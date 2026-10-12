@@ -420,10 +420,46 @@ child_environment_allowed(int role, char **environment, size_t count)
 }
 
 static int
+darwin_filter_absent(int before_spawn)
+{
+#if defined(__APPLE__)
+    struct stat value;
+    int rc;
+    (void)before_spawn;
+#if YSTACK_CANCEL_RELEASE_TESTING
+    if ((YSTACK_CANCEL_TEST_CASE == 49 && !before_spawn) ||
+            (YSTACK_CANCEL_TEST_CASE == 50 && before_spawn)) {
+        errno = before_spawn ? ELOOP : EACCES;
+        return 0;
+    }
+#endif
+    rc = lstat("/usr/local/share/posix_spawn_filtering_rules", &value);
+    if (rc < 0 && errno == ENOENT) return 1;
+    if (rc == 0) errno = EEXIST;
+    return 0;
+#else
+    (void)before_spawn;
+    return 0;
+#endif
+}
+
+static int
 child_platform_admitted(void)
 {
 #if YSTACK_CANCEL_RELEASE_TESTING
+#if defined(__APPLE__)
+    return darwin_filter_absent(0);
+#else
     return 1;
+#endif
+#elif defined(__linux__)
+#if defined(POSIX_SPAWN_SETSID)
+    return 1;
+#else
+    return 0;
+#endif
+#elif defined(__APPLE__)
+    return darwin_filter_absent(0);
 #else
     return 0;
 #endif
@@ -594,6 +630,18 @@ state_spawn_child(NativeState *state, PyObject *Py_UNUSED(ignored))
         if (!PyErr_Occurred()) PyErr_SetString(PyExc_RuntimeError, "child is not prepared");
         return NULL;
     }
+#if defined(__APPLE__)
+    if (!darwin_filter_absent(1)) {
+        int saved_errno = errno;
+        child_remember_error(child, FAILURE_CHILD_SPAWN);
+        child_release_prepared(child);
+        child->state = CHILD_NO_CHILD;
+        Py_CLEAR(child->fd_tuple);
+        errno = saved_errno;
+        PyErr_SetFromErrno(PyExc_OSError);
+        return NULL;
+    }
+#endif
 #if YSTACK_CANCEL_RELEASE_TESTING
     if (YSTACK_CANCEL_TEST_CASE == 27) rc = EIO;
     else

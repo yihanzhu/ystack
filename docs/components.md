@@ -1858,8 +1858,12 @@ one non-consuming native pending-signal observation. The same state owns child p
 identity and the exact completion bytes through the first marker byte, durability point,
 action and mask restoration, and final close. Unknown signal, child, or platform behavior
 refuses before its effect. Linux keeps its separate C11 release contract and adds the
-public close-from action after the fixed stdio and pipe actions. Platform admission stays
-closed until the same-source public-call controls and provider evidence are complete.
+public close-from action after the fixed stdio and pipe actions. Platform admission
+requires the held parent build and runtime records to match the fixed public-call controls
+and provider evidence. Linux also requires the public session, mask, default-action,
+close-from, and wait capabilities used by the fixed child recipe. macOS checks the fixed
+default spawn-filter path before preparation and again immediately before spawn while the
+parent holds and rechecks its protected ancestors.
 
 ```sh
 bash scripts/test/shadow-enforced.test.sh

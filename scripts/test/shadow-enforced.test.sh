@@ -32,10 +32,34 @@ native_out="$tmp/native-release"
 /bin/bash -p "$root/shadow/v1/build-cancel-release.sh" build "$python_bin" "$native_out"
 native_binary=$(/usr/bin/find "$native_out" -mindepth 1 -maxdepth 1 -type f ! -name build-record.json -print)
 [ -n "$native_binary" ] && [ -f "$native_binary" ] || fail 'native release build output'
-for native_case in 1 2 5 6 7 8 9 10 12 13 33 36 37 38 39 40 41 42 43 44 45 46 47 48; do
+native_build_cases="1 2 5 6 7 8 9 10 12 13 33 36 37 38 39 40 41 42 43 44 45 46 47 48"
+[ "$(uname -s)" != Darwin ] || native_build_cases="$native_build_cases 49 50"
+for native_case in $native_build_cases; do
   /bin/bash -p "$root/shadow/v1/build-cancel-release.sh" test-build "$python_bin" \
     "$tmp/native-case-$native_case" "$native_case"
 done
+if [ "$(uname -s)" = Darwin ]; then
+  "$python_bin" -I -S -B - "$tmp/native-case-49" "$tmp/native-case-50" <<'PY'
+import errno,importlib.util,pathlib,sys
+def load(directory):
+ binary=next(pathlib.Path(directory).glob("_cancel_release*.so"));spec=importlib.util.spec_from_file_location("_cancel_release",binary)
+ module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);state=module.prepare_state();state.block_entry();state.arm_consumer();return state
+child=(12,b"/usr/bin/true",(b"/usr/bin/true",),(b"LANG=C",b"LC_ALL=C",b"PATH=/usr/bin:/bin"))
+first=load(sys.argv[1])
+try:first.prepare_child(child)
+except RuntimeError as exc:assert str(exc)=="native child platform contract is unavailable" and first.child_status()[0]==0
+else:raise AssertionError("first Darwin filter check accepted")
+second=load(sys.argv[2]);second.prepare_child(child)
+try:second.spawn_child()
+except OSError as exc:assert exc.errno==errno.ELOOP
+else:raise AssertionError("second Darwin filter check accepted")
+status=second.child_status()
+assert status[0:5]==(2,0,0,0,0) and status[19]==1 and status[23]==27
+assert status[25:43]==(1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0)
+second.abort_release();assert second.outcome()=="native-release.failure"
+print("shadow-enforced-darwin-filter-faults: first and second checks refused before spawn")
+PY
+fi
 native_control_binary=$(/usr/bin/find "$tmp/native-case-33" -mindepth 1 -maxdepth 1 \
   -type f ! -name build-record.json -print)
 [ -n "$native_control_binary" ] && [ -f "$native_control_binary" ] || fail 'native child control output'
@@ -157,18 +181,20 @@ default_result=0
 [ ! -e "$tmp/native-disposition-default/bundle.json" ] || fail 'default pending rollback left marker'
 /usr/bin/printf 'shadow-enforced-native-dispositions: returning, ignored, blocked and default controls passed\n'
 "$python_bin" -I -S -B - "$native_binary" <<'PY'
-import importlib.util,sys
+import importlib.util,sys,time
 spec=importlib.util.spec_from_file_location("_cancel_release",sys.argv[1])
 module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
 state=module.prepare_state();state.block_entry();state.arm_consumer()
-try:
- state.prepare_child((12,b"/usr/bin/true",(b"/usr/bin/true",),
-  (b"LANG=C",b"LC_ALL=C",b"PATH=/usr/bin:/bin")))
-except RuntimeError as exc:
- assert str(exc)=="native child platform contract is unavailable"
- assert state.child_status()[0]==0
-else:raise AssertionError("production child platform admitted without complete proof")
-print("shadow-enforced-native-child-admission: unknown platform contract refused before effect")
+state.prepare_child((12,b"/usr/bin/true",(b"/usr/bin/true",),
+ (b"LANG=C",b"LC_ALL=C",b"PATH=/usr/bin:/bin")))
+state.spawn_child();state.close_child_stdin();state.close_child_stdout();state.close_child_stderr()
+deadline=time.monotonic()+5
+while not state.child_status()[11]:
+ state.observe_child_exit();assert time.monotonic()<deadline;time.sleep(.01)
+state.reap_child();state.check_child_group();status=state.child_status()
+assert status[17:20]==(1,1,1) and status[24]==1 and status[47:49]==(-1,3)
+state.abort_release();assert state.outcome()=="native-release.failure"
+print("shadow-enforced-native-child-admission: production child completed with no residual group")
 PY
 cat > "$tmp/native-child-state.py" <<'PY'
 import errno,importlib.util,os,signal,sys,time
@@ -733,8 +759,18 @@ sys.stdout.buffer.write(encoded)
 PY
 /bin/chmod 0400 "$tmp/runtime-dependency-collector.py"
 cat > "$tmp/parent-input-helper.py" <<'PY'
-import errno,hashlib,json,os,pathlib,re,stat,sys,sysconfig
+import ctypes,errno,hashlib,json,os,pathlib,platform,re,stat,sys,sysconfig
 FIXED_ENV={"LANG":"C","LC_ALL":"C","PATH":"/usr/bin:/bin"}
+LINUX_IMAGES={
+ "python-executable":("e50d468e8b0adfb05733f5b87b3cff34829c4a8c1aea50c865aa8bdfe4bb150f",8020928,"337d65cf00021797985cc9f77c0cc334a9fbeb38","python3.12","3.12.3-1ubuntu0.17"),
+ "elf-interpreter":("c20a2dc8917c755f02b94049356320fe1f62ac7d9f8994731f807d9df39302da",236616,"0d77dbd4379bf0b5af3e05be7fb6af1e4cea7c96","glibc","2.39-0ubuntu8.9"),
+ "libc":("3a15d66867d83762c7f2f1e37359cb8f6c5743edb369c65285cb0b1c4f7498bf",2129424,"a4a7992a8e66555c8141ab2a08a8465ff6e0ea65","glibc","2.39-0ubuntu8.9")}
+LINUX_PUBLIC={
+ "posix_spawn":("GLIBC_2.15",1109456,1109476,"16e5959a25a83065d39bb8e93dc2ed488696a5bfa469c0bd0241bc5e648d7fb2"),"posix_spawn_file_actions_addclosefrom_np":("GLIBC_2.34",1109728,1109832,"094141876bca63c79a141dbff0c3021f39281ddde2301ae4e266a20330674d6c"),"posix_spawn_file_actions_adddup2":("GLIBC_2.2.5",1109840,1109992,"4b34c942e54d72e3ae03c317d1c4a50d3d1b690112803e9d7e438fc6cf2cf8c2"),"posix_spawn_file_actions_addclose":("GLIBC_2.2.5",1109616,1109720,"2d1a71087d23e36d34d1c566d6d28beca86d64b0a05581ea47c230ee0a31e770"),"posix_spawnattr_setflags":("GLIBC_2.2.5",1111120,1111142,"3edb85b9ffbc36418200f6596846ece68ae12658483e12403d4f8b651995b982"),"posix_spawnattr_setsigmask":("GLIBC_2.2.5",1111216,1111318,"292f51d0b111cc38042d299c401eebba7075b92a4fc239cd0facd63b9a3c130f"),"posix_spawnattr_setsigdefault":("GLIBC_2.2.5",1111040,1111118,"bf2aa378691e0fd318e4df6e29d2268a8d8bce38e2f182a3382fa6ef72d73462"),
+ "waitid":("GLIBC_2.2.5",1116512,1116675,"1360edbe046fb42e8953968e824cee5335295e0dbc121f7159834cb56eebff92"),"kill":("GLIBC_2.2.5",283952,283989,"d50e8da96bd1d65d00f2f675c37928154f6ec7bb556638d9b20ec83dc0d2b733"),"pthread_sigmask":("GLIBC_2.32",671712,671935,"3043a39417b506fe7e7a280d25c0afa2352548dff517da9b10edcbb09f80347a"),"sigpending":("GLIBC_2.2.5",284000,284050,"d49832fee54ef678bf120b24183d35a8bbb6a7a9dfcfe2cd755e9702106b5d44"),"sigaction":("GLIBC_2.2.5",283360,283412,"a304a32c5ea02577db83795ea66d3f3df1a9b0ed7d1c997dd3700c3aae590cef"),"sigismember":("GLIBC_2.2.5",285984,286044,"920372824353b830dc98f3b0605e01248a5159993a35577ddfdacd83d8bddf34"),"openat":("GLIBC_2.4",1160560,1160824,"26911bf0d6da6abedb3630f3d9be8112741ea6a46af9cf5b408a5175e6fa5b23"),"read":("GLIBC_2.2.5",1162528,1162677,"34c15fa809ef2060efee95f3f9d36c0f4646c1d2863e8bbe7c7f57039e59e75c"),"write":("GLIBC_2.2.5",1165360,1165517,"0f7113fcb1fe89e611ba7000f794672049c384e995bc5ce3114e2bd2a6f6a9ff"),"fsync":("GLIBC_2.2.5",1175712,1175843,"66e747db445c320e010f62683da56d4c1ab03cbf372a62dc9337d46b5c3f6bba"),"close":("GLIBC_2.2.5",1141168,1141299,"192013146611c5b26fad8e10c6e631620b189484121ad496b01e84b824fc3a12"),"unlinkat":("GLIBC_2.4",1165056,1165093,"fd41e59e7cacd11b993d44a1c8d79d956a1888bd112eb47fbabbe6ab4542b797"),"fstat":("GLIBC_2.33",1144400,1144442,"60f34480d7daf97dd72daf34658d002ec38da4226b582ed538d3e1f6f1cb0f97")}
+LINUX_INTERNAL={(1114048,1114096):"64887898097779cd4eb2dfa3a5a6dbee7a1dae6f83ef6675d4c8048965c001fe",(624176,624294):"6fdf5cb86e3d4e88a27e2535f12d523f4f2b4d1d1e0f7b6da8dc59cbbf0f0622",(624304,624435):"b3c4b25a0311f125b20d9f586f777d497455c957ae3c28c45a748c44b17f4a71",(1110528,1110590):"1d3b6b6fec0a543547c4870f17ccc175eb0c3607d4ce2f92cd27d94c6aa9474d",(1110624,1110695):"1c30dba8de93cce0fba79e46e68eaed9d5481c7ff9beae6de92e5ddd0047ddbb",(1111328,1112526):"fda92da328c31dc15c2b94de79df5db22812cbc2d054008da7d98349350f2387",(283456,283896):"e16a3c9ea6be1d7128125d0666c900f94d6f2f267c4b43654f840589b5561442"}
+LINUX_GATE={"posix_spawn_file_actions_addclosefrom_np","posix_spawn_file_actions_adddup2","posix_spawn_file_actions_addclose","posix_spawnattr_setflags","posix_spawnattr_setsigmask","posix_spawnattr_setsigdefault"}
+DARWIN_UUIDS={"/usr/lib/system/libsystem_kernel.dylib":"ea1df724-0264-3bd8-beb2-ce75aa5534cd","/usr/lib/system/libsystem_c.dylib":"af204963-e350-39a8-9e50-1681dbc4133d","/usr/lib/system/libsystem_platform.dylib":"b4dc35d3-e0f0-3d32-85b4-cd3436c0819b","/usr/lib/system/libsystem_pthread.dylib":"3aab1736-e768-37e9-a828-2309e16cf6b2"}
 def startup_environment():
  environment=dict(os.environ);base={key:environment.pop(key,None) for key in FIXED_ENV}
  if base!=FIXED_ENV:raise OSError(errno.EACCES,"startup environment")
@@ -755,11 +791,16 @@ def canonical(raw):
  if raw!=(json.dumps(value,sort_keys=True,separators=(",",":"),ensure_ascii=False)+"\n").encode():raise ValueError("canonical")
  return value
 def identity(value):return (value.st_dev,value.st_ino,value.st_mode,value.st_uid,value.st_gid,value.st_nlink,value.st_size,value.st_mtime_ns,value.st_ctime_ns)
+class MissingFilter(Exception):pass
 class ParentInputs:
- def __init__(self,package,physical_python,native_binary,build_record,dependency_record):
-  self.environment_keys=startup_environment();self._fds=[None]*16;self._count=0;self._rows=[];self.package=pathlib.Path(package)
+ def __init__(self,package,physical_python,native_binary,build_record,dependency_record,collector):
+  self.environment_keys=startup_environment();self._fds=[None]*20;self._count=0;self._rows=[];self.package=pathlib.Path(package)
+  self._filter_fds=[None]*4;self._filter_count=0;self._filter_rows=[];self._filter_missing=None;self._acl=None
   self.physical_python=os.path.realpath(physical_python);self.native_binary=os.path.realpath(native_binary)
-  try:self._prepare(pathlib.Path(build_record),pathlib.Path(dependency_record))
+  self.collector=os.path.realpath(collector)
+  try:
+   if sys.platform=="darwin":self._prepare_filter()
+   self._prepare(pathlib.Path(build_record),pathlib.Path(dependency_record))
   except BaseException:
    try:self.close()
    except OSError:pass
@@ -781,13 +822,49 @@ class ParentInputs:
   if identity(before)!=identity(after) or (named.st_dev,named.st_ino)!=(after.st_dev,after.st_ino):raise OSError(errno.EIO,"input changed")
   row={"path":str(path),"identity":identity(after),"sha256":hashlib.sha256(raw).hexdigest(),"size":len(raw)}
   self._rows.append(row);return bytes(raw),row
+ def _filter_acl(self,fd):
+  ctypes.set_errno(0);pointer=self._acl.acl_get_fd_np(fd,0x100);error=ctypes.get_errno()
+  if pointer:
+   released=self._acl.acl_free(pointer)
+   if released!=0:raise OSError(errno.EIO,"acl_free")
+   raise OSError(errno.EACCES,"filter parent ACL")
+  if error!=errno.ENOENT:raise OSError(error or errno.EIO,"acl_get_fd_np")
+ def _filter_take(self,name,parent):
+  flags=os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC
+  try:fd=os.open(name,flags) if parent is None else os.open(name,flags,dir_fd=parent)
+  except OSError as exc:
+   if parent is not None and exc.errno==errno.ENOENT:raise MissingFilter from None
+   raise
+  index=self._filter_count;self._filter_fds[index]=fd;self._filter_count=index+1
+  if os.get_inheritable(fd):raise OSError(errno.EIO,"inheritable filter parent")
+  value=os.fstat(fd)
+  if not stat.S_ISDIR(value.st_mode) or value.st_uid!=0 or stat.S_IMODE(value.st_mode)&0o022:raise OSError(errno.EACCES,"unprotected filter parent")
+  if parent is not None:
+   named=os.stat(name,dir_fd=parent,follow_symlinks=False)
+   if identity(named)!=identity(value):raise OSError(errno.EIO,"filter parent name mismatch")
+  self._filter_acl(fd);self._filter_rows.append((fd,name,identity(value)));return fd
+ def _filter_absent(self,name,parent):
+  try:os.stat(name,dir_fd=parent,follow_symlinks=False)
+  except OSError as exc:
+   if exc.errno==errno.ENOENT:return
+   raise
+  raise OSError(errno.EEXIST,"filter component appeared")
+ def _prepare_filter(self):
+  self._acl=ctypes.CDLL(None,use_errno=True);self._acl.acl_get_fd_np.argtypes=[ctypes.c_int,ctypes.c_int];self._acl.acl_get_fd_np.restype=ctypes.c_void_p
+  self._acl.acl_free.argtypes=[ctypes.c_void_p];self._acl.acl_free.restype=ctypes.c_int
+  parent=self._filter_take("/",None)
+  for name in ("usr","local","share"):
+   try:parent=self._filter_take(name,parent)
+   except MissingFilter:
+    self._filter_missing=(name,parent);self._filter_absent(name,parent);return
+  self._filter_missing=("posix_spawn_filtering_rules",parent);self._filter_absent(*self._filter_missing)
  def _prepare(self,build_path,dependency_path):
   source=self.package/"shadow/v1/_cancel_release.c";script=self.package/"shadow/v1/build-cancel-release.sh"
   driver=self.package/"shadow/v1/enforced-reproduction.py";consumer=self.package/"shadow/v1/_consumer.py"
   python_raw,python_row=self.hold(self.physical_python,256*1024*1024)
   source_raw,source_row=self.hold(source,1024*1024);script_raw,script_row=self.hold(script,1024*1024)
   driver_raw,driver_row=self.hold(driver,4*1024*1024);consumer_raw,consumer_row=self.hold(consumer,1024*1024)
-  native_raw,native_row=self.hold(self.native_binary,256*1024*1024)
+  native_raw,native_row=self.hold(self.native_binary,256*1024*1024);collector_raw,collector_row=self.hold(self.collector,1024*1024)
   build_raw,_=self.hold(build_path,1024*1024);dependency_raw,_=self.hold(dependency_path,1024*1024)
   build=canonical(build_raw);dependency=canonical(dependency_raw)
   if set(build)!={"schema_version","kind","id","body"} or (build["schema_version"],build["kind"],build["id"])!=(1,"shadow_cancel_release_build_record","shadow.cancel-release.build"):raise ValueError("build envelope")
@@ -796,6 +873,12 @@ class ParentInputs:
   if not isinstance(body,dict) or set(body)!=build_keys or any(name not in body for name in required) or body["test_build"] is not False:raise ValueError("build body")
   compiler_raw,compiler_row=self.hold(body["compiler_path"],256*1024*1024)
   if (body["source_sha256"]!=source_row["sha256"] or body["build_script_sha256"]!=script_row["sha256"] or os.path.realpath(body["python_path"])!=self.physical_python or body["python_sha256"]!=python_row["sha256"] or body["compiler_sha256"]!=compiler_row["sha256"] or body["output_sha256"]!=native_row["sha256"] or body["output_size"]!=native_row["size"]):raise ValueError("build relation")
+  include=os.path.realpath(sysconfig.get_config_var("INCLUDEPY") or "");config_include=os.path.realpath(sysconfig.get_config_var("CONFINCLUDEPY") or "")
+  language="-std=gnu11" if sys.platform=="darwin" else "-std=c11";link=["-bundle","-undefined","dynamic_lookup"] if sys.platform=="darwin" else ["-shared"]
+  expected=[body["compiler_path"],language,"-Wall","-Wextra","-Werror","-O2","-fvisibility=hidden","-fPIC","-I"+include,"-I"+config_include]+link+[str(source),"-o",self.native_binary]
+  config_keys=("CONFIG_ARGS","Py_GIL_DISABLED","Py_DEBUG","Py_ENABLE_JIT","HAVE_PTHREAD_SIGMASK","HAVE_BROKEN_PTHREAD_SIGMASK","HAVE_SIGACTION")
+  expected_config={key:sysconfig.get_config_var(key) for key in config_keys}
+  if (body["platform"]!=sys.platform or body["architecture"]!=platform.machine() or body["python_implementation"]!=sys.implementation.name or body["python_version"]!=sys.version or body["soabi"]!=sysconfig.get_config_var("SOABI") or body["ext_suffix"]!=sysconfig.get_config_var("EXT_SUFFIX") or body["output_name"]!=pathlib.Path(self.native_binary).name or body["configuration"]!=expected_config or body["argv"]!=expected or body["argv_sha256"]!=hashlib.sha256((json.dumps(expected,sort_keys=True,separators=(",",":"),ensure_ascii=False)+"\n").encode()).hexdigest()):raise ValueError("build recipe")
   if set(dependency)!={"schema_version","kind","id","body"} or (dependency["schema_version"],dependency["kind"],dependency["id"])!=(1,"shadow_runtime_dependency_record","shadow.runtime-dependency"):raise ValueError("dependency envelope")
   facts=dependency["body"]
   if not isinstance(facts,dict) or facts.get("platform")!=body["platform"] or os.path.realpath(facts.get("executable",""))!=self.physical_python:raise ValueError("runtime relation")
@@ -811,17 +894,58 @@ class ParentInputs:
    if set(item)!={"path","identity"} or not os.path.isabs(item["path"]):raise ValueError("origin shape")
    value=item["identity"]
    if set(value)!={"status","sha256","size"} or value["status"]!="ok" or not isinstance(value["sha256"],str) or len(value["sha256"])!=64 or not isinstance(value["size"],int) or value["size"]<0:raise ValueError("origin identity")
-  for path,row in ((driver,driver_row),(consumer,consumer_row),(pathlib.Path(self.native_binary),native_row)):
+  for path,row in ((driver,driver_row),(consumer,consumer_row),(pathlib.Path(self.native_binary),native_row),(pathlib.Path(self.collector),collector_row)):
    matches=[item for item in origins if os.path.realpath(item.get("path",""))==os.path.realpath(path)]
    if len(matches)!=1 or matches[0].get("identity")!={"status":"ok","sha256":row["sha256"],"size":row["size"]}:raise ValueError("origin relation")
+  stdlib=os.path.realpath(sysconfig.get_path("stdlib"));allowed=(stdlib+os.sep,os.path.realpath(self.package)+os.sep)
+  for item in origins:
+   resolved=os.path.realpath(item["path"])
+   if resolved not in (self.physical_python,self.native_binary,self.collector) and not resolved.startswith(allowed):raise ValueError("foreign origin")
   if facts["platform"]=="linux":
    images=facts.get("elf_images");roles=("python-executable","native-release","elf-interpreter","libc")
    if not isinstance(images,list) or facts.get("required_roles")!={role:1 for role in roles}:raise ValueError("ELF roles")
+   if any(not isinstance(item,dict) or not isinstance(item.get("roles"),list) for item in images):raise ValueError("ELF image shape")
+   for role in roles:
+    if sum(role in item["roles"] for item in images)!=1:raise ValueError("ELF role count")
    native=[item for item in images if "native-release" in item.get("roles",[])]
    if len(native)!=1 or os.path.realpath(native[0].get("path",""))!=self.native_binary or native[0].get("identity")!={"status":"ok","sha256":native_row["sha256"],"size":native_row["size"]}:raise ValueError("ELF native")
-   for role in ("elf-interpreter","libc"):
-    item=next(item for item in images if role in item.get("roles",[]));self.hold(item["path"],256*1024*1024)
-  elif facts["platform"]!="darwin":raise ValueError("platform")
+   for role in ("python-executable","elf-interpreter","libc"):
+    item=next(item for item in images if role in item["roles"]);expected_image=LINUX_IMAGES[role]
+    if item.get("identity")!={"status":"ok","sha256":expected_image[0],"size":expected_image[1]} or item.get("build_id")!={"status":"ok","value":expected_image[2]}:raise ValueError("ELF fixed identity")
+    packages=item.get("package",{}).get("packages",[])
+    if not any(row.get("source_package")==expected_image[3] and row.get("source_version")==expected_image[4] and row.get("binary_version")==expected_image[4] for row in packages):raise ValueError("ELF package")
+    if role!="python-executable":
+     _raw,held=self.hold(item["path"],256*1024*1024)
+     if (held["sha256"],held["size"])!=expected_image[:2]:raise ValueError("ELF held identity")
+   functions=facts.get("libc_function_bodies")
+   if not isinstance(functions,dict) or functions.get("evidence_binding")!={"reason":None,"status":"ok"} or functions.get("image_identity")!={"status":"ok","sha256":LINUX_IMAGES["libc"][0],"size":LINUX_IMAGES["libc"][1]} or functions.get("image_build_id")!={"status":"ok","value":LINUX_IMAGES["libc"][2]} or functions.get("source_before")!=functions.get("source_after"):raise ValueError("ELF evidence binding")
+   rows=functions.get("functions");found={row.get("label"):row for row in rows} if isinstance(rows,list) else {}
+   if set(found)!=set(LINUX_PUBLIC):raise ValueError("ELF public set")
+   for name,expected_function in LINUX_PUBLIC.items():
+    row=found[name]
+    expected_role="gate-only-case-48" if name in LINUX_GATE else "production-native"
+    if row.get("status")!="ok" or row.get("origin_role")!=expected_role or (row.get("required_version"),row.get("start"),row.get("end"),row.get("body_sha256"))!=expected_function or hashlib.sha256(row.get("body","").encode()).hexdigest()!=expected_function[3]:raise ValueError("ELF public body")
+   internal=functions.get("internal_functions");indexed={(row.get("start"),row.get("end")):row for row in internal} if isinstance(internal,list) else {}
+   if set(indexed)!=set(LINUX_INTERNAL):raise ValueError("ELF internal set")
+   for key,digest in LINUX_INTERNAL.items():
+    row=indexed[key]
+    if row.get("status")!="ok" or row.get("body_sha256")!=digest or hashlib.sha256(row.get("body","").encode()).hexdigest()!=digest:raise ValueError("ELF internal body")
+   child=functions.get("spawn_child_candidate")
+   if not isinstance(child,dict) or child.get("status")!="ok" or (child.get("start"),child.get("end"),child.get("body_sha256"))!=(1112528,1114043,"7ee884c26dd4ad90da96f4786080082a0e7f6c91f55ebae142972ddedeff8059") or hashlib.sha256(child.get("body","").encode()).hexdigest()!=child["body_sha256"]:raise ValueError("ELF child body")
+   gate=functions.get("build_records",{}).get("gate");production=functions.get("build_records",{}).get("production")
+   if functions.get("gate_only_provenance",{}).get("status")!="ok" or production!=build or not isinstance(gate,dict) or gate.get("body",{}).get("test_build") is not True or gate.get("body",{}).get("test_case")!=48:raise ValueError("ELF gate provenance")
+   gate_body=gate["body"];shared=set(body)-{"argv","argv_sha256","output_name","output_size","output_sha256","test_build"}
+   if any(gate_body.get(key)!=body[key] for key in shared):raise ValueError("ELF gate source relation")
+   expected_gate=list(expected);source_index=expected_gate.index(str(source));expected_gate[source_index:source_index]=["-DYSTACK_CANCEL_RELEASE_TESTING=1","-DYSTACK_CANCEL_TEST_CASE=48"]
+   expected_gate[-1]=gate_body.get("argv",[None])[-1]
+   if gate_body.get("argv")!=expected_gate or gate_body.get("argv_sha256")!=hashlib.sha256((json.dumps(expected_gate,sort_keys=True,separators=(",",":"),ensure_ascii=False)+"\n").encode()):raise ValueError("ELF gate recipe")
+  elif facts["platform"]=="darwin":
+   if facts.get("executable_identity")!={"status":"ok","sha256":"1b5cb11d163e5ba34e2a05fc533c0ed89574d4425f9749a9d89405f651980e0d","size":34640} or facts.get("package")!={"kind":"homebrew-cellar","formula":"python@3.14","version":"3.14.8_2"} or facts.get("darwin_shared_cache_uuid")!={"status":"ok","value":"421885d7-01cc-3629-b59b-6a068db34420"}:raise ValueError("Darwin runtime")
+   selected={item.get("path"):item.get("identity") for item in facts.get("darwin_mapped_images",[]) if item.get("path") in DARWIN_UUIDS}
+   if set(selected)!=set(DARWIN_UUIDS) or any(selected[path]!={"cpu_type":16777228,"cpu_subtype":2147483650,"uuid":value} for path,value in DARWIN_UUIDS.items()):raise ValueError("Darwin providers")
+   bindings=facts.get("darwin_release_symbol_bindings");expected_symbols={"pthread_sigmask":"/usr/lib/system/libsystem_pthread.dylib","fcntl":"/usr/lib/system/libsystem_kernel.dylib","close":"/usr/lib/system/libsystem_kernel.dylib","fstat":"/usr/lib/system/libsystem_kernel.dylib","unlinkat":"/usr/lib/system/libsystem_kernel.dylib","fsync":"/usr/lib/system/libsystem_kernel.dylib"}
+   if not isinstance(bindings,list) or len(bindings)!=6 or any(row.get("mapped_image")!=expected_symbols.get(row.get("symbol")) or row.get("mapped_identity",{}).get("uuid")!=DARWIN_UUIDS[row["mapped_image"]] for row in bindings):raise ValueError("Darwin bindings")
+  else:raise ValueError("platform")
   self.build=build;self.dependency=dependency;self.build_sha256=hashlib.sha256(build_raw).hexdigest();self.dependency_sha256=hashlib.sha256(dependency_raw).hexdigest();self.rows=tuple(self._rows)
  def recheck(self):
   for index,row in enumerate(self._rows):
@@ -833,10 +957,21 @@ class ParentInputs:
     if not chunk:raise OSError(errno.EIO,"input shortened")
     measured.update(chunk);remaining-=len(chunk)
    if measured.hexdigest()!=row["sha256"]:raise OSError(errno.EIO,"input bytes changed")
+  for index,(fd,name,before) in enumerate(self._filter_rows):
+   value=os.fstat(fd)
+   if identity(value)!=before or value.st_uid!=0 or stat.S_IMODE(value.st_mode)&0o022:raise OSError(errno.EIO,"filter parent changed")
+   if index and identity(os.stat(name,dir_fd=self._filter_rows[index-1][0],follow_symlinks=False))!=before:raise OSError(errno.EIO,"filter parent name changed")
+   self._filter_acl(fd)
+  if self._filter_missing is not None:self._filter_absent(*self._filter_missing)
  def close(self):
   failure=None
   while self._count:
    index=self._count-1;fd=self._fds[index];self._fds[index]=None;self._count=index
+   try:os.close(fd)
+   except OSError as exc:
+    if failure is None:failure=exc
+  while self._filter_count:
+   index=self._filter_count-1;fd=self._filter_fds[index];self._filter_fds[index]=None;self._filter_count=index
    try:os.close(fd)
    except OSError as exc:
     if failure is None:failure=exc
@@ -884,6 +1019,7 @@ for parent_env_case in lang path extra; do
   /usr/bin/env -i "${parent_env_args[@]}" "$python_bin" -I -S -B - \
     "$tmp/parent-input-helper.py" "$root" "$python_bin" "$native_binary" \
     "$native_out/build-record.json" "$tmp/runtime-dependency-record.json" \
+    "$tmp/runtime-dependency-collector.py" \
     > "$tmp/parent-input-$parent_env_case.stdout" \
     2> "$tmp/parent-input-$parent_env_case.stderr" <<'PY'
 import errno,importlib.util,pathlib,sys
@@ -902,7 +1038,8 @@ done
 /usr/bin/printf 'shadow-parent-input-environment: LANG/PATH value changes and an extra key refused\n'
 /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C LANG=C "$python_bin" -I -S -B - \
   "$tmp/parent-input-helper.py" "$root" "$python_bin" "$native_binary" \
-  "$native_out/build-record.json" "$tmp/runtime-dependency-record.json" <<'PY'
+  "$native_out/build-record.json" "$tmp/runtime-dependency-record.json" \
+  "$tmp/runtime-dependency-collector.py" <<'PY'
 import importlib.util,json,pathlib,sys
 path=pathlib.Path(sys.argv[1]);spec=importlib.util.spec_from_file_location("parent_input_helper",path)
 helper=importlib.util.module_from_spec(spec);spec.loader.exec_module(helper);held=helper.ParentInputs(*sys.argv[2:])
@@ -1394,13 +1531,17 @@ PY
 
 /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C LANG=C \
   "$python_bin" -I -S -B - "$root" "$tmp" "$tmp/object-closure" "$jq_bin" \
-  "$native_binary" "$native_out/build-record.json" "$tmp/runtime-dependency-record.json" <<'PY'
+  "$native_binary" "$native_out/build-record.json" "$tmp/runtime-dependency-record.json" \
+  "$tmp/parent-input-helper.py" "$tmp/runtime-dependency-collector.py" <<'PY'
 import os
 startup_environment_keys=tuple(sorted(os.environ))
 import hashlib, importlib.util, json, pathlib, shutil, stat, sys, sysconfig, tempfile, types
 
-root, base, helper, jq, native_binary, native_record, dependency_record = map(pathlib.Path, sys.argv[1:])
-dependency_document=json.loads(dependency_record.read_bytes())
+root, base, helper, jq, native_binary, native_record, dependency_record, parent_helper, collector = map(pathlib.Path, sys.argv[1:])
+helper_spec=importlib.util.spec_from_file_location("parent_input_helper",parent_helper)
+parent_module=importlib.util.module_from_spec(helper_spec);helper_spec.loader.exec_module(parent_module)
+parent_inputs=parent_module.ParentInputs(root,pathlib.Path(sys.executable).resolve(),native_binary,native_record,dependency_record,collector)
+dependency_document=parent_inputs.dependency
 assert tuple(dependency_document["body"]["preexec_environment"]["observed_keys"])==startup_environment_keys
 dependency_work = base / "dependency-work"; dependency_work.mkdir()
 spec = importlib.util.spec_from_file_location("shadow_consumer", root / "shadow/v1/_consumer.py")
@@ -1427,15 +1568,15 @@ def parent_doc(path, raw):
         "helper_source_sha256": c.HELPER_SOURCE_SHA256, "helper_build_record_sha256": "2" * 64,
         "helper_executable_sha256": sha(raw), "helper_executable_size": len(raw),
         "helper_path": str(path), "native_release": {
-            "source_sha256": sha((root/"shadow/v1/_cancel_release.c").read_bytes()),
-            "build_script_sha256": sha((root/"shadow/v1/build-cancel-release.sh").read_bytes()),
-            "build_record_sha256": sha(native_record.read_bytes()),
+            "source_sha256": parent_inputs.build["body"]["source_sha256"],
+            "build_script_sha256": parent_inputs.build["body"]["build_script_sha256"],
+            "build_record_sha256": parent_inputs.build_sha256,
             "binary_path": str(native_binary), "binary_size": native_binary.stat().st_size,
             "binary_sha256": sha(native_binary.read_bytes()),
             "python_path": os.path.realpath(sys.executable),
             "python_sha256": sha(pathlib.Path(sys.executable).read_bytes()),
             "python_abi": sysconfig.get_config_var("SOABI"),
-            "dependency_record_sha256": sha(dependency_record.read_bytes()),
+            "dependency_record_sha256": parent_inputs.dependency_sha256,
             "loader_mode": "rtld-now-local.v1"}}, schema=2)
 
 # Parallel shards share TMPDIR. Stabilize only change metadata for ancestors outside this
@@ -1987,6 +2128,7 @@ payload.chmod(0o777); remember_store(); refuses("E_STORE", lambda: c.read_store_
 
 anchor.close(); c._metadata, c._named_metadata = real_metadata, real_named
 c._source_root, c._acl_state = real_source, real_acl
+parent_inputs.recheck();parent_inputs.close()
 print("shadow-enforced: %d checks passed" % checks)
 PY
 
@@ -2640,12 +2782,16 @@ cli_stderr=$("$python_bin" -I -S -B "$root/shadow/v1/enforced-reproduction.py" r
 # each unchanged child interface; this case proves their byte flow and ordering.
 /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C LANG=C \
   "$python_bin" -I -S -B - "$root" "$tmp/slice3-orchestration" "$native_binary" \
-  "$native_out/build-record.json" "$tmp/runtime-dependency-record.json" <<'PY'
+  "$native_out/build-record.json" "$tmp/runtime-dependency-record.json" \
+  "$tmp/parent-input-helper.py" "$tmp/runtime-dependency-collector.py" <<'PY'
 import os
 startup_environment_keys=tuple(sorted(os.environ))
 import hashlib, importlib.util, json, pathlib, sys, sysconfig, types
-root, base, native_binary, native_record, dependency_record = map(pathlib.Path,sys.argv[1:])
-dependency_document=json.loads(dependency_record.read_bytes())
+root, base, native_binary, native_record, dependency_record, parent_helper, collector = map(pathlib.Path,sys.argv[1:])
+helper_spec=importlib.util.spec_from_file_location("parent_input_helper",parent_helper)
+parent_module=importlib.util.module_from_spec(helper_spec);helper_spec.loader.exec_module(parent_module)
+parent_inputs=parent_module.ParentInputs(root,pathlib.Path(sys.executable).resolve(),native_binary,native_record,dependency_record,collector)
+dependency_document=parent_inputs.dependency
 assert tuple(dependency_document["body"]["preexec_environment"]["observed_keys"])==startup_environment_keys
 base.mkdir(mode=0o700)
 spec=importlib.util.spec_from_file_location("enforced_flow",root/"shadow/v1/enforced-reproduction.py")
@@ -2801,11 +2947,11 @@ parent={"helper_source_sha256":e.c.HELPER_SOURCE_SHA256,"helper_build_record_sha
  "helper_executable_sha256":sha(b"helper"),"helper_executable_size":6,"helper_path":str(helper),
  "native_release":{"source_sha256":sha((root/"shadow/v1/_cancel_release.c").read_bytes()),
  "build_script_sha256":sha((root/"shadow/v1/build-cancel-release.sh").read_bytes()),
- "build_record_sha256":sha(native_record.read_bytes()),"binary_path":str(native_binary),
+ "build_record_sha256":parent_inputs.build_sha256,"binary_path":str(native_binary),
  "binary_size":native_binary.stat().st_size,"binary_sha256":sha(native_binary.read_bytes()),
  "python_path":os.path.realpath(sys.executable),"python_sha256":sha(pathlib.Path(sys.executable).read_bytes()),
  "python_abi":sysconfig.get_config_var("SOABI"),
- "dependency_record_sha256":sha(dependency_record.read_bytes()),"loader_mode":"rtld-now-local.v1"}}
+ "dependency_record_sha256":parent_inputs.dependency_sha256,"loader_mode":"rtld-now-local.v1"}}
 class Census:
  def observe(self):pass
 executable=e.stable_file(pathlib.Path(e.sys.executable))
@@ -2843,6 +2989,7 @@ changed["payloads"][0]["sha256"]=sha(e.canonical(changed_receipt))
 try:e.require_no_change(e.canonical(changed),incident)
 except e.Refusal as exc:ok(exc.code=="E_RELATION","changed materialization response cannot launch")
 else:raise AssertionError("changed materialization accepted")
+parent_inputs.recheck();parent_inputs.close()
 print("shadow-enforced-flow: %d checks passed"%checks)
 PY
 
@@ -3069,12 +3216,16 @@ print(json.dumps(evidence,sort_keys=True,separators=(",",":"),ensure_ascii=False
 PY
 /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C LANG=C \
   "$python_bin" -I -S -B - "$real" "$fixture" "$python_bin" "$real_native_binary" \
-  "$real_native/build-record.json" "$real/runtime-dependency-record.json" <<'PY'
+  "$real_native/build-record.json" "$real/runtime-dependency-record.json" \
+  "$tmp/parent-input-helper.py" "$tmp/runtime-dependency-collector.py" <<'PY'
 import os
 startup_environment_keys=tuple(sorted(os.environ))
 import dataclasses, hashlib, importlib.util, json, pathlib, shutil, stat, subprocess, sys, sysconfig, types
-base, package, physical_python, native_binary, native_record, dependency_record = map(pathlib.Path,sys.argv[1:])
-dependency_document=json.loads(dependency_record.read_bytes())
+base, package, physical_python, native_binary, native_record, dependency_record, parent_helper, collector = map(pathlib.Path,sys.argv[1:])
+helper_spec=importlib.util.spec_from_file_location("parent_input_helper",parent_helper)
+parent_module=importlib.util.module_from_spec(helper_spec);helper_spec.loader.exec_module(parent_module)
+parent_inputs=parent_module.ParentInputs(package,physical_python,native_binary,native_record,dependency_record,collector)
+dependency_document=parent_inputs.dependency
 assert tuple(dependency_document["body"]["preexec_environment"]["observed_keys"])==startup_environment_keys
 module_path=package/"shadow/v1/enforced-reproduction.py"
 spec=importlib.util.spec_from_file_location("real_shadow_enforced",module_path)
@@ -3282,11 +3433,11 @@ parent={"helper_source_sha256":c.HELPER_SOURCE_SHA256,"helper_build_record_sha25
  "helper_path":str(base.parent/"object-closure"),"native_release":{
  "source_sha256":sha((package/"shadow/v1/_cancel_release.c").read_bytes()),
  "build_script_sha256":sha((package/"shadow/v1/build-cancel-release.sh").read_bytes()),
- "build_record_sha256":sha(native_record.read_bytes()),"binary_path":str(native_binary),
+ "build_record_sha256":parent_inputs.build_sha256,"binary_path":str(native_binary),
  "binary_size":native_binary.stat().st_size,"binary_sha256":sha(native_binary.read_bytes()),
  "python_path":str(physical_python),"python_sha256":sha(physical_python.read_bytes()),
  "python_abi":sysconfig.get_config_var("SOABI"),
- "dependency_record_sha256":sha(dependency_record.read_bytes()),"loader_mode":"rtld-now-local.v1"}}
+ "dependency_record_sha256":parent_inputs.dependency_sha256,"loader_mode":"rtld-now-local.v1"}}
 census=e._NativeThreadCensus();census.observe()
 executable=e.stable_file(physical_python)
 admission=e._StartupAdmission(e._STARTUP_KEY,e.sys.executable,executable.sha256,e.sys.version,
@@ -3465,5 +3616,6 @@ for mode in ("incomplete","refused","missing","partial","cpu-none","unconfirmed"
              "mutate-core-ingress","mutate-contracts","mutate-control-source"):
  refuse_case(mode,mode=mode,launches=1)
 scenario_mode="success";scenario_output=None
+parent_inputs.recheck();parent_inputs.close()
 print(f"shadow-enforced-real-reproduce: {checks} checks passed")
 PY

@@ -1218,6 +1218,8 @@ remains a refusal before its effect.
 
 On Linux, also require the recorded C11 recipe and the public close-from action after the
 fixed stdio and pipe actions. Prove with an explicitly inheritable ordinary descriptor and
-high descriptor that neither reaches exec. This gate-only control does not open production
-admission; the matching package, build ID, source/body, wait, signal, and release evidence
-must still bind the exact production bytes.
+high descriptor that neither reaches exec. Production admission requires the matching
+package, build ID, source bodies, wait, signal, and release evidence to bind the exact
+production bytes. On macOS, hold and recheck the protected default spawn-filter ancestors
+and require the fixed path to remain absent through the second check immediately before
+spawn.
