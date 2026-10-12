@@ -68,6 +68,9 @@ _CHILD_ROLES = {
     "jq-version": 13,
     "sandbox-launch-boundary": 14,
     "darwin-group-membership": 15,
+    "write-seed-conversion": 16,
+    "write-materialization-input": 17,
+    "write-git-inspection": 18,
 }
 
 
@@ -185,6 +188,7 @@ def _runtime_module_origins() -> tuple[str, ...]:
     stdlib = Path(sysconfig.get_path("stdlib")).resolve(strict=True)
     driver = Path(__file__).resolve(strict=True)
     consumer = (SOURCE / "shadow/v1/_consumer.py").resolve(strict=True)
+    writer = SOURCE / "shadow/v1/write-shadow.py"
     origins = []
     for module in tuple(sys.modules.values()):
         if module is sys.modules.get("__main__"):
@@ -198,7 +202,7 @@ def _runtime_module_origins() -> tuple[str, ...]:
         path = Path(origin)
         require(path.is_absolute(), "E_RUNTIME")
         resolved = path.resolve(strict=True)
-        require(_path_below(resolved, stdlib) or resolved in {driver, consumer, _NATIVE_ORIGIN},
+        require(_path_below(resolved, stdlib) or resolved in {driver, consumer, writer, _NATIVE_ORIGIN},
                 "E_RUNTIME")
         origins.append(str(resolved))
     return tuple(sorted(set(origins)))
@@ -834,6 +838,8 @@ def _native_child_spec(role: str, argv: list[str], env: dict[str, str]) -> tuple
             and all(type(key) is str and type(value) is str and key and "=" not in key
                     and "\0" not in key and "\0" not in value
                     for key, value in env.items()), "E_RUNTIME")
+    if role.startswith("write-"):
+        c.validate_writer_argv(role, argv, str(SOURCE))
     executable = os.fsencode(argv[0])
     arguments = tuple(os.fsencode(item) for item in argv)
     environment = tuple(os.fsencode(f"{key}={env[key]}") for key in sorted(env))
@@ -849,110 +855,107 @@ def _native_returncode(status: tuple[int, ...]) -> int:
     return -value
 
 
+def _native_child_pending(status: tuple[int, ...]) -> tuple[str, ...]:
+    actions = []
+    if status[0] not in {0, 4}:
+        for tag, name in ((28, "close_child_stdin"), (31, "close_child_stdout"),
+                          (37, "close_child_stderr")):
+            if status[tag] == 0:
+                actions.append(name)
+    if status[0] == 3 and not status[17]:
+        if status[20] == 0:
+            actions.append("term_child_group")
+        if status[21] == 0:
+            actions.append("kill_child_group")
+        if not status[11] and (status[6] == 0 or status[7] == 0):
+            actions.append("observe_child_exit")
+        if (status[12] == 0 and status[11] and status[20] == status[21] == 1
+                and (status[45] == 0 or status[46] == errno.ESRCH)):
+            actions.append("reap_child")
+    if (status[0] in {3, 4} and not status[18]
+            and (status[22] == 0 or status[47] == 0)):
+        actions.append("check_child_group")
+    return tuple(actions)
+
+
 def _native_child_cleanup(native: object, deadline: float) -> None:
     first: BaseException | None = None
-    def observe_checkpoint() -> None:
+    def attempt(method) -> bool:
         nonlocal first
         try:
             CancellationSignals.checkpoint()
         except BaseException as exc:
             if first is None:
                 first = exc
-    for close in (native.close_child_stdin, native.close_child_stdout,
-                  native.close_child_stderr):
-        observe_checkpoint()
         try:
-            close()
+            method()
+            return True
         except BaseException as exc:
             if first is None:
                 first = exc
-    try:
-        initial = _native_child_status(native)
-    except BaseException as exc:
-        initial = None
-        if first is None:
-            first = exc
-    if initial is not None and initial[0] in {0, 2, 4}:
+        return False
+    def snapshot():
+        nonlocal first
+        try:
+            return _native_child_status(native)
+        except MemoryError as exc:
+            if first is None:
+                first = exc
+            try:
+                return _native_child_status(native)
+            except BaseException:
+                raise first
+    status = snapshot()
+    if status[0] in {0, 1, 2, 4}:
         if first is not None:
             raise first
-        require(initial[23] == 0, "E_RUNTIME")
+        require(status[23] == 0, "E_RUNTIME")
         return
-    try:
-        observe_checkpoint()
-        native.term_child_group()
-    except BaseException as exc:
-        if first is None:
-            first = exc
-    grace = min(deadline, time.monotonic() + 5)
-    status = initial
-    while (status is None or not status[11]) and time.monotonic() < grace:
-        observe_checkpoint()
-        try:
-            native.observe_child_exit()
-        except BaseException as exc:
-            if first is None:
-                first = exc
+    for name in ("close_child_stdin", "close_child_stdout", "close_child_stderr"):
+        if name in _native_child_pending(snapshot()):
+            attempt(getattr(native, name))
+    status = snapshot()
+    if status[0] in {0, 2, 4}:
+        if first is not None:
+            raise first
+        require(status[23] == 0, "E_RUNTIME")
+        return
+    if "term_child_group" in _native_child_pending(status):
+        attempt(native.term_child_group)
+    observation_failed = False
+    def observe_until(end):
+        nonlocal observation_failed
+        status = snapshot()
+        while (not observation_failed and "observe_child_exit" in _native_child_pending(status)
+               and time.monotonic() < end):
+            returned = attempt(native.observe_child_exit)
+            status = snapshot()
+            if not returned:
+                observation_failed = True
+                break
+            if not status[11]:
+                time.sleep(min(0.02, max(0, end - time.monotonic())))
+    observe_until(min(deadline, time.monotonic() + 5))
+    status = snapshot()
+    if "kill_child_group" in _native_child_pending(status):
+        attempt(native.kill_child_group)
+    observe_until(deadline)
+    status = snapshot()
+    if "reap_child" in _native_child_pending(status):
+        attempt(native.reap_child)
+    status = snapshot()
+    while ("check_child_group" in _native_child_pending(status)
+           and time.monotonic() < deadline):
+        returned = attempt(native.check_child_group)
+        status = snapshot()
+        if not returned:
             break
-        try:
-            status = _native_child_status(native)
-        except BaseException as exc:
-            status = None
-            if first is None:
-                first = exc
-        if status is None or not status[11]:
-            time.sleep(min(0.02, max(0, grace - time.monotonic())))
-    try:
-        observe_checkpoint()
-        native.kill_child_group()
-    except BaseException as exc:
-        if first is None:
-            first = exc
-    try:
-        status = _native_child_status(native)
-    except BaseException as exc:
-        status = None
-        if first is None:
-            first = exc
-    while (status is None or not status[11]) and time.monotonic() < deadline:
-        observe_checkpoint()
-        try:
-            native.observe_child_exit()
-        except BaseException as exc:
-            if first is None:
-                first = exc
-            break
-        try:
-            status = _native_child_status(native)
-        except BaseException as exc:
-            status = None
-            if first is None:
-                first = exc
-        if status is None or not status[11]:
+        if not status[18]:
             time.sleep(min(0.02, max(0, deadline - time.monotonic())))
-    if status is not None and status[11]:
-        observe_checkpoint()
-        try:
-            native.reap_child()
-        except BaseException as exc:
-            if first is None:
-                first = exc
-    while time.monotonic() < deadline:
-        try:
-            observe_checkpoint()
-            native.check_child_group()
-        except BaseException as exc:
-            if first is None:
-                first = exc
-            break
-        status = _native_child_status(native)
-        if status[18] or status[22] != 1 or status[47] != 0:
-            break
-        time.sleep(min(0.02, max(0, deadline - time.monotonic())))
-    status = _native_child_status(native)
     if first is not None:
         raise first
-    require(status[17] == 1 and status[18] == 1 and status[19] == 1
-            and status[23] == 0 and status[24] == 1, "E_RUNTIME")
+    require(status[17] == status[18] == status[19] == status[24] == 1
+            and status[23] == 0, "E_RUNTIME")
 
 
 def _communicate_native(native: object, input_raw: bytes, stdout_limit: int,
@@ -1029,10 +1032,9 @@ def _communicate_native(native: object, input_raw: bytes, stdout_limit: int,
             native.reap_child()
             status = _native_child_status(native)
             native.check_child_group()
-            status = _native_child_status(native)
         else:
             _native_child_cleanup(native, end)
-            status = _native_child_status(native)
+        status = _native_child_status(native)
         require(status[17] == 1 and status[18] == 1 and status[19] == 1
                 and status[23] == 0 and status[24] == 1, "E_RUNTIME")
         return (_NativeChildResult(returncode), bytes(output[stdout_fd]),
@@ -1070,7 +1072,13 @@ def spawn_bounded(role: str, argv: list[str], input_raw: bytes, stdout_limit: in
         return _communicate_native(native, input_raw, stdout_limit, stderr_limit, timeout)
     except BaseException as exc:
         try:
-            if attempted and _native_child_status(native)[0] == 3:
+            try:
+                status = _native_child_status(native)
+            except MemoryError:
+                if attempted:
+                    _native_child_cleanup(native, time.monotonic() + 10)
+                raise
+            if attempted and status[0] == 3 and _native_child_pending(status):
                 _native_child_cleanup(native, time.monotonic() + 10)
         except BaseException as cleanup_exc:
             raise exc from cleanup_exc
@@ -1814,7 +1822,7 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
             yield from ((b"request.json", launch_raw), (b"evaluation.json", evaluation_raw),
                 (b"incident.json", incident_raw), (b"record.json", record_raw),
                 (b"manifest.json", manifest_raw), (b"instruction", instruction))
-            for index, row in enumerate(manifest["entries"]):
+            for index, row in enumerate(row for row in manifest["entries"] if row["kind"] == "file"):
                 require(integer(row.get("size_bytes")) and row["size_bytes"] >= 0, "E_RELATION")
                 raw = read_regular(prep / "candidate" / row["path"], row["size_bytes"], "E_RELATION")
                 require(len(raw) == row["size_bytes"] and sha(raw) == row["sha256"], "E_RELATION")

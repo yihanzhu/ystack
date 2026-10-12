@@ -1872,3 +1872,24 @@ initializes Darwin's extended group service.
 ```sh
 bash scripts/test/shadow-enforced.test.sh
 ```
+
+## Inactive shadow write materialization
+
+`shadow/v1/write-shadow.py` has a private preparation path for one frozen enforced
+reproduction. It reopens the original controlled store and reruns the fixed evaluator
+and checker before constructing the exact 32 add-only evidence files. The unchanged
+seed converter, materializer and preparation components produce the candidate. The
+consumer checks actual tree, parent, modes and raw bytes, then performs the original
+incident check through a separate write attempt. Frozen reproduction bytes stay unchanged.
+
+`shadow/v1/write-materialization-input.jq` owns the two fixed JSON phases. Patch and
+contract bytes use raw files, within the existing native argv bound. Native roles
+16–18 are only the fixed converter, builder and read-only Git inspection commands.
+They use the existing State owner and general cleared environment; role 19 refuses.
+The public `prepare` entry still refuses. Completed admission and the outer write
+marker belong to the next slice. This code adds no publisher or qualification.
+
+`shadow-write.test.sh` reuses the unchanged enforced test's disposable real-chain
+fixture by inserting writer controls into a temporary script copy. It also runs the
+complete original regression. Only fixture identity/origin and supervisor launch are
+simulated; converter, builder, materializer, preparation, verifier and checker are real.
