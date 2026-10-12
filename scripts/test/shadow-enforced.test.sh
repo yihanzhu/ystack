@@ -733,8 +733,17 @@ sys.stdout.buffer.write(encoded)
 PY
 /bin/chmod 0400 "$tmp/runtime-dependency-collector.py"
 cat > "$tmp/parent-input-helper.py" <<'PY'
-import errno,hashlib,json,os,pathlib,stat,sys,sysconfig
+import errno,hashlib,json,os,pathlib,re,stat,sys,sysconfig
 FIXED_ENV={"LANG":"C","LC_ALL":"C","PATH":"/usr/bin:/bin"}
+def startup_environment():
+ environment=dict(os.environ);base={key:environment.pop(key,None) for key in FIXED_ENV}
+ if base!=FIXED_ENV:raise OSError(errno.EACCES,"startup environment")
+ if sys.platform=="darwin":
+  value=environment.pop("__CF_USER_TEXT_ENCODING",None)
+  match=re.fullmatch(r"0x([0-9A-Fa-f]+):0x([0-9A-Fa-f]+):0x([0-9A-Fa-f]+)",value or "")
+  if match is None or int(match.group(1),16)!=os.getuid():raise OSError(errno.EACCES,"startup environment")
+ if environment:raise OSError(errno.EACCES,"startup environment")
+ return tuple(sorted(os.environ))
 def pairs(values):
  result={}
  for key,value in values:
@@ -748,8 +757,7 @@ def canonical(raw):
 def identity(value):return (value.st_dev,value.st_ino,value.st_mode,value.st_uid,value.st_gid,value.st_nlink,value.st_size,value.st_mtime_ns,value.st_ctime_ns)
 class ParentInputs:
  def __init__(self,package,physical_python,native_binary,build_record,dependency_record):
-  if dict(os.environ)!=FIXED_ENV:raise OSError(errno.EACCES,"startup environment")
-  self._fds=[None]*16;self._count=0;self._rows=[];self.package=pathlib.Path(package)
+  self.environment_keys=startup_environment();self._fds=[None]*16;self._count=0;self._rows=[];self.package=pathlib.Path(package)
   self.physical_python=os.path.realpath(physical_python);self.native_binary=os.path.realpath(native_binary)
   try:self._prepare(pathlib.Path(build_record),pathlib.Path(dependency_record))
   except BaseException:
@@ -795,7 +803,7 @@ class ParentInputs:
   platform_keys={"executable_build_id","elf_interpreter","elf_images","mapped_file_gaps","libc_function_bodies","required_roles"} if facts["platform"]=="linux" else {"build_id","native_dependencies","darwin_mapped_images","darwin_release_symbol_bindings","darwin_shared_cache_uuid","package"}
   if set(facts)!=common|platform_keys:raise ValueError("dependency body")
   if facts.get("executable_identity")!={"status":"ok","sha256":python_row["sha256"],"size":python_row["size"]}:raise ValueError("runtime P")
-  if facts.get("flags")!={"isolated":1,"no_site":1,"dont_write_bytecode":1} or facts.get("preexec_environment")!={"observed_keys":["LANG","LC_ALL","PATH"],"forbidden_keys":[]}:raise ValueError("runtime startup")
+  if facts.get("flags")!={"isolated":1,"no_site":1,"dont_write_bytecode":1} or facts.get("preexec_environment")!={"observed_keys":list(self.environment_keys),"forbidden_keys":[]}:raise ValueError("runtime startup")
   if facts.get("soabi")!=sysconfig.get_config_var("SOABI") or os.path.realpath(facts.get("stdlib",""))!=os.path.realpath(sysconfig.get_path("stdlib")) or facts.get("version")!=sys.version:raise ValueError("runtime metadata")
   origins=facts.get("loaded_origins")
   if not isinstance(origins,list):raise ValueError("origins")
@@ -867,6 +875,31 @@ for kind,name,path in (("shadow_cancel_release_build_evidence","shadow.cancel-re
   "body":{"record_sha256":hashlib.sha256(raw).hexdigest(),"record":record}}
  print(json.dumps(evidence,sort_keys=True,separators=(",",":"),ensure_ascii=False))
 PY
+for parent_env_case in lang path extra; do
+  case "$parent_env_case" in
+    lang) parent_env_args=(PATH=/usr/bin:/bin LC_ALL=C LANG=wrong) ;;
+    path) parent_env_args=(PATH=/bin LC_ALL=C LANG=C) ;;
+    extra) parent_env_args=(PATH=/usr/bin:/bin LC_ALL=C LANG=C EXTRA=wrong) ;;
+  esac
+  /usr/bin/env -i "${parent_env_args[@]}" "$python_bin" -I -S -B - \
+    "$tmp/parent-input-helper.py" "$root" "$python_bin" "$native_binary" \
+    "$native_out/build-record.json" "$tmp/runtime-dependency-record.json" \
+    > "$tmp/parent-input-$parent_env_case.stdout" \
+    2> "$tmp/parent-input-$parent_env_case.stderr" <<'PY'
+import errno,importlib.util,pathlib,sys
+path=pathlib.Path(sys.argv[1]);spec=importlib.util.spec_from_file_location("parent_input_helper",path)
+helper=importlib.util.module_from_spec(spec);spec.loader.exec_module(helper)
+try:helper.ParentInputs(*sys.argv[2:])
+except OSError as exc:
+ assert exc.errno==errno.EACCES and str(exc)=="[Errno 13] startup environment"
+ print("startup-environment-refused")
+else:raise AssertionError("accepted altered startup environment")
+PY
+  [ ! -s "$tmp/parent-input-$parent_env_case.stderr" ] || fail "parent input $parent_env_case stderr"
+  /usr/bin/grep -Fx 'startup-environment-refused' "$tmp/parent-input-$parent_env_case.stdout" \
+    >/dev/null || fail "parent input accepted $parent_env_case"
+done
+/usr/bin/printf 'shadow-parent-input-environment: LANG/PATH value changes and an extra key refused\n'
 /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C LANG=C "$python_bin" -I -S -B - \
   "$tmp/parent-input-helper.py" "$root" "$python_bin" "$native_binary" \
   "$native_out/build-record.json" "$tmp/runtime-dependency-record.json" <<'PY'
@@ -876,7 +909,7 @@ helper=importlib.util.module_from_spec(spec);spec.loader.exec_module(helper);hel
 try:
  held.recheck();print(json.dumps({"kind":"shadow_parent_input_mechanical_record",
   "build_sha256":held.build_sha256,"dependency_sha256":held.dependency_sha256,
-  "held_files":len(held.rows)},sort_keys=True,separators=(",",":")))
+  "environment_keys":held.environment_keys,"held_files":len(held.rows)},sort_keys=True,separators=(",",":")))
 finally:held.close()
 PY
 "$python_bin" -I -S -B - "$root" "$native_actual_child_binary" <<'PY'
