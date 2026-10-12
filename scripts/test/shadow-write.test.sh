@@ -15,7 +15,7 @@ fi
 python_bin=$("$python_bin" -I -S -B -c 'import os,sys; print(os.path.realpath(sys.executable))')
 cat > "$tmp/writer-tests.py" <<'PY'
 def run_writer_tests():
-    import copy
+    import copy, signal
     from contextlib import contextmanager
     global scenario_work, scenario_output, scenario_mode, scenario_request
     module_names = ("shadow_writer_test_subject", "ystack_shadow_enforced", "ystack_shadow_consumer")
@@ -304,12 +304,31 @@ def run_writer_tests():
                     raise AssertionError("false candidate parent/tree accepted")
         finally:
             ws.close()
-    # Final-output native proof uses exactly the actual fixed writer commands.
     real_env = e.clean_env(base / "bin/jq", fixture)
-    argv = ["/usr/bin/git", "--no-replace-objects", "--git-dir=" + str(base / "source.git"), "rev-parse", "--is-bare-repository"]
+    roles = ("write-seed-conversion", "write-materialization-input", "write-git-inspection")
+    def fixed_command(role, name):
+        directory = fixture / (role + "-" + name)
+        directory.mkdir(mode=0o700)
+        if role == "write-seed-conversion":
+            incident_path = output / "incident.json" if name != "nonzero" else directory / "missing.json"
+            return ["/bin/bash", "-p", str(package / "maintenance/v1/incident-to-eval.sh"), "convert",
+                    str(incident_path), str(output / "shadow-record.json"), str(directory)]
+        if role == "write-materialization-input":
+            input_path = output / "materialization-input.json"
+            if name == "nonzero":
+                input_path = directory / "invalid.json"
+                write(input_path, b"{invalid JSON\n", 0o400)
+            return [str(base / "bin/jq"), "-L", str(package / "core/v2/generations" / generation / "modules"),
+                    "-S", "-c", "--arg", "phase", "stage-request", "--rawfile", "contract",
+                    str(paths[2] / "builder/contract.json"), "--rawfile", "patch", str(paths[2] / "builder/producer.patch"),
+                    "--slurpfile", "metadata", str(paths[2] / "builder/metadata-first.json"), "-f",
+                    str(package / "shadow/v1/write-materialization-input.jq"), str(input_path)]
+        inspection = ["cat-file", "commit", "0" * 40] if name == "nonzero" else ["rev-parse", "--is-bare-repository"]
+        return ["/usr/bin/git", "--no-replace-objects", "--git-dir=" + str(base / "source.git"), *inspection]
+    commands = [(role, fixed_command(role, "positive")) for role in roles]
+    argv = commands[-1][1]
     with partial_owner():
-        for role, args in (("write-git-inspection", argv), ("write-seed-conversion", ["/bin/bash", "-p", str(package / "maintenance/v1/incident-to-eval.sh"), "convert", str(output / "incident.json"), str(output / "shadow-record.json"), str(fixture)]),
-                           ("write-materialization-input", [str(base / "bin/jq"), "-L", str(package / "core/v2/generations" / generation / "modules"), "-S", "-c", "--arg", "phase", "stage-request", "--rawfile", "contract", str(paths[2] / "builder/contract.json"), "--rawfile", "patch", str(paths[2] / "builder/producer.patch"), "--slurpfile", "metadata", str(paths[2] / "builder/metadata-first.json"), "-f", str(package / "shadow/v1/write-materialization-input.jq"), str(output / "materialization-input.json")])):
+        for role, args in commands:
             bad = list(args)
             bad[-1] = "--unexpected"
             try:
@@ -333,31 +352,46 @@ def run_writer_tests():
             ok(native.child_status()[0] == 0, "extra writer env refuses before spawn")
         else:
             raise AssertionError("extra environment accepted")
-        ok(e.run_bounded("write-git-inspection", argv, env=real_env) == b"true\n", "actual role18 fixed Git succeeds on final native binary")
-        status = native.child_status()
-        ok(status[17] == status[18] == status[19] == status[24] == 1 and status[23] == 0, "actual role18 has unique reap/group absence/complete pipe responsibility")
-    for name, args, limit, timeout in (("nonzero", argv[:-2] + ["cat-file", "commit", "0" * 40], 1024, 120),
-        ("oversize", argv, 1, 120), ("timeout", argv, 1024, 0.000001)):
+    for role, args in commands:
         with partial_owner():
-            try:
-                e.run_bounded("write-git-inspection", args, env=real_env, output_limit=limit, timeout=timeout)
-            except e.Refusal:
-                ok(not (paths[3] / "bundle.json").exists(), "actual fixed writer command " + name + " has no completion")
-            else:
-                raise AssertionError(name + " accepted")
-    old_term = signal.signal(signal.SIGTERM, signal.SIG_IGN)
-    try:
-        with partial_owner():
-            signal.raise_signal(signal.SIGTERM)
-            try:
-                e.run_bounded("write-git-inspection", argv, env=real_env)
-            except e.Cancelled:
-                ok(native.child_status()[0] == 0 and not (paths[3] / "bundle.json").exists(),
-                   "real watched TERM prevents next writer child and completion")
-            else:
-                raise AssertionError("pending cancellation accepted")
-    finally:
-        signal.signal(signal.SIGTERM, old_term)
+            actual_output = e.run_bounded(role, args, env=real_env, output_limit=8 * e.OUTPUT_LIMIT)
+            ok(bool(actual_output), "actual fixed " + role + " positive produces output")
+            if role == "write-git-inspection":
+                ok(actual_output == b"true\n", "actual role18 fixed Git reads bare fact")
+            status = native.child_status()
+            ok(status[17] == status[18] == status[19] == status[24] == 1 and status[23] == 0,
+               role + " has unique reap/group absence/complete pipe responsibility")
+        for name, limit, timeout in (("nonzero", 8 * e.OUTPUT_LIMIT, 120),
+                                     ("oversize", 1, 120), ("timeout", 8 * e.OUTPUT_LIMIT, 0.000001)):
+            args = fixed_command(role, name)
+            child = subprocess.run([str(physical_python), "-I", "-S", "-B", str(native_negative_runner),
+                *map(str, (base, package, physical_python, native_binary, native_record, dependency_record,
+                           parent_helper, collector)), role, name, json.dumps(args), json.dumps(real_env),
+                str(limit), str(timeout)], env={key: os.environ[key] for key in startup_environment_keys},
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180)
+            (fixture / (role + "-" + name + ".stdout")).write_bytes(child.stdout)
+            (fixture / (role + "-" + name + ".stderr")).write_bytes(child.stderr)
+            if child.returncode != 0:
+                print(child.stdout.decode(), end="")
+                print(child.stderr.decode(), end="", file=sys.stderr)
+                raise AssertionError(role + " " + name + " isolated control failed")
+            report = json.loads(child.stdout)
+            ok(report["outcome"] == "native-release.failure" and report["no_completion"],
+               role + " " + name + " isolated raw failure retained; no L")
+            print("native writer negative", json.dumps(report, sort_keys=True))
+        old_term = signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        try:
+            with partial_owner():
+                signal.raise_signal(signal.SIGTERM)
+                try:
+                    e.run_bounded(role, fixed_command(role, "cancel"), env=real_env)
+                except e.Cancelled:
+                    ok(native.child_status()[0] == 0 and not (paths[3] / "bundle.json").exists(),
+                       "fixture SIG_IGN; real watched TERM prevents next " + role + " child and completion")
+                else:
+                    raise AssertionError(role + " pending cancellation accepted")
+        finally:
+            signal.signal(signal.SIGTERM, old_term)
     ok(json.loads((root / "enforcement/v1/accepted-identities.json").read_bytes())["body"]["environments"] == [], "shipped accepted set stays empty")
     ok(w.main(["write-shadow.py", "prepare", "request", "bundle", "work", "output"]) == 1, "interim public prepare refuses without marker")
     scenario_work, scenario_output = original_work, original_output
@@ -399,7 +433,56 @@ def diagnose_input_recheck(self):
 e.InputSnapshot.recheck=diagnose_input_recheck
 """
 source=source.replace(point,point+"\n"+diag,1)
+start=source.index('base, package, physical_python, native_binary, native_record, dependency_record, parent_helper, collector = map(pathlib.Path,sys.argv[1:])')
+start=source.rfind('import os\nstartup_environment_keys=',0,start)
+end=source.index('with e.CancellationSignals(admission):bundle=e.reproduce',start)
+prelude=source[start:end]
+prelude=prelude.replace('map(pathlib.Path,sys.argv[1:])','map(pathlib.Path,sys.argv[1:9])')
+prelude=prelude.replace('path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(raw);path.chmod(mode)',
+ 'path.parent.mkdir(parents=True,exist_ok=True)\n if path.exists() and path.read_bytes()==raw:return\n if path.exists():path.chmod(0o600)\n path.write_bytes(raw);path.chmod(mode)')
+import re
+prelude=re.sub(r'\.mkdir\(([^\n)]*)\)',lambda m:m.group(0) if 'exist_ok' in m.group(1) else '.mkdir('+m.group(1)+',exist_ok=True)',prelude)
+negative="""
+role,name=sys.argv[9:11]
+argv,environment=json.loads(sys.argv[11]),json.loads(sys.argv[12])
+limit,timeout=int(sys.argv[13]),float(sys.argv[14])
+class NegativeComplete(Exception):pass
+sentinel=NegativeComplete()
+refused=False
+try:
+ with e.CancellationSignals(admission):
+  try:e.run_bounded(role,argv,env=environment,output_limit=limit,timeout=timeout)
+  except e.Refusal as exc:
+   assert str(exc) in {"E_RUNTIME","E_LIMIT"},str(exc)
+   refused=True
+   refusal_code=str(exc)
+   status=native.child_status()
+   assert len(status)==49
+   if name=="nonzero":
+    assert status[11]==1 and status[9]==getattr(os,"CLD_EXITED",1) and status[10]!=0
+   if name=="oversize":assert str(exc)=="E_LIMIT"
+   if status[0]==4:
+    assert status[17]==status[18]==status[19]==status[24]==1 and status[23]==0
+    classification="successful bounded cleanup"
+   elif status[0]==3:
+    assert status[24]==0 and (status[23]!=0 or not status[11])
+    classification="retained native failure or outstanding duty; process exit is not State teardown"
+   else:
+    assert name=="timeout" and status[0] in {0,2} and status[23]==0
+    classification="refused before owned child"
+  assert refused,"negative command accepted"
+  raise sentinel
+except NegativeComplete as exc:
+ assert exc is sentinel
+assert native.outcome()=="native-release.failure"
+assert native.child_status()==status
+print(json.dumps({"role":role,"case":name,"status":status,"classification":classification,"refusal":refusal_code,
+ "outcome":native.outcome(),"no_completion":True},sort_keys=True))
+"""
+runner=tmp/"writer-native-negative.py"
+runner.write_text(prelude+negative)
 body="root = pathlib.Path("+repr(str(root))+")\n"+(tmp/"writer-tests.py").read_text()
+body="native_negative_runner = pathlib.Path("+repr(str(tmp/"writer-native-negative.py"))+")\n"+body
 source=source.replace(anchor,"exec(compile("+repr(body)+", 'shadow-write-fixture-controls', 'exec'))\n"+anchor,1)
 (tmp/"enforced-with-writer.sh").write_text(source)
 PY

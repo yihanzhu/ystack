@@ -857,108 +857,69 @@ def _native_returncode(status: tuple[int, ...]) -> int:
 
 def _native_child_cleanup(native: object, deadline: float) -> None:
     first: BaseException | None = None
-    def observe_checkpoint() -> None:
+    def attempt(method) -> bool:
         nonlocal first
         try:
             CancellationSignals.checkpoint()
         except BaseException as exc:
             if first is None:
                 first = exc
-    for close in (native.close_child_stdin, native.close_child_stdout,
-                  native.close_child_stderr):
-        observe_checkpoint()
         try:
-            close()
+            method()
+            return True
         except BaseException as exc:
             if first is None:
                 first = exc
-    try:
-        initial = _native_child_status(native)
-    except BaseException as exc:
-        initial = None
-        if first is None:
-            first = exc
-    if initial is not None and initial[0] in {0, 2, 4}:
+        return False
+    for tag, close in ((28, native.close_child_stdin), (31, native.close_child_stdout),
+                       (37, native.close_child_stderr)):
+        status = _native_child_status(native)
+        if status[0] not in {0, 4} and status[tag] == 0:
+            attempt(close)
+    status = _native_child_status(native)
+    if status[0] in {0, 2, 4}:
         if first is not None:
             raise first
-        require(initial[23] == 0, "E_RUNTIME")
+        require(status[23] == 0, "E_RUNTIME")
         return
-    try:
-        observe_checkpoint()
-        native.term_child_group()
-    except BaseException as exc:
-        if first is None:
-            first = exc
-    grace = min(deadline, time.monotonic() + 5)
-    status = initial
-    while (status is None or not status[11]) and time.monotonic() < grace:
-        observe_checkpoint()
-        try:
-            native.observe_child_exit()
-        except BaseException as exc:
-            if first is None:
-                first = exc
-            break
-        try:
-            status = _native_child_status(native)
-        except BaseException as exc:
-            status = None
-            if first is None:
-                first = exc
-        if status is None or not status[11]:
-            time.sleep(min(0.02, max(0, grace - time.monotonic())))
-    try:
-        observe_checkpoint()
-        native.kill_child_group()
-    except BaseException as exc:
-        if first is None:
-            first = exc
-    try:
+    if status[0] == 3 and not status[17] and status[20] == 0:
+        attempt(native.term_child_group)
+    observation_failed = False
+    def observe_until(end):
+        nonlocal observation_failed
         status = _native_child_status(native)
-    except BaseException as exc:
-        status = None
-        if first is None:
-            first = exc
-    while (status is None or not status[11]) and time.monotonic() < deadline:
-        observe_checkpoint()
-        try:
-            native.observe_child_exit()
-        except BaseException as exc:
-            if first is None:
-                first = exc
-            break
-        try:
+        while (not observation_failed and status[0] == 3 and not status[17] and not status[11]
+               and (status[6] == 0 or status[7] == 0) and time.monotonic() < end):
+            returned = attempt(native.observe_child_exit)
             status = _native_child_status(native)
-        except BaseException as exc:
-            status = None
-            if first is None:
-                first = exc
-        if status is None or not status[11]:
-            time.sleep(min(0.02, max(0, deadline - time.monotonic())))
-    if status is not None and status[11]:
-        observe_checkpoint()
-        try:
-            native.reap_child()
-        except BaseException as exc:
-            if first is None:
-                first = exc
-    while time.monotonic() < deadline:
-        try:
-            observe_checkpoint()
-            native.check_child_group()
-        except BaseException as exc:
-            if first is None:
-                first = exc
-            break
-        status = _native_child_status(native)
-        if status[18] or status[22] != 1 or status[47] != 0:
-            break
-        time.sleep(min(0.02, max(0, deadline - time.monotonic())))
+            if not returned:
+                observation_failed = True
+                break
+            if not status[11]:
+                time.sleep(min(0.02, max(0, end - time.monotonic())))
+    observe_until(min(deadline, time.monotonic() + 5))
     status = _native_child_status(native)
+    if status[0] == 3 and not status[17] and status[21] == 0:
+        attempt(native.kill_child_group)
+    observe_until(deadline)
+    status = _native_child_status(native)
+    if (status[0] == 3 and not status[17] and status[12] == 0 and status[11]
+            and status[20] == status[21] == 1
+            and (status[45] == 0 or status[46] == errno.ESRCH)):
+        attempt(native.reap_child)
+    status = _native_child_status(native)
+    while (status[0] in {3, 4} and not status[18]
+           and (status[22] == 0 or status[47] == 0) and time.monotonic() < deadline):
+        returned = attempt(native.check_child_group)
+        status = _native_child_status(native)
+        if not returned:
+            break
+        if not status[18]:
+            time.sleep(min(0.02, max(0, deadline - time.monotonic())))
     if first is not None:
         raise first
-    require(status[17] == 1 and status[18] == 1 and status[19] == 1
-            and status[23] == 0 and status[24] == 1, "E_RUNTIME")
+    require(status[17] == status[18] == status[19] == status[24] == 1
+            and status[23] == 0, "E_RUNTIME")
 
 
 def _communicate_native(native: object, input_raw: bytes, stdout_limit: int,
@@ -1031,14 +992,11 @@ def _communicate_native(native: object, input_raw: bytes, stdout_limit: int,
                   and status[9] == getattr(os, "CLD_EXITED", 1) and status[10] == 0
                   and status[11] == 1 and status[19] == 1 and status[20:23] == (0, 0, 0)
                   and status[23] == 0)
-        if normal:
-            native.reap_child()
-            status = _native_child_status(native)
-            native.check_child_group()
-            status = _native_child_status(native)
-        else:
-            _native_child_cleanup(native, end)
-            status = _native_child_status(native)
+        require(normal, "E_RUNTIME")
+        native.reap_child()
+        status = _native_child_status(native)
+        native.check_child_group()
+        status = _native_child_status(native)
         require(status[17] == 1 and status[18] == 1 and status[19] == 1
                 and status[23] == 0 and status[24] == 1, "E_RUNTIME")
         return (_NativeChildResult(returncode), bytes(output[stdout_fd]),
