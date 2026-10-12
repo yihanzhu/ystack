@@ -357,9 +357,10 @@ scratch children. Use argument arrays and no shell command strings.
 | Resolve Darwin UUIDs | `P -I -S -B S/shadow/v1/_consumer.py _resolve-darwin-uuids` |
 | Read Darwin group | `P -I -S -B S/shadow/v1/_consumer.py _read-darwin-group` |
 
-Except for the closed writer roles below, fixed script calls receive only
-`PATH=DEPENDENCY_BIN:/usr/bin:/bin`, `LC_ALL=C`, `LANG=C`; DEPENDENCY_BIN contains the checked jq. Clear inherited Git configuration,
-hooks, prompts, loader/Python variables, functions and network/proxy settings.
+Child environment is classified only by closed role. Roles 1 and 12–15 receive exactly
+`PATH=/usr/bin:/bin`, `LC_ALL=C` and `LANG=C`. Roles 2–11 and 16–18 receive the
+existing 14-key `clean_env` defined below. Clear inherited Git configuration, hooks,
+prompts, loader/Python variables, functions and network/proxy settings.
 All children close inherited descriptors except their declared stdio. Use a new
 process group per ordinary component. Each ordinary child has a 120-second deadline,
 64 KiB stderr cap and its upstream output cap (1 MiB where no tighter cap exists).
@@ -369,13 +370,14 @@ never call a truncated output successful. Consumers have a 1,200-second overall
 budget; a deadline only removes opportunities for work, never relaxes admission.
 
 Writer roles 16 `write-seed-conversion`, 17 `write-materialization-input` and 18
-`write-git-inspection` bind the three writer operations above. They use the existing
-14-key `clean_env`: `PATH`, `HOME`, `TMPDIR`, `LANG`, `LC_ALL`,
-`GIT_CONFIG_NOSYSTEM`, `GIT_CONFIG_GLOBAL`, `GIT_NO_REPLACE_OBJECTS`,
-`GIT_NO_LAZY_FETCH`, `GIT_TERMINAL_PROMPT`, `GIT_OPTIONAL_LOCKS`,
-`GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_0` and `GIT_CONFIG_VALUE_0`. The last three bind
-the sole absent hooks path. Restricted roles remain exactly 1 and 12–15; roles 2–11 and
-16–18 use the general shape. Role 19 and every mismatched argv or environment refuse.
+`write-git-inspection` bind the three writer operations above. The general environment
+has exactly `PATH=DEPENDENCY_BIN:/usr/bin:/bin`, caller-owned disposable `HOME` and
+`TMPDIR`, `LANG=C`, `LC_ALL=C`, `GIT_CONFIG_NOSYSTEM=1`,
+`GIT_CONFIG_GLOBAL=/dev/null`, `GIT_NO_REPLACE_OBJECTS=1`, `GIT_NO_LAZY_FETCH=1`,
+`GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS=0`, `GIT_CONFIG_COUNT=1`,
+`GIT_CONFIG_KEY_0=core.hooksPath` and `GIT_CONFIG_VALUE_0=ABSENT_NO_HOOKS_PATH`.
+DEPENDENCY_BIN contains only the checked private jq. Role 19 and every mismatched argv
+or environment refuse.
 Each writer role keeps the 120-second deadline and 64-KiB stderr cap. Converter stdout
 is at most 1 MiB; builder stdout is at most 8 MiB; tree listings are at most 16 MiB and
 commits are at most 1 MiB. A blob read is bounded by its expected length plus one;
@@ -391,8 +393,8 @@ resource once, keeps the first error and creates no child.
 `prepare_child()` accepts one exact built-in tuple: closed role integer, absolute UTF-8-bytes
 executable, tuple-of-bytes argv and tuple-of-bytes environment. Roles 1–15 retain their
 accepted meanings. Add only the three writer roles 16–18 above; role 19 stays unreachable.
-Each identity role keeps its fixed three-key environment. Every role requires its exact
-executable/argv, environment class and own stdin/stdout caps. Reject path-like objects,
+Every role requires its exact executable/argv, classified environment and own
+stdin/stdout caps. Reject path-like objects,
 callables, NUL, unknown or mismatched role, extra environment, nonfixed stdio,
 conflicting descriptors and existing argument/environment/file/output bounds. Never
 accept a REQUEST-selected program, PATH search or generic dispatcher/action list.
