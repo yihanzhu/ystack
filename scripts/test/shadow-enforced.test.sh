@@ -252,12 +252,16 @@ def absent(fd):
  except OSError as exc:return exc.errno==errno.EBADF
  return False
 def finish(_sent,_frame):raise SystemExit(0)
-signal.signal(signal.SIGTERM,finish);child=os.fork()
-if child==0:
- signal.signal(signal.SIGTERM,signal.SIG_IGN)
- os.write(1,(json.dumps({"kind":"descendant","pid":os.getpid(),"pgid":os.getpgrp(),"uid":os.getuid()},sort_keys=True,separators=(",",":"))+"\\n").encode())
- while True:signal.pause()
-os.write(1,(json.dumps({"kind":"leader","pid":os.getpid(),"pgid":os.getpgrp(),"uid":os.getuid(),"descendant":child,"inherited_absent":absent(%d),"high_absent":absent(%d)},sort_keys=True,separators=(",",":"))+"\\n").encode())
+signal.signal(signal.SIGTERM,finish);leader=os.getpid();ready_r,ready_w=os.pipe();reaper=os.fork()
+if reaper==0:
+ os.close(ready_r);os.setpgid(0,0);child=os.fork()
+ if child==0:
+  os.close(ready_w);os.setpgid(0,leader);signal.signal(signal.SIGTERM,signal.SIG_IGN)
+  os.write(1,(json.dumps({"kind":"descendant","pid":os.getpid(),"pgid":os.getpgrp(),"uid":os.getuid()},sort_keys=True,separators=(",",":"))+"\\n").encode())
+  while True:signal.pause()
+ os.write(ready_w,(str(child)+"\\n").encode());os.close(ready_w);os.waitpid(child,0);os._exit(0)
+os.close(ready_w);child=int(os.read(ready_r,32));os.close(ready_r)
+os.write(1,(json.dumps({"kind":"leader","pid":leader,"pgid":os.getpgrp(),"uid":os.getuid(),"descendant":child,"inherited_absent":absent(%d),"high_absent":absent(%d)},sort_keys=True,separators=(",",":"))+"\\n").encode())
 while True:signal.pause()
 ''' % (inherited,high))
 argv=(sys.executable.encode(),b"-I",b"-S",b"-B",b"-c",program)
@@ -278,7 +282,6 @@ os.close(high);os.close(inherited)
 state.term_child_group();observe(state);before=state.child_status();assert before[17]==0
 state.kill_child_group();after_kill=state.child_status();assert after_kill[45:47]==(0,0)
 close_at_eof(state,stdout_fd,state.close_child_stdout);close_at_eof(state,stderr_fd,state.close_child_stderr)
-if sys.platform=="linux":time.sleep(1)
 state.reap_child();state.check_child_group();final=state.child_status()
 print("actual-descendant-final",sys.platform,final,flush=True)
 assert final[17:20]==(1,1,1) and final[24]==1 and final[47:49]==(-1,errno.ESRCH)
