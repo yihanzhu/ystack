@@ -1226,3 +1226,17 @@ package, build ID, source bodies, wait, signal, and release evidence to bind the
 production bytes. On macOS, hold and recheck the protected default spawn-filter ancestors
 and require the fixed path to remain absent through the second check immediately before
 spawn.
+
+### Restore inactive shadow write materialization
+
+Restore `shadow/v1/write-shadow.py`, `shadow/v1/write-materialization-input.jq` and
+`scripts/test/shadow-write.test.sh` beside the enforced consumer and its native source.
+The writer reauthenticates frozen evidence, prepares 32 additions, verifies the actual
+candidate, and keeps outer completion withheld. Public `prepare` remains a refusal
+until the separate admission slice lands. Never substitute archived origin for a fresh
+controlled-store read or enlarge the native role/argv/environment contract.
+
+Run `bash scripts/test/shadow-write.test.sh`. It includes the full unchanged enforced
+regression and real writer component checks in disposable fixtures. Retain final native
+build/source and command evidence; synthetic receipt/installation proof grants no native
+qualification. The shipped accepted set stays empty and CPU/wall enforcement stays none.

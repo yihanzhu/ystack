@@ -1017,3 +1017,108 @@ def _resolver_main(argv: list[str]) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(_resolver_main(sys.argv))
+
+
+def validate_writer_argv(role: str, argv: list[str], source: str) -> None:
+    def physical(value: str) -> bool:
+        return _physical(value) and os.path.realpath(value) == value
+    if role == "write-seed-conversion":
+        valid = (len(argv) == 7 and argv[:4] == ["/bin/bash", "-p",
+            source + "/maintenance/v1/incident-to-eval.sh", "convert"]
+            and all(physical(value) for value in argv[4:]))
+    elif role == "write-materialization-input":
+        valid = (len(argv) == 20 and physical(argv[0]) and argv[0].endswith("/jq")
+            and argv[1] == "-L" and physical(argv[2])
+            and argv[3:7] == ["-S", "-c", "--arg", "phase"]
+            and argv[7] in {"stage-request", "final-input"}
+            and argv[8:10] == ["--rawfile", "contract"] and physical(argv[10])
+            and argv[11:13] == ["--rawfile", "patch"] and physical(argv[13])
+            and argv[14:16] == ["--slurpfile", "metadata"] and physical(argv[16])
+            and argv[17:19] == ["-f", source + "/shadow/v1/write-materialization-input.jq"]
+            and physical(argv[19]))
+    elif role == "write-git-inspection":
+        valid = (len(argv) >= 5 and argv[:2] == ["/usr/bin/git", "--no-replace-objects"]
+                 and argv[2].startswith("--git-dir=") and physical(argv[2][10:]))
+        args = argv[3:]
+        valid = valid and (
+            (len(args) == 6 and args[:2] == ["config", "--file"]
+             and physical(args[2]) and args[3:] == ["--name-only", "--list", "--no-includes"])
+            or args in (["rev-parse", "--is-bare-repository"],
+                       ["rev-parse", "--show-object-format"])
+            or (len(args) == 6 and args[:5] == ["ls-tree", "-r", "-t", "-z", "--full-tree"]
+                and _writer_oid(args[5]))
+            or (len(args) == 3 and args[:2] in (["cat-file", "commit"], ["cat-file", "blob"])
+                and _writer_oid(args[2])))
+    else:
+        valid = False
+    _require(valid, "E_RELATION")
+
+
+def _writer_oid(value: object) -> bool:
+    return isinstance(value, str) and len(value) in {40, 64} and all(
+        char in "0123456789abcdef" for char in value)
+
+
+def write_path_ok(path: object, policy: dict, mode: dict) -> bool:
+    if not isinstance(path, str) or not 1 <= len(path.encode()) <= 4096:
+        return False
+    if path.startswith("/") or "\\" in path or any(ord(char) < 32 or ord(char) == 127 for char in path):
+        return False
+    parts = path.split("/")
+    if len(parts) > 64 or any(part in {"", ".", ".."} or part.lower() in {".git", ".ystack"}
+                             or part.endswith((".", " ")) for part in parts):
+        return False
+    rules = policy["body"]
+    folded = [part.lower() for part in parts]
+    if any(part in rules["protected_path_segments"] for part in folded):
+        return False
+    if len(parts) == 1 and path in rules["protected_root_files"]:
+        return False
+    prefixes = rules["protected_path_prefixes"] + mode["forbidden_prefixes"]
+    if any(path.startswith(prefix) or path == prefix.rstrip("/") for prefix in prefixes):
+        return False
+    return path not in mode["forbidden_paths"]
+
+
+def evidence_patch(files: dict[str, bytes], algorithm: str) -> tuple[bytes, list[dict]]:
+    _require(algorithm in {"sha1", "sha256"} and len(files) == 32, "E_RELATION")
+    chunks = []
+    facts = []
+    for path, raw in sorted(files.items()):
+        _require(isinstance(raw, bytes) and b"\0" not in raw, "E_RELATION")
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeError:
+            raise Refusal("E_RELATION") from None
+        _require(not any(ord(char) < 32 and char not in "\n\r\t" for char in text), "E_RELATION")
+        oid = hashlib.new(algorithm, ("blob " + str(len(raw)) + "\0").encode() + raw).hexdigest()
+        header = (f"diff --git a/{path} b/{path}\nnew file mode 100644\n"
+                  f"index {'0' * len(oid)}..{oid}\n--- /dev/null\n+++ b/{path}\n")
+        lines = raw.split(b"\n")
+        if raw:
+            if raw.endswith(b"\n"):
+                lines.pop()
+            header += f"@@ -0,0 +1,{len(lines)} @@\n"
+        patch = header.encode() + b"".join(b"+" + line + b"\n" for line in lines if raw)
+        if raw and not raw.endswith(b"\n"):
+            patch += b"\\ No newline at end of file\n"
+        chunks.append(patch)
+        _require(sum(map(len, chunks)) <= 1_048_576, "E_LIMIT")
+        facts.append({"path": path, "mode": "100644", "sha256": digest(raw),
+                      "git_blob_oid": oid, "add_only": True})
+    return b"".join(chunks), facts
+
+
+def write_contract(paths: list[str]) -> bytes:
+    return canonical({"schema_version": 1, "kind": "local_git_materialization_contract",
+        "allowed_paths": paths, "max_patch_bytes": 1_048_576, "max_changed_paths": 32,
+        "allowed_modes": ["100644", "100755"], "allow_binary_patch": False,
+        "allow_symlinks": False, "allow_submodules": False, "candidate_repository_kind": "bare"})
+
+
+WRITE_TEXTS = {
+    "finish": b"Finish after all planned evidence files exist in the disposable candidate.\n",
+    "verify": b"Verify every planned path, mode and byte digest, then run the fixed incident check.\n",
+    "output_contract": b"Add only the listed evidence files; preserve all existing target files.\n",
+    "policy": b"Routine candidate-only evidence preparation. Network and publication are denied.\n",
+}

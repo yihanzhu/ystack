@@ -68,6 +68,9 @@ _CHILD_ROLES = {
     "jq-version": 13,
     "sandbox-launch-boundary": 14,
     "darwin-group-membership": 15,
+    "write-seed-conversion": 16,
+    "write-materialization-input": 17,
+    "write-git-inspection": 18,
 }
 
 
@@ -185,6 +188,7 @@ def _runtime_module_origins() -> tuple[str, ...]:
     stdlib = Path(sysconfig.get_path("stdlib")).resolve(strict=True)
     driver = Path(__file__).resolve(strict=True)
     consumer = (SOURCE / "shadow/v1/_consumer.py").resolve(strict=True)
+    writer = SOURCE / "shadow/v1/write-shadow.py"
     origins = []
     for module in tuple(sys.modules.values()):
         if module is sys.modules.get("__main__"):
@@ -198,7 +202,7 @@ def _runtime_module_origins() -> tuple[str, ...]:
         path = Path(origin)
         require(path.is_absolute(), "E_RUNTIME")
         resolved = path.resolve(strict=True)
-        require(_path_below(resolved, stdlib) or resolved in {driver, consumer, _NATIVE_ORIGIN},
+        require(_path_below(resolved, stdlib) or resolved in {driver, consumer, writer, _NATIVE_ORIGIN},
                 "E_RUNTIME")
         origins.append(str(resolved))
     return tuple(sorted(set(origins)))
@@ -834,6 +838,8 @@ def _native_child_spec(role: str, argv: list[str], env: dict[str, str]) -> tuple
             and all(type(key) is str and type(value) is str and key and "=" not in key
                     and "\0" not in key and "\0" not in value
                     for key, value in env.items()), "E_RUNTIME")
+    if role.startswith("write-"):
+        c.validate_writer_argv(role, argv, str(SOURCE))
     executable = os.fsencode(argv[0])
     arguments = tuple(os.fsencode(item) for item in argv)
     environment = tuple(os.fsencode(f"{key}={env[key]}") for key in sorted(env))

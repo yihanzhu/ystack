@@ -396,6 +396,69 @@ copy_child_vector(PyObject *value, char *storage, size_t storage_size,
 }
 
 static int
+path_suffix(const char *value, const char *suffix)
+{
+    size_t length = strlen(value), tail = strlen(suffix);
+    return value[0] == '/' && length > tail &&
+        strcmp(value + length - tail, suffix) == 0;
+}
+
+static int
+writer_oid(const char *value)
+{
+    size_t index, length = strlen(value);
+    if (length != 40 && length != 64) return 0;
+    for (index = 0; index < length; index++)
+        if (!((value[index] >= '0' && value[index] <= '9') ||
+                (value[index] >= 'a' && value[index] <= 'f'))) return 0;
+    return 1;
+}
+
+static int
+writer_argv_allowed(int role, const char *executable, char **argv, size_t count)
+{
+    if (role < 16) return 1;
+    if (role == 16)
+        return count == 7 && strcmp(executable, "/bin/bash") == 0 &&
+            strcmp(argv[1], "-p") == 0 &&
+            path_suffix(argv[2], "/maintenance/v1/incident-to-eval.sh") &&
+            strcmp(argv[3], "convert") == 0 && argv[4][0] == '/' &&
+            argv[5][0] == '/' && argv[6][0] == '/';
+    if (role == 17)
+        return count == 20 && path_suffix(executable, "/jq") &&
+            strcmp(argv[1], "-L") == 0 && argv[2][0] == '/' &&
+            strcmp(argv[3], "-S") == 0 && strcmp(argv[4], "-c") == 0 &&
+            strcmp(argv[5], "--arg") == 0 && strcmp(argv[6], "phase") == 0 &&
+            (strcmp(argv[7], "stage-request") == 0 ||
+             strcmp(argv[7], "final-input") == 0) &&
+            strcmp(argv[8], "--rawfile") == 0 && strcmp(argv[9], "contract") == 0 &&
+            argv[10][0] == '/' && strcmp(argv[11], "--rawfile") == 0 &&
+            strcmp(argv[12], "patch") == 0 && argv[13][0] == '/' &&
+            strcmp(argv[14], "--slurpfile") == 0 &&
+            strcmp(argv[15], "metadata") == 0 && argv[16][0] == '/' &&
+            strcmp(argv[17], "-f") == 0 &&
+            path_suffix(argv[18], "/shadow/v1/write-materialization-input.jq") &&
+            argv[19][0] == '/';
+    if (role != 18 || strcmp(executable, "/usr/bin/git") != 0 || count < 5 ||
+            strcmp(argv[1], "--no-replace-objects") != 0 ||
+            strncmp(argv[2], "--git-dir=/", 11) != 0) return 0;
+    if (strcmp(argv[3], "config") == 0)
+        return count == 9 && strcmp(argv[4], "--file") == 0 && argv[5][0] == '/' &&
+            strcmp(argv[6], "--name-only") == 0 && strcmp(argv[7], "--list") == 0 &&
+            strcmp(argv[8], "--no-includes") == 0;
+    if (strcmp(argv[3], "rev-parse") == 0)
+        return count == 5 && (strcmp(argv[4], "--is-bare-repository") == 0 ||
+            strcmp(argv[4], "--show-object-format") == 0);
+    if (strcmp(argv[3], "ls-tree") == 0)
+        return count == 9 && strcmp(argv[4], "-r") == 0 &&
+            strcmp(argv[5], "-t") == 0 && strcmp(argv[6], "-z") == 0 &&
+            strcmp(argv[7], "--full-tree") == 0 && writer_oid(argv[8]);
+    return count == 6 && strcmp(argv[3], "cat-file") == 0 &&
+        (strcmp(argv[4], "commit") == 0 || strcmp(argv[4], "blob") == 0) &&
+        writer_oid(argv[5]);
+}
+
+static int
 child_environment_allowed(int role, char **environment, size_t count)
 {
     static const char *general[] = {
@@ -406,7 +469,7 @@ child_environment_allowed(int role, char **environment, size_t count)
         "LC_ALL=C", "PATH=", "TMPDIR="
     };
     size_t index;
-    if (role == 1 || role >= 12) {
+    if (role == 1 || (role >= 12 && role <= 15)) {
         return count == 3 && strcmp(environment[0], "LANG=C") == 0 &&
             strcmp(environment[1], "LC_ALL=C") == 0 &&
             strcmp(environment[2], "PATH=/usr/bin:/bin") == 0;
@@ -512,7 +575,7 @@ state_prepare_child(NativeState *state, PyObject *argument)
         return NULL;
     }
     role = PyLong_AsLong(role_object);
-    if (role < 1 || role > 15 || PyErr_Occurred() ||
+    if (role < 1 || role > 18 || PyErr_Occurred() ||
             PyBytes_AsStringAndSize(executable_object, &executable, &executable_length) < 0 ||
             executable_length < 2 || executable[0] != '/' ||
             (size_t)executable_length >= sizeof(child->executable) ||
@@ -526,6 +589,10 @@ state_prepare_child(NativeState *state, PyObject *argument)
             memcmp(child->argv[0], executable, (size_t)executable_length) != 0) {
         PyErr_Clear();
         PyErr_SetString(PyExc_ValueError, "child tuple is outside the fixed contract");
+        return NULL;
+    }
+    if (!writer_argv_allowed((int)role, executable, child->argv, child->argc)) {
+        PyErr_SetString(PyExc_ValueError, "writer argv is outside the fixed contract");
         return NULL;
     }
     memcpy(child->executable, executable, (size_t)executable_length);
