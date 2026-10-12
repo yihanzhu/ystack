@@ -1197,9 +1197,32 @@ Real lessons from setting this up:
   Claude and Codex never talk directly — the PR is the only message bus.
 
 ### Restore the inactive shadow consumer trust reader
-Restore `shadow/v1/_consumer.py` and its focused test with the sandbox bound controls.
-The private reader launches no sandbox. Verify it with:
+Restore `shadow/v1/_consumer.py`, `shadow/v1/_cancel_release.c`,
+`shadow/v1/build-cancel-release.sh`, `shadow/v1/enforced-reproduction.py`, and their
+focused test with the sandbox bound controls. The entry remains inactive: a
+real native launch still needs the separately reserved host installation and
+qualification. The test compiles the private extension into its temporary fixture; it
+does not install or activate it. Verify framing, native release, durable prelaunch state,
+store evidence, fixed verifier relations, trace sealing, and the exact completion
+inventory with:
 
 ```sh
 bash scripts/test/shadow-enforced.test.sh
 ```
+
+On macOS, also require the recorded GNU C11 bundle recipe, the fixed native signal owner,
+the saved caller mask, non-consuming pending checkpoints, State-owned child lifecycle,
+and exact-byte native completion commit. Bind the actual system providers and spawn-filter
+state used by the reviewed runtime. Missing signal, child, identity, or lifecycle proof
+remains a refusal before its effect.
+Protected Darwin restoration also requires the fixed State-owned supplementary-group
+child. Primary or effective gid matches start no query; supplementary results are only
+the exact requested gid or an empty array, and any child or protocol failure refuses.
+
+On Linux, also require the recorded C11 recipe and the public close-from action after the
+fixed stdio and pipe actions. Prove with an explicitly inheritable ordinary descriptor and
+high descriptor that neither reaches exec. Production admission requires the matching
+package, build ID, source bodies, wait, signal, and release evidence to bind the exact
+production bytes. On macOS, hold and recheck the protected default spawn-filter ancestors
+and require the fixed path to remain absent through the second check immediately before
+spawn.

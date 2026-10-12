@@ -1833,7 +1833,41 @@ paths byte for byte on a repeat run alongside every refusal above.
 
 ## Inactive shadow consumer trust reader
 `shadow/v1/_consumer.py` reads descriptor-3 context, dependencies, the root-owned
-installation, and its store through stable held descriptors. It launches no sandbox.
+installation, and its store through stable held descriptors.
+
+`shadow/v1/enforced-reproduction.py` is the explicit inactive reproduction entry.
+It validates and materializes a no-change request, prepares and inspects the
+candidate, evaluates the fixed bound declaration, persists a nonce-bearing launch
+request and receipt expectation, and frames the prepared export. Its production
+launch path is fixed to the installed supervisor account; repository tests replace
+only that private launch boundary. A completed run reopens the controlled store,
+checks the bound receipt and fixed verifier result, validates a sealed trace, and
+writes the exact 29-file frozen bundle with `bundle.json` last. It has no write,
+publisher, activation, installation, or qualification path.
+
+`shadow/v1/_cancel_release.c` is the private single-thread cancellation-release
+boundary. `shadow/v1/build-cancel-release.sh` compiles it only for a reviewed Python
+runtime into a new private test or provisioning directory and records the exact source,
+compiler, arguments, ABI, and output. The consumer loads only parent-accepted bytes by
+absolute path with `RTLD_NOW|RTLD_LOCAL`; it never builds or installs them.
+On macOS the recorded recipe uses GNU C11 and the standard bundle linker flags. The
+module, State, method bindings, and required first-use roots exist before the first
+census. After that census and before product work, the native state captures the caller
+mask, installs fixed native HUP/INT/TERM handlers, and keeps those signals blocked. Existing Python checkpoints use
+one non-consuming native pending-signal observation. The same state owns child process
+identity and the exact completion bytes through the first marker byte, durability point,
+action and mask restoration, and final close. Unknown signal, child, or platform behavior
+refuses before its effect. Linux keeps its separate C11 release contract and adds the
+public close-from action after the fixed stdio and pipe actions. Platform admission
+requires the held parent build and runtime records to match the fixed public-call controls
+and provider evidence. Linux also requires the public session, mask, default-action,
+close-from, and wait capabilities used by the fixed child recipe. macOS checks the fixed
+default spawn-filter path before preparation and again immediately before spawn while the
+parent holds and rechecks its protected ancestors.
+On protected macOS runs, primary or effective group membership is decided locally.
+Supplementary membership is read once by a distinct State-owned private child with fixed
+Python, source, arguments, environment, input, output, and cleanup; the parent never
+initializes Darwin's extended group service.
 
 ```sh
 bash scripts/test/shadow-enforced.test.sh
