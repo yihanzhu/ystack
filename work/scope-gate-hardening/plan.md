@@ -31,6 +31,8 @@ paths:
   `scope.sandbox-receipt-missing` to the closed reason vocabulary.
 - `shadow/v1/_consumer.py` — expose private reusable held-bundle and read-only Git
   primitives without adding a public command or trust input.
+- `shadow/v1/enforced-reproduction.py` — wire its existing fixed Darwin UUID and
+  group roles to the shared private owner with unchanged argv, ledger and lifecycle.
 - `shadow/v1/write-shadow.py` — call the shared Git primitive with unchanged
   child-5 behavior, so scope does not carry a second implementation.
 - `scripts/test/scope-qualification.test.sh` — complete core proof, including the
@@ -153,6 +155,10 @@ only the canonical UUID array; its group method accepts only one canonical
 reap. `enforced-reproduction.py` constructs this owner and keeps its existing
 ledger entries; the scope reader constructs the same private owner from its held
 physical files. Neither path accepts a runner callback or arbitrary argv.
+This is the only `enforced-reproduction.py` change: its existing two roles call the
+private owner's two closed methods. All other driver roles, request handling,
+ledger rows, timeouts, cancellation, signal cleanup and reap behavior remain byte-
+for-byte compatible at their public boundaries.
 
 For each completed bundle, perform these checks in this order:
 
@@ -323,6 +329,9 @@ Add focused cases for every spec R6 item. Besides the real fixture above, cover:
 - fixed Git command rejection, config/replace/alternate/shallow/promisor drift,
   bundle/Git races, child timeout/signal/nonzero/malformed output and exact reap;
   no target write, network, credential, producer or publisher call.
+- the complete existing shadow-enforced suite proving the shared Darwin owner keeps
+  fixed UUID/group argv, original ledger entries, bounds, timeout, cancellation,
+  signal cleanup and unique reap, with every other driver role unchanged;
 - the existing self-host compatibility harness with its empty legacy bundle root,
   real bare Git snapshot, nine arguments, both intentional refusal reasons and
   unchanged identity, relation, qualification and inactive-output assertions.
