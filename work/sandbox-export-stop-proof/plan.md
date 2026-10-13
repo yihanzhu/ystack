@@ -8,7 +8,10 @@ drafted: 2026-10-13
 
 Tracks #552. Implement this one test repair on
 `codex/impl/sandbox-export-stop-proof` after an independent routine-plan check of
-this exact plan-only head. Implementation `review_size: standard`.
+this exact plan-only head. Implementation `review_size: accepted-exception`,
+450–550 net lines. This one concern needs the valid-export proof and bounded
+failure diagnostics with their negative controls. Keep the complete tests
+readable and retain every existing acceptance requirement.
 
 ## Scope
 
