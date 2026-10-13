@@ -610,7 +610,14 @@ class _Reader:
         require({path for path, value in facts.items() if path not in source_facts and value[1] == "tree"}
                 == directories - set(source_facts))
         policy = parse(self.package_sources["scope/v1/scope-policy.json"].raw)
-        marker = parse(self.package_sources["config/construction-mode.json"].raw)
+        marker_raw = self.package_sources["config/construction-mode.json"].raw
+        require(len(marker_raw) <= 8 * c.DOCUMENT_LIMIT)
+        try:
+            marker = json.loads(marker_raw.decode("utf-8"), object_pairs_hook=c._unique_object)
+            require(type(marker) is dict)
+            c.canonical(marker)
+        except (UnicodeError, ValueError, TypeError, RecursionError):
+            raise c.Refusal("E_RELATION") from None
         require(all(c.write_path_ok(path, policy, marker) and self.allowed(path) for path in paths))
         frozen = {name: frozen_files[prefix + name] for name in c.SHADOW_EVIDENCE_NAMES + ("bundle.json",)}
         require(frozen["incident.json"] == files["incident.json"] and frozen_files[prefix + "README.md"]

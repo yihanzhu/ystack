@@ -113,6 +113,62 @@ PY_REASON_PROGRAM
   -f "$tmp/environment-reasons.jq" "$tmp/environment-reasons.json" >/dev/null ||
   fail 'record forms confused declaration and bound evaluator reasons'
 pass 'each record form accepts its evaluator reason and refuses the other evaluator reason'
+"$python_bin" -I -S -B - "$root" <<'PY_FIXED_MARKER'
+import ast,importlib.util,json,pathlib,sys,types
+root=pathlib.Path(sys.argv[1]);source=root/'scope/v1/read-shadow-evidence.py'
+spec=importlib.util.spec_from_file_location('scope_fixed_marker_subject',source)
+module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
+tree=ast.parse(source.read_bytes())
+method=next(node for node in ast.walk(tree) if isinstance(node,ast.FunctionDef) and node.name=='write_relations')
+start=next(index for index,node in enumerate(method.body) if isinstance(node,ast.Assign)
+    and any(isinstance(target,ast.Name) and target.id=='marker_raw' for target in node.targets))
+body=method.body[start:start+3]+[ast.Return(value=ast.Name(id='marker',ctx=ast.Load()))]
+function=ast.FunctionDef(name='fixed_marker',args=ast.arguments(posonlyargs=[],args=[ast.arg(arg='self')],
+    kwonlyargs=[],kw_defaults=[],defaults=[]),body=body,decorator_list=[])
+namespace={'c':module.c,'require':module.require,'json':json}
+exec(compile(ast.fix_missing_locations(ast.Module(body=[function],type_ignores=[])),str(source),'exec'),namespace)
+def parse_fixed(raw):
+    return namespace['fixed_marker'](types.SimpleNamespace(package_sources={
+        'config/construction-mode.json':types.SimpleNamespace(raw=raw)}))
+raw=(root/'config/construction-mode.json').read_bytes();canonical=module.c.canonical(json.loads(raw))
+assert raw!=canonical
+pretty=parse_fixed(raw);normalized=parse_fixed(canonical);assert pretty==normalized
+policy=module.parse((root/'scope/v1/scope-policy.json').read_bytes())
+for path in ['README.md','ystack-evidence/incident.fixture/shadow-record.json','AGENTS.md']:
+    assert module.c.write_path_ok(path,policy,pretty)==module.c.write_path_ok(path,policy,normalized)
+for bad in [b'{"status":0,"status":1}',b'{"nested":{"id":0,"id":1}}',
+            b'{"value":NaN}',b'{"value":Infinity}',b'{"value":1e9999}',
+            b'[]',b'\xff',b' '* (8*module.c.DOCUMENT_LIMIT+1),b'{}'.decode().encode('utf-16'),
+            b'{"nested":'+b'{"child":'*2000+b'{"id":0,"id":1}'+b'}'*2000+b'}']:
+    try:parse_fixed(bad)
+    except module.c.Refusal as error:assert error.code=='E_RELATION'
+    else:raise AssertionError('invalid fixed marker accepted')
+try:module.parse(raw)
+except module.c.Refusal:pass
+else:raise AssertionError('untrusted evidence parser accepted pretty bytes')
+print('fixed reviewed marker: pretty/canonical policy equality; 10 invalid cases refuse; evidence parser stays strict')
+PY_FIXED_MARKER
+"$python_bin" -I -S -B - "$root" <<'PY_MAC_TRANSITION'
+import json,pathlib,subprocess,sys
+source=(pathlib.Path(sys.argv[1])/'scripts/test/scope-qualification.test.sh').read_text()
+cleanup=source[source.index('\ncleanup_genuine() {'):source.index('\nsetup_genuine_linux() {')]
+condition=cleanup[cleanup.index('    if [ "$current" = "${genuine_mac_identities[index]}" ] ||'):]
+condition=condition[:condition.index(' then')+5]
+old=json.dumps({'name':'fixture','uuid':'a'*32,'uid':None,'gid':None},sort_keys=True,separators=(',',':'))
+new=json.dumps({'name':'fixture','uuid':'a'*32,'uid':56000,'gid':None},sort_keys=True,separators=(',',':'))
+third=json.dumps({'name':'fixture','uuid':'a'*32,'uid':56001,'gid':None},sort_keys=True,separators=(',',':'))
+other=json.dumps({'name':'fixture','uuid':'b'*32,'uid':56000,'gid':None},sort_keys=True,separators=(',',':'))
+program='index=0; current=$1; genuine_mac_identities=($2); pending=$3;\n'+condition+'\n exit 0; else exit 1; fi'
+for current,pending,accepted in [(old,new,True),(new,new,True),(third,new,False),
+                                (other,new,False),(new,'',False),(old,'',True)]:
+    result=subprocess.run(['/bin/bash','-c',program,'transition',current,old,pending],
+                          stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=2)
+    assert result.returncode==(0 if accepted else 1) and not result.stdout and not result.stderr
+setter=source[source.index('\nmac_set_record() {'):source.index('\nsetup_genuine_macos() {')]
+assert setter.index('genuine_mac_pending[index]=$expected') < setter.index('/usr/bin/dscl . -create')
+assert setter.index('[ "$current" = "$expected" ]') < setter.index("genuine_mac_pending[index]=''")
+print('Mac owned cleanup: old/new bounded transition accepts; third identity refuses; journal precedes mutation')
+PY_MAC_TRANSITION
 /bin/mkdir -m 700 "$tmp/legacy-bundles"
 /usr/bin/git init --bare "$tmp/legacy-source.git" >"$tmp/git-init.out" 2>"$tmp/git-init.err"
 run_evaluator() {
@@ -1569,6 +1625,7 @@ genuine_chown=/bin/chown
 [ "$genuine_platform" != Darwin ] || genuine_chown=/usr/sbin/chown
 genuine_mac_nodes=()
 genuine_mac_identities=()
+genuine_mac_pending=()
 genuine_python=''
 genuine_base=''
 genuine_writer=''
@@ -1640,7 +1697,11 @@ cleanup_genuine() {
     else failed=1; fi
   fi
   for ((index=${#genuine_mac_nodes[@]}-1; index>=0; index--)); do
-    if [ "$(mac_record_identity "${genuine_mac_nodes[index]}")" = "${genuine_mac_identities[index]}" ]; then
+    local current pending
+    current=$(mac_record_identity "${genuine_mac_nodes[index]}") || { failed=1; continue; }
+    pending=${genuine_mac_pending[index]:-}
+    if [ "$current" = "${genuine_mac_identities[index]}" ] ||
+       { [ -n "$pending" ] && [ "$current" = "$pending" ]; }; then
       /usr/bin/sudo -n /usr/bin/dscl . -delete "${genuine_mac_nodes[index]}" || failed=1
       if mac_record_absent "${genuine_mac_nodes[index]}"; then
         /usr/bin/printf 'owned-record-absent: %s expected=%s\n' "${genuine_mac_nodes[index]}" "${genuine_mac_identities[index]}"
@@ -1807,6 +1868,7 @@ PY_MAC_ABSENT
   /usr/bin/sudo -n /usr/bin/dscl . -create "$node" GeneratedUID "$identifier" || fail 'fixture record creation'
   genuine_mac_nodes+=("$node")
   genuine_mac_identities+=("$expected")
+  genuine_mac_pending+=('')
   current=$(mac_record_identity "$node") || fail 'fixture identity capture'
   [ "$current" = "$expected" ] || fail 'unexpected new fixture identity'
 }
@@ -1817,10 +1879,12 @@ mac_set_record() {
   expected=$(/usr/bin/sudo -n "$genuine_python" -I -S -B -c \
     'import json,sys;v=json.loads(sys.argv[1]);k={"UniqueID":"uid","PrimaryGroupID":"gid"}.get(sys.argv[2]);v.update({k:int(sys.argv[3])} if k else {});print(json.dumps(v,sort_keys=True,separators=(",",":")))' \
     "$current" "$key" "$value") || fail 'fixture identity encoding'
+  genuine_mac_pending[index]=$expected
   /usr/bin/sudo -n /usr/bin/dscl . -create "${genuine_mac_nodes[index]}" "$key" "$value" || fail 'fixture record property'
   current=$(mac_record_identity "${genuine_mac_nodes[index]}") || fail 'fixture identity capture'
   [ "$current" = "$expected" ] || fail 'fixture property changed another identity'
   genuine_mac_identities[index]=$current
+  genuine_mac_pending[index]=''
 }
 setup_genuine_macos() {
   [ "${GITHUB_ACTIONS:-}" = true ] && [ "${RUNNER_ENVIRONMENT:-}" = github-hosted ] ||
