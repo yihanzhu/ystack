@@ -217,10 +217,16 @@ child 6 completes or child 7 starts.
    refuse. Ordinary source changes outside these protected sets remain allowed.
 7. Require one continuous branch-rule event interval from the authenticated
    baseline state through the current state. Replaying the events must reproduce
-   both endpoint states. No event may change deletion, non-fast-forward,
-   pull-request or required-status-check protection. A temporary change followed
-   by restoration refuses. Missing event history, an unexplained version jump or
-   a source unable to provide the full interval refuses.
+   both endpoint states. The complete sorted set of every rule applicable to the
+   default branch must equal the baseline after every event and at the current
+   endpoint. Reject any rule addition or deletion and any change to source rule
+   id, target pattern, enforcement state, bypass actors, rule type or canonical
+   parameters. Deletion, non-fast-forward, pull-request and required-status-check
+   protection are the minimum required enforcing rule kinds at every state; they
+   are not an exhaustive list of rules held unchanged. A permanent A→B change and
+   a temporary A→B→A change in any fifth rule kind both refuse. Missing event
+   history, an unexplained version jump or a source unable to provide the full
+   interval refuses.
 8. The qualifying observation compares only with `coverage_base`, its Git snapshot
    and its baseline rule state. The current observation compares only with R, its
    Git snapshot and the complete base-to-R interval. Do not require the two
@@ -295,9 +301,12 @@ child 6 completes or child 7 starts.
 4. Include paired negatives for another repository/default branch, non-descendant
    or second-parent path, missing commit/page/cursor, foreign/direct evidence
    change, wrong publisher/PR/base/head/merge/path, protected Git change,
-   branch-rule A→B→A, incomplete history, wrong source identity, caller copy,
-   owner/group/mode/ACL/link swap, changed raw page or observation, and fixed
-   package drift.
+   branch-rule addition/deletion or field change, a fifth rule kind's permanent
+   A→B and temporary A→B→A, incomplete history, wrong source identity, caller
+   copy, owner/group/mode/ACL/link swap, changed raw page or observation, and
+   fixed package drift. Preserve a positive whose complete applicable rule set,
+   including at least the four required enforcing kinds and one fifth kind, is
+   unchanged at every event and endpoint.
 5. Request cases prove a fresh second evaluation at the same R rejects the first
    genuine current attempt, while a new genuine attempt passes. Rereading the
    original qualifying attempt passes without changing `terminated_at`; test one
