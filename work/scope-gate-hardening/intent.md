@@ -25,7 +25,7 @@ or a supplied claim.
 Every required environment has an authentic satisfied receipt. The receipt is bound
 to its attempt, candidate, environment, and policy. Its registry identity is genuinely
 native-qualified. Declaration-only records remain readable, but they refuse.
-They keep the existing `scope.sandbox-receipt-missing` reason.
+They refuse with `scope.sandbox-receipt-missing`.
 
 The existing no-change result keeps its current meaning. A changed result qualifies
 only when it is the complete withheld-publication form and exactly matches the
