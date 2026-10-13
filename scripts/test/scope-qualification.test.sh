@@ -56,14 +56,21 @@ esac
 jq_cache_dir="${TMPDIR:-/tmp}/ystack-portable-core-jq16"
 /bin/mkdir -p "$jq_cache_dir"
 jq_cache="$jq_cache_dir/$jq_asset"
-if [ ! -f "$jq_cache" ] || [ -L "$jq_cache" ] ||
-   [ "$(sha256_path "$jq_cache")" != "$jq_sha" ]; then
-  download=$(/usr/bin/mktemp "$jq_cache_dir/.jq-1.6.XXXXXX")
-  /usr/bin/curl --proto '=https' --tlsv1.2 -fsSL \
-    "https://github.com/jqlang/jq/releases/download/jq-1.6/$jq_asset" -o "$download"
-  [ "$(sha256_path "$download")" = "$jq_sha" ] || fail 'jq release digest'
-  /bin/chmod 0555 "$download"
-  /bin/mv "$download" "$jq_cache"
+if [ "${platform%%:*}" = Darwin ] && [ "${GITHUB_ACTIONS:-}" = true ] &&
+   [ "${RUNNER_ENVIRONMENT:-}" = github-hosted ]; then
+  jq_cache=/usr/local/bin/jq
+  [ -f "$jq_cache" ] && [ ! -L "$jq_cache" ] && [ "$(sha256_path "$jq_cache")" = "$jq_sha" ] ||
+    fail 'genuine origin BLOCKED: existing fixed pinned jq is required'
+else
+  if [ ! -f "$jq_cache" ] || [ -L "$jq_cache" ] ||
+     [ "$(sha256_path "$jq_cache")" != "$jq_sha" ]; then
+    download=$(/usr/bin/mktemp "$jq_cache_dir/.jq-1.6.XXXXXX")
+    /usr/bin/curl --proto '=https' --tlsv1.2 -fsSL \
+      "https://github.com/jqlang/jq/releases/download/jq-1.6/$jq_asset" -o "$download"
+    [ "$(sha256_path "$download")" = "$jq_sha" ] || fail 'jq release digest'
+    /bin/chmod 0555 "$download"
+    /bin/mv "$download" "$jq_cache"
+  fi
 fi
 bin="$tmp/bin"
 /bin/mkdir -m 700 "$bin"
@@ -73,8 +80,13 @@ jq_bin="$bin/jq"
 [ "$("$jq_bin" --version)" = jq-1.6 ] || fail 'jq identity'
 
 run_validator() { PATH="$bin:/usr/bin:/bin" "$validator" validate "$1"; }
-python_candidate=$(command -v python3.14 2>/dev/null || command -v python3)
-if [ -x /opt/homebrew/bin/python3.14 ]; then python_candidate=/opt/homebrew/bin/python3.14; fi
+if [ "${platform%%:*}" = Darwin ] && [ "${GITHUB_ACTIONS:-}" = true ] &&
+   [ "${RUNNER_ENVIRONMENT:-}" = github-hosted ]; then
+  python_candidate=/usr/bin/python3
+else
+  python_candidate=$(command -v python3.14 2>/dev/null || command -v python3)
+  if [ -x /opt/homebrew/bin/python3.14 ]; then python_candidate=/opt/homebrew/bin/python3.14; fi
+fi
 python_bin=$("$python_candidate" -I -S -B -c 'import os,sys;print(os.path.realpath(sys.executable))')
 "$python_bin" -I -S -B -c 'import sys;assert sys.version_info >= (3,11)' || fail 'existing Python 3.11+ required'
 /bin/ln -s "$python_bin" "$bin/python3"
@@ -1552,6 +1564,11 @@ print('terminal protocol framing, EOF, nonzero, first-open FIFO and committed-by
 PY_TERMINAL_TEST
 pass 'terminal append and byte caps are independent; framed commitment binds the first snapshot'
 
+genuine_platform=$(/usr/bin/uname -s)
+genuine_chown=/bin/chown
+[ "$genuine_platform" != Darwin ] || genuine_chown=/usr/sbin/chown
+genuine_mac_nodes=()
+genuine_mac_identities=()
 genuine_python=''
 genuine_base=''
 genuine_writer=''
@@ -1573,7 +1590,11 @@ genuine_anchor_parents=()
 genuine_anchor_parent_identities=()
 fixture_directory_identity() {
   [ -d "$1" ] && [ ! -L "$1" ] || return 1
-  /usr/bin/sudo -n /usr/bin/stat -c '%d:%i:%u:%g:%f' -- "$1"
+  if [ "$genuine_platform" = Darwin ]; then
+    /usr/bin/sudo -n /usr/bin/stat -f '%d:%i:%u:%g:%p' "$1"
+  else
+    /usr/bin/sudo -n /usr/bin/stat -c '%d:%i:%u:%g:%f' -- "$1"
+  fi
 }
 remove_fixture_directory() {
   local path=$1 identity=$2 recursive=$3
@@ -1618,6 +1639,14 @@ cleanup_genuine() {
       else /usr/bin/printf 'owned-group-absent: %s expected=%s\n' "$genuine_group" "$genuine_group_identity"; fi
     else failed=1; fi
   fi
+  for ((index=${#genuine_mac_nodes[@]}-1; index>=0; index--)); do
+    if [ "$(mac_record_identity "${genuine_mac_nodes[index]}")" = "${genuine_mac_identities[index]}" ]; then
+      /usr/bin/sudo -n /usr/bin/dscl . -delete "${genuine_mac_nodes[index]}" || failed=1
+      if mac_record_absent "${genuine_mac_nodes[index]}"; then
+        /usr/bin/printf 'owned-record-absent: %s expected=%s\n' "${genuine_mac_nodes[index]}" "${genuine_mac_identities[index]}"
+      else failed=1; fi
+    else failed=1; fi
+  done
   for ((index=${#genuine_anchor_parents[@]}-1; index>=0; index--)); do
     remove_fixture_directory "${genuine_anchor_parents[index]}" "${genuine_anchor_parent_identities[index]}" false || failed=1
   done
@@ -1671,6 +1700,10 @@ setup_genuine_linux() {
   [ "$writer_uid" -gt 0 ] && [ "$consumer_uid" -gt 0 ] && [ "$writer_uid" != "$consumer_uid" ] &&
     [ "$consumer_gid" = 65534 ] && [ "$consumer_gid" != "$fixture_gid" ] &&
     [[ " $actual_groups " = *" $fixture_gid "* ]] || fail 'actual principal membership'
+  setup_genuine_paths
+}
+
+setup_genuine_paths() {
   if [ ! -e /usr/local/libexec ] && [ ! -L /usr/local/libexec ]; then
     /usr/bin/sudo -n /bin/mkdir -m 0755 -- /usr/local/libexec || fail 'fixture parent creation'
     genuine_libexec_created=true
@@ -1696,14 +1729,176 @@ setup_genuine_linux() {
   for component_dir in scope shadow sandbox core config scripts adapters preparation control enforcement telemetry maintenance evals verifiers; do
     /usr/bin/sudo -n /bin/cp -R -- "$root/$component_dir" "$genuine_base/package/$component_dir" || fail 'fixed package copy'
   done
-  /usr/bin/sudo -n /bin/chown -R 0:0 -- "$genuine_base/package" || fail 'root package ownership'
+  /usr/bin/sudo -n "$genuine_chown" -R 0:0 -- "$genuine_base/package" || fail 'root package ownership'
   /usr/bin/sudo -n /bin/chmod -R a+rX,go-w -- "$genuine_base/package" || fail 'root package mode'
+  if [ "$genuine_platform" = Darwin ]; then
+    /usr/bin/sudo -n "$genuine_python" -I -S -B - "$genuine_base/package" <<'PY_MAC_IMPORT_CLOSURE' || fail 'actual fixed consumer import closure is unsafe'
+import importlib.util,pathlib,stat,sys
+package=pathlib.Path(sys.argv[1])
+source=package/'scope/v1/read-shadow-evidence.py'
+spec=importlib.util.spec_from_file_location('scope_fixture_import_closure',source)
+assert spec is not None and spec.loader is not None
+module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module
+spec.loader.exec_module(module)
+for loaded in sys.modules.values():
+ name=getattr(loaded,'__file__',None)
+ if not name:continue
+ path=pathlib.Path(name)
+ assert path.resolve()==path and path.is_file()
+ for item in (path,*path.parents):
+  value=item.lstat()
+  assert value.st_uid==0 and not value.st_mode & 0o022 and not stat.S_ISLNK(value.st_mode)
+assert '_cancel_release' not in sys.modules
+print('actual root-owned P/consumer/reader import closure: PASS; no State/startup/VM')
+PY_MAC_IMPORT_CLOSURE
+  fi
   prepare_genuine_writer
   /usr/bin/sudo -n /bin/cp -- "$tmp/genuine-writer.py" "$genuine_base/genuine-writer.py" || fail 'fixed storage harness copy'
-  /usr/bin/sudo -n /bin/chown 0:0 -- "$genuine_base/genuine-writer.py" || fail 'storage harness owner'
+  /usr/bin/sudo -n "$genuine_chown" 0:0 -- "$genuine_base/genuine-writer.py" || fail 'storage harness owner'
   /usr/bin/sudo -n /bin/chmod 0555 -- "$genuine_base/genuine-writer.py" || fail 'storage harness mode'
   /usr/bin/sudo -n -u "$genuine_writer" /usr/bin/id
   /usr/bin/sudo -n -u "$genuine_consumer" /usr/bin/id
+}
+
+mac_record_identity() {
+  /usr/bin/sudo -n "$genuine_python" -I -S -B - "$1" <<'PY_MAC_IDENTITY'
+import json,plistlib,subprocess,sys,uuid
+node=sys.argv[1]
+result=subprocess.run(['/usr/bin/dscl','-plist','.','-read',node],capture_output=True,timeout=10)
+assert result.returncode==0 and not result.stderr and len(result.stdout)<=65536
+value=plistlib.loads(result.stdout)
+def field(name):
+ rows=value.get('dsAttrTypeStandard:'+name,[])
+ assert type(rows) is list and len(rows)<=1 and all(type(item) is str for item in rows)
+ return rows[0] if rows else None
+name=field('RecordName');identifier=field('GeneratedUID')
+assert name==node.rsplit('/',1)[1] and identifier is not None
+uid,gid=field('UniqueID'),field('PrimaryGroupID')
+print(json.dumps({'name':name,'uuid':uuid.UUID(identifier).hex,
+ 'uid':int(uid) if uid is not None else None,'gid':int(gid) if gid is not None else None},
+ sort_keys=True,separators=(',',':')))
+PY_MAC_IDENTITY
+}
+mac_record_absent() {
+  /usr/bin/sudo -n "$genuine_python" -I -S -B - "$1" <<'PY_MAC_ABSENCE'
+import subprocess,sys
+node,name=sys.argv[1].rsplit('/',1)
+result=subprocess.run(['/usr/bin/dscl','.', '-list',node],capture_output=True,timeout=10)
+assert result.returncode==0 and not result.stderr and len(result.stdout)<=65536
+assert name not in result.stdout.decode('utf8').splitlines()
+PY_MAC_ABSENCE
+}
+mac_create_record() {
+  local node=$1 number=$2 identifier expected current
+  mac_record_absent "$node" || fail 'fixture record already exists or absence is unverified'
+  /usr/bin/sudo -n "$genuine_python" -I -S -B - "$node" "$number" <<'PY_MAC_ABSENT' || fail 'fixture name or numeric ID no longer absent'
+import subprocess,sys
+for node,field in (('/Users','UniqueID'),('/Groups','PrimaryGroupID')):
+ result=subprocess.run(['/usr/bin/dscl','.', '-list',node,field],capture_output=True,timeout=10)
+ assert result.returncode==0 and not result.stderr and len(result.stdout)<=65536
+ for row in result.stdout.decode('utf8').splitlines():
+  name,number=row.rsplit(None,1)
+  assert name!=sys.argv[1].rsplit('/',1)[1] and int(number)!=int(sys.argv[2])
+PY_MAC_ABSENT
+  identifier=$(/usr/bin/sudo -n "$genuine_python" -I -S -B -c 'import uuid;print(uuid.uuid4())') || fail 'fixture UUID'
+  expected=$(/usr/bin/sudo -n "$genuine_python" -I -S -B -c \
+    'import json,sys,uuid;print(json.dumps(dict(name=sys.argv[1],uuid=uuid.UUID(sys.argv[2]).hex,uid=None,gid=None),sort_keys=True,separators=(",",":")))' \
+    "${node##*/}" "$identifier") || fail 'fixture identity encoding'
+  /usr/bin/sudo -n /usr/bin/dscl . -create "$node" GeneratedUID "$identifier" || fail 'fixture record creation'
+  genuine_mac_nodes+=("$node")
+  genuine_mac_identities+=("$expected")
+  current=$(mac_record_identity "$node") || fail 'fixture identity capture'
+  [ "$current" = "$expected" ] || fail 'unexpected new fixture identity'
+}
+mac_set_record() {
+  local index=$1 key=$2 value=$3 expected current
+  current=$(mac_record_identity "${genuine_mac_nodes[index]}") || fail 'fixture identity capture'
+  [ "$current" = "${genuine_mac_identities[index]}" ] || fail 'fixture identity changed'
+  expected=$(/usr/bin/sudo -n "$genuine_python" -I -S -B -c \
+    'import json,sys;v=json.loads(sys.argv[1]);k={"UniqueID":"uid","PrimaryGroupID":"gid"}.get(sys.argv[2]);v.update({k:int(sys.argv[3])} if k else {});print(json.dumps(v,sort_keys=True,separators=(",",":")))' \
+    "$current" "$key" "$value") || fail 'fixture identity encoding'
+  /usr/bin/sudo -n /usr/bin/dscl . -create "${genuine_mac_nodes[index]}" "$key" "$value" || fail 'fixture record property'
+  current=$(mac_record_identity "${genuine_mac_nodes[index]}") || fail 'fixture identity capture'
+  [ "$current" = "$expected" ] || fail 'fixture property changed another identity'
+  genuine_mac_identities[index]=$current
+}
+setup_genuine_macos() {
+  [ "${GITHUB_ACTIONS:-}" = true ] && [ "${RUNNER_ENVIRONMENT:-}" = github-hosted ] ||
+    fail 'genuine origin BLOCKED: a reserved disposable host is required'
+  /usr/bin/sudo -n /usr/bin/true || fail 'existing noninteractive sudo is required'
+  local command
+  for command in /usr/bin/python3 /usr/local/bin/jq /usr/bin/git /usr/bin/cc /usr/bin/dscl \
+    /usr/sbin/dseditgroup /usr/bin/stat /bin/chmod /usr/sbin/chown /bin/mkdir /bin/cp /bin/rm /usr/bin/id /usr/bin/false; do
+    [ -f "$command" ] && [ ! -L "$command" ] && [ -x "$command" ] || fail 'missing fixed host prerequisite'
+  done
+  genuine_python=$(/usr/bin/sudo -n /usr/bin/python3 -I -S -B -c \
+    'import os,sys;assert sys.version_info >= (3,11);print(os.path.realpath(sys.executable))') ||
+    fail 'existing root Python 3.11+ required'
+  /usr/bin/sudo -n "$genuine_python" -I -S -B - <<'PY_MAC_RUNTIME' || fail 'physical root-owned runtime closure required'
+import os,pathlib,plistlib,stat,sys,uuid
+paths={pathlib.Path(sys.executable),pathlib.Path('/usr/local/bin/jq')}
+paths.update(pathlib.Path(module.__file__) for module in sys.modules.values()
+ if getattr(module,'__file__',None))
+for path in paths:
+ assert path.resolve()==path and path.is_file()
+ for item in (path,*path.parents):
+  value=item.lstat()
+  assert value.st_uid==0 and not value.st_mode & 0o022 and not stat.S_ISLNK(value.st_mode)
+assert pathlib.Path(sys.executable).resolve()==pathlib.Path(sys.executable)
+PY_MAC_RUNTIME
+  jq_cache=/usr/local/bin/jq
+  [ "$(sha256_path "$jq_cache")" = "$jq_sha" ] && [ "$("$jq_cache" --version)" = jq-1.6 ] ||
+    fail 'existing pinned root jq required'
+  [ ! -e /usr/local/libexec/ystack-sandbox/v1/supervisor ] &&
+    [ ! -L /usr/local/libexec/ystack-sandbox/v1/supervisor ] || fail 'existing fixed anchor'
+  local token first
+  token=$(/usr/bin/git -C "$root" rev-parse HEAD) || fail 'immutable checkout OID required'
+  [ -z "$(/usr/bin/git -C "$root" status --porcelain)" ] || fail 'clean immutable checkout required'
+  token=${token:0:8}
+  genuine_writer="yscw_$token";genuine_consumer="yscc_$token";genuine_group="yscg_$token"
+  genuine_private_group="yscp_$token"
+  genuine_base="/usr/local/libexec/ystack-scope-fixture.$token"
+  [ ! -e "$genuine_base" ] && [ ! -L "$genuine_base" ] || fail 'existing fixture root'
+  first=$(/usr/bin/sudo -n "$genuine_python" -I -S -B - "$genuine_writer" "$genuine_consumer" \
+    "$genuine_group" "$genuine_private_group" <<'PY_MAC_IDS'
+import subprocess,sys
+used=set()
+for node,attribute in (('/Users','UniqueID'),('/Groups','PrimaryGroupID')):
+ result=subprocess.run(['/usr/bin/dscl','.', '-list',node,attribute],capture_output=True,timeout=10)
+ assert result.returncode==0 and not result.stderr and len(result.stdout)<=65536
+ for row in result.stdout.decode('utf8').splitlines():
+  name,number=row.rsplit(None,1)
+  assert name not in sys.argv[1:]
+  used.add(int(number))
+for first in range(56000,56997):
+ if not used.intersection(range(first,first+4)):
+  print(first);break
+else:raise ValueError('no unused fixture identities')
+PY_MAC_IDS
+  ) || fail 'unused fixture names and IDs required'
+  mac_create_record "/Groups/$genuine_group" "$((first + 2))"
+  mac_set_record 0 PrimaryGroupID "$((first + 2))"
+  mac_create_record "/Groups/$genuine_private_group" "$((first + 3))"
+  mac_set_record 1 PrimaryGroupID "$((first + 3))"
+  mac_create_record "/Users/$genuine_writer" "$first"
+  mac_set_record 2 UniqueID "$first"
+  mac_set_record 2 PrimaryGroupID "$((first + 2))"
+  mac_set_record 2 NFSHomeDirectory /var/empty
+  mac_set_record 2 UserShell /usr/bin/false
+  mac_create_record "/Users/$genuine_consumer" "$((first + 1))"
+  mac_set_record 3 UniqueID "$((first + 1))"
+  mac_set_record 3 PrimaryGroupID "$((first + 3))"
+  mac_set_record 3 NFSHomeDirectory /var/empty
+  mac_set_record 3 UserShell /usr/bin/false
+  /usr/bin/sudo -n /usr/sbin/dseditgroup -o edit -a "$genuine_consumer" -t user "$genuine_group" || fail 'fixture supplementary group'
+  local groups
+  groups=$(/usr/bin/sudo -n -u "$genuine_consumer" /usr/bin/id -G) || fail 'actual consumer groups'
+  [ "$(/usr/bin/id -u "$genuine_writer")" = "$first" ] &&
+    [ "$(/usr/bin/id -u "$genuine_consumer")" = "$((first + 1))" ] &&
+    [ "$(/usr/bin/id -g "$genuine_writer")" = "$((first + 2))" ] &&
+    [ "$(/usr/bin/id -g "$genuine_consumer")" = "$((first + 3))" ] &&
+    [[ " $groups " = *" $((first + 2)) "* ]] || fail 'actual distinct supplementary-only principals'
+  setup_genuine_paths
 }
 
 prepare_genuine_writer() {
@@ -1721,17 +1916,33 @@ assert spec is not None and spec.loader is not None
 c = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = c
 spec.loader.exec_module(c)
+class FixtureDarwinLedger:
+    def __init__(self): self.commands = []
+    def record_command(self, role, argv, executable, component):
+        c._require(role in {"darwin-acl-uuid-resolution", "darwin-group-membership"}, "E_RUNTIME")
+        c._require(len(self.commands) < 4096, "E_LIMIT")
+        self.commands.append({"role":role,"argv_sha256":c.digest(canonical(argv)),
+            "executable_sha256":executable,"component_sha256":component})
+canonical = c.canonical
 owned = []
 store_fd = attempt_fd = None
 try:
-    source = c._open_held(c.ANCHOR + "/host-supervisor.py", False, c._root_rule(), "E_RUNTIME")
+    darwin = None
+    if sys.platform == "darwin":
+        import time
+        python = c._hold_bytes(sys.executable, c.EXECUTABLE_LIMIT)
+        owned.append(python)
+        consumer_source = c._hold_bytes(str(package / "shadow/v1/_consumer.py"), c.EXECUTABLE_LIMIT)
+        owned.append(consumer_source)
+        darwin = c._DarwinChildOwner(python, consumer_source, time.monotonic() + 120, FixtureDarwinLedger())
+    source = c._open_held(c.ANCHOR + "/host-supervisor.py", False, c._root_rule(darwin), "E_RUNTIME")
     owned.append(source)
     source_raw = source.read(c.EXECUTABLE_LIMIT, "E_RUNTIME")
-    config = c._open_held(c.ANCHOR + "/host-config.json", False, c._root_rule(), "E_RUNTIME")
+    config = c._open_held(c.ANCHOR + "/host-config.json", False, c._root_rule(darwin), "E_RUNTIME")
     owned.append(config)
     config_raw = config.read(c.DOCUMENT_LIMIT, "E_RUNTIME")
     settings = c._parse_config(config_raw)
-    packet_file = c._open_held(str(base / "storage-input.json"), False, c._root_rule(), "E_RUNTIME")
+    packet_file = c._open_held(str(base / "storage-input.json"), False, c._root_rule(darwin), "E_RUNTIME")
     owned.append(packet_file)
     packet_raw = packet_file.read(c.DOCUMENT_LIMIT, "E_RUNTIME")
     packet = c._json(packet_raw, c.DOCUMENT_LIMIT, "E_RUNTIME")
@@ -1763,6 +1974,7 @@ try:
     for held, raw in ((source, source_raw), (config, config_raw), (packet_file, packet_raw)):
         held.recheck("E_STALE")
         c._require(held.read(len(raw), "E_STALE") == raw, "E_STALE")
+    if darwin is not None: darwin.recheck()
     print(json.dumps({"storage_fixture_only": True, "uid": uid, "gid": gid,
         "attempt_id": packet["attempt_id"], "source_sha256": c.digest(source_raw),
         "input_sha256": c.digest(packet_raw), "calls": ["check_store_root", "create_attempt_dir",
@@ -1808,6 +2020,14 @@ assert spec is not None and spec.loader is not None
 c = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = c
 spec.loader.exec_module(c)
+class FixtureDarwinLedger:
+    def __init__(self): self.commands = []
+    def record_command(self, role, argv, executable, component):
+        c._require(role in {"darwin-acl-uuid-resolution", "darwin-group-membership"}, "E_RUNTIME")
+        c._require(len(self.commands) < 4096, "E_LIMIT")
+        self.commands.append({"role":role,"argv_sha256":c.digest(canonical(argv)),
+            "executable_sha256":executable,"component_sha256":component})
+canonical = c.canonical
 def read():
     owned = []
     anchor = store = None
@@ -1817,7 +2037,11 @@ def read():
         c._require(held.raw == source_raw, "E_STALE")
         python = c._hold_bytes(sys.executable, c.EXECUTABLE_LIMIT)
         owned.append(python)
-        anchor = c.load_anchor()
+        darwin = None
+        if sys.platform == "darwin":
+            import time
+            darwin = c._DarwinChildOwner(python, held, time.monotonic() + 120, FixtureDarwinLedger())
+        anchor = c.load_anchor(darwin, darwin)
         if len(sys.argv) == 2 and sys.argv[1] != "observation":
             store = c._HeldStoreRead(anchor, sys.argv[1])
             raw = store.observation
@@ -1864,6 +2088,8 @@ def load(name,path):
  module=importlib.util.module_from_spec(spec);sys.modules[name]=module;spec.loader.exec_module(module);return module
 w=load('scope_fixture_writer_algorithms',package/'shadow/v1/write-shadow.py');e=w.e;c=w.c
 uid=pwd.getpwnam(writer).pw_uid;consumer_uid=pwd.getpwnam(consumer).pw_uid;gid=grp.getgrnam(group).gr_gid
+consumer_gid=pwd.getpwnam(consumer).pw_gid
+assert consumer_gid!=gid and gid in map(int,subprocess.check_output(['/usr/bin/sudo','-n','-u',consumer,'--','/usr/bin/id','-G']).split())
 assert uid>0 and consumer_uid>0 and uid!=consumer_uid
 for name in ('tools','work','bundles','identities','snapshots'):(base/name).mkdir(mode=0o755)
 work=base/'work';work.chmod(0o700);tools=base/'tools';jq=tools/'jq';shutil.copyfile(jq_source,jq);jq.chmod(0o555)
@@ -2134,8 +2360,12 @@ shutil.copyfile(package/'sandbox/v1/host-supervisor.py',anchor/'host-supervisor.
 installed={role:str(package/relative) for role,relative in c.INSTALLED_SOURCES.items()}
 identity_paths={key:str(put(base/'identities'/key,(key+'\n').encode())) for key in c.IDENTITY_KEYS if key!='dyld_cache_files'};identity_paths['dyld_cache_files']=[str(put(base/'identities/dyld-cache',b'fixture-only dyld identity\n'))];identity_paths['verifier']=str(verifier);identity_paths['host_runtime']=sys.executable;identity_paths['host_supervisor']=str(anchor/'host-supervisor.py')
 store=base/'store';store.mkdir(mode=0o750);os.chown(store,uid,gid);(base/'writer-work').mkdir(mode=0o700);os.chown(base/'writer-work',uid,gid)
+if sys.platform=='darwin':run(['/bin/chmod','-N',store])
 config={'schema_version':1,'kind':'sandbox_host_config','id':'scope.fixture.host','body':{'principal_uid':uid,'consumer_gid':gid,'environment_id':environment,'store_id':'store.scope-genuine','store_root':str(store),'work_root':str(base/'writer-work'),'identity_paths':identity_paths,'installed_files':installed,'runtime':{'driver':str(put(base/'identities/runtime-driver',b'not executed\n')),'vfkit':str(put(base/'identities/vfkit',b'not executed\n'))}}};put(anchor/'host-config.json',config)
 policy=json.loads((package/'control/v1/sandbox-bound-policy.json').read_bytes());claim={'schema_version':1,'kind':'execution_environment_claim','id':environment,'body':{key:policy['body'][key] for key in ('environment','filesystem','isolation','limits','network','resources','sensitive_material')}}
+if sys.platform=='darwin':
+    run(['/bin/chmod','+a','user:'+consumer+' allow read',verifier])
+    print(run(['/bin/ls','-lde',verifier]).decode(),flush=True)
 claim['body'].update(declaration_status='complete',duty_evaluation_ref=e.document_ref(duty_raw),effects={'external_writes':False,'target_writes':False},execution_identity={'adapter_instance_id':'instance.verifier','execution_boundary_id':'boundary.verifier','principal_id':'principal.verifier','role':'verifier'},policy_set_ref=e.document_ref((package/'control/v1/control-policy-set-sandbox-bound.json').read_bytes()),stage_result_ref=duty['body']['stage']['result_ref'],tools=[{key:value for key,value in policy['body']['tools'][0].items() if key!='identity_binding'}|{'sha256':sha(verifier.read_bytes())}])
 claim_raw=canonical(claim);observation={'schema_version':1,'kind':'sandbox_verifier_observation','id':'sandbox.observation.verifier','body':{'environment_id':environment,'environment_entry_sha256':sha(canonical(entry)),'target_repository_id':'fixture.target','accepted_set_sha256':sha(canonical(accepted)),'verifier_sha256':sha(verifier.read_bytes())}}
 put(work/'duty.json',duty_raw);put(work/'claim.json',claim_raw);put(work/'observation.json',observation)
@@ -2361,7 +2591,7 @@ put(doc_root / 'shadow-set.json', {'schema_version': 1, 'kind': 'shadow_evidence
     'id': 'scope.evidence.genuine', 'body': {'records': [json.loads(shadow_record)]}})
 consumer_work = base / 'consumer-work'
 consumer_work.mkdir(mode=0o700)
-os.chown(consumer_work, consumer_uid, 65534)
+os.chown(consumer_work, consumer_uid, consumer_gid)
 for root, dirs, names in os.walk(source):
     pathlib.Path(root).chmod(0o755)
     for name in names:
@@ -2567,12 +2797,14 @@ reader_command = ['/usr/bin/sudo','-n','-u',consumer,'--',sys.executable,'-I','-
                   base / 'genuine-reader.py', write_attempt]
 refuse(['/usr/bin/sudo','-n','-u',writer,'--',sys.executable,'-I','-S','-B',
         base / 'genuine-reader.py',write_attempt], 'writer-is-not-consumer', b'E_CONFIG')
-run(['/usr/bin/gpasswd','--delete',consumer,group])
+run(['/usr/sbin/dseditgroup','-o','edit','-d',consumer,'-t','user',group] if sys.platform=='darwin'
+    else ['/usr/bin/gpasswd','--delete',consumer,group])
 try:
     assert str(gid).encode() not in run(['/usr/bin/sudo','-n','-u',consumer,'--','/usr/bin/id','-G']).split()
     refuse(reader_command,'missing-consumer-group',b'E_CONFIG')
 finally:
-    run(['/usr/sbin/usermod','--append','--groups',group,consumer])
+    run(['/usr/sbin/dseditgroup','-o','edit','-a',consumer,'-t','user',group] if sys.platform=='darwin'
+        else ['/usr/sbin/usermod','--append','--groups',group,consumer])
 assert str(gid).encode() in run(['/usr/bin/sudo','-n','-u',consumer,'--','/usr/bin/id','-G']).split()
 store_snapshot = {str(path.relative_to(store)): (path.lstat().st_uid,path.lstat().st_gid,
     stat.S_IMODE(path.lstat().st_mode),path.read_bytes() if path.is_file() else None)
@@ -2626,16 +2858,21 @@ receipt_path.symlink_to(original_receipt.name)
 refuse(reader_command,'symlink',b'E_STORE')
 receipt_path.unlink()
 original_receipt.rename(receipt_path)
-# Actual Linux ACL bytes grant this consumer write permission; the original reader refuses them.
-acl_raw = (2).to_bytes(4,'little')
-for tag, permission, identity_number in ((1,4,0xffffffff),(2,6,consumer_uid),(4,4,0xffffffff),
-                                         (16,6,0xffffffff),(32,0,0xffffffff)):
-    acl_raw += tag.to_bytes(2,'little')+permission.to_bytes(2,'little')+identity_number.to_bytes(4,'little')
-os.setxattr(receipt_path,'system.posix_acl_access',acl_raw)
-print(json.dumps({'actual_acl':os.getxattr(receipt_path,'system.posix_acl_access').hex()},sort_keys=True),flush=True)
-refuse(reader_command,'extra-write-acl',b'E_STORE')
-os.removexattr(receipt_path,'system.posix_acl_access')
-receipt_path.chmod(0o440)
+if sys.platform=='darwin':
+    run(['/bin/chmod','+a','user:'+consumer+' allow write',receipt_path])
+    print(run(['/bin/ls','-lde',receipt_path]).decode(),flush=True)
+    try:refuse(reader_command,'extra-write-acl',b'E_STORE')
+    finally:run(['/bin/chmod','-a#','0',receipt_path])
+else:
+    acl_raw = (2).to_bytes(4,'little')
+    for tag, permission, identity_number in ((1,4,0xffffffff),(2,6,consumer_uid),(4,4,0xffffffff),
+                                             (16,6,0xffffffff),(32,0,0xffffffff)):
+        acl_raw += tag.to_bytes(2,'little')+permission.to_bytes(2,'little')+identity_number.to_bytes(4,'little')
+    os.setxattr(receipt_path,'system.posix_acl_access',acl_raw)
+    print(json.dumps({'actual_acl':os.getxattr(receipt_path,'system.posix_acl_access').hex()},sort_keys=True),flush=True)
+    refuse(reader_command,'extra-write-acl',b'E_STORE')
+    os.removexattr(receipt_path,'system.posix_acl_access')
+    receipt_path.chmod(0o440)
 assert receipt_path.read_bytes()==receipt_before
 
 # Every archive mutation is canonical and rehashes its marker and enclosing references.
@@ -2721,7 +2958,7 @@ print(json.dumps({'private_frontend_original_sha256':sha(frontend_before),
 ready_path, ack_path = consumer_work/'test-ready', consumer_work/'test-ack'
 for path in (ready_path,ack_path):
     os.mkfifo(path,0o600)
-    os.chown(path,consumer_uid,65534)
+    os.chown(path,consumer_uid,consumer_gid)
     st=path.lstat()
     assert stat.S_ISFIFO(st.st_mode) and st.st_nlink==1 and stat.S_IMODE(st.st_mode)==0o600
 race_argv = list(scope_argv)
@@ -2735,7 +2972,7 @@ def metadata(path):
 def through_use(label, target, mutate, restore, cancellation=False):
     ready_fd=os.open(ready_path,os.O_RDONLY|os.O_NONBLOCK|os.O_NOFOLLOW)
     st=os.fstat(ready_fd)
-    assert metadata(ready_path)[:7]==[st.st_dev,st.st_ino,stat.S_IFIFO,consumer_uid,65534,0o600,1]
+    assert metadata(ready_path)[:7]==[st.st_dev,st.st_ino,stat.S_IFIFO,consumer_uid,consumer_gid,0o600,1]
     child=None
     original_error=None
     before=None
@@ -2760,7 +2997,7 @@ def through_use(label, target, mutate, restore, cancellation=False):
         try:
             ack_state=os.fstat(ack_fd)
             assert stat.S_ISFIFO(ack_state.st_mode) and ack_state.st_uid==consumer_uid
-            assert ack_state.st_gid==65534 and ack_state.st_nlink==1
+            assert ack_state.st_gid==consumer_gid and ack_state.st_nlink==1
             assert (ack_state.st_dev,ack_state.st_ino)==(ack_path.lstat().st_dev,ack_path.lstat().st_ino)
             message=b'CANCEL\n' if cancellation else b'CONTINUE\n'
             assert os.write(ack_fd,message)==len(message)
@@ -2820,14 +3057,18 @@ print(json.dumps({'through_use_controls':'PASS','sibling_before':'PASS','sibling
 
 PY_GENUINE_ASSEMBLER
 }
-run_genuine_linux() {
-  setup_genuine_linux
+run_genuine() {
+  case "$genuine_platform" in
+    Linux) setup_genuine_linux ;;
+    Darwin) setup_genuine_macos ;;
+    *) fail 'unsupported genuine fixture platform' ;;
+  esac
   prepare_genuine_reader
   prepare_genuine_assembler
   local script
   for script in genuine-reader.py genuine-assembler.py; do
     /usr/bin/sudo -n /bin/cp -- "$tmp/$script" "$genuine_base/$script" || fail 'fixed fixture source copy'
-    /usr/bin/sudo -n /bin/chown 0:0 -- "$genuine_base/$script" || fail 'fixed fixture source ownership'
+    /usr/bin/sudo -n "$genuine_chown" 0:0 -- "$genuine_base/$script" || fail 'fixed fixture source ownership'
     /usr/bin/sudo -n /bin/chmod 0555 -- "$genuine_base/$script" || fail 'fixed fixture source mode'
   done
   /usr/bin/sudo -n "$genuine_python" -I -S -B "$genuine_base/genuine-assembler.py" \
@@ -2835,5 +3076,5 @@ run_genuine_linux() {
   pass 'actual root anchor, distinct storage writer and read-only consumer authenticate one complete bundle'
 }
 
-run_genuine_linux
+run_genuine
 /usr/bin/printf 'scope qualification: %s focused checks passed\n' "$passes"
