@@ -127,9 +127,22 @@ sets, current profile/stage/result/materialization/publisher/post-check facts,
 qualifying receipts, Git observation, and the fixed source package selected by
 the root-owned configuration. It accepts none of those values back from a caller.
 
-Reuse the #541 fixed sudo object, physical Python, private child ledger, clean
-environment, deadline, bounded streams, process-group cleanup, and exact reap.
-The only source argv is:
+Add one closed source method to the concrete private child owner used by the
+reader. This is a #544 responsibility; #541 supplies no sudo owner or source
+launcher. The source method opens and holds physical `/usr/bin/sudo`, the current
+Python and installed supervisor, reuses the reader's one deadline and closed
+command ledger, and accepts only the canonical request bytes. It exposes no argv,
+environment, callback, role, timeout, or output-limit argument.
+
+The method records role `coverage-source-boundary`, the request digest, fixed argv
+digest, sudo digest, and supervisor digest in that ledger. It rechecks all three
+executables before and after use. Use the existing private bounded child lifecycle
+and its process-group cleanup; extend that concrete owner with this one method
+rather than copy the lifecycle or expose a generic runner. The source role has a
+120-second cap within the reader's deadline, zero stdout, at most 16 KiB stderr,
+a clean environment containing only `PATH=/usr/bin:/bin`, `LC_ALL=C`, and
+`LANG=C`, TERM then KILL cleanup bounded to 10 seconds, and one exact reap. Its
+only argv is:
 
 ```text
 /usr/bin/sudo -n -u #SOURCE_UID -- P -I -S -B ANCHOR/host-supervisor.py coverage-read
@@ -280,9 +293,11 @@ refuses.
 
 Parse age from the original authenticated qualifying sandbox receipt
 `timing.terminated_at`. Compare it with the authenticated current source receipt
-`completed_at`. Accept 0 through exactly 2,592,000 whole seconds. A future,
-malformed, or one-second-older value refuses. A new source attempt, store reread,
-or copied timestamp cannot refresh it.
+`completed_at` at their full UTC precision. Accept only a real difference greater
+than or equal to zero and less than or equal to exactly 2,592,000 seconds. Never
+truncate, floor, round, or discard a fractional second; 2,592,000 seconds plus any
+fraction refuses. A future or malformed value also refuses. A new source attempt,
+store reread, or copied timestamp cannot refresh it.
 
 Jq receives only the closed measured result. It emits
 `scope.enablement-stale` for missing, incomplete, unauthenticated, replayed,
@@ -314,13 +329,14 @@ interval. Keep `.ystack/`, workflows, and the complete applicable branch-rule se
 unchanged. Include the four required enforcing kinds and an unchanged fifth kind.
 Use identical closed coverage identity and freshly derived current refs.
 
-For the exact 30-day positive and its one-second neighbors, use the real UTC
-seconds written by the source supervisor. Create a fresh qualifying fixture and
-fresh source attempt for each case. Start just after a second boundary and permit
-a small bounded number of new-attempt retries solely to obtain the intended
-whole-second delta. Record both authenticated timestamps and every consumed
-attempt. Never reuse a nonce, alter a completed receipt, patch the clock, pass a
-time environment variable, or treat an unmatched retry as a pass.
+For the exact 30-day positive and its one-second neighbors, use the real UTC time
+written by the source supervisor. Create a fresh qualifying fixture and fresh
+source attempt for each case. Start just after a second boundary and permit at
+most eight new attempts within 120 seconds solely to obtain the intended exact
+delta. Retain every failed attempt and record both authenticated timestamps for
+each. If no attempt matches, the test fails. Never reuse a nonce, alter a completed
+receipt, patch or truncate the clock, pass a time environment variable, or treat
+an unmatched attempt as a skip or pass.
 
 Prepare the same fixed fixture and cases for macOS. Run them only on a verified
 disposable evidence host whose owner already authorized root setup, account/group
