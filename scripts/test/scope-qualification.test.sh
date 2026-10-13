@@ -1872,6 +1872,111 @@ assert sha(jq.read_bytes())==c.JQ_SHA256[sys.platform]
 env={'PATH':str(tools)+':/usr/bin:/bin','LC_ALL':'C','LANG':'C','HOME':str(work),'TMPDIR':str(work),'GIT_CONFIG_NOSYSTEM':'1','GIT_CONFIG_GLOBAL':'/dev/null','GIT_NO_REPLACE_OBJECTS':'1','GIT_NO_LAZY_FETCH':'1','GIT_TERMINAL_PROMPT':'0','GIT_OPTIONAL_LOCKS':'0','GIT_AUTHOR_NAME':'fixture','GIT_AUTHOR_EMAIL':'fixture@example.invalid','GIT_COMMITTER_NAME':'fixture','GIT_COMMITTER_EMAIL':'fixture@example.invalid','GIT_AUTHOR_DATE':'2000-01-01T00:00:00Z','GIT_COMMITTER_DATE':'2000-01-01T00:00:00Z'}
 commands=[]
 scope_observation_count=0
+def prepare_scope_diagnostic():
+ directory=base/'scope-diagnostic';directory.mkdir(mode=0o700)
+ os.chown(directory,consumer_uid,gid)
+ wrapper=base/'scope-diagnostic-wrapper.py'
+ wrapper.write_text(r'''import hashlib,json,os,runpy,stat,sys
+from pathlib import Path
+reader=Path(sys.argv[1]);consumer=reader.parents[2]/'shadow/v1/_consumer.py'
+directory=reader.parents[3]/'scope-diagnostic'
+effective=[str(reader),*sys.argv[2:]];initial=list(sys.orig_argv)
+trace=directory/('trace-'+str(os.getpid())+'.jsonl')
+fd=None
+try:
+ fd=os.open(trace,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+ state=os.fstat(fd)
+ assert stat.S_ISREG(state.st_mode) and state.st_nlink==1 and state.st_uid==os.getuid()
+except BaseException:
+ if fd is not None:
+  try:os.close(fd)
+  except BaseException:pass
+ fd=None
+sources={str(reader),str(consumer)};observed=False;last_foreground=None
+
+def bounded(value,depth=0):
+ if value is None or type(value) in (bool,int,float):return value
+ if isinstance(value,str):return value[:512]
+ if isinstance(value,(bytes,bytearray)):
+  raw=bytes(value);return {'length':len(raw),'sha256':hashlib.sha256(raw).hexdigest(),
+   'prefix_hex':raw[:512].hex(),'truncated':len(raw)>512}
+ if isinstance(value,os.stat_result):
+  return [value.st_dev,value.st_ino,value.st_mode,value.st_uid,value.st_gid,
+   value.st_nlink,value.st_size,value.st_mtime_ns,value.st_ctime_ns]
+ if depth<2 and isinstance(value,(list,tuple)):
+  return [bounded(item,depth+1) for item in value[:12]]
+ if depth<2 and type(value) is dict:
+  return {str(key)[:80]:bounded(item,depth+1) for key,item in list(value.items())[:12]}
+ return {'type':type(value).__name__}
+
+def foreground(frame):
+ local=frame.f_locals;child=local.get('child')
+ return {'argv':bounded(local.get('argv','absent')),
+  'result':bounded(local.get('result','absent')),
+  'child_returncode':getattr(child,'returncode','absent'),
+  'outputs':bounded(local.get('outputs','absent')),
+  'chunk':bounded(local.get('chunk','absent'))}
+
+def observe(frame,event,arg):
+ global observed,last_foreground
+ if frame.f_code.co_filename not in sources:return observe
+ try:
+  if event=='return' and frame.f_code.co_name=='_foreground':
+   last_foreground=foreground(frame)
+  if event!='exception' or observed:return observe
+  error=arg[1]
+  if isinstance(error,(GeneratorExit,BlockingIOError)):return observe
+  observed=True
+  record={'exception':type(error).__name__,'code':getattr(error,'code',None),
+   'errno':getattr(error,'errno',None),'message':str(error)[:512],
+   'initial_argv':initial,'effective_argv':effective,'last_foreground':last_foreground,
+   'namespace':'actual root-owned package; runpy original reader; diagnostic initial wrapper'}
+  frames=[];current=frame
+  while current is not None and len(frames)<16:
+   local=current.f_locals;item=local.get('self')
+   row={'file':current.f_code.co_filename,'function':current.f_code.co_name,
+    'line':current.f_lineno,'locals':{name:bounded(value) for name,value in
+      list(local.items())[:12] if name not in ('self','__builtins__')}}
+   if current.f_code.co_name=='_foreground':row['foreground']=foreground(current)
+   if hasattr(item,'commands'):row['last_commands']=bounded(item.commands[-2:])
+   frames.append(row);current=current.f_back
+  record['frames']=frames
+  raw=(json.dumps(record,sort_keys=True,separators=(',',':'))+'\n').encode()
+  if len(raw)>16384:raw=b'{"observer_error":"record exceeds16KiB"}\n'
+  if fd is not None and os.write(fd,raw)!=len(raw):raise OSError('short diagnostic write')
+ except BaseException:
+  pass
+ return observe
+sys.argv=effective;sys.settrace(observe)
+try:runpy.run_path(str(reader),run_name='__main__')
+finally:
+ sys.settrace(None)
+ try:os.close(fd)
+ except BaseException:pass
+''')
+ wrapper.chmod(0o555)
+ frontend=base/'scope-diagnostic-frontend.sh'
+ original=(package/'scope/v1/evaluate-scope.sh').read_text()
+ diagnostic=original.replace('source_path=${BASH_SOURCE[0]}',
+   'source_path='+str(package/'scope/v1/evaluate-scope.sh'))
+ diagnostic=diagnostic.replace('"$python_bin" -I -S -B "$reader" read',
+   '"$python_bin" -I -S -B '+str(wrapper)+' "$reader" read')
+ before='cleanup() { finish_reader; exec 8<&-; /bin/rm -rf -- "$scratch" >/dev/null 2>&1 || :; }'
+ after='''cleanup() { finish_reader; exec 8<&-;
+ for name in reader-stderr locator-error terminal-error; do
+  if [ -f "$scratch/$name" ]; then
+   /bin/dd if="$scratch/$name" of="DIRECTORY/${scratch##*/}-$name" bs=65537 count=1 2>/dev/null || :
+  else /usr/bin/printf missing >"DIRECTORY/${scratch##*/}-$name.missing" 2>/dev/null || :
+  fi
+ done
+ /bin/rm -rf -- "$scratch" >/dev/null 2>&1 || :; }'''.replace('DIRECTORY',str(directory))
+ assert diagnostic.count(before)==1
+ frontend.write_text(diagnostic.replace(before,after));frontend.chmod(0o555)
+ print(json.dumps({'scope_diagnostic_source':{'original_frontend_sha256':sha(original.encode()),
+  'private_frontend_sha256':sha(frontend.read_bytes()),'wrapper_sha256':sha(wrapper.read_bytes())},
+  'diagnostic_only':True,'original_namespace':str(package)},sort_keys=True),flush=True)
+ return frontend,directory
+scope_diagnostic_frontend,scope_diagnostic_directory=prepare_scope_diagnostic()
 def observe_scope(stop, destination, captured, errors):
  def identity(state):
   return (state.st_dev,state.st_ino,state.st_mode,state.st_uid,state.st_gid,
@@ -1903,6 +2008,7 @@ def run(argv,raw=None,role=None,component=None,limit=16*1024*1024):
  if str(package/'scope/v1/evaluate-scope.sh') in argv:
   destination=base/'snapshots'/('scope-observation-'+str(scope_observation_count))
   scope_observation_count+=1;destination.mkdir(mode=0o700)
+  argv[argv.index(str(package/"scope/v1/evaluate-scope.sh"))]=str(scope_diagnostic_frontend)
   stop=threading.Event()
   observer=threading.Thread(target=observe_scope,args=(stop,destination,captured,errors))
   observer.start()
@@ -1915,6 +2021,15 @@ def run(argv,raw=None,role=None,component=None,limit=16*1024*1024):
       'raw_utf8':value.decode('utf8','backslashreplace')},sort_keys=True),flush=True)
    assert not errors,errors
  print(json.dumps({'fixture_command':argv,'returncode':r.returncode,'stdout_sha256':sha(r.stdout),'stderr':r.stderr.decode('utf8','backslashreplace')},sort_keys=True),flush=True)
+ if observer is not None:
+  for diagnostic_file in sorted(scope_diagnostic_directory.iterdir()):
+   cap=16384 if diagnostic_file.name.startswith('trace-') else 65536
+   with diagnostic_file.open('rb') as stream:diagnostic_raw=stream.read(cap+1)
+   print(json.dumps({'actual_scope_diagnostic':diagnostic_file.name,
+    'raw_utf8':diagnostic_raw[:cap].decode('utf8','backslashreplace'),
+    'exceeds_cap':len(diagnostic_raw)>cap,'empty':not diagnostic_raw,
+    'missing':diagnostic_file.name.endswith('.missing'),
+    'original_returncode':r.returncode},sort_keys=True),flush=True)
  if observer is not None:
   print(json.dumps({'actual_scope_stdout_utf8':r.stdout.decode('utf8','backslashreplace')},sort_keys=True),flush=True)
  assert r.returncode==0 and len(r.stdout)<=limit and not r.stderr
