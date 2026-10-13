@@ -44,82 +44,110 @@ evidence only. It does not enable a scope or grant write authority.
    disabled. It derives commits, trees, parents, paths, modes, and blobs itself.
    A supplied list of those facts is not evidence.
 6. Forge facts use one closed consumer input, `coverage-observation-bundle.v1`.
-   Its held directory contains exactly `coverage-query.json`,
-   `coverage-observation.json`, `sandbox-request.json`,
-   `sandbox-expectation.json`, `sandbox-evaluation.json`,
-   `sandbox-receipt.json`, `sandbox-check.json`,
-   `verifier-observation.json`, `origin-observation.json`,
-   `preparation-record.json`, `preparation-manifest.json`,
-   `payload-stdout.txt`, `payload-stderr.txt`, `evidence-manifest.json`,
-   `payload-evidence-0000.json`, and `bundle.json`. The marker lists the preceding
-   15 files by sorted name, size, and SHA-256. There is no second receipt or
-   identity format. The marker is schema 1, kind `scope_coverage_bundle`; its body
-   has exactly `activation_state:"inactive"`,
-   `contract_version:"coverage-observation-bundle.v1"`, `query_sha256`, and
-   `files`.
-7. `coverage-query.json` has the standard four-field envelope, schema 1, and kind
-   `scope_coverage_query`. Its body has
-   exactly `repository_id`, `coverage_base`, `evaluated_revision`,
-   `default_branch`, `qualifying_observation_ref`, and `git_snapshot_ref`. The
-   qualifying-base query uses null for its own prior observation ref; later
-   queries use the complete ref to that unchanged qualifying observation. The
-   coverage observation uses schema 1 and kind `scope_coverage_observation` in the
-   same envelope. Its body has exactly those six query fields plus `query_ref`,
-   `observed_at`, `first_parent_interval`, `publisher_merges`,
-   `protected_workflow_paths`, and `branch_rule_history`.
-   The interval has exactly
-   `base`, `tip`, and `commits`; each ordered commit row has exactly `commit_id`,
-   `parent_id`, and `tree_id`. Each publisher row has exactly `repository_id`,
-   `scope_id`, `branch`, `pull_request_id`, `head_commit`, `base_commit`,
-   `merge_commit`, and `publisher_identity_ref`. The rule history has exactly
-   `start_observed_at`, `start_state_digest`, `events`, `end_observed_at`,
-   `end_state_digest`, `terminal_cursor`, and `truncated`. Each ordered event has
-   exactly `event_id`, `observed_at`, `before_digest`, and `after_digest`. The
-   start values equal the authenticated qualifying baseline; the end values and
-   cursor come from the same current observation; and `truncated` must be false.
-   Thus A-to-B-to-A is a change even when endpoint digests match. Receipt payload
-   digests and the held marker bind these raw bytes to the authenticated observer
-   attempt.
-8. The existing sandbox receipt contract authenticates that attempt without new
-   checker behavior. The fixed observer is
-   `tool.scope-coverage-observer.v1` in the package-selected exact environment
-   `environment.scope-coverage-observer.v1`; its current registry entry must be
-   unique and `native-qualified`, and its accepted entry must be unique. Its
-   executable digest is the existing `verifier` identity:
-   `verifier-observation.json`, `sandbox-evaluation.json`, the receipt's observed
-   verifier identity, and that accepted entry must match as `check-bound` already
-   requires. The launch subject's `environment_id`, entry digest, repository id,
-   source commit/tree, candidate commit/tree, preparation record and manifest
-   digests, and `incident_sha256` bind respectively to that environment, the
-   query repository, base, R, the two held preparation files, and the raw
-   `coverage-query.json`. The consumer rebuilds the one fixed observer instruction
-   from the tool id and held query and requires its digest in the launch request.
-   Expectation and receipt repeat that exact subject and attempt; expectation
-   binds the raw launch request. Receipt control fields bind
-   the existing fixed policy, decision, policy set, evaluator, and actual sandbox
-   evaluation. Receipt payload fields bind `payload-stdout.txt` byte-for-byte to
-   `coverage-observation.json`, empty `payload-stderr.txt`, and the exact one-item
-   evidence manifest. That manifest names `payload-evidence-0000.json` with the
-   same observation bytes, size, and digest. The fresh controlled-storage origin
-   recheck binds the same
-   store and attempt. Only a valid, satisfied `check-bound` output admits those
-   bytes. Caller-authored JSON or equal digests outside that held attempt do not.
-9. Qualification at the exact base uses child-5 Git source facts plus an
-   authenticated qualifying coverage observation for that base. A later R uses
-   that unchanged qualifying observation plus a current observation whose request
-   starts from it. The fixed Git reader must independently derive the same commit
-   interval, trees, protected paths, and snapshot binding. A gap, duplicate,
-   reordered row, cursor discontinuity, truncation, or disagreement refuses.
-10. The evaluator does not implement or qualify the observer. No production
-   environment and verifier identity for this role are accepted today. Missing,
-   unqualified, stale, malformed, or differently bound observations refuse.
-   Fixtures use the same directory, schema, checker, origin, registry and accepted
-   identity lookup with one identity pinned only in a private fixture package;
-   they do not use a `trusted` or `qualified` switch.
-11. The evaluator reads the host UTC clock once for the age check and records that
+   It is read from one fresh `controlled-storage.v1` attempt selected only by the
+   fixed package and root-owned anchor. The attempt contains exactly
+   `receipt.json` and `payload/`. `payload/` contains exactly `request.json`,
+   `raw-manifest.json`, `observation.json`, and `raw/`; `raw/` contains only the
+   continuous names `0000` through `NNNN`. The completed evidence copy also has
+   `origin-observation.json` and a final `bundle.json`. The marker lists every
+   preceding file by sorted relative name, size, and SHA-256. It is schema 1, kind
+   `scope_coverage_bundle`; its body has exactly `activation_state:"inactive"`,
+   `contract_version:"coverage-observation-bundle.v1"`, `request_sha256`,
+   `receipt_sha256`, `origin_observation_sha256`, and `files`.
+7. `request.json` has the standard four-field envelope, schema 1, and kind
+   `coverage_source_request`. Its body has exactly `attempt_id`, `nonce`,
+   `repository_id`, `coverage_base`, `evaluated_revision`,
+   `qualifying_observation_ref`, `coverage_rule_version`, and
+   `source_package_ref`. The consumer reconstructs these canonical bytes from the
+   scope, the fixed Git result and closed coverage identity. It accepts no caller
+   host, endpoint, credential, executable, adapter, collector, forge fact or trust
+   flag. A qualifying-base request uses null for its own prior observation ref.
+   A later request uses the complete ref to the unchanged qualifying observation.
+   Each producer attempt creates one fresh nonce and attempt id exclusively. A
+   later consumer may re-read the same fixed qualifying attempt; that read neither
+   reserves its nonce again nor changes its original time.
+8. `receipt.json` is canonical schema 1, kind
+   `forge_coverage_source_receipt`. Its body has exactly
+   `operation:"coverage-read.v1"`, `producer_role:"host-supervisor"`, `store_id`,
+   `attempt_id`, `request_sha256`, `source_identity`, `query`,
+   `raw_manifest_sha256`, `observation_sha256`, `started_at`, `completed_at`, and
+   `outcome`. `source_identity` has exactly the measured host-supervisor package
+   digest, the resolved forge binding's existing adapter id, package ref and
+   package-byte digest, and its existing requested capability set.
+   `query` repeats repository, base, revision, qualifying ref and rule version
+   exactly. The request bytes, attempt, receipt, root-selected store and package
+   identity must all agree. A receipt field that says authenticated or qualified
+   proves nothing by itself.
+9. `raw-manifest.json` has one ordered row per raw page. A row has exactly fixed
+   endpoint id, page index, request digest, status, raw size and digest, input
+   cursor, and output cursor. Endpoint ids come from the fixed source package's
+   closed set. Page indexes start at zero and are continuous. Cursors join without
+   a gap or branch, the terminal cursor is present, and no endpoint is truncated.
+   There are at most 128 pages. Each raw page is at most 1 MiB and all raw pages
+   together are at most 64 MiB; the request, receipt, manifest and observation are
+   each at most 1 MiB. These limits apply before parsing. The consumer rehashes
+   every held raw page, runs the package's fixed normalizer over those bytes, and
+   requires the result byte-for-byte equal `observation.json`.
+10. `observation.json` is canonical schema 1, kind
+    `scope_coverage_observation`. Its body has exactly `repository_id`,
+    `coverage_base`, `evaluated_revision`, `default_branch`,
+    `qualifying_observation_ref`, `git_snapshot_ref`, `request_ref`, `observed_at`,
+    `first_parent_interval`, `publisher_merges`, `protected_workflow_paths`, and
+    `branch_rule_history`. The interval has exactly `base`, `tip`, and `commits`;
+    each ordered commit row has `commit_id`, `parent_id`, and `tree_id`. Each
+    publisher row has `repository_id`, `scope_id`, `branch`, `pull_request_id`,
+    `head_commit`, `base_commit`, `merge_commit`, and `publisher_identity_ref`.
+    Rule history has `start_observed_at`, `start_state_digest`, `events`,
+    `end_observed_at`, `end_state_digest`, `terminal_cursor`, and `truncated:false`.
+    Each ordered event has `event_id`, `observed_at`, `before_digest`, and
+    `after_digest`. A-to-B-to-A remains a change when endpoint digests match.
+11. The consumer authenticates origin itself. It uses the existing immutable
+    anchor to fix the reviewed host-supervisor package, physical interpreter,
+    dedicated principal, consumer group, store root and store id. It then applies
+    the existing `controlled-storage.v1` owner, group, mode, ACL, link, no-follow,
+    exact-inventory, bounded-read, held-descriptor and before/after metadata checks
+    to every object. The interactive account and consumer cannot write the store.
+    Only full success creates a fresh authenticated origin observation. A copied
+    origin label, archived observation, matching digest, caller JSON or normalized
+    adapter output never authenticates source.
+12. The consumer selects the one forge binding already present in the closed
+    coverage identity. Its fixed adapter id, package ref, package source bytes and
+    requested capabilities are the only source identity. The binding must contain
+    the future accepted `core.forge.read-coverage.v1` capability; the current
+    binding does not, so it refuses. No collector id, registry slot or coverage
+    identity field is added. Receipt identity fields must equal those held binding
+    bytes. Missing, duplicate, stale, placeholder or differently bound source
+    refuses. It checks request-to-attempt, producer-to-store, producer-to-package,
+    package-to-raw-page, raw-page-to-observation, and observation-to-Git relations
+    before accepting.
+13. Qualification at the exact base uses child-5 Git source facts plus the original
+    authenticated qualifying coverage attempt for that base. A later R uses that
+    unchanged qualifying observation and its original request plus one current
+    request and observation. The fixed Git reader independently derives each
+    observation's own revision, commit interval, trees, protected paths and
+    snapshot. Shared repository/base/rule/closed-identity fields must agree;
+    evaluated revisions, snapshots, intervals and observation times need not.
+    Gaps, duplicates, reordered rows, cursor discontinuity, truncation or any
+    disagreement with the corresponding Git facts refuse.
+14. This concern implements and tests only the finite consumer above. It does not
+    call a real source operation or add a host role, credential, network access,
+    installation, provider, production identity or qualification. A future
+    `coverage-read.v1` producer must first pass its own accepted source-provider
+    artifact and may then write this exact contract from inside the existing
+    dedicated host-supervisor trust boundary. Current production source and
+    accepted source capability are absent, so production coverage always refuses.
+15. A private fixture may pin one fixture collector and fixed raw response files,
+    with no network. Its fixed producer accepts only the canonical request and
+    writes through a distinct fixture supervisor principal into the same exact
+    store contract. Tests run the real consumer, normalizer and Git checks. A
+    same-UID directory, metadata mock, caller pipe or caller-supplied fact is not a
+    source-authentication positive. If development or CI cannot provide the
+    distinct principal, the physical positive remains explicitly blocked and G3
+    cannot replace it with a simulated pass.
+16. The evaluator reads the host UTC clock once for the age check and records that
    value in its output. The time is not accepted from an input document. A clock
    read failure, invalid UTC value, or apparent future qualifying evidence refuses.
-12. No input boolean or label such as `checked`, `trusted`, `native-qualified`, or
+17. No input boolean or label such as `checked`, `trusted`, `native-qualified`, or
    `verified` substitutes for these source checks. Equal digests, a pull request's
    existence, or well-shaped JSON also do not establish provenance on their own.
 
@@ -198,29 +226,38 @@ evidence only. It does not enable a scope or grant write authority.
 
 ### R4. Revision coverage
 
-1. A scope records `coverage_base`, its repository id and object algorithm, and one
-   coverage rule version. The qualifying child-5 evidence was produced at that
-   exact base. Its separately held qualifying coverage bundle authenticates the
-   target default branch and branch-rule baseline at that same base.
-2. The exact base uses its authenticated child-5 Git source facts and qualifying
-   coverage bundle. A later revision R is covered only when the current coverage
-   bundle places R on the same authenticated target default branch and the fixed
-   Git reader proves R is a first-parent descendant of `coverage_base`. Both
-   coverage observations and Git results must name the same repository, base,
-   revision, snapshot, commits, parents, and trees in the same order.
-3. For commits after the base through R, changes under `ystack-evidence/` are
+1. Revision coverage replaces the old exact-revision and full-identity predicates
+   only when `workflow_id == "workflow.shadow-evidence-commit"` and
+   `task_class == "task.commit-shadow-evidence"`. A scope where neither field
+   matches this fixed pair remains read-only: it keeps the original exact revision,
+   full qualified identity and no-change materialization predicates, and also needs
+   R2's authentic sandbox receipt. A partial or mixed pair is malformed and cannot
+   fall back to read-only. Record fields or a caller boolean never choose the class.
+2. A write scope records `coverage_base`, its repository id and object algorithm,
+   and one coverage rule version. The qualifying child-5 evidence was produced at
+   that exact base. Its separately held qualifying coverage bundle authenticates
+   the target default branch and branch-rule baseline at that same base.
+3. The exact base compares its original authenticated coverage observation only to
+   the base Git snapshot, base commit/tree and baseline forge facts. A later R is
+   covered only when the current observation places R on that same authenticated
+   default branch and the fixed Git reader proves R is a first-parent descendant
+   of `coverage_base`. The current observation compares to R's Git snapshot,
+   commits, parents, trees and current forge facts. Both observations share the
+   repository, base, rule version and closed identity; they do not share evaluated
+   revision, snapshot, interval or observation time.
+4. For commits after the base through R, changes under `ystack-evidence/` are
    allowed only when the authenticated coverage observation proves that commit was
    merged from this scope's own publisher pull request. Repository, scope, branch,
    pull request, head, base, and merge commit must all agree. A foreign, unmerged,
    rewritten, or merely similarly named pull request refuses.
-4. Nothing may change under the target's `.ystack/` or its protected CI workflow
+5. Nothing may change under the target's `.ystack/` or its protected CI workflow
    paths. The fixed Git reader derives these path changes. The authenticated
    qualifying and current observations must show one continuous, complete
    branch-rule history with no event from the baseline through R. Endpoint digest
    equality cannot hide a temporary change.
-5. Other ordinary source changes are allowed. They do not need to come from this
+6. Other ordinary source changes are allowed. They do not need to come from this
    scope's publisher. They remain subject to the fresh derived-evidence rule below.
-6. The closed coverage identity is exactly the parent R3.3 set:
+7. The closed coverage identity is exactly the parent R3.3 set:
    - scope id, `workflow_id`, `task_class`, and `model_request`;
    - `adapter_config_refs`, `prompt_refs`, `skill_refs`, and
      `verification_instructions_ref`;
@@ -230,27 +267,27 @@ evidence only. It does not enable a scope or grant write authority.
    - control policy-set ref and the sandbox and scope policy bytes;
    - `coverage_base` and coverage rule version.
    No field may be added, removed, substituted, or reselected during coverage.
-7. Everything outside that set is revision-derived. For every evaluation it is
+8. Everything outside that set is revision-derived. For every evaluation it is
    freshly rebuilt from R, the actual request, resolved profile, target Git facts,
    and materialization. Existing stage-request, request/incident,
    materialization, gate-binding, qualified-identity, and cross-document checks
    must bind every derived reference and digest to those current bytes.
-8. Revision-derived values include the target revision; source and candidate
+9. Revision-derived values include the target revision; source and candidate
    commits and trees; publisher base; stage request target and source refs;
    repository-context and resolved-profile refs; gate evidence refs; shadow record;
    materialization and stage result; sandbox evaluation; receipt; and the complete
    withheld-write relations. Matching old evidence is not proof. A different value
    is not proof either.
-9. The qualifying time is only
+10. The qualifying time is only
    `sandbox-receipt.json.body.timing.terminated_at` from the original enforced
    reproduction attempt inside the qualifying child-5 bundle. For a withheld-write
    bundle it is the inner reproduction receipt, never the outer write attempt.
    Reopening, copying, origin rechecking, or producing a current coverage
    observation cannot refresh it. The evaluator subtracts that authenticated UTC
-   instant from its one R1.11 clock read. Age equal to exactly 30 times 24 times
+   instant from its one R1.16 clock read. Age equal to exactly 30 times 24 times
    60 times 60 seconds is accepted. A greater age, negative age, future or invalid
    timestamp, or a time inconsistent with the checked original receipt refuses.
-10. A coverage-identity change, history rewrite, non-descendant revision, foreign
+11. A coverage-identity change, history rewrite, non-descendant revision, foreign
     evidence-root change, protected change, branch-rule drift, stale evidence, or
     failed fresh binding returns to the parent R3 gate named for that change.
 
@@ -271,9 +308,10 @@ evidence only. It does not enable a scope or grant write authority.
 4. A proposable result still requires every scope, shadow, eval, duty, kill, risk,
    mode, and protected-path predicate not explicitly replaced here. R1.2 and R3
    replace the old no-change-only materialization predicate with the closed
-   three-form dispatch. R4 replaces exact-revision and full-identity equality
-   with coverage-base, closed-identity, and fresh-derived binding. Every other
-   predicate remains unchanged.
+   three-form dispatch. R4 replaces exact-revision and full-identity equality only
+   for its exact write workflow/task pair, using coverage-base, closed-identity,
+   and fresh-derived binding. Read-only scopes retain their original predicates.
+   Every other predicate remains unchanged.
 5. The evidence section records the measured child-5 bundle and receipt-check refs.
    For coverage it records `coverage_base`, evaluated revision, rule version,
    measured Git snapshot ref, qualifying and current coverage bundle refs,
@@ -304,24 +342,33 @@ evidence only. It does not enable a scope or grant write authority.
    tree changes pass.
 4. Coverage cases include exact base, direct descendant, multi-commit first-parent
    descent, allowed ordinary source edits, and this scope's verified evidence-root
-   merge. The fixed fixture observer produces the exact held contract and passes
-   the same checker, origin, and identity lookup as production. Negative cases
-   include caller-authored identical JSON, wrong observer or store, missing or
+   merge. A fixed fixture producer uses pinned raw response files, zero network and
+   a distinct fixture supervisor principal to write the exact store contract. The
+   real consumer, normalizer, origin checks and identity lookup process it. If CI
+   cannot provide that distinct principal, the physical positive remains blocked;
+   metadata mocks do not replace it. Negative cases include caller-authored
+   identical JSON, same-UID store, wrong producer, collector or store, missing or
    reordered interval row, duplicate or discontinuous cursor, truncated history,
    non-descendant and rewritten history, second-parent-only membership, foreign
    publisher pull request, unmerged or mismatched merge, protected `.ystack/` or
    CI change, changed closed-identity field, stale derived field, missing
-   observation fact, malformed Git input, and branch rules A-to-B-to-A.
+   observation fact, malformed Git input, branch rules A-to-B-to-A, a valid-looking
+   authenticated field, copied origin, request/nonce replay, raw-page mutation,
+   normalizer disagreement, and a missing or differently bound source package.
+   Classification cases pair the exact write workflow/task identity with legal
+   coverage, keep a read-only exact-revision/full-identity/no-change positive and
+   cross-revision refusal, reject each partial pair, and prove an added record field
+   or caller flag cannot change either class.
 5. Freshness cases fix the clock and test just before, exactly at, and just after
    30 days, plus future, invalid, and inconsistent timestamps. A 31-day-old
    reproduction stays stale after a fresh origin recheck and current coverage
    observation. A write fixture with different inner and outer receipt times uses
    only the inner reproduction `terminated_at`.
 6. Development uses disposable repositories and the one closed fixture coverage
-   contract. Tests show that the production package's absent accepted observer
-   identity, empty accepted set, `unproven` registry entries, and CPU/wall gaps
-   all refuse. No
-   fixture identity or byte may enter production package data.
+   contract. Tests show that the production forge binding's absent source
+   capability, empty sandbox accepted set, `unproven` registry entries, and CPU/wall
+   gaps all refuse. The fixture source reads only pinned package files and exposes
+   no public fixture switch. No fixture identity or byte may enter production data.
 7. Run the complete scope qualification suite, child-5 consumer and write suites,
    sandbox receipt suite, materializer and fixed digest suites, relevant schema and
    integration suites, and required CI. A quick CI pass is not full-suite proof.
@@ -338,14 +385,15 @@ child-5 bundle rules, fixed receipt checker, materializer protocol, and qualifie
 identity checks. It gives the scope program only measured facts and canonical
 digests after all checks pass.
 
-A private coverage reader consumes only the held, versioned observation bundle in
-R1. It authenticates the fixed observer attempt through the existing receipt,
-origin, and package identity boundaries, then combines those facts with fixed
-read-only Git results. Git proves object relationships and path changes. The
-observation proves facts Git cannot prove alone: default-branch identity,
-publisher pull-request origin, and the complete branch-rule event interval. Neither
-source can replace the other. When the accepted observer or bundle is unavailable,
-the reader returns a closed refusal.
+A private coverage reader consumes only the held, versioned attempt in R1. It
+authenticates the fixed host-supervisor channel through the existing immutable
+anchor and controlled-store rules. It then binds the request, receipt, fixed forge
+package identity, raw pages, normalization and observation before combining
+those facts with fixed read-only Git results. Git proves object relationships and
+path changes. The observation proves default-branch identity, publisher pull-request
+origin and the complete branch-rule event interval. Each source retains its own
+facts. A missing provider, source capability or complete attempt returns a closed
+refusal.
 
 The scope program compares the measured receipt, write, coverage, identity, and
 fresh-binding facts with the scope's existing evidence. The driver maps a missing
@@ -365,7 +413,7 @@ Implementation PR: `review_size: standard`.
 
 - Native qualification, its standard, VM execution, installation, or accepted
   production identity changes.
-- A target/forge observation provider, observer qualification, network access,
+- A target/forge source provider, source-package qualification, network access,
   credentials, target inspection, or a real publisher.
 - Real enablement, ystack-tip reads, config bootstrap, activation, target writes,
   publication, post-publication verification, or production use.
@@ -381,7 +429,7 @@ Implementation PR: `review_size: standard`.
   implementation.
 - **Production remains blocked.** The current accepted identity set is empty,
   registry entries are `unproven`, CPU and wall proof is absent, and no accepted
-  target/forge observer exists. Code and fixture tests cannot close
+  target/forge source provider exists. Code and fixture tests cannot close
   those gaps.
 - **Git is incomplete provenance.** Git objects prove ancestry and bytes. They do
   not prove which default branch, pull request, publisher, or branch rule the forge
