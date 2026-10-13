@@ -37,6 +37,8 @@ paths:
   child-5 behavior, so scope does not carry a second implementation.
 - `scripts/test/scope-qualification.test.sh` — complete core proof, including the
   real controlled-store fixture.
+- `scripts/test/shadow-enforced.test.sh` — keep the original native-owner proof
+  on the real private adapter after moving its obsolete test injection point.
 - `scripts/test/shadow-write.test.sh` — prove the shared Git primitive preserves
   the accepted writer behavior and fixed command set.
 - `scripts/test/shadow-self-host-evidence.test.sh` — move its real evaluator
@@ -162,10 +164,17 @@ only the canonical UUID array; its group method accepts only one canonical
 reap. `enforced-reproduction.py` constructs this owner and keeps its existing
 ledger entries; the scope reader constructs the same private owner from its held
 physical files. Neither path accepts a runner callback or arbitrary argv.
-This is the only `enforced-reproduction.py` change: its existing two roles call the
-private owner's two closed methods. All other driver roles, request handling,
-ledger rows, timeouts, cancellation, signal cleanup and reap behavior remain byte-
-for-byte compatible at their public boundaries.
+Keep `_communicate_native` returning its private child-result object. The
+`_DarwinLedger.native_communicate` adapter unwraps only that object's
+`returncode` and returns `(int, stdout, stderr)` to the shared owner. The owner
+still requires integer zero and empty stderr. Do not change the native C, roles,
+argv, environment, mask, bounds, cleanup or reap contract, and do not add a
+callback or a generic result coercion.
+These are the only `enforced-reproduction.py` changes: its existing two roles call
+the private owner's closed methods, and its private ledger adapter unwraps the
+native return code. All other driver roles, request handling, ledger rows,
+timeouts, cancellation, signal cleanup and reap behavior remain byte-for-byte
+compatible at their public boundaries.
 
 Separate record readability from qualification eligibility before opening any
 bundle. Resolve every scope ref to exactly one canonical record in `SHADOW_SET`,
@@ -392,9 +401,16 @@ Add focused cases for every spec R6 item. Besides the real fixture above, cover:
 - fixed Git command rejection, config/replace/alternate/shallow/promisor drift,
   bundle/Git races, child timeout/signal/nonzero/malformed output and exact reap;
   no target write, network, credential, producer or publisher call.
-- the complete existing shadow-enforced suite proving the shared Darwin owner keeps
-  fixed UUID/group argv, original ledger entries, bounds, timeout, cancellation,
-  signal cleanup and unique reap, with every other driver role unchanged;
+- the complete existing 149-check shadow-enforced suite proving the shared Darwin
+  owner keeps fixed UUID/group argv, original ledger entries, bounds, timeout,
+  cancellation, signal cleanup and unique reap, with every other driver role
+  unchanged. Its rows/recipe fixture executes the actual owner and actual adapter:
+  it captures the fixed tuple at the test-only native State prepare boundary and
+  supplies `_NativeChildResult`, stdout and stderr only at the private
+  `_communicate_native` boundary. Preserve every prior success and refusal
+  assertion, including malformed, missing, reordered, duplicate, extra, trailing,
+  oversize, empty, count, 128-row, group, member and nonmember cases. Restore the
+  native owner and transport before the real Darwin and cancellation cases;
 - the existing self-host compatibility harness with its empty legacy bundle root,
   four unmodified real pre/post record commit ids, a genuine locally created bare
   object database with no historical-object lookup, nine arguments, both
