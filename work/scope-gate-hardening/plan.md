@@ -79,17 +79,20 @@ That case has two real legacy records, so an empty root is its only legal layout
 it must not manufacture a completed child-5 bundle.
 
 `SOURCE_GIT_DIR` is one held bare object database for the scope's target. The scope
-and every record eligible to contribute must name its repository id, hash
-algorithm and exact target commit. A referenced legacy record for another
-revision or identity remains readable but is never eligible and creates no Git
-prerequisite. The locator does not prove a repository id. Git object hashes and
-the eligible record/scope relations prove the exact bytes used by this inactive
-evaluation.
-The compatibility test creates a real bare snapshot for its own target repository
-and the commit selected by the current scope case, with the same object format and
-tree as that eligible record. It passes that directory as `SOURCE_GIT_DIR`; an
-empty or invented Git locator is forbidden. The unselected legacy record does not
-require its historical commit to be present in this snapshot.
+and every enforced or write record eligible to contribute must name its repository
+id, hash algorithm and exact target commit. A referenced legacy record is always
+reporting-only and creates no Git prerequisite, even when its revision and identity
+match the current scope. The locator does not prove a repository id. Git object
+hashes and the eligible enforced/write record relations prove the exact bytes used
+by this inactive evaluation.
+The legacy-only compatibility test creates a genuine local bare object database,
+passes its physical held directory as `SOURCE_GIT_DIR`, and verifies bare-repository
+shape, expected object format, stable config and object-directory metadata. No
+record is eligible to contribute, so the reader performs no commit, tree or blob
+lookup and the database may contain no objects. An invented directory, supplied
+JSON or bare locator still proves no repository identity or Git fact. Never fetch,
+reconstruct or require any of the legacy records' historical objects for this
+reporting-only case.
 
 The driver snapshots its own package files and the seven documents first. It then
 runs the physical current Python as:
@@ -167,16 +170,18 @@ for-byte compatible at their public boundaries.
 Separate record readability from qualification eligibility before opening any
 bundle. Resolve every scope ref to exactly one canonical record in `SHADOW_SET`,
 verify its digest, closed record form and bounded set membership, and retain a
-reporting row for it. A record is eligible only when its target repository id,
-target hash algorithm, exact target commit and complete qualified identity equal
-the current scope. Apply the existing required-environment selection only to these
-eligible rows. Duplicate eligible rows, missing required environments or extra
-eligible identities keep their existing refusal behavior.
+reporting row for it. First compare target repository id, target hash algorithm,
+exact target commit and complete qualified identity with the current scope. A row
+is eligible only when that comparison matches and its closed form is an actual
+enforced or withheld-write record. Legacy rows are never eligible. Apply the
+existing required-environment selection only to eligible rows. Duplicate eligible
+rows, missing required environments or extra eligible identities keep their
+existing refusal behavior.
 
-A shape-valid legacy row that fails this eligibility comparison remains readable
-and appears in the observation as noncontributing. It has no bundle, origin,
-receipt, native identity, Git or qualification effect. Never rewrite or drop its
-raw record, infer facts from it, or let it satisfy a required environment. A
+A shape-valid legacy row remains readable and appears in the observation as
+noncontributing whether or not its identity comparison matches. It has no bundle,
+origin, receipt, native identity, Git or qualification effect. Never rewrite or
+drop its raw record, infer facts from it, or let it satisfy a required environment. A
 claimed enforced or write row can contribute only after every bundle,
 controlled-store, checker, native, current-Git and record relation below passes;
 provided JSON, a matching digest or the bare locator alone never makes it eligible
@@ -271,15 +276,16 @@ two legacy records and empty bundle root now produce reason ids containing
 order. Preserve its exact per-case identity and gate relations, unavailable
 qualification, absent proposal, inactive output, authority `none`, and disabled
 state. Run both the pre and post scope case for each retained record group. Across
-the two groups this exercises the four actual commits
+the two groups this preserves the four actual commit ids in their raw record JSON:
 `d3f6d525328838b9c2de819699e53d8909ab7a3f`,
 `0427390224c25147650f1bd3b6e43ed6911b97a7`,
 `413a2f02a46ababa987039be65089e95c1916765`, and
-`e7da8f7b8f88c2a9cb4670dc453c5223a9c2d15e`. In each evaluation the selected row
-is eligible for that scope case; the other real legacy row remains readable and
-reported but noncontributing. The test must still fail on malformed input, a
-changed selected relation or an attempt to make the other row contribute. Do not
-accept `E_USAGE`, omit or rewrite a record, synthesize a receipt, or retain the old
+`e7da8f7b8f88c2a9cb4670dc453c5223a9c2d15e`. Both the selected and unselected
+legacy rows remain readable, reported and noncontributing. The genuine local bare
+database is held and format-checked but none of those four commits is looked up.
+The test must still fail on malformed input, a changed selected identity relation
+or an attempt to make either row contribute. Do not accept `E_USAGE`, omit or
+rewrite a record, synthesize a receipt, fetch historical objects, or retain the old
 one-reason expectation.
 
 ## Same-contract controlled-origin fixture
@@ -372,8 +378,9 @@ Add focused cases for every spec R6 item. Besides the real fixture above, cover:
   fixed UUID/group argv, original ledger entries, bounds, timeout, cancellation,
   signal cleanup and unique reap, with every other driver role unchanged;
 - the existing self-host compatibility harness with its empty legacy bundle root,
-  four real pre/post commits, per-case bare Git snapshot, nine arguments, both
-  intentional refusal reasons, the other row reported but noncontributing, and
+  four unmodified real pre/post record commit ids, a genuine locally created bare
+  object database with no historical-object lookup, nine arguments, both
+  intentional refusal reasons, both rows reported but noncontributing, and
   unchanged identity, relation, qualification and inactive-output assertions.
 
 Preserve existing byte-for-byte outputs where the new authenticity requirement
