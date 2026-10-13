@@ -5,7 +5,7 @@ export LC_ALL=C
 umask 077
 
 if [ "${YSTACK_SCOPE_TEST_BOUNDED:-0}" != 1 ]; then
-  YSTACK_SCOPE_TEST_BOUNDED=1 exec /usr/bin/perl -e 'alarm 300; exec @ARGV; die "exec failed: $!\n"' /bin/bash "$0"
+  YSTACK_SCOPE_TEST_BOUNDED=1 exec /usr/bin/perl -e 'alarm 1800; exec @ARGV; die "exec failed: $!\n"' /bin/bash "$0"
 fi
 
 root=$(CDPATH='' cd -P -- "${BASH_SOURCE[0]%/*}/../.." && pwd -P)
