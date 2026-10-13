@@ -20,7 +20,25 @@ These gaps let a well-shaped record say more than its authentic evidence proves.
 Missing evidence must refuse qualification instead of falling back to a declaration
 or a supplied claim.
 
+## Delivery boundary
+
+Child 6 has two mandatory, ordered deliveries. Issue #541 is the nonterminal core.
+It authenticates required-environment receipts and native-qualified identities,
+accepts the complete no-change and withheld-write record forms, and keeps every
+scope on the existing exact-revision rule. It does not complete later-revision
+coverage and cannot complete child 6.
+
+Issue #544 must then implement the complete parent R3 later-revision coverage result.
+It authenticates the default branch, first-parent history, own-publisher changes,
+protected configuration, CI and branch rules, closed coverage identity, fresh
+revision-derived binding, and the 30-day limit. Both #541 and #544 must pass their
+artifact, plan, implementation, proof and review gates before child 6 is complete or
+child 7 starts. This split changes delivery order only. Every outcome and safety
+standard below remains required.
+
 ## Proposed outcome
+
+### Nonterminal core outcome — #541
 
 Every required environment has an authentic satisfied receipt. The receipt is bound
 to its attempt, candidate, environment, and policy. Its registry identity is genuinely
@@ -31,6 +49,12 @@ The existing no-change result keeps its current meaning. A changed result qualif
 only when it is the complete withheld-publication form and exactly matches the
 add-only write set accepted from the shadow consumer. The gate checks the source,
 candidate, parent, tree, blob, mode, publisher-request, and verification relations.
+
+The #541 core keeps exact-revision and full-identity matching for read-only and write
+scopes. Evidence from another revision refuses. No core result claims revision
+coverage or satisfies the mandatory #544 outcome.
+
+### Mandatory follow-up outcome — #544
 
 Older evidence covers a later revision only when authentic facts prove default-branch
 first-parent descent. Changes under `ystack-evidence/` come only from this scope's
@@ -60,8 +84,8 @@ live publishers, credentials, and production configuration remain untouched.
 ## Constraints
 
 This is one security-control concern under the accepted Step 8 child 6 boundary.
-G2 must define the exact trusted inputs and provenance. A separate high-risk plan must
-land before implementation.
+Each delivery must define its exact trusted inputs and provenance in G2. A separate
+high-risk plan must land before each implementation.
 
 Current CPU and wall enforcement remain `none`. Native qualification remains
 `BLOCKED`, and the accepted production identity set remains empty. Fixture success
