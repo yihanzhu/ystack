@@ -100,6 +100,15 @@ store, receipt checker, native registry, accepted set, record-form, held Git, an
 write relations. Every required environment has exactly one row in each set.
 Missing, duplicate, foreign, unproven, legacy, or cross-form rows cannot count.
 
+Treat the controlled-store acquisitions in this first pass as provisional. Keep
+each one through the complete bundle authentication and through durable creation
+of the source request and expectation. Then recheck and close only those initial
+store acquisitions and remove them from the reader's owned set before the source
+process starts. Continue to hold the bundle directories, package, input, anchor,
+Git, request, expectation, and all other reader objects. Closing a store
+acquisition does not turn its captured bytes or relations into trusted final
+evidence; the final pass below must authenticate them again.
+
 Compare the closed coverage identity field by field. It contains only the scope,
 workflow, task, model request, artifact refs, complete resolved-profile source and
 bindings, environment and registry entry, control policy bytes, coverage base,
@@ -126,6 +135,8 @@ derives every ref from held scope, seven original documents, authenticated bundl
 sets, current profile/stage/result/materialization/publisher/post-check facts,
 qualifying receipts, Git observation, and the fixed source package selected by
 the root-owned configuration. It accepts none of those values back from a caller.
+The initial store acquisitions remain held until these exact files are durable;
+only then may the reader release them as described above.
 
 Add one closed source method to the concrete private child owner used by the
 reader. This is a #544 responsibility; #541 supplies no sudo owner or source
@@ -269,6 +280,23 @@ during the acquired read refuses stale. The archived source origin never
 authenticates a new read and no reread refreshes the qualifying sandbox receipt's
 original `terminated_at`.
 
+After the source process has completed its receipt-last write and exited, open a
+fresh source attempt and freshly reacquire every qualifying and current controlled
+store attempt. Repeat the full receipt, payload, checker, native-registry,
+accepted-set, form, materialization, request, write-relation, and reference
+authentication. Require every original receipt and payload byte and every check,
+materialization, request, and non-origin ref to equal the provisional result and
+the held source request. A completed source sibling may change only the fresh
+store-root metadata recorded by these new origin observations. It may not change
+an old attempt, its original timestamp, or any authenticated relation.
+
+Keep all final core attempt acquisitions and the source attempt acquisition owned
+through jq evaluation, `READY`, and `SEAL`. Their root identities are taken only
+after the source sibling is complete. Any store-root, attempt, directory, receipt,
+payload, or source mutation after that acquisition refuses stale through the
+unchanged identity, no-follow, descriptor, inventory, and byte rechecks. Do not
+whitelist a root metadata change or weaken the held-path identity.
+
 ## History and decision rules
 
 The normalized observation contains exactly repository, default branch, baseline
@@ -350,6 +378,13 @@ under the read-only identity and the actual source supervisor and collector unde
 the dedicated source principal. Prove a matching raw PR actor passes and a changed
 or foreign actor refuses while the held publisher expectation remains unchanged.
 
+The positive must use an existing authenticated qualifying/current attempt set,
+create its own source sibling, then pass the complete final reacquisition with
+fresh root metadata and unchanged old attempt bytes and relations. A paired case
+mutates the store root or any old/source attempt after final reacquisition and
+before `SEAL`; it must refuse stale. A mock origin, accepted root-mutation
+exception, or skipped second authentication cannot satisfy either case.
+
 Build real Git commits A, ordinary source B, own-publisher evidence C, and current
 R. The source pages and bare Git facts must agree on the complete first-parent
 interval. Keep `.ystack/`, workflows, and the complete applicable branch-rule set
@@ -387,6 +422,9 @@ Besides the real positive, cover every spec R9 case:
   final recheck;
 - replay of the first genuine attempt during a second same-R evaluation, followed
   by a new genuine attempt that passes;
+- lawful source-sibling creation between provisional and final acquisitions,
+  unchanged old attempt bytes and refs on full final reauthentication, and any
+  root or attempt mutation during the final hold refusing stale before `SEAL`;
 - another repository/default branch; non-descendant and second-parent paths;
   missing, duplicate, reordered, alternate, and incomplete first-parent history;
 - protected Git changes; direct, foreign, rewritten, deleted, changed-existing,
