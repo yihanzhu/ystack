@@ -2330,6 +2330,129 @@ print(json.dumps({'genuine_paired_storage_controls':'PASS','consumer_denials':6,
     'canonical_archive_refusals':len(archive_cases),'original_receipt_terminated_at':
         json.loads(receipt_before)['body']['timing']['terminated_at']},sort_keys=True),flush=True)
 
+# This private frontend copy changes only the before-SEAL test synchronization boundary.
+race_package = base / 'through-use-package'
+shutil.copytree(package, race_package)
+frontend = race_package / 'scope/v1/evaluate-scope.sh'
+frontend_before = frontend.read_bytes()
+seal_boundary = b"/usr/bin/printf 'SEAL\\n' >&7 || emit_error E_RUNTIME\n"
+assert frontend_before.count(seal_boundary)==1
+synchronization = b"""exec 6<>"$TMPDIR/test-ack" || emit_error E_RUNTIME
+/usr/bin/printf 'ACQUIRED\\n' >"$TMPDIR/test-ready" || emit_error E_RUNTIME
+reply=''
+IFS= read -r -t 30 reply <&6 || emit_error E_RUNTIME
+exec 6>&-
+case "$reply" in
+  CONTINUE) ;;
+  CANCEL) kill -s TERM "$BASHPID" ;;
+  *) emit_error E_RUNTIME ;;
+esac
+"""
+frontend.write_bytes(frontend_before.replace(seal_boundary,synchronization+seal_boundary,1))
+frontend.chmod(0o555)
+print(json.dumps({'private_frontend_original_sha256':sha(frontend_before),
+    'private_frontend_execution_sha256':sha(frontend.read_bytes()),
+    'difference':'one fixed synchronization insertion before SEAL; production reader unchanged'},sort_keys=True),flush=True)
+ready_path, ack_path = consumer_work/'test-ready', consumer_work/'test-ack'
+for path in (ready_path,ack_path):
+    os.mkfifo(path,0o600)
+    os.chown(path,consumer_uid,65534)
+    st=path.lstat()
+    assert stat.S_ISFIFO(st.st_mode) and st.st_nlink==1 and stat.S_IMODE(st.st_mode)==0o600
+race_argv = list(scope_argv)
+race_argv[race_argv.index(package/'scope/v1/evaluate-scope.sh')] = frontend
+
+def metadata(path):
+    state=path.lstat()
+    return [state.st_dev,state.st_ino,stat.S_IFMT(state.st_mode),state.st_uid,state.st_gid,
+            stat.S_IMODE(state.st_mode),state.st_nlink,state.st_size,state.st_mtime_ns,state.st_ctime_ns]
+
+def through_use(label, target, mutate, restore, cancellation=False):
+    ready_fd=os.open(ready_path,os.O_RDONLY|os.O_NONBLOCK|os.O_NOFOLLOW)
+    st=os.fstat(ready_fd)
+    assert metadata(ready_path)[:7]==[st.st_dev,st.st_ino,stat.S_IFIFO,consumer_uid,65534,0o600,1]
+    child=None
+    original_error=None
+    before=None
+    started=time.monotonic()
+    deadline=started+150
+    try:
+        child=subprocess.Popen(list(map(str,race_argv)),stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+                               env=env,start_new_session=True,close_fds=True)
+        message=b''
+        while message!=b'ACQUIRED\n':
+            assert time.monotonic()<deadline and child.poll() is None, 'consumer exited before acquisition'
+            readable,_,_=select.select([ready_fd],[],[],min(0.1,deadline-time.monotonic()))
+            if readable:
+                message+=os.read(ready_fd,32)
+                assert len(message)<=9
+        before=metadata(target)
+        if not cancellation:
+            mutate()
+            print(json.dumps({'through_use':label,'held_object':str(target),
+                'expected_before':before,'current_after':metadata(target)},sort_keys=True),flush=True)
+        ack_fd=os.open(ack_path,os.O_WRONLY|os.O_NONBLOCK|os.O_NOFOLLOW)
+        try:
+            ack_state=os.fstat(ack_fd)
+            assert stat.S_ISFIFO(ack_state.st_mode) and ack_state.st_uid==consumer_uid
+            assert ack_state.st_gid==65534 and ack_state.st_nlink==1
+            assert (ack_state.st_dev,ack_state.st_ino)==(ack_path.lstat().st_dev,ack_path.lstat().st_ino)
+            message=b'CANCEL\n' if cancellation else b'CONTINUE\n'
+            assert os.write(ack_fd,message)==len(message)
+        finally:
+            os.close(ack_fd)
+        stdout,stderr=child.communicate(timeout=max(0.001,deadline-time.monotonic()))
+        print(json.dumps({'through_use':label,'returncode':child.returncode,'stdout_hex':stdout.hex(),
+            'stderr_utf8':stderr.decode('utf8','backslashreplace'),'elapsed':time.monotonic()-started},sort_keys=True),flush=True)
+        assert child.returncode!=0 and stdout==b''
+        assert stderr== (b'E_RUNTIME\n' if cancellation else b'E_STALE\n')
+    except BaseException as error:
+        original_error=error
+        raise
+    finally:
+        os.close(ready_fd)
+        try:
+            if child is not None and child.returncode is None:
+                os.killpg(child.pid,signal.SIGTERM)
+                child.communicate(timeout=10)
+            if before is not None:
+                restore()
+        except BaseException as cleanup_error:
+            if original_error is not None:
+                raise original_error from cleanup_error
+            raise
+
+import select,signal
+original_config=(anchor/'host-config.json').read_bytes()
+through_use('anchor-bytes-during-use',anchor/'host-config.json',
+    lambda:put(anchor/'host-config.json',original_config+b' '),
+    lambda:put(anchor/'host-config.json',original_config))
+source_config=(source/'config').read_bytes()
+through_use('git-config-during-use',source/'config',
+    lambda:put(source/'config',source_config+b'\n'),
+    lambda:put(source/'config',source_config))
+through_use('receipt-bytes-during-use',receipt_path,
+    lambda:receipt_path.write_bytes(receipt_before+b' '),
+    lambda:receipt_path.write_bytes(receipt_before))
+# The third attempt has real exclusive writes. It does not replace old payload or timing bytes.
+third_packet=json.loads((base/'storage-input.json').read_bytes())
+third_packet['attempt_id']='attempt.scope-genuine-sibling'
+third_receipt=json.loads(third_packet['receipt_utf8'])
+third_receipt['body']['attempt']['attempt_id']=third_packet['attempt_id']
+third_packet['receipt_utf8']=canonical(third_receipt).decode()
+put(base/'storage-input.json',third_packet)
+through_use('lawful-sibling-during-use',store,
+    lambda:run(['/usr/bin/sudo','-n','-u',writer,'--',sys.executable,'-I','-S','-B',base/'genuine-writer.py']),
+    lambda:None)
+assert receipt_path.read_bytes()==receipt_before
+assert json.loads(receipt_path.read_bytes())['body']['timing']['terminated_at']==json.loads(receipt_before)['body']['timing']['terminated_at']
+through_use('watched-cancellation',store,lambda:None,lambda:None,cancellation=True)
+ready_path.unlink()
+ack_path.unlink()
+assert json.loads(run(scope_argv))['body']['evidence']['shadow_bundle_facts'][0]['authentication']['state']=='authenticated'
+print(json.dumps({'through_use_controls':'PASS','sibling_before':'PASS','sibling_during':'E_STALE',
+    'original_timing_unchanged':True,'watched_cancellation':'E_RUNTIME'},sort_keys=True),flush=True)
+
 PY_GENUINE_ASSEMBLER
 }
 run_genuine_linux() {
