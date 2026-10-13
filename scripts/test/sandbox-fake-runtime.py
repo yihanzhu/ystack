@@ -443,6 +443,8 @@ def cmd_run(args):
         if fh.write(frame) != len(frame):
             raise OSError("partial export write")
     if "phase_record_path" in scenario and not scenario.get("damage_export"):
+        if hs.validate_export(records, plan_sha256) is None:
+            raise ValueError("invalid export phase report")
         publish_export_phase(scenario, frame)
     if scenario.get("hang_after_export"):
         # R5.3's own gate under test: a valid, complete frame is on disk,

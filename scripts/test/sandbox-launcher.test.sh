@@ -2252,7 +2252,7 @@ pass 'finding 5: a duplicate stdout record, an unknown record name, or a missing
 # Finding 6 [P2]: export consumption gated on confirmed termination.
 n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
 build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
-"$python" - "$base" "$install_dir" "$store_root" "$attempt_id" "$vfkit_path" <<'PY_EXPORT_STOP'
+cat > "$base/export-stop.py" <<'PY_EXPORT_STOP'
 import hashlib
 import json
 import os
@@ -2398,10 +2398,12 @@ never_close = subprocess.run([vfkit, "run",
 assert never_close.returncode == 0, never_close.stderr[:4096]
 assert read_phase(phase_path, phase_attempt) is None
 os.unlink(phase_path + ".mailbox")
+unread_output = "export-must-stay-unread"
 with open(scenario_path, "wb") as fh:
     fh.write(canonical({"hardstop_writes_export": True, "hang_after_export": True,
                         "phase_record_path": phase_path, "attempt_id": phase_attempt,
-                        "stdout": "export-must-stay-unread", "stderr": "export-must-stay-unread"}))
+                        "stdout": unread_output, "stderr": unread_output,
+                        "limit_overrides": {"output_bytes": {"observed": 2 * len(unread_output.encode())}}}))
 env = os.environ.copy()
 env["YSTACK_FAKE_SCENARIO"] = scenario_path
 assert "YSTACK_TEST_HARDSTOP_MS" not in env and "YSTACK_TEST_SIGKILL_MS" not in env
@@ -2474,7 +2476,15 @@ finally:
                                  ("receipt", os.path.join(store, attempt, "receipt.json"), 16384),
                                  ("stderr", os.path.join(base, "err"), 4096)):
             try:
-                with open(path, "rb") as fh:
+                before = os.lstat(path)
+                if not stat.S_ISREG(before.st_mode):
+                    raise OSError("nonregular diagnostic file")
+                fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                with os.fdopen(fd, "rb") as fh:
+                    opened = os.fstat(fh.fileno())
+                    if (not stat.S_ISREG(opened.st_mode)
+                            or (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino)):
+                        raise OSError("diagnostic file changed")
                     raw = fh.read(cap)
             except OSError as exc:
                 raw = repr(exc).encode()
@@ -2484,6 +2494,85 @@ if failure is not None:
 print("export-stop phase verified; owned launcher reaped status=%s elapsed=%.3f; closed negatives passed" %
       (status, time.monotonic() - started))
 PY_EXPORT_STOP
+"$python" - "$base" "$base/export-stop.py" "$vfkit_path" <<'PY_EXPORT_FAILURES'
+import importlib.util
+import json
+import os
+import signal
+import subprocess
+import sys
+import time
+import uuid
+
+base, helper, vfkit = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("hs", os.environ["YSTACK_HOST_SUPERVISOR"])
+hs = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(hs)
+invalid = os.path.join(base, "invalid-export-" + uuid.uuid4().hex)
+with open(invalid + ".input", "xb") as fh:
+    fh.write(hs.frame_write([(b"plan.json", b"{}")]))
+with open(invalid + ".export", "xb") as fh:
+    fh.write(b"\0" * 4096)
+with open(invalid + ".scenario", "x") as fh:
+    json.dump({"phase_record_path": invalid + ".phase", "attempt_id": "invalid." + uuid.uuid4().hex,
+               "stdout": "export-must-stay-unread", "stderr": "export-must-stay-unread"}, fh)
+env = os.environ.copy()
+env["YSTACK_FAKE_SCENARIO"] = invalid + ".scenario"
+with open(invalid + ".out", "xb") as out, open(invalid + ".err", "xb") as err:
+    producer = subprocess.Popen([sys.executable, vfkit, "run", invalid + ".mailbox",
+                                 invalid + ".export", invalid + ".input"],
+                                stdout=out, stderr=err, env=env)
+    try:
+        producer_status = producer.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        producer.kill()
+        producer.wait(timeout=5)
+        raise
+assert producer_status == 1
+assert not os.path.lexists(invalid + ".phase") and not os.path.lexists(invalid + ".phase.staging")
+with open(invalid + ".err", "rb") as fh:
+    producer_error = fh.read(4096)
+    assert b"invalid export phase report" in producer_error
+print("export-stop invalid46-versus0 report: producer exit1; no marker; stderr=%r" % producer_error)
+
+for kind in ("fifo", "symlink-fifo"):
+    control = os.path.join(base, "diagnostic-" + kind)
+    os.mkdir(control, 0o700)
+    install, store = os.path.join(control, "install"), os.path.join(control, "store")
+    os.mkdir(install, 0o700)
+    os.mkdir(store, 0o700)
+    with open(os.path.join(control, "pkg-scn.json"), "x") as fh:
+        fh.write("{}")
+    with open(os.path.join(install, "host-supervisor.py"), "x") as fh:
+        fh.write("import json, os, time\ns = json.load(open(os.environ['YSTACK_FAKE_SCENARIO']))\n"
+                 "path = s['phase_record_path']\n")
+        if kind == "fifo":
+            fh.write("os.mkfifo(path)\n")
+        else:
+            fh.write("os.mkfifo(path + '.fifo')\nos.symlink(path + '.fifo', path)\n")
+        fh.write("while True: time.sleep(0.01)\n")
+    started = time.monotonic()
+    with open(os.path.join(control, "worker.out"), "xb") as out, \
+            open(os.path.join(control, "worker.err"), "xb") as err:
+        worker = subprocess.Popen([sys.executable, helper, control, install, store,
+                                   "attempt.diagnostic-" + kind, vfkit], stdout=out, stderr=err)
+        try:
+            worker_status = worker.wait(timeout=80)
+        except subprocess.TimeoutExpired:
+            worker.kill()
+            worker.wait(timeout=5)
+            raise
+    with open(os.path.join(control, "worker.err"), "rb") as fh:
+        raw = fh.read(8192)
+    assert worker_status == 1, (kind, worker_status, raw)
+    assert b"status=%s" % str(-signal.SIGTERM).encode() in raw, raw
+    assert b"nonregular diagnostic file" in raw and b"nonregular phase" in raw, raw
+    print("export-stop %s bounded diagnostic=%r" % (kind, raw))
+    print("export-stop %s real finally: worker exit1; owned launcher reaped status=%s; elapsed=%.3f" %
+          (kind, -signal.SIGTERM, time.monotonic() - started))
+PY_EXPORT_FAILURES
+pass 'finding 6: an actual output-count mismatch cannot publish a phase marker; FIFO and symlink-to-FIFO failures execute the same bounded finally and reap their owned launcher'
+"$python" "$base/export-stop.py" "$base" "$install_dir" "$store_root" "$attempt_id" "$vfkit_path"
 pass 'finding 6: export consumption is gated on tree_terminated -- a runtime that wrote a fully valid, complete export frame but then hung (never confirming a stop) still gets every guest row unavailable, never the payload/observations that frame actually contains (R5.3 stop-before-read)'
 
 # Finding 7 [P2]: the deadline clock starts at the phase-B admission
