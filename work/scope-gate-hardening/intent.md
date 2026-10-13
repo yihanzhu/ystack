@@ -33,9 +33,9 @@ add-only write set accepted from the shadow consumer. The gate checks the source
 candidate, parent, tree, blob, mode, publisher-request, and verification relations.
 
 Older evidence covers a later revision only when authentic facts prove default-branch
-first-parent descent. Intervening changes are limited to this scope's own verified
-publisher pull request under the accepted evidence root. Protected configuration,
-CI workflows, and branch rules stay unchanged.
+first-parent descent. Changes under `ystack-evidence/` come only from this scope's
+own verified publisher pull requests. The target's `.ystack/`, CI workflow files,
+and branch rules stay unchanged.
 
 The coverage identity uses the accepted closed fields. Evidence derived from the
 revision, request, profile, and materialization is freshly rebuilt and rebound.
