@@ -1115,7 +1115,7 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
                          and status[1] > 0 and status[2] == status[1] and status[23] == 0, "E_RUNTIME")
                 self._checkpoint()
                 result, output, error = self.ledger.native_communicate(native, raw, cap, 65536, remaining)
-                _require(result == 0 and not error, "E_RUNTIME")
+                _require(type(result) is int and result == 0 and not error, "E_RUNTIME")
             except BaseException as exc:
                 try:
                     try:

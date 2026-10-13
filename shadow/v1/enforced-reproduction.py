@@ -439,7 +439,8 @@ class _DarwinLedger:
 
     @staticmethod
     def native_communicate(native, raw, output_limit, error_limit, timeout):
-        return _communicate_native(native, raw, output_limit, error_limit, timeout)
+        child, stdout, stderr = _communicate_native(native, raw, output_limit, error_limit, timeout)
+        return child.returncode, stdout, stderr
 
 
 class _DarwinUUIDResolver(c._DarwinUUIDResolver):

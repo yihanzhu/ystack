@@ -2609,15 +2609,36 @@ uuid_values=["0123456789abcdef0123456789abcdef","00"*16,"00"*16]
 resolver_rows=[{"uuid":uuid_values[0],"status":"resolved","kind":"user","id":501},
  {"uuid":uuid_values[1],"status":"resolved","kind":"group","id":20},
  {"uuid":uuid_values[2],"status":"unresolved","kind":None,"id":None}]
-original_run=e.run_bounded; resolver_calls=[]
+original_transport=e._communicate_native; resolver_calls=[]
+class CapturedNativeState:
+ def __init__(self,state):self.state,self.prepared=state,None
+ def prepare_child(self,value):
+  self.prepared=value
+  self.state.prepare_child(value)
+ def __getattr__(self,name):return getattr(self.state,name)
+captured_native=CapturedNativeState(native_state)
+parent_owner.native=captured_native
+transport_payload=e.c.canonical(resolver_rows)
+def recipe_call(native,raw,output_limit,error_limit,timeout,calls):
+ prepared=native.prepared
+ role,executable,arguments,environment=prepared
+ assert role in (1,15) and arguments[0]==executable and error_limit==65536
+ calls.append(("darwin-acl-uuid-resolution" if role==1 else "darwin-group-membership",
+  list(map(os.fsdecode,arguments)),{"stdin":raw,"timeout":timeout,"output_limit":output_limit,
+   "env":dict(os.fsdecode(value).split("=",1) for value in environment)}))
+ actual,stdout,stderr=original_transport(native,raw,output_limit,error_limit,timeout)
+ assert type(actual) is e._NativeChildResult
+ assert e._native_child_status(native)[0]==4
+ print(json.dumps({"recipe_actual_returncode":actual.returncode,
+  "stdout_sha256":sha(stdout),"stderr_sha256":sha(stderr)},sort_keys=True))
+ return e._NativeChildResult(0),transport_payload,b""
 def resolver_refuses(action,message):
  try:action()
  except (e.Refusal,e.c.Refusal) as exc:ok(exc.code=="E_ACL",message);return
  raise AssertionError("accepted: "+message)
-def resolver_run(role,argv,**options):
- resolver_calls.append((role,argv,options))
- return e.c.canonical(resolver_rows)
-e.run_bounded=resolver_run
+def resolver_run(native,raw,output_limit,error_limit,timeout):
+ return recipe_call(native,raw,output_limit,error_limit,timeout,resolver_calls)
+e._communicate_native=resolver_run
 ok(resolver.resolve(uuid_values)==resolver_rows,"fixed resolver preserves user/group/unresolved order")
 ok([row["role"] for row in resolver_ledger]==["darwin-acl-uuid-resolution"],
    "nonempty resolver batch appends one command-ledger row")
@@ -2636,35 +2657,38 @@ for bad,message in [
  (b'[{"id":501,"kind":"user","status":"resolved","uuid":"0123456789abcdef0123456789abcdef","x":1}]\n',"extra resolver field refused"),
  (e.c.canonical(resolver_rows)+b"x","trailing resolver data refused"),
  (b" "*(32*1024+1),"resolver output byte cap enforced")]:
- e.run_bounded=lambda *_args,bad=bad,**_options:bad
+ transport_payload=bad
  resolver_refuses(lambda:resolver.resolve(uuid_values),message)
-e.run_bounded=original_run
+transport_payload=e.c.canonical(resolver_rows)
 resolver_refuses(lambda:resolver.resolve(["A"*32]),"noncanonical resolver UUID refused")
 resolver_refuses(lambda:resolver.resolve(["00"*16]*129),"resolver count cap enforced")
 before_empty=len(resolver_ledger);ok(resolver.resolve([])==[] and len(resolver_ledger)==before_empty,
  "empty resolver batch appends no command-ledger row")
 boundary_uuids=[("%032x"%index) for index in range(128)]
-e.run_bounded=lambda *_args,**_options:e.c.canonical([
+transport_payload=e.c.canonical([
  {"uuid":uuid,"status":"unresolved","kind":None,"id":None} for uuid in boundary_uuids])
 ok(len(resolver.resolve(boundary_uuids))==128,"resolver accepts exact 128-entry boundary")
-e.run_bounded=original_run
+transport_payload=e.c.canonical(resolver_rows)
 resolver_refuses(lambda:e.c._json_array(b"["+b'"00",'*8192+b'"00"]\n',16*1024,"E_ACL"),
  "resolver input byte cap enforced before parsing")
 group_reader=e._DarwinGroupReader(resolver);group_calls=[]
-def group_run(role,argv,**options):
- group_calls.append((role,argv,options));return e.c.canonical([20])
-e.run_bounded=group_run
+def group_run(native,raw,output_limit,error_limit,timeout):
+ return recipe_call(native,raw,output_limit,error_limit,timeout,group_calls)
+transport_payload=e.c.canonical([20])
+e._communicate_native=group_run
 ok(group_reader.contains(20),"fixed group reader accepts exact matching gid")
 role,argv,options=group_calls[0]
 ok(role=="darwin-group-membership" and argv[-1]=="_read-darwin-group"
  and options["stdin"]==e.c.canonical({"gid":20}) and options["timeout"]==10
  and options["output_limit"]==16,"group reader argv input and caps are fixed")
-e.run_bounded=lambda *_args,**_options:e.c.canonical([])
+transport_payload=e.c.canonical([])
 ok(not group_reader.contains(20),"fixed group reader preserves exact nonmember result")
 for bad in (e.c.canonical([21]),b"[20,20]\n",b'{"member":true}\n',b"x"*17):
- e.run_bounded=lambda *_args,bad=bad,**_options:bad
+ transport_payload=bad
  resolver_refuses(lambda:group_reader.contains(20),"malformed group result refuses")
-e.run_bounded=original_run
+transport_payload=e.c.canonical(resolver_rows)
+e._communicate_native=original_transport
+parent_owner.native=native_state
 if sys.platform=="darwin":
  lib=e.ctypes.CDLL(e.c.DARWIN_SYSTEM_C,use_errno=True)
  def native_uuid(name,value):
