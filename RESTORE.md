@@ -1237,7 +1237,8 @@ The isolated public `prepare REQUEST BUNDLE WORK OUTPUT` entry requires descript
 schema-2 context and the reviewed physical Python/native source. It seals an inactive
 `withheld-write.v1` outer bundle only after the separate authenticated write check.
 The marker includes the publisher body; the candidate includes only frozen evidence.
-Publication stays withheld, and the existing scope evaluator refuses this form.
+Publication stays withheld. The hardened scope evaluator can authenticate this form
+only for its fixed write workflow and task, with a fresh controlled-store read.
 Never substitute archived origin for a fresh controlled-store read or enlarge the
 native role/argv/environment contract. No branch transport or publisher is restored.
 
@@ -1245,3 +1246,26 @@ Run `bash scripts/test/shadow-write.test.sh`. It includes the full unchanged enf
 regression and real writer component checks in disposable fixtures. Retain final native
 build/source and command evidence; synthetic receipt/installation proof grants no native
 qualification. The shipped accepted set stays empty and CPU/wall enforcement stays none.
+
+
+### Restore the inactive scope evidence gate
+
+Restore `scope/v1/read-shadow-evidence.py`, the scope shell/jq/policy files,
+`shadow/v1/_consumer.py`, the enforced consumer, writer, and every fixed component
+listed in `ci/required-files.txt`. Keep the actual bare Git snapshot and digest-named
+bundles outside the controlled store. The scope entry takes the original seven documents
+followed by `BUNDLE_ROOT SOURCE_GIT_DIR`; it requires existing physical Python 3.11+ and
+pinned jq 1.6. No tool discovery fallback installs a dependency.
+
+Run `bash scripts/test/scope-qualification.test.sh`, the enforced and writer suites,
+and the self-host evidence compatibility suite. The genuine Linux section runs only on
+an existing disposable hosted CI runner with noninteractive sudo. It refuses an existing
+anchor, creates unique fixture accounts/group and root-owned paths, uses the real four
+storage functions, and records identity-checked cleanup even after a failure. It never
+starts a VM or publisher. Legacy/same-uid fixtures remain compatibility evidence.
+
+On macOS, keep genuine proof blocked until the reserved host owner authorizes its actual
+root setup and cleanup. Reuse an already available trusted physical runtime and complete
+dependency closure. Do not install one or change the current development Mac. Neither
+platform's synthetic completed-run fields establish native qualification, CPU/wall proof,
+source coverage or scope enablement.

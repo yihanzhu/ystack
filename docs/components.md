@@ -1014,7 +1014,8 @@ required `gate_evidence_refs` with exactly `risk_gate_evaluation_ref`,
 one evaluation by kind, id, and the digest of that evaluation's canonical bytes.
 
 The **evaluator** (`scope/v1/evaluate-scope.sh` with `scope/v1/scope-gates.jq`)
-reads seven documents: the scope record, a set of shadow reproduction records in
+reads nine inputs: seven documents, a held bundle root and an actual bare Git snapshot.
+The documents are the scope record, a set of shadow reproduction records in
 the shape step 7 emits, the eval dashboard, a risk-gates evaluation, a kill-switch
 evaluation, a duty-separation evaluation, and the operating-mode marker. It
 measures every one of them itself — including a digest over each individual shadow
@@ -1033,7 +1034,7 @@ separation is satisfied; and the mode is readable. Otherwise the answer is
 `scope.protected-path`, `scope.shadow-evidence-missing`,
 `scope.shadow-inconclusive`, `scope.eval-family-unseeded`, `scope.eval-failing`,
 `scope.kill-switch`, `scope.duty-violation`, `scope.mode-construction`, or
-`scope.malformed`.
+`scope.malformed`, or `scope.sandbox-receipt-missing`.
 
 A supplied shadow record counts **only** when one of the scope's
 `shadow_evidence_refs` names both its id and the digest the evaluator measured over
@@ -1898,7 +1899,8 @@ record and trace. The completion marker inventories the original 29 outer eviden
 names plus the publisher body. Native L occurs after ordinary owners close. A failure
 or cancellation can retain partial evidence but cannot create the completion marker.
 Two fresh disposable attempts prove identical trees, write sets, request bytes and
-post-write digests. The unchanged scope evaluator still refuses the new record form.
+post-write digests. The hardened scope reader can authenticate this record form only
+for `workflow.shadow-evidence-commit` plus `task.commit-shadow-evidence`.
 The shipped accepted set stays empty; CPU/wall enforcement is none and native
 qualification remains blocked. No publisher implementation ships here.
 
@@ -1906,3 +1908,31 @@ qualification remains blocked. No publisher implementation ships here.
 fixture by inserting writer controls into a temporary script copy. It also runs the
 complete original regression. Only fixture identity/origin and supervisor launch are
 simulated; converter, builder, materializer, preparation, verifier and checker are real.
+
+
+## Inactive scope evidence origin and write gate
+
+`scope/v1/evaluate-scope.sh evaluate SCOPE SHADOW_SET DASHBOARD RISK KILL DUTY MODE BUNDLE_ROOT SOURCE_GIT_DIR`
+uses the fixed physical `scope/v1/read-shadow-evidence.py`. Legacy declarations remain
+readable and never qualify. A claimed matching enforced or withheld record needs its
+complete digest-named bundle and a fresh read from the fixed root-owned supervisor
+anchor. Archived origin bytes preserve provenance; they cannot authenticate that read.
+Missing authentic evidence reports `scope.sandbox-receipt-missing` and creates no proposal.
+
+The reader holds the current package, inputs, bundle, bare Git snapshot and controlled
+store through the final check. The private READY/SEAL/CANCEL handshake keeps those
+owners live while jq checks the seven documents. Publication stays withheld. The fixed
+write workflow alone may consume the complete 32 add-only files; necessary ancestor
+trees may change, while existing leaves and unrelated trees must remain unchanged.
+Other workflows keep the exact-revision and no-change requirements.
+
+This core does not implement later-revision coverage, enablement or parent R3. The
+separate source coverage delivery remains required. Production accepted identities stay
+empty, CPU/wall enforcement stays none, and native qualification stays blocked.
+
+The genuine test uses actual host storage functions, a root anchor, a dedicated writer
+uid and a different read-only consumer uid. Its completed-run fields are explicitly
+synthetic storage fixtures. The native capsule measures and loads the real current
+binary with RTLD_NOW|LOCAL, without creating State or executing startup, VM or publisher.
+The current development Mac cannot run account or anchor setup. Its genuine positive
+requires the separately authorized reserved evidence host described in the accepted plan.

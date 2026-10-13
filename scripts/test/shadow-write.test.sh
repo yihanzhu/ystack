@@ -1034,14 +1034,14 @@ run_evaluator "${good[@]}" > "$tmp/legacy-evaluation.json"
 "$jq_bin" -S -c --slurpfile write_record "$1" '.body.records=[$write_record[0]]' "$tmp/shadow-set.json" > "$tmp/write-set.json"
 scope_for_shadow "$tmp/write-set.json" "$tmp/write-scope.json"
 run_evaluator "$tmp/write-scope.json" "$tmp/write-set.json" "$tmp/dashboard.json" "$tmp/risk.json" "$tmp/kill.json" "$tmp/duty.json" "$tmp/marker.json" > "$tmp/write-evaluation.json"
-"$jq_bin" -e '.body.outcome=="not-proposable" and (.body.reason_ids | index("scope.malformed") != null) and .body.authority_effect=="none"' "$tmp/write-evaluation.json" >/dev/null || fail 'write form was accepted by old evaluator'
+"$jq_bin" -e '.body.outcome=="not-proposable" and (.body.reason_ids | index("scope.sandbox-receipt-missing") != null) and .body.authority_effect=="none" and (.body.evidence.shadow_bundle_facts | all(.eligible==false and .authentication.state=="missing"))' "$tmp/write-evaluation.json" >/dev/null || fail 'unrelated write form supplied authentic evidence'
 cat "$tmp/legacy-evaluation.json" "$tmp/write-evaluation.json"
 '''
     write(scope_script, (scope_prelude + scope_tail).encode(), 0o500)
     scope_check = subprocess.run(["/bin/bash", str(scope_script), str(supplied_record)],
         env={"PATH": "/usr/bin:/bin", "LC_ALL": "C", "TMPDIR": str(base.parent.parent), "YSTACK_SCOPE_TEST_BOUNDED": "1"},
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300)
-    ok(scope_check.returncode == 0, "unchanged actual scope evaluator refuses complete write form; legacy positive remains valid: " + scope_check.stderr.decode())
+    ok(scope_check.returncode == 0, "actual scope evaluator keeps unrelated write and legacy records unqualified: " + scope_check.stderr.decode())
     print(scope_check.stdout.decode())
     ok(json.loads((root / "enforcement/v1/accepted-identities.json").read_bytes())["body"]["environments"] == [], "shipped accepted set stays empty")
     ok(w.main(["write-shadow.py", "prepare", "request", "bundle", "work", "output"]) == 1, "public prepare refuses without trusted startup admission")

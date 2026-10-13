@@ -11,6 +11,7 @@ import stat
 import sys
 import sysconfig
 import time
+import unicodedata
 
 PACKAGE = Path(__file__).absolute().parents[2]
 SOURCE = PACKAGE / "shadow/v1/_consumer.py"
@@ -550,8 +551,10 @@ class _Reader:
         source = self.hold(PACKAGE / "preparation/v1/prepare-candidate.py", c.EXECUTABLE_LIMIT)
         require(producer["source_sha256"] == source.sha256
                 and producer["protocol_sha256"] == self.package_sources["adapters/local-git-materializer/v1/protocol.jq"].sha256
-                and producer["jq"]["version"] == "jq-1.6" and type(producer["unicode_version"]) is str
-                and 1 <= len(producer["unicode_version"]) <= 16)
+                and producer["jq"]["version"] == "jq-1.6"
+                and producer["python"]["version"] == sys.version.splitlines()[0]
+                and producer["git"]["version"].startswith("git version ")
+                and producer["unicode_version"] == unicodedata.unidata_version)
         core = producer["core"]
         base = {"adapters/local-git-materializer/v1/protocol.jq", "scripts/core-contract.sh", "core/v2/generation-registry.json"}
         generation = str(self.modules.parent.relative_to(PACKAGE))

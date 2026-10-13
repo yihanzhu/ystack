@@ -24,9 +24,18 @@ sha256_path() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'; }
 tmp=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-scope-test.XXXXXX")
 cleanup() {
   local prior=$? cleanup_status=0
-  if declare -F cleanup_genuine >/dev/null; then cleanup_genuine || cleanup_status=1; fi
+  if declare -F cleanup_genuine >/dev/null; then
+    cleanup_genuine || cleanup_status=1
+  else
+    /usr/bin/printf 'genuine-cleanup: NOT_STARTED\n'
+  fi
   /bin/rm -rf -- "$tmp" >/dev/null 2>&1 || cleanup_status=1
-  if [ "$prior" -eq 0 ] && [ "$cleanup_status" -ne 0 ]; then exit 1; fi
+  if [ "$cleanup_status" -eq 0 ]; then
+    /usr/bin/printf 'fixture-cleanup: PASS prior-exit=%s\n' "$prior"
+  else
+    /usr/bin/printf 'fixture-cleanup: FAIL prior-exit=%s\n' "$prior" >&2
+    if [ "$prior" -eq 0 ]; then exit 1; fi
+  fi
 }
 trap cleanup EXIT
 
@@ -1377,6 +1386,7 @@ race_marker_case appeared ''
 race_marker_case appeared-symlink '' symlink
 pass 'held marker changes, appearance, and symlink appearance before SEAL refuse as stale'
 
+genuine_python=''
 genuine_base=''
 genuine_writer=''
 genuine_consumer=''
@@ -1401,13 +1411,17 @@ fixture_directory_identity() {
 }
 remove_fixture_directory() {
   local path=$1 identity=$2 recursive=$3
-  [ -n "$identity" ] && [ "$(fixture_directory_identity "$path")" = "$identity" ] || return 1
+  local current
+  current=$(fixture_directory_identity "$path") || return 1
+  /usr/bin/printf 'owned-directory: %s expected=%s current=%s\n' "$path" "$identity" "$current"
+  [ -n "$identity" ] && [ "$current" = "$identity" ] || return 1
   if [ "$recursive" = true ]; then
     /usr/bin/sudo -n /bin/rm -rf -- "$path" || return 1
   else
     /usr/bin/sudo -n /bin/rmdir -- "$path" || return 1
   fi
-  [ ! -e "$path" ] && [ ! -L "$path" ]
+  [ ! -e "$path" ] && [ ! -L "$path" ] || return 1
+  /usr/bin/printf 'owned-directory-absent: %s\n' "$path"
 }
 cleanup_genuine() {
   local failed=0 index
@@ -1420,19 +1434,22 @@ cleanup_genuine() {
   if [ "$genuine_consumer_created" = true ]; then
     if [ -n "$genuine_consumer_identity" ] && [ "$(/usr/bin/getent passwd "$genuine_consumer")" = "$genuine_consumer_identity" ]; then
       /usr/bin/sudo -n /usr/sbin/userdel "$genuine_consumer" || failed=1
-      ! /usr/bin/getent passwd "$genuine_consumer" >/dev/null || failed=1
+      if /usr/bin/getent passwd "$genuine_consumer"; then failed=1
+      else /usr/bin/printf 'owned-user-absent: %s expected=%s\n' "$genuine_consumer" "$genuine_consumer_identity"; fi
     else failed=1; fi
   fi
   if [ "$genuine_writer_created" = true ]; then
     if [ -n "$genuine_writer_identity" ] && [ "$(/usr/bin/getent passwd "$genuine_writer")" = "$genuine_writer_identity" ]; then
       /usr/bin/sudo -n /usr/sbin/userdel "$genuine_writer" || failed=1
-      ! /usr/bin/getent passwd "$genuine_writer" >/dev/null || failed=1
+      if /usr/bin/getent passwd "$genuine_writer"; then failed=1
+      else /usr/bin/printf 'owned-user-absent: %s expected=%s\n' "$genuine_writer" "$genuine_writer_identity"; fi
     else failed=1; fi
   fi
   if [ "$genuine_group_created" = true ]; then
     if [ -n "$genuine_group_identity" ] && [ "$(/usr/bin/getent group "$genuine_group" | /usr/bin/cut -d : -f 1-3)" = "$genuine_group_identity" ]; then
       /usr/bin/sudo -n /usr/sbin/groupdel "$genuine_group" || failed=1
-      ! /usr/bin/getent group "$genuine_group" >/dev/null || failed=1
+      if /usr/bin/getent group "$genuine_group"; then failed=1
+      else /usr/bin/printf 'owned-group-absent: %s expected=%s\n' "$genuine_group" "$genuine_group_identity"; fi
     else failed=1; fi
   fi
   for ((index=${#genuine_anchor_parents[@]}-1; index>=0; index--)); do
@@ -1441,6 +1458,8 @@ cleanup_genuine() {
   if [ "$genuine_libexec_created" = true ]; then
     remove_fixture_directory /usr/local/libexec "$genuine_libexec_identity" false || failed=1
   fi
+  if [ "$failed" -eq 0 ]; then /usr/bin/printf 'genuine-cleanup: PASS\n'
+  else /usr/bin/printf 'genuine-cleanup: FAIL\n' >&2; fi
   [ "$failed" -eq 0 ]
 }
 setup_genuine_linux() {
@@ -1448,6 +1467,10 @@ setup_genuine_linux() {
     [ "${RUNNER_ENVIRONMENT:-}" = github-hosted ] ||
     fail 'genuine origin BLOCKED: a reserved disposable host is required'
   /usr/bin/sudo -n /usr/bin/true || fail 'existing noninteractive sudo is required'
+  genuine_python=$(/usr/bin/sudo -n /usr/bin/python3 -I -S -B -c 'import os,sys;assert sys.version_info >= (3,11);print(os.path.realpath(sys.executable))') ||
+    fail 'existing root Python 3.11+ required'
+  /usr/bin/sudo -n "$genuine_python" -I -S -B -c 'import os,pathlib,stat,sys;p=pathlib.Path(sys.executable);assert p.resolve()==p;assert all(q.stat().st_uid==0 and not q.stat().st_mode & 0o022 for q in (p,*p.parents))' ||
+    fail 'physical root-owned Python closure required'
   [ ! -e /usr/local/libexec/ystack-sandbox/v1/supervisor ] &&
     [ ! -L /usr/local/libexec/ystack-sandbox/v1/supervisor ] || fail 'existing fixed anchor'
   local token
@@ -1619,40 +1642,48 @@ assert spec is not None and spec.loader is not None
 c = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = c
 spec.loader.exec_module(c)
-owned = []
-anchor = store = None
+def read():
+    owned = []
+    anchor = store = None
+    try:
+        held = c._hold_bytes(str(source), c.EXECUTABLE_LIMIT)
+        owned.append(held)
+        c._require(held.raw == source_raw, "E_STALE")
+        python = c._hold_bytes(sys.executable, c.EXECUTABLE_LIMIT)
+        owned.append(python)
+        anchor = c.load_anchor()
+        if len(sys.argv) == 2 and sys.argv[1] != "observation":
+            store = c._HeldStoreRead(anchor, sys.argv[1])
+            raw = store.observation
+            store.recheck()
+        else:
+            c._require(sys.argv[1:] == ["observation"], "E_RUNTIME")
+            raw = c.verifier_observation(anchor, anchor.config["environment_id"], "fixture.target")
+        anchor.recheck("E_STALE")
+        for item in owned:
+            item.recheck("E_STALE")
+        return raw
+    finally:
+        first = sys.exception()
+        cleanup_error = None
+        for owner in (store, anchor, *reversed(owned)):
+            if owner is not None:
+                try:
+                    owner.close()
+                except BaseException as error:
+                    if cleanup_error is None:
+                        cleanup_error = error
+        if cleanup_error is not None:
+            if first is not None:
+                raise first from cleanup_error
+            raise cleanup_error
+
 try:
-    held = c._hold_bytes(str(source), c.EXECUTABLE_LIMIT)
-    owned.append(held)
-    c._require(held.raw == source_raw, "E_STALE")
-    python = c._hold_bytes(sys.executable, c.EXECUTABLE_LIMIT)
-    owned.append(python)
-    anchor = c.load_anchor()
-    if len(sys.argv) == 2 and sys.argv[1] != "observation":
-        store = c._HeldStoreRead(anchor, sys.argv[1])
-        raw = store.observation
-        store.recheck()
-    else:
-        c._require(sys.argv[1:] == ["observation"], "E_RUNTIME")
-        raw = c.verifier_observation(anchor, anchor.config["environment_id"], "fixture.target")
-    anchor.recheck("E_STALE")
-    for item in owned:
-        item.recheck("E_STALE")
-    os.write(1, raw)
-finally:
-    first = sys.exception()
-    cleanup_error = None
-    for owner in (store, anchor, *reversed(owned)):
-        if owner is not None:
-            try:
-                owner.close()
-            except BaseException as error:
-                if cleanup_error is None:
-                    cleanup_error = error
-    if cleanup_error is not None:
-        if first is not None:
-            raise first from cleanup_error
-        raise cleanup_error
+    os.write(1, read())
+except c.Refusal as error:
+    print(error.code, file=sys.stderr)
+    raise SystemExit(65)
+
 PY_GENUINE_READER
 }
 prepare_genuine_assembler() {
@@ -1681,7 +1712,7 @@ def run(argv,raw=None,role=None,component=None,limit=16*1024*1024):
  if role:commands.append({'role':role,'argv_sha256':sha(canonical(argv)),'executable_sha256':sha(pathlib.Path(argv[0]).resolve().read_bytes()),'component_sha256':sha(pathlib.Path(component).read_bytes())})
  return r.stdout
 def put(path,value,mode=0o444):
- raw=value if type(value) is bytes else canonical(value);path=pathlib.pathlib.Path(path);path.write_bytes(raw);path.chmod(mode);return path
+ raw=value if type(value) is bytes else canonical(value);path=pathlib.Path(path);path.write_bytes(raw);path.chmod(mode);return path
 helper=tools/'object-closure';run(['/usr/bin/cc','-std=c11','-Wall','-Wextra','-Werror','-O2',package/c.HELPER_SOURCE,'-o',helper]);helper.chmod(0o555)
 verifier=tools/'file-digest-verifier';run(['/usr/bin/cc','-std=c11','-Wall','-Wextra','-Werror','-O2',package/'verifiers/file-digest/v1/verifier.c','-o',verifier]);verifier.chmod(0o555)
 native_dir=base/'native';run(['/bin/bash','-p',package/'shadow/v1/build-cancel-release.sh','build',sys.executable,native_dir])
@@ -1690,8 +1721,17 @@ native_handle=ctypes.PyDLL(str(native_binary),mode=os.RTLD_NOW|os.RTLD_LOCAL)
 closure=[]
 for name,module in sorted(sys.modules.items()):
  path=getattr(module,'__file__',None)
- if path and pathlib.pathlib.Path(path).is_file():
-  path=pathlib.pathlib.Path(path).resolve();closure.append({'module':name,'path':str(path),'sha256':sha(path.read_bytes())})
+ if path and pathlib.Path(path).is_file():
+  path=pathlib.Path(path).resolve()
+  dependency = c._open_held(str(path), False, c._installed_rule(uid), 'E_INSTALL')
+  try:
+   raw = dependency.read(c.EXECUTABLE_LIMIT, 'E_INSTALL')
+   dependency.recheck('E_STALE')
+   closure.append({'module':name,'path':str(path),'sha256':sha(raw),
+                   'uid':dependency.before.st_uid,'gid':dependency.before.st_gid,
+                   'mode':stat.S_IMODE(dependency.before.st_mode)})
+  finally:
+   dependency.close()
 closure_raw=canonical({'fixture_runtime_closure':closure,'python':str(pathlib.Path(sys.executable).resolve()),'native_binary':str(native_binary),'loader_mode':'rtld-now-local.v1','state_created':False,'startup_called':False,'vm_called':False})
 put(base/'runtime-closure.json',closure_raw)
 native={'context_version':2,'source_sha256':sha((package/'shadow/v1/_cancel_release.c').read_bytes()),'build_script_sha256':sha((package/'shadow/v1/build-cancel-release.sh').read_bytes()),'build_record_sha256':sha(native_record.read_bytes()),'binary_locator_sha256':sha(str(native_binary).encode()),'binary_size':native_binary.stat().st_size,'binary_sha256':sha(native_binary.read_bytes()),'python_locator_sha256':sha(sys.executable.encode()),'python_sha256':sha(pathlib.Path(sys.executable).read_bytes()),'python_abi':sysconfig.get_config_var('SOABI'),'dependency_record_sha256':sha(closure_raw),'loader_mode':'rtld-now-local.v1'}
@@ -1937,7 +1977,13 @@ for name in ('scope', 'dashboard', 'risk', 'kill', 'duty', 'marker'):
     value = json.loads((documents / (name + '.json')).read_bytes())
     if name in ('risk', 'duty'):
         value['body']['stage']['request_ref'] = identity['body']['stage_request_ref']
+        value['body']['stage']['resolved_profile_ref'] = identity['body']['resolved_profile_ref']
     put(doc_root / (name + '.json'), value)
+duty_gate_raw = (doc_root / 'duty.json').read_bytes()
+for name in ('risk', 'kill'):
+    gate = json.loads((doc_root / (name + '.json')).read_bytes())
+    gate['body']['duty_evaluation_ref']['sha256'] = sha(duty_gate_raw)
+    put(doc_root / (name + '.json'), gate)
 scope_doc = json.loads((doc_root / 'scope.json').read_bytes())
 scope_doc['body'].update(target_repository_id='fixture.target',
     qualified_identity=identity['body'], required_shadow_environments=[environment],
@@ -1972,6 +2018,318 @@ assert evaluation['body']['authority'] == 'none' and evaluation['body']['enabled
 print(json.dumps({'genuine_scope_contract': 'PASS', 'synthetic_runtime_facts': True,
     'vm_executed': False, 'actual_writer_uid': uid, 'actual_consumer_uid': consumer_uid,
     'scope_sha256': sha(scope_raw)}, sort_keys=True), flush=True)
+
+frozen = dict(files, **{'bundle.json': marker})
+seed_dir = work / 'seed'
+seed_dir.mkdir(mode=0o700)
+seed_raw = component('maintenance/v1/incident-to-eval.sh',
+    ['convert', put(work / 'frozen-incident.json', frozen['incident.json']),
+     put(work / 'frozen-record.json', frozen['shadow-record.json']), seed_dir],
+    role='write-seed-conversion')
+assert [path.name for path in seed_dir.iterdir()] == ['eval-seed-case-stale-moved-artifacts.json']
+assert (seed_dir / 'eval-seed-case-stale-moved-artifacts.json').read_bytes() == seed_raw
+prefix = 'ystack-evidence/' + incident['id'] + '/'
+write_files = {prefix + name: raw for name, raw in frozen.items()}
+write_files[prefix + 'eval-seed.json'] = seed_raw
+write_files[prefix + 'README.md'] = b'Shadow evidence. Publication is withheld.\n'
+paths = sorted(write_files)
+patch_raw, write_set = c.evidence_patch(write_files, 'sha1')
+assert len(write_set) == 32
+write_attempt = 'attempt.scope-genuine-write'
+contract_raw = c.write_contract(paths)
+contract_path = put(work / 'write-contract.json', contract_raw)
+patch_path = put(work / 'write.patch', patch_raw)
+metadata = {key: sha(raw) for key, raw in c.WRITE_TEXTS.items()}
+metadata.update(contract=sha(contract_raw), patch=sha(patch_raw), allowed_paths=paths,
+    attempt_id=write_attempt, suffix=sha(write_attempt.encode())[:32],
+    environment_id=environment, claim_sha256=sha(claim_raw))
+builder = package / 'shadow/v1/write-materialization-input.jq'
+def build_phase(phase, input_path, metadata_path):
+    return run([jq, '-L', modules, '-S', '-c', '--arg', 'phase', phase,
+        '--rawfile', 'contract', contract_path, '--rawfile', 'patch', patch_path,
+        '--slurpfile', 'metadata', metadata_path, '-f', builder, input_path],
+        role='write-materialization-input', component=builder, limit=8*1024*1024)
+first_raw = build_phase('stage-request', q_path, put(work / 'write-metadata-first.json', metadata))
+first = json.loads(first_raw)
+assert canonical(first['original']) == frozen['materialization-input.json']
+metadata['stage_request_sha256'] = sha(canonical(first['stage_request']))
+write_input_raw = build_phase('final-input', put(work / 'write-first.json', first_raw),
+    put(work / 'write-metadata-final.json', metadata))
+write_input = json.loads(write_input_raw)
+write_input_path, write_response_raw, write_candidate = materialize(write_input, 'write')
+assert write_input_path.read_bytes() == write_input_raw
+write_response_path = put(work / 'write-response.json', write_response_raw)
+run([jq, '-L', modules, '-e', '--arg', 'command', 'validate-input', '-f', protocol, write_input_path],
+    role='materializer-input-validation', component=protocol)
+write_check = put(work / 'write-response-check.json', e.response_check(write_input, write_response_raw))
+run([jq, '-L', modules, '-e', '--arg', 'command', 'validate-response', '-f', protocol, write_check],
+    role='materializer-response-validation', component=protocol)
+write_prep, write_scratch = work / 'write-preparation', work / 'write-preparation-scratch'
+write_scratch.mkdir(mode=0o700)
+write_common = ['--input', write_input_path, '--input-sha256', sha(write_input_raw),
+    '--response', write_response_path, '--response-sha256', sha(write_response_raw),
+    '--candidate-repository', write_candidate / 'repository.git', '--output', write_prep,
+    '--scratch', write_scratch, '--jq', jq]
+run([sys.executable, '-I', '-S', '-B', preparation_source, 'prepare', *write_common],
+    role='candidate-preparation', component=preparation_source)
+for path in write_scratch.iterdir():
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+run([sys.executable, '-I', '-S', '-B', preparation_source, 'inspect', *write_common],
+    role='candidate-inspection', component=preparation_source)
+write_record_raw = (write_prep / 'record.json').read_bytes()
+write_manifest_raw = (write_prep / 'manifest.json').read_bytes()
+write_identity = json.loads(identity_raw)
+write_identity['body']['stage_request_ref'] = e.pair_ref(write_input['stage_request'])
+write_identity_raw = canonical(write_identity)
+launch_raw, expectation_raw = e.make_launch(facts_anchor,
+    {'id': write_attempt, 'body': {'attempt_id': write_attempt}}, canonical(incident),
+    evaluation_raw, canonical(observation), write_record_raw, write_manifest_raw, instruction)
+launch, expectation = json.loads(launch_raw), json.loads(expectation_raw)
+write_receipt = json.loads(receipt_raw)
+write_receipt['id'] = 'receipt.' + sha(launch_raw)
+write_receipt['body'].update(attempt=expectation['body']['attempt'], control=launch['body']['control'],
+    subject=launch['body']['subject'], timing={'admitted_at':'2026-08-30T00:00:07Z',
+                                             'terminated_at':'2026-08-30T00:00:08Z'})
+write_receipt_raw = canonical(write_receipt)
+put(base / 'storage-input.json', {'attempt_id': write_attempt, 'receipt_utf8': write_receipt_raw.decode(),
+    'stdout_utf8': '', 'stderr_utf8': '', 'manifest_utf8': evidence_raw.decode(),
+    'evidence_utf8': result_raw.decode()})
+run(['/usr/bin/sudo', '-n', '-u', writer, '--', sys.executable, '-I', '-S', '-B',
+     base / 'genuine-writer.py'])
+write_origin_raw = run(['/usr/bin/sudo', '-n', '-u', consumer, '--', sys.executable,
+    '-I', '-S', '-B', base / 'genuine-reader.py', write_attempt])
+write_checker_raw = component('enforcement/v1/check-sandbox-receipt.sh',
+    ['check-bound', put(work / 'write-receipt.json', write_receipt_raw),
+     put(work / 'write-expectation.json', expectation_raw), work / 'evaluation.json',
+     work / 'observation.json'], role='sandbox-receipt-check')
+assert json.loads(write_checker_raw)['body']['enforcement_verdict'] == 'satisfied'
+write_trace_raw = e.trace_ledger(incident, write_attempt, environment, 'no-change', 'tool.verifier',
+    evaluation_raw, write_checker_raw)
+write_trace_receipt = component('telemetry/v1/validate-trace-ledger.sh',
+    ['validate', incident['id'], write_attempt, put(work / 'write-trace.json', write_trace_raw)],
+    role='trace-validation')
+write_provenance = json.loads(provenance)
+write_provenance['id'] = write_attempt
+write_provenance['body'].update(consumer_source_sha256=sha((package / 'shadow/v1/write-shadow.py').read_bytes()),
+                                 commands=commands)
+write_provenance_raw = canonical(write_provenance)
+write_material_receipt = json.loads(json.loads(write_response_raw)['payloads'][0]['data'])
+write_tree = write_material_receipt['candidate']['tree_id']
+publisher, publisher_body = w._publisher(incident, write_tree)
+write_section = {'bundle_ref': w._bundle_ref(frozen['bundle.json']), 'scope_id': scope_doc['id'],
+    'workflow_id': 'workflow.shadow-evidence-commit', 'task_class': 'task.commit-shadow-evidence',
+    'write_set': write_set, 'publisher_request': publisher,
+    'admission': {'state':'checked', 'effect':'none', 'request_sha256':sha(canonical(publisher)),
+                  'write_set_sha256':sha(canonical(write_set))},
+    'publication': {'state':'withheld','reason_id':'shadow.write-not-published'},
+    'post_write_verification': {'target_revision':incident['body']['git_revision_ref'],
+                               'candidate_tree_id':write_tree, 'write_set':write_set}}
+outer_files = dict(files)
+outer_files.update({'materialization-input.json':write_input_raw, 'materialization-response.json':write_response_raw,
+    'preparation-record.json':write_record_raw, 'preparation-manifest.json':write_manifest_raw,
+    'qualified-identity.json':write_identity_raw, 'sandbox-request.json':launch_raw,
+    'sandbox-expectation.json':expectation_raw, 'sandbox-receipt.json':write_receipt_raw,
+    'sandbox-check.json':write_checker_raw, 'origin-observation.json':write_origin_raw,
+    'trace-ledger.json':write_trace_raw, 'trace-receipt.json':write_trace_receipt,
+    'consumer-provenance.json':write_provenance_raw, 'publisher-body.txt':publisher_body})
+materialized = SimpleNamespace(response_raw=write_response_raw, evaluation_raw=evaluation_raw,
+                               qualified_identity_raw=write_identity_raw)
+outer_record = w._outer_record(SimpleNamespace(anchor=facts_anchor), materialized, frozen,
+                              outer_files, write_section, write_provenance_raw, write_trace_raw)
+outer_files['shadow-record.json'] = outer_record
+w._record_relations(outer_files, incident, json.loads(result_raw)['body'], write_origin_raw,
+                    facts_anchor, write_section)
+outer_marker = canonical({'schema_version':1,'kind':'shadow_consumer_bundle',
+    'id':'bundle.'+sha(frozen['incident.json'])[:32], 'body':{
+      'activation_state':'inactive', 'record_form':'withheld-write.v1',
+      'incident_sha256':sha(frozen['incident.json']), 'target_revision':incident['body']['git_revision_ref'],
+      'files':[{'name':name,'size_bytes':len(outer_files[name]),'sha256':sha(outer_files[name])}
+               for name in sorted(outer_files)]}})
+outer_bundle = base / 'snapshots' / sha(outer_record)
+outer_bundle.mkdir(mode=0o755)
+for name, raw in outer_files.items():
+    put(outer_bundle / name, raw)
+put(outer_bundle / 'bundle.json', outer_marker)
+shutil.copytree(write_candidate / 'repository.git/objects', source / 'objects', dirs_exist_ok=True)
+for root, dirs, names in os.walk(source):
+    pathlib.Path(root).chmod(0o755)
+    for name in names:
+        (pathlib.Path(root) / name).chmod(0o444)
+# The frozen first attempt remains valid after the writer creates a lawful sibling.
+sibling_scope = json.loads(run(scope_argv))
+assert sibling_scope['body']['evidence']['shadow_bundle_facts'][0]['authentication']['state'] == 'authenticated'
+scope_doc['body'].update(workflow_id='workflow.shadow-evidence-commit', task_class='task.commit-shadow-evidence',
+    allowed_paths=paths, qualified_identity=write_identity['body'], shadow_evidence_refs=[e.document_ref(outer_record)])
+for name in ('risk','duty'):
+    gate = json.loads((doc_root / (name+'.json')).read_bytes())
+    gate['body']['stage']['request_ref'] = write_identity['body']['stage_request_ref']
+    put(doc_root / (name+'.json'), gate)
+for name in ('risk','kill'):
+    gate = json.loads((doc_root / (name+'.json')).read_bytes())
+    gate['body']['duty_evaluation_ref']['sha256'] = sha((doc_root / 'duty.json').read_bytes())
+    put(doc_root / (name+'.json'), gate)
+for key, name in (('risk_gate_evaluation_ref','risk'), ('kill_switch_evaluation_ref','kill'), ('duty_separation_evaluation_ref','duty')):
+    scope_doc['body']['gate_evidence_refs'][key] = e.document_ref((doc_root / (name+'.json')).read_bytes())
+put(doc_root / 'scope.json', scope_doc)
+put(doc_root / 'shadow-set.json', {'schema_version':1,'kind':'shadow_evidence_set',
+    'id':'scope.evidence.genuine','body':{'records':[json.loads(outer_record)]}})
+# A bundle not claimed by the current evidence set must not remain in the input root.
+archive = base / 'snapshots' / bundle.name
+bundle.rename(archive)
+outer_bundle.rename(base / 'bundles' / outer_bundle.name)
+outer_scope_raw = run(scope_argv)
+put(base / 'genuine-write-scope-evaluation.json', outer_scope_raw)
+outer_facts = json.loads(outer_scope_raw)['body']['evidence']['shadow_bundle_facts']
+assert len(outer_facts)==1 and outer_facts[0]['eligible'] is True
+assert outer_facts[0]['authentication']['state']=='authenticated'
+assert outer_facts[0]['record_form']=='withheld-write.v1'
+print(json.dumps({'genuine_withheld_contract':'PASS','frozen_files':32,'synthetic_runtime_facts':True,
+    'vm_executed':False,'publisher_executed':False,'lawful_sibling_before_read':'PASS'},sort_keys=True),flush=True)
+
+def refuse(argv, label, expected):
+    result = subprocess.run(list(map(str, argv)), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            env=env, timeout=180)
+    print(json.dumps({'negative':label, 'returncode':result.returncode,
+        'stdout_hex':result.stdout.hex(), 'stderr_utf8':result.stderr.decode('utf8','backslashreplace')},
+        sort_keys=True), flush=True)
+    assert result.returncode != 0 and result.stdout == b'' and result.stderr == expected + b'\n'
+    return result
+
+reader_command = ['/usr/bin/sudo','-n','-u',consumer,'--',sys.executable,'-I','-S','-B',
+                  base / 'genuine-reader.py', write_attempt]
+refuse(['/usr/bin/sudo','-n','-u',writer,'--',sys.executable,'-I','-S','-B',
+        base / 'genuine-reader.py',write_attempt], 'writer-is-not-consumer', b'E_CONFIG')
+run(['/usr/bin/gpasswd','--delete',consumer,group])
+try:
+    assert str(gid).encode() not in run(['/usr/bin/sudo','-n','-u',consumer,'--','/usr/bin/id','-G']).split()
+    refuse(reader_command,'missing-consumer-group',b'E_CONFIG')
+finally:
+    run(['/usr/sbin/usermod','--append','--groups',group,consumer])
+assert str(gid).encode() in run(['/usr/bin/sudo','-n','-u',consumer,'--','/usr/bin/id','-G']).split()
+store_snapshot = {str(path.relative_to(store)): (path.lstat().st_uid,path.lstat().st_gid,
+    stat.S_IMODE(path.lstat().st_mode),path.read_bytes() if path.is_file() else None)
+    for path in store.rglob('*')}
+permissions_source = base / 'consumer-permissions.py'
+put(permissions_source, b"""import os,pathlib,sys
+base=pathlib.Path(__file__).parent
+store=base/'store'
+receipt=store/'attempt.scope-genuine-write/receipt.json'
+source=base/'consumer-work/replacement'
+source.write_bytes(b'consumer-owned replacement')
+actions=(('create',lambda:os.open(store/'created',os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600)),
+ ('replace',lambda:os.replace(source,receipt)),
+ ('rename',lambda:os.rename(receipt,receipt.with_name('renamed'))),
+ ('chmod',lambda:os.chmod(receipt,0o600)),
+ ('link',lambda:os.link(receipt,receipt.with_name('linked'))),
+ ('remove',lambda:os.unlink(receipt)))
+for name,action in actions:
+ try: action()
+ except PermissionError: print('consumer denied '+name,flush=True)
+ else: raise AssertionError('consumer acquired write authority: '+name)
+source.unlink()
+""", 0o555)
+permission_report = run(['/usr/bin/sudo','-n','-u',consumer,'--',sys.executable,'-I','-S','-B',
+                         permissions_source])
+assert len(permission_report.splitlines()) == 6
+assert store_snapshot == {str(path.relative_to(store)): (path.lstat().st_uid,path.lstat().st_gid,
+    stat.S_IMODE(path.lstat().st_mode),path.read_bytes() if path.is_file() else None)
+    for path in store.rglob('*')}
+for path in (store, store/write_attempt, store/write_attempt/'receipt.json'):
+    print(json.dumps({'actual_metadata':str(path),'uid':path.stat().st_uid,'gid':path.stat().st_gid,
+        'mode':stat.S_IMODE(path.stat().st_mode),'device':path.stat().st_dev,'inode':path.stat().st_ino,
+        'xattrs':{name:os.getxattr(path,name).hex() for name in os.listxattr(path)}},sort_keys=True),flush=True)
+
+receipt_path = store / write_attempt / 'receipt.json'
+receipt_before = receipt_path.read_bytes()
+for label, mode, owner in (('wrong-owner',0o440,0),('group-write',0o460,uid),('world-read',0o444,uid)):
+    os.chown(receipt_path,owner,gid)
+    receipt_path.chmod(mode)
+    refuse(reader_command,label,b'E_STORE')
+    os.chown(receipt_path,uid,gid)
+    receipt_path.chmod(0o440)
+assert receipt_path.read_bytes()==receipt_before
+hardlink = store / write_attempt / 'hardlink'
+os.link(receipt_path,hardlink)
+refuse(reader_command,'hardlink',b'E_STORE')
+hardlink.unlink()
+original_receipt = store / write_attempt / 'original-receipt'
+receipt_path.rename(original_receipt)
+receipt_path.symlink_to(original_receipt.name)
+refuse(reader_command,'symlink',b'E_STORE')
+receipt_path.unlink()
+original_receipt.rename(receipt_path)
+# Actual Linux ACL bytes grant this consumer write permission; the original reader refuses them.
+acl_raw = (2).to_bytes(4,'little')
+for tag, permission, identity_number in ((1,4,0xffffffff),(2,6,consumer_uid),(4,4,0xffffffff),
+                                         (16,6,0xffffffff),(32,0,0xffffffff)):
+    acl_raw += tag.to_bytes(2,'little')+permission.to_bytes(2,'little')+identity_number.to_bytes(4,'little')
+os.setxattr(receipt_path,'system.posix_acl_access',acl_raw)
+print(json.dumps({'actual_acl':os.getxattr(receipt_path,'system.posix_acl_access').hex()},sort_keys=True),flush=True)
+refuse(reader_command,'extra-write-acl',b'E_STORE')
+os.removexattr(receipt_path,'system.posix_acl_access')
+receipt_path.chmod(0o440)
+assert receipt_path.read_bytes()==receipt_before
+
+# Every archive mutation is canonical and rehashes its marker and enclosing references.
+positive_bundle = base / 'bundles' / sha(outer_record)
+positive_bundle.rename(base / 'snapshots' / ('positive-'+positive_bundle.name))
+positive_scope = (doc_root/'scope.json').read_bytes()
+positive_set = (doc_root/'shadow-set.json').read_bytes()
+def archive_negative(label, name, change):
+    changed = dict(outer_files)
+    value=json.loads(changed[name])
+    change(value)
+    changed[name]=canonical(value)
+    record=json.loads(changed['shadow-record.json'])
+    if name=='consumer-provenance.json':
+        record['body']['consumer_provenance_ref']=e.document_ref(changed[name])
+    elif name=='sandbox-expectation.json':
+        record['body']['sandbox']['expectation_ref']=e.document_ref(changed[name])
+    elif name=='preparation-record.json':
+        pass
+    changed['shadow-record.json']=canonical(record)
+    marker_doc=json.loads(outer_marker)
+    marker_doc['body']['files']=[{'name':key,'size_bytes':len(raw),'sha256':sha(raw)}
+                               for key,raw in sorted(changed.items())]
+    directory=base/'bundles'/sha(changed['shadow-record.json'])
+    directory.mkdir(mode=0o755)
+    try:
+        for key,raw in changed.items():put(directory/key,raw)
+        put(directory/'bundle.json',marker_doc)
+        current_scope=json.loads(positive_scope)
+        current_scope['body']['shadow_evidence_refs']=[e.document_ref(changed['shadow-record.json'])]
+        put(doc_root/'scope.json',current_scope)
+        put(doc_root/'shadow-set.json',{'schema_version':1,'kind':'shadow_evidence_set',
+            'id':'scope.evidence.genuine','body':{'records':[json.loads(changed['shadow-record.json'])]}})
+        refuse(scope_argv,label,b'E_RELATION')
+    finally:
+        shutil.rmtree(directory)
+        put(doc_root/'scope.json',positive_scope)
+        put(doc_root/'shadow-set.json',positive_set)
+archive_cases=(
+ ('native-abi','consumer-provenance.json',lambda value:value['body']['native_release'].__setitem__('python_abi','wrong-abi')),
+ ('native-source','consumer-provenance.json',lambda value:value['body']['native_release'].__setitem__('source_sha256',sha(b'wrong source'))),
+ ('consumer-source','consumer-provenance.json',lambda value:value['body'].__setitem__('consumer_source_sha256',sha(b'wrong consumer'))),
+ ('command-role','consumer-provenance.json',lambda value:value['body']['commands'][0].__setitem__('role','caller-selected-role')),
+ ('expectation-subject','sandbox-expectation.json',lambda value:value['body']['subject'].__setitem__('incident_sha256',sha(b'wrong incident'))),
+ ('preparation-source','preparation-record.json',lambda value:value['source'].__setitem__('commit_id','a'*40)),
+ ('publisher-title','shadow-record.json',lambda value:value['body']['write']['publisher_request']['body'].__setitem__('title','wrong title')),
+ ('publisher-schema-type','shadow-record.json',lambda value:value['body']['write']['publisher_request'].__setitem__('schema_version',True)),
+ ('admission-effect','shadow-record.json',lambda value:value['body']['write']['admission'].__setitem__('effect','write')),
+ ('write-add-only-type','shadow-record.json',lambda value:value['body']['write']['write_set'][0].__setitem__('add_only',1)),
+ ('publication-state','shadow-record.json',lambda value:value['body']['write']['publication'].__setitem__('state','published')),
+ ('postwrite-tree','shadow-record.json',lambda value:value['body']['write']['post_write_verification'].__setitem__('candidate_tree_id','a'*40)))
+for label,name,change in archive_cases:
+    archive_negative(label,name,change)
+(base/'snapshots'/('positive-'+positive_bundle.name)).rename(positive_bundle)
+assert json.loads(run(scope_argv))['body']['evidence']['shadow_bundle_facts'][0]['authentication']['state']=='authenticated'
+print(json.dumps({'genuine_paired_storage_controls':'PASS','consumer_denials':6,
+    'canonical_archive_refusals':len(archive_cases),'original_receipt_terminated_at':
+        json.loads(receipt_before)['body']['timing']['terminated_at']},sort_keys=True),flush=True)
+
 PY_GENUINE_ASSEMBLER
 }
 run_genuine_linux() {
@@ -1984,7 +2342,7 @@ run_genuine_linux() {
     /usr/bin/sudo -n /bin/chown 0:0 -- "$genuine_base/$script" || fail 'fixed fixture source ownership'
     /usr/bin/sudo -n /bin/chmod 0555 -- "$genuine_base/$script" || fail 'fixed fixture source mode'
   done
-  /usr/bin/sudo -n "$python_bin" -I -S -B "$genuine_base/genuine-assembler.py" \
+  /usr/bin/sudo -n "$genuine_python" -I -S -B "$genuine_base/genuine-assembler.py" \
     "$genuine_base" "$genuine_writer" "$genuine_consumer" "$genuine_group" "$jq_cache" "$tmp"
   pass 'actual root anchor, distinct storage writer and read-only consumer authenticate one complete bundle'
 }
