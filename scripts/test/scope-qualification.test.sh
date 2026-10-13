@@ -1876,7 +1876,7 @@ def prepare_scope_diagnostic():
  directory=base/'scope-diagnostic';directory.mkdir(mode=0o700)
  os.chown(directory,consumer_uid,gid)
  wrapper=base/'scope-diagnostic-wrapper.py'
- wrapper.write_text(r'''import hashlib,json,os,runpy,stat,sys
+ wrapper.write_text(r'''import errno,hashlib,json,os,runpy,stat,sys
 from pathlib import Path
 reader=Path(sys.argv[1]);consumer=reader.parents[2]/'shadow/v1/_consumer.py'
 directory=reader.parents[3]/'scope-diagnostic'
@@ -1929,6 +1929,10 @@ def observe(frame,event,arg):
   if event!='exception' or observed:return observe
   error=arg[1]
   if isinstance(error,(GeneratorExit,BlockingIOError)):return observe
+  if (frame.f_code.co_filename==str(consumer)
+      and frame.f_code.co_name=='_linux_acl_xattr' and isinstance(error,OSError)
+      and error.errno in (errno.ENODATA,getattr(errno,'ENOATTR',errno.ENODATA))):
+   return observe
   def source(current):
    return {'file':current.f_code.co_filename[:512],
     'function':current.f_code.co_name[:128],'line':current.f_lineno}
