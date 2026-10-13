@@ -11,6 +11,9 @@ import os
 import stat
 import subprocess
 import sys
+import selectors
+import signal
+import time
 from typing import Callable
 
 ANCHOR = "/usr/local/libexec/ystack-sandbox/v1/supervisor"
@@ -839,8 +842,42 @@ def _hex_name(value: object) -> bool:
     return (isinstance(value, str) and bool(value) and len(value) % 2 == 0
             and len(value) <= 510 and all(char in "0123456789abcdef" for char in value))
 
-def read_store_attempt(anchor: Anchor, attempt_id: str) -> tuple[dict[str, bytes], bytes]:
-    _require(_id(attempt_id), "E_STORE")
+class _HeldStoreRead:
+    def __init__(self, anchor: Anchor, attempt_id: str) -> None:
+        self.anchor, self.attempt_id = anchor, attempt_id
+        self.held: list[HeldPath] = []
+        self.snapshots, self.observation = read_store_attempt(anchor, attempt_id, _owner=self)
+
+    def recheck(self, code: str = "E_STALE") -> None:
+        self.anchor.recheck(code)
+        for item in self.held:
+            item.recheck(code)
+            relative = os.path.relpath(item.path, self.anchor.config["store_root"])
+            if stat.S_ISREG(item.before.st_mode):
+                name = relative[len(self.attempt_id) + 1:]
+                _require(name in self.snapshots and item.read(len(self.snapshots[name]), code)
+                         == self.snapshots[name], code)
+            else:
+                names = set(os.listdir(item.fd))
+                if relative == ".":
+                    _require(self.attempt_id in names, code)
+                elif relative == self.attempt_id:
+                    _require(names == {"receipt.json", "payload"}, code)
+                elif relative == self.attempt_id + "/payload":
+                    expected = {name.split("/")[1] for name in self.snapshots if name.startswith("payload/")}
+                    _require(names == expected, code)
+                elif relative == self.attempt_id + "/payload/evidence":
+                    _require(names == {name.split("/")[2] for name in self.snapshots
+                                       if name.startswith("payload/evidence/")}, code)
+
+    def close(self) -> None:
+        held, self.held = self.held, []
+        _close_paths(held)
+
+
+def read_store_attempt(anchor: Anchor, attempt_id: str, *,
+                       _owner: _HeldStoreRead | None = None) -> tuple[dict[str, bytes], bytes]:
+    _require(_id(attempt_id) and (_owner is None or isinstance(_owner, _HeldStoreRead)), "E_STORE")
     anchor.recheck("E_STORE")
     uid, gid = anchor.config["principal_uid"], anchor.config["consumer_gid"]
     root = anchor.config["store_root"]
@@ -935,6 +972,8 @@ def read_store_attempt(anchor: Anchor, attempt_id: str) -> tuple[dict[str, bytes
                                  "id": attempt_id, "body": {"store_id": anchor.config["store_id"],
                                      "attempt_id": attempt_id, "entries": observations,
                                      "result": "authenticated"}})
+        if _owner is not None:
+            _owner.held, opened = opened, []
         return snapshots, observation
     except BaseException as exc:
         failure = exc
@@ -945,6 +984,334 @@ def read_store_attempt(anchor: Anchor, attempt_id: str) -> tuple[dict[str, bytes
         except OSError:
             if failure is None:
                 raise
+
+def _closed_scope_child(argv: list[str], env: dict[str, str], owner) -> None:
+    _require(type(argv) is list and argv and all(type(value) is str and value and "\0" not in value
+                                               for value in argv), "E_RUNTIME")
+    python = [owner.python.held.path, "-I", "-S", "-B", owner.source.held.path]
+    if argv[:-1] == python and argv[-1] in {"_resolve-darwin-uuids", "_read-darwin-group"}:
+        _require(env == {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"}, "E_RUNTIME")
+        return
+    ledger = owner.ledger
+    _require(hasattr(ledger, "environment") and env == ledger.environment(), "E_RUNTIME")
+    root = _source_root()
+    if argv[0] == "/usr/bin/git":
+        _require(len(argv) >= 4 and argv[1] == "--no-replace-objects"
+                 and argv[2].startswith("--git-dir=") and _physical(argv[2][10:]), "E_RUNTIME")
+        args = argv[3:]
+        fixed = args in (["rev-parse", "--is-bare-repository"], ["rev-parse", "--show-object-format"])
+        config = (len(args) == 6 and args[0:2] == ["config", "--file"] and _physical(args[2])
+                  and args[3:] == ["--name-only", "--list", "--no-includes"])
+        tree = len(args) == 6 and args[:5] == ["ls-tree", "-r", "-t", "-z", "--full-tree"] and _writer_oid(args[5])
+        obj = len(args) == 3 and args[0] == "cat-file" and args[1] in {"commit", "blob"} and _writer_oid(args[2])
+        _require(fixed or config or tree or obj, "E_RUNTIME")
+        return
+    if argv[:2] == ["/bin/bash", "-p"]:
+        scripts = {"control/v1/evaluate-bound-sandbox.sh": ("evaluate", 3),
+            "shadow/v1/validate-incident.sh": ("validate", 1),
+            "enforcement/v1/check-sandbox-receipt.sh": ("check-bound", 4),
+            "maintenance/v1/incident-to-eval.sh": ("convert", 3)}
+        for relative, (operation, count) in scripts.items():
+            if argv[2:4] == [os.path.join(root, relative), operation]:
+                _require(len(argv) == 4 + count and all(_physical(path) for path in argv[4:]), "E_RUNTIME")
+                return
+        _require(len(argv) == 7 and argv[2:4] == [os.path.join(root, "telemetry/v1/validate-trace-ledger.sh"), "validate"]
+                 and _id(argv[4]) and _id(argv[5]) and _physical(argv[6]), "E_RUNTIME")
+        return
+    _require(argv[0] == ledger.jq.held.path and ledger.jq.sha256 == JQ_SHA256[sys.platform]
+             and argv[1:3] == ["-L", str(ledger.modules)] and argv[-2] == "-f"
+             and argv[-1] in {os.path.join(root, relative) for relative in (
+                 "shadow/v1/qualified-identity.jq", "adapters/local-git-materializer/v1/protocol.jq",
+                 "shadow/v1/write-materialization-input.jq")}, "E_RUNTIME")
+    args = argv[3:-2]
+    program = os.path.basename(argv[-1])
+    if program == "qualified-identity.jq":
+        _require(len(args) == 10 and args[:3] == ["-r", "--arg", "repository_id"]
+                 and _id(args[3]) and args[4:6] == ["--arg", "hash_algorithm"]
+                 and args[6] in {"sha1", "sha256"} and args[7:9] == ["--arg", "commit_id"]
+                 and _writer_oid(args[9]), "E_RUNTIME")
+    elif program == "protocol.jq":
+        _require(len(args) == 4 and args[:3] == ["-e", "--arg", "command"]
+                 and args[3] in {"validate-input", "validate-response"}, "E_RUNTIME")
+    else:
+        _require(len(args) == 14 and args[:4] == ["-S", "-c", "--arg", "phase"]
+                 and args[4] in {"stage-request", "final-input"}
+                 and args[5:7] == ["--rawfile", "contract"] and _physical(args[7])
+                 and args[8:10] == ["--rawfile", "patch"] and _physical(args[10])
+                 and args[11:13] == ["--slurpfile", "metadata"] and _physical(args[13]), "E_RUNTIME")
+
+
+@dataclasses.dataclass
+class _HeldBytes:
+    held: HeldPath
+    raw: bytes
+
+    @property
+    def sha256(self) -> str:
+        return digest(self.raw)
+
+    def recheck(self, code: str = "E_STALE") -> None:
+        self.held.recheck(code)
+        _require(self.held.read(len(self.raw), code) == self.raw, code)
+
+    def close(self) -> None:
+        self.held.close()
+
+
+def _hold_bytes(path: str, limit: int, code: str = "E_RELATION", hardlinks=False) -> _HeldBytes:
+    held = _open_held(path, False, lambda _fd, _state, _ancestor: True, code,
+                      allow_hardlinks=hardlinks)
+    try:
+        return _HeldBytes(held, held.read(limit, code))
+    except BaseException:
+        held.close()
+        raise
+
+
+class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
+    def __init__(self, python, source, deadline: float, ledger) -> None:
+        self.python, self.source = python, source
+        self.deadline, self.ledger = deadline, ledger
+        self.context = None
+        self.recheck()
+
+    def recheck(self) -> None:
+        self.python.recheck("E_DEPENDENCY")
+        self.source.recheck("E_DEPENDENCY")
+        _require(self.python.held.path == sys.executable
+                 and os.path.realpath(sys.executable) == sys.executable
+                 and self.source.held.path == os.path.join(_source_root(), "shadow/v1/_consumer.py"),
+                 "E_DEPENDENCY")
+
+    def _checkpoint(self) -> None:
+        if self.context is not None:
+            self.context.checkpoint()
+
+    def _fixed(self, operation: str, raw: bytes, cap: int, context=None) -> bytes:
+        _require(operation in {"_resolve-darwin-uuids", "_read-darwin-group"}, "E_RUNTIME")
+        self.context = context
+        self.recheck()
+        role = "darwin-acl-uuid-resolution" if operation == "_resolve-darwin-uuids" else "darwin-group-membership"
+        argv = [self.python.held.path, "-I", "-S", "-B", self.source.held.path, operation]
+        self.ledger.record_command(role, argv, self.python.sha256, self.source.sha256)
+        env = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"}
+        remaining = min(10, self.deadline - time.monotonic())
+        _require(remaining > 0, "E_RUNTIME")
+        if context is None:
+            output = self._foreground(argv, raw, cap, 65536, remaining, env)
+        else:
+            native = context.native
+            _require(native is not None and self.ledger.native_status(native)[0] in {0, 4}, "E_RUNTIME")
+            self._checkpoint()
+            attempted = False
+            try:
+                attempted = True
+                native.prepare_child((1 if operation == "_resolve-darwin-uuids" else 15,
+                    os.fsencode(argv[0]), tuple(os.fsencode(item) for item in argv),
+                    tuple(os.fsencode(f"{key}={env[key]}") for key in sorted(env))))
+                native.spawn_child()
+                status = self.ledger.native_status(native)
+                _require(status[0] == 3 and status[3] == 1 and status[4] == 0
+                         and status[1] > 0 and status[2] == status[1] and status[23] == 0, "E_RUNTIME")
+                self._checkpoint()
+                result, output, error = self.ledger.native_communicate(native, raw, cap, 65536, remaining)
+                _require(result == 0 and not error, "E_RUNTIME")
+            except BaseException as exc:
+                try:
+                    try:
+                        status = self.ledger.native_status(native)
+                    except MemoryError:
+                        if attempted:
+                            self.ledger.native_cleanup(native, time.monotonic() + 10)
+                        raise
+                    if attempted and status[0] == 3 and self.ledger.native_pending(status):
+                        self.ledger.native_cleanup(native, time.monotonic() + 10)
+                except BaseException as cleanup_exc:
+                    raise exc from cleanup_exc
+                raise
+        self.recheck()
+        return output
+
+    def resolve(self, uuids: list[str], context=None) -> list[dict]:
+        _require(type(uuids) is list and len(uuids) <= DARWIN_UUID_COUNT_LIMIT
+                 and all(_uuid_hex(value) for value in uuids), "E_ACL")
+        if not uuids:
+            return []
+        output = self._fixed("_resolve-darwin-uuids", canonical(uuids), DARWIN_UUID_OUTPUT_LIMIT, context)
+        rows = _json_array(output, DARWIN_UUID_OUTPUT_LIMIT, "E_ACL")
+        _require(len(rows) == len(uuids), "E_ACL")
+        for uuid, row in zip(uuids, rows):
+            _require(type(row) is dict and set(row) == {"uuid", "status", "kind", "id"}
+                     and row["uuid"] == uuid, "E_ACL")
+            if row["status"] == "resolved":
+                _require(row["kind"] in {"user", "group"} and _integer(row["id"])
+                         and 0 <= row["id"] <= 0xffffffff, "E_ACL")
+            else:
+                _require(row["status"] == "unresolved" and row["kind"] is None
+                         and row["id"] is None, "E_ACL")
+        return rows
+
+    def contains(self, gid: int, context=None) -> bool:
+        _require(_integer(gid) and 0 <= gid <= 0xffffffff, "E_ACL")
+        output = self._fixed("_read-darwin-group", canonical({"gid": gid}), 16, context)
+        _require(output in (canonical([]), canonical([gid])), "E_ACL")
+        return output == canonical([gid])
+
+    def _foreground(self, argv, raw, cap, error_cap, timeout, env):
+        _closed_scope_child(argv, env, self)
+        _require(0 < timeout <= 120 and type(cap) is int and 0 < cap <= 16 * DOCUMENT_LIMIT
+                 and error_cap == 65536, "E_RUNTIME")
+        previous = signal.pthread_sigmask(signal.SIG_BLOCK,
+                                          {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
+        child = None
+        selector = selectors.DefaultSelector()
+        cancelled = [False]
+        old_handlers = {}
+        def observe_signal(_number, _frame):
+            cancelled[0] = True
+        try:
+            for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+                old_handlers[number] = signal.signal(number, observe_signal)
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+            _require(not cancelled[0], "E_RUNTIME")
+            child = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, env=env, close_fds=True, start_new_session=True)
+            outputs = {child.stdout.fileno(): bytearray(), child.stderr.fileno(): bytearray()}
+            limits = {child.stdout.fileno(): cap, child.stderr.fileno(): error_cap}
+            for stream in (child.stdin, child.stdout, child.stderr):
+                os.set_blocking(stream.fileno(), False)
+            selector.register(child.stdout, selectors.EVENT_READ)
+            selector.register(child.stderr, selectors.EVENT_READ)
+            if raw:
+                selector.register(child.stdin, selectors.EVENT_WRITE)
+            else:
+                child.stdin.close()
+            end, sent = time.monotonic() + timeout, 0
+            while selector.get_map():
+                _require(not cancelled[0] and time.monotonic() < end, "E_RUNTIME")
+                for key, events in selector.select(min(0.1, max(0, end - time.monotonic()))):
+                    stream = key.fileobj
+                    if stream is child.stdin:
+                        try:
+                            count = os.write(stream.fileno(), raw[sent:sent + 65536])
+                        except BlockingIOError:
+                            continue
+                        _require(count > 0, "E_RUNTIME")
+                        sent += count
+                        if sent == len(raw):
+                            selector.unregister(stream)
+                            stream.close()
+                    else:
+                        try:
+                            chunk = os.read(stream.fileno(), 65536)
+                        except BlockingIOError:
+                            continue
+                        if not chunk:
+                            selector.unregister(stream)
+                            stream.close()
+                        else:
+                            bucket = outputs[key.fd]
+                            _require(len(bucket) + len(chunk) <= limits[key.fd], "E_LIMIT")
+                            bucket.extend(chunk)
+            result = child.wait(timeout=max(0.001, end - time.monotonic()))
+            _require(not cancelled[0] and result == 0, "E_RUNTIME")
+            stdout, stderr = list(outputs.values())
+            _require(not stderr, "E_RUNTIME")
+            return bytes(stdout)
+        except BaseException as exc:
+            if child is not None and child.returncode is None:
+                for number in (signal.SIGTERM, signal.SIGKILL):
+                    try:
+                        os.killpg(child.pid, number)
+                    except ProcessLookupError:
+                        pass
+                try:
+                    child.wait(timeout=10)
+                except BaseException as cleanup_exc:
+                    raise exc from cleanup_exc
+            raise
+        finally:
+            signal.pthread_sigmask(signal.SIG_BLOCK,
+                                    {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
+            try:
+                selector.close()
+                if child is not None:
+                    for stream in (child.stdin, child.stdout, child.stderr):
+                        if stream is not None and not stream.closed:
+                            stream.close()
+                for number, handler in old_handlers.items():
+                    signal.signal(number, handler)
+            finally:
+                signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+
+
+
+SHADOW_EVIDENCE_NAMES = (
+    "accepted-identities.json", "claim.json", "consumer-provenance.json", "decision.json",
+    "duty-evaluation.json", "evaluator-driver.txt", "evaluator-program.txt",
+    "evidence-manifest.json", "file-digest-result.json", "incident.json",
+    "materialization-input.json", "materialization-response.json", "origin-observation.json",
+    "payload-stderr.txt", "payload-stdout.txt", "policy-set.json", "policy.json",
+    "preparation-manifest.json", "preparation-record.json", "qualified-identity.json",
+    "registry.json", "sandbox-check.json", "sandbox-evaluation.json",
+    "sandbox-expectation.json", "sandbox-receipt.json", "sandbox-request.json",
+    "shadow-record.json", "trace-ledger.json", "trace-receipt.json",
+)
+
+class _HeldBundle:
+    def __init__(self, parent: HeldPath, name: str, form: str) -> None:
+        _require(form in {"enforced-reproduction.v1", "withheld-write.v1"}, "E_RELATION")
+        self.held: list[HeldPath] = []
+        self.files: dict[str, bytes] = {}
+        self.names = set(SHADOW_EVIDENCE_NAMES) | {"bundle.json"}
+        if form == "withheld-write.v1":
+            self.names.add("publisher-body.txt")
+        try:
+            directory = _open_child(parent, name, True,
+                                    lambda _fd, _state, _ancestor: True, "E_RELATION")
+            self.held.append(directory)
+            _require(set(os.listdir(directory.fd)) == self.names, "E_RELATION")
+            total = 0
+            for filename in sorted(self.names):
+                item = _open_child(directory, filename, False,
+                                   lambda _fd, _state, _ancestor: True, "E_RELATION")
+                self.held.append(item)
+                limit = (8 * DOCUMENT_LIMIT if filename == "materialization-input.json" else
+                         2 * DOCUMENT_LIMIT if filename == "preparation-manifest.json" else DOCUMENT_LIMIT)
+                raw = item.read(limit, "E_STALE")
+                total += len(raw)
+                _require(total <= 48 * DOCUMENT_LIMIT, "E_LIMIT")
+                if filename.endswith(".json"):
+                    _json(raw, limit, "E_RELATION")
+                self.files[filename] = raw
+            incident = _json(self.files["incident.json"], DOCUMENT_LIMIT, "E_RELATION")
+            marker = _json(self.files["bundle.json"], DOCUMENT_LIMIT, "E_RELATION")
+            expected = {"schema_version": 1, "kind": "shadow_consumer_bundle",
+                "id": "bundle." + digest(self.files["incident.json"])[:32], "body": {
+                    "activation_state": "inactive", "record_form": form,
+                    "incident_sha256": digest(self.files["incident.json"]),
+                    "target_revision": incident["body"]["git_revision_ref"],
+                    "files": [{"name": filename, "size_bytes": len(self.files[filename]),
+                               "sha256": digest(self.files[filename])}
+                              for filename in sorted(self.names - {"bundle.json"})]}}
+            _require(canonical(marker) == canonical(expected), "E_RELATION")
+            self.recheck()
+        except BaseException:
+            self.close()
+            raise
+
+    def recheck(self, code: str = "E_STALE") -> None:
+        _require(set(os.listdir(self.held[0].fd)) == self.names, code)
+        for item in self.held:
+            item.recheck(code)
+        for item in self.held[1:]:
+            filename = os.path.basename(item.path)
+            _require(item.read(len(self.files[filename]), code) == self.files[filename], code)
+
+    def close(self) -> None:
+        held, self.held = self.held, []
+        _close_paths(held)
+
 
 GIT_CONFIG_KEYS = {"core.repositoryformatversion", "core.filemode", "core.bare",
                    "core.logallrefupdates", "core.ignorecase", "core.precomposeunicode",

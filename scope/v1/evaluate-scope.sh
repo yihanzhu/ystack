@@ -16,8 +16,11 @@ emit_error() {
 
 sha256_path() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'; }
 
-[ "$#" -eq 8 ] && [ "$1" = evaluate ] || emit_error E_USAGE
+[ "$#" -eq 10 ] && [ "$1" = evaluate ] || emit_error E_USAGE
 shift
+documents=("$1" "$2" "$3" "$4" "$5" "$6" "$7")
+bundle_root=$8
+source_git=$9
 source_path=${BASH_SOURCE[0]}
 case "$source_path" in /*) ;; *) source_path="$(pwd -P)/$source_path" ;; esac
 source_dir=$(CDPATH='' cd -P -- "${source_path%/*}" 2>/dev/null && pwd -P) ||
@@ -34,7 +37,7 @@ mode_marker="$repo/config/construction-mode.json"
 for required in "$source_path" "$policy" "$record_program" "$program"; do
   [ -f "$required" ] && [ ! -L "$required" ] || emit_error E_RUNTIME
 done
-for input in "$@"; do
+for input in "${documents[@]}"; do
   [ -f "$input" ] && [ ! -L "$input" ] || emit_error E_RUNTIME
 done
 jq_bin=$(command -v jq 2>/dev/null) || emit_error E_RUNTIME
@@ -45,8 +48,23 @@ case "$jq_bin" in /*) ;; *) emit_error E_RUNTIME ;; esac
 scratch=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-scope-evaluate.XXXXXX" 2>/dev/null) ||
   emit_error E_RUNTIME
 scratch=$(CDPATH='' cd -P -- "$scratch" 2>/dev/null && pwd -P) || emit_error E_RUNTIME
-cleanup() { /bin/rm -rf -- "$scratch" >/dev/null 2>&1 || :; }
-signal_exit() { trap - EXIT HUP INT TERM; cleanup; exit 1; }
+/bin/mkdir -m 700 "$scratch/observation" || emit_error E_RUNTIME
+reader_pid=''
+control_open=false
+control_verified=false
+finish_reader() {
+  if [ "$control_open" = true ]; then
+    if [ "$control_verified" = true ]; then /usr/bin/printf 'CANCEL\n' >&7 || :; fi
+    exec 7>&-
+    control_open=false
+  fi
+  if [ -n "$reader_pid" ]; then
+    wait "$reader_pid" 2>/dev/null || :
+    reader_pid=''
+  fi
+}
+cleanup() { finish_reader; exec 8<&-; /bin/rm -rf -- "$scratch" >/dev/null 2>&1 || :; }
+signal_exit() { trap - EXIT HUP INT TERM; cleanup; /usr/bin/printf '%s\n' E_RUNTIME >&2; exit 1; }
 trap cleanup EXIT
 trap signal_exit HUP INT TERM
 
@@ -72,7 +90,7 @@ require_canonical() {
 
 names=(scope shadow-set dashboard risk kill duty marker)
 index=0
-for input in "$@"; do
+for input in "${documents[@]}"; do
   snapshot "$input" "$scratch/${names[$index]}.json"
   index=$((index + 1))
 done
@@ -151,6 +169,46 @@ done
 record_shas=$("$jq_bin" -R -s -c 'split("\n") | map(select(length > 0))' \
   <"$scratch/record-shas.txt") || emit_error E_RUNTIME
 
+reader="$source_dir/read-shadow-evidence.py"
+[ -f "$reader" ] && [ ! -L "$reader" ] || emit_error E_RUNTIME
+python_bin=$(command -v python3 2>/dev/null) || emit_error E_RUNTIME
+python_bin=$("$python_bin" -I -S -B -c 'import os,sys;print(os.path.realpath(sys.executable))' 2>/dev/null) || emit_error E_RUNTIME
+case "$python_bin" in /*) ;; *) emit_error E_RUNTIME ;; esac
+reader_sha=$(sha256_path "$reader") || emit_error E_RUNTIME
+consumer_sha=$(sha256_path "$repo/shadow/v1/_consumer.py") || emit_error E_RUNTIME
+python_sha=$(sha256_path "$python_bin") || emit_error E_RUNTIME
+jq_sha=$(sha256_path "$jq_bin") || emit_error E_RUNTIME
+/usr/bin/mkfifo -m 600 "$scratch/reader-control" "$scratch/reader-ready" || emit_error E_RUNTIME
+/bin/mkdir -m 700 "$scratch/reader-captures" "$scratch/reader-runtime" "$scratch/reader-runtime/no-hooks" || emit_error E_RUNTIME
+exec 7<>"$scratch/reader-control"
+exec 8<>"$scratch/reader-ready"
+control_open=true
+/usr/bin/perl -MFcntl=F_GETFL,F_SETFL,O_NONBLOCK -e '
+  my $flags = fcntl(STDIN, F_GETFL, 0);
+  defined($flags) && fcntl(STDIN, F_SETFL, $flags | O_NONBLOCK) or exit 1;
+' <&7 || emit_error E_RUNTIME
+for prepared in observation.json observation.json.canonical evaluation.json evaluation.json.canonical reader-stderr; do
+  : >"$scratch/$prepared" || emit_error E_RUNTIME
+done
+/usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C LANG=C YSTACK_SCOPE_JQ="$jq_bin" \
+  /usr/bin/perl -e 'alarm 300; exec @ARGV; die "exec failed: $!\n"' "$python_bin" -I -S -B "$reader" read \
+  "$scratch/scope.json" "$scratch/shadow-set.json" "$bundle_root" "$source_git" \
+  "$scratch/observation/result.json" <&7 >&8 2>"$scratch/reader-stderr" 7>&- 8>&- &
+reader_pid=$!
+exec 9<"$scratch/reader-ready"
+exec 8<&9
+exec 9<&-
+ready=''
+if ! IFS= read -r -t 300 -n 16 ready <&8; then
+  finish_reader
+  reader_error=$(/bin/cat "$scratch/reader-stderr") || emit_error E_RUNTIME
+  emit_error "$reader_error"
+fi
+[ "$ready" = READY ] || emit_error E_RUNTIME
+control_verified=true
+snapshot "$scratch/observation/result.json" "$scratch/observation.json"
+require_canonical "$scratch/observation.json"
+
 policy_sha=$(sha256_path "$scratch/policy.json") || emit_error E_RUNTIME
 scope_sha=$(sha256_path "$scratch/scope.json") || emit_error E_RUNTIME
 shadow_set_sha=$(sha256_path "$scratch/shadow-set.json") || emit_error E_RUNTIME
@@ -172,6 +230,7 @@ driver_sha=$(sha256_path "$source_path") || emit_error E_RUNTIME
   --slurpfile kill "$scratch/kill.json" \
   --slurpfile duty "$scratch/duty.json" \
   --slurpfile marker "$scratch/marker.json" \
+  --slurpfile measured "$scratch/observation.json" \
   --argjson record_shas "$record_shas" \
   --arg mode_repo_state "$mode_repo_state" \
   --arg policy_sha "$policy_sha" --arg scope_sha "$scope_sha" \
@@ -180,12 +239,17 @@ driver_sha=$(sha256_path "$source_path") || emit_error E_RUNTIME
   --arg duty_sha "$duty_sha" --arg marker_sha "$marker_sha" \
   >"$scratch/evaluation.json" 2>/dev/null || emit_error E_RUNTIME
 
-[ "$(sha256_path "$policy")" = "$policy_sha" ] &&
+[ "$(sha256_path "$reader")" = "$reader_sha" ] &&
+  [ "$(sha256_path "$repo/shadow/v1/_consumer.py")" = "$consumer_sha" ] &&
+  [ "$(sha256_path "$python_bin")" = "$python_sha" ] &&
+  [ "$(sha256_path "$jq_bin")" = "$jq_sha" ] &&
+  /usr/bin/cmp -s "$scratch/observation.json" "$scratch/observation/result.json" &&
+  [ "$(sha256_path "$policy")" = "$policy_sha" ] &&
   [ "$(sha256_path "$program")" = "$program_sha" ] &&
   [ "$(sha256_path "$record_program")" = "$record_program_sha" ] &&
   [ "$(sha256_path "$source_path")" = "$driver_sha" ] || emit_error E_RELATION
 index=0
-for input in "$@"; do
+for input in "${documents[@]}"; do
   [ -f "$input" ] && [ ! -L "$input" ] || emit_error E_STALE
   /usr/bin/cmp -s "$input" "$scratch/${names[$index]}.json" || emit_error E_STALE
   index=$((index + 1))
@@ -239,6 +303,22 @@ require_canonical "$scratch/evaluation.json"
         .body.proposal == {state: "absent"} end) and
   ((.body | has("grant_ref") or has("activation") or has("qualification_ref")) | not)
 ' "$scratch/evaluation.json" >/dev/null 2>&1 || emit_error E_RUNTIME
+
+/usr/bin/printf 'SEAL\n' >&7 || emit_error E_RUNTIME
+exec 7>&-
+control_open=false
+reader_status=0
+wait "$reader_pid" || reader_status=$?
+reader_pid=''
+[ "$(/usr/bin/wc -c <"$scratch/reader-stderr" | /usr/bin/tr -d ' ')" -le 65536 ] || emit_error E_LIMIT
+if [ "$reader_status" -ne 0 ]; then
+  reader_error=$(/bin/cat "$scratch/reader-stderr") || emit_error E_RUNTIME
+  emit_error "$reader_error"
+fi
+[ ! -s "$scratch/reader-stderr" ] || emit_error E_RUNTIME
+extra=''
+if IFS= read -r -n 1 extra <&8 || [ -n "$extra" ]; then emit_error E_RUNTIME; fi
+exec 8<&-
 
 /bin/cat "$scratch/evaluation.json" || emit_error E_RUNTIME
 trap - EXIT HUP INT TERM

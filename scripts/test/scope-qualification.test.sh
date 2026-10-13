@@ -5,7 +5,7 @@ export LC_ALL=C
 umask 077
 
 if [ "${YSTACK_SCOPE_TEST_BOUNDED:-0}" != 1 ]; then
-  YSTACK_SCOPE_TEST_BOUNDED=1 exec /usr/bin/perl -e 'alarm 300; exec @ARGV' "$0"
+  YSTACK_SCOPE_TEST_BOUNDED=1 exec /usr/bin/perl -e 'alarm 300; exec @ARGV; die "exec failed: $!\n"' /bin/bash "$0"
 fi
 
 root=$(CDPATH='' cd -P -- "${BASH_SOURCE[0]%/*}/../.." && pwd -P)
@@ -22,7 +22,12 @@ pass() { passes=$((passes + 1)); /usr/bin/printf 'ok %s - %s\n' "$passes" "$1"; 
 sha256_path() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'; }
 
 tmp=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-scope-test.XXXXXX")
-cleanup() { /bin/rm -rf -- "$tmp" >/dev/null 2>&1 || :; }
+cleanup() {
+  local prior=$? cleanup_status=0
+  if declare -F cleanup_genuine >/dev/null; then cleanup_genuine || cleanup_status=1; fi
+  /bin/rm -rf -- "$tmp" >/dev/null 2>&1 || cleanup_status=1
+  if [ "$prior" -eq 0 ] && [ "$cleanup_status" -ne 0 ]; then exit 1; fi
+}
 trap cleanup EXIT
 
 platform=$(/usr/bin/uname -s):$(/usr/bin/uname -m)
@@ -59,7 +64,20 @@ jq_bin="$bin/jq"
 [ "$("$jq_bin" --version)" = jq-1.6 ] || fail 'jq identity'
 
 run_validator() { PATH="$bin:/usr/bin:/bin" "$validator" validate "$1"; }
-run_evaluator() { PATH="$bin:/usr/bin:/bin" "$evaluator" evaluate "$@"; }
+python_candidate=$(command -v python3.14 2>/dev/null || command -v python3)
+if [ -x /opt/homebrew/bin/python3.14 ]; then python_candidate=/opt/homebrew/bin/python3.14; fi
+python_bin=$("$python_candidate" -I -S -B -c 'import os,sys;print(os.path.realpath(sys.executable))')
+"$python_bin" -I -S -B -c 'import sys;assert sys.version_info >= (3,11)' || fail 'existing Python 3.11+ required'
+/bin/ln -s "$python_bin" "$bin/python3"
+/bin/mkdir -m 700 "$tmp/legacy-bundles"
+/usr/bin/git init --bare "$tmp/legacy-source.git" >"$tmp/git-init.out" 2>"$tmp/git-init.err"
+run_evaluator() {
+  if [ "$#" -eq 7 ]; then
+    PATH="$bin:/usr/bin:/bin" "$evaluator" evaluate "$@" "$tmp/legacy-bundles" "$tmp/legacy-source.git"
+  else
+    PATH="$bin:/usr/bin:/bin" "$evaluator" evaluate "$@"
+  fi
+}
 expect_validator_error() {
   local label=$1 expected=$2 input=$3 status=0 out
   out=$(run_validator "$input" 2>&1 >/dev/null) || status=$?
@@ -74,6 +92,7 @@ evaluation_reasons() {
 }
 expect_reasons() {
   local label=$1 expected=$2
+  expected=$("$jq_bin" -c 'map(select(. != "scope.proposable")) + ["scope.sandbox-receipt-missing"] | sort | unique' <<<"$expected")
   shift 2
   local actual
   actual=$(evaluation_reasons "$@")
@@ -678,20 +697,26 @@ record_1_sha=$(set_record_sha "$tmp/shadow-set.json" 1)
          max_attempts:2,
          environments:["env.ci-linux-fixture","env.local-macos-fixture"],
          evidence:evidence}}}}}' >"$tmp/expected.json"
-/usr/bin/cmp -s "$tmp/evaluation.json" "$tmp/expected.json" ||
+"$jq_bin" -S -c --arg config_sha "$(sha256_path "$tmp/legacy-source.git/config")" '
+  .body.outcome="not-proposable" | .body.reason_ids=["scope.sandbox-receipt-missing"] |
+  .body.proposal={state:"absent"} |
+  .body.evidence.shadow_bundle_facts=(.body.evidence.shadow_records | map({
+    record_ref:{schema_version,kind,id,sha256},record_form:"legacy",eligible:false,
+    authentication:{state:"missing"},facts:{}})) |
+  .body.evidence.git_snapshot={repository_kind:"bare",hash_algorithm:"sha1",config_sha256:$config_sha}
+' "$tmp/expected.json" >"$tmp/expected-authenticity.json"
+/usr/bin/cmp -s "$tmp/evaluation.json" "$tmp/expected-authenticity.json" ||
   fail "the proposable evaluation does not match the expected document byte for byte: $("$jq_bin" -c '{outcome:.body.outcome,reasons:.body.reason_ids}' "$tmp/evaluation.json" 2>/dev/null)"
-pass 'a routine scope with complete evidence is proposable, byte for byte and on repeat'
+pass 'legacy declarations stay readable, byte-identical on repeat, and cannot supply authentic evidence'
 
 "$jq_bin" -e '
-  .body.enabled == false and .body.proposal.document.body.enabled == false and
-  .body.proposal.document.body.push_allowed == false and
+  .body.enabled == false and .body.proposal == {state:"absent"} and
+  .body.qualification.state == "unavailable" and
   .body.operating_mode.state == "operating" and
-  .body.proposal.document.body.enablement ==
-    {state:"blocked",reason_id:"scope.enablement-requires-operator-pr"} and
-  ([.. | strings] | any(. == "enabled" or . == "qualified" or . == "active") | not) and
+  (.body.evidence.shadow_bundle_facts | all(.eligible == false and .authentication.state == "missing")) and
   ((.body | has("grant_ref") or has("activation")) | not)
-' "$tmp/evaluation.json" >/dev/null || fail 'the proposal claims authority'
-pass 'the proposal is inert: nothing is enabled and enablement stays blocked'
+' "$tmp/evaluation.json" >/dev/null || fail 'legacy declarations claim authority'
+pass 'declarations create no proposal, qualification, enablement or authority'
 
 mutate_scope '.body.risk_tier = "high"' "$tmp/tier-high.json"
 mutate_scope '.body.risk_tier = "bootstrap"' "$tmp/tier-bootstrap.json"
@@ -785,8 +810,7 @@ expect_reasons shadow-other-repository '["scope.shadow-evidence-missing"]' \
   "$tmp/scope-other-repo.json" "$tmp/shadow-other-repo.json" "${good[@]:2}"
 "$jq_bin" -S -c '.body.records[1] = .body.records[0]' "$tmp/shadow-set.json" \
   >"$tmp/shadow-replayed.json"
-expect_reasons shadow-replayed \
-  '["scope.malformed","scope.shadow-evidence-missing","scope.shadow-inconclusive"]' \
+expect_evaluator_error shadow-replayed E_RELATION \
   "${good[@]:0:1}" "$tmp/shadow-replayed.json" "${good[@]:2}"
 # An outcome outside the shadow slice's vocabulary is not a record this
 # evaluator understands, even when it is claimed: the set is malformed.
@@ -814,8 +838,7 @@ pass 'shadow evidence must cover every environment, be conclusive, use a known o
        environment:{environment_id:"env.local-macos-fixture"}}}' \
   "$tmp/shadow-set.json" >"$tmp/shadow-stub.json"
 scope_for_shadow "$tmp/shadow-stub.json" "$tmp/scope-stub.json"
-expect_reasons shadow-stub-record \
-  '["scope.malformed","scope.shadow-evidence-missing","scope.shadow-inconclusive"]' \
+expect_evaluator_error shadow-stub-record E_RELATION \
   "$tmp/scope-stub.json" "$tmp/shadow-stub.json" "${good[@]:2}"
 pass 'a stub carrying only the fields the gate reads is not a shadow record'
 
@@ -840,7 +863,7 @@ run_evaluator "$tmp/scope-unclaimed.json" "${good[@]:1}" >"$tmp/evaluation-uncla
     sha256:"0000000000000000000000000000000000000000000000000000000000000000"}]) |
   sort | unique)' "$tmp/scope.json" >"$tmp/scope-dangling-ref.json"
 run_validator "$tmp/scope-dangling-ref.json" || fail 'a three-ref scope was refused'
-expect_reasons shadow-dangling-ref '["scope.shadow-evidence-missing"]' \
+expect_evaluator_error shadow-dangling-ref E_RELATION \
   "$tmp/scope-dangling-ref.json" "${good[@]:1}"
 pass 'only the shadow records a scope claims by digest count as its evidence'
 
@@ -1208,8 +1231,7 @@ for malformed_case in 'del(.body.records[0].body.shadow)' \
   '.body.records[0].body.qualified_identity.extra = true' \
   '.body.records[0].body.qualified_identity_ref.content_id = "shadow-other"'; do
   "$jq_bin" -S -c "$malformed_case" "$tmp/shadow-set.json" >"$tmp/shadow-malformed.json"
-  expect_reasons "malformed shadow $malformed_case" \
-    '["scope.malformed","scope.shadow-evidence-missing","scope.shadow-inconclusive"]' \
+  expect_evaluator_error "malformed shadow $malformed_case" E_RELATION \
     "${good[@]:0:1}" "$tmp/shadow-malformed.json" "${good[@]:2}"
 done
 "$jq_bin" -S -c '.body.families = (.body.families[0:8])' "$tmp/dashboard.json" \
@@ -1274,21 +1296,22 @@ pass 'the evaluation is bound to the exact bytes of every input it read'
 # is then all there is, and the evaluator still never enables anything.
 fake_repo="$tmp/portable/scope/v1"
 /bin/mkdir -p "$fake_repo"
+for component_dir in core shadow control enforcement adapters preparation telemetry maintenance evals scripts; do
+  /bin/cp -R "$root/$component_dir" "$tmp/portable/$component_dir"
+done
 for shipped in scope-policy.json workflow-scope.jq scope-gates.jq validate-scope.sh \
-  evaluate-scope.sh; do
+  evaluate-scope.sh read-shadow-evidence.py; do
   /bin/cp "$root/scope/v1/$shipped" "$fake_repo/$shipped"
 done
 /bin/chmod 0500 "$fake_repo/validate-scope.sh" "$fake_repo/evaluate-scope.sh"
 "$jq_bin" -S -c -n '{schema_version:1,status:"retired"}' >"$tmp/marker-operating.json"
 PATH="$bin:/usr/bin:/bin" "$fake_repo/evaluate-scope.sh" evaluate "${good[@]:0:6}" \
-  "$tmp/marker-operating.json" >"$tmp/evaluation-portable.json"
+  "$tmp/marker-operating.json" "$tmp/legacy-bundles" "$tmp/legacy-source.git" >"$tmp/evaluation-portable.json"
 "$jq_bin" -e '
-  .body.outcome == "proposable" and .body.enabled == false and
+  .body.outcome == "not-proposable" and .body.reason_ids == ["scope.sandbox-receipt-missing"] and .body.enabled == false and
   .body.operating_mode == {state:"operating",repository_marker:"absent",
     marker_ref:.body.evidence.mode_marker_ref} and
-  .body.proposal.document.body.enabled == false and
-  .body.proposal.document.body.enablement ==
-    {state:"blocked",reason_id:"scope.enablement-requires-operator-pr"}
+  .body.proposal == {state:"absent"} and .body.qualification.state == "unavailable"
 ' "$tmp/evaluation-portable.json" >/dev/null ||
   fail 'the portable copy enabled something or misread the mode'
 pass 'with no committed mode marker the outcome is still only a blocked proposal'
@@ -1296,9 +1319,9 @@ pass 'with no committed mode marker the outcome is still only a blocked proposal
 # and "retired" mean anything, and a typo fails closed.
 "$jq_bin" -S -c -n '{schema_version:1,status:"activ"}' >"$tmp/marker-typo.json"
 PATH="$bin:/usr/bin:/bin" "$fake_repo/evaluate-scope.sh" evaluate "${good[@]:0:6}" \
-  "$tmp/marker-typo.json" >"$tmp/evaluation-typo.json"
+  "$tmp/marker-typo.json" "$tmp/legacy-bundles" "$tmp/legacy-source.git" >"$tmp/evaluation-typo.json"
 "$jq_bin" -e '.body.outcome == "not-proposable" and
-  .body.reason_ids == ["scope.mode-construction"] and .body.enabled == false' \
+  .body.reason_ids == ["scope.mode-construction","scope.sandbox-receipt-missing"] and .body.enabled == false' \
   "$tmp/evaluation-typo.json" >/dev/null || fail 'an unknown mode status was not refused'
 pass 'an unknown operating-mode status fails closed even without a committed marker'
 # A committed marker present as a symlink is not absent: the portable tree must
@@ -1307,53 +1330,664 @@ pass 'an unknown operating-mode status fails closed even without a committed mar
 /bin/ln -s /dev/null "$tmp/portable/config/construction-mode.json"
 symlink_status=0
 PATH="$bin:/usr/bin:/bin" "$fake_repo/evaluate-scope.sh" evaluate "${good[@]:0:6}" \
-  "$tmp/marker-operating.json" >"$tmp/evaluation-symlink-marker.json" 2>"$tmp/symlink-marker.err" ||
+  "$tmp/marker-operating.json" "$tmp/legacy-bundles" "$tmp/legacy-source.git" >"$tmp/evaluation-symlink-marker.json" 2>"$tmp/symlink-marker.err" ||
   symlink_status=$?
 [ "$symlink_status" -ne 0 ] && [ ! -s "$tmp/evaluation-symlink-marker.json" ] &&
   [ "$(/bin/cat "$tmp/symlink-marker.err")" = E_RUNTIME ] || fail 'a symlinked committed marker was not refused'
 /bin/rm -f "$tmp/portable/config/construction-mode.json"
 pass 'a committed marker that is not a regular file fails closed'
 
-# The committed marker decides both the mode and the `repository_marker` field,
-# and it is read before the gate program runs, so it is rechecked afterwards
-# like every other input. These two cases change it while the run is in flight:
-# a shim on PATH rewrites (or creates) the committed marker when the evaluator
-# invokes the gate program, which is after the snapshot and before the stale
-# checks. Both must be refused rather than emitting a result about marker bytes
-# the repository no longer holds.
 race_marker_case() {
   local label=$1 committed=$2 shape=${3:-file} status=0 out
   local race_repo="$tmp/race-$label" race_bin="$tmp/race-bin-$label"
   /bin/mkdir -p "$race_repo/scope/v1" "$race_repo/config"
   /bin/mkdir -m 700 "$race_bin"
+  /bin/ln -s "$python_bin" "$race_bin/python3"
+  /bin/cp "$jq_bin" "$race_bin/jq"
+  for component_dir in core shadow control enforcement adapters preparation telemetry maintenance evals scripts; do
+    /bin/cp -R "$root/$component_dir" "$race_repo/$component_dir"
+  done
   for shipped in scope-policy.json workflow-scope.jq scope-gates.jq \
-    validate-scope.sh evaluate-scope.sh; do
+    validate-scope.sh evaluate-scope.sh read-shadow-evidence.py; do
     /bin/cp "$root/scope/v1/$shipped" "$race_repo/scope/v1/$shipped"
   done
-  /bin/chmod 0500 "$race_repo/scope/v1/evaluate-scope.sh"
   if [ -n "$committed" ]; then
     /bin/cp "$committed" "$race_repo/config/construction-mode.json"
   fi
-  { /usr/bin/printf '#!/bin/bash\nfor argument in "$@"; do\n'
-    /usr/bin/printf '  case "$argument" in\n'
-    /usr/bin/printf '    */scope-gates.jq)\n'
-    if [ "$shape" = symlink ]; then
-      /usr/bin/printf '      /bin/ln -sf /dev/null %s ;;\n' "$race_repo/config/construction-mode.json"
-    else
-      /usr/bin/printf '      /bin/cat %s > %s ;;\n' \
-        "$tmp/marker-operating.json" "$race_repo/config/construction-mode.json"
-    fi
-    /usr/bin/printf '  esac\ndone\nexec %s "$@"\n' "$jq_bin"
-  } >"$race_bin/jq"
-  /bin/chmod 0555 "$race_bin/jq"
+  "$python_bin" -I -S -B - "$race_repo" "$tmp/marker-operating.json" "$shape" <<'PY_MUTATE'
+import pathlib,shlex,sys
+root,marker,shape=sys.argv[1:]
+path=pathlib.Path(root)/"scope/v1/evaluate-scope.sh"
+raw=path.read_text()
+boundary='policy_sha=$(sha256_path "$scratch/policy.json")'
+assert raw.count(boundary)==1
+name=str(pathlib.Path(root)/"config/construction-mode.json")
+command=("/bin/ln -s /dev/null " + shlex.quote(name) if shape=="symlink"
+         else "/bin/cat " + shlex.quote(marker) + " > " + shlex.quote(name))
+path.write_text(raw.replace(boundary,command+"\n"+boundary))
+PY_MUTATE
+  /bin/chmod 0500 "$race_repo/scope/v1/evaluate-scope.sh"
   out=$(PATH="$race_bin:/usr/bin:/bin" "$race_repo/scope/v1/evaluate-scope.sh" \
-    evaluate "${good[@]:0:6}" "$tmp/marker.json" 2>&1 >/dev/null) || status=$?
+    evaluate "${good[@]:0:6}" "$tmp/marker.json" "$tmp/legacy-bundles" "$tmp/legacy-source.git" 2>&1 >/dev/null) || status=$?
   [ "$status" -ne 0 ] || fail "$label accepted a marker that changed mid-run"
   [ "$out" = E_STALE ] || fail "$label expected E_STALE got $out"
 }
 race_marker_case rewritten "$tmp/marker.json"
 race_marker_case appeared ''
 race_marker_case appeared-symlink '' symlink
-pass 'a committed mode marker that changes while the run is in flight is stale'
+pass 'held marker changes, appearance, and symlink appearance before SEAL refuse as stale'
 
+genuine_base=''
+genuine_writer=''
+genuine_consumer=''
+genuine_group=''
+genuine_base_created=false
+genuine_libexec_created=false
+genuine_writer_created=false
+genuine_consumer_created=false
+genuine_group_created=false
+genuine_anchor_created=false
+genuine_writer_identity=''
+genuine_consumer_identity=''
+genuine_group_identity=''
+genuine_base_identity=''
+genuine_anchor_identity=''
+genuine_libexec_identity=''
+genuine_anchor_parents=()
+genuine_anchor_parent_identities=()
+fixture_directory_identity() {
+  [ -d "$1" ] && [ ! -L "$1" ] || return 1
+  /usr/bin/sudo -n /usr/bin/stat -c '%d:%i:%u:%g:%f' -- "$1"
+}
+remove_fixture_directory() {
+  local path=$1 identity=$2 recursive=$3
+  [ -n "$identity" ] && [ "$(fixture_directory_identity "$path")" = "$identity" ] || return 1
+  if [ "$recursive" = true ]; then
+    /usr/bin/sudo -n /bin/rm -rf -- "$path" || return 1
+  else
+    /usr/bin/sudo -n /bin/rmdir -- "$path" || return 1
+  fi
+  [ ! -e "$path" ] && [ ! -L "$path" ]
+}
+cleanup_genuine() {
+  local failed=0 index
+  if [ "$genuine_anchor_created" = true ]; then
+    remove_fixture_directory /usr/local/libexec/ystack-sandbox/v1/supervisor "$genuine_anchor_identity" true || failed=1
+  fi
+  if [ "$genuine_base_created" = true ]; then
+    remove_fixture_directory "$genuine_base" "$genuine_base_identity" true || failed=1
+  fi
+  if [ "$genuine_consumer_created" = true ]; then
+    if [ -n "$genuine_consumer_identity" ] && [ "$(/usr/bin/getent passwd "$genuine_consumer")" = "$genuine_consumer_identity" ]; then
+      /usr/bin/sudo -n /usr/sbin/userdel "$genuine_consumer" || failed=1
+      ! /usr/bin/getent passwd "$genuine_consumer" >/dev/null || failed=1
+    else failed=1; fi
+  fi
+  if [ "$genuine_writer_created" = true ]; then
+    if [ -n "$genuine_writer_identity" ] && [ "$(/usr/bin/getent passwd "$genuine_writer")" = "$genuine_writer_identity" ]; then
+      /usr/bin/sudo -n /usr/sbin/userdel "$genuine_writer" || failed=1
+      ! /usr/bin/getent passwd "$genuine_writer" >/dev/null || failed=1
+    else failed=1; fi
+  fi
+  if [ "$genuine_group_created" = true ]; then
+    if [ -n "$genuine_group_identity" ] && [ "$(/usr/bin/getent group "$genuine_group" | /usr/bin/cut -d : -f 1-3)" = "$genuine_group_identity" ]; then
+      /usr/bin/sudo -n /usr/sbin/groupdel "$genuine_group" || failed=1
+      ! /usr/bin/getent group "$genuine_group" >/dev/null || failed=1
+    else failed=1; fi
+  fi
+  for ((index=${#genuine_anchor_parents[@]}-1; index>=0; index--)); do
+    remove_fixture_directory "${genuine_anchor_parents[index]}" "${genuine_anchor_parent_identities[index]}" false || failed=1
+  done
+  if [ "$genuine_libexec_created" = true ]; then
+    remove_fixture_directory /usr/local/libexec "$genuine_libexec_identity" false || failed=1
+  fi
+  [ "$failed" -eq 0 ]
+}
+setup_genuine_linux() {
+  [ "$(/usr/bin/uname -s)" = Linux ] && [ "${GITHUB_ACTIONS:-}" = true ] &&
+    [ "${RUNNER_ENVIRONMENT:-}" = github-hosted ] ||
+    fail 'genuine origin BLOCKED: a reserved disposable host is required'
+  /usr/bin/sudo -n /usr/bin/true || fail 'existing noninteractive sudo is required'
+  [ ! -e /usr/local/libexec/ystack-sandbox/v1/supervisor ] &&
+    [ ! -L /usr/local/libexec/ystack-sandbox/v1/supervisor ] || fail 'existing fixed anchor'
+  local token
+  token=$(/usr/bin/printf '%s' "$tmp" | /usr/bin/sha256sum | /usr/bin/cut -c 1-12)
+  genuine_writer="yscw_$token"
+  genuine_consumer="yscc_$token"
+  genuine_group="yscg_$token"
+  genuine_base="/usr/local/libexec/ystack-scope-fixture.$token"
+  [ ! -e "$genuine_base" ] && [ ! -L "$genuine_base" ] || fail 'existing fixture root'
+  ! /usr/bin/getent passwd "$genuine_writer" >/dev/null || fail 'existing writer'
+  ! /usr/bin/getent passwd "$genuine_consumer" >/dev/null || fail 'existing consumer'
+  ! /usr/bin/getent group "$genuine_group" >/dev/null || fail 'existing fixture group'
+  /usr/bin/getent group 65534 >/dev/null || fail 'existing readonly primary group required'
+  /usr/bin/sudo -n /usr/sbin/groupadd --system "$genuine_group" || fail 'fixture group creation'
+  genuine_group_created=true
+  genuine_group_identity=$(/usr/bin/getent group "$genuine_group" | /usr/bin/cut -d : -f 1-3)
+  /usr/bin/sudo -n /usr/sbin/useradd --system --no-create-home --no-user-group \
+    --gid "$genuine_group" --shell /usr/sbin/nologin "$genuine_writer" || fail 'writer creation'
+  genuine_writer_created=true
+  genuine_writer_identity=$(/usr/bin/getent passwd "$genuine_writer")
+  /usr/bin/sudo -n /usr/sbin/useradd --system --no-create-home --no-user-group \
+    --gid 65534 --groups "$genuine_group" --shell /usr/sbin/nologin "$genuine_consumer" || fail 'consumer creation'
+  genuine_consumer_created=true
+  genuine_consumer_identity=$(/usr/bin/getent passwd "$genuine_consumer")
+  genuine_group_identity=$(/usr/bin/getent group "$genuine_group" | /usr/bin/cut -d : -f 1-3)
+  local writer_uid consumer_uid fixture_gid consumer_gid actual_groups
+  writer_uid=$(/usr/bin/id -u "$genuine_writer")
+  consumer_uid=$(/usr/bin/id -u "$genuine_consumer")
+  fixture_gid=$(/usr/bin/getent group "$genuine_group" | /usr/bin/cut -d : -f 3)
+  consumer_gid=$(/usr/bin/id -g "$genuine_consumer")
+  actual_groups=$(/usr/bin/sudo -n -u "$genuine_consumer" /usr/bin/id -G)
+  [ "$writer_uid" -gt 0 ] && [ "$consumer_uid" -gt 0 ] && [ "$writer_uid" != "$consumer_uid" ] &&
+    [ "$consumer_gid" = 65534 ] && [ "$consumer_gid" != "$fixture_gid" ] &&
+    [[ " $actual_groups " = *" $fixture_gid "* ]] || fail 'actual principal membership'
+  if [ ! -e /usr/local/libexec ] && [ ! -L /usr/local/libexec ]; then
+    /usr/bin/sudo -n /bin/mkdir -m 0755 -- /usr/local/libexec || fail 'fixture parent creation'
+    genuine_libexec_created=true
+    genuine_libexec_identity=$(fixture_directory_identity /usr/local/libexec)
+  fi
+  /usr/bin/sudo -n /bin/mkdir -m 0755 -- "$genuine_base" || fail 'fixture root creation'
+  genuine_base_created=true
+  genuine_base_identity=$(fixture_directory_identity "$genuine_base")
+  local anchor_parent
+  for anchor_parent in /usr/local/libexec/ystack-sandbox /usr/local/libexec/ystack-sandbox/v1; do
+    if [ ! -e "$anchor_parent" ] && [ ! -L "$anchor_parent" ]; then
+      /usr/bin/sudo -n /bin/mkdir -m 0755 -- "$anchor_parent" || fail 'anchor parent creation'
+      genuine_anchor_parents+=("$anchor_parent")
+      genuine_anchor_parent_identities+=("$(fixture_directory_identity "$anchor_parent")")
+    else
+      [ -d "$anchor_parent" ] && [ ! -L "$anchor_parent" ] || fail 'unsafe anchor parent'
+    fi
+  done
+  /usr/bin/sudo -n /bin/mkdir -m 0755 -- /usr/local/libexec/ystack-sandbox/v1/supervisor || fail 'exclusive anchor creation'
+  genuine_anchor_created=true
+  genuine_anchor_identity=$(fixture_directory_identity /usr/local/libexec/ystack-sandbox/v1/supervisor)
+  /usr/bin/sudo -n /bin/mkdir -m 0755 -- "$genuine_base/package" || fail 'fixture package creation'
+  for component_dir in scope shadow sandbox core config scripts adapters preparation control enforcement telemetry maintenance evals verifiers; do
+    /usr/bin/sudo -n /bin/cp -R -- "$root/$component_dir" "$genuine_base/package/$component_dir" || fail 'fixed package copy'
+  done
+  /usr/bin/sudo -n /bin/chown -R 0:0 -- "$genuine_base/package" || fail 'root package ownership'
+  /usr/bin/sudo -n /bin/chmod -R a+rX,go-w -- "$genuine_base/package" || fail 'root package mode'
+  prepare_genuine_writer
+  /usr/bin/sudo -n /bin/cp -- "$tmp/genuine-writer.py" "$genuine_base/genuine-writer.py" || fail 'fixed storage harness copy'
+  /usr/bin/sudo -n /bin/chown 0:0 -- "$genuine_base/genuine-writer.py" || fail 'storage harness owner'
+  /usr/bin/sudo -n /bin/chmod 0555 -- "$genuine_base/genuine-writer.py" || fail 'storage harness mode'
+  /usr/bin/sudo -n -u "$genuine_writer" /usr/bin/id
+  /usr/bin/sudo -n -u "$genuine_consumer" /usr/bin/id
+}
+
+prepare_genuine_writer() {
+  /bin/cat >"$tmp/genuine-writer.py" <<'PY_STORAGE'
+import importlib.util
+import json
+import os
+from pathlib import Path
+import sys
+
+base = Path(__file__).absolute().parent
+package = base / "package"
+spec = importlib.util.spec_from_file_location("scope_fixture_consumer", package / "shadow/v1/_consumer.py")
+assert spec is not None and spec.loader is not None
+c = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = c
+spec.loader.exec_module(c)
+owned = []
+store_fd = attempt_fd = None
+try:
+    source = c._open_held(c.ANCHOR + "/host-supervisor.py", False, c._root_rule(), "E_RUNTIME")
+    owned.append(source)
+    source_raw = source.read(c.EXECUTABLE_LIMIT, "E_RUNTIME")
+    config = c._open_held(c.ANCHOR + "/host-config.json", False, c._root_rule(), "E_RUNTIME")
+    owned.append(config)
+    config_raw = config.read(c.DOCUMENT_LIMIT, "E_RUNTIME")
+    settings = c._parse_config(config_raw)
+    packet_file = c._open_held(str(base / "storage-input.json"), False, c._root_rule(), "E_RUNTIME")
+    owned.append(packet_file)
+    packet_raw = packet_file.read(c.DOCUMENT_LIMIT, "E_RUNTIME")
+    packet = c._json(packet_raw, c.DOCUMENT_LIMIT, "E_RUNTIME")
+    c._require(set(packet) == {"attempt_id", "receipt_utf8", "stdout_utf8", "stderr_utf8",
+                              "manifest_utf8", "evidence_utf8"}
+               and c._id(packet["attempt_id"])
+               and all(type(packet[key]) is str for key in packet), "E_RUNTIME")
+    uid, gid = settings["principal_uid"], settings["consumer_gid"]
+    c._require(os.getuid() == os.geteuid() == uid and uid != 0
+               and gid in (os.getgid(), *os.getgroups()), "E_RUNTIME")
+    receipt = packet["receipt_utf8"].encode()
+    c._require(c._json(receipt, c.DOCUMENT_LIMIT, "E_RUNTIME")["body"]["attempt"]["attempt_id"]
+               == packet["attempt_id"], "E_RUNTIME")
+    host_spec = importlib.util.spec_from_file_location("scope_fixture_storage", source.path)
+    c._require(host_spec is not None and host_spec.loader is not None, "E_RUNTIME")
+    host = importlib.util.module_from_spec(host_spec)
+    sys.modules[host_spec.name] = host
+    host_spec.loader.exec_module(host)
+    source.recheck("E_STALE")
+    c._require(source.read(c.EXECUTABLE_LIMIT, "E_STALE") == source_raw, "E_STALE")
+    store_fd = host.check_store_root(settings["store_root"], uid, gid)
+    attempt_fd = host.create_attempt_dir(store_fd, uid, gid, packet["attempt_id"])
+    host.write_payload(attempt_fd, uid, gid,
+        (("stdout", packet["stdout_utf8"].encode()), ("stderr", packet["stderr_utf8"].encode()),
+         ("evidence-manifest.json", packet["manifest_utf8"].encode())),
+        (("0000", packet["evidence_utf8"].encode()),))
+    transferred, attempt_fd = attempt_fd, None
+    host.write_receipt_file(store_fd, transferred, uid, gid, receipt)
+    for held, raw in ((source, source_raw), (config, config_raw), (packet_file, packet_raw)):
+        held.recheck("E_STALE")
+        c._require(held.read(len(raw), "E_STALE") == raw, "E_STALE")
+    print(json.dumps({"storage_fixture_only": True, "uid": uid, "gid": gid,
+        "attempt_id": packet["attempt_id"], "source_sha256": c.digest(source_raw),
+        "input_sha256": c.digest(packet_raw), "calls": ["check_store_root", "create_attempt_dir",
+            "write_payload", "write_receipt_file"]}, sort_keys=True))
+finally:
+    original_error = sys.exception()
+    cleanup_error = None
+    for fd in (attempt_fd, store_fd):
+        if fd is not None:
+            try:
+                os.close(fd)
+            except BaseException as error:
+                if cleanup_error is None:
+                    cleanup_error = error
+    try:
+        c._close_paths(owned)
+    except BaseException as error:
+        if cleanup_error is None:
+            cleanup_error = error
+    if cleanup_error is not None:
+        if original_error is not None:
+            raise original_error from cleanup_error
+        raise cleanup_error
+PY_STORAGE
+  "$python_bin" -I -S -B - "$tmp/genuine-writer.py" <<'PY_SYNTAX'
+import ast,pathlib,sys
+ast.parse(pathlib.Path(sys.argv[1]).read_bytes())
+PY_SYNTAX
+}
+
+prepare_genuine_reader() {
+  /bin/cat >"$tmp/genuine-reader.py" <<'PY_GENUINE_READER'
+import importlib.util
+import os
+from pathlib import Path
+import sys
+
+base = Path(__file__).absolute().parent
+source = base / "package/shadow/v1/_consumer.py"
+source_raw = source.read_bytes()
+spec = importlib.util.spec_from_file_location("scope_fixture_store_consumer", source)
+assert spec is not None and spec.loader is not None
+c = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = c
+spec.loader.exec_module(c)
+owned = []
+anchor = store = None
+try:
+    held = c._hold_bytes(str(source), c.EXECUTABLE_LIMIT)
+    owned.append(held)
+    c._require(held.raw == source_raw, "E_STALE")
+    python = c._hold_bytes(sys.executable, c.EXECUTABLE_LIMIT)
+    owned.append(python)
+    anchor = c.load_anchor()
+    if len(sys.argv) == 2 and sys.argv[1] != "observation":
+        store = c._HeldStoreRead(anchor, sys.argv[1])
+        raw = store.observation
+        store.recheck()
+    else:
+        c._require(sys.argv[1:] == ["observation"], "E_RUNTIME")
+        raw = c.verifier_observation(anchor, anchor.config["environment_id"], "fixture.target")
+    anchor.recheck("E_STALE")
+    for item in owned:
+        item.recheck("E_STALE")
+    os.write(1, raw)
+finally:
+    first = sys.exception()
+    cleanup_error = None
+    for owner in (store, anchor, *reversed(owned)):
+        if owner is not None:
+            try:
+                owner.close()
+            except BaseException as error:
+                if cleanup_error is None:
+                    cleanup_error = error
+    if cleanup_error is not None:
+        if first is not None:
+            raise first from cleanup_error
+        raise cleanup_error
+PY_GENUINE_READER
+}
+prepare_genuine_assembler() {
+  /bin/cat >"$tmp/genuine-assembler.py" <<'PY_GENUINE_ASSEMBLER'
+import ctypes,hashlib,importlib.util,json,os,pathlib,pwd,grp,shutil,stat,subprocess,sys,sysconfig,time
+base=pathlib.Path(sys.argv[1]);writer,consumer,group=sys.argv[2:5];jq_source=pathlib.Path(sys.argv[5]);documents=pathlib.Path(sys.argv[6]);package=base/'package'
+assert os.getuid()==0 and base.resolve()==base and package.resolve()==package
+canonical=lambda value:(json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=False,allow_nan=False)+'\n').encode()
+sha=lambda raw:hashlib.sha256(raw).hexdigest()
+def load(name,path):
+ spec=importlib.util.spec_from_file_location(name,path);assert spec and spec.loader
+ module=importlib.util.module_from_spec(spec);sys.modules[name]=module;spec.loader.exec_module(module);return module
+w=load('scope_fixture_writer_algorithms',package/'shadow/v1/write-shadow.py');e=w.e;c=w.c
+uid=pwd.getpwnam(writer).pw_uid;consumer_uid=pwd.getpwnam(consumer).pw_uid;gid=grp.getgrnam(group).gr_gid
+assert uid>0 and consumer_uid>0 and uid!=consumer_uid
+for name in ('tools','work','bundles','identities','snapshots'):(base/name).mkdir(mode=0o755)
+work=base/'work';work.chmod(0o700);tools=base/'tools';jq=tools/'jq';shutil.copyfile(jq_source,jq);jq.chmod(0o555)
+assert sha(jq.read_bytes())==c.JQ_SHA256[sys.platform]
+(tools/'python3').symlink_to(sys.executable)
+env={'PATH':str(tools)+':/usr/bin:/bin','LC_ALL':'C','LANG':'C','HOME':str(work),'TMPDIR':str(work),'GIT_CONFIG_NOSYSTEM':'1','GIT_CONFIG_GLOBAL':'/dev/null','GIT_NO_REPLACE_OBJECTS':'1','GIT_NO_LAZY_FETCH':'1','GIT_TERMINAL_PROMPT':'0','GIT_OPTIONAL_LOCKS':'0','GIT_AUTHOR_NAME':'fixture','GIT_AUTHOR_EMAIL':'fixture@example.invalid','GIT_COMMITTER_NAME':'fixture','GIT_COMMITTER_EMAIL':'fixture@example.invalid','GIT_AUTHOR_DATE':'2000-01-01T00:00:00Z','GIT_COMMITTER_DATE':'2000-01-01T00:00:00Z'}
+commands=[]
+def run(argv,raw=None,role=None,component=None,limit=16*1024*1024):
+ argv=list(map(str,argv));r=subprocess.run(argv,input=raw,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env,timeout=180)
+ print(json.dumps({'fixture_command':argv,'returncode':r.returncode,'stdout_sha256':sha(r.stdout),'stderr':r.stderr.decode('utf8','backslashreplace')},sort_keys=True),flush=True)
+ assert r.returncode==0 and len(r.stdout)<=limit and not r.stderr
+ if role:commands.append({'role':role,'argv_sha256':sha(canonical(argv)),'executable_sha256':sha(pathlib.Path(argv[0]).resolve().read_bytes()),'component_sha256':sha(pathlib.Path(component).read_bytes())})
+ return r.stdout
+def put(path,value,mode=0o444):
+ raw=value if type(value) is bytes else canonical(value);path=pathlib.pathlib.Path(path);path.write_bytes(raw);path.chmod(mode);return path
+helper=tools/'object-closure';run(['/usr/bin/cc','-std=c11','-Wall','-Wextra','-Werror','-O2',package/c.HELPER_SOURCE,'-o',helper]);helper.chmod(0o555)
+verifier=tools/'file-digest-verifier';run(['/usr/bin/cc','-std=c11','-Wall','-Wextra','-Werror','-O2',package/'verifiers/file-digest/v1/verifier.c','-o',verifier]);verifier.chmod(0o555)
+native_dir=base/'native';run(['/bin/bash','-p',package/'shadow/v1/build-cancel-release.sh','build',sys.executable,native_dir])
+native_record=native_dir/'build-record.json';native_binary=next(p for p in native_dir.iterdir() if p.name!='build-record.json')
+native_handle=ctypes.PyDLL(str(native_binary),mode=os.RTLD_NOW|os.RTLD_LOCAL)
+closure=[]
+for name,module in sorted(sys.modules.items()):
+ path=getattr(module,'__file__',None)
+ if path and pathlib.pathlib.Path(path).is_file():
+  path=pathlib.pathlib.Path(path).resolve();closure.append({'module':name,'path':str(path),'sha256':sha(path.read_bytes())})
+closure_raw=canonical({'fixture_runtime_closure':closure,'python':str(pathlib.Path(sys.executable).resolve()),'native_binary':str(native_binary),'loader_mode':'rtld-now-local.v1','state_created':False,'startup_called':False,'vm_called':False})
+put(base/'runtime-closure.json',closure_raw)
+native={'context_version':2,'source_sha256':sha((package/'shadow/v1/_cancel_release.c').read_bytes()),'build_script_sha256':sha((package/'shadow/v1/build-cancel-release.sh').read_bytes()),'build_record_sha256':sha(native_record.read_bytes()),'binary_locator_sha256':sha(str(native_binary).encode()),'binary_size':native_binary.stat().st_size,'binary_sha256':sha(native_binary.read_bytes()),'python_locator_sha256':sha(sys.executable.encode()),'python_sha256':sha(pathlib.Path(sys.executable).read_bytes()),'python_abi':sysconfig.get_config_var('SOABI'),'dependency_record_sha256':sha(closure_raw),'loader_mode':'rtld-now-local.v1'}
+put(base/'native-measurement.json',{'native_release':native,'state_created':False,'startup_called':False,'vm_called':False,'qualification_claimed':False})
+source=base/'source.git';run(['/usr/bin/git','init','-q','--bare',source])
+def git(args,raw=None):return run(['/usr/bin/git','--no-replace-objects','--git-dir='+str(source),*args],raw)
+content=b'fixed content\n';blob=git(['hash-object','-w','--stdin'],content).decode().strip();sibling=git(['hash-object','-w','--stdin'],b'unchanged sibling\n').decode().strip();sibling_tree=git(['mktree'],f'100644 blob {sibling}\tsibling.md\n'.encode()).decode().strip();tree=git(['mktree'],f'100644 blob {blob}\tsource.txt\n040000 tree {sibling_tree}\tystack-evidence\n'.encode()).decode().strip();commit=git(['commit-tree',tree],b'source\n').decode().strip();git(['update-ref','refs/heads/main',commit])
+run(['/bin/bash',package/'scripts/test/local-git-materializer-fixtures.sh','build',work/'built',jq,'sha1',commit,tree])
+original=json.loads((work/'built/input.json').read_bytes())
+for row in original['payloads']:
+ if row['input_id']=='input.producer-patch':row['data']=''
+for row in original['trust_context']['verified_payloads']:
+ if row['input_id']=='input.producer-patch':row['content']['data']='';row['sha256']=sha(b'')
+for row in original['stage_request']['content']['body']['inputs']:
+ if row['input_id']=='input.producer-patch':row['value']['value']['value']['sha256']=sha(b'')
+original['stage_request']['sha256']=sha(canonical(original['stage_request']['content']))
+generation=json.loads((package/'core/v2/generation-registry.json').read_bytes())[-1]['generation_id'];modules=package/'core/v2/generations'/generation/'modules'
+def component(relative,args,raw=None,role=None):return run(['/bin/bash','-p',package/relative,*args],raw,role,package/relative)
+def materialize(doc,label):
+ path=put(work/(label+'-input.json'),doc);candidate=work/(label+'-candidate');scratch=work/(label+'-materializer');candidate.mkdir(mode=0o700);scratch.mkdir(mode=0o700)
+ raw=component('adapters/local-git-materializer/v1/materialize.sh',['materialize',path,'fixture.target',source,candidate,scratch,helper,jq],role='materialization');response=json.loads(raw)
+ receipt=json.loads(response['payloads'][0]['data']);print(json.dumps({'candidate_directory':str(candidate),'receipt_candidate':receipt['candidate']},sort_keys=True),flush=True)
+ return path,raw,candidate
+prior_path,prior_raw,_=materialize(original,'prior');prior=json.loads(prior_raw)
+prior_request=put(work/'prior-request.json',original['stage_request']['content']);prior_profile=put(work/'prior-profile.json',original['resolved_profile']['content']);prior_result=put(work/'prior-result.json',prior['stage_result'])
+duty_raw=component('control/v1/evaluate-duty.sh',['evaluate',package/'control/v1/control-policy-set-sandbox-bound.json',prior_request,prior_profile,prior_result]);duty=json.loads(duty_raw);assert duty['body']['verdict']=='satisfied'
+environment='env.scope-genuine';registry=json.loads((package/'shadow/v1/shadow-environments.json').read_bytes());entry=registry['body']['environments'][0];entry.update(environment_id=environment,target_repository_id='fixture.target',source_root_commit=commit,proof_state='native-qualified');registry['body']['environments']=[entry];put(package/'shadow/v1/shadow-environments.json',registry)
+incident={'schema_version':1,'kind':'shadow_incident_record','id':'incident.scope-genuine','body':{'deploy_authority':'none','target_repository_id':'fixture.target','git_revision_ref':{'repository_id':'fixture.target','hash_algorithm':'sha1','commit_id':commit},'failing_check':{'kind':'file-digest','path':'source.txt','expected_sha256':sha(content)},'observed_symptom':'synthetic completed-run facts for controlled storage only','reporter_actor_ref':'actor.scope-fixture','observed_at':'2026-08-30T00:00:04Z'}}
+instruction=e.make_instruction(incident)
+identities={key:sha((package/'control/v1/sandbox-bound-policy.json').read_bytes()+key.encode()) for key in c.IDENTITY_SLOTS};identities.update(host_runtime=sha(pathlib.Path(sys.executable).read_bytes()),host_supervisor=sha((package/'sandbox/v1/host-supervisor.py').read_bytes()),verifier=sha(verifier.read_bytes()),toolchain=sha(jq.read_bytes()),image=sha(canonical(registry)),verification_instructions=sha(instruction))
+mechanisms={'cpu_time_ms':'mechanism.cpu.single-vcpu-quota-deadline.v1','wall_time_ms':'mechanism.wall.host-monotonic-stop.v1','memory_bytes':'mechanism.memory.vm-ram-ceiling.v1','output_bytes':'mechanism.output.single-tmpfs-append.v1','process_count':'mechanism.tasks.cgroup-pids.v1','scratch_bytes':'mechanism.scratch.tmpfs-no-free.v1'}
+accepted={'schema_version':1,'kind':'sandbox_accepted_identity_set','id':'sandbox.accepted-identities.v1','body':{'activation_state':'inactive','environments':[{'environment_id':environment,'identities':{key:[value] for key,value in identities.items()},'mechanisms':{key:[value] for key,value in mechanisms.items()},'scratch_bytes':16777216}],'set_version':'v1'}};put(package/'enforcement/v1/accepted-identities.json',accepted)
+anchor=pathlib.Path(c.ANCHOR);assert anchor.is_dir()
+shutil.copyfile(package/'sandbox/v1/host-supervisor.py',anchor/'host-supervisor.py');(anchor/'host-supervisor.py').chmod(0o555)
+installed={role:str(package/relative) for role,relative in c.INSTALLED_SOURCES.items()}
+identity_paths={key:str(put(base/'identities'/key,(key+'\n').encode())) for key in c.IDENTITY_KEYS if key!='dyld_cache_files'};identity_paths['dyld_cache_files']=[str(put(base/'identities/dyld-cache',b'fixture-only dyld identity\n'))];identity_paths['verifier']=str(verifier);identity_paths['host_runtime']=sys.executable;identity_paths['host_supervisor']=str(anchor/'host-supervisor.py')
+store=base/'store';store.mkdir(mode=0o750);os.chown(store,uid,gid);(base/'writer-work').mkdir(mode=0o700);os.chown(base/'writer-work',uid,gid)
+config={'schema_version':1,'kind':'sandbox_host_config','id':'scope.fixture.host','body':{'principal_uid':uid,'consumer_gid':gid,'environment_id':environment,'store_id':'store.scope-genuine','store_root':str(store),'work_root':str(base/'writer-work'),'identity_paths':identity_paths,'installed_files':installed,'runtime':{'driver':str(put(base/'identities/runtime-driver',b'not executed\n')),'vfkit':str(put(base/'identities/vfkit',b'not executed\n'))}}};put(anchor/'host-config.json',config)
+policy=json.loads((package/'control/v1/sandbox-bound-policy.json').read_bytes());claim={'schema_version':1,'kind':'execution_environment_claim','id':environment,'body':{key:policy['body'][key] for key in ('environment','filesystem','isolation','limits','network','resources','sensitive_material')}}
+claim['body'].update(declaration_status='complete',duty_evaluation_ref=e.document_ref(duty_raw),effects={'external_writes':False,'target_writes':False},execution_identity={'adapter_instance_id':'instance.verifier','execution_boundary_id':'boundary.verifier','principal_id':'principal.verifier','role':'verifier'},policy_set_ref=e.document_ref((package/'control/v1/control-policy-set-sandbox-bound.json').read_bytes()),stage_result_ref=duty['body']['stage']['result_ref'],tools=[{key:value for key,value in policy['body']['tools'][0].items() if key!='identity_binding'}|{'sha256':sha(verifier.read_bytes())}])
+claim_raw=canonical(claim);observation={'schema_version':1,'kind':'sandbox_verifier_observation','id':'sandbox.observation.verifier','body':{'environment_id':environment,'environment_entry_sha256':sha(canonical(entry)),'target_repository_id':'fixture.target','accepted_set_sha256':sha(canonical(accepted)),'verifier_sha256':sha(verifier.read_bytes())}}
+put(work/'duty.json',duty_raw);put(work/'claim.json',claim_raw);put(work/'observation.json',observation)
+evaluation_raw=component('control/v1/evaluate-bound-sandbox.sh',['evaluate',work/'duty.json',work/'claim.json',work/'observation.json'],role='sandbox-bound-evaluation');assert json.loads(evaluation_raw)['body']['verdict']=='satisfied'
+q=json.loads(canonical(original));q['stage_request']['content']['body']['environment_ref']={'environment_id':environment,'fingerprint_sha256':sha(claim_raw)};q['stage_request']['sha256']=sha(canonical(q['stage_request']['content']))
+print(json.dumps({'fixture_stage_ready':True,'uid':uid,'consumer_uid':consumer_uid,'gid':gid,'source_commit':commit,'source_tree':tree,'actual_native_loaded':True,'state_created':False,'startup_called':False,'vm_called':False},sort_keys=True),flush=True)
+put(base/'stage-state.json',{'original':original,'q':q,'incident':incident,'claim':claim,'duty_utf8':duty_raw.decode(),'evaluation_utf8':evaluation_raw.decode(),'observation':observation,'native':native,'identities':identities,'mechanisms':mechanisms,'commands':commands,'source_commit':commit,'source_tree':tree,'blob':blob})
+
+q_path, response_raw, candidate_root = materialize(q, 'consumer')
+response_path = put(work / 'response.json', response_raw)
+protocol = package / 'adapters/local-git-materializer/v1/protocol.jq'
+run([jq, '-L', modules, '-e', '--arg', 'command', 'validate-input', '-f', protocol, q_path],
+    role='materializer-input-validation', component=protocol)
+response_check = put(work / 'response-check.json', e.response_check(q, response_raw))
+run([jq, '-L', modules, '-e', '--arg', 'command', 'validate-response', '-f', protocol, response_check],
+    role='materializer-response-validation', component=protocol)
+prep, scratch = work / 'preparation', work / 'preparation-scratch'
+scratch.mkdir(mode=0o700)
+preparation_source = package / 'preparation/v1/prepare-candidate.py'
+common = ['--input', q_path, '--input-sha256', sha(q_path.read_bytes()),
+          '--response', response_path, '--response-sha256', sha(response_raw),
+          '--candidate-repository', candidate_root / 'repository.git', '--output', prep,
+          '--scratch', scratch, '--jq', jq]
+run([sys.executable, '-I', '-S', '-B', preparation_source, 'prepare', *common],
+    role='candidate-preparation', component=preparation_source)
+for path in scratch.iterdir():
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+run([sys.executable, '-I', '-S', '-B', preparation_source, 'inspect', *common],
+    role='candidate-inspection', component=preparation_source)
+record_raw = (prep / 'record.json').read_bytes()
+manifest_raw = (prep / 'manifest.json').read_bytes()
+manifest = json.loads(manifest_raw)
+identity = {'schema_version': 1, 'kind': 'qualified_identity', 'id': 'identity.scope-genuine',
+            'body': {'adapter_config_refs': [{'content_id': 'producer-config',
+                      'media_type': 'application/json', 'sha256': sha(b'fixed producer config')}],
+                     'model_request': {'effort_id': 'high', 'model_id': 'model.fixture',
+                                       'provider_id': 'provider.fixture'},
+                     'prompt_refs': [{'location': {'kind': 'path', 'value': 'source.txt'},
+                       'mode': '100644', 'object_id': blob, 'object_type': 'blob',
+                       'revision': incident['body']['git_revision_ref']}],
+                     'resolved_profile_ref': e.pair_ref(q['resolved_profile']), 'skill_refs': [],
+                     'stage_request_ref': e.pair_ref(q['stage_request']),
+                     'target_revision': incident['body']['git_revision_ref'],
+                     'verification_instructions_ref': {'content_id': 'verification-instructions',
+                       'media_type': 'text/plain', 'sha256': sha(instruction)}}}
+identity_raw = canonical(identity)
+run([jq, '-L', modules, '-r', '--arg', 'repository_id', 'fixture.target', '--arg',
+     'hash_algorithm', 'sha1', '--arg', 'commit_id', commit, '-f',
+     package / 'shadow/v1/qualified-identity.jq'], identity_raw,
+    role='qualified-identity-validation', component=package / 'shadow/v1/qualified-identity.jq')
+e.validate_input_relations(q, incident, claim, identity, instruction)
+component('shadow/v1/validate-incident.sh', ['validate', put(work / 'incident.json', incident)],
+          role='incident-validation')
+from types import SimpleNamespace
+facts_anchor = SimpleNamespace(config=config['body'], registry=c._parse_registry(canonical(registry)),
+    installed={role: (pathlib.Path(path).read_bytes(), sha(pathlib.Path(path).read_bytes()))
+               for role, path in installed.items()})
+attempt_id = 'attempt.scope-genuine-first'
+request = {'id': attempt_id, 'body': {'attempt_id': attempt_id}}
+launch_raw, expectation_raw = e.make_launch(facts_anchor, request, canonical(incident),
+    evaluation_raw, canonical(observation), record_raw, manifest_raw, instruction)
+launch = json.loads(launch_raw)
+expectation = json.loads(expectation_raw)
+result_raw = canonical({'schema_version': 1, 'kind': 'file_digest_verifier_payload',
+                       'id': 'file-digest-payload', 'body': {
+                         'check': {'path': 'source.txt', 'expected_sha256': sha(content)},
+                         'instruction_sha256': sha(instruction),
+                         'observed': {'sha256': sha(content), 'size_bytes': len(content)},
+                         'outcome': 'match', 'reason_id': 'file.match'}})
+evidence_raw = canonical({'schema_version': 1, 'kind': 'sandbox_evidence_manifest',
+                          'id': 'evidence-manifest', 'body': {'files': [{
+                            'name_hex': b'file-digest-result.json'.hex(),
+                            'sha256': sha(result_raw), 'size_bytes': len(result_raw)}]}})
+bounds = {'cpu_time_ms': (30000, 1000, 1, 'guest-supervisor'),
+          'wall_time_ms': (60000, 2000, 1, 'host-supervisor'),
+          'memory_bytes': (536870912, 1048576, 4096, 'guest-supervisor'),
+          'output_bytes': (10485760, len(result_raw), 1, 'guest-supervisor'),
+          'process_count': (32, 1, 1, 'guest-supervisor'),
+          'scratch_bytes': (16777216, 4096, 4096, 'guest-supervisor')}
+limits = {key: {'bound': bound, 'observed': observed, 'resolution': resolution,
+               'observation': 'complete', 'enforcement': 'hard', 'reached': False,
+               'mechanism_id': mechanisms[key], 'observer': observer}
+          for key, (bound, observed, resolution, observer) in bounds.items()}
+receipt_raw = canonical({'schema_version': 1, 'kind': 'sandbox_enforcement_receipt',
+    'id': 'receipt.' + sha(launch_raw), 'body': {
+        'contract_version': 'v1', 'origin': {'producer_role': 'host-supervisor',
+          'store_id': config['body']['store_id'], 'accepted_set_sha256': sha(canonical(accepted))},
+        'attempt': expectation['body']['attempt'], 'control': launch['body']['control'],
+        'subject': launch['body']['subject'],
+        'identities': {key: {'state': 'observed', 'sha256': value} for key, value in identities.items()},
+        'limits': limits,
+        'teardown': {'state': 'confirmed', 'tree_terminated': True, 'storage_destroyed': True},
+        'lifecycle': {'admission': 'admitted', 'runtime': 'completed', 'control_deadline': 'met'},
+        'payload': {'stdout_sha256': sha(b''), 'stderr_sha256': sha(b''),
+          'evidence_manifest_sha256': sha(evidence_raw), 'exit_state': 'exited', 'exit_code': 0},
+        'timing': {'admitted_at': '2026-08-30T00:00:05Z', 'terminated_at': '2026-08-30T00:00:06Z'},
+        'outcome': {'verdict': 'satisfied', 'reason_ids': ['enforcement.satisfied']}}})
+put(base / 'storage-input.json', {'attempt_id': attempt_id, 'receipt_utf8': receipt_raw.decode(),
+    'stdout_utf8': '', 'stderr_utf8': '', 'manifest_utf8': evidence_raw.decode(),
+    'evidence_utf8': result_raw.decode()})
+run(['/usr/bin/sudo', '-n', '-u', writer, '--', sys.executable, '-I', '-S', '-B',
+     base / 'genuine-writer.py'])
+origin_raw = run(['/usr/bin/sudo', '-n', '-u', consumer, '--', sys.executable,
+                  '-I', '-S', '-B', base / 'genuine-reader.py', attempt_id])
+origin = json.loads(origin_raw)
+put(work / 'receipt.json', receipt_raw)
+put(work / 'expectation.json', expectation_raw)
+put(work / 'evaluation.json', evaluation_raw)
+checker_raw = component('enforcement/v1/check-sandbox-receipt.sh',
+    ['check-bound', work / 'receipt.json', work / 'expectation.json', work / 'evaluation.json',
+     work / 'observation.json'], role='sandbox-receipt-check')
+checker = json.loads(checker_raw)
+assert checker['body']['check_verdict'] == 'valid' and checker['body']['enforcement_verdict'] == 'satisfied'
+trace_raw = e.trace_ledger(incident, attempt_id, environment, 'no-change', 'tool.verifier',
+                           evaluation_raw, checker_raw)
+trace_path = put(work / 'trace.json', trace_raw)
+trace_receipt = component('telemetry/v1/validate-trace-ledger.sh',
+    ['validate', incident['id'], attempt_id, trace_path], role='trace-validation')
+provenance = canonical({'schema_version': 1, 'kind': 'shadow_consumer_provenance', 'id': attempt_id,
+    'body': {'activation_state': 'inactive', 'authority': 'none',
+      'instruction_utf8': instruction.decode(), 'instruction_sha256': sha(instruction),
+      'observation': observation, 'observation_sha256': sha(canonical(observation)),
+      'helper_source_sha256': sha((package / c.HELPER_SOURCE).read_bytes()),
+      'helper_build_record_sha256': sha(canonical({'compiler': '/usr/bin/cc', 'fixture_only': True,
+           'helper_source_sha256': sha((package / c.HELPER_SOURCE).read_bytes()),
+           'helper_executable_sha256': sha(helper.read_bytes())})),
+      'helper_executable_sha256': sha(helper.read_bytes()),
+      'consumer_source_sha256': sha((package / 'shadow/v1/enforced-reproduction.py').read_bytes()),
+      'python_sha256': sha(pathlib.Path(sys.executable).read_bytes()), 'jq_sha256': sha(jq.read_bytes()),
+      'native_release': native, 'commands': commands}})
+material_receipt = json.loads(json.loads(response_raw)['payloads'][0]['data'])
+stage_result = json.loads(response_raw)['stage_result']
+content_ref = lambda name, media, raw: {'content_id': name, 'media_type': media, 'sha256': sha(raw)}
+shadow_record = canonical({'schema_version': 1, 'kind': 'shadow_reproduction_record',
+ 'id': incident['id'], 'body': {
+  'record_form': 'enforced-reproduction.v1', 'activation_state': 'inactive', 'authority': 'none',
+  'deploy_authority': 'none', 'effects': ['caller-disposable-candidate-repository'],
+  'evaluation_mode': 'observation-only', 'shadow': True,
+  'qualification': {'state': 'unavailable', 'reason_id': 'shadow.unqualified'},
+  'outcome': 'no-change', 'reason_id': 'check.passed-at-revision',
+  'observed_at': incident['body']['observed_at'], 'target_repository_id': 'fixture.target',
+  'git_revision_ref': incident['body']['git_revision_ref'], 'qualified_identity': identity['body'],
+  'qualified_identity_ref': content_ref('shadow-qualified-identity', 'application/vnd.ystack.qualified-identity+json', identity_raw),
+  'incident_ref': content_ref('shadow-incident-record', 'application/vnd.ystack.shadow-incident-record+json', canonical(incident)),
+  'environment': {'environment_id': environment,
+    'claim_ref': content_ref('shadow-environment-claim', 'application/vnd.ystack.control-execution-environment-claim+json', claim_raw),
+    'registry_ref': content_ref('shadow-environment-registry', 'application/vnd.ystack.shadow-environment-registry+json', canonical(registry)),
+    'evaluation': {'state': 'present', 'value': {'verdict': 'satisfied',
+      'reason_ids': json.loads(evaluation_raw)['body']['reason_ids'],
+      'evaluation_ref': content_ref('shadow-sandbox-evaluation', 'application/vnd.ystack.control-evaluation+json', evaluation_raw)}}},
+  'materialization': {'state': 'present', 'value': {'adapter_id': 'adapter.local-git-materializer.v1',
+    'outcome': 'no-change', 'source': material_receipt['source'], 'candidate': material_receipt['candidate'],
+    'stage_result_ref': e.document_ref(canonical(stage_result))}},
+  'check': {'failing_check': incident['body']['failing_check'], 'execution': {'state': 'present',
+    'value': {'tool_id': 'tool.verifier', 'observed_sha256': sha(content), 'matches_expected': True}}},
+  'sandbox': {'state': 'satisfied', 'reason_id': 'shadow.sandbox-satisfied',
+    'launch_request_ref': e.document_ref(launch_raw), 'expectation_ref': e.document_ref(expectation_raw),
+    'receipt_ref': e.document_ref(receipt_raw), 'check_ref': e.document_ref(checker_raw),
+    'origin': {'state': 'authenticated', 'store_id': config['body']['store_id'],
+       'method': 'controlled-storage.v1', 'observation_sha256': sha(origin_raw)},
+    'payload_ref': content_ref('file-digest-result', 'application/json', result_raw)},
+  'producer_invocations': 0, 'consumer_provenance_ref': e.document_ref(provenance),
+  'trace_ledger_ref': content_ref('shadow-trace-ledger', 'application/vnd.ystack.telemetry-trace-ledger+json', trace_raw)}})
+files = {'incident.json': canonical(incident), 'claim.json': claim_raw, 'duty-evaluation.json': duty_raw,
+ 'materialization-input.json': q_path.read_bytes(), 'materialization-response.json': response_raw,
+ 'qualified-identity.json': identity_raw, 'preparation-record.json': record_raw,
+ 'preparation-manifest.json': manifest_raw, 'sandbox-evaluation.json': evaluation_raw,
+ 'sandbox-request.json': launch_raw, 'sandbox-expectation.json': expectation_raw,
+ 'sandbox-receipt.json': receipt_raw, 'sandbox-check.json': checker_raw,
+ 'origin-observation.json': origin_raw, 'payload-stdout.txt': b'', 'payload-stderr.txt': b'',
+ 'evidence-manifest.json': evidence_raw, 'file-digest-result.json': result_raw,
+ 'consumer-provenance.json': provenance, 'shadow-record.json': shadow_record,
+ 'trace-ledger.json': trace_raw, 'trace-receipt.json': trace_receipt}
+for name, role in {'evaluator-driver.txt':'evaluator_driver', 'evaluator-program.txt':'evaluator_program',
+                  'policy.json':'control_policy', 'decision.json':'control_decision',
+                  'policy-set.json':'control_policy_set', 'accepted-identities.json':'accepted_set',
+                  'registry.json':'registry'}.items():
+    files[name] = pathlib.Path(installed[role]).read_bytes()
+assert set(files) == set(e.EVIDENCE_NAMES)
+marker = canonical({'schema_version': 1, 'kind': 'shadow_consumer_bundle',
+    'id': 'bundle.' + sha(files['incident.json'])[:32], 'body': {
+      'activation_state': 'inactive', 'record_form': 'enforced-reproduction.v1',
+      'incident_sha256': sha(files['incident.json']), 'target_revision': incident['body']['git_revision_ref'],
+      'files': [{'name': name, 'size_bytes': len(files[name]), 'sha256': sha(files[name])}
+                for name in sorted(files)]}})
+bundle = base / 'bundles' / sha(shadow_record)
+bundle.mkdir(mode=0o755)
+for name, raw in files.items():
+    put(bundle / name, raw)
+put(bundle / 'bundle.json', marker)
+print(json.dumps({'genuine_enforced_bundle': str(bundle), 'record_sha256': sha(shadow_record),
+                  'actual_storage_writer_uid': uid, 'actual_consumer_uid': consumer_uid,
+                  'synthetic_runtime_facts': True, 'vm_executed': False}, sort_keys=True), flush=True)
+
+reader_observation = run(['/usr/bin/sudo', '-n', '-u', consumer, '--', sys.executable,
+                          '-I', '-S', '-B', base / 'genuine-reader.py', 'observation'])
+assert reader_observation == canonical(observation)
+doc_root = base / 'documents'
+doc_root.mkdir(mode=0o755)
+for name in ('scope', 'dashboard', 'risk', 'kill', 'duty', 'marker'):
+    value = json.loads((documents / (name + '.json')).read_bytes())
+    if name in ('risk', 'duty'):
+        value['body']['stage']['request_ref'] = identity['body']['stage_request_ref']
+    put(doc_root / (name + '.json'), value)
+scope_doc = json.loads((doc_root / 'scope.json').read_bytes())
+scope_doc['body'].update(target_repository_id='fixture.target',
+    qualified_identity=identity['body'], required_shadow_environments=[environment],
+    shadow_evidence_refs=[e.document_ref(shadow_record)])
+for key, name in (('risk_gate_evaluation_ref', 'risk'), ('kill_switch_evaluation_ref', 'kill'),
+                  ('duty_separation_evaluation_ref', 'duty')):
+    scope_doc['body']['gate_evidence_refs'][key] = e.document_ref((doc_root / (name + '.json')).read_bytes())
+put(doc_root / 'scope.json', scope_doc)
+put(doc_root / 'shadow-set.json', {'schema_version': 1, 'kind': 'shadow_evidence_set',
+    'id': 'scope.evidence.genuine', 'body': {'records': [json.loads(shadow_record)]}})
+consumer_work = base / 'consumer-work'
+consumer_work.mkdir(mode=0o700)
+os.chown(consumer_work, consumer_uid, 65534)
+for root, dirs, names in os.walk(source):
+    pathlib.Path(root).chmod(0o755)
+    for name in names:
+        (pathlib.Path(root) / name).chmod(0o444)
+scope_argv = ['/usr/bin/sudo', '-n', '-u', consumer, '--', '/usr/bin/env', '-i',
+    'PATH=' + str(tools) + ':/usr/bin:/bin', 'LANG=C', 'LC_ALL=C', 'HOME=' + str(consumer_work),
+    'TMPDIR=' + str(consumer_work), '/bin/bash', '-p', package / 'scope/v1/evaluate-scope.sh',
+    'evaluate', *[doc_root / (name + '.json') for name in
+                 ('scope', 'shadow-set', 'dashboard', 'risk', 'kill', 'duty', 'marker')],
+    base / 'bundles', source]
+scope_raw = run(scope_argv)
+put(base / 'genuine-scope-evaluation.json', scope_raw)
+evaluation = json.loads(scope_raw)
+facts = evaluation['body']['evidence']['shadow_bundle_facts']
+assert len(facts) == 1 and facts[0]['eligible'] is True
+assert facts[0]['authentication']['state'] == 'authenticated'
+assert 'scope.sandbox-receipt-missing' not in evaluation['body']['reason_ids']
+assert evaluation['body']['authority'] == 'none' and evaluation['body']['enabled'] is False
+print(json.dumps({'genuine_scope_contract': 'PASS', 'synthetic_runtime_facts': True,
+    'vm_executed': False, 'actual_writer_uid': uid, 'actual_consumer_uid': consumer_uid,
+    'scope_sha256': sha(scope_raw)}, sort_keys=True), flush=True)
+PY_GENUINE_ASSEMBLER
+}
+run_genuine_linux() {
+  setup_genuine_linux
+  prepare_genuine_reader
+  prepare_genuine_assembler
+  local script
+  for script in genuine-reader.py genuine-assembler.py; do
+    /usr/bin/sudo -n /bin/cp -- "$tmp/$script" "$genuine_base/$script" || fail 'fixed fixture source copy'
+    /usr/bin/sudo -n /bin/chown 0:0 -- "$genuine_base/$script" || fail 'fixed fixture source ownership'
+    /usr/bin/sudo -n /bin/chmod 0555 -- "$genuine_base/$script" || fail 'fixed fixture source mode'
+  done
+  /usr/bin/sudo -n "$python_bin" -I -S -B "$genuine_base/genuine-assembler.py" \
+    "$genuine_base" "$genuine_writer" "$genuine_consumer" "$genuine_group" "$jq_cache" "$tmp"
+  pass 'actual root anchor, distinct storage writer and read-only consumer authenticate one complete bundle'
+}
+
+run_genuine_linux
 /usr/bin/printf 'scope qualification: %s focused checks passed\n' "$passes"
