@@ -37,6 +37,9 @@ paths:
   real controlled-store fixture.
 - `scripts/test/shadow-write.test.sh` — prove the shared Git primitive preserves
   the accepted writer behavior and fixed command set.
+- `scripts/test/shadow-self-host-evidence.test.sh` — move its real evaluator
+  compatibility call to the nine-argument contract and preserve its inactive,
+  identity-bound result under the new authentic-receipt refusal.
 - `docs/components.md` and `RESTORE.md` — document the inactive inputs, refusal
   state, restore set and focused/full proof commands.
 - `ci/required-files.txt` — add the new private reader exactly once.
@@ -68,12 +71,19 @@ directory. Direct children not named by a supplied record refuse. A legacy recor
 has no child directory. A claimed enforced record with no matching directory is
 well-formed missing evidence. A legacy record with a directory, an unclaimed
 directory, or two paths for one digest is malformed.
+For the existing declaration-only compatibility case in
+`shadow-self-host-evidence.test.sh`, pass a newly created empty `BUNDLE_ROOT`.
+That case has two real legacy records, so an empty root is its only legal layout;
+it must not manufacture a completed child-5 bundle.
 
 `SOURCE_GIT_DIR` is one held bare object database for the scope's target. All
 records and the scope must name the same repository id, hash algorithm and exact
 target commit before the reader uses it. The locator does not prove a repository
 id. Git object hashes and the record/scope relations prove the exact bytes used by
 this inactive evaluation.
+The compatibility test creates a real bare snapshot for its own target repository
+and commit, with the same object format and tree as the record revision. It passes
+that directory as `SOURCE_GIT_DIR`; an empty or invented Git locator is forbidden.
 
 The driver snapshots its own package files and the seven documents first. It then
 runs the physical current Python as:
@@ -110,6 +120,15 @@ around every command. Accept only fixed `config`, `rev-parse`, `ls-tree` and
 caller-selected Git commands remain impossible. `write-shadow.py` must use this
 same primitive after the refactor.
 
+The private Git owner holds the named bare repository, its ancestors, config and
+object database plus the physical `/usr/bin/git`; it exposes only the current
+config, `rev-parse`, `ls-tree` and `cat-file` operations with their existing output
+bounds. It records every fixed call in the caller's private ledger object.
+`write-shadow.py` passes its existing workspace ledger and retains its current
+`_Workspace.execute` rechecks. The scope reader supplies its own fixed ledger and
+rechecks it with the final observation. This is a concrete private interface, not
+a generic subprocess, workspace callback or unrecorded second Git implementation.
+
 Add a private bundle reader to `_consumer.py`. It opens a bundle directory and
 every listed file descriptor-relative with no-follow rules, one link, regular-file
 kind, bounded size and stable before/after metadata. Require canonical
@@ -126,6 +145,14 @@ UUID and supplementary-group child roles with the same physical Python, clean
 environment, saved mask, closed descriptors, timeout, output limits and unique
 reap. Refactor only the concrete runner needed to share those roles; do not add a
 generic child dispatcher, callback, registry or caller-supplied command.
+The shared private owner holds the physical Python and `_consumer.py` descriptors,
+the fixed deadline and a closed command ledger. Its Darwin UUID method accepts
+only the canonical UUID array; its group method accepts only one canonical
+`{gid}` object. They keep the existing fixed argv, 10-second role cap,
+32-KiB/16-byte output bounds, saved mask, close-all, signal cleanup and unique
+reap. `enforced-reproduction.py` constructs this owner and keeps its existing
+ledger entries; the scope reader constructs the same private owner from its held
+physical files. Neither path accepts a runner callback or arbitrary argv.
 
 For each completed bundle, perform these checks in this order:
 
@@ -204,30 +231,59 @@ Output remains inactive, observation-only, authority none, enabled false and
 qualification unavailable. Do not add coverage, freshness, enablement, provider
 or publication fields reserved for #544.
 
+Update the existing declaration-only compatibility assertion deliberately. Its
+two legacy records and empty bundle root now produce reason ids containing
+`scope.eval-failing` and `scope.sandbox-receipt-missing` in the policy's canonical
+order. Preserve its exact per-case identity and gate relations, unavailable
+qualification, absent proposal, inactive output, authority `none`, and disabled
+state. The test must still fail on malformed input or a changed relation. Do not
+accept `E_USAGE`, omit the test, synthesize a receipt, or retain the old one-reason
+expectation.
+
 ## Same-contract controlled-origin fixture
 
 The positive origin case must exercise the production consumer checks. It may not
 patch metadata functions, replace `ANCHOR`, copy an origin document or run writer
 and reader as one uid.
 
-On a disposable Linux CI runner, and on the required disposable Mac evidence
-host, the scope test uses passwordless `/usr/bin/sudo -n` to create one unique
-writer account, one distinct consumer account and one consumer group. It first
-refuses if the fixed anchor already exists. Root creates the physical fixed anchor
-and root-owned package/config/identity files with their production modes. The
-config names the writer uid, consumer gid, unique store/work roots and the
-reviewed package bytes. The disposable registry and accepted-set fixture bytes are
-installed through that root-owned package; they do not alter tracked production
-files.
+Use one fixed private test harness from
+`scripts/test/scope-qualification.test.sh`. It loads the reviewed physical
+`sandbox/v1/host-supervisor.py` from the root-owned fixture package, verifies that
+file and package before and after use, and calls only its real
+`check_store_root`, `create_attempt_dir`, `write_payload` and
+`write_receipt_file` functions. It has no public command, launch path, VM call,
+callback or substitute storage predicate. The writer subprocess runs as the
+dedicated non-root writer and supplies the exact canonical stdout, stderr,
+evidence manifest, evidence file and synthetic completed receipt built by the
+fixed fixture. These run facts prove this storage and consumer contract only;
+they do not claim a VM launch or native environment qualification.
 
-Run the existing fixed host-supervisor store writer as the writer account to
-create the exact bounded attempt. Run the real scope evaluator as the consumer
-account, whose only access is the read-only group. The bundle and source Git
-snapshot live outside the controlled store. Assert actual uid/gid, mode, platform
-ACL, link, no-follow, held-descriptor, fresh-origin and `check-bound` success.
-Then prove the consumer cannot create, replace, rename, chmod, link or remove a
-store object. Root cleanup removes only the uniquely named fixture after every
-case; cleanup failure fails the suite. No production anchor may be overwritten.
+The harness calls `check_store_root` first and retains its returned store fd. It
+then calls `create_attempt_dir` exactly once, `write_payload` once, and
+`write_receipt_file` last. The real functions perform exclusive creation,
+`fchown`, `fchmod`, per-file and per-directory `fsync`, fixed inventory writes and
+the final store-root `fsync`. Because `write_receipt_file` closes `attempt_fd`,
+the harness transfers that fd's ownership before the call and never closes or
+uses it again; it closes the retained `store_fd` exactly once in all exits. The
+consumer starts only after the writer has exited and the parent has rechecked the
+closed attempt. No sibling attempt may be created after acquisition begins.
+
+On an ordinary disposable Linux CI runner, the existing test job may use its
+already available noninteractive sudo to create one unique writer account, one
+distinct consumer account and one consumer group for this test. It first refuses
+if the fixed anchor exists. Root creates the anchor, reviewed package,
+configuration, fixture registry/accepted bytes and unique store/work roots with
+the production ownership and modes. The writer belongs to the consumer group;
+the consumer remains a different uid with read-only group access. Cleanup is
+trap-owned, removes only the unique fixture identities and paths, and fails the
+test if any account, group or object remains. No workflow edit or new CI
+permission is required.
+
+Run the real scope evaluator as the consumer account. The bundle and actual bare
+Git snapshot live outside the controlled store. Assert actual uid/gid, mode,
+platform ACL, link, no-follow, held-descriptor, fresh-origin and `check-bound`
+success. Then prove the consumer cannot create, replace, rename, chmod, link or
+remove a store object. No production anchor may be overwritten.
 
 Use the same setup for paired negatives: caller-created store copy, same bytes
 under the wrong owner or store id, writer/consumer uid collapse, missing group,
@@ -238,9 +294,16 @@ and ACL command output with the test evidence. Fixture native-qualified entries
 prove only this closed consumer path; they never claim CPU/wall proof, VM
 qualification or a production identity.
 
-If either platform cannot provide distinct principals, real ACLs or noninteractive
-root setup, stop G3 as blocked. Do not replace this case with mocks, same-uid files,
-permanent refusal or a skipped positive.
+Prepare the same fixed harness and cases for macOS, including the concrete Darwin
+runner owner above. Run them only on a verified disposable evidence host whose
+owner has separately authorized noninteractive root setup, account/group lifecycle
+and the fixed anchor. This plan does not authorize the current development Mac,
+create that environment, install a runtime, add a user/group, write the anchor or
+change host permissions. Reuse only an already available physical runtime and
+dependency closure; do not download or install one. Until such a host and authority
+are verified, keep the macOS real-principal positive and G3 blocked while ordinary
+code and tests may be prepared. Do not replace either platform's proof with mocks,
+same-uid files, copied origin, permanent refusal or a skipped positive.
 
 ## Proof and completion
 
@@ -260,6 +323,9 @@ Add focused cases for every spec R6 item. Besides the real fixture above, cover:
 - fixed Git command rejection, config/replace/alternate/shallow/promisor drift,
   bundle/Git races, child timeout/signal/nonzero/malformed output and exact reap;
   no target write, network, credential, producer or publisher call.
+- the existing self-host compatibility harness with its empty legacy bundle root,
+  real bare Git snapshot, nine arguments, both intentional refusal reasons and
+  unchanged identity, relation, qualification and inactive-output assertions.
 
 Preserve existing byte-for-byte outputs where the new authenticity requirement
 does not intentionally change the result. Update docs with the exact nine-argument
@@ -272,6 +338,7 @@ On the final implementation head, run and retain complete output for:
 ```sh
 bash scripts/test/scope-qualification.test.sh
 bash scripts/test/shadow-enforced.test.sh
+bash scripts/test/shadow-self-host-evidence.test.sh
 bash scripts/test/shadow-write.test.sh
 bash scripts/test/sandbox-receipt.test.sh
 bash scripts/test/local-git-materializer.test.sh
