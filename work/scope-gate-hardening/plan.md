@@ -108,9 +108,48 @@ Use a clean fixed environment, closed descriptors, bounded stdout/stderr, a
 bounded runtime, one foreground child, and exact reap. The reader writes one
 canonical internal `scope_shadow_evidence_observation` to the exclusive `OUTPUT`.
 It never writes the bundle, store, Git repository, package or target. It reports
-measured refs and facts, not an authorization decision. The driver snapshots this
-file, passes it to `scope-gates.jq` as one fixed slurp input, and rechecks package,
-documents, both directory trees and the observation before emitting output.
+measured refs and facts, not an authorization decision.
+
+The existing reader control FIFOs carry a closed three-frame handshake. The reader
+writes exactly `READY\n` after `OUTPUT` is complete. The driver snapshots the
+observation, records its exact SHA-256, and runs `scope-gates.jq` once with that
+snapshot as the fixed slurp input. It validates and retains that evaluation but
+does not publish it. The driver then writes exactly `SEAL\n`. Any missing,
+partial, duplicate, reordered, oversized or trailing message, early EOF, timeout,
+signal, nonzero exit or reap error is `E_RUNTIME` and publishes no evaluation.
+
+On `SEAL`, keep the command ledger open while the reader rechecks the control
+FIFO, every held package/input/bundle/store/Git/identity descriptor, and the full
+anchor. These remain the existing real checks: a Darwin rule may make another
+fixed UUID call, and every such call appends its actual four-field command row.
+Only after this complete recheck succeeds may the reader atomically close ledger
+append. `record_command` refuses every call after closure. It also refuses before
+an append that would exceed 4,096 rows. Do not cache an ACL or UUID result, omit a
+fresh rule call, replace a full recheck with metadata-only work, or pre-record a
+command that did not run.
+
+After ledger closure, write one exclusive canonical `terminal.json` beside
+`OUTPUT`, bounded by the same one-MiB document limit. Its exact top-level fields
+are `schema_version`, `kind`, `id`, and `body`; kind is
+`scope_shadow_evidence_terminal`, id equals the observation id, and body has
+exactly `observation_sha256` and `commands`. The digest equals the exact retained
+observation bytes. `commands` is the complete final ledger with the original
+four-field row shape and original order. No fact, result, status, replacement
+observation or authorization field is allowed. Persist and close that file, then
+write exactly `COMMIT\n` and exit without another component, Git, ACL, UUID or
+group call. Closing already-held descriptors is the only work after commit.
+
+The driver requires `COMMIT`, the reader's successful exact reap and empty stderr
+before it opens the terminal file. It checks canonical bytes, exact closed shape,
+the one-MiB and 4,096-row caps, the retained observation digest, and each command
+row. The observation's original `commands` must be an exact ordered prefix of the
+terminal commands. The driver forms the unique final observation only by replacing
+that one array in its retained snapshot; deleting `body.commands` from both forms
+must produce byte-identical canonical documents. This structural check uses the
+existing fixed `jq_bin`; it does not run scope policy again or create a second
+evaluator or fact source. Recheck the package, seven documents, directory trees,
+retained observation bytes and terminal bytes. Only then may the driver publish
+the already validated original jq evaluation.
 
 Keep the existing driver error vocabulary. Bad invocation is `E_USAGE`; an input
 or output bound is `E_LIMIT`; malformed JSON is `E_PARSE` or `E_CANONICAL` as it
@@ -136,9 +175,10 @@ object database plus the physical `/usr/bin/git`; it exposes only the current
 config, `rev-parse`, `ls-tree` and `cat-file` operations with their existing output
 bounds. It records every fixed call in the caller's private ledger object.
 `write-shadow.py` passes its existing workspace ledger and retains its current
-`_Workspace.execute` rechecks. The scope reader supplies its own fixed ledger and
-rechecks it with the final observation. This is a concrete private interface, not
-a generic subprocess, workspace callback or unrecorded second Git implementation.
+`_Workspace.execute` rechecks. The scope reader supplies the live ledger that the
+terminal protocol closes after the full SEAL recheck. This is a concrete private
+interface, not a generic subprocess, workspace callback or unrecorded second Git
+implementation.
 
 Add a private bundle reader to `_consumer.py`. It opens a bundle directory and
 every listed file descriptor-relative with no-follow rules, one link, regular-file
@@ -401,6 +441,19 @@ Add focused cases for every spec R6 item. Besides the real fixture above, cover:
 - fixed Git command rejection, config/replace/alternate/shallow/promisor drift,
   bundle/Git races, child timeout/signal/nonzero/malformed output and exact reap;
   no target write, network, credential, producer or publisher call.
+- a real fixed-owner control in which the initial observation is READY, the
+  subsequent full SEAL recheck performs another actual Darwin UUID resolution,
+  and the terminal ledger contains that row exactly once after the original
+  command prefix. Keep every descriptor held through this check and prove the
+  original non-command observation bytes and original jq result do not change;
+- refusal before publication for missing, partial, duplicate, reordered or
+  trailing READY/SEAL/COMMIT frames; EOF, cancel, timeout, nonzero exit and reap
+  failure; absent, noncanonical, truncated, replaced or oversized terminal
+  bytes; wrong observation digest or id; removed/reordered/changed prefix rows;
+  malformed, duplicate or extra command fields; 4,097 rows; a late command after
+  closure; and terminal or held-object mutation through use. Pair the caps with
+  exact-limit successes, preserve the first failure, and prove no result bytes
+  appear before terminal validation and successful reader exit;
 - the complete existing 149-check shadow-enforced suite proving the shared Darwin
   owner keeps fixed UUID/group argv, original ledger entries, bounds, timeout,
   cancellation, signal cleanup and unique reap, with every other driver role
