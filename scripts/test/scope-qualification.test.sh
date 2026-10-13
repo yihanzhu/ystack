@@ -1912,7 +1912,7 @@ def bounded(value,depth=0):
 def foreground(frame):
  local=frame.f_locals;child=local.get('child')
  return {'argv':bounded(local.get('argv','absent')),
-  'result':bounded(local.get('result','absent')),
+  'wait_status':bounded(local.get('result','absent')),
   'child_returncode':getattr(child,'returncode','absent'),
   'outputs':bounded(local.get('outputs','absent')),
   'chunk':bounded(local.get('chunk','absent'))}
@@ -1920,32 +1920,61 @@ def foreground(frame):
 def observe(frame,event,arg):
  global observed,last_foreground
  if frame.f_code.co_filename not in sources:return observe
+ record=None
  try:
   if event=='return' and frame.f_code.co_name=='_foreground':
    last_foreground=foreground(frame)
+   last_foreground['normal_return']=isinstance(arg,bytes)
+   last_foreground['returned_bytes']=bounded(arg) if isinstance(arg,bytes) else 'absent'
   if event!='exception' or observed:return observe
   error=arg[1]
   if isinstance(error,(GeneratorExit,BlockingIOError)):return observe
+  def source(current):
+   return {'file':current.f_code.co_filename[:512],
+    'function':current.f_code.co_name[:128],'line':current.f_lineno}
+  caller=frame
+  for unused in range(16):
+   if caller.f_code.co_name not in ('require','_require') or caller.f_back is None:break
+   caller=caller.f_back
+  record={'exception':type(error).__name__[:128],'code':getattr(error,'code',None),
+   'errno':getattr(error,'errno',None),'first_source':source(frame),
+   'first_check_caller':source(caller),'truncated':False,'frames':[]}
+  def encoded():return (json.dumps(record,sort_keys=True,separators=(',',':'))+'\n').encode()
+  assert len(encoded())<=16384
   observed=True
-  record={'exception':type(error).__name__,'code':getattr(error,'code',None),
-   'errno':getattr(error,'errno',None),'message':str(error)[:512],
-   'initial_argv':initial,'effective_argv':effective,'last_foreground':last_foreground,
-   'namespace':'actual root-owned package; runpy original reader; diagnostic initial wrapper'}
-  frames=[];current=frame
-  while current is not None and len(frames)<16:
-   local=current.f_locals;item=local.get('self')
-   row={'file':current.f_code.co_filename,'function':current.f_code.co_name,
-    'line':current.f_lineno,'locals':{name:bounded(value) for name,value in
-      list(local.items())[:12] if name not in ('self','__builtins__')}}
-   if current.f_code.co_name=='_foreground':row['foreground']=foreground(current)
-   if hasattr(item,'commands'):row['last_commands']=bounded(item.commands[-2:])
-   frames.append(row);current=current.f_back
-  record['frames']=frames
-  raw=(json.dumps(record,sort_keys=True,separators=(',',':'))+'\n').encode()
-  if len(raw)>16384:raw=b'{"observer_error":"record exceeds16KiB"}\n'
-  if fd is not None and os.write(fd,raw)!=len(raw):raise OSError('short diagnostic write')
- except BaseException:
-  pass
+  def add(target,key,value):
+   target[key]=value
+   if len(encoded())>16384:
+    del target[key];record['truncated']=True
+  add(record,'message',str(error)[:512])
+  add(record,'initial_argv',initial);add(record,'effective_argv',effective)
+  add(record,'last_foreground',last_foreground)
+  current=frame
+  while current is not None and len(record['frames'])<16:
+   local=current.f_locals;item=local.get('self');row=source(current)
+   record['frames'].append(row)
+   if len(encoded())>16384:
+    record['frames'].pop();record['truncated']=True;break
+   row['locals']={}
+   for name,value in list(local.items())[:12]:
+    if name not in ('self','__builtins__'):add(row['locals'],name,bounded(value))
+   if current.f_code.co_name=='_foreground':add(row,'foreground',foreground(current))
+   if hasattr(item,'commands'):add(row,'last_commands',bounded(item.commands[-2:]))
+   current=current.f_back
+  if current is not None:record['truncated']=True
+ except BaseException as diagnostic_error:
+  if record is not None:
+   record['truncated']=True
+   record['observer_error']=type(diagnostic_error).__name__[:128]
+ finally:
+  if record is not None and fd is not None:
+   try:
+    raw=(json.dumps(record,sort_keys=True,separators=(',',':'))+'\n').encode()
+    if len(raw)>16384:
+     raw=(json.dumps({key:record[key] for key in ('exception','code','errno',
+      'first_source','first_check_caller')}|{'truncated':True},sort_keys=True)+'\n').encode()
+    if os.write(fd,raw)!=len(raw):raise OSError('short diagnostic write')
+   except BaseException:pass
  return observe
 sys.argv=effective;sys.settrace(observe)
 try:runpy.run_path(str(reader),run_name='__main__')
@@ -2022,14 +2051,20 @@ def run(argv,raw=None,role=None,component=None,limit=16*1024*1024):
    assert not errors,errors
  print(json.dumps({'fixture_command':argv,'returncode':r.returncode,'stdout_sha256':sha(r.stdout),'stderr':r.stderr.decode('utf8','backslashreplace')},sort_keys=True),flush=True)
  if observer is not None:
-  for diagnostic_file in sorted(scope_diagnostic_directory.iterdir()):
-   cap=16384 if diagnostic_file.name.startswith('trace-') else 65536
-   with diagnostic_file.open('rb') as stream:diagnostic_raw=stream.read(cap+1)
-   print(json.dumps({'actual_scope_diagnostic':diagnostic_file.name,
-    'raw_utf8':diagnostic_raw[:cap].decode('utf8','backslashreplace'),
-    'exceeds_cap':len(diagnostic_raw)>cap,'empty':not diagnostic_raw,
-    'missing':diagnostic_file.name.endswith('.missing'),
-    'original_returncode':r.returncode},sort_keys=True),flush=True)
+  try:
+   for diagnostic_file in sorted(scope_diagnostic_directory.iterdir()):
+    cap=16384 if diagnostic_file.name.startswith('trace-') else 65536
+    with diagnostic_file.open('rb') as stream:diagnostic_raw=stream.read(cap+1)
+    print(json.dumps({'actual_scope_diagnostic':diagnostic_file.name,
+     'raw_utf8':diagnostic_raw[:cap].decode('utf8','backslashreplace'),
+     'exceeds_cap':len(diagnostic_raw)>cap,'empty':not diagnostic_raw,
+     'missing':diagnostic_file.name.endswith('.missing'),
+     'original_returncode':r.returncode},sort_keys=True),flush=True)
+  except BaseException as diagnostic_error:
+   try:
+    print(json.dumps({'observer_error':type(diagnostic_error).__name__[:128],
+     'original_returncode':r.returncode},sort_keys=True),flush=True)
+   except BaseException:pass
  if observer is not None:
   print(json.dumps({'actual_scope_stdout_utf8':r.stdout.decode('utf8','backslashreplace')},sort_keys=True),flush=True)
  assert r.returncode==0 and len(r.stdout)<=limit and not r.stderr
