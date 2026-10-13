@@ -44,28 +44,30 @@ evidence only. It does not enable a scope or grant write authority.
    disabled. It derives commits, trees, parents, paths, modes, and blobs itself.
    A supplied list of those facts is not evidence.
 6. Forge facts use one closed consumer input, `coverage-observation-bundle.v1`.
-   Its held directory contains exactly `coverage-request.json`,
-   `coverage-expectation.json`, `coverage-observation.json`,
-   `sandbox-evaluation.json`, `sandbox-receipt.json`, `sandbox-check.json`,
-   `origin-observation.json`, and `bundle.json`. The marker lists those seven
-   preceding files by sorted name, size, and SHA-256. The fixed receipt checker
-   and controlled-storage origin check must authenticate the same attempt,
-   request, expectation, observer executable identity, payload bytes, store, and
-   result. The evaluator package has one fixed
-   `coverage-observer-identity.json` slot. It is absent or one canonical document
-   whose body has exactly `observer_id`, `environment_id`, `executable_ref`,
-   `registry_entry_ref`, and `accepted_identity_ref`. All refs resolve to current
-   package bytes and the existing accepted registry boundaries. Caller documents
-   cannot add, replace, or qualify that identity.
-7. The request envelope has exactly `schema_version`, `kind`, `id`, and `body`.
-   Its body has exactly `repository_id`, `observer_identity_ref`,
-   `coverage_base`, `evaluated_revision`, `default_branch`,
-   `qualifying_observation_ref`, and `git_snapshot_ref`. The qualifying-base
-   request uses null for its own prior observation ref; later requests use the
-   complete ref to that unchanged qualifying observation. The observation uses
-   the same envelope and its body has exactly those seven request fields plus
-   `request_ref`, `observed_at`, `first_parent_interval`, `publisher_merges`,
-   `protected_workflow_paths`, and `branch_rule_history`. The interval has exactly
+   Its held directory contains exactly `coverage-query.json`,
+   `coverage-observation.json`, `sandbox-request.json`,
+   `sandbox-expectation.json`, `sandbox-evaluation.json`,
+   `sandbox-receipt.json`, `sandbox-check.json`,
+   `verifier-observation.json`, `origin-observation.json`,
+   `preparation-record.json`, `preparation-manifest.json`,
+   `payload-stdout.txt`, `payload-stderr.txt`, `evidence-manifest.json`,
+   `payload-evidence-0000.json`, and `bundle.json`. The marker lists the preceding
+   15 files by sorted name, size, and SHA-256. There is no second receipt or
+   identity format. The marker is schema 1, kind `scope_coverage_bundle`; its body
+   has exactly `activation_state:"inactive"`,
+   `contract_version:"coverage-observation-bundle.v1"`, `query_sha256`, and
+   `files`.
+7. `coverage-query.json` has the standard four-field envelope, schema 1, and kind
+   `scope_coverage_query`. Its body has
+   exactly `repository_id`, `coverage_base`, `evaluated_revision`,
+   `default_branch`, `qualifying_observation_ref`, and `git_snapshot_ref`. The
+   qualifying-base query uses null for its own prior observation ref; later
+   queries use the complete ref to that unchanged qualifying observation. The
+   coverage observation uses schema 1 and kind `scope_coverage_observation` in the
+   same envelope. Its body has exactly those six query fields plus `query_ref`,
+   `observed_at`, `first_parent_interval`, `publisher_merges`,
+   `protected_workflow_paths`, and `branch_rule_history`.
+   The interval has exactly
    `base`, `tip`, and `commits`; each ordered commit row has exactly `commit_id`,
    `parent_id`, and `tree_id`. Each publisher row has exactly `repository_id`,
    `scope_id`, `branch`, `pull_request_id`, `head_commit`, `base_commit`,
@@ -78,21 +80,46 @@ evidence only. It does not enable a scope or grant write authority.
    Thus A-to-B-to-A is a change even when endpoint digests match. Receipt payload
    digests and the held marker bind these raw bytes to the authenticated observer
    attempt.
-8. Qualification at the exact base uses child-5 Git source facts plus an
+8. The existing sandbox receipt contract authenticates that attempt without new
+   checker behavior. The fixed observer is
+   `tool.scope-coverage-observer.v1` in the package-selected exact environment
+   `environment.scope-coverage-observer.v1`; its current registry entry must be
+   unique and `native-qualified`, and its accepted entry must be unique. Its
+   executable digest is the existing `verifier` identity:
+   `verifier-observation.json`, `sandbox-evaluation.json`, the receipt's observed
+   verifier identity, and that accepted entry must match as `check-bound` already
+   requires. The launch subject's `environment_id`, entry digest, repository id,
+   source commit/tree, candidate commit/tree, preparation record and manifest
+   digests, and `incident_sha256` bind respectively to that environment, the
+   query repository, base, R, the two held preparation files, and the raw
+   `coverage-query.json`. The consumer rebuilds the one fixed observer instruction
+   from the tool id and held query and requires its digest in the launch request.
+   Expectation and receipt repeat that exact subject and attempt; expectation
+   binds the raw launch request. Receipt control fields bind
+   the existing fixed policy, decision, policy set, evaluator, and actual sandbox
+   evaluation. Receipt payload fields bind `payload-stdout.txt` byte-for-byte to
+   `coverage-observation.json`, empty `payload-stderr.txt`, and the exact one-item
+   evidence manifest. That manifest names `payload-evidence-0000.json` with the
+   same observation bytes, size, and digest. The fresh controlled-storage origin
+   recheck binds the same
+   store and attempt. Only a valid, satisfied `check-bound` output admits those
+   bytes. Caller-authored JSON or equal digests outside that held attempt do not.
+9. Qualification at the exact base uses child-5 Git source facts plus an
    authenticated qualifying coverage observation for that base. A later R uses
    that unchanged qualifying observation plus a current observation whose request
    starts from it. The fixed Git reader must independently derive the same commit
    interval, trees, protected paths, and snapshot binding. A gap, duplicate,
    reordered row, cursor discontinuity, truncation, or disagreement refuses.
-9. The evaluator does not implement or qualify the observer. The production
-   accepted slot is empty today. Missing, unqualified, stale, malformed, or
-   differently bound observations refuse. Fixtures use the same directory,
-   schema, checker, origin, and identity lookup with one identity pinned only in a
-   private fixture package; they do not use a `trusted` or `qualified` switch.
-10. The evaluator reads the host UTC clock once for the age check and records that
+10. The evaluator does not implement or qualify the observer. No production
+   environment and verifier identity for this role are accepted today. Missing,
+   unqualified, stale, malformed, or differently bound observations refuse.
+   Fixtures use the same directory, schema, checker, origin, registry and accepted
+   identity lookup with one identity pinned only in a private fixture package;
+   they do not use a `trusted` or `qualified` switch.
+11. The evaluator reads the host UTC clock once for the age check and records that
    value in its output. The time is not accepted from an input document. A clock
    read failure, invalid UTC value, or apparent future qualifying evidence refuses.
-11. No input boolean or label such as `checked`, `trusted`, `native-qualified`, or
+12. No input boolean or label such as `checked`, `trusted`, `native-qualified`, or
    `verified` substitutes for these source checks. Equal digests, a pull request's
    existence, or well-shaped JSON also do not establish provenance on their own.
 
@@ -220,7 +247,7 @@ evidence only. It does not enable a scope or grant write authority.
    bundle it is the inner reproduction receipt, never the outer write attempt.
    Reopening, copying, origin rechecking, or producing a current coverage
    observation cannot refresh it. The evaluator subtracts that authenticated UTC
-   instant from its one R1.10 clock read. Age equal to exactly 30 times 24 times
+   instant from its one R1.11 clock read. Age equal to exactly 30 times 24 times
    60 times 60 seconds is accepted. A greater age, negative age, future or invalid
    timestamp, or a time inconsistent with the checked original receipt refuses.
 10. A coverage-identity change, history rewrite, non-descendant revision, foreign
@@ -291,8 +318,9 @@ evidence only. It does not enable a scope or grant write authority.
    observation. A write fixture with different inner and outer receipt times uses
    only the inner reproduction `terminated_at`.
 6. Development uses disposable repositories and the one closed fixture coverage
-   contract. Tests show that the production package's empty observer slot and
-   accepted set, `unproven` registry entries, and CPU/wall gaps all refuse. No
+   contract. Tests show that the production package's absent accepted observer
+   identity, empty accepted set, `unproven` registry entries, and CPU/wall gaps
+   all refuse. No
    fixture identity or byte may enter production package data.
 7. Run the complete scope qualification suite, child-5 consumer and write suites,
    sandbox receipt suite, materializer and fixed digest suites, relevant schema and
