@@ -78,14 +78,18 @@ For the existing declaration-only compatibility case in
 That case has two real legacy records, so an empty root is its only legal layout;
 it must not manufacture a completed child-5 bundle.
 
-`SOURCE_GIT_DIR` is one held bare object database for the scope's target. All
-records and the scope must name the same repository id, hash algorithm and exact
-target commit before the reader uses it. The locator does not prove a repository
-id. Git object hashes and the record/scope relations prove the exact bytes used by
-this inactive evaluation.
+`SOURCE_GIT_DIR` is one held bare object database for the scope's target. The scope
+and every record eligible to contribute must name its repository id, hash
+algorithm and exact target commit. A referenced legacy record for another
+revision or identity remains readable but is never eligible and creates no Git
+prerequisite. The locator does not prove a repository id. Git object hashes and
+the eligible record/scope relations prove the exact bytes used by this inactive
+evaluation.
 The compatibility test creates a real bare snapshot for its own target repository
-and commit, with the same object format and tree as the record revision. It passes
-that directory as `SOURCE_GIT_DIR`; an empty or invented Git locator is forbidden.
+and the commit selected by the current scope case, with the same object format and
+tree as that eligible record. It passes that directory as `SOURCE_GIT_DIR`; an
+empty or invented Git locator is forbidden. The unselected legacy record does not
+require its historical commit to be present in this snapshot.
 
 The driver snapshots its own package files and the seven documents first. It then
 runs the physical current Python as:
@@ -160,7 +164,25 @@ private owner's two closed methods. All other driver roles, request handling,
 ledger rows, timeouts, cancellation, signal cleanup and reap behavior remain byte-
 for-byte compatible at their public boundaries.
 
-For each completed bundle, perform these checks in this order:
+Separate record readability from qualification eligibility before opening any
+bundle. Resolve every scope ref to exactly one canonical record in `SHADOW_SET`,
+verify its digest, closed record form and bounded set membership, and retain a
+reporting row for it. A record is eligible only when its target repository id,
+target hash algorithm, exact target commit and complete qualified identity equal
+the current scope. Apply the existing required-environment selection only to these
+eligible rows. Duplicate eligible rows, missing required environments or extra
+eligible identities keep their existing refusal behavior.
+
+A shape-valid legacy row that fails this eligibility comparison remains readable
+and appears in the observation as noncontributing. It has no bundle, origin,
+receipt, native identity, Git or qualification effect. Never rewrite or drop its
+raw record, infer facts from it, or let it satisfy a required environment. A
+claimed enforced or write row can contribute only after every bundle,
+controlled-store, checker, native, current-Git and record relation below passes;
+provided JSON, a matching digest or the bare locator alone never makes it eligible
+or authentic.
+
+For each eligible completed bundle, perform these checks in this order:
 
 1. Match the raw `shadow-record.json` to the record selected by its directory
    digest. Dispatch only legacy, `enforced-reproduction.v1`, and
@@ -206,11 +228,14 @@ write, require the complete outer inventory, changed materialization and the exa
 write object. A missing, extra or cross-form field is malformed; it never falls
 back to another form.
 
-Derive source and candidate facts from `SOURCE_GIT_DIR`. Read the source commit,
-candidate commit and trees with the shared fixed Git primitive. Require the
-candidate's sole parent to be the source commit. Compare repository, algorithm,
-commit and tree ids with the incident, qualified identity, materializer response,
-preparation records, publisher request and post-write verification.
+For each eligible enforced or write record, derive source and candidate facts from
+`SOURCE_GIT_DIR`. Read the current source commit, candidate commit and trees with
+the shared fixed Git primitive. Require the source commit to equal the scope's
+exact revision and the candidate's sole parent to be that source commit. Compare
+repository, algorithm, commit and tree ids with the incident, qualified identity,
+materializer response, preparation records, publisher request and post-write
+verification. A noneligible legacy row neither invokes Git nor supplies one of
+these comparisons.
 
 For a withheld write, reconstruct the exact 32 files from held bundle bytes plus
 the deterministic seed and README rules already used by child 5. Recompute each
@@ -231,6 +256,9 @@ caller boolean selects the class.
 
 `scope-gates.jq` consumes only the reader's closed observation. It keeps every
 unchanged risk, path, eval, kill, duty, mode, identity and proposal predicate.
+It computes required-environment and qualification results only from rows marked
+eligible by the field-for-field comparison above and fully authenticated by the
+reader. Reporting rows remain visible but cannot enter those predicates.
 Add the new reason only when a required environment has no one complete authentic
 bundle. Structural ambiguity or a failed fixed relation stays a closed error.
 Output remains inactive, observation-only, authority none, enabled false and
@@ -242,9 +270,17 @@ two legacy records and empty bundle root now produce reason ids containing
 `scope.eval-failing` and `scope.sandbox-receipt-missing` in the policy's canonical
 order. Preserve its exact per-case identity and gate relations, unavailable
 qualification, absent proposal, inactive output, authority `none`, and disabled
-state. The test must still fail on malformed input or a changed relation. Do not
-accept `E_USAGE`, omit the test, synthesize a receipt, or retain the old one-reason
-expectation.
+state. Run both the pre and post scope case for each retained record group. Across
+the two groups this exercises the four actual commits
+`d3f6d525328838b9c2de819699e53d8909ab7a3f`,
+`0427390224c25147650f1bd3b6e43ed6911b97a7`,
+`413a2f02a46ababa987039be65089e95c1916765`, and
+`e7da8f7b8f88c2a9cb4670dc453c5223a9c2d15e`. In each evaluation the selected row
+is eligible for that scope case; the other real legacy row remains readable and
+reported but noncontributing. The test must still fail on malformed input, a
+changed selected relation or an attempt to make the other row contribute. Do not
+accept `E_USAGE`, omit or rewrite a record, synthesize a receipt, or retain the old
+one-reason expectation.
 
 ## Same-contract controlled-origin fixture
 
@@ -318,6 +354,9 @@ Add focused cases for every spec R6 item. Besides the real fixture above, cover:
 - all three forms; exact inventories; missing/extra/early marker; swapped bundle
   directories; copied origin; fixed-package drift; stale descriptors; wrong
   attempt, candidate, environment, policy, payload, store and checker bytes;
+- readable noneligible legacy rows at another revision and identity; unchanged
+  reporting order and refs; attempts to count, authenticate through, or derive Git
+  facts from such a row refuse without dropping or rewriting it;
 - every required environment; absent, duplicate, foreign, unproven and forged
   registry/accepted rows; recomputed JSON digests do not create trust;
 - the legal fixed write pair with no-change and withheld-write; both partial and
@@ -333,7 +372,8 @@ Add focused cases for every spec R6 item. Besides the real fixture above, cover:
   fixed UUID/group argv, original ledger entries, bounds, timeout, cancellation,
   signal cleanup and unique reap, with every other driver role unchanged;
 - the existing self-host compatibility harness with its empty legacy bundle root,
-  real bare Git snapshot, nine arguments, both intentional refusal reasons and
+  four real pre/post commits, per-case bare Git snapshot, nine arguments, both
+  intentional refusal reasons, the other row reported but noncontributing, and
   unchanged identity, relation, qualification and inactive-output assertions.
 
 Preserve existing byte-for-byte outputs where the new authenticity requirement
