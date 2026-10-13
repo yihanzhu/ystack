@@ -2251,16 +2251,328 @@ pass 'finding 5: a duplicate stdout record, an unknown record name, or a missing
 
 # Finding 6 [P2]: export consumption gated on confirmed termination.
 n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
-printf '%s' '{"hang_after_export":true}' > "$scenario_path"
 build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
-status=0
-YSTACK_TEST_HARDSTOP_MS=100 YSTACK_TEST_SIGKILL_MS=200 YSTACK_TEST_POLL_INTERVAL_MS=20 \
-  run_launch "$base/pkg-scn.json" || status=$?
-[ "$status" -eq 0 ] || fail "finding 6: expected exit 0, got $status ($(cat "$base/err"))"
-cpu_obs=$("$jq_bin" -r '.body.limits.cpu_time_ms.observation' "$store_root/$attempt_id/receipt.json")
-tree_terminated=$("$jq_bin" -r '.body.teardown.tree_terminated' "$store_root/$attempt_id/receipt.json")
-[ "$tree_terminated" = false ] && [ "$cpu_obs" = unavailable ] ||
-  fail "finding 6: expected teardown.tree_terminated false and every guest row unavailable (a valid, complete export sitting on disk must never be read/trusted without a confirmed stop), got $tree_terminated/$cpu_obs"
+cat > "$base/export-stop.py" <<'PY_EXPORT_STOP'
+import hashlib
+import json
+import os
+import re
+import signal
+import stat
+import subprocess
+import sys
+import time
+import uuid
+
+base, install, store, attempt, vfkit = sys.argv[1:]
+phase_attempt = attempt + "." + uuid.uuid4().hex
+phase_path = os.path.join(base, "export-phase-" + phase_attempt)
+scenario_path = os.path.join(base, "scenario-export-phase.json")
+
+
+def canonical(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def unique_pairs(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate phase key")
+        result[key] = value
+    return result
+
+
+def read_phase(path, expected_attempt, expected_frame=None):
+    try:
+        before = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISREG(before.st_mode):
+        raise ValueError("nonregular phase")
+    # The publisher's link-then-unlink window is pending, never accepted.
+    if before.st_nlink != 1:
+        return None
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as fh:
+        opened = os.fstat(fh.fileno())
+        if ((before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino)
+                or not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1
+                or not 0 < opened.st_size <= 512):
+            raise ValueError("invalid phase file")
+        raw = fh.read(512)
+        after = os.fstat(fh.fileno())
+        if (len(raw) != opened.st_size or after.st_size != opened.st_size
+                or after.st_mtime_ns != opened.st_mtime_ns or after.st_nlink != 1):
+            raise ValueError("phase changed during read")
+    final = os.lstat(path)
+    if ((final.st_dev, final.st_ino) != (opened.st_dev, opened.st_ino)
+            or final.st_nlink != 1 or final.st_size != opened.st_size):
+        raise ValueError("phase publication changed")
+    record = json.loads(raw.decode("utf-8"), object_pairs_hook=unique_pairs)
+    keys = {"schema_version", "attempt_id", "phase", "frame_size", "frame_sha256"}
+    if (not isinstance(record, dict) or set(record) != keys
+            or canonical(record) != raw
+            or type(record["schema_version"]) is not int or record["schema_version"] != 1
+            or record["attempt_id"] != expected_attempt
+            or record["phase"] != "export-written-closed"
+            or type(record["frame_size"]) is not int
+            or not 0 < record["frame_size"] <= 64 * 1024 * 1024
+            or not isinstance(record["frame_sha256"], str)
+            or re.fullmatch(r"[0-9a-f]{64}", record["frame_sha256"]) is None):
+        raise ValueError("invalid phase record")
+    if expected_frame is not None and (
+            record["frame_size"] != len(expected_frame)
+            or record["frame_sha256"] != hashlib.sha256(expected_frame).hexdigest()):
+        raise ValueError("wrong phase frame")
+    return record
+
+
+known_frame = b"closed-negative-control"
+known = {"schema_version": 1, "attempt_id": phase_attempt,
+         "phase": "export-written-closed", "frame_size": len(known_frame),
+         "frame_sha256": hashlib.sha256(known_frame).hexdigest()}
+negative_path = phase_path + ".negative"
+assert read_phase(negative_path, phase_attempt, known_frame) is None
+negative_bytes = [b"", b"{", b"\xff", canonical(known) + b" ",
+                  canonical(known) + b" " * 512,
+                  canonical(known).replace(b'"schema_version":1',
+                                           b'"schema_version":1,"schema_version":1')]
+for key, value in (("attempt_id", "wrong"), ("extra", 1), ("phase", "before-close"),
+                   ("frame_size", 0), ("frame_size", True), ("frame_size", 67108865),
+                   ("frame_size", 1), ("frame_sha256", "0" * 64),
+                   ("frame_sha256", "A" * 64), ("schema_version", True)):
+    negative_bytes.append(canonical(dict(known, **{key: value})))
+negative_bytes.append(canonical({key: value for key, value in known.items()
+                                 if key != "frame_size"}))
+for raw in negative_bytes:
+    with open(negative_path, "wb") as fh:
+        fh.write(raw)
+    try:
+        read_phase(negative_path, phase_attempt, known_frame)
+    except (ValueError, UnicodeError):
+        pass
+    else:
+        raise AssertionError("phase negative accepted")
+os.unlink(negative_path)
+for kind in ("symlink", "directory", "fifo", "multilink"):
+    if kind == "symlink":
+        os.symlink(scenario_path, negative_path)
+    elif kind == "directory":
+        os.mkdir(negative_path)
+    elif kind == "fifo":
+        os.mkfifo(negative_path)
+    else:
+        with open(negative_path, "wb") as fh:
+            fh.write(canonical(known))
+        os.link(negative_path, negative_path + ".link")
+    try:
+        pending_deadline = time.monotonic() + 0.02
+        while time.monotonic() < pending_deadline:
+            assert read_phase(negative_path, phase_attempt, known_frame) is None
+    except ValueError:
+        pass
+    if kind == "directory":
+        os.rmdir(negative_path)
+    else:
+        os.unlink(negative_path)
+    if kind == "multilink":
+        os.unlink(negative_path + ".link")
+with open(negative_path, "wb") as fh:
+    fh.write(canonical(known))
+os.link(negative_path, negative_path + ".link")
+assert read_phase(negative_path, phase_attempt, known_frame) is None
+os.unlink(negative_path + ".link")
+assert read_phase(negative_path, phase_attempt, known_frame) == known
+os.unlink(negative_path)
+assert not os.path.lexists(phase_path) and not os.path.lexists(phase_path + ".staging")
+with open(scenario_path, "wb") as fh:
+    fh.write(canonical({"action": "no_export", "phase_record_path": phase_path,
+                        "attempt_id": phase_attempt}))
+negative_env = os.environ.copy()
+negative_env["YSTACK_FAKE_SCENARIO"] = scenario_path
+never_close = subprocess.run([vfkit, "run",
+                              phase_path + ".mailbox", phase_path + ".export",
+                              phase_path + ".input"], env=negative_env,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
+assert never_close.returncode == 0, never_close.stderr[:4096]
+assert read_phase(phase_path, phase_attempt) is None
+os.unlink(phase_path + ".mailbox")
+unread_output = "export-must-stay-unread"
+with open(scenario_path, "wb") as fh:
+    fh.write(canonical({"hardstop_writes_export": True, "hang_after_export": True,
+                        "phase_record_path": phase_path, "attempt_id": phase_attempt,
+                        "stdout": unread_output, "stderr": unread_output,
+                        "limit_overrides": {"output_bytes": {"observed": 2 * len(unread_output.encode())}}}))
+env = os.environ.copy()
+env["YSTACK_FAKE_SCENARIO"] = scenario_path
+assert "YSTACK_TEST_HARDSTOP_MS" not in env and "YSTACK_TEST_SIGKILL_MS" not in env
+child = None
+status = None
+failure = None
+wait_ceiling_breached = False
+started = time.monotonic()
+try:
+    with open(os.path.join(base, "pkg-scn.json"), "rb") as package, \
+            open(os.path.join(base, "out"), "wb") as out, \
+            open(os.path.join(base, "err"), "wb") as err:
+        child = subprocess.Popen([sys.executable, "host-supervisor.py", "launch"],
+                                 cwd=install, stdin=package, stdout=out, stderr=err, env=env)
+    deadline = time.monotonic() + 10
+    while True:
+        if child.poll() is not None:
+            raise AssertionError("launcher exited before post-close phase")
+        phase = read_phase(phase_path, phase_attempt)
+        if phase is not None:
+            print("export-stop post-close phase=%s launcher_pid=%s elapsed=%.3f" %
+                  (canonical(phase).decode(), child.pid, time.monotonic() - started), flush=True)
+            break
+        if time.monotonic() >= deadline:
+            raise AssertionError("post-close phase missing at deadline")
+        time.sleep(0.01)
+    child.send_signal(signal.SIGTERM)
+    status = child.wait(timeout=65)
+    assert status == 0, "launcher status %s" % status
+    with open(os.path.join(store, attempt, "receipt.json"), "rb") as fh:
+        receipt = json.load(fh)["body"]
+    assert receipt["teardown"]["tree_terminated"] is False
+    for name in ("cpu_time_ms", "memory_bytes", "output_bytes", "process_count", "scratch_bytes"):
+        assert receipt["limits"][name]["observation"] == "unavailable", name
+        assert receipt["limits"][name]["observed"] is None, name
+    assert receipt["lifecycle"]["runtime"] == "error"
+    assert receipt["payload"]["exit_state"] == "not-started"
+    assert receipt["payload"]["exit_code"] is None
+    for name in ("stdout", "stderr"):
+        assert receipt["payload"][name + "_sha256"] == hashlib.sha256(b"").hexdigest()
+        with open(os.path.join(store, attempt, "payload", name), "rb") as fh:
+            assert fh.read(1) == b"", name
+except subprocess.TimeoutExpired as exc:
+    failure = exc
+    wait_ceiling_breached = True
+except Exception as exc:
+    failure = exc
+finally:
+    if child is not None and child.poll() is None:
+        if not wait_ceiling_breached:
+            child.send_signal(signal.SIGTERM)
+            try:
+                status = child.wait(timeout=65)
+            except subprocess.TimeoutExpired:
+                wait_ceiling_breached = True
+        if wait_ceiling_breached:
+            child.kill()
+            try:
+                status = child.wait(timeout=5)
+            except subprocess.TimeoutExpired as exc:
+                failure = exc
+            failure = failure or AssertionError("owned launcher wait exceeded ceiling")
+    if child is not None and status is None:
+        status = child.returncode
+    if failure is not None:
+        print("export-stop failure attempt=%s launcher_pid=%s status=%s elapsed=%.3f error=%r" %
+              (phase_attempt, child.pid if child else None, status,
+               time.monotonic() - started, failure), file=sys.stderr)
+        for label, path, cap in (("phase", phase_path, 512),
+                                 ("receipt", os.path.join(store, attempt, "receipt.json"), 16384),
+                                 ("stderr", os.path.join(base, "err"), 4096)):
+            try:
+                before = os.lstat(path)
+                if not stat.S_ISREG(before.st_mode):
+                    raise OSError("nonregular diagnostic file")
+                fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                with os.fdopen(fd, "rb") as fh:
+                    opened = os.fstat(fh.fileno())
+                    if (not stat.S_ISREG(opened.st_mode)
+                            or (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino)):
+                        raise OSError("diagnostic file changed")
+                    raw = fh.read(cap)
+            except OSError as exc:
+                raw = repr(exc).encode()
+            print("%s=%r" % (label, raw), file=sys.stderr)
+if failure is not None:
+    raise failure
+print("export-stop phase verified; owned launcher reaped status=%s elapsed=%.3f; closed negatives passed" %
+      (status, time.monotonic() - started))
+PY_EXPORT_STOP
+"$python" - "$base" "$base/export-stop.py" "$vfkit_path" <<'PY_EXPORT_FAILURES'
+import importlib.util
+import json
+import os
+import signal
+import subprocess
+import sys
+import time
+import uuid
+
+base, helper, vfkit = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("hs", os.environ["YSTACK_HOST_SUPERVISOR"])
+hs = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(hs)
+invalid = os.path.join(base, "invalid-export-" + uuid.uuid4().hex)
+with open(invalid + ".input", "xb") as fh:
+    fh.write(hs.frame_write([(b"plan.json", b"{}")]))
+with open(invalid + ".export", "xb") as fh:
+    fh.write(b"\0" * 4096)
+with open(invalid + ".scenario", "x") as fh:
+    json.dump({"phase_record_path": invalid + ".phase", "attempt_id": "invalid." + uuid.uuid4().hex,
+               "stdout": "export-must-stay-unread", "stderr": "export-must-stay-unread"}, fh)
+env = os.environ.copy()
+env["YSTACK_FAKE_SCENARIO"] = invalid + ".scenario"
+with open(invalid + ".out", "xb") as out, open(invalid + ".err", "xb") as err:
+    producer = subprocess.Popen([sys.executable, vfkit, "run", invalid + ".mailbox",
+                                 invalid + ".export", invalid + ".input"],
+                                stdout=out, stderr=err, env=env)
+    try:
+        producer_status = producer.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        producer.kill()
+        producer.wait(timeout=5)
+        raise
+assert producer_status == 1
+assert not os.path.lexists(invalid + ".phase") and not os.path.lexists(invalid + ".phase.staging")
+with open(invalid + ".err", "rb") as fh:
+    producer_error = fh.read(4096)
+    assert b"invalid export phase report" in producer_error
+print("export-stop invalid46-versus0 report: producer exit1; no marker; stderr=%r" % producer_error)
+
+for kind in ("fifo", "symlink-fifo"):
+    control = os.path.join(base, "diagnostic-" + kind)
+    os.mkdir(control, 0o700)
+    install, store = os.path.join(control, "install"), os.path.join(control, "store")
+    os.mkdir(install, 0o700)
+    os.mkdir(store, 0o700)
+    with open(os.path.join(control, "pkg-scn.json"), "x") as fh:
+        fh.write("{}")
+    with open(os.path.join(install, "host-supervisor.py"), "x") as fh:
+        fh.write("import json, os, time\ns = json.load(open(os.environ['YSTACK_FAKE_SCENARIO']))\n"
+                 "path = s['phase_record_path']\n")
+        if kind == "fifo":
+            fh.write("os.mkfifo(path)\n")
+        else:
+            fh.write("os.mkfifo(path + '.fifo')\nos.symlink(path + '.fifo', path)\n")
+        fh.write("while True: time.sleep(0.01)\n")
+    started = time.monotonic()
+    with open(os.path.join(control, "worker.out"), "xb") as out, \
+            open(os.path.join(control, "worker.err"), "xb") as err:
+        worker = subprocess.Popen([sys.executable, helper, control, install, store,
+                                   "attempt.diagnostic-" + kind, vfkit], stdout=out, stderr=err)
+        try:
+            worker_status = worker.wait(timeout=80)
+        except subprocess.TimeoutExpired:
+            worker.kill()
+            worker.wait(timeout=5)
+            raise
+    with open(os.path.join(control, "worker.err"), "rb") as fh:
+        raw = fh.read(8192)
+    assert worker_status == 1, (kind, worker_status, raw)
+    assert b"status=%s" % str(-signal.SIGTERM).encode() in raw, raw
+    assert b"nonregular diagnostic file" in raw and b"nonregular phase" in raw, raw
+    print("export-stop %s bounded diagnostic=%r" % (kind, raw))
+    print("export-stop %s real finally: worker exit1; owned launcher reaped status=%s; elapsed=%.3f" %
+          (kind, -signal.SIGTERM, time.monotonic() - started))
+PY_EXPORT_FAILURES
+pass 'finding 6: an actual output-count mismatch cannot publish a phase marker; FIFO and symlink-to-FIFO failures execute the same bounded finally and reap their owned launcher'
+"$python" "$base/export-stop.py" "$base" "$install_dir" "$store_root" "$attempt_id" "$vfkit_path"
 pass 'finding 6: export consumption is gated on tree_terminated -- a runtime that wrote a fully valid, complete export frame but then hung (never confirming a stop) still gets every guest row unavailable, never the payload/observations that frame actually contains (R5.3 stop-before-read)'
 
 # Finding 7 [P2]: the deadline clock starts at the phase-B admission
