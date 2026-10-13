@@ -15,7 +15,7 @@ fi
 python_bin=$("$python_bin" -I -S -B -c 'import os,sys; print(os.path.realpath(sys.executable))')
 cat > "$tmp/writer-tests.py" <<'PY'
 def run_writer_tests():
-    import copy, signal, datetime
+    import copy, signal
     from contextlib import contextmanager
     global scenario_work, scenario_output, scenario_mode, scenario_request
     module_names = ("shadow_writer_test_subject", "ystack_shadow_enforced", "ystack_shadow_consumer")
@@ -526,9 +526,9 @@ def run_writer_tests():
             receipt_path = store / attempt / "receipt.json"
             if receipt_path.exists():
                 receipt = json.loads(receipt_path.read_bytes())
-                start = datetime.datetime(2026, 8, 30, 0, counter % 50, 5, tzinfo=datetime.timezone.utc)
-                receipt["body"]["timing"] = {"admitted_at": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                    "terminated_at": (start + datetime.timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ")}
+                minute = counter % 50
+                receipt["body"]["timing"] = {"admitted_at": f"2026-08-30T00:{minute:02d}:05Z",
+                    "terminated_at": f"2026-08-30T00:{minute:02d}:06Z"}
                 receipt_path.chmod(0o600)
                 receipt_path.write_bytes(canonical(receipt))
                 receipt_path.chmod(0o440)
