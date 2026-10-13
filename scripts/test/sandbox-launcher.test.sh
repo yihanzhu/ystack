@@ -2408,6 +2408,7 @@ assert "YSTACK_TEST_HARDSTOP_MS" not in env and "YSTACK_TEST_SIGKILL_MS" not in 
 child = None
 status = None
 failure = None
+wait_ceiling_breached = False
 started = time.monotonic()
 try:
     with open(os.path.join(base, "pkg-scn.json"), "rb") as package, \
@@ -2443,16 +2444,25 @@ try:
         assert receipt["payload"][name + "_sha256"] == hashlib.sha256(b"").hexdigest()
         with open(os.path.join(store, attempt, "payload", name), "rb") as fh:
             assert fh.read(1) == b"", name
+except subprocess.TimeoutExpired as exc:
+    failure = exc
+    wait_ceiling_breached = True
 except Exception as exc:
     failure = exc
 finally:
     if child is not None and child.poll() is None:
-        child.send_signal(signal.SIGTERM)
-        try:
-            status = child.wait(timeout=65)
-        except subprocess.TimeoutExpired:
+        if not wait_ceiling_breached:
+            child.send_signal(signal.SIGTERM)
+            try:
+                status = child.wait(timeout=65)
+            except subprocess.TimeoutExpired:
+                wait_ceiling_breached = True
+        if wait_ceiling_breached:
             child.kill()
-            status = child.wait(timeout=5)
+            try:
+                status = child.wait(timeout=5)
+            except subprocess.TimeoutExpired as exc:
+                failure = exc
             failure = failure or AssertionError("owned launcher wait exceeded ceiling")
     if child is not None and status is None:
         status = child.returncode
