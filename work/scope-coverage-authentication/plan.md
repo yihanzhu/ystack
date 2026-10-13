@@ -100,6 +100,15 @@ store, receipt checker, native registry, accepted set, record-form, held Git, an
 write relations. Every required environment has exactly one row in each set.
 Missing, duplicate, foreign, unproven, legacy, or cross-form rows cannot count.
 
+Treat the controlled-store acquisitions in this first pass as provisional. Keep
+each one through the complete bundle authentication and through durable creation
+of the source request and expectation. Then recheck and close only those initial
+store acquisitions and remove them from the reader's owned set before the source
+process starts. Continue to hold the bundle directories, package, input, anchor,
+Git, request, expectation, and all other reader objects. Closing a store
+acquisition does not turn its captured bytes or relations into trusted final
+evidence; the final pass below must authenticate them again.
+
 Compare the closed coverage identity field by field. It contains only the scope,
 workflow, task, model request, artifact refs, complete resolved-profile source and
 bindings, environment and registry entry, control policy bytes, coverage base,
@@ -126,6 +135,8 @@ derives every ref from held scope, seven original documents, authenticated bundl
 sets, current profile/stage/result/materialization/publisher/post-check facts,
 qualifying receipts, Git observation, and the fixed source package selected by
 the root-owned configuration. It accepts none of those values back from a caller.
+The initial store acquisitions remain held until these exact files are durable;
+only then may the reader release them as described above.
 
 Add one closed source method to the concrete private child owner used by the
 reader. This is a #544 responsibility; #541 supplies no sudo owner or source
@@ -169,8 +180,16 @@ The source config is one canonical closed document. It fixes:
 - the three query families and each exact schema version;
 - a physical source-package manifest and its SHA-256;
 - one physical collector executable and its SHA-256;
+- one target-specific canonical `publisher_identity_ref`;
 - the accepted-set path and digest; and
 - the existing store id and dedicated principal/group relation.
+
+The publisher identity is an independent root-controlled expectation. The
+evaluator holds it from this configuration and compares every qualifying
+publisher-PR actor ref with it. It is not derived from a PR row, publisher
+request, scope field, matching digest, resolved-profile publisher binding, or
+caller label. It does not add a field to the closed coverage identity or to the
+exact evaluator-owned request.
 
 The accepted set is a separate canonical closed document. It is inactive and has
 zero or one row for this source id. A qualifying row matches operation version,
@@ -261,6 +280,23 @@ during the acquired read refuses stale. The archived source origin never
 authenticates a new read and no reread refreshes the qualifying sandbox receipt's
 original `terminated_at`.
 
+After the source process has completed its receipt-last write and exited, open a
+fresh source attempt and freshly reacquire every qualifying and current controlled
+store attempt. Repeat the full receipt, payload, checker, native-registry,
+accepted-set, form, materialization, request, write-relation, and reference
+authentication. Require every original receipt and payload byte and every check,
+materialization, request, and non-origin ref to equal the provisional result and
+the held source request. A completed source sibling may change only the fresh
+store-root metadata recorded by these new origin observations. It may not change
+an old attempt, its original timestamp, or any authenticated relation.
+
+Keep all final core attempt acquisitions and the source attempt acquisition owned
+through jq evaluation, `READY`, and `SEAL`. Their root identities are taken only
+after the source sibling is complete. Any store-root, attempt, directory, receipt,
+payload, or source mutation after that acquisition refuses stale through the
+unchanged identity, no-follow, descriptor, inventory, and byte rechecks. Do not
+whitelist a root metadata change or weaken the held-path identity.
+
 ## History and decision rules
 
 The normalized observation contains exactly repository, default branch, baseline
@@ -281,7 +317,9 @@ own publisher PR. Bind PR node/number, fixed publisher identity, base, head,
 merge, source branch, scope, changed paths, and retained publisher request to the
 actual Git change. Foreign, direct, rewritten, deleted, changed-existing, or
 ambiguous evidence refuses. Ordinary source changes outside protected sets stay
-allowed.
+allowed. Compare the publisher actor ref directly with the independently held
+`publisher_identity_ref`; a source row cannot define or authenticate its own
+expected publisher.
 
 Replay the complete branch-rule event interval from the authenticated baseline.
 After every event and at current, require the full sorted set of all rules that
@@ -312,16 +350,40 @@ Extend the #541 fixture in `scope-qualification.test.sh`; do not add a second
 fixture framework. On Linux CI, reuse its unique dedicated writer, distinct
 read-only consumer, consumer group, root-owned anchor, controlled store, and
 actual bare Git repository. Add the optional source files and a root-owned offline
-collector package only inside that disposable fixture. No workflow change or new
-CI permission is required.
+collector package only inside that disposable fixture. The outer root setup also
+creates one unique fixture-only sudoers file with exclusive no-follow creation,
+root ownership, mode `0440`, and one exact `NOPASSWD:NOSETENV` command. Validate
+that file with physical `/usr/sbin/visudo -cf` before running the consumer. The
+command permits only the consumer to become the source uid for the physical
+Python, `-I -S -B`, exact held supervisor path, and final `coverage-read` argument
+shown above. It has no wildcard argv, shell, `env`, alternate executable,
+`SETENV`, launch role, collector command, or store-writer command.
+
+A unique trap removes only that sudoers file, verifies it is absent, then removes
+the fixture accounts and group. Prove the exact command reaches the real source
+request and that an extra, missing, reordered, or replaced argument, a different
+Python or supervisor, an environment assignment, `launch`, a shell, and every
+writer/helper command all fail. The consumer must still fail every direct store
+write, chmod, link, rename, and removal. This temporary rule exists only on the
+ordinary disposable Linux CI fixture. Production and the current development Mac
+install no rule. The macOS positive waits for a separately verified disposable
+host with an already authorized equivalent exact-command setup.
 
 The fixture collector is the authoritative offline forge. Its physical package
 contains pinned raw repository/default-branch, PR, and full rule-history pages.
-The root-owned config selects them. The evaluator caller cannot name, replace, or
-supply a page, cursor, source observation, or accepted identity. Run the actual
-consumer under the read-only identity and the actual source supervisor and
-collector under the dedicated source principal. Prove the consumer cannot create,
-replace, rename, chmod, link, or remove any source-store object.
+The root-owned config selects them and one fixed fixture publisher identity ref.
+The evaluator caller cannot name, replace, or supply a page, cursor, source
+observation, publisher expectation, or accepted identity. Run the actual consumer
+under the read-only identity and the actual source supervisor and collector under
+the dedicated source principal. Prove a matching raw PR actor passes and a changed
+or foreign actor refuses while the held publisher expectation remains unchanged.
+
+The positive must use an existing authenticated qualifying/current attempt set,
+create its own source sibling, then pass the complete final reacquisition with
+fresh root metadata and unchanged old attempt bytes and relations. A paired case
+mutates the store root or any old/source attempt after final reacquisition and
+before `SEAL`; it must refuse stale. A mock origin, accepted root-mutation
+exception, or skipped second authentication cannot satisfy either case.
 
 Build real Git commits A, ordinary source B, own-publisher evidence C, and current
 R. The source pages and bare Git facts must agree on the complete first-parent
@@ -354,11 +416,15 @@ Besides the real positive, cover every spec R9 case:
   and cross-revision refusal; forged coverage fields cannot select the class;
 - every closed-identity field and every current-derived ref changed separately;
 - absent/duplicate/foreign/unproven source config and accepted identity; changed
-  supervisor, source package, collector, normalizer, query schema, anchor, store,
-  owner, group, mode, ACL, link, descriptor, request, expectation, nonce, attempt,
-  receipt, manifest, page, cursor, observation, and final recheck;
+  supervisor, source package, collector, normalizer, query schema, publisher
+  expectation, anchor, store, owner, group, mode, ACL, link, descriptor, request,
+  expectation, nonce, attempt, receipt, manifest, page, cursor, observation, and
+  final recheck;
 - replay of the first genuine attempt during a second same-R evaluation, followed
   by a new genuine attempt that passes;
+- lawful source-sibling creation between provisional and final acquisitions,
+  unchanged old attempt bytes and refs on full final reauthentication, and any
+  root or attempt mutation during the final hold refusing stale before `SEAL`;
 - another repository/default branch; non-descendant and second-parent paths;
   missing, duplicate, reordered, alternate, and incomplete first-parent history;
 - protected Git changes; direct, foreign, rewritten, deleted, changed-existing,
@@ -383,18 +449,19 @@ bash scripts/test/shadow-enforced.test.sh
 bash scripts/test/shadow-write.test.sh
 bash scripts/test/shadow-self-host-evidence.test.sh
 bash scripts/test/sandbox-receipt.test.sh
-bash scripts/test/local-git-materializer.test.sh
+bash scripts/test/local-git-materializer-protocol.test.sh
+bash scripts/test/local-git-materializer-adapter.test.sh
 bash scripts/test/portable-core-schema.test.sh
-bash scripts/test/integration.test.sh
 bash scripts/test/run-all.sh
 ```
 
-Use the repository's actual integration-test filename if #541 records a renamed
-equivalent; do not create an alias only to satisfy this command list. Run the real
-principal proof on Linux and macOS and record OS, filesystem, uid/gid/groups, ACL,
-timestamps, source package and exact head. Dispatch the six-shard full matrix from
-that head and require all shards, checks, aggregate CI, and external required
-checks green. Quick CI is additional evidence only.
+Run the materializer protocol and adapter suites shown above and every related
+integration test discovered by the existing full runner. Do not create an alias
+for an absent aggregate test name. Run the real principal proof on Linux and
+macOS and record OS, filesystem, uid/gid/groups, ACL, timestamps, source package
+and exact head. Dispatch the six-shard full matrix from that head and require all
+shards, checks, aggregate CI, and external required checks green. Quick CI is
+additional evidence only.
 
 Before publication, run `git diff --check`, compare the diff with this exact path
 list, verify intent/spec/plan blobs and risk, require the new manifest entry once,
