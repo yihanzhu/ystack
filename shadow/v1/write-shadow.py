@@ -412,6 +412,15 @@ def _record_relations(files, incident, result, fresh_origin, anchor, write=None)
         "tool_id": "tool.verifier", "observed_sha256": result["observed"]["sha256"],
         "matches_expected": result["outcome"] == "match"}}, "E_RELATION")
     evaluation = parse(files["sandbox-evaluation.json"])
+    claim = parse(files["claim.json"])
+    duty_ref = e.document_ref(files["duty-evaluation.json"])
+    require(canonical(evaluation["body"]["claim_ref"]) == canonical(e.document_ref(files["claim.json"]))
+            and canonical(evaluation["body"]["duty_evaluation_ref"]) == canonical(duty_ref)
+            and canonical(claim["body"]["duty_evaluation_ref"]) == canonical(duty_ref), "E_RELATION")
+    if write is not None:
+        generated = parse(files["materialization-input.json"], 8 * e.OUTPUT_LIMIT)
+        require(generated["stage_request"]["content"]["body"]["environment_ref"] == {
+            "environment_id": claim["id"], "fingerprint_sha256": sha(files["claim.json"])}, "E_RELATION")
     require(body["environment"]["environment_id"] == parse(files["claim.json"])["id"]
             and body["environment"]["evaluation"] == {"state": "present", "value": {
                 "verdict": evaluation["body"]["verdict"], "reason_ids": evaluation["body"]["reason_ids"],
@@ -736,7 +745,9 @@ def _admit(ws, materialized, frozen, files, write):
     prefix = "ystack-evidence/" + incident["id"] + "/"
     require(all(materialized.files[prefix + name] == raw for name, raw in frozen.items()), "E_RELATION")
     require(set(files) == set(e.EVIDENCE_NAMES) | {"publisher-body.txt"}, "E_RELATION")
-    retained = {"materialization-input.json": materialized.input_raw,
+    retained = {"claim.json": (ws.work / "captured/claim.json").read_bytes(),
+        "duty-evaluation.json": (ws.work / "captured/duty_evaluation.json").read_bytes(),
+        "materialization-input.json": materialized.input_raw,
         "materialization-response.json": materialized.response_raw,
         "preparation-record.json": materialized.preparation_record_raw,
         "preparation-manifest.json": materialized.preparation_manifest_raw,
@@ -781,6 +792,7 @@ def _outer_record(ws, materialized, frozen, files, write, provenance, trace):
         consumer_provenance_ref=e.document_ref(provenance),
         trace_ledger_ref={"content_id": "shadow-trace-ledger", "media_type": "application/vnd.ystack.telemetry-trace-ledger+json",
             "sha256": sha(trace)}, write=write)
+    body["environment"]["claim_ref"]["sha256"] = sha(files["claim.json"])
     body["environment"]["evaluation"] = {"state": "present", "value": {
         "verdict": evaluation["body"]["verdict"], "reason_ids": evaluation["body"]["reason_ids"],
         "evaluation_ref": {"content_id": "shadow-sandbox-evaluation",
@@ -813,7 +825,9 @@ def write(request_path: Path, bundle: Path, work: Path, output: Path, parent: di
             "post_write_verification": {"target_revision": incident["body"]["git_revision_ref"],
                 "candidate_tree_id": materialized.candidate_tree_id, "write_set": materialized.write_set}}
         files = {name: frozen[name] for name in e.EVIDENCE_NAMES}
-        files.update({"materialization-input.json": materialized.input_raw,
+        files.update({"claim.json": (work / "captured/claim.json").read_bytes(),
+            "duty-evaluation.json": (work / "captured/duty_evaluation.json").read_bytes(),
+            "materialization-input.json": materialized.input_raw,
             "materialization-response.json": materialized.response_raw,
             "preparation-record.json": materialized.preparation_record_raw,
             "preparation-manifest.json": materialized.preparation_manifest_raw,

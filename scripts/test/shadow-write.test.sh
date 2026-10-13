@@ -644,14 +644,21 @@ def run_writer_tests():
                     ok(ws.commands == commands_before, "admission hash refuses before later child")
                 else:
                     raise AssertionError("invalid admission hash accepted")
-        for name, alter in (("body-byte", lambda value: value.update({"publisher-body.txt": value["publisher-body.txt"] + b"\n"})),
+        retained_mutations = [("body-byte", lambda value: value.update({"publisher-body.txt": value["publisher-body.txt"] + b"\n"})),
                             ("outer-missing", lambda value: value.pop("policy.json")),
                             ("outer-extra", lambda value: value.update(extra=b"")),
                             ("retained-response", lambda value: value.update({"materialization-response.json": b"{}\n"})),
                             ("retained-identity", lambda value: value.update({"qualified-identity.json": b"{}\n"})),
                             ("retained-preparation", lambda value: value.update({"preparation-manifest.json": b"{}\n"})),
                             ("retained-check", lambda value: value.update({"sandbox-check.json": b"{}\n"})),
-                            ("retained-receipt", lambda value: value.update({"sandbox-receipt.json": b"{}\n"}))):
+                            ("retained-receipt", lambda value: value.update({"sandbox-receipt.json": b"{}\n"})),
+                            ("retained-claim", lambda value: value.update({"claim.json": b"{}\n"})),
+                            ("retained-duty", lambda value: value.update({"duty-evaluation.json": b"{}\n"}))]
+        for filename in ("claim.json", "duty-evaluation.json"):
+            if retained[filename] != frozen[filename]:
+                retained_mutations.append(("stale-" + filename,
+                    lambda value, filename=filename: value.update({filename: frozen[filename]})))
+        for name, alter in retained_mutations:
             altered = dict(retained)
             alter(altered)
             commands_before = copy.deepcopy(ws.commands)
@@ -669,6 +676,7 @@ def run_writer_tests():
             record_mutations = [("missing-" + key, lambda value, key=key: value["body"].pop(key))
                 for key in ("record_form", "write", "materialization", "check", "qualified_identity_ref", "consumer_provenance_ref", "trace_ledger_ref")]
             record_mutations.extend((
+                ("stale-outer-claim-ref", lambda item: item["body"]["environment"]["claim_ref"].update(sha256=sha(frozen["claim.json"]))),
                 ("typed-record-schema", lambda item: item.update(schema_version=True)),
                 ("typed-zero-producer", lambda item: item["body"].update(producer_invocations=False)),
                 ("extra-envelope", lambda item: item.update(authority="publish"))))
@@ -691,6 +699,45 @@ def run_writer_tests():
                     ok(ws.commands == commands_before and not any(ws.output.iterdir()), "malformed outer record permits no child or output after exact admission boundary")
                 else:
                     raise AssertionError("malformed retained outer record accepted: " + name)
+            for field, filename in (("claim_ref", "claim.json"), ("duty_evaluation_ref", "duty-evaluation.json")):
+                if retained[filename] == frozen[filename]:
+                    continue
+                proof_files = dict(retained, **{"shadow-record.json": raw})
+                evaluation = json.loads(proof_files["sandbox-evaluation.json"])
+                evaluation["body"][field] = e.document_ref(frozen[filename])
+                proof_files["sandbox-evaluation.json"] = canonical(evaluation)
+                altered = copy.deepcopy(record)
+                altered["body"]["environment"]["evaluation"]["value"]["evaluation_ref"]["sha256"] = sha(proof_files["sandbox-evaluation.json"])
+                proof_files["trace-ledger.json"] = e.trace_ledger(json.loads(frozen["incident.json"]),
+                    json.loads(retained["sandbox-request.json"])["id"], json.loads(retained["claim.json"])["id"],
+                    record["body"]["outcome"], "tool.verifier", proof_files["sandbox-evaluation.json"], retained["sandbox-check.json"])
+                altered["body"]["trace_ledger_ref"]["sha256"] = sha(proof_files["trace-ledger.json"])
+                proof_files["shadow-record.json"] = canonical(altered)
+                try:
+                    w._record_relations(proof_files, json.loads(frozen["incident.json"]),
+                        json.loads(retained["file-digest-result.json"])["body"], retained["origin-observation.json"], ws.anchor, expected)
+                except e.Refusal as exc:
+                    ok(str(exc) == "E_RELATION" and ws.commands == commands_before and not marker.exists(), "stale evaluation ref refuses despite recomputed record/trace digests: " + field)
+                else:
+                    raise AssertionError("stale evaluation ref accepted: " + field)
+            proof_files = dict(retained)
+            generated = json.loads(proof_files["materialization-input.json"])
+            generated["stage_request"]["content"]["body"]["environment_ref"]["fingerprint_sha256"] = sha(frozen["claim.json"])
+            generated["stage_request"]["sha256"] = sha(canonical(generated["stage_request"]["content"]))
+            identity = json.loads(proof_files["qualified-identity.json"])
+            identity["body"]["stage_request_ref"] = e.pair_ref(generated["stage_request"])
+            proof_files["materialization-input.json"], proof_files["qualified-identity.json"] = canonical(generated), canonical(identity)
+            altered = copy.deepcopy(record)
+            altered["body"]["qualified_identity"] = identity["body"]
+            altered["body"]["qualified_identity_ref"]["sha256"] = sha(proof_files["qualified-identity.json"])
+            proof_files["shadow-record.json"] = canonical(altered)
+            try:
+                w._record_relations(proof_files, json.loads(frozen["incident.json"]),
+                    json.loads(retained["file-digest-result.json"])["body"], retained["origin-observation.json"], ws.anchor, expected)
+            except e.Refusal as exc:
+                ok(str(exc) == "E_RELATION" and ws.commands == commands_before and not marker.exists(), "stale input fingerprint refuses despite recomputed stage/identity/record refs")
+            else:
+                raise AssertionError("stale input fingerprint accepted")
             return raw
         w._outer_record = inspect_record
         try:
@@ -700,13 +747,42 @@ def run_writer_tests():
         inspection.append((materialized, copy.deepcopy(ws.commands), answer))
         return answer
     w._admit = inspected_admission
+    def fresh_inputs(paths, fresh_duty=False):
+        document = json.loads(paths[0].read_bytes())
+        claim = json.loads(pathlib.Path(document["body"]["claim"]).read_bytes())
+        duty = json.loads(pathlib.Path(document["body"]["duty_evaluation"]).read_bytes())
+        claim["body"]["execution_identity"]["adapter_instance_id"] = "adapter.instance.write." + str(counter)
+        duty_raw = canonical(duty)
+        if fresh_duty:
+            result = json.loads((base / "prior-result.json").read_bytes())
+            result["body"]["recorded_at"] = "2026-08-30T00:00:09Z"
+            result_path = paths[0].parent / "current-prior-result.json"
+            write(result_path, canonical(result), 0o400)
+            evaluated = subprocess.run(["/bin/bash", "-p", str(root / "control/v1/evaluate-duty.sh"), "evaluate",
+                str(root / "control/v1/control-policy-set-sandbox-bound.json"), str(base / "prior-request.json"),
+                str(base / "prior-profile.json"), str(result_path)], env={"PATH": str(base / "bin") + ":/usr/bin:/bin",
+                "LC_ALL": "C", "TMPDIR": str(base.parent.parent)}, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+            ok(evaluated.returncode == 0, "real unchanged duty evaluator accepts synthetic later recorded_at: " + evaluated.stderr.decode())
+            duty_raw = evaluated.stdout
+            duty = json.loads(duty_raw)
+            ok(duty["body"]["verdict"] == "satisfied" and duty_raw != output.joinpath("duty-evaluation.json").read_bytes(), "real evaluator produces distinct valid canonical current duty")
+            claim["body"]["stage_result_ref"] = duty["body"]["stage"]["result_ref"]
+        claim["body"]["duty_evaluation_ref"] = e.document_ref(duty_raw)
+        for role, raw in (("claim", canonical(claim)), ("duty_evaluation", duty_raw)):
+            path = paths[0].parent / (role + ".json")
+            write(path, raw, 0o400)
+            document["body"][role] = str(path)
+        paths[0].chmod(0o600)
+        write(paths[0], canonical(document), 0o400)
     first_complete_paths = case("complete-first")
+    fresh_inputs(first_complete_paths)
     try:
         first_complete = complete(first_complete_paths)
+        second_complete_paths = case("complete-second")
+        fresh_inputs(second_complete_paths, fresh_duty=True)
+        second_complete = complete(second_complete_paths)
     finally:
         w._admit = admit_function
-    second_complete_paths = case("complete-second")
-    second_complete = complete(second_complete_paths)
     first_launch = json.loads(first_complete["sandbox-request.json"])
     second_launch = json.loads(second_complete["sandbox-request.json"])
     ok(first_launch["id"] != second_launch["id"] and first_launch["body"]["nonce"] != second_launch["body"]["nonce"],
@@ -747,6 +823,17 @@ def run_writer_tests():
         ok(record["body"]["qualified_identity"] == json.loads(retained["qualified-identity.json"])["body"], "outer identity uses actual new generated write stage request")
         write_section = record["body"]["write"]
         request_body = json.loads(retained["materialization-input.json"])["stage_request"]["content"]["body"]
+        current_request = json.loads(paths[0].read_bytes())["body"]
+        current_claim = pathlib.Path(current_request["claim"]).read_bytes()
+        current_duty = pathlib.Path(current_request["duty_evaluation"]).read_bytes()
+        ok(retained["claim.json"] == current_claim != output.joinpath("claim.json").read_bytes(), "outer retains actual fresh same-environment claim, not frozen claim")
+        ok(retained["duty-evaluation.json"] == current_duty, "outer retains actual current validated duty bytes")
+        evaluation = json.loads(retained["sandbox-evaluation.json"])["body"]
+        ok(evaluation["claim_ref"] == e.document_ref(current_claim) and
+           evaluation["duty_evaluation_ref"] == e.document_ref(current_duty), "actual bound evaluator refs bind current retained claim and duty")
+        ok(json.loads(current_claim)["body"]["duty_evaluation_ref"] == e.document_ref(current_duty), "current claim binds actual current duty")
+        ok(record["body"]["environment"]["claim_ref"]["sha256"] == sha(current_claim) and
+           request_body["environment_ref"] == {"environment_id": json.loads(current_claim)["id"], "fingerprint_sha256": sha(current_claim)}, "outer claim ref and generated request fingerprint bind actual current claim")
         ok(write_section["workflow_id"] == request_body["workflow_id"] and write_section["task_class"] == request_body["task_class_id"], "write workflow/task equal actual generated request")
         ok(write_section["admission"] == {"state": "checked", "effect": "none",
             "request_sha256": sha(canonical(write_section["publisher_request"])), "write_set_sha256": sha(canonical(write_section["write_set"]))}, "offline admission hashes actual canonical request and write set")
@@ -780,6 +867,7 @@ def run_writer_tests():
         for name in ("sandbox-request.json", "sandbox-receipt.json", "shadow-record.json", "trace-ledger.json", "consumer-provenance.json"):
             ok((prefix / name).read_bytes() != retained[name], "new outer attempt evidence stays outside candidate: " + name)
     ok(inspection[0][1] == json.loads(first_complete["consumer-provenance.json"])["body"]["commands"], "no child command appears after frozen complete provenance")
+    ok(first_complete["duty-evaluation.json"] == output.joinpath("duty-evaluation.json").read_bytes() != second_complete["duty-evaluation.json"], "both unchanged and fresh valid current duty complete without changing frozen candidate bytes")
     ok(digest_directory(base / "source.git") == source_before and digest_directory(output) == frozen_before
        and digest_directory(original_attempt) == store_before, "complete two-attempt flow preserves original source, bundle and controlled-store bytes")
     for mode in ("cpu-none", "unconfirmed", "missing", "partial"):
