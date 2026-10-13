@@ -201,9 +201,19 @@ For each eligible completed bundle, perform these checks in this order:
    store and payload. Do not add a field to the existing checker.
 4. Call `read_store_attempt(anchor, attempt_id)`. Require its fresh raw receipt,
    stdout, stderr, evidence manifest and evidence file to equal the retained
-   bundle bytes. Require the fresh canonical origin observation to equal the
-   retained authenticated observation and its digest. Recheck the anchor and held
-   store after the comparison.
+   bundle bytes. Keep the retained canonical origin observation and digest as the
+   archival record's complete provenance. Match its stable store and attempt
+   identifiers, plus the enclosing record's fixed-package and payload references,
+   to the same retained bytes. Never use that archived observation to authenticate
+   the current read.
+   Require the new canonical origin observation to name the same store and attempt
+   and to bind every freshly read file's size and digest. It need not equal the
+   archived observation byte for byte: a sibling attempt completed before this
+   acquisition may lawfully change store-directory metadata. The fresh read alone
+   authenticates current origin. Preserve all owner, group, mode, ACL, link,
+   no-follow, inventory, held-descriptor and before/after checks in
+   `read_store_attempt`, then recheck the anchor and held store after comparison.
+   Any mutation during that acquired read refuses as stale.
 5. Invoke the existing checker exactly as
    `check-bound RECEIPT EXPECTATION EVALUATION VERIFIER_OBSERVATION`. The verifier
    observation is freshly derived from the fixed anchor and target repository id.
@@ -314,7 +324,11 @@ the final store-root `fsync`. Because `write_receipt_file` closes `attempt_fd`,
 the harness transfers that fd's ownership before the call and never closes or
 uses it again; it closes the retained `store_fd` exactly once in all exits. The
 consumer starts only after the writer has exited and the parent has rechecked the
-closed attempt. No sibling attempt may be created after acquisition begins.
+closed attempt. A sibling attempt completed before acquisition may change only
+the fresh store-directory metadata; the consumer must still reread the old
+immutable attempt successfully when all current checks pass. A sibling creation
+started after acquisition begins mutates the held store during use and must make
+the read refuse as stale.
 
 On an ordinary disposable Linux CI runner, the existing test job may use its
 already available noninteractive sudo to create one unique writer account, one
@@ -336,8 +350,12 @@ remove a store object. No production anchor may be overwritten.
 Use the same setup for paired negatives: caller-created store copy, same bytes
 under the wrong owner or store id, writer/consumer uid collapse, missing group,
 extra ACL grant, symlink/hardlink, metadata swap, changed receipt/payload and
-anchor/package drift. On macOS include a supplementary-group-only positive and
-the existing UUID-qualified ACL checks. Record actual `id`, filesystem metadata
+anchor/package drift. Pair a successful reread after a sibling attempt completed
+before acquisition with a refused sibling mutation during acquisition. In both
+cases keep the old attempt's raw bytes and original receipt `terminated_at`
+unchanged; the reread never refreshes qualification age. On macOS include a
+supplementary-group-only positive and the existing UUID-qualified ACL checks.
+Record actual `id`, filesystem metadata
 and ACL command output with the test evidence. Fixture native-qualified entries
 prove only this closed consumer path; they never claim CPU/wall proof, VM
 qualification or a production identity.
