@@ -455,11 +455,8 @@ def absent_section_ok($reasons):
   exact(["reason_id","state"]) and .state == "absent" and
   (.reason_id as $reason | $reasons | index($reason) != null);
 
-# The sandbox evaluation the slice copies out of control/v1/sandbox.jq when the
-# environment is listed and that evaluator returned a document. The verdict
-# vocabulary and the satisfied/reason pairing are that evaluator's own
-# (control/v1/sandbox.jq:254-256).
-def environment_evaluation_ok:
+# Each record form retains the reason from its actual declaration or bound evaluator.
+def environment_evaluation_ok($form):
   type == "object" and
   (if .state == "absent"
    then absent_section_ok(["environment.evaluation-refused","environment.unlisted"])
@@ -472,7 +469,8 @@ def environment_evaluation_ok:
       (.reason_ids |
        type == "array" and length >= 1 and length <= 64 and all(.[]; id_ok)) and
       ((.verdict == "satisfied") ==
-       (.reason_ids == ["sandbox.declaration-satisfied"])) and
+       (.reason_ids == [(if $form == "legacy" then "sandbox.declaration-satisfied"
+                        else "sandbox.verifier-binding-satisfied" end)])) and
       (.evaluation_ref |
        shadow_ref_ok("shadow-sandbox-evaluation";
          "application/vnd.ystack.control-evaluation+json")))
@@ -646,7 +644,7 @@ def shadow_record_ok:
     (.registry_ref |
      shadow_ref_ok("shadow-environment-registry";
        "application/vnd.ystack.shadow-environment-registry+json")) and
-    (.evaluation | environment_evaluation_ok)) and
+    (.evaluation | environment_evaluation_ok($form))) and
    (.materialization |
     materialization_ok($body.git_revision_ref; $body.target_repository_id; $form)) and
    (.check | check_block_ok($form)) and

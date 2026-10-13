@@ -78,6 +78,29 @@ if [ -x /opt/homebrew/bin/python3.14 ]; then python_candidate=/opt/homebrew/bin/
 python_bin=$("$python_candidate" -I -S -B -c 'import os,sys;print(os.path.realpath(sys.executable))')
 "$python_bin" -I -S -B -c 'import sys;assert sys.version_info >= (3,11)' || fail 'existing Python 3.11+ required'
 /bin/ln -s "$python_bin" "$bin/python3"
+"$python_bin" -I -S -B - "$gate_program" "$tmp/environment-reasons.jq" <<'PY_REASON_PROGRAM'
+import pathlib,sys
+source=pathlib.Path(sys.argv[1]).read_text()
+boundary='\n$policy[0].body as $p |'
+assert source.count(boundary)==1
+program=source.split(boundary)[0]
+program+='\nall(.[]; . as $case | (.value | environment_evaluation_ok($case.form)) == $case.expected)\n'
+pathlib.Path(sys.argv[2]).write_text(program)
+PY_REASON_PROGRAM
+"$jq_bin" -n --arg sha "$(sha256_path "$gate_program")" '
+  {state:"present",value:{verdict:"satisfied",reason_ids:[],evaluation_ref:{
+    content_id:"shadow-sandbox-evaluation",
+    media_type:"application/vnd.ystack.control-evaluation+json",sha256:$sha}}} as $value |
+  ["legacy","enforced-reproduction.v1","withheld-write.v1"] |
+  map(. as $form | ["sandbox.declaration-satisfied","sandbox.verifier-binding-satisfied"] |
+    map(. as $reason | {form:$form,value:($value | .value.reason_ids=[$reason]),
+      expected:(if $form == "legacy" then $reason == "sandbox.declaration-satisfied"
+        else $reason == "sandbox.verifier-binding-satisfied" end)})) | add
+' >"$tmp/environment-reasons.json"
+"$jq_bin" -e --slurpfile policy "$policy" --arg scope_sha '' --arg shadow_set_sha '' \
+  -f "$tmp/environment-reasons.jq" "$tmp/environment-reasons.json" >/dev/null ||
+  fail 'record forms confused declaration and bound evaluator reasons'
+pass 'each record form accepts its evaluator reason and refuses the other evaluator reason'
 /bin/mkdir -m 700 "$tmp/legacy-bundles"
 /usr/bin/git init --bare "$tmp/legacy-source.git" >"$tmp/git-init.out" 2>"$tmp/git-init.err"
 run_evaluator() {
@@ -1688,7 +1711,7 @@ PY_GENUINE_READER
 }
 prepare_genuine_assembler() {
   /bin/cat >"$tmp/genuine-assembler.py" <<'PY_GENUINE_ASSEMBLER'
-import ctypes,hashlib,importlib.util,json,os,pathlib,pwd,grp,shutil,stat,subprocess,sys,sysconfig,time
+import ctypes,hashlib,importlib.util,json,os,pathlib,pwd,grp,shutil,stat,subprocess,sys,sysconfig,threading,time
 base=pathlib.Path(sys.argv[1]);writer,consumer,group=sys.argv[2:5];jq_source=pathlib.Path(sys.argv[5]);documents=pathlib.Path(sys.argv[6]);package=base/'package'
 assert os.getuid()==0 and base.resolve()==base and package.resolve()==package
 canonical=lambda value:(json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=False,allow_nan=False)+'\n').encode()
@@ -1705,10 +1728,55 @@ assert sha(jq.read_bytes())==c.JQ_SHA256[sys.platform]
 (tools/'python3').symlink_to(sys.executable)
 env={'PATH':str(tools)+':/usr/bin:/bin','LC_ALL':'C','LANG':'C','HOME':str(work),'TMPDIR':str(work),'GIT_CONFIG_NOSYSTEM':'1','GIT_CONFIG_GLOBAL':'/dev/null','GIT_NO_REPLACE_OBJECTS':'1','GIT_NO_LAZY_FETCH':'1','GIT_TERMINAL_PROMPT':'0','GIT_OPTIONAL_LOCKS':'0','GIT_AUTHOR_NAME':'fixture','GIT_AUTHOR_EMAIL':'fixture@example.invalid','GIT_COMMITTER_NAME':'fixture','GIT_COMMITTER_EMAIL':'fixture@example.invalid','GIT_AUTHOR_DATE':'2000-01-01T00:00:00Z','GIT_COMMITTER_DATE':'2000-01-01T00:00:00Z'}
 commands=[]
+scope_observation_count=0
+def observe_scope(stop, destination, captured, errors):
+ def identity(state):
+  return (state.st_dev,state.st_ino,state.st_mode,state.st_uid,state.st_gid,
+    state.st_nlink,state.st_size,state.st_mtime_ns,state.st_ctime_ns)
+ try:
+  while not stop.wait(.005):
+   for scratch in (base/'consumer-work').glob('ystack-scope-evaluate.*'):
+    for relative in ('observation/result.json','observation.json','evaluation.json','reader-stderr'):
+     path=scratch/relative
+     try:
+      before=path.lstat()
+      if not stat.S_ISREG(before.st_mode) or before.st_size>1024*1024:continue
+      fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW)
+      with os.fdopen(fd,'rb') as stream:
+       opened=os.fstat(stream.fileno())
+       raw=stream.read(1024*1024+1)
+       closed=os.fstat(stream.fileno())
+      after=path.lstat()
+     except FileNotFoundError:continue
+     if len(raw)>1024*1024 or not identity(before)==identity(opened)==identity(closed)==identity(after):continue
+     key=(relative,sha(raw))
+     if key not in captured:
+      (destination/(relative.replace('/','-')+'-'+key[1])).write_bytes(raw)
+      captured[key]=raw
+ except BaseException as error:errors.append(repr(error))
 def run(argv,raw=None,role=None,component=None,limit=16*1024*1024):
- argv=list(map(str,argv));r=subprocess.run(argv,input=raw,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env,timeout=180)
+ global scope_observation_count
+ argv=list(map(str,argv));stop=observer=None;captured={};errors=[]
+ if str(package/'scope/v1/evaluate-scope.sh') in argv:
+  destination=base/'snapshots'/('scope-observation-'+str(scope_observation_count))
+  scope_observation_count+=1;destination.mkdir(mode=0o700)
+  stop=threading.Event()
+  observer=threading.Thread(target=observe_scope,args=(stop,destination,captured,errors))
+  observer.start()
+ try:r=subprocess.run(argv,input=raw,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env,timeout=180)
+ finally:
+  if observer is not None:
+   stop.set();observer.join(10);assert not observer.is_alive()
+   for (name,digest),value in sorted(captured.items()):
+    print(json.dumps({'actual_scope_snapshot':name,'sha256':digest,
+      'raw_utf8':value.decode('utf8','backslashreplace')},sort_keys=True),flush=True)
+   assert not errors,errors
  print(json.dumps({'fixture_command':argv,'returncode':r.returncode,'stdout_sha256':sha(r.stdout),'stderr':r.stderr.decode('utf8','backslashreplace')},sort_keys=True),flush=True)
+ if observer is not None:
+  print(json.dumps({'actual_scope_stdout_utf8':r.stdout.decode('utf8','backslashreplace')},sort_keys=True),flush=True)
  assert r.returncode==0 and len(r.stdout)<=limit and not r.stderr
+ if observer is not None:
+  assert any(name=='observation/result.json' for name,_digest in captured),'scope reader observation was not retained'
  if role:commands.append({'role':role,'argv_sha256':sha(canonical(argv)),'executable_sha256':sha(pathlib.Path(argv[0]).resolve().read_bytes()),'component_sha256':sha(pathlib.Path(component).read_bytes())})
  return r.stdout
 def put(path,value,mode=0o444):
