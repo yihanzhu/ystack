@@ -376,10 +376,11 @@ def _darwin_acl(fd: int, resolver: _DarwinUUIDResolver | None) -> list[tuple[int
         while True:
             ctypes.set_errno(0)
             rc = lib.acl_get_entry(acl, selector, ctypes.byref(entry))
+            entry_errno = ctypes.get_errno()
             if rc != 0:
-                if ctypes.get_errno() != 0:
-                    raise OSError(ctypes.get_errno(), "acl_get_entry")
-                break
+                if rc == -1 and entry_errno == errno.EINVAL and selector == -1 and captured:
+                    break
+                raise OSError(entry_errno or errno.EIO, "acl_get_entry")
             selector = -1
             tag.value, perms.value = 0, None
             if lib.acl_get_tag_type(entry, ctypes.byref(tag)) != 0:

@@ -1903,6 +1903,7 @@ class Call:
 class FakeAclLib:
     def __init__(self, failure=None):
         self.failure, self.entries = failure, 0
+        self.selectors = []
         self.calls = {"entry": 0, "permission": 0, "qualifier": 0}
         self.freed = []
         self.guid = c.ctypes.create_string_buffer(16)
@@ -1913,13 +1914,19 @@ class FakeAclLib:
         self.acl_get_permset = Call(self.get_permset)
         self.acl_get_perm_np = Call(self.get_perm)
         self.acl_free = Call(self.free)
-    def get_entry(self, _acl, _selector, _entry):
+    def get_entry(self, _acl, selector, _entry):
         self.calls["entry"] += 1
+        self.selectors.append(selector)
+        assert selector == (0 if self.entries == 0 else -1)
         if self.failure == "acl-memory": raise MemoryError("after ACL ownership")
         if self.failure == "entry": c.ctypes.set_errno(13); return -1
+        if self.failure == "first-einval": c.ctypes.set_errno(22); return -1
+        if self.failure == "first-abnormal": c.ctypes.set_errno(22); return 1
         self.entries += 1
         if self.entries == 1: return 0
-        c.ctypes.set_errno(0); return -1
+        failure = {"next-other-errno": (13, -1), "next-zero-errno": (0, -1),
+                   "next-abnormal": (22, 1)}.get(self.failure, (22, -1))
+        c.ctypes.set_errno(failure[0]); return failure[1]
     def get_tag(self, _entry, output): output._obj.value = 1; return 0
     def get_permset(self, _entry, output): output._obj.value = 1; return 0
     def get_perm(self, _perms, bit):
@@ -1952,13 +1959,23 @@ def darwin_rule(failure, installed=False):
     return rule(fd, state, False), fake, resolver
 for installed in (False, True):
     accepted_acl, fake, resolver = darwin_rule(None, installed)
-    ok(accepted_acl and fake.entries == 2 and resolver.calls == [["00" * 16]],
+    ok(accepted_acl and fake.entries == 2 and fake.selectors == [0, -1]
+       and resolver.calls == [["00" * 16]],
        "Darwin capture sends only positional UUID bytes to fixed resolver")
     ok(fake.freed == [c.ctypes.addressof(fake.guid), 1],
        "Darwin capture frees the exact qualifier then ACL once")
     for failure in ("entry", "permission", "qualifier"):
         accepted_acl, fake, resolver = darwin_rule(failure, installed)
         ok(not accepted_acl and fake.calls[failure] > 0, "Darwin %s error reached and refused" % failure)
+for installed in (False, True):
+    for failure in ("first-einval", "first-abnormal", "next-other-errno", "next-zero-errno", "next-abnormal"):
+        accepted_acl, fake, resolver = darwin_rule(failure, installed)
+        expected_free = ([c.ctypes.addressof(fake.guid), 1] if failure.startswith("next-") else [1])
+        ok(not accepted_acl and fake.freed == expected_free and resolver.calls == [],
+           "Darwin %s refuses and frees owned resources once without resolver" % failure)
+    accepted_acl, fake, resolver = darwin_rule("qualifier", installed)
+    ok(not accepted_acl and fake.selectors == [0] and fake.freed == [1] and resolver.calls == [],
+       "incomplete FIRST capture refuses without attempting NEXT or resolver")
 fake = FakeAclLib(); c._DARWIN_ACL_FUNCTIONS = types.SimpleNamespace(library=fake)
 refuses("E_ACL", lambda: c._darwin_acl(fd, None))
 ok(fake.calls["entry"] == 0, "missing Darwin resolver refuses before ACL capture")

@@ -46,6 +46,7 @@ class _Reader:
     def __init__(self, scope_path, set_path, bundle_root, git_root, output):
         self.owned = []
         self.inputs, self.commands = [], []
+        self.commands_open = True
         self.output = output
         self.scratch = output.parent.parent
         self.deadline = DEADLINE
@@ -153,8 +154,20 @@ class _Reader:
         return path
 
     def record_command(self, role, argv, executable, component):
+        require(self.commands_open, "E_RUNTIME")
+        require(len(self.commands) < 4096, "E_LIMIT")
         self.commands.append({"role": role, "argv_sha256": c.digest(c.canonical(argv)),
                               "executable_sha256": executable, "component_sha256": component})
+
+    def terminal(self, observation):
+        require(self.commands_open, "E_RUNTIME")
+        self.commands_open = False
+        raw = c.canonical({"schema_version": 1, "kind": "scope_shadow_evidence_terminal",
+            "id": self.scope["id"], "body": {
+                "observation_sha256": c.digest(observation), "commands": self.commands}})
+        require(0 < len(raw) <= c.DOCUMENT_LIMIT, "E_LIMIT")
+        write_exclusive(self.output.parent / "terminal.json", raw)
+        return raw
 
     def execute_git(self, argv, limit):
         self.recheck()
@@ -788,6 +801,24 @@ class _ControlFIFO:
             self.parent.close()
 
 
+def write_exclusive(path, raw):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400)
+    try:
+        sent = 0
+        while sent < len(raw):
+            count = os.write(fd, raw[sent:])
+            require(count > 0, "E_RUNTIME")
+            sent += count
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
 def main(arguments):
     require(len(arguments) == 6 and arguments[0] == "read", "E_USAGE")
     paths = list(map(Path, arguments[1:]))
@@ -802,15 +833,7 @@ def main(arguments):
         raw = reader.evaluate()
         require(len(raw) <= c.DOCUMENT_LIMIT, "E_LIMIT")
         reader.recheck()
-        fd = os.open(reader.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400)
-        try:
-            sent = 0
-            while sent < len(raw):
-                count = os.write(fd, raw[sent:])
-                require(count > 0, "E_RUNTIME")
-                sent += count
-        finally:
-            os.close(fd)
+        write_exclusive(reader.output, raw)
         reader.inputs.append((reader.output, raw))
         reader.recheck()
         require(os.write(1, b"READY\n") == 6, "E_RUNTIME")
@@ -818,6 +841,9 @@ def main(arguments):
         require(message == b"SEAL\n", "E_RUNTIME")
         control.recheck()
         reader.recheck()
+        terminal = reader.terminal(raw)
+        frame = ("COMMIT " + str(len(terminal)) + " " + c.digest(terminal) + "\n").encode("ascii")
+        require(len(frame) <= 96 and os.write(1, frame) == len(frame), "E_RUNTIME")
     finally:
         try:
             if reader is not None:

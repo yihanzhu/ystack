@@ -48,6 +48,7 @@ case "$jq_bin" in /*) ;; *) emit_error E_RUNTIME ;; esac
 scratch=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-scope-evaluate.XXXXXX" 2>/dev/null) ||
   emit_error E_RUNTIME
 scratch=$(CDPATH='' cd -P -- "$scratch" 2>/dev/null && pwd -P) || emit_error E_RUNTIME
+reader_started=$SECONDS
 /bin/mkdir -m 700 "$scratch/observation" || emit_error E_RUNTIME
 reader_pid=''
 control_open=false
@@ -62,6 +63,11 @@ finish_reader() {
     wait "$reader_pid" 2>/dev/null || :
     reader_pid=''
   fi
+}
+remaining_time() {
+  local remaining=$((300 - SECONDS + reader_started))
+  [ "$remaining" -gt 0 ] || emit_error E_RUNTIME
+  /usr/bin/printf '%s' "$remaining"
 }
 cleanup() { finish_reader; exec 8<&-; /bin/rm -rf -- "$scratch" >/dev/null 2>&1 || :; }
 signal_exit() { trap - EXIT HUP INT TERM; cleanup; /usr/bin/printf '%s\n' E_RUNTIME >&2; exit 1; }
@@ -178,6 +184,47 @@ reader_sha=$(sha256_path "$reader") || emit_error E_RUNTIME
 consumer_sha=$(sha256_path "$repo/shadow/v1/_consumer.py") || emit_error E_RUNTIME
 python_sha=$(sha256_path "$python_bin") || emit_error E_RUNTIME
 jq_sha=$(sha256_path "$jq_bin") || emit_error E_RUNTIME
+locator_snapshot() {
+  /usr/bin/perl -e 'alarm shift; exec @ARGV; die "exec failed: $!\n"' \
+    "$(remaining_time)" "$python_bin" -I -S -B - "$bundle_root" "$source_git" <<'PY_LOCATORS'
+import hashlib,json,os,stat,sys
+def identity(value):
+    return (value.st_dev,value.st_ino,value.st_mode,value.st_uid,value.st_gid,
+            value.st_nlink,value.st_size,value.st_mtime_ns,value.st_ctime_ns)
+digest=hashlib.sha256()
+def retain(path, state):
+    digest.update(json.dumps((path,identity(state)),separators=(',',':')).encode()+b'\n')
+def walk(fd, path):
+    before=os.fstat(fd);names=sorted(os.listdir(fd))
+    retain(path,before)
+    for name in names:
+        value=os.stat(name,dir_fd=fd,follow_symlinks=False)
+        if stat.S_ISDIR(value.st_mode):
+            child=os.open(name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd)
+            try:
+                if identity(os.fstat(child))!=identity(value):raise ValueError("E_STALE")
+                walk(child,path+"/"+name)
+                if identity(os.stat(name,dir_fd=fd,follow_symlinks=False))!=identity(value):
+                    raise ValueError("E_STALE")
+            finally:os.close(child)
+        elif stat.S_ISREG(value.st_mode):retain(path+"/"+name,value)
+        else:raise ValueError("E_RELATION")
+    if identity(os.fstat(fd))!=identity(before) or sorted(os.listdir(fd))!=names:
+        raise ValueError("E_STALE")
+try:
+    for path in sys.argv[1:]:
+        if not os.path.isabs(path) or os.path.realpath(path)!=path:raise ValueError("E_RELATION")
+        fd=os.open(path,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+        try:walk(fd,path)
+        finally:os.close(fd)
+    print(digest.hexdigest())
+except (OSError,ValueError) as error:
+    print(str(error) if str(error) in {"E_LIMIT","E_STALE","E_RELATION"} else "E_RUNTIME",file=sys.stderr)
+    raise SystemExit(1)
+PY_LOCATORS
+}
+locator_before=$(locator_snapshot 2>"$scratch/locator-error") ||
+  emit_error "$(/bin/cat "$scratch/locator-error")"
 /usr/bin/mkfifo -m 600 "$scratch/reader-control" "$scratch/reader-ready" || emit_error E_RUNTIME
 /bin/mkdir -m 700 "$scratch/reader-captures" "$scratch/reader-runtime" "$scratch/reader-runtime/no-hooks" || emit_error E_RUNTIME
 exec 7<>"$scratch/reader-control"
@@ -187,27 +234,30 @@ control_open=true
   my $flags = fcntl(STDIN, F_GETFL, 0);
   defined($flags) && fcntl(STDIN, F_SETFL, $flags | O_NONBLOCK) or exit 1;
 ' <&7 || emit_error E_RUNTIME
-for prepared in observation.json observation.json.canonical evaluation.json evaluation.json.canonical reader-stderr; do
+for prepared in observation.json observation.json.canonical evaluation.json evaluation.json.canonical reader-stderr \
+  terminal.json terminal.json.canonical final-observation.json final-observation.json.canonical locator-error terminal-error; do
   : >"$scratch/$prepared" || emit_error E_RUNTIME
 done
 /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C LANG=C YSTACK_SCOPE_JQ="$jq_bin" \
-  /usr/bin/perl -e 'alarm 300; exec @ARGV; die "exec failed: $!\n"' "$python_bin" -I -S -B "$reader" read \
+  /usr/bin/perl -e 'alarm shift; exec @ARGV; die "exec failed: $!\n"' "$(remaining_time)" "$python_bin" -I -S -B "$reader" read \
   "$scratch/scope.json" "$scratch/shadow-set.json" "$bundle_root" "$source_git" \
   "$scratch/observation/result.json" <&7 >&8 2>"$scratch/reader-stderr" 7>&- 8>&- &
 reader_pid=$!
 exec 9<"$scratch/reader-ready"
 exec 8<&9
 exec 9<&-
-ready=''
-if ! IFS= read -r -t 300 -n 16 ready <&8; then
+ready=$(/usr/bin/perl -e 'alarm shift; my $count=sysread(STDIN,my $frame,7);
+  defined($count) && $frame eq "READY\n" or exit 1; print $frame or exit 1;
+' "$(remaining_time)" <&8) || {
   finish_reader
   reader_error=$(/bin/cat "$scratch/reader-stderr") || emit_error E_RUNTIME
   emit_error "$reader_error"
-fi
+}
 [ "$ready" = READY ] || emit_error E_RUNTIME
 control_verified=true
 snapshot "$scratch/observation/result.json" "$scratch/observation.json"
 require_canonical "$scratch/observation.json"
+observation_sha=$(sha256_path "$scratch/observation.json") || emit_error E_RUNTIME
 
 policy_sha=$(sha256_path "$scratch/policy.json") || emit_error E_RUNTIME
 scope_sha=$(sha256_path "$scratch/scope.json") || emit_error E_RUNTIME
@@ -307,6 +357,14 @@ require_canonical "$scratch/evaluation.json"
 /usr/bin/printf 'SEAL\n' >&7 || emit_error E_RUNTIME
 exec 7>&-
 control_open=false
+commit=$(/usr/bin/perl -e 'alarm shift; my $count=sysread(STDIN,my $frame,97);
+  defined($count) && length($frame)<=96 &&
+  $frame =~ /\ACOMMIT ([1-9][0-9]{0,6}) ([0-9a-f]{64})\n\z/ && $1<=1048576 or exit 1;
+  print $frame or exit 1;
+' "$(remaining_time)" <&8) || emit_error E_RUNTIME
+commit_values=${commit#COMMIT }
+commit_size=${commit_values%% *}
+commit_sha=${commit_values#* }
 reader_status=0
 wait "$reader_pid" || reader_status=$?
 reader_pid=''
@@ -316,9 +374,110 @@ if [ "$reader_status" -ne 0 ]; then
   emit_error "$reader_error"
 fi
 [ ! -s "$scratch/reader-stderr" ] || emit_error E_RUNTIME
-extra=''
-if IFS= read -r -n 1 extra <&8 || [ -n "$extra" ]; then emit_error E_RUNTIME; fi
+/usr/bin/perl -e 'alarm shift; my $count=sysread(STDIN,my $byte,1);
+  defined($count) && $count==0 or exit 1;
+' "$(remaining_time)" <&8 || emit_error E_RUNTIME
 exec 8<&-
+
+terminal_status=0
+/usr/bin/perl -e 'alarm shift; exec @ARGV; die "exec failed: $!\n"' \
+  "$(remaining_time)" "$python_bin" -I -S -B - \
+  "$scratch/observation" "$scratch/terminal.json" "$commit_size" "$commit_sha" \
+  2>"$scratch/terminal-error" <<'PY_TERMINAL_SNAPSHOT' || terminal_status=$?
+import hashlib,os,stat,sys
+parent=source=target=None
+class SnapshotRefusal(Exception):pass
+def require_snapshot(value,code):
+    if not value:raise SnapshotRefusal(code)
+def identity(value):
+    return (value.st_dev,value.st_ino,value.st_mode,value.st_uid,value.st_gid,
+            value.st_nlink,value.st_size,value.st_mtime_ns,value.st_ctime_ns)
+try:
+    directory,destination,maximum,commit_sha=sys.argv[1:];maximum=int(maximum)
+    parent=os.open(directory,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+    before=os.stat("terminal.json",dir_fd=parent,follow_symlinks=False)
+    require_snapshot(stat.S_ISREG(before.st_mode) and before.st_nlink==1,"E_RUNTIME")
+    source=os.open("terminal.json",os.O_RDONLY|os.O_NONBLOCK|os.O_NOFOLLOW,dir_fd=parent)
+    require_snapshot(identity(os.fstat(source))==identity(before),"E_STALE")
+    chunks=[];received=0
+    while received<maximum+1:
+        raw=os.read(source,min(65536,maximum+1-received))
+        if not raw:break
+        chunks.append(raw);received+=len(raw)
+    require_snapshot(identity(os.fstat(source))==identity(before) and
+        identity(os.stat("terminal.json",dir_fd=parent,follow_symlinks=False))==identity(before),"E_STALE")
+    raw=b"".join(chunks)
+    require_snapshot(hashlib.sha256(raw).hexdigest()==commit_sha,"E_RELATION")
+    require_snapshot(received==maximum and before.st_size==maximum,"E_RELATION")
+    named=os.lstat(destination)
+    require_snapshot(stat.S_ISREG(named.st_mode) and named.st_nlink==1,"E_RUNTIME")
+    target=os.open(destination,os.O_WRONLY|os.O_NONBLOCK|os.O_NOFOLLOW)
+    require_snapshot(identity(os.fstat(target))==identity(named),"E_STALE")
+    os.ftruncate(target,0)
+    for raw in chunks:
+        sent=0
+        while sent<len(raw):
+            count=os.write(target,raw[sent:])
+            if count<=0:raise OSError("snapshot write failed")
+            sent+=count
+except SnapshotRefusal as error:
+    print(str(error),file=sys.stderr);raise SystemExit(1)
+except BaseException as error:
+    print("E_RUNTIME",file=sys.stderr);print(repr(error),file=sys.stderr);raise SystemExit(1)
+finally:
+    for descriptor in (target,source,parent):
+        if descriptor is not None:os.close(descriptor)
+PY_TERMINAL_SNAPSHOT
+[ "$(/usr/bin/wc -c <"$scratch/terminal-error" | /usr/bin/tr -d ' ')" -le 65536 ] || emit_error E_RUNTIME
+if [ "$terminal_status" -ne 0 ]; then
+  terminal_error=$(/bin/dd if="$scratch/terminal-error" bs=65537 count=1 2>/dev/null) || emit_error E_RUNTIME
+  /usr/bin/printf '%s\n' "$terminal_error" | /usr/bin/cmp -s - "$scratch/terminal-error" || emit_error E_RUNTIME
+  case "$terminal_error" in E_RELATION|E_STALE|E_RUNTIME) emit_error "$terminal_error" ;; *) emit_error E_RUNTIME ;; esac
+fi
+[ ! -s "$scratch/terminal-error" ] || emit_error E_RUNTIME
+[ "$(sha256_path "$scratch/terminal.json")" = "$commit_sha" ] || emit_error E_RELATION
+require_canonical "$scratch/terminal.json"
+"$jq_bin" -e --slurpfile original "$scratch/observation.json" --arg original_sha "$observation_sha" '
+  (keys | sort) == ["body","id","kind","schema_version"] and
+  (.schema_version | type == "number") and .schema_version == 1 and
+  .kind == "scope_shadow_evidence_terminal" and .id == $original[0].id and
+  (.body | keys == ["commands","observation_sha256"]) and
+  .body.observation_sha256 == $original_sha and
+  (.body.commands | type == "array" and length <= 4096 and
+    all(.[]; keys == ["argv_sha256","component_sha256","executable_sha256","role"] and
+      (.role | type == "string" and test("\\A[a-z0-9][a-z0-9._:-]{0,127}\\z")) and
+      all(.argv_sha256,.component_sha256,.executable_sha256;
+        type == "string" and test("\\A[0-9a-f]{64}\\z")))) and
+  .body.commands[0:($original[0].body.commands | length)] == $original[0].body.commands
+' "$scratch/terminal.json" >/dev/null 2>&1 || emit_error E_RELATION
+"$jq_bin" -S -c --slurpfile terminal "$scratch/terminal.json" \
+  '.body.commands=$terminal[0].body.commands' "$scratch/observation.json" \
+  >"$scratch/final-observation.json" || emit_error E_RUNTIME
+"$jq_bin" -e --slurpfile original "$scratch/observation.json" \
+  'del(.body.commands) == ($original[0] | del(.body.commands))' \
+  "$scratch/final-observation.json" >/dev/null || emit_error E_RELATION
+require_canonical "$scratch/final-observation.json"
+[ "$(sha256_path "$scratch/observation.json")" = "$observation_sha" ] &&
+  [ "$(sha256_path "$scratch/terminal.json")" = "$commit_sha" ] || emit_error E_STALE
+/usr/bin/cmp -s "$scratch/observation/terminal.json" "$scratch/terminal.json" || emit_error E_STALE
+[ "$(locator_snapshot 2>"$scratch/locator-error")" = "$locator_before" ] || emit_error E_STALE
+for required in "$source_path" "$policy" "$record_program" "$program" "$reader" "$repo/shadow/v1/_consumer.py" "$python_bin" "$jq_bin"; do
+  [ -f "$required" ] && [ ! -L "$required" ] || emit_error E_STALE
+done
+[ "$(sha256_path "$source_path")" = "$driver_sha" ] &&
+  [ "$(sha256_path "$policy")" = "$policy_sha" ] &&
+  [ "$(sha256_path "$record_program")" = "$record_program_sha" ] &&
+  [ "$(sha256_path "$program")" = "$program_sha" ] &&
+  [ "$(sha256_path "$reader")" = "$reader_sha" ] &&
+  [ "$(sha256_path "$repo/shadow/v1/_consumer.py")" = "$consumer_sha" ] &&
+  [ "$(sha256_path "$python_bin")" = "$python_sha" ] &&
+  [ "$(sha256_path "$jq_bin")" = "$jq_sha" ] || emit_error E_STALE
+index=0
+for input in "${documents[@]}"; do
+  [ -f "$input" ] && [ ! -L "$input" ] || emit_error E_STALE
+  /usr/bin/cmp -s "$input" "$scratch/${names[$index]}.json" || emit_error E_STALE
+  index=$((index+1))
+done
 
 /bin/cat "$scratch/evaluation.json" || emit_error E_RUNTIME
 trap - EXIT HUP INT TERM

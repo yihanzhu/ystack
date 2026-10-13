@@ -1409,6 +1409,149 @@ race_marker_case appeared ''
 race_marker_case appeared-symlink '' symlink
 pass 'held marker changes, appearance, and symlink appearance before SEAL refuse as stale'
 
+"$python_bin" -I -S -B - "$root" "$tmp" "$bin" "${good[@]}" <<'PY_TERMINAL_TEST'
+import copy,hashlib,json,os,pathlib,pwd,runpy,shutil,subprocess,sys
+root,tmp,bin_path=map(pathlib.Path,sys.argv[1:4]);documents=sys.argv[4:]
+namespace=runpy.run_path(str(root/'scope/v1/read-shadow-evidence.py'),run_name='terminal_limits_test')
+Reader=namespace['_Reader'];c=namespace['c'];canonical=c.canonical
+area=tmp/'terminal-controls';area.mkdir()
+def reader_at(name,rows):
+    location=area/name;location.mkdir()
+    reader=Reader.__new__(Reader);reader.commands_open=True;reader.commands=copy.deepcopy(rows)
+    reader.scope={'id':'a'};reader.output=location/'result.json'
+    return reader
+def refusal(operation,code):
+    try:operation()
+    except c.Refusal as error:assert error.code==code,(error.code,code)
+    else:raise AssertionError('required refusal absent: '+code)
+row={'role':'a','argv_sha256':'0'*64,'executable_sha256':'0'*64,'component_sha256':'0'*64}
+reader=reader_at('append-limit',[])
+for _ in range(4096):reader.record_command('a',[],row['executable_sha256'],row['component_sha256'])
+assert len(reader.commands)==4096
+refusal(lambda:reader.record_command('a',[],row['executable_sha256'],row['component_sha256']),'E_LIMIT')
+refusal(lambda:reader.terminal(b'original'),'E_LIMIT')
+refusal(lambda:reader.record_command('a',[],row['executable_sha256'],row['component_sha256']),'E_RUNTIME')
+assert not (reader.output.parent/'terminal.json').exists()
+base=len(canonical({'schema_version':1,'kind':'scope_shadow_evidence_terminal','id':'a',
+                    'body':{'observation_sha256':c.digest(b'original'),'commands':[]}}))
+count=(c.DOCUMENT_LIMIT-base+1)//len(canonical(row))
+rows=[copy.deepcopy(row) for _ in range(count)]
+remaining=c.DOCUMENT_LIMIT-(base+count*len(canonical(row))-1)
+for item in rows:
+    added=min(127,remaining);item['role']+='a'*added;remaining-=added
+    if not remaining:break
+assert remaining==0 and count<4096
+reader=reader_at('document-limit',rows);raw=reader.terminal(b'original')
+assert len(raw)==c.DOCUMENT_LIMIT and (reader.output.parent/'terminal.json').read_bytes()==raw
+refusal(lambda:reader.terminal(b'original'),'E_RUNTIME')
+rows[-1]['role']+='a'
+refusal(lambda:reader_at('document-over-limit',rows).terminal(b'original'),'E_LIMIT')
+print('terminal limits: 4096 append, 4097 refusal, independent exact 1 MiB and overflow PASS',flush=True)
+package=area/'package';package.mkdir();(package/'scope').mkdir()
+for component in ('core','shadow','control','enforcement','adapters','preparation','telemetry','maintenance','evals','scripts'):
+    shutil.copytree(root/component,package/component)
+shutil.copytree(root/'scope/v1',package/'scope/v1')
+reader_path=package/'scope/v1/read-shadow-evidence.py';frontend=package/'scope/v1/evaluate-scope.sh'
+reader_source=reader_path.read_text();frontend_source=frontend.read_text()
+argv=[str(frontend),'evaluate',*documents,str(tmp/'legacy-bundles'),str(tmp/'legacy-source.git')]
+environment=dict(os.environ,PATH=str(bin_path)+':/usr/bin:/bin')
+frame='require(len(frame) <= 96 and os.write(1, frame) == len(frame), "E_RUNTIME")'
+assert reader_source.count(frame)==1
+boundary="/usr/bin/perl -e 'alarm shift; exec @ARGV; die \"exec failed: $!\\n\"' \\\n  \"$(remaining_time)\" \"$python_bin\" -I -S -B - \\\n  \"$scratch/observation\""
+assert frontend_source.count(boundary)==1
+captures=area/'captures';captures.mkdir()
+for name in ('original.json','terminal.json','baseline-original.json'):(captures/name).write_bytes(b'')
+def run_case(label,reader_change=None,driver_change=None,expected=None):
+    private_error=area/(label+'.terminal-error');private_error.write_bytes(b'')
+    reader_bytes=reader_change or reader_source;driver_bytes=driver_change or frontend_source
+    error_capture='emit_error() {\n  if [ -n "${scratch:-}" ] && [ -f "$scratch/terminal-error" ]; then\n'+\
+        '    /bin/dd if="$scratch/terminal-error" of='+str(private_error)+' bs=65537 count=1 2>/dev/null\n  fi'
+    driver_bytes=driver_bytes.replace('emit_error() {',error_capture)
+    (area/(label+'.reader-source.py')).write_text(reader_bytes)
+    (area/(label+'.frontend-source.sh')).write_text(driver_bytes)
+    reader_path.write_text(reader_bytes)
+    frontend.chmod(0o700);frontend.write_text(driver_bytes);frontend.chmod(0o500)
+    result=subprocess.run(argv,env=environment,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=35)
+    assert private_error.stat().st_size<=65536,label+' private stderr overflow'
+    (area/(label+'.stdout')).write_bytes(result.stdout);(area/(label+'.stderr')).write_bytes(result.stderr)
+    print('terminal control',label,'exit',result.returncode,'stderr',repr(result.stderr),flush=True)
+    if expected is None:assert result.returncode==0 and result.stdout and not result.stderr
+    else:
+        assert result.returncode!=0 and not result.stdout and result.stderr==expected.encode()+b'\n',label
+        if label in {'size-mismatch','deleted-suffix','shape-valid-suffix'}:
+            assert private_error.read_bytes()==b'E_RELATION\n',label+' did not reject actual retained snapshot digest'
+    return result
+run_case('normal')
+for label,expression in (
+    ('partial',"b'COMMIT 1 '"),('duplicate','frame+frame'),('trailing',"frame+b'x'"),
+    ('reordered',"b'COMMIT '+c.digest(terminal).encode()+b' '+str(len(terminal)).encode()+b'\\n'"),
+    ('zero-size',"b'COMMIT 0 '+c.digest(terminal).encode()+b'\\n'"),
+    ('leading-zero',"b'COMMIT 0'+str(len(terminal)).encode()+b' '+c.digest(terminal).encode()+b'\\n'"),
+    ('uppercase-digest',"b'COMMIT '+str(len(terminal)).encode()+b' '+c.digest(terminal).upper().encode()+b'\\n'"),
+    ('bad-digest',"b'COMMIT '+str(len(terminal)).encode()+b' '+b'0'*64+b'\\n'"),
+    ('size-mismatch',"b'COMMIT '+str(len(terminal)+1).encode()+b' '+c.digest(terminal).encode()+b'\\n'")):
+    modified=reader_source.replace(frame,'frame = '+expression+'\n        require(os.write(1, frame) == len(frame), "E_RUNTIME")')
+    run_case(label,modified,expected='E_RELATION' if label in {'bad-digest','size-mismatch'} else 'E_RUNTIME')
+run_case('missing-commit',reader_source.replace(frame,'return'),expected='E_RUNTIME')
+run_case('nonzero-after-commit',reader_source.replace(frame,frame+'\n        raise OSError("controlled exit")'),expected='E_RUNTIME')
+late_source=reader_source.replace('terminal = reader.terminal(raw)',
+    "reader.record_command('a', ['synthetic suffix control'], '0'*64, '0'*64)\n        terminal = reader.terminal(raw)")
+if sys.platform=='darwin':
+    probe=package/'late-acl-probe';probe.write_bytes(b'owned ACL fixture\n');probe.chmod(0o400)
+    subprocess.run(['/bin/chmod','+a','user:'+pwd.getpwuid(os.getuid()).pw_name+' allow read',str(probe)],check=True)
+    acquire="""probe_active = False
+        rule = c._installed_rule(os.getuid(), reader.darwin)
+        probe = c._open_held(str(PACKAGE / 'late-acl-probe'), False,
+            lambda fd,state,ancestor: True if ancestor or not probe_active else rule(fd,state,False), 'E_RUNTIME')
+        reader.owned.append(probe)
+        """
+    late_source=reader_source.replace('raw = reader.evaluate()',acquire+'raw = reader.evaluate()')
+    late_source=late_source.replace('message = sys.stdin.buffer.read(8)',
+                                    'probe_active = True\n        message = sys.stdin.buffer.read(8)')
+    capture='/bin/cat "$scratch/observation.json" > '+str(captures/'original.json')+'\n'+\
+            '/bin/cat "$scratch/observation/terminal.json" > '+str(captures/'terminal.json')+'\n'
+    baseline=run_case('actual-jq-baseline',reader_source,frontend_source.replace(boundary,capture+boundary))
+    original_baseline=(captures/'original.json').read_bytes()
+    (captures/'baseline-original.json').write_bytes(original_baseline)
+    actual=run_case('actual-late-uuid',late_source,frontend_source.replace(boundary,capture+boundary))
+    assert actual.stdout==baseline.stdout
+    baseline_observation=json.loads(original_baseline)
+    current_observation=json.loads((captures/'original.json').read_bytes())
+    del baseline_observation['body']['commands'];del current_observation['body']['commands']
+    assert canonical(current_observation)==canonical(baseline_observation)
+    original=json.loads((captures/'original.json').read_bytes());terminal=json.loads((captures/'terminal.json').read_bytes())
+    before=original['body']['commands'];after=terminal['body']['commands']
+    assert after[:len(before)]==before and len(after)==len(before)+1
+    assert all(item['role']=='darwin-acl-uuid-resolution' for item in after[len(before):])
+    assert terminal['body']['observation_sha256']==c.digest((captures/'original.json').read_bytes())
+    final=copy.deepcopy(original);final['body']['commands']=after
+    original_noncommands=copy.deepcopy(original);del original_noncommands['body']['commands']
+    final_noncommands=copy.deepcopy(final);del final_noncommands['body']['commands']
+    assert canonical(final_noncommands)==canonical(original_noncommands)
+    print('actual full-SEAL fixed-owner UUID suffix retained with exact original prefix PASS',flush=True)
+# These copies alter a committed terminal only after the real reader has exited.
+mutation='"$python_bin" -I -S -B - "$scratch/observation/terminal.json" "$scratch/observation.json" <<\'PY_SWAP_TERMINAL\'\n'
+for label,code in (
+    ('fifo',"path.unlink();os.mkfifo(path,0o600)"),
+    ('deleted-suffix',"document=json.loads(path.read_bytes());document['body']['commands']=json.loads(pathlib.Path(sys.argv[2]).read_bytes())['body']['commands'];replace_terminal(document)"),
+    ('shape-valid-suffix',"document=json.loads(path.read_bytes());document['body']['commands'][-1]['argv_sha256']='0'*64;replace_terminal(document)")):
+    replace_code="""def replace_terminal(document):
+    raw=(json.dumps(document,sort_keys=True,separators=(',',':'))+'\\n').encode()
+    path.unlink()
+    fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o400)
+    try:
+        assert os.write(fd,raw)==len(raw)
+    finally:os.close(fd)
+"""
+    inserted=mutation+'import json,os,pathlib,sys\npath=pathlib.Path(sys.argv[1])\n'+replace_code+code+'\nPY_SWAP_TERMINAL\n'
+
+    run_case(label,reader_change=late_source if label!='fifo' else reader_source,
+             driver_change=frontend_source.replace(boundary,inserted+boundary),
+             expected='E_RUNTIME' if label=='fifo' else 'E_RELATION')
+print('terminal protocol framing, EOF, nonzero, first-open FIFO and committed-byte tampering PASS',flush=True)
+PY_TERMINAL_TEST
+pass 'terminal append and byte caps are independent; framed commitment binds the first snapshot'
+
 genuine_python=''
 genuine_base=''
 genuine_writer=''
