@@ -1478,7 +1478,7 @@ race_marker_case appeared-symlink '' symlink
 pass 'held marker changes, appearance, and symlink appearance before SEAL refuse as stale'
 
 "$python_bin" -I -S -B - "$root" "$tmp" "$bin" "${good[@]}" <<'PY_TERMINAL_TEST'
-import copy,hashlib,json,os,pathlib,pwd,runpy,shutil,subprocess,sys
+import copy,hashlib,json,os,pathlib,pwd,runpy,shutil,subprocess,sys,time
 root,tmp,bin_path=map(pathlib.Path,sys.argv[1:4]);documents=sys.argv[4:]
 namespace=runpy.run_path(str(root/'scope/v1/read-shadow-evidence.py'),run_name='terminal_limits_test')
 Reader=namespace['_Reader'];c=namespace['c'];canonical=c.canonical
@@ -1529,7 +1529,7 @@ boundary="/usr/bin/perl -e 'alarm shift; exec @ARGV; die \"exec failed: $!\\n\"'
 assert frontend_source.count(boundary)==1
 captures=area/'captures';captures.mkdir()
 for name in ('original.json','terminal.json','baseline-original.json'):(captures/name).write_bytes(b'')
-def run_case(label,reader_change=None,driver_change=None,expected=None):
+def run_case(label,reader_change=None,driver_change=None,expected=None,timeout=35):
     private_error=area/(label+'.terminal-error');private_error.write_bytes(b'')
     reader_bytes=reader_change or reader_source;driver_bytes=driver_change or frontend_source
     error_capture='emit_error() {\n  if [ -n "${scratch:-}" ] && [ -f "$scratch/terminal-error" ]; then\n'+\
@@ -1539,7 +1539,7 @@ def run_case(label,reader_change=None,driver_change=None,expected=None):
     (area/(label+'.frontend-source.sh')).write_text(driver_bytes)
     reader_path.write_text(reader_bytes)
     frontend.chmod(0o700);frontend.write_text(driver_bytes);frontend.chmod(0o500)
-    result=subprocess.run(argv,env=environment,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=35)
+    result=subprocess.run(argv,env=environment,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=timeout)
     assert private_error.stat().st_size<=65536,label+' private stderr overflow'
     (area/(label+'.stdout')).write_bytes(result.stdout);(area/(label+'.stderr')).write_bytes(result.stderr)
     print('terminal control',label,'exit',result.returncode,'stderr',repr(result.stderr),flush=True)
@@ -1617,6 +1617,25 @@ for label,expression in (
     ('size-mismatch',"b'COMMIT '+str(len(terminal)+1).encode()+b' '+c.digest(terminal).encode()+b'\\n'")):
     modified=reader_source.replace(frame,'frame = '+expression+'\n        require(os.write(1, frame) == len(frame), "E_RUNTIME")')
     run_case(label,modified,expected='E_RELATION' if label in {'bad-digest','size-mismatch'} else 'E_RUNTIME')
+ready_write='require(os.write(1, b"READY\\n") == 6, "E_RUNTIME")'
+seal_write="/usr/bin/printf 'SEAL\\n' >&7 || emit_error E_RUNTIME"
+assert reader_source.count(ready_write)==frontend_source.count(seal_write)==1
+for phase in ('READY','SEAL'):
+    for label,raw in (('missing',b''),('partial',phase[:3].encode()),('duplicate',(phase+'\n'+phase+'\n').encode()),
+                      ('reordered',b'SEAL\n' if phase=='READY' else b'COMMIT 1 0\n'),
+                      ('trailing',(phase+'\nx').encode()),('EOF',b'')):
+        if phase=='READY':
+            replacement='return' if not raw else 'require(os.write(1, '+repr(raw)+') == '+str(len(raw))+', "E_RUNTIME")'
+            run_case('ready-'+label,reader_source.replace(ready_write,replacement,1),expected='E_RUNTIME')
+        else:
+            replacement='/usr/bin/printf '+repr(raw.decode()).replace('\n','\\n')+' >&7 || emit_error E_RUNTIME'
+            if not raw:replacement=':'
+            run_case('seal-'+label,driver_change=frontend_source.replace(seal_write,replacement,1),expected='E_RUNTIME')
+started=time.monotonic()
+run_case('protocol-deadline',reader_source.replace('message = sys.stdin.buffer.read(8)',
+    'while True: signal.pause()\n        message = sys.stdin.buffer.read(8)',1),expected='E_RUNTIME',timeout=320)
+assert 290 <= time.monotonic()-started < 320
+print('READY/SEAL missing, partial, duplicate, reordered, trailing, EOF and original 300s protocol deadline PASS',flush=True)
 run_case('missing-commit',reader_source.replace(frame,'return'),expected='E_RUNTIME')
 run_case('nonzero-after-commit',reader_source.replace(frame,frame+'\n        raise OSError("controlled exit")'),expected='E_RUNTIME')
 late_source=reader_source.replace('terminal = reader.terminal(raw)',
@@ -2264,7 +2283,7 @@ native={'context_version':2,'source_sha256':sha((package/'shadow/v1/_cancel_rele
 put(base/'native-measurement.json',{'native_release':native,'state_created':False,'startup_called':False,'vm_called':False,'qualification_claimed':False})
 source=base/'source.git';run(['/usr/bin/git','init','-q','--bare',source])
 def git(args,raw=None):return run(['/usr/bin/git','--no-replace-objects','--git-dir='+str(source),*args],raw)
-content=b'fixed content\n';blob=git(['hash-object','-w','--stdin'],content).decode().strip();sibling=git(['hash-object','-w','--stdin'],b'unchanged sibling\n').decode().strip();sibling_tree=git(['mktree'],f'100644 blob {sibling}\tsibling.md\n'.encode()).decode().strip();tree=git(['mktree'],f'100644 blob {blob}\tsource.txt\n040000 tree {sibling_tree}\tystack-evidence\n'.encode()).decode().strip();commit=git(['commit-tree',tree],b'source\n').decode().strip();git(['update-ref','refs/heads/main',commit])
+content=b'fixed content\n';blob=git(['hash-object','-w','--stdin'],content).decode().strip();sibling=git(['hash-object','-w','--stdin'],b'unchanged sibling\n').decode().strip();sibling_tree=git(['mktree'],f'100644 blob {sibling}\tsibling.md\n'.encode()).decode().strip();unrelated_tree=git(['mktree'],f'100644 blob {sibling}\told.txt\n'.encode()).decode().strip();tree=git(['mktree'],f'100644 blob {blob}\tsource.txt\n040000 tree {unrelated_tree}\tunrelated\n040000 tree {sibling_tree}\tystack-evidence\n'.encode()).decode().strip();commit=git(['commit-tree',tree],b'source\n').decode().strip();git(['update-ref','refs/heads/main',commit])
 run(['/bin/bash',package/'scripts/test/local-git-materializer-fixtures.sh','build',work/'built',jq,'sha1',commit,tree])
 original=json.loads((work/'built/input.json').read_bytes())
 for row in original['payloads']:
@@ -2741,6 +2760,261 @@ assert outer_facts[0]['authentication']['state']=='authenticated'
 assert outer_facts[0]['record_form']=='withheld-write.v1'
 print(json.dumps({'genuine_withheld_contract':'PASS','frozen_files':32,'synthetic_runtime_facts':True,
     'vm_executed':False,'publisher_executed':False,'lawful_sibling_before_read':'PASS'},sort_keys=True),flush=True)
+
+# These private calls retain the real package, command owner and actual Git database.
+relation_area=base/'reader-relations';relation_area.mkdir(mode=0o755)
+relation_cases=[]
+write_commit=write_material_receipt['candidate']['commit_id']
+actual_facts={}
+for entry_raw in git(['ls-tree','-r','-t','-z',write_commit]).split(b'\0'):
+    if entry_raw:
+        head,path=entry_raw.split(b'\t');actual_facts[path.decode()]=tuple(head.decode().split())
+def object_tree(entries,directory=''):
+    children={path[len(directory):].split('/')[0] for path in entries if path.startswith(directory)}
+    rows=[]
+    for name in sorted(children):
+        path=directory+name;mode,kind,oid=entries[path]
+        if kind=='tree':oid=object_tree(entries,path+'/')
+        rows.append(f'{mode} {kind} {oid}\t{name}\n')
+    return git(['mktree'],''.join(rows).encode()).decode().strip()
+changed_blob=git(['hash-object','-w','--stdin'],b'changed existing file\n').decode().strip()
+for label,change in (
+    ('old-blob',lambda f:f.update({'source.txt':('100644','blob',changed_blob)})),
+    ('old-mode',lambda f:f.update({'source.txt':('100755','blob',blob)})),
+    ('old-type',lambda f:f.update({'source.txt':('120000','blob',blob)})),
+    ('old-removal',lambda f:f.pop('source.txt')),
+    ('extra-leaf',lambda f:f.update({'extra.txt':('100644','blob',changed_blob)})),
+    ('unrelated-tree',lambda f:f.update({'unrelated/old.txt':('100644','blob',changed_blob)}))):
+    changed=dict(actual_facts);change(changed);bad_tree=object_tree(changed)
+    bad_commit=git(['commit-tree',bad_tree,'-p',commit],b'reader negative\n').decode().strip()
+    relation_cases.append({'label':label,'mode':'write','commit':bad_commit,'tree':bad_tree})
+wrong_parent=git(['commit-tree',write_tree],b'wrong actual sole parent\n').decode().strip()
+for label,mode in (('actual-parent','git'),('parent-field','git'),('tree-field','git')):
+    relation_cases.append({'label':label,'mode':mode,'commit':wrong_parent if label=='actual-parent' else write_commit,
+                           'tree':write_tree})
+for label in ('rows-missing','rows-extra','rows-reordered','rows-unmatched','row-blob',
+              'scope-glob','bundle-ref','publisher-body','rebuilt-input','frozen-marker','frozen-seed','frozen-readme'):
+    case={'label':label,'mode':'write','commit':write_commit,'tree':write_tree}
+    if label.startswith('frozen-'):
+        name={'frozen-marker':'bundle.json','frozen-seed':'eval-seed.json','frozen-readme':'README.md'}[label]
+        path='ystack-evidence/'+incident['id']+'/'+name
+        raw=b'Wrong readme\n' if name=='README.md' else canonical({'wrong':True})
+        oid=git(['hash-object','-w','--stdin'],raw).decode().strip()
+        changed=dict(actual_facts);changed[path]=('100644','blob',oid)
+        bad_tree=object_tree(changed)
+        case.update(tree=bad_tree,commit=git(['commit-tree',bad_tree,'-p',commit],b'frozen relation negative\n').decode().strip(),
+                    row={'path':path,'git_blob_oid':oid,'sha256':sha(raw)})
+    relation_cases.append(case)
+bundle_area=relation_area/'bundles';bundle_area.mkdir(mode=0o755)
+for label in ('bundle-complete','missing-receipt','missing-origin','missing-check','missing-marker','early-marker',
+              'extra-file','marker-form','marker-size','marker-digest','marker-inventory','swapped-directory'):
+    directory=bundle_area/label;shutil.copytree(base/'bundles'/sha(outer_record),directory)
+    if label.startswith('missing-'):
+        name={'missing-receipt':'sandbox-receipt.json','missing-origin':'origin-observation.json',
+              'missing-check':'sandbox-check.json','missing-marker':'bundle.json'}[label]
+        (directory/name).unlink()
+    elif label=='early-marker':
+        for path in directory.iterdir():
+            if path.name!='bundle.json':path.unlink()
+    elif label=='extra-file':put(directory/'extra.txt',b'extra\n')
+    elif label not in ('swapped-directory','bundle-complete'):
+        marker=json.loads((directory/'bundle.json').read_bytes())
+        if label=='marker-form':marker['body']['record_form']='enforced-reproduction.v1'
+        if label=='marker-size':marker['body']['files'][0]['size_bytes']+=1
+        if label=='marker-digest':marker['body']['files'][0]['sha256']='0'*64
+        if label=='marker-inventory':marker['body']['files'].pop()
+        put(directory/'bundle.json',marker)
+    if label=='swapped-directory':
+        shutil.copytree(directory,bundle_area/'replacement')
+        os.chown(bundle_area,consumer_uid,consumer_gid)
+    relation_cases.append({'label':label,'mode':'bundle'})
+for label,form,change,needle in (
+    ('form-missing','withheld',lambda b:b.pop('record_form'),'set(body) =='),
+    ('form-wrong','withheld',lambda b:b.update(record_form='other'),'form in'),
+    ('write-missing','withheld',lambda b:b.pop('write'),'set(body) =='),
+    ('write-mixed','enforced',lambda b:b.update(write={}), 'set(body) =='),
+    ('enforced-changed','enforced',lambda b:b['materialization']['value'].update(outcome='changed'),'outcome'),
+    ('withheld-nochange','withheld',lambda b:b['materialization']['value'].update(outcome='no-change'),'outcome')):
+    selected=dict(outer_files if form=='withheld' else files)
+    record=json.loads(selected['shadow-record.json']);change(record['body'])
+    selected['shadow-record.json']=canonical(record)
+    marker=json.loads(outer_marker if form=='withheld' else frozen['bundle.json'])
+    marker['body']['files']=[{'name':name,'size_bytes':len(raw),'sha256':sha(raw)} for name,raw in sorted(selected.items())]
+    selected['bundle.json']=canonical(marker)
+    location=relation_area/('dispatch-'+label);location.mkdir(mode=0o755)
+    bundle_root=location/'bundles';bundle_root.mkdir(mode=0o755)
+    directory=bundle_root/sha(selected['shadow-record.json']);directory.mkdir(mode=0o755)
+    for name,raw in selected.items():put(directory/name,raw)
+    selected_scope=json.loads((doc_root/'scope.json').read_bytes())
+    selected_scope['body'].update(qualified_identity=record['body']['qualified_identity'],
+        shadow_evidence_refs=[e.document_ref(selected['shadow-record.json'])])
+    put(location/'scope.json',selected_scope)
+    put(location/'set.json',{'schema_version':1,'kind':'shadow_evidence_set','id':'scope.evidence.genuine','body':{'records':[record]}})
+    relation_cases.append({'label':label,'mode':'dispatch','needle':needle})
+location=relation_area/'dispatch-environment-duplicate';location.mkdir(mode=0o755)
+duplicated=json.loads(outer_record);duplicated['id']='record.scope-second-eligible'
+assert sha(canonical(duplicated))!=sha(outer_record)
+bundle_root=location/'bundles';bundle_root.mkdir(mode=0o755)
+shutil.copytree(base/'bundles'/sha(outer_record),bundle_root/sha(outer_record))
+current=json.loads((doc_root/'scope.json').read_bytes())
+current['body']['shadow_evidence_refs'].append(e.document_ref(canonical(duplicated)))
+put(location/'scope.json',current)
+put(location/'set.json',{'schema_version':1,'kind':'shadow_evidence_set','id':'scope.evidence.genuine',
+    'body':{'records':[json.loads(outer_record),duplicated]}})
+relation_cases.append({'label':'environment-duplicate','mode':'dispatch','needle':'environment not in identities'})
+put(relation_area/'cases.json',relation_cases)
+for name,raw in outer_files.items():put(relation_area/name,raw)
+for label in [row['label'] for row in relation_cases]+['qualified','unproven']:
+    scratch=relation_area/label;scratch.mkdir(mode=0o700,exist_ok=True);scratch.chmod(0o700);os.chown(scratch,consumer_uid,consumer_gid)
+    for name in ('reader-captures','reader-runtime','observation','reader-runtime/no-hooks'):
+        child=scratch/name;child.mkdir(mode=0o700);os.chown(child,consumer_uid,consumer_gid)
+relation_program=put(base/'reader-relations.py',b"""import copy,importlib.util,json,os,pathlib,sys
+base=pathlib.Path(sys.argv[1]);label=sys.argv[2];package=base/'package';area=base/'reader-relations'
+source=package/'scope/v1/read-shadow-evidence.py'
+spec=importlib.util.spec_from_file_location('scope_actual_relation_reader',source)
+module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
+c=module.c;canonical=c.canonical
+cases=json.loads((area/'cases.json').read_bytes())
+case=next((row for row in cases if row['label']==label),None)
+location=area/('dispatch-'+label) if case and case['mode']=='dispatch' else base/'documents'
+reader=module._Reader(location/'scope.json',location/('set.json' if case and case['mode']=='dispatch' else 'shadow-set.json'),
+                     location/'bundles' if case and case['mode']=='dispatch' else base/'bundles',
+                     base/'source.git',area/label/'observation/result.json')
+files={name:(area/name).read_bytes() for name in c.SHADOW_EVIDENCE_NAMES+('publisher-body.txt',)}
+incident=json.loads(files['incident.json']);body=json.loads(files['shadow-record.json'])['body']
+try:
+    if label in ('qualified','unproven'):
+        if label=='unproven':files['registry.json']=(package/'shadow/v1/shadow-environments.json').read_bytes()
+        operation=lambda:reader._authenticate(files)
+        target='_authenticate';needle='registry["proof_state"]'
+    else:
+        case=next(row for row in json.loads((area/'cases.json').read_bytes()) if row['label']==label)
+        if case['mode']=='dispatch':
+            try:reader.evaluate()
+            except c.Refusal as error:
+                assert error.code=='E_RELATION',(label,error.code)
+                tb=error.__traceback__;reached=[]
+                while tb:
+                    if tb.tb_frame.f_code is module._Reader.evaluate.__code__:reached.append(tb.tb_lineno)
+                    tb=tb.tb_next
+                lines=source.read_text().splitlines()
+                assert any(case['needle'] in '\\n'.join(lines[max(0,n-2):n+4]) for n in reached),(label,reached)
+                print(json.dumps({'actual_reader_dispatch':label,'code':error.code,'lines':reached}),flush=True)
+            else:raise AssertionError('mixed record form accepted: '+label)
+            raise SystemExit(0)
+        if case['mode']=='bundle':
+            parent=reader.directory(area/'bundles')
+            if label=='bundle-complete':
+                held=c._HeldBundle(parent,label,'withheld-write.v1')
+                try:assert held.files['shadow-record.json']==files['shadow-record.json'];held.recheck();print('actual HeldBundle complete positive PASS')
+                finally:held.close()
+            elif label=='swapped-directory':
+                held=c._HeldBundle(parent,label,'withheld-write.v1')
+                try:
+                    (area/'bundles'/label).rename(area/'bundles'/'previous')
+                    (area/'bundles'/'replacement').rename(area/'bundles'/label)
+                    try:held.recheck()
+                    except c.Refusal as error:assert error.code=='E_STALE';print('actual HeldBundle swapped directory Stale PASS')
+                    else:raise AssertionError('swapped completed bundle accepted')
+                finally:held.close()
+            else:
+                try:c._HeldBundle(parent,label,'withheld-write.v1')
+                except c.Refusal as error:
+                    assert error.code=='E_RELATION',(label,error.code)
+                    tb=error.__traceback__;reached=False
+                    while tb:
+                        reached|=tb.tb_frame.f_code is c._HeldBundle.__init__.__code__;tb=tb.tb_next
+                    assert reached;print('actual HeldBundle '+label+' Relation PASS',flush=True)
+                else:raise AssertionError('malformed completed bundle accepted: '+label)
+            raise SystemExit(0)
+        revision=incident['body']['git_revision_ref']
+        facts=reader.git.inventory(dict(revision,commit_id=case['commit']))
+        source_facts=reader.git.inventory(revision)
+        assert reader.commit(case['commit'])[0]==case['tree']
+        target='write_relations';needle='facts.get(path)'
+        if label=='extra-leaf':needle='if path not in source_facts and value[1] !='
+        if case['mode']=='git':
+            response=json.loads(files['materialization-response.json']);receipt=json.loads(response['payloads'][0]['data'])
+            receipt['candidate'].update(commit_id=case['commit'],tree_id=case['tree'])
+            if label=='parent-field':receipt['candidate']['parent_commit_id']='0'*40
+            if label=='tree-field':receipt['candidate']['tree_id']='0'*40
+            receipt_raw=canonical(receipt);response['payloads'][0].update(data=receipt_raw.decode(),sha256=c.digest(receipt_raw))
+            files['materialization-response.json']=canonical(response)
+            prep=json.loads(files['preparation-record.json'])
+            prep.update(response_sha256=c.digest(files['materialization-response.json']),receipt_sha256=c.digest(receipt_raw))
+            prep['candidate'].update({key:receipt['candidate'][key] for key in ('commit_id','tree_id','parent_commit_id')})
+            files['preparation-record.json']=canonical(prep)
+            operation=lambda:reader.git_relations(files,json.loads(files['materialization-input.json']),incident,body)
+            target='git_relations';needle={'actual-parent':'parents ==','parent-field':'candidate["parent_commit_id"]','tree-field':'candidate_tree =='}[label]
+        else:
+            rows=body['write']['write_set']
+            if 'row' in case:
+                selected=next(row for row in rows if row['path']==case['row']['path']);selected.update(case['row'])
+            if label=='rows-missing':rows.pop()
+            if label=='rows-extra':rows.append(copy.deepcopy(rows[-1]))
+            if label=='rows-reordered':rows[0],rows[1]=rows[1],rows[0]
+            if label=='rows-unmatched':rows[0]['path']='unmatched.txt'
+            if label.startswith('rows-'):needle='[row.get("path")'
+            if label=='row-blob':rows[0]['git_blob_oid']='0'*40;needle='set(row) =='
+            if label=='scope-glob':reader.scope_body['allowed_paths']=['unmatched/*'];needle='self.allowed(path)'
+            if label.startswith('frozen-'):needle={'frozen-marker':'same(marker_doc','frozen-seed':'seed ==','frozen-readme':'frozen["incident.json"]'}[label]
+            if label=='bundle-ref':body['write']['bundle_ref']['sha256']='0'*64;needle='write["bundle_ref"]'
+            if label=='publisher-body':files['publisher-body.txt']=b'wrong body\\n';needle='publisher_request'
+            if label=='rebuilt-input':files['materialization-input.json']=canonical(dict(json.loads(files['materialization-input.json']),extra=1));needle='self.rebuild_input'
+            operation=lambda:reader.write_relations(files,json.loads(files['materialization-input.json']),incident,body,
+                                                    facts,source_facts,case['tree'])
+    try:operation()
+    except c.Refusal as error:
+        assert label!='qualified' and error.code=='E_RELATION',(label,error.code)
+        reached=[];tb=error.__traceback__
+        while tb:
+            if tb.tb_frame.f_code.co_filename==str(source) and tb.tb_frame.f_code.co_name==target:
+                reached.append(tb.tb_lineno)
+            tb=tb.tb_next
+        lines=source.read_text().splitlines()
+        assert any(needle in '\\n'.join(lines[max(0,n-2):n+4]) for n in reached),(label,target,needle,reached)
+        print(json.dumps({'actual_reader_refusal':label,'code':error.code,'function':target,'lines':reached}),flush=True)
+    else:
+        assert label=='qualified','missing actual Reader refusal: '+label
+        print('actual Reader native-qualified authentication positive PASS',flush=True)
+finally:reader.close()
+""",0o555)
+relation_argv=['/usr/bin/sudo','-n','-u',consumer,'--','/usr/bin/env','-i',
+    'PATH='+str(tools)+':/usr/bin:/bin','TMPDIR='+str(base/'consumer-work'),
+    'YSTACK_SCOPE_JQ='+str(jq),sys.executable,'-I','-S','-B',relation_program,base]
+for case in relation_cases:run([*relation_argv,case['label']])
+run([*relation_argv,'qualified'])
+registry_path=package/'shadow/v1/shadow-environments.json';qualified_registry=registry_path.read_bytes()
+try:
+    unproven=json.loads(qualified_registry);unproven['body']['environments'][0]['proof_state']='unproven'
+    put(registry_path,unproven)
+    run([*relation_argv,'unproven'])
+finally:put(registry_path,qualified_registry)
+
+original_scope=(doc_root/'scope.json').read_bytes();original_set=(doc_root/'shadow-set.json').read_bytes()
+completed=base/'bundles'/sha(outer_record);missing=base/'snapshots'/'missing-digest-control'
+completed.rename(missing)
+try:
+    missing_result=json.loads(run(scope_argv))
+    assert missing_result['body']['outcome']=='not-proposable'
+    assert 'scope.sandbox-receipt-missing' in missing_result['body']['reason_ids']
+finally:missing.rename(completed)
+for label,with_legacy in (('required-environment-missing',False),('required-environment-legacy',True)):
+    current=json.loads(original_scope);current['body']['required_shadow_environments'].append('env.scope-missing')
+    records=[json.loads(outer_record)]
+    if with_legacy:
+        legacy=json.loads(outer_record);legacy['id']='record.scope-legacy'
+        for key in ('record_form','sandbox','producer_invocations','consumer_provenance_ref','write'):legacy['body'].pop(key)
+        legacy['body']['environment']['environment_id']='env.scope-missing';records.append(legacy)
+        current['body']['shadow_evidence_refs'].append(e.document_ref(canonical(legacy)))
+    try:
+        put(doc_root/'scope.json',current)
+        put(doc_root/'shadow-set.json',{'schema_version':1,'kind':'shadow_evidence_set','id':'scope.evidence.genuine','body':{'records':records}})
+        report=json.loads(run(scope_argv));facts=report['body']['evidence']['shadow_bundle_facts']
+        assert report['body']['outcome']=='not-proposable' and 'scope.sandbox-receipt-missing' in report['body']['reason_ids']
+        assert sum(row['eligible'] and row['authentication']['state']=='authenticated' for row in facts)==1
+        print(label+' authenticated member cannot replace every required environment PASS',flush=True)
+    finally:put(doc_root/'scope.json',original_scope);put(doc_root/'shadow-set.json',original_set)
 
 reader_command = ['/usr/bin/sudo','-n','-u',consumer,'--',sys.executable,'-I','-S','-B',
                   base / 'genuine-reader.py', write_attempt]
