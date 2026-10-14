@@ -1,0 +1,148 @@
+# Private proposal: publication and dispatch require the separate reserved decision.
+name: scope genuine macOS proof
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scope-genuine-macos
+  cancel-in-progress: false
+
+jobs:
+  genuine-scope:
+    if: github.repository_id == '1270665750' && github.repository == 'yihanzhu/ystack' && github.event_name == 'workflow_dispatch' && github.actor == 'yihanzhu' && github.triggering_actor == 'yihanzhu' && github.ref == 'refs/heads/ystack/impl/scope-gate-hardening' && github.workflow_ref == 'yihanzhu/ystack/.github/workflows/scope-genuine-macos.yml@refs/heads/ystack/impl/scope-gate-hardening' && github.workflow_sha == github.sha
+    runs-on: macos-15-intel
+    timeout-minutes: 100
+    env:
+      YSTACK_SELECTED_SHA: ${{ github.sha }}
+      YSTACK_WORKFLOW_SHA: ${{ github.workflow_sha }}
+      YSTACK_WORKFLOW_REF: ${{ github.workflow_ref }}
+      PATH: /usr/bin:/bin:/usr/sbin:/sbin
+      LC_ALL: C
+      LANG: C
+      GIT_AUTHOR_NAME: ci
+      GIT_AUTHOR_EMAIL: ci@example.com
+      GIT_COMMITTER_NAME: ci
+      GIT_COMMITTER_EMAIL: ci@example.com
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        timeout-minutes: 5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify fixed host and source; fill only the owned test cache
+        timeout-minutes: 5
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          set -euo pipefail
+          umask 077
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REPOSITORY" = yihanzhu/ystack
+          test "$GITHUB_REPOSITORY_ID" = 1270665750
+          test "$GITHUB_ACTOR" = yihanzhu
+          test "$GITHUB_TRIGGERING_ACTOR" = yihanzhu
+          test "$GITHUB_REF" = refs/heads/ystack/impl/scope-gate-hardening
+          test "$YSTACK_WORKFLOW_REF" = yihanzhu/ystack/.github/workflows/scope-genuine-macos.yml@refs/heads/ystack/impl/scope-gate-hardening
+          test "$GITHUB_ACTIONS" = true
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$RUNNER_OS" = macOS
+          test "$RUNNER_ARCH" = X64
+          test "$(/usr/bin/uname -s)" = Darwin
+          test "$(/usr/bin/uname -m)" = x86_64
+          [[ "$YSTACK_SELECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$YSTACK_SELECTED_SHA" = "$GITHUB_SHA"
+          test "$YSTACK_WORKFLOW_SHA" = "$YSTACK_SELECTED_SHA"
+          test "$(/usr/bin/git rev-parse HEAD)" = "$YSTACK_SELECTED_SHA"
+          workflow_blob=$(/usr/bin/git rev-parse "$YSTACK_WORKFLOW_SHA:.github/workflows/scope-genuine-macos.yml")
+          test "$(/usr/bin/git hash-object .github/workflows/scope-genuine-macos.yml)" = "$workflow_blob"
+          /usr/bin/printf 'selected_sha=%s workflow_sha=%s workflow_blob=%s\n' "$YSTACK_SELECTED_SHA" "$YSTACK_WORKFLOW_SHA" "$workflow_blob"
+          /usr/bin/git merge-base --is-ancestor bde9921177d055c3f32e43b9e10486c6d44b2748 HEAD
+          test -z "$(/usr/bin/git status --porcelain=v1)"
+          /usr/bin/printf 'repo=1270665750 branch=ystack/impl/scope-gate-hardening issue=541 implementation_PR=558 candidate=%s\n' "$YSTACK_SELECTED_SHA"
+          for tool in /usr/bin/python3 /usr/local/bin/jq /usr/bin/git /usr/bin/cc /usr/bin/sudo /usr/bin/perl /usr/bin/dscl /usr/sbin/dseditgroup /usr/bin/stat /bin/chmod /usr/sbin/chown /bin/mkdir /bin/cp /bin/rm /usr/bin/id /usr/bin/false; do
+            test -f "$tool" && test ! -L "$tool" && test -x "$tool"
+          done
+          p=$(/usr/bin/python3 -I -S -B -c 'import os,sys;assert sys.version_info >= (3,11);print(os.path.realpath(sys.executable))')
+          if [ -x /opt/homebrew/bin/python3.14 ]; then native_p=/opt/homebrew/bin/python3.14
+          elif [ -x /usr/local/bin/python3.14 ]; then native_p=/usr/local/bin/python3.14
+          else native_p=$(command -v python3.14 || command -v python3); fi
+          native_p=$("$native_p" -I -S -B -c 'import os,sys;print(os.path.realpath(sys.executable))')
+          test "$p" = "$native_p"
+          "$p" -I -S -B - "$PWD" "$YSTACK_SELECTED_SHA" <<'PY'
+          import hashlib,importlib.util,json,os,pathlib,plistlib,stat,sys,sysconfig,uuid
+          root=pathlib.Path(sys.argv[1]); assert root.resolve()==root
+          selected_sha=sys.argv[2];token=selected_sha[:8]
+          source=root/'scope/v1/read-shadow-evidence.py'
+          spec=importlib.util.spec_from_file_location('reserved_source_preflight',source)
+          module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
+          assert '_cancel_release' not in sys.modules
+          paths={pathlib.Path(sys.executable),pathlib.Path('/usr/local/bin/jq')}
+          paths.update(pathlib.Path(m.__file__) for m in tuple(sys.modules.values()) if getattr(m,'__file__',None))
+          rows=[]
+          for path in sorted(paths):
+              assert path.resolve()==path and path.is_file()
+              if path.is_relative_to(root):
+                  continue
+              before=path.stat()
+              for item in (path,*path.parents):
+                  state=item.lstat()
+                  assert state.st_uid==0 and not state.st_mode & 0o022 and not stat.S_ISLNK(state.st_mode)
+              raw=path.read_bytes(); after=path.stat()
+              fields=('st_dev','st_ino','st_uid','st_gid','st_mode','st_nlink','st_size','st_mtime_ns','st_ctime_ns')
+              assert all(getattr(before,key)==getattr(after,key) for key in fields)
+              rows.append({'path':str(path),'sha256':hashlib.sha256(raw).hexdigest(),'size':len(raw),'uid':before.st_uid,'gid':before.st_gid,'mode':oct(before.st_mode),'nlink':before.st_nlink})
+          jq=pathlib.Path('/usr/local/bin/jq'); assert jq.stat().st_nlink==1
+          assert hashlib.sha256(jq.read_bytes()).hexdigest()=='5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef'
+          for key in ('stdlib','platstdlib','include','platinclude'):
+              path=pathlib.Path(sysconfig.get_path(key));assert path.resolve()==path and path.is_dir()
+              for item in (path,*path.parents):
+                  state=item.lstat();assert state.st_uid==0 and not state.st_mode & 0o022 and not stat.S_ISLNK(state.st_mode)
+          assert not os.path.lexists('/usr/local/libexec/ystack-sandbox/v1/supervisor')
+          fixture_root='/usr/local/libexec/ystack-scope-fixture.'+token
+          assert not os.path.lexists(fixture_root)
+          print(json.dumps({'selected_sha':selected_sha,'token':token,'fixture_root':fixture_root,'fixture_names':['yscw_'+token,'yscc_'+token,'yscg_'+token,'yscp_'+token]},sort_keys=True))
+          print(json.dumps({'preflight':'physical runtime and loaded import closure','rows':rows,'state_created':False,'startup_called':False,'vm_called':False},sort_keys=True))
+          PY
+          test "$(/usr/local/bin/jq --version)" = jq-1.6
+          /usr/bin/sudo -n /usr/bin/true
+          cache_root=$(/usr/bin/mktemp -d "$RUNNER_TEMP/ystack-mac-proof.XXXXXX")
+          cache_root=$(CDPATH='' cd -P -- "$cache_root" && pwd -P)
+          identity=$(/usr/bin/stat -f '%d:%i:%u' "$cache_root")
+          /usr/bin/printf 'YSTACK_PROOF_TMP=%s\nYSTACK_PROOF_TMP_ID=%s\nTMPDIR=%s\n' "$cache_root" "$identity" "$cache_root" >> "$GITHUB_ENV"
+          /bin/mkdir -m 700 "$cache_root/ystack-portable-core-jq16"
+          /bin/cp /usr/local/bin/jq "$cache_root/ystack-portable-core-jq16/jq-osx-amd64"
+          /bin/chmod 0555 "$cache_root/ystack-portable-core-jq16/jq-osx-amd64"
+          test "$(/usr/bin/shasum -a 256 "$cache_root/ystack-portable-core-jq16/jq-osx-amd64" | /usr/bin/awk '{print $1}')" = 5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef
+          test -z "$(/usr/bin/git status --porcelain=v1)"
+      - name: Complete original scope qualification suite
+        timeout-minutes: 35
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+        run: /bin/bash scripts/test/scope-qualification.test.sh
+      - name: Complete original native owner suite
+        timeout-minutes: 50
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+        run: /bin/bash scripts/test/shadow-enforced.test.sh
+      - name: Verify source and remove only the owned test cache
+        if: always()
+        timeout-minutes: 5
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          set -euo pipefail
+          if [ -n "${YSTACK_PROOF_TMP:-}" ]; then
+            test -d "$YSTACK_PROOF_TMP" && test ! -L "$YSTACK_PROOF_TMP"
+            test "$(/usr/bin/stat -f '%d:%i:%u' "$YSTACK_PROOF_TMP")" = "$YSTACK_PROOF_TMP_ID"
+            /bin/rm -rf -- "$YSTACK_PROOF_TMP"
+            test ! -e "$YSTACK_PROOF_TMP" && test ! -L "$YSTACK_PROOF_TMP"
+          fi
+          [[ "$YSTACK_SELECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$YSTACK_SELECTED_SHA" = "$GITHUB_SHA"
+          test "$YSTACK_WORKFLOW_SHA" = "$YSTACK_SELECTED_SHA"
+          test "$(/usr/bin/git rev-parse HEAD)" = "$YSTACK_SELECTED_SHA"
+          workflow_blob=$(/usr/bin/git rev-parse "$YSTACK_WORKFLOW_SHA:.github/workflows/scope-genuine-macos.yml")
+          test "$(/usr/bin/git hash-object .github/workflows/scope-genuine-macos.yml)" = "$workflow_blob"
+          /usr/bin/printf 'selected_sha=%s workflow_sha=%s workflow_blob=%s\n' "$YSTACK_SELECTED_SHA" "$YSTACK_WORKFLOW_SHA" "$workflow_blob"
+          test -z "$(/usr/bin/git status --porcelain=v1)"
