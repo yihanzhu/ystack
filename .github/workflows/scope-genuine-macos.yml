@@ -86,6 +86,7 @@ jobs:
           physical = os.path.realpath(logical)
           active_path = logical
           owned = []
+          posix_refusal = None
           links = {}
           fields = ("st_dev", "st_ino", "st_mode", "st_uid", "st_gid", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns")
 
@@ -120,8 +121,14 @@ jobs:
                       raise OSError(acl_errno or errno.EIO, "system bootstrap ACL query")
 
               def immutable(fd, state, _ancestor):
+                  global posix_refusal
                   assert time.monotonic() < deadline
                   if state.st_uid != 0 or state.st_mode & 0o022:
+                      try:
+                          if posix_refusal is None:
+                              posix_refusal = (fd, state, _ancestor)
+                      except BaseException:
+                          pass
                       return False
                   ctypes.set_errno(0)
                   empty_acl(library.acl_get_fd_np(fd, 0x100))
@@ -169,10 +176,62 @@ jobs:
                   chain.append({"type": type(cursor).__name__, "code": getattr(cursor, "code", None), "errno": getattr(cursor, "errno", None),
                       "filename": str(getattr(cursor, "filename", ""))[:256]})
                   cursor = cursor.__cause__ or cursor.__context__
+              detail = {"status": "GAP", "reason": "no saved POSIX refusal"}
               try:
-                  print(json.dumps({"stage": "system-bootstrap-entry-refusal", "path": active_path[:256],
+                  if posix_refusal is not None:
+                      saved_fd, saved, ancestor = posix_refusal
+                      assert type(saved_fd) is int and saved_fd >= 0 and type(ancestor) is bool
+                      assert type(saved) is os.stat_result
+                      detail = {"status": "GAP", "fd_at_refusal": saved_fd, "ancestor": ancestor,
+                          "state": {field: getattr(saved, field) for field in fields}}
+                      cursor = error.__traceback__
+                      for _ in range(16):
+                          if cursor is None:
+                              break
+                          frame = cursor.tb_frame
+                          local = frame.f_locals
+                          if (frame.f_code is c._open_held.__code__ and frame.f_globals is c.__dict__ and
+                              local.get("rule") is immutable and local.get("state") is saved and
+                              local.get("fd") == saved_fd):
+                              parts, path = local["parts"], local["path"]
+                              assert type(parts) is list and 0 < len(parts) <= 128
+                              assert type(path) is str and path.startswith("/") and parts == path.split("/")[1:]
+                              assert all(type(part) is str and part not in ("", ".", "..") for part in parts)
+                              if "index" not in local:
+                                  assert "name" not in local and "last" not in local and ancestor is True
+                                  index, component = -1, "/"
+                              else:
+                                  index = local["index"]
+                                  assert type(index) is int and 0 <= index < len(parts)
+                                  assert local["name"] == parts[index]
+                                  assert local["last"] is (index == len(parts) - 1)
+                                  assert ancestor is (not local["last"])
+                                  component = "/" + "/".join(parts[:index + 1])
+                              assert len(component.encode()) <= 1024
+                              detail.update(status="CAPTURED", component=component, index=index,
+                                  caller="_open_held", traceback_line=cursor.tb_lineno)
+                              break
+                          cursor = cursor.tb_next
+                      if len(json.dumps(detail).encode()) > 2048:
+                          detail = {"status": "GAP", "reason": "component record cap", "state": detail["state"]}
+              except BaseException as observation_error:
+                  if detail is not None:
+                      detail = {"status": "GAP", "reason": type(observation_error).__name__,
+                          "state": detail.get("state")}
+              try:
+                  report = {"stage": "system-bootstrap-entry-refusal", "path": active_path[:256],
                       "logical": logical[:256], "physical": physical[:256], "chain": chain,
-                      "candidate_executed": False}, sort_keys=True), file=sys.stderr, flush=True)
+                      "posix_refusal": detail, "candidate_executed": False}
+                  encoded = json.dumps(report, sort_keys=True)
+                  if len(encoded.encode()) > 16384:
+                      for key in ("path", "logical", "physical"):
+                          report[key] = report[key][:64]
+                      for item in report["chain"]:
+                          item["filename"] = item["filename"][:64]
+                      report["diagnostic_truncated"] = True
+                      encoded = json.dumps(report, sort_keys=True)
+                  assert len(encoded.encode()) <= 16384
+                  print(encoded, file=sys.stderr, flush=True)
               except BaseException:
                   pass
               raise
