@@ -43,7 +43,13 @@ drafted: 2026-10-14
    Python in the unchanged native suite's order: executable
    `/opt/homebrew/bin/python3.14`, then `/usr/local/bin/python3.14`, then
    `python3.14` or `python3` on the fixed PATH. Resolve its physical path and report
-   its actual version before checking the minimum. A selected candidate that fails
+   its actual version before checking the minimum. Before executing that candidate,
+   use fixed system Python for a bounded read-only check of its physical installation
+   and required load paths, using actual Darwin ACL and held identity checks. This
+   private fixture boundary accepts only a closed, immutable installation layout;
+   unknown layouts fail. Repeat it immediately before the first privileged Python
+   execution. Candidate self-report and later root checks cannot supply this prior
+   trust. Preserve the later complete runtime/module checks. A candidate that fails
    any check stops; do not try another runtime. The scope outer evaluator and
    privileged fixture must bind that same physical Python. The original harness still
    verifies its root-owned copied package; repository modules are not claimed to
@@ -96,8 +102,9 @@ drafted: 2026-10-14
 For the implementation PR: `review_size: standard`.
 
 The separately reviewed high-risk plan precedes implementation and pins the
-workflow bytes. Preserve the approved baseline except for the fixed selector and
-its version output. Recheck patch context against the actual publication base.
+workflow bytes. Preserve the approved baseline except for the fixed selector,
+its version output and the prior trusted runtime check. Recheck patch context
+against the actual publication base.
 A further change to workflow meaning or permissions requires fresh artifact review.
 
 Publish the stable workflow through its protected PR, producing main X. Normally
@@ -114,8 +121,8 @@ API, product debug path, live profile or general privileged execution service.
 ## Out of scope
 
 This publication changes no product or test file. The scope fixture's matching
-runtime selection is repaired only under #541's existing accepted plan and paths;
-it changes no assertion or proof standard. No reduced controls, arbitrary dispatch
+runtime selection and existing Darwin resolver wiring are repaired only under
+#541's existing accepted plan and paths; they change no assertion or proof standard. No reduced controls, arbitrary dispatch
 ref, alternative provider, runtime/tool installation, host repair, VM, real publisher, production
 identity, real target or new credential scope. No #544 ref or sudoers execution is
 inherited: that work still needs its own accepted gates and explicit reviewed
