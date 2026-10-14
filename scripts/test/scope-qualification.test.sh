@@ -2864,6 +2864,7 @@ put(location/'set.json',{'schema_version':1,'kind':'shadow_evidence_set','id':'s
 relation_cases.append({'label':'environment-duplicate','mode':'dispatch','needle':'environment not in identities'})
 put(relation_area/'cases.json',relation_cases)
 for name,raw in outer_files.items():put(relation_area/name,raw)
+put(relation_area/'bundle.json',outer_marker)
 for label in [row['label'] for row in relation_cases]+['qualified','unproven']:
     scratch=relation_area/label;scratch.mkdir(mode=0o700,exist_ok=True);scratch.chmod(0o700);os.chown(scratch,consumer_uid,consumer_gid)
     for name in ('reader-captures','reader-runtime','observation','reader-runtime/no-hooks'):
@@ -2880,7 +2881,7 @@ location=area/('dispatch-'+label) if case and case['mode']=='dispatch' else base
 reader=module._Reader(location/'scope.json',location/('set.json' if case and case['mode']=='dispatch' else 'shadow-set.json'),
                      location/'bundles' if case and case['mode']=='dispatch' else base/'bundles',
                      base/'source.git',area/label/'observation/result.json')
-files={name:(area/name).read_bytes() for name in c.SHADOW_EVIDENCE_NAMES+('publisher-body.txt',)}
+files={name:(area/name).read_bytes() for name in c.SHADOW_EVIDENCE_NAMES+('publisher-body.txt','bundle.json')}
 incident=json.loads(files['incident.json']);body=json.loads(files['shadow-record.json'])['body']
 try:
     if label in ('qualified','unproven'):
