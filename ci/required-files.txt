@@ -592,3 +592,4 @@ shadow/v1/write-shadow.py
 shadow/v1/write-materialization-input.jq
 scripts/test/shadow-write.test.sh
 scope/v1/read-shadow-evidence.py
+.github/workflows/scope-genuine-macos.yml
