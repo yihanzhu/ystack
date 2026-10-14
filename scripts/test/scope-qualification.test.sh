@@ -2821,10 +2821,10 @@ esac
 cleanup_boundary=b'cleanup() { finish_reader; exec 8<&-; /bin/rm -rf -- "$scratch" >/dev/null 2>&1 || :; }'
 assert frontend_before.count(cleanup_boundary)==1
 capture_cleanup=b"""cleanup() { finish_reader; exec 8<&-;
- /usr/bin/printf '%s' "$test_reader_status" >"$TMPDIR/test-reader-status" 2>/dev/null ||
-  /usr/bin/printf capture_error >"$TMPDIR/test-reader-capture-error" 2>/dev/null || :
+ /usr/bin/printf '%s' "$test_reader_status" 2>/dev/null >"$TMPDIR/test-reader-status" ||
+  /usr/bin/printf capture_error 2>/dev/null >"$TMPDIR/test-reader-capture-error" || :
  /bin/dd if="$scratch/reader-stderr" of="$TMPDIR/test-reader-stderr" bs=65537 count=1 2>/dev/null ||
-  /usr/bin/printf capture_error >"$TMPDIR/test-reader-capture-error" 2>/dev/null || :
+  /usr/bin/printf capture_error 2>/dev/null >"$TMPDIR/test-reader-capture-error" || :
  /bin/rm -rf -- "$scratch" >/dev/null 2>&1 || :; }"""
 wait_boundary=b'    wait "$reader_pid" 2>/dev/null || :'
 assert frontend_before.count(wait_boundary)==1
