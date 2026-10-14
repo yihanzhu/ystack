@@ -8,16 +8,19 @@ drafted: 2026-10-14
 
 ## Requirements
 
-1. Publish the manual workflow for #541 without changing the product or either
-   original suite. Implementation changes only `.github/workflows/scope-genuine-macos.yml`
+1. Publish the manual workflow for #541 without changing the product or its
+   acceptance standard. Implementation changes only `.github/workflows/scope-genuine-macos.yml`
    and its entry in `ci/required-files.txt`. Preserve the meaning of the package
    [approved on 2026-10-14](https://github.com/yihanzhu/ystack/issues/541#issuecomment-6167260870):
 
-   | Approved artifact | SHA-256 |
+   | Approved baseline artifact | SHA-256 |
    |---|---|
    | Decision | `1620fef70105e8b3a82fd4f906b8855d5cbe0026cfbfd994931ca50f48098fed` |
    | Workflow | `4135bf0a37fffb672e02ffeb436cd5dc5d5c7f02dd49aa1c2ef0a9074ea5cd4c` |
    | Two-path patch | `880fa41e85a8387280354c34a70a93a75604d2ac5030063c479d14263b903e2c` |
+
+   The separately accepted plan pins the workflow bytes with the existing-runtime
+   selector below. Preserve the baseline's remaining behavior and authority.
 
 2. Keep dispatch closed to `yihanzhu/ystack`, repository ID `1270665750`, the manual
    event, actor and triggering actor `yihanzhu`, and
@@ -36,8 +39,13 @@ drafted: 2026-10-14
 4. Keep `macos-15-intel` as the unverified candidate host. Before fixture mutation,
    require the approved GitHub-hosted, Darwin and x86_64 guards, fixed physical
    tools, existing noninteractive sudo and absent fixture paths. Preserve physical
-   Python 3.11+, loaded runtime/module and stdlib/include ancestor checks. The
-   native suite must select the same physical Python. The original harness still
+   Python 3.11+, loaded runtime/module and stdlib/include ancestor checks. Select
+   Python in the unchanged native suite's order: executable
+   `/opt/homebrew/bin/python3.14`, then `/usr/local/bin/python3.14`, then
+   `python3.14` or `python3` on the fixed PATH. Resolve its physical path and report
+   its actual version before checking the minimum. A selected candidate that fails
+   any check stops; do not try another runtime. The scope outer evaluator and
+   privileged fixture must bind that same physical Python. The original harness still
    verifies its root-owned copied package; repository modules are not claimed to
    be root-owned in checkout. A missing tool, SDK or safe runtime closure fails.
 
@@ -87,9 +95,10 @@ drafted: 2026-10-14
 
 For the implementation PR: `review_size: standard`.
 
-The separately reviewed high-risk plan precedes implementation. Apply the approved
-workflow bytes; recheck only patch context against the actual publication base.
-A change to workflow meaning or permissions requires fresh artifact review.
+The separately reviewed high-risk plan precedes implementation and pins the
+workflow bytes. Preserve the approved baseline except for the fixed selector and
+its version output. Recheck patch context against the actual publication base.
+A further change to workflow meaning or permissions requires fresh artifact review.
 
 Publish the stable workflow through its protected PR, producing main X. Normally
 merge X into the same #541 implementation branch to produce H. Independently review
@@ -104,8 +113,10 @@ API, product debug path, live profile or general privileged execution service.
 
 ## Out of scope
 
-No product or test changes, reduced controls, arbitrary dispatch ref, alternative
-provider, runtime/tool installation, host repair, VM, real publisher, production
+This publication changes no product or test file. The scope fixture's matching
+runtime selection is repaired only under #541's existing accepted plan and paths;
+it changes no assertion or proof standard. No reduced controls, arbitrary dispatch
+ref, alternative provider, runtime/tool installation, host repair, VM, real publisher, production
 identity, real target or new credential scope. No #544 ref or sudoers execution is
 inherited: that work still needs its own accepted gates and explicit reviewed
 closed-ref/authority binding. This publication does not perform that future action.
