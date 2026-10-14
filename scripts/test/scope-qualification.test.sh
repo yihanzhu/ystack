@@ -1550,6 +1550,63 @@ def run_case(label,reader_change=None,driver_change=None,expected=None):
             assert private_error.read_bytes()==b'E_RELATION\n',label+' did not reject actual retained snapshot digest'
     return result
 run_case('normal')
+commit_boundary='frame = ("COMMIT " + str(len(terminal)) + " " + c.digest(terminal) + "\\n").encode("ascii")'
+assert reader_source.count(commit_boundary)==1
+for label,change,expected in (
+    ('terminal-schema',"document['schema_version']=2",'E_RELATION'),
+    ('terminal-schema-type',"document['schema_version']=True",'E_RELATION'),
+    ('terminal-kind',"document['kind']='wrong_terminal'",'E_RELATION'),
+    ('terminal-id',"document['id']='scope.other'",'E_RELATION'),
+    ('terminal-observation',"document['body']['observation_sha256']='0'*64",'E_RELATION'),
+    ('terminal-root-extra',"document['extra']=1",'E_RELATION'),
+    ('terminal-root-missing',"del document['kind']",'E_RELATION'),
+    ('terminal-body-extra',"document['body']['extra']=1",'E_RELATION'),
+    ('terminal-body-type',"document['body']=[]",'E_RELATION'),
+    ('terminal-commands-type',"document['body']['commands']={}",'E_RELATION'),
+    ('terminal-row-type',"document['body']['commands'][0]=1",'E_RELATION'),
+    ('terminal-row-missing',"del document['body']['commands'][0]['component_sha256']",'E_RELATION'),
+    ('terminal-row-extra',"document['body']['commands'][0]['extra']=1",'E_RELATION'),
+    ('terminal-row-role',"document['body']['commands'][0]['role']='invalid role'",'E_RELATION'),
+    ('terminal-row-hash',"document['body']['commands'][0]['argv_sha256']='g'*64",'E_RELATION'),
+    ('terminal-prefix-removed',"del document['body']['commands'][0]",'E_RELATION'),
+    ('terminal-prefix-reordered',"rows=document['body']['commands'];rows[0],rows[1]=rows[1],rows[0]",'E_RELATION'),
+    ('terminal-prefix-changed',"document['body']['commands'][0]['argv_sha256']='0'*64",'E_RELATION'),
+    ('terminal-root-duplicate',"duplicate=b'id'",'E_CANONICAL'),
+    ('terminal-body-duplicate',"duplicate=b'observation_sha256'",'E_CANONICAL'),
+    ('terminal-row-duplicate',"duplicate=b'role'",'E_CANONICAL')):
+    alteration="""original = json.loads(raw)
+        prefix = original['body']['commands']
+        assert len(prefix) >= 2 and prefix[0] != prefix[1]
+        assert prefix[0]['argv_sha256'] != '0'*64 and c.digest(raw) != '0'*64
+        document = json.loads(terminal)
+        duplicate = False
+        CHANGE
+        terminal = c.canonical(document)
+        if duplicate:
+            key = b'"' + duplicate + b'":'
+            terminal = terminal.replace(key, key + b'"a",' + key, 1)
+        path = reader.output.parent / 'terminal.json'
+        path.unlink()
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400)
+        try:
+            assert os.write(descriptor, terminal) == len(terminal)
+        finally:
+            os.close(descriptor)
+        """.replace('CHANGE',change)
+    altered=reader_source.replace(commit_boundary,alteration+commit_boundary,1)
+    evidence={name:area/(label+'.'+name) for name in ('O','T','COMMIT','wait')}
+    for path in evidence.values():path.write_bytes(b'')
+    capture=''
+    for name,source in (('O','observation.json'),('T','observation/terminal.json')):
+        capture+='/bin/dd if="$scratch/'+source+'" of='+str(evidence[name])+' bs=1048577 count=1 2>/dev/null\n'
+    capture+='/usr/bin/printf \'%s\\n\' "$commit" >'+str(evidence['COMMIT'])+'\n'
+    capture+='/usr/bin/printf \'%s\\n\' "$reader_status" >'+str(evidence['wait'])+'\n'
+    run_case(label,reader_change=altered,driver_change=frontend_source.replace(boundary,capture+boundary,1),expected=expected)
+    tested=evidence['T'].read_bytes();observed=evidence['O'].read_bytes()
+    assert evidence['COMMIT'].read_bytes()==b'COMMIT '+str(len(tested)).encode()+b' '+c.digest(tested).encode()+b'\n'
+    assert evidence['wait'].read_bytes()==b'0\n' and len(json.loads(observed)['body']['commands'])>=2
+    assert (area/(label+'.terminal-error')).read_bytes()==b'',label+' failed before terminal semantics'
+print('terminal semantic controls: actual matching COMMIT, closed shape, O identity/digest and original prefix refuse PASS',flush=True)
 for label,expression in (
     ('partial',"b'COMMIT 1 '"),('duplicate','frame+frame'),('trailing',"frame+b'x'"),
     ('reordered',"b'COMMIT '+c.digest(terminal).encode()+b' '+str(len(terminal)).encode()+b'\\n'"),
@@ -2171,6 +2228,15 @@ def run(argv,raw=None,role=None,component=None,limit=16*1024*1024):
  assert r.returncode==0 and len(r.stdout)<=limit and not r.stderr
  if role:commands.append({'role':role,'argv_sha256':sha(canonical(argv)),'executable_sha256':sha(pathlib.Path(argv[0]).resolve().read_bytes()),'component_sha256':sha(pathlib.Path(component).read_bytes())})
  return r.stdout
+def refuse(argv, label, expected):
+    result = subprocess.run(list(map(str, argv)), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            env=env, timeout=180)
+    print(json.dumps({'negative':label, 'returncode':result.returncode,
+        'stdout_hex':result.stdout.hex(), 'stderr_utf8':result.stderr.decode('utf8','backslashreplace')},
+        sort_keys=True), flush=True)
+    assert result.returncode != 0 and result.stdout == b'' and result.stderr == expected + b'\n'
+    return result
+
 def put(path,value,mode=0o444):
  raw=value if type(value) is bytes else canonical(value);path=pathlib.Path(path);path.write_bytes(raw);path.chmod(mode);return path
 helper=tools/'object-closure';run(['/usr/bin/cc','-std=c11','-Wall','-Wextra','-Werror','-O2',package/c.HELPER_SOURCE,'-o',helper]);helper.chmod(0o555)
@@ -2483,6 +2549,29 @@ print(json.dumps({'genuine_scope_contract': 'PASS', 'synthetic_runtime_facts': T
     'vm_executed': False, 'actual_writer_uid': uid, 'actual_consumer_uid': consumer_uid,
     'scope_sha256': sha(scope_raw)}, sort_keys=True), flush=True)
 
+readonly_scope_raw=(doc_root/'scope.json').read_bytes()
+fixed_scope=json.loads(readonly_scope_raw)
+fixed_scope['body'].update(workflow_id='workflow.shadow-evidence-commit',task_class='task.commit-shadow-evidence')
+try:
+    put(doc_root/'scope.json',fixed_scope)
+    fixed_nochange=json.loads(run(scope_argv))['body']['evidence']['shadow_bundle_facts']
+    assert len(fixed_nochange)==1 and fixed_nochange[0]['eligible'] is True
+    assert fixed_nochange[0]['authentication']['state']=='authenticated'
+    assert fixed_nochange[0]['record_form']=='enforced-reproduction.v1'
+    for key in ('workflow_id','task_class'):
+        partial=json.loads(canonical(fixed_scope));del partial['body'][key]
+        put(doc_root/'scope.json',partial)
+        refuse(scope_argv,'classification-partial-'+key,b'E_SHAPE')
+        mixed=json.loads(canonical(fixed_scope));mixed['body'][key]=json.loads(readonly_scope_raw)['body'][key]
+        put(doc_root/'scope.json',mixed)
+        assert run([jq,'-r','-f',package/'scope/v1/workflow-scope.jq',doc_root/'scope.json'])==b''
+        refuse(scope_argv,'classification-mixed-'+key,b'E_RELATION')
+finally:
+    put(doc_root/'scope.json',readonly_scope_raw)
+assert (doc_root/'scope.json').read_bytes()==readonly_scope_raw
+print(json.dumps({'classification_fixed_pair_nochange':'authenticated',
+    'partial_refusals':2,'shape_valid_mixed_refusals':2},sort_keys=True),flush=True)
+
 frozen = dict(files, **{'bundle.json': marker})
 seed_dir = work / 'seed'
 seed_dir.mkdir(mode=0o700)
@@ -2652,15 +2741,6 @@ assert outer_facts[0]['authentication']['state']=='authenticated'
 assert outer_facts[0]['record_form']=='withheld-write.v1'
 print(json.dumps({'genuine_withheld_contract':'PASS','frozen_files':32,'synthetic_runtime_facts':True,
     'vm_executed':False,'publisher_executed':False,'lawful_sibling_before_read':'PASS'},sort_keys=True),flush=True)
-
-def refuse(argv, label, expected):
-    result = subprocess.run(list(map(str, argv)), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            env=env, timeout=180)
-    print(json.dumps({'negative':label, 'returncode':result.returncode,
-        'stdout_hex':result.stdout.hex(), 'stderr_utf8':result.stderr.decode('utf8','backslashreplace')},
-        sort_keys=True), flush=True)
-    assert result.returncode != 0 and result.stdout == b'' and result.stderr == expected + b'\n'
-    return result
 
 reader_command = ['/usr/bin/sudo','-n','-u',consumer,'--',sys.executable,'-I','-S','-B',
                   base / 'genuine-reader.py', write_attempt]
