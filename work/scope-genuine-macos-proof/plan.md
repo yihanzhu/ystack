@@ -71,7 +71,7 @@ SHA-256 values remain in spec requirement 1 and the linked direct decision.
    cap marks the inventory incomplete. No host repair, fallback, qualification or
    altered acceptance follows from this diagnostic. The existing owner and all
    later real ACL/UUID/runtime checks remain unchanged. Require workflow SHA-256
-   `b0289213949f6d6c87201733541b090edf25cb92696c4359150cb28540ad37ab`.
+   `95ae79c25bb5f89036793ef0f4017d1cf058c2fc0b167adca2440437688a9709`.
    Check its patch against the actual publication base with `git apply --check`.
    Keep the manifest entry exactly once; an existing correct entry needs no edit.
    Reconcile and continue the existing deterministic implementation branch.

@@ -82,16 +82,36 @@ jobs:
               flags_changed = False
               owned_fds = []
               cleanup_unknown = 0
+              current_operation, current_component = "initial", None
+              failure_context = None
               prefix = None
               roots = []
               seen = set()
               old_flags = fcntl.fcntl(2, fcntl.F_GETFL)
 
+              def remember(error):
+                  nonlocal failure_context
+                  if failure_context is None:
+                      failure_context = {"operation": current_operation, "component": current_component,
+                          "type": type(error).__name__, "errno": getattr(error, "errno", None)}
+
+              def emit(row, summary=False):
+                  nonlocal current_operation, current_component
+                  previous = current_operation, current_component
+                  current_operation, current_component = "write-stderr", None
+                  try:
+                      emit_row(row, summary)
+                  except BaseException as error:
+                      remember(error)
+                      raise
+                  finally:
+                      current_operation, current_component = previous
+
               def budget():
                   if time.monotonic() >= deadline - 1:
                       raise TimeoutError("inventory remaining deadline")
 
-              def emit(row, summary=False):
+              def emit_row(row, summary=False):
                   nonlocal output_bytes
                   if time.monotonic() >= deadline:
                       raise TimeoutError("inventory output deadline")
@@ -134,6 +154,15 @@ jobs:
                   match = re.fullmatch(r"((?:/usr/local/Cellar|/opt/homebrew/Cellar)/[^/]+/[^/]+|/Library/Frameworks/Python\.framework/Versions/[^/]+)/bin/python3\.(1[1-9]|[2-9][0-9])", path)
                   return match.group(1) if match else None
 
+              def physical_layout(path):
+                  match = re.fullmatch(r"(.+)/bin/python3\.(1[1-9]|[2-9][0-9])", path)
+                  if match is None or prefix is None or normal(path) != path:
+                      raise ValueError("inventory physical layout shape")
+                  layout = match.group(1)
+                  if not (layout == prefix or layout.startswith(prefix + "/")):
+                      raise ValueError("inventory physical layout containment")
+                  return layout
+
               def allowed(path):
                   return path == "/" or any(path == root or path.startswith(root + "/") for root in roots)
 
@@ -152,13 +181,15 @@ jobs:
                   return False
 
               def open_fd(name, flags, dir_fd=None):
-                  nonlocal cleanup_unknown
+                  nonlocal cleanup_unknown, current_operation
                   acquired = None
                   try:
                       acquired = os.open(name, flags, dir_fd=dir_fd)
+                      current_operation = "register-fd"
                       owned_fds.append(acquired)
                       return acquired
-                  except BaseException:
+                  except BaseException as error:
+                      remember(error)
                       if acquired is not None:
                           try:
                               os.close(acquired)
@@ -167,18 +198,22 @@ jobs:
                       raise
 
               def close_fd(fd):
-                  nonlocal cleanup_unknown
+                  nonlocal cleanup_unknown, current_operation, current_component
                   owned_fds.remove(fd)
                   try:
                       os.close(fd)
-                  except BaseException:
+                  except BaseException as error:
+                      current_operation, current_component = "close-owned-fd", None
+                      remember(error)
                       cleanup_unknown += 1
                       raise
 
               def raw_acl(fd):
+                  nonlocal current_operation
                   captured = []
                   budget()
                   ctypes.set_errno(0)
+                  current_operation = "acl_get_fd_np"
                   acl = library.acl_get_fd_np(fd, 0x100)
                   try:
                       query_errno = ctypes.get_errno()
@@ -191,6 +226,7 @@ jobs:
                       while True:
                           budget()
                           ctypes.set_errno(0)
+                          current_operation = "acl_get_entry"
                           rc = library.acl_get_entry(acl, selector, ctypes.byref(entry))
                           entry_errno = ctypes.get_errno()
                           if rc != 0:
@@ -201,33 +237,45 @@ jobs:
                           if len(captured) >= 128:
                               raise ValueError("inventory ACL cap")
                           selector = -1
+                          current_operation = "acl_get_tag_type"
                           if library.acl_get_tag_type(entry, ctypes.byref(tag)) != 0:
                               raise OSError(ctypes.get_errno() or errno.EIO, "inventory ACL tag")
+                          current_operation = "acl_get_permset"
                           if library.acl_get_permset(entry, ctypes.byref(perms)) != 0:
                               raise OSError(ctypes.get_errno() or errno.EIO, "inventory ACL perms")
                           bits = 0
                           for shift in range(1, 14):
                               budget()
+                              current_operation = "acl_get_perm_np"
                               present = library.acl_get_perm_np(perms, 1 << shift)
                               if present not in (0, 1):
                                   raise OSError(ctypes.get_errno() or errno.EIO, "inventory ACL bit")
                               bits |= present << shift
                           budget()
+                          current_operation = "acl_get_qualifier"
                           qualifier = library.acl_get_qualifier(entry)
                           try:
                               if not qualifier:
                                   raise OSError(ctypes.get_errno() or errno.EIO, "inventory ACL qualifier")
                               captured.append({"entry_rc": rc, "entry_errno": entry_errno, "tag": tag.value,
                                   "uuid": ctypes.string_at(qualifier, 16).hex(), "permissions": bits})
+                          except BaseException as error:
+                              remember(error)
+                              raise
                           finally:
+                              current_operation = "acl_free_qualifier"
                               if qualifier and library.acl_free(qualifier) != 0:
                                   raise OSError(ctypes.get_errno() or errno.EIO, "inventory ACL qualifier free")
+                  except BaseException as error:
+                      remember(error)
+                      raise
                   finally:
+                      current_operation = "acl_free"
                       if acl and library.acl_free(acl) != 0:
                           raise OSError(ctypes.get_errno() or errno.EIO, "inventory ACL free")
 
               def inspect_path(path, selected_edge=False):
-                  nonlocal objects
+                  nonlocal objects, current_operation, current_component
                   path = normal(path)
                   if not target_allowed(path, selected_edge):
                       gap("outside fixed roots", path)
@@ -236,7 +284,9 @@ jobs:
                   fd = None
                   try:
                       budget()
+                      current_operation, current_component = "open-root", "/"
                       fd = open_fd("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                      current_operation = "fstat-root"
                       root_state = os.fstat(fd)
                       if ("/", identity(root_state)) not in seen:
                           if objects >= 16384:
@@ -253,6 +303,7 @@ jobs:
                           if not ancestor_allowed(component):
                               gap("outside component", component)
                               return None
+                          current_operation, current_component = "lstat", component
                           before = os.stat(name, dir_fd=fd, follow_symlinks=False)
                           key = (component, identity(before))
                           if key not in seen:
@@ -263,11 +314,13 @@ jobs:
                               emit({"inventory": "metadata", "path": component,
                                   "state": dict(zip(fields, identity(before))), "ancestor": index < len(parts) - 1})
                           if stat.S_ISLNK(before.st_mode):
+                              current_operation = "readlink"
                               target = os.readlink(name, dir_fd=fd)
                               next_path = normal(os.path.join(os.path.dirname(component), target, *parts[index + 1:]))
                               if not target_allowed(next_path, selected_edge):
                                   gap("symlink outside fixed roots", next_path)
                                   return None
+                              current_operation = "link-recheck"
                               if identity(os.stat(name, dir_fd=fd, follow_symlinks=False)) != identity(before):
                                   raise ValueError("inventory link changed")
                               gap("symlink ACL unavailable through a safe held-parent API", component)
@@ -277,9 +330,11 @@ jobs:
                           if not directory and (index < len(parts) - 1 or not stat.S_ISREG(before.st_mode)):
                               gap("unsupported object type", component)
                               return None
+                          current_operation, current_component = "open", component
                           child = open_fd(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK |
                               (os.O_DIRECTORY if directory else 0), dir_fd=fd)
                           try:
+                              current_operation = "fstat-open"
                               if identity(os.fstat(child)) != identity(before):
                                   raise ValueError("inventory open identity")
                               budget()
@@ -292,6 +347,7 @@ jobs:
                                   digest, count = hashlib.sha256(), 0
                                   while True:
                                       budget()
+                                      current_operation = "read"
                                       raw = os.read(child, min(65536, c.EXECUTABLE_LIMIT + 1 - count))
                                       if not raw:
                                           break
@@ -300,16 +356,24 @@ jobs:
                                           raise ValueError("inventory file cap")
                                       digest.update(raw)
                                   row.update(bytes=count, sha256=digest.hexdigest())
-                              if identity(os.fstat(child)) != identity(before) or identity(os.stat(name, dir_fd=fd, follow_symlinks=False)) != identity(before):
+                              current_operation = "fstat-recheck"
+                              if identity(os.fstat(child)) != identity(before):
+                                  raise ValueError("inventory object changed")
+                              current_operation = "named-recheck"
+                              if identity(os.stat(name, dir_fd=fd, follow_symlinks=False)) != identity(before):
                                   raise ValueError("inventory object changed")
                               row["identity_unchanged"] = True
                               emit(row)
-                          except BaseException:
+                          except BaseException as error:
+                              remember(error)
                               close_fd(child)
                               raise
                           previous, fd = fd, child
                           close_fd(previous)
                       return path
+                  except BaseException as error:
+                      remember(error)
+                      raise
                   finally:
                       if fd is not None:
                           close_fd(fd)
@@ -324,8 +388,10 @@ jobs:
                   raise ValueError("inventory symlink cap")
 
               def directory_fd(path):
+                  nonlocal current_operation, current_component
                   if not allowed(path):
                       raise ValueError("inventory scan root")
+                  current_operation, current_component = "open-scan-root", "/"
                   fd = open_fd("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK)
                   try:
                       for index, name in enumerate(path.split("/")[1:]):
@@ -333,11 +399,15 @@ jobs:
                           component = "/" + "/".join(path.split("/")[1:index + 2])
                           if not ancestor_allowed(component):
                               raise ValueError("inventory scan component")
+                          current_operation, current_component = "open-scan-directory", component
                           child = open_fd(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
                           previous, fd = fd, child
                           close_fd(previous)
                       result, fd = fd, None
                       return result
+                  except BaseException as error:
+                      remember(error)
+                      raise
                   finally:
                       if fd is not None:
                           close_fd(fd)
@@ -366,10 +436,14 @@ jobs:
                   else:
                       gap("unknown selected locator", locator)
                       selected_path = None
+                  resolve("/usr/local/bin/jq")
                   if selected_path is not None and prefix is None:
                       gap("selected installation prefix unavailable")
                   if selected_path is not None and prefix is not None:
-                      pending = [prefix + "/lib", prefix + "/include"]
+                      current_operation, current_component = "physical-layout", selected_path
+                      layout = physical_layout(selected_path)
+                      emit({"inventory": "layout", "admission_root": prefix, "physical_layout": layout})
+                      pending = [layout + "/lib", layout + "/include"]
                       while pending:
                           budget()
                           directory = pending.pop()
@@ -380,28 +454,42 @@ jobs:
                           fd = None
                           try:
                               fd = directory_fd(directory)
+                              current_operation, current_component = "fstat-scan", directory
                               scan_before = identity(os.fstat(fd))
+                              current_operation = "scandir"
                               with os.scandir(fd) as entries:
-                                  for entry in entries:
+                                  while True:
+                                      current_operation, current_component = "scandir-next", directory
+                                      try:
+                                          entry = next(entries)
+                                      except StopIteration:
+                                          break
                                       budget()
                                       if len(pending) + objects >= 16384:
                                           raise ValueError("inventory pending object cap")
                                       child = directory + "/" + entry.name
                                       result = resolve(child)
-                                      if result == child and entry.is_dir(follow_symlinks=False):
-                                          pending.append(child)
+                                      if result == child:
+                                          current_operation, current_component = "scan-entry-type", child
+                                          if entry.is_dir(follow_symlinks=False):
+                                              pending.append(child)
+                              current_operation, current_component = "fstat-scan-recheck", directory
                               if identity(os.fstat(fd)) != scan_before:
                                   raise ValueError("inventory layout directory changed")
+                          except BaseException as error:
+                              remember(error)
+                              raise
                           finally:
                               if fd is not None:
                                   close_fd(fd)
-                  resolve("/usr/local/bin/jq")
                   gap("Mach-O closure not read: existing guard parser mixes byte parsing with ungated filesystem reads")
               except BaseException as inventory_error:
+                  remember(inventory_error)
                   gaps += 1
                   try:
                       emit({"inventory": "GAP", "reason": type(inventory_error).__name__,
-                          "errno": getattr(inventory_error, "errno", None), "objects": objects})
+                          "errno": getattr(inventory_error, "errno", None), "objects": objects,
+                          "failure_context": failure_context})
                   except BaseException:
                       pass
               finally:
