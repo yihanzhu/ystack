@@ -79,10 +79,250 @@ bin="$tmp/bin"
 jq_bin="$bin/jq"
 [ "$("$jq_bin" --version)" = jq-1.6 ] || fail 'jq identity'
 
+authenticate_genuine_macos_python() {
+  [ -z "${__PYVENV_LAUNCHER__+present}" ] || return 1
+  local guard_variable
+  for guard_variable in "${!DYLD_@}"; do [ -z "$guard_variable" ] || return 1; done
+  /usr/bin/python3 -I -S -B - "$root" "$1" <<'PY_MAC_BOOTSTRAP'
+import ctypes
+import errno
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import struct
+import sys
+import time
+
+assert sys.platform == 'darwin' and os.getuid() != 0
+assert not any(key.startswith('DYLD_') or key == '__PYVENV_LAUNCHER__' for key in os.environ)
+package = Path(sys.argv[1])
+assert package.is_absolute() and package.resolve() == package
+source = package / 'shadow/v1/_consumer.py'
+spec = importlib.util.spec_from_file_location('fixture_bootstrap_consumer', source)
+assert spec is not None and spec.loader is not None
+c = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = c
+spec.loader.exec_module(c)
+
+class FixtureDarwinLedger:
+    def __init__(self): self.commands = []
+    def record_command(self, role, argv, executable, component):
+        c._require(role == 'darwin-acl-uuid-resolution', 'E_RUNTIME')
+        c._require(len(self.commands) < 4096, 'E_LIMIT')
+        self.commands.append({'role': role, 'argv_sha256': c.digest(c.canonical(argv)),
+            'executable_sha256': executable, 'component_sha256': component})
+
+locator = Path(sys.argv[2])
+assert locator.is_absolute()
+selected = Path(os.path.realpath(str(locator)))
+print(json.dumps({'bootstrap_python': sys.executable, 'bootstrap_version': list(sys.version_info[:3]),
+    'selected_python': str(selected), 'candidate_executed': False}, sort_keys=True), file=sys.stderr)
+match = re.fullmatch(r'python3\.(1[1-9]|[2-9][0-9])', selected.name)
+assert match and selected.parent.name == 'bin'
+prefix = selected.parent.parent
+assert prefix not in (Path('/'), Path('/usr'), Path('/usr/local'), Path('/opt/homebrew'))
+stdlib = prefix / 'lib' / ('python3.' + match[1])
+assert (stdlib / 'os.py').is_file() and (stdlib / 'encodings/__init__.py').is_file()
+assert not any(os.path.lexists(str(parent / 'pyvenv.cfg')) for parent in (selected.parent, prefix))
+assert not any(os.path.lexists(str(selected) + suffix) for suffix in ('._pth', '.zip'))
+deadline = time.monotonic() + 120
+owned = []
+active_path = str(selected)
+rows = {}
+links = {}
+cache_paths = set()
+images = set()
+seen = set()
+ledger = FixtureDarwinLedger()
+fields = ('st_dev', 'st_ino', 'st_mode', 'st_uid', 'st_gid', 'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+
+def identity(state):
+    return tuple(getattr(state, field) for field in fields)
+
+def inspect(path, directory=False):
+    global active_path
+    active_path = str(path)
+    assert time.monotonic() < deadline and len(rows) < 16384
+    assert path.is_absolute() and path.resolve() == path
+    held = c._open_held(str(path), directory, c._root_rule(owner), 'E_INSTALL')
+    try:
+        raw = b'' if directory else held.read(c.EXECUTABLE_LIMIT, 'E_INSTALL')
+        held.recheck('E_STALE')
+        value = (identity(held.before), hashlib.sha256(raw).hexdigest())
+        assert str(path) not in rows or rows[str(path)] == value
+        rows[str(path)] = value
+        return raw
+    finally:
+        held.close()
+
+def native_dependencies(path, raw):
+    # This fixture accepts only a bounded x86_64 Mach-O dependency closure.
+    magic = raw[:4]
+    if magic in (b'\xca\xfe\xba\xbe', b'\xca\xfe\xba\xbf'):
+        count = struct.unpack_from('>I', raw, 4)[0]
+        width = 20 if magic[-1] == 0xbe else 32
+        assert 0 < count <= 16 and 8 + count * width <= len(raw)
+        slices = []
+        for index in range(count):
+            values = struct.unpack_from('>IIIII' if width == 20 else '>IIQQII', raw, 8 + index * width)
+            if values[0] == 0x01000007:
+                offset, size = values[2:4]
+                assert offset + size <= len(raw)
+                slices.append(raw[offset:offset + size])
+        assert len(slices) == 1
+        raw = slices[0]
+        magic = raw[:4]
+    if magic != b'\xcf\xfa\xed\xfe':
+        assert path.suffix not in ('.so', '.dylib')
+        assert magic not in (b'\xfe\xed\xfa\xce', b'\xce\xfa\xed\xfe', b'\xfe\xed\xfa\xcf')
+        return
+    header = struct.unpack_from('<8I', raw)
+    assert header[1] == 0x01000007 and header[4] <= 4096
+    end = 32 + header[5]
+    assert end <= len(raw)
+    offset = 32
+    for _ in range(header[4]):
+        command, size = struct.unpack_from('<II', raw, offset)
+        assert size >= 8 and size % 8 == 0 and offset + size <= end
+        assert command not in (0x6, 0x9, 0x10, 0x27)
+        if command in (0xc, 0xe, 0x80000018, 0x8000001c, 0x8000001f, 0x20, 0x80000023):
+            name_offset = struct.unpack_from('<I', raw, offset + 8)[0]
+            assert 12 <= name_offset < size
+            encoded = raw[offset + name_offset:offset + size]
+            assert b'\0' in encoded
+            name = encoded.split(b'\0', 1)[0].decode('utf8')
+            if command == 0xe:
+                assert name == '/usr/lib/dyld'
+                inspect(Path(name))
+            else:
+                if name.startswith('@loader_path/'):
+                    name = str(path.parent / name[len('@loader_path/'):])
+                elif name.startswith('@executable_path/'):
+                    name = str(selected.parent / name[len('@executable_path/'):])
+                assert name.startswith('/') and '@' not in name
+                target = Path(os.path.normpath(name))
+                if str(target).startswith(('/usr/lib/', '/System/Library/')) and not os.path.lexists(target):
+                    assert len(cache_paths) < 256
+                    cache_paths.add(target)
+                    parent = target.parent
+                    while not os.path.lexists(parent):
+                        parent = parent.parent
+                    inspect(parent, True)
+                elif command == 0x8000001c:
+                    assert prefix in target.parents or target == prefix
+                    inspect(target, True)
+                else:
+                    assert len(images) < 256
+                    images.add(target)
+        offset += size
+    assert offset == end
+
+try:
+    bootstrap = c._hold_bytes(sys.executable, c.EXECUTABLE_LIMIT)
+    owned.append(bootstrap)
+    consumer_source = c._hold_bytes(str(source), c.EXECUTABLE_LIMIT)
+    owned.append(consumer_source)
+    owner = c._DarwinChildOwner(bootstrap, consumer_source, deadline, ledger)
+    library = c._DARWIN_ACL_FUNCTIONS.library
+    library.acl_get_link_np.argtypes = [ctypes.c_char_p, ctypes.c_int]
+    library.acl_get_link_np.restype = ctypes.c_void_p
+    for item in reversed((locator, *locator.parents)):
+        if item == Path('/'):
+            continue
+        before = item.lstat()
+        if stat.S_ISLNK(before.st_mode):
+            inspect(item.parent.resolve(), True)
+            assert before.st_uid == 0 and before.st_nlink == 1
+            ctypes.set_errno(0)
+            acl = library.acl_get_link_np(os.fsencode(item), 0x100)
+            if acl:
+                assert library.acl_free(acl) == 0
+                raise ValueError('selector link with ACL is unsupported')
+            assert ctypes.get_errno() == errno.ENOENT
+            links[str(item)] = (identity(before), os.readlink(item))
+        else:
+            inspect(item, item != locator)
+    root = c._open_held(str(prefix), True, c._root_rule(owner), 'E_INSTALL')
+    owned.append(root)
+    images.add(selected)
+    directories = [prefix / 'lib', prefix / 'include']
+    while directories:
+        directory = directories.pop()
+        inspect(directory, True)
+        with os.scandir(str(directory)) as entries:
+            for entry in entries:
+                assert len(rows) + len(directories) < 16384
+                path = directory / entry.name
+                if entry.is_dir(follow_symlinks=False):
+                    inspect(path, True)
+                    directories.append(path)
+                else:
+                    raw = inspect(path)
+                    native_dependencies(path, raw)
+    while images:
+        path = images.pop()
+        if path in seen:
+            continue
+        assert len(seen) < 256
+        seen.add(path)
+        raw = inspect(path)
+        assert raw[:4] in (b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe', b'\xca\xfe\xba\xbf')
+        native_dependencies(path, raw)
+    for name, (before, _digest) in rows.items():
+        assert time.monotonic() < deadline and identity(os.lstat(name)) == before
+    assert all(not os.path.lexists(path) for path in cache_paths)
+    for name, (before, target) in links.items():
+        assert identity(os.lstat(name)) == before and os.readlink(name) == target
+    assert not any(os.path.lexists(str(parent / 'pyvenv.cfg')) for parent in (selected.parent, prefix))
+    assert not any(os.path.lexists(str(selected) + suffix) for suffix in ('._pth', '.zip'))
+    assert Path(os.path.realpath(str(locator))) == selected
+    for item in owned:
+        item.recheck('E_STALE')
+    print(json.dumps({'bootstrap': 'fixed-system-python-existing-runtime', 'python': str(selected),
+        'prefix': str(prefix), 'objects': len(rows), 'native_images': len(seen),
+        'closure_sha256': c.digest(c.canonical({'objects': rows, 'selector_links': links})), 'acl_commands': len(ledger.commands),
+        'acl_commands_sha256': c.digest(c.canonical(ledger.commands)), 'privileged_execution': False}, sort_keys=True), file=sys.stderr)
+    print(selected)
+except BaseException as error:
+    try:
+        print(json.dumps({'bootstrap_refusal_path': active_path, 'exception': type(error).__name__,
+            'code': getattr(error, 'code', None), 'candidate_executed': False}, sort_keys=True), file=sys.stderr)
+    except BaseException:
+        pass
+    raise
+finally:
+    original = sys.exc_info()[1]
+    try:
+        c._close_paths(owned)
+    except OSError as cleanup_error:
+        if original is not None:
+            raise original from cleanup_error
+        raise
+PY_MAC_BOOTSTRAP
+}
+
 run_validator() { PATH="$bin:/usr/bin:/bin" "$validator" validate "$1"; }
 if [ "${platform%%:*}" = Darwin ] && [ "${GITHUB_ACTIONS:-}" = true ] &&
    [ "${RUNNER_ENVIRONMENT:-}" = github-hosted ]; then
-  python_candidate=/usr/bin/python3
+  if [ -x /opt/homebrew/bin/python3.14 ]; then python_candidate=/opt/homebrew/bin/python3.14
+  elif [ -x /usr/local/bin/python3.14 ]; then python_candidate=/usr/local/bin/python3.14
+  else python_candidate=$(command -v python3.14 2>/dev/null || command -v python3); fi
+  python_candidate=$(authenticate_genuine_macos_python "$python_candidate") || fail 'trusted existing runtime closure required'
+  [ "$("$python_candidate" -I -S -B -c 'import sys
+from pathlib import Path
+p = Path(sys.executable)
+print("selected_python=" + str(p) + " version=" + ".".join(map(str, sys.version_info[:3])),
+      file=sys.stderr, flush=True)
+assert sys.version_info >= (3, 11)
+prefix = p.parent.parent
+assert p.resolve() == p and sys.prefix == sys.base_prefix == str(prefix)
+assert all(Path(value).is_absolute() and (Path(value) == prefix or prefix in Path(value).parents)
+           for value in sys.path)
+print(p)')" = "$python_candidate" ] || fail 'selected Python layout differs'
 else
   python_candidate=$(command -v python3.14 2>/dev/null || command -v python3)
   if [ -x /opt/homebrew/bin/python3.14 ]; then python_candidate=/opt/homebrew/bin/python3.14; fi
@@ -1745,6 +1985,10 @@ remove_fixture_directory() {
 }
 cleanup_genuine() {
   local failed=0 index
+  if [ -n "$genuine_base" ] && [ -e "$genuine_base/runtime-guard-cleanup-uncertain" ]; then
+    /usr/bin/printf 'genuine-cleanup: FAIL; owned command/helper cleanup pending; preserving fixture objects\n' >&2
+    return 1
+  fi
   if [ "$genuine_anchor_created" = true ]; then
     remove_fixture_directory /usr/local/libexec/ystack-sandbox/v1/supervisor "$genuine_anchor_identity" true || failed=1
   fi
@@ -1971,9 +2215,12 @@ setup_genuine_macos() {
     /usr/sbin/dseditgroup /usr/bin/stat /bin/chmod /usr/sbin/chown /bin/mkdir /bin/cp /bin/rm /usr/bin/id /usr/bin/false; do
     [ -f "$command" ] && [ ! -L "$command" ] && [ -x "$command" ] || fail 'missing fixed host prerequisite'
   done
-  genuine_python=$(/usr/bin/sudo -n /usr/bin/python3 -I -S -B -c \
+  [ "$(authenticate_genuine_macos_python "$python_bin")" = "$python_bin" ] ||
+    fail 'trusted existing runtime closure required before privilege'
+  genuine_python=$(/usr/bin/sudo -n "$python_bin" -I -S -B -c \
     'import os,sys;assert sys.version_info >= (3,11);print(os.path.realpath(sys.executable))') ||
     fail 'existing root Python 3.11+ required'
+  [ "$genuine_python" = "$python_bin" ] || fail 'fixture Python differs from selected physical Python'
   /usr/bin/sudo -n "$genuine_python" -I -S -B - <<'PY_MAC_RUNTIME' || fail 'physical root-owned runtime closure required'
 import os,pathlib,plistlib,stat,sys,uuid
 paths={pathlib.Path(sys.executable),pathlib.Path('/usr/local/bin/jq')}
@@ -2039,6 +2286,411 @@ PY_MAC_IDS
     [ "$(/usr/bin/id -g "$genuine_consumer")" = "$((first + 3))" ] &&
     [[ " $groups " = *" $((first + 2)) "* ]] || fail 'actual distinct supplementary-only principals'
   setup_genuine_paths
+}
+
+run_genuine_macos_runtime_guard_controls() {
+  local operator_name guard_source guard_control
+  operator_name=$(/usr/bin/id -un) || fail 'guard operator identity'
+  guard_source="$tmp/runtime-guard.py"
+  guard_control="$tmp/runtime-guard-controls.py"
+  "$python_bin" -I -S -B - "$root/scripts/test/scope-qualification.test.sh" "$guard_source" <<'PY_GUARD_EXTRACT'
+from pathlib import Path
+import sys
+source = Path(sys.argv[1]).read_text()
+body = source.split("<<'PY_MAC_BOOTSTRAP'\n", 1)[1].split('\nPY_MAC_BOOTSTRAP\n', 1)[0]
+compile(body, 'actual-runtime-guard', 'exec')
+Path(sys.argv[2]).write_text(body)
+PY_GUARD_EXTRACT
+  /bin/cat >"$guard_control" <<'PY_GUARD_CONTROLS'
+import hashlib
+import json
+import os
+from pathlib import Path
+import pwd
+import selectors
+import signal
+import shutil
+import stat
+import struct
+import subprocess
+import sys
+import time
+
+base, package, python, guard_file = map(Path, sys.argv[1:5])
+operator = sys.argv[5]
+assert os.getuid() == 0 and pwd.getpwnam(operator).pw_uid != 0
+assert base.resolve() == base and base.is_dir() and base.stat().st_uid == 0
+assert python.resolve() == python and python.parent.name == 'bin'
+prefix = python.parent.parent
+fixture = base / 'runtime-guard'
+assert not os.path.lexists(fixture)
+fixture.mkdir(mode=0o755)
+fixture.chmod(0o755)
+copied = fixture / 'installation'
+copied.mkdir(mode=0o755)
+copied.chmod(0o755)
+(copied / 'bin').mkdir(mode=0o755)
+(copied / 'bin').chmod(0o755)
+selected = copied / 'bin' / python.name
+shutil.copyfile(python, selected)
+selected.chmod(0o555)
+assert selected.read_bytes() == python.read_bytes()
+for name in ('lib', 'include'):
+    shutil.copytree(prefix / name, copied / name, symlinks=True)
+for path in (fixture, copied, *copied.rglob('*')):
+    value = path.lstat()
+    if stat.S_ISDIR(value.st_mode):
+        path.chmod(0o755)
+        value = path.lstat()
+        assert stat.S_IMODE(value.st_mode) == 0o755
+    assert value.st_uid == 0 and not value.st_mode & 0o022
+    assert not stat.S_ISLNK(value.st_mode)
+guard = guard_file.read_bytes()
+program = fixture / 'guard.py'
+wrapper_prefix = r"""import json, os, signal, sys, time
+from pathlib import Path
+code = Path(sys.argv.pop(1)).read_bytes()
+foreground = {}
+proofs = []
+last_identity = None
+identity_refusal = None
+original_name = 'actual-runtime-guard'
+consumer_name = str(Path(sys.argv[1]) / 'shadow/v1/_consumer.py')
+print('GUARD_ACTUAL_PRINCIPAL ' + json.dumps({'uid': os.getuid(), 'gid': os.getgid(),
+    'groups': os.getgroups()}, sort_keys=True), file=sys.stderr, flush=True)
+
+def observe(frame, event, arg):
+    global last_identity, identity_refusal
+    if frame.f_code.co_filename == consumer_name and frame.f_code.co_name == '_foreground':
+        if event == 'call':
+            foreground[id(frame)] = True
+        elif event == 'return':
+            child = frame.f_locals.get('child')
+            streams = () if child is None else (child.stdin, child.stdout, child.stderr)
+            proofs.append({'pid': None if child is None else child.pid,
+                'returncode': None if child is None else child.returncode,
+                'reaped': child is None or child.returncode is not None,
+                'pipes_closed': all(item is None or item.closed for item in streams)})
+            foreground.pop(id(frame), None)
+    if frame.f_code.co_filename == original_name and frame.f_code.co_name == 'identity' and event == 'return':
+        caller = frame.f_back
+        if caller is not None and caller.f_code.co_filename == original_name:
+            line = code.decode().splitlines()[caller.f_lineno - 1]
+            if line.strip() == 'assert time.monotonic() < deadline and identity(os.lstat(name)) == before':
+                last_identity = {'name': caller.f_locals['name'], 'actual': list(arg),
+                    'expected': list(caller.f_locals['before']), 'deadline': caller.f_locals['deadline']}
+    if event == 'exception' and frame.f_code.co_filename == original_name:
+        line = code.decode().splitlines()[frame.f_lineno - 1]
+        if line.strip() == 'assert time.monotonic() < deadline and identity(os.lstat(name)) == before':
+            if isinstance(arg[1], AssertionError) and last_identity is not None:
+                now = time.monotonic()
+                identity_refusal = dict(last_identity, observed_time=now,
+                    deadline_valid=now < last_identity['deadline'],
+                    actual_identity_comparison_reached=True)
+    return observe
+
+def cancel(_number, _frame):
+    raise InterruptedError('private guard cancelled')
+
+for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+    signal.signal(number, cancel)
+signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
+sys.settrace(observe)
+try:
+    exec(compile(code, original_name, 'exec'), {'__name__': '__main__'})
+finally:
+    sys.settrace(None)
+    if identity_refusal is not None:
+        print('GUARD_IDENTITY_REFUSAL ' + json.dumps(identity_refusal, sort_keys=True), file=sys.stderr, flush=True)
+    print('GUARD_OWNED_CLEANUP ' + json.dumps({'foreground_calls': proofs,
+        'active_calls': len(foreground), 'complete': not foreground and all(
+            item['reaped'] and item['pipes_closed'] for item in proofs)}, sort_keys=True), file=sys.stderr, flush=True)
+"""
+program.write_text(wrapper_prefix)
+program.chmod(0o444)
+original_program = fixture / 'guard-original.py'
+original_program.write_bytes(guard)
+original_program.chmod(0o444)
+sync_program = fixture / 'guard-held-change.py'
+boundary = b'    for name, (before, _digest) in rows.items():\n'
+assert guard.count(boundary) == 1
+checkpoint = b"    print('HELD_READY', flush=True)\n    assert sys.stdin.buffer.read(1) == b'S'\n"
+sync_program.write_bytes(guard.replace(boundary, checkpoint + boundary))
+sync_program.chmod(0o444)
+module = copied / 'lib' / ('python3.' + python.name.split('.')[1]) / 'os.py'
+ancestor = selected.parent
+original_module = module.read_bytes()
+original_python = selected.read_bytes()
+
+operator_record = pwd.getpwnam(operator)
+operator_groups = os.getgrouplist(operator, operator_record.pw_gid)
+assert operator_record.pw_uid != 0 and operator_record.pw_gid in operator_groups
+pending_path = base / 'runtime-guard-cleanup-uncertain'
+
+def unique_object(pairs):
+    value = {}
+    for key, item in pairs:
+        assert key not in value, 'duplicate cleanup field'
+        value[key] = item
+    return value
+
+def confirmation(stderr):
+    lines = stderr.splitlines()
+    rows = [line[len(b'GUARD_OWNED_CLEANUP '):] for line in lines
+            if line.startswith(b'GUARD_OWNED_CLEANUP ')]
+    assert len(rows) == 1, 'missing or duplicate cleanup confirmation'
+    value = json.loads(rows[0].decode('utf-8'), object_pairs_hook=unique_object)
+    assert type(value) is dict and set(value) == {'active_calls', 'complete', 'foreground_calls'}
+    assert type(value['active_calls']) is int and value['active_calls'] == 0
+    assert value['complete'] is True and type(value['foreground_calls']) is list
+    assert len(value['foreground_calls']) <= 4096
+    for row in value['foreground_calls']:
+        assert type(row) is dict and set(row) == {'pid', 'returncode', 'reaped', 'pipes_closed'}
+        assert row['reaped'] is True and row['pipes_closed'] is True
+        if row['pid'] is None:
+            assert row['returncode'] is None
+        else:
+            assert type(row['pid']) is int and row['pid'] > 0 and type(row['returncode']) is int
+    return value
+
+def completed_case(returncode, stderr, cancelled):
+    assert type(returncode) is int, 'direct command not reaped'
+    value = confirmation(stderr)
+    assert not cancelled, 'cancelled completion window'
+    return value
+
+valid_cleanup = b'GUARD_OWNED_CLEANUP {"active_calls":0,"complete":true,"foreground_calls":[]}\n'
+assert completed_case(0, valid_cleanup, False)['complete']
+for label, raw, cancelled in (
+    ('EOF-then-wait-cancel', valid_cleanup, True),
+    ('post-wait-precommit-cancel', valid_cleanup, True),
+    ('missing-cleanup', b'', False),
+    ('partial-cleanup', b'GUARD_OWNED_CLEANUP {', False),
+    ('malformed-cleanup', b'GUARD_OWNED_CLEANUP []\n', False),
+    ('duplicate-cleanup', valid_cleanup * 2, False),
+    ('unreaped-native', b'GUARD_OWNED_CLEANUP {"active_calls":0,"complete":true,"foreground_calls":[{"pid":1,"returncode":null,"reaped":true,"pipes_closed":true}]}\n', False)):
+    try:
+        completed_case(0, raw, cancelled)
+    except (AssertionError, ValueError, UnicodeError):
+        print('pure completion-state refuses ' + label + '; pending cannot be released', flush=True)
+    else:
+        raise AssertionError('completion-state accepted ' + label)
+
+def run_control(label, expected, synchronized=False):
+    source = sync_program if synchronized else original_program
+    command = ['/usr/bin/python3', '-I', '-S', '-B', str(program), str(source),
+               str(package), str(selected)]
+    end = time.monotonic() + 145
+    pending_fd = os.open(pending_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    pending_identity = os.fstat(pending_fd)
+    try:
+        payload = json.dumps({'case': label, 'state': 'PENDING'}, sort_keys=True).encode() + b'\n'
+        assert os.write(pending_fd, payload) == len(payload)
+        os.fsync(pending_fd)
+    finally:
+        os.close(pending_fd)
+    directory_fd = os.open(base, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+    watched = {signal.SIGINT, signal.SIGTERM, signal.SIGHUP}
+    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, watched)
+    previous_handlers = {number: signal.getsignal(number) for number in watched}
+    cancelled = [False]
+    def cancelled_signal(_number, _frame):
+        cancelled[0] = True
+    for number in watched:
+        signal.signal(number, cancelled_signal)
+    child = None
+    selector = selectors.DefaultSelector()
+    buckets = {}
+    readiness = False
+    first_error = None
+    def uncertain_cleanup(error):
+        print(json.dumps({'case': label, 'guard_cleanup': 'FAIL_PENDING',
+            'command_pid': None if child is None else child.pid,
+            'command_returncode': None if child is None else child.returncode,
+            'error': type(error).__name__, 'pending_retained': pending_path.exists()},
+            sort_keys=True), flush=True)
+    try:
+        try:
+            child = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, user=operator_record.pw_uid, group=operator_record.pw_gid,
+                extra_groups=operator_groups, env={'PATH': '/usr/bin:/bin', 'LC_ALL': 'C', 'LANG': 'C'})
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+            buckets = {child.stdout: bytearray(), child.stderr: bytearray()}
+            for stream in (child.stdin, child.stdout, child.stderr):
+                os.set_blocking(stream.fileno(), False)
+            for stream in buckets:
+                selector.register(stream, selectors.EVENT_READ)
+            if not synchronized:
+                child.stdin.close()
+            control_end = end - 15
+            while selector.get_map():
+                assert not cancelled[0] and time.monotonic() < control_end, 'cancel/continuous guard deadline'
+                for key, events in selector.select(min(0.1, max(0, control_end - time.monotonic()))):
+                    stream = key.fileobj
+                    if stream is child.stdin:
+                        assert os.write(stream.fileno(), b'S') == 1
+                        selector.unregister(stream)
+                        stream.close()
+                        continue
+                    try:
+                        chunk = os.read(stream.fileno(), 4096)
+                    except BlockingIOError:
+                        continue
+                    if not chunk:
+                        selector.unregister(stream)
+                        stream.close()
+                        continue
+                    assert sum(map(len, buckets.values())) + len(chunk) <= 65536, 'total output cap'
+                    buckets[stream].extend(chunk)
+                    if synchronized and not readiness and stream is child.stdout:
+                        assert b'HELD_READY\n'.startswith(bytes(buckets[stream])), 'readiness frame'
+                        if bytes(buckets[stream]) == b'HELD_READY\n':
+                            with module.open('ab') as target:
+                                assert target.write(b'\n') == 1
+                                target.flush()
+                                os.fsync(target.fileno())
+                            readiness = True
+                            selector.register(child.stdin, selectors.EVENT_WRITE)
+            child.wait(timeout=max(0.001, control_end - time.monotonic()))
+        except BaseException as error:
+            first_error = error
+            if child is None:
+                raise
+            if child.returncode is None:
+                child.terminate()
+            try:
+                while selector.get_map() and time.monotonic() < end:
+                    for key, events in selector.select(min(0.1, max(0, end - time.monotonic()))):
+                        stream = key.fileobj
+                        if stream is child.stdin:
+                            selector.unregister(stream)
+                            stream.close()
+                            continue
+                        try:
+                            chunk = os.read(stream.fileno(), 4096)
+                        except BlockingIOError:
+                            continue
+                        if not chunk:
+                            selector.unregister(stream)
+                            stream.close()
+                        elif sum(map(len, buckets.values())) + len(chunk) <= 65536:
+                            buckets[stream].extend(chunk)
+                child.wait(timeout=max(0.001, end - time.monotonic()))
+            except BaseException as cleanup_error:
+                if child.returncode is None:
+                    child.kill()
+                try:
+                    child.wait(timeout=max(0.001, end - time.monotonic()))
+                except BaseException as reap_error:
+                    uncertain_cleanup(reap_error)
+                    raise error from reap_error
+                uncertain_cleanup(cleanup_error)
+                raise error from cleanup_error
+        try:
+            signal.pthread_sigmask(signal.SIG_BLOCK, watched)
+            stdout, stderr = map(bytes, buckets.values())
+            report = {'case': label, 'returncode': child.returncode, 'stdout': stdout.decode('utf-8'),
+                'stderr': stderr.decode('utf-8'), 'operator_uid': operator_record.pw_uid,
+                'operator_primary_gid': operator_record.pw_gid, 'operator_groups': operator_groups,
+                'candidate_executed': False, 'candidate_sudo_executed': False,
+                'command_reaped': child.returncode is not None, 'sudo_monitor_created': False}
+            print(json.dumps(report, sort_keys=True), flush=True)
+            principals = [line[len(b'GUARD_ACTUAL_PRINCIPAL '):] for line in stderr.splitlines()
+                          if line.startswith(b'GUARD_ACTUAL_PRINCIPAL ')]
+            assert len(principals) == 1
+            principal = json.loads(principals[0])
+            assert principal['uid'] == operator_record.pw_uid and principal['gid'] == operator_record.pw_gid
+            assert set(principal['groups']) == set(operator_groups)
+            completed_case(child.returncode, stderr, cancelled[0] or bool(signal.sigpending() & watched))
+            if first_error is not None:
+                raise first_error
+            if expected is None:
+                assert child.returncode == 0 and stdout == (str(selected) + '\n').encode()
+                assert b'"privileged_execution": false' in stderr
+            else:
+                assert child.returncode != 0 and stdout == (b'HELD_READY\n' if synchronized else b'')
+                assert b'"candidate_executed": false' in stderr and expected in stderr
+                if synchronized:
+                    observed = [line[len(b'GUARD_IDENTITY_REFUSAL '):] for line in stderr.splitlines()
+                                if line.startswith(b'GUARD_IDENTITY_REFUSAL ')]
+                    assert readiness and len(observed) == 1
+                    evidence = json.loads(observed[0])
+                    assert evidence['deadline_valid'] and evidence['actual_identity_comparison_reached']
+                    assert evidence['name'] == str(module) and evidence['actual'] != evidence['expected']
+
+            selector.close()
+            for stream in (child.stdin, child.stdout, child.stderr):
+                if not stream.closed:
+                    stream.close()
+            assert all(stream.closed for stream in (child.stdin, child.stdout, child.stderr))
+            assert time.monotonic() < end, 'completion deadline'
+            assert not cancelled[0] and not signal.sigpending() & watched, 'cancelled success transition'
+            current = pending_path.lstat()
+            assert (current.st_dev, current.st_ino, current.st_uid, current.st_mode, current.st_nlink) == (
+                pending_identity.st_dev, pending_identity.st_ino, pending_identity.st_uid,
+                pending_identity.st_mode, pending_identity.st_nlink)
+            assert pending_path.read_bytes() == payload
+            pending_path.unlink()
+        except BaseException as error:
+            uncertain_cleanup(error)
+            raise
+    finally:
+        signal.pthread_sigmask(signal.SIG_BLOCK, watched)
+        try:
+            selector.close()
+            if child is not None:
+                for stream in (child.stdin, child.stdout, child.stderr):
+                    if not stream.closed:
+                        stream.close()
+            for number, handler in previous_handlers.items():
+                signal.signal(number, handler)
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+
+run_control('unchanged-copied-existing-layout', None)
+for label, path in (('selected-P-write-ACL', selected),
+                    ('ancestor-write-ACL', ancestor), ('startup-module-write-ACL', module)):
+    grant = subprocess.run(['/bin/chmod', '+a', 'user:' + operator + ' allow write', str(path)],
+                           capture_output=True, timeout=10)
+    assert grant.returncode == 0 and not grant.stderr
+    try:
+        run_control(label, b'E_INSTALL')
+    finally:
+        remove = subprocess.run(['/bin/chmod', '-N', str(path)], capture_output=True, timeout=10)
+        assert remove.returncode == 0 and not remove.stderr
+    assert selected.read_bytes() == original_python and module.read_bytes() == original_module
+run_control('held-module-identity-change', b'AssertionError', synchronized=True)
+module.write_bytes(original_module)
+for label, dependency in (('unknown-load-path', '@rpath/untrusted.dylib'),
+                          ('escaping-load-path', '@loader_path/../../../../untrusted.dylib')):
+    encoded = dependency.encode() + b'\0'
+    size = (24 + len(encoded) + 7) // 8 * 8
+    load = struct.pack('<6I', 0xc, size, 24, 0, 0, 0) + encoded
+    load += b'\0' * (size - len(load))
+    image = struct.pack('<8I', 0xfeedfacf, 0x01000007, 3, 6, 1, size, 0, 0) + load
+    library = module.parent / 'guard-untrusted.dylib'
+    library.write_bytes(image)
+    library.chmod(0o444)
+    try:
+        run_control(label, b'AssertionError' if label == 'unknown-load-path' else b'E_INSTALL')
+    finally:
+        library.unlink()
+run_control('restored-copied-existing-layout', None)
+assert selected.read_bytes() == original_python and module.read_bytes() == original_module
+print('actual Darwin ACL/identity/load-path guard controls PASS; no candidate execution', flush=True)
+PY_GUARD_CONTROLS
+  /usr/bin/sudo -n "$genuine_python" -I -S -B - "$guard_control" <<'PY_GUARD_SYNTAX'
+from pathlib import Path
+import sys
+compile(Path(sys.argv[1]).read_bytes(), sys.argv[1], 'exec')
+PY_GUARD_SYNTAX
+  /usr/bin/sudo -n "$genuine_python" -I -S -B "$guard_control" \
+    "$genuine_base" "$genuine_base/package" "$genuine_python" "$guard_source" "$operator_name" ||
+    fail 'actual Darwin runtime guard regression'
 }
 
 prepare_genuine_writer() {
@@ -2263,20 +2915,43 @@ verifier=tools/'file-digest-verifier';run(['/usr/bin/cc','-std=c11','-Wall','-We
 native_dir=base/'native';run(['/bin/bash','-p',package/'shadow/v1/build-cancel-release.sh','build',sys.executable,native_dir])
 native_record=native_dir/'build-record.json';native_binary=next(p for p in native_dir.iterdir() if p.name!='build-record.json')
 native_handle=ctypes.PyDLL(str(native_binary),mode=os.RTLD_NOW|os.RTLD_LOCAL)
-closure=[]
-for name,module in sorted(sys.modules.items()):
- path=getattr(module,'__file__',None)
- if path and pathlib.Path(path).is_file():
-  path=pathlib.Path(path).resolve()
-  dependency = c._open_held(str(path), False, c._installed_rule(uid), 'E_INSTALL')
-  try:
-   raw = dependency.read(c.EXECUTABLE_LIMIT, 'E_INSTALL')
-   dependency.recheck('E_STALE')
-   closure.append({'module':name,'path':str(path),'sha256':sha(raw),
-                   'uid':dependency.before.st_uid,'gid':dependency.before.st_gid,
-                   'mode':stat.S_IMODE(dependency.before.st_mode)})
-  finally:
-   dependency.close()
+class FixtureDarwinLedger:
+ def __init__(self): self.commands=[]
+ def record_command(self,role,argv,executable,component):
+  c._require(role in {'darwin-acl-uuid-resolution','darwin-group-membership'},'E_RUNTIME')
+  c._require(len(self.commands)<4096,'E_LIMIT')
+  self.commands.append({'role':role,'argv_sha256':c.digest(canonical(argv)),
+   'executable_sha256':executable,'component_sha256':component})
+owned=[]
+darwin=None
+closure_ledger=FixtureDarwinLedger()
+try:
+ if sys.platform=='darwin':
+  python=c._hold_bytes(sys.executable,c.EXECUTABLE_LIMIT);owned.append(python)
+  consumer_source=c._hold_bytes(str(package/'shadow/v1/_consumer.py'),c.EXECUTABLE_LIMIT);owned.append(consumer_source)
+  darwin=c._DarwinChildOwner(python,consumer_source,time.monotonic()+120,closure_ledger)
+ closure=[]
+ for name,module in sorted(sys.modules.items()):
+  path=getattr(module,'__file__',None)
+  if path and pathlib.Path(path).is_file():
+   path=pathlib.Path(path).resolve()
+   dependency = c._open_held(str(path), False, c._installed_rule(uid,darwin), 'E_INSTALL')
+   try:
+    raw = dependency.read(c.EXECUTABLE_LIMIT, 'E_INSTALL')
+    dependency.recheck('E_STALE')
+    closure.append({'module':name,'path':str(path),'sha256':sha(raw),
+                    'uid':dependency.before.st_uid,'gid':dependency.before.st_gid,
+                    'mode':stat.S_IMODE(dependency.before.st_mode)})
+   finally:
+    dependency.close()
+ for item in owned:item.recheck('E_STALE')
+finally:
+ original=sys.exc_info()[1]
+ try:c._close_paths(owned)
+ except OSError as cleanup_error:
+  if original is not None:raise original from cleanup_error
+  raise
+print(json.dumps({'fixture_runtime_acl_commands':closure_ledger.commands},sort_keys=True),flush=True)
 closure_raw=canonical({'fixture_runtime_closure':closure,'python':str(pathlib.Path(sys.executable).resolve()),'native_binary':str(native_binary),'loader_mode':'rtld-now-local.v1','state_created':False,'startup_called':False,'vm_called':False})
 put(base/'runtime-closure.json',closure_raw)
 native={'context_version':2,'source_sha256':sha((package/'shadow/v1/_cancel_release.c').read_bytes()),'build_script_sha256':sha((package/'shadow/v1/build-cancel-release.sh').read_bytes()),'build_record_sha256':sha(native_record.read_bytes()),'binary_locator_sha256':sha(str(native_binary).encode()),'binary_size':native_binary.stat().st_size,'binary_sha256':sha(native_binary.read_bytes()),'python_locator_sha256':sha(sys.executable.encode()),'python_sha256':sha(pathlib.Path(sys.executable).read_bytes()),'python_abi':sysconfig.get_config_var('SOABI'),'dependency_record_sha256':sha(closure_raw),'loader_mode':'rtld-now-local.v1'}
@@ -3320,6 +3995,7 @@ run_genuine() {
     *) fail 'unsupported genuine fixture platform' ;;
   esac
   prepare_genuine_reader
+  if [ "$genuine_platform" = Darwin ]; then run_genuine_macos_runtime_guard_controls; fi
   prepare_genuine_assembler
   local script
   for script in genuine-reader.py genuine-assembler.py; do
