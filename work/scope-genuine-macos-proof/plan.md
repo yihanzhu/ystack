@@ -32,8 +32,24 @@ SHA-256 values remain in spec requirement 1 and the linked direct decision.
    the physical installation and required native dependencies. Keep the bounded
    private prefix guard, refusal of unknown layouts, and repeat it before privilege
    in the separately repaired scope fixture. Keep equality with the native selection
-   and every original physical runtime/module check. Require workflow SHA-256
-   `7b0cd6058443cd8c785a09f8af01bd6cd49dd53024458b86c4da00bca07c229c`.
+   and every original physical runtime/module check. At this private fixture
+   boundary, enter the same fixed system Python once by its authenticated physical
+   path before the guard or its test observer starts. Keep the PID, isolated flags
+   and closed arguments. Never assign a replacement value to `sys.executable`.
+   Hold its physical file and ancestors with the original no-follow, regular-file,
+   single-link and full identity checks. Require root ownership, no non-root mode
+   write bits, and actual ACL absence. Check each logical symlink's ownership,
+   target, metadata and ACL, with its physical parent held. Recheck held bytes and
+   names immediately before exec. A nonempty ACL or failed ACL query refuses at
+   this entry: no prior UUID resolver exists there. Do not interpret or fake UUIDs.
+   This uses the already trusted fixed system runtime as its starting point; it
+   does not claim that ACL absence authenticates all of that runtime's startup
+   modules. After actual re-entry, require the same version, canonical prefixes
+   and startup paths, plus physical `sys.executable`. Keep one shared 120-second
+   deadline across entry and guard. Record bounded stage/path/exception-chain
+   diagnostics before re-raising an error. The existing owner and all later real
+   ACL/UUID/runtime checks remain unchanged. Require workflow SHA-256
+   `216db17f85d65eb048d416c5381be8c6ec1a5e6653ee723b719b53b3fd41ff92`.
    Check its patch against the actual publication base with `git apply --check`.
    Keep the manifest entry exactly once; an existing correct entry needs no edit.
    Reconcile and continue the existing deterministic implementation branch.
@@ -76,8 +92,8 @@ native/CPU-wall qualification or admit production identities.
 For spec requirements 1–7, compare the complete workflow with the pinned bytes
 and verify its SHA-256 with `shasum -a 256`. Compare with the approved baseline:
 only the fixed selector, version output and prior trusted runtime check may
-differ. Verify the manifest has
-exactly one entry and no unrelated edit. Run `git diff --check` and
+differ. That check includes the same system runtime's physical re-entry.
+Verify the manifest has exactly one entry and no unrelated edit. Run `git diff --check` and
 `git diff --name-only` against the exact publication base; changes must stay within
 the two allowed paths. Preserve both artifact hash links and both suite commands.
 
@@ -99,6 +115,8 @@ for body in runs:
 for marker in ('PY_MAC_BOOTSTRAP', 'PY'):
     python_body = runs[0].split("<<'" + marker + "'\n", 1)[1].split('\n' + marker + '\n', 1)[0]
     compile(python_body, 'workflow-' + marker, 'exec')
+entry = runs[0].split("mac_bootstrap_entry='", 1)[1].split("\n'\n", 1)[0]
+compile(entry, 'workflow-system-bootstrap-entry', 'exec')
 identity_body = runs[0].split("-c '", 1)[1].split("')\n", 1)[0]
 compile(identity_body, 'workflow-selected-identity', 'exec')
 PY
@@ -109,7 +127,14 @@ its ancestor and a startup module; changed held identity; an escaping or unknown
 load path; and an unchanged safe layout. Refusal must occur before candidate
 execution, including before sudo. Check those controls at the real Darwin boundary
 when the approved host runs; synthetic syntax checks cannot prove ACL behavior.
-Do not alter the original two suites, their assertions or the native 149 controls.
+Keep the entry and guard identical in the workflow and scope fixture. In the
+owned guard controls, physical re-entry must precede observer installation and
+keep the same owned PID. Preserve their cancellation, wait, pipe and pending
+cleanup checks. Check entry metadata refusal on owned fixtures for a write ACL,
+changed held identity and an ACL query error before any candidate execution.
+The actual fixed system runtime must also pass physical re-entry; a refusal
+cannot count as the unchanged-layout positive. Preserve the complete original
+two suites, their assertions and the native 149 controls.
 
 For spec requirement 8, require the automatic repository `checks` and aggregate
 `ci` on the publication PR's exact head/base, plus a separate full independent
