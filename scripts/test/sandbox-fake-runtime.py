@@ -31,6 +31,8 @@ import importlib.util
 import json
 import os
 import signal
+import stat
+import hashlib
 import subprocess
 import sys
 import time
@@ -235,10 +237,38 @@ def cmd_stop(args):
     return 0
 
 
+def publish_export_phase(scenario, frame):
+    path, attempt = scenario["phase_record_path"], scenario.get("attempt_id")
+    if not all(isinstance(value, str) and value for value in (path, attempt)):
+        raise ValueError("invalid export phase scenario")
+    record = {"schema_version": 1, "attempt_id": attempt,
+              "phase": "export-written-closed", "frame_size": len(frame),
+              "frame_sha256": hashlib.sha256(frame).hexdigest()}
+    raw = json.dumps(record, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    if not 0 < len(raw) <= 512:
+        raise ValueError("export phase record too large")
+    staging = path + ".staging"
+    fd = os.open(staging, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "wb") as fh:
+        if fh.write(raw) != len(raw):
+            raise OSError("partial phase write")
+        fh.flush()
+        os.fsync(fh.fileno())
+    st = os.lstat(staging)
+    if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+        raise ValueError("invalid phase staging file")
+    os.link(staging, path)
+    os.unlink(staging)
+
+
 def cmd_run(args):
     socket_path, export_disk, input_disk = args[0], args[1], args[2]
     hs = load_host_module()
     scenario = load_scenario()
+    if "phase_record_path" in scenario or "attempt_id" in scenario:
+        if not all(isinstance(scenario.get(key), str) and scenario[key]
+                   for key in ("phase_record_path", "attempt_id")):
+            raise ValueError("invalid export phase scenario")
     if scenario.get("emit_runtime_output"):
         # findings-477-r13.md finding 1: real bytes on this process's own
         # stdout (the host's runtime.log capture, distinct from the
@@ -410,7 +440,12 @@ def cmd_run(args):
     if scenario.get("damage_export"):
         frame = frame[:-1]
     with open(export_disk, "r+b") as fh:
-        fh.write(frame)
+        if fh.write(frame) != len(frame):
+            raise OSError("partial export write")
+    if "phase_record_path" in scenario and not scenario.get("damage_export"):
+        if hs.validate_export(records, plan_sha256) is None:
+            raise ValueError("invalid export phase report")
+        publish_export_phase(scenario, frame)
     if scenario.get("hang_after_export"):
         # R5.3's own gate under test: a valid, complete frame is on disk,
         # but the runtime never confirms a stop (never writes "stopped")
