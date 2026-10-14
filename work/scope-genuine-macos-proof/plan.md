@@ -49,7 +49,7 @@ SHA-256 values remain in spec requirement 1 and the linked direct decision.
    deadline across entry and guard. Record bounded stage/path/exception-chain
    diagnostics before re-raising an error. The existing owner and all later real
    ACL/UUID/runtime checks remain unchanged. Require workflow SHA-256
-   `216db17f85d65eb048d416c5381be8c6ec1a5e6653ee723b719b53b3fd41ff92`.
+   `4e5a04c438c33be6604e9a40c7b9cae46a0c1a3c278e36d24a7f8a7e5ead751f`.
    Check its patch against the actual publication base with `git apply --check`.
    Keep the manifest entry exactly once; an existing correct entry needs no edit.
    Reconcile and continue the existing deterministic implementation branch.
