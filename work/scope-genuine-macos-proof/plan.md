@@ -47,9 +47,31 @@ SHA-256 values remain in spec requirement 1 and the linked direct decision.
    modules. After actual re-entry, require the same version, canonical prefixes
    and startup paths, plus physical `sys.executable`. Keep one shared 120-second
    deadline across entry and guard. Record bounded stage/path/exception-chain
-   diagnostics before re-raising an error. The existing owner and all later real
-   ACL/UUID/runtime checks remain unchanged. Require workflow SHA-256
-   `4e5a04c438c33be6604e9a40c7b9cae46a0c1a3c278e36d24a7f8a7e5ead751f`.
+   diagnostics before re-raising an error. After entry refusal, allow one private,
+   non-privileged read-only inventory using that same fixed system Python and only
+   the remaining shared deadline. Keep synchronous budget checks; add no signal
+   timer or new hard-interruption guarantee. Preserve the original refusal and cleanup even
+   if inventory fails. Never execute P, a UUID/helper child or a privileged command.
+   Read only the fixed bootstrap, the already selected P, fixed jq and the objects
+   their existing checks would inspect. Do not read file contents outside those
+   objects or list unrelated directories. For P, admit only its one physical
+   installation prefix beneath `/usr/local/Cellar/`, `/opt/homebrew/Cellar/` or
+   `/Library/Frameworks/Python.framework/Versions/`; unknown layouts give GAP.
+   Bound reads to that prefix, the same system Python framework root, `/usr/lib/`
+   and `/System/Library/`. Read only originally named system objects and their
+   ancestors, not recursive system scans. Check each symlink step against these
+   roots before following it; an outside edge gives GAP, not another read.
+   Record symlink ACL as GAP; do not make absolute-path link ACL queries.
+   Mach-O closure discovery gives a fixed GAP; do not add a parser or follow its
+   load edges here. This inventory cannot claim complete closure or a host repair
+   ready to execute. Collect metadata, raw ACL fields, layout and byte digests without
+   interpreting UUIDs or claiming authentication. Keep the original traversal,
+   object, file and ACL caps. Limit all inventory output to 16 MiB, each JSONL row
+   and its final summary to 16 KiB within that total. Any error, change or exhausted
+   cap marks the inventory incomplete. No host repair, fallback, qualification or
+   altered acceptance follows from this diagnostic. The existing owner and all
+   later real ACL/UUID/runtime checks remain unchanged. Require workflow SHA-256
+   `b0289213949f6d6c87201733541b090edf25cb92696c4359150cb28540ad37ab`.
    Check its patch against the actual publication base with `git apply --check`.
    Keep the manifest entry exactly once; an existing correct entry needs no edit.
    Reconcile and continue the existing deterministic implementation branch.
@@ -92,7 +114,8 @@ native/CPU-wall qualification or admit production identities.
 For spec requirements 1–7, compare the complete workflow with the pinned bytes
 and verify its SHA-256 with `shasum -a 256`. Compare with the approved baseline:
 only the fixed selector, version output and prior trusted runtime check may
-differ. That check includes the same system runtime's physical re-entry.
+differ. That check includes the same system runtime's physical re-entry and its
+bounded failure inventory.
 Verify the manifest has exactly one entry and no unrelated edit. Run `git diff --check` and
 `git diff --name-only` against the exact publication base; changes must stay within
 the two allowed paths. Preserve both artifact hash links and both suite commands.
@@ -127,14 +150,34 @@ its ancestor and a startup module; changed held identity; an escaping or unknown
 load path; and an unchanged safe layout. Refusal must occur before candidate
 execution, including before sudo. Check those controls at the real Darwin boundary
 when the approved host runs; synthetic syntax checks cannot prove ACL behavior.
-Keep the entry and guard identical in the workflow and scope fixture. In the
-owned guard controls, physical re-entry must precede observer installation and
-keep the same owned PID. Preserve their cancellation, wait, pipe and pending
+Keep the guard byte-identical in the workflow and scope fixture. The workflow may
+prefix its existing Python string with only the fixed private `failure_inventory`
+definition. Keep the same `/usr/bin/python3 -I -S -B -c` invocation and inputs.
+Only these four lines may differ inside entry, after its original refusal diagnostic
+handler and before its unchanged bare `raise`:
+
+```python
+    try:
+        failure_inventory()
+    except BaseException:
+        pass
+```
+
+Remove that one exact block and require byte equality with the scope entry.
+Preserve its normal path, authentication predicates, original diagnostics and
+`finally` cleanup. Do not copy the inventory into scope or expand its source for
+this workflow-only diagnostic. In the owned guard controls, physical re-entry must
+precede observer installation and keep the same owned PID. Preserve their
+cancellation, wait, pipe and pending
 cleanup checks. Check entry metadata refusal on owned fixtures for a write ACL,
 changed held identity and an ACL query error before any candidate execution.
 The actual fixed system runtime must also pass physical re-entry; a refusal
 cannot count as the unchanged-layout positive. Preserve the complete original
 two suites, their assertions and the native 149 controls.
+Check the private inventory's outside-root and symlink rejection, byte/time/count
+caps, original refusal preservation, no child execution, owned-fd cleanup and
+stderr flag restoration.
+These diagnostic controls do not replace the real entry positive or qualify a host.
 
 For spec requirement 8, require the automatic repository `checks` and aggregate
 `ci` on the publication PR's exact head/base, plus a separate full independent
