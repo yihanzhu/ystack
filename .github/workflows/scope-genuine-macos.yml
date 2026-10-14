@@ -66,15 +66,249 @@ jobs:
           for tool in /usr/bin/python3 /usr/local/bin/jq /usr/bin/git /usr/bin/cc /usr/bin/sudo /usr/bin/perl /usr/bin/dscl /usr/sbin/dseditgroup /usr/bin/stat /bin/chmod /usr/sbin/chown /bin/mkdir /bin/cp /bin/rm /usr/bin/id /usr/bin/false; do
             test -f "$tool" && test ! -L "$tool" && test -x "$tool"
           done
-          p=$(/usr/bin/python3 -I -S -B -c 'import os,sys;assert sys.version_info >= (3,11);print(os.path.realpath(sys.executable))')
           if [ -x /opt/homebrew/bin/python3.14 ]; then native_p=/opt/homebrew/bin/python3.14
           elif [ -x /usr/local/bin/python3.14 ]; then native_p=/usr/local/bin/python3.14
           else native_p=$(command -v python3.14 || command -v python3); fi
-          native_p=$("$native_p" -I -S -B -c 'import os,sys;print(os.path.realpath(sys.executable))')
+          test -z "${__PYVENV_LAUNCHER__+present}"
+          for guard_variable in "${!DYLD_@}"; do test -z "$guard_variable"; done
+          p=$(/usr/bin/python3 -I -S -B - "$PWD" "$native_p" <<'PY_MAC_BOOTSTRAP'
+          import ctypes
+          import errno
+          import hashlib
+          import importlib.util
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import stat
+          import struct
+          import sys
+          import time
+
+          assert sys.platform == 'darwin' and os.getuid() != 0
+          assert not any(key.startswith('DYLD_') or key == '__PYVENV_LAUNCHER__' for key in os.environ)
+          package = Path(sys.argv[1])
+          assert package.is_absolute() and package.resolve() == package
+          source = package / 'shadow/v1/_consumer.py'
+          spec = importlib.util.spec_from_file_location('fixture_bootstrap_consumer', source)
+          assert spec is not None and spec.loader is not None
+          c = importlib.util.module_from_spec(spec)
+          sys.modules[spec.name] = c
+          spec.loader.exec_module(c)
+
+          class FixtureDarwinLedger:
+              def __init__(self): self.commands = []
+              def record_command(self, role, argv, executable, component):
+                  c._require(role == 'darwin-acl-uuid-resolution', 'E_RUNTIME')
+                  c._require(len(self.commands) < 4096, 'E_LIMIT')
+                  self.commands.append({'role': role, 'argv_sha256': c.digest(c.canonical(argv)),
+                      'executable_sha256': executable, 'component_sha256': component})
+
+          locator = Path(sys.argv[2])
+          assert locator.is_absolute()
+          selected = Path(os.path.realpath(str(locator)))
+          print(json.dumps({'bootstrap_python': sys.executable, 'bootstrap_version': list(sys.version_info[:3]),
+              'selected_python': str(selected), 'candidate_executed': False}, sort_keys=True), file=sys.stderr)
+          match = re.fullmatch(r'python3\.(1[1-9]|[2-9][0-9])', selected.name)
+          assert match and selected.parent.name == 'bin'
+          prefix = selected.parent.parent
+          assert prefix not in (Path('/'), Path('/usr'), Path('/usr/local'), Path('/opt/homebrew'))
+          stdlib = prefix / 'lib' / ('python3.' + match[1])
+          assert (stdlib / 'os.py').is_file() and (stdlib / 'encodings/__init__.py').is_file()
+          assert not any(os.path.lexists(str(parent / 'pyvenv.cfg')) for parent in (selected.parent, prefix))
+          assert not any(os.path.lexists(str(selected) + suffix) for suffix in ('._pth', '.zip'))
+          deadline = time.monotonic() + 120
+          owned = []
+          active_path = str(selected)
+          rows = {}
+          links = {}
+          cache_paths = set()
+          images = set()
+          seen = set()
+          ledger = FixtureDarwinLedger()
+          fields = ('st_dev', 'st_ino', 'st_mode', 'st_uid', 'st_gid', 'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+
+          def identity(state):
+              return tuple(getattr(state, field) for field in fields)
+
+          def inspect(path, directory=False):
+              global active_path
+              active_path = str(path)
+              assert time.monotonic() < deadline and len(rows) < 16384
+              assert path.is_absolute() and path.resolve() == path
+              held = c._open_held(str(path), directory, c._root_rule(owner), 'E_INSTALL')
+              try:
+                  raw = b'' if directory else held.read(c.EXECUTABLE_LIMIT, 'E_INSTALL')
+                  held.recheck('E_STALE')
+                  value = (identity(held.before), hashlib.sha256(raw).hexdigest())
+                  assert str(path) not in rows or rows[str(path)] == value
+                  rows[str(path)] = value
+                  return raw
+              finally:
+                  held.close()
+
+          def native_dependencies(path, raw):
+              # This fixture accepts only a bounded x86_64 Mach-O dependency closure.
+              magic = raw[:4]
+              if magic in (b'\xca\xfe\xba\xbe', b'\xca\xfe\xba\xbf'):
+                  count = struct.unpack_from('>I', raw, 4)[0]
+                  width = 20 if magic[-1] == 0xbe else 32
+                  assert 0 < count <= 16 and 8 + count * width <= len(raw)
+                  slices = []
+                  for index in range(count):
+                      values = struct.unpack_from('>IIIII' if width == 20 else '>IIQQII', raw, 8 + index * width)
+                      if values[0] == 0x01000007:
+                          offset, size = values[2:4]
+                          assert offset + size <= len(raw)
+                          slices.append(raw[offset:offset + size])
+                  assert len(slices) == 1
+                  raw = slices[0]
+                  magic = raw[:4]
+              if magic != b'\xcf\xfa\xed\xfe':
+                  assert path.suffix not in ('.so', '.dylib')
+                  assert magic not in (b'\xfe\xed\xfa\xce', b'\xce\xfa\xed\xfe', b'\xfe\xed\xfa\xcf')
+                  return
+              header = struct.unpack_from('<8I', raw)
+              assert header[1] == 0x01000007 and header[4] <= 4096
+              end = 32 + header[5]
+              assert end <= len(raw)
+              offset = 32
+              for _ in range(header[4]):
+                  command, size = struct.unpack_from('<II', raw, offset)
+                  assert size >= 8 and size % 8 == 0 and offset + size <= end
+                  assert command not in (0x6, 0x9, 0x10, 0x27)
+                  if command in (0xc, 0xe, 0x80000018, 0x8000001c, 0x8000001f, 0x20, 0x80000023):
+                      name_offset = struct.unpack_from('<I', raw, offset + 8)[0]
+                      assert 12 <= name_offset < size
+                      encoded = raw[offset + name_offset:offset + size]
+                      assert b'\0' in encoded
+                      name = encoded.split(b'\0', 1)[0].decode('utf8')
+                      if command == 0xe:
+                          assert name == '/usr/lib/dyld'
+                          inspect(Path(name))
+                      else:
+                          if name.startswith('@loader_path/'):
+                              name = str(path.parent / name[len('@loader_path/'):])
+                          elif name.startswith('@executable_path/'):
+                              name = str(selected.parent / name[len('@executable_path/'):])
+                          assert name.startswith('/') and '@' not in name
+                          target = Path(os.path.normpath(name))
+                          if str(target).startswith(('/usr/lib/', '/System/Library/')) and not os.path.lexists(target):
+                              assert len(cache_paths) < 256
+                              cache_paths.add(target)
+                              parent = target.parent
+                              while not os.path.lexists(parent):
+                                  parent = parent.parent
+                              inspect(parent, True)
+                          elif command == 0x8000001c:
+                              assert prefix in target.parents or target == prefix
+                              inspect(target, True)
+                          else:
+                              assert len(images) < 256
+                              images.add(target)
+                  offset += size
+              assert offset == end
+
+          try:
+              bootstrap = c._hold_bytes(sys.executable, c.EXECUTABLE_LIMIT)
+              owned.append(bootstrap)
+              consumer_source = c._hold_bytes(str(source), c.EXECUTABLE_LIMIT)
+              owned.append(consumer_source)
+              owner = c._DarwinChildOwner(bootstrap, consumer_source, deadline, ledger)
+              library = c._DARWIN_ACL_FUNCTIONS.library
+              library.acl_get_link_np.argtypes = [ctypes.c_char_p, ctypes.c_int]
+              library.acl_get_link_np.restype = ctypes.c_void_p
+              for item in reversed((locator, *locator.parents)):
+                  if item == Path('/'):
+                      continue
+                  before = item.lstat()
+                  if stat.S_ISLNK(before.st_mode):
+                      inspect(item.parent.resolve(), True)
+                      assert before.st_uid == 0 and before.st_nlink == 1
+                      ctypes.set_errno(0)
+                      acl = library.acl_get_link_np(os.fsencode(item), 0x100)
+                      if acl:
+                          assert library.acl_free(acl) == 0
+                          raise ValueError('selector link with ACL is unsupported')
+                      assert ctypes.get_errno() == errno.ENOENT
+                      links[str(item)] = (identity(before), os.readlink(item))
+                  else:
+                      inspect(item, item != locator)
+              root = c._open_held(str(prefix), True, c._root_rule(owner), 'E_INSTALL')
+              owned.append(root)
+              images.add(selected)
+              directories = [prefix / 'lib', prefix / 'include']
+              while directories:
+                  directory = directories.pop()
+                  inspect(directory, True)
+                  with os.scandir(str(directory)) as entries:
+                      for entry in entries:
+                          assert len(rows) + len(directories) < 16384
+                          path = directory / entry.name
+                          if entry.is_dir(follow_symlinks=False):
+                              inspect(path, True)
+                              directories.append(path)
+                          else:
+                              raw = inspect(path)
+                              native_dependencies(path, raw)
+              while images:
+                  path = images.pop()
+                  if path in seen:
+                      continue
+                  assert len(seen) < 256
+                  seen.add(path)
+                  raw = inspect(path)
+                  assert raw[:4] in (b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe', b'\xca\xfe\xba\xbf')
+                  native_dependencies(path, raw)
+              for name, (before, _digest) in rows.items():
+                  assert time.monotonic() < deadline and identity(os.lstat(name)) == before
+              assert all(not os.path.lexists(path) for path in cache_paths)
+              for name, (before, target) in links.items():
+                  assert identity(os.lstat(name)) == before and os.readlink(name) == target
+              assert not any(os.path.lexists(str(parent / 'pyvenv.cfg')) for parent in (selected.parent, prefix))
+              assert not any(os.path.lexists(str(selected) + suffix) for suffix in ('._pth', '.zip'))
+              assert Path(os.path.realpath(str(locator))) == selected
+              for item in owned:
+                  item.recheck('E_STALE')
+              print(json.dumps({'bootstrap': 'fixed-system-python-existing-runtime', 'python': str(selected),
+                  'prefix': str(prefix), 'objects': len(rows), 'native_images': len(seen),
+                  'closure_sha256': c.digest(c.canonical({'objects': rows, 'selector_links': links})), 'acl_commands': len(ledger.commands),
+                  'acl_commands_sha256': c.digest(c.canonical(ledger.commands)), 'privileged_execution': False}, sort_keys=True), file=sys.stderr)
+              print(selected)
+          except BaseException as error:
+              try:
+                  print(json.dumps({'bootstrap_refusal_path': active_path, 'exception': type(error).__name__,
+                      'code': getattr(error, 'code', None), 'candidate_executed': False}, sort_keys=True), file=sys.stderr)
+              except BaseException:
+                  pass
+              raise
+          finally:
+              original = sys.exc_info()[1]
+              try:
+                  c._close_paths(owned)
+              except OSError as cleanup_error:
+                  if original is not None:
+                      raise original from cleanup_error
+                  raise
+          PY_MAC_BOOTSTRAP
+          )
+          native_p=$("$p" -I -S -B -c 'import sys
+          from pathlib import Path
+          p = Path(sys.executable)
+          print("selected_python=" + str(p) + " version=" + ".".join(map(str, sys.version_info[:3])),
+                file=sys.stderr, flush=True)
+          assert sys.version_info >= (3, 11)
+          prefix = p.parent.parent
+          assert p.resolve() == p and sys.prefix == sys.base_prefix == str(prefix)
+          assert all(Path(value).is_absolute() and (Path(value) == prefix or prefix in Path(value).parents)
+                     for value in sys.path)
+          print(p)')
           test "$p" = "$native_p"
           "$p" -I -S -B - "$PWD" "$YSTACK_SELECTED_SHA" <<'PY'
           import hashlib,importlib.util,json,os,pathlib,plistlib,stat,sys,sysconfig,uuid
           root=pathlib.Path(sys.argv[1]); assert root.resolve()==root
+          runtime_prefix=pathlib.Path(sys.executable).parent.parent
+          assert sys.prefix==sys.base_prefix==str(runtime_prefix)
           selected_sha=sys.argv[2];token=selected_sha[:8]
           source=root/'scope/v1/read-shadow-evidence.py'
           spec=importlib.util.spec_from_file_location('reserved_source_preflight',source)
@@ -87,6 +321,7 @@ jobs:
               assert path.resolve()==path and path.is_file()
               if path.is_relative_to(root):
                   continue
+              assert runtime_prefix in path.parents or str(path).startswith(('/usr/lib/','/System/Library/')) or path==pathlib.Path('/usr/local/bin/jq')
               before=path.stat()
               for item in (path,*path.parents):
                   state=item.lstat()
@@ -99,6 +334,7 @@ jobs:
           assert hashlib.sha256(jq.read_bytes()).hexdigest()=='5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef'
           for key in ('stdlib','platstdlib','include','platinclude'):
               path=pathlib.Path(sysconfig.get_path(key));assert path.resolve()==path and path.is_dir()
+              assert runtime_prefix in path.parents
               for item in (path,*path.parents):
                   state=item.lstat();assert state.st_uid==0 and not state.st_mode & 0o022 and not stat.S_ISLNK(state.st_mode)
           assert not os.path.lexists('/usr/local/libexec/ystack-sandbox/v1/supervisor')
