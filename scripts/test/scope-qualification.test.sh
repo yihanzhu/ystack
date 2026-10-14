@@ -2142,7 +2142,7 @@ PY_GENUINE_READER
 }
 prepare_genuine_assembler() {
   /bin/cat >"$tmp/genuine-assembler.py" <<'PY_GENUINE_ASSEMBLER'
-import ctypes,hashlib,importlib.util,json,os,pathlib,pwd,grp,shutil,stat,subprocess,sys,sysconfig,threading,time
+import ctypes,hashlib,importlib.util,json,os,pathlib,pwd,grp,shutil,stat,subprocess,sys,sysconfig,time
 base=pathlib.Path(sys.argv[1]);writer,consumer,group=sys.argv[2:5];jq_source=pathlib.Path(sys.argv[5]);documents=pathlib.Path(sys.argv[6]);package=base/'package'
 assert os.getuid()==0 and base.resolve()==base and package.resolve()==package
 canonical=lambda value:(json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=False,allow_nan=False)+'\n').encode()
@@ -2161,209 +2161,14 @@ assert sha(jq.read_bytes())==c.JQ_SHA256[sys.platform]
 (tools/'python3').symlink_to(sys.executable)
 env={'PATH':str(tools)+':/usr/bin:/bin','LC_ALL':'C','LANG':'C','HOME':str(work),'TMPDIR':str(work),'GIT_CONFIG_NOSYSTEM':'1','GIT_CONFIG_GLOBAL':'/dev/null','GIT_NO_REPLACE_OBJECTS':'1','GIT_NO_LAZY_FETCH':'1','GIT_TERMINAL_PROMPT':'0','GIT_OPTIONAL_LOCKS':'0','GIT_AUTHOR_NAME':'fixture','GIT_AUTHOR_EMAIL':'fixture@example.invalid','GIT_COMMITTER_NAME':'fixture','GIT_COMMITTER_EMAIL':'fixture@example.invalid','GIT_AUTHOR_DATE':'2000-01-01T00:00:00Z','GIT_COMMITTER_DATE':'2000-01-01T00:00:00Z'}
 commands=[]
-scope_observation_count=0
-def prepare_scope_diagnostic():
- directory=base/'scope-diagnostic';directory.mkdir(mode=0o700)
- os.chown(directory,consumer_uid,gid)
- wrapper=base/'scope-diagnostic-wrapper.py'
- wrapper.write_text(r'''import errno,hashlib,json,os,runpy,stat,sys
-from pathlib import Path
-reader=Path(sys.argv[1]);consumer=reader.parents[2]/'shadow/v1/_consumer.py'
-directory=reader.parents[3]/'scope-diagnostic'
-effective=[str(reader),*sys.argv[2:]];initial=list(sys.orig_argv)
-trace=directory/('trace-'+str(os.getpid())+'.jsonl')
-fd=None
-try:
- fd=os.open(trace,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
- state=os.fstat(fd)
- assert stat.S_ISREG(state.st_mode) and state.st_nlink==1 and state.st_uid==os.getuid()
-except BaseException:
- if fd is not None:
-  try:os.close(fd)
-  except BaseException:pass
- fd=None
-sources={str(reader),str(consumer)};observed=False;last_foreground=None
-
-def bounded(value,depth=0):
- if value is None or type(value) in (bool,int,float):return value
- if isinstance(value,str):return value[:512]
- if isinstance(value,(bytes,bytearray)):
-  raw=bytes(value);return {'length':len(raw),'sha256':hashlib.sha256(raw).hexdigest(),
-   'prefix_hex':raw[:512].hex(),'truncated':len(raw)>512}
- if isinstance(value,os.stat_result):
-  return [value.st_dev,value.st_ino,value.st_mode,value.st_uid,value.st_gid,
-   value.st_nlink,value.st_size,value.st_mtime_ns,value.st_ctime_ns]
- if depth<2 and isinstance(value,(list,tuple)):
-  return [bounded(item,depth+1) for item in value[:12]]
- if depth<2 and type(value) is dict:
-  return {str(key)[:80]:bounded(item,depth+1) for key,item in list(value.items())[:12]}
- return {'type':type(value).__name__}
-
-def foreground(frame):
- local=frame.f_locals;child=local.get('child')
- return {'argv':bounded(local.get('argv','absent')),
-  'wait_status':bounded(local.get('result','absent')),
-  'child_returncode':getattr(child,'returncode','absent'),
-  'outputs':bounded(local.get('outputs','absent')),
-  'chunk':bounded(local.get('chunk','absent'))}
-
-def observe(frame,event,arg):
- global observed,last_foreground
- if frame.f_code.co_filename not in sources:return observe
- record=None
- try:
-  if event=='return' and frame.f_code.co_name=='_foreground':
-   last_foreground=foreground(frame)
-   last_foreground['normal_return']=isinstance(arg,bytes)
-   last_foreground['returned_bytes']=bounded(arg) if isinstance(arg,bytes) else 'absent'
-  if event!='exception' or observed:return observe
-  error=arg[1]
-  if isinstance(error,(GeneratorExit,BlockingIOError)):return observe
-  if (frame.f_code.co_filename==str(consumer)
-      and frame.f_code.co_name=='_linux_acl_xattr' and isinstance(error,OSError)
-      and error.errno in (errno.ENODATA,getattr(errno,'ENOATTR',errno.ENODATA))):
-   return observe
-  def source(current):
-   return {'file':current.f_code.co_filename[:512],
-    'function':current.f_code.co_name[:128],'line':current.f_lineno}
-  caller=frame
-  for unused in range(16):
-   if caller.f_code.co_name not in ('require','_require') or caller.f_back is None:break
-   caller=caller.f_back
-  record={'exception':type(error).__name__[:128],'code':getattr(error,'code',None),
-   'errno':getattr(error,'errno',None),'first_source':source(frame),
-   'first_check_caller':source(caller),'truncated':False,'frames':[]}
-  def encoded():return (json.dumps(record,sort_keys=True,separators=(',',':'))+'\n').encode()
-  assert len(encoded())<=16384
-  observed=True
-  def add(target,key,value):
-   target[key]=value
-   if len(encoded())>16384:
-    del target[key];record['truncated']=True
-  add(record,'message',str(error)[:512])
-  add(record,'initial_argv',initial);add(record,'effective_argv',effective)
-  add(record,'last_foreground',last_foreground)
-  current=frame
-  while current is not None and len(record['frames'])<16:
-   local=current.f_locals;item=local.get('self');row=source(current)
-   record['frames'].append(row)
-   if len(encoded())>16384:
-    record['frames'].pop();record['truncated']=True;break
-   row['locals']={}
-   for name,value in list(local.items())[:12]:
-    if name not in ('self','__builtins__'):add(row['locals'],name,bounded(value))
-   if current.f_code.co_name=='_foreground':add(row,'foreground',foreground(current))
-   if hasattr(item,'commands'):add(row,'last_commands',bounded(item.commands[-2:]))
-   current=current.f_back
-  if current is not None:record['truncated']=True
- except BaseException as diagnostic_error:
-  if record is not None:
-   record['truncated']=True
-   record['observer_error']=type(diagnostic_error).__name__[:128]
- finally:
-  if record is not None and fd is not None:
-   try:
-    raw=(json.dumps(record,sort_keys=True,separators=(',',':'))+'\n').encode()
-    if len(raw)>16384:
-     raw=(json.dumps({key:record[key] for key in ('exception','code','errno',
-      'first_source','first_check_caller')}|{'truncated':True},sort_keys=True)+'\n').encode()
-    if os.write(fd,raw)!=len(raw):raise OSError('short diagnostic write')
-   except BaseException:pass
- return observe
-sys.argv=effective;sys.settrace(observe)
-try:runpy.run_path(str(reader),run_name='__main__')
-finally:
- sys.settrace(None)
- try:os.close(fd)
- except BaseException:pass
-''')
- wrapper.chmod(0o555)
- frontend=base/'scope-diagnostic-frontend.sh'
- original=(package/'scope/v1/evaluate-scope.sh').read_text()
- diagnostic=original.replace('source_path=${BASH_SOURCE[0]}',
-   'source_path='+str(package/'scope/v1/evaluate-scope.sh'))
- diagnostic=diagnostic.replace('"$python_bin" -I -S -B "$reader" read',
-   '"$python_bin" -I -S -B '+str(wrapper)+' "$reader" read')
- before='cleanup() { finish_reader; exec 8<&-; /bin/rm -rf -- "$scratch" >/dev/null 2>&1 || :; }'
- after='''cleanup() { finish_reader; exec 8<&-;
- for name in reader-stderr locator-error terminal-error; do
-  if [ -f "$scratch/$name" ]; then
-   /bin/dd if="$scratch/$name" of="DIRECTORY/${scratch##*/}-$name" bs=65537 count=1 2>/dev/null || :
-  else /usr/bin/printf missing >"DIRECTORY/${scratch##*/}-$name.missing" 2>/dev/null || :
-  fi
- done
- /bin/rm -rf -- "$scratch" >/dev/null 2>&1 || :; }'''.replace('DIRECTORY',str(directory))
- assert diagnostic.count(before)==1
- frontend.write_text(diagnostic.replace(before,after));frontend.chmod(0o555)
- print(json.dumps({'scope_diagnostic_source':{'original_frontend_sha256':sha(original.encode()),
-  'private_frontend_sha256':sha(frontend.read_bytes()),'wrapper_sha256':sha(wrapper.read_bytes())},
-  'diagnostic_only':True,'original_namespace':str(package)},sort_keys=True),flush=True)
- return frontend,directory
-scope_diagnostic_frontend,scope_diagnostic_directory=prepare_scope_diagnostic()
-def observe_scope(stop, destination, captured, errors):
- def identity(state):
-  return (state.st_dev,state.st_ino,state.st_mode,state.st_uid,state.st_gid,
-    state.st_nlink,state.st_size,state.st_mtime_ns,state.st_ctime_ns)
- try:
-  while not stop.wait(.005):
-   for scratch in (base/'consumer-work').glob('ystack-scope-evaluate.*'):
-    for relative in ('observation/result.json','observation.json','evaluation.json','reader-stderr'):
-     path=scratch/relative
-     try:
-      before=path.lstat()
-      if not stat.S_ISREG(before.st_mode) or before.st_size>1024*1024:continue
-      fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW)
-      with os.fdopen(fd,'rb') as stream:
-       opened=os.fstat(stream.fileno())
-       raw=stream.read(1024*1024+1)
-       closed=os.fstat(stream.fileno())
-      after=path.lstat()
-     except FileNotFoundError:continue
-     if len(raw)>1024*1024 or not identity(before)==identity(opened)==identity(closed)==identity(after):continue
-     key=(relative,sha(raw))
-     if key not in captured:
-      (destination/(relative.replace('/','-')+'-'+key[1])).write_bytes(raw)
-      captured[key]=raw
- except BaseException as error:errors.append(repr(error))
 def run(argv,raw=None,role=None,component=None,limit=16*1024*1024):
- global scope_observation_count
- argv=list(map(str,argv));stop=observer=None;captured={};errors=[]
+ argv=list(map(str,argv))
+ r=subprocess.run(argv,input=raw,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env,timeout=180)
+ print(json.dumps({'fixture_command':argv,'returncode':r.returncode,'stdout_sha256':sha(r.stdout),
+  'stderr':r.stderr.decode('utf8','backslashreplace')},sort_keys=True),flush=True)
  if str(package/'scope/v1/evaluate-scope.sh') in argv:
-  destination=base/'snapshots'/('scope-observation-'+str(scope_observation_count))
-  scope_observation_count+=1;destination.mkdir(mode=0o700)
-  argv[argv.index(str(package/"scope/v1/evaluate-scope.sh"))]=str(scope_diagnostic_frontend)
-  stop=threading.Event()
-  observer=threading.Thread(target=observe_scope,args=(stop,destination,captured,errors))
-  observer.start()
- try:r=subprocess.run(argv,input=raw,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env,timeout=180)
- finally:
-  if observer is not None:
-   stop.set();observer.join(10);assert not observer.is_alive()
-   for (name,digest),value in sorted(captured.items()):
-    print(json.dumps({'actual_scope_snapshot':name,'sha256':digest,
-      'raw_utf8':value.decode('utf8','backslashreplace')},sort_keys=True),flush=True)
-   assert not errors,errors
- print(json.dumps({'fixture_command':argv,'returncode':r.returncode,'stdout_sha256':sha(r.stdout),'stderr':r.stderr.decode('utf8','backslashreplace')},sort_keys=True),flush=True)
- if observer is not None:
-  try:
-   for diagnostic_file in sorted(scope_diagnostic_directory.iterdir()):
-    cap=16384 if diagnostic_file.name.startswith('trace-') else 65536
-    with diagnostic_file.open('rb') as stream:diagnostic_raw=stream.read(cap+1)
-    print(json.dumps({'actual_scope_diagnostic':diagnostic_file.name,
-     'raw_utf8':diagnostic_raw[:cap].decode('utf8','backslashreplace'),
-     'exceeds_cap':len(diagnostic_raw)>cap,'empty':not diagnostic_raw,
-     'missing':diagnostic_file.name.endswith('.missing'),
-     'original_returncode':r.returncode},sort_keys=True),flush=True)
-  except BaseException as diagnostic_error:
-   try:
-    print(json.dumps({'observer_error':type(diagnostic_error).__name__[:128],
-     'original_returncode':r.returncode},sort_keys=True),flush=True)
-   except BaseException:pass
- if observer is not None:
   print(json.dumps({'actual_scope_stdout_utf8':r.stdout.decode('utf8','backslashreplace')},sort_keys=True),flush=True)
  assert r.returncode==0 and len(r.stdout)<=limit and not r.stderr
- if observer is not None:
-  assert any(name=='observation/result.json' for name,_digest in captured),'scope reader observation was not retained'
  if role:commands.append({'role':role,'argv_sha256':sha(canonical(argv)),'executable_sha256':sha(pathlib.Path(argv[0]).resolve().read_bytes()),'component_sha256':sha(pathlib.Path(component).read_bytes())})
  return r.stdout
 def put(path,value,mode=0o444):
@@ -2996,7 +2801,6 @@ print(json.dumps({'genuine_paired_storage_controls':'PASS','consumer_denials':6,
     'canonical_archive_refusals':len(archive_cases),'original_receipt_terminated_at':
         json.loads(receipt_before)['body']['timing']['terminated_at']},sort_keys=True),flush=True)
 
-# This private frontend copy changes only the before-SEAL test synchronization boundary.
 race_package = base / 'through-use-package'
 shutil.copytree(package, race_package)
 frontend = race_package / 'scope/v1/evaluate-scope.sh'
@@ -3014,12 +2818,34 @@ case "$reply" in
   *) emit_error E_RUNTIME ;;
 esac
 """
-frontend.write_bytes(frontend_before.replace(seal_boundary,synchronization+seal_boundary,1))
+cleanup_boundary=b'cleanup() { finish_reader; exec 8<&-; /bin/rm -rf -- "$scratch" >/dev/null 2>&1 || :; }'
+assert frontend_before.count(cleanup_boundary)==1
+capture_cleanup=b"""cleanup() { finish_reader; exec 8<&-;
+ /usr/bin/printf '%s' "$test_reader_status" >"$TMPDIR/test-reader-status" 2>/dev/null ||
+  /usr/bin/printf capture_error >"$TMPDIR/test-reader-capture-error" 2>/dev/null || :
+ /bin/dd if="$scratch/reader-stderr" of="$TMPDIR/test-reader-stderr" bs=65537 count=1 2>/dev/null ||
+  /usr/bin/printf capture_error >"$TMPDIR/test-reader-capture-error" 2>/dev/null || :
+ /bin/rm -rf -- "$scratch" >/dev/null 2>&1 || :; }"""
+wait_boundary=b'    wait "$reader_pid" 2>/dev/null || :'
+assert frontend_before.count(wait_boundary)==1
+wait_capture=b'    if wait "$reader_pid" 2>/dev/null; then test_reader_status=0; else test_reader_status=$?; fi'
+execution=frontend_before.replace(b"reader_pid=''\n",b"reader_pid=''\ntest_reader_status=unreaped\n",1)
+execution=execution.replace(wait_boundary,wait_capture,1)
+execution=execution.replace(seal_boundary,synchronization+seal_boundary,1)
+frontend.write_bytes(execution.replace(cleanup_boundary,capture_cleanup,1))
 frontend.chmod(0o555)
 print(json.dumps({'private_frontend_original_sha256':sha(frontend_before),
     'private_frontend_execution_sha256':sha(frontend.read_bytes()),
-    'difference':'one fixed synchronization insertion before SEAL; production reader unchanged'},sort_keys=True),flush=True)
+    'difference':'fixed before-SEAL synchronization and bounded same-reader stderr copy after original finish/reap; production reader unchanged'},sort_keys=True),flush=True)
 ready_path, ack_path = consumer_work/'test-ready', consumer_work/'test-ack'
+reader_stderr_path=consumer_work/'test-reader-stderr'
+capture_error_path=consumer_work/'test-reader-capture-error'
+reader_status_path=consumer_work/'test-reader-status'
+for path in (reader_stderr_path,capture_error_path,reader_status_path):
+    fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+    os.close(fd);os.chown(path,consumer_uid,consumer_gid)
+    state=path.lstat()
+    assert stat.S_ISREG(state.st_mode) and state.st_nlink==1 and stat.S_IMODE(state.st_mode)==0o600
 for path in (ready_path,ack_path):
     os.mkfifo(path,0o600)
     os.chown(path,consumer_uid,consumer_gid)
@@ -3042,6 +2868,9 @@ def through_use(label, target, mutate, restore, cancellation=False):
     before=None
     started=time.monotonic()
     deadline=started+150
+    for path in (reader_stderr_path,capture_error_path,reader_status_path):
+        fd=os.open(path,os.O_WRONLY|os.O_TRUNC|os.O_NOFOLLOW)
+        os.close(fd)
     try:
         child=subprocess.Popen(list(map(str,race_argv)),stdout=subprocess.PIPE,stderr=subprocess.PIPE,
                                env=env,start_new_session=True,close_fds=True)
@@ -3070,8 +2899,16 @@ def through_use(label, target, mutate, restore, cancellation=False):
         stdout,stderr=child.communicate(timeout=max(0.001,deadline-time.monotonic()))
         print(json.dumps({'through_use':label,'returncode':child.returncode,'stdout_hex':stdout.hex(),
             'stderr_utf8':stderr.decode('utf8','backslashreplace'),'elapsed':time.monotonic()-started},sort_keys=True),flush=True)
-        assert child.returncode!=0 and stdout==b''
-        assert stderr== (b'E_RUNTIME\n' if cancellation else b'E_STALE\n')
+        with reader_stderr_path.open('rb') as stream:inner_stderr=stream.read(65537)
+        with capture_error_path.open('rb') as stream:capture_error=stream.read(64)
+        with reader_status_path.open('rb') as stream:reader_status=stream.read(16)
+        print(json.dumps({'through_use':label,'original_reader_stderr_utf8':inner_stderr.decode('utf8','backslashreplace'),
+            'capture_error':capture_error.decode('utf8','backslashreplace'),
+            'original_reader_wait_status':reader_status.decode('utf8','backslashreplace')},sort_keys=True),flush=True)
+        assert child.returncode!=0 and stdout==b'' and stderr==b'E_RUNTIME\n'
+        assert not capture_error and len(inner_stderr)<=65536
+        if not cancellation:
+            assert inner_stderr==b'E_STALE\n' and reader_status.isdigit() and 0<int(reader_status)<=255
     except BaseException as error:
         original_error=error
         raise
@@ -3116,7 +2953,7 @@ through_use('watched-cancellation',store,lambda:None,lambda:None,cancellation=Tr
 ready_path.unlink()
 ack_path.unlink()
 assert json.loads(run(scope_argv))['body']['evidence']['shadow_bundle_facts'][0]['authentication']['state']=='authenticated'
-print(json.dumps({'through_use_controls':'PASS','sibling_before':'PASS','sibling_during':'E_STALE',
+print(json.dumps({'through_use_controls':'PASS','sibling_before':'PASS','sibling_during':{'public':'E_RUNTIME','reader':'E_STALE'},
     'original_timing_unchanged':True,'watched_cancellation':'E_RUNTIME'},sort_keys=True),flush=True)
 
 PY_GENUINE_ASSEMBLER
