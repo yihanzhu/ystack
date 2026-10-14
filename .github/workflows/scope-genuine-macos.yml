@@ -71,6 +71,363 @@ jobs:
           else native_p=$(command -v python3.14 || command -v python3); fi
           test -z "${__PYVENV_LAUNCHER__+present}"
           for guard_variable in "${!DYLD_@}"; do test -z "$guard_variable"; done
+          mac_failure_inventory='def failure_inventory():
+              import fcntl
+              import hashlib
+              import re
+              import select
+
+              output_limit, row_limit = 16 * 1024 * 1024, 16384
+              objects, output_bytes, gaps = 0, 0, 0
+              flags_changed = False
+              owned_fds = []
+              cleanup_unknown = 0
+              prefix = None
+              roots = []
+              seen = set()
+              old_flags = fcntl.fcntl(2, fcntl.F_GETFL)
+
+              def budget():
+                  if time.monotonic() >= deadline - 1:
+                      raise TimeoutError("inventory remaining deadline")
+
+              def emit(row, summary=False):
+                  nonlocal output_bytes
+                  if time.monotonic() >= deadline:
+                      raise TimeoutError("inventory output deadline")
+                  raw = (json.dumps(row, sort_keys=True) + "\n").encode("utf-8")
+                  ceiling = output_limit if summary else output_limit - row_limit
+                  if len(raw) > row_limit or output_bytes + len(raw) > ceiling:
+                      raise ValueError("inventory output cap")
+                  offset = 0
+                  while offset < len(raw):
+                      if time.monotonic() >= deadline:
+                          raise TimeoutError("inventory output deadline")
+                      if not select.select([], [2], [], max(0, deadline - time.monotonic()))[1]:
+                          raise TimeoutError("inventory output deadline")
+                      try:
+                          written = os.write(2, raw[offset:])
+                      except BlockingIOError:
+                          continue
+                      if written <= 0:
+                          raise OSError("inventory output write")
+                      offset += written
+                      output_bytes += written
+
+              def gap(reason, edge=None):
+                  nonlocal gaps
+                  gaps += 1
+                  row = {"inventory": "GAP", "reason": reason}
+                  if edge is not None:
+                      row["edge_sha256"] = hashlib.sha256(os.fsencode(edge)).hexdigest()
+                  emit(row)
+
+              def normal(path):
+                  if type(path) is not str or not path.startswith("/") or "\x00" in path:
+                      raise ValueError("inventory absolute path")
+                  result = os.path.normpath(path)
+                  if len(result.split("/")) > 129 or len(os.fsencode(result)) > 4096:
+                      raise ValueError("inventory path cap")
+                  return result
+
+              def installation(path):
+                  match = re.fullmatch(r"((?:/usr/local/Cellar|/opt/homebrew/Cellar)/[^/]+/[^/]+|/Library/Frameworks/Python\.framework/Versions/[^/]+)/bin/python3\.(1[1-9]|[2-9][0-9])", path)
+                  return match.group(1) if match else None
+
+              def allowed(path):
+                  return path == "/" or any(path == root or path.startswith(root + "/") for root in roots)
+
+              def ancestor_allowed(path):
+                  return allowed(path) or any(root.startswith(path.rstrip("/") + "/") for root in roots)
+
+              def target_allowed(path, selected_edge=False):
+                  nonlocal prefix
+                  if allowed(path):
+                      return True
+                  candidate = installation(path) if selected_edge and prefix is None else None
+                  if candidate is not None:
+                      prefix = candidate
+                      roots.append(candidate)
+                      return True
+                  return False
+
+              def open_fd(name, flags, dir_fd=None):
+                  nonlocal cleanup_unknown
+                  acquired = None
+                  try:
+                      acquired = os.open(name, flags, dir_fd=dir_fd)
+                      owned_fds.append(acquired)
+                      return acquired
+                  except BaseException:
+                      if acquired is not None:
+                          try:
+                              os.close(acquired)
+                          except BaseException:
+                              cleanup_unknown += 1
+                      raise
+
+              def close_fd(fd):
+                  nonlocal cleanup_unknown
+                  owned_fds.remove(fd)
+                  try:
+                      os.close(fd)
+                  except BaseException:
+                      cleanup_unknown += 1
+                      raise
+
+              def raw_acl(fd):
+                  captured = []
+                  budget()
+                  ctypes.set_errno(0)
+                  acl = library.acl_get_fd_np(fd, 0x100)
+                  try:
+                      query_errno = ctypes.get_errno()
+                      if not acl:
+                          if query_errno != errno.ENOENT:
+                              raise OSError(query_errno or errno.EIO, "inventory acl query")
+                          return {"query_acquired": False, "query_errno": query_errno, "entries": captured}
+                      entry, selector = ctypes.c_void_p(), 0
+                      tag, perms = ctypes.c_int(), ctypes.c_void_p()
+                      while True:
+                          budget()
+                          ctypes.set_errno(0)
+                          rc = library.acl_get_entry(acl, selector, ctypes.byref(entry))
+                          entry_errno = ctypes.get_errno()
+                          if rc != 0:
+                              if rc == -1 and entry_errno == errno.EINVAL and selector == -1 and captured:
+                                  return {"query_acquired": True, "query_errno": query_errno, "end_rc": rc,
+                                      "end_errno": entry_errno, "entries": captured}
+                              raise OSError(entry_errno or errno.EIO, "inventory acl_get_entry")
+                          if len(captured) >= 128:
+                              raise ValueError("inventory ACL cap")
+                          selector = -1
+                          if library.acl_get_tag_type(entry, ctypes.byref(tag)) != 0:
+                              raise OSError(ctypes.get_errno() or errno.EIO, "inventory ACL tag")
+                          if library.acl_get_permset(entry, ctypes.byref(perms)) != 0:
+                              raise OSError(ctypes.get_errno() or errno.EIO, "inventory ACL perms")
+                          bits = 0
+                          for shift in range(1, 14):
+                              budget()
+                              present = library.acl_get_perm_np(perms, 1 << shift)
+                              if present not in (0, 1):
+                                  raise OSError(ctypes.get_errno() or errno.EIO, "inventory ACL bit")
+                              bits |= present << shift
+                          budget()
+                          qualifier = library.acl_get_qualifier(entry)
+                          try:
+                              if not qualifier:
+                                  raise OSError(ctypes.get_errno() or errno.EIO, "inventory ACL qualifier")
+                              captured.append({"entry_rc": rc, "entry_errno": entry_errno, "tag": tag.value,
+                                  "uuid": ctypes.string_at(qualifier, 16).hex(), "permissions": bits})
+                          finally:
+                              if qualifier and library.acl_free(qualifier) != 0:
+                                  raise OSError(ctypes.get_errno() or errno.EIO, "inventory ACL qualifier free")
+                  finally:
+                      if acl and library.acl_free(acl) != 0:
+                          raise OSError(ctypes.get_errno() or errno.EIO, "inventory ACL free")
+
+              def inspect_path(path, selected_edge=False):
+                  nonlocal objects
+                  path = normal(path)
+                  if not target_allowed(path, selected_edge):
+                      gap("outside fixed roots", path)
+                      return None
+                  parts = path.split("/")[1:] if path != "/" else []
+                  fd = None
+                  try:
+                      budget()
+                      fd = open_fd("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                      root_state = os.fstat(fd)
+                      if ("/", identity(root_state)) not in seen:
+                          if objects >= 16384:
+                              raise ValueError("inventory object cap")
+                          objects += 1
+                          seen.add(("/", identity(root_state)))
+                          budget()
+                          ctypes.set_errno(0)
+                          emit({"inventory": "root", "state": dict(zip(fields, identity(root_state))),
+                              "acl": raw_acl(fd)})
+                      for index, name in enumerate(parts):
+                          budget()
+                          component = "/" + "/".join(parts[:index + 1])
+                          if not ancestor_allowed(component):
+                              gap("outside component", component)
+                              return None
+                          before = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                          key = (component, identity(before))
+                          if key not in seen:
+                              if objects >= 16384:
+                                  raise ValueError("inventory object cap")
+                              objects += 1
+                              seen.add(key)
+                              emit({"inventory": "metadata", "path": component,
+                                  "state": dict(zip(fields, identity(before))), "ancestor": index < len(parts) - 1})
+                          if stat.S_ISLNK(before.st_mode):
+                              target = os.readlink(name, dir_fd=fd)
+                              next_path = normal(os.path.join(os.path.dirname(component), target, *parts[index + 1:]))
+                              if not target_allowed(next_path, selected_edge):
+                                  gap("symlink outside fixed roots", next_path)
+                                  return None
+                              if identity(os.stat(name, dir_fd=fd, follow_symlinks=False)) != identity(before):
+                                  raise ValueError("inventory link changed")
+                              gap("symlink ACL unavailable through a safe held-parent API", component)
+                              emit({"inventory": "link", "path": component, "target": next_path, "acl": "GAP"})
+                              return next_path
+                          directory = stat.S_ISDIR(before.st_mode)
+                          if not directory and (index < len(parts) - 1 or not stat.S_ISREG(before.st_mode)):
+                              gap("unsupported object type", component)
+                              return None
+                          child = open_fd(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK |
+                              (os.O_DIRECTORY if directory else 0), dir_fd=fd)
+                          try:
+                              if identity(os.fstat(child)) != identity(before):
+                                  raise ValueError("inventory open identity")
+                              budget()
+                              ctypes.set_errno(0)
+                              acl = raw_acl(child)
+                              row = {"inventory": "object", "path": component, "acl": acl}
+                              if not directory:
+                                  if before.st_nlink != 1 or before.st_size > c.EXECUTABLE_LIMIT:
+                                      raise ValueError("inventory file cap or links")
+                                  digest, count = hashlib.sha256(), 0
+                                  while True:
+                                      budget()
+                                      raw = os.read(child, min(65536, c.EXECUTABLE_LIMIT + 1 - count))
+                                      if not raw:
+                                          break
+                                      count += len(raw)
+                                      if count > c.EXECUTABLE_LIMIT:
+                                          raise ValueError("inventory file cap")
+                                      digest.update(raw)
+                                  row.update(bytes=count, sha256=digest.hexdigest())
+                              if identity(os.fstat(child)) != identity(before) or identity(os.stat(name, dir_fd=fd, follow_symlinks=False)) != identity(before):
+                                  raise ValueError("inventory object changed")
+                              row["identity_unchanged"] = True
+                              emit(row)
+                          except BaseException:
+                              close_fd(child)
+                              raise
+                          previous, fd = fd, child
+                          close_fd(previous)
+                      return path
+                  finally:
+                      if fd is not None:
+                          close_fd(fd)
+
+              def resolve(path, selected_edge=False):
+                  path = normal(path)
+                  for _ in range(128):
+                      next_path = inspect_path(path, selected_edge)
+                      if next_path is None or next_path == path:
+                          return next_path
+                      path = next_path
+                  raise ValueError("inventory symlink cap")
+
+              def directory_fd(path):
+                  if not allowed(path):
+                      raise ValueError("inventory scan root")
+                  fd = open_fd("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                  try:
+                      for index, name in enumerate(path.split("/")[1:]):
+                          budget()
+                          component = "/" + "/".join(path.split("/")[1:index + 2])
+                          if not ancestor_allowed(component):
+                              raise ValueError("inventory scan component")
+                          child = open_fd(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+                          previous, fd = fd, child
+                          close_fd(previous)
+                      result, fd = fd, None
+                      return result
+                  finally:
+                      if fd is not None:
+                          close_fd(fd)
+
+              try:
+                  budget()
+                  fcntl.fcntl(2, fcntl.F_SETFL, old_flags | os.O_NONBLOCK)
+                  flags_changed = True
+                  system = re.fullmatch(r"(/Applications/Xcode_[^/]+\.app/Contents/Developer/Library/Frameworks/Python3\.framework|/Library/Developer/CommandLineTools/Library/Frameworks/Python3\.framework)/Versions/[^/]+/bin/python3(?:\.[0-9]+)?", physical)
+                  if system is None:
+                      gap("unknown system framework", physical)
+                  else:
+                      roots.append(system.group(1))
+                  if logical == "/usr/bin/python3" or re.fullmatch(r"/(?:Applications/Xcode_[^/]+\.app/Contents/Developer|Library/Developer/CommandLineTools)/usr/bin/python3", logical):
+                      roots.append(logical)
+                  roots.append("/usr/local/bin/jq")
+                  if system is not None:
+                      resolve(physical)
+                      resolve(logical)
+                  locator = sys.argv[-1]
+                  if re.fullmatch(r"/(?:usr/local|opt/homebrew)/bin/python3(?:\.14)?", locator):
+                      roots.append(locator)
+                      selected_path = resolve(locator, True)
+                  elif installation(normal(locator)) is not None:
+                      selected_path = resolve(locator, True)
+                  else:
+                      gap("unknown selected locator", locator)
+                      selected_path = None
+                  if selected_path is not None and prefix is None:
+                      gap("selected installation prefix unavailable")
+                  if selected_path is not None and prefix is not None:
+                      pending = [prefix + "/lib", prefix + "/include"]
+                      while pending:
+                          budget()
+                          directory = pending.pop()
+                          actual = resolve(directory)
+                          if actual != directory:
+                              gap("layout directory symlink or missing", directory)
+                              continue
+                          fd = None
+                          try:
+                              fd = directory_fd(directory)
+                              scan_before = identity(os.fstat(fd))
+                              with os.scandir(fd) as entries:
+                                  for entry in entries:
+                                      budget()
+                                      if len(pending) + objects >= 16384:
+                                          raise ValueError("inventory pending object cap")
+                                      child = directory + "/" + entry.name
+                                      result = resolve(child)
+                                      if result == child and entry.is_dir(follow_symlinks=False):
+                                          pending.append(child)
+                              if identity(os.fstat(fd)) != scan_before:
+                                  raise ValueError("inventory layout directory changed")
+                          finally:
+                              if fd is not None:
+                                  close_fd(fd)
+                  resolve("/usr/local/bin/jq")
+                  gap("Mach-O closure not read: existing guard parser mixes byte parsing with ungated filesystem reads")
+              except BaseException as inventory_error:
+                  gaps += 1
+                  try:
+                      emit({"inventory": "GAP", "reason": type(inventory_error).__name__,
+                          "errno": getattr(inventory_error, "errno", None), "objects": objects})
+                  except BaseException:
+                      pass
+              finally:
+                  try:
+                      for remaining_fd in tuple(owned_fds):
+                          try:
+                              close_fd(remaining_fd)
+                          except BaseException:
+                              gaps += 1
+                      try:
+                          emit({"inventory": "summary", "objects": objects, "output_bytes_before_summary": output_bytes,
+                              "gaps": gaps, "fd_cleanup_unknown": cleanup_unknown,
+                              "complete": False, "candidate_executed": False}, summary=True)
+                      except BaseException:
+                          pass
+                  finally:
+                      if flags_changed:
+                          try:
+                              fcntl.fcntl(2, fcntl.F_SETFL, old_flags)
+                          except BaseException:
+                              try:
+                                  emit({"inventory": "GAP", "reason": "stderr flags restore failed"})
+                              except BaseException:
+                                  pass
+                              raise
+          '
           mac_bootstrap_entry='import ctypes
           import errno
           import importlib.util
@@ -234,6 +591,10 @@ jobs:
                   print(encoded, file=sys.stderr, flush=True)
               except BaseException:
                   pass
+              try:
+                  failure_inventory()
+              except BaseException:
+                  pass
               raise
           finally:
               if owned:
@@ -245,7 +606,7 @@ jobs:
                           raise original from cleanup_error
                       raise
           '
-          p=$(/usr/bin/python3 -I -S -B -c "$mac_bootstrap_entry" "$PWD" - "$PWD" "$native_p" <<'PY_MAC_BOOTSTRAP'
+          p=$(/usr/bin/python3 -I -S -B -c "$mac_failure_inventory"$'\n'"$mac_bootstrap_entry" "$PWD" - "$PWD" "$native_p" <<'PY_MAC_BOOTSTRAP'
           import ctypes
           import errno
           import hashlib
