@@ -9,7 +9,7 @@ Tracks #541. Risk is high. This is the nonterminal child-6 core. It authenticate
 the existing child-5 evidence at one exact revision. Issue #544 remains mandatory
 before child 6 completes or child 7 starts.
 
-Implementation PR: `review_size: accepted-exception`, 2,600–5,000 net changed
+Implementation PR: `review_size: accepted-exception`, 2,600–5,400 net changed
 lines. The private evidence reader, held-path and Git checks, closed evaluator
 relations, and a real two-principal origin fixture form one security boundary.
 Most of the range is proof: complete classification, bundle, Git, terminal and
@@ -427,15 +427,111 @@ prove only this closed consumer path; they never claim CPU/wall proof, VM
 qualification or a production identity.
 
 Prepare the same fixed harness and cases for macOS, including the concrete Darwin
-runner owner above. Run them only on a verified disposable evidence host whose
-owner has separately authorized noninteractive root setup, account/group lifecycle
-and the fixed anchor. This plan does not authorize the current development Mac,
-create that environment, install a runtime, add a user/group, write the anchor or
-change host permissions. Reuse only an already available physical runtime and
-dependency closure; do not download or install one. Until such a host and authority
-are verified, keep the macOS real-principal positive and G3 blocked while ordinary
-code and tests may be prepared. Do not replace either platform's proof with mocks,
-same-uid files, copied origin, permanent refusal or a skipped positive.
+runner owner above. Run them only on the verified disposable evidence host under
+[the approved temporary supply](https://github.com/yihanzhu/ystack/issues/559#issuecomment-6180555883).
+Bind that supply to these accepted `work/scope-genuine-macos-proof/` artifacts:
+
+| Artifact | Git blob |
+| --- | --- |
+| Intent | `154befc5159f96c49823fb36f949525a5e09b4ac` |
+| Spec | `34b245ca820f45491cd31c5828306102b2a4bad0` |
+| High-risk plan | `900502c60faf5af84bd650624fc0655bc2491f0c` |
+
+The workflow Git blob is `9477dbb83f04671a751a47a222f0e95ce57964aa`.
+Its SHA-256 is
+`f85a016727998c34cded73ccaa1af268e4838d964e8c5a556f19eb357980342a`.
+Its complete entry and guard share one Python body with SHA-256
+`42239f667417de41f93b875c083bc3b26bde7837c69679ebb2d8e62e9a1da22c`.
+The fixed source manifest SHA-256 is
+`34ab06f305b15a1772852ce9b814c2935f80917e9548d362fe43d36c0e1cf850`.
+Keep these exact bytes. A changed dependency returns through its artifact gate.
+
+The workflow supplies only official Python 3.14.7 and jq 1.6 in the entirely new
+`/Library/Frameworks/Python.framework` root. Core test files do not fetch, install
+or repair that supply. They do not authorize the development Mac or create another
+runtime, host or account scope. Keep Linux's original runtime behavior.
+
+In the Darwin branches of `scope-qualification.test.sh` and
+`shadow-enforced.test.sh`, bind P only to
+`/Library/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python`.
+Bind the prefix separately to `/Library/Frameworks/Python.framework/Versions/3.14`
+and jq to `/Library/Frameworks/Python.framework/ystack-private-tools/jq`.
+Replace the old bin/name-derived layout only at these fixed test boundaries.
+Scope's outer evaluator and genuine setup, and the native suite, use the same P.
+Add no path override, environment trust flag, alternate runtime or product API.
+
+Keep one literal entry/guard body in a fixed heredoc in
+`scope-qualification.test.sh`. The native suite reads only that body from its
+fixed physical package path `scripts/test/scope-qualification.test.sh`. Use the
+existing non-privileged system Python and held NOFOLLOW reader with its current
+16-MiB source-byte cap. Require one exact opening heredoc line and one exact
+closing `PY_MAC_FIXED_RUNTIME_GUARD` line.
+Retain the read bytes and recheck the source identity. Verify the extracted body
+against the fixed guard SHA-256 before writing an exclusive private guard file.
+Do not source the shell file, execute the scope suite, evaluate other source text,
+add an auth-only mode or accept a caller-selected path or command.
+
+Before publication, mechanically compare the scope literal, native extraction and
+pinned workflow body byte for byte. Each suite runs that same body through its own
+actual empty-to-real authentication. Keep the complete failure diagnostics,
+predicates, cleanup and shared deadline unchanged. Use only the fixed source
+manifest from the workflow's existing owned cache. Treat that cache path as a
+locator. Retain bounded bytes, verify the fixed manifest digest, and place them
+beside each test's private guard. Missing or changed bytes refuse. Core tests must
+not fetch them or accept a caller's replacement manifest.
+
+Invoke each guard through the existing non-privileged system Python as:
+
+```text
+/usr/bin/python3 -I -S -B GUARD PACKAGE P GUARD empty 0 0
+```
+
+Here GUARD is that test's owned exact guard file and PACKAGE is its held physical
+package. The guard first authenticates the complete supplied manifest and runtime
+with physical NOFOLLOW opens, regular/nlink checks, full identity, root ownership,
+non-root non-writable modes and actual empty ACLs. Authenticate each used publisher
+link step and its held physical parent before inspecting the canonical target.
+Preserve publisher bytes and link text. Missing targets, loops, escapes, changes
+and unknown ACLs refuse. Keep every original scan, byte, object and command cap.
+
+The same guard enters P with `-I -S -B` and retains its PID and 120-second deadline.
+Require actual physical `sys.executable == P`, version 3.14.7 and at least 3.11,
+fixed prefix/base_prefix, isolated flags and the original closed startup paths.
+Never assign sys.executable or inject __PYVENV_LAUNCHER__. Under authenticated P,
+use the existing real Darwin owner and UUID resolver. Repeat all original runtime,
+module, stdlib/include and loaded-image checks. Scope repeats this complete guard
+before its first privileged P execution. Keep the genuine principal, store, Git,
+ledger and account/anchor cleanup behavior and all original refusal cases.
+
+Use the fixed jq bytes with the original SHA-256 and actual jq-1.6 version checks.
+A private test copy may retain the existing owned-cache behavior and cleanup. It
+must originate from the authenticated fixed jq. No Darwin downloader or fallback
+may run. Neither test changes or removes the workflow-owned supply root.
+
+Require all 13 native-reader controls with actual owned files: valid extraction;
+missing and duplicate opening markers; missing and duplicate closing markers;
+wrong guard bytes; oversized, changed held and symlink sources; valid, wrong and
+missing manifests; and exclusive guard creation that refuses overwrite.
+Require all four scope manifest-reader controls on actual owned files: valid
+manifest, wrong manifest, missing manifest and wrong guard. Use the exact reader
+boundaries and record each result and descriptor cleanup. Every refusal occurs
+before P execution. These controls do not replace either suite's actual
+empty-to-real authentication or prove Mac host qualification.
+
+Adapt the existing owned guard and entry controls to this fixed layout. Keep real
+objects, actual ACL/API errors, held changes, cancellation and exact reap. Preserve
+identity, version, prefix, startup-path and deadline refusals. A metadata-only
+extracted-boundary control uses its recorded objects and cannot execute copied
+runtime bytes or claim the actual entry positive. The positive requires the real
+fixed P and actual same-PID transition on the approved Mac host. Keep every
+original 149 native control and both complete suites. These fixture bindings do
+not qualify a host or change the product installation boundary.
+
+Until actual supply, host checks, complete tests and cleanup pass, keep the Mac
+real-principal positive and G3 blocked. Keep CPU/wall evidence NONE and production
+identities empty. Preserve every prior failure. Do not replace either platform's
+proof with mocks, same-uid files, copied origin, permanent refusal or a skipped
+positive.
 
 ## Proof and completion
 
