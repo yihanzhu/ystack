@@ -64,26 +64,88 @@ jobs:
           test -z "$(/usr/bin/git status --porcelain=v1)"
           /usr/bin/printf 'repo=1270665750 branch=ystack/impl/scope-gate-hardening issue=541 implementation_PR=558 candidate=%s\n' "$YSTACK_SELECTED_SHA"
           for tool in /bin/cat /usr/bin/shasum /usr/bin/awk /usr/bin/mktemp /usr/bin/python3 /usr/bin/openssl /usr/bin/security /usr/bin/git /usr/bin/cc /usr/bin/sudo /usr/bin/perl /usr/bin/dscl /usr/sbin/dseditgroup /usr/bin/stat /bin/chmod /usr/sbin/chown /bin/mkdir /bin/cp /bin/rm /usr/bin/id /usr/bin/false; do
-            test -f "$tool"
-            test ! -L "$tool"
-            test -x "$tool"
+            test -f "$tool" || {
+              /usr/bin/printf 'precache_failure tool=%s predicate=regular\n' "$tool" >&2 || exit 1
+              exit 1
+            }
+            test ! -L "$tool" || {
+              /usr/bin/printf 'precache_failure tool=%s predicate=not-link\n' "$tool" >&2 || exit 1
+              exit 1
+            }
+            test -x "$tool" || {
+              /usr/bin/printf 'precache_failure tool=%s predicate=executable\n' "$tool" >&2 || exit 1
+              exit 1
+            }
           done
           native_p=/Library/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python
-          test -z "${__PYVENV_LAUNCHER__+present}"
-          for guard_variable in "${!DYLD_@}"; do test -z "$guard_variable"; done
-          /usr/bin/sudo -n /usr/bin/true
-          test ! -e /Library/Frameworks/Python.framework/Versions/3.14
-          test ! -L /Library/Frameworks/Python.framework/Versions/3.14
-          test ! -e /Library/Frameworks/Python.framework/ystack-private-tools
-          test ! -L /Library/Frameworks/Python.framework/ystack-private-tools
-          test ! -e /usr/local/libexec/ystack-sandbox/v1/supervisor
-          test ! -L /usr/local/libexec/ystack-sandbox/v1/supervisor
-          test ! -e "/usr/local/libexec/ystack-scope-fixture.${YSTACK_SELECTED_SHA:0:8}"
-          test ! -L "/usr/local/libexec/ystack-scope-fixture.${YSTACK_SELECTED_SHA:0:8}"
-          cache_root=$(/usr/bin/mktemp -d "$RUNNER_TEMP/ystack-mac-proof.XXXXXX")
-          cache_root=$(CDPATH='' cd -P -- "$cache_root" && pwd -P)
-          identity=$(/usr/bin/stat -f '%d:%i:%u' "$cache_root")
-          /usr/bin/printf 'YSTACK_PROOF_TMP=%s\nYSTACK_PROOF_TMP_ID=%s\nTMPDIR=%s\n' "$cache_root" "$identity" "$cache_root" >> "$GITHUB_ENV"
+          test -z "${__PYVENV_LAUNCHER__+present}" || {
+            /usr/bin/printf 'precache_failure check=environment-1\n' >&2 || exit 1
+            exit 1
+          }
+          for guard_variable in "${!DYLD_@}"; do
+            test -z "$guard_variable" || {
+              /usr/bin/printf 'precache_failure check=environment-2\n' >&2 || exit 1
+              exit 1
+            }
+          done
+          /usr/bin/sudo -n /usr/bin/true || {
+            precache_status=$?
+            /usr/bin/printf 'precache_failure check=sudo\n' >&2 || exit "$precache_status"
+            exit "$precache_status"
+          }
+          test ! -e /Library/Frameworks/Python.framework/Versions/3.14 || {
+            /usr/bin/printf 'precache_failure check=version-absent-entry\n' >&2 || exit 1
+            exit 1
+          }
+          test ! -L /Library/Frameworks/Python.framework/Versions/3.14 || {
+            /usr/bin/printf 'precache_failure check=version-absent-link\n' >&2 || exit 1
+            exit 1
+          }
+          test ! -e /Library/Frameworks/Python.framework/ystack-private-tools || {
+            /usr/bin/printf 'precache_failure check=tools-absent-entry\n' >&2 || exit 1
+            exit 1
+          }
+          test ! -L /Library/Frameworks/Python.framework/ystack-private-tools || {
+            /usr/bin/printf 'precache_failure check=tools-absent-link\n' >&2 || exit 1
+            exit 1
+          }
+          test ! -e /usr/local/libexec/ystack-sandbox/v1/supervisor || {
+            /usr/bin/printf 'precache_failure check=anchor-absent-entry\n' >&2 || exit 1
+            exit 1
+          }
+          test ! -L /usr/local/libexec/ystack-sandbox/v1/supervisor || {
+            /usr/bin/printf 'precache_failure check=anchor-absent-link\n' >&2 || exit 1
+            exit 1
+          }
+          test ! -e "/usr/local/libexec/ystack-scope-fixture.${YSTACK_SELECTED_SHA:0:8}" || {
+            /usr/bin/printf 'precache_failure check=fixture-absent-entry\n' >&2 || exit 1
+            exit 1
+          }
+          test ! -L "/usr/local/libexec/ystack-scope-fixture.${YSTACK_SELECTED_SHA:0:8}" || {
+            /usr/bin/printf 'precache_failure check=fixture-absent-link\n' >&2 || exit 1
+            exit 1
+          }
+          cache_root=$(/usr/bin/mktemp -d "$RUNNER_TEMP/ystack-mac-proof.XXXXXX") || {
+            precache_status=$?
+            /usr/bin/printf 'precache_failure check=cache-create\n' >&2 || exit "$precache_status"
+            exit "$precache_status"
+          }
+          cache_root=$(CDPATH='' cd -P -- "$cache_root" && pwd -P) || {
+            precache_status=$?
+            /usr/bin/printf 'precache_failure check=cache-physical-path\n' >&2 || exit "$precache_status"
+            exit "$precache_status"
+          }
+          identity=$(/usr/bin/stat -f '%d:%i:%u' "$cache_root") || {
+            precache_status=$?
+            /usr/bin/printf 'precache_failure check=cache-identity\n' >&2 || exit "$precache_status"
+            exit "$precache_status"
+          }
+          /usr/bin/printf 'YSTACK_PROOF_TMP=%s\nYSTACK_PROOF_TMP_ID=%s\nTMPDIR=%s\n' "$cache_root" "$identity" "$cache_root" >> "$GITHUB_ENV" || {
+            # shellcheck disable=SC2320
+            precache_status=$?
+            /usr/bin/printf 'precache_failure check=cache-environment-record\n' >&2 || exit "$precache_status"
+            exit "$precache_status"
+          }
           /bin/cat > "$cache_root/provision.py" <<'PY_MAC_PROVISION'
           import base64
           import ctypes
