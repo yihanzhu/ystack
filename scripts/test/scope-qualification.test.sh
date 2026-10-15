@@ -114,6 +114,7 @@ entry_pid = os.getpid() if stage == 'empty' else int(sys.argv[6])
 assert time.monotonic() < deadline <= time.monotonic() + 120
 fixed_root = Path('/Library/Frameworks/Python.framework')
 fixed_prefix = fixed_root / 'Versions/3.14'
+fixed_tools = fixed_root / 'ystack-private-tools'
 fixed_p = fixed_prefix / 'Resources/Python.app/Contents/MacOS/Python'
 if stage == 'real':
     assert os.getpid() == entry_pid
@@ -190,7 +191,7 @@ def canonical_fixed(path):
     if path != fixed_root and fixed_root not in path.parents:
         return path
     relative = str(path.relative_to(fixed_root))
-    if relative == '.':
+    if relative == '.' or path == fixed_root / 'Versions':
         return path
     pending = relative.split('/')
     resolved = []
@@ -200,6 +201,9 @@ def canonical_fixed(path):
         assert steps <= 128 and time.monotonic() < deadline
         resolved.append(pending.pop(0))
         name = '/'.join(resolved)
+        if name == 'Versions':
+            assert pending and pending[0] == '3.14'
+            continue
         assert name in manifest
         row = manifest[name]
         if row['kind'] != stat.S_IFLNK:
@@ -214,7 +218,7 @@ def canonical_fixed(path):
             ctypes.set_errno(0)
             empty_acl(library.acl_get_link_np(os.fsencode(logical), 0x100))
             target = os.path.normpath(os.path.join(os.path.dirname(name), row['link']))
-            assert target != '..' and not target.startswith('../') and not target.startswith('/')
+            assert target == 'Versions/3.14' or target.startswith('Versions/3.14/')
             links[str(logical)] = (identity(before), row['link'])
             assert identity(logical.lstat()) == identity(before) and os.readlink(logical) == row['link']
             parent.recheck('E_STALE')
@@ -326,11 +330,22 @@ try:
     assert hashlib.sha256(manifest_raw).hexdigest() == '34ab06f305b15a1772852ce9b814c2935f80917e9548d362fe43d36c0e1cf850'
     manifest_rows = json.loads(manifest_raw)
     assert len(manifest_rows) == 4201
-    manifest = {row['path']: row for row in manifest_rows}
-    assert len(manifest) == len(manifest_rows)
-    manifest['ystack-private-tools'] = {'kind': stat.S_IFDIR, 'mode': 0o40755}
-    manifest['ystack-private-tools/jq'] = {'kind': stat.S_IFREG, 'mode': 0o100755,
-        'size': 864040, 'sha256': '5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef'}
+    selected_rows = [row for row in manifest_rows if row['path'] == 'Versions/3.14' or row['path'].startswith('Versions/3.14/')]
+    assert len(selected_rows) == 4195 and c.digest(c.canonical(selected_rows)) == '4da2fbc7b543eb3d990f429c0fe972669105abdbf9ce2b7c962b404c94f7cc27'
+    supply_rows = [dict(row, mode=row['kind'] | (0o755 if row['kind'] != stat.S_IFREG or row['mode'] & 0o111 else 0o644)) for row in selected_rows]
+    supply_rows.extend([{'path': 'ystack-private-tools', 'kind': stat.S_IFDIR, 'mode': 0o40755},
+        {'path': 'ystack-private-tools/jq', 'kind': stat.S_IFREG, 'mode': 0o100755, 'size': 864040,
+         'sha256': '5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef'}])
+    assert c.digest(c.canonical(supply_rows)) == 'a04635f441f9706f126986616fc0f648a757630aacd78fafb944bcc2166a8d19'
+    manifest = {}
+    for row in supply_rows:
+        value = {key: row[key] for key in ('kind', 'mode', 'size', 'sha256', 'link')
+                 if key in row and (key != 'size' or row['kind'] != stat.S_IFDIR)}
+        value['uid'] = 0
+        if row['kind'] != stat.S_IFDIR:
+            value['nlink'] = 1
+        manifest[row['path']] = value
+    assert len(manifest) == 4197 and c.digest(c.canonical(manifest)) == 'ac527b61d0d7475d20a6e329b0b5f31e68635c7a73c93031b2b208b18ccd9c56'
     owner = None
     if stage == 'real':
         bootstrap = c._hold_bytes(sys.executable, c.EXECUTABLE_LIMIT)
@@ -356,9 +371,13 @@ try:
     owned.append(root)
     images.update((selected, prefix / 'bin/python3.14', prefix / 'Python'))
     observed = set()
-    pending_tree = [fixed_root]
+    pending_tree = [fixed_prefix, fixed_tools]
     while pending_tree:
         directory = pending_tree.pop()
+        name = str(directory.relative_to(fixed_root))
+        assert name in manifest and name not in observed
+        observed.add(name)
+        assert directory.lstat().st_mode == manifest[name]['mode']
         inspect(directory, True)
         with os.scandir(str(directory)) as entries:
             for entry in entries:
@@ -366,14 +385,6 @@ try:
                 path = Path(entry.path)
                 name = str(path.relative_to(fixed_root))
                 assert name not in observed
-                observed.add(name)
-                if name == 'ystack-private-tools':
-                    assert entry.is_dir(follow_symlinks=False)
-                    pending_tree.append(path)
-                    continue
-                if name == 'ystack-private-tools/jq':
-                    assert hashlib.sha256(inspect(path)).hexdigest() == '5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef'
-                    continue
                 assert name in manifest
                 row = manifest[name]
                 before = path.lstat()
@@ -381,6 +392,7 @@ try:
                 if row['kind'] == stat.S_IFDIR:
                     pending_tree.append(path)
                 elif row['kind'] == stat.S_IFLNK:
+                    observed.add(name)
                     parent = c._open_held(str(path.parent), True, rule(), 'E_INSTALL')
                     try:
                         assert before.st_uid == 0 and before.st_nlink == 1 and not before.st_mode & 0o022
@@ -393,11 +405,13 @@ try:
                     finally:
                         parent.close()
                 else:
+                    observed.add(name)
                     raw = inspect(path)
                     assert len(raw) == row['size'] and hashlib.sha256(raw).hexdigest() == row['sha256']
                     assert stat.S_IMODE(before.st_mode) == (0o755 if row['mode'] & 0o111 else 0o644)
-                    native_dependencies(path, raw)
-    assert observed == (set(manifest) - {''}) | {'ystack-private-tools', 'ystack-private-tools/jq'}
+                    if name != 'ystack-private-tools/jq':
+                        native_dependencies(path, raw)
+    assert observed == set(manifest)
     directories = [prefix / 'lib', prefix / 'include']
     while directories:
         directory = directories.pop()
@@ -490,7 +504,7 @@ owned = []
 try:
     guard = c._hold_bytes(str(directory_path / 'guard.py'), c.EXECUTABLE_LIMIT)
     owned.append(guard)
-    assert hashlib.sha256(guard.raw).hexdigest() == '42239f667417de41f93b875c083bc3b26bde7837c69679ebb2d8e62e9a1da22c'
+    assert hashlib.sha256(guard.raw).hexdigest() == 'd8737aa32fac4021e4ac13d217175a5591fd8a189b1a05e12802128a279d342f'
     cache = Path(os.environ['YSTACK_PROOF_TMP'])
     assert cache.is_absolute() and cache.resolve() == cache
     manifest = c._hold_bytes(str(cache / 'manifest.json'), c.EXECUTABLE_LIMIT)
@@ -527,7 +541,7 @@ finally:
     c._close_paths(owned)
 PY_MAC_FIXED_MANIFEST
   fi
-  [ "$(sha256_path "$mac_guard_file")" = 42239f667417de41f93b875c083bc3b26bde7837c69679ebb2d8e62e9a1da22c ] || return 1
+  [ "$(sha256_path "$mac_guard_file")" = d8737aa32fac4021e4ac13d217175a5591fd8a189b1a05e12802128a279d342f ] || return 1
   /usr/bin/python3 -I -S -B "$mac_guard_file" "$root" "$1" "$mac_guard_file" empty 0 0
 }
 
@@ -640,7 +654,7 @@ PY_MAC_TRANSITION
 /usr/bin/git init --bare "$tmp/legacy-source.git" >"$tmp/git-init.out" 2>"$tmp/git-init.err"
 /bin/mkdir -m 700 "$tmp/stale-observation"
 python3 -I -S -B - "$root" "$tmp/stale-observation" <<'PY_STALE_PREPARE'
-import hashlib,pathlib,shlex
+import difflib,hashlib,json,pathlib,shlex
 root=pathlib.Path(__import__('sys').argv[1]);area=pathlib.Path(__import__('sys').argv[2])
 expected={'scope/v1/evaluate-scope.sh': 'f120e877973aa0b66d7ce3de2f6b9cc46b6a9b073e89c606fd99fd23fc84356a', 'scope/v1/read-shadow-evidence.py': 'a2e5ba7f8b8274851e727fd0928c2eafb7153305d84daf55a41a1c4315a9c54b', 'shadow/v1/_consumer.py': '34d314505860f7569f53f41491c29979ab30aa08f83cfc151444f8cb6a235f68'}
 for path,digest in expected.items():
@@ -651,7 +665,7 @@ def state(value):
     return dict(zip(FIELDS,(value.st_dev,value.st_ino,stat.S_IFMT(value.st_mode),
         value.st_uid,value.st_gid,stat.S_IMODE(value.st_mode),value.st_nlink,
         value.st_size,value.st_mtime_ns,value.st_ctime_ns)))
-def observe(original,log,case,phase,argv):
+def observe(original,log,case,phase,argv,index):
     descriptor=None
     provisional=None
     record=None
@@ -716,7 +730,7 @@ def observe(original,log,case,phase,argv):
             if held_frame is None:
                 gap='E_STALE outside original HeldPath recheck'
                 return trace
-            record={'status':'FIRST_STALE','case':case,'phase':phase,
+            record={'status':'FIRST_STALE','case':case,'case_index':index,'phase':phase,
                 'exception':type(error).__name__,'predicate_input':frame.f_locals.get('value') if type(frame.f_locals.get('value')) is bool else None,'elapsed':time.monotonic()-started,
                 'guard':{'source':frame.f_code.co_filename,'function':frame.f_code.co_name,
                     'line':frame.f_lineno},'frames':[]}
@@ -735,9 +749,12 @@ def observe(original,log,case,phase,argv):
                     if component is not None:
                         entry['component']={'fd':component.fd,'name':component.name,
                             'ancestor':component.ancestor,'expected':state(component.before)}
-                    for name in ('before',):
+                    for name in ('before','current','named','after','after_named'):
                         value=local.get(name)
                         if hasattr(value,'st_mtime_ns'):entry[name+'_local']=state(value)
+                        else:entry[name+'_local']='GAP'
+                    expected_identity=local.get('expected')
+                    entry['expected_identity_local']=list(expected_identity) if type(expected_identity) is tuple else 'GAP'
                     expected=local.get('raw')
                     if isinstance(expected,bytes):entry['raw_local_memory_sha256']=hashlib.sha256(expected).hexdigest()
                     record['frames'].append(entry)
@@ -779,22 +796,98 @@ def observe(original,log,case,phase,argv):
                 try:os.close(descriptor)
                 except BaseException:pass
 """
+
 observer=area/'observer.py';observer.write_text(observer_source)
 front=(root/'scope/v1/evaluate-scope.sh').read_text()
 reader=root/'scope/v1/read-shadow-evidence.py'
 cases=['.github/workflows/ci.yml', 'config/models.conf', 'AGENTS.md', 'control/v1/validate.sh', 'src/migrations/001.sql', 'app/auth/login.ts', 'docs/*/page.md', 'secrets/token.txt']
+frontend_capture = r"""diag_record=''
+diag_sink_ready=false
+diag_log=DIAG_LOG
+diag_case_index=DIAG_INDEX
+diag_sink_before=$(/usr/bin/stat -Lc '%d:%i:%u:%g:%f:%h' "$diag_log" 2>/dev/null) || diag_sink_before=''
+if [ -f "$diag_log" ] && [ ! -L "$diag_log" ] && [ -n "$diag_sink_before" ]; then
+  if { exec 19>>"$diag_log"; } 2>/dev/null; then
+    diag_sink_open=$(/usr/bin/stat -Lc '%d:%i:%u:%g:%f:%h' /dev/fd/19 2>/dev/null) || diag_sink_open=''
+    diag_sink_named=$(/usr/bin/stat -Lc '%d:%i:%u:%g:%f:%h' "$diag_log" 2>/dev/null) || diag_sink_named=''
+    IFS=: read -r _ _ diag_uid _ diag_mode diag_links <<<"$diag_sink_open"
+    if [ "$diag_sink_before" = "$diag_sink_open" ] && [ "$diag_sink_open" = "$diag_sink_named" ] &&
+       [ "$diag_uid" = "$UID" ] && [ "$diag_links" = 1 ] &&
+       [[ "$diag_mode" =~ ^[0-9a-f]+$ ]] && [ "$((16#$diag_mode & 0777))" -eq 384 ]; then
+      diag_sink_ready=true
+    else
+      exec 19>&-
+    fi
+  fi
+fi
+"""
+emit_capture = r"""  diag_original_status=$?
+  if [ -z "$diag_record" ]; then
+    case "${1:-}" in
+      E_USAGE|E_RUNTIME|E_LIMIT|E_PARSE|E_CANONICAL|E_SHAPE|E_RELATION|E_STALE) diag_token=$1 ;;
+      *) diag_token=GAP ;;
+    esac
+    diag_ready_presence=${ready+present}
+    diag_commit_presence=${commit+present}
+    printf -v diag_record '{"status":"FRONTEND_ERROR","case_index":%s,"original_command_status":%s,"copy_caller_line":%s,"phase":"%s","token":"%s","pid":%s,"reader_pid":"%s","control_open":"%s","control_verified":"%s","reader_status":"%s","ready_presence":"%s","commit_presence":"%s"}' \
+      "$diag_case_index" "$diag_original_status" "${BASH_LINENO[0]:-0}" "${FUNCNAME[1]:-main}" "$diag_token" "${BASHPID:-$$}" \
+      "${reader_pid-GAP}" "${control_open-GAP}" "${control_verified-GAP}" "${reader_status-GAP}" \
+      "${diag_ready_presence:-GAP}" "${diag_commit_presence:-GAP}"
+    if [ "${#diag_record}" -gt 512 ]; then diag_record='{"status":"OBSERVER_GAP","reason":"frontend memory cap"}'; fi
+  fi
+"""
+exit_capture = r"""diag_after_cleanup() {
+  diag_exit_status=$?
+  cleanup
+  diag_cleanup_status=$?
+  if [ -n "$diag_record" ]; then
+    diag_record=${diag_record%\}}
+    diag_record+=",\"frontend_exit_status\":$diag_exit_status,\"cleanup_return_status\":$diag_cleanup_status}"
+  fi
+  if [ "$diag_sink_ready" = true ] && [ -n "$diag_record" ]; then
+    diag_sink_now=$(/usr/bin/stat -Lc '%d:%i:%u:%g:%f:%h' /dev/fd/19 2>/dev/null) || diag_sink_now=''
+    diag_size=$(/usr/bin/stat -Lc '%s' /dev/fd/19 2>/dev/null) || diag_size=''
+    if [ "$diag_sink_now" = "$diag_sink_before" ] && [[ "$diag_size" =~ ^[0-9]+$ ]] &&
+       [ "$((diag_size + ${#diag_record} + 1))" -le 16384 ]; then
+      /usr/bin/printf '%s\n' "$diag_record" >&19 2>/dev/null || :
+    fi
+  fi
+  if [ "$diag_sink_ready" = true ]; then exec 19>&-; fi
+  exit "$diag_exit_status"
+}
+trap diag_after_cleanup EXIT
+"""
 for index,case in enumerate(cases):
     log=area/(str(index)+'.jsonl');log.touch(mode=0o600,exist_ok=False)
+    binding=area/(str(index)+'.binding.json');binding.touch(mode=0o600,exist_ok=False)
     wrapper=area/(str(index)+'.py')
     wrapper.write_text("import pathlib,runpy,sys\n"+
         "m=runpy.run_path("+repr(str(observer))+")\n"+
         "m['observe'](pathlib.Path("+repr(str(reader))+"),"+repr(str(log))+","+repr(case)+
-        ",'reader', ["+repr(str(reader))+ "]+sys.argv[1:])\n")
+        ",'reader', ["+repr(str(reader))+ "]+sys.argv[1:],"+str(index)+")\n")
     copy=front.replace('source_path=${BASH_SOURCE[0]}','source_path='+shlex.quote(str(root/'scope/v1/evaluate-scope.sh')))
     launch='"$python_bin" -I -S -B "$reader" read'
-    assert copy.count(launch)==1
+    assert copy.count(launch)==1 and copy.count('trap cleanup EXIT')==1
     copy=copy.replace(launch,'"$python_bin" -I -S -B '+shlex.quote(str(wrapper))+' read')
+    assert '19>&' not in copy and '19<' not in copy
+    copy=copy.replace('umask 077\n','umask 077\n'+frontend_capture.replace('DIAG_LOG',shlex.quote(str(log))).replace('DIAG_INDEX',str(index)),1)
+    assert copy.count('emit_error() {\n')==1
+    copy=copy.replace('emit_error() {\n','emit_error() {\n'+emit_capture,1)
+    copy=copy.replace('trap cleanup EXIT',exit_capture.rstrip(),1)
+    assert copy.count('7>&- 8>&- &')==1
+    copy=copy.replace('7>&- 8>&- &','7>&- 8>&- 19>&- &',1)
     frontend=area/(str(index)+'.sh');frontend.write_text(copy);frontend.chmod(0o500)
+    original_lines=front.splitlines();copied_lines=copy.splitlines();mapping={}
+    for match in difflib.SequenceMatcher(a=original_lines,b=copied_lines,autojunk=False).get_matching_blocks():
+        for offset in range(match.size):
+            if 'emit_error ' in original_lines[match.a+offset]:mapping[match.b+offset+1]=match.a+offset+1
+    line_map={'original_sha256':hashlib.sha256(front.encode()).hexdigest(),
+        'copy_sha256':hashlib.sha256(copy.encode()).hexdigest(),'line_map':mapping,
+        'original_line_sha256':{str(number):hashlib.sha256(original_lines[number-1].encode()).hexdigest() for number in mapping.values()}}
+    raw=json.dumps(line_map,separators=(',',':')).encode()+b'\n'
+    assert len(raw)<=12000
+    (area/(str(index)+'.lines.json')).write_bytes(raw)
+
 PY_STALE_PREPARE
 run_evaluator() {
   if [ "$#" -eq 7 ]; then
@@ -813,8 +906,8 @@ evaluation_reasons() {
   local out
   out=$(run_evaluator "$@" 2>&1) ||
     { if [ "$1" = "$tmp/protected.json" ]; then
-        python3 -I -S -B - "$tmp/stale-observation/$protected_index.jsonl" <<'PY_STALE_EXPORT' >&2 2>/dev/null || :
-import json,os,stat,sys
+        python3 -I -S -B - "$tmp/stale-observation/$protected_index.jsonl" "$tmp/stale-observation/$protected_index.binding.json" "$tmp/stale-observation/$protected_index.lines.json" <<'PY_STALE_EXPORT' >&2 2>/dev/null || :
+import json,os,pathlib,stat,sys
 try:
     fd=os.open(sys.argv[1],os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
     with os.fdopen(fd,'rb') as source:
@@ -822,8 +915,24 @@ try:
         if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1:raise ValueError('trace type')
         raw=source.read(16385)
     if not raw or len(raw)>16384 or not raw.endswith(b'\n'):raise ValueError('missing/incomplete trace')
-    for line in raw.splitlines():json.loads(line)
-    sys.stdout.buffer.write(raw)
+    records=[json.loads(line) for line in raw.splitlines()]
+    descriptor=os.open(sys.argv[2],os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+    with os.fdopen(descriptor,'rb') as source:binding=source.read(3073)
+    if len(binding)>3072:raise ValueError('binding cap')
+    json.loads(binding)
+    descriptor=os.open(sys.argv[3],os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+    with os.fdopen(descriptor,'rb') as source:mapping_raw=source.read(12001)
+    if len(mapping_raw)>12000:raise ValueError('line map cap')
+    mapping=json.loads(mapping_raw)
+    for record in records:
+        if record.get('status')=='FRONTEND_ERROR':
+            line=mapping['line_map'].get(str(record['copy_caller_line']))
+            record['original_caller_line']=line if line is not None else 'GAP'
+            record['original_line_sha256']=mapping['original_line_sha256'].get(str(line),'GAP')
+            record['copy_sha256']=mapping['copy_sha256']
+    emitted=binding+b''.join(json.dumps(row,separators=(',',':')).encode()+b'\n' for row in records)
+    if len(emitted)>16384:raise ValueError('combined export cap')
+    sys.stdout.buffer.write(emitted)
 except BaseException:
     print('{"status":"OBSERVER_GAP","reason":"missing/incomplete private transport"}')
 PY_STALE_EXPORT
@@ -1493,6 +1602,71 @@ for glob in '.github/workflows/ci.yml' 'config/models.conf' 'AGENTS.md' \
     "$tmp/scope.json" >"$tmp/protected.json"
   original_evaluator=$evaluator
   evaluator="$tmp/stale-observation/$protected_index.sh"
+  python3 -I -S -B - "$root" "$tmp/stale-observation" "$protected_index" "$glob" "$evaluator" \
+    "$tmp/protected.json" "${good[@]:1}" <<'PY_PROTECTED_BINDING' 2>/dev/null || :
+import hashlib
+import json
+import os
+from pathlib import Path
+import stat
+import sys
+
+root, area = map(Path, sys.argv[1:3])
+index, glob, frontend = int(sys.argv[3]), sys.argv[4], Path(sys.argv[5])
+documents = sys.argv[6:]
+assert 0 <= index < 8 and len(documents) == 7
+sources = ('scope/v1/evaluate-scope.sh', 'scope/v1/read-shadow-evidence.py',
+           'shadow/v1/_consumer.py', 'scripts/test/scope-qualification.test.sh')
+identity = lambda value: (value.st_dev, value.st_ino, value.st_mode, value.st_uid,
+    value.st_gid, value.st_nlink, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+
+
+def measured(path, maximum):
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        before = os.fstat(descriptor)
+        assert stat.S_ISREG(before.st_mode) and before.st_nlink == 1
+        chunks, total = [], 0
+        while True:
+            raw = os.read(descriptor, min(65536, maximum + 1 - total))
+            if not raw:
+                break
+            chunks.append(raw)
+            total += len(raw)
+            assert total <= maximum
+        assert identity(os.fstat(descriptor)) == identity(before)
+        assert identity(os.stat(path, follow_symlinks=False)) == identity(before)
+        return {'path': str(path), 'bytes': total, 'sha256': hashlib.sha256(b''.join(chunks)).hexdigest()}
+    finally:
+        os.close(descriptor)
+
+
+command = [str(frontend), 'evaluate', *documents, str(area.parent / 'legacy-bundles'),
+           str(area.parent / 'legacy-source.git')]
+try:
+    binding = {'status': 'CASE_BINDING', 'index': index, 'glob': glob,
+        'source_event_sha': os.environ.get('GITHUB_SHA', 'GAP'),
+        'command_sha256': hashlib.sha256(json.dumps(command,
+            separators=(',', ':'), ensure_ascii=True).encode()).hexdigest(),
+        'inputs': [measured(Path(path), 1048576) for path in documents],
+        'source': [measured(root / path, 16 * 1024 * 1024) for path in sources],
+        'private_frontend': measured(frontend, 16 * 1024 * 1024)}
+except (OSError, AssertionError) as error:
+    binding = {'status': 'OBSERVER_GAP', 'index': index, 'glob': glob,
+               'boundary': 'case binding before evaluator', 'exception': type(error).__name__}
+raw = json.dumps(binding, separators=(',', ':'), ensure_ascii=True).encode() + b'\n'
+if len(raw) > 3072:
+    raw = (json.dumps({'status':'OBSERVER_GAP','index':index,'glob':glob,'reason':'case binding cap3072'})+'\n').encode()
+path = area / (str(index) + '.binding.json')
+fd = os.open(path, os.O_WRONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+try:
+    info = os.fstat(fd)
+    assert stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid == os.getuid()
+    os.ftruncate(fd, 0)
+    assert os.write(fd, raw) == len(raw)
+finally:
+    os.close(fd)
+PY_PROTECTED_BINDING
   expect_reasons "protected $glob" '["scope.protected-path"]' "$tmp/protected.json" \
     "${good[@]:1}"
   evaluator=$original_evaluator
@@ -2712,7 +2886,7 @@ starts = [index for index, line in enumerate(source) if line == opening]
 stops = [index for index, line in enumerate(source) if line == closing]
 assert len(starts) == len(stops) == 1 and starts[0] < stops[0]
 body = b''.join(source[starts[0] + 1:stops[0]])
-assert hashlib.sha256(body).hexdigest() == '42239f667417de41f93b875c083bc3b26bde7837c69679ebb2d8e62e9a1da22c'
+assert hashlib.sha256(body).hexdigest() == 'd8737aa32fac4021e4ac13d217175a5591fd8a189b1a05e12802128a279d342f'
 compile(body, 'actual-runtime-guard', 'exec')
 assert Path(sys.argv[2]).read_bytes() == body
 Path(sys.argv[3]).write_bytes(body)
@@ -2750,7 +2924,10 @@ assert not os.path.lexists(fixture)
 fixture.mkdir(mode=0o755)
 fixture.chmod(0o755)
 copied = fixture / 'installation'
-shutil.copytree(prefix.parent.parent, copied, symlinks=True)
+copied.mkdir(mode=0o755)
+(copied / 'Versions').mkdir(mode=0o755)
+shutil.copytree(prefix, copied / 'Versions/3.14', symlinks=True)
+shutil.copytree(prefix.parent.parent / 'ystack-private-tools', copied / 'ystack-private-tools', symlinks=True)
 selected = copied / 'Versions/3.14/Resources/Python.app/Contents/MacOS/Python'
 assert selected.read_bytes() == python.read_bytes()
 for path in (fixture, copied, *copied.rglob('*')):
@@ -2840,6 +3017,7 @@ metadata_header = """locator = Path(sys.argv[2])
 selected = Path(os.path.realpath(str(locator)))
 fixed_root = selected.parents[6]
 fixed_prefix = fixed_root / 'Versions/3.14'
+fixed_tools = fixed_root / 'ystack-private-tools'
 fixed_p = selected
 prefix = fixed_prefix
 stdlib = prefix / 'lib/python3.14'

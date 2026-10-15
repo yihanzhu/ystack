@@ -52,7 +52,7 @@ def extract_guard(held):
     assert len(starts) == len(stops) == 1 and starts[0] < stops[0]
     raw = b''.join(lines[starts[0] + 1:stops[0]])
     assert len(raw) <= c.EXECUTABLE_LIMIT
-    assert hashlib.sha256(raw).hexdigest() == '42239f667417de41f93b875c083bc3b26bde7837c69679ebb2d8e62e9a1da22c'
+    assert hashlib.sha256(raw).hexdigest() == 'd8737aa32fac4021e4ac13d217175a5591fd8a189b1a05e12802128a279d342f'
     held.recheck('E_STALE')
     return raw
 
