@@ -34,7 +34,7 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Verify fixed host and source; fill only the owned test cache
+      - name: Verify fixed host and source; supply only the fixed owned runtime
         timeout-minutes: 5
         shell: /bin/bash --noprofile --norc -e -o pipefail {0}
         run: |
@@ -63,638 +63,749 @@ jobs:
           /usr/bin/git merge-base --is-ancestor bde9921177d055c3f32e43b9e10486c6d44b2748 HEAD
           test -z "$(/usr/bin/git status --porcelain=v1)"
           /usr/bin/printf 'repo=1270665750 branch=ystack/impl/scope-gate-hardening issue=541 implementation_PR=558 candidate=%s\n' "$YSTACK_SELECTED_SHA"
-          for tool in /usr/bin/python3 /usr/local/bin/jq /usr/bin/git /usr/bin/cc /usr/bin/sudo /usr/bin/perl /usr/bin/dscl /usr/sbin/dseditgroup /usr/bin/stat /bin/chmod /usr/sbin/chown /bin/mkdir /bin/cp /bin/rm /usr/bin/id /usr/bin/false; do
+          for tool in /bin/cat /usr/bin/shasum /usr/bin/awk /usr/bin/mktemp /usr/bin/python3 /usr/bin/openssl /usr/bin/security /usr/bin/git /usr/bin/cc /usr/bin/sudo /usr/bin/perl /usr/bin/dscl /usr/sbin/dseditgroup /usr/bin/stat /bin/chmod /usr/sbin/chown /bin/mkdir /bin/cp /bin/rm /usr/bin/id /usr/bin/false; do
             test -f "$tool" && test ! -L "$tool" && test -x "$tool"
           done
-          if [ -x /opt/homebrew/bin/python3.14 ]; then native_p=/opt/homebrew/bin/python3.14
-          elif [ -x /usr/local/bin/python3.14 ]; then native_p=/usr/local/bin/python3.14
-          else native_p=$(command -v python3.14 || command -v python3); fi
+          native_p=/Library/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python
           test -z "${__PYVENV_LAUNCHER__+present}"
           for guard_variable in "${!DYLD_@}"; do test -z "$guard_variable"; done
-          mac_failure_inventory='def failure_inventory():
-              import fcntl
-              import hashlib
-              import re
-              import select
-
-              output_limit, row_limit = 16 * 1024 * 1024, 16384
-              objects, output_bytes, gaps = 0, 0, 0
-              flags_changed = False
-              owned_fds = []
-              cleanup_unknown = 0
-              current_operation, current_component = "initial", None
-              failure_context = None
-              prefix = None
-              roots = []
-              seen = set()
-              old_flags = fcntl.fcntl(2, fcntl.F_GETFL)
-
-              def remember(error):
-                  nonlocal failure_context
-                  if failure_context is None:
-                      failure_context = {"operation": current_operation, "component": current_component,
-                          "type": type(error).__name__, "errno": getattr(error, "errno", None)}
-
-              def emit(row, summary=False):
-                  nonlocal current_operation, current_component
-                  previous = current_operation, current_component
-                  current_operation, current_component = "write-stderr", None
-                  try:
-                      emit_row(row, summary)
-                  except BaseException as error:
-                      remember(error)
-                      raise
-                  finally:
-                      current_operation, current_component = previous
-
-              def budget():
-                  if time.monotonic() >= deadline - 1:
-                      raise TimeoutError("inventory remaining deadline")
-
-              def emit_row(row, summary=False):
-                  nonlocal output_bytes
-                  if time.monotonic() >= deadline:
-                      raise TimeoutError("inventory output deadline")
-                  raw = (json.dumps(row, sort_keys=True) + "\n").encode("utf-8")
-                  ceiling = output_limit if summary else output_limit - row_limit
-                  if len(raw) > row_limit or output_bytes + len(raw) > ceiling:
-                      raise ValueError("inventory output cap")
-                  offset = 0
-                  while offset < len(raw):
-                      if time.monotonic() >= deadline:
-                          raise TimeoutError("inventory output deadline")
-                      if not select.select([], [2], [], max(0, deadline - time.monotonic()))[1]:
-                          raise TimeoutError("inventory output deadline")
-                      try:
-                          written = os.write(2, raw[offset:])
-                      except BlockingIOError:
-                          continue
-                      if written <= 0:
-                          raise OSError("inventory output write")
-                      offset += written
-                      output_bytes += written
-
-              def gap(reason, edge=None):
-                  nonlocal gaps
-                  gaps += 1
-                  row = {"inventory": "GAP", "reason": reason}
-                  if edge is not None:
-                      row["edge_sha256"] = hashlib.sha256(os.fsencode(edge)).hexdigest()
-                  emit(row)
-
-              def normal(path):
-                  if type(path) is not str or not path.startswith("/") or "\x00" in path:
-                      raise ValueError("inventory absolute path")
-                  result = os.path.normpath(path)
-                  if len(result.split("/")) > 129 or len(os.fsencode(result)) > 4096:
-                      raise ValueError("inventory path cap")
-                  return result
-
-              def installation(path):
-                  match = re.fullmatch(r"((?:/usr/local/Cellar|/opt/homebrew/Cellar)/[^/]+/[^/]+|/Library/Frameworks/Python\.framework/Versions/[^/]+)/bin/python3\.(1[1-9]|[2-9][0-9])", path)
-                  return match.group(1) if match else None
-
-              def physical_layout(path):
-                  match = re.fullmatch(r"(.+)/bin/python3\.(1[1-9]|[2-9][0-9])", path)
-                  if match is None or prefix is None or normal(path) != path:
-                      raise ValueError("inventory physical layout shape")
-                  layout = match.group(1)
-                  if not (layout == prefix or layout.startswith(prefix + "/")):
-                      raise ValueError("inventory physical layout containment")
-                  return layout
-
-              def allowed(path):
-                  return path == "/" or any(path == root or path.startswith(root + "/") for root in roots)
-
-              def ancestor_allowed(path):
-                  return allowed(path) or any(root.startswith(path.rstrip("/") + "/") for root in roots)
-
-              def target_allowed(path, selected_edge=False):
-                  nonlocal prefix
-                  if allowed(path):
-                      return True
-                  candidate = installation(path) if selected_edge and prefix is None else None
-                  if candidate is not None:
-                      prefix = candidate
-                      roots.append(candidate)
-                      return True
-                  return False
-
-              def open_fd(name, flags, dir_fd=None):
-                  nonlocal cleanup_unknown, current_operation
-                  acquired = None
-                  try:
-                      acquired = os.open(name, flags, dir_fd=dir_fd)
-                      current_operation = "register-fd"
-                      owned_fds.append(acquired)
-                      return acquired
-                  except BaseException as error:
-                      remember(error)
-                      if acquired is not None:
-                          try:
-                              os.close(acquired)
-                          except BaseException:
-                              cleanup_unknown += 1
-                      raise
-
-              def close_fd(fd):
-                  nonlocal cleanup_unknown, current_operation, current_component
-                  owned_fds.remove(fd)
-                  try:
-                      os.close(fd)
-                  except BaseException as error:
-                      current_operation, current_component = "close-owned-fd", None
-                      remember(error)
-                      cleanup_unknown += 1
-                      raise
-
-              def raw_acl(fd):
-                  nonlocal current_operation
-                  captured = []
-                  budget()
-                  ctypes.set_errno(0)
-                  current_operation = "acl_get_fd_np"
-                  acl = library.acl_get_fd_np(fd, 0x100)
-                  try:
-                      query_errno = ctypes.get_errno()
-                      if not acl:
-                          if query_errno != errno.ENOENT:
-                              raise OSError(query_errno or errno.EIO, "inventory acl query")
-                          return {"query_acquired": False, "query_errno": query_errno, "entries": captured}
-                      entry, selector = ctypes.c_void_p(), 0
-                      tag, perms = ctypes.c_int(), ctypes.c_void_p()
-                      while True:
-                          budget()
-                          ctypes.set_errno(0)
-                          current_operation = "acl_get_entry"
-                          rc = library.acl_get_entry(acl, selector, ctypes.byref(entry))
-                          entry_errno = ctypes.get_errno()
-                          if rc != 0:
-                              if rc == -1 and entry_errno == errno.EINVAL and selector == -1 and captured:
-                                  return {"query_acquired": True, "query_errno": query_errno, "end_rc": rc,
-                                      "end_errno": entry_errno, "entries": captured}
-                              raise OSError(entry_errno or errno.EIO, "inventory acl_get_entry")
-                          if len(captured) >= 128:
-                              raise ValueError("inventory ACL cap")
-                          selector = -1
-                          current_operation = "acl_get_tag_type"
-                          if library.acl_get_tag_type(entry, ctypes.byref(tag)) != 0:
-                              raise OSError(ctypes.get_errno() or errno.EIO, "inventory ACL tag")
-                          current_operation = "acl_get_permset"
-                          if library.acl_get_permset(entry, ctypes.byref(perms)) != 0:
-                              raise OSError(ctypes.get_errno() or errno.EIO, "inventory ACL perms")
-                          bits = 0
-                          for shift in range(1, 14):
-                              budget()
-                              current_operation = "acl_get_perm_np"
-                              present = library.acl_get_perm_np(perms, 1 << shift)
-                              if present not in (0, 1):
-                                  raise OSError(ctypes.get_errno() or errno.EIO, "inventory ACL bit")
-                              bits |= present << shift
-                          budget()
-                          current_operation = "acl_get_qualifier"
-                          qualifier = library.acl_get_qualifier(entry)
-                          try:
-                              if not qualifier:
-                                  raise OSError(ctypes.get_errno() or errno.EIO, "inventory ACL qualifier")
-                              captured.append({"entry_rc": rc, "entry_errno": entry_errno, "tag": tag.value,
-                                  "uuid": ctypes.string_at(qualifier, 16).hex(), "permissions": bits})
-                          except BaseException as error:
-                              remember(error)
-                              raise
-                          finally:
-                              current_operation = "acl_free_qualifier"
-                              if qualifier and library.acl_free(qualifier) != 0:
-                                  raise OSError(ctypes.get_errno() or errno.EIO, "inventory ACL qualifier free")
-                  except BaseException as error:
-                      remember(error)
-                      raise
-                  finally:
-                      current_operation = "acl_free"
-                      if acl and library.acl_free(acl) != 0:
-                          raise OSError(ctypes.get_errno() or errno.EIO, "inventory ACL free")
-
-              def inspect_path(path, selected_edge=False):
-                  nonlocal objects, current_operation, current_component
-                  path = normal(path)
-                  if not target_allowed(path, selected_edge):
-                      gap("outside fixed roots", path)
-                      return None
-                  parts = path.split("/")[1:] if path != "/" else []
-                  fd = None
-                  try:
-                      budget()
-                      current_operation, current_component = "open-root", "/"
-                      fd = open_fd("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK)
-                      current_operation = "fstat-root"
-                      root_state = os.fstat(fd)
-                      if ("/", identity(root_state)) not in seen:
-                          if objects >= 16384:
-                              raise ValueError("inventory object cap")
-                          objects += 1
-                          seen.add(("/", identity(root_state)))
-                          budget()
-                          ctypes.set_errno(0)
-                          emit({"inventory": "root", "state": dict(zip(fields, identity(root_state))),
-                              "acl": raw_acl(fd)})
-                      for index, name in enumerate(parts):
-                          budget()
-                          component = "/" + "/".join(parts[:index + 1])
-                          if not ancestor_allowed(component):
-                              gap("outside component", component)
-                              return None
-                          current_operation, current_component = "lstat", component
-                          before = os.stat(name, dir_fd=fd, follow_symlinks=False)
-                          key = (component, identity(before))
-                          if key not in seen:
-                              if objects >= 16384:
-                                  raise ValueError("inventory object cap")
-                              objects += 1
-                              seen.add(key)
-                              emit({"inventory": "metadata", "path": component,
-                                  "state": dict(zip(fields, identity(before))), "ancestor": index < len(parts) - 1})
-                          if stat.S_ISLNK(before.st_mode):
-                              current_operation = "readlink"
-                              target = os.readlink(name, dir_fd=fd)
-                              next_path = normal(os.path.join(os.path.dirname(component), target, *parts[index + 1:]))
-                              if not target_allowed(next_path, selected_edge):
-                                  gap("symlink outside fixed roots", next_path)
-                                  return None
-                              current_operation = "link-recheck"
-                              if identity(os.stat(name, dir_fd=fd, follow_symlinks=False)) != identity(before):
-                                  raise ValueError("inventory link changed")
-                              gap("symlink ACL unavailable through a safe held-parent API", component)
-                              emit({"inventory": "link", "path": component, "target": next_path, "acl": "GAP"})
-                              return next_path
-                          directory = stat.S_ISDIR(before.st_mode)
-                          if not directory and (index < len(parts) - 1 or not stat.S_ISREG(before.st_mode)):
-                              gap("unsupported object type", component)
-                              return None
-                          current_operation, current_component = "open", component
-                          child = open_fd(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK |
-                              (os.O_DIRECTORY if directory else 0), dir_fd=fd)
-                          try:
-                              current_operation = "fstat-open"
-                              if identity(os.fstat(child)) != identity(before):
-                                  raise ValueError("inventory open identity")
-                              budget()
-                              ctypes.set_errno(0)
-                              acl = raw_acl(child)
-                              row = {"inventory": "object", "path": component, "acl": acl}
-                              if not directory:
-                                  if before.st_nlink != 1 or before.st_size > c.EXECUTABLE_LIMIT:
-                                      raise ValueError("inventory file cap or links")
-                                  digest, count = hashlib.sha256(), 0
-                                  while True:
-                                      budget()
-                                      current_operation = "read"
-                                      raw = os.read(child, min(65536, c.EXECUTABLE_LIMIT + 1 - count))
-                                      if not raw:
-                                          break
-                                      count += len(raw)
-                                      if count > c.EXECUTABLE_LIMIT:
-                                          raise ValueError("inventory file cap")
-                                      digest.update(raw)
-                                  row.update(bytes=count, sha256=digest.hexdigest())
-                              current_operation = "fstat-recheck"
-                              if identity(os.fstat(child)) != identity(before):
-                                  raise ValueError("inventory object changed")
-                              current_operation = "named-recheck"
-                              if identity(os.stat(name, dir_fd=fd, follow_symlinks=False)) != identity(before):
-                                  raise ValueError("inventory object changed")
-                              row["identity_unchanged"] = True
-                              emit(row)
-                          except BaseException as error:
-                              remember(error)
-                              close_fd(child)
-                              raise
-                          previous, fd = fd, child
-                          close_fd(previous)
-                      return path
-                  except BaseException as error:
-                      remember(error)
-                      raise
-                  finally:
-                      if fd is not None:
-                          close_fd(fd)
-
-              def resolve(path, selected_edge=False):
-                  path = normal(path)
-                  for _ in range(128):
-                      next_path = inspect_path(path, selected_edge)
-                      if next_path is None or next_path == path:
-                          return next_path
-                      path = next_path
-                  raise ValueError("inventory symlink cap")
-
-              def directory_fd(path):
-                  nonlocal current_operation, current_component
-                  if not allowed(path):
-                      raise ValueError("inventory scan root")
-                  current_operation, current_component = "open-scan-root", "/"
-                  fd = open_fd("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK)
-                  try:
-                      for index, name in enumerate(path.split("/")[1:]):
-                          budget()
-                          component = "/" + "/".join(path.split("/")[1:index + 2])
-                          if not ancestor_allowed(component):
-                              raise ValueError("inventory scan component")
-                          current_operation, current_component = "open-scan-directory", component
-                          child = open_fd(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
-                          previous, fd = fd, child
-                          close_fd(previous)
-                      result, fd = fd, None
-                      return result
-                  except BaseException as error:
-                      remember(error)
-                      raise
-                  finally:
-                      if fd is not None:
-                          close_fd(fd)
-
-              try:
-                  budget()
-                  fcntl.fcntl(2, fcntl.F_SETFL, old_flags | os.O_NONBLOCK)
-                  flags_changed = True
-                  system = re.fullmatch(r"(/Applications/Xcode_[^/]+\.app/Contents/Developer/Library/Frameworks/Python3\.framework|/Library/Developer/CommandLineTools/Library/Frameworks/Python3\.framework)/Versions/[^/]+/bin/python3(?:\.[0-9]+)?", physical)
-                  if system is None:
-                      gap("unknown system framework", physical)
-                  else:
-                      roots.append(system.group(1))
-                  if logical == "/usr/bin/python3" or re.fullmatch(r"/(?:Applications/Xcode_[^/]+\.app/Contents/Developer|Library/Developer/CommandLineTools)/usr/bin/python3", logical):
-                      roots.append(logical)
-                  roots.append("/usr/local/bin/jq")
-                  if system is not None:
-                      resolve(physical)
-                      resolve(logical)
-                  locator = sys.argv[-1]
-                  if re.fullmatch(r"/(?:usr/local|opt/homebrew)/bin/python3(?:\.14)?", locator):
-                      roots.append(locator)
-                      selected_path = resolve(locator, True)
-                  elif installation(normal(locator)) is not None:
-                      selected_path = resolve(locator, True)
-                  else:
-                      gap("unknown selected locator", locator)
-                      selected_path = None
-                  resolve("/usr/local/bin/jq")
-                  if selected_path is not None and prefix is None:
-                      gap("selected installation prefix unavailable")
-                  if selected_path is not None and prefix is not None:
-                      current_operation, current_component = "physical-layout", selected_path
-                      layout = physical_layout(selected_path)
-                      emit({"inventory": "layout", "admission_root": prefix, "physical_layout": layout})
-                      pending = [layout + "/lib", layout + "/include"]
-                      while pending:
-                          budget()
-                          directory = pending.pop()
-                          actual = resolve(directory)
-                          if actual != directory:
-                              gap("layout directory symlink or missing", directory)
-                              continue
-                          fd = None
-                          try:
-                              fd = directory_fd(directory)
-                              current_operation, current_component = "fstat-scan", directory
-                              scan_before = identity(os.fstat(fd))
-                              current_operation = "scandir"
-                              with os.scandir(fd) as entries:
-                                  while True:
-                                      current_operation, current_component = "scandir-next", directory
-                                      try:
-                                          entry = next(entries)
-                                      except StopIteration:
-                                          break
-                                      budget()
-                                      if len(pending) + objects >= 16384:
-                                          raise ValueError("inventory pending object cap")
-                                      child = directory + "/" + entry.name
-                                      result = resolve(child)
-                                      if result == child:
-                                          current_operation, current_component = "scan-entry-type", child
-                                          if entry.is_dir(follow_symlinks=False):
-                                              pending.append(child)
-                              current_operation, current_component = "fstat-scan-recheck", directory
-                              if identity(os.fstat(fd)) != scan_before:
-                                  raise ValueError("inventory layout directory changed")
-                          except BaseException as error:
-                              remember(error)
-                              raise
-                          finally:
-                              if fd is not None:
-                                  close_fd(fd)
-                  gap("Mach-O closure not read: existing guard parser mixes byte parsing with ungated filesystem reads")
-              except BaseException as inventory_error:
-                  remember(inventory_error)
-                  gaps += 1
-                  try:
-                      emit({"inventory": "GAP", "reason": type(inventory_error).__name__,
-                          "errno": getattr(inventory_error, "errno", None), "objects": objects,
-                          "failure_context": failure_context})
-                  except BaseException:
-                      pass
-              finally:
-                  try:
-                      for remaining_fd in tuple(owned_fds):
-                          try:
-                              close_fd(remaining_fd)
-                          except BaseException:
-                              gaps += 1
-                      try:
-                          emit({"inventory": "summary", "objects": objects, "output_bytes_before_summary": output_bytes,
-                              "gaps": gaps, "fd_cleanup_unknown": cleanup_unknown,
-                              "complete": False, "candidate_executed": False}, summary=True)
-                      except BaseException:
-                          pass
-                  finally:
-                      if flags_changed:
-                          try:
-                              fcntl.fcntl(2, fcntl.F_SETFL, old_flags)
-                          except BaseException:
-                              try:
-                                  emit({"inventory": "GAP", "reason": "stderr flags restore failed"})
-                              except BaseException:
-                                  pass
-                              raise
-          '
-          mac_bootstrap_entry='import ctypes
+          /usr/bin/sudo -n /usr/bin/true
+          test ! -e /Library/Frameworks/Python.framework && test ! -L /Library/Frameworks/Python.framework
+          test ! -e /usr/local/libexec/ystack-sandbox/v1/supervisor && test ! -L /usr/local/libexec/ystack-sandbox/v1/supervisor
+          test ! -e "/usr/local/libexec/ystack-scope-fixture.${YSTACK_SELECTED_SHA:0:8}" && test ! -L "/usr/local/libexec/ystack-scope-fixture.${YSTACK_SELECTED_SHA:0:8}"
+          cache_root=$(/usr/bin/mktemp -d "$RUNNER_TEMP/ystack-mac-proof.XXXXXX")
+          cache_root=$(CDPATH='' cd -P -- "$cache_root" && pwd -P)
+          identity=$(/usr/bin/stat -f '%d:%i:%u' "$cache_root")
+          /usr/bin/printf 'YSTACK_PROOF_TMP=%s\nYSTACK_PROOF_TMP_ID=%s\nTMPDIR=%s\n' "$cache_root" "$identity" "$cache_root" >> "$GITHUB_ENV"
+          /bin/cat > "$cache_root/provision.py" <<'PY_MAC_PROVISION'
+          import base64
+          import ctypes
           import errno
-          import importlib.util
+          import gzip
+          import hashlib
+          import io
           import json
           import os
           from pathlib import Path
+          import re
           import stat
+          import selectors
+          import signal
+          import struct
+          import subprocess
           import sys
           import time
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+          import xml.etree.ElementTree as ET
+          import zlib
 
-          deadline = time.monotonic() + 120
-          logical = sys.executable
-          physical = os.path.realpath(logical)
-          active_path = logical
+          ROOT = Path('/Library/Frameworks/Python.framework')
+          P = ROOT / 'Versions/3.14/Resources/Python.app/Contents/MacOS/Python'
+          JQ = ROOT / 'ystack-private-tools/jq'
+          FIELDS = ('st_dev', 'st_ino', 'st_mode', 'st_uid', 'st_gid', 'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+          PKG_SHA = '70c5239ad2d62925d2947e46921d0ddd3d35be3d2f0a2d50db33da507dbcb419'
+          JQ_SHA = '5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef'
+          MANIFEST_SHA = '34ab06f305b15a1772852ce9b814c2935f80917e9548d362fe43d36c0e1cf850'
+          TOC_SHA = 'd64220723aba35bab5b83bdc1774f6669618ecc025b65b96c8b4c14972443111'
+          cache = Path(sys.argv[1])
+          assert cache.is_absolute() and cache.resolve() == cache
+          assert sys.platform == 'darwin' and os.getuid() != 0
+          assert sys.flags.isolated and sys.flags.no_site and sys.flags.dont_write_bytecode
+          started = time.monotonic()
+          deadline = started + 270
           owned = []
-          posix_refusal = None
-          links = {}
-          fields = ("st_dev", "st_ino", "st_mode", "st_uid", "st_gid", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns")
+          held = []
+          shared_components = {}
+          commands = 0
+          cancel_requested = 0
 
-          def identity(state):
-              return tuple(getattr(state, field) for field in fields)
+          def interrupted(signum, frame):
+              global cancel_requested
+              if not cancel_requested:
+                  cancel_requested = signum
+
+          signal.signal(signal.SIGTERM, interrupted)
+          signal.signal(signal.SIGINT, interrupted)
+          lib = ctypes.CDLL('/usr/lib/libSystem.B.dylib', use_errno=True)
+          lib.acl_get_fd_np.argtypes = [ctypes.c_int, ctypes.c_int]
+          lib.acl_get_fd_np.restype = ctypes.c_void_p
+          lib.acl_get_link_np.argtypes = [ctypes.c_char_p, ctypes.c_int]
+          lib.acl_get_link_np.restype = ctypes.c_void_p
+          lib.acl_free.argtypes = [ctypes.c_void_p]
+          lib.acl_free.restype = ctypes.c_int
+
+
+          def canonical(value):
+              return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode('ascii')
+
+
+          def ident(value):
+              return [getattr(value, field) for field in FIELDS]
+
+
+          def budget():
+              if cancel_requested:
+                  raise SystemExit(128 + cancel_requested)
+              assert time.monotonic() < deadline
+
+
+          def empty_acl(value):
+              error = ctypes.get_errno()
+              if value:
+                  assert lib.acl_free(value) == 0
+                  raise ValueError('nonempty or unknown ACL before UUID resolver')
+              assert error == errno.ENOENT
+
+
+          def acquire_component(path, before, fd, name):
+              if path in shared_components:
+                  component = shared_components[path]
+                  try:
+                      assert component[1] == before == ident(os.fstat(component[2]))
+                  finally:
+                      os.close(fd)
+                  component[4] += 1
+                  return component
+              component = [path, before, fd, name, 1]
+              shared_components[path] = component
+              return component
+
+
+          def release_component(component):
+              component[4] -= 1
+              assert component[4] >= 0
+              if component[4] == 0:
+                  del shared_components[component[0]]
+                  os.close(component[2])
+
+
+          def physical(path, directory=False, immutable=True):
+              budget()
+              assert path.is_absolute() and path.resolve() == path
+              chain = []
+              result = None
+              try:
+                  fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                  chain.append(acquire_component('/', ident(os.fstat(fd)), fd, None))
+                  for index, name in enumerate(path.parts[1:]):
+                      before = os.stat(name, dir_fd=chain[-1][2], follow_symlinks=False)
+                      isdir = index < len(path.parts) - 2 or directory
+                      assert stat.S_ISDIR(before.st_mode) if isdir else stat.S_ISREG(before.st_mode)
+                      if immutable:
+                          assert before.st_uid == 0 and not before.st_mode & 0o022
+                      child = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | (os.O_DIRECTORY if isdir else 0), dir_fd=chain[-1][2])
+                      component = str(Path('/').joinpath(*path.parts[1:index + 2]))
+                      chain.append(acquire_component(component, ident(before), child, name))
+                      assert ident(os.fstat(chain[-1][2])) == ident(before)
+                      if not isdir:
+                          assert before.st_nlink == 1 and before.st_size <= 16 * 1024 * 1024
+                  result = (str(path), chain[-1][1], chain[-1][2], chain)
+                  recheck_one(result)
+                  held.append(result)
+                  return result
+              except BaseException:
+                  for component in reversed(chain):
+                      release_component(component)
+                  raise
+
+
+          def recheck_one(record):
+              for index, (path, before, fd, name, refs) in enumerate(record[3]):
+                  budget()
+                  current = os.fstat(fd)
+                  named = os.lstat('/') if name is None else os.stat(name, dir_fd=record[3][index - 1][2], follow_symlinks=False)
+                  assert ident(current) == before == ident(named)
+                  assert current.st_uid == 0 and not current.st_mode & 0o022
+                  ctypes.set_errno(0)
+                  empty_acl(lib.acl_get_fd_np(fd, 0x100))
+
+
+          def recheck():
+              for record in held:
+                  recheck_one(record)
+
+
+          def close_physical(record):
+              held.remove(record)
+              error = None
+              for component in reversed(record[3]):
+                  try:
+                      release_component(component)
+                  except OSError as failure:
+                      error = error or failure
+              if error is not None:
+                  raise error
+
+
+          def close_all_physical():
+              original = sys.exc_info()[1]
+              error = None
+              for record in tuple(reversed(held)):
+                  try:
+                      close_physical(record)
+                  except OSError as failure:
+                      error = error or failure
+              if error is not None:
+                  if original is not None:
+                      raise original from error
+                  raise error
+              assert not held and not shared_components
+              if cancel_requested:
+                  raise SystemExit(128 + cancel_requested)
+
+
+          def mutation_names(argv):
+              changes = {}
+              if argv[:3] == ['/usr/bin/sudo', '-n', '/bin/mkdir']:
+                  assert argv[3:] == ['-m', '0755', str(ROOT)]
+                  changes[str(ROOT.parent)] = ({ROOT.name}, set())
+              elif argv[:3] == ['/usr/bin/sudo', '-n', '/bin/cp']:
+                  assert argv[3:] == ['-R', '-P', '-n', str(cache / 'stage') + '/.', str(ROOT)]
+                  additions = {row['path'].split('/')[0] for row in rows if row['path']}
+                  additions.add('ystack-private-tools')
+                  changes[str(ROOT)] = (additions, set())
+              elif argv[:3] == ['/usr/bin/sudo', '-n', '/bin/rm']:
+                  assert argv[3] in ('-f', '-d') and argv[4] == '--'
+                  for name in argv[5:]:
+                      path = Path(name)
+                      assert path == ROOT or ROOT in path.parents
+                      parent = str(path.parent)
+                      if parent not in changes:
+                          changes[parent] = (set(), set())
+                      changes[parent][1].add(path.name)
+              elif argv[:3] == ['/usr/bin/sudo', '-n', '/bin/chmod']:
+                  assert argv[3:5] == ['-h', '0755'] and len(argv) == 6
+              return changes
+
+
+          def held_directories():
+              result = {}
+              for record in held:
+                  for path, before, fd, name, refs in record[3]:
+                      if stat.S_ISDIR(before[2]):
+                          result.setdefault(path, (before, fd))
+              return result
+
+
+          def bounded_command(argv, expected):
+              budget()
+              child_deadline = deadline - 2
+              assert time.monotonic() < child_deadline
+              process = None
+              selector = None
+              completed = False
+              output, errors = bytearray(), bytearray()
+              try:
+                  budget()
+                  process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                             stderr=subprocess.PIPE, close_fds=True, umask=0o022)
+                  budget()
+                  selector = selectors.DefaultSelector()
+                  budget()
+                  assert process.stdout is not None and process.stderr is not None
+                  for stream, target in ((process.stdout, output), (process.stderr, errors)):
+                      os.set_blocking(stream.fileno(), False)
+                      selector.register(stream, selectors.EVENT_READ, target)
+                      budget()
+                  while selector.get_map():
+                      budget()
+                      remaining = child_deadline - time.monotonic()
+                      assert remaining > 0
+                      for key, events in selector.select(min(remaining, 0.25)):
+                          budget()
+                          block = os.read(key.fileobj.fileno(), min(65536, 16 * 1024 * 1024 + 1 - len(output) - len(errors)))
+                          if not block:
+                              selector.unregister(key.fileobj)
+                              continue
+                          assert len(output) + len(errors) + len(block) <= 16 * 1024 * 1024
+                          key.data.extend(block)
+                  while True:
+                      budget()
+                      remaining = child_deadline - time.monotonic()
+                      assert remaining > 0
+                      try:
+                          status = process.wait(timeout=min(remaining, 0.25))
+                          break
+                      except subprocess.TimeoutExpired:
+                          pass
+                  budget()
+                  completed = status == expected
+                  assert status == expected, (argv[0], status)
+                  return bytes(output)
+              finally:
+                  close_unknown = False
+                  if selector is not None:
+                      try:
+                          selector.close()
+                      except OSError:
+                          close_unknown = True
+                  for stream in (() if process is None else (process.stdout, process.stderr)):
+                      if stream is not None:
+                          try:
+                              stream.close()
+                          except OSError:
+                              close_unknown = True
+                  if process is not None and (not completed or cancel_requested):
+                      reaped = False
+                      try:
+                          if process.poll() is None:
+                              try:
+                                  process.terminate()
+                              except OSError:
+                                  pass
+                              try:
+                                  remaining = deadline - time.monotonic()
+                                  if remaining > 0:
+                                      process.wait(timeout=min(0.5, remaining))
+                              except subprocess.TimeoutExpired:
+                                  pass
+                              if process.poll() is None:
+                                  try:
+                                      process.kill()
+                                  except OSError:
+                                      pass
+                          remaining = deadline - time.monotonic()
+                          if process.poll() is None and remaining > 0:
+                              process.wait(timeout=remaining)
+                          reaped = process.poll() is not None
+                      except (OSError, subprocess.TimeoutExpired):
+                          pass
+                      diagnostic = canonical({'fixed_command_failed': True, 'direct_child_pid': process.pid,
+                          'direct_child_reaped': reaped, 'sudo_subcommand_state': 'unknown' if argv[0] == '/usr/bin/sudo' else 'not-applicable'}) + b'\n'
+                      try:
+                          os.write(2, diagnostic)
+                      except OSError:
+                          pass
+                      if not reaped:
+                          raise RuntimeError('owned direct-child cancellation or reap unknown')
+                  if close_unknown:
+                      raise RuntimeError('owned command pipe or selector close unknown')
+                  if cancel_requested:
+                      raise SystemExit(128 + cancel_requested)
+
+
+          def run(argv, expected=0):
+              global commands
+              budget()
+              commands += 1
+              assert commands <= 256 and len(argv) <= 256
+              assert sum(len(os.fsencode(arg)) + 1 for arg in argv) <= 65536
+              recheck()
+              changes = mutation_names(argv)
+              directories = held_directories()
+              names_before = {}
+              for path, (additions, removals) in changes.items():
+                  assert path in directories
+                  names = set(os.listdir(directories[path][1]))
+                  assert len(names) <= 16384 and not names & additions and removals <= names
+                  names_before[path] = names
+              output = bounded_command(argv, expected)
+              for path, (additions, removals) in changes.items():
+                  assert set(os.listdir(directories[path][1])) == (names_before[path] | additions) - removals
+              for record in held:
+                  for index, component in enumerate(record[3]):
+                      path, before, fd, name, refs = component
+                      if path not in changes:
+                          continue
+                      current = os.fstat(fd)
+                      named = os.lstat('/') if name is None else os.stat(name, dir_fd=record[3][index - 1][2], follow_symlinks=False)
+                      after = ident(current)
+                      assert after == ident(named) and stat.S_ISDIR(after[2])
+                      assert all(after[field] == before[field] for field in (0, 1, 2, 3, 4))
+                      assert current.st_uid == 0 and not current.st_mode & 0o022
+                      ctypes.set_errno(0)
+                      empty_acl(lib.acl_get_fd_np(fd, 0x100))
+                      component[1][:] = after
+              recheck()
+              return output
+
+
+          def save():
+              raw = canonical({'root': str(ROOT), 'objects': owned})
+              assert len(raw) <= 4 * 1024 * 1024
+              target = cache / 'owned.json'
+              with target.open('wb') as output:
+                  output.write(raw)
+                  output.flush()
+                  os.fsync(output.fileno())
+
+
+          def link(path, expected, writable=False):
+              parent = physical(path.parent, True)
+              before = path.lstat()
+              assert stat.S_ISLNK(before.st_mode) and before.st_uid == 0 and before.st_nlink == 1
+              assert writable or not before.st_mode & 0o022
+              assert os.readlink(path) == expected
+              ctypes.set_errno(0)
+              empty_acl(lib.acl_get_link_np(os.fsencode(path), 0x100))
+              assert ident(path.lstat()) == ident(before) and os.readlink(path) == expected
+              recheck_one(parent)
+              close_physical(parent)
+              return ident(before)
+
+
+          def cleanup():
+              receipt = json.loads((cache / 'owned.json').read_bytes())
+              assert receipt['root'] == str(ROOT) and len(receipt['objects']) <= 16384
+              objects = {item['path']: item for item in receipt['objects']}
+              assert len(objects) == len(receipt['objects']) and str(ROOT) in objects
+              root_record = physical(ROOT, True)
+              assert root_record[1] == objects[str(ROOT)]['identity']
+              recheck_one(root_record)
+              close_physical(root_record)
+              actual = set()
+              for directory, dirs, files in os.walk(ROOT, followlinks=False):
+                  actual.add(directory)
+                  actual.update(str(Path(directory) / name) for name in dirs + files)
+                  assert len(actual) <= 16384
+              assert actual == set(objects)
+              for name, item in objects.items():
+                  path = Path(name)
+                  assert path == ROOT or ROOT in path.parents
+                  assert ident(path.lstat()) == item['identity']
+              leaves = sorted(name for name, row in objects.items() if row['kind'] != 'directory')
+              levels = sorted({len(Path(name).parts) for name, row in objects.items() if row['kind'] == 'directory'}, reverse=True)
+              batches = [(False, leaves[offset:offset + 128]) for offset in range(0, len(leaves), 128)]
+              for depth in levels:
+                  names = sorted(name for name, row in objects.items() if row['kind'] == 'directory' and len(Path(name).parts) == depth)
+                  batches.extend((True, names[offset:offset + 128]) for offset in range(0, len(names), 128))
+              for directory, names in batches:
+                  parents = {}
+                  for name in names:
+                      path = Path(name)
+                      if str(path.parent) not in parents:
+                          parents[str(path.parent)] = physical(path.parent, True)
+                          for component, before, fd, edge, refs in parents[str(path.parent)][3]:
+                              if component in objects:
+                                  assert before == objects[component]['identity']
+                      assert ident(path.lstat()) == objects[name]['identity']
+                      if directory:
+                          assert not list(path.iterdir())
+                  run(['/usr/bin/sudo', '-n', '/bin/rm', '-d' if directory else '-f', '--', *names])
+                  for name in names:
+                      assert not os.path.lexists(name)
+                      del objects[name]
+                  for name, record in parents.items():
+                      current = ident(os.fstat(record[2]))
+                      assert current == ident(Path(name).lstat())
+                      assert all(current[index] == record[1][index] for index in (0, 1, 2, 3, 4))
+                      if name in objects:
+                          objects[name]['identity'] = current
+                      recheck_one(record)
+                      close_physical(record)
+              assert not objects and not os.path.lexists(ROOT)
+
+
+          if len(sys.argv) == 3 and sys.argv[2] == '--cleanup':
+              try:
+                  cleanup()
+              finally:
+                  close_all_physical()
+              sys.exit(0)
+
+
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, request, fp, code, message, headers, newurl):
+                  return None
+
+
+          opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+          received = 0
+          requests = 0
+
+
+          def fetch(url, expected_size, expected_sha, redirect=False):
+              global received, requests
+              budget()
+              requests += 1
+              assert requests <= 3
+              request = urllib.request.Request(url, headers={'Accept-Encoding': 'identity'})
+              try:
+                  response = opener.open(request, timeout=max(0.01, deadline - time.monotonic()))
+              except urllib.error.HTTPError as response:
+                  assert redirect and response.code == 302
+                  assert len(response.headers.get_all('Location', [])) == 1
+                  location = response.headers['Location']
+                  parsed = urllib.parse.urlsplit(location)
+                  assert parsed.scheme == 'https' and parsed.netloc == 'release-assets.githubusercontent.com'
+                  assert parsed.path == '/github-production-release-asset/5101141/6387d980-de1f-11e8-9fee-7af0943ede86'
+                  assert parsed.query and not parsed.fragment and len(location) <= 16384
+                  response.close()
+                  return fetch(location, expected_size, expected_sha)
+              with response:
+                  assert response.status == 200 and not redirect
+                  assert response.headers.get('Content-Encoding', 'identity') == 'identity'
+                  assert int(response.headers['Content-Length']) == expected_size
+                  data = bytearray()
+                  while True:
+                      budget()
+                      block = response.read(min(65536, expected_size + 1 - len(data)))
+                      if not block:
+                          break
+                      data.extend(block)
+                      received += len(block)
+                      assert len(data) <= expected_size and received <= 280 * 1024 * 1024
+              assert len(data) == expected_size and hashlib.sha256(data).hexdigest() == expected_sha
+              return bytes(data)
+
+
+          def inflate(data, cap, gzip_format=False):
+              decoder = zlib.decompressobj(31 if gzip_format else 15)
+              output = decoder.decompress(data, cap + 1)
+              assert len(output) <= cap and decoder.eof and not decoder.unused_data and not decoder.unconsumed_tail
+              return output
+
+
+          def parse_pkg(raw):
+              assert len(raw) == 78557763 and hashlib.sha256(raw).hexdigest() == PKG_SHA
+              magic, header, version, compressed, size, algorithm = struct.unpack('>4sHHQQI', raw[:28])
+              assert (magic, header, version, compressed, size, algorithm) == (b'xar!', 28, 1, 6785, 33710, 1)
+              toc_compressed = raw[header:header + compressed]
+              toc = inflate(toc_compressed, size)
+              assert len(toc) == size and hashlib.sha256(toc).hexdigest() == TOC_SHA
+              base = header + compressed
+              assert hashlib.sha1(toc_compressed).digest() == raw[base:base + 20]
+              tree = ET.fromstring(toc)
+              files = {}
+              total = 0
+              def walk(parent, prefix=''):
+                  nonlocal total
+                  for entry in parent.findall('file'):
+                      name = entry.findtext('name')
+                      assert name and name not in ('.', '..') and '/' not in name and '\x00' not in name
+                      path = prefix + name
+                      assert path not in files and len(files) < 16384
+                      kind = entry.findtext('type')
+                      files[path] = None
+                      if kind == 'directory':
+                          walk(entry, path + '/')
+                          continue
+                      assert kind == 'file'
+                      data = entry.find('data')
+                      offset, length, expected = [int(data.findtext(key)) for key in ('offset', 'length', 'size')]
+                      assert 0 <= offset <= len(raw) and 0 <= length <= 256 * 1024 * 1024 and expected <= 256 * 1024 * 1024
+                      archived = raw[base + offset:base + offset + length]
+                      assert len(archived) == length
+                      encoding = data.find('encoding').get('style')
+                      extracted = inflate(archived, expected) if encoding == 'application/x-gzip' else archived
+                      assert encoding in ('application/x-gzip', 'application/octet-stream') and len(extracted) == expected
+                      for tag, blob in (('archived-checksum', archived), ('extracted-checksum', extracted)):
+                          checksum = data.find(tag)
+                          assert checksum is not None and checksum.get('style') == 'sha1'
+                          assert hashlib.sha1(blob).hexdigest() == checksum.text
+                      total += len(extracted)
+                      assert total <= 512 * 1024 * 1024
+                      files[path] = extracted
+              walk(tree.find('toc'))
+              assert len(files) == 36
+              certs = tree.findall('.//{http://www.w3.org/2000/09/xmldsig#}X509Certificate')[:3]
+              assert len(certs) == 3
+              cert_shas = ['5dbaf27e6e8a6dda57a129491fd69a183ca8b0d4a8f895946d569db534d45d3b',
+                           'f16cd3c54c7f83cea4bf1a3e6a0819c8aaa8e4a1528fd144715f350643d2df3a',
+                           'b0b1730ecbc7ff4505142c49f1295e6eda6bcaed7e2c68c5be91b5a11001f024']
+              for index, (cert, digest) in enumerate(zip(certs, cert_shas)):
+                  value = base64.b64decode(cert.text)
+                  assert hashlib.sha256(value).hexdigest() == digest
+                  (cache / ('cert-%s.der' % index)).write_bytes(value)
+              (cache / 'toc.bin').write_bytes(toc_compressed)
+              signature = tree.find('toc/signature')
+              assert signature.get('style') == 'RSA'
+              offset, count = int(signature.findtext('offset')), int(signature.findtext('size'))
+              assert (offset, count) == (20, 256)
+              (cache / 'signature.bin').write_bytes(raw[base + offset:base + offset + count])
+              public = run(['/usr/bin/openssl', 'x509', '-inform', 'DER', '-in', str(cache / 'cert-0.der'), '-pubkey', '-noout'])
+              (cache / 'public.pem').write_bytes(public)
+              run(['/usr/bin/openssl', 'dgst', '-sha1', '-verify', str(cache / 'public.pem'), '-signature',
+                   str(cache / 'signature.bin'), str(cache / 'toc.bin')])
+              run(['/usr/bin/security', 'verify-cert', '-L', '-R', 'offline', '-N', '-p', 'basic',
+                   '-c', str(cache / 'cert-0.der'), '-c', str(cache / 'cert-1.der')])
+              return files['Python_Framework.pkg/Payload']
+
+
+          def parse_cpio(payload):
+              raw = inflate(payload, 512 * 1024 * 1024, True)
+              rows, blobs, offset, total = [], {}, 0, 0
+              while True:
+                  budget()
+                  assert raw[offset:offset + 6] == b'070707' and offset + 76 <= len(raw)
+                  values = [int(raw[offset + start:offset + end], 8) for start, end in
+                            ((6,12),(12,18),(18,24),(24,30),(30,36),(36,42),(42,48),(48,59),(59,65),(65,76))]
+                  dev, ino, mode, uid, gid, nlink, rdev, mtime, namesize, filesize = values
+                  offset += 76
+                  assert 0 < namesize <= 4096 and filesize <= 16 * 1024 * 1024
+                  name_raw = raw[offset:offset + namesize]
+                  assert len(name_raw) == namesize and name_raw[-1:] == b'\x00' and b'\x00' not in name_raw[:-1]
+                  name = name_raw[:-1].decode('utf8')
+                  offset += namesize
+                  body = raw[offset:offset + filesize]
+                  assert len(body) == filesize
+                  offset += filesize
+                  if name == 'TRAILER!!!':
+                      assert filesize == 0 and not any(raw[offset:])
+                      break
+                  assert name == '.' or name.startswith('./')
+                  path = name[2:] if name != '.' else ''
+                  assert len(path.split('/')) <= 128 and not any(part in ('', '.', '..') for part in path.split('/')) if path else True
+                  assert path not in blobs and len(rows) < 16384
+                  kind = stat.S_IFMT(mode)
+                  assert kind in (stat.S_IFDIR, stat.S_IFREG, stat.S_IFLNK)
+                  assert uid == gid == 0
+                  row = {'path': path, 'kind': kind, 'mode': mode, 'uid': uid, 'gid': gid, 'nlink': nlink, 'size': filesize}
+                  if kind == stat.S_IFREG:
+                      assert nlink == 1
+                      row['sha256'] = hashlib.sha256(body).hexdigest()
+                      total += filesize
+                  elif kind == stat.S_IFLNK:
+                      assert nlink == 1
+                      target = body.decode('utf8')
+                      assert target and not target.startswith('/') and '\x00' not in target
+                      resolved = os.path.normpath(os.path.join(os.path.dirname(path), target))
+                      assert resolved != '..' and not resolved.startswith('../')
+                      row['link'] = target
+                  else:
+                      assert filesize == 0
+                  rows.append(row)
+                  blobs[path] = body
+              assert len(rows) == 4201 and total == 124901627
+              assert sum(row['kind'] == stat.S_IFREG for row in rows) == 3702
+              assert sum(row['kind'] == stat.S_IFLNK for row in rows) == 39
+              assert hashlib.sha256(canonical(rows)).hexdigest() == MANIFEST_SHA
+              return rows, blobs
+
 
           try:
-              assert sys.platform == "darwin" and os.getuid() != 0
-              assert not any(key.startswith("DYLD_") or key == "__PYVENV_LAUNCHER__" for key in os.environ)
-              package = Path(sys.argv[1])
-              assert package.is_absolute() and package.resolve() == package
-              assert os.path.isabs(logical) and os.path.isabs(physical) and physical != "/"
-              assert len(Path(logical).parts) <= 128
-              source = package / "shadow/v1/_consumer.py"
-              spec = importlib.util.spec_from_file_location("fixture_entry_consumer", source)
-              assert spec is not None and spec.loader is not None
-              c = importlib.util.module_from_spec(spec)
-              sys.modules[spec.name] = c
-              spec.loader.exec_module(c)
-              assert c._DARWIN_ACL_FUNCTIONS is not None
-              library = c._DARWIN_ACL_FUNCTIONS.library
-              library.acl_get_link_np.argtypes = [ctypes.c_char_p, ctypes.c_int]
-              library.acl_get_link_np.restype = ctypes.c_void_p
+              physical(ROOT.parent, True)
+              assert not os.path.lexists(ROOT)
+              pkg = fetch('https://www.python.org/ftp/python/3.14.7/python-3.14.7-macos11.pkg', 78557763, PKG_SHA)
+              jq = fetch('https://github.com/jqlang/jq/releases/download/jq-1.6/jq-osx-amd64', 864040, JQ_SHA, True)
+              rows, blobs = parse_cpio(parse_pkg(pkg))
+              (cache / 'manifest.json').write_bytes(canonical(rows))
+              stage = cache / 'stage'
+              stage.mkdir(mode=0o755)
+              for row in rows:
+                  path = stage / row['path']
+                  if row['path'] == '':
+                      continue
+                  assert path.parent.is_dir() and not path.parent.is_symlink()
+                  if row['kind'] == stat.S_IFDIR:
+                      path.mkdir(mode=0o755)
+                  elif row['kind'] == stat.S_IFREG:
+                      with path.open('xb') as output:
+                          output.write(blobs[row['path']])
+                      path.chmod(0o755 if row['mode'] & 0o111 else 0o644)
+                  else:
+                      path.symlink_to(row['link'])
+                      os.chmod(path, 0o755, follow_symlinks=False)
+              (stage / 'ystack-private-tools').mkdir(mode=0o755)
+              (stage / 'ystack-private-tools/jq').write_bytes(jq)
+              (stage / 'ystack-private-tools/jq').chmod(0o755)
+              for path in (stage, *(stage / row['path'] for row in rows if row['path']), stage / 'ystack-private-tools'):
+                  if path.is_dir() and not path.is_symlink():
+                      path.chmod(0o755)
+              stage_rows = []
+              for row in rows:
+                  path = stage / row['path']
+                  state = path.lstat()
+                  assert stat.S_IFMT(state.st_mode) == row['kind'] and state.st_uid == os.getuid()
+                  assert not state.st_mode & 0o022
+                  if row['kind'] == stat.S_IFREG:
+                      assert state.st_nlink == 1 and hashlib.sha256(path.read_bytes()).hexdigest() == row['sha256']
+                  elif row['kind'] == stat.S_IFLNK:
+                      assert state.st_nlink == 1 and os.readlink(path) == row['link']
+                  stage_rows.append((str(path), ident(state)))
+              recheck()
+              assert not os.path.lexists(ROOT)
+              run(['/usr/bin/sudo', '-n', '/bin/mkdir', '-m', '0755', str(ROOT)])
+              root = physical(ROOT, True)
+              assert not list(ROOT.iterdir())
+              owned.append({'path': str(ROOT), 'kind': 'directory', 'identity': root[1]})
+              save()
+              run(['/usr/bin/sudo', '-n', '/bin/cp', '-R', '-P', '-n', str(stage) + '/.', str(ROOT)])
 
-              def empty_acl(acl):
-                  if acl:
-                      if library.acl_free(acl) != 0:
-                          raise OSError(ctypes.get_errno() or errno.EIO, "acl_free")
-                      raise ValueError("system bootstrap ACL requires an unavailable prior resolver")
-                  acl_errno = ctypes.get_errno()
-                  if acl_errno != errno.ENOENT:
-                      raise OSError(acl_errno or errno.EIO, "system bootstrap ACL query")
-
-              def immutable(fd, state, _ancestor):
-                  global posix_refusal
-                  assert time.monotonic() < deadline
-                  if state.st_uid != 0 or state.st_mode & 0o022:
-                      try:
-                          if posix_refusal is None:
-                              posix_refusal = (fd, state, _ancestor)
-                      except BaseException:
-                          pass
-                      return False
-                  ctypes.set_errno(0)
-                  empty_acl(library.acl_get_fd_np(fd, 0x100))
-                  return True
-
-              active_path = physical
-              held = c._open_held(physical, False, immutable, "E_INSTALL")
-              owned.append(held)
-              raw = held.read(c.EXECUTABLE_LIMIT, "E_INSTALL")
-              for item in reversed((Path(logical), *Path(logical).parents)):
-                  active_path = str(item)
-                  before = item.lstat()
-                  if stat.S_ISLNK(before.st_mode):
-                      assert before.st_uid == 0 and before.st_nlink == 1
-                      if item.parent.resolve() != Path("/"):
-                          parent = c._open_held(str(item.parent.resolve()), True, immutable, "E_INSTALL")
-                          owned.append(parent)
-                      ctypes.set_errno(0)
-                      empty_acl(library.acl_get_link_np(os.fsencode(item), 0x100))
-                      links[str(item)] = (identity(before), os.readlink(item))
-              source_held = c._hold_bytes(str(source), c.EXECUTABLE_LIMIT)
-              owned.append(source_held)
-              record = {"python": physical, "version": list(sys.version_info[:3]),
-                  "prefixes": [os.path.realpath(sys.prefix), os.path.realpath(sys.base_prefix)],
-                  "paths": [os.path.realpath(value) for value in sys.path], "deadline": deadline}
-              encoded = json.dumps(record, sort_keys=True)
-              assert len(encoded.encode()) <= 16384
-              for name, (before, target) in links.items():
-                  assert identity(os.lstat(name)) == before and os.readlink(name) == target
-              assert os.path.realpath(logical) == physical
-              assert identity(os.stat(logical)) == identity(held.before)
+              assert all(ident(os.lstat(name)) == state for name, state in stage_rows)
+              expected = {row['path']: row for row in rows}
+              expected['ystack-private-tools'] = {'kind': stat.S_IFDIR, 'mode': 0o40755}
+              expected['ystack-private-tools/jq'] = {'kind': stat.S_IFREG, 'mode': 0o100755, 'size': 864040, 'sha256': JQ_SHA}
+              found = set()
+              pending = [ROOT]
+              copied = []
+              while pending:
+                  directory = pending.pop()
+                  relative = str(directory.relative_to(ROOT))
+                  relative = '' if relative == '.' else relative
+                  assert relative in expected and relative not in found
+                  found.add(relative)
+                  record = physical(directory, True)
+                  assert stat.S_IMODE(record[1][2]) == 0o755
+                  copied.append({'path': str(directory), 'kind': 'directory', 'identity': record[1]})
+                  recheck_one(record)
+                  close_physical(record)
+                  with os.scandir(directory) as entries:
+                      for entry in entries:
+                          budget()
+                          name = str(Path(entry.path).relative_to(ROOT))
+                          assert name in expected and len(found) + len(pending) <= 16384
+                          row = expected[name]
+                          path = Path(entry.path)
+                          if row['kind'] == stat.S_IFDIR:
+                              pending.append(path)
+                              continue
+                          assert name not in found
+                          found.add(name)
+                          if row['kind'] == stat.S_IFLNK:
+                              before = link(path, row['link'], True)
+                              copied.append({'path': str(path), 'kind': 'link', 'identity': before, 'target': row['link']})
+                          else:
+                              record = physical(path)
+                              assert stat.S_IMODE(record[1][2]) == (0o755 if row['mode'] & 0o111 else 0o644)
+                              data = bytearray()
+                              while True:
+                                  budget()
+                                  block = os.read(record[2], 65536)
+                                  if not block:
+                                      break
+                                  data.extend(block)
+                                  assert len(data) <= 16 * 1024 * 1024
+                              assert len(data) == row['size'] and hashlib.sha256(data).hexdigest() == row['sha256']
+                              assert ident(os.fstat(record[2])) == record[1] == ident(path.lstat())
+                              copied.append({'path': str(path), 'kind': 'file', 'identity': record[1]})
+                              recheck_one(record)
+                              close_physical(record)
+              assert found == set(expected) and len(copied) == 4203
+              assert ident(ROOT.lstat())[:6] == ident(os.fstat(root[2]))[:6]
+              owned[:] = copied
+              save()
               for item in owned:
-                  item.recheck("E_STALE")
-              assert held.read(len(raw), "E_STALE") == raw and time.monotonic() < deadline
-              print(json.dumps({"stage": "system-bootstrap-physical-entry", "logical": logical[:256],
-                  "physical": physical[:256], "sha256": c.digest(raw), "candidate_executed": False},
-                  sort_keys=True), file=sys.stderr, flush=True)
-              os.execv(physical, [physical, "-I", "-S", "-B", *sys.argv[2:], encoded])
-          except BaseException as error:
-              chain = []
-              cursor = error
-              for _ in range(4):
-                  if cursor is None:
-                      break
-                  chain.append({"type": type(cursor).__name__, "code": getattr(cursor, "code", None), "errno": getattr(cursor, "errno", None),
-                      "filename": str(getattr(cursor, "filename", ""))[:256]})
-                  cursor = cursor.__cause__ or cursor.__context__
-              detail = {"status": "GAP", "reason": "no saved POSIX refusal"}
-              try:
-                  if posix_refusal is not None:
-                      saved_fd, saved, ancestor = posix_refusal
-                      assert type(saved_fd) is int and saved_fd >= 0 and type(ancestor) is bool
-                      assert type(saved) is os.stat_result
-                      detail = {"status": "GAP", "fd_at_refusal": saved_fd, "ancestor": ancestor,
-                          "state": {field: getattr(saved, field) for field in fields}}
-                      cursor = error.__traceback__
-                      for _ in range(16):
-                          if cursor is None:
-                              break
-                          frame = cursor.tb_frame
-                          local = frame.f_locals
-                          if (frame.f_code is c._open_held.__code__ and frame.f_globals is c.__dict__ and
-                              local.get("rule") is immutable and local.get("state") is saved and
-                              local.get("fd") == saved_fd):
-                              parts, path = local["parts"], local["path"]
-                              assert type(parts) is list and 0 < len(parts) <= 128
-                              assert type(path) is str and path.startswith("/") and parts == path.split("/")[1:]
-                              assert all(type(part) is str and part not in ("", ".", "..") for part in parts)
-                              if "index" not in local:
-                                  assert "name" not in local and "last" not in local and ancestor is True
-                                  index, component = -1, "/"
-                              else:
-                                  index = local["index"]
-                                  assert type(index) is int and 0 <= index < len(parts)
-                                  assert local["name"] == parts[index]
-                                  assert local["last"] is (index == len(parts) - 1)
-                                  assert ancestor is (not local["last"])
-                                  component = "/" + "/".join(parts[:index + 1])
-                              assert len(component.encode()) <= 1024
-                              detail.update(status="CAPTURED", component=component, index=index,
-                                  caller="_open_held", traceback_line=cursor.tb_lineno)
-                              break
-                          cursor = cursor.tb_next
-                      if len(json.dumps(detail).encode()) > 2048:
-                          detail = {"status": "GAP", "reason": "component record cap", "state": detail["state"]}
-              except BaseException as observation_error:
-                  if detail is not None:
-                      detail = {"status": "GAP", "reason": type(observation_error).__name__,
-                          "state": detail.get("state")}
-              try:
-                  report = {"stage": "system-bootstrap-entry-refusal", "path": active_path[:256],
-                      "logical": logical[:256], "physical": physical[:256], "chain": chain,
-                      "posix_refusal": detail, "candidate_executed": False}
-                  encoded = json.dumps(report, sort_keys=True)
-                  if len(encoded.encode()) > 16384:
-                      for key in ("path", "logical", "physical"):
-                          report[key] = report[key][:64]
-                      for item in report["chain"]:
-                          item["filename"] = item["filename"][:64]
-                      report["diagnostic_truncated"] = True
-                      encoded = json.dumps(report, sort_keys=True)
-                  assert len(encoded.encode()) <= 16384
-                  print(encoded, file=sys.stderr, flush=True)
-              except BaseException:
-                  pass
-              try:
-                  failure_inventory()
-              except BaseException:
-                  pass
-              raise
+                  if item['kind'] != 'link':
+                      continue
+                  path = Path(item['path'])
+                  assert link(path, item['target'], True) == item['identity']
+                  run(['/usr/bin/sudo', '-n', '/bin/chmod', '-h', '0755', str(path)])
+                  after = link(path, item['target'])
+                  assert stat.S_IMODE(after[2]) == 0o755
+                  assert all(after[index] == item['identity'][index] for index in (0, 1, 3, 4, 5, 6, 7))
+                  item['identity'] = after
+                  save()
+              for item in owned:
+                  assert ident(Path(item['path']).lstat()) == item['identity']
+              print(json.dumps({'supply': 'fixed-official-framework-and-jq', 'objects': len(owned),
+                  'manifest_sha256': MANIFEST_SHA, 'download_requests': requests, 'received_bytes': received,
+                  'pkgSign': 'not-accepted', 'basic_trust': 'offline-pass', 'candidate_executed': False}, sort_keys=True))
           finally:
-              if owned:
-                  original = sys.exc_info()[1]
-                  try:
-                      c._close_paths(owned)
-                  except OSError as cleanup_error:
-                      if original is not None:
-                          raise original from cleanup_error
-                      raise
-          '
-          p=$(/usr/bin/python3 -I -S -B -c "$mac_failure_inventory"$'\n'"$mac_bootstrap_entry" "$PWD" - "$PWD" "$native_p" <<'PY_MAC_BOOTSTRAP'
+              close_all_physical()
+          PY_MAC_PROVISION
+          /bin/chmod 0555 "$cache_root/provision.py"
+          provision_status=0
+          /usr/bin/python3 -I -S -B "$cache_root/provision.py" "$cache_root" || provision_status=$?
+          if [ -f "$cache_root/owned.json" ] && [ ! -L "$cache_root/owned.json" ]; then
+            owned_sha=$(/usr/bin/shasum -a 256 "$cache_root/owned.json" | /usr/bin/awk '{print $1}')
+            [[ "$owned_sha" =~ ^[0-9a-f]{64}$ ]]
+            /usr/bin/printf 'YSTACK_RUNTIME_OWNED_SHA=%s\n' "$owned_sha" >> "$GITHUB_ENV"
+          fi
+          test "$provision_status" -eq 0
+          /bin/cat > "$cache_root/guard.py" <<'PY_MAC_GUARD'
           import ctypes
           import errno
           import hashlib
@@ -710,14 +821,23 @@ jobs:
 
           assert sys.platform == 'darwin' and os.getuid() != 0
           assert not any(key.startswith('DYLD_') or key == '__PYVENV_LAUNCHER__' for key in os.environ)
-          assert len(sys.argv) == 4
-          bootstrap_entry_record = json.loads(sys.argv.pop())
-          assert set(bootstrap_entry_record) == {'python', 'version', 'prefixes', 'paths', 'deadline'}
-          assert sys.executable == os.path.realpath(sys.executable) == bootstrap_entry_record['python']
-          assert list(sys.version_info[:3]) == bootstrap_entry_record['version']
-          assert [os.path.realpath(sys.prefix), os.path.realpath(sys.base_prefix)] == bootstrap_entry_record['prefixes']
-          assert [os.path.realpath(value) for value in sys.path] == bootstrap_entry_record['paths']
-          assert time.monotonic() < bootstrap_entry_record['deadline'] <= time.monotonic() + 120
+          assert len(sys.argv) == 7
+          stage = sys.argv[4]
+          assert stage in ('empty', 'real')
+          deadline = time.monotonic() + 120 if stage == 'empty' else float(sys.argv[5])
+          entry_pid = os.getpid() if stage == 'empty' else int(sys.argv[6])
+          assert time.monotonic() < deadline <= time.monotonic() + 120
+          fixed_root = Path('/Library/Frameworks/Python.framework')
+          fixed_prefix = fixed_root / 'Versions/3.14'
+          fixed_p = fixed_prefix / 'Resources/Python.app/Contents/MacOS/Python'
+          if stage == 'real':
+              assert os.getpid() == entry_pid
+              assert sys.executable == os.path.realpath(sys.executable) == str(fixed_p)
+              assert sys.version_info[:3] == (3, 14, 7) and sys.version_info >= (3, 11)
+              assert sys.prefix == sys.base_prefix == str(fixed_prefix)
+              assert sys.flags.isolated and sys.flags.no_site and sys.flags.dont_write_bytecode
+              assert all(Path(value).is_absolute() and (Path(value) == fixed_prefix or fixed_prefix in Path(value).parents)
+                         for value in sys.path)
           package = Path(sys.argv[1])
           assert package.is_absolute() and package.resolve() == package
           source = package / 'shadow/v1/_consumer.py'
@@ -739,18 +859,15 @@ jobs:
           assert locator.is_absolute()
           selected = Path(os.path.realpath(str(locator)))
           print(json.dumps({'bootstrap_python': sys.executable, 'bootstrap_version': list(sys.version_info[:3]),
-              'selected_python': str(selected), 'candidate_executed': False}, sort_keys=True), file=sys.stderr)
-          match = re.fullmatch(r'python3\.(1[1-9]|[2-9][0-9])', selected.name)
-          assert match and selected.parent.name == 'bin'
-          prefix = selected.parent.parent
-          assert prefix not in (Path('/'), Path('/usr'), Path('/usr/local'), Path('/opt/homebrew'))
-          stdlib = prefix / 'lib' / ('python3.' + match[1])
+              'selected_python': str(selected), 'candidate_executed': stage == 'real'}, sort_keys=True), file=sys.stderr)
+          assert locator == selected == fixed_p
+          prefix = fixed_prefix
+          stdlib = prefix / 'lib/python3.14'
           assert (stdlib / 'os.py').is_file() and (stdlib / 'encodings/__init__.py').is_file()
           assert not any(os.path.lexists(str(parent / 'pyvenv.cfg')) for parent in (selected.parent, prefix))
           assert not any(os.path.lexists(str(selected) + suffix) for suffix in ('._pth', '.zip'))
-          deadline = bootstrap_entry_record['deadline']
           owned = []
-          active_path = sys.executable
+          active_path = str(selected)
           active_stage = 'bootstrap-held'
           rows = {}
           links = {}
@@ -763,13 +880,76 @@ jobs:
           def identity(state):
               return tuple(getattr(state, field) for field in fields)
 
+          def empty_acl(value):
+              saved = ctypes.get_errno()
+              if value:
+                  assert library.acl_free(value) == 0
+                  raise ValueError('nonempty or unknown ACL before real UUID resolver')
+              assert saved == errno.ENOENT
+
+
+          def immutable(fd, state, ancestor):
+              assert time.monotonic() < deadline
+              assert state.st_uid == 0 and not state.st_mode & 0o022
+              ctypes.set_errno(0)
+              empty_acl(library.acl_get_fd_np(fd, 0x100))
+              return True
+
+
+          def rule():
+              return immutable if stage == 'empty' else c._root_rule(owner)
+
+
+          def canonical_fixed(path):
+              path = Path(os.path.normpath(str(path)))
+              if path != fixed_root and fixed_root not in path.parents:
+                  return path
+              relative = str(path.relative_to(fixed_root))
+              if relative == '.':
+                  return path
+              pending = relative.split('/')
+              resolved = []
+              steps = 0
+              while pending:
+                  steps += 1
+                  assert steps <= 128 and time.monotonic() < deadline
+                  resolved.append(pending.pop(0))
+                  name = '/'.join(resolved)
+                  assert name in manifest
+                  row = manifest[name]
+                  if row['kind'] != stat.S_IFLNK:
+                      continue
+                  logical = fixed_root / name
+                  parent = c._open_held(str(logical.parent), True, rule(), 'E_INSTALL')
+                  try:
+                      before = logical.lstat()
+                      assert stat.S_ISLNK(before.st_mode) and before.st_uid == 0 and before.st_nlink == 1
+                      assert not before.st_mode & 0o022 and stat.S_IMODE(before.st_mode) == 0o755
+                      assert os.readlink(logical) == row['link']
+                      ctypes.set_errno(0)
+                      empty_acl(library.acl_get_link_np(os.fsencode(logical), 0x100))
+                      target = os.path.normpath(os.path.join(os.path.dirname(name), row['link']))
+                      assert target != '..' and not target.startswith('../') and not target.startswith('/')
+                      links[str(logical)] = (identity(before), row['link'])
+                      assert identity(logical.lstat()) == identity(before) and os.readlink(logical) == row['link']
+                      parent.recheck('E_STALE')
+                      pending = target.split('/') + pending
+                      resolved = []
+                  finally:
+                      parent.close()
+              physical = fixed_root.joinpath(*resolved)
+              assert physical.resolve() == physical
+              return physical
+
+
           def inspect(path, directory=False):
               global active_path, active_stage
               active_path = str(path)
               active_stage = 'candidate-inspect'
               assert time.monotonic() < deadline and len(rows) < 16384
+              path = canonical_fixed(path)
               assert path.is_absolute() and path.resolve() == path
-              held = c._open_held(str(path), directory, c._root_rule(owner), 'E_INSTALL')
+              held = c._open_held(str(path), directory, rule(), 'E_INSTALL')
               try:
                   raw = b'' if directory else held.read(c.EXECUTABLE_LIMIT, 'E_INSTALL')
                   held.recheck('E_STALE')
@@ -781,6 +961,7 @@ jobs:
                   held.close()
 
           def native_dependencies(path, raw):
+              path = canonical_fixed(path)
               # This fixture accepts only a bounded x86_64 Mach-O dependency closure.
               magic = raw[:4]
               if magic in (b'\xca\xfe\xba\xbe', b'\xca\xfe\xba\xbf'):
@@ -843,15 +1024,33 @@ jobs:
               assert offset == end
 
           try:
-              bootstrap = c._hold_bytes(sys.executable, c.EXECUTABLE_LIMIT)
-              owned.append(bootstrap)
-              active_path, active_stage = str(source), 'consumer-source-held'
-              consumer_source = c._hold_bytes(str(source), c.EXECUTABLE_LIMIT)
-              owned.append(consumer_source)
-              owner = c._DarwinChildOwner(bootstrap, consumer_source, deadline, ledger)
               library = c._DARWIN_ACL_FUNCTIONS.library
               library.acl_get_link_np.argtypes = [ctypes.c_char_p, ctypes.c_int]
               library.acl_get_link_np.restype = ctypes.c_void_p
+              source_held = c._hold_bytes(str(source), c.EXECUTABLE_LIMIT)
+              owned.append(source_held)
+              guard_path = Path(sys.argv[3])
+              guard_held = c._hold_bytes(str(guard_path), c.EXECUTABLE_LIMIT)
+              owned.append(guard_held)
+              guard_held.recheck('E_INSTALL')
+              guard_code = guard_held.raw
+              manifest_held = c._hold_bytes(str(guard_path.parent / 'manifest.json'), c.EXECUTABLE_LIMIT)
+              owned.append(manifest_held)
+              manifest_held.recheck('E_INSTALL')
+              manifest_raw = manifest_held.raw
+              assert hashlib.sha256(manifest_raw).hexdigest() == '34ab06f305b15a1772852ce9b814c2935f80917e9548d362fe43d36c0e1cf850'
+              manifest_rows = json.loads(manifest_raw)
+              assert len(manifest_rows) == 4201
+              manifest = {row['path']: row for row in manifest_rows}
+              assert len(manifest) == len(manifest_rows)
+              manifest['ystack-private-tools'] = {'kind': stat.S_IFDIR, 'mode': 0o40755}
+              manifest['ystack-private-tools/jq'] = {'kind': stat.S_IFREG, 'mode': 0o100755,
+                  'size': 864040, 'sha256': '5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef'}
+              owner = None
+              if stage == 'real':
+                  bootstrap = c._hold_bytes(sys.executable, c.EXECUTABLE_LIMIT)
+                  owned.append(bootstrap)
+                  owner = c._DarwinChildOwner(bootstrap, source_held, deadline, ledger)
               for item in reversed((locator, *locator.parents)):
                   if item == Path('/'):
                       continue
@@ -868,9 +1067,52 @@ jobs:
                       links[str(item)] = (identity(before), os.readlink(item))
                   else:
                       inspect(item, item != locator)
-              root = c._open_held(str(prefix), True, c._root_rule(owner), 'E_INSTALL')
+              root = c._open_held(str(prefix), True, rule(), 'E_INSTALL')
               owned.append(root)
-              images.add(selected)
+              images.update((selected, prefix / 'bin/python3.14', prefix / 'Python'))
+              observed = set()
+              pending_tree = [fixed_root]
+              while pending_tree:
+                  directory = pending_tree.pop()
+                  inspect(directory, True)
+                  with os.scandir(str(directory)) as entries:
+                      for entry in entries:
+                          assert time.monotonic() < deadline and len(observed) < 16384
+                          path = Path(entry.path)
+                          name = str(path.relative_to(fixed_root))
+                          assert name not in observed
+                          observed.add(name)
+                          if name == 'ystack-private-tools':
+                              assert entry.is_dir(follow_symlinks=False)
+                              pending_tree.append(path)
+                              continue
+                          if name == 'ystack-private-tools/jq':
+                              assert hashlib.sha256(inspect(path)).hexdigest() == '5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef'
+                              continue
+                          assert name in manifest
+                          row = manifest[name]
+                          before = path.lstat()
+                          assert stat.S_IFMT(before.st_mode) == row['kind']
+                          if row['kind'] == stat.S_IFDIR:
+                              pending_tree.append(path)
+                          elif row['kind'] == stat.S_IFLNK:
+                              parent = c._open_held(str(path.parent), True, rule(), 'E_INSTALL')
+                              try:
+                                  assert before.st_uid == 0 and before.st_nlink == 1 and not before.st_mode & 0o022
+                                  assert stat.S_IMODE(before.st_mode) == 0o755 and os.readlink(path) == row['link']
+                                  ctypes.set_errno(0)
+                                  empty_acl(library.acl_get_link_np(os.fsencode(path), 0x100))
+                                  assert identity(path.lstat()) == identity(before) and os.readlink(path) == row['link']
+                                  links[str(path)] = (identity(before), row['link'])
+                                  parent.recheck('E_STALE')
+                              finally:
+                                  parent.close()
+                          else:
+                              raw = inspect(path)
+                              assert len(raw) == row['size'] and hashlib.sha256(raw).hexdigest() == row['sha256']
+                              assert stat.S_IMODE(before.st_mode) == (0o755 if row['mode'] & 0o111 else 0o644)
+                              native_dependencies(path, raw)
+              assert observed == (set(manifest) - {''}) | {'ystack-private-tools', 'ystack-private-tools/jq'}
               directories = [prefix / 'lib', prefix / 'include']
               while directories:
                   directory = directories.pop()
@@ -904,10 +1146,16 @@ jobs:
               assert Path(os.path.realpath(str(locator))) == selected
               for item in owned:
                   item.recheck('E_STALE')
-              print(json.dumps({'bootstrap': 'fixed-system-python-existing-runtime', 'python': str(selected),
+              print(json.dumps({'bootstrap': 'fixed-framework-real-resolver' if stage == 'real' else 'fixed-system-trusted-reader', 'python': str(selected),
                   'prefix': str(prefix), 'objects': len(rows), 'native_images': len(seen),
                   'closure_sha256': c.digest(c.canonical({'objects': rows, 'selector_links': links})), 'acl_commands': len(ledger.commands),
-                  'acl_commands_sha256': c.digest(c.canonical(ledger.commands)), 'privileged_execution': False}, sort_keys=True), file=sys.stderr)
+                  'acl_commands_sha256': c.digest(c.canonical(ledger.commands)), 'stage': stage, 'pid': os.getpid(), 'candidate_executed': stage == 'real', 'privileged_execution': False}, sort_keys=True), file=sys.stderr)
+              if stage == 'empty':
+                  assert os.getpid() == entry_pid
+                  for item in owned:
+                      item.recheck('E_STALE')
+                  os.execv(str(selected), [str(selected), '-I', '-S', '-B', '-c', guard_code.decode('utf8'),
+                      str(package), str(selected), str(guard_path), 'real', str(deadline), str(entry_pid)])
               print(selected)
           except BaseException as error:
               try:
@@ -921,7 +1169,7 @@ jobs:
                       cursor = cursor.__cause__ or cursor.__context__
                   print(json.dumps({'stage': active_stage, 'bootstrap_refusal_path': active_path[:256],
                       'exception': type(error).__name__, 'code': getattr(error, 'code', None),
-                      'chain': chain, 'candidate_executed': False}, sort_keys=True), file=sys.stderr)
+                      'chain': chain, 'candidate_executed': stage == 'real'}, sort_keys=True), file=sys.stderr)
               except BaseException:
                   pass
               raise
@@ -933,15 +1181,19 @@ jobs:
                   if original is not None:
                       raise original from cleanup_error
                   raise
-          PY_MAC_BOOTSTRAP
-          )
+          PY_MAC_GUARD
+          /bin/chmod 0555 "$cache_root/guard.py"
+          p=$(/usr/bin/python3 -I -S -B "$cache_root/guard.py" "$PWD" "$native_p" "$cache_root/guard.py" empty 0 0)
           native_p=$("$p" -I -S -B -c 'import sys
           from pathlib import Path
           p = Path(sys.executable)
           print("selected_python=" + str(p) + " version=" + ".".join(map(str, sys.version_info[:3])),
                 file=sys.stderr, flush=True)
           assert sys.version_info >= (3, 11)
-          prefix = p.parent.parent
+          assert p == Path("/Library/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python")
+          assert sys.version_info[:3] == (3, 14, 7)
+          assert sys.flags.isolated and sys.flags.no_site and sys.flags.dont_write_bytecode
+          prefix = Path("/Library/Frameworks/Python.framework/Versions/3.14")
           assert p.resolve() == p and sys.prefix == sys.base_prefix == str(prefix)
           assert all(Path(value).is_absolute() and (Path(value) == prefix or prefix in Path(value).parents)
                      for value in sys.path)
@@ -950,21 +1202,21 @@ jobs:
           "$p" -I -S -B - "$PWD" "$YSTACK_SELECTED_SHA" <<'PY'
           import hashlib,importlib.util,json,os,pathlib,plistlib,stat,sys,sysconfig,uuid
           root=pathlib.Path(sys.argv[1]); assert root.resolve()==root
-          runtime_prefix=pathlib.Path(sys.executable).parent.parent
+          runtime_prefix=pathlib.Path('/Library/Frameworks/Python.framework/Versions/3.14')
           assert sys.prefix==sys.base_prefix==str(runtime_prefix)
           selected_sha=sys.argv[2];token=selected_sha[:8]
           source=root/'scope/v1/read-shadow-evidence.py'
           spec=importlib.util.spec_from_file_location('reserved_source_preflight',source)
           module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
           assert '_cancel_release' not in sys.modules
-          paths={pathlib.Path(sys.executable),pathlib.Path('/usr/local/bin/jq')}
+          paths={pathlib.Path(sys.executable),pathlib.Path('/Library/Frameworks/Python.framework/ystack-private-tools/jq')}
           paths.update(pathlib.Path(m.__file__) for m in tuple(sys.modules.values()) if getattr(m,'__file__',None))
           rows=[]
           for path in sorted(paths):
               assert path.resolve()==path and path.is_file()
               if path.is_relative_to(root):
                   continue
-              assert runtime_prefix in path.parents or str(path).startswith(('/usr/lib/','/System/Library/')) or path==pathlib.Path('/usr/local/bin/jq')
+              assert runtime_prefix in path.parents or str(path).startswith(('/usr/lib/','/System/Library/')) or path==pathlib.Path('/Library/Frameworks/Python.framework/ystack-private-tools/jq')
               before=path.stat()
               for item in (path,*path.parents):
                   state=item.lstat()
@@ -973,7 +1225,7 @@ jobs:
               fields=('st_dev','st_ino','st_uid','st_gid','st_mode','st_nlink','st_size','st_mtime_ns','st_ctime_ns')
               assert all(getattr(before,key)==getattr(after,key) for key in fields)
               rows.append({'path':str(path),'sha256':hashlib.sha256(raw).hexdigest(),'size':len(raw),'uid':before.st_uid,'gid':before.st_gid,'mode':oct(before.st_mode),'nlink':before.st_nlink})
-          jq=pathlib.Path('/usr/local/bin/jq'); assert jq.stat().st_nlink==1
+          jq=pathlib.Path('/Library/Frameworks/Python.framework/ystack-private-tools/jq'); assert jq.stat().st_nlink==1
           assert hashlib.sha256(jq.read_bytes()).hexdigest()=='5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef'
           for key in ('stdlib','platstdlib','include','platinclude'):
               path=pathlib.Path(sysconfig.get_path(key));assert path.resolve()==path and path.is_dir()
@@ -986,14 +1238,10 @@ jobs:
           print(json.dumps({'selected_sha':selected_sha,'token':token,'fixture_root':fixture_root,'fixture_names':['yscw_'+token,'yscc_'+token,'yscg_'+token,'yscp_'+token]},sort_keys=True))
           print(json.dumps({'preflight':'physical runtime and loaded import closure','rows':rows,'state_created':False,'startup_called':False,'vm_called':False},sort_keys=True))
           PY
-          test "$(/usr/local/bin/jq --version)" = jq-1.6
+          test "$(/Library/Frameworks/Python.framework/ystack-private-tools/jq --version)" = jq-1.6
           /usr/bin/sudo -n /usr/bin/true
-          cache_root=$(/usr/bin/mktemp -d "$RUNNER_TEMP/ystack-mac-proof.XXXXXX")
-          cache_root=$(CDPATH='' cd -P -- "$cache_root" && pwd -P)
-          identity=$(/usr/bin/stat -f '%d:%i:%u' "$cache_root")
-          /usr/bin/printf 'YSTACK_PROOF_TMP=%s\nYSTACK_PROOF_TMP_ID=%s\nTMPDIR=%s\n' "$cache_root" "$identity" "$cache_root" >> "$GITHUB_ENV"
           /bin/mkdir -m 700 "$cache_root/ystack-portable-core-jq16"
-          /bin/cp /usr/local/bin/jq "$cache_root/ystack-portable-core-jq16/jq-osx-amd64"
+          /bin/cp /Library/Frameworks/Python.framework/ystack-private-tools/jq "$cache_root/ystack-portable-core-jq16/jq-osx-amd64"
           /bin/chmod 0555 "$cache_root/ystack-portable-core-jq16/jq-osx-amd64"
           test "$(/usr/bin/shasum -a 256 "$cache_root/ystack-portable-core-jq16/jq-osx-amd64" | /usr/bin/awk '{print $1}')" = 5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef
           test -z "$(/usr/bin/git status --porcelain=v1)"
@@ -1005,7 +1253,7 @@ jobs:
         timeout-minutes: 50
         shell: /bin/bash --noprofile --norc -e -o pipefail {0}
         run: /bin/bash scripts/test/shadow-enforced.test.sh
-      - name: Verify source and remove only the owned test cache
+      - name: Verify source and remove only the owned runtime and test cache
         if: always()
         timeout-minutes: 5
         shell: /bin/bash --noprofile --norc -e -o pipefail {0}
@@ -1014,6 +1262,14 @@ jobs:
           if [ -n "${YSTACK_PROOF_TMP:-}" ]; then
             test -d "$YSTACK_PROOF_TMP" && test ! -L "$YSTACK_PROOF_TMP"
             test "$(/usr/bin/stat -f '%d:%i:%u' "$YSTACK_PROOF_TMP")" = "$YSTACK_PROOF_TMP_ID"
+            if [ -e "$YSTACK_PROOF_TMP/owned.json" ]; then
+              [[ "${YSTACK_RUNTIME_OWNED_SHA:-}" =~ ^[0-9a-f]{64}$ ]]
+              test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/owned.json" | /usr/bin/awk '{print $1}')" = "$YSTACK_RUNTIME_OWNED_SHA"
+              test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 0a58ee47d0263edd529c734eacbe0104accad7f8cee1259989ccc1d99285ce76
+              /usr/bin/python3 -I -S -B "$YSTACK_PROOF_TMP/provision.py" "$YSTACK_PROOF_TMP" --cleanup
+            else
+              test ! -e /Library/Frameworks/Python.framework && test ! -L /Library/Frameworks/Python.framework
+            fi
             /bin/rm -rf -- "$YSTACK_PROOF_TMP"
             test ! -e "$YSTACK_PROOF_TMP" && test ! -L "$YSTACK_PROOF_TMP"
           fi
