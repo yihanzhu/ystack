@@ -438,12 +438,12 @@ Bind that supply to these accepted `work/scope-genuine-macos-proof/` artifacts:
 | Spec | `6760cc5f786aa794f1fce3784664e220769d7811` |
 | High-risk plan | `0ff44d9da76e3b653560db26e0d2f6afde727201` |
 
-Use the workflow published at `2ab03f85a55f64ecfeed87873fecde5c61396957`,
-from reviewed head `7c7b2a4276463317352b8fbfb29917030908ee74` against base
-`9600c4b389371aae2de3e581cfb67439aa56e494`. Actual supply and cleanup across
+Use the workflow published at `59c671dc08739824456efe1ffa5f4b4f0cbad22e`,
+from reviewed head `d01cbb259c544191a721179ee9c048d9372c0cb1` against base
+`4f60b7ebcea6c68dbdadb92b2eaac09becee9318`. Actual supply and cleanup across
 separate job-step processes still require Mac job evidence. The workflow Git
-blob is `db2b011bb9a554cbd7678724c5e9c44d85f6e405`; its SHA-256 is
-`10b62ef34fdb28683f95746de5096e62dc347de20826dd54997411a9f57ac31f`.
+blob is `4758c5e500e6e741212ac3653da360c9d01bd18a`; its SHA-256 is
+`6e8304356e3191b60cf22276b8d67750ebe0e181cfa60b9c862ff0125138d815`.
 The complete shared entry/guard body SHA-256 is
 `d8737aa32fac4021e4ac13d217175a5591fd8a189b1a05e12802128a279d342f`.
 The separate post-guard identity assertion passed through `-c` has SHA-256
