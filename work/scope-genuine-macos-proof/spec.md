@@ -1,5 +1,5 @@
 ---
-intent-blob: 7b38be231a975a16133d16a987539ac1061352da
+intent-blob: 77d6e5bae9e8b6a846bb543096756c2723ca54e5
 risk: high
 drafted: 2026-10-15
 ---
@@ -10,7 +10,8 @@ drafted: 2026-10-15
 
 1. Provide the manual proof environment for #541 under the
    [directly approved conditional supply](https://github.com/yihanzhu/ystack/issues/559#issuecomment-6180555883)
-   and [existing-parent supplement](https://github.com/yihanzhu/ystack/issues/559#issuecomment-6189713897).
+   and [existing-parent supplement](https://github.com/yihanzhu/ystack/issues/559#issuecomment-6189713897),
+   with the [approved 3.15 supplement and accepted source review](https://github.com/yihanzhu/ystack/issues/559#issuecomment-6203606687).
    Preserve the product and its acceptance standard. This implementation changes
    only `.github/workflows/scope-genuine-macos.yml` and its entry in
    `ci/required-files.txt`. The separately accepted high-risk plan fixes all
@@ -20,7 +21,11 @@ drafted: 2026-10-15
    | --- | --- |
    | Conditional decision | `7206ddb285720163917b4f0c7a710ec278b9b1992f88436cff9fbda18404d4bd` |
    | Existing-parent supplement | `d811e67bf53b8bcbd0417d5db686c297adbe325c47de3ab048d92bdfeead4880` |
-   | Python 3.14.7 official macOS pkg | `70c5239ad2d62925d2947e46921d0ddd3d35be3d2f0a2d50db33da507dbcb419` |
+   | Fixed 3.15 supplement | `6cbb39e4a5bcc391913e98de09bc95dac7a78e4c7585424777bd149dfdf0fca8` |
+   | Accepted 3.15 source review | `22a69d7721afa114fc9780e024c97f9f323318ac854a18794b4ec3be4041340d` |
+   | [Python 3.15.0 official macOS pkg](https://www.python.org/ftp/python/3.15.0/python-3.15.0-macos11.pkg) | `7c7e7eca61cbfa5f0c6f80cd594cddbfd492f4e8b3fb87e3d9fa1efebaec43ed` |
+   | Decompressed XAR TOC | `72a73d8e5b05959f062df93f21e5829a5aac4526c833dd24cba4941462a29924` |
+   | Inner P image | `23a6212221922087dafd5a0e59631efa00b75b5f2e47945ba404c67be2c54c0b` |
    | Original jq 1.6 Mac artifact | `5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef` |
 
 2. Keep dispatch closed to `yihanzhu/ystack`, repository ID `1270665750`, the manual
@@ -40,20 +45,23 @@ drafted: 2026-10-15
 4. Keep `macos-15-intel` as the candidate host. Before any mutation, require the
    approved GitHub-hosted, Darwin and x86_64 guards, fixed physical tools, existing
    noninteractive sudo and absent fixture paths. Use only the fixed official
-   Python 3.14.7 and jq 1.6 bytes above. No version, source, runtime or provider
+   Python 3.15.0 and jq 1.6 bytes above. No version, source, runtime or provider
    fallback is allowed. No other dependency download or installation is allowed.
 
    Take only the standard Python_Framework payload. Preserve every supplied byte
    and publisher link. Do not run any package script or installer. Exclude the GUI,
    CLI, documentation, pip, profile and free-threaded components. Verify the source
-   chain, complete signed content manifest and fixed hashes before supply. The
-   accepted source evidence combines the official release digest, XAR signature
-   and content hashes, PSF installer identity and offline OS basic trust chain.
+   chain, complete signed content manifest and fixed hashes before supply. Require
+   exactly 89,032,014 package bytes. Verify RSA over the compressed XAR TOC.
+   Verify every archived and extracted checksum for all 28 XAR entries, then the
+   complete standard payload.
+   The accepted source evidence combines the official release digest, XAR
+   signature and content hashes, PSF installer identity and offline OS basic chain.
    Do not call the recorded pkgSign EKU rejection a pass. Basic trust does not
    prove installer-policy, online revocation, Sigstore or notarization acceptance.
 
    Supply only two entirely absent trees under the existing physical root
-   `/Library/Frameworks/Python.framework`: `Versions/3.14` and
+   `/Library/Frameworks/Python.framework`: `Versions/3.15` and
    `ystack-private-tools`. Authenticate that root, its physical Versions directory
    and every physical ancestor with held NOFOLLOW descriptors, exact named identity,
    UID 0, non-group/other-writable modes and actual empty ACLs. Unknown ACLs fail.
@@ -62,12 +70,23 @@ drafted: 2026-10-15
    existing object, including a dangling link, fails. After creation, authenticate
    its recorded owned identity before each write.
 
-   Verify the full 4,201-entry source manifest first. Supply only its 4,195 entries
-   at `Versions/3.14` or below, plus the private tools directory and jq: exactly
-   4,197 entries. Preserve their bytes and link text. Scan these two new trees for
-   an exact set match; do not ignore extras or admit old siblings to the runtime.
-   The high-risk plan fixes the source subset, mode map and runtime expectation
-   table. Keep old versions, top-level Current and root aliases unchanged.
+   Verify the full 4,502-entry source manifest first. Supply only its 4,496 entries
+   at `Versions/3.15` or below, plus the private tools directory and jq: exactly
+   4,498 entries. Preserve their bytes and all 35 link texts. Scan these two new
+   trees for an exact set match; do not ignore extras or admit old siblings.
+
+   | Fixed manifest | SHA-256 |
+   | --- | --- |
+   | Complete standard source | `e0d204e2827885c5f2f4278e709981b7fc1e02424d3bfa5ae2ff2af789789d26` |
+   | Complete V3.15 subset | `3176a7d3551aaa719fa8ed26964237d0d1771184c6ce7a5159bbf039e7816572` |
+   | V3.15 and T/jq mode map | `9184f6976c2be2e1430594adbb406293168c0201c849e31bfd671f2c8e83fb9e` |
+   | V3.15 and T/jq runtime map | `d6a212cf50fd2593c75e8e011c321e65fa8609cce7add72e69d16ff0e78252c4` |
+
+   The high-risk plan binds these maps to fixed commands and guards. Source modes
+   and UID/GID are archive data, not host proof. With umask 022, require new
+   directories/executable files and the 35 new links to be 0755; other files must
+   be 0644. Authenticate actual UID 0, mode and empty ACL after creation.
+   Keep old versions, top-level Current and root aliases unchanged.
    Do not traverse old version contents or use those old objects as dependencies.
 
    Read only bounded direct child names and lstat/link metadata of the existing
@@ -80,14 +99,16 @@ drafted: 2026-10-15
    the original object, depth, output and deadline limits.
 
    Use only the accepted manifest and bounded mkdir/cp/chmod/rm commands for new
-   owned objects. Do not use chown, a privileged shell, a package manager, scripts,
-   compilation, binary rewriting or relinking. Check copied bytes against the
-   accepted source before execution. Root ownership alone is not provenance.
+   owned objects. Runtime supply must not use chown, a privileged shell, package
+   managers, scripts, compilation, binary rewriting or relinking. Preserve the
+   approved fixture `/usr/bin/cc` helper/native builds. Add no compiler, SDK,
+   source or administrator scope. Check copied bytes against the accepted source
+   before execution. Root ownership alone is not provenance.
 
 5. Bind P to the fixed inner image
-   `/Library/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python`.
+   `/Library/Frameworks/Python.framework/Versions/3.15/Resources/Python.app/Contents/MacOS/Python`.
    Bind its runtime prefix separately to
-   `/Library/Frameworks/Python.framework/Versions/3.14`.
+   `/Library/Frameworks/Python.framework/Versions/3.15`.
    This fixed mapping replaces the old bin/name-derived prefix only at the private
    fixture boundary. It adds no arbitrary path input or runtime selection service.
 
@@ -109,6 +130,13 @@ drafted: 2026-10-15
    resolve alone as authentication. Preserve the two unused dangling PrivateHeaders
    links without granting them read or execution authority.
 
+   Bind the source inventory's 91 loadable x86_64 Mach-O images: 90 also contain
+   arm64 and one is x86_64-only. Require the 17 internal load edges to stay within
+   V3.15, plus the 117 system-library edges and three `/usr/lib/dyld` edges.
+   Classify the two fat static archives and one wrapped LLVM bitcode object as
+   retained data, not loadable images. Authenticate their exact bytes and container
+   structure against the fixed inventory. Do not skip unknown native formats by
+   filename or extension; unknown or malformed native containers and images fail.
    Keep the complete lib/include scan, all required native-image closure checks,
    original system cache boundaries and final source/identity rechecks. Preserve
    all byte, object and command caps and the shared 120-second entry/guard deadline.
@@ -116,7 +144,7 @@ drafted: 2026-10-15
    Preserve the later complete loaded-runtime/module and stdlib/include checks.
 
    The fixed entry must preserve PID and isolated flags. After entry, require the
-   actual physical `sys.executable` to equal P, actual version to equal 3.14.7 and
+   actual physical `sys.executable` to equal P, actual version to equal 3.15.0 and
    remain at least 3.11, and `sys.prefix == sys.base_prefix` to equal the fixed
    framework prefix. Require the original closed startup-path checks against that
    prefix. Never assign `sys.executable` or inject `__PYVENV_LAUNCHER__`. Any actual
@@ -153,7 +181,8 @@ drafted: 2026-10-15
    native 50 and final closure 5 minutes. Fetch each fixed artifact at most once
    through its accepted source/delivery binding, within the original preflight
    budget. Preserve the approved single-file and aggregate limits. No retry,
-   source change or added time is permitted. Phase-one fetching is closed.
+   source change or added time is permitted. Both source-verification fetch phases
+   are closed.
    Preserve every assertion, product deadline, cancellation/reap rule and byte/row
    cap. The temporary supply and cleanup fit these original budgets.
 
