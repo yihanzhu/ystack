@@ -1,17 +1,17 @@
-# Intent: Publish the bounded macOS scope proof workflow
+# Intent: Provide the bounded macOS scope proof environment
 Author: Codex (intent author). Status: draft.
 
 ## Problem
 
-Scope-gate hardening (#541) needs a real macOS consumer proof on a verified
-disposable host. The approved workflow is still a private proposal. Linux CI and
-local fixtures cannot supply that proof, so the manager cannot complete acceptance.
+Scope-gate hardening (#541) needs real macOS consumer proof on a verified
+disposable host. The host's preinstalled runtime fails the required trust checks.
+Linux CI and local fixtures cannot supply this proof.
 
 ## Proposed outcome
 
-Publish a bounded manual route to run the two complete original suites at the exact
-reviewed implementation head. Preserve the approved workflow meaning and produce
-source-bound evidence without changing the product or its acceptance standard.
+Use the approved temporary runtime supply to run both complete original suites at
+the exact reviewed implementation head. Produce source-bound evidence while
+preserving the product and its acceptance standard.
 
 ## Affected users and systems
 
@@ -20,27 +20,40 @@ scope and native suites, and the disposable macOS runner and its owned fixture.
 
 ## Constraints
 
-- Preserve the [package approved on 2026-10-14](https://github.com/yihanzhu/ystack/issues/541#issuecomment-6167260870).
-  Implementation changes only `.github/workflows/scope-genuine-macos.yml` and its
-  `ci/required-files.txt` entry, after the normal spec and high-risk plan gates.
+- Follow the [approved conditional package and accepted source review](https://github.com/yihanzhu/ystack/issues/559#issuecomment-6180555883).
+  Use only the fixed official Python 3.14.7 and original pinned jq 1.6 bytes.
+  Supply only an entirely absent `/Library/Frameworks/Python.framework` tree,
+  with jq inside that root. Authenticate its existing parent first. Do not repair
+  an existing runtime, overwrite old objects, run package scripts, alter binaries
+  or publisher links, or use another version, source, root or provider.
+- Complete this G1 amendment, G2 and a separate high-risk plan before implementation.
+  The Mac workflow implementation changes only
+  `.github/workflows/scope-genuine-macos.yml` and its `ci/required-files.txt` entry.
+  Necessary fixed bootstrap/Python/jq bindings in #541's two test fixtures pass
+  their own affected artifact gates within the original core paths.
 - Keep the fixed repository, operator, manual event and sole #541 implementation
   ref. Bind the reviewed workflow and source before and after execution. The
   dispatch event SHA selects source; it does not grant approval.
-- Keep the candidate host, physical runtime checks, existing pinned jq cache,
-  both original complete suites and the 100-minute outer limit. Product deadlines
-  and caps stay unchanged. Do not install runtimes or use a fallback provider.
-- Keep administrator actions within the approved disposable fixture: distinct
-  users and groups, fixed anchor, derived owned root, supplementary-only and UUID
-  checks, and verified cleanup. No VM, real publisher or production identity.
+- Keep the candidate host and all physical runtime, held identity, NOFOLLOW,
+  owner, mode, actual ACL/UUID and complete runtime/module closure checks.
+  Bind the exact startup images and paths through G2 and the high-risk plan.
+  Source review alone does not prove host safety or choose an unreviewed startup path.
+- Keep both complete original suites and the 100-minute outer limit. Product
+  deadlines and caps stay unchanged. Supply and clean up within the approved
+  temporary job and its original budgets. Preserve all failures and unknowns.
+- Keep administrator actions within the approved new runtime root and disposable
+  fixture. Preserve distinct users and groups, the fixed anchor, derived owned
+  root, supplementary-only checks, and verified cleanup of every owned resource.
+  No VM, real publisher or production identity is allowed.
 - Publish through a protected PR, merge that main into the same implementation
   branch normally, then review the exact resulting head and base. Complete Linux
   and Mac proof must match that source before protected implementation merge.
 - Host or preflight refusal, suite failure and incomplete cleanup remain failures.
-  Workflow publication alone does not close #541 or prove native or CPU/wall
+  Publication and source review do not close #541 or prove native or CPU/wall
   qualification. #544 receives no automatic ref or authority from this work.
 
 ## Open questions
 
-Provider availability and the complete Mac result remain to be established by the
-approved preflight and actual suites. A failed prerequisite stays a failure; it does
-not authorize a replacement host, tool or proof.
+The new root's availability, complete authenticated startup and actual Mac result
+remain to be established within the approved gates and real suites. A failed
+prerequisite does not authorize a replacement host, tool or proof.

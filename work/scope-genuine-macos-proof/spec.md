@@ -1,76 +1,117 @@
 ---
-intent-blob: 633ac30af807896e3550f9bf0eb098278213fc59
+intent-blob: 154befc5159f96c49823fb36f949525a5e09b4ac
 risk: high
 drafted: 2026-10-14
 ---
 
-# Spec: Publish the bounded macOS scope proof workflow
+# Spec: Provide the bounded macOS scope proof environment
 
 ## Requirements
 
-1. Publish the manual workflow for #541 without changing the product or its
-   acceptance standard. Implementation changes only `.github/workflows/scope-genuine-macos.yml`
-   and its entry in `ci/required-files.txt`. Preserve the meaning of the package
-   [approved on 2026-10-14](https://github.com/yihanzhu/ystack/issues/541#issuecomment-6167260870):
+1. Provide the manual proof environment for #541 under the
+   [directly approved conditional supply](https://github.com/yihanzhu/ystack/issues/559#issuecomment-6180555883).
+   Preserve the product and its acceptance standard. This implementation changes
+   only `.github/workflows/scope-genuine-macos.yml` and its entry in
+   `ci/required-files.txt`. The separately accepted high-risk plan pins the exact
+   workflow, manifest, commands and cleanup before implementation.
 
-   | Approved baseline artifact | SHA-256 |
-   |---|---|
-   | Decision | `1620fef70105e8b3a82fd4f906b8855d5cbe0026cfbfd994931ca50f48098fed` |
-   | Workflow | `4135bf0a37fffb672e02ffeb436cd5dc5d5c7f02dd49aa1c2ef0a9074ea5cd4c` |
-   | Two-path patch | `880fa41e85a8387280354c34a70a93a75604d2ac5030063c479d14263b903e2c` |
-
-   The separately accepted plan pins the workflow bytes with the existing-runtime
-   selector below. Preserve the baseline's remaining behavior and authority.
+   | Fixed source | Accepted SHA-256 |
+   | --- | --- |
+   | Conditional decision | `7206ddb285720163917b4f0c7a710ec278b9b1992f88436cff9fbda18404d4bd` |
+   | Python 3.14.7 official macOS pkg | `70c5239ad2d62925d2947e46921d0ddd3d35be3d2f0a2d50db33da507dbcb419` |
+   | Original jq 1.6 Mac artifact | `5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef` |
 
 2. Keep dispatch closed to `yihanzhu/ystack`, repository ID `1270665750`, the manual
    event, actor and triggering actor `yihanzhu`, and
-   `refs/heads/ystack/impl/scope-gate-hardening`. Keep the exact workflow path/ref,
+   `refs/heads/ystack/impl/scope-gate-hardening`. Keep the fixed workflow path/ref,
    read-only contents permission, pinned checkout action, disabled persisted
    credentials, serial concurrency and no cancellation of another run. Expose no
    inputs for source, path, command, provider or credentials.
 
 3. Select source from immutable `github.sha`. Before and after execution, require
-   lowercase 40-hex source, event and workflow SHAs to agree with checkout HEAD;
-   verify the checked-out workflow against its Git blob and require clean source.
+   lowercase 40-hex source, event and workflow SHAs to agree with checkout HEAD.
+   Verify the checked-out workflow against its Git blob and require clean source.
    Preserve the approved minimum ancestry check. The manager separately binds the
-   reviewed head H, then-current base X, artifact hashes and workflow blob to the
-   actual run API, ref and checkout. A matching SHA or permitted actor is not approval.
+   reviewed head H, current base X, artifacts and workflow blob to the actual run
+   API, ref and checkout. A matching SHA or permitted actor is not approval.
 
-4. Keep `macos-15-intel` as the unverified candidate host. Before fixture mutation,
-   require the approved GitHub-hosted, Darwin and x86_64 guards, fixed physical
-   tools, existing noninteractive sudo and absent fixture paths. Preserve physical
-   Python 3.11+, loaded runtime/module and stdlib/include ancestor checks. Select
-   Python in the unchanged native suite's order: executable
-   `/opt/homebrew/bin/python3.14`, then `/usr/local/bin/python3.14`, then
-   `python3.14` or `python3` on the fixed PATH. Resolve its physical path and report
-   its actual version before checking the minimum. Before executing that candidate,
-   use fixed system Python for a bounded read-only check of its physical installation
-   and required load paths, using actual Darwin ACL and held identity checks. This
-   private fixture boundary accepts only a closed, immutable installation layout;
-   unknown layouts fail. Repeat it immediately before the first privileged Python
-   execution. Candidate self-report and later root checks cannot supply this prior
-   trust. Preserve the later complete runtime/module checks. A candidate that fails
-   any check stops; do not try another runtime. The scope outer evaluator and
-   privileged fixture must bind that same physical Python. The original harness still
-   verifies its root-owned copied package; repository modules are not claimed to
-   be root-owned in checkout. A missing tool, SDK or safe runtime closure fails.
+4. Keep `macos-15-intel` as the candidate host. Before any mutation, require the
+   approved GitHub-hosted, Darwin and x86_64 guards, fixed physical tools, existing
+   noninteractive sudo and absent fixture paths. Use only the fixed official
+   Python 3.14.7 and jq 1.6 bytes above. No version, source, runtime or provider
+   fallback is allowed. No other dependency download or installation is allowed.
 
-5. Use only the existing physical `/usr/local/bin/jq`, with version `jq-1.6`,
-   single-link ownership checks and SHA-256
-   `5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef`.
-   Fill the native suite's expected cache only inside a new job-owned temporary
-   directory, verify copied bytes, and preserve identity-checked cache cleanup.
-   No downloading, installation, runtime ownership repair or fallback is allowed.
+   Take only the standard Python_Framework payload. Preserve every supplied byte
+   and publisher link. Do not run any package script or installer. Exclude the GUI,
+   CLI, documentation, pip, profile and free-threaded components. Verify the source
+   chain, complete signed content manifest and fixed hashes before supply. The
+   accepted source evidence combines the official release digest, XAR signature
+   and content hashes, PSF installer identity and offline OS basic trust chain.
+   Do not call the recorded pkgSign EKU rejection a pass. Basic trust does not
+   prove installer-policy, online revocation, Sigstore or notarization acceptance.
 
-6. Keep the original fixture's distinct writer and consumer, supplementary-only
-   shared group membership, actual UUID/ACL checks, store, Git and evidence APIs.
-   Derive TOKEN from H's first eight characters; use only `yscw_TOKEN`,
-   `yscc_TOKEN`, `yscg_TOKEN`, `yscp_TOKEN`, the owned root
-   `/usr/local/libexec/ystack-scope-fixture.TOKEN` and absent fixed anchor
-   `/usr/local/libexec/ystack-sandbox/v1/supervisor`. Preserve original unused-ID
-   selection within 56000–56999, absence checks, account transition journal,
-   original missing-ancestor handling and verified reverse cleanup. Never replace
-   an existing anchor. Cache cleanup cannot replace root fixture cleanup.
+   The sole root is an entirely absent `/Library/Frameworks/Python.framework`.
+   Authenticate the existing parent and ancestors first. Do not create or repair
+   a parent, replace any existing object, or add a version to an existing framework.
+   Use only the accepted manifest and bounded mkdir/cp/chmod/rm commands for new
+   owned objects. Do not use chown, a privileged shell, a package manager, scripts,
+   compilation, binary rewriting or relinking. Check copied bytes against the
+   accepted source before execution. Root ownership alone is not provenance.
+
+5. Bind P to the fixed inner image
+   `/Library/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python`.
+   Bind its runtime prefix separately to
+   `/Library/Frameworks/Python.framework/Versions/3.14`.
+   This fixed mapping replaces the old bin/name-derived prefix only at the private
+   fixture boundary. It adds no arbitrary path input or runtime selection service.
+
+   The existing fixed system Python remains the initial non-privileged trusted
+   reader. Before executing P, authenticate the supplied physical installation,
+   outer image, inner image, shared Python library and every required load target.
+   Candidate self-report, a new root owner and later privileged checks cannot
+   establish this prior trust. Do not add a circular requirement for the initial
+   trusted reader to authenticate itself before its first non-privileged start.
+
+   Keep the original held descriptors, NOFOLLOW physical opens, regular-file and
+   single-link checks, full identity, root owner, non-writable modes and actual
+   Darwin ACL checks. Preserve the entry's refusal of nonempty or unknown ACLs
+   before a real UUID resolver exists. Do not fake or bypass UUID results.
+   Authenticate each used logical link step's owner, metadata, target and actual
+   ACL while holding its physical parent. Bind its canonical target to the fixed
+   manifest, then apply the original physical checks. Reject loops, escapes,
+   missing required targets, unlisted paths and changed identities. Never use
+   resolve alone as authentication. Preserve the two unused dangling PrivateHeaders
+   links without granting them read or execution authority.
+
+   Keep the complete lib/include scan, all required native-image closure checks,
+   original system cache boundaries and final source/identity rechecks. Preserve
+   all byte, object and command caps and the shared 120-second entry/guard deadline.
+   Repeat authentication immediately before the first privileged P execution.
+   Preserve the later complete loaded-runtime/module and stdlib/include checks.
+
+   The fixed entry must preserve PID and isolated flags. After entry, require the
+   actual physical `sys.executable` to equal P, actual version to equal 3.14.7 and
+   remain at least 3.11, and `sys.prefix == sys.base_prefix` to equal the fixed
+   framework prefix. Require the original closed startup-path checks against that
+   prefix. Never assign `sys.executable` or inject `__PYVENV_LAUNCHER__`. Any actual
+   mismatch fails; static source acceptance does not predict a passing execution.
+   Scope's outer evaluator and privileged fixture, and the native suite, must bind
+   this same P through their separately accepted #541 artifact changes.
+
+6. Put only the fixed jq bytes at
+   `/Library/Frameworks/Python.framework/ystack-private-tools/jq`.
+   Preserve physical single-link ownership, actual version `jq-1.6` and fixed
+   digest checks. Prefill the native suite cache only in a new job-owned temporary
+   directory. Verify copied bytes and preserve identity-checked cache cleanup.
+   Do not follow the preinstalled jq link or create a second supply root.
+
+   Keep the original distinct writer and consumer, supplementary-only shared
+   group, actual UUID/ACL, store, Git and evidence APIs. Derive TOKEN from H's first
+   eight characters. Use only `yscw_TOKEN`, `yscc_TOKEN`, `yscg_TOKEN`, `yscp_TOKEN`,
+   the owned `/usr/local/libexec/ystack-scope-fixture.TOKEN` and absent anchor
+   `/usr/local/libexec/ystack-sandbox/v1/supervisor`. Keep unused-ID selection within
+   56000–56999, absence checks, account journal and verified reverse cleanup.
+   Never replace an existing anchor. Cache cleanup cannot prove fixture cleanup.
 
 7. Run both complete original commands at H, in order:
 
@@ -79,67 +120,66 @@ drafted: 2026-10-14
    /bin/bash scripts/test/shadow-enforced.test.sh
    ```
 
-   Keep the 100-minute job cap and approved step limits: checkout 5, preflight 5,
-   scope 35, native 50, final source/cache closure 5 minutes. These are scheduling
-   reservations, not measured completion guarantees. Preserve every assertion,
-   product deadline, cancellation/reap rule and byte/row cap. Timeout, interruption,
-   refusal, suite failure or incomplete cleanup gives no successful proof.
+   Keep the 100-minute job cap and step limits: checkout 5, preflight 5, scope 35,
+   native 50 and final closure 5 minutes. Fetch each fixed artifact at most once
+   through its accepted source/delivery binding, within the original preflight
+   budget. Preserve the approved single-file and aggregate limits. No retry,
+   source change or added time is permitted. Phase-one fetching is closed.
+   Preserve every assertion, product deadline, cancellation/reap rule and byte/row
+   cap. The temporary supply and cleanup fit these original budgets.
 
-8. Accept workflow publication only after exact-base patch/manifest validation,
-   workflow and embedded shell/Python static checks, required repository CI and
-   independent review. Actual Mac proof is a later host execution at a freshly
-   reviewed H/X. Read its complete results and cleanup evidence together with the
-   exact-head complete Linux matrix before #541 G3. Publication does not close
-   #541 or establish native/CPU-wall qualification; production identities stay empty.
+   Track every new root, directory and file by the accepted manifest and actual
+   owned identity. Clean them and the original fixture/cache on success or failure.
+   Changed or unknown identity forbids broader deletion. Timeout, interruption,
+   refusal, suite failure or incomplete cleanup gives no successful proof.
+   An ephemeral host does not itself prove cleanup.
+
+8. Accept publication only after exact-base patch/manifest validation, workflow
+   and embedded shell/Python static checks, required repository CI and independent
+   review. Actual Mac proof follows at freshly reviewed H/X. Read complete results
+   and cleanup with the same-head complete Linux matrix before #541 G3.
+   Publication or source review does not close #541 or establish native/CPU-wall
+   qualification. Production identities stay empty.
 
 ## Design
 
 | File | Responsibility |
-|---|---|
-| `.github/workflows/scope-genuine-macos.yml` | Publish the approved fixed manual workflow and its existing guards, suite steps and closure. |
-| `ci/required-files.txt` | Add the workflow to the restore-critical manifest. |
+| --- | --- |
+| `.github/workflows/scope-genuine-macos.yml` | Fixed temporary supply, original guards, suites and closure. |
+| `ci/required-files.txt` | Keep the workflow in the restore-critical manifest. |
 
 For the implementation PR: `review_size: standard`.
 
-The separately reviewed high-risk plan precedes implementation and pins the
-workflow bytes. Preserve the approved baseline except for the fixed selector,
-its version output and the prior trusted runtime check. Recheck patch context
-against the actual publication base.
-A further change to workflow meaning or permissions requires fresh artifact review.
+The separately reviewed high-risk plan fixes the complete manifest, startup
+binding, immutable modes, permitted command paths/argv, source validation,
+deadline, cleanup and workflow bytes. Recheck patch context at the actual base.
+Do not implement before these items and their independent review are complete.
 
-Publish the stable workflow through its protected PR, producing main X. Normally
-merge X into the same #541 implementation branch to produce H. Independently review
-H/X, artifact hashes and the matching workflow blob, then freeze the branch for
-Linux and Mac runs. The manager checks those bindings before and after dispatch.
-Merge #541 through its protected PR only while the reviewed H and X still match.
-Source SHA changes do not require publishing another literal into the workflow.
-A changed main, source or workflow invalidates affected review and proof.
-
-The job stays a repository-specific development fixture. It adds no portable-core
-API, product debug path, live profile or general privileged execution service.
+Protected publication produces main X. Merge X normally into the same #541
+implementation branch to produce H. Independently review H/X and all artifact and
+workflow hashes, then freeze the branch for Linux and Mac runs. The manager checks
+these bindings before and after dispatch. Merge #541 only while reviewed H/X match.
+Source changes do not require another literal SHA in the workflow. Changed main,
+source or workflow invalidates the affected review and proof.
 
 ## Out of scope
 
-This publication changes no product or test file. The scope fixture's matching
-runtime selection and existing Darwin resolver wiring are repaired only under
-#541's existing accepted plan and paths; they change no assertion or proof standard. No reduced controls, arbitrary dispatch
-ref, alternative provider, runtime/tool installation, host repair, VM, real publisher, production
-identity, real target or new credential scope. No #544 ref or sudoers execution is
-inherited: that work still needs its own accepted gates and explicit reviewed
-closed-ref/authority binding. This publication does not perform that future action.
+No product or test file changes in this publication. Necessary fixed fixture
+bindings pass #541's own affected artifact gates within its original allowed paths.
+No reduced controls, arbitrary dispatch ref, alternative provider, preinstalled
+runtime repair, other supply root, VM, real publisher, production identity, real
+target or new credential scope. No #544 ref or sudoers execution is inherited.
+It still needs its own gates and reviewed closed-ref/authority binding.
 
 ## Areas of concern
 
-Risk is high because this adds a workflow that can reach the separately approved
-administrator fixture. The normal artifact chain, separate authors and reviewers,
-required CI, rounds cap and protected publishing remain in force. The approval is
-limited to this repository and manager; it does not authorize clones or live yshifu.
+Risk is high because the workflow can reach the approved temporary administrator
+actions. Keep the artifact chain, separate authors/reviewers, required CI, rounds
+cap and protected publishing. Authority remains limited to this repository,
+manager, fixed source and disposable job.
 
-The intent's open provider and result questions remain evidence to obtain. Actual
-label availability, physical runtime, exact jq, SDK, account lifecycle and complete
-Mac results are unverified until the approved job runs. A failed prerequisite stays
-a failure. The fixed native time cap has no measured completion guarantee; an
-interruption cannot be reported as completed cleanup or positive qualification.
-
-The host-specific job does not change the vendor-neutral core or its acceptance
-standard. No conflict with the accepted intent or north star is identified.
+The source review accepts static feasibility only. Root absence, parent trust,
+actual startup identity, loaded closure, supply timing, SDK, account lifecycle and
+complete Mac results remain actual-job checks. Keep every old refusal and unknown
+failure. Native remains BLOCKED and CPU/wall remains NONE until their separate
+requirements are met. #544's first-code gate does not advance from this publication.
