@@ -1,5 +1,5 @@
 ---
-spec-blob: 6760cc5f786aa794f1fce3784664e220769d7811
+spec-blob: d8e3f17fbae49d66f14683c3f2e5e9f63073e5ae
 drafted: 2026-10-15
 ---
 # Plan: scope-genuine-macos-proof
@@ -17,6 +17,7 @@ This plan implements the high-risk spec and the directly approved conditional
 supply recorded on #559 in comment 6180555883 and its existing-parent supplement
 in comment 6189713897 (SHA-256
 `d811e67bf53b8bcbd0417d5db686c297adbe325c47de3ab048d92bdfeead4880`).
+Apply the [approved fixed 3.15 supplement and accepted source review](https://github.com/yihanzhu/ystack/issues/559#issuecomment-6203606687).
 It changes no product or test file.
 The original #541 fixtures require their own accepted plan amendment before code.
 The supplied runtime does not repair or inherit trust from the preinstalled tree.
@@ -25,37 +26,39 @@ The supplied runtime does not repair or inherit trust from the preinstalled tree
 
 | Object | Exact binding |
 | --- | --- |
-| Python | `https://www.python.org/ftp/python/3.14.7/python-3.14.7-macos11.pkg`; 78,557,763 bytes; SHA-256 `70c5239ad2d62925d2947e46921d0ddd3d35be3d2f0a2d50db33da507dbcb419` |
+| Python | `https://www.python.org/ftp/python/3.15.0/python-3.15.0-macos11.pkg`; 89,032,014 bytes; SHA-256 `7c7e7eca61cbfa5f0c6f80cd594cddbfd492f4e8b3fb87e3d9fa1efebaec43ed` |
+| Decompressed XAR TOC | SHA-256 `72a73d8e5b05959f062df93f21e5829a5aac4526c833dd24cba4941462a29924` |
 | jq | `https://github.com/jqlang/jq/releases/download/jq-1.6/jq-osx-amd64`; 864,040 bytes; SHA-256 `5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef` |
 | jq delivery | HTTPS host `release-assets.githubusercontent.com`; path `/github-production-release-asset/5101141/6387d980-de1f-11e8-9fee-7af0943ede86` |
 | Existing ROOT | `/Library/Frameworks/Python.framework` |
 | Existing version parent | `/Library/Frameworks/Python.framework/Versions` |
-| New V | `/Library/Frameworks/Python.framework/Versions/3.14` |
+| New V | `/Library/Frameworks/Python.framework/Versions/3.15` |
 | New T | `/Library/Frameworks/Python.framework/ystack-private-tools` |
-| P | `/Library/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python` |
-| Prefix | `/Library/Frameworks/Python.framework/Versions/3.14` |
+| P | `/Library/Frameworks/Python.framework/Versions/3.15/Resources/Python.app/Contents/MacOS/Python`; SHA-256 `23a6212221922087dafd5a0e59631efa00b75b5f2e47945ba404c67be2c54c0b` |
+| Prefix | `/Library/Frameworks/Python.framework/Versions/3.15` |
 | jq path | `/Library/Frameworks/Python.framework/ystack-private-tools/jq` |
 
 Use only the standard `Python_Framework.pkg/Payload`. Its accepted source
-manifest has 4,201 entries: 460 directories, 3,702 regular files and 39 links.
-Regular file bytes total 124,901,627. Verify all source rows before selection.
+manifest has 4,502 entries: 529 directories, 3,934 regular files and 39 links.
+Regular file bytes total 131,786,038. Verify all source rows before selection.
 Pin the canonical source manifest SHA-256
-`34ab06f305b15a1772852ce9b814c2935f80917e9548d362fe43d36c0e1cf850`.
+`e0d204e2827885c5f2f4278e709981b7fc1e02424d3bfa5ae2ff2af789789d26`.
 Use source cpio order and JSON with sorted keys, compact separators, ASCII escapes
 and no final newline; map keys are sorted. Derive it through the reviewed bounded
-parser. Check every row, type, size, file digest and link target.
+parser. Each row has path, kind, mode, uid, gid, nlink and size; regular files
+add sha256, and links add link text. Check every row, type, size, digest and target.
 
-Select only paths equal to `Versions/3.14` or starting with `Versions/3.14/`.
-This retains 4,195 source entries: 458 directories, 3,702 files and 35 links,
+Select only paths equal to `Versions/3.15` or starting with `Versions/3.15/`.
+This retains 4,496 source entries: 527 directories, 3,934 files and 35 links,
 including every regular-file byte. Add only T and the fixed jq. The exact supplied
-set has 4,197 entries. Do not supply ROOT, Versions, top-level Current or root
+set has 4,498 entries. Do not supply ROOT, Versions, top-level Current or root
 aliases, and do not grant old siblings runtime authority.
 
 | Canonical data | SHA-256 |
 | --- | --- |
-| Selected source subset | `4da2fbc7b543eb3d990f429c0fe972669105abdbf9ce2b7c962b404c94f7cc27` |
-| Supply mode map | `a04635f441f9706f126986616fc0f648a757630aacd78fafb944bcc2166a8d19` |
-| Exact runtime expectation table | `ac527b61d0d7475d20a6e329b0b5f31e68635c7a73c93031b2b208b18ccd9c56` |
+| Selected source subset | `3176a7d3551aaa719fa8ed26964237d0d1771184c6ce7a5159bbf039e7816572` |
+| Supply mode map | `9184f6976c2be2e1430594adbb406293168c0201c849e31bfd671f2c8e83fb9e` |
+| Exact runtime expectation table | `d6a212cf50fd2593c75e8e011c321e65fa8609cce7add72e69d16ff0e78252c4` |
 
 Apply the new-object mode mapping below after this source binding. New objects
 must have UID 0; files and links must have nlink 1. Source gid, directory nlink
@@ -74,10 +77,12 @@ The old signed query is evidence of the delivery binding, not a reusable URL.
 Keep Python below 256 MiB, jq below 8 MiB and aggregate received bytes below
 280 MiB. Require the exact lengths and hashes above before parsing or supply.
 All requests, validation, staging and supply share the original five-minute
-preflight budget. Do not restart its clock. Phase-one source fetching is closed.
+preflight budget. Do not restart its clock. Both source-verification fetch phases
+are closed.
 
 Keep the accepted XAR signature/content and official release evidence. Validate
-the fixed archive and complete signed content records before extraction. Do not
+the exact compressed TOC RSA signature, decompressed TOC hash and all 28 XAR
+entries' archived and extracted checksums before parsing the standard payload. Do not
 convert the recorded pkgSign EKU failure into a successful policy check. The
 accepted offline basic chain and source digest do not claim online revocation,
 Sigstore or notarization acceptance. Do not fetch new trust material in the job.
@@ -137,7 +142,7 @@ their targets. No needed path may use a missing target.
    | --- | --- |
    | `/bin/mkdir -m 0755 V` | Create and journal the absent version root. |
    | `/bin/mkdir -m 0755 T` | Create and journal the absent tool root. |
-   | `/bin/cp -R -P -n STAGE/Versions/3.14/. V` | Copy only the verified version bytes into empty owned V. |
+   | `/bin/cp -R -P -n STAGE/Versions/3.15/. V` | Copy only the verified version bytes into empty owned V. |
    | `/bin/cp -R -P -n STAGE/ystack-private-tools/. T` | Copy only the fixed jq into empty owned T. |
    | `/bin/chmod -h 0755 LINK...` | Set only the 35 new manifest links themselves to the fixed mode. |
    | `/bin/rm -f -- LEAF...` | Remove only recorded owned regular files and links after identity checks. |
@@ -154,12 +159,13 @@ their targets. No needed path may use a missing target.
    runner limits unchanged. Set only these fixed child processes' umask to 022. Do not change the job mask, sudoers or host policy.
    Verify the resulting actual modes; the requested mask is not proof.
    No privileged shell, chown, installer, package script, compiler, relinker or
-   package manager is permitted.
-   Keep the original fixture's separately bounded account commands unchanged.
+   package manager is permitted for runtime supply. Keep the original fixture's
+   separately bounded account commands and approved `/usr/bin/cc` helper/native
+   builds unchanged. Add no compiler, SDK, source or administrator scope.
 5. After each successful copy, scan its destination within the same caps and
    journal every confirmed new identity before another write. Verify the exact
    subtree set, bytes, types, UID 0, nlink and actual ACLs; capture actual modes.
-   After both copies, require exactly all 4,197 entries. Existing parents remain
+   After both copies, require exactly all 4,498 entries. Existing parents remain
    separately authenticated and never enter the owned set. These scans record
    copy results, not runtime acceptance. A new manifest link may have a
    copy-created mode before chmod. Before changing it, require its held immutable
@@ -180,12 +186,34 @@ their targets. No needed path may use a missing target.
    Then pass its canonical physical target to the original physical checks.
    Reject loops, escapes, unlisted paths, changed identities and missing required
    targets. Keep the full lib/include scan, both startup images, shared Python
-   library, all 90 native images and every required load target. Preserve the
-   original native parser, system cache boundaries, size/count limits and final
-   source/identity rechecks. A path resolve alone grants no authority.
+   library, all 91 loadable x86_64 Mach-O images and every required load target.
+   The fixed inventory contains 90 x86_64/arm64 images and one x86_64-only image:
+   three executables, ten dylibs and 78 bundles. Keep x86_64 as the only execution
+   architecture. Require all 17 internal load edges within V, plus 117 system-library
+   edges and three `/usr/lib/dyld` edges. Preserve the original bounded native
+   parser controls, system cache boundaries and final source/identity rechecks.
+   A path resolve alone grants no authority.
+
+   Classify these three exact manifest-bound files as retained static data:
+
+   | Path relative to V | Required container |
+   | --- | --- |
+   | `Frameworks/Tcl.framework/Versions/9.0/libtclstub.a` | Fat x86_64/arm64 ar archives; two symbol indexes and ten MH_OBJECT members total. |
+   | `Frameworks/Tk.framework/Versions/9.0/libtkstub.a` | Fat x86_64/arm64 ar archives; two symbol indexes and four MH_OBJECT members total. |
+   | `lib/python3.15/config-3.15-darwin/python.o` | Fat x86_64/arm64 slices containing wrapped LLVM bitcode. |
+
+   Require exact file digests from the selected manifest before classification.
+   Check fat headers, unique declared architectures, nonoverlapping in-bounds
+   slices, ar headers and member bounds. Permit only the recorded symbol indexes
+   and MH_OBJECT members with no dynamic load commands. For the bitcode object,
+   check wrapper magic/version, payload bounds and bitcode magic in each slice.
+   Keep all parsing within the original file/object/depth/time caps. These data
+   files gain no load or execution authority. Unknown or malformed native images,
+   containers, slices or member kinds fail. Never bypass classification because a
+   name ends in `.a` or `.o`, and never treat a loadable image as static data.
 8. Enter the exact P with `-I -S -B` by the existing same-PID entry mechanism.
    Preserve the shared 120-second entry/guard deadline across this transition.
-   Require actual physical `sys.executable == P`, exact version 3.14.7 and at
+   Require actual physical `sys.executable == P`, exact version 3.15.0 and at
    least 3.11, unchanged PID, isolated flags, the fixed prefix/base_prefix and
    original closed startup paths. Never assign `sys.executable` or inject
    `__PYVENV_LAUNCHER__`. A mismatch remains a failure.
@@ -263,7 +291,8 @@ and cleanup sets. Cover failure between root creations and actual metadata recor
 Retain changed-held-identity, writable/ACL-path and bad startup identity/version/
 prefix/flags controls. Force each mandatory shell predicate to fail; test the tool
 predicate in all three positions of its AND-list, not just the final command.
-Keep the original cancellation and cleanup controls. Static models do not prove
+Cover unknown or malformed native containers and static data offered as a loaded
+image. Keep the original cancellation and cleanup controls. Static models do not prove
 Darwin ACL behavior or a real same-PID positive. Those require the actual approved
 Mac job and the unchanged complete suites. Preserve all failed controls.
 
