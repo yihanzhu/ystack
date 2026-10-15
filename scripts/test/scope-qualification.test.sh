@@ -84,7 +84,7 @@ if [ "${platform%%:*}" != Darwin ]; then
 fi
 
 authenticate_genuine_macos_python() {
-  [ "$1" = /Library/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python ] || return 1
+  [ "$1" = /Library/Frameworks/Python.framework/Versions/3.15/Resources/Python.app/Contents/MacOS/Python ] || return 1
   local mac_guard_file="$tmp/runtime-guard/guard.py"
   if [ ! -d "$tmp/runtime-guard" ]; then
     /bin/mkdir -m 700 "$tmp/runtime-guard" || return 1
@@ -113,13 +113,13 @@ deadline = time.monotonic() + 120 if stage == 'empty' else float(sys.argv[5])
 entry_pid = os.getpid() if stage == 'empty' else int(sys.argv[6])
 assert time.monotonic() < deadline <= time.monotonic() + 120
 fixed_root = Path('/Library/Frameworks/Python.framework')
-fixed_prefix = fixed_root / 'Versions/3.14'
+fixed_prefix = fixed_root / 'Versions/3.15'
 fixed_tools = fixed_root / 'ystack-private-tools'
 fixed_p = fixed_prefix / 'Resources/Python.app/Contents/MacOS/Python'
 if stage == 'real':
     assert os.getpid() == entry_pid
     assert sys.executable == os.path.realpath(sys.executable) == str(fixed_p)
-    assert sys.version_info[:3] == (3, 14, 7) and sys.version_info >= (3, 11)
+    assert sys.version_info[:3] == (3, 15, 0) and sys.version_info >= (3, 11)
     assert sys.prefix == sys.base_prefix == str(fixed_prefix)
     assert sys.flags.isolated and sys.flags.no_site and sys.flags.dont_write_bytecode
     assert all(Path(value).is_absolute() and (Path(value) == fixed_prefix or fixed_prefix in Path(value).parents)
@@ -148,7 +148,7 @@ print(json.dumps({'bootstrap_python': sys.executable, 'bootstrap_version': list(
     'selected_python': str(selected), 'candidate_executed': stage == 'real'}, sort_keys=True), file=sys.stderr)
 assert locator == selected == fixed_p
 prefix = fixed_prefix
-stdlib = prefix / 'lib/python3.14'
+stdlib = prefix / 'lib/python3.15'
 assert (stdlib / 'os.py').is_file() and (stdlib / 'encodings/__init__.py').is_file()
 assert not any(os.path.lexists(str(parent / 'pyvenv.cfg')) for parent in (selected.parent, prefix))
 assert not any(os.path.lexists(str(selected) + suffix) for suffix in ('._pth', '.zip'))
@@ -160,6 +160,9 @@ links = {}
 cache_paths = set()
 images = set()
 seen = set()
+native_inventory = {}
+static_paths = set()
+load_edges = set()
 ledger = FixtureDarwinLedger()
 fields = ('st_dev', 'st_ino', 'st_mode', 'st_uid', 'st_gid', 'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
 
@@ -202,7 +205,7 @@ def canonical_fixed(path):
         resolved.append(pending.pop(0))
         name = '/'.join(resolved)
         if name == 'Versions':
-            assert pending and pending[0] == '3.14'
+            assert pending and pending[0] == '3.15'
             continue
         assert name in manifest
         row = manifest[name]
@@ -218,7 +221,7 @@ def canonical_fixed(path):
             ctypes.set_errno(0)
             empty_acl(library.acl_get_link_np(os.fsencode(logical), 0x100))
             target = os.path.normpath(os.path.join(os.path.dirname(name), row['link']))
-            assert target == 'Versions/3.14' or target.startswith('Versions/3.14/')
+            assert target == 'Versions/3.15' or target.startswith('Versions/3.15/')
             links[str(logical)] = (identity(before), row['link'])
             assert identity(logical.lstat()) == identity(before) and os.readlink(logical) == row['link']
             parent.recheck('E_STALE')
@@ -249,28 +252,108 @@ def inspect(path, directory=False):
     finally:
         held.close()
 
-def native_dependencies(path, raw):
-    path = canonical_fixed(path)
-    # This fixture accepts only a bounded x86_64 Mach-O dependency closure.
+def native_slices(raw):
     magic = raw[:4]
-    if magic in (b'\xca\xfe\xba\xbe', b'\xca\xfe\xba\xbf'):
-        count = struct.unpack_from('>I', raw, 4)[0]
-        width = 20 if magic[-1] == 0xbe else 32
-        assert 0 < count <= 16 and 8 + count * width <= len(raw)
-        slices = []
-        for index in range(count):
-            values = struct.unpack_from('>IIIII' if width == 20 else '>IIQQII', raw, 8 + index * width)
-            if values[0] == 0x01000007:
-                offset, size = values[2:4]
-                assert offset + size <= len(raw)
-                slices.append(raw[offset:offset + size])
-        assert len(slices) == 1
-        raw = slices[0]
-        magic = raw[:4]
-    if magic != b'\xcf\xfa\xed\xfe':
-        assert path.suffix not in ('.so', '.dylib')
-        assert magic not in (b'\xfe\xed\xfa\xce', b'\xce\xfa\xed\xfe', b'\xfe\xed\xfa\xcf')
+    if magic == b'\xcf\xfa\xed\xfe':
+        header = struct.unpack_from('<8I', raw)
+        return [(header[1], header[2], raw)]
+    assert magic in (b'\xca\xfe\xba\xbe', b'\xca\xfe\xba\xbf')
+    count = struct.unpack_from('>I', raw, 4)[0]
+    width = 20 if magic[-1] == 0xbe else 32
+    assert 0 < count <= 16 and 8 + count * width <= len(raw)
+    slices = []
+    for index in range(count):
+        values = struct.unpack_from('>IIIII' if width == 20 else '>IIQQII', raw, 8 + index * width)
+        cpu, subtype, offset, size, alignment = values[:5]
+        assert alignment <= 31 and offset % (1 << alignment) == 0
+        assert width == 20 or values[5] == 0
+        assert offset >= 8 + count * width and size >= 32 and offset + size <= len(raw)
+        slices.append((cpu, subtype, offset, size))
+    assert len({value[0] for value in slices}) == count
+    ordered = sorted(slices, key=lambda value: value[2])
+    assert all(left[2] + left[3] <= right[2] for left, right in zip(ordered, ordered[1:]))
+    return [(cpu, subtype, raw[offset:offset + size]) for cpu, subtype, offset, size in slices]
+
+def static_data(name, raw, slices):
+    bindings = {
+        'Frameworks/Tcl.framework/Versions/9.0/libtclstub.a': ('74fd3db0166b27cbe6aeaa4ef642a2bcca7e68d2fec4c05467bf5c04978d0670',
+            ('tclStubLib.o', 'tclStubCall.o', 'tclStubLibTbl.o', 'tclTomMathStubLib.o', 'tclOOStubLib.o')),
+        'Frameworks/Tk.framework/Versions/9.0/libtkstub.a': ('c8fac1a39815dbe3ce300961ca125a196363354f0290ff21be65e7592349e935',
+            ('tkStubLib.o', 'ttkStubLib.o')),
+        'lib/python3.15/config-3.15-darwin/python.o': ('8c1ab81c7a71dbc98218a6ddf230353b2fcb73e51fdc3a0c9ec050ed461f7e21', None)}
+    if name not in bindings:
+        return False
+    digest, members = bindings[name]
+    assert hashlib.sha256(raw).hexdigest() == digest and len(slices) == 2
+    for cpu, subtype, body in slices:
+        assert time.monotonic() < deadline
+        if members is None:
+            magic, version, offset, size, wrapper_cpu = struct.unpack_from('<5I', body)
+            expected = (4888, 0x01000007) if cpu == 0x01000007 else (5252, 0xffffffff)
+            assert magic == 0x0b17c0de and version == 0 and offset == 20
+            assert (size, wrapper_cpu) == expected and offset + size <= len(body)
+            assert body[offset:offset + 4] == b'BC\xc0\xde'
+            continue
+        assert body[:8] == b'!<arch>\n'
+        offset, observed = 8, []
+        while offset < len(body):
+            assert time.monotonic() < deadline and len(observed) <= len(members)
+            header = body[offset:offset + 60]
+            assert len(header) == 60 and header[58:] == b'`\n'
+            size = int(header[48:58])
+            assert size >= 0 and offset + 60 + size + size % 2 <= len(body)
+            value = body[offset + 60:offset + 60 + size]
+            offset += 60 + size + size % 2
+            member = header[:16].decode('ascii').strip()
+            if member.startswith('#1/'):
+                length = int(member[3:])
+                assert 0 < length <= len(value)
+                member, value = value[:length].rstrip(b'\0').decode('ascii'), value[length:]
+            observed.append(member)
+            if member == '__.SYMDEF SORTED':
+                assert len(observed) == 1
+                continue
+            assert member in members and value[:4] == b'\xcf\xfa\xed\xfe'
+            mh = struct.unpack_from('<8I', value)
+            assert mh[1:4] == (cpu, subtype, 1) and mh[4] <= 4096
+            end, position = 32 + mh[5], 32
+            assert end <= len(value)
+            for _ in range(mh[4]):
+                command, length = struct.unpack_from('<II', value, position)
+                assert command in (0x19, 0x2, 0x32, 0x29)
+                assert length >= 8 and length % 8 == 0 and position + length <= end
+                position += length
+            assert position == end
+        assert offset == len(body) and observed == ['__.SYMDEF SORTED', *members]
+    return True
+
+def native_dependencies(path, raw, loaded=False):
+    path = canonical_fixed(path)
+    name = str(path.relative_to(prefix)) if path.is_relative_to(prefix) else None
+    magic = raw[:4]
+    if magic not in (b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe', b'\xca\xfe\xba\xbf'):
+        assert not loaded and path.suffix not in ('.so', '.dylib')
+        assert magic not in (b'\xfe\xed\xfa\xce', b'\xce\xfa\xed\xfe', b'\xfe\xed\xfa\xcf',
+                             b'\xde\xc0\x17\x0b', b'BC\xc0\xde') and not raw.startswith(b'!<arch>\n')
         return
+    slices = native_slices(raw)
+    if name is not None and len(slices) > 1:
+        assert {(cpu, subtype) for cpu, subtype, body in slices} == {(0x01000007, 3), (0x0100000c, 0)}
+    if static_data(name, raw, slices):
+        assert not loaded
+        static_paths.add(str(path))
+        return
+    assert all(body[:4] == b'\xcf\xfa\xed\xfe' for cpu, subtype, body in slices)
+    x86 = [body for cpu, subtype, body in slices if cpu == 0x01000007]
+    assert len(x86) == 1
+    if name is not None and len(slices) == 1:
+        assert name == 'bin/python3.15-intel64'
+    for cpu, subtype, body in slices:
+        mh = struct.unpack_from('<8I', body)
+        assert mh[1:3] == (cpu, subtype) and mh[3] in (2, 6, 8)
+    raw = x86[0]
+    if name is not None:
+        native_inventory[str(path)] = struct.unpack_from('<8I', raw)[3]
     header = struct.unpack_from('<8I', raw)
     assert header[1] == 0x01000007 and header[4] <= 4096
     end = 32 + header[5]
@@ -286,6 +369,8 @@ def native_dependencies(path, raw):
             encoded = raw[offset + name_offset:offset + size]
             assert b'\0' in encoded
             name = encoded.split(b'\0', 1)[0].decode('utf8')
+            if name is not None and path.is_relative_to(prefix):
+                load_edges.add((str(path), command, name))
             if command == 0xe:
                 assert name == '/usr/lib/dyld'
                 inspect(Path(name))
@@ -327,16 +412,16 @@ try:
     owned.append(manifest_held)
     manifest_held.recheck('E_INSTALL')
     manifest_raw = manifest_held.raw
-    assert hashlib.sha256(manifest_raw).hexdigest() == '34ab06f305b15a1772852ce9b814c2935f80917e9548d362fe43d36c0e1cf850'
+    assert hashlib.sha256(manifest_raw).hexdigest() == 'e0d204e2827885c5f2f4278e709981b7fc1e02424d3bfa5ae2ff2af789789d26'
     manifest_rows = json.loads(manifest_raw)
-    assert len(manifest_rows) == 4201
-    selected_rows = [row for row in manifest_rows if row['path'] == 'Versions/3.14' or row['path'].startswith('Versions/3.14/')]
-    assert len(selected_rows) == 4195 and c.digest(c.canonical(selected_rows)) == '4da2fbc7b543eb3d990f429c0fe972669105abdbf9ce2b7c962b404c94f7cc27'
+    assert len(manifest_rows) == 4502
+    selected_rows = [row for row in manifest_rows if row['path'] == 'Versions/3.15' or row['path'].startswith('Versions/3.15/')]
+    assert len(selected_rows) == 4496 and c.digest(c.canonical(selected_rows)) == '3176a7d3551aaa719fa8ed26964237d0d1771184c6ce7a5159bbf039e7816572'
     supply_rows = [dict(row, mode=row['kind'] | (0o755 if row['kind'] != stat.S_IFREG or row['mode'] & 0o111 else 0o644)) for row in selected_rows]
     supply_rows.extend([{'path': 'ystack-private-tools', 'kind': stat.S_IFDIR, 'mode': 0o40755},
         {'path': 'ystack-private-tools/jq', 'kind': stat.S_IFREG, 'mode': 0o100755, 'size': 864040,
          'sha256': '5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef'}])
-    assert c.digest(c.canonical(supply_rows)) == 'a04635f441f9706f126986616fc0f648a757630aacd78fafb944bcc2166a8d19'
+    assert c.digest(c.canonical(supply_rows)) == '9184f6976c2be2e1430594adbb406293168c0201c849e31bfd671f2c8e83fb9e'
     manifest = {}
     for row in supply_rows:
         value = {key: row[key] for key in ('kind', 'mode', 'size', 'sha256', 'link')
@@ -345,7 +430,7 @@ try:
         if row['kind'] != stat.S_IFDIR:
             value['nlink'] = 1
         manifest[row['path']] = value
-    assert len(manifest) == 4197 and c.digest(c.canonical(manifest)) == 'ac527b61d0d7475d20a6e329b0b5f31e68635c7a73c93031b2b208b18ccd9c56'
+    assert len(manifest) == 4498 and c.digest(c.canonical(manifest)) == 'd6a212cf50fd2593c75e8e011c321e65fa8609cce7add72e69d16ff0e78252c4'
     owner = None
     if stage == 'real':
         bootstrap = c._hold_bytes(sys.executable, c.EXECUTABLE_LIMIT)
@@ -369,7 +454,7 @@ try:
             inspect(item, item != locator)
     root = c._open_held(str(prefix), True, rule(), 'E_INSTALL')
     owned.append(root)
-    images.update((selected, prefix / 'bin/python3.14', prefix / 'Python'))
+    images.update((selected, prefix / 'bin/python3.15', prefix / 'Python'))
     observed = set()
     pending_tree = [fixed_prefix, fixed_tools]
     while pending_tree:
@@ -412,6 +497,12 @@ try:
                     if name != 'ystack-private-tools/jq':
                         native_dependencies(path, raw)
     assert observed == set(manifest)
+    assert len(native_inventory) == 91 and len(static_paths) == 3
+    assert [list(native_inventory.values()).count(kind) for kind in (2, 6, 8)] == [3, 10, 78]
+    assert sum(command == 0xe for source, command, name in load_edges) == 3
+    assert sum(name.startswith(str(prefix) + '/') for source, command, name in load_edges) == 17
+    assert sum(name.startswith(('/usr/lib/', '/System/Library/')) and command != 0xe
+               for source, command, name in load_edges) == 117
     directories = [prefix / 'lib', prefix / 'include']
     while directories:
         directory = directories.pop()
@@ -434,7 +525,7 @@ try:
         seen.add(path)
         raw = inspect(path)
         assert raw[:4] in (b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe', b'\xca\xfe\xba\xbf')
-        native_dependencies(path, raw)
+        native_dependencies(path, raw, True)
     for name, (before, _digest) in rows.items():
         assert time.monotonic() < deadline and identity(os.lstat(name)) == before
     assert all(not os.path.lexists(path) for path in cache_paths)
@@ -504,12 +595,12 @@ owned = []
 try:
     guard = c._hold_bytes(str(directory_path / 'guard.py'), c.EXECUTABLE_LIMIT)
     owned.append(guard)
-    assert hashlib.sha256(guard.raw).hexdigest() == 'd8737aa32fac4021e4ac13d217175a5591fd8a189b1a05e12802128a279d342f'
+    assert hashlib.sha256(guard.raw).hexdigest() == 'e6fb867d4cd7e0092fe5cc61050be3286f14279b8541f82d156dbd10f1b065b6'
     cache = Path(os.environ['YSTACK_PROOF_TMP'])
     assert cache.is_absolute() and cache.resolve() == cache
     manifest = c._hold_bytes(str(cache / 'manifest.json'), c.EXECUTABLE_LIMIT)
     owned.append(manifest)
-    assert hashlib.sha256(manifest.raw).hexdigest() == '34ab06f305b15a1772852ce9b814c2935f80917e9548d362fe43d36c0e1cf850'
+    assert hashlib.sha256(manifest.raw).hexdigest() == 'e0d204e2827885c5f2f4278e709981b7fc1e02424d3bfa5ae2ff2af789789d26'
     guard.recheck('E_STALE')
     manifest.recheck('E_STALE')
     directory = c._open_held(str(directory_path), True,
@@ -541,13 +632,13 @@ finally:
     c._close_paths(owned)
 PY_MAC_FIXED_MANIFEST
   fi
-  [ "$(sha256_path "$mac_guard_file")" = d8737aa32fac4021e4ac13d217175a5591fd8a189b1a05e12802128a279d342f ] || return 1
+  [ "$(sha256_path "$mac_guard_file")" = e6fb867d4cd7e0092fe5cc61050be3286f14279b8541f82d156dbd10f1b065b6 ] || return 1
   /usr/bin/python3 -I -S -B "$mac_guard_file" "$root" "$1" "$mac_guard_file" empty 0 0
 }
 
 run_validator() { PATH="$bin:/usr/bin:/bin" "$validator" validate "$1"; }
 if [ "${platform%%:*}" = Darwin ]; then
-  python_candidate=/Library/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python
+  python_candidate=/Library/Frameworks/Python.framework/Versions/3.15/Resources/Python.app/Contents/MacOS/Python
   python_candidate=$(authenticate_genuine_macos_python "$python_candidate") || fail 'fixed supplied runtime closure required'
   [ "$("$python_candidate" -I -S -B -c 'import sys
 from pathlib import Path
@@ -555,10 +646,10 @@ p = Path(sys.executable)
 print("selected_python=" + str(p) + " version=" + ".".join(map(str, sys.version_info[:3])),
       file=sys.stderr, flush=True)
 assert sys.version_info >= (3, 11)
-assert p == Path("/Library/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python")
-assert sys.version_info[:3] == (3, 14, 7)
+assert p == Path("/Library/Frameworks/Python.framework/Versions/3.15/Resources/Python.app/Contents/MacOS/Python")
+assert sys.version_info[:3] == (3, 15, 0)
 assert sys.flags.isolated and sys.flags.no_site and sys.flags.dont_write_bytecode
-prefix = Path("/Library/Frameworks/Python.framework/Versions/3.14")
+prefix = Path("/Library/Frameworks/Python.framework/Versions/3.15")
 assert p.resolve() == p and sys.prefix == sys.base_prefix == str(prefix)
 assert all(Path(value).is_absolute() and (Path(value) == prefix or prefix in Path(value).parents)
            for value in sys.path)
@@ -2886,7 +2977,7 @@ starts = [index for index, line in enumerate(source) if line == opening]
 stops = [index for index, line in enumerate(source) if line == closing]
 assert len(starts) == len(stops) == 1 and starts[0] < stops[0]
 body = b''.join(source[starts[0] + 1:stops[0]])
-assert hashlib.sha256(body).hexdigest() == 'd8737aa32fac4021e4ac13d217175a5591fd8a189b1a05e12802128a279d342f'
+assert hashlib.sha256(body).hexdigest() == 'e6fb867d4cd7e0092fe5cc61050be3286f14279b8541f82d156dbd10f1b065b6'
 compile(body, 'actual-runtime-guard', 'exec')
 assert Path(sys.argv[2]).read_bytes() == body
 Path(sys.argv[3]).write_bytes(body)
@@ -2917,8 +3008,8 @@ assert len(entry.encode()) <= 16 * 1024 * 1024
 assert os.getuid() == 0 and pwd.getpwnam(operator).pw_uid != 0
 assert base.resolve() == base and base.is_dir() and base.stat().st_uid == 0
 assert python.resolve() == python
-assert python == Path('/Library/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python')
-prefix = Path('/Library/Frameworks/Python.framework/Versions/3.14')
+assert python == Path('/Library/Frameworks/Python.framework/Versions/3.15/Resources/Python.app/Contents/MacOS/Python')
+prefix = Path('/Library/Frameworks/Python.framework/Versions/3.15')
 fixture = base / 'runtime-guard'
 assert not os.path.lexists(fixture)
 fixture.mkdir(mode=0o755)
@@ -2926,9 +3017,9 @@ fixture.chmod(0o755)
 copied = fixture / 'installation'
 copied.mkdir(mode=0o755)
 (copied / 'Versions').mkdir(mode=0o755)
-shutil.copytree(prefix, copied / 'Versions/3.14', symlinks=True)
+shutil.copytree(prefix, copied / 'Versions/3.15', symlinks=True)
 shutil.copytree(prefix.parent.parent / 'ystack-private-tools', copied / 'ystack-private-tools', symlinks=True)
-selected = copied / 'Versions/3.14/Resources/Python.app/Contents/MacOS/Python'
+selected = copied / 'Versions/3.15/Resources/Python.app/Contents/MacOS/Python'
 assert selected.read_bytes() == python.read_bytes()
 for path in (fixture, copied, *copied.rglob('*')):
     value = path.lstat()
@@ -3003,6 +3094,46 @@ program.write_text(wrapper_prefix)
 program.chmod(0o444)
 original_program = fixture / 'guard-original.py'
 guard_ast = ast.parse(guard)
+parser_functions = [node for node in guard_ast.body if isinstance(node, ast.FunctionDef)
+                    and node.name in ('native_slices', 'static_data', 'native_dependencies')]
+assert len(parser_functions) == 3
+parser_namespace = {'Path': Path, 'struct': struct, 'hashlib': hashlib, 'time': time,
+    'deadline': time.monotonic() + 120, 'prefix': copied / 'Versions/3.15',
+    'canonical_fixed': lambda path: path, 'static_paths': set()}
+exec(compile(ast.Module(body=parser_functions, type_ignores=[]), 'exact-native-format-controls', 'exec'), parser_namespace)
+for name in ('Frameworks/Tcl.framework/Versions/9.0/libtclstub.a',
+             'Frameworks/Tk.framework/Versions/9.0/libtkstub.a',
+             'lib/python3.15/config-3.15-darwin/python.o'):
+    path = copied / 'Versions/3.15' / name
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        before = os.fstat(fd)
+        assert stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and before.st_size <= 16 * 1024 * 1024
+        raw = bytearray()
+        while True:
+            block = os.read(fd, min(65536, 16 * 1024 * 1024 + 1 - len(raw)))
+            if not block:
+                break
+            raw.extend(block)
+            assert len(raw) <= 16 * 1024 * 1024
+        fields = ('st_dev', 'st_ino', 'st_mode', 'st_uid', 'st_gid', 'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+        assert all(getattr(before, key) == getattr(os.fstat(fd), key) == getattr(path.lstat(), key) for key in fields)
+    finally:
+        os.close(fd)
+    parser_namespace['native_dependencies'](path, bytes(raw))
+    malformed = bytearray(raw)
+    struct.pack_into('>I', malformed, 4, 0)
+    for label, candidate, data, loaded in (
+        ('loaded-static', path, bytes(raw), True),
+        ('unknown-static-path', path.parent / 'unlisted-native-container', bytes(raw), False),
+        ('malformed-fat', path, bytes(malformed), False)):
+        try:
+            parser_namespace['native_dependencies'](candidate, data, loaded)
+        except (AssertionError, ValueError, struct.error):
+            print('native-format refuses ' + label + ' ' + name, flush=True)
+        else:
+            raise AssertionError('native-format control accepted ' + label)
+assert len(parser_namespace['static_paths']) == 3
 imports = [node for node in guard_ast.body if isinstance(node, (ast.Import, ast.ImportFrom))]
 functions = [node for node in guard_ast.body if isinstance(node, ast.FunctionDef)]
 package_start = guard.decode().index('package = Path(sys.argv[1])')
@@ -3016,11 +3147,11 @@ except_start = guard.decode().index('except BaseException as error:', try_end)
 metadata_header = """locator = Path(sys.argv[2])
 selected = Path(os.path.realpath(str(locator)))
 fixed_root = selected.parents[6]
-fixed_prefix = fixed_root / 'Versions/3.14'
+fixed_prefix = fixed_root / 'Versions/3.15'
 fixed_tools = fixed_root / 'ystack-private-tools'
 fixed_p = selected
 prefix = fixed_prefix
-stdlib = prefix / 'lib/python3.14'
+stdlib = prefix / 'lib/python3.15'
 assert selected == prefix / 'Resources/Python.app/Contents/MacOS/Python'
 stage = 'real'
 deadline = time.monotonic() + 120
@@ -3032,7 +3163,7 @@ metadata_subject += '\n'.join(ast.get_source_segment(guard.decode(), node) for n
 metadata_try = guard.decode()[try_start:report_start]
 parser_boundary = "    for item in reversed((locator, *locator.parents)):\n"
 assert metadata_try.count(parser_boundary) == 1
-parser_control = """    parser_file = prefix / 'lib/python3.14/guard-untrusted.dylib'
+parser_control = """    parser_file = prefix / 'lib/python3.15/guard-untrusted.dylib'
     if os.path.lexists(parser_file):
         parser_held = c._hold_bytes(str(parser_file), c.EXECUTABLE_LIMIT)
         owned.append(parser_held)
@@ -3059,7 +3190,7 @@ assert metadata_subject.encode().count(boundary) == 1
 checkpoint = b"    print('HELD_READY', flush=True)\n    assert sys.stdin.buffer.read(1) == b'S'\n"
 sync_program.write_bytes(metadata_subject.encode().replace(boundary, checkpoint + boundary))
 sync_program.chmod(0o444)
-module = copied / 'Versions/3.14/lib/python3.14/os.py'
+module = copied / 'Versions/3.15/lib/python3.15/os.py'
 ancestor = selected.parent
 original_module = module.read_bytes()
 original_python = selected.read_bytes()

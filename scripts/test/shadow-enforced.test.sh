@@ -52,7 +52,7 @@ def extract_guard(held):
     assert len(starts) == len(stops) == 1 and starts[0] < stops[0]
     raw = b''.join(lines[starts[0] + 1:stops[0]])
     assert len(raw) <= c.EXECUTABLE_LIMIT
-    assert hashlib.sha256(raw).hexdigest() == 'd8737aa32fac4021e4ac13d217175a5591fd8a189b1a05e12802128a279d342f'
+    assert hashlib.sha256(raw).hexdigest() == 'e6fb867d4cd7e0092fe5cc61050be3286f14279b8541f82d156dbd10f1b065b6'
     held.recheck('E_STALE')
     return raw
 
@@ -142,7 +142,7 @@ def reader_controls(private, source_raw, manifest_raw):
             data_file(path, raw)
         try:
             held = c._hold_bytes(str(path), c.EXECUTABLE_LIMIT)
-            assert hashlib.sha256(held.raw).hexdigest() == '34ab06f305b15a1772852ce9b814c2935f80917e9548d362fe43d36c0e1cf850'
+            assert hashlib.sha256(held.raw).hexdigest() == 'e0d204e2827885c5f2f4278e709981b7fc1e02424d3bfa5ae2ff2af789789d26'
             held.recheck('E_STALE')
             accepted = True
         except (c.Refusal, AssertionError):
@@ -183,7 +183,7 @@ try:
     assert cache.is_absolute() and cache.resolve() == cache
     manifest = c._hold_bytes(str(cache / 'manifest.json'), c.EXECUTABLE_LIMIT)
     owned.append(manifest)
-    assert hashlib.sha256(manifest.raw).hexdigest() == '34ab06f305b15a1772852ce9b814c2935f80917e9548d362fe43d36c0e1cf850'
+    assert hashlib.sha256(manifest.raw).hexdigest() == 'e0d204e2827885c5f2f4278e709981b7fc1e02424d3bfa5ae2ff2af789789d26'
     manifest.recheck('E_STALE')
     reader_controls(private, script.raw, manifest.raw)
     parent = c._open_held(str(private), True,
@@ -206,7 +206,7 @@ try:
 finally:
     c._close_paths(owned)
 PY_MAC_NATIVE_GUARD
-  python_bin=/Library/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python
+  python_bin=/Library/Frameworks/Python.framework/Versions/3.15/Resources/Python.app/Contents/MacOS/Python
   mac_guard_file="$tmp/runtime-guard/guard.py"
   [ "$(/usr/bin/python3 -I -S -B "$mac_guard_file" "$root" "$python_bin" "$mac_guard_file" empty 0 0)" = "$python_bin" ] ||
     fail 'fixed supplied runtime closure required'
