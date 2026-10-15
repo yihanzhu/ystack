@@ -13,8 +13,8 @@ drafted: 2026-10-15
    and [existing-parent supplement](https://github.com/yihanzhu/ystack/issues/559#issuecomment-6189713897).
    Preserve the product and its acceptance standard. This implementation changes
    only `.github/workflows/scope-genuine-macos.yml` and its entry in
-   `ci/required-files.txt`. The separately accepted high-risk plan pins the exact
-   workflow, manifest, commands and cleanup before implementation.
+   `ci/required-files.txt`. The separately accepted high-risk plan fixes all
+   normative supply and proof requirements before implementation.
 
    | Fixed source | Accepted SHA-256 |
    | --- | --- |
@@ -192,10 +192,18 @@ drafted: 2026-10-15
 
 For the implementation PR: `review_size: standard`.
 
-The separately reviewed high-risk plan fixes the complete manifest, startup
-binding, immutable modes, permitted command paths/argv, source validation,
-deadline, cleanup and workflow bytes. Recheck patch context at the actual base.
-Do not implement before these items and their independent review are complete.
+The separately reviewed high-risk plan fixes all normative inputs before code:
+complete source and runtime manifests, startup binding, immutable modes, permitted
+command paths/argv, source validation, state transitions, deadlines, cleanup,
+workflow behavior and proof requirements. Recheck patch context at the actual
+base. Do not implement before these items and their independent review are complete.
+
+After implementation and before publication, independent review binds the actual
+workflow Git blob and SHA-256, plus the shared bootstrap entry/guard SHA-256s, to
+the exact candidate head and base. The separately accepted #541 high-risk plan
+must bind those exact shared bytes before either test fixture changes. Both
+artifact chains and the original exact-source proof gates remain required before
+the real Mac run.
 
 Protected publication produces main X. Merge X normally into the same #541
 implementation branch to produce H. Independently review H/X and all artifact and
