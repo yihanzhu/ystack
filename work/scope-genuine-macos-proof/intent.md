@@ -21,11 +21,21 @@ scope and native suites, and the disposable macOS runner and its owned fixture.
 ## Constraints
 
 - Follow the [approved conditional package and accepted source review](https://github.com/yihanzhu/ystack/issues/559#issuecomment-6180555883).
+  Apply the [approved existing-parent supplement](https://github.com/yihanzhu/ystack/issues/559#issuecomment-6189713897).
   Use only the fixed official Python 3.14.7 and original pinned jq 1.6 bytes.
-  Supply only an entirely absent `/Library/Frameworks/Python.framework` tree,
-  with jq inside that root. Authenticate its existing parent first. Do not repair
-  an existing runtime, overwrite old objects, run package scripts, alter binaries
+  Supply only the entirely absent `Versions/3.14` and `ystack-private-tools`
+  trees under `/Library/Frameworks/Python.framework`. Authenticate the existing
+  physical framework root, Versions directory and full parent chain first,
+  including held identity, ownership, mode and actual empty ACL checks.
+  Preserve old versions, top-level Current and root aliases. Do not traverse old
+  version contents or use old objects as runtime dependencies. Do not repair an
+  existing runtime, overwrite old objects, run package scripts, alter binaries
   or publisher links, or use another version, source, root or provider.
+- Limit existing-parent writes to adding and removing the two fixed child names
+  and their necessary directory metadata changes. Verify each exact change and
+  record the resulting real metadata; do not backdate it. Clean up only new trees
+  whose objects match the ownership journal. Extra, changed or unknown objects
+  block deletion. Preserve the old child names and stable safety attributes.
 - Complete this G1 amendment, G2 and a separate high-risk plan before implementation.
   The Mac workflow implementation changes only
   `.github/workflows/scope-genuine-macos.yml` and its `ci/required-files.txt` entry.
@@ -41,9 +51,10 @@ scope and native suites, and the disposable macOS runner and its owned fixture.
 - Keep both complete original suites and the 100-minute outer limit. Product
   deadlines and caps stay unchanged. Supply and clean up within the approved
   temporary job and its original budgets. Preserve all failures and unknowns.
-- Keep administrator actions within the approved new runtime root and disposable
-  fixture. Preserve distinct users and groups, the fixed anchor, derived owned
-  root, supplementary-only checks, and verified cleanup of every owned resource.
+- Keep administrator actions within the two approved new trees, their permitted
+  parent changes and the disposable fixture. Preserve distinct users and groups,
+  the fixed anchor, derived owned root, supplementary-only checks, and verified
+  cleanup of every owned resource.
   No VM, real publisher or production identity is allowed.
 - Publish through a protected PR, merge that main into the same implementation
   branch normally, then review the exact resulting head and base. Complete Linux
@@ -54,6 +65,6 @@ scope and native suites, and the disposable macOS runner and its owned fixture.
 
 ## Open questions
 
-The new root's availability, complete authenticated startup and actual Mac result
-remain to be established within the approved gates and real suites. A failed
-prerequisite does not authorize a replacement host, tool or proof.
+Safe existing parents, both new trees' absence, complete authenticated startup and
+the actual Mac result remain to be established within the approved gates and real
+suites. A failed prerequisite does not authorize a replacement host, tool or proof.

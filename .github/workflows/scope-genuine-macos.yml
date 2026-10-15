@@ -64,15 +64,22 @@ jobs:
           test -z "$(/usr/bin/git status --porcelain=v1)"
           /usr/bin/printf 'repo=1270665750 branch=ystack/impl/scope-gate-hardening issue=541 implementation_PR=558 candidate=%s\n' "$YSTACK_SELECTED_SHA"
           for tool in /bin/cat /usr/bin/shasum /usr/bin/awk /usr/bin/mktemp /usr/bin/python3 /usr/bin/openssl /usr/bin/security /usr/bin/git /usr/bin/cc /usr/bin/sudo /usr/bin/perl /usr/bin/dscl /usr/sbin/dseditgroup /usr/bin/stat /bin/chmod /usr/sbin/chown /bin/mkdir /bin/cp /bin/rm /usr/bin/id /usr/bin/false; do
-            test -f "$tool" && test ! -L "$tool" && test -x "$tool"
+            test -f "$tool"
+            test ! -L "$tool"
+            test -x "$tool"
           done
           native_p=/Library/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python
           test -z "${__PYVENV_LAUNCHER__+present}"
           for guard_variable in "${!DYLD_@}"; do test -z "$guard_variable"; done
           /usr/bin/sudo -n /usr/bin/true
-          test ! -e /Library/Frameworks/Python.framework && test ! -L /Library/Frameworks/Python.framework
-          test ! -e /usr/local/libexec/ystack-sandbox/v1/supervisor && test ! -L /usr/local/libexec/ystack-sandbox/v1/supervisor
-          test ! -e "/usr/local/libexec/ystack-scope-fixture.${YSTACK_SELECTED_SHA:0:8}" && test ! -L "/usr/local/libexec/ystack-scope-fixture.${YSTACK_SELECTED_SHA:0:8}"
+          test ! -e /Library/Frameworks/Python.framework/Versions/3.14
+          test ! -L /Library/Frameworks/Python.framework/Versions/3.14
+          test ! -e /Library/Frameworks/Python.framework/ystack-private-tools
+          test ! -L /Library/Frameworks/Python.framework/ystack-private-tools
+          test ! -e /usr/local/libexec/ystack-sandbox/v1/supervisor
+          test ! -L /usr/local/libexec/ystack-sandbox/v1/supervisor
+          test ! -e "/usr/local/libexec/ystack-scope-fixture.${YSTACK_SELECTED_SHA:0:8}"
+          test ! -L "/usr/local/libexec/ystack-scope-fixture.${YSTACK_SELECTED_SHA:0:8}"
           cache_root=$(/usr/bin/mktemp -d "$RUNNER_TEMP/ystack-mac-proof.XXXXXX")
           cache_root=$(CDPATH='' cd -P -- "$cache_root" && pwd -P)
           identity=$(/usr/bin/stat -f '%d:%i:%u' "$cache_root")
@@ -102,7 +109,10 @@ jobs:
           import zlib
 
           ROOT = Path('/Library/Frameworks/Python.framework')
-          P = ROOT / 'Versions/3.14/Resources/Python.app/Contents/MacOS/Python'
+          V = ROOT / 'Versions/3.14'
+          T = ROOT / 'ystack-private-tools'
+          TREES = (V, T)
+          P = V / 'Resources/Python.app/Contents/MacOS/Python'
           JQ = ROOT / 'ystack-private-tools/jq'
           FIELDS = ('st_dev', 'st_ino', 'st_mode', 'st_uid', 'st_gid', 'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
           PKG_SHA = '70c5239ad2d62925d2947e46921d0ddd3d35be3d2f0a2d50db33da507dbcb419'
@@ -116,8 +126,14 @@ jobs:
           started = time.monotonic()
           deadline = started + 270
           owned = []
+          staging = []
+          parents = {}
+          parent_records = {}
+          ancestors = {}
+          created = set()
           held = []
           shared_components = {}
+          journal = None
           commands = 0
           cancel_requested = 0
 
@@ -256,27 +272,89 @@ jobs:
                   raise SystemExit(128 + cancel_requested)
 
 
+          def in_trees(path):
+              return any(path == tree or tree in path.parents for tree in TREES)
+
+
+          def child_snapshot(record):
+              recheck_one(record)
+              children = {}
+              counted = len(owned) + len(ancestors) + sum(len(row['children']) for name, row in parents.items() if name != record[0])
+              with os.scandir(record[2]) as entries:
+                  for entry in entries:
+                      budget()
+                      name = entry.name
+                      assert name not in ('.', '..') and '/' not in name
+                      assert counted + len(children) < 16384
+                      before = os.stat(name, dir_fd=record[2], follow_symlinks=False)
+                      target = os.readlink(name, dir_fd=record[2]) if stat.S_ISLNK(before.st_mode) else None
+                      assert ident(os.stat(name, dir_fd=record[2], follow_symlinks=False)) == ident(before)
+                      children[name] = {'identity': ident(before), 'target': target}
+              recheck_one(record)
+              return children
+
+
+          def check_parents():
+              total = len(owned) + len(ancestors)
+              for name, expected in parents.items():
+                  record = parent_records[name]
+                  recheck_one(record)
+                  assert record[1] == expected['identity']
+                  actual = child_snapshot(record)
+                  new_names = {tree.name for tree in TREES if str(tree.parent) == name and str(tree) in created}
+                  assert set(actual) == set(expected['children']) | new_names
+                  assert {key: row for key, row in actual.items() if key not in new_names} == expected['children']
+                  total += len(expected['children'])
+              assert total <= 16384
+
+
+          def open_parents(saved=None, saved_ancestors=None):
+              for path in (ROOT, V.parent):
+                  record = physical(path, True)
+                  parent_records[str(path)] = record
+                  if saved is None:
+                      assert all(not os.path.lexists(tree) for tree in TREES)
+                      children = child_snapshot(record)
+                      parents[str(path)] = {'identity': record[1].copy(), 'children': children,
+                                            'original_names': sorted(children)}
+              if saved is not None:
+                  assert set(saved) == {str(ROOT), str(V.parent)}
+                  parents.update(saved)
+              for record in parent_records.values():
+                  for name, before, fd, edge, refs in record[3]:
+                      if name not in parents:
+                          ancestors[name] = before.copy()
+              if saved is not None:
+                  assert ancestors == saved_ancestors
+              check_parents()
+
+
           def mutation_names(argv):
               changes = {}
               if argv[:3] == ['/usr/bin/sudo', '-n', '/bin/mkdir']:
-                  assert argv[3:] == ['-m', '0755', str(ROOT)]
-                  changes[str(ROOT.parent)] = ({ROOT.name}, set())
+                  assert argv[3:5] == ['-m', '0755'] and len(argv) == 6
+                  path = Path(argv[5])
+                  assert path in TREES and str(path) not in created and not os.path.lexists(path)
+                  changes[str(path.parent)] = ({path.name}, set())
               elif argv[:3] == ['/usr/bin/sudo', '-n', '/bin/cp']:
-                  assert argv[3:] == ['-R', '-P', '-n', str(cache / 'stage') + '/.', str(ROOT)]
-                  additions = {row['path'].split('/')[0] for row in rows if row['path']}
-                  additions.add('ystack-private-tools')
-                  changes[str(ROOT)] = (additions, set())
+                  path = Path(argv[-1])
+                  assert path in TREES and str(path) in created
+                  relative = path.relative_to(ROOT)
+                  assert argv[3:] == ['-R', '-P', '-n', str(cache / 'stage' / relative) + '/.', str(path)]
+                  assert not os.listdir(path)
+                  changes[str(path)] = ({Path(name).parts[len(relative.parts)] for name in expected
+                                        if Path(name).is_relative_to(relative) and name != str(relative)}, set())
               elif argv[:3] == ['/usr/bin/sudo', '-n', '/bin/rm']:
-                  assert argv[3] in ('-f', '-d') and argv[4] == '--'
+                  assert argv[3] in ('-f', '-d') and argv[4] == '--' and 0 < len(argv[5:]) <= 128
                   for name in argv[5:]:
                       path = Path(name)
-                      assert path == ROOT or ROOT in path.parents
-                      parent = str(path.parent)
-                      if parent not in changes:
-                          changes[parent] = (set(), set())
-                      changes[parent][1].add(path.name)
+                      assert in_trees(path) and str(path) in created | {item['path'] for item in owned}
+                      changes.setdefault(str(path.parent), (set(), set()))[1].add(path.name)
               elif argv[:3] == ['/usr/bin/sudo', '-n', '/bin/chmod']:
                   assert argv[3:5] == ['-h', '0755'] and len(argv) == 6
+                  assert any(item['path'] == argv[5] and item['kind'] == 'link' for item in owned)
+              else:
+                  assert argv[0] != '/usr/bin/sudo'
               return changes
 
 
@@ -393,6 +471,9 @@ jobs:
               assert commands <= 256 and len(argv) <= 256
               assert sum(len(os.fsencode(arg)) + 1 for arg in argv) <= 65536
               recheck()
+              check_parents()
+              if journal is not None:
+                  assert journal_snapshot() == journal
               changes = mutation_names(argv)
               directories = held_directories()
               names_before = {}
@@ -402,6 +483,8 @@ jobs:
                   assert len(names) <= 16384 and not names & additions and removals <= names
                   names_before[path] = names
               output = bounded_command(argv, expected)
+              if journal is not None:
+                  assert journal_snapshot() == journal
               for path, (additions, removals) in changes.items():
                   assert set(os.listdir(directories[path][1])) == (names_before[path] | additions) - removals
               for record in held:
@@ -418,18 +501,53 @@ jobs:
                       ctypes.set_errno(0)
                       empty_acl(lib.acl_get_fd_np(fd, 0x100))
                       component[1][:] = after
+              if argv[:3] == ['/usr/bin/sudo', '-n', '/bin/mkdir']:
+                  created.add(argv[5])
+              if argv[:4] == ['/usr/bin/sudo', '-n', '/bin/rm', '-d']:
+                  created.difference_update(argv[5:])
+              for name in changes:
+                  if name in parents:
+                      parents[name]['identity'] = parent_records[name][1].copy()
+                      if name == str(V.parent):
+                          parents[str(ROOT)]['children']['Versions']['identity'] = parents[name]['identity'].copy()
               recheck()
+              check_parents()
               return output
 
 
+          def journal_snapshot():
+              path = cache / 'owned.json'
+              fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+              try:
+                  before = os.fstat(fd)
+                  assert stat.S_ISREG(before.st_mode) and before.st_uid == os.getuid() and before.st_nlink == 1
+                  assert 0 <= before.st_size <= 4 * 1024 * 1024
+                  raw = bytearray()
+                  while True:
+                      budget()
+                      block = os.read(fd, min(65536, 4 * 1024 * 1024 + 1 - len(raw)))
+                      if not block:
+                          break
+                      raw.extend(block)
+                      assert len(raw) <= 4 * 1024 * 1024
+                  assert ident(os.fstat(fd)) == ident(before) == ident(path.lstat())
+                  return ident(before), bytes(raw)
+              finally:
+                  os.close(fd)
+
+
           def save():
-              raw = canonical({'root': str(ROOT), 'objects': owned})
+              global journal
+              check_parents()
+              raw = canonical({'root': str(ROOT), 'objects': owned, 'parents': parents, 'created': sorted(created), 'ancestors': ancestors, 'staging': staging})
               assert len(raw) <= 4 * 1024 * 1024
               target = cache / 'owned.json'
               with target.open('wb') as output:
                   output.write(raw)
                   output.flush()
                   os.fsync(output.fileno())
+              journal = journal_snapshot()
+              assert journal[1] == raw
 
 
           def link(path, expected, writable=False):
@@ -447,23 +565,41 @@ jobs:
 
 
           def cleanup():
-              receipt = json.loads((cache / 'owned.json').read_bytes())
+              global journal
+              journal = journal_snapshot()
+              assert hashlib.sha256(journal[1]).hexdigest() == os.environ['YSTACK_RUNTIME_OWNED_SHA']
+              receipt = json.loads(journal[1])
+              assert len(receipt['staging']) <= 16384
+              for name, before in receipt['staging']:
+                  path = Path(name)
+                  assert path == cache / 'stage' or cache / 'stage' in path.parents
+                  assert ident(path.lstat()) == before
+              staging[:] = receipt['staging']
               assert receipt['root'] == str(ROOT) and len(receipt['objects']) <= 16384
               objects = {item['path']: item for item in receipt['objects']}
-              assert len(objects) == len(receipt['objects']) and str(ROOT) in objects
-              root_record = physical(ROOT, True)
-              assert root_record[1] == objects[str(ROOT)]['identity']
-              recheck_one(root_record)
-              close_physical(root_record)
+              assert len(objects) == len(receipt['objects'])
+              assert set(receipt['created']) <= {str(tree) for tree in TREES}
+              created.update(receipt['created'])
+              owned[:] = list(objects.values())
+              open_parents(receipt['parents'], receipt['ancestors'])
               actual = set()
-              for directory, dirs, files in os.walk(ROOT, followlinks=False):
-                  actual.add(directory)
-                  actual.update(str(Path(directory) / name) for name in dirs + files)
-                  assert len(actual) <= 16384
+              for tree in TREES:
+                  if str(tree) not in created:
+                      assert not os.path.lexists(tree)
+                      continue
+                  assert str(tree) in objects
+                  root_record = physical(tree, True)
+                  assert root_record[1] == objects[str(tree)]['identity']
+                  close_physical(root_record)
+                  for directory, dirs, files in os.walk(tree, followlinks=False):
+                      budget()
+                      actual.add(directory)
+                      actual.update(str(Path(directory) / name) for name in dirs + files)
+                      assert len(actual) + sum(len(row['children']) for row in parents.values()) <= 16384
               assert actual == set(objects)
               for name, item in objects.items():
                   path = Path(name)
-                  assert path == ROOT or ROOT in path.parents
+                  assert in_trees(path)
                   assert ident(path.lstat()) == item['identity']
               leaves = sorted(name for name, row in objects.items() if row['kind'] != 'directory')
               levels = sorted({len(Path(name).parts) for name, row in objects.items() if row['kind'] == 'directory'}, reverse=True)
@@ -472,12 +608,12 @@ jobs:
                   names = sorted(name for name, row in objects.items() if row['kind'] == 'directory' and len(Path(name).parts) == depth)
                   batches.extend((True, names[offset:offset + 128]) for offset in range(0, len(names), 128))
               for directory, names in batches:
-                  parents = {}
+                  batch_parents = {}
                   for name in names:
                       path = Path(name)
-                      if str(path.parent) not in parents:
-                          parents[str(path.parent)] = physical(path.parent, True)
-                          for component, before, fd, edge, refs in parents[str(path.parent)][3]:
+                      if str(path.parent) not in batch_parents:
+                          batch_parents[str(path.parent)] = physical(path.parent, True)
+                          for component, before, fd, edge, refs in batch_parents[str(path.parent)][3]:
                               if component in objects:
                                   assert before == objects[component]['identity']
                       assert ident(path.lstat()) == objects[name]['identity']
@@ -487,7 +623,8 @@ jobs:
                   for name in names:
                       assert not os.path.lexists(name)
                       del objects[name]
-                  for name, record in parents.items():
+                  owned[:] = list(objects.values())
+                  for name, record in batch_parents.items():
                       current = ident(os.fstat(record[2]))
                       assert current == ident(Path(name).lstat())
                       assert all(current[index] == record[1][index] for index in (0, 1, 2, 3, 4))
@@ -495,7 +632,11 @@ jobs:
                           objects[name]['identity'] = current
                       recheck_one(record)
                       close_physical(record)
-              assert not objects and not os.path.lexists(ROOT)
+                  save()
+              assert not objects and not created and all(not os.path.lexists(tree) for tree in TREES)
+              check_parents()
+              assert all(sorted(row['children']) == row['original_names'] for row in parents.values())
+              print(canonical({'cleanup': 'two-owned-trees-absent', 'parents': parents}).decode('ascii'))
 
 
           if len(sys.argv) == 3 and sys.argv[2] == '--cleanup':
@@ -676,18 +817,33 @@ jobs:
 
 
           try:
-              physical(ROOT.parent, True)
-              assert not os.path.lexists(ROOT)
+              open_parents()
+              save()
               pkg = fetch('https://www.python.org/ftp/python/3.14.7/python-3.14.7-macos11.pkg', 78557763, PKG_SHA)
               jq = fetch('https://github.com/jqlang/jq/releases/download/jq-1.6/jq-osx-amd64', 864040, JQ_SHA, True)
               rows, blobs = parse_cpio(parse_pkg(pkg))
               (cache / 'manifest.json').write_bytes(canonical(rows))
+              selected = [row for row in rows if row['path'] == 'Versions/3.14' or row['path'].startswith('Versions/3.14/')]
+              assert len(selected) == 4195 and hashlib.sha256(canonical(selected)).hexdigest() == '4da2fbc7b543eb3d990f429c0fe972669105abdbf9ce2b7c962b404c94f7cc27'
+              supply = [dict(row, mode=row['kind'] | (0o755 if row['kind'] != stat.S_IFREG or row['mode'] & 0o111 else 0o644)) for row in selected]
+              supply.extend([{'path': 'ystack-private-tools', 'kind': stat.S_IFDIR, 'mode': 0o40755},
+                             {'path': 'ystack-private-tools/jq', 'kind': stat.S_IFREG, 'mode': 0o100755, 'size': 864040, 'sha256': JQ_SHA}])
+              assert hashlib.sha256(canonical(supply)).hexdigest() == 'a04635f441f9706f126986616fc0f648a757630aacd78fafb944bcc2166a8d19'
+              expected = {row['path']: row for row in supply}
+              runtime = {}
+              for name, row in expected.items():
+                  value = {key: row[key] for key in ('kind', 'mode', 'size', 'sha256', 'link')
+                           if key in row and (key != 'size' or row['kind'] != stat.S_IFDIR)}
+                  value['uid'] = 0
+                  if row['kind'] != stat.S_IFDIR:
+                      value['nlink'] = 1
+                  runtime[name] = value
+              assert len(runtime) == 4197 and hashlib.sha256(canonical(runtime)).hexdigest() == 'ac527b61d0d7475d20a6e329b0b5f31e68635c7a73c93031b2b208b18ccd9c56'
               stage = cache / 'stage'
               stage.mkdir(mode=0o755)
-              for row in rows:
+              (stage / 'Versions').mkdir(mode=0o755)
+              for row in selected:
                   path = stage / row['path']
-                  if row['path'] == '':
-                      continue
                   assert path.parent.is_dir() and not path.parent.is_symlink()
                   if row['kind'] == stat.S_IFDIR:
                       path.mkdir(mode=0o755)
@@ -701,82 +857,83 @@ jobs:
               (stage / 'ystack-private-tools').mkdir(mode=0o755)
               (stage / 'ystack-private-tools/jq').write_bytes(jq)
               (stage / 'ystack-private-tools/jq').chmod(0o755)
-              for path in (stage, *(stage / row['path'] for row in rows if row['path']), stage / 'ystack-private-tools'):
+              for path in (stage, stage / 'Versions', *(stage / row['path'] for row in selected if row['path']), stage / 'ystack-private-tools'):
                   if path.is_dir() and not path.is_symlink():
                       path.chmod(0o755)
-              stage_rows = []
-              for row in rows:
+              stage_rows = [(str(path), ident(path.lstat())) for path in (stage, stage / 'Versions')]
+              for row in supply:
                   path = stage / row['path']
                   state = path.lstat()
                   assert stat.S_IFMT(state.st_mode) == row['kind'] and state.st_uid == os.getuid()
-                  assert not state.st_mode & 0o022
+                  assert state.st_mode == row['mode']
                   if row['kind'] == stat.S_IFREG:
                       assert state.st_nlink == 1 and hashlib.sha256(path.read_bytes()).hexdigest() == row['sha256']
                   elif row['kind'] == stat.S_IFLNK:
                       assert state.st_nlink == 1 and os.readlink(path) == row['link']
                   stage_rows.append((str(path), ident(state)))
-              recheck()
-              assert not os.path.lexists(ROOT)
-              run(['/usr/bin/sudo', '-n', '/bin/mkdir', '-m', '0755', str(ROOT)])
-              root = physical(ROOT, True)
-              assert not list(ROOT.iterdir())
-              owned.append({'path': str(ROOT), 'kind': 'directory', 'identity': root[1]})
+              staging[:] = stage_rows
               save()
-              run(['/usr/bin/sudo', '-n', '/bin/cp', '-R', '-P', '-n', str(stage) + '/.', str(ROOT)])
-
-              assert all(ident(os.lstat(name)) == state for name, state in stage_rows)
-              expected = {row['path']: row for row in rows}
-              expected['ystack-private-tools'] = {'kind': stat.S_IFDIR, 'mode': 0o40755}
-              expected['ystack-private-tools/jq'] = {'kind': stat.S_IFREG, 'mode': 0o100755, 'size': 864040, 'sha256': JQ_SHA}
-              found = set()
-              pending = [ROOT]
-              copied = []
-              while pending:
-                  directory = pending.pop()
-                  relative = str(directory.relative_to(ROOT))
-                  relative = '' if relative == '.' else relative
-                  assert relative in expected and relative not in found
-                  found.add(relative)
-                  record = physical(directory, True)
-                  assert stat.S_IMODE(record[1][2]) == 0o755
-                  copied.append({'path': str(directory), 'kind': 'directory', 'identity': record[1]})
-                  recheck_one(record)
-                  close_physical(record)
-                  with os.scandir(directory) as entries:
-                      for entry in entries:
-                          budget()
-                          name = str(Path(entry.path).relative_to(ROOT))
-                          assert name in expected and len(found) + len(pending) <= 16384
-                          row = expected[name]
-                          path = Path(entry.path)
-                          if row['kind'] == stat.S_IFDIR:
-                              pending.append(path)
-                              continue
-                          assert name not in found
-                          found.add(name)
-                          if row['kind'] == stat.S_IFLNK:
-                              before = link(path, row['link'], True)
-                              copied.append({'path': str(path), 'kind': 'link', 'identity': before, 'target': row['link']})
-                          else:
-                              record = physical(path)
-                              assert stat.S_IMODE(record[1][2]) == (0o755 if row['mode'] & 0o111 else 0o644)
-                              data = bytearray()
-                              while True:
-                                  budget()
-                                  block = os.read(record[2], 65536)
-                                  if not block:
-                                      break
-                                  data.extend(block)
-                                  assert len(data) <= 16 * 1024 * 1024
-                              assert len(data) == row['size'] and hashlib.sha256(data).hexdigest() == row['sha256']
-                              assert ident(os.fstat(record[2])) == record[1] == ident(path.lstat())
-                              copied.append({'path': str(path), 'kind': 'file', 'identity': record[1]})
-                              recheck_one(record)
-                              close_physical(record)
-              assert found == set(expected) and len(copied) == 4203
-              assert ident(ROOT.lstat())[:6] == ident(os.fstat(root[2]))[:6]
-              owned[:] = copied
-              save()
+              for tree in TREES:
+                  assert all(ident(os.lstat(name)) == state for name, state in stage_rows)
+                  recheck()
+                  check_parents()
+                  assert not os.path.lexists(tree)
+                  run(['/usr/bin/sudo', '-n', '/bin/mkdir', '-m', '0755', str(tree)])
+                  root = physical(tree, True)
+                  assert not os.listdir(root[2])
+                  owned.append({'path': str(tree), 'kind': 'directory', 'identity': root[1]})
+                  save()
+                  run(['/usr/bin/sudo', '-n', '/bin/cp', '-R', '-P', '-n', str(stage / tree.relative_to(ROOT)) + '/.', str(tree)])
+                  assert all(ident(os.lstat(name)) == state for name, state in stage_rows)
+                  subset = {name: row for name, row in expected.items() if ROOT / name == tree or tree in (ROOT / name).parents}
+                  found = set()
+                  pending = [tree]
+                  copied = []
+                  while pending:
+                      directory = pending.pop()
+                      relative = str(directory.relative_to(ROOT))
+                      assert relative in subset and relative not in found
+                      found.add(relative)
+                      record = physical(directory, True)
+                      assert stat.S_IMODE(record[1][2]) == 0o755
+                      copied.append({'path': str(directory), 'kind': 'directory', 'identity': record[1]})
+                      recheck_one(record)
+                      close_physical(record)
+                      with os.scandir(directory) as entries:
+                          for entry in entries:
+                              budget()
+                              name = str(Path(entry.path).relative_to(ROOT))
+                              assert name in subset and len(found) + len(pending) + len(owned) + sum(len(row['children']) for row in parents.values()) <= 16384
+                              row = subset[name]
+                              path = Path(entry.path)
+                              if row['kind'] == stat.S_IFDIR:
+                                  pending.append(path)
+                                  continue
+                              assert name not in found
+                              found.add(name)
+                              if row['kind'] == stat.S_IFLNK:
+                                  before = link(path, row['link'], True)
+                                  copied.append({'path': str(path), 'kind': 'link', 'identity': before, 'target': row['link']})
+                              else:
+                                  record = physical(path)
+                                  assert stat.S_IMODE(record[1][2]) == (0o755 if row['mode'] & 0o111 else 0o644)
+                                  data = bytearray()
+                                  while True:
+                                      budget()
+                                      block = os.read(record[2], 65536)
+                                      if not block:
+                                          break
+                                      data.extend(block)
+                                      assert len(data) <= 16 * 1024 * 1024
+                                  assert len(data) == row['size'] and hashlib.sha256(data).hexdigest() == row['sha256']
+                                  assert ident(os.fstat(record[2])) == record[1] == ident(path.lstat())
+                                  copied.append({'path': str(path), 'kind': 'file', 'identity': record[1]})
+                                  recheck_one(record)
+                                  close_physical(record)
+                  assert found == set(subset) and len(copied) == len(subset)
+                  owned[:] = [item for item in owned if item['path'] != str(tree)] + copied
+                  save()
+              assert len(owned) == 4197
               for item in owned:
                   if item['kind'] != 'link':
                       continue
@@ -829,6 +986,7 @@ jobs:
           assert time.monotonic() < deadline <= time.monotonic() + 120
           fixed_root = Path('/Library/Frameworks/Python.framework')
           fixed_prefix = fixed_root / 'Versions/3.14'
+          fixed_tools = fixed_root / 'ystack-private-tools'
           fixed_p = fixed_prefix / 'Resources/Python.app/Contents/MacOS/Python'
           if stage == 'real':
               assert os.getpid() == entry_pid
@@ -905,7 +1063,7 @@ jobs:
               if path != fixed_root and fixed_root not in path.parents:
                   return path
               relative = str(path.relative_to(fixed_root))
-              if relative == '.':
+              if relative == '.' or path == fixed_root / 'Versions':
                   return path
               pending = relative.split('/')
               resolved = []
@@ -915,6 +1073,9 @@ jobs:
                   assert steps <= 128 and time.monotonic() < deadline
                   resolved.append(pending.pop(0))
                   name = '/'.join(resolved)
+                  if name == 'Versions':
+                      assert pending and pending[0] == '3.14'
+                      continue
                   assert name in manifest
                   row = manifest[name]
                   if row['kind'] != stat.S_IFLNK:
@@ -929,7 +1090,7 @@ jobs:
                       ctypes.set_errno(0)
                       empty_acl(library.acl_get_link_np(os.fsencode(logical), 0x100))
                       target = os.path.normpath(os.path.join(os.path.dirname(name), row['link']))
-                      assert target != '..' and not target.startswith('../') and not target.startswith('/')
+                      assert target == 'Versions/3.14' or target.startswith('Versions/3.14/')
                       links[str(logical)] = (identity(before), row['link'])
                       assert identity(logical.lstat()) == identity(before) and os.readlink(logical) == row['link']
                       parent.recheck('E_STALE')
@@ -1041,11 +1202,22 @@ jobs:
               assert hashlib.sha256(manifest_raw).hexdigest() == '34ab06f305b15a1772852ce9b814c2935f80917e9548d362fe43d36c0e1cf850'
               manifest_rows = json.loads(manifest_raw)
               assert len(manifest_rows) == 4201
-              manifest = {row['path']: row for row in manifest_rows}
-              assert len(manifest) == len(manifest_rows)
-              manifest['ystack-private-tools'] = {'kind': stat.S_IFDIR, 'mode': 0o40755}
-              manifest['ystack-private-tools/jq'] = {'kind': stat.S_IFREG, 'mode': 0o100755,
-                  'size': 864040, 'sha256': '5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef'}
+              selected_rows = [row for row in manifest_rows if row['path'] == 'Versions/3.14' or row['path'].startswith('Versions/3.14/')]
+              assert len(selected_rows) == 4195 and c.digest(c.canonical(selected_rows)) == '4da2fbc7b543eb3d990f429c0fe972669105abdbf9ce2b7c962b404c94f7cc27'
+              supply_rows = [dict(row, mode=row['kind'] | (0o755 if row['kind'] != stat.S_IFREG or row['mode'] & 0o111 else 0o644)) for row in selected_rows]
+              supply_rows.extend([{'path': 'ystack-private-tools', 'kind': stat.S_IFDIR, 'mode': 0o40755},
+                  {'path': 'ystack-private-tools/jq', 'kind': stat.S_IFREG, 'mode': 0o100755, 'size': 864040,
+                   'sha256': '5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef'}])
+              assert c.digest(c.canonical(supply_rows)) == 'a04635f441f9706f126986616fc0f648a757630aacd78fafb944bcc2166a8d19'
+              manifest = {}
+              for row in supply_rows:
+                  value = {key: row[key] for key in ('kind', 'mode', 'size', 'sha256', 'link')
+                           if key in row and (key != 'size' or row['kind'] != stat.S_IFDIR)}
+                  value['uid'] = 0
+                  if row['kind'] != stat.S_IFDIR:
+                      value['nlink'] = 1
+                  manifest[row['path']] = value
+              assert len(manifest) == 4197 and c.digest(c.canonical(manifest)) == 'ac527b61d0d7475d20a6e329b0b5f31e68635c7a73c93031b2b208b18ccd9c56'
               owner = None
               if stage == 'real':
                   bootstrap = c._hold_bytes(sys.executable, c.EXECUTABLE_LIMIT)
@@ -1071,9 +1243,13 @@ jobs:
               owned.append(root)
               images.update((selected, prefix / 'bin/python3.14', prefix / 'Python'))
               observed = set()
-              pending_tree = [fixed_root]
+              pending_tree = [fixed_prefix, fixed_tools]
               while pending_tree:
                   directory = pending_tree.pop()
+                  name = str(directory.relative_to(fixed_root))
+                  assert name in manifest and name not in observed
+                  observed.add(name)
+                  assert directory.lstat().st_mode == manifest[name]['mode']
                   inspect(directory, True)
                   with os.scandir(str(directory)) as entries:
                       for entry in entries:
@@ -1081,14 +1257,6 @@ jobs:
                           path = Path(entry.path)
                           name = str(path.relative_to(fixed_root))
                           assert name not in observed
-                          observed.add(name)
-                          if name == 'ystack-private-tools':
-                              assert entry.is_dir(follow_symlinks=False)
-                              pending_tree.append(path)
-                              continue
-                          if name == 'ystack-private-tools/jq':
-                              assert hashlib.sha256(inspect(path)).hexdigest() == '5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef'
-                              continue
                           assert name in manifest
                           row = manifest[name]
                           before = path.lstat()
@@ -1096,6 +1264,7 @@ jobs:
                           if row['kind'] == stat.S_IFDIR:
                               pending_tree.append(path)
                           elif row['kind'] == stat.S_IFLNK:
+                              observed.add(name)
                               parent = c._open_held(str(path.parent), True, rule(), 'E_INSTALL')
                               try:
                                   assert before.st_uid == 0 and before.st_nlink == 1 and not before.st_mode & 0o022
@@ -1108,11 +1277,13 @@ jobs:
                               finally:
                                   parent.close()
                           else:
+                              observed.add(name)
                               raw = inspect(path)
                               assert len(raw) == row['size'] and hashlib.sha256(raw).hexdigest() == row['sha256']
                               assert stat.S_IMODE(before.st_mode) == (0o755 if row['mode'] & 0o111 else 0o644)
-                              native_dependencies(path, raw)
-              assert observed == (set(manifest) - {''}) | {'ystack-private-tools', 'ystack-private-tools/jq'}
+                              if name != 'ystack-private-tools/jq':
+                                  native_dependencies(path, raw)
+              assert observed == set(manifest)
               directories = [prefix / 'lib', prefix / 'include']
               while directories:
                   directory = directories.pop()
@@ -1260,18 +1431,23 @@ jobs:
         run: |
           set -euo pipefail
           if [ -n "${YSTACK_PROOF_TMP:-}" ]; then
-            test -d "$YSTACK_PROOF_TMP" && test ! -L "$YSTACK_PROOF_TMP"
+            test -d "$YSTACK_PROOF_TMP"
+            test ! -L "$YSTACK_PROOF_TMP"
             test "$(/usr/bin/stat -f '%d:%i:%u' "$YSTACK_PROOF_TMP")" = "$YSTACK_PROOF_TMP_ID"
             if [ -e "$YSTACK_PROOF_TMP/owned.json" ]; then
               [[ "${YSTACK_RUNTIME_OWNED_SHA:-}" =~ ^[0-9a-f]{64}$ ]]
               test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/owned.json" | /usr/bin/awk '{print $1}')" = "$YSTACK_RUNTIME_OWNED_SHA"
-              test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 0a58ee47d0263edd529c734eacbe0104accad7f8cee1259989ccc1d99285ce76
+              test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = ae7c2d39d74678733b46a5c536d2b47b83380d4795cf78c7f5d7dd2c77721b1c
               /usr/bin/python3 -I -S -B "$YSTACK_PROOF_TMP/provision.py" "$YSTACK_PROOF_TMP" --cleanup
             else
-              test ! -e /Library/Frameworks/Python.framework && test ! -L /Library/Frameworks/Python.framework
+              test ! -e /Library/Frameworks/Python.framework/Versions/3.14
+              test ! -L /Library/Frameworks/Python.framework/Versions/3.14
+              test ! -e /Library/Frameworks/Python.framework/ystack-private-tools
+              test ! -L /Library/Frameworks/Python.framework/ystack-private-tools
             fi
             /bin/rm -rf -- "$YSTACK_PROOF_TMP"
-            test ! -e "$YSTACK_PROOF_TMP" && test ! -L "$YSTACK_PROOF_TMP"
+            test ! -e "$YSTACK_PROOF_TMP"
+            test ! -L "$YSTACK_PROOF_TMP"
           fi
           [[ "$YSTACK_SELECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$YSTACK_SELECTED_SHA" = "$GITHUB_SHA"
