@@ -20,10 +20,10 @@ scope and native suites, and the disposable macOS runner and its owned fixture.
 
 ## Constraints
 
-- Follow the [approved conditional package and accepted source review](https://github.com/yihanzhu/ystack/issues/559#issuecomment-6180555883).
+- Follow the [approved fixed 3.15 supplement and accepted source review](https://github.com/yihanzhu/ystack/issues/559#issuecomment-6203606687).
   Apply the [approved existing-parent supplement](https://github.com/yihanzhu/ystack/issues/559#issuecomment-6189713897).
-  Use only the fixed official Python 3.14.7 and original pinned jq 1.6 bytes.
-  Supply only the entirely absent `Versions/3.14` and `ystack-private-tools`
+  Use only the fixed official Python 3.15.0 and original pinned jq 1.6 bytes.
+  Supply only the entirely absent `Versions/3.15` and `ystack-private-tools`
   trees under `/Library/Frameworks/Python.framework`. Authenticate the existing
   physical framework root, Versions directory and full parent chain first,
   including held identity, ownership, mode and actual empty ACL checks.
