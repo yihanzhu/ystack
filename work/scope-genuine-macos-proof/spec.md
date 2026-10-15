@@ -1,7 +1,7 @@
 ---
-intent-blob: 154befc5159f96c49823fb36f949525a5e09b4ac
+intent-blob: 7b38be231a975a16133d16a987539ac1061352da
 risk: high
-drafted: 2026-10-14
+drafted: 2026-10-15
 ---
 
 # Spec: Provide the bounded macOS scope proof environment
@@ -9,15 +9,17 @@ drafted: 2026-10-14
 ## Requirements
 
 1. Provide the manual proof environment for #541 under the
-   [directly approved conditional supply](https://github.com/yihanzhu/ystack/issues/559#issuecomment-6180555883).
+   [directly approved conditional supply](https://github.com/yihanzhu/ystack/issues/559#issuecomment-6180555883)
+   and [existing-parent supplement](https://github.com/yihanzhu/ystack/issues/559#issuecomment-6189713897).
    Preserve the product and its acceptance standard. This implementation changes
    only `.github/workflows/scope-genuine-macos.yml` and its entry in
-   `ci/required-files.txt`. The separately accepted high-risk plan pins the exact
-   workflow, manifest, commands and cleanup before implementation.
+   `ci/required-files.txt`. The separately accepted high-risk plan fixes all
+   normative supply and proof requirements before implementation.
 
    | Fixed source | Accepted SHA-256 |
    | --- | --- |
    | Conditional decision | `7206ddb285720163917b4f0c7a710ec278b9b1992f88436cff9fbda18404d4bd` |
+   | Existing-parent supplement | `d811e67bf53b8bcbd0417d5db686c297adbe325c47de3ab048d92bdfeead4880` |
    | Python 3.14.7 official macOS pkg | `70c5239ad2d62925d2947e46921d0ddd3d35be3d2f0a2d50db33da507dbcb419` |
    | Original jq 1.6 Mac artifact | `5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef` |
 
@@ -50,9 +52,33 @@ drafted: 2026-10-14
    Do not call the recorded pkgSign EKU rejection a pass. Basic trust does not
    prove installer-policy, online revocation, Sigstore or notarization acceptance.
 
-   The sole root is an entirely absent `/Library/Frameworks/Python.framework`.
-   Authenticate the existing parent and ancestors first. Do not create or repair
-   a parent, replace any existing object, or add a version to an existing framework.
+   Supply only two entirely absent trees under the existing physical root
+   `/Library/Frameworks/Python.framework`: `Versions/3.14` and
+   `ystack-private-tools`. Authenticate that root, its physical Versions directory
+   and every physical ancestor with held NOFOLLOW descriptors, exact named identity,
+   UID 0, non-group/other-writable modes and actual empty ACLs. Unknown ACLs fail.
+   Do not create, chmod, chown or repair an existing parent. Require both targets
+   absent before supply and each absent again before its root is created. Any
+   existing object, including a dangling link, fails. After creation, authenticate
+   its recorded owned identity before each write.
+
+   Verify the full 4,201-entry source manifest first. Supply only its 4,195 entries
+   at `Versions/3.14` or below, plus the private tools directory and jq: exactly
+   4,197 entries. Preserve their bytes and link text. Scan these two new trees for
+   an exact set match; do not ignore extras or admit old siblings to the runtime.
+   The high-risk plan fixes the source subset, mode map and runtime expectation
+   table. Keep old versions, top-level Current and root aliases unchanged.
+   Do not traverse old version contents or use those old objects as dependencies.
+
+   Read only bounded direct child names and lstat/link metadata of the existing
+   parents to bind their original sets. Before every command, recheck the held
+   parents and recorded sets. Only direct mkdir/rmdir of a fixed new root may change
+   its parent's child set and size, nlink, mtime_ns or ctime_ns. Require the exact
+   child delta and unchanged dev/ino/type/uid/gid/mode/actual ACL before recording
+   the new set and actual fields. Failed or unknown actions cannot justify
+   rebinding. Other ancestors remain unchanged. Never backdate metadata. These checks share
+   the original object, depth, output and deadline limits.
+
    Use only the accepted manifest and bounded mkdir/cp/chmod/rm commands for new
    owned objects. Do not use chown, a privileged shell, a package manager, scripts,
    compilation, binary rewriting or relinking. Check copied bytes against the
@@ -103,7 +129,7 @@ drafted: 2026-10-14
    Preserve physical single-link ownership, actual version `jq-1.6` and fixed
    digest checks. Prefill the native suite cache only in a new job-owned temporary
    directory. Verify copied bytes and preserve identity-checked cache cleanup.
-   Do not follow the preinstalled jq link or create a second supply root.
+   Do not follow the preinstalled jq link or select another tool path.
 
    Keep the original distinct writer and consumer, supplementary-only shared
    group, actual UUID/ACL, store, Git and evidence APIs. Derive TOKEN from H's first
@@ -112,6 +138,9 @@ drafted: 2026-10-14
    `/usr/local/libexec/ystack-sandbox/v1/supervisor`. Keep unused-ID selection within
    56000–56999, absence checks, account journal and verified reverse cleanup.
    Never replace an existing anchor. Cache cleanup cannot prove fixture cleanup.
+   Every required anchor, fixture, tool, cache and cleanup predicate must reject
+   failure in every shell control-flow position. Do not rely on `set -e` in an
+   AND-list or conditional to enforce a mandatory check.
 
 7. Run both complete original commands at H, in order:
 
@@ -128,15 +157,28 @@ drafted: 2026-10-14
    Preserve every assertion, product deadline, cancellation/reap rule and byte/row
    cap. The temporary supply and cleanup fit these original budgets.
 
-   Track every new root, directory and file by the accepted manifest and actual
-   owned identity. Clean them and the original fixture/cache on success or failure.
-   Changed or unknown identity forbids broader deletion. Timeout, interruption,
-   refusal, suite failure or incomplete cleanup gives no successful proof.
-   An ephemeral host does not itself prove cleanup.
+   Journal each created root and confirmed new directory, file and link by its
+   accepted manifest and actual owned identity. Recheck the journal and held
+   parents before each write. Clean owned objects and the original fixture/cache
+   on success or failure, including failure between the two root creations.
+   Before cleanup, require the exact set and identities in each created tree;
+   an uncreated tree must remain absent. Partial copies with unrecorded objects,
+   extras or changed/unknown identity forbid broader deletion and keep cleanup
+   UNKNOWN. Never infer ownership from a path or UID alone.
+
+   Delete recorded leaves, then empty directories, stopping at the two new roots.
+   Never delete an existing parent, old version, Current or root alias. Do not use
+   recursive force deletion on either supply tree. Successful cleanup proves both
+   absent and the original child sets and stable safety fields preserved. Record the existing
+   parents' real metadata after known cleanup; do not claim it all returned to its
+   original values. Timeout, interruption, refusal, suite failure or incomplete
+   cleanup gives no successful proof. An ephemeral host does not prove cleanup.
 
 8. Accept publication only after exact-base patch/manifest validation, workflow
    and embedded shell/Python static checks, required repository CI and independent
-   review. Actual Mac proof follows at freshly reviewed H/X. Read complete results
+   review. Regression checks cover unsafe or changed parents, existing targets,
+   wrong sets, preserved old objects, partial copy/cleanup and required shell
+   predicate failures. Actual Mac proof follows at freshly reviewed H/X. Read complete results
    and cleanup with the same-head complete Linux matrix before #541 G3.
    Publication or source review does not close #541 or establish native/CPU-wall
    qualification. Production identities stay empty.
@@ -150,10 +192,18 @@ drafted: 2026-10-14
 
 For the implementation PR: `review_size: standard`.
 
-The separately reviewed high-risk plan fixes the complete manifest, startup
-binding, immutable modes, permitted command paths/argv, source validation,
-deadline, cleanup and workflow bytes. Recheck patch context at the actual base.
-Do not implement before these items and their independent review are complete.
+The separately reviewed high-risk plan fixes all normative inputs before code:
+complete source and runtime manifests, startup binding, immutable modes, permitted
+command paths/argv, source validation, state transitions, deadlines, cleanup,
+workflow behavior and proof requirements. Recheck patch context at the actual
+base. Do not implement before these items and their independent review are complete.
+
+After implementation and before publication, independent review binds the actual
+workflow Git blob and SHA-256, plus the shared bootstrap entry/guard SHA-256s, to
+the exact candidate head and base. The separately accepted #541 high-risk plan
+must bind those exact shared bytes before either test fixture changes. Both
+artifact chains and the original exact-source proof gates remain required before
+the real Mac run.
 
 Protected publication produces main X. Merge X normally into the same #541
 implementation branch to produce H. Independently review H/X and all artifact and
@@ -178,8 +228,8 @@ actions. Keep the artifact chain, separate authors/reviewers, required CI, round
 cap and protected publishing. Authority remains limited to this repository,
 manager, fixed source and disposable job.
 
-The source review accepts static feasibility only. Root absence, parent trust,
-actual startup identity, loaded closure, supply timing, SDK, account lifecycle and
-complete Mac results remain actual-job checks. Keep every old refusal and unknown
+The source review accepts static feasibility only. Both new trees' absence, parent
+trust, actual startup identity, loaded closure, supply timing, SDK, account lifecycle
+and complete Mac results remain actual-job checks. Keep every old refusal and unknown
 failure. Native remains BLOCKED and CPU/wall remains NONE until their separate
 requirements are met. #544's first-code gate does not advance from this publication.

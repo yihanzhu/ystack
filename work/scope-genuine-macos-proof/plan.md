@@ -1,6 +1,6 @@
 ---
-spec-blob: 34b245ca820f45491cd31c5828306102b2a4bad0
-drafted: 2026-10-14
+spec-blob: 6760cc5f786aa794f1fce3784664e220769d7811
+drafted: 2026-10-15
 ---
 # Plan: scope-genuine-macos-proof
 
@@ -14,7 +14,10 @@ drafted: 2026-10-14
 For the implementation PR: `review_size: standard`.
 
 This plan implements the high-risk spec and the directly approved conditional
-supply recorded on #559 in comment 6180555883. It changes no product or test file.
+supply recorded on #559 in comment 6180555883 and its existing-parent supplement
+in comment 6189713897 (SHA-256
+`d811e67bf53b8bcbd0417d5db686c297adbe325c47de3ab048d92bdfeead4880`).
+It changes no product or test file.
 The original #541 fixtures require their own accepted plan amendment before code.
 The supplied runtime does not repair or inherit trust from the preinstalled tree.
 
@@ -25,25 +28,39 @@ The supplied runtime does not repair or inherit trust from the preinstalled tree
 | Python | `https://www.python.org/ftp/python/3.14.7/python-3.14.7-macos11.pkg`; 78,557,763 bytes; SHA-256 `70c5239ad2d62925d2947e46921d0ddd3d35be3d2f0a2d50db33da507dbcb419` |
 | jq | `https://github.com/jqlang/jq/releases/download/jq-1.6/jq-osx-amd64`; 864,040 bytes; SHA-256 `5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef` |
 | jq delivery | HTTPS host `release-assets.githubusercontent.com`; path `/github-production-release-asset/5101141/6387d980-de1f-11e8-9fee-7af0943ede86` |
-| New root | `/Library/Frameworks/Python.framework` |
+| Existing ROOT | `/Library/Frameworks/Python.framework` |
+| Existing version parent | `/Library/Frameworks/Python.framework/Versions` |
+| New V | `/Library/Frameworks/Python.framework/Versions/3.14` |
+| New T | `/Library/Frameworks/Python.framework/ystack-private-tools` |
 | P | `/Library/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python` |
 | Prefix | `/Library/Frameworks/Python.framework/Versions/3.14` |
 | jq path | `/Library/Frameworks/Python.framework/ystack-private-tools/jq` |
-| Workflow SHA-256 | `f85a016727998c34cded73ccaa1af268e4838d964e8c5a556f19eb357980342a` |
 
 Use only the standard `Python_Framework.pkg/Payload`. Its accepted source
 manifest has 4,201 entries: 460 directories, 3,702 regular files and 39 links.
-Regular file bytes total 124,901,627. Add only the private tools directory and jq.
+Regular file bytes total 124,901,627. Verify all source rows before selection.
 Pin the canonical source manifest SHA-256
 `34ab06f305b15a1772852ce9b814c2935f80917e9548d362fe43d36c0e1cf850`.
 Use source cpio order and JSON with sorted keys, compact separators, ASCII escapes
-and no final newline. Derive it through the reviewed bounded parser. Check every
-row, type, size, file digest and link target. Derive only the two fixed private
-tools entries from the jq binding above. Require all 4,203 supplied objects.
-The lookup map keys these source rows by path and adds only the fixed directory
-and jq rows. Its canonical SHA-256 is
-`373e04ba5cd436fe035837e38c90c0cc31dad95f37a16752628328f6d691be47`.
-Apply the new-object mode mapping below after this source binding.
+and no final newline; map keys are sorted. Derive it through the reviewed bounded
+parser. Check every row, type, size, file digest and link target.
+
+Select only paths equal to `Versions/3.14` or starting with `Versions/3.14/`.
+This retains 4,195 source entries: 458 directories, 3,702 files and 35 links,
+including every regular-file byte. Add only T and the fixed jq. The exact supplied
+set has 4,197 entries. Do not supply ROOT, Versions, top-level Current or root
+aliases, and do not grant old siblings runtime authority.
+
+| Canonical data | SHA-256 |
+| --- | --- |
+| Selected source subset | `4da2fbc7b543eb3d990f429c0fe972669105abdbf9ce2b7c962b404c94f7cc27` |
+| Supply mode map | `a04635f441f9706f126986616fc0f648a757630aacd78fafb944bcc2166a8d19` |
+| Exact runtime expectation table | `ac527b61d0d7475d20a6e329b0b5f31e68635c7a73c93031b2b208b18ccd9c56` |
+
+Apply the new-object mode mapping below after this source binding. New objects
+must have UID 0; files and links must have nlink 1. Source gid, directory nlink
+and size are publisher records, not copied-host invariants. Capture actual gid,
+directory nlink/size and nanosecond times in held identities and recheck them.
 Do not embed or execute package scripts. Do not use another package component.
 
 Fetch Python once with HTTPS verification and no redirect. Fetch the fixed jq
@@ -87,34 +104,48 @@ their targets. No needed path may use a missing target.
    trusted reader. Do not execute P or jq while fetching, parsing or staging.
    Do not require that reader to authenticate itself before its first start.
    Create only a new job-owned private staging directory. Capture its identity.
-   Extract only the verified standard payload, then add the fixed jq bytes.
+   Stage only the verified V subset, then add T and the fixed jq bytes.
    Set new staging directories to 0755, regular files with publisher execute bits
    to 0755, other regular files to 0644, and links themselves to 0755. Set jq to
    0755. This changes modes only, never source bytes or link text.
-3. Authenticate the existing `/Library/Frameworks` parent and all ancestors with
-   the original physical, identity, root-owner, mode and actual ACL checks.
-   Hold them through mutation. Require the entire new root to be absent, including
-   links and residual objects. Do not create or repair an existing parent.
-4. Use only the exact bounded administrator commands below. Record the newly
-   created root identity before copying. Recheck the staged manifest and empty
-   root before copy. Recheck the complete held ancestor chain before and after
-   each command. Only a direct parent changed by the fixed mkdir/cp/rm may
-   rebind its size, nlink and timestamps. First require the exact name-set change
-   and unchanged device, inode, type, owner, mode and actual ACL. Keep every
-   unrelated ancestor field unchanged.
-   All command paths are fixed. Every derived path comes from the accepted
-   manifest below that one root, never from a dispatch input or an unchecked link.
+3. Authenticate existing ROOT, Versions and every physical ancestor. Hold
+   NOFOLLOW directory descriptors and verify exact named identity, UID 0,
+   non-group/other-writable modes and actual empty ACLs. Unknown ACLs fail.
+   Do not create, chmod, chown or repair them. Require V and T both wholly absent,
+   including files, links, dangling links and residual objects. Snapshot only
+   bounded direct child names and lstat/link metadata of ROOT and Versions.
+   Do not traverse old versions or use old Current or aliases as dependencies.
+   These checks share the original object, depth, output and remaining time caps.
+4. Use only the bounded administrator commands below. Recheck each root's absence
+   immediately before its mkdir. Record that new root's actual identity at once.
+   Its state then changes from absent to owned; later writes require that exact
+   identity. Recheck the selected stage and empty owned destination before each
+   copy. Recheck the journal, full held parent chain and recorded child sets
+   before and after every command.
+
+   Only direct mkdir/rmdir of V may change Versions; only direct mkdir/rmdir of T
+   may change ROOT. Require exactly that fixed child-name addition or removal and
+   unchanged dev/ino/type/uid/gid/mode/actual ACL. Only then record the actual new
+   size, nlink, mtime_ns and ctime_ns plus the new child set. Failed or unknown
+   actions cannot justify rebinding. Copy and link chmod grant no such parent
+   exception. Other ancestors and old objects retain every checked field.
+   New-tree internal parents keep their original exact per-operation updates.
+   Never backdate timestamps. Every derived path comes from the fixed manifest
+   inside V or T, never from input, old siblings or an unchecked link.
 
    | Program and arguments after `sudo -n` | Purpose |
    | --- | --- |
-   | `/bin/mkdir -m 0755 ROOT` | Create the sole absent root. |
-   | `/bin/cp -R -P -n STAGE/. ROOT` | Copy the verified stage once. Do not use `-p` or follow source links. |
-   | `/bin/chmod -h 0755 LINK...` | Set only newly copied manifest links themselves to the fixed mode. |
+   | `/bin/mkdir -m 0755 V` | Create and journal the absent version root. |
+   | `/bin/mkdir -m 0755 T` | Create and journal the absent tool root. |
+   | `/bin/cp -R -P -n STAGE/Versions/3.14/. V` | Copy only the verified version bytes into empty owned V. |
+   | `/bin/cp -R -P -n STAGE/ystack-private-tools/. T` | Copy only the fixed jq into empty owned T. |
+   | `/bin/chmod -h 0755 LINK...` | Set only the 35 new manifest links themselves to the fixed mode. |
    | `/bin/rm -f -- LEAF...` | Remove only recorded owned regular files and links after identity checks. |
    | `/bin/rm -d -- DIRECTORY...` | Remove only recorded empty owned directories in reverse depth order. |
 
-   ROOT is the literal framework root. STAGE is the single new private staging
-   path recorded by this job. Bound each manifest-derived argument batch to 128
+   ROOT, V and T are fixed literals, not inputs. STAGE is the single new private
+   staging path recorded by this job. Never use `cp -p` or follow source links.
+   Bound each manifest-derived argument batch to 128
    paths. Bound the private supply runner to 256 commands, 256 arguments and
    65,536 argument bytes per command. Enforce the combined 16 MiB stdout/stderr
    cap while reading, within the remaining deadline. Cancel and reap its exact
@@ -125,23 +156,27 @@ their targets. No needed path may use a missing target.
    No privileged shell, chown, installer, package script, compiler, relinker or
    package manager is permitted.
    Keep the original fixture's separately bounded account commands unchanged.
-5. After copy, scan the complete new tree within the same caps. Capture every
-   actual owned identity and verify path set, bytes, types, root owner, nlink and
-   actual ACLs. Do not accept an extra or missing object. This scan records copy
-   results; it does not yet accept the runtime. A new manifest link may have a
+5. After each successful copy, scan its destination within the same caps and
+   journal every confirmed new identity before another write. Verify the exact
+   subtree set, bytes, types, UID 0, nlink and actual ACLs; capture actual modes.
+   After both copies, require exactly all 4,197 entries. Existing parents remain
+   separately authenticated and never enter the owned set. These scans record
+   copy results, not runtime acceptance. A new manifest link may have a
    copy-created mode before chmod. Before changing it, require its held immutable
    physical parent, UID0, nlink1, exact target, full identity and actual empty ACL.
    After chmod, require 0755 and unchanged identity fields/target except the
    expected mode and ctime changes. Rebind its owned record. Never apply this
    transition to an old object or treat it as a weaker execution check.
-6. Before the first P execution, authenticate the entire fixed installation with
+6. Before the first P execution, authenticate the exact V/T installation with
    the existing metadata-only entry rule, including actual empty ACL checks.
    There is no prior UUID resolver at this stage. Keep held physical NOFOLLOW
    opens, regular/nlink checks, complete identities, root owner and non-root
    non-writable modes. No fake UUID, candidate self-report or new root owner can
    substitute for this verification. Reject every unknown or nonempty ACL here.
 7. Authenticate each used logical link step while holding its physical parent.
-   Bind owner, metadata, target and actual ACL to the fixed source manifest.
+   Accept only the 35 fixed new links; bind owner, metadata, target and actual ACL
+   to the selected manifest. Resolve only within V, including its internal Tcl/Tk
+   Current links; top-level Current and old aliases grant no runtime authority.
    Then pass its canonical physical target to the original physical checks.
    Reject loops, escapes, unlisted paths, changed identities and missing required
    targets. Keep the full lib/include scan, both startup images, shared Python
@@ -164,23 +199,32 @@ their targets. No needed path may use a missing target.
 10. Verify the fixed jq bytes, physical identity and actual `jq-1.6` version.
     Prefill only the new owned native cache, using those same bytes. Preserve
     identity-checked cache cleanup. Do not inspect or run the preinstalled jq.
+    Every mandatory anchor, fixture, tool, cache and cleanup check must propagate
+    failure in every shell position. Use explicit failure handling; an AND-list
+    or conditional must not suppress a required failure through `set -e`.
 
 ## Cleanup and proof
 
-Keep an owned-identity journal for staging, the new root and every confirmed
-copied object. Hold and recheck physical parents. Record the exact boundary of a
-failed or interrupted copy. Do not infer ownership of an unrecorded child from
-its name or root UID. Such uncertainty prevents broader deletion and remains a
-cleanup failure. A batch copy does not promise complete cleanup on every interrupt.
+Journal staging, each successful V/T mkdir and every confirmed copied object by
+actual identity. Hold and recheck physical parents before each new write. A failure
+between the root creations still cleans the already recorded owned objects.
+Record the exact boundary of a failed or interrupted copy. Never infer ownership
+from a name or root UID. An unrecorded partial-copy object blocks wider deletion
+and leaves cleanup UNKNOWN. A batch copy cannot promise cleanup on every interrupt.
 
-On normal and failure exits, recheck each recorded object before unlinking it.
-Remove regular files and links without following links. Remove directories only
-when their actual identity still matches and they are empty. Check the complete
-root name set; unexpected entries prohibit broader deletion. Use no wildcard
-or `rm -rf` on this privileged supply root. Preserve the original identity-checked
-`/bin/rm -rf` cleanup of the separate job-owned private cache. Preserve the
-original refusal when cleanup also fails. A vanished host or ephemeral runner
-is not successful cleanup evidence.
+Before cleanup, require each created tree's exact journal set and actual identities;
+an uncreated tree must remain absent. Recheck each object before deleting it. Remove
+recorded files and links without following links, then identity-matched empty
+directories in reverse depth order, stopping after V and T. Extra, changed or
+unknown objects block broader deletion. Never pass ROOT, Versions, Current, old
+versions or root aliases to cp, chmod or rm. Use no wildcard or `rm -rf` on V/T.
+Keep the separate job-owned cache's original identity-checked `/bin/rm -rf` cleanup.
+
+Successful supply cleanup proves V/T absent, original direct child sets restored
+and existing parents' stable safety fields unchanged. Record their actual dynamic
+metadata after each known rmdir; do not claim all metadata returned to its old value.
+Preserve the original refusal when cleanup also fails. A vanished host or ephemeral
+runner is not cleanup evidence.
 
 Preserve the original account journal, four derived principals, unused-ID range,
 supplementary-only group, fixed anchor, closed store/Git/evidence paths, actual
@@ -196,18 +240,29 @@ Run both complete original commands in order:
 Keep the 100-minute job and 5/5/35/50/5-minute step limits. Supply stays in the
 original preflight step. Keep all original assertions, native 149 controls,
 product deadlines, cancellation/reap rules and output caps. No failed prerequisite
-permits a skip, replacement runtime, provider or alternate proof.
+permits a skip, replacement runtime, provider or alternate proof. An intentional-stop
+diagnostic path must not replace or interrupt these suites.
 
 Before publication, check exact-base patch context, the sole manifest entry,
 artifact hash links and allowed paths. Parse YAML with the existing Ruby library.
 Run `/bin/bash -n` on every decoded shell body. Compile all embedded Python
 strings and heredocs without executing them. Check the fixed source/manifest
-digests and compare workflow/scope entry and guard bytes at their gated boundary.
-Save full outputs and the exact pinned workflow. Run `git diff --check`.
+digests. After implementation, record the actual workflow Git blob and SHA-256
+and the extracted shared entry/guard SHA-256s against the exact candidate head/base.
+The separate publication reviewer reads those exact bytes and full validation
+outputs before protected merge. Do not reuse an old workflow or guard digest as
+the new binding. The #541 high-risk plan then pins these existing shared bytes
+before fixture code changes; compare the resulting copies before the real run.
+Save full outputs and the exact workflow. Run `git diff --check`.
 
-Use owned fixture controls for wrong source bytes, extra/missing manifest paths,
-escaping or changed links, copy failure, unrecorded cleanup objects, changed held
-identity, writable/ACL paths and incorrect startup identity/version/prefix/flags.
+Use owned fixture controls for unsafe/changed parents, either pre-existing V/T,
+wrong source bytes, extra/missing manifest paths, changed or escaping links,
+wrong parent child-set deltas, partial copy and unrecorded cleanup objects.
+Prove old versions, Current and aliases remain unchanged and outside dependency
+and cleanup sets. Cover failure between root creations and actual metadata records.
+Retain changed-held-identity, writable/ACL-path and bad startup identity/version/
+prefix/flags controls. Force each mandatory shell predicate to fail; test the tool
+predicate in all three positions of its AND-list, not just the final command.
 Keep the original cancellation and cleanup controls. Static models do not prove
 Darwin ACL behavior or a real same-PID positive. Those require the actual approved
 Mac job and the unchanged complete suites. Preserve all failed controls.
@@ -234,6 +289,6 @@ not amend the core product or waive that gate. It grants no #544 ref, sudoers or
 execution authority. #544 retains its original sequence and full requirements.
 
 Keep every old Mac refusal, Linux UNKNOWN and incomplete proof. Actual parent
-trust, whole-root absence, startup identity, timing, SDK, account lifecycle and
+trust, V/T absence, startup identity, timing, SDK, account lifecycle and
 cleanup remain real-job checks. Native stays BLOCKED, CPU/wall NONE and production
 identities empty until their own requirements are met.
