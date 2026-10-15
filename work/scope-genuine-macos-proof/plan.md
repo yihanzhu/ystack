@@ -29,7 +29,7 @@ The supplied runtime does not repair or inherit trust from the preinstalled tree
 | P | `/Library/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python` |
 | Prefix | `/Library/Frameworks/Python.framework/Versions/3.14` |
 | jq path | `/Library/Frameworks/Python.framework/ystack-private-tools/jq` |
-| Workflow SHA-256 | `7acae1f9b08659884f4acd37907a1044c1c2fe4183eeec739019e13e813b06af` |
+| Workflow SHA-256 | `f85a016727998c34cded73ccaa1af268e4838d964e8c5a556f19eb357980342a` |
 
 Use only the standard `Python_Framework.pkg/Payload`. Its accepted source
 manifest has 4,201 entries: 460 directories, 3,702 regular files and 39 links.
