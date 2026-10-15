@@ -1032,10 +1032,12 @@ jobs:
               guard_path = Path(sys.argv[3])
               guard_held = c._hold_bytes(str(guard_path), c.EXECUTABLE_LIMIT)
               owned.append(guard_held)
-              guard_code = guard_held.read(c.EXECUTABLE_LIMIT, 'E_INSTALL')
+              guard_held.recheck('E_INSTALL')
+              guard_code = guard_held.raw
               manifest_held = c._hold_bytes(str(guard_path.parent / 'manifest.json'), c.EXECUTABLE_LIMIT)
               owned.append(manifest_held)
-              manifest_raw = manifest_held.read(c.EXECUTABLE_LIMIT, 'E_INSTALL')
+              manifest_held.recheck('E_INSTALL')
+              manifest_raw = manifest_held.raw
               assert hashlib.sha256(manifest_raw).hexdigest() == '34ab06f305b15a1772852ce9b814c2935f80917e9548d362fe43d36c0e1cf850'
               manifest_rows = json.loads(manifest_raw)
               assert len(manifest_rows) == 4201
