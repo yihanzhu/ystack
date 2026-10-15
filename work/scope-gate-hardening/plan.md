@@ -1,6 +1,6 @@
 ---
 spec-blob: e161301045491f5f41d2fb2df0c6ad0a6284f914
-drafted: 2026-10-13
+drafted: 2026-10-15
 ---
 
 # Plan: harden scope qualification evidence core
@@ -428,28 +428,43 @@ qualification or a production identity.
 
 Prepare the same fixed harness and cases for macOS, including the concrete Darwin
 runner owner above. Run them only on the verified disposable evidence host under
-[the approved temporary supply](https://github.com/yihanzhu/ystack/issues/559#issuecomment-6180555883).
+[the approved temporary supply](https://github.com/yihanzhu/ystack/issues/559#issuecomment-6180555883)
+and [existing-parent supplement](https://github.com/yihanzhu/ystack/issues/559#issuecomment-6189713897).
 Bind that supply to these accepted `work/scope-genuine-macos-proof/` artifacts:
 
 | Artifact | Git blob |
 | --- | --- |
-| Intent | `154befc5159f96c49823fb36f949525a5e09b4ac` |
-| Spec | `34b245ca820f45491cd31c5828306102b2a4bad0` |
-| High-risk plan | `900502c60faf5af84bd650624fc0655bc2491f0c` |
+| Intent | `7b38be231a975a16133d16a987539ac1061352da` |
+| Spec | `6760cc5f786aa794f1fce3784664e220769d7811` |
+| High-risk plan | `0ff44d9da76e3b653560db26e0d2f6afde727201` |
 
-The workflow Git blob is `9477dbb83f04671a751a47a222f0e95ce57964aa`.
-Its SHA-256 is
-`f85a016727998c34cded73ccaa1af268e4838d964e8c5a556f19eb357980342a`.
-Its complete entry and guard share one Python body with SHA-256
-`42239f667417de41f93b875c083bc3b26bde7837c69679ebb2d8e62e9a1da22c`.
-The fixed source manifest SHA-256 is
-`34ab06f305b15a1772852ce9b814c2935f80917e9548d362fe43d36c0e1cf850`.
-Keep these exact bytes. A changed dependency returns through its artifact gate.
+Use the workflow published at `59c671dc08739824456efe1ffa5f4b4f0cbad22e`,
+from reviewed head `d01cbb259c544191a721179ee9c048d9372c0cb1` against base
+`4f60b7ebcea6c68dbdadb92b2eaac09becee9318`. Actual supply and cleanup across
+separate job-step processes still require Mac job evidence. The workflow Git
+blob is `4758c5e500e6e741212ac3653da360c9d01bd18a`; its SHA-256 is
+`6e8304356e3191b60cf22276b8d67750ebe0e181cfa60b9c862ff0125138d815`.
+The complete shared entry/guard body SHA-256 is
+`d8737aa32fac4021e4ac13d217175a5591fd8a189b1a05e12802128a279d342f`.
+The separate post-guard identity assertion passed through `-c` has SHA-256
+`e63ddcbb9e5876f47a71fc68cf0ffc254f00c0914462ce4a332713acbfcb8fde`.
+The same-PID transition belongs to the shared guard. Keep these exact bytes;
+a changed dependency returns through its artifact gate before fixture changes.
 
-The workflow supplies only official Python 3.14.7 and jq 1.6 in the entirely new
-`/Library/Frameworks/Python.framework` root. Core test files do not fetch, install
-or repair that supply. They do not authorize the development Mac or create another
-runtime, host or account scope. Keep Linux's original runtime behavior.
+| Fixed manifest data | SHA-256 |
+| --- | --- |
+| Complete official source | `34ab06f305b15a1772852ce9b814c2935f80917e9548d362fe43d36c0e1cf850` |
+| Selected version subset | `4da2fbc7b543eb3d990f429c0fe972669105abdbf9ce2b7c962b404c94f7cc27` |
+| Supply mode map | `a04635f441f9706f126986616fc0f648a757630aacd78fafb944bcc2166a8d19` |
+| Runtime expectation table | `ac527b61d0d7475d20a6e329b0b5f31e68635c7a73c93031b2b208b18ccd9c56` |
+
+The workflow supplies only official Python 3.14.7 and jq 1.6 in the initially
+absent `Versions/3.14` and `ystack-private-tools` trees under the existing
+`/Library/Frameworks/Python.framework`. The approved supplement SHA-256 is
+`d811e67bf53b8bcbd0417d5db686c297adbe325c47de3ab048d92bdfeead4880`.
+Core test files do not fetch, supply, repair or clean those trees or their existing
+parents. They add no development-Mac, runtime, host or account scope. Keep Linux's
+original runtime behavior.
 
 In the Darwin branches of `scope-qualification.test.sh` and
 `shadow-enforced.test.sh`, bind P only to
@@ -487,12 +502,21 @@ Invoke each guard through the existing non-privileged system Python as:
 ```
 
 Here GUARD is that test's owned exact guard file and PACKAGE is its held physical
-package. The guard first authenticates the complete supplied manifest and runtime
-with physical NOFOLLOW opens, regular/nlink checks, full identity, root ownership,
-non-root non-writable modes and actual empty ACLs. Authenticate each used publisher
-link step and its held physical parent before inspecting the canonical target.
-Preserve publisher bytes and link text. Missing targets, loops, escapes, changes
-and unknown ACLs refuse. Keep every original scan, byte, object and command cap.
+package. Verify the complete 4,201-row source, then its exact 4,195-row version
+subset and two fixed tool rows. Authenticate exactly those 4,197 supplied objects;
+do not scan old versions into the runtime set or ignore extra new-tree objects.
+Hold the existing framework root, Versions and every physical ancestor with
+NOFOLLOW directory descriptors, exact named identity, UID 0, modes without group
+or other write bits, and actual empty ACLs. Authenticate the supplied runtime with
+its original regular/nlink, identity, ownership, mode, byte and ACL checks.
+
+Accept only the 35 fixed new links. Authenticate each used step and its held
+physical parent before inspecting its canonical target within the new version.
+Preserve publisher bytes and link text. Old versions, top-level Current and root
+aliases remain unchanged and provide no runtime dependency or cleanup authority.
+Missing required targets, loops, escapes, changes and unknown ACLs refuse. Keep
+all original scans, the native-image closure and system-cache boundary, and every
+byte, object, command and shared deadline cap.
 
 The same guard enters P with `-I -S -B` and retains its PID and 120-second deadline.
 Require actual physical `sys.executable == P`, version 3.14.7 and at least 3.11,
@@ -506,7 +530,8 @@ ledger and account/anchor cleanup behavior and all original refusal cases.
 Use the fixed jq bytes with the original SHA-256 and actual jq-1.6 version checks.
 A private test copy may retain the existing owned-cache behavior and cleanup. It
 must originate from the authenticated fixed jq. No Darwin downloader or fallback
-may run. Neither test changes or removes the workflow-owned supply root.
+may run. Neither test changes or removes the workflow-owned supply trees or
+modifies their existing parents.
 
 Require all 13 native-reader controls with actual owned files: valid extraction;
 missing and duplicate opening markers; missing and duplicate closing markers;
@@ -518,13 +543,17 @@ boundaries and record each result and descriptor cleanup. Every refusal occurs
 before P execution. These controls do not replace either suite's actual
 empty-to-real authentication or prove Mac host qualification.
 
-Adapt the existing owned guard and entry controls to this fixed layout. Keep real
-objects, actual ACL/API errors, held changes, cancellation and exact reap. Preserve
-identity, version, prefix, startup-path and deadline refusals. A metadata-only
+Adapt the existing owned guard and entry controls to this fixed layout. For the
+metadata-only controls, create owned empty physical installation and Versions
+parents. Copy only the authenticated new version and tool trees into them. Do not
+copy or traverse old framework contents. Bind the extracted guard's fixed paths,
+including `fixed_tools`, to these owned objects. Keep real objects, actual ACL/API
+errors, held changes, cancellation and exact reap. Preserve identity, version,
+prefix, startup-path and deadline refusals. A metadata-only
 extracted-boundary control uses its recorded objects and cannot execute copied
 runtime bytes or claim the actual entry positive. The positive requires the real
-fixed P and actual same-PID transition on the approved Mac host. Keep every
-original 149 native control and both complete suites. These fixture bindings do
+fixed P and actual same-PID transition on the approved Mac host. Keep all original
+37 scope controls, 149 native controls and both complete suites. These bindings do
 not qualify a host or change the product installation boundary.
 
 Until actual supply, host checks, complete tests and cleanup pass, keep the Mac
@@ -532,6 +561,74 @@ real-principal positive and G3 blocked. Keep CPU/wall evidence NONE and producti
 identities empty. Preserve every prior failure. Do not replace either platform's
 proof with mocks, same-uid files, copied origin, permanent refusal or a skipped
 positive.
+
+## Private Linux fixture failure observation
+
+Limit the diagnostic change to `scope-qualification.test.sh` at its existing
+`PY_STALE_PREPARE`, private frontend-copy and failure-export seams and original
+eight-case call site. Preserve the generator, glob order, evaluator argv,
+assertions, result, evaluator stdout/stderr, READY/SEAL/COMMIT and cleanup.
+Add no public mode, product hook, helper path, provider, trust input or predicate.
+Keep the original 300/1,800-second limits and the original eight-case sequence per
+invocation. Add no three-attempt runner, retry or deadline reset.
+
+The diagnostic boundary follows private candidate SHA-256
+`f807180c483a689ae6ebb8985fa99f4088836b6280da0d3591481b151fba6850`.
+Its exact formatter/capture bodies stay readable multiline raw literals:
+
+| Embedded body | Decoded-byte SHA-256 |
+| --- | --- |
+| observer_source | `0c2b1c8c8cb9c662c55e17e134f408693ab4ead8f27357ad6cb2b7bcc0b820eb` |
+| frontend_capture | `a21a722a59923fa6ad18f6f6dd26385d46dcd5a3733083f9d7625777d73c4af8` |
+| emit_capture | `153556128c04167c2a73d6c91c86b37bd3e1d34eb35fdeea44e865803301afb4` |
+| exit_capture | `95bc34214161aa79167d7f33e8cf4980d70177f7771fa5bf30672e8f0e1739ac` |
+
+The candidate binds this private diagnostic boundary. The final fixture also
+contains the separately bound Mac body, so its whole-file digest is measured at
+the actual implementation head. Verify the unchanged diagnostic bodies and the
+generated private copies separately from that combined file digest.
+
+Prepare log, binding and line-map leaves before held acquisition. Before each
+evaluator call, bind the case index, exact glob, all seven document hashes, fixed
+source hashes, private frontend bytes and canonical exact argv hash. The four
+source files remain the evaluator, private reader, `_consumer.py` and this test.
+Retain the existing no-follow, bounded-byte and stable-identity reads. Event SHA
+is observed data and supplies no approval. Case-binding records stay at most
+3,072 bytes; missing, changed, unreadable or oversized data stays GAP.
+
+Only the private frontend copy's original emit_error may capture incoming status,
+real caller line/function and existing reader variables in bounded memory. Its
+incoming `$?` is the status at emit_error entry, not a claim about the earliest
+external command. Preserve the exact copy-to-original line map. The existing EXIT
+chain runs the original cleanup exactly once, preserves its entry status, then
+appends only to the preauthenticated existing FD19 sink. Close FD19 for the reader
+launch. Keep signal_exit unchanged. Early errors, signals, child/subshell paths,
+sink errors and transport gaps remain GAP. Do not query failed input metadata.
+
+The existing HeldPath observer may serialize only original same-call return,
+exception and errno events and values already present in the original recheck
+frame. Keep before/current/named/after/after_named/expected as frame-local data.
+Python can retain locals from a previous component. A retained after/after_named,
+or another local after an early metadata failure, does not establish the current
+component's state. Interpret it with the exact guard line, component index/name
+and actual same-call events. Missing values stay GAP. Add no stat, ACL query,
+enumeration, object reread, variable reset, rule change or held-directory entry
+to fill gaps or change the original predicate.
+
+Keep the 12,000-byte reader record, 16,384-byte sinks and combined failure export,
+and 512-byte frontend memory record before its bounded exit fields. Preserve the
+accepted sink-only identity/size checks and exact output format. The suite may
+retain its original failure-only export; evaluator output and exit behavior remain
+unchanged. The owned exit-zero control does not prove actual frontend success,
+which removes its traps before cleanup. Preserve the prior Mac stat-adapter limits;
+they do not prove actual Linux stat, evaluator execution or historical cause.
+
+Actual execution still needs accepted exact-head source preparation and the
+original test gate. Require separate independent implementation review of this
+boundary. Keep the historical Important finding and exact cause UNKNOWN. A current
+success or NO_REPRO cannot close that finding, hide a real failure or turn E_STALE
+into success. Preserve all original controls and complete same-head Linux and Mac
+proof before the separate core G3.
 
 ## Proof and completion
 
