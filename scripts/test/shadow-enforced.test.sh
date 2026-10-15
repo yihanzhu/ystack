@@ -18,6 +18,203 @@ esac
 jq_bin="${TMPDIR:-/tmp}/ystack-portable-core-jq16/$jq_asset"
 [ -x "$jq_bin" ] || { /usr/bin/printf 'missing pinned jq\n' >&2; exit 1; }
 jq_bin=$(CDPATH='' cd -P -- "${jq_bin%/*}" && /usr/bin/printf '%s/%s' "$PWD" "${jq_bin##*/}")
+if [ "$(/usr/bin/uname -s)" = Darwin ]; then
+  [ "${GITHUB_ACTIONS:-}" = true ] && [ "${RUNNER_ENVIRONMENT:-}" = github-hosted ] ||
+    fail 'a reserved disposable host is required'
+  /usr/bin/python3 -I -S -B - "$root" "$tmp" <<'PY_MAC_NATIVE_GUARD'
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import stat
+import sys
+
+package = Path(sys.argv[1])
+private = Path(sys.argv[2])
+assert package.is_absolute() and package.resolve() == package
+assert private.is_absolute() and private.resolve() == private
+source = package / 'shadow/v1/_consumer.py'
+spec = importlib.util.spec_from_file_location('fixed_native_runtime_reader', source)
+c = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = c
+spec.loader.exec_module(c)
+owned = []
+
+
+def extract_guard(held):
+    held.recheck('E_STALE')
+    lines = held.raw.splitlines(keepends=True)
+    opening = b'  /bin/cat >"$mac_guard_file" <<\'PY_MAC_FIXED_RUNTIME_GUARD\'\n'
+    closing = b'PY_MAC_FIXED_RUNTIME_GUARD\n'
+    starts = [index for index, line in enumerate(lines) if line == opening]
+    stops = [index for index, line in enumerate(lines) if line == closing]
+    assert len(starts) == len(stops) == 1 and starts[0] < stops[0]
+    raw = b''.join(lines[starts[0] + 1:stops[0]])
+    assert len(raw) <= c.EXECUTABLE_LIMIT
+    assert hashlib.sha256(raw).hexdigest() == '42239f667417de41f93b875c083bc3b26bde7837c69679ebb2d8e62e9a1da22c'
+    held.recheck('E_STALE')
+    return raw
+
+
+def update_created(parent, before, names):
+    after = c._metadata(parent.fd)
+    assert c._identity(after)[:6] == c._identity(before)[:6]
+    assert set(os.listdir(parent.fd)) == names
+    parent.components[-1].before = after
+    parent.recheck('E_STALE')
+
+
+def exclusive(parent, name, raw):
+    assert name in ('guard.py', 'manifest.json') and len(raw) <= c.EXECUTABLE_LIMIT
+    parent.recheck('E_STALE')
+    before, names = parent.before, set(os.listdir(parent.fd))
+    assert name not in names
+    fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o500, dir_fd=parent.fd)
+    try:
+        offset = 0
+        while offset < len(raw):
+            written = os.write(fd, raw[offset:offset + 65536])
+            assert written > 0
+            offset += written
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    update_created(parent, before, names | {name})
+
+
+def reader_controls(private, source_raw, manifest_raw):
+    base = private / 'reader-controls'
+    assert not os.path.lexists(base)
+    base.mkdir(mode=0o700)
+    rows = []
+    def data_file(path, raw):
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        try:
+            offset = 0
+            while offset < len(raw):
+                count = os.write(fd, raw[offset:offset + 65536])
+                assert count > 0
+                offset += count
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    opening = b'  /bin/cat >"$mac_guard_file" <<\'PY_MAC_FIXED_RUNTIME_GUARD\'\n'
+    closing = b'PY_MAC_FIXED_RUNTIME_GUARD\n'
+    source_body = source_raw.split(opening, 1)[1].split(closing, 1)[0]
+    cases = [('valid', source_raw), ('missing-opening', source_raw.replace(opening, b'', 1)),
+        ('duplicate-opening', opening + source_raw), ('missing-closing', source_raw.replace(closing, b'', 1)),
+        ('duplicate-closing', source_raw + closing),
+        ('wrong-guard', source_raw.replace(source_body, b'x' + source_body[1:], 1)),
+        ('oversized-source', b'x' * (c.EXECUTABLE_LIMIT + 1)), ('changed-held-source', source_raw)]
+    for label, raw in cases:
+        path = base / label
+        data_file(path, raw)
+        held, accepted = None, False
+        try:
+            held = c._hold_bytes(str(path), c.EXECUTABLE_LIMIT)
+            if label == 'changed-held-source':
+                with path.open('ab') as output:
+                    output.write(b'\n')
+                    output.flush()
+                    os.fsync(output.fileno())
+            extract_guard(held)
+            accepted = True
+        except (c.Refusal, AssertionError):
+            pass
+        finally:
+            if held is not None:
+                held.close()
+        assert accepted == (label == 'valid')
+        rows.append({'control': label, 'accepted': accepted, 'candidate_executed': False})
+    path = base / 'symlink'
+    path.symlink_to(base / 'valid')
+    try:
+        held = c._hold_bytes(str(path), c.EXECUTABLE_LIMIT)
+    except c.Refusal:
+        rows.append({'control': 'symlink-source', 'accepted': False, 'candidate_executed': False})
+    else:
+        held.close()
+        raise AssertionError('symlink source accepted')
+    for label, raw in [('valid-manifest', manifest_raw), ('wrong-manifest', b'{}'), ('missing-manifest', None)]:
+        path, held, accepted = base / label, None, False
+        if raw is not None:
+            data_file(path, raw)
+        try:
+            held = c._hold_bytes(str(path), c.EXECUTABLE_LIMIT)
+            assert hashlib.sha256(held.raw).hexdigest() == '34ab06f305b15a1772852ce9b814c2935f80917e9548d362fe43d36c0e1cf850'
+            held.recheck('E_STALE')
+            accepted = True
+        except (c.Refusal, AssertionError):
+            pass
+        finally:
+            if held is not None:
+                held.close()
+        assert accepted == (label == 'valid-manifest')
+        rows.append({'control': label, 'accepted': accepted, 'candidate_executed': False})
+    directory = c._open_held(str(base), True,
+        lambda fd, state, ancestor: ancestor or state.st_uid == os.getuid() and stat.S_IMODE(state.st_mode) == 0o700,
+        'E_INSTALL')
+    try:
+        guard = c._hold_bytes(str(base / 'valid'), c.EXECUTABLE_LIMIT)
+        try:
+            body = extract_guard(guard)
+        finally:
+            guard.close()
+        exclusive(directory, 'guard.py', body)
+        try:
+            exclusive(directory, 'guard.py', body)
+        except (AssertionError, FileExistsError):
+            pass
+        else:
+            raise AssertionError('exclusive guard overwrite accepted')
+        rows.append({'control': 'exclusive-guard-no-overwrite', 'accepted': False, 'candidate_executed': False})
+    finally:
+        directory.close()
+    print(json.dumps({'fixed_reader_controls': rows}, sort_keys=True), file=sys.stderr, flush=True)
+    return rows
+
+
+try:
+    script = c._hold_bytes(str(package / 'scripts/test/scope-qualification.test.sh'), c.EXECUTABLE_LIMIT)
+    owned.append(script)
+    guard = extract_guard(script)
+    cache = Path(os.environ['YSTACK_PROOF_TMP'])
+    assert cache.is_absolute() and cache.resolve() == cache
+    manifest = c._hold_bytes(str(cache / 'manifest.json'), c.EXECUTABLE_LIMIT)
+    owned.append(manifest)
+    assert hashlib.sha256(manifest.raw).hexdigest() == '34ab06f305b15a1772852ce9b814c2935f80917e9548d362fe43d36c0e1cf850'
+    manifest.recheck('E_STALE')
+    reader_controls(private, script.raw, manifest.raw)
+    parent = c._open_held(str(private), True,
+        lambda fd, state, ancestor: ancestor or state.st_uid == os.getuid() and stat.S_IMODE(state.st_mode) == 0o700,
+        'E_INSTALL')
+    owned.append(parent)
+    before, names = parent.before, set(os.listdir(parent.fd))
+    assert 'runtime-guard' not in names
+    os.mkdir('runtime-guard', 0o700, dir_fd=parent.fd)
+    update_created(parent, before, names | {'runtime-guard'})
+    directory = c._open_child(parent, 'runtime-guard', True,
+        lambda fd, state, ancestor: ancestor or state.st_uid == os.getuid() and stat.S_IMODE(state.st_mode) == 0o700,
+        'E_INSTALL')
+    owned.append(directory)
+    exclusive(directory, 'guard.py', guard)
+    exclusive(directory, 'manifest.json', manifest.raw)
+    script.recheck('E_STALE')
+    manifest.recheck('E_STALE')
+    directory.recheck('E_STALE')
+finally:
+    c._close_paths(owned)
+PY_MAC_NATIVE_GUARD
+  python_bin=/Library/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python
+  mac_guard_file="$tmp/runtime-guard/guard.py"
+  [ "$(/usr/bin/python3 -I -S -B "$mac_guard_file" "$root" "$python_bin" "$mac_guard_file" empty 0 0)" = "$python_bin" ] ||
+    fail 'fixed supplied runtime closure required'
+  fixed_jq=/Library/Frameworks/Python.framework/ystack-private-tools/jq
+  [ "$(sha_file "$fixed_jq")" = 5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef ] &&
+    [ "$("$fixed_jq" --version)" = jq-1.6 ] && [ "$(sha_file "$jq_bin")" = "$(sha_file "$fixed_jq")" ] ||
+    fail 'fixed jq identity'
+else
 if [ -x /opt/homebrew/bin/python3.14 ]; then
   python_bin=/opt/homebrew/bin/python3.14
 elif [ -x /usr/local/bin/python3.14 ]; then
@@ -28,6 +225,7 @@ fi
 case "$python_bin" in /*) ;; *) /usr/bin/printf 'missing physical python\n' >&2; exit 1 ;; esac
 python_bin=$("$python_bin" -I -S -B -c 'import os,sys; print(os.path.realpath(sys.executable))')
 case "$python_bin" in /*) ;; *) /usr/bin/printf 'missing resolved physical python\n' >&2; exit 1 ;; esac
+fi
 native_out="$tmp/native-release"
 /bin/bash -p "$root/shadow/v1/build-cancel-release.sh" build "$python_bin" "$native_out"
 native_binary=$(/usr/bin/find "$native_out" -mindepth 1 -maxdepth 1 -type f ! -name build-record.json -print)
