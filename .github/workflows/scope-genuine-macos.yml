@@ -561,7 +561,8 @@ jobs:
               try:
                   output = bounded_command(argv, expected)
               except BaseException:
-                  parent_mode.complete(False)
+                  known = argv[0] != '/usr/bin/sudo' and parent_mode.settled(last_child_outcome)
+                  parent_mode.complete(known)
                   raise
               if journal is not None:
                   assert journal_snapshot() == journal
@@ -925,8 +926,8 @@ jobs:
                           assert outcome['returncode'] is None or type(outcome['returncode']) is int
                           assert all(type(outcome[key]) is bool for key in ('reaped', 'cancelled', 'privileged_unknown'))
                           if body['known']:
-                              assert outcome['pid'] is not None and outcome['returncode'] == 0 and outcome['reaped']
-                              assert not outcome['cancelled'] and not outcome['privileged_unknown']
+                              assert self.settled(outcome)
+                              assert outcome['returncode'] == 0 or issued[number][0] != '/usr/bin/sudo'
                           assert body['owned_sha256'] is None or type(body['owned_sha256']) is str and re.fullmatch('[0-9a-f]{64}', body['owned_sha256'])
                           results.add(number)
                       else:
@@ -1180,8 +1181,37 @@ jobs:
                                       'ancestors': dict(previous['ancestors'], **{str(ROOT): current[str(ROOT)]['identity']})}
                   return previous
 
-              def restore(self):
+              @staticmethod
+              def settled(outcome):
+                  return (type(outcome['pid']) is int and outcome['pid'] > 0
+                          and type(outcome['returncode']) is int and 0 <= outcome['returncode'] < 126
+                          and outcome['reaped'] is True and outcome['cancelled'] is False
+                          and outcome['privileged_unknown'] is False)
+
+              def phase_quiescence(self):
                   rows = self.load()
+                  entered = {row['body']['phase'] for row in rows
+                             if row['kind'] == 'phase' and row['body']['point'] == 'enter'} - {'closure'}
+                  completed = {row['body']['phase']: row['body'] for row in rows
+                               if row['kind'] == 'phase' and row['body']['point'] == 'result'}
+                  assert entered <= set(completed)
+                  assert all(completed[name]['quiescent'] and self.settled(completed[name]['outcome']) for name in entered)
+
+              def source_failure_settled(self):
+                  if not self.settled(last_child_outcome) or last_child_outcome['returncode'] == 0:
+                      return False
+                  try:
+                      self.validated_history()
+                      assert not any(row['kind'] == 'issued' and row['body']['argv'][:3] ==
+                                     ['/usr/bin/sudo', '-n', '/bin/mkdir'] for row in self.rows)
+                      assert not os.path.lexists(V) and not os.path.lexists(T)
+                  except (AssertionError, OSError, ValueError, KeyError):
+                      return False
+                  return True
+
+              def restore(self):
+                  self.phase_quiescence()
+                  rows = self.rows
                   if self.baseline is None:
                       return
                   mode_issued = [row['body']['argv'] for row in rows if row['kind'] == 'issued'
@@ -1190,11 +1220,6 @@ jobs:
                       return
                   assert len(mode_issued) <= 2
                   expected = self.validated_history()
-                  phases = {row['body']['phase']: row['body'] for row in rows
-                            if row['kind'] == 'phase' and row['body']['point'] == 'result'}
-                  entries = {row['body']['phase'] for row in rows if row['kind'] == 'phase' and row['body']['point'] == 'enter'}
-                  assert entries - {'closure'} <= set(phases)
-                  assert all(value['quiescent'] for value in phases.values())
                   assert not os.path.lexists(V) and not os.path.lexists(T)
                   owned_results = [row['body'] for row in rows if row['kind'] == 'result' and row['body']['owned_sha256']]
                   if os.path.lexists(cache / 'owned.json'):
@@ -1249,6 +1274,7 @@ jobs:
                   if name == 'closure':
                       original = None
                       try:
+                          parent_mode.phase_quiescence()
                           parent_mode.validated_history()
                           if os.path.lexists(cache / 'owned.json'):
                               rows = [row['body'] for row in parent_mode.rows if row['kind'] == 'result' and row['body']['owned_sha256']]
@@ -1295,7 +1321,8 @@ jobs:
                           assert ident(os.fstat(held_script)) == state == ident(script.lstat())
                   except BaseException:
                       parent_mode.load()
-                      parent_mode.phase(name, 'result', False, False)
+                      quiescent = name == 'supply' and parent_mode.source_failure_settled()
+                      parent_mode.phase(name, 'result', False, quiescent)
                       raise
                   finally:
                       if held_script is not None:
@@ -1670,7 +1697,7 @@ jobs:
           umask 077
           cache_root=$YSTACK_PROOF_TMP
           native_p=/Library/Frameworks/Python.framework/Versions/3.15/Resources/Python.app/Contents/MacOS/Python
-          test "$(/usr/bin/shasum -a 256 "$cache_root/provision.py" | /usr/bin/awk '{print $1}')" = 4b7d2ac559f0f3b0ccacd70e0bf9ad7818fa91644a1a7a2c76826bc46b6573ea
+          test "$(/usr/bin/shasum -a 256 "$cache_root/provision.py" | /usr/bin/awk '{print $1}')" = 8f8cbbdc51e895ecd70a10e6dbce6012240acac19c207410d1215b9ce505c050
           provision_status=0
           /usr/bin/python3 -I -S -B "$cache_root/provision.py" "$cache_root" --supply || provision_status=$?
           if [ -f "$cache_root/owned.json" ] && [ ! -L "$cache_root/owned.json" ]; then
@@ -2227,7 +2254,7 @@ jobs:
           SH_FIXED_SUPPLY_PHASE
           /bin/chmod 0500 "$cache_root/supply-phase.sh"
           export YSTACK_PROOF_TMP="$cache_root"
-          test "$(/usr/bin/shasum -a 256 "$cache_root/provision.py" | /usr/bin/awk '{print $1}')" = 4b7d2ac559f0f3b0ccacd70e0bf9ad7818fa91644a1a7a2c76826bc46b6573ea
+          test "$(/usr/bin/shasum -a 256 "$cache_root/provision.py" | /usr/bin/awk '{print $1}')" = 8f8cbbdc51e895ecd70a10e6dbce6012240acac19c207410d1215b9ce505c050
           /bin/cat > "$cache_root/mode-controls.py" <<'PY_PARENT_MODE_CONTROLS'
           from pathlib import Path
           import ast,contextlib,ctypes,errno,hashlib,io,json,os,re,stat,subprocess,sys,tempfile,time,types,base64
@@ -2534,11 +2561,11 @@ jobs:
               mode = ns['VersionsParentMode']()
               try:
                   mode.begin();mode.phase('supply','result',True,True)
-                  for program in ('/bin/mkdir','/bin/rm'):
-                      argv = ['/usr/bin/sudo','-n',program] + (['-m','0755',str(ns['V'])] if program.endswith('mkdir') else ['-d','--',str(ns['V'])])
+                  for owned_program in ('/bin/mkdir','/bin/rm'):
+                      argv = ['/usr/bin/sudo','-n',owned_program] + (['-m','0755',str(ns['V'])] if owned_program.endswith('mkdir') else ['-d','--',str(ns['V'])])
                       mode.reserve(argv);ns['bounded_command'](argv,0)
                       leaf = area/'root/Versions/3.15'
-                      leaf.mkdir() if program.endswith('mkdir') else leaf.rmdir()
+                      leaf.mkdir() if owned_program.endswith('mkdir') else leaf.rmdir()
                       mode.open_parent();view = mode.view();mode.release_parent()
                       parents = {}
                       for name, state, children in ((str(ns['ROOT']),view['ancestors'][str(ns['ROOT'])],view['root_children']),
@@ -2550,6 +2577,101 @@ jobs:
                   assert stat.S_IMODE((area/'root/Versions').stat().st_mode)==0o775
                   results.append({'case':'eligible-original-parent-schema-deltas','restored':True})
               finally:mode.close()
+          # Exact phase exception and closure paths use actual nonprivileged child exits.
+          runner_nodes = [node for node in module.body if isinstance(node, ast.FunctionDef)
+                          and node.name in ('bounded_command', 'budget', 'canonical', 'interrupted')]
+          run_node = next(node for node in module.body if isinstance(node, ast.FunctionDef) and node.name == 'run')
+          journal_node = next(node for node in module.body if isinstance(node, ast.FunctionDef) and node.name == 'journal_snapshot')
+          def real_exit(ns, status, cancelled=False):
+              import selectors,signal
+              real = dict(os=os,subprocess=subprocess,selectors=selectors,time=time,json=json,
+                          cancel_requested=0,deadline=time.monotonic()+4)
+              exec(compile(ast.Module(body=runner_nodes,type_ignores=[]),'exact-owned-real-runner','exec'),real)
+              handlers = {number:signal.getsignal(number) for number in (signal.SIGTERM,signal.SIGINT)}
+              for number in handlers:signal.signal(number,real['interrupted'])
+              code = 'import sys;sys.exit('+str(status)+')'
+              if cancelled:code = 'import os,signal,time;os.kill(os.getppid(),signal.SIGTERM);time.sleep(30)'
+              try:
+                  return real['bounded_command']([sys.executable,'-I','-S','-B','-c',code],0,False)
+              finally:
+                  ns['last_child_outcome'] = real['last_child_outcome'].copy()
+                  for number,handler in handlers.items():signal.signal(number,handler)
+
+          def empty_owned_journal(ns, area):
+              mode = ns['parent_mode'];mode.open_parent()
+              try:view = mode.view()
+              finally:mode.release_parent()
+              parents = {str(ns['ROOT']):{'identity':view['ancestors'][str(ns['ROOT'])],'children':view['root_children']},
+                         str(ns['V'].parent):{'identity':view['d'],'children':view['d_children']}}
+              receipt = canonical({'root':str(ns['ROOT']),'objects':[],'created':[],'staging':[],
+                                   'parents':parents,'ancestors':view['ancestors']})
+              with (area/'cache/owned.json').open('xb') as output:output.write(receipt);output.flush();os.fsync(output.fileno())
+              ns['os'].environ['YSTACK_RUNTIME_OWNED_SHA'] = hashlib.sha256(receipt).hexdigest()
+              exec(compile(ast.Module(body=[journal_node],type_ignores=[]),'exact-owned-journal-reader','exec'),ns)
+
+          with tempfile.TemporaryDirectory(prefix='versions-mode-real-phase-') as temporary:
+              for bits in (0o755,0o775):
+                  area = Path(temporary)/str(bits);ns,events,active = fixture(area,mode=bits)
+                  normal_command = ns['bounded_command'];cleanup_calls = []
+                  ns.update(commands=0,held=[],created=set(),parents={},journal=None,
+                            recheck=lambda:None,check_parents=lambda:None,
+                            mutation_names=lambda argv:{},held_directories=lambda:{})
+                  exec(compile(ast.Module(body=[run_node],type_ignores=[]),'exact-owned-source-run','exec'),ns)
+                  def failing_source(argv, expected, stream_phase=False):
+                      if argv[0]=='/usr/bin/sudo':return normal_command(argv,expected)
+                      if argv[0]=='/usr/bin/openssl':return real_exit(ns,17)
+                      assert argv[0]=='/bin/bash' and argv[-1]==str(area/'cache/supply-phase.sh')
+                      empty_owned_journal(ns,area)
+                      try:ns['run'](['/usr/bin/openssl','x509','-inform','DER','-in',str(area/'cache/cert-0.der'),'-pubkey','-noout'])
+                      except AssertionError:pass
+                      return real_exit(ns,23)
+                  ns['bounded_command'] = failing_source
+                  ns['cleanup'] = lambda:cleanup_calls.append('authenticated empty journal cleanup entered')
+                  refuse(lambda:ns['fixed_phase']('supply'))
+                  mode = ns['VersionsParentMode']()
+                  try:
+                      rows = mode.load();phase = next(row['body'] for row in rows if row['kind']=='phase' and row['body']['point']=='result')
+                      assert not phase['success'] and phase['quiescent'] and phase['outcome']['returncode']==23
+                      assert phase['outcome']['reaped'] and not phase['outcome']['cancelled']
+                  finally:mode.close()
+                  refuse(lambda:ns['fixed_phase']('closure'))
+                  assert len(cleanup_calls)==1 and not active
+                  assert stat.S_IMODE((area/'root/Versions').stat().st_mode)==bits
+                  assert len([argv for argv in events if argv[:3]==['/usr/bin/sudo','-n','/bin/chmod']])==(2 if bits==0o775 else 0)
+                  count=len(events);refuse(lambda:ns['fixed_phase']('closure'));assert len(events)==count
+                  results.append({'case':'actual-source-nonzero-'+oct(bits),'outcome':phase['outcome'],
+                                  'failed_verifier_rc':17,'failure_preserved':True,'cleanup_calls':1,'restore_repeated':False})
+              for bits in (0o755,0o775):
+                  for fault in ('missing-result','unreaped','cancelled','privileged-unknown'):
+                      area=Path(temporary)/(str(bits)+'-'+fault);ns,events,active=fixture(area,mode=bits)
+                      ns['fixed_phase']('supply');empty_owned_journal(ns,area)
+                      (area/'root/Versions/3.15').mkdir();(area/'root/ystack-private-tools').mkdir()
+                      cleanup_calls=[];ns['cleanup']=lambda:cleanup_calls.append('must not enter')
+                      normal_command=ns['bounded_command']
+                      def uncertain_suite(argv, expected, stream_phase=False):
+                          if argv[0]=='/usr/bin/sudo':return normal_command(argv,expected)
+                          assert argv==['/bin/bash','scripts/test/scope-qualification.test.sh']
+                          try:return real_exit(ns,29,fault=='cancelled')
+                          finally:
+                              if fault=='unreaped':ns['last_child_outcome']['reaped']=False
+                              if fault=='privileged-unknown':ns['last_child_outcome']['privileged_unknown']=True
+                      ns['bounded_command']=uncertain_suite
+                      if fault=='missing-result':
+                          original_phase=ns['VersionsParentMode'].phase
+                          def interrupted_phase(self,name,point,*args):
+                              if name=='scope' and point=='result':raise OSError('owned interruption before result publication')
+                              return original_phase(self,name,point,*args)
+                          ns['VersionsParentMode'].phase=interrupted_phase
+                      try:ns['fixed_phase']('scope')
+                      except (AssertionError,OSError,SystemExit):pass
+                      else:raise AssertionError('uncertain suite became success')
+                      count=len(events);refuse(lambda:ns['fixed_phase']('closure'))
+                      assert not cleanup_calls and len(events)==count and not active
+                      assert (area/'root/Versions/3.15').is_dir() and (area/'root/ystack-private-tools').is_dir()
+                      assert stat.S_IMODE((area/'root/Versions').stat().st_mode)==0o755
+                      results.append({'case':'actual-closure-'+fault+'-'+oct(bits),'cleanup_calls':0,
+                                      'later_mode_commands':0,'owned_trees_retained':True,
+                                      'observation_adapter':fault in ('unreaped','privileged-unknown')})
           print(json.dumps({'cases':results,'boundary_sha256':hashlib.sha256(source).hexdigest(),
               'limits':'Exact private class/fixed_phase compiled from provision. UID/ACL/physical observations and recording executor are fixed test-only adapters; actual owned records/fsync/fds and nonprivileged child wait are real. No production D, sudo, supplied P, suite or host probe executed.'},sort_keys=True))
           PY_PARENT_MODE_CONTROLS
@@ -2709,19 +2831,19 @@ jobs:
           PY_OWNED_MODE_CONTROLS
           /bin/chmod 0500 "$cache_root/owned-mode-controls.py"
           /usr/bin/python3 -I -S -B "$cache_root/owned-mode-controls.py" "$cache_root/provision.py"
-          test "$(/usr/bin/shasum -a 256 "$cache_root/provision.py" | /usr/bin/awk '{print $1}')" = 4b7d2ac559f0f3b0ccacd70e0bf9ad7818fa91644a1a7a2c76826bc46b6573ea
+          test "$(/usr/bin/shasum -a 256 "$cache_root/provision.py" | /usr/bin/awk '{print $1}')" = 8f8cbbdc51e895ecd70a10e6dbce6012240acac19c207410d1215b9ce505c050
           /usr/bin/python3 -I -S -B "$cache_root/provision.py" "$cache_root" --phase supply
       - name: Complete original scope qualification suite
         timeout-minutes: 35
         shell: /bin/bash --noprofile --norc -e -o pipefail {0}
         run: |
-          test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 4b7d2ac559f0f3b0ccacd70e0bf9ad7818fa91644a1a7a2c76826bc46b6573ea
+          test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 8f8cbbdc51e895ecd70a10e6dbce6012240acac19c207410d1215b9ce505c050
           /usr/bin/python3 -I -S -B "$YSTACK_PROOF_TMP/provision.py" "$YSTACK_PROOF_TMP" --phase scope
       - name: Complete original native owner suite
         timeout-minutes: 50
         shell: /bin/bash --noprofile --norc -e -o pipefail {0}
         run: |
-          test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 4b7d2ac559f0f3b0ccacd70e0bf9ad7818fa91644a1a7a2c76826bc46b6573ea
+          test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 8f8cbbdc51e895ecd70a10e6dbce6012240acac19c207410d1215b9ce505c050
           /usr/bin/python3 -I -S -B "$YSTACK_PROOF_TMP/provision.py" "$YSTACK_PROOF_TMP" --phase native
       - name: Verify source and remove only the owned runtime and test cache
         if: always()
@@ -2733,7 +2855,7 @@ jobs:
           if [ -n "${YSTACK_PROOF_TMP:-}" ]; then
             if test -d "$YSTACK_PROOF_TMP" && test ! -L "$YSTACK_PROOF_TMP" &&
                test "$(/usr/bin/stat -f '%d:%i:%u' "$YSTACK_PROOF_TMP")" = "$YSTACK_PROOF_TMP_ID" &&
-               test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 4b7d2ac559f0f3b0ccacd70e0bf9ad7818fa91644a1a7a2c76826bc46b6573ea; then
+               test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 8f8cbbdc51e895ecd70a10e6dbce6012240acac19c207410d1215b9ce505c050; then
               /usr/bin/python3 -I -S -B "$YSTACK_PROOF_TMP/provision.py" "$YSTACK_PROOF_TMP" --phase closure || recovery_status=$?
             else
               recovery_status=1
