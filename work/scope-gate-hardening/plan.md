@@ -441,21 +441,21 @@ Bind that supply to these accepted `work/scope-genuine-macos-proof/` artifacts:
 | Spec | `d17c985b9651ff46c259997fb54d8fc214293357` |
 | High-risk plan | `3b262be50272921c4b6098d5b86c8f0cd5554478` |
 
-Use the workflow published at `54c3e6278842ed85caa8ef93d20c7a54566b4216`,
-from reviewed head `d6c8136b8a5476313f3fede0ac6a1846fceb449c` against base
-`0627b78f28cb2cbaf417eaf9a4ac656a49e12927`. Actual supply and cleanup across
+Use the workflow published at `b54c764cc2bc19e1183c812e3b05b606878c6abc`,
+from reviewed head `240daa3d2466b7faf1ebfa339dc96d90611b73d6` against base
+`4a4ce2bf5bc6cbec24a799f69447d851b07cc1f8`. Actual supply and cleanup across
 separate job-step processes still require complete Mac job evidence. When mode
 preparation is used, this includes durable journal reopening and verified mode
 restoration. Same-process controls or a green cleanup step cannot replace that
 proof. The workflow Git
-blob is `0bb0a25849dc2ba82bc2effd1269eff39317d370`; its SHA-256 is
-`8cb2a0f6e5aed70b6d25743fbfb390b6f1e5939dfb6a7301aa802350aab76fe1`.
+blob is `727bf04be4b48050159a50125c4d31e8127227b8`; its SHA-256 is
+`cc17022057346df1dfb4522b298ac8ad3c123ce3676697f519b2545e899393ac`.
 The complete shared entry/guard body SHA-256 is
 `41b01937f09c6db77e35cd899ea209665ff2eea7a1e7650d0d5b04ec1090b573`.
 The separate post-guard identity assertion passed through `-c` has SHA-256
 `e11560926ec9ab0188cd448a723a9c2eee5bef4064cc3445d7a25cd5e4377229`.
 The published provision body SHA-256 is
-`650efea04c4a03f4deb3fb0f58d2d3bc36cb71e66c2f957933ceaa4f1519d4a4`;
+`9d3ee653838e91fce78fdca6e28f8e5fd8b23f01983fd97d022698286c5525c0`;
 only the workflow supplies and cleans the runtime. The same-PID transition belongs
 to the shared guard. Keep these exact bytes; a changed dependency returns through
 its artifact gate before fixture changes.
