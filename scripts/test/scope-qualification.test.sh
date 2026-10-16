@@ -3369,6 +3369,25 @@ fixed_tools = fixed_root / 'ystack-private-tools'
 fixed_p = selected
 prefix = fixed_prefix
 stdlib = prefix / 'lib/python3.15'
+logical_prefix = Path('/Library/Frameworks/Python.framework/Versions/3.15')
+
+def copied_load_target(name):
+    target = Path(name)
+    assert target.is_absolute()
+    if target == logical_prefix or logical_prefix in target.parents:
+        assert '..' not in target.parts
+        target = prefix / target.relative_to(logical_prefix)
+    elif target == prefix or prefix in target.parents:
+        target = Path(os.path.normpath(name))
+        assert target == prefix or prefix in target.parents
+    else:
+        target = Path(os.path.normpath(name))
+        assert str(target).startswith(('/usr/lib/', '/System/Library/'))
+    if target == prefix or prefix in target.parents:
+        target = canonical_fixed(target)
+        assert target == prefix or prefix in target.parents
+    return target
+
 assert selected == prefix / 'Resources/Python.app/Contents/MacOS/Python'
 stage = 'real'
 deadline = time.clock_gettime(time.CLOCK_UPTIME_RAW) + 120
@@ -3376,8 +3395,14 @@ deadline = time.clock_gettime(time.CLOCK_UPTIME_RAW) + 120
 metadata_subject = '\n'.join(ast.get_source_segment(guard.decode(), node) for node in imports) + '\n'
 metadata_subject += guard.decode()[package_start:package_end] + metadata_header
 metadata_subject += guard.decode()[state_start:state_end]
-metadata_subject += '\n'.join(ast.get_source_segment(guard.decode(), node) for node in functions) + '\n'
+metadata_functions = '\n'.join(ast.get_source_segment(guard.decode(), node) for node in functions)
+assert metadata_functions.count('target = Path(os.path.normpath(name))') == 1
+metadata_subject += metadata_functions.replace('target = Path(os.path.normpath(name))',
+    'target = copied_load_target(name)') + '\n'
 metadata_try = guard.decode()[try_start:report_start]
+edge_count = "sum(name.startswith(str(prefix) + '/') for source, command, name in load_edges) == 17"
+assert metadata_try.count(edge_count) == 1
+metadata_try = metadata_try.replace(edge_count, edge_count.replace('str(prefix)', 'str(logical_prefix)'))
 parser_boundary = "    for item in reversed((locator, *locator.parents)):\n"
 assert metadata_try.count(parser_boundary) == 1
 parser_control = """    parser_file = prefix / 'lib/python3.15/guard-untrusted.dylib'
@@ -3655,6 +3680,168 @@ c = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = c
 spec.loader.exec_module(c)
 assert c._DARWIN_ACL_FUNCTIONS is not None
+def copied_binding_controls():
+    import tempfile
+    import types
+    with (guard_file.parent / 'manifest.json').open('rb') as source:
+        raw = source.read(16 * 1024 * 1024 + 1)
+    assert len(raw) <= 16 * 1024 * 1024
+    assert hashlib.sha256(raw).hexdigest() == 'e0d204e2827885c5f2f4278e709981b7fc1e02424d3bfa5ae2ff2af789789d26'
+    source_rows = json.loads(raw)
+    manifest = {row['path']: row for row in source_rows
+                if row['path'] == 'Versions/3.15' or row['path'].startswith('Versions/3.15/')}
+    assert len(manifest) == 4496
+    edges = [
+        ('Resources/Python.app/Contents/MacOS/Python', 'Python'),
+        ('bin/python3.15', 'Python'),
+        ('bin/python3.15-intel64', 'Python'),
+        ('lib/libform.6.dylib', 'lib/libncurses.6.dylib'),
+        ('lib/libmenu.6.dylib', 'lib/libncurses.6.dylib'),
+        ('lib/libpanel.6.dylib', 'lib/libncurses.6.dylib'),
+        ('lib/libssl.3.dylib', 'lib/libcrypto.3.dylib'),
+        ('lib/python3.15/lib-dynload/_curses.cpython-315-darwin.so', 'lib/libncurses.6.dylib'),
+        ('lib/python3.15/lib-dynload/_curses_panel.cpython-315-darwin.so', 'lib/libncurses.6.dylib'),
+        ('lib/python3.15/lib-dynload/_curses_panel.cpython-315-darwin.so', 'lib/libpanel.6.dylib'),
+        ('lib/python3.15/lib-dynload/_hashlib.cpython-315-darwin.so', 'lib/libcrypto.3.dylib'),
+        ('lib/python3.15/lib-dynload/_remote_debugging.cpython-315-darwin.so', 'lib/libzstd.1.dylib'),
+        ('lib/python3.15/lib-dynload/_ssl.cpython-315-darwin.so', 'lib/libcrypto.3.dylib'),
+        ('lib/python3.15/lib-dynload/_ssl.cpython-315-darwin.so', 'lib/libssl.3.dylib'),
+        ('lib/python3.15/lib-dynload/_tkinter.cpython-315-darwin.so', 'Frameworks/Tcl.framework/Tcl'),
+        ('lib/python3.15/lib-dynload/_tkinter.cpython-315-darwin.so', 'Frameworks/Tk.framework/Tk'),
+        ('lib/python3.15/lib-dynload/_zstd.cpython-315-darwin.so', 'lib/libzstd.1.dylib'),
+    ]
+
+    def image(target=None):
+        load = b''
+        if target is not None:
+            encoded = target.encode() + b'\0'
+            size = (24 + len(encoded) + 7) // 8 * 8
+            load = struct.pack('<6I', 0xc, size, 24, 0, 0, 0) + encoded
+            load += b'\0' * (size - len(load))
+        x86 = struct.pack('<8I', 0xfeedfacf, 0x01000007, 3, 6, int(bool(load)), len(load), 0, 0) + load
+        arm = struct.pack('<8I', 0xfeedfacf, 0x0100000c, 0, 6, 0, 0, 0, 0)
+        return (struct.pack('>2I', 0xcafebabe, 2) +
+                struct.pack('>5I', 0x01000007, 3, 48, len(x86), 0) +
+                struct.pack('>5I', 0x0100000c, 0, 48 + len(x86), len(arm), 0) + x86 + arm)
+
+    def descriptors():
+        result = []
+        for name in os.listdir('/dev/fd'):
+            try:
+                os.fstat(int(name))
+            except OSError:
+                continue
+            result.append(int(name))
+        return sorted(result)
+
+    before_fds = descriptors()
+    with tempfile.TemporaryDirectory(prefix='copied-binding-', dir=fixture) as temporary:
+        root = Path(temporary).resolve()
+        physical_root = root / 'copy'
+        physical_prefix = physical_root / 'Versions/3.15'
+        physical_prefix.mkdir(parents=True)
+        for row in manifest.values():
+            if row['kind'] == stat.S_IFLNK:
+                link = physical_root / row['path']
+                link.parent.mkdir(parents=True, exist_ok=True)
+                link.symlink_to(row['link'])
+                os.chmod(link, 0o755, follow_symlinks=False)
+        assert sum(row['kind'] == stat.S_IFLNK for row in manifest.values()) == 35
+        targets = {}
+        for source_name, target_name in edges:
+            target = (physical_prefix / target_name).resolve()
+            assert physical_prefix in target.parents
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(image())
+            target.chmod(0o644)
+            targets[target_name] = target
+            (physical_prefix / source_name).parent.mkdir(parents=True, exist_ok=True)
+        opened = []
+
+        def owned_open(path, directory, rule, code):
+            assert Path(path) == physical_root or physical_root in Path(path).parents
+            opened.append(path)
+            return c._open_held(path, directory, rule, code)
+
+        def owned_rule(fd, value, ancestor):
+            # Only the ordinary owned principal and ancestor mode facts adapt here.
+            return stat.S_ISDIR(value.st_mode) if ancestor else (
+                value.st_uid == os.getuid() and not value.st_mode & 0o022)
+
+        library = c._DARWIN_ACL_FUNCTIONS.library
+        library.acl_get_link_np.argtypes = [ctypes.c_char_p, ctypes.c_int]
+        library.acl_get_link_np.restype = ctypes.c_void_p
+        ns = dict(Path=Path, os=os, stat=stat, ctypes=ctypes, errno=errno, hashlib=hashlib,
+                  struct=struct, time=time, math=math, manifest=manifest, library=library,
+                  c=types.SimpleNamespace(_open_held=owned_open, EXECUTABLE_LIMIT=c.EXECUTABLE_LIMIT),
+                  fixed_root=physical_root, prefix=physical_prefix,
+                  logical_prefix=Path('/Library/Frameworks/Python.framework/Versions/3.15'),
+                  selected=physical_prefix / 'Resources/Python.app/Contents/MacOS/Python',
+                  rule=lambda: owned_rule, deadline=time.clock_gettime(time.CLOCK_UPTIME_RAW) + 120,
+                  rows={}, links={}, images=set(), seen=set(), load_edges=set(), cache_paths=set(),
+                  native_inventory={}, static_paths=set(), fields=fields)
+        subject = ast.parse(metadata_subject)
+        names = {'uptime', 'identity', 'empty_acl', 'canonical_fixed', 'inspect', 'native_slices',
+                 'static_data', 'native_dependencies', 'copied_load_target'}
+        functions = [node for node in subject.body if isinstance(node, ast.FunctionDef) and node.name in names]
+        assert len(functions) == len(names)
+        extracted = '\n'.join(ast.get_source_segment(metadata_subject, node) for node in functions)
+        assert extracted.count('before.st_uid == 0') == 1
+        extracted = extracted.replace('before.st_uid == 0', 'before.st_uid == os.getuid()')
+        exec(compile(extracted, 'actual-copied-binding-functions-owned-principal', 'exec'), ns)
+        logical_prefix = ns['logical_prefix']
+        for source_name, target_name in edges:
+            logical = str(logical_prefix / target_name)
+            assert ns['copied_load_target'](logical) == targets[target_name]
+            ns['native_dependencies'](physical_prefix / source_name, image(logical))
+        assert len(ns['load_edges']) == 17
+        assert all(name.startswith(str(logical_prefix) + '/') for source, command, name in ns['load_edges'])
+        assert ns['images'] == set(targets.values())
+        traversal = next(node for node in ast.walk(subject) if isinstance(node, ast.While)
+                         and isinstance(node.test, ast.Name) and node.test.id == 'images')
+        exec(compile(ast.Module(body=[traversal], type_ignores=[]), 'actual-copied-image-traversal', 'exec'), ns)
+        assert ns['seen'] == set(targets.values()) and set(ns['rows']) == {str(path) for path in targets.values()}
+        assert all(physical_root in Path(path).parents for path in opened)
+        assert any('Tcl.framework' in name for name in ns['links'])
+        assert any('Tk.framework' in name for name in ns['links'])
+        assert any('libzstd.1.dylib' in name for name in ns['links'])
+        refused = []
+
+        def reject(label, action):
+            try:
+                action()
+            except (AssertionError, OSError, ValueError, c.Refusal):
+                refused.append(label)
+            else:
+                raise AssertionError('copied binding accepted ' + label)
+
+        for label, name in (
+                ('other-version', str(logical_prefix.parent / '3.14/Python')),
+                ('prefix-lookalike', str(logical_prefix) + '-other/Python'),
+                ('logical-escape', str(logical_prefix) + '/../3.14/Python'),
+                ('physical-escape', str(physical_prefix) + '/../../../../escape'),
+                ('relative', 'Python'), ('unknown', '/copied-binding-untrusted/Python')):
+            reject(label, lambda name=name: ns['copied_load_target'](name))
+        assert ns['copied_load_target']('/usr/lib/libSystem.B.dylib') == Path('/usr/lib/libSystem.B.dylib')
+        target = targets['Python']
+        original_good = root / 'original-good'
+        original_good.write_bytes(target.read_bytes())
+        target.write_bytes(b'changed-copy')
+        reject('changed-copy-not-original-good', lambda: ns['inspect'](ns['copied_load_target'](str(logical_prefix / 'Python'))))
+        target.unlink()
+        reject('missing-copy-not-original-good', lambda: ns['inspect'](ns['copied_load_target'](str(logical_prefix / 'Python'))))
+        target.symlink_to(original_good)
+        reject('copy-link-to-original-good', lambda: ns['copied_load_target'](str(logical_prefix / 'Python')))
+        assert original_good.read_bytes() == image()
+        assert all(not str(path).startswith(str(logical_prefix)) for path in opened)
+    after_fds = descriptors()
+    assert before_fds == after_fds
+    print(json.dumps({'copied_binding_controls': 'PASS', 'logical_edges': 17, 'fixed_links': 35,
+                      'refusals': refused, 'actual_opened_copy_paths': opened,
+                      'fds_before': before_fds, 'fds_after': after_fds,
+                      'ordinary_uid_ancestor_mode_adapter': True, 'copied_runtime_executed': False}, sort_keys=True), flush=True)
+
+copied_binding_controls()
 entry_namespace = {'ctypes': ctypes, 'errno': errno, 'time': time, 'math': math,
     'deadline': time.clock_gettime(time.CLOCK_UPTIME_RAW) + 120, 'library': c._DARWIN_ACL_FUNCTIONS.library}
 exec(compile(ast.Module(body=entry_rules, type_ignores=[]), 'actual-entry-rules', 'exec'), entry_namespace)
