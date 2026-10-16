@@ -975,7 +975,7 @@ exit_capture = r"""diag_after_cleanup() {
 }
 trap diag_after_cleanup EXIT
 """
-for index,case in enumerate(cases):
+for index,case in enumerate(cases+['evaluation-reasons']):
     log=area/(str(index)+'.jsonl');log.touch(mode=0o600,exist_ok=False)
     binding=area/(str(index)+'.binding.json');binding.touch(mode=0o600,exist_ok=False)
     wrapper=area/(str(index)+'.py')
@@ -1002,6 +1002,11 @@ for index,case in enumerate(cases):
     line_map={'original_sha256':hashlib.sha256(front.encode()).hexdigest(),
         'copy_sha256':hashlib.sha256(copy.encode()).hexdigest(),'line_map':mapping,
         'original_line_sha256':{str(number):hashlib.sha256(original_lines[number-1].encode()).hexdigest() for number in mapping.values()}}
+    if index==8:
+        import os
+        line_map['slot_identity']={name:list((lambda value:(value.st_dev,value.st_ino,value.st_mode,
+            value.st_uid,value.st_gid,value.st_nlink))(os.lstat(path)))
+            for name,path in (('log',log),('binding',binding))}
     raw=json.dumps(line_map,separators=(',',':')).encode()+b'\n'
     assert len(raw)<=12000
     (area/(str(index)+'.lines.json')).write_bytes(raw)
@@ -1020,11 +1025,125 @@ expect_validator_error() {
   [ "$status" -ne 0 ] || fail "$label accepted"
   [ "$out" = "$expected" ] || fail "$label expected $expected got $out"
 }
+prepare_stale_binding() {
+  local index=$1 boundary=$2 frontend=$3
+  shift 3
+  if [ "$#" -eq 7 ]; then set -- "$@" "$tmp/legacy-bundles" "$tmp/legacy-source.git"; fi
+  python3 -I -S -B - "$root" "$tmp/stale-observation" "$index" "$boundary" "$frontend" "$@" <<'PY_PROTECTED_BINDING'
+import hashlib
+import json
+import os
+from pathlib import Path
+import stat
+import sys
+
+root, area = map(Path, sys.argv[1:3])
+index, glob, frontend = int(sys.argv[3]), sys.argv[4], Path(sys.argv[5])
+arguments = sys.argv[6:]
+documents = arguments[:7]
+assert 0 <= index <= 8 and len(arguments) == 9
+assert index != 8 or glob == 'evaluation-reasons'
+sources = ('scope/v1/evaluate-scope.sh', 'scope/v1/read-shadow-evidence.py',
+           'shadow/v1/_consumer.py', 'scripts/test/scope-qualification.test.sh')
+identity = lambda value: (value.st_dev, value.st_ino, value.st_mode, value.st_uid,
+    value.st_gid, value.st_nlink, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+
+
+def measured(path, maximum):
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        before = os.fstat(descriptor)
+        assert stat.S_ISREG(before.st_mode) and before.st_nlink == 1
+        chunks, total = [], 0
+        while True:
+            raw = os.read(descriptor, min(65536, maximum + 1 - total))
+            if not raw:
+                break
+            chunks.append(raw)
+            total += len(raw)
+            assert total <= maximum
+        assert identity(os.fstat(descriptor)) == identity(before)
+        assert identity(os.stat(path, follow_symlinks=False)) == identity(before)
+        return {'path': str(path), 'bytes': total, 'sha256': hashlib.sha256(b''.join(chunks)).hexdigest()}
+    finally:
+        os.close(descriptor)
+
+
+if index == 8:
+    descriptor = os.open(area / '8.lines.json', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        before = os.fstat(descriptor)
+        assert stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and before.st_uid == os.getuid()
+        raw = os.read(descriptor, 12001)
+        assert len(raw) <= 12000 and identity(os.fstat(descriptor)) == identity(before)
+        assert identity(os.stat(area / '8.lines.json', follow_symlinks=False)) == identity(before)
+        pinned = json.loads(raw)['slot_identity']
+    finally:
+        os.close(descriptor)
+    for name, suffix, maximum in (('log', '.jsonl', 16384), ('binding', '.binding.json', 3072)):
+        path = area / ('8' + suffix)
+        descriptor = os.open(path, os.O_WRONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            before = os.fstat(descriptor)
+            assert list(identity(before)[:6]) == pinned[name]
+            assert stat.S_ISREG(before.st_mode) and before.st_uid == os.getuid() and before.st_nlink == 1
+            assert stat.S_IMODE(before.st_mode) == 0o600 and before.st_size <= maximum
+            assert identity(os.stat(path, follow_symlinks=False)) == identity(before)
+            os.ftruncate(descriptor, 0)
+            after = os.fstat(descriptor)
+            assert identity(after)[:6] == identity(before)[:6] and after.st_size == 0
+            assert identity(os.stat(path, follow_symlinks=False)) == identity(after)
+        finally:
+            os.close(descriptor)
+
+
+command = [str(frontend), 'evaluate', *arguments]
+try:
+    binding = {'status': 'CASE_BINDING', 'index': index, 'glob': glob,
+        'source_event_sha': os.environ.get('GITHUB_SHA', 'GAP'),
+        'command_sha256': hashlib.sha256(json.dumps(command,
+            separators=(',', ':'), ensure_ascii=True).encode()).hexdigest(),
+        'inputs': [measured(Path(path), 1048576) for path in documents],
+        'source': [measured(root / path, 16 * 1024 * 1024) for path in sources],
+        'private_frontend': measured(frontend, 16 * 1024 * 1024)}
+except (OSError, AssertionError) as error:
+    binding = {'status': 'OBSERVER_GAP', 'index': index, 'glob': glob,
+               'boundary': 'case binding before evaluator', 'exception': type(error).__name__}
+raw = json.dumps(binding, separators=(',', ':'), ensure_ascii=True).encode() + b'\n'
+if len(raw) > 3072:
+    raw = (json.dumps({'status':'OBSERVER_GAP','index':index,'glob':glob,'reason':'case binding cap3072'})+'\n').encode()
+path = area / (str(index) + '.binding.json')
+fd = os.open(path, os.O_WRONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+try:
+    info = os.fstat(fd)
+    assert stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid == os.getuid()
+    if index == 8:
+        assert list(identity(info)[:6]) == pinned['binding'] and stat.S_IMODE(info.st_mode) == 0o600
+        assert identity(os.stat(path, follow_symlinks=False)) == identity(info)
+    os.ftruncate(fd, 0)
+    assert os.write(fd, raw) == len(raw)
+    if index == 8:
+        after = os.fstat(fd)
+        assert identity(after)[:6] == identity(info)[:6] and after.st_size == len(raw)
+        assert identity(os.stat(path, follow_symlinks=False)) == identity(after)
+finally:
+    os.close(fd)
+if index == 8 and binding['status'] != 'CASE_BINDING':
+    raise SystemExit(1)
+PY_PROTECTED_BINDING
+}
 evaluation_reasons() {
-  local out
+  local out evaluator=$evaluator diagnostic_index=8 diagnostic_ready=false
+  if [ "$1" = "$tmp/protected.json" ]; then
+    diagnostic_index=$protected_index
+    diagnostic_ready=true
+  elif prepare_stale_binding 8 evaluation-reasons "$tmp/stale-observation/8.sh" "$@" 2>/dev/null; then
+    evaluator="$tmp/stale-observation/8.sh"
+    diagnostic_ready=true
+  fi
   out=$(run_evaluator "$@" 2>&1) ||
-    { if [ "$1" = "$tmp/protected.json" ]; then
-        python3 -I -S -B - "$tmp/stale-observation/$protected_index.jsonl" "$tmp/stale-observation/$protected_index.binding.json" "$tmp/stale-observation/$protected_index.lines.json" <<'PY_STALE_EXPORT' >&2 2>/dev/null || :
+    { if [ "$diagnostic_ready" = true ]; then
+        python3 -I -S -B - "$tmp/stale-observation/$diagnostic_index.jsonl" "$tmp/stale-observation/$diagnostic_index.binding.json" "$tmp/stale-observation/$diagnostic_index.lines.json" <<'PY_STALE_EXPORT' >&2 2>/dev/null || :
 import json,os,pathlib,stat,sys
 try:
     fd=os.open(sys.argv[1],os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
@@ -1054,6 +1173,8 @@ try:
 except BaseException:
     print('{"status":"OBSERVER_GAP","reason":"missing/incomplete private transport"}')
 PY_STALE_EXPORT
+      else
+        /usr/bin/printf '%s\n' '{"status":"OBSERVER_GAP","reason":"current private preparation failed"}' >&2
       fi
       fail "evaluator refused a well-formed call ($1): $(/usr/bin/printf '%s' "$out" | /usr/bin/tail -c 300)"
     }
@@ -1074,6 +1195,105 @@ expect_evaluator_error() {
   [ "$status" -ne 0 ] || fail "$label accepted"
   [ "$out" = "$expected" ] || fail "$label expected $expected got $out"
 }
+
+"$python_bin" -I -S -B - "$root" <<'PY_STALE_CONTROLS'
+from pathlib import Path
+import ast,hashlib,json,os,shlex,subprocess,sys,tempfile
+root=Path(sys.argv[1])
+source=(root/'scripts/test/scope-qualification.test.sh').read_text()
+def heredoc(tag):
+    start=source.index("<<'"+tag+"'");start=source.index('\n',start)+1
+    return source[start:source.index('\n'+tag+'\n',start)]+'\n'
+prepare=heredoc('PY_STALE_PREPARE')
+functions=source[source.index('run_evaluator() {'):source.index('\nexpect_reasons() {')]
+functions=functions[:functions.index('\nexpect_validator_error() {')]+functions[functions.index('\nprepare_stale_binding() {'):]
+expected={'observer_source':'0c2b1c8c8cb9c662c55e17e134f408693ab4ead8f27357ad6cb2b7bcc0b820eb',
+ 'frontend_capture':'a21a722a59923fa6ad18f6f6dd26385d46dcd5a3733083f9d7625777d73c4af8',
+ 'emit_capture':'153556128c04167c2a73d6c91c86b37bd3e1d34eb35fdeea44e865803301afb4',
+ 'exit_capture':'95bc34214161aa79167d7f33e8cf4980d70177f7771fa5bf30672e8f0e1739ac'}
+bodies={n.targets[0].id:n.value.value for n in ast.parse(prepare).body if isinstance(n,ast.Assign) and isinstance(n.targets[0],ast.Name) and isinstance(n.value,ast.Constant) and isinstance(n.value.value,str)}
+assert all(hashlib.sha256(bodies[n].encode()).hexdigest()==digest for n,digest in expected.items())
+reports=[]
+with tempfile.TemporaryDirectory(prefix='ystack-boundary-owned-') as temporary:
+    tmp=Path(temporary);area=tmp/'stale-observation';area.mkdir(mode=0o700)
+    prior=sys.argv
+    try:
+        sys.argv=['owned-prepare',str(root),str(area)]
+        exec(compile(prepare,'exact-private-copy-preparation','exec'),{})
+    finally:sys.argv=prior
+    for suffix in ('.jsonl','.binding.json','.sh','.py','.lines.json'):
+        assert len(list(area.glob('*'+suffix)))==(10 if suffix=='.py' else 9)
+    assert len(list(area.iterdir()))==46
+    mapping=json.loads((area/'8.lines.json').read_bytes())
+    front=(root/'scope/v1/evaluate-scope.sh').read_text().splitlines()
+    copied=(area/'8.sh').read_text().splitlines()
+    for c,o in mapping['line_map'].items():
+        assert copied[int(c)-1]==front[o-1]
+        assert mapping['original_line_sha256'][str(o)]==hashlib.sha256(front[o-1].encode()).hexdigest()
+    fixed_line=next(iter(mapping['line_map']))
+    docs=[]
+    for index in range(7):
+        path=tmp/('input'+str(index)+'.json');path.write_text('{}\n');docs.append(path)
+    (tmp/'bin').mkdir();trace=tmp/'argv.trace';trace.touch(mode=0o600)
+    pytrace=tmp/'python.trace';pytrace.touch(mode=0o600)
+    interpreter=shlex.quote(sys.executable)
+    (tmp/'bin/python3').write_text('#!/bin/bash\nprintf "%s\\n" "$#" >> '+shlex.quote(str(pytrace))+'\nexec '+interpreter+' "$@"\n')
+    (tmp/'bin/python3').chmod(0o500)
+    stub='#!/bin/bash\n/usr/bin/printf "%s\\0" "$0" "$@" >> '+shlex.quote(str(trace))+'\n'
+    failure=stub+'/usr/bin/printf \'{"status":"FRONTEND_ERROR","case_index":8,"copy_caller_line":'+fixed_line+'}\\n\' >> '+shlex.quote(str(area/'8.jsonl'))+'\n/usr/bin/printf "E_STALE\\n" >&2\nexit 1\n'
+    fallback=tmp/'fallback.sh';fallback.write_text(stub+'printf "E_STALE\\n" >&2\nexit 1\n');fallback.chmod(0o500)
+    def frontend(text):
+        path=area/'8.sh';path.chmod(0o700);path.write_text(text);path.chmod(0o500)
+    prefix='set -euo pipefail\n'+functions+'\nroot='+shlex.quote(str(root))+'\ntmp='+shlex.quote(str(tmp))+'\nbin='+shlex.quote(str(tmp/'bin'))+'\nevaluator='+shlex.quote(str(fallback))+'\nPATH="$bin:/usr/bin:/bin"\nowned_jq(){ /bin/cat; }\njq_bin=owned_jq\nfail(){ printf "FAIL: %s\\n" "$1" >&2; exit 1; }\n'
+    argv=' '.join(shlex.quote(str(path)) for path in docs)
+    frontend(stub+'printf \'["owned"]\'\n')
+    call=prefix+'a=$(evaluation_reasons '+argv+'); test "$a" = \'["owned"]\'\nprintf \'{"current":2}\\n\' > '+shlex.quote(str(docs[0]))+'\nb=$(evaluation_reasons '+argv+'); test "$b" = \'["owned"]\'\ntest "$evaluator" = '+shlex.quote(str(fallback))+'\n'
+    result=subprocess.run(['/bin/bash','-c',call],capture_output=True,timeout=10)
+    assert result.returncode==0 and not result.stdout and not result.stderr,(result.returncode,result.stderr)
+    current=json.loads((area/'8.binding.json').read_bytes())
+    command=[str(area/'8.sh'),'evaluate',*[str(path)for path in docs],str(tmp/'legacy-bundles'),str(tmp/'legacy-source.git')]
+    assert current['index']==8 and current['glob']=='evaluation-reasons'
+    assert current['command_sha256']==hashlib.sha256(json.dumps(command,separators=(',',':'),ensure_ascii=True).encode()).hexdigest()
+    assert current['inputs'][0]['sha256']==hashlib.sha256(docs[0].read_bytes()).hexdigest()
+    assert [row['sha256']for row in current['source']]==[hashlib.sha256((root/path).read_bytes()).hexdigest()for path in ('scope/v1/evaluate-scope.sh','scope/v1/read-shadow-evidence.py','shadow/v1/_consumer.py','scripts/test/scope-qualification.test.sh')]
+    assert current['private_frontend']['sha256']==hashlib.sha256((area/'8.sh').read_bytes()).hexdigest()
+    assert trace.read_bytes().split(b'\0')[:-1]==[os.fsencode(arg)for arg in command]*2
+    assert not (area/'8.jsonl').read_bytes()
+    reports.append({'case':'serial-reuse','actual_calls':2,'exact_nine_data_argv':True,'fresh_seven_input_source_frontend_hashes':True,'global_frontend_unchanged':True,'success_not_exported':True})
+    for fault in ('failure-transport','reset-failure','binding-failure'):
+        frontend(failure)
+        (area/'8.jsonl').write_text('{"status":"STALE_PREVIOUS_RECORD"}\n')
+        (area/'8.binding.json').write_text('{"status":"STALE_PREVIOUS_BINDING"}\n')
+        marker=None
+        if fault=='reset-failure':
+            marker=tmp/'old.log';marker.write_text('STALE_PREVIOUS_RECORD\n')
+            (area/'8.jsonl').unlink();(area/'8.jsonl').symlink_to(marker)
+        if fault=='binding-failure':docs[0].rename(tmp/'missing-input.json')
+        before=pytrace.read_text().splitlines()
+        result=subprocess.run(['/bin/bash','-c',prefix+'evaluation_reasons '+argv],capture_output=True,timeout=10)
+        assert result.returncode==1 and not result.stdout and b'E_STALE' in result.stderr
+        assert b'STALE_PREVIOUS_RECORD' not in result.stderr and b'STALE_PREVIOUS_BINDING' not in result.stderr
+        rows=result.stderr.splitlines();added=pytrace.read_text().splitlines()[len(before):]
+        if fault=='failure-transport':
+            binding,record=map(json.loads,rows[:2])
+            assert binding['status']=='CASE_BINDING' and record['status']=='FRONTEND_ERROR'
+            assert record['original_caller_line']==mapping['line_map'][fixed_line]
+            assert record['original_line_sha256']==mapping['original_line_sha256'][str(record['original_caller_line'])]
+            assert record['copy_sha256']==mapping['copy_sha256'] and sum(len(row)+1 for row in rows[:2])<=16384
+            assert len(added)==2
+        else:
+            assert json.loads(rows[0])['status']=='OBSERVER_GAP' and len(added)==1
+        if marker is not None:
+            assert marker.read_text()=='STALE_PREVIOUS_RECORD\n'
+            (area/'8.jsonl').unlink();(area/'8.jsonl').touch(mode=0o600)
+            pinned=json.loads((area/'8.lines.json').read_bytes())
+            value=os.lstat(area/'8.jsonl');pinned['slot_identity']['log']=[value.st_dev,value.st_ino,value.st_mode,value.st_uid,value.st_gid,value.st_nlink]
+            (area/'8.lines.json').write_text(json.dumps(pinned))
+        if fault=='binding-failure':(tmp/'missing-input.json').rename(docs[0])
+        assert len(list(area.iterdir()))==46
+        reports.append({'case':fault,'original_nonzero_and_stderr_preserved':True,'old_evidence_not_read_or_exported':True,'export_invocations':len(added)-1})
+print(json.dumps({'cases':reports,'four_body_sha256':expected,'scope':'Exact preparation/binding/evaluation_reasons/run_evaluator bytes; fixed ordinary frontend/jq output adapters only. No actual evaluator, reader, jq, supplied P, genuine fixture or historical cause proof.'},sort_keys=True))
+PY_STALE_CONTROLS
 
 for shipped in "$policy" "$record_program" "$gate_program" "$validator" "$evaluator"; do
   [ -f "$shipped" ] && [ ! -L "$shipped" ] || fail "missing $shipped"
@@ -1720,71 +1940,8 @@ for glob in '.github/workflows/ci.yml' 'config/models.conf' 'AGENTS.md' \
     "$tmp/scope.json" >"$tmp/protected.json"
   original_evaluator=$evaluator
   evaluator="$tmp/stale-observation/$protected_index.sh"
-  python3 -I -S -B - "$root" "$tmp/stale-observation" "$protected_index" "$glob" "$evaluator" \
-    "$tmp/protected.json" "${good[@]:1}" <<'PY_PROTECTED_BINDING' 2>/dev/null || :
-import hashlib
-import json
-import os
-from pathlib import Path
-import stat
-import sys
-
-root, area = map(Path, sys.argv[1:3])
-index, glob, frontend = int(sys.argv[3]), sys.argv[4], Path(sys.argv[5])
-documents = sys.argv[6:]
-assert 0 <= index < 8 and len(documents) == 7
-sources = ('scope/v1/evaluate-scope.sh', 'scope/v1/read-shadow-evidence.py',
-           'shadow/v1/_consumer.py', 'scripts/test/scope-qualification.test.sh')
-identity = lambda value: (value.st_dev, value.st_ino, value.st_mode, value.st_uid,
-    value.st_gid, value.st_nlink, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
-
-
-def measured(path, maximum):
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    try:
-        before = os.fstat(descriptor)
-        assert stat.S_ISREG(before.st_mode) and before.st_nlink == 1
-        chunks, total = [], 0
-        while True:
-            raw = os.read(descriptor, min(65536, maximum + 1 - total))
-            if not raw:
-                break
-            chunks.append(raw)
-            total += len(raw)
-            assert total <= maximum
-        assert identity(os.fstat(descriptor)) == identity(before)
-        assert identity(os.stat(path, follow_symlinks=False)) == identity(before)
-        return {'path': str(path), 'bytes': total, 'sha256': hashlib.sha256(b''.join(chunks)).hexdigest()}
-    finally:
-        os.close(descriptor)
-
-
-command = [str(frontend), 'evaluate', *documents, str(area.parent / 'legacy-bundles'),
-           str(area.parent / 'legacy-source.git')]
-try:
-    binding = {'status': 'CASE_BINDING', 'index': index, 'glob': glob,
-        'source_event_sha': os.environ.get('GITHUB_SHA', 'GAP'),
-        'command_sha256': hashlib.sha256(json.dumps(command,
-            separators=(',', ':'), ensure_ascii=True).encode()).hexdigest(),
-        'inputs': [measured(Path(path), 1048576) for path in documents],
-        'source': [measured(root / path, 16 * 1024 * 1024) for path in sources],
-        'private_frontend': measured(frontend, 16 * 1024 * 1024)}
-except (OSError, AssertionError) as error:
-    binding = {'status': 'OBSERVER_GAP', 'index': index, 'glob': glob,
-               'boundary': 'case binding before evaluator', 'exception': type(error).__name__}
-raw = json.dumps(binding, separators=(',', ':'), ensure_ascii=True).encode() + b'\n'
-if len(raw) > 3072:
-    raw = (json.dumps({'status':'OBSERVER_GAP','index':index,'glob':glob,'reason':'case binding cap3072'})+'\n').encode()
-path = area / (str(index) + '.binding.json')
-fd = os.open(path, os.O_WRONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-try:
-    info = os.fstat(fd)
-    assert stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid == os.getuid()
-    os.ftruncate(fd, 0)
-    assert os.write(fd, raw) == len(raw)
-finally:
-    os.close(fd)
-PY_PROTECTED_BINDING
+  prepare_stale_binding "$protected_index" "$glob" "$evaluator" \
+    "$tmp/protected.json" "${good[@]:1}" 2>/dev/null || :
   expect_reasons "protected $glob" '["scope.protected-path"]' "$tmp/protected.json" \
     "${good[@]:1}"
   evaluator=$original_evaluator
