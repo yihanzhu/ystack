@@ -77,7 +77,6 @@ jobs:
               exit 1
             }
           done
-          native_p=/Library/Frameworks/Python.framework/Versions/3.15/Resources/Python.app/Contents/MacOS/Python
           test -z "${__PYVENV_LAUNCHER__+present}" || {
             /usr/bin/printf 'precache_failure check=environment-1\n' >&2 || exit 1
             exit 1
@@ -431,7 +430,9 @@ jobs:
               return result
 
 
-          def bounded_command(argv, expected):
+          def bounded_command(argv, expected, stream_phase=False):
+              global last_child_outcome
+              last_child_outcome = {"pid": None, "returncode": None, "reaped": False, "cancelled": False, "privileged_unknown": False}
               budget()
               child_deadline = deadline - 2
               assert time.monotonic() < child_deadline
@@ -443,6 +444,7 @@ jobs:
                   budget()
                   process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                              stderr=subprocess.PIPE, close_fds=True, umask=0o022)
+                  last_child_outcome["pid"] = process.pid
                   budget()
                   selector = selectors.DefaultSelector()
                   budget()
@@ -463,6 +465,8 @@ jobs:
                               continue
                           assert len(output) + len(errors) + len(block) <= 16 * 1024 * 1024
                           key.data.extend(block)
+                          if stream_phase:
+                              assert os.write(1 if key.data is output else 2, block) == len(block)
                   while True:
                       budget()
                       remaining = child_deadline - time.monotonic()
@@ -520,8 +524,15 @@ jobs:
                           os.write(2, diagnostic)
                       except OSError:
                           pass
+                      last_child_outcome = {'pid': process.pid, 'returncode': process.returncode, 'reaped': reaped,
+                          'cancelled': bool(cancel_requested), 'privileged_unknown': argv[0] == '/usr/bin/sudo'}
                       if not reaped:
                           raise RuntimeError('owned direct-child cancellation or reap unknown')
+                  last_child_outcome = {'pid': None if process is None else process.pid,
+                      'returncode': None if process is None else process.returncode,
+                      'reaped': process is not None and process.returncode is not None,
+                      'cancelled': bool(cancel_requested),
+                      'privileged_unknown': argv[0] == '/usr/bin/sudo' and not completed}
                   if close_unknown:
                       raise RuntimeError('owned command pipe or selector close unknown')
                   if cancel_requested:
@@ -546,7 +557,12 @@ jobs:
                   names = set(os.listdir(directories[path][1]))
                   assert len(names) <= 16384 and not names & additions and removals <= names
                   names_before[path] = names
-              output = bounded_command(argv, expected)
+              parent_mode.reserve(argv)
+              try:
+                  output = bounded_command(argv, expected)
+              except BaseException:
+                  parent_mode.complete(False)
+                  raise
               if journal is not None:
                   assert journal_snapshot() == journal
               for path, (additions, removals) in changes.items():
@@ -576,6 +592,8 @@ jobs:
                           parents[str(ROOT)]['children']['Versions']['identity'] = parents[name]['identity'].copy()
               recheck()
               check_parents()
+              if not changes and argv[0] != '/usr/bin/sudo':
+                  parent_mode.complete(True)
               return output
 
 
@@ -612,6 +630,8 @@ jobs:
                   os.fsync(output.fileno())
               journal = journal_snapshot()
               assert journal[1] == raw
+              if parent_mode.pending is not None:
+                  parent_mode.complete(True, json.loads(canonical(parents)), hashlib.sha256(raw).hexdigest())
 
 
           def link(path, expected, writable=False):
@@ -703,12 +723,602 @@ jobs:
               print(canonical({'cleanup': 'two-owned-trees-absent', 'parents': parents}).decode('ascii'))
 
 
-          if len(sys.argv) == 3 and sys.argv[2] == '--cleanup':
+          class VersionsParentMode:
+              RECORD_LIMIT = 4 * 1024 * 1024
+              ENV_KEY = 'YSTACK_VERSIONS_MODE_STATE'
+              PHASES = ('supply', 'scope', 'native', 'closure')
+
+              def __init__(self):
+                  self.cache_fd = os.open(cache, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                  self.cache_identity = ident(os.fstat(self.cache_fd))
+                  assert self.cache_identity == ident(cache.lstat())
+                  assert self.cache_identity[3] == os.getuid() and self.cache_identity[2] == stat.S_IFDIR | 0o700
+                  self.cache_binding = self.cache_identity[:5]
+                  self.context = {key: os.environ[key] for key in
+                                  ('YSTACK_SELECTED_SHA', 'YSTACK_WORKFLOW_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_JOB')}
+                  assert re.fullmatch('[0-9a-f]{40}', self.context['YSTACK_SELECTED_SHA'])
+                  assert self.context['YSTACK_SELECTED_SHA'] == self.context['YSTACK_WORKFLOW_SHA']
+                  assert all(re.fullmatch('[A-Za-z0-9_-]{1,64}', value) for value in self.context.values())
+                  self.binding = None
+                  self.baseline = None
+                  self.rows = []
+                  self.pending = None
+                  self.root_record = None
+                  self.d_fd = None
+                  self.d_identity = None
+                  self.expected_parents = None
+                  self.env_seen = None
+
+              @staticmethod
+              def unique(pairs):
+                  result = {}
+                  for key, value in pairs:
+                      assert key not in result
+                      result[key] = value
+                  return result
+
+              def cache_check(self):
+                  actual = ident(os.fstat(self.cache_fd))
+                  assert actual == ident(cache.lstat()) and actual[:5] == self.cache_binding
+                  assert stat.S_ISDIR(actual[2]) and not actual[2] & 0o077
+
+              def read_record(self, name):
+                  self.cache_check()
+                  assert name in ('versions-mode-original.json', 'provision-actions.jsonl')
+                  fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=self.cache_fd)
+                  try:
+                      before = ident(os.fstat(fd))
+                      assert before[2] == stat.S_IFREG | 0o600 and before[3] == os.getuid() and before[5] == 1
+                      assert 0 <= before[6] <= self.RECORD_LIMIT
+                      raw = bytearray()
+                      while True:
+                          budget()
+                          block = os.read(fd, min(65536, self.RECORD_LIMIT + 1 - len(raw)))
+                          if not block:
+                              break
+                          raw.extend(block)
+                          assert len(raw) <= self.RECORD_LIMIT
+                      assert len(raw) == before[6]
+                      assert before == ident(os.fstat(fd)) == ident(os.stat(name, dir_fd=self.cache_fd, follow_symlinks=False))
+                      self.cache_check()
+                      return {'identity': before, 'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}, bytes(raw)
+                  finally:
+                      os.close(fd)
+
+              def create_record(self, name, raw):
+                  self.cache_check()
+                  assert name in ('versions-mode-original.json', 'provision-actions.jsonl') and len(raw) <= self.RECORD_LIMIT
+                  fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=self.cache_fd)
+                  try:
+                      state = os.fstat(fd)
+                      assert stat.S_ISREG(state.st_mode) and state.st_uid == os.getuid() and state.st_nlink == 1
+                      assert stat.S_IMODE(state.st_mode) == 0o600
+                      position = 0
+                      while position < len(raw):
+                          count = os.write(fd, raw[position:position + 65536])
+                          assert count > 0
+                          position += count
+                      os.fsync(fd)
+                  finally:
+                      os.close(fd)
+                  os.fsync(self.cache_fd)
+                  binding, actual = self.read_record(name)
+                  assert actual == raw
+                  return binding
+
+              def publication(self, value=None):
+                  path = Path(os.environ['GITHUB_ENV'])
+                  fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_NOFOLLOW | os.O_NONBLOCK)
+                  try:
+                      before = ident(os.fstat(fd))
+                      assert stat.S_ISREG(before[2]) and before[3] == os.getuid() and before[5] == 1
+                      assert before == ident(path.lstat()) and before[6] <= 16 * 1024 * 1024
+                      os.lseek(fd, 0, os.SEEK_SET)
+                      existing = bytearray()
+                      while True:
+                          block = os.read(fd, 65536)
+                          if not block:
+                              break
+                          existing.extend(block)
+                          assert len(existing) <= 16 * 1024 * 1024
+                      assert ident(os.fstat(fd)) == before == ident(path.lstat())
+                      if value is not None:
+                          line = self.ENV_KEY.encode() + b'=' + base64.b64encode(canonical(value)) + b'\n'
+                          assert len(line) <= 16384 and len(existing) + len(line) <= 16 * 1024 * 1024
+                          assert not existing or existing[-1:] == b'\n'
+                          assert os.write(fd, line) == len(line)
+                          os.fsync(fd)
+                          after = ident(os.fstat(fd))
+                          assert after == ident(path.lstat()) and after[:6] == before[:6]
+                          os.lseek(fd, before[6], os.SEEK_SET)
+                          assert os.read(fd, len(line) + 1) == line
+                          text = line[len(self.ENV_KEY) + 1:-1].decode('ascii')
+                          os.environ[self.ENV_KEY] = text
+                          self.env_seen = text
+                          return value
+                      matches = [line[len(self.ENV_KEY) + 1:] for line in bytes(existing).splitlines()
+                                 if line.startswith(self.ENV_KEY.encode() + b'=')]
+                      text = matches[-1].decode('ascii') if matches else os.environ.get(self.ENV_KEY)
+                      assert text and len(text) <= 16384
+                      raw = base64.b64decode(text, validate=True)
+                      result = json.loads(raw, object_pairs_hook=self.unique)
+                      assert canonical(result) == raw
+                      self.env_seen = text
+                      return result
+                  finally:
+                      os.close(fd)
+
+              def publish(self):
+                  action, raw = self.read_record('provision-actions.jsonl')
+                  original = None
+                  if self.baseline is not None:
+                      original, body = self.read_record('versions-mode-original.json')
+                      assert body == canonical(self.baseline)
+                  value = {'version': 1, 'cache': self.cache_binding, 'context': self.context,
+                           'original': original, 'actions': action}
+                  self.publication(value)
+                  self.binding = value
+
+              def load(self):
+                  value = self.publication()
+                  assert type(value) is dict and set(value) == {'version', 'cache', 'context', 'original', 'actions'}
+                  assert value['version'] == 1 and value['cache'] == self.cache_binding and value['context'] == self.context
+                  binding, raw = self.read_record('provision-actions.jsonl')
+                  assert binding == value['actions']
+                  if value['original'] is not None:
+                      original, body = self.read_record('versions-mode-original.json')
+                      assert original == value['original']
+                      baseline = json.loads(body, object_pairs_hook=self.unique)
+                      assert canonical(baseline) == body and type(baseline) is dict
+                      assert set(baseline) == {'version', 'context', 'cache', 'd', 'ancestors', 'root_children', 'd_children', 'acl'}
+                      assert baseline['version'] == 1 and baseline['context'] == self.context and baseline['cache'] == self.cache_binding
+                      assert type(baseline['d']) is list and len(baseline['d']) == 9
+                      assert baseline['d'][2] == stat.S_IFDIR | 0o775 and baseline['d'][3] == 0
+                      assert all(type(value) is int for value in baseline['d'])
+                      assert type(baseline['ancestors']) is dict and str(ROOT) in baseline['ancestors']
+                      for name, identity in baseline['ancestors'].items():
+                          assert type(name) is str and name.startswith('/') and type(identity) is list and len(identity) == 9
+                          assert all(type(field) is int for field in identity)
+                          assert stat.S_ISDIR(identity[2]) and identity[3] == 0 and not identity[2] & 0o022
+                      assert baseline['acl'] == {name: 'empty' for name in [*baseline['ancestors'], str(V.parent)]}
+                      for children in (baseline['root_children'], baseline['d_children']):
+                          assert type(children) is dict and len(children) <= 16384
+                          for name, row in children.items():
+                              assert type(name) is str and name and name not in ('.', '..') and '/' not in name
+                              assert type(row) is dict and 'identity' in row and set(row) == {'identity', 'target'}
+                              assert type(row['identity']) is list and len(row['identity']) == 9
+                              assert all(type(field) is int for field in row['identity'])
+                              assert (row['target'] is not None) == stat.S_ISLNK(row['identity'][2])
+                              if row['target'] is not None:
+                                  assert type(row['target']) is str and len(os.fsencode(row['target'])) <= 4096
+                      assert len(baseline['root_children']) + len(baseline['d_children']) + len(baseline['ancestors']) <= 16384
+                      assert baseline['root_children']['Versions'] == {'identity': baseline['d'], 'target': None}
+                      assert T.name not in baseline['root_children'] and V.name not in baseline['d_children']
+                      self.baseline = baseline
+                  else:
+                      assert not os.path.lexists(cache / 'versions-mode-original.json')
+                  rows, previous, issued, results, phases = [], '0' * 64, {}, set(), []
+                  for line in raw.splitlines(keepends=True):
+                      row = json.loads(line, object_pairs_hook=self.unique)
+                      assert canonical(row) + b'\n' == line
+                      assert set(row) == {'sequence', 'previous', 'kind', 'body'}
+                      assert type(row['sequence']) is int and row['sequence'] == len(rows)
+                      assert row['previous'] == previous and row['kind'] in ('issued', 'result', 'phase')
+                      body = row['body']
+                      assert type(body) is dict
+                      if row['kind'] == 'issued':
+                          assert set(body) == {'number', 'argv'} and type(body['number']) is int
+                          assert body['number'] == len(issued) + 1 <= 256
+                          argv = body['argv']
+                          assert type(argv) is list and all(type(arg) is str for arg in argv)
+                          assert len(argv) <= 256 and sum(len(os.fsencode(arg)) + 1 for arg in argv) <= 65536
+                          self.fixed_command(argv)
+                          issued[body['number']] = argv
+                      elif row['kind'] == 'result':
+                          assert set(body) == {'number', 'known', 'outcome', 'parents', 'owned_sha256'}
+                          number = body['number']
+                          assert type(number) is int and number in issued and number not in results
+                          assert type(body['known']) is bool
+                          outcome = body['outcome']
+                          assert type(outcome) is dict and set(outcome) == {'pid', 'returncode', 'reaped', 'cancelled', 'privileged_unknown'}
+                          assert outcome['pid'] is None or type(outcome['pid']) is int and outcome['pid'] > 0
+                          assert outcome['returncode'] is None or type(outcome['returncode']) is int
+                          assert all(type(outcome[key]) is bool for key in ('reaped', 'cancelled', 'privileged_unknown'))
+                          if body['known']:
+                              assert outcome['pid'] is not None and outcome['returncode'] == 0 and outcome['reaped']
+                              assert not outcome['cancelled'] and not outcome['privileged_unknown']
+                          assert body['owned_sha256'] is None or type(body['owned_sha256']) is str and re.fullmatch('[0-9a-f]{64}', body['owned_sha256'])
+                          results.add(number)
+                      else:
+                          assert set(body) == {'phase', 'point', 'success', 'quiescent', 'deadline', 'outcome'}
+                          assert body['phase'] in self.PHASES and body['point'] in ('enter', 'result')
+                          assert type(body['success']) is bool and type(body['quiescent']) is bool
+                          assert body['deadline'] is None if body['point'] == 'result' else type(body['deadline']) in (int, float) and 0 < body['deadline'] < 1e12
+                          if body['point'] == 'enter' or body['phase'] == 'closure':
+                              assert body['outcome'] is None
+                          else:
+                              assert type(body['outcome']) is dict and set(body['outcome']) == {'pid', 'returncode', 'reaped', 'cancelled', 'privileged_unknown'}
+                              if body['quiescent']:
+                                  assert body['outcome']['reaped'] and not body['outcome']['cancelled']
+                                  assert not body['outcome']['privileged_unknown']
+                          assert (body['phase'], body['point']) not in phases
+                          assert body['point'] == 'enter' or (body['phase'], 'enter') in phases
+                          phases.append((body['phase'], body['point']))
+                          assert len(phases) <= 8
+                      previous = hashlib.sha256(line).hexdigest()
+                      rows.append(row)
+                  self.rows, self.binding = rows, value
+                  return rows
+
+              def append(self, kind, body):
+                  self.load()
+                  row = {'sequence': len(self.rows), 'previous': hashlib.sha256(canonical(self.rows[-1]) + b'\n').hexdigest()
+                         if self.rows else '0' * 64, 'kind': kind, 'body': body}
+                  binding, raw = self.read_record('provision-actions.jsonl')
+                  assert binding == self.binding['actions']
+                  data = canonical(row) + b'\n'
+                  assert len(raw) + len(data) <= self.RECORD_LIMIT
+                  fd = os.open('provision-actions.jsonl', os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW, dir_fd=self.cache_fd)
+                  try:
+                      assert ident(os.fstat(fd)) == binding['identity']
+                      assert os.write(fd, data) == len(data)
+                      os.fsync(fd)
+                  finally:
+                      os.close(fd)
+                  self.publish()
+                  self.load()
+
+              def fixed_command(self, argv):
+                  assert type(argv) is list and argv and all(type(arg) is str for arg in argv)
+                  if argv[:3] == ['/usr/bin/sudo', '-n', '/bin/chmod'] and argv[3:] in (
+                          ['0755', '/Library/Frameworks/Python.framework/Versions'],
+                          ['0775', '/Library/Frameworks/Python.framework/Versions']):
+                      return
+                  if argv[:3] == ['/usr/bin/sudo', '-n', '/bin/mkdir']:
+                      assert argv[3:5] == ['-m', '0755'] and len(argv) == 6 and Path(argv[5]) in TREES
+                  elif argv[:3] == ['/usr/bin/sudo', '-n', '/bin/cp']:
+                      assert len(argv) == 8 and argv[3:6] == ['-R', '-P', '-n']
+                      target = Path(argv[7])
+                      assert target in TREES and argv[6] == str(cache / 'stage' / target.relative_to(ROOT)) + '/.'
+                  elif argv[:3] == ['/usr/bin/sudo', '-n', '/bin/chmod']:
+                      assert argv[3:5] == ['-h', '0755'] and len(argv) == 6
+                      assert Path(argv[5]).is_relative_to(V) and '..' not in Path(argv[5]).parts
+                  elif argv[:3] == ['/usr/bin/sudo', '-n', '/bin/rm']:
+                      assert argv[3] in ('-f', '-d') and argv[4] == '--' and 0 < len(argv[5:]) <= 128
+                      assert all(in_trees(Path(arg)) and '..' not in Path(arg).parts for arg in argv[5:])
+                  else:
+                      forms = [
+                          ['/usr/bin/openssl', 'x509', '-inform', 'DER', '-in', str(cache / 'cert-0.der'), '-pubkey', '-noout'],
+                          ['/usr/bin/openssl', 'dgst', '-sha1', '-verify', str(cache / 'public.pem'), '-signature',
+                           str(cache / 'signature.bin'), str(cache / 'toc.bin')],
+                          ['/usr/bin/security', 'verify-cert', '-L', '-R', 'offline', '-N', '-p', 'basic',
+                           '-c', str(cache / 'cert-0.der'), '-c', str(cache / 'cert-1.der')]]
+                      assert argv in forms
+
+              def reserve(self, argv):
+                  self.load()
+                  assert self.pending is None
+                  self.fixed_command(argv)
+                  issued = [row['body'] for row in self.rows if row['kind'] == 'issued']
+                  completed = {row['body']['number'] for row in self.rows if row['kind'] == 'result' and row['body']['known']}
+                  assert {row['number'] for row in issued} == completed
+                  assert len(issued) < 256
+                  if argv[:3] == ['/usr/bin/sudo', '-n', '/bin/chmod'] and argv[-1] == str(V.parent):
+                      assert not any(row['argv'] == argv for row in issued)
+                  number = len(issued) + 1
+                  self.append('issued', {'number': number, 'argv': argv})
+                  self.pending = number
+                  return number
+
+              def complete(self, known, parent_state=None, owned_sha=None):
+                  assert self.pending is not None
+                  number = self.pending
+                  self.append('result', {'number': number, 'known': known, 'outcome': last_child_outcome.copy(), 'parents': parent_state,
+                                         'owned_sha256': owned_sha})
+                  self.pending = None
+
+              def phase(self, name, point, success=False, quiescent=False):
+                  assert name in self.PHASES and point in ('enter', 'result')
+                  self.append('phase', {'phase': name, 'point': point, 'success': success, 'quiescent': quiescent,
+                                        'deadline': deadline if point == 'enter' else None,
+                                        'outcome': last_child_outcome.copy() if point == 'result' and name != 'closure' else None})
+
+              def close(self):
+                  if self.d_fd is not None:
+                      os.close(self.d_fd)
+                      self.d_fd = None
+                  if self.root_record is not None:
+                      close_physical(self.root_record)
+                      self.root_record = None
+                  if self.cache_fd is not None:
+                      os.close(self.cache_fd)
+                      self.cache_fd = None
+
+              def open_parent(self):
+                  assert self.root_record is None and self.d_fd is None
+                  self.root_record = physical(ROOT, True)
+                  root_fd = self.root_record[2]
+                  before = os.stat('Versions', dir_fd=root_fd, follow_symlinks=False)
+                  assert stat.S_ISDIR(before.st_mode) and before.st_uid == 0
+                  self.d_fd = os.open('Versions', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=root_fd)
+                  self.d_identity = ident(before)
+                  self.parent_check()
+
+              def parent_check(self):
+                  recheck_one(self.root_record)
+                  named = os.stat('Versions', dir_fd=self.root_record[2], follow_symlinks=False)
+                  assert self.d_identity == ident(named) == ident(os.fstat(self.d_fd))
+                  ctypes.set_errno(0)
+                  empty_acl(lib.acl_get_fd_np(self.d_fd, 0x100))
+                  assert self.d_identity[3] == 0 and stat.S_ISDIR(self.d_identity[2])
+
+              def children(self, fd):
+                  self.parent_check()
+                  names = sorted(os.listdir(fd))
+                  assert len(names) + len(self.root_record[3]) <= 16384
+                  result = {}
+                  for name in names:
+                      budget()
+                      assert name and name not in ('.', '..') and '/' not in name
+                      before = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                      row = {'identity': ident(before), 'target': None}
+                      if stat.S_ISLNK(before.st_mode):
+                          row['target'] = os.readlink(name, dir_fd=fd)
+                          assert len(os.fsencode(row['target'])) <= 4096
+                      assert ident(os.stat(name, dir_fd=fd, follow_symlinks=False)) == row['identity']
+                      result[name] = row
+                  self.parent_check()
+                  assert sorted(os.listdir(fd)) == names
+                  return result
+
+              def view(self):
+                  self.parent_check()
+                  root_children = self.children(self.root_record[2])
+                  d_children = self.children(self.d_fd)
+                  assert len(root_children) + len(d_children) + len(self.root_record[3]) <= 16384
+                  return {'d': self.d_identity.copy(), 'root_children': root_children, 'd_children': d_children,
+                          'ancestors': {name: before.copy() for name, before, fd, edge, refs in self.root_record[3]},
+                          'acl': {name: 'empty' for name in [*(part[0] for part in self.root_record[3]), str(V.parent)]}}
+
+              def release_parent(self):
+                  if self.d_fd is not None:
+                      os.close(self.d_fd)
+                      self.d_fd = None
+                  if self.root_record is not None:
+                      close_physical(self.root_record)
+                      self.root_record = None
+
+              def begin(self):
+                  assert not os.path.lexists(cache / 'versions-mode-original.json')
+                  assert not os.path.lexists(cache / 'provision-actions.jsonl')
+                  self.open_parent()
+                  initial = self.view()
+                  assert not os.path.lexists(V) and not os.path.lexists(T)
+                  mode = initial['d'][2]
+                  assert not mode & 0o022 or mode == stat.S_IFDIR | 0o775
+                  if mode == stat.S_IFDIR | 0o775:
+                      self.baseline = dict(version=1, context=self.context, cache=self.cache_binding, **initial)
+                      self.create_record('versions-mode-original.json', canonical(self.baseline))
+                  self.create_record('provision-actions.jsonl', b'')
+                  self.publish()
+                  self.phase('supply', 'enter')
+                  if self.baseline is not None:
+                      self.mode_command('0755')
+                  self.release_parent()
+
+              def mode_command(self, mode):
+                  assert mode in ('0755', '0775') and self.baseline is not None
+                  self.load()
+                  before = self.view()
+                  expected_mode = 0o40775 if mode == '0755' else 0o40755
+                  assert before['d'][2] == expected_mode
+                  argv = ['/usr/bin/sudo', '-n', '/bin/chmod', mode, '/Library/Frameworks/Python.framework/Versions']
+                  self.reserve(argv)
+                  try:
+                      bounded_command(argv, 0)
+                  except BaseException:
+                      observed = ident(os.fstat(self.d_fd))
+                      self.complete(False, {'observed_d': observed})
+                      print(canonical({'versions_mode': 'FAIL_UNKNOWN', 'actual_observed_d': observed}).decode('ascii'), file=sys.stderr)
+                      raise
+                  after = ident(os.fstat(self.d_fd))
+                  assert after == ident(os.stat('Versions', dir_fd=self.root_record[2], follow_symlinks=False))
+                  assert after[2] == stat.S_IFDIR | int(mode, 8)
+                  assert all(after[index] == before['d'][index] for index in (0, 1, 3, 4, 5, 6, 7))
+                  self.d_identity = after
+                  actual = self.view()
+                  original = before['root_children']
+                  updated = dict(original, Versions={'identity': after, 'target': None})
+                  assert actual['root_children'] == updated and actual['d_children'] == before['d_children']
+                  assert actual['ancestors'] == before['ancestors']
+                  self.complete(True, actual)
+
+              def validated_history(self):
+                  rows = self.load()
+                  issued = {row['body']['number']: row['body']['argv'] for row in rows if row['kind'] == 'issued'}
+                  results = {row['body']['number']: row['body'] for row in rows if row['kind'] == 'result'}
+                  assert set(issued) == set(results) and all(row['known'] for row in results.values())
+                  previous = None
+                  for number, argv in issued.items():
+                      result = results[number]
+                      current = result['parents']
+                      if current is None:
+                          assert argv[0] != '/usr/bin/sudo'
+                          continue
+                      if argv[:3] == ['/usr/bin/sudo', '-n', '/bin/chmod'] and argv[-1] == str(V.parent):
+                          assert type(current) is dict and set(current) == {'d', 'ancestors', 'root_children', 'd_children', 'acl'}
+                          before = self.baseline if previous is None else previous
+                          assert all(current['d'][index] == before['d'][index] for index in (0, 1, 3, 4, 5, 6, 7))
+                          assert current['d'][2] == (0o40755 if argv[3] == '0755' else 0o40775)
+                          assert current['d_children'] == before['d_children'] and current['ancestors'] == before['ancestors']
+                          assert current['root_children'] == dict(before['root_children'], Versions={'identity': current['d'], 'target': None})
+                          assert current['acl'] == before['acl']
+                          previous = current
+                          continue
+                      assert previous is not None or self.baseline is None
+                      if self.baseline is not None:
+                          assert type(current) is dict and set(current) == {str(ROOT), str(V.parent)}
+                          for name, row in current.items():
+                              assert type(row) is dict and set(row) == {'identity', 'children', 'original_names'}
+                          allowed = set()
+                          if argv[:3] == ['/usr/bin/sudo', '-n', '/bin/mkdir']:
+                              allowed.add(str(Path(argv[5]).parent))
+                          if argv[:4] == ['/usr/bin/sudo', '-n', '/bin/rm', '-d']:
+                              allowed.update(str(Path(name).parent) for name in argv[5:] if Path(name) in TREES)
+                          old_identities = {str(ROOT): previous['ancestors'][str(ROOT)], str(V.parent): previous['d']}
+                          for name, old in old_identities.items():
+                              value = current[name]['identity']
+                              assert type(value) is list and len(value) == 9 and all(type(field) is int for field in value)
+                              assert all(value[index] == old[index] for index in (0, 1, 2, 3, 4))
+                              assert name in allowed or value == old
+                              assert current[name]['original_names'] == sorted(self.baseline['root_children'] if name == str(ROOT) else self.baseline['d_children'])
+                          assert current[str(V.parent)]['children'] == self.baseline['d_children']
+                          assert current[str(ROOT)]['children'] == dict(self.baseline['root_children'], Versions={'identity': current[str(V.parent)]['identity'], 'target': None})
+                          previous = {'d': current[str(V.parent)]['identity'],
+                                      'root_children': current[str(ROOT)]['children'],
+                                      'd_children': current[str(V.parent)]['children'], 'acl': previous['acl'],
+                                      'ancestors': dict(previous['ancestors'], **{str(ROOT): current[str(ROOT)]['identity']})}
+                  return previous
+
+              def restore(self):
+                  rows = self.load()
+                  if self.baseline is None:
+                      return
+                  mode_issued = [row['body']['argv'] for row in rows if row['kind'] == 'issued'
+                                 and row['body']['argv'][-1] == str(V.parent)]
+                  if not mode_issued:
+                      return
+                  assert len(mode_issued) <= 2
+                  expected = self.validated_history()
+                  phases = {row['body']['phase']: row['body'] for row in rows
+                            if row['kind'] == 'phase' and row['body']['point'] == 'result'}
+                  entries = {row['body']['phase'] for row in rows if row['kind'] == 'phase' and row['body']['point'] == 'enter'}
+                  assert entries - {'closure'} <= set(phases)
+                  assert all(value['quiescent'] for value in phases.values())
+                  assert not os.path.lexists(V) and not os.path.lexists(T)
+                  owned_results = [row['body'] for row in rows if row['kind'] == 'result' and row['body']['owned_sha256']]
+                  if os.path.lexists(cache / 'owned.json'):
+                      journal_identity, raw = journal_snapshot()
+                      receipt = json.loads(raw, object_pairs_hook=self.unique)
+                      assert canonical(receipt) == raw and not receipt['objects'] and not receipt['created']
+                      if owned_results:
+                          assert hashlib.sha256(raw).hexdigest() == owned_results[-1]['owned_sha256']
+                          assert receipt['parents'] == owned_results[-1]['parents']
+                      else:
+                          assert not receipt['staging'] and hashlib.sha256(raw).hexdigest() == os.environ['YSTACK_RUNTIME_OWNED_SHA']
+                          assert receipt['parents'][str(ROOT)]['identity'] == expected['ancestors'][str(ROOT)]
+                          assert receipt['parents'][str(V.parent)]['identity'] == expected['d']
+                  self.open_parent()
+                  actual = self.view()
+                  print(canonical({'versions_mode_recovery_observation': actual['d'],
+                                   'matches_authenticated_state': actual == expected}).decode('ascii'), file=sys.stderr)
+                  assert expected is not None and actual == expected
+                  assert actual['d'][:2] == self.baseline['d'][:2]
+                  assert all(actual['d'][index] == self.baseline['d'][index] for index in (0, 1, 3, 4))
+                  root_children = dict(actual['root_children'], Versions=self.baseline['root_children']['Versions'])
+                  assert root_children == self.baseline['root_children'] and actual['d_children'] == self.baseline['d_children']
+                  for name, identity in self.baseline['ancestors'].items():
+                      if name != str(ROOT):
+                          assert actual['ancestors'][name] == identity
+                  if len(mode_issued) == 2:
+                      assert mode_issued[-1][3] == '0775' and actual['d'][2] == 0o40775
+                      self.release_parent()
+                      return
+                  assert actual['d'][2] == 0o40755
+                  self.mode_command('0775')
+                  self.release_parent()
+
+
+          def fixed_phase(name):
+              global deadline, parent_mode
+              assert name in VersionsParentMode.PHASES
+              deadline = started + {'supply': 270, 'scope': 35 * 60, 'native': 50 * 60, 'closure': 270}[name]
+              parent_mode = VersionsParentMode()
               try:
-                  cleanup()
+                  if name == 'supply':
+                      parent_mode.begin()
+                  else:
+                      parent_mode.load()
+                      rows = parent_mode.rows
+                      completed = {row['body']['phase']: row['body'] for row in rows
+                                   if row['kind'] == 'phase' and row['body']['point'] == 'result'}
+                      if name != 'closure':
+                          required = VersionsParentMode.PHASES[:VersionsParentMode.PHASES.index(name)]
+                          assert all(key in completed and completed[key]['success'] and completed[key]['quiescent'] for key in required)
+                      parent_mode.phase(name, 'enter')
+                  if name == 'closure':
+                      original = None
+                      try:
+                          parent_mode.validated_history()
+                          if os.path.lexists(cache / 'owned.json'):
+                              rows = [row['body'] for row in parent_mode.rows if row['kind'] == 'result' and row['body']['owned_sha256']]
+                              expected = os.environ['YSTACK_RUNTIME_OWNED_SHA']
+                              assert re.fullmatch('[0-9a-f]{64}', expected)
+                              if rows:
+                                  assert rows[-1]['owned_sha256'] == expected
+                              else:
+                                  identity, raw = journal_snapshot()
+                                  receipt = json.loads(raw, object_pairs_hook=parent_mode.unique)
+                                  assert canonical(receipt) == raw and hashlib.sha256(raw).hexdigest() == expected
+                                  assert not receipt['objects'] and not receipt['created'] and not receipt['staging']
+                              cleanup()
+                          else:
+                              assert not os.path.lexists(V) and not os.path.lexists(T)
+                      except BaseException as error:
+                          original = error
+                      close_all_physical()
+                      try:
+                          parent_mode.restore()
+                      except BaseException as error:
+                          if original is not None:
+                              raise original from error
+                          raise
+                      if original is not None:
+                          raise original
+                      success = all(row['body']['success'] for row in parent_mode.rows
+                                    if row['kind'] == 'phase' and row['body']['point'] == 'result')
+                      parent_mode.phase(name, 'result', success, True)
+                      assert success, 'earlier phase failure remains a failure'
+                      return
+                  script = cache / 'supply-phase.sh' if name == 'supply' else None
+                  held_script = None
+                  if script is not None:
+                      held_script = os.open(script, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                      state = ident(os.fstat(held_script))
+                      assert state == ident(script.lstat()) and stat.S_ISREG(state[2])
+                      assert state[3] == os.getuid() and state[5] == 1 and state[6] <= 16 * 1024 * 1024
+                  argv = ['/bin/bash', '--noprofile', '--norc', '-e', '-o', 'pipefail', str(script)] if name == 'supply' else [
+                      '/bin/bash', 'scripts/test/' + {'scope': 'scope-qualification.test.sh', 'native': 'shadow-enforced.test.sh'}[name]]
+                  try:
+                      bounded_command(argv, 0, True)
+                      if held_script is not None:
+                          assert ident(os.fstat(held_script)) == state == ident(script.lstat())
+                  except BaseException:
+                      parent_mode.load()
+                      parent_mode.phase(name, 'result', False, False)
+                      raise
+                  finally:
+                      if held_script is not None:
+                          os.close(held_script)
+                  parent_mode.load()
+                  parent_mode.phase(name, 'result', True, True)
               finally:
                   close_all_physical()
+                  parent_mode.close()
+
+
+          parent_mode = None
+          if len(sys.argv) == 4 and sys.argv[2] == '--phase':
+              fixed_phase(sys.argv[3])
               sys.exit(0)
+          assert len(sys.argv) == 3 and sys.argv[2] == '--supply'
+          parent_mode = VersionsParentMode()
+          parent_mode.load()
+          phase_rows = [row['body'] for row in parent_mode.rows if row['kind'] == 'phase']
+          assert len(phase_rows) == 1 and phase_rows[0]['phase'] == 'supply' and phase_rows[0]['point'] == 'enter'
+          deadline = phase_rows[0]['deadline']
+          assert time.monotonic() < deadline <= started + 270
+          parent_mode.validated_history()
 
 
           class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -1043,12 +1653,26 @@ jobs:
               print(json.dumps({'supply': 'fixed-official-framework-and-jq', 'objects': len(owned),
                   'manifest_sha256': MANIFEST_SHA, 'download_requests': requests, 'received_bytes': received,
                   'pkgSign': 'not-accepted', 'basic_trust': 'offline-pass', 'candidate_executed': False}, sort_keys=True))
+          except BaseException:
+              try:
+                  close_all_physical()
+                  parent_mode.restore()
+              except BaseException as recovery_error:
+                  print(canonical({'mode_recovery': 'FAIL_UNKNOWN', 'error': type(recovery_error).__name__}).decode('ascii'), file=sys.stderr)
+              raise
           finally:
               close_all_physical()
+              parent_mode.close()
           PY_MAC_PROVISION
           /bin/chmod 0555 "$cache_root/provision.py"
+          /bin/cat > "$cache_root/supply-phase.sh" <<'SH_FIXED_SUPPLY_PHASE'
+          set -euo pipefail
+          umask 077
+          cache_root=$YSTACK_PROOF_TMP
+          native_p=/Library/Frameworks/Python.framework/Versions/3.15/Resources/Python.app/Contents/MacOS/Python
+          test "$(/usr/bin/shasum -a 256 "$cache_root/provision.py" | /usr/bin/awk '{print $1}')" = 4b7d2ac559f0f3b0ccacd70e0bf9ad7818fa91644a1a7a2c76826bc46b6573ea
           provision_status=0
-          /usr/bin/python3 -I -S -B "$cache_root/provision.py" "$cache_root" || provision_status=$?
+          /usr/bin/python3 -I -S -B "$cache_root/provision.py" "$cache_root" --supply || provision_status=$?
           if [ -f "$cache_root/owned.json" ] && [ ! -L "$cache_root/owned.json" ]; then
             owned_sha=$(/usr/bin/shasum -a 256 "$cache_root/owned.json" | /usr/bin/awk '{print $1}')
             [[ "$owned_sha" =~ ^[0-9a-f]{64}$ ]]
@@ -1600,38 +2224,530 @@ jobs:
           /bin/chmod 0555 "$cache_root/ystack-portable-core-jq16/jq-osx-amd64"
           test "$(/usr/bin/shasum -a 256 "$cache_root/ystack-portable-core-jq16/jq-osx-amd64" | /usr/bin/awk '{print $1}')" = 5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef
           test -z "$(/usr/bin/git status --porcelain=v1)"
+          SH_FIXED_SUPPLY_PHASE
+          /bin/chmod 0500 "$cache_root/supply-phase.sh"
+          export YSTACK_PROOF_TMP="$cache_root"
+          test "$(/usr/bin/shasum -a 256 "$cache_root/provision.py" | /usr/bin/awk '{print $1}')" = 4b7d2ac559f0f3b0ccacd70e0bf9ad7818fa91644a1a7a2c76826bc46b6573ea
+          /bin/cat > "$cache_root/mode-controls.py" <<'PY_PARENT_MODE_CONTROLS'
+          from pathlib import Path
+          import ast,contextlib,ctypes,errno,hashlib,io,json,os,re,stat,subprocess,sys,tempfile,time,types,base64
+          source = Path(sys.argv[1]).read_bytes()
+          assert len(source) <= 16 * 1024 * 1024
+          module = ast.parse(source)
+          selected = [node for node in module.body if isinstance(node, (ast.ClassDef, ast.FunctionDef))
+                      and node.name in ('VersionsParentMode', 'fixed_phase')]
+          assert len(selected) == 2
+          program = compile(ast.Module(body=selected, type_ignores=[]), 'exact-parent-mode-boundary', 'exec')
+          fields = ('st_dev', 'st_ino', 'st_mode', 'st_uid', 'st_gid', 'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+          identity = lambda value: [getattr(value, name) for name in fields]
+          canonical = lambda value: json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode('ascii')
+          fixed_root = Path('/Library/Frameworks/Python.framework')
+
+          def fixture(area, create=True, mode=0o775, bad_uid=False, bad_acl=False, bad_ancestor=False):
+              if create:
+                  area.mkdir(mode=0o700)
+                  (area / 'cache').mkdir(mode=0o700)
+                  (area / 'root/Versions').mkdir(parents=True)
+                  (area / 'root').chmod(0o755)
+                  (area / 'root/Versions').chmod(mode)
+                  (area / 'root/Versions/Current').symlink_to('old')
+                  (area / 'root/Versions/old').mkdir(mode=0o755)
+                  (area / 'root/alias').symlink_to('Versions/old')
+                  (area / 'environment').write_bytes(b'')
+                  (area / 'environment').chmod(0o600)
+                  (area / 'cache/supply-phase.sh').write_text('fixed owned test data; never executed\n')
+              mapped_root = area / 'root'
+              d = mapped_root / 'Versions'
+              root_inode = os.stat(mapped_root).st_ino
+              d_inode = os.stat(d).st_ino
+              events = []
+              active = []
+              def mapped(path):
+                  value = str(path)
+                  return str(mapped_root) + value[len(str(fixed_root)):] if value == str(fixed_root) or value.startswith(str(fixed_root) + '/') else path
+              def observed(value):
+                  row = {name: getattr(value, name) for name in fields}
+                  if value.st_ino in (root_inode, d_inode):
+                      row['st_uid'] = 1 if bad_uid and value.st_ino == d_inode else 0
+                  return types.SimpleNamespace(**row)
+              def opened(path, flags, mode=0o777, *, dir_fd=None):
+                  return os.open(mapped(path), flags, mode, dir_fd=dir_fd)
+              def named(path, *, dir_fd=None, follow_symlinks=True):
+                  return observed(os.stat(mapped(path), dir_fd=dir_fd, follow_symlinks=follow_symlinks))
+              environment = {'YSTACK_SELECTED_SHA': '1' * 40, 'YSTACK_WORKFLOW_SHA': '1' * 40,
+                             'GITHUB_RUN_ID': '1', 'GITHUB_RUN_ATTEMPT': '1', 'GITHUB_JOB': 'owned-controls',
+                             'GITHUB_ENV': str(area / 'environment')}
+              proxy = types.SimpleNamespace(**{name: getattr(os, name) for name in (
+                  'O_RDONLY', 'O_WRONLY', 'O_RDWR', 'O_APPEND', 'O_CREAT', 'O_EXCL', 'O_NOFOLLOW', 'O_NONBLOCK',
+                  'O_DIRECTORY', 'SEEK_SET', 'write', 'read', 'close', 'lseek', 'fsync', 'listdir', 'readlink', 'fsencode', 'getuid')})
+              proxy.open = opened
+              proxy.stat = named
+              proxy.fstat = lambda fd: observed(os.fstat(fd))
+              proxy.environ = environment
+              proxy.path = types.SimpleNamespace(lexists=lambda path: os.path.lexists(mapped(path)))
+              def physical(path, directory):
+                  assert path == fixed_root and directory and not bad_ancestor
+                  fd = opened(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                  before = identity(proxy.fstat(fd))
+                  assert before[3] == 0 and not before[2] & 0o022
+                  record = (str(path), before, fd, [[str(path), before, fd, None, 1]])
+                  active.append(record)
+                  return record
+              def recheck(record):
+                  assert identity(proxy.fstat(record[2])) == record[1] == identity(named(record[0], follow_symlinks=False))
+              def close_physical(record):
+                  active.remove(record)
+                  os.close(record[2])
+              def acl(_value):
+                  assert not bad_acl
+              ns = dict(Path=Path,os=proxy,sys=sys,stat=stat,re=re,json=json,hashlib=hashlib,base64=base64,ctypes=ctypes,
+                        time=time,cache=area/'cache',ROOT=fixed_root,V=fixed_root/'Versions/3.15',
+                        T=fixed_root/'ystack-private-tools',TREES=(fixed_root/'Versions/3.15',fixed_root/'ystack-private-tools'),
+                        canonical=canonical,ident=identity,budget=lambda:None,physical=physical,recheck_one=recheck,
+                        close_physical=close_physical,close_all_physical=lambda:None,empty_acl=acl,
+                        lib=types.SimpleNamespace(acl_get_fd_np=lambda *args:None),started=time.monotonic(),deadline=time.monotonic()+270)
+              ns['in_trees'] = lambda path: any(path == tree or tree in path.parents for tree in ns['TREES'])
+              def command(argv, expected, stream_phase=False):
+                  events.append(argv.copy())
+                  child = subprocess.Popen([sys.executable, '-I', '-S', '-B', '-c', 'pass'], close_fds=True)
+                  status = child.wait(timeout=5)
+                  ns['last_child_outcome'] = {'pid': child.pid, 'returncode': status, 'reaped': True,
+                                              'cancelled': False, 'privileged_unknown': False}
+                  assert status == expected == 0
+                  if argv[:3] == ['/usr/bin/sudo', '-n', '/bin/chmod']:
+                      assert argv[3] in ('0755','0775') and argv[4] == str(fixed_root/'Versions')
+                      os.chmod(d, int(argv[3],8))
+                  return b''
+              ns['bounded_command'] = command
+              exec(program, ns)
+              return ns, events, active
+
+          def refuse(call):
+              try:
+                  call()
+              except (AssertionError,ValueError,OSError,KeyError,TypeError,RuntimeError):
+                  return
+              raise AssertionError('unsafe parent-mode case accepted')
+
+          if len(sys.argv) == 4 and sys.argv[3] in ('--owned-reopen', '--owned-refusal'):
+              ns, events, active = fixture(Path(sys.argv[2]), False)
+              mode = ns['VersionsParentMode']()
+              try:
+                  mode.load()
+                  if sys.argv[3] == '--owned-refusal':
+                      refuse(mode.restore)
+                  else:
+                      mode.restore()
+                  assert not events
+              finally:
+                  mode.close()
+              assert not active
+              print('fresh owned reopen: no repeated mode command')
+              raise SystemExit(0)
+          assert len(sys.argv) == 2
+          def fresh_refusal(area):
+              child = subprocess.run([sys.executable, '-I', '-S', '-B', __file__, sys.argv[1], str(area), '--owned-refusal'],
+                                     capture_output=True, timeout=5)
+              assert child.returncode == 0, (child.stdout, child.stderr)
+              return child.stdout.decode()
+          results = []
+          with tempfile.TemporaryDirectory(prefix='versions-mode-controls-') as temporary:
+              root = Path(temporary)
+              for name, mode_bits in (('normal',0o755),('eligible',0o775)):
+                  area = root/name
+                  ns, events, active = fixture(area, mode=mode_bits)
+                  ns['fixed_phase']('supply')
+                  ns['fixed_phase']('scope')
+                  ns['fixed_phase']('native')
+                  ns['fixed_phase']('closure')
+                  mode_commands = [row for row in events if row[0]=='/usr/bin/sudo']
+                  assert len(mode_commands) == (0 if name=='normal' else 2)
+                  assert stat.S_IMODE((area/'root/Versions').stat().st_mode)==mode_bits
+                  assert os.readlink(area/'root/alias')=='Versions/old'
+                  assert os.readlink(area/'root/Versions/Current')=='old'
+                  assert not active
+                  child = subprocess.run([sys.executable,'-I','-S','-B',__file__,str(sys.argv[1]),str(area),'--owned-reopen'],capture_output=True,timeout=5)
+                  assert child.returncode==0,(child.stdout,child.stderr)
+                  results.append({'case':name,'mode_commands':mode_commands,'fresh_process_stdout':child.stdout.decode(),'fresh_process_stderr':child.stderr.decode()})
+              for name, options in [('uid',{'bad_uid':True}),('mode',{'mode':0o777}),('acl',{'bad_acl':True}),('ancestor',{'bad_ancestor':True})]:
+                  ns, events, active = fixture(root/name,**options)
+                  mode = ns['VersionsParentMode']()
+                  try:
+                      refuse(mode.begin)
+                      assert not events
+                  finally:
+                      mode.close()
+                  results.append({'case':name,'refused':True,'commands':events})
+              for label in ('V-existing', 'T-link', 'D-link', 'held-identity'):
+                  area = root/label
+                  ns, events, active = fixture(area)
+                  mode = ns['VersionsParentMode']()
+                  if label=='V-existing':
+                      (area/'root/Versions/3.15').write_text('old object')
+                  elif label=='T-link':
+                      (area/'root/ystack-private-tools').symlink_to('missing')
+                  elif label=='D-link':
+                      (area/'root/Versions').rename(area/'root/old-parent')
+                      (area/'root/Versions').symlink_to('old-parent')
+                  else:
+                      original_stat = ns['os'].stat
+                      def changed(*args, **kwargs):
+                          value = original_stat(*args, **kwargs)
+                          if args[0]=='Versions':
+                              value.st_ino += 1
+                          return value
+                      ns['os'].stat = changed
+                  try:
+                      refuse(mode.begin)
+                      assert not events
+                  finally:
+                      mode.close()
+                  results.append({'case':label,'refused':True,'mode_commands':0})
+              for label in ('baseline-missing','baseline-changed','actions-truncated','actions-oversized',
+                            'actions-duplicate','actions-reordered','baseline-malformed','cache-replacement',
+                            'fsync-failed','publication-failed'):
+                  area = root/label
+                  ns, events, active = fixture(area)
+                  mode = ns['VersionsParentMode']()
+                  try:
+                      if label in ('fsync-failed','publication-failed'):
+                          if label=='fsync-failed':
+                              def fail_fsync(fd):
+                                  raise OSError('owned fsync failure')
+                              ns['os'].fsync = fail_fsync
+                          else:
+                              original_publish = mode.publication
+                              def fail_publication(value=None):
+                                  if value is not None and value['actions']['bytes']>0:
+                                      raise OSError('owned publication failure')
+                                  return original_publish(value)
+                              mode.publication = fail_publication
+                          refuse(mode.begin)
+                          assert not events
+                      else:
+                          mode.begin()
+                          original_count = len(events)
+                          baseline = area/'cache/versions-mode-original.json'
+                          actions = area/'cache/provision-actions.jsonl'
+                          if label=='baseline-missing':
+                              baseline.unlink()
+                          elif label=='baseline-changed':
+                              baseline.write_bytes(baseline.read_bytes()+b' ')
+                          elif label=='actions-truncated':
+                              actions.write_bytes(actions.read_bytes()[:-1])
+                          elif label=='actions-oversized':
+                              actions.write_bytes(b'x'*(4*1024*1024+1))
+                          elif label in ('actions-duplicate','actions-reordered'):
+                              lines=actions.read_bytes().splitlines(keepends=True)
+                              actions.write_bytes(b''.join(lines+lines[:1] if label=='actions-duplicate' else list(reversed(lines))))
+                              value=dict(mode.binding,actions=mode.read_record('provision-actions.jsonl')[0])
+                              mode.publication(value)
+                          elif label=='baseline-malformed':
+                              value=json.loads(baseline.read_bytes());value['unexpected']=True
+                              baseline.write_bytes(canonical(value))
+                              state=dict(mode.binding,original=mode.read_record('versions-mode-original.json')[0])
+                              mode.publication(state)
+                          else:
+                              (area/'cache').rename(area/'old-cache')
+                              (area/'cache').mkdir(mode=0o700)
+                          refuse(mode.load)
+                          assert len(events)==original_count
+                  finally:
+                      mode.close()
+                  results.append({'case':label,'refused':True,'no_later_mode_command':True})
+              for label in ('unknown-exit','cancelled','unreaped','privileged-unknown','restore-failure'):
+                  area=root/label
+                  ns,events,active=fixture(area)
+                  mode=ns['VersionsParentMode']()
+                  execute=ns['bounded_command']
+                  def uncertain(argv,expected,stream_phase=False):
+                      if label=='restore-failure' and argv[3]!='0775':
+                          return execute(argv,expected,stream_phase)
+                      output=execute(argv,expected,stream_phase)
+                      outcome=ns['last_child_outcome']
+                      outcome['privileged_unknown']=True
+                      if label=='cancelled':outcome['cancelled']=True
+                      if label=='unreaped':outcome['returncode']=None;outcome['reaped']=False
+                      raise RuntimeError('owned uncertain command outcome')
+                  ns['bounded_command']=uncertain
+                  try:
+                      if label=='restore-failure':
+                          mode.begin();mode.phase('supply','result',True,True)
+                          try:mode.restore()
+                          except RuntimeError:pass
+                          else:raise AssertionError('restore failure swallowed')
+                      else:
+                          try:mode.begin()
+                          except RuntimeError:pass
+                          else:raise AssertionError('unknown command accepted')
+                      count=len(events)
+                      refuse(mode.restore)
+                      assert len(events)==count
+                  finally:
+                      mode.close()
+                  fresh = fresh_refusal(area)
+                  results.append({'case':label,'fresh_cleanup':fresh,'refused':True,'no_retry':True,'actual_owned_mode':oct((area/'root/Versions').stat().st_mode)})
+              for label in ('source-failure','suite-failure','partial-copy','residual-tools','old-child-drift','restore-reserved'):
+                  area=root/label
+                  ns,events,active=fixture(area)
+                  mode=ns['VersionsParentMode']()
+                  try:
+                      mode.begin()
+                      mode.phase('supply','result',label!='source-failure',True)
+                      if label=='suite-failure':
+                          mode.phase('scope','enter');mode.phase('scope','result',False,True)
+                      if label=='partial-copy':
+                          (area/'root/Versions/3.15').mkdir();(area/'root/Versions/3.15/unrecorded').write_text('partial')
+                      if label=='residual-tools':(area/'root/ystack-private-tools').mkdir()
+                      if label=='old-child-drift':
+                          (area/'root/alias').unlink();(area/'root/alias').symlink_to('different')
+                      if label=='restore-reserved':
+                          mode.reserve(['/usr/bin/sudo','-n','/bin/chmod','0775',str(fixed_root/'Versions')])
+                      if label in ('source-failure','suite-failure'):
+                          mode.close()
+                          refuse(lambda:ns['fixed_phase']('closure'))
+                          assert stat.S_IMODE((area/'root/Versions').stat().st_mode)==0o775
+                      else:
+                          count=len(events);refuse(mode.restore);assert len(events)==count
+                          assert stat.S_IMODE((area/'root/Versions').stat().st_mode)==0o755
+                  finally:
+                      mode.close()
+                  if label == 'restore-reserved':
+                      fresh_refusal(area)
+                  assert os.path.lexists(area/'root/Versions/Current')
+                  results.append({'case':label,'failure_preserved':True,'no_wider_cleanup':True})
+              area=root/'shared-budget'
+              ns,events,active=fixture(area)
+              mode=ns['VersionsParentMode']()
+              try:
+                  mode.begin();mode.phase('supply','result',True,True)
+                  argv=['/usr/bin/openssl','x509','-inform','DER','-in',str(area/'cache/cert-0.der'),'-pubkey','-noout']
+                  for _ in range(255):
+                      mode.reserve(argv);ns['bounded_command'](argv,0);mode.complete(True)
+                  count=len(events);refuse(mode.restore);assert len(events)==count==256
+              finally:mode.close()
+              fresh_refusal(area)
+              results.append({'case':'shared256budget','issued':256,'restore_refused':True,'count_not_reset':True})
+          with tempfile.TemporaryDirectory(prefix='versions-mode-parent-deltas-') as temporary:
+              area = Path(temporary)/'eligible'
+              ns, events, active = fixture(area)
+              mode = ns['VersionsParentMode']()
+              try:
+                  mode.begin();mode.phase('supply','result',True,True)
+                  for program in ('/bin/mkdir','/bin/rm'):
+                      argv = ['/usr/bin/sudo','-n',program] + (['-m','0755',str(ns['V'])] if program.endswith('mkdir') else ['-d','--',str(ns['V'])])
+                      mode.reserve(argv);ns['bounded_command'](argv,0)
+                      leaf = area/'root/Versions/3.15'
+                      leaf.mkdir() if program.endswith('mkdir') else leaf.rmdir()
+                      mode.open_parent();view = mode.view();mode.release_parent()
+                      parents = {}
+                      for name, state, children in ((str(ns['ROOT']),view['ancestors'][str(ns['ROOT'])],view['root_children']),
+                                                     (str(ns['V'].parent),view['d'],view['d_children'])):
+                          original = {key: value for key,value in children.items() if key != '3.15'}
+                          parents[name] = {'identity':state,'children':original,'original_names':sorted(original)}
+                      mode.complete(True,parents)
+                  mode.restore()
+                  assert stat.S_IMODE((area/'root/Versions').stat().st_mode)==0o775
+                  results.append({'case':'eligible-original-parent-schema-deltas','restored':True})
+              finally:mode.close()
+          print(json.dumps({'cases':results,'boundary_sha256':hashlib.sha256(source).hexdigest(),
+              'limits':'Exact private class/fixed_phase compiled from provision. UID/ACL/physical observations and recording executor are fixed test-only adapters; actual owned records/fsync/fds and nonprivileged child wait are real. No production D, sudo, supplied P, suite or host probe executed.'},sort_keys=True))
+          PY_PARENT_MODE_CONTROLS
+          /bin/chmod 0500 "$cache_root/mode-controls.py"
+          /usr/bin/python3 -I -S -B "$cache_root/mode-controls.py" "$cache_root/provision.py"
+          /bin/cat > "$cache_root/owned-mode-controls.py" <<'PY_OWNED_MODE_CONTROLS'
+          from pathlib import Path
+          import ast,contextlib,copy,ctypes,errno,hashlib,io,json,os,shutil,stat,subprocess,tempfile,time,types,sys,base64,re
+          D=Path(__file__).parent;raw=Path(sys.argv[1]).read_text();functions={n.name:n for n in ast.parse(raw).body if isinstance(n,ast.FunctionDef)};rows=[];bind={}
+          # Only the fixed metadata/command boundary is extracted. No module top-level or runner is executed.
+          names=('canonical','ident','in_trees','child_snapshot','check_parents','open_parents','mutation_names','held_directories','run','journal_snapshot','save','cleanup','acquire_component','release_component','close_physical','close_all_physical')
+          for name in names:bind[name]=hashlib.sha256(ast.get_source_segment(raw,functions[name]).encode()).hexdigest()
+          class NoACLProof:
+           def acl_get_fd_np(self,*args):ctypes.set_errno(errno.ENOENT);return None
+
+          def namespace(base):
+           root=base/'Python.framework';(root/'Versions/3.13').mkdir(parents=True)
+           (root/'Versions/3.13/old.txt').write_text('untouched old payload')
+           (root/'Versions/Current').symlink_to('3.13');(root/'Python').symlink_to('Versions/Current/Python')
+           cache=base/'cache';cache.mkdir(mode=0o700)
+           (cache/'environment').write_bytes(b'')
+           for key,value in {'YSTACK_SELECTED_SHA':'1'*40,'YSTACK_WORKFLOW_SHA':'1'*40,'GITHUB_RUN_ID':'1','GITHUB_RUN_ATTEMPT':'1','GITHUB_JOB':'owned-controls','GITHUB_ENV':str(cache/'environment')}.items():os.environ[key]=value
+           ns={'base64':base64,'re':re,'os':os,'Path':Path,'stat':stat,'json':json,'hashlib':hashlib,'ctypes':ctypes,'errno':errno,'sys':__import__('sys'),
+               'FIELDS':('st_dev','st_ino','st_mode','st_uid','st_gid','st_nlink','st_size','st_mtime_ns','st_ctime_ns'),
+               'ROOT':root,'V':root/'Versions/3.15','T':root/'ystack-private-tools','cache':cache,'owned':[],'staging':[],'parents':{},'parent_records':{},'ancestors':{},'created':set(),'held':[],'shared_components':{},'commands':0,'journal':None,'cancel_requested':0,'lib':NoACLProof()}
+           ns['TREES']=(ns['V'],ns['T']);ns['budget']=lambda:None;ns['empty_acl']=lambda value:None
+           for name in names:
+            node=copy.deepcopy(functions[name])
+            if name=='run':
+             # Explicit owned-data compatibility adapter: UID0 is unavailable here. No ACL success is claimed.
+             class OwnUID(ast.NodeTransformer):
+              def visit_Compare(self,node):
+               if ast.unparse(node)=='current.st_uid == 0':node.comparators[0]=ast.Constant(os.getuid())
+               return self.generic_visit(node)
+             node=OwnUID().visit(node);ast.fix_missing_locations(node)
+            exec(compile(ast.Module(body=[node],type_ignores=[]),'exact-owned-boundary:'+name,'exec'),ns)
+           def recheck_one(record):
+            for path,before,fd,edge,refs in record[3]:
+             assert ns['ident'](os.fstat(fd))==before==ns['ident'](os.lstat(path))
+             if Path(path)==root or root in Path(path).parents:
+              assert os.fstat(fd).st_uid==os.getuid() and not os.fstat(fd).st_mode & 0o022
+           def physical(path,directory=False,immutable=True):
+            chain=[]
+            for item in [Path('/')]+[Path('/').joinpath(*path.parts[1:i+1]) for i in range(1,len(path.parts))]:
+             before=os.lstat(item);assert stat.S_ISDIR(before.st_mode) if item!=path or directory else stat.S_ISREG(before.st_mode)
+             fd=os.open(item,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK|(os.O_DIRECTORY if stat.S_ISDIR(before.st_mode) else 0))
+             chain.append(ns['acquire_component'](str(item),ns['ident'](before),fd,None if item==Path('/') else item.name))
+            record=(str(path),chain[-1][1],chain[-1][2],chain);ns['held'].append(record);recheck_one(record);return record
+           ns['physical']=physical;ns['recheck_one']=recheck_one;ns['recheck']=lambda:[recheck_one(r) for r in ns['held']]
+           calls=[]
+           def command(argv,expected):
+            calls.append(argv)
+            child=subprocess.Popen([sys.executable,'-I','-S','-B','-c','pass'],close_fds=True)
+            status=child.wait(timeout=5)
+            ns['last_child_outcome']={'pid':child.pid,'returncode':status,'reaped':True,'cancelled':False,'privileged_unknown':False}
+            assert status==0
+            program=argv[2]
+            if program=='/bin/mkdir':Path(argv[5]).mkdir(mode=0o755)
+            elif program=='/bin/cp':
+             destination=Path(argv[-1]);(destination/'data.txt').write_text('owned fixture bytes');(destination/'empty').mkdir(mode=0o755)
+            elif program=='/bin/rm':
+             for name in argv[5:]:Path(name).rmdir() if argv[3]=='-d' else Path(name).unlink()
+            else:raise AssertionError(argv)
+            return b''
+           ns['bounded_command']=command;ns['calls']=calls
+           node=next(n for n in ast.parse(raw).body if isinstance(n,ast.ClassDef) and n.name=='VersionsParentMode')
+           exec(compile(ast.Module(body=[node],type_ignores=[]),'exact-owned-parent-mode', 'exec'),ns)
+           mode=ns['VersionsParentMode']();mode.create_record('provision-actions.jsonl',b'');mode.publish();ns['parent_mode']=mode
+           return ns
+
+          def refused(action):
+           try:action()
+           except (AssertionError,OSError,ValueError,KeyError):return True
+           raise AssertionError('required refusal did not occur')
+          def close(ns):ns['close_all_physical']();ns['parent_mode'].close()
+          def inventory(ns,tree):
+           values=[]
+           for directory,dirs,files in os.walk(tree,followlinks=False):
+            for p in [Path(directory)]+[Path(directory)/name for name in files]:
+             values.append({'path':str(p),'kind':'directory' if p.is_dir() else 'file','identity':ns['ident'](p.lstat())})
+           ns['owned'][:]=[v for v in ns['owned'] if v['path']!=str(tree)]+values
+           ns['save']()
+          def mkdir(ns,tree):
+           ns['run'](['/usr/bin/sudo','-n','/bin/mkdir','-m','0755',str(tree)])
+           record=ns['physical'](tree,True);ns['owned'].append({'path':str(tree),'kind':'directory','identity':record[1]});ns['save']()
+          def cleanup_process(ns):
+           receipt=(ns['cache']/'owned.json').read_bytes();os.environ['YSTACK_RUNTIME_OWNED_SHA']=hashlib.sha256(receipt).hexdigest()
+           close(ns)
+           ns['parent_mode']=ns['VersionsParentMode']();ns['parent_mode'].load()
+           ns['owned']=[];ns['parents']={};ns['parent_records']={};ns['ancestors']={};ns['created']=set();ns['journal']=None
+           with contextlib.redirect_stdout(io.StringIO()) as out:ns['cleanup']()
+           return out.getvalue()
+
+          def fixture(label,callback):
+           with tempfile.TemporaryDirectory(prefix='ystack-existing-owned-',dir='/private/tmp') as temp:
+            before=len(os.listdir('/dev/fd'));ns=namespace(Path(temp))
+            try:detail=callback(ns)
+            finally:close(ns)
+            assert len(os.listdir('/dev/fd'))==before
+            rows.append({'case':label,'result':'PASS','fd_before':before,'fd_after':len(os.listdir('/dev/fd')),'detail':detail})
+
+          def success(ns):
+           ns['open_parents']();ns['save']();old=ns['child_snapshot'](ns['parent_records'][str(ns['ROOT'])]);initial=copy.deepcopy(ns['parents'])
+           ns['expected']={str(t.relative_to(ns['ROOT']))+suffix:{} for t in ns['TREES'] for suffix in ('','/data.txt','/empty')}
+           for tree in ns['TREES']:
+            mkdir(ns,tree);ns['run'](['/usr/bin/sudo','-n','/bin/cp','-R','-P','-n',str(ns['cache']/'stage'/tree.relative_to(ns['ROOT']))+'/.',str(tree)]);inventory(ns,tree)
+           output=cleanup_process(ns)
+           assert all(not os.path.lexists(t) for t in ns['TREES'])
+           assert ns['child_snapshot'](ns['parent_records'][str(ns['ROOT'])])==ns['parents'][str(ns['ROOT'])]['children']
+           assert (ns['ROOT']/'Versions/3.13/old.txt').read_text()=='untouched old payload'
+           assert os.readlink(ns['ROOT']/'Versions/Current')=='3.13' and os.readlink(ns['ROOT']/'Python')=='Versions/Current/Python'
+           assert initial[str(ns['V'].parent)]['identity']!=ns['parents'][str(ns['V'].parent)]['identity']
+           return {'journal_cross_process':True,'commands':ns['calls'],'cleanup_stdout':output,'old_payload_untouched':True}
+          fixture('two-tree actual owned-data copy bookkeeping and reverse cleanup',success)
+          def first_only(ns):
+           ns['open_parents']();ns['save']();mkdir(ns,ns['V']);cleanup_process(ns);assert not ns['created'];return 'failure between root creations cleans recorded V'
+          fixture('failure between roots',first_only)
+          for which,kind in [('V','file'),('V','directory'),('V','dangling-link'),('T','dangling-link')]:
+           def preexisting(ns,which=which,kind=kind):
+            target=ns[which]
+            if kind=='file':target.write_text('existing')
+            elif kind=='directory':target.mkdir()
+            else:target.symlink_to('missing')
+            refused(ns['open_parents']);assert os.path.lexists(target);return 'no command issued'
+           fixture('preexisting '+which+' '+kind,preexisting)
+          def unsafe(ns):
+           ns['ROOT'].chmod(0o775);refused(ns['open_parents']);assert not ns['calls'];return 'owned-data writable parent refused; no ACL claim'
+          fixture('unsafe parent mode',unsafe)
+          def changed(ns):
+           ns['open_parents']();ns['save']();(ns['ROOT']/'unexpected').write_text('extra');refused(ns['check_parents']);return 'changed parent identity/name set'
+          fixture('changed held parent',changed)
+          def changed_old(ns):
+           ns['open_parents']();ns['save']();(ns['ROOT']/'Python').unlink();(ns['ROOT']/'Python').symlink_to('different');refused(ns['check_parents']);return 'old alias replacement refused'
+          fixture('changed old alias metadata',changed_old)
+          def wrong_delta(ns):
+           ns['open_parents']();ns['save']();before=copy.deepcopy(ns['parents']);original=ns['bounded_command']
+           def wrong(argv,expected):original(argv,expected);(ns['ROOT']/'extra').mkdir();return b''
+           ns['bounded_command']=wrong;refused(lambda:mkdir(ns,ns['T']));assert ns['parents']==before;return 'unexpected child delta did not rebind'
+          fixture('wrong child delta',wrong_delta)
+          def partial(ns):
+           ns['open_parents']();ns['save']();mkdir(ns,ns['V']);(ns['V']/'unrecorded').write_text('partial')
+           count=len(ns['calls']);refused(lambda:cleanup_process(ns));assert len(ns['calls'])==count and (ns['V']/'unrecorded').exists();return 'unknown partial copy blocks all deletion'
+          fixture('partial copy/unrecorded cleanup',partial)
+          def replaced(ns):
+           ns['open_parents']();ns['save']();mkdir(ns,ns['V']);(ns['V']/'file').write_text('first');inventory(ns,ns['V']);(ns['V']/'file').unlink();(ns['V']/'file').write_text('replacement')
+           refused(lambda:cleanup_process(ns));assert (ns['V']/'file').exists();return 'identity replacement refused'
+          fixture('changed owned identity',replaced)
+          def journal_changed(ns):
+           ns['open_parents']();ns['save']();(ns['cache']/'owned.json').write_text('{}');refused(lambda:mkdir(ns,ns['V']));assert not ns['calls'];return 'journal bytes/identity stale'
+          fixture('changed journal leaf',journal_changed)
+          for target in ('ROOT','Versions','old-version'):
+           def forbidden(ns,target=target):
+            ns['open_parents']();ns['save']();path={'ROOT':ns['ROOT'],'Versions':ns['V'].parent,'old-version':ns['V'].parent/'3.13'}[target]
+            refused(lambda:ns['mutation_names'](['/usr/bin/sudo','-n','/bin/rm','-d','--',str(path)]));return 'outside exact owned trees'
+           fixture('old deletion target '+target,forbidden)
+          (D/'owned-controls.json').write_text(json.dumps({'provision_sha256':hashlib.sha256(raw.encode()).hexdigest(),'exact_function_sha256':bind,'limitations':['No full provision/guard/runner, source fetch, sudo, selected P/jq or suites executed.','Fixed constants relocated to exclusive owned-data fixture; run UID check changes only UID0 to current UID; ACL adapter grants no actual ACL proof.','Physical adapter holds actual full ancestor chain but applies own-UID/nonwrite rule only within the fixture; production UID0/real Darwin ACL checks remain static/actual-job gates.','Command adapter performs only ordinary owned fixture mkdir/write/rm; it is not sudo/cp evidence.'],'cases':rows},indent=2)+'\n');print('PASS',len(rows),'owned-data controls')
+          PY_OWNED_MODE_CONTROLS
+          /bin/chmod 0500 "$cache_root/owned-mode-controls.py"
+          /usr/bin/python3 -I -S -B "$cache_root/owned-mode-controls.py" "$cache_root/provision.py"
+          test "$(/usr/bin/shasum -a 256 "$cache_root/provision.py" | /usr/bin/awk '{print $1}')" = 4b7d2ac559f0f3b0ccacd70e0bf9ad7818fa91644a1a7a2c76826bc46b6573ea
+          /usr/bin/python3 -I -S -B "$cache_root/provision.py" "$cache_root" --phase supply
       - name: Complete original scope qualification suite
         timeout-minutes: 35
         shell: /bin/bash --noprofile --norc -e -o pipefail {0}
-        run: /bin/bash scripts/test/scope-qualification.test.sh
+        run: |
+          test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 4b7d2ac559f0f3b0ccacd70e0bf9ad7818fa91644a1a7a2c76826bc46b6573ea
+          /usr/bin/python3 -I -S -B "$YSTACK_PROOF_TMP/provision.py" "$YSTACK_PROOF_TMP" --phase scope
       - name: Complete original native owner suite
         timeout-minutes: 50
         shell: /bin/bash --noprofile --norc -e -o pipefail {0}
-        run: /bin/bash scripts/test/shadow-enforced.test.sh
+        run: |
+          test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 4b7d2ac559f0f3b0ccacd70e0bf9ad7818fa91644a1a7a2c76826bc46b6573ea
+          /usr/bin/python3 -I -S -B "$YSTACK_PROOF_TMP/provision.py" "$YSTACK_PROOF_TMP" --phase native
       - name: Verify source and remove only the owned runtime and test cache
         if: always()
         timeout-minutes: 5
         shell: /bin/bash --noprofile --norc -e -o pipefail {0}
         run: |
           set -euo pipefail
+          recovery_status=0
           if [ -n "${YSTACK_PROOF_TMP:-}" ]; then
-            test -d "$YSTACK_PROOF_TMP"
-            test ! -L "$YSTACK_PROOF_TMP"
-            test "$(/usr/bin/stat -f '%d:%i:%u' "$YSTACK_PROOF_TMP")" = "$YSTACK_PROOF_TMP_ID"
-            if [ -e "$YSTACK_PROOF_TMP/owned.json" ]; then
-              [[ "${YSTACK_RUNTIME_OWNED_SHA:-}" =~ ^[0-9a-f]{64}$ ]]
-              test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/owned.json" | /usr/bin/awk '{print $1}')" = "$YSTACK_RUNTIME_OWNED_SHA"
-              test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 38ce8128520a02dad25ca3d2b54426b84088c1fd26f550698fe7fe5b2ce1fe54
-              /usr/bin/python3 -I -S -B "$YSTACK_PROOF_TMP/provision.py" "$YSTACK_PROOF_TMP" --cleanup
+            if test -d "$YSTACK_PROOF_TMP" && test ! -L "$YSTACK_PROOF_TMP" &&
+               test "$(/usr/bin/stat -f '%d:%i:%u' "$YSTACK_PROOF_TMP")" = "$YSTACK_PROOF_TMP_ID" &&
+               test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 4b7d2ac559f0f3b0ccacd70e0bf9ad7818fa91644a1a7a2c76826bc46b6573ea; then
+              /usr/bin/python3 -I -S -B "$YSTACK_PROOF_TMP/provision.py" "$YSTACK_PROOF_TMP" --phase closure || recovery_status=$?
             else
-              test ! -e /Library/Frameworks/Python.framework/Versions/3.15
-              test ! -L /Library/Frameworks/Python.framework/Versions/3.15
-              test ! -e /Library/Frameworks/Python.framework/ystack-private-tools
-              test ! -L /Library/Frameworks/Python.framework/ystack-private-tools
+              recovery_status=1
             fi
-            /bin/rm -rf -- "$YSTACK_PROOF_TMP"
-            test ! -e "$YSTACK_PROOF_TMP"
-            test ! -L "$YSTACK_PROOF_TMP"
+            if [ "$recovery_status" -eq 0 ]; then
+              if test -d "$YSTACK_PROOF_TMP" && test ! -L "$YSTACK_PROOF_TMP" &&
+                 test "$(/usr/bin/stat -f '%d:%i:%u' "$YSTACK_PROOF_TMP")" = "$YSTACK_PROOF_TMP_ID"; then
+                /bin/rm -rf -- "$YSTACK_PROOF_TMP" || recovery_status=$?
+                test ! -e "$YSTACK_PROOF_TMP" || recovery_status=1
+                test ! -L "$YSTACK_PROOF_TMP" || recovery_status=1
+              else
+                recovery_status=1
+              fi
+            fi
           fi
           [[ "$YSTACK_SELECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$YSTACK_SELECTED_SHA" = "$GITHUB_SHA"
@@ -1641,3 +2757,4 @@ jobs:
           test "$(/usr/bin/git hash-object .github/workflows/scope-genuine-macos.yml)" = "$workflow_blob"
           /usr/bin/printf 'selected_sha=%s workflow_sha=%s workflow_blob=%s\n' "$YSTACK_SELECTED_SHA" "$YSTACK_WORKFLOW_SHA" "$workflow_blob"
           test -z "$(/usr/bin/git status --porcelain=v1)"
+          test "${recovery_status:-0}" -eq 0
