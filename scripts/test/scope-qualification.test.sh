@@ -2245,6 +2245,86 @@ print(json.dumps({'observer_owner_controls':'PASS','reports':reports,'ordinary_u
                   'supplied_runtime_executed':False,'not_actual_root_chain_or_full_fixture_proof':True,'fixed_owned_control_deadlines_only':[5,1],
                   'production_deadlines_unchanged':[1800,300,120,145,15]},sort_keys=True))
 PY_OBSERVER_OWNER_CONTROLS
+python3 -I -S -B - "$root" "$tmp/store-mode-controls" "${BASH_SOURCE[0]}" <<'PY_STORE_MODE_CONTROLS'
+import ast,hashlib,json,os,pathlib,subprocess,sys
+root,area=map(pathlib.Path,sys.argv[1:3]);source=pathlib.Path(sys.argv[3]).read_text();area.mkdir()
+opening='  /bin/cat >"$tmp/genuine-assembler.py" <<'+"'PY_GENUINE_ASSEMBLER'"
+lines=source.splitlines(keepends=True)
+a=[i for i,line in enumerate(lines) if line.rstrip('\n')==opening]
+b=[i for i,line in enumerate(lines) if line.rstrip('\n')=='PY_GENUINE_ASSEMBLER']
+assert len(a)==len(b)==1 and a[0]<b[0]
+assembler=''.join(lines[a[0]+1:b[0]]);tree=ast.parse(assembler)
+start=next(i for i,node in enumerate(tree.body) if isinstance(node,ast.Assign) and isinstance(node.targets[0],ast.Name) and node.targets[0].id=='store')
+block=tree.body[start:start+7]
+assert len(block)==7 and isinstance(block[-1],ast.Expr)
+assert ast.unparse(block[-1].value.func)=='store.chmod' and block[-1].value.args[0].value==0o750
+creation=''.join(assembler.splitlines(keepends=True)[block[0].lineno-1:block[-1].end_lineno])
+assert len(ast.parse(creation).body)==7
+(area/'creation.py').write_text(creation)
+host=root/'sandbox/v1/host-supervisor.py';host_raw=host.read_bytes();assert len(host_raw)<=16*1024*1024
+worker=r"""import ast,errno,json,os,pathlib,runpy,stat,subprocess,sys
+base,creation,host=map(pathlib.Path,sys.argv[1:4]);mask=int(sys.argv[4]);case=sys.argv[5]
+uid,gid=os.getuid(),os.getgid();before_mask=os.umask(mask);os.umask(before_mask);assert before_mask==mask
+product=runpy.run_path(str(host),run_name='owned_store_mode_product')
+block=ast.parse(creation.read_bytes()).body
+if case=='old-077':block=block[:-1]
+mode_attempted=False;writer_reached=False;error=None;original=pathlib.Path.chmod
+calls=[]
+def run(argv):
+    command=list(map(str,argv));assert command[:2]==['/bin/chmod','-N'] and command[2]==str(base/'store')
+    result=subprocess.run(command,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=3)
+    calls.append({'argv':command,'status':result.returncode,'stdout_hex':result.stdout.hex(),'stderr_hex':result.stderr.hex()})
+    assert result.returncode==0 and not result.stdout and not result.stderr
+
+def fail_mode(path,mode,*args,**kwargs):
+    global mode_attempted
+    assert path==base/'store' and mode==0o750
+    mode_attempted=True
+    raise OSError(errno.EIO,'fixed before-mode operation')
+if case=='mode-operation-fault':pathlib.Path.chmod=fail_mode
+try:
+    try:exec(compile(ast.Module(body=block,type_ignores=[]),str(creation),'exec'))
+    except OSError as actual:
+        assert case=='mode-operation-fault' and actual.errno==errno.EIO and actual.strerror=='fixed before-mode operation'
+        error={'type':type(actual).__name__,'errno':actual.errno,'message':actual.strerror}
+finally:pathlib.Path.chmod=original
+store=base/'store'
+if case=='wrong-mode':store.chmod(0o700)
+expected=case not in ('old-077','wrong-mode')
+if case=='mode-operation-fault':
+    assert error is not None and mode_attempted and not writer_reached
+else:
+    try:fd=product['check_store_root'](store,uid,gid)
+    except product['Refusal'] as actual:assert not expected and actual.code=='E_STORE'
+    else:
+        try:
+            assert expected
+            writer_reached=True
+            assert product['store_root_state_ok'](fd,uid,gid)
+            if sys.platform=='darwin':assert product['darwin_acl_entries'](fd)==[]
+        finally:os.close(fd)
+state=store.stat();assert stat.S_ISDIR(state.st_mode) and state.st_uid==uid and state.st_gid==gid
+assert stat.S_IMODE(state.st_mode)==(0o750 if case=='fixed' or (case=='mode-operation-fault' and mask==0o022) else 0o700)
+after_mask=os.umask(mask);os.umask(after_mask);assert after_mask==before_mask
+print(json.dumps({'case':case,'mask_before':before_mask,'mask_after':after_mask,'mode':stat.S_IMODE(state.st_mode),
+    'uid':state.st_uid,'gid':state.st_gid,'nlink':state.st_nlink,'product_accepted':None if error else expected,
+    'mode_fault':error,'writer_reach_marker':writer_reached,'actual_acl_commands':calls,
+    'scope':'ordinary owned same-uid data; not actual writer/root-origin or failed CI inode'},sort_keys=True),flush=True)
+"""
+script=area/'worker.py';script.write_text(worker);reports=[]
+for mask,cases in [(0o077,('fixed','old-077','wrong-mode','mode-operation-fault')),(0o022,('fixed','wrong-mode','mode-operation-fault'))]:
+    for case in cases:
+        base=area/(str(mask)+'-'+case);base.mkdir()
+        bindings={str(path):hashlib.sha256(path.read_bytes()).hexdigest() for path in (script,area/'creation.py',host)}
+        (base/'preexec.json').write_text(json.dumps(bindings,sort_keys=True)+'\n')
+        result=subprocess.run([sys.executable,'-I','-S','-B',str(script),str(base),str(area/'creation.py'),str(host),str(mask),case],
+            stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=10,umask=mask)
+        (base/'stdout.raw').write_bytes(result.stdout);(base/'stderr.raw').write_bytes(result.stderr)
+        assert result.returncode==0 and not result.stderr,(case,result.returncode,result.stdout,result.stderr)
+        reports.append(json.loads(result.stdout))
+print(json.dumps({'store_mode_controls':reports,'creation_sha256':hashlib.sha256(creation.encode()).hexdigest(),
+    'host_source_sha256':hashlib.sha256(host_raw).hexdigest(),'no_actual_writer_or_supplied_runtime':True},sort_keys=True),flush=True)
+PY_STORE_MODE_CONTROLS
 scope_controls_state=completed
 /bin/rm -- "$tmp/observer-owner-controls.pending"
 
@@ -5600,6 +5680,7 @@ installed={role:str(package/relative) for role,relative in c.INSTALLED_SOURCES.i
 identity_paths={key:str(put(base/'identities'/key,(key+'\n').encode())) for key in c.IDENTITY_KEYS if key!='dyld_cache_files'};identity_paths['dyld_cache_files']=[str(put(base/'identities/dyld-cache',b'fixture-only dyld identity\n'))];identity_paths['verifier']=str(verifier);identity_paths['host_runtime']=sys.executable;identity_paths['host_supervisor']=str(anchor/'host-supervisor.py')
 store=base/'store';store.mkdir(mode=0o750);os.chown(store,uid,gid);(base/'writer-work').mkdir(mode=0o700);os.chown(base/'writer-work',uid,gid)
 if sys.platform=='darwin':run(['/bin/chmod','-N',store])
+store.chmod(0o750)
 config={'schema_version':1,'kind':'sandbox_host_config','id':'scope.fixture.host','body':{'principal_uid':uid,'consumer_gid':gid,'environment_id':environment,'store_id':'store.scope-genuine','store_root':str(store),'work_root':str(base/'writer-work'),'identity_paths':identity_paths,'installed_files':installed,'runtime':{'driver':str(put(base/'identities/runtime-driver',b'not executed\n')),'vfkit':str(put(base/'identities/vfkit',b'not executed\n'))}}};put(anchor/'host-config.json',config)
 policy=json.loads((package/'control/v1/sandbox-bound-policy.json').read_bytes());claim={'schema_version':1,'kind':'execution_environment_claim','id':environment,'body':{key:policy['body'][key] for key in ('environment','filesystem','isolation','limits','network','resources','sensitive_material')}}
 if sys.platform=='darwin':
