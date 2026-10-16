@@ -9,7 +9,7 @@ Tracks #541. Risk is high. This is the nonterminal child-6 core. It authenticate
 the existing child-5 evidence at one exact revision. Issue #544 remains mandatory
 before child 6 completes or child 7 starts.
 
-Implementation PR: `review_size: accepted-exception`, 2,600–6,200 net changed
+Implementation PR: `review_size: accepted-exception`, 2,600–7,000 net changed
 lines. The private evidence reader, held-path and Git checks, closed evaluator
 relations, and a real two-principal origin fixture form one security boundary.
 Most of the range is proof: complete classification, bundle, Git, terminal and
@@ -639,6 +639,56 @@ unknown, malformed and loaded-static refusals. Preserve the approved fixture
 source download or administrator authority. Do not replace unrelated historical
 fixture facts or Linux runtime selection.
 
+Keep the Mac guard wrapper's observation private to this scope fixture. Bind its
+fixed source lines once. Authenticate the actual guard and consumer code objects,
+files and callers; select only their required trace events. Preserve real
+`_foreground` call/return, identity return and the final identity exception,
+including actual child reap and pipe-close evidence. Do not disable observation,
+cache a safety scan, alter the shared guard or query a failed object.
+
+Use one private `scope_fixture_owner_cancel` boundary to connect the original
+1,800-second alarm and fixture exit to the existing root driver. Keep the same
+alarm start. Make Bash's wait interruptible. Bind the cancellation channel before
+launch and use the fixed sudo/P entry's stdin, not an assumed preserved high FD
+or a new sudo option. Only that owner consumes it. Close every unrelated writer;
+EOF or cancellation prevents every later child launch, including between controls.
+Distinguish owner never launched, launch attempted without confirmation, active,
+and completed. Only a proven never-launched state can omit owner confirmation.
+
+Reuse `run_control` and its existing terminate, wait, kill and pipe-close boundary.
+Keep its 145-second total and 15-second closing window; cancellation does not
+restart either. Reap the owner's tracked child and its tracked foreground, then
+close their pipes before issuing a bounded completion record. Bind that record to
+the current authenticated root driver, invocation and held fixture identity.
+Require this confirmation and completion of the original launch wait before
+teardown deletes any root-fixture or ordinary-tmp object. EOF, Bash wait, a PID or a missing PENDING
+file alone proves no quiescence. Missing, stale, malformed or uncertain completion,
+unreaped children and pipe-close errors keep PENDING and failure with zero deletion.
+Preserve the original failure on confirmed cancellation. Do not discover arbitrary
+PIDs, use sudo kill, add a process-manager API or enlarge permissions. The unchanged
+workflow still refuses restoration for a negative signal or unknown phase outcome;
+fixture confirmation does not override that rule or prove final D/V/T restoration.
+
+In existing CI, compare old and new observers on real owned calls and events.
+Cover identity refusal, real foreground return/reap, direct-callee stat/bool/errno,
+exceptions and early GAP. Compare event order and field meaning while retaining
+actual varying identities and times; do not hand-fill identity. Check wrong code
+objects, same-name callers, one-time source-line binding and required local events.
+Record actual callback counts and cost without treating them as a full-suite timing
+proof. Run the exact private cancellation boundary with a fixed test-only short
+alarm and real owned children. Cover never-started and starting owners, normal
+completion, cancellation between and during calls, EOF and completion races,
+missing/wrong confirmation, unreaped children and close errors. Prove no new launch
+and cancel/reap/close/confirm/wait before delete. After any attempted launch,
+missing confirmation permits zero deletions. These controls add no production
+selector, runtime, sudo or diagnostic job. In the original complete Mac suite,
+also prove the real Bash → fixed sudo/P → root driver → reduced-privilege child
+and foreground cancellation, reap and confirmation chain. Use a fixed short
+cancellation case at the existing controlled-fixture entry, with no additional
+administrator command or general selector. Ordinary owned controls cannot replace
+this root-chain proof or normal full-suite restoration. Preserve actual alarm
+failures and the original 300/1,800/120-second limits.
+
 Bind both complete composed scope stdin bodies in existing CI by bounded
 extraction, each body's digest and prelude-before-body order. For each body, run
 its exact extracted stdin classification and physical-file boundary in a trusted
@@ -668,18 +718,21 @@ Limit the diagnostic change to `scope-qualification.test.sh` at its existing
 `PY_STALE_PREPARE`, private frontend-copy and `evaluation_reasons` failure boundary.
 Keep the original eight protected slots, calls, glob order and bindings unchanged.
 Use one precreated slot 8 for the other existing calls through `evaluation_reasons`,
-with fixed identity `evaluation-reasons`; reuse the same four exact bodies below.
+with fixed identity `evaluation-reasons`; reuse the four bodies bound below.
 There are at most nine slots. Do not add a case registry, selection option or new
 call site. Keep direct evaluator calls, expected-error calls and genuine fixtures
-outside this boundary. Preserve every original call's nine data arguments, order,
-assertions, result, evaluator stdout/stderr, READY/SEAL/COMMIT and cleanup.
+outside this boundary. Preserve all 78 expanded `expect_reasons` calls from the
+51 source call sites, their nine data arguments, order, assertions, result,
+evaluator stdout/stderr, READY/SEAL/COMMIT and cleanup.
 Add no invocation, public mode, product hook, helper path, provider, trust input or
 predicate. Keep the original 300/1,800-second limits, with no retry, deadline reset
 or TMPDIR relocation. Diagnostic overhead does not increase either time limit.
 
 The diagnostic boundary follows private candidate SHA-256
 `f807180c483a689ae6ebb8985fa99f4088836b6280da0d3591481b151fba6850`.
-Its exact formatter/capture bodies stay readable multiline raw literals:
+These decoded-body hashes are the observation baseline. Keep the literals
+readable and multiline. Only `observer_source` may change for the trace dispatch
+and source-line binding below; the other three bodies remain exact:
 
 | Embedded body | Decoded-byte SHA-256 |
 | --- | --- |
@@ -688,10 +741,13 @@ Its exact formatter/capture bodies stay readable multiline raw literals:
 | emit_capture | `153556128c04167c2a73d6c91c86b37bd3e1d34eb35fdeea44e865803301afb4` |
 | exit_capture | `95bc34214161aa79167d7f33e8cf4980d70177f7771fa5bf30672e8f0e1739ac` |
 
-The candidate binds this private diagnostic boundary. The final fixture also
-contains the separately bound Mac body, so its whole-file digest is measured at
-the actual implementation head. Verify the unchanged diagnostic bodies and the
-generated private copies separately from that combined file digest.
+The candidate binds the unchanged capture contract. Freeze the actual revised
+`observer_source` decoded bytes, generated private copies and their bindings at
+the implementation's exact head/base. Verify the other three baseline hashes
+unchanged and measure the combined fixture digest separately. New independent
+source preparation must accept these actual bytes before full execution; retain
+the separate implementation G3. Do not reuse the baseline hash for changed bytes
+or accept a future digest.
 
 Precreate all nine log, binding, wrapper and line-map slots before held acquisition.
 Reuse slot 8 only after the prior synchronous call and its original cleanup finish;
@@ -718,6 +774,13 @@ chain runs the original cleanup exactly once, preserves its entry status, then
 appends only to the preauthenticated existing FD19 sink. Close FD19 for the reader
 launch. Keep signal_exit unchanged. Early errors, signals, child/subshell paths,
 sink errors and transport gaps remain GAP. Do not query failed input metadata.
+
+Prebind the Linux observer's fixed source lines once. Authenticate its actual
+code objects, files and callers and select only needed events. Keep watched
+recheck line events and real direct-callee return/exception events, including
+callees outside watched files. Preserve component tracking and actual stat, bool,
+errno and identity returns. A watched-file filter alone is insufficient. This
+changes trace dispatch, not safety reads, capture fields, predicates or output.
 
 The existing HeldPath observer may serialize only original same-call return,
 exception and errno events and values already present in the original recheck
