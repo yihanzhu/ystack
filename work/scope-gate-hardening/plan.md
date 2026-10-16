@@ -581,6 +581,19 @@ module, stdlib/include and loaded-image checks. Scope repeats this complete guar
 before its first privileged P execution. Keep the genuine principal, store, Git,
 ledger and account/anchor cleanup behavior and all original refusal cases.
 
+In scope's `PY_MAC_RUNTIME`, use the accepted Mac plan's private
+`fixed_stdin_module_paths` classification. Before closure imports, bind the
+executing `__main__` object and namespace to `sys.modules['__main__']`. Require
+name `__main__`, file `<stdin>`, spec None, argv[0] `-` and effective `-I -S -B`
+flags. After imports and before use, recheck that same object, namespace identity,
+mapping and attributes; reject any other module key aliasing that object. Exclude
+only this bound entry object. Keep P and jq as explicit candidates and every other
+nonempty module file under the original physical, absolute, regular-file, lstat,
+UID/mode and symlink checks. Pseudo-paths on other modules, wrong startup or entry
+rebinding refuse. Do not filter by path text or existence, normalize a bad path
+into acceptance or add a general resolver. Keep the native fixture's file entry,
+workflow, shared guard, identity entry and provision unchanged.
+
 Use the fixed jq bytes with the original SHA-256 and actual jq-1.6 version checks.
 A private test copy may retain the existing owned-cache behavior and cleanup. It
 must originate from the authenticated fixed jq. No Darwin downloader or fallback
@@ -614,6 +627,17 @@ unknown, malformed and loaded-static refusals. Preserve the approved fixture
 `/usr/bin/cc` helper/native builds; add no compiler, SDK, runtime rebuilding,
 source download or administrator authority. Do not replace unrelated historical
 fixture facts or Linux runtime selection.
+
+Exercise the exact extracted scope stdin boundary in existing CI with a trusted
+real `-I -S -B -` process. Show that the old collection includes its real entry and
+refuses, while the new classification excludes only that entry and still checks
+all real imported files. Reject another module's pseudo-path, wrong name, file,
+spec, argv or effective flags, entry aliases, object/mapping/namespace rebinding,
+and relative, missing, changed or unsafe real files. Use only an explicit
+owned-file UID/mode fact adapter for these controls; do not fabricate a positive
+main object, execute the supplied P or sudo, or add a diagnostic job. Preserve
+nonzero failures and bounded child reap. These controls do not replace either
+complete Mac suite or the same-final-head Linux proof.
 
 Until actual supply, host checks, complete tests and cleanup pass, keep the Mac
 real-principal positive and G3 blocked. Keep CPU/wall evidence NONE and production
