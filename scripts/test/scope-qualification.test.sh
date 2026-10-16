@@ -22,19 +22,94 @@ pass() { passes=$((passes + 1)); /usr/bin/printf 'ok %s - %s\n' "$passes" "$1"; 
 sha256_path() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'; }
 
 tmp=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-scope-test.XXXXXX")
+scope_owner_state=never
+scope_controls_state=never
+scope_owner_pid=''
+scope_owner_writer=false
+scope_owner_reader=false
+scope_owner_serial=0
+scope_owner_status=0
+scope_fixture_owner_cancel() {
+  if [ "$scope_owner_reader" = true ]; then exec 6<&-;scope_owner_reader=false;fi
+  if [ "$scope_owner_writer" = true ]; then
+    exec 7>&-
+    scope_owner_writer=false
+  fi
+}
+scope_fixture_owner_wait() {
+  [ "$scope_owner_state" != never ] || return 0
+  [ "$scope_owner_state" != completed ] || return 0
+  [ -n "$scope_owner_pid" ] || return 1
+  scope_owner_status=0
+  wait "$scope_owner_pid" || scope_owner_status=$?
+  scope_fixture_owner_cancel
+  /usr/bin/python3 -I -S -B "$scope_owner_channel_helper" confirm "$tmp" "$genuine_base" \
+    "$guard_control" "$scope_owner_serial" || return 1
+  scope_owner_state=completed
+}
+scope_fixture_owner_launch() {
+  local proof=$1
+  [ "$scope_owner_state" = never ] || [ "$scope_owner_state" = completed ] || return 1
+  scope_owner_serial=$((scope_owner_serial+1))
+  /usr/bin/python3 -I -S -B "$scope_owner_channel_helper" prepare "$tmp" "$genuine_base" \
+    "$guard_control" "$scope_owner_serial" || return 1
+  exec 7<>"$tmp/scope-owner-$scope_owner_serial.fifo"
+  scope_owner_writer=true
+  exec 6<"$tmp/scope-owner-$scope_owner_serial.fifo"
+  scope_owner_reader=true
+  scope_owner_state=attempted
+  scope_owner_pid=''
+  /usr/bin/sudo -n "$genuine_python" -I -S -B "$guard_control" \
+    "$genuine_base" "$genuine_base/package" "$genuine_python" "$guard_source" "$operator_name" "$entry_source" \
+    "$tmp/scope-owner-$scope_owner_serial.json" <&6 6<&- 7>&- &
+  scope_owner_pid=$!
+  exec 6<&-
+  scope_owner_reader=false
+  scope_owner_state=active
+  if [ "$proof" = true ]; then
+    /usr/bin/python3 -I -S -B "$scope_owner_channel_helper" ready "$tmp" "$genuine_base" \
+      "$guard_control" "$scope_owner_serial" 7>&- || return 1
+    scope_fixture_owner_cancel
+  fi
+  scope_fixture_owner_wait || return 1
+  if [ "$proof" = true ]; then
+    [ "$scope_owner_status" -ne 0 ] || return 1
+    /usr/bin/printf 'actual fixed root-owner cancellation/reap/confirmation: PASS\n'
+  else
+    return "$scope_owner_status"
+  fi
+}
+scope_fixture_signal=''
+trap 'scope_fixture_signal=ALRM;scope_fixture_owner_cancel;exit 142' ALRM
+
 cleanup() {
   local prior=$? cleanup_status=0
-  if declare -F cleanup_genuine >/dev/null; then
+  scope_fixture_owner_cancel
+  if ! scope_fixture_owner_wait; then
+    /usr/bin/printf 'fixture-cleanup: FAIL_PENDING; owner completion is unknown\n' >&2
+    cleanup_status=1
+  elif { [ "$scope_controls_state" != never ] && [ "$scope_controls_state" != completed ]; } ||
+       [ -e "$tmp/observer-owner-controls.pending" ] || [ -L "$tmp/observer-owner-controls.pending" ]; then
+    /usr/bin/printf 'fixture-cleanup: FAIL_PENDING; ordinary control completion is unknown\n' >&2
+    cleanup_status=1
+  elif declare -F cleanup_genuine >/dev/null; then
     cleanup_genuine || cleanup_status=1
   else
     /usr/bin/printf 'genuine-cleanup: NOT_STARTED\n'
   fi
-  /bin/rm -rf -- "$tmp" >/dev/null 2>&1 || cleanup_status=1
+  if [ "$cleanup_status" -eq 0 ]; then
+    /bin/rm -rf -- "$tmp" >/dev/null 2>&1 || cleanup_status=1
+  fi
   if [ "$cleanup_status" -eq 0 ]; then
     /usr/bin/printf 'fixture-cleanup: PASS prior-exit=%s\n' "$prior"
   else
     /usr/bin/printf 'fixture-cleanup: FAIL prior-exit=%s\n' "$prior" >&2
     if [ "$prior" -eq 0 ]; then exit 1; fi
+  fi
+  if [ -n "$scope_fixture_signal" ]; then
+    trap - "$scope_fixture_signal"
+    kill -s "$scope_fixture_signal" "$$"
+    exit 142
   fi
 }
 trap cleanup EXIT
@@ -781,7 +856,7 @@ root=pathlib.Path(__import__('sys').argv[1]);area=pathlib.Path(__import__('sys')
 expected={'scope/v1/evaluate-scope.sh': 'f120e877973aa0b66d7ce3de2f6b9cc46b6a9b073e89c606fd99fd23fc84356a', 'scope/v1/read-shadow-evidence.py': 'a2e5ba7f8b8274851e727fd0928c2eafb7153305d84daf55a41a1c4315a9c54b', 'shadow/v1/_consumer.py': '34d314505860f7569f53f41491c29979ab30aa08f83cfc151444f8cb6a235f68'}
 for path,digest in expected.items():
     assert hashlib.sha256((root/path).read_bytes()).hexdigest()==digest
-observer_source = r"""import hashlib,json,os,runpy,stat,sys,time
+observer_source = r"""import hashlib,json,os,runpy,stat,sys,time,types
 FIELDS=('dev','ino','type','uid','gid','mode','nlink','size','mtime_ns','ctime_ns')
 def state(value):
     return dict(zip(FIELDS,(value.st_dev,value.st_ino,stat.S_IFMT(value.st_mode),
@@ -795,6 +870,22 @@ def observe(original,log,case,phase,argv,index):
     events={}
     sources={str(original),str(original.parents[2]/'shadow/v1/_consumer.py')}
     started=time.monotonic()
+    source_lines={}
+    source_codes={}
+    def code_tree(code):
+        result={code}
+        for value in code.co_consts:
+            if isinstance(value,types.CodeType):result.update(code_tree(value))
+        return result
+    try:
+        for name in sources:
+            with open(name,'rb') as source:
+                raw=source.read(16*1024*1024+1)
+            if len(raw)>16*1024*1024:raise ValueError('diagnostic source bound')
+            source_lines[name]=raw.decode().splitlines()
+            source_codes[name]=code_tree(compile(raw,name,'exec',dont_inherit=True))
+    except BaseException as error:
+        gap='source-bind:'+type(error).__name__
     try:
         before=os.lstat(log)
         if not stat.S_ISREG(before.st_mode) or before.st_nlink!=1 or before.st_uid!=os.getuid():
@@ -813,7 +904,8 @@ def observe(original,log,case,phase,argv,index):
             except BaseException as close_error:
                 gap+=';close:'+type(close_error).__name__
     def watched(frame):
-        return frame.f_code.co_filename in sources
+        return (frame.f_code.co_filename in source_codes and
+                frame.f_code in source_codes[frame.f_code.co_filename])
     def trace(frame,event,arg):
         nonlocal record,gap
         try:
@@ -884,10 +976,20 @@ def observe(original,log,case,phase,argv,index):
         except BaseException as error:
             gap='observer:'+type(error).__name__
         return trace
+    def dispatch(frame,event,arg):
+        if event!='call':return None
+        if watched(frame):
+            frame.f_trace_lines=frame.f_code.co_name=='recheck'
+            return trace
+        parent=frame.f_back
+        if parent is not None and watched(parent):
+            frame.f_trace_lines=False
+            return trace
+        return None
     previous=sys.gettrace()
     try:
         sys.argv=argv
-        try:sys.settrace(trace)
+        try:sys.settrace(dispatch)
         except BaseException as error:gap='trace-install:'+type(error).__name__
         runpy.run_path(str(original),run_name='__main__')
     finally:
@@ -1211,7 +1313,7 @@ def heredoc(tag):
 prepare=heredoc('PY_STALE_PREPARE')
 functions=source[source.index('run_evaluator() {'):source.index('\nexpect_reasons() {')]
 functions=functions[:functions.index('\nexpect_validator_error() {')]+functions[functions.index('\nprepare_stale_binding() {'):]
-expected={'observer_source':'0c2b1c8c8cb9c662c55e17e134f408693ab4ead8f27357ad6cb2b7bcc0b820eb',
+expected={'observer_source':'bc86cecd63feb9813f62af75bd7921e2ffd5624c0a263914f12ad4cb40c3e8ed',
  'frontend_capture':'a21a722a59923fa6ad18f6f6dd26385d46dcd5a3733083f9d7625777d73c4af8',
  'emit_capture':'153556128c04167c2a73d6c91c86b37bd3e1d34eb35fdeea44e865803301afb4',
  'exit_capture':'95bc34214161aa79167d7f33e8cf4980d70177f7771fa5bf30672e8f0e1739ac'}
@@ -1298,6 +1400,273 @@ with tempfile.TemporaryDirectory(prefix='ystack-boundary-owned-') as temporary:
         reports.append({'case':fault,'original_nonzero_and_stderr_preserved':True,'old_evidence_not_read_or_exported':True,'export_invocations':len(added)-1})
 print(json.dumps({'cases':reports,'four_body_sha256':expected,'scope':'Exact preparation/binding/evaluation_reasons/run_evaluator bytes; fixed ordinary frontend/jq output adapters only. No actual evaluator, reader, jq, supplied P, genuine fixture or historical cause proof.'},sort_keys=True))
 PY_STALE_CONTROLS
+
+(set -C; : >"$tmp/observer-owner-controls.pending")
+scope_controls_state=started
+"$python_bin" -I -S -B - "$root/scripts/test/scope-qualification.test.sh" "$root" <<'PY_OBSERVER_OWNER_CONTROLS'
+from pathlib import Path
+import ast,hashlib,importlib.util,json,os,pwd,re,signal,stat,subprocess,sys,tempfile,time,types,shutil,traceback
+source=Path(sys.argv[1]).read_text()
+def heredoc(tag):
+    mark="<<'"+tag+"'";start=source.index('\n',source.index(mark))+1
+    return source[start:source.index('\n'+tag+'\n',start)]+'\n'
+def literal(code,name):
+    return next(n.value.value for n in ast.parse(code).body if isinstance(n,ast.Assign)
+                and isinstance(n.targets[0],ast.Name) and n.targets[0].id==name)
+prepare=heredoc('PY_STALE_PREPARE');observer=literal(prepare,'observer_source')
+guard=heredoc('PY_GUARD_CONTROLS');wrapper=literal(guard,'wrapper_prefix');channel=heredoc('PY_FIXTURE_OWNER_CHANNEL')
+old=observer.replace('sys,time,types','sys,time',1)
+a=old.index('    source_lines={}\n');b=old.index('    try:\n        before=os.lstat(log)',a);old=old[:a]+old[b:]
+a=old.index('    def dispatch(frame,event,arg):\n');b=old.index('    previous=sys.gettrace()\n',a);old=old[:a]+old[b:]
+old=old.replace("return (frame.f_code.co_filename in source_codes and\n                frame.f_code in source_codes[frame.f_code.co_filename])","return frame.f_code.co_filename in sources").replace('sys.settrace(dispatch)','sys.settrace(trace)')
+assert hashlib.sha256(old.encode()).hexdigest()=='0c2b1c8c8cb9c662c55e17e134f408693ab4ead8f27357ad6cb2b7bcc0b820eb'
+root=Path(sys.argv[2]).resolve()
+consumer=(root/'shadow/v1/_consumer.py').read_bytes()
+assert hashlib.sha256(consumer).hexdigest()=='34d314505860f7569f53f41491c29979ab30aa08f83cfc151444f8cb6a235f68'
+old_wrapper=wrapper.replace('import dis, json, os, signal, sys, time, types','import json, os, signal, sys, time',1)
+a=old_wrapper.index('code_path=Path(sys.argv.pop(1))\n');b=old_wrapper.index('foreground = {}',a)
+old_wrapper=old_wrapper[:a]+"code = Path(sys.argv.pop(1)).read_bytes()\n"+old_wrapper[b:]
+a=old_wrapper.index('compiled_code = compile(');b=old_wrapper.index("print('GUARD_ACTUAL_PRINCIPAL",a);old_wrapper=old_wrapper[:a]+old_wrapper[b:]
+a=old_wrapper.index("        if short_proof and event=='line'");b=old_wrapper.index("        if event == 'call':",a);old_wrapper=old_wrapper[:a]+old_wrapper[b:]
+old_wrapper=old_wrapper.replace("            foreground.pop('ready',None)\n",'')
+old_wrapper=old_wrapper.replace('if bound(caller) and caller.f_lineno in identity_lines:',"line = code.decode().splitlines()[caller.f_lineno - 1]\n            if line.strip() == 'assert uptime() < deadline and identity(os.lstat(name)) == before':")
+old_wrapper=old_wrapper.replace('        if bound(frame) and frame.f_lineno in identity_lines:',"        line = code.decode().splitlines()[frame.f_lineno - 1]\n        if line.strip() == 'assert uptime() < deadline and identity(os.lstat(name)) == before':")
+a=old_wrapper.index('def dispatch(frame, event, arg):\n');b=old_wrapper.index('def cancel(',a);old_wrapper=old_wrapper[:a]+old_wrapper[b:]
+old_wrapper=old_wrapper.replace('sys.settrace(dispatch)','sys.settrace(observe)').replace("exec(compiled_code, {'__name__': '__main__'})","exec(compile(code, original_name, 'exec'), {'__name__': '__main__'})")
+assert hashlib.sha256(old_wrapper.encode()).hexdigest()=='0b4348aefe34c0036a2bfa16f9290e4aeefaef169444f3ec987f1474e085fc52'
+reports=[]
+temporary=tempfile.mkdtemp(prefix='scope-observer-owner-')
+print(json.dumps({'ordinary_tree':temporary,'on_failure':'RETAIN'}),flush=True)
+try:
+    area=Path(temporary).resolve();package=area/'package';(package/'shadow/v1').mkdir(parents=True);(package/'scope/v1').mkdir(parents=True)
+    (package/'shadow/v1/_consumer.py').write_bytes(consumer)
+    helper=area/'outside.py';helper.write_text('allowed=True\ndef rule(fd,value,ancestor):\n return allowed\n')
+    reader=package/'scope/v1/reader.py'
+    reader.write_text('''import importlib.util,os,sys
+from pathlib import Path
+p=Path(__file__).parents[2]/'shadow/v1/_consumer.py'
+s=importlib.util.spec_from_file_location('observer_owned_consumer',p)
+c=importlib.util.module_from_spec(s);sys.modules[s.name]=c;s.loader.exec_module(c)
+s=importlib.util.spec_from_file_location('observer_outside',sys.argv[2])
+h=importlib.util.module_from_spec(s);s.loader.exec_module(h)
+held=c._open_held(sys.argv[1],False,h.rule,'E_STALE')
+try:
+ if sys.argv[3]=='errno':os.unlink(sys.argv[1])
+ elif sys.argv[3]=='bool':h.allowed=False
+ elif sys.argv[3]=='gap':pass
+ else:
+  with open(sys.argv[1],'ab') as f:f.write(b'changed')
+ held.recheck('E_STALE')
+finally:held.close()
+''')
+    def observe_case(code,kind):
+        target=area/'value';target.write_bytes(b'actual owned file');log=area/'log';log.write_bytes(b'')
+        ns={};exec(compile(code,'actual-private-observer','exec'),ns)
+        callbacks={};wrappers={};install=sys.settrace
+        def wrap(fn):
+            if fn is None:return None
+            if fn not in wrappers:
+                def call(frame,event,arg):
+                    callbacks[event]=callbacks.get(event,0)+1
+                    return wrap(fn(frame,event,arg))
+                wrappers[fn]=call
+            return wrappers[fn]
+        def counted(fn):install(wrap(fn))
+        previous=sys.argv;started=time.monotonic();sys.settrace=counted
+        try:
+            try:ns['observe'](reader,log,'owned', 'owned-phase',[str(reader),str(target),str(helper),kind],8)
+            except Exception as error:assert kind!='gap' and str(error)=='E_STALE'
+            else:assert kind=='gap'
+        finally:
+            install(None);sys.settrace=install;sys.argv=previous
+        result=json.loads(log.read_bytes());assert result['status']==('OBSERVER_GAP' if kind=='gap' else 'FIRST_STALE')
+        return result,callbacks,time.monotonic()-started
+    for kind in ('identity','errno','bool','gap'):
+        first,old_counts,old_cost=observe_case(old,kind);second,new_counts,new_cost=observe_case(observer,kind)
+        def shape(value):
+            return {'guard':value['guard'],'exception':value['exception'],'predicate_input':value['predicate_input'],
+                    'frames':[(f['source'],f['function'],f['line'],
+                        [(v['function'],v['caller_line'],v.get('actual_bool_return'),v.get('errno'),v.get('exception'),
+                          sorted(v.get('stat',{}))) for v in f['actual_returns']],sorted(f)) for f in value['frames']]}
+        assert (first['status'],first.get('reason'))==(second['status'],second.get('reason'))
+        if kind!='gap':assert shape(first)==shape(second),(first,second)
+        assert sum(new_counts.values())<sum(old_counts.values())
+        assert any('actual_bool_return' in item for frame in second.get('frames',[]) for item in frame['actual_returns']) or kind!='bool'
+        reports.append({'observer':kind,'old':first,'new':second,'old_callbacks':old_counts,'new_callbacks':new_counts,
+                        'old_seconds':old_cost,'new_seconds':new_cost,'same_field_meaning':True})
+    # Extract only the existing private owner and actual guard child lifecycle, never the complete fixture.
+    tree=ast.parse(guard);names={'ScopeFixtureOwnerCancel','unique_object','confirmation','completed_case','run_control'}
+    parts=[ast.get_source_segment(guard,n) for n in tree.body if isinstance(n,(ast.ClassDef,ast.FunctionDef)) and n.name in names]
+    assert len(parts)==5
+    owned='\n\n'.join(parts)
+    assert owned.count('assert os.getuid()==0')==1
+    owned=owned.replace('assert os.getuid()==0','assert os.getuid()=='+str(os.getuid()))
+    drop='user=operator_record.pw_uid, group=operator_record.pw_gid,\n                extra_groups=operator_groups, '
+    assert owned.count(drop)==1;owned=owned.replace(drop,'')
+    assert owned.count('end = time.monotonic() + 145')==1 and owned.count('control_end = end - 15')==1
+    owned=owned.replace('end = time.monotonic() + 145','end = time.monotonic() + 5').replace('control_end = end - 15','control_end = end - 1')
+    channel_owned=channel.replace('fixture.st_uid==0','fixture.st_uid=='+str(os.getuid())).replace('info.st_uid==0','info.st_uid=='+str(os.getuid()))
+    shell=source[source.index('scope_owner_state=never\n'):source.index("scope_fixture_signal=''\n")]
+    assert shell.count('/usr/bin/sudo -n "$genuine_python"')==1
+    shell=shell.replace('/usr/bin/sudo -n "$genuine_python"','"$genuine_python"')
+    proof=next(n.value.args[0].value for n in ast.walk(tree) if isinstance(n,ast.Expr) and isinstance(n.value,ast.Call)
+               and isinstance(n.value.func,ast.Attribute) and n.value.func.attr=='write_text' and isinstance(n.value.func.value,ast.Name)
+               and n.value.func.value.id=='proof_program')
+    mac_program=area/'mac-wrapper.py';mac_subject=area/'mac-subject.py';mac_target=area/'mac-target'
+    mac_code=proof.replace('time.sleep(30)','time.sleep(0)')
+    clock_name='CLOCK_UPTIME_RAW' if sys.platform=='darwin' else 'CLOCK_MONOTONIC'
+    mac_code=mac_code.replace('CLOCK_UPTIME_RAW',clock_name)
+    foreground_line="instance._foreground(command,b'',4096,65536,10,{'PATH':'/usr/bin:/bin','LC_ALL':'C','LANG':'C'})"
+    assert mac_code.count(foreground_line)==1
+    mac_code=mac_code.replace(foreground_line,foreground_line+"\nname=sys.argv[2];before=identity(os.lstat(name))\nwith open(name,'ab') as target:target.write(b'changed')\nassert uptime() < deadline and identity(os.lstat(name)) == before")
+    mac_subject.write_text(mac_code)
+    mac_records=[]
+    for version,code in [('old',old_wrapper),('new',wrapper),('wrong-code-same-name',wrapper)]:
+        code=code.replace('CLOCK_UPTIME_RAW',clock_name)
+        mac_target.write_bytes(b'owned')
+        if version=='wrong-code-same-name':
+            fake="scope={}\nexec(compile('def _foreground():return None\\n',str(consumer),'exec'),scope)\nscope['_foreground']()\n"
+            mac_subject.write_text(mac_code.replace('name=sys.argv[2];before=',fake+'name=sys.argv[2];before='))
+        else:mac_subject.write_text(mac_code)
+        counted=code.replace('foreground = {}','callback_count=0\nforeground = {}',1)
+        for name in ('observe','dispatch'):
+            header='def '+name+'(frame, event, arg):\n'
+            if header in counted:counted=counted.replace(header,header+'    global callback_count\n    callback_count+=1\n',1)
+        counted=counted.replace('    sys.settrace(None)\n',"    sys.settrace(None)\n    print('TRACE_COUNT '+str(callback_count),file=sys.stderr)\n",1)
+        mac_program.write_text(counted);started=time.monotonic()
+        result=subprocess.run([sys.executable,'-I','-S','-B',str(mac_program),str(mac_subject),str(package),str(mac_target),str(mac_program)],capture_output=True,timeout=10)
+        print(json.dumps({'mac_observer_version':version,'actual_rc':result.returncode,'stdout':result.stdout.decode(),'stderr':result.stderr.decode()}),flush=True)
+        assert result.returncode!=0
+        def row(prefix):return json.loads(next(line[len(prefix):] for line in result.stderr.splitlines() if line.startswith(prefix)))
+        clean=row(b'GUARD_OWNED_CLEANUP ');identity=row(b'GUARD_IDENTITY_REFUSAL ')
+        assert clean['complete'] and clean['active_calls']==0 and len(clean['foreground_calls'])==1
+        assert clean['foreground_calls'][0]['reaped'] and clean['foreground_calls'][0]['pipes_closed']
+        assert identity['deadline_valid'] and identity['actual_identity_comparison_reached'] and identity['actual']!=identity['expected']
+        count=int(next(line.split()[1] for line in result.stderr.splitlines() if line.startswith(b'TRACE_COUNT ')))
+        mac_records.append({'version':version,'cleanup':clean,'identity':identity,'callbacks':count,'seconds':time.monotonic()-started,'stdout':result.stdout.decode(),'stderr':result.stderr.decode()})
+    assert mac_records[1]['callbacks']<mac_records[0]['callbacks']
+    reports.append({'mac_actual_observer_equivalence':mac_records})
+    for fault in ('ordinary-started-no-marker','ordinary-pending','never-started','starting','normal','cancel','alarm','eof-before-launch','actual-deadline','missing-confirmation','wrong-confirmation','reported-wait-error','reported-close-error','inner-wait-error','inner-close-error'):
+        work=area/fault;work.mkdir();base=work/'base';base.mkdir();(base/'package/shadow/v1').mkdir(parents=True);(base/'package/shadow/v1/_consumer.py').write_bytes(consumer);script=work/'runtime-guard-controls.py';ch=work/'channel.py';ch.write_text(channel_owned)
+        fixture=base/('runtime-guard-cancel-proof' if fault in ('cancel','alarm') else 'runtime-guard');fixture.mkdir()
+        program=fixture/'wrapper.py';program.write_text(wrapper.replace('CLOCK_UPTIME_RAW',clock_name))
+        body=fixture/'subject.py'
+        if fault in ('cancel','alarm'):body=fixture/'owner-cancel-proof.py';body.write_text(proof.replace('CLOCK_UPTIME_RAW',clock_name))
+        else:body.write_text("import os,sys,time\nname=sys.argv[2];deadline=time.monotonic()+120\nbefore=tuple(os.lstat(name))\ndef uptime():return time.monotonic()\ndef identity(value):return tuple(value)\nassert uptime() < deadline and identity(os.lstat(name)) == before\nprint('{\"privileged_execution\": false}',file=sys.stderr)\nprint(sys.argv[2])\n")
+        selected=base/'selected';selected.write_bytes(b'not executable data')
+        prefix='''from pathlib import Path
+import fcntl,hashlib,json,os,pwd,selectors,signal,stat,subprocess,sys,time
+base=Path(sys.argv[1]);package=Path(sys.argv[2]);python=Path(sys.executable)
+operator_record=pwd.getpwuid(os.getuid());operator_groups=os.getgroups()
+selected=base/'selected';guard_file=Path(sys.argv[4]);module=selected
+pending_path=base/'runtime-guard-cleanup-uncertain'
+'''
+        suffix="\nprogram=Path("+repr(str(program))+")\noriginal_program=Path("+repr(str(body))+")\nsync_program=original_program\nowner_cancel=ScopeFixtureOwnerCancel()\ntry:\n    run_control("+repr('fixed-short-owner-cancel' if fault in ('cancel','alarm') else 'owned-normal')+",None)\nfinally:\n    owner_cancel.finish()\n"
+        script.write_text(prefix+owned+suffix)
+        (work/'guard-source').write_bytes(b'owned guard source')
+        if fault=='actual-deadline':body.write_text(body.read_text().replace('print(sys.argv[2])','time.sleep(10)\nprint(sys.argv[2])'))
+        if fault in ('inner-wait-error','inner-close-error'):
+            hook="""saved_popen=subprocess.Popen
+actual_children=[]
+def fixed_owned_popen(*args,**kwargs):
+    child=saved_popen(*args,**kwargs)
+    actual_children.append(child)
+    operation=child.wait if FAULT=='inner-wait-error' else child.stdout.close
+    injected=[False]
+    def reported_error(*args,**kwargs):
+        value=operation(*args,**kwargs)
+        if not injected[0]:
+            injected[0]=True
+            raise OSError('fixed reported error after actual operation')
+        return value
+    if FAULT=='inner-wait-error':child.wait=reported_error
+    else:child.stdout.close=reported_error
+    return child
+subprocess.Popen=fixed_owned_popen
+""".replace('FAULT',repr(fault))
+            content=script.read_text().replace('owner_cancel=ScopeFixtureOwnerCancel()\n',hook+'owner_cancel=ScopeFixtureOwnerCancel()\n',1)
+            content=content.replace('    owner_cancel.finish()\n',"    try:owner_cancel.finish()\n    finally:\n        assert len(actual_children)==1\n        child=actual_children[0]\n        assert type(child.returncode) is int and all(p.closed for p in (child.stdin,child.stdout,child.stderr))\n        print('INDEPENDENT_PHYSICAL_COMPLETION '+json.dumps({'pid':child.pid,'status':child.returncode,'all_pipes_closed':True}),flush=True)\n")
+            script.write_text(content)
+        serial='1' if fault in ('cancel','alarm') else '2'
+        variables='\n'.join(name+'='+repr(str(value)) for name,value in {'tmp':work,'genuine_base':base,'guard_control':script,'genuine_python':sys.executable,'guard_source':work/'guard-source','operator_name':pwd.getpwuid(os.getuid()).pw_name,'entry_source':work/'guard-source','scope_owner_channel_helper':ch}.items())+'\n'
+        # Keep the exact production launch, wait and confirmation functions; only UID and fixed sudo transport adapt.
+        if serial=='2':variables+='scope_owner_serial=1\n'
+        if fault in ('cancel','alarm'):call='scope_fixture_owner_launch true\n'
+        elif fault=='eof-before-launch':
+            call='scope_fixture_owner_launch false\n'
+            shell_case=shell.replace('  scope_owner_state=active\n','  scope_owner_state=active\n  scope_fixture_owner_cancel\n',1)
+        else:call='scope_fixture_owner_launch false\n'
+        negative=fault in ('missing-confirmation','wrong-confirmation','reported-wait-error','reported-close-error')
+        genuine=area/(fault+'.genuine-receipt')
+        if negative:
+            call+='\n/bin/cp "$tmp/scope-owner-2.receipt" '+repr(str(genuine))+'\n'
+            call+='scope_owner_state=active\n'
+            if fault=='missing-confirmation':call+='/bin/mv "$tmp/scope-owner-2.receipt" "$tmp/scope-owner-2.saved-receipt"\n'
+            elif fault=='wrong-confirmation':
+                patch_code='import json,os,sys;p=sys.argv[1];v=json.load(open(p));v["context_sha256"]="0"*64;os.chmod(p,0o600);open(p,"w").write(json.dumps(v));os.chmod(p,0o444)'
+                call+='/usr/bin/python3 -I -S -B -c '+repr(patch_code)+' "$tmp/scope-owner-2.receipt"\n'
+            elif fault=='reported-wait-error':
+                actual_wait=shell[shell.index('scope_fixture_owner_wait() {'):shell.index('scope_fixture_owner_launch() {')]
+                call+=actual_wait.replace('scope_fixture_owner_wait() {','scope_fixture_owner_wait_actual() {',1)
+                call+='scope_fixture_owner_wait() { scope_fixture_owner_wait_actual || return 1; printf "REPORTED_WAIT_ERROR_AFTER_REAL_WAIT\\n" >&2; return 1; }\n'
+            else:
+                actual_close=shell[shell.index('scope_fixture_owner_cancel() {'):shell.index('scope_fixture_owner_wait() {')]
+                call+=actual_close.replace('scope_fixture_owner_cancel() {','scope_fixture_owner_cancel_actual() {',1)
+                call+='scope_fixture_owner_cancel() { scope_fixture_owner_cancel_actual; printf "REPORTED_CLOSE_ERROR_AFTER_REAL_CLOSE\\n" >&2; return 1; }\n'
+        cleanup_source=source[source.index("scope_fixture_signal=''\n"):source.index('\nplatform=',source.index("scope_fixture_signal=''\n"))]
+        test_shell=shell_case if fault=='eof-before-launch' else shell
+        if fault=='alarm':test_shell=test_shell.replace('    scope_fixture_owner_cancel\n  fi\n',"    /usr/bin/python3 -I -S -B -c 'import os,signal,time;time.sleep(0.25);os.kill(os.getppid(),signal.SIGALRM)' 7>&-\n  fi\n",1)
+        if fault=='starting':test_shell=test_shell.replace('  scope_owner_state=attempted\n','  scope_owner_state=attempted\n  kill -s ALRM "$$"\n',1)
+        if fault in ('ordinary-started-no-marker','ordinary-pending','never-started'):call='exit 0\n'
+        if fault=='ordinary-started-no-marker':call='scope_controls_state=started\nexit 0\n'
+        if fault=='ordinary-pending':(work/'observer-owner-controls.pending').touch()
+        audit=area/(fault+'.deleted')
+        stub='cleanup_genuine(){ if [ \"$scope_owner_state\" != never ]; then /bin/cat \"$tmp/scope-owner-$scope_owner_serial.receipt\" > '+repr(str(genuine))+'; fi; /bin/rm -rf -- "$genuine_base";printf DELETED > '+repr(str(audit))+'; }\n'
+        command='set -euo pipefail\n'+test_shell+variables+stub+cleanup_source+call
+        generated=area/(fault+'.generated.json')
+        generated.write_text(json.dumps({'driver':script.read_text(),'wrapper':program.read_text(),'subject':body.read_text(),'channel':ch.read_text(),'bash':command},sort_keys=True))
+        print(json.dumps({'generated_parts':str(generated),'sha256':hashlib.sha256(generated.read_bytes()).hexdigest(),'source':json.loads(generated.read_text())}),flush=True)
+        start=time.monotonic();result=subprocess.run(['/bin/bash','-c',command],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=20)
+        (area/(fault+'.stdout')).write_bytes(result.stdout);(area/(fault+'.stderr')).write_bytes(result.stderr)
+        confirmed=audit.exists()
+        print(json.dumps({'actual_owner_case':fault,'returncode':result.returncode,'stdout':result.stdout.decode(),'stderr':result.stderr.decode(),'deletion_permitted':confirmed}),flush=True)
+        assert confirmed==(fault in ('never-started','normal','cancel','alarm','eof-before-launch','actual-deadline')),(fault,result.returncode,result.stderr)
+        assert (result.returncode==0)==(fault in ('never-started','normal','cancel'))
+        if fault=='alarm':assert result.returncode==-signal.SIGALRM
+        if fault=='eof-before-launch':assert result.returncode!=0 and '\"cases\": []' in result.stdout.decode()
+        if fault=='actual-deadline':assert result.returncode!=0 and time.monotonic()-start>=4
+        if fault=='cancel':assert 'foreground_count' in result.stdout.decode()
+        if fault not in ('ordinary-started-no-marker','ordinary-pending','never-started','starting','inner-wait-error','inner-close-error'):
+            original=json.loads(genuine.read_bytes())
+            assert original['quiescent'] is True and isinstance(original['cases'],list)
+            if fault not in ('eof-before-launch',):assert len(original['cases'])==1
+        if fault in ('inner-wait-error','inner-close-error'):
+            assert not confirmed and work.exists() and result.returncode!=0
+            assert 'INDEPENDENT_PHYSICAL_COMPLETION' in result.stdout.decode()
+            assert 'original child supervision not confirmed' in result.stderr.decode()
+            assert 'GUARD_OWNED_CLEANUP' in result.stdout.decode()
+            assert 'fixed reported error after actual operation' in result.stderr.decode()
+        if fault in ('ordinary-started-no-marker','ordinary-pending'):assert work.exists() and 'ordinary control completion is unknown' in result.stderr.decode()
+        if negative:
+            assert not confirmed and work.exists()
+            if fault=='missing-confirmation':assert 'FileNotFoundError' in result.stderr.decode()
+            if fault=='wrong-confirmation':assert "value['context_sha256']==hashlib.sha256(raw).hexdigest()" in result.stderr.decode()
+            if fault=='reported-wait-error':assert 'REPORTED_WAIT_ERROR_AFTER_REAL_WAIT' in result.stderr.decode()
+            if fault=='reported-close-error':assert 'REPORTED_CLOSE_ERROR_AFTER_REAL_CLOSE' in result.stderr.decode()
+        reports.append({'owner_case':fault,'returncode':result.returncode,'deletion_permitted':confirmed,
+                        'stdout':result.stdout.decode(),'stderr':result.stderr.decode(),'elapsed':time.monotonic()-start})
+except BaseException:
+    print(json.dumps({'ordinary_tree_retained':temporary,'reason':'control did not establish complete success'}),flush=True)
+    raise
+else:
+    shutil.rmtree(temporary)
+    print(json.dumps({'ordinary_tree_removed_after_complete_evidence':temporary}),flush=True)
+print(json.dumps({'observer_owner_controls':'PASS','reports':reports,'ordinary_uid_and_fixed_sudo_transport_adapter':True,
+                  'supplied_runtime_executed':False,'not_actual_root_chain_or_full_fixture_proof':True,'fixed_owned_control_deadlines_only':[5,1],
+                  'production_deadlines_unchanged':[1800,300,120,145,15]},sort_keys=True))
+PY_OBSERVER_OWNER_CONTROLS
+scope_controls_state=completed
+/bin/rm -- "$tmp/observer-owner-controls.pending"
 
 for shipped in "$policy" "$record_program" "$gate_program" "$validator" "$evaluator"; do
   [ -f "$shipped" ] && [ ! -L "$shipped" ] || fail "missing $shipped"
@@ -3177,10 +3546,84 @@ PY_MAC_IDS
 }
 
 run_genuine_macos_runtime_guard_controls() {
-  local operator_name guard_source guard_control entry_source
+  local operator_name guard_source entry_source
   operator_name=$(/usr/bin/id -un) || fail 'guard operator identity'
   guard_source="$tmp/runtime-guard/guard.py"
   guard_control="$tmp/runtime-guard-controls.py"
+  scope_owner_channel_helper="$tmp/scope-fixture-owner-channel.py"
+  /bin/cat >"$scope_owner_channel_helper" <<'PY_FIXTURE_OWNER_CHANNEL'
+import hashlib,json,os,stat,sys,time
+from pathlib import Path
+
+def identity(value):
+    return [value.st_dev,value.st_ino,value.st_mode,value.st_uid,value.st_gid,value.st_nlink,
+            value.st_size,value.st_mtime_ns,value.st_ctime_ns]
+
+def snapshot(path,maximum):
+    fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+    try:
+        before=os.fstat(fd)
+        assert stat.S_ISREG(before.st_mode) and before.st_nlink==1 and before.st_size<=maximum
+        raw=bytearray()
+        while len(raw)<=maximum:
+            block=os.read(fd,min(65536,maximum+1-len(raw)))
+            if not block:break
+            raw.extend(block)
+        assert len(raw)<=maximum and identity(os.fstat(fd))==identity(before)==identity(os.lstat(path))
+        return bytes(raw),before
+    finally:os.close(fd)
+
+operation,area,base,driver,serial=sys.argv[1:]
+area,base,driver=map(Path,(area,base,driver))
+assert area.resolve()==area and base.resolve()==base and driver==area/'runtime-guard-controls.py'
+assert serial in ('1','2') and operation in ('prepare','confirm','ready')
+stem=area/('scope-owner-'+serial)
+context=Path(str(stem)+'.json');channel=Path(str(stem)+'.fifo')
+receipt=Path(str(stem)+'.receipt');ready=Path(str(stem)+'.ready')
+if operation=='prepare':
+    raw,source=snapshot(driver,16*1024*1024)
+    fixture=os.lstat(base)
+    assert stat.S_ISDIR(fixture.st_mode) and fixture.st_uid==0 and not fixture.st_mode&0o022
+    os.mkfifo(channel,0o600)
+    pipe=os.lstat(channel)
+    value={'invocation':str(stem),'driver_sha256':hashlib.sha256(raw).hexdigest(),
+           'driver_identity':identity(source),'fixture':identity(fixture)[:5],
+           'channel':identity(pipe)[:6]}
+    fd=os.open(context,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+    try:
+        data=json.dumps(value,sort_keys=True,separators=(',',':')).encode()
+        assert os.write(fd,data)==len(data);os.fsync(fd)
+    finally:os.close(fd)
+else:
+    raw,state=snapshot(context,4096);expected=json.loads(raw)
+    current,source=snapshot(driver,16*1024*1024)
+    assert identity(source)==expected['driver_identity'] and hashlib.sha256(current).hexdigest()==expected['driver_sha256']
+    assert identity(os.lstat(base))[:5]==expected['fixture']
+    assert identity(os.lstat(channel))[:6]==expected['channel']
+    if operation=='ready':
+        end=time.monotonic()+10
+        while not ready.exists():
+            assert time.monotonic()<end
+            time.sleep(0.02)
+        data,info=snapshot(ready,4096)
+        assert info.st_uid==0 and stat.S_IMODE(info.st_mode)==0o444
+        assert json.loads(data)=={'context_sha256':hashlib.sha256(raw).hexdigest(),'foreground_started':True}
+    else:
+        data,info=snapshot(receipt,16384);value=json.loads(data)
+        assert info.st_uid==0 and stat.S_IMODE(info.st_mode)==0o444
+        assert set(value)=={'context_sha256','driver_pid','cases','cancelled','quiescent'}
+        assert value['context_sha256']==hashlib.sha256(raw).hexdigest()
+        assert type(value['driver_pid']) is int and value['driver_pid']>0 and value['quiescent'] is True
+        assert type(value['cancelled']) is bool and type(value['cases']) is list and len(value['cases'])<=16
+        assert all(set(row)=={'pid','returncode','foreground_count','foreground_sha256'} and
+                   type(row['pid']) is int and row['pid']>0 and type(row['returncode']) is int and
+                   type(row['foreground_count']) is int and 0<=row['foreground_count']<=4096 and
+                   type(row['foreground_sha256']) is str and len(row['foreground_sha256'])==64
+                   for row in value['cases'])
+        if serial=='1':
+            assert value['cancelled'] and len(value['cases'])==1 and value['cases'][0]['foreground_count']==1
+        print(json.dumps(value,sort_keys=True),flush=True)
+PY_FIXTURE_OWNER_CHANNEL
   entry_source="$tmp/runtime-bootstrap-entry.py"
   "$python_bin" -I -S -B - "$root/scripts/test/scope-qualification.test.sh" "$guard_source" "$entry_source" <<'PY_GUARD_EXTRACT'
 from pathlib import Path
@@ -3203,6 +3646,7 @@ import ast
 import ctypes
 import errno
 import importlib.util
+import fcntl
 import hashlib
 import json
 import math
@@ -3227,7 +3671,7 @@ assert base.resolve() == base and base.is_dir() and base.stat().st_uid == 0
 assert python.resolve() == python
 assert python == Path('/Library/Frameworks/Python.framework/Versions/3.15/Resources/Python.app/Contents/MacOS/Python')
 prefix = Path('/Library/Frameworks/Python.framework/Versions/3.15')
-fixture = base / 'runtime-guard'
+fixture = base / ('runtime-guard-cancel-proof' if Path(sys.argv[7]).name == 'scope-owner-1.json' else 'runtime-guard')
 assert not os.path.lexists(fixture)
 fixture.mkdir(mode=0o755)
 fixture.chmod(0o755)
@@ -3248,21 +3692,52 @@ for path in (fixture, copied, *copied.rglob('*')):
     assert value.st_uid == 0 and not value.st_mode & 0o022
 guard = guard_file.read_bytes()
 program = fixture / 'guard.py'
-wrapper_prefix = r"""import json, os, signal, sys, time
+wrapper_prefix = r"""import dis, json, os, signal, sys, time, types
 from pathlib import Path
-code = Path(sys.argv.pop(1)).read_bytes()
+code_path=Path(sys.argv.pop(1))
+short_proof=code_path.name=='owner-cancel-proof.py' and code_path.parent==Path(sys.argv[1]).parent/'runtime-guard-cancel-proof'
+code = code_path.read_bytes()
 foreground = {}
 proofs = []
 last_identity = None
 identity_refusal = None
 original_name = 'actual-runtime-guard'
 consumer_name = str(Path(sys.argv[1]) / 'shadow/v1/_consumer.py')
+compiled_code = compile(code, original_name, 'exec')
+source_lines = code.decode().splitlines()
+def code_tree(code):
+    result = {code}
+    for value in code.co_consts:
+        if isinstance(value, types.CodeType):
+            result.update(code_tree(value))
+    return result
+with open(consumer_name, 'rb') as source:
+    consumer_bytes = source.read(16 * 1024 * 1024 + 1)
+assert len(consumer_bytes) <= 16 * 1024 * 1024
+bound_codes = {original_name: code_tree(compiled_code),
+    consumer_name: code_tree(compile(consumer_bytes, consumer_name, 'exec', dont_inherit=True))}
+identity_line = "assert uptime() < deadline and identity(os.lstat(name)) == before"
+identity_lines = {index + 1 for index, line in enumerate(source_lines) if line.strip() == identity_line}
+assert identity_lines
+identity_callers = {item for item in bound_codes[original_name]
+    if identity_lines & {line for offset, line in dis.findlinestarts(item)}}
+
+def bound(frame):
+    return (frame.f_code.co_filename in bound_codes and
+            frame.f_code in bound_codes[frame.f_code.co_filename])
 print('GUARD_ACTUAL_PRINCIPAL ' + json.dumps({'pid': os.getpid(), 'uid': os.getuid(), 'gid': os.getgid(),
     'groups': os.getgroups()}, sort_keys=True), file=sys.stderr, flush=True)
 
 def observe(frame, event, arg):
     global last_identity, identity_refusal
     if frame.f_code.co_filename == consumer_name and frame.f_code.co_name == '_foreground':
+        if short_proof and event=='line' and not foreground.get('ready'):
+            child=frame.f_locals.get('child')
+            outputs=frame.f_locals.get('outputs')
+            if child is not None and outputs is not None and not child.stdout.closed:
+                if outputs.get(child.stdout.fileno())==b'TERM_RESISTANT_READY\n':
+                    print('OWNER_FOREGROUND_READY',flush=True)
+                    foreground['ready']=True
         if event == 'call':
             foreground[id(frame)] = True
         elif event == 'return':
@@ -3273,21 +3748,33 @@ def observe(frame, event, arg):
                 'reaped': child is None or child.returncode is not None,
                 'pipes_closed': all(item is None or item.closed for item in streams)})
             foreground.pop(id(frame), None)
+            foreground.pop('ready',None)
     if frame.f_code.co_filename == original_name and frame.f_code.co_name == 'identity' and event == 'return':
         caller = frame.f_back
         if caller is not None and caller.f_code.co_filename == original_name:
-            line = code.decode().splitlines()[caller.f_lineno - 1]
-            if line.strip() == 'assert uptime() < deadline and identity(os.lstat(name)) == before':
+            if bound(caller) and caller.f_lineno in identity_lines:
                 last_identity = {'name': caller.f_locals['name'], 'actual': list(arg),
                     'expected': list(caller.f_locals['before']), 'deadline': caller.f_locals['deadline']}
     if event == 'exception' and frame.f_code.co_filename == original_name:
-        line = code.decode().splitlines()[frame.f_lineno - 1]
-        if line.strip() == 'assert uptime() < deadline and identity(os.lstat(name)) == before':
+        if bound(frame) and frame.f_lineno in identity_lines:
             if isinstance(arg[1], AssertionError) and last_identity is not None:
                 now = time.clock_gettime(time.CLOCK_UPTIME_RAW)
                 identity_refusal = dict(last_identity, observed_time=now,
                     deadline_valid=now < last_identity['deadline'],
                     actual_identity_comparison_reached=True)
+    return observe
+
+def dispatch(frame, event, arg):
+    if event != 'call' or not bound(frame):
+        return None
+    foreground_call = frame.f_code.co_filename == consumer_name and frame.f_code.co_name == '_foreground'
+    guard_call = (frame.f_code.co_filename == original_name and
+                  (frame.f_code.co_name == 'identity' or frame.f_code in identity_callers))
+    if not foreground_call and not guard_call:
+        return None
+    frame.f_trace_lines = short_proof and foreground_call
+    if foreground_call:
+        observe(frame, event, arg)
     return observe
 
 def cancel(_number, _frame):
@@ -3296,9 +3783,9 @@ def cancel(_number, _frame):
 for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
     signal.signal(number, cancel)
 signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
-sys.settrace(observe)
+sys.settrace(dispatch)
 try:
-    exec(compile(code, original_name, 'exec'), {'__name__': '__main__'})
+    exec(compiled_code, {'__name__': '__main__'})
 finally:
     sys.settrace(None)
     if identity_refusal is not None:
@@ -3491,7 +3978,115 @@ for label, raw, cancelled in (
     else:
         raise AssertionError('completion-state accepted ' + label)
 
+class ScopeFixtureOwnerCancel:
+    def __init__(self):
+        self.cancelled=False
+        self.active=False
+        self.cases=[]
+        self.context=Path(sys.argv[7])
+        self.context_raw,self.context_state=self.snapshot(self.context,4096)
+        self.expected=json.loads(self.context_raw)
+        self.stem=Path(self.expected['invocation'])
+        assert self.context==Path(str(self.stem)+'.json') and self.stem.parent==Path(sys.argv[0]).parent
+        self.source_fd=None
+        self.fixture_fd=None
+        try:
+            self.source_fd=os.open(sys.argv[0],os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+            self.fixture_fd=os.open(base,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+            assert self.identity(os.fstat(self.source_fd))==self.expected['driver_identity']
+            assert self.identity(os.fstat(self.fixture_fd))[:5]==self.expected['fixture']
+            assert self.identity(os.fstat(0))[:6]==self.expected['channel'] and stat.S_ISFIFO(os.fstat(0).st_mode)
+            assert fcntl.fcntl(0,fcntl.F_GETFL)&os.O_ACCMODE==os.O_RDONLY
+            assert os.getuid()==0
+            os.set_blocking(0,False)
+        except BaseException:
+            if self.source_fd is not None:os.close(self.source_fd)
+            if self.fixture_fd is not None:os.close(self.fixture_fd)
+            raise
+
+    @staticmethod
+    def identity(value):
+        return [value.st_dev,value.st_ino,value.st_mode,value.st_uid,value.st_gid,value.st_nlink,
+                value.st_size,value.st_mtime_ns,value.st_ctime_ns]
+
+    @classmethod
+    def snapshot(cls,path,maximum):
+        fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+        try:
+            before=os.fstat(fd)
+            assert stat.S_ISREG(before.st_mode) and before.st_nlink==1 and before.st_size<=maximum
+            raw=bytearray()
+            while len(raw)<=maximum:
+                block=os.read(fd,min(65536,maximum+1-len(raw)))
+                if not block:break
+                raw.extend(block)
+            raw=bytes(raw)
+            assert len(raw)<=maximum and cls.identity(os.fstat(fd))==cls.identity(before)==cls.identity(os.lstat(path))
+            return raw,before
+        finally:os.close(fd)
+
+    def check(self):
+        try:
+            data=os.read(0,1)
+        except BlockingIOError:
+            data=None
+        if data is not None:self.cancelled=True
+        if self.cancelled:raise InterruptedError('scope fixture owner cancelled')
+
+    def publish(self,suffix,value):
+        raw=json.dumps(value,sort_keys=True,separators=(',',':')).encode()
+        assert len(raw)<=16384
+        fd=os.open(str(self.stem)+suffix,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o444)
+        try:
+            assert os.write(fd,raw)==len(raw)
+            os.fsync(fd)
+        finally:os.close(fd)
+        parent=os.open(self.stem.parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+        try:os.fsync(parent)
+        finally:os.close(parent)
+
+    def settled(self,child,stderr):
+        assert child is not None and type(child.returncode) is int
+        assert all(stream.closed for stream in (child.stdin,child.stdout,child.stderr))
+        value=confirmation(stderr)
+        self.cases.append({'pid':child.pid,'returncode':child.returncode,
+            'foreground_count':len(value['foreground_calls']),
+            'foreground_sha256':hashlib.sha256(json.dumps(value['foreground_calls'],sort_keys=True).encode()).hexdigest()})
+        assert len(self.cases)<=16
+        self.active=False
+
+    def finish(self):
+        try:
+            assert not self.active
+            raw,state=self.snapshot(self.context,4096)
+            assert raw==self.context_raw and self.identity(state)==self.identity(self.context_state)
+            source,state=self.snapshot(Path(sys.argv[0]),16*1024*1024)
+            assert self.identity(state)==self.expected['driver_identity']
+            assert hashlib.sha256(source).hexdigest()==self.expected['driver_sha256']
+            assert self.identity(os.fstat(self.source_fd))==self.expected['driver_identity']
+            assert self.identity(os.fstat(self.fixture_fd))[:5]==self.expected['fixture']==self.identity(os.lstat(base))[:5]
+            os.close(self.source_fd)
+            self.source_fd=None
+            os.close(self.fixture_fd)
+            self.fixture_fd=None
+            self.publish('.receipt',{'context_sha256':hashlib.sha256(raw).hexdigest(),
+                'driver_pid':os.getpid(),'cases':self.cases,'cancelled':self.cancelled,'quiescent':True})
+        finally:
+            if self.source_fd is not None:os.close(self.source_fd)
+            if self.fixture_fd is not None:os.close(self.fixture_fd)
+
+    def acl(self,argv):
+        self.check()
+        assert argv in [[ '/bin/chmod', '+a', 'user:'+operator+' allow write',str(path)]
+                        for path in (selected,ancestor,module,entry_data,entry_directory)]+[['/bin/chmod','-N',str(path)]
+                        for path in (selected,ancestor,module,entry_data,entry_directory)]
+        self.active=True
+        result=subprocess.run(argv,capture_output=True,timeout=10)
+        self.active=False
+        return result
+
 def run_control(label, expected, synchronized=False):
+    owner_cancel.check()
     source = sync_program if synchronized else original_program
     command = [str(python), '-I', '-S', '-B', str(program), str(source),
                str(package), str(selected), str(guard_file)]
@@ -3518,6 +4113,8 @@ def run_control(label, expected, synchronized=False):
     for number in watched:
         signal.signal(number, cancelled_signal)
     child = None
+    waited = False
+    supervision_known = True
     selector = selectors.DefaultSelector()
     buckets = {}
     readiness = False
@@ -3530,9 +4127,11 @@ def run_control(label, expected, synchronized=False):
             sort_keys=True), flush=True)
     try:
         try:
+            owner_cancel.check()
+            owner_cancel.active=True
             child = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE, user=operator_record.pw_uid, group=operator_record.pw_gid,
-                extra_groups=operator_groups, env={'PATH': '/usr/bin:/bin', 'LC_ALL': 'C', 'LANG': 'C'})
+                extra_groups=operator_groups, close_fds=True, env={'PATH': '/usr/bin:/bin', 'LC_ALL': 'C', 'LANG': 'C'})
             signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
             buckets = {child.stdout: bytearray(), child.stderr: bytearray()}
             for stream in (child.stdin, child.stdout, child.stderr):
@@ -3543,6 +4142,7 @@ def run_control(label, expected, synchronized=False):
                 child.stdin.close()
             control_end = end - 15
             while selector.get_map():
+                owner_cancel.check()
                 assert not cancelled[0] and time.monotonic() < control_end, 'cancel/continuous guard deadline'
                 for key, events in selector.select(min(0.1, max(0, control_end - time.monotonic()))):
                     stream = key.fileobj
@@ -3561,6 +4161,11 @@ def run_control(label, expected, synchronized=False):
                         continue
                     assert sum(map(len, buckets.values())) + len(chunk) <= 65536, 'total output cap'
                     buckets[stream].extend(chunk)
+                    if label=='fixed-short-owner-cancel' and b'OWNER_FOREGROUND_READY\n' in buckets[stream]:
+                        ready=Path(str(owner_cancel.stem)+'.ready')
+                        if not ready.exists():
+                            owner_cancel.publish('.ready',{'context_sha256':hashlib.sha256(owner_cancel.context_raw).hexdigest(),
+                                'foreground_started':True})
                     if synchronized and not readiness and stream is child.stdout:
                         assert b'HELD_READY\n'.startswith(bytes(buckets[stream])), 'readiness frame'
                         if bytes(buckets[stream]) == b'HELD_READY\n':
@@ -3571,8 +4176,11 @@ def run_control(label, expected, synchronized=False):
                             readiness = True
                             selector.register(child.stdin, selectors.EVENT_WRITE)
             child.wait(timeout=max(0.001, control_end - time.monotonic()))
+            waited = True
         except BaseException as error:
             first_error = error
+            supervision_known = ((isinstance(error,InterruptedError) and owner_cancel.cancelled) or
+                (isinstance(error,AssertionError) and str(error)=='cancel/continuous guard deadline'))
             if child is None:
                 raise
             if child.returncode is None:
@@ -3595,11 +4203,14 @@ def run_control(label, expected, synchronized=False):
                         elif sum(map(len, buckets.values())) + len(chunk) <= 65536:
                             buckets[stream].extend(chunk)
                 child.wait(timeout=max(0.001, end - time.monotonic()))
+                waited = True
             except BaseException as cleanup_error:
+                supervision_known = False
                 if child.returncode is None:
                     child.kill()
                 try:
                     child.wait(timeout=max(0.001, end - time.monotonic()))
+                    waited = True
                 except BaseException as reap_error:
                     uncertain_cleanup(reap_error)
                     raise error from reap_error
@@ -3646,6 +4257,7 @@ def run_control(label, expected, synchronized=False):
                     stream.close()
             assert all(stream.closed for stream in (child.stdin, child.stdout, child.stderr))
             assert time.monotonic() < end, 'completion deadline'
+            owner_cancel.check()
             assert not cancelled[0] and not signal.sigpending() & watched, 'cancelled success transition'
             current = pending_path.lstat()
             assert (current.st_dev, current.st_ino, current.st_uid, current.st_mode, current.st_nlink) == (
@@ -3664,6 +4276,15 @@ def run_control(label, expected, synchronized=False):
                 for stream in (child.stdin, child.stdout, child.stderr):
                     if not stream.closed:
                         stream.close()
+            if child is not None:
+                assert waited and supervision_known, 'original child supervision not confirmed'
+                owner_cancel.settled(child,bytes(buckets.get(child.stderr,b'')))
+                if pending_path.exists():
+                    current=pending_path.lstat()
+                    assert (current.st_dev,current.st_ino,current.st_uid,current.st_mode,current.st_nlink)==(
+                        pending_identity.st_dev,pending_identity.st_ino,pending_identity.st_uid,pending_identity.st_mode,pending_identity.st_nlink)
+                    assert pending_path.read_bytes()==payload
+                    pending_path.unlink()
             for number, handler in previous_handlers.items():
                 signal.signal(number, handler)
         finally:
@@ -3680,350 +4301,377 @@ c = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = c
 spec.loader.exec_module(c)
 assert c._DARWIN_ACL_FUNCTIONS is not None
-def native_control_image(target=None):
-    load = b''
-    if target is not None:
-        encoded = target.encode() + b'\0'
-        size = (24 + len(encoded) + 7) // 8 * 8
-        load = struct.pack('<6I', 0xc, size, 24, 0, 0, 0) + encoded
-        load += b'\0' * (size - len(load))
-    x86 = struct.pack('<8I', 0xfeedfacf, 0x01000007, 3, 6, int(bool(load)), len(load), 0, 0) + load
-    arm = struct.pack('<8I', 0xfeedfacf, 0x0100000c, 0, 6, 0, 0, 0, 0)
-    return (struct.pack('>2I', 0xcafebabe, 2) +
-            struct.pack('>5I', 0x01000007, 3, 48, len(x86), 0) +
-            struct.pack('>5I', 0x0100000c, 0, 48 + len(x86), len(arm), 0) + x86 + arm)
+owner_cancel=ScopeFixtureOwnerCancel()
+try:
+    if owner_cancel.context.name=='scope-owner-1.json':
+        proof_program=fixture/'owner-cancel-proof.py'
+        proof_program.write_text("""import importlib.util,os,sys,time
+from pathlib import Path
+consumer=Path(sys.argv[1])/'shadow/v1/_consumer.py'
+spec=importlib.util.spec_from_file_location('fixed_owner_cancel_consumer',consumer)
+c=importlib.util.module_from_spec(spec);sys.modules[spec.name]=c;spec.loader.exec_module(c)
+child_code='\\n'.join(('import signal,time',
+    'signal.signal(signal.SIGTERM,signal.SIG_IGN)',
+    "print('TERM_RESISTANT_READY',flush=True)",
+    'time.sleep(30)'))
+command=[sys.executable,'-I','-S','-B','-c',child_code]
+def fixed_sleep(argv,env,owner):
+    assert argv==command and env=={'PATH':'/usr/bin:/bin','LC_ALL':'C','LANG':'C'}
+c._closed_scope_child=fixed_sleep
+instance=c._DarwinChildOwner.__new__(c._DarwinChildOwner)
+name=str(consumer);before=tuple(os.lstat(name))
+def identity(value):return tuple(value)
+def uptime():return time.clock_gettime(time.CLOCK_UPTIME_RAW)
+deadline=uptime()+120
+assert uptime() < deadline and identity(os.lstat(name)) == before
+instance._foreground(command,b'',4096,65536,10,{'PATH':'/usr/bin:/bin','LC_ALL':'C','LANG':'C'})
+""")
+        original_program=proof_program
+        run_control('fixed-short-owner-cancel',b'E_RUNTIME')
+        raise AssertionError('short cancellation did not interrupt')
+    def native_control_image(target=None):
+        load = b''
+        if target is not None:
+            encoded = target.encode() + b'\0'
+            size = (24 + len(encoded) + 7) // 8 * 8
+            load = struct.pack('<6I', 0xc, size, 24, 0, 0, 0) + encoded
+            load += b'\0' * (size - len(load))
+        x86 = struct.pack('<8I', 0xfeedfacf, 0x01000007, 3, 6, int(bool(load)), len(load), 0, 0) + load
+        arm = struct.pack('<8I', 0xfeedfacf, 0x0100000c, 0, 6, 0, 0, 0, 0)
+        return (struct.pack('>2I', 0xcafebabe, 2) +
+                struct.pack('>5I', 0x01000007, 3, 48, len(x86), 0) +
+                struct.pack('>5I', 0x0100000c, 0, 48 + len(x86), len(arm), 0) + x86 + arm)
 
-def copied_binding_controls():
-    import tempfile
-    import types
-    with (guard_file.parent / 'manifest.json').open('rb') as source:
-        raw = source.read(16 * 1024 * 1024 + 1)
-    assert len(raw) <= 16 * 1024 * 1024
-    assert hashlib.sha256(raw).hexdigest() == 'e0d204e2827885c5f2f4278e709981b7fc1e02424d3bfa5ae2ff2af789789d26'
-    source_rows = json.loads(raw)
-    manifest = {row['path']: row for row in source_rows
-                if row['path'] == 'Versions/3.15' or row['path'].startswith('Versions/3.15/')}
-    assert len(manifest) == 4496
-    edges = [
-        ('Resources/Python.app/Contents/MacOS/Python', 'Python'),
-        ('bin/python3.15', 'Python'),
-        ('bin/python3.15-intel64', 'Python'),
-        ('lib/libform.6.dylib', 'lib/libncurses.6.dylib'),
-        ('lib/libmenu.6.dylib', 'lib/libncurses.6.dylib'),
-        ('lib/libpanel.6.dylib', 'lib/libncurses.6.dylib'),
-        ('lib/libssl.3.dylib', 'lib/libcrypto.3.dylib'),
-        ('lib/python3.15/lib-dynload/_curses.cpython-315-darwin.so', 'lib/libncurses.6.dylib'),
-        ('lib/python3.15/lib-dynload/_curses_panel.cpython-315-darwin.so', 'lib/libncurses.6.dylib'),
-        ('lib/python3.15/lib-dynload/_curses_panel.cpython-315-darwin.so', 'lib/libpanel.6.dylib'),
-        ('lib/python3.15/lib-dynload/_hashlib.cpython-315-darwin.so', 'lib/libcrypto.3.dylib'),
-        ('lib/python3.15/lib-dynload/_remote_debugging.cpython-315-darwin.so', 'lib/libzstd.1.dylib'),
-        ('lib/python3.15/lib-dynload/_ssl.cpython-315-darwin.so', 'lib/libcrypto.3.dylib'),
-        ('lib/python3.15/lib-dynload/_ssl.cpython-315-darwin.so', 'lib/libssl.3.dylib'),
-        ('lib/python3.15/lib-dynload/_tkinter.cpython-315-darwin.so', 'Frameworks/Tcl.framework/Tcl'),
-        ('lib/python3.15/lib-dynload/_tkinter.cpython-315-darwin.so', 'Frameworks/Tk.framework/Tk'),
-        ('lib/python3.15/lib-dynload/_zstd.cpython-315-darwin.so', 'lib/libzstd.1.dylib'),
-    ]
+    def copied_binding_controls():
+        import tempfile
+        import types
+        with (guard_file.parent / 'manifest.json').open('rb') as source:
+            raw = source.read(16 * 1024 * 1024 + 1)
+        assert len(raw) <= 16 * 1024 * 1024
+        assert hashlib.sha256(raw).hexdigest() == 'e0d204e2827885c5f2f4278e709981b7fc1e02424d3bfa5ae2ff2af789789d26'
+        source_rows = json.loads(raw)
+        manifest = {row['path']: row for row in source_rows
+                    if row['path'] == 'Versions/3.15' or row['path'].startswith('Versions/3.15/')}
+        assert len(manifest) == 4496
+        edges = [
+            ('Resources/Python.app/Contents/MacOS/Python', 'Python'),
+            ('bin/python3.15', 'Python'),
+            ('bin/python3.15-intel64', 'Python'),
+            ('lib/libform.6.dylib', 'lib/libncurses.6.dylib'),
+            ('lib/libmenu.6.dylib', 'lib/libncurses.6.dylib'),
+            ('lib/libpanel.6.dylib', 'lib/libncurses.6.dylib'),
+            ('lib/libssl.3.dylib', 'lib/libcrypto.3.dylib'),
+            ('lib/python3.15/lib-dynload/_curses.cpython-315-darwin.so', 'lib/libncurses.6.dylib'),
+            ('lib/python3.15/lib-dynload/_curses_panel.cpython-315-darwin.so', 'lib/libncurses.6.dylib'),
+            ('lib/python3.15/lib-dynload/_curses_panel.cpython-315-darwin.so', 'lib/libpanel.6.dylib'),
+            ('lib/python3.15/lib-dynload/_hashlib.cpython-315-darwin.so', 'lib/libcrypto.3.dylib'),
+            ('lib/python3.15/lib-dynload/_remote_debugging.cpython-315-darwin.so', 'lib/libzstd.1.dylib'),
+            ('lib/python3.15/lib-dynload/_ssl.cpython-315-darwin.so', 'lib/libcrypto.3.dylib'),
+            ('lib/python3.15/lib-dynload/_ssl.cpython-315-darwin.so', 'lib/libssl.3.dylib'),
+            ('lib/python3.15/lib-dynload/_tkinter.cpython-315-darwin.so', 'Frameworks/Tcl.framework/Tcl'),
+            ('lib/python3.15/lib-dynload/_tkinter.cpython-315-darwin.so', 'Frameworks/Tk.framework/Tk'),
+            ('lib/python3.15/lib-dynload/_zstd.cpython-315-darwin.so', 'lib/libzstd.1.dylib'),
+        ]
 
-    def descriptors():
-        result = []
-        for name in os.listdir('/dev/fd'):
-            try:
-                os.fstat(int(name))
-            except OSError:
-                continue
-            result.append(int(name))
-        return sorted(result)
-
-    before_fds = descriptors()
-    with tempfile.TemporaryDirectory(prefix='copied-binding-', dir=fixture) as temporary:
-        root = Path(temporary).resolve()
-        physical_root = root / 'copy'
-        physical_prefix = physical_root / 'Versions/3.15'
-        physical_prefix.mkdir(parents=True)
-        for row in manifest.values():
-            if row['kind'] == stat.S_IFLNK:
-                link = physical_root / row['path']
-                link.parent.mkdir(parents=True, exist_ok=True)
-                link.symlink_to(row['link'])
-                os.chmod(link, 0o755, follow_symlinks=False)
-        assert sum(row['kind'] == stat.S_IFLNK for row in manifest.values()) == 35
-        targets = {}
-        for source_name, target_name in edges:
-            target = (physical_prefix / target_name).resolve()
-            assert physical_prefix in target.parents
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(native_control_image())
-            target.chmod(0o644)
-            targets[target_name] = target
-            (physical_prefix / source_name).parent.mkdir(parents=True, exist_ok=True)
-        opened = []
-
-        def owned_open(path, directory, rule, code):
-            assert Path(path) == physical_root or physical_root in Path(path).parents
-            opened.append(path)
-            return c._open_held(path, directory, rule, code)
-
-        def owned_rule(fd, value, ancestor):
-            # Only the ordinary owned principal and ancestor mode facts adapt here.
-            return stat.S_ISDIR(value.st_mode) if ancestor else (
-                value.st_uid == os.getuid() and not value.st_mode & 0o022)
-
-        library = c._DARWIN_ACL_FUNCTIONS.library
-        library.acl_get_link_np.argtypes = [ctypes.c_char_p, ctypes.c_int]
-        library.acl_get_link_np.restype = ctypes.c_void_p
-        ns = dict(Path=Path, os=os, stat=stat, ctypes=ctypes, errno=errno, hashlib=hashlib,
-                  struct=struct, time=time, math=math, manifest=manifest, library=library,
-                  c=types.SimpleNamespace(_open_held=owned_open, _require=c._require,
-                                         EXECUTABLE_LIMIT=c.EXECUTABLE_LIMIT),
-                  fixed_root=physical_root, prefix=physical_prefix,
-                  logical_prefix=Path('/Library/Frameworks/Python.framework/Versions/3.15'),
-                  selected=physical_prefix / 'Resources/Python.app/Contents/MacOS/Python',
-                  rule=lambda: owned_rule, deadline=time.clock_gettime(time.CLOCK_UPTIME_RAW) + 120,
-                  rows={}, links={}, images=set(), seen=set(), load_edges=set(), cache_paths=set(),
-                  native_inventory={}, static_paths=set(), fields=fields)
-        subject = ast.parse(metadata_subject)
-        names = {'uptime', 'identity', 'empty_acl', 'canonical_fixed', 'inspect', 'native_slices',
-                 'static_data', 'native_dependencies', 'copied_load_target'}
-        functions = [node for node in subject.body if isinstance(node, ast.FunctionDef) and node.name in names]
-        assert len(functions) == len(names)
-        extracted = '\n'.join(ast.get_source_segment(metadata_subject, node) for node in functions)
-        assert extracted.count('before.st_uid == 0') == 1
-        extracted = extracted.replace('before.st_uid == 0', 'before.st_uid == os.getuid()')
-        exec(compile(extracted, 'actual-copied-binding-functions-owned-principal', 'exec'), ns)
-        logical_prefix = ns['logical_prefix']
-        for source_name, target_name in edges:
-            logical = str(logical_prefix / target_name)
-            assert ns['copied_load_target'](logical) == targets[target_name]
-            ns['native_dependencies'](physical_prefix / source_name, native_control_image(logical))
-        assert len(ns['load_edges']) == 17
-        assert all(name.startswith(str(logical_prefix) + '/') for source, command, name in ns['load_edges'])
-        assert ns['images'] == set(targets.values())
-        traversal = next(node for node in ast.walk(subject) if isinstance(node, ast.While)
-                         and isinstance(node.test, ast.Name) and node.test.id == 'images')
-        exec(compile(ast.Module(body=[traversal], type_ignores=[]), 'actual-copied-image-traversal', 'exec'), ns)
-        assert ns['seen'] == set(targets.values()) and set(ns['rows']) == {str(path) for path in targets.values()}
-        assert all(physical_root in Path(path).parents for path in opened)
-        assert any('Tcl.framework' in name for name in ns['links'])
-        assert any('Tk.framework' in name for name in ns['links'])
-        assert any('libzstd.1.dylib' in name for name in ns['links'])
-        parser_file = physical_prefix / 'lib/python3.15/guard-untrusted.dylib'
-        parser_file.parent.mkdir(parents=True, exist_ok=True)
-        manifest[str(parser_file.relative_to(physical_root))] = {'kind': stat.S_IFREG}
-        load_refusals = []
-        for label, dependency, expected_type, expected_function, expected_line in (
-                ('unknown-load-path', '@rpath/untrusted.dylib', AssertionError,
-                 'native_dependencies', "assert name.startswith('/') and '@' not in name"),
-                ('escaping-load-path', '@loader_path/../../../../untrusted.dylib', c.Refusal,
-                 'copied_load_target', "c._require(target == prefix or prefix in target.parents, 'E_INSTALL')")):
-            data = native_control_image(dependency)
-            for thin in (False, True):
-                raw = data[48:48 + struct.unpack_from('>I', data, 20)[0]] if thin else data
-                load_ns = dict(ns, rows={}, links={}, images=set(), load_edges=set(), seen=set())
-                exec(compile(extracted, 'actual-copied-binding-functions-owned-principal', 'exec'), load_ns)
-                parser_file.write_bytes(raw)
-                with_source = c._hold_bytes(str(parser_file), c.EXECUTABLE_LIMIT)
+        def descriptors():
+            result = []
+            for name in os.listdir('/dev/fd'):
                 try:
-                    with_source.recheck('E_STALE')
-                    assert load_ns['inspect'](parser_file) == with_source.raw == raw
-                finally:
-                    with_source.close()
-                try:
-                    load_ns['native_dependencies'](parser_file, raw)
-                except (AssertionError, c.Refusal) as error:
-                    frames = []
-                    trace = error.__traceback__
-                    lines = extracted.splitlines()
-                    while trace is not None:
-                        if trace.tb_frame.f_code.co_filename == 'actual-copied-binding-functions-owned-principal':
-                            frames.append((trace.tb_frame.f_code.co_name, lines[trace.tb_lineno - 1].strip()))
-                        trace = trace.tb_next
-                    if thin:
-                        assert type(error) is AssertionError
-                        assert frames[-1] == ('native_dependencies', "assert name == 'bin/python3.15-intel64'")
-                        assert all(name != 'copied_load_target' for name, line in frames)
+                    os.fstat(int(name))
+                except OSError:
+                    continue
+                result.append(int(name))
+            return sorted(result)
+
+        before_fds = descriptors()
+        with tempfile.TemporaryDirectory(prefix='copied-binding-', dir=fixture) as temporary:
+            root = Path(temporary).resolve()
+            physical_root = root / 'copy'
+            physical_prefix = physical_root / 'Versions/3.15'
+            physical_prefix.mkdir(parents=True)
+            for row in manifest.values():
+                if row['kind'] == stat.S_IFLNK:
+                    link = physical_root / row['path']
+                    link.parent.mkdir(parents=True, exist_ok=True)
+                    link.symlink_to(row['link'])
+                    os.chmod(link, 0o755, follow_symlinks=False)
+            assert sum(row['kind'] == stat.S_IFLNK for row in manifest.values()) == 35
+            targets = {}
+            for source_name, target_name in edges:
+                target = (physical_prefix / target_name).resolve()
+                assert physical_prefix in target.parents
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(native_control_image())
+                target.chmod(0o644)
+                targets[target_name] = target
+                (physical_prefix / source_name).parent.mkdir(parents=True, exist_ok=True)
+            opened = []
+
+            def owned_open(path, directory, rule, code):
+                assert Path(path) == physical_root or physical_root in Path(path).parents
+                opened.append(path)
+                return c._open_held(path, directory, rule, code)
+
+            def owned_rule(fd, value, ancestor):
+                # Only the ordinary owned principal and ancestor mode facts adapt here.
+                return stat.S_ISDIR(value.st_mode) if ancestor else (
+                    value.st_uid == os.getuid() and not value.st_mode & 0o022)
+
+            library = c._DARWIN_ACL_FUNCTIONS.library
+            library.acl_get_link_np.argtypes = [ctypes.c_char_p, ctypes.c_int]
+            library.acl_get_link_np.restype = ctypes.c_void_p
+            ns = dict(Path=Path, os=os, stat=stat, ctypes=ctypes, errno=errno, hashlib=hashlib,
+                      struct=struct, time=time, math=math, manifest=manifest, library=library,
+                      c=types.SimpleNamespace(_open_held=owned_open, _require=c._require,
+                                             EXECUTABLE_LIMIT=c.EXECUTABLE_LIMIT),
+                      fixed_root=physical_root, prefix=physical_prefix,
+                      logical_prefix=Path('/Library/Frameworks/Python.framework/Versions/3.15'),
+                      selected=physical_prefix / 'Resources/Python.app/Contents/MacOS/Python',
+                      rule=lambda: owned_rule, deadline=time.clock_gettime(time.CLOCK_UPTIME_RAW) + 120,
+                      rows={}, links={}, images=set(), seen=set(), load_edges=set(), cache_paths=set(),
+                      native_inventory={}, static_paths=set(), fields=fields)
+            subject = ast.parse(metadata_subject)
+            names = {'uptime', 'identity', 'empty_acl', 'canonical_fixed', 'inspect', 'native_slices',
+                     'static_data', 'native_dependencies', 'copied_load_target'}
+            functions = [node for node in subject.body if isinstance(node, ast.FunctionDef) and node.name in names]
+            assert len(functions) == len(names)
+            extracted = '\n'.join(ast.get_source_segment(metadata_subject, node) for node in functions)
+            assert extracted.count('before.st_uid == 0') == 1
+            extracted = extracted.replace('before.st_uid == 0', 'before.st_uid == os.getuid()')
+            exec(compile(extracted, 'actual-copied-binding-functions-owned-principal', 'exec'), ns)
+            logical_prefix = ns['logical_prefix']
+            for source_name, target_name in edges:
+                logical = str(logical_prefix / target_name)
+                assert ns['copied_load_target'](logical) == targets[target_name]
+                ns['native_dependencies'](physical_prefix / source_name, native_control_image(logical))
+            assert len(ns['load_edges']) == 17
+            assert all(name.startswith(str(logical_prefix) + '/') for source, command, name in ns['load_edges'])
+            assert ns['images'] == set(targets.values())
+            traversal = next(node for node in ast.walk(subject) if isinstance(node, ast.While)
+                             and isinstance(node.test, ast.Name) and node.test.id == 'images')
+            exec(compile(ast.Module(body=[traversal], type_ignores=[]), 'actual-copied-image-traversal', 'exec'), ns)
+            assert ns['seen'] == set(targets.values()) and set(ns['rows']) == {str(path) for path in targets.values()}
+            assert all(physical_root in Path(path).parents for path in opened)
+            assert any('Tcl.framework' in name for name in ns['links'])
+            assert any('Tk.framework' in name for name in ns['links'])
+            assert any('libzstd.1.dylib' in name for name in ns['links'])
+            parser_file = physical_prefix / 'lib/python3.15/guard-untrusted.dylib'
+            parser_file.parent.mkdir(parents=True, exist_ok=True)
+            manifest[str(parser_file.relative_to(physical_root))] = {'kind': stat.S_IFREG}
+            load_refusals = []
+            for label, dependency, expected_type, expected_function, expected_line in (
+                    ('unknown-load-path', '@rpath/untrusted.dylib', AssertionError,
+                     'native_dependencies', "assert name.startswith('/') and '@' not in name"),
+                    ('escaping-load-path', '@loader_path/../../../../untrusted.dylib', c.Refusal,
+                     'copied_load_target', "c._require(target == prefix or prefix in target.parents, 'E_INSTALL')")):
+                data = native_control_image(dependency)
+                for thin in (False, True):
+                    raw = data[48:48 + struct.unpack_from('>I', data, 20)[0]] if thin else data
+                    load_ns = dict(ns, rows={}, links={}, images=set(), load_edges=set(), seen=set())
+                    exec(compile(extracted, 'actual-copied-binding-functions-owned-principal', 'exec'), load_ns)
+                    parser_file.write_bytes(raw)
+                    with_source = c._hold_bytes(str(parser_file), c.EXECUTABLE_LIMIT)
+                    try:
+                        with_source.recheck('E_STALE')
+                        assert load_ns['inspect'](parser_file) == with_source.raw == raw
+                    finally:
+                        with_source.close()
+                    try:
+                        load_ns['native_dependencies'](parser_file, raw)
+                    except (AssertionError, c.Refusal) as error:
+                        frames = []
+                        trace = error.__traceback__
+                        lines = extracted.splitlines()
+                        while trace is not None:
+                            if trace.tb_frame.f_code.co_filename == 'actual-copied-binding-functions-owned-principal':
+                                frames.append((trace.tb_frame.f_code.co_name, lines[trace.tb_lineno - 1].strip()))
+                            trace = trace.tb_next
+                        if thin:
+                            assert type(error) is AssertionError
+                            assert frames[-1] == ('native_dependencies', "assert name == 'bin/python3.15-intel64'")
+                            assert all(name != 'copied_load_target' for name, line in frames)
+                        else:
+                            assert type(error) is expected_type
+                            assert frames[-1] == (expected_function, expected_line)
+                            if expected_type is c.Refusal:
+                                assert error.code == 'E_INSTALL'
+                        load_refusals.append({'case': label, 'thin': thin, 'type': type(error).__name__,
+                                              'code': getattr(error, 'code', None), 'actual_frames': frames})
                     else:
-                        assert type(error) is expected_type
-                        assert frames[-1] == (expected_function, expected_line)
-                        if expected_type is c.Refusal:
-                            assert error.code == 'E_INSTALL'
-                    load_refusals.append({'case': label, 'thin': thin, 'type': type(error).__name__,
-                                          'code': getattr(error, 'code', None), 'actual_frames': frames})
+                        raise AssertionError('native load refusal accepted ' + label)
+            refused = []
+
+            def reject(label, action):
+                try:
+                    action()
+                except (AssertionError, OSError, ValueError, c.Refusal):
+                    refused.append(label)
                 else:
-                    raise AssertionError('native load refusal accepted ' + label)
-        refused = []
+                    raise AssertionError('copied binding accepted ' + label)
 
-        def reject(label, action):
-            try:
-                action()
-            except (AssertionError, OSError, ValueError, c.Refusal):
-                refused.append(label)
-            else:
-                raise AssertionError('copied binding accepted ' + label)
+            for label, name in (
+                    ('other-version', str(logical_prefix.parent / '3.14/Python')),
+                    ('prefix-lookalike', str(logical_prefix) + '-other/Python'),
+                    ('logical-escape', str(logical_prefix) + '/../3.14/Python'),
+                    ('physical-escape', str(physical_prefix) + '/../../../../escape'),
+                    ('relative', 'Python'), ('unknown', '/copied-binding-untrusted/Python')):
+                reject(label, lambda name=name: ns['copied_load_target'](name))
+            assert ns['copied_load_target']('/usr/lib/libSystem.B.dylib') == Path('/usr/lib/libSystem.B.dylib')
+            target = targets['Python']
+            original_good = root / 'original-good'
+            original_good.write_bytes(target.read_bytes())
+            target.write_bytes(b'changed-copy')
+            reject('changed-copy-not-original-good', lambda: ns['inspect'](ns['copied_load_target'](str(logical_prefix / 'Python'))))
+            target.unlink()
+            reject('missing-copy-not-original-good', lambda: ns['inspect'](ns['copied_load_target'](str(logical_prefix / 'Python'))))
+            target.symlink_to(original_good)
+            reject('copy-link-to-original-good', lambda: ns['copied_load_target'](str(logical_prefix / 'Python')))
+            assert original_good.read_bytes() == native_control_image()
+            assert all(not str(path).startswith(str(logical_prefix)) for path in opened)
+        after_fds = descriptors()
+        assert before_fds == after_fds
+        print(json.dumps({'copied_binding_controls': 'PASS', 'logical_edges': 17, 'fixed_links': 35,
+                          'refusals': refused, 'load_refusals': load_refusals, 'actual_opened_copy_paths': opened,
+                          'fds_before': before_fds, 'fds_after': after_fds,
+                          'ordinary_uid_ancestor_mode_adapter': True, 'copied_runtime_executed': False}, sort_keys=True), flush=True)
 
-        for label, name in (
-                ('other-version', str(logical_prefix.parent / '3.14/Python')),
-                ('prefix-lookalike', str(logical_prefix) + '-other/Python'),
-                ('logical-escape', str(logical_prefix) + '/../3.14/Python'),
-                ('physical-escape', str(physical_prefix) + '/../../../../escape'),
-                ('relative', 'Python'), ('unknown', '/copied-binding-untrusted/Python')):
-            reject(label, lambda name=name: ns['copied_load_target'](name))
-        assert ns['copied_load_target']('/usr/lib/libSystem.B.dylib') == Path('/usr/lib/libSystem.B.dylib')
-        target = targets['Python']
-        original_good = root / 'original-good'
-        original_good.write_bytes(target.read_bytes())
-        target.write_bytes(b'changed-copy')
-        reject('changed-copy-not-original-good', lambda: ns['inspect'](ns['copied_load_target'](str(logical_prefix / 'Python'))))
-        target.unlink()
-        reject('missing-copy-not-original-good', lambda: ns['inspect'](ns['copied_load_target'](str(logical_prefix / 'Python'))))
-        target.symlink_to(original_good)
-        reject('copy-link-to-original-good', lambda: ns['copied_load_target'](str(logical_prefix / 'Python')))
-        assert original_good.read_bytes() == native_control_image()
-        assert all(not str(path).startswith(str(logical_prefix)) for path in opened)
-    after_fds = descriptors()
-    assert before_fds == after_fds
-    print(json.dumps({'copied_binding_controls': 'PASS', 'logical_edges': 17, 'fixed_links': 35,
-                      'refusals': refused, 'load_refusals': load_refusals, 'actual_opened_copy_paths': opened,
-                      'fds_before': before_fds, 'fds_after': after_fds,
-                      'ordinary_uid_ancestor_mode_adapter': True, 'copied_runtime_executed': False}, sort_keys=True), flush=True)
-
-copied_binding_controls()
-entry_namespace = {'ctypes': ctypes, 'errno': errno, 'time': time, 'math': math,
-    'deadline': time.clock_gettime(time.CLOCK_UPTIME_RAW) + 120, 'library': c._DARWIN_ACL_FUNCTIONS.library}
-exec(compile(ast.Module(body=entry_rules, type_ignores=[]), 'actual-entry-rules', 'exec'), entry_namespace)
-entry_immutable = entry_namespace['immutable']
-entry_directory = fixture / 'entry-metadata'
-entry_directory.mkdir(mode=0o755)
-entry_directory.chmod(0o755)
-entry_data = entry_directory / 'data'
-entry_data.write_bytes(b'owned entry metadata control\n')
-entry_data.chmod(0o444)
-for path in (entry_directory, entry_data):
-    value = path.lstat()
-    assert value.st_uid == 0 and not value.st_mode & 0o022
-assert entry_data.stat().st_nlink == 1 and stat.S_ISREG(entry_data.stat().st_mode)
-
-def entry_metadata(label, refused=False):
-    try:
-        held = c._open_held(str(entry_data), False, entry_immutable, 'E_INSTALL')
-    except c.Refusal as error:
-        assert refused and error.code == 'E_INSTALL'
-    else:
-        try:
-            assert not refused
-            assert held.read(4096, 'E_INSTALL') == b'owned entry metadata control\n'
-            held.recheck('E_STALE')
-        finally:
-            held.close()
-    print(json.dumps({'entry_metadata': label, 'refused': refused,
-        'candidate_executed': False, 'candidate_sudo_executed': False}, sort_keys=True), flush=True)
-
-entry_metadata('clean-owned-data')
-for label, path in (('file-write-ACL', entry_data), ('ancestor-write-ACL', entry_directory)):
-    grant = subprocess.run(['/bin/chmod', '+a', 'user:' + operator + ' allow write', str(path)],
-                           capture_output=True, timeout=10)
-    assert grant.returncode == 0 and not grant.stderr
-    try:
-        entry_metadata(label, refused=True)
-    finally:
-        remove = subprocess.run(['/bin/chmod', '-N', str(path)], capture_output=True, timeout=10)
-        assert remove.returncode == 0 and not remove.stderr
-held = c._open_held(str(entry_data), False, entry_immutable, 'E_INSTALL')
-try:
-    entry_data.write_bytes(b'owned entry metadata control changed\n')
-    try:
-        held.recheck('E_STALE')
-    except c.Refusal as error:
-        assert error.code == 'E_STALE'
-    else:
-        raise AssertionError('entry held mutation accepted')
-finally:
-    held.close()
+    copied_binding_controls()
+    entry_namespace = {'ctypes': ctypes, 'errno': errno, 'time': time, 'math': math,
+        'deadline': time.clock_gettime(time.CLOCK_UPTIME_RAW) + 120, 'library': c._DARWIN_ACL_FUNCTIONS.library}
+    exec(compile(ast.Module(body=entry_rules, type_ignores=[]), 'actual-entry-rules', 'exec'), entry_namespace)
+    entry_immutable = entry_namespace['immutable']
+    entry_directory = fixture / 'entry-metadata'
+    entry_directory.mkdir(mode=0o755)
+    entry_directory.chmod(0o755)
+    entry_data = entry_directory / 'data'
     entry_data.write_bytes(b'owned entry metadata control\n')
-print('entry metadata held mutation: actual E_STALE', flush=True)
-fd = os.open(entry_data, os.O_RDONLY | os.O_NOFOLLOW)
-saved = os.fstat(fd)
-os.close(fd)
-try:
-    entry_immutable(fd, saved, False)
-except AssertionError:
-    assert ctypes.get_errno() == errno.EBADF
-else:
-    raise AssertionError('entry ACL query on closed fd accepted')
-print('entry metadata closed separate fd: actual EBADF; no second close', flush=True)
-entry_metadata('ACL-cleared-restored-owned-data')
+    entry_data.chmod(0o444)
+    for path in (entry_directory, entry_data):
+        value = path.lstat()
+        assert value.st_uid == 0 and not value.st_mode & 0o022
+    assert entry_data.stat().st_nlink == 1 and stat.S_ISREG(entry_data.stat().st_mode)
 
-import types
-startup = next(node for node in guard_ast.body if isinstance(node, ast.If)
-    and ast.get_source_segment(guard.decode(), node.test) == "stage == 'real'")
-window = next(node for node in guard_ast.body if isinstance(node, ast.Assert)
-    and 'deadline <= guard_started + 120' in ast.get_source_segment(guard.decode(), node))
-assertions = compile(ast.Module(body=[window, *startup.body], type_ignores=[]), 'actual-fixed-entry-assertions', 'exec')
-def startup_namespace():
-    proxy = types.SimpleNamespace(executable=sys.executable, version_info=sys.version_info,
-        prefix=sys.prefix, base_prefix=sys.base_prefix, flags=sys.flags, path=list(sys.path))
-    guard_started = time.clock_gettime(time.CLOCK_UPTIME_RAW)
-    return {'sys': proxy, 'os': os, 'Path': Path, 'time': time, 'math': math,
-        'uptime': entry_namespace['uptime'], 'guard_started': guard_started, 'entry_pid': os.getpid(),
-        'fixed_p': python, 'fixed_prefix': prefix, 'deadline': guard_started + 120}
-exec(assertions, dict(startup_namespace(), sys=sys))
-for label, key, value in (
-    ('executable', 'executable', '/entry-control-wrong-physical'),
-    ('version', 'version_info', (0, 0, 0)),
-    ('prefixes', 'prefix', '/entry-control-wrong-prefix'),
-    ('paths', 'path', ['/entry-control-wrong-path']),
-    ('flags', 'flags', types.SimpleNamespace(isolated=0, no_site=0, dont_write_bytecode=0)),
-    ('pid', 'entry_pid', os.getpid() + 1),
-    ('expired-deadline', 'deadline', time.clock_gettime(time.CLOCK_UPTIME_RAW) - 1),
-    ('beyond-shared-window', 'deadline', time.clock_gettime(time.CLOCK_UPTIME_RAW) + 240)):
-    changed = startup_namespace()
-    if key in ('entry_pid', 'deadline'):
-        changed[key] = value
-    else:
-        setattr(changed['sys'], key, value)
+    def entry_metadata(label, refused=False):
+        try:
+            held = c._open_held(str(entry_data), False, entry_immutable, 'E_INSTALL')
+        except c.Refusal as error:
+            assert refused and error.code == 'E_INSTALL'
+        else:
+            try:
+                assert not refused
+                assert held.read(4096, 'E_INSTALL') == b'owned entry metadata control\n'
+                held.recheck('E_STALE')
+            finally:
+                held.close()
+        print(json.dumps({'entry_metadata': label, 'refused': refused,
+            'candidate_executed': False, 'candidate_sudo_executed': False}, sort_keys=True), flush=True)
+
+    entry_metadata('clean-owned-data')
+    for label, path in (('file-write-ACL', entry_data), ('ancestor-write-ACL', entry_directory)):
+        grant = owner_cancel.acl(['/bin/chmod', '+a', 'user:' + operator + ' allow write', str(path)])
+        assert grant.returncode == 0 and not grant.stderr
+        try:
+            entry_metadata(label, refused=True)
+        finally:
+            remove = owner_cancel.acl(['/bin/chmod', '-N', str(path)])
+            assert remove.returncode == 0 and not remove.stderr
+    held = c._open_held(str(entry_data), False, entry_immutable, 'E_INSTALL')
     try:
-        exec(assertions, changed)
+        entry_data.write_bytes(b'owned entry metadata control changed\n')
+        try:
+            held.recheck('E_STALE')
+        except c.Refusal as error:
+            assert error.code == 'E_STALE'
+        else:
+            raise AssertionError('entry held mutation accepted')
+    finally:
+        held.close()
+        entry_data.write_bytes(b'owned entry metadata control\n')
+    print('entry metadata held mutation: actual E_STALE', flush=True)
+    fd = os.open(entry_data, os.O_RDONLY | os.O_NOFOLLOW)
+    saved = os.fstat(fd)
+    os.close(fd)
+    try:
+        entry_immutable(fd, saved, False)
     except AssertionError:
-        print('fixed startup operand model refuses ' + label + '; not host qualification', flush=True)
+        assert ctypes.get_errno() == errno.EBADF
     else:
-        raise AssertionError('fixed startup operand accepted ' + label)
-print('fixed entry actual-sys assertions plus eight explicit operand models PASS; actual entry still required', flush=True)
+        raise AssertionError('entry ACL query on closed fd accepted')
+    print('entry metadata closed separate fd: actual EBADF; no second close', flush=True)
+    entry_metadata('ACL-cleared-restored-owned-data')
 
-run_control('unchanged-copied-existing-layout', None)
-for label, path in (('selected-P-write-ACL', selected),
-                    ('ancestor-write-ACL', ancestor), ('startup-module-write-ACL', module)):
-    grant = subprocess.run(['/bin/chmod', '+a', 'user:' + operator + ' allow write', str(path)],
-                           capture_output=True, timeout=10)
-    assert grant.returncode == 0 and not grant.stderr
-    try:
-        run_control(label, b'E_INSTALL')
-    finally:
-        remove = subprocess.run(['/bin/chmod', '-N', str(path)], capture_output=True, timeout=10)
-        assert remove.returncode == 0 and not remove.stderr
+    import types
+    startup = next(node for node in guard_ast.body if isinstance(node, ast.If)
+        and ast.get_source_segment(guard.decode(), node.test) == "stage == 'real'")
+    window = next(node for node in guard_ast.body if isinstance(node, ast.Assert)
+        and 'deadline <= guard_started + 120' in ast.get_source_segment(guard.decode(), node))
+    assertions = compile(ast.Module(body=[window, *startup.body], type_ignores=[]), 'actual-fixed-entry-assertions', 'exec')
+    def startup_namespace():
+        proxy = types.SimpleNamespace(executable=sys.executable, version_info=sys.version_info,
+            prefix=sys.prefix, base_prefix=sys.base_prefix, flags=sys.flags, path=list(sys.path))
+        guard_started = time.clock_gettime(time.CLOCK_UPTIME_RAW)
+        return {'sys': proxy, 'os': os, 'Path': Path, 'time': time, 'math': math,
+            'uptime': entry_namespace['uptime'], 'guard_started': guard_started, 'entry_pid': os.getpid(),
+            'fixed_p': python, 'fixed_prefix': prefix, 'deadline': guard_started + 120}
+    exec(assertions, dict(startup_namespace(), sys=sys))
+    for label, key, value in (
+        ('executable', 'executable', '/entry-control-wrong-physical'),
+        ('version', 'version_info', (0, 0, 0)),
+        ('prefixes', 'prefix', '/entry-control-wrong-prefix'),
+        ('paths', 'path', ['/entry-control-wrong-path']),
+        ('flags', 'flags', types.SimpleNamespace(isolated=0, no_site=0, dont_write_bytecode=0)),
+        ('pid', 'entry_pid', os.getpid() + 1),
+        ('expired-deadline', 'deadline', time.clock_gettime(time.CLOCK_UPTIME_RAW) - 1),
+        ('beyond-shared-window', 'deadline', time.clock_gettime(time.CLOCK_UPTIME_RAW) + 240)):
+        changed = startup_namespace()
+        if key in ('entry_pid', 'deadline'):
+            changed[key] = value
+        else:
+            setattr(changed['sys'], key, value)
+        try:
+            exec(assertions, changed)
+        except AssertionError:
+            print('fixed startup operand model refuses ' + label + '; not host qualification', flush=True)
+        else:
+            raise AssertionError('fixed startup operand accepted ' + label)
+    print('fixed entry actual-sys assertions plus eight explicit operand models PASS; actual entry still required', flush=True)
+
+    run_control('unchanged-copied-existing-layout', None)
+    for label, path in (('selected-P-write-ACL', selected),
+                        ('ancestor-write-ACL', ancestor), ('startup-module-write-ACL', module)):
+        grant = owner_cancel.acl(['/bin/chmod', '+a', 'user:' + operator + ' allow write', str(path)])
+        assert grant.returncode == 0 and not grant.stderr
+        try:
+            run_control(label, b'E_INSTALL')
+        finally:
+            remove = owner_cancel.acl(['/bin/chmod', '-N', str(path)])
+            assert remove.returncode == 0 and not remove.stderr
+        assert selected.read_bytes() == original_python and module.read_bytes() == original_module
+    run_control('held-module-identity-change', b'AssertionError', synchronized=True)
+    module.write_bytes(original_module)
+    for label, dependency in (('unknown-load-path', '@rpath/untrusted.dylib'),
+                              ('escaping-load-path', '@loader_path/../../../../untrusted.dylib')):
+        image = native_control_image(dependency)
+        library = module.parent / 'guard-untrusted.dylib'
+        library.write_bytes(image)
+        library.chmod(0o444)
+        try:
+            run_control(label, b'AssertionError' if label == 'unknown-load-path' else b'E_INSTALL')
+        finally:
+            library.unlink()
+    run_control('restored-copied-existing-layout', None)
     assert selected.read_bytes() == original_python and module.read_bytes() == original_module
-run_control('held-module-identity-change', b'AssertionError', synchronized=True)
-module.write_bytes(original_module)
-for label, dependency in (('unknown-load-path', '@rpath/untrusted.dylib'),
-                          ('escaping-load-path', '@loader_path/../../../../untrusted.dylib')):
-    image = native_control_image(dependency)
-    library = module.parent / 'guard-untrusted.dylib'
-    library.write_bytes(image)
-    library.chmod(0o444)
-    try:
-        run_control(label, b'AssertionError' if label == 'unknown-load-path' else b'E_INSTALL')
-    finally:
-        library.unlink()
-run_control('restored-copied-existing-layout', None)
-assert selected.read_bytes() == original_python and module.read_bytes() == original_module
-print('actual Darwin ACL/identity/load-path guard controls PASS; no candidate execution', flush=True)
+    print('actual Darwin ACL/identity/load-path guard controls PASS; no candidate execution', flush=True)
+finally:
+    owner_cancel.finish()
 PY_GUARD_CONTROLS
   /usr/bin/sudo -n "$genuine_python" -I -S -B - "$guard_control" <<'PY_GUARD_SYNTAX'
 from pathlib import Path
 import sys
 compile(Path(sys.argv[1]).read_bytes(), sys.argv[1], 'exec')
 PY_GUARD_SYNTAX
-  /usr/bin/sudo -n "$genuine_python" -I -S -B "$guard_control" \
-    "$genuine_base" "$genuine_base/package" "$genuine_python" "$guard_source" "$operator_name" "$entry_source" ||
-    fail 'actual Darwin runtime guard regression'
+  scope_fixture_owner_launch true
+  scope_fixture_owner_launch false
 }
 
 prepare_genuine_writer() {
