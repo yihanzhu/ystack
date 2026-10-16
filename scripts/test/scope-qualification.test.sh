@@ -1655,6 +1655,22 @@ subprocess.Popen=fixed_owned_popen
             if fault=='reported-close-error':assert 'REPORTED_CLOSE_ERROR_AFTER_REAL_CLOSE' in result.stderr.decode()
         reports.append({'owner_case':fault,'returncode':result.returncode,'deletion_permitted':confirmed,
                         'stdout':result.stdout.decode(),'stderr':result.stderr.decode(),'elapsed':time.monotonic()-start})
+    library=area/'never-launched-library';library.write_bytes(b'owned data')
+    cleanup_node=next(n for n in ast.walk(tree) if isinstance(n,ast.Try) and n.finalbody and
+        any(isinstance(x,ast.Expr) and isinstance(x.value,ast.Call) and isinstance(x.value.func,ast.Attribute) and
+            x.value.func.attr=='unlink' and isinstance(x.value.func.value,ast.Name) and x.value.func.value.id=='library' for x in n.finalbody))
+    boundary=compile(ast.Module(body=cleanup_node.finalbody,type_ignores=[]),'actual-library-cleanup-boundary','exec')
+    for active in (True,False):
+        try:exec(boundary,{'owner_cancel':types.SimpleNamespace(active=active),'library':library})
+        except AssertionError:assert active and library.read_bytes()==b'owned data'
+        else:assert not active and not library.exists()
+    namespace={};exec(compile(owned,'actual-owner-never-launched','exec'),globals(),namespace)
+    owner=namespace['ScopeFixtureOwnerCancel'].__new__(namespace['ScopeFixtureOwnerCancel'])
+    owner.active=True;owner.check=lambda:None
+    try:owner.acl([])
+    except AssertionError:pass
+    else:raise AssertionError('active prior child allowed new ACL operation')
+    reports.append({'never_launched_data_cleanup_gate':'PASS','active_library_unlink_refused':True,'active_acl_refused':True})
 except BaseException:
     print(json.dumps({'ordinary_tree_retained':temporary,'reason':'control did not establish complete success'}),flush=True)
     raise
@@ -4077,6 +4093,7 @@ class ScopeFixtureOwnerCancel:
 
     def acl(self,argv):
         self.check()
+        assert not self.active
         assert argv in [[ '/bin/chmod', '+a', 'user:'+operator+' allow write',str(path)]
                         for path in (selected,ancestor,module,entry_data,entry_directory)]+[['/bin/chmod','-N',str(path)]
                         for path in (selected,ancestor,module,entry_data,entry_directory)]
@@ -4658,6 +4675,7 @@ instance._foreground(command,b'',4096,65536,10,{'PATH':'/usr/bin:/bin','LC_ALL':
         try:
             run_control(label, b'AssertionError' if label == 'unknown-load-path' else b'E_INSTALL')
         finally:
+            assert not owner_cancel.active
             library.unlink()
     run_control('restored-copied-existing-layout', None)
     assert selected.read_bytes() == original_python and module.read_bytes() == original_module
