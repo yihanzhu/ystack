@@ -1570,12 +1570,12 @@ finally:
         mac_records.append({'version':version,'cleanup':clean,'identity':identity,'callbacks':count,'seconds':time.monotonic()-started,'stdout':result.stdout.decode(),'stderr':result.stderr.decode()})
     assert mac_records[1]['callbacks']<mac_records[0]['callbacks']
     reports.append({'mac_actual_observer_equivalence':mac_records})
-    for fault in ('ordinary-started-no-marker','ordinary-pending','never-started','starting','normal','cancel','alarm','eof-before-launch','actual-deadline','missing-confirmation','wrong-confirmation','reported-wait-error','reported-close-error','wait-interrupted','writer-close-error','terminal-nonzero','inner-wait-error','inner-close-error'):
+    for fault in ('ordinary-started-no-marker','ordinary-pending','never-started','starting','normal','cancel','alarm','eof-before-launch','actual-deadline','missing-confirmation','wrong-confirmation','reported-wait-error','reported-close-error','wait-interrupted','writer-close-error','terminal-nonzero','mask077-normal','mask022-normal','mask077-cancel','mask022-cancel','mode0400','mode0644','fchmod-error','mask022-fchmod-error','inner-wait-error','inner-close-error'):
         work=area/fault;work.mkdir();base=work/'base';base.mkdir();(base/'package/shadow/v1').mkdir(parents=True);(base/'package/shadow/v1/_consumer.py').write_bytes(consumer);script=work/'runtime-guard-controls.py';ch=work/'channel.py';ch.write_text(channel_owned)
-        fixture=base/('runtime-guard-cancel-proof' if fault in ('cancel','alarm') else 'runtime-guard');fixture.mkdir()
+        fixture=base/('runtime-guard-cancel-proof' if fault in ('cancel','alarm','mask077-cancel','mask022-cancel') else 'runtime-guard');fixture.mkdir()
         program=fixture/'wrapper.py';program.write_text(wrapper.replace('CLOCK_UPTIME_RAW',clock_name))
         body=fixture/'subject.py'
-        if fault in ('cancel','alarm'):body=fixture/'owner-cancel-proof.py';body.write_text(proof.replace('CLOCK_UPTIME_RAW',clock_name))
+        if fault in ('cancel','alarm','mask077-cancel','mask022-cancel'):body=fixture/'owner-cancel-proof.py';body.write_text(proof.replace('CLOCK_UPTIME_RAW',clock_name))
         else:body.write_text("import os,sys,time\nname=sys.argv[2];deadline=time.monotonic()+120\nbefore=tuple(os.lstat(name))\ndef uptime():return time.monotonic()\ndef identity(value):return tuple(value)\nassert uptime() < deadline and identity(os.lstat(name)) == before\nprint('{\"privileged_execution\": false}',file=sys.stderr)\nprint(sys.argv[2])\n")
         selected=base/'selected';selected.write_bytes(b'not executable data')
         prefix='''from pathlib import Path
@@ -1585,9 +1585,38 @@ operator_record=pwd.getpwuid(os.getuid());operator_groups=os.getgroups()
 selected=base/'selected';guard_file=Path(sys.argv[4]);module=selected
 pending_path=base/'runtime-guard-cleanup-uncertain'
 '''
-        suffix="\nprogram=Path("+repr(str(program))+")\noriginal_program=Path("+repr(str(body))+")\nsync_program=original_program\nowner_cancel=ScopeFixtureOwnerCancel()\ntry:\n    run_control("+repr('fixed-short-owner-cancel' if fault in ('cancel','alarm') else 'owned-normal')+",None)\nfinally:\n    owner_cancel.finish()\n"
+        suffix="\nprogram=Path("+repr(str(program))+")\noriginal_program=Path("+repr(str(body))+")\nsync_program=original_program\nowner_cancel=ScopeFixtureOwnerCancel()\ntry:\n    run_control("+repr('fixed-short-owner-cancel' if fault in ('cancel','alarm','mask077-cancel','mask022-cancel') else 'owned-normal')+",None)\nfinally:\n    owner_cancel.finish()\n"
         script.write_text(prefix+owned+suffix)
         (work/'guard-source').write_bytes(b'owned guard source')
+        mask=0o022 if fault.startswith('mask022-') else 0o077
+        publication_hook="""expected_mask=MASK
+saved_publish=ScopeFixtureOwnerCancel.publish
+def observed_publish(self,suffix,value):
+    assert os.umask(expected_mask)==expected_mask
+    saved_publish(self,suffix,value)
+    assert os.umask(expected_mask)==expected_mask
+    fd=os.open(str(self.stem)+suffix,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+    try:
+        info=os.fstat(fd);raw=os.read(fd,16385)
+        assert stat.S_IMODE(info.st_mode)==0o444 and info.st_uid==os.getuid() and info.st_nlink==1
+        assert len(raw)<=16384 and json.loads(raw)==value
+        assert raw==json.dumps(value,sort_keys=True,separators=(',',':')).encode()
+        print('ACTUAL_PUBLICATION '+json.dumps({'suffix':suffix,'uid':info.st_uid,'mode':stat.S_IMODE(info.st_mode),'nlink':info.st_nlink,'payload':json.loads(raw),'sha256':hashlib.sha256(raw).hexdigest(),'umask':expected_mask}),flush=True)
+    finally:os.close(fd)
+ScopeFixtureOwnerCancel.publish=observed_publish
+""".replace('MASK',str(mask))
+        content=script.read_text().replace('owner_cancel=ScopeFixtureOwnerCancel()\n',publication_hook+'owner_cancel=ScopeFixtureOwnerCancel()\n',1)
+        if fault in ('fchmod-error','mask022-fchmod-error'):
+            hook="""def fixed_fchmod_failure(fd,mode):
+    info=os.fstat(fd)
+    assert mode==0o444 and stat.S_ISREG(info.st_mode) and stat.S_IMODE(info.st_mode)==0o400
+    print('FIXED_FCHMOD_ERROR_AFTER_WRITE '+json.dumps({'actual_mode':stat.S_IMODE(info.st_mode),'uid':info.st_uid,'nlink':info.st_nlink,'size':info.st_size,'requested_mode':mode}),flush=True)
+    raise OSError('fixed publication fchmod failure')
+os.fchmod=fixed_fchmod_failure
+"""
+            content=content.replace('owner_cancel=ScopeFixtureOwnerCancel()\n',hook+'owner_cancel=ScopeFixtureOwnerCancel()\n',1)
+            content=content.replace('    owner_cancel.finish()\n',"    try:owner_cancel.finish()\n    finally:\n        assert not owner_cancel.active and len(owner_cancel.cases)==1\n        print('INDEPENDENT_PUBLICATION_GRAPH_COMPLETE '+json.dumps(owner_cancel.cases),flush=True)\n")
+        script.write_text(content)
         if fault=='terminal-nonzero':body.write_text(body.read_text()+"raise ValueError('actual nonzero child terminal')\n")
         if fault=='actual-deadline':body.write_text(body.read_text().replace('print(sys.argv[2])','time.sleep(10)\nprint(sys.argv[2])'))
         if fault in ('inner-wait-error','inner-close-error'):
@@ -1612,16 +1641,16 @@ subprocess.Popen=fixed_owned_popen
             content=script.read_text().replace('owner_cancel=ScopeFixtureOwnerCancel()\n',hook+'owner_cancel=ScopeFixtureOwnerCancel()\n',1)
             content=content.replace('    owner_cancel.finish()\n',"    try:owner_cancel.finish()\n    finally:\n        assert len(actual_children)==1\n        child=actual_children[0]\n        assert type(child.returncode) is int and all(p.closed for p in (child.stdin,child.stdout,child.stderr))\n        print('INDEPENDENT_PHYSICAL_COMPLETION '+json.dumps({'pid':child.pid,'status':child.returncode,'all_pipes_closed':True}),flush=True)\n")
             script.write_text(content)
-        serial='1' if fault in ('cancel','alarm') else '2'
+        serial='1' if fault in ('cancel','alarm','mask077-cancel','mask022-cancel') else '2'
         variables='\n'.join(name+'='+repr(str(value)) for name,value in {'tmp':work,'genuine_base':base,'guard_control':script,'genuine_python':sys.executable,'guard_source':work/'guard-source','operator_name':pwd.getpwuid(os.getuid()).pw_name,'entry_source':work/'guard-source','scope_owner_channel_helper':ch}.items())+'\n'
         # Keep the exact production launch, wait and confirmation functions; only UID and fixed sudo transport adapt.
         if serial=='2':variables+='scope_owner_serial=1\n'
-        if fault in ('cancel','alarm'):call='scope_fixture_owner_launch true\n'
+        if fault in ('cancel','alarm','mask077-cancel','mask022-cancel'):call='scope_fixture_owner_launch true\n'
         elif fault=='eof-before-launch':
             call='scope_fixture_owner_launch false\n'
             shell_case=shell.replace('  scope_owner_state=active\n','  scope_owner_state=active\n  scope_fixture_owner_cancel\n',1)
         else:call='scope_fixture_owner_launch false\n'
-        negative=fault in ('missing-confirmation','wrong-confirmation','reported-wait-error','reported-close-error','wait-interrupted','writer-close-error')
+        negative=fault in ('missing-confirmation','wrong-confirmation','reported-wait-error','reported-close-error','wait-interrupted','writer-close-error','mode0400','mode0644')
         genuine=area/(fault+'.genuine-receipt')
         if negative:
             call+='\n/bin/cp "$tmp/scope-owner-2.receipt" '+repr(str(genuine))+'\n'
@@ -1629,6 +1658,10 @@ subprocess.Popen=fixed_owned_popen
             if fault=='missing-confirmation':call+='/bin/mv "$tmp/scope-owner-2.receipt" "$tmp/scope-owner-2.saved-receipt"\n'
             elif fault=='wrong-confirmation':
                 patch_code='import json,os,sys;p=sys.argv[1];v=json.load(open(p));v["context_sha256"]="0"*64;os.chmod(p,0o600);open(p,"w").write(json.dumps(v));os.chmod(p,0o444)'
+                call+='/usr/bin/python3 -I -S -B -c '+repr(patch_code)+' "$tmp/scope-owner-2.receipt"\n'
+            elif fault in ('mode0400','mode0644'):
+                mode=0o400 if fault=='mode0400' else 0o644
+                patch_code='import os,sys;fd=os.open(sys.argv[1],os.O_RDONLY|os.O_NOFOLLOW);os.fchmod(fd,'+str(mode)+');os.close(fd)'
                 call+='/usr/bin/python3 -I -S -B -c '+repr(patch_code)+' "$tmp/scope-owner-2.receipt"\n'
             else:
                 if fault in ('reported-wait-error','wait-interrupted'):
@@ -1658,17 +1691,17 @@ subprocess.Popen=fixed_owned_popen
         generated=area/(fault+'.generated.json')
         generated.write_text(json.dumps({'driver':script.read_text(),'wrapper':program.read_text(),'subject':body.read_text(),'channel':ch.read_text(),'bash':command},sort_keys=True))
         print(json.dumps({'generated_parts':str(generated),'sha256':hashlib.sha256(generated.read_bytes()).hexdigest(),'source':json.loads(generated.read_text())}),flush=True)
-        start=time.monotonic();result=subprocess.run(['/bin/bash','-c',command],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=20)
+        start=time.monotonic();result=subprocess.run(['/bin/bash','-c',command],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=20,umask=mask)
         (area/(fault+'.stdout')).write_bytes(result.stdout);(area/(fault+'.stderr')).write_bytes(result.stderr)
         confirmed=audit.exists()
         print(json.dumps({'actual_owner_case':fault,'returncode':result.returncode,'stdout':result.stdout.decode(),'stderr':result.stderr.decode(),'deletion_permitted':confirmed}),flush=True)
-        assert confirmed==(fault in ('never-started','normal','cancel','alarm','eof-before-launch','actual-deadline','terminal-nonzero')),(fault,result.returncode,result.stderr)
-        assert (result.returncode==0)==(fault in ('never-started','normal','cancel'))
+        assert confirmed==(fault in ('never-started','normal','cancel','alarm','eof-before-launch','actual-deadline','terminal-nonzero','mask077-normal','mask022-normal','mask077-cancel','mask022-cancel')),(fault,result.returncode,result.stderr)
+        assert (result.returncode==0)==(fault in ('never-started','normal','cancel','mask077-normal','mask022-normal','mask077-cancel','mask022-cancel'))
         if fault=='alarm':assert result.returncode==-signal.SIGALRM
         if fault=='eof-before-launch':assert result.returncode!=0 and '\"cases\": []' in result.stdout.decode()
         if fault=='actual-deadline':assert result.returncode!=0 and time.monotonic()-start>=4
         if fault=='cancel':assert 'foreground_count' in result.stdout.decode()
-        if fault not in ('ordinary-started-no-marker','ordinary-pending','never-started','starting','inner-wait-error','inner-close-error'):
+        if fault not in ('ordinary-started-no-marker','ordinary-pending','never-started','starting','inner-wait-error','inner-close-error','fchmod-error','mask022-fchmod-error'):
             original=json.loads(genuine.read_bytes())
             assert original['quiescent'] is True and isinstance(original['cases'],list)
             if fault not in ('eof-before-launch',):assert len(original['cases'])==1
@@ -1679,9 +1712,19 @@ subprocess.Popen=fixed_owned_popen
             assert 'GUARD_OWNED_CLEANUP' in result.stdout.decode()
             assert 'fixed reported error after actual operation' in result.stderr.decode()
         if fault in ('ordinary-started-no-marker','ordinary-pending'):assert work.exists() and 'ordinary control completion is unknown' in result.stderr.decode()
+        if fault in ('fchmod-error','mask022-fchmod-error'):
+            assert not confirmed and work.exists() and result.returncode!=0
+            assert 'FIXED_FCHMOD_ERROR_AFTER_WRITE' in result.stdout.decode()
+            assert 'INDEPENDENT_PUBLICATION_GRAPH_COMPLETE' in result.stdout.decode()
+            assert 'fixed publication fchmod failure' in result.stderr.decode()
+        if fault.startswith('mask') and not fault.endswith('fchmod-error'):
+            publications=[json.loads(line[len('ACTUAL_PUBLICATION '):]) for line in result.stdout.decode().splitlines() if line.startswith('ACTUAL_PUBLICATION ')]
+            assert {v['suffix'] for v in publications}==({'.ready','.receipt'} if fault.endswith('cancel') else {'.receipt'})
+            assert all(v['mode']==0o444 and v['umask']==mask and v['uid']==os.getuid() and v['nlink']==1 for v in publications)
         if negative:
             assert not confirmed and work.exists()
             if fault=='missing-confirmation':assert 'FileNotFoundError' in result.stderr.decode()
+            if fault in ('mode0400','mode0644'):assert 'stat.S_IMODE(info.st_mode)==0o444' in result.stderr.decode()
             if fault=='wrong-confirmation':assert "value['context_sha256']==hashlib.sha256(raw).hexdigest()" in result.stderr.decode()
             if fault in ('reported-wait-error','wait-interrupted'):
                 assert 'ACTUAL_WAIT_FINISHED:0' in result.stderr.decode() and 'FIRST_REFUSAL:unknown:' in result.stderr.decode()
@@ -4088,9 +4131,10 @@ class ScopeFixtureOwnerCancel:
     def publish(self,suffix,value):
         raw=json.dumps(value,sort_keys=True,separators=(',',':')).encode()
         assert len(raw)<=16384
-        fd=os.open(str(self.stem)+suffix,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o444)
+        fd=os.open(str(self.stem)+suffix,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o400)
         try:
             assert os.write(fd,raw)==len(raw)
+            os.fchmod(fd,0o444)
             os.fsync(fd)
         finally:os.close(fd)
         parent=os.open(self.stem.parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
