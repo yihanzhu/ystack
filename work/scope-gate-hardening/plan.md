@@ -9,7 +9,7 @@ Tracks #541. Risk is high. This is the nonterminal child-6 core. It authenticate
 the existing child-5 evidence at one exact revision. Issue #544 remains mandatory
 before child 6 completes or child 7 starts.
 
-Implementation PR: `review_size: accepted-exception`, 2,600–7,000 net changed
+Implementation PR: `review_size: accepted-exception`, 2,600–7,500 net changed
 lines. The private evidence reader, held-path and Git checks, closed evaluator
 relations, and a real two-principal origin fixture form one security boundary.
 Most of the range is proof: complete classification, bundle, Git, terminal and
@@ -731,8 +731,9 @@ or TMPDIR relocation. Diagnostic overhead does not increase either time limit.
 The diagnostic boundary follows private candidate SHA-256
 `f807180c483a689ae6ebb8985fa99f4088836b6280da0d3591481b151fba6850`.
 These decoded-body hashes are the observation baseline. Keep the literals
-readable and multiline. Only `observer_source` may change for the trace dispatch
-and source-line binding below; the other three bodies remain exact:
+readable and multiline. Only `observer_source` may change for the trace dispatch,
+source-line binding and fixed phase facts below; the other three bodies remain
+exact. Cost work does not add a trace-dispatch optimization:
 
 | Embedded body | Decoded-byte SHA-256 |
 | --- | --- |
@@ -758,7 +759,8 @@ fixed source hashes, private frontend bytes and canonical exact argv hash. Keep
 indices 0–7 and their exact glob bindings unchanged. Reuse the existing bounded
 binding/copy code. Scope the frontend selection to this private call; do not alter
 subsequent calls. Missing or failed reset/binding means GAP, never a prior call's
-record or binding. Do not create per-call leaves or accumulate success records.
+record or binding. Do not create per-call leaves or accumulate success records,
+except the two fixed, bounded cost samples below.
 The four source files remain the evaluator, private reader, `_consumer.py` and
 this test. No failed-input metadata query is added; input measurement stays before
 that call's held acquisition.
@@ -811,6 +813,75 @@ boundary. Keep the historical Important finding and exact cause UNKNOWN. A curre
 success or NO_REPRO cannot close that finding, hide a real failure or turn E_STALE
 into success. Preserve all original controls and complete same-head Linux and Mac
 proof before the separate core G3.
+
+## Fixed same-call scope evidence
+
+Keep this evidence work inside the existing scope fixture. In the original
+terminal `run_case`, export an unexpected result before its original assertion:
+public stdout/stderr, the existing private terminal error, and the current reader
+and injected frontend byte hashes. For `size-mismatch`, retain original COMMIT
+values, actual wait return/status and already-produced reader stderr through the
+private frontend-copy boundary. A preset zero is not a completed wait. Missing
+stages are GAP. Keep full bounded-input digests, byte counts, bounded prefixes and
+truncation flags within one 16,384-byte encoded failure export. Output failure
+cannot replace the original failure. Keep the E_RELATION expectation and every
+original case. Use the actual extracted COMMIT parser, wait/stderr/EOF admission
+and terminal snapshot in owned N/N+1 controls: a real writer sends a legal frame
+and exits, real wait and EOF succeed, and a regular N-byte file has its original
+digest. N passes; N+1 reaches the original size predicate and exact refusal line.
+Do not hand-fill wait, simulate the token or substitute an earlier framing error.
+
+Retain cost samples only for protected slot 0's original `.github/workflows/ci.yml`
+call and the original terminal `normal` call. Precreate one fixed 4,096-byte-bounded
+data leaf and one one-byte eligibility leaf outside all evaluated/held trees.
+There are at most three records, each at most 1,024 encoded bytes: the two private
+frontends and slot 0's observer. Include fixed case, current source/copy/argv
+bindings, phase facts and GAP; no header, path list, environment dump or per-call
+leaf. Use the existing private sink identity boundary before held acquisition;
+add no safety-object or source/package query. Other slots, argv and calls stay
+unchanged. Keep these two success samples only until the original fixture ends;
+they are not success evidence or qualification output.
+
+Each selected private frontend reads Bash SECONDS at exactly five boundaries:
+copy entry, before the original reader launch, after its real normal wait, and
+before/after its original cleanup. Do not reset SECONDS or start a timing process.
+Instrument that cleanup once for both EXIT and the success path that removes its
+traps. Preserve the original call, return, signal and exit behavior. Mark an
+unreached normal wait GAP; cleanup's tolerant wait cannot substitute for it.
+Slot 0's observer takes five same-process monotonic samples: preparation entry,
+before/after trace installation, runpy return or unwind, and after trace restore.
+Preserve the original exception and mark unwind as failure, not normal completion.
+Keep only finite, ordered differences; missing or invalid facts are GAP. Bash
+facts have integer-second resolution. Do not subtract different process clocks.
+Launch-to-wait includes frontend work and reader waiting; observed execution
+includes imports, tracing and measurement overhead. Neither is isolated CPU or
+callback cost. Do not time callbacks, add source reads or change trace dispatch.
+
+Initialize eligibility to zero. Only the original terminal Python, after every
+original terminal assertion passes, may write one and close it before returning.
+Only the existing outer cleanup with saved status 142 and signal ALRM may export
+cost, after its original cleanup gates pass and before its original tmp deletion.
+Require that bound eligibility and all three completed records have closed
+writers. Missing, malformed or uncertain qualification means no cost output.
+Early I1 or terminal failure, successful exit and other failures produce no cost
+export. Prove that an I1 export or terminal assertion failure cannot reach this
+qualification point; otherwise suppress cost. Thus the original I1 bytes and
+exporter stay unchanged, with no cross-subshell memory counter, lock or publisher.
+Cost output is at most 4,096 bytes and must fit the original 16,384-byte unused
+failure allowance; uncertain allowance means no output. Do not wait for a sample,
+retry, query a failed object or use cost state to permit cleanup or restoration.
+
+Use real owned extracted boundaries to cover both cleanup paths exactly once,
+nonzero wait, missing phases, exception/unwind, actual phase order, source/case
+binding, wrong eligibility, incomplete writers and byte caps. Show that early I1
+and terminal failures cannot qualify, and that a real ordinary ALRM handled after
+terminal completion exports once before deletion without changing status or
+cleanup gates. Keep the I1 record and its full cap intact. Bind the actual revised
+observer, generated private copies and timing injections at exact H/B in new
+independent source preparation; keep the other three capture literals exact.
+All original calls, deadlines, owner/reap/restoration controls, complete Mac/Linux
+proof and historical UNKNOWN findings remain. Add no evaluator/reader invocation,
+retry, diagnostic CI, public selector, product change, permission or budget.
 
 ## Proof and completion
 
