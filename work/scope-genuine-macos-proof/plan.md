@@ -401,6 +401,20 @@ recovery fails, without replacing the original failure.
    use. Do not pass a raw absolute deadline to the owner or change product code.
    Workflow and scope share the same fixed entry/guard bytes, apart from an
    explicitly retained failure-only diagnostic block. No product API changes.
+   Keep the post-guard stdin module classification in one private
+   `fixed_stdin_module_paths` boundary. Before importing the reader, bind the
+   executing `__main__` object and namespace to `sys.modules['__main__']`.
+   Require its name `__main__`, file `<stdin>`, spec None, `sys.argv[0] == '-'`
+   and the fixed isolated `-I -S -B -` startup. After imports and before use,
+   require that same object, namespace, mapping and attributes; reject aliases
+   of that object under any other module key. Exclude only this bound entry
+   object from file candidates. Every other nonempty module file retains the
+   original physical-path, root, UID/mode/ACL, identity and digest checks.
+   A pseudo-path on another module, relative or missing file, changed entry or
+   wrong startup must refuse. Do not filter by name/path text or file existence,
+   normalize a bad path into acceptance, or add a general module resolver.
+   This classification leaves the shared guard, identity entry and provision
+   bytes unchanged.
 10. Verify the fixed jq bytes, physical identity and actual `jq-1.6` version.
     Prefill only the new owned native cache, using those same bytes. Preserve
     identity-checked cache cleanup. Do not inspect or run the preinstalled jq.
@@ -523,6 +537,15 @@ and runtime tables and their unchanged hashes. Require the original consumer's
 LF-terminated encoding to fail these fixed digest checks. Reject changed counts,
 fields or digests. Reuse the existing reader and fixed data within the original
 budget; execute neither P nor sudo, and add no job, diagnostic run or metadata probe.
+
+In the existing CI preflight, run the exact stdin classification boundary under
+ordinary trusted Python with the real fixed stdin startup. Prove that only its
+bound entry is excluded and all real module files remain checked. Reject another
+module's `<stdin>`, a wrong entry name/spec/startup, an alias or rebound entry,
+and relative, missing or changed real module files. Use owned-data adapters only
+for physical-file ownership facts; keep production checks unchanged. Do not fake
+the positive entry with a dictionary. Keep the existing budget and full real-P
+Mac proof; add no supplied-P/sudo execution, job or diagnostic run for these controls.
 
 Use owned fixture controls for unsafe/changed parents, either pre-existing V/T,
 wrong source bytes, extra/missing manifest paths, changed or escaping links,
