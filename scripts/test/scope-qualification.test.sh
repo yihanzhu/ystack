@@ -3379,7 +3379,7 @@ def copied_load_target(name):
         target = prefix / target.relative_to(logical_prefix)
     elif target == prefix or prefix in target.parents:
         target = Path(os.path.normpath(name))
-        assert target == prefix or prefix in target.parents
+        c._require(target == prefix or prefix in target.parents, 'E_INSTALL')
     else:
         target = Path(os.path.normpath(name))
         assert str(target).startswith(('/usr/lib/', '/System/Library/'))
@@ -3680,6 +3680,19 @@ c = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = c
 spec.loader.exec_module(c)
 assert c._DARWIN_ACL_FUNCTIONS is not None
+def native_control_image(target=None):
+    load = b''
+    if target is not None:
+        encoded = target.encode() + b'\0'
+        size = (24 + len(encoded) + 7) // 8 * 8
+        load = struct.pack('<6I', 0xc, size, 24, 0, 0, 0) + encoded
+        load += b'\0' * (size - len(load))
+    x86 = struct.pack('<8I', 0xfeedfacf, 0x01000007, 3, 6, int(bool(load)), len(load), 0, 0) + load
+    arm = struct.pack('<8I', 0xfeedfacf, 0x0100000c, 0, 6, 0, 0, 0, 0)
+    return (struct.pack('>2I', 0xcafebabe, 2) +
+            struct.pack('>5I', 0x01000007, 3, 48, len(x86), 0) +
+            struct.pack('>5I', 0x0100000c, 0, 48 + len(x86), len(arm), 0) + x86 + arm)
+
 def copied_binding_controls():
     import tempfile
     import types
@@ -3711,19 +3724,6 @@ def copied_binding_controls():
         ('lib/python3.15/lib-dynload/_zstd.cpython-315-darwin.so', 'lib/libzstd.1.dylib'),
     ]
 
-    def image(target=None):
-        load = b''
-        if target is not None:
-            encoded = target.encode() + b'\0'
-            size = (24 + len(encoded) + 7) // 8 * 8
-            load = struct.pack('<6I', 0xc, size, 24, 0, 0, 0) + encoded
-            load += b'\0' * (size - len(load))
-        x86 = struct.pack('<8I', 0xfeedfacf, 0x01000007, 3, 6, int(bool(load)), len(load), 0, 0) + load
-        arm = struct.pack('<8I', 0xfeedfacf, 0x0100000c, 0, 6, 0, 0, 0, 0)
-        return (struct.pack('>2I', 0xcafebabe, 2) +
-                struct.pack('>5I', 0x01000007, 3, 48, len(x86), 0) +
-                struct.pack('>5I', 0x0100000c, 0, 48 + len(x86), len(arm), 0) + x86 + arm)
-
     def descriptors():
         result = []
         for name in os.listdir('/dev/fd'):
@@ -3752,7 +3752,7 @@ def copied_binding_controls():
             target = (physical_prefix / target_name).resolve()
             assert physical_prefix in target.parents
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(image())
+            target.write_bytes(native_control_image())
             target.chmod(0o644)
             targets[target_name] = target
             (physical_prefix / source_name).parent.mkdir(parents=True, exist_ok=True)
@@ -3773,7 +3773,8 @@ def copied_binding_controls():
         library.acl_get_link_np.restype = ctypes.c_void_p
         ns = dict(Path=Path, os=os, stat=stat, ctypes=ctypes, errno=errno, hashlib=hashlib,
                   struct=struct, time=time, math=math, manifest=manifest, library=library,
-                  c=types.SimpleNamespace(_open_held=owned_open, EXECUTABLE_LIMIT=c.EXECUTABLE_LIMIT),
+                  c=types.SimpleNamespace(_open_held=owned_open, _require=c._require,
+                                         EXECUTABLE_LIMIT=c.EXECUTABLE_LIMIT),
                   fixed_root=physical_root, prefix=physical_prefix,
                   logical_prefix=Path('/Library/Frameworks/Python.framework/Versions/3.15'),
                   selected=physical_prefix / 'Resources/Python.app/Contents/MacOS/Python',
@@ -3793,7 +3794,7 @@ def copied_binding_controls():
         for source_name, target_name in edges:
             logical = str(logical_prefix / target_name)
             assert ns['copied_load_target'](logical) == targets[target_name]
-            ns['native_dependencies'](physical_prefix / source_name, image(logical))
+            ns['native_dependencies'](physical_prefix / source_name, native_control_image(logical))
         assert len(ns['load_edges']) == 17
         assert all(name.startswith(str(logical_prefix) + '/') for source, command, name in ns['load_edges'])
         assert ns['images'] == set(targets.values())
@@ -3805,6 +3806,50 @@ def copied_binding_controls():
         assert any('Tcl.framework' in name for name in ns['links'])
         assert any('Tk.framework' in name for name in ns['links'])
         assert any('libzstd.1.dylib' in name for name in ns['links'])
+        parser_file = physical_prefix / 'lib/python3.15/guard-untrusted.dylib'
+        parser_file.parent.mkdir(parents=True, exist_ok=True)
+        manifest[str(parser_file.relative_to(physical_root))] = {'kind': stat.S_IFREG}
+        load_refusals = []
+        for label, dependency, expected_type, expected_function, expected_line in (
+                ('unknown-load-path', '@rpath/untrusted.dylib', AssertionError,
+                 'native_dependencies', "assert name.startswith('/') and '@' not in name"),
+                ('escaping-load-path', '@loader_path/../../../../untrusted.dylib', c.Refusal,
+                 'copied_load_target', "c._require(target == prefix or prefix in target.parents, 'E_INSTALL')")):
+            data = native_control_image(dependency)
+            for thin in (False, True):
+                raw = data[48:48 + struct.unpack_from('>I', data, 20)[0]] if thin else data
+                load_ns = dict(ns, rows={}, links={}, images=set(), load_edges=set(), seen=set())
+                exec(compile(extracted, 'actual-copied-binding-functions-owned-principal', 'exec'), load_ns)
+                parser_file.write_bytes(raw)
+                with_source = c._hold_bytes(str(parser_file), c.EXECUTABLE_LIMIT)
+                try:
+                    with_source.recheck('E_STALE')
+                    assert load_ns['inspect'](parser_file) == with_source.raw == raw
+                finally:
+                    with_source.close()
+                try:
+                    load_ns['native_dependencies'](parser_file, raw)
+                except (AssertionError, c.Refusal) as error:
+                    frames = []
+                    trace = error.__traceback__
+                    lines = extracted.splitlines()
+                    while trace is not None:
+                        if trace.tb_frame.f_code.co_filename == 'actual-copied-binding-functions-owned-principal':
+                            frames.append((trace.tb_frame.f_code.co_name, lines[trace.tb_lineno - 1].strip()))
+                        trace = trace.tb_next
+                    if thin:
+                        assert type(error) is AssertionError
+                        assert frames[-1] == ('native_dependencies', "assert name == 'bin/python3.15-intel64'")
+                        assert all(name != 'copied_load_target' for name, line in frames)
+                    else:
+                        assert type(error) is expected_type
+                        assert frames[-1] == (expected_function, expected_line)
+                        if expected_type is c.Refusal:
+                            assert error.code == 'E_INSTALL'
+                    load_refusals.append({'case': label, 'thin': thin, 'type': type(error).__name__,
+                                          'code': getattr(error, 'code', None), 'actual_frames': frames})
+                else:
+                    raise AssertionError('native load refusal accepted ' + label)
         refused = []
 
         def reject(label, action):
@@ -3832,12 +3877,12 @@ def copied_binding_controls():
         reject('missing-copy-not-original-good', lambda: ns['inspect'](ns['copied_load_target'](str(logical_prefix / 'Python'))))
         target.symlink_to(original_good)
         reject('copy-link-to-original-good', lambda: ns['copied_load_target'](str(logical_prefix / 'Python')))
-        assert original_good.read_bytes() == image()
+        assert original_good.read_bytes() == native_control_image()
         assert all(not str(path).startswith(str(logical_prefix)) for path in opened)
     after_fds = descriptors()
     assert before_fds == after_fds
     print(json.dumps({'copied_binding_controls': 'PASS', 'logical_edges': 17, 'fixed_links': 35,
-                      'refusals': refused, 'actual_opened_copy_paths': opened,
+                      'refusals': refused, 'load_refusals': load_refusals, 'actual_opened_copy_paths': opened,
                       'fds_before': before_fds, 'fds_after': after_fds,
                       'ordinary_uid_ancestor_mode_adapter': True, 'copied_runtime_executed': False}, sort_keys=True), flush=True)
 
@@ -3959,11 +4004,7 @@ run_control('held-module-identity-change', b'AssertionError', synchronized=True)
 module.write_bytes(original_module)
 for label, dependency in (('unknown-load-path', '@rpath/untrusted.dylib'),
                           ('escaping-load-path', '@loader_path/../../../../untrusted.dylib')):
-    encoded = dependency.encode() + b'\0'
-    size = (24 + len(encoded) + 7) // 8 * 8
-    load = struct.pack('<6I', 0xc, size, 24, 0, 0, 0) + encoded
-    load += b'\0' * (size - len(load))
-    image = struct.pack('<8I', 0xfeedfacf, 0x01000007, 3, 6, 1, size, 0, 0) + load
+    image = native_control_image(dependency)
     library = module.parent / 'guard-untrusted.dylib'
     library.write_bytes(image)
     library.chmod(0o444)
