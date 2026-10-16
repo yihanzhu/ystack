@@ -96,6 +96,7 @@ import errno
 import hashlib
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -107,11 +108,35 @@ import time
 assert sys.platform == 'darwin' and os.getuid() != 0
 assert not any(key.startswith('DYLD_') or key == '__PYVENV_LAUNCHER__' for key in os.environ)
 assert len(sys.argv) == 7
+def uptime():
+    value = time.clock_gettime(time.CLOCK_UPTIME_RAW)
+    assert type(value) is float and math.isfinite(value) and value >= 0
+    return value
+
+
+def owner_deadline():
+    info = time.get_clock_info('monotonic')
+    # Both fixed Darwin APIs use mach_absolute_time: seconds, the same rate, and excluding system sleep.
+    assert info.monotonic and not info.adjustable and info.implementation == 'mach_absolute_time()'
+    assert math.isfinite(info.resolution) and info.resolution > 0
+    resolution = time.clock_getres(time.CLOCK_UPTIME_RAW)
+    assert math.isfinite(resolution) and resolution > 0
+    local = time.monotonic()
+    raw = uptime()
+    remaining = deadline - raw
+    assert math.isfinite(local) and local >= 0
+    assert math.isfinite(remaining) and 0 < remaining <= 120
+    converted = local + remaining
+    assert math.isfinite(converted) and converted > local
+    return converted
+
+
 stage = sys.argv[4]
 assert stage in ('empty', 'real')
-deadline = time.monotonic() + 120 if stage == 'empty' else float(sys.argv[5])
+guard_started = uptime()
+deadline = guard_started + 120 if stage == 'empty' else float(sys.argv[5])
 entry_pid = os.getpid() if stage == 'empty' else int(sys.argv[6])
-assert time.monotonic() < deadline <= time.monotonic() + 120
+assert math.isfinite(deadline) and uptime() < deadline <= guard_started + 120
 fixed_root = Path('/Library/Frameworks/Python.framework')
 fixed_prefix = fixed_root / 'Versions/3.15'
 fixed_tools = fixed_root / 'ystack-private-tools'
@@ -178,7 +203,7 @@ def empty_acl(value):
 
 
 def immutable(fd, state, ancestor):
-    assert time.monotonic() < deadline
+    assert uptime() < deadline
     assert state.st_uid == 0 and not state.st_mode & 0o022
     ctypes.set_errno(0)
     empty_acl(library.acl_get_fd_np(fd, 0x100))
@@ -201,7 +226,7 @@ def canonical_fixed(path):
     steps = 0
     while pending:
         steps += 1
-        assert steps <= 128 and time.monotonic() < deadline
+        assert steps <= 128 and uptime() < deadline
         resolved.append(pending.pop(0))
         name = '/'.join(resolved)
         if name == 'Versions':
@@ -238,7 +263,7 @@ def inspect(path, directory=False):
     global active_path, active_stage
     active_path = str(path)
     active_stage = 'candidate-inspect'
-    assert time.monotonic() < deadline and len(rows) < 16384
+    assert uptime() < deadline and len(rows) < 16384
     path = canonical_fixed(path)
     assert path.is_absolute() and path.resolve() == path
     held = c._open_held(str(path), directory, rule(), 'E_INSTALL')
@@ -286,7 +311,7 @@ def static_data(name, raw, slices):
     digest, members = bindings[name]
     assert hashlib.sha256(raw).hexdigest() == digest and len(slices) == 2
     for cpu, subtype, body in slices:
-        assert time.monotonic() < deadline
+        assert uptime() < deadline
         if members is None:
             magic, version, offset, size, wrapper_cpu = struct.unpack_from('<5I', body)
             expected = (4888, 0x01000007) if cpu == 0x01000007 else (5252, 0xffffffff)
@@ -297,7 +322,7 @@ def static_data(name, raw, slices):
         assert body[:8] == b'!<arch>\n'
         offset, observed = 8, []
         while offset < len(body):
-            assert time.monotonic() < deadline and len(observed) <= len(members)
+            assert uptime() < deadline and len(observed) <= len(members)
             header = body[offset:offset + 60]
             assert len(header) == 60 and header[58:] == b'`\n'
             size = int(header[48:58])
@@ -435,7 +460,8 @@ try:
     if stage == 'real':
         bootstrap = c._hold_bytes(sys.executable, c.EXECUTABLE_LIMIT)
         owned.append(bootstrap)
-        owner = c._DarwinChildOwner(bootstrap, source_held, deadline, ledger)
+        owner = c._DarwinChildOwner(bootstrap, source_held, owner_deadline(), ledger)
+        assert uptime() < deadline
     for item in reversed((locator, *locator.parents)):
         if item == Path('/'):
             continue
@@ -466,7 +492,7 @@ try:
         inspect(directory, True)
         with os.scandir(str(directory)) as entries:
             for entry in entries:
-                assert time.monotonic() < deadline and len(observed) < 16384
+                assert uptime() < deadline and len(observed) < 16384
                 path = Path(entry.path)
                 name = str(path.relative_to(fixed_root))
                 assert name not in observed
@@ -527,7 +553,7 @@ try:
         assert raw[:4] in (b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe', b'\xca\xfe\xba\xbf')
         native_dependencies(path, raw, True)
     for name, (before, _digest) in rows.items():
-        assert time.monotonic() < deadline and identity(os.lstat(name)) == before
+        assert uptime() < deadline and identity(os.lstat(name)) == before
     assert all(not os.path.lexists(path) for path in cache_paths)
     for name, (before, target) in links.items():
         assert identity(os.lstat(name)) == before and os.readlink(name) == target
@@ -536,6 +562,7 @@ try:
     assert Path(os.path.realpath(str(locator))) == selected
     for item in owned:
         item.recheck('E_STALE')
+    assert uptime() < deadline
     print(json.dumps({'bootstrap': 'fixed-framework-real-resolver' if stage == 'real' else 'fixed-system-trusted-reader', 'python': str(selected),
         'prefix': str(prefix), 'objects': len(rows), 'native_images': len(seen),
         'closure_sha256': c.digest(c.canonical({'objects': rows, 'selector_links': links})), 'acl_commands': len(ledger.commands),
@@ -595,7 +622,7 @@ owned = []
 try:
     guard = c._hold_bytes(str(directory_path / 'guard.py'), c.EXECUTABLE_LIMIT)
     owned.append(guard)
-    assert hashlib.sha256(guard.raw).hexdigest() == 'e6fb867d4cd7e0092fe5cc61050be3286f14279b8541f82d156dbd10f1b065b6'
+    assert hashlib.sha256(guard.raw).hexdigest() == '41b01937f09c6db77e35cd899ea209665ff2eea7a1e7650d0d5b04ec1090b573'
     cache = Path(os.environ['YSTACK_PROOF_TMP'])
     assert cache.is_absolute() and cache.resolve() == cache
     manifest = c._hold_bytes(str(cache / 'manifest.json'), c.EXECUTABLE_LIMIT)
@@ -632,7 +659,7 @@ finally:
     c._close_paths(owned)
 PY_MAC_FIXED_MANIFEST
   fi
-  [ "$(sha256_path "$mac_guard_file")" = e6fb867d4cd7e0092fe5cc61050be3286f14279b8541f82d156dbd10f1b065b6 ] || return 1
+  [ "$(sha256_path "$mac_guard_file")" = 41b01937f09c6db77e35cd899ea209665ff2eea7a1e7650d0d5b04ec1090b573 ] || return 1
   /usr/bin/python3 -I -S -B "$mac_guard_file" "$root" "$1" "$mac_guard_file" empty 0 0
 }
 
@@ -2977,7 +3004,7 @@ starts = [index for index, line in enumerate(source) if line == opening]
 stops = [index for index, line in enumerate(source) if line == closing]
 assert len(starts) == len(stops) == 1 and starts[0] < stops[0]
 body = b''.join(source[starts[0] + 1:stops[0]])
-assert hashlib.sha256(body).hexdigest() == 'e6fb867d4cd7e0092fe5cc61050be3286f14279b8541f82d156dbd10f1b065b6'
+assert hashlib.sha256(body).hexdigest() == '41b01937f09c6db77e35cd899ea209665ff2eea7a1e7650d0d5b04ec1090b573'
 compile(body, 'actual-runtime-guard', 'exec')
 assert Path(sys.argv[2]).read_bytes() == body
 Path(sys.argv[3]).write_bytes(body)
@@ -2989,6 +3016,7 @@ import errno
 import importlib.util
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import pwd
@@ -3060,14 +3088,14 @@ def observe(frame, event, arg):
         caller = frame.f_back
         if caller is not None and caller.f_code.co_filename == original_name:
             line = code.decode().splitlines()[caller.f_lineno - 1]
-            if line.strip() == 'assert time.monotonic() < deadline and identity(os.lstat(name)) == before':
+            if line.strip() == 'assert uptime() < deadline and identity(os.lstat(name)) == before':
                 last_identity = {'name': caller.f_locals['name'], 'actual': list(arg),
                     'expected': list(caller.f_locals['before']), 'deadline': caller.f_locals['deadline']}
     if event == 'exception' and frame.f_code.co_filename == original_name:
         line = code.decode().splitlines()[frame.f_lineno - 1]
-        if line.strip() == 'assert time.monotonic() < deadline and identity(os.lstat(name)) == before':
+        if line.strip() == 'assert uptime() < deadline and identity(os.lstat(name)) == before':
             if isinstance(arg[1], AssertionError) and last_identity is not None:
-                now = time.monotonic()
+                now = time.clock_gettime(time.CLOCK_UPTIME_RAW)
                 identity_refusal = dict(last_identity, observed_time=now,
                     deadline_valid=now < last_identity['deadline'],
                     actual_identity_comparison_reached=True)
@@ -3095,10 +3123,10 @@ program.chmod(0o444)
 original_program = fixture / 'guard-original.py'
 guard_ast = ast.parse(guard)
 parser_functions = [node for node in guard_ast.body if isinstance(node, ast.FunctionDef)
-                    and node.name in ('native_slices', 'static_data', 'native_dependencies')]
-assert len(parser_functions) == 3
-parser_namespace = {'Path': Path, 'struct': struct, 'hashlib': hashlib, 'time': time,
-    'deadline': time.monotonic() + 120, 'prefix': copied / 'Versions/3.15',
+                    and node.name in ('uptime', 'native_slices', 'static_data', 'native_dependencies')]
+assert len(parser_functions) == 4
+parser_namespace = {'Path': Path, 'struct': struct, 'hashlib': hashlib, 'time': time, 'math': math,
+    'deadline': time.clock_gettime(time.CLOCK_UPTIME_RAW) + 120, 'prefix': copied / 'Versions/3.15',
     'canonical_fixed': lambda path: path, 'static_paths': set()}
 exec(compile(ast.Module(body=parser_functions, type_ignores=[]), 'exact-native-format-controls', 'exec'), parser_namespace)
 for name in ('Frameworks/Tcl.framework/Versions/9.0/libtclstub.a',
@@ -3154,7 +3182,7 @@ prefix = fixed_prefix
 stdlib = prefix / 'lib/python3.15'
 assert selected == prefix / 'Resources/Python.app/Contents/MacOS/Python'
 stage = 'real'
-deadline = time.monotonic() + 120
+deadline = time.clock_gettime(time.CLOCK_UPTIME_RAW) + 120
 """
 metadata_subject = '\n'.join(ast.get_source_segment(guard.decode(), node) for node in imports) + '\n'
 metadata_subject += guard.decode()[package_start:package_end] + metadata_header
@@ -3429,8 +3457,8 @@ def run_control(label, expected, synchronized=False):
 
 entry_ast = ast.parse(entry)
 entry_rules = [node for node in ast.walk(entry_ast)
-               if isinstance(node, ast.FunctionDef) and node.name in ('empty_acl', 'immutable')]
-assert len(entry_rules) == 2
+               if isinstance(node, ast.FunctionDef) and node.name in ('uptime', 'empty_acl', 'immutable')]
+assert len(entry_rules) == 3
 source = package / 'shadow/v1/_consumer.py'
 spec = importlib.util.spec_from_file_location('owned_entry_metadata_consumer', source)
 assert spec is not None and spec.loader is not None
@@ -3438,8 +3466,8 @@ c = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = c
 spec.loader.exec_module(c)
 assert c._DARWIN_ACL_FUNCTIONS is not None
-entry_namespace = {'ctypes': ctypes, 'errno': errno, 'time': time,
-    'deadline': time.monotonic() + 120, 'library': c._DARWIN_ACL_FUNCTIONS.library}
+entry_namespace = {'ctypes': ctypes, 'errno': errno, 'time': time, 'math': math,
+    'deadline': time.clock_gettime(time.CLOCK_UPTIME_RAW) + 120, 'library': c._DARWIN_ACL_FUNCTIONS.library}
 exec(compile(ast.Module(body=entry_rules, type_ignores=[]), 'actual-entry-rules', 'exec'), entry_namespace)
 entry_immutable = entry_namespace['immutable']
 entry_directory = fixture / 'entry-metadata'
@@ -3507,13 +3535,15 @@ import types
 startup = next(node for node in guard_ast.body if isinstance(node, ast.If)
     and ast.get_source_segment(guard.decode(), node.test) == "stage == 'real'")
 window = next(node for node in guard_ast.body if isinstance(node, ast.Assert)
-    and 'deadline <= time.monotonic() + 120' in ast.get_source_segment(guard.decode(), node))
+    and 'deadline <= guard_started + 120' in ast.get_source_segment(guard.decode(), node))
 assertions = compile(ast.Module(body=[window, *startup.body], type_ignores=[]), 'actual-fixed-entry-assertions', 'exec')
 def startup_namespace():
     proxy = types.SimpleNamespace(executable=sys.executable, version_info=sys.version_info,
         prefix=sys.prefix, base_prefix=sys.base_prefix, flags=sys.flags, path=list(sys.path))
-    return {'sys': proxy, 'os': os, 'Path': Path, 'time': time, 'entry_pid': os.getpid(),
-        'fixed_p': python, 'fixed_prefix': prefix, 'deadline': time.monotonic() + 120}
+    guard_started = time.clock_gettime(time.CLOCK_UPTIME_RAW)
+    return {'sys': proxy, 'os': os, 'Path': Path, 'time': time, 'math': math,
+        'uptime': entry_namespace['uptime'], 'guard_started': guard_started, 'entry_pid': os.getpid(),
+        'fixed_p': python, 'fixed_prefix': prefix, 'deadline': guard_started + 120}
 exec(assertions, dict(startup_namespace(), sys=sys))
 for label, key, value in (
     ('executable', 'executable', '/entry-control-wrong-physical'),
@@ -3522,8 +3552,8 @@ for label, key, value in (
     ('paths', 'path', ['/entry-control-wrong-path']),
     ('flags', 'flags', types.SimpleNamespace(isolated=0, no_site=0, dont_write_bytecode=0)),
     ('pid', 'entry_pid', os.getpid() + 1),
-    ('expired-deadline', 'deadline', time.monotonic() - 1),
-    ('beyond-shared-window', 'deadline', time.monotonic() + 240)):
+    ('expired-deadline', 'deadline', time.clock_gettime(time.CLOCK_UPTIME_RAW) - 1),
+    ('beyond-shared-window', 'deadline', time.clock_gettime(time.CLOCK_UPTIME_RAW) + 240)):
     changed = startup_namespace()
     if key in ('entry_pid', 'deadline'):
         changed[key] = value
