@@ -29,22 +29,37 @@ scope_owner_writer=false
 scope_owner_reader=false
 scope_owner_serial=0
 scope_owner_status=0
+scope_owner_waiting=false
+scope_fixture_owner_close_reader() { exec 6<&-; }
+scope_fixture_owner_close_writer() { exec 7>&-; }
 scope_fixture_owner_cancel() {
-  if [ "$scope_owner_reader" = true ]; then exec 6<&-;scope_owner_reader=false;fi
-  if [ "$scope_owner_writer" = true ]; then
-    exec 7>&-
-    scope_owner_writer=false
+  local failed=0
+  [ "$scope_owner_state" != unknown ] || failed=1
+  if [ "$scope_owner_reader" = true ]; then
+    if scope_fixture_owner_close_reader; then scope_owner_reader=false; else failed=1; fi
   fi
+  if [ "$scope_owner_writer" = true ]; then
+    if scope_fixture_owner_close_writer; then scope_owner_writer=false; else failed=1; fi
+  fi
+  if [ "$failed" -ne 0 ]; then scope_owner_state=unknown; return 1; fi
 }
 scope_fixture_owner_wait() {
+  [ "$scope_owner_state" != unknown ] || return 1
   [ "$scope_owner_state" != never ] || return 0
   [ "$scope_owner_state" != completed ] || return 0
-  [ -n "$scope_owner_pid" ] || return 1
+  if [ -z "$scope_owner_pid" ]; then scope_owner_state=unknown; return 1; fi
   scope_owner_status=0
+  scope_owner_waiting=true
   wait "$scope_owner_pid" || scope_owner_status=$?
-  scope_fixture_owner_cancel
-  /usr/bin/python3 -I -S -B "$scope_owner_channel_helper" confirm "$tmp" "$genuine_base" \
-    "$guard_control" "$scope_owner_serial" || return 1
+  scope_owner_waiting=false
+  if [ "$scope_owner_status" -ge 127 ]; then
+    scope_owner_state=unknown
+    scope_fixture_owner_cancel || :
+    return 1
+  fi
+  scope_fixture_owner_cancel || return 1
+  if ! /usr/bin/python3 -I -S -B "$scope_owner_channel_helper" confirm "$tmp" "$genuine_base" \
+    "$guard_control" "$scope_owner_serial"; then scope_owner_state=unknown; return 1; fi
   scope_owner_state=completed
 }
 scope_fixture_owner_launch() {
@@ -63,13 +78,12 @@ scope_fixture_owner_launch() {
     "$genuine_base" "$genuine_base/package" "$genuine_python" "$guard_source" "$operator_name" "$entry_source" \
     "$tmp/scope-owner-$scope_owner_serial.json" <&6 6<&- 7>&- &
   scope_owner_pid=$!
-  exec 6<&-
-  scope_owner_reader=false
+  if scope_fixture_owner_close_reader; then scope_owner_reader=false; else scope_owner_state=unknown; return 1; fi
   scope_owner_state=active
   if [ "$proof" = true ]; then
     /usr/bin/python3 -I -S -B "$scope_owner_channel_helper" ready "$tmp" "$genuine_base" \
       "$guard_control" "$scope_owner_serial" 7>&- || return 1
-    scope_fixture_owner_cancel
+    scope_fixture_owner_cancel || return 1
   fi
   scope_fixture_owner_wait || return 1
   if [ "$proof" = true ]; then
@@ -80,11 +94,11 @@ scope_fixture_owner_launch() {
   fi
 }
 scope_fixture_signal=''
-trap 'scope_fixture_signal=ALRM;scope_fixture_owner_cancel;exit 142' ALRM
+trap 'scope_fixture_signal=ALRM;if [ "$scope_owner_waiting" = true ]; then scope_owner_state=unknown;fi;scope_fixture_owner_cancel || :;exit 142' ALRM
 
 cleanup() {
   local prior=$? cleanup_status=0
-  scope_fixture_owner_cancel
+  if ! scope_fixture_owner_cancel; then cleanup_status=1; fi
   if ! scope_fixture_owner_wait; then
     /usr/bin/printf 'fixture-cleanup: FAIL_PENDING; owner completion is unknown\n' >&2
     cleanup_status=1
@@ -1451,13 +1465,15 @@ s=importlib.util.spec_from_file_location('observer_outside',sys.argv[2])
 h=importlib.util.module_from_spec(s);s.loader.exec_module(h)
 held=c._open_held(sys.argv[1],False,h.rule,'E_STALE')
 try:
- if sys.argv[3]=='errno':os.unlink(sys.argv[1])
+ if sys.argv[3]=='errno':os.close(held.fd)
  elif sys.argv[3]=='bool':h.allowed=False
  elif sys.argv[3]=='gap':pass
  else:
   with open(sys.argv[1],'ab') as f:f.write(b'changed')
  held.recheck('E_STALE')
-finally:held.close()
+finally:
+ if sys.argv[3]=='errno':held.components.pop()
+ held.close()
 ''')
     def observe_case(code,kind):
         target=area/'value';target.write_bytes(b'actual owned file');log=area/'log';log.write_bytes(b'')
@@ -1480,6 +1496,14 @@ finally:held.close()
         finally:
             install(None);sys.settrace=install;sys.argv=previous
         result=json.loads(log.read_bytes());assert result['status']==('OBSERVER_GAP' if kind=='gap' else 'FIRST_STALE')
+        if kind=='errno':
+            actual=[(frame,item) for frame in result['frames'] for item in frame['actual_returns'] if item.get('errno')==9]
+            assert len(actual)==1 and actual[0][1]['function']=='_metadata' and actual[0][1]['exception']=='OSError'
+            frame,item=actual[0]
+            assert frame['function']=='recheck' and frame['component']['ancestor'] is False
+            lines=(package/'shadow/v1/_consumer.py').read_text().splitlines()
+            assert lines[item['caller_line']-1].strip()=='current = _metadata(component.fd)'
+            assert lines[result['guard']['line']-1].strip()=='raise Refusal(code) from None'
         return result,callbacks,time.monotonic()-started
     for kind in ('identity','errno','bool','gap'):
         first,old_counts,old_cost=observe_case(old,kind);second,new_counts,new_cost=observe_case(observer,kind)
@@ -1546,7 +1570,7 @@ finally:held.close()
         mac_records.append({'version':version,'cleanup':clean,'identity':identity,'callbacks':count,'seconds':time.monotonic()-started,'stdout':result.stdout.decode(),'stderr':result.stderr.decode()})
     assert mac_records[1]['callbacks']<mac_records[0]['callbacks']
     reports.append({'mac_actual_observer_equivalence':mac_records})
-    for fault in ('ordinary-started-no-marker','ordinary-pending','never-started','starting','normal','cancel','alarm','eof-before-launch','actual-deadline','missing-confirmation','wrong-confirmation','reported-wait-error','reported-close-error','inner-wait-error','inner-close-error'):
+    for fault in ('ordinary-started-no-marker','ordinary-pending','never-started','starting','normal','cancel','alarm','eof-before-launch','actual-deadline','missing-confirmation','wrong-confirmation','reported-wait-error','reported-close-error','wait-interrupted','writer-close-error','terminal-nonzero','inner-wait-error','inner-close-error'):
         work=area/fault;work.mkdir();base=work/'base';base.mkdir();(base/'package/shadow/v1').mkdir(parents=True);(base/'package/shadow/v1/_consumer.py').write_bytes(consumer);script=work/'runtime-guard-controls.py';ch=work/'channel.py';ch.write_text(channel_owned)
         fixture=base/('runtime-guard-cancel-proof' if fault in ('cancel','alarm') else 'runtime-guard');fixture.mkdir()
         program=fixture/'wrapper.py';program.write_text(wrapper.replace('CLOCK_UPTIME_RAW',clock_name))
@@ -1564,6 +1588,7 @@ pending_path=base/'runtime-guard-cleanup-uncertain'
         suffix="\nprogram=Path("+repr(str(program))+")\noriginal_program=Path("+repr(str(body))+")\nsync_program=original_program\nowner_cancel=ScopeFixtureOwnerCancel()\ntry:\n    run_control("+repr('fixed-short-owner-cancel' if fault in ('cancel','alarm') else 'owned-normal')+",None)\nfinally:\n    owner_cancel.finish()\n"
         script.write_text(prefix+owned+suffix)
         (work/'guard-source').write_bytes(b'owned guard source')
+        if fault=='terminal-nonzero':body.write_text(body.read_text()+"raise ValueError('actual nonzero child terminal')\n")
         if fault=='actual-deadline':body.write_text(body.read_text().replace('print(sys.argv[2])','time.sleep(10)\nprint(sys.argv[2])'))
         if fault in ('inner-wait-error','inner-close-error'):
             hook="""saved_popen=subprocess.Popen
@@ -1596,7 +1621,7 @@ subprocess.Popen=fixed_owned_popen
             call='scope_fixture_owner_launch false\n'
             shell_case=shell.replace('  scope_owner_state=active\n','  scope_owner_state=active\n  scope_fixture_owner_cancel\n',1)
         else:call='scope_fixture_owner_launch false\n'
-        negative=fault in ('missing-confirmation','wrong-confirmation','reported-wait-error','reported-close-error')
+        negative=fault in ('missing-confirmation','wrong-confirmation','reported-wait-error','reported-close-error','wait-interrupted','writer-close-error')
         genuine=area/(fault+'.genuine-receipt')
         if negative:
             call+='\n/bin/cp "$tmp/scope-owner-2.receipt" '+repr(str(genuine))+'\n'
@@ -1605,17 +1630,24 @@ subprocess.Popen=fixed_owned_popen
             elif fault=='wrong-confirmation':
                 patch_code='import json,os,sys;p=sys.argv[1];v=json.load(open(p));v["context_sha256"]="0"*64;os.chmod(p,0o600);open(p,"w").write(json.dumps(v));os.chmod(p,0o444)'
                 call+='/usr/bin/python3 -I -S -B -c '+repr(patch_code)+' "$tmp/scope-owner-2.receipt"\n'
-            elif fault=='reported-wait-error':
-                actual_wait=shell[shell.index('scope_fixture_owner_wait() {'):shell.index('scope_fixture_owner_launch() {')]
-                call+=actual_wait.replace('scope_fixture_owner_wait() {','scope_fixture_owner_wait_actual() {',1)
-                call+='scope_fixture_owner_wait() { scope_fixture_owner_wait_actual || return 1; printf "REPORTED_WAIT_ERROR_AFTER_REAL_WAIT\\n" >&2; return 1; }\n'
             else:
-                actual_close=shell[shell.index('scope_fixture_owner_cancel() {'):shell.index('scope_fixture_owner_wait() {')]
-                call+=actual_close.replace('scope_fixture_owner_cancel() {','scope_fixture_owner_cancel_actual() {',1)
-                call+='scope_fixture_owner_cancel() { scope_fixture_owner_cancel_actual; printf "REPORTED_CLOSE_ERROR_AFTER_REAL_CLOSE\\n" >&2; return 1; }\n'
+                if fault in ('reported-wait-error','wait-interrupted'):
+                    status=127 if fault=='reported-wait-error' else 142
+                    call+='wait() { local actual=0; builtin wait "$@" || actual=$?; printf "ACTUAL_WAIT_FINISHED:%s\\n" "$actual" >&2; return '+str(status)+'; }\n'
+                    repair='unset -f wait\n'
+                else:
+                    reader=fault=='reported-close-error';number=6 if reader else 7
+                    role='reader' if reader else 'writer'
+                    call+='exec '+str(number)+('<' if reader else '>')+'"$tmp/guard-source"\nscope_owner_'+role+'=true\n'
+                    original='scope_fixture_owner_close_'+role+'() { exec '+str(number)+('<&-' if reader else '>&-')+'; }\n'
+                    call+=original.replace('; }','; printf "ACTUAL_CLOSE_FINISHED:'+role+'\\n" >&2; return 1; }')
+                    repair=original
+                call+='if scope_fixture_owner_wait; then exit 99; fi\ntest "$scope_owner_state" = unknown\nprintf "FIRST_REFUSAL:unknown:%s\\n" "$scope_owner_status" >&2\n'+repair
         cleanup_source=source[source.index("scope_fixture_signal=''\n"):source.index('\nplatform=',source.index("scope_fixture_signal=''\n"))]
         test_shell=shell_case if fault=='eof-before-launch' else shell
-        if fault=='alarm':test_shell=test_shell.replace('    scope_fixture_owner_cancel\n  fi\n',"    /usr/bin/python3 -I -S -B -c 'import os,signal,time;time.sleep(0.25);os.kill(os.getppid(),signal.SIGALRM)' 7>&-\n  fi\n",1)
+        if fault=='alarm':
+            assert test_shell.count('    scope_fixture_owner_cancel || return 1\n  fi\n')==1
+            test_shell=test_shell.replace('    scope_fixture_owner_cancel || return 1\n  fi\n',"    /usr/bin/python3 -I -S -B -c 'import os,signal,time;time.sleep(0.25);os.kill(os.getppid(),signal.SIGALRM)' 7>&-\n  fi\n",1)
         if fault=='starting':test_shell=test_shell.replace('  scope_owner_state=attempted\n','  scope_owner_state=attempted\n  kill -s ALRM "$$"\n',1)
         if fault in ('ordinary-started-no-marker','ordinary-pending','never-started'):call='exit 0\n'
         if fault=='ordinary-started-no-marker':call='scope_controls_state=started\nexit 0\n'
@@ -1630,7 +1662,7 @@ subprocess.Popen=fixed_owned_popen
         (area/(fault+'.stdout')).write_bytes(result.stdout);(area/(fault+'.stderr')).write_bytes(result.stderr)
         confirmed=audit.exists()
         print(json.dumps({'actual_owner_case':fault,'returncode':result.returncode,'stdout':result.stdout.decode(),'stderr':result.stderr.decode(),'deletion_permitted':confirmed}),flush=True)
-        assert confirmed==(fault in ('never-started','normal','cancel','alarm','eof-before-launch','actual-deadline')),(fault,result.returncode,result.stderr)
+        assert confirmed==(fault in ('never-started','normal','cancel','alarm','eof-before-launch','actual-deadline','terminal-nonzero')),(fault,result.returncode,result.stderr)
         assert (result.returncode==0)==(fault in ('never-started','normal','cancel'))
         if fault=='alarm':assert result.returncode==-signal.SIGALRM
         if fault=='eof-before-launch':assert result.returncode!=0 and '\"cases\": []' in result.stdout.decode()
@@ -1651,8 +1683,12 @@ subprocess.Popen=fixed_owned_popen
             assert not confirmed and work.exists()
             if fault=='missing-confirmation':assert 'FileNotFoundError' in result.stderr.decode()
             if fault=='wrong-confirmation':assert "value['context_sha256']==hashlib.sha256(raw).hexdigest()" in result.stderr.decode()
-            if fault=='reported-wait-error':assert 'REPORTED_WAIT_ERROR_AFTER_REAL_WAIT' in result.stderr.decode()
-            if fault=='reported-close-error':assert 'REPORTED_CLOSE_ERROR_AFTER_REAL_CLOSE' in result.stderr.decode()
+            if fault in ('reported-wait-error','wait-interrupted'):
+                assert 'ACTUAL_WAIT_FINISHED:0' in result.stderr.decode() and 'FIRST_REFUSAL:unknown:' in result.stderr.decode()
+                assert result.stderr.decode().count('ACTUAL_WAIT_FINISHED:')==1
+            if fault in ('reported-close-error','writer-close-error'):
+                assert 'ACTUAL_CLOSE_FINISHED:' in result.stderr.decode() and 'FIRST_REFUSAL:unknown:0' in result.stderr.decode()
+                assert result.stderr.decode().count('ACTUAL_CLOSE_FINISHED:')==1
         reports.append({'owner_case':fault,'returncode':result.returncode,'deletion_permitted':confirmed,
                         'stdout':result.stdout.decode(),'stderr':result.stderr.decode(),'elapsed':time.monotonic()-start})
     library=area/'never-launched-library';library.write_bytes(b'owned data')
