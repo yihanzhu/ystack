@@ -111,6 +111,13 @@ cleanup() {
   else
     /usr/bin/printf 'genuine-cleanup: NOT_STARTED\n'
   fi
+  if [ "$cleanup_status" -eq 0 ] && [ "$prior" -eq 142 ] && [ "$scope_fixture_signal" = ALRM ]; then
+    python3 -I -S -B - "$tmp/stale-observation/observer.py" <<'PY_FIXED_COST_EXPORT' || :
+import runpy,sys
+try:runpy.run_path(sys.argv[1])['cost_export']()
+except BaseException:pass
+PY_FIXED_COST_EXPORT
+  fi
   if [ "$cleanup_status" -eq 0 ]; then
     /bin/rm -rf -- "$tmp" >/dev/null 2>&1 || cleanup_status=1
   fi
@@ -871,6 +878,119 @@ expected={'scope/v1/evaluate-scope.sh': 'f120e877973aa0b66d7ce3de2f6b9cc46b6a9b0
 for path,digest in expected.items():
     assert hashlib.sha256((root/path).read_bytes()).hexdigest()==digest
 observer_source = r"""import hashlib,json,os,runpy,stat,sys,time,types
+def cost_identity(value):
+    return (value.st_dev,value.st_ino,stat.S_IFMT(value.st_mode),value.st_uid,
+            stat.S_IMODE(value.st_mode),value.st_nlink)
+def cost_open(which,flags):
+    path,expected=COST[which]
+    fd=os.open(path,flags|os.O_NOFOLLOW|os.O_NONBLOCK)
+    try:
+        actual=os.fstat(fd)
+        if cost_identity(actual)!=tuple(expected) or actual.st_uid!=os.getuid():raise ValueError('cost identity')
+        if cost_identity(os.lstat(path))!=tuple(expected):raise ValueError('cost named identity')
+        if actual.st_size>(4096 if which=='data' else 1):raise ValueError('cost cap')
+        return fd
+    except BaseException:
+        os.close(fd);raise
+
+def cost_rows():
+    fd=cost_open('data',os.O_RDONLY)
+    try:raw=os.read(fd,4097)
+    finally:os.close(fd)
+    rows=[json.loads(line) for line in raw.splitlines()]
+    if len(raw)>4096 or len(rows)>3 or any(len(line)+1>1024 for line in raw.splitlines()):raise ValueError('cost rows')
+    if len({row['sample'] for row in rows})!=len(rows):raise ValueError('duplicate cost')
+    import math
+    for row in rows:
+        if row['sample'] not in {'protected-0-frontend','protected-0-observer','terminal-normal'}:raise ValueError('cost case')
+        for name in ('source_sha256','reader_sha256','copy_sha256','argv_sha256'):
+            value=row[name]
+            if type(value) is not str or len(value)!=64 or any(c not in '0123456789abcdef' for c in value):raise ValueError('cost binding')
+        if type(row['completed']) is not bool:raise ValueError('cost completion')
+        points=row['phases']
+        if points!='GAP' and (type(points) is not list or len(points)!=5 or
+            not all(type(v) in (int,float) and math.isfinite(v) for v in points) or points[0]!=0 or
+            not all(a<=b for a,b in zip(points,points[1:]))):raise ValueError('cost phases')
+        if row['completed'] and (points=='GAP' or row.get('outcome')!='normal'):raise ValueError('cost incomplete')
+    return rows
+
+def cost_put(row):
+    rows=cost_rows()
+    if row['sample'] not in {'protected-0-frontend','protected-0-observer','terminal-normal'}:raise ValueError('cost sample')
+    rows=[old for old in rows if old['sample']!=row['sample']]+[row]
+    lines=[json.dumps(old,separators=(',',':'),ensure_ascii=True).encode()+b'\n' for old in rows]
+    raw=b''.join(lines)
+    if len(rows)>3 or any(len(line)>1024 for line in lines) or len(raw)>4096:raise ValueError('cost encoded cap')
+    fd=cost_open('data',os.O_WRONLY)
+    try:
+        os.ftruncate(fd,0)
+        if os.write(fd,raw)!=len(raw):raise OSError('cost write')
+    finally:os.close(fd)
+
+def cost_bind(sample,source,reader,copy,argv):
+    cost_put({'sample':sample,'source_sha256':source,'reader_sha256':reader,
+        'copy_sha256':copy,'argv_sha256':argv,'completed':False,'phases':'GAP'})
+
+def cost_finish(sample,points,normal):
+    import math
+    row=next(row for row in cost_rows() if row['sample']==sample)
+    valid=len(points)==5 and all(type(value) in (int,float) and math.isfinite(value) for value in points)
+    valid=valid and all(a<=b for a,b in zip(points,points[1:]))
+    row.update(completed=bool(valid and normal),phases=[value-points[0] for value in points] if valid else 'GAP',
+        outcome='normal' if normal else 'unwind-or-incomplete')
+    cost_put(row)
+
+def cost_qualify():
+    rows=cost_rows()
+    if {row['sample'] for row in rows}!={'protected-0-frontend','protected-0-observer','terminal-normal'}:return
+    if not all(row['completed'] for row in rows):return
+    fd=cost_open('eligible',os.O_WRONLY)
+    try:
+        if os.write(fd,b'1')!=1:raise OSError('cost eligibility')
+    finally:os.close(fd)
+
+def cost_export():
+    try:
+        fd=cost_open('eligible',os.O_RDONLY)
+        try:eligible=os.read(fd,2)
+        finally:os.close(fd)
+        if eligible!=b'1':return
+        rows=cost_rows()
+        if len(rows)!=3 or not all(row['completed'] for row in rows):return
+        raw=b''.join(json.dumps(row,separators=(',',':'),ensure_ascii=True).encode()+b'\n' for row in rows)
+        if len(raw)<=4096:sys.stderr.buffer.write(raw)
+    except BaseException:pass
+
+def cost_frontend(source,sample,helper):
+    import shlex
+    entry="scope_cost_points=($SECONDS GAP GAP GAP GAP)\nscope_cost_done=false\nscope_cost_wait=false\n"
+    launch='/usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C LANG=C YSTACK_SCOPE_JQ="$jq_bin"'
+    wait='wait "$reader_pid" || reader_status=$?\n'
+    cleanup='cleanup() { finish_reader; exec 8<&-; /bin/rm -rf -- "$scratch" >/dev/null 2>&1 || :; }'
+    assert source.count(launch)==source.count(wait)==source.count(cleanup)==1
+    logger='''cleanup() {
+  local scope_cost_status
+  scope_cost_points[3]=$SECONDS
+  scope_cost_original_cleanup
+  scope_cost_status=$?
+  scope_cost_points[4]=$SECONDS
+  if [ "$scope_cost_done" = false ]; then
+    scope_cost_done=true
+    python3 -I -S -B - HELPER SAMPLE "$scope_cost_wait" "${scope_cost_points[@]}" <<'PY_FIXED_COST_FINISH' >/dev/null 2>&1 || :
+import runpy,sys
+m=runpy.run_path(sys.argv[1])
+points=[int(value) if value.isdecimal() else None for value in sys.argv[4:]]
+m['cost_finish'](sys.argv[2],points,sys.argv[3]=='true')
+PY_FIXED_COST_FINISH
+  fi
+  return "$scope_cost_status"
+}'''
+    logger=logger.replace('HELPER',shlex.quote(str(helper))).replace('SAMPLE',shlex.quote(sample))
+    source=source.replace('umask 077\n','umask 077\n'+entry,1)
+    source=source.replace(launch,'scope_cost_points[1]=$SECONDS\n'+launch,1)
+    source=source.replace(wait,wait+'scope_cost_points[2]=$SECONDS\n[ "$reader_status" -ne 0 ] || scope_cost_wait=true\n',1)
+    return source.replace(cleanup,cleanup.replace('cleanup()', 'scope_cost_original_cleanup()')+'\n'+logger,1)
+
 FIELDS=('dev','ino','type','uid','gid','mode','nlink','size','mtime_ns','ctime_ns')
 def state(value):
     return dict(zip(FIELDS,(value.st_dev,value.st_ino,stat.S_IFMT(value.st_mode),
@@ -884,6 +1004,9 @@ def observe(original,log,case,phase,argv,index):
     events={}
     sources={str(original),str(original.parents[2]/'shadow/v1/_consumer.py')}
     started=time.monotonic()
+    cost_selected=index==0 and case=='.github/workflows/ci.yml'
+    cost_points=[started,None,None,None,None]
+    cost_normal=False
     source_lines={}
     source_codes={}
     def code_tree(code):
@@ -1003,12 +1126,21 @@ def observe(original,log,case,phase,argv,index):
     previous=sys.gettrace()
     try:
         sys.argv=argv
+        cost_points[1]=time.monotonic() if cost_selected else None
         try:sys.settrace(dispatch)
         except BaseException as error:gap='trace-install:'+type(error).__name__
-        runpy.run_path(str(original),run_name='__main__')
+        cost_points[2]=time.monotonic() if cost_selected else None
+        try:
+            runpy.run_path(str(original),run_name='__main__')
+            cost_normal=True
+        finally:cost_points[3]=time.monotonic() if cost_selected else None
     finally:
         try:sys.settrace(previous)
         except BaseException as error:gap='trace-restore:'+type(error).__name__
+        cost_points[4]=time.monotonic() if cost_selected else None
+        if index==0 and case=='.github/workflows/ci.yml':
+            try:cost_finish('protected-0-observer',cost_points,cost_normal and gap is None)
+            except BaseException:pass
         try:
             if descriptor is not None:
                 payload=record or {'status':'OBSERVER_GAP','reason':'no original HeldPath E_STALE captured','case':case,'phase':phase}
@@ -1035,7 +1167,20 @@ def observe(original,log,case,phase,argv,index):
                 except BaseException:pass
 """
 
+cost={}
+for name,leaf,raw in [('data','same-call-cost.data',b''),('eligible','same-call-cost.eligible',b'0')]:
+    path=area/leaf
+    fd=__import__('os').open(path,__import__('os').O_CREAT|__import__('os').O_EXCL|__import__('os').O_WRONLY,0o600)
+    try:
+        assert __import__('os').write(fd,raw)==len(raw)
+        value=__import__('os').fstat(fd)
+        cost[name]=(str(path),(value.st_dev,value.st_ino,__import__('stat').S_IFMT(value.st_mode),value.st_uid,
+            __import__('stat').S_IMODE(value.st_mode),value.st_nlink))
+    finally:__import__('os').close(fd)
+observer_source+='\nCOST='+repr(cost)+'\n'
 observer=area/'observer.py';observer.write_text(observer_source)
+cost_functions={};exec(compile(observer_source,str(observer),'exec'),cost_functions)
+
 front=(root/'scope/v1/evaluate-scope.sh').read_text()
 reader=root/'scope/v1/read-shadow-evidence.py'
 cases=['.github/workflows/ci.yml', 'config/models.conf', 'AGENTS.md', 'control/v1/validate.sh', 'src/migrations/001.sql', 'app/auth/login.ts', 'docs/*/page.md', 'secrets/token.txt']
@@ -1114,6 +1259,7 @@ for index,case in enumerate(cases+['evaluation-reasons']):
     copy=copy.replace('trap cleanup EXIT',exit_capture.rstrip(),1)
     assert copy.count('7>&- 8>&- &')==1
     copy=copy.replace('7>&- 8>&- &','7>&- 8>&- 19>&- &',1)
+    if index==0:copy=cost_functions['cost_frontend'](copy,'protected-0-frontend',observer)
     frontend=area/(str(index)+'.sh');frontend.write_text(copy);frontend.chmod(0o500)
     original_lines=front.splitlines();copied_lines=copy.splitlines();mapping={}
     for match in difflib.SequenceMatcher(a=original_lines,b=copied_lines,autojunk=False).get_matching_blocks():
@@ -1132,6 +1278,281 @@ for index,case in enumerate(cases+['evaluation-reasons']):
     (area/(str(index)+'.lines.json')).write_bytes(raw)
 
 PY_STALE_PREPARE
+python3 -I -S -B - "$root" "$tmp/same-call-owned-controls" "${BASH_SOURCE[0]}" <<'PY_SAME_CALL_OWNED_CONTROLS'
+import ast,hashlib,json,os,pathlib,runpy,signal,stat,subprocess,sys,time
+root,area=map(pathlib.Path,sys.argv[1:3]);source=pathlib.Path(sys.argv[3]).read_text()
+area.mkdir()
+prepare=source.split("<<'PY_STALE_PREPARE'",1)[1].split('\n',1)[1].split('\nPY_STALE_PREPARE\n',1)[0]
+observer=ast.literal_eval(next(node.value for node in ast.parse(prepare).body
+    if isinstance(node,ast.Assign) and any(isinstance(target,ast.Name) and target.id=='observer_source' for target in node.targets)))
+front=(root/'scope/v1/evaluate-scope.sh').read_text();reports=[];actual={};execution=0;dependencies=[]
+def freeze(paths):
+    global execution
+    execution+=1
+    snapshot=area/('preexec-'+str(execution));snapshot.mkdir()
+    rows=[]
+    for number,path in enumerate(paths):
+        path=pathlib.Path(path)
+        saved=str(number)+'-'+path.name
+        raw=path.read_bytes();(snapshot/saved).write_bytes(raw)
+        rows.append({'path':str(path),'snapshot':saved,'sha256':hashlib.sha256(raw).hexdigest(),'bytes':len(raw)})
+    (snapshot/'binding.json').write_text(json.dumps(rows,sort_keys=True)+'\n')
+def run(argv):
+    child=None
+    freeze(list(dict.fromkeys(dependencies+[pathlib.Path(arg) for arg in argv if str(arg).startswith(str(area)) and pathlib.Path(arg).suffix in ('.py','.sh')])))
+    try:
+        child=subprocess.Popen(argv,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        stdout,stderr=child.communicate(timeout=4)
+        return child.returncode,stdout,stderr
+    finally:
+        if child is not None:
+            try:
+                if child.poll() is None:child.kill()
+                child.wait(timeout=2)
+            finally:
+                try:child.stdout.close()
+                finally:child.stderr.close()
+
+def fixture(name):
+    base=area/name;base.mkdir();config={}
+    for key,raw in [('data',b''),('eligible',b'0')]:
+        path=base/key;fd=os.open(path,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600)
+        try:
+            assert os.write(fd,raw)==len(raw)
+            value=os.fstat(fd);config[key]=(str(path),(value.st_dev,value.st_ino,
+                stat.S_IFMT(value.st_mode),value.st_uid,stat.S_IMODE(value.st_mode),value.st_nlink))
+        finally:os.close(fd)
+    helper=base/'observer.py';helper.write_text(observer+'\nCOST='+repr(config)+'\n')
+    dependencies.append(helper)
+    freeze([helper])
+    module=runpy.run_path(str(helper))
+    for sample in ['protected-0-frontend','protected-0-observer','terminal-normal']:
+        module['cost_bind'](sample,*['0'*64]*4)
+    return base,helper,module
+
+for name,exit_status,success_path in [('success',0,True),('exit-error',1,False),('reader-nonzero',7,False),('missing-wait',1,False)]:
+    base,helper,module=fixture(name)
+    composed=module['cost_frontend'](front,'protected-0-frontend',helper)
+    tree=ast.parse(observer);function=next(node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=='cost_frontend')
+    assert composed.count('scope_cost_points[3]=$SECONDS')==composed.count('scope_cost_points[4]=$SECONDS')==1
+    a=composed.index('scope_cost_original_cleanup()');b=composed.index('signal_exit()',a)
+    cleanup=composed[a:b]
+    cleanup=cleanup.replace('scope_cost_original_cleanup() { finish_reader; exec 8<&-; /bin/rm -rf -- "$scratch" >/dev/null 2>&1 || :; }',
+        'scope_cost_original_cleanup() { /usr/bin/printf x >>"$calls"; }')
+    script='set -uo pipefail\ncalls='+repr(str(base/'calls'))+'\nscope_cost_points=($SECONDS GAP GAP GAP GAP)\nscope_cost_done=false\nscope_cost_wait=false\n'+cleanup
+    script+='trap cleanup EXIT\n'
+    if name!='missing-wait':
+        script+='scope_cost_points[1]=$SECONDS\n/bin/bash -c "exit '+str(exit_status)+'" &\nreader_pid=$!\nreader_status=0\n'
+        script+='wait "$reader_pid" || reader_status=$?\nscope_cost_points[2]=$SECONDS\n[ "$reader_status" -ne 0 ] || scope_cost_wait=true\n'
+    script+=('trap - EXIT\ncleanup\n' if success_path else 'exit '+str(exit_status)+'\n')
+    path=base/'copy.sh';path.write_text(script)
+    module['cost_bind']('protected-0-frontend',hashlib.sha256(front.encode()).hexdigest(),
+        hashlib.sha256(b'fixed ordinary child').hexdigest(),hashlib.sha256(script.encode()).hexdigest(),
+        hashlib.sha256(json.dumps(['/bin/bash',str(path)]).encode()).hexdigest())
+    rc,out,err=run(['/bin/bash',str(path)])
+    actual[name]=(base,helper,module,script)
+    assert rc==exit_status and not out and not err,(name,rc,out,err)
+    assert (base/'calls').read_bytes()==b'x'
+    row=next(row for row in module['cost_rows']() if row['sample']=='protected-0-frontend')
+    assert row['completed']==success_path,(name,row)
+    assert (row['phases']=='GAP')==(name=='missing-wait')
+    reports.append({'case':name,'actual_exit':rc,'cleanup_calls':1,'record':row})
+
+base,helper,module,script=actual['success']
+terminal_script=script.replace('protected-0-frontend','terminal-normal')
+path=base/'terminal-normal.sh';path.write_text(terminal_script)
+module['cost_bind']('terminal-normal',hashlib.sha256(front.encode()).hexdigest(),
+    hashlib.sha256(b'fixed ordinary child').hexdigest(),hashlib.sha256(terminal_script.encode()).hexdigest(),
+    hashlib.sha256(json.dumps(['/bin/bash',str(path)]).encode()).hexdigest())
+assert run(['/bin/bash',str(path)])==(0,b'',b'')
+package=base/'package';(package/'scope/v1').mkdir(parents=True);(package/'shadow/v1').mkdir(parents=True)
+program=package/'scope/v1/read-shadow-evidence.py';program.write_text('value=True\n')
+(package/'shadow/v1/_consumer.py').write_text('value=True\n')
+log=base/'observer.jsonl';log.touch(mode=0o600)
+module['cost_bind']('protected-0-observer',hashlib.sha256(program.read_bytes()).hexdigest(),
+    hashlib.sha256((package/'shadow/v1/_consumer.py').read_bytes()).hexdigest(),
+    hashlib.sha256(helper.read_bytes()).hexdigest(),hashlib.sha256(json.dumps([str(program)]).encode()).hexdigest())
+freeze([helper,program,package/'shadow/v1/_consumer.py'])
+module['observe'](program,str(log),'.github/workflows/ci.yml','reader',[str(program)],0)
+assert next(row for row in module['cost_rows']() if row['sample']=='protected-0-observer')['completed']
+module['cost_qualify']();assert (base/'eligible').read_bytes()==b'1'
+outer=source[source.index('  if [ "$cleanup_status" -eq 0 ] && [ "$prior" -eq 142 ]'):]
+outer=outer[:outer.index('  if [ "$cleanup_status" -eq 0 ]; then')]
+outer=outer.replace('"$tmp/stale-observation/observer.py"',repr(str(helper)))
+script='scope_fixture_signal=ALRM\ncleanup_status=0\nprior=142\n'+outer
+script+='/usr/bin/printf DELETED\n'
+path=base/'outer.sh';path.write_text(script)
+rc,out,err=run(['/bin/bash',str(path)])
+assert rc==0 and out==b'DELETED' and len(err)<=4096 and len(err.splitlines())==3
+for eligible in [b'0',b'',b'x']:
+    (base/'eligible').write_bytes(eligible)
+    assert run(['/bin/bash',str(path)])[2]==b''
+(base/'eligible').write_bytes(b'1')
+for replacement in [('prior=142','prior=1'),('scope_fixture_signal=ALRM','scope_fixture_signal=TERM'),('cleanup_status=0','cleanup_status=1')]:
+    path.write_text(script.replace(*replacement));assert run(['/bin/bash',str(path)])[2]==b''
+program.write_text('raise ValueError("owned unwind")\n')
+freeze([helper,program,package/'shadow/v1/_consumer.py'])
+try:module['observe'](program,str(log),'.github/workflows/ci.yml','reader',[str(program)],0)
+except ValueError as error:assert str(error)=='owned unwind'
+else:raise AssertionError('observer swallowed original unwind')
+assert not next(row for row in module['cost_rows']() if row['sample']=='protected-0-observer')['completed']
+path.write_text(script);assert run(['/bin/bash',str(path)])[2]==b''
+program.write_text('value=True\n')
+freeze([helper,program,package/'shadow/v1/_consumer.py'])
+module['observe'](program,str(log),'.github/workflows/ci.yml','reader',[str(program)],0)
+# The original shell cleanup and a real ALRM prove ordering, not a fabricated status.
+outer_cleanup=source[source.index('scope_owner_state=never'):source.index('platform=$(/usr/bin/uname')]
+outer_cleanup=outer_cleanup.replace('"$tmp/stale-observation/observer.py"',repr(str(helper)))
+outer_tmp=base/'outer-tmp';outer_tmp.mkdir()
+body='tmp='+repr(str(outer_tmp))+'\n'+outer_cleanup+'\n/bin/sleep 2\n'
+alarm_script=base/'alarm.sh';alarm_script.write_text(body)
+rc,out,err=run(['/usr/bin/perl','-e','alarm 1;exec @ARGV;die $!','/bin/bash',str(alarm_script)])
+assert rc in (-signal.SIGALRM,142) and b'fixture-cleanup: PASS prior-exit=142' in out
+assert len(err.splitlines())==3 and len(err)<=4096 and not outer_tmp.exists(),(rc,out,err)
+reports.append({'case':'real-ALRM-after-qualification','actual_exit':rc,'before_delete_records':3,'outer_removed_after_original_gates':True})
+completed_rows=module['cost_rows']()
+module['cost_finish']('protected-0-observer',[1,None,3,4,5],False)
+path.write_text(script);assert run(['/bin/bash',str(path)])[2]==b''
+try:module['cost_put']({'sample':'terminal-normal','payload':'x'*1024})
+except ValueError:pass
+else:raise AssertionError('cost cap accepted')
+reports.append({'case':'eligibility-and-caps','wrong_eligibility':3,'wrong_cleanup_context':3,'incomplete_record_suppresses':True})
+
+# Original parser, real wait/EOF and original first snapshot, with ordinary data only.
+a=front.index('commit=$(');b=front.index('terminal_status=0',a);admission=front[a:b]
+a=front.index('/usr/bin/perl -e',b);b=front.index('\nPY_TERMINAL_SNAPSHOT',a)+len('\nPY_TERMINAL_SNAPSHOT');snapshot=front[a:b]
+raw=b'{"owned":true}\n';digest=hashlib.sha256(raw).hexdigest()
+for extra in [0,1]:
+    base=area/('size-'+str(extra));base.mkdir();(base/'observation').mkdir()
+    (base/'observation/terminal.json').write_bytes(raw);(base/'terminal.json').write_bytes(b'')
+    (base/'reader-stderr').write_bytes(b'');os.mkfifo(base/'fifo',0o600)
+    body='set -uo pipefail\nscratch='+repr(str(base))+'\nremaining_time() { /usr/bin/printf 3; }\nemit_error() { /usr/bin/printf "%s\\n" "$1" >&2; exit 1; }\n'
+    frame='COMMIT '+str(len(raw)+extra)+' '+digest+'\n'
+    body+='/usr/bin/printf '+repr(frame)+' >"$scratch/fifo" &\nreader_pid=$!\nexec 8<"$scratch/fifo"\n'+admission
+    body+='terminal_status=0\npython_bin='+repr(sys.executable)+'\n'+snapshot+'\n/usr/bin/printf "actual-wait=%s snapshot=%s\\n" "$reader_status" "$terminal_status"\n'
+    trace_prefix='''import atexit,json,pathlib,sys
+actual_lines=[]
+def actual_trace(frame,event,arg):
+    if event=='exception' and type(arg[1]).__name__=='SnapshotRefusal' and str(arg[1])=='E_RELATION':actual_lines.append(frame.f_lineno)
+    return actual_trace
+atexit.register(lambda:pathlib.Path(TRACE_PATH).write_text(json.dumps(actual_lines)))
+sys.settrace(actual_trace)
+sys._getframe().f_trace=actual_trace
+'''.replace('TRACE_PATH',repr(str(base/'actual-lines.json')))
+    body=body.replace('import hashlib,os,stat,sys\n',trace_prefix+'import hashlib,os,stat,sys\n',1)
+    expected_line=(trace_prefix+snapshot.split("<<'PY_TERMINAL_SNAPSHOT'",1)[1].split('\n',1)[1]).splitlines().index('    require_snapshot(received==maximum and before.st_size==maximum,"E_RELATION")')+1
+    path=base/'admission.sh';path.write_text(body)
+    rc,out,err=run(['/bin/bash',str(path)])
+    assert rc==0 and not err,(rc,out,err)
+    expected=0 if extra==0 else 1
+    assert out==('actual-wait=0 snapshot='+str(expected)+'\n').encode(),out
+    assert (base/'terminal-error').read_bytes()==(b'' if extra==0 else b'E_RELATION\n')
+    assert (base/'terminal.json').read_bytes()==(raw if extra==0 else b'')
+    lines=json.loads((base/'actual-lines.json').read_text())
+    assert (expected_line in lines)==bool(extra),(expected_line,lines)
+    reports.append({'actual_exception_lines':lines,'expected_size_line':expected_line,'case':'actual-N+'+str(extra),'actual_wait':0,'snapshot_status':expected,
+        'frame_size':len(raw)+extra,'regular_size':len(raw),'source_size_predicate':front.splitlines().index('    require_snapshot(received==maximum and before.st_size==maximum,"E_RELATION")')+1})
+opening='"$python_bin" -I -S -B - "$root" "$tmp" "$bin" "${good[@]}" <<'+"'PY_TERMINAL_TEST'"
+lines=source.splitlines(keepends=True)
+starts=[i for i,line in enumerate(lines) if line.rstrip('\n')==opening]
+ends=[i for i,line in enumerate(lines) if line.rstrip('\n')=='PY_TERMINAL_TEST']
+assert len(starts)==len(ends)==1 and starts[0]<ends[0]
+terminal=''.join(lines[starts[0]+1:ends[0]])
+tree=ast.parse(terminal)
+functions=[node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name in {'terminal_failure','run_case'}]
+assert len(functions)==2
+base,terminal_helper,terminal_module=fixture('terminal-first-failure')
+for row in completed_rows:terminal_module['cost_put'](row)
+reader=base/'reader.py';driver=base/'driver.sh';reader.write_text('pass\n');driver.touch()
+namespace=dict(globals(),area=base,reader_path=reader,frontend=driver,reader_source='pass\n',
+    argv=['/bin/bash',str(driver)],environment=dict(os.environ))
+actual_asserts=[node for node in ast.walk(next(node for node in functions if node.name=='run_case')) if isinstance(node,ast.Assert)]
+exit_asserts=[node for node in actual_asserts if node.msg is None and isinstance(node.test,ast.BoolOp)
+    and any(isinstance(value,ast.Attribute) and isinstance(value.value,ast.Name)
+        and value.value.id=='result' and value.attr=='returncode' for value in ast.walk(node.test))]
+assert len(exit_asserts)==1
+exit_assert=exit_asserts[0]
+private_assert=next(node for node in actual_asserts if isinstance(node.msg,ast.BinOp) and isinstance(node.msg.right,ast.Constant) and 'retained snapshot' in str(node.msg.right.value))
+stat_line=next(node.lineno for node in actual_asserts if isinstance(node.msg,ast.BinOp) and isinstance(node.msg.right,ast.Constant) and 'overflow' in str(node.msg.right.value))
+import contextlib,copy,io,types
+def terminal_run(*args,**kwargs):
+    freeze(list(dict.fromkeys(dependencies+[reader,driver])))
+    return subprocess.run(*args,**kwargs)
+attributes={node.attr for node in ast.walk(next(node for node in functions if node.name=='run_case'))
+    if isinstance(node,ast.Attribute) and isinstance(node.value,ast.Name) and node.value.id=='subprocess'}
+assert attributes=={'PIPE','run'}
+namespace['subprocess']=types.SimpleNamespace(run=terminal_run,PIPE=subprocess.PIPE)
+assert set(vars(namespace['subprocess']))==attributes
+success_driver="#!/bin/bash\n/usr/bin/printf '%s\\n' '{\"owned\":true}'\n"
+failed_driver="#!/bin/bash\nif false; then\nwait \"$reader_pid\" || reader_status=$?\nfi\n/usr/bin/printf '%s\\n' E_RELATION >&2\nexit 1\n"
+for fault in ('normal-success','ordinary-unexpected','serialize-error','output-error','facts-read-error','facts-construct-error','original-stat-error'):
+    selected=copy.deepcopy(functions)
+    if fault=='facts-construct-error':
+        helper_node=next(node for node in selected if node.name=='terminal_failure')
+        first=next(node for node in helper_node.body[0].body if isinstance(node,ast.Assign) and isinstance(node.targets[0],ast.Name) and node.targets[0].id=='facts')
+        index=helper_node.body[0].body.index(first)
+        helper_node.body[0].body[index]=ast.copy_location(ast.Raise(exc=ast.Call(func=ast.Name(id='OSError',ctx=ast.Load()),args=[ast.Constant('fixed diagnostic facts fault')],keywords=[]),cause=None),first)
+    selected_tree=ast.fix_missing_locations(ast.Module(body=selected,type_ignores=[]))
+    selected_path=base/(fault+'-extracted.py');selected_path.write_text(ast.unparse(selected_tree)+'\n')
+    selected_ast=base/(fault+'-extracted.ast');selected_ast.write_text(ast.dump(selected_tree,include_attributes=True))
+    freeze([selected_path,selected_ast])
+    exec(compile(selected_tree,'exact-terminal-failure-boundary','exec'),namespace)
+    fd=terminal_module['cost_open']('eligible',os.O_WRONLY)
+    try:assert os.write(fd,b'0')==1
+    finally:os.close(fd)
+    namespace['frontend_source']=success_driver if fault=='normal-success' else ('#!/bin/bash\nexit 2\n' if fault=='ordinary-unexpected' else failed_driver)
+    output=io.BytesIO();sink=io.TextIOWrapper(output,encoding='utf-8',write_through=True)
+    namespace['json']=json
+    if fault=='serialize-error':namespace['json']=types.SimpleNamespace(dumps=lambda *a,**k:(_ for _ in ()).throw(ValueError('fixed JSON fault')))
+    if fault=='output-error':
+        class RefusingBuffer:
+            def write(self,raw):raise OSError('fixed output fault')
+        sink=types.SimpleNamespace(buffer=RefusingBuffer())
+    original_read,original_stat=pathlib.Path.read_bytes,pathlib.Path.stat
+    def reading(path):
+        if path.name=='size-mismatch.same-call':raise OSError('fixed diagnostic read fault')
+        return original_read(path)
+    def stating(path,*args,**kwargs):
+        if path.name=='size-mismatch.terminal-error':raise OSError('fixed original stat fault')
+        return original_stat(path,*args,**kwargs)
+    if fault=='facts-read-error':pathlib.Path.read_bytes=reading
+    if fault=='original-stat-error':pathlib.Path.stat=stating
+    label='owned-success' if fault=='normal-success' else ('owned-unexpected' if fault=='ordinary-unexpected' else 'size-mismatch')
+    expected=None if label!='size-mismatch' else 'E_RELATION'
+    reached_qualification=False;observed=None
+    try:
+        with contextlib.redirect_stderr(sink):
+            namespace['run_case'](label,expected=expected)
+            terminal_module['cost_qualify']()
+            reached_qualification=True
+    except BaseException as error:
+        observed=error
+        if fault=='original-stat-error':
+            assert type(error) is OSError and str(error)=='fixed original stat fault'
+            expected_line=stat_line
+        else:
+            assert type(error) is AssertionError
+            assert str(error)==('' if fault=='ordinary-unexpected' else 'size-mismatch did not reject actual retained snapshot digest'),(fault,str(error))
+            expected_line=exit_assert.lineno if fault=='ordinary-unexpected' else private_assert.lineno
+        frames=[];trace=error.__traceback__
+        while trace:
+            if trace.tb_frame.f_code.co_name=='run_case':frames.append(trace.tb_lineno)
+            trace=trace.tb_next
+        assert frames==[expected_line],(fault,frames,expected_line)
+    finally:pathlib.Path.read_bytes,pathlib.Path.stat=original_read,original_stat
+    if fault=='normal-success':
+        assert observed is None and reached_qualification and output.getvalue()==b''
+    else:assert observed is not None and not reached_qualification
+    assert (base/'eligible').read_bytes()==(b'1' if fault=='normal-success' else b'0')
+    if fault=='ordinary-unexpected':
+        emitted=output.getvalue();row=json.loads(emitted)
+        assert len(emitted)<=16384 and row['returncode']==2 and row['same_call']['normal_wait']=='GAP'
+        assert row['reader_sha256']==hashlib.sha256(b'pass\n').hexdigest()
+        assert row['frontend_sha256']==hashlib.sha256(b'#!/bin/bash\nexit 2\n').hexdigest()
+    reports.append({'case':fault,'original_exit_exact':observed is not None,'qualification_reached':reached_qualification,
+        'original_assert_line':None if observed is None else expected_line})
+print(json.dumps({'same_call_owned_controls':reports},sort_keys=True),flush=True)
+PY_SAME_CALL_OWNED_CONTROLS
 run_evaluator() {
   if [ "$#" -eq 7 ]; then
     PATH="$bin:/usr/bin:/bin" "$evaluator" evaluate "$@" "$tmp/legacy-bundles" "$tmp/legacy-source.git"
@@ -1248,6 +1669,12 @@ try:
         assert identity(os.stat(path, follow_symlinks=False)) == identity(after)
 finally:
     os.close(fd)
+if index==0 and binding['status']=='CASE_BINDING':
+    import runpy
+    module=runpy.run_path(str(area/'observer.py'))
+    for sample in ('protected-0-frontend','protected-0-observer'):
+        module['cost_bind'](sample,binding['source'][0]['sha256'],binding['source'][1]['sha256'],
+            binding['private_frontend']['sha256'],binding['command_sha256'])
 if index == 8 and binding['status'] != 'CASE_BINDING':
     raise SystemExit(1)
 PY_PROTECTED_BINDING
@@ -1327,7 +1754,7 @@ def heredoc(tag):
 prepare=heredoc('PY_STALE_PREPARE')
 functions=source[source.index('run_evaluator() {'):source.index('\nexpect_reasons() {')]
 functions=functions[:functions.index('\nexpect_validator_error() {')]+functions[functions.index('\nprepare_stale_binding() {'):]
-expected={'observer_source':'bc86cecd63feb9813f62af75bd7921e2ffd5624c0a263914f12ad4cb40c3e8ed',
+expected={'observer_source':'7a7931df84892f2b30cdf412b01757a085e5752211f3e019aed6ae7c501d1e02',
  'frontend_capture':'a21a722a59923fa6ad18f6f6dd26385d46dcd5a3733083f9d7625777d73c4af8',
  'emit_capture':'153556128c04167c2a73d6c91c86b37bd3e1d34eb35fdeea44e865803301afb4',
  'exit_capture':'95bc34214161aa79167d7f33e8cf4980d70177f7771fa5bf30672e8f0e1739ac'}
@@ -1343,7 +1770,7 @@ with tempfile.TemporaryDirectory(prefix='ystack-boundary-owned-') as temporary:
     finally:sys.argv=prior
     for suffix in ('.jsonl','.binding.json','.sh','.py','.lines.json'):
         assert len(list(area.glob('*'+suffix)))==(10 if suffix=='.py' else 9)
-    assert len(list(area.iterdir()))==46
+    assert len(list(area.iterdir()))==48
     mapping=json.loads((area/'8.lines.json').read_bytes())
     front=(root/'scope/v1/evaluate-scope.sh').read_text().splitlines()
     copied=(area/'8.sh').read_text().splitlines()
@@ -1410,7 +1837,7 @@ with tempfile.TemporaryDirectory(prefix='ystack-boundary-owned-') as temporary:
             value=os.lstat(area/'8.jsonl');pinned['slot_identity']['log']=[value.st_dev,value.st_ino,value.st_mode,value.st_uid,value.st_gid,value.st_nlink]
             (area/'8.lines.json').write_text(json.dumps(pinned))
         if fault=='binding-failure':(tmp/'missing-input.json').rename(docs[0])
-        assert len(list(area.iterdir()))==46
+        assert len(list(area.iterdir()))==48
         reports.append({'case':fault,'original_nonzero_and_stderr_preserved':True,'old_evidence_not_read_or_exported':True,'export_invocations':len(added)-1})
 print(json.dumps({'cases':reports,'four_body_sha256':expected,'scope':'Exact preparation/binding/evaluation_reasons/run_evaluator bytes; fixed ordinary frontend/jq output adapters only. No actual evaluator, reader, jq, supplied P, genuine fixture or historical cause proof.'},sort_keys=True))
 PY_STALE_CONTROLS
@@ -1429,7 +1856,16 @@ def literal(code,name):
                 and isinstance(n.targets[0],ast.Name) and n.targets[0].id==name)
 prepare=heredoc('PY_STALE_PREPARE');observer=literal(prepare,'observer_source')
 guard=heredoc('PY_GUARD_CONTROLS');wrapper=literal(guard,'wrapper_prefix');channel=heredoc('PY_FIXTURE_OWNER_CHANNEL')
-old=observer.replace('sys,time,types','sys,time',1)
+timeless=observer[observer.index("FIELDS="):]
+timeless=timeless.replace("    cost_selected=index==0 and case=='.github/workflows/ci.yml'\n",'')
+timeless=timeless.replace('    cost_points=[started,None,None,None,None]\n    cost_normal=False\n','')
+timeless=timeless.replace('        cost_points[1]=time.monotonic() if cost_selected else None\n','')
+a=timeless.index('        cost_points[2]=time.monotonic() if cost_selected else None\n');b=timeless.index('    finally:\n        try:sys.settrace(previous)',a)
+timeless=timeless[:a]+"        runpy.run_path(str(original),run_name='__main__')\n"+timeless[b:]
+a=timeless.index('        cost_points[4]=time.monotonic() if cost_selected else None\n');b=timeless.index('        try:\n            if descriptor is not None:',a)
+timeless=timeless[:a]+timeless[b:]
+timeless='import hashlib,json,os,runpy,stat,sys,time,types\n'+timeless
+old=timeless.replace('sys,time,types','sys,time',1)
 a=old.index('    source_lines={}\n');b=old.index('    try:\n        before=os.lstat(log)',a);old=old[:a]+old[b:]
 a=old.index('    def dispatch(frame,event,arg):\n');b=old.index('    previous=sys.gettrace()\n',a);old=old[:a]+old[b:]
 old=old.replace("return (frame.f_code.co_filename in source_codes and\n                frame.f_code in source_codes[frame.f_code.co_filename])","return frame.f_code.co_filename in sources").replace('sys.settrace(dispatch)','sys.settrace(trace)')
@@ -3142,17 +3578,60 @@ boundary="/usr/bin/perl -e 'alarm shift; exec @ARGV; die \"exec failed: $!\\n\"'
 assert frontend_source.count(boundary)==1
 captures=area/'captures';captures.mkdir()
 for name in ('original.json','terminal.json','baseline-original.json'):(captures/name).write_bytes(b'')
+cost_module=runpy.run_path(str(tmp/'stale-observation/observer.py'))
+def terminal_failure(label,result,private_error,reader_bytes,driver_bytes,facts_path,reader_error_path,expected):
+    try:
+        private_raw=private_error.read_bytes()
+        unexpected=(len(private_raw)>65536 or (not(result.returncode==0 and result.stdout and not result.stderr)
+            if expected is None else not(result.returncode!=0 and not result.stdout and result.stderr==expected.encode()+b'\n')))
+        if label in {'size-mismatch','deleted-suffix','shape-valid-suffix'} and private_raw!=b'E_RELATION\n':unexpected=True
+        facts={'normal_wait':'GAP','COMMIT':'GAP','reader_stderr':'GAP'}
+        if label=='size-mismatch':
+            raw=facts_path.read_bytes()
+            if raw:
+                lines=raw.decode('ascii','replace').splitlines()
+                if len(lines)==2:facts.update(COMMIT=lines[0],normal_wait={'completed':True,'status':lines[1]})
+            error_raw=reader_error_path.read_bytes()
+            facts['reader_stderr']={'bytes':len(error_raw),'sha256':hashlib.sha256(error_raw).hexdigest(),
+                'prefix':error_raw[:768].decode('utf-8','backslashreplace'),'truncated':len(error_raw)>768}
+        if not unexpected:return
+        def retained(raw):
+            return {'bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest(),
+                'prefix':raw[:256].decode('utf-8','backslashreplace'),'truncated':len(raw)>256}
+        payload={'status':'TERMINAL_UNEXPECTED','case':label,'returncode':result.returncode,
+            'reader_sha256':hashlib.sha256(reader_bytes.encode()).hexdigest(),
+            'frontend_sha256':hashlib.sha256(driver_bytes.encode()).hexdigest(),
+            'stdout':retained(result.stdout),'stderr':retained(result.stderr),
+            'private_error':retained(private_raw),'same_call':facts}
+        raw=json.dumps(payload,separators=(',',':'),ensure_ascii=True).encode()+b'\n'
+        if len(raw)<=16384:sys.stderr.buffer.write(raw)
+    except BaseException:pass
+
 def run_case(label,reader_change=None,driver_change=None,expected=None,timeout=35):
     private_error=area/(label+'.terminal-error');private_error.write_bytes(b'')
     reader_bytes=reader_change or reader_source;driver_bytes=driver_change or frontend_source
     error_capture='emit_error() {\n  if [ -n "${scratch:-}" ] && [ -f "$scratch/terminal-error" ]; then\n'+\
         '    /bin/dd if="$scratch/terminal-error" of='+str(private_error)+' bs=65537 count=1 2>/dev/null\n  fi'
     driver_bytes=driver_bytes.replace('emit_error() {',error_capture)
+    facts_path=area/'size-mismatch.same-call'
+    reader_error_path=area/'size-mismatch.reader-stderr'
+    if label=='size-mismatch':facts_path.write_bytes(b'');reader_error_path.write_bytes(b'')
+    if label=='size-mismatch':
+        wait='wait "$reader_pid" || reader_status=$?\n'
+        capture='/usr/bin/printf \'%s\\n\' "$commit" "$reader_status" >'+str(facts_path)+'\n/bin/dd if="$scratch/reader-stderr" of='+str(reader_error_path)+' bs=65537 count=1 2>/dev/null || :\n'
+        assert driver_bytes.count(wait)==1
+        driver_bytes=driver_bytes.replace(wait,wait+capture,1)
+    if label=='normal':
+        driver_bytes=cost_module['cost_frontend'](driver_bytes,'terminal-normal',tmp/'stale-observation/observer.py')
+        cost_module['cost_bind']('terminal-normal',hashlib.sha256(frontend_source.encode()).hexdigest(),
+            hashlib.sha256(reader_bytes.encode()).hexdigest(),hashlib.sha256(driver_bytes.encode()).hexdigest(),
+            hashlib.sha256(json.dumps(argv,separators=(',',':'),ensure_ascii=True).encode()).hexdigest())
     (area/(label+'.reader-source.py')).write_text(reader_bytes)
     (area/(label+'.frontend-source.sh')).write_text(driver_bytes)
     reader_path.write_text(reader_bytes)
     frontend.chmod(0o700);frontend.write_text(driver_bytes);frontend.chmod(0o500)
     result=subprocess.run(argv,env=environment,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=timeout)
+    terminal_failure(label,result,private_error,reader_bytes,driver_bytes,facts_path,reader_error_path,expected)
     assert private_error.stat().st_size<=65536,label+' private stderr overflow'
     (area/(label+'.stdout')).write_bytes(result.stdout);(area/(label+'.stderr')).write_bytes(result.stderr)
     print('terminal control',label,'exit',result.returncode,'stderr',repr(result.stderr),flush=True)
@@ -3306,6 +3785,8 @@ for label,code in (
              driver_change=frontend_source.replace(boundary,inserted+boundary),
              expected='E_RUNTIME' if label=='fifo' else 'E_RELATION')
 print('terminal protocol framing, EOF, nonzero, first-open FIFO and committed-byte tampering PASS',flush=True)
+try:cost_module['cost_qualify']()
+except BaseException:pass
 PY_TERMINAL_TEST
 pass 'terminal append and byte caps are independent; framed commitment binds the first snapshot'
 
