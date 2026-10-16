@@ -50,8 +50,11 @@ Regular file bytes total 131,786,038. Verify all source rows before selection.
 Pin the canonical source manifest SHA-256
 `e0d204e2827885c5f2f4278e709981b7fc1e02424d3bfa5ae2ff2af789789d26`.
 Use source cpio order and JSON with sorted keys, compact separators, ASCII escapes
-and no final newline; map keys are sorted. Derive it through the reviewed bounded
-parser. Each row has path, kind, mode, uid, gid, nlink and size; regular files
+and no final newline; map keys are sorted. Use this same private fixed format for
+the shared guard's selected-subset, supply-mode and runtime-table checks. Keep
+their expected hashes, row selection, fields, order and counts unchanged.
+Derive it through the reviewed bounded parser. Each row has path, kind, mode,
+uid, gid, nlink and size; regular files
 add sha256, and links add link text. Check every row, type, size, digest and target.
 
 Select only paths equal to `Versions/3.15` or starting with `Versions/3.15/`.
@@ -451,7 +454,9 @@ Before publication, check exact-base patch context, the sole manifest entry,
 artifact hash links and allowed paths. Parse YAML with the existing Ruby library.
 Run `/bin/bash -n` on every decoded shell body. Compile all embedded Python
 strings and heredocs without executing them. Check the fixed source/manifest
-digests. Change the shared guard only for the fixed clock contract above.
+digests. Limit shared-guard changes to the fixed clock contract and the three
+fixed manifest encoding checks above. Leave product canonical encoding and its
+ledger/closure uses unchanged; do not strip bytes to make a digest match.
 Keep the 14-line identity entry unchanged, with SHA-256
 `e11560926ec9ab0188cd448a723a9c2eee5bef4064cc3445d7a25cd5e4377229`.
 After implementation, record the actual workflow Git blob and SHA-256
@@ -511,6 +516,13 @@ flags, alternate tools and old-tree paths before dispatch. Keep the same executo
 caps and preflight deadline. Local controls or a local NO_REPRO do not prove real
 supply: the approved Mac job must still authenticate all 4,498 entries and complete
 the original suites and cleanup.
+
+In the existing CI preflight, run pure-data checks of the exact guard row
+construction and fixed manifest encoding against the reviewed selected, supply
+and runtime tables and their unchanged hashes. Require the original consumer's
+LF-terminated encoding to fail these fixed digest checks. Reject changed counts,
+fields or digests. Reuse the existing reader and fixed data within the original
+budget; execute neither P nor sudo, and add no job, diagnostic run or metadata probe.
 
 Use owned fixture controls for unsafe/changed parents, either pre-existing V/T,
 wrong source bytes, extra/missing manifest paths, changed or escaping links,
