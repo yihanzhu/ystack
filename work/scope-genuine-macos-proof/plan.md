@@ -86,6 +86,15 @@ All requests, validation, staging and supply share the original five-minute
 preflight budget. Do not restart its clock. Both source-verification fetch phases
 are closed.
 
+Use the fixed private `time.clock_gettime(time.CLOCK_UPTIME_RAW)` clock for all
+provision timing: phase starts and journal deadlines, budget checks, fetch and
+child waits, cancellation and reap. Carry the original absolute deadline through
+`fixed_phase` to Bash and fresh system Python, and through journal reopening.
+Each original phase keeps its existing start and limit: supply/closure 270 seconds,
+scope 35 minutes and native 50 minutes. Children and reloads receive no new budget.
+Require finite readings and transported deadlines, positive remaining time and
+all original upper bounds. Add no clock choice, fallback, input or time allowance.
+
 Keep the accepted XAR signature/content and official release evidence. Validate
 the exact compressed TOC RSA signature, decompressed TOC hash and all 28 XAR
 entries' archived and extracted checksums before parsing the standard payload. Do not
@@ -360,7 +369,9 @@ recovery fails, without replacing the original failure.
    containers, slices or member kinds fail. Never bypass classification because a
    name ends in `.a` or `.o`, and never treat a loadable image as static data.
 8. Enter the exact P with `-I -S -B` by the existing same-PID entry mechanism.
-   Preserve the shared 120-second entry/guard deadline across this transition.
+   Use the same fixed raw clock in both stages and carry the original shared
+   120-second entry/guard deadline unchanged across this transition. Reject
+   nonfinite, expired or out-of-bound values; do not restart the budget.
    Require actual physical `sys.executable == P`, exact version 3.15.0 and at
    least 3.11, unchanged PID, isolated flags, the fixed prefix/base_prefix and
    original closed startup paths. Never assign `sys.executable` or inject
@@ -370,6 +381,16 @@ recovery fails, without replacing the original failure.
    checks. Repeat full authentication immediately before first privileged P
    execution in the separately planned scope fixture. Preserve real queries,
    child ownership, bounded cancellation, exact reap and failure classification.
+   At the sole `_DarwinChildOwner` construction boundary, preserve its existing
+   local-monotonic API. In authenticated P, require monotonic, non-adjustable
+   `get_clock_info('monotonic')` with the fixed `mach_absolute_time` provider and
+   available raw API. Verify their common seconds, rate and sleep semantics;
+   unavailable or unproven clock contracts fail without fallback.
+   Read local monotonic `m` before raw `u`. Set `remaining = deadline - u` and
+   pass `m + remaining`, only if all values are finite and remaining is positive
+   and within the original remaining upper bound. This order deducts conversion
+   time; it grants no new budget. Keep raw expiry checks before and after owner
+   use. Do not pass a raw absolute deadline to the owner or change product code.
    Workflow and scope share the same fixed entry/guard bytes, apart from an
    explicitly retained failure-only diagnostic block. No product API changes.
 10. Verify the fixed jq bytes, physical identity and actual `jq-1.6` version.
@@ -425,9 +446,9 @@ Before publication, check exact-base patch context, the sole manifest entry,
 artifact hash links and allowed paths. Parse YAML with the existing Ruby library.
 Run `/bin/bash -n` on every decoded shell body. Compile all embedded Python
 strings and heredocs without executing them. Check the fixed source/manifest
-digests. Keep the shared 480-line guard and entry bytes unchanged: SHA-256
-`e6fb867d4cd7e0092fe5cc61050be3286f14279b8541f82d156dbd10f1b065b6`
-and `e11560926ec9ab0188cd448a723a9c2eee5bef4064cc3445d7a25cd5e4377229`.
+digests. Change the shared guard only for the fixed clock contract above.
+Keep the 14-line identity entry unchanged, with SHA-256
+`e11560926ec9ab0188cd448a723a9c2eee5bef4064cc3445d7a25cd5e4377229`.
 After implementation, record the actual workflow Git blob and SHA-256
 and the extracted shared entry/guard SHA-256s against the exact candidate head/base.
 The separate publication reviewer reads those exact bytes and full validation
@@ -462,6 +483,19 @@ is used, the actual approved Mac job must reopen its published journals in the
 separate cleanup step, clean V/T and verify restoration after the full suites.
 A same-process simulation cannot replace that proof. The normal safe-parent path
 still requires the original actual proof with no permission changes.
+
+In the existing private owned-data boundary, run the real `fixed_phase` to Bash
+and fresh system Python `--supply` chain. For the positive, the parent must create
+and publish the exact 270-second deadline and the child must load it normally.
+Test real delayed expiry with only a fixed short test-duration constant at the
+same clock/budget/entry boundary and real sleep. Hand-filled journal deadlines
+cannot prove success or expiry. Add no production parameter, environment selection
+or runtime entry point.
+Cover real same-PID exec without renewal, nonfinite/invalid deadlines, clock-contract
+refusal and conservative owner conversion. Assert original failure preservation,
+actual wait/reap and that fresh recovery cannot bypass quiescence. These controls
+execute neither supplied P nor sudo and do not prove P's clock contract; the actual
+approved Mac job and both complete suites still establish that contract and transition.
 
 Use owned fixture controls for unsafe/changed parents, either pre-existing V/T,
 wrong source bytes, extra/missing manifest paths, changed or escaping links,
