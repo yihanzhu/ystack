@@ -1,5 +1,5 @@
 ---
-intent-blob: 77d6e5bae9e8b6a846bb543096756c2723ca54e5
+intent-blob: 336c520dcdc7dacb6bbf3b52d34ab07f12b50f0d
 risk: high
 drafted: 2026-10-15
 ---
@@ -11,7 +11,8 @@ drafted: 2026-10-15
 1. Provide the manual proof environment for #541 under the
    [directly approved conditional supply](https://github.com/yihanzhu/ystack/issues/559#issuecomment-6180555883)
    and [existing-parent supplement](https://github.com/yihanzhu/ystack/issues/559#issuecomment-6189713897),
-   with the [approved 3.15 supplement and accepted source review](https://github.com/yihanzhu/ystack/issues/559#issuecomment-6203606687).
+   with the [approved 3.15 supplement and accepted source review](https://github.com/yihanzhu/ystack/issues/559#issuecomment-6203606687)
+   and [fixed Versions-mode supplement](https://github.com/yihanzhu/ystack/issues/559#issuecomment-6205434290).
    Preserve the product and its acceptance standard. This implementation changes
    only `.github/workflows/scope-genuine-macos.yml` and its entry in
    `ci/required-files.txt`. The separately accepted high-risk plan fixes all
@@ -23,6 +24,7 @@ drafted: 2026-10-15
    | Existing-parent supplement | `d811e67bf53b8bcbd0417d5db686c297adbe325c47de3ab048d92bdfeead4880` |
    | Fixed 3.15 supplement | `6cbb39e4a5bcc391913e98de09bc95dac7a78e4c7585424777bd149dfdf0fca8` |
    | Accepted 3.15 source review | `22a69d7721afa114fc9780e024c97f9f323318ac854a18794b4ec3be4041340d` |
+   | Fixed Versions-mode supplement | `399d3a10cac7add2bf2e77da613235fac353e7f9473f1d3cdbdff303ad9afa93` |
    | [Python 3.15.0 official macOS pkg](https://www.python.org/ftp/python/3.15.0/python-3.15.0-macos11.pkg) | `7c7e7eca61cbfa5f0c6f80cd594cddbfd492f4e8b3fb87e3d9fa1efebaec43ed` |
    | Decompressed XAR TOC | `72a73d8e5b05959f062df93f21e5829a5aac4526c833dd24cba4941462a29924` |
    | Inner P image | `23a6212221922087dafd5a0e59631efa00b75b5f2e47945ba404c67be2c54c0b` |
@@ -33,7 +35,11 @@ drafted: 2026-10-15
    `refs/heads/ystack/impl/scope-gate-hardening`. Keep the fixed workflow path/ref,
    read-only contents permission, pinned checkout action, disabled persisted
    credentials, serial concurrency and no cancellation of another run. Expose no
-   inputs for source, path, command, provider or credentials.
+   inputs for source, path, command, provider or credentials. The mode supplement
+   covers only already approved #541/#559 and #544 complete Mac proof and original
+   bounded revisions. It adds no rounds, diagnostic runs, dispatches or rerun
+   allowance. #544 needs its own independently accepted closed-ref and authority
+   binding; this workflow keeps its sole #541 ref.
 
 3. Select source from immutable `github.sha`. Before and after execution, require
    lowercase 40-hex source, event and workflow SHAs to agree with checkout HEAD.
@@ -62,13 +68,44 @@ drafted: 2026-10-15
 
    Supply only two entirely absent trees under the existing physical root
    `/Library/Frameworks/Python.framework`: `Versions/3.15` and
-   `ystack-private-tools`. Authenticate that root, its physical Versions directory
-   and every physical ancestor with held NOFOLLOW descriptors, exact named identity,
-   UID 0, non-group/other-writable modes and actual empty ACLs. Unknown ACLs fail.
-   Do not create, chmod, chown or repair an existing parent. Require both targets
-   absent before supply and each absent again before its root is created. Any
-   existing object, including a dangling link, fails. After creation, authenticate
-   its recorded owned identity before each write.
+   `ystack-private-tools`. Authenticate that root and every physical ancestor with
+   held NOFOLLOW descriptors, exact named identity, UID 0, non-group/other-writable
+   modes and actual empty ACLs. Unknown ACLs fail. The sole mode preparation below
+   applies only to `/Library/Frameworks/Python.framework/Versions`, called D.
+   If D passes the original parent checks, keep the original path without mode
+   preparation or restoration. The added write exception requires a physical D
+   with UID 0, exact mode 0775 and actual empty ACL, safe held ancestors and both
+   targets wholly absent. No link, changed identity or other failing owner, mode
+   or ACL is eligible. Do not repair any other parent or old object.
+
+   Before preparation, exclusively create an immutable, bounded mode journal in
+   the original job-owned cache with NOFOLLOW, one link and mode 0600. Record D's
+   dev/ino/uid/gid/full mode/nlink/size/mtime_ns/ctime_ns, safe ancestor identities
+   and empty ACL evidence, original direct child/link sets and exact H/job identity.
+   Fsync it and publish its digest and cache/journal identity to the cleanup step
+   before mutation. Recheck it in the current process. This original record is
+   distinct from the mutable owned-runtime journal; record action results separately.
+   Missing, changed, unauthenticated or non-durable records prohibit mutation.
+
+   Permit only `/usr/bin/sudo -n /bin/chmod 0755 /Library/Frameworks/Python.framework/Versions`
+   and restoration with `/usr/bin/sudo -n /bin/chmod 0775 /Library/Frameworks/Python.framework/Versions`.
+   Each argv may launch at most once per job, including uncertain exits. Persist
+   action state before launch; never retry an uncertain action or reset its count
+   in another process. Both commands count within the original runtime supply
+   and cleanup runner's 256-command pool; a new process grants no extra allowance.
+   Keep all original argument, output and time caps. This pool does not add a new
+   total limit to the original fixtures' separately bounded administrator actions.
+   Recheck held/named identity, ancestors, ACLs and old direct child sets before
+   and after preparation. Only mode and the actual chmod ctime change may differ.
+   After this preparation, require exact 0755 before source fetch, supply, guard
+   or tests. An uncertain or failed action stops them; only authenticated recovery
+   may follow. Keep preparation private to D; do not weaken shared physical or
+   runtime checks.
+
+   After preparation, authenticate D under the original parent rules. Require both
+   targets absent before supply and each absent again before its root is created.
+   Any existing object, including a dangling link, fails. After creation,
+   authenticate its recorded owned identity before each write.
 
    Verify the full 4,502-entry source manifest first. Supply only its 4,496 entries
    at `Versions/3.15` or below, plus the private tools directory and jq: exactly
@@ -91,19 +128,22 @@ drafted: 2026-10-15
 
    Read only bounded direct child names and lstat/link metadata of the existing
    parents to bind their original sets. Before every command, recheck the held
-   parents and recorded sets. Only direct mkdir/rmdir of a fixed new root may change
-   its parent's child set and size, nlink, mtime_ns or ctime_ns. Require the exact
-   child delta and unchanged dev/ino/type/uid/gid/mode/actual ACL before recording
-   the new set and actual fields. Failed or unknown actions cannot justify
-   rebinding. Other ancestors remain unchanged. Never backdate metadata. These checks share
+   parents and recorded sets. Apart from D's two mode/ctime transitions, only direct
+   mkdir/rmdir of a fixed new root may change its parent's child set and size,
+   nlink, mtime_ns or ctime_ns. Require the exact child delta and unchanged
+   dev/ino/type/uid/gid/mode/actual ACL before recording the new set and fields.
+   Failed or unknown tree actions cannot justify rebinding. D's mode journal may
+   support safe restoration after an uncertain chmod, never continued supply.
+   Other ancestors remain unchanged. Never backdate metadata. These checks share
    the original object, depth, output and deadline limits.
 
-   Use only the accepted manifest and bounded mkdir/cp/chmod/rm commands for new
-   owned objects. Runtime supply must not use chown, a privileged shell, package
-   managers, scripts, compilation, binary rewriting or relinking. Preserve the
-   approved fixture `/usr/bin/cc` helper/native builds. Add no compiler, SDK,
-   source or administrator scope. Check copied bytes against the accepted source
-   before execution. Root ownership alone is not provenance.
+   Apart from the two fixed D commands, use only the accepted manifest and bounded
+   mkdir/cp/chmod/rm commands for new owned objects. Runtime supply must not use
+   chown, a privileged shell, package managers, scripts, compilation, binary
+   rewriting or relinking. Preserve the approved fixture `/usr/bin/cc` helper/native
+   builds. Add no compiler, SDK or source scope. Only the fixed D permission adds
+   administrator scope. Check copied bytes against the accepted source before
+   execution. Root ownership alone is not provenance.
 
 5. Bind P to the fixed inner image
    `/Library/Frameworks/Python.framework/Versions/3.15/Resources/Python.app/Contents/MacOS/Python`.
@@ -195,19 +235,54 @@ drafted: 2026-10-15
    extras or changed/unknown identity forbid broader deletion and keep cleanup
    UNKNOWN. Never infer ownership from a path or UID alone.
 
+   On normal exit, failure or cancellation, first prevent later guard/P/suite
+   starts and apply the original cancellation/reap rules to this job's test and
+   runtime children. Unknown or unreaped processes forbid restoration; add no
+   administrator signal command. If mode preparation was entered, both same-process
+   finally and the separate cleanup step must use the authenticated mode journal
+   and durable action state.
+   Retain both through mode cleanup and preserve failure evidence before removing
+   the cache; cache deletion must not discard an unresolved restoration record.
+
    Delete recorded leaves, then empty directories, stopping at the two new roots.
    Never delete an existing parent, old version, Current or root alias. Do not use
    recursive force deletion on either supply tree. Successful cleanup proves both
    absent and the original child sets and stable safety fields preserved. Record the existing
    parents' real metadata after known cleanup; do not claim it all returned to its
-   original values. Timeout, interruption, refusal, suite failure or incomplete
-   cleanup gives no successful proof. An ephemeral host does not prove cleanup.
+   original values. Before restoring D, require both new trees absent, original
+   direct child sets and old Current/versions/aliases preserved, the same held
+   dev/ino/uid/gid/type, actual empty ACL and exact 0755, with only the previously
+   authenticated chmod and child-delta changes. Then attempt the fixed restore
+   once and verify 0775 with all other safety fields intact. Restore permission
+   bits, not the entire original metadata: both chmod operations change ctime.
+   Record actual differences and never backdate them. If preparation did not take
+   effect and the original 0775 state still matches, record no change and do not
+   run restoration chmod.
+
+   A prior failure remains a failure even if restoration succeeds. After cleanup
+   failure, still stop/reap and check restoration conditions. Residual V/T,
+   unknown objects or processes, identity/ACL drift or an untrusted journal forbid
+   the restore write. Leave the hardened 0755 state and fail; do not claim that
+   destruction of the disposable host proves restoration. A failed restore is not
+   retried or reported as success. Preserve its actual observed state and records.
+   Timeout, interruption, refusal, suite failure or incomplete cleanup gives no
+   successful proof. An ephemeral host does not prove cleanup.
 
 8. Accept publication only after exact-base patch/manifest validation, workflow
    and embedded shell/Python static checks, required repository CI and independent
    review. Regression checks cover unsafe or changed parents, existing targets,
    wrong sets, preserved old objects, partial copy/cleanup and required shell
-   predicate failures. Actual Mac proof follows at freshly reviewed H/X. Read complete results
+   predicate failures. Preserve the normal safe-parent path with no mode change.
+   Add CI regression checks for that path and the exact eligible 0775-to-0755
+   preparation and safe 0775 restore; owner/mode/ACL/link/identity refusal; absent,
+   altered or unpublished mode journals; unknown exit, interruption and cancellation;
+   per-job max-once and shared command-budget enforcement; and unsafe-restoration
+   refusal. Use owned test data for negative controls, never extra mutations of D.
+   Verify that neither failure nor a fresh cleanup process permits repeated chmod
+   or renewed testing. When mode preparation is used, the actual Mac job must
+   prove durable journal reopening, runtime cleanup and mode restoration across
+   separate steps; a same-process test is insufficient. Actual Mac proof follows
+   at freshly reviewed H/X. Read complete results
    and cleanup with the same-head complete Linux matrix before #541 G3.
    Publication or source review does not close #541 or establish native/CPU-wall
    qualification. Production identities stay empty.
