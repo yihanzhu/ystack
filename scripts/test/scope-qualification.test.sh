@@ -2944,6 +2944,29 @@ setup_genuine_linux() {
   setup_genuine_paths
 }
 
+genuine_mac_stdin_prelude=$(/bin/cat <<'PY_MAC_STDIN_PRELUDE'
+import sys
+stdin_entry = sys.modules['__main__']
+stdin_namespace = globals()
+import pathlib
+
+def fixed_stdin_module_paths():
+    assert sys.modules.get('__main__') is stdin_entry
+    assert stdin_entry.__dict__ is stdin_namespace is globals()
+    assert stdin_namespace['__name__'] == '__main__'
+    assert stdin_namespace['__file__'] == '<stdin>' and stdin_namespace['__spec__'] is None
+    assert sys.argv[0] == '-'
+    assert sys.flags.isolated and sys.flags.no_site and sys.flags.dont_write_bytecode
+    modules = tuple(sys.modules.items())
+    assert all(name == '__main__' for name, module in modules if module is stdin_entry)
+    return {pathlib.Path(module.__file__) for name, module in modules
+            if module is not stdin_entry and getattr(module, '__file__', None)}
+
+fixed_stdin_module_paths()
+PY_MAC_STDIN_PRELUDE
+) || fail 'fixed stdin prelude composition'
+readonly genuine_mac_stdin_prelude
+
 setup_genuine_paths() {
   if [ ! -e /usr/local/libexec ] && [ ! -L /usr/local/libexec ]; then
     /usr/bin/sudo -n /bin/mkdir -m 0755 -- /usr/local/libexec || fail 'fixture parent creation'
@@ -2970,10 +2993,11 @@ setup_genuine_paths() {
   for component_dir in scope shadow sandbox core config scripts adapters preparation control enforcement telemetry maintenance evals verifiers; do
     /usr/bin/sudo -n /bin/cp -R -- "$root/$component_dir" "$genuine_base/package/$component_dir" || fail 'fixed package copy'
   done
-  /usr/bin/sudo -n "$genuine_chown" -R 0:0 -- "$genuine_base/package" || fail 'root package ownership'
-  /usr/bin/sudo -n /bin/chmod -R a+rX,go-w -- "$genuine_base/package" || fail 'root package mode'
+  /usr/bin/sudo -n "$genuine_chown" -R -- 0:0 "$genuine_base/package" || fail 'root package ownership'
+  /usr/bin/sudo -n /bin/chmod -R -- a+rX,go-w "$genuine_base/package" || fail 'root package mode'
   if [ "$genuine_platform" = Darwin ]; then
-    /usr/bin/sudo -n "$genuine_python" -I -S -B - "$genuine_base/package" <<'PY_MAC_IMPORT_CLOSURE' || fail 'actual fixed consumer import closure is unsafe'
+    local mac_import_body
+    mac_import_body=$(/bin/cat <<'PY_MAC_IMPORT_CLOSURE'
 import importlib.util,pathlib,stat,sys
 package=pathlib.Path(sys.argv[1])
 source=package/'scope/v1/read-shadow-evidence.py'
@@ -2981,10 +3005,8 @@ spec=importlib.util.spec_from_file_location('scope_fixture_import_closure',sourc
 assert spec is not None and spec.loader is not None
 module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module
 spec.loader.exec_module(module)
-for loaded in sys.modules.values():
- name=getattr(loaded,'__file__',None)
- if not name:continue
- path=pathlib.Path(name)
+paths=fixed_stdin_module_paths()
+for path in paths:
  assert path.resolve()==path and path.is_file()
  for item in (path,*path.parents):
   value=item.lstat()
@@ -2992,11 +3014,14 @@ for loaded in sys.modules.values():
 assert '_cancel_release' not in sys.modules
 print('actual root-owned P/consumer/reader import closure: PASS; no State/startup/VM')
 PY_MAC_IMPORT_CLOSURE
+    ) || fail 'fixed stdin body composition'
+    /usr/bin/sudo -n "$genuine_python" -I -S -B - "$genuine_base/package" <<<"$genuine_mac_stdin_prelude
+$mac_import_body" || fail 'actual fixed consumer import closure is unsafe'
   fi
   prepare_genuine_writer
   /usr/bin/sudo -n /bin/cp -- "$tmp/genuine-writer.py" "$genuine_base/genuine-writer.py" || fail 'fixed storage harness copy'
-  /usr/bin/sudo -n "$genuine_chown" 0:0 -- "$genuine_base/genuine-writer.py" || fail 'storage harness owner'
-  /usr/bin/sudo -n /bin/chmod 0555 -- "$genuine_base/genuine-writer.py" || fail 'storage harness mode'
+  /usr/bin/sudo -n "$genuine_chown" -- 0:0 "$genuine_base/genuine-writer.py" || fail 'storage harness owner'
+  /usr/bin/sudo -n /bin/chmod -- 0555 "$genuine_base/genuine-writer.py" || fail 'storage harness mode'
   /usr/bin/sudo -n -u "$genuine_writer" /usr/bin/id
   /usr/bin/sudo -n -u "$genuine_consumer" /usr/bin/id
 }
@@ -3081,25 +3106,8 @@ setup_genuine_macos() {
     'import os,sys;assert sys.version_info >= (3,11);print(os.path.realpath(sys.executable))') ||
     fail 'existing root Python 3.11+ required'
   [ "$genuine_python" = "$python_bin" ] || fail 'fixture Python differs from selected physical Python'
-  /usr/bin/sudo -n "$genuine_python" -I -S -B - <<'PY_MAC_RUNTIME' || fail 'physical root-owned runtime closure required'
-import sys
-stdin_entry = sys.modules['__main__']
-stdin_namespace = globals()
-import pathlib
-
-def fixed_stdin_module_paths():
-    assert sys.modules.get('__main__') is stdin_entry
-    assert stdin_entry.__dict__ is stdin_namespace is globals()
-    assert stdin_namespace['__name__'] == '__main__'
-    assert stdin_namespace['__file__'] == '<stdin>' and stdin_namespace['__spec__'] is None
-    assert sys.argv[0] == '-'
-    assert sys.flags.isolated and sys.flags.no_site and sys.flags.dont_write_bytecode
-    modules = tuple(sys.modules.items())
-    assert all(name == '__main__' for name, module in modules if module is stdin_entry)
-    return {pathlib.Path(module.__file__) for name, module in modules
-            if module is not stdin_entry and getattr(module, '__file__', None)}
-
-fixed_stdin_module_paths()
+  local mac_runtime_body
+  mac_runtime_body=$(/bin/cat <<'PY_MAC_RUNTIME'
 import os,plistlib,stat,uuid
 paths={pathlib.Path(sys.executable),pathlib.Path('/Library/Frameworks/Python.framework/ystack-private-tools/jq')}
 paths.update(fixed_stdin_module_paths())
@@ -3110,6 +3118,9 @@ for path in paths:
   assert value.st_uid==0 and not value.st_mode & 0o022 and not stat.S_ISLNK(value.st_mode)
 assert pathlib.Path(sys.executable).resolve()==pathlib.Path(sys.executable)
 PY_MAC_RUNTIME
+  ) || fail 'fixed stdin body composition'
+  /usr/bin/sudo -n "$genuine_python" -I -S -B - <<<"$genuine_mac_stdin_prelude
+$mac_runtime_body" || fail 'physical root-owned runtime closure required'
   jq_cache=/Library/Frameworks/Python.framework/ystack-private-tools/jq
   [ "$(sha256_path "$jq_cache")" = "$jq_sha" ] && [ "$("$jq_cache" --version)" = jq-1.6 ] ||
     fail 'existing pinned root jq required'
@@ -5094,15 +5105,15 @@ run_genuine() {
   local script
   for script in genuine-reader.py genuine-assembler.py; do
     /usr/bin/sudo -n /bin/cp -- "$tmp/$script" "$genuine_base/$script" || fail 'fixed fixture source copy'
-    /usr/bin/sudo -n "$genuine_chown" 0:0 -- "$genuine_base/$script" || fail 'fixed fixture source ownership'
-    /usr/bin/sudo -n /bin/chmod 0555 -- "$genuine_base/$script" || fail 'fixed fixture source mode'
+    /usr/bin/sudo -n "$genuine_chown" -- 0:0 "$genuine_base/$script" || fail 'fixed fixture source ownership'
+    /usr/bin/sudo -n /bin/chmod -- 0555 "$genuine_base/$script" || fail 'fixed fixture source mode'
   done
   /usr/bin/sudo -n "$genuine_python" -I -S -B "$genuine_base/genuine-assembler.py" \
     "$genuine_base" "$genuine_writer" "$genuine_consumer" "$genuine_group" "$jq_cache" "$tmp"
   pass 'actual root anchor, distinct storage writer and read-only consumer authenticate one complete bundle'
 }
 
-/usr/bin/python3 -I -S -B - "$root/scripts/test/scope-qualification.test.sh" <<'PY_MAC_STDIN_CONTROLS'
+mac_stdin_controls=$(/bin/cat <<'PY_MAC_STDIN_CONTROLS'
 import ast
 import hashlib
 import importlib.util
@@ -5117,12 +5128,26 @@ import types
 with pathlib.Path(sys.argv[1]).open('rb') as stream:
     source = stream.read(16 * 1024 * 1024 + 1)
 assert len(source) <= 16 * 1024 * 1024
-opening = b"<<'PY_MAC_RUNTIME' || fail 'physical root-owned runtime closure required'\n"
-closing = b'\nPY_MAC_RUNTIME\n'
-assert source.count(opening) == 1
-start = source.index(opening) + len(opening)
-collector = source[start:source.index(closing, start)].decode() + '\n'
-assert hashlib.sha256(collector.encode()).hexdigest() == 'c30fb527aab7ecefea60c6e413c73cbfdc76edfe42334d86c11164f5d86b97e9'
+def literal(tag):
+    opening = b"<<'" + tag.encode() + b"'\n"
+    closing = b'\n' + tag.encode() + b'\n'
+    assert source.count(opening) == 1
+    start = source.index(opening) + len(opening)
+    return source[start:source.index(closing, start)].decode() + '\n'
+
+
+prelude = literal('PY_MAC_STDIN_PRELUDE')
+assert source.count(b'\ndef fixed_stdin_module_paths():\n') == 1
+body_digests = {
+    'PY_MAC_RUNTIME': 'c30fb527aab7ecefea60c6e413c73cbfdc76edfe42334d86c11164f5d86b97e9',
+    'PY_MAC_IMPORT_CLOSURE': '70279637e8f9166987bc0763f6d710ad65ccf650c2d92937bc5ebb11efb6fdb5',
+}
+assert sys.argv[2] in body_digests
+collector = prelude.rstrip('\n') + '\n' + literal(sys.argv[2]).rstrip('\n') + '\n'
+assert hashlib.sha256(collector.encode()).hexdigest() == body_digests[sys.argv[2]]
+assert source.index(b"<<'PY_MAC_STDIN_PRELUDE'\n") < source.index(("<<'" + sys.argv[2] + "'\n").encode())
+assert source.count(b'<<<"$genuine_mac_stdin_prelude\n$mac_runtime_body"') == 1
+assert source.count(b'<<<"$genuine_mac_stdin_prelude\n$mac_import_body"') == 1
 module = ast.parse(collector)
 first = next(index for index, node in enumerate(module.body)
              if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
@@ -5247,8 +5272,14 @@ for label, flags in [('without-I', ['-S', '-B']), ('without-S', ['-I', '-B'])]:
     assert result.returncode != 0 and b'AssertionError' in result.stderr and not result.stdout
     results.append({'case': label, 'refused': True, 'actual_rc': result.returncode})
 print(json.dumps({'kind': 'real trusted stdin; ordinary owned-data UID/mode adaptation only',
-                  'controls': results, 'supplied_runtime_executed': False}, sort_keys=True))
+                  'controls': results, 'supplied_runtime_executed': False, 'entry': sys.argv[2],
+                  'composed_sha256': body_digests[sys.argv[2]]}, sort_keys=True))
 PY_MAC_STDIN_CONTROLS
+) || fail 'fixed stdin control composition'
+for stdin_boundary in PY_MAC_RUNTIME PY_MAC_IMPORT_CLOSURE; do
+  /usr/bin/python3 -I -S -B - "$root/scripts/test/scope-qualification.test.sh" "$stdin_boundary" <<<"$mac_stdin_controls" ||
+    fail 'fixed stdin entry controls'
+done
 
 run_genuine
 /usr/bin/printf 'scope qualification: %s focused checks passed\n' "$passes"
