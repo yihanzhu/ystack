@@ -439,17 +439,17 @@ Bind that supply to these accepted `work/scope-genuine-macos-proof/` artifacts:
 | --- | --- |
 | Intent | `336c520dcdc7dacb6bbf3b52d34ab07f12b50f0d` |
 | Spec | `d17c985b9651ff46c259997fb54d8fc214293357` |
-| High-risk plan | `1c026037704f8a6f24bdb9126913fac6fbb81046` |
+| High-risk plan | `035d20d9bf2dbce30efadcb0f8d0d72691a696ef` |
 
-Use the workflow published at `03019c192f2d04ba6adf6b967351c82886b6c8d7`,
-from reviewed head `0250539f202dd5364a9b1f6f880c7d7ecb216c6f` against base
-`17e89f081e1ab41606a21ce0cf50b0c029b2f0f4`. Actual supply and cleanup across
+Use the workflow published at `5b4acf99e77ce7dd68db6a2607f683a6f99ca68e`,
+from reviewed head `fbb46bcfa7437f1b364e054d83dddf50f45d6cb4` against base
+`aff1175d4cd7831a64421d29811ced02d978a1b3`. Actual supply and cleanup across
 separate job-step processes still require complete Mac job evidence. When mode
 preparation is used, this includes durable journal reopening and verified mode
 restoration. Same-process controls or a green cleanup step cannot replace that
 proof. The workflow Git
-blob is `ed68f0cf1faa9bdeb3f658fde14ae8bc1d936ffd`; its SHA-256 is
-`9fa78a8c6e837466e14f17d2c85889d31c0dc903a4d888ea6854a570c9dbdd0a`.
+blob is `e4a856ae71942e34b76568000428dc3b6f5af0a6`; its SHA-256 is
+`ee8d312b1f36fab443d02adf960b1ad9f7fbedc7bb123b902eb1451d6c6cecaf`.
 The complete shared entry/guard body SHA-256 is
 `3c229ffd250d8b255ae59ae1f507e3815c9f6bfb25b793c9075871675a1a540c`.
 The separate post-guard identity assertion passed through `-c` has SHA-256
