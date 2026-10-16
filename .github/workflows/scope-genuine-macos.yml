@@ -731,6 +731,36 @@ jobs:
               print(canonical({'cleanup': 'two-owned-trees-absent', 'parents': parents}).decode('ascii'))
 
 
+          def copy_inventory_failure(tree, found, subset, copied):
+              try:
+                  budget()
+                  assert tree in TREES
+                  missing = sorted(set(subset) - found)
+                  extra = sorted(found - set(subset))
+                  record = {'copy_inventory_failure': True, 'tree': 'V' if tree == V else 'T',
+                            'found': len(found), 'subset': len(subset), 'copied': len(copied), 'truncated': False}
+                  for label, values in (('missing', missing), ('extra', extra)):
+                      record[label] = {'count': len(values), 'sha256': hashlib.sha256(canonical(values)).hexdigest(),
+                                       'prefix': [], 'truncated': bool(values)}
+                  for label, values in (('missing', missing), ('extra', extra)):
+                      for value in values[:32]:
+                          budget()
+                          record[label]['prefix'].append(value)
+                          record[label]['truncated'] = len(record[label]['prefix']) < len(values)
+                          record['truncated'] = any(record[key]['truncated'] for key in ('missing', 'extra'))
+                          if len(canonical(record)) + 1 > 16384:
+                              record[label]['prefix'].pop()
+                              record[label]['truncated'] = True
+                              break
+                  record['truncated'] = any(record[key]['truncated'] for key in ('missing', 'extra'))
+                  raw = canonical(record) + b'\n'
+                  assert len(raw) <= 16384
+                  budget()
+                  assert os.write(2, raw) == len(raw)
+              except BaseException:
+                  pass
+
+
           class VersionsParentMode:
               RECORD_LIMIT = 4 * 1024 * 1024
               ENV_KEY = 'YSTACK_VERSIONS_MODE_STATE'
@@ -1667,7 +1697,11 @@ jobs:
                                   copied.append({'path': str(path), 'kind': 'file', 'identity': record[1]})
                                   recheck_one(record)
                                   close_physical(record)
-                  assert found == set(subset) and len(copied) == len(subset)
+                  try:
+                      assert found == set(subset) and len(copied) == len(subset)
+                  except AssertionError:
+                      copy_inventory_failure(tree, found, subset, copied)
+                      raise
                   owned[:] = [item for item in owned if item['path'] != str(tree)] + copied
                   save()
               assert len(owned) == 4498
@@ -1704,7 +1738,7 @@ jobs:
           umask 077
           cache_root=$YSTACK_PROOF_TMP
           native_p=/Library/Frameworks/Python.framework/Versions/3.15/Resources/Python.app/Contents/MacOS/Python
-          test "$(/usr/bin/shasum -a 256 "$cache_root/provision.py" | /usr/bin/awk '{print $1}')" = 650efea04c4a03f4deb3fb0f58d2d3bc36cb71e66c2f957933ceaa4f1519d4a4
+          test "$(/usr/bin/shasum -a 256 "$cache_root/provision.py" | /usr/bin/awk '{print $1}')" = 9d3ee653838e91fce78fdca6e28f8e5fd8b23f01983fd97d022698286c5525c0
           provision_status=0
           /usr/bin/python3 -I -S -B "$cache_root/provision.py" "$cache_root" --supply || provision_status=$?
           if [ -f "$cache_root/owned.json" ] && [ ! -L "$cache_root/owned.json" ]; then
@@ -2288,7 +2322,7 @@ jobs:
           SH_FIXED_SUPPLY_PHASE
           /bin/chmod 0500 "$cache_root/supply-phase.sh"
           export YSTACK_PROOF_TMP="$cache_root"
-          test "$(/usr/bin/shasum -a 256 "$cache_root/provision.py" | /usr/bin/awk '{print $1}')" = 650efea04c4a03f4deb3fb0f58d2d3bc36cb71e66c2f957933ceaa4f1519d4a4
+          test "$(/usr/bin/shasum -a 256 "$cache_root/provision.py" | /usr/bin/awk '{print $1}')" = 9d3ee653838e91fce78fdca6e28f8e5fd8b23f01983fd97d022698286c5525c0
           /bin/cat > "$cache_root/mode-controls.py" <<'PY_PARENT_MODE_CONTROLS'
           from pathlib import Path
           import ast,contextlib,ctypes,errno,hashlib,io,json,os,re,stat,subprocess,sys,tempfile,time,types,base64,math
@@ -2962,6 +2996,65 @@ jobs:
                               'stdout_fd_closed':True,'stderr_fd_closed':True,'fd_before':before,'fd_after':len(os.listdir('/dev/fd')),
                               'fixed_short_timeout_adapter':fault=='timeout','helper_sha256':hashlib.sha256(helper_source.encode()).hexdigest()})
 
+          # Exercise the actual final-copy assertion seam with memory-only data and refusing query sentinels.
+          report_node = next(node for node in module.body if isinstance(node,ast.FunctionDef) and node.name=='copy_inventory_failure')
+          copy_seam = next(node for node in ast.walk(module) if isinstance(node,ast.Try) and len(node.body)==1
+                           and isinstance(node.body[0],ast.Assert) and ast.unparse(node.body[0].test)==
+                           'found == set(subset) and len(copied) == len(subset)')
+          assert len(copy_seam.handlers)==1 and ast.unparse(copy_seam.handlers[0].type)=='AssertionError'
+          canonical_node = next(node for node in module.body if isinstance(node,ast.FunctionDef) and node.name=='canonical')
+          for label in ('missing-extra','count-only','unicode-truncated','success','serialization-error','output-error'):
+              queries,output,clock_checks,caught = [],[],[],[]
+              class NoQuery:
+                  def write(self,fd,data):
+                      assert fd==2
+                      if label=='output-error':raise BrokenPipeError('fixed owned output refusal')
+                      output.append(data);return len(data)
+                  def __getattr__(self,name):
+                      queries.append(name);raise AssertionError('forbidden diagnostic OS query '+name)
+              ns = dict(os=NoQuery(),json=json,hashlib=hashlib,TREES=(fixed_root/'Versions/3.15',fixed_root/'ystack-private-tools'),
+                        V=fixed_root/'Versions/3.15',T=fixed_root/'ystack-private-tools',budget=lambda:clock_checks.append(True))
+              exec(compile(ast.Module(body=[canonical_node,report_node],type_ignores=[]),'exact-copy-failure-function','exec'),ns)
+              tree=ns['T'] if label=='count-only' else ns['V']
+              subset={'a':{},'b':{},'c':{}};found={'a','extra-1','extra-2'};copied=[{}]
+              if label=='count-only':subset={'a':{}};found={'a'};copied=[]
+              if label=='unicode-truncated':
+                  subset={('路径α\"\n'*500)+str(i):{} for i in range(100)}
+                  found={('余外β\"\n'*500)+str(i) for i in range(100)}
+              if label=='success':subset={'a':{}};found={'a'};copied=[{}]
+              ns.update(tree=tree,subset=subset,found=found,copied=copied)
+              original_data=(repr(subset),repr(found),repr(copied))
+              actual_report=ns['copy_inventory_failure']
+              def observed_report(*args):
+                  caught.append(sys.exc_info()[1]);return actual_report(*args)
+              ns['copy_inventory_failure']=observed_report
+              if label=='serialization-error':
+                  def failed_canonical(value):raise ValueError('fixed owned serialization refusal')
+                  ns['canonical']=failed_canonical
+              failure=None
+              try:exec(compile(ast.Module(body=[copy_seam],type_ignores=[]),'actual-final-copy-assertion-seam','exec'),ns)
+              except AssertionError as error:failure=error
+              assert not queries and original_data==(repr(subset),repr(found),repr(copied))
+              if label=='success':assert failure is None and not output and not clock_checks and not caught
+              else:
+                  assert isinstance(failure,AssertionError) and len(caught)==1 and caught[0] is failure
+                  if label in ('serialization-error','output-error'):assert not output
+                  else:
+                      assert len(output)==1 and len(output[0])<=16384 and output[0].endswith(b'\n')
+                      decoded=output[0].decode('utf8');assert decoded.count('\n')==1;row=json.loads(decoded)
+                      assert row['tree']==('T' if label=='count-only' else 'V')
+                      assert (row['found'],row['subset'],row['copied'])==(len(found),len(subset),len(copied))
+                      for key,values in (('missing',sorted(set(subset)-found)),('extra',sorted(found-set(subset)))):
+                          assert row[key]['count']==len(values) and row[key]['sha256']==hashlib.sha256(canonical(values)).hexdigest()
+                          assert row[key]['prefix']==values[:len(row[key]['prefix'])] and len(row[key]['prefix'])<=32
+                          assert row[key]['truncated']==(len(row[key]['prefix'])<len(values))
+                      assert row['truncated']==any(row[key]['truncated'] for key in ('missing','extra'))
+                      if label=='unicode-truncated':assert row['truncated']
+              results.append({'case':'copy-inventory-'+label,'original_assertion_preserved':label!='success',
+                              'success_no_side_effects':label=='success','OS_queries':queries,
+                              'stderr_bytes':sum(len(b) for b in output),'record':json.loads(output[0]) if output else None,
+                              'exact_function_sha256':hashlib.sha256(ast.get_source_segment(source.decode(),report_node).encode()).hexdigest()})
+
           print(json.dumps({'cases':results,'boundary_sha256':hashlib.sha256(source).hexdigest(),
               'limits':'Exact private class/fixed_phase compiled from provision. UID/ACL/physical observations and recording executor are fixed test-only adapters; actual owned records/fsync/fds and nonprivileged child wait are real. No production D, sudo, supplied P, suite or host probe executed.'},sort_keys=True))
           PY_PARENT_MODE_CONTROLS
@@ -3121,19 +3214,19 @@ jobs:
           PY_OWNED_MODE_CONTROLS
           /bin/chmod 0500 "$cache_root/owned-mode-controls.py"
           /usr/bin/python3 -I -S -B "$cache_root/owned-mode-controls.py" "$cache_root/provision.py"
-          test "$(/usr/bin/shasum -a 256 "$cache_root/provision.py" | /usr/bin/awk '{print $1}')" = 650efea04c4a03f4deb3fb0f58d2d3bc36cb71e66c2f957933ceaa4f1519d4a4
+          test "$(/usr/bin/shasum -a 256 "$cache_root/provision.py" | /usr/bin/awk '{print $1}')" = 9d3ee653838e91fce78fdca6e28f8e5fd8b23f01983fd97d022698286c5525c0
           /usr/bin/python3 -I -S -B "$cache_root/provision.py" "$cache_root" --phase supply
       - name: Complete original scope qualification suite
         timeout-minutes: 35
         shell: /bin/bash --noprofile --norc -e -o pipefail {0}
         run: |
-          test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 650efea04c4a03f4deb3fb0f58d2d3bc36cb71e66c2f957933ceaa4f1519d4a4
+          test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 9d3ee653838e91fce78fdca6e28f8e5fd8b23f01983fd97d022698286c5525c0
           /usr/bin/python3 -I -S -B "$YSTACK_PROOF_TMP/provision.py" "$YSTACK_PROOF_TMP" --phase scope
       - name: Complete original native owner suite
         timeout-minutes: 50
         shell: /bin/bash --noprofile --norc -e -o pipefail {0}
         run: |
-          test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 650efea04c4a03f4deb3fb0f58d2d3bc36cb71e66c2f957933ceaa4f1519d4a4
+          test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 9d3ee653838e91fce78fdca6e28f8e5fd8b23f01983fd97d022698286c5525c0
           /usr/bin/python3 -I -S -B "$YSTACK_PROOF_TMP/provision.py" "$YSTACK_PROOF_TMP" --phase native
       - name: Verify source and remove only the owned runtime and test cache
         if: always()
@@ -3145,7 +3238,7 @@ jobs:
           if [ -n "${YSTACK_PROOF_TMP:-}" ]; then
             if test -d "$YSTACK_PROOF_TMP" && test ! -L "$YSTACK_PROOF_TMP" &&
                test "$(/usr/bin/stat -f '%d:%i:%u' "$YSTACK_PROOF_TMP")" = "$YSTACK_PROOF_TMP_ID" &&
-               test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 650efea04c4a03f4deb3fb0f58d2d3bc36cb71e66c2f957933ceaa4f1519d4a4; then
+               test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 9d3ee653838e91fce78fdca6e28f8e5fd8b23f01983fd97d022698286c5525c0; then
               /usr/bin/python3 -I -S -B "$YSTACK_PROOF_TMP/provision.py" "$YSTACK_PROOF_TMP" --phase closure || recovery_status=$?
             else
               recovery_status=1
