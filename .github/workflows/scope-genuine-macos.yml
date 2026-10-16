@@ -272,7 +272,9 @@ jobs:
                       isdir = index < len(path.parts) - 2 or directory
                       assert stat.S_ISDIR(before.st_mode) if isdir else stat.S_ISREG(before.st_mode)
                       if immutable:
-                          assert before.st_uid == 0 and not before.st_mode & 0o022
+                          assert before.st_uid == 0 and not before.st_mode & 0o022, (
+                              'immutable-parent component=/' + '/'.join(path.parts[1:index + 2]) +
+                              f' uid={before.st_uid} mode={before.st_mode:#o}')
                       child = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | (os.O_DIRECTORY if isdir else 0), dir_fd=chain[-1][2])
                       component = str(Path('/').joinpath(*path.parts[1:index + 2]))
                       chain.append(acquire_component(component, ident(before), child, name))
@@ -1619,7 +1621,7 @@ jobs:
             if [ -e "$YSTACK_PROOF_TMP/owned.json" ]; then
               [[ "${YSTACK_RUNTIME_OWNED_SHA:-}" =~ ^[0-9a-f]{64}$ ]]
               test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/owned.json" | /usr/bin/awk '{print $1}')" = "$YSTACK_RUNTIME_OWNED_SHA"
-              test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 70537fe6254dbced8fc5b0e4b94a6ad9dd1d3c50a47acd621874a49f344594a4
+              test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 38ce8128520a02dad25ca3d2b54426b84088c1fd26f550698fe7fe5b2ce1fe54
               /usr/bin/python3 -I -S -B "$YSTACK_PROOF_TMP/provision.py" "$YSTACK_PROOF_TMP" --cleanup
             else
               test ! -e /Library/Frameworks/Python.framework/Versions/3.15
