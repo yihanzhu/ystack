@@ -1448,6 +1448,54 @@ old_wrapper=old_wrapper.replace('        if bound(frame) and frame.f_lineno in i
 a=old_wrapper.index('def dispatch(frame, event, arg):\n');b=old_wrapper.index('def cancel(',a);old_wrapper=old_wrapper[:a]+old_wrapper[b:]
 old_wrapper=old_wrapper.replace('sys.settrace(dispatch)','sys.settrace(observe)').replace("exec(compiled_code, {'__name__': '__main__'})","exec(compile(code, original_name, 'exec'), {'__name__': '__main__'})")
 assert hashlib.sha256(old_wrapper.encode()).hexdigest()=='0b4348aefe34c0036a2bfa16f9290e4aeefaef169444f3ec987f1474e085fc52'
+def proof_materialization_controls(guard,area):
+    tree=ast.parse(guard)
+    block=next(n for n in ast.walk(tree) if isinstance(n,ast.If) and any(isinstance(x,ast.Assign) and isinstance(x.targets[0],ast.Name) and x.targets[0].id=='proof_program' for x in n.body))
+    nodes=block.body[:5]
+    assert isinstance(nodes[2],ast.Expr) and nodes[2].value.func.attr=='chmod' and nodes[2].value.args[0].value==0o444
+    assert isinstance(nodes[4],ast.Expr) and nodes[4].value.func.id=='run_control'
+    actual='\n'.join(ast.get_source_segment(guard,n) for n in nodes)+'\n'
+    assert ast.dump(ast.parse(actual),include_attributes=False)==ast.dump(ast.Module(body=nodes,type_ignores=[]),include_attributes=False)
+    old='\n'.join(ast.get_source_segment(guard,n) for n in nodes[:2])+'\n'
+    expected=nodes[1].value.args[0].value.encode()
+    records=[]
+    for mask,fault in ((0o077,'normal'),(0o022,'normal'),(0o077,'old'),(0o077,'write'),(0o022,'write'),(0o077,'mode'),(0o022,'mode')):
+        fixture=area/('materialize-'+str(mask)+'-'+fault);fixture.mkdir();fixture.chmod(0o755)
+        script="from pathlib import Path\nimport hashlib,json,os,stat,sys\nfixture=Path(sys.argv[1])\n"+'mask='+repr(mask)+'\nfault='+repr(fault)+'\nexpected='+repr(expected)+'\nactual='+repr(actual)+'\nold='+repr(old)+'\n'+r"""
+assert os.umask(mask)==mask
+launches=[]
+def run_control(label,expected_error):
+    assert label=='fixed-short-owner-cancel' and expected_error==b'E_RUNTIME'
+    assert proof_program.read_bytes()==expected and stat.S_IMODE(proof_program.stat().st_mode)==0o444
+    launches.append(label)
+def failed_write(self,*args,**kwargs):
+    assert self==fixture/'owner-cancel-proof.py'
+    raise OSError('fixed materialization write failure')
+def failed_mode(self,mode):
+    assert self==fixture/'owner-cancel-proof.py' and mode==0o444
+    raise OSError('fixed materialization mode failure')
+if fault=='write':Path.write_text=failed_write
+if fault=='mode':Path.chmod=failed_mode
+try:exec(compile(old if fault=='old' else actual,'actual-root-proof-materialization','exec'))
+except OSError as error:
+    assert fault in ('write','mode') and str(error)=='fixed materialization '+fault+' failure' and not launches
+    record={'fault':fault,'mask':mask,'error':type(error).__name__,'message':str(error),'launches':len(launches)}
+else:
+    assert fault in ('normal','old')
+    path=fixture/'owner-cancel-proof.py';value=path.lstat();raw=path.read_bytes()
+    assert raw==expected and stat.S_ISREG(value.st_mode) and value.st_uid==os.getuid() and value.st_nlink==1
+    assert stat.S_IMODE(value.st_mode)==(0o600 if fault=='old' else 0o444)
+    assert len(launches)==(0 if fault=='old' else 1) and stat.S_IMODE(fixture.stat().st_mode)==0o755
+    record={'fault':fault,'mask':mask,'mode':stat.S_IMODE(value.st_mode),'uid':value.st_uid,'nlink':value.st_nlink,'sha256':hashlib.sha256(raw).hexdigest(),'launches':len(launches),'same_uid_read_only':True}
+assert os.umask(mask)==mask
+print(json.dumps(record,sort_keys=True))
+"""
+        print(json.dumps({'actual_materialization_script':script,'sha256':hashlib.sha256(script.encode()).hexdigest(),'mask':mask,'fault':fault}),flush=True)
+        result=subprocess.run([sys.executable,'-I','-S','-B','-',str(fixture)],input=script.encode(),capture_output=True,timeout=10,umask=mask)
+        assert result.returncode==0,(fault,result.stdout,result.stderr)
+        record=json.loads(result.stdout);records.append(record)
+    return records
+
 reports=[]
 temporary=tempfile.mkdtemp(prefix='scope-observer-owner-')
 print(json.dumps({'ordinary_tree':temporary,'on_failure':'RETAIN'}),flush=True)
@@ -1750,6 +1798,7 @@ subprocess.Popen=fixed_owned_popen
     except AssertionError:pass
     else:raise AssertionError('active prior child allowed new ACL operation')
     reports.append({'never_launched_data_cleanup_gate':'PASS','active_library_unlink_refused':True,'active_acl_refused':True})
+    reports.append({'actual_proof_materialization':proof_materialization_controls(guard,area)})
 except BaseException:
     print(json.dumps({'ordinary_tree_retained':temporary,'reason':'control did not establish complete success'}),flush=True)
     raise
@@ -4423,6 +4472,7 @@ deadline=uptime()+120
 assert uptime() < deadline and identity(os.lstat(name)) == before
 instance._foreground(command,b'',4096,65536,10,{'PATH':'/usr/bin:/bin','LC_ALL':'C','LANG':'C'})
 """)
+        proof_program.chmod(0o444)
         original_program=proof_program
         run_control('fixed-short-owner-cancel',b'E_RUNTIME')
         raise AssertionError('short cancellation did not interrupt')
