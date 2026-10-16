@@ -9,13 +9,14 @@ Tracks #541. Risk is high. This is the nonterminal child-6 core. It authenticate
 the existing child-5 evidence at one exact revision. Issue #544 remains mandatory
 before child 6 completes or child 7 starts.
 
-Implementation PR: `review_size: accepted-exception`, 2,600–5,400 net changed
+Implementation PR: `review_size: accepted-exception`, 2,600–5,600 net changed
 lines. The private evidence reader, held-path and Git checks, closed evaluator
 relations, and a real two-principal origin fixture form one security boundary.
 Most of the range is proof: complete classification, bundle, Git, terminal and
 authenticated-set controls, plus the same-contract owner, group, ACL, descriptor
-and receipt lifecycle. The range preserves readable controls and does not relax
-tests, CI, review, or any acceptance standard.
+and receipt lifecycle. It also covers the complete fixed runtime guard and its
+owned native-format controls. The range preserves readable controls and does not
+relax tests, CI, review, or any acceptance standard.
 
 ## Files that change
 
@@ -429,47 +430,62 @@ qualification or a production identity.
 Prepare the same fixed harness and cases for macOS, including the concrete Darwin
 runner owner above. Run them only on the verified disposable evidence host under
 [the approved temporary supply](https://github.com/yihanzhu/ystack/issues/559#issuecomment-6180555883)
-and [existing-parent supplement](https://github.com/yihanzhu/ystack/issues/559#issuecomment-6189713897).
+and [existing-parent supplement](https://github.com/yihanzhu/ystack/issues/559#issuecomment-6189713897),
+with the [approved 3.15 supplement and accepted source review](https://github.com/yihanzhu/ystack/issues/559#issuecomment-6203606687).
 Bind that supply to these accepted `work/scope-genuine-macos-proof/` artifacts:
 
 | Artifact | Git blob |
 | --- | --- |
-| Intent | `7b38be231a975a16133d16a987539ac1061352da` |
-| Spec | `6760cc5f786aa794f1fce3784664e220769d7811` |
-| High-risk plan | `0ff44d9da76e3b653560db26e0d2f6afde727201` |
+| Intent | `77d6e5bae9e8b6a846bb543096756c2723ca54e5` |
+| Spec | `d8e3f17fbae49d66f14683c3f2e5e9f63073e5ae` |
+| High-risk plan | `86377e9e622702282855b8eb2e4495a3ac8c0428` |
 
-Use the workflow published at `59c671dc08739824456efe1ffa5f4b4f0cbad22e`,
-from reviewed head `d01cbb259c544191a721179ee9c048d9372c0cb1` against base
-`4f60b7ebcea6c68dbdadb92b2eaac09becee9318`. Actual supply and cleanup across
+Use the workflow published at `3647713fccaa74c5dd3ff63f50fbdcc2e5878359`,
+from reviewed head `94454d7629f4c6746dda0d9175c380ce8adfb697` against base
+`1f37a085c013748e95db64bd2594aa0bb2237475`. Actual supply and cleanup across
 separate job-step processes still require Mac job evidence. The workflow Git
-blob is `4758c5e500e6e741212ac3653da360c9d01bd18a`; its SHA-256 is
-`6e8304356e3191b60cf22276b8d67750ebe0e181cfa60b9c862ff0125138d815`.
+blob is `ed5d7e8a847282b146d56213e5eba9c839b69efb`; its SHA-256 is
+`ea6cc8a1ec75bea24131d36b9425fff860dc1cde9747c972c678f55dd36f3211`.
 The complete shared entry/guard body SHA-256 is
-`d8737aa32fac4021e4ac13d217175a5591fd8a189b1a05e12802128a279d342f`.
+`e6fb867d4cd7e0092fe5cc61050be3286f14279b8541f82d156dbd10f1b065b6`.
 The separate post-guard identity assertion passed through `-c` has SHA-256
-`e63ddcbb9e5876f47a71fc68cf0ffc254f00c0914462ce4a332713acbfcb8fde`.
-The same-PID transition belongs to the shared guard. Keep these exact bytes;
-a changed dependency returns through its artifact gate before fixture changes.
+`e11560926ec9ab0188cd448a723a9c2eee5bef4064cc3445d7a25cd5e4377229`.
+The published provision body SHA-256 is
+`38ce8128520a02dad25ca3d2b54426b84088c1fd26f550698fe7fe5b2ce1fe54`;
+only the workflow supplies and cleans the runtime. The same-PID transition belongs
+to the shared guard. Keep these exact bytes; a changed dependency returns through
+its artifact gate before fixture changes.
 
 | Fixed manifest data | SHA-256 |
 | --- | --- |
-| Complete official source | `34ab06f305b15a1772852ce9b814c2935f80917e9548d362fe43d36c0e1cf850` |
-| Selected version subset | `4da2fbc7b543eb3d990f429c0fe972669105abdbf9ce2b7c962b404c94f7cc27` |
-| Supply mode map | `a04635f441f9706f126986616fc0f648a757630aacd78fafb944bcc2166a8d19` |
-| Runtime expectation table | `ac527b61d0d7475d20a6e329b0b5f31e68635c7a73c93031b2b208b18ccd9c56` |
+| Complete official source | `e0d204e2827885c5f2f4278e709981b7fc1e02424d3bfa5ae2ff2af789789d26` |
+| Selected version subset | `3176a7d3551aaa719fa8ed26964237d0d1771184c6ce7a5159bbf039e7816572` |
+| Supply mode map | `9184f6976c2be2e1430594adbb406293168c0201c849e31bfd671f2c8e83fb9e` |
+| Runtime expectation table | `d6a212cf50fd2593c75e8e011c321e65fa8609cce7add72e69d16ff0e78252c4` |
 
-The workflow supplies only official Python 3.14.7 and jq 1.6 in the initially
-absent `Versions/3.14` and `ystack-private-tools` trees under the existing
-`/Library/Frameworks/Python.framework`. The approved supplement SHA-256 is
-`d811e67bf53b8bcbd0417d5db686c297adbe325c47de3ab048d92bdfeead4880`.
+The workflow supplies only official Python 3.15.0 and jq 1.6 in the initially
+absent `Versions/3.15` and `ystack-private-tools` trees under the existing
+`/Library/Frameworks/Python.framework`. The existing-parent supplement SHA-256 is
+`d811e67bf53b8bcbd0417d5db686c297adbe325c47de3ab048d92bdfeead4880`;
+the fixed 3.15 supplement is
+`6cbb39e4a5bcc391913e98de09bc95dac7a78e4c7585424777bd149dfdf0fca8`.
+The fixed package is `https://www.python.org/ftp/python/3.15.0/python-3.15.0-macos11.pkg`,
+exactly 89,032,014 bytes. Its SHA-256 is
+`7c7e7eca61cbfa5f0c6f80cd594cddbfd492f4e8b3fb87e3d9fa1efebaec43ed`;
+the decompressed TOC SHA-256 is
+`72a73d8e5b05959f062df93f21e5829a5aac4526c833dd24cba4941462a29924`.
+Keep the published workflow's complete signature/content verification and its
+basic-trust/pkgSign limitations. Do not fetch or execute package scripts here.
 Core test files do not fetch, supply, repair or clean those trees or their existing
 parents. They add no development-Mac, runtime, host or account scope. Keep Linux's
 original runtime behavior.
 
 In the Darwin branches of `scope-qualification.test.sh` and
 `shadow-enforced.test.sh`, bind P only to
-`/Library/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python`.
-Bind the prefix separately to `/Library/Frameworks/Python.framework/Versions/3.14`
+`/Library/Frameworks/Python.framework/Versions/3.15/Resources/Python.app/Contents/MacOS/Python`.
+Its image SHA-256 is
+`23a6212221922087dafd5a0e59631efa00b75b5f2e47945ba404c67be2c54c0b`.
+Bind the prefix separately to `/Library/Frameworks/Python.framework/Versions/3.15`
 and jq to `/Library/Frameworks/Python.framework/ystack-private-tools/jq`.
 Replace the old bin/name-derived layout only at these fixed test boundaries.
 Scope's outer evaluator and genuine setup, and the native suite, use the same P.
@@ -486,8 +502,8 @@ against the fixed guard SHA-256 before writing an exclusive private guard file.
 Do not source the shell file, execute the scope suite, evaluate other source text,
 add an auth-only mode or accept a caller-selected path or command.
 
-Before publication, mechanically compare the scope literal, native extraction and
-pinned workflow body byte for byte. Each suite runs that same body through its own
+During exact-head source preparation and before publication, mechanically compare
+the scope literal, native extraction and pinned workflow body byte for byte. Each suite runs that same body through its own
 actual empty-to-real authentication. Keep the complete failure diagnostics,
 predicates, cleanup and shared deadline unchanged. Use only the fixed source
 manifest from the workflow's existing owned cache. Treat that cache path as a
@@ -502,8 +518,10 @@ Invoke each guard through the existing non-privileged system Python as:
 ```
 
 Here GUARD is that test's owned exact guard file and PACKAGE is its held physical
-package. Verify the complete 4,201-row source, then its exact 4,195-row version
-subset and two fixed tool rows. Authenticate exactly those 4,197 supplied objects;
+package. Verify the complete 4,502-row source: 3,934 regular files, 529 directories
+and 39 links, including each row's UID/GID/nlink and fixed content or link text.
+The exact version subset has 4,496 rows: the same regular files, 527 directories
+and 35 links. Add only the two fixed tool rows. Authenticate all 4,498 objects;
 do not scan old versions into the runtime set or ignore extra new-tree objects.
 Hold the existing framework root, Versions and every physical ancestor with
 NOFOLLOW directory descriptors, exact named identity, UID 0, modes without group
@@ -516,10 +534,26 @@ Preserve publisher bytes and link text. Old versions, top-level Current and root
 aliases remain unchanged and provide no runtime dependency or cleanup authority.
 Missing required targets, loops, escapes, changes and unknown ACLs refuse. Keep
 all original scans, the native-image closure and system-cache boundary, and every
-byte, object, command and shared deadline cap.
+byte, object, command and shared deadline cap. The fixed closure contains 91
+loadable x86_64 images: 90 also contain ARM64 and one is x86_64-only. They comprise
+3 executables, 10 dylibs and 78 bundles, with 17 internal V3.15 edges, 117 system
+library edges and 3 `/usr/lib/dyld` edges. Execution remains x86_64 only.
+
+The guard treats only these exact prefix-relative files as static data:
+
+| File | Whole-file SHA-256 | Required bounded structure |
+| --- | --- | --- |
+| `Frameworks/Tcl.framework/Versions/9.0/libtclstub.a` | `74fd3db0166b27cbe6aeaa4ef642a2bcca7e68d2fec4c05467bf5c04978d0670` | x86_64/ARM64 fat archives; two symbol indexes and ten MH_OBJECT members total |
+| `Frameworks/Tk.framework/Versions/9.0/libtkstub.a` | `c8fac1a39815dbe3ce300961ca125a196363354f0290ff21be65e7592349e935` | x86_64/ARM64 fat archives; two symbol indexes and four MH_OBJECT members total |
+| `lib/python3.15/config-3.15-darwin/python.o` | `8c1ab81c7a71dbc98218a6ddf230353b2fcb73e51fdc3a0c9ec050ed461f7e21` | x86_64/ARM64 fat LLVM wrappers with bounded bitcode payloads |
+
+Require the published guard's exact path/hash, magic, slice, member and wrapper
+checks. These data objects grant no load or execution permission. Unknown or
+malformed native containers and static data offered as a loaded image refuse;
+no filename suffix can bypass classification.
 
 The same guard enters P with `-I -S -B` and retains its PID and 120-second deadline.
-Require actual physical `sys.executable == P`, version 3.14.7 and at least 3.11,
+Require actual physical `sys.executable == P`, version 3.15.0 and at least 3.11,
 fixed prefix/base_prefix, isolated flags and the original closed startup paths.
 Never assign sys.executable or inject __PYVENV_LAUNCHER__. Under authenticated P,
 use the existing real Darwin owner and UUID resolver. Repeat all original runtime,
@@ -554,7 +588,12 @@ extracted-boundary control uses its recorded objects and cannot execute copied
 runtime bytes or claim the actual entry positive. The positive requires the real
 fixed P and actual same-PID transition on the approved Mac host. Keep all original
 37 scope controls, 149 native controls and both complete suites. These bindings do
-not qualify a host or change the product installation boundary.
+not qualify a host or change the product installation boundary. Adapt the owned
+native-format controls to the new fixed containers and pair valid data with
+unknown, malformed and loaded-static refusals. Preserve the approved fixture
+`/usr/bin/cc` helper/native builds; add no compiler, SDK, runtime rebuilding,
+source download or administrator authority. Do not replace unrelated historical
+fixture facts or Linux runtime selection.
 
 Until actual supply, host checks, complete tests and cleanup pass, keep the Mac
 real-principal positive and G3 blocked. Keep CPU/wall evidence NONE and production
