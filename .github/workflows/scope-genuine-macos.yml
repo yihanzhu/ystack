@@ -441,6 +441,11 @@ jobs:
               global last_child_outcome
               last_child_outcome = {"pid": None, "returncode": None, "reaped": False, "cancelled": False, "privileged_unknown": False}
               budget()
+              accepted = (expected,)
+              if expected == 1 and argv[:5] == ['/bin/cp', '-R', '-P', '-n', '-X']:
+                  if argv == ['/bin/cp', '-R', '-P', '-n', '-X', str(cache / 'copy-control/source') + '/.',
+                              str(cache / 'copy-control/collision')]:
+                      accepted = (0, 1)
               child_deadline = deadline - 2
               assert uptime() < child_deadline
               process = None
@@ -484,8 +489,8 @@ jobs:
                       except subprocess.TimeoutExpired:
                           pass
                   budget()
-                  completed = status == expected
-                  assert status == expected, (argv[0], status)
+                  completed = status in accepted
+                  assert status in accepted, (argv[0], status)
                   return bytes(output)
               finally:
                   close_unknown = False
@@ -1654,7 +1659,9 @@ jobs:
                   parent_mode.reserve(argv)
                   try:
                       bounded_command(argv, status)
-                      assert parent_mode.settled(last_child_outcome) and last_child_outcome['returncode'] == status
+                      assert parent_mode.settled(last_child_outcome)
+                      actual_status = last_child_outcome['returncode']
+                      assert actual_status in ((0, 1) if name == 'collision' else (0,))
                       actual = snapshot(area / name)
                       wanted = dict(source_before)
                       if name == 'collision':
@@ -1662,7 +1669,7 @@ jobs:
                           wanted['link'] = [stat.S_IFLNK, 'kept-sentinel-target']
                       assert actual == wanted and snapshot(source) == source_before
                       assert all(ident(os.lstat(path)) == state for path, state in staging)
-                      record = canonical({'owned_copy_control': name, 'returncode': status,
+                      record = canonical({'owned_copy_control': name, 'returncode': actual_status,
                                           'exact_names_types_bytes_links': True, 'source_rechecked': True,
                                           'sentinel_preserved': name == 'collision'}) + b'\n'
                       assert len(record) <= 16384 and os.write(2, record) == len(record)
@@ -1828,7 +1835,7 @@ jobs:
           umask 077
           cache_root=$YSTACK_PROOF_TMP
           native_p=/Library/Frameworks/Python.framework/Versions/3.15/Resources/Python.app/Contents/MacOS/Python
-          test "$(/usr/bin/shasum -a 256 "$cache_root/provision.py" | /usr/bin/awk '{print $1}')" = 75d43e12b66de9b0ad6f2539fc6c1f7f614486df25bcf72a6a9da454f5cda87a
+          test "$(/usr/bin/shasum -a 256 "$cache_root/provision.py" | /usr/bin/awk '{print $1}')" = 625a0e3e21588c90a921c003032501b6780b5ee9ac4cb29e463f1cea6232a053
           provision_status=0
           /usr/bin/python3 -I -S -B "$cache_root/provision.py" "$cache_root" --supply || provision_status=$?
           if [ -f "$cache_root/owned.json" ] && [ ! -L "$cache_root/owned.json" ]; then
@@ -2412,7 +2419,7 @@ jobs:
           SH_FIXED_SUPPLY_PHASE
           /bin/chmod 0500 "$cache_root/supply-phase.sh"
           export YSTACK_PROOF_TMP="$cache_root"
-          test "$(/usr/bin/shasum -a 256 "$cache_root/provision.py" | /usr/bin/awk '{print $1}')" = 75d43e12b66de9b0ad6f2539fc6c1f7f614486df25bcf72a6a9da454f5cda87a
+          test "$(/usr/bin/shasum -a 256 "$cache_root/provision.py" | /usr/bin/awk '{print $1}')" = 625a0e3e21588c90a921c003032501b6780b5ee9ac4cb29e463f1cea6232a053
           /bin/cat > "$cache_root/mode-controls.py" <<'PY_PARENT_MODE_CONTROLS'
           from pathlib import Path
           import ast,contextlib,ctypes,errno,hashlib,io,json,os,re,stat,subprocess,sys,tempfile,time,types,base64,math,zlib
@@ -3244,10 +3251,12 @@ jobs:
           }
           with tempfile.TemporaryDirectory(prefix='owned-appledouble-copy-') as temporary:
               for bits in (0o755,0o775):
-                  for fault in ('none','timeout','close-error','missing-result','acceptance-error'):
+                  for fault in ('none','timeout','close-error','missing-result','acceptance-error','collision-zero','collision-bad-status','collision-overwrite'):
                       area=Path(temporary)/(str(bits)+'-'+fault)
                       ns,events,active=fixture(area,mode=bits)
                       original_executor=ns['bounded_command'];cleanup_calls=[];children=[];observations=[]
+                      successful=fault in ('none','collision-zero')
+                      late_fault=fault in ('collision-bad-status','collision-overwrite')
                       ns['os'].lstat=os.lstat
                       ns.update(stage=area/'cache/stage',staging=[],commands=0)
                       ns['stage'].mkdir(mode=0o700)
@@ -3263,7 +3272,7 @@ jobs:
                       def actual_copy(argv,expected):
                           import selectors
                           real=dict(os=os,subprocess=subprocess,selectors=selectors,time=time,json=json,math=math,
-                                    cancel_requested=0,deadline=time.clock_gettime(time.CLOCK_UPTIME_RAW)+(2.25 if fault=='timeout' else 6))
+                                    cancel_requested=0,cache=ns['cache'],deadline=time.clock_gettime(time.CLOCK_UPTIME_RAW)+(2.25 if fault=='timeout' else 6))
                           class BrokenClose:
                               def __init__(self,stream):self.stream=stream
                               def fileno(self):return self.stream.fileno()
@@ -3281,6 +3290,19 @@ jobs:
                               command=[sys.executable,'-I','-S','-B','-c','import time;time.sleep(30)'] if fault=='timeout' else arguments
                               child=subprocess.Popen(command,**kwargs);children.append(child)
                               if fault in ('close-error','missing-result'):child.stdout=BrokenClose(child.stdout)
+                              if argv[-1]==str(area/'cache/copy-control/collision') and fault in ('collision-zero','collision-bad-status'):
+                                  class StatusView:
+                                      def __getattr__(self,name):return getattr(child,name)
+                                      @property
+                                      def returncode(self):
+                                          return None if child.returncode is None else (0 if fault=='collision-zero' else 2)
+                                      def wait(self,*args,**kwargs):
+                                          child.wait(*args,**kwargs)
+                                          return self.returncode
+                                      def poll(self):
+                                          child.poll()
+                                          return self.returncode
+                                  return StatusView()
                               return child
                           real['subprocess']=types.SimpleNamespace(Popen=spawn,DEVNULL=subprocess.DEVNULL,PIPE=subprocess.PIPE,TimeoutExpired=subprocess.TimeoutExpired)
                           exec(compile(ast.Module(body=runner_nodes,type_ignores=[]),'exact-owned-cp-runner','exec'),real)
@@ -3288,6 +3310,8 @@ jobs:
                               output=real['bounded_command'](argv,expected)
                               if fault=='acceptance-error':
                                   (area/'cache/copy-control/empty/tclooConfig.sh').write_bytes(b'fixed acceptance mismatch')
+                              if fault=='collision-overwrite' and argv[-1]==str(area/'cache/copy-control/collision'):
+                                  (area/'cache/copy-control/collision/tclooConfig.sh').write_bytes(b'fixed overwritten sentinel')
                               return output
                           finally:
                               ns['last_child_outcome']=real['last_child_outcome'].copy()
@@ -3319,19 +3343,19 @@ jobs:
                           copies=[row for row in issued if row['argv'][0]=='/bin/cp']
                           actual_results=[row['body'] for row in mode.rows if row['kind']=='result' and row['body']['number'] in {entry['number'] for entry in copies}]
                           supply_result=next(row['body'] for row in mode.rows if row['kind']=='phase' and row['body']['point']=='result')
-                          assert len(copies)==(2 if fault=='none' else 1)
+                          assert len(copies)==(2 if successful or late_fault else 1)
                           assert len(actual_results)==(0 if fault=='missing-result' else len(copies))
-                          assert all(row['known']==(fault=='none') for row in actual_results)
-                          assert supply_result['success']==supply_result['quiescent']==(fault=='none')
+                          assert [row['known'] for row in actual_results]==([True,False] if late_fault else [successful]*len(actual_results))
+                          assert supply_result['success']==supply_result['quiescent']==successful
                           assert len(issued)==(0 if bits==0o755 else 1)+len(copies)
-                          if fault!='none':
+                          if not successful:
                               refuse(lambda:mode.reserve(copies[0]['argv']))
                               count=len(mode.rows);mode.close();mode=ns['VersionsParentMode']();mode.load()
                               assert len(mode.rows)==count
                               refuse(lambda:mode.reserve(copies[0]['argv']))
                       finally:mode.close()
-                      if fault=='none':
-                          assert failed is None and [row['returncode'] for row in observations]==[0,1]
+                      if successful:
+                          assert failed is None and [row['returncode'] for row in observations]==[0,0 if fault=='collision-zero' else 1]
                           assert all(row['reaped'] and not row['cancelled'] for row in observations)
                           ns['fixed_phase']('closure')
                           assert len(cleanup_calls)==1
@@ -3356,8 +3380,10 @@ jobs:
                       assert not active
                       results.append({'case':'owned-copy-'+fault+'-'+oct(bits),'actual_children':observations,
                                       'direct_children_reaped':True,'pipes_closed':True,'issued_copy_commands':len(copies),
-                                      'known':fault=='none','next_launch_refused':fault!='none','cleanup_calls':len(cleanup_calls),
-                                      'fresh_process_closure':fresh_result if fault!='none' else None,
+                                      'known':successful,'next_launch_refused':not successful,'cleanup_calls':len(cleanup_calls),
+                                      'fresh_process_closure':fresh_result if not successful else None,
+                                      'status_adapter':fault if fault in ('collision-zero','collision-bad-status') else None,
+                                      'actual_child_returncodes':[child.returncode for child in children],
                                       'fixed_short_timeout_adapter':fault=='timeout','exact_function_sha256':copy_sha})
               area=Path(temporary)/'validators';ns,events,active=fixture(area,mode=0o755)
               mode=ns['VersionsParentMode']()
@@ -3391,6 +3417,31 @@ jobs:
                                   'ordinary_cp_rejected_before_production_queries':True,'live_invalid_forms_refused':len(bad),'dispatches':0})
               finally:mode.close()
               assert not active
+
+          with tempfile.TemporaryDirectory(prefix='owned-production-status-') as temporary:
+              import selectors
+              children=[]
+              def production_status_child(argv,**kwargs):
+                  assert argv==['/usr/bin/sudo','-n','/bin/cp','-R','-P','-n','-X',
+                                str(Path(temporary)/'stage/Versions/3.15')+'/.',str(fixed_root/'Versions/3.15')]
+                  child=subprocess.Popen([sys.executable,'-I','-S','-B','-c','raise SystemExit(1)'],**kwargs)
+                  children.append(child)
+                  return child
+              real=dict(os=os,subprocess=types.SimpleNamespace(Popen=production_status_child,DEVNULL=subprocess.DEVNULL,
+                        PIPE=subprocess.PIPE,TimeoutExpired=subprocess.TimeoutExpired),selectors=selectors,time=time,json=json,
+                        math=math,cancel_requested=0,cache=Path(temporary),deadline=time.clock_gettime(time.CLOCK_UPTIME_RAW)+6)
+              exec(compile(ast.Module(body=runner_nodes,type_ignores=[]),'exact-production-cp-status-boundary','exec'),real)
+              argv=['/usr/bin/sudo','-n','/bin/cp','-R','-P','-n','-X',str(Path(temporary)/'stage/Versions/3.15')+'/.',str(fixed_root/'Versions/3.15')]
+              refuse(lambda:real['bounded_command'](argv,0))
+              assert real['last_child_outcome']['returncode']==1 and real['last_child_outcome']['reaped']
+              assert real['last_child_outcome']['privileged_unknown']
+              for child in children:
+                  assert child.stdout.closed and child.stderr.closed
+                  try:os.waitpid(child.pid,os.WNOHANG)
+                  except ChildProcessError:pass
+                  else:raise AssertionError('status-adapter ordinary child not reaped')
+              results.append({'case':'production-cp-rc1-refused','outcome':real['last_child_outcome'],
+                              'fixed_ordinary_child_adapter':True,'sudo_executed':False,'pipes_closed':True,'actual_reaped':True})
 
           print(json.dumps({'cases':results,'boundary_sha256':hashlib.sha256(source).hexdigest(),
               'limits':'Exact private class/fixed_phase compiled from provision. UID/ACL/physical observations and recording executor are fixed test-only adapters; actual owned records/fsync/fds and nonprivileged child wait are real. No production D, sudo, supplied P, suite or host probe executed.'},sort_keys=True))
@@ -3551,19 +3602,19 @@ jobs:
           PY_OWNED_MODE_CONTROLS
           /bin/chmod 0500 "$cache_root/owned-mode-controls.py"
           /usr/bin/python3 -I -S -B "$cache_root/owned-mode-controls.py" "$cache_root/provision.py"
-          test "$(/usr/bin/shasum -a 256 "$cache_root/provision.py" | /usr/bin/awk '{print $1}')" = 75d43e12b66de9b0ad6f2539fc6c1f7f614486df25bcf72a6a9da454f5cda87a
+          test "$(/usr/bin/shasum -a 256 "$cache_root/provision.py" | /usr/bin/awk '{print $1}')" = 625a0e3e21588c90a921c003032501b6780b5ee9ac4cb29e463f1cea6232a053
           /usr/bin/python3 -I -S -B "$cache_root/provision.py" "$cache_root" --phase supply
       - name: Complete original scope qualification suite
         timeout-minutes: 35
         shell: /bin/bash --noprofile --norc -e -o pipefail {0}
         run: |
-          test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 75d43e12b66de9b0ad6f2539fc6c1f7f614486df25bcf72a6a9da454f5cda87a
+          test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 625a0e3e21588c90a921c003032501b6780b5ee9ac4cb29e463f1cea6232a053
           /usr/bin/python3 -I -S -B "$YSTACK_PROOF_TMP/provision.py" "$YSTACK_PROOF_TMP" --phase scope
       - name: Complete original native owner suite
         timeout-minutes: 50
         shell: /bin/bash --noprofile --norc -e -o pipefail {0}
         run: |
-          test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 75d43e12b66de9b0ad6f2539fc6c1f7f614486df25bcf72a6a9da454f5cda87a
+          test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 625a0e3e21588c90a921c003032501b6780b5ee9ac4cb29e463f1cea6232a053
           /usr/bin/python3 -I -S -B "$YSTACK_PROOF_TMP/provision.py" "$YSTACK_PROOF_TMP" --phase native
       - name: Verify source and remove only the owned runtime and test cache
         if: always()
@@ -3575,7 +3626,7 @@ jobs:
           if [ -n "${YSTACK_PROOF_TMP:-}" ]; then
             if test -d "$YSTACK_PROOF_TMP" && test ! -L "$YSTACK_PROOF_TMP" &&
                test "$(/usr/bin/stat -f '%d:%i:%u' "$YSTACK_PROOF_TMP")" = "$YSTACK_PROOF_TMP_ID" &&
-               test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 75d43e12b66de9b0ad6f2539fc6c1f7f614486df25bcf72a6a9da454f5cda87a; then
+               test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 625a0e3e21588c90a921c003032501b6780b5ee9ac4cb29e463f1cea6232a053; then
               /usr/bin/python3 -I -S -B "$YSTACK_PROOF_TMP/provision.py" "$YSTACK_PROOF_TMP" --phase closure || recovery_status=$?
             else
               recovery_status=1
