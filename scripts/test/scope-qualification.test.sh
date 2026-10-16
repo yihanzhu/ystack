@@ -3082,9 +3082,10 @@ setup_genuine_macos() {
     fail 'existing root Python 3.11+ required'
   [ "$genuine_python" = "$python_bin" ] || fail 'fixture Python differs from selected physical Python'
   /usr/bin/sudo -n "$genuine_python" -I -S -B - <<'PY_MAC_RUNTIME' || fail 'physical root-owned runtime closure required'
-import pathlib,sys
+import sys
 stdin_entry = sys.modules['__main__']
 stdin_namespace = globals()
+import pathlib
 
 def fixed_stdin_module_paths():
     assert sys.modules.get('__main__') is stdin_entry
@@ -5121,13 +5122,13 @@ closing = b'\nPY_MAC_RUNTIME\n'
 assert source.count(opening) == 1
 start = source.index(opening) + len(opening)
 collector = source[start:source.index(closing, start)].decode() + '\n'
-assert hashlib.sha256(collector.encode()).hexdigest() == 'b27c2105bb9c96ab26c8bbe223de06e84d20284eaf4d29f015f0327807c53d1f'
+assert hashlib.sha256(collector.encode()).hexdigest() == 'c30fb527aab7ecefea60c6e413c73cbfdc76edfe42334d86c11164f5d86b97e9'
 module = ast.parse(collector)
 first = next(index for index, node in enumerate(module.body)
              if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
              and node.targets[0].id == 'stdin_entry')
-parts = module.body[first:first + 4]
-assert [type(node).__name__ for node in parts] == ['Assign', 'Assign', 'FunctionDef', 'Expr']
+parts = module.body[first:first + 5]
+assert [type(node).__name__ for node in parts] == ['Assign', 'Assign', 'Import', 'FunctionDef', 'Expr']
 exec(compile(ast.Module(body=parts, type_ignores=[]), '<exact-stdin-classifier>', 'exec'), globals())
 assert stdin_entry is sys.modules['__main__'] and stdin_namespace is globals()
 results = []
@@ -5241,7 +5242,7 @@ with tempfile.TemporaryDirectory(prefix='ystack-stdin-owned-') as temporary:
         del sys.modules[spec.name]
 fragment = '\n'.join(ast.get_source_segment(collector, node) for node in parts)
 for label, flags in [('without-I', ['-S', '-B']), ('without-S', ['-I', '-B'])]:
-    result = subprocess.run(['/usr/bin/python3', *flags, '-'], input=('import sys,pathlib\n' + fragment).encode(),
+    result = subprocess.run(['/usr/bin/python3', *flags, '-'], input=('import sys\n' + fragment).encode(),
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
     assert result.returncode != 0 and b'AssertionError' in result.stderr and not result.stdout
     results.append({'case': label, 'refused': True, 'actual_rc': result.returncode})
