@@ -431,27 +431,31 @@ Prepare the same fixed harness and cases for macOS, including the concrete Darwi
 runner owner above. Run them only on the verified disposable evidence host under
 [the approved temporary supply](https://github.com/yihanzhu/ystack/issues/559#issuecomment-6180555883)
 and [existing-parent supplement](https://github.com/yihanzhu/ystack/issues/559#issuecomment-6189713897),
-with the [approved 3.15 supplement and accepted source review](https://github.com/yihanzhu/ystack/issues/559#issuecomment-6203606687).
+with the [approved 3.15 supplement and accepted source review](https://github.com/yihanzhu/ystack/issues/559#issuecomment-6203606687)
+and [fixed Versions-mode approval](https://github.com/yihanzhu/ystack/issues/559#issuecomment-6205434290).
 Bind that supply to these accepted `work/scope-genuine-macos-proof/` artifacts:
 
 | Artifact | Git blob |
 | --- | --- |
-| Intent | `77d6e5bae9e8b6a846bb543096756c2723ca54e5` |
-| Spec | `d8e3f17fbae49d66f14683c3f2e5e9f63073e5ae` |
-| High-risk plan | `86377e9e622702282855b8eb2e4495a3ac8c0428` |
+| Intent | `336c520dcdc7dacb6bbf3b52d34ab07f12b50f0d` |
+| Spec | `d17c985b9651ff46c259997fb54d8fc214293357` |
+| High-risk plan | `54e656e1fc6f8c64634743f703580bab070fda5d` |
 
-Use the workflow published at `3647713fccaa74c5dd3ff63f50fbdcc2e5878359`,
-from reviewed head `94454d7629f4c6746dda0d9175c380ce8adfb697` against base
-`1f37a085c013748e95db64bd2594aa0bb2237475`. Actual supply and cleanup across
-separate job-step processes still require Mac job evidence. The workflow Git
-blob is `ed5d7e8a847282b146d56213e5eba9c839b69efb`; its SHA-256 is
-`ea6cc8a1ec75bea24131d36b9425fff860dc1cde9747c972c678f55dd36f3211`.
+Use the workflow published at `768b39d3a566ee59f79ec0045a070ee67bbf7025`,
+from reviewed head `5bbd751862dded6275376403ab34db432e504ee4` against base
+`508ee075999ac4de85152dc9f3d4881b6b3cb941`. Actual supply and cleanup across
+separate job-step processes still require complete Mac job evidence. When mode
+preparation is used, this includes durable journal reopening and verified mode
+restoration. Same-process controls or a green cleanup step cannot replace that
+proof. The workflow Git
+blob is `8d2f0ff7e53176d29419b528d4777771ce1c1ca7`; its SHA-256 is
+`c711db5eff9e329d16546bf159199cfc61959221d483675177b4949f8ee5b54d`.
 The complete shared entry/guard body SHA-256 is
 `e6fb867d4cd7e0092fe5cc61050be3286f14279b8541f82d156dbd10f1b065b6`.
 The separate post-guard identity assertion passed through `-c` has SHA-256
 `e11560926ec9ab0188cd448a723a9c2eee5bef4064cc3445d7a25cd5e4377229`.
 The published provision body SHA-256 is
-`38ce8128520a02dad25ca3d2b54426b84088c1fd26f550698fe7fe5b2ce1fe54`;
+`8f8cbbdc51e895ecd70a10e6dbce6012240acac19c207410d1215b9ce505c050`;
 only the workflow supplies and cleans the runtime. The same-PID transition belongs
 to the shared guard. Keep these exact bytes; a changed dependency returns through
 its artifact gate before fixture changes.
@@ -469,6 +473,8 @@ absent `Versions/3.15` and `ystack-private-tools` trees under the existing
 `d811e67bf53b8bcbd0417d5db686c297adbe325c47de3ab048d92bdfeead4880`;
 the fixed 3.15 supplement is
 `6cbb39e4a5bcc391913e98de09bc95dac7a78e4c7585424777bd149dfdf0fca8`.
+The fixed Versions-mode supplement is
+`399d3a10cac7add2bf2e77da613235fac353e7f9473f1d3cdbdff303ad9afa93`.
 The fixed package is `https://www.python.org/ftp/python/3.15.0/python-3.15.0-macos11.pkg`,
 exactly 89,032,014 bytes. Its SHA-256 is
 `7c7e7eca61cbfa5f0c6f80cd594cddbfd492f4e8b3fb87e3d9fa1efebaec43ed`;
