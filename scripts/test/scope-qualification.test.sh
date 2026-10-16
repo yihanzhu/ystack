@@ -3082,10 +3082,26 @@ setup_genuine_macos() {
     fail 'existing root Python 3.11+ required'
   [ "$genuine_python" = "$python_bin" ] || fail 'fixture Python differs from selected physical Python'
   /usr/bin/sudo -n "$genuine_python" -I -S -B - <<'PY_MAC_RUNTIME' || fail 'physical root-owned runtime closure required'
-import os,pathlib,plistlib,stat,sys,uuid
+import pathlib,sys
+stdin_entry = sys.modules['__main__']
+stdin_namespace = globals()
+
+def fixed_stdin_module_paths():
+    assert sys.modules.get('__main__') is stdin_entry
+    assert stdin_entry.__dict__ is stdin_namespace is globals()
+    assert stdin_namespace['__name__'] == '__main__'
+    assert stdin_namespace['__file__'] == '<stdin>' and stdin_namespace['__spec__'] is None
+    assert sys.argv[0] == '-'
+    assert sys.flags.isolated and sys.flags.no_site and sys.flags.dont_write_bytecode
+    modules = tuple(sys.modules.items())
+    assert all(name == '__main__' for name, module in modules if module is stdin_entry)
+    return {pathlib.Path(module.__file__) for name, module in modules
+            if module is not stdin_entry and getattr(module, '__file__', None)}
+
+fixed_stdin_module_paths()
+import os,plistlib,stat,uuid
 paths={pathlib.Path(sys.executable),pathlib.Path('/Library/Frameworks/Python.framework/ystack-private-tools/jq')}
-paths.update(pathlib.Path(module.__file__) for module in sys.modules.values()
- if getattr(module,'__file__',None))
+paths.update(fixed_stdin_module_paths())
 for path in paths:
  assert path.resolve()==path and path.is_file()
  for item in (path,*path.parents):
@@ -5084,6 +5100,154 @@ run_genuine() {
     "$genuine_base" "$genuine_writer" "$genuine_consumer" "$genuine_group" "$jq_cache" "$tmp"
   pass 'actual root anchor, distinct storage writer and read-only consumer authenticate one complete bundle'
 }
+
+/usr/bin/python3 -I -S -B - "$root/scripts/test/scope-qualification.test.sh" <<'PY_MAC_STDIN_CONTROLS'
+import ast
+import hashlib
+import importlib.util
+import json
+import pathlib
+import stat
+import subprocess
+import sys
+import tempfile
+import types
+
+with pathlib.Path(sys.argv[1]).open('rb') as stream:
+    source = stream.read(16 * 1024 * 1024 + 1)
+assert len(source) <= 16 * 1024 * 1024
+opening = b"<<'PY_MAC_RUNTIME' || fail 'physical root-owned runtime closure required'\n"
+closing = b'\nPY_MAC_RUNTIME\n'
+assert source.count(opening) == 1
+start = source.index(opening) + len(opening)
+collector = source[start:source.index(closing, start)].decode() + '\n'
+assert hashlib.sha256(collector.encode()).hexdigest() == 'b27c2105bb9c96ab26c8bbe223de06e84d20284eaf4d29f015f0327807c53d1f'
+module = ast.parse(collector)
+first = next(index for index, node in enumerate(module.body)
+             if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
+             and node.targets[0].id == 'stdin_entry')
+parts = module.body[first:first + 4]
+assert [type(node).__name__ for node in parts] == ['Assign', 'Assign', 'FunctionDef', 'Expr']
+exec(compile(ast.Module(body=parts, type_ignores=[]), '<exact-stdin-classifier>', 'exec'), globals())
+assert stdin_entry is sys.modules['__main__'] and stdin_namespace is globals()
+results = []
+
+def refused(label, operation):
+    try:
+        operation()
+    except AssertionError:
+        results.append({'case': label, 'refused': True})
+    else:
+        raise AssertionError(label)
+
+
+# Only UID and ancestor write-mode facts adapt to this ordinary owned tree.
+class OwnedPath(type(pathlib.Path())):
+    def lstat(self):
+        value = super().lstat()
+        mode = value.st_mode if self == leaf else value.st_mode & ~0o022
+        return types.SimpleNamespace(st_uid=0, st_mode=mode)
+
+    def is_file(self):
+        regular = super().is_file()
+        if self == changed_path:
+            self.unlink()
+            self.symlink_to('target.py')
+        return regular
+
+
+loop = next(node for node in module.body if isinstance(node, ast.For)
+            and isinstance(node.target, ast.Name) and node.target.id == 'path')
+physical = compile(ast.Module(body=[loop], type_ignores=[]), '<exact-fixture-physical-loop>', 'exec')
+legacy_paths = set()
+legacy_update = """legacy_paths.update(pathlib.Path(module.__file__) for module in sys.modules.values()
+ if getattr(module,'__file__',None))"""
+exec(compile(legacy_update, '<original-fixture-collection>', 'exec'), globals())
+assert pathlib.Path('<stdin>') in legacy_paths
+refused('old-real-stdin-collection', lambda: exec(physical, globals() | {'paths': {OwnedPath('<stdin>')}}))
+changed_path = None
+with tempfile.TemporaryDirectory(prefix='ystack-stdin-owned-') as temporary:
+    area = pathlib.Path(temporary).resolve()
+    runtime_prefix = OwnedPath(area / 'runtime')
+    runtime_prefix.mkdir()
+    leaf = runtime_prefix / 'ordinary.py'
+    leaf.write_bytes(b'VALUE = 7\n')
+    (runtime_prefix / 'target.py').write_bytes(b'VALUE = 9\n')
+    before = fixed_stdin_module_paths()
+    spec = importlib.util.spec_from_file_location('owned_stdin_module', leaf)
+    imported = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = imported
+    try:
+        spec.loader.exec_module(imported)
+        paths = fixed_stdin_module_paths()
+        expected = {pathlib.Path(value.__file__) for value in tuple(sys.modules.values())
+                    if value is not stdin_entry and getattr(value, '__file__', None)}
+        assert paths == expected and leaf in paths and pathlib.Path('<stdin>') not in paths
+        assert leaf not in before
+        exec(physical, globals() | {'paths': {leaf}})
+        results.append({'case': 'real-stdin-entry-and-imported-file', 'accepted': True,
+                        'all_other_module_candidates_retained': paths == expected})
+        for label, path in [('relative-file', OwnedPath('relative.py')),
+                            ('missing-file', runtime_prefix / 'missing.py'),
+                            ('other-module-stdin', OwnedPath('<stdin>'))]:
+            imported.__file__ = str(path)
+            assert pathlib.Path(path) in fixed_stdin_module_paths()
+            refused(label, lambda: exec(physical, globals() | {'paths': {path}}))
+        imported.__file__ = str(leaf)
+        changed_path = leaf
+        refused('changed-real-file', lambda: exec(physical, globals() | {'paths': {leaf}}))
+        changed_path = None
+        leaf.unlink()
+        leaf.write_bytes(b'VALUE = 7\n')
+        leaf.chmod(0o777)
+        refused('unsafe-real-mode', lambda: exec(physical, globals() | {'paths': {leaf}}))
+        leaf.chmod(0o600)
+        previous_entry = stdin_entry
+        try:
+            stdin_entry = types.ModuleType('__main__')
+            refused('entry-object-rebind', fixed_stdin_module_paths)
+        finally:
+            stdin_entry = previous_entry
+        for attribute, wrong in [('__name__', 'wrong'), ('__file__', 'wrong'), ('__spec__', object())]:
+            previous = getattr(stdin_entry, attribute)
+            try:
+                setattr(stdin_entry, attribute, wrong)
+                refused('entry-' + attribute, fixed_stdin_module_paths)
+            finally:
+                setattr(stdin_entry, attribute, previous)
+        sys.modules['owned_entry_alias'] = stdin_entry
+        try:
+            refused('entry-alias', fixed_stdin_module_paths)
+        finally:
+            del sys.modules['owned_entry_alias']
+        sys.modules['__main__'] = types.ModuleType('__main__')
+        try:
+            refused('entry-mapping-rebind', fixed_stdin_module_paths)
+        finally:
+            sys.modules['__main__'] = stdin_entry
+        previous = stdin_namespace
+        try:
+            stdin_namespace = {}
+            refused('entry-namespace', fixed_stdin_module_paths)
+        finally:
+            stdin_namespace = previous
+        previous = sys.argv[0]
+        try:
+            sys.argv[0] = 'wrong'
+            refused('entry-argv', fixed_stdin_module_paths)
+        finally:
+            sys.argv[0] = previous
+    finally:
+        del sys.modules[spec.name]
+fragment = '\n'.join(ast.get_source_segment(collector, node) for node in parts)
+for label, flags in [('without-I', ['-S', '-B']), ('without-S', ['-I', '-B'])]:
+    result = subprocess.run(['/usr/bin/python3', *flags, '-'], input=('import sys,pathlib\n' + fragment).encode(),
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
+    assert result.returncode != 0 and b'AssertionError' in result.stderr and not result.stdout
+    results.append({'case': label, 'refused': True, 'actual_rc': result.returncode})
+print(json.dumps({'kind': 'real trusted stdin; ordinary owned-data UID/mode adaptation only',
+                  'controls': results, 'supplied_runtime_executed': False}, sort_keys=True))
+PY_MAC_STDIN_CONTROLS
 
 run_genuine
 /usr/bin/printf 'scope qualification: %s focused checks passed\n' "$passes"
