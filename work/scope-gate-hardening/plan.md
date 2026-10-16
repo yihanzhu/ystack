@@ -439,19 +439,19 @@ Bind that supply to these accepted `work/scope-genuine-macos-proof/` artifacts:
 | --- | --- |
 | Intent | `336c520dcdc7dacb6bbf3b52d34ab07f12b50f0d` |
 | Spec | `d17c985b9651ff46c259997fb54d8fc214293357` |
-| High-risk plan | `34cfb18460ce767d824f564944047c9d9835df9c` |
+| High-risk plan | `1c026037704f8a6f24bdb9126913fac6fbb81046` |
 
-Use the workflow published at `8fcc9b159226a739bc2f5dbe56d508200da87411`,
-from reviewed head `b431856f478c486c1488839ac0f56eafbd4cc60f` against base
-`72a0e4b2289099fc43aa979c76c0136b641c3759`. Actual supply and cleanup across
+Use the workflow published at `03019c192f2d04ba6adf6b967351c82886b6c8d7`,
+from reviewed head `0250539f202dd5364a9b1f6f880c7d7ecb216c6f` against base
+`17e89f081e1ab41606a21ce0cf50b0c029b2f0f4`. Actual supply and cleanup across
 separate job-step processes still require complete Mac job evidence. When mode
 preparation is used, this includes durable journal reopening and verified mode
 restoration. Same-process controls or a green cleanup step cannot replace that
 proof. The workflow Git
-blob is `3cd7ac52aa21c6ae0eacc48341e53c7cce29fca6`; its SHA-256 is
-`307503c3fdf4482561c55ed7205ce70a4c0e175221e844594b8c1c9bd913e819`.
+blob is `ed68f0cf1faa9bdeb3f658fde14ae8bc1d936ffd`; its SHA-256 is
+`9fa78a8c6e837466e14f17d2c85889d31c0dc903a4d888ea6854a570c9dbdd0a`.
 The complete shared entry/guard body SHA-256 is
-`41b01937f09c6db77e35cd899ea209665ff2eea7a1e7650d0d5b04ec1090b573`.
+`3c229ffd250d8b255ae59ae1f507e3815c9f6bfb25b793c9075871675a1a540c`.
 The separate post-guard identity assertion passed through `-c` has SHA-256
 `e11560926ec9ab0188cd448a723a9c2eee5bef4064cc3445d7a25cd5e4377229`.
 The published provision body SHA-256 is
@@ -466,6 +466,12 @@ its artifact gate before fixture changes.
 | Selected version subset | `3176a7d3551aaa719fa8ed26964237d0d1771184c6ce7a5159bbf039e7816572` |
 | Supply mode map | `9184f6976c2be2e1430594adbb406293168c0201c849e31bfd671f2c8e83fb9e` |
 | Runtime expectation table | `d6a212cf50fd2593c75e8e011c321e65fa8609cce7add72e69d16ff0e78252c4` |
+
+Use the accepted Mac plan's fixed ASCII compact JSON, sorted keys and no final
+newline for the shared guard's selected, supply and runtime-table checks. Keep
+all fixed hashes, row selection, fields, order and counts unchanged. Preserve
+product canonical encoding and its ledger/closure uses; do not strip bytes to
+force a digest match.
 
 The workflow supplies only official Python 3.15.0 and jq 1.6 in the initially
 absent `Versions/3.15` and `ystack-private-tools` trees under the existing

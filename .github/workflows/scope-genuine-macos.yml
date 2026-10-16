@@ -1862,6 +1862,10 @@ jobs:
           assert sys.platform == 'darwin' and os.getuid() != 0
           assert not any(key.startswith('DYLD_') or key == '__PYVENV_LAUNCHER__' for key in os.environ)
           assert len(sys.argv) == 7
+          def fixed_manifest_bytes(value):
+              return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode('ascii')
+
+
           def uptime():
               value = time.clock_gettime(time.CLOCK_UPTIME_RAW)
               assert type(value) is float and math.isfinite(value) and value >= 0
@@ -2195,12 +2199,12 @@ jobs:
               manifest_rows = json.loads(manifest_raw)
               assert len(manifest_rows) == 4502
               selected_rows = [row for row in manifest_rows if row['path'] == 'Versions/3.15' or row['path'].startswith('Versions/3.15/')]
-              assert len(selected_rows) == 4496 and c.digest(c.canonical(selected_rows)) == '3176a7d3551aaa719fa8ed26964237d0d1771184c6ce7a5159bbf039e7816572'
+              assert len(selected_rows) == 4496 and c.digest(fixed_manifest_bytes(selected_rows)) == '3176a7d3551aaa719fa8ed26964237d0d1771184c6ce7a5159bbf039e7816572'
               supply_rows = [dict(row, mode=row['kind'] | (0o755 if row['kind'] != stat.S_IFREG or row['mode'] & 0o111 else 0o644)) for row in selected_rows]
               supply_rows.extend([{'path': 'ystack-private-tools', 'kind': stat.S_IFDIR, 'mode': 0o40755},
                   {'path': 'ystack-private-tools/jq', 'kind': stat.S_IFREG, 'mode': 0o100755, 'size': 864040,
                    'sha256': '5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef'}])
-              assert c.digest(c.canonical(supply_rows)) == '9184f6976c2be2e1430594adbb406293168c0201c849e31bfd671f2c8e83fb9e'
+              assert c.digest(fixed_manifest_bytes(supply_rows)) == '9184f6976c2be2e1430594adbb406293168c0201c849e31bfd671f2c8e83fb9e'
               manifest = {}
               for row in supply_rows:
                   value = {key: row[key] for key in ('kind', 'mode', 'size', 'sha256', 'link')
@@ -2209,7 +2213,7 @@ jobs:
                   if row['kind'] != stat.S_IFDIR:
                       value['nlink'] = 1
                   manifest[row['path']] = value
-              assert len(manifest) == 4498 and c.digest(c.canonical(manifest)) == 'd6a212cf50fd2593c75e8e011c321e65fa8609cce7add72e69d16ff0e78252c4'
+              assert len(manifest) == 4498 and c.digest(fixed_manifest_bytes(manifest)) == 'd6a212cf50fd2593c75e8e011c321e65fa8609cce7add72e69d16ff0e78252c4'
               owner = None
               if stage == 'real':
                   bootstrap = c._hold_bytes(sys.executable, c.EXECUTABLE_LIMIT)
@@ -2354,6 +2358,95 @@ jobs:
                   raise
           PY_MAC_GUARD
           /bin/chmod 0555 "$cache_root/guard.py"
+          /usr/bin/python3 -I -S -B - "$cache_root" "$PWD" <<'PY_FIXED_MANIFEST_CONTROLS'
+          import ast
+          import copy
+          import hashlib
+          import json
+          from pathlib import Path
+          import stat
+          import sys
+          import types
+
+          cache, package = map(Path, sys.argv[1:])
+
+          def bounded(path):
+              with path.open('rb') as stream:
+                  value = stream.read(16 * 1024 * 1024 + 1)
+              assert len(value) <= 16 * 1024 * 1024
+              return value
+
+
+          def pure_function(text, name, namespace):
+              nodes = [node for node in ast.parse(text).body
+                       if isinstance(node, ast.FunctionDef) and node.name == name]
+              assert len(nodes) == 1 and len(nodes[0].body) == 1
+              assert isinstance(nodes[0].body[0], ast.Return)
+              exec(compile(ast.Module(body=nodes, type_ignores=[]), '<manifest-pure-function>', 'exec'), namespace)
+              return namespace[name]
+
+
+          sha = lambda value: hashlib.sha256(value).hexdigest()
+          source = bounded(cache / 'manifest.json')
+          assert sha(source) == 'e0d204e2827885c5f2f4278e709981b7fc1e02424d3bfa5ae2ff2af789789d26'
+          rows = json.loads(source)
+          assert len(rows) == 4502
+          text = bounded(cache / 'guard.py').decode('utf-8')
+          consumer = bounded(package / 'shadow/v1/_consumer.py').decode('utf-8')
+          provision = bounded(cache / 'provision.py').decode('utf-8')
+          namespace = {'json': json, 'hashlib': hashlib}
+          fixed = pure_function(text, 'fixed_manifest_bytes', dict(namespace))
+          provider = pure_function(provision, 'canonical', dict(namespace))
+          legacy = pure_function(consumer, 'canonical', dict(namespace))
+          assert fixed(rows) == provider(rows) == source
+          body = next(node.body for node in ast.parse(text).body if isinstance(node, ast.Try))
+          start = next(index for index, node in enumerate(body)
+                       if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
+                       and node.targets[0].id == 'selected_rows')
+          end = next(index for index, node in enumerate(body[start:], start)
+                     if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
+                     and node.targets[0].id == 'owner')
+          nodes = body[start:end]
+          assert [type(node).__name__ for node in nodes] == ['Assign', 'Assert', 'Assign', 'Expr', 'Assert', 'Assign', 'For', 'Assert']
+          assertions = [node for node in nodes if isinstance(node, ast.Assert)]
+          state = {'manifest_rows': rows, 'stat': stat, 'fixed_manifest_bytes': fixed,
+                   'c': types.SimpleNamespace(digest=sha)}
+          exec(compile(ast.Module(body=nodes, type_ignores=[]), '<exact-guard-manifest-data>', 'exec'), state)
+          results = []
+          for name, assertion, count, digest in zip(
+                  ('selected_rows', 'supply_rows', 'manifest'), assertions, (4496, 4498, 4498),
+                  ('3176a7d3551aaa719fa8ed26964237d0d1771184c6ce7a5159bbf039e7816572',
+                   '9184f6976c2be2e1430594adbb406293168c0201c849e31bfd671f2c8e83fb9e',
+                   'd6a212cf50fd2593c75e8e011c321e65fa8609cce7add72e69d16ff0e78252c4')):
+              value = state[name]
+              encoded = fixed(value)
+              assert len(value) == count and sha(encoded) == digest and encoded == provider(value)
+              assert legacy(value) == encoded + b'\n'
+              check = compile(ast.Module(body=[assertion], type_ignores=[]), '<exact-guard-manifest-assert>', 'exec')
+              for fault in ('legacy-LF', 'count', 'field', 'digest'):
+                  negative = dict(state)
+                  if fault == 'legacy-LF':
+                      negative['fixed_manifest_bytes'] = legacy
+                  elif fault == 'digest':
+                      negative['c'] = types.SimpleNamespace(digest=lambda unused: '0' * 64)
+                  else:
+                      changed = copy.deepcopy(value)
+                      if fault == 'count':
+                          changed.pop(next(iter(changed))) if isinstance(changed, dict) else changed.pop()
+                      elif isinstance(changed, dict):
+                          changed[next(iter(changed))]['mode'] ^= 1
+                      else:
+                          changed[0]['mode'] ^= 1
+                      negative[name] = changed
+                  try:
+                      exec(check, negative)
+                  except AssertionError:
+                      pass
+                  else:
+                      raise AssertionError((name, fault, 'was accepted'))
+              results.append({'table': name, 'count': count, 'sha256': digest, 'negative_cases': 4})
+          print(json.dumps({'kind': 'pure-data; no runtime authentication', 'tables': results}, sort_keys=True))
+          PY_FIXED_MANIFEST_CONTROLS
           p=$(/usr/bin/python3 -I -S -B "$cache_root/guard.py" "$PWD" "$native_p" "$cache_root/guard.py" empty 0 0)
           native_p=$("$p" -I -S -B -c 'import sys
           from pathlib import Path
@@ -2975,7 +3068,7 @@ jobs:
           opening = b'/bin/cat > "$cache_root/guard.py" <<\'PY_MAC_GUARD\'\n'
           assert supply.count(opening)==1 and supply.count(b'\nPY_MAC_GUARD\n')==1
           guard = supply.split(opening,1)[1].split(b'\nPY_MAC_GUARD\n',1)[0].decode()+'\n'
-          assert hashlib.sha256(guard.encode()).hexdigest() == '41b01937f09c6db77e35cd899ea209665ff2eea7a1e7650d0d5b04ec1090b573'
+          assert hashlib.sha256(guard.encode()).hexdigest() == '3c229ffd250d8b255ae59ae1f507e3815c9f6bfb25b793c9075871675a1a540c'
           guard_module = ast.parse(guard)
           guard_parts = {node.name:ast.get_source_segment(guard,node) for node in guard_module.body
                          if isinstance(node,ast.FunctionDef) and node.name in ('uptime','owner_deadline')}
