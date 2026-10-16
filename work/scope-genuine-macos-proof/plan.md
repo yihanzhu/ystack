@@ -11,7 +11,7 @@ drafted: 2026-10-15
 | `.github/workflows/scope-genuine-macos.yml` | Supply the fixed runtime, authenticate it, run the original suites and clean owned objects. |
 | `ci/required-files.txt` | Keep that workflow path exactly once. Preserve all other entries. |
 
-For the implementation PR: `review_size: accepted-exception`, 600–1,200 net lines.
+For the implementation PR: `review_size: accepted-exception`, 600–1,400 net lines.
 This one concern adds the fixed parent-mode boundary, durable recovery integration
 and its CI controls. Reuse the existing bounded executor and owned-tree cleanup.
 The range is an estimate, not an implementation target or permission to cut proof.
