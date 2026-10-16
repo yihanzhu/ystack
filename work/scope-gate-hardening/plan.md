@@ -439,23 +439,23 @@ Bind that supply to these accepted `work/scope-genuine-macos-proof/` artifacts:
 | --- | --- |
 | Intent | `336c520dcdc7dacb6bbf3b52d34ab07f12b50f0d` |
 | Spec | `d17c985b9651ff46c259997fb54d8fc214293357` |
-| High-risk plan | `54e656e1fc6f8c64634743f703580bab070fda5d` |
+| High-risk plan | `3b262be50272921c4b6098d5b86c8f0cd5554478` |
 
-Use the workflow published at `768b39d3a566ee59f79ec0045a070ee67bbf7025`,
-from reviewed head `5bbd751862dded6275376403ab34db432e504ee4` against base
-`508ee075999ac4de85152dc9f3d4881b6b3cb941`. Actual supply and cleanup across
+Use the workflow published at `b54c764cc2bc19e1183c812e3b05b606878c6abc`,
+from reviewed head `240daa3d2466b7faf1ebfa339dc96d90611b73d6` against base
+`4a4ce2bf5bc6cbec24a799f69447d851b07cc1f8`. Actual supply and cleanup across
 separate job-step processes still require complete Mac job evidence. When mode
 preparation is used, this includes durable journal reopening and verified mode
 restoration. Same-process controls or a green cleanup step cannot replace that
 proof. The workflow Git
-blob is `8d2f0ff7e53176d29419b528d4777771ce1c1ca7`; its SHA-256 is
-`c711db5eff9e329d16546bf159199cfc61959221d483675177b4949f8ee5b54d`.
+blob is `727bf04be4b48050159a50125c4d31e8127227b8`; its SHA-256 is
+`cc17022057346df1dfb4522b298ac8ad3c123ce3676697f519b2545e899393ac`.
 The complete shared entry/guard body SHA-256 is
-`e6fb867d4cd7e0092fe5cc61050be3286f14279b8541f82d156dbd10f1b065b6`.
+`41b01937f09c6db77e35cd899ea209665ff2eea7a1e7650d0d5b04ec1090b573`.
 The separate post-guard identity assertion passed through `-c` has SHA-256
 `e11560926ec9ab0188cd448a723a9c2eee5bef4064cc3445d7a25cd5e4377229`.
 The published provision body SHA-256 is
-`8f8cbbdc51e895ecd70a10e6dbce6012240acac19c207410d1215b9ce505c050`;
+`9d3ee653838e91fce78fdca6e28f8e5fd8b23f01983fd97d022698286c5525c0`;
 only the workflow supplies and cleans the runtime. The same-PID transition belongs
 to the shared guard. Keep these exact bytes; a changed dependency returns through
 its artifact gate before fixture changes.
@@ -559,6 +559,14 @@ malformed native containers and static data offered as a loaded image refuse;
 no filename suffix can bypass classification.
 
 The same guard enters P with `-I -S -B` and retains its PID and 120-second deadline.
+Use the published guard's fixed private `CLOCK_UPTIME_RAW` clock across both
+stages without renewing that budget. At its sole owner boundary, require the
+authenticated P's fixed same-source seconds, rate and sleep contract, monotonic
+non-adjustable provider and finite readings. Read local monotonic `m` before raw
+`u`; pass `m + (deadline - u)` only with finite positive remaining time within
+the original bound and a finite result. Keep raw expiry checks before and after
+owner use. Keep the consumer's local-monotonic API and code unchanged for this
+binding.
 Require actual physical `sys.executable == P`, version 3.15.0 and at least 3.11,
 fixed prefix/base_prefix, isolated flags and the original closed startup paths.
 Never assign sys.executable or inject __PYVENV_LAUNCHER__. Under authenticated P,
