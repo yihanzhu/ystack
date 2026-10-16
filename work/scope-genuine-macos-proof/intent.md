@@ -31,19 +31,32 @@ scope and native suites, and the disposable macOS runner and its owned fixture.
   version contents or use old objects as runtime dependencies. Do not repair an
   existing runtime, overwrite old objects, run package scripts, alter binaries
   or publisher links, or use another version, source, root or provider.
-- Limit existing-parent writes to adding and removing the two fixed child names
-  and their necessary directory metadata changes. Verify each exact change and
-  record the resulting real metadata; do not backdate it. Clean up only new trees
-  whose objects match the ownership journal. Extra, changed or unknown objects
-  block deletion. Preserve the old child names and stable safety attributes.
+- Apply the [approved fixed Versions-mode supplement](https://github.com/yihanzhu/ystack/issues/559#issuecomment-6205434290),
+  decision SHA-256 `399d3a10cac7add2bf2e77da613235fac353e7f9473f1d3cdbdff303ad9afa93`.
+  Only `/Library/Frameworks/Python.framework/Versions` may change from exact
+  UID 0 and mode 0775 to 0755 after held identity and actual empty ACL checks and
+  a durable journal of its original metadata. Restore 0775 only after the original
+  cleanup of both new trees and safe identity checks. Each of the two fixed chmod
+  commands may run at most once per job, within the original 256 administrator
+  command limit. Unsafe restoration leaves 0755 and fails the job. Record actual
+  ctime changes; never backdate them.
+  Otherwise limit existing-parent writes to adding and removing the two fixed
+  child names and their necessary directory metadata changes. Verify each exact
+  change and record real metadata. Clean up only new trees whose objects match the
+  ownership journal. Extra, changed or unknown objects block deletion. Preserve
+  the old child names and all other stable safety attributes.
 - Complete this G1 amendment, G2 and a separate high-risk plan before implementation.
   The Mac workflow implementation changes only
   `.github/workflows/scope-genuine-macos.yml` and its `ci/required-files.txt` entry.
   Necessary fixed bootstrap/Python/jq bindings in #541's two test fixtures pass
   their own affected artifact gates within the original core paths.
 - Keep the fixed repository, operator, manual event and sole #541 implementation
-  ref. Bind the reviewed workflow and source before and after execution. The
-  dispatch event SHA selects source; it does not grant approval.
+  ref. The mode supplement covers only the already approved #541/#559 and #544
+  complete Mac proof and their original bounded revisions. #544 requires its own
+  closed-ref and authority binding through independent artifact acceptance.
+  Add no rounds, diagnostic runs, CI dispatches or rerun allowance.
+  Bind the reviewed workflow and source before and after execution. The dispatch
+  event SHA selects source; it does not grant approval.
 - Keep the candidate host and all physical runtime, held identity, NOFOLLOW,
   owner, mode, actual ACL/UUID and complete runtime/module closure checks.
   Bind the exact startup images and paths through G2 and the high-risk plan.
