@@ -153,6 +153,7 @@ jobs:
           import hashlib
           import io
           import json
+          import math
           import os
           from pathlib import Path
           import re
@@ -184,7 +185,13 @@ jobs:
           assert cache.is_absolute() and cache.resolve() == cache
           assert sys.platform == 'darwin' and os.getuid() != 0
           assert sys.flags.isolated and sys.flags.no_site and sys.flags.dont_write_bytecode
-          started = time.monotonic()
+          def uptime():
+              value = time.clock_gettime(time.CLOCK_UPTIME_RAW)
+              assert type(value) is float and math.isfinite(value) and value >= 0
+              return value
+
+
+          started = uptime()
           deadline = started + 270
           owned = []
           staging = []
@@ -225,7 +232,7 @@ jobs:
           def budget():
               if cancel_requested:
                   raise SystemExit(128 + cancel_requested)
-              assert time.monotonic() < deadline
+              assert type(deadline) in (int, float) and math.isfinite(deadline) and uptime() < deadline
 
 
           def empty_acl(value):
@@ -435,7 +442,7 @@ jobs:
               last_child_outcome = {"pid": None, "returncode": None, "reaped": False, "cancelled": False, "privileged_unknown": False}
               budget()
               child_deadline = deadline - 2
-              assert time.monotonic() < child_deadline
+              assert uptime() < child_deadline
               process = None
               selector = None
               completed = False
@@ -455,7 +462,7 @@ jobs:
                       budget()
                   while selector.get_map():
                       budget()
-                      remaining = child_deadline - time.monotonic()
+                      remaining = child_deadline - uptime()
                       assert remaining > 0
                       for key, events in selector.select(min(remaining, 0.25)):
                           budget()
@@ -469,7 +476,7 @@ jobs:
                               assert os.write(1 if key.data is output else 2, block) == len(block)
                   while True:
                       budget()
-                      remaining = child_deadline - time.monotonic()
+                      remaining = child_deadline - uptime()
                       assert remaining > 0
                       try:
                           status = process.wait(timeout=min(remaining, 0.25))
@@ -502,7 +509,7 @@ jobs:
                               except OSError:
                                   pass
                               try:
-                                  remaining = deadline - time.monotonic()
+                                  remaining = deadline - uptime()
                                   if remaining > 0:
                                       process.wait(timeout=min(0.5, remaining))
                               except subprocess.TimeoutExpired:
@@ -512,7 +519,7 @@ jobs:
                                       process.kill()
                                   except OSError:
                                       pass
-                          remaining = deadline - time.monotonic()
+                          remaining = deadline - uptime()
                           if process.poll() is None and remaining > 0:
                               process.wait(timeout=remaining)
                           reaped = process.poll() is not None
@@ -934,7 +941,7 @@ jobs:
                           assert set(body) == {'phase', 'point', 'success', 'quiescent', 'deadline', 'outcome'}
                           assert body['phase'] in self.PHASES and body['point'] in ('enter', 'result')
                           assert type(body['success']) is bool and type(body['quiescent']) is bool
-                          assert body['deadline'] is None if body['point'] == 'result' else type(body['deadline']) in (int, float) and 0 < body['deadline'] < 1e12
+                          assert body['deadline'] is None if body['point'] == 'result' else type(body['deadline']) in (int, float) and math.isfinite(body['deadline']) and 0 < body['deadline'] < 1e12
                           if body['point'] == 'enter' or body['phase'] == 'closure':
                               assert body['outcome'] is None
                           else:
@@ -1344,7 +1351,7 @@ jobs:
           phase_rows = [row['body'] for row in parent_mode.rows if row['kind'] == 'phase']
           assert len(phase_rows) == 1 and phase_rows[0]['phase'] == 'supply' and phase_rows[0]['point'] == 'enter'
           deadline = phase_rows[0]['deadline']
-          assert time.monotonic() < deadline <= started + 270
+          assert type(deadline) in (int, float) and math.isfinite(deadline) and uptime() < deadline <= started + 270
           parent_mode.validated_history()
 
 
@@ -1365,7 +1372,7 @@ jobs:
               assert requests <= 3
               request = urllib.request.Request(url, headers={'Accept-Encoding': 'identity'})
               try:
-                  response = opener.open(request, timeout=max(0.01, deadline - time.monotonic()))
+                  response = opener.open(request, timeout=max(0.01, deadline - uptime()))
               except urllib.error.HTTPError as response:
                   assert redirect and response.code == 302
                   assert len(response.headers.get_all('Location', [])) == 1
@@ -1697,7 +1704,7 @@ jobs:
           umask 077
           cache_root=$YSTACK_PROOF_TMP
           native_p=/Library/Frameworks/Python.framework/Versions/3.15/Resources/Python.app/Contents/MacOS/Python
-          test "$(/usr/bin/shasum -a 256 "$cache_root/provision.py" | /usr/bin/awk '{print $1}')" = 8f8cbbdc51e895ecd70a10e6dbce6012240acac19c207410d1215b9ce505c050
+          test "$(/usr/bin/shasum -a 256 "$cache_root/provision.py" | /usr/bin/awk '{print $1}')" = 650efea04c4a03f4deb3fb0f58d2d3bc36cb71e66c2f957933ceaa4f1519d4a4
           provision_status=0
           /usr/bin/python3 -I -S -B "$cache_root/provision.py" "$cache_root" --supply || provision_status=$?
           if [ -f "$cache_root/owned.json" ] && [ ! -L "$cache_root/owned.json" ]; then
@@ -1712,6 +1719,7 @@ jobs:
           import hashlib
           import importlib.util
           import json
+          import math
           import os
           from pathlib import Path
           import re
@@ -1723,11 +1731,35 @@ jobs:
           assert sys.platform == 'darwin' and os.getuid() != 0
           assert not any(key.startswith('DYLD_') or key == '__PYVENV_LAUNCHER__' for key in os.environ)
           assert len(sys.argv) == 7
+          def uptime():
+              value = time.clock_gettime(time.CLOCK_UPTIME_RAW)
+              assert type(value) is float and math.isfinite(value) and value >= 0
+              return value
+
+
+          def owner_deadline():
+              info = time.get_clock_info('monotonic')
+              # Both fixed Darwin APIs use mach_absolute_time: seconds, the same rate, and excluding system sleep.
+              assert info.monotonic and not info.adjustable and info.implementation == 'mach_absolute_time()'
+              assert math.isfinite(info.resolution) and info.resolution > 0
+              resolution = time.clock_getres(time.CLOCK_UPTIME_RAW)
+              assert math.isfinite(resolution) and resolution > 0
+              local = time.monotonic()
+              raw = uptime()
+              remaining = deadline - raw
+              assert math.isfinite(local) and local >= 0
+              assert math.isfinite(remaining) and 0 < remaining <= 120
+              converted = local + remaining
+              assert math.isfinite(converted) and converted > local
+              return converted
+
+
           stage = sys.argv[4]
           assert stage in ('empty', 'real')
-          deadline = time.monotonic() + 120 if stage == 'empty' else float(sys.argv[5])
+          guard_started = uptime()
+          deadline = guard_started + 120 if stage == 'empty' else float(sys.argv[5])
           entry_pid = os.getpid() if stage == 'empty' else int(sys.argv[6])
-          assert time.monotonic() < deadline <= time.monotonic() + 120
+          assert math.isfinite(deadline) and uptime() < deadline <= guard_started + 120
           fixed_root = Path('/Library/Frameworks/Python.framework')
           fixed_prefix = fixed_root / 'Versions/3.15'
           fixed_tools = fixed_root / 'ystack-private-tools'
@@ -1794,7 +1826,7 @@ jobs:
 
 
           def immutable(fd, state, ancestor):
-              assert time.monotonic() < deadline
+              assert uptime() < deadline
               assert state.st_uid == 0 and not state.st_mode & 0o022
               ctypes.set_errno(0)
               empty_acl(library.acl_get_fd_np(fd, 0x100))
@@ -1817,7 +1849,7 @@ jobs:
               steps = 0
               while pending:
                   steps += 1
-                  assert steps <= 128 and time.monotonic() < deadline
+                  assert steps <= 128 and uptime() < deadline
                   resolved.append(pending.pop(0))
                   name = '/'.join(resolved)
                   if name == 'Versions':
@@ -1854,7 +1886,7 @@ jobs:
               global active_path, active_stage
               active_path = str(path)
               active_stage = 'candidate-inspect'
-              assert time.monotonic() < deadline and len(rows) < 16384
+              assert uptime() < deadline and len(rows) < 16384
               path = canonical_fixed(path)
               assert path.is_absolute() and path.resolve() == path
               held = c._open_held(str(path), directory, rule(), 'E_INSTALL')
@@ -1902,7 +1934,7 @@ jobs:
               digest, members = bindings[name]
               assert hashlib.sha256(raw).hexdigest() == digest and len(slices) == 2
               for cpu, subtype, body in slices:
-                  assert time.monotonic() < deadline
+                  assert uptime() < deadline
                   if members is None:
                       magic, version, offset, size, wrapper_cpu = struct.unpack_from('<5I', body)
                       expected = (4888, 0x01000007) if cpu == 0x01000007 else (5252, 0xffffffff)
@@ -1913,7 +1945,7 @@ jobs:
                   assert body[:8] == b'!<arch>\n'
                   offset, observed = 8, []
                   while offset < len(body):
-                      assert time.monotonic() < deadline and len(observed) <= len(members)
+                      assert uptime() < deadline and len(observed) <= len(members)
                       header = body[offset:offset + 60]
                       assert len(header) == 60 and header[58:] == b'`\n'
                       size = int(header[48:58])
@@ -2051,7 +2083,8 @@ jobs:
               if stage == 'real':
                   bootstrap = c._hold_bytes(sys.executable, c.EXECUTABLE_LIMIT)
                   owned.append(bootstrap)
-                  owner = c._DarwinChildOwner(bootstrap, source_held, deadline, ledger)
+                  owner = c._DarwinChildOwner(bootstrap, source_held, owner_deadline(), ledger)
+                  assert uptime() < deadline
               for item in reversed((locator, *locator.parents)):
                   if item == Path('/'):
                       continue
@@ -2082,7 +2115,7 @@ jobs:
                   inspect(directory, True)
                   with os.scandir(str(directory)) as entries:
                       for entry in entries:
-                          assert time.monotonic() < deadline and len(observed) < 16384
+                          assert uptime() < deadline and len(observed) < 16384
                           path = Path(entry.path)
                           name = str(path.relative_to(fixed_root))
                           assert name not in observed
@@ -2143,7 +2176,7 @@ jobs:
                   assert raw[:4] in (b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe', b'\xca\xfe\xba\xbf')
                   native_dependencies(path, raw, True)
               for name, (before, _digest) in rows.items():
-                  assert time.monotonic() < deadline and identity(os.lstat(name)) == before
+                  assert uptime() < deadline and identity(os.lstat(name)) == before
               assert all(not os.path.lexists(path) for path in cache_paths)
               for name, (before, target) in links.items():
                   assert identity(os.lstat(name)) == before and os.readlink(name) == target
@@ -2152,6 +2185,7 @@ jobs:
               assert Path(os.path.realpath(str(locator))) == selected
               for item in owned:
                   item.recheck('E_STALE')
+              assert uptime() < deadline
               print(json.dumps({'bootstrap': 'fixed-framework-real-resolver' if stage == 'real' else 'fixed-system-trusted-reader', 'python': str(selected),
                   'prefix': str(prefix), 'objects': len(rows), 'native_images': len(seen),
                   'closure_sha256': c.digest(c.canonical({'objects': rows, 'selector_links': links})), 'acl_commands': len(ledger.commands),
@@ -2254,16 +2288,16 @@ jobs:
           SH_FIXED_SUPPLY_PHASE
           /bin/chmod 0500 "$cache_root/supply-phase.sh"
           export YSTACK_PROOF_TMP="$cache_root"
-          test "$(/usr/bin/shasum -a 256 "$cache_root/provision.py" | /usr/bin/awk '{print $1}')" = 8f8cbbdc51e895ecd70a10e6dbce6012240acac19c207410d1215b9ce505c050
+          test "$(/usr/bin/shasum -a 256 "$cache_root/provision.py" | /usr/bin/awk '{print $1}')" = 650efea04c4a03f4deb3fb0f58d2d3bc36cb71e66c2f957933ceaa4f1519d4a4
           /bin/cat > "$cache_root/mode-controls.py" <<'PY_PARENT_MODE_CONTROLS'
           from pathlib import Path
-          import ast,contextlib,ctypes,errno,hashlib,io,json,os,re,stat,subprocess,sys,tempfile,time,types,base64
+          import ast,contextlib,ctypes,errno,hashlib,io,json,os,re,stat,subprocess,sys,tempfile,time,types,base64,math
           source = Path(sys.argv[1]).read_bytes()
           assert len(source) <= 16 * 1024 * 1024
           module = ast.parse(source)
           selected = [node for node in module.body if isinstance(node, (ast.ClassDef, ast.FunctionDef))
-                      and node.name in ('VersionsParentMode', 'fixed_phase')]
-          assert len(selected) == 2
+                      and node.name in ('VersionsParentMode', 'fixed_phase', 'uptime')]
+          assert len(selected) == 3
           program = compile(ast.Module(body=selected, type_ignores=[]), 'exact-parent-mode-boundary', 'exec')
           fields = ('st_dev', 'st_ino', 'st_mode', 'st_uid', 'st_gid', 'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
           identity = lambda value: [getattr(value, name) for name in fields]
@@ -2328,11 +2362,11 @@ jobs:
               def acl(_value):
                   assert not bad_acl
               ns = dict(Path=Path,os=proxy,sys=sys,stat=stat,re=re,json=json,hashlib=hashlib,base64=base64,ctypes=ctypes,
-                        time=time,cache=area/'cache',ROOT=fixed_root,V=fixed_root/'Versions/3.15',
+                        time=time,math=math,cache=area/'cache',ROOT=fixed_root,V=fixed_root/'Versions/3.15',
                         T=fixed_root/'ystack-private-tools',TREES=(fixed_root/'Versions/3.15',fixed_root/'ystack-private-tools'),
                         canonical=canonical,ident=identity,budget=lambda:None,physical=physical,recheck_one=recheck,
                         close_physical=close_physical,close_all_physical=lambda:None,empty_acl=acl,
-                        lib=types.SimpleNamespace(acl_get_fd_np=lambda *args:None),started=time.monotonic(),deadline=time.monotonic()+270)
+                        lib=types.SimpleNamespace(acl_get_fd_np=lambda *args:None),started=time.clock_gettime(time.CLOCK_UPTIME_RAW),deadline=time.clock_gettime(time.CLOCK_UPTIME_RAW)+270)
               ns['in_trees'] = lambda path: any(path == tree or tree in path.parents for tree in ns['TREES'])
               def command(argv, expected, stream_phase=False):
                   events.append(argv.copy())
@@ -2355,6 +2389,25 @@ jobs:
               except (AssertionError,ValueError,OSError,KeyError,TypeError,RuntimeError):
                   return
               raise AssertionError('unsafe parent-mode case accepted')
+
+          if len(sys.argv) == 4 and sys.argv[3] in ('--owned-clock-child', '--owned-clock-expired'):
+              ns, events, active = fixture(Path(sys.argv[2]), False)
+              if sys.argv[3] == '--owned-clock-expired':
+                  time.sleep(0.4)
+              start = source.index(b"assert len(sys.argv) == 3 and sys.argv[2] == '--supply'")
+              end = source.index(b'\n\nclass NoRedirect', start)
+              entry = source[start:end]
+              ns['sys'] = types.SimpleNamespace(argv=['owned-supply', str(ns['cache']), '--supply'])
+              try:
+                  exec(compile(entry, 'exact-owned-supply-entry', 'exec'), ns)
+                  ns['budget'] = None
+                  print(json.dumps({'pid':os.getpid(), 'deadline':ns['deadline'], 'raw':ns['uptime'](),
+                                    'started':ns['started'], 'supply_loaded':True}))
+              finally:
+                  if ns.get('parent_mode') is not None:
+                      ns['parent_mode'].close()
+              assert not active
+              raise SystemExit(0)
 
           if len(sys.argv) == 4 and sys.argv[3] in ('--owned-reopen', '--owned-refusal'):
               ns, events, active = fixture(Path(sys.argv[2]), False)
@@ -2579,13 +2632,13 @@ jobs:
               finally:mode.close()
           # Exact phase exception and closure paths use actual nonprivileged child exits.
           runner_nodes = [node for node in module.body if isinstance(node, ast.FunctionDef)
-                          and node.name in ('bounded_command', 'budget', 'canonical', 'interrupted')]
+                          and node.name in ('bounded_command', 'budget', 'canonical', 'interrupted', 'uptime')]
           run_node = next(node for node in module.body if isinstance(node, ast.FunctionDef) and node.name == 'run')
           journal_node = next(node for node in module.body if isinstance(node, ast.FunctionDef) and node.name == 'journal_snapshot')
           def real_exit(ns, status, cancelled=False):
               import selectors,signal
-              real = dict(os=os,subprocess=subprocess,selectors=selectors,time=time,json=json,
-                          cancel_requested=0,deadline=time.monotonic()+4)
+              real = dict(os=os,subprocess=subprocess,selectors=selectors,time=time,json=json,math=math,
+                          cancel_requested=0,deadline=time.clock_gettime(time.CLOCK_UPTIME_RAW)+4)
               exec(compile(ast.Module(body=runner_nodes,type_ignores=[]),'exact-owned-real-runner','exec'),real)
               handlers = {number:signal.getsignal(number) for number in (signal.SIGTERM,signal.SIGINT)}
               for number in handlers:signal.signal(number,real['interrupted'])
@@ -2672,6 +2725,243 @@ jobs:
                       results.append({'case':'actual-closure-'+fault+'-'+oct(bits),'cleanup_calls':0,
                                       'later_mode_commands':0,'owned_trees_retained':True,
                                       'observation_adapter':fault in ('unreaped','privileged-unknown')})
+          def owned_test_child(argv):
+              child = None
+              try:
+                  child = subprocess.Popen(argv,stdout=subprocess.PIPE,stderr=subprocess.PIPE,close_fds=True)
+                  out, err = child.communicate(timeout=5)
+                  return child, out, err
+              finally:
+                  original = sys.exc_info()[1]
+                  cleanup_error = None
+                  if child is not None:
+                      try:
+                          if child.returncode is None:
+                              child.kill()
+                      except BaseException as error:
+                          cleanup_error = error
+                      try:
+                          child.wait(timeout=1)
+                      except BaseException as error:
+                          cleanup_error = cleanup_error or error
+                      finally:
+                          for stream in (child.stdout,child.stderr):
+                              if stream is not None:
+                                  try:
+                                      stream.close()
+                                  except BaseException as error:
+                                      cleanup_error = cleanup_error or error
+                  if cleanup_error is not None:
+                      if original is not None:
+                          raise original from cleanup_error
+                      raise cleanup_error
+
+
+          # Only the fixed owned executor is adapted; fixed_phase publishes its real deadline.
+          with tempfile.TemporaryDirectory(prefix='versions-mode-shared-clock-') as temporary:
+              import shlex
+              for expired in (False, True):
+                  area = Path(temporary)/('expiry' if expired else 'positive')
+                  ns, events, active = fixture(area, mode=0o755)
+                  ns['started'] = ns['uptime']()
+                  if expired:
+                      phase = next(node for node in module.body if isinstance(node, ast.FunctionDef) and node.name == 'fixed_phase')
+                      import copy
+                      phase = copy.deepcopy(phase)
+                      assignment = phase.body[2]
+                      assert ast.unparse(assignment.value) == "started + {'supply': 270, 'scope': 35 * 60, 'native': 50 * 60, 'closure': 270}[name]"
+                      assignment.value.right.value.values[0] = ast.Constant(0.25)
+                      ast.fix_missing_locations(phase)
+                      exec(compile(ast.Module(body=[phase],type_ignores=[]),'fixed-owned-short-duration-only','exec'),ns)
+                  flag = '--owned-clock-expired' if expired else '--owned-clock-child'
+                  argv = ['/usr/bin/python3','-I','-S','-B',str(Path(__file__).resolve()),sys.argv[1],str(area),flag]
+                  (area/'cache/supply-phase.sh').write_text('exec '+' '.join(shlex.quote(value) for value in argv)+'\n')
+                  children = []
+                  def actual_chain(argv, expected, stream_phase=False):
+                      assert argv == ['/bin/bash','--noprofile','--norc','-e','-o','pipefail',str(area/'cache/supply-phase.sh')]
+                      child, out, err = owned_test_child(argv)
+                      assert len(out)+len(err) <= 16384
+                      outcome = {'pid':child.pid,'returncode':child.returncode,'reaped':True,'cancelled':False,'privileged_unknown':False}
+                      ns['last_child_outcome'] = outcome
+                      try:os.waitpid(child.pid,os.WNOHANG)
+                      except ChildProcessError:pass
+                      else:raise AssertionError('owned child not reaped')
+                      children.append({'outcome':outcome,'stdout':out.decode(),'stderr':err.decode()})
+                      assert child.returncode == expected, (out, err)
+                      return out
+                  ns['bounded_command'] = actual_chain
+                  before = len(os.listdir('/dev/fd'))
+                  if expired:refuse(lambda:ns['fixed_phase']('supply'))
+                  else:ns['fixed_phase']('supply')
+                  assert len(children)==1 and not active
+                  reader = ns['VersionsParentMode']()
+                  try:
+                      reader.load()
+                      phases = [row['body'] for row in reader.rows if row['kind']=='phase']
+                      assert len(phases)==2 and phases[0]['deadline']==ns['started']+(0.25 if expired else 270)
+                      assert phases[1]['success'] is not expired and phases[1]['quiescent']
+                      if not expired:
+                          loaded = json.loads(children[0]['stdout'])
+                          assert loaded['deadline']==phases[0]['deadline'] and loaded['pid']==children[0]['outcome']['pid']
+                          assert loaded['started'] <= loaded['raw'] < loaded['deadline']
+                      else:assert 'AssertionError' in children[0]['stderr']
+                  finally:reader.close()
+                  # Actual closure authenticates the real result; failure stays a failure.
+                  if expired:refuse(lambda:ns['fixed_phase']('closure'))
+                  else:ns['fixed_phase']('closure')
+                  assert not events and not active and len(os.listdir('/dev/fd'))==before
+                  results.append({'case':'shared-clock-expiry' if expired else 'shared-clock-real270',
+                                  'children':children,'deadline_seconds':0.25 if expired else 270,
+                                  'fixed_test_only_duration_adapter':expired,'actual_wait_reap':True,
+                                  'failure_preserved':expired,'no_mode_commands':True,'fd_closed':True})
+          for label, invalid in (('nan',float('nan')),('inf',float('inf')),('negative-inf',float('-inf')),
+                                 ('bool',True),('text','invalid'),('zero',0),('negative',-1),('upper-bound',1e100)):
+              with tempfile.TemporaryDirectory(prefix='versions-mode-deadline-refusal-') as temporary:
+                  area = Path(temporary)/'normal'
+                  ns, events, active = fixture(area,mode=0o755)
+                  mode = ns['VersionsParentMode']()
+                  try:
+                      mode.begin()
+                      ns['deadline'] = invalid
+                      refuse(lambda:mode.phase('scope','enter'))
+                      assert not events
+                  finally:mode.close()
+                  assert not active
+                  results.append({'case':'journal-deadline-refusal-'+label,'no_mode_commands':True})
+
+          # The source script is fixed generated owned data; only its clock/entry fragments execute.
+          supply = (Path(sys.argv[1]).parent/'supply-phase.sh').read_bytes()
+          assert len(supply) <= 16*1024*1024
+          opening = b'/bin/cat > "$cache_root/guard.py" <<\'PY_MAC_GUARD\'\n'
+          assert supply.count(opening)==1 and supply.count(b'\nPY_MAC_GUARD\n')==1
+          guard = supply.split(opening,1)[1].split(b'\nPY_MAC_GUARD\n',1)[0].decode()+'\n'
+          assert hashlib.sha256(guard.encode()).hexdigest() == '41b01937f09c6db77e35cd899ea209665ff2eea7a1e7650d0d5b04ec1090b573'
+          guard_module = ast.parse(guard)
+          guard_parts = {node.name:ast.get_source_segment(guard,node) for node in guard_module.body
+                         if isinstance(node,ast.FunctionDef) and node.name in ('uptime','owner_deadline')}
+          assert set(guard_parts)=={'uptime','owner_deadline'}
+          clock_code = guard_parts['uptime']+'\n\n'+guard_parts['owner_deadline']+'\n'
+          header = guard[guard.index('stage = sys.argv[4]'):guard.index("fixed_root = Path(")]
+          clock_ns = dict(time=time,math=math)
+          exec(compile(clock_code,'exact-owned-guard-clock','exec'),clock_ns)
+          def clock_refused(action):
+              try:action()
+              except (AssertionError,ValueError,TypeError,AttributeError,OverflowError):return
+              raise AssertionError('invalid clock boundary accepted')
+          for value in ('nan','inf','-inf','-1','0','not-a-number','1e100'):
+              ns = dict(clock_ns,os=os,sys=types.SimpleNamespace(argv=['guard','owned','owned','owned','real',value,str(os.getpid())]))
+              clock_refused(lambda:exec(compile(header,'exact-owned-guard-header','exec'),ns))
+              results.append({'case':'guard-deadline-refusal-'+value,'runtime_not_executed':True})
+          real_time = time
+          for fault in ('nonmonotonic','adjustable','provider','missing-api','raw-nan','raw-inf','raw-negative'):
+              info = time.get_clock_info('monotonic')
+              proxy = types.SimpleNamespace(clock_gettime=time.clock_gettime,clock_getres=time.clock_getres,
+                                            CLOCK_UPTIME_RAW=time.CLOCK_UPTIME_RAW,monotonic=time.monotonic)
+              proxy.get_clock_info = lambda name:types.SimpleNamespace(
+                  monotonic=info.monotonic and fault!='nonmonotonic',adjustable=info.adjustable or fault=='adjustable',
+                  implementation='unknown-provider' if fault=='provider' else info.implementation,resolution=info.resolution)
+              if fault=='missing-api':del proxy.CLOCK_UPTIME_RAW
+              if fault.startswith('raw-'):
+                  proxy.clock_gettime = lambda name: {'raw-nan':float('nan'),'raw-inf':float('inf'),'raw-negative':-1.0}[fault]
+              ns = dict(time=proxy,math=math,deadline=clock_ns['uptime']()+2)
+              exec(compile(clock_code,'exact-owned-clock-refusal','exec'),ns)
+              clock_refused(ns['owner_deadline'])
+              results.append({'case':'owner-contract-refusal-'+fault,'owner_not_created':True})
+          order = []
+          def local_read():
+              value = real_time.monotonic();order.append(('local',value));return value
+          def raw_read(identifier):
+              real_time.sleep(0.02)
+              value = real_time.clock_gettime(identifier);order.append(('raw',value));return value
+          proxy = types.SimpleNamespace(get_clock_info=real_time.get_clock_info,clock_getres=real_time.clock_getres,
+                                        CLOCK_UPTIME_RAW=real_time.CLOCK_UPTIME_RAW,monotonic=local_read,clock_gettime=raw_read)
+          ns = dict(time=proxy,math=math,deadline=clock_ns['uptime']()+2)
+          exec(compile(clock_code,'exact-owned-conservative-conversion','exec'),ns)
+          converted = ns['owner_deadline']()
+          assert [row[0] for row in order]==['local','raw']
+          assert converted == order[0][1]+(ns['deadline']-order[1][1])
+          assert 0 < converted-real_time.monotonic() < ns['deadline']-order[1][1]
+          ns['deadline'] = clock_ns['uptime']()-1
+          clock_refused(ns['owner_deadline'])
+          results.append({'case':'owner-conservative-conversion','ordered_readings':order,
+                          'converted':converted,'expired_refused':True,'production_owner_not_created':True})
+          with tempfile.TemporaryDirectory(prefix='guard-shared-clock-exec-') as temporary:
+              for expired in (False,True):
+                  script = Path(temporary)/('expired.py' if expired else 'positive.py')
+                  # Only this fixed test duration differs; the real-stage header keeps its original upper bound.
+                  entry_header = header.replace('guard_started + 120 if', 'guard_started + 0.25 if') if expired else header
+                  code = 'import os,sys,time,math,json\nfrom pathlib import Path\n'+clock_code+entry_header
+                  code += "assert stage == 'empty' or os.getpid() == entry_pid\n"
+                  code += "print(json.dumps({'stage':stage,'pid':os.getpid(),'deadline':deadline,'raw':uptime()}),flush=True)\n"
+                  code += "if stage == 'empty':\n"
+                  if expired:code += '    time.sleep(0.4)\n'
+                  code += "    selected=Path('/usr/bin/python3');package=Path('owned');guard_path=Path(__file__);guard_code=guard_path.read_bytes()\n"
+                  transition = next(ast.get_source_segment(guard,node) for node in ast.walk(guard_module)
+                                    if isinstance(node,ast.Call) and ast.unparse(node.func)=='os.execv')
+                  code += '    '+transition.replace('\n','\n    ')+'\n'
+                  with script.open('x') as output:output.write(code)
+                  fd_before = len(os.listdir('/dev/fd'))
+                  child,out,err = owned_test_child(['/usr/bin/python3','-I','-S','-B',str(script),'owned','owned','owned','empty','0','0'])
+                  assert len(out)+len(err)<=16384 and child.returncode==(1 if expired else 0),(out,err)
+                  observations = [json.loads(line) for line in out.splitlines()]
+                  assert observations[0]['stage']=='empty' and observations[0]['pid']==child.pid
+                  if expired:assert len(observations)==1 and b'AssertionError' in err
+                  else:
+                      assert len(observations)==2 and observations[1]['stage']=='real'
+                      assert observations[1]['pid']==observations[0]['pid'] and observations[1]['deadline']==observations[0]['deadline']
+                      assert observations[0]['raw']<=observations[1]['raw']<observations[0]['deadline']
+                  try:os.waitpid(child.pid,os.WNOHANG)
+                  except ChildProcessError:pass
+                  else:raise AssertionError('exec child not reaped')
+                  assert len(os.listdir('/dev/fd'))==fd_before
+                  results.append({'case':'guard-exec-expired' if expired else 'guard-exec-same-pid',
+                                  'observations':observations,'returncode':child.returncode,'stderr':err.decode(),
+                                  'actual_reaped':True,'supplied_python_not_executed':True,'fixed_short_duration_adapter':expired})
+          # Fixed test-only seams exercise this same helper's abnormal supervision exits.
+          helper_module = ast.parse(Path(__file__).read_bytes())
+          helper_node = next(node for node in helper_module.body if isinstance(node,ast.FunctionDef) and node.name=='owned_test_child')
+          helper_source = ast.get_source_segment(Path(__file__).read_text(),helper_node)
+          for fault in ('timeout','supervision-error'):
+              import copy
+              node = copy.deepcopy(helper_node)
+              if fault=='timeout':
+                  calls = [item for item in ast.walk(node) if isinstance(item,ast.Call) and
+                           isinstance(item.func,ast.Attribute) and item.func.attr=='communicate']
+                  assert len(calls)==1 and calls[0].keywords[0].arg=='timeout' and calls[0].keywords[0].value.value==5
+                  calls[0].keywords[0].value = ast.Constant(0.05)
+                  ast.fix_missing_locations(node)
+              observed = []
+              supervision_error = OSError('fixed owned supervision failure after actual spawn')
+              def observed_spawn(*args,**kwargs):
+                  child = subprocess.Popen(*args,**kwargs)
+                  observed.append((child,child.stdout.fileno(),child.stderr.fileno()))
+                  if fault=='supervision-error':
+                      def failed_communicate(*args,**kwargs):raise supervision_error
+                      child.communicate = failed_communicate
+                  return child
+              ns = dict(subprocess=types.SimpleNamespace(Popen=observed_spawn,PIPE=subprocess.PIPE),sys=sys)
+              exec(compile(ast.Module(body=[node],type_ignores=[]),'exact-owned-child-supervisor','exec'),ns)
+              before = len(os.listdir('/dev/fd'))
+              failure = None
+              try:ns['owned_test_child'](['/usr/bin/python3','-I','-S','-B','-c','import time;time.sleep(30)'])
+              except BaseException as error:failure = error
+              assert len(observed)==1 and failure is not None
+              assert isinstance(failure,subprocess.TimeoutExpired) if fault=='timeout' else failure is supervision_error
+              child,out_fd,err_fd = observed[0]
+              assert child.returncode is not None and child.stdout.closed and child.stderr.closed
+              for fd in (out_fd,err_fd):
+                  try:os.fstat(fd)
+                  except OSError as error:assert error.errno==errno.EBADF
+                  else:raise AssertionError('owned pipe FD remained open')
+              try:os.waitpid(child.pid,os.WNOHANG)
+              except ChildProcessError:pass
+              else:raise AssertionError('owned supervision child not actually reaped')
+              assert len(os.listdir('/dev/fd'))==before
+              results.append({'case':'owned-child-'+fault,'pid':child.pid,'returncode':child.returncode,
+                              'failure_type':type(failure).__name__,'failure_preserved':True,'actual_reaped':True,
+                              'stdout_fd_closed':True,'stderr_fd_closed':True,'fd_before':before,'fd_after':len(os.listdir('/dev/fd')),
+                              'fixed_short_timeout_adapter':fault=='timeout','helper_sha256':hashlib.sha256(helper_source.encode()).hexdigest()})
+
           print(json.dumps({'cases':results,'boundary_sha256':hashlib.sha256(source).hexdigest(),
               'limits':'Exact private class/fixed_phase compiled from provision. UID/ACL/physical observations and recording executor are fixed test-only adapters; actual owned records/fsync/fds and nonprivileged child wait are real. No production D, sudo, supplied P, suite or host probe executed.'},sort_keys=True))
           PY_PARENT_MODE_CONTROLS
@@ -2679,7 +2969,7 @@ jobs:
           /usr/bin/python3 -I -S -B "$cache_root/mode-controls.py" "$cache_root/provision.py"
           /bin/cat > "$cache_root/owned-mode-controls.py" <<'PY_OWNED_MODE_CONTROLS'
           from pathlib import Path
-          import ast,contextlib,copy,ctypes,errno,hashlib,io,json,os,shutil,stat,subprocess,tempfile,time,types,sys,base64,re
+          import ast,contextlib,copy,ctypes,errno,hashlib,io,json,os,shutil,stat,subprocess,tempfile,time,types,sys,base64,re,math
           D=Path(__file__).parent;raw=Path(sys.argv[1]).read_text();functions={n.name:n for n in ast.parse(raw).body if isinstance(n,ast.FunctionDef)};rows=[];bind={}
           # Only the fixed metadata/command boundary is extracted. No module top-level or runner is executed.
           names=('canonical','ident','in_trees','child_snapshot','check_parents','open_parents','mutation_names','held_directories','run','journal_snapshot','save','cleanup','acquire_component','release_component','close_physical','close_all_physical')
@@ -2694,7 +2984,7 @@ jobs:
            cache=base/'cache';cache.mkdir(mode=0o700)
            (cache/'environment').write_bytes(b'')
            for key,value in {'YSTACK_SELECTED_SHA':'1'*40,'YSTACK_WORKFLOW_SHA':'1'*40,'GITHUB_RUN_ID':'1','GITHUB_RUN_ATTEMPT':'1','GITHUB_JOB':'owned-controls','GITHUB_ENV':str(cache/'environment')}.items():os.environ[key]=value
-           ns={'base64':base64,'re':re,'os':os,'Path':Path,'stat':stat,'json':json,'hashlib':hashlib,'ctypes':ctypes,'errno':errno,'sys':__import__('sys'),
+           ns={'math':math,'base64':base64,'re':re,'os':os,'Path':Path,'stat':stat,'json':json,'hashlib':hashlib,'ctypes':ctypes,'errno':errno,'sys':__import__('sys'),
                'FIELDS':('st_dev','st_ino','st_mode','st_uid','st_gid','st_nlink','st_size','st_mtime_ns','st_ctime_ns'),
                'ROOT':root,'V':root/'Versions/3.15','T':root/'ystack-private-tools','cache':cache,'owned':[],'staging':[],'parents':{},'parent_records':{},'ancestors':{},'created':set(),'held':[],'shared_components':{},'commands':0,'journal':None,'cancel_requested':0,'lib':NoACLProof()}
            ns['TREES']=(ns['V'],ns['T']);ns['budget']=lambda:None;ns['empty_acl']=lambda value:None
@@ -2831,19 +3121,19 @@ jobs:
           PY_OWNED_MODE_CONTROLS
           /bin/chmod 0500 "$cache_root/owned-mode-controls.py"
           /usr/bin/python3 -I -S -B "$cache_root/owned-mode-controls.py" "$cache_root/provision.py"
-          test "$(/usr/bin/shasum -a 256 "$cache_root/provision.py" | /usr/bin/awk '{print $1}')" = 8f8cbbdc51e895ecd70a10e6dbce6012240acac19c207410d1215b9ce505c050
+          test "$(/usr/bin/shasum -a 256 "$cache_root/provision.py" | /usr/bin/awk '{print $1}')" = 650efea04c4a03f4deb3fb0f58d2d3bc36cb71e66c2f957933ceaa4f1519d4a4
           /usr/bin/python3 -I -S -B "$cache_root/provision.py" "$cache_root" --phase supply
       - name: Complete original scope qualification suite
         timeout-minutes: 35
         shell: /bin/bash --noprofile --norc -e -o pipefail {0}
         run: |
-          test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 8f8cbbdc51e895ecd70a10e6dbce6012240acac19c207410d1215b9ce505c050
+          test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 650efea04c4a03f4deb3fb0f58d2d3bc36cb71e66c2f957933ceaa4f1519d4a4
           /usr/bin/python3 -I -S -B "$YSTACK_PROOF_TMP/provision.py" "$YSTACK_PROOF_TMP" --phase scope
       - name: Complete original native owner suite
         timeout-minutes: 50
         shell: /bin/bash --noprofile --norc -e -o pipefail {0}
         run: |
-          test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 8f8cbbdc51e895ecd70a10e6dbce6012240acac19c207410d1215b9ce505c050
+          test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 650efea04c4a03f4deb3fb0f58d2d3bc36cb71e66c2f957933ceaa4f1519d4a4
           /usr/bin/python3 -I -S -B "$YSTACK_PROOF_TMP/provision.py" "$YSTACK_PROOF_TMP" --phase native
       - name: Verify source and remove only the owned runtime and test cache
         if: always()
@@ -2855,7 +3145,7 @@ jobs:
           if [ -n "${YSTACK_PROOF_TMP:-}" ]; then
             if test -d "$YSTACK_PROOF_TMP" && test ! -L "$YSTACK_PROOF_TMP" &&
                test "$(/usr/bin/stat -f '%d:%i:%u' "$YSTACK_PROOF_TMP")" = "$YSTACK_PROOF_TMP_ID" &&
-               test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 8f8cbbdc51e895ecd70a10e6dbce6012240acac19c207410d1215b9ce505c050; then
+               test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 650efea04c4a03f4deb3fb0f58d2d3bc36cb71e66c2f957933ceaa4f1519d4a4; then
               /usr/bin/python3 -I -S -B "$YSTACK_PROOF_TMP/provision.py" "$YSTACK_PROOF_TMP" --phase closure || recovery_status=$?
             else
               recovery_status=1
