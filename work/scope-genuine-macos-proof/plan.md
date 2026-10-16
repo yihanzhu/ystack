@@ -298,14 +298,19 @@ recovery fails, without replacing the original failure.
    | --- | --- |
    | `/bin/mkdir -m 0755 V` | Create and journal the absent version root. |
    | `/bin/mkdir -m 0755 T` | Create and journal the absent tool root. |
-   | `/bin/cp -R -P -n STAGE/Versions/3.15/. V` | Copy only the verified version bytes into empty owned V. |
-   | `/bin/cp -R -P -n STAGE/ystack-private-tools/. T` | Copy only the fixed jq into empty owned T. |
+   | `/bin/cp -R -P -n -X STAGE/Versions/3.15/. V` | Copy only the verified version bytes into empty owned V. |
+   | `/bin/cp -R -P -n -X STAGE/ystack-private-tools/. T` | Copy only the fixed jq into empty owned T. |
    | `/bin/chmod -h 0755 LINK...` | Set only the 35 new manifest links themselves to the fixed mode. |
    | `/bin/rm -f -- LEAF...` | Remove only recorded owned regular files and links after identity checks. |
    | `/bin/rm -d -- DIRECTORY...` | Remove only recorded empty owned directories in reverse depth order. |
 
    ROOT, V and T are fixed literals, not inputs. STAGE is the single new private
    staging path recorded by this job. Never use `cp -p` or follow source links.
+   Keep `-X` fixed in both copies to disable extended-attribute and resource-fork
+   transfer. Preserve every manifest `._` path as an ordinary file with its exact
+   bytes; do not merge it into metadata or omit it. This platform flag stays in
+   the private fixed-copy boundary. Add no environment switch, `sudo -E`,
+   alternate copy tool or general copy API.
    Bound each manifest-derived argument batch to 128
    paths. Bound the private supply runner to 256 commands, 256 arguments and
    65,536 argument bytes per command. Enforce the combined 16 MiB stdout/stderr
@@ -496,6 +501,16 @@ refusal and conservative owner conversion. Assert original failure preservation,
 actual wait/reap and that fresh recovery cannot bypass quiescence. These controls
 execute neither supplied P nor sudo and do not prove P's clock contract; the actual
 approved Mac job and both complete suites still establish that contract and transition.
+
+After staging, before production copy, run the real `/bin/cp -R -P -n -X` on
+owned test directories with representative manifest-bound `._` file bytes, without
+sudo. Require exact file sets and bytes, link preservation and no overwrite of an
+existing sentinel. Recheck the staged source. Exercise the production command
+validator: accept only the two fixed copy argv; reject missing, changed or extra
+flags, alternate tools and old-tree paths before dispatch. Keep the same executor,
+caps and preflight deadline. Local controls or a local NO_REPRO do not prove real
+supply: the approved Mac job must still authenticate all 4,498 entries and complete
+the original suites and cleanup.
 
 Use owned fixture controls for unsafe/changed parents, either pre-existing V/T,
 wrong source bytes, extra/missing manifest paths, changed or escaping links,

@@ -410,7 +410,7 @@ jobs:
                   path = Path(argv[-1])
                   assert path in TREES and str(path) in created
                   relative = path.relative_to(ROOT)
-                  assert argv[3:] == ['-R', '-P', '-n', str(cache / 'stage' / relative) + '/.', str(path)]
+                  assert argv[3:] == ['-R', '-P', '-n', '-X', str(cache / 'stage' / relative) + '/.', str(path)]
                   assert not os.listdir(path)
                   changes[str(path)] = ({Path(name).parts[len(relative.parts)] for name in expected
                                         if Path(name).is_relative_to(relative) and name != str(relative)}, set())
@@ -424,7 +424,7 @@ jobs:
                   assert argv[3:5] == ['-h', '0755'] and len(argv) == 6
                   assert any(item['path'] == argv[5] and item['kind'] == 'link' for item in owned)
               else:
-                  assert argv[0] != '/usr/bin/sudo'
+                  assert argv[0] not in ('/usr/bin/sudo', '/bin/cp')
               return changes
 
 
@@ -441,6 +441,11 @@ jobs:
               global last_child_outcome
               last_child_outcome = {"pid": None, "returncode": None, "reaped": False, "cancelled": False, "privileged_unknown": False}
               budget()
+              accepted = (expected,)
+              if expected == 1 and argv[:5] == ['/bin/cp', '-R', '-P', '-n', '-X']:
+                  if argv == ['/bin/cp', '-R', '-P', '-n', '-X', str(cache / 'copy-control/source') + '/.',
+                              str(cache / 'copy-control/collision')]:
+                      accepted = (0, 1)
               child_deadline = deadline - 2
               assert uptime() < child_deadline
               process = None
@@ -484,8 +489,8 @@ jobs:
                       except subprocess.TimeoutExpired:
                           pass
                   budget()
-                  completed = status == expected
-                  assert status == expected, (argv[0], status)
+                  completed = status in accepted
+                  assert status in accepted, (argv[0], status)
                   return bytes(output)
               finally:
                   close_unknown = False
@@ -548,6 +553,7 @@ jobs:
 
           def run(argv, expected=0):
               global commands
+              assert argv[0] != '/bin/cp'
               budget()
               commands += 1
               assert commands <= 256 and len(argv) <= 256
@@ -1015,9 +1021,13 @@ jobs:
                   if argv[:3] == ['/usr/bin/sudo', '-n', '/bin/mkdir']:
                       assert argv[3:5] == ['-m', '0755'] and len(argv) == 6 and Path(argv[5]) in TREES
                   elif argv[:3] == ['/usr/bin/sudo', '-n', '/bin/cp']:
-                      assert len(argv) == 8 and argv[3:6] == ['-R', '-P', '-n']
-                      target = Path(argv[7])
-                      assert target in TREES and argv[6] == str(cache / 'stage' / target.relative_to(ROOT)) + '/.'
+                      assert len(argv) == 9 and argv[3:7] == ['-R', '-P', '-n', '-X']
+                      target = Path(argv[8])
+                      assert target in TREES and argv[7] == str(cache / 'stage' / target.relative_to(ROOT)) + '/.'
+                  elif argv[0] == '/bin/cp':
+                      assert argv in [[
+                          '/bin/cp', '-R', '-P', '-n', '-X', str(cache / 'copy-control/source') + '/.',
+                          str(cache / 'copy-control' / name)] for name in ('empty', 'collision')]
                   elif argv[:3] == ['/usr/bin/sudo', '-n', '/bin/chmod']:
                       assert argv[3:5] == ['-h', '0755'] and len(argv) == 6
                       assert Path(argv[5]).is_relative_to(V) and '..' not in Path(argv[5]).parts
@@ -1583,6 +1593,92 @@ jobs:
               return rows, blobs
 
 
+          def owned_copy_control():
+              global commands
+              area = cache / 'copy-control'
+              area.mkdir(mode=0o700)
+              source = area / 'source'
+              source.mkdir(mode=0o700)
+              binding = (
+                  ('._tclooConfig.sh', '13ba2a529b4fc91e29812ef8754e075d8cdd514b81c5445726a55bcbd491970d', 9751),
+                  ('tclooConfig.sh', '84006e97d498a361074944182e03053bb0a99b480ea052fd11e4ad78aa4c5437', 771))
+              for name, digest, size in binding:
+                  path = stage / 'Versions/3.15/Frameworks/Tcl.framework/Versions/9.0' / name
+                  row = expected[str(path.relative_to(stage))]
+                  assert row['kind'] == stat.S_IFREG and row['sha256'] == digest and row['size'] == size
+                  before = ident(path.lstat())
+                  fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                  try:
+                      assert ident(os.fstat(fd)) == before
+                      data = os.read(fd, 16 * 1024 * 1024 + 1)
+                      assert len(data) == size and hashlib.sha256(data).hexdigest() == digest
+                      assert ident(os.fstat(fd)) == before == ident(path.lstat())
+                  finally:
+                      os.close(fd)
+                  with (source / name).open('xb') as output:
+                      assert output.write(data) == size
+              (source / 'child').mkdir(mode=0o700)
+              with (source / 'child/data').open('xb') as output:
+                  assert output.write(b'owned-copy-data\n') == 16
+              (source / 'link').symlink_to('tclooConfig.sh')
+              for name in ('empty', 'collision'):
+                  (area / name).mkdir(mode=0o700)
+              sentinel = b'owned-copy-sentinel\n'
+              with (area / 'collision/tclooConfig.sh').open('xb') as output:
+                  assert output.write(sentinel) == len(sentinel)
+              (area / 'collision/link').symlink_to('kept-sentinel-target')
+
+              def snapshot(path):
+                  assert set(os.listdir(path)) == {'._tclooConfig.sh', 'tclooConfig.sh', 'child', 'link'}
+                  assert set(os.listdir(path / 'child')) == {'data'}
+                  values = {}
+                  for name in ('._tclooConfig.sh', 'tclooConfig.sh', 'child', 'child/data', 'link'):
+                      leaf = path / name
+                      state = leaf.lstat()
+                      kind = stat.S_IFMT(state.st_mode)
+                      assert kind in (stat.S_IFREG, stat.S_IFDIR, stat.S_IFLNK)
+                      if kind == stat.S_IFREG:
+                          assert state.st_nlink == 1 and state.st_size <= 16 * 1024 * 1024
+                          data = leaf.read_bytes()
+                          assert len(data) == state.st_size
+                          value = hashlib.sha256(data).hexdigest()
+                      else:
+                          value = os.readlink(leaf) if kind == stat.S_IFLNK else None
+                      assert ident(leaf.lstat()) == ident(state)
+                      values[name] = [kind, value]
+                  return values
+
+              source_before = snapshot(source)
+              for name, status in (('empty', 0), ('collision', 1)):
+                  budget()
+                  assert all(ident(os.lstat(path)) == state for path, state in staging)
+                  argv = ['/bin/cp', '-R', '-P', '-n', '-X', str(source) + '/.', str(area / name)]
+                  commands += 1
+                  assert commands <= 256 and len(argv) <= 256
+                  assert sum(len(os.fsencode(arg)) + 1 for arg in argv) <= 65536
+                  parent_mode.reserve(argv)
+                  try:
+                      bounded_command(argv, status)
+                      assert parent_mode.settled(last_child_outcome)
+                      actual_status = last_child_outcome['returncode']
+                      assert actual_status in ((0, 1) if name == 'collision' else (0,))
+                      actual = snapshot(area / name)
+                      wanted = dict(source_before)
+                      if name == 'collision':
+                          wanted['tclooConfig.sh'] = [stat.S_IFREG, hashlib.sha256(sentinel).hexdigest()]
+                          wanted['link'] = [stat.S_IFLNK, 'kept-sentinel-target']
+                      assert actual == wanted and snapshot(source) == source_before
+                      assert all(ident(os.lstat(path)) == state for path, state in staging)
+                      record = canonical({'owned_copy_control': name, 'returncode': actual_status,
+                                          'exact_names_types_bytes_links': True, 'source_rechecked': True,
+                                          'sentinel_preserved': name == 'collision'}) + b'\n'
+                      assert len(record) <= 16384 and os.write(2, record) == len(record)
+                  except BaseException:
+                      parent_mode.complete(False)
+                      raise
+                  parent_mode.complete(True)
+
+
           try:
               open_parents()
               save()
@@ -1640,6 +1736,7 @@ jobs:
                   stage_rows.append((str(path), ident(state)))
               staging[:] = stage_rows
               save()
+              owned_copy_control()
               for tree in TREES:
                   assert all(ident(os.lstat(name)) == state for name, state in stage_rows)
                   recheck()
@@ -1650,7 +1747,7 @@ jobs:
                   assert not os.listdir(root[2])
                   owned.append({'path': str(tree), 'kind': 'directory', 'identity': root[1]})
                   save()
-                  run(['/usr/bin/sudo', '-n', '/bin/cp', '-R', '-P', '-n', str(stage / tree.relative_to(ROOT)) + '/.', str(tree)])
+                  run(['/usr/bin/sudo', '-n', '/bin/cp', '-R', '-P', '-n', '-X', str(stage / tree.relative_to(ROOT)) + '/.', str(tree)])
                   assert all(ident(os.lstat(name)) == state for name, state in stage_rows)
                   subset = {name: row for name, row in expected.items() if ROOT / name == tree or tree in (ROOT / name).parents}
                   found = set()
@@ -1738,7 +1835,7 @@ jobs:
           umask 077
           cache_root=$YSTACK_PROOF_TMP
           native_p=/Library/Frameworks/Python.framework/Versions/3.15/Resources/Python.app/Contents/MacOS/Python
-          test "$(/usr/bin/shasum -a 256 "$cache_root/provision.py" | /usr/bin/awk '{print $1}')" = 9d3ee653838e91fce78fdca6e28f8e5fd8b23f01983fd97d022698286c5525c0
+          test "$(/usr/bin/shasum -a 256 "$cache_root/provision.py" | /usr/bin/awk '{print $1}')" = 625a0e3e21588c90a921c003032501b6780b5ee9ac4cb29e463f1cea6232a053
           provision_status=0
           /usr/bin/python3 -I -S -B "$cache_root/provision.py" "$cache_root" --supply || provision_status=$?
           if [ -f "$cache_root/owned.json" ] && [ ! -L "$cache_root/owned.json" ]; then
@@ -2322,10 +2419,10 @@ jobs:
           SH_FIXED_SUPPLY_PHASE
           /bin/chmod 0500 "$cache_root/supply-phase.sh"
           export YSTACK_PROOF_TMP="$cache_root"
-          test "$(/usr/bin/shasum -a 256 "$cache_root/provision.py" | /usr/bin/awk '{print $1}')" = 9d3ee653838e91fce78fdca6e28f8e5fd8b23f01983fd97d022698286c5525c0
+          test "$(/usr/bin/shasum -a 256 "$cache_root/provision.py" | /usr/bin/awk '{print $1}')" = 625a0e3e21588c90a921c003032501b6780b5ee9ac4cb29e463f1cea6232a053
           /bin/cat > "$cache_root/mode-controls.py" <<'PY_PARENT_MODE_CONTROLS'
           from pathlib import Path
-          import ast,contextlib,ctypes,errno,hashlib,io,json,os,re,stat,subprocess,sys,tempfile,time,types,base64,math
+          import ast,contextlib,ctypes,errno,hashlib,io,json,os,re,stat,subprocess,sys,tempfile,time,types,base64,math,zlib
           source = Path(sys.argv[1]).read_bytes()
           assert len(source) <= 16 * 1024 * 1024
           module = ast.parse(source)
@@ -2441,6 +2538,15 @@ jobs:
                   if ns.get('parent_mode') is not None:
                       ns['parent_mode'].close()
               assert not active
+              raise SystemExit(0)
+
+          if len(sys.argv) == 4 and sys.argv[3] == '--owned-closure-refusal':
+              ns, events, active = fixture(Path(sys.argv[2]), False)
+              calls=[]
+              ns['cleanup']=lambda:calls.append('must not enter cleanup')
+              refuse(lambda:ns['fixed_phase']('closure'))
+              assert not calls and not events and not active
+              print(json.dumps({'actual_pid':os.getpid(),'fresh_fixed_phase_closure_refused':True,'cleanup_calls':0,'mode_calls':0}))
               raise SystemExit(0)
 
           if len(sys.argv) == 4 and sys.argv[3] in ('--owned-reopen', '--owned-refusal'):
@@ -3055,6 +3161,288 @@ jobs:
                               'stderr_bytes':sum(len(b) for b in output),'record':json.loads(output[0]) if output else None,
                               'exact_function_sha256':hashlib.sha256(ast.get_source_segment(source.decode(),report_node).encode()).hexdigest()})
 
+          # Execute the exact fixed ordinary-copy boundary on owned data, never on production paths.
+          copy_node = next(node for node in module.body if isinstance(node, ast.FunctionDef) and node.name=='owned_copy_control')
+          mutation_node = next(node for node in module.body if isinstance(node, ast.FunctionDef) and node.name=='mutation_names')
+          copy_sha = hashlib.sha256(ast.get_source_segment(source.decode(),copy_node).encode()).hexdigest()
+          sample_bytes = {
+              'appledouble-sample.bin': zlib.decompress(base64.b64decode(
+                  'eJztWgdUU8vWTqVDQIoIgiEIIi0nCb1JL9K7gCIxCRhaIAlVaUFBBUXhgiBIFyzYURQLoqg0FalWRBGVJoIFC+J/QtHg9T7fW+t/'
+                  '763/XzdrnZwzM3vP7DMz+5tv7wSClOCGwCAQeyIJ7eiKXoOe+7DrILzghYdAFAbAO1hWXAz5pz4mbm4us09sDagY2AP8JxHEbD3k'
+                  'CAQiTaKFqBPDwoIp6iSGuhmNTDGn0ikkJo0eMyMKrQO/qiAQ2T/JuVDCI0DREEookzHbLSwIApEP+1WfrtSAUCIzgk6ZkVN4CH4Z'
+                  'QCDiP+TCI4h0YiiTGkqBfO4VgM3YBgNv0BmFNPDSmJ0Fdg0cjoYteB9jJimYRjOjhfpTAyCm9vaa7gRnD1tPiMDYaL7fzp3P0oSe'
+                  'aBt/eN147Bm1Z0VAovnj+1z8D0eOPPjdVG6BhO7tzC0jctuYS6rDkfonDuVbCxW7fBV5fjT6sJ2bNmgqdHZ6ZgxlT7MYWMdWzZ2r'
+                  '45ozm5/TxLl61NxdaE6WTznFOmWSROaCcX03Yb4dwtkOFfzezj/fxojYEAium7qj++y6ses4pgICJHLxzugLQrlhxYlAIgwKxaEA'
+                  'QS5evxRrKAWOgEGRC4TAHopZQgMAC2EEsOCKxXAYFAYTS6iGrLq11ya2Jdk+s3xHNOPqlnVm7E7mtKD8YCcbcPwALxfcHcElCnN3'
+                  'xYkCIuwCnyifCXut0TahJHWcIrCcXckvKjNbaUahM6n+VBKRSaWFok0imBtpdCozBicBiLHl4KKCs3IuNBoTbWYCyC4WxOMAXTwe'
+                  'p6OpiQO8FwsSwCJOG5j5eAO+ODVAZUZTYLk5JZISTAuj0NE25n850JzJ/AIwK/x3kwU4TeZ8KYAFxXC+Njh3cBYUBQHr+WAsKBTS'
+                  'oZq9Uc5tz446SvhVSYcPtwSf7lGK6IHXZi/rWJTnYt6baBkwtTINsnXbDiDV3i50dfXNAVh/D8nucOvQyENT7J44hcH15bbKbrTF'
+                  'VUDRSiWN8oSMgej+dfLKcpZt26+t/xi4d3+4tOTBUwJNcD7NU7BKtfenH0knX18hZ0yveKkdiXt5gauOeepDWJVdldqtJl+LtDtf'
+                  'eF5s6DLOPqO9tlVa6OnYowMDO5ucaoyL+OQVLIwz/gjY1PfHkG5H9AGNu1db+ggJ6mdVrw0odincPrxTOWqqUCxnb9/79eoTryrD'
+                  'K/XL8uxiMWX2Y2EiXd0pSazxAEIWwdv4ZGbDYUaOTMPab0+HtWFwKARaljQGJI0Ai8BpkxGFQr8heAAu8AaDQoBl7Dp5hCQgkSim'
+                  '0ka1+iOSd/pd0E5144pJK/sEHl/AnItHhQuKRHJDoQgdQAvQmC8D0BSljUxmmB4WSyMxwuaBhhYyUwQIajMVdHCfkIiAOnuYZYgV'
+                  'gAIgXyxXvCxFZk6VRA/m0GRLq4NVgAxbXgghgRD7qCdAFYnsG626O1zh9Vm7q8H9hCwgxG5Gsd8EAboDFyDMxeGzCBi49xe6Apy9'
+                  'Feq/mvF51Y2frDET9u6WxANiHopPRaxJKlT6Xutlu3yafRXFvzDlEwluhCUlmBTve+dsqYcrb+fkXOW7qRnYRru9g5q8IWS17vvp'
+                  'ZPue0s5ty0a3XUF9/ESQrRauubpWRNtcG3Gi3Hx/+kbBTXEy8a1nst500wzFYxMPMDueZsS1b3uFq8y9vuzJM5bXscQkP0uJkcLz'
+                  'O4wPSys/JabwpYeh7q9WHbErRYp0x6QfICnIycNoWT7eniU9FiFPWicTitY/vDlKrqSZY2n2htHRfB7V+j16jSqU0qyhh2uGdnWe'
+                  'b7gCTOGl7GszBZbr5rL0ivN6Xz5/flHo4tbj3kfWtk09bBW+BiLIBRBBymYRBArjnCPkfw4u2HsIr4nHaQAELTZcaAJ4ED9mi/8R'
+                  'G34HGc/3HOJdtuehrJXTMHLUN2aL2rBWqaed+0jaku29n2yD33MfwQCwV5JGH514OxJMDuZ+utvsX7A8SKSt7MJzaeVry7ILYwXK'
+                  'rdJ8OiW0CS0NKPvbYtS7TUvo79cJdSWsz59QgNe6Z9ivExwna8qL24p7yZz+Y/JDQeEdp9r6NU4BGTzV6MmWKlU0LezsKiiQXmN2'
+                  'B7Xf8K2KjZJU4/TtM+eF7vsu7W4xPKN39B1KCJLJf1JOQp3ZZSD4cIPEkbLwTCtX9/rjWJPTH7/0h916UWZnEb/MLsgpx2R7A3MD'
+                  'v3CySSphR9JJYM2INwKfvvF0hkwvhfEtwJdy0eZeZBFBjFIS9UeT2ixksKCx4IxE/snVUN9BBAnAwRuHq/4SP34LMCwoe41l0AgW'
+                  'lAcsIMALMrc6JDISCiRNAMrzmAODSsiygYMBIkdUVBQHcsw8kYhYIOnad2EYkHRWKum0CyWYSgwlUdDg7mBupDLQpO8bhoLeEIMm'
+                  'hsagw4h0JvjEYESEUBhoIolECWPO6viDOhT2FYpmjwFqbQD3EgNsJRPpZDSTQg8BFULJaBItlExlb0EGWymCQVFdMFAYDdSNmZVc'
+                  'sGHD6EQSk0qa6ZM5S+PUf3LNGfhaq5VnpxZdM5qe/+htVP5EZHsU4Fi/bGvyVuk8QyvtiUP5xrtUO0/uXnTv8jtG/ut2MqolxlHj'
+                  'XqnRp+hvQY3cI3G6yWmu6A6dhpN1+xz5gr6pTHlVInk3Lzb2EJFldtSkyetblXXRlj8bvlsT9gRl8XRF83hI9OjLM4sXH3wUj9Fs'
+                  'Vui6j+oO6ixdLi8yWVKVwUjyuyHtw4vNPPXR3PqNn06h+HtDxQD0DkLgpCDrTu9wGfaTa6AP+QqJEDWpx63qMfwAJSf0oJaxxPHM'
+                  'fa2E+lT3+5V55/GmX+51hRfGl7jUSF/KMl2+SPkmSuasfYEvqdE2cbHT4R1dD55PtfFya5+IiJADWMg+EMIaZ+FLGG+RN/ZAZGTt'
+                  'xGV3dKU2M/Nn8vPvJh5s4qMJaOIBnBagC2iwkQwAi7iZIsEbSDqOkwIkufh4MxW3Z02okqFQAQ4eiFsNWM8aZ7LAOJPZLcY2TQ/t'
+                  'FAPaFop2pfkzo4h0CtqSFgFuuhmzlX50tXLeWP4FA8gDcrNvIPXX3fxrVKpdlND+/EbEZqKmllV8YEvZ5HS/E9YVtvfWfq5X1Bb/'
+                  '7EdHHkWe4g5QwRzN7bnpUqgs2WZrQ+wgFVLsIPwOm7l0n+JvxKIOuGSGt/iMJa+A40aqpsdLPk0/3zt66VN2701HLGVzsPSJcn0Z'
+                  'sex8+RRUQUlUvLHSftEnnz/vcqtsOWBQ5KCU+EDsnZM7Il/Q9iXlJE7ewiekRcR3ggeVe+2ssNN6P5FXq8OWfx6UX2ns5691BEaJ'
+                  'Tzj7Yn1Qw7GmkU9xmUsXX9hs/MJsUx1q20RffDqf5BnP4VYXUqZkzNrgNNtNI10FEy2QQydTlTYJiI6OZUtDBlcN5fj0v1CiLcHi'
+                  'douwVs7hIswSYMFMAYHvOAgDFtKoXzIWOgeN8gfIICGap1GwFMw8FwJ3JoMD08iUSCo5AK9OptABPAftUvyHtGtOC8CBCyc7j6zi'
+                  'bJgFL8EFyPrtZ7QU+L+Jltoc54PKr88Hjs6J8y6PBSTY86PAXkQBgG++Ezic40w7+lY0KeRytcZURXYTb/n46VOd/nsWnoncieDq'
+                  '/wgJ5RAiAig8gCcABBAf5qIgUQ4BwZk982uKujPJx+C2+eWVRkhd//KizBdOynSdlcddJOtUX6Nrum9EPOZ6qvAA6sG0OPaG35Ap'
+                  'wr2XfLD1gsQVHER6zUQFJPG4lv8bgfNb3xI2EreearPDikMSPMNSw3czYXXpCL3TL0lT0wUDYxdMH12ONTmSQY+jBcjWnY8wGWtO'
+                  '43WfeHPMJHwAV3ISidtVk/RUHm6nTg24kZ/zQtExxBl7/Hq++ZPoLcsGVeDUPmR97UWfOFb852Ry1cVDl8vl7zwe1vIUkCAs0r4S'
+                  'cEo1ebln9eQJHnFUi15gbEbDl3qNUc3LmzThORP521i6cuM9Pu+xXiXI8LhJ3ROXKZ2pFhpCLiIvs08npa3AscRsAJaYBRgTA/R/'
+                  'N4T/+gzhiMKLWdBOEMLnV4kXjuPnCMuBpT9akDgUeBxo4QAw9MUTCAQNbwD7oxWBwyDQpqajcUKyK88TY3HJogXTgznAFU3X+5jj'
+                  'pLzJIyZkkWuAwXfX5IXhsIAahyn/hDYLuvKHPhTHgkqBXi9hsCo6JBgdSaEzwIkyxODUAQyaEkqikamhAYYYdzdLNR3MKiM+Azlz'
+                  'RzM3LycLNOiyDCbayd3UzsYMjVHDYmfmDos1dzNHO9nZuLqhwT6wWAsHDHoetRb6GSjIwDrR2SvFjLEDO1MDFdTJTDIGHGa29wXm'
+                  'gLVkKolpxMdrEESJMSKRNxIZGykMAyy7BFYS6XQi+4HXADyyiOwH5yA7pr+zBsV2Q/BGSqCVuYVmrIqWt1dUlLm7IVsOOydogJ3T'
+                  'BWtmRjDAzoxvxPeT54ETBeElFdcVxxv4vcrgUWpbdNupUiFjd1PsUFu6jVTS+Cp6QJ4M89a5LQk3eg1Ub7kvdroSHXFA1IPAK7Yd'
+                  'NR7icW+niDgmVSUo6I+is2ex11O19pZmt1/uPVlf9zglZPf5WEi5eGG+FEz3s7CIUhCOiYY49wkYhwjVVpX2czUodw2qVxve3Zio'
+                  'OeIfLZG1XS9n26Ro/+hEekOhc8Am4BBi0tXjkk7vMRn6pkPKKz5cS7bZl6Xw+tZFLaGb5d35zd5pw15FNr4Kp5YIrhm2TK2sX2l+'
+                  'Yfkd8x6XHnioi/XUDmyrp/Rzmf5oUge/LqZi7UMYYrIqZx8NtzHgICzcudr6nc8e6X49lRKWcBvAEm7l4p/ftMIwIRxLGAwYhWs4'
+                  'E1Ys4YNgVTkMCp/xJaSKEBwmBYJZLIcmFFEchKACAaAXcyGV4QgkF3gYLXQtBLqiezfWllAVyrOh/lmI0hXJLWIhUtvLocLFETuF'
+                  'V23AJ8F4ot8rlFbhnAQl2XC6wLdABgiF8bi+Swvc7uQQWMwSvAuSQzgY2w7PkkMekYGlkl98v6r8TAo3g72ozyLKillUcKOCRxiT'
+                  'GBL2l6AyH24K/Cbc/OcoI/s98ODhrEPQ8Z4p4nCEmaK2N2CKkwVBZcY68R92sXO2IOy5ugG4/4V82JDcZIRXKq/BzS1mS3peEQ3P'
+                  'KmsvGZX0HniyrxnTKWuMJQpmXHTMDisqMNx71RfZctPeolEKferYakRyS8rUc9c369vNF5vuqgtzlapoitYWWNS5h38rnrbtUZ+O'
+                  '6Vj/OGrnGlHf+krMRdf85Z7r9ZKGOt6ndpoorNcRn9J3zS989XhZpmWIVvxA3o0sx1y07r2CIr6vpfwtLTHZfXGvktWs8lyKmyHB'
+                  'OWffpVvlqJ6bSgphMjqzULsdPCUF9xzVyB3qPGG1Z53ENeGwVMb0N89eKTedqPrjGZsbXO+dWGFde8DkQtGLxIeNb1t92lqPxuU4'
+                  'WhTu5PE7vrjP/vQe9fshDTbezYPzwW09OCOX/gGJ07il4HCrV3urTskaxY+fnq3snViaBaoIzRMqJFgAGdT0Aj71BlDiYCJLfwmQ'
+                  'c4Hq/xPm9WsCxQMQZvN9qoAyoFSsWLz8B8ddkO9jzu/yn5J+XscGeNyLvdxby41QSa4O8LyxZsE/sa5f8KfGNR5nU+2yU/IH0ja/'
+                  'dJT8UDxkJH/7zWVDpkp8QHByRPEO3R45FAsl1G3boy6YLj8SonKfHznQg09IJDCXblgRqb2Bj4LxU7LaH+EtaEgRVoxOkgmHud8o'
+                  'NS0KGLTd5C9wZ3FiLSzH19gK+UQ/7qr59dK+icpLlogr6ZvaXDonOqmZeOe9H6133B4sfNCRIF8ADE2Jay8te33K3tS/OTBFL8FY'
+                  '+L6YznCd/ruXOaEGyLsPRJ89HGREjJ/RwPIlPqk6Wm7zaOe4xwNpxDn1S7ilH4coXA/F2rzLDrzw0xlfhbAnHBh/uiX4uuczTUcY'
+                  '75FIt3tHTAocfPjCnQTu6IwYfrm8pBOMj7nB6GRsDgbj7DxJRW/f1PyXfhjA4QENQBP8xmuw42O8NkfxvwzFv/3ZIEqyZDJPOGBt'
+                  'u3rhuQz5AKMp02e8cXw7zklOMYyxlxruOV1f0Th9TiOsWFDU4BKPw74smq72g0LK+2rSu92NNiHr0B26X3lr3+m9vb2aSkbmWfY9'
+                  '0GygSMrekChbRKxWf/9mu2D6I8MPXHdoKQp2vFelG4Wit+2sx5yrlRPNb369o/DxJp9vZYN3y5Lip7+9SLd5rs/3SbiCTrig2rDa'
+                  'm86n68R8rBQasz6+8qDYHY/THsEHBt80HPs0hN4leVOJ+YzHfruiaYzvB79+izUlX5xtfDNX258f62SceYDY1O9S1FK2ZF1VUG5w'
+                  '4bMRppq5UR/RiNsiXiNCMdc4P6KwERi1rYvKmPvZoAJIKuNwy1+C4p8Sgr/N+P2rPwYsTEGmLMj28/5VKKXV/r433JW7Sf5edD7l'
+                  '4tsun8FzCdLyN0vvVB9SGvz4OGybnO7bh4SCa3SzbkNT5721R2V2ZbZHpF1bV/C+Jf1RYKDe42G3uFGxoLfdRlmNIbFu6yfMdgm3'
+                  'Ra7NhwjIODQb3Pr8YvKqEb3mXO8rjcPixcfWBhwUqMqXpZzuRwGmGoPHOqAdlY9NGRGbnc227vMTfnRsRXtQQBPBgtaUK1u8L8Fe'
+                  'JOsp9duIrcVbh2aMkGcPhnsAU506WNBh0RK6amDXuSnLrrVNJ44g9UK0lcoOWlJo7iUbtw25GDW963zxeVX5c8XEM3pB3dcGPuGT'
+                  'GvGl1k93cZUteX66Rd/2SV+r0KnjuXeT/872/53t/zvb/3+DRf2d7f9Tth/Hgq0CmYw+OxOUtO2/yxY44skfEW9xUjogxZkbElwQ'
+                  'Af8mOyTPmR0Cnekmo8Xq3ualiiWv6vcZ3WhD5U/rfwZUOKNxAdxSQAoAHQshtosrN+bWm1yy9gfj9hakl4rT13WLfsI4dk6jXC3X'
+                  'wFm/mVtJTlmvXtGgvjvaLrTGqs1bhXpP/st0pw+aGLezujhXhrzFw/CiuFVc+ZLL3stVA3HO2VPcR81UhfuX+LiefRV5UYU7OHur'
+                  'c46meWMF5sLLeNjFEakX1H3Wn2sXfR3UaPa52zwEKK5I8Uy84KZmiWIkeyaani8337I3OlPGYT151QdoHuN45/7aIRPthHFi262y'
+                  'KCDoOI9/e/2h1tf1jx1Stg5Z22spmEScV8qFdmleV1JKtF43VodZZP+yHKiiXf7Kc2GrsUH+mFdQN/SddXvo5N2j8KyKnoor2wXv'
+                  'duXILZU4sPTc9deit1P9RsT9Ki5tPuxReCix/dKnY94Bs3/ICccCgA5BX4uoQcJraBH0XYn+RDpVX9OSoGmqZY5X0zE1t1TT0CaY'
+                  'qJma4PBqgImFrqklQRds1IX8D47GNZs=')),
+              'counterpart-sample.bin': zlib.decompress(base64.b64decode(
+                  'eJx1kU9r3DAQxe/+FEP2kBa6hhIIhZLDxnWLYYlD1sk1yPJ4rSJLRiN5u9++I9n5Q2hPlmc0P703bwNeamsLa3p1zGmA7TbbZBto'
+                  'BkVAA2oNJJ2aPHzqrePKZ+DGEQ064bEDEbwdhVdSaH2G9gyN1HV9SSATMThk2EL4Agw42aA7aBHwj0SmKg+DIDAWZqEDEvhBeDgh'
+                  'UGjJKx885lBxRWnNJOmQn12FzcIp0WoeitJGSx5szwB8fZyFWQN2ih+CTpG0MzqW3Z4Z9v4mriLz1fnimU/KeDQdj3gbZSsjdegS'
+                  'AZpyt20FYReFfeAsmtIy2CojKEkguxjkp8/QWXMZ7c8Y4a/b8lEArxNs8InCl0dCPSPlazZRB3fGxZ8yy0yvNEbJNKFUvZKRKoCU'
+                  'OXJ90sLHkTxbCIQgWG3cGgeH4+Q5PpQicIPTSAzB4XucKN1E3hwYxGi+d3aM5uBbfs04a07CdfQ9qdaqdRwMpyJM97KvpG3h/A6c'
+                  '0yRcCosZedYU+7p+3le3z4f7sri5uFgrh+bx9h/l6q7YP/4oP1TvH6qnXVP+p1v83O9+Hd7+n8qHQ1Xf3XzNr7K/FK4EzQ==')),
+          }
+          with tempfile.TemporaryDirectory(prefix='owned-appledouble-copy-') as temporary:
+              for bits in (0o755,0o775):
+                  for fault in ('none','timeout','close-error','missing-result','acceptance-error','collision-zero','collision-bad-status','collision-overwrite'):
+                      area=Path(temporary)/(str(bits)+'-'+fault)
+                      ns,events,active=fixture(area,mode=bits)
+                      original_executor=ns['bounded_command'];cleanup_calls=[];children=[];observations=[]
+                      successful=fault in ('none','collision-zero')
+                      late_fault=fault in ('collision-bad-status','collision-overwrite')
+                      ns['os'].lstat=os.lstat
+                      ns.update(stage=area/'cache/stage',staging=[],commands=0)
+                      ns['stage'].mkdir(mode=0o700)
+                      sample_directory=ns['stage']/'Versions/3.15/Frameworks/Tcl.framework/Versions/9.0'
+                      sample_directory.mkdir(parents=True)
+                      ns['expected']={}
+                      for name,filename in (('._tclooConfig.sh','appledouble-sample.bin'),('tclooConfig.sh','counterpart-sample.bin')):
+                          data=sample_bytes[filename];path=sample_directory/name
+                          path.write_bytes(data)
+                          ns['expected'][str(path.relative_to(ns['stage']))]={'kind':stat.S_IFREG,'size':len(data),'sha256':hashlib.sha256(data).hexdigest()}
+                          ns['staging'].append((str(path),identity(path.lstat())))
+                      exec(compile(ast.Module(body=[copy_node],type_ignores=[]),'exact-owned-copy-boundary','exec'),ns)
+                      def actual_copy(argv,expected):
+                          import selectors
+                          real=dict(os=os,subprocess=subprocess,selectors=selectors,time=time,json=json,math=math,
+                                    cancel_requested=0,cache=ns['cache'],deadline=time.clock_gettime(time.CLOCK_UPTIME_RAW)+(2.25 if fault=='timeout' else 6))
+                          class BrokenClose:
+                              def __init__(self,stream):self.stream=stream
+                              def fileno(self):return self.stream.fileno()
+                              def close(self):
+                                  self.stream.close()
+                                  raise OSError('fixed owned close failure after actual close')
+                          def spawn(arguments,**kwargs):
+                              audit=ns['VersionsParentMode']()
+                              try:
+                                  audit.load()
+                                  issued=[row['body'] for row in audit.rows if row['kind']=='issued']
+                                  done={row['body']['number'] for row in audit.rows if row['kind']=='result'}
+                                  assert issued[-1]['argv']==argv and issued[-1]['number'] not in done
+                              finally:audit.close()
+                              command=[sys.executable,'-I','-S','-B','-c','import time;time.sleep(30)'] if fault=='timeout' else arguments
+                              child=subprocess.Popen(command,**kwargs);children.append(child)
+                              if fault in ('close-error','missing-result'):child.stdout=BrokenClose(child.stdout)
+                              if argv[-1]==str(area/'cache/copy-control/collision') and fault in ('collision-zero','collision-bad-status'):
+                                  class StatusView:
+                                      def __getattr__(self,name):return getattr(child,name)
+                                      @property
+                                      def returncode(self):
+                                          return None if child.returncode is None else (0 if fault=='collision-zero' else 2)
+                                      def wait(self,*args,**kwargs):
+                                          child.wait(*args,**kwargs)
+                                          return self.returncode
+                                      def poll(self):
+                                          child.poll()
+                                          return self.returncode
+                                  return StatusView()
+                              return child
+                          real['subprocess']=types.SimpleNamespace(Popen=spawn,DEVNULL=subprocess.DEVNULL,PIPE=subprocess.PIPE,TimeoutExpired=subprocess.TimeoutExpired)
+                          exec(compile(ast.Module(body=runner_nodes,type_ignores=[]),'exact-owned-cp-runner','exec'),real)
+                          try:
+                              output=real['bounded_command'](argv,expected)
+                              if fault=='acceptance-error':
+                                  (area/'cache/copy-control/empty/tclooConfig.sh').write_bytes(b'fixed acceptance mismatch')
+                              if fault=='collision-overwrite' and argv[-1]==str(area/'cache/copy-control/collision'):
+                                  (area/'cache/copy-control/collision/tclooConfig.sh').write_bytes(b'fixed overwritten sentinel')
+                              return output
+                          finally:
+                              ns['last_child_outcome']=real['last_child_outcome'].copy()
+                              observations.append(real['last_child_outcome'].copy())
+                      def supply_executor(argv,expected,stream_phase=False):
+                          if argv[0]=='/usr/bin/sudo':return original_executor(argv,expected)
+                          if argv[0]=='/bin/cp':return actual_copy(argv,expected)
+                          assert argv==['/bin/bash','--noprofile','--norc','-e','-o','pipefail',str(area/'cache/supply-phase.sh')]
+                          empty_owned_journal(ns,area)
+                          if fault=='missing-result':
+                              original_complete=ns['parent_mode'].complete
+                              def unpublished(known,*args,**kwargs):
+                                  if not known:raise OSError('fixed owned result-publication refusal')
+                                  return original_complete(known,*args,**kwargs)
+                              ns['parent_mode'].complete=unpublished
+                          failed=False
+                          try:ns['owned_copy_control']()
+                          except (AssertionError,RuntimeError,OSError):failed=True
+                          return real_exit(ns,23 if failed else 0)
+                      ns['bounded_command']=supply_executor
+                      ns['cleanup']=lambda:cleanup_calls.append('authenticated empty owned cleanup')
+                      failed=None
+                      try:ns['fixed_phase']('supply')
+                      except AssertionError as error:failed=error
+                      mode=ns['VersionsParentMode']()
+                      try:
+                          mode.load()
+                          issued=[row['body'] for row in mode.rows if row['kind']=='issued']
+                          copies=[row for row in issued if row['argv'][0]=='/bin/cp']
+                          actual_results=[row['body'] for row in mode.rows if row['kind']=='result' and row['body']['number'] in {entry['number'] for entry in copies}]
+                          supply_result=next(row['body'] for row in mode.rows if row['kind']=='phase' and row['body']['point']=='result')
+                          assert len(copies)==(2 if successful or late_fault else 1)
+                          assert len(actual_results)==(0 if fault=='missing-result' else len(copies))
+                          assert [row['known'] for row in actual_results]==([True,False] if late_fault else [successful]*len(actual_results))
+                          assert supply_result['success']==supply_result['quiescent']==successful
+                          assert len(issued)==(0 if bits==0o755 else 1)+len(copies)
+                          if not successful:
+                              refuse(lambda:mode.reserve(copies[0]['argv']))
+                              count=len(mode.rows);mode.close();mode=ns['VersionsParentMode']();mode.load()
+                              assert len(mode.rows)==count
+                              refuse(lambda:mode.reserve(copies[0]['argv']))
+                      finally:mode.close()
+                      if successful:
+                          assert failed is None and [row['returncode'] for row in observations]==[0,0 if fault=='collision-zero' else 1]
+                          assert all(row['reaped'] and not row['cancelled'] for row in observations)
+                          ns['fixed_phase']('closure')
+                          assert len(cleanup_calls)==1
+                          assert stat.S_IMODE((area/'root/Versions').stat().st_mode)==bits
+                      else:
+                          assert failed is not None and not supply_result['quiescent']
+                          count=len(events)
+                          fresh,stdout,stderr=owned_test_child([sys.executable,'-I','-S','-B',__file__,sys.argv[1],str(area),'--owned-closure-refusal'])
+                          assert fresh.returncode==0,(stdout,stderr)
+                          fresh_result=json.loads(stdout);assert fresh_result['fresh_fixed_phase_closure_refused']
+                          refuse(lambda:ns['fixed_phase']('closure'))
+                          assert not cleanup_calls and len(events)==count
+                          assert stat.S_IMODE((area/'root/Versions').stat().st_mode)==0o755
+                      for child in children:
+                          assert child.returncode is not None
+                          try:os.waitpid(child.pid,os.WNOHANG)
+                          except ChildProcessError:pass
+                          else:raise AssertionError('owned copy child not actually reaped')
+                          for stream in (child.stdout,child.stderr):
+                              original=getattr(stream,'stream',stream)
+                              assert original.closed
+                      assert not active
+                      results.append({'case':'owned-copy-'+fault+'-'+oct(bits),'actual_children':observations,
+                                      'direct_children_reaped':True,'pipes_closed':True,'issued_copy_commands':len(copies),
+                                      'known':successful,'next_launch_refused':not successful,'cleanup_calls':len(cleanup_calls),
+                                      'fresh_process_closure':fresh_result if not successful else None,
+                                      'status_adapter':fault if fault in ('collision-zero','collision-bad-status') else None,
+                                      'actual_child_returncodes':[child.returncode for child in children],
+                                      'fixed_short_timeout_adapter':fault=='timeout','exact_function_sha256':copy_sha})
+              area=Path(temporary)/'validators';ns,events,active=fixture(area,mode=0o755)
+              mode=ns['VersionsParentMode']()
+              try:
+                  mode.begin()
+                  cp_forms=[['/usr/bin/sudo','-n','/bin/cp','-R','-P','-n','-X',str(ns['cache']/'stage'/tree.relative_to(fixed_root))+'/.',str(tree)] for tree in ns['TREES']]
+                  for argv in cp_forms:mode.fixed_command(argv)
+                  forms=[['/bin/cp','-R','-P','-n','-X',str(ns['cache']/'copy-control/source')+'/.',str(ns['cache']/'copy-control'/name)] for name in ('empty','collision')]
+                  for argv in forms:mode.fixed_command(argv)
+                  bad=[cp_forms[0][:6]+cp_forms[0][7:],cp_forms[0][:6]+['-x']+cp_forms[0][7:],
+                       cp_forms[0][:7]+['-f']+cp_forms[0][7:],['/usr/bin/cp']+forms[0][1:],
+                       cp_forms[0][:-1]+[str(fixed_root/'Versions/old')],cp_forms[0][:-2]+forms[0][-2:],
+                       forms[0][:-1]+[str(ns['cache']/'elsewhere')]]
+                  for argv in bad:refuse(lambda argv=argv:mode.reserve(argv))
+                  assert not [row for row in mode.rows if row['kind']=='issued']
+                  queries=[]
+                  test=dict(ns,created={str(tree) for tree in ns['TREES']},expected={},owned=[],
+                            os=types.SimpleNamespace(listdir=lambda path:[],path=os.path,fsencode=os.fsencode),
+                            commands=0,journal=None,parent_mode=mode,held_directories=lambda:{},
+                            budget=lambda:None,recheck=lambda:queries.append('production query'),check_parents=lambda:None,
+                            bounded_command=lambda *args:(_ for _ in ()).throw(AssertionError('must not dispatch')))
+                  exec(compile(ast.Module(body=[mutation_node,run_node],type_ignores=[]),'exact-production-cp-validator','exec'),test)
+                  for argv in forms:
+                      refuse(lambda argv=argv:test['mutation_names'](argv))
+                      refuse(lambda argv=argv:test['run'](argv))
+                  assert not queries and not events
+                  for argv in bad:refuse(lambda argv=argv:test['run'](argv))
+                  assert not events and not [row for row in mode.load() if row['kind']=='issued']
+                  for argv in cp_forms:assert test['mutation_names'](argv)=={argv[-1]:(set(),set())}
+                  results.append({'case':'fixed-cp-validators','production_forms':2,'control_forms':2,'invalid_forms_refused':len(bad),
+                                  'ordinary_cp_rejected_before_production_queries':True,'live_invalid_forms_refused':len(bad),'dispatches':0})
+              finally:mode.close()
+              assert not active
+
+          with tempfile.TemporaryDirectory(prefix='owned-production-status-') as temporary:
+              import selectors
+              children=[]
+              def production_status_child(argv,**kwargs):
+                  assert argv==['/usr/bin/sudo','-n','/bin/cp','-R','-P','-n','-X',
+                                str(Path(temporary)/'stage/Versions/3.15')+'/.',str(fixed_root/'Versions/3.15')]
+                  child=subprocess.Popen([sys.executable,'-I','-S','-B','-c','raise SystemExit(1)'],**kwargs)
+                  children.append(child)
+                  return child
+              real=dict(os=os,subprocess=types.SimpleNamespace(Popen=production_status_child,DEVNULL=subprocess.DEVNULL,
+                        PIPE=subprocess.PIPE,TimeoutExpired=subprocess.TimeoutExpired),selectors=selectors,time=time,json=json,
+                        math=math,cancel_requested=0,cache=Path(temporary),deadline=time.clock_gettime(time.CLOCK_UPTIME_RAW)+6)
+              exec(compile(ast.Module(body=runner_nodes,type_ignores=[]),'exact-production-cp-status-boundary','exec'),real)
+              argv=['/usr/bin/sudo','-n','/bin/cp','-R','-P','-n','-X',str(Path(temporary)/'stage/Versions/3.15')+'/.',str(fixed_root/'Versions/3.15')]
+              refuse(lambda:real['bounded_command'](argv,0))
+              assert real['last_child_outcome']['returncode']==1 and real['last_child_outcome']['reaped']
+              assert real['last_child_outcome']['privileged_unknown']
+              for child in children:
+                  assert child.stdout.closed and child.stderr.closed
+                  try:os.waitpid(child.pid,os.WNOHANG)
+                  except ChildProcessError:pass
+                  else:raise AssertionError('status-adapter ordinary child not reaped')
+              results.append({'case':'production-cp-rc1-refused','outcome':real['last_child_outcome'],
+                              'fixed_ordinary_child_adapter':True,'sudo_executed':False,'pipes_closed':True,'actual_reaped':True})
+
           print(json.dumps({'cases':results,'boundary_sha256':hashlib.sha256(source).hexdigest(),
               'limits':'Exact private class/fixed_phase compiled from provision. UID/ACL/physical observations and recording executor are fixed test-only adapters; actual owned records/fsync/fds and nonprivileged child wait are real. No production D, sudo, supplied P, suite or host probe executed.'},sort_keys=True))
           PY_PARENT_MODE_CONTROLS
@@ -3160,7 +3548,7 @@ jobs:
            ns['open_parents']();ns['save']();old=ns['child_snapshot'](ns['parent_records'][str(ns['ROOT'])]);initial=copy.deepcopy(ns['parents'])
            ns['expected']={str(t.relative_to(ns['ROOT']))+suffix:{} for t in ns['TREES'] for suffix in ('','/data.txt','/empty')}
            for tree in ns['TREES']:
-            mkdir(ns,tree);ns['run'](['/usr/bin/sudo','-n','/bin/cp','-R','-P','-n',str(ns['cache']/'stage'/tree.relative_to(ns['ROOT']))+'/.',str(tree)]);inventory(ns,tree)
+            mkdir(ns,tree);ns['run'](['/usr/bin/sudo','-n','/bin/cp','-R','-P','-n','-X',str(ns['cache']/'stage'/tree.relative_to(ns['ROOT']))+'/.',str(tree)]);inventory(ns,tree)
            output=cleanup_process(ns)
            assert all(not os.path.lexists(t) for t in ns['TREES'])
            assert ns['child_snapshot'](ns['parent_records'][str(ns['ROOT'])])==ns['parents'][str(ns['ROOT'])]['children']
@@ -3214,19 +3602,19 @@ jobs:
           PY_OWNED_MODE_CONTROLS
           /bin/chmod 0500 "$cache_root/owned-mode-controls.py"
           /usr/bin/python3 -I -S -B "$cache_root/owned-mode-controls.py" "$cache_root/provision.py"
-          test "$(/usr/bin/shasum -a 256 "$cache_root/provision.py" | /usr/bin/awk '{print $1}')" = 9d3ee653838e91fce78fdca6e28f8e5fd8b23f01983fd97d022698286c5525c0
+          test "$(/usr/bin/shasum -a 256 "$cache_root/provision.py" | /usr/bin/awk '{print $1}')" = 625a0e3e21588c90a921c003032501b6780b5ee9ac4cb29e463f1cea6232a053
           /usr/bin/python3 -I -S -B "$cache_root/provision.py" "$cache_root" --phase supply
       - name: Complete original scope qualification suite
         timeout-minutes: 35
         shell: /bin/bash --noprofile --norc -e -o pipefail {0}
         run: |
-          test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 9d3ee653838e91fce78fdca6e28f8e5fd8b23f01983fd97d022698286c5525c0
+          test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 625a0e3e21588c90a921c003032501b6780b5ee9ac4cb29e463f1cea6232a053
           /usr/bin/python3 -I -S -B "$YSTACK_PROOF_TMP/provision.py" "$YSTACK_PROOF_TMP" --phase scope
       - name: Complete original native owner suite
         timeout-minutes: 50
         shell: /bin/bash --noprofile --norc -e -o pipefail {0}
         run: |
-          test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 9d3ee653838e91fce78fdca6e28f8e5fd8b23f01983fd97d022698286c5525c0
+          test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 625a0e3e21588c90a921c003032501b6780b5ee9ac4cb29e463f1cea6232a053
           /usr/bin/python3 -I -S -B "$YSTACK_PROOF_TMP/provision.py" "$YSTACK_PROOF_TMP" --phase native
       - name: Verify source and remove only the owned runtime and test cache
         if: always()
@@ -3238,7 +3626,7 @@ jobs:
           if [ -n "${YSTACK_PROOF_TMP:-}" ]; then
             if test -d "$YSTACK_PROOF_TMP" && test ! -L "$YSTACK_PROOF_TMP" &&
                test "$(/usr/bin/stat -f '%d:%i:%u' "$YSTACK_PROOF_TMP")" = "$YSTACK_PROOF_TMP_ID" &&
-               test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 9d3ee653838e91fce78fdca6e28f8e5fd8b23f01983fd97d022698286c5525c0; then
+               test "$(/usr/bin/shasum -a 256 "$YSTACK_PROOF_TMP/provision.py" | /usr/bin/awk '{print $1}')" = 625a0e3e21588c90a921c003032501b6780b5ee9ac4cb29e463f1cea6232a053; then
               /usr/bin/python3 -I -S -B "$YSTACK_PROOF_TMP/provision.py" "$YSTACK_PROOF_TMP" --phase closure || recovery_status=$?
             else
               recovery_status=1
