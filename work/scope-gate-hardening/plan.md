@@ -408,6 +408,10 @@ trap-owned, removes only the unique fixture identities and paths, and fails the
 test if any account, group or object remains. No workflow edit or new CI
 permission is required.
 
+Keep the fixed fixture chown/chmod options and `--` before the first owner or mode
+operand. Preserve each original program, target, role, recursive extent and
+nonzero failure; do not ignore errors or widen the owned paths.
+
 Run the real scope evaluator as the consumer account. The bundle and actual bare
 Git snapshot live outside the controlled store. Assert actual uid/gid, mode,
 platform ACL, link, no-follow, held-descriptor, fresh-origin and `check-bound`
@@ -581,18 +585,25 @@ module, stdlib/include and loaded-image checks. Scope repeats this complete guar
 before its first privileged P execution. Keep the genuine principal, store, Git,
 ledger and account/anchor cleanup behavior and all original refusal cases.
 
-In scope's `PY_MAC_RUNTIME`, use the accepted Mac plan's private
-`fixed_stdin_module_paths` classification. Before closure imports, bind the
-executing `__main__` object and namespace to `sys.modules['__main__']`. Require
+Use one private `fixed_stdin_module_paths` prelude in the scope fixture for both
+fixed stdin calls, `PY_MAC_RUNTIME` and `PY_MAC_IMPORT_CLOSURE`. Compose that one
+literal with each call's own fixed body; do not copy the classifier, import a
+helper module or execute it in a separate namespace. Keep both real `-I -S -B -`
+invocations and their existing data arguments. Composition or transmission failure
+retains the original nonzero exit and child lifecycle. Each process first imports
+builtin sys and binds its executing `__main__` object and namespace to
+`sys.modules['__main__']`, before other imports. Require
 name `__main__`, file `<stdin>`, spec None, argv[0] `-` and effective `-I -S -B`
 flags. After imports and before use, recheck that same object, namespace identity,
 mapping and attributes; reject any other module key aliasing that object. Exclude
-only this bound entry object. Keep P and jq as explicit candidates and every other
-nonempty module file under the original physical, absolute, regular-file, lstat,
-UID/mode and symlink checks. Pseudo-paths on other modules, wrong startup or entry
-rebinding refuse. Do not filter by path text or existence, normalize a bad path
-into acceptance or add a general resolver. Keep the native fixture's file entry,
-workflow, shared guard, identity entry and provision unchanged.
+only this bound entry object. Keep runtime's P and jq as explicit candidates;
+keep the import-closure body's actual fixed reader import and `_cancel_release`
+absence check. Every other nonempty module file retains the original physical,
+absolute, regular-file, lstat, UID/mode, ancestor and symlink checks. Pseudo-paths
+on other modules, wrong startup or entry rebinding refuse. Do not filter by path
+text or existence, normalize a bad path into acceptance or add a general resolver
+or caller-selected source. Keep the native fixture's file entry, workflow, shared
+guard, identity entry and provision unchanged.
 
 Use the fixed jq bytes with the original SHA-256 and actual jq-1.6 version checks.
 A private test copy may retain the existing owned-cache behavior and cleanup. It
@@ -628,16 +639,22 @@ unknown, malformed and loaded-static refusals. Preserve the approved fixture
 source download or administrator authority. Do not replace unrelated historical
 fixture facts or Linux runtime selection.
 
-Exercise the exact extracted scope stdin boundary in existing CI with a trusted
-real `-I -S -B -` process. Show that the old collection includes its real entry and
-refuses, while the new classification excludes only that entry and still checks
-all real imported files. Reject another module's pseudo-path, wrong name, file,
-spec, argv or effective flags, entry aliases, object/mapping/namespace rebinding,
-and relative, missing, changed or unsafe real files. Use only an explicit
-owned-file UID/mode fact adapter for these controls; do not fabricate a positive
-main object, execute the supplied P or sudo, or add a diagnostic job. Preserve
-nonzero failures and bounded child reap. These controls do not replace either
-complete Mac suite or the same-final-head Linux proof.
+Bind both complete composed scope stdin bodies in existing CI by bounded
+extraction, each body's digest and prelude-before-body order. For each body, run
+its exact extracted stdin classification and physical-file boundary in a trusted
+real `-I -S -B -` process. Reuse one control template; verify both fixed callers
+use the single prelude and retain their own imports and assertions. One
+classifier-only run cannot replace either entry's boundary controls. Show that
+the old collection includes its real entry and refuses, while the shared
+classification excludes only that entry and retains all real imported files.
+Reject another module's pseudo-path, wrong name, file, spec, argv or effective
+flags, entry aliases, object/mapping/namespace rebinding, and relative, missing,
+changed or unsafe real files. Use only an explicit owned-file UID/mode fact
+adapter; do not fabricate a positive main object, execute the supplied P or sudo,
+or add a diagnostic job. Keep nonzero failures and bounded child reap. These
+owned-data boundary controls do not execute the privileged complete bodies;
+actual P/jq and fixed-package reader-import positives still require the original
+complete Mac suites and same-final-head Linux proof.
 
 Until actual supply, host checks, complete tests and cleanup pass, keep the Mac
 real-principal positive and G3 blocked. Keep CPU/wall evidence NONE and production
