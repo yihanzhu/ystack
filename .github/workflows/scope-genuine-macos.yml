@@ -2725,6 +2725,38 @@ jobs:
                       results.append({'case':'actual-closure-'+fault+'-'+oct(bits),'cleanup_calls':0,
                                       'later_mode_commands':0,'owned_trees_retained':True,
                                       'observation_adapter':fault in ('unreaped','privileged-unknown')})
+          def owned_test_child(argv):
+              child = None
+              try:
+                  child = subprocess.Popen(argv,stdout=subprocess.PIPE,stderr=subprocess.PIPE,close_fds=True)
+                  out, err = child.communicate(timeout=5)
+                  return child, out, err
+              finally:
+                  original = sys.exc_info()[1]
+                  cleanup_error = None
+                  if child is not None:
+                      try:
+                          if child.returncode is None:
+                              child.kill()
+                      except BaseException as error:
+                          cleanup_error = error
+                      try:
+                          child.wait(timeout=1)
+                      except BaseException as error:
+                          cleanup_error = cleanup_error or error
+                      finally:
+                          for stream in (child.stdout,child.stderr):
+                              if stream is not None:
+                                  try:
+                                      stream.close()
+                                  except BaseException as error:
+                                      cleanup_error = cleanup_error or error
+                  if cleanup_error is not None:
+                      if original is not None:
+                          raise original from cleanup_error
+                      raise cleanup_error
+
+
           # Only the fixed owned executor is adapted; fixed_phase publishes its real deadline.
           with tempfile.TemporaryDirectory(prefix='versions-mode-shared-clock-') as temporary:
               import shlex
@@ -2747,12 +2779,7 @@ jobs:
                   children = []
                   def actual_chain(argv, expected, stream_phase=False):
                       assert argv == ['/bin/bash','--noprofile','--norc','-e','-o','pipefail',str(area/'cache/supply-phase.sh')]
-                      child = subprocess.Popen(argv,stdout=subprocess.PIPE,stderr=subprocess.PIPE,close_fds=True)
-                      try:
-                          out, err = child.communicate(timeout=5)
-                      finally:
-                          if child.poll() is None:
-                              child.kill();child.wait(timeout=1)
+                      child, out, err = owned_test_child(argv)
                       assert len(out)+len(err) <= 16384
                       outcome = {'pid':child.pid,'returncode':child.returncode,'reaped':True,'cancelled':False,'privileged_unknown':False}
                       ns['last_child_outcome'] = outcome
@@ -2874,9 +2901,7 @@ jobs:
                   code += '    '+transition.replace('\n','\n    ')+'\n'
                   with script.open('x') as output:output.write(code)
                   fd_before = len(os.listdir('/dev/fd'))
-                  child = subprocess.Popen(['/usr/bin/python3','-I','-S','-B',str(script),'owned','owned','owned','empty','0','0'],
-                                           stdout=subprocess.PIPE,stderr=subprocess.PIPE,close_fds=True)
-                  out,err=child.communicate(timeout=5)
+                  child,out,err = owned_test_child(['/usr/bin/python3','-I','-S','-B',str(script),'owned','owned','owned','empty','0','0'])
                   assert len(out)+len(err)<=16384 and child.returncode==(1 if expired else 0),(out,err)
                   observations = [json.loads(line) for line in out.splitlines()]
                   assert observations[0]['stage']=='empty' and observations[0]['pid']==child.pid
@@ -2892,6 +2917,51 @@ jobs:
                   results.append({'case':'guard-exec-expired' if expired else 'guard-exec-same-pid',
                                   'observations':observations,'returncode':child.returncode,'stderr':err.decode(),
                                   'actual_reaped':True,'supplied_python_not_executed':True,'fixed_short_duration_adapter':expired})
+          # Fixed test-only seams exercise this same helper's abnormal supervision exits.
+          helper_module = ast.parse(Path(__file__).read_bytes())
+          helper_node = next(node for node in helper_module.body if isinstance(node,ast.FunctionDef) and node.name=='owned_test_child')
+          helper_source = ast.get_source_segment(Path(__file__).read_text(),helper_node)
+          for fault in ('timeout','supervision-error'):
+              import copy
+              node = copy.deepcopy(helper_node)
+              if fault=='timeout':
+                  calls = [item for item in ast.walk(node) if isinstance(item,ast.Call) and
+                           isinstance(item.func,ast.Attribute) and item.func.attr=='communicate']
+                  assert len(calls)==1 and calls[0].keywords[0].arg=='timeout' and calls[0].keywords[0].value.value==5
+                  calls[0].keywords[0].value = ast.Constant(0.05)
+                  ast.fix_missing_locations(node)
+              observed = []
+              supervision_error = OSError('fixed owned supervision failure after actual spawn')
+              def observed_spawn(*args,**kwargs):
+                  child = subprocess.Popen(*args,**kwargs)
+                  observed.append((child,child.stdout.fileno(),child.stderr.fileno()))
+                  if fault=='supervision-error':
+                      def failed_communicate(*args,**kwargs):raise supervision_error
+                      child.communicate = failed_communicate
+                  return child
+              ns = dict(subprocess=types.SimpleNamespace(Popen=observed_spawn,PIPE=subprocess.PIPE),sys=sys)
+              exec(compile(ast.Module(body=[node],type_ignores=[]),'exact-owned-child-supervisor','exec'),ns)
+              before = len(os.listdir('/dev/fd'))
+              failure = None
+              try:ns['owned_test_child'](['/usr/bin/python3','-I','-S','-B','-c','import time;time.sleep(30)'])
+              except BaseException as error:failure = error
+              assert len(observed)==1 and failure is not None
+              assert isinstance(failure,subprocess.TimeoutExpired) if fault=='timeout' else failure is supervision_error
+              child,out_fd,err_fd = observed[0]
+              assert child.returncode is not None and child.stdout.closed and child.stderr.closed
+              for fd in (out_fd,err_fd):
+                  try:os.fstat(fd)
+                  except OSError as error:assert error.errno==errno.EBADF
+                  else:raise AssertionError('owned pipe FD remained open')
+              try:os.waitpid(child.pid,os.WNOHANG)
+              except ChildProcessError:pass
+              else:raise AssertionError('owned supervision child not actually reaped')
+              assert len(os.listdir('/dev/fd'))==before
+              results.append({'case':'owned-child-'+fault,'pid':child.pid,'returncode':child.returncode,
+                              'failure_type':type(failure).__name__,'failure_preserved':True,'actual_reaped':True,
+                              'stdout_fd_closed':True,'stderr_fd_closed':True,'fd_before':before,'fd_after':len(os.listdir('/dev/fd')),
+                              'fixed_short_timeout_adapter':fault=='timeout','helper_sha256':hashlib.sha256(helper_source.encode()).hexdigest()})
+
           print(json.dumps({'cases':results,'boundary_sha256':hashlib.sha256(source).hexdigest(),
               'limits':'Exact private class/fixed_phase compiled from provision. UID/ACL/physical observations and recording executor are fixed test-only adapters; actual owned records/fsync/fds and nonprivileged child wait are real. No production D, sudo, supplied P, suite or host probe executed.'},sort_keys=True))
           PY_PARENT_MODE_CONTROLS
