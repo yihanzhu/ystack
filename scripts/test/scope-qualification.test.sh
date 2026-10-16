@@ -108,6 +108,10 @@ import time
 assert sys.platform == 'darwin' and os.getuid() != 0
 assert not any(key.startswith('DYLD_') or key == '__PYVENV_LAUNCHER__' for key in os.environ)
 assert len(sys.argv) == 7
+def fixed_manifest_bytes(value):
+    return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode('ascii')
+
+
 def uptime():
     value = time.clock_gettime(time.CLOCK_UPTIME_RAW)
     assert type(value) is float and math.isfinite(value) and value >= 0
@@ -441,12 +445,12 @@ try:
     manifest_rows = json.loads(manifest_raw)
     assert len(manifest_rows) == 4502
     selected_rows = [row for row in manifest_rows if row['path'] == 'Versions/3.15' or row['path'].startswith('Versions/3.15/')]
-    assert len(selected_rows) == 4496 and c.digest(c.canonical(selected_rows)) == '3176a7d3551aaa719fa8ed26964237d0d1771184c6ce7a5159bbf039e7816572'
+    assert len(selected_rows) == 4496 and c.digest(fixed_manifest_bytes(selected_rows)) == '3176a7d3551aaa719fa8ed26964237d0d1771184c6ce7a5159bbf039e7816572'
     supply_rows = [dict(row, mode=row['kind'] | (0o755 if row['kind'] != stat.S_IFREG or row['mode'] & 0o111 else 0o644)) for row in selected_rows]
     supply_rows.extend([{'path': 'ystack-private-tools', 'kind': stat.S_IFDIR, 'mode': 0o40755},
         {'path': 'ystack-private-tools/jq', 'kind': stat.S_IFREG, 'mode': 0o100755, 'size': 864040,
          'sha256': '5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef'}])
-    assert c.digest(c.canonical(supply_rows)) == '9184f6976c2be2e1430594adbb406293168c0201c849e31bfd671f2c8e83fb9e'
+    assert c.digest(fixed_manifest_bytes(supply_rows)) == '9184f6976c2be2e1430594adbb406293168c0201c849e31bfd671f2c8e83fb9e'
     manifest = {}
     for row in supply_rows:
         value = {key: row[key] for key in ('kind', 'mode', 'size', 'sha256', 'link')
@@ -455,7 +459,7 @@ try:
         if row['kind'] != stat.S_IFDIR:
             value['nlink'] = 1
         manifest[row['path']] = value
-    assert len(manifest) == 4498 and c.digest(c.canonical(manifest)) == 'd6a212cf50fd2593c75e8e011c321e65fa8609cce7add72e69d16ff0e78252c4'
+    assert len(manifest) == 4498 and c.digest(fixed_manifest_bytes(manifest)) == 'd6a212cf50fd2593c75e8e011c321e65fa8609cce7add72e69d16ff0e78252c4'
     owner = None
     if stage == 'real':
         bootstrap = c._hold_bytes(sys.executable, c.EXECUTABLE_LIMIT)
@@ -622,7 +626,7 @@ owned = []
 try:
     guard = c._hold_bytes(str(directory_path / 'guard.py'), c.EXECUTABLE_LIMIT)
     owned.append(guard)
-    assert hashlib.sha256(guard.raw).hexdigest() == '41b01937f09c6db77e35cd899ea209665ff2eea7a1e7650d0d5b04ec1090b573'
+    assert hashlib.sha256(guard.raw).hexdigest() == '3c229ffd250d8b255ae59ae1f507e3815c9f6bfb25b793c9075871675a1a540c'
     cache = Path(os.environ['YSTACK_PROOF_TMP'])
     assert cache.is_absolute() and cache.resolve() == cache
     manifest = c._hold_bytes(str(cache / 'manifest.json'), c.EXECUTABLE_LIMIT)
@@ -659,7 +663,7 @@ finally:
     c._close_paths(owned)
 PY_MAC_FIXED_MANIFEST
   fi
-  [ "$(sha256_path "$mac_guard_file")" = 41b01937f09c6db77e35cd899ea209665ff2eea7a1e7650d0d5b04ec1090b573 ] || return 1
+  [ "$(sha256_path "$mac_guard_file")" = 3c229ffd250d8b255ae59ae1f507e3815c9f6bfb25b793c9075871675a1a540c ] || return 1
   /usr/bin/python3 -I -S -B "$mac_guard_file" "$root" "$1" "$mac_guard_file" empty 0 0
 }
 
@@ -3161,7 +3165,7 @@ starts = [index for index, line in enumerate(source) if line == opening]
 stops = [index for index, line in enumerate(source) if line == closing]
 assert len(starts) == len(stops) == 1 and starts[0] < stops[0]
 body = b''.join(source[starts[0] + 1:stops[0]])
-assert hashlib.sha256(body).hexdigest() == '41b01937f09c6db77e35cd899ea209665ff2eea7a1e7650d0d5b04ec1090b573'
+assert hashlib.sha256(body).hexdigest() == '3c229ffd250d8b255ae59ae1f507e3815c9f6bfb25b793c9075871675a1a540c'
 compile(body, 'actual-runtime-guard', 'exec')
 assert Path(sys.argv[2]).read_bytes() == body
 Path(sys.argv[3]).write_bytes(body)
