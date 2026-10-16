@@ -9,7 +9,7 @@ Tracks #541. Risk is high. This is the nonterminal child-6 core. It authenticate
 the existing child-5 evidence at one exact revision. Issue #544 remains mandatory
 before child 6 completes or child 7 starts.
 
-Implementation PR: `review_size: accepted-exception`, 2,600–5,600 net changed
+Implementation PR: `review_size: accepted-exception`, 2,600–5,900 net changed
 lines. The private evidence reader, held-path and Git checks, closed evaluator
 relations, and a real two-principal origin fixture form one security boundary.
 Most of the range is proof: complete classification, bundle, Git, terminal and
@@ -439,23 +439,23 @@ Bind that supply to these accepted `work/scope-genuine-macos-proof/` artifacts:
 | --- | --- |
 | Intent | `336c520dcdc7dacb6bbf3b52d34ab07f12b50f0d` |
 | Spec | `d17c985b9651ff46c259997fb54d8fc214293357` |
-| High-risk plan | `3b262be50272921c4b6098d5b86c8f0cd5554478` |
+| High-risk plan | `34cfb18460ce767d824f564944047c9d9835df9c` |
 
-Use the workflow published at `b54c764cc2bc19e1183c812e3b05b606878c6abc`,
-from reviewed head `240daa3d2466b7faf1ebfa339dc96d90611b73d6` against base
-`4a4ce2bf5bc6cbec24a799f69447d851b07cc1f8`. Actual supply and cleanup across
+Use the workflow published at `8fcc9b159226a739bc2f5dbe56d508200da87411`,
+from reviewed head `b431856f478c486c1488839ac0f56eafbd4cc60f` against base
+`72a0e4b2289099fc43aa979c76c0136b641c3759`. Actual supply and cleanup across
 separate job-step processes still require complete Mac job evidence. When mode
 preparation is used, this includes durable journal reopening and verified mode
 restoration. Same-process controls or a green cleanup step cannot replace that
 proof. The workflow Git
-blob is `727bf04be4b48050159a50125c4d31e8127227b8`; its SHA-256 is
-`cc17022057346df1dfb4522b298ac8ad3c123ce3676697f519b2545e899393ac`.
+blob is `3cd7ac52aa21c6ae0eacc48341e53c7cce29fca6`; its SHA-256 is
+`307503c3fdf4482561c55ed7205ce70a4c0e175221e844594b8c1c9bd913e819`.
 The complete shared entry/guard body SHA-256 is
 `41b01937f09c6db77e35cd899ea209665ff2eea7a1e7650d0d5b04ec1090b573`.
 The separate post-guard identity assertion passed through `-c` has SHA-256
 `e11560926ec9ab0188cd448a723a9c2eee5bef4064cc3445d7a25cd5e4377229`.
 The published provision body SHA-256 is
-`9d3ee653838e91fce78fdca6e28f8e5fd8b23f01983fd97d022698286c5525c0`;
+`625a0e3e21588c90a921c003032501b6780b5ee9ac4cb29e463f1cea6232a053`;
 only the workflow supplies and cleans the runtime. The same-PID transition belongs
 to the shared guard. Keep these exact bytes; a changed dependency returns through
 its artifact gate before fixture changes.
@@ -618,12 +618,17 @@ positive.
 ## Private Linux fixture failure observation
 
 Limit the diagnostic change to `scope-qualification.test.sh` at its existing
-`PY_STALE_PREPARE`, private frontend-copy and failure-export seams and original
-eight-case call site. Preserve the generator, glob order, evaluator argv,
+`PY_STALE_PREPARE`, private frontend-copy and `evaluation_reasons` failure boundary.
+Keep the original eight protected slots, calls, glob order and bindings unchanged.
+Use one precreated slot 8 for the other existing calls through `evaluation_reasons`,
+with fixed identity `evaluation-reasons`; reuse the same four exact bodies below.
+There are at most nine slots. Do not add a case registry, selection option or new
+call site. Keep direct evaluator calls, expected-error calls and genuine fixtures
+outside this boundary. Preserve every original call's nine data arguments, order,
 assertions, result, evaluator stdout/stderr, READY/SEAL/COMMIT and cleanup.
-Add no public mode, product hook, helper path, provider, trust input or predicate.
-Keep the original 300/1,800-second limits and the original eight-case sequence per
-invocation. Add no three-attempt runner, retry or deadline reset.
+Add no invocation, public mode, product hook, helper path, provider, trust input or
+predicate. Keep the original 300/1,800-second limits, with no retry, deadline reset
+or TMPDIR relocation. Diagnostic overhead does not increase either time limit.
 
 The diagnostic boundary follows private candidate SHA-256
 `f807180c483a689ae6ebb8985fa99f4088836b6280da0d3591481b151fba6850`.
@@ -641,10 +646,19 @@ contains the separately bound Mac body, so its whole-file digest is measured at
 the actual implementation head. Verify the unchanged diagnostic bodies and the
 generated private copies separately from that combined file digest.
 
-Prepare log, binding and line-map leaves before held acquisition. Before each
-evaluator call, bind the case index, exact glob, all seven document hashes, fixed
-source hashes, private frontend bytes and canonical exact argv hash. The four
-source files remain the evaluator, private reader, `_consumer.py` and this test.
+Precreate all nine log, binding, wrapper and line-map slots before held acquisition.
+Reuse slot 8 only after the prior synchronous call and its original cleanup finish;
+no concurrent writer or unfinished call may share it. Before each use, clear only
+its existing owned log/binding through the existing no-follow identity boundary,
+then bind index 8, its fixed boundary identity, all seven current document hashes,
+fixed source hashes, private frontend bytes and canonical exact argv hash. Keep
+indices 0–7 and their exact glob bindings unchanged. Reuse the existing bounded
+binding/copy code. Scope the frontend selection to this private call; do not alter
+subsequent calls. Missing or failed reset/binding means GAP, never a prior call's
+record or binding. Do not create per-call leaves or accumulate success records.
+The four source files remain the evaluator, private reader, `_consumer.py` and
+this test. No failed-input metadata query is added; input measurement stays before
+that call's held acquisition.
 Retain the existing no-follow, bounded-byte and stable-identity reads. Event SHA
 is observed data and supplies no approval. Case-binding records stay at most
 3,072 bytes; missing, changed, unreadable or oversized data stays GAP.
@@ -670,9 +684,14 @@ to fill gaps or change the original predicate.
 
 Keep the 12,000-byte reader record, 16,384-byte sinks and combined failure export,
 and 512-byte frontend memory record before its bounded exit fields. Preserve the
-accepted sink-only identity/size checks and exact output format. The suite may
-retain its original failure-only export; evaluator output and exit behavior remain
-unchanged. The owned exit-zero control does not prove actual frontend success,
+accepted sink-only identity/size checks and exact output format. At the existing
+failure-only export, use the active original protected slot or the current slot-8
+binding. Export at most the unchanged combined cap; missing current preparation
+exports GAP without reading or presenting a prior invocation's evidence. Preserve
+original exit behavior and do not export successes. Check sequential slot reuse,
+reset/binding failure, stale-record exclusion, four body hashes, original argv and
+call counts with owned data and the original full suite; add no diagnostic CI.
+The owned exit-zero control does not prove actual frontend success,
 which removes its traps before cleanup. Preserve the prior Mac stat-adapter limits;
 they do not prove actual Linux stat, evaluator execution or historical cause.
 
