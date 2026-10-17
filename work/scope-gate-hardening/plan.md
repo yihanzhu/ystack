@@ -9,7 +9,7 @@ Tracks #541. Risk is high. This is the nonterminal child-6 core. It authenticate
 the existing child-5 evidence at one exact revision. Issue #544 remains mandatory
 before child 6 completes or child 7 starts.
 
-Implementation PR: `review_size: accepted-exception`, 2,600–7,750 net changed
+Implementation PR: `review_size: accepted-exception`, 2,600–8,000 net changed
 lines. The private evidence reader, held-path and Git checks, closed evaluator
 relations, and a real two-principal origin fixture form one security boundary.
 Most of the range is proof: complete classification, bundle, Git, terminal and
@@ -647,6 +647,29 @@ files and callers; select only their required trace events. Preserve real
 including actual child reap and pipe-close evidence. Do not disable observation,
 cache a safety scan, alter the shared guard or query a failed object.
 
+Only `observer_source.watched` and the Mac `wrapper_prefix.bound` classifier may
+reuse their original code-authentication result within one trace session. Keep
+`source_codes` and `bound_codes` fixed after their original authenticated source
+reads and compilation. Every new actual code object first undergoes the original
+filename and structural CodeType-set test. Structurally equal distinct objects
+remain eligible under that test; same-name unequal or inequivalent replaced code
+keeps its original refusal. Identity is only a reuse key, never a new permission gate.
+Retain a strong code reference with each result, preventing id reuse; discard all
+entries when that session ends. Allow at most 512 entries per classifier, with no
+public selector or reusable cache API.
+
+Reuse only after bounded confirmation of an exact built-in immutable constant
+graph: scalar constants, tuples, frozensets and nested code. Inspect at most 1,024
+nodes, 32 nesting levels and 64 KiB of scalar/code payload per qualification;
+do not invoke custom hash/equality to decide qualification. On a cache miss,
+mutable or custom values, an uncertain or over-limit graph, a full cache or
+reentrant incomplete qualification keep the original classification on every
+call. Qualification only decides whether to retain the original result; it adds
+no refusal or acceptance.
+Never cache exceptions or let qualification failure change the original result
+or exception. Keep event selection, order and fields unchanged. Cache no source
+read, metadata, ACL, held-path recheck, safety scan, execution or owner state.
+
 Use one private `scope_fixture_owner_cancel` boundary to connect the original
 1,800-second alarm and fixture exit to the existing root driver. Keep the same
 alarm start. Make Bash's wait interruptible. Bind the cancellation channel before
@@ -675,8 +698,23 @@ Cover identity refusal, real foreground return/reap, direct-callee stat/bool/err
 exceptions and early GAP. Compare event order and field meaning while retaining
 actual varying identities and times; do not hand-fill identity. Check wrong code
 objects, same-name callers, one-time source-line binding and required local events.
-Record actual callback counts and cost without treating them as a full-suite timing
-proof. Run the exact private cancellation boundary with a fixed test-only short
+Before source publication or another full Mac run, require a complete readable
+private candidate and its actual 14-path size. Run the real extracted old and new
+classifiers in both boundaries on the same owned call sequences. Preserve event
+order, fields, refusals and frame-local GAP, including nonwatched direct-callee
+stat/bool/errno, identity and foreground return/reap/pipe events. Cover structurally
+equal new code objects, same-name unequal code and inequivalent replace/rebind,
+mutable/custom
+hash/eq constants, uncached exceptions, capacity saturation and reentrancy.
+Record actual callback counts, classification requests, original structural tests
+and new-object counts for each session. Require equivalent observations and a substantial drop
+in repeated authentication. Record whole ordinary-call wall time; add no per-event
+timing, evaluator/reader call, runtime, sudo or diagnostic CI. If equivalence,
+counts or measured work show no useful reduction, stop the candidate before full
+execution. These results do not promise completion within the Mac deadline.
+After this gate, require fresh independent exact-byte source preparation, then
+the original same-final-head Mac/Linux proof and separate G3. Run the exact
+private cancellation boundary with a fixed test-only short
 alarm and real owned children. Cover never-started and starting owners, normal
 completion, cancellation between and during calls, EOF and completion races,
 missing/wrong confirmation, unreaped children and close errors. Prove no new launch
@@ -733,8 +771,9 @@ The diagnostic boundary follows private candidate SHA-256
 `f807180c483a689ae6ebb8985fa99f4088836b6280da0d3591481b151fba6850`.
 These decoded-body hashes are the observation baseline. Keep the literals
 readable and multiline. Only `observer_source` may change for the trace dispatch,
-source-line binding and fixed phase facts below; the other three bodies remain
-exact. Cost work does not add a trace-dispatch optimization:
+source-line binding, fixed phase facts and session-local code-result reuse below;
+the other three bodies remain exact. Cost sampling adds no dispatch optimization;
+only the two classifiers above may reuse authenticated code results:
 
 | Embedded body | Decoded-byte SHA-256 |
 | --- | --- |
@@ -779,9 +818,10 @@ launch. Keep signal_exit unchanged. Early errors, signals, child/subshell paths,
 sink errors and transport gaps remain GAP. Do not query failed input metadata.
 
 Prebind the Linux observer's fixed source lines once. Authenticate its actual
-code objects, files and callers and select only needed events. Keep watched
-recheck line events and real direct-callee return/exception events, including
-callees outside watched files. Preserve component tracking and actual stat, bool,
+code objects, files and callers and select only needed events. Apply only the
+session-local classification reuse above; keep source authentication complete.
+Keep watched recheck line events and real direct-callee return/exception events,
+including callees outside watched files. Preserve component tracking and actual stat, bool,
 errno and identity returns. A watched-file filter alone is insufficient. This
 changes trace dispatch, not safety reads, capture fields, predicates or output.
 
@@ -856,7 +896,8 @@ Keep only finite, ordered differences; missing or invalid facts are GAP. Bash
 facts have integer-second resolution. Do not subtract different process clocks.
 Launch-to-wait includes frontend work and reader waiting; observed execution
 includes imports, tracing and measurement overhead. Neither is isolated CPU or
-callback cost. Do not time callbacks, add source reads or change trace dispatch.
+callback cost. Cost sampling must not time callbacks, add source reads or change
+trace dispatch. The separate classifier reuse above changes no timing boundary.
 
 Initialize eligibility to zero. Only the original terminal Python, after every
 original terminal assertion passes, may write one and close it before returning.
