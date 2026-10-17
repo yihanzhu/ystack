@@ -1023,6 +1023,26 @@ invoke custom lookup, getters or callbacks. Only a frame whose f_code is exactly
 c._open_held.__code__ may supply its existing path (exact str, at most 1,024
 characters), index (exact int) and name (exact str, at most 255 characters).
 Function names use the same 80-character bound; line numbers are exact ints.
+In this same reader record, retain the outer OSError's native errno descriptor
+only as exact int/null. Within the existing traceback bounds, retain at most one
+foreground state whose f_code is exactly c._DarwinChildOwner._foreground.__code__.
+Restrict it to the first genuine evaluator's original first Git config call:
+`/usr/bin/git --no-replace-objects --git-dir=<original> config --file <original> --name-only --list --no-includes`.
+Require the original exact list of nine exact strings, only those two path slots
+variable, and at most 2,048 encoded argv bytes; bind that exact argv in the record.
+Read only existing finite exact-int/float timeout/end and cancelled as an exact
+single-element list of an exact bool. Record cleanup_signal only at the original
+cleanup killpg traceback site, from its original TERM/KILL loop constant; it is
+not a received signal. From an exact original Popen instance's native dictionary,
+retain only existing positive exact-int pid and exact-int/null returncode.
+Cached None is not liveness. These are exception-mapping facts, not a snapshot at
+an earlier predicate: final cancelled=False excludes that one-way bool trigger;
+True cannot distinguish cancellation from a prior deadline failure. Add no buffer
+contents or lengths, whole locals, dynamic getters, callbacks or repr. Missing or
+invalid frame, command, object, scalar or binding is GAP. Do not poll, wait,
+getpgid, inspect proc/ps, send kill0, read a clock or make any new syscall, query,
+trace callback or process. Keep original signals, Popen, call order and exceptions
+unchanged; these facts grant no cleanup or restoration permission.
 Missing, unsupported, wrong-type, cyclic or over-limit facts stay GAP. Do not
 serialize whole locals, repr/str(error), other exception fields or source text.
 Add no stat, open, ACL, readlink, resolve or other failed-object query, input
@@ -1058,6 +1078,13 @@ first error. Exercise actual original _open_held with an owned controlled OS
 failure to prove its suppressed context; direct Refusal is a separate control,
 not OS-error coverage. Cover missing/wrong/cyclic/overlong context, exact frame
 identity versus a same-name wrong frame, and type, formatting and sink failures.
+For foreground facts, use the exact extracted mapping with original cancel and
+deadline refusals and controlled TERM/KILL OSError exits. Prove original exception
+identity, result, call count and whether cleanup wait was reached are unchanged.
+Cover existing native child fields, wrong frame/config argv, pseudo-child rejection,
+None without a liveness claim, GAP, encoding/cap and formatting/write failures.
+Label controlled OS errors honestly; preserve all old and new ordinary raw output
+under the original 16 MiB cap without truncation or removal of controls.
 Prove no extra object queries, unchanged original error/status/calls and no
 success export within the same caps. Freeze complete generated copies before
 these ordinary controls. For the launch fields, use actual owned link creation and
