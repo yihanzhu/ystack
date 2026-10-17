@@ -2716,7 +2716,7 @@ def counted_wrapper_cases(wrapper,old_wrapper,mac_code,consumer,clock_name):
         frozen.append((version,counted.encode(),subject.encode()))
     return frozen
 
-def short_stage_controls(guard,channel,area):
+def short_stage_controls(guard,channel,area,clock_name):
     import textwrap
     trusted_python=Path(sys.executable).resolve()
     fields=('st_dev','st_ino','st_mode','st_uid','st_gid','st_nlink','st_size','st_mtime_ns','st_ctime_ns')
@@ -2730,6 +2730,7 @@ def short_stage_controls(guard,channel,area):
     compile(proof.encode(),'actual-short-subject-prelaunch','exec')
     prefix=next(n.value.value for n in tree.body if isinstance(n,ast.Assign) and isinstance(n.targets[0],ast.Name) and n.targets[0].id=='wrapper_prefix')
     compile(prefix.encode(),'actual-short-wrapper-prelaunch','exec')
+    prefix_source=prefix
     short=functions['fixed_short_phase'];normal=next(i for i,n in enumerate(tree.body) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='copied' for t in n.targets))
     branch=next(i for i,n in enumerate(tree.body) if isinstance(n,ast.If) and any(isinstance(x,ast.Call) and isinstance(x.func,ast.Name) and x.func.id=='fixed_short_phase' for item in n.body for x in ast.walk(item)))
     assert branch<normal and all(not (isinstance(n,ast.Attribute) and n.attr=='copytree') for n in ast.walk(short))
@@ -2764,6 +2765,19 @@ def short_stage_controls(guard,channel,area):
                 assert reversed_actual.count(anchor)==1
                 reversed_actual=reversed_actual.replace(anchor,'stderr=subprocess.PIPE, '+before+'close_fds=True',1)
         assert reversed_actual==guard
+        assert clock_name in ('CLOCK_UPTIME_RAW','CLOCK_MONOTONIC')
+        clock_sites=[i for i,line in enumerate(actual.splitlines(),1) if 'CLOCK_UPTIME_RAW' in line]
+        assert clock_sites==[173,601,642,717,894,1004,1076,1088,1089]
+        assert actual.count('CLOCK_UPTIME_RAW')==9 and 'CLOCK_MONOTONIC' not in actual
+        unmapped_actual=actual;actual=actual.replace('CLOCK_UPTIME_RAW',clock_name)
+        assert actual.replace(clock_name,'CLOCK_UPTIME_RAW')==unmapped_actual
+        if clock_name=='CLOCK_UPTIME_RAW':assert actual==unmapped_actual
+        mapped_tree=ast.parse(actual)
+        mapped_proof=next(n.args[0].value for n in ast.walk(mapped_tree) if isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute) and n.func.attr=='write_text' and isinstance(n.func.value,ast.Name) and n.func.value.id=='proof_program')
+        mapped_wrapper=next(n.value.value for n in mapped_tree.body if isinstance(n,ast.Assign) and isinstance(n.targets[0],ast.Name) and n.targets[0].id=='wrapper_prefix')
+        assert mapped_proof==proof.replace('CLOCK_UPTIME_RAW',clock_name)
+        assert mapped_wrapper==prefix_source.replace('CLOCK_UPTIME_RAW',clock_name)
+        clock_binding={'clock':clock_name,'sites':clock_sites,'unmapped_sha256':hashlib.sha256(unmapped_actual.encode()).hexdigest(),'mapped_sha256':hashlib.sha256(actual.encode()).hexdigest(),'proof_sha256':hashlib.sha256(mapped_proof.encode()).hexdigest(),'wrapper_sha256':hashlib.sha256(mapped_wrapper.encode()).hexdigest()}
         compile(actual,'actual-whole-inner-driver-prelaunch','exec')
         logical="logical_prefix = Path('/Library/Frameworks/Python.framework/Versions/3.15')"
         assert guard.count(logical)==actual.count(logical)==1
@@ -2808,7 +2822,7 @@ finally:
         if serial=='2':assert command.index('scope_owner_serial=0\n')<command.index('scope_owner_serial=1\n')<command.index(call)
         for name,raw in [('driver.py',setup),('channel.py',owned_channel),('boundary.sh',command)]:
             (snapshots/(fault+'.'+name)).write_text(raw)
-        print(json.dumps({'whole_stage_preexec':fault,'trusted_interpreter':trusted_binding,'expected_driver_argv':expected_argv,'expected_serial':serial,'driver':setup,'channel':owned_channel,'bash':command,'adapter':'fixed current-UID, trusted Python, sudo transport, and two owned-copy stop stimulus; actual production driver otherwise intact','driver_sha256':hashlib.sha256(setup.encode()).hexdigest()}),flush=True)
+        print(json.dumps({'whole_stage_preexec':fault,'clock_binding':clock_binding,'trusted_interpreter':trusted_binding,'expected_driver_argv':expected_argv,'expected_serial':serial,'driver':setup,'channel':owned_channel,'bash':command,'adapter':'fixed current-UID, trusted Python, sudo transport, and two owned-copy stop stimulus; actual production driver otherwise intact','driver_sha256':hashlib.sha256(setup.encode()).hexdigest()}),flush=True)
         compile(owned_channel,'actual-whole-channel-prelaunch','exec')
         syntax=subprocess.run(['/bin/bash','-n','-c',command],capture_output=True,timeout=5)
         assert syntax.returncode==0 and not syntax.stderr
@@ -3129,13 +3143,14 @@ reports=[]
 temporary=tempfile.mkdtemp(prefix='scope-observer-owner-')
 print(json.dumps({'ordinary_tree':temporary,'on_failure':'RETAIN'}),flush=True)
 try:
+    clock_name='CLOCK_UPTIME_RAW' if sys.platform=='darwin' else 'CLOCK_MONOTONIC'
     area=Path(temporary).resolve();package=area/'package';(package/'shadow/v1').mkdir(parents=True);(package/'scope/v1').mkdir(parents=True)
     (package/'shadow/v1/_consumer.py').write_bytes(consumer)
     reports.extend(code_auth_controls(observer,wrapper,area))
     reports.append(genuine_relation_controls(area))
     reports.append(original_context_controls(area))
     reports.append(wrapper_cancel_controls(wrapper,guard,area))
-    reports.append(short_stage_controls(guard,channel,area))
+    reports.append(short_stage_controls(guard,channel,area,clock_name))
     helper=area/'outside.py';helper.write_text('allowed=True\ndef rule(fd,value,ancestor):\n return allowed\n')
     reader=package/'scope/v1/reader.py'
     reader.write_text('''import importlib.util,os,sys
@@ -3241,7 +3256,6 @@ finally:
                and n.value.func.value.id=='proof_program')
     mac_program=area/'mac-wrapper.py';mac_subject=area/'mac-subject.py';mac_target=area/'mac-target'
     mac_code=proof.replace('time.sleep(30)','time.sleep(0)')
-    clock_name='CLOCK_UPTIME_RAW' if sys.platform=='darwin' else 'CLOCK_MONOTONIC'
     mac_code=mac_code.replace('CLOCK_UPTIME_RAW',clock_name)
     foreground_line="instance._foreground(command,b'',4096,65536,10,{'PATH':'/usr/bin:/bin','LC_ALL':'C','LANG':'C'})"
     assert mac_code.count(foreground_line)==1
