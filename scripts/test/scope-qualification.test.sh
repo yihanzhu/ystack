@@ -2789,7 +2789,92 @@ def counted_wrapper_cases(wrapper,old_wrapper,mac_code,consumer,clock_name):
         else:subject=mac_code
         counted=code.replace('foreground = {}','callback_count=0\nforeground = {}',1)
         if 'def bound(frame):\n' in counted:
-            counter="authentication={'requests':0,'filename_memberships':0,'code_set_memberships':0,'objects':{},'rows':[],'stack':[],'events':[]}\nclass AuthenticationTable(dict):\n    def __contains__(self,key):\n        authentication['filename_memberships']+=1\n        authentication['stack'][-1]['filename']+=1\n        return super().__contains__(key)\nclass AuthenticationSet(set):\n    def __contains__(self,key):\n        authentication['code_set_memberships']+=1\n        authentication['stack'][-1]['set']+=1\n        return super().__contains__(key)\nbound_codes=AuthenticationTable({key:AuthenticationSet(value) for key,value in bound_codes.items()})\n"
+            paired_source=r'''import hashlib
+paired={'requests':0,'dispatch':0,'local_events':0,'objects':{},'files':[],'names':[],'exceptions':0}
+paired_cached=hashlib.sha256();paired_original=hashlib.sha256()
+paired_selected=hashlib.sha256();paired_expected=hashlib.sha256()
+paired_last=None
+original_bound=bound
+original_observe=observe
+original_dispatch=dispatch
+
+def paired_bound(frame,event):
+    global paired_last
+    code=frame.f_code
+    assert type(code) is types.CodeType and type(code.co_filename) is str
+    assert type(code.co_name) is str and type(code.co_firstlineno) is int
+    key=id(code)
+    new_object=key not in paired['objects']
+    if new_object:
+        assert len(paired['objects'])<1024
+        assert len(code.co_filename)<=1024 and len(code.co_name)<=255
+        for field,value in (('files',code.co_filename),('names',code.co_name)):
+            if value not in paired[field]:
+                assert len(paired[field])<1024
+                paired[field].append(value)
+        paired['objects'][key]=[paired['files'].index(code.co_filename),paired['names'].index(code.co_name),code.co_firstlineno]
+    paired['requests']+=1
+    if new_object and code.co_filename in paired_codes:
+        pending=[(code,0)];nodes=0
+        while pending:
+            value,depth=pending.pop();nodes+=1
+            assert nodes<=65536 and depth<=64
+            if type(value) is types.CodeType:
+                assert all(type(getattr(value,name)) is str for name in ('co_filename','co_name'))
+                for name in ('co_names','co_varnames','co_freevars','co_cellvars'):
+                    sequence=getattr(value,name)
+                    assert type(sequence) is tuple and all(type(item) is str for item in sequence)
+                qualname=getattr(value,'co_qualname',None)
+                assert qualname is None or type(qualname) is str
+                assert type(value.co_consts) is tuple
+                pending.extend((item,depth+1) for item in value.co_consts)
+            elif type(value) in (tuple,frozenset):pending.extend((item,depth+1) for item in value)
+            else:assert type(value) in (str,bytes,int,float,complex,bool,type(None),type(Ellipsis))
+    try:
+        actual=original_bound(frame)
+    except BaseException as error:
+        try:expected=(code.co_filename in paired_codes and code in paired_codes[code.co_filename])
+        except BaseException as oracle_error:
+            assert type(error) is type(oracle_error)
+            paired['exceptions']+=1
+            raw=json.dumps([key,event,type(error).__name__],separators=(',',':')).encode()
+            paired_cached.update(raw);paired_original.update(raw)
+        else:raise AssertionError('paired classification exception differs')
+        raise
+    expected=(code.co_filename in paired_codes and code in paired_codes[code.co_filename])
+    raw=json.dumps([key,event,actual],separators=(',',':')).encode()
+    other=json.dumps([key,event,expected],separators=(',',':')).encode()
+    paired_cached.update(raw);paired_original.update(other)
+    if type(actual) is not bool or actual!=expected:
+        print('PAIRED_FAILURE '+json.dumps({'code':key,'event':event,'actual':actual,'expected':expected}),file=sys.stderr)
+        raise AssertionError('same-event classification differs')
+    paired_last=(code,event,expected)
+    return actual
+
+def paired_observe(frame,event,arg):
+    paired['local_events']+=1
+    result=original_observe(frame,event,arg)
+    assert result is paired_observe
+    return result
+
+def paired_dispatch(frame,event,arg):
+    global paired_last
+    paired['dispatch']+=1;paired_last=None
+    selected=original_dispatch(frame,event,arg)
+    if event=='call':
+        assert paired_last is not None and paired_last[0] is frame.f_code and paired_last[1]==event
+        eligible=paired_last[2]
+        code=frame.f_code
+        foreground_call=code.co_filename==consumer_name and code.co_name=='_foreground'
+        guard_call=code.co_filename==original_name and (code.co_name=='identity' or code in identity_callers)
+        expected=paired_observe if eligible and (foreground_call or guard_call) else None
+    else:expected=None
+    paired_selected.update(json.dumps([id(frame.f_code),event,selected is paired_observe],separators=(',',':')).encode())
+    paired_expected.update(json.dumps([id(frame.f_code),event,expected is paired_observe],separators=(',',':')).encode())
+    assert selected is expected,'same-event dispatch selection differs'
+    return selected
+'''
+            counter="paired_codes=types.MappingProxyType({key:frozenset(value) for key,value in bound_codes.items()})\nauthentication={'requests':0,'filename_memberships':0,'code_set_memberships':0,'objects':{},'rows':[],'stack':[],'events':[]}\nclass AuthenticationTable(dict):\n    def __contains__(self,key):\n        authentication['filename_memberships']+=1\n        authentication['stack'][-1]['filename']+=1\n        return super().__contains__(key)\nclass AuthenticationSet(set):\n    def __contains__(self,key):\n        authentication['code_set_memberships']+=1\n        authentication['stack'][-1]['set']+=1\n        return super().__contains__(key)\nbound_codes=AuthenticationTable({key:AuthenticationSet(value) for key,value in bound_codes.items()})\n"
             counted=counted.replace('identity_line = ',counter+'identity_line = ',1)
             counted=measured_classifier(counted,'bound')
             counted=counted.replace('def bound(frame):\n',"def bound(frame):\n    authentication['requests']+=1\n    authentication['objects'][id(frame.f_code)]=frame.f_code\n",1)
@@ -2797,6 +2882,17 @@ def counted_wrapper_cases(wrapper,old_wrapper,mac_code,consumer,clock_name):
         for name in ('observe','dispatch'):
             header='def '+name+'(frame, event, arg):\n'
             if header in counted:counted=counted.replace(header,header+'    global callback_count\n    callback_count+=1\n',1)
+        if version in ('new','wrong-code-same-name'):
+            start=counted.index('def observe(frame, event, arg):\n');end=counted.index('def cancel(',start)
+            original=counted[start:end]
+            observed=original.replace('bound(caller)','paired_bound(caller,event)').replace('bound(frame)','paired_bound(frame,event)')
+            assert observed.count('return observe')==2
+            observed=observed.replace('return observe','return paired_observe')
+            counted=counted[:start]+observed+paired_source+'\n'+counted[end:]
+            assert counted.count('sys.settrace(dispatch)')==1
+            counted=counted.replace('sys.settrace(dispatch)','sys.settrace(paired_dispatch)',1)
+            report="    print('PAIRED_RESULT '+json.dumps(dict(paired,cached_digest=paired_cached.hexdigest(),original_digest=paired_original.hexdigest(),selection_digest=paired_selected.hexdigest(),expected_selection_digest=paired_expected.hexdigest(),proof_wall_includes_oracle=True)),file=sys.stderr)\n"
+            counted=counted.replace('    sys.settrace(None)\n','    sys.settrace(None)\n'+report,1)
         counted=counted.replace('    sys.settrace(None)\n',"    sys.settrace(None)\n    print('TRACE_COUNT '+str(callback_count),file=sys.stderr)\n",1)
         frozen.append((version,counted.encode(),subject.encode()))
     return frozen
@@ -3370,13 +3466,20 @@ finally:
         count=int(next(line.split()[1] for line in result.stderr.splitlines() if line.startswith(b'TRACE_COUNT ')))
         authentication=row(b'AUTH_RESULT ') if version!='old' else None
         elapsed=time.monotonic()-started
-        record={'version':version,'cleanup':clean,'identity':identity,'callbacks':count,'seconds':elapsed,'authentication':authentication,'stdout':result.stdout.decode(),'stderr':result.stderr.decode()}
+        paired=row(b'PAIRED_RESULT ') if version in ('new','wrong-code-same-name') else None
+        record={'paired':paired,'version':version,'cleanup':clean,'identity':identity,'callbacks':count,'seconds':elapsed,'authentication':authentication,'stdout':result.stdout.decode(),'stderr':result.stderr.decode()}
         mac_records.append(record)
-        mac_references.append(completed_evidence({'wrapper_completed_actual':version,'raw_reference':raw_reference,'cleanup':clean,'identity':identity,'callbacks':count,'whole_wall':elapsed,'authentication_rows':0 if authentication is None else len(authentication['rows'])}))
+        mac_references.append(completed_evidence({'wrapper_completed_actual':version,'raw_reference':raw_reference,'cleanup':clean,'identity':identity,'callbacks':count,'whole_wall':elapsed,'authentication_rows':0 if authentication is None else len(authentication['rows']),'paired_requests':None if paired is None else paired['requests']}))
     assert mac_records[1]['callbacks']<mac_records[0]['callbacks']
     modern,cached=mac_records[3],mac_records[1]
-    assert modern['callbacks']==cached['callbacks']
-    assert modern['authentication']['requests']==cached['authentication']['requests']
+    for record in (cached,mac_records[2]):
+        paired=record['paired'];assert paired is not None
+        assert paired['requests']==record['authentication']['requests']
+        assert paired['cached_digest']==paired['original_digest']
+        assert paired['selection_digest']==paired['expected_selection_digest']
+        assert paired['dispatch']>0 and paired['local_events']>0 and paired['objects']
+    reports.append(completed_evidence({'same_event_wrapper_equivalence':{'versions':['new','wrong-code-same-name'],
+        'strict_classification_and_selection':True,'independent_global_counts_retained':True,'proof_wall_includes_oracle':True}}))
     for record in (modern,cached):
         facts=record['authentication'];assert facts['strong_references']
         assert all(row['set']==(0 if row['hit'] else 1) for row in facts['rows'] if row['set'] or row['hit'])
