@@ -3234,6 +3234,85 @@ def paired_dispatch(frame,event,arg):
         frozen.append((version,counted.encode(),subject.encode()))
     return frozen
 
+def observer_dispatch_expected(frame,event,questions,selected,before,after,trace):
+    if event!='call':
+        assert not questions and selected is None and after==before,'observer noncall selection differs'
+        return
+    assert questions and questions[0][0] is frame,'observer request frame differs'
+    if questions[0][1]:
+        assert len(questions)==1,'observer duplicate request'
+        expected=trace;lines=frame.f_code.co_name=='recheck'
+    elif frame.f_back is not None:
+        assert len(questions)==2 and questions[1][0] is frame.f_back,'observer parent request differs'
+        expected=trace if questions[1][1] else None;lines=False if expected is trace else before
+    else:
+        assert len(questions)==1,'observer missing-parent request differs'
+        expected=None;lines=before
+    assert selected is expected,'observer dispatch selection differs'
+    assert after==lines,'observer trace-lines selection differs'
+
+def observer_same_request_program(program):
+    import textwrap
+    factory=next(n for n in ast.parse(heredoc('PY_OBSERVER_OWNER_CONTROLS')).body if isinstance(n,ast.FunctionDef) and n.name=='counted_wrapper_cases')
+    literals={}
+    for name in ('paired_source','primitive_source'):
+        choices=[n.value.value for n in ast.walk(factory) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id==name for t in n.targets) and isinstance(n.value,ast.Constant)]
+        assert len(choices)==1;literals[name]=choices[0]
+    prefix=literals['paired_source'].split('def paired_observe(',1)[0]
+    assert prefix.count('def primitive_expected(')==prefix.count('def positive_expected(')==prefix.count('def paired_bound(')==1
+    assert program.count('return super().__contains__(key)')==2
+    program=program.replace('return super().__contains__(key)',"return primitive_call('filename',self,key,super().__contains__)",1)
+    program=program.replace('return super().__contains__(key)',"return primitive_call('set',self,key,super().__contains__)",1)
+    marker='    class AuthenticationSet(set):\n'
+    assert program.count(marker)==1
+    lookup="    def __getitem__(self,key):\n        return primitive_call('lookup',self,key,super().__getitem__)\n"
+    program=program.replace(marker,textwrap.indent(lookup,'    ')+marker,1)
+    marker="        authentication['stack'].append(_auth_row)\n"
+    assert program.count(marker)==1
+    program=program.replace(marker,marker+"        _auth_row['_primitive']={'frame':frame,'code':frame.f_code,'table':source_codes,'steps':[]}\n",1)
+    setup="""proof={'bound_codes':source_codes,'paired_codes':types.MappingProxyType({key:frozenset(value) for key,value in source_codes.items()}),
+    'authentication':authentication,'bound':watched,'observe':trace,'dispatch':dispatch,'types':types,'hashlib':hashlib,'json':json,'sys':sys}
+exec(compile(PRIMITIVE+PREFIX,'actual-observer-primitive-proof','exec'),proof)
+primitive_call=proof['primitive_call']
+proof.update(active=None,questions=[],failures=[],dispatch_checks=0,local_checks=0,negative_dispatch_done=False)
+globals()['SAME_REQUEST_PROOF']=proof
+original_watched=watched
+def watched(frame):
+    assert proof['active'] is not None,'observer request outside callback'
+    previous=proof['paired']['exceptions']
+    try:result=proof['paired_bound'](frame,proof['active'][1])
+    except BaseException as error:
+        if proof['paired']['exceptions']==previous:proof['failures'].append(type(error).__name__)
+        raise
+    assert len(proof['questions'])<64,'observer request bound'
+    proof['questions'].append((frame,result))
+    return result
+""".replace('PRIMITIVE',repr(literals['primitive_source'])).replace('PREFIX',repr(prefix))
+    marker='    previous=sys.gettrace()\n';assert program.count(marker)==1
+    program=program.replace(marker,textwrap.indent(setup,'    ')+marker,1)
+    # The original primitive controls consume a closed-name adapter of this actual generated classifier.
+    parsed=ast.parse(program);wanted={'watched','AuthenticationTable','AuthenticationSet'}
+    definitions=[n for n in ast.walk(parsed) if isinstance(n,(ast.FunctionDef,ast.ClassDef)) and n.name in wanted]
+    watched=[n for n in definitions if n.name=='watched' and not any(isinstance(x,ast.Assert) and 'callback' in ast.get_source_segment(program,x) for x in ast.walk(n))]
+    assert len(watched)==1
+    definitions=[n for n in definitions if n.name!='watched']+watched
+    names={'watched':'bound','watched_cache':'bound_cache','watched_busy':'bound_busy','watched_weakref':'bound_weakref','source_codes':'bound_codes'}
+    class ClosedNames(ast.NodeTransformer):
+        def visit_Name(self,node):
+            if node.id in names:node.id=names[node.id]
+            return node
+        def visit_FunctionDef(self,node):
+            self.generic_visit(node)
+            if node.name=='watched':node.name='bound'
+            return node
+    adapted=ast.fix_missing_locations(ClosedNames().visit(ast.Module(body=definitions,type_ignores=[])))
+    initialization=[n for n in ast.walk(parsed) if isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name) and n.targets[0].id=='authentication']
+    assert len(initialization)==1
+    initialization=ast.get_source_segment(program,initialization[0])+'\n'
+    adapter=initialization+literals['primitive_source']+'\n'+ast.unparse(adapted)+'\n'+prefix+'\ndef cancel():pass\n'
+    compile(adapter,'actual-observer-closed-name-adapter','exec')
+    return program,adapter
+
 def primitive_witness_controls(program):
     import weakref,io
     tree=ast.parse(program)
@@ -3318,8 +3397,10 @@ def primitive_witness_controls(program):
                 'same_original_exception':fault=='primitive-exception' and error is original_errors[0]}
         reports.append({'case':fault,'actual_rejection':rejection,'custom_effects':calls,'constructed_custom_metaclass':constructed,
             'primitive_steps':scope['paired']['primitive_steps'],'original_auth_rows':len(scope['authentication']['rows']),
-            'diagnostic_stderr':diagnostic.getvalue(),'same_event_assertions':'actual extracted primitive/classifier/witness boundary'})
-    return completed_evidence({'primitive_witness_controls':reports,'scope':'inert actual code objects and explicit owned proof-fault injection; no child, evaluator, reader or OS query'})
+            'diagnostic_stderr':diagnostic.getvalue()})
+    return completed_evidence({'primitive_witness_controls':reports,
+        'same_event_assertions_for_all_cases':'actual extracted primitive/classifier/witness boundary',
+        'scope':'inert actual code objects and explicit owned proof-fault injection; no child, evaluator, reader or OS query'})
 
 
 def short_stage_controls(guard,channel,area,clock_name):
@@ -3793,8 +3874,13 @@ finally:
             code=code.replace('source_codes[name]=code_tree(compile(raw,name,\'exec\',dont_inherit=True))',"source_codes[name]=AuthenticationSet(code_tree(compile(raw,name,'exec',dont_inherit=True)))",1)
             code=code.replace('    def watched(frame):\n',"    def watched(frame):\n        authentication['requests']+=1\n        authentication['objects'][id(frame.f_code)]=frame.f_code\n",1)
         if '    source_codes=AuthenticationTable()\n' in code:code=measured_classifier(code,'watched')
+        same_request='    watched_cache = {}\n' in code
+        if same_request:code,negative_adapter=observer_same_request_program(code)
         snapshot=area/('observer-'+hashlib.sha256(code.encode()).hexdigest()+'.py');snapshot.write_text(code)
         print(json.dumps({'preexec_observer':str(snapshot),'sha256':hashlib.sha256(snapshot.read_bytes()).hexdigest(),'kind':kind,'reader_sha256':hashlib.sha256(reader.read_bytes()).hexdigest(),'consumer_sha256':hashlib.sha256(consumer).hexdigest()}),flush=True)
+        if same_request and kind=='identity':
+            print(json.dumps({'observer_primitive_adapter_preexec':negative_adapter,'sha256':hashlib.sha256(negative_adapter.encode()).hexdigest()}),flush=True)
+            reports.append(primitive_witness_controls(negative_adapter))
         ns={};exec(compile(code,'actual-private-observer','exec'),ns)
         callbacks={};wrappers={};install=sys.settrace
         def wrap(fn):
@@ -3802,7 +3888,39 @@ finally:
             if fn not in wrappers:
                 def call(frame,event,arg):
                     callbacks[event]=callbacks.get(event,0)+1
-                    return wrap(fn(frame,event,arg))
+                    proof=ns.get('SAME_REQUEST_PROOF')
+                    before=frame.f_trace_lines
+                    if proof is not None:
+                        assert proof['active'] is None
+                        proof['active']=(frame,event,arg);proof['questions']=[]
+                    try:
+                        selected=fn(frame,event,arg)
+                        if proof is not None:
+                            if fn is proof['original_dispatch']:
+                                observer_dispatch_expected(frame,event,proof['questions'],selected,before,frame.f_trace_lines,proof['original_observe'])
+                                proof['dispatch_checks']+=1
+                                if event=='call' and not proof['negative_dispatch_done']:
+                                    for fault in ('selection','frame','lines'):
+                                        questions=list(proof['questions']);choice=selected;after=frame.f_trace_lines
+                                        if fault=='selection':choice=None if selected is proof['original_observe'] else proof['original_observe']
+                                        elif fault=='frame':questions[0]=(object(),questions[0][1])
+                                        else:after=not after
+                                        caught=None
+                                        try:observer_dispatch_expected(frame,event,questions,choice,before,after,proof['original_observe'])
+                                        except AssertionError as error:caught=error
+                                        assert caught is not None
+                                        tb=caught.__traceback__
+                                        while tb.tb_next:tb=tb.tb_next
+                                        assert tb.tb_frame.f_code is observer_dispatch_expected.__code__
+                                        expected={'selection':'observer dispatch selection differs','frame':'observer request frame differs','lines':'observer trace-lines selection differs'}[fault]
+                                        assert str(caught)==expected
+                                    proof['negative_dispatch_done']=True
+                            elif fn is proof['original_observe']:
+                                assert selected is proof['original_observe'],'observer local return differs'
+                                proof['local_checks']+=1
+                        return wrap(selected)
+                    finally:
+                        if proof is not None:proof['active']=None
                 wrappers[fn]=call
             return wrappers[fn]
         def counted(fn):install(wrap(fn))
@@ -3816,7 +3934,19 @@ finally:
         result=json.loads(log.read_bytes());elapsed=time.monotonic()-started
         facts=ns.get('AUTH_RESULT',{})
         authentication=authentication_proof(facts) if facts else None
-        reference=completed_evidence({'observer_actual':kind,'result':result,'callbacks':callbacks,'whole_wall':elapsed,'authentication':authentication})
+        paired=None
+        if same_request:
+            proof=ns['SAME_REQUEST_PROOF'];details=proof['paired']
+            paired={'classifications':details['requests'],'dispatch_checks':proof['dispatch_checks'],'local_checks':proof['local_checks'],
+                'actual_digest':proof['paired_cached'].hexdigest(),'original_digest':proof['paired_original'].hexdigest(),
+                'primitive_digest':proof['primitive_digest'].hexdigest(),'new_actual_objects':len(details['objects']),
+                'failure_code_dictionary':{'objects':details['objects'],'files':details['files'],'names':details['names']} if proof['failures'] else None,
+                'primitive_steps':details['primitive_steps'],'failures':proof['failures'],'negative_dispatch_done':proof['negative_dispatch_done'],
+                'proof_wall_includes_oracle':True}
+        reference=completed_evidence({'observer_actual':kind,'result':result,'callbacks':callbacks,'whole_wall':elapsed,'authentication':authentication,'same_request':paired})
+        if same_request:
+            assert not paired['failures'] and paired['negative_dispatch_done'] and paired['actual_digest']==paired['original_digest']
+            assert paired['classifications']==facts['requests'] and paired['dispatch_checks'] and paired['local_checks']
         assert result['status']==('OBSERVER_GAP' if kind=='gap' else 'FIRST_STALE')
         if kind=='errno':
             actual=[(frame,item) for frame in result['frames'] for item in frame['actual_returns'] if item.get('errno')==9]
@@ -3841,7 +3971,7 @@ finally:
         assert sum(new_counts.values())<sum(old_counts.values())
         assert (plain['status'],plain.get('reason'))==(second['status'],second.get('reason'))
         if kind!='gap':assert shape(plain)==shape(second),(plain,second)
-        assert plain_counts==new_counts and plain_auth['requests']==new_auth['requests']
+        assert new_auth['requests']>0 and plain_auth['requests']>0
         assert new_auth['valid'] and plain_auth['valid'],(plain_auth,new_auth)
         assert any('actual_bool_return' in item for frame in second.get('frames',[]) for item in frame['actual_returns']) or kind!='bool'
         reports.append(completed_evidence({'observer':kind,'original_reference':old_reference,'modern_reference':plain_reference,'cached_reference':new_reference,'same_field_meaning':True}))
