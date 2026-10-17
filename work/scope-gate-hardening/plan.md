@@ -9,7 +9,7 @@ Tracks #541. Risk is high. This is the nonterminal child-6 core. It authenticate
 the existing child-5 evidence at one exact revision. Issue #544 remains mandatory
 before child 6 completes or child 7 starts.
 
-Implementation PR: `review_size: accepted-exception`, 2,600–8,200 net changed
+Implementation PR: `review_size: accepted-exception`, 2,600–8,400 net changed
 lines. The private evidence reader, held-path and Git checks, closed evaluator
 relations, and a real two-principal origin fixture form one security boundary.
 Most of the range is proof: complete classification, bundle, Git, terminal and
@@ -693,6 +693,26 @@ PIDs, use sudo kill, add a process-manager API or enlarge permissions. The uncha
 workflow still refuses restoration for a negative signal or unknown phase outcome;
 fixture confirmation does not override that rule or prove final D/V/T restoration.
 
+Within this private boundary, use one zero-payload `.ready-complete` leaf at the
+same fixed owner stem. Refuse an existing ready or completion leaf, including a
+symlink, before launch. Only the authenticated current owner may create the
+completion leaf, after the original ready write, mode 0444, file fsync, close and
+parent fsync all succeed. Create it with O_CREAT|O_EXCL|O_NOFOLLOW and mode 0400.
+Keep the inherited umask unchanged: 022 and 077 both yield 0400. Reject any other
+resulting mode; do not repair it. Creation publishes the entire empty signal;
+never write it or change its mode after it becomes visible. Check it without
+following links: a root-owned regular file, one link, size zero and mode 0400.
+The unprivileged channel needs only its metadata, not permission to read content.
+Bind it to the existing invocation and context; add no generic publisher or path
+selector. Within the original ten-second wait, wait for this completion leaf,
+then perform the original ready strict snapshot and payload/context check once.
+Keep every identity field, including ctime. Do not retry a bad snapshot, add a
+settling sleep or extend a deadline. Ready publication or validation errors keep
+the original nonzero result. Completion proves neither owner exit nor receipt,
+quiescence or deletion permission. Keep the original Bash state, wait, receipt
+and cleanup rules; only their independent confirmation may permit cleanup.
+PENDING or unknown owner completion still permits zero deletion.
+
 In existing CI, compare old and new observers on real owned calls and events.
 Cover identity refusal, real foreground return/reap, direct-callee stat/bool/errno,
 exceptions and early GAP. Compare event order and field meaning while retaining
@@ -727,6 +747,24 @@ cancellation case at the existing controlled-fixture entry, with no additional
 administrator command or general selector. Ordinary owned controls cannot replace
 this root-chain proof or normal full-suite restoration. Preserve actual alarm
 failures and the original 300/1,800/120-second limits.
+
+Use the actual extracted ready publisher, channel and fixed call site in owned
+controls. Pause deterministically after ready creation but before completion;
+prove the reader has not entered its payload snapshot. Release the same writer
+and require one strict snapshot of the fully published ready. Cover ready write,
+mode, file fsync, close, parent fsync and completion creation failures; missing,
+stale, wrong-invocation, wrong-owner/type/mode, linked or nonempty completion;
+and post-completion ready drift. No failed preparation or check may reach the
+alarm sender. Keep the original 022/077 umask controls without changing umask.
+Do not add production synchronization hooks or weaken an earlier check to reach
+a later branch. Preserve the real normal/cancel/alarm chain, its original signal
+status, wait/reap/pipes/receipt proof and unknown-state zero-deletion controls.
+Only `PY_GUARD_CONTROLS`, `PY_FIXTURE_OWNER_CHANNEL` and their necessary ordinary
+controls may change for this readiness boundary. Keep the four capture restrictions, classifiers,
+shared guard, entry and product consumer unchanged by it. Run the complete owner,
+21 layout and 17 same-call controls and static gates; measure the complete output
+against the original 16 MiB cap. Retain fresh exact-byte source preparation and
+the original same-final-head Mac/Linux, root-chain, restoration and G3 proof.
 
 Bind both complete composed scope stdin bodies in existing CI by bounded
 extraction, each body's digest and prelude-before-body order. For each body, run
