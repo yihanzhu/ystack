@@ -9,7 +9,7 @@ Tracks #541. Risk is high. This is the nonterminal child-6 core. It authenticate
 the existing child-5 evidence at one exact revision. Issue #544 remains mandatory
 before child 6 completes or child 7 starts.
 
-Implementation PR: `review_size: accepted-exception`, 2,600–9,300 net changed
+Implementation PR: `review_size: accepted-exception`, 2,600–9,500 net changed
 lines. The private evidence reader, held-path and Git checks, closed evaluator
 relations, and a real two-principal origin fixture form one security boundary.
 Most of the range is proof: complete classification, bundle, Git, terminal and
@@ -951,6 +951,20 @@ proved closed, recheck owned identities and restore the original source-copy
 bytes before any later call. Unknown closure keeps PENDING; no restoration,
 extra administrator command, repeated call or ignored restoration error is allowed.
 
+Within this same capture, retain three existing launch strings: the exact target
+argument used when creating tools/python3, python_bin after the original successful
+command-v, and the post-realpath python_bin passed at the original reader launch.
+Retain the creation argument once; do not query the link or read sys.executable
+again for capture. Bind it to this invocation and the actual source/copy digests.
+Use fixed insertion sites for the two Bash values. Keep the target, original
+realpath program, commands, environment, data arguments and reader launch unchanged.
+A stage not reached or a missing, unsupported or over-limit value is GAP.
+Each value's encoded JSON string is at most 1,024 bytes. Encode paths safely in the
+existing binding/records; never interpolate raw values into JSON or shell code.
+Use the existing failure writer; add no program invocation for collection, reader
+probe, filesystem query or new sink. These values are observations, not authority
+or proof that a path is physical. Keep the same record and export caps below.
+
 At the original Bash emit_error entry, retain its real caller function, original
 line and fixed phase. Only at the reader's existing exception mapping retain the
 original exception type, its already-computed pre-mapping code and bounded actual
@@ -1000,7 +1014,12 @@ not OS-error coverage. Cover missing/wrong/cyclic/overlong context, exact frame
 identity versus a same-name wrong frame, and type, formatting and sink failures.
 Prove no extra object queries, unchanged original error/status/calls and no
 success export within the same caps. Freeze complete generated copies before
-these ordinary controls.
+these ordinary controls. For the launch fields, use actual owned link creation and
+the original extracted selection/launch sites to prove that each retained value
+comes from that same invocation. Cover stage failure/GAP, quotes, backslashes,
+control characters, unsupported encoding, length caps and wrong bindings. Preserve
+the original call count, argv, environment, refusal and source checks; collection
+or encoding failure cannot mask the original result. Keep success export absent.
 Check exact reverse restoration, actual copy-source authentication, closure before
 restoration, unknown closure with no restoration, and unchanged later calls. Do
 not substitute owned controls for actual genuine refusal evidence. Freeze the
