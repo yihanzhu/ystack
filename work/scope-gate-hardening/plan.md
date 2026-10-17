@@ -9,7 +9,7 @@ Tracks #541. Risk is high. This is the nonterminal child-6 core. It authenticate
 the existing child-5 evidence at one exact revision. Issue #544 remains mandatory
 before child 6 completes or child 7 starts.
 
-Implementation PR: `review_size: accepted-exception`, 2,600–9,700 net changed
+Implementation PR: `review_size: accepted-exception`, 2,600–10,000 net changed
 lines. The private evidence reader, held-path and Git checks, closed evaluator
 relations, and a real two-principal origin fixture form one security boundary.
 Most of the range is proof: complete classification, bundle, Git, terminal and
@@ -945,9 +945,9 @@ copy bytes and original-line maps. Removing only those insertions must restore
 both originals byte for byte. Keep source_path, __file__, PACKAGE, reader launch
 and every original source, held, ACL and identity check unchanged; authenticate
 the actual inserted files, never label them with the original hashes. Touch no
-repository source, supplied runtime, old version or Current. Change no command or
-nine data arguments. After the call and all its reader/writer processes are
-proved closed, recheck owned identities and restore the original source-copy
+repository source, supplied runtime, old version or Current. Apart from the fixed
+probe-program insertion below, change no command or nine data arguments.
+After the call and all its reader/writer processes are proved closed, recheck owned identities and restore the original source-copy
 bytes before any later call. Unknown closure keeps PENDING; no restoration,
 extra administrator command, repeated call or ignored restoration error is allowed.
 
@@ -956,14 +956,38 @@ argument used when creating tools/python3, python_bin after the original success
 command-v, and the post-realpath python_bin passed at the original reader launch.
 Retain the creation argument once; do not query the link or read sys.executable
 again for capture. Bind it to this invocation and the actual source/copy digests.
-Use fixed insertion sites for the two Bash values. Keep the target, original
-realpath program, commands, environment, data arguments and reader launch unchanged.
+Use fixed insertion sites for the two Bash values. Keep the target, commands,
+environment, data arguments and reader launch unchanged. The original realpath
+program has only the fixed observation insertion below.
 A stage not reached or a missing, unsupported or over-limit value is GAP.
 Each value's encoded JSON string is at most 1,024 bytes. Encode paths safely in the
 existing binding/records; never interpolate raw values into JSON or shell code.
 Use the existing failure writer; add no program invocation for collection, reader
 probe, filesystem query or new sink. These values are observations, not authority
 or proof that a path is physical. Keep the same record and export caps below.
+
+In this one original probe, retain sys.executable at its existing read and call
+os.path.realpath once with its original argument and options. Bind the original
+lstat/readlink functions before that call. Each original primitive invocation
+must delegate exactly once with unchanged arguments and effects, return the same
+result object or rethrow the same original exception. Restore both bindings in
+finally. Observation failures must not alter that behavior, realpath's original
+error suppression, its result, stdout/stderr or exit status. Add no query,
+resolve, retry, process, interpreter, reader or evaluator invocation.
+
+Retain only the first original OSError: operation (lstat or readlink), safe ASCII
+type name of at most 80 characters, existing exact-int/null errno and existing
+exact-str path. Include the original probe input. Each encoded JSON string is at
+most 1,024 bytes. Only the matching path's already-returned native lstat result
+may supply its exact-int mode/uid/gid; retain no object collection or whole locals.
+Use built-in field access, not repr/str(error), custom getters or callbacks.
+Missing, wrong-type, over-limit or unencodable values and observation failures
+are GAP, never an inferred cause. Retain at most one probe record of 2,048 encoded
+bytes in the same prebound sink. Use the existing identity, source/copy, invocation
+and argument bindings and bounded-write checks. Close the writer on every path;
+no extra sink, environment selector or program invocation is allowed. The original
+synchronous probe completion proves only this probe and its writer ended, not
+reader/owner closure or permission to clean up or restore anything.
 
 At the original Bash emit_error entry, retain its real caller function, original
 line and fixed phase. Only at the reader's existing exception mapping retain the
@@ -983,7 +1007,7 @@ Add no stat, open, ACL, readlink, resolve or other failed-object query, input
 reread, re-evaluation or retry. Preserve the original exception and mapping;
 diagnostic collection failure cannot replace them. Keep each encoded record at
 most 4,096 bytes and the existing sink at most 8,192 bytes.
-Capture at most one record from each boundary;
+Capture at most one record from each Bash, probe and reader boundary;
 an unreached or missing stage is GAP, not an inferred cause. Use one fixed,
 precreated private sink outside evaluated and held trees, with the existing
 no-follow, regular-file, identity and bounded-write checks. Prebind the invocation,
@@ -1020,6 +1044,14 @@ comes from that same invocation. Cover stage failure/GAP, quotes, backslashes,
 control characters, unsupported encoding, length caps and wrong bindings. Preserve
 the original call count, argv, environment, refusal and source checks; collection
 or encoding failure cannot mask the original result. Keep success export absent.
+For the probe, compare the exact extracted original and observed programs on an
+actual owned success path and controlled original lstat/readlink errors. Prove
+one delegation per original call, argument/effect equivalence, result/exception
+identity, unchanged realpath result, stdout/stderr/status and final binding
+restoration. Each error control must reach its named primitive; an earlier failure
+is not coverage. Cover GAP, wrong types, overlong/unsafe encoding, observation and
+sink failure, record/sink caps, wrong source/invocation and exact inverse. Use only
+these ordinary controls; they do not prove the actual Mac query cause or a fix.
 Check exact reverse restoration, actual copy-source authentication, closure before
 restoration, unknown closure with no restoration, and unchanged later calls. Do
 not substitute owned controls for actual genuine refusal evidence. Freeze the
