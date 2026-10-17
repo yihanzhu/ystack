@@ -9,14 +9,15 @@ Tracks #541. Risk is high. This is the nonterminal child-6 core. It authenticate
 the existing child-5 evidence at one exact revision. Issue #544 remains mandatory
 before child 6 completes or child 7 starts.
 
-Implementation PR: `review_size: accepted-exception`, 2,600–7,600 net changed
+Implementation PR: `review_size: accepted-exception`, 2,600–7,750 net changed
 lines. The private evidence reader, held-path and Git checks, closed evaluator
 relations, and a real two-principal origin fixture form one security boundary.
 Most of the range is proof: complete classification, bundle, Git, terminal and
 authenticated-set controls, plus the same-contract owner, group, ACL, descriptor
 and receipt lifecycle. It also covers the complete fixed runtime guard and its
-owned native-format controls. The range preserves readable controls and does not
-relax tests, CI, review, or any acceptance standard.
+owned native-format controls. It includes final-mode initialization and complete
+mode regressions for the five fixed fixture directories. The range preserves
+readable controls and does not relax tests, CI, review, or any acceptance standard.
 
 ## Files that change
 
