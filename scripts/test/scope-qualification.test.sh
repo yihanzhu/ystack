@@ -2397,6 +2397,96 @@ def stable_sink_controls(area,assembler):
             'refusal':refused,'export_bytes':len(output.getvalue())})
     return reports
 
+def foreground_state_controls(area):
+    import io
+    assembler=heredoc('PY_GENUINE_ASSEMBLER');tree=ast.parse(assembler)
+    klass=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='GenuineRelationCapture')
+    constructor=next(n for n in klass.body if isinstance(n,ast.FunctionDef) and n.name=='__init__')
+    expression=next(n.value for n in ast.walk(constructor) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='record' for t in n.targets))
+    spec=importlib.util.spec_from_file_location('foreground_state_consumer',root/'shadow/v1/_consumer.py')
+    module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
+    location=area/'foreground-facts';location.mkdir();sink=location/'sink';sink.write_bytes(b'');sink.chmod(0o600)
+    value=os.lstat(sink);identity=(value.st_dev,value.st_ino,stat.S_IFMT(value.st_mode),value.st_uid,value.st_gid,stat.S_IMODE(value.st_mode),value.st_nlink)
+    insertion=eval(compile(ast.Expression(expression),'actual-foreground-record-expression','eval'),{'token':repr('owned-foreground'),'sink':repr(str(sink)),'identity':repr(identity)})
+    reader=(root/'scope/v1/read-shadow-evidence.py').read_text();boundary='        if code not in {"E_USAGE", "E_LIMIT", "E_PARSE", "E_CANONICAL", "E_RELATION", "E_STALE", "E_RUNTIME"}:\n'
+    assert reader.count(boundary)==1;copied=reader.replace(boundary,insertion+boundary,1);tail=copied[copied.index('if __name__ == "__main__":'):]
+    original=module._DarwinChildOwner._foreground
+    print(json.dumps({'foreground_state_preexec':{'reader_copy':copied,'insertion':insertion,'original_foreground_source':ast.get_source_segment((root/'shadow/v1/_consumer.py').read_text(),next(n for n in ast.walk(ast.parse((root/'shadow/v1/_consumer.py').read_text())) if isinstance(n,ast.FunctionDef) and n.name=='_foreground')),'reader_sha256':hashlib.sha256(copied.encode()).hexdigest()}}),flush=True)
+    records=[]
+    for fault in ('cancel','deadline','term','kill','wrong-frame','wrong-command','pseudo','encoding','cap','format','write'):
+        sink.write_bytes(b'');calls=[];handlers=[];clock_calls=[];pseudo_hooks=[];holder=[];output=io.StringIO();sentinel=PermissionError(13,'fixed ordinary cleanup signal refusal')
+        argv=['/usr/bin/git','--no-replace-objects','--git-dir=/owned/source.git','config','--file','/owned/config','--name-only','--list','--no-includes']
+        if fault=='wrong-command':argv[3]='rev-parse'
+        if fault=='encoding':argv[5]='/owned/\ud800'
+        if fault=='cap':argv[5]='/'+('x'*2050)
+        print(json.dumps({'foreground_case_preexec':fault,'argv':argv,'original_code_identity':fault!='wrong-frame','ordinary_child':['trusted-current-python','-I','-S','-B','-c','pass'],'seams':'fixed Popen transport, selector/clock/signal arguments; real native child/wait/pipes'}),flush=True)
+        child=subprocess.Popen([sys.executable,'-I','-S','-B','-c','pass'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
+        actual_wait=child.wait
+        def wait(*args,**kwargs):calls.append(['wait',kwargs]);return actual_wait(*args,**kwargs)
+        child.wait=wait
+        class Pseudo:
+            def __getattribute__(self,key):
+                pseudo_hooks.append(key)
+                return getattr(child,key)
+        selected=Pseudo() if fault=='pseudo' else child
+        class Selector:
+            def register(self,*args):pass
+            def get_map(self):
+                if fault=='cancel':handlers[0](signal.SIGTERM,None)
+                return {1:True}
+            def close(self):calls.append(['selector-close'])
+        def monotonic():clock_calls.append(True);return 0 if len(clock_calls)==1 else 31
+        def set_handler(number,handler):handlers.append(handler);return signal.SIG_DFL
+        def kill(pid,number):
+            calls.append(['killpg',pid,int(number)])
+            if (fault=='term' and number==signal.SIGTERM) or (fault=='kill' and number==signal.SIGKILL):raise sentinel
+        def popen(arguments,**options):
+            assert arguments is argv and options['start_new_session'] and options['close_fds'];calls.append(['Popen',list(arguments)]);return selected
+        scope=dict(original.__globals__)
+        scope.update(_closed_scope_child=lambda arguments,env,owner:None,
+            subprocess=types.SimpleNamespace(Popen=popen,PIPE=subprocess.PIPE),
+            selectors=types.SimpleNamespace(DefaultSelector=Selector,EVENT_READ=1,EVENT_WRITE=2),time=types.SimpleNamespace(monotonic=monotonic),
+            signal=types.SimpleNamespace(**{key:getattr(signal,key) for key in ('SIGINT','SIGTERM','SIGHUP','SIGKILL','SIG_BLOCK','SIG_SETMASK')},SIG_DFL=signal.SIG_DFL,pthread_sigmask=lambda *args:set(),signal=set_handler),
+            os=types.SimpleNamespace(set_blocking=os.set_blocking,killpg=kill))
+        code=original.__code__.replace(co_name='_foreground') if fault=='wrong-frame' else original.__code__
+        function=types.FunctionType(code,scope)
+        def main(args):
+            try:function(object(),argv,b'',4096,65536,30,{})
+            except BaseException as error:holder.append((error,list(calls),list(pseudo_hooks)));raise
+        def formatting(value,*args,**kwargs):
+            if fault=='format':raise ValueError('fixed foreground format refusal')
+            return json.dumps(value,*args,**kwargs)
+        actual_write=os.write
+        def write(*args):
+            if fault=='write':raise OSError('fixed foreground sink refusal')
+            return actual_write(*args)
+        namespace={'__name__':'__main__','main':main,'c':module,'sys':types.SimpleNamespace(argv=['reader'],stderr=output),'json':types.SimpleNamespace(dumps=formatting),'os':os,'stat':stat}
+        status=None
+        try:
+            os.write=write
+            try:exec(compile(tail,'actual-foreground-reader-mapping','exec'),namespace)
+            except SystemExit as error:status=error.code
+        finally:os.write=actual_write
+        before_wait=list(calls);before_hooks=list(pseudo_hooks);returned=actual_wait(timeout=5)
+        assert returned==0 and child.returncode==0 and all(stream.closed for stream in (child.stdin,child.stdout,child.stderr))
+        assert len(holder)==1 and before_wait==holder[0][1] and before_hooks==holder[0][2]
+        assert status==1 and output.getvalue()=='E_RUNTIME\n'
+        error=holder[0][0];waited=any(row[0]=='wait' for row in before_wait)
+        assert waited==(fault not in ('term','kill')) and len([row for row in before_wait if row[0]=='killpg'])==(1 if fault=='term' else 2)
+        if fault in ('term','kill'):assert error is sentinel
+        else:assert type(error) is module.Refusal and error.code=='E_RUNTIME'
+        raw=sink.read_bytes();assert len(raw)<=4096
+        if fault in ('format','write'):assert not raw;fact='GAP'
+        else:
+            record=json.loads(raw);fact=record['foreground'];assert record['errno']==(13 if fault in ('term','kill') else None)
+            if fault in ('wrong-frame','wrong-command','encoding','cap'):assert fact=='GAP'
+            else:
+                assert fact['argv']==argv and fact['timeout']==30 and fact['end']==30 and fact['cancelled']==(fault=='cancel') and fact['cleanup_signal']=='GAP'
+                if fault=='pseudo':assert fact['child']=='GAP'
+                else:assert fact['child']=={'pid':child.pid,'returncode':None if fault in ('term','kill') else 0}
+        records.append({'case':fault,'mapped_stderr':output.getvalue(),'status':status,'original_error_type':type(error).__name__,'same_signal_error':error is sentinel,'original_calls':before_wait,'clock_calls':len(clock_calls),'wait_reached':waited,'facts':fact,'real_child_returncode':returned,'all_pipes_closed':True,'None_is_not_liveness':True})
+    return completed_evidence({'foreground_state_controls':records,'scope':'original exact foreground code with fixed ordinary transport/selector/clock/signal-error seams; no actual Git/OS-signal cause or real-principal proof'})
+
 def original_context_controls(area):
     assembler=heredoc('PY_GENUINE_ASSEMBLER');tree=ast.parse(assembler)
     capture=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='GenuineRelationCapture')
@@ -3668,6 +3758,7 @@ try:
     reports.append(probe_capture_controls(area))
     reports.append(link_mode_controls(area))
     reports.append(original_context_controls(area))
+    reports.append(foreground_state_controls(area))
     reports.append(wrapper_cancel_controls(wrapper,guard,area))
     reports.append(short_stage_controls(guard,channel,area,clock_name))
     helper=area/'outside.py';helper.write_text('allowed=True\ndef rule(fd,value,ancestor):\n return allowed\n')
@@ -7767,6 +7858,8 @@ print(relation_result)
             def relation_name(value):
                 text=type.__dict__['__name__'].__get__(type(value))
                 return text if type(text) is str and len(text)<=80 and text.isascii() and text.isidentifier() else 'GAP'
+            relation_foreground=[False,'GAP']
+            relation_foreground_code=type(c._DarwinChildOwner._foreground).__dict__['__code__'].__get__(c._DarwinChildOwner._foreground)
             def relation_trace(value,limit):
                 rows=[];held='GAP';tb=relation_field(value,'__traceback__')
                 target=type(c._open_held).__dict__['__code__'].__get__(c._open_held)
@@ -7777,6 +7870,37 @@ print(relation_result)
                     line=fields['tb_lineno'].__get__(tb)
                     valid=type(function) is str and len(function)<=80
                     rows.append([function if valid else 'GAP',line if type(line) is int else 'GAP'])
+                    if code_object is relation_foreground_code and not relation_foreground[0]:
+                        relation_foreground[0]=True
+                        try:
+                            local=frame_fields['f_locals'].__get__(frame)
+                            arguments=local['argv']
+                            valid=type(arguments) is list and len(arguments)==9 and all(type(item) is str for item in arguments)
+                            if valid:
+                                for item in arguments:item.encode('utf-8','strict')
+                                valid=(arguments[:2]==['/usr/bin/git','--no-replace-objects'] and arguments[2].startswith('--git-dir=/') and
+                                    arguments[3:5]==['config','--file'] and arguments[5].startswith('/') and
+                                    arguments[6:]==['--name-only','--list','--no-includes'] and len(json.dumps(arguments,ensure_ascii=True).encode())<=2048)
+                            if valid:
+                                def relation_number(key):
+                                    try:value=local[key]
+                                    except KeyError:return 'GAP'
+                                    return value if (type(value) is int or type(value) is float) and -float('inf')<value<float('inf') else 'GAP'
+                                try:cancelled=local['cancelled']
+                                except KeyError:cancelled=None
+                                cancelled=cancelled[0] if type(cancelled) is list and len(cancelled)==1 and type(cancelled[0]) is bool else 'GAP'
+                                child_state='GAP'
+                                try:child=local['child']
+                                except KeyError:child=None
+                                if type(child) is c.subprocess.Popen:
+                                    state=c.subprocess.Popen.__dict__['__dict__'].__get__(child,c.subprocess.Popen)
+                                    if type(state) is dict:
+                                        pid=state.get('pid');returned=state.get('returncode','GAP')
+                                        child_state={'pid':pid if type(pid) is int and pid>0 else 'GAP',
+                                            'returncode':returned if type(returned) is int or returned is None else 'GAP'}
+                                relation_foreground[1]={'argv':arguments,'timeout':relation_number('timeout'),'end':relation_number('end'),
+                                    'cancelled':cancelled,'cleanup_signal':'GAP','child':child_state}
+                        except BaseException:pass
                     if code_object is target:
                         local=frame_fields['f_locals'].__get__(frame)
                         try:path=local['path']
@@ -7808,7 +7932,10 @@ print(relation_result)
             else:
                 if relation_field(relation_current,'__cause__') is not None or relation_field(relation_current,'__context__') is not None:
                     relation_context.append('GAP')
+            try:relation_outer_errno=OSError.__dict__['errno'].__get__(error,OSError)
+            except TypeError:relation_outer_errno=None
             relation_raw=(json.dumps({'boundary':'reader','binding':TOKEN,'exception':relation_name(error),
+                'errno':relation_outer_errno if type(relation_outer_errno) is int or relation_outer_errno is None else 'GAP','foreground':relation_foreground[1],
                 'code':code[:128],'trace':relation_rows,'context':relation_context,'trace_truncated':relation_truncated},sort_keys=True,separators=(',',':'),ensure_ascii=True)+'\\n').encode()
             relation_fd=os.open(SINK,os.O_WRONLY|os.O_APPEND|os.O_NOFOLLOW)
             try:
