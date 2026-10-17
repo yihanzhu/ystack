@@ -2790,7 +2790,8 @@ def counted_wrapper_cases(wrapper,old_wrapper,mac_code,consumer,clock_name):
         counted=code.replace('foreground = {}','callback_count=0\nforeground = {}',1)
         if 'def bound(frame):\n' in counted:
             paired_source=r'''import hashlib
-paired={'requests':0,'dispatch':0,'local_events':0,'objects':{},'files':[],'names':[],'exceptions':0}
+paired={'requests':0,'dispatch':0,'local_events':0,'objects':{},'files':[],'names':[],'exceptions':0,'primitive_steps':0,'primitive_examples':{}}
+primitive_digest=hashlib.sha256()
 paired_cached=hashlib.sha256();paired_original=hashlib.sha256()
 paired_selected=hashlib.sha256();paired_expected=hashlib.sha256()
 paired_last=None
@@ -2798,50 +2799,97 @@ original_bound=bound
 original_observe=observe
 original_dispatch=dispatch
 
+def primitive_expected(witness,frame,code,error):
+    assert witness['frame'] is frame and witness['code'] is code and witness['table'] is bound_codes
+    steps=witness['steps'];assert steps and steps[0][0]=='filename'
+    kind,owner,key,value,failed=steps[0]
+    assert owner is bound_codes and key is code.co_filename
+    if failed is not None:
+        assert len(steps)==1 and error is failed
+        return None
+    assert type(value) is bool
+    if not value:
+        assert len(steps)==1 and error is None
+        return False
+    assert len(steps)>=2 and steps[1][0]=='lookup'
+    kind,owner,key,selected,failed=steps[1]
+    assert owner is bound_codes and key is code.co_filename
+    if failed is not None:
+        assert len(steps)==2 and error is failed
+        return None
+    assert len(steps)==3 and steps[2][0]=='set'
+    kind,owner,key,value,failed=steps[2]
+    assert owner is selected and key is code
+    if failed is not None:
+        assert error is failed
+        return None
+    assert error is None and type(value) is bool
+    return value
+
+def positive_expected(code):
+    pending=[(code,0)];nodes=payload=0
+    while pending:
+        value,depth=pending.pop();nodes+=1
+        assert nodes<=1024 and depth<=32
+        kind=type(value)
+        if kind is types.CodeType:
+            children=(value.co_code,value.co_consts,value.co_names,value.co_varnames,value.co_freevars,value.co_cellvars,
+                value.co_filename,value.co_name,getattr(value,'co_qualname',''),
+                value.co_linetable if hasattr(value,'co_linetable') else value.co_lnotab,
+                getattr(value,'co_exceptiontable',b''),value.co_argcount,value.co_posonlyargcount,value.co_kwonlyargcount,
+                value.co_nlocals,value.co_stacksize,value.co_flags,value.co_firstlineno)
+        elif kind is tuple or kind is frozenset:children=value
+        else:
+            if value is None or value is Ellipsis:size=0
+            elif kind is bool:size=1
+            elif kind is int:size=(value.bit_length()+7)//8
+            elif kind is float:size=8
+            elif kind is complex:size=16
+            elif kind is bytes:size=len(value)
+            elif kind is str:
+                assert len(value)<=65536-payload
+                size=len(value.encode('utf-8'))
+            else:raise AssertionError('positive hit is not independently pure')
+            payload+=size;assert payload<=65536
+            continue
+        assert len(pending)+len(children)<=1024-nodes
+        pending.extend((child,depth+1) for child in children)
+    return code.co_filename in paired_codes and code in paired_codes[code.co_filename]
+
 def paired_bound(frame,event):
     global paired_last
-    code=frame.f_code
-    assert type(code) is types.CodeType and type(code.co_filename) is str
-    assert type(code.co_name) is str and type(code.co_firstlineno) is int
+    code=frame.f_code;assert type(code) is types.CodeType
     key=id(code)
-    new_object=key not in paired['objects']
-    if new_object:
+    if key not in paired['objects']:
         assert len(paired['objects'])<1024
-        assert len(code.co_filename)<=1024 and len(code.co_name)<=255
-        for field,value in (('files',code.co_filename),('names',code.co_name)):
+        for field,value,limit in (('files',code.co_filename,1024),('names',code.co_name,255)):
+            value=value if type(value) is str and len(value)<=limit else 'GAP'
             if value not in paired[field]:
                 assert len(paired[field])<1024
                 paired[field].append(value)
-        paired['objects'][key]=[paired['files'].index(code.co_filename),paired['names'].index(code.co_name),code.co_firstlineno]
-    paired['requests']+=1
-    if new_object and code.co_filename in paired_codes:
-        pending=[(code,0)];nodes=0
-        while pending:
-            value,depth=pending.pop();nodes+=1
-            assert nodes<=65536 and depth<=64
-            if type(value) is types.CodeType:
-                assert all(type(getattr(value,name)) is str for name in ('co_filename','co_name'))
-                for name in ('co_names','co_varnames','co_freevars','co_cellvars'):
-                    sequence=getattr(value,name)
-                    assert type(sequence) is tuple and all(type(item) is str for item in sequence)
-                qualname=getattr(value,'co_qualname',None)
-                assert qualname is None or type(qualname) is str
-                assert type(value.co_consts) is tuple
-                pending.extend((item,depth+1) for item in value.co_consts)
-            elif type(value) in (tuple,frozenset):pending.extend((item,depth+1) for item in value)
-            else:assert type(value) in (str,bytes,int,float,complex,bool,type(None),type(Ellipsis))
-    try:
-        actual=original_bound(frame)
-    except BaseException as error:
-        try:expected=(code.co_filename in paired_codes and code in paired_codes[code.co_filename])
-        except BaseException as oracle_error:
-            assert type(error) is type(oracle_error)
-            paired['exceptions']+=1
-            raw=json.dumps([key,event,type(error).__name__],separators=(',',':')).encode()
-            paired_cached.update(raw);paired_original.update(raw)
-        else:raise AssertionError('paired classification exception differs')
-        raise
-    expected=(code.co_filename in paired_codes and code in paired_codes[code.co_filename])
+        paired['objects'][key]=[paired['files'].index(code.co_filename if type(code.co_filename) is str and len(code.co_filename)<=1024 else 'GAP'),paired['names'].index(code.co_name if type(code.co_name) is str and len(code.co_name)<=255 else 'GAP'),code.co_firstlineno]
+    paired['requests']+=1;index=len(authentication['rows']);error=None
+    try:actual=original_bound(frame)
+    except BaseException as caught:error=caught;actual=None
+    assert len(authentication['rows'])>index
+    row=authentication['rows'][index];assert row['code']==key
+    witness=row.pop('_primitive');assert witness['frame'] is frame and witness['code'] is code
+    if row['hit']:
+        assert not witness['steps'] and row['retained_before'] and error is None
+        expected=positive_expected(code)
+    else:expected=primitive_expected(witness,frame,code,error)
+    scalar=[(kind,id(owner),id(value),type(failed).__name__ if failed is not None else result if type(result) is bool else id(result)) for kind,owner,value,result,failed in witness['steps']]
+    paired['primitive_steps']+=len(scalar)
+    primitive_digest.update(json.dumps([key,event,scalar],separators=(',',':')).encode())
+    shape=','.join(step[0] for step in scalar) or 'pure-positive-hit'
+    if shape not in paired['primitive_examples']:
+        assert len(paired['primitive_examples'])<8
+        paired['primitive_examples'][shape]=scalar
+    if error is not None:
+        paired['exceptions']+=1
+        raw=json.dumps([key,event,type(error).__name__],separators=(',',':')).encode()
+        paired_cached.update(raw);paired_original.update(raw)
+        raise error
     raw=json.dumps([key,event,actual],separators=(',',':')).encode()
     other=json.dumps([key,event,expected],separators=(',',':')).encode()
     paired_cached.update(raw);paired_original.update(other)
@@ -2876,7 +2924,33 @@ def paired_dispatch(frame,event,arg):
 '''
             counter="paired_codes=types.MappingProxyType({key:frozenset(value) for key,value in bound_codes.items()})\nauthentication={'requests':0,'filename_memberships':0,'code_set_memberships':0,'objects':{},'rows':[],'stack':[],'events':[]}\nclass AuthenticationTable(dict):\n    def __contains__(self,key):\n        authentication['filename_memberships']+=1\n        authentication['stack'][-1]['filename']+=1\n        return super().__contains__(key)\nclass AuthenticationSet(set):\n    def __contains__(self,key):\n        authentication['code_set_memberships']+=1\n        authentication['stack'][-1]['set']+=1\n        return super().__contains__(key)\nbound_codes=AuthenticationTable({key:AuthenticationSet(value) for key,value in bound_codes.items()})\n"
             counted=counted.replace('identity_line = ',counter+'identity_line = ',1)
+            if version in ('new','wrong-code-same-name'):
+                primitive_source=r'''def primitive_call(kind,owner,key,operation):
+    row=authentication['stack'][-1];witness=row['_primitive']
+    assert row['code']==id(witness['code']) and witness['table'] is bound_codes
+    try:value=operation(key)
+    except BaseException as error:
+        witness['steps'].append((kind,owner,key,None,error))
+        raise
+    witness['steps'].append((kind,owner,key,value,None))
+    return value
+'''
+                counter=counter.replace('return super().__contains__(key)',"return primitive_call('filename',self,key,super().__contains__)",1)
+                counter=counter.replace('return super().__contains__(key)',"return primitive_call('set',self,key,super().__contains__)",1)
+                boundary='class AuthenticationSet(set):\n'
+                lookup="    def __getitem__(self,key):\n        return primitive_call('lookup',self,key,super().__getitem__)\n"
+                assert counter.count(boundary)==1
+                counter=primitive_source+counter.replace(boundary,lookup+boundary,1)
+                start=counted.index('paired_codes=types.MappingProxyType(');end=counted.index('identity_line = ',start)
+                counted=counted[:start]+counted[end:]
+                enable='bound_cache = {}\n'
+                assert counted.count(enable)==1
+                counted=counted.replace(enable,counter+enable,1)
             counted=measured_classifier(counted,'bound')
+            if version in ('new','wrong-code-same-name'):
+                marker="authentication['stack'].append(_auth_row)\n"
+                assert counted.count(marker)==1
+                counted=counted.replace(marker,marker+"    _auth_row['_primitive']={'frame':frame,'code':frame.f_code,'table':bound_codes,'steps':[]}\n",1)
             counted=counted.replace('def bound(frame):\n',"def bound(frame):\n    authentication['requests']+=1\n    authentication['objects'][id(frame.f_code)]=frame.f_code\n",1)
             counted=counted.replace('    sys.settrace(None)\n',"    sys.settrace(None)\n    print('AUTH_RESULT '+json.dumps({'requests':authentication['requests'],'filename_memberships':authentication['filename_memberships'],'code_set_memberships':authentication['code_set_memberships'],'new_actual_objects':len(authentication['objects']),'rows':authentication['rows'],'events':authentication['events'],'strong_references':all(id(value)==key for key,value in authentication['objects'].items())}),file=sys.stderr)\n",1)
         for name in ('observe','dispatch'):
@@ -2891,11 +2965,99 @@ def paired_dispatch(frame,event,arg):
             counted=counted[:start]+observed+paired_source+'\n'+counted[end:]
             assert counted.count('sys.settrace(dispatch)')==1
             counted=counted.replace('sys.settrace(dispatch)','sys.settrace(paired_dispatch)',1)
-            report="    print('PAIRED_RESULT '+json.dumps(dict(paired,cached_digest=paired_cached.hexdigest(),original_digest=paired_original.hexdigest(),selection_digest=paired_selected.hexdigest(),expected_selection_digest=paired_expected.hexdigest(),proof_wall_includes_oracle=True)),file=sys.stderr)\n"
+            report="    print('PAIRED_RESULT '+json.dumps(dict(paired,cached_digest=paired_cached.hexdigest(),original_digest=paired_original.hexdigest(),selection_digest=paired_selected.hexdigest(),expected_selection_digest=paired_expected.hexdigest(),primitive_digest=primitive_digest.hexdigest(),proof_wall_includes_oracle=True)),file=sys.stderr)\n"
             counted=counted.replace('    sys.settrace(None)\n','    sys.settrace(None)\n'+report,1)
         counted=counted.replace('    sys.settrace(None)\n',"    sys.settrace(None)\n    print('TRACE_COUNT '+str(callback_count),file=sys.stderr)\n",1)
         frozen.append((version,counted.encode(),subject.encode()))
     return frozen
+
+def primitive_witness_controls(program):
+    import weakref,io
+    tree=ast.parse(program)
+    definitions=[n for n in tree.body if isinstance(n,(ast.FunctionDef,ast.ClassDef)) and n.name in ('primitive_call','AuthenticationTable','AuthenticationSet','bound')]
+    assert len(definitions)==4
+    assignments={n.targets[0].id:n.value for n in tree.body if isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name)}
+    fragment=program[program.index('import hashlib\npaired='):program.index('def cancel(')]
+    paired_tree=ast.parse(fragment);reports=[]
+    for fault in ('normal','wrong-result','missing','wrong-frame','wrong-table','wrong-set','duplicate','impure-hit','metaclass-hit','primitive-exception','custom-reentry'):
+        code=compile('value=1','owned-primitive-source','exec')
+        diagnostic=io.StringIO()
+        scope={'types':types,'hashlib':hashlib,'json':json,'sys':types.SimpleNamespace(stderr=diagnostic),'bound_cache':{},'bound_busy':[False],'bound_weakref':weakref,
+            'observe':lambda *args:None,'dispatch':lambda *args:None}
+        scope['authentication']=eval(compile(ast.Expression(assignments['authentication']),'actual-authentication-init','eval'),{})
+        exec(compile(ast.Module(body=definitions,type_ignores=[]),'actual-primitive-counter-classifier','exec'),scope)
+        table=scope['AuthenticationTable']({code.co_filename:scope['AuthenticationSet']({code})})
+        scope['bound_codes']=table;scope['paired_codes']=types.MappingProxyType({code.co_filename:frozenset({code})})
+        exec(compile(fragment,'actual-paired-witness-boundary','exec'),scope)
+        frame=types.SimpleNamespace(f_code=code);calls=[];original_errors=[];constructed=None
+        if fault in ('impure-hit','primitive-exception'):frame=types.SimpleNamespace(f_code=code.replace(co_consts=([],)))
+        if fault=='metaclass-hit':
+            class Meta(type):
+                def __eq__(self,other):calls.append('metaclass-eq');return False
+                def __iter__(self):calls.append('metaclass-iter');return iter(())
+            class Constant(metaclass=Meta):pass
+            frame=types.SimpleNamespace(f_code=code.replace(co_consts=(Constant(),)));constructed=True
+        if fault in ('impure-hit','metaclass-hit'):scope['bound_cache'][id(frame.f_code)]=(frame.f_code,True)
+        if fault=='custom-reentry':
+            class Constant:
+                def __hash__(self):
+                    calls.append('hash');assert scope['paired_bound'](frame,'call') is True
+                    return 1
+            outer=types.SimpleNamespace(f_code=code.replace(co_consts=(Constant(),)))
+        real=scope['original_bound']
+        def altered(current):
+            index=len(scope['authentication']['rows'])
+            try:value=real(current)
+            except BaseException as caught:original_errors.append(caught);raise
+            row=scope['authentication']['rows'][index]
+            if fault=='wrong-result':return not value
+            if fault=='missing':row.pop('_primitive')
+            elif fault=='wrong-frame':row['_primitive']['frame']=object()
+            elif fault=='wrong-table':row['_primitive']['table']={}
+            elif fault=='wrong-set':
+                step=row['_primitive']['steps'][-1];row['_primitive']['steps'][-1]=(step[0],object(),*step[2:])
+            elif fault=='duplicate':row['_primitive']['steps'].append(row['_primitive']['steps'][0])
+            return value
+        if fault not in ('normal','impure-hit','metaclass-hit','custom-reentry'):scope['original_bound']=altered
+        error=None;result=None
+        try:result=scope['paired_bound'](outer if fault=='custom-reentry' else frame,'call')
+        except BaseException as caught:error=caught
+        if fault in ('normal','custom-reentry'):
+            assert error is None
+            if fault=='normal':assert result is True and scope['paired_bound'](frame,'call') is True
+            else:assert result is False and calls==['hash'] and not scope['authentication']['stack']
+            rejection=None
+        else:
+            assert error is not None
+            expected_type=TypeError if fault=='primitive-exception' else KeyError if fault=='missing' else AssertionError
+            assert type(error) is expected_type
+            function={'wrong-result':'paired_bound','missing':'paired_bound','wrong-frame':'paired_bound',
+                'wrong-table':'primitive_expected','wrong-set':'primitive_expected','duplicate':'primitive_expected',
+                'impure-hit':'positive_expected','metaclass-hit':'positive_expected','primitive-exception':'primitive_call'}[fault]
+            target=scope[function];nodes=tree if function=='primitive_call' else paired_tree
+            predicates={'wrong-result':"raise AssertionError('same-event classification differs')",
+                'missing':"witness = row.pop('_primitive')",'wrong-frame':"witness['frame'] is frame and witness['code'] is code",
+                'wrong-table':"witness['frame'] is frame and witness['code'] is code and witness['table'] is bound_codes",
+                'wrong-set':'owner is selected and key is code','duplicate':"len(steps) == 3 and steps[2][0] == 'set'",
+                'impure-hit':"raise AssertionError('positive hit is not independently pure')",
+                'metaclass-hit':"raise AssertionError('positive hit is not independently pure')",'primitive-exception':'value = operation(key)'}
+            expected=ast.parse(predicates[fault]).body[0]
+            if type(expected) is ast.Expr:expected=ast.Assert(test=expected.value,msg=None)
+            expected_dump=ast.dump(expected,include_attributes=False)
+            matches=[n for n in ast.walk(nodes) if type(n) is type(expected) and ast.dump(n,include_attributes=False)==expected_dump]
+            assert len(matches)==1
+            tb=error.__traceback__
+            while tb.tb_next:tb=tb.tb_next
+            assert tb.tb_frame.f_code is target.__code__ and tb.tb_lineno==matches[0].lineno
+            if fault=='primitive-exception':assert len(original_errors)==1 and error is original_errors[0]
+            if fault=='metaclass-hit':assert constructed and calls==[]
+            rejection={'type':type(error).__name__,'function':function,'line':tb.tb_lineno,'predicate':predicates[fault],
+                'same_original_exception':fault=='primitive-exception' and error is original_errors[0]}
+        reports.append({'case':fault,'actual_rejection':rejection,'custom_effects':calls,'constructed_custom_metaclass':constructed,
+            'primitive_steps':scope['paired']['primitive_steps'],'original_auth_rows':len(scope['authentication']['rows']),
+            'diagnostic_stderr':diagnostic.getvalue(),'same_event_assertions':'actual extracted primitive/classifier/witness boundary'})
+    return completed_evidence({'primitive_witness_controls':reports,'scope':'inert actual code objects and explicit owned proof-fault injection; no child, evaluator, reader or OS query'})
+
 
 def short_stage_controls(guard,channel,area,clock_name):
     import textwrap
@@ -3445,6 +3607,7 @@ finally:
     mac_subject.write_text(mac_code)
     mac_records=[];mac_references=[];frozen_cases=[]
     for version,wrapper_raw,subject_raw in counted_wrapper_cases(wrapper,old_wrapper,mac_code,consumer,clock_name):
+        if version=='new':reports.append(primitive_witness_controls(wrapper_raw.decode()))
         snapshot=area/('mac-wrapper-'+version+'.py');snapshot.write_bytes(wrapper_raw)
         subject_snapshot=area/('mac-subject-'+version+'.py');subject_snapshot.write_bytes(subject_raw)
         assert snapshot.read_bytes()==wrapper_raw and subject_snapshot.read_bytes()==subject_raw
