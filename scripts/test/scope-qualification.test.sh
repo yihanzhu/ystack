@@ -1278,6 +1278,8 @@ for index,case in enumerate(cases+['evaluation-reasons']):
     (area/(str(index)+'.lines.json')).write_bytes(raw)
 
 PY_STALE_PREPARE
+(set -C; : >"$tmp/observer-owner-controls.pending")
+scope_controls_state=started
 python3 -I -S -B - "$root" "$tmp/same-call-owned-controls" "${BASH_SOURCE[0]}" <<'PY_SAME_CALL_OWNED_CONTROLS'
 import ast,hashlib,json,os,pathlib,runpy,signal,stat,subprocess,sys,time
 root,area=map(pathlib.Path,sys.argv[1:3]);source=pathlib.Path(sys.argv[3]).read_text()
@@ -1462,6 +1464,61 @@ reports.append({'case':'closed-cost-refused-other-owner','actual_exit':rc,'cost_
     'genuine_owner_pid':receipt['driver_pid'],'genuine_owner_completed_before_negative_view':True,
     'actual_missing_receipt_refusal':True,'tmp_retained':True,'genuine_cleanup_restore_calls':0,
     'ordinary_transport_and_uid_adaptation_only':True})
+# Keep the nested owner live while the real outer ordinary-control gate refuses teardown.
+ready_work=base/'ready-owner';ready_work.mkdir();ready_base=ready_work/'base';ready_base.mkdir()
+ready_driver=ready_work/'runtime-guard-controls.py';ready_channel=ready_work/'channel.py';ready_channel.write_text(channel)
+ready_driver.write_text('from pathlib import Path\nimport fcntl,hashlib,json,os,stat,sys,time\nbase=Path(sys.argv[1])\n'+owner+"\nowner=ScopeFixtureOwnerCancel()\nprint('BOUND_READY '+str(os.getpid())+' '+hashlib.sha256(Path(sys.argv[0]).read_bytes()).hexdigest(),flush=True)\nend=time.monotonic()+2\ntry:\n    while True:\n        assert time.monotonic()<end,'fixed owned ready deadline'\n        owner.check()\n        time.sleep(0.01)\nexcept InterruptedError:pass\nfinally:owner.finish()\n")
+ready_variables={'tmp':ready_work,'genuine_base':ready_base,'guard_control':ready_driver,'genuine_python':sys.executable,
+    'guard_source':ready_work/'unused-guard','operator_name':'owned','entry_source':ready_work/'unused-entry',
+    'scope_owner_channel_helper':ready_channel}
+ready_shell=owner_shell.replace('  scope_owner_state=active\n','  scope_owner_state=active\n  read -r release\n  test "$release" = RELEASE\n  scope_fixture_owner_cancel\n',1)
+ready_command='set -euo pipefail\n'+ready_shell+''.join(k+'='+repr(str(v))+'\n' for k,v in ready_variables.items())
+ready_command+='scope_owner_serial=1\nscope_fixture_owner_launch false\ntest "$scope_owner_state" = completed\n'
+ready_script=base/'ready-owner.sh';ready_script.write_text(ready_command)
+active_tmp=base/'active-outer';active_tmp.mkdir();active_forbidden=base/'active-forbidden'
+pending='(set -C; : >"$tmp/observer-owner-controls.pending")\nscope_controls_state=started\n'
+assert source.count(pending)==1 and source.index(pending)<source.index("<<'PY_SAME_CALL_OWNED_CONTROLS'")
+active_command='tmp='+repr(str(active_tmp))+'\n'+outer_cleanup+'\n'+pending
+active_command+='cleanup_genuine() { printf forbidden >'+repr(str(active_forbidden))+'; }\nkill -s ALRM "$$"\n'
+active_script=base/'active-outer.sh';active_script.write_text(active_command)
+dependencies.extend([ready_driver,ready_channel]);freeze(dependencies+[ready_script,active_script])
+child=None;physical_complete=False
+try:
+    import select
+    child=subprocess.Popen(['/bin/bash',str(ready_script)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    started=time.monotonic();readable,_,_=select.select([child.stdout],[],[],1)
+    assert readable,'bound ready not reached'
+    ready=child.stdout.readline();fields=ready.split()
+    assert len(fields)==3 and fields[0]==b'BOUND_READY' and fields[2].decode()==hashlib.sha256(ready_driver.read_bytes()).hexdigest()
+    assert not (ready_work/'scope-owner-2.receipt').exists()
+    rc,out,err=run(['/bin/bash',str(active_script)])
+    (base/'active-outer.stdout.raw').write_bytes(out);(base/'active-outer.stderr.raw').write_bytes(err)
+    assert rc in (-signal.SIGALRM,142) and b'ordinary control completion is unknown' in err
+    assert b'fixture-cleanup: FAIL prior-exit=142' in err and active_tmp.is_dir()
+    assert (active_tmp/'observer-owner-controls.pending').is_file() and not active_forbidden.exists()
+    assert [json.loads(line) for line in err.splitlines() if line.startswith(b'{')]==closed_rows
+    stdout,stderr=child.communicate(b'RELEASE\n',timeout=max(0.01,4-(time.monotonic()-started)))
+    assert child.returncode==0 and not stderr,(child.returncode,stdout,stderr)
+    actual_receipt=json.loads((ready_work/'scope-owner-2.receipt').read_bytes())
+    assert actual_receipt['driver_pid']==int(fields[1]) and actual_receipt['cancelled'] and actual_receipt['quiescent']
+    physical_complete=True
+finally:
+    if child is not None:
+        try:
+            if child.poll() is None:child.kill()
+            child.wait(timeout=2)
+        finally:
+            try:child.stdin.close()
+            finally:
+                try:child.stdout.close()
+                finally:child.stderr.close()
+assert physical_complete and all(pipe.closed for pipe in (child.stdin,child.stdout,child.stderr))
+(base/'ready-owner.stdout.raw').write_bytes(ready+stdout);(base/'ready-owner.stderr.raw').write_bytes(stderr)
+assert active_tmp.is_dir() and (active_tmp/'observer-owner-controls.pending').is_file()
+reports.append({'case':'ready-nested-owner-outer-failure','actual_exit':rc,'saved142_ALRM':True,
+    'pending_retained':True,'outer_tmp_retained':True,'genuine_cleanup_restore_calls':0,
+    'nested_actual_wait_confirm_after_refusal':True,'all_bash_pipes_closed':True,
+    'actual_owner_pid':actual_receipt['driver_pid'],'no_unknown_live_child_pass':physical_complete})
 completed_rows=module['cost_rows']()
 module['cost_finish']('protected-0-observer',[1,None,3,4,5],False)
 path.write_text(script);assert run(['/bin/bash',str(path)])[2]==b''
@@ -1894,8 +1951,6 @@ with tempfile.TemporaryDirectory(prefix='ystack-boundary-owned-') as temporary:
 print(json.dumps({'cases':reports,'four_body_sha256':expected,'scope':'Exact preparation/binding/evaluation_reasons/run_evaluator bytes; fixed ordinary frontend/jq output adapters only. No actual evaluator, reader, jq, supplied P, genuine fixture or historical cause proof.'},sort_keys=True))
 PY_STALE_CONTROLS
 
-(set -C; : >"$tmp/observer-owner-controls.pending")
-scope_controls_state=started
 "$python_bin" -I -S -B - "$root/scripts/test/scope-qualification.test.sh" "$root" <<'PY_OBSERVER_OWNER_CONTROLS'
 from pathlib import Path
 import ast,hashlib,importlib.util,json,os,pwd,re,signal,stat,subprocess,sys,tempfile,time,types,shutil,traceback
