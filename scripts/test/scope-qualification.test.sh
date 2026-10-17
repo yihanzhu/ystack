@@ -2375,10 +2375,114 @@ layout_source=ast.get_source_segment(assembler,layout)+'\n'
 (area/'layout.py').write_text(layout_source)
 layout_old="for name in ('tools','work','bundles','identities','snapshots'):(base/name).mkdir(mode=0o755)\nwork=base/'work';work.chmod(0o700)\n"
 (area/'layout-old.py').write_text(layout_old)
+consumer_calls=sorted([node for node in ast.walk(tree) if isinstance(node,ast.Expr)
+    and isinstance(node.value,ast.Call) and isinstance(node.value.func,ast.Attribute) and node.value.func.attr=='mkdir'
+    and any(k.arg=='mode' and isinstance(k.value,ast.Constant) and k.value.value==0o755 for k in node.value.keywords)
+    and node.lineno!=layout.body[1].lineno],key=lambda node:node.lineno)
+assert len(consumer_calls)==11
+sites=[]
+for node in consumer_calls:
+    siblings=next(value for parent in ast.walk(tree) for value in vars(parent).values()
+        if isinstance(value,list) and node in value)
+    position=siblings.index(node);receiver=node.value.func.value.id
+    assignment=next(item for item in reversed(siblings[:position]) if isinstance(item,ast.Assign)
+        and any(isinstance(target,ast.Name) and target.id==receiver for target in item.targets))
+    mode=siblings[position+1]
+    assert isinstance(mode,ast.Expr) and ast.unparse(mode.value)==receiver+'.chmod(493)'
+    sites.append({'receiver':receiver,'code':'\n'.join(ast.get_source_segment(assembler,item) for item in (assignment,node,mode))+'\n',
+        'old':'\n'.join(ast.get_source_segment(assembler,item) for item in (assignment,node))+'\n'})
+assert [row['receiver'] for row in sites]==['bundle','doc_root','outer_bundle','relation_area','bundle_area','location','bundle_root','directory','location','bundle_root','directory']
+loops=[node for node in ast.walk(tree) if isinstance(node,ast.For) and isinstance(node.target,ast.Tuple)
+    and [item.id for item in node.target.elts]==['label','form','change','needle']]
+assert len(loops)==1
+labels=[row.elts[0].value for row in loops[0].iter.elts];assert len(labels)==6
+copies=[node for node in ast.walk(tree) if isinstance(node,ast.Expr) and isinstance(node.value,ast.Call)
+    and ast.unparse(node.value.func)=='shutil.copytree' and (ast.unparse(node.value.args[0])=="base / 'bundles' / sha(outer_record)"
+    or (ast.unparse(node.value.args[0])=='directory' and ast.unparse(node.value.args[1])=="bundle_area / 'replacement'"))]
+assert len(copies)==3
+copies.sort(key=lambda node:node.lineno)
+rename_start=next(i for i,node in enumerate(tree.body) if isinstance(node,ast.Assign)
+    and isinstance(node.targets[0],ast.Name) and node.targets[0].id=='archive')
+renames=tree.body[rename_start:rename_start+3]
+assert [ast.unparse(node.value.func) for node in renames[1:]]==['bundle.rename','outer_bundle.rename']
+private_loop=next(node for node in tree.body if isinstance(node,ast.For) and isinstance(node.iter,ast.BinOp)
+    and ast.unparse(node.iter.right)=="['qualified', 'unproven']")
+put=next(node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=='put')
+copy_loop=next(node for node in tree.body if isinstance(node,ast.For) and isinstance(node.iter,ast.Tuple)
+    and any(isinstance(value,ast.Constant) and value.value=='bundle-complete' for value in node.iter.elts))
+copy_labels=[value.value for value in copy_loop.iter.elts if value.value in ('bundle-complete','swapped-directory')]
+assert copy_labels==['bundle-complete','swapped-directory']
+consumer={'sites':sites,'labels':labels,'copy_labels':copy_labels,'copies':[ast.get_source_segment(assembler,node) for node in copies],
+    'renames':'\n'.join(ast.get_source_segment(assembler,node) for node in renames),
+    'private':ast.get_source_segment(assembler,private_loop),'put':ast.get_source_segment(assembler,put)}
+(area/'consumer.json').write_text(json.dumps(consumer,sort_keys=True)+'\n')
 host=root/'sandbox/v1/host-supervisor.py';host_raw=host.read_bytes();assert len(host_raw)<=16*1024*1024
-worker=r"""import ast,errno,json,os,pathlib,runpy,stat,subprocess,sys
+worker=r"""import ast,errno,hashlib,json,os,pathlib,runpy,stat,subprocess,sys
 base,creation,host=map(pathlib.Path,sys.argv[1:4]);mask=int(sys.argv[4]);case=sys.argv[5]
 uid,gid=os.getuid(),os.getgid();before_mask=os.umask(mask);os.umask(before_mask);assert before_mask==mask
+if case.startswith('consumer-'):
+    import shutil
+    recipe=json.loads(creation.read_bytes());observed=[];launch=False;error=None;refusal=None
+    sha=lambda raw:hashlib.sha256(raw).hexdigest()
+    shadow_record=b'owned-enforced';outer_record=b'owned-withheld';selected={'shadow-record.json':b'owned-selected'}
+    changed={'shadow-record.json':b'owned-changed'};consumer_uid,consumer_gid=uid,gid
+    exec(compile((creation.parent/'layout.py').read_bytes(),'actual-top-five-layout','exec'))
+    exec(compile(recipe['put'],'actual-put','exec'))
+    saved_mkdir,saved_chmod=pathlib.Path.mkdir,pathlib.Path.chmod
+    def fail_consumer(path,*args,**kwargs):
+        assert path==base/'bundles'/sha(shadow_record)
+        raise OSError(errno.EIO,'fixed consumer before-operation fault')
+    if case=='consumer-mkdir-fault':pathlib.Path.mkdir=fail_consumer
+    if case=='consumer-chmod-fault':pathlib.Path.chmod=fail_consumer
+    def site(index):
+        row=recipe['sites'][index]
+        exec(compile(row['old' if case=='consumer-old' else 'code'],'actual-consumer-site-'+str(index),'exec'),globals())
+        path=globals()[row['receiver']];value=os.lstat(path)
+        assert stat.S_ISDIR(value.st_mode) and value.st_uid==uid and value.st_gid==gid
+        observed.append({'site':index,'path':str(path.relative_to(base)),'uid':value.st_uid,'gid':value.st_gid,
+            'type':stat.S_IFMT(value.st_mode),'mode':stat.S_IMODE(value.st_mode),'symlink':stat.S_ISLNK(value.st_mode)})
+        assert stat.S_IMODE(value.st_mode)==0o755,'consumer final0755:'+str(index)
+    try:
+        try:
+            for index in range(5):site(index)
+            put(bundle/'owned.txt',b'owned content');put(outer_bundle/'owned.txt',b'owned content')
+            exec(compile(recipe['renames'],'actual-bundle-renames','exec'),globals())
+            for label in recipe['copy_labels']:
+                directory=bundle_area/label
+                exec(compile(recipe['copies'][0],'actual-first-copytree','exec'))
+                assert stat.S_IMODE(directory.stat().st_mode)==0o755
+            exec(compile(recipe['copies'][1],'actual-replacement-copytree','exec'))
+            for label in recipe['labels']:
+                for index in (5,6,7):site(index)
+            for index in (8,9):site(index)
+            exec(compile(recipe['copies'][2],'actual-duplicate-copytree','exec'))
+            site(10)
+            relation_cases=[{'label':recipe['labels'][0]}]
+            exec(compile(recipe['private'],'actual-private-reader-scratch','exec'))
+            for label in (recipe['labels'][0],'qualified','unproven'):
+                scratch=relation_area/label
+                for path in (scratch,*[scratch/name for name in ('reader-captures','reader-runtime','observation','reader-runtime/no-hooks')]):
+                    assert stat.S_IMODE(os.lstat(path).st_mode)==0o700
+            for path in (archive,base/'bundles'/sha(outer_record),bundle_area/'bundle-complete',bundle_area/'swapped-directory',bundle_area/'replacement',bundle_root/sha(outer_record)):
+                assert stat.S_IMODE(path.stat().st_mode)==0o755
+                assert (path/'owned.txt').read_bytes()==b'owned content' and stat.S_IMODE((path/'owned.txt').stat().st_mode)==0o444
+            assert {row['site'] for row in observed}==set(range(11)) and len(observed)==26
+            launch=True
+        except OSError as actual:
+            assert case in ('consumer-mkdir-fault','consumer-chmod-fault')
+            assert actual.errno==errno.EIO and actual.strerror=='fixed consumer before-operation fault'
+            error={'type':type(actual).__name__,'errno':actual.errno,'message':actual.strerror}
+        except AssertionError as actual:
+            assert case=='consumer-old' and mask==0o077 and str(actual)=='consumer final0755:0'
+            refusal=str(actual)
+    finally:pathlib.Path.mkdir,pathlib.Path.chmod=saved_mkdir,saved_chmod
+    assert launch==(case=='consumer-fixed')
+    if case.endswith('-fault'):assert error is not None and not launch
+    after_mask=os.umask(mask);os.umask(after_mask);assert before_mask==after_mask
+    print(json.dumps({'case':case,'mask_before':before_mask,'mask_after':after_mask,'sites':observed,
+        'operation_error':error,'refusal':refusal,'consumer_launch_sentinel':launch,
+        'scope':'closed11 actual-source AST sites; ordinary UID, no real evaluator'},sort_keys=True),flush=True)
+    raise SystemExit(0)
 if case.startswith('layout-'):
     launched=False;error=None;observed=[]
     saved_mkdir,saved_chmod=pathlib.Path.mkdir,pathlib.Path.chmod
@@ -2463,12 +2567,12 @@ print(json.dumps({'case':case,'mask_before':before_mask,'mask_after':after_mask,
     'scope':'ordinary owned same-uid data; not actual writer/root-origin or failed CI inode'},sort_keys=True),flush=True)
 """
 script=area/'worker.py';script.write_text(worker);reports=[]
-for mask,cases in [(0o077,('fixed','old-077','wrong-mode','mode-operation-fault','layout-fixed','layout-old','layout-mkdir-fault','layout-chmod-fault')),
-                   (0o022,('fixed','wrong-mode','mode-operation-fault','layout-fixed','layout-mkdir-fault','layout-chmod-fault'))]:
+for mask,cases in [(0o077,('fixed','old-077','wrong-mode','mode-operation-fault','layout-fixed','layout-old','layout-mkdir-fault','layout-chmod-fault','consumer-fixed','consumer-old','consumer-mkdir-fault','consumer-chmod-fault')),
+                   (0o022,('fixed','wrong-mode','mode-operation-fault','layout-fixed','layout-mkdir-fault','layout-chmod-fault','consumer-fixed','consumer-mkdir-fault','consumer-chmod-fault'))]:
     for case in cases:
         base=area/(str(mask)+'-'+case);base.mkdir()
-        selected=area/('layout-old.py' if case=='layout-old' else 'layout.py' if case.startswith('layout-') else 'creation.py')
-        bindings={str(path):hashlib.sha256(path.read_bytes()).hexdigest() for path in (script,selected,host)}
+        selected=area/('consumer.json' if case.startswith('consumer-') else 'layout-old.py' if case=='layout-old' else 'layout.py' if case.startswith('layout-') else 'creation.py')
+        bindings={str(path):hashlib.sha256(path.read_bytes()).hexdigest() for path in (script,selected,host,area/'layout.py')}
         (base/'preexec.json').write_text(json.dumps(bindings,sort_keys=True)+'\n')
         result=subprocess.run([sys.executable,'-I','-S','-B',str(script),str(base),str(selected),str(host),str(mask),case],
             stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=10,umask=mask)
@@ -6032,6 +6136,7 @@ marker = canonical({'schema_version': 1, 'kind': 'shadow_consumer_bundle',
                 for name in sorted(files)]}})
 bundle = base / 'bundles' / sha(shadow_record)
 bundle.mkdir(mode=0o755)
+bundle.chmod(0o755)
 for name, raw in files.items():
     put(bundle / name, raw)
 put(bundle / 'bundle.json', marker)
@@ -6044,6 +6149,7 @@ reader_observation = run(['/usr/bin/sudo', '-n', '-u', consumer, '--', sys.execu
 assert reader_observation == canonical(observation)
 doc_root = base / 'documents'
 doc_root.mkdir(mode=0o755)
+doc_root.chmod(0o755)
 for name in ('scope', 'dashboard', 'risk', 'kill', 'duty', 'marker'):
     value = json.loads((documents / (name + '.json')).read_bytes())
     if name in ('risk', 'duty'):
@@ -6244,6 +6350,7 @@ outer_marker = canonical({'schema_version':1,'kind':'shadow_consumer_bundle',
                for name in sorted(outer_files)]}})
 outer_bundle = base / 'snapshots' / sha(outer_record)
 outer_bundle.mkdir(mode=0o755)
+outer_bundle.chmod(0o755)
 for name, raw in outer_files.items():
     put(outer_bundle / name, raw)
 put(outer_bundle / 'bundle.json', outer_marker)
@@ -6285,6 +6392,7 @@ print(json.dumps({'genuine_withheld_contract':'PASS','frozen_files':32,'syntheti
 
 # These private calls retain the real package, command owner and actual Git database.
 relation_area=base/'reader-relations';relation_area.mkdir(mode=0o755)
+relation_area.chmod(0o755)
 relation_cases=[]
 write_commit=write_material_receipt['candidate']['commit_id']
 actual_facts={}
@@ -6328,6 +6436,7 @@ for label in ('rows-missing','rows-extra','rows-reordered','rows-unmatched','row
                     row={'path':path,'git_blob_oid':oid,'sha256':sha(raw)})
     relation_cases.append(case)
 bundle_area=relation_area/'bundles';bundle_area.mkdir(mode=0o755)
+bundle_area.chmod(0o755)
 for label in ('bundle-complete','missing-receipt','missing-origin','missing-check','missing-marker','early-marker',
               'extra-file','marker-form','marker-size','marker-digest','marker-inventory','swapped-directory'):
     directory=bundle_area/label;shutil.copytree(base/'bundles'/sha(outer_record),directory)
@@ -6364,8 +6473,11 @@ for label,form,change,needle in (
     marker['body']['files']=[{'name':name,'size_bytes':len(raw),'sha256':sha(raw)} for name,raw in sorted(selected.items())]
     selected['bundle.json']=canonical(marker)
     location=relation_area/('dispatch-'+label);location.mkdir(mode=0o755)
+    location.chmod(0o755)
     bundle_root=location/'bundles';bundle_root.mkdir(mode=0o755)
+    bundle_root.chmod(0o755)
     directory=bundle_root/sha(selected['shadow-record.json']);directory.mkdir(mode=0o755)
+    directory.chmod(0o755)
     for name,raw in selected.items():put(directory/name,raw)
     selected_scope=json.loads((doc_root/'scope.json').read_bytes())
     selected_scope['body'].update(qualified_identity=record['body']['qualified_identity'],
@@ -6374,9 +6486,11 @@ for label,form,change,needle in (
     put(location/'set.json',{'schema_version':1,'kind':'shadow_evidence_set','id':'scope.evidence.genuine','body':{'records':[record]}})
     relation_cases.append({'label':label,'mode':'dispatch','needle':needle})
 location=relation_area/'dispatch-environment-duplicate';location.mkdir(mode=0o755)
+location.chmod(0o755)
 duplicated=json.loads(outer_record);duplicated['id']='record.scope-second-eligible'
 assert sha(canonical(duplicated))!=sha(outer_record)
 bundle_root=location/'bundles';bundle_root.mkdir(mode=0o755)
+bundle_root.chmod(0o755)
 shutil.copytree(base/'bundles'/sha(outer_record),bundle_root/sha(outer_record))
 current=json.loads((doc_root/'scope.json').read_bytes())
 current['body']['shadow_evidence_refs'].append(e.document_ref(canonical(duplicated)))
@@ -6644,6 +6758,7 @@ def archive_negative(label, name, change):
                                for key,raw in sorted(changed.items())]
     directory=base/'bundles'/sha(changed['shadow-record.json'])
     directory.mkdir(mode=0o755)
+    directory.chmod(0o755)
     try:
         for key,raw in changed.items():put(directory/key,raw)
         put(directory/'bundle.json',marker_doc)
