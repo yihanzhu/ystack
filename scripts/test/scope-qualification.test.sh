@@ -2397,6 +2397,108 @@ def stable_sink_controls(area,assembler):
             'refusal':refused,'export_bytes':len(output.getvalue())})
     return reports
 
+def original_context_controls(area):
+    assembler=heredoc('PY_GENUINE_ASSEMBLER');tree=ast.parse(assembler)
+    capture=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='GenuineRelationCapture')
+    initializer=next(n for n in capture.body if isinstance(n,ast.FunctionDef) and n.name=='__init__')
+    expression=next(n.value for n in ast.walk(initializer) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='record' for t in n.targets))
+    specification=importlib.util.spec_from_file_location('original_context_consumer',root/'shadow/v1/_consumer.py')
+    module=importlib.util.module_from_spec(specification);sys.modules[specification.name]=module;specification.loader.exec_module(module)
+    location=area/'original-context-controls';location.mkdir();sink=location/'sink';sink.write_bytes(b'');sink.chmod(0o600)
+    state=os.lstat(sink);identity=(state.st_dev,state.st_ino,stat.S_IFMT(state.st_mode),state.st_uid,state.st_gid,stat.S_IMODE(state.st_mode),state.st_nlink)
+    insertion=eval(compile(ast.Expression(expression),'actual-record-expression','eval'),{'token':repr('owned-context'),'sink':repr(str(sink)),'identity':repr(identity)})
+    original=(root/'scope/v1/read-shadow-evidence.py').read_text()
+    boundary='        if code not in {"E_USAGE", "E_LIMIT", "E_PARSE", "E_CANONICAL", "E_RELATION", "E_STALE", "E_RUNTIME"}:\n'
+    assert original.count(boundary)==1
+    copied=original.replace(boundary,insertion+boundary,1)
+    assert copied.replace(insertion+boundary,boundary,1)==original
+    tail=copied[copied.index('if __name__ == "__main__":'):]
+    snapshot=location/'reader.actual.preexec.py';snapshot.write_text(copied)
+    print(json.dumps({'original_context_preexec':{'reader_copy':copied,'sha256':hashlib.sha256(copied.encode()).hexdigest(),'insertion':insertion,'original_sha256':hashlib.sha256(original.encode()).hexdigest()}}),flush=True)
+    reports=[];hooks=[]
+    class Hostile(OSError):
+        def __getattribute__(self,key):hooks.append(key);raise AssertionError('custom exception lookup')
+        @property
+        def errno(self):hooks.append('errno-property');raise AssertionError('getter')
+        def __str__(self):hooks.append('str');raise AssertionError('str')
+        def __repr__(self):hooks.append('repr');raise AssertionError('repr')
+    def wrap(value):
+        try:raise value
+        except BaseException:raise module.Refusal('E_INSTALL') from None
+    def os_failure():module._open_held(str(location/'absent'),False,lambda *args:True,'E_INSTALL')
+    namespace={};exec(compile('def _open_held():\n path="wrong";index=7;name="wrong"\n raise OSError(9,"owned wrong frame")\n','owned-same-name-wrong-code','exec'),namespace)
+    def wrong_frame():
+        try:namespace['_open_held']()
+        except BaseException:raise module.Refusal('E_INSTALL') from None
+    def chained(kind):
+        first=OSError(5,'owned error');second=ValueError('owned');third=RuntimeError('owned')
+        first.__cause__=second;second.__cause__=third
+        if kind=='cycle':third.__cause__=first
+        if kind=='overflow':third.__cause__=Exception('fourth')
+        wrap(first)
+    cases={'os':os_failure,'early-open':os_failure,'direct':lambda:module._require(False,'E_INSTALL'),
+        'hostile':lambda:wrap(Hostile(7,'owned')),'wrong-frame':wrong_frame,
+        'cycle':lambda:chained('cycle'),'overflow':lambda:chained('overflow'),
+        'long-type':lambda:wrap(type('X'*81,(Exception,),{})()),
+        'wrong-errno':lambda:wrap(OSError('not-int','owned')),
+        'long-path':lambda:module._open_held(str(location/('x'*1025)),False,lambda *args:True,'E_INSTALL'),
+        'utf8-cap':lambda:module._open_held(str(location/('/'.join(['界'*200]*3))),False,lambda *args:True,'E_INSTALL'),
+        'format':os_failure,'write':os_failure,'success':lambda:None}
+    original_os={'open':os.open,'fstat':os.fstat,'lstat':os.lstat,'write':os.write,'close':os.close}
+    for case,action in cases.items():
+        sink.write_bytes(b'');calls=[];phase=[False];output=__import__('io').StringIO()
+        def main(args):
+            try:return action()
+            finally:phase[0]=True
+        def operation(name):
+            def observed(*args,**kwargs):
+                if case=='early-open' and not phase[0] and name=='open' and args[0]=='/':
+                    return original_os[name](str(location/'missing-first-open'),*args[1:],**kwargs)
+                if phase[0]:
+                    calls.append(name)
+                    if name in ('open','lstat'):assert args[0]==str(sink),'failed-object query'
+                    if case=='write' and name=='write':raise OSError('fixed sink failure')
+                return original_os[name](*args,**kwargs)
+            return observed
+        def formatting(value,*args,**kwargs):
+            if case=='format':raise ValueError('fixed context formatting failure')
+            return json.dumps(value,*args,**kwargs)
+        scope={'__name__':'__main__','sys':types.SimpleNamespace(argv=['reader'],stderr=output),
+            'c':module,'main':main,'json':types.SimpleNamespace(dumps=formatting),'os':os,'stat':stat}
+        for name in original_os:setattr(os,name,operation(name))
+        status=0
+        try:
+            try:exec(compile(tail,'actual-original-reader-mapping','exec'),scope)
+            except SystemExit as error:status=error.code
+        finally:
+            for name,value in original_os.items():setattr(os,name,value)
+        raw=sink.read_bytes();assert len(raw)<=4096
+        if case=='success':assert status==0 and output.getvalue()=='' and not raw and not calls
+        else:assert status==1 and output.getvalue()=='E_RELATION\n'
+        record=json.loads(raw) if raw else None
+        if case not in ('format','write','success','utf8-cap'):
+            assert record['exception']=='Refusal' and record['code']=='E_INSTALL'
+            context=record['context']
+            if case=='os':
+                assert context[0]['exception']=='FileNotFoundError' and context[0]['errno']==2
+                assert context[0]['held']=={'path':str(location/'absent'),'index':len(str(location/'absent').split('/'))-2,'name':'absent'}
+                assert any(pair[0]=='_open_held' for pair in context[0]['trace'])
+            elif case=='early-open':
+                assert context[0]['exception']=='FileNotFoundError' and context[0]['errno']==2
+                assert context[0]['held']=={'path':str(location/'absent'),'index':'GAP','name':'GAP'}
+                assert any(pair[0]=='_open_held' for pair in context[0]['trace'])
+            elif case=='direct':assert context==[]
+            elif case=='hostile':assert context[0]['exception']=='Hostile' and context[0]['errno']==7 and not hooks
+            elif case=='wrong-frame':assert context[0]['held']=='GAP' and any(pair[0]=='_open_held' for pair in context[0]['trace'])
+            elif case in ('cycle','overflow'):assert len(context)==4 and context[-1]=='GAP'
+            elif case=='long-type':assert context[0]['exception']=='GAP'
+            elif case=='wrong-errno':assert context[0]['errno'] is None
+            elif case=='long-path':assert context[0]['held']['path']==context[0]['held']['name']=='GAP'
+        elif case!='success':assert not raw
+        if case=='cycle':assert context[1]['trace']==context[2]['trace']=='GAP'
+        reports.append({'case':case,'status':status,'public_stderr':output.getvalue(),'sink_utf8':raw.decode(),'diagnostic_calls':calls,'custom_callbacks':list(hooks),'early_open_stimulus':'actual owned missingpath at original first os.open seam' if case=='early-open' else None})
+    return completed_evidence({'original_error_context_controls':reports,'actual_copy_sha256':hashlib.sha256(copied.encode()).hexdigest(),'scope':'actual reader insertion/mapping; original held OS failure; builtin-descriptor adversarial controls; no full evaluator or runtime'})
+
 def genuine_relation_controls(area):
     assembler=heredoc('PY_GENUINE_ASSEMBLER');tree=ast.parse(assembler)
     stability=stable_sink_controls(area,assembler)
@@ -2909,6 +3011,7 @@ try:
     (package/'shadow/v1/_consumer.py').write_bytes(consumer)
     reports.extend(code_auth_controls(observer,wrapper,area))
     reports.append(genuine_relation_controls(area))
+    reports.append(original_context_controls(area))
     reports.append(wrapper_cancel_controls(wrapper,guard,area))
     helper=area/'outside.py';helper.write_text('allowed=True\ndef rule(fd,value,ancestor):\n return allowed\n')
     reader=package/'scope/v1/reader.py'
@@ -6895,11 +6998,55 @@ syswrite($f,$raw)==length($raw) or die;close($f) or die;'''
   for match in difflib.SequenceMatcher(a=front.splitlines(),b=copied.splitlines(),autojunk=False).get_matching_blocks():
    for offset in range(match.size):self.line_map[match.b+offset+1]=match.a+offset+1
   record='''        try:
-            relation_rows=[];relation_tb=error.__traceback__
-            while relation_tb is not None and len(relation_rows)<16:
-                relation_rows.append([relation_tb.tb_frame.f_code.co_name[:80],relation_tb.tb_lineno]);relation_tb=relation_tb.tb_next
-            relation_raw=(json.dumps({'boundary':'reader','binding':TOKEN,'exception':type(error).__name__[:80],
-                'code':code[:128],'trace':relation_rows},sort_keys=True,separators=(',',':'),ensure_ascii=True)+'\\n').encode()
+            relation_base=BaseException.__dict__
+            def relation_field(value,key):
+                return relation_base[key].__get__(value,BaseException)
+            def relation_name(value):
+                text=type.__dict__['__name__'].__get__(type(value))
+                return text if type(text) is str and len(text)<=80 and text.isascii() and text.isidentifier() else 'GAP'
+            def relation_trace(value,limit):
+                rows=[];held='GAP';tb=relation_field(value,'__traceback__')
+                target=type(c._open_held).__dict__['__code__'].__get__(c._open_held)
+                while tb is not None and len(rows)<limit:
+                    fields=type(tb).__dict__;frame=fields['tb_frame'].__get__(tb)
+                    frame_fields=type(frame).__dict__;code_object=frame_fields['f_code'].__get__(frame)
+                    function=type(code_object).__dict__['co_name'].__get__(code_object)
+                    line=fields['tb_lineno'].__get__(tb)
+                    valid=type(function) is str and len(function)<=80
+                    rows.append([function if valid else 'GAP',line if type(line) is int else 'GAP'])
+                    if code_object is target:
+                        local=frame_fields['f_locals'].__get__(frame)
+                        try:path=local['path']
+                        except KeyError:path='GAP'
+                        try:index=local['index']
+                        except KeyError:index='GAP'
+                        try:name=local['name']
+                        except KeyError:name='GAP'
+                        held={'path':path if type(path) is str and len(path)<=1024 else 'GAP',
+                            'index':index if type(index) is int else 'GAP',
+                            'name':name if type(name) is str and len(name)<=255 else 'GAP'}
+                    tb=fields['tb_next'].__get__(tb)
+                return rows if rows else 'GAP',held,tb is not None
+            relation_rows,unused,relation_truncated=relation_trace(error,16)
+            relation_context=[];relation_seen=[error];relation_current=error
+            for relation_index in range(3):
+                following=relation_field(relation_current,'__cause__')
+                if following is None:following=relation_field(relation_current,'__context__')
+                if following is None:break
+                if any(following is previous for previous in relation_seen):
+                    relation_context.append('GAP');break
+                relation_seen.append(following);relation_current=following
+                try:relation_errno=OSError.__dict__['errno'].__get__(following,OSError)
+                except TypeError:relation_errno=None
+                trace,held,truncated=relation_trace(following,8)
+                relation_context.append({'exception':relation_name(following),
+                    'errno':relation_errno if type(relation_errno) is int else None,
+                    'trace':trace,'held':held,'trace_truncated':truncated})
+            else:
+                if relation_field(relation_current,'__cause__') is not None or relation_field(relation_current,'__context__') is not None:
+                    relation_context.append('GAP')
+            relation_raw=(json.dumps({'boundary':'reader','binding':TOKEN,'exception':relation_name(error),
+                'code':code[:128],'trace':relation_rows,'context':relation_context,'trace_truncated':relation_truncated},sort_keys=True,separators=(',',':'),ensure_ascii=True)+'\\n').encode()
             relation_fd=os.open(SINK,os.O_WRONLY|os.O_APPEND|os.O_NOFOLLOW)
             try:
                 relation_s=os.fstat(relation_fd);relation_n=os.lstat(SINK)
