@@ -9,7 +9,7 @@ Tracks #541. Risk is high. This is the nonterminal child-6 core. It authenticate
 the existing child-5 evidence at one exact revision. Issue #544 remains mandatory
 before child 6 completes or child 7 starts.
 
-Implementation PR: `review_size: accepted-exception`, 2,600–8,800 net changed
+Implementation PR: `review_size: accepted-exception`, 2,600–9,000 net changed
 lines. The private evidence reader, held-path and Git checks, closed evaluator
 relations, and a real two-principal origin fixture form one security boundary.
 Most of the range is proof: complete classification, bundle, Git, terminal and
@@ -654,18 +654,35 @@ reads and compilation. Every new actual code object first undergoes the original
 filename and structural CodeType-set test. Structurally equal distinct objects
 remain eligible under that test; same-name unequal or inequivalent replaced code
 keeps its original refusal. Identity is only a reuse key, never a new permission gate.
-Retain a strong code reference with each result, preventing id reuse; discard all
-entries when that session ends. Allow at most 512 entries per classifier, with no
-public selector or reusable cache API.
+Retain a strong code reference with each cached classification result to prevent
+id reuse. Discard all entries when that session ends. Positive entries and negative
+eligibility markers share the same 512-entry limit per classifier. Add no public
+selector or reusable cache API.
 
-Reuse only after bounded confirmation of an exact built-in immutable constant
-graph: scalar constants, tuples, frozensets and nested code. Inspect at most 1,024
-nodes, 32 nesting levels and 64 KiB of scalar/code payload per qualification;
+Reuse a classification result only after bounded confirmation of an exact built-in
+immutable constant graph: scalar constants, tuples, frozensets and nested code.
+Inspect at most 1,024 nodes, 32 nesting levels and 64 KiB of scalar/code payload
+per qualification;
 do not invoke custom hash/equality to decide qualification. On a cache miss,
 mutable or custom values, an uncertain or over-limit graph, a full cache or
 reentrant incomplete qualification keep the original classification on every
 call. Qualification only decides whether to retain the original result; it adds
 no refusal or acceptance.
+
+Only exact native CodeType objects may have a negative eligibility marker. Mark
+only after a source filename matched, the original set test returned, and bounded
+qualification returned ineligible normally. Key by id; retain only a weakref.ref
+with no callback, and require ref() is code on each hit. Never hash the weak
+reference or use custom hash/eq for marker identity. Retain no strong reference to
+an unqualified constant graph. Every negative hit still performs the original
+filename and structural set tests, with their short circuit, busy/reentry boundary,
+result, exception and custom hash/eq effects. Skip only the repeated qualification
+walk. A later mutable-graph change may lose an optimization opportunity, never an
+original classification. Dead or mismatched references, unavailable or failed
+weak-reference creation, full shared capacity, reentry and qualification exceptions
+keep the original path. Marker failures cannot change its result or exception.
+Clear markers with the session; cache no exception or safety fact.
+
 Never cache exceptions or let qualification failure change the original result
 or exception. Keep event selection, order and fields unchanged. Cache no source
 read, metadata, ACL, held-path recheck, safety scan, execution or owner state.
@@ -726,9 +743,18 @@ stat/bool/errno, identity and foreground return/reap/pipe events. Cover structur
 equal new code objects, same-name unequal code and inequivalent replace/rebind,
 mutable/custom
 hash/eq constants, uncached exceptions, capacity saturation and reentrancy.
-Record actual callback counts, classification requests, original structural tests
-and new-object counts for each session. Require equivalent observations and a substantial drop
-in repeated authentication. Record whole ordinary-call wall time; add no per-event
+For negative markers, also cover live/dead references, identity mismatch,
+unavailable/failed weak-reference creation and shared positive/negative capacity.
+Use the exact full guard code graph and real oversized graphs as inert code data
+in the existing ordinary boundaries; do not execute guard/runtime bytes. Reuse the
+two classifiers, four observer cases and actual wrapper sequence. Compare complete
+results, events, fields, GAP, custom effects, foreground/reap/pipes and exceptions.
+Record actual callback counts, classification requests, original structural tests,
+qualification entries/visited nodes and new-object counts. Keep the existing
+positive-cache authentication reduction proof. Require equivalent observations
+and useful reduction of repeated qualification; each negative hit must still make
+its original membership tests. Record whole ordinary-call wall time for the same
+work sequence, without artificial heating. Add no per-event
 timing, evaluator/reader call, runtime, sudo or diagnostic CI. If equivalence,
 counts or measured work show no useful reduction, stop the candidate before full
 execution. These results do not promise completion within the Mac deadline.
@@ -810,7 +836,7 @@ The diagnostic boundary follows private candidate SHA-256
 `f807180c483a689ae6ebb8985fa99f4088836b6280da0d3591481b151fba6850`.
 These decoded-body hashes are the observation baseline. Keep the literals
 readable and multiline. Only `observer_source` may change for the trace dispatch,
-source-line binding, fixed phase facts and session-local code-result reuse below;
+source-line binding, fixed phase facts and the classifier contract above;
 the other three bodies remain exact. Cost sampling adds no dispatch optimization;
 only the two classifiers above may reuse authenticated code results:
 
