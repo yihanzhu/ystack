@@ -2368,10 +2368,54 @@ assert ast.unparse(block[-1].value.func)=='store.chmod' and block[-1].value.args
 creation=''.join(assembler.splitlines(keepends=True)[block[0].lineno-1:block[-1].end_lineno])
 assert len(ast.parse(creation).body)==7
 (area/'creation.py').write_text(creation)
+layout=next(node for node in tree.body if isinstance(node,ast.For) and isinstance(node.target,ast.Name)
+    and node.target.id=='name' and isinstance(node.iter,ast.Tuple)
+    and [value.value for value in node.iter.elts]==['tools','work','bundles','identities','snapshots'])
+layout_source=ast.get_source_segment(assembler,layout)+'\n'
+(area/'layout.py').write_text(layout_source)
+layout_old="for name in ('tools','work','bundles','identities','snapshots'):(base/name).mkdir(mode=0o755)\nwork=base/'work';work.chmod(0o700)\n"
+(area/'layout-old.py').write_text(layout_old)
 host=root/'sandbox/v1/host-supervisor.py';host_raw=host.read_bytes();assert len(host_raw)<=16*1024*1024
 worker=r"""import ast,errno,json,os,pathlib,runpy,stat,subprocess,sys
 base,creation,host=map(pathlib.Path,sys.argv[1:4]);mask=int(sys.argv[4]);case=sys.argv[5]
 uid,gid=os.getuid(),os.getgid();before_mask=os.umask(mask);os.umask(before_mask);assert before_mask==mask
+if case.startswith('layout-'):
+    launched=False;error=None;observed=[]
+    saved_mkdir,saved_chmod=pathlib.Path.mkdir,pathlib.Path.chmod
+    def fail_layout(path,*args,**kwargs):
+        assert path==base/'tools'
+        raise OSError(errno.EIO,'fixed layout before-operation fault')
+    if case=='layout-mkdir-fault':pathlib.Path.mkdir=fail_layout
+    if case=='layout-chmod-fault':pathlib.Path.chmod=fail_layout
+    try:
+        try:exec(compile(creation.read_bytes(),str(creation),'exec'))
+        except OSError as actual:
+            assert case in ('layout-mkdir-fault','layout-chmod-fault')
+            assert actual.errno==errno.EIO and actual.strerror=='fixed layout before-operation fault'
+            error={'type':type(actual).__name__,'errno':actual.errno,'message':actual.strerror}
+    finally:pathlib.Path.mkdir,pathlib.Path.chmod=saved_mkdir,saved_chmod
+    if case in ('layout-mkdir-fault','layout-chmod-fault'):
+        assert error is not None and not launched
+    else:
+        refusal=None
+        try:
+            for name in ('tools','work','bundles','identities','snapshots'):
+                value=os.lstat(base/name)
+                assert stat.S_ISDIR(value.st_mode) and value.st_uid==uid and value.st_gid==gid
+                actual_mode=stat.S_IMODE(value.st_mode)
+                observed.append({'name':name,'type':stat.S_IFMT(value.st_mode),'uid':value.st_uid,
+                    'gid':value.st_gid,'mode':actual_mode,'nlink':value.st_nlink,'symlink':stat.S_ISLNK(value.st_mode)})
+                assert actual_mode==(0o700 if name=='work' else 0o755),'fixed layout0755:'+name
+            launched=True
+        except AssertionError as actual:
+            assert case=='layout-old' and mask==0o077 and str(actual)=='fixed layout0755:tools'
+            refusal=str(actual)
+        assert launched==(case=='layout-fixed')
+    after_mask=os.umask(mask);os.umask(after_mask);assert after_mask==before_mask
+    print(json.dumps({'case':case,'mask_before':before_mask,'mask_after':after_mask,'layout':observed,
+        'operation_fault':error,'refusal':None if error else refusal,'launch_sentinel':launched,
+        'scope':'actual extracted layout; ordinary owned UID only, no writer/reader launched'},sort_keys=True),flush=True)
+    raise SystemExit(0)
 product=runpy.run_path(str(host),run_name='owned_store_mode_product')
 block=ast.parse(creation.read_bytes()).body
 if case=='old-077':block=block[:-1]
@@ -2419,12 +2463,14 @@ print(json.dumps({'case':case,'mask_before':before_mask,'mask_after':after_mask,
     'scope':'ordinary owned same-uid data; not actual writer/root-origin or failed CI inode'},sort_keys=True),flush=True)
 """
 script=area/'worker.py';script.write_text(worker);reports=[]
-for mask,cases in [(0o077,('fixed','old-077','wrong-mode','mode-operation-fault')),(0o022,('fixed','wrong-mode','mode-operation-fault'))]:
+for mask,cases in [(0o077,('fixed','old-077','wrong-mode','mode-operation-fault','layout-fixed','layout-old','layout-mkdir-fault','layout-chmod-fault')),
+                   (0o022,('fixed','wrong-mode','mode-operation-fault','layout-fixed','layout-mkdir-fault','layout-chmod-fault'))]:
     for case in cases:
         base=area/(str(mask)+'-'+case);base.mkdir()
-        bindings={str(path):hashlib.sha256(path.read_bytes()).hexdigest() for path in (script,area/'creation.py',host)}
+        selected=area/('layout-old.py' if case=='layout-old' else 'layout.py' if case.startswith('layout-') else 'creation.py')
+        bindings={str(path):hashlib.sha256(path.read_bytes()).hexdigest() for path in (script,selected,host)}
         (base/'preexec.json').write_text(json.dumps(bindings,sort_keys=True)+'\n')
-        result=subprocess.run([sys.executable,'-I','-S','-B',str(script),str(base),str(area/'creation.py'),str(host),str(mask),case],
+        result=subprocess.run([sys.executable,'-I','-S','-B',str(script),str(base),str(selected),str(host),str(mask),case],
             stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=10,umask=mask)
         (base/'stdout.raw').write_bytes(result.stdout);(base/'stderr.raw').write_bytes(result.stderr)
         assert result.returncode==0 and not result.stderr,(case,result.returncode,result.stdout,result.stderr)
@@ -5680,8 +5726,11 @@ uid=pwd.getpwnam(writer).pw_uid;consumer_uid=pwd.getpwnam(consumer).pw_uid;gid=g
 consumer_gid=pwd.getpwnam(consumer).pw_gid
 assert consumer_gid!=gid and gid in map(int,subprocess.check_output(['/usr/bin/sudo','-n','-u',consumer,'--','/usr/bin/id','-G']).split())
 assert uid>0 and consumer_uid>0 and uid!=consumer_uid
-for name in ('tools','work','bundles','identities','snapshots'):(base/name).mkdir(mode=0o755)
-work=base/'work';work.chmod(0o700);tools=base/'tools';jq=tools/'jq';shutil.copyfile(jq_source,jq);jq.chmod(0o555)
+for name in ('tools','work','bundles','identities','snapshots'):
+ directory=base/name
+ directory.mkdir(mode=0o755)
+ directory.chmod(0o700 if name=='work' else 0o755)
+work=base/'work';tools=base/'tools';jq=tools/'jq';shutil.copyfile(jq_source,jq);jq.chmod(0o555)
 assert sha(jq.read_bytes())==c.JQ_SHA256[sys.platform]
 (tools/'python3').symlink_to(sys.executable)
 env={'PATH':str(tools)+':/usr/bin:/bin','LC_ALL':'C','LANG':'C','HOME':str(work),'TMPDIR':str(work),'GIT_CONFIG_NOSYSTEM':'1','GIT_CONFIG_GLOBAL':'/dev/null','GIT_NO_REPLACE_OBJECTS':'1','GIT_NO_LAZY_FETCH':'1','GIT_TERMINAL_PROMPT':'0','GIT_OPTIONAL_LOCKS':'0','GIT_AUTHOR_NAME':'fixture','GIT_AUTHOR_EMAIL':'fixture@example.invalid','GIT_COMMITTER_NAME':'fixture','GIT_COMMITTER_EMAIL':'fixture@example.invalid','GIT_AUTHOR_DATE':'2000-01-01T00:00:00Z','GIT_COMMITTER_DATE':'2000-01-01T00:00:00Z'}
