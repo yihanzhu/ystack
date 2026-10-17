@@ -1044,12 +1044,14 @@ def observe(original,log,case,phase,argv,index):
             except BaseException as close_error:
                 gap+=';close:'+type(close_error).__name__
     watched_cache = {}
+    try:import weakref as watched_weakref
+    except ImportError:watched_weakref=None
     watched_busy = [False]
     def watched(frame):
         code = frame.f_code
         key = id(code)
         found = watched_cache.get(key)
-        if not watched_busy[0] and found is not None and found[0] is code:
+        if not watched_busy[0] and type(found) is tuple and found[0] is code:
             return found[1]
         if watched_busy[0]:
             return (frame.f_code.co_filename in source_codes and
@@ -1058,7 +1060,11 @@ def observe(original,log,case,phase,argv,index):
         try:
             in_source = frame.f_code.co_filename in source_codes
             result = in_source and frame.f_code in source_codes[frame.f_code.co_filename]
-            if in_source and len(watched_cache) < 512:
+            negative_marker=False
+            try:
+                negative_marker=watched_weakref is not None and type(found) is watched_weakref.ReferenceType and found() is code
+            except Exception:pass
+            if in_source and len(watched_cache) < 512 and not negative_marker:
                 try:
                     pending = [(code, 0)]
                     nodes = payload = 0
@@ -1109,6 +1115,8 @@ def observe(original,log,case,phase,argv,index):
                         pending.extend((child, depth + 1) for child in children)
                     if reusable:
                         watched_cache[key] = (code, result)
+                    elif type(code) is types.CodeType and watched_weakref is not None:
+                        watched_cache[key] = watched_weakref.ref(code)
                 except Exception:
                     pass
             return result
@@ -1935,7 +1943,7 @@ def heredoc(tag):
 prepare=heredoc('PY_STALE_PREPARE')
 functions=source[source.index('run_evaluator() {'):source.index('\nexpect_reasons() {')]
 functions=functions[:functions.index('\nexpect_validator_error() {')]+functions[functions.index('\nprepare_stale_binding() {'):]
-expected={'observer_source':'814673107ae076d38e71030a356ae2d078c6cfce51d2f7ab1fcaf4ec751c1ab3',
+expected={'observer_source':'9158acae3a1262edbfb7ae7d51f32f69902c674e3faa801bd96aa705da309f45',
  'frontend_capture':'a21a722a59923fa6ad18f6f6dd26385d46dcd5a3733083f9d7625777d73c4af8',
  'emit_capture':'153556128c04167c2a73d6c91c86b37bd3e1d34eb35fdeea44e865803301afb4',
  'exit_capture':'95bc34214161aa79167d7f33e8cf4980d70177f7771fa5bf30672e8f0e1739ac'}
@@ -2286,8 +2294,8 @@ def measured_classifier(program,name):
     body=textwrap.dedent(''.join(lines[node.lineno:node.end_lineno]))
     if name+'_cache' in body:
         marker='found = '+name+'_cache.get(key)\n'
-        body=body.replace(marker,marker+"_auth_row['retained_before']=found is not None and found[0] is code\n",1)
-        body=body.replace('    if in_source and len('+name+'_cache) < 512:',"    _auth_row['capacity']=len("+name+"_cache)>=512\n    if in_source and len("+name+"_cache) < 512:",1)
+        body=body.replace(marker,marker+"_auth_row['retained_before']=type(found) is tuple and found[0] is code\n",1)
+        body=body.replace('    if in_source and len('+name+'_cache) < 512 and not negative_marker:',"    _auth_row['capacity']=len("+name+"_cache)>=512\n    _auth_row['negative_hit']=negative_marker\n    if in_source and len("+name+"_cache) < 512 and not negative_marker:",1)
         body=body.replace('    return found[1]\n',"    _auth_row['hit']=True\n    authentication['events'].append(['hit',_auth_row['code'],found[0] is code])\n    return found[1]\n",1)
         body=body.replace('if '+name+'_busy[0]:\n','if '+name+"_busy[0]:\n    _auth_row['busy']=True\n",1)
         marker='    in_source = frame.f_code.co_filename in '
@@ -2296,7 +2304,8 @@ def measured_classifier(program,name):
         body=body.replace('            pending = [(code, 0)]',"            _auth_row['qualify']=True\n            pending = [(code, 0)]",1)
         marker='                '+name+'_cache[key] = (code, result)\n'
         body=body.replace(marker,marker+"                _auth_row['insert']=True\n                authentication['events'].append(['insert',_auth_row['code'],"+name+"_cache[key][0] is code])\n",1)
-    prefix="""_auth_row={'code':id(frame.f_code),'filename':0,'set':0,'hit':False,'busy':False,'outside':None,'qualify':False,'insert':False,'retained_before':False,'capacity':False,'exception':None}
+    body=body.replace('                nodes += 1',"                nodes += 1\n                _auth_row['nodes']+=1",1)
+    prefix="""_auth_row={'code':id(frame.f_code),'filename':0,'set':0,'hit':False,'busy':False,'outside':None,'qualify':False,'insert':False,'retained_before':False,'capacity':False,'exception':None,'negative_hit':False,'nodes':0}
 authentication['rows'].append(_auth_row)
 authentication['stack'].append(_auth_row)
 try:
@@ -2336,12 +2345,14 @@ def authentication_proof(facts):
         else:
             outside+=1
             valid=valid and not row['qualify'] and not row['insert']
+        if row['negative_hit']:valid=valid and row['set']==row['filename']==1 and not row['qualify'] and not row['hit'] and not row['busy']
         if row['insert']:valid=valid and row['qualify'] and row['set']==1 and not row['busy']
         if row['exception']:exceptions+=1;valid=valid and not row['insert'] and not row['hit']
     return {'valid':valid,'source_first_set_attempts':first,'same_identity_hits':hits,
         'required_subsequent_set_attempts':fallback,'fallback_reasons':reasons,'no_set_requests':outside,'exceptions':exceptions,
         'filename_memberships':facts['filename_memberships'],'code_set_memberships':facts['code_set_memberships'],
         'requests':facts['requests'],'new_actual_objects':len(facts['objects']),
+        'eligibility_entries':sum(row['qualify'] for row in facts['rows']),'visited_nodes':sum(row['nodes'] for row in facts['rows']),'negative_hits':sum(row['negative_hit'] for row in facts['rows']),
         'rows':facts['rows'],'actual_insert_hit_events':facts['events']}
 
 def stable_sink_controls(area,assembler):
@@ -2498,6 +2509,110 @@ def genuine_relation_controls(area):
     assert len(list(snapshot.iterdir()))==22
     return completed_evidence({'genuine_relation_controls':reports,'stable_sink_controls':stability,'scope':'actual insertions and original admission/exception boundaries with fixed ordinary UID and standalone entry adapters; no full evaluator/P/jq/root proof'})
 
+def negative_eligibility_controls(actual,name,table_name,area):
+    import gc,weakref
+    counted=actual.replace('                pending = [(code, 0)]','                counters[0]+=1\n                pending = [(code, 0)]',1)
+    counted=counted.replace('                    nodes += 1','                    nodes += 1\n                    counters[1]+=1',1)
+    assert counted!=actual and counted.count('counters[1]+=1')==1
+    class Inputs(dict):
+        def __contains__(self,key):self.filename+=1;return super().__contains__(key)
+    class Codes(set):
+        def __contains__(self,key):self.tests+=1;return super().__contains__(key)
+    def session(code,mode='live'):
+        codes=Codes({code});codes.tests=0;table=Inputs({code.co_filename:codes});table.filename=0
+        counts=[0,0];scope={'types':types,table_name:table,'counters':counts}
+        exec(compile(counted,'actual-negative-eligibility','exec'),scope)
+        if mode=='unavailable':scope[name+'_weakref']=None
+        elif mode=='failed':
+            def failed(value):raise TypeError('fixed weak reference creation failure')
+            scope[name+'_weakref']=types.SimpleNamespace(ReferenceType=weakref.ReferenceType,ref=failed)
+        return scope,scope[name],counts,table,codes
+    guard=heredoc('PY_MAC_FIXED_RUNTIME_GUARD')
+    assert hashlib.sha256(guard.encode()).hexdigest()=='3c229ffd250d8b255ae59ae1f507e3815c9f6bfb25b793c9075871675a1a540c'
+    full=compile(guard,'owned-inert-full-guard','exec');oversized=compile('value='+repr(tuple(range(1025))),'owned-inert-oversized','exec')
+    summaries=[]
+    for code in (full,oversized):
+        paired=[]
+        for mode in ('unavailable','live'):
+            scope,call,counts,table,codes=session(code,mode);carrier=types.SimpleNamespace(f_code=code)
+            started=time.monotonic();results=[call(carrier) for unused in range(3)];elapsed=time.monotonic()-started
+            row={'mode':mode,'results':results,'qualifications':counts[0],'visited_nodes':counts[1],
+                 'filename_memberships':table.filename,'set_memberships':codes.tests,'whole_wall':elapsed,
+                 'negative_entries':sum(type(value) is weakref.ReferenceType for value in scope[name+'_cache'].values())}
+            paired.append(row)
+        assert paired[0]['results']==paired[1]['results']==[True]*3
+        assert all(row['filename_memberships']==row['set_memberships']==3 for row in paired)
+        assert paired[0]['qualifications']==3 and paired[1]['qualifications']==1
+        assert paired[1]['visited_nodes']*3==paired[0]['visited_nodes'] and paired[1]['negative_entries']==1
+        summaries.append({'code_filename':code.co_filename,'inert_never_executed':True,'same_three_call_sequence':paired})
+    for mode in ('unavailable','failed'):
+        scope,call,counts,table,codes=session(oversized,mode)
+        assert [call(types.SimpleNamespace(f_code=oversized)) for unused in range(3)]==[True]*3
+        assert counts[0]==codes.tests==table.filename==3 and not scope[name+'_cache']
+        summaries.append({'fallback':mode,'qualification_entries':counts[0],'nodes':counts[1],'set_memberships':codes.tests})
+    scope,call,counts,table,codes=session(oversized);other=oversized.replace(co_name='different')
+    scope[name+'_cache'][id(oversized)]=weakref.ref(other)
+    assert call(types.SimpleNamespace(f_code=oversized)) and call(types.SimpleNamespace(f_code=oversized))
+    assert counts[0]==1 and codes.tests==table.filename==2 and scope[name+'_cache'][id(oversized)]() is oversized
+    summaries.append({'identity_mismatch':'original path then live marker','qualification_entries':counts[0],'memberships':codes.tests})
+    scope,call,counts,table,codes=session(oversized)
+    def departed():
+        value=oversized.replace(co_name='temporary-negative');call(types.SimpleNamespace(f_code=value))
+        reference=weakref.ref(value);key=id(value);return reference,key
+    dead,key=departed();gc.collect();assert dead() is None and scope[name+'_cache'][key]() is None
+    scope[name+'_cache'][id(oversized)]=dead
+    before=counts[0];assert call(types.SimpleNamespace(f_code=oversized));assert counts[0]==before+1
+    summaries.append({'dead_reference':True,'no_strong_unqualified_graph':True,'replacement_original_path':True})
+    scope,call,counts,table,codes=session(oversized)
+    held=[]
+    for index in range(512):
+        code=(compile('value=1','owned-inert-oversized','exec') if index%2==0 else oversized).replace(co_firstlineno=index+1)
+        held.append(code);call(types.SimpleNamespace(f_code=code))
+    cache=scope[name+'_cache'];assert len(cache)==512
+    positive=sum(type(value) is tuple for value in cache.values());negative=sum(type(value) is weakref.ReferenceType for value in cache.values())
+    assert positive==negative==256
+    extra=oversized.replace(co_firstlineno=600);prior=(counts[:],codes.tests,table.filename)
+    call(types.SimpleNamespace(f_code=extra));call(types.SimpleNamespace(f_code=extra))
+    assert counts==prior[0] and codes.tests==prior[1]+2 and table.filename==prior[2]+2 and id(extra) not in cache
+    summaries.append({'shared_capacity':len(cache),'positive':positive,'negative':negative,'full_cache_original_memberships':2,'extra_retained':False})
+    return completed_evidence({'negative_eligibility':name,'actual_source_sha256':hashlib.sha256(actual.encode()).hexdigest(),
+        'counted_source_sha256':hashlib.sha256(counted.encode()).hexdigest(),'full_guard_sha256':hashlib.sha256(guard.encode()).hexdigest(),'records':summaries})
+
+def counted_wrapper_cases(wrapper,old_wrapper,mac_code,consumer,clock_name):
+    plain_wrapper=wrapper
+    a=plain_wrapper.index('bound_cache = {}\n');b=plain_wrapper.index("print('GUARD_ACTUAL_PRINCIPAL",a)
+    plain_wrapper=plain_wrapper[:a]+'try:import weakref as bound_weakref\nexcept ImportError:bound_weakref=None\ndef bound(frame):\n    return (frame.f_code.co_filename in bound_codes and\n            frame.f_code in bound_codes[frame.f_code.co_filename])\n'+plain_wrapper[b:]
+    plain_wrapper=plain_wrapper.replace('    bound_cache.clear()\n','')
+    shared_import='try:import weakref as bound_weakref\nexcept ImportError:bound_weakref=None\n'
+    assert shared_import in plain_wrapper and shared_import in wrapper
+    tail=wrapper.split("print('GUARD_ACTUAL_PRINCIPAL",1)[1]
+    plain_tail=plain_wrapper.split("print('GUARD_ACTUAL_PRINCIPAL",1)[1]
+    clear='    bound_cache.clear()\n'
+    assert tail.count(clear)==1 and plain_tail.count(clear)==0
+    prefix,suffix=tail.split(clear)
+    assert prefix.endswith('finally:\n    sys.settrace(None)\n')
+    assert plain_tail[:len(prefix)]==prefix and plain_tail[len(prefix):]==suffix
+    frozen=[]
+    for version,code in [('old',old_wrapper),('new',wrapper),('wrong-code-same-name',wrapper),('uncached-modern',plain_wrapper)]:
+        code=code.replace('CLOCK_UPTIME_RAW',clock_name)
+        if version=='wrong-code-same-name':
+            fake="scope={}\nexec(compile('def _foreground():return None\\n',str(consumer),'exec'),scope)\nscope['_foreground']()\n"
+            subject=mac_code.replace('name=sys.argv[2];before=',fake+'name=sys.argv[2];before=')
+        else:subject=mac_code
+        counted=code.replace('foreground = {}','callback_count=0\nforeground = {}',1)
+        if 'def bound(frame):\n' in counted:
+            counter="authentication={'requests':0,'filename_memberships':0,'code_set_memberships':0,'objects':{},'rows':[],'stack':[],'events':[]}\nclass AuthenticationTable(dict):\n    def __contains__(self,key):\n        authentication['filename_memberships']+=1\n        authentication['stack'][-1]['filename']+=1\n        return super().__contains__(key)\nclass AuthenticationSet(set):\n    def __contains__(self,key):\n        authentication['code_set_memberships']+=1\n        authentication['stack'][-1]['set']+=1\n        return super().__contains__(key)\nbound_codes=AuthenticationTable({key:AuthenticationSet(value) for key,value in bound_codes.items()})\n"
+            counted=counted.replace('identity_line = ',counter+'identity_line = ',1)
+            counted=measured_classifier(counted,'bound')
+            counted=counted.replace('def bound(frame):\n',"def bound(frame):\n    authentication['requests']+=1\n    authentication['objects'][id(frame.f_code)]=frame.f_code\n",1)
+            counted=counted.replace('    sys.settrace(None)\n',"    sys.settrace(None)\n    print('AUTH_RESULT '+json.dumps({'requests':authentication['requests'],'filename_memberships':authentication['filename_memberships'],'code_set_memberships':authentication['code_set_memberships'],'new_actual_objects':len(authentication['objects']),'rows':authentication['rows'],'events':authentication['events'],'strong_references':all(id(value)==key for key,value in authentication['objects'].items())}),file=sys.stderr)\n",1)
+        for name in ('observe','dispatch'):
+            header='def '+name+'(frame, event, arg):\n'
+            if header in counted:counted=counted.replace(header,header+'    global callback_count\n    callback_count+=1\n',1)
+        counted=counted.replace('    sys.settrace(None)\n',"    sys.settrace(None)\n    print('TRACE_COUNT '+str(callback_count),file=sys.stderr)\n",1)
+        frozen.append((version,counted.encode(),subject.encode()))
+    return frozen
+
 def code_auth_controls(observer,wrapper,area):
     import textwrap
     records=[]
@@ -2575,6 +2690,7 @@ def code_auth_controls(observer,wrapper,area):
                                                      ('bound','bound_codes',wrapper,0,"print('GUARD_ACTUAL_PRINCIPAL")]:
         start=program.index(' '*indent+name+'_cache = {}\n');end=program.index(next_marker,start)
         actual=textwrap.dedent(program[start:end]);tree=ast.parse(actual)
+        records.append(negative_eligibility_controls(actual,name,table_name,area))
         originals={'watched':"""def watched(frame):
     return (frame.f_code.co_filename in source_codes and
             frame.f_code in source_codes[frame.f_code.co_filename])
@@ -2651,7 +2767,7 @@ def code_auth_controls(observer,wrapper,area):
                 for current in held:classify(current)
                 assert len(scope[name+'_cache'])==512
                 before=table.tests;classify(held[-1]);classify(held[-1]);assert table.tests-before==2
-                assert all(key==id(item[0]) and type(item[0]) is types.CodeType for key,item in scope[name+'_cache'].items())
+                assert all((type(item) is tuple and key==id(item[0]) and type(item[0]) is types.CodeType) or (type(item) is __import__('weakref').ReferenceType and item() is not None and key==id(item())) for key,item in scope[name+'_cache'].items())
                 records.append(completed_evidence({'boundary':name,'separate_saturation':True,'objects':len(held),
                     'final_entries':len(scope[name+'_cache']),'post_saturation_filename_memberships':table.tests,
                     'post_saturation_code_set_memberships':table.code_tests}))
@@ -2818,32 +2934,17 @@ finally:
     assert mac_code.count(foreground_line)==1
     mac_code=mac_code.replace(foreground_line,foreground_line+"\nname=sys.argv[2];before=identity(os.lstat(name))\nwith open(name,'ab') as target:target.write(b'changed')\nassert uptime() < deadline and identity(os.lstat(name)) == before")
     mac_subject.write_text(mac_code)
-    plain_wrapper=wrapper
-    a=plain_wrapper.index('bound_cache = {}\n');b=plain_wrapper.index("print('GUARD_ACTUAL_PRINCIPAL",a)
-    plain_wrapper=plain_wrapper[:a]+'def bound(frame):\n    return (frame.f_code.co_filename in bound_codes and\n            frame.f_code in bound_codes[frame.f_code.co_filename])\n'+plain_wrapper[b:]
-    plain_wrapper=plain_wrapper.replace('    bound_cache.clear()\n','')
-    mac_records=[];mac_references=[]
-    for version,code in [('old',old_wrapper),('new',wrapper),('wrong-code-same-name',wrapper),('uncached-modern',plain_wrapper)]:
-        code=code.replace('CLOCK_UPTIME_RAW',clock_name)
-        mac_target.write_bytes(b'owned')
-        if version=='wrong-code-same-name':
-            fake="scope={}\nexec(compile('def _foreground():return None\\n',str(consumer),'exec'),scope)\nscope['_foreground']()\n"
-            mac_subject.write_text(mac_code.replace('name=sys.argv[2];before=',fake+'name=sys.argv[2];before='))
-        else:mac_subject.write_text(mac_code)
-        counted=code.replace('foreground = {}','callback_count=0\nforeground = {}',1)
-        if 'def bound(frame):\n' in counted:
-            counter="authentication={'requests':0,'filename_memberships':0,'code_set_memberships':0,'objects':{},'rows':[],'stack':[],'events':[]}\nclass AuthenticationTable(dict):\n    def __contains__(self,key):\n        authentication['filename_memberships']+=1\n        authentication['stack'][-1]['filename']+=1\n        return super().__contains__(key)\nclass AuthenticationSet(set):\n    def __contains__(self,key):\n        authentication['code_set_memberships']+=1\n        authentication['stack'][-1]['set']+=1\n        return super().__contains__(key)\nbound_codes=AuthenticationTable({key:AuthenticationSet(value) for key,value in bound_codes.items()})\n"
-            counted=counted.replace('identity_line = ',counter+'identity_line = ',1)
-            counted=measured_classifier(counted,'bound')
-            counted=counted.replace('def bound(frame):\n',"def bound(frame):\n    authentication['requests']+=1\n    authentication['objects'][id(frame.f_code)]=frame.f_code\n",1)
-            counted=counted.replace('    sys.settrace(None)\n',"    sys.settrace(None)\n    print('AUTH_RESULT '+json.dumps({'requests':authentication['requests'],'filename_memberships':authentication['filename_memberships'],'code_set_memberships':authentication['code_set_memberships'],'new_actual_objects':len(authentication['objects']),'rows':authentication['rows'],'events':authentication['events'],'strong_references':all(id(value)==key for key,value in authentication['objects'].items())}),file=sys.stderr)\n",1)
-        for name in ('observe','dispatch'):
-            header='def '+name+'(frame, event, arg):\n'
-            if header in counted:counted=counted.replace(header,header+'    global callback_count\n    callback_count+=1\n',1)
-        counted=counted.replace('    sys.settrace(None)\n',"    sys.settrace(None)\n    print('TRACE_COUNT '+str(callback_count),file=sys.stderr)\n",1)
-        mac_program.write_text(counted)
-        snapshot=area/('mac-wrapper-'+version+'.py');snapshot.write_text(counted)
-        print(json.dumps({'preexec_wrapper':str(snapshot),'sha256':hashlib.sha256(snapshot.read_bytes()).hexdigest(),'subject':mac_subject.read_text(),'subject_sha256':hashlib.sha256(mac_subject.read_bytes()).hexdigest(),'consumer_sha256':hashlib.sha256(consumer).hexdigest()}),flush=True)
+    mac_records=[];mac_references=[];frozen_cases=[]
+    for version,wrapper_raw,subject_raw in counted_wrapper_cases(wrapper,old_wrapper,mac_code,consumer,clock_name):
+        snapshot=area/('mac-wrapper-'+version+'.py');snapshot.write_bytes(wrapper_raw)
+        subject_snapshot=area/('mac-subject-'+version+'.py');subject_snapshot.write_bytes(subject_raw)
+        assert snapshot.read_bytes()==wrapper_raw and subject_snapshot.read_bytes()==subject_raw
+        frozen_cases.append((version,snapshot,subject_snapshot,hashlib.sha256(wrapper_raw).hexdigest(),hashlib.sha256(subject_raw).hexdigest()))
+        print(json.dumps({'preexec_wrapper':str(snapshot),'sha256':hashlib.sha256(wrapper_raw).hexdigest(),'source':wrapper_raw.decode(),'shared_import':'try:import weakref as bound_weakref\nexcept ImportError:bound_weakref=None\n','subject':subject_raw.decode(),'subject_sha256':hashlib.sha256(subject_raw).hexdigest(),'consumer_sha256':hashlib.sha256(consumer).hexdigest()}),flush=True)
+    for version,snapshot,subject_snapshot,wrapper_sha,subject_sha in frozen_cases:
+        wrapper_raw=snapshot.read_bytes();subject_raw=subject_snapshot.read_bytes()
+        assert hashlib.sha256(wrapper_raw).hexdigest()==wrapper_sha and hashlib.sha256(subject_raw).hexdigest()==subject_sha
+        mac_program.write_bytes(wrapper_raw);mac_subject.write_bytes(subject_raw);mac_target.write_bytes(b'owned')
         started=time.monotonic()
         result=subprocess.run([sys.executable,'-I','-S','-B',str(mac_program),str(mac_subject),str(package),str(mac_target),str(mac_program)],capture_output=True,timeout=10)
         raw_reference=completed_evidence({'mac_observer_version':version,'actual_rc':result.returncode,'stdout':result.stdout.decode(),'stderr':result.stderr.decode()})
@@ -5423,12 +5524,14 @@ identity_callers = {item for item in bound_codes[original_name]
     if identity_lines & {line for offset, line in dis.findlinestarts(item)}}
 
 bound_cache = {}
+try:import weakref as bound_weakref
+except ImportError:bound_weakref=None
 bound_busy = [False]
 def bound(frame):
     code = frame.f_code
     key = id(code)
     found = bound_cache.get(key)
-    if not bound_busy[0] and found is not None and found[0] is code:
+    if not bound_busy[0] and type(found) is tuple and found[0] is code:
         return found[1]
     if bound_busy[0]:
         return (frame.f_code.co_filename in bound_codes and
@@ -5437,7 +5540,11 @@ def bound(frame):
     try:
         in_source = frame.f_code.co_filename in bound_codes
         result = in_source and frame.f_code in bound_codes[frame.f_code.co_filename]
-        if in_source and len(bound_cache) < 512:
+        negative_marker=False
+        try:
+            negative_marker=bound_weakref is not None and type(found) is bound_weakref.ReferenceType and found() is code
+        except Exception:pass
+        if in_source and len(bound_cache) < 512 and not negative_marker:
             try:
                 pending = [(code, 0)]
                 nodes = payload = 0
@@ -5488,6 +5595,8 @@ def bound(frame):
                     pending.extend((child, depth + 1) for child in children)
                 if reusable:
                     bound_cache[key] = (code, result)
+                elif type(code) is types.CodeType and bound_weakref is not None:
+                    bound_cache[key] = bound_weakref.ref(code)
             except Exception:
                 pass
         return result
