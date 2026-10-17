@@ -2619,6 +2619,103 @@ def genuine_relation_controls(area):
     assert len(list(snapshot.iterdir()))==22
     return completed_evidence({'genuine_relation_controls':reports,'stable_sink_controls':stability,'scope':'actual insertions and original admission/exception boundaries with fixed ordinary UID and standalone entry adapters; no full evaluator/P/jq/root proof'})
 
+def probe_capture_controls(area):
+    import io,contextlib
+    assembler=heredoc('PY_GENUINE_ASSEMBLER');tree=ast.parse(assembler)
+    node=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='GenuineRelationCapture')
+    actual=ast.get_source_segment(assembler,node)+'\n'
+    spec=importlib.util.spec_from_file_location('probe_capture_consumer',root/'shadow/v1/_consumer.py')
+    module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
+    location=area/'probe-capture';location.mkdir();reports=[]
+    for fault in ('normal','lstat','readlink','observer','sink','wrong-type','surrogate','overlong','record-cap','sink-cap','wrong-binding'):
+        base=location/fault;base.mkdir();package=base/'package';(package/'scope/v1').mkdir(parents=True)
+        for name in ('evaluate-scope.sh','read-shadow-evidence.py'):
+            path=package/'scope/v1'/name;path.write_bytes((root/'scope/v1'/name).read_bytes());path.chmod(0o755 if name.endswith('.sh') else 0o644)
+        target=base/'target';target.write_bytes(b'owned');link=base/'link';link.symlink_to(target)
+        context={'pathlib':__import__('pathlib'),'os':os,'stat':stat,'json':json,'sys':sys,'c':module,
+            'base':base,'package':package,'consumer_uid':os.getuid(),'consumer_gid':os.getgid(),
+            'relation_creation_target':sys.executable,'sha':lambda raw:hashlib.sha256(raw).hexdigest(),'canonical':capture_canonical(assembler)}
+        exec(compile(actual,'actual-probe-capture','exec'),context)
+        argv=[str(package/'scope/v1/evaluate-scope.sh'),'evaluate',*['owned-'+str(i) for i in range(9)]]
+        capture=context['GenuineRelationCapture'](argv)
+        program=capture.probe_program
+        assert program.count('relation_input=sys.executable')==1 and program.count('os.path.realpath(relation_input)')==1
+        adapted=program.replace('relation_input=sys.executable','relation_input='+repr(str(link)),1)
+        if fault=='wrong-type':adapted=adapted.replace("relation_input="+repr(str(link)),"relation_input=b'/owned-byte-input'",1)
+        if fault=='surrogate':adapted=adapted.replace("relation_input="+repr(str(link)),"relation_input='\\ud800'",1)
+        if fault=='overlong':adapted=adapted.replace("relation_input="+repr(str(link)),"relation_input="+repr('x'*1100),1)
+        if fault=='record-cap':adapted=adapted.replace("'input':relation_value(relation_input)","'input':'x'*2049",1)
+        if fault=='sink-cap':capture.sink.write_bytes(b'x'*8192)
+        calls=[];results=[];errors=[];original_lstat=os.lstat;original_readlink=os.readlink;original_write=os.write
+        before=capture.sink.read_bytes();probe_input=str(link)
+        def delegate(operation,original):
+            def observed(*args,**kwargs):
+                calls.append([operation,args,kwargs])
+                if (operation==fault or fault=='observer' and operation=='readlink') and args[0]==str(link):
+                    error=OSError(13,'fixed ordinary primitive refusal');errors.append(error);raise error
+                result=original(*args,**kwargs);results.append((operation,result));return result
+            return observed
+        def execute(source,observed):
+            calls.clear();results.clear();errors.clear();out=io.StringIO();err=io.StringIO();caught=None;space={}
+            ls=delegate('lstat',original_lstat);rl=delegate('readlink',original_readlink)
+            def write(fd,raw):
+                if fault=='sink':raise OSError('fixed sink refusal')
+                return original_write(fd,raw)
+            try:
+                os.lstat,os.readlink=ls,rl;os.write=write
+                if fault=='observer' and observed:
+                    source=source.replace("name=type.__dict__['__name__'].__get__(type(error))","raise ValueError('fixed observer refusal')",1)
+                with contextlib.redirect_stdout(out),contextlib.redirect_stderr(err):
+                    try:exec(compile(source,'actual-probe-observed' if observed else 'actual-probe-original','exec'),space)
+                    except BaseException as error:caught=error
+                assert os.lstat is ls and os.readlink is rl
+                if observed:
+                    assert space['relation_lstat'] is ls and space['relation_readlink'] is rl
+                    assert all(space.get('relation_result') is not result for operation,result in results if operation=='lstat')
+                actual_calls=[(op,args,kw) for op,args,kw in calls if args[0]!=str(capture.sink)]
+                return {'stdout':out.getvalue(),'stderr':err.getvalue(),'exception':type(caught).__name__ if caught else None,
+                    'calls':actual_calls,'space':space,'error':caught,'primitive_errors':list(errors),'primitive_returns':list(results)}
+            finally:os.lstat,os.readlink,os.write=original_lstat,original_readlink,original_write
+        input_node=next(n for n in ast.parse(adapted).body if isinstance(n,ast.Assign) and isinstance(n.targets[0],ast.Name) and n.targets[0].id=='relation_input')
+        expression=ast.get_source_segment(adapted,input_node.value)
+        original='import os,sys\nprint(os.path.realpath('+expression+'))\n'
+        print(json.dumps({'probe_capture_preexec':fault,'program':program,'adapted':adapted,'original':original,
+            'binding':capture.binding,'sha256':hashlib.sha256(adapted.encode()).hexdigest()}),flush=True)
+        first=execute(original,False);second=execute(adapted,True)
+        assert (first['stdout'],first['stderr'],first['exception'],first['calls'])==(second['stdout'],second['stderr'],second['exception'],second['calls'])
+        raw=capture.sink.read_bytes()[len(before):]
+        if fault in ('sink','record-cap','sink-cap'):assert not raw
+        else:
+            record=json.loads(raw);assert len(raw)<=2048 and record['binding']==capture.token and record['boundary']=='probe'
+            if fault in ('lstat','readlink'):
+                detail=record['first_error'];assert detail['operation']==fault and detail['errno']==13 and detail['path']==str(link)
+                assert second['primitive_errors'] and second['space']['relation_seen'] is True
+                if fault=='readlink':assert type(detail['lstat']['mode']) is int
+            elif fault=='wrong-type':assert record['input']=='GAP'
+            elif fault in ('surrogate','overlong'):assert record['input']=='GAP'
+            elif fault=='observer':assert record['first_error']=='GAP'
+        if fault=='wrong-binding':
+            row=json.loads(raw);row['binding']='0'*64;capture.sink.write_bytes(capture_canonical(assembler)(row))
+            output=io.BytesIO();context['sys']=types.SimpleNamespace(stderr=types.SimpleNamespace(buffer=output))
+            capture.export_failure(subprocess.CompletedProcess([],1,b'',b'E_RELATION\n'));assert not output.getvalue()
+        # Direct original delegate errors and returns use the exact wrapper objects.
+        if fault=='normal':
+            namespace=second['space'];real_result=original_lstat(link);sentinel=OSError(5,'owned sentinel')
+            namespace['relation_lstat']=lambda *a,**k:real_result
+            assert namespace['relation_observed_lstat'](str(link)) is real_result
+            def fail(*a,**k):raise sentinel
+            namespace['relation_readlink']=fail
+            try:namespace['relation_observed_readlink'](str(link))
+            except OSError as error:assert error is sentinel
+            else:raise AssertionError('original primitive exception swallowed')
+        for held in capture.held:held.close()
+        reports.append({'case':fault,'original_stdout':first['stdout'],'observed_stdout':second['stdout'],
+            'original_exception':first['exception'],'observed_exception':second['exception'],
+            'original_calls':[[op,[value.hex() if type(value) is bytes else value for value in args],kw] for op,args,kw in first['calls']],
+            'observed_calls':[[op,[value.hex() if type(value) is bytes else value for value in args],kw] for op,args,kw in second['calls']],'probe_record':raw.decode('utf8','backslashreplace'),
+            'bindings_restored':True,'no_extra_realpath_primitive':True})
+    return completed_evidence({'probe_capture_controls':reports,'scope':'exact original/observed probe, owned path input and explicit original primitive error seams; not Mac3.15 cause or full fixture proof'})
+
 def launch_capture_controls(area):
     import shlex,io
     assembler=heredoc('PY_GENUINE_ASSEMBLER');tree=ast.parse(assembler)
@@ -2648,7 +2745,7 @@ def launch_capture_controls(area):
         token_binding={key:value for key,value in capture.binding.items() if key!='copy_sha256'}
         assert capture.token==context['sha'](context['canonical'](token_binding))
         assert context['canonical']({'value':'é'})==b'{"value":"\xc3\xa9"}\n'
-        original=capture.original[0].decode();inverse=front
+        original=capture.original[0].decode();inverse=front.replace(capture.probe_replacement[1],capture.probe_replacement[0],1)
         launch='/usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C LANG=C YSTACK_SCOPE_JQ="$jq_bin" \\\n'
         for anchor,insertion in reversed(capture.front_insertions):
             inverse=inverse.replace(insertion+anchor,anchor,1) if anchor==launch else inverse.replace(anchor+insertion,anchor,1)
@@ -2678,9 +2775,10 @@ def launch_capture_controls(area):
         result=subprocess.run(['/bin/bash',str(base/'boundary.sh')],capture_output=True,timeout=10)
         completed_evidence({'launch_capture_actual_before_assert':{'case':fault,'returncode':result.returncode,'stdout_hex':result.stdout.hex(),'stderr_hex':result.stderr.hex()}})
         assert result.returncode==1 and result.stderr==b'E_RUNTIME\n' and not result.stdout
-        record=json.loads(capture.sink.read_bytes());assert record['binding']==capture.token
+        launch_rows=[json.loads(line) for line in capture.sink.read_bytes().splitlines()]
+        record=next(row for row in launch_rows if row['boundary']=='bash');assert record['binding']==capture.token
         assert record['launch']=={'command_v':expected_selected,'reader_python':expected_launch},record
-        assert len(capture.sink.read_bytes())<=4096
+        assert len(capture.sink.read_bytes())<=8192
         if fault in ('normal','creation-high','creation-low','creation-unicode'):assert (base/'reader.stdout').read_text().strip()==expected_launch and record['wait']=='0'
         output=io.BytesIO();context['sys']=types.SimpleNamespace(stderr=types.SimpleNamespace(buffer=output))
         capture.export_failure(result)
@@ -3492,6 +3590,7 @@ try:
     reports.extend(code_auth_controls(observer,wrapper,area))
     reports.append(genuine_relation_controls(area))
     reports.append(launch_capture_controls(area))
+    reports.append(probe_capture_controls(area))
     reports.append(original_context_controls(area))
     reports.append(wrapper_cancel_controls(wrapper,guard,area))
     reports.append(short_stage_controls(guard,channel,area,clock_name))
@@ -7519,6 +7618,67 @@ syswrite($f,$raw)==length($raw) or die;close($f) or die;'''
   copied=front
   for anchor,insertion in self.front_insertions:
    copied=copied.replace(anchor,anchor+insertion,1) if anchor!=launch else copied.replace(anchor,insertion+anchor,1)
+  self.probe_program=r'''import os,sys,json,stat
+relation_input=sys.executable
+relation_lstat,relation_readlink=os.lstat,os.readlink
+relation_first='GAP';relation_seen=False;relation_last=None
+def relation_value(value):
+    try:
+        if type(value) is not str:return 'GAP'
+        value.encode('utf-8','strict')
+        return value if len(json.dumps(value,ensure_ascii=True).encode())<=1024 else 'GAP'
+    except BaseException:return 'GAP'
+def relation_error(operation,path,error):
+    global relation_first,relation_seen
+    if relation_seen:return
+    relation_seen=True
+    try:
+        name=type.__dict__['__name__'].__get__(type(error))
+        number=OSError.__dict__['errno'].__get__(error,OSError)
+        metadata='GAP'
+        if type(path) is str and relation_last is not None and relation_last[0]==path:metadata=relation_last[1]
+        relation_first={'operation':operation,'exception':name if type(name) is str and name.isascii() and name.isidentifier() and len(name)<=80 else 'GAP',
+            'errno':number if type(number) is int or number is None else 'GAP','path':relation_value(path),'lstat':metadata}
+    except BaseException:relation_first='GAP'
+def relation_observed_lstat(*args,**kwargs):
+    global relation_last
+    try:result=relation_lstat(*args,**kwargs)
+    except OSError as error:
+        relation_error('lstat',args[0] if args else None,error);raise
+    try:
+        relation_last=None
+        if args and type(args[0]) is str and type(result) is os.stat_result:
+            fields=os.stat_result.__dict__
+            values=[fields[key].__get__(result,os.stat_result) for key in ('st_mode','st_uid','st_gid')]
+            if all(type(value) is int for value in values):relation_last=(args[0],dict(zip(('mode','uid','gid'),values)))
+    except BaseException:relation_last=None
+    return result
+def relation_observed_readlink(*args,**kwargs):
+    try:return relation_readlink(*args,**kwargs)
+    except OSError as error:
+        relation_error('readlink',args[0] if args else None,error);raise
+try:
+    try:
+        os.lstat,os.readlink=relation_observed_lstat,relation_observed_readlink
+        relation_result=os.path.realpath(relation_input)
+    finally:os.lstat,os.readlink=relation_lstat,relation_readlink
+finally:
+    try:
+        relation_raw=(json.dumps({'boundary':'probe','binding':TOKEN,'input':relation_value(relation_input),'first_error':relation_first},sort_keys=True,separators=(',',':'),ensure_ascii=True)+'\n').encode()
+        if len(relation_raw)<=2048:
+            relation_fd=os.open(SINK,os.O_WRONLY|os.O_APPEND|os.O_NOFOLLOW)
+            try:
+                relation_s=os.fstat(relation_fd);relation_n=os.lstat(SINK)
+                relation_id=lambda s:(s.st_dev,s.st_ino,stat.S_IFMT(s.st_mode),s.st_uid,s.st_gid,stat.S_IMODE(s.st_mode),s.st_nlink)
+                if relation_id(relation_s)==IDENTITY and relation_id(relation_n)==IDENTITY and relation_s.st_size+len(relation_raw)<=8192:
+                    if os.write(relation_fd,relation_raw)!=len(relation_raw):raise OSError('relation probe write')
+            finally:os.close(relation_fd)
+    except BaseException:pass
+print(relation_result)
+'''.replace('TOKEN',token).replace('SINK',sink).replace('IDENTITY',identity)
+  self.probe_replacement=("'import os,sys;print(os.path.realpath(sys.executable))'",shlex.quote(self.probe_program))
+  assert copied.count(self.probe_replacement[0])==1
+  copied=copied.replace(*self.probe_replacement,1)
   import difflib
   self.line_map={}
   for match in difflib.SequenceMatcher(a=front.splitlines(),b=copied.splitlines(),autojunk=False).get_matching_blocks():
@@ -7586,7 +7746,7 @@ syswrite($f,$raw)==length($raw) or die;close($f) or die;'''
   assert reader.count(boundary)==1
   self.reader_insertion=(boundary,record)
   self.copies=[copied.encode(),reader.replace(boundary,record+boundary,1).encode()]
-  reversed_front=copied
+  reversed_front=copied.replace(self.probe_replacement[1],self.probe_replacement[0],1)
   for anchor,insertion in reversed(self.front_insertions):
    reversed_front=reversed_front.replace(insertion+anchor,anchor,1) if anchor==launch else reversed_front.replace(anchor+insertion,anchor,1)
   assert reversed_front==front and self.copies[1].decode().replace(record+boundary,boundary,1)==reader
@@ -7632,10 +7792,11 @@ syswrite($f,$raw)==length($raw) or die;close($f) or die;'''
     assert len(raw)<=8192 and self.stable_sink(before)==self.stable_sink(after) and self.identity(os.lstat(self.sink))==self.sink_identity
    finally:os.close(fd)
    assert not raw or raw.endswith(b'\n')
-   rows=[json.loads(line) for line in raw.splitlines()];assert len(rows)<=2 and all(len(line)+1<=4096 for line in raw.splitlines())
+   rows=[json.loads(line) for line in raw.splitlines()];assert len(rows)<=3 and all(len(line)+1<=4096 for line in raw.splitlines())
    selected={}
    for row in rows:
-    assert row['binding']==self.token and row['boundary'] in {'bash','reader'} and row['boundary'] not in selected
+    assert row['binding']==self.token and row['boundary'] in {'bash','probe','reader'} and row['boundary'] not in selected
+    if row['boundary']=='probe':assert len(canonical(row))<=2048
     selected[row['boundary']]=row
    bash=selected.get('bash');writers_closed=bool(bash and result.returncode==1 and
     (bash['phase']=='before-reader' or (bash['wait'].isdigit() and int(bash['wait'])<127)))
@@ -7643,7 +7804,7 @@ syswrite($f,$raw)==length($raw) or die;close($f) or die;'''
    if 'bash' in selected:
     selected['bash']['original_line']=self.line_map.get(selected['bash']['line'],'GAP')
    payload={'status':'GENUINE_RELATION_UNEXPECTED','binding':self.binding,
-    'bash':selected.get('bash','GAP'),'reader':selected.get('reader','GAP'),
+    'bash':selected.get('bash','GAP'),'probe':selected.get('probe','GAP'),'reader':selected.get('reader','GAP'),
     'writer_completion':('reader not started' if bash['phase']=='before-reader' else 'original wait observed') if writers_closed else 'GAP','restoration':'PENDING'}
    encoded=(json.dumps(payload,sort_keys=True,separators=(',',':'),ensure_ascii=True)+'\n').encode()
    if len(encoded)<=12288:sys.stderr.buffer.write(encoded)
