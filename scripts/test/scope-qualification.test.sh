@@ -111,7 +111,7 @@ cleanup() {
   else
     /usr/bin/printf 'genuine-cleanup: NOT_STARTED\n'
   fi
-  if [ "$cleanup_status" -eq 0 ] && [ "$prior" -eq 142 ] && [ "$scope_fixture_signal" = ALRM ]; then
+  if [ "$prior" -eq 142 ] && [ "$scope_fixture_signal" = ALRM ]; then
     python3 -I -S -B - "$tmp/stale-observation/observer.py" <<'PY_FIXED_COST_EXPORT' || :
 import runpy,sys
 try:runpy.run_path(sys.argv[1])['cost_export']()
@@ -1376,7 +1376,7 @@ freeze([helper,program,package/'shadow/v1/_consumer.py'])
 module['observe'](program,str(log),'.github/workflows/ci.yml','reader',[str(program)],0)
 assert next(row for row in module['cost_rows']() if row['sample']=='protected-0-observer')['completed']
 module['cost_qualify']();assert (base/'eligible').read_bytes()==b'1'
-outer=source[source.index('  if [ "$cleanup_status" -eq 0 ] && [ "$prior" -eq 142 ]'):]
+outer=source[source.index('  if [ "$prior" -eq 142 ] && [ "$scope_fixture_signal" = ALRM ]; then'):]
 outer=outer[:outer.index('  if [ "$cleanup_status" -eq 0 ]; then')]
 outer=outer.replace('"$tmp/stale-observation/observer.py"',repr(str(helper)))
 script='scope_fixture_signal=ALRM\ncleanup_status=0\nprior=142\n'+outer
@@ -1388,7 +1388,7 @@ for eligible in [b'0',b'',b'x']:
     (base/'eligible').write_bytes(eligible)
     assert run(['/bin/bash',str(path)])[2]==b''
 (base/'eligible').write_bytes(b'1')
-for replacement in [('prior=142','prior=1'),('scope_fixture_signal=ALRM','scope_fixture_signal=TERM'),('cleanup_status=0','cleanup_status=1')]:
+for replacement in [('prior=142','prior=1'),('scope_fixture_signal=ALRM','scope_fixture_signal=TERM')]:
     path.write_text(script.replace(*replacement));assert run(['/bin/bash',str(path)])[2]==b''
 program.write_text('raise ValueError("owned unwind")\n')
 freeze([helper,program,package/'shadow/v1/_consumer.py'])
@@ -1410,13 +1410,65 @@ rc,out,err=run(['/usr/bin/perl','-e','alarm 1;exec @ARGV;die $!','/bin/bash',str
 assert rc in (-signal.SIGALRM,142) and b'fixture-cleanup: PASS prior-exit=142' in out
 assert len(err.splitlines())==3 and len(err)<=4096 and not outer_tmp.exists(),(rc,out,err)
 reports.append({'case':'real-ALRM-after-qualification','actual_exit':rc,'before_delete_records':3,'outer_removed_after_original_gates':True})
+# The independent owner completes and authenticates before its negative confirmation view.
+closed_rows=module['cost_rows']()
+assert len(closed_rows)==3 and all(row['completed'] for row in closed_rows)
+closed_bytes=(base/'data').read_bytes()
+owner_work=base/'refused-owner';owner_work.mkdir();owner_base=owner_work/'base';owner_base.mkdir()
+def actual_body(tag):
+    lines=source.splitlines(keepends=True)
+    starts=[i for i,line in enumerate(lines) if line.rstrip('\n').endswith("<<'"+tag+"'")]
+    stops=[i for i,line in enumerate(lines) if line.rstrip('\n')==tag]
+    assert len(starts)==len(stops)==1 and starts[0]<stops[0]
+    return ''.join(lines[starts[0]+1:stops[0]])
+owner_tree=ast.parse(actual_body('PY_GUARD_CONTROLS'))
+owner=next(ast.get_source_segment(actual_body('PY_GUARD_CONTROLS'),node) for node in owner_tree.body
+    if isinstance(node,ast.ClassDef) and node.name=='ScopeFixtureOwnerCancel')
+assert owner.count('assert os.getuid()==0')==1
+owner=owner.replace('assert os.getuid()==0','assert os.getuid()=='+str(os.getuid()))
+owner_driver=owner_work/'runtime-guard-controls.py'
+owner_driver.write_text('from pathlib import Path\nimport fcntl,hashlib,json,os,stat,sys\nbase=Path(sys.argv[1])\n'+owner+'\nowner=ScopeFixtureOwnerCancel()\nowner.finish()\n')
+channel=actual_body('PY_FIXTURE_OWNER_CHANNEL')
+channel=channel.replace('fixture.st_uid==0','fixture.st_uid=='+str(os.getuid())).replace('info.st_uid==0','info.st_uid=='+str(os.getuid()))
+owner_channel=owner_work/'channel.py';owner_channel.write_text(channel)
+dependencies.extend([owner_driver,owner_channel])
+owner_shell=source[source.index('scope_owner_state=never\n'):source.index("scope_fixture_signal=''\n")]
+assert owner_shell.count('/usr/bin/sudo -n "$genuine_python"')==1
+owner_shell=owner_shell.replace('/usr/bin/sudo -n "$genuine_python"','"$genuine_python"')
+variables={'tmp':owner_work,'genuine_base':owner_base,'guard_control':owner_driver,'genuine_python':sys.executable,
+    'guard_source':owner_work/'unused-guard','operator_name':'owned','entry_source':owner_work/'unused-entry',
+    'scope_owner_channel_helper':owner_channel}
+genuine=owner_work/'genuine.receipt';forbidden=base/'forbidden-genuine-or-restore'
+variables=''.join(key+'='+repr(str(value))+'\n' for key,value in variables.items())
+refused=source[source.index("scope_fixture_signal=''\n"):source.index('\nplatform=',source.index("scope_fixture_signal=''\n"))]
+refused=refused.replace('"$tmp/stale-observation/observer.py"',repr(str(helper)))
+command='set -euo pipefail\n'+owner_shell+variables
+command+='cleanup_genuine() { printf forbidden >'+repr(str(forbidden))+'; }\n'+refused
+command+='scope_owner_serial=1\nscope_fixture_owner_launch false\ntest "$scope_owner_state" = completed\n'
+command+='/bin/mv "$tmp/scope-owner-2.receipt" '+repr(str(genuine))+'\nscope_owner_state=active\nkill -s ALRM "$$"\n'
+path=base/'refused-owner.sh';path.write_text(command)
+rc,out,err=run(['/bin/bash',str(path)])
+(base/'refused-owner.stdout.raw').write_bytes(out)
+(base/'refused-owner.stderr.raw').write_bytes(err)
+assert rc in (-signal.SIGALRM,142) and b'fixture-cleanup: FAIL prior-exit=142' in err,(rc,out,err)
+assert b'FileNotFoundError' in err and b'scope-owner-2.receipt' in err and b'owner completion is unknown' in err
+exported=[json.loads(line) for line in err.splitlines() if line.startswith(b'{')]
+assert exported==closed_rows and (base/'data').read_bytes()==closed_bytes
+receipt=json.loads(genuine.read_bytes())
+assert receipt['quiescent'] and receipt['cases']==[] and receipt['cancelled'] is False
+assert owner_work.is_dir() and owner_base.is_dir() and not forbidden.exists()
+assert b'fixture-cleanup: PASS' not in out and b'genuine-cleanup:' not in out
+reports.append({'case':'closed-cost-refused-other-owner','actual_exit':rc,'cost_records':len(exported),
+    'genuine_owner_pid':receipt['driver_pid'],'genuine_owner_completed_before_negative_view':True,
+    'actual_missing_receipt_refusal':True,'tmp_retained':True,'genuine_cleanup_restore_calls':0,
+    'ordinary_transport_and_uid_adaptation_only':True})
 completed_rows=module['cost_rows']()
 module['cost_finish']('protected-0-observer',[1,None,3,4,5],False)
 path.write_text(script);assert run(['/bin/bash',str(path)])[2]==b''
 try:module['cost_put']({'sample':'terminal-normal','payload':'x'*1024})
 except ValueError:pass
 else:raise AssertionError('cost cap accepted')
-reports.append({'case':'eligibility-and-caps','wrong_eligibility':3,'wrong_cleanup_context':3,'incomplete_record_suppresses':True})
+reports.append({'case':'eligibility-and-caps','wrong_eligibility':3,'wrong_cleanup_context':2,'incomplete_record_suppresses':True})
 
 # Original parser, real wait/EOF and original first snapshot, with ordinary data only.
 a=front.index('commit=$(');b=front.index('terminal_status=0',a);admission=front[a:b]
