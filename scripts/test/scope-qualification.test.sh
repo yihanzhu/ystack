@@ -2634,6 +2634,7 @@ tools=location/'tools';tools.mkdir();target=location/'target';target.write_bytes
 relation_creation_target=str(target);link=tools/'python3';target_before=target.lstat();target_raw=target.read_bytes()
 mode_calls=[];launches=[];sentinel=OSError(5,'fixed owned '+fault+' failure')
 if fault=='existing':link.symlink_to('unchanged-old-target')
+fields=('st_dev','st_ino','st_mode','st_uid','st_gid','st_nlink','st_size','st_mtime_ns','st_ctime_ns')
 existing=link.lstat() if fault=='existing' else None
 native_platform=sys.platform
 platform='linux' if fault=='linux' else 'darwin' if fault in ('create','mode','existing') else native_platform
@@ -2661,7 +2662,9 @@ if fault in ('create','mode','existing'):
     frames=traceback.extract_tb(caught.__traceback__)
     if fault=='existing':
         assert type(caught) is FileExistsError and not mode_calls
-        assert os.readlink(link)=='unchanged-old-target' and link.lstat()==existing
+        assert os.readlink(link)=='unchanged-old-target'
+        after=link.lstat()
+        assert all(getattr(after,key)==getattr(existing,key) for key in fields)
         assert any(frame.filename=='actual-tools-link-creation' and frame.lineno==1 for frame in frames)
     else:
         assert caught is sentinel
@@ -2676,7 +2679,6 @@ else:
     if fault!='old' and platform=='darwin':assert stat.S_IMODE(value.st_mode)==0o744 and len(mode_calls)==1
     else:assert not mode_calls
     if fault=='old' and native_platform=='darwin':assert stat.S_IMODE(value.st_mode)==0o700 and stat.S_IMODE(value.st_mode)!=0o744
-fields=('st_dev','st_ino','st_mode','st_uid','st_gid','st_nlink','st_size','st_mtime_ns','st_ctime_ns')
 assert target.read_bytes()==target_raw and all(getattr(target.lstat(),key)==getattr(target_before,key) for key in fields) and os.umask(mask)==mask
 value=link.lstat() if link.is_symlink() else None
 print(json.dumps({'mask':mask,'case':fault,'native_platform':native_platform,'branch':platform,'mode_calls':mode_calls,
