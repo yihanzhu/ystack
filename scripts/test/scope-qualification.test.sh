@@ -106,6 +106,9 @@ cleanup() {
        [ -e "$tmp/observer-owner-controls.pending" ] || [ -L "$tmp/observer-owner-controls.pending" ]; then
     /usr/bin/printf 'fixture-cleanup: FAIL_PENDING; ordinary control completion is unknown\n' >&2
     cleanup_status=1
+  elif [ -n "${genuine_base:-}" ] && { [ -e "$genuine_base/genuine-relation.PENDING" ] || [ -L "$genuine_base/genuine-relation.PENDING" ]; }; then
+    /usr/bin/printf 'fixture-cleanup: FAIL_PENDING; genuine relation closure is unknown\n' >&2
+    cleanup_status=1
   elif declare -F cleanup_genuine >/dev/null; then
     cleanup_genuine || cleanup_status=1
   else
@@ -2327,6 +2330,113 @@ def authentication_proof(facts):
         'requests':facts['requests'],'new_actual_objects':len(facts['objects']),
         'rows':facts['rows'],'actual_insert_hit_events':facts['events']}
 
+def genuine_relation_controls(area):
+    assembler=heredoc('PY_GENUINE_ASSEMBLER');tree=ast.parse(assembler)
+    node=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='GenuineRelationCapture')
+    actual=ast.get_source_segment(assembler,node)+'\n'
+    spec=importlib.util.spec_from_file_location('genuine_relation_owned_consumer',root/'shadow/v1/_consumer.py')
+    module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
+    location=area/'genuine-relation-controls';location.mkdir();reports=[]
+    for fault in ('direct','reader','missing','wrong-sink','wrong-invocation','overflow','format','write','unknown','success','source-drift'):
+        base=location/fault;base.mkdir();package=base/'package';(package/'scope/v1').mkdir(parents=True)
+        for name in ('evaluate-scope.sh','read-shadow-evidence.py'):
+            path=package/'scope/v1'/name;path.write_bytes((root/'scope/v1'/name).read_bytes());path.chmod(0o755 if name.endswith('.sh') else 0o644)
+        context={'pathlib':__import__('pathlib'),'os':os,'stat':stat,'json':json,'sys':sys,'c':module,
+            'base':base,'package':package,'consumer_uid':os.getuid(),'consumer_gid':os.getgid(),
+            'sha':lambda raw:hashlib.sha256(raw).hexdigest(),'canonical':lambda value:(json.dumps(value,sort_keys=True,separators=(',',':'))+'\n').encode()}
+        exec(compile(actual,'exact-genuine-relation-capture','exec'),context)
+        argv=[str(package/'scope/v1/evaluate-scope.sh'),'evaluate',*['owned-'+str(i) for i in range(9)]]
+        for leaf in ('boundary.sh','reader-mapping.py','closed-writer.py','reader.stderr','reader-stderr'):(base/leaf).write_bytes(b'')
+        os.mkfifo(base/'ready-fifo',0o600)
+        capture=context['GenuineRelationCapture'](argv);front=capture.copies[0].decode();reader=capture.copies[1].decode()
+        snapshot=Path(sys.argv[1]).parent
+        (snapshot/(fault+'.front.preexec.sh')).write_text(front);(snapshot/(fault+'.reader.preexec.py')).write_text(reader)
+        print(json.dumps({'genuine_relation_preexec':fault,'front_sha256':hashlib.sha256(front.encode()).hexdigest(),
+            'reader_sha256':hashlib.sha256(reader.encode()).hexdigest(),'original_sha256':capture.binding['original_sha256']}),flush=True)
+        if fault=='source-drift':
+            with capture.paths[0].open('ab') as stream:stream.write(b'\n')
+            try:capture.before_call()
+            except module.Refusal as error:assert error.code=='E_STALE'
+            else:raise AssertionError('changed actual source accepted')
+            reports.append({'case':fault,'actual_copy_recheck':'E_STALE','spawned':False})
+            for item in capture.held:item.close()
+            continue
+        prelude=front[:front.index('sha256_path() {')]
+        def caller(prefix,needle):
+            target=next(i for i,line in enumerate(front.splitlines(),1) if needle in line)
+            text=prefix+'\n';assert len(text.splitlines())<target
+            return text+'\n'*(target-len(text.splitlines())-1)+front.splitlines()[target-1]+'\n'
+        command=caller(prelude+'\nsource_dir=/owned-bad\nrepo=/owned','[ "$source_dir" = "$repo/scope/v1" ] || emit_error E_RUNTIME')
+        expected_error=b'E_RUNTIME\n'
+        if fault in ('reader','write'):
+            tail=reader[reader.index('if __name__ == "__main__":'):]
+            program='import os,sys,json,stat,importlib.util\n'
+            program+='s=importlib.util.spec_from_file_location("owned_reader_consumer",'+repr(str(root/'shadow/v1/_consumer.py'))+');c=importlib.util.module_from_spec(s);sys.modules[s.name]=c;s.loader.exec_module(c)\n'
+            program+='def main(args):c._require(False,"E_INSTALL")\n'
+            if fault=='write':program+='def refused_write(*args):raise OSError("fixed relation write failure")\nos.write=refused_write\n'
+            program+=tail;child=base/'reader-mapping.py';child.write_text(program)
+            print(json.dumps({'genuine_reader_mapping_preexec':fault,'bytes':program,'sha256':hashlib.sha256(program.encode()).hexdigest()}),flush=True)
+            command=caller(prelude+'\nrelation_phase=reader-attempted\n'+__import__('shlex').quote(sys.executable)+' -I -S -B '+__import__('shlex').quote(str(child))+' 2>'+__import__('shlex').quote(str(base/'reader.stderr'))+' &\nreader_pid=$!\nwait "$reader_pid" || :\nreader_error=E_RELATION','emit_error "$reader_error"')
+            expected_error=b'E_RELATION\n'
+        if fault=='success':
+            original=(root/'scope/v1/evaluate-scope.sh').read_text();start=original.index('commit=$(/usr/bin/perl');end=original.index('\nterminal_status=0',start)
+            admission=original[start:end];producer=base/'closed-writer.py';fifo=base/'ready-fifo'
+            producer.write_text('import sys\nwith open(sys.argv[1],"wb",buffering=0) as stream:stream.write(b"COMMIT 1 "+b"0"*64+b"\\n")\n')
+            command='set -uo pipefail\nscratch='+__import__('shlex').quote(str(base))+'\n: >"$scratch/reader-stderr"\n'+__import__('shlex').quote(sys.executable)+' -I -S -B '+__import__('shlex').quote(str(producer))+' '+__import__('shlex').quote(str(fifo))+' &\nreader_pid=$!\nexec 8<'+__import__('shlex').quote(str(fifo))+'\nremaining_time(){ printf 5; }\nemit_error(){ exit 1; }\n'+admission+'\nprintf "owned-admission-complete\\n"\n'
+        driver=base/'boundary.sh';driver.write_text(command)
+        print(json.dumps({'genuine_boundary_preexec':fault,'bytes':command,'sha256':hashlib.sha256(command.encode()).hexdigest()}),flush=True)
+        capture.before_call();result=subprocess.run(['/bin/bash',str(driver)],capture_output=True,timeout=10)
+        if fault=='success':assert result.returncode==0 and result.stdout and not result.stderr
+        else:assert result.returncode==1 and result.stderr==expected_error and not result.stdout
+        if fault=='unknown':result=subprocess.CompletedProcess(result.args,-signal.SIGTERM,result.stdout,result.stderr)
+        if fault=='format':
+            def format_failure(value,*args,**kwargs):
+                if type(value) is dict and value.get('status')=='GENUINE_RELATION_UNEXPECTED':raise ValueError('fixed relation format failure')
+                return json.dumps(value,*args,**kwargs)
+            context['json']=types.SimpleNamespace(dumps=format_failure,loads=json.loads)
+        run_node=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='run')
+        run_source=ast.get_source_segment(assembler,run_node)+'\n'
+        context.update(relation_capture=capture,env={},commands=[])
+        def transport(arguments,**options):
+            assert arguments==argv and options['timeout']==180
+            if fault=='missing':capture.sink.unlink()
+            elif fault=='wrong-sink':capture.sink.chmod(0o444)
+            elif fault=='wrong-invocation':capture.sink.write_bytes(capture.sink.read_bytes().replace(capture.token.encode(),b'0'*64))
+            elif fault=='overflow':capture.sink.write_bytes(b'x'*8193)
+            return result
+        context['subprocess']=types.SimpleNamespace(run=transport,PIPE=subprocess.PIPE)
+        exec(compile(run_source,'exact-genuine-original-run','exec'),context)
+        output=__import__('io').BytesIO();saved=sys.stderr;refusal_line=None
+        try:
+            sys.stderr=types.SimpleNamespace(buffer=output)
+            try:context['run'](argv)
+            except AssertionError as error:
+                frames=traceback.extract_tb(error.__traceback__)
+                refusal_line=frames[-1].lineno
+                assert fault!='success' and frames[-1].filename=='exact-genuine-original-run'
+                expected_line=next(n.lineno for n in ast.walk(ast.parse(run_source)) if isinstance(n,ast.Assert))
+                assert refusal_line==expected_line
+            else:assert fault=='success'
+        finally:sys.stderr=saved
+        raw=output.getvalue();assert len(raw)<=12288 and len(raw)+4096<=16384
+        if fault=='success':
+            assert not raw and capture.restored and not capture.pending.exists()
+            assert [path.read_bytes() for path in capture.paths]==capture.original
+        else:
+            assert not capture.restored and capture.pending.is_file()
+            if fault in ('direct','reader','write','unknown'):
+                payload=json.loads(raw);assert payload['status']=='GENUINE_RELATION_UNEXPECTED'
+                if fault=='direct':assert payload['bash']['phase']=='before-reader' and payload['reader']=='GAP' and type(payload['bash']['original_line']) is int
+                if fault=='reader':assert payload['reader']['exception']=='Refusal' and payload['reader']['code']=='E_INSTALL'
+                if fault=='write':assert payload['reader']=='GAP'
+                if fault=='unknown':assert payload['bash']==payload['reader']=='GAP'
+            else:assert not raw
+            for item in capture.held:item.close()
+        reports.append({'case':fault,'actual_returncode':result.returncode,'stdout_hex':result.stdout.hex(),
+            'stderr_utf8':result.stderr.decode(),'capture_utf8':raw.decode(),'restore':capture.restored,
+            'pending':capture.pending.exists(),'normal_admission':'actual original wait/EOF segment' if fault=='success' else None})
+    return completed_evidence({'genuine_relation_controls':reports,'scope':'actual insertions and original admission/exception boundaries with fixed ordinary UID and standalone entry adapters; no full evaluator/P/jq/root proof'})
+
 def code_auth_controls(observer,wrapper,area):
     import textwrap
     records=[]
@@ -2535,6 +2645,7 @@ try:
     area=Path(temporary).resolve();package=area/'package';(package/'shadow/v1').mkdir(parents=True);(package/'scope/v1').mkdir(parents=True)
     (package/'shadow/v1/_consumer.py').write_bytes(consumer)
     reports.extend(code_auth_controls(observer,wrapper,area))
+    reports.append(genuine_relation_controls(area))
     helper=area/'outside.py';helper.write_text('allowed=True\ndef rule(fd,value,ancestor):\n return allowed\n')
     reader=package/'scope/v1/reader.py'
     reader.write_text('''import importlib.util,os,sys
@@ -6473,14 +6584,140 @@ work=base/'work';tools=base/'tools';jq=tools/'jq';shutil.copyfile(jq_source,jq);
 assert sha(jq.read_bytes())==c.JQ_SHA256[sys.platform]
 (tools/'python3').symlink_to(sys.executable)
 env={'PATH':str(tools)+':/usr/bin:/bin','LC_ALL':'C','LANG':'C','HOME':str(work),'TMPDIR':str(work),'GIT_CONFIG_NOSYSTEM':'1','GIT_CONFIG_GLOBAL':'/dev/null','GIT_NO_REPLACE_OBJECTS':'1','GIT_NO_LAZY_FETCH':'1','GIT_TERMINAL_PROMPT':'0','GIT_OPTIONAL_LOCKS':'0','GIT_AUTHOR_NAME':'fixture','GIT_AUTHOR_EMAIL':'fixture@example.invalid','GIT_COMMITTER_NAME':'fixture','GIT_COMMITTER_EMAIL':'fixture@example.invalid','GIT_AUTHOR_DATE':'2000-01-01T00:00:00Z','GIT_COMMITTER_DATE':'2000-01-01T00:00:00Z'}
+class GenuineRelationCapture:
+ def __init__(self,argv):
+  self.paths=[package/'scope/v1/evaluate-scope.sh',package/'scope/v1/read-shadow-evidence.py']
+  self.pending=base/'genuine-relation.PENDING'
+  fd=os.open(self.pending,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o400);os.close(fd)
+  self.sink=base/'genuine-relation.jsonl'
+  fd=os.open(self.sink,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+  try:os.fchown(fd,consumer_uid,consumer_gid);os.fchmod(fd,0o600);self.sink_identity=self.identity(os.fstat(fd))
+  finally:os.close(fd)
+  self.original=[];self.modes=[]
+  for path in self.paths:
+   held=c._hold_bytes(str(path),c.EXECUTABLE_LIMIT)
+   try:self.original.append(held.raw);self.modes.append(stat.S_IMODE(held.held.before.st_mode));held.recheck('E_STALE')
+   finally:held.close()
+  assert len(argv)>=10 and str(argv[-10])=='evaluate'
+  self.binding={'invocation':str(self.sink),'argv_sha256':sha(canonical(list(map(str,argv[-9:])))),
+   'command_sha256':sha(canonical(list(map(str,argv)))),
+   'original_sha256':[sha(raw) for raw in self.original]}
+  self.token=sha(canonical(self.binding))
+  sink=repr(str(self.sink));identity=repr(self.sink_identity);token=repr(self.token)
+  writer='''my($p,$d,$i,$u,$g,$raw)=@ARGV;
+use Fcntl qw(O_WRONLY O_APPEND O_NOFOLLOW S_ISREG);
+sysopen(my $f,$p,O_WRONLY|O_APPEND|O_NOFOLLOW) or die;
+my @s=stat($f);my @n=lstat($p);
+die unless S_ISREG($s[2]) && $s[0]==$d && $s[1]==$i && $s[3]==1 && $s[4]==$u && $s[5]==$g && ($s[2]&07777)==0600 && $s[7]<=8192;
+die unless $n[0]==$s[0] && $n[1]==$s[1] && length($raw)<=4096 && $s[7]+length($raw)<=8192;
+syswrite($f,$raw)==length($raw) or die;close($f) or die;'''
+  import shlex
+  prefix="relation_phase=before-reader\nrelation_wait=GAP\nwait() { builtin wait \"$@\"; relation_wait=$?; return \"$relation_wait\"; }\n"
+  capture="""  local relation_line=${BASH_LINENO[0]:-0} relation_function=${FUNCNAME[1]:-main} relation_record
+  case "$relation_line:$relation_function:$relation_wait" in *[!A-Za-z0-9_:]*) relation_function=GAP; relation_line=0; relation_wait=GAP;; esac
+  relation_record=$(/usr/bin/printf '{"boundary":"bash","binding":"TOKEN","line":%s,"function":"%s","phase":"%s","wait":"%s"}\\n' "$relation_line" "$relation_function" "$relation_phase" "$relation_wait")
+  /usr/bin/perl -e WRITER -- SINK DEV INO UID GID "$relation_record"$'\\n' >/dev/null 2>&1 || :
+""".replace('TOKEN',self.token).replace('WRITER',shlex.quote(writer)).replace('SINK',shlex.quote(str(self.sink)))
+  for key,value in [('DEV',self.sink_identity[0]),('INO',self.sink_identity[1]),('UID',consumer_uid),('GID',consumer_gid)]:capture=capture.replace(key,str(value))
+  launch='/usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C LANG=C YSTACK_SCOPE_JQ="$jq_bin" \\\n'
+  front=self.original[0].decode();assert front.count('umask 077\n')==front.count('emit_error() {\n')==front.count(launch)==1
+  self.front_insertions=[('umask 077\n',prefix),('emit_error() {\n',capture),(launch,'relation_phase=reader-attempted\n')]
+  copied=front.replace('umask 077\n','umask 077\n'+prefix,1).replace('emit_error() {\n','emit_error() {\n'+capture,1).replace(launch,'relation_phase=reader-attempted\n'+launch,1)
+  import difflib
+  self.line_map={}
+  for match in difflib.SequenceMatcher(a=front.splitlines(),b=copied.splitlines(),autojunk=False).get_matching_blocks():
+   for offset in range(match.size):self.line_map[match.b+offset+1]=match.a+offset+1
+  record='''        try:
+            relation_rows=[];relation_tb=error.__traceback__
+            while relation_tb is not None and len(relation_rows)<16:
+                relation_rows.append([relation_tb.tb_frame.f_code.co_name[:80],relation_tb.tb_lineno]);relation_tb=relation_tb.tb_next
+            relation_raw=(json.dumps({'boundary':'reader','binding':TOKEN,'exception':type(error).__name__[:80],
+                'code':code[:128],'trace':relation_rows},sort_keys=True,separators=(',',':'),ensure_ascii=True)+'\\n').encode()
+            relation_fd=os.open(SINK,os.O_WRONLY|os.O_APPEND|os.O_NOFOLLOW)
+            try:
+                relation_s=os.fstat(relation_fd);relation_n=os.lstat(SINK)
+                relation_id=lambda s:(s.st_dev,s.st_ino,stat.S_IFMT(s.st_mode),s.st_uid,s.st_gid,stat.S_IMODE(s.st_mode),s.st_nlink)
+                if relation_id(relation_s)==IDENTITY and relation_id(relation_n)==IDENTITY and len(relation_raw)<=4096 and relation_s.st_size+len(relation_raw)<=8192:
+                    if os.write(relation_fd,relation_raw)!=len(relation_raw):raise OSError('relation capture write')
+            finally:os.close(relation_fd)
+        except BaseException:pass
+'''.replace('TOKEN',token).replace('SINK',sink).replace('IDENTITY',identity)
+  reader=self.original[1].decode();boundary='        if code not in {"E_USAGE", "E_LIMIT", "E_PARSE", "E_CANONICAL", "E_RELATION", "E_STALE", "E_RUNTIME"}:\n'
+  assert reader.count(boundary)==1
+  self.reader_insertion=(boundary,record)
+  self.copies=[copied.encode(),reader.replace(boundary,record+boundary,1).encode()]
+  reversed_front=copied.replace('umask 077\n'+prefix,'umask 077\n',1).replace('emit_error() {\n'+capture,'emit_error() {\n',1).replace('relation_phase=reader-attempted\n'+launch,launch,1)
+  assert reversed_front==front and self.copies[1].decode().replace(record+boundary,boundary,1)==reader
+  self.binding['copy_sha256']=[sha(raw) for raw in self.copies]
+  self.held=[]
+  for path,raw in zip(self.paths,self.copies):
+   self.replace(path,raw)
+   item=c._hold_bytes(str(path),c.EXECUTABLE_LIMIT);assert item.raw==raw;item.recheck('E_STALE');self.held.append(item)
+  self.restored=False
+ def before_call(self):
+  for item,raw in zip(self.held,self.copies):item.recheck('E_STALE');assert item.raw==raw
+ @staticmethod
+ def identity(value):
+  return (value.st_dev,value.st_ino,stat.S_IFMT(value.st_mode),value.st_uid,value.st_gid,stat.S_IMODE(value.st_mode),value.st_nlink)
+ @staticmethod
+ def replace(path,raw):
+  fd=os.open(path,os.O_WRONLY|os.O_NOFOLLOW)
+  try:
+   state=os.fstat(fd);named=os.lstat(path)
+   assert stat.S_ISREG(state.st_mode) and state.st_nlink==1 and (state.st_dev,state.st_ino)==(named.st_dev,named.st_ino)
+   os.ftruncate(fd,0);sent=0
+   while sent<len(raw):
+    count=os.write(fd,raw[sent:]);assert count>0;sent+=count
+   os.fsync(fd)
+  finally:os.close(fd)
+ def export_failure(self,result):
+  try:
+   fd=os.open(self.sink,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+   try:
+    before=os.fstat(fd);assert self.identity(before)==self.sink_identity and before.st_size<=8192
+    raw=os.read(fd,8193);after=os.fstat(fd)
+    assert len(raw)<=8192 and before==after and before.st_mtime_ns==after.st_mtime_ns and before.st_ctime_ns==after.st_ctime_ns and self.identity(os.lstat(self.sink))==self.sink_identity
+   finally:os.close(fd)
+   assert not raw or raw.endswith(b'\n')
+   rows=[json.loads(line) for line in raw.splitlines()];assert len(rows)<=2 and all(len(line)+1<=4096 for line in raw.splitlines())
+   selected={}
+   for row in rows:
+    assert row['binding']==self.token and row['boundary'] in {'bash','reader'} and row['boundary'] not in selected
+    selected[row['boundary']]=row
+   bash=selected.get('bash');writers_closed=bool(bash and result.returncode==1 and
+    (bash['phase']=='before-reader' or (bash['wait'].isdigit() and int(bash['wait'])<127)))
+   if not writers_closed:selected={}
+   if 'bash' in selected:
+    selected['bash']['original_line']=self.line_map.get(selected['bash']['line'],'GAP')
+   payload={'status':'GENUINE_RELATION_UNEXPECTED','binding':self.binding,
+    'bash':selected.get('bash','GAP'),'reader':selected.get('reader','GAP'),
+    'writer_completion':'original wait observed' if writers_closed else 'GAP','restoration':'PENDING'}
+   encoded=(json.dumps(payload,sort_keys=True,separators=(',',':'),ensure_ascii=True)+'\n').encode()
+   if len(encoded)<=12288:sys.stderr.buffer.write(encoded)
+  except BaseException:pass
+ def finish(self,result):
+  if result.returncode!=0 or not result.stdout or result.stderr:
+   self.export_failure(result);return
+  # Exact original normal admission includes COMMIT, successful wait, empty stderr and EOF.
+  for item,raw in zip(self.held,self.copies):item.recheck('E_STALE');assert item.raw==raw
+  for item in self.held:item.close()
+  for path,original,mode in zip(self.paths,self.original,self.modes):
+   self.replace(path,original);restored=c._hold_bytes(str(path),c.EXECUTABLE_LIMIT)
+   try:assert restored.raw==original and stat.S_IMODE(restored.held.before.st_mode)==mode;restored.recheck('E_STALE')
+   finally:restored.close()
+  self.pending.unlink();self.restored=True
+
 commands=[]
+relation_capture=None
 def run(argv,raw=None,role=None,component=None,limit=16*1024*1024):
  argv=list(map(str,argv))
+ if relation_capture is not None:relation_capture.before_call()
  r=subprocess.run(argv,input=raw,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env,timeout=180)
  print(json.dumps({'fixture_command':argv,'returncode':r.returncode,'stdout_sha256':sha(r.stdout),
   'stderr':r.stderr.decode('utf8','backslashreplace')},sort_keys=True),flush=True)
  if str(package/'scope/v1/evaluate-scope.sh') in argv:
   print(json.dumps({'actual_scope_stdout_utf8':r.stdout.decode('utf8','backslashreplace')},sort_keys=True),flush=True)
+ if relation_capture is not None:relation_capture.finish(r)
  assert r.returncode==0 and len(r.stdout)<=limit and not r.stderr
  if role:commands.append({'role':role,'argv_sha256':sha(canonical(argv)),'executable_sha256':sha(pathlib.Path(argv[0]).resolve().read_bytes()),'component_sha256':sha(pathlib.Path(component).read_bytes())})
  return r.stdout
@@ -6819,7 +7056,10 @@ scope_argv = ['/usr/bin/sudo', '-n', '-u', consumer, '--', '/usr/bin/env', '-i',
     'evaluate', *[doc_root / (name + '.json') for name in
                  ('scope', 'shadow-set', 'dashboard', 'risk', 'kill', 'duty', 'marker')],
     base / 'bundles', source]
+relation_capture=GenuineRelationCapture(scope_argv)
 scope_raw = run(scope_argv)
+assert relation_capture.restored
+relation_capture=None
 put(base / 'genuine-scope-evaluation.json', scope_raw)
 evaluation = json.loads(scope_raw)
 facts = evaluation['body']['evidence']['shadow_bundle_facts']
