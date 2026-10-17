@@ -1021,6 +1021,7 @@ def run_writer_tests():
     scope_source = (root / "scripts/test/scope-qualification.test.sh").read_text()
     scope_boundary = 'run_validator "$tmp/scope.json" || fail'
     ok(scope_source.count(scope_boundary) == 1, "existing scope fixture has one fixed evaluator boundary")
+    scope_suffix = scope_source[scope_source.index(scope_boundary):]
     scope_prelude = scope_source[:scope_source.index(scope_boundary)]
     scope_root = 'root=$(CDPATH=\'\' cd -P -- "${BASH_SOURCE[0]%/*}/../.." && pwd -P)'
     ok(scope_prelude.count(scope_root) == 1, "scope fixture keeps fixed physical repository root")
@@ -1037,7 +1038,7 @@ run_evaluator "$tmp/write-scope.json" "$tmp/write-set.json" "$tmp/dashboard.json
 "$jq_bin" -e '.body.outcome=="not-proposable" and (.body.reason_ids | index("scope.sandbox-receipt-missing") != null) and .body.authority_effect=="none" and (.body.evidence.shadow_bundle_facts | all(.eligible==false and .authentication.state=="missing"))' "$tmp/write-evaluation.json" >/dev/null || fail 'unrelated write form supplied authentic evidence'
 cat "$tmp/legacy-evaluation.json" "$tmp/write-evaluation.json"
 '''
-    write(scope_script, (scope_prelude + scope_tail).encode(), 0o500)
+    write(scope_script, (scope_prelude + scope_tail + '\nexit "$?"\n' + scope_suffix).encode(), 0o500)
     scope_check = subprocess.run(["/bin/bash", str(scope_script), str(supplied_record)],
         env={"PATH": "/usr/bin:/bin", "LC_ALL": "C", "TMPDIR": str(base.parent.parent), "YSTACK_SCOPE_TEST_BOUNDED": "1"},
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300)
