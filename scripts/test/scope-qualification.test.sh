@@ -2073,7 +2073,8 @@ assert hashlib.sha256(old.encode()).hexdigest()=='0c2b1c8c8cb9c662c55e17e134f408
 root=Path(sys.argv[2]).resolve()
 consumer=(root/'shadow/v1/_consumer.py').read_bytes()
 assert hashlib.sha256(consumer).hexdigest()=='34d314505860f7569f53f41491c29979ab30aa08f83cfc151444f8cb6a235f68'
-old_wrapper=wrapper.replace('import dis, json, os, signal, sys, time, types','import json, os, signal, sys, time',1)
+old_wrapper=wrapper.replace("try:\n    for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):\n        signal.signal(number, cancel)\n    signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})\n    sys.settrace(dispatch)\n    exec(compiled_code, {'__name__': '__main__'})\n","for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):\n    signal.signal(number, cancel)\nsignal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})\nsys.settrace(dispatch)\ntry:\n    exec(compiled_code, {'__name__': '__main__'})\n",1)
+old_wrapper=old_wrapper.replace('import dis, json, os, signal, sys, time, types','import json, os, signal, sys, time',1)
 old_wrapper=old_wrapper.replace('    bound_cache.clear()\n','')
 a=old_wrapper.index('code_path=Path(sys.argv.pop(1))\n');b=old_wrapper.index('foreground = {}',a)
 old_wrapper=old_wrapper[:a]+"code = Path(sys.argv.pop(1)).read_bytes()\n"+old_wrapper[b:]
@@ -2613,6 +2614,91 @@ def counted_wrapper_cases(wrapper,old_wrapper,mac_code,consumer,clock_name):
         frozen.append((version,counted.encode(),subject.encode()))
     return frozen
 
+def wrapper_cancel_controls(wrapper,guard,area):
+    location=area/'wrapper-cancel';location.mkdir();package=location/'package';(package/'shadow/v1').mkdir(parents=True)
+    (package/'shadow/v1/_consumer.py').write_bytes(consumer)
+    actual=location/'wrapper.py';actual.write_text(wrapper)
+    subject=location/'subject.py';subject.write_text("import os,signal,sys,time\nname=sys.argv[2];before=tuple(os.lstat(name));deadline=time.monotonic()+120\ndef uptime():return time.monotonic()\ndef identity(value):return tuple(value)\nassert uptime() < deadline and identity(os.lstat(name)) == before\nprint('SUBJECT_ENTERED',flush=True)\nos.kill(os.getpid(),signal.SIGTERM)\n")
+    target=location/'target';target.write_bytes(b'owned data')
+    bootstrap=location/'bootstrap.py'
+    raw="""from pathlib import Path
+import json,os,signal,sys,traceback
+case=sys.argv.pop(1);path=Path(sys.argv.pop(1));source=path.read_bytes()
+mask=signal.pthread_sigmask(signal.SIG_BLOCK,set())
+assert {signal.SIGINT,signal.SIGTERM,signal.SIGHUP}<=mask
+print(json.dumps({'inherited_blocked':[int(value) for value in mask],'case':case}),flush=True)
+if case in ('pending','repeat'):
+    os.kill(os.getpid(),signal.SIGTERM)
+    assert signal.SIGTERM in signal.sigpending()
+    print('ACTUAL_PENDING_TERM',flush=True)
+original_signal=signal.signal;original_trace=sys.settrace
+if case=='handler-failure':
+    def registration(number,handler):
+        if number==signal.SIGTERM:raise OSError('fixed handler setup failure')
+        return original_signal(number,handler)
+    signal.signal=registration
+if case in ('trace-failure','before-exec','repeat'):
+    def install(handler):
+        if handler is not None and case=='trace-failure':raise OSError('fixed tracing setup failure')
+        if (handler is not None and case=='before-exec') or (handler is None and case=='repeat'):
+            print('ACTUAL_SECOND_TERM' if case=='repeat' else 'ACTUAL_BEFORE_EXEC_TERM',flush=True)
+            os.kill(os.getpid(),signal.SIGTERM)
+        return original_trace(handler)
+    sys.settrace=install
+try:exec(compile(source,str(path),'exec'),{'__name__':'__main__'})
+except BaseException as error:
+    events=[];current=error
+    while current is not None:
+        events.append({'type':type(current).__name__,'message':str(current),'frames':[(item.name,item.lineno) for item in traceback.extract_tb(current.__traceback__)]})
+        current=current.__context__
+    print('ACTUAL_WRAPPER_ERROR '+json.dumps(events),flush=True)
+    raise
+"""
+    bootstrap.write_text(raw)
+    print(json.dumps({'wrapper_cancel_preexec':{'wrapper':wrapper,'wrapper_sha256':hashlib.sha256(wrapper.encode()).hexdigest(),'subject':subject.read_text(),'bootstrap':raw,'bootstrap_sha256':hashlib.sha256(raw.encode()).hexdigest()}}),flush=True)
+    parsed=ast.parse(guard);wanted={'unique_object','confirmation','completed_case'}
+    namespace={'json':json};nodes=[node for node in parsed.body if isinstance(node,ast.FunctionDef) and node.name in wanted]
+    assert len(nodes)==3;exec(compile(ast.Module(body=nodes,type_ignores=[]),'actual-completion-functions','exec'),namespace)
+    reports=[]
+    for case in ('pending','handler-failure','trace-failure','before-exec','after-exec','repeat'):
+        mask={signal.SIGINT,signal.SIGTERM,signal.SIGHUP};previous=signal.pthread_sigmask(signal.SIG_BLOCK,mask)
+        try:child=subprocess.Popen([sys.executable,'-I','-S','-B',str(bootstrap),case,str(actual),str(subject),str(package),str(target)],stdout=subprocess.PIPE,stderr=subprocess.PIPE,umask=0o077)
+        finally:signal.pthread_sigmask(signal.SIG_SETMASK,previous)
+        deadline=time.monotonic()+5;complete=False
+        try:
+            stdout,stderr=child.communicate(timeout=3);returncode=child.wait(timeout=max(0.01,deadline-time.monotonic()));complete=True
+        finally:
+            try:
+                if not complete:
+                    if child.poll() is None:child.kill()
+                    child.wait(timeout=max(0.01,deadline-time.monotonic()))
+            finally:
+                try:child.stdout.close()
+                finally:child.stderr.close()
+        completed_evidence({'wrapper_cancel_actual_before_assert':{'case':case,'pid':child.pid,'returncode':child.returncode,'wait_reaped':complete,'stdout_closed':child.stdout.closed,'stderr_closed':child.stderr.closed,'stdout':stdout.decode(),'stderr':stderr.decode()}})
+        assert complete and child.returncode==returncode and returncode!=0 and child.stdout.closed and child.stderr.closed
+        errors=json.loads(next(line[len(b'ACTUAL_WRAPPER_ERROR '):] for line in stdout.splitlines() if line.startswith(b'ACTUAL_WRAPPER_ERROR ')))
+        entered=b'SUBJECT_ENTERED\n' in stdout;assert entered==(case=='after-exec')
+        rows=[line for line in stderr.splitlines() if line.startswith(b'GUARD_OWNED_CLEANUP ')]
+        if case=='repeat':
+            assert not rows and len(errors)==2 and all(item['type']=='InterruptedError' and item['frames'][-1][0]=='cancel' for item in errors)
+            try:namespace['confirmation'](stderr)
+            except AssertionError as error:assert str(error)=='missing or duplicate cleanup confirmation'
+            else:raise AssertionError('repeat cancellation accepted unknown cleanup')
+        else:
+            assert len(rows)==1;value=namespace['confirmation'](stderr)
+            assert value=={'active_calls':0,'complete':True,'foreground_calls':[]}
+            if case in ('handler-failure','trace-failure'):assert errors[0]['type']=='OSError' and errors[0]['message']=='fixed '+('handler' if case=='handler-failure' else 'tracing')+' setup failure'
+            else:assert errors[0]['type']=='InterruptedError' and errors[0]['message']=='private guard cancelled' and errors[0]['frames'][-1][0]=='cancel'
+            if case=='pending':
+                unblock=next(i for i,line in enumerate(wrapper.splitlines(),1) if 'signal.pthread_sigmask(signal.SIG_UNBLOCK' in line)
+                assert ['<module>',unblock] in errors[0]['frames']
+            try:namespace['completed_case'](returncode,stderr,True)
+            except AssertionError as error:assert str(error)=='cancelled completion window'
+            else:raise AssertionError('cancelled command authorized completion')
+        reports.append({'case':case,'pid':child.pid,'returncode':returncode,'wait_reaped':child.returncode is not None,'stdout_closed':child.stdout.closed,'stderr_closed':child.stderr.closed,'subject_entered':entered,'cleanup_rows':len(rows),'actual_errors':errors,'stdout':stdout.decode(),'stderr':stderr.decode(),'completion_authorized':False})
+    return completed_evidence({'wrapper_cancel_controls':reports,'scope':'ordinary actual pending/self signals; setup failures are fixed pre-operation seams; no root serial1 or readiness proof'})
+
 def code_auth_controls(observer,wrapper,area):
     import textwrap
     records=[]
@@ -2823,6 +2909,7 @@ try:
     (package/'shadow/v1/_consumer.py').write_bytes(consumer)
     reports.extend(code_auth_controls(observer,wrapper,area))
     reports.append(genuine_relation_controls(area))
+    reports.append(wrapper_cancel_controls(wrapper,guard,area))
     helper=area/'outside.py';helper.write_text('allowed=True\ndef rule(fd,value,ancestor):\n return allowed\n')
     reader=package/'scope/v1/reader.py'
     reader.write_text('''import importlib.util,os,sys
@@ -5657,11 +5744,11 @@ def dispatch(frame, event, arg):
 def cancel(_number, _frame):
     raise InterruptedError('private guard cancelled')
 
-for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
-    signal.signal(number, cancel)
-signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
-sys.settrace(dispatch)
 try:
+    for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        signal.signal(number, cancel)
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
+    sys.settrace(dispatch)
     exec(compiled_code, {'__name__': '__main__'})
 finally:
     sys.settrace(None)
