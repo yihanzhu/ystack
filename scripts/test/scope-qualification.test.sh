@@ -2499,6 +2499,12 @@ def original_context_controls(area):
         reports.append({'case':case,'status':status,'public_stderr':output.getvalue(),'sink_utf8':raw.decode(),'diagnostic_calls':calls,'custom_callbacks':list(hooks),'early_open_stimulus':'actual owned missingpath at original first os.open seam' if case=='early-open' else None})
     return completed_evidence({'original_error_context_controls':reports,'actual_copy_sha256':hashlib.sha256(copied.encode()).hexdigest(),'scope':'actual reader insertion/mapping; original held OS failure; builtin-descriptor adversarial controls; no full evaluator or runtime'})
 
+def capture_canonical(assembler):
+    tree=ast.parse(assembler)
+    node=next(n.value for n in tree.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='canonical' for t in n.targets))
+    assert isinstance(node,ast.Lambda)
+    return eval(compile(ast.Expression(node),'actual-assembler-canonical','eval'),{'json':json})
+
 def genuine_relation_controls(area):
     assembler=heredoc('PY_GENUINE_ASSEMBLER');tree=ast.parse(assembler)
     stability=stable_sink_controls(area,assembler)
@@ -2514,9 +2520,10 @@ def genuine_relation_controls(area):
         base=location/fault;base.mkdir();package=base/'package';(package/'scope/v1').mkdir(parents=True)
         for name in ('evaluate-scope.sh','read-shadow-evidence.py'):
             path=package/'scope/v1'/name;path.write_bytes((root/'scope/v1'/name).read_bytes());path.chmod(0o755 if name.endswith('.sh') else 0o644)
-        context={'pathlib':__import__('pathlib'),'os':os,'stat':stat,'json':json,'sys':sys,'c':module,
+        creation_target=sys.executable;(base/'python3').symlink_to(creation_target)
+        context={'pathlib':__import__('pathlib'),'os':os,'stat':stat,'json':json,'sys':sys,'c':module,'relation_creation_target':creation_target,
             'base':base,'package':package,'consumer_uid':os.getuid(),'consumer_gid':os.getgid(),
-            'sha':lambda raw:hashlib.sha256(raw).hexdigest(),'canonical':lambda value:(json.dumps(value,sort_keys=True,separators=(',',':'))+'\n').encode()}
+            'sha':lambda raw:hashlib.sha256(raw).hexdigest(),'canonical':capture_canonical(assembler)}
         exec(compile(actual,'exact-genuine-relation-capture','exec'),context)
         argv=[str(package/'scope/v1/evaluate-scope.sh'),'evaluate',*['owned-'+str(i) for i in range(9)]]
         for leaf in ('boundary.sh','reader-mapping.py','closed-writer.py','reader.stderr','reader-stderr'):(base/leaf).write_bytes(b'')
@@ -2611,6 +2618,84 @@ def genuine_relation_controls(area):
             'pending':capture.pending.exists(),'normal_admission':'actual original wait/EOF segment' if fault=='success' else None})
     assert len(list(snapshot.iterdir()))==22
     return completed_evidence({'genuine_relation_controls':reports,'stable_sink_controls':stability,'scope':'actual insertions and original admission/exception boundaries with fixed ordinary UID and standalone entry adapters; no full evaluator/P/jq/root proof'})
+
+def launch_capture_controls(area):
+    import shlex,io
+    assembler=heredoc('PY_GENUINE_ASSEMBLER');tree=ast.parse(assembler)
+    node=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='GenuineRelationCapture')
+    actual=ast.get_source_segment(assembler,node)+'\n'
+    spec=importlib.util.spec_from_file_location('launch_capture_consumer',root/'shadow/v1/_consumer.py')
+    module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
+    location=area/'launch-capture';location.mkdir();reports=[]
+    for fault in ('normal','before-selection','selection-failure','probe-failure','quotes','over-limit','invalid-utf8','creation-high','creation-low','creation-unicode'):
+        base=location/fault;base.mkdir();package=base/'package';(package/'scope/v1').mkdir(parents=True)
+        for name in ('evaluate-scope.sh','read-shadow-evidence.py'):
+            path=package/'scope/v1'/name;path.write_bytes((root/'scope/v1'/name).read_bytes());path.chmod(0o755 if name.endswith('.sh') else 0o644)
+        tools=base/'tools';tools.mkdir();creation_target=sys.executable
+        (tools/'python3').symlink_to(creation_target)
+        retained_creation_target={'creation-high':'\ud800','creation-low':'\udfff','creation-unicode':'écriture'}.get(fault,creation_target)
+        for name in ('boundary.sh','reader.py','reader-stderr','control','reader.stdout','jq-data'):(base/name).write_bytes(b'')
+        (base/'reader.py').write_text('import sys\nprint(sys.executable)\n')
+        context={'pathlib':__import__('pathlib'),'os':os,'stat':stat,'json':json,'sys':sys,'c':module,
+            'base':base,'package':package,'consumer_uid':os.getuid(),'consumer_gid':os.getgid(),
+            'relation_creation_target':retained_creation_target,'sha':lambda raw:hashlib.sha256(raw).hexdigest(),
+            'canonical':capture_canonical(assembler)}
+        exec(compile(actual,'actual-launch-capture','exec'),context)
+        argv=[str(package/'scope/v1/evaluate-scope.sh'),'evaluate',*['owned-'+str(i) for i in range(9)]]
+        capture=context['GenuineRelationCapture'](argv);front=capture.copies[0].decode()
+        assert capture.binding['creation_target']==('GAP' if fault in ('creation-high','creation-low') else retained_creation_target)
+        assert set(capture.binding)=={'invocation','argv_sha256','command_sha256','original_sha256','creation_target','copy_sha256'}
+        token_binding={key:value for key,value in capture.binding.items() if key!='copy_sha256'}
+        assert capture.token==context['sha'](context['canonical'](token_binding))
+        assert context['canonical']({'value':'é'})==b'{"value":"\xc3\xa9"}\n'
+        original=capture.original[0].decode();inverse=front
+        launch='/usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C LANG=C YSTACK_SCOPE_JQ="$jq_bin" \\\n'
+        for anchor,insertion in reversed(capture.front_insertions):
+            inverse=inverse.replace(insertion+anchor,anchor,1) if anchor==launch else inverse.replace(anchor+insertion,anchor,1)
+        assert inverse==original
+        prelude=front[:front.index('sha256_path() {')]
+        selection=front[front.index('python_bin=$(command -v python3'):front.index('reader_sha=$(sha256_path')]
+        launched=front[front.index('relation_launch=$python_bin\n'):front.index('reader_pid=$!')+len('reader_pid=$!')]
+        setup='\nPATH='+shlex.quote(str(tools))+':/usr/bin:/bin\nscratch='+shlex.quote(str(base))+'\nreader="$scratch/reader.py"\njq_bin="$scratch/jq-data"\nbundle_root="$scratch/bundle"\nsource_git="$scratch/source"\nremaining_time(){ printf 5; }\n'
+        command=prelude+setup
+        expected_selected=str(tools/'python3');expected_launch='GAP'
+        if fault=='before-selection':expected_selected='GAP'
+        elif fault=='selection-failure':command+='PATH='+shlex.quote(str(base))+'\n'+selection;expected_selected='GAP'
+        elif fault=='probe-failure':
+            command+=selection.split('python_bin=$("$python_bin"',1)[0]+'python_bin=/owned-fixed-missing-python\n'+selection[selection.index('python_bin=$("$python_bin"'):]
+        elif fault in ('quotes','over-limit','invalid-utf8'):
+            value='quote" slash\\ tab\t newline\n' if fault=='quotes' else 'x'*1023 if fault=='over-limit' else None
+            assignment=shlex.quote(value) if value is not None else "$'\\377'"
+            command+='relation_command_v='+assignment+'\nrelation_launch='+assignment+'\n'
+            expected_selected=value if fault=='quotes' else 'GAP';expected_launch=expected_selected
+        else:
+            command+=selection+'exec 7<"$scratch/control"\nexec 8>"$scratch/reader.stdout"\n'+launched+'\nexec 7<&-\nexec 8>&-\nwait "$reader_pid"\n'
+            expected_launch=str(Path(sys.executable).resolve())
+        command+='emit_error E_RUNTIME\n'
+        (base/'boundary.sh').write_text(command)
+        print(json.dumps({'launch_capture_preexec':fault,'front':front,'reader_copy':capture.copies[1].decode(),
+            'command':command,'binding':capture.binding,'command_sha256':hashlib.sha256(command.encode()).hexdigest()}),flush=True)
+        result=subprocess.run(['/bin/bash',str(base/'boundary.sh')],capture_output=True,timeout=10)
+        completed_evidence({'launch_capture_actual_before_assert':{'case':fault,'returncode':result.returncode,'stdout_hex':result.stdout.hex(),'stderr_hex':result.stderr.hex()}})
+        assert result.returncode==1 and result.stderr==b'E_RUNTIME\n' and not result.stdout
+        record=json.loads(capture.sink.read_bytes());assert record['binding']==capture.token
+        assert record['launch']=={'command_v':expected_selected,'reader_python':expected_launch},record
+        assert len(capture.sink.read_bytes())<=4096
+        if fault in ('normal','creation-high','creation-low','creation-unicode'):assert (base/'reader.stdout').read_text().strip()==expected_launch and record['wait']=='0'
+        output=io.BytesIO();context['sys']=types.SimpleNamespace(stderr=types.SimpleNamespace(buffer=output))
+        capture.export_failure(result)
+        exported=json.loads(output.getvalue());assert exported['binding']==capture.binding and not capture.restored
+        assert len(output.getvalue())<=12288 and len(output.getvalue())+4096<=16384
+        for value,expected in [('a'*1022,'a'*1022),('a'*1023,'GAP'),('é'*200,'GAP'),(None,'GAP')]:
+            assert capture.launch_value(value)==expected
+        class Custom(str):pass
+        assert capture.launch_value(Custom('x'))=='GAP'
+        for item in capture.held:item.close()
+        reports.append({'case':fault,'record':record,'export':exported,'restored':False,'original_source_inverse_exact':True,
+            'creation_input_adapter':'adversarial retained scalar into actual constructor, not a real sys.executable value' if fault.startswith('creation-') else 'actual owned symlink target',
+            'real_binding_token_completed':True,'canonical_expression':ast.get_source_segment(assembler,next(n.value for n in tree.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='canonical' for t in n.targets)))})
+    return completed_evidence({'launch_capture_controls':reports,'scope':'actual fixed insertions and owned link plus original selection/launch data path; encoding stimuli are explicit owned inputs, not real runtime evidence'})
+
 
 def negative_eligibility_controls(actual,name,table_name,area):
     import gc,weakref
@@ -3148,6 +3233,7 @@ try:
     (package/'shadow/v1/_consumer.py').write_bytes(consumer)
     reports.extend(code_auth_controls(observer,wrapper,area))
     reports.append(genuine_relation_controls(area))
+    reports.append(launch_capture_controls(area))
     reports.append(original_context_controls(area))
     reports.append(wrapper_cancel_controls(wrapper,guard,area))
     reports.append(short_stage_controls(guard,channel,area,clock_name))
@@ -7108,7 +7194,8 @@ for name in ('tools','work','bundles','identities','snapshots'):
  directory.chmod(0o700 if name=='work' else 0o755)
 work=base/'work';tools=base/'tools';jq=tools/'jq';shutil.copyfile(jq_source,jq);jq.chmod(0o555)
 assert sha(jq.read_bytes())==c.JQ_SHA256[sys.platform]
-(tools/'python3').symlink_to(sys.executable)
+relation_creation_target=sys.executable
+(tools/'python3').symlink_to(relation_creation_target)
 env={'PATH':str(tools)+':/usr/bin:/bin','LC_ALL':'C','LANG':'C','HOME':str(work),'TMPDIR':str(work),'GIT_CONFIG_NOSYSTEM':'1','GIT_CONFIG_GLOBAL':'/dev/null','GIT_NO_REPLACE_OBJECTS':'1','GIT_NO_LAZY_FETCH':'1','GIT_TERMINAL_PROMPT':'0','GIT_OPTIONAL_LOCKS':'0','GIT_AUTHOR_NAME':'fixture','GIT_AUTHOR_EMAIL':'fixture@example.invalid','GIT_COMMITTER_NAME':'fixture','GIT_COMMITTER_EMAIL':'fixture@example.invalid','GIT_AUTHOR_DATE':'2000-01-01T00:00:00Z','GIT_COMMITTER_DATE':'2000-01-01T00:00:00Z'}
 class GenuineRelationCapture:
  def __init__(self,argv):
@@ -7127,10 +7214,22 @@ class GenuineRelationCapture:
   assert len(argv)>=10 and str(argv[-10])=='evaluate'
   self.binding={'invocation':str(self.sink),'argv_sha256':sha(canonical(list(map(str,argv[-9:])))),
    'command_sha256':sha(canonical(list(map(str,argv)))),
-   'original_sha256':[sha(raw) for raw in self.original]}
+   'original_sha256':[sha(raw) for raw in self.original],
+   'creation_target':self.launch_value(relation_creation_target)}
   self.token=sha(canonical(self.binding))
   sink=repr(str(self.sink));identity=repr(self.sink_identity);token=repr(self.token)
-  writer='''my($p,$d,$i,$u,$g,$raw)=@ARGV;
+  writer='''my($p,$d,$i,$u,$g,$raw,$selected,$launched)=@ARGV;
+use JSON::PP;use Encode ();
+my $codec=JSON::PP->new->ascii(1)->canonical(1);
+sub launch_value {
+ my($value)=@_;my $result='GAP';
+ eval { my $text=Encode::decode('UTF-8',$value,Encode::FB_CROAK());
+  $result=$text if length($codec->encode($text))<=1024; };
+ return $result;
+}
+my $record=$codec->decode($raw);
+$record->{launch}={command_v=>launch_value($selected),reader_python=>launch_value($launched)};
+$raw=$codec->encode($record)."\n";
 use Fcntl qw(O_WRONLY O_APPEND O_NOFOLLOW S_ISREG);
 sysopen(my $f,$p,O_WRONLY|O_APPEND|O_NOFOLLOW) or die;
 my @s=stat($f);my @n=lstat($p);
@@ -7138,17 +7237,22 @@ die unless S_ISREG($s[2]) && $s[0]==$d && $s[1]==$i && $s[3]==1 && $s[4]==$u && 
 die unless $n[0]==$s[0] && $n[1]==$s[1] && length($raw)<=4096 && $s[7]+length($raw)<=8192;
 syswrite($f,$raw)==length($raw) or die;close($f) or die;'''
   import shlex
-  prefix="relation_phase=before-reader\nrelation_wait=GAP\nwait() { builtin wait \"$@\"; relation_wait=$?; return \"$relation_wait\"; }\n"
+  prefix="relation_phase=before-reader\nrelation_wait=GAP\nrelation_command_v=GAP\nrelation_launch=GAP\nwait() { builtin wait \"$@\"; relation_wait=$?; return \"$relation_wait\"; }\n"
   capture="""  local relation_line=${BASH_LINENO[0]:-0} relation_function=${FUNCNAME[1]:-main} relation_record
   case "$relation_line:$relation_function:$relation_wait" in *[!A-Za-z0-9_:]*) relation_function=GAP; relation_line=0; relation_wait=GAP;; esac
   relation_record=$(/usr/bin/printf '{"boundary":"bash","binding":"TOKEN","line":%s,"function":"%s","phase":"%s","wait":"%s"}\\n' "$relation_line" "$relation_function" "$relation_phase" "$relation_wait")
-  /usr/bin/perl -e WRITER -- SINK DEV INO UID GID "$relation_record"$'\\n' >/dev/null 2>&1 || :
+  /usr/bin/perl -e WRITER -- SINK DEV INO UID GID "$relation_record"$'\\n' "$relation_command_v" "$relation_launch" >/dev/null 2>&1 || :
 """.replace('TOKEN',self.token).replace('WRITER',shlex.quote(writer)).replace('SINK',shlex.quote(str(self.sink)))
   for key,value in [('DEV',self.sink_identity[0]),('INO',self.sink_identity[1]),('UID',consumer_uid),('GID',consumer_gid)]:capture=capture.replace(key,str(value))
   launch='/usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C LANG=C YSTACK_SCOPE_JQ="$jq_bin" \\\n'
   front=self.original[0].decode();assert front.count('umask 077\n')==front.count('emit_error() {\n')==front.count(launch)==1
-  self.front_insertions=[('umask 077\n',prefix),('emit_error() {\n',capture),(launch,'relation_phase=reader-attempted\n')]
-  copied=front.replace('umask 077\n','umask 077\n'+prefix,1).replace('emit_error() {\n','emit_error() {\n'+capture,1).replace(launch,'relation_phase=reader-attempted\n'+launch,1)
+  selection='python_bin=$(command -v python3 2>/dev/null) || emit_error E_RUNTIME\n'
+  assert front.count(selection)==1
+  self.front_insertions=[('umask 077\n',prefix),('emit_error() {\n',capture),
+   (selection,'relation_command_v=$python_bin\n'),(launch,'relation_launch=$python_bin\nrelation_phase=reader-attempted\n')]
+  copied=front
+  for anchor,insertion in self.front_insertions:
+   copied=copied.replace(anchor,anchor+insertion,1) if anchor!=launch else copied.replace(anchor,insertion+anchor,1)
   import difflib
   self.line_map={}
   for match in difflib.SequenceMatcher(a=front.splitlines(),b=copied.splitlines(),autojunk=False).get_matching_blocks():
@@ -7216,7 +7320,9 @@ syswrite($f,$raw)==length($raw) or die;close($f) or die;'''
   assert reader.count(boundary)==1
   self.reader_insertion=(boundary,record)
   self.copies=[copied.encode(),reader.replace(boundary,record+boundary,1).encode()]
-  reversed_front=copied.replace('umask 077\n'+prefix,'umask 077\n',1).replace('emit_error() {\n'+capture,'emit_error() {\n',1).replace('relation_phase=reader-attempted\n'+launch,launch,1)
+  reversed_front=copied
+  for anchor,insertion in reversed(self.front_insertions):
+   reversed_front=reversed_front.replace(insertion+anchor,anchor,1) if anchor==launch else reversed_front.replace(anchor+insertion,anchor,1)
   assert reversed_front==front and self.copies[1].decode().replace(record+boundary,boundary,1)==reader
   self.binding['copy_sha256']=[sha(raw) for raw in self.copies]
   self.held=[]
@@ -7240,6 +7346,14 @@ syswrite($f,$raw)==length($raw) or die;close($f) or die;'''
     count=os.write(fd,raw[sent:]);assert count>0;sent+=count
    os.fsync(fd)
   finally:os.close(fd)
+ @staticmethod
+ def launch_value(value):
+  try:
+   if type(value) is not str:return 'GAP'
+   value.encode('utf-8','strict')
+   if len(json.dumps(value,ensure_ascii=True).encode())<=1024:return value
+  except BaseException:pass
+  return 'GAP'
  @staticmethod
  def stable_sink(value):
   return (value.st_dev,value.st_ino,value.st_mode,value.st_nlink,value.st_uid,value.st_gid,value.st_size,value.st_mtime_ns,value.st_ctime_ns)
