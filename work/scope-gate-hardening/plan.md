@@ -9,7 +9,7 @@ Tracks #541. Risk is high. This is the nonterminal child-6 core. It authenticate
 the existing child-5 evidence at one exact revision. Issue #544 remains mandatory
 before child 6 completes or child 7 starts.
 
-Implementation PR: `review_size: accepted-exception`, 2,600–9,000 net changed
+Implementation PR: `review_size: accepted-exception`, 2,600–9,300 net changed
 lines. The private evidence reader, held-path and Git checks, closed evaluator
 relations, and a real two-principal origin fixture form one security boundary.
 Most of the range is proof: complete classification, bundle, Git, terminal and
@@ -954,8 +954,22 @@ extra administrator command, repeated call or ignored restoration error is allow
 At the original Bash emit_error entry, retain its real caller function, original
 line and fixed phase. Only at the reader's existing exception mapping retain the
 original exception type, its already-computed pre-mapping code and bounded actual
-traceback function/line pairs. Read no source text or extra exception attributes
-and query no failed object to fill a gap. Capture at most one record from each boundary;
+traceback function/line pairs. In that same reader insertion, follow at most three
+existing underlying exception objects: cause first, otherwise context, including
+suppressed context. Stop identity cycles. For each, retain only an ASCII identifier type name
+of at most 80 characters, existing errno (exact int or null), and at most eight
+original traceback function/line pairs. Use built-in field access that cannot
+invoke custom lookup, getters or callbacks. Only a frame whose f_code is exactly
+c._open_held.__code__ may supply its existing path (exact str, at most 1,024
+characters), index (exact int) and name (exact str, at most 255 characters).
+Function names use the same 80-character bound; line numbers are exact ints.
+Missing, unsupported, wrong-type, cyclic or over-limit facts stay GAP. Do not
+serialize whole locals, repr/str(error), other exception fields or source text.
+Add no stat, open, ACL, readlink, resolve or other failed-object query, input
+reread, re-evaluation or retry. Preserve the original exception and mapping;
+diagnostic collection failure cannot replace them. Keep each encoded record at
+most 4,096 bytes and the existing sink at most 8,192 bytes.
+Capture at most one record from each boundary;
 an unreached or missing stage is GAP, not an inferred cause. Use one fixed,
 precreated private sink outside evaluated and held trees, with the existing
 no-follow, regular-file, identity and bounded-write checks. Prebind the invocation,
@@ -980,7 +994,13 @@ Use ordinary owned controls on the exact extracted insertions and original
 failure boundaries. Distinguish direct Bash refusal from reader-mapped refusal;
 cover original-line/phase mapping, missing-stage GAP, wrong invocation or source,
 missing/wrong sink, overflow and formatting/write failure without masking the
-first error. Prove success has no failure export and combined export stays bounded.
+first error. Exercise actual original _open_held with an owned controlled OS
+failure to prove its suppressed context; direct Refusal is a separate control,
+not OS-error coverage. Cover missing/wrong/cyclic/overlong context, exact frame
+identity versus a same-name wrong frame, and type, formatting and sink failures.
+Prove no extra object queries, unchanged original error/status/calls and no
+success export within the same caps. Freeze complete generated copies before
+these ordinary controls.
 Check exact reverse restoration, actual copy-source authentication, closure before
 restoration, unknown closure with no restoration, and unchanged later calls. Do
 not substitute owned controls for actual genuine refusal evidence. Freeze the
