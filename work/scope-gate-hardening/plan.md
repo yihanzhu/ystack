@@ -9,7 +9,7 @@ Tracks #541. Risk is high. This is the nonterminal child-6 core. It authenticate
 the existing child-5 evidence at one exact revision. Issue #544 remains mandatory
 before child 6 completes or child 7 starts.
 
-Implementation PR: `review_size: accepted-exception`, 2,600–8,400 net changed
+Implementation PR: `review_size: accepted-exception`, 2,600–8,800 net changed
 lines. The private evidence reader, held-path and Git checks, closed evaluator
 relations, and a real two-principal origin fixture form one security boundary.
 Most of the range is proof: complete classification, bundle, Git, terminal and
@@ -798,7 +798,8 @@ Use one precreated slot 8 for the other existing calls through `evaluation_reaso
 with fixed identity `evaluation-reasons`; reuse the four bodies bound below.
 There are at most nine slots. Do not add a case registry, selection option or new
 call site. Keep direct evaluator calls, expected-error calls and genuine fixtures
-outside this boundary. Preserve all 78 expanded `expect_reasons` calls from the
+outside this nine-slot boundary. Only the first genuine call has the separate
+fixed failure capture below. Preserve all 78 expanded `expect_reasons` calls from the
 51 source call sites, their nine data arguments, order, assertions, result,
 evaluator stdout/stderr, READY/SEAL/COMMIT and cleanup.
 Add no invocation, public mode, product hook, helper path, provider, trust input or
@@ -909,6 +910,56 @@ and terminal snapshot in owned N/N+1 controls: a real writer sends a legal frame
 and exits, real wait and EOF succeed, and a regular N-byte file has its original
 digest. N passes; N+1 reaches the original size predicate and exact refusal line.
 Do not hand-fill wait, simulate the token or substitute an earlier framing error.
+
+Use one separate private `genuine_relation_capture` boundary for only the first
+existing genuine `run(scope_argv)`. Before its held acquisition, prepare the
+frontend and reader source copies only at their existing paths in the owned
+fixture package. Bind the exact original bytes, fixed insertion sites, complete
+copy bytes and original-line maps. Removing only those insertions must restore
+both originals byte for byte. Keep source_path, __file__, PACKAGE, reader launch
+and every original source, held, ACL and identity check unchanged; authenticate
+the actual inserted files, never label them with the original hashes. Touch no
+repository source, supplied runtime, old version or Current. Change no command or
+nine data arguments. After the call and all its reader/writer processes are
+proved closed, recheck owned identities and restore the original source-copy
+bytes before any later call. Unknown closure keeps PENDING; no restoration,
+extra administrator command, repeated call or ignored restoration error is allowed.
+
+At the original Bash emit_error entry, retain its real caller function, original
+line and fixed phase. Only at the reader's existing exception mapping retain the
+original exception type, its already-computed pre-mapping code and bounded actual
+traceback function/line pairs. Read no source text or extra exception attributes
+and query no failed object to fill a gap. Capture at most one record from each boundary;
+an unreached or missing stage is GAP, not an inferred cause. Use one fixed,
+precreated private sink outside evaluated and held trees, with the existing
+no-follow, regular-file, identity and bounded-write checks. Prebind the invocation,
+original/copy source digests and canonical exact nine-data-argument digest; accept
+no earlier invocation's record. Use already retained preparation bytes and call
+values; add no input reread, safety-object stat/ACL query, scan, trace callback or
+environment selector. These insertions change none of the four Linux capture literals.
+
+Export only this first call's unexpected failure before its original assembler
+assertion. Keep its original stdout/stderr, error token, status, assertions,
+wait/pipe/owner/cleanup and every deadline. Formatting, sink and export failures
+cannot replace the original error. Bound the complete new encoded export,
+including bindings and GAP, to 12,288 bytes. Together with the existing at-most
+4,096-byte cost export it stays within the original 16,384-byte failure allowance.
+Earlier I1 or terminal failures cannot reach this call; preserve both exporters
+and their full caps. Unknown allowance means no new output. Export no success,
+add no evaluator/reader invocation or retry, and grant no cleanup or restoration
+permission from these records. This boundary obtains refusal provenance only;
+it neither changes a predicate nor proves an ALRM or performance fix.
+
+Use ordinary owned controls on the exact extracted insertions and original
+failure boundaries. Distinguish direct Bash refusal from reader-mapped refusal;
+cover original-line/phase mapping, missing-stage GAP, wrong invocation or source,
+missing/wrong sink, overflow and formatting/write failure without masking the
+first error. Prove success has no failure export and combined export stays bounded.
+Check exact reverse restoration, actual copy-source authentication, closure before
+restoration, unknown closure with no restoration, and unchanged later calls. Do
+not substitute owned controls for actual genuine refusal evidence. Freeze the
+actual generated copies, insertion bodies and bindings at exact H/B in fresh
+independent source preparation before the original full proof and separate G3.
 
 Retain cost samples only for protected slot 0's original `.github/workflows/ci.yml`
 call and the original terminal `normal` call. Precreate one fixed 4,096-byte-bounded
