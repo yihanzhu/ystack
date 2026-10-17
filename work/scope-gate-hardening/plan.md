@@ -9,7 +9,7 @@ Tracks #541. Risk is high. This is the nonterminal child-6 core. It authenticate
 the existing child-5 evidence at one exact revision. Issue #544 remains mandatory
 before child 6 completes or child 7 starts.
 
-Implementation PR: `review_size: accepted-exception`, 2,600–7,500 net changed
+Implementation PR: `review_size: accepted-exception`, 2,600–7,600 net changed
 lines. The private evidence reader, held-path and Git checks, closed evaluator
 relations, and a real two-principal origin fixture form one security boundary.
 Most of the range is proof: complete classification, bundle, Git, terminal and
@@ -860,25 +860,39 @@ callback cost. Do not time callbacks, add source reads or change trace dispatch.
 Initialize eligibility to zero. Only the original terminal Python, after every
 original terminal assertion passes, may write one and close it before returning.
 Only the existing outer cleanup with saved status 142 and signal ALRM may export
-cost, after its original cleanup gates pass and before its original tmp deletion.
-Require that bound eligibility and all three completed records have closed
-writers. Missing, malformed or uncertain qualification means no cost output.
+cost, after its original cancel/wait attempts and before its original tmp deletion.
+Cost export does not require another owner's cleanup to succeed. Require bound
+eligibility 1 and all three completed records, with current source/copy/argv and
+existing identity/NOFOLLOW checks. Prove that their only fixed writers have
+finished, closed their records and cannot write again. A marker, metadata, memory
+flag or another owner's state alone cannot prove this. Missing qualification,
+records, writer closure or source binding, and invalid or oversized data mean no
+output. An unknown other owner permits only reading this unrelated, previously
+closed cost data. Keep owner confirmation, cleanup_genuine, PENDING, tmp deletion,
+restoration and the original status 142/ALRM behavior unchanged.
 Early I1 or terminal failure, successful exit and other failures produce no cost
 export. Prove that an I1 export or terminal assertion failure cannot reach this
 qualification point; otherwise suppress cost. Thus the original I1 bytes and
 exporter stay unchanged, with no cross-subshell memory counter, lock or publisher.
 Cost output is at most 4,096 bytes and must fit the original 16,384-byte unused
 failure allowance; uncertain allowance means no output. Do not wait for a sample,
-retry, query a failed object or use cost state to permit cleanup or restoration.
+retry, query a failed object, fill missing data or use cost state to permit cleanup
+or restoration.
 
 Use real owned extracted boundaries to cover both cleanup paths exactly once,
 nonzero wait, missing phases, exception/unwind, actual phase order, source/case
 binding, wrong eligibility, incomplete writers and byte caps. Show that early I1
 and terminal failures cannot qualify, and that a real ordinary ALRM handled after
 terminal completion exports once before deletion without changing status or
-cleanup gates. Keep the I1 record and its full cap intact. Bind the actual revised
-observer, generated private copies and timing injections at exact H/B in new
-independent source preparation; keep the other three capture literals exact.
+cleanup gates. Keep that normal-cleanup control. Also run the actual original
+cleanup boundary with real closed samples and a refused owner confirmation:
+export once, call neither deletion nor cleanup_genuine/restoration, preserve the
+original failure and status 142/ALRM. The independent owned harness may reclaim
+only its own data whose writers it has proved closed; an actually unreaped child
+cannot be a passing control. Keep the I1 record and its full cap intact. Bind the
+actual revised observer, generated private copies and timing injections at exact
+H/B in new independent source preparation; keep the other three capture literals
+exact.
 All original calls, deadlines, owner/reap/restoration controls, complete Mac/Linux
 proof and historical UNKNOWN findings remain. Add no evaluator/reader invocation,
 retry, diagnostic CI, public selector, product change, permission or budget.
