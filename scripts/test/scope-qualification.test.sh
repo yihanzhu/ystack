@@ -1040,9 +1040,77 @@ def observe(original,log,case,phase,argv,index):
             try:os.close(rejected)
             except BaseException as close_error:
                 gap+=';close:'+type(close_error).__name__
+    watched_cache = {}
+    watched_busy = [False]
     def watched(frame):
-        return (frame.f_code.co_filename in source_codes and
-                frame.f_code in source_codes[frame.f_code.co_filename])
+        code = frame.f_code
+        key = id(code)
+        found = watched_cache.get(key)
+        if not watched_busy[0] and found is not None and found[0] is code:
+            return found[1]
+        if watched_busy[0]:
+            return (frame.f_code.co_filename in source_codes and
+                    frame.f_code in source_codes[frame.f_code.co_filename])
+        watched_busy[0] = True
+        try:
+            in_source = frame.f_code.co_filename in source_codes
+            result = in_source and frame.f_code in source_codes[frame.f_code.co_filename]
+            if in_source and len(watched_cache) < 512:
+                try:
+                    pending = [(code, 0)]
+                    nodes = payload = 0
+                    reusable = True
+                    while pending:
+                        value, depth = pending.pop()
+                        nodes += 1
+                        if nodes > 1024 or depth > 32:
+                            reusable = False
+                            break
+                        kind = type(value)
+                        if kind is types.CodeType:
+                            children = (value.co_code, value.co_consts, value.co_names, value.co_varnames,
+                                value.co_freevars, value.co_cellvars, value.co_filename, value.co_name,
+                                getattr(value, 'co_qualname', ''),
+                                value.co_linetable if hasattr(value, 'co_linetable') else value.co_lnotab,
+                                getattr(value, 'co_exceptiontable', b''), value.co_argcount,
+                                value.co_posonlyargcount, value.co_kwonlyargcount, value.co_nlocals,
+                                value.co_stacksize, value.co_flags, value.co_firstlineno)
+                        elif kind is tuple or kind is frozenset:
+                            children = value
+                        else:
+                            if value is None or value is Ellipsis: size = 0
+                            elif kind is bool: size = 1
+                            elif kind is int: size = (value.bit_length() + 7) // 8
+                            elif kind is float: size = 8
+                            elif kind is complex: size = 16
+                            elif kind is bytes: size = len(value)
+                            elif kind is str:
+                                if len(value) > 65536 - payload:
+                                    reusable = False
+                                    break
+                                if not value.isascii() and len(value) > (65536 - payload) // 4:
+                                    reusable = False
+                                    break
+                                size = len(value.encode('utf-8'))
+                            else:
+                                reusable = False
+                                break
+                            payload += size
+                            if payload > 65536:
+                                reusable = False
+                                break
+                            continue
+                        if len(pending) + len(children) > 1024 - nodes:
+                            reusable = False
+                            break
+                        pending.extend((child, depth + 1) for child in children)
+                    if reusable:
+                        watched_cache[key] = (code, result)
+                except Exception:
+                    pass
+            return result
+        finally:
+            watched_busy[0] = False
     def trace(frame,event,arg):
         nonlocal record,gap
         try:
@@ -1138,6 +1206,7 @@ def observe(original,log,case,phase,argv,index):
         try:sys.settrace(previous)
         except BaseException as error:gap='trace-restore:'+type(error).__name__
         cost_points[4]=time.monotonic() if cost_selected else None
+        watched_cache.clear()
         if index==0 and case=='.github/workflows/ci.yml':
             try:cost_finish('protected-0-observer',cost_points,cost_normal and gap is None)
             except BaseException:pass
@@ -1955,6 +2024,15 @@ PY_STALE_CONTROLS
 from pathlib import Path
 import ast,hashlib,importlib.util,json,os,pwd,re,signal,stat,subprocess,sys,tempfile,time,types,shutil,traceback
 source=Path(sys.argv[1]).read_text()
+evidence=[]
+def completed_evidence(payload):
+    raw=json.dumps(payload,sort_keys=True,separators=(',',':')).encode()
+    kind=next(iter(payload));value=payload[kind]
+    reference={'order':len(evidence),'case':kind+(':'+value if type(value) is str else ''),'sha256':hashlib.sha256(raw).hexdigest(),
+        'bytes':len(raw),'rows':len(payload.get('authentication',{}).get('rows',[])) if isinstance(payload.get('authentication'),dict) else 1}
+    print(json.dumps({'complete_owned_payload':reference,'payload':payload},sort_keys=True,separators=(',',':')),flush=True)
+    evidence.append(reference)
+    return reference
 def heredoc(tag):
     mark="<<'"+tag+"'";start=source.index('\n',source.index(mark))+1
     return source[start:source.index('\n'+tag+'\n',start)]+'\n'
@@ -1972,7 +2050,11 @@ timeless=timeless[:a]+"        runpy.run_path(str(original),run_name='__main__')
 a=timeless.index('        cost_points[4]=time.monotonic() if cost_selected else None\n');b=timeless.index('        try:\n            if descriptor is not None:',a)
 timeless=timeless[:a]+timeless[b:]
 timeless='import hashlib,json,os,runpy,stat,sys,time,types\n'+timeless
-old=timeless.replace('sys,time,types','sys,time',1)
+old=timeless
+a=old.index('    watched_cache = {}\n');b=old.index('    def trace(frame,event,arg):\n',a)
+old=old[:a]+'    def watched(frame):\n        return (frame.f_code.co_filename in source_codes and\n                frame.f_code in source_codes[frame.f_code.co_filename])\n'+old[b:]
+old=old.replace('sys,time,types','sys,time',1)
+old=old.replace('        watched_cache.clear()\n','')
 a=old.index('    source_lines={}\n');b=old.index('    try:\n        before=os.lstat(log)',a);old=old[:a]+old[b:]
 a=old.index('    def dispatch(frame,event,arg):\n');b=old.index('    previous=sys.gettrace()\n',a);old=old[:a]+old[b:]
 old=old.replace("return (frame.f_code.co_filename in source_codes and\n                frame.f_code in source_codes[frame.f_code.co_filename])","return frame.f_code.co_filename in sources").replace('sys.settrace(dispatch)','sys.settrace(trace)')
@@ -1981,6 +2063,7 @@ root=Path(sys.argv[2]).resolve()
 consumer=(root/'shadow/v1/_consumer.py').read_bytes()
 assert hashlib.sha256(consumer).hexdigest()=='34d314505860f7569f53f41491c29979ab30aa08f83cfc151444f8cb6a235f68'
 old_wrapper=wrapper.replace('import dis, json, os, signal, sys, time, types','import json, os, signal, sys, time',1)
+old_wrapper=old_wrapper.replace('    bound_cache.clear()\n','')
 a=old_wrapper.index('code_path=Path(sys.argv.pop(1))\n');b=old_wrapper.index('foreground = {}',a)
 old_wrapper=old_wrapper[:a]+"code = Path(sys.argv.pop(1)).read_bytes()\n"+old_wrapper[b:]
 a=old_wrapper.index('compiled_code = compile(');b=old_wrapper.index("print('GUARD_ACTUAL_PRINCIPAL",a);old_wrapper=old_wrapper[:a]+old_wrapper[b:]
@@ -2036,7 +2119,389 @@ print(json.dumps(record,sort_keys=True))
         print(json.dumps({'actual_materialization_script':script,'sha256':hashlib.sha256(script.encode()).hexdigest(),'mask':mask,'fault':fault}),flush=True)
         result=subprocess.run([sys.executable,'-I','-S','-B','-',str(fixture)],input=script.encode(),capture_output=True,timeout=10,umask=mask)
         assert result.returncode==0,(fault,result.stdout,result.stderr)
-        record=json.loads(result.stdout);records.append(record)
+        record=json.loads(result.stdout);records.append(completed_evidence(record))
+    return records
+
+def ready_publication_controls(guard,channel,area):
+    node=next(n for n in ast.parse(guard).body if isinstance(n,ast.ClassDef) and n.name=='ScopeFixtureOwnerCancel')
+    publisher=ast.get_source_segment(guard,node).replace('info.st_uid==0','info.st_uid=='+str(os.getuid()))
+    call=next(n for n in ast.walk(ast.parse(guard)) if isinstance(n,ast.If) and "label == 'fixed-short-owner-cancel'" in ast.unparse(n.test) and 'OWNER_FOREGROUND_READY' in ast.unparse(n.test))
+    call_source=ast.get_source_segment(guard,call)
+    channel=channel.replace('fixture.st_uid==0','fixture.st_uid=='+str(os.getuid())).replace('info.st_uid==0','info.st_uid=='+str(os.getuid()))
+    worker=r"""from pathlib import Path
+import ast,hashlib,json,os,stat,sys,threading,time,types
+PUBLISHER
+channel_source=CHANNEL
+call_source=CALL
+area=Path(sys.argv[1]).resolve();area.mkdir();mask=MASK
+assert os.umask(mask)==mask
+parsed=ast.parse(channel_source);definitions=[n for n in parsed.body if isinstance(n,(ast.FunctionDef,ast.ClassDef))]
+main=[n for n in parsed.body if not isinstance(n,(ast.Import,ast.ImportFrom,ast.FunctionDef,ast.ClassDef))]
+steady=next(n.lineno for n in ast.walk(parsed) if isinstance(n,ast.Assert) and 'identity(os.fstat(fd))' in ast.unparse(n.test))
+def namespace(work,operation,clock=time,system=os):
+    value={'Path':Path,'hashlib':hashlib,'json':json,'os':system,'stat':stat,'time':clock,
+           'sys':types.SimpleNamespace(argv=['channel',operation,str(work),str(work/'base'),str(work/'runtime-guard-controls.py'),'1'])}
+    exec(compile(ast.Module(body=definitions,type_ignores=[]),'actual-ready-channel','exec'),value)
+    return value
+def channel_call(value):exec(compile(ast.Module(body=main,type_ignores=[]),'actual-ready-channel','exec'),value)
+def setup(name,prepare=True):
+    work=area/name;work.mkdir();(work/'base').mkdir(mode=0o755);(work/'runtime-guard-controls.py').write_bytes(b'actual owned driver')
+    if prepare:channel_call(namespace(work,'prepare'))
+    stem=work/'scope-owner-1';owner=ScopeFixtureOwnerCancel.__new__(ScopeFixtureOwnerCancel);owner.stem=stem
+    if prepare:owner.context_raw=(work/'scope-owner-1.json').read_bytes()
+    return work,owner,Path(str(stem)+'.ready'),Path(str(stem)+'.ready-complete')
+def invoke(owner):
+    exec(compile(call_source,'actual-ready-call','exec'),{'Path':Path,'hashlib':hashlib,'owner_cancel':owner,
+        'label':'fixed-short-owner-cancel','buckets':{'owned':b'OWNER_FOREGROUND_READY\n'},'stream':'owned'})
+def report(value):print(json.dumps(value,sort_keys=True),flush=True)
+for fault in ('ready-open','ready-write','ready-mode','ready-fsync','ready-close','parent-fsync','complete-open','interleave'):
+    work,owner,ready,complete=setup(fault);events=[];held={};failed=[];created=threading.Event();release=threading.Event();poll=threading.Event();snapshots=[];errors=[];threads=[]
+    real=os;proxy=types.SimpleNamespace(**{name:getattr(os,name) for name in dir(os)})
+    def operation(name,fd=None):
+        role=held.get(fd) if fd is not None else None;key=(role+'-'+name) if role else name;events.append(key)
+        if key==fault:failed.append(key);raise OSError('fixed '+key)
+    def opened(path,flags,*args):
+        role='complete' if Path(path)==complete else 'ready' if Path(path)==ready else 'parent'
+        operation(role+'-open');fd=real.open(path,flags,*args);held[fd]=role
+        if role=='ready' and fault=='interleave':created.set();assert release.wait(3)
+        return fd
+    def written(fd,raw):operation('write',fd);return real.write(fd,raw)
+    def mode(fd,value):operation('mode',fd);return real.fchmod(fd,value)
+    def synced(fd):operation('fsync',fd);return real.fsync(fd)
+    def closed(fd):operation('close',fd);real.close(fd);held.pop(fd)
+    proxy.open=opened;proxy.write=written;proxy.fchmod=mode;proxy.fsync=synced;proxy.close=closed
+    original=ScopeFixtureOwnerCancel.publish.__globals__['os'];ScopeFixtureOwnerCancel.publish.__globals__['os']=proxy
+    try:
+        if fault=='interleave':
+            def writer():
+                try:invoke(owner)
+                except BaseException as error:errors.append(('writer',type(error).__name__,str(error)))
+            writer_thread=threading.Thread(target=writer);threads.append(writer_thread);writer_thread.start();assert created.wait(3)
+            def sleeping(seconds):poll.set();time.sleep(seconds)
+            clock=types.SimpleNamespace(monotonic=time.monotonic,sleep=sleeping)
+            value=namespace(work,'ready',clock);snapshot=value['snapshot']
+            def observed(path,maximum):
+                if path==ready:snapshots.append('ready')
+                return snapshot(path,maximum)
+            value['snapshot']=observed
+            def reader():
+                try:channel_call(value)
+                except BaseException as error:errors.append(('reader',type(error).__name__,str(error)))
+            reader_thread=threading.Thread(target=reader);threads.append(reader_thread);reader_thread.start()
+            try:assert poll.wait(3) and not snapshots;release.set()
+            finally:release.set();writer_thread.join(3);reader_thread.join(3)
+            report({'case':fault,'mask':mask,'events':events,'snapshots':snapshots,'errors':errors,'threads_finished':not writer_thread.is_alive() and not reader_thread.is_alive()})
+            assert not writer_thread.is_alive() and not reader_thread.is_alive() and not errors and snapshots==['ready']
+            info=complete.lstat();assert (info.st_uid,stat.S_IMODE(info.st_mode),info.st_nlink,info.st_size)==(os.getuid(),0o400,1,0)
+        else:
+            try:invoke(owner)
+            except OSError as error:report({'case':fault,'mask':mask,'events':events,'error':str(error),'failed_operation':failed})
+            else:raise AssertionError('fixed publication failure did not propagate')
+            assert failed==[fault] and not os.path.lexists(complete)
+            if fault in ('parent-fsync','complete-open'):assert events.index('ready-close')<events.index('parent-fsync')
+    finally:
+        release.set();ScopeFixtureOwnerCancel.publish.__globals__['os']=original
+        if not any(thread.is_alive() for thread in threads):
+            for fd in list(held):os.close(fd);held.pop(fd)
+for fault in ('missing','invocation','owner','directory','symlink','mode','links','nonempty','drift','completion-drift'):
+    work,owner,ready,complete=setup(fault);invoke(owner);opened_paths=[];drifted=[]
+    proxy=types.SimpleNamespace(**{name:getattr(os,name) for name in dir(os)});fds={}
+    def opened(path,*args):opened_paths.append(str(path));fd=os.open(path,*args);fds[fd]=Path(path);return fd
+    def info(fd):
+        before=os.fstat(fd)
+        if not drifted and ((fault=='drift' and fds.get(fd)==ready) or (fault=='completion-drift' and fds.get(fd)==ready)):
+            if fault=='drift':
+                os.chmod(ready,0o600)
+                with open(ready,'ab') as output:output.write(b' ')
+                os.chmod(ready,0o444)
+            else:os.link(complete,work/'changed-completion-link')
+            drifted.append(fault)
+        return before
+    proxy.open=opened;proxy.fstat=info
+    if fault=='missing':complete.unlink()
+    if fault=='invocation':
+        context=Path(str(owner.stem)+'.json');data=json.loads(context.read_bytes());data['invocation']=str(work/'foreign');context.write_text(json.dumps(data))
+    if fault in ('directory','symlink'):
+        complete.unlink()
+        if fault=='directory':complete.mkdir(mode=0o400)
+        else:complete.symlink_to(ready)
+    if fault=='mode':complete.chmod(0o600)
+    if fault=='links':os.link(complete,work/'extra-link')
+    if fault=='nonempty':complete.chmod(0o600);complete.write_bytes(b'x');complete.chmod(0o400)
+    value=namespace(work,'ready',system=proxy)
+    if fault=='owner':
+        wrong=channel_source.replace("info.st_uid==UID, 'completion owner'".replace('UID',str(os.getuid())),"info.st_uid==UID, 'completion owner'".replace('UID',str(os.getuid()+1)))
+        modified=ast.parse(wrong);value['negative_expected_uid']=os.getuid()+1
+        selected=[n for n in modified.body if not isinstance(n,(ast.Import,ast.ImportFrom,ast.FunctionDef,ast.ClassDef))]
+    else:selected=main
+    started=time.monotonic()
+    try:exec(compile(ast.Module(body=selected,type_ignores=[]),'actual-ready-channel','exec'),value)
+    except AssertionError as error:
+        trace=error.__traceback__
+        while trace.tb_next:trace=trace.tb_next
+        want={'missing':'completion deadline','invocation':'completion invocation','owner':'completion owner','directory':'completion type','symlink':'completion type','mode':'completion mode','links':'completion links','nonempty':'completion size','completion-drift':'completion changed'}
+        report({'case':fault,'mask':mask,'error':str(error),'line':trace.tb_lineno,'elapsed':time.monotonic()-started,'opened':opened_paths,'actual_uid':os.getuid(),'negative_expected_uid':value.get('negative_expected_uid')})
+        assert (trace.tb_lineno==steady if fault=='drift' else str(error)==want[fault])
+    else:raise AssertionError('invalid ready publication accepted')
+    assert str(complete) not in opened_paths
+for leaf in ('.ready','.ready-complete'):
+    work,owner,ready,complete=setup('old'+leaf,False);target=Path(str(owner.stem)+leaf);target.symlink_to(work/'absent')
+    try:channel_call(namespace(work,'prepare'))
+    except AssertionError as error:assert str(error)=='old ready publication'
+    else:raise AssertionError('old publication accepted')
+    assert not os.path.lexists(str(owner.stem)+'.fifo');report({'case':'old'+leaf,'mask':mask,'refused_before_channel_creation':True})
+assert os.umask(mask)==mask
+"""
+    worker=worker.replace('PUBLISHER',publisher).replace('CHANNEL',repr(channel)).replace('CALL',repr(call_source))
+    references=[]
+    for mask in (0o022,0o077):
+        script=worker.replace('MASK',str(mask));path=area/('ready-publication-'+str(mask)+'.py');path.write_text(script)
+        print(json.dumps({'ready_worker_preexec':str(path),'sha256':hashlib.sha256(script.encode()).hexdigest(),'source':script}),flush=True)
+        result=subprocess.run([sys.executable,'-I','-S','-B',str(path),str(area/('ready-'+str(mask)))],capture_output=True,timeout=40,umask=mask)
+        references.append(completed_evidence({'ready_mask':mask,'returncode':result.returncode,'stdout':result.stdout.decode(),'stderr':result.stderr.decode()}))
+        assert result.returncode==0 and not result.stderr,(mask,result.returncode,result.stderr)
+    return references
+
+def measured_classifier(program,name):
+    import textwrap
+    node=next(n for n in ast.walk(ast.parse(program)) if isinstance(n,ast.FunctionDef) and n.name==name)
+    lines=program.splitlines(keepends=True);indent=' '*node.col_offset
+    body=textwrap.dedent(''.join(lines[node.lineno:node.end_lineno]))
+    if name+'_cache' in body:
+        marker='found = '+name+'_cache.get(key)\n'
+        body=body.replace(marker,marker+"_auth_row['retained_before']=found is not None and found[0] is code\n",1)
+        body=body.replace('    if in_source and len('+name+'_cache) < 512:',"    _auth_row['capacity']=len("+name+"_cache)>=512\n    if in_source and len("+name+"_cache) < 512:",1)
+        body=body.replace('    return found[1]\n',"    _auth_row['hit']=True\n    authentication['events'].append(['hit',_auth_row['code'],found[0] is code])\n    return found[1]\n",1)
+        body=body.replace('if '+name+'_busy[0]:\n','if '+name+"_busy[0]:\n    _auth_row['busy']=True\n",1)
+        marker='    in_source = frame.f_code.co_filename in '
+        line=next(line for line in body.splitlines(keepends=True) if line.startswith(marker))
+        body=body.replace(line,line+"    _auth_row['outside']=not in_source\n",1)
+        body=body.replace('            pending = [(code, 0)]',"            _auth_row['qualify']=True\n            pending = [(code, 0)]",1)
+        marker='                '+name+'_cache[key] = (code, result)\n'
+        body=body.replace(marker,marker+"                _auth_row['insert']=True\n                authentication['events'].append(['insert',_auth_row['code'],"+name+"_cache[key][0] is code])\n",1)
+    prefix="""_auth_row={'code':id(frame.f_code),'filename':0,'set':0,'hit':False,'busy':False,'outside':None,'qualify':False,'insert':False,'retained_before':False,'capacity':False,'exception':None}
+authentication['rows'].append(_auth_row)
+authentication['stack'].append(_auth_row)
+try:
+"""
+    suffix="""except BaseException as error:
+    _auth_row['exception']=type(error).__name__
+    raise
+finally:
+    assert authentication['stack'].pop() is _auth_row
+"""
+    measured=prefix+textwrap.indent(body,'    ')+suffix
+    replacement=lines[node.lineno-1]+textwrap.indent(measured,indent+'    ')
+    return ''.join(lines[:node.lineno-1])+replacement+''.join(lines[node.end_lineno:])
+
+def authentication_proof(facts):
+    retained=set();valid=True
+    for action,identity,strong_reference in facts['events']:
+        valid=valid and strong_reference
+        if action=='insert':retained.add(identity)
+        else:valid=valid and identity in retained
+    seen=set();first=hits=fallback=outside=exceptions=0
+    reasons={'busy':0,'capacity':0,'qualification_not_retained':0,'exception':0}
+    for row in facts['rows']:
+        identity=row['code'];valid=valid and id(facts['objects'][identity])==identity
+        if row['hit']:
+            hits+=1
+            valid=valid and row['set']==row['filename']==0 and not row['busy'] and not row['qualify']
+        elif row['set']:
+            valid=valid and row['set']==1 and (not row['retained_before'] or row['busy'])
+            if row['busy']:reasons['busy']+=1
+            elif row['capacity']:reasons['capacity']+=1
+            elif row['exception']:reasons['exception']+=1
+            elif row['qualify'] and not row['insert']:reasons['qualification_not_retained']+=1
+            if identity not in seen:first+=1
+            else:fallback+=1
+            seen.add(identity)
+        else:
+            outside+=1
+            valid=valid and not row['qualify'] and not row['insert']
+        if row['insert']:valid=valid and row['qualify'] and row['set']==1 and not row['busy']
+        if row['exception']:exceptions+=1;valid=valid and not row['insert'] and not row['hit']
+    return {'valid':valid,'source_first_set_attempts':first,'same_identity_hits':hits,
+        'required_subsequent_set_attempts':fallback,'fallback_reasons':reasons,'no_set_requests':outside,'exceptions':exceptions,
+        'filename_memberships':facts['filename_memberships'],'code_set_memberships':facts['code_set_memberships'],
+        'requests':facts['requests'],'new_actual_objects':len(facts['objects']),
+        'rows':facts['rows'],'actual_insert_hit_events':facts['events']}
+
+def code_auth_controls(observer,wrapper,area):
+    import textwrap
+    records=[]
+    refusal=next(n for n in ast.parse(consumer).body if isinstance(n,ast.ClassDef) and n.name=='Refusal')
+    refusal_scope={'__name__':'actual_owned_refusal'}
+    exec(compile(ast.fix_missing_locations(ast.Module(body=[refusal],type_ignores=[])),'actual-consumer-Refusal','exec'),refusal_scope)
+    Refusal=refusal_scope['Refusal']
+    class Table(dict):
+        def __contains__(self,key):
+            self.tests+=1
+            self.auth['filename_memberships']+=1
+            self.auth['stack'][-1]['filename']+=1
+            if self.hook is not None:
+                hook,self.hook=self.hook,None
+                self.nested.append(hook())
+            return super().__contains__(key)
+    class CodeSet(set):
+        def __contains__(self,key):
+            self.owner.code_tests+=1
+            self.owner.auth['code_set_memberships']+=1
+            self.owner.auth['stack'][-1]['set']+=1
+            return super().__contains__(key)
+    class Constant:
+        calls=[]
+        def __hash__(self):self.calls.append('hash');return hash(None)
+        def __eq__(self,other):self.calls.append('eq');return len(self.calls)%2==0
+    class BadHash:
+        def __hash__(self):raise ValueError('owned original hash error')
+    class Filename(str):
+        calls=[]
+        def __hash__(self):self.calls.append('hash');return super().__hash__()
+        def __eq__(self,other):self.calls.append('eq');return super().__eq__(other)
+    raw='def sample(): return sys._getframe()\n'
+    base=compile(raw,'owned-classifier','exec').co_consts[0]
+    def frame(code):return types.FunctionType(code,{'sys':sys})()
+    nested=None
+    for unused in range(34):nested=(nested,)
+    codes=[base,base.replace(),base.replace(co_name='wrong'),base.replace(co_consts=([1],)),
+        base.replace(co_consts=(Constant(),)),base.replace(co_consts=(BadHash(),)),
+        base.replace(co_filename=Filename(base.co_filename)),base.replace(co_name=Filename(base.co_name)),
+        base.replace(co_consts=(None,tuple(range(1025)))),base.replace(co_consts=(None,nested)),
+        base.replace(co_consts=(None,b'x'*65537)),base.replace(co_consts=(None,'\ud800')),
+        base.replace(co_consts=(None,(1,2.0,3j,b'x','text',frozenset({1,2}))))]
+    try:
+        codes.append(base.replace(co_names=(Filename('sys'),'_getframe')))
+    except SystemError as error:
+        if type(error) is not SystemError or str(error)!='non-string found in code slot':raise
+        records.append(completed_evidence({'constructor':'co_names str subclass','interpreter':sys.version,
+            'exception':type(error).__name__,'message':str(error),'classifier':'NOT_CALLED'}))
+    cases=[frame(code) for code in codes]
+    for name,table_name,program,indent,next_marker in [('watched','source_codes',observer,4,'    def trace('),
+                                                     ('bound','bound_codes',wrapper,0,"print('GUARD_ACTUAL_PRINCIPAL")]:
+        start=program.index(' '*indent+name+'_cache = {}\n');end=program.index(next_marker,start)
+        actual=textwrap.dedent(program[start:end]);tree=ast.parse(actual)
+        originals={'watched':"""def watched(frame):
+    return (frame.f_code.co_filename in source_codes and
+            frame.f_code in source_codes[frame.f_code.co_filename])
+""",'bound':"""def bound(frame):
+    return (frame.f_code.co_filename in bound_codes and
+            frame.f_code in bound_codes[frame.f_code.co_filename])
+"""}
+        original_source=originals[name];path=area/(name+'-classifiers.py')
+        path.write_text(original_source+'\n'+actual)
+        print(json.dumps({'classifier_source':str(path),'sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'owned_program':raw}),flush=True)
+        outputs=[]
+        for label,code_source in [('original',original_source),('cached',actual)]:
+            codeset=CodeSet({base});table=Table({base.co_filename:codeset});codeset.owner=table
+            table.tests=0;table.code_tests=0;table.hook=None;table.nested=[]
+            qualifications=[]
+            authentication={'rows':[],'stack':[],'events':[],'objects':{},'requests':0,'filename_memberships':0,'code_set_memberships':0};table.auth=authentication
+            if label=='cached':
+                code_source=code_source.replace('                pending = [(code, 0)]',
+                    '                qualifications.append(code)\n                pending = [(code, 0)]',1)
+            code_source=measured_classifier(code_source,name)
+            scope={'types':types,'sys':sys,table_name:table,'qualifications':qualifications,'authentication':authentication}
+            measured=area/(name+'-'+label+'-measured.py');measured.write_text(code_source)
+            print(json.dumps({'preexec_classifier':str(measured),'sha256':hashlib.sha256(measured.read_bytes()).hexdigest()}),flush=True)
+            exec(compile(code_source,str(path), 'exec'),scope)
+            original_function=scope[name];objects={};requests=[0]
+            def classify(current):
+                requests[0]+=1;objects[id(current.f_code)]=current.f_code
+                authentication['requests']+=1;authentication['objects'][id(current.f_code)]=current.f_code
+                return original_function(current)
+            Constant.calls.clear();Filename.calls.clear();result_rows=[];started=time.monotonic()
+            for current in cases:
+                outcomes=[];prior=table.tests
+                for unused in range(3):
+                    try:outcomes.append(('return',classify(current)))
+                    except Exception as error:outcomes.append((type(error).__name__,str(error)))
+                result_rows.append(outcomes)
+                print(json.dumps({'classifier_case':name,'version':label,'actual_outcomes':outcomes,'actual_rows':authentication['rows'][-3:],'custom_hash_eq':[Constant.calls,Filename.calls]}),flush=True)
+                if label=='cached' and current.f_code is not base and current.f_code is not codes[1]:
+                    if type(current.f_code.co_filename) is not str or type(current.f_code.co_name) is not str or outcomes[0][0]!='return' or any(current.f_code is item for item in codes[3:6]+codes[8:12]) or any(type(item) is not str for item in current.f_code.co_names):
+                        assert table.tests-prior==3
+            assert result_rows[0]==result_rows[1]==[('return',True)]*3
+            assert result_rows[2]==[('return',False)]*3
+            hook_frame=frame(base.replace());table.hook=lambda:classify(hook_frame)
+            assert classify(frame(base.replace())) is True and table.nested==[True]
+            if label=='cached':assert scope[name+'_busy']==[False]
+            inherited=frame(base.replace())
+            try:raise Refusal('E_STALE')
+            except Refusal:
+                inherited_results=[classify(inherited),classify(inherited)]
+                inherited_rows=authentication['rows'][-2:]
+                print(json.dumps({'actual_Refusal_context':name,'version':label,'results':inherited_results,'rows':inherited_rows}),flush=True)
+                assert inherited_results==[True,True] and all(row['exception'] is None for row in inherited_rows)
+                if label=='cached':assert inherited_rows[0]['insert'] and inherited_rows[1]['hit']
+            comparison=(result_rows,list(Constant.calls),list(Filename.calls),table.nested)
+            outputs.append(comparison)
+            before=(table.tests,table.code_tests)
+            repeats=[classify(cases[0]) for unused in range(2000)]
+            repeated=(table.tests-before[0],table.code_tests-before[1])
+            outside=frame(base.replace(co_filename='outside-authenticated-source'))
+            qualified_before=len(qualifications);outside_before=(table.tests,table.code_tests)
+            for unused in range(3):assert classify(outside) is False
+            assert (table.tests-outside_before[0],table.code_tests-outside_before[1])==(3,0)
+            outside_qualifications=len(qualifications)-qualified_before
+            assert outside_qualifications==0
+            if label=='cached':assert id(outside.f_code) not in scope[name+'_cache']
+            elapsed=time.monotonic()-started
+            same_sequence=authentication_proof(authentication)
+            sequence_reference=completed_evidence({'classifier_sequence':name,'version':label,'actual_results':result_rows,'repeats':repeats,'custom_hash_eq':[Constant.calls,Filename.calls],'whole_wall':elapsed,'authentication':same_sequence})
+            assert same_sequence['valid'] and all(value is True for value in repeats)
+            if label=='cached':
+                assert repeated==(0,0)
+                held=[frame(base.replace(co_firstlineno=1000+i)) for i in range(520)]
+                for current in held:classify(current)
+                assert len(scope[name+'_cache'])==512
+                before=table.tests;classify(held[-1]);classify(held[-1]);assert table.tests-before==2
+                assert all(key==id(item[0]) and type(item[0]) is types.CodeType for key,item in scope[name+'_cache'].items())
+                records.append(completed_evidence({'boundary':name,'separate_saturation':True,'objects':len(held),
+                    'final_entries':len(scope[name+'_cache']),'post_saturation_filename_memberships':table.tests,
+                    'post_saturation_code_set_memberships':table.code_tests}))
+            else:assert repeated==(2000,2000)
+            records.append(completed_evidence({'boundary':name,'version':label,'ordinary_wall':elapsed,
+                'same_sequence_reference':sequence_reference,'repeat_memberships':repeated,
+                'outside_qualifications':outside_qualifications,
+                'ordered_results':result_rows,'custom_hash_eq':comparison[1:3]}))
+        assert outputs[0]==outputs[1],(name,outputs)
+        cold_records=[]
+        class ColdTable(dict):
+            def __contains__(self,key):
+                if self.hook is not None:
+                    hook,self.hook=self.hook,None
+                    self.nested.append(hook())
+                return super().__contains__(key)
+        for label,cold_source in [('original',original_source),('cached',actual)]:
+            cold_cases=[frame(current.f_code.replace()) for current in cases];cold_base=cold_cases[0].f_code
+            cold_table=ColdTable({cold_base.co_filename:{cold_base}});cold_table.hook=None;cold_table.nested=[]
+            cold_scope={'types':types,table_name:cold_table}
+            cold_path=area/(name+'-'+label+'-cold.py');cold_path.write_text(cold_source)
+            print(json.dumps({'preexec_cold_classifier':str(cold_path),'sha256':hashlib.sha256(cold_path.read_bytes()).hexdigest()}),flush=True)
+            exec(compile(cold_source,str(cold_path),'exec'),cold_scope);cold_function=cold_scope[name]
+            Constant.calls.clear();Filename.calls.clear();cold_results=[]
+            def attempt(current):
+                try:cold_results.append(('return',cold_function(current)))
+                except Exception as error:cold_results.append((type(error).__name__,str(error)))
+            began=time.monotonic()
+            for current in cold_cases:
+                for unused in range(3):attempt(current)
+            cold_hook=frame(cold_base.replace());cold_table.hook=lambda:cold_function(cold_hook)
+            attempt(frame(cold_base.replace()))
+            inherited=frame(cold_base.replace())
+            try:raise Refusal('E_STALE')
+            except Refusal:attempt(inherited);attempt(inherited)
+            for unused in range(2000):attempt(cold_cases[0])
+            outside=frame(cold_base.replace(co_filename='outside-authenticated-source'))
+            for unused in range(3):attempt(outside)
+            elapsed=time.monotonic()-began
+            cold_records.append({'version':label,'whole_wall':elapsed,'results':cold_results,
+                'custom_hash_eq':[list(Constant.calls),list(Filename.calls)],'nested':cold_table.nested})
+            print(json.dumps({'cold_same_sequence':name,'actual':cold_records[-1]}),flush=True)
+        assert cold_records[0]['results']==cold_records[1]['results']
+        assert cold_records[0]['custom_hash_eq']==cold_records[1]['custom_hash_eq'] and cold_records[0]['nested']==cold_records[1]['nested']
+        records.append(completed_evidence({'cold_same_sequence':name,'records':cold_records,'no_detail_recording_or_json_inside_timer':True}))
     return records
 
 reports=[]
@@ -2045,6 +2510,7 @@ print(json.dumps({'ordinary_tree':temporary,'on_failure':'RETAIN'}),flush=True)
 try:
     area=Path(temporary).resolve();package=area/'package';(package/'shadow/v1').mkdir(parents=True);(package/'scope/v1').mkdir(parents=True)
     (package/'shadow/v1/_consumer.py').write_bytes(consumer)
+    reports.extend(code_auth_controls(observer,wrapper,area))
     helper=area/'outside.py';helper.write_text('allowed=True\ndef rule(fd,value,ancestor):\n return allowed\n')
     reader=package/'scope/v1/reader.py'
     reader.write_text('''import importlib.util,os,sys
@@ -2066,8 +2532,19 @@ finally:
  if sys.argv[3]=='errno':held.components.pop()
  held.close()
 ''')
+    uncached_observer=observer
+    a=uncached_observer.index('    watched_cache = {}\n');b=uncached_observer.index('    def trace(frame,event,arg):\n',a)
+    uncached_observer=uncached_observer[:a]+'    def watched(frame):\n        return (frame.f_code.co_filename in source_codes and\n                frame.f_code in source_codes[frame.f_code.co_filename])\n'+uncached_observer[b:]
+    uncached_observer=uncached_observer.replace('        watched_cache.clear()\n','')
     def observe_case(code,kind):
         target=area/'value';target.write_bytes(b'actual owned file');log=area/'log';log.write_bytes(b'')
+        if '    source_codes={}\n' in code:
+            code=code.replace('    source_codes={}\n',"    authentication={'requests':0,'filename_memberships':0,'code_set_memberships':0,'objects':{},'rows':[],'stack':[],'events':[]}\n    globals()['AUTH_RESULT']=authentication\n    class AuthenticationTable(dict):\n        def __contains__(self,key):\n            authentication['filename_memberships']+=1\n            authentication['stack'][-1]['filename']+=1\n            return super().__contains__(key)\n    class AuthenticationSet(set):\n        def __contains__(self,key):\n            authentication['code_set_memberships']+=1\n            authentication['stack'][-1]['set']+=1\n            return super().__contains__(key)\n    source_codes=AuthenticationTable()\n",1)
+            code=code.replace('source_codes[name]=code_tree(compile(raw,name,\'exec\',dont_inherit=True))',"source_codes[name]=AuthenticationSet(code_tree(compile(raw,name,'exec',dont_inherit=True)))",1)
+            code=code.replace('    def watched(frame):\n',"    def watched(frame):\n        authentication['requests']+=1\n        authentication['objects'][id(frame.f_code)]=frame.f_code\n",1)
+        if '    source_codes=AuthenticationTable()\n' in code:code=measured_classifier(code,'watched')
+        snapshot=area/('observer-'+hashlib.sha256(code.encode()).hexdigest()+'.py');snapshot.write_text(code)
+        print(json.dumps({'preexec_observer':str(snapshot),'sha256':hashlib.sha256(snapshot.read_bytes()).hexdigest(),'kind':kind,'reader_sha256':hashlib.sha256(reader.read_bytes()).hexdigest(),'consumer_sha256':hashlib.sha256(consumer).hexdigest()}),flush=True)
         ns={};exec(compile(code,'actual-private-observer','exec'),ns)
         callbacks={};wrappers={};install=sys.settrace
         def wrap(fn):
@@ -2086,7 +2563,11 @@ finally:
             else:assert kind=='gap'
         finally:
             install(None);sys.settrace=install;sys.argv=previous
-        result=json.loads(log.read_bytes());assert result['status']==('OBSERVER_GAP' if kind=='gap' else 'FIRST_STALE')
+        result=json.loads(log.read_bytes());elapsed=time.monotonic()-started
+        facts=ns.get('AUTH_RESULT',{})
+        authentication=authentication_proof(facts) if facts else None
+        reference=completed_evidence({'observer_actual':kind,'result':result,'callbacks':callbacks,'whole_wall':elapsed,'authentication':authentication})
+        assert result['status']==('OBSERVER_GAP' if kind=='gap' else 'FIRST_STALE')
         if kind=='errno':
             actual=[(frame,item) for frame in result['frames'] for item in frame['actual_returns'] if item.get('errno')==9]
             assert len(actual)==1 and actual[0][1]['function']=='_metadata' and actual[0][1]['exception']=='OSError'
@@ -2095,9 +2576,11 @@ finally:
             lines=(package/'shadow/v1/_consumer.py').read_text().splitlines()
             assert lines[item['caller_line']-1].strip()=='current = _metadata(component.fd)'
             assert lines[result['guard']['line']-1].strip()=='raise Refusal(code) from None'
-        return result,callbacks,time.monotonic()-started
+        return result,callbacks,elapsed,authentication,reference
     for kind in ('identity','errno','bool','gap'):
-        first,old_counts,old_cost=observe_case(old,kind);second,new_counts,new_cost=observe_case(observer,kind)
+        first,old_counts,old_cost,unused,old_reference=observe_case(old,kind)
+        plain,plain_counts,plain_cost,plain_auth,plain_reference=observe_case(uncached_observer,kind)
+        second,new_counts,new_cost,new_auth,new_reference=observe_case(observer,kind)
         def shape(value):
             return {'guard':value['guard'],'exception':value['exception'],'predicate_input':value['predicate_input'],
                     'frames':[(f['source'],f['function'],f['line'],
@@ -2106,9 +2589,12 @@ finally:
         assert (first['status'],first.get('reason'))==(second['status'],second.get('reason'))
         if kind!='gap':assert shape(first)==shape(second),(first,second)
         assert sum(new_counts.values())<sum(old_counts.values())
+        assert (plain['status'],plain.get('reason'))==(second['status'],second.get('reason'))
+        if kind!='gap':assert shape(plain)==shape(second),(plain,second)
+        assert plain_counts==new_counts and plain_auth['requests']==new_auth['requests']
+        assert new_auth['valid'] and plain_auth['valid'],(plain_auth,new_auth)
         assert any('actual_bool_return' in item for frame in second.get('frames',[]) for item in frame['actual_returns']) or kind!='bool'
-        reports.append({'observer':kind,'old':first,'new':second,'old_callbacks':old_counts,'new_callbacks':new_counts,
-                        'old_seconds':old_cost,'new_seconds':new_cost,'same_field_meaning':True})
+        reports.append(completed_evidence({'observer':kind,'original_reference':old_reference,'modern_reference':plain_reference,'cached_reference':new_reference,'same_field_meaning':True}))
     # Extract only the existing private owner and actual guard child lifecycle, never the complete fixture.
     tree=ast.parse(guard);names={'ScopeFixtureOwnerCancel','unique_object','confirmation','completed_case','run_control'}
     parts=[ast.get_source_segment(guard,n) for n in tree.body if isinstance(n,(ast.ClassDef,ast.FunctionDef)) and n.name in names]
@@ -2116,6 +2602,7 @@ finally:
     owned='\n\n'.join(parts)
     assert owned.count('assert os.getuid()==0')==1
     owned=owned.replace('assert os.getuid()==0','assert os.getuid()=='+str(os.getuid()))
+    owned=owned.replace('info.st_uid==0','info.st_uid=='+str(os.getuid()))
     drop='user=operator_record.pw_uid, group=operator_record.pw_gid,\n                extra_groups=operator_groups, '
     assert owned.count(drop)==1;owned=owned.replace(drop,'')
     assert owned.count('end = time.monotonic() + 145')==1 and owned.count('control_end = end - 15')==1
@@ -2135,8 +2622,12 @@ finally:
     assert mac_code.count(foreground_line)==1
     mac_code=mac_code.replace(foreground_line,foreground_line+"\nname=sys.argv[2];before=identity(os.lstat(name))\nwith open(name,'ab') as target:target.write(b'changed')\nassert uptime() < deadline and identity(os.lstat(name)) == before")
     mac_subject.write_text(mac_code)
-    mac_records=[]
-    for version,code in [('old',old_wrapper),('new',wrapper),('wrong-code-same-name',wrapper)]:
+    plain_wrapper=wrapper
+    a=plain_wrapper.index('bound_cache = {}\n');b=plain_wrapper.index("print('GUARD_ACTUAL_PRINCIPAL",a)
+    plain_wrapper=plain_wrapper[:a]+'def bound(frame):\n    return (frame.f_code.co_filename in bound_codes and\n            frame.f_code in bound_codes[frame.f_code.co_filename])\n'+plain_wrapper[b:]
+    plain_wrapper=plain_wrapper.replace('    bound_cache.clear()\n','')
+    mac_records=[];mac_references=[]
+    for version,code in [('old',old_wrapper),('new',wrapper),('wrong-code-same-name',wrapper),('uncached-modern',plain_wrapper)]:
         code=code.replace('CLOCK_UPTIME_RAW',clock_name)
         mac_target.write_bytes(b'owned')
         if version=='wrong-code-same-name':
@@ -2144,13 +2635,22 @@ finally:
             mac_subject.write_text(mac_code.replace('name=sys.argv[2];before=',fake+'name=sys.argv[2];before='))
         else:mac_subject.write_text(mac_code)
         counted=code.replace('foreground = {}','callback_count=0\nforeground = {}',1)
+        if 'def bound(frame):\n' in counted:
+            counter="authentication={'requests':0,'filename_memberships':0,'code_set_memberships':0,'objects':{},'rows':[],'stack':[],'events':[]}\nclass AuthenticationTable(dict):\n    def __contains__(self,key):\n        authentication['filename_memberships']+=1\n        authentication['stack'][-1]['filename']+=1\n        return super().__contains__(key)\nclass AuthenticationSet(set):\n    def __contains__(self,key):\n        authentication['code_set_memberships']+=1\n        authentication['stack'][-1]['set']+=1\n        return super().__contains__(key)\nbound_codes=AuthenticationTable({key:AuthenticationSet(value) for key,value in bound_codes.items()})\n"
+            counted=counted.replace('identity_line = ',counter+'identity_line = ',1)
+            counted=measured_classifier(counted,'bound')
+            counted=counted.replace('def bound(frame):\n',"def bound(frame):\n    authentication['requests']+=1\n    authentication['objects'][id(frame.f_code)]=frame.f_code\n",1)
+            counted=counted.replace('    sys.settrace(None)\n',"    sys.settrace(None)\n    print('AUTH_RESULT '+json.dumps({'requests':authentication['requests'],'filename_memberships':authentication['filename_memberships'],'code_set_memberships':authentication['code_set_memberships'],'new_actual_objects':len(authentication['objects']),'rows':authentication['rows'],'events':authentication['events'],'strong_references':all(id(value)==key for key,value in authentication['objects'].items())}),file=sys.stderr)\n",1)
         for name in ('observe','dispatch'):
             header='def '+name+'(frame, event, arg):\n'
             if header in counted:counted=counted.replace(header,header+'    global callback_count\n    callback_count+=1\n',1)
         counted=counted.replace('    sys.settrace(None)\n',"    sys.settrace(None)\n    print('TRACE_COUNT '+str(callback_count),file=sys.stderr)\n",1)
-        mac_program.write_text(counted);started=time.monotonic()
+        mac_program.write_text(counted)
+        snapshot=area/('mac-wrapper-'+version+'.py');snapshot.write_text(counted)
+        print(json.dumps({'preexec_wrapper':str(snapshot),'sha256':hashlib.sha256(snapshot.read_bytes()).hexdigest(),'subject':mac_subject.read_text(),'subject_sha256':hashlib.sha256(mac_subject.read_bytes()).hexdigest(),'consumer_sha256':hashlib.sha256(consumer).hexdigest()}),flush=True)
+        started=time.monotonic()
         result=subprocess.run([sys.executable,'-I','-S','-B',str(mac_program),str(mac_subject),str(package),str(mac_target),str(mac_program)],capture_output=True,timeout=10)
-        print(json.dumps({'mac_observer_version':version,'actual_rc':result.returncode,'stdout':result.stdout.decode(),'stderr':result.stderr.decode()}),flush=True)
+        raw_reference=completed_evidence({'mac_observer_version':version,'actual_rc':result.returncode,'stdout':result.stdout.decode(),'stderr':result.stderr.decode()})
         assert result.returncode!=0
         def row(prefix):return json.loads(next(line[len(prefix):] for line in result.stderr.splitlines() if line.startswith(prefix)))
         clean=row(b'GUARD_OWNED_CLEANUP ');identity=row(b'GUARD_IDENTITY_REFUSAL ')
@@ -2158,9 +2658,27 @@ finally:
         assert clean['foreground_calls'][0]['reaped'] and clean['foreground_calls'][0]['pipes_closed']
         assert identity['deadline_valid'] and identity['actual_identity_comparison_reached'] and identity['actual']!=identity['expected']
         count=int(next(line.split()[1] for line in result.stderr.splitlines() if line.startswith(b'TRACE_COUNT ')))
-        mac_records.append({'version':version,'cleanup':clean,'identity':identity,'callbacks':count,'seconds':time.monotonic()-started,'stdout':result.stdout.decode(),'stderr':result.stderr.decode()})
+        authentication=row(b'AUTH_RESULT ') if version!='old' else None
+        elapsed=time.monotonic()-started
+        record={'version':version,'cleanup':clean,'identity':identity,'callbacks':count,'seconds':elapsed,'authentication':authentication,'stdout':result.stdout.decode(),'stderr':result.stderr.decode()}
+        mac_records.append(record)
+        mac_references.append(completed_evidence({'wrapper_completed_actual':version,'raw_reference':raw_reference,'cleanup':clean,'identity':identity,'callbacks':count,'whole_wall':elapsed,'authentication_rows':0 if authentication is None else len(authentication['rows'])}))
     assert mac_records[1]['callbacks']<mac_records[0]['callbacks']
-    reports.append({'mac_actual_observer_equivalence':mac_records})
+    modern,cached=mac_records[3],mac_records[1]
+    assert modern['callbacks']==cached['callbacks']
+    assert modern['authentication']['requests']==cached['authentication']['requests']
+    for record in (modern,cached):
+        facts=record['authentication'];assert facts['strong_references']
+        assert all(row['set']==(0 if row['hit'] else 1) for row in facts['rows'] if row['set'] or row['hit'])
+        retained=set()
+        for action,identity,strong_reference in facts['events']:
+            assert strong_reference
+            if action=='insert':retained.add(identity)
+            else:assert identity in retained
+    assert list(modern['cleanup'])==list(cached['cleanup']) and list(modern['identity'])==list(cached['identity'])
+    reports.append(completed_evidence({'mac_actual_observer_equivalence':mac_references}))
+    print(json.dumps({'complete_count_value_references':reports}),flush=True)
+    reports.append(completed_evidence({'ready_publication_controls':ready_publication_controls(guard,channel,area)}))
     for fault in ('ordinary-started-no-marker','ordinary-pending','never-started','starting','normal','cancel','alarm','eof-before-launch','actual-deadline','missing-confirmation','wrong-confirmation','reported-wait-error','reported-close-error','wait-interrupted','writer-close-error','terminal-nonzero','mask077-normal','mask022-normal','mask077-cancel','mask022-cancel','mode0400','mode0644','fchmod-error','mask022-fchmod-error','inner-wait-error','inner-close-error'):
         work=area/fault;work.mkdir();base=work/'base';base.mkdir();(base/'package/shadow/v1').mkdir(parents=True);(base/'package/shadow/v1/_consumer.py').write_bytes(consumer);script=work/'runtime-guard-controls.py';ch=work/'channel.py';ch.write_text(channel_owned)
         fixture=base/('runtime-guard-cancel-proof' if fault in ('cancel','alarm','mask077-cancel','mask022-cancel') else 'runtime-guard');fixture.mkdir()
@@ -2285,7 +2803,7 @@ subprocess.Popen=fixed_owned_popen
         start=time.monotonic();result=subprocess.run(['/bin/bash','-c',command],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=20,umask=mask)
         (area/(fault+'.stdout')).write_bytes(result.stdout);(area/(fault+'.stderr')).write_bytes(result.stderr)
         confirmed=audit.exists()
-        print(json.dumps({'actual_owner_case':fault,'returncode':result.returncode,'stdout':result.stdout.decode(),'stderr':result.stderr.decode(),'deletion_permitted':confirmed}),flush=True)
+        raw_reference=completed_evidence({'actual_owner_case':fault,'returncode':result.returncode,'stdout':result.stdout.decode(),'stderr':result.stderr.decode(),'deletion_permitted':confirmed})
         assert confirmed==(fault in ('never-started','normal','cancel','alarm','eof-before-launch','actual-deadline','terminal-nonzero','mask077-normal','mask022-normal','mask077-cancel','mask022-cancel')),(fault,result.returncode,result.stderr)
         assert (result.returncode==0)==(fault in ('never-started','normal','cancel','mask077-normal','mask022-normal','mask077-cancel','mask022-cancel'))
         if fault=='alarm':assert result.returncode==-signal.SIGALRM
@@ -2323,8 +2841,8 @@ subprocess.Popen=fixed_owned_popen
             if fault in ('reported-close-error','writer-close-error'):
                 assert 'ACTUAL_CLOSE_FINISHED:' in result.stderr.decode() and 'FIRST_REFUSAL:unknown:0' in result.stderr.decode()
                 assert result.stderr.decode().count('ACTUAL_CLOSE_FINISHED:')==1
-        reports.append({'owner_case':fault,'returncode':result.returncode,'deletion_permitted':confirmed,
-                        'stdout':result.stdout.decode(),'stderr':result.stderr.decode(),'elapsed':time.monotonic()-start})
+        reports.append(completed_evidence({'owner_case':fault,'returncode':result.returncode,'deletion_permitted':confirmed,
+                        'raw_reference':raw_reference,'elapsed':time.monotonic()-start}))
     library=area/'never-launched-library';library.write_bytes(b'owned data')
     cleanup_node=next(n for n in ast.walk(tree) if isinstance(n,ast.Try) and n.finalbody and
         any(isinstance(x,ast.Expr) and isinstance(x.value,ast.Call) and isinstance(x.value.func,ast.Attribute) and
@@ -2340,15 +2858,15 @@ subprocess.Popen=fixed_owned_popen
     try:owner.acl([])
     except AssertionError:pass
     else:raise AssertionError('active prior child allowed new ACL operation')
-    reports.append({'never_launched_data_cleanup_gate':'PASS','active_library_unlink_refused':True,'active_acl_refused':True})
-    reports.append({'actual_proof_materialization':proof_materialization_controls(guard,area)})
+    reports.append(completed_evidence({'never_launched_data_cleanup_gate':'PASS','active_library_unlink_refused':True,'active_acl_refused':True}))
+    reports.append(completed_evidence({'actual_proof_materialization':proof_materialization_controls(guard,area)}))
 except BaseException:
     print(json.dumps({'ordinary_tree_retained':temporary,'reason':'control did not establish complete success'}),flush=True)
     raise
 else:
     shutil.rmtree(temporary)
     print(json.dumps({'ordinary_tree_removed_after_complete_evidence':temporary}),flush=True)
-print(json.dumps({'observer_owner_controls':'PASS','reports':reports,'ordinary_uid_and_fixed_sudo_transport_adapter':True,
+print(json.dumps({'observer_owner_controls':'PASS','reports':reports,'complete_payload_index':evidence,'ordinary_uid_and_fixed_sudo_transport_adapter':True,
                   'supplied_runtime_executed':False,'not_actual_root_chain_or_full_fixture_proof':True,'fixed_owned_control_deadlines_only':[5,1],
                   'production_deadlines_unchanged':[1800,300,120,145,15]},sort_keys=True))
 PY_OBSERVER_OWNER_CONTROLS
@@ -4542,7 +5060,9 @@ assert serial in ('1','2') and operation in ('prepare','confirm','ready')
 stem=area/('scope-owner-'+serial)
 context=Path(str(stem)+'.json');channel=Path(str(stem)+'.fifo')
 receipt=Path(str(stem)+'.receipt');ready=Path(str(stem)+'.ready')
+complete=Path(str(stem)+'.ready-complete')
 if operation=='prepare':
+    assert not os.path.lexists(ready) and not os.path.lexists(complete), 'old ready publication'
     raw,source=snapshot(driver,16*1024*1024)
     fixture=os.lstat(base)
     assert stat.S_ISDIR(fixture.st_mode) and fixture.st_uid==0 and not fixture.st_mode&0o022
@@ -4558,18 +5078,30 @@ if operation=='prepare':
     finally:os.close(fd)
 else:
     raw,state=snapshot(context,4096);expected=json.loads(raw)
+    assert expected['invocation']==str(stem), 'completion invocation'
     current,source=snapshot(driver,16*1024*1024)
     assert identity(source)==expected['driver_identity'] and hashlib.sha256(current).hexdigest()==expected['driver_sha256']
     assert identity(os.lstat(base))[:5]==expected['fixture']
     assert identity(os.lstat(channel))[:6]==expected['channel']
     if operation=='ready':
         end=time.monotonic()+10
-        while not ready.exists():
-            assert time.monotonic()<end
-            time.sleep(0.02)
+        while True:
+            try:info=os.lstat(complete)
+            except FileNotFoundError:
+                assert time.monotonic()<end, 'completion deadline'
+                time.sleep(0.02)
+                continue
+            break
+        assert stat.S_ISREG(info.st_mode), 'completion type'
+        assert info.st_uid==0, 'completion owner'
+        assert info.st_nlink==1, 'completion links'
+        assert info.st_size==0, 'completion size'
+        assert stat.S_IMODE(info.st_mode)==0o400, 'completion mode'
+        complete_identity=identity(info)
         data,info=snapshot(ready,4096)
         assert info.st_uid==0 and stat.S_IMODE(info.st_mode)==0o444
         assert json.loads(data)=={'context_sha256':hashlib.sha256(raw).hexdigest(),'foreground_started':True}
+        assert identity(os.lstat(complete))==complete_identity, 'completion changed'
     else:
         data,info=snapshot(receipt,16384);value=json.loads(data)
         assert info.st_uid==0 and stat.S_IMODE(info.st_mode)==0o444
@@ -4684,9 +5216,77 @@ assert identity_lines
 identity_callers = {item for item in bound_codes[original_name]
     if identity_lines & {line for offset, line in dis.findlinestarts(item)}}
 
+bound_cache = {}
+bound_busy = [False]
 def bound(frame):
-    return (frame.f_code.co_filename in bound_codes and
-            frame.f_code in bound_codes[frame.f_code.co_filename])
+    code = frame.f_code
+    key = id(code)
+    found = bound_cache.get(key)
+    if not bound_busy[0] and found is not None and found[0] is code:
+        return found[1]
+    if bound_busy[0]:
+        return (frame.f_code.co_filename in bound_codes and
+                frame.f_code in bound_codes[frame.f_code.co_filename])
+    bound_busy[0] = True
+    try:
+        in_source = frame.f_code.co_filename in bound_codes
+        result = in_source and frame.f_code in bound_codes[frame.f_code.co_filename]
+        if in_source and len(bound_cache) < 512:
+            try:
+                pending = [(code, 0)]
+                nodes = payload = 0
+                reusable = True
+                while pending:
+                    value, depth = pending.pop()
+                    nodes += 1
+                    if nodes > 1024 or depth > 32:
+                        reusable = False
+                        break
+                    kind = type(value)
+                    if kind is types.CodeType:
+                        children = (value.co_code, value.co_consts, value.co_names, value.co_varnames,
+                            value.co_freevars, value.co_cellvars, value.co_filename, value.co_name,
+                            getattr(value, 'co_qualname', ''),
+                            value.co_linetable if hasattr(value, 'co_linetable') else value.co_lnotab,
+                            getattr(value, 'co_exceptiontable', b''), value.co_argcount,
+                            value.co_posonlyargcount, value.co_kwonlyargcount, value.co_nlocals,
+                            value.co_stacksize, value.co_flags, value.co_firstlineno)
+                    elif kind is tuple or kind is frozenset:
+                        children = value
+                    else:
+                        if value is None or value is Ellipsis: size = 0
+                        elif kind is bool: size = 1
+                        elif kind is int: size = (value.bit_length() + 7) // 8
+                        elif kind is float: size = 8
+                        elif kind is complex: size = 16
+                        elif kind is bytes: size = len(value)
+                        elif kind is str:
+                            if len(value) > 65536 - payload:
+                                reusable = False
+                                break
+                            if not value.isascii() and len(value) > (65536 - payload) // 4:
+                                reusable = False
+                                break
+                            size = len(value.encode('utf-8'))
+                        else:
+                            reusable = False
+                            break
+                        payload += size
+                        if payload > 65536:
+                            reusable = False
+                            break
+                        continue
+                    if len(pending) + len(children) > 1024 - nodes:
+                        reusable = False
+                        break
+                    pending.extend((child, depth + 1) for child in children)
+                if reusable:
+                    bound_cache[key] = (code, result)
+            except Exception:
+                pass
+        return result
+    finally:
+        bound_busy[0] = False
 print('GUARD_ACTUAL_PRINCIPAL ' + json.dumps({'pid': os.getpid(), 'uid': os.getuid(), 'gid': os.getgid(),
     'groups': os.getgroups()}, sort_keys=True), file=sys.stderr, flush=True)
 
@@ -4750,6 +5350,7 @@ try:
     exec(compiled_code, {'__name__': '__main__'})
 finally:
     sys.settrace(None)
+    bound_cache.clear()
     if identity_refusal is not None:
         print('GUARD_IDENTITY_REFUSAL ' + json.dumps(identity_refusal, sort_keys=True), file=sys.stderr, flush=True)
     print('GUARD_OWNED_CLEANUP ' + json.dumps({'foreground_calls': proofs,
@@ -4950,6 +5551,7 @@ class ScopeFixtureOwnerCancel:
         self.expected=json.loads(self.context_raw)
         self.stem=Path(self.expected['invocation'])
         assert self.context==Path(str(self.stem)+'.json') and self.stem.parent==Path(sys.argv[0]).parent
+        assert not os.path.lexists(str(self.stem)+'.ready') and not os.path.lexists(str(self.stem)+'.ready-complete'), 'old ready publication'
         self.source_fd=None
         self.fixture_fd=None
         try:
@@ -5007,6 +5609,15 @@ class ScopeFixtureOwnerCancel:
         parent=os.open(self.stem.parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
         try:os.fsync(parent)
         finally:os.close(parent)
+        if suffix=='.ready':
+            complete=Path(str(self.stem)+'.ready-complete')
+            fd=os.open(complete,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o400)
+            try:
+                info=os.fstat(fd)
+                assert stat.S_ISREG(info.st_mode) and info.st_uid==0 and info.st_nlink==1
+                assert info.st_size==0 and stat.S_IMODE(info.st_mode)==0o400
+                assert self.identity(info)==self.identity(os.lstat(complete))
+            finally:os.close(fd)
 
     def settled(self,child,stderr):
         assert child is not None and type(child.returncode) is int
