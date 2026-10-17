@@ -2360,23 +2360,46 @@ def code_auth_controls(observer,wrapper,area):
         def __hash__(self):self.calls.append('hash');return super().__hash__()
         def __eq__(self,other):self.calls.append('eq');return super().__eq__(other)
     raw='def sample(): return sys._getframe()\n'
-    base=compile(raw,'owned-classifier','exec').co_consts[0]
     def frame(code):return types.FunctionType(code,{'sys':sys})()
-    nested=None
-    for unused in range(34):nested=(nested,)
-    codes=[base,base.replace(),base.replace(co_name='wrong'),base.replace(co_consts=([1],)),
-        base.replace(co_consts=(Constant(),)),base.replace(co_consts=(BadHash(),)),
-        base.replace(co_filename=Filename(base.co_filename)),base.replace(co_name=Filename(base.co_name)),
-        base.replace(co_consts=(None,tuple(range(1025)))),base.replace(co_consts=(None,nested)),
-        base.replace(co_consts=(None,b'x'*65537)),base.replace(co_consts=(None,'\ud800')),
-        base.replace(co_consts=(None,(1,2.0,3j,b'x','text',frozenset({1,2}))))]
-    try:
-        codes.append(base.replace(co_names=(Filename('sys'),'_getframe')))
-    except SystemError as error:
-        if type(error) is not SystemError or str(error)!='non-string found in code slot':raise
-        records.append(completed_evidence({'constructor':'co_names str subclass','interpreter':sys.version,
-            'exception':type(error).__name__,'message':str(error),'classifier':'NOT_CALLED'}))
-    cases=[frame(code) for code in codes]
+    def fresh_cases(key):
+        base=compile(raw,'owned-classifier','exec').co_consts[0]
+        nested=None
+        for unused in range(34):nested=(nested,)
+        codes=[base,base.replace(),base.replace(co_name='wrong'),base.replace(co_consts=([1],)),
+            base.replace(co_consts=(Constant(),)),base.replace(co_consts=(BadHash(),)),
+            base.replace(co_filename=Filename(base.co_filename)),base.replace(co_name=Filename(base.co_name)),
+            base.replace(co_consts=(None,tuple(range(1025)))),base.replace(co_consts=(None,nested)),
+            base.replace(co_consts=(None,b'x'*65537)),base.replace(co_consts=(None,'\ud800')),
+            base.replace(co_consts=(None,(1,2.0,3j,b'x','text',frozenset({1,2}))))]
+        try:
+            codes.append(base.replace(co_names=(Filename('sys'),'_getframe')))
+        except SystemError as error:
+            if type(error) is not SystemError or str(error)!='non-string found in code slot':raise
+            records.append(completed_evidence({'constructor':'co_names str subclass','interpreter':sys.version,
+                'exception':type(error).__name__,'message':str(error),'classifier':'NOT_CALLED'}))
+        cases=[frame(code) for code in codes]
+        return base,codes,cases
+    graphs={}
+    identities=set()
+    for boundary in ('watched','bound'):
+        for version in ('original','cached'):
+            for sequence in ('measured','cold'):
+                key=(boundary,version,sequence)
+                graph=fresh_cases(key);current=set()
+                def visit(value):
+                    if type(value) is types.CodeType:
+                        current.add(id(value))
+                        for field in ('co_filename','co_name','co_qualname','co_names','co_varnames','co_freevars','co_cellvars','co_consts'):
+                            visit(getattr(value,field,None))
+                    elif type(value) in (tuple,list,frozenset):
+                        for child in value:visit(child)
+                    elif type(value) in (Constant,BadHash,Filename):current.add(id(value))
+                for code in graph[1]:visit(code)
+                current.update(id(value) for value in graph[2])
+                assert current.isdisjoint(identities) and not Constant.calls and not Filename.calls
+                identities.update(current);graphs[key]=graph
+                records.append(completed_evidence({'fresh_input_graph':key,'code_frame_custom_ids':sorted(current),
+                    'separate_from_all_prior_graphs':True,'identity_only_no_hash_probe':True}))
     for name,table_name,program,indent,next_marker in [('watched','source_codes',observer,4,'    def trace('),
                                                      ('bound','bound_codes',wrapper,0,"print('GUARD_ACTUAL_PRINCIPAL")]:
         start=program.index(' '*indent+name+'_cache = {}\n');end=program.index(next_marker,start)
@@ -2393,6 +2416,7 @@ def code_auth_controls(observer,wrapper,area):
         print(json.dumps({'classifier_source':str(path),'sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'owned_program':raw}),flush=True)
         outputs=[]
         for label,code_source in [('original',original_source),('cached',actual)]:
+            base,codes,cases=graphs[(name,label,'measured')]
             codeset=CodeSet({base});table=Table({base.co_filename:codeset});codeset.owner=table
             table.tests=0;table.code_tests=0;table.hook=None;table.nested=[]
             qualifications=[]
@@ -2474,7 +2498,7 @@ def code_auth_controls(observer,wrapper,area):
                     self.nested.append(hook())
                 return super().__contains__(key)
         for label,cold_source in [('original',original_source),('cached',actual)]:
-            cold_cases=[frame(current.f_code.replace()) for current in cases];cold_base=cold_cases[0].f_code
+            cold_base,cold_codes,cold_cases=graphs[(name,label,'cold')]
             cold_table=ColdTable({cold_base.co_filename:{cold_base}});cold_table.hook=None;cold_table.nested=[]
             cold_scope={'types':types,table_name:cold_table}
             cold_path=area/(name+'-'+label+'-cold.py');cold_path.write_text(cold_source)
