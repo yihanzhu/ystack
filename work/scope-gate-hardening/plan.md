@@ -413,6 +413,28 @@ Keep the fixed fixture chown/chmod options and `--` before the first owner or mo
 operand. Preserve each original program, target, role, recursive extent and
 nonzero failure; do not ignore errors or widen the owned paths.
 
+In the assembler's private Darwin tools/python3 creation block, initialize only
+that newly and exclusively created symlink to final mode 0744, without following
+it, before any consumer use. Use os.chmod with follow_symlinks=False. Keep the
+original target, root uid/gid, global umask and Linux behavior unchanged. Creation
+failure must not overwrite or chmod an existing leaf. Initialization failure
+retains the original nonzero error before probe/consumer launch, without retry
+or fallback. Touch no target, P, Versions, Current, ancestor, ACL or other tree;
+add no administrator command, public API or diagnostic mechanism. Keep production
+realpath and NOFOLLOW checks unchanged.
+
+Freeze and uniquely extract this actual creation/initialization block for owned
+022/077 umask controls. Check link type/mode, target text, owner/nlink and unchanged
+mask, target bytes and target mode. Retain the old 077 creation block's actual
+mode comparison; a 0700 link must fail the final-mode postcondition. Prove existing
+leaf refusal without overwrite and separately reach creation and nofollow chmod
+failures, preserving the original error and preventing later probe/consumer use.
+Label controlled OS seams honestly. Linux must add no nofollow chmod. Same-uid
+owned controls prove construction only; the original full Mac must still prove
+this path with its real different-uid consumer and complete restoration. Include
+all old and new ordinary raw output under the original 16 MiB cap; do not truncate
+evidence, remove controls or relax cleanup to fit it.
+
 Run the real scope evaluator as the consumer account. The bundle and actual bare
 Git snapshot live outside the controlled store. Assert actual uid/gid, mode,
 platform ACL, link, no-follow, held-descriptor, fresh-origin and `check-bound`
