@@ -2619,6 +2619,79 @@ def genuine_relation_controls(area):
     assert len(list(snapshot.iterdir()))==22
     return completed_evidence({'genuine_relation_controls':reports,'stable_sink_controls':stability,'scope':'actual insertions and original admission/exception boundaries with fixed ordinary UID and standalone entry adapters; no full evaluator/P/jq/root proof'})
 
+def link_mode_controls(area):
+    assembler=heredoc('PY_GENUINE_ASSEMBLER');nodes=ast.parse(assembler).body
+    matches=[i for i,n in enumerate(nodes) if isinstance(n,ast.Expr) and isinstance(n.value,ast.Call) and isinstance(n.value.func,ast.Attribute) and n.value.func.attr=='symlink_to' and isinstance(n.value.args[0],ast.Name) and n.value.args[0].id=='relation_creation_target']
+    assert len(matches)==1;index=matches[0];block=nodes[index:index+2]
+    assert type(block[1]) is ast.If and ast.dump(block[1].test,include_attributes=False)==ast.dump(ast.parse("sys.platform=='darwin'",mode='eval').body,include_attributes=False)
+    actual='\n'.join(ast.get_source_segment(assembler,n) for n in block)+'\n'
+    old=ast.get_source_segment(assembler,block[0])+'\n';records=[]
+    for mask,fault in ((0o022,'normal'),(0o077,'normal'),(0o077,'old'),(0o022,'existing'),(0o077,'existing'),(0o022,'create'),(0o077,'create'),(0o022,'mode'),(0o077,'mode'),(0o022,'linux'),(0o077,'linux')):
+        location=area/('link-mode-'+str(mask)+'-'+fault);location.mkdir()
+        script="from pathlib import Path\nimport hashlib,json,os,stat,sys,types,traceback\nlocation=Path(sys.argv[1])\n"+'mask='+repr(mask)+'\nfault='+repr(fault)+'\nactual='+repr(actual)+'\nold='+repr(old)+'\n'+r"""
+assert os.umask(mask)==mask
+tools=location/'tools';tools.mkdir();target=location/'target';target.write_bytes(b'owned-target');target.chmod(0o640)
+relation_creation_target=str(target);link=tools/'python3';target_before=target.lstat();target_raw=target.read_bytes()
+mode_calls=[];launches=[];sentinel=OSError(5,'fixed owned '+fault+' failure')
+if fault=='existing':link.symlink_to('unchanged-old-target')
+existing=link.lstat() if fault=='existing' else None
+native_platform=sys.platform
+platform='linux' if fault=='linux' else 'darwin' if fault in ('create','mode','existing') else native_platform
+real_chmod=os.chmod;real_symlink=Path.symlink_to
+
+def mode(path,value,**options):
+    assert path==link and value==0o744 and options=={'follow_symlinks':False}
+    mode_calls.append([str(path),value,options])
+    if fault=='mode':raise sentinel
+    return real_chmod(path,value,**options)
+def create(self,*args,**kwargs):
+    assert self==link and args==(relation_creation_target,) and not kwargs
+    raise sentinel
+namespace={'tools':tools,'relation_creation_target':relation_creation_target,'sys':types.SimpleNamespace(platform=platform),'os':types.SimpleNamespace(chmod=mode)}
+if fault=='create':Path.symlink_to=create
+caught=None
+try:
+    try:
+        exec(compile(old if fault=='old' else actual,'actual-tools-link-creation','exec'),namespace)
+        launches.append('later-probe-consumer')
+    except OSError as error:caught=error
+finally:Path.symlink_to=real_symlink
+if fault in ('create','mode','existing'):
+    assert caught is not None and not launches
+    frames=traceback.extract_tb(caught.__traceback__)
+    if fault=='existing':
+        assert type(caught) is FileExistsError and not mode_calls
+        assert os.readlink(link)=='unchanged-old-target' and link.lstat()==existing
+        assert any(frame.filename=='actual-tools-link-creation' and frame.lineno==1 for frame in frames)
+    else:
+        assert caught is sentinel
+        assert frames[-1].name==('create' if fault=='create' else 'mode')
+        assert any(frame.filename=='actual-tools-link-creation' and frame.lineno==(1 if fault=='create' else 2) for frame in frames)
+        if fault=='create':assert not link.is_symlink() and not mode_calls
+        else:assert link.is_symlink() and len(mode_calls)==1
+else:
+    assert caught is None and launches==['later-probe-consumer']
+    value=link.lstat();assert stat.S_ISLNK(value.st_mode) and value.st_uid==os.getuid() and value.st_gid==os.getgid() and value.st_nlink==1
+    assert os.readlink(link)==relation_creation_target
+    if fault!='old' and platform=='darwin':assert stat.S_IMODE(value.st_mode)==0o744 and len(mode_calls)==1
+    else:assert not mode_calls
+    if fault=='old' and native_platform=='darwin':assert stat.S_IMODE(value.st_mode)==0o700 and stat.S_IMODE(value.st_mode)!=0o744
+fields=('st_dev','st_ino','st_mode','st_uid','st_gid','st_nlink','st_size','st_mtime_ns','st_ctime_ns')
+assert target.read_bytes()==target_raw and all(getattr(target.lstat(),key)==getattr(target_before,key) for key in fields) and os.umask(mask)==mask
+value=link.lstat() if link.is_symlink() else None
+print(json.dumps({'mask':mask,'case':fault,'native_platform':native_platform,'branch':platform,'mode_calls':mode_calls,
+    'link_mode':stat.S_IMODE(value.st_mode) if value else None,'uid':value.st_uid if value else None,'gid':value.st_gid if value else None,
+    'nlink':value.st_nlink if value else None,'target_unchanged':True,'mask_unchanged':True,'launches':launches,
+    'error':type(caught).__name__ if caught else None,'same_error':caught is sentinel,'ordinary_seam':fault in ('create','mode'),
+    'Darwin_mode_construction_proven':native_platform=='darwin' and fault=='normal'},sort_keys=True))
+"""
+        print(json.dumps({'link_mode_preexec':fault,'mask':mask,'script':script,'sha256':hashlib.sha256(script.encode()).hexdigest()}),flush=True)
+        result=subprocess.run([sys.executable,'-I','-S','-B','-',str(location)],input=script.encode(),capture_output=True,timeout=10,umask=mask)
+        completed_evidence({'link_mode_before_assert':{'mask':mask,'case':fault,'returncode':result.returncode,'stdout_utf8':result.stdout.decode(),'stderr_utf8':result.stderr.decode()}})
+        assert result.returncode==0 and not result.stderr,(fault,result.stdout,result.stderr)
+        records.append(json.loads(result.stdout))
+    return completed_evidence({'link_mode_controls':records,'scope':'actual extracted block, current UID; native Darwin mode only, explicit Linux branch and OS-failure seams; not cross-UID genuine proof'})
+
 def probe_capture_controls(area):
     import io,contextlib
     assembler=heredoc('PY_GENUINE_ASSEMBLER');tree=ast.parse(assembler)
@@ -3591,6 +3664,7 @@ try:
     reports.append(genuine_relation_controls(area))
     reports.append(launch_capture_controls(area))
     reports.append(probe_capture_controls(area))
+    reports.append(link_mode_controls(area))
     reports.append(original_context_controls(area))
     reports.append(wrapper_cancel_controls(wrapper,guard,area))
     reports.append(short_stage_controls(guard,channel,area,clock_name))
@@ -7561,6 +7635,7 @@ work=base/'work';tools=base/'tools';jq=tools/'jq';shutil.copyfile(jq_source,jq);
 assert sha(jq.read_bytes())==c.JQ_SHA256[sys.platform]
 relation_creation_target=sys.executable
 (tools/'python3').symlink_to(relation_creation_target)
+if sys.platform=='darwin':os.chmod(tools/'python3',0o744,follow_symlinks=False)
 env={'PATH':str(tools)+':/usr/bin:/bin','LC_ALL':'C','LANG':'C','HOME':str(work),'TMPDIR':str(work),'GIT_CONFIG_NOSYSTEM':'1','GIT_CONFIG_GLOBAL':'/dev/null','GIT_NO_REPLACE_OBJECTS':'1','GIT_NO_LAZY_FETCH':'1','GIT_TERMINAL_PROMPT':'0','GIT_OPTIONAL_LOCKS':'0','GIT_AUTHOR_NAME':'fixture','GIT_AUTHOR_EMAIL':'fixture@example.invalid','GIT_COMMITTER_NAME':'fixture','GIT_COMMITTER_EMAIL':'fixture@example.invalid','GIT_AUTHOR_DATE':'2000-01-01T00:00:00Z','GIT_COMMITTER_DATE':'2000-01-01T00:00:00Z'}
 class GenuineRelationCapture:
  def __init__(self,argv):
