@@ -2206,13 +2206,13 @@ for fault in ('ready-open','ready-write','ready-mode','ready-fsync','ready-close
         release.set();ScopeFixtureOwnerCancel.publish.__globals__['os']=original
         if not any(thread.is_alive() for thread in threads):
             for fd in list(held):os.close(fd);held.pop(fd)
-for fault in ('missing','invocation','owner','directory','symlink','mode','links','nonempty','drift','completion-drift'):
+for fault in ('missing','invocation','owner','directory','symlink','mode','links','nonempty','drift','completion-drift','completion-format','completion-overcap'):
     work,owner,ready,complete=setup(fault);invoke(owner);opened_paths=[];drifted=[]
     proxy=types.SimpleNamespace(**{name:getattr(os,name) for name in dir(os)});fds={}
     def opened(path,*args):opened_paths.append(str(path));fd=os.open(path,*args);fds[fd]=Path(path);return fd
     def info(fd):
         before=os.fstat(fd)
-        if not drifted and ((fault=='drift' and fds.get(fd)==ready) or (fault=='completion-drift' and fds.get(fd)==ready)):
+        if not drifted and ((fault=='drift' and fds.get(fd)==ready) or (fault in ('completion-drift','completion-format','completion-overcap') and fds.get(fd)==ready)):
             if fault=='drift':
                 os.chmod(ready,0o600)
                 with open(ready,'ab') as output:output.write(b' ')
@@ -2232,6 +2232,11 @@ for fault in ('missing','invocation','owner','directory','symlink','mode','links
     if fault=='links':os.link(complete,work/'extra-link')
     if fault=='nonempty':complete.chmod(0o600);complete.write_bytes(b'x');complete.chmod(0o400)
     value=namespace(work,'ready',system=proxy)
+    if fault in ('completion-format','completion-overcap'):
+        def diagnostic_dump(*args,**kwargs):
+            if fault=='completion-format':raise ValueError('fixed completion formatting failure')
+            return 'x'*1024
+        value['json']=types.SimpleNamespace(loads=json.loads,dumps=diagnostic_dump)
     if fault=='owner':
         wrong=channel_source.replace("info.st_uid==UID, 'completion owner'".replace('UID',str(os.getuid())),"info.st_uid==UID, 'completion owner'".replace('UID',str(os.getuid()+1)))
         modified=ast.parse(wrong);value['negative_expected_uid']=os.getuid()+1
@@ -2244,7 +2249,16 @@ for fault in ('missing','invocation','owner','directory','symlink','mode','links
         while trace.tb_next:trace=trace.tb_next
         want={'missing':'completion deadline','invocation':'completion invocation','owner':'completion owner','directory':'completion type','symlink':'completion type','mode':'completion mode','links':'completion links','nonempty':'completion size','completion-drift':'completion changed'}
         report({'case':fault,'mask':mask,'error':str(error),'line':trace.tb_lineno,'elapsed':time.monotonic()-started,'opened':opened_paths,'actual_uid':os.getuid(),'negative_expected_uid':value.get('negative_expected_uid')})
-        assert (trace.tb_lineno==steady if fault=='drift' else str(error)==want[fault])
+        if fault=='completion-drift':
+            assert str(error).startswith('completion changed ') and len(str(error).encode())<=1024
+            details=json.loads(str(error)[len('completion changed '):])
+            assert details['initial']==value['complete_identity'] and details['final']==value['final_complete_identity']
+            assert all(type(item) is int for item in details['initial']+details['final']) and len(details['initial'])==len(details['final'])==9
+            fields=('dev','ino','mode','uid','gid','nlink','size','mtime_ns','ctime_ns')
+            assert details['changed']==[name for name,before,after in zip(fields,details['initial'],details['final']) if before!=after]
+            assert details['initial']!=details['final'] and details['initial'][5]==1 and details['final'][5]==2
+        elif fault in ('completion-format','completion-overcap'):assert str(error)=='completion changed'
+        else:assert (trace.tb_lineno==steady if fault=='drift' else str(error)==want[fault])
     else:raise AssertionError('invalid ready publication accepted')
     assert str(complete) not in opened_paths
 for leaf in ('.ready','.ready-complete'):
@@ -2330,13 +2344,58 @@ def authentication_proof(facts):
         'requests':facts['requests'],'new_actual_objects':len(facts['objects']),
         'rows':facts['rows'],'actual_insert_hit_events':facts['events']}
 
+def stable_sink_controls(area,assembler):
+    import io
+    node=next(n for n in ast.parse(assembler).body if isinstance(n,ast.ClassDef) and n.name=='GenuineRelationCapture')
+    methods=[n for n in node.body if isinstance(n,ast.FunctionDef) and n.name in ('identity','stable_sink','export_failure')]
+    extracted=ast.ClassDef(name='ExtractedSink',bases=[],keywords=[],body=methods,decorator_list=[])
+    code=compile(ast.fix_missing_locations(ast.Module(body=[extracted],type_ignores=[])),'actual-stable-sink','exec')
+    sink=area/'stable-sink';sink.write_bytes(b'');sink.chmod(0o600)
+    fields=('st_dev','st_ino','st_mode','st_nlink','st_uid','st_gid','st_size','st_mtime_ns','st_ctime_ns')
+    reports=[]
+    for field in (None,*fields):
+        state=os.stat(sink);os.utime(sink,ns=(1000000000,state.st_mtime_ns));observed=[];refused=[]
+        def observed_fstat(fd):
+            value=os.fstat(fd);observed.append(value)
+            if field is not None and len(observed)==2:
+                # Fixed negative observation view; the positive keeps exact kernel objects.
+                view={name:getattr(value,name) for name in fields};view[field]+=1
+                return types.SimpleNamespace(**view)
+            return value
+        proxy=types.SimpleNamespace(**{name:getattr(os,name) for name in ('open','close','read','lstat','O_RDONLY','O_NOFOLLOW','O_NONBLOCK')},fstat=observed_fstat)
+        output=io.BytesIO();namespace={'os':proxy,'stat':stat,'json':json,'sys':types.SimpleNamespace(stderr=types.SimpleNamespace(buffer=output))}
+        exec(code,namespace);capture=namespace['ExtractedSink']();capture.sink=sink;capture.sink_identity=capture.identity(os.lstat(sink));capture.token='x'*64;capture.binding={'case':'owned-stable-sink'};capture.line_map={}
+        def trace(frame,event,arg):
+            if frame.f_code.co_filename=='actual-stable-sink' and frame.f_code.co_name=='export_failure' and event=='exception':
+                refused.append((frame.f_lineno,arg[0].__name__))
+            return trace
+        previous=sys.gettrace();sys.settrace(trace)
+        try:capture.export_failure(types.SimpleNamespace(returncode=-15))
+        finally:sys.settrace(previous)
+        assert len(observed)==2
+        if field is None:
+            payload=json.loads(output.getvalue());assert payload['writer_completion']=='GAP' and payload['restoration']=='PENDING'
+            assert capture.stable_sink(observed[0])==capture.stable_sink(observed[1]) and not refused
+        else:
+            target=next(n.lineno for n in ast.walk(node) if isinstance(n,ast.Assert) and 'self.stable_sink' in ast.get_source_segment(assembler,n))
+            assert refused==[(target,'AssertionError')] and not output.getvalue()
+        reports.append({'field':field,'adapter':'exact kernel objects' if field is None else 'one-field negative observation view; not kernel mutation',
+            'before':{name:getattr(observed[0],name) for name in (*fields,'st_atime_ns')},
+            'after':{name:getattr(observed[1],name) for name in (*fields,'st_atime_ns')},
+            'refusal':refused,'export_bytes':len(output.getvalue())})
+    return reports
+
 def genuine_relation_controls(area):
     assembler=heredoc('PY_GENUINE_ASSEMBLER');tree=ast.parse(assembler)
+    stability=stable_sink_controls(area,assembler)
     node=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='GenuineRelationCapture')
     actual=ast.get_source_segment(assembler,node)+'\n'
     spec=importlib.util.spec_from_file_location('genuine_relation_owned_consumer',root/'shadow/v1/_consumer.py')
     module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
     location=area/'genuine-relation-controls';location.mkdir();reports=[]
+    snapshot=location/'preexec';snapshot.mkdir()
+    assert snapshot.parent==location and snapshot.is_relative_to(area) and not snapshot.is_relative_to(root)
+    assert snapshot!=Path(sys.argv[1]).parent and snapshot!=(root/'scripts/test/scope-qualification.test.sh').parent
     for fault in ('direct','reader','missing','wrong-sink','wrong-invocation','overflow','format','write','unknown','success','source-drift'):
         base=location/fault;base.mkdir();package=base/'package';(package/'scope/v1').mkdir(parents=True)
         for name in ('evaluate-scope.sh','read-shadow-evidence.py'):
@@ -2349,10 +2408,11 @@ def genuine_relation_controls(area):
         for leaf in ('boundary.sh','reader-mapping.py','closed-writer.py','reader.stderr','reader-stderr'):(base/leaf).write_bytes(b'')
         os.mkfifo(base/'ready-fifo',0o600)
         capture=context['GenuineRelationCapture'](argv);front=capture.copies[0].decode();reader=capture.copies[1].decode()
-        snapshot=Path(sys.argv[1]).parent
         (snapshot/(fault+'.front.preexec.sh')).write_text(front);(snapshot/(fault+'.reader.preexec.py')).write_text(reader)
+        assert (snapshot/(fault+'.front.preexec.sh')).read_bytes()==capture.copies[0] and (snapshot/(fault+'.reader.preexec.py')).read_bytes()==capture.copies[1]
         print(json.dumps({'genuine_relation_preexec':fault,'front_sha256':hashlib.sha256(front.encode()).hexdigest(),
-            'reader_sha256':hashlib.sha256(reader.encode()).hexdigest(),'original_sha256':capture.binding['original_sha256']}),flush=True)
+            'reader_sha256':hashlib.sha256(reader.encode()).hexdigest(),'original_sha256':capture.binding['original_sha256'],
+            'front_source':front,'reader_source':reader,'snapshot_root':str(snapshot),'sequence':len(reports)}),flush=True)
         if fault=='source-drift':
             with capture.paths[0].open('ab') as stream:stream.write(b'\n')
             try:capture.before_call()
@@ -2435,7 +2495,8 @@ def genuine_relation_controls(area):
         reports.append({'case':fault,'actual_returncode':result.returncode,'stdout_hex':result.stdout.hex(),
             'stderr_utf8':result.stderr.decode(),'capture_utf8':raw.decode(),'restore':capture.restored,
             'pending':capture.pending.exists(),'normal_admission':'actual original wait/EOF segment' if fault=='success' else None})
-    return completed_evidence({'genuine_relation_controls':reports,'scope':'actual insertions and original admission/exception boundaries with fixed ordinary UID and standalone entry adapters; no full evaluator/P/jq/root proof'})
+    assert len(list(snapshot.iterdir()))==22
+    return completed_evidence({'genuine_relation_controls':reports,'stable_sink_controls':stability,'scope':'actual insertions and original admission/exception boundaries with fixed ordinary UID and standalone entry adapters; no full evaluator/P/jq/root proof'})
 
 def code_auth_controls(observer,wrapper,area):
     import textwrap
@@ -5236,7 +5297,17 @@ else:
         data,info=snapshot(ready,4096)
         assert info.st_uid==0 and stat.S_IMODE(info.st_mode)==0o444
         assert json.loads(data)=={'context_sha256':hashlib.sha256(raw).hexdigest(),'foreground_started':True}
-        assert identity(os.lstat(complete))==complete_identity, 'completion changed'
+        final_complete_identity=identity(os.lstat(complete))
+        if final_complete_identity!=complete_identity:
+            message='completion changed'
+            try:
+                fields=('dev','ino','mode','uid','gid','nlink','size','mtime_ns','ctime_ns')
+                details={'initial':complete_identity,'final':final_complete_identity,
+                         'changed':[name for name,before,after in zip(fields,complete_identity,final_complete_identity) if before!=after]}
+                rendered=message+' '+json.dumps(details,sort_keys=True,separators=(',',':'))
+                if len(rendered.encode('utf-8'))<=1024:message=rendered
+            except BaseException:pass
+            raise AssertionError(message)
     else:
         data,info=snapshot(receipt,16384);value=json.loads(data)
         assert info.st_uid==0 and stat.S_IMODE(info.st_mode)==0o444
@@ -6670,13 +6741,16 @@ syswrite($f,$raw)==length($raw) or die;close($f) or die;'''
     count=os.write(fd,raw[sent:]);assert count>0;sent+=count
    os.fsync(fd)
   finally:os.close(fd)
+ @staticmethod
+ def stable_sink(value):
+  return (value.st_dev,value.st_ino,value.st_mode,value.st_nlink,value.st_uid,value.st_gid,value.st_size,value.st_mtime_ns,value.st_ctime_ns)
  def export_failure(self,result):
   try:
    fd=os.open(self.sink,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
    try:
     before=os.fstat(fd);assert self.identity(before)==self.sink_identity and before.st_size<=8192
     raw=os.read(fd,8193);after=os.fstat(fd)
-    assert len(raw)<=8192 and before==after and before.st_mtime_ns==after.st_mtime_ns and before.st_ctime_ns==after.st_ctime_ns and self.identity(os.lstat(self.sink))==self.sink_identity
+    assert len(raw)<=8192 and self.stable_sink(before)==self.stable_sink(after) and self.identity(os.lstat(self.sink))==self.sink_identity
    finally:os.close(fd)
    assert not raw or raw.endswith(b'\n')
    rows=[json.loads(line) for line in raw.splitlines()];assert len(rows)<=2 and all(len(line)+1<=4096 for line in raw.splitlines())
@@ -6691,7 +6765,7 @@ syswrite($f,$raw)==length($raw) or die;close($f) or die;'''
     selected['bash']['original_line']=self.line_map.get(selected['bash']['line'],'GAP')
    payload={'status':'GENUINE_RELATION_UNEXPECTED','binding':self.binding,
     'bash':selected.get('bash','GAP'),'reader':selected.get('reader','GAP'),
-    'writer_completion':'original wait observed' if writers_closed else 'GAP','restoration':'PENDING'}
+    'writer_completion':('reader not started' if bash['phase']=='before-reader' else 'original wait observed') if writers_closed else 'GAP','restoration':'PENDING'}
    encoded=(json.dumps(payload,sort_keys=True,separators=(',',':'),ensure_ascii=True)+'\n').encode()
    if len(encoded)<=12288:sys.stderr.buffer.write(encoded)
   except BaseException:pass
