@@ -1932,6 +1932,108 @@ reports.append({'case':'actual-final-export-write-failure','actual_exit':rc,'act
     'uncaught_exception_or_traceback':False,'stderr_restored_before_final_write_and_after_control':True,
     'original_saved142_ALRM_and_cleanup_decision_retained':True})
 
+def sudo_provenance_controls():
+    import dataclasses,importlib.util,sysconfig,types
+    reader=(root/'scope/v1/read-shadow-evidence.py').read_text()
+    enforced=(root/'shadow/v1/enforced-reproduction.py').read_text()
+    spec=importlib.util.spec_from_file_location('sudo_contract_owned_consumer',root/'shadow/v1/_consumer.py')
+    c=importlib.util.module_from_spec(spec);sys.modules[spec.name]=c;spec.loader.exec_module(c)
+    tree=ast.parse(reader);klass=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='_Reader')
+    methods=[n for n in klass.body if isinstance(n,ast.FunctionDef) and n.name in ('provenance','recheck','close')]
+    helpers=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in ('require','parse','same')]
+    contract=ast.parse(enforced);fixed=next(n for n in contract.body if isinstance(n,ast.ClassDef) and n.name=='FixedSudo')
+    factory=next(n for n in contract.body if isinstance(n,ast.FunctionDef) and n.name=='fixed_sudo')
+    actual=ast.Module(body=helpers+[ast.ClassDef(name='ActualReader',bases=[],keywords=[],body=methods,decorator_list=[])],type_ignores=[])
+    actual=ast.fix_missing_locations(actual)
+    namespace={'c':c,'Path':pathlib.Path,'PACKAGE':root,'sys':sys,'sysconfig':sysconfig}
+    exec(compile(actual,'actual-reader-provenance-owned','exec'),namespace)
+    ActualReader=namespace['ActualReader'];rows=[];leaf=area/'sudo-owned-leaf';leaf.write_bytes(b'ordinary fixed executable data')
+    for case in ('no-change','withheld-write','content-digest','wrong-digest','wrong-component','nonroot','writable','nlink','drift','factory-failure','close-failure','fallback'):
+        calls=[];fds=[];closed=[];states=[];marker=OSError('fixed owned sudo operation failure')
+        def metadata(fd):
+            value=os.fstat(fd)
+            values={key:getattr(value,key) for key in ('st_dev','st_ino','st_mode','st_uid','st_gid','st_nlink','st_size','st_mtime_ns','st_ctime_ns')}
+            values.update(st_uid=0,st_mode=stat.S_IFREG|0o555,st_nlink=1)
+            if case=='nonroot':values['st_uid']=os.getuid() or 1
+            if case=='writable':values['st_mode']|=0o022
+            if case=='nlink':values['st_nlink']=2
+            return types.SimpleNamespace(**values)
+        def opened(path,flags):
+            assert path=='/usr/bin/sudo';calls.append(['open',path,flags])
+            fd=os.open(leaf,os.O_RDONLY|os.O_NOFOLLOW);fds.append(fd);states.append(metadata(fd));return fd
+        def inspected(fd):
+            if case=='factory-failure':raise marker
+            return metadata(fd)
+        def named(path):
+            assert path=='/usr/bin/sudo';value=metadata(fds[-1])
+            if case=='drift' and len(calls)>1:value.st_ino+=1
+            return value
+        def closed_fd(fd):
+            os.close(fd);closed.append(fd)
+            if case=='close-failure':raise marker
+        operating=types.SimpleNamespace(open=opened,fstat=inspected,lstat=named,close=closed_fd,
+            O_RDONLY=os.O_RDONLY,O_NOFOLLOW=os.O_NOFOLLOW,stat_result=os.stat_result)
+        if case!='fallback':operating.O_EXEC=1<<29
+        domain={'dataclasses':dataclasses,'os':operating,'stat':stat,'c':c,'sha':c.digest,'canonical':c.canonical,'require':namespace['require']}
+        sys.modules['sudo_contract_owned_definitions']=types.ModuleType('sudo_contract_owned_definitions')
+        domain['__name__']='sudo_contract_owned_definitions'
+        exec(compile(ast.Module(body=[fixed,factory],type_ignores=[]),'actual-fixed-sudo-owned','exec'),domain)
+        obj=ActualReader.__new__(ActualReader);obj.owned=[];obj.inputs=[];obj.anchor=None
+        digest='1'*64;held=types.SimpleNamespace(sha256=digest)
+        obj.package_sources={p:held for p in ('shadow/v1/write-shadow.py','shadow/v1/enforced-reproduction.py')}
+        obj.python=obj.jq=obj.bash=obj.git_binary=obj.consumer=held
+        supervisor=types.SimpleNamespace(path=c.ANCHOR+'/host-supervisor.py',read=lambda limit,code:b'original supervisor')
+        obj.anchor=types.SimpleNamespace(held=[supervisor],recheck=lambda code:None)
+        def hold(path,limit,**options):
+            assert str(path)!='/usr/bin/sudo';return held
+        obj.hold=hold
+        def acquire():
+            result=domain['fixed_sudo']();calls.append(['factory-return']);assert obj.owned==[];return result
+        obj.enforced=types.SimpleNamespace(fixed_sudo=acquire)
+        native={k:digest for k in ('source_sha256','build_script_sha256','build_record_sha256','binary_locator_sha256','binary_sha256','python_locator_sha256','python_sha256','dependency_record_sha256')}
+        native.update(context_version=2,binary_size=1,python_abi=sysconfig.get_config_var('SOABI'),loader_mode='rtld-now-local.v1',python_locator_sha256=c.digest(sys.executable.encode()))
+        instruction=b'fixed ordinary instruction';observation=c.canonical({'fixed':'observation'})
+        # The OS metadata transport adapts root ownership only; real data and descriptor lifecycle remain ordinary.
+        fd=os.open(leaf,os.O_RDONLY);state=metadata(fd);os.close(fd)
+        identity=c.digest(c.canonical(list(c._identity(state))))
+        expected=identity
+        if case=='content-digest':expected=c.digest(leaf.read_bytes())
+        if case=='wrong-digest':expected='2'*64
+        component=c.digest(b'original supervisor') if case!='wrong-component' else '3'*64
+        body={'activation_state':'inactive','authority':'none','instruction_utf8':instruction.decode(),'instruction_sha256':c.digest(instruction),
+            'observation':json.loads(observation),'observation_sha256':c.digest(observation),'native_release':native,
+            'commands':[{'role':'sandbox-launch-boundary','argv_sha256':digest,'executable_sha256':expected,'component_sha256':component}],
+            'helper_source_sha256':c.HELPER_SOURCE_SHA256,'helper_build_record_sha256':digest,'helper_executable_sha256':digest,
+            'consumer_source_sha256':digest,'python_sha256':digest,'jq_sha256':digest}
+        files={'consumer-provenance.json':c.canonical({'schema_version':1,'kind':'shadow_consumer_provenance','id':'owned-attempt','body':body})}
+        error=None;stale=None;close_error=None
+        try:
+            obj.provenance(files,instruction,observation,'owned-attempt',case=='withheld-write')
+            assert len(obj.owned)==1 and obj.owned[0].sha256==identity and identity!=c.digest(leaf.read_bytes())
+            if case=='drift':
+                calls.append(['drift'])
+                try:obj.recheck()
+                except c.Refusal as exc:stale=exc.code;assert stale=='E_STALE'
+                else:raise AssertionError('missing stale refusal')
+            else:obj.recheck()
+        except BaseException as exc:error=exc
+        finally:
+            try:obj.close()
+            except BaseException as exc:close_error=exc
+        if case in ('content-digest','wrong-digest','wrong-component','nonroot','writable','nlink'):
+            assert isinstance(error,c.Refusal) and error.code in ('E_RELATION','E_DEPENDENCY')
+        elif case=='factory-failure':assert error is marker
+        else:assert error is None
+        assert closed==fds and len(set(closed))==len(closed) and obj.owned==[]
+        assert (close_error is marker) if case=='close-failure' else close_error is None
+        flags=calls[0][2];assert flags==os.O_NOFOLLOW|(os.O_RDONLY if case=='fallback' else operating.O_EXEC)
+        rows.append({'case':case,'identity_sha256':identity,'content_sha256':c.digest(leaf.read_bytes()),'calls':calls,
+            'original_exception':type(error).__name__ if error else None,'stale':stale,'close_exception':type(close_error).__name__ if close_error else None,
+            'owned_registration_and_reverse_close':True,'descriptor_closed':len(closed),'transport':'ordinary real FD; fixed root metadata and O_EXEC availability OS seams'})
+    reports.append({'sudo_provenance_controls':rows,'actual_reader_sha256':hashlib.sha256(reader.encode()).hexdigest(),
+        'actual_factory_sha256':hashlib.sha256(ast.get_source_segment(enforced,factory).encode()).hexdigest()})
+sudo_provenance_controls()
+
 print(json.dumps({'same_call_owned_controls':reports},sort_keys=True),flush=True)
 PY_SAME_CALL_OWNED_CONTROLS
 run_evaluator() {

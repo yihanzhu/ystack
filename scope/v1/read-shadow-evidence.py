@@ -452,7 +452,8 @@ class _Reader:
             "darwin-acl-uuid-resolution": (self.python.sha256, self.consumer.sha256),
             "darwin-group-membership": (self.python.sha256, self.consumer.sha256)}
         supervisor = next(item for item in self.anchor.held if item.path == c.ANCHOR + "/host-supervisor.py")
-        sudo = self.hold(Path("/usr/bin/sudo"), c.EXECUTABLE_LIMIT, hardlinks=True)
+        sudo = self.enforced.fixed_sudo()
+        self.owned.append(sudo)
         fixed["sandbox-launch-boundary"] = (sudo.sha256, c.digest(supervisor.read(c.EXECUTABLE_LIMIT, "E_STALE")))
         for role, relative in roles.items():
             component = self.hold(PACKAGE / relative, c.EXECUTABLE_LIMIT)
