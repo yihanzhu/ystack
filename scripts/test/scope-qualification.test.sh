@@ -2413,7 +2413,8 @@ def foreground_state_controls(area):
     original=module._DarwinChildOwner._foreground
     print(json.dumps({'foreground_state_preexec':{'reader_copy':copied,'insertion':insertion,'original_foreground_source':ast.get_source_segment((root/'shadow/v1/_consumer.py').read_text(),next(n for n in ast.walk(ast.parse((root/'shadow/v1/_consumer.py').read_text())) if isinstance(n,ast.FunctionDef) and n.name=='_foreground')),'reader_sha256':hashlib.sha256(copied.encode()).hexdigest()}}),flush=True)
     records=[]
-    for fault in ('cancel','deadline','term','kill','wrong-frame','wrong-command','pseudo','encoding','cap','format','write'):
+    for fault in ('cancel','deadline','term','kill','wrong-frame','wrong-command','pseudo','encoding','cap','format','write',
+            'io-partial','io-old-chunk','io-format','io-record-cap'):
         sink.write_bytes(b'');calls=[];handlers=[];clock_calls=[];pseudo_hooks=[];holder=[];output=io.StringIO();sentinel=PermissionError(13,'fixed ordinary cleanup signal refusal')
         argv=['/usr/bin/git','--no-replace-objects','--git-dir=/owned/source.git','config','--file','/owned/config','--name-only','--list','--no-includes']
         if fault=='wrong-command':argv[3]='rev-parse'
@@ -2429,13 +2430,27 @@ def foreground_state_controls(area):
                 pseudo_hooks.append(key)
                 return getattr(child,key)
         selected=Pseudo() if fault=='pseudo' else child
+        io_case=fault.startswith('io-');selections=[];reads=[];fds=(child.stdout.fileno(),child.stderr.fileno())
         class Selector:
             def register(self,*args):pass
+            def select(self,timeout):
+                channel=(child.stdout if not selections else child.stderr) if fault=='io-partial' else (child.stderr if not selections else child.stdout)
+                selections.append(channel is child.stderr)
+                return [(module.selectors.SelectorKey(channel,channel.fileno(),1,None),1)]
             def get_map(self):
                 if fault=='cancel':handlers[0](signal.SIGTERM,None)
                 return {1:True}
+            def unregister(self,stream):calls.append(['unregister',stream is child.stdout])
             def close(self):calls.append(['selector-close'])
-        def monotonic():clock_calls.append(True);return 0 if len(clock_calls)==1 else 31
+        def monotonic():
+            clock_calls.append(True)
+            return 0 if len(clock_calls)==1 or io_case and len(selections)<(2 if fault in ('io-old-chunk','io-partial') else 1) else 31
+        def read(fd,cap):
+            calls.append(['read',fd,cap]);reads.append(fd)
+            if fd==fds[0]:
+                if fault=='io-partial':return b''
+                raise BlockingIOError('fixed next selected stdout')
+            return bytes(range(256))*2
         def set_handler(number,handler):handlers.append(handler);return signal.SIG_DFL
         def kill(pid,number):
             calls.append(['killpg',pid,int(number)])
@@ -2447,7 +2462,7 @@ def foreground_state_controls(area):
             subprocess=types.SimpleNamespace(Popen=popen,PIPE=subprocess.PIPE),
             selectors=types.SimpleNamespace(DefaultSelector=Selector,EVENT_READ=1,EVENT_WRITE=2),time=types.SimpleNamespace(monotonic=monotonic),
             signal=types.SimpleNamespace(**{key:getattr(signal,key) for key in ('SIGINT','SIGTERM','SIGHUP','SIGKILL','SIG_BLOCK','SIG_SETMASK')},SIG_DFL=signal.SIG_DFL,pthread_sigmask=lambda *args:set(),signal=set_handler),
-            os=types.SimpleNamespace(set_blocking=os.set_blocking,killpg=kill))
+            os=types.SimpleNamespace(set_blocking=os.set_blocking,killpg=kill,read=read))
         code=original.__code__.replace(co_name='_foreground') if fault=='wrong-frame' else original.__code__
         function=types.FunctionType(code,scope)
         def main(args):
@@ -2455,7 +2470,10 @@ def foreground_state_controls(area):
             except BaseException as error:holder.append((error,list(calls),list(pseudo_hooks)));raise
         def formatting(value,*args,**kwargs):
             if fault=='format':raise ValueError('fixed foreground format refusal')
-            return json.dumps(value,*args,**kwargs)
+            if fault=='io-format' and type(value) is dict and 'stderr_prefix_hex' in value:raise ValueError('fixed io-only encoding refusal')
+            raw=json.dumps(value,*args,**kwargs)
+            if fault=='io-record-cap' and type(value) is dict and type(value.get('foreground')) is dict and type(value['foreground'].get('io')) is dict:return raw+(' '*4096)
+            return raw
         actual_write=os.write
         def write(*args):
             if fault=='write':raise OSError('fixed foreground sink refusal')
@@ -2482,10 +2500,64 @@ def foreground_state_controls(area):
             if fault in ('wrong-frame','wrong-command','encoding','cap'):assert fact=='GAP'
             else:
                 assert fact['argv']==argv and fact['timeout']==30 and fact['end']==30 and fact['cancelled']==(fault=='cancel') and fact['cleanup_signal']=='GAP'
+                if io_case:
+                    assert reads and selections and fact['cancelled'] is False
+                    if fault in ('io-format','io-record-cap'):assert fact['io']=='GAP'
+                    else:
+                        assert fact['io']['stderr_bytes']==512 and fact['io']['stderr_prefix_hex']==bytes(range(256)).hex() and fact['io']['stderr_truncated']
+                        assert fact['io']['stdout_bytes']==0 and fact['io']['last_assigned_chunk_bytes']==512
+                        assert fact['io']['last_selected']['channel']==('stdout' if fault=='io-old-chunk' else 'stderr')
+                        if fault=='io-partial':assert reads==[fds[0],fds[1]] and ['unregister',True] in before_wait
                 if fault=='pseudo':assert fact['child']=='GAP'
                 else:assert fact['child']=={'pid':child.pid,'returncode':None if fault in ('term','kill') else 0}
         records.append({'case':fault,'mapped_stderr':output.getvalue(),'status':status,'original_error_type':type(error).__name__,'same_signal_error':error is sentinel,'original_calls':before_wait,'clock_calls':len(clock_calls),'wait_reached':waited,'facts':fact,'real_child_returncode':returned,'all_pipes_closed':True,'None_is_not_liveness':True})
     return completed_evidence({'foreground_state_controls':records,'scope':'original exact foreground code with fixed ordinary transport/selector/clock/signal-error seams; no actual Git/OS-signal cause or real-principal proof'})
+
+def foreground_io_controls():
+    assembler=ast.parse(heredoc('PY_GENUINE_ASSEMBLER'))
+    capture=next(n for n in assembler.body if isinstance(n,ast.ClassDef) and n.name=='GenuineRelationCapture')
+    constructor=next(n for n in capture.body if isinstance(n,ast.FunctionDef) and n.name=='__init__')
+    expression=next(n.value for n in ast.walk(constructor) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='record' for t in n.targets))
+    insertion=eval(compile(ast.Expression(expression),'actual-io-record-expression','eval'),{'token':repr('owned-io'),'sink':repr('/unused-owned-io'),'identity':repr(())})
+    parsed=ast.parse('if True:\n'+insertion);helper=next(n for n in ast.walk(parsed) if isinstance(n,ast.FunctionDef) and n.name=='relation_io')
+    import selectors
+    reports=[];hooks=[]
+    class Hostile:
+        def __getattribute__(self,key):hooks.append(key);raise AssertionError('io custom getter')
+        def __repr__(self):hooks.append('repr');raise AssertionError('io custom repr')
+    for fault in ('empty','binary','partial-eof','old-chunk','missing','outputs','bucket','fd','key','events','chunk','bounds','group-cap','format'):
+        outputs={17:bytearray(b'out'),23:bytearray(bytes(range(256))*2)}
+        local={'outputs':outputs,'cap':4096,'error_cap':65536,
+            'key':selectors.SelectorKey(None,17,1,None),'events':1,'chunk':b'previous-stderr'}
+        if fault=='empty':outputs[17].clear();outputs[23].clear();local.pop('key');local.pop('chunk')
+        if fault=='partial-eof':local['chunk']=b''
+        if fault=='old-chunk':local['key']=selectors.SelectorKey(None,17,1,None)
+        if fault=='missing':local.pop('outputs')
+        if fault=='outputs':local['outputs']=Hostile()
+        if fault=='bucket':outputs[17]=Hostile()
+        if fault=='fd':local['outputs']={'17':bytearray(),23:bytearray()}
+        if fault=='key':local['key']=Hostile()
+        if fault=='events':local['events']=Hostile()
+        if fault=='chunk':local['chunk']=Hostile()
+        if fault=='bounds':outputs[17].extend(b'x'*4096)
+        def dumps(value,*args,**kwargs):
+            if fault=='format':raise ValueError('fixed optional io formatting refusal')
+            if fault=='group-cap':return 'x'*1025
+            return json.dumps(value,*args,**kwargs)
+        namespace={'c':types.SimpleNamespace(selectors=selectors),'json':types.SimpleNamespace(dumps=dumps)}
+        exec(compile(ast.Module(body=[helper],type_ignores=[]),'actual-extracted-io-helper','exec'),namespace)
+        value=namespace['relation_io'](local)
+        if fault in ('missing','outputs','bucket','fd','bounds','group-cap','format'):assert value=='GAP'
+        else:
+            assert value['stdout_bytes']==len(outputs[17]) and value['stderr_bytes']==len(outputs[23])
+            assert value['stderr_prefix_hex']==bytes(outputs[23][:256]).hex() and value['stderr_truncated']==(len(outputs[23])>256)
+            if fault in ('key','events','empty'):assert value['last_selected']=='GAP'
+            else:assert value['last_selected']=={'channel':'stdout','events':1}
+            if fault in ('chunk','empty'):assert value['last_assigned_chunk_bytes']=='GAP'
+            else:assert value['last_assigned_chunk_bytes']==len(local['chunk'])
+        assert hooks==[]
+        reports.append({'case':fault,'actual_io':value,'custom_hooks':list(hooks),'scope':'exact extracted optional helper; ordinary fixed in-memory adversarial inputs'})
+    return completed_evidence({'foreground_io_controls':reports})
 
 def original_context_controls(area):
     assembler=heredoc('PY_GENUINE_ASSEMBLER');tree=ast.parse(assembler)
@@ -3840,6 +3912,7 @@ try:
     reports.append(link_mode_controls(area))
     reports.append(original_context_controls(area))
     reports.append(foreground_state_controls(area))
+    reports.append(foreground_io_controls())
     reports.append(wrapper_cancel_controls(wrapper,guard,area))
     reports.append(short_stage_controls(guard,channel,area,clock_name))
     helper=area/'outside.py';helper.write_text('allowed=True\ndef rule(fd,value,ancestor):\n return allowed\n')
@@ -4051,6 +4124,8 @@ finally:
     reports.append(completed_evidence({'mac_actual_observer_equivalence':mac_references}))
     print(json.dumps({'complete_count_value_references':reports}),flush=True)
     reports.append(completed_evidence({'ready_publication_controls':ready_publication_controls(guard,channel,area)}))
+    shared_parts={'wrapper':wrapper.replace('CLOCK_UPTIME_RAW',clock_name),'channel':channel_owned}
+    shared_reference=completed_evidence({'owner_case_shared_source':shared_parts})
     for fault in ('ordinary-started-no-marker','ordinary-pending','never-started','starting','normal','cancel','alarm','eof-before-launch','actual-deadline','missing-confirmation','wrong-confirmation','reported-wait-error','reported-close-error','wait-interrupted','writer-close-error','terminal-nonzero','mask077-normal','mask022-normal','mask077-cancel','mask022-cancel','mode0400','mode0644','fchmod-error','mask022-fchmod-error','inner-wait-error','inner-close-error'):
         work=area/fault;work.mkdir();base=work/'base';base.mkdir();(base/'package/shadow/v1').mkdir(parents=True);(base/'package/shadow/v1/_consumer.py').write_bytes(consumer);script=work/'runtime-guard-controls.py';ch=work/'channel.py';ch.write_text(channel_owned)
         fixture=base/('runtime-guard-cancel-proof' if fault in ('cancel','alarm','mask077-cancel','mask022-cancel') else 'runtime-guard');fixture.mkdir()
@@ -4171,7 +4246,10 @@ subprocess.Popen=fixed_owned_popen
         command='set -euo pipefail\n'+test_shell+variables+stub+cleanup_source+call
         generated=area/(fault+'.generated.json')
         generated.write_text(json.dumps({'driver':script.read_text(),'wrapper':program.read_text(),'subject':body.read_text(),'channel':ch.read_text(),'bash':command},sort_keys=True))
-        print(json.dumps({'generated_parts':str(generated),'sha256':hashlib.sha256(generated.read_bytes()).hexdigest(),'source':json.loads(generated.read_text())}),flush=True)
+        reported_source=json.loads(generated.read_text())
+        assert reported_source['wrapper']==shared_parts['wrapper'] and reported_source['channel']==shared_parts['channel']
+        reported_source={key:value for key,value in reported_source.items() if key not in ('wrapper','channel')}
+        print(json.dumps({'generated_parts':str(generated),'sha256':hashlib.sha256(generated.read_bytes()).hexdigest(),'source':reported_source,'shared_reference':shared_reference}),flush=True)
         start=time.monotonic();result=subprocess.run(['/bin/bash','-c',command],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=20,umask=mask)
         (area/(fault+'.stdout')).write_bytes(result.stdout);(area/(fault+'.stderr')).write_bytes(result.stderr)
         confirmed=audit.exists()
@@ -7990,6 +8068,30 @@ print(relation_result)
                 return text if type(text) is str and len(text)<=80 and text.isascii() and text.isidentifier() else 'GAP'
             relation_foreground=[False,'GAP']
             relation_foreground_code=type(c._DarwinChildOwner._foreground).__dict__['__code__'].__get__(c._DarwinChildOwner._foreground)
+            def relation_io(local):
+                try:
+                    outputs=local['outputs'];cap=local['cap'];error_cap=local['error_cap']
+                    if type(outputs) is not dict or len(outputs)!=2:return 'GAP'
+                    rows=list(outputs.items())
+                    if not all(type(fd) is int and type(bucket) is bytearray for fd,bucket in rows):return 'GAP'
+                    if type(cap) is not int or type(error_cap) is not int or cap<=0 or error_cap!=65536:return 'GAP'
+                    stdout,stderr=rows[0][1],rows[1][1]
+                    if len(stdout)>cap or len(stderr)>error_cap:return 'GAP'
+                    selected='GAP';chunk_length='GAP'
+                    try:key=local['key'];events=local['events']
+                    except KeyError:key=events=None
+                    if type(key) is c.selectors.SelectorKey and type(events) is int:
+                        fd=tuple.__getitem__(key,1)
+                        if type(fd) is int and fd in (rows[0][0],rows[1][0]):
+                            selected={'channel':'stdout' if fd==rows[0][0] else 'stderr','events':events}
+                    try:chunk=local['chunk']
+                    except KeyError:chunk=None
+                    if type(chunk) is bytes:chunk_length=len(chunk)
+                    facts={'stdout_bytes':len(stdout),'stderr_bytes':len(stderr),'cap':cap,'error_cap':error_cap,
+                        'stderr_prefix_hex':bytes(stderr[:256]).hex(),'stderr_truncated':len(stderr)>256,
+                        'last_selected':selected,'last_assigned_chunk_bytes':chunk_length}
+                    return facts if len(json.dumps(facts,sort_keys=True,separators=(',',':'),ensure_ascii=True).encode())<=1024 else 'GAP'
+                except BaseException:return 'GAP'
             def relation_trace(value,limit):
                 rows=[];held='GAP';tb=relation_field(value,'__traceback__')
                 target=type(c._open_held).__dict__['__code__'].__get__(c._open_held)
@@ -8030,6 +8132,7 @@ print(relation_result)
                                             'returncode':returned if type(returned) is int or returned is None else 'GAP'}
                                 relation_foreground[1]={'argv':arguments,'timeout':relation_number('timeout'),'end':relation_number('end'),
                                     'cancelled':cancelled,'cleanup_signal':'GAP','child':child_state}
+                                relation_foreground[1]['io']=relation_io(local) if line==1192 else 'GAP'
                         except BaseException:pass
                     if code_object is target:
                         local=frame_fields['f_locals'].__get__(frame)
@@ -8064,9 +8167,18 @@ print(relation_result)
                     relation_context.append('GAP')
             try:relation_outer_errno=OSError.__dict__['errno'].__get__(error,OSError)
             except TypeError:relation_outer_errno=None
-            relation_raw=(json.dumps({'boundary':'reader','binding':TOKEN,'exception':relation_name(error),
+            relation_record={'boundary':'reader','binding':TOKEN,'exception':relation_name(error),
                 'errno':relation_outer_errno if type(relation_outer_errno) is int or relation_outer_errno is None else 'GAP','foreground':relation_foreground[1],
-                'code':code[:128],'trace':relation_rows,'context':relation_context,'trace_truncated':relation_truncated},sort_keys=True,separators=(',',':'),ensure_ascii=True)+'\\n').encode()
+                'code':code[:128],'trace':relation_rows,'context':relation_context,'trace_truncated':relation_truncated}
+            try:
+                relation_raw=(json.dumps(relation_record,sort_keys=True,separators=(',',':'),ensure_ascii=True)+'\\n').encode()
+            except BaseException:
+                if type(relation_foreground[1]) is not dict:raise
+                relation_foreground[1]['io']='GAP'
+                relation_raw=(json.dumps(relation_record,sort_keys=True,separators=(',',':'),ensure_ascii=True)+'\\n').encode()
+            if len(relation_raw)>4096 and type(relation_foreground[1]) is dict:
+                relation_foreground[1]['io']='GAP'
+                relation_raw=(json.dumps(relation_record,sort_keys=True,separators=(',',':'),ensure_ascii=True)+'\\n').encode()
             relation_fd=os.open(SINK,os.O_WRONLY|os.O_APPEND|os.O_NOFOLLOW)
             try:
                 relation_s=os.fstat(relation_fd);relation_n=os.lstat(SINK)
