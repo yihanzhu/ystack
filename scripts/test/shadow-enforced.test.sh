@@ -18,6 +18,203 @@ esac
 jq_bin="${TMPDIR:-/tmp}/ystack-portable-core-jq16/$jq_asset"
 [ -x "$jq_bin" ] || { /usr/bin/printf 'missing pinned jq\n' >&2; exit 1; }
 jq_bin=$(CDPATH='' cd -P -- "${jq_bin%/*}" && /usr/bin/printf '%s/%s' "$PWD" "${jq_bin##*/}")
+if [ "$(/usr/bin/uname -s)" = Darwin ]; then
+  [ "${GITHUB_ACTIONS:-}" = true ] && [ "${RUNNER_ENVIRONMENT:-}" = github-hosted ] ||
+    fail 'a reserved disposable host is required'
+  /usr/bin/python3 -I -S -B - "$root" "$tmp" <<'PY_MAC_NATIVE_GUARD'
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import stat
+import sys
+
+package = Path(sys.argv[1])
+private = Path(sys.argv[2])
+assert package.is_absolute() and package.resolve() == package
+assert private.is_absolute() and private.resolve() == private
+source = package / 'shadow/v1/_consumer.py'
+spec = importlib.util.spec_from_file_location('fixed_native_runtime_reader', source)
+c = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = c
+spec.loader.exec_module(c)
+owned = []
+
+
+def extract_guard(held):
+    held.recheck('E_STALE')
+    lines = held.raw.splitlines(keepends=True)
+    opening = b'  /bin/cat >"$mac_guard_file" <<\'PY_MAC_FIXED_RUNTIME_GUARD\'\n'
+    closing = b'PY_MAC_FIXED_RUNTIME_GUARD\n'
+    starts = [index for index, line in enumerate(lines) if line == opening]
+    stops = [index for index, line in enumerate(lines) if line == closing]
+    assert len(starts) == len(stops) == 1 and starts[0] < stops[0]
+    raw = b''.join(lines[starts[0] + 1:stops[0]])
+    assert len(raw) <= c.EXECUTABLE_LIMIT
+    assert hashlib.sha256(raw).hexdigest() == '3c229ffd250d8b255ae59ae1f507e3815c9f6bfb25b793c9075871675a1a540c'
+    held.recheck('E_STALE')
+    return raw
+
+
+def update_created(parent, before, names):
+    after = c._metadata(parent.fd)
+    assert c._identity(after)[:6] == c._identity(before)[:6]
+    assert set(os.listdir(parent.fd)) == names
+    parent.components[-1].before = after
+    parent.recheck('E_STALE')
+
+
+def exclusive(parent, name, raw):
+    assert name in ('guard.py', 'manifest.json') and len(raw) <= c.EXECUTABLE_LIMIT
+    parent.recheck('E_STALE')
+    before, names = parent.before, set(os.listdir(parent.fd))
+    assert name not in names
+    fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o500, dir_fd=parent.fd)
+    try:
+        offset = 0
+        while offset < len(raw):
+            written = os.write(fd, raw[offset:offset + 65536])
+            assert written > 0
+            offset += written
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    update_created(parent, before, names | {name})
+
+
+def reader_controls(private, source_raw, manifest_raw):
+    base = private / 'reader-controls'
+    assert not os.path.lexists(base)
+    base.mkdir(mode=0o700)
+    rows = []
+    def data_file(path, raw):
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        try:
+            offset = 0
+            while offset < len(raw):
+                count = os.write(fd, raw[offset:offset + 65536])
+                assert count > 0
+                offset += count
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    opening = b'  /bin/cat >"$mac_guard_file" <<\'PY_MAC_FIXED_RUNTIME_GUARD\'\n'
+    closing = b'PY_MAC_FIXED_RUNTIME_GUARD\n'
+    source_body = source_raw.split(opening, 1)[1].split(closing, 1)[0]
+    cases = [('valid', source_raw), ('missing-opening', source_raw.replace(opening, b'', 1)),
+        ('duplicate-opening', opening + source_raw), ('missing-closing', source_raw.replace(closing, b'', 1)),
+        ('duplicate-closing', source_raw + closing),
+        ('wrong-guard', source_raw.replace(source_body, b'x' + source_body[1:], 1)),
+        ('oversized-source', b'x' * (c.EXECUTABLE_LIMIT + 1)), ('changed-held-source', source_raw)]
+    for label, raw in cases:
+        path = base / label
+        data_file(path, raw)
+        held, accepted = None, False
+        try:
+            held = c._hold_bytes(str(path), c.EXECUTABLE_LIMIT)
+            if label == 'changed-held-source':
+                with path.open('ab') as output:
+                    output.write(b'\n')
+                    output.flush()
+                    os.fsync(output.fileno())
+            extract_guard(held)
+            accepted = True
+        except (c.Refusal, AssertionError):
+            pass
+        finally:
+            if held is not None:
+                held.close()
+        assert accepted == (label == 'valid')
+        rows.append({'control': label, 'accepted': accepted, 'candidate_executed': False})
+    path = base / 'symlink'
+    path.symlink_to(base / 'valid')
+    try:
+        held = c._hold_bytes(str(path), c.EXECUTABLE_LIMIT)
+    except c.Refusal:
+        rows.append({'control': 'symlink-source', 'accepted': False, 'candidate_executed': False})
+    else:
+        held.close()
+        raise AssertionError('symlink source accepted')
+    for label, raw in [('valid-manifest', manifest_raw), ('wrong-manifest', b'{}'), ('missing-manifest', None)]:
+        path, held, accepted = base / label, None, False
+        if raw is not None:
+            data_file(path, raw)
+        try:
+            held = c._hold_bytes(str(path), c.EXECUTABLE_LIMIT)
+            assert hashlib.sha256(held.raw).hexdigest() == 'e0d204e2827885c5f2f4278e709981b7fc1e02424d3bfa5ae2ff2af789789d26'
+            held.recheck('E_STALE')
+            accepted = True
+        except (c.Refusal, AssertionError):
+            pass
+        finally:
+            if held is not None:
+                held.close()
+        assert accepted == (label == 'valid-manifest')
+        rows.append({'control': label, 'accepted': accepted, 'candidate_executed': False})
+    directory = c._open_held(str(base), True,
+        lambda fd, state, ancestor: ancestor or state.st_uid == os.getuid() and stat.S_IMODE(state.st_mode) == 0o700,
+        'E_INSTALL')
+    try:
+        guard = c._hold_bytes(str(base / 'valid'), c.EXECUTABLE_LIMIT)
+        try:
+            body = extract_guard(guard)
+        finally:
+            guard.close()
+        exclusive(directory, 'guard.py', body)
+        try:
+            exclusive(directory, 'guard.py', body)
+        except (AssertionError, FileExistsError):
+            pass
+        else:
+            raise AssertionError('exclusive guard overwrite accepted')
+        rows.append({'control': 'exclusive-guard-no-overwrite', 'accepted': False, 'candidate_executed': False})
+    finally:
+        directory.close()
+    print(json.dumps({'fixed_reader_controls': rows}, sort_keys=True), file=sys.stderr, flush=True)
+    return rows
+
+
+try:
+    script = c._hold_bytes(str(package / 'scripts/test/scope-qualification.test.sh'), c.EXECUTABLE_LIMIT)
+    owned.append(script)
+    guard = extract_guard(script)
+    cache = Path(os.environ['YSTACK_PROOF_TMP'])
+    assert cache.is_absolute() and cache.resolve() == cache
+    manifest = c._hold_bytes(str(cache / 'manifest.json'), c.EXECUTABLE_LIMIT)
+    owned.append(manifest)
+    assert hashlib.sha256(manifest.raw).hexdigest() == 'e0d204e2827885c5f2f4278e709981b7fc1e02424d3bfa5ae2ff2af789789d26'
+    manifest.recheck('E_STALE')
+    reader_controls(private, script.raw, manifest.raw)
+    parent = c._open_held(str(private), True,
+        lambda fd, state, ancestor: ancestor or state.st_uid == os.getuid() and stat.S_IMODE(state.st_mode) == 0o700,
+        'E_INSTALL')
+    owned.append(parent)
+    before, names = parent.before, set(os.listdir(parent.fd))
+    assert 'runtime-guard' not in names
+    os.mkdir('runtime-guard', 0o700, dir_fd=parent.fd)
+    update_created(parent, before, names | {'runtime-guard'})
+    directory = c._open_child(parent, 'runtime-guard', True,
+        lambda fd, state, ancestor: ancestor or state.st_uid == os.getuid() and stat.S_IMODE(state.st_mode) == 0o700,
+        'E_INSTALL')
+    owned.append(directory)
+    exclusive(directory, 'guard.py', guard)
+    exclusive(directory, 'manifest.json', manifest.raw)
+    script.recheck('E_STALE')
+    manifest.recheck('E_STALE')
+    directory.recheck('E_STALE')
+finally:
+    c._close_paths(owned)
+PY_MAC_NATIVE_GUARD
+  python_bin=/Library/Frameworks/Python.framework/Versions/3.15/Resources/Python.app/Contents/MacOS/Python
+  mac_guard_file="$tmp/runtime-guard/guard.py"
+  [ "$(/usr/bin/python3 -I -S -B "$mac_guard_file" "$root" "$python_bin" "$mac_guard_file" empty 0 0)" = "$python_bin" ] ||
+    fail 'fixed supplied runtime closure required'
+  fixed_jq=/Library/Frameworks/Python.framework/ystack-private-tools/jq
+  [ "$(sha_file "$fixed_jq")" = 5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef ] &&
+    [ "$("$fixed_jq" --version)" = jq-1.6 ] && [ "$(sha_file "$jq_bin")" = "$(sha_file "$fixed_jq")" ] ||
+    fail 'fixed jq identity'
+else
 if [ -x /opt/homebrew/bin/python3.14 ]; then
   python_bin=/opt/homebrew/bin/python3.14
 elif [ -x /usr/local/bin/python3.14 ]; then
@@ -28,6 +225,7 @@ fi
 case "$python_bin" in /*) ;; *) /usr/bin/printf 'missing physical python\n' >&2; exit 1 ;; esac
 python_bin=$("$python_bin" -I -S -B -c 'import os,sys; print(os.path.realpath(sys.executable))')
 case "$python_bin" in /*) ;; *) /usr/bin/printf 'missing resolved physical python\n' >&2; exit 1 ;; esac
+fi
 native_out="$tmp/native-release"
 /bin/bash -p "$root/shadow/v1/build-cancel-release.sh" build "$python_bin" "$native_out"
 native_binary=$(/usr/bin/find "$native_out" -mindepth 1 -maxdepth 1 -type f ! -name build-record.json -print)
@@ -1903,6 +2101,7 @@ class Call:
 class FakeAclLib:
     def __init__(self, failure=None):
         self.failure, self.entries = failure, 0
+        self.selectors = []
         self.calls = {"entry": 0, "permission": 0, "qualifier": 0}
         self.freed = []
         self.guid = c.ctypes.create_string_buffer(16)
@@ -1913,13 +2112,19 @@ class FakeAclLib:
         self.acl_get_permset = Call(self.get_permset)
         self.acl_get_perm_np = Call(self.get_perm)
         self.acl_free = Call(self.free)
-    def get_entry(self, _acl, _selector, _entry):
+    def get_entry(self, _acl, selector, _entry):
         self.calls["entry"] += 1
+        self.selectors.append(selector)
+        assert selector == (0 if self.entries == 0 else -1)
         if self.failure == "acl-memory": raise MemoryError("after ACL ownership")
         if self.failure == "entry": c.ctypes.set_errno(13); return -1
+        if self.failure == "first-einval": c.ctypes.set_errno(22); return -1
+        if self.failure == "first-abnormal": c.ctypes.set_errno(22); return 1
         self.entries += 1
         if self.entries == 1: return 0
-        c.ctypes.set_errno(0); return -1
+        failure = {"next-other-errno": (13, -1), "next-zero-errno": (0, -1),
+                   "next-abnormal": (22, 1)}.get(self.failure, (22, -1))
+        c.ctypes.set_errno(failure[0]); return failure[1]
     def get_tag(self, _entry, output): output._obj.value = 1; return 0
     def get_permset(self, _entry, output): output._obj.value = 1; return 0
     def get_perm(self, _perms, bit):
@@ -1952,13 +2157,23 @@ def darwin_rule(failure, installed=False):
     return rule(fd, state, False), fake, resolver
 for installed in (False, True):
     accepted_acl, fake, resolver = darwin_rule(None, installed)
-    ok(accepted_acl and fake.entries == 2 and resolver.calls == [["00" * 16]],
+    ok(accepted_acl and fake.entries == 2 and fake.selectors == [0, -1]
+       and resolver.calls == [["00" * 16]],
        "Darwin capture sends only positional UUID bytes to fixed resolver")
     ok(fake.freed == [c.ctypes.addressof(fake.guid), 1],
        "Darwin capture frees the exact qualifier then ACL once")
     for failure in ("entry", "permission", "qualifier"):
         accepted_acl, fake, resolver = darwin_rule(failure, installed)
         ok(not accepted_acl and fake.calls[failure] > 0, "Darwin %s error reached and refused" % failure)
+for installed in (False, True):
+    for failure in ("first-einval", "first-abnormal", "next-other-errno", "next-zero-errno", "next-abnormal"):
+        accepted_acl, fake, resolver = darwin_rule(failure, installed)
+        expected_free = ([c.ctypes.addressof(fake.guid), 1] if failure.startswith("next-") else [1])
+        ok(not accepted_acl and fake.freed == expected_free and resolver.calls == [],
+           "Darwin %s refuses and frees owned resources once without resolver" % failure)
+    accepted_acl, fake, resolver = darwin_rule("qualifier", installed)
+    ok(not accepted_acl and fake.selectors == [0] and fake.freed == [1] and resolver.calls == [],
+       "incomplete FIRST capture refuses without attempting NEXT or resolver")
 fake = FakeAclLib(); c._DARWIN_ACL_FUNCTIONS = types.SimpleNamespace(library=fake)
 refuses("E_ACL", lambda: c._darwin_acl(fd, None))
 ok(fake.calls["entry"] == 0, "missing Darwin resolver refuses before ACL capture")
@@ -2609,15 +2824,36 @@ uuid_values=["0123456789abcdef0123456789abcdef","00"*16,"00"*16]
 resolver_rows=[{"uuid":uuid_values[0],"status":"resolved","kind":"user","id":501},
  {"uuid":uuid_values[1],"status":"resolved","kind":"group","id":20},
  {"uuid":uuid_values[2],"status":"unresolved","kind":None,"id":None}]
-original_run=e.run_bounded; resolver_calls=[]
+original_transport=e._communicate_native; resolver_calls=[]
+class CapturedNativeState:
+ def __init__(self,state):self.state,self.prepared=state,None
+ def prepare_child(self,value):
+  self.prepared=value
+  self.state.prepare_child(value)
+ def __getattr__(self,name):return getattr(self.state,name)
+captured_native=CapturedNativeState(native_state)
+parent_owner.native=captured_native
+transport_payload=e.c.canonical(resolver_rows)
+def recipe_call(native,raw,output_limit,error_limit,timeout,calls):
+ prepared=native.prepared
+ role,executable,arguments,environment=prepared
+ assert role in (1,15) and arguments[0]==executable and error_limit==65536
+ calls.append(("darwin-acl-uuid-resolution" if role==1 else "darwin-group-membership",
+  list(map(os.fsdecode,arguments)),{"stdin":raw,"timeout":timeout,"output_limit":output_limit,
+   "env":dict(os.fsdecode(value).split("=",1) for value in environment)}))
+ actual,stdout,stderr=original_transport(native,raw,output_limit,error_limit,timeout)
+ assert type(actual) is e._NativeChildResult
+ assert e._native_child_status(native)[0]==4
+ print(json.dumps({"recipe_actual_returncode":actual.returncode,
+  "stdout_sha256":sha(stdout),"stderr_sha256":sha(stderr)},sort_keys=True))
+ return e._NativeChildResult(0),transport_payload,b""
 def resolver_refuses(action,message):
  try:action()
  except (e.Refusal,e.c.Refusal) as exc:ok(exc.code=="E_ACL",message);return
  raise AssertionError("accepted: "+message)
-def resolver_run(role,argv,**options):
- resolver_calls.append((role,argv,options))
- return e.c.canonical(resolver_rows)
-e.run_bounded=resolver_run
+def resolver_run(native,raw,output_limit,error_limit,timeout):
+ return recipe_call(native,raw,output_limit,error_limit,timeout,resolver_calls)
+e._communicate_native=resolver_run
 ok(resolver.resolve(uuid_values)==resolver_rows,"fixed resolver preserves user/group/unresolved order")
 ok([row["role"] for row in resolver_ledger]==["darwin-acl-uuid-resolution"],
    "nonempty resolver batch appends one command-ledger row")
@@ -2636,35 +2872,38 @@ for bad,message in [
  (b'[{"id":501,"kind":"user","status":"resolved","uuid":"0123456789abcdef0123456789abcdef","x":1}]\n',"extra resolver field refused"),
  (e.c.canonical(resolver_rows)+b"x","trailing resolver data refused"),
  (b" "*(32*1024+1),"resolver output byte cap enforced")]:
- e.run_bounded=lambda *_args,bad=bad,**_options:bad
+ transport_payload=bad
  resolver_refuses(lambda:resolver.resolve(uuid_values),message)
-e.run_bounded=original_run
+transport_payload=e.c.canonical(resolver_rows)
 resolver_refuses(lambda:resolver.resolve(["A"*32]),"noncanonical resolver UUID refused")
 resolver_refuses(lambda:resolver.resolve(["00"*16]*129),"resolver count cap enforced")
 before_empty=len(resolver_ledger);ok(resolver.resolve([])==[] and len(resolver_ledger)==before_empty,
  "empty resolver batch appends no command-ledger row")
 boundary_uuids=[("%032x"%index) for index in range(128)]
-e.run_bounded=lambda *_args,**_options:e.c.canonical([
+transport_payload=e.c.canonical([
  {"uuid":uuid,"status":"unresolved","kind":None,"id":None} for uuid in boundary_uuids])
 ok(len(resolver.resolve(boundary_uuids))==128,"resolver accepts exact 128-entry boundary")
-e.run_bounded=original_run
+transport_payload=e.c.canonical(resolver_rows)
 resolver_refuses(lambda:e.c._json_array(b"["+b'"00",'*8192+b'"00"]\n',16*1024,"E_ACL"),
  "resolver input byte cap enforced before parsing")
 group_reader=e._DarwinGroupReader(resolver);group_calls=[]
-def group_run(role,argv,**options):
- group_calls.append((role,argv,options));return e.c.canonical([20])
-e.run_bounded=group_run
+def group_run(native,raw,output_limit,error_limit,timeout):
+ return recipe_call(native,raw,output_limit,error_limit,timeout,group_calls)
+transport_payload=e.c.canonical([20])
+e._communicate_native=group_run
 ok(group_reader.contains(20),"fixed group reader accepts exact matching gid")
 role,argv,options=group_calls[0]
 ok(role=="darwin-group-membership" and argv[-1]=="_read-darwin-group"
  and options["stdin"]==e.c.canonical({"gid":20}) and options["timeout"]==10
  and options["output_limit"]==16,"group reader argv input and caps are fixed")
-e.run_bounded=lambda *_args,**_options:e.c.canonical([])
+transport_payload=e.c.canonical([])
 ok(not group_reader.contains(20),"fixed group reader preserves exact nonmember result")
 for bad in (e.c.canonical([21]),b"[20,20]\n",b'{"member":true}\n',b"x"*17):
- e.run_bounded=lambda *_args,bad=bad,**_options:bad
+ transport_payload=bad
  resolver_refuses(lambda:group_reader.contains(20),"malformed group result refuses")
-e.run_bounded=original_run
+transport_payload=e.c.canonical(resolver_rows)
+e._communicate_native=original_transport
+parent_owner.native=native_state
 if sys.platform=="darwin":
  lib=e.ctypes.CDLL(e.c.DARWIN_SYSTEM_C,use_errno=True)
  def native_uuid(name,value):
