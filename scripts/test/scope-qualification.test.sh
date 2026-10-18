@@ -30,6 +30,19 @@ scope_owner_reader=false
 scope_owner_serial=0
 scope_owner_status=0
 scope_owner_waiting=false
+scope_stage_points=($SECONDS GAP GAP GAP GAP GAP GAP GAP GAP GAP)
+scope_stage_operation=none
+scope_stage_entered=GAP
+scope_stage_returned=GAP
+scope_stage_status=GAP
+scope_stage_frozen=false
+scope_stage_snapshot=()
+scope_stage_freeze() {
+  [ "$scope_stage_frozen" = false ] || return 0
+  scope_stage_snapshot=("${scope_stage_points[@]}" "$scope_stage_operation" "$scope_stage_entered" "$scope_stage_returned" "$scope_stage_status" "$SECONDS")
+  scope_stage_frozen=true
+  readonly -a scope_stage_snapshot
+}
 scope_fixture_owner_close_reader() { exec 6<&-; }
 scope_fixture_owner_close_writer() { exec 7>&-; }
 scope_fixture_owner_cancel() {
@@ -94,7 +107,7 @@ scope_fixture_owner_launch() {
   fi
 }
 scope_fixture_signal=''
-trap 'scope_fixture_signal=ALRM;if [ "$scope_owner_waiting" = true ]; then scope_owner_state=unknown;fi;scope_fixture_owner_cancel || :;exit 142' ALRM
+trap 'scope_stage_freeze;scope_fixture_signal=ALRM;if [ "$scope_owner_waiting" = true ]; then scope_owner_state=unknown;fi;scope_fixture_owner_cancel || :;exit 142' ALRM
 
 cleanup() {
   local prior=$? cleanup_status=0
@@ -115,10 +128,40 @@ cleanup() {
     /usr/bin/printf 'genuine-cleanup: NOT_STARTED\n'
   fi
   if [ "$prior" -eq 142 ] && [ "$scope_fixture_signal" = ALRM ]; then
-    python3 -I -S -B - "$tmp/stale-observation/observer.py" <<'PY_FIXED_COST_EXPORT' || :
-import runpy,sys
-try:runpy.run_path(sys.argv[1])['cost_export']()
-except BaseException:pass
+    python3 -I -S -B - "$tmp/stale-observation/observer.py" "$scope_stage_frozen" "${scope_stage_snapshot[@]}" <<'PY_FIXED_COST_EXPORT' || :
+import io,json,runpy,sys,types
+
+def stage_record(arguments,original):
+    try:
+        if type(arguments) is not list or len(arguments)!=16 or type(arguments[0]) is not str or arguments[0]!='true' or type(original) is not bytes or not original:return b''
+        if len(original)>4096 or len(original.splitlines())!=3:return b''
+        def integer(value):
+            if type(value) is not str or not value.isascii() or not value.isdecimal() or len(value)>10:return 'GAP'
+            number=int(value)
+            return number if 0<=number<=2147483647 else 'GAP'
+        points=[integer(value) for value in arguments[1:11]]
+        operation=arguments[11]
+        if type(operation) is not str or operation not in ('none','libexec-mkdir','libexec-identity','base-mkdir','base-identity'):operation='GAP'
+        entered,returned,status,trap=map(integer,arguments[12:16])
+        if status!='GAP' and status>255:status='GAP'
+        if returned=='GAP':status='GAP'
+        if operation in ('none','GAP'):entered=returned=status='GAP'
+        names=('entry','initial-runtime-enter','initial-runtime-return','ordinary-complete','ok35','terminal-complete',
+            'genuine-setup-enter','genuine-runtime-return','identity-prepared','path-prepare-enter')
+        record={'sample':'scope-alrm-stage','points':dict(zip(names,points)),
+            'last_operation':{'operation':operation,'entered':entered,'returned':returned,'status':status},'trap_entry':trap}
+        encoded=json.dumps(record,sort_keys=True,separators=(',',':'),ensure_ascii=True).encode()+b'\n'
+        return encoded if len(encoded)<=1024 and len(original)+len(encoded)<=4096 else b''
+    except BaseException:return b''
+
+saved=sys.stderr;buffer=io.BytesIO()
+try:
+    sys.stderr=types.SimpleNamespace(buffer=buffer)
+    try:runpy.run_path(sys.argv[1])['cost_export']()
+    except BaseException:pass
+finally:sys.stderr=saved
+original=buffer.getvalue();buffer.close()
+if original:sys.stderr.buffer.write(original+stage_record(sys.argv[2:],original))
 PY_FIXED_COST_EXPORT
   fi
   if [ "$cleanup_status" -eq 0 ]; then
@@ -769,7 +812,9 @@ PY_MAC_FIXED_MANIFEST
 run_validator() { PATH="$bin:/usr/bin:/bin" "$validator" validate "$1"; }
 if [ "${platform%%:*}" = Darwin ]; then
   python_candidate=/Library/Frameworks/Python.framework/Versions/3.15/Resources/Python.app/Contents/MacOS/Python
+  scope_stage_points[1]=$SECONDS
   python_candidate=$(authenticate_genuine_macos_python "$python_candidate") || fail 'fixed supplied runtime closure required'
+  scope_stage_points[2]=$SECONDS
   [ "$("$python_candidate" -I -S -B -c 'import sys
 from pathlib import Path
 p = Path(sys.executable)
@@ -1490,8 +1535,9 @@ body='tmp='+repr(str(outer_tmp))+'\n'+outer_cleanup+'\n/bin/sleep 2\n'
 alarm_script=base/'alarm.sh';alarm_script.write_text(body)
 rc,out,err=run(['/usr/bin/perl','-e','alarm 1;exec @ARGV;die $!','/bin/bash',str(alarm_script)])
 assert rc in (-signal.SIGALRM,142) and b'fixture-cleanup: PASS prior-exit=142' in out
-assert len(err.splitlines())==3 and len(err)<=4096 and not outer_tmp.exists(),(rc,out,err)
-reports.append({'case':'real-ALRM-after-qualification','actual_exit':rc,'before_delete_records':3,'outer_removed_after_original_gates':True})
+assert len(err.splitlines())==4 and len(err)<=4096 and not outer_tmp.exists(),(rc,out,err)
+assert json.loads(err.splitlines()[-1])['sample']=='scope-alrm-stage'
+reports.append({'case':'real-ALRM-after-qualification','actual_exit':rc,'original_sample_records':3,'optional_stage_records':1,'total_records':4,'outer_removed_after_original_gates':True})
 # The independent owner completes and authenticates before its negative confirmation view.
 closed_rows=module['cost_rows']()
 assert len(closed_rows)==3 and all(row['completed'] for row in closed_rows)
@@ -1535,7 +1581,8 @@ rc,out,err=run(['/bin/bash',str(path)])
 assert rc in (-signal.SIGALRM,142) and b'fixture-cleanup: FAIL prior-exit=142' in err,(rc,out,err)
 assert b'FileNotFoundError' in err and b'scope-owner-2.receipt' in err and b'owner completion is unknown' in err
 exported=[json.loads(line) for line in err.splitlines() if line.startswith(b'{')]
-assert exported==closed_rows and (base/'data').read_bytes()==closed_bytes
+assert exported[:3]==closed_rows and len(exported)==4 and exported[3]['sample']=='scope-alrm-stage'
+assert (base/'data').read_bytes()==closed_bytes
 receipt=json.loads(genuine.read_bytes())
 assert receipt['quiescent'] and receipt['cases']==[] and receipt['cancelled'] is False
 assert owner_work.is_dir() and owner_base.is_dir() and not forbidden.exists()
@@ -1576,7 +1623,8 @@ try:
     assert rc in (-signal.SIGALRM,142) and b'ordinary control completion is unknown' in err
     assert b'fixture-cleanup: FAIL prior-exit=142' in err and active_tmp.is_dir()
     assert (active_tmp/'observer-owner-controls.pending').is_file() and not active_forbidden.exists()
-    assert [json.loads(line) for line in err.splitlines() if line.startswith(b'{')]==closed_rows
+    active_export=[json.loads(line) for line in err.splitlines() if line.startswith(b'{')]
+    assert active_export[:3]==closed_rows and len(active_export)==4 and active_export[3]['sample']=='scope-alrm-stage'
     stdout,stderr=child.communicate(b'RELEASE\n',timeout=max(0.01,4-(time.monotonic()-started)))
     assert child.returncode==0 and not stderr,(child.returncode,stdout,stderr)
     actual_receipt=json.loads((ready_work/'scope-owner-2.receipt').read_bytes())
@@ -1740,6 +1788,105 @@ for fault in ('normal-success','ordinary-unexpected','serialize-error','output-e
         assert row['frontend_sha256']==hashlib.sha256(b'#!/bin/bash\nexit 2\n').hexdigest()
     reports.append({'case':fault,'original_exit_exact':observed is not None,'qualification_reached':reached_qualification,
         'original_assert_line':None if observed is None else expected_line})
+# The extracted stage formatter uses only fixed ordinary scalar inputs.
+export_lines=source.splitlines(keepends=True)
+export_start=next(i for i,line in enumerate(export_lines) if line.rstrip('\n').endswith("<<'PY_FIXED_COST_EXPORT' || :"))
+export_stop=export_lines.index('PY_FIXED_COST_EXPORT\n')
+export_source=''.join(export_lines[export_start+1:export_stop])
+export_tree=ast.parse(export_source)
+formatter=next(node for node in export_tree.body if isinstance(node,ast.FunctionDef) and node.name=='stage_record')
+stage_namespace={'json':json};exec(compile(ast.Module(body=[formatter],type_ignores=[]),'actual-stage-formatter','exec'),stage_namespace)
+closed_original=b''.join(json.dumps(row,separators=(',',':'),ensure_ascii=True).encode()+b'\n' for row in closed_rows)
+valid=['true']+['0']*10+['base-identity','0','GAP','GAP','1']
+for fault in ('valid','invalid-enum','missing','wrong-type','integer-overflow','bad-status','optional-cap','combined-cap','format','unqualified'):
+    arguments=list(valid);original=closed_original;captured=[]
+    if fault=='invalid-enum':arguments[11]='other'
+    if fault=='missing':arguments.pop()
+    if fault=='wrong-type':arguments[3]=object()
+    if fault=='integer-overflow':arguments[3]='9'*20
+    if fault=='bad-status':arguments[13]='1';arguments[14]='256'
+    if fault=='combined-cap':original=b'{}\n{}\n'+b' '*4086+b'{}\n'
+    if fault=='unqualified':arguments[0]='false'
+    def encode(value,*args,**kwargs):
+        captured.append(value)
+        if fault=='format':raise ValueError('fixed optional stage formatting refusal')
+        if fault=='optional-cap':return 'x'*1024
+        return json.dumps(value,*args,**kwargs)
+    stage_namespace['json']=type('FixedJSON',(),{'dumps':staticmethod(encode)})
+    optional=stage_namespace['stage_record'](arguments,original)
+    if fault in ('missing','optional-cap','combined-cap','format','unqualified'):assert optional==b''
+    else:
+        record=json.loads(optional);assert len(optional)<=1024 and len(original)+len(optional)<=4096
+        assert record['sample']=='scope-alrm-stage' and record['trap_entry']==1
+        if fault=='invalid-enum':assert record['last_operation']['operation']=='GAP'
+        if fault in ('wrong-type','integer-overflow'):assert record['points']['initial-runtime-return']=='GAP'
+        if fault=='bad-status':assert record['last_operation']['status']=='GAP'
+    assert (original+optional).startswith(original)
+    reports.append({'case':'stage-'+fault,'optional_bytes':len(optional),'original_three_bytes_retained':True})
+
+stage_start=source.index('scope_stage_points=(')
+stage_stop=source.index('scope_fixture_owner_close_reader()',stage_start)
+stage_shell=source[stage_start:stage_stop]
+trap_line=next(line for line in source.splitlines() if line.startswith("trap 'scope_stage_freeze;"))
+setup_start=source.index('setup_genuine_paths() {\n')
+setup_stop=source.index('  local anchor_parent\n',setup_start)
+setup=source[setup_start:setup_stop]+'}\n'
+old_setup=setup
+old_setup='\n'.join(line for line in old_setup.splitlines() if not line.strip().startswith('scope_stage_'))+'\n'
+for message in ('fixture parent creation','fixture root creation'):
+    old_setup=old_setup.replace(" || { scope_stage_status=$?;scope_stage_returned=$SECONDS;fail "+repr(message)+"; }"," || fail "+repr(message))
+assert old_setup=='setup_genuine_paths() {\n  if [ ! -e /usr/local/libexec ] && [ ! -L /usr/local/libexec ]; then\n    /usr/bin/sudo -n /bin/mkdir -m 0755 -- /usr/local/libexec || fail \'fixture parent creation\'\n    genuine_libexec_created=true\n    genuine_libexec_identity=$(fixture_directory_identity /usr/local/libexec)\n  fi\n  /usr/bin/sudo -n /bin/mkdir -m 0755 -- "$genuine_base" || fail \'fixture root creation\'\n  genuine_base_created=true\n  genuine_base_identity=$(fixture_directory_identity "$genuine_base")\n}\n'
+for fault in ('success','libexec-mkdir','libexec-identity','base-mkdir','base-identity','alarm-identity'):
+    pair=[]
+    for version,program in (('original',old_setup),('observed',setup)):
+        work=area/('stage-'+fault+'-'+version);work.mkdir();libexec=work/'libexec';fixture_base=libexec/'fixture'
+        program=program.replace('/usr/local/libexec',str(libexec)).replace('/usr/bin/sudo -n /bin/mkdir','owned_mkdir')
+        shell='set -euo pipefail\n'+stage_shell+'scope_owner_waiting=false\nscope_fixture_owner_cancel(){ :; }\n'+trap_line+'\n'
+        shell+='genuine_base='+repr(str(fixture_base))+'\naudit='+repr(str(work/'audit'))+'\nfault='+repr(fault)+'\n'
+        shell+='fail(){ printf "%s\\n" "$1" >&2;exit 1; }\n'
+        shell+='owned_mkdir(){ printf "mkdir:%s\\n" "$*" >>"$audit";if { [ "$fault" = libexec-mkdir ] && [ "$4" != "$genuine_base" ]; } || { [ "$fault" = base-mkdir ] && [ "$4" = "$genuine_base" ]; };then return 7;fi;/bin/mkdir "$@"; }\n'
+        shell+='fixture_directory_identity(){ printf "identity:%s\\n" "$1" >>"$audit";if { [ "$fault" = libexec-identity ] && [ "$1" != "$genuine_base" ]; } || { [ "$fault" = base-identity ] && [ "$1" = "$genuine_base" ]; };then return 7;fi;if [ "$fault" = alarm-identity ];then kill -s ALRM "$$";fi;printf fixed-owned-identity; }\n'
+        shell+='finish(){ local status=$?;printf "STAGE_EXIT:%s:%s:%s:%s:%s\\n" "$status" "$scope_stage_operation" "$scope_stage_entered" "$scope_stage_returned" "$scope_stage_status";if [ "$scope_stage_frozen" = true ];then printf "FROZEN:%s\\n" "${scope_stage_snapshot[*]}";else printf "FROZEN:GAP\\n";fi;exit "$status"; }\ntrap finish EXIT\n'
+        shell+=program+'setup_genuine_paths\n'
+        script_path=work/'actual-stage.sh';script_path.write_text(shell)
+        rc,out,err=run(['/bin/bash',str(script_path)])
+        (work/'child.stdout.raw').write_bytes(out);(work/'child.stderr.raw').write_bytes(err)
+        child_result={'case':fault,'version':version,'returncode':rc,'stdout':out.decode(),'stderr':err.decode()}
+        (work/'child-result.json').write_text(json.dumps(child_result,sort_keys=True)+'\n')
+        print(json.dumps({'stage_child_actual':child_result},sort_keys=True),flush=True)
+        audit=(work/'audit').read_text().replace(str(libexec),'OWNED_LIBEXEC')
+        pair.append((rc,out,err,audit))
+        if version=='observed':
+            row=next(line.decode() for line in out.splitlines() if line.startswith(b'STAGE_EXIT:')).split(':')
+            if fault=='success':assert rc==0 and row[2]=='base-identity' and row[4]!='GAP' and row[5]=='0'
+            elif fault.endswith('mkdir'):assert rc==1 and row[2]==fault and row[4]!='GAP' and row[5]=='7'
+            elif fault=='alarm-identity':
+                assert rc==142 and row[4:]==['GAP','GAP']
+                frozen=next(line.decode().split(':',1)[1].split() for line in out.splitlines() if line.startswith(b'FROZEN:'))
+                assert len(frozen)==15 and frozen[10]=='libexec-identity' and frozen[12:14]==['GAP','GAP']
+            else:assert rc==7 and row[2]==fault and row[4:]==['GAP','GAP']
+    assert pair[0][0]==pair[1][0] and pair[0][2]==pair[1][2] and pair[0][3]==pair[1][3]
+    reports.append({'case':'stage-original-operation-'+fault,'original_status':pair[0][0],'observed_status':pair[1][0],
+        'original_argv_and_order':pair[0][3],'actual_stage_stdout':pair[1][1].decode(),'actual_stderr':pair[1][2].decode(),
+        'ordinary_fixed_mkdir_and_identity_transport_only':True})
+
+# Reuse the real three already-closed samples and the original cleanup ALRM test.
+assert len(closed_rows)==3 and all(row['completed'] for row in closed_rows)
+for row in closed_rows:module['cost_put'](row)
+freeze_body='tmp='+repr(str(base/'stage-frozen-tmp'))+'\n'+outer_cleanup
+(base/'stage-frozen-tmp').mkdir()
+freeze_body+='cleanup_genuine(){ scope_stage_points[4]=999999;scope_stage_operation=base-mkdir; }\n'
+freeze_body+='scope_stage_points[4]=$SECONDS\nkill -s ALRM "$$"\n'
+freeze_path=base/'stage-freeze.sh';freeze_path.write_text(freeze_body)
+rc,out,err=run(['/bin/bash',str(freeze_path)])
+exported=[json.loads(line) for line in err.splitlines() if line.startswith(b'{')]
+assert rc in (-signal.SIGALRM,142) and exported[:3]==closed_rows and len(exported)==4
+stage=exported[3];assert stage['sample']=='scope-alrm-stage' and stage['points']['ok35']!=999999
+assert stage['last_operation']['operation']=='none' and not (base/'stage-frozen-tmp').exists()
+assert b'fixture-cleanup: PASS prior-exit=142' in out
+reports.append({'case':'stage-real-ALRM-freeze-before-cleanup','actual_exit':rc,'frozen_stage':stage,
+    'original_three_records_exact':True,'cleanup_mutation_not_exported':True,'original_cleanup_gate_retained':True})
+
 print(json.dumps({'same_call_owned_controls':reports},sort_keys=True),flush=True)
 PY_SAME_CALL_OWNED_CONTROLS
 run_evaluator() {
@@ -4551,6 +4698,7 @@ print(json.dumps({'store_mode_controls':reports,'creation_sha256':hashlib.sha256
     'host_source_sha256':hashlib.sha256(host_raw).hexdigest(),'no_actual_writer_or_supplied_runtime':True},sort_keys=True),flush=True)
 PY_STORE_MODE_CONTROLS
 scope_controls_state=completed
+scope_stage_points[3]=$SECONDS
 /bin/rm -- "$tmp/observer-owner-controls.pending"
 
 for shipped in "$policy" "$record_program" "$gate_program" "$validator" "$evaluator"; do
@@ -5830,6 +5978,7 @@ race_marker_case rewritten "$tmp/marker.json"
 race_marker_case appeared ''
 race_marker_case appeared-symlink '' symlink
 pass 'held marker changes, appearance, and symlink appearance before SEAL refuse as stale'
+scope_stage_points[4]=$SECONDS
 
 "$python_bin" -I -S -B - "$root" "$tmp" "$bin" "${good[@]}" <<'PY_TERMINAL_TEST'
 import copy,hashlib,json,os,pathlib,pwd,runpy,shutil,subprocess,sys,time
@@ -6094,6 +6243,7 @@ try:cost_module['cost_qualify']()
 except BaseException:pass
 PY_TERMINAL_TEST
 pass 'terminal append and byte caps are independent; framed commitment binds the first snapshot'
+scope_stage_points[5]=$SECONDS
 
 genuine_platform=$(/usr/bin/uname -s)
 genuine_chown=/bin/chown
@@ -6240,6 +6390,7 @@ setup_genuine_linux() {
   [ "$writer_uid" -gt 0 ] && [ "$consumer_uid" -gt 0 ] && [ "$writer_uid" != "$consumer_uid" ] &&
     [ "$consumer_gid" = 65534 ] && [ "$consumer_gid" != "$fixture_gid" ] &&
     [[ " $actual_groups " = *" $fixture_gid "* ]] || fail 'actual principal membership'
+  scope_stage_points[8]=$SECONDS
   setup_genuine_paths
 }
 
@@ -6267,14 +6418,23 @@ PY_MAC_STDIN_PRELUDE
 readonly genuine_mac_stdin_prelude
 
 setup_genuine_paths() {
+  scope_stage_points[9]=$SECONDS
   if [ ! -e /usr/local/libexec ] && [ ! -L /usr/local/libexec ]; then
-    /usr/bin/sudo -n /bin/mkdir -m 0755 -- /usr/local/libexec || fail 'fixture parent creation'
+    scope_stage_operation=libexec-mkdir;scope_stage_entered=$SECONDS;scope_stage_returned=GAP;scope_stage_status=GAP
+    /usr/bin/sudo -n /bin/mkdir -m 0755 -- /usr/local/libexec || { scope_stage_status=$?;scope_stage_returned=$SECONDS;fail 'fixture parent creation'; }
+    scope_stage_status=$?;scope_stage_returned=$SECONDS
     genuine_libexec_created=true
+    scope_stage_operation=libexec-identity;scope_stage_entered=$SECONDS;scope_stage_returned=GAP;scope_stage_status=GAP
     genuine_libexec_identity=$(fixture_directory_identity /usr/local/libexec)
+    scope_stage_status=$?;scope_stage_returned=$SECONDS
   fi
-  /usr/bin/sudo -n /bin/mkdir -m 0755 -- "$genuine_base" || fail 'fixture root creation'
+  scope_stage_operation=base-mkdir;scope_stage_entered=$SECONDS;scope_stage_returned=GAP;scope_stage_status=GAP
+  /usr/bin/sudo -n /bin/mkdir -m 0755 -- "$genuine_base" || { scope_stage_status=$?;scope_stage_returned=$SECONDS;fail 'fixture root creation'; }
+  scope_stage_status=$?;scope_stage_returned=$SECONDS
   genuine_base_created=true
+  scope_stage_operation=base-identity;scope_stage_entered=$SECONDS;scope_stage_returned=GAP;scope_stage_status=GAP
   genuine_base_identity=$(fixture_directory_identity "$genuine_base")
+  scope_stage_status=$?;scope_stage_returned=$SECONDS
   local anchor_parent
   for anchor_parent in /usr/local/libexec/ystack-sandbox /usr/local/libexec/ystack-sandbox/v1; do
     if [ ! -e "$anchor_parent" ] && [ ! -L "$anchor_parent" ]; then
@@ -6401,6 +6561,7 @@ setup_genuine_macos() {
   done
   [ "$(authenticate_genuine_macos_python "$python_bin")" = "$python_bin" ] ||
     fail 'trusted existing runtime closure required before privilege'
+  scope_stage_points[7]=$SECONDS
   genuine_python=$(/usr/bin/sudo -n "$python_bin" -I -S -B -c \
     'import os,sys;assert sys.version_info >= (3,11);print(os.path.realpath(sys.executable))') ||
     fail 'existing root Python 3.11+ required'
@@ -6472,6 +6633,7 @@ PY_MAC_IDS
     [ "$(/usr/bin/id -g "$genuine_writer")" = "$((first + 2))" ] &&
     [ "$(/usr/bin/id -g "$genuine_consumer")" = "$((first + 3))" ] &&
     [[ " $groups " = *" $((first + 2)) "* ]] || fail 'actual distinct supplementary-only principals'
+  scope_stage_points[8]=$SECONDS
   setup_genuine_paths
 }
 
@@ -9386,6 +9548,7 @@ print(json.dumps({'through_use_controls':'PASS','sibling_before':'PASS','sibling
 PY_GENUINE_ASSEMBLER
 }
 run_genuine() {
+  scope_stage_points[6]=$SECONDS
   case "$genuine_platform" in
     Linux) setup_genuine_linux ;;
     Darwin) setup_genuine_macos ;;
