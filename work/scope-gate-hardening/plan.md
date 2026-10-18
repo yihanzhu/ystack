@@ -1101,10 +1101,52 @@ only when both group and whole-record caps fit; otherwise retain all required
 original fields with io GAP. I/O formatting failure takes that same fallback and
 cannot discard the old record or replace the first error. Add no other buffer
 contents or lengths, whole locals, dynamic getters, callbacks or repr. Missing or
-invalid frame, command, object, scalar or binding is GAP. Do not poll, wait,
-getpgid, inspect proc/ps, send kill0, read a clock or make any new syscall, query,
-trace callback or process. Keep original signals, Popen, call order and exceptions
-unchanged; these facts grant no cleanup or restoration permission.
+invalid frame, command, object, scalar or binding is GAP. Apart from the fixed
+first_git_failure_snapshot below and its own child lifecycle, do not poll, wait,
+getpgid, inspect proc/ps, send kill0, read a clock or add a syscall, query, trace
+callback or process. Keep original signals, Popen, call order and exceptions
+unchanged; these facts grant no cleanup or restoration permission. Keep
+cleanup_signal GAP when finally has overwritten the original loop value.
+
+Keep first_git_failure_snapshot private to this same reader insertion. Enable it
+only for the exact first-config code/argv binding, the original deadline/cancel
+Refusal and its outer cleanup killpg PermissionError with native errno 1. After
+original finally, use the already-held exact Popen positive PID once; add no
+success hook or earlier sample. During original fixture preparation, authenticate
+/bin/ps with the existing held, no-follow root-owner/mode/ACL tool checks. Reject
+setuid/setgid, changed identity or unsupported fixed fields before enabling it;
+an absolute path alone does not prove same-UID execution. Use the unchanged
+consumer credentials and environment, no sudo, shell or PATH lookup, and only
+`/bin/ps -p <decimal-pid> -o pid=,ppid=,pgid=,ruid=,uid=,stat=,ucomm=`.
+Select no other PID, process tree, environment, full command line or extra field.
+Keep this one post_cleanup_failure sample's original_identity UNPROVEN: even a
+matching PID, parent and short command cannot bind the original process instance,
+prove liveness at killpg, explain EPERM or authorize cleanup.
+
+Reuse the fixture's bounded direct-child supervision method inside this one
+private boundary; never call the failed _foreground or introduce a general owner
+API. Bound execution to one second and its own termination/reap to one second,
+within unchanged outer deadlines; do not restart or extend the failed Git limit.
+Track only the observer's actual Popen child, drain bounded pipes, terminate only
+that direct child when needed, wait and close its pipes before accepting a sample.
+No target-Git poll, wait, signal, group kill, PID discovery or retry is permitted.
+Before enabling this in full proof, ordinary controls must prove ownership through
+launch interruption, timeout, cancellation and termination failure. If bounded
+ownership/closure cannot be proved, STOP before full proof. Unknown observer
+closure remains PENDING with zero deletion/restoration; never use observation
+failure or a marker as proof of quiescence. Preserve the original first exception,
+traceback, mapping and status, including when observation or its cleanup fails.
+
+Bound ps stdout to 768 bytes and stderr to 128 bytes. Accept only one bounded ASCII
+row with the seven fixed fields and the selected PID; retain numeric IDs, short
+status and command identifier, with safe encoding and no arbitrary text. Missing,
+denied, malformed, changed, over-limit or unsupported results are GAP, not a cause.
+Use an optional group of at most 1,024 encoded bytes in the existing reader record,
+with its source/copy/invocation binding. Add no sink. Required old fields retain
+priority under every existing record, sink, export and ordinary-raw cap; lack of
+space or formatting/write failure drops only this group to GAP. Export no success.
+Remove this temporary observation when exact failure evidence supports a separately
+reviewed repair; it neither changes a safety predicate nor proves a repair.
 Missing, unsupported, wrong-type, cyclic or over-limit facts stay GAP. Do not
 serialize whole locals, repr/str(error), other exception fields or source text.
 Add no stat, open, ACL, readlink, resolve or other failed-object query, input
@@ -1151,10 +1193,24 @@ stderr beyond 256 bytes with exact prefix/truncation, missing or wrong types and
 pseudo-keys with zero hooks, GAP, encoding/group/record caps, and formatting/write
 failure isolation. The original required record and first error must survive a
 failed optional group. Retain the complete original control sequence.
+For first_git_failure_snapshot, extract the actual mapping and private boundary.
+Prove one query for its exact failure chain and zero for wrong frame, argv, PID,
+non-EPERM or success. Use real owned observer children to prove normal completion,
+launch interruption, timeout/cancel, pipe overflow and termination-failure handling,
+real wait/pipe closure, and PENDING with zero deletion when closure is unknown.
+Validate the exact tool identity, no setuid/setgid and fixed field support before
+use; unsupported means STOP, not a fallback command. Cover disappeared/denied PID,
+malformed/extra fields, caps, encoding/write failure and original_identity UNPROVEN.
+Compare the original failure path with observation enabled: same original exception
+object/context/traceback, Git argv/env/calls/signals/wait order and old record.
+Prove no recursion into _foreground, no retry and no extra target-object query.
+These ordinary controls must pass before fresh independent source preparation and
+original full proof; they do not prove the actual Mac kernel cause or restoration.
 Label controlled OS errors honestly; preserve all old and new ordinary raw output
 under the original 16 MiB cap without truncation or removal of controls.
-Prove no extra object queries, unchanged original error/status/calls and no
-success export within the same caps. Freeze complete generated copies before
+Prove no object queries beyond that fixed snapshot, unchanged original
+error/status/calls and no success export within the same caps.
+Freeze complete generated copies before
 these ordinary controls. For the launch fields, use actual owned link creation and
 the original extracted selection/launch sites to prove that each retained value
 comes from that same invocation. Cover stage failure/GAP, quotes, backslashes,
