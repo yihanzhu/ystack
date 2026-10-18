@@ -9,7 +9,7 @@ Tracks #541. Risk is high. This is the nonterminal child-6 core. It authenticate
 the existing child-5 evidence at one exact revision. Issue #544 remains mandatory
 before child 6 completes or child 7 starts.
 
-Implementation PR: `review_size: accepted-exception`, 2,600–10,850 net changed
+Implementation PR: `review_size: accepted-exception`, 2,600–11,000 net changed
 lines. The private evidence reader, held-path and Git checks, closed evaluator
 relations, and a real two-principal origin fixture form one security boundary.
 Most of the range is proof: complete classification, bundle, Git, terminal and
@@ -732,6 +732,27 @@ PIDs, use sudo kill, add a process-manager API or enlarge permissions. The uncha
 workflow still refuses restoration for a negative signal or unknown phase outcome;
 fixture confirmation does not override that rule or prove final D/V/T restoration.
 
+Only the original `run_control` calls `unchanged-copied-existing-layout` and
+`held-module-identity-change` may add an optional `supervision` field to their
+existing report. Keep `end`, the first and last finite values returned by the
+original loop deadline-assertion `time.monotonic()` call, original `readiness`,
+and a fixed phase. Preserve that call's `not cancelled[0]` short circuit, position,
+count, result and exception; do not sample the separate select-timeout or cleanup
+clock calls. Phase is `launch` before the original Popen, `loop` before the original
+loop owner check, `wait` before the original normal child wait, or `report` before
+the original report. Freeze at the first original exception before cleanup, or
+at the normal report; cleanup cannot overwrite it. Use only exact builtin finite
+floats, the original bool and these enums; absent or invalid fields are GAP.
+`end - 145` is a derived supervision start, not child launch time. Loop values
+and phase show reached code points, not child liveness or isolated scan cost.
+Bound this optional field, including its key and delimiters, to 256 encoded bytes.
+Collection, encoding or space failure omits only this field and cannot replace
+the original result or exception. Add no report on an original early-exit path,
+sink, writer, clock, query, callback, child or invocation. Keep all original fields,
+stdout/stderr and first-error ordering, the 65,536-byte child-output cap and the
+16 MiB ordinary raw cap. Guard bytes, safety reads, all local/global deadlines,
+reap, pipes, PENDING, cleanup and restoration stay unchanged.
+
 Within this private boundary, use one zero-payload `.ready-complete` leaf at the
 same fixed owner stem. Refuse an existing ready or completion leaf, including a
 symlink, before launch. Only the authenticated current owner may create the
@@ -751,6 +772,31 @@ the original nonzero result. Completion proves neither owner exit nor receipt,
 quiescence or deletion permission. Keep the original Bash state, wait, receipt
 and cleanup rules; only their independent confirmation may permit cleanup.
 PENDING or unknown owner completion still permits zero deletion.
+
+For supervision facts, extract the actual old/new `run_control` boundary in the
+existing owned controls. Compare clock calls, order, returned values and original
+exception identity, child creation/terminate/wait/kill and pipe-close effects.
+Cover normal completion, early cancellation, no loop entry, cancellation before
+and after readiness, the original clock exception, nonfinite/missing values and
+encoding/cap failure. Prove the short circuit adds no clock call, first-error
+facts survive cleanup, other labels gain no field, and no original early failure
+gains a report. Keep all prior controls; ordinary seams do not prove kernel
+closure or the actual Mac cause. Measure complete raw bytes before source review.
+
+At the existing `completed_evidence` boundary, retain wrapper/channel source
+sharing. Owner-control drivers may also share only their uniquely extracted,
+byte-identical contiguous `run_control` source span within this execution. Emit
+its complete bytes and bound length/digest before any reference. Retain each
+driver's full prefix, suffix, span position and complete-source SHA; reconstruct
+its exact bytes and verify that SHA against the already-held pre-execution source
+before each case. Keep the complete frozen generated files and executed sources.
+Different spans need their own full preceding payload or remain full; do not
+normalize text or assume entire drivers match. Missing, forward or wrong references
+cannot replace full evidence. Reuse the existing private payload/reference format,
+not a new cache or source framework. Add no source read or runtime change.
+Prove full-before-reference order, exact reconstruction, differing drivers and
+spans, wrong/missing references and unchanged execution bytes/calls. Keep every
+other payload and control; measure the complete new raw under the same cap.
 
 In existing CI, compare old and new observers on real owned calls and events.
 Cover identity refusal, real foreground return/reap, direct-callee stat/bool/errno,
