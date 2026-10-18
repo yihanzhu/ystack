@@ -1037,7 +1037,23 @@ not a received signal. From an exact original Popen instance's native dictionary
 retain only existing positive exact-int pid and exact-int/null returncode.
 Cached None is not liveness. These are exception-mapping facts, not a snapshot at
 an earlier predicate: final cancelled=False excludes that one-way bool trigger;
-True cannot distinguish cancellation from a prior deadline failure. Add no buffer
+True cannot distinguish cancellation from a prior deadline failure. Only at the
+original _foreground rejection at line 1192, with that exact code/config binding,
+allow an optional io group of at most 1,024 encoded bytes. Require original outputs
+as an exact dict of two exact-int fd keys and exact-bytearray values in the original
+stdout/stderr insertion order. Retain their lengths and original exact-int cap and
+error_cap bounds; out-of-bound lengths are GAP. Retain at most the first 256 stderr
+bytes as hex with an explicit truncated bool; retain no stdout content. From the
+already-held exact native SelectorKey and exact-int events, map its existing fd
+only to those original channel keys. Missing or foreign keys are GAP. Record an
+existing exact-bytes chunk length separately: BlockingIOError can leave an older
+chunk with another selected key, so do not attribute it to last_selected. These
+are retained exception-mapping facts, not selector state at the failed predicate.
+Do not inspect the selector after finally or call fileno/get_map/select/read.
+Missing, wrong-type, over-limit or unencodable I/O facts are GAP. Include the group
+only when both group and whole-record caps fit; otherwise retain all required
+original fields with io GAP. I/O formatting failure takes that same fallback and
+cannot discard the old record or replace the first error. Add no other buffer
 contents or lengths, whole locals, dynamic getters, callbacks or repr. Missing or
 invalid frame, command, object, scalar or binding is GAP. Do not poll, wait,
 getpgid, inspect proc/ps, send kill0, read a clock or make any new syscall, query,
@@ -1083,6 +1099,12 @@ deadline refusals and controlled TERM/KILL OSError exits. Prove original excepti
 identity, result, call count and whether cleanup wait was reached are unchanged.
 Cover existing native child fields, wrong frame/config argv, pseudo-child rejection,
 None without a liveness claim, GAP, encoding/cap and formatting/write failures.
+For io, prove original buffer order, bounds and channel provenance, partial EOF,
+and an old chunk after BlockingIOError with another selected key. Cover binary
+stderr beyond 256 bytes with exact prefix/truncation, missing or wrong types and
+pseudo-keys with zero hooks, GAP, encoding/group/record caps, and formatting/write
+failure isolation. The original required record and first error must survive a
+failed optional group. Retain the complete original control sequence.
 Label controlled OS errors honestly; preserve all old and new ordinary raw output
 under the original 16 MiB cap without truncation or removal of controls.
 Prove no extra object queries, unchanged original error/status/calls and no
