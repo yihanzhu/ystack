@@ -981,13 +981,25 @@ def cost_bind(sample,source,reader,copy,argv):
     cost_put({'sample':sample,'source_sha256':source,'reader_sha256':reader,
         'copy_sha256':copy,'argv_sha256':argv,'completed':False,'phases':'GAP'})
 
-def cost_finish(sample,points,normal):
+def cost_finish(sample,points,normal,counts=None):
     import math
     row=next(row for row in cost_rows() if row['sample']==sample)
     valid=len(points)==5 and all(type(value) in (int,float) and math.isfinite(value) for value in points)
     valid=valid and all(a<=b for a,b in zip(points,points[1:]))
     row.update(completed=bool(valid and normal),phases=[value-points[0] for value in points] if valid else 'GAP',
         outcome='normal' if normal else 'unwind-or-incomplete')
+    if sample=='protected-0-observer':
+        row.pop('counts',None)
+        if counts is not None:
+            optional='GAP'
+            try:
+                if type(counts) is list and len(counts)==8 and all(type(v) is int and 0<=v<=2147483647 for v in counts):
+                    optional=dict(zip(('requests', 'filename_tests', 'set_tests', 'result_reuses', 'negative_hits', 'qualification_entries', 'qualification_nodes', 'dispatch_selected'),counts))
+                encoded=json.dumps(optional,separators=(',',':'),ensure_ascii=True).encode()
+                candidate=dict(row,counts=optional)
+                if len(encoded)<=384 and len(json.dumps(candidate,separators=(',',':'),ensure_ascii=True).encode())+1<=1024:
+                    row=candidate
+            except BaseException:pass
     cost_put(row)
 
 def cost_qualify():
@@ -1091,27 +1103,46 @@ def observe(original,log,case,phase,argv,index):
             except BaseException as close_error:
                 gap+=';close:'+type(close_error).__name__
     watched_cache = {}
+    classification_counts=[[0]*8 if cost_selected else None]
+    def count_classification(which):
+        try:
+            values=classification_counts[0]
+            if values is None:return
+            if type(values) is not list or len(values)!=8 or type(which) is not int or not 0<=which<8:
+                classification_counts[0]=None
+                return
+            value=values[which]
+            if type(value) is not int or not 0<=value<2147483647:
+                classification_counts[0]=None
+                return
+            values[which]=value+1
+        except BaseException:classification_counts[0]=None
     try:import weakref as watched_weakref
     except ImportError:watched_weakref=None
     watched_busy = [False]
     def watched(frame):
+        count_classification(0)
         code = frame.f_code
         key = id(code)
         found = watched_cache.get(key)
         if not watched_busy[0] and type(found) is tuple and found[0] is code:
+            count_classification(3)
             return found[1]
         if watched_busy[0]:
-            return (frame.f_code.co_filename in source_codes and
-                    frame.f_code in source_codes[frame.f_code.co_filename])
+            return ((count_classification(1) or frame.f_code.co_filename in source_codes) and
+                    frame.f_code in (source_codes[frame.f_code.co_filename],count_classification(2))[0])
         watched_busy[0] = True
         try:
+            count_classification(1)
             in_source = frame.f_code.co_filename in source_codes
-            result = in_source and frame.f_code in source_codes[frame.f_code.co_filename]
+            result = in_source and frame.f_code in (source_codes[frame.f_code.co_filename],count_classification(2))[0]
             negative_marker=False
             try:
                 negative_marker=watched_weakref is not None and type(found) is watched_weakref.ReferenceType and found() is code
             except Exception:pass
+            if negative_marker:count_classification(4)
             if in_source and len(watched_cache) < 512 and not negative_marker:
+                count_classification(5)
                 try:
                     pending = [(code, 0)]
                     nodes = payload = 0
@@ -1119,6 +1150,7 @@ def observe(original,log,case,phase,argv,index):
                     while pending:
                         value, depth = pending.pop()
                         nodes += 1
+                        count_classification(6)
                         if nodes > 1024 or depth > 32:
                             reusable = False
                             break
@@ -1243,10 +1275,12 @@ def observe(original,log,case,phase,argv,index):
         if event!='call':return None
         if watched(frame):
             frame.f_trace_lines=frame.f_code.co_name=='recheck'
+            count_classification(7)
             return trace
         parent=frame.f_back
         if parent is not None and watched(parent):
             frame.f_trace_lines=False
+            count_classification(7)
             return trace
         return None
     previous=sys.gettrace()
@@ -1266,7 +1300,7 @@ def observe(original,log,case,phase,argv,index):
         cost_points[4]=time.monotonic() if cost_selected else None
         watched_cache.clear()
         if index==0 and case=='.github/workflows/ci.yml':
-            try:cost_finish('protected-0-observer',cost_points,cost_normal and gap is None)
+            try:cost_finish('protected-0-observer',cost_points,cost_normal and gap is None,classification_counts[0] if classification_counts[0] is not None else 'GAP')
             except BaseException:pass
         try:
             if descriptor is not None:
@@ -1504,6 +1538,38 @@ module['cost_bind']('protected-0-observer',hashlib.sha256(program.read_bytes()).
 freeze([helper,program,package/'shadow/v1/_consumer.py'])
 module['observe'](program,str(log),'.github/workflows/ci.yml','reader',[str(program)],0)
 assert next(row for row in module['cost_rows']() if row['sample']=='protected-0-observer')['completed']
+
+# Optional collection faults cannot suppress the original completed cost sample.
+counts_row=next(row for row in module['cost_rows']() if row['sample']=='protected-0-observer')
+assert set(counts_row['counts'])==set(('requests', 'filename_tests', 'set_tests', 'result_reuses', 'negative_hits', 'qualification_entries', 'qualification_nodes', 'dispatch_selected'))
+assert all(type(value) is int and 0<=value<=2147483647 for value in counts_row['counts'].values())
+assert counts_row['counts']['dispatch_selected']>0 and len(json.dumps(counts_row['counts'],separators=(',',':')).encode())<=384
+count_tree=ast.parse(observer)
+count_node=next(node for node in ast.walk(count_tree) if isinstance(node,ast.FunctionDef) and node.name=='count_classification')
+count_scope={'classification_counts':[[0]*8]}
+exec(compile(ast.Module(body=[count_node],type_ignores=[]),'actual-count-collector','exec'),count_scope)
+for fault in ('overflow','bool','shape'):
+    count_scope['classification_counts']=[[2147483647]*8 if fault=='overflow' else [True]*8 if fault=='bool' else []]
+    count_scope['count_classification'](0)
+    assert count_scope['classification_counts']==[None]
+count_scope['count_classification'](0);assert count_scope['classification_counts']==[None]
+finish_globals=module['cost_finish'].__globals__;original_json=finish_globals['json'];saved_rows=module['cost_rows']()
+for fault in ('missing','wrong-type','overflow','encoding','group-cap'):
+    values=None if fault=='missing' else [True]*8 if fault=='wrong-type' else [2147483648]*8 if fault=='overflow' else [0]*8
+    def encoded(value,*args,**options):
+        if type(value) is dict and set(value)==set(('requests', 'filename_tests', 'set_tests', 'result_reuses', 'negative_hits', 'qualification_entries', 'qualification_nodes', 'dispatch_selected')):
+            if fault=='encoding':raise UnicodeError('fixed optional count encoding refusal')
+            if fault=='group-cap':return 'x'*385
+        return json.dumps(value,*args,**options)
+    finish_globals['json']=__import__('types').SimpleNamespace(loads=json.loads,dumps=encoded)
+    try:module['cost_finish']('protected-0-observer',[1,2,3,4,5],True,values)
+    finally:finish_globals['json']=original_json
+    current=next(row for row in module['cost_rows']() if row['sample']=='protected-0-observer')
+    assert current['completed'] and current['phases']==[0,1,2,3,4]
+    assert current.get('counts','GAP')=='GAP'
+for row in saved_rows:module['cost_put'](row)
+reports.append({'optional_classifier_counts':counts_row['counts'],'actual_count_faults':8,
+    'original_sample_and_qualification_preserved':True,'counts_are_branch_facts_not_CPU':True})
 module['cost_qualify']();assert (base/'eligible').read_bytes()==b'1'
 outer=source[source.index('  if [ "$prior" -eq 142 ] && [ "$scope_fixture_signal" = ALRM ]; then'):]
 outer=outer[:outer.index('  if [ "$cleanup_status" -eq 0 ]; then')]
@@ -2237,7 +2303,7 @@ def heredoc(tag):
 prepare=heredoc('PY_STALE_PREPARE')
 functions=source[source.index('run_evaluator() {'):source.index('\nexpect_reasons() {')]
 functions=functions[:functions.index('\nexpect_validator_error() {')]+functions[functions.index('\nprepare_stale_binding() {'):]
-expected={'observer_source':'9158acae3a1262edbfb7ae7d51f32f69902c674e3faa801bd96aa705da309f45',
+expected={'observer_source':'73834305528e3760b467ddde8598307eebb1073cd56b16ca98c910d64c5ad592',
  'frontend_capture':'a21a722a59923fa6ad18f6f6dd26385d46dcd5a3733083f9d7625777d73c4af8',
  'emit_capture':'153556128c04167c2a73d6c91c86b37bd3e1d34eb35fdeea44e865803301afb4',
  'exit_capture':'95bc34214161aa79167d7f33e8cf4980d70177f7771fa5bf30672e8f0e1739ac'}
@@ -3657,7 +3723,7 @@ def watched(frame):
     marker='    previous=sys.gettrace()\n';assert program.count(marker)==1
     program=program.replace(marker,textwrap.indent(setup,'    ')+marker,1)
     # The original primitive controls consume a closed-name adapter of this actual generated classifier.
-    parsed=ast.parse(program);wanted={'watched','AuthenticationTable','AuthenticationSet'}
+    parsed=ast.parse(program);wanted={'watched','AuthenticationTable','AuthenticationSet','count_classification'}
     definitions=[n for n in ast.walk(parsed) if isinstance(n,(ast.FunctionDef,ast.ClassDef)) and n.name in wanted]
     watched=[n for n in definitions if n.name=='watched' and not any(isinstance(x,ast.Assert) and 'callback' in ast.get_source_segment(program,x) for x in ast.walk(n))]
     assert len(watched)==1
@@ -3675,15 +3741,16 @@ def watched(frame):
     initialization=[n for n in ast.walk(parsed) if isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name) and n.targets[0].id=='authentication']
     assert len(initialization)==1
     initialization=ast.get_source_segment(program,initialization[0])+'\n'
-    adapter=initialization+literals['primitive_source']+'\n'+ast.unparse(adapted)+'\n'+prefix+'\ndef cancel():pass\n'
+    adapter='classification_counts=[[0]*8]\n'+initialization+literals['primitive_source']+'\n'+ast.unparse(adapted)+'\n'+prefix+'\ndef cancel():pass\n'
     compile(adapter,'actual-observer-closed-name-adapter','exec')
     return program,adapter
 
 def primitive_witness_controls(program):
     import weakref,io
     tree=ast.parse(program)
-    definitions=[n for n in tree.body if isinstance(n,(ast.FunctionDef,ast.ClassDef)) and n.name in ('primitive_call','AuthenticationTable','AuthenticationSet','bound')]
-    assert len(definitions)==4
+    definitions=[n for n in tree.body if isinstance(n,(ast.FunctionDef,ast.ClassDef)) and n.name in ('primitive_call','AuthenticationTable','AuthenticationSet','bound','count_classification')]
+    expected_definitions={'primitive_call','AuthenticationTable','AuthenticationSet','bound'}
+    assert {n.name for n in definitions} in (expected_definitions,expected_definitions|{'count_classification'})
     assignments={n.targets[0].id:n.value for n in tree.body if isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name)}
     fragment=program[program.index('import hashlib\npaired='):program.index('def cancel(')]
     paired_tree=ast.parse(fragment);reports=[]
@@ -3693,6 +3760,7 @@ def primitive_witness_controls(program):
         scope={'types':types,'hashlib':hashlib,'json':json,'sys':types.SimpleNamespace(stderr=diagnostic),'bound_cache':{},'bound_busy':[False],'bound_weakref':weakref,
             'observe':lambda *args:None,'dispatch':lambda *args:None}
         scope['authentication']=eval(compile(ast.Expression(assignments['authentication']),'actual-authentication-init','eval'),{})
+        scope['classification_counts']=[[0]*8]
         exec(compile(ast.Module(body=definitions,type_ignores=[]),'actual-primitive-counter-classifier','exec'),scope)
         table=scope['AuthenticationTable']({code.co_filename:scope['AuthenticationSet']({code})})
         scope['bound_codes']=table;scope['paired_codes']=types.MappingProxyType({code.co_filename:frozenset({code})})
@@ -4066,7 +4134,9 @@ def code_auth_controls(observer,wrapper,area):
     for name,table_name,program,indent,next_marker in [('watched','source_codes',observer,4,'    def trace('),
                                                      ('bound','bound_codes',wrapper,0,"print('GUARD_ACTUAL_PRINCIPAL")]:
         start=program.index(' '*indent+name+'_cache = {}\n');end=program.index(next_marker,start)
-        actual=textwrap.dedent(program[start:end]);tree=ast.parse(actual)
+        actual=textwrap.dedent(program[start:end])
+        if name=='watched':actual='cost_selected=True\n'+actual
+        tree=ast.parse(actual)
         records.append(negative_eligibility_controls(actual,name,table_name,area))
         originals={'watched':"""def watched(frame):
     return (frame.f_code.co_filename in source_codes and
@@ -4136,6 +4206,12 @@ def code_auth_controls(observer,wrapper,area):
             if label=='cached':assert id(outside.f_code) not in scope[name+'_cache']
             elapsed=time.monotonic()-started
             same_sequence=authentication_proof(authentication)
+            if name=='watched' and label=='cached':
+                expected_counts=[authentication['requests'],table.tests,table.code_tests,
+                    sum(row['hit'] for row in authentication['rows']),sum(row['negative_hit'] for row in authentication['rows']),
+                    sum(row['qualify'] for row in authentication['rows']),sum(row['nodes'] for row in authentication['rows']),0]
+                assert scope['classification_counts'][0]==expected_counts
+                records.append(completed_evidence({'same_request_optional_counts':expected_counts,'primitive_witness_agreement':True}))
             sequence_reference=completed_evidence({'classifier_sequence':name,'version':label,'actual_results':result_rows,'repeats':repeats,'custom_hash_eq':[Constant.calls,Filename.calls],'whole_wall':elapsed,'authentication':same_sequence})
             assert same_sequence['valid'] and all(value is True for value in repeats)
             if label=='cached':
@@ -4234,6 +4310,8 @@ finally:
     a=uncached_observer.index('    watched_cache = {}\n');b=uncached_observer.index('    def trace(frame,event,arg):\n',a)
     uncached_observer=uncached_observer[:a]+'    def watched(frame):\n        return (frame.f_code.co_filename in source_codes and\n                frame.f_code in source_codes[frame.f_code.co_filename])\n'+uncached_observer[b:]
     uncached_observer=uncached_observer.replace('        watched_cache.clear()\n','')
+    uncached_observer=uncached_observer.replace('            count_classification(7)\n','')
+    uncached_observer=uncached_observer.replace('    def trace(frame,event,arg):\n','    classification_counts=[None]\n    def trace(frame,event,arg):\n',1)
     def observe_case(code,kind):
         target=area/'value';target.write_bytes(b'actual owned file');log=area/'log';log.write_bytes(b'')
         if '    source_codes={}\n' in code:
