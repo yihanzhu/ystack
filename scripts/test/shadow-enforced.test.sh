@@ -1912,7 +1912,7 @@ PY
   "$tmp/parent-input-helper.py" "$tmp/runtime-dependency-collector.py" "$native_control_binary" <<'PY'
 import os
 startup_environment_keys=tuple(sorted(os.environ))
-import errno, hashlib, importlib.util, json, pathlib, shutil, stat, sys, sysconfig, tempfile, time, types
+import ast, errno, hashlib, importlib.util, json, pathlib, shutil, stat, sys, sysconfig, tempfile, time, types
 
 root, base, helper, jq, native_binary, native_record, dependency_record, parent_helper, collector, group_control = map(pathlib.Path, sys.argv[1:])
 helper_spec=importlib.util.spec_from_file_location("parent_input_helper",parent_helper)
@@ -2087,6 +2087,88 @@ acl_calls = [0]
 def acl_value(value):
     def observe(_fd, _resolver=None): acl_calls[0] += 1; return value
     return observe
+def acl_mask_equivalence():
+    current = pathlib.Path(c.__file__).read_text()
+    replacement = '(1 << 2) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 8) | (1 << 10) | (1 << 12) | (1 << 13)'
+    previous = 'sum(1 << n for n in (2, 4, 5, 6, 8, 10, 12, 13))'
+    assert current.count('dangerous = ' + replacement) == 2
+    original = current.replace('dangerous = ' + replacement, 'dangerous = ' + previous)
+    assert hashlib.sha256(original.encode()).hexdigest() == '34d314505860f7569f53f41491c29979ab30aa08f83cfc151444f8cb6a235f68'
+    expected_sources = {'_root_rule': {'old': '1c1a097a7f919d09a7147d6b2752543cae550b1b580983c131e93cf1ee8c45c7', 'new': 'af22ae2221580e7d65ef28e702b69c8653ffde0c965d500b52a1d8c5a28abaa5'}, '_installed_rule': {'old': 'da01370596351b9ff79a582986c8fbaa6804c5a3b2642272461bf4658d655ef4', 'new': '976684eafda4c87744529283c19e94e4113e108c3d9c9a2f17346239997b4cad'}}
+    rows = []
+    dangerous_bits = (4, 16, 32, 64, 256, 1024, 4096, 8192)
+    assert sum(dangerous_bits) == 13684
+    cases = [(tag, identity, bits) for tag in (1, 2) for identity in (0, 123, 456, None)
+             for bits in dangerous_bits + (13684, 0, 2, 32768)]
+    for name in ('_root_rule', '_installed_rule'):
+        sources = []
+        for version, text in (('old', original), ('new', current)):
+            node = next(n for n in ast.parse(text).body if isinstance(n, ast.FunctionDef) and n.name == name)
+            extracted = ast.get_source_segment(text, node)
+            assert hashlib.sha256(extracted.encode()).hexdigest() == expected_sources[name][version]
+            sources.append(extracted)
+        samples = [('darwin', [(tag, identity, bits)], None, None, 0, 0o555) for tag, identity, bits in cases]
+        samples += [('darwin', [(1, 456, 4), (1, 0, 4)], None, None, 0, 0o555),
+                    ('darwin', [], None, None, 999, 0o555), ('darwin', [], None, None, 0, 0o575),
+                    ('linux', None, None, None, 0, 0o555),
+                    ('linux', [(0x02, 4, 123)], None, None, 0, 0o555),
+                    ('linux', None, [(0x10, 2, 0)], None, 0, 0o555)]
+        samples += [('darwin', [], None, error, 0, 0o555) for error in
+                    (OSError('fixed ACL failure'), c.Refusal('E_ACL'), MemoryError('fixed ACL memory'))]
+        for platform, access, default, fault, uid, mode in samples:
+            results = []
+            for extracted in sources:
+                calls = []
+                class ObservedRows(list):
+                    def __iter__(self):
+                        for value in super().__iter__():
+                            calls.append(('row', value))
+                            yield value
+                def observe(held_fd, held_resolver):
+                    calls.append(('acl', held_fd, held_resolver))
+                    if fault is not None:
+                        raise fault
+                    return (None if access is None else ObservedRows(access),
+                            None if default is None else ObservedRows(default))
+                namespace = dict(vars(c), sys=types.SimpleNamespace(platform=platform), _acl_state=observe)
+                exec(compile('from __future__ import annotations\n' + extracted, 'actual-' + name, 'exec'), namespace)
+                resolver = object()
+                rule = namespace[name](123, resolver) if name == '_installed_rule' else namespace[name](resolver)
+                state = types.SimpleNamespace(st_uid=uid, st_mode=stat.S_IFDIR | mode)
+                outcome = None
+                try:
+                    outcome = rule(fd, state, False)
+                except BaseException as error:
+                    assert fault is error and isinstance(error, MemoryError)
+                    outcome = ('propagated', type(error).__name__)
+                assert all(call[1:] == (fd, resolver) for call in calls if call[0] == 'acl')
+                if uid == 999 or mode & 0o022:
+                    assert calls == [] and outcome is False
+                else:
+                    assert sum(call[0] == 'acl' for call in calls) == 1
+                if isinstance(fault, (OSError, c.Refusal)):
+                    assert outcome is False
+                results.append((outcome, [(entry[0], entry[1]) for entry in calls]))
+            assert results[0] == results[1], (name, platform, access, default, type(fault).__name__, results)
+            rows.append({'rule': name, 'platform': platform, 'outcome': results[0][0], 'calls': len(results[0][1])})
+        for extracted in sources:
+            calls = []
+            observations = iter(([(1, 456, 4)], [], [(1, 456, 4)]))
+            resolver = object()
+            def observe(held_fd, held_resolver):
+                assert held_fd == fd and held_resolver is resolver
+                calls.append((held_fd, held_resolver))
+                return next(observations), None
+            namespace = dict(vars(c), sys=types.SimpleNamespace(platform='darwin'), _acl_state=observe)
+            exec(compile('from __future__ import annotations\n' + extracted, 'actual-continuous-' + name, 'exec'), namespace)
+            rule = namespace[name](123, resolver) if name == '_installed_rule' else namespace[name](resolver)
+            state = types.SimpleNamespace(st_uid=0, st_mode=stat.S_IFDIR | 0o555)
+            assert [rule(fd, state, False) for _ in range(3)] == [False, True, False]
+            assert calls == [(fd, resolver)] * 3
+    print(json.dumps({'acl_mask_equivalence': rows, 'same_closure_fresh_observations': True,
+                      'source_hashes': expected_sources, 'fixed_mask': 13684}, sort_keys=True))
+acl_mask_equivalence()
+
 c.sys.platform = "linux"
 c._acl_state = acl_value(([(0x02, 4, 123)], None))
 ok(not c._installed_rule(123)(fd, installed_state, False) and acl_calls[0] == 1,

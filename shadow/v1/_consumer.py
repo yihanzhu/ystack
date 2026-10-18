@@ -447,7 +447,7 @@ def _root_rule(resolver: _DarwinUUIDResolver | None = None) -> Rule:
             return False
         if sys.platform != "darwin":
             return _linux_install_acl_ok(access) and _linux_install_acl_ok(default)
-        dangerous = sum(1 << n for n in (2, 4, 5, 6, 8, 10, 12, 13))
+        dangerous = (1 << 2) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 8) | (1 << 10) | (1 << 12) | (1 << 13)
         return not any(tag == 1 and identifier != 0 and bits & dangerous
                        for tag, identifier, bits in access)
     return check
@@ -462,7 +462,7 @@ def _installed_rule(principal_uid: int, resolver: _DarwinUUIDResolver | None = N
             return False
         if sys.platform != "darwin":
             return _linux_install_acl_ok(access) and _linux_install_acl_ok(default)
-        dangerous = sum(1 << n for n in (2, 4, 5, 6, 8, 10, 12, 13))
+        dangerous = (1 << 2) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 8) | (1 << 10) | (1 << 12) | (1 << 13)
         return not any(tag == 1 and bits & dangerous and identifier not in (0, principal_uid)
                        for tag, identifier, bits in access)
     return check

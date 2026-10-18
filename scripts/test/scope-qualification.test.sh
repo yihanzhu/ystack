@@ -924,7 +924,7 @@ PY_MAC_TRANSITION
 python3 -I -S -B - "$root" "$tmp/stale-observation" <<'PY_STALE_PREPARE'
 import difflib,hashlib,json,pathlib,shlex
 root=pathlib.Path(__import__('sys').argv[1]);area=pathlib.Path(__import__('sys').argv[2])
-expected={'scope/v1/evaluate-scope.sh': 'f120e877973aa0b66d7ce3de2f6b9cc46b6a9b073e89c606fd99fd23fc84356a', 'scope/v1/read-shadow-evidence.py': 'ef89c5b775a397dc4d1c2b25d961b2872436bc9c105a1984f10524e2a64c2614', 'shadow/v1/_consumer.py': '34d314505860f7569f53f41491c29979ab30aa08f83cfc151444f8cb6a235f68'}
+expected={'scope/v1/evaluate-scope.sh': 'f120e877973aa0b66d7ce3de2f6b9cc46b6a9b073e89c606fd99fd23fc84356a', 'scope/v1/read-shadow-evidence.py': 'ef89c5b775a397dc4d1c2b25d961b2872436bc9c105a1984f10524e2a64c2614', 'shadow/v1/_consumer.py': '69ae9a759ea703cf48caf60d36211d3ca46f788868f9aa6513a32bcaa6c022dc'}
 for path,digest in expected.items():
     assert hashlib.sha256((root/path).read_bytes()).hexdigest()==digest
 observer_source = r"""import hashlib,json,os,runpy,stat,sys,time,types
@@ -2432,7 +2432,7 @@ old=old.replace("return (frame.f_code.co_filename in source_codes and\n         
 assert hashlib.sha256(old.encode()).hexdigest()=='0c2b1c8c8cb9c662c55e17e134f408693ab4ead8f27357ad6cb2b7bcc0b820eb'
 root=Path(sys.argv[2]).resolve()
 consumer=(root/'shadow/v1/_consumer.py').read_bytes()
-assert hashlib.sha256(consumer).hexdigest()=='34d314505860f7569f53f41491c29979ab30aa08f83cfc151444f8cb6a235f68'
+assert hashlib.sha256(consumer).hexdigest()=='69ae9a759ea703cf48caf60d36211d3ca46f788868f9aa6513a32bcaa6c022dc'
 old_wrapper=wrapper.replace("try:\n    for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):\n        signal.signal(number, cancel)\n    signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})\n    sys.settrace(dispatch)\n    exec(compiled_code, {'__name__': '__main__'})\n","for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):\n    signal.signal(number, cancel)\nsignal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})\nsys.settrace(dispatch)\ntry:\n    exec(compiled_code, {'__name__': '__main__'})\n",1)
 old_wrapper=old_wrapper.replace('import dis, json, os, signal, sys, time, types','import json, os, signal, sys, time',1)
 old_wrapper=old_wrapper.replace('    bound_cache.clear()\n','')
