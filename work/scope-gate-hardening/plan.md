@@ -9,7 +9,7 @@ Tracks #541. Risk is high. This is the nonterminal child-6 core. It authenticate
 the existing child-5 evidence at one exact revision. Issue #544 remains mandatory
 before child 6 completes or child 7 starts.
 
-Implementation PR: `review_size: accepted-exception`, 2,600–11,200 net changed
+Implementation PR: `review_size: accepted-exception`, 2,600–11,600 net changed
 lines. The private evidence reader, held-path and Git checks, closed evaluator
 relations, and a real two-principal origin fixture form one security boundary.
 Most of the range is proof: complete classification, bundle, Git, terminal and
@@ -1101,10 +1101,74 @@ only when both group and whole-record caps fit; otherwise retain all required
 original fields with io GAP. I/O formatting failure takes that same fallback and
 cannot discard the old record or replace the first error. Add no other buffer
 contents or lengths, whole locals, dynamic getters, callbacks or repr. Missing or
-invalid frame, command, object, scalar or binding is GAP. Do not poll, wait,
-getpgid, inspect proc/ps, send kill0, read a clock or make any new syscall, query,
-trace callback or process. Keep original signals, Popen, call order and exceptions
-unchanged; these facts grant no cleanup or restoration permission.
+invalid frame, command, object, scalar or binding is GAP. Apart from the fixed
+first_git_failure_snapshot below and its fixed build/load checks, do not poll, wait,
+getpgid, inspect proc/ps, send kill0, read a clock or add a syscall, query, trace
+callback or process. Keep original signals, Popen, call order and exceptions
+unchanged; these facts grant no cleanup or restoration permission. Keep
+cleanup_signal GAP when finally has overwritten the original loop value.
+
+Keep first_git_failure_snapshot private to this same reader insertion. Use one
+fixture-only in-process C bridge. Trigger it only
+for the exact first-config code/argv binding, original deadline Refusal and outer
+cleanup killpg PermissionError with native errno 1. Require retained cancelled to
+be exact False; True, GAP or a wrong chain means no query. Use the already-held
+positive PID once after original finally, with no success hook or earlier sample.
+Mark original_identity UNPROVEN. A matching PID, parent, UID, group or short name
+cannot bind the original instance, establish killpg-time liveness or explain EPERM.
+
+Embed the fixed C source only in this scope fixture. Prepare its source, private
+build record and binary in one new owned fixed directory before the genuine call.
+Do not modify _cancel_release, object-closure, verifier, product native records,
+product API, runtime guard or qualification. Use the existing CI /usr/bin/cc and
+local SDK only; freeze the actual compiler, SDK/header provenance, source, exact
+flags, binary bytes and architecture before use. No installation or external
+source retrieval.
+The one system request is SDK-declared sysctl with the fixed four-element MIB
+CTL_KERN, KERN_PROC, KERN_PROC_PID, pid and one sizeof(struct kinfo_proc) buffer.
+Require one complete result; no size probe, enumeration, second request or retry.
+Only SDK-declared members may supply PID, PPID, process group, real/effective UID,
+status and bounded short command. Their declarations and types must compile under
+-Wall -Wextra -Werror; unsupported fields or ambiguous SDK provenance mean STOP,
+not a different interface or guessed offsets. Keep system structures, constants
+and selectors inside C. Python passes only a checked PID and a fixed-capacity
+byte buffer to the bridge's own fixed ABI; it never declares the system layout.
+
+Keep loading behind this one fixed artifact boundary, not a general loader.
+Authenticate the source/build/binary and every ancestor with the existing held,
+no-follow owner/mode/ACL and identity checks; reject setuid/setgid, writable or
+changed objects. Require a fixed absolute owned binary path and RTLD_NOW|RTLD_LOCAL,
+no search fallback. Its complete Mach-O dependencies must be only the already
+trusted /usr/lib/libSystem.B.dylib and its existing authenticated system closure;
+libproc is not an alias for that permission. Bind install name, load commands and
+architecture; reject unknown dependencies, rpaths and initializer side effects.
+After load, verify the actual image/function address belongs to that held binary
+and recheck named/held identity. A digest or absolute path alone is not loaded-image
+proof. Reuse the existing physical/system-cache authentication rules without
+widening product closure or trust roots. If this requires a general loader, new
+system dependency or changed product qualification, STOP. The actual SDK linkage
+and this fixed loading proof must pass before the genuine observation is enabled.
+
+Load only in this existing failure insertion after original cleanup/finally has
+run, using the frozen prepared artifact. This adds loader work, not a successful-path
+measurement. No fork, exec, wait, signal, thread, target getpgid, new alarm or
+budget transfer is allowed. Keep original cancellation and outer supervision
+acting on the same reader. Do not mask, replace or swallow its handlers, retry
+EINTR, reset deadlines or grant a grace period. A synchronous native/loader call
+has no proved one-second bound or zero handler latency; make no such claim.
+Known observation errors become GAP without replacing the original exception,
+traceback, mapping or status; original cancellation must still take its original
+exit path. Unknown closure retains PENDING and grants no deletion or restoration.
+
+Bound the bridge result to 768 bytes of fixed safe scalar fields; record native
+status/errno without arbitrary text. Missing, denied, short, wrong-type, changed,
+over-limit or unsupported results are GAP. Use an optional group of at most 1,024
+encoded bytes in the existing reader record, with source/build/binary/copy and
+invocation bindings. Add no sink. Required old fields retain priority under every
+existing record, sink, export and ordinary-raw cap; insufficient space or encoding
+and write failure drops only this group to GAP. Export no success. Remove this
+temporary observation when exact evidence supports a separately reviewed repair;
+it neither changes a safety predicate nor proves a repair.
 Missing, unsupported, wrong-type, cyclic or over-limit facts stay GAP. Do not
 serialize whole locals, repr/str(error), other exception fields or source text.
 Add no stat, open, ACL, readlink, resolve or other failed-object query, input
@@ -1151,10 +1215,25 @@ stderr beyond 256 bytes with exact prefix/truncation, missing or wrong types and
 pseudo-keys with zero hooks, GAP, encoding/group/record caps, and formatting/write
 failure isolation. The original required record and first error must survive a
 failed optional group. Retain the complete original control sequence.
+For first_git_failure_snapshot, extract the actual mapping and fixed bridge.
+Prove one native request for its exact failure chain and zero for wrong frame,
+argv, PID, non-EPERM, cancelled True/GAP or success. Compile against the real SDK
+and test the actual fixed ABI, PID ranges, complete/short/error results, EINTR
+without retry, safe encoding, caps and source/invocation binding. Reject changed
+source/build/binary, wrong image/function mapping, unexpected dependencies and
+unsafe ownership/mode/ACL without a query. Compare the original failure path:
+same exception object/context/traceback, Git argv/env/calls/signals/wait order and
+old record. Exercise original cancellation through the actual mapping/native call;
+no swallowed handler, added child, wait or grace period is permitted. Keep GAP,
+format/write isolation, original_identity UNPROVEN and unknown-closure refusal.
+These ordinary controls and fixed loading proof precede fresh independent source
+preparation and the original full proof. They neither prove the actual Mac kernel
+cause nor replace actual cancellation, restoration or qualification evidence.
 Label controlled OS errors honestly; preserve all old and new ordinary raw output
 under the original 16 MiB cap without truncation or removal of controls.
-Prove no extra object queries, unchanged original error/status/calls and no
-success export within the same caps. Freeze complete generated copies before
+Prove no object queries beyond that fixed snapshot, unchanged original
+error/status/calls and no success export within the same caps.
+Freeze complete generated copies before
 these ordinary controls. For the launch fields, use actual owned link creation and
 the original extracted selection/launch sites to prove that each retained value
 comes from that same invocation. Cover stage failure/GAP, quotes, backslashes,
