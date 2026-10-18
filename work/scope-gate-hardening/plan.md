@@ -798,6 +798,27 @@ Prove full-before-reference order, exact reconstruction, differing drivers and
 spans, wrong/missing references and unchanged execution bytes/calls. Keep every
 other payload and control; measure the complete new raw under the same cap.
 
+The same boundary may share only the byte-identical selector_setup span in the
+existing genuine_relation_preexec.reader_source and launch_capture_preexec.reader_copy
+reports within this execution. Require one unique contiguous occurrence in each
+actual generated reader; never share different complete readers. Use only existing
+capture.selector_insertion and capture.copies values. Emit the complete span
+payload before any existing canonical five-field reference. Keep every report's
+other fields, binding, full prefix/suffix, byte offset/span length and complete
+source length/SHA. Reconstruct the exact source; keep its full frozen generated
+file, original source inverse, and actual execution bytes/calls unchanged. Preserve
+fully recoverable actual source before the original execution and related assertions.
+Different spans need their own full preceding payload or remain full. Missing,
+wrong or forward references, non-unique spans, or wrong prefix/suffix/offset/length/
+SHA must reject reuse or retain full evidence. Normalize nothing. Prove every
+actual reader's exact reconstruction and binding, direct rejection cases, complete
+canonical full-before-reference order and indices. Retain the original six shared
+objects and 26 generated-source inverse checks and all other controls. Add no
+source read, query, OS/runtime/process/interface or trust root. This changes only
+report expression; no generic diff, compression, cache, logging framework or
+cross-run sharing. Measure the complete new batch's recursive raw under the same
+16 MiB cap; a projection cannot establish PASS or remove an earlier volume failure.
+
 In existing CI, compare old and new observers on real owned calls and events.
 Cover identity refusal, real foreground return/reap, direct-callee stat/bool/errno,
 exceptions and early GAP. Compare event order and field meaning while retaining
