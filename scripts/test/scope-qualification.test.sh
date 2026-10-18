@@ -924,7 +924,7 @@ PY_MAC_TRANSITION
 python3 -I -S -B - "$root" "$tmp/stale-observation" <<'PY_STALE_PREPARE'
 import difflib,hashlib,json,pathlib,shlex
 root=pathlib.Path(__import__('sys').argv[1]);area=pathlib.Path(__import__('sys').argv[2])
-expected={'scope/v1/evaluate-scope.sh': 'f120e877973aa0b66d7ce3de2f6b9cc46b6a9b073e89c606fd99fd23fc84356a', 'scope/v1/read-shadow-evidence.py': 'ef89c5b775a397dc4d1c2b25d961b2872436bc9c105a1984f10524e2a64c2614', 'shadow/v1/_consumer.py': '69ae9a759ea703cf48caf60d36211d3ca46f788868f9aa6513a32bcaa6c022dc'}
+expected={'scope/v1/evaluate-scope.sh': 'f120e877973aa0b66d7ce3de2f6b9cc46b6a9b073e89c606fd99fd23fc84356a', 'scope/v1/read-shadow-evidence.py': 'ef89c5b775a397dc4d1c2b25d961b2872436bc9c105a1984f10524e2a64c2614', 'shadow/v1/_consumer.py': '6634f9df4ea9a1e02cd6212d58a82379dd5148780672700792f8248f76ea6f9b'}
 for path,digest in expected.items():
     assert hashlib.sha256((root/path).read_bytes()).hexdigest()==digest
 observer_source = r"""import hashlib,json,os,runpy,stat,sys,time,types
@@ -2432,7 +2432,7 @@ old=old.replace("return (frame.f_code.co_filename in source_codes and\n         
 assert hashlib.sha256(old.encode()).hexdigest()=='0c2b1c8c8cb9c662c55e17e134f408693ab4ead8f27357ad6cb2b7bcc0b820eb'
 root=Path(sys.argv[2]).resolve()
 consumer=(root/'shadow/v1/_consumer.py').read_bytes()
-assert hashlib.sha256(consumer).hexdigest()=='69ae9a759ea703cf48caf60d36211d3ca46f788868f9aa6513a32bcaa6c022dc'
+assert hashlib.sha256(consumer).hexdigest()=='6634f9df4ea9a1e02cd6212d58a82379dd5148780672700792f8248f76ea6f9b'
 old_wrapper=wrapper.replace("try:\n    for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):\n        signal.signal(number, cancel)\n    signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})\n    sys.settrace(dispatch)\n    exec(compiled_code, {'__name__': '__main__'})\n","for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):\n    signal.signal(number, cancel)\nsignal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})\nsys.settrace(dispatch)\ntry:\n    exec(compiled_code, {'__name__': '__main__'})\n",1)
 old_wrapper=old_wrapper.replace('import dis, json, os, signal, sys, time, types','import json, os, signal, sys, time',1)
 old_wrapper=old_wrapper.replace('    bound_cache.clear()\n','')
@@ -2930,7 +2930,7 @@ def stable_sink_controls(area,assembler):
     return reports
 
 OUTER_RUN_SOURCE_SHA='7f3571e66a1da98ccc2a876c426ea77fcddc010cbdb64d76342efde97ce77a64'
-OUTER_CAPTURE_SOURCE_SHA='67be9871491f73021fa2f7f1f640523bc755d47f9fc6c85bfdce31992347f43f'
+OUTER_CAPTURE_SOURCE_SHA='1d67c7254a74dd32a279c51246c11bc06ad3ad5d96d40c31a940603b9239ffeb'
 def outer_timeout_boundary(assembler):
     tree=ast.parse(assembler)
     runs=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='run']
@@ -3146,6 +3146,15 @@ def foreground_state_controls(area):
             except SystemExit as error:status=error.code
         finally:os.write=actual_write
         before_wait=list(calls);before_hooks=list(pseudo_hooks);returned=actual_wait(timeout=5)
+        raw=sink.read_bytes();original_error=holder[0][0] if holder else None
+        trace=[];tb=BaseException.__dict__['__traceback__'].__get__(original_error,BaseException) if original_error is not None else None
+        while tb is not None and len(trace)<16:
+            trace.append([tb.tb_frame.f_code.co_name,tb.tb_lineno,tb.tb_frame.f_code is original.__code__]);tb=tb.tb_next
+        completed_evidence({'foreground_case_actual':{'case':fault,'record_hex':raw.hex(),'error_type':type(original_error).__name__,
+            'same_signal_error':original_error is sentinel,'error_trace':trace,'trace_truncated':tb is not None,
+            'original_calls':before_wait,'calls_after_final_wait':list(calls),'clock_calls':len(clock_calls),'status':status,
+            'mapped_stderr':output.getvalue(),'returned':returned,'child_returncode':child.returncode,
+            'pipes_closed':[stream.closed for stream in (child.stdin,child.stdout,child.stderr)],'holder_count':len(holder)}})
         assert returned==0 and child.returncode==0 and all(stream.closed for stream in (child.stdin,child.stdout,child.stderr))
         assert len(holder)==1 and before_wait==holder[0][1] and before_hooks==holder[0][2]
         assert status==1 and output.getvalue()=='E_RUNTIME\n'
@@ -3153,7 +3162,7 @@ def foreground_state_controls(area):
         assert waited==(fault not in ('term','kill','io-term','io-kill')) and len([row for row in before_wait if row[0]=='killpg'])==(1 if fault in ('term','io-term') else 2)
         if fault in ('term','kill','io-term','io-kill'):assert error is sentinel
         else:assert type(error) is module.Refusal and error.code=='E_RUNTIME'
-        raw=sink.read_bytes();assert len(raw)<=4096
+        assert len(raw)<=4096
         if fault in ('format','write'):assert not raw;fact='GAP'
         else:
             record=json.loads(raw);fact=record['foreground'];assert record['errno']==(13 if fault in ('term','kill','io-term','io-kill') else None)
@@ -3173,7 +3182,7 @@ def foreground_state_controls(area):
         if fault in ('io-term','io-kill'):
             context=BaseException.__dict__['__context__'].__get__(error,BaseException)
             assert type(context) is module.Refusal and context.code=='E_RUNTIME'
-            assert ['_foreground',1192] in record['context'][0]['trace']
+            assert ['_foreground',1196] in record['context'][0]['trace']
             assert fact['io']['stderr_bytes']==512 and not waited
             context_errors.append((error,context))
         records.append({'case':fault,'mapped_stderr':output.getvalue(),'status':status,'original_error_type':type(error).__name__,'same_signal_error':error is sentinel,'original_calls':before_wait,'clock_calls':len(clock_calls),'wait_reached':waited,'facts':fact,'real_child_returncode':returned,'all_pipes_closed':True,'None_is_not_liveness':True})
@@ -8922,7 +8931,7 @@ print(relation_result)
                                 relation_io_binding[1]=tuple(arguments)
                         except BaseException:pass
                     if (code_object is relation_foreground_code and frame is relation_io_binding[0] and
-                            not relation_io_binding[2] and line==1192):
+                            not relation_io_binding[2] and line==1196):
                         relation_io_binding[2]=True
                         try:
                             local=frame_fields['f_locals'].__get__(frame)

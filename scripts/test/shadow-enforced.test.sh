@@ -2089,12 +2089,13 @@ def acl_value(value):
     return observe
 def acl_mask_equivalence():
     current = pathlib.Path(c.__file__).read_text()
-    replacement = '(1 << 2) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 8) | (1 << 10) | (1 << 12) | (1 << 13)'
-    previous = 'sum(1 << n for n in (2, 4, 5, 6, 8, 10, 12, 13))'
-    assert current.count('dangerous = ' + replacement) == 2
-    original = current.replace('dangerous = ' + replacement, 'dangerous = ' + previous)
-    assert hashlib.sha256(original.encode()).hexdigest() == '34d314505860f7569f53f41491c29979ab30aa08f83cfc151444f8cb6a235f68'
-    expected_sources = {'_root_rule': {'old': '1c1a097a7f919d09a7147d6b2752543cae550b1b580983c131e93cf1ee8c45c7', 'new': 'af22ae2221580e7d65ef28e702b69c8653ffde0c965d500b52a1d8c5a28abaa5'}, '_installed_rule': {'old': 'da01370596351b9ff79a582986c8fbaa6804c5a3b2642272461bf4658d655ef4', 'new': '976684eafda4c87744529283c19e94e4113e108c3d9c9a2f17346239997b4cad'}}
+    reverse_blocks = [('        for tag, identifier, bits in access:\n            if tag == 1 and identifier != 0 and bits & dangerous:\n                return False\n        return True', '        return not any(tag == 1 and identifier != 0 and bits & dangerous\n                       for tag, identifier, bits in access)'), ('        for tag, identifier, bits in access:\n            if tag == 1 and bits & dangerous and identifier not in (0, principal_uid):\n                return False\n        return True', '        return not any(tag == 1 and bits & dangerous and identifier not in (0, principal_uid)\n                       for tag, identifier, bits in access)')]
+    original = current
+    for replacement, previous in reverse_blocks:
+        assert original.count(replacement) == 1
+        original = original.replace(replacement, previous, 1)
+    assert hashlib.sha256(original.encode()).hexdigest() == '69ae9a759ea703cf48caf60d36211d3ca46f788868f9aa6513a32bcaa6c022dc'
+    expected_sources = {'_root_rule': {'old': 'af22ae2221580e7d65ef28e702b69c8653ffde0c965d500b52a1d8c5a28abaa5', 'new': '0b09217defef12508065a0fb8dbb43cd5ba3bd2f432281a18c0f0b138435e273'}, '_installed_rule': {'old': '976684eafda4c87744529283c19e94e4113e108c3d9c9a2f17346239997b4cad', 'new': 'd11b36310a1c712c7ab66521a0a6c7b8231feed6eac6a554296b07408798be6f'}}
     rows = []
     dangerous_bits = (4, 16, 32, 64, 256, 1024, 4096, 8192)
     assert sum(dangerous_bits) == 13684
