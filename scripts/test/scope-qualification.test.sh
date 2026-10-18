@@ -2494,6 +2494,165 @@ print(json.dumps(record,sort_keys=True))
         record=json.loads(result.stdout);records.append(completed_evidence(record))
     return records
 
+def supervision_controls(guard, area):
+    import types
+    node=next(n for n in ast.parse(guard).body if isinstance(n,ast.FunctionDef) and n.name=='run_control')
+    current=ast.get_source_segment(guard,node)
+    original=current[:current.index("    supervision_phase = 'launch'\n")]+current[current.index('    pending_fd ='):]
+    original=original.replace("                supervision_phase = 'loop'\n",'').replace("            supervision_phase = 'wait'\n",'')
+    original=original.replace('supervision_clock(time.monotonic())','time.monotonic()')
+    original=original.replace('            supervision_frozen = freeze_supervision()\n','',1)
+    start=original.index('            if supervision_frozen is None:\n');end=original.index('            report =',start)
+    original=original[:start]+original[end:]
+    start=original.index("            if label in ('unchanged-copied-existing-layout', 'held-module-identity-change'):\n");end=original.index('            print(json.dumps(report, sort_keys=True), flush=True)',start)
+    original=original[:start]+original[end:]
+    assert hashlib.sha256(original.encode()).hexdigest()=='851d30352d654ce94648efac1fd94b133a6fcc57a9de7c2abdc63dfbc0dea3c5'
+    records=[]
+    for fault in ('normal','no-loop','cancel','after-ready','clock','nonfinite','missing','encoding','cap','other','early'):
+        sentinel=OSError('fixed original loop clock');results=[]
+        for version,code in (('old',original),('new',current)):
+            work=area/('supervision-'+fault+'-'+version);work.mkdir();effects=[];printed=[];handlers={};ticks=[];checks=[]
+            class Stream:
+                def __init__(self,fd):self.fd=fd;self.closed=False
+                def fileno(self):return self.fd
+                def close(self):effects.append(('close',self.fd));self.closed=True
+            class Child:
+                pid=7;returncode=None
+                def __init__(self):self.stdin=Stream(101);self.stdout=Stream(102);self.stderr=Stream(103)
+                def wait(self,timeout):effects.append(('wait',timeout));self.returncode=0 if self.returncode is None else self.returncode
+                def terminate(self):effects.append(('terminate',));self.returncode=-15
+                def kill(self):effects.append(('kill',));self.returncode=-9
+            child=Child();selected=work/'selected';module=work/'module';module.write_bytes(b'owned')
+            principal=json.dumps({'uid':os.getuid(),'gid':os.getgid(),'groups':os.getgroups(),'pid':7}).encode()
+            data={102:[b'HELD_READY\n' if fault=='after-ready' else (str(selected)+'\n').encode(),b''],103:[b'GUARD_ACTUAL_PRINCIPAL '+principal+b'\n{"privileged_execution": false}\n',b'']}
+            class Selector:
+                def __init__(self):self.mapping={}
+                def register(self,stream,events):effects.append(('register',stream.fd,events));self.mapping[stream]=events
+                def unregister(self,stream):effects.append(('unregister',stream.fd));del self.mapping[stream]
+                def get_map(self):return {} if fault=='no-loop' else self.mapping
+                def select(self,timeout):effects.append(('select',timeout));return [(types.SimpleNamespace(fileobj=k),v) for k,v in list(self.mapping.items())]
+                def close(self):effects.append(('selector-close',))
+            def clock():
+                index=len(ticks)
+                if fault=='clock' and index==1:
+                    ticks.append(('raise',sentinel));raise sentinel
+                value=(float('inf') if fault=='nonfinite' else 10 if fault=='missing' else 10.0)+index
+                ticks.append(('return',value));return value
+            def check():
+                checks.append(len(checks))
+                if fault=='early':raise sentinel
+                if (fault=='cancel' and len(checks)==3) or (fault=='after-ready' and len(checks)==4):handlers[signal.SIGTERM](signal.SIGTERM,None)
+            def spawn(argv,**options):effects.append(('spawn',argv,options));return child
+            def read(fd,size):effects.append(('read',fd,size));return data[fd].pop(0)
+            def dumps(value,*args,**kwargs):
+                if type(value) is dict and set(value)=={'supervision'}:
+                    if fault=='encoding':raise ValueError('fixed optional encoding')
+                    if fault=='cap':return 'x'*257
+                return json.dumps(value,*args,**kwargs)
+            system=types.SimpleNamespace(**{k:getattr(os,k) for k in dir(os)})
+            system.set_blocking=lambda fd,value:effects.append(('blocking',fd,value));system.read=read
+            system.write=lambda fd,value: effects.append(('write',fd,value)) or len(value) if fd==101 else os.write(fd,value)
+            signals=types.SimpleNamespace(**{k:getattr(signal,k) for k in dir(signal)})
+            signals.pthread_sigmask=lambda how,mask: effects.append(('mask',how,sorted(mask))) or set()
+            signals.getsignal=lambda number:None
+            signals.signal=lambda number,handler:handlers.__setitem__(number,handler)
+            signals.sigpending=lambda:set()
+            owner=types.SimpleNamespace(check=check,active=False,cancelled=False,settled=lambda *args:effects.append(('settled',)))
+            namespace={'Path':Path,'os':system,'json':types.SimpleNamespace(dumps=dumps,loads=json.loads),'signal':signals,
+                'time':types.SimpleNamespace(monotonic=clock),'selectors':types.SimpleNamespace(DefaultSelector=Selector,EVENT_READ=1,EVENT_WRITE=2),
+                'subprocess':types.SimpleNamespace(Popen=spawn,PIPE=subprocess.PIPE),'operator_record':pwd.getpwuid(os.getuid()),'operator_groups':os.getgroups(),
+                'owner_cancel':owner,'python':Path(sys.executable),'program':Path('wrapper'),'package':Path('package'),'guard_file':Path('guard'),
+                'original_program':Path('subject'),'sync_program':Path('sync'),'selected':selected,'module':module,'pending_path':work/'pending','base':work,
+                'completed_case':lambda *args:effects.append(('completed',args)), 'print':lambda value,**kwargs:printed.append(json.loads(value))}
+            exec(compile(code,'actual-'+version+'-run-control','exec'),namespace)
+            error=None
+            try:namespace['run_control']('other' if fault=='other' else 'held-module-identity-change' if fault=='after-ready' else 'unchanged-copied-existing-layout',None,fault=='after-ready')
+            except BaseException as caught:error=caught
+            reports=[row for row in printed if 'operator_uid' in row]
+            captured=[];cursor=error
+            while cursor is not None and all(cursor is not entry[0] for entry in captured):
+                captured.append((cursor,type(cursor),cursor.args))
+                cursor=cursor.__cause__ if cursor.__cause__ is not None else cursor.__context__
+            results.append((effects,ticks,checks,printed,reports,error,captured))
+        a,b=results
+        # Paths differ only because each side owns a fresh tree, not because the command changed.
+        def normalized(value):return repr(value).replace(str(area/('supervision-'+fault+'-old')),'OWNED').replace(str(area/('supervision-'+fault+'-new')),'OWNED')
+        assert normalized(a[:3])==normalized(b[:3])
+        assert (type(a[5]),None if a[5] is None else a[5].args)==(type(b[5]),None if b[5] is None else b[5].args)
+        old_chain,new_chain=a[6],b[6]
+        assert [(kind,args) for _,kind,args in old_chain]==[(kind,args) for _,kind,args in new_chain]
+        if fault=='clock':
+            assert any(e is sentinel for e,_,_ in old_chain) and any(e is sentinel for e,_,_ in new_chain)
+        clean=[{k:v for k,v in row.items() if k!='supervision'} for row in b[3]]
+        assert normalized(a[3])==normalized(clean)
+        facts=b[4][0].get('supervision') if b[4] else None
+        if fault in ('encoding','cap','other','early'):
+            assert facts is None
+        else:
+            expected={'end':155.0,'loop_first':11.0,'loop_last':13.0,'readiness':False,'phase':'report'}
+            if fault in ('no-loop','cancel','clock','nonfinite','missing'):
+                expected.update(loop_first='GAP',loop_last='GAP')
+            if fault in ('cancel','clock','nonfinite'):expected['phase']='loop'
+            if fault in ('missing','nonfinite'):expected['end']='GAP'
+            if fault=='after-ready':expected.update(loop_last=11.0,readiness=True,phase='loop')
+            assert facts==expected,(fault,facts,expected)
+            assert len(json.dumps({'supervision':facts},sort_keys=True).encode())<=256
+        records.append({'case':fault,'clock_returns_or_exceptions':[(kind,type(v).__name__ if isinstance(v,BaseException) else 'inf' if type(v) is float and v==float('inf') else v) for kind,v in a[1]],
+            'calls_and_effects_equal':True,'exception_chain':[kind.__name__ for _,kind,_ in old_chain],
+            'clock_sentinel_identity':fault=='clock' and any(e is sentinel for e,_,_ in old_chain) and any(e is sentinel for e,_,_ in new_chain),
+            'supervision':facts,'scope':'actual extracted function; fixed ordinary transport seams, not kernel closure'})
+    return completed_evidence({'run_control_supervision_controls':records})
+
+def owner_driver_restore(record, control):
+    reference=record['control_reference']
+    assert type(reference) is dict and type(reference.get('order')) is int, 'missing source reference'
+    assert 0<=reference['order']<len(evidence), 'forward source reference'
+    assert evidence[reference['order']]==reference, 'wrong source reference'
+    raw=json.dumps({'owner_run_control_source':{'source':control}},sort_keys=True,separators=(',',':')).encode()
+    assert reference['case']=='owner_run_control_source' and reference['sha256']==hashlib.sha256(raw).hexdigest() and reference['bytes']==len(raw), 'wrong source payload'
+    assert record['position']==len(record['prefix']), 'source position'
+    restored=record['prefix']+control+record['suffix']
+    assert hashlib.sha256(restored.encode()).hexdigest()==record['sha256'], 'source digest'
+    return restored
+
+def owner_driver_projection(driver, control, reference):
+    choices=[n for n in ast.parse(driver).body if isinstance(n,ast.FunctionDef) and n.name=='run_control']
+    assert len(choices)==1 and driver.count(control)==1, 'source span uniqueness'
+    assert ast.get_source_segment(driver,choices[0])==control, 'different source span'
+    position=driver.index(control)
+    record={'prefix':driver[:position],'suffix':driver[position+len(control):],'position':position,
+            'control_reference':reference,'sha256':hashlib.sha256(driver.encode()).hexdigest()}
+    assert owner_driver_restore(record,control)==driver
+    return record
+
+def owner_driver_source_controls(control, reference):
+    records=[]
+    for prefix,suffix in (('import sys\n','\nfirst=1\n'),('import os\n','\nsecond=2\n')):
+        driver=prefix+control+suffix
+        projected=owner_driver_projection(driver,control,reference)
+        assert owner_driver_restore(projected,control)==driver
+        records.append({'case':'distinct-driver','source_sha256':projected['sha256'],'exact_reconstruction':True})
+    baseline=projected
+    for fault in ('missing','wrong','forward','prefix','suffix','position','different-span','nonunique-span'):
+        projected=dict(baseline);projected['control_reference']=dict(reference)
+        expected={'missing':'missing source reference','wrong':'wrong source reference','forward':'forward source reference',
+                  'prefix':'source digest','suffix':'source digest','position':'source position',
+                  'different-span':'source span uniqueness','nonunique-span':'source span uniqueness'}[fault]
+        if fault=='missing':projected['control_reference']=None
+        if fault=='wrong':projected['control_reference']['sha256']='0'*64
+        if fault=='forward':projected['control_reference']['order']=len(evidence)
+        if fault=='prefix':projected['prefix']='X'+projected['prefix'][1:]
+        if fault=='suffix':projected['suffix']+='X'
+        if fault=='position':projected['position']+=1
+        try:
+            if fault=='different-span':owner_driver_projection(driver.replace('owner_cancel.check()','owner_cancel.check();pass',1),control,reference)
+            elif fault=='nonunique-span':owner_driver_projection(driver+'\n'+control,control,reference)
+            else:owner_driver_restore(projected,control)
+        except AssertionError as error:assert error.args==(expected,),(fault,error.args)
+        else:raise AssertionError('invalid source report admitted')
+        records.append({'case':fault,'exact_refusal':expected})
+    return completed_evidence({'owner_driver_source_controls':records})
+
 def ready_publication_controls(guard,channel,area):
     node=next(n for n in ast.parse(guard).body if isinstance(n,ast.ClassDef) and n.name=='ScopeFixtureOwnerCancel')
     publisher=ast.get_source_segment(guard,node).replace('info.st_uid==0','info.st_uid=='+str(os.getuid()))
@@ -4062,7 +4221,7 @@ def short_stage_controls(guard,channel,area,clock_name):
         assert reversed_actual==guard
         assert clock_name in ('CLOCK_UPTIME_RAW','CLOCK_MONOTONIC')
         clock_sites=[i for i,line in enumerate(actual.splitlines(),1) if 'CLOCK_UPTIME_RAW' in line]
-        assert clock_sites==[173,601,642,717,894,1004,1076,1088,1089]
+        assert clock_sites==[173,635,676,751,928,1038,1110,1122,1123]
         assert actual.count('CLOCK_UPTIME_RAW')==9 and 'CLOCK_MONOTONIC' not in actual
         unmapped_actual=actual;actual=actual.replace('CLOCK_UPTIME_RAW',clock_name)
         assert actual.replace(clock_name,'CLOCK_UPTIME_RAW')==unmapped_actual
@@ -4681,6 +4840,10 @@ finally:
     shared_parts={'wrapper':wrapper.replace('CLOCK_UPTIME_RAW',clock_name),'channel':channel_owned}
     assert channel_owned==shared_channel_source
     shared_reference=completed_evidence({'owner_case_shared_source':{'wrapper':shared_parts['wrapper'],'channel':shared_channel_reference}})
+    shared_control = ast.get_source_segment(owned, next(n for n in ast.parse(owned).body if isinstance(n,ast.FunctionDef) and n.name=='run_control'))
+    control_reference = completed_evidence({'owner_run_control_source': {'source':shared_control}})
+    reports.append(supervision_controls(guard, area))
+    reports.append(owner_driver_source_controls(shared_control, control_reference))
     for fault in ('ordinary-started-no-marker','ordinary-pending','never-started','starting','normal','cancel','alarm','eof-before-launch','actual-deadline','missing-confirmation','wrong-confirmation','reported-wait-error','reported-close-error','wait-interrupted','writer-close-error','terminal-nonzero','mask077-normal','mask022-normal','mask077-cancel','mask022-cancel','mode0400','mode0644','fchmod-error','mask022-fchmod-error','inner-wait-error','inner-close-error'):
         work=area/fault;work.mkdir();base=work/'base';base.mkdir();(base/'package/shadow/v1').mkdir(parents=True);(base/'package/shadow/v1/_consumer.py').write_bytes(consumer);script=work/'runtime-guard-controls.py';ch=work/'channel.py';ch.write_text(channel_owned)
         fixture=base/('runtime-guard-cancel-proof' if fault in ('cancel','alarm','mask077-cancel','mask022-cancel') else 'runtime-guard');fixture.mkdir()
@@ -4804,6 +4967,10 @@ subprocess.Popen=fixed_owned_popen
         reported_source=json.loads(generated.read_text())
         assert reported_source['wrapper']==shared_parts['wrapper'] and reported_source['channel']==shared_parts['channel']
         reported_source={key:value for key,value in reported_source.items() if key not in ('wrapper','channel')}
+        driver = reported_source['driver']
+        projected = owner_driver_projection(driver, shared_control, control_reference)
+        assert owner_driver_restore(projected, shared_control) == driver
+        reported_source['driver'] = projected
         print(json.dumps({'generated_parts':str(generated),'sha256':hashlib.sha256(generated.read_bytes()).hexdigest(),'source':reported_source,'shared_reference':shared_reference}),flush=True)
         start=time.monotonic();result=subprocess.run(['/bin/bash','-c',command],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=20,umask=mask)
         (area/(fault+'.stdout')).write_bytes(result.stdout);(area/(fault+'.stderr')).write_bytes(result.stderr)
@@ -7538,6 +7705,23 @@ def run_control(label, expected, synchronized=False):
     command = [str(python), '-I', '-S', '-B', str(program), str(source),
                str(package), str(selected), str(guard_file)]
     end = time.monotonic() + 145
+    supervision_phase = 'launch'
+    supervision_points = [None, None]
+    supervision_frozen = None
+    def supervision_clock(value):
+        try:
+            if type(value) is float and -float('inf') < value < float('inf'):
+                if supervision_points[0] is None:
+                    supervision_points[0] = value
+                supervision_points[1] = value
+        except BaseException:
+            pass
+        return value
+    def freeze_supervision():
+        try:
+            return (end, *supervision_points, readiness, supervision_phase)
+        except BaseException:
+            return None
     pending_fd = os.open(pending_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     pending_identity = os.fstat(pending_fd)
     try:
@@ -7589,8 +7773,9 @@ def run_control(label, expected, synchronized=False):
                 child.stdin.close()
             control_end = end - 15
             while selector.get_map():
+                supervision_phase = 'loop'
                 owner_cancel.check()
-                assert not cancelled[0] and time.monotonic() < control_end, 'cancel/continuous guard deadline'
+                assert not cancelled[0] and supervision_clock(time.monotonic()) < control_end, 'cancel/continuous guard deadline'
                 for key, events in selector.select(min(0.1, max(0, control_end - time.monotonic()))):
                     stream = key.fileobj
                     if stream is child.stdin:
@@ -7622,9 +7807,11 @@ def run_control(label, expected, synchronized=False):
                                 os.fsync(target.fileno())
                             readiness = True
                             selector.register(child.stdin, selectors.EVENT_WRITE)
+            supervision_phase = 'wait'
             child.wait(timeout=max(0.001, control_end - time.monotonic()))
             waited = True
         except BaseException as error:
+            supervision_frozen = freeze_supervision()
             first_error = error
             supervision_known = ((isinstance(error,InterruptedError) and owner_cancel.cancelled) or
                 (isinstance(error,AssertionError) and str(error)=='cancel/continuous guard deadline'))
@@ -7666,11 +7853,25 @@ def run_control(label, expected, synchronized=False):
         try:
             signal.pthread_sigmask(signal.SIG_BLOCK, watched)
             stdout, stderr = map(bytes, buckets.values())
+            if supervision_frozen is None:
+                supervision_phase = 'report'
+                supervision_frozen = freeze_supervision()
             report = {'case': label, 'returncode': child.returncode, 'stdout': stdout.decode('utf-8'),
                 'stderr': stderr.decode('utf-8'), 'operator_uid': operator_record.pw_uid,
                 'operator_primary_gid': operator_record.pw_gid, 'operator_groups': operator_groups,
                 'candidate_executed': False, 'candidate_sudo_executed': False,
                 'command_reaped': child.returncode is not None, 'sudo_monitor_created': False}
+            if label in ('unchanged-copied-existing-layout', 'held-module-identity-change'):
+                try:
+                    values = supervision_frozen
+                    facts = {key: value if type(value) is float and -float('inf') < value < float('inf') else 'GAP'
+                             for key, value in zip(('end', 'loop_first', 'loop_last'), values[:3])}
+                    facts.update(readiness=values[3] if type(values[3]) is bool else 'GAP', phase=values[4])
+                    encoded = json.dumps({'supervision': facts}, sort_keys=True, allow_nan=False).encode('utf-8')
+                    if len(encoded) <= 256:
+                        report['supervision'] = facts
+                except BaseException:
+                    pass
             print(json.dumps(report, sort_keys=True), flush=True)
             principals = [line[len(b'GUARD_ACTUAL_PRINCIPAL '):] for line in stderr.splitlines()
                           if line.startswith(b'GUARD_ACTUAL_PRINCIPAL ')]
