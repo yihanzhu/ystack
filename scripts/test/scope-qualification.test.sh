@@ -160,8 +160,10 @@ try:
     try:runpy.run_path(sys.argv[1])['cost_export']()
     except BaseException:pass
 finally:sys.stderr=saved
-original=buffer.getvalue();buffer.close()
-if original:sys.stderr.buffer.write(original+stage_record(sys.argv[2:],original))
+try:
+    original=buffer.getvalue();buffer.close()
+    if original:sys.stderr.buffer.write(original+stage_record(sys.argv[2:],original))
+except BaseException:pass
 PY_FIXED_COST_EXPORT
   fi
   if [ "$cleanup_status" -eq 0 ]; then
@@ -1886,6 +1888,49 @@ assert stage['last_operation']['operation']=='none' and not (base/'stage-frozen-
 assert b'fixture-cleanup: PASS prior-exit=142' in out
 reports.append({'case':'stage-real-ALRM-freeze-before-cleanup','actual_exit':rc,'frozen_stage':stage,
     'original_three_records_exact':True,'cleanup_mutation_not_exported':True,'original_cleanup_gate_retained':True})
+
+# The actual revised exporter runs after the same real three closed samples qualify.
+assert len(closed_rows)==3 and all(row['completed'] for row in closed_rows)
+write_control_prefix='''import json,sys
+actual_stderr=sys.stderr
+class RefusingFinalBuffer:
+    def write(self,raw):
+        print(json.dumps({'actual_final_export_attempt':raw.decode('ascii'),'bytes':len(raw)},sort_keys=True),flush=True)
+        raise OSError('fixed actual final exporter write refusal')
+class FinalWriteView:
+    buffer=RefusingFinalBuffer()
+    def write(self,text):return actual_stderr.write(text)
+    def flush(self):return actual_stderr.flush()
+final_write_view=FinalWriteView();sys.stderr=final_write_view
+'''
+write_control_suffix="\nassert sys.stderr is final_write_view\nsys.stderr=actual_stderr\nprint('ACTUAL_EXPORT_RETURNED_STDERR_RESTORED',flush=True)\n"
+assert outer_cleanup.count(export_source)==1
+write_cleanup=outer_cleanup.replace(export_source,write_control_prefix+export_source+write_control_suffix,1)
+write_tmp=base/'stage-write-failure-tmp';write_tmp.mkdir()
+write_audit=base/'stage-write-cleanup'
+write_body='tmp='+repr(str(write_tmp))+'\n'+write_cleanup
+write_body+='cleanup_genuine(){ printf original-cleanup >'+repr(str(write_audit))+'; }\nkill -s ALRM "$$"\n'
+write_script=base/'actual-export-write-failure.sh';write_script.write_text(write_body)
+rc,out,err=run(['/bin/bash',str(write_script)])
+(base/'actual-export-write-failure.stdout.raw').write_bytes(out)
+(base/'actual-export-write-failure.stderr.raw').write_bytes(err)
+write_result={'actual_exit':rc,'stdout':out.decode(),'stderr':err.decode()}
+(base/'actual-export-write-failure.result.json').write_text(json.dumps(write_result,sort_keys=True)+'\n')
+print(json.dumps({'actual_export_write_control':write_result},sort_keys=True),flush=True)
+attempts=[json.loads(line) for line in out.splitlines() if line.startswith(b'{')]
+assert len(attempts)==1 and set(attempts[0])=={'actual_final_export_attempt','bytes'}
+actual=attempts[0]['actual_final_export_attempt'].encode('ascii')
+assert len(actual)==attempts[0]['bytes'] and len(actual)<=4096
+records=[json.loads(line) for line in actual.splitlines()]
+assert records[:3]==closed_rows and len(records)==4 and records[3]['sample']=='scope-alrm-stage'
+assert len(actual.splitlines()[-1])+1<=1024
+assert rc in (-signal.SIGALRM,142) and err==b''
+assert b'ACTUAL_EXPORT_RETURNED_STDERR_RESTORED\n' in out and b'fixture-cleanup: PASS prior-exit=142' in out
+assert not write_tmp.exists() and write_audit.read_bytes()==b'original-cleanup'
+reports.append({'case':'actual-final-export-write-failure','actual_exit':rc,'actual_write_attempts':1,
+    'three_qualified_original_records_exact':True,'optional_record_bytes':len(actual.splitlines()[-1])+1,
+    'uncaught_exception_or_traceback':False,'stderr_restored_before_final_write_and_after_control':True,
+    'original_saved142_ALRM_and_cleanup_decision_retained':True})
 
 print(json.dumps({'same_call_owned_controls':reports},sort_keys=True),flush=True)
 PY_SAME_CALL_OWNED_CONTROLS
