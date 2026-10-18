@@ -2772,8 +2772,8 @@ def foreground_state_controls(area):
     assert reader.count(boundary)==1;copied=reader.replace(boundary,insertion+boundary,1);tail=copied[copied.index('if __name__ == "__main__":'):]
     original=module._DarwinChildOwner._foreground
     print(json.dumps({'foreground_state_preexec':{'reader_copy':copied,'insertion':insertion,'original_foreground_source':ast.get_source_segment((root/'shadow/v1/_consumer.py').read_text(),next(n for n in ast.walk(ast.parse((root/'shadow/v1/_consumer.py').read_text())) if isinstance(n,ast.FunctionDef) and n.name=='_foreground')),'reader_sha256':hashlib.sha256(copied.encode()).hexdigest()}}),flush=True)
-    records=[]
-    for fault in ('cancel','deadline','term','kill','wrong-frame','wrong-command','pseudo','encoding','cap','format','write',
+    records=[];context_errors=[]
+    for fault in ('cancel','deadline','term','kill','io-term','io-kill','wrong-frame','wrong-command','pseudo','encoding','cap','format','write',
             'io-partial','io-old-chunk','io-format','io-record-cap'):
         sink.write_bytes(b'');calls=[];handlers=[];clock_calls=[];pseudo_hooks=[];holder=[];output=io.StringIO();sentinel=PermissionError(13,'fixed ordinary cleanup signal refusal')
         argv=['/usr/bin/git','--no-replace-objects','--git-dir=/owned/source.git','config','--file','/owned/config','--name-only','--list','--no-includes']
@@ -2814,7 +2814,7 @@ def foreground_state_controls(area):
         def set_handler(number,handler):handlers.append(handler);return signal.SIG_DFL
         def kill(pid,number):
             calls.append(['killpg',pid,int(number)])
-            if (fault=='term' and number==signal.SIGTERM) or (fault=='kill' and number==signal.SIGKILL):raise sentinel
+            if (fault in ('term','io-term') and number==signal.SIGTERM) or (fault in ('kill','io-kill') and number==signal.SIGKILL):raise sentinel
         def popen(arguments,**options):
             assert arguments is argv and options['start_new_session'] and options['close_fds'];calls.append(['Popen',list(arguments)]);return selected
         scope=dict(original.__globals__)
@@ -2850,13 +2850,13 @@ def foreground_state_controls(area):
         assert len(holder)==1 and before_wait==holder[0][1] and before_hooks==holder[0][2]
         assert status==1 and output.getvalue()=='E_RUNTIME\n'
         error=holder[0][0];waited=any(row[0]=='wait' for row in before_wait)
-        assert waited==(fault not in ('term','kill')) and len([row for row in before_wait if row[0]=='killpg'])==(1 if fault=='term' else 2)
-        if fault in ('term','kill'):assert error is sentinel
+        assert waited==(fault not in ('term','kill','io-term','io-kill')) and len([row for row in before_wait if row[0]=='killpg'])==(1 if fault in ('term','io-term') else 2)
+        if fault in ('term','kill','io-term','io-kill'):assert error is sentinel
         else:assert type(error) is module.Refusal and error.code=='E_RUNTIME'
         raw=sink.read_bytes();assert len(raw)<=4096
         if fault in ('format','write'):assert not raw;fact='GAP'
         else:
-            record=json.loads(raw);fact=record['foreground'];assert record['errno']==(13 if fault in ('term','kill') else None)
+            record=json.loads(raw);fact=record['foreground'];assert record['errno']==(13 if fault in ('term','kill','io-term','io-kill') else None)
             if fault in ('wrong-frame','wrong-command','encoding','cap'):assert fact=='GAP'
             else:
                 assert fact['argv']==argv and fact['timeout']==30 and fact['end']==30 and fact['cancelled']==(fault=='cancel') and fact['cleanup_signal']=='GAP'
@@ -2869,9 +2869,53 @@ def foreground_state_controls(area):
                         assert fact['io']['last_selected']['channel']==('stdout' if fault=='io-old-chunk' else 'stderr')
                         if fault=='io-partial':assert reads==[fds[0],fds[1]] and ['unregister',True] in before_wait
                 if fault=='pseudo':assert fact['child']=='GAP'
-                else:assert fact['child']=={'pid':child.pid,'returncode':None if fault in ('term','kill') else 0}
+                else:assert fact['child']=={'pid':child.pid,'returncode':None if fault in ('term','kill','io-term','io-kill') else 0}
+        if fault in ('io-term','io-kill'):
+            context=BaseException.__dict__['__context__'].__get__(error,BaseException)
+            assert type(context) is module.Refusal and context.code=='E_RUNTIME'
+            assert ['_foreground',1192] in record['context'][0]['trace']
+            assert fact['io']['stderr_bytes']==512 and not waited
+            context_errors.append((error,context))
         records.append({'case':fault,'mapped_stderr':output.getvalue(),'status':status,'original_error_type':type(error).__name__,'same_signal_error':error is sentinel,'original_calls':before_wait,'clock_calls':len(clock_calls),'wait_reached':waited,'facts':fact,'real_child_returncode':returned,'all_pipes_closed':True,'None_is_not_liveness':True})
-    return completed_evidence({'foreground_state_controls':records,'scope':'original exact foreground code with fixed ordinary transport/selector/clock/signal-error seams; no actual Git/OS-signal cause or real-principal proof'})
+    mapping=ast.parse('if True:\n'+insertion).body[0].body[0].body
+    first=next(index for index,node in enumerate(mapping) if isinstance(node,ast.Assign) and any(isinstance(t,ast.Tuple) for t in node.targets))
+    helpers=ast.Module(body=mapping[:first],type_ignores=[])
+    assertions=[]
+    for fault in ('same-frame','other-frame','wrong-argv','non1192','missing-context','gap-final'):
+        environment={'c':module,'json':json,'types':types,'BaseException':BaseException}
+        exec(compile(helpers,'actual-foreground-context-helpers','exec'),environment)
+        outer,context=context_errors[0];other=context_errors[1][1]
+        original_io=environment['relation_io'];attempts=[]
+        def counted(local):
+            attempts.append(True)
+            return 'GAP' if fault=='gap-final' else original_io(local)
+        environment['relation_io']=counted
+        environment['relation_trace'](outer,16)
+        binding=environment['relation_io_binding'];frame=binding[0]
+        outer_fact=environment['relation_foreground'][1]
+        outer_fields={key:value for key,value in outer_fact.items() if key!='io'}
+        assert frame is not None and not binding[2]
+        saved=list(frame.f_locals['argv'])
+        try:
+            if fault=='wrong-argv':frame.f_locals['argv'][3]='rev-parse'
+            if fault=='other-frame':
+                other_frame=other.__traceback__
+                while other_frame.tb_frame.f_code is not original.__code__:other_frame=other_frame.tb_next
+                assert other_frame.tb_frame is not frame
+                environment['relation_trace'](other,8)
+            elif fault=='non1192':environment['relation_trace'](outer,16)
+            elif fault!='missing-context':environment['relation_trace'](context,8)
+            if fault=='gap-final':environment['relation_trace'](context,8)
+            assert environment['relation_foreground'][1] is outer_fact
+            assert {key:value for key,value in outer_fact.items() if key!='io'}==outer_fields
+            expected=1 if fault in ('same-frame','gap-final') else 0
+            assert len(attempts)==expected
+            fact=environment['relation_foreground'][1]['io']
+            if fault=='same-frame':assert fact['stderr_bytes']==512
+            else:assert fact=='GAP'
+            assertions.append({'case':fault,'io_attempts':len(attempts),'io':fact,'actual_frame_bound':True})
+        finally:frame.f_locals['argv'][:]=saved
+    return completed_evidence({'foreground_context_controls':assertions,'foreground_state_controls':records,'scope':'original exact foreground code with fixed ordinary transport/selector/clock/signal-error seams; no actual Git/OS-signal cause or real-principal proof'})
 
 def foreground_io_controls():
     assembler=ast.parse(heredoc('PY_GENUINE_ASSEMBLER'))
@@ -8454,6 +8498,7 @@ print(relation_result)
                 text=type.__dict__['__name__'].__get__(type(value))
                 return text if type(text) is str and len(text)<=80 and text.isascii() and text.isidentifier() else 'GAP'
             relation_foreground=[False,'GAP']
+            relation_io_binding=[None,None,False]
             relation_foreground_code=type(c._DarwinChildOwner._foreground).__dict__['__code__'].__get__(c._DarwinChildOwner._foreground)
             def relation_io(local):
                 try:
@@ -8519,7 +8564,20 @@ print(relation_result)
                                             'returncode':returned if type(returned) is int or returned is None else 'GAP'}
                                 relation_foreground[1]={'argv':arguments,'timeout':relation_number('timeout'),'end':relation_number('end'),
                                     'cancelled':cancelled,'cleanup_signal':'GAP','child':child_state}
-                                relation_foreground[1]['io']=relation_io(local) if line==1192 else 'GAP'
+                                relation_foreground[1]['io']='GAP'
+                                relation_io_binding[0]=frame
+                                relation_io_binding[1]=tuple(arguments)
+                        except BaseException:pass
+                    if (code_object is relation_foreground_code and frame is relation_io_binding[0] and
+                            not relation_io_binding[2] and line==1192):
+                        relation_io_binding[2]=True
+                        try:
+                            local=frame_fields['f_locals'].__get__(frame)
+                            arguments=local['argv']
+                            if (type(arguments) is list and len(arguments)==9 and
+                                    all(type(item) is str for item in arguments) and
+                                    tuple(arguments)==relation_io_binding[1]):
+                                relation_foreground[1]['io']=relation_io(local)
                         except BaseException:pass
                     if code_object is target:
                         local=frame_fields['f_locals'].__get__(frame)
