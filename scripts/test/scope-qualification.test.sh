@@ -2502,16 +2502,24 @@ def supervision_controls(guard, area):
     original=original.replace("                supervision_phase = 'loop'\n",'').replace("            supervision_phase = 'wait'\n",'')
     original=original.replace('supervision_clock(time.monotonic())','time.monotonic()')
     original=original.replace('            supervision_frozen = freeze_supervision()\n','',1)
-    start=original.index('            if supervision_frozen is None:\n');end=original.index('            report =',start)
+    start=original.index('            if first_error is None:\n');end=original.index('            report =',start)
     original=original[:start]+original[end:]
     start=original.index("            if label in ('unchanged-copied-existing-layout', 'held-module-identity-change'):\n");end=original.index('            print(json.dumps(report, sort_keys=True), flush=True)',start)
     original=original[:start]+original[end:]
     assert hashlib.sha256(original.encode()).hexdigest()=='851d30352d654ce94648efac1fd94b133a6fcc57a9de7c2abdc63dfbc0dea3c5'
     records=[]
-    for fault in ('normal','no-loop','cancel','after-ready','clock','nonfinite','missing','encoding','cap','other','early'):
+    for fault in ('normal','no-loop','cancel','after-ready','clock','nonfinite','missing','encoding','cap','other','early','collection'):
         sentinel=OSError('fixed original loop clock');results=[]
         for version,code in (('old',original),('new',current)):
-            work=area/('supervision-'+fault+'-'+version);work.mkdir();effects=[];printed=[];handlers={};ticks=[];checks=[]
+            work=area/('supervision-'+fault+'-'+version);work.mkdir();effects=[];printed=[];handlers={};ticks=[];checks=[];collection_attempts=[]
+            class CollectionPoints(list):
+                def __iter__(self):
+                    collection_attempts.append('freeze')
+                    if len(collection_attempts)==1:raise OSError('fixed first collection failure')
+                    return super().__iter__()
+            if fault=='collection' and version=='new':
+                assert code.count('supervision_points = [None, None]')==1
+                code=code.replace('supervision_points = [None, None]','supervision_points = CollectionPoints([None, None])',1)
             class Stream:
                 def __init__(self,fd):self.fd=fd;self.closed=False
                 def fileno(self):return self.fd
@@ -2541,7 +2549,7 @@ def supervision_controls(guard, area):
             def check():
                 checks.append(len(checks))
                 if fault=='early':raise sentinel
-                if (fault=='cancel' and len(checks)==3) or (fault=='after-ready' and len(checks)==4):handlers[signal.SIGTERM](signal.SIGTERM,None)
+                if (fault in ('cancel','collection') and len(checks)==3) or (fault=='after-ready' and len(checks)==4):handlers[signal.SIGTERM](signal.SIGTERM,None)
             def spawn(argv,**options):effects.append(('spawn',argv,options));return child
             def read(fd,size):effects.append(('read',fd,size));return data[fd].pop(0)
             def dumps(value,*args,**kwargs):
@@ -2563,7 +2571,7 @@ def supervision_controls(guard, area):
                 'subprocess':types.SimpleNamespace(Popen=spawn,PIPE=subprocess.PIPE),'operator_record':pwd.getpwuid(os.getuid()),'operator_groups':os.getgroups(),
                 'owner_cancel':owner,'python':Path(sys.executable),'program':Path('wrapper'),'package':Path('package'),'guard_file':Path('guard'),
                 'original_program':Path('subject'),'sync_program':Path('sync'),'selected':selected,'module':module,'pending_path':work/'pending','base':work,
-                'completed_case':lambda *args:effects.append(('completed',args)), 'print':lambda value,**kwargs:printed.append(json.loads(value))}
+                'completed_case':lambda *args:effects.append(('completed',args)), 'CollectionPoints':CollectionPoints, 'print':lambda value,**kwargs:printed.append(json.loads(value))}
             exec(compile(code,'actual-'+version+'-run-control','exec'),namespace)
             error=None
             try:namespace['run_control']('other' if fault=='other' else 'held-module-identity-change' if fault=='after-ready' else 'unchanged-copied-existing-layout',None,fault=='after-ready')
@@ -2573,8 +2581,13 @@ def supervision_controls(guard, area):
             while cursor is not None and all(cursor is not entry[0] for entry in captured):
                 captured.append((cursor,type(cursor),cursor.args))
                 cursor=cursor.__cause__ if cursor.__cause__ is not None else cursor.__context__
-            results.append((effects,ticks,checks,printed,reports,error,captured))
+            results.append((effects,ticks,checks,printed,reports,error,captured,list(collection_attempts)))
         a,b=results
+        if fault=='collection':
+            print(json.dumps({'collection_failure_actual':{'old_reports':a[3],'new_reports':b[3],'attempts':b[7],
+                'old_effects':repr(a[0]),'new_effects':repr(b[0]),'clock':b[1],
+                'old_chain':[kind.__name__ for _,kind,_ in a[6]],'new_chain':[kind.__name__ for _,kind,_ in b[6]]}}),flush=True)
+            assert a[7]==[] and b[7]==['freeze'] and len(a[4])==len(b[4])==1
         # Paths differ only because each side owns a fresh tree, not because the command changed.
         def normalized(value):return repr(value).replace(str(area/('supervision-'+fault+'-old')),'OWNED').replace(str(area/('supervision-'+fault+'-new')),'OWNED')
         assert normalized(a[:3])==normalized(b[:3])
@@ -2586,7 +2599,7 @@ def supervision_controls(guard, area):
         clean=[{k:v for k,v in row.items() if k!='supervision'} for row in b[3]]
         assert normalized(a[3])==normalized(clean)
         facts=b[4][0].get('supervision') if b[4] else None
-        if fault in ('encoding','cap','other','early'):
+        if fault in ('encoding','cap','other','early','collection'):
             assert facts is None
         else:
             expected={'end':155.0,'loop_first':11.0,'loop_last':13.0,'readiness':False,'phase':'report'}
@@ -2600,7 +2613,7 @@ def supervision_controls(guard, area):
         records.append({'case':fault,'clock_returns_or_exceptions':[(kind,type(v).__name__ if isinstance(v,BaseException) else 'inf' if type(v) is float and v==float('inf') else v) for kind,v in a[1]],
             'calls_and_effects_equal':True,'exception_chain':[kind.__name__ for _,kind,_ in old_chain],
             'clock_sentinel_identity':fault=='clock' and any(e is sentinel for e,_,_ in old_chain) and any(e is sentinel for e,_,_ in new_chain),
-            'supervision':facts,'scope':'actual extracted function; fixed ordinary transport seams, not kernel closure'})
+            'collection_attempts':len(b[7]),'supervision':facts,'scope':'actual extracted function; fixed ordinary transport seams, not kernel closure'})
     return completed_evidence({'run_control_supervision_controls':records})
 
 def owner_driver_restore(record, control):
@@ -7853,7 +7866,7 @@ def run_control(label, expected, synchronized=False):
         try:
             signal.pthread_sigmask(signal.SIG_BLOCK, watched)
             stdout, stderr = map(bytes, buckets.values())
-            if supervision_frozen is None:
+            if first_error is None:
                 supervision_phase = 'report'
                 supervision_frozen = freeze_supervision()
             report = {'case': label, 'returncode': child.returncode, 'stdout': stdout.decode('utf-8'),
