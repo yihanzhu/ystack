@@ -1102,61 +1102,77 @@ original fields with io GAP. I/O formatting failure takes that same fallback and
 cannot discard the old record or replace the first error. Add no other buffer
 contents or lengths, whole locals, dynamic getters, callbacks or repr. Missing or
 invalid frame, command, object, scalar or binding is GAP. Apart from the fixed
-first_git_failure_snapshot builtin observations below, do not poll, wait,
+first_git_select_observation transparent delegation below, do not poll, wait,
 getpgid, inspect proc/ps, send kill0, read a clock or add a syscall, query, trace
 callback or process. Keep original signals, Popen, call order and exceptions
 unchanged; these facts grant no cleanup or restoration permission. Keep
 cleanup_signal GAP when finally has overwritten the original loop value.
 
-Keep first_git_failure_snapshot private to this same reader insertion. Trigger it
-only for the exact first-config code/nine-argument binding, original deadline
-Refusal and outer cleanup killpg PermissionError with native errno 1. Require
-retained cancelled to be exact False and the existing PID to be an exact positive
-builtin int. Wrong chains, True, GAP, invalid PID or success make no observations.
-Set once-only state before the first observation; re-entry makes none. After
-original finally, call the authenticated getpgid once for that PID, getuid and
-geteuid once each for the current reader, and read Python's SIGCHLD registration
-once. Add no earlier sample, retry or fallback.
+Retire the four posterior builtin observations and only their method-specific
+controls. Preserve their complete evidence and UNKNOWN findings. This disposition
+replaces a diagnostic method; it does not claim a repair or change acceptance.
 
-Use only real native builtins already loaded in the fixed authenticated runtime.
-Bind their actual identities and implementation provenance to that runtime and
-the exact source/copy/invocation before use; a mutable module attribute or name
-alone is not proof. Public getsignal may be a Python wrapper: establish its
-already-loaded native implementation without importing or loading a new native
-module or guessing an ABI. Verify the builtin references and fixed SIGCHLD,
-DFL and IGN identities. Actual ordinary provenance proof is an enablement gate;
-an unavailable function or unprovable binding means STOP, not another interface.
-Do not compile C, load a library, add a trust root or change _cancel_release,
-object-closure, verifier, product API, runtime guard or native qualification.
+Keep first_git_select_observation private to this same disposable reader copy.
+Bind the original execute_git first-config nine argv, code, source/copy and
+invocation. Consume once-only state before installing the adaptation around only
+its original _foreground call; wrong bindings, other Git calls and re-entry get
+no installation or counts. Preserve _foreground text, AST and code object. Keep
+argument evaluation order and counts, the timeout expression and environment()
+once each, and the surrounding recheck/record_command positions. Add no
+evaluator, reader or Git invocation.
 
-Label PGID as the later query result and original_identity UNPROVEN. It cannot
-bind the original PID instance, establish killpg-time liveness or explain EPERM.
-UID/EUID belong to the current reader, not the target or kill-time credentials.
-Encode Python's SIGCHLD registration only as DFL/IGN/OTHER/UNKNOWN by fixed
-identity, without invoking or repr of a handler. It is not native sigaction,
-flags or auto-reap evidence. Keep cleanup_signal GAP. Accept only bounded exact
-builtin scalar results; a native query error supplies only safe exact-int errno
-or GAP, never an inferred cause. Missing, denied, wrong-type, changed, over-limit
-or unencodable facts are GAP.
+Use one fixed private native-selector adaptation that overrides only select.
+Bind the real already-loaded native class, constructor and select implementation
+to the authenticated runtime; names or mutable module attributes alone are not
+proof. Construct once through the original native constructor. Keep its native
+instance/resources and original register/get_map/unregister/close implementations,
+order and call counts. Add no extra select or other method call, generic registry,
+arbitrary proxy or public API. If the fixed class cannot preserve those behaviors
+and original closure, STOP; do not select another interface.
 
-Keep original cancellation and outer supervision acting on the same reader.
-Retained False is not a current cancellation token. Add no process, target wait
-or signal, getpriority, ps/proc access, trace callback, alarm, thread or budget
-transfer. Do not mask, replace or swallow handlers, retry EINTR, reset deadlines
-or grant a grace period. Make no hard one-second or zero handler-latency claim.
-Known observation/encoding/write errors affect only the optional group; no broad
-catch may consume original cancellation. Preserve the first exception object,
-context, traceback, mapping, status, old fields, Git argv/env, calls, pipes,
-signals and wait order. Unknown closure retains PENDING and grants no deletion
-or restoration permission.
+Retain only entered, returned, raised, nonempty, events_total and last_length.
+The first five are exact builtin ints from 0 through 2^31-1; last_length is an
+exact builtin int in that range or GAP.
+Before each original select delegation increment entered; on return increment
+returned. Only for an exact builtin list, use builtin len to update last_length,
+events_total and nonempty. Do not iterate events or inspect keys, fd, attributes,
+repr or buffers. Delegate the original arguments once and return the same list
+object. On an original exception increment raised when safe and bare rethrow the
+same object with its cause/context. A non-exact result, counter overflow or
+collection failure makes this new group permanently GAP; original delegation,
+return or exception still follows the original path. Do not retry collection or
+swallow cancellation as an observation failure.
 
-Bound these fixed facts to 768 bytes and their optional group to at most 1,024
-encoded bytes in the existing reader record, with runtime/builtin/source/copy
-and invocation bindings. Add no sink. Required old fields retain priority under
-every existing record, sink, export and ordinary-raw cap; insufficient space or
-encoding/write failure drops only this group to GAP. Export no success. Remove
-this temporary observation when exact evidence supports a separately reviewed
-repair; it neither changes a safety predicate nor proves a repair.
+At the existing failure mapping, require the original exact foreground frame,
+code, first-config argv and this invocation's selector instance identity. Export
+only for its original deadline Refusal then same-frame cleanup killpg
+PermissionError with native errno 1, retained cancelled exact False and existing
+exact positive builtin-int PID. All other
+ends discard counts without output. Retained False is not a current cancel token;
+add no query to obtain one. Do not infer blocking, PID identity, kernel readiness
+or an EPERM cause from counts or GAP. Keep cleanup_signal GAP and every original
+identity, context and I/O check.
+
+Restore the exact temporary binding in finally on every exit, including install,
+constructor, delegation, cancellation and cleanup failures. This restores no
+child or filesystem state and grants no cleanup permission. Prove native resource
+closure and original cancellation through the actual boundary before enabling it.
+Do not replace Popen/read/write/killpg/wait, add queries, clocks, processes, threads,
+signals or grace, or alter any original deadline or exception outcome. A select
+wrapper adds a private traceback frame: bind it honestly and retain every original
+frame in order, the same exception and cause/context. Do not claim byte-identical
+whole tracebacks or let new frames displace original facts under existing bounds.
+Keep the original deadline check outside the wrapper and its exact frame mapping.
+
+Bound the six-field object to 256 encoded bytes and its source/copy/invocation-bound
+optional group to 1,024 bytes in the existing reader record and sink. Required old
+fields and still-applicable diagnostics have priority. Insufficient space, encoding
+or write failure makes only this group GAP; preserve the complete old record,
+first error and exit. Keep every record, sink, export and ordinary-raw cap. No
+success export, event log or timing record is added. The small counting overhead
+has no zero-latency or full-budget-success guarantee. Unknown closure remains
+PENDING with no deletion or restoration permission. Retire this observation when
+a separately reviewed repair removes this evidentiary need.
 Missing, unsupported, wrong-type, cyclic or over-limit facts stay GAP. Do not
 serialize whole locals, repr/str(error), other exception fields or source text.
 Add no stat, open, ACL, readlink, resolve or other failed-object query, input
@@ -1203,22 +1219,30 @@ stderr beyond 256 bytes with exact prefix/truncation, missing or wrong types and
 pseudo-keys with zero hooks, GAP, encoding/group/record caps, and formatting/write
 failure isolation. The original required record and first error must survive a
 failed optional group. Retain the complete original control sequence.
-For first_git_failure_snapshot, extract the actual mapping and builtin bindings.
-Prove actual runtime/builtin provenance and an actual owned-PID query path before
-enabling the method. Prove exactly one of each fixed observation for the exact
-failure chain and zero for wrong frame/argv/PID, non-EPERM, cancelled True/GAP,
-re-entry or success. Cover exact types, returns, native errors, unavailable or
-changed bindings, and original cancellation without retry or swallowed handlers.
-Compare the original failure path: same exception object/context/traceback, Git
-argv/env/calls, effects, pipes, signals, wait order and old record. Exercise fixed
-registration encoding without invoking or repr of handlers. Cover GAP, source/
-invocation binding, caps and format/sink failure with the old record preserved.
-These ordinary controls precede fresh independent source preparation and the
-original full proof. They do not prove the actual Mac PID identity or kernel
-cause, or replace actual cancellation, restoration or qualification evidence.
+For first_git_select_observation, extract the original _foreground and actual
+adaptation in the existing ordinary owner lane. Prove real runtime/class/method
+binding and a real native path; fixed scripted native-result seams are controlled
+branch evidence, not that proof. Preserve native construction, non-select calls,
+closure and original argument evaluation order/counts. Cover empty/nonempty exact
+lists with the same returned object, one delegation per original call, sentinel
+exceptions with original frames in order plus the named wrapper, cause/context,
+and cancellation propagation. Cover wrong frame/argv/instance, other calls and
+re-entry; non-exact lists must invoke no custom len/iter. Prove output rejection
+for bad PID, wrong error chain and cancelled True/GAP. Cover overflow and
+collection failure permanently GAP while original effects continue, all group/
+record/export failures with old fields retained, and exact binding restoration
+on install/constructor/delegation/cleanup failures. Save actual facts before
+assertions. Compare the same original delegation's result, exception and calls;
+do not infer equivalence from totals across separate runs. Real stderr still
+fails under the original rule; do not filter it or require the host to be silent.
+Keep all shared foreground/I/O/context/invocation/source, first-error, cancellation,
+cap, child/wait/pipe and native-lifecycle controls. Only builtin-query-specific
+controls retire; retain old raw evidence. These enablement proofs precede fresh
+independent source preparation and the original full Mac then same-H Linux proof.
+They neither establish the actual CI cause nor replace restoration or G3.
 Label controlled OS errors honestly; preserve all old and new ordinary raw output
 under the original 16 MiB cap without truncation or removal of controls.
-Prove no object queries beyond that fixed snapshot, unchanged original
+Prove no added object queries, unchanged original
 error/status/calls and no success export within the same caps.
 Freeze complete generated copies before
 these ordinary controls. For the launch fields, use actual owned link creation and
