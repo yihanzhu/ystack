@@ -1181,6 +1181,30 @@ includes imports, tracing and measurement overhead. Neither is isolated CPU or
 callback cost. Cost sampling must not time callbacks, add source reads or change
 trace dispatch. The separate classifier reuse above changes no timing boundary.
 
+Only the same slot 0 observer row may add one optional `counts` group, at most
+384 encoded bytes. Its eight fixed fields are `requests`, `filename_tests`,
+`set_tests`, `result_reuses`, `negative_hits`, `qualification_entries`,
+`qualification_nodes` and `dispatch_selected`. Count every original watched
+request, including non-source requests and attempts that throw. Count filename
+and CodeType-set tests only when their original short-circuit branch attempts
+that test. Count original strong result-cache reuse for either True or False,
+live matching weak-negative hits, qualification entries and nodes already visited
+by the original walk. Count selected dispatch returns at the original branches
+that return the existing trace. These are branch counts, not CPU attribution.
+Use only facts from those original branches and existing node counts. Add no
+classification, hash/eq, weak-reference call, query, source read, clock or callback.
+Keep counts local to this selected observer session. Each value is an exact int
+from 0 through 2,147,483,647. Collection failure, overflow or unavailable facts
+make only the group GAP; stop its increments rather than grow an unbounded value.
+Do not catch an original operation's exception to collect a count. Preserve the
+classifier contract above, original effects, order, results, exceptions, reentry
+and resource bounds. Keep the original five phases, completed status, eligibility
+and closed-writer rules unchanged. Encoding or space failure omits only this
+optional group. Preserve the original sample fields, three records and existing
+stage priority; the original 1,024-byte row and 4,096-byte combined caps still hold.
+No other slot gains counts or success export. Counts do not authorize an
+optimization; any proposed work reduction still needs its own evidence and gate.
+
 Initialize eligibility to zero. Only the original terminal Python, after every
 original terminal assertion passes, may write one and close it before returning.
 Only the existing outer cleanup with saved status 142 and signal ALRM may export
@@ -1213,6 +1237,15 @@ wrong types, missing values, encoding and byte-cap failures. Prove unchanged
 command argv/order, errexit/failure behavior, original status/signal and all export
 and cleanup gates. No eligibility or normal exit means no stage output; optional
 overflow cannot lose the original samples. Unknown state grants no deletion.
+For counts, reuse the actual owned classifier/observer boundaries and an
+independent primitive witness on the same original request sequence. Cover
+non-source and throwing attempts, short circuit, True/False result reuse, weak
+negative fallback, selected dispatch, qualification nodes, custom hash/eq and
+reentry. Prove unchanged effects, order, result, exception and original phases.
+Missing facts, overflow, wrong types, encoding/cap and exporter failure may lose
+only counts, not the original samples, qualification, first error or cleanup gates.
+Measure full raw size and ordinary whole-work overhead without per-event timing,
+extra evaluator/reader calls or artificial heating before source preparation.
 Keep every original control. Show that early I1
 and terminal failures cannot qualify, and that a real ordinary ALRM handled after
 terminal completion exports once before deletion without changing status or
