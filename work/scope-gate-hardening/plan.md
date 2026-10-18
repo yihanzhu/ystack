@@ -1102,73 +1102,61 @@ original fields with io GAP. I/O formatting failure takes that same fallback and
 cannot discard the old record or replace the first error. Add no other buffer
 contents or lengths, whole locals, dynamic getters, callbacks or repr. Missing or
 invalid frame, command, object, scalar or binding is GAP. Apart from the fixed
-first_git_failure_snapshot below and its fixed build/load checks, do not poll, wait,
+first_git_failure_snapshot builtin observations below, do not poll, wait,
 getpgid, inspect proc/ps, send kill0, read a clock or add a syscall, query, trace
 callback or process. Keep original signals, Popen, call order and exceptions
 unchanged; these facts grant no cleanup or restoration permission. Keep
 cleanup_signal GAP when finally has overwritten the original loop value.
 
-Keep first_git_failure_snapshot private to this same reader insertion. Use one
-fixture-only in-process C bridge. Trigger it only
-for the exact first-config code/argv binding, original deadline Refusal and outer
-cleanup killpg PermissionError with native errno 1. Require retained cancelled to
-be exact False; True, GAP or a wrong chain means no query. Use the already-held
-positive PID once after original finally, with no success hook or earlier sample.
-Mark original_identity UNPROVEN. A matching PID, parent, UID, group or short name
-cannot bind the original instance, establish killpg-time liveness or explain EPERM.
+Keep first_git_failure_snapshot private to this same reader insertion. Trigger it
+only for the exact first-config code/nine-argument binding, original deadline
+Refusal and outer cleanup killpg PermissionError with native errno 1. Require
+retained cancelled to be exact False and the existing PID to be an exact positive
+builtin int. Wrong chains, True, GAP, invalid PID or success make no observations.
+Set once-only state before the first observation; re-entry makes none. After
+original finally, call the authenticated getpgid once for that PID, getuid and
+geteuid once each for the current reader, and read Python's SIGCHLD registration
+once. Add no earlier sample, retry or fallback.
 
-Embed the fixed C source only in this scope fixture. Prepare its source, private
-build record and binary in one new owned fixed directory before the genuine call.
-Do not modify _cancel_release, object-closure, verifier, product native records,
-product API, runtime guard or qualification. Use the existing CI /usr/bin/cc and
-local SDK only; freeze the actual compiler, SDK/header provenance, source, exact
-flags, binary bytes and architecture before use. No installation or external
-source retrieval.
-The one system request is SDK-declared sysctl with the fixed four-element MIB
-CTL_KERN, KERN_PROC, KERN_PROC_PID, pid and one sizeof(struct kinfo_proc) buffer.
-Require one complete result; no size probe, enumeration, second request or retry.
-Only SDK-declared members may supply PID, PPID, process group, real/effective UID,
-status and bounded short command. Their declarations and types must compile under
--Wall -Wextra -Werror; unsupported fields or ambiguous SDK provenance mean STOP,
-not a different interface or guessed offsets. Keep system structures, constants
-and selectors inside C. Python passes only a checked PID and a fixed-capacity
-byte buffer to the bridge's own fixed ABI; it never declares the system layout.
+Use only real native builtins already loaded in the fixed authenticated runtime.
+Bind their actual identities and implementation provenance to that runtime and
+the exact source/copy/invocation before use; a mutable module attribute or name
+alone is not proof. Public getsignal may be a Python wrapper: establish its
+already-loaded native implementation without importing or loading a new native
+module or guessing an ABI. Verify the builtin references and fixed SIGCHLD,
+DFL and IGN identities. Actual ordinary provenance proof is an enablement gate;
+an unavailable function or unprovable binding means STOP, not another interface.
+Do not compile C, load a library, add a trust root or change _cancel_release,
+object-closure, verifier, product API, runtime guard or native qualification.
 
-Keep loading behind this one fixed artifact boundary, not a general loader.
-Authenticate the source/build/binary and every ancestor with the existing held,
-no-follow owner/mode/ACL and identity checks; reject setuid/setgid, writable or
-changed objects. Require a fixed absolute owned binary path and RTLD_NOW|RTLD_LOCAL,
-no search fallback. Its complete Mach-O dependencies must be only the already
-trusted /usr/lib/libSystem.B.dylib and its existing authenticated system closure;
-libproc is not an alias for that permission. Bind install name, load commands and
-architecture; reject unknown dependencies, rpaths and initializer side effects.
-After load, verify the actual image/function address belongs to that held binary
-and recheck named/held identity. A digest or absolute path alone is not loaded-image
-proof. Reuse the existing physical/system-cache authentication rules without
-widening product closure or trust roots. If this requires a general loader, new
-system dependency or changed product qualification, STOP. The actual SDK linkage
-and this fixed loading proof must pass before the genuine observation is enabled.
+Label PGID as the later query result and original_identity UNPROVEN. It cannot
+bind the original PID instance, establish killpg-time liveness or explain EPERM.
+UID/EUID belong to the current reader, not the target or kill-time credentials.
+Encode Python's SIGCHLD registration only as DFL/IGN/OTHER/UNKNOWN by fixed
+identity, without invoking or repr of a handler. It is not native sigaction,
+flags or auto-reap evidence. Keep cleanup_signal GAP. Accept only bounded exact
+builtin scalar results; a native query error supplies only safe exact-int errno
+or GAP, never an inferred cause. Missing, denied, wrong-type, changed, over-limit
+or unencodable facts are GAP.
 
-Load only in this existing failure insertion after original cleanup/finally has
-run, using the frozen prepared artifact. This adds loader work, not a successful-path
-measurement. No fork, exec, wait, signal, thread, target getpgid, new alarm or
-budget transfer is allowed. Keep original cancellation and outer supervision
-acting on the same reader. Do not mask, replace or swallow its handlers, retry
-EINTR, reset deadlines or grant a grace period. A synchronous native/loader call
-has no proved one-second bound or zero handler latency; make no such claim.
-Known observation errors become GAP without replacing the original exception,
-traceback, mapping or status; original cancellation must still take its original
-exit path. Unknown closure retains PENDING and grants no deletion or restoration.
+Keep original cancellation and outer supervision acting on the same reader.
+Retained False is not a current cancellation token. Add no process, target wait
+or signal, getpriority, ps/proc access, trace callback, alarm, thread or budget
+transfer. Do not mask, replace or swallow handlers, retry EINTR, reset deadlines
+or grant a grace period. Make no hard one-second or zero handler-latency claim.
+Known observation/encoding/write errors affect only the optional group; no broad
+catch may consume original cancellation. Preserve the first exception object,
+context, traceback, mapping, status, old fields, Git argv/env, calls, pipes,
+signals and wait order. Unknown closure retains PENDING and grants no deletion
+or restoration permission.
 
-Bound the bridge result to 768 bytes of fixed safe scalar fields; record native
-status/errno without arbitrary text. Missing, denied, short, wrong-type, changed,
-over-limit or unsupported results are GAP. Use an optional group of at most 1,024
-encoded bytes in the existing reader record, with source/build/binary/copy and
-invocation bindings. Add no sink. Required old fields retain priority under every
-existing record, sink, export and ordinary-raw cap; insufficient space or encoding
-and write failure drops only this group to GAP. Export no success. Remove this
-temporary observation when exact evidence supports a separately reviewed repair;
-it neither changes a safety predicate nor proves a repair.
+Bound these fixed facts to 768 bytes and their optional group to at most 1,024
+encoded bytes in the existing reader record, with runtime/builtin/source/copy
+and invocation bindings. Add no sink. Required old fields retain priority under
+every existing record, sink, export and ordinary-raw cap; insufficient space or
+encoding/write failure drops only this group to GAP. Export no success. Remove
+this temporary observation when exact evidence supports a separately reviewed
+repair; it neither changes a safety predicate nor proves a repair.
 Missing, unsupported, wrong-type, cyclic or over-limit facts stay GAP. Do not
 serialize whole locals, repr/str(error), other exception fields or source text.
 Add no stat, open, ACL, readlink, resolve or other failed-object query, input
@@ -1215,20 +1203,19 @@ stderr beyond 256 bytes with exact prefix/truncation, missing or wrong types and
 pseudo-keys with zero hooks, GAP, encoding/group/record caps, and formatting/write
 failure isolation. The original required record and first error must survive a
 failed optional group. Retain the complete original control sequence.
-For first_git_failure_snapshot, extract the actual mapping and fixed bridge.
-Prove one native request for its exact failure chain and zero for wrong frame,
-argv, PID, non-EPERM, cancelled True/GAP or success. Compile against the real SDK
-and test the actual fixed ABI, PID ranges, complete/short/error results, EINTR
-without retry, safe encoding, caps and source/invocation binding. Reject changed
-source/build/binary, wrong image/function mapping, unexpected dependencies and
-unsafe ownership/mode/ACL without a query. Compare the original failure path:
-same exception object/context/traceback, Git argv/env/calls/signals/wait order and
-old record. Exercise original cancellation through the actual mapping/native call;
-no swallowed handler, added child, wait or grace period is permitted. Keep GAP,
-format/write isolation, original_identity UNPROVEN and unknown-closure refusal.
-These ordinary controls and fixed loading proof precede fresh independent source
-preparation and the original full proof. They neither prove the actual Mac kernel
-cause nor replace actual cancellation, restoration or qualification evidence.
+For first_git_failure_snapshot, extract the actual mapping and builtin bindings.
+Prove actual runtime/builtin provenance and an actual owned-PID query path before
+enabling the method. Prove exactly one of each fixed observation for the exact
+failure chain and zero for wrong frame/argv/PID, non-EPERM, cancelled True/GAP,
+re-entry or success. Cover exact types, returns, native errors, unavailable or
+changed bindings, and original cancellation without retry or swallowed handlers.
+Compare the original failure path: same exception object/context/traceback, Git
+argv/env/calls, effects, pipes, signals, wait order and old record. Exercise fixed
+registration encoding without invoking or repr of handlers. Cover GAP, source/
+invocation binding, caps and format/sink failure with the old record preserved.
+These ordinary controls precede fresh independent source preparation and the
+original full proof. They do not prove the actual Mac PID identity or kernel
+cause, or replace actual cancellation, restoration or qualification evidence.
 Label controlled OS errors honestly; preserve all old and new ordinary raw output
 under the original 16 MiB cap without truncation or removal of controls.
 Prove no object queries beyond that fixed snapshot, unchanged original
