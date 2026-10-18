@@ -2666,6 +2666,83 @@ def owner_driver_source_controls(control, reference):
         records.append({'case':fault,'exact_refusal':expected})
     return completed_evidence({'owner_driver_source_controls':records})
 
+reader_selector_shared=None
+reader_selector_controls_done=False
+def reader_selector_restore(record,span):
+    reference=record['selector_reference']
+    assert type(reference) is dict and type(reference.get('order')) is int, 'reader missing reference'
+    assert 0<=reference['order']<len(evidence), 'reader forward reference'
+    assert evidence[reference['order']]==reference, 'reader wrong reference'
+    payload=json.dumps({'reader_selector_setup_source':{'source':span.decode('utf-8','strict')}},sort_keys=True,separators=(',',':')).encode()
+    assert reference['case']=='reader_selector_setup_source' and reference['sha256']==hashlib.sha256(payload).hexdigest() and reference['bytes']==len(payload), 'reader wrong payload'
+    prefix=record['prefix'].encode('utf-8','strict');suffix=record['suffix'].encode('utf-8','strict')
+    assert record['offset']==len(prefix), 'reader offset'
+    assert record['span_bytes']==len(span), 'reader span length'
+    raw=prefix+span+suffix
+    assert raw.count(span)==1, 'reader span uniqueness'
+    assert record['source_bytes']==len(raw), 'reader source length'
+    assert record['source_sha256']==hashlib.sha256(raw).hexdigest(), 'reader source digest'
+    return raw
+
+def reader_selector_projection(raw,span,reference):
+    assert span and raw.count(span)==1, 'reader span uniqueness'
+    offset=raw.index(span)
+    record={'prefix':raw[:offset].decode('utf-8','strict'),'suffix':raw[offset+len(span):].decode('utf-8','strict'),
+        'offset':offset,'span_bytes':len(span),'source_bytes':len(raw),'source_sha256':hashlib.sha256(raw).hexdigest(),'selector_reference':reference}
+    return record
+
+def reader_selector_source_controls(raw,span,reference):
+    records=[]
+    for prefix,suffix in ((b'first-prefix\n',b'\nfirst-suffix'),(b'second-prefix\n',b'\nsecond-suffix')):
+        source=prefix+span+suffix;projected=reader_selector_projection(source,span,reference)
+        assert reader_selector_restore(projected,span)==source
+        records.append({'case':'distinct-source','source_sha256':projected['source_sha256'],'exact_reconstruction':True})
+    baseline=reader_selector_projection(raw,span,reference)
+    for fault,expected in (('missing','reader missing reference'),('wrong','reader wrong reference'),('forward','reader forward reference'),
+            ('prefix','reader source digest'),('suffix','reader source length'),('offset','reader offset'),('span-length','reader span length'),
+            ('source-length','reader source length'),('source-sha','reader source digest'),('different-span','reader span uniqueness'),('nonunique','reader span uniqueness')):
+        projected=dict(baseline);projected['selector_reference']=dict(reference)
+        if fault=='missing':projected['selector_reference']=None
+        if fault=='wrong':projected['selector_reference']['sha256']='0'*64
+        if fault=='forward':projected['selector_reference']['order']=len(evidence)
+        if fault=='prefix':projected['prefix']='X'+projected['prefix'][1:]
+        if fault=='suffix':projected['suffix']+='X'
+        if fault=='offset':projected['offset']+=1
+        if fault=='span-length':projected['span_bytes']+=1
+        if fault=='source-length':projected['source_bytes']+=1
+        if fault=='source-sha':projected['source_sha256']='0'*64
+        try:
+            if fault=='different-span':reader_selector_projection(raw,span+b'#different',reference)
+            elif fault=='nonunique':reader_selector_projection(raw+span,span,reference)
+            else:reader_selector_restore(projected,span)
+        except AssertionError as error:assert error.args==(expected,),(fault,error.args)
+        else:raise AssertionError('invalid reader source report admitted')
+        records.append({'case':fault,'exact_refusal':expected})
+    return completed_evidence({'reader_selector_source_controls':records})
+
+def reader_selector_report(capture):
+    global reader_selector_shared
+    raw=capture.copies[1];span=capture.selector_insertion[1].encode('utf-8','strict')
+    if not span or raw.count(span)!=1:return raw.decode('utf-8','strict')
+    if reader_selector_shared is None:
+        reference=completed_evidence({'reader_selector_setup_source':{'source':span.decode('utf-8','strict')}})
+        reader_selector_shared=(span,reference)
+    shared,reference=reader_selector_shared
+    if shared!=span:return raw.decode('utf-8','strict')
+    assert shared==span
+    return reader_selector_projection(raw,span,reference)
+
+def reader_selector_validate(capture,record):
+    global reader_selector_controls_done
+    raw=capture.copies[1];span=capture.selector_insertion[1].encode('utf-8','strict')
+    if type(record) is str:
+        assert record.encode('utf-8','strict')==raw
+        return
+    assert reader_selector_restore(record,span)==raw
+    if not reader_selector_controls_done:
+        reader_selector_source_controls(raw,span,record['selector_reference'])
+        reader_selector_controls_done=True
+
 def ready_publication_controls(guard,channel,area):
     node=next(n for n in ast.parse(guard).body if isinstance(n,ast.ClassDef) and n.name=='ScopeFixtureOwnerCancel')
     publisher=ast.get_source_segment(guard,node).replace('info.st_uid==0','info.st_uid=='+str(os.getuid()))
@@ -2930,7 +3007,7 @@ def stable_sink_controls(area,assembler):
     return reports
 
 OUTER_RUN_SOURCE_SHA='7f3571e66a1da98ccc2a876c426ea77fcddc010cbdb64d76342efde97ce77a64'
-OUTER_CAPTURE_SOURCE_SHA='43286ffa285bda07e2be419bbd63805bf2c668d180403c284d4b324f734e233c'
+OUTER_CAPTURE_SOURCE_SHA='39e1a2a392622e879d1d1a09c0e8bfadbf813ef4908c52156f28b661f5588f59'
 def outer_timeout_boundary(assembler):
     tree=ast.parse(assembler)
     runs=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='run']
@@ -3057,155 +3134,224 @@ def outer_timeout_controls(area):
             'write_errors':write_errors,'facts':json.loads(raw) if raw else 'GAP'})
     return completed_evidence({'outer_timeout_controls':reports,'fixed_source_allowance':allowance,'custom_hooks':hooks})
 
-def builtin_snapshot_controls(area,module,error):
+def select_counter_controls(area,module,error,observed_namespace):
+    import io
     assembler=heredoc('PY_GENUINE_ASSEMBLER');tree=ast.parse(assembler)
-    constructor=next(n for n in ast.walk(tree) if isinstance(n,ast.FunctionDef) and n.name=='__init__' and any(isinstance(x,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='record' for t in x.targets) for x in ast.walk(n)))
-    expression=next(n.value for n in ast.walk(constructor) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='record' for t in n.targets))
-    sink=area/'snapshot-control-sink';sink.write_bytes(b'');sink.chmod(0o600)
-    state=os.lstat(sink);identity=(state.st_dev,state.st_ino,stat.S_IFMT(state.st_mode),state.st_uid,state.st_gid,stat.S_IMODE(state.st_mode),state.st_nlink)
-    insertion=eval(compile(ast.Expression(expression),'actual-builtin-record','eval'),{'token':repr('owned-builtin'),'sink':repr(str(sink)),'identity':repr(identity)})
-    whole=ast.parse('if True:\n'+insertion).body[0].body[0];body=whole.body
-    stop=next(i for i,node in enumerate(body) if isinstance(node,ast.Assign) and any(isinstance(t,ast.Tuple) for t in node.targets))
-    helpers=ast.Module(body=body[:stop],type_ignores=[])
-    # One controlled call seam wraps the actual operation node; bindings and all gates remain original.
-    expected=ast.dump(ast.parse('value=function(*args)').body[0],include_attributes=False)
-    original_dump=ast.dump(helpers,include_attributes=False)
-    targets=[node for node in ast.walk(helpers) if isinstance(node,ast.Assign) and ast.dump(node,include_attributes=False)==expected]
-    assert len(targets)==1
-    targets[0].value=ast.Call(func=ast.Name(id='ordinary_observation',ctx=ast.Load()),args=[ast.Name(id='function',ctx=ast.Load()),ast.Name(id='args',ctx=ast.Load())],keywords=[])
-    ast.fix_missing_locations(helpers)
-    restore=ast.parse(ast.unparse(helpers));modified=next(n for n in ast.walk(restore) if isinstance(n,ast.Assign) and isinstance(n.value,ast.Call) and isinstance(n.value.func,ast.Name) and n.value.func.id=='ordinary_observation')
-    modified.value=ast.parse('function(*args)',mode='eval').body
-    assert ast.dump(restore,include_attributes=False)==original_dump
-    actual_main=next(n for n in ast.parse((root/'scope/v1/read-shadow-evidence.py').read_text()).body if isinstance(n,ast.FunctionDef) and n.name=='main')
-    real_main={};exec(compile(ast.Module(body=[actual_main],type_ignores=[]),'actual-reader-main-definition','exec'),real_main)
-    main=real_main['main'];cancel_code=next(x for x in main.__code__.co_consts if type(x) is types.CodeType and x.co_name=='cancel');cancel=types.FunctionType(cancel_code,{'InterruptedError':InterruptedError})
-    binding_namespace={'c':module,'os':os,'sys':sys,'json':json,'main':main,'error':error}
-    exec(compile(helpers,'actual-builtin-bindings','exec'),binding_namespace)
-    functions,constants,provenance=binding_namespace['first_git_builtin_binding'](os,sys,module.signal)
-    owned_pid=os.getpid();owned_values=[functions[0](owned_pid),functions[1](),functions[2](),functions[3](constants[0])]
-    assert all(type(value) is int and 0<=value<=2147483647 for value in owned_values[:3])
-    completed_evidence({'actual_builtin_owned_pid':{'pid':owned_pid,'later_pgid':owned_values[0],'current_reader_uid':owned_values[1],
-        'current_reader_euid':owned_values[2],'python_SIGCHLD_registration':'DFL' if owned_values[3] is constants[1] else 'IGN' if owned_values[3] is constants[2] else 'UNKNOWN' if owned_values[3] is None else 'OTHER',
-        'native_functions':provenance,'calls':[1,1,1,1],'runtime_version':list(sys.version_info[:3]),'original_identity':'UNPROVEN','scope':'actual trusted ordinary interpreter; not CI3.15 or original target instance'}})
-    reports=[];original_errno=error.errno;baseline_trace=error.__traceback__
-    for case in ('normal','IGN','OTHER','UNKNOWN','native-error','wrong-return','wrong-frame','wrong-argv','bad-pid','cancelled-true','cancelled-gap','non-EPERM','missing-context','reentry','changed-binding','unavailable','cancel','format','cap','changed-attribute','changed-constant','public-wrapper'):
-        calls=[];hooks=[];namespace={'c':module,'os':os,'sys':sys,'json':json,'main':main,'error':error}
-        functions,constants,_=None,None,None
-        class Handler:
-            def __call__(self,*args):hooks.append('call');raise AssertionError('handler invoked')
-            def __repr__(self):hooks.append('repr');raise AssertionError('handler repr')
-        def observe(function,args):
-            index=len(calls);calls.append([index,len(args)])
-            if case=='reentry' and index==0:assert namespace['first_git_failure_snapshot']()=='GAP'
-            if case=='native-error' and index==0:raise ProcessLookupError(3,'controlled ordinary native-query seam')
-            if case=='cancel' and index==0:cancel(0,None)
-            if index==3:return constants[2] if case=='IGN' else Handler() if case=='OTHER' else None if case=='UNKNOWN' else constants[1]
-            return True if case=='wrong-return' else 17+index
-        namespace['ordinary_observation']=observe
-        exec(compile(helpers,'actual-snapshot-operation-seam','exec'),namespace)
-        functions,constants,provenance=namespace['first_git_builtin_binding'](os,sys,module.signal)
-        frame=None;tb=error.__traceback__
-        while tb is not None:
-            if tb.tb_frame.f_code is module._DarwinChildOwner._foreground.__code__:frame=tb.tb_frame;break
-            tb=tb.tb_next
-        assert frame is not None
-        saved_argv=list(frame.f_locals['argv']);child=frame.f_locals['child'];saved_pid=child.pid;cancelled=frame.f_locals['cancelled'];saved_cancelled=list(cancelled)
-        native_module=sys.modules['_signal'];saved_signal=native_module.getsignal;saved_constant=native_module.SIGCHLD;saved_getpgid=os.getpgid
-        try:
-            if case=='changed-attribute':os.getpgid=os.getuid
-            if case=='changed-constant':native_module.SIGCHLD=99999
-            if case=='public-wrapper':native_module.getsignal=signal.getsignal
-            if case=='wrong-frame':namespace['relation_foreground_code']=namespace['relation_foreground_code'].replace(co_name='_foreground')
-            if case=='wrong-argv':frame.f_locals['argv'][3]='rev-parse'
-            if case=='bad-pid':child.pid=True
-            if case=='cancelled-true':cancelled[:]=[True]
-            if case=='cancelled-gap':cancelled[:]=[1]
-            if case=='non-EPERM':error.errno=13
-            namespace['relation_trace'](error,16)
-            context=BaseException.__dict__['__context__'].__get__(error,BaseException)
-            if case!='missing-context':namespace['relation_trace'](context,8)
-            namespace['relation_seen']=[error,context];namespace['relation_outer_errno']=error.errno
-            if case in ('changed-binding','unavailable'):
-                native=namespace['first_git_builtin_binding']
-                if case=='unavailable':namespace['first_git_builtin_binding']=lambda *args:(_ for _ in ()).throw(KeyError('controlled unavailable binding'))
-                else:
-                    states=[]
-                    def changed(*args):
-                        result=native(*args);states.append(True)
-                        return (result[0][::-1] if len(states)>1 else result[0]),result[1],result[2]
-                    namespace['first_git_builtin_binding']=changed
-            original_json=namespace['json']
-            if case in ('format','cap'):
-                def dump(value,*args,**kwargs):
-                    if type(value) is dict and 'original_identity' in value:
-                        if case=='format':raise ValueError('controlled snapshot-only format failure')
-                        return 'x'*769
-                    return json.dumps(value,*args,**kwargs)
-                namespace['json']=types.SimpleNamespace(dumps=dump)
-            caught=None;result=None
-            try:result=namespace['first_git_failure_snapshot']()
-            except InterruptedError as failure:caught=failure
-            reports.append({'case':case,'calls':calls,'result':result,'cancel_exception':type(caught).__name__ if caught else None,'handler_hooks':hooks,'original_traceback_unchanged':error.__traceback__ is baseline_trace})
-            assert error.__traceback__ is baseline_trace and not hooks
-            zero=case in ('wrong-frame','wrong-argv','bad-pid','cancelled-true','cancelled-gap','non-EPERM','missing-context','unavailable','changed-attribute','changed-constant','public-wrapper')
-            assert len(calls)==(0 if zero else 1 if case=='cancel' else 4)
-            if case=='cancel':assert type(caught) is InterruptedError and caught.args==('scope reader cancelled',)
-            elif zero or case in ('changed-binding','format','cap'):assert result=='GAP'
+    klass=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='GenuineRelationCapture')
+    inputs=next(n for n in klass.body if isinstance(n,ast.FunctionDef) and n.name=='select_source_inputs')
+    inputs=ast.parse(ast.get_source_segment(assembler,inputs)).body[0]
+    source_context={'sys':sys,'sha':lambda raw:hashlib.sha256(raw).hexdigest()}
+    exec(compile(ast.Module(body=[inputs],type_ignores=[]),'actual-select-source-inputs','exec'),source_context)
+    source,path,origin,source_sha,native_sha,abc_source,abc_path,abc_sha=source_context['select_source_inputs'](module)
+    klass=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='GenuineRelationCapture')
+    constructor=next(n for n in klass.body if isinstance(n,ast.FunctionDef) and n.name=='__init__')
+    expression=next(n.value for n in ast.walk(constructor) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='selector_setup' for t in n.targets))
+    setup=eval(compile(ast.Expression(expression),'actual-selector-setup-expression','eval'),{'selector_source':source,'selector_path':path,'native_origin':origin,'selector_source_sha':source_sha,'native_sha':native_sha,'abc_source':abc_source,'abc_path':abc_path})
+    setup_tree=ast.parse(setup);native_proof=[];reports=[];hooks=[]
+    binding_reports=[]
+    for binding_case in ('original','metaclass','bases','method','native-global','backend'):
+        binding_namespace={'c':module,'sys':sys,'json':json}
+        exec(compile(setup,'actual-select-binding-control','exec'),binding_namespace)
+        fields=vars(module.selectors);original_class=fields['DefaultSelector'];native=fields['select'];saved=[];binding_hooks=[]
+        def replace(mapping,key,value):saved.append((mapping,key,mapping[key]));mapping[key]=value
+        class HostileMeta(type):
+            def __getattribute__(self,name):binding_hooks.append(name);raise AssertionError('metaclass hook')
+        class HostileClass(metaclass=HostileMeta):pass
+        if binding_case=='metaclass':replace(fields,'DefaultSelector',HostileClass)
+        elif binding_case=='bases':
+            wrong=type(original_class)('WrongBases',(object,),{})
+            replace(fields,'DefaultSelector',wrong);replace(fields,original_class.__name__,wrong)
+        elif binding_case=='method':
+            original_select=original_class.select;original_class.select=original_class.close
+        elif binding_case=='native-global':replace(fields,'select',object())
+        elif binding_case=='backend':
+            if original_class is fields.get('KqueueSelector'):replace(vars(native),'kqueue',object)
             else:
-                assert type(result) is dict and result['facts']['original_identity']=='UNPROVEN'
-                assert result['facts']['python_SIGCHLD_registration']['value']==('IGN' if case=='IGN' else 'OTHER' if case=='OTHER' else 'UNKNOWN' if case=='UNKNOWN' else 'DFL')
-                if case=='native-error':assert result['facts']['later_pgid']=={'value':'GAP','errno':3}
-                if case=='wrong-return':assert result['facts']['later_pgid']=={'value':'GAP'}
-                assert namespace['first_git_failure_snapshot']()=='GAP' and len(calls)==4
+                original_backend=original_class._selector_cls;original_class._selector_cls=object
+        binding_error=None;binding_result=None
+        try:binding_result=binding_namespace['_scope_select_binding']()
+        except BaseException as failure:binding_error=failure
         finally:
-            frame.f_locals['argv'][:]=saved_argv;child.pid=saved_pid;cancelled[:]=saved_cancelled;error.errno=original_errno
-            os.getpgid=saved_getpgid;native_module.getsignal=saved_signal;native_module.SIGCHLD=saved_constant
-    mapping_reports=[];baseline=None
-    for mapping_case in ('baseline-gap','normal','group-format','group-cap','sink','cancel'):
-        sink.write_bytes(b'');calls=[];cancel_errors=[];write_errors=[]
-        def operation(function,args):
-            index=len(calls);calls.append([index,len(args)])
-            if mapping_case=='cancel':
-                try:cancel(0,None)
-                except InterruptedError as failure:cancel_errors.append(failure);raise
-            return constants[1] if index==3 else 17+index
-        def dump(value,*args,**kwargs):
-            if type(value) is dict and 'first_git_failure_snapshot' in value:
-                if mapping_case=='group-format':raise ValueError('controlled optional encoding failure')
-                if mapping_case=='group-cap':return json.dumps(value,*args,**kwargs)+' '*4096
+            if binding_case=='method':original_class.select=original_select
+            if binding_case=='backend' and original_class is fields.get('EpollSelector'):original_class._selector_cls=original_backend
+            for mapping,key,value in reversed(saved):mapping[key]=value
+        proof={'case':binding_case,'exception':type(binding_error).__name__ if binding_error is not None else None,'same_class':binding_result is not None and binding_result[0] is original_class,'hooks':list(binding_hooks),'native_constructions':0,'restored':fields['DefaultSelector'] is original_class and fields['select'] is native}
+        completed_evidence({'select_binding_control_actual':proof});binding_reports.append(proof)
+        assert not binding_hooks and proof['restored']
+        if binding_case=='original':assert binding_error is None and proof['same_class']
+        else:assert type(binding_error) is AssertionError
+    for case in ('native-empty','empty','nonempty','sentinel','cancel','non-exact','overflow','collection','wrong-argv','other-call','reentry','constructor','cleanup','wrong-binding','restore-install'):
+        calls=[];returned_objects=[];depth=[0];native_error_before=[];native_chain=[];sentinel=OSError(5,'fixed select sentinel');cause=ValueError('fixed original cause');sentinel.__cause__=cause
+        class FalseList(list):
+            def __len__(self):hooks.append('len');raise AssertionError('custom len')
+            def __iter__(self):hooks.append('iter');raise AssertionError('custom iter')
+        value=FalseList() if case=='non-exact' else [object(),object()] if case=='nonempty' else []
+        class ScriptedSelector:
+            def __init__(self):
+                calls.append('construct')
+                if case=='constructor':raise sentinel
+            def register(self,*args):calls.append('register')
+            def get_map(self):calls.append('get_map');return {}
+            def unregister(self,*args):calls.append('unregister')
+            def close(self):
+                calls.append('close')
+                if case=='cleanup':raise sentinel
+            def select(self,*args,**kwargs):
+                calls.append(['select',args,kwargs])
+                if case in ('sentinel','cancel'):
+                    nonlocal sentinel
+                    try:
+                        if case=='cancel':cancel(0,None)
+                        else:raise sentinel
+                    except BaseException as actual:
+                        sentinel=actual;native_chain[:]=[actual.__cause__,actual.__context__]
+                        tb=actual.__traceback__
+                        while tb is not None:native_error_before.append((id(tb.tb_frame),tb.tb_frame.f_code,tb.tb_lineno));tb=tb.tb_next
+                        raise
+                returned_objects.append(value);return value
+        class ControlOwner:
+            def _foreground(self,argv,raw,cap,error_cap,timeout,env):
+                active=self.selector_module.DefaultSelector();self.active=active
+                try:
+                    if case=='overflow':namespace['_scope_select_state']['counts']['entered']=2147483647
+                    if case=='collection':namespace['_scope_select_state']['counts']['entered']='invalid'
+                    if case=='reentry' and depth[0]==0:
+                        depth[0]=1
+                        try:namespace['_scope_select_call'](self._foreground,argv,raw,cap,error_cap,timeout,env)
+                        finally:depth[0]=0
+                    result=active.select(timeout=0);self.result=result
+                    if case in ('overflow','collection'):active.select(timeout=0)
+                    return result
+                finally:active.close()
+        if case=='reentry':
+            def nested(self,argv,raw,cap,error_cap,timeout,env):
+                calls.append('reentry-original');return []
+            owner_type=ControlOwner
+        class InstallFacade:
+            def __init__(self):object.__setattr__(self,'DefaultSelector',ScriptedSelector);object.__setattr__(self,'attempts',0)
+            def __setattr__(self,name,value):
+                if name=='DefaultSelector' and value is not ScriptedSelector:
+                    object.__setattr__(self,'attempts',self.attempts+1);raise TypeError('fixed install failure')
+                object.__setattr__(self,name,value)
+        facade=module.selectors if case=='native-empty' else InstallFacade() if case=='restore-install' else types.SimpleNamespace(DefaultSelector=ScriptedSelector)
+        control=types.SimpleNamespace(_DarwinChildOwner=ControlOwner,selectors=facade)
+        namespace={'c':control,'sys':sys,'json':json};exec(compile(setup,'actual-select-setup','exec'),namespace)
+        if case!='native-empty':
+            methods={name:getattr(ScriptedSelector,name) for name in ('__init__','register','get_map','unregister','close','select')}
+            namespace['_scope_select_binding']=lambda:(ScriptedSelector,methods,object)
+        owner=ControlOwner();owner.selector_module=facade
+        original_class=facade.DefaultSelector
+        argv=['/usr/bin/git','--no-replace-objects','--git-dir=/owned/source.git','config','--file','/owned/config','--name-only','--list','--no-includes'];other_argv=list(argv);other_argv[3]='rev-parse'
+        if case in ('wrong-argv','other-call'):argv=other_argv
+        if case=='wrong-binding':
+            def wrong_binding():raise AssertionError('fixed missing native qualification')
+            namespace['_scope_select_binding']=wrong_binding
+        if case=='cancel':
+            reader_tree=ast.parse((root/'scope/v1/read-shadow-evidence.py').read_text());main_node=next(n for n in reader_tree.body if isinstance(n,ast.FunctionDef) and n.name=='main')
+            original_main={};exec(compile(ast.Module(body=[main_node],type_ignores=[]),'actual-reader-main','exec'),original_main)
+            code=next(value for value in original_main['main'].__code__.co_consts if type(value) is types.CodeType and value.co_name=='cancel')
+            cancel=types.FunctionType(code,{'InterruptedError':InterruptedError})
+        actual_bound=owner._foreground
+        caught=None;result=None
+        try:result=namespace['_scope_select_call'](actual_bound,argv,b'',4096,65536,30,{})
+        except BaseException as failure:caught=failure
+        state=namespace['_scope_select_state'];facts=dict(state['counts']) if type(state['counts']) is dict else 'GAP'
+        trace=[];trace_identities=[];tb=caught.__traceback__ if caught is not None else None
+        while tb is not None:
+            trace.append([tb.tb_frame.f_code.co_name,tb.tb_lineno]);trace_identities.append((id(tb.tb_frame),tb.tb_frame.f_code,tb.tb_lineno));tb=tb.tb_next
+        native_closed=None
+        if case=='native-empty' and hasattr(owner,'active'):native_closed=owner.active._selector.closed
+        report={'case':case,'counts':facts,'same_result':result is value if case!='native-empty' else type(result) is list,'calls':calls,'same_exception':caught is sentinel,'cause_same':caught.__cause__ is cause if caught is sentinel else None,'trace':trace,'binding_restored':facade.DefaultSelector is original_class,'hooks':list(hooks),'native_closed':native_closed,'seam':'real authenticated native construction/select/close' if case=='native-empty' else 'controlled original-select result/exception and inert foreground body; wrapper source exact'}
+        completed_evidence({'select_control_actual':report})
+        assert facade.DefaultSelector is original_class and not hooks
+        if case in ('sentinel','cancel','constructor','cleanup'):assert caught is sentinel
+        elif case=='wrong-binding':assert type(caught) is AssertionError and facts=='GAP'
+        else:assert caught is None
+        if case in ('empty','nonempty','non-exact'):assert result is value and len(returned_objects)==1
+        if case=='nonempty':assert facts=={'entered':1,'returned':1,'raised':0,'nonempty':1,'events_total':2,'last_length':2}
+        if case in ('non-exact','overflow','collection','restore-install'):assert facts=='GAP'
+        if case in ('overflow','collection'):assert len(returned_objects)==2
+        if case=='reentry':assert facts['entered']==facts['returned']==1 and len(returned_objects)==2
+        if case=='restore-install':assert facade.attempts==1 and result is value
+        if case in ('sentinel','cancel'):
+            assert facts['entered']==facts['raised']==1 and facts['returned']==0
+            assert trace_identities[-len(native_error_before):]==native_error_before and caught.__cause__ is native_chain[0] and caught.__context__ is native_chain[1]
+            assert any(item[1] is type(owner.active).select.__code__ for item in trace_identities)
+        if case in ('wrong-argv','other-call'):assert not state['used'] and facts=='GAP'
+        if case=='native-empty':assert native_closed and facts['entered']==facts['returned']==1 and facts['raised']==0;native_proof.append(report)
+        reports.append(report)
+    assert len(native_proof)==1
+    # The real shared snapshot-term call supplied this exact already-reaped frame and selector.
+    record_expression=next(n.value for n in ast.walk(constructor) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='record' for t in n.targets))
+    location=area/'select-mapping';location.mkdir();sink=location/'sink';sink.write_bytes(b'');sink.chmod(0o600)
+    state=observed_namespace['_scope_select_state'];frame=None;tb=error.__traceback__
+    while tb is not None:
+        if tb.tb_frame.f_code is module._DarwinChildOwner._foreground.__code__:frame=tb.tb_frame;break
+        tb=tb.tb_next
+    assert frame is not None and frame.f_code is module._DarwinChildOwner._foreground.__code__ and frame.f_locals['argv'] is state['argv']
+    assert type(frame.f_locals['selector']) is state['selector_class'] and state['selector'] is None
+    assert state['counts']=={'entered':0,'returned':0,'raised':0,'nonempty':0,'events_total':0,'last_length':'GAP'}
+    original_selector=state['selector'];original_pid=frame.f_locals['child'].pid;original_cancelled=list(frame.f_locals['cancelled']);original_errno=error.errno
+    mappings=[];baseline_trace=error.__traceback__;baseline_context=error.__context__;baseline_cause=error.__cause__;baseline_record=None
+    reader=(root/'scope/v1/read-shadow-evidence.py').read_text();boundary='        if code not in {"E_USAGE", "E_LIMIT", "E_PARSE", "E_CANONICAL", "E_RELATION", "E_STALE", "E_RUNTIME"}:\n'
+    assert reader.count(boundary)==1
+    for case in ('normal','wrong-frame','wrong-argv','wrong-instance','bad-pid','cancelled-true','cancelled-gap','non-EPERM','missing-context','baseline-gap','format','cap','facts-cap','group-cap','group-format','cancel','sink'):
+        sink.write_bytes(b'');s=os.lstat(sink);identity=(s.st_dev,s.st_ino,stat.S_IFMT(s.st_mode),s.st_uid,s.st_gid,stat.S_IMODE(s.st_mode),s.st_nlink)
+        insertion=eval(compile(ast.Expression(record_expression),'actual-select-mapping-expression','eval'),{'token':repr('ordinary-select-mapping'),'sink':repr(str(sink)),'identity':repr(identity),'selector_source_sha':source_sha,'native_sha':native_sha,'abc_source':abc_source,'abc_path':abc_path})
+        copied=reader.replace(boundary,insertion+boundary,1);tail=copied[copied.index('if __name__ == "__main__":'):]
+        record_tree=ast.parse(tail)
+        if case=='missing-context':
+            target=next(n for n in ast.walk(record_tree) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Subscript) and isinstance(t.value,ast.Name) and t.value.id=='relation_snapshot_state' and isinstance(t.slice,ast.Constant) and t.slice.value==2 for t in n.targets));target.value=ast.Constant(None);ast.fix_missing_locations(record_tree)
+        raised_error=[]
+        def main(_args):raised_error.append(error);raise error
+        output=io.StringIO();old_sys=(sys.argv,sys.stderr);actual_write=os.write;saved_argv=list(frame.f_locals['argv'])
+        cancel_holder=[]
+        def dumps(value,*args,**kwargs):
+            if type(value) is dict and set(value)=={'entered','returned','raised','nonempty','events_total','last_length'} and case=='facts-cap':return 'x'*257
+            if type(value) is dict and set(value)=={'facts','binding','selectors_source_sha256','native_origin_sha256'}:
+                if case=='group-cap':return 'x'*1025
+                if case=='group-format':raise ValueError('fixed group format failure')
+            if type(value) is dict and 'first_git_select_observation' in value:
+                if case=='cancel':
+                    try:cancel(0,None)
+                    except InterruptedError as caught:cancel_holder.append(caught);raise
+                if case=='format':raise ValueError('fixed optional formatting failure')
+                if case=='cap':return json.dumps(value,*args,**kwargs)+' '*4096
             return json.dumps(value,*args,**kwargs)
-        environment={'c':module,'os':os,'sys':sys,'json':types.SimpleNamespace(dumps=dump),'main':main,'error':error,'code':'E_RUNTIME','stat':stat,'ordinary_observation':operation}
-        program=ast.parse('if True:\n'+insertion).body[0].body[0]
-        operation_nodes=[node for node in ast.walk(program) if isinstance(node,ast.Assign) and ast.dump(node,include_attributes=False)==expected]
-        assert len(operation_nodes)==1;operation_nodes[0].value=ast.parse('ordinary_observation(function,args)',mode='eval').body
-        if mapping_case=='baseline-gap':
-            methods=[node for node in ast.walk(program) if isinstance(node,ast.FunctionDef) and node.name=='first_git_failure_snapshot']
-            assert len(methods)==1;methods[0].body=[ast.Return(value=ast.Constant(value='GAP'))]
-        ast.fix_missing_locations(program);caught=None;actual_write=os.write
-        def write(fd,raw):
-            if mapping_case=='sink':
-                try:return actual_write(-1,raw)
-                except OSError as failure:write_errors.append(failure.errno);raise
-            return actual_write(fd,raw)
+        def write(*args):
+            if case=='sink':raise OSError(9,'fixed actual sink write failure')
+            return actual_write(*args)
+        namespace={'__name__':'__main__','c':module,'main':main,'error':error,'os':os,'sys':sys,'json':types.SimpleNamespace(dumps=dumps),'stat':stat,'_scope_select_state':state,'_scope_select_source_sha':source_sha,'_scope_select_native_sha':native_sha}
+        saved_foreground=state['foreground'];cancelled_error=None;status=None;error.__traceback__=baseline_trace;error.__context__=baseline_context;error.__cause__=baseline_cause
         try:
-            os.write=write
-            try:exec(compile(ast.Module(body=[program],type_ignores=[]),'actual-full-snapshot-record-operation-seam','exec'),environment)
-            except InterruptedError as failure:caught=failure
-        finally:os.write=actual_write
-        raw=sink.read_bytes();record=json.loads(raw) if raw else None
-        if mapping_case=='baseline-gap':baseline=record;assert not calls
-        elif mapping_case=='cancel':assert caught is cancel_errors[0] and caught.args==('scope reader cancelled',) and len(calls)==1 and not raw
-        else:
-            assert caught is None and len(calls)==4
-            if mapping_case=='sink':assert not raw and write_errors==[9]
-            elif mapping_case in ('group-format','group-cap'):assert record==baseline
-            else:
-                assert type(record.pop('first_git_failure_snapshot')) is dict and record==baseline
-        assert error.__traceback__ is baseline_trace and environment['code']=='E_RUNTIME'
-        mapping_reports.append({'case':mapping_case,'observation_calls':calls,'record':json.loads(raw) if raw else 'GAP','write_errno':write_errors,
-            'cancel_propagated_same_object':mapping_case!='cancel' or caught is cancel_errors[0],'original_exception_traceback_unchanged':True})
-    return completed_evidence({'builtin_snapshot_mapping_controls':mapping_reports,'builtin_snapshot_controls':reports,'adapter':'one actual operation AST seam only; native binding and original real foreground failure frame retained; controlled errors are not OS failure evidence'})
+            if case=='wrong-frame':state['foreground']=saved_foreground.replace(co_name='_foreground')
+            if case=='wrong-argv':frame.f_locals['argv'][3]='rev-parse'
+            if case in ('wrong-instance','baseline-gap'):state['selector']=object()
+            if case=='bad-pid':frame.f_locals['child'].pid=0
+            if case=='cancelled-true':frame.f_locals['cancelled'][0]=True
+            if case=='cancelled-gap':frame.f_locals['cancelled'][:]=[]
+            if case=='non-EPERM':error.errno=13
+            sys.argv=['reader'];sys.stderr=output;os.write=write
+            try:exec(compile(record_tree,'actual-select-full-mapping','exec'),namespace)
+            except InterruptedError as caught:cancelled_error=caught
+            except SystemExit as stopped:status=stopped.code
+            raw=sink.read_bytes();data=json.loads(raw) if raw else None
+        finally:
+            os.write=actual_write;sys.argv,sys.stderr=old_sys;state['foreground']=saved_foreground;state['selector']=original_selector;frame.f_locals['argv'][:]=saved_argv;frame.f_locals['child'].pid=original_pid;frame.f_locals['cancelled'][:]=original_cancelled;error.errno=original_errno
+        report={'case':case,'raw_hex':raw.hex(),'same_error':len(raised_error)==1 and raised_error[0] is error,'shared_actual_frame':True,'actual_calls_not_reexecuted':True,'same_cancel_object':cancelled_error is cancel_holder[0] if cancel_holder else None,'status':status,'mapped_stderr':output.getvalue(),'same_context':error.__context__ is baseline_context,'same_cause':error.__cause__ is baseline_cause};completed_evidence({'select_mapping_actual':report})
+        assert len(raised_error)==1 and raised_error[0] is error and error.__context__ is baseline_context and error.__cause__ is baseline_cause
+        if case!='cancel':assert status==1 and output.getvalue()=='E_RUNTIME\n'
+        if case=='normal':
+            assert type(data.get('first_git_select_observation')) is dict
+            baseline_record={key:value for key,value in data.items() if key!='first_git_select_observation'}
+        if case in ('baseline-gap','format','cap','group-format','group-cap'):assert data==baseline_record
+        if case=='normal':pass
+        elif case=='facts-cap':assert data['first_git_select_observation']['facts']=='GAP'
+        elif case=='cancel':assert not raw and len(cancel_holder)==1 and cancelled_error is cancel_holder[0]
+        elif case=='sink':assert not raw
+        else:assert 'first_git_select_observation' not in data
+        mappings.append(report)
+    return completed_evidence({'first_git_select_controls':reports,'first_git_select_mapping_controls':mappings,'native_proof':native_proof})
 
 def foreground_state_controls(area):
     import io
@@ -3275,8 +3421,24 @@ def foreground_state_controls(area):
             os=types.SimpleNamespace(set_blocking=os.set_blocking,killpg=kill,read=read))
         code=original.__code__.replace(co_name='_foreground') if fault=='wrong-frame' else original.__code__
         function=types.FunctionType(code,scope)
+        select_namespace=None
+        if fault=='snapshot-term':
+            source_method=next(n for n in klass.body if isinstance(n,ast.FunctionDef) and n.name=='select_source_inputs')
+            source_method=ast.parse(ast.get_source_segment(assembler,source_method)).body[0]
+            source_context={'sys':sys,'sha':lambda raw:hashlib.sha256(raw).hexdigest()}
+            exec(compile(ast.Module(body=[source_method],type_ignores=[]),'actual-select-inputs','exec'),source_context)
+            selector_source,selector_path,native_origin,selector_source_sha,native_sha,abc_source,abc_path,abc_sha=source_context['select_source_inputs'](module)
+            setup_expression=next(n.value for n in ast.walk(constructor) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='selector_setup' for t in n.targets))
+            setup=eval(compile(ast.Expression(setup_expression),'actual-select-setup-expression','eval'),{'selector_source':selector_source,'selector_path':selector_path,'native_origin':native_origin,'selector_source_sha':selector_source_sha,'native_sha':native_sha,'abc_source':abc_source,'abc_path':abc_path})
+            select_namespace={'c':module,'sys':sys,'json':json};exec(compile(setup,'actual-controlled-select-setup','exec'),select_namespace)
+            methods={name:getattr(Selector,name) for name in ('__init__','register','get_map','unregister','close','select')}
+            select_namespace['_scope_select_binding']=lambda:(Selector,methods,object)
         def main(args):
-            try:function(object(),argv,b'',4096,65536,30,{})
+            try:
+                if fault=='snapshot-term':
+                    owner=module._DarwinChildOwner.__new__(module._DarwinChildOwner)
+                    select_namespace['_scope_select_call'](types.MethodType(function,owner),argv,b'',4096,65536,30,{})
+                else:function(object(),argv,b'',4096,65536,30,{})
             except BaseException as error:holder.append((error,list(calls),list(pseudo_hooks)));raise
         def formatting(value,*args,**kwargs):
             if fault=='format':raise ValueError('fixed foreground format refusal')
@@ -3289,6 +3451,7 @@ def foreground_state_controls(area):
             if fault=='write':raise OSError('fixed foreground sink refusal')
             return actual_write(*args)
         namespace={'__name__':'__main__','main':main,'c':module,'sys':sys if fault=='snapshot-term' else types.SimpleNamespace(argv=['reader'],stderr=output),'json':types.SimpleNamespace(dumps=formatting),'os':os,'stat':stat}
+        if select_namespace is not None:namespace.update({key:select_namespace[key] for key in ('_scope_select_state','_scope_select_source_sha','_scope_select_native_sha')})
         status=None;original_sys=(sys.argv,sys.stderr)
         if fault=='snapshot-term':sys.argv=['reader'];sys.stderr=output
         try:
@@ -3336,7 +3499,7 @@ def foreground_state_controls(area):
             assert ['_foreground',1196] in record['context'][0]['trace']
             assert fact['io']['stderr_bytes']==512 and not waited
             context_errors.append((error,context))
-        if fault=='snapshot-term':snapshot_error=error;assert type(record.get('first_git_failure_snapshot')) is dict
+        if fault=='snapshot-term':snapshot_error=error;snapshot_namespace=select_namespace;assert type(record.get('first_git_select_observation')) is dict
         records.append({'case':fault,'mapped_stderr':output.getvalue(),'status':status,'original_error_type':type(error).__name__,'same_signal_error':error is sentinel,'original_calls':before_wait,'clock_calls':len(clock_calls),'wait_reached':waited,'facts':fact,'real_child_returncode':returned,'all_pipes_closed':True,'None_is_not_liveness':True})
     mapping=ast.parse('if True:\n'+insertion).body[0].body[0].body
     first=next(index for index,node in enumerate(mapping) if isinstance(node,ast.Assign) and any(isinstance(t,ast.Tuple) for t in node.targets))
@@ -3376,7 +3539,7 @@ def foreground_state_controls(area):
             else:assert fact=='GAP'
             assertions.append({'case':fault,'io_attempts':len(attempts),'io':fact,'actual_frame_bound':True})
         finally:frame.f_locals['argv'][:]=saved
-    builtin_snapshot_controls(area,module,snapshot_error)
+    select_counter_controls(area,module,snapshot_error,snapshot_namespace)
     return completed_evidence({'foreground_context_controls':assertions,'foreground_state_controls':records,'scope':'original exact foreground code with fixed ordinary transport/selector/clock/signal-error seams; no actual Git/OS-signal cause or real-principal proof'})
 
 def foreground_io_controls():
@@ -3559,9 +3722,11 @@ def genuine_relation_controls(area):
         capture=context['GenuineRelationCapture'](argv);front=capture.copies[0].decode();reader=capture.copies[1].decode()
         (snapshot/(fault+'.front.preexec.sh')).write_text(front);(snapshot/(fault+'.reader.preexec.py')).write_text(reader)
         assert (snapshot/(fault+'.front.preexec.sh')).read_bytes()==capture.copies[0] and (snapshot/(fault+'.reader.preexec.py')).read_bytes()==capture.copies[1]
+        reader_report=reader_selector_report(capture)
         print(json.dumps({'genuine_relation_preexec':fault,'front_sha256':hashlib.sha256(front.encode()).hexdigest(),
             'reader_sha256':hashlib.sha256(reader.encode()).hexdigest(),'original_sha256':capture.binding['original_sha256'],
-            'front_source':front,'reader_source':reader,'snapshot_root':str(snapshot),'sequence':len(reports)}),flush=True)
+            'front_source':front,'reader_source':reader_report,'snapshot_root':str(snapshot),'sequence':len(reports)}),flush=True)
+        reader_selector_validate(capture,reader_report)
         if fault=='source-drift':
             with capture.paths[0].open('ab') as stream:stream.write(b'\n')
             try:capture.before_call()
@@ -3873,8 +4038,10 @@ def launch_capture_controls(area):
             expected_launch=str(Path(sys.executable).resolve())
         command+='emit_error E_RUNTIME\n'
         (base/'boundary.sh').write_text(command)
-        print(json.dumps({'launch_capture_preexec':fault,'front':front,'reader_copy':capture.copies[1].decode(),
+        reader_report=reader_selector_report(capture)
+        print(json.dumps({'launch_capture_preexec':fault,'front':front,'reader_copy':reader_report,
             'command':command,'binding':capture.binding,'command_sha256':hashlib.sha256(command.encode()).hexdigest()}),flush=True)
+        reader_selector_validate(capture,reader_report)
         result=subprocess.run(['/bin/bash',str(base/'boundary.sh')],capture_output=True,timeout=10)
         completed_evidence({'launch_capture_actual_before_assert':{'case':fault,'returncode':result.returncode,'stdout_hex':result.stdout.hex(),'stderr_hex':result.stderr.hex()}})
         assert result.returncode==1 and result.stderr==b'E_RUNTIME\n' and not result.stdout
@@ -8885,6 +9052,15 @@ relation_creation_target=sys.executable
 if sys.platform=='darwin':os.chmod(tools/'python3',0o744,follow_symlinks=False)
 env={'PATH':str(tools)+':/usr/bin:/bin','LC_ALL':'C','LANG':'C','HOME':str(work),'TMPDIR':str(work),'GIT_CONFIG_NOSYSTEM':'1','GIT_CONFIG_GLOBAL':'/dev/null','GIT_NO_REPLACE_OBJECTS':'1','GIT_NO_LAZY_FETCH':'1','GIT_TERMINAL_PROMPT':'0','GIT_OPTIONAL_LOCKS':'0','GIT_AUTHOR_NAME':'fixture','GIT_AUTHOR_EMAIL':'fixture@example.invalid','GIT_COMMITTER_NAME':'fixture','GIT_COMMITTER_EMAIL':'fixture@example.invalid','GIT_AUTHOR_DATE':'2000-01-01T00:00:00Z','GIT_COMMITTER_DATE':'2000-01-01T00:00:00Z'}
 class GenuineRelationCapture:
+ @staticmethod
+ def select_source_inputs(module):
+  source_path=module.selectors.__file__;native_path=sys.modules['select'].__file__
+  abc_path=sys.modules['abc'].__file__;rows=[]
+  for path in (source_path,native_path,abc_path):
+   held=module._hold_bytes(path,module.EXECUTABLE_LIMIT)
+   try:rows.append(held.raw);held.recheck('E_STALE')
+   finally:held.close()
+  return rows[0].decode('utf-8','strict'),source_path,native_path,sha(rows[0]),sha(rows[1]),rows[2].decode('utf-8','strict'),abc_path,sha(rows[2])
  def __init__(self,argv):
   self.paths=[package/'scope/v1/evaluate-scope.sh',package/'scope/v1/read-shadow-evidence.py']
   self.pending=base/'genuine-relation.PENDING'
@@ -9005,6 +9181,8 @@ print(relation_result)
   self.line_map={}
   for match in difflib.SequenceMatcher(a=front.splitlines(),b=copied.splitlines(),autojunk=False).get_matching_blocks():
    for offset in range(match.size):self.line_map[match.b+offset+1]=match.a+offset+1
+  selector_source,selector_path,native_origin,selector_source_sha,native_sha,abc_source,abc_path,abc_sha=self.select_source_inputs(c)
+  selector_setup="_scope_select_source_sha=SELECTORS_SHA\n_scope_select_native_sha=NATIVE_SHA\n_scope_select_state={'used':False,'suspended':False,'counts':None,'selector':None,'selector_class':None,'argv':None,'foreground':None}\ndef _scope_select_binding():\n    module_type=type(sys);module_fields=module_type.__dict__['__dict__'];modules=module_fields.__get__(sys)['modules']\n    assert type(modules) is dict and modules['sys'] is sys and modules['selectors'] is c.selectors\n    selectors=c.selectors;mapping=module_fields.__get__(selectors);loader=modules['_frozen_importlib_external']\n    assert type(selectors) is module_type and type(mapping['__loader__']) is loader.SourceFileLoader\n    assert mapping['__file__']==SELECTORS_PATH and mapping['__spec__'].origin==SELECTORS_PATH\n    code_type=type(_scope_select_binding.__code__);function_type=type(_scope_select_binding)\n    def code_at(code,*names):\n        for name in names:\n            matches=[value for value in code.co_consts if type(value) is code_type and value.co_name==name]\n            assert len(matches)==1\n            code=matches[0]\n        return code\n    selector_code=compile(SELECTORS_SOURCE,SELECTORS_PATH,'exec',dont_inherit=True)\n    abc=modules['abc'];abc_fields=module_fields.__get__(abc)\n    assert type(abc) is module_type and type(abc_fields['__loader__']) is loader.SourceFileLoader\n    assert abc_fields['__file__']==ABC_PATH and abc_fields['__spec__'].origin==ABC_PATH\n    abc_code=code_at(compile(ABC_SOURCE,ABC_PATH,'exec',dont_inherit=True),'ABCMeta')\n    meta=abc_fields['ABCMeta'];type_fields=type.__dict__['__dict__'];bases=type.__dict__['__bases__'];mro=type.__dict__['__mro__']\n    assert type(meta) is type and bases.__get__(meta)==(type,) and mro.__get__(meta)==(meta,type,object)\n    meta_fields=type_fields.__get__(meta)\n    for name in ('__getattribute__','__call__','__eq__','__hash__','mro'):\n        assert getattr(meta,name) is getattr(type,name)\n    for expected in abc_code.co_consts:\n        if type(expected) is code_type:\n            actual=meta_fields[expected.co_name]\n            if type(actual) is staticmethod:actual=actual.__func__\n            assert type(actual) is function_type and actual.__globals__ is abc_fields and actual.__code__==expected\n    assert mapping['ABCMeta'] is meta\n    abc_native=modules['_abc'];abc_native_fields=module_fields.__get__(abc_native)\n    assert type(abc_native) is module_type and abc_native_fields['__spec__'].origin=='built-in'\n    for name in ('_abc_init','_abc_register','_abc_instancecheck','_abc_subclasscheck'):\n        assert abc_fields[name] is abc_native_fields[name] and type(abc_fields[name]) is type(len)\n    base=mapping['BaseSelector'];implementation=mapping['_BaseSelectorImpl'];cls=mapping['DefaultSelector']\n    if cls is mapping.get('KqueueSelector'):\n        chain=(cls,implementation,base,object)\n        owners={'__init__':'KqueueSelector','register':'KqueueSelector','get_map':'_BaseSelectorImpl','unregister':'KqueueSelector','close':'KqueueSelector','select':'KqueueSelector'}\n    else:\n        assert cls is mapping.get('EpollSelector')\n        chain=(cls,mapping['_PollLikeSelector'],implementation,base,object)\n        owners={'__init__':'_PollLikeSelector','register':'_PollLikeSelector','get_map':'_BaseSelectorImpl','unregister':'_PollLikeSelector','close':'EpollSelector','select':'EpollSelector'}\n    for position,item in enumerate(chain[:-1]):\n        assert type(item) is meta\n        actual_bases=bases.__get__(item);actual_mro=mro.__get__(item)\n        assert len(actual_bases)==1 and actual_bases[0] is chain[position+1]\n        assert len(actual_mro)==len(chain)-position and all(left is right for left,right in zip(actual_mro,chain[position:]))\n    methods={}\n    for name,owner_name in owners.items():\n        owner=mapping[owner_name];method=type_fields.__get__(owner)[name]\n        assert getattr(cls,name) is method and type(method) is function_type\n        assert method.__globals__ is mapping and method.__code__==code_at(selector_code,owner_name,name)\n        methods[name]=method\n    native=modules['select'];native_fields=module_fields.__get__(native)\n    assert type(native) is module_type and mapping['select'] is native\n    assert type(native_fields['__loader__']) is loader.ExtensionFileLoader\n    assert native_fields['__file__']==NATIVE_ORIGIN and native_fields['__spec__'].origin==NATIVE_ORIGIN\n    if cls is mapping.get('KqueueSelector'):\n        assert '_selector_cls' not in type_fields.__get__(cls)\n        backend=native_fields['kqueue']\n    else:\n        backend=type_fields.__get__(cls)['_selector_cls'];assert backend is native_fields['epoll']\n    new=backend.__dict__['__new__'];fields=type(new).__dict__\n    assert type(new) is type(len) and fields['__self__'].__get__(new) is backend\n    assert backend.__module__=='select' and type(backend) is type\n    return cls,methods,backend\n\ndef _scope_select_first_config(arguments):\n    if type(arguments) is not list or len(arguments)!=9 or not all(type(value) is str for value in arguments):return False\n    try:\n        for value in arguments:value.encode('utf-8','strict')\n        return (arguments[:2]==['/usr/bin/git','--no-replace-objects'] and arguments[2].startswith('--git-dir=/') and\n            arguments[3:5]==['config','--file'] and arguments[5].startswith('/') and\n            arguments[6:]==['--name-only','--list','--no-includes'] and len(json.dumps(arguments,ensure_ascii=True).encode())<=2048)\n    except (UnicodeError,TypeError,ValueError):return False\n\ndef _scope_select_call(bound,arguments,raw,cap,error_cap,timeout,environment):\n    state=_scope_select_state\n    if state['used']:\n        previous=state['suspended'];state['suspended']=True\n        try:return bound(arguments,raw,cap,error_cap,timeout,environment)\n        finally:state['suspended']=previous\n    if (type(bound) is not type(c._DarwinChildOwner._foreground.__get__(object(),object)) or\n            bound.__func__.__code__ is not c._DarwinChildOwner._foreground.__code__ or\n            type(bound.__self__) is not c._DarwinChildOwner or not _scope_select_first_config(arguments)):\n        return bound(arguments,raw,cap,error_cap,timeout,environment)\n    state['used']=True;state['argv']=arguments;state['foreground']=bound.__func__.__code__\n    original_class,methods,backend=_scope_select_binding()\n    state['counts']={'entered':0,'returned':0,'raised':0,'nonempty':0,'events_total':0,'last_length':'GAP'}\n    original_select=methods['select']\n    def increment(key,amount=1):\n        facts=state['counts']\n        if facts is None:return\n        try:\n            value=facts[key]\n            if type(value) is not int or type(amount) is not int or value<0 or amount<0 or value+amount>2147483647:state['counts']=None\n            else:facts[key]=value+amount\n        except (KeyError,TypeError,ValueError,OverflowError,MemoryError):state['counts']=None\n    class ScopeFirstConfigSelector(original_class):\n        __slots__=()\n        def select(self,*args,**kwargs):\n            if state['suspended']:return original_select(self,*args,**kwargs)\n            if state['selector'] is None:state['selector']=self\n            elif state['selector'] is not self:state['counts']=None\n            increment('entered')\n            try:result=original_select(self,*args,**kwargs)\n            except BaseException:\n                increment('raised')\n                raise\n            increment('returned')\n            if type(result) is not list:state['counts']=None\n            elif state['counts'] is not None:\n                try:\n                    length=len(result)\n                    if length>2147483647:state['counts']=None\n                    else:\n                        state['counts']['last_length']=length\n                        increment('events_total',length)\n                        if length:increment('nonempty')\n                except (KeyError,TypeError,ValueError,OverflowError,MemoryError):state['counts']=None\n            return result\n    assert all(getattr(ScopeFirstConfigSelector,name) is methods[name] for name in ('__init__','register','get_map','unregister','close'))\n    state['selector_class']=ScopeFirstConfigSelector\n    container=bound.__func__.__globals__.get('selectors',c.selectors)\n    assert container.DefaultSelector is original_class\n    try:\n        try:container.DefaultSelector=ScopeFirstConfigSelector\n        except (AttributeError,TypeError,MemoryError):state['counts']=None\n        return bound(arguments,raw,cap,error_cap,timeout,environment)\n    finally:container.DefaultSelector=original_class\n".replace('SELECTORS_SOURCE',repr(selector_source)).replace('SELECTORS_PATH',repr(selector_path)).replace('NATIVE_ORIGIN',repr(native_origin)).replace('SELECTORS_SHA',repr(selector_source_sha)).replace('NATIVE_SHA',repr(native_sha)).replace('ABC_SOURCE',repr(abc_source)).replace('ABC_PATH',repr(abc_path))
   record='''        try:
             relation_base=BaseException.__dict__
             def relation_field(value,key):
@@ -9014,77 +9192,31 @@ print(relation_result)
                 return text if type(text) is str and len(text)<=80 and text.isascii() and text.isidentifier() else 'GAP'
             relation_snapshot_cancelled=[False]
             relation_snapshot_state=[False,None,None,None]
-            def first_git_builtin_binding(os,sys,signal):
-                module_type=type(sys)
-                assert module_type is type(os) and type(signal) is module_type
-                modules=module_type.__dict__['__dict__'].__get__(sys)['modules']
-                assert type(modules) is dict
-                assert modules['sys'] is sys and modules['os'] is os and modules['signal'] is signal
-                system=module_type.__dict__['__dict__'].__get__(sys)
-                loader=module_type.__dict__['__dict__'].__get__(modules['_frozen_importlib'])['BuiltinImporter']
-                builtin_type=type(len)
-                fields=builtin_type.__dict__
-                functions=[];provenance=[]
-                for module_name,names in (('posix',('getpgid','getuid','geteuid')),('_signal',('getsignal',))):
-                    module=modules[module_name]
-                    assert type(module) is module_type and module_name in system['builtin_module_names']
-                    mapping=module_type.__dict__['__dict__'].__get__(module)
-                    assert mapping['__name__']==module_name and mapping['__loader__'] is loader
-                    for name in names:
-                        function=mapping[name]
-                        assert type(function) is builtin_type
-                        assert fields['__self__'].__get__(function) is module
-                        assert fields['__name__'].__get__(function)==name
-                        if module_name=='posix':assert module_type.__dict__['__dict__'].__get__(os)[name] is function
-                        functions.append(function);provenance.append([module_name,name,'native-builtin'])
-                native=module_type.__dict__['__dict__'].__get__(modules['_signal'])
-                constants=tuple(native[name] for name in ('SIGCHLD','SIG_DFL','SIG_IGN'))
-                assert all(type(value) is int for value in constants) and constants[0]>0 and constants[1:]==(0,1)
-                assert module_type.__dict__['__dict__'].__get__(signal)['_signal'] is modules['_signal']
-                public=module_type.__dict__['__dict__'].__get__(signal)
-                assert all(native[name] is int.__int__(public[name]) for name in ('SIGCHLD','SIG_DFL','SIG_IGN'))
-                return tuple(functions),constants,provenance
-            def first_git_failure_snapshot():
-                if relation_snapshot_state[0]:return 'GAP'
-                fact=relation_foreground[1]
-                if (type(error) is not PermissionError or relation_outer_errno!=1 or type(fact) is not dict or
-                        fact['cancelled'] is not False or relation_snapshot_state[1] is not relation_io_binding[0] or
-                        relation_snapshot_state[2] is None or not any(relation_snapshot_state[2] is item for item in relation_seen)):
-                    return 'GAP'
-                child=fact['child']
-                if type(child) is not dict or type(child['pid']) is not int or not 0<child['pid']<=2147483647:return 'GAP'
-                relation_snapshot_state[0]=True
-                cancel_codes=tuple(value for value in main.__code__.co_consts
-                    if type(value) is type(relation_foreground_code) and value.co_name=='cancel')
+            def first_git_select_observation():
                 try:
-                    functions,constants,provenance=first_git_builtin_binding(os,sys,c.signal)
-                except (AssertionError,KeyError,AttributeError,TypeError):return 'GAP'
-                def observed(function,args,registration=False):
-                    try:value=function(*args)
-                    except Exception as failure:
-                        tb=BaseException.__dict__['__traceback__'].__get__(failure,BaseException)
-                        for unused in range(16):
-                            if tb is None:break
-                            if any(tb.tb_frame.f_code is code for code in cancel_codes):raise
-                            tb=tb.tb_next
-                        if type(failure) is InterruptedError and len(cancel_codes)!=1:raise
-                        if isinstance(failure,OSError):
-                            number=OSError.__dict__['errno'].__get__(failure,OSError)
-                            return {'value':'UNKNOWN' if registration else 'GAP','errno':number if type(number) is int and -2147483648<=number<=2147483647 else 'GAP'}
-                        return {'value':'GAP'}
-                    if registration:
-                        return {'value':'DFL' if value is constants[1] else 'IGN' if value is constants[2] else 'UNKNOWN' if value is None else 'OTHER'}
-                    return {'value':value} if type(value) is int and 0<=value<=2147483647 else {'value':'GAP'}
-                facts={'original_identity':'UNPROVEN','later_pgid':observed(functions[0],(child['pid'],)),
-                    'current_reader_uid':observed(functions[1],()),'current_reader_euid':observed(functions[2],()),
-                    'python_SIGCHLD_registration':observed(functions[3],(constants[0],),True)}
-                try:
-                    current,now_constants,unused=first_git_builtin_binding(os,sys,c.signal)
-                    if not all(left is right for left,right in zip(current,functions)) or any(left is not right for left,right in zip(now_constants,constants)):return 'GAP'
-                    if len(json.dumps(facts,sort_keys=True,separators=(',',':'),ensure_ascii=True).encode())>768:return 'GAP'
-                    group={'facts':facts,'binding':TOKEN,'runtime_version':list(sys.version_info[:3]),'builtins':provenance}
+                    state=_scope_select_state;fact=relation_foreground[1]
+                    if (type(error) is not PermissionError or relation_outer_errno!=1 or type(fact) is not dict or
+                            fact['cancelled'] is not False or relation_snapshot_state[1] is not relation_io_binding[0] or
+                            relation_snapshot_state[2] is None or not any(relation_snapshot_state[2] is item for item in relation_seen)):
+                        return 'GAP'
+                    child=fact['child'];frame=relation_io_binding[0]
+                    if type(child) is not dict or type(child['pid']) is not int or not 0<child['pid']<=2147483647:return 'GAP'
+                    local=type(frame).__dict__['f_locals'].__get__(frame)
+                    if (not state['used'] or state['foreground'] is not relation_foreground_code or
+                            type(local['selector']) is not state['selector_class'] or local['argv'] is not state['argv']):return 'GAP'
+                    counts=state['counts']
+                    if state['selector'] is not None:
+                        if local['selector'] is not state['selector']:return 'GAP'
+                    elif type(counts) is not dict or counts['entered']!=0:return 'GAP'
+                    if counts is not None:
+                        if (type(counts) is not dict or set(counts)!={'entered','returned','raised','nonempty','events_total','last_length'} or
+                                any(type(counts[key]) is not int or not 0<=counts[key]<=2147483647 for key in counts if key!='last_length') or
+                                not (type(counts['last_length']) is str and counts['last_length']=='GAP' or type(counts['last_length']) is int and 0<=counts['last_length']<=2147483647)):
+                            counts=None
+                        elif len(json.dumps(counts,sort_keys=True,separators=(',',':'),ensure_ascii=True).encode())>256:counts=None
+                    group={'facts':dict(counts) if counts is not None else 'GAP','binding':TOKEN,'selectors_source_sha256':_scope_select_source_sha,'native_origin_sha256':_scope_select_native_sha}
                     return group if len(json.dumps(group,sort_keys=True,separators=(',',':'),ensure_ascii=True).encode())<=1024 else 'GAP'
-                except (AssertionError,KeyError,AttributeError,TypeError,ValueError,UnicodeError,RecursionError,OverflowError):return 'GAP'
+                except (NameError,KeyError,TypeError,ValueError,AttributeError,UnicodeError,RecursionError,OverflowError,MemoryError):return 'GAP'
             relation_foreground=[False,'GAP']
             relation_io_binding=[None,None,False]
             relation_foreground_code=type(c._DarwinChildOwner._foreground).__dict__['__code__'].__get__(c._DarwinChildOwner._foreground)
@@ -9217,10 +9349,10 @@ print(relation_result)
                 relation_foreground[1]['io']='GAP'
                 relation_raw=(json.dumps(relation_record,sort_keys=True,separators=(',',':'),ensure_ascii=True)+'\\n').encode()
             relation_snapshot_cancelled[0]=True
-            relation_snapshot=first_git_failure_snapshot()
+            relation_snapshot=first_git_select_observation()
             if type(relation_snapshot) is dict:
                 try:
-                    extended=dict(relation_record);extended['first_git_failure_snapshot']=relation_snapshot
+                    extended=dict(relation_record);extended['first_git_select_observation']=relation_snapshot
                     extended_raw=(json.dumps(extended,sort_keys=True,separators=(',',':'),ensure_ascii=True)+'\\n').encode()
                     if len(extended_raw)<=4096:relation_raw=extended_raw
                 except (TypeError,ValueError,UnicodeError,RecursionError,OverflowError):pass
@@ -9238,11 +9370,15 @@ print(relation_result)
   reader=self.original[1].decode();boundary='        if code not in {"E_USAGE", "E_LIMIT", "E_PARSE", "E_CANONICAL", "E_RELATION", "E_STALE", "E_RUNTIME"}:\n'
   assert reader.count(boundary)==1
   self.reader_insertion=(boundary,record)
-  self.copies=[copied.encode(),reader.replace(boundary,record+boundary,1).encode()]
+  select_anchor='class _Reader:\n';select_old='result = self.darwin._foreground(argv, b"", limit, 65536,';select_new='result = _scope_select_call(self.darwin._foreground,argv, b"", limit, 65536,'
+  assert reader.count(select_anchor)==1 and reader.count(select_old)==1
+  self.selector_insertion=(select_anchor,selector_setup);self.selector_call=(select_old,select_new)
+  selected_reader=reader.replace(select_anchor,selector_setup+select_anchor,1).replace(select_old,select_new,1)
+  self.copies=[copied.encode(),selected_reader.replace(boundary,record+boundary,1).encode()]
   reversed_front=copied.replace(self.probe_replacement[1],self.probe_replacement[0],1)
   for anchor,insertion in reversed(self.front_insertions):
    reversed_front=reversed_front.replace(insertion+anchor,anchor,1) if anchor==launch else reversed_front.replace(anchor+insertion,anchor,1)
-  assert reversed_front==front and self.copies[1].decode().replace(record+boundary,boundary,1)==reader
+  assert reversed_front==front and self.copies[1].decode().replace(record+boundary,boundary,1).replace(selector_setup+select_anchor,select_anchor,1).replace(select_new,select_old,1)==reader
   self.binding['copy_sha256']=[sha(raw) for raw in self.copies]
   self.held=[]
   for path,raw in zip(self.paths,self.copies):
