@@ -2930,7 +2930,7 @@ def stable_sink_controls(area,assembler):
     return reports
 
 OUTER_RUN_SOURCE_SHA='7f3571e66a1da98ccc2a876c426ea77fcddc010cbdb64d76342efde97ce77a64'
-OUTER_CAPTURE_SOURCE_SHA='1d67c7254a74dd32a279c51246c11bc06ad3ad5d96d40c31a940603b9239ffeb'
+OUTER_CAPTURE_SOURCE_SHA='43286ffa285bda07e2be419bbd63805bf2c668d180403c284d4b324f734e233c'
 def outer_timeout_boundary(assembler):
     tree=ast.parse(assembler)
     runs=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='run']
@@ -3057,6 +3057,156 @@ def outer_timeout_controls(area):
             'write_errors':write_errors,'facts':json.loads(raw) if raw else 'GAP'})
     return completed_evidence({'outer_timeout_controls':reports,'fixed_source_allowance':allowance,'custom_hooks':hooks})
 
+def builtin_snapshot_controls(area,module,error):
+    assembler=heredoc('PY_GENUINE_ASSEMBLER');tree=ast.parse(assembler)
+    constructor=next(n for n in ast.walk(tree) if isinstance(n,ast.FunctionDef) and n.name=='__init__' and any(isinstance(x,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='record' for t in x.targets) for x in ast.walk(n)))
+    expression=next(n.value for n in ast.walk(constructor) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='record' for t in n.targets))
+    sink=area/'snapshot-control-sink';sink.write_bytes(b'');sink.chmod(0o600)
+    state=os.lstat(sink);identity=(state.st_dev,state.st_ino,stat.S_IFMT(state.st_mode),state.st_uid,state.st_gid,stat.S_IMODE(state.st_mode),state.st_nlink)
+    insertion=eval(compile(ast.Expression(expression),'actual-builtin-record','eval'),{'token':repr('owned-builtin'),'sink':repr(str(sink)),'identity':repr(identity)})
+    whole=ast.parse('if True:\n'+insertion).body[0].body[0];body=whole.body
+    stop=next(i for i,node in enumerate(body) if isinstance(node,ast.Assign) and any(isinstance(t,ast.Tuple) for t in node.targets))
+    helpers=ast.Module(body=body[:stop],type_ignores=[])
+    # One controlled call seam wraps the actual operation node; bindings and all gates remain original.
+    expected=ast.dump(ast.parse('value=function(*args)').body[0],include_attributes=False)
+    original_dump=ast.dump(helpers,include_attributes=False)
+    targets=[node for node in ast.walk(helpers) if isinstance(node,ast.Assign) and ast.dump(node,include_attributes=False)==expected]
+    assert len(targets)==1
+    targets[0].value=ast.Call(func=ast.Name(id='ordinary_observation',ctx=ast.Load()),args=[ast.Name(id='function',ctx=ast.Load()),ast.Name(id='args',ctx=ast.Load())],keywords=[])
+    ast.fix_missing_locations(helpers)
+    restore=ast.parse(ast.unparse(helpers));modified=next(n for n in ast.walk(restore) if isinstance(n,ast.Assign) and isinstance(n.value,ast.Call) and isinstance(n.value.func,ast.Name) and n.value.func.id=='ordinary_observation')
+    modified.value=ast.parse('function(*args)',mode='eval').body
+    assert ast.dump(restore,include_attributes=False)==original_dump
+    actual_main=next(n for n in ast.parse((root/'scope/v1/read-shadow-evidence.py').read_text()).body if isinstance(n,ast.FunctionDef) and n.name=='main')
+    real_main={};exec(compile(ast.Module(body=[actual_main],type_ignores=[]),'actual-reader-main-definition','exec'),real_main)
+    main=real_main['main'];cancel_code=next(x for x in main.__code__.co_consts if type(x) is types.CodeType and x.co_name=='cancel');cancel=types.FunctionType(cancel_code,{'InterruptedError':InterruptedError})
+    binding_namespace={'c':module,'os':os,'sys':sys,'json':json,'main':main,'error':error}
+    exec(compile(helpers,'actual-builtin-bindings','exec'),binding_namespace)
+    functions,constants,provenance=binding_namespace['first_git_builtin_binding'](os,sys,module.signal)
+    owned_pid=os.getpid();owned_values=[functions[0](owned_pid),functions[1](),functions[2](),functions[3](constants[0])]
+    assert all(type(value) is int and 0<=value<=2147483647 for value in owned_values[:3])
+    completed_evidence({'actual_builtin_owned_pid':{'pid':owned_pid,'later_pgid':owned_values[0],'current_reader_uid':owned_values[1],
+        'current_reader_euid':owned_values[2],'python_SIGCHLD_registration':'DFL' if owned_values[3] is constants[1] else 'IGN' if owned_values[3] is constants[2] else 'UNKNOWN' if owned_values[3] is None else 'OTHER',
+        'native_functions':provenance,'calls':[1,1,1,1],'runtime_version':list(sys.version_info[:3]),'original_identity':'UNPROVEN','scope':'actual trusted ordinary interpreter; not CI3.15 or original target instance'}})
+    reports=[];original_errno=error.errno;baseline_trace=error.__traceback__
+    for case in ('normal','IGN','OTHER','UNKNOWN','native-error','wrong-return','wrong-frame','wrong-argv','bad-pid','cancelled-true','cancelled-gap','non-EPERM','missing-context','reentry','changed-binding','unavailable','cancel','format','cap','changed-attribute','changed-constant','public-wrapper'):
+        calls=[];hooks=[];namespace={'c':module,'os':os,'sys':sys,'json':json,'main':main,'error':error}
+        functions,constants,_=None,None,None
+        class Handler:
+            def __call__(self,*args):hooks.append('call');raise AssertionError('handler invoked')
+            def __repr__(self):hooks.append('repr');raise AssertionError('handler repr')
+        def observe(function,args):
+            index=len(calls);calls.append([index,len(args)])
+            if case=='reentry' and index==0:assert namespace['first_git_failure_snapshot']()=='GAP'
+            if case=='native-error' and index==0:raise ProcessLookupError(3,'controlled ordinary native-query seam')
+            if case=='cancel' and index==0:cancel(0,None)
+            if index==3:return constants[2] if case=='IGN' else Handler() if case=='OTHER' else None if case=='UNKNOWN' else constants[1]
+            return True if case=='wrong-return' else 17+index
+        namespace['ordinary_observation']=observe
+        exec(compile(helpers,'actual-snapshot-operation-seam','exec'),namespace)
+        functions,constants,provenance=namespace['first_git_builtin_binding'](os,sys,module.signal)
+        frame=None;tb=error.__traceback__
+        while tb is not None:
+            if tb.tb_frame.f_code is module._DarwinChildOwner._foreground.__code__:frame=tb.tb_frame;break
+            tb=tb.tb_next
+        assert frame is not None
+        saved_argv=list(frame.f_locals['argv']);child=frame.f_locals['child'];saved_pid=child.pid;cancelled=frame.f_locals['cancelled'];saved_cancelled=list(cancelled)
+        native_module=sys.modules['_signal'];saved_signal=native_module.getsignal;saved_constant=native_module.SIGCHLD;saved_getpgid=os.getpgid
+        try:
+            if case=='changed-attribute':os.getpgid=os.getuid
+            if case=='changed-constant':native_module.SIGCHLD=99999
+            if case=='public-wrapper':native_module.getsignal=signal.getsignal
+            if case=='wrong-frame':namespace['relation_foreground_code']=namespace['relation_foreground_code'].replace(co_name='_foreground')
+            if case=='wrong-argv':frame.f_locals['argv'][3]='rev-parse'
+            if case=='bad-pid':child.pid=True
+            if case=='cancelled-true':cancelled[:]=[True]
+            if case=='cancelled-gap':cancelled[:]=[1]
+            if case=='non-EPERM':error.errno=13
+            namespace['relation_trace'](error,16)
+            context=BaseException.__dict__['__context__'].__get__(error,BaseException)
+            if case!='missing-context':namespace['relation_trace'](context,8)
+            namespace['relation_seen']=[error,context];namespace['relation_outer_errno']=error.errno
+            if case in ('changed-binding','unavailable'):
+                native=namespace['first_git_builtin_binding']
+                if case=='unavailable':namespace['first_git_builtin_binding']=lambda *args:(_ for _ in ()).throw(KeyError('controlled unavailable binding'))
+                else:
+                    states=[]
+                    def changed(*args):
+                        result=native(*args);states.append(True)
+                        return (result[0][::-1] if len(states)>1 else result[0]),result[1],result[2]
+                    namespace['first_git_builtin_binding']=changed
+            original_json=namespace['json']
+            if case in ('format','cap'):
+                def dump(value,*args,**kwargs):
+                    if type(value) is dict and 'original_identity' in value:
+                        if case=='format':raise ValueError('controlled snapshot-only format failure')
+                        return 'x'*769
+                    return json.dumps(value,*args,**kwargs)
+                namespace['json']=types.SimpleNamespace(dumps=dump)
+            caught=None;result=None
+            try:result=namespace['first_git_failure_snapshot']()
+            except InterruptedError as failure:caught=failure
+            reports.append({'case':case,'calls':calls,'result':result,'cancel_exception':type(caught).__name__ if caught else None,'handler_hooks':hooks,'original_traceback_unchanged':error.__traceback__ is baseline_trace})
+            assert error.__traceback__ is baseline_trace and not hooks
+            zero=case in ('wrong-frame','wrong-argv','bad-pid','cancelled-true','cancelled-gap','non-EPERM','missing-context','unavailable','changed-attribute','changed-constant','public-wrapper')
+            assert len(calls)==(0 if zero else 1 if case=='cancel' else 4)
+            if case=='cancel':assert type(caught) is InterruptedError and caught.args==('scope reader cancelled',)
+            elif zero or case in ('changed-binding','format','cap'):assert result=='GAP'
+            else:
+                assert type(result) is dict and result['facts']['original_identity']=='UNPROVEN'
+                assert result['facts']['python_SIGCHLD_registration']['value']==('IGN' if case=='IGN' else 'OTHER' if case=='OTHER' else 'UNKNOWN' if case=='UNKNOWN' else 'DFL')
+                if case=='native-error':assert result['facts']['later_pgid']=={'value':'GAP','errno':3}
+                if case=='wrong-return':assert result['facts']['later_pgid']=={'value':'GAP'}
+                assert namespace['first_git_failure_snapshot']()=='GAP' and len(calls)==4
+        finally:
+            frame.f_locals['argv'][:]=saved_argv;child.pid=saved_pid;cancelled[:]=saved_cancelled;error.errno=original_errno
+            os.getpgid=saved_getpgid;native_module.getsignal=saved_signal;native_module.SIGCHLD=saved_constant
+    mapping_reports=[];baseline=None
+    for mapping_case in ('baseline-gap','normal','group-format','group-cap','sink','cancel'):
+        sink.write_bytes(b'');calls=[];cancel_errors=[];write_errors=[]
+        def operation(function,args):
+            index=len(calls);calls.append([index,len(args)])
+            if mapping_case=='cancel':
+                try:cancel(0,None)
+                except InterruptedError as failure:cancel_errors.append(failure);raise
+            return constants[1] if index==3 else 17+index
+        def dump(value,*args,**kwargs):
+            if type(value) is dict and 'first_git_failure_snapshot' in value:
+                if mapping_case=='group-format':raise ValueError('controlled optional encoding failure')
+                if mapping_case=='group-cap':return json.dumps(value,*args,**kwargs)+' '*4096
+            return json.dumps(value,*args,**kwargs)
+        environment={'c':module,'os':os,'sys':sys,'json':types.SimpleNamespace(dumps=dump),'main':main,'error':error,'code':'E_RUNTIME','stat':stat,'ordinary_observation':operation}
+        program=ast.parse('if True:\n'+insertion).body[0].body[0]
+        operation_nodes=[node for node in ast.walk(program) if isinstance(node,ast.Assign) and ast.dump(node,include_attributes=False)==expected]
+        assert len(operation_nodes)==1;operation_nodes[0].value=ast.parse('ordinary_observation(function,args)',mode='eval').body
+        if mapping_case=='baseline-gap':
+            methods=[node for node in ast.walk(program) if isinstance(node,ast.FunctionDef) and node.name=='first_git_failure_snapshot']
+            assert len(methods)==1;methods[0].body=[ast.Return(value=ast.Constant(value='GAP'))]
+        ast.fix_missing_locations(program);caught=None;actual_write=os.write
+        def write(fd,raw):
+            if mapping_case=='sink':
+                try:return actual_write(-1,raw)
+                except OSError as failure:write_errors.append(failure.errno);raise
+            return actual_write(fd,raw)
+        try:
+            os.write=write
+            try:exec(compile(ast.Module(body=[program],type_ignores=[]),'actual-full-snapshot-record-operation-seam','exec'),environment)
+            except InterruptedError as failure:caught=failure
+        finally:os.write=actual_write
+        raw=sink.read_bytes();record=json.loads(raw) if raw else None
+        if mapping_case=='baseline-gap':baseline=record;assert not calls
+        elif mapping_case=='cancel':assert caught is cancel_errors[0] and caught.args==('scope reader cancelled',) and len(calls)==1 and not raw
+        else:
+            assert caught is None and len(calls)==4
+            if mapping_case=='sink':assert not raw and write_errors==[9]
+            elif mapping_case in ('group-format','group-cap'):assert record==baseline
+            else:
+                assert type(record.pop('first_git_failure_snapshot')) is dict and record==baseline
+        assert error.__traceback__ is baseline_trace and environment['code']=='E_RUNTIME'
+        mapping_reports.append({'case':mapping_case,'observation_calls':calls,'record':json.loads(raw) if raw else 'GAP','write_errno':write_errors,
+            'cancel_propagated_same_object':mapping_case!='cancel' or caught is cancel_errors[0],'original_exception_traceback_unchanged':True})
+    return completed_evidence({'builtin_snapshot_mapping_controls':mapping_reports,'builtin_snapshot_controls':reports,'adapter':'one actual operation AST seam only; native binding and original real foreground failure frame retained; controlled errors are not OS failure evidence'})
+
 def foreground_state_controls(area):
     import io
     assembler=heredoc('PY_GENUINE_ASSEMBLER');tree=ast.parse(assembler)
@@ -3073,9 +3223,9 @@ def foreground_state_controls(area):
     original=module._DarwinChildOwner._foreground
     print(json.dumps({'foreground_state_preexec':{'reader_copy':copied,'insertion':insertion,'original_foreground_source':ast.get_source_segment((root/'shadow/v1/_consumer.py').read_text(),next(n for n in ast.walk(ast.parse((root/'shadow/v1/_consumer.py').read_text())) if isinstance(n,ast.FunctionDef) and n.name=='_foreground')),'reader_sha256':hashlib.sha256(copied.encode()).hexdigest()}}),flush=True)
     records=[];context_errors=[]
-    for fault in ('cancel','deadline','term','kill','io-term','io-kill','wrong-frame','wrong-command','pseudo','encoding','cap','format','write',
+    for fault in ('cancel','deadline','term','kill','io-term','io-kill','snapshot-term','wrong-frame','wrong-command','pseudo','encoding','cap','format','write',
             'io-partial','io-old-chunk','io-format','io-record-cap'):
-        sink.write_bytes(b'');calls=[];handlers=[];clock_calls=[];pseudo_hooks=[];holder=[];output=io.StringIO();sentinel=PermissionError(13,'fixed ordinary cleanup signal refusal')
+        sink.write_bytes(b'');calls=[];handlers=[];clock_calls=[];pseudo_hooks=[];holder=[];output=io.StringIO();sentinel=PermissionError(1 if fault=='snapshot-term' else 13,'fixed ordinary cleanup signal refusal')
         argv=['/usr/bin/git','--no-replace-objects','--git-dir=/owned/source.git','config','--file','/owned/config','--name-only','--list','--no-includes']
         if fault=='wrong-command':argv[3]='rev-parse'
         if fault=='encoding':argv[5]='/owned/\ud800'
@@ -3114,7 +3264,7 @@ def foreground_state_controls(area):
         def set_handler(number,handler):handlers.append(handler);return signal.SIG_DFL
         def kill(pid,number):
             calls.append(['killpg',pid,int(number)])
-            if (fault in ('term','io-term') and number==signal.SIGTERM) or (fault in ('kill','io-kill') and number==signal.SIGKILL):raise sentinel
+            if (fault in ('term','io-term','snapshot-term') and number==signal.SIGTERM) or (fault in ('kill','io-kill') and number==signal.SIGKILL):raise sentinel
         def popen(arguments,**options):
             assert arguments is argv and options['start_new_session'] and options['close_fds'];calls.append(['Popen',list(arguments)]);return selected
         scope=dict(original.__globals__)
@@ -3138,13 +3288,14 @@ def foreground_state_controls(area):
         def write(*args):
             if fault=='write':raise OSError('fixed foreground sink refusal')
             return actual_write(*args)
-        namespace={'__name__':'__main__','main':main,'c':module,'sys':types.SimpleNamespace(argv=['reader'],stderr=output),'json':types.SimpleNamespace(dumps=formatting),'os':os,'stat':stat}
-        status=None
+        namespace={'__name__':'__main__','main':main,'c':module,'sys':sys if fault=='snapshot-term' else types.SimpleNamespace(argv=['reader'],stderr=output),'json':types.SimpleNamespace(dumps=formatting),'os':os,'stat':stat}
+        status=None;original_sys=(sys.argv,sys.stderr)
+        if fault=='snapshot-term':sys.argv=['reader'];sys.stderr=output
         try:
             os.write=write
             try:exec(compile(tail,'actual-foreground-reader-mapping','exec'),namespace)
             except SystemExit as error:status=error.code
-        finally:os.write=actual_write
+        finally:os.write=actual_write;sys.argv,sys.stderr=original_sys
         before_wait=list(calls);before_hooks=list(pseudo_hooks);returned=actual_wait(timeout=5)
         raw=sink.read_bytes();original_error=holder[0][0] if holder else None
         trace=[];tb=BaseException.__dict__['__traceback__'].__get__(original_error,BaseException) if original_error is not None else None
@@ -3159,13 +3310,13 @@ def foreground_state_controls(area):
         assert len(holder)==1 and before_wait==holder[0][1] and before_hooks==holder[0][2]
         assert status==1 and output.getvalue()=='E_RUNTIME\n'
         error=holder[0][0];waited=any(row[0]=='wait' for row in before_wait)
-        assert waited==(fault not in ('term','kill','io-term','io-kill')) and len([row for row in before_wait if row[0]=='killpg'])==(1 if fault in ('term','io-term') else 2)
-        if fault in ('term','kill','io-term','io-kill'):assert error is sentinel
+        assert waited==(fault not in ('term','kill','io-term','io-kill','snapshot-term')) and len([row for row in before_wait if row[0]=='killpg'])==(1 if fault in ('term','io-term','snapshot-term') else 2)
+        if fault in ('term','kill','io-term','io-kill','snapshot-term'):assert error is sentinel
         else:assert type(error) is module.Refusal and error.code=='E_RUNTIME'
         assert len(raw)<=4096
         if fault in ('format','write'):assert not raw;fact='GAP'
         else:
-            record=json.loads(raw);fact=record['foreground'];assert record['errno']==(13 if fault in ('term','kill','io-term','io-kill') else None)
+            record=json.loads(raw);fact=record['foreground'];assert record['errno']==(1 if fault=='snapshot-term' else 13 if fault in ('term','kill','io-term','io-kill','snapshot-term') else None)
             if fault in ('wrong-frame','wrong-command','encoding','cap'):assert fact=='GAP'
             else:
                 assert fact['argv']==argv and fact['timeout']==30 and fact['end']==30 and fact['cancelled']==(fault=='cancel') and fact['cleanup_signal']=='GAP'
@@ -3178,13 +3329,14 @@ def foreground_state_controls(area):
                         assert fact['io']['last_selected']['channel']==('stdout' if fault=='io-old-chunk' else 'stderr')
                         if fault=='io-partial':assert reads==[fds[0],fds[1]] and ['unregister',True] in before_wait
                 if fault=='pseudo':assert fact['child']=='GAP'
-                else:assert fact['child']=={'pid':child.pid,'returncode':None if fault in ('term','kill','io-term','io-kill') else 0}
+                else:assert fact['child']=={'pid':child.pid,'returncode':None if fault in ('term','kill','io-term','io-kill','snapshot-term') else 0}
         if fault in ('io-term','io-kill'):
             context=BaseException.__dict__['__context__'].__get__(error,BaseException)
             assert type(context) is module.Refusal and context.code=='E_RUNTIME'
             assert ['_foreground',1196] in record['context'][0]['trace']
             assert fact['io']['stderr_bytes']==512 and not waited
             context_errors.append((error,context))
+        if fault=='snapshot-term':snapshot_error=error;assert type(record.get('first_git_failure_snapshot')) is dict
         records.append({'case':fault,'mapped_stderr':output.getvalue(),'status':status,'original_error_type':type(error).__name__,'same_signal_error':error is sentinel,'original_calls':before_wait,'clock_calls':len(clock_calls),'wait_reached':waited,'facts':fact,'real_child_returncode':returned,'all_pipes_closed':True,'None_is_not_liveness':True})
     mapping=ast.parse('if True:\n'+insertion).body[0].body[0].body
     first=next(index for index,node in enumerate(mapping) if isinstance(node,ast.Assign) and any(isinstance(t,ast.Tuple) for t in node.targets))
@@ -3224,6 +3376,7 @@ def foreground_state_controls(area):
             else:assert fact=='GAP'
             assertions.append({'case':fault,'io_attempts':len(attempts),'io':fact,'actual_frame_bound':True})
         finally:frame.f_locals['argv'][:]=saved
+    builtin_snapshot_controls(area,module,snapshot_error)
     return completed_evidence({'foreground_context_controls':assertions,'foreground_state_controls':records,'scope':'original exact foreground code with fixed ordinary transport/selector/clock/signal-error seams; no actual Git/OS-signal cause or real-principal proof'})
 
 def foreground_io_controls():
@@ -8859,6 +9012,79 @@ print(relation_result)
             def relation_name(value):
                 text=type.__dict__['__name__'].__get__(type(value))
                 return text if type(text) is str and len(text)<=80 and text.isascii() and text.isidentifier() else 'GAP'
+            relation_snapshot_cancelled=[False]
+            relation_snapshot_state=[False,None,None,None]
+            def first_git_builtin_binding(os,sys,signal):
+                module_type=type(sys)
+                assert module_type is type(os) and type(signal) is module_type
+                modules=module_type.__dict__['__dict__'].__get__(sys)['modules']
+                assert type(modules) is dict
+                assert modules['sys'] is sys and modules['os'] is os and modules['signal'] is signal
+                system=module_type.__dict__['__dict__'].__get__(sys)
+                loader=module_type.__dict__['__dict__'].__get__(modules['_frozen_importlib'])['BuiltinImporter']
+                builtin_type=type(len)
+                fields=builtin_type.__dict__
+                functions=[];provenance=[]
+                for module_name,names in (('posix',('getpgid','getuid','geteuid')),('_signal',('getsignal',))):
+                    module=modules[module_name]
+                    assert type(module) is module_type and module_name in system['builtin_module_names']
+                    mapping=module_type.__dict__['__dict__'].__get__(module)
+                    assert mapping['__name__']==module_name and mapping['__loader__'] is loader
+                    for name in names:
+                        function=mapping[name]
+                        assert type(function) is builtin_type
+                        assert fields['__self__'].__get__(function) is module
+                        assert fields['__name__'].__get__(function)==name
+                        if module_name=='posix':assert module_type.__dict__['__dict__'].__get__(os)[name] is function
+                        functions.append(function);provenance.append([module_name,name,'native-builtin'])
+                native=module_type.__dict__['__dict__'].__get__(modules['_signal'])
+                constants=tuple(native[name] for name in ('SIGCHLD','SIG_DFL','SIG_IGN'))
+                assert all(type(value) is int for value in constants) and constants[0]>0 and constants[1:]==(0,1)
+                assert module_type.__dict__['__dict__'].__get__(signal)['_signal'] is modules['_signal']
+                public=module_type.__dict__['__dict__'].__get__(signal)
+                assert all(native[name] is int.__int__(public[name]) for name in ('SIGCHLD','SIG_DFL','SIG_IGN'))
+                return tuple(functions),constants,provenance
+            def first_git_failure_snapshot():
+                if relation_snapshot_state[0]:return 'GAP'
+                fact=relation_foreground[1]
+                if (type(error) is not PermissionError or relation_outer_errno!=1 or type(fact) is not dict or
+                        fact['cancelled'] is not False or relation_snapshot_state[1] is not relation_io_binding[0] or
+                        relation_snapshot_state[2] is None or not any(relation_snapshot_state[2] is item for item in relation_seen)):
+                    return 'GAP'
+                child=fact['child']
+                if type(child) is not dict or type(child['pid']) is not int or not 0<child['pid']<=2147483647:return 'GAP'
+                relation_snapshot_state[0]=True
+                cancel_codes=tuple(value for value in main.__code__.co_consts
+                    if type(value) is type(relation_foreground_code) and value.co_name=='cancel')
+                try:
+                    functions,constants,provenance=first_git_builtin_binding(os,sys,c.signal)
+                except (AssertionError,KeyError,AttributeError,TypeError):return 'GAP'
+                def observed(function,args,registration=False):
+                    try:value=function(*args)
+                    except Exception as failure:
+                        tb=BaseException.__dict__['__traceback__'].__get__(failure,BaseException)
+                        for unused in range(16):
+                            if tb is None:break
+                            if any(tb.tb_frame.f_code is code for code in cancel_codes):raise
+                            tb=tb.tb_next
+                        if type(failure) is InterruptedError and len(cancel_codes)!=1:raise
+                        if isinstance(failure,OSError):
+                            number=OSError.__dict__['errno'].__get__(failure,OSError)
+                            return {'value':'UNKNOWN' if registration else 'GAP','errno':number if type(number) is int and -2147483648<=number<=2147483647 else 'GAP'}
+                        return {'value':'GAP'}
+                    if registration:
+                        return {'value':'DFL' if value is constants[1] else 'IGN' if value is constants[2] else 'UNKNOWN' if value is None else 'OTHER'}
+                    return {'value':value} if type(value) is int and 0<=value<=2147483647 else {'value':'GAP'}
+                facts={'original_identity':'UNPROVEN','later_pgid':observed(functions[0],(child['pid'],)),
+                    'current_reader_uid':observed(functions[1],()),'current_reader_euid':observed(functions[2],()),
+                    'python_SIGCHLD_registration':observed(functions[3],(constants[0],),True)}
+                try:
+                    current,now_constants,unused=first_git_builtin_binding(os,sys,c.signal)
+                    if not all(left is right for left,right in zip(current,functions)) or any(left is not right for left,right in zip(now_constants,constants)):return 'GAP'
+                    if len(json.dumps(facts,sort_keys=True,separators=(',',':'),ensure_ascii=True).encode())>768:return 'GAP'
+                    group={'facts':facts,'binding':TOKEN,'runtime_version':list(sys.version_info[:3]),'builtins':provenance}
+                    return group if len(json.dumps(group,sort_keys=True,separators=(',',':'),ensure_ascii=True).encode())<=1024 else 'GAP'
+                except (AssertionError,KeyError,AttributeError,TypeError,ValueError,UnicodeError,RecursionError,OverflowError):return 'GAP'
             relation_foreground=[False,'GAP']
             relation_io_binding=[None,None,False]
             relation_foreground_code=type(c._DarwinChildOwner._foreground).__dict__['__code__'].__get__(c._DarwinChildOwner._foreground)
@@ -8890,12 +9116,16 @@ print(relation_result)
                 rows=[];held='GAP';tb=relation_field(value,'__traceback__')
                 target=type(c._open_held).__dict__['__code__'].__get__(c._open_held)
                 while tb is not None and len(rows)<limit:
+                    if relation_snapshot_state[3] is None:relation_snapshot_state[3]=value
                     fields=type(tb).__dict__;frame=fields['tb_frame'].__get__(tb)
                     frame_fields=type(frame).__dict__;code_object=frame_fields['f_code'].__get__(frame)
                     function=type(code_object).__dict__['co_name'].__get__(code_object)
                     line=fields['tb_lineno'].__get__(tb)
                     valid=type(function) is str and len(function)<=80
                     rows.append([function if valid else 'GAP',line if type(line) is int else 'GAP'])
+                    if code_object is relation_foreground_code and value is relation_snapshot_state[3] and line==1230:relation_snapshot_state[1]=frame
+                    if code_object is relation_foreground_code and frame is relation_io_binding[0] and line==1196 and type(value) is c.Refusal:
+                        if object.__getattribute__(value,'__dict__').get('code')=='E_RUNTIME':relation_snapshot_state[2]=value
                     if code_object is relation_foreground_code and not relation_foreground[0]:
                         relation_foreground[0]=True
                         try:
@@ -8986,6 +9216,15 @@ print(relation_result)
             if len(relation_raw)>4096 and type(relation_foreground[1]) is dict:
                 relation_foreground[1]['io']='GAP'
                 relation_raw=(json.dumps(relation_record,sort_keys=True,separators=(',',':'),ensure_ascii=True)+'\\n').encode()
+            relation_snapshot_cancelled[0]=True
+            relation_snapshot=first_git_failure_snapshot()
+            if type(relation_snapshot) is dict:
+                try:
+                    extended=dict(relation_record);extended['first_git_failure_snapshot']=relation_snapshot
+                    extended_raw=(json.dumps(extended,sort_keys=True,separators=(',',':'),ensure_ascii=True)+'\\n').encode()
+                    if len(extended_raw)<=4096:relation_raw=extended_raw
+                except (TypeError,ValueError,UnicodeError,RecursionError,OverflowError):pass
+            relation_snapshot_cancelled[0]=False
             relation_fd=os.open(SINK,os.O_WRONLY|os.O_APPEND|os.O_NOFOLLOW)
             try:
                 relation_s=os.fstat(relation_fd);relation_n=os.lstat(SINK)
@@ -8993,7 +9232,8 @@ print(relation_result)
                 if relation_id(relation_s)==IDENTITY and relation_id(relation_n)==IDENTITY and len(relation_raw)<=4096 and relation_s.st_size+len(relation_raw)<=8192:
                     if os.write(relation_fd,relation_raw)!=len(relation_raw):raise OSError('relation capture write')
             finally:os.close(relation_fd)
-        except BaseException:pass
+        except BaseException:
+            if relation_snapshot_cancelled[0]:raise
 '''.replace('TOKEN',token).replace('SINK',sink).replace('IDENTITY',identity)
   reader=self.original[1].decode();boundary='        if code not in {"E_USAGE", "E_LIMIT", "E_PARSE", "E_CANONICAL", "E_RELATION", "E_STALE", "E_RUNTIME"}:\n'
   assert reader.count(boundary)==1
