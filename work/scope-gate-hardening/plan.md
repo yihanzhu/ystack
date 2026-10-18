@@ -1124,10 +1124,44 @@ is not coverage. Cover GAP, wrong types, overlong/unsafe encoding, observation a
 sink failure, record/sink caps, wrong source/invocation and exact inverse. Use only
 these ordinary controls; they do not prove the actual Mac query cause or a fix.
 Check exact reverse restoration, actual copy-source authentication, closure before
-restoration, unknown closure with no restoration, and unchanged later calls. Do
-not substitute owned controls for actual genuine refusal evidence. Freeze the
-actual generated copies, insertion bodies and bindings at exact H/B in fresh
-independent source preparation before the original full proof and separate G3.
+restoration, unknown closure with no restoration, and unchanged later calls apart
+from the fixed outer timeout exit below. Do not substitute owned controls for
+actual genuine refusal evidence. Freeze the actual generated copies, insertion
+bodies and bindings at exact H/B in fresh independent source preparation before
+the original full proof and separate G3.
+
+Only the original `outer_scope_raw = run(scope_argv)` call after the withheld
+bundle swap may report its original `TimeoutExpired`. Match the exact stdlib
+exception type and fixed call site. Require cmd to be an exact list of exact
+strings matching that call's normalized scope_argv, and exact integer timeout 180.
+Use only the exception's already-held native fields, without custom getters,
+repr/str or whole locals.
+Keep the first-call capture and general run function unchanged. Report only the
+fixed boundary, bound argv digest, timeout, exact-bytes output/stderr lengths and
+at most 256 stderr bytes as hex with an explicit truncated flag. No stdout
+content. Bound lengths by the original run limit. Missing, None, wrong type,
+overbound or inaccessible fields are GAP with a fixed reason; empty bytes means
+length zero. Neither empty nor GAP identifies the internal cause or child state.
+Emit at most one 1,024-byte encoded record through the existing assembler stderr
+exit, best effort. Add no sink, writer process, source capture, query, clock or
+child access; no communicate/read/poll/wait, evaluator call, retry or permission.
+Keep original
+argv, env, input, timeout, call count, reap, traceback and cleanup unchanged.
+After the optional record, bare rethrow the same original exception. Collection,
+encoding, cap or real stderr-write failure cannot replace it. Share the original
+12,288-byte non-cost allowance and 4,096-byte cost allowance, within 16,384 total;
+all existing records take priority. Unknown or insufficient allowance omits this
+record, never the original traceback or evidence. Normal return adds no output.
+These facts grant no cleanup or restoration permission and prove no timeout fix.
+
+Use the actual extracted fixed call/handler boundary in ordinary controls. Prove
+normal silence, one original call with unchanged arguments/env/input/timeout,
+and exception identity, traceback and original call/reap effects. Cover empty
+bytes versus None, binary stderr at 256 and beyond, wrong type/cmd/call site,
+custom-hook rejection, safe encoding, record caps and a real stderr-write failure.
+Each recording failure must retain the original exception. Keep all old controls,
+raw-size and exact-source preparation gates; ordinary controls do not prove the
+actual Mac cause. This adds no general run logger or new diagnostic invocation.
 
 Retain two cost samples: protected slot 0's original `.github/workflows/ci.yml`
 call and the original terminal `normal` call. Precreate one fixed 4,096-byte-bounded
