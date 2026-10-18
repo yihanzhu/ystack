@@ -2757,6 +2757,134 @@ def stable_sink_controls(area,assembler):
             'refusal':refused,'export_bytes':len(output.getvalue())})
     return reports
 
+OUTER_RUN_SOURCE_SHA='7f3571e66a1da98ccc2a876c426ea77fcddc010cbdb64d76342efde97ce77a64'
+OUTER_CAPTURE_SOURCE_SHA='67be9871491f73021fa2f7f1f640523bc755d47f9fc6c85bfdce31992347f43f'
+def outer_timeout_boundary(assembler):
+    tree=ast.parse(assembler)
+    runs=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='run']
+    captures=[n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='GenuineRelationCapture']
+    assert len(runs)==len(captures)==1,'original-source-count'
+    assert hashlib.sha256(ast.get_source_segment(assembler,runs[0]).encode()).hexdigest()==OUTER_RUN_SOURCE_SHA,'original-run'
+    assert hashlib.sha256(ast.get_source_segment(assembler,captures[0]).encode()).hexdigest()==OUTER_CAPTURE_SOURCE_SHA,'original-capture'
+    starts=[i for i,n in enumerate(tree.body) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='outer_timeout_argv' for t in n.targets)]
+    assert len(starts)==1,'outer-handler-count'
+    index=starts[0];nodes=tree.body[index:index+3]
+    adjacent=ast.parse("archive = base / 'snapshots' / bundle.name\nbundle.rename(archive)\nouter_bundle.rename(base / 'bundles' / outer_bundle.name)\n").body
+    assert [ast.dump(n,include_attributes=False) for n in tree.body[index-3:index]]==[ast.dump(n,include_attributes=False) for n in adjacent],'outer-position'
+    assert len(nodes)==3 and isinstance(nodes[-1],ast.Try) and len(nodes[-1].body)==len(nodes[-1].handlers)==1,'outer-handler-shape'
+    expected=ast.parse('outer_scope_raw = run(scope_argv)').body[0]
+    assert ast.dump(nodes[-1].body[0],include_attributes=False)==ast.dump(expected,include_attributes=False),'outer-call'
+    assignments=[n for n in ast.walk(tree) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='outer_scope_raw' for t in n.targets)]
+    assert len(assignments)==1,'outer-call-count'
+    handler=nodes[-1].handlers[0]
+    assert ast.dump(handler.type,include_attributes=False)==ast.dump(ast.parse('subprocess.TimeoutExpired',mode='eval').body,include_attributes=False) and handler.name=='outer_timeout','outer-type'
+    assert isinstance(handler.body[-1],ast.Raise) and handler.body[-1].exc is None,'outer-bare-raise'
+    first=ast.parse('relation_capture=GenuineRelationCapture(scope_argv)\nscope_raw = run(scope_argv)\nassert relation_capture.restored\nrelation_capture=None\n').body
+    beginnings=[i for i in range(len(tree.body)-3) if [ast.dump(n,include_attributes=False) for n in tree.body[i:i+4]]==[ast.dump(n,include_attributes=False) for n in first]]
+    assert len(beginnings)==1 and beginnings[0]+4<index,'restored-admission'
+    writes=[n for n in ast.walk(tree) if isinstance(n,ast.Call) and ast.dump(n.func,include_attributes=False)==ast.dump(ast.parse('sys.stderr.buffer.write',mode='eval').body,include_attributes=False)]
+    assert len(writes)==2 and sum(n in list(ast.walk(captures[0])) for n in writes)==1 and sum(n in list(ast.walk(handler)) for n in writes)==1,'stderr-exits'
+    return ast.Module(body=nodes,type_ignores=[]),runs[0],{'prior_failure_export_records':0,'optional_record_cap':1024,'reserved_cost_cap':4096,'explicit_record_total_max':5120,'failure_total_cap':16384,'original_traceback_preserved':True}
+
+def outer_timeout_controls(area):
+    import io
+    assembler=heredoc('PY_GENUINE_ASSEMBLER')
+    boundary,original,allowance=outer_timeout_boundary(assembler)
+    reports=[];hooks=[];actual_canonical=capture_canonical(assembler)
+    class Hostile:
+        def __getattribute__(self,key):hooks.append(key);raise AssertionError('custom timeout getter')
+        def __str__(self):hooks.append('str');raise AssertionError('custom timeout str')
+    class Wrong(subprocess.TimeoutExpired):
+        def __getattribute__(self,key):hooks.append(key);raise AssertionError('subclass timeout getter')
+    negative_sources=(('wrong-call',assembler.replace('outer_scope_raw = run(scope_argv)','outer_scope_raw = other(scope_argv)',1),'outer-call'),
+        ('wrong-position',assembler.replace('outer_timeout_argv=None','pass\nouter_timeout_argv=None',1),'outer-position'),
+        ('unproven-restoration',assembler.replace('assert relation_capture.restored','pass',1),'restored-admission'))
+    for case,source,expected in negative_sources:
+        try:outer_timeout_boundary(source)
+        except AssertionError as error:assert error.args==(expected,)
+        else:raise AssertionError('invalid outer source admitted')
+        reports.append({'case':case,'inert_source_refusal':expected,'calls':0,'write_attempts':0})
+    for case in ('normal','empty','none','binary256','binary257','missing','field-type','overbound','wrong-cmd','wrong-timeout','wrong-type','custom-cmd','encoding','format','cap','write','capture-active'):
+        package=area/'fixed-package';argv=['/bin/bash','-p',package/'scope/v1/evaluate-scope.sh','evaluate']
+        if case=='encoding':argv[2]='\ud800'
+        command=[str(v) for v in argv];calls=[];effects=[];writes=[];write_errors=[];retained=[];normal_stdout=[];out=io.BytesIO();token='same-owned-call-'+case
+        fault=Wrong(command,180) if case=='wrong-type' else subprocess.TimeoutExpired(command,180,output=b'',stderr=b'')
+        if case=='none':fault.output=fault.stderr=None
+        if case in ('binary256','binary257'):fault.output=b'fixed stdout';fault.stderr=bytes(range(256))+(b'x' if case=='binary257' else b'')
+        if case=='missing':del fault.output
+        if case=='field-type':fault.output=fault.stderr=Hostile()
+        if case=='overbound':fault.output=fault.stderr=b'x'*(16*1024*1024+1)
+        if case=='wrong-cmd':fault.cmd=['/wrong']
+        if case=='custom-cmd':fault.cmd=[Hostile()]
+        if case=='wrong-timeout':fault.timeout=180.0
+        def child(arguments,**options):
+            calls.append((arguments,dict(options)))
+            effects.extend([('call',token),('wait',token),('reap',token)])
+            if case=='normal':return subprocess.CompletedProcess(arguments,0,b'normal',b'')
+            try:raise fault
+            except BaseException as observed:
+                tb=BaseException.__dict__['__traceback__'].__get__(observed,BaseException);suffix=[]
+                while tb is not None:
+                    suffix.append((tb,tb.tb_frame,tb.tb_frame.f_code,tb.tb_lasti,tb.tb_lineno));tb=tb.tb_next
+                retained.append((observed,suffix,list(effects)))
+                raise
+        def encode(value):
+            if type(value) is dict and value.get('boundary')=='outer-withheld-timeout':
+                if case=='format':raise ValueError('fixed timeout format')
+                if case=='cap':return b'x'*1025
+            return actual_canonical(value)
+        closed=(area/'timeout-closed').open('wb');closed.close()
+        class Outlet:
+            def write(self,data):
+                writes.append(data)
+                try:return closed.write(data) if case=='write' else out.write(data)
+                except BaseException as error:write_errors.append(type(error).__name__);raise
+        environment={'owned':'fixed'}
+        capture=types.SimpleNamespace(before_call=lambda:effects.append(('capture-before',token))) if case=='capture-active' else None
+        context={'scope_argv':argv,'relation_capture':capture,'env':environment,'package':package,
+            'subprocess':types.SimpleNamespace(TimeoutExpired=subprocess.TimeoutExpired,run=child,PIPE=subprocess.PIPE),
+            'json':json,'sha':lambda raw:hashlib.sha256(raw).hexdigest(),'canonical':encode,'pathlib':__import__('pathlib'),
+            'sys':types.SimpleNamespace(stderr=types.SimpleNamespace(buffer=Outlet())),
+            'print':lambda value,**options:normal_stdout.append(value)}
+        exec(compile(ast.Module(body=[original],type_ignores=[]),'actual-original-run','exec'),context)
+        error=None;trace=[]
+        try:exec(compile(boundary,'actual-fixed-outer-call','exec'),context)
+        except BaseException as observed:
+            error=observed;tb=BaseException.__dict__['__traceback__'].__get__(observed,BaseException)
+            while tb is not None:
+                trace.append((tb,tb.tb_frame,tb.tb_frame.f_code,tb.tb_lasti,tb.tb_lineno));tb=tb.tb_next
+        raw=out.getvalue()
+        print(json.dumps({'outer_timeout_case_actual':case,'argv':calls[0][0] if calls else [],'effects':effects,'write_attempts_hex':[v.hex() for v in writes],
+            'same_exception':error is fault,'stderr_hex':raw.hex(),'write_errors':write_errors,'original_stdout':normal_stdout},sort_keys=True),flush=True)
+        assert len(calls)==1 and calls[0][0]==command and set(calls[0][1])=={'input','stdout','stderr','env','timeout'}
+        options=calls[0][1];assert options['env'] is environment and options['input'] is None and options['timeout']==180 and options['stdout']==options['stderr']==subprocess.PIPE
+        expected_effects=([('capture-before',token)] if capture is not None else [])+[('call',token),('wait',token),('reap',token)]
+        assert effects==expected_effects and len(raw)<=1024 and not hooks
+        if case=='normal':
+            assert error is None and not retained and context['outer_scope_raw']==b'normal' and not writes
+            assert [json.loads(v) for v in normal_stdout]==[{'fixture_command':command,'returncode':0,'stdout_sha256':hashlib.sha256(b'normal').hexdigest(),'stderr':''},{'actual_scope_stdout_utf8':'normal'}]
+        else:
+            assert error is fault and len(retained)==1 and retained[0][0] is error and retained[0][2]==expected_effects and not normal_stdout
+            suffix=retained[0][1];assert len(trace)>=len(suffix) and any(v[2] is context['run'].__code__ for v in trace)
+            assert all(a[0] is b[0] and a[1] is b[1] and a[2] is b[2] and a[3:]==b[3:] for a,b in zip(trace[-len(suffix):],suffix))
+        if case in ('wrong-cmd','wrong-timeout','wrong-type','custom-cmd','encoding','format','cap','write','capture-active'):assert not raw
+        elif case!='normal':
+            value=json.loads(raw);assert set(value)=={'boundary','argv_sha256','timeout','output','stderr'} and value['boundary']=='outer-withheld-timeout' and value['timeout']==180
+            assert value['argv_sha256']==hashlib.sha256(actual_canonical(command)).hexdigest()
+            if case in ('empty','missing'):assert value['stderr']=={'bytes':0,'prefix_hex':'','truncated':False}
+            if case=='empty':assert value['output']=={'bytes':0}
+            if case=='missing':assert value['output']=={'state':'GAP','reason':'missing'}
+            if case in ('none','field-type','overbound'):
+                reason={'none':'none','field-type':'type','overbound':'overbound'}[case]
+                assert value['output']==value['stderr']=={'state':'GAP','reason':reason}
+            if case in ('binary256','binary257'):
+                assert value['output']=={'bytes':len(b'fixed stdout')} and value['stderr']=={'bytes':256+(case=='binary257'),'prefix_hex':bytes(range(256)).hex(),'truncated':case=='binary257'}
+        if case=='write':assert len(writes)==1 and write_errors==['ValueError']
+        reports.append({'case':case,'same_exception':error is fault,'original_traceback_suffix_identity':case=='normal' or bool(retained),
+            'effects':effects,'effect_scope':'fixed same-call wait/reap model, not kernel lifecycle proof','calls':1,'write_attempts':len(writes),
+            'write_errors':write_errors,'facts':json.loads(raw) if raw else 'GAP'})
+    return completed_evidence({'outer_timeout_controls':reports,'fixed_source_allowance':allowance,'custom_hooks':hooks})
+
 def foreground_state_controls(area):
     import io
     assembler=heredoc('PY_GENUINE_ASSEMBLER');tree=ast.parse(assembler)
@@ -3904,6 +4032,8 @@ def short_stage_controls(guard,channel,area,clock_name):
     shell=shell.replace('/usr/bin/sudo -n "$genuine_python"','"$genuine_python"')
     cleanup_source=source[source.index("scope_fixture_signal=''\n"):source.index('\nplatform=',source.index("scope_fixture_signal=''\n"))]
     owned_channel=channel.replace('fixture.st_uid==0','fixture.st_uid=='+str(os.getuid())).replace('info.st_uid==0','info.st_uid=='+str(os.getuid()))
+    shared_channel_source=owned_channel
+    shared_channel_reference=completed_evidence({'ordinary_shared_channel':{'channel':shared_channel_source}})
     location=area/'whole-driver-stages';location.mkdir();snapshots=location/'preexec';snapshots.mkdir();reports=[];plans=[]
     for fault in ('short','early-eof','normal-prep-failure'):
         work=location/fault;work.mkdir();base=work/'base';base.mkdir();package=base/'package';(package/'shadow/v1').mkdir(parents=True)
@@ -3987,7 +4117,8 @@ finally:
         if serial=='2':assert command.index('scope_owner_serial=0\n')<command.index('scope_owner_serial=1\n')<command.index(call)
         for name,raw in [('driver.py',setup),('channel.py',owned_channel),('boundary.sh',command)]:
             (snapshots/(fault+'.'+name)).write_text(raw)
-        print(json.dumps({'whole_stage_preexec':fault,'clock_binding':clock_binding,'trusted_interpreter':trusted_binding,'expected_driver_argv':expected_argv,'expected_serial':serial,'driver':setup,'channel':owned_channel,'bash':command,'adapter':'fixed current-UID, trusted Python, sudo transport, and two owned-copy stop stimulus; actual production driver otherwise intact','driver_sha256':hashlib.sha256(setup.encode()).hexdigest()}),flush=True)
+        assert owned_channel==shared_channel_source
+        print(json.dumps({'whole_stage_preexec':fault,'clock_binding':clock_binding,'trusted_interpreter':trusted_binding,'expected_driver_argv':expected_argv,'expected_serial':serial,'driver':setup,'channel':shared_channel_reference,'bash':command,'adapter':'fixed current-UID, trusted Python, sudo transport, and two owned-copy stop stimulus; actual production driver otherwise intact','driver_sha256':hashlib.sha256(setup.encode()).hexdigest()}),flush=True)
         compile(owned_channel,'actual-whole-channel-prelaunch','exec')
         syntax=subprocess.run(['/bin/bash','-n','-c',command],capture_output=True,timeout=5)
         assert syntax.returncode==0 and not syntax.stderr
@@ -4014,7 +4145,7 @@ finally:
                 value=json.loads((work/'scope-owner-1.receipt').read_bytes());assert value['quiescent'] and value['cancelled'] and value['cases']==[]
             else:assert len(graph['copies'])==2 and b'fixed normal preparation stop' in result.stderr and not (work/'scope-owner-2.receipt').exists()
         reports.append({'case':fault,'actual_reference':completed_evidence({'whole_stage_graph':graph}),'candidate_cleanup_allowed':fault=='short','normal_Darwin_controls_executed':False,'no_unknown_actual_child':True})
-    return completed_evidence({'short_stage_controls':reports,'normal_copy_data_only':True,'full_normal_Darwin_proof_pending':True})
+    return completed_evidence({'short_stage_controls':reports,'normal_copy_data_only':True,'full_normal_Darwin_proof_pending':True}),shared_channel_source,shared_channel_reference
 
 
 def wrapper_cancel_controls(wrapper,guard,area):
@@ -4325,10 +4456,12 @@ try:
     reports.append(probe_capture_controls(area))
     reports.append(link_mode_controls(area))
     reports.append(original_context_controls(area))
+    reports.append(outer_timeout_controls(area))
     reports.append(foreground_state_controls(area))
     reports.append(foreground_io_controls())
     reports.append(wrapper_cancel_controls(wrapper,guard,area))
-    reports.append(short_stage_controls(guard,channel,area,clock_name))
+    stage_report,shared_channel_source,shared_channel_reference=short_stage_controls(guard,channel,area,clock_name)
+    reports.append(stage_report)
     helper=area/'outside.py';helper.write_text('allowed=True\ndef rule(fd,value,ancestor):\n return allowed\n')
     reader=package/'scope/v1/reader.py'
     reader.write_text('''import importlib.util,os,sys
@@ -4491,13 +4624,18 @@ finally:
     mac_code=mac_code.replace(foreground_line,foreground_line+"\nname=sys.argv[2];before=identity(os.lstat(name))\nwith open(name,'ab') as target:target.write(b'changed')\nassert uptime() < deadline and identity(os.lstat(name)) == before")
     mac_subject.write_text(mac_code)
     mac_records=[];mac_references=[];frozen_cases=[]
+    paired_wrapper_source=None;paired_wrapper_reference=None
     for version,wrapper_raw,subject_raw in counted_wrapper_cases(wrapper,old_wrapper,mac_code,consumer,clock_name):
-        if version=='new':reports.append(primitive_witness_controls(wrapper_raw.decode()))
+        if version=='new':
+            paired_wrapper_source=wrapper_raw.decode()
+            paired_wrapper_reference=completed_evidence({'same_event_wrapper_source':{'source':paired_wrapper_source}})
+            reports.append(primitive_witness_controls(wrapper_raw.decode()))
+        if version in ('new','wrong-code-same-name'):assert wrapper_raw.decode()==paired_wrapper_source
         snapshot=area/('mac-wrapper-'+version+'.py');snapshot.write_bytes(wrapper_raw)
         subject_snapshot=area/('mac-subject-'+version+'.py');subject_snapshot.write_bytes(subject_raw)
         assert snapshot.read_bytes()==wrapper_raw and subject_snapshot.read_bytes()==subject_raw
         frozen_cases.append((version,snapshot,subject_snapshot,hashlib.sha256(wrapper_raw).hexdigest(),hashlib.sha256(subject_raw).hexdigest()))
-        print(json.dumps({'preexec_wrapper':str(snapshot),'sha256':hashlib.sha256(wrapper_raw).hexdigest(),'source':wrapper_raw.decode(),'shared_import':'try:import weakref as bound_weakref\nexcept ImportError:bound_weakref=None\n','subject':subject_raw.decode(),'subject_sha256':hashlib.sha256(subject_raw).hexdigest(),'consumer_sha256':hashlib.sha256(consumer).hexdigest()}),flush=True)
+        print(json.dumps({'preexec_wrapper':str(snapshot),'sha256':hashlib.sha256(wrapper_raw).hexdigest(),'source':paired_wrapper_reference if version in ('new','wrong-code-same-name') else wrapper_raw.decode(),'shared_import':'try:import weakref as bound_weakref\nexcept ImportError:bound_weakref=None\n','subject':subject_raw.decode(),'subject_sha256':hashlib.sha256(subject_raw).hexdigest(),'consumer_sha256':hashlib.sha256(consumer).hexdigest()}),flush=True)
     for version,snapshot,subject_snapshot,wrapper_sha,subject_sha in frozen_cases:
         wrapper_raw=snapshot.read_bytes();subject_raw=subject_snapshot.read_bytes()
         assert hashlib.sha256(wrapper_raw).hexdigest()==wrapper_sha and hashlib.sha256(subject_raw).hexdigest()==subject_sha
@@ -4541,7 +4679,8 @@ finally:
     print(json.dumps({'complete_count_value_references':reports}),flush=True)
     reports.append(completed_evidence({'ready_publication_controls':ready_publication_controls(guard,channel,area)}))
     shared_parts={'wrapper':wrapper.replace('CLOCK_UPTIME_RAW',clock_name),'channel':channel_owned}
-    shared_reference=completed_evidence({'owner_case_shared_source':shared_parts})
+    assert channel_owned==shared_channel_source
+    shared_reference=completed_evidence({'owner_case_shared_source':{'wrapper':shared_parts['wrapper'],'channel':shared_channel_reference}})
     for fault in ('ordinary-started-no-marker','ordinary-pending','never-started','starting','normal','cancel','alarm','eof-before-launch','actual-deadline','missing-confirmation','wrong-confirmation','reported-wait-error','reported-close-error','wait-interrupted','writer-close-error','terminal-nonzero','mask077-normal','mask022-normal','mask077-cancel','mask022-cancel','mode0400','mode0644','fchmod-error','mask022-fchmod-error','inner-wait-error','inner-close-error'):
         work=area/fault;work.mkdir();base=work/'base';base.mkdir();(base/'package/shadow/v1').mkdir(parents=True);(base/'package/shadow/v1/_consumer.py').write_bytes(consumer);script=work/'runtime-guard-controls.py';ch=work/'channel.py';ch.write_text(channel_owned)
         fixture=base/('runtime-guard-cancel-proof' if fault in ('cancel','alarm','mask077-cancel','mask022-cancel') else 'runtime-guard');fixture.mkdir()
@@ -9261,7 +9400,36 @@ put(doc_root / 'shadow-set.json', {'schema_version':1,'kind':'shadow_evidence_se
 archive = base / 'snapshots' / bundle.name
 bundle.rename(archive)
 outer_bundle.rename(base / 'bundles' / outer_bundle.name)
-outer_scope_raw = run(scope_argv)
+outer_timeout_argv=None
+try:
+    if type(scope_argv) is list and all(type(item) is str or type(item) is pathlib.PosixPath for item in scope_argv):
+        outer_timeout_argv=[str(item) for item in scope_argv]
+except BaseException:pass
+try:
+    outer_scope_raw = run(scope_argv)
+except subprocess.TimeoutExpired as outer_timeout:
+    try:
+        if type(outer_timeout) is not subprocess.TimeoutExpired or relation_capture is not None:raise ValueError('outer timeout binding')
+        native=BaseException.__dict__['__dict__'].__get__(outer_timeout,BaseException)
+        cmd=native['cmd'];timeout=native['timeout']
+        if (type(native) is not dict or type(cmd) is not list or not all(type(item) is str for item in cmd) or
+                outer_timeout_argv is None or cmd!=outer_timeout_argv or type(timeout) is not int or timeout!=180):
+            raise ValueError('outer timeout command')
+        facts={'boundary':'outer-withheld-timeout','argv_sha256':sha(canonical(outer_timeout_argv)),'timeout':timeout}
+        for name in ('output','stderr'):
+            try:value=native[name]
+            except KeyError:
+                facts[name]={'state':'GAP','reason':'missing'};continue
+            if value is None:facts[name]={'state':'GAP','reason':'none'}
+            elif type(value) is not bytes:facts[name]={'state':'GAP','reason':'type'}
+            elif len(value)>16*1024*1024:facts[name]={'state':'GAP','reason':'overbound'}
+            else:
+                facts[name]={'bytes':len(value)}
+                if name=='stderr':facts[name].update(prefix_hex=value[:256].hex(),truncated=len(value)>256)
+        encoded=canonical(facts)+b'\n'
+        if len(encoded)<=1024:sys.stderr.buffer.write(encoded)
+    except BaseException:pass
+    raise
 put(base / 'genuine-write-scope-evaluation.json', outer_scope_raw)
 outer_facts = json.loads(outer_scope_raw)['body']['evidence']['shadow_bundle_facts']
 assert len(outer_facts)==1 and outer_facts[0]['eligible'] is True
