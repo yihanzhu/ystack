@@ -9,7 +9,7 @@ Tracks #541. Risk is high. This is the nonterminal child-6 core. It authenticate
 the existing child-5 evidence at one exact revision. Issue #544 remains mandatory
 before child 6 completes or child 7 starts.
 
-Implementation PR: `review_size: accepted-exception`, 2,600–10,200 net changed
+Implementation PR: `review_size: accepted-exception`, 2,600–10,600 net changed
 lines. The private evidence reader, held-path and Git checks, closed evaluator
 relations, and a real two-principal origin fixture form one security boundary.
 Most of the range is proof: complete classification, bundle, Git, terminal and
@@ -1129,16 +1129,41 @@ not substitute owned controls for actual genuine refusal evidence. Freeze the
 actual generated copies, insertion bodies and bindings at exact H/B in fresh
 independent source preparation before the original full proof and separate G3.
 
-Retain cost samples only for protected slot 0's original `.github/workflows/ci.yml`
+Retain two cost samples: protected slot 0's original `.github/workflows/ci.yml`
 call and the original terminal `normal` call. Precreate one fixed 4,096-byte-bounded
 data leaf and one one-byte eligibility leaf outside all evaluated/held trees.
-There are at most three records, each at most 1,024 encoded bytes: the two private
-frontends and slot 0's observer. Include fixed case, current source/copy/argv
+There are at most three stored sample records, each at most 1,024 encoded bytes:
+the two private frontends and slot 0's observer. Include fixed case, current source/copy/argv
 bindings, phase facts and GAP; no header, path list, environment dump or per-call
 leaf. Use the existing private sink identity boundary before held acquisition;
 add no safety-object or source/package query. Other slots, argv and calls stay
 unchanged. Keep these two success samples only until the original fixture ends;
 they are not success evidence or qualification output.
+
+The same bounded parent Bash may retain one optional ALRM stage record in memory.
+Record its entry SECONDS without resetting it or moving the original alarm. Use
+only fixed enum points at initial runtime authentication entry/return, ordinary
+controls complete, ok35, terminal complete, genuine setup entry, its runtime
+authentication return, identity preparation complete and path preparation entry.
+Each point has only its integer SECONDS or GAP. In path preparation, retain only
+the last of the original libexec mkdir/identity and base mkdir/identity operations:
+fixed operation enum, entered/returned, integer SECONDS and original return status
+only after the command actually returned. Preserve original creation flags,
+identity assignments, argv, order, errexit and failure handling; an if/OR-list
+wrapper must not change them. Missing returned means no recorded return, not a
+claim that a child is alive or that a command did not execute. Retain no dynamic
+path, argv, environment or object data. Add no query, clock process or collector.
+At entry to the original ALRM trap, freeze these values and trap-entry SECONDS
+once, before cancellation or cleanup. Cleanup cannot overwrite the frozen facts.
+Pass only that snapshot to the same existing cost-export call. Safely encode at
+most one optional record of at most 1,024 bytes including its newline; add no leaf
+or writer. Export it only with the three complete original samples, under all
+existing eligibility, binding, writer-closure and saved 142/ALRM gates below.
+The combined cost output still fits 4,096 bytes and the unused failure allowance.
+Missing or invalid stage facts are GAP. Invalid encoding or insufficient space
+omits only the optional record; it must not discard or shorten the original three
+samples, change the first failure, or grant cleanup/restoration permission.
+Unqualified, early-failure, normal-exit and other-failure paths gain no output.
 
 Each selected private frontend reads Bash SECONDS at exactly five boundaries:
 copy entry, before the original reader launch, after its real normal wait, and
@@ -1180,7 +1205,15 @@ or restoration.
 
 Use real owned extracted boundaries to cover both cleanup paths exactly once,
 nonzero wait, missing phases, exception/unwind, actual phase order, source/case
-binding, wrong eligibility, incomplete writers and byte caps. Show that early I1
+binding, wrong eligibility, incomplete writers and byte caps. For the stage record,
+exercise the actual extracted Bash/trap/export boundaries with a real ALRM: freeze
+ordered points and entered/returned status once before cleanup changes state.
+Cover a command with no recorded return, a real zero/nonzero return, fixed enums,
+wrong types, missing values, encoding and byte-cap failures. Prove unchanged
+command argv/order, errexit/failure behavior, original status/signal and all export
+and cleanup gates. No eligibility or normal exit means no stage output; optional
+overflow cannot lose the original samples. Unknown state grants no deletion.
+Keep every original control. Show that early I1
 and terminal failures cannot qualify, and that a real ordinary ALRM handled after
 terminal completion exports once before deletion without changing status or
 cleanup gates. Keep that normal-cleanup control. Also run the actual original
