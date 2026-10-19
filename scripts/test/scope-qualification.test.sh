@@ -924,7 +924,7 @@ PY_MAC_TRANSITION
 python3 -I -S -B - "$root" "$tmp/stale-observation" <<'PY_STALE_PREPARE'
 import difflib,hashlib,json,pathlib,shlex
 root=pathlib.Path(__import__('sys').argv[1]);area=pathlib.Path(__import__('sys').argv[2])
-expected={'scope/v1/evaluate-scope.sh': 'f120e877973aa0b66d7ce3de2f6b9cc46b6a9b073e89c606fd99fd23fc84356a', 'scope/v1/read-shadow-evidence.py': 'ef89c5b775a397dc4d1c2b25d961b2872436bc9c105a1984f10524e2a64c2614', 'shadow/v1/_consumer.py': '6634f9df4ea9a1e02cd6212d58a82379dd5148780672700792f8248f76ea6f9b'}
+expected={'scope/v1/evaluate-scope.sh': 'f120e877973aa0b66d7ce3de2f6b9cc46b6a9b073e89c606fd99fd23fc84356a', 'scope/v1/read-shadow-evidence.py': 'ef89c5b775a397dc4d1c2b25d961b2872436bc9c105a1984f10524e2a64c2614', 'shadow/v1/_consumer.py': 'd35cb669a1521fb007c7814c49ca05054ef13d973067de8d0719073525971597'}
 for path,digest in expected.items():
     assert hashlib.sha256((root/path).read_bytes()).hexdigest()==digest
 observer_source = r"""import hashlib,json,os,runpy,stat,sys,time,types
@@ -2432,7 +2432,7 @@ old=old.replace("return (frame.f_code.co_filename in source_codes and\n         
 assert hashlib.sha256(old.encode()).hexdigest()=='0c2b1c8c8cb9c662c55e17e134f408693ab4ead8f27357ad6cb2b7bcc0b820eb'
 root=Path(sys.argv[2]).resolve()
 consumer=(root/'shadow/v1/_consumer.py').read_bytes()
-assert hashlib.sha256(consumer).hexdigest()=='6634f9df4ea9a1e02cd6212d58a82379dd5148780672700792f8248f76ea6f9b'
+assert hashlib.sha256(consumer).hexdigest()=='d35cb669a1521fb007c7814c49ca05054ef13d973067de8d0719073525971597'
 old_wrapper=wrapper.replace("try:\n    for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):\n        signal.signal(number, cancel)\n    signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})\n    sys.settrace(dispatch)\n    exec(compiled_code, {'__name__': '__main__'})\n","for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):\n    signal.signal(number, cancel)\nsignal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})\nsys.settrace(dispatch)\ntry:\n    exec(compiled_code, {'__name__': '__main__'})\n",1)
 old_wrapper=old_wrapper.replace('import dis, json, os, signal, sys, time, types','import json, os, signal, sys, time',1)
 old_wrapper=old_wrapper.replace('    bound_cache.clear()\n','')
@@ -3007,7 +3007,7 @@ def stable_sink_controls(area,assembler):
     return reports
 
 OUTER_RUN_SOURCE_SHA='7f3571e66a1da98ccc2a876c426ea77fcddc010cbdb64d76342efde97ce77a64'
-OUTER_CAPTURE_SOURCE_SHA='18f67bbac0adc83021a77bf402cabca0353f446011adb4f1fcc95fce20ad47aa'
+OUTER_CAPTURE_SOURCE_SHA='2de9ba7708d90326fa5dfa1104b33ace0033d909cef1ad873e2ed08851e8c4d2'
 def outer_timeout_boundary(assembler):
     tree=ast.parse(assembler)
     runs=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='run']
@@ -3526,7 +3526,7 @@ def select_counter_controls(area,module,error,observed_namespace,direct_error,di
     setup=eval(compile(ast.Expression(expression),'actual-selector-setup-expression','eval'),{'selector_source':source,'selector_path':path,'native_origin':origin,'selector_source_sha':source_sha,'native_sha':native_sha,'abc_source':abc_source,'abc_path':abc_path})
     setup_tree=ast.parse(setup);native_proof=[];reports=[];hooks=[]
     binding_reports=[]
-    for binding_case in ('original','metaclass','bases','method','native-global','backend'):
+    for binding_case in ('original','metaclass','bases','method','native-global','backend','loader','spec','module','carrier','digest'):
         binding_namespace={'c':module,'sys':sys,'json':json}
         exec(compile(setup,'actual-select-binding-control','exec'),binding_namespace)
         fields=vars(module.selectors);original_class=fields['DefaultSelector'];native=fields['select'];saved=[];binding_hooks=[]
@@ -3545,6 +3545,16 @@ def select_counter_controls(area,module,error,observed_namespace,direct_error,di
             if original_class is fields.get('KqueueSelector'):replace(vars(native),'kqueue',object)
             else:
                 original_backend=original_class._selector_cls;original_class._selector_cls=object
+        if binding_case=='loader':replace(vars(native),'__loader__',object())
+        if binding_case=='spec':replace(vars(native),'__spec__',types.SimpleNamespace(origin='unknown',loader=object()))
+        if binding_case=='module':replace(fields,'select',types.ModuleType('select'))
+        if binding_case=='carrier':
+            source=ast.parse(setup)
+            binding=next(node for node in source.body if isinstance(node,ast.FunctionDef) and node.name=='_scope_select_binding')
+            check=next(node for node in ast.walk(binding) if isinstance(node,ast.Assert) and isinstance(node.test,ast.BoolOp) and any(isinstance(item,ast.Name) and item.id=='actual_path' for item in ast.walk(node)))
+            check.test.values[0].comparators[0]=ast.Constant('/owned/wrong-carrier');ast.fix_missing_locations(source)
+            exec(compile(source,'actual-wrong-carrier-binding','exec'),binding_namespace)
+        if binding_case=='digest':binding_namespace['_scope_select_native_sha']='0'*64
         binding_error=None;binding_result=None
         try:binding_result=binding_namespace['_scope_select_binding']()
         except BaseException as failure:binding_error=failure
@@ -3651,7 +3661,9 @@ def select_counter_controls(area,module,error,observed_namespace,direct_error,di
                     object.__setattr__(self,'attempts',self.attempts+1);raise TypeError('fixed install failure')
                 object.__setattr__(self,name,value)
         facade=module.selectors if case=='native-empty' else InstallFacade() if case=='restore-install' else types.SimpleNamespace(DefaultSelector=ScriptedSelector)
-        control=types.SimpleNamespace(_DarwinChildOwner=ControlOwner,selectors=facade)
+        control=types.SimpleNamespace(**vars(module))
+        control._DarwinChildOwner=ControlOwner
+        control.selectors=facade
         namespace={'c':control,'sys':sys,'json':json};exec(compile(setup,'actual-select-setup','exec'),namespace)
         if case!='native-empty':
             methods={name:getattr(ScriptedSelector,name) for name in ('__init__','register','get_map','unregister','close','select')}
@@ -3708,7 +3720,7 @@ def select_counter_controls(area,module,error,observed_namespace,direct_error,di
     assert frame is not None and frame.f_code is module._DarwinChildOwner._foreground.__code__ and frame.f_locals['argv'] is state['argv']
     assert type(frame.f_locals['selector']) is state['selector_class'] and state['selector'] is None
     assert state['counts']=={'entered':0,'returned':0,'raised':0,'nonempty':0,'events_total':0,'last_length':'GAP'}
-    original_selector=state['selector'];original_pid=frame.f_locals['child'].pid;original_cancelled=list(frame.f_locals['cancelled']);original_errno=error.errno
+    original_selector=state['selector'];original_pid=frame.f_locals['child'].pid;original_cancelled=list(frame.f_locals['cancelled']);original_errno=error.__cause__.errno
     mappings=[];baseline_trace=error.__traceback__;baseline_context=error.__context__;baseline_cause=error.__cause__;baseline_record=None
     reader=(root/'scope/v1/read-shadow-evidence.py').read_text();boundary='        if code not in {"E_USAGE", "E_LIMIT", "E_PARSE", "E_CANONICAL", "E_RELATION", "E_STALE", "E_RUNTIME"}:\n'
     assert reader.count(boundary)==1
@@ -3726,7 +3738,7 @@ def select_counter_controls(area,module,error,observed_namespace,direct_error,di
         original_selector=state['selector'];original_pid=frame.f_locals['child'].pid;original_cancelled=list(frame.f_locals['cancelled'])
         original_code=error.code if type(error) is module.Refusal else None;original_used=state['used'];original_state_argv=state['argv']
         if case=='sink':state['process_snapshot']={'pid':original_pid,'ppid':1,'pgid':original_pid,'uid':os.getuid(),'state':2,'comm_hex':'00'*16}
-        original_errno=error.errno if type(error) is PermissionError else None
+        original_errno=error.__cause__.errno if lane=='eperm' else None
         sink.write_bytes(b'');s=os.lstat(sink);identity=(s.st_dev,s.st_ino,stat.S_IFMT(s.st_mode),s.st_uid,s.st_gid,stat.S_IMODE(s.st_mode),s.st_nlink)
         insertion=eval(compile(ast.Expression(record_expression),'actual-select-mapping-expression','eval'),{'token':repr('ordinary-select-mapping'),'sink':repr(str(sink)),'identity':repr(identity),'selector_source_sha':source_sha,'native_sha':native_sha,'abc_source':abc_source,'abc_path':abc_path})
         copied=reader.replace(boundary,insertion+boundary,1);tail=copied[copied.index('if __name__ == "__main__":'):]
@@ -3764,7 +3776,7 @@ def select_counter_controls(area,module,error,observed_namespace,direct_error,di
             if case=='bad-pid':frame.f_locals['child'].pid=0
             if case=='cancelled-true':frame.f_locals['cancelled'][0]=True
             if case=='cancelled-gap':frame.f_locals['cancelled'][:]=[]
-            if case=='non-EPERM':error.errno=13
+            if case=='non-EPERM':error.__cause__.errno=13
             if case=='wrong-error':error.code='E_INSTALL'
             if case=='invocation':state['argv']=list(original_state_argv)
             if case=='encoding':frame.f_locals['argv'][5]='/owned/\ud800'
@@ -3775,8 +3787,8 @@ def select_counter_controls(area,module,error,observed_namespace,direct_error,di
             raw=sink.read_bytes();data=json.loads(raw) if raw else None
         finally:
             os.write=actual_write;sys.argv,sys.stderr=old_sys;state['foreground']=saved_foreground;state['selector']=original_selector;frame.f_locals['argv'][:]=saved_argv;frame.f_locals['child'].pid=original_pid;frame.f_locals['cancelled'][:]=original_cancelled;state['used']=original_used;state['argv']=original_state_argv
-            if type(error) is PermissionError:error.errno=original_errno
-            else:error.code=original_code
+            if lane=='eperm':error.__cause__.errno=original_errno
+            error.code=original_code
         report={'case':case if lane=='eperm' else lane+':'+case,'raw_hex':raw.hex(),'same_error':len(raised_error)==1 and raised_error[0] is error,'shared_actual_frame':True,'actual_calls_not_reexecuted':True,'same_cancel_object':cancelled_error is cancel_holder[0] if cancel_holder else None,'status':status,'mapped_stderr':output.getvalue(),'same_context':error.__context__ is baseline_context,'same_cause':error.__cause__ is baseline_cause};completed_evidence({'select_mapping_actual':report})
         assert len(raised_error)==1 and raised_error[0] is error and error.__context__ is baseline_context and error.__cause__ is baseline_cause
         if case!='cancel':assert status==1 and output.getvalue()==('E_RELATION\n' if case=='wrong-error' else 'E_RUNTIME\n')
@@ -3793,6 +3805,172 @@ def select_counter_controls(area,module,error,observed_namespace,direct_error,di
         mappings.append(report)
     return completed_evidence({'first_git_select_controls':reports,'first_git_select_mapping_controls':mappings,'native_proof':native_proof})
 
+def owned_cleanup_controls(module):
+    import json,signal,subprocess,types
+    original=module._DarwinChildOwner._foreground
+    rows=[]
+    for fault in ('normal','term','kill','both','lookup','wait','both-wait','duplicate'):
+        child=subprocess.Popen([sys.executable,'-I','-S','-B','-c','pass'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
+        actual_wait=child.wait;calls=[];first=[];clock=[];masks=[];handlers=[]
+        term_error=PermissionError(1,'controlled TERM failure')
+        kill_error=term_error if fault=='duplicate' else PermissionError(13,'controlled KILL failure')
+        wait_error=OSError(5,'controlled failure after actual wait')
+        class Selector:
+            def register(self,*args):calls.append(['register'])
+            def get_map(self):return {1:True}
+            def close(self):calls.append(['selector-close'])
+        def now():
+            clock.append(True)
+            return 0 if len(clock)==1 else 31
+        def require(*args):
+            try:return module._require(*args)
+            except BaseException as error:first.append(error);raise
+        def kill(pid,number):
+            calls.append(['signal',pid,int(number)])
+            if fault=='lookup':raise ProcessLookupError(3,'controlled already gone')
+            if number==signal.SIGTERM and fault in ('term','both','both-wait','duplicate'):raise term_error
+            if number==signal.SIGKILL and fault in ('kill','both','both-wait','duplicate'):raise kill_error
+        def wait(*args,**kwargs):
+            calls.append(['wait',kwargs]);result=actual_wait(*args,**kwargs)
+            calls.append(['actual-wait-return',result])
+            if fault in ('wait','both-wait'):raise wait_error
+            return result
+        def handler(number,value):handlers.append([int(number),value]);return signal.SIG_DFL
+        def mask(how,values):masks.append([int(how),sorted(map(int,values))]);return set()
+        child.wait=wait
+        scope=dict(original.__globals__)
+        scope.update(_closed_scope_child=lambda *args:None,_require=require,
+            subprocess=types.SimpleNamespace(Popen=lambda *args,**kwargs:child,PIPE=subprocess.PIPE),
+            selectors=types.SimpleNamespace(DefaultSelector=Selector,EVENT_READ=1,EVENT_WRITE=2),time=types.SimpleNamespace(monotonic=now),
+            signal=types.SimpleNamespace(**{key:getattr(signal,key) for key in ('SIGINT','SIGTERM','SIGHUP','SIGKILL','SIG_BLOCK','SIG_SETMASK')},pthread_sigmask=mask,signal=handler),
+            os=types.SimpleNamespace(set_blocking=os.set_blocking,killpg=kill))
+        function=types.FunctionType(original.__code__,scope);error=None
+        try:function(object(),['owned-fixed-transport'],b'',4096,65536,30,{})
+        except BaseException as caught:error=caught
+        chain=[];node=error;seen=[]
+        while node is not None and len(chain)<8 and not any(node is prior for prior in seen):
+            seen.append(node);chain.append({'type':type(node).__name__,'identity':id(node),'errno':getattr(node,'errno',None)})
+            node=node.__cause__
+        record={'case':fault,'first_identity':id(first[0]) if first else None,'same_first':bool(first) and error is first[0],
+            'cause_chain':chain,'acyclic':node is None,'calls':calls,'masks':masks,'handler_count':len(handlers),
+            'child_returncode':child.returncode,'pipes_closed':[stream.closed for stream in (child.stdin,child.stdout,child.stderr)],
+            'term_identity':id(term_error),'kill_identity':id(kill_error),'wait_identity':id(wait_error),
+            'scope':'actual repaired foreground code; controlled fixed Popen/signal/clock/mask transports, real owned child and native wait; no kernel EPERM or group-gone claim'}
+        print(json.dumps({'owned_cleanup_before_assert':record},sort_keys=True),flush=True)
+        assert first and error is first[0] and type(error) is module.Refusal and error.code=='E_RUNTIME'
+        assert node is None and [row[2] for row in calls if row[0]=='signal']==[int(signal.SIGTERM),int(signal.SIGKILL)]
+        assert [row[1] for row in calls if row[0]=='wait']==[{'timeout':10}]
+        assert child.returncode==0 and all(record['pipes_closed']) and calls.count(['selector-close'])==1
+        assert len(handlers)==6 and len(masks)==4 and calls.index(['selector-close'])>next(i for i,row in enumerate(calls) if row[0]=='wait')
+        expected=[]
+        if fault in ('term','both','both-wait','duplicate'):expected.append(term_error)
+        if fault in ('kill','both','both-wait'):expected.append(kill_error)
+        if fault in ('wait','both-wait'):expected.append(wait_error)
+        assert [item['identity'] for item in chain[1:]]==[id(item) for item in reversed(expected)]
+        rows.append(record)
+    return rows
+
+def native_carrier_controls(area,module):
+    import ctypes,types
+    assembler=ast.parse(heredoc('PY_GENUINE_ASSEMBLER'))
+    capture=next(node for node in assembler.body if isinstance(node,ast.ClassDef) and node.name=='GenuineRelationCapture')
+    method=next(node for node in capture.body if isinstance(node,ast.FunctionDef) and node.name=='select_source_inputs')
+    qualifier=ast.literal_eval(method.args.defaults[0]);parsed=ast.parse(qualifier)
+    function=parsed.body[0]
+    core=next(node for node in ast.walk(function) if isinstance(node,ast.FunctionDef) and node.name=='carrier_path')
+    assert len([node for node in ast.walk(core) if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id=='registered'])==1
+    assert len([node for node in ast.walk(core) if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id=='slot'])==1
+    assert len([node for node in ast.walk(core) if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id=='image'])==1
+    slot_call=next(node for node in ast.walk(core) if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id=='slot')
+    assert isinstance(slot_call.args[1],ast.Constant) and slot_call.args[1].value==65
+    reports=[]
+    for fault in ('exact','registration','missing-slot','missing-image','layout','offset','null-slot','image-denial','null-path','long-path'):
+        calls=[];backend=object()
+        path=b'/owned/fixed-carrier' if fault!='long-path' else b'x'*4097
+        storage=ctypes.create_string_buffer(path)
+        class Function:
+            def __init__(self,name,owner):self.name=name;self._objects={'0':owner}
+            def __call__(self,*args):
+                calls.append([self.name])
+                if self.name=='PyType_GetSlot':
+                    assert args==(backend,65)
+                    return 0 if fault=='null-slot' else 0x2345
+                assert args[0]==0x2345
+                info=args[1]._obj;info.name=None if fault=='null-path' else ctypes.addressof(storage);info.base=0x1000
+                return 0 if fault=='image-denial' else 1
+        class Library:
+            def __getitem__(self,name):
+                calls.append(['lookup',name])
+                if fault=='missing-slot' and name=='PyType_GetSlot' or fault=='missing-image' and name=='dladdr':raise AttributeError(name)
+                return Function(name,self)
+        def registration(name):calls.append(['registration',name]);return 0 if fault=='registration' else 1
+        view=types.SimpleNamespace(**{name:getattr(ctypes,name) for name in dir(ctypes)})
+        view.CDLL=Library;view._CFuncPtr=Function
+        if fault=='layout':view.alignment=lambda value:4
+        context={'registered':registration}
+        if fault=='offset':context['getattr']=lambda value,key:types.SimpleNamespace(offset=getattr(value,key).offset+1)
+        exec(compile(ast.Module(body=[core],type_ignores=[]),'actual-carrier-core','exec'),context)
+        error=None;result=None
+        try:result=context['carrier_path'](view,object(),backend)
+        except (AssertionError,AttributeError) as caught:error=caught
+        fact={'case':fault,'calls':calls,'result':result,'error':None if error is None else type(error).__name__,
+            'scope':'actual extracted ABI/slot/image/path code with controlled transport, not Linux positive or native address proof'}
+        print(json.dumps({'native_carrier_core_before_assert':fact},sort_keys=True),flush=True)
+        if fault=='exact':
+            assert error is None and result=='/owned/fixed-carrier'
+            assert calls==[['registration','select'],['lookup','PyType_GetSlot'],['lookup','dladdr'],['PyType_GetSlot'],['dladdr']]
+        else:assert error is not None
+        assert calls.count(['registration','select'])<=1 and calls.count(['PyType_GetSlot'])<=1 and calls.count(['dladdr'])<=1
+        reports.append(fact)
+    tail_start=next(index for index,node in enumerate(function.body) if isinstance(node,ast.Assert) and isinstance(node.test,ast.Call) and isinstance(node.test.func,ast.Attribute) and node.test.func.attr=='_physical')
+    held_function=ast.FunctionDef(name='actual_carrier_hold',args=ast.arguments(posonlyargs=[],args=[],kwonlyargs=[],kw_defaults=[],defaults=[]),body=function.body[tail_start:],decorator_list=[])
+    held_tree=ast.fix_missing_locations(ast.Module(body=[held_function],type_ignores=[]))
+    target=area/'carrier-owned-data';target.write_bytes(b'fixed carrier data');target.chmod(0o444)
+    resolver=type('EmptyCarrierResolver',(module._DarwinUUIDResolver,),{'resolve':lambda self,values:[] if type(values) is list and not values else (_ for _ in ()).throw(module.Refusal('E_ACL'))})()
+    for fault in ('held-exact','held-size','held-drift'):
+        backend=object();cls=type('FixedCarrierClass',(),{'_selector_cls':backend});native=types.SimpleNamespace(epoll=backend)
+        selector=types.SimpleNamespace(select=native,DefaultSelector=cls);ctypes_view=types.SimpleNamespace(pythonapi=object());retained=[]
+        base_rule=module._installed_rule(os.getuid(),resolver)
+        def rule(fd,state,ancestor):return True if ancestor else base_rule(fd,state,False)
+        def open_held(*args):
+            item=module._open_held(*args);retained.append(item)
+            if fault=='held-drift':
+                actual_read=item.read
+                def changed(*args):
+                    raw=actual_read(*args);target.chmod(0o664);return raw
+                item.read=changed
+            return item
+        view=types.SimpleNamespace(_physical=module._physical,_installed_rule=lambda uid:rule,os=os,_open_held=open_held,
+            EXECUTABLE_LIMIT=4 if fault=='held-size' else module.EXECUTABLE_LIMIT,selectors=selector,digest=module.digest)
+        context={'c':view,'path':str(target),'modules':{'select':native},'native':native,'backend':backend,'cls':cls,'ctypes':ctypes_view,'api':ctypes_view.pythonapi,'api_handle':1}
+        context['api']=types.SimpleNamespace(_handle=1);ctypes_view.pythonapi=context['api']
+        exec(compile(held_tree,'actual-carrier-held-tail','exec'),context)
+        error=None;result=None
+        try:result=context['actual_carrier_hold']()
+        except module.Refusal as caught:error=caught
+        finally:target.chmod(0o444)
+        fact={'case':fault,'result':result,'error':None if error is None else error.code,'all_held_fds_closed':all(not item.components for item in retained),
+            'scope':'actual carrier held/read/recheck tail; controlled identity transport and owned-root ancestor adapter, real file/rule/ACL; not Linux positive'}
+        print(json.dumps({'native_carrier_held_before_assert':fact},sort_keys=True),flush=True)
+        assert (error is None)==(fault=='held-exact') and fact['all_held_fds_closed']
+        reports.append(fact)
+    qualifier_scope={'sys':sys,'sha':lambda raw:hashlib.sha256(raw).hexdigest()}
+    exec(compile(qualifier,'actual-shared-native-source','exec'),qualifier_scope)
+    native=sys.modules['select']
+    if sys.platform=='linux' and getattr(native.__spec__,'origin',None)=='built-in':
+        locator,digest=qualifier_scope['_scope_select_native_source'](module)
+        platform={'status':'ACTUAL_LINUX_BUILTIN','path':locator,'sha256':digest,'metadata_only':False}
+    elif sys.platform=='darwin':
+        class NoAPI:
+            def __getattribute__(self,key):raise AssertionError('Mac extension must make zero new API queries')
+        view=types.SimpleNamespace(selectors=module.selectors,_hold_bytes=module._hold_bytes,EXECUTABLE_LIMIT=module.EXECUTABLE_LIMIT,digest=module.digest,ctypes=NoAPI())
+        locator,digest=qualifier_scope['_scope_select_native_source'](view)
+        assert locator==native.__file__
+        platform={'status':'ACTUAL_MAC_EXTENSION_ZERO_NEW_QUERIES','path':locator,'sha256':digest,'Linux_builtin':'PENDING_CI'}
+    else:platform={'status':'NON_BUILTIN_RUNTIME','Linux_builtin':'PENDING_CI'}
+    print(json.dumps({'native_carrier_platform_before_assert':platform},sort_keys=True),flush=True)
+    return completed_evidence({'native_carrier_controls':reports,'platform':platform})
+
 def foreground_state_controls(area):
     import io
     assembler=heredoc('PY_GENUINE_ASSEMBLER');tree=ast.parse(assembler)
@@ -3807,6 +3985,8 @@ def foreground_state_controls(area):
     reader=(root/'scope/v1/read-shadow-evidence.py').read_text();boundary='        if code not in {"E_USAGE", "E_LIMIT", "E_PARSE", "E_CANONICAL", "E_RELATION", "E_STALE", "E_RUNTIME"}:\n'
     assert reader.count(boundary)==1;copied=reader.replace(boundary,insertion+boundary,1);tail=copied[copied.index('if __name__ == "__main__":'):]
     original=module._DarwinChildOwner._foreground
+    completed_evidence({'owned_cleanup_controls':owned_cleanup_controls(module)})
+    native_carrier_controls(area,module)
     print(json.dumps({'foreground_state_preexec':{'reader_copy':copied,'insertion':insertion,'original_foreground_source':ast.get_source_segment((root/'shadow/v1/_consumer.py').read_text(),next(n for n in ast.walk(ast.parse((root/'shadow/v1/_consumer.py').read_text())) if isinstance(n,ast.FunctionDef) and n.name=='_foreground')),'reader_sha256':hashlib.sha256(copied.encode()).hexdigest()}}),flush=True)
     records=[];context_errors=[]
     for fault in ('cancel','deadline','cleanup-wait','term','kill','io-term','io-kill','snapshot-term','wrong-frame','wrong-command','pseudo','encoding','cap','format','write',
@@ -3917,13 +4097,13 @@ def foreground_state_controls(area):
         assert len(holder)==1 and before_wait==holder[0][1] and before_hooks==holder[0][2]
         assert status==1 and output.getvalue()=='E_RUNTIME\n'
         error=holder[0][0];waited=any(row[0]=='wait' for row in before_wait)
-        assert waited==(fault not in ('term','kill','io-term','io-kill','snapshot-term')) and len([row for row in before_wait if row[0]=='killpg'])==(1 if fault in ('term','io-term','snapshot-term') else 2)
-        if fault in ('term','kill','io-term','io-kill','snapshot-term'):assert error is sentinel
-        else:assert type(error) is module.Refusal and error.code=='E_RUNTIME'
+        assert waited and len([row for row in before_wait if row[0]=='killpg'])==2
+        assert type(error) is module.Refusal and error.code=='E_RUNTIME'
+        if fault in ('term','kill','io-term','io-kill','snapshot-term'):assert error.__cause__ is sentinel
         assert len(raw)<=4096
         if fault in ('format','write'):assert not raw;fact='GAP'
         else:
-            record=json.loads(raw);fact=record['foreground'];assert record['errno']==(1 if fault=='snapshot-term' else 13 if fault in ('term','kill','io-term','io-kill','snapshot-term') else None)
+            record=json.loads(raw);fact=record['foreground'];assert record['errno'] is None
             if fault in ('wrong-frame','wrong-command','encoding','cap'):assert fact=='GAP'
             else:
                 assert fact['argv']==argv and fact['timeout']==30 and fact['end']==30 and fact['cancelled']==(fault=='cancel') and fact['cleanup_signal']=='GAP'
@@ -3936,13 +4116,12 @@ def foreground_state_controls(area):
                         assert fact['io']['last_selected']['channel']==('stdout' if fault=='io-old-chunk' else 'stderr')
                         if fault=='io-partial':assert reads==[fds[0],fds[1]] and ['unregister',True] in before_wait
                 if fault=='pseudo':assert fact['child']=='GAP'
-                else:assert fact['child']=={'pid':child.pid,'returncode':None if fault in ('term','kill','io-term','io-kill','snapshot-term') else 0}
+                else:assert fact['child']=={'pid':child.pid,'returncode':0}
         if fault in ('io-term','io-kill'):
-            context=BaseException.__dict__['__context__'].__get__(error,BaseException)
-            assert type(context) is module.Refusal and context.code=='E_RUNTIME'
-            assert ['_foreground',1196] in record['context'][0]['trace']
-            assert fact['io']['stderr_bytes']==512 and not waited
-            context_errors.append((error,context))
+            context=BaseException.__dict__['__cause__'].__get__(error,BaseException)
+            assert context is sentinel and ['_foreground',1196] in record['trace']
+            assert fact['io']['stderr_bytes']==512 and waited
+            context_errors.append((context,error))
         if fault=='snapshot-term':snapshot_error=error;snapshot_namespace=select_namespace;assert type(record.get('first_git_select_observation')) is dict
         if fault=='deadline':
             direct_error=error;direct_namespace=select_namespace;assert type(record.get('first_git_select_observation')) is dict
@@ -3953,7 +4132,7 @@ def foreground_state_controls(area):
         if fault=='cleanup-wait':
             cleanup_error=error;cleanup_namespace=select_namespace
             assert error.__cause__ is wait_failure and 'first_git_select_observation' not in record
-            assert [v[1] for v in trace if v[2]]==[1236,1196]
+            assert [v[1] for v in trace if v[2]]==[1250,1196]
         records.append({'case':fault,'mapped_stderr':output.getvalue(),'status':status,'original_error_type':type(error).__name__,'same_signal_error':error is sentinel,'original_calls':before_wait,'clock_calls':len(clock_calls),'wait_reached':waited,'facts':fact,'real_child_returncode':returned,'all_pipes_closed':True,'None_is_not_liveness':True})
     mapping=ast.parse('if True:\n'+insertion).body[0].body[0].body
     first=next(index for index,node in enumerate(mapping) if isinstance(node,ast.Assign) and any(isinstance(t,ast.Tuple) for t in node.targets))
@@ -10221,14 +10400,92 @@ if sys.platform=='darwin':os.chmod(tools/'python3',0o744,follow_symlinks=False)
 env={'PATH':str(tools)+':/usr/bin:/bin','LC_ALL':'C','LANG':'C','HOME':str(work),'TMPDIR':str(work),'GIT_CONFIG_NOSYSTEM':'1','GIT_CONFIG_GLOBAL':'/dev/null','GIT_NO_REPLACE_OBJECTS':'1','GIT_NO_LAZY_FETCH':'1','GIT_TERMINAL_PROMPT':'0','GIT_OPTIONAL_LOCKS':'0','GIT_AUTHOR_NAME':'fixture','GIT_AUTHOR_EMAIL':'fixture@example.invalid','GIT_COMMITTER_NAME':'fixture','GIT_COMMITTER_EMAIL':'fixture@example.invalid','GIT_AUTHOR_DATE':'2000-01-01T00:00:00Z','GIT_COMMITTER_DATE':'2000-01-01T00:00:00Z'}
 class GenuineRelationCapture:
  @staticmethod
- def select_source_inputs(module):
-  source_path=module.selectors.__file__;native_path=sys.modules['select'].__file__
-  abc_path=sys.modules['abc'].__file__;rows=[]
-  for path in (source_path,native_path,abc_path):
+ def select_source_inputs(module,qualifier='''def _scope_select_native_source(c):
+    module_type=type(sys);module_dict=module_type.__dict__['__dict__']
+    modules=module_dict.__get__(sys)['modules'];native=modules['select'];fields=module_dict.__get__(native)
+    external=modules['_frozen_importlib_external'];bootstrap=modules['_frozen_importlib']
+    assert type(native) is module_type and c.selectors.select is native
+    spec=fields['__spec__'];loader=fields['__loader__']
+    assert type(spec) is type(sys.__spec__) and spec.name=='select'
+    if type(loader) is external.ExtensionFileLoader:
+        path=fields['__file__'];assert spec.loader is loader and spec.origin==path
+        held=c._hold_bytes(path,c.EXECUTABLE_LIMIT)
+        try:held.recheck('E_STALE');return path,c.digest(held.raw)
+        finally:held.close()
+    boot=module_dict.__get__(bootstrap);builtin=boot['BuiltinImporter'];imp=modules['_imp']
+    assert bootstrap.__loader__ is boot['FrozenImporter'] and bootstrap.__spec__.loader is boot['FrozenImporter'] and bootstrap.__spec__.origin=='frozen'
+    assert sys.platform=='linux' and modules['importlib._bootstrap'] is bootstrap and external._bootstrap is bootstrap
+    assert type(builtin) is type and loader is builtin and spec.loader is builtin and spec.origin=='built-in'
+    assert fields.get('__file__') is None and spec.name=='select' and modules[spec.name] is native
+    assert type(imp) is module_type and boot['_imp'] is imp and imp.__loader__ is builtin and imp.__spec__.origin=='built-in'
+    registered=imp.is_builtin
+    assert type(registered) is type(len) and registered.__self__ is imp and registered.__name__=='is_builtin'
+    assert type(builtin.find_spec) is type(_scope_select_native_source.__get__(object(),object))
+    assert builtin.find_spec.__func__.__globals__ is boot and 'select' in sys.builtin_module_names
+    backend=fields['epoll'];cls=c.selectors.DefaultSelector
+    assert cls is c.selectors.EpollSelector and cls._selector_cls is backend and type(backend) is type
+    new=backend.__dict__['__new__'];assert type(new) is type(len) and new.__self__ is backend and backend.__module__=='select'
+    ctypes=c.ctypes;ctypes_fields=module_dict.__get__(ctypes);api=ctypes_fields['pythonapi']
+    assert modules['ctypes'] is ctypes and type(ctypes) is module_type and type(api) is ctypes.PyDLL and api._name is None
+    assert ctypes.PyDLL.__bases__==(ctypes.CDLL,) and ctypes.PyDLL.__init__ is ctypes.CDLL.__init__
+    assert ctypes.PyDLL.__getattribute__ is object.__getattribute__ and ctypes.PyDLL.__getitem__ is ctypes.CDLL.__getitem__
+    api_fields=object.__getattribute__(api,'__dict__');api_handle=api_fields['_handle'];pointer_type=api_fields['_FuncPtr']
+    assert type(api_handle) is int and api_handle>0 and type(pointer_type) is type(ctypes._CFuncPtr)
+    assert pointer_type.__bases__==(ctypes._CFuncPtr,) and pointer_type.__call__ is ctypes._CFuncPtr.__call__
+    assert pointer_type._flags_==ctypes._FUNCFLAG_CDECL|ctypes._FUNCFLAG_PYTHONAPI
+    held_ctypes=c._hold_bytes(ctypes.__file__,c.EXECUTABLE_LIMIT)
+    try:
+        compiled=compile(held_ctypes.raw,ctypes.__file__,'exec',dont_inherit=True)
+        cdll=next(value for value in compiled.co_consts if type(value) is type(compiled) and value.co_name=='CDLL')
+        for name in ('__init__','__getitem__','__getattr__'):
+            expected=next(value for value in cdll.co_consts if type(value) is type(compiled) and value.co_name==name)
+            actual=ctypes.CDLL.__dict__[name]
+            assert type(actual) is type(_scope_select_native_source) and actual.__globals__ is ctypes_fields and actual.__code__==expected
+        held_ctypes.recheck('E_STALE')
+    finally:held_ctypes.close()
+    def carrier_path(ctypes,api,backend):
+        assert ctypes.sizeof(ctypes.c_void_p)==ctypes.alignment(ctypes.c_void_p)==8 and ctypes.sizeof(ctypes.c_int)==4
+        class DlInfo(ctypes.Structure):
+            _fields_=[('name',ctypes.c_void_p),('base',ctypes.c_void_p),('symbol',ctypes.c_void_p),('address',ctypes.c_void_p)]
+        assert ctypes.sizeof(DlInfo)==32 and ctypes.alignment(DlInfo)==8
+        assert [getattr(DlInfo,key).offset for key in ('name','base','symbol','address')]==[0,8,16,24]
+        result=registered('select');assert type(result) is int and result!=0
+        lookup=ctypes.CDLL.__dict__['__getitem__']
+        slot=lookup(api,'PyType_GetSlot');image=lookup(api,'dladdr')
+        assert isinstance(slot,ctypes._CFuncPtr) and isinstance(image,ctypes._CFuncPtr)
+        assert slot._objects['0'] is api and image._objects['0'] is api
+        slot.argtypes=[ctypes.py_object,ctypes.c_int];slot.restype=ctypes.c_void_p
+        image.argtypes=[ctypes.c_void_p,ctypes.POINTER(DlInfo)];image.restype=ctypes.c_int
+        pointer=slot(backend,65);assert type(pointer) is int and pointer>0
+        info=DlInfo();assert image(pointer,ctypes.byref(info))!=0 and info.name and info.base and info.base<=pointer
+        path=bytearray()
+        for index in range(4097):
+            value=ctypes.c_ubyte.from_address(info.name+index).value
+            if value==0:break
+            path.append(value)
+        assert index<=4096 and value==0 and path
+        path=bytes(path).decode('utf-8','strict')
+        return path
+    path=carrier_path(ctypes,api,backend)
+    assert c._physical(path)
+    rule=c._installed_rule(c.os.getuid())
+    held=c._open_held(path,False,rule,'E_INSTALL')
+    try:
+        raw=held.read(c.EXECUTABLE_LIMIT,'E_INSTALL');held.recheck('E_STALE')
+        assert modules['select'] is native and c.selectors.select is native and native.epoll is backend
+        assert cls is c.selectors.DefaultSelector and cls._selector_cls is backend and ctypes.pythonapi is api and api._handle==api_handle
+        return path,c.digest(raw)
+    finally:held.close()
+'''):
+  context={'sys':sys,'sha':sha}
+  exec(compile(qualifier,'actual-native-selector-source','exec'),context)
+  native_path,native_sha=context['_scope_select_native_source'](module)
+  source_path=module.selectors.__file__;abc_path=sys.modules['abc'].__file__;rows=[]
+  for path in (source_path,abc_path):
    held=module._hold_bytes(path,module.EXECUTABLE_LIMIT)
    try:rows.append(held.raw);held.recheck('E_STALE')
    finally:held.close()
-  return rows[0].decode('utf-8','strict'),source_path,native_path,sha(rows[0]),sha(rows[1]),rows[2].decode('utf-8','strict'),abc_path,sha(rows[2])
+  return rows[0].decode('utf-8','strict'),source_path,native_path,sha(rows[0]),native_sha,rows[1].decode('utf-8','strict'),abc_path,sha(rows[1])
  def __init__(self,argv):
   self.paths=[package/'scope/v1/evaluate-scope.sh',package/'scope/v1/read-shadow-evidence.py']
   self.pending=base/'genuine-relation.PENDING'
@@ -10350,7 +10607,83 @@ print(relation_result)
   for match in difflib.SequenceMatcher(a=front.splitlines(),b=copied.splitlines(),autojunk=False).get_matching_blocks():
    for offset in range(match.size):self.line_map[match.b+offset+1]=match.a+offset+1
   selector_source,selector_path,native_origin,selector_source_sha,native_sha,abc_source,abc_path,abc_sha=self.select_source_inputs(c)
-  selector_setup=("_scope_select_source_sha=SELECTORS_SHA\n_scope_select_native_sha=NATIVE_SHA\n_scope_select_state={'used':False,'suspended':False,'counts':None,'selector':None,'selector_class':None,'argv':None,'foreground':None}\ndef _scope_select_binding():\n    module_type=type(sys);module_fields=module_type.__dict__['__dict__'];modules=module_fields.__get__(sys)['modules']\n    assert type(modules) is dict and modules['sys'] is sys and modules['selectors'] is c.selectors\n    selectors=c.selectors;mapping=module_fields.__get__(selectors);loader=modules['_frozen_importlib_external']\n    assert type(selectors) is module_type and type(mapping['__loader__']) is loader.SourceFileLoader\n    assert mapping['__file__']==SELECTORS_PATH and mapping['__spec__'].origin==SELECTORS_PATH\n    code_type=type(_scope_select_binding.__code__);function_type=type(_scope_select_binding)\n    def code_at(code,*names):\n        for name in names:\n            matches=[value for value in code.co_consts if type(value) is code_type and value.co_name==name]\n            assert len(matches)==1\n            code=matches[0]\n        return code\n    selector_code=compile(SELECTORS_SOURCE,SELECTORS_PATH,'exec',dont_inherit=True)\n    abc=modules['abc'];abc_fields=module_fields.__get__(abc)\n    assert type(abc) is module_type and abc_fields['__file__']==ABC_PATH\n    abc_filename=ABC_PATH\n    if abc_fields['__spec__'].origin=='frozen':\n        bootstrap=modules['_frozen_importlib'];bootstrap_fields=module_fields.__get__(bootstrap)\n        assert type(bootstrap) is module_type and modules['importlib._bootstrap'] is bootstrap and loader._bootstrap is bootstrap\n        frozen=bootstrap_fields['FrozenImporter'];builtin=bootstrap_fields['BuiltinImporter']\n        assert type(frozen) is type and type(builtin) is type\n        assert module_fields.__get__(sys)['__loader__'] is builtin and module_fields.__get__(sys)['__spec__'].loader is builtin\n        assert bootstrap_fields['__loader__'] is frozen and bootstrap_fields['__spec__'].loader is frozen and bootstrap_fields['__spec__'].origin=='frozen'\n        assert abc_fields['__loader__'] is frozen and abc_fields['__spec__'].loader is frozen\n        for importer in (frozen,builtin):\n            for method in ('find_spec','create_module','exec_module'):\n                function=type.__dict__['__dict__'].__get__(importer)[method].__func__\n                assert type(function) is function_type and function.__globals__ is bootstrap_fields\n        abc_filename='<frozen abc>'\n    else:\n        assert type(abc_fields['__loader__']) is loader.SourceFileLoader and abc_fields['__spec__'].origin==ABC_PATH\n    abc_code=code_at(compile(ABC_SOURCE,abc_filename,'exec',dont_inherit=True),'ABCMeta')\n    meta=abc_fields['ABCMeta']\n    assert mapping['ABCMeta'] is meta\n    type_fields=type.__dict__['__dict__'];bases=type.__dict__['__bases__'];mro=type.__dict__['__mro__']\n    assert type(meta) is type and bases.__get__(meta)==(type,) and mro.__get__(meta)==(meta,type,object)\n    meta_fields=type_fields.__get__(meta)\n    for name in ('__getattribute__','__call__','__eq__','__hash__','mro'):\n        assert getattr(meta,name) is getattr(type,name)\n    for expected in abc_code.co_consts:\n        if type(expected) is code_type:\n            actual=meta_fields[expected.co_name]\n            if type(actual) is staticmethod:actual=actual.__func__\n            assert type(actual) is function_type and actual.__globals__ is abc_fields and actual.__code__==expected\n    abc_native=modules['_abc'];abc_native_fields=module_fields.__get__(abc_native)\n    assert type(abc_native) is module_type and abc_native_fields['__spec__'].origin=='built-in'\n    for name in ('_abc_init','_abc_register','_abc_instancecheck','_abc_subclasscheck'):\n        assert abc_fields[name] is abc_native_fields[name] and type(abc_fields[name]) is type(len)\n    base=mapping['BaseSelector'];implementation=mapping['_BaseSelectorImpl'];cls=mapping['DefaultSelector']\n    if cls is mapping.get('KqueueSelector'):\n        chain=(cls,implementation,base,object)\n        owners={'__init__':'KqueueSelector','register':'KqueueSelector','get_map':'_BaseSelectorImpl','unregister':'KqueueSelector','close':'KqueueSelector','select':'KqueueSelector'}\n    else:\n        assert cls is mapping.get('EpollSelector')\n        chain=(cls,mapping['_PollLikeSelector'],implementation,base,object)\n        owners={'__init__':'_PollLikeSelector','register':'_PollLikeSelector','get_map':'_BaseSelectorImpl','unregister':'_PollLikeSelector','close':'EpollSelector','select':'EpollSelector'}\n    for position,item in enumerate(chain[:-1]):\n        assert type(item) is meta\n        actual_bases=bases.__get__(item);actual_mro=mro.__get__(item)\n        assert len(actual_bases)==1 and actual_bases[0] is chain[position+1]\n        assert len(actual_mro)==len(chain)-position and all(left is right for left,right in zip(actual_mro,chain[position:]))\n    methods={}\n    for name,owner_name in owners.items():\n        owner=mapping[owner_name];method=type_fields.__get__(owner)[name]\n        assert getattr(cls,name) is method and type(method) is function_type\n        assert method.__globals__ is mapping and method.__code__==code_at(selector_code,owner_name,name)\n        methods[name]=method\n    native=modules['select'];native_fields=module_fields.__get__(native)\n    assert type(native) is module_type and mapping['select'] is native\n    assert type(native_fields['__loader__']) is loader.ExtensionFileLoader\n    assert native_fields['__file__']==NATIVE_ORIGIN and native_fields['__spec__'].origin==NATIVE_ORIGIN\n    if cls is mapping.get('KqueueSelector'):\n        assert '_selector_cls' not in type_fields.__get__(cls)\n        backend=native_fields['kqueue']\n    else:\n        backend=type_fields.__get__(cls)['_selector_cls'];assert backend is native_fields['epoll']\n    new=backend.__dict__['__new__'];fields=type(new).__dict__\n    assert type(new) is type(len) and fields['__self__'].__get__(new) is backend\n    assert backend.__module__=='select' and type(backend) is type\n    return cls,methods,backend\n\ndef _scope_select_first_config(arguments):\n    if type(arguments) is not list or len(arguments)!=9 or not all(type(value) is str for value in arguments):return False\n    try:\n        for value in arguments:value.encode('utf-8','strict')\n        return (arguments[:2]==['/usr/bin/git','--no-replace-objects'] and arguments[2].startswith('--git-dir=/') and\n            arguments[3:5]==['config','--file'] and arguments[5].startswith('/') and\n            arguments[6:]==['--name-only','--list','--no-includes'] and len(json.dumps(arguments,ensure_ascii=True).encode())<=2048)\n    except (UnicodeError,TypeError,ValueError):return False\n\ndef _scope_select_call(bound,arguments,raw,cap,error_cap,timeout,environment):\n    state=_scope_select_state\n    if state['used']:\n        previous=state['suspended'];state['suspended']=True\n        try:return bound(arguments,raw,cap,error_cap,timeout,environment)\n        finally:state['suspended']=previous\n    if (type(bound) is not type(c._DarwinChildOwner._foreground.__get__(object(),object)) or\n            bound.__func__.__code__ is not c._DarwinChildOwner._foreground.__code__ or\n            type(bound.__self__) is not c._DarwinChildOwner or not _scope_select_first_config(arguments)):\n        return bound(arguments,raw,cap,error_cap,timeout,environment)\n    state['used']=True;state['argv']=arguments;state['foreground']=bound.__func__.__code__\n    original_class,methods,backend=_scope_select_binding()\n    state['counts']={'entered':0,'returned':0,'raised':0,'nonempty':0,'events_total':0,'last_length':'GAP'}\n    state['native_selector']=original_class;state['owner']=bound.__self__\n    state['process_snapshot']='GAP';state['process_attempted']=False;state['process_pending']=False\n    original_select=methods['select']\n    def increment(key,amount=1):\n        facts=state['counts']\n        if facts is None:return\n        try:\n            value=facts[key]\n            if type(value) is not int or type(amount) is not int or value<0 or amount<0 or value+amount>2147483647:state['counts']=None\n            else:facts[key]=value+amount\n        except (KeyError,TypeError,ValueError,OverflowError,MemoryError):state['counts']=None\n    class ScopeFirstConfigSelector(original_class):\n        __slots__=()\n        def select(self,*args,**kwargs):\n            if state['suspended']:return original_select(self,*args,**kwargs)\n            if state['selector'] is None:state['selector']=self\n            elif state['selector'] is not self:state['counts']=None\n            increment('entered')\n            first_git_process_snapshot(sys._getframe().f_back,self)\n            try:result=original_select(self,*args,**kwargs)\n            except BaseException:\n                increment('raised')\n                raise\n            increment('returned')\n            if type(result) is not list:state['counts']=None\n            elif state['counts'] is not None:\n                try:\n                    length=len(result)\n                    if length>2147483647:state['counts']=None\n                    else:\n                        state['counts']['last_length']=length\n                        increment('events_total',length)\n                        if length:increment('nonempty')\n                except (KeyError,TypeError,ValueError,OverflowError,MemoryError):state['counts']=None\n            return result\n    assert all(getattr(ScopeFirstConfigSelector,name) is methods[name] for name in ('__init__','register','get_map','unregister','close'))\n    state['selector_class']=ScopeFirstConfigSelector\n    container=bound.__func__.__globals__.get('selectors',c.selectors)\n    assert container.DefaultSelector is original_class\n    try:\n        try:container.DefaultSelector=ScopeFirstConfigSelector\n        except (AttributeError,TypeError,MemoryError):state['counts']=None\n        return bound(arguments,raw,cap,error_cap,timeout,environment)\n    finally:container.DefaultSelector=original_class\n" + r"""
+  selector_setup=('''def _scope_select_native_source(c):
+    module_type=type(sys);module_dict=module_type.__dict__['__dict__']
+    modules=module_dict.__get__(sys)['modules'];native=modules['select'];fields=module_dict.__get__(native)
+    external=modules['_frozen_importlib_external'];bootstrap=modules['_frozen_importlib']
+    assert type(native) is module_type and c.selectors.select is native
+    spec=fields['__spec__'];loader=fields['__loader__']
+    assert type(spec) is type(sys.__spec__) and spec.name=='select'
+    if type(loader) is external.ExtensionFileLoader:
+        path=fields['__file__'];assert spec.loader is loader and spec.origin==path
+        held=c._hold_bytes(path,c.EXECUTABLE_LIMIT)
+        try:held.recheck('E_STALE');return path,c.digest(held.raw)
+        finally:held.close()
+    boot=module_dict.__get__(bootstrap);builtin=boot['BuiltinImporter'];imp=modules['_imp']
+    assert bootstrap.__loader__ is boot['FrozenImporter'] and bootstrap.__spec__.loader is boot['FrozenImporter'] and bootstrap.__spec__.origin=='frozen'
+    assert sys.platform=='linux' and modules['importlib._bootstrap'] is bootstrap and external._bootstrap is bootstrap
+    assert type(builtin) is type and loader is builtin and spec.loader is builtin and spec.origin=='built-in'
+    assert fields.get('__file__') is None and spec.name=='select' and modules[spec.name] is native
+    assert type(imp) is module_type and boot['_imp'] is imp and imp.__loader__ is builtin and imp.__spec__.origin=='built-in'
+    registered=imp.is_builtin
+    assert type(registered) is type(len) and registered.__self__ is imp and registered.__name__=='is_builtin'
+    assert type(builtin.find_spec) is type(_scope_select_native_source.__get__(object(),object))
+    assert builtin.find_spec.__func__.__globals__ is boot and 'select' in sys.builtin_module_names
+    backend=fields['epoll'];cls=c.selectors.DefaultSelector
+    assert cls is c.selectors.EpollSelector and cls._selector_cls is backend and type(backend) is type
+    new=backend.__dict__['__new__'];assert type(new) is type(len) and new.__self__ is backend and backend.__module__=='select'
+    ctypes=c.ctypes;ctypes_fields=module_dict.__get__(ctypes);api=ctypes_fields['pythonapi']
+    assert modules['ctypes'] is ctypes and type(ctypes) is module_type and type(api) is ctypes.PyDLL and api._name is None
+    assert ctypes.PyDLL.__bases__==(ctypes.CDLL,) and ctypes.PyDLL.__init__ is ctypes.CDLL.__init__
+    assert ctypes.PyDLL.__getattribute__ is object.__getattribute__ and ctypes.PyDLL.__getitem__ is ctypes.CDLL.__getitem__
+    api_fields=object.__getattribute__(api,'__dict__');api_handle=api_fields['_handle'];pointer_type=api_fields['_FuncPtr']
+    assert type(api_handle) is int and api_handle>0 and type(pointer_type) is type(ctypes._CFuncPtr)
+    assert pointer_type.__bases__==(ctypes._CFuncPtr,) and pointer_type.__call__ is ctypes._CFuncPtr.__call__
+    assert pointer_type._flags_==ctypes._FUNCFLAG_CDECL|ctypes._FUNCFLAG_PYTHONAPI
+    held_ctypes=c._hold_bytes(ctypes.__file__,c.EXECUTABLE_LIMIT)
+    try:
+        compiled=compile(held_ctypes.raw,ctypes.__file__,'exec',dont_inherit=True)
+        cdll=next(value for value in compiled.co_consts if type(value) is type(compiled) and value.co_name=='CDLL')
+        for name in ('__init__','__getitem__','__getattr__'):
+            expected=next(value for value in cdll.co_consts if type(value) is type(compiled) and value.co_name==name)
+            actual=ctypes.CDLL.__dict__[name]
+            assert type(actual) is type(_scope_select_native_source) and actual.__globals__ is ctypes_fields and actual.__code__==expected
+        held_ctypes.recheck('E_STALE')
+    finally:held_ctypes.close()
+    def carrier_path(ctypes,api,backend):
+        assert ctypes.sizeof(ctypes.c_void_p)==ctypes.alignment(ctypes.c_void_p)==8 and ctypes.sizeof(ctypes.c_int)==4
+        class DlInfo(ctypes.Structure):
+            _fields_=[('name',ctypes.c_void_p),('base',ctypes.c_void_p),('symbol',ctypes.c_void_p),('address',ctypes.c_void_p)]
+        assert ctypes.sizeof(DlInfo)==32 and ctypes.alignment(DlInfo)==8
+        assert [getattr(DlInfo,key).offset for key in ('name','base','symbol','address')]==[0,8,16,24]
+        result=registered('select');assert type(result) is int and result!=0
+        lookup=ctypes.CDLL.__dict__['__getitem__']
+        slot=lookup(api,'PyType_GetSlot');image=lookup(api,'dladdr')
+        assert isinstance(slot,ctypes._CFuncPtr) and isinstance(image,ctypes._CFuncPtr)
+        assert slot._objects['0'] is api and image._objects['0'] is api
+        slot.argtypes=[ctypes.py_object,ctypes.c_int];slot.restype=ctypes.c_void_p
+        image.argtypes=[ctypes.c_void_p,ctypes.POINTER(DlInfo)];image.restype=ctypes.c_int
+        pointer=slot(backend,65);assert type(pointer) is int and pointer>0
+        info=DlInfo();assert image(pointer,ctypes.byref(info))!=0 and info.name and info.base and info.base<=pointer
+        path=bytearray()
+        for index in range(4097):
+            value=ctypes.c_ubyte.from_address(info.name+index).value
+            if value==0:break
+            path.append(value)
+        assert index<=4096 and value==0 and path
+        path=bytes(path).decode('utf-8','strict')
+        return path
+    path=carrier_path(ctypes,api,backend)
+    assert c._physical(path)
+    rule=c._installed_rule(c.os.getuid())
+    held=c._open_held(path,False,rule,'E_INSTALL')
+    try:
+        raw=held.read(c.EXECUTABLE_LIMIT,'E_INSTALL');held.recheck('E_STALE')
+        assert modules['select'] is native and c.selectors.select is native and native.epoll is backend
+        assert cls is c.selectors.DefaultSelector and cls._selector_cls is backend and ctypes.pythonapi is api and api._handle==api_handle
+        return path,c.digest(raw)
+    finally:held.close()
+''' + "_scope_select_source_sha=SELECTORS_SHA\n_scope_select_native_sha=NATIVE_SHA\n_scope_select_state={'used':False,'suspended':False,'counts':None,'selector':None,'selector_class':None,'argv':None,'foreground':None}\ndef _scope_select_binding():\n    module_type=type(sys);module_fields=module_type.__dict__['__dict__'];modules=module_fields.__get__(sys)['modules']\n    assert type(modules) is dict and modules['sys'] is sys and modules['selectors'] is c.selectors\n    selectors=c.selectors;mapping=module_fields.__get__(selectors);loader=modules['_frozen_importlib_external']\n    assert type(selectors) is module_type and type(mapping['__loader__']) is loader.SourceFileLoader\n    assert mapping['__file__']==SELECTORS_PATH and mapping['__spec__'].origin==SELECTORS_PATH\n    code_type=type(_scope_select_binding.__code__);function_type=type(_scope_select_binding)\n    def code_at(code,*names):\n        for name in names:\n            matches=[value for value in code.co_consts if type(value) is code_type and value.co_name==name]\n            assert len(matches)==1\n            code=matches[0]\n        return code\n    selector_code=compile(SELECTORS_SOURCE,SELECTORS_PATH,'exec',dont_inherit=True)\n    abc=modules['abc'];abc_fields=module_fields.__get__(abc)\n    assert type(abc) is module_type and abc_fields['__file__']==ABC_PATH\n    abc_filename=ABC_PATH\n    if abc_fields['__spec__'].origin=='frozen':\n        bootstrap=modules['_frozen_importlib'];bootstrap_fields=module_fields.__get__(bootstrap)\n        assert type(bootstrap) is module_type and modules['importlib._bootstrap'] is bootstrap and loader._bootstrap is bootstrap\n        frozen=bootstrap_fields['FrozenImporter'];builtin=bootstrap_fields['BuiltinImporter']\n        assert type(frozen) is type and type(builtin) is type\n        assert module_fields.__get__(sys)['__loader__'] is builtin and module_fields.__get__(sys)['__spec__'].loader is builtin\n        assert bootstrap_fields['__loader__'] is frozen and bootstrap_fields['__spec__'].loader is frozen and bootstrap_fields['__spec__'].origin=='frozen'\n        assert abc_fields['__loader__'] is frozen and abc_fields['__spec__'].loader is frozen\n        for importer in (frozen,builtin):\n            for method in ('find_spec','create_module','exec_module'):\n                function=type.__dict__['__dict__'].__get__(importer)[method].__func__\n                assert type(function) is function_type and function.__globals__ is bootstrap_fields\n        abc_filename='<frozen abc>'\n    else:\n        assert type(abc_fields['__loader__']) is loader.SourceFileLoader and abc_fields['__spec__'].origin==ABC_PATH\n    abc_code=code_at(compile(ABC_SOURCE,abc_filename,'exec',dont_inherit=True),'ABCMeta')\n    meta=abc_fields['ABCMeta']\n    assert mapping['ABCMeta'] is meta\n    type_fields=type.__dict__['__dict__'];bases=type.__dict__['__bases__'];mro=type.__dict__['__mro__']\n    assert type(meta) is type and bases.__get__(meta)==(type,) and mro.__get__(meta)==(meta,type,object)\n    meta_fields=type_fields.__get__(meta)\n    for name in ('__getattribute__','__call__','__eq__','__hash__','mro'):\n        assert getattr(meta,name) is getattr(type,name)\n    for expected in abc_code.co_consts:\n        if type(expected) is code_type:\n            actual=meta_fields[expected.co_name]\n            if type(actual) is staticmethod:actual=actual.__func__\n            assert type(actual) is function_type and actual.__globals__ is abc_fields and actual.__code__==expected\n    abc_native=modules['_abc'];abc_native_fields=module_fields.__get__(abc_native)\n    assert type(abc_native) is module_type and abc_native_fields['__spec__'].origin=='built-in'\n    for name in ('_abc_init','_abc_register','_abc_instancecheck','_abc_subclasscheck'):\n        assert abc_fields[name] is abc_native_fields[name] and type(abc_fields[name]) is type(len)\n    base=mapping['BaseSelector'];implementation=mapping['_BaseSelectorImpl'];cls=mapping['DefaultSelector']\n    if cls is mapping.get('KqueueSelector'):\n        chain=(cls,implementation,base,object)\n        owners={'__init__':'KqueueSelector','register':'KqueueSelector','get_map':'_BaseSelectorImpl','unregister':'KqueueSelector','close':'KqueueSelector','select':'KqueueSelector'}\n    else:\n        assert cls is mapping.get('EpollSelector')\n        chain=(cls,mapping['_PollLikeSelector'],implementation,base,object)\n        owners={'__init__':'_PollLikeSelector','register':'_PollLikeSelector','get_map':'_BaseSelectorImpl','unregister':'_PollLikeSelector','close':'EpollSelector','select':'EpollSelector'}\n    for position,item in enumerate(chain[:-1]):\n        assert type(item) is meta\n        actual_bases=bases.__get__(item);actual_mro=mro.__get__(item)\n        assert len(actual_bases)==1 and actual_bases[0] is chain[position+1]\n        assert len(actual_mro)==len(chain)-position and all(left is right for left,right in zip(actual_mro,chain[position:]))\n    methods={}\n    for name,owner_name in owners.items():\n        owner=mapping[owner_name];method=type_fields.__get__(owner)[name]\n        assert getattr(cls,name) is method and type(method) is function_type\n        assert method.__globals__ is mapping and method.__code__==code_at(selector_code,owner_name,name)\n        methods[name]=method\n    native=modules['select'];native_fields=module_fields.__get__(native)\n    assert type(native) is module_type and mapping['select'] is native\n    actual_path,actual_digest=_scope_select_native_source(c)\n    assert actual_path==NATIVE_ORIGIN and actual_digest==_scope_select_native_sha\n    if cls is mapping.get('KqueueSelector'):\n        assert '_selector_cls' not in type_fields.__get__(cls)\n        backend=native_fields['kqueue']\n    else:\n        backend=type_fields.__get__(cls)['_selector_cls'];assert backend is native_fields['epoll']\n    new=backend.__dict__['__new__'];fields=type(new).__dict__\n    assert type(new) is type(len) and fields['__self__'].__get__(new) is backend\n    assert backend.__module__=='select' and type(backend) is type\n    return cls,methods,backend\n\ndef _scope_select_first_config(arguments):\n    if type(arguments) is not list or len(arguments)!=9 or not all(type(value) is str for value in arguments):return False\n    try:\n        for value in arguments:value.encode('utf-8','strict')\n        return (arguments[:2]==['/usr/bin/git','--no-replace-objects'] and arguments[2].startswith('--git-dir=/') and\n            arguments[3:5]==['config','--file'] and arguments[5].startswith('/') and\n            arguments[6:]==['--name-only','--list','--no-includes'] and len(json.dumps(arguments,ensure_ascii=True).encode())<=2048)\n    except (UnicodeError,TypeError,ValueError):return False\n\ndef _scope_select_call(bound,arguments,raw,cap,error_cap,timeout,environment):\n    state=_scope_select_state\n    if state['used']:\n        previous=state['suspended'];state['suspended']=True\n        try:return bound(arguments,raw,cap,error_cap,timeout,environment)\n        finally:state['suspended']=previous\n    if (type(bound) is not type(c._DarwinChildOwner._foreground.__get__(object(),object)) or\n            bound.__func__.__code__ is not c._DarwinChildOwner._foreground.__code__ or\n            type(bound.__self__) is not c._DarwinChildOwner or not _scope_select_first_config(arguments)):\n        return bound(arguments,raw,cap,error_cap,timeout,environment)\n    state['used']=True;state['argv']=arguments;state['foreground']=bound.__func__.__code__\n    original_class,methods,backend=_scope_select_binding()\n    state['counts']={'entered':0,'returned':0,'raised':0,'nonempty':0,'events_total':0,'last_length':'GAP'}\n    state['native_selector']=original_class;state['owner']=bound.__self__\n    state['process_snapshot']='GAP';state['process_attempted']=False;state['process_pending']=False\n    original_select=methods['select']\n    def increment(key,amount=1):\n        facts=state['counts']\n        if facts is None:return\n        try:\n            value=facts[key]\n            if type(value) is not int or type(amount) is not int or value<0 or amount<0 or value+amount>2147483647:state['counts']=None\n            else:facts[key]=value+amount\n        except (KeyError,TypeError,ValueError,OverflowError,MemoryError):state['counts']=None\n    class ScopeFirstConfigSelector(original_class):\n        __slots__=()\n        def select(self,*args,**kwargs):\n            if state['suspended']:return original_select(self,*args,**kwargs)\n            if state['selector'] is None:state['selector']=self\n            elif state['selector'] is not self:state['counts']=None\n            increment('entered')\n            first_git_process_snapshot(sys._getframe().f_back,self)\n            try:result=original_select(self,*args,**kwargs)\n            except BaseException:\n                increment('raised')\n                raise\n            increment('returned')\n            if type(result) is not list:state['counts']=None\n            elif state['counts'] is not None:\n                try:\n                    length=len(result)\n                    if length>2147483647:state['counts']=None\n                    else:\n                        state['counts']['last_length']=length\n                        increment('events_total',length)\n                        if length:increment('nonempty')\n                except (KeyError,TypeError,ValueError,OverflowError,MemoryError):state['counts']=None\n            return result\n    assert all(getattr(ScopeFirstConfigSelector,name) is methods[name] for name in ('__init__','register','get_map','unregister','close'))\n    state['selector_class']=ScopeFirstConfigSelector\n    container=bound.__func__.__globals__.get('selectors',c.selectors)\n    assert container.DefaultSelector is original_class\n    try:\n        try:container.DefaultSelector=ScopeFirstConfigSelector\n        except (AttributeError,TypeError,MemoryError):state['counts']=None\n        return bound(arguments,raw,cap,error_cap,timeout,environment)\n    finally:container.DefaultSelector=original_class\n" + r"""
 _scope_process_helper_raw=rb'''import hashlib,importlib.util,json,os,stat,sys
 from pathlib import Path
 
@@ -10396,7 +10729,7 @@ def main():
             source_raw.extend(block)
     finally:os.close(source_fd)
     _stage='source-hash'
-    assert len(source_raw)<=16777216 and hashlib.sha256(source_raw).hexdigest()=='6634f9df4ea9a1e02cd6212d58a82379dd5148780672700792f8248f76ea6f9b'
+    assert len(source_raw)<=16777216 and hashlib.sha256(source_raw).hexdigest()=='d35cb669a1521fb007c7814c49ca05054ef13d973067de8d0719073525971597'
     _stage='consumer-load'
     spec=importlib.util.spec_from_file_location('scope_fixed_procinfo_consumer',source)
     c=importlib.util.module_from_spec(spec);sys.modules[spec.name]=c;spec.loader.exec_module(c)
@@ -10415,7 +10748,7 @@ def main():
                 _stage+='-owner' if state.st_uid not in (0,principal) else '-mode' if state.st_mode&(stat.S_IWGRP|stat.S_IWOTH) else '-acl'
             return accepted
         sources=((str(Path(__file__).absolute()),expected),(sys.executable,sys.argv[3]),
-                 (str(source),'6634f9df4ea9a1e02cd6212d58a82379dd5148780672700792f8248f76ea6f9b'),(c.ctypes.__file__,PROC_CTYPES_PY_DIGEST),
+                 (str(source),'d35cb669a1521fb007c7814c49ca05054ef13d973067de8d0719073525971597'),(c.ctypes.__file__,PROC_CTYPES_PY_DIGEST),
                  (sys.modules['_ctypes'].__file__,PROC_CTYPES_EXT_DIGEST))
         root=Path(__file__).absolute().parents[3]
         def owned_root_rule(fd,state,ancestor):
@@ -10628,7 +10961,10 @@ def first_git_process_snapshot(frame,selector):
             def first_git_select_observation():
                 try:
                     state=_scope_select_state;fact=relation_foreground[1]
-                    eperm=(type(error) is PermissionError and relation_outer_errno==1 and relation_snapshot_state[1] is relation_io_binding[0])
+                    cleanup_cause=relation_field(error,'__cause__')
+                    eperm=(type(error) is c.Refusal and relation_snapshot_state[2] is error and
+                        type(cleanup_cause) is PermissionError and OSError.__dict__['errno'].__get__(cleanup_cause,OSError)==1 and
+                        relation_snapshot_state[1] is relation_io_binding[0] and relation_snapshot_state[4]==2 and relation_snapshot_state[5])
                     direct=(type(error) is c.Refusal and relation_snapshot_state[2] is error and
                         relation_snapshot_state[4]==1 and relation_snapshot_state[5] and not relation_truncated and
                         relation_field(error,'__cause__') is None and relation_field(error,'__context__') is None)
@@ -10637,6 +10973,7 @@ def first_git_process_snapshot(frame,selector):
                         return 'GAP'
                     child=fact['child'];frame=relation_io_binding[0]
                     if type(child) is not dict or type(child['pid']) is not int or not 0<child['pid']<=2147483647:return 'GAP'
+                    if eperm and type(child['returncode']) is not int:return 'GAP'
                     local=type(frame).__dict__['f_locals'].__get__(frame)
                     if (not state['used'] or state['foreground'] is not relation_foreground_code or
                             type(local['selector']) is not state['selector_class'] or local['argv'] is not state['argv']):return 'GAP'
@@ -10694,7 +11031,8 @@ def first_git_process_snapshot(frame,selector):
                     line=fields['tb_lineno'].__get__(tb)
                     valid=type(function) is str and len(function)<=80
                     rows.append([function if valid else 'GAP',line if type(line) is int else 'GAP'])
-                    if code_object is relation_foreground_code and value is relation_snapshot_state[3] and line==1230:relation_snapshot_state[1]=frame
+                    if (code_object is relation_foreground_code and relation_snapshot_state[3] is not None and
+                            value is relation_field(relation_snapshot_state[3],'__cause__') and line==1231):relation_snapshot_state[1]=frame
                     if code_object is relation_foreground_code and not relation_foreground[0]:
                         relation_foreground[0]=True
                         try:
@@ -10731,7 +11069,7 @@ def first_git_process_snapshot(frame,selector):
                         except BaseException:pass
                     if code_object is relation_foreground_code and value is relation_snapshot_state[3]:
                         relation_snapshot_state[4]+=1
-                        if line!=1196:relation_snapshot_state[5]=False
+                        if line not in (1196,1250):relation_snapshot_state[5]=False
                     if code_object is relation_foreground_code and frame is relation_io_binding[0] and line==1196 and type(value) is c.Refusal:
                         if object.__getattribute__(value,'__dict__').get('code')=='E_RUNTIME':relation_snapshot_state[2]=value
                     if (code_object is relation_foreground_code and frame is relation_io_binding[0] and

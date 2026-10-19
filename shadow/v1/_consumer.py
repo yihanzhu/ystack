@@ -1224,16 +1224,30 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
             _require(not stderr, "E_RUNTIME")
             return bytes(stdout)
         except BaseException as exc:
+            cleanup_errors = []
             if child is not None and child.returncode is None:
                 for number in (signal.SIGTERM, signal.SIGKILL):
                     try:
                         os.killpg(child.pid, number)
                     except ProcessLookupError:
                         pass
+                    except BaseException as cleanup_exc:
+                        cleanup_errors.append(cleanup_exc)
                 try:
                     child.wait(timeout=10)
                 except BaseException as cleanup_exc:
-                    raise exc from cleanup_exc
+                    cleanup_errors.append(cleanup_exc)
+            if cleanup_errors:
+                cause = None
+                retained = [exc]
+                for cleanup_exc in cleanup_errors:
+                    if any(cleanup_exc is prior for prior in retained):
+                        continue
+                    cleanup_exc.__cause__ = cause
+                    cause = cleanup_exc
+                    retained.append(cleanup_exc)
+                if cause is not None:
+                    raise exc from cause
             raise
         finally:
             signal.pthread_sigmask(signal.SIG_BLOCK,
