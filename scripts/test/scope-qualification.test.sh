@@ -107,6 +107,7 @@ scope_fixture_owner_launch() {
   fi
 }
 scope_fixture_signal=''
+scope_dashboard_inflight=false
 trap 'scope_stage_freeze;scope_fixture_signal=ALRM;if [ "$scope_owner_waiting" = true ]; then scope_owner_state=unknown;fi;scope_fixture_owner_cancel || :;exit 142' ALRM
 
 cleanup() {
@@ -127,7 +128,7 @@ cleanup() {
   else
     /usr/bin/printf 'genuine-cleanup: NOT_STARTED\n'
   fi
-  if [ "$prior" -eq 142 ] && [ "$scope_fixture_signal" = ALRM ]; then
+  if [ "$prior" -eq 142 ] && [ "$scope_fixture_signal" = ALRM ] && [ "${scope_dashboard_inflight:-false}" = false ]; then
     python3 -I -S -B - "$tmp/stale-observation/observer.py" "$scope_stage_frozen" "${scope_stage_snapshot[@]}" <<'PY_FIXED_COST_EXPORT' || :
 import io,json,runpy,sys,types
 
@@ -162,7 +163,12 @@ try:
 finally:sys.stderr=saved
 try:
     original=buffer.getvalue();buffer.close()
-    if original:sys.stderr.buffer.write(original+stage_record(sys.argv[2:],original))
+    if original:
+        lines=original.splitlines(keepends=True)
+        required=b''.join(lines[:3]);pair=b''.join(lines[3:])
+        stage=stage_record(sys.argv[2:],required)
+        if len(required+stage+pair)>4096:pair=b''
+        sys.stderr.buffer.write(required+stage+pair)
 except BaseException:pass
 PY_FIXED_COST_EXPORT
   fi
@@ -943,16 +949,19 @@ def cost_open(which,flags):
     except BaseException:
         os.close(fd);raise
 
+COST_REQUIRED=('protected-0-frontend','protected-0-observer','terminal-normal')
+COST_DASHBOARD=('dashboard-flow-frontend','dashboard-flow-observer')
+
 def cost_rows():
     fd=cost_open('data',os.O_RDONLY)
     try:raw=os.read(fd,4097)
     finally:os.close(fd)
     rows=[json.loads(line) for line in raw.splitlines()]
-    if len(raw)>4096 or len(rows)>3 or any(len(line)+1>1024 for line in raw.splitlines()):raise ValueError('cost rows')
+    if len(raw)>4096 or len(rows)>5 or any(len(line)+1>1024 for line in raw.splitlines()):raise ValueError('cost rows')
     if len({row['sample'] for row in rows})!=len(rows):raise ValueError('duplicate cost')
     import math
-    for row in rows:
-        if row['sample'] not in {'protected-0-frontend','protected-0-observer','terminal-normal'}:raise ValueError('cost case')
+    def validate(row):
+        if row['sample'] not in COST_REQUIRED+COST_DASHBOARD:raise ValueError('cost case')
         for name in ('source_sha256','reader_sha256','copy_sha256','argv_sha256'):
             value=row[name]
             if type(value) is not str or len(value)!=64 or any(c not in '0123456789abcdef' for c in value):raise ValueError('cost binding')
@@ -962,19 +971,39 @@ def cost_rows():
             not all(type(v) in (int,float) and math.isfinite(v) for v in points) or points[0]!=0 or
             not all(a<=b for a,b in zip(points,points[1:]))):raise ValueError('cost phases')
         if row['completed'] and (points=='GAP' or row.get('outcome')!='normal'):raise ValueError('cost incomplete')
+    original=[row for row in rows if row.get('sample') in COST_REQUIRED]
+    for row in original:validate(row)
+    try:
+        for row in rows:
+            if row not in original:validate(row)
+    except (ValueError,KeyError,TypeError):
+        if row.get('sample') not in COST_DASHBOARD:raise
+        rows=original
     return rows
 
 def cost_put(row):
     rows=cost_rows()
-    if row['sample'] not in {'protected-0-frontend','protected-0-observer','terminal-normal'}:raise ValueError('cost sample')
+    if row['sample'] not in COST_REQUIRED+COST_DASHBOARD:raise ValueError('cost sample')
     rows=[old for old in rows if old['sample']!=row['sample']]+[row]
+    rows=[old for old in rows if old['sample'] in COST_REQUIRED]+[old for old in rows if old['sample'] in COST_DASHBOARD]
     lines=[json.dumps(old,separators=(',',':'),ensure_ascii=True).encode()+b'\n' for old in rows]
     raw=b''.join(lines)
-    if len(rows)>3 or any(len(line)>1024 for line in lines) or len(raw)>4096:raise ValueError('cost encoded cap')
+    required=[line for old,line in zip(rows,lines) if old['sample'] in COST_REQUIRED]
+    optional=[line for old,line in zip(rows,lines) if old['sample'] in COST_DASHBOARD]
+    reserve=(3-len(required))*1024+sum(max(len(line),1024) for line in required)
+    if optional and reserve+sum(map(len,optional))>4096:
+        rows=[old for old in rows if old['sample'] in COST_REQUIRED]
+        raw=b''.join(required);lines=required
+    if len(rows)>5 or any(len(line)>1024 for line in lines) or len(raw)>4096:raise ValueError('cost encoded cap')
     fd=cost_open('data',os.O_WRONLY)
     try:
-        os.ftruncate(fd,0)
-        if os.write(fd,raw)!=len(raw):raise OSError('cost write')
+        if row['sample'] in COST_REQUIRED:os.ftruncate(fd,0)
+        try:
+            if os.write(fd,raw)!=len(raw):raise OSError('cost write')
+            os.ftruncate(fd,len(raw))
+        except Exception:
+            if row['sample'] in COST_DASHBOARD:os.ftruncate(fd,sum(map(len,required)))
+            raise
     finally:os.close(fd)
 
 def cost_bind(sample,source,reader,copy,argv):
@@ -1004,8 +1033,9 @@ def cost_finish(sample,points,normal,counts=None):
 
 def cost_qualify():
     rows=cost_rows()
-    if {row['sample'] for row in rows}!={'protected-0-frontend','protected-0-observer','terminal-normal'}:return
-    if not all(row['completed'] for row in rows):return
+    original=[row for row in rows if row['sample'] in COST_REQUIRED]
+    if {row['sample'] for row in original}!=set(COST_REQUIRED):return
+    if not all(row['completed'] for row in original):return
     fd=cost_open('eligible',os.O_WRONLY)
     try:
         if os.write(fd,b'1')!=1:raise OSError('cost eligibility')
@@ -1018,14 +1048,62 @@ def cost_export():
         finally:os.close(fd)
         if eligible!=b'1':return
         rows=cost_rows()
-        if len(rows)!=3 or not all(row['completed'] for row in rows):return
+        original=[row for row in rows if row['sample'] in COST_REQUIRED]
+        if len(original)!=3 or not all(row['completed'] for row in original):return
+        pair=[row for row in rows if row['sample'] in COST_DASHBOARD]
+        if len(pair)!=2 or not all(row['completed'] for row in pair):pair=[]
+        rows=original+pair
         raw=b''.join(json.dumps(row,separators=(',',':'),ensure_ascii=True).encode()+b'\n' for row in rows)
         if len(raw)<=4096:sys.stderr.buffer.write(raw)
     except BaseException:pass
 
+def cost_dashboard_binding(source,line,expression,arguments,binding,copy_sha):
+    call='  expect_reasons "dashboard shape $dashboard_case" '+chr(92)
+    if type(source) is not str or hashlib.sha256(source.encode()).hexdigest()!=binding['source'][3]['sha256']:return False
+    if binding['private_frontend']['sha256']!=copy_sha:return False
+    lines=source.splitlines()
+    if lines.count(call)!=1 or type(line) is not str or not line.isdecimal():return False
+    if int(line)!=lines.index(call)+1 or expression!='del(.body.flow)':return False
+    parent=os.path.dirname(COST['data'][0]);base=os.path.dirname(parent)
+    expected=[os.path.join(base,name) for name in ('scope.json','shadow-set.json','dashboard-shape.json',
+        'risk.json','kill.json','duty.json','marker.json','legacy-bundles','legacy-source.git')]
+    if arguments!=expected or binding.get('index')!=8 or binding.get('glob')!='evaluation-reasons':return False
+    if any(row['sample'] in COST_DASHBOARD for row in cost_rows()):return False
+    for sample in COST_DASHBOARD:
+        cost_bind(sample,binding['source'][0]['sha256'],binding['source'][1]['sha256'],
+            binding['private_frontend']['sha256'],binding['command_sha256'])
+    return True
+
+def cost_dashboard_observer(log,case,index,argv):
+    if index!=8 or case!='evaluation-reasons':return False
+    path=str(log)[:-6]+'.binding.json'
+    fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+    try:
+        info=os.fstat(fd);raw=os.read(fd,3073)
+        if info.st_uid!=os.getuid() or not stat.S_ISREG(info.st_mode) or info.st_nlink!=1:return False
+        if len(raw)>3072 or os.fstat(fd)!=info or os.stat(path,follow_symlinks=False)!=info:return False
+    finally:os.close(fd)
+    binding=json.loads(raw)
+    if binding.get('dashboard_selected') is not True or binding.get('status')!='CASE_BINDING':return False
+    expected=[os.path.join(os.path.dirname(os.path.dirname(COST['data'][0])),name)
+        for name in ('legacy-bundles','legacy-source.git')]
+    if len(argv)!=7 or argv[1]!='read' or argv[4:6]!=expected:return False
+    pair=[row for row in cost_rows() if row['sample'] in COST_DASHBOARD]
+    if len(pair)!=2 or any(row['completed'] for row in pair):return False
+    return all(row['source_sha256']==binding['source'][0]['sha256'] and
+        row['reader_sha256']==binding['source'][1]['sha256'] and
+        row['copy_sha256']==binding['private_frontend']['sha256'] and
+        row['argv_sha256']==binding['command_sha256'] for row in pair)
+
 def cost_frontend(source,sample,helper):
     import shlex
     entry="scope_cost_points=($SECONDS GAP GAP GAP GAP)\nscope_cost_done=false\nscope_cost_wait=false\n"
+    dashboard=sample=='dashboard-flow-frontend'
+    if dashboard:
+        entry="scope_cost_active=false\nIFS= read -r scope_cost_binding <"+shlex.quote(str(helper.parent/'8.binding.json'))+" || :\n"+\
+            "case \"$scope_cost_binding\" in '{\"dashboard_selected\":true,'*) scope_cost_active=true ;; esac\n"+\
+            'scope_cost_points=(GAP GAP GAP GAP GAP)\n[ "$scope_cost_active" != true ] || scope_cost_points[0]=$SECONDS\n'+\
+            "scope_cost_done=false\nscope_cost_wait=false\n"
     launch='/usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C LANG=C YSTACK_SCOPE_JQ="$jq_bin"'
     wait='wait "$reader_pid" || reader_status=$?\n'
     cleanup='cleanup() { finish_reader; exec 8<&-; /bin/rm -rf -- "$scratch" >/dev/null 2>&1 || :; }'
@@ -1048,9 +1126,14 @@ PY_FIXED_COST_FINISH
   return "$scope_cost_status"
 }'''
     logger=logger.replace('HELPER',shlex.quote(str(helper))).replace('SAMPLE',shlex.quote(sample))
+    if dashboard:
+        logger=logger.replace('  scope_cost_points[3]=$SECONDS','  [ "$scope_cost_active" != true ] || scope_cost_points[3]=$SECONDS')
+        logger=logger.replace('  scope_cost_points[4]=$SECONDS','  [ "$scope_cost_active" != true ] || scope_cost_points[4]=$SECONDS')
+        logger=logger.replace('[ "$scope_cost_done" = false ]','[ "$scope_cost_done" = false ] && [ "$scope_cost_active" = true ]')
     source=source.replace('umask 077\n','umask 077\n'+entry,1)
-    source=source.replace(launch,'scope_cost_points[1]=$SECONDS\n'+launch,1)
-    source=source.replace(wait,wait+'scope_cost_points[2]=$SECONDS\n[ "$reader_status" -ne 0 ] || scope_cost_wait=true\n',1)
+    clock='[ "$scope_cost_active" != true ] || ' if dashboard else ''
+    source=source.replace(launch,clock+'scope_cost_points[1]=$SECONDS\n'+launch,1)
+    source=source.replace(wait,wait+clock+'scope_cost_points[2]=$SECONDS\n[ "$reader_status" -ne 0 ] || scope_cost_wait=true\n',1)
     return source.replace(cleanup,cleanup.replace('cleanup()', 'scope_cost_original_cleanup()')+'\n'+logger,1)
 
 FIELDS=('dev','ino','type','uid','gid','mode','nlink','size','mtime_ns','ctime_ns')
@@ -1067,6 +1150,9 @@ def observe(original,log,case,phase,argv,index):
     sources={str(original),str(original.parents[2]/'shadow/v1/_consumer.py')}
     started=time.monotonic()
     cost_selected=index==0 and case=='.github/workflows/ci.yml'
+    try:dashboard_selected=cost_dashboard_observer(log,case,index,argv)
+    except Exception:dashboard_selected=False
+    phase_selected=cost_selected or dashboard_selected
     cost_points=[started,None,None,None,None]
     cost_normal=False
     source_lines={}
@@ -1286,19 +1372,22 @@ def observe(original,log,case,phase,argv,index):
     previous=sys.gettrace()
     try:
         sys.argv=argv
-        cost_points[1]=time.monotonic() if cost_selected else None
+        cost_points[1]=time.monotonic() if phase_selected else None
         try:sys.settrace(dispatch)
         except BaseException as error:gap='trace-install:'+type(error).__name__
-        cost_points[2]=time.monotonic() if cost_selected else None
+        cost_points[2]=time.monotonic() if phase_selected else None
         try:
             runpy.run_path(str(original),run_name='__main__')
             cost_normal=True
-        finally:cost_points[3]=time.monotonic() if cost_selected else None
+        finally:cost_points[3]=time.monotonic() if phase_selected else None
     finally:
         try:sys.settrace(previous)
         except BaseException as error:gap='trace-restore:'+type(error).__name__
-        cost_points[4]=time.monotonic() if cost_selected else None
+        cost_points[4]=time.monotonic() if phase_selected else None
         watched_cache.clear()
+        if dashboard_selected:
+            try:cost_finish('dashboard-flow-observer',cost_points,cost_normal and gap is None)
+            except BaseException:pass
         if index==0 and case=='.github/workflows/ci.yml':
             try:cost_finish('protected-0-observer',cost_points,cost_normal and gap is None,classification_counts[0] if classification_counts[0] is not None else 'GAP')
             except BaseException:pass
@@ -1421,6 +1510,7 @@ for index,case in enumerate(cases+['evaluation-reasons']):
     assert copy.count('7>&- 8>&- &')==1
     copy=copy.replace('7>&- 8>&- &','7>&- 8>&- 19>&- &',1)
     if index==0:copy=cost_functions['cost_frontend'](copy,'protected-0-frontend',observer)
+    if index==8:copy=cost_functions['cost_frontend'](copy,'dashboard-flow-frontend',observer)
     frontend=area/(str(index)+'.sh');frontend.write_text(copy);frontend.chmod(0o500)
     original_lines=front.splitlines();copied_lines=copy.splitlines();mapping={}
     for match in difflib.SequenceMatcher(a=original_lines,b=copied_lines,autojunk=False).get_matching_blocks():
@@ -1571,7 +1661,7 @@ for row in saved_rows:module['cost_put'](row)
 reports.append({'optional_classifier_counts':counts_row['counts'],'actual_count_faults':8,
     'original_sample_and_qualification_preserved':True,'counts_are_branch_facts_not_CPU':True})
 module['cost_qualify']();assert (base/'eligible').read_bytes()==b'1'
-outer=source[source.index('  if [ "$prior" -eq 142 ] && [ "$scope_fixture_signal" = ALRM ]; then'):]
+outer=source[source.index('  if [ "$prior" -eq 142 ] && [ "$scope_fixture_signal" = ALRM ]'):]
 outer=outer[:outer.index('  if [ "$cleanup_status" -eq 0 ]; then')]
 outer=outer.replace('"$tmp/stale-observation/observer.py"',repr(str(helper)))
 script='scope_fixture_signal=ALRM\ncleanup_status=0\nprior=142\n'+outer
@@ -2100,6 +2190,193 @@ def sudo_provenance_controls():
         'actual_factory_sha256':hashlib.sha256(ast.get_source_segment(enforced,factory).encode()).hexdigest()})
 sudo_provenance_controls()
 
+
+def dashboard_phase_controls():
+    base,helper,module=fixture('dashboard-fixed-source')
+    required=[]
+    for sample in module['COST_REQUIRED']:
+        module['cost_finish'](sample,[0,1,2,3,4],True)
+    required=module['cost_rows']();module['cost_qualify']()
+    expected_copy='c'*64
+    command=[str(area/'8.sh'),'evaluate']+[str(area/name) for name in
+        ('scope.json','shadow-set.json','dashboard-shape.json','risk.json','kill.json',
+         'duty.json','marker.json','legacy-bundles','legacy-source.git')]
+    call='  expect_reasons "dashboard shape $dashboard_case" '+chr(92)
+    call_line=str(source.splitlines().index(call)+1)
+    binding={'status':'CASE_BINDING','index':8,'glob':'evaluation-reasons',
+        'source':[{'sha256':'a'*64},{'sha256':'b'*64},{'sha256':'d'*64},
+            {'sha256':hashlib.sha256(source.encode()).hexdigest()}],
+        'private_frontend':{'sha256':expected_copy},
+        'command_sha256':hashlib.sha256(json.dumps(command,separators=(',',':')).encode()).hexdigest()}
+    select=module['cost_dashboard_binding'];arguments=command[2:]
+    outcomes=[]
+    for name in ('line','expression','source','argv','copy','glob'):
+        wrong=json.loads(json.dumps(binding));actual_source=source;line=call_line
+        expression='del(.body.flow)';argv=list(arguments);copy_sha=expected_copy
+        if name=='line':line=str(int(line)+1)
+        elif name=='expression':expression='del(.body.telemetry)'
+        elif name=='source':actual_source=source+'\n'
+        elif name=='argv':argv[2]=str(area/'dashboard.json')
+        elif name=='copy':copy_sha='e'*64
+        elif name=='glob':wrong['glob']='dashboard-flow'
+        chosen=select(actual_source,line,expression,argv,wrong,copy_sha)
+        print(json.dumps({'dashboard_binding_before_assert':{'case':name,'selected':chosen,
+            'rows':module['cost_rows']()}},sort_keys=True),flush=True)
+        assert chosen is False and module['cost_rows']()==required
+        outcomes.append({'case':name,'selected':chosen})
+    selected=select(source,call_line,'del(.body.flow)',arguments,binding,expected_copy)
+    print(json.dumps({'dashboard_first_before_assert':{'selected':selected,'rows':module['cost_rows']()}},sort_keys=True),flush=True)
+    assert selected is True
+    assert select(source,call_line,'del(.body.flow)',arguments,binding,expected_copy) is False
+    for expression in ('del(.body.telemetry)','del(.body.evaluator)','del(.body.catalog_ref)',
+        'del(.body.coverage)','.body.extra_block = {}','.extra = true',
+        '.body.core_contract.semantic_identity = "core.contracts.v1"','.body.coverage.families_total = 8',
+        '.body.observed_at = "2026-02-30T00:00:00Z"','.body.evaluator.content.body.runtime.host_os = "plan9"',
+        '.body.catalog_ref.kind = "eval_seed_set"'):
+        assert select(source,call_line,expression,arguments,binding,expected_copy) is False
+    bound=dict(dashboard_selected=True,**binding)
+    log=base/'8.jsonl';log.touch(mode=0o600)
+    binding_path=base/'8.binding.json';binding_path.write_text(json.dumps(bound,separators=(',',':'))+'\n');binding_path.chmod(0o600)
+    package=base/'actual-package';(package/'scope/v1').mkdir(parents=True);(package/'shadow/v1').mkdir(parents=True)
+    program=package/'scope/v1/read-shadow-evidence.py';program.write_text('value=True\n')
+    (package/'shadow/v1/_consumer.py').write_text('value=True\n')
+    reader_argv=[str(program),'read','owned-scope','owned-shadow',*arguments[-2:],'owned-output']
+    assert module['cost_dashboard_observer'](str(log),'evaluation-reasons',8,reader_argv)
+    assert not module['cost_dashboard_observer'](str(log),'wrong-case',8,reader_argv)
+    assert not module['cost_dashboard_observer'](str(log),'evaluation-reasons',7,reader_argv)
+    wrong_argv=list(reader_argv);wrong_argv[4]='wrong-bundle'
+    assert not module['cost_dashboard_observer'](str(log),'evaluation-reasons',8,wrong_argv)
+    composed=module['cost_frontend'](front,'dashboard-flow-frontend',helper)
+    a=composed.index('scope_cost_original_cleanup()');b=composed.index('signal_exit()',a)
+    cleanup=composed[a:b].replace(
+        'scope_cost_original_cleanup() { finish_reader; exec 8<&-; /bin/rm -rf -- "$scratch" >/dev/null 2>&1 || :; }',
+        'scope_cost_original_cleanup() { printf x >>"$calls"; }')
+    for name,status,normal in (('normal',0,True),('unwind',7,False),('missing-wait',1,False)):
+        script='set -uo pipefail\ncalls='+repr(str(base/(name+'.calls')))+'\nscope_cost_active=true\n'
+        script+='scope_cost_points=($SECONDS GAP GAP GAP GAP)\nscope_cost_done=false\nscope_cost_wait=false\n'+cleanup
+        script+='trap cleanup EXIT\n'
+        if name!='missing-wait':
+            script+='scope_cost_points[1]=$SECONDS\n/bin/bash -c "exit '+str(status)+'" &\nreader_pid=$!\nreader_status=0\n'
+            script+='wait "$reader_pid" || reader_status=$?\nscope_cost_points[2]=$SECONDS\n[ "$reader_status" -ne 0 ] || scope_cost_wait=true\n'
+        script+=('trap - EXIT\ncleanup\n' if normal else 'exit '+str(status)+'\n')
+        path=base/(name+'.sh');path.write_text(script);rc,out,err=run(['/bin/bash',str(path)])
+        row=next(row for row in module['cost_rows']() if row['sample']=='dashboard-flow-frontend')
+        print(json.dumps({'dashboard_frontend_before_assert':{'case':name,'returncode':rc,
+            'stdout_hex':out.hex(),'stderr_hex':err.hex(),'row':row}},sort_keys=True),flush=True)
+        assert rc==status and out==err==b'' and (base/(name+'.calls')).read_bytes()==b'x'
+        assert row['completed'] is normal and (row['phases']=='GAP')==(name=='missing-wait')
+    before_unselected=(base/'data').read_bytes()
+    unselected='set -uo pipefail\ncalls='+repr(str(base/'unselected.calls'))+'\n'
+    unselected+='scope_cost_active=false\nscope_cost_points=(GAP GAP GAP GAP GAP)\nscope_cost_done=false\nscope_cost_wait=false\n'+cleanup
+    unselected+='trap - EXIT\ncleanup\n'
+    path=base/'unselected.sh';path.write_text(unselected)
+    rc,out,err=run(['/bin/bash',str(path)])
+    after_unselected=(base/'data').read_bytes()
+    print(json.dumps({'dashboard_later_frontend_before_assert':{'returncode':rc,'stdout_hex':out.hex(),
+        'stderr_hex':err.hex(),'shared_leaf_before_hex':before_unselected.hex(),
+        'shared_leaf_after_hex':after_unselected.hex()}},sort_keys=True),flush=True)
+    assert rc==0 and not out and not err and after_unselected==before_unselected
+    assert (base/'unselected.calls').read_bytes()==b'x'
+    for name,code in (('normal','value=True\n'),('unwind','raise ValueError("dashboard unwind")\n')):
+        program.write_text(code)
+        for sample in module['COST_DASHBOARD']:module['cost_bind'](sample,*['0'*64]*4)
+        # The source-binding checks above remain real. This narrow seam isolates the actual observer phase unwind.
+        observe=module['observe'];globals_=observe.__globals__;original_select=globals_['cost_dashboard_observer']
+        globals_['cost_dashboard_observer']=lambda *args:True
+        error=None
+        freeze([helper,program,package/'shadow/v1/_consumer.py'])
+        try:observe(program,str(log),'evaluation-reasons','reader',reader_argv,8)
+        except ValueError as caught:error=caught
+        finally:globals_['cost_dashboard_observer']=original_select
+        row=next(row for row in module['cost_rows']() if row['sample']=='dashboard-flow-observer')
+        print(json.dumps({'dashboard_observer_before_assert':{'case':name,'error':type(error).__name__ if error else None,
+            'row':row,'slot0_counts':required[1].get('counts')}},sort_keys=True),flush=True)
+        assert row['completed']==(name=='normal') and row['phases']!='GAP' and 'counts' not in row
+        assert (error is None)==(name=='normal')
+    # The existing exporter and outer source execute against the actual shared leaf.
+    for sample in module['COST_DASHBOARD']:module['cost_finish'](sample,[0,1,2,3,4],True)
+    original_rows=[row for row in module['cost_rows']() if row['sample'] in module['COST_REQUIRED']]
+    assert original_rows==required
+    outer=source[source.index('  if [ "$prior" -eq 142 ] && [ "$scope_fixture_signal" = ALRM ]'):]
+    outer=outer[:outer.index('  if [ "$cleanup_status" -eq 0 ]; then')]
+    outer=outer.replace('"$tmp/stale-observation/observer.py"',repr(str(helper)))
+    script='scope_fixture_signal=ALRM\nscope_dashboard_inflight=false\ncleanup_status=0\nprior=142\n'
+    script+='scope_stage_frozen=true\nscope_stage_snapshot=(0 1 2 3 4 5 6 7 8 9 none GAP GAP GAP 10)\n'+outer
+    path=base/'actual-pair-export.sh';path.write_text(script)
+    rc,out,err=run(['/bin/bash',str(path)])
+    rows=[json.loads(line) for line in err.splitlines()]
+    print(json.dumps({'dashboard_export_before_assert':{'returncode':rc,'stdout_hex':out.hex(),
+        'stderr_hex':err.hex(),'rows':rows}},sort_keys=True),flush=True)
+    assert rc==0 and not out and rows[:3]==required and len(rows)==6 and len(err)<=4096
+    assert rows[3]['sample']=='scope-alrm-stage' and {row['sample'] for row in rows[4:]}==set(module['COST_DASHBOARD'])
+    path.write_text(script.replace('scope_dashboard_inflight=false','scope_dashboard_inflight=true'))
+    assert run(['/bin/bash',str(path)])[2]==b''
+    for sample in module['COST_DASHBOARD']:
+        module['cost_finish'](sample,[0,None,None,None,None],False)
+    path.write_text(script);assert len(run(['/bin/bash',str(path)])[2].splitlines())==4
+    # This real owned writer can still rewrite the shared leaf until its original synchronous wait completes.
+    writer=base/'unfinished-writer.py'
+    writer.write_text('import runpy,sys\nm=runpy.run_path('+repr(str(helper))+')\nprint("READY",flush=True)\nassert sys.stdin.readline()=="RELEASE\\n"\nm["cost_finish"]("dashboard-flow-frontend",[0,1,2,3,4],True)\n')
+    freeze([helper,writer,path])
+    child=None;closed=False
+    try:
+        child=subprocess.Popen([sys.executable,'-I','-S','-B',str(writer)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        ready=child.stdout.readline()
+        path.write_text(script.replace('scope_dashboard_inflight=false','scope_dashboard_inflight=true'))
+        export_rc,export_out,export_err=run(['/bin/bash',str(path)])
+        print(json.dumps({'dashboard_unfinished_shared_writer_before_assert':{'ready_hex':ready.hex(),
+            'export_returncode':export_rc,'stdout_hex':export_out.hex(),'stderr_hex':export_err.hex()}},sort_keys=True),flush=True)
+        stdout,stderr=child.communicate(b'RELEASE\n',timeout=2)
+        result=child.returncode
+    finally:
+        if child is not None:
+            if child.poll() is None:child.kill()
+            child.wait(timeout=2)
+            for pipe in (child.stdin,child.stdout,child.stderr):pipe.close()
+            closed=all(pipe.closed for pipe in (child.stdin,child.stdout,child.stderr))
+    print(json.dumps({'dashboard_shared_writer_closed_before_assert':{'returncode':result,
+        'stdout_hex':stdout.hex(),'stderr_hex':stderr.hex(),'three_pipes_closed':closed}},sort_keys=True),flush=True)
+    assert ready==b'READY\n' and export_rc==0 and export_out==export_err==b''
+    assert result==0 and not stdout and not stderr and closed
+    path.write_text(script)
+    malformed_row=next(row for row in module['cost_rows']() if row['sample']=='dashboard-flow-frontend')
+    for value in (float('nan'),True,None):
+        row=dict(malformed_row)
+        row['phases']=[0,1,2,3,value]
+        raw=b''.join(json.dumps(old,separators=(',',':')).encode()+b'\n' for old in required+[row])
+        (base/'data').write_bytes(raw)
+        rc,out,err=run(['/bin/bash',str(path)])
+        print(json.dumps({'dashboard_malformed_pair_before_assert':{'returncode':rc,'stdout_hex':out.hex(),
+            'stderr_hex':err.hex()}},sort_keys=True),flush=True)
+        assert rc==0 and not out and [json.loads(line) for line in err.splitlines()][:3]==required
+        assert len(err.splitlines())==4
+
+    # Actual encoding and write boundaries fail before any result assertion; required prefix survives.
+    globals_=module['cost_put'].__globals__;original_json=globals_['json'];original_os=globals_['os']
+    for fault in ('encoding','row-cap','combined-cap','write'):
+        for sample in module['COST_DASHBOARD']:module['cost_bind'](sample,*['0'*64]*4)
+        row=dict(next(row for row in module['cost_rows']() if row['sample']=='dashboard-flow-frontend'))
+        row.update(completed=True,phases=[0,1,2,3,4],outcome='normal')
+        if fault=='row-cap':row['extra']='x'*1024
+        if fault=='combined-cap':row['extra']='x'*500
+        def encoded(value,*args,**options):
+            if type(value) is dict and value.get('sample') in module['COST_DASHBOARD']:raise ValueError('owned encoding seam')
+            return original_json.dumps(value,*args,**options)
+        if fault=='encoding':globals_['json']=__import__('types').SimpleNamespace(dumps=encoded,loads=original_json.loads)
+        if fault=='write':globals_['os']=__import__('types').SimpleNamespace(**{name:getattr(original_os,name) for name in dir(original_os) if not name.startswith('__')})
+        if fault=='write':globals_['os'].write=lambda fd,raw:0
+        error=None
+        try:module['cost_put'](row)
+        except (ValueError,OSError) as caught:error=caught
+        finally:globals_['json']=original_json;globals_['os']=original_os
+        actual=module['cost_rows']()
+        print(json.dumps({'dashboard_failure_before_assert':{'case':fault,'error':type(error).__name__ if error else None,'rows':actual}},sort_keys=True),flush=True)
+        assert [old for old in actual if old['sample'] in module['COST_REQUIRED']]==required
+    reports.append({'dashboard_phase_controls':outcomes,'only_original_fixed_call':True,
+        'closed_synchronous_writer_required_before_terminal_qualification':True,
+        'dashboard_counts':False,'five_phase_frontend_and_observer':True})
+dashboard_phase_controls()
+
 print(json.dumps({'same_call_owned_controls':reports},sort_keys=True),flush=True)
 PY_SAME_CALL_OWNED_CONTROLS
 run_evaluator() {
@@ -2119,7 +2396,7 @@ prepare_stale_binding() {
   local index=$1 boundary=$2 frontend=$3
   shift 3
   if [ "$#" -eq 7 ]; then set -- "$@" "$tmp/legacy-bundles" "$tmp/legacy-source.git"; fi
-  python3 -I -S -B - "$root" "$tmp/stale-observation" "$index" "$boundary" "$frontend" "$@" <<'PY_PROTECTED_BINDING'
+  python3 -I -S -B - "$root" "$tmp/stale-observation" "$index" "$boundary" "$frontend" "${scope_dashboard_line:-0}" "${dashboard_case-}" "$@" <<'PY_PROTECTED_BINDING'
 import hashlib
 import json
 import os
@@ -2129,7 +2406,8 @@ import sys
 
 root, area = map(Path, sys.argv[1:3])
 index, glob, frontend = int(sys.argv[3]), sys.argv[4], Path(sys.argv[5])
-arguments = sys.argv[6:]
+dashboard_line, dashboard_expression = sys.argv[6:8]
+arguments = sys.argv[8:]
 documents = arguments[:7]
 assert 0 <= index <= 8 and len(arguments) == 9
 assert index != 8 or glob == 'evaluation-reasons'
@@ -2139,6 +2417,7 @@ identity = lambda value: (value.st_dev, value.st_ino, value.st_mode, value.st_ui
     value.st_gid, value.st_nlink, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
 
 
+scope_source=[None]
 def measured(path, maximum):
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
@@ -2154,7 +2433,9 @@ def measured(path, maximum):
             assert total <= maximum
         assert identity(os.fstat(descriptor)) == identity(before)
         assert identity(os.stat(path, follow_symlinks=False)) == identity(before)
-        return {'path': str(path), 'bytes': total, 'sha256': hashlib.sha256(b''.join(chunks)).hexdigest()}
+        raw=b''.join(chunks)
+        if path==root/'scripts/test/scope-qualification.test.sh':scope_source[0]=raw.decode('utf-8','strict')
+        return {'path': str(path), 'bytes': total, 'sha256': hashlib.sha256(raw).hexdigest()}
     finally:
         os.close(descriptor)
 
@@ -2167,7 +2448,8 @@ if index == 8:
         raw = os.read(descriptor, 12001)
         assert len(raw) <= 12000 and identity(os.fstat(descriptor)) == identity(before)
         assert identity(os.stat(area / '8.lines.json', follow_symlinks=False)) == identity(before)
-        pinned = json.loads(raw)['slot_identity']
+        mapping = json.loads(raw)
+        pinned = mapping['slot_identity']
     finally:
         os.close(descriptor)
     for name, suffix, maximum in (('log', '.jsonl', 16384), ('binding', '.binding.json', 3072)):
@@ -2199,6 +2481,11 @@ try:
 except (OSError, AssertionError) as error:
     binding = {'status': 'OBSERVER_GAP', 'index': index, 'glob': glob,
                'boundary': 'case binding before evaluator', 'exception': type(error).__name__}
+if index==8 and binding['status']=='CASE_BINDING':
+    import runpy
+    module=runpy.run_path(str(area/'observer.py'))
+    selected=module['cost_dashboard_binding'](scope_source[0],dashboard_line,dashboard_expression,arguments,binding,mapping['copy_sha256'])
+    binding=dict(dashboard_selected=selected,**binding)
 raw = json.dumps(binding, separators=(',', ':'), ensure_ascii=True).encode() + b'\n'
 if len(raw) > 3072:
     raw = (json.dumps({'status':'OBSERVER_GAP','index':index,'glob':glob,'reason':'case binding cap3072'})+'\n').encode()
@@ -2277,11 +2564,13 @@ PY_STALE_EXPORT
   /usr/bin/printf '%s' "$out" | "$jq_bin" -c '.body.reason_ids'
 }
 expect_reasons() {
-  local label=$1 expected=$2
+  local label=$1 expected=$2 scope_dashboard_line=${BASH_LINENO[0]}
   expected=$("$jq_bin" -c 'map(select(. != "scope.proposable")) + ["scope.sandbox-receipt-missing"] | sort | unique' <<<"$expected")
   shift 2
   local actual
+  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 8454 ]; then scope_dashboard_inflight=true; fi
   actual=$(evaluation_reasons "$@")
+  scope_dashboard_inflight=false
   [ "$actual" = "$expected" ] || fail "$label expected $expected got $actual"
 }
 expect_evaluator_error() {
@@ -2303,7 +2592,7 @@ def heredoc(tag):
 prepare=heredoc('PY_STALE_PREPARE')
 functions=source[source.index('run_evaluator() {'):source.index('\nexpect_reasons() {')]
 functions=functions[:functions.index('\nexpect_validator_error() {')]+functions[functions.index('\nprepare_stale_binding() {'):]
-expected={'observer_source':'73834305528e3760b467ddde8598307eebb1073cd56b16ca98c910d64c5ad592',
+expected={'observer_source':'ec9a0dbbca6f2ce67f29f3fbeaeac12f380c88549b6137fc00ed439b6044abb3',
  'frontend_capture':'a21a722a59923fa6ad18f6f6dd26385d46dcd5a3733083f9d7625777d73c4af8',
  'emit_capture':'153556128c04167c2a73d6c91c86b37bd3e1d34eb35fdeea44e865803301afb4',
  'exit_capture':'95bc34214161aa79167d7f33e8cf4980d70177f7771fa5bf30672e8f0e1739ac'}
@@ -2414,11 +2703,13 @@ prepare=heredoc('PY_STALE_PREPARE');observer=literal(prepare,'observer_source')
 guard=heredoc('PY_GUARD_CONTROLS');wrapper=literal(guard,'wrapper_prefix');channel=heredoc('PY_FIXTURE_OWNER_CHANNEL')
 timeless=observer[observer.index("FIELDS="):]
 timeless=timeless.replace("    cost_selected=index==0 and case=='.github/workflows/ci.yml'\n",'')
+a=timeless.index('    try:dashboard_selected=cost_dashboard_observer(');b=timeless.index('    cost_points=',a)
+timeless=timeless[:a]+timeless[b:]
 timeless=timeless.replace('    cost_points=[started,None,None,None,None]\n    cost_normal=False\n','')
-timeless=timeless.replace('        cost_points[1]=time.monotonic() if cost_selected else None\n','')
-a=timeless.index('        cost_points[2]=time.monotonic() if cost_selected else None\n');b=timeless.index('    finally:\n        try:sys.settrace(previous)',a)
+timeless=timeless.replace('        cost_points[1]=time.monotonic() if phase_selected else None\n','')
+a=timeless.index('        cost_points[2]=time.monotonic() if phase_selected else None\n');b=timeless.index('    finally:\n        try:sys.settrace(previous)',a)
 timeless=timeless[:a]+"        runpy.run_path(str(original),run_name='__main__')\n"+timeless[b:]
-a=timeless.index('        cost_points[4]=time.monotonic() if cost_selected else None\n');b=timeless.index('        try:\n            if descriptor is not None:',a)
+a=timeless.index('        cost_points[4]=time.monotonic() if phase_selected else None\n');b=timeless.index('        try:\n            if descriptor is not None:',a)
 timeless=timeless[:a]+timeless[b:]
 timeless='import hashlib,json,os,runpy,stat,sys,time,types\n'+timeless
 old=timeless
