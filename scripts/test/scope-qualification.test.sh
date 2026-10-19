@@ -3007,7 +3007,7 @@ def stable_sink_controls(area,assembler):
     return reports
 
 OUTER_RUN_SOURCE_SHA='7f3571e66a1da98ccc2a876c426ea77fcddc010cbdb64d76342efde97ce77a64'
-OUTER_CAPTURE_SOURCE_SHA='2de9ba7708d90326fa5dfa1104b33ace0033d909cef1ad873e2ed08851e8c4d2'
+OUTER_CAPTURE_SOURCE_SHA='f8729ae4d82b503cd4dd230a416a212ffb8eaaa65ac4b975a2400633206cf4fc'
 def outer_timeout_boundary(assembler):
     tree=ast.parse(assembler)
     runs=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='run']
@@ -3165,11 +3165,14 @@ def process_snapshot_controls(area,module):
     native_call=next(n for n in ast.walk(helper_main) if isinstance(n,ast.Call) and isinstance(n.func,ast.Name) and n.func.id=='first_git_proc_query')
     assert platform_guard.lineno<native_call.lineno
     query=next(n for n in helper_tree.body if isinstance(n,ast.FunctionDef) and n.name=='first_git_proc_query')
+    image_query=next(n for n in helper_tree.body if isinstance(n,ast.FunctionDef) and n.name=='first_git_image_query')
     queries={'__name__':'ordinary-owned-helper'}
+    exec(compile(ast.Module(body=[image_query],type_ignores=[]),'actual-image-query','exec'),queries)
     exec(compile(ast.Module(body=[query],type_ignores=[]),'actual-process-query','exec'),queries)
     actual_query=queries['first_git_proc_query'];reports=[]
     helper_reference=completed_evidence({'process_helper_source':{'source':helper.decode()}})
-    for fault in ('exact','short','zero','denial','eintr','wrong-pid','missing','alignment','offset','library','comm16'):
+    for fault in ('exact','short','zero','denial','eintr','wrong-pid','missing','alignment','offset','library','comm16',
+                  'image-missing','image-denial','image-eintr','image-zero','image-bool','image-limit','image-short','image-nul','image-relative','image-long','image-encoding'):
         calls=[]
         class Function:
             def __call__(self,pid,flavor,argument,pointer,size):
@@ -3183,9 +3186,29 @@ def process_snapshot_controls(area,module):
                 if fault=='eintr':ctypes.set_errno(4);return -1
                 return 63 if fault=='short' else 0 if fault=='zero' else 64
         function=Function()
+        class ImageFunction:
+            def __call__(self,pid,pointer,size):
+                calls.append(['image',pid,size])
+                assert pid==123 and size==4096 and bytes(pointer._obj)==bytes(4096)
+                path=b'/owned/fixed-image'
+                if fault=='image-relative':path=b'relative'
+                if fault=='image-long':path=b'/'+b'x'*256
+                if fault=='image-encoding':path=b'/\xff'
+                ctypes.memmove(pointer,path,len(path))
+                if fault=='image-nul':ctypes.memmove(pointer,b'x'*4096,4096)
+                if fault in ('image-denial','image-eintr'):
+                    ctypes.set_errno(13 if fault=='image-denial' else 4);return -1
+                if fault=='image-zero':return 0
+                if fault=='image-bool':return True
+                if fault=='image-limit':return 4096
+                return len(path)-1 if fault=='image-short' else len(path)
+        image_function=ImageFunction()
         class Library:
             _name='/usr/lib/libSystem.B.dylib'
             def __getitem__(self,key):
+                if key=='proc_pidpath':
+                    if fault=='image-missing':raise AttributeError(key)
+                    return image_function
                 assert key=='proc_pidinfo'
                 if fault=='missing':raise AttributeError(key)
                 return function
@@ -3200,9 +3223,10 @@ def process_snapshot_controls(area,module):
         report={'case':fault,'actual_calls':calls,'result':result,'same_loaded_library':False,
                 'scope':'controlled native-return/ABI seam through extracted query; not kernel result'}
         print(json.dumps({'process_native_control_before_assert':report},sort_keys=True),flush=True)
-        if fault in ('exact','comm16'):
-            assert result=={'pid':123,'ppid':17,'pgid':123,'uid':os.getuid(),'state':2,'comm_hex':b'0123456789abcdef'.hex()}
-            assert calls==[[123,13,0,64]]
+        if fault in ('exact','comm16') or fault.startswith('image-'):
+            expected_image='GAP' if fault.startswith('image-') else b'/owned/fixed-image'.hex()
+            assert result=={'pid':123,'ppid':17,'pgid':123,'uid':os.getuid(),'state':2,'comm_hex':b'0123456789abcdef'.hex(),'image_path_hex':expected_image}
+            assert calls==([[123,13,0,64]] if fault=='image-missing' else [[123,13,0,64],['image',123,4096]])
         else:assert result=='GAP' and len(calls)==int(fault not in ('missing','alignment','offset','library'))
         reports.append(report)
     library=module._DARWIN_ACL_FUNCTIONS.library if sys.platform=='darwin' else None
@@ -3212,13 +3236,14 @@ def process_snapshot_controls(area,module):
         result=actual_query(ctypes,library,os.getpid())
         print(json.dumps({'process_actual_native_before_assert':{'pid':os.getpid(),'result':result,'python':sys.executable,'version':sys.version}},sort_keys=True),flush=True)
         assert type(result) is dict and result['pid']==os.getpid() and result['uid']==os.getuid()
+        assert result['image_path_hex']!='GAP' and bytes.fromhex(result['image_path_hex']).startswith(b'/')
         assert library is module._DARWIN_ACL_FUNCTIONS.library
         assert all(getattr(library,name) is function and tuple(function.argtypes)==arguments and function.restype is returned
                    for name,(function,arguments,returned) in acl_before.items())
         reports.append({'case':'actual-local-procinfo','result':result,'scope':'actual local ABI/library/UID only; not CI x86_64'})
     values=namespace['_scope_process_values']
-    valid={'first_git_process_snapshot':{'pid':123,'ppid':1,'pgid':123,'uid':os.getuid(),'state':2,'comm_hex':'00'*16}}
-    for fault in ('valid','pid','bool','fields','comm','unicode','overflow'):
+    valid={'first_git_process_snapshot':{'pid':123,'ppid':1,'pgid':123,'uid':os.getuid(),'state':2,'comm_hex':'00'*16,'image_path_hex':b'/owned/fixed-image'.hex()}}
+    for fault in ('valid','pid','bool','fields','comm','unicode','overflow','image-type','image-hex','image-encoding','image-nul','image-cap'):
         value=json.loads(json.dumps(valid))
         if fault=='pid':value['first_git_process_snapshot']['pid']=124
         if fault=='bool':value['first_git_process_snapshot']['uid']=True
@@ -3226,8 +3251,15 @@ def process_snapshot_controls(area,module):
         if fault=='comm':value['first_git_process_snapshot']['comm_hex']='00'*17
         if fault=='unicode':value['first_git_process_snapshot']['comm_hex']='é'*32
         if fault=='overflow':value['first_git_process_snapshot']['state']=4294967296
+        if fault=='image-type':value['first_git_process_snapshot']['image_path_hex']=True
+        if fault=='image-hex':value['first_git_process_snapshot']['image_path_hex']='FF'
+        if fault=='image-encoding':value['first_git_process_snapshot']['image_path_hex']=b'/\xff'.hex()
+        if fault=='image-nul':value['first_git_process_snapshot']['image_path_hex']=b'/x\0'.hex()
+        if fault=='image-cap':value['first_git_process_snapshot']['image_path_hex']=(b'/'+b'x'*256).hex()
         result=values(module.canonical(value),123)
-        assert (type(result) is dict)==(fault=='valid')
+        print(json.dumps({'process_fields_before_assert':{'case':fault,'input':value,'result':result}},sort_keys=True),flush=True)
+        assert (type(result) is dict)==(fault=='valid' or fault.startswith('image-'))
+        if fault.startswith('image-'):assert result['image_path_hex']=='GAP' and result['pid']==123
         reports.append({'case':'fields-'+fault,'result':result})
     process_admission_controls(module,setup)
     process_unknown_controls(namespace,module)
@@ -3372,7 +3404,9 @@ def process_snapshot_controls(area,module):
             if stimulus=='runtime-refusal':selected[-1]='0'*64
             result,error,facts,reference=supervised(selected,[False])
             assert error is None
-            if stimulus=='actual-helper' and sys.platform=='darwin':assert type(result) is dict and result['pid']==os.getpid() and result['uid']==os.getuid()
+            if stimulus=='actual-helper' and sys.platform=='darwin':
+                assert type(result) is dict and result['pid']==os.getpid() and result['uid']==os.getuid()
+                assert result['image_path_hex']!='GAP' and bytes.fromhex(result['image_path_hex']).startswith(b'/')
             else:assert result=='GAP'
             if stimulus=='actual-helper' and sys.platform!='darwin':
                 stdout=b''.join(bytes.fromhex(row['hex']) for row in facts['reads'] if row.get('channel')=='stdout' and 'hex' in row)
@@ -3470,8 +3504,9 @@ def process_unknown_controls(scope,module):
 def process_admission_controls(module,setup):
     import types
     records=[]
-    for fault in ('eligible','foreign-frame','foreign-selector','other-argv','wrong-counter','counter-bool','budget','cancel','pid-bool','other-call','once'):
-        scope={'c':module,'sys':sys,'json':json}
+    for fault in ('eligible','foreign-frame','foreign-selector','other-argv','wrong-counter','counter-bool','budget','cancel','pid-bool','other-call','once','non-Darwin'):
+        admission_sys=types.SimpleNamespace(platform='linux' if fault=='non-Darwin' else 'darwin',_getframe=sys._getframe,executable=sys.executable)
+        scope={'c':module,'sys':admission_sys,'json':json}
         exec(compile(setup,'actual-process-admission-setup','exec'),scope)
         snapshot=scope['first_git_process_snapshot'];state=scope['_scope_select_state'];calls=[]
         original_time=module.time;original_popen=module.subprocess.Popen;original_hold=module._hold_bytes
@@ -3503,7 +3538,7 @@ def process_admission_controls(module,setup):
             execution['actual_site']()
             execution['actual_site']()
         finally:module.time=original_time;module.subprocess.Popen=original_popen;module._hold_bytes=original_hold
-        record={'case':fault,'observer_calls':len(calls),'attempted':state.get('process_attempted',False)}
+        record={'case':fault,'observer_calls':len(calls),'attempted':state.get('process_attempted',False),'controlled_platform':admission_sys.platform}
         print(json.dumps({'process_admission_before_assert':record},sort_keys=True),flush=True)
         assert len(calls)==int(fault=='eligible')
         if calls:
@@ -3737,7 +3772,7 @@ def select_counter_controls(area,module,error,observed_namespace,direct_error,di
         assert frame is not None and frame.f_locals['argv'] is state['argv']
         original_selector=state['selector'];original_pid=frame.f_locals['child'].pid;original_cancelled=list(frame.f_locals['cancelled'])
         original_code=error.code if type(error) is module.Refusal else None;original_used=state['used'];original_state_argv=state['argv']
-        if case=='sink':state['process_snapshot']={'pid':original_pid,'ppid':1,'pgid':original_pid,'uid':os.getuid(),'state':2,'comm_hex':'00'*16}
+        if case=='sink':state['process_snapshot']={'pid':original_pid,'ppid':1,'pgid':original_pid,'uid':os.getuid(),'state':2,'comm_hex':'00'*16,'image_path_hex':b'/owned/fixed-image'.hex()}
         original_errno=error.__cause__.errno if lane=='eperm' else None
         sink.write_bytes(b'');s=os.lstat(sink);identity=(s.st_dev,s.st_ino,stat.S_IFMT(s.st_mode),s.st_uid,s.st_gid,stat.S_IMODE(s.st_mode),s.st_nlink)
         insertion=eval(compile(ast.Expression(record_expression),'actual-select-mapping-expression','eval'),{'token':repr('ordinary-select-mapping'),'sink':repr(str(sink)),'identity':repr(identity),'selector_source_sha':source_sha,'native_sha':native_sha,'abc_source':abc_source,'abc_path':abc_path})
@@ -3764,7 +3799,7 @@ def select_counter_controls(area,module,error,observed_namespace,direct_error,di
         def write(*args):
             if case=='sink':
                 completed_evidence({'process_export_write_before_assert':{'raw_hex':args[1].hex(),'scope':'actual reader exporter with controlled populated process observation'}})
-                assert b'first_git_process_snapshot' in args[1]
+                assert b'first_git_process_snapshot' in args[1] and b'image_path_hex' in args[1]
                 raise OSError(9,'fixed actual sink write failure')
             return actual_write(*args)
         namespace={'__name__':'__main__','c':module,'main':main,'error':error,'os':os,'sys':sys,'json':types.SimpleNamespace(dumps=dumps),'stat':stat,'_scope_select_state':state,'_scope_select_source_sha':source_sha,'_scope_select_native_sha':native_sha}
@@ -10687,6 +10722,24 @@ print(relation_result)
 _scope_process_helper_raw=rb'''import hashlib,importlib.util,json,os,stat,sys
 from pathlib import Path
 
+def first_git_image_query(ctypes,library,pid):
+    if type(pid) is not int or not 0<pid<=2147483647:return 'GAP'
+    try:function=library['proc_pidpath']
+    except AttributeError:return 'GAP'
+    function.argtypes=[ctypes.c_int,ctypes.c_void_p,ctypes.c_uint32]
+    function.restype=ctypes.c_int
+    buffer=ctypes.create_string_buffer(4096)
+    ctypes.set_errno(0)
+    returned=function(pid,ctypes.byref(buffer),4096)
+    if type(returned) is not int or not 0<returned<4096:return 'GAP'
+    data=bytes(buffer)
+    if data.find(b'\0')!=returned or returned>256:return 'GAP'
+    path=data[:returned]
+    if not path.startswith(b'/'):return 'GAP'
+    try:path.decode('utf-8','strict')
+    except UnicodeError:return 'GAP'
+    return path.hex()
+
 def first_git_proc_query(ctypes,library,pid):
     if type(pid) is not int or not 0<pid<=2147483647:return 'GAP'
     if type(library) is not ctypes.CDLL or library._name!='/usr/lib/libSystem.B.dylib':return 'GAP'
@@ -10707,8 +10760,10 @@ def first_git_proc_query(ctypes,library,pid):
     returned=function(pid,13,0,ctypes.byref(buffer),64)
     if type(returned) is not int or returned!=64 or buffer.pid!=pid:return 'GAP'
     comm=bytes(buffer)[16:32]
-    return {'pid':buffer.pid,'ppid':buffer.ppid,'pgid':buffer.pgid,'uid':buffer.uid,
+    result={'pid':buffer.pid,'ppid':buffer.ppid,'pgid':buffer.pgid,'uid':buffer.uid,
             'state':buffer.state,'comm_hex':comm.hex()}
+    result['image_path_hex']=first_git_image_query(ctypes,library,pid)
+    return result
 
 _stage='input'
 _refusal=None
@@ -10802,10 +10857,21 @@ def _scope_process_values(raw,pid):
         record=c._json(raw,768,'E_PARSE')
         if type(record) is not dict or set(record)!={'first_git_process_snapshot'}:return 'GAP'
         value=record['first_git_process_snapshot']
-        if type(value) is not dict or set(value)!={'pid','ppid','pgid','uid','state','comm_hex'}:return 'GAP'
+        fields={'pid','ppid','pgid','uid','state','comm_hex'}
+        if type(value) is not dict or set(value) not in (fields,fields|{'image_path_hex'}):return 'GAP'
         if any(type(value[key]) is not int or not 0<=value[key]<=4294967295 for key in ('pid','ppid','pgid','uid','state')):return 'GAP'
         text=value['comm_hex']
         if value['pid']!=pid or type(text) is not str or len(text)!=32 or any(ch not in '0123456789abcdef' for ch in text):return 'GAP'
+        image=value.get('image_path_hex','GAP')
+        if image!='GAP':
+            valid=type(image) is str and 2<=len(image)<=512 and len(image)%2==0 and all(ch in '0123456789abcdef' for ch in image)
+            if valid:
+                path=bytes.fromhex(image)
+                try:path.decode('utf-8','strict')
+                except UnicodeError:valid=False
+                valid=valid and path.startswith(b'/') and b'\0' not in path
+            if not valid:image='GAP'
+        value['image_path_hex']=image
         return value
     except (c.Refusal,ValueError,TypeError,UnicodeError,RecursionError,MemoryError):return 'GAP'
 
