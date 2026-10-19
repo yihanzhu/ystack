@@ -3007,7 +3007,7 @@ def stable_sink_controls(area,assembler):
     return reports
 
 OUTER_RUN_SOURCE_SHA='7f3571e66a1da98ccc2a876c426ea77fcddc010cbdb64d76342efde97ce77a64'
-OUTER_CAPTURE_SOURCE_SHA='194cd18de6456fae0d6dfcde33a957668000020e5daa2432c00dba1971be1697'
+OUTER_CAPTURE_SOURCE_SHA='18f67bbac0adc83021a77bf402cabca0353f446011adb4f1fcc95fce20ad47aa'
 def outer_timeout_boundary(assembler):
     tree=ast.parse(assembler)
     runs=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='run']
@@ -3232,12 +3232,17 @@ def process_snapshot_controls(area,module):
     process_admission_controls(module,setup)
     process_unknown_controls(namespace,module)
     supervisor=namespace['_scope_process_supervise']
+    select_class=next(node for node in ast.walk(ast.parse(setup)) if isinstance(node,ast.ClassDef) and node.name=='ScopeFirstConfigSelector')
+    select_node=next(node for node in select_class.body if isinstance(node,ast.FunctionDef) and node.name=='select')
+    select_context={'state':namespace['_scope_select_state'],'increment':lambda *args:None,'sys':sys}
+    exec(compile(ast.Module(body=[select_node],type_ignores=[]),'actual-process-select-boundary','exec'),select_context)
     original_state=dict(namespace['_scope_select_state'])
     namespace['_scope_select_state']['native_selector']=selectors.DefaultSelector
     actual_popen=module.subprocess.Popen;actual_read=module.os.read
     actual_blocking=module.os.set_blocking;actual_killpg=module.os.killpg
     def supervised(command,cancelled):
         children=[];reads=[];channels={};kills=[];arguments=[];waits=[];first_probe=[True]
+        cleanup_first=[];following_select=[];owned_pid=os.getpid()
         namespace['_scope_select_state']['process_pending']=False
         namespace['_scope_select_state'].pop('process_close_error',None)
         def popen(*args,**kwargs):
@@ -3263,6 +3268,9 @@ def process_snapshot_controls(area,module):
         def killpg(pid,number):
             fact={'pid':pid,'number':number,'exception':None};kills.append(fact)
             try:
+                if stimulus in ('cleanup-cancel','cleanup-overflow-cancel') and number==0 and not cleanup_first:
+                    cleanup_first.append(sys._getframe(1).f_locals.get('first'))
+                    os.kill(owned_pid,signal.SIGTERM)
                 if stimulus in ('probe-cancel','probe-overflow') and number==0 and first_probe[0]:
                     first_probe[0]=False;raise injected_probe_error
                 return actual_killpg(pid,number)
@@ -3272,7 +3280,12 @@ def process_snapshot_controls(area,module):
             actual_popen.wait=waited
             module.subprocess.Popen=popen;module.os.read=read
             module.os.set_blocking=blocking;module.os.killpg=killpg
-            try:result=supervisor(command,{'PATH':'/usr/bin:/bin','LC_ALL':'C','LANG':'C'},time.monotonic()+4,cancelled,os.getpid())
+            def observe(*args):
+                return supervisor(command,{'PATH':'/usr/bin:/bin','LC_ALL':'C','LANG':'C'},time.monotonic()+4,cancelled,owned_pid)
+            select_context['first_git_process_snapshot']=observe
+            select_context['original_select']=lambda *args,**kwargs:following_select.append(True) or []
+            try:
+                result=select_context['select'](object(),0) if stimulus in ('cleanup-cancel','cleanup-overflow-cancel') else observe()
             except BaseException as caught:error=caught
         finally:
             actual_popen.wait=actual_wait
@@ -3288,6 +3301,9 @@ def process_snapshot_controls(area,module):
             'returncodes':[child.returncode for child in children],
             'pipes_closed':[all(stream.closed for stream in (child.stdin,child.stdout,child.stderr)) for child in children],
             'reads':reads,'killpg':kills,'cancelled':cancelled[0],'Popen_calls':len(arguments),
+            'cleanup_entry_first':None if not cleanup_first or cleanup_first[0] is None else type(cleanup_first[0]).__name__,
+            'cleanup_first_context':bool(cleanup_first) and error is not None and error.__context__ is cleanup_first[0],
+            'following_original_select_calls':len(following_select),'cleanup_signal_delivered':bool(cleanup_first),
             'scope':'transparent delegation of existing native calls; read bytes exactly returned before cap/refusal, not an assertion of unseen post-cap bytes'}
         reference=completed_evidence({'process_lifecycle_before_assert':facts})
         assert not children or len(children)==1 and children[0].returncode is not None and all(facts['pipes_closed'])
@@ -3295,22 +3311,26 @@ def process_snapshot_controls(area,module):
         return result,error,facts,reference
     construction_error=RuntimeError('owned construct')
     injected_probe_error=PermissionError(1,'controlled original group-probe refusal')
-    for stimulus in ('short','resistant','overflow','probe-overflow','cancel','probe-cancel','spawn-cancel','before-cancel','construction'):
+    for stimulus in ('short','resistant','overflow','probe-overflow','cancel','probe-cancel','spawn-cancel','before-cancel','construction','cleanup-cancel','cleanup-overflow-cancel'):
         cancelled=[stimulus=='before-cancel']
         code="import os;os.write(1,b'fixed')"
         if stimulus=='resistant':code="import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);print('ready',flush=True);time.sleep(10)"
-        if stimulus in ('overflow','probe-overflow'):code="import os;os.write(1,b'x'*769)"
+        if stimulus in ('overflow','probe-overflow','cleanup-overflow-cancel'):code="import os;os.write(1,b'x'*769)"
         if stimulus in ('cancel','probe-cancel'):code="import os,signal,time;os.kill(os.getppid(),signal.SIGTERM);time.sleep(10)"
         old=signal.signal(signal.SIGTERM,lambda *args:cancelled.__setitem__(0,True))
         command=['construct-refusal'] if stimulus=='construction' else [sys.executable,'-I','-S','-B','-c',code]
         try:result,error,facts,reference=supervised(command,cancelled)
         finally:signal.signal(signal.SIGTERM,old)
         if stimulus=='construction':assert type(error) is namespace['ScopeProcessPending'] and error.__cause__ is construction_error
-        elif stimulus in ('cancel','probe-cancel','spawn-cancel','before-cancel'):
+        elif stimulus in ('cancel','probe-cancel','spawn-cancel','before-cancel','cleanup-cancel','cleanup-overflow-cancel'):
             assert cancelled[0] is True and type(error) is InterruptedError
             assert facts['Popen_calls']==int(stimulus!='before-cancel')
             assert facts['same_first_error']
             if stimulus=='probe-cancel':assert facts['same_probe_cause'] and any(row.get('returncode') is not None for row in facts['waits'])
+            if stimulus in ('cleanup-cancel','cleanup-overflow-cancel'):
+                assert facts['cleanup_signal_delivered'] and facts['following_original_select_calls']==0
+                assert facts['cleanup_entry_first']==('ValueError' if stimulus=='cleanup-overflow-cancel' else None)
+                assert facts['cleanup_first_context'] and any(row.get('returncode') is not None for row in facts['waits'])
         else:
             assert error is None and result=='GAP'
             if stimulus=='probe-overflow':assert namespace['_scope_select_state']['process_close_error'] is injected_probe_error
@@ -10539,6 +10559,10 @@ def _scope_process_supervise(command,environment,end,cancelled,pid):
                 try:resource.close()
                 except BaseException as error:remember(error);resources_closed=False
             closed=gone and waited and resources_closed and all(stream.closed for stream in (child.stdin,child.stdout,child.stderr))
+            if cancelled[0] is not False and (first is None or isinstance(first,Exception) and type(first) is not InterruptedError):
+                cancel_error=InterruptedError('scope process observation cancelled')
+                cancel_error.__context__=first
+                first=cancel_error
             _scope_select_state['process_close_error']=close_error
             if not closed:
                 _scope_select_state['process_pending']=True
