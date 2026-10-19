@@ -1166,10 +1166,15 @@ swallow cancellation as an observation failure.
 
 At the existing failure mapping, require the original exact foreground frame,
 code, first-config argv and this invocation's selector instance identity. Export
-only for its original deadline Refusal then same-frame cleanup killpg
-PermissionError with native errno 1, retained cancelled exact False and existing
-exact positive builtin-int PID. All other
-ends discard counts without output. Retained False is not a current cancel token;
+only with retained cancelled exact False and the existing exact positive
+builtin-int PID, through either of two original exits: the original deadline
+Refusal then same-frame cleanup killpg PermissionError with native errno 1; or
+that exact deadline-site Refusal E_RUNTIME object reaching the mapping directly
+after original cleanup/finally returned normally, without a replacement error.
+The direct exit must bind the same original foreground code/frame, nine config
+argv, selector instance and invocation. It adds no error site or call. Normal
+cleanup return or cached returncode -15 proves no full-tree closure or restoration.
+All other ends discard counts without output. Retained False is not a current cancel token;
 add no query to obtain one. Do not infer blocking, PID identity, kernel readiness
 or an EPERM cause from counts or GAP. Keep cleanup_signal GAP and every original
 identity, context and I/O check.
@@ -1249,7 +1254,13 @@ lists with the same returned object, one delegation per original call, sentinel
 exceptions with original frames in order plus the named wrapper, cause/context,
 and cancellation propagation. Cover wrong frame/argv/instance, other calls and
 re-entry; non-exact lists must invoke no custom len/iter. Prove output rejection
-for bad PID, wrong error chain and cancelled True/GAP. Cover overflow and
+for bad PID, wrong error chain and cancelled True/GAP. Add an actual mapping-lane
+control for the original deadline refusal with normal original cleanup and the
+same direct Refusal reaching the mapper: export its existing counts once, preserve
+exception identity/context/trace, original calls and binding restoration. Keep
+the EPERM lane and every existing negative, native, lifecycle and source-inverse
+control. Prove wrong direct error/site/frame/selector/invocation still exports no
+group; neither branch adds success output or cleanup authority. Cover overflow and
 collection failure permanently GAP while original effects continue, all group/
 record/export failures with old fields retained, and exact binding restoration
 on install/constructor/delegation/cleanup failures. Save actual facts before
