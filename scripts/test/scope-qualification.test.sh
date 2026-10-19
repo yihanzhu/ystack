@@ -3007,7 +3007,7 @@ def stable_sink_controls(area,assembler):
     return reports
 
 OUTER_RUN_SOURCE_SHA='7f3571e66a1da98ccc2a876c426ea77fcddc010cbdb64d76342efde97ce77a64'
-OUTER_CAPTURE_SOURCE_SHA='5c484bccbeb4e965e82c3491dd888106cecb477e0b4af10736a4eada04b2af92'
+OUTER_CAPTURE_SOURCE_SHA='cdbfd7657dc9b5b83b23ddd8eef458a75b3ce997d3162d3b74b2b6c856a29b7b'
 def outer_timeout_boundary(assembler):
     tree=ast.parse(assembler)
     runs=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='run']
@@ -3134,7 +3134,7 @@ def outer_timeout_controls(area):
             'write_errors':write_errors,'facts':json.loads(raw) if raw else 'GAP'})
     return completed_evidence({'outer_timeout_controls':reports,'fixed_source_allowance':allowance,'custom_hooks':hooks})
 
-def select_counter_controls(area,module,error,observed_namespace):
+def select_counter_controls(area,module,error,observed_namespace,direct_error,direct_namespace,cleanup_error,cleanup_namespace):
     import io
     assembler=heredoc('PY_GENUINE_ASSEMBLER');tree=ast.parse(assembler)
     klass=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='GenuineRelationCapture')
@@ -3335,7 +3335,20 @@ def select_counter_controls(area,module,error,observed_namespace):
     mappings=[];baseline_trace=error.__traceback__;baseline_context=error.__context__;baseline_cause=error.__cause__;baseline_record=None
     reader=(root/'scope/v1/read-shadow-evidence.py').read_text();boundary='        if code not in {"E_USAGE", "E_LIMIT", "E_PARSE", "E_CANONICAL", "E_RELATION", "E_STALE", "E_RUNTIME"}:\n'
     assert reader.count(boundary)==1
-    for case in ('normal','wrong-frame','wrong-argv','wrong-instance','bad-pid','cancelled-true','cancelled-gap','non-EPERM','missing-context','baseline-gap','format','cap','facts-cap','group-cap','group-format','cancel','sink'):
+    eperm_error=error;eperm_namespace=observed_namespace;baseline_records={}
+    mapping_baselines={id(item):(item.__traceback__,item.__context__,item.__cause__) for item in (error,direct_error,cleanup_error)}
+    mapping_inputs=[('eperm',case,eperm_error,eperm_namespace) for case in ('normal','wrong-frame','wrong-argv','wrong-instance','bad-pid','cancelled-true','cancelled-gap','non-EPERM','missing-context','baseline-gap','format','cap','facts-cap','group-cap','group-format','cancel','sink')]
+    mapping_inputs += [('direct',case,direct_error,direct_namespace) for case in ('normal','wrong-frame','wrong-argv','wrong-instance','invocation','encoding','bad-pid','cancelled-true','cancelled-gap','wrong-error','baseline-gap','format','cap','group-cap','group-format')]
+    mapping_inputs.append(('cleanup-wait','cleanup-wait',cleanup_error,cleanup_namespace))
+    for lane,case,error,observed_namespace in mapping_inputs:
+        state=observed_namespace['_scope_select_state'];baseline_trace,baseline_context,baseline_cause=mapping_baselines[id(error)];tb=baseline_trace;frame=None
+        while tb is not None:
+            if tb.tb_frame.f_code is module._DarwinChildOwner._foreground.__code__:frame=tb.tb_frame;break
+            tb=tb.tb_next
+        assert frame is not None and frame.f_locals['argv'] is state['argv']
+        original_selector=state['selector'];original_pid=frame.f_locals['child'].pid;original_cancelled=list(frame.f_locals['cancelled'])
+        original_code=error.code if type(error) is module.Refusal else None;original_used=state['used'];original_state_argv=state['argv']
+        original_errno=error.errno if type(error) is PermissionError else None
         sink.write_bytes(b'');s=os.lstat(sink);identity=(s.st_dev,s.st_ino,stat.S_IFMT(s.st_mode),s.st_uid,s.st_gid,stat.S_IMODE(s.st_mode),s.st_nlink)
         insertion=eval(compile(ast.Expression(record_expression),'actual-select-mapping-expression','eval'),{'token':repr('ordinary-select-mapping'),'sink':repr(str(sink)),'identity':repr(identity),'selector_source_sha':source_sha,'native_sha':native_sha,'abc_source':abc_source,'abc_path':abc_path})
         copied=reader.replace(boundary,insertion+boundary,1);tail=copied[copied.index('if __name__ == "__main__":'):]
@@ -3371,20 +3384,26 @@ def select_counter_controls(area,module,error,observed_namespace):
             if case=='cancelled-true':frame.f_locals['cancelled'][0]=True
             if case=='cancelled-gap':frame.f_locals['cancelled'][:]=[]
             if case=='non-EPERM':error.errno=13
+            if case=='wrong-error':error.code='E_INSTALL'
+            if case=='invocation':state['argv']=list(original_state_argv)
+            if case=='encoding':frame.f_locals['argv'][5]='/owned/\ud800'
             sys.argv=['reader'];sys.stderr=output;os.write=write
             try:exec(compile(record_tree,'actual-select-full-mapping','exec'),namespace)
             except InterruptedError as caught:cancelled_error=caught
             except SystemExit as stopped:status=stopped.code
             raw=sink.read_bytes();data=json.loads(raw) if raw else None
         finally:
-            os.write=actual_write;sys.argv,sys.stderr=old_sys;state['foreground']=saved_foreground;state['selector']=original_selector;frame.f_locals['argv'][:]=saved_argv;frame.f_locals['child'].pid=original_pid;frame.f_locals['cancelled'][:]=original_cancelled;error.errno=original_errno
-        report={'case':case,'raw_hex':raw.hex(),'same_error':len(raised_error)==1 and raised_error[0] is error,'shared_actual_frame':True,'actual_calls_not_reexecuted':True,'same_cancel_object':cancelled_error is cancel_holder[0] if cancel_holder else None,'status':status,'mapped_stderr':output.getvalue(),'same_context':error.__context__ is baseline_context,'same_cause':error.__cause__ is baseline_cause};completed_evidence({'select_mapping_actual':report})
+            os.write=actual_write;sys.argv,sys.stderr=old_sys;state['foreground']=saved_foreground;state['selector']=original_selector;frame.f_locals['argv'][:]=saved_argv;frame.f_locals['child'].pid=original_pid;frame.f_locals['cancelled'][:]=original_cancelled;state['used']=original_used;state['argv']=original_state_argv
+            if type(error) is PermissionError:error.errno=original_errno
+            else:error.code=original_code
+        report={'case':case if lane=='eperm' else lane+':'+case,'raw_hex':raw.hex(),'same_error':len(raised_error)==1 and raised_error[0] is error,'shared_actual_frame':True,'actual_calls_not_reexecuted':True,'same_cancel_object':cancelled_error is cancel_holder[0] if cancel_holder else None,'status':status,'mapped_stderr':output.getvalue(),'same_context':error.__context__ is baseline_context,'same_cause':error.__cause__ is baseline_cause};completed_evidence({'select_mapping_actual':report})
         assert len(raised_error)==1 and raised_error[0] is error and error.__context__ is baseline_context and error.__cause__ is baseline_cause
-        if case!='cancel':assert status==1 and output.getvalue()=='E_RUNTIME\n'
+        if case!='cancel':assert status==1 and output.getvalue()==('E_RELATION\n' if case=='wrong-error' else 'E_RUNTIME\n')
         if case=='normal':
             assert type(data.get('first_git_select_observation')) is dict
-            baseline_record={key:value for key,value in data.items() if key!='first_git_select_observation'}
-        if case in ('baseline-gap','format','cap','group-format','group-cap'):assert data==baseline_record
+            baseline_record={key:value for key,value in data.items() if key!='first_git_select_observation'};baseline_records[lane]=baseline_record
+        if case in ('baseline-gap','format','cap','group-format','group-cap'):assert data==baseline_records[lane]
+        if lane=='direct' and case=='baseline-gap':assert raw==(json.dumps(baseline_records[lane],sort_keys=True,separators=(',',':'),ensure_ascii=True)+'\n').encode()
         if case=='normal':pass
         elif case=='facts-cap':assert data['first_git_select_observation']['facts']=='GAP'
         elif case=='cancel':assert not raw and len(cancel_holder)==1 and cancelled_error is cancel_holder[0]
@@ -3409,7 +3428,7 @@ def foreground_state_controls(area):
     original=module._DarwinChildOwner._foreground
     print(json.dumps({'foreground_state_preexec':{'reader_copy':copied,'insertion':insertion,'original_foreground_source':ast.get_source_segment((root/'shadow/v1/_consumer.py').read_text(),next(n for n in ast.walk(ast.parse((root/'shadow/v1/_consumer.py').read_text())) if isinstance(n,ast.FunctionDef) and n.name=='_foreground')),'reader_sha256':hashlib.sha256(copied.encode()).hexdigest()}}),flush=True)
     records=[];context_errors=[]
-    for fault in ('cancel','deadline','term','kill','io-term','io-kill','snapshot-term','wrong-frame','wrong-command','pseudo','encoding','cap','format','write',
+    for fault in ('cancel','deadline','cleanup-wait','term','kill','io-term','io-kill','snapshot-term','wrong-frame','wrong-command','pseudo','encoding','cap','format','write',
             'io-partial','io-old-chunk','io-format','io-record-cap'):
         sink.write_bytes(b'');calls=[];handlers=[];clock_calls=[];pseudo_hooks=[];holder=[];output=io.StringIO();sentinel=PermissionError(1 if fault=='snapshot-term' else 13,'fixed ordinary cleanup signal refusal')
         argv=['/usr/bin/git','--no-replace-objects','--git-dir=/owned/source.git','config','--file','/owned/config','--name-only','--list','--no-includes']
@@ -3419,7 +3438,11 @@ def foreground_state_controls(area):
         print(json.dumps({'foreground_case_preexec':fault,'argv':argv,'original_code_identity':fault!='wrong-frame','ordinary_child':['trusted-current-python','-I','-S','-B','-c','pass'],'seams':'fixed Popen transport, selector/clock/signal arguments; real native child/wait/pipes'}),flush=True)
         child=subprocess.Popen([sys.executable,'-I','-S','-B','-c','pass'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
         actual_wait=child.wait
-        def wait(*args,**kwargs):calls.append(['wait',kwargs]);return actual_wait(*args,**kwargs)
+        wait_failure=OSError(5,'fixed cleanup wait failure after real wait')
+        def wait(*args,**kwargs):
+            calls.append(['wait',kwargs]);result=actual_wait(*args,**kwargs)
+            if fault=='cleanup-wait':raise wait_failure
+            return result
         child.wait=wait
         class Pseudo:
             def __getattribute__(self,key):
@@ -3462,7 +3485,7 @@ def foreground_state_controls(area):
         code=original.__code__.replace(co_name='_foreground') if fault=='wrong-frame' else original.__code__
         function=types.FunctionType(code,scope)
         select_namespace=None
-        if fault=='snapshot-term':
+        if fault in ('snapshot-term','deadline','cleanup-wait'):
             source_method=next(n for n in klass.body if isinstance(n,ast.FunctionDef) and n.name=='select_source_inputs')
             source_method=ast.parse(ast.get_source_segment(assembler,source_method)).body[0]
             source_context={'sys':sys,'sha':lambda raw:hashlib.sha256(raw).hexdigest()}
@@ -3475,7 +3498,7 @@ def foreground_state_controls(area):
             select_namespace['_scope_select_binding']=lambda:(Selector,methods,object)
         def main(args):
             try:
-                if fault=='snapshot-term':
+                if fault in ('snapshot-term','deadline','cleanup-wait'):
                     owner=module._DarwinChildOwner.__new__(module._DarwinChildOwner)
                     select_namespace['_scope_select_call'](types.MethodType(function,owner),argv,b'',4096,65536,30,{})
                 else:function(object(),argv,b'',4096,65536,30,{})
@@ -3490,10 +3513,10 @@ def foreground_state_controls(area):
         def write(*args):
             if fault=='write':raise OSError('fixed foreground sink refusal')
             return actual_write(*args)
-        namespace={'__name__':'__main__','main':main,'c':module,'sys':sys if fault=='snapshot-term' else types.SimpleNamespace(argv=['reader'],stderr=output),'json':types.SimpleNamespace(dumps=formatting),'os':os,'stat':stat}
+        namespace={'__name__':'__main__','main':main,'c':module,'sys':sys if fault in ('snapshot-term','deadline','cleanup-wait') else types.SimpleNamespace(argv=['reader'],stderr=output),'json':types.SimpleNamespace(dumps=formatting),'os':os,'stat':stat}
         if select_namespace is not None:namespace.update({key:select_namespace[key] for key in ('_scope_select_state','_scope_select_source_sha','_scope_select_native_sha')})
         status=None;original_sys=(sys.argv,sys.stderr)
-        if fault=='snapshot-term':sys.argv=['reader'];sys.stderr=output
+        if fault in ('snapshot-term','deadline','cleanup-wait'):sys.argv=['reader'];sys.stderr=output
         try:
             os.write=write
             try:exec(compile(tail,'actual-foreground-reader-mapping','exec'),namespace)
@@ -3540,6 +3563,16 @@ def foreground_state_controls(area):
             assert fact['io']['stderr_bytes']==512 and not waited
             context_errors.append((error,context))
         if fault=='snapshot-term':snapshot_error=error;snapshot_namespace=select_namespace;assert type(record.get('first_git_select_observation')) is dict
+        if fault=='deadline':
+            direct_error=error;direct_namespace=select_namespace;assert type(record.get('first_git_select_observation')) is dict
+            assert error.__cause__ is None and error.__context__ is None and [v[1] for v in trace if v[2]]==[1196]
+            assert [v[2] for v in before_wait if v[0]=='killpg']==[int(signal.SIGTERM),int(signal.SIGKILL)]
+            assert [v[1] for v in before_wait if v[0]=='wait']==[{'timeout':10}] and before_wait.count(['selector-close'])==1
+            assert len(handlers)==6 and handlers[-3:]==[signal.SIG_DFL]*3 and scope['selectors'].DefaultSelector is Selector
+        if fault=='cleanup-wait':
+            cleanup_error=error;cleanup_namespace=select_namespace
+            assert error.__cause__ is wait_failure and 'first_git_select_observation' not in record
+            assert [v[1] for v in trace if v[2]]==[1236,1196]
         records.append({'case':fault,'mapped_stderr':output.getvalue(),'status':status,'original_error_type':type(error).__name__,'same_signal_error':error is sentinel,'original_calls':before_wait,'clock_calls':len(clock_calls),'wait_reached':waited,'facts':fact,'real_child_returncode':returned,'all_pipes_closed':True,'None_is_not_liveness':True})
     mapping=ast.parse('if True:\n'+insertion).body[0].body[0].body
     first=next(index for index,node in enumerate(mapping) if isinstance(node,ast.Assign) and any(isinstance(t,ast.Tuple) for t in node.targets))
@@ -3579,7 +3612,7 @@ def foreground_state_controls(area):
             else:assert fact=='GAP'
             assertions.append({'case':fault,'io_attempts':len(attempts),'io':fact,'actual_frame_bound':True})
         finally:frame.f_locals['argv'][:]=saved
-    select_counter_controls(area,module,snapshot_error,snapshot_namespace)
+    select_counter_controls(area,module,snapshot_error,snapshot_namespace,direct_error,direct_namespace,cleanup_error,cleanup_namespace)
     return completed_evidence({'foreground_context_controls':assertions,'foreground_state_controls':records,'scope':'original exact foreground code with fixed ordinary transport/selector/clock/signal-error seams; no actual Git/OS-signal cause or real-principal proof'})
 
 def foreground_io_controls():
@@ -9231,12 +9264,15 @@ print(relation_result)
                 text=type.__dict__['__name__'].__get__(type(value))
                 return text if type(text) is str and len(text)<=80 and text.isascii() and text.isidentifier() else 'GAP'
             relation_snapshot_cancelled=[False]
-            relation_snapshot_state=[False,None,None,None]
+            relation_snapshot_state=[False,None,None,None,0,True]
             def first_git_select_observation():
                 try:
                     state=_scope_select_state;fact=relation_foreground[1]
-                    if (type(error) is not PermissionError or relation_outer_errno!=1 or type(fact) is not dict or
-                            fact['cancelled'] is not False or relation_snapshot_state[1] is not relation_io_binding[0] or
+                    eperm=(type(error) is PermissionError and relation_outer_errno==1 and relation_snapshot_state[1] is relation_io_binding[0])
+                    direct=(type(error) is c.Refusal and relation_snapshot_state[2] is error and
+                        relation_snapshot_state[4]==1 and relation_snapshot_state[5] and not relation_truncated and
+                        relation_field(error,'__cause__') is None and relation_field(error,'__context__') is None)
+                    if (not (eperm or direct) or type(fact) is not dict or fact['cancelled'] is not False or
                             relation_snapshot_state[2] is None or not any(relation_snapshot_state[2] is item for item in relation_seen)):
                         return 'GAP'
                     child=fact['child'];frame=relation_io_binding[0]
@@ -9296,8 +9332,6 @@ print(relation_result)
                     valid=type(function) is str and len(function)<=80
                     rows.append([function if valid else 'GAP',line if type(line) is int else 'GAP'])
                     if code_object is relation_foreground_code and value is relation_snapshot_state[3] and line==1230:relation_snapshot_state[1]=frame
-                    if code_object is relation_foreground_code and frame is relation_io_binding[0] and line==1196 and type(value) is c.Refusal:
-                        if object.__getattribute__(value,'__dict__').get('code')=='E_RUNTIME':relation_snapshot_state[2]=value
                     if code_object is relation_foreground_code and not relation_foreground[0]:
                         relation_foreground[0]=True
                         try:
@@ -9332,6 +9366,11 @@ print(relation_result)
                                 relation_io_binding[0]=frame
                                 relation_io_binding[1]=tuple(arguments)
                         except BaseException:pass
+                    if code_object is relation_foreground_code and value is relation_snapshot_state[3]:
+                        relation_snapshot_state[4]+=1
+                        if line!=1196:relation_snapshot_state[5]=False
+                    if code_object is relation_foreground_code and frame is relation_io_binding[0] and line==1196 and type(value) is c.Refusal:
+                        if object.__getattribute__(value,'__dict__').get('code')=='E_RUNTIME':relation_snapshot_state[2]=value
                     if (code_object is relation_foreground_code and frame is relation_io_binding[0] and
                             not relation_io_binding[2] and line==1196):
                         relation_io_binding[2]=True
