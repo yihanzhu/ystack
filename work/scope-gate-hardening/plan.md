@@ -1277,9 +1277,34 @@ runtime and actual carrying object. Missing __file__, a built-in string or an
 arbitrary executable digest is not that proof. Use the same closed source-shape
 predicate in select_source_inputs and the generated binding; retain held bytes,
 rechecks, selectors/abc methods, constructor/globals/inheritance and backend
-identity. Do not invent an extension path or accept other no-file loaders. If
-existing runtime qualification cannot bind the actual carrier, STOP that branch;
-add no trust root, alternate implementation or Linux skip.
+identity. Do not invent an extension path or accept other no-file loaders.
+Only the Linux built-in branch may use one private constructor-carrier qualifier
+in this fixture. Authenticate the bootstrap's real _imp.is_builtin registration
+for select and the exact loaded epoll type before querying its source. Through
+the runtime's existing authenticated ctypes.pythonapi handle, call public
+PyType_GetSlot(PyTypeObject *, int) -> void * with public Py_tp_new 65, then
+dladdr(const void *, Dl_info *) -> int on the non-null slot pointer. Bind the
+supported Linux pointer ABI and Dl_info four-pointer field order; do not read a
+PyTypeObject layout. This is the actual constructor slot, not
+the generic __new__ wrapper returned by PyCFunction_GetFunction. Never call the
+pointer. Require the supported Linux Dl_info layout and a successful result with
+a bounded, terminated image pathname of at most 4,096 bytes. Use only that
+physical absolute pathname as the carrier locator; reject aliases or missing
+files. Hold its complete bytes with the existing executable size cap, no-follow,
+owner/mode/ACL/identity and before/after rechecks. The generated binding must
+repeat the same source relation and match that held carrier and digest.
+Allow at most one registration, slot and image lookup per existing source-input
+or generated-binding admission, never per select or event. Retain the exact
+runtime, module, backend and function objects throughout admission. Do not load
+another image or handle, discover libraries, enumerate images/processes, inspect
+ELF dependencies, invoke a constructor or add a runtime provider. This identifies
+one constructor's carrying file; it is not full function-address attestation or
+native qualification. Local headers establish interface provenance only. Require
+the actual supported Linux ABI, current-runtime symbol exports and held-file
+relation in the real positive. Missing symbols, unsupported ABI, null/unmatched
+origin, an unholdable or oversized carrier, or drift stops that branch without
+retry, a larger limit, another loader, trust root or Linux skip. The extension
+and Mac branches must perform none of these new queries.
 Construct once through the original native constructor. Keep its native
 instance/resources and original register/get_map/unregister/close implementations,
 order and call counts. Add no extra select or other method call, generic registry,
@@ -1465,8 +1490,15 @@ adaptation in the existing ordinary owner lane. Prove real runtime/class/method
 binding and a real native path. On the actual supported Linux runtime, prove
 select_source_inputs, full capture construction and native binding against its
 real module/source shape. Keep the original six binding controls and add wrong
-loader/spec/module/carrier rejection. Preserve the real Mac extension/Kqueue path
-and all lifecycle/inverse controls. Metadata seams are not a real built-in positive;
+loader/spec/module/carrier rejection. For the private built-in qualifier, prove
+the real registered epoll constructor slot, actual loaded carrier and held bytes
+through both source-input and full generated-binding admissions on Linux. Reject
+a different held file/digest, generic wrapper or wrong type/slot, wrong native
+origin, missing symbol, unsupported layout, null/overlong path and carrier drift
+or size overrun. Prove the fixed lookup counts and no constructor call or new
+loader; label injected failures as controlled, not real source positives.
+Preserve the real Mac extension/Kqueue path with zero new lookups and all
+lifecycle/inverse controls. Metadata seams are not a real built-in positive;
 fixed scripted native-result seams are controlled
 branch evidence, not that proof. Preserve native construction, non-select calls,
 closure and original argument evaluation order/counts. Cover empty/nonempty exact
@@ -1494,8 +1526,9 @@ independent source preparation and the original full Mac then same-H Linux proof
 They neither establish the actual CI cause nor replace restoration or G3.
 Label controlled OS errors honestly; preserve all old and new ordinary raw output
 under the original 16 MiB cap without truncation or removal of controls.
-Prove no added object queries, unchanged original
-error/status/calls and no success export within the same caps.
+Apart from the fixed built-in carrier qualification, prove no added object
+queries, unchanged original error/status/calls and no success export within the
+same caps.
 Freeze complete generated copies before
 these ordinary controls. For the launch fields, use actual owned link creation and
 the original extracted selection/launch sites to prove that each retained value
