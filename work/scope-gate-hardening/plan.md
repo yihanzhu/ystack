@@ -1264,11 +1264,30 @@ Require live cancelled exact False, a finite original end and at least three
 seconds remaining on that same monotonic clock. Consume the single attempt before
 spawn. Missing identity, cancellation or insufficient time means zero spawn/GAP;
 never use exception-mapping values, restart end or infer an outer budget.
-Authenticate fixed /bin/ps through the existing held/no-follow owner, ACL, mode
-and byte-identity checks before use; setuid/setgid or unsupported tools refuse
-observation. Use the same consumer UID, no sudo, and only
-`/bin/ps -p <owned-pid> -o pid=,ppid=,pgid=,uid=,state=,comm=` with fixed C locale.
-Do not read argv, environment, a process table or descendants, or use a sampler.
+Run only the authenticated fixed Python P with -I -S -B and one frozen private
+helper source for this PID, at the same consumer UID with fixed C locale. Bind P,
+helper, consumer and ctypes bytes through the existing held/no-follow owner, ACL,
+mode, source and native-closure gates. Do not run ps or any setid helper, add a
+loader, or weaken the original runtime or system-cache authentication.
+Use only the helper's existing _DARWIN_ACL_FUNCTIONS.library handle for fixed
+/usr/lib/libSystem.B.dylib. Do not replace/reload that handle, change its ACL
+signatures, load libproc or another image, or use a fallback.
+Bind the installed SDK declarations and libSystem re-export evidence before use;
+header/stub hashes are provenance, not proof of the actual loaded library.
+On the original x86_64 runtime, require the declared proc_pidinfo signature
+int(int,int,uint64_t,void*,int), PROC_PIDT_SHORTBSDINFO 13 and the exact 64-byte
+proc_bsdshortinfo layout: four uint32 fields, comm[16], then eight uint32 fields,
+including uint32 uid_t/gid_t. Check ctypes sizes, alignment and every offset.
+Call proc_pidinfo once with owned PID, flavor 13, arg zero and one zeroed 64-byte
+buffer. Missing symbol, unsupported ABI, denial, EINTR or return other than 64 is
+GAP with no retry. On exact success require matching PID; retain only PID, PPID,
+PGID, UID, numeric status and the bounded 16 comm bytes. Do not decode other fields
+or query argv, environment, a process table, descendants or another flavor.
+Do not use a sampler.
+This call runs only in the supervised helper, never in the reader thread; its
+native duration has no synchronous one-second guarantee. All helper startup and
+authentication consume the same collection window. No new evaluator, reader or
+Git invocation is allowed; this helper is not a new product or runtime provider.
 This is one direct observation child in its own group with bounded pipes. Within
 the original end allow at most one second to collect and one second to terminate,
 kill if needed, wait and close its pipes, using the existing owned-child pattern.
@@ -1289,8 +1308,12 @@ syscall or closure proof. It cannot authorize retry of the consumed reference.
 Before enabling this boundary, freeze its exact generated source and inverse.
 Use actual extracted ordinary controls for once-only/foreign-frame/other-call
 rejection, exact counter/remaining admission, cancellation before and during spawn,
-real ps and short TERM-resistant owned children, complete wait/group/pipe closure,
-missing or privileged tool, wrong PID/fields, overflow and write-failure isolation.
+the actual fixed helper and short TERM-resistant owned children, complete
+wait/group/pipe closure, source/runtime refusal, missing symbol, ABI/offset drift,
+exact and short native returns, denial/EINTR without retry, wrong PID/fields and
+16-byte/nonterminated comm encoding. Prove overflow and write-failure isolation,
+no extra native call, unchanged loaded-library boundary and exact frozen helper
+bytes. Ordinary local results do not establish the CI ABI, runtime or target state.
 Show original select arguments, results, exceptions, order and all deadlines
 unchanged; no artificial successful closure or extra evaluator/Git call. Keep every
 existing shared control. Measure the entire fresh recursive raw batch at 16 MiB
