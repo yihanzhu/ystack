@@ -1600,16 +1600,26 @@ Each recording failure must retain the original exception. Keep all old controls
 raw-size and exact-source preparation gates; ordinary controls do not prove the
 actual Mac cause. This adds no general run logger or new diagnostic invocation.
 
-Retain two cost samples: protected slot 0's original `.github/workflows/ci.yml`
-call and the original terminal `normal` call. Precreate one fixed 4,096-byte-bounded
-data leaf and one one-byte eligibility leaf outside all evaluated/held trees.
-There are at most three stored sample records, each at most 1,024 encoded bytes:
-the two private frontends and slot 0's observer. Include fixed case, current source/copy/argv
-bindings, phase facts and GAP; no header, path list, environment dump or per-call
-leaf. Use the existing private sink identity boundary before held acquisition;
-add no safety-object or source/package query. Other slots, argv and calls stay
-unchanged. Keep these two success samples only until the original fixture ends;
-they are not success evidence or qualification output.
+Retain the cost samples from protected slot 0's original `.github/workflows/ci.yml`
+call and the original terminal `normal` call. Add only the first existing dashboard
+shape call, `dashboard shape del(.body.flow)`, through the existing slot 8 boundary.
+Bind that fixed source call, current source, private copy and nine data arguments
+before held acquisition; the other eleven dashboard iterations are not selected. Reuse the
+existing private copy/binding path, with no new slot, caller selection option or
+case registry. Its two optional records are `dashboard-flow-frontend` and
+`dashboard-flow-observer`; they use only the existing five phase fields and GAP.
+Keep cost_selected false for this call and add no classifier qualification work;
+slot 0 remains the only counted session. Preserve all 78 calls, order and results.
+Precreate the same fixed 4,096-byte-bounded data leaf and one-byte eligibility leaf
+outside all evaluated/held trees. Permit at most five sample records, each at most
+1,024 encoded bytes, within that same data cap. Keep fixed case and current
+source/copy/argv bindings; add no header, path list, environment dump or per-call
+leaf. Use the existing sink identity boundary; add no safety-object or source/package
+query. Keep the original three records and their optional counts/stage priority.
+If storage or export space is insufficient, omit the entire new two-record group
+as GAP; it cannot displace, shorten or prevent a required original record.
+Keep these samples only until the original fixture ends. They are not success
+proof, qualification output or evidence of CPU or classifier cost.
 
 The same bounded parent Bash may retain one optional ALRM stage record in memory.
 Record its entry SECONDS without resetting it or moving the original alarm. Use
@@ -1642,8 +1652,9 @@ before/after its original cleanup. Do not reset SECONDS or start a timing proces
 Instrument that cleanup once for both EXIT and the success path that removes its
 traps. Preserve the original call, return, signal and exit behavior. Mark an
 unreached normal wait GAP; cleanup's tolerant wait cannot substitute for it.
-Slot 0's observer takes five same-process monotonic samples: preparation entry,
-before/after trace installation, runpy return or unwind, and after trace restore.
+The slot 0 and fixed dashboard observers each take five same-process monotonic
+samples: preparation entry, before/after trace installation, runpy return or unwind,
+and after trace restore. No other call gains phase samples or per-event clocks.
 Preserve the original exception and mark unwind as failure, not normal completion.
 Keep only finite, ordered differences; missing or invalid facts are GAP. Bash
 facts have integer-second resolution. Do not subtract different process clocks.
@@ -1687,12 +1698,16 @@ original terminal assertion passes, may write one and close it before returning.
 Only the existing outer cleanup with saved status 142 and signal ALRM may export
 cost, after its original cancel/wait attempts and before its original tmp deletion.
 Cost export does not require another owner's cleanup to succeed. Require bound
-eligibility 1 and all three completed records, with current source/copy/argv and
-existing identity/NOFOLLOW checks. Prove that their only fixed writers have
-finished, closed their records and cannot write again. A marker, metadata, memory
-flag or another owner's state alone cannot prove this. Missing qualification,
-records, writer closure or source binding, and invalid or oversized data mean no
-output. An unknown other owner permits only reading this unrelated, previously
+eligibility 1 and all three original completed records, with current source/copy/argv
+and existing identity/NOFOLLOW checks. Prove that their only fixed writers have
+finished, closed their records and cannot write again. The optional dashboard
+pair may export only when both records independently meet these same completion,
+binding and closed-writer gates. Missing, incomplete or invalid new facts mean
+GAP for that pair, without qualifying it or changing original-sample eligibility.
+A marker, metadata, memory flag or another owner's state alone cannot prove closure.
+Missing qualification, required original records, writer closure or source binding,
+and invalid or oversized shared transport still mean no output. An unknown other
+owner permits only reading this unrelated, previously
 closed cost data. Keep owner confirmation, cleanup_genuine, PENDING, tmp deletion,
 restoration and the original status 142/ALRM behavior unchanged.
 Early I1 or terminal failure, successful exit and other failures produce no cost
@@ -1706,7 +1721,15 @@ or restoration.
 
 Use real owned extracted boundaries to cover both cleanup paths exactly once,
 nonzero wait, missing phases, exception/unwind, actual phase order, source/case
-binding, wrong eligibility, incomplete writers and byte caps. For the stage record,
+binding, wrong eligibility, incomplete writers and byte caps. For the dashboard
+pair, use the actual extracted fixed frontend/observer/binding and exporter paths.
+Prove selection of only that first source-bound call, both five-phase orders,
+unchanged original calls/nine arguments/results/exceptions/cleanup, and no counts
+outside slot 0. Cover wrong case/source/argv, later slot reuse, unwind, missing or
+unfinished writer, malformed facts, write/encoding failure and per-row/combined caps.
+An absent or overflowing pair must leave the original three records and stage
+priority intact; normal exit or absent eligibility still exports nothing. Keep
+all old controls and exact generated-source/inverse preparation. For the stage record,
 exercise the actual extracted Bash/trap/export boundaries with a real ALRM: freeze
 ordered points and entered/returned status once before cleanup changes state.
 Cover a command with no recorded return, a real zero/nonzero return, fixed enums,
