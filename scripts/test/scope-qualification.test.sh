@@ -838,6 +838,7 @@ else
 fi
 python_bin=$("$python_candidate" -I -S -B -c 'import os,sys;print(os.path.realpath(sys.executable))')
 "$python_bin" -I -S -B -c 'import sys;assert sys.version_info >= (3,11)' || fail 'existing Python 3.11+ required'
+scope_original_checks() {
 /bin/ln -s "$python_bin" "$bin/python3"
 "$python_bin" -I -S -B - "$gate_program" "$tmp/environment-reasons.jq" <<'PY_REASON_PROGRAM'
 import pathlib,sys
@@ -4583,6 +4584,717 @@ def primitive_witness_controls(program):
         'scope':'inert actual code objects and explicit owned proof-fault injection; no child, evaluator, reader or OS query'})
 
 
+class ScopeReferenceCancel(BaseException):
+    pass
+
+
+def first_git_reference_execute(command, environment, close_by, invocation, stop_child):
+    import signal
+    child = None
+    first_error = None
+    stdout = stderr = None
+    completion = None
+    try:
+        assert time.monotonic() + 40 <= close_by, 'reference execution/closing allowance'
+        child = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, close_fds=True, start_new_session=True, env=environment)
+        try:
+            stdout, stderr = child.communicate(input=b'', timeout=30)
+        except subprocess.TimeoutExpired as error:
+            stdout, stderr = error.output, error.stderr
+            raise
+    except BaseException as error:
+        first_error = error
+    finally:
+        try:
+            print(json.dumps({'reference_capture': {'invocation': invocation,
+                'argv': command, 'environment': environment, 'input_hex': '',
+                'pid': None if child is None else child.pid,
+                'stdout_hex': None if stdout is None else stdout.hex(),
+                'stderr_hex': None if stderr is None else stderr.hex(),
+                'error': None if first_error is None else type(first_error).__name__}},
+                sort_keys=True), flush=True)
+        except BaseException as error:
+            if first_error is None:
+                first_error = error
+        if child is not None:
+            cleanup_error = None
+            try:
+                stop_child(child)
+                assert type(child.returncode) is int, 'reference wait missing'
+                for stream in (child.stdin, child.stdout, child.stderr):
+                    if not stream.closed:
+                        stream.close()
+                assert all(stream.closed for stream in (child.stdin, child.stdout, child.stderr))
+                completion = {'invocation': invocation, 'pid': child.pid,
+                    'returncode': child.returncode, 'group_gone': True,
+                    'waited': True, 'pipes_closed': True}
+            except BaseException as error:
+                cleanup_error = error
+            try:
+                print(json.dumps({'reference_completion': completion,
+                    'cleanup_error': None if cleanup_error is None else type(cleanup_error).__name__},
+                    sort_keys=True), flush=True)
+            except BaseException as error:
+                if first_error is None and cleanup_error is None:
+                    first_error = error
+            if cleanup_error is not None:
+                if first_error is not None:
+                    raise first_error from cleanup_error
+                raise cleanup_error
+    if first_error is not None:
+        raise first_error
+    assert type(stdout) is bytes and type(stderr) is bytes, 'reference incomplete capture'
+    assert len(stdout) <= 1048576 and len(stderr) <= 65536, 'reference output cap'
+    assert completion is not None and completion['returncode'] == 0 and not stderr, 'reference command refused'
+    return stdout, completion
+
+
+def first_git_reference_validate(stdout, stderr, child, invocation, command, environment, runtime_metadata):
+    assert type(stdout) is bytes and type(stderr) is bytes
+    captures = []
+    completions = []
+    runtimes = []
+    for line in stdout.splitlines():
+        value = json.loads(line, object_pairs_hook=unique_object)
+        if set(value) == {'reference_runtime'}:
+            runtimes.append(value['reference_runtime'])
+        elif set(value) == {'reference_capture'}:
+            captures.append(value['reference_capture'])
+        elif set(value) == {'reference_completion', 'cleanup_error'}:
+            assert value['cleanup_error'] is None
+            completions.append(value['reference_completion'])
+        else:
+            raise AssertionError('unknown reference output')
+    assert len(captures) == len(completions) == len(runtimes) == 1
+    assert type(runtimes[0]) is list and len(runtimes[0]) == 2
+    for entry in runtimes[0]:
+        assert type(entry) is dict and set(entry) == {'path', 'identity'}
+        assert type(entry['path']) is str and type(entry['identity']) is list and len(entry['identity']) == 9
+        assert all(type(value) is int for value in entry['identity'])
+    assert runtimes[0] == runtime_metadata
+    capture, complete = captures[0], completions[0]
+    assert set(capture) == {'invocation', 'argv', 'environment', 'input_hex', 'pid', 'stdout_hex', 'stderr_hex', 'error'}
+    assert capture['invocation'] == invocation and capture['argv'] == command
+    assert capture['environment'] == environment and capture['input_hex'] == '' and capture['error'] is None
+    assert type(capture['pid']) is int and capture['pid'] > 0 and capture['pid'] != child.pid
+    assert type(capture['stdout_hex']) is str and len(capture['stdout_hex']) <= 2097152
+    assert type(capture['stderr_hex']) is str and len(capture['stderr_hex']) <= 131072
+    output = bytes.fromhex(capture['stdout_hex'])
+    assert capture['stdout_hex'] == output.hex() and capture['stderr_hex'] == ''
+    assert output == b'core.repositoryformatversion\ncore.filemode\ncore.bare\n'
+    assert complete == {'invocation': invocation, 'pid': capture['pid'], 'returncode': 0,
+        'group_gone': True, 'waited': True, 'pipes_closed': True}
+    assert type(complete['pid']) is int and type(complete['returncode']) is int and complete['returncode'] == 0
+    assert complete['group_gone'] is True and complete['waited'] is True and complete['pipes_closed'] is True
+    assert type(child.returncode) is int and child.returncode == 0
+    original = confirmation(stderr)
+    assert original['foreground_calls'] == [], 'product foreground ran in reference'
+    return complete
+
+
+def first_git_reference_driver(guard_source, channel_source, owner_source):
+    def replace_once(source, before, after):
+        assert source.count(before) == 1, before
+        return source.replace(before, after, 1)
+    tree = ast.parse(guard_source)
+    run = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'run_control')
+    original_run = ast.get_source_segment(guard_source, run)
+    result = guard_source
+    reference_cancel = ast.get_source_segment(owner_source, next(node for node in ast.parse(owner_source).body
+        if isinstance(node, ast.ClassDef) and node.name == 'ScopeReferenceCancel'))
+    result = replace_once(result, "def cancel(_number, _frame):\n    raise InterruptedError('private guard cancelled')\n",
+        reference_cancel + "\n\ndef cancel(_number, _frame):\n    raise ScopeReferenceCancel('private guard cancelled')\n")
+    result = replace_once(result, '        self.active=False\n\n    def finish(self):',
+        '        assert self.reference is not None\n        self.cases[-1]["reference"] = self.reference\n        self.active=False\n\n    def finish(self):')
+    result = replace_once(result, '        self.cases=[]\n', '        self.cases=[]\n        self.reference=None\n')
+    rewritten_run = replace_once(original_run,
+        "    source = sync_program if synchronized else original_program\n",
+        "    assert label == 'fixed-first-git-reference' and expected is None and not synchronized\n    source = original_program\n")
+    rewritten_run = replace_once(rewritten_run, '    end = time.monotonic() + 145\n',
+        "    end = time.monotonic() + 145\n    command += [str(owner_cancel.context), str(end - 15), json.dumps(reference_environment,sort_keys=True)]\n")
+    rewritten_run = replace_once(rewritten_run, "            if expected is None:\n",
+        "            owner_cancel.reference = first_git_reference_validate(stdout, stderr, child,\n                str(owner_cancel.context), reference_command, reference_environment, reference_runtime_metadata)\n            if expected is None:\n")
+    rewritten_run = replace_once(rewritten_run,
+        "                assert child.returncode == 0 and stdout == (str(selected) + '\\n').encode()\n                assert b'\"privileged_execution\": false' in stderr\n",
+        "                assert child.returncode == 0 and owner_cancel.reference is not None\n")
+    rewritten_run = replace_once(rewritten_run,
+        '            if child is not None:\n                assert waited and supervision_known,',
+        '            if child is not None:\n                if first_error is not None: raise first_error\n                assert owner_cancel.reference is not None\n                assert waited and supervision_known,')
+    rewritten_run = replace_once(rewritten_run,
+        '        except BaseException as error:\n            uncertain_cleanup(error)\n            raise\n',
+        '        except BaseException as error:\n            if first_error is None: first_error = error\n            uncertain_cleanup(error)\n            raise\n')
+    result = replace_once(result, original_run, rewritten_run)
+    validation = ast.get_source_segment(owner_source, next(node for node in ast.parse(owner_source).body
+        if isinstance(node, ast.FunctionDef) and node.name == 'first_git_reference_validate'))
+    phase = '''
+def fixed_first_git_reference_phase():
+    global owner_cancel, original_program, reference_command, reference_environment, reference_runtime_metadata
+    owner_cancel = ScopeFixtureOwnerCancel()
+    first_error = None
+    try:
+        assert operator_record.pw_uid == 56001
+        assert owner_cancel.context.name == 'scope-owner-2.json'
+        prepare_fixed_fixture()
+        program.write_text(wrapper_prefix)
+        program.chmod(0o444)
+        repository = fixture / 'reference.git'
+        repository.mkdir(mode=0o755)
+        (repository / 'objects').mkdir(mode=0o755)
+        (repository / 'refs').mkdir(mode=0o755)
+        (repository / 'HEAD').write_bytes(b'ref: refs/heads/main\\n')
+        config = repository / 'config'
+        config_raw = b'[core]\\nrepositoryformatversion = 0\\nfilemode = true\\nbare = true\\n'
+        fd = os.open(config, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o444)
+        try:
+            assert os.write(fd, config_raw) == len(config_raw)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        config.chmod(0o444)
+        state = os.lstat(config)
+        assert stat.S_ISREG(state.st_mode) and state.st_uid == 0 and state.st_nlink == 1
+        assert stat.S_IMODE(state.st_mode) == 0o444 and config.read_bytes() == config_raw
+        reference_command = ['/usr/bin/git', '--no-replace-objects', '--git-dir=' + str(repository),
+            'config', '--file', str(config), '--name-only', '--list', '--no-includes']
+        runtime = fixture / 'reference-runtime'
+        runtime.mkdir(mode=0o700)
+        (runtime / 'no-hooks').mkdir(mode=0o700)
+        reference_runtime_metadata = []
+        for directory in (runtime, runtime / 'no-hooks'):
+            directory.chmod(0o700)
+            os.chown(directory, operator_record.pw_uid, operator_record.pw_gid)
+            runtime_state = os.lstat(directory)
+            assert directory.is_absolute() and directory.resolve() == directory and stat.S_ISDIR(runtime_state.st_mode)
+            assert stat.S_IMODE(runtime_state.st_mode) == 0o700 and runtime_state.st_uid == operator_record.pw_uid
+            assert runtime_state.st_gid == operator_record.pw_gid
+            reference_runtime_metadata.append({'path': str(directory), 'identity': ScopeFixtureOwnerCancel.identity(runtime_state)})
+        for directory in (repository, repository/'objects', repository/'refs'):
+            directory.chmod(0o755)
+        (repository / 'HEAD').chmod(0o444)
+        reader_source = (package / 'scope/v1/read-shadow-evidence.py').read_text()
+        reader_class = next(node for node in ast.parse(reader_source).body if isinstance(node,ast.ClassDef) and node.name=='_Reader')
+        environment_method = next(node for node in reader_class.body if isinstance(node,ast.FunctionDef) and node.name=='environment')
+        environment_scope = {}
+        exec(compile(ast.Module(body=[environment_method],type_ignores=[]),'actual-reference-reader-environment','exec'),environment_scope)
+        class FixedEnvironment:
+            pass
+        inputs = FixedEnvironment()
+        inputs.runtime = runtime
+        inputs.no_hooks = runtime / 'no-hooks'
+        inputs.jq = FixedEnvironment()
+        inputs.jq.held = FixedEnvironment()
+        inputs.jq.held.path = '/Library/Frameworks/Python.framework/ystack-private-tools/jq'
+        reference_environment = environment_scope['environment'](inputs)
+        assert len(reference_environment)==14 and all(type(key) is str and type(value) is str for key,value in reference_environment.items())
+        original_program = fixture / 'first-git-reference.py'
+        original_program.write_text(REFERENCE_WORKER)
+        original_program.chmod(0o444)
+        print(json.dumps({'reference_preexec': {'source': REFERENCE_WORKER,
+            'source_sha256': hashlib.sha256(REFERENCE_WORKER.encode()).hexdigest(),
+            'argv': reference_command, 'environment': reference_environment,
+            'config_hex': config_raw.hex(), 'config_mode': state.st_mode,
+            'config_identity': ScopeFixtureOwnerCancel.identity(state),
+            'runtime_metadata': reference_runtime_metadata,
+            'invocation': str(owner_cancel.context)}}, sort_keys=True), flush=True)
+        run_control('fixed-first-git-reference', None)
+        assert len(owner_cancel.cases) == 1 and owner_cancel.reference is not None
+    except BaseException as error:
+        first_error = error
+        raise
+    finally:
+        if not owner_cancel.active:
+            try:
+                owner_cancel.finish()
+            except BaseException as error:
+                if first_error is not None:
+                    raise first_error from error
+                raise
+'''
+    execute_source = ast.get_source_segment(owner_source, next(node for node in ast.parse(owner_source).body
+        if isinstance(node, ast.FunctionDef) and node.name == 'first_git_reference_execute'))
+    worker = '''import importlib.util,json,os,signal,stat,subprocess,sys,time
+from pathlib import Path
+package, selected, guard_file, context = map(Path, sys.argv[1:5])
+assert len(sys.argv) == 7
+close_by = float(sys.argv[5])
+assert os.getuid() == os.geteuid() == 56001
+assert Path(sys.executable) == selected == Path('/Library/Frameworks/Python.framework/Versions/3.15/Resources/Python.app/Contents/MacOS/Python')
+assert sys.version_info[:3] == (3,15,0) and sys.flags.isolated and sys.flags.no_site and sys.flags.dont_write_bytecode
+spec = importlib.util.spec_from_file_location('fixed_reference_enforced', package / 'shadow/v1/enforced-reproduction.py')
+assert spec is not None and spec.loader is not None
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+repository = package.parent / 'runtime-guard/reference.git'
+command = ['/usr/bin/git', '--no-replace-objects', '--git-dir=' + str(repository), 'config', '--file', str(repository / 'config'), '--name-only', '--list', '--no-includes']
+environment = json.loads(sys.argv[6])
+assert type(environment) is dict and len(environment)==14
+runtime = package.parent / 'runtime-guard/reference-runtime'
+assert environment['HOME'] == environment['TMPDIR'] == str(runtime)
+assert environment['GIT_CONFIG_VALUE_0'] == str(runtime / 'no-hooks')
+runtime_metadata = []
+for directory in (runtime, runtime / 'no-hooks'):
+    state = os.lstat(directory)
+    assert directory.is_absolute() and directory.resolve() == directory and stat.S_ISDIR(state.st_mode)
+    assert stat.S_IMODE(state.st_mode) == 0o700 and state.st_uid == os.getuid()
+    runtime_metadata.append({'path': str(directory), 'identity': [state.st_dev, state.st_ino, state.st_mode,
+        state.st_uid, state.st_gid, state.st_nlink, state.st_size, state.st_mtime_ns, state.st_ctime_ns]})
+name = str(guard_file)
+before = tuple(os.lstat(name))
+def identity(value): return tuple(value)
+def uptime(): return time.monotonic()
+deadline = close_by
+assert uptime() < deadline and identity(os.lstat(name)) == before
+'''
+    worker += execute_source + '''
+owned = []
+first_error = None
+try:
+    for path, hardlinks in ((Path('/usr/bin/git'), True), (selected, False),
+            (package / 'shadow/v1/enforced-reproduction.py', False),
+            (package / 'shadow/v1/_consumer.py', False), (repository / 'config', False)):
+        held = module.c._hold_bytes(str(path), module.c.EXECUTABLE_LIMIT, hardlinks=hardlinks)
+        owned.append(held)
+    for held in owned:
+        held.recheck('E_STALE')
+    print(json.dumps({'reference_runtime': runtime_metadata}, sort_keys=True), flush=True)
+    first_git_reference_execute(command, environment, close_by, str(context), module.stop_child)
+    for held in owned:
+        held.recheck('E_STALE')
+except BaseException as error:
+    first_error = error
+    raise
+finally:
+    try:
+        module.c._close_paths(owned)
+    except BaseException as error:
+        if first_error is not None:
+            raise first_error from error
+        raise
+'''
+    injected = validation + '\nREFERENCE_WORKER = ' + repr(worker) + '\n' + phase
+    result = replace_once(result, '\nprepare_fixed_fixture()\ncopied = fixture',
+        '\n' + injected + "\nfixed_first_git_reference_phase()\nraise SystemExit(0)\n\nprepare_fixed_fixture()\ncopied = fixture")
+    original_fields = "{'pid','returncode','foreground_count','foreground_sha256'}"
+    channel_result = replace_once(channel_source, original_fields,
+        "{'pid','returncode','foreground_count','foreground_sha256','reference'}")
+    channel_result = replace_once(channel_result, "        if serial=='1':\n",
+        "        assert serial=='2' and not value['cancelled'] and len(value['cases'])==1\n"
+        "        row=value['cases'][0];proof=row['reference']\n"
+        "        assert row['foreground_count']==0 and row['returncode']==0\n"
+        "        assert type(proof) is dict and proof=={'invocation':str(context),'pid':proof['pid'],\n"
+        "            'returncode':0,'group_gone':True,'waited':True,'pipes_closed':True}\n"
+        "        assert type(proof['returncode']) is int and proof['returncode']==0\n"
+        "        assert proof['group_gone'] is True and proof['waited'] is True and proof['pipes_closed'] is True\n"
+        "        assert type(proof['pid']) is int and proof['pid']>0 and proof['pid']!=row['pid']\n"
+        "        if serial=='1':\n")
+    return result, channel_result, worker
+
+
+def first_git_reference_controls(guard, channel, area, clock_name):
+    import copy
+    location = area / 'first-git-reference'
+    location.mkdir()
+    trusted = Path(sys.executable).resolve()
+    trusted_bytes = trusted.read_bytes()
+    before = trusted.lstat()
+    identity_fields = ('st_dev', 'st_ino', 'st_mode', 'st_uid', 'st_gid', 'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+    assert len(trusted_bytes) <= 16 * 1024 * 1024
+    assert all(getattr(before, key) == getattr(trusted.lstat(), key) for key in identity_fields)
+    owner_source = heredoc('PY_OBSERVER_OWNER_CONTROLS')
+    driver, reference_channel, worker = first_git_reference_driver(guard, channel, owner_source)
+    owned = driver
+    changes = [
+        ('assert os.getuid() == 0 and pwd.getpwnam(operator).pw_uid != 0',
+         'assert os.getuid() == ' + str(os.getuid()) + ' and pwd.getpwnam(operator).pw_uid == ' + str(os.getuid())),
+        ('base.stat().st_uid == 0', 'base.stat().st_uid == ' + str(os.getuid())),
+        ('assert os.getuid()==0', 'assert os.getuid()==' + str(os.getuid())),
+        ('assert stat.S_ISREG(info.st_mode) and info.st_uid==0 and info.st_nlink==1',
+         'assert stat.S_ISREG(info.st_mode) and info.st_uid==' + str(os.getuid()) + ' and info.st_nlink==1'),
+        ("assert python == Path('/Library/Frameworks/Python.framework/Versions/3.15/Resources/Python.app/Contents/MacOS/Python')",
+         'assert python == Path(' + repr(str(trusted)) + ')'),
+        ('assert operator_record.pw_uid == 56001', 'assert operator_record.pw_uid == ' + str(os.getuid())),
+        ('state.st_uid == 0 and state.st_nlink == 1', 'state.st_uid == ' + str(os.getuid()) + ' and state.st_nlink == 1'),
+        ('user=operator_record.pw_uid, group=operator_record.pw_gid,\n                extra_groups=operator_groups, ', '')]
+    for old, new in changes:
+        assert owned.count(old) == 1
+        owned = owned.replace(old, new, 1)
+    worker_edits = [
+        ('assert os.getuid() == os.geteuid() == 56001',
+         'assert os.getuid() == os.geteuid() == ' + str(os.getuid())),
+        ("assert Path(sys.executable) == selected == Path('/Library/Frameworks/Python.framework/Versions/3.15/Resources/Python.app/Contents/MacOS/Python')",
+         'assert Path(sys.executable) == selected == Path(' + repr(str(trusted)) + ')'),
+        ('assert sys.version_info[:3] == (3,15,0) and sys.flags.isolated and sys.flags.no_site and sys.flags.dont_write_bytecode',
+         'assert sys.flags.isolated and sys.flags.no_site and sys.flags.dont_write_bytecode')]
+    ordinary_worker = worker
+    for before_worker, after_worker in worker_edits:
+        assert ordinary_worker.count(before_worker) == 1
+        ordinary_worker = ordinary_worker.replace(before_worker, after_worker, 1)
+    native_argv = [str(trusted), '-I', '-S', '-B', '-c',
+        "print('core.repositoryformatversion\\ncore.filemode\\ncore.bare')"]
+    original_call = '    first_git_reference_execute(command, environment, close_by, str(context), module.stop_child)\n'
+    ordinary_call = """    ordinary_native_popen = subprocess.Popen
+    def ordinary_reference_popen(argv, **options):
+        assert argv is command and len(argv) == 9
+        assert options == {'stdin': subprocess.PIPE, 'stdout': subprocess.PIPE, 'stderr': subprocess.PIPE,
+            'close_fds': True, 'start_new_session': True, 'env': environment}
+        return ordinary_native_popen(NATIVE_ARGV, **options)
+    subprocess.Popen = ordinary_reference_popen
+    try:
+        first_git_reference_execute(command, environment, close_by, str(context), module.stop_child)
+    finally:
+        subprocess.Popen = ordinary_native_popen
+""".replace('NATIVE_ARGV', repr(native_argv))
+    assert ordinary_worker.count(original_call) == 1
+    ordinary_worker = ordinary_worker.replace(original_call, ordinary_call, 1)
+    inverse_worker = ordinary_worker.replace(ordinary_call, original_call, 1)
+    for before_worker, after_worker in reversed(worker_edits):
+        assert inverse_worker.count(after_worker) == 1
+        inverse_worker = inverse_worker.replace(after_worker, before_worker, 1)
+    assert inverse_worker == worker
+    assert owned.count(repr(worker)) == 1
+    owned = owned.replace(repr(worker), repr(ordinary_worker), 1)
+    unmapped = owned
+    assert clock_name in ('CLOCK_UPTIME_RAW', 'CLOCK_MONOTONIC')
+    owned = owned.replace('CLOCK_UPTIME_RAW', clock_name)
+    assert owned.replace(clock_name, 'CLOCK_UPTIME_RAW') == unmapped
+    own_channel = reference_channel.replace('fixture.st_uid==0', 'fixture.st_uid==' + str(os.getuid()))
+    own_channel = own_channel.replace('info.st_uid==0', 'info.st_uid==' + str(os.getuid()))
+    shell = source[source.index('scope_owner_state=never\n'):source.index("scope_fixture_signal=''\n")]
+    assert shell.count('/usr/bin/sudo -n "$genuine_python"') == 1
+    shell = shell.replace('/usr/bin/sudo -n "$genuine_python"', '"$genuine_python"', 1)
+    cleanup_source = source[source.index("scope_fixture_signal=''\n"):source.index('\nplatform=', source.index("scope_fixture_signal=''\n"))]
+    work = location / 'whole-owner'
+    work.mkdir()
+    base = work / 'base'
+    base.mkdir()
+    package = base / 'package'
+    (package / 'shadow/v1').mkdir(parents=True)
+    for name in ('_consumer.py', 'enforced-reproduction.py'):
+        (package / 'shadow/v1' / name).write_bytes((Path(sys.argv[2]) / 'shadow/v1' / name).read_bytes())
+    (package / 'scope/v1').mkdir(parents=True)
+    (package / 'scope/v1/read-shadow-evidence.py').write_bytes((Path(sys.argv[2])/'scope/v1/read-shadow-evidence.py').read_bytes())
+    script = work / 'runtime-guard-controls.py'
+    script.write_text(owned)
+    helper = work / 'channel.py'
+    helper.write_text(own_channel)
+    guard_path = work / 'actual-guard.py'
+    guard_path.write_text(heredoc('PY_MAC_FIXED_RUNTIME_GUARD'))
+    marker = location / 'whole-owner.deleted'
+    receipt = location / 'whole-owner.saved.receipt'
+    variables = '\n'.join(key + '=' + repr(str(value)) for key, value in {
+        'tmp': work, 'genuine_base': base, 'guard_control': script, 'genuine_python': trusted,
+        'guard_source': guard_path, 'operator_name': pwd.getpwuid(os.getuid()).pw_name,
+        'entry_source': guard_path, 'scope_owner_channel_helper': helper}.items()) + '\n'
+    command = 'set -euo pipefail\n' + variables + shell + 'scope_owner_serial=1\n'
+    command += 'cleanup_genuine(){ /bin/cp "$tmp/scope-owner-2.receipt" ' + repr(str(receipt)) + '; printf DELETED > ' + repr(str(marker)) + '; }\n'
+    command += cleanup_source + 'scope_fixture_owner_launch false\n'
+    (work / 'boundary.sh').write_text(command)
+    frozen = Path(tempfile.mkdtemp(prefix='scope-reference-source-inputs-', dir='/private/tmp'))
+    frozen_rows = []
+    for name, actual in [('driver.py', owned), ('channel.py', own_channel),
+            ('worker.py', ordinary_worker), ('boundary.sh', command)]:
+        path = frozen / name
+        with path.open('xb') as target:
+            assert target.write(actual.encode()) == len(actual.encode())
+        path.chmod(0o444)
+        assert path.read_bytes() == actual.encode()
+        state = path.lstat()
+        frozen_rows.append({'path': str(path), 'bytes': len(actual.encode()),
+            'sha256': hashlib.sha256(actual.encode()).hexdigest(), 'mode': stat.S_IMODE(state.st_mode)})
+    (frozen / 'preexec.json').write_text(json.dumps(frozen_rows, sort_keys=True))
+    completed_evidence({'reference_owned_preexec': {'frozen_sources': frozen_rows,
+        'trusted_interpreter': str(trusted), 'trusted_sha256': hashlib.sha256(trusted_bytes).hexdigest(),
+        'formal_worker_sha256': hashlib.sha256(worker.encode()).hexdigest(), 'native_argv': native_argv,
+        'adapter': 'ordinary fixed Python short child behind transparent Popen argv seam; formal Git nine argv and native Popen options are asserted; not Git success or CI3.15'}})
+    try:
+        result = subprocess.run(['/bin/bash', '-c', command], capture_output=True, timeout=160)
+    except subprocess.TimeoutExpired as error:
+        completed_evidence({'reference_owned_timeout_before_raise': {
+            'stage': 'ordinary-whole-owner', 'exception_id': id(error),
+            'cause_id': None if error.__cause__ is None else id(error.__cause__),
+            'context_id': None if error.__context__ is None else id(error.__context__),
+            'stdout_hex': None if error.stdout is None else error.stdout.hex(),
+            'stderr_hex': None if error.stderr is None else error.stderr.hex(),
+            'stdout_scope': 'GAP' if error.stdout is None else 'actual captured partial bytes',
+            'stderr_scope': 'GAP' if error.stderr is None else 'actual captured partial bytes',
+            'closure': 'PENDING', 'deletions': 0}})
+        raise
+    completed_evidence({'reference_owned_actual_before_assert': {'returncode': result.returncode,
+        'stdout_hex': result.stdout.hex(), 'stderr_hex': result.stderr.hex()}})
+    for frozen_row in frozen_rows:
+        assert len(Path(frozen_row['path']).read_bytes()) == frozen_row['bytes']
+        assert hashlib.sha256(Path(frozen_row['path']).read_bytes()).hexdigest() == frozen_row['sha256']
+    marker_bytes = marker.read_bytes()
+    assert result.returncode == 0 and marker_bytes == b'DELETED'
+    owner_receipt = json.loads(receipt.read_bytes())
+    assert owner_receipt['quiescent'] and not owner_receipt['cancelled'] and len(owner_receipt['cases']) == 1
+    row = owner_receipt['cases'][0]
+    assert row['foreground_count'] == 0 and row['reference']['group_gone']
+    assert row['reference']['waited'] and row['reference']['pipes_closed'] and row['returncode'] == 0
+    report_lines = result.stdout.splitlines()
+    cleanup_trailer = b'fixture-cleanup: PASS prior-exit=0'
+    assert report_lines[-1] == cleanup_trailer and report_lines.count(cleanup_trailer) == 1
+    reports = [json.loads(line) for line in report_lines[:-1]]
+    preexec = next(row['reference_preexec'] for row in reports if 'reference_preexec' in row)
+    terminal = [row for row in reports if row.get('case')=='fixed-first-git-reference' and 'stdout' in row]
+    assert len(terminal)==1
+    terminal = terminal[0]
+    functions = [node for node in ast.parse(guard).body if isinstance(node,ast.FunctionDef)
+        and node.name in ('unique_object','confirmation')]
+    namespace = {'json':json}
+    exec(compile(ast.Module(body=functions,type_ignores=[]),'actual-reference-confirmation','exec'),namespace)
+    check = next(node for node in ast.parse(owner_source).body if isinstance(node,ast.FunctionDef)
+        and node.name=='first_git_reference_validate')
+    exec(compile(ast.Module(body=[check],type_ignores=[]),'actual-reference-validation','exec'),namespace)
+    witness = types.SimpleNamespace(pid=row['pid'],returncode=row['returncode'])
+    original_stdout = terminal['stdout'].encode()
+    original_stderr = terminal['stderr'].encode()
+    arguments = (original_stderr,witness,str(work/'scope-owner-2.json'),preexec['argv'],preexec['environment'],preexec['runtime_metadata'])
+    assert namespace['first_git_reference_validate'](original_stdout,*arguments)==row['reference']
+    negatives = []
+    phase = next(node for node in ast.parse(driver).body if isinstance(node, ast.FunctionDef) and node.name == 'fixed_first_git_reference_phase')
+    finishing_error = OSError('fixed phase finalization failure seam')
+    first_seen = []
+    def failed_finish():
+        first_seen.append(sys.exc_info()[1])
+        raise finishing_error
+    phase_scope = {'ScopeFixtureOwnerCancel': lambda: types.SimpleNamespace(active=False, finish=failed_finish),
+        'operator_record': types.SimpleNamespace(pw_uid=-1)}
+    exec(compile(ast.Module(body=[phase], type_ignores=[]), 'actual-reference-phase-first-error', 'exec'), phase_scope)
+    phase_error = None
+    try:
+        phase_scope['fixed_first_git_reference_phase']()
+    except BaseException as caught:
+        phase_error = caught
+    phase_reference = completed_evidence({'reference_phase_first_error_actual': {
+        'same_first_error': len(first_seen) == 1 and phase_error is first_seen[0],
+        'same_finish_cause': phase_error is not None and phase_error.__cause__ is finishing_error,
+        'type': None if phase_error is None else type(phase_error).__name__,
+        'scope': 'actual extracted phase early UID rejection with controlled constructor/finish; no lifecycle or real owner proof'}})
+    assert len(first_seen) == 1 and phase_error is first_seen[0] and type(phase_error) is AssertionError
+    assert phase_error.__cause__ is finishing_error
+    negatives.append({'case': 'phase-first-error', 'actual_reference': phase_reference})
+    for fault in ('missing-completion','wrong-invocation','wrong-pid','surviving-group','missing-wait','open-pipe','first-error','empty-foreground-only','wrong-type','runtime-contract'):
+        values = [json.loads(line) for line in original_stdout.splitlines()]
+        if fault == 'runtime-contract':
+            refused_fields = []
+            for field, index, invalid in (('owner', 3, -1), ('mode', 2, 0), ('path', None, '/wrong')):
+                wrong = copy.deepcopy(values)
+                entry = wrong[0]['reference_runtime'][0]
+                if index is None:
+                    entry['path'] = invalid
+                else:
+                    entry['identity'][index] = invalid
+                refusal = None
+                try:
+                    namespace['first_git_reference_validate'](b''.join(json.dumps(value).encode()+b'\n' for value in wrong), *arguments)
+                except AssertionError as caught:
+                    refusal = caught
+                assert refusal is not None
+                refused_fields.append(field)
+            negatives.append({'case': fault, 'refused_fields': refused_fields,
+                'scope': 'controlled runtime metadata mutation of actual worker output; no new launch/query'})
+            continue
+        if fault == 'wrong-type':
+            refused_fields = []
+            for field, invalid in (('pid', float(values[2]['reference_completion']['pid'])), ('returncode', 0.0), ('group_gone', 1), ('waited', 1), ('pipes_closed', 1)):
+                wrong = copy.deepcopy(values)
+                wrong[2]['reference_completion'][field] = invalid
+                encoded = b''.join(json.dumps(value, sort_keys=True).encode() + b'\n' for value in wrong)
+                refusal = None
+                try:
+                    namespace['first_git_reference_validate'](encoded, *arguments)
+                except AssertionError as caught:
+                    refusal = caught
+                assert refusal is not None
+                refused_fields.append(field)
+            negatives.append({'case': fault, 'refused_fields': refused_fields,
+                'scope': 'controlled non-builtin-int/numeric-bool aliases; no new launch/query'})
+            continue
+        if fault in ('missing-completion','empty-foreground-only'):
+            values = values[:2] if fault=='missing-completion' else []
+        elif fault=='first-error':
+            values[1]['reference_capture']['error']='InterruptedError'
+        else:
+            target = values[2]['reference_completion']
+            key,value = {'wrong-invocation':('invocation','/wrong'), 'wrong-pid':('pid',-1),
+                'surviving-group':('group_gone',False), 'missing-wait':('waited',False),
+                'open-pipe':('pipes_closed',False)}[fault]
+            target[key]=value
+        changed = b''.join(json.dumps(value,sort_keys=True).encode()+b'\n' for value in values)
+        error = None
+        try:
+            namespace['first_git_reference_validate'](changed,*arguments)
+        except AssertionError as caught:
+            error = caught
+        assert error is not None
+        negatives.append({'case':fault,'refused':True,'type':type(error).__name__,
+            'scope':'controlled scalar mutation of the already emitted actual worker record; no new launch/query'})
+    completed_evidence({'reference_completion_negative_controls':negatives})
+    return completed_evidence({'first_git_reference_controls': {
+        'whole_owner': 'actual ordinary Python short child communicate/stop_child/group/wait/three pipes/worker/Bash receipt; not Git success',
+        'cleanup_witness': {'marker_path': str(marker), 'marker_hex': marker_bytes.hex(),
+            'receipt_path': str(receipt), 'receipt': owner_receipt},
+        'ordinary_only': True, 'scope_qualification': False}})
+
+
+def first_git_reference_failure_controls(area):
+    import contextlib
+    import io
+    native_popen = subprocess.Popen
+    actual_module = Path(sys.argv[2]) / 'shadow/v1/enforced-reproduction.py'
+    spec = importlib.util.spec_from_file_location('ordinary_first_reference_enforced', actual_module)
+    assert spec is not None and spec.loader is not None
+    enforced = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = enforced
+    spec.loader.exec_module(enforced)
+    owner_source = heredoc('PY_OBSERVER_OWNER_CONTROLS')
+    execute_source = ast.get_source_segment(owner_source,next(node for node in ast.parse(owner_source).body
+        if isinstance(node,ast.FunctionDef) and node.name=='first_git_reference_execute'))
+    before_cap = 'len(stdout) <= 1048576 and len(stderr) <= 65536'
+    after_cap = 'len(stdout) <= 16 and len(stderr) <= 16'
+    assert execute_source.count(before_cap)==1 and after_cap not in execute_source
+    small_source = execute_source.replace(before_cap,after_cap,1)
+    assert small_source.replace(after_cap,before_cap,1)==execute_source
+    cap_scope = dict(globals())
+    exec(compile(small_source,'actual-reference-cap-seam','exec'),cap_scope)
+    cases = []
+    pending_area = Path(tempfile.mkdtemp(prefix='scope-reference-pending-', dir='/private/tmp'))
+    for fault in ('normal', 'nonzero', 'stderr', 'timeout', 'cancel', 'launch', 'TERM', 'KILL', 'surviving-group', 'cap-boundary', 'output-cap',
+            'capture-write', 'completion-write', 'capture-write-cancel', 'completion-write-TERM'):
+        case = pending_area / fault
+        case.mkdir()
+        pending = case / 'PENDING'
+        pending.write_bytes(b'owned reference closure not yet established\n')
+        stimulus = {
+            'normal': "print('ordinary-reference',flush=True)",
+            'nonzero': "raise SystemExit(7)",
+            'stderr': "import sys;print('original-stderr',file=sys.stderr,flush=True)",
+            'timeout': "import time;time.sleep(60)",
+            'cancel': "import os,signal,time;os.kill(os.getppid(),signal.SIGTERM);time.sleep(60)",
+            'cap-boundary': "import sys;sys.stdout.buffer.write(b'x'*16)",
+            'output-cap': "import sys;sys.stdout.buffer.write(b'x'*17)",
+            'capture-write': "print('ordinary-reference',flush=True)",
+            'completion-write': "print('ordinary-reference',flush=True)",
+            'completion-write-TERM': "print('ordinary-reference',flush=True)",
+            'capture-write-cancel': "import os,signal,time;os.kill(os.getppid(),signal.SIGTERM);time.sleep(60)"}.get(fault, "pass")
+        argv = [str(Path(sys.executable).resolve()), '-I', '-S', '-B', '-c', stimulus]
+        environment = {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C', 'LANG': 'C'}
+        launched = []
+        stop_calls = []
+        faults = []
+        original_handlers = {}
+        report_error = OSError('fixed actual report-write failure seam')
+        report_attempts = []
+        class ReportWriteFailure(io.StringIO):
+            def write(self, value):
+                report_attempts.append(value)
+                failure = 3 if fault in ('completion-write','completion-write-TERM') else 1
+                if len(report_attempts) == failure:
+                    raise report_error
+                return super().write(value)
+        terminal = ReportWriteFailure() if fault in ('capture-write','completion-write','capture-write-cancel','completion-write-TERM') else io.StringIO()
+        output = proof = error = None
+        def launched_once(command, **options):
+            assert command is argv and options == {'stdin': subprocess.PIPE, 'stdout': subprocess.PIPE,
+                'stderr': subprocess.PIPE, 'close_fds': True, 'start_new_session': True, 'env': environment}
+            if fault == 'launch':
+                raise launch_error
+            child = native_popen(command, **options)
+            launched.append(child)
+            assert len(launched) == 1
+            return child
+        launch_error = OSError('fixed launch failure seam')
+        stop_error = PermissionError('fixed original stop-child failure seam')
+        real_killpg = enforced.os.killpg
+        def killpg(group, number):
+            assert len(launched) == 1 and group == launched[0].pid
+            faults.append(number)
+            if fault in ('TERM','completion-write-TERM') and number == signal.SIGTERM:
+                raise stop_error
+            if fault == 'KILL' and number == signal.SIGKILL:
+                raise stop_error
+            if fault in ('KILL', 'surviving-group'):
+                return None
+            return real_killpg(group, number)
+        def stopped_once(child):
+            assert len(launched) == 1 and child is launched[0] and not stop_calls
+            stop_calls.append(child.pid)
+            try:
+                enforced.os.killpg = killpg
+                enforced.stop_child(child)
+            finally:
+                enforced.os.killpg = real_killpg
+        cancelled = ScopeReferenceCancel('fixed original reference cancellation')
+        def cancel(_number, _frame):
+            raise cancelled
+        try:
+            for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+                original_handlers[number] = signal.signal(number, cancel)
+            subprocess.Popen = launched_once
+            with contextlib.redirect_stdout(terminal):
+                try:
+                    execute = cap_scope['first_git_reference_execute'] if fault in ('cap-boundary','output-cap') else first_git_reference_execute
+                    output, proof = execute(argv, environment,
+                        time.monotonic() + 130, str(case), stopped_once)
+                except BaseException as caught:
+                    error = caught
+        finally:
+            subprocess.Popen = native_popen
+            enforced.os.killpg = real_killpg
+            for number, handler in original_handlers.items():
+                signal.signal(number, handler)
+        actual = {'case': fault, 'original_output': terminal.getvalue(),
+            'error': None if error is None else type(error).__name__,
+            'same_launch_error': error is launch_error, 'same_stop_error': error is stop_error,
+            'same_cancel_error': error is cancelled, 'launches': len(launched),
+            'stop_calls': stop_calls, 'actual_signal_arguments': faults,
+            'children': [{'pid': child.pid, 'returncode': child.returncode,
+                'pipes_closed': all(stream.closed for stream in (child.stdin, child.stdout, child.stderr))}
+                for child in launched], 'pending_path': str(pending),
+            'scope': 'actual short owned children; explicit native killpg failure/survival seams; output-cap uses exact extracted predicate with16-byte ordinary seam, not actual1MiB overflow; no Git/CI qualification'}
+        if fault in ('capture-write','completion-write','capture-write-cancel','completion-write-TERM'):
+            actual['report_write_failure'] = {'same_report_error': error is report_error,
+                'attempted_writes': report_attempts, 'failed_write_not_delivered': True,
+                'capture_export': 'complete original StringIO capture' if fault in ('completion-write','completion-write-TERM') else 'GAP',
+                'scope': 'actual print/write exit of extracted function; saved attempted text is not delivered stdout'}
+        reference = completed_evidence({'reference_failure_actual_before_assert': actual})
+        assert len(launched) == (0 if fault == 'launch' else 1)
+        assert len(stop_calls) == len(launched)
+        if fault in ('normal','cap-boundary'):
+            assert error is None and output == (b'ordinary-reference\n' if fault=='normal' else b'x'*16)
+            assert proof['group_gone'] and proof['waited'] and proof['pipes_closed']
+            pending.unlink()
+        else:
+            assert error is not None and proof is None and pending.read_bytes()
+            if fault == 'launch':
+                assert error is launch_error
+            elif fault in ('cancel', 'capture-write-cancel'):
+                assert error is cancelled
+            elif fault in ('capture-write', 'completion-write'):
+                assert error is report_error
+            elif fault in ('TERM', 'KILL', 'completion-write-TERM'):
+                assert error is stop_error
+            elif fault == 'timeout':
+                assert type(error) is subprocess.TimeoutExpired
+            elif fault == 'surviving-group':
+                assert type(error) is enforced.Refusal
+            else:
+                assert type(error) is AssertionError
+        if fault in ('capture-write','completion-write'):
+            attempted = [json.loads(value) for value in report_attempts if value.startswith('{')]
+            capture = next(value['reference_capture'] for value in attempted if 'reference_capture' in value)
+            assert capture['stdout_hex'] == b'ordinary-reference\n'.hex() and capture['stderr_hex'] == ''
+            assert len(stop_calls) == 1 and actual['children'][0]['pipes_closed']
+        if launched:
+            assert type(launched[0].returncode) is int, 'ordinary direct child not reaped'
+        cases.append({'case': fault, 'actual_reference': reference,
+            'cleanup_authorized': fault in ('normal','cap-boundary'), 'retained_pending': fault not in ('normal','cap-boundary')})
+    return completed_evidence({'reference_failure_controls': cases})
+
+
 def short_stage_controls(guard,channel,area,clock_name):
     import textwrap
     trusted_python=Path(sys.executable).resolve()
@@ -5034,6 +5746,8 @@ try:
     reports.append(foreground_state_controls(area))
     reports.append(foreground_io_controls())
     reports.append(wrapper_cancel_controls(wrapper,guard,area))
+    reports.append(first_git_reference_controls(guard,channel,area,clock_name))
+    reports.append(first_git_reference_failure_controls(area))
     stage_report,shared_channel_source,shared_channel_reference=short_stage_controls(guard,channel,area,clock_name)
     reports.append(stage_report)
     helper=area/'outside.py';helper.write_text('allowed=True\ndef rule(fd,value,ancestor):\n return allowed\n')
@@ -7235,6 +7949,8 @@ PY_TERMINAL_TEST
 pass 'terminal append and byte caps are independent; framed commitment binds the first snapshot'
 scope_stage_points[5]=$SECONDS
 
+}
+
 genuine_platform=$(/usr/bin/uname -s)
 genuine_chown=/bin/chown
 [ "$genuine_platform" != Darwin ] || genuine_chown=/usr/sbin/chown
@@ -7627,8 +8343,7 @@ PY_MAC_IDS
   setup_genuine_paths
 }
 
-run_genuine_macos_runtime_guard_controls() {
-  local operator_name guard_source entry_source
+prepare_genuine_macos_runtime_guard_controls() {
   operator_name=$(/usr/bin/id -un) || fail 'guard operator identity'
   guard_source="$tmp/runtime-guard/guard.py"
   guard_control="$tmp/runtime-guard-controls.py"
@@ -8920,6 +9635,11 @@ from pathlib import Path
 import sys
 compile(Path(sys.argv[1]).read_bytes(), sys.argv[1], 'exec')
 PY_GUARD_SYNTAX
+}
+
+run_genuine_macos_runtime_guard_controls() {
+  local operator_name guard_source entry_source
+  prepare_genuine_macos_runtime_guard_controls
   scope_fixture_owner_launch true
   scope_fixture_owner_launch false
 }
@@ -10697,6 +11417,9 @@ run_genuine() {
   pass 'actual root anchor, distinct storage writer and read-only consumer authenticate one complete bundle'
 }
 
+# shellcheck disable=SC2329
+scope_original_suite() {
+  scope_original_checks
 mac_stdin_controls=$(/bin/cat <<'PY_MAC_STDIN_CONTROLS'
 import ast
 import hashlib
@@ -10867,3 +11590,45 @@ done
 
 run_genuine
 /usr/bin/printf 'scope qualification: %s focused checks passed\n' "$passes"
+}
+
+scope_first_git_reference() {
+  local operator_name guard_source entry_source
+  [ "$genuine_platform" = Darwin ] || fail 'reference requires the original disposable Mac role'
+  [ "$passes" -eq 0 ] || fail 'reference must precede every original suite check'
+  setup_genuine_macos
+  [ "$(/usr/bin/id -u "$genuine_consumer")" = 56001 ] || fail 'fixed reference consumer UID required'
+  prepare_genuine_macos_runtime_guard_controls
+  operator_name=$genuine_consumer
+  "$python_bin" -I -S -B - "$root/scripts/test/scope-qualification.test.sh" "$guard_control" "$scope_owner_channel_helper" <<'PY_FIRST_REFERENCE_COPY'
+from pathlib import Path
+import ast,hashlib,json,sys
+script=Path(sys.argv[1]).read_text()
+def body(tag):
+    mark="<<'"+tag+"'";start=script.index('\n',script.index(mark))+1
+    return script[start:script.index('\n'+tag+'\n',start)]+'\n'
+owner_source=body('PY_OBSERVER_OWNER_CONTROLS')
+names={'first_git_reference_execute','first_git_reference_validate','first_git_reference_driver'}
+parts=[node for node in ast.parse(owner_source).body if isinstance(node,ast.FunctionDef) and node.name in names]
+assert {node.name for node in parts}==names and len(parts)==3
+scope={'ast':ast}
+exec(compile(ast.Module(body=parts,type_ignores=[]),'actual-fixed-reference-copy','exec'),scope)
+driver_path,channel_path=map(Path,sys.argv[2:])
+original_driver,original_channel=driver_path.read_text(),channel_path.read_text()
+driver,channel,worker=scope['first_git_reference_driver'](original_driver,original_channel,owner_source)
+assert 'fixed_first_git_reference_phase()\nraise SystemExit(0)' in driver
+print(json.dumps({'fixed_reference_sources':{'driver':driver,'channel':channel,'worker':worker,
+    'original_driver_sha256':hashlib.sha256(original_driver.encode()).hexdigest(),
+    'original_channel_sha256':hashlib.sha256(original_channel.encode()).hexdigest()}},sort_keys=True),flush=True)
+driver_path.write_text(driver)
+channel_path.write_text(channel)
+PY_FIRST_REFERENCE_COPY
+  scope_owner_serial=1
+  scope_fixture_owner_launch false
+  [ "$scope_owner_state" = completed ] && [ "$scope_owner_status" -eq 0 ] || fail 'reference closure unknown'
+  trap - EXIT
+  cleanup
+  /usr/bin/printf 'REFERENCE_ONLY\n'
+}
+
+scope_first_git_reference
