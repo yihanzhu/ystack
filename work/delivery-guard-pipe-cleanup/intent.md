@@ -1,7 +1,7 @@
 # Intent: Preserve delivery guard rejection when its input pipe closes
 Author: Codex (intent author at manager direction). Status: draft.
 
-Tracks #666. [Accepted intake](https://github.com/yihanzhu/ystack/issues/666#issuecomment-6279573388).
+Tracks #666. [Accepted intake](https://github.com/yihanzhu/ystack/issues/666#issuecomment-6279844294).
 
 ## Problem
 
@@ -49,8 +49,8 @@ Use the standard review-size budget.
 Fix the normal cleanup path. Do not add retries, sleeps, longer deadlines,
 lock-file deletion, a general cleanup refactor, or weaker acceptance rules.
 Do not add permissions, credentials, installation, activation or target execution.
-Keep #558's head and base frozen while its current full Linux run is active.
-Preserve that attempt and the original failed evidence.
+Preserve the #558 attempt and its original failed evidence. A base change
+requires fresh review against the new base.
 
 ## Open questions
 
