@@ -9,7 +9,7 @@ Tracks #541. Risk is high. This is the nonterminal child-6 core. It authenticate
 the existing child-5 evidence at one exact revision. Issue #544 remains mandatory
 before child 6 completes or child 7 starts.
 
-Implementation PR: `review_size: accepted-exception`, 2,600–12,300 net changed
+Implementation PR: `review_size: accepted-exception`, 2,600–12,600 net changed
 lines. The private evidence reader, held-path and Git checks, closed evaluator
 relations, and a real two-principal origin fixture form one security boundary.
 Most of the range is proof: complete classification, bundle, Git, terminal and
@@ -1228,7 +1228,7 @@ original fields with io GAP. I/O formatting failure takes that same fallback and
 cannot discard the old record or replace the first error. Add no other buffer
 contents or lengths, whole locals, dynamic getters, callbacks or repr. Missing or
 invalid frame, command, object, scalar or binding is GAP. Apart from the fixed
-first_git_select_observation transparent delegation below, do not poll, wait,
+first_git_select_observation and first_git_process_snapshot below, do not poll, wait,
 getpgid, inspect proc/ps, send kill0, read a clock or add a syscall, query, trace
 callback or process. Keep original signals, Popen, call order and exceptions
 unchanged; these facts grant no cleanup or restoration permission. Keep
@@ -1256,7 +1256,50 @@ order and call counts. Add no extra select or other method call, generic registr
 arbitrary proxy or public API. If the fixed class cannot preserve those behaviors
 and original closure, STOP; do not select another interface.
 
-Retain only entered, returned, raised, nonempty, events_total and last_length.
+Allow only `first_git_process_snapshot` in this same private Mac fixture copy.
+Only at original select call 101, after 100 normal empty returns and no raised
+select, bind its live exact foreground frame/code, nine argv, selector and owned
+Popen PID. Invalid counters mean no observation; add no select or polling trigger.
+Require live cancelled exact False, a finite original end and at least three
+seconds remaining on that same monotonic clock. Consume the single attempt before
+spawn. Missing identity, cancellation or insufficient time means zero spawn/GAP;
+never use exception-mapping values, restart end or infer an outer budget.
+Authenticate fixed /bin/ps through the existing held/no-follow owner, ACL, mode
+and byte-identity checks before use; setuid/setgid or unsupported tools refuse
+observation. Use the same consumer UID, no sudo, and only
+`/bin/ps -p <owned-pid> -o pid=,ppid=,pgid=,uid=,state=,comm=` with fixed C locale.
+Do not read argv, environment, a process table or descendants, or use a sampler.
+This is one direct observation child in its own group with bounded pipes. Within
+the original end allow at most one second to collect and one second to terminate,
+kill if needed, wait and close its pipes, using the existing owned-child pattern.
+Check live cancellation during supervision; do not mask signals or swallow it.
+Keep original outer alarms effective. An early outer timeout still fails/PENDING;
+local admission does not promise outer time or successful closure. Uncertain
+observation-child closure means PENDING, no continuation, deletion or restoration.
+On known closure, unavailable/failed/invalid observation is GAP and original select
+still receives its original arguments once. Preserve all original calls and errors.
+Retain at most 768 stdout bytes and 128 stderr bytes, fixed parsed fields and the
+observation status in one optional group of at most 1,024 encoded bytes. Overflow
+is GAP. Export only through the existing first-config failure record and its
+original eligible exits; no success output or new sink. Required old fields and
+all existing record/export/raw caps take priority. A matching PID/comm is only a
+post-launch stage clue, not birth identity, binary authentication, a blocked
+syscall or closure proof. It cannot authorize retry of the consumed reference.
+
+Before enabling this boundary, freeze its exact generated source and inverse.
+Use actual extracted ordinary controls for once-only/foreign-frame/other-call
+rejection, exact counter/remaining admission, cancellation before and during spawn,
+real ps and short TERM-resistant owned children, complete wait/group/pipe closure,
+missing or privileged tool, wrong PID/fields, overflow and write-failure isolation.
+Show original select arguments, results, exceptions, order and all deadlines
+unchanged; no artificial successful closure or extra evaluator/Git call. Keep every
+existing shared control. Measure the entire fresh recursive raw batch at 16 MiB
+before publication, using only existing lossless source sharing. Retire this
+private observation after its actual evidence is used for a separately reviewed
+normal-path correction; keep the evidence and all shared lifecycle controls.
+
+For select counts retain only entered, returned, raised, nonempty, events_total
+and last_length.
 The first five are exact builtin ints from 0 through 2^31-1; last_length is an
 exact builtin int in that range or GAP.
 Before each original select delegation increment entered; on return increment
@@ -1288,9 +1331,10 @@ Restore the exact temporary binding in finally on every exit, including install,
 constructor, delegation, cancellation and cleanup failures. This restores no
 child or filesystem state and grants no cleanup permission. Prove native resource
 closure and original cancellation through the actual boundary before enabling it.
-Do not replace Popen/read/write/killpg/wait, add queries, clocks, processes, threads,
-signals or grace, or alter any original deadline or exception outcome. A select
-wrapper adds a private traceback frame: bind it honestly and retain every original
+Outside first_git_process_snapshot, add no queries, clocks or processes. Do not
+replace original Popen/read/write/killpg/wait or their signal handling, add threads
+or grace, or alter an original deadline or exception. A select wrapper adds a private
+traceback frame: bind it honestly and retain every original
 frame in order, the same exception and cause/context. Do not claim byte-identical
 whole tracebacks or let new frames displace original facts under existing bounds.
 Keep the original deadline check outside the wrapper and its exact frame mapping.
