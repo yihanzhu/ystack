@@ -909,9 +909,13 @@ positive.
 Use one temporary private `scope_first_git_reference` test boundary in
 `scope-qualification.test.sh`. Its fixed source entry replaces only that head's
 suite dispatch. Retain the complete original suite text and assertions. Add no
-argument, environment selector, workflow, product entry or fallback. Run this
-head once in a fresh invocation of the existing approved Mac workflow. It is a
-reference head and cannot be merged or accepted as complete scope/Mac proof.
+argument, environment selector, workflow, product entry or fallback. The initial
+one-shot allowance is consumed. Remove its temporary entry before preparing the
+fixed worker-path correction below. Permit only one corrective fresh-head
+invocation of the existing approved Mac workflow after this amendment is accepted
+and merged. Dispatch consumes this allowance even if Git never starts; no further
+retry is allowed. This reference head cannot be merged or accepted as complete
+scope/Mac proof.
 Do not run the original first-config foreground before or after the reference.
 Ordinary enablement controls are separate from this real reference invocation.
 
@@ -924,6 +928,13 @@ bytes, modes, paths, source and environment before launch; do not reuse an old
 failed tree or claim that new path bytes match an earlier run. Retain the original
 nine-argument first-config shape and exact reader environment contract. Root-owned
 fixture preparation is not a second consumer reference or a comparison arm.
+
+Bind the reference worker's existing `name` scalar to `str(Path(sys.argv[0]))`.
+This is the fixed root-generated `program = fixture / 'guard.py'` wrapper that
+launched the worker, not the runner-private `guard_file` or a shared-guard copy.
+Keep the original arguments, lstat count and identity comparison. Freeze and
+verify the actual wrapper source, path and worker binding under the existing
+checks. Do not change roles, permissions, the shared guard or its entry source.
 
 Run exactly one consumer Git through standard `subprocess.Popen` and
 `communicate`, with empty input, three PIPEs, `close_fds=True` and
@@ -968,15 +979,20 @@ and do not continue the original genuine case. Failure or unknown state remains
 nonzero/PENDING. The unchanged workflow may then run its original native suite;
 even a green job is not complete scope/Mac acceptance. Preserve the real workflow
 cleanup result separately; reference closure does not prove D/V/T restoration.
-After this one invocation reaches a terminal state and its original evidence is
-sealed, remove the temporary entry in a normal new commit. No complete scope/Mac
-proof or G3 may start while it remains. Preserve the old red evidence and all
-original tests. A reference result is a cross-run fact with cold-start and host
-state limits, not a root-cause verdict or a product fix. Final acceptance still
-requires the original complete Mac then same-head Linux, restoration and G3.
+After this corrective invocation reaches a terminal state and its original
+evidence is sealed, remove the temporary entry in a normal new commit.
+No complete scope/Mac proof or G3 may start while it remains.
+Preserve the old red evidence and all original tests.
+A reference result is a cross-run fact with cold-start and host state limits,
+not a root-cause verdict or a product fix. Final acceptance still requires the
+original complete Mac then same-head Linux, restoration and G3.
 
 Before dispatch, freeze the full generated reference source and bindings. Reuse
-one actual extracted owned-control lane with real short-lived children. Prove
+one actual extracted owned-control lane with real short-lived children. In its
+existing positive, replace the unused `guard_path.write_text` with an assertion
+that this fresh owned path is absent. The worker must use the existing wrapper
+and complete the original receipt chain without an extra invocation or mocked
+lstat. This checks path selection, not cross-UID access. Prove
 exact command/environment/input and one invocation, normal complete raw capture,
 nonzero/stderr refusal, timeout and cancellation, actual stop_child group reap,
 wait and all pipe closes. Cover launch failure, TERM/KILL failure, surviving group,
@@ -986,11 +1002,12 @@ owner receipt binds the reference child, rejects the empty original foreground
 proof and preserves the first failure. Ordinary same-UID controls do not prove the
 real Mac consumer or root chain. Preserve every existing ordinary/owner control,
 source inverse and safety proof. Measure the complete recursive new raw batch
-against 16 MiB before fresh independent source preparation and the one reference.
+against 16 MiB. Complete fresh local proof, fresh independent source preparation
+and required CI before dispatching the corrective reference at that exact head.
 Do not hide source, remove controls or compress evidence to fit. This exception
 adds no identity/select observer, runtime, source download, administrator command,
-permission, retry allowance or product behavior. Its removal does not retire any
-original UNKNOWN finding or relax the final proof.
+permission, further retry allowance or product behavior. Its removal does not
+retire any original UNKNOWN finding or relax the final proof.
 
 ## Private Linux fixture failure observation
 
