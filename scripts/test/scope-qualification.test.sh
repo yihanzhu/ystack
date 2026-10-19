@@ -3007,7 +3007,7 @@ def stable_sink_controls(area,assembler):
     return reports
 
 OUTER_RUN_SOURCE_SHA='7f3571e66a1da98ccc2a876c426ea77fcddc010cbdb64d76342efde97ce77a64'
-OUTER_CAPTURE_SOURCE_SHA='cdbfd7657dc9b5b83b23ddd8eef458a75b3ce997d3162d3b74b2b6c856a29b7b'
+OUTER_CAPTURE_SOURCE_SHA='194cd18de6456fae0d6dfcde33a957668000020e5daa2432c00dba1971be1697'
 def outer_timeout_boundary(assembler):
     tree=ast.parse(assembler)
     runs=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='run']
@@ -3133,6 +3133,363 @@ def outer_timeout_controls(area):
             'effects':effects,'effect_scope':'fixed same-call wait/reap model, not kernel lifecycle proof','calls':1,'write_attempts':len(writes),
             'write_errors':write_errors,'facts':json.loads(raw) if raw else 'GAP'})
     return completed_evidence({'outer_timeout_controls':reports,'fixed_source_allowance':allowance,'custom_hooks':hooks})
+
+def process_snapshot_controls(area,module):
+    import ctypes,io,selectors,signal,types,traceback
+    assembler=heredoc('PY_GENUINE_ASSEMBLER');tree=ast.parse(assembler)
+    capture=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='GenuineRelationCapture')
+    constructor=next(n for n in capture.body if isinstance(n,ast.FunctionDef) and n.name=='__init__')
+    expression=next(n.value for n in ast.walk(constructor) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='selector_setup' for t in n.targets))
+    method=next(n for n in capture.body if isinstance(n,ast.FunctionDef) and n.name=='select_source_inputs')
+    context={'sys':sys,'sha':lambda raw:hashlib.sha256(raw).hexdigest()}
+    exec(compile(ast.Module(body=[ast.parse(ast.get_source_segment(assembler,method)).body[0]],type_ignores=[]),'actual-process-source-inputs','exec'),context)
+    selected=context['select_source_inputs'](module)
+    names=('selector_source','selector_path','native_origin','selector_source_sha','native_sha','abc_source','abc_path','abc_sha')
+    setup=eval(compile(ast.Expression(expression),'actual-process-selector-expression','eval'),dict(zip(names,selected)))
+    namespace={'c':module,'sys':sys,'json':json}
+    exec(compile(setup,'actual-process-selector-setup','exec'),namespace)
+    helper=namespace['_scope_process_helper_raw'];helper_tree=ast.parse(helper)
+    helper_main=next(n for n in helper_tree.body if isinstance(n,ast.FunctionDef) and n.name=='main')
+    resolver_node=next(n for n in ast.walk(helper_main) if isinstance(n,ast.ClassDef) and n.name=='EmptyOnlyResolver')
+    resolver_scope={'c':module};exec(compile(ast.Module(body=[resolver_node],type_ignores=[]),'actual-empty-only-helper-resolver','exec'),resolver_scope)
+    resolver=resolver_scope['EmptyOnlyResolver']()
+    for value in (['00'*16],(),[1]):
+        try:resolver.resolve(value)
+        except module.Refusal as error:assert type(error) is module.Refusal and error.code=='E_ACL'
+        else:raise AssertionError('helper resolver accepted nonempty/type')
+    assert resolver.resolve([])==[]
+    platform_test=ast.dump(ast.parse("sys.platform=='darwin' and sys.byteorder=='little'",mode='eval').body,include_attributes=False)
+    platform_guard=next(n for n in ast.walk(helper_main)
+        if isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute) and n.func.attr=='_require'
+        and n.args and ast.dump(n.args[0],include_attributes=False)==platform_test)
+    native_call=next(n for n in ast.walk(helper_main) if isinstance(n,ast.Call) and isinstance(n.func,ast.Name) and n.func.id=='first_git_proc_query')
+    assert platform_guard.lineno<native_call.lineno
+    query=next(n for n in helper_tree.body if isinstance(n,ast.FunctionDef) and n.name=='first_git_proc_query')
+    queries={'__name__':'ordinary-owned-helper'}
+    exec(compile(ast.Module(body=[query],type_ignores=[]),'actual-process-query','exec'),queries)
+    actual_query=queries['first_git_proc_query'];reports=[]
+    helper_reference=completed_evidence({'process_helper_source':{'source':helper.decode()}})
+    for fault in ('exact','short','zero','denial','eintr','wrong-pid','missing','alignment','offset','library','comm16'):
+        calls=[]
+        class Function:
+            def __call__(self,pid,flavor,argument,pointer,size):
+                calls.append([pid,flavor,argument,size])
+                assert flavor==13 and argument==0 and size==64
+                buffer=pointer._obj
+                assert bytes(buffer)==bytes(64)
+                buffer.pid=pid+int(fault=='wrong-pid');buffer.ppid=17;buffer.pgid=pid;buffer.uid=os.getuid();buffer.state=2
+                ctypes.memmove(ctypes.addressof(buffer)+16,b'0123456789abcdef',16)
+                if fault=='denial':ctypes.set_errno(13);return -1
+                if fault=='eintr':ctypes.set_errno(4);return -1
+                return 63 if fault=='short' else 0 if fault=='zero' else 64
+        function=Function()
+        class Library:
+            _name='/usr/lib/libSystem.B.dylib'
+            def __getitem__(self,key):
+                assert key=='proc_pidinfo'
+                if fault=='missing':raise AttributeError(key)
+                return function
+        library=Library()
+        view=types.SimpleNamespace(**{name:getattr(ctypes,name) for name in dir(ctypes)})
+        view.CDLL=Library
+        if fault=='alignment':view.alignment=lambda value:8
+        if fault=='offset':queries['getattr']=lambda obj,key:types.SimpleNamespace(offset=getattr(obj,key).offset+int(key=='uid'))
+        if fault=='library':library._name='/untrusted/image'
+        try:result=actual_query(view,library,123)
+        finally:queries.pop('getattr',None)
+        report={'case':fault,'actual_calls':calls,'result':result,'same_loaded_library':False,
+                'scope':'controlled native-return/ABI seam through extracted query; not kernel result'}
+        print(json.dumps({'process_native_control_before_assert':report},sort_keys=True),flush=True)
+        if fault in ('exact','comm16'):
+            assert result=={'pid':123,'ppid':17,'pgid':123,'uid':os.getuid(),'state':2,'comm_hex':b'0123456789abcdef'.hex()}
+            assert calls==[[123,13,0,64]]
+        else:assert result=='GAP' and len(calls)==int(fault not in ('missing','alignment','offset','library'))
+        reports.append(report)
+    library=module._DARWIN_ACL_FUNCTIONS.library if sys.platform=='darwin' else None
+    if library is not None:
+        acl_before={name:(getattr(library,name),tuple(getattr(library,name).argtypes),getattr(library,name).restype)
+                    for name in ('acl_get_fd_np','acl_get_entry','acl_get_tag_type','acl_free')}
+        result=actual_query(ctypes,library,os.getpid())
+        print(json.dumps({'process_actual_native_before_assert':{'pid':os.getpid(),'result':result,'python':sys.executable,'version':sys.version}},sort_keys=True),flush=True)
+        assert type(result) is dict and result['pid']==os.getpid() and result['uid']==os.getuid()
+        assert library is module._DARWIN_ACL_FUNCTIONS.library
+        assert all(getattr(library,name) is function and tuple(function.argtypes)==arguments and function.restype is returned
+                   for name,(function,arguments,returned) in acl_before.items())
+        reports.append({'case':'actual-local-procinfo','result':result,'scope':'actual local ABI/library/UID only; not CI x86_64'})
+    values=namespace['_scope_process_values']
+    valid={'first_git_process_snapshot':{'pid':123,'ppid':1,'pgid':123,'uid':os.getuid(),'state':2,'comm_hex':'00'*16}}
+    for fault in ('valid','pid','bool','fields','comm','unicode','overflow'):
+        value=json.loads(json.dumps(valid))
+        if fault=='pid':value['first_git_process_snapshot']['pid']=124
+        if fault=='bool':value['first_git_process_snapshot']['uid']=True
+        if fault=='fields':value['first_git_process_snapshot']['extra']=0
+        if fault=='comm':value['first_git_process_snapshot']['comm_hex']='00'*17
+        if fault=='unicode':value['first_git_process_snapshot']['comm_hex']='é'*32
+        if fault=='overflow':value['first_git_process_snapshot']['state']=4294967296
+        result=values(module.canonical(value),123)
+        assert (type(result) is dict)==(fault=='valid')
+        reports.append({'case':'fields-'+fault,'result':result})
+    process_admission_controls(module,setup)
+    process_unknown_controls(namespace,module)
+    supervisor=namespace['_scope_process_supervise']
+    original_state=dict(namespace['_scope_select_state'])
+    namespace['_scope_select_state']['native_selector']=selectors.DefaultSelector
+    actual_popen=module.subprocess.Popen;actual_read=module.os.read
+    actual_blocking=module.os.set_blocking;actual_killpg=module.os.killpg
+    def supervised(command,cancelled):
+        children=[];reads=[];channels={};kills=[];arguments=[];waits=[];first_probe=[True]
+        namespace['_scope_select_state']['process_pending']=False
+        namespace['_scope_select_state'].pop('process_close_error',None)
+        def popen(*args,**kwargs):
+            arguments.append([args,kwargs])
+            if command==['construct-refusal']:raise construction_error
+            child=actual_popen(*args,**kwargs);children.append(child)
+            if stimulus=='spawn-cancel':cancelled[0]=True
+            return child
+        def blocking(fd,value):
+            channels[fd]='stdout' if not channels else 'stderr'
+            return actual_blocking(fd,value)
+        def read(fd,size):
+            try:value=actual_read(fd,size)
+            except BaseException as error:
+                reads.append({'fd':fd,'size':size,'exception':type(error).__name__});raise
+            reads.append({'fd':fd,'size':size,'channel':channels.get(fd,'constructor'),'hex':value.hex()})
+            return value
+        def waited(child,*args,**kwargs):
+            row={'timeout':kwargs.get('timeout')};waits.append(row)
+            try:result=actual_wait(child,*args,**kwargs)
+            except BaseException as error:row['error']=type(error).__name__;raise
+            row['returncode']=result;return result
+        def killpg(pid,number):
+            fact={'pid':pid,'number':number,'exception':None};kills.append(fact)
+            try:
+                if stimulus in ('probe-cancel','probe-overflow') and number==0 and first_probe[0]:
+                    first_probe[0]=False;raise injected_probe_error
+                return actual_killpg(pid,number)
+            except BaseException as error:fact.update(exception=type(error).__name__,errno=getattr(error,'errno',None),identity=id(error));raise
+        result=None;error=None;actual_wait=actual_popen.wait
+        try:
+            actual_popen.wait=waited
+            module.subprocess.Popen=popen;module.os.read=read
+            module.os.set_blocking=blocking;module.os.killpg=killpg
+            try:result=supervisor(command,{'PATH':'/usr/bin:/bin','LC_ALL':'C','LANG':'C'},time.monotonic()+4,cancelled,os.getpid())
+            except BaseException as caught:error=caught
+        finally:
+            actual_popen.wait=actual_wait
+            module.subprocess.Popen=actual_popen;module.os.read=actual_read
+            module.os.set_blocking=actual_blocking;module.os.killpg=actual_killpg
+        frame_locals={};trace=error.__traceback__ if error is not None else None
+        while trace is not None:
+            if trace.tb_frame.f_code is supervisor.__code__:frame_locals=dict(trace.tb_frame.f_locals)
+            trace=trace.tb_next
+        facts={'case':stimulus,'command':command,'result':result,'error':None if error is None else type(error).__name__,
+            'same_first_error':error is frame_locals.get('first'),'same_probe_cause':error is not None and error.__cause__ is injected_probe_error,
+            'exception_trace':traceback.format_exception(type(error),error,error.__traceback__) if error is not None else [],'waits':waits,
+            'returncodes':[child.returncode for child in children],
+            'pipes_closed':[all(stream.closed for stream in (child.stdin,child.stdout,child.stderr)) for child in children],
+            'reads':reads,'killpg':kills,'cancelled':cancelled[0],'Popen_calls':len(arguments),
+            'scope':'transparent delegation of existing native calls; read bytes exactly returned before cap/refusal, not an assertion of unseen post-cap bytes'}
+        reference=completed_evidence({'process_lifecycle_before_assert':facts})
+        assert not children or len(children)==1 and children[0].returncode is not None and all(facts['pipes_closed'])
+        if children:assert any(row['pid']==children[0].pid and row['number']==0 and row['exception']=='ProcessLookupError' for row in kills)
+        return result,error,facts,reference
+    construction_error=RuntimeError('owned construct')
+    injected_probe_error=PermissionError(1,'controlled original group-probe refusal')
+    for stimulus in ('short','resistant','overflow','probe-overflow','cancel','probe-cancel','spawn-cancel','before-cancel','construction'):
+        cancelled=[stimulus=='before-cancel']
+        code="import os;os.write(1,b'fixed')"
+        if stimulus=='resistant':code="import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);print('ready',flush=True);time.sleep(10)"
+        if stimulus in ('overflow','probe-overflow'):code="import os;os.write(1,b'x'*769)"
+        if stimulus in ('cancel','probe-cancel'):code="import os,signal,time;os.kill(os.getppid(),signal.SIGTERM);time.sleep(10)"
+        old=signal.signal(signal.SIGTERM,lambda *args:cancelled.__setitem__(0,True))
+        command=['construct-refusal'] if stimulus=='construction' else [sys.executable,'-I','-S','-B','-c',code]
+        try:result,error,facts,reference=supervised(command,cancelled)
+        finally:signal.signal(signal.SIGTERM,old)
+        if stimulus=='construction':assert type(error) is namespace['ScopeProcessPending'] and error.__cause__ is construction_error
+        elif stimulus in ('cancel','probe-cancel','spawn-cancel','before-cancel'):
+            assert cancelled[0] is True and type(error) is InterruptedError
+            assert facts['Popen_calls']==int(stimulus!='before-cancel')
+            assert facts['same_first_error']
+            if stimulus=='probe-cancel':assert facts['same_probe_cause'] and any(row.get('returncode') is not None for row in facts['waits'])
+        else:
+            assert error is None and result=='GAP'
+            if stimulus=='probe-overflow':assert namespace['_scope_select_state']['process_close_error'] is injected_probe_error
+        reports.append({'case':stimulus,'actual_reference':reference})
+    package=area/'process-helper-package';directory=package/'scope/v1';directory.mkdir(parents=True)
+    source=package/'shadow/v1';source.mkdir(parents=True)
+    consumer_bytes=Path(module.__file__).read_bytes();(source/'_consumer.py').write_bytes(consumer_bytes)
+    ctypes_source=module._hold_bytes(module.ctypes.__file__,module.EXECUTABLE_LIMIT)
+    ctypes_native=module._hold_bytes(sys.modules['_ctypes'].__file__,module.EXECUTABLE_LIMIT)
+    try:
+        actual_helper=helper.replace(b'PROC_CTYPES_PY_DIGEST',repr(ctypes_source.sha256).encode()).replace(b'PROC_CTYPES_EXT_DIGEST',repr(ctypes_native.sha256).encode())
+        identity_fields=('st_dev','st_ino','st_mode','st_uid','st_gid','st_nlink','st_size','st_mtime_ns','st_ctime_ns')
+        runtime_inputs={item.held.path:tuple(getattr(item.held.before,key) for key in identity_fields) for item in (ctypes_source,ctypes_native)}
+        ctypes_source.recheck('E_STALE');ctypes_native.recheck('E_STALE')
+    finally:ctypes_source.close();ctypes_native.close()
+    executable=module._hold_bytes(sys.executable,module.EXECUTABLE_LIMIT)
+    runtime_inputs[executable.held.path]=tuple(getattr(executable.held.before,key) for key in identity_fields)
+    original_helper=actual_helper
+    ordinary_prefix=("ordinary_runtime_inputs="+repr(runtime_inputs)+"\nordinary_identity_fields="+repr(identity_fields)+
+        "\nassert sys.executable=="+repr(sys.executable)+" and os.getuid()==os.geteuid()=="+str(os.getuid())+
+        " and sys.version_info[:3]=="+repr(tuple(sys.version_info[:3]))+
+        " and sys.flags.isolated and sys.flags.no_site and sys.flags.dont_write_bytecode\n")
+    original_runtime="                current=c._open_held(path,False,rule,'E_INSTALL');held.append(current)"
+    ordinary_runtime="                assert path in ordinary_runtime_inputs\n                current=c._open_held(path,False,lambda _fd,_state,_ancestor:True,'E_INSTALL');held.append(current)\n                assert tuple(getattr(current.before,key) for key in ordinary_identity_fields)==ordinary_runtime_inputs[path]"
+    assert actual_helper.count(b'def main():')==1 and actual_helper.count(original_runtime.encode())==1
+    actual_helper=actual_helper.replace(b'def main():',ordinary_prefix.encode()+b'def main():',1).replace(original_runtime.encode(),ordinary_runtime.encode(),1)
+    assert actual_helper.replace(ordinary_runtime.encode(),original_runtime.encode(),1).replace(ordinary_prefix.encode()+b'def main():',b'def main():',1)==original_helper
+    executable.recheck('E_STALE')
+    target=directory/'first-git-process-helper.py';target.write_bytes(actual_helper);target.chmod(0o444)
+    command=[sys.executable,'-I','-S','-B',str(target),str(os.getpid()),hashlib.sha256(actual_helper).hexdigest(),executable.sha256]
+    completed_evidence({'process_actual_helper_preexec':{'argv':command,'helper_source':actual_helper.decode(),
+        'consumer_sha256':hashlib.sha256(consumer_bytes).hexdigest(),'python_sha256':executable.sha256,
+        'runtime_qualification_seam':'fixed local P/UID/version and nine-field+bytes held adapter; not CI qualification',
+        'formal_helper_sha256':hashlib.sha256(original_helper).hexdigest(),'runtime_input_identity':runtime_inputs}})
+    try:
+        for stimulus in ('actual-helper','source-refusal','runtime-refusal'):
+            selected=list(command)
+            if stimulus=='source-refusal':selected[-2]='0'*64
+            if stimulus=='runtime-refusal':selected[-1]='0'*64
+            result,error,facts,reference=supervised(selected,[False])
+            assert error is None
+            if stimulus=='actual-helper' and sys.platform=='darwin':assert type(result) is dict and result['pid']==os.getpid() and result['uid']==os.getuid()
+            else:assert result=='GAP'
+            if stimulus=='actual-helper' and sys.platform!='darwin':
+                stdout=b''.join(bytes.fromhex(row['hex']) for row in facts['reads'] if row.get('channel')=='stdout' and 'hex' in row)
+                stderr=b''.join(bytes.fromhex(row['hex']) for row in facts['reads'] if row.get('channel')=='stderr' and 'hex' in row)
+                assert facts['returncodes']==[1] and not stdout and stderr.endswith(b':E_RUNTIME\n')
+            reports.append({'case':stimulus,'actual_reference':reference})
+        policies=[node for node in helper_main.body if isinstance(node,ast.Try) and any(isinstance(item,ast.ClassDef) and item.name=='EmptyOnlyResolver' for item in node.body)]
+        assert len(policies)==1
+        policy=policies[0]
+        last=next(index for index,node in enumerate(policy.body) if isinstance(node,ast.For))
+        qualification=[node for node in policy.body[:last+1] if not (isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='sources' for t in node.targets))]
+        rule_node=next(node for node in qualification if isinstance(node,ast.FunctionDef) and node.name=='rule')
+        rule_source=ast.get_source_segment(helper.decode(),rule_node)
+        traced_rule=rule_source.replace('accepted=base_rule(fd,state,ancestor)','qualification_state[:]=[state.st_mode,state.st_size];accepted=base_rule(fd,state,ancestor)',1)
+        assert traced_rule.replace('qualification_state[:]=[state.st_mode,state.st_size];','',1)==rule_source
+        qualification=[ast.parse(traced_rule).body[0] if node is rule_node else node for node in qualification]
+        for stimulus,mode in (('source-mode',0o664),('source-setid',0o544|0o4000),('source-recheck',0o444)):
+            target.chmod(mode)
+            owned={'c':module,'os':os,'stat':stat,'Path':Path,'__file__':str(target),'held':[],
+                'sources':((str(target),hashlib.sha256(actual_helper).hexdigest()),),'_stage':'qualification-control','qualification_state':[]}
+            error=None;recheck_facts=None
+            try:
+                exec(compile(ast.Module(body=qualification,type_ignores=[]),'actual-owned-helper-qualification','exec'),owned)
+                if stimulus=='source-recheck':
+                    item=owned['files'][0];acl_calls=[];original_acl=module._acl_state
+                    def observed_acl(*args,**kwargs):
+                        acl_calls.append(True)
+                        return original_acl(*args,**kwargs)
+                    try:
+                        module._acl_state=observed_acl
+                        item.recheck('E_STALE')
+                    finally:module._acl_state=original_acl
+                    recheck_facts={'retained_rule':item.held.components[-1].rule is owned['rule'],
+                        'acl_calls':len(acl_calls),'same_bytes':item.raw==actual_helper,'before_mode':item.held.before.st_mode}
+                    target.chmod(0o664)
+                    item.recheck('E_STALE')
+            except module.Refusal as caught:error=caught
+            finally:module._close_paths(owned['held'])
+            reference=completed_evidence({'process_source_qualification_before_assert':{
+                'case':stimulus,'source_mode':mode,'actual_rule_state':owned['qualification_state'],
+                'recheck':recheck_facts,'error':None if error is None else error.code,
+                'helper_executed':False,'native_query_called':False,
+                'scope':'actual extracted owned-root/held/qualification statements; source bytes are only read, never spawned'}})
+            target.chmod(0o444)
+            assert type(error) is module.Refusal and error.code==('E_STALE' if stimulus=='source-recheck' else 'E_INSTALL')
+            if stimulus=='source-recheck':assert recheck_facts['retained_rule'] and recheck_facts['acl_calls']>0 and recheck_facts['same_bytes']
+            elif stimulus=='source-setid':assert owned['qualification_state'][0]&0o6000
+            reports.append({'case':stimulus,'actual_reference':reference})
+        assert target.read_bytes()==actual_helper
+    finally:executable.close()
+    namespace['_scope_select_state'].clear();namespace['_scope_select_state'].update(original_state)
+    return completed_evidence({'process_snapshot_controls':reports,'helper_source':helper_reference,
+        'scope':'actual extracted native query, actual helper and owned lifecycle; full reader source/export gates remain in original owner'})
+
+def process_unknown_controls(scope,module):
+    import io,types
+    events=[];clock=[0.0];probe=PermissionError(1,'controlled unknown group')
+    class Child:
+        pid=123;returncode=0
+        def __init__(self):self.stdin=io.BytesIO();self.stdout=io.BytesIO();self.stderr=io.BytesIO()
+        def poll(self):events.append('poll');return 0
+        def wait(self,timeout):events.append('wait');return 0
+    child=Child()
+    class Selector:
+        def close(self):events.append('selector-close')
+    def monotonic():clock[0]+=0.001;return clock[0]
+    def killpg(pid,number):
+        events.append(['killpg',pid,int(number)])
+        raise probe
+    view=types.SimpleNamespace(time=types.SimpleNamespace(monotonic=monotonic,sleep=lambda value:None),
+        subprocess=types.SimpleNamespace(Popen=lambda *a,**k:child,PIPE=module.subprocess.PIPE,TimeoutExpired=module.subprocess.TimeoutExpired),
+        selectors=module.selectors,signal=module.signal,os=types.SimpleNamespace(killpg=killpg,set_blocking=lambda *a:None))
+    previous=scope['c'];state=scope['_scope_select_state'];saved=dict(state);error=None;observed={}
+    state.update(native_selector=Selector,process_pending=False)
+    try:
+        scope['c']=view
+        try:scope['_scope_process_supervise'](['controlled-no-process'],{},4,[False],123)
+        except BaseException as caught:error=caught
+        trace=error.__traceback__ if error is not None else None
+        while trace is not None:
+            if trace.tb_frame.f_code is scope['_scope_process_supervise'].__code__:observed=dict(trace.tb_frame.f_locals)
+            trace=trace.tb_next
+        fact={'case':'unknown-group-controlled','events':events,'pending':state.get('process_pending'),
+            'same_first':error is observed.get('first'),'same_probe_cause':error is not None and error.__cause__ is probe,
+            'gone':observed.get('gone'),'waited':observed.get('waited'),
+            'pipes_closed':[stream.closed for stream in (child.stdin,child.stdout,child.stderr)],
+            'scope':'actual extracted supervisor with inert Popen/clock/group seam; no OS child or kernel closure claim'}
+        reference=completed_evidence({'process_unknown_before_assert':fact})
+        assert fact['pending'] is True and fact['gone'] is False and fact['waited'] is True
+        assert fact['same_first'] and fact['same_probe_cause'] and all(fact['pipes_closed'])
+        assert 'wait' in events and events.count('selector-close')==1
+        return reference
+    finally:scope['c']=previous;state.clear();state.update(saved)
+
+def process_admission_controls(module,setup):
+    import types
+    records=[]
+    for fault in ('eligible','foreign-frame','foreign-selector','other-argv','wrong-counter','counter-bool','budget','cancel','pid-bool','other-call','once'):
+        scope={'c':module,'sys':sys,'json':json}
+        exec(compile(setup,'actual-process-admission-setup','exec'),scope)
+        snapshot=scope['first_git_process_snapshot'];state=scope['_scope_select_state'];calls=[]
+        original_time=module.time;original_popen=module.subprocess.Popen;original_hold=module._hold_bytes
+        class Child:
+            def __init__(self):self.pid=True if fault=='pid-bool' else 123
+        class Selector:pass
+        child=Child();selector=Selector();argv=['/usr/bin/git','--no-replace-objects','--git-dir=/owned/source','config','--file','/owned/config','--name-only','--list','--no-includes']
+        expected={'entered':101,'returned':100,'raised':0,'nonempty':0,'events_total':0,'last_length':0}
+        if fault=='wrong-counter':expected['returned']=99
+        if fault=='counter-bool':expected['raised']=False
+        if fault=='other-call':expected['entered']=100
+        state.update(used=True,counts=expected,selector=selector,selector_class=Selector,argv=argv)
+        if fault=='foreign-selector':state['selector']=Selector()
+        if fault=='other-argv':state['argv']=list(argv)
+        if fault=='once':state['process_attempted']=True
+        owner=types.SimpleNamespace(python=types.SimpleNamespace(raw=b'p',sha256=hashlib.sha256(b'p').hexdigest()),source=types.SimpleNamespace(raw=b'c'))
+        cancelled=[fault=='cancel'];end=102 if fault=='budget' else 104
+        state['owner']=owner
+        state['foreground']=process_admission_controls.__code__
+        function_source="def actual_site():\n self=owner;child=owned_child;selector=owned_selector;argv=owned_argv;cancelled=owned_cancelled;end=owned_end\n return snapshot(sys._getframe(),selector)\n"
+        execution={'owner':owner,'owned_child':child,'owned_selector':selector,'owned_argv':argv,'owned_cancelled':cancelled,'owned_end':end,'snapshot':snapshot,'sys':sys}
+        function_tree=ast.parse(function_source);ast.increment_lineno(function_tree,1194)
+        exec(compile(function_tree,'fixed-ordinary-original-local-shape','exec'),execution)
+        if fault!='foreign-frame':state['foreground']=execution['actual_site'].__code__
+        scope['_scope_process_supervise']=lambda *args:calls.append(args) or 'GAP'
+        try:
+            module.time=types.SimpleNamespace(monotonic=lambda:100)
+            module.subprocess.Popen=Child
+            execution['actual_site']()
+            execution['actual_site']()
+        finally:module.time=original_time;module.subprocess.Popen=original_popen;module._hold_bytes=original_hold
+        record={'case':fault,'observer_calls':len(calls),'attempted':state.get('process_attempted',False)}
+        print(json.dumps({'process_admission_before_assert':record},sort_keys=True),flush=True)
+        assert len(calls)==int(fault=='eligible')
+        if calls:
+            assert calls[0][0][-1]==owner.python.sha256 and calls[0][1]=={'PATH':'/usr/bin:/bin','LC_ALL':'C','LANG':'C'}
+        records.append(record)
+    return completed_evidence({'process_admission_controls':records,'scope':'actual extracted admission function and exact live ordinary frame; supervisor transport is controlled, not OS closure'})
 
 def select_counter_controls(area,module,error,observed_namespace,direct_error,direct_namespace,cleanup_error,cleanup_namespace):
     import io
@@ -3348,6 +3705,7 @@ def select_counter_controls(area,module,error,observed_namespace,direct_error,di
         assert frame is not None and frame.f_locals['argv'] is state['argv']
         original_selector=state['selector'];original_pid=frame.f_locals['child'].pid;original_cancelled=list(frame.f_locals['cancelled'])
         original_code=error.code if type(error) is module.Refusal else None;original_used=state['used'];original_state_argv=state['argv']
+        if case=='sink':state['process_snapshot']={'pid':original_pid,'ppid':1,'pgid':original_pid,'uid':os.getuid(),'state':2,'comm_hex':'00'*16}
         original_errno=error.errno if type(error) is PermissionError else None
         sink.write_bytes(b'');s=os.lstat(sink);identity=(s.st_dev,s.st_ino,stat.S_IFMT(s.st_mode),s.st_uid,s.st_gid,stat.S_IMODE(s.st_mode),s.st_nlink)
         insertion=eval(compile(ast.Expression(record_expression),'actual-select-mapping-expression','eval'),{'token':repr('ordinary-select-mapping'),'sink':repr(str(sink)),'identity':repr(identity),'selector_source_sha':source_sha,'native_sha':native_sha,'abc_source':abc_source,'abc_path':abc_path})
@@ -3372,7 +3730,10 @@ def select_counter_controls(area,module,error,observed_namespace,direct_error,di
                 if case=='cap':return json.dumps(value,*args,**kwargs)+' '*4096
             return json.dumps(value,*args,**kwargs)
         def write(*args):
-            if case=='sink':raise OSError(9,'fixed actual sink write failure')
+            if case=='sink':
+                completed_evidence({'process_export_write_before_assert':{'raw_hex':args[1].hex(),'scope':'actual reader exporter with controlled populated process observation'}})
+                assert b'first_git_process_snapshot' in args[1]
+                raise OSError(9,'fixed actual sink write failure')
             return actual_write(*args)
         namespace={'__name__':'__main__','c':module,'main':main,'error':error,'os':os,'sys':sys,'json':types.SimpleNamespace(dumps=dumps),'stat':stat,'_scope_select_state':state,'_scope_select_source_sha':source_sha,'_scope_select_native_sha':native_sha}
         saved_foreground=state['foreground'];cancelled_error=None;status=None;error.__traceback__=baseline_trace;error.__context__=baseline_context;error.__cause__=baseline_cause
@@ -3612,6 +3973,7 @@ def foreground_state_controls(area):
             else:assert fact=='GAP'
             assertions.append({'case':fault,'io_attempts':len(attempts),'io':fact,'actual_frame_bound':True})
         finally:frame.f_locals['argv'][:]=saved
+    process_snapshot_controls(area,module)
     select_counter_controls(area,module,snapshot_error,snapshot_namespace,direct_error,direct_namespace,cleanup_error,cleanup_namespace)
     return completed_evidence({'foreground_context_controls':assertions,'foreground_state_controls':records,'scope':'original exact foreground code with fixed ordinary transport/selector/clock/signal-error seams; no actual Git/OS-signal cause or real-principal proof'})
 
@@ -9968,7 +10330,268 @@ print(relation_result)
   for match in difflib.SequenceMatcher(a=front.splitlines(),b=copied.splitlines(),autojunk=False).get_matching_blocks():
    for offset in range(match.size):self.line_map[match.b+offset+1]=match.a+offset+1
   selector_source,selector_path,native_origin,selector_source_sha,native_sha,abc_source,abc_path,abc_sha=self.select_source_inputs(c)
-  selector_setup="_scope_select_source_sha=SELECTORS_SHA\n_scope_select_native_sha=NATIVE_SHA\n_scope_select_state={'used':False,'suspended':False,'counts':None,'selector':None,'selector_class':None,'argv':None,'foreground':None}\ndef _scope_select_binding():\n    module_type=type(sys);module_fields=module_type.__dict__['__dict__'];modules=module_fields.__get__(sys)['modules']\n    assert type(modules) is dict and modules['sys'] is sys and modules['selectors'] is c.selectors\n    selectors=c.selectors;mapping=module_fields.__get__(selectors);loader=modules['_frozen_importlib_external']\n    assert type(selectors) is module_type and type(mapping['__loader__']) is loader.SourceFileLoader\n    assert mapping['__file__']==SELECTORS_PATH and mapping['__spec__'].origin==SELECTORS_PATH\n    code_type=type(_scope_select_binding.__code__);function_type=type(_scope_select_binding)\n    def code_at(code,*names):\n        for name in names:\n            matches=[value for value in code.co_consts if type(value) is code_type and value.co_name==name]\n            assert len(matches)==1\n            code=matches[0]\n        return code\n    selector_code=compile(SELECTORS_SOURCE,SELECTORS_PATH,'exec',dont_inherit=True)\n    abc=modules['abc'];abc_fields=module_fields.__get__(abc)\n    assert type(abc) is module_type and abc_fields['__file__']==ABC_PATH\n    abc_filename=ABC_PATH\n    if abc_fields['__spec__'].origin=='frozen':\n        bootstrap=modules['_frozen_importlib'];bootstrap_fields=module_fields.__get__(bootstrap)\n        assert type(bootstrap) is module_type and modules['importlib._bootstrap'] is bootstrap and loader._bootstrap is bootstrap\n        frozen=bootstrap_fields['FrozenImporter'];builtin=bootstrap_fields['BuiltinImporter']\n        assert type(frozen) is type and type(builtin) is type\n        assert module_fields.__get__(sys)['__loader__'] is builtin and module_fields.__get__(sys)['__spec__'].loader is builtin\n        assert bootstrap_fields['__loader__'] is frozen and bootstrap_fields['__spec__'].loader is frozen and bootstrap_fields['__spec__'].origin=='frozen'\n        assert abc_fields['__loader__'] is frozen and abc_fields['__spec__'].loader is frozen\n        for importer in (frozen,builtin):\n            for method in ('find_spec','create_module','exec_module'):\n                function=type.__dict__['__dict__'].__get__(importer)[method].__func__\n                assert type(function) is function_type and function.__globals__ is bootstrap_fields\n        abc_filename='<frozen abc>'\n    else:\n        assert type(abc_fields['__loader__']) is loader.SourceFileLoader and abc_fields['__spec__'].origin==ABC_PATH\n    abc_code=code_at(compile(ABC_SOURCE,abc_filename,'exec',dont_inherit=True),'ABCMeta')\n    meta=abc_fields['ABCMeta']\n    assert mapping['ABCMeta'] is meta\n    type_fields=type.__dict__['__dict__'];bases=type.__dict__['__bases__'];mro=type.__dict__['__mro__']\n    assert type(meta) is type and bases.__get__(meta)==(type,) and mro.__get__(meta)==(meta,type,object)\n    meta_fields=type_fields.__get__(meta)\n    for name in ('__getattribute__','__call__','__eq__','__hash__','mro'):\n        assert getattr(meta,name) is getattr(type,name)\n    for expected in abc_code.co_consts:\n        if type(expected) is code_type:\n            actual=meta_fields[expected.co_name]\n            if type(actual) is staticmethod:actual=actual.__func__\n            assert type(actual) is function_type and actual.__globals__ is abc_fields and actual.__code__==expected\n    abc_native=modules['_abc'];abc_native_fields=module_fields.__get__(abc_native)\n    assert type(abc_native) is module_type and abc_native_fields['__spec__'].origin=='built-in'\n    for name in ('_abc_init','_abc_register','_abc_instancecheck','_abc_subclasscheck'):\n        assert abc_fields[name] is abc_native_fields[name] and type(abc_fields[name]) is type(len)\n    base=mapping['BaseSelector'];implementation=mapping['_BaseSelectorImpl'];cls=mapping['DefaultSelector']\n    if cls is mapping.get('KqueueSelector'):\n        chain=(cls,implementation,base,object)\n        owners={'__init__':'KqueueSelector','register':'KqueueSelector','get_map':'_BaseSelectorImpl','unregister':'KqueueSelector','close':'KqueueSelector','select':'KqueueSelector'}\n    else:\n        assert cls is mapping.get('EpollSelector')\n        chain=(cls,mapping['_PollLikeSelector'],implementation,base,object)\n        owners={'__init__':'_PollLikeSelector','register':'_PollLikeSelector','get_map':'_BaseSelectorImpl','unregister':'_PollLikeSelector','close':'EpollSelector','select':'EpollSelector'}\n    for position,item in enumerate(chain[:-1]):\n        assert type(item) is meta\n        actual_bases=bases.__get__(item);actual_mro=mro.__get__(item)\n        assert len(actual_bases)==1 and actual_bases[0] is chain[position+1]\n        assert len(actual_mro)==len(chain)-position and all(left is right for left,right in zip(actual_mro,chain[position:]))\n    methods={}\n    for name,owner_name in owners.items():\n        owner=mapping[owner_name];method=type_fields.__get__(owner)[name]\n        assert getattr(cls,name) is method and type(method) is function_type\n        assert method.__globals__ is mapping and method.__code__==code_at(selector_code,owner_name,name)\n        methods[name]=method\n    native=modules['select'];native_fields=module_fields.__get__(native)\n    assert type(native) is module_type and mapping['select'] is native\n    assert type(native_fields['__loader__']) is loader.ExtensionFileLoader\n    assert native_fields['__file__']==NATIVE_ORIGIN and native_fields['__spec__'].origin==NATIVE_ORIGIN\n    if cls is mapping.get('KqueueSelector'):\n        assert '_selector_cls' not in type_fields.__get__(cls)\n        backend=native_fields['kqueue']\n    else:\n        backend=type_fields.__get__(cls)['_selector_cls'];assert backend is native_fields['epoll']\n    new=backend.__dict__['__new__'];fields=type(new).__dict__\n    assert type(new) is type(len) and fields['__self__'].__get__(new) is backend\n    assert backend.__module__=='select' and type(backend) is type\n    return cls,methods,backend\n\ndef _scope_select_first_config(arguments):\n    if type(arguments) is not list or len(arguments)!=9 or not all(type(value) is str for value in arguments):return False\n    try:\n        for value in arguments:value.encode('utf-8','strict')\n        return (arguments[:2]==['/usr/bin/git','--no-replace-objects'] and arguments[2].startswith('--git-dir=/') and\n            arguments[3:5]==['config','--file'] and arguments[5].startswith('/') and\n            arguments[6:]==['--name-only','--list','--no-includes'] and len(json.dumps(arguments,ensure_ascii=True).encode())<=2048)\n    except (UnicodeError,TypeError,ValueError):return False\n\ndef _scope_select_call(bound,arguments,raw,cap,error_cap,timeout,environment):\n    state=_scope_select_state\n    if state['used']:\n        previous=state['suspended'];state['suspended']=True\n        try:return bound(arguments,raw,cap,error_cap,timeout,environment)\n        finally:state['suspended']=previous\n    if (type(bound) is not type(c._DarwinChildOwner._foreground.__get__(object(),object)) or\n            bound.__func__.__code__ is not c._DarwinChildOwner._foreground.__code__ or\n            type(bound.__self__) is not c._DarwinChildOwner or not _scope_select_first_config(arguments)):\n        return bound(arguments,raw,cap,error_cap,timeout,environment)\n    state['used']=True;state['argv']=arguments;state['foreground']=bound.__func__.__code__\n    original_class,methods,backend=_scope_select_binding()\n    state['counts']={'entered':0,'returned':0,'raised':0,'nonempty':0,'events_total':0,'last_length':'GAP'}\n    original_select=methods['select']\n    def increment(key,amount=1):\n        facts=state['counts']\n        if facts is None:return\n        try:\n            value=facts[key]\n            if type(value) is not int or type(amount) is not int or value<0 or amount<0 or value+amount>2147483647:state['counts']=None\n            else:facts[key]=value+amount\n        except (KeyError,TypeError,ValueError,OverflowError,MemoryError):state['counts']=None\n    class ScopeFirstConfigSelector(original_class):\n        __slots__=()\n        def select(self,*args,**kwargs):\n            if state['suspended']:return original_select(self,*args,**kwargs)\n            if state['selector'] is None:state['selector']=self\n            elif state['selector'] is not self:state['counts']=None\n            increment('entered')\n            try:result=original_select(self,*args,**kwargs)\n            except BaseException:\n                increment('raised')\n                raise\n            increment('returned')\n            if type(result) is not list:state['counts']=None\n            elif state['counts'] is not None:\n                try:\n                    length=len(result)\n                    if length>2147483647:state['counts']=None\n                    else:\n                        state['counts']['last_length']=length\n                        increment('events_total',length)\n                        if length:increment('nonempty')\n                except (KeyError,TypeError,ValueError,OverflowError,MemoryError):state['counts']=None\n            return result\n    assert all(getattr(ScopeFirstConfigSelector,name) is methods[name] for name in ('__init__','register','get_map','unregister','close'))\n    state['selector_class']=ScopeFirstConfigSelector\n    container=bound.__func__.__globals__.get('selectors',c.selectors)\n    assert container.DefaultSelector is original_class\n    try:\n        try:container.DefaultSelector=ScopeFirstConfigSelector\n        except (AttributeError,TypeError,MemoryError):state['counts']=None\n        return bound(arguments,raw,cap,error_cap,timeout,environment)\n    finally:container.DefaultSelector=original_class\n".replace('SELECTORS_SOURCE',repr(selector_source)).replace('SELECTORS_PATH',repr(selector_path)).replace('NATIVE_ORIGIN',repr(native_origin)).replace('SELECTORS_SHA',repr(selector_source_sha)).replace('NATIVE_SHA',repr(native_sha)).replace('ABC_SOURCE',repr(abc_source)).replace('ABC_PATH',repr(abc_path))
+  selector_setup=("_scope_select_source_sha=SELECTORS_SHA\n_scope_select_native_sha=NATIVE_SHA\n_scope_select_state={'used':False,'suspended':False,'counts':None,'selector':None,'selector_class':None,'argv':None,'foreground':None}\ndef _scope_select_binding():\n    module_type=type(sys);module_fields=module_type.__dict__['__dict__'];modules=module_fields.__get__(sys)['modules']\n    assert type(modules) is dict and modules['sys'] is sys and modules['selectors'] is c.selectors\n    selectors=c.selectors;mapping=module_fields.__get__(selectors);loader=modules['_frozen_importlib_external']\n    assert type(selectors) is module_type and type(mapping['__loader__']) is loader.SourceFileLoader\n    assert mapping['__file__']==SELECTORS_PATH and mapping['__spec__'].origin==SELECTORS_PATH\n    code_type=type(_scope_select_binding.__code__);function_type=type(_scope_select_binding)\n    def code_at(code,*names):\n        for name in names:\n            matches=[value for value in code.co_consts if type(value) is code_type and value.co_name==name]\n            assert len(matches)==1\n            code=matches[0]\n        return code\n    selector_code=compile(SELECTORS_SOURCE,SELECTORS_PATH,'exec',dont_inherit=True)\n    abc=modules['abc'];abc_fields=module_fields.__get__(abc)\n    assert type(abc) is module_type and abc_fields['__file__']==ABC_PATH\n    abc_filename=ABC_PATH\n    if abc_fields['__spec__'].origin=='frozen':\n        bootstrap=modules['_frozen_importlib'];bootstrap_fields=module_fields.__get__(bootstrap)\n        assert type(bootstrap) is module_type and modules['importlib._bootstrap'] is bootstrap and loader._bootstrap is bootstrap\n        frozen=bootstrap_fields['FrozenImporter'];builtin=bootstrap_fields['BuiltinImporter']\n        assert type(frozen) is type and type(builtin) is type\n        assert module_fields.__get__(sys)['__loader__'] is builtin and module_fields.__get__(sys)['__spec__'].loader is builtin\n        assert bootstrap_fields['__loader__'] is frozen and bootstrap_fields['__spec__'].loader is frozen and bootstrap_fields['__spec__'].origin=='frozen'\n        assert abc_fields['__loader__'] is frozen and abc_fields['__spec__'].loader is frozen\n        for importer in (frozen,builtin):\n            for method in ('find_spec','create_module','exec_module'):\n                function=type.__dict__['__dict__'].__get__(importer)[method].__func__\n                assert type(function) is function_type and function.__globals__ is bootstrap_fields\n        abc_filename='<frozen abc>'\n    else:\n        assert type(abc_fields['__loader__']) is loader.SourceFileLoader and abc_fields['__spec__'].origin==ABC_PATH\n    abc_code=code_at(compile(ABC_SOURCE,abc_filename,'exec',dont_inherit=True),'ABCMeta')\n    meta=abc_fields['ABCMeta']\n    assert mapping['ABCMeta'] is meta\n    type_fields=type.__dict__['__dict__'];bases=type.__dict__['__bases__'];mro=type.__dict__['__mro__']\n    assert type(meta) is type and bases.__get__(meta)==(type,) and mro.__get__(meta)==(meta,type,object)\n    meta_fields=type_fields.__get__(meta)\n    for name in ('__getattribute__','__call__','__eq__','__hash__','mro'):\n        assert getattr(meta,name) is getattr(type,name)\n    for expected in abc_code.co_consts:\n        if type(expected) is code_type:\n            actual=meta_fields[expected.co_name]\n            if type(actual) is staticmethod:actual=actual.__func__\n            assert type(actual) is function_type and actual.__globals__ is abc_fields and actual.__code__==expected\n    abc_native=modules['_abc'];abc_native_fields=module_fields.__get__(abc_native)\n    assert type(abc_native) is module_type and abc_native_fields['__spec__'].origin=='built-in'\n    for name in ('_abc_init','_abc_register','_abc_instancecheck','_abc_subclasscheck'):\n        assert abc_fields[name] is abc_native_fields[name] and type(abc_fields[name]) is type(len)\n    base=mapping['BaseSelector'];implementation=mapping['_BaseSelectorImpl'];cls=mapping['DefaultSelector']\n    if cls is mapping.get('KqueueSelector'):\n        chain=(cls,implementation,base,object)\n        owners={'__init__':'KqueueSelector','register':'KqueueSelector','get_map':'_BaseSelectorImpl','unregister':'KqueueSelector','close':'KqueueSelector','select':'KqueueSelector'}\n    else:\n        assert cls is mapping.get('EpollSelector')\n        chain=(cls,mapping['_PollLikeSelector'],implementation,base,object)\n        owners={'__init__':'_PollLikeSelector','register':'_PollLikeSelector','get_map':'_BaseSelectorImpl','unregister':'_PollLikeSelector','close':'EpollSelector','select':'EpollSelector'}\n    for position,item in enumerate(chain[:-1]):\n        assert type(item) is meta\n        actual_bases=bases.__get__(item);actual_mro=mro.__get__(item)\n        assert len(actual_bases)==1 and actual_bases[0] is chain[position+1]\n        assert len(actual_mro)==len(chain)-position and all(left is right for left,right in zip(actual_mro,chain[position:]))\n    methods={}\n    for name,owner_name in owners.items():\n        owner=mapping[owner_name];method=type_fields.__get__(owner)[name]\n        assert getattr(cls,name) is method and type(method) is function_type\n        assert method.__globals__ is mapping and method.__code__==code_at(selector_code,owner_name,name)\n        methods[name]=method\n    native=modules['select'];native_fields=module_fields.__get__(native)\n    assert type(native) is module_type and mapping['select'] is native\n    assert type(native_fields['__loader__']) is loader.ExtensionFileLoader\n    assert native_fields['__file__']==NATIVE_ORIGIN and native_fields['__spec__'].origin==NATIVE_ORIGIN\n    if cls is mapping.get('KqueueSelector'):\n        assert '_selector_cls' not in type_fields.__get__(cls)\n        backend=native_fields['kqueue']\n    else:\n        backend=type_fields.__get__(cls)['_selector_cls'];assert backend is native_fields['epoll']\n    new=backend.__dict__['__new__'];fields=type(new).__dict__\n    assert type(new) is type(len) and fields['__self__'].__get__(new) is backend\n    assert backend.__module__=='select' and type(backend) is type\n    return cls,methods,backend\n\ndef _scope_select_first_config(arguments):\n    if type(arguments) is not list or len(arguments)!=9 or not all(type(value) is str for value in arguments):return False\n    try:\n        for value in arguments:value.encode('utf-8','strict')\n        return (arguments[:2]==['/usr/bin/git','--no-replace-objects'] and arguments[2].startswith('--git-dir=/') and\n            arguments[3:5]==['config','--file'] and arguments[5].startswith('/') and\n            arguments[6:]==['--name-only','--list','--no-includes'] and len(json.dumps(arguments,ensure_ascii=True).encode())<=2048)\n    except (UnicodeError,TypeError,ValueError):return False\n\ndef _scope_select_call(bound,arguments,raw,cap,error_cap,timeout,environment):\n    state=_scope_select_state\n    if state['used']:\n        previous=state['suspended'];state['suspended']=True\n        try:return bound(arguments,raw,cap,error_cap,timeout,environment)\n        finally:state['suspended']=previous\n    if (type(bound) is not type(c._DarwinChildOwner._foreground.__get__(object(),object)) or\n            bound.__func__.__code__ is not c._DarwinChildOwner._foreground.__code__ or\n            type(bound.__self__) is not c._DarwinChildOwner or not _scope_select_first_config(arguments)):\n        return bound(arguments,raw,cap,error_cap,timeout,environment)\n    state['used']=True;state['argv']=arguments;state['foreground']=bound.__func__.__code__\n    original_class,methods,backend=_scope_select_binding()\n    state['counts']={'entered':0,'returned':0,'raised':0,'nonempty':0,'events_total':0,'last_length':'GAP'}\n    state['native_selector']=original_class;state['owner']=bound.__self__\n    state['process_snapshot']='GAP';state['process_attempted']=False;state['process_pending']=False\n    original_select=methods['select']\n    def increment(key,amount=1):\n        facts=state['counts']\n        if facts is None:return\n        try:\n            value=facts[key]\n            if type(value) is not int or type(amount) is not int or value<0 or amount<0 or value+amount>2147483647:state['counts']=None\n            else:facts[key]=value+amount\n        except (KeyError,TypeError,ValueError,OverflowError,MemoryError):state['counts']=None\n    class ScopeFirstConfigSelector(original_class):\n        __slots__=()\n        def select(self,*args,**kwargs):\n            if state['suspended']:return original_select(self,*args,**kwargs)\n            if state['selector'] is None:state['selector']=self\n            elif state['selector'] is not self:state['counts']=None\n            increment('entered')\n            first_git_process_snapshot(sys._getframe().f_back,self)\n            try:result=original_select(self,*args,**kwargs)\n            except BaseException:\n                increment('raised')\n                raise\n            increment('returned')\n            if type(result) is not list:state['counts']=None\n            elif state['counts'] is not None:\n                try:\n                    length=len(result)\n                    if length>2147483647:state['counts']=None\n                    else:\n                        state['counts']['last_length']=length\n                        increment('events_total',length)\n                        if length:increment('nonempty')\n                except (KeyError,TypeError,ValueError,OverflowError,MemoryError):state['counts']=None\n            return result\n    assert all(getattr(ScopeFirstConfigSelector,name) is methods[name] for name in ('__init__','register','get_map','unregister','close'))\n    state['selector_class']=ScopeFirstConfigSelector\n    container=bound.__func__.__globals__.get('selectors',c.selectors)\n    assert container.DefaultSelector is original_class\n    try:\n        try:container.DefaultSelector=ScopeFirstConfigSelector\n        except (AttributeError,TypeError,MemoryError):state['counts']=None\n        return bound(arguments,raw,cap,error_cap,timeout,environment)\n    finally:container.DefaultSelector=original_class\n" + r"""
+_scope_process_helper_raw=rb'''import hashlib,importlib.util,json,os,stat,sys
+from pathlib import Path
+
+def first_git_proc_query(ctypes,library,pid):
+    if type(pid) is not int or not 0<pid<=2147483647:return 'GAP'
+    if type(library) is not ctypes.CDLL or library._name!='/usr/lib/libSystem.B.dylib':return 'GAP'
+    names=('pid','ppid','pgid','state','comm','flags','uid','gid','ruid','rgid','svuid','svgid','rfu')
+    class ShortInfo(ctypes.Structure):
+        _fields_=[(name,ctypes.c_char*16 if name=='comm' else ctypes.c_uint32) for name in names]
+    offsets=(0,4,8,12,16,32,36,40,44,48,52,56,60)
+    if (ctypes.sizeof(ctypes.c_uint32)!=4 or ctypes.sizeof(ctypes.c_uint64)!=8 or
+            ctypes.sizeof(ctypes.c_int)!=4 or ctypes.sizeof(ctypes.c_void_p)!=8 or
+            ctypes.alignment(ShortInfo)!=4 or ctypes.sizeof(ShortInfo)!=64 or
+            tuple(getattr(ShortInfo,name).offset for name in names)!=offsets):return 'GAP'
+    try:function=library['proc_pidinfo']
+    except AttributeError:return 'GAP'
+    function.argtypes=[ctypes.c_int,ctypes.c_int,ctypes.c_uint64,ctypes.c_void_p,ctypes.c_int]
+    function.restype=ctypes.c_int
+    buffer=ShortInfo()
+    ctypes.set_errno(0)
+    returned=function(pid,13,0,ctypes.byref(buffer),64)
+    if type(returned) is not int or returned!=64 or buffer.pid!=pid:return 'GAP'
+    comm=bytes(buffer)[16:32]
+    return {'pid':buffer.pid,'ppid':buffer.ppid,'pgid':buffer.pgid,'uid':buffer.uid,
+            'state':buffer.state,'comm_hex':comm.hex()}
+
+_stage='input'
+_refusal=None
+
+def main():
+    global _stage,_refusal
+    source=Path(__file__).absolute().parents[2]/'shadow/v1/_consumer.py'
+    assert len(sys.argv)==4 and sys.argv[1].isascii() and sys.argv[1].isdecimal()
+    expected=sys.argv[2]
+    assert len(expected)==64 and all(ch in '0123456789abcdef' for ch in expected)
+    _stage='source-open'
+    source_fd=os.open(source,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+    try:
+        source_raw=bytearray()
+        while len(source_raw)<=16777216:
+            block=os.read(source_fd,min(65536,16777217-len(source_raw)))
+            if not block:break
+            source_raw.extend(block)
+    finally:os.close(source_fd)
+    _stage='source-hash'
+    assert len(source_raw)<=16777216 and hashlib.sha256(source_raw).hexdigest()=='6634f9df4ea9a1e02cd6212d58a82379dd5148780672700792f8248f76ea6f9b'
+    _stage='consumer-load'
+    spec=importlib.util.spec_from_file_location('scope_fixed_procinfo_consumer',source)
+    c=importlib.util.module_from_spec(spec);sys.modules[spec.name]=c;spec.loader.exec_module(c)
+    _refusal=c.Refusal
+    held=[]
+    try:
+        class EmptyOnlyResolver(c._DarwinUUIDResolver):
+            def resolve(self,uuids):
+                if type(uuids) is list and len(uuids)==0:return []
+                raise c.Refusal('E_ACL')
+        principal=os.getuid();base_rule=c._installed_rule(principal,EmptyOnlyResolver())
+        def rule(fd,state,ancestor):
+            global _stage
+            accepted=base_rule(fd,state,ancestor)
+            if not accepted:
+                _stage+='-owner' if state.st_uid not in (0,principal) else '-mode' if state.st_mode&(stat.S_IWGRP|stat.S_IWOTH) else '-acl'
+            return accepted
+        sources=((str(Path(__file__).absolute()),expected),(sys.executable,sys.argv[3]),
+                 (str(source),'6634f9df4ea9a1e02cd6212d58a82379dd5148780672700792f8248f76ea6f9b'),(c.ctypes.__file__,PROC_CTYPES_PY_DIGEST),
+                 (sys.modules['_ctypes'].__file__,PROC_CTYPES_EXT_DIGEST))
+        root=Path(__file__).absolute().parents[3]
+        def owned_root_rule(fd,state,ancestor):
+            return True if ancestor else rule(fd,state,False)
+        _stage='root-hold'
+        anchor=c._open_held(str(root),True,owned_root_rule,'E_INSTALL');held.append(anchor)
+        files=[]
+        _stage='held-inputs'
+        for path,digest in sources:
+            _stage='helper-hold' if path==sources[0][0] else 'runtime-hold' if path==sources[1][0] else 'consumer-hold' if path==sources[2][0] else 'ctypes-hold'
+            if str(path).startswith(str(root)+'/'):
+                current=anchor;parts=Path(path).relative_to(root).parts
+                for index,name in enumerate(parts):
+                    current=c._open_child(current,name,index<len(parts)-1,rule,'E_INSTALL')
+                    held.append(current)
+            else:
+                current=c._open_held(path,False,rule,'E_INSTALL');held.append(current)
+            item=c._HeldBytes(current,current.read(c.EXECUTABLE_LIMIT,'E_INSTALL'))
+            c._require(item.sha256==digest,'E_STALE')
+            c._require(not current.before.st_mode&0o6000,'E_INSTALL')
+            item.recheck('E_STALE');files.append(item)
+        c._require(sys.platform=='darwin' and sys.byteorder=='little','E_RUNTIME')
+        c._require(type(c._DARWIN_ACL_FUNCTIONS) is c._DarwinACLFunctions,'E_RUNTIME')
+        library=c._DARWIN_ACL_FUNCTIONS.library
+        _stage='native-query'
+        result=first_git_proc_query(c.ctypes,library,int(sys.argv[1]))
+        for item in files:item.recheck('E_STALE')
+        raw=(json.dumps({'first_git_process_snapshot':result},sort_keys=True,separators=(',',':'))+'\n').encode()
+        c._require(len(raw)<=768,'E_LIMIT')
+        count=os.write(1,raw);c._require(count==len(raw),'E_RUNTIME')
+    finally:
+        c._close_paths(held)
+
+if __name__=='__main__':
+    try:main()
+    except InterruptedError:raise
+    except Exception as error:
+        categories={AssertionError:'ASSERT',NameError:'NAME',AttributeError:'ATTRIBUTE',PermissionError:'PERMISSION',FileNotFoundError:'MISSING',OSError:'OS'}
+        category=categories.get(type(error),'UNKNOWN')
+        if type(error) is _refusal and type(error.code) is str and error.code in {'E_INSTALL','E_STALE','E_ACL','E_RUNTIME','E_LIMIT'}:category=error.code
+        raw=('scope-process:'+_stage+':'+category+'\n').encode('ascii')
+        assert len(raw)<=128
+        os.write(2,raw)
+        raise SystemExit(1)
+'''
+class ScopeProcessPending(BaseException):
+    pass
+
+def _scope_process_values(raw,pid):
+    try:
+        record=c._json(raw,768,'E_PARSE')
+        if type(record) is not dict or set(record)!={'first_git_process_snapshot'}:return 'GAP'
+        value=record['first_git_process_snapshot']
+        if type(value) is not dict or set(value)!={'pid','ppid','pgid','uid','state','comm_hex'}:return 'GAP'
+        if any(type(value[key]) is not int or not 0<=value[key]<=4294967295 for key in ('pid','ppid','pgid','uid','state')):return 'GAP'
+        text=value['comm_hex']
+        if value['pid']!=pid or type(text) is not str or len(text)!=32 or any(ch not in '0123456789abcdef' for ch in text):return 'GAP'
+        return value
+    except (c.Refusal,ValueError,TypeError,UnicodeError,RecursionError,MemoryError):return 'GAP'
+
+def _scope_process_supervise(command,environment,end,cancelled,pid):
+    child=None;selector=None;closed=False;first=None;result='GAP';constructing=False
+    start=c.time.monotonic();collection=min(end,start+1)
+    try:
+        if cancelled[0] is not False:raise InterruptedError('scope process observation cancelled')
+        if c.time.monotonic()>=collection or end-c.time.monotonic()<3:return 'GAP'
+        constructing=True
+        child=c.subprocess.Popen(command,stdin=c.subprocess.PIPE,stdout=c.subprocess.PIPE,
+            stderr=c.subprocess.PIPE,env=environment,close_fds=True,start_new_session=True)
+        selector=_scope_select_state['native_selector']()
+        buckets={child.stdout:bytearray(),child.stderr:bytearray()}
+        limits={child.stdout:768,child.stderr:128}
+        child.stdin.close()
+        for stream in buckets:
+            c.os.set_blocking(stream.fileno(),False);selector.register(stream,c.selectors.EVENT_READ)
+        while selector.get_map():
+            if cancelled[0] is not False:raise InterruptedError('scope process observation cancelled')
+            left=collection-c.time.monotonic()
+            if left<=0:raise TimeoutError('scope process collection')
+            for key,events in selector.select(min(left,0.02)):
+                if cancelled[0] is not False:raise InterruptedError('scope process observation cancelled')
+                stream=key.fileobj
+                try:block=c.os.read(stream.fileno(),769)
+                except BlockingIOError:continue
+                if not block:selector.unregister(stream);stream.close()
+                else:
+                    if len(buckets[stream])+len(block)>limits[stream]:raise ValueError('scope process output cap')
+                    buckets[stream].extend(block)
+        left=collection-c.time.monotonic()
+        if left<=0:raise TimeoutError('scope process wait')
+        code=child.wait(timeout=left)
+        if cancelled[0] is not False:raise InterruptedError('scope process observation cancelled')
+        if code==0 and not buckets[child.stderr]:result=_scope_process_values(bytes(buckets[child.stdout]),pid)
+    except BaseException as error:
+        first=error
+    finally:
+        if child is not None:
+            close_end=min(end,c.time.monotonic()+1)
+            gone=False;waited=False;resources_closed=True;close_error=None
+            def remember(error):
+                nonlocal close_error
+                if close_error is None:close_error=error
+            for number in (c.signal.SIGTERM,c.signal.SIGKILL):
+                if c.time.monotonic()>=close_end:break
+                try:c.os.killpg(child.pid,number)
+                except ProcessLookupError:pass
+                except BaseException as error:remember(error)
+                boundary=min(close_end,c.time.monotonic()+0.05) if number==c.signal.SIGTERM else close_end
+                while c.time.monotonic()<boundary:
+                    try:child.poll()
+                    except BaseException as error:remember(error)
+                    try:c.os.killpg(child.pid,0)
+                    except ProcessLookupError:gone=True;break
+                    except BaseException as error:remember(error);break
+                    if cancelled[0] is not False and first is None:first=InterruptedError('scope process observation cancelled')
+                    c.time.sleep(min(0.005,max(0,boundary-c.time.monotonic())))
+                left=boundary-c.time.monotonic()
+                if left>0:
+                    try:
+                        returned=child.wait(timeout=left)
+                        waited=type(returned) is int
+                    except c.subprocess.TimeoutExpired:pass
+                    except BaseException as error:remember(error)
+                if c.time.monotonic()<close_end:
+                    try:c.os.killpg(child.pid,0)
+                    except ProcessLookupError:gone=True
+                    except BaseException as error:remember(error)
+                if gone and waited:break
+            if not waited and c.time.monotonic()<close_end:
+                try:
+                    returned=child.wait(timeout=close_end-c.time.monotonic())
+                    waited=type(returned) is int
+                except BaseException as error:remember(error)
+            if not gone and c.time.monotonic()<close_end:
+                try:c.os.killpg(child.pid,0)
+                except ProcessLookupError:gone=True
+                except BaseException as error:remember(error)
+            for resource in (selector,child.stdin,child.stdout,child.stderr):
+                if resource is None:continue
+                if c.time.monotonic()>=close_end:resources_closed=False;continue
+                try:resource.close()
+                except BaseException as error:remember(error);resources_closed=False
+            closed=gone and waited and resources_closed and all(stream.closed for stream in (child.stdin,child.stdout,child.stderr))
+            _scope_select_state['process_close_error']=close_error
+            if not closed:
+                _scope_select_state['process_pending']=True
+                if close_error is None:close_error=ScopeProcessPending('scope process closure PENDING')
+                if first is not None:raise first from close_error
+                raise ScopeProcessPending('scope process closure PENDING') from close_error
+            if close_error is not None:
+                if first is not None and (not isinstance(first,Exception) or type(first) is InterruptedError):raise first from close_error
+                result='GAP'
+        elif first is not None and constructing:
+            _scope_select_state['process_pending']=True
+            raise ScopeProcessPending('scope process construction PENDING') from first
+    if first is not None and (not isinstance(first,Exception) or type(first) is InterruptedError):raise first
+    return result
+
+def first_git_process_snapshot(frame,selector):
+    state=_scope_select_state
+    if state.get('process_attempted') or sys.platform!='darwin':return
+    counts=state['counts']
+    expected={'entered':101,'returned':100,'raised':0,'nonempty':0,'events_total':0,'last_length':0}
+    if type(counts) is not dict or any(type(k) is not str for k in counts) or set(counts)!=set(expected) or any(type(counts[k]) is not int or counts[k]!=v for k,v in expected.items()):return
+    if type(frame) is not type(sys._getframe()):return
+    fields=type(frame).__dict__;local=fields['f_locals'].__get__(frame)
+    if (fields['f_code'].__get__(frame) is not state['foreground'] or fields['f_lineno'].__get__(frame)!=1197 or
+            local.get('self') is not state['owner'] or local.get('argv') is not state['argv'] or
+            local.get('selector') is not selector or type(selector) is not state['selector_class'] or state['selector'] is not selector):return
+    child=local.get('child');cancelled=local.get('cancelled');end=local.get('end')
+    if type(child) is not c.subprocess.Popen or type(cancelled) is not list or len(cancelled)!=1 or cancelled[0] is not False:return
+    child_fields=c.subprocess.Popen.__dict__['__dict__'].__get__(child,c.subprocess.Popen)
+    pid=child_fields.get('pid')
+    if type(pid) is not int or not 0<pid<=2147483647 or type(end) not in (int,float) or not -float('inf')<end<float('inf'):return
+    if end-c.time.monotonic()<3:return
+    state['process_attempted']=True
+    owner=local['self']
+    path=c.os.path.join(c._source_root(),'scope/v1/first-git-process-helper.py')
+    environment={'PATH':'/usr/bin:/bin','LC_ALL':'C','LANG':'C'}
+    command=[sys.executable,'-I','-S','-B',path,str(pid),c.digest(_scope_process_helper_raw),owner.python.sha256]
+    state['process_snapshot']=_scope_process_supervise(command,environment,end,cancelled,pid)
+""").replace('SELECTORS_SOURCE',repr(selector_source)).replace('SELECTORS_PATH',repr(selector_path)).replace('NATIVE_ORIGIN',repr(native_origin)).replace('SELECTORS_SHA',repr(selector_source_sha)).replace('NATIVE_SHA',repr(native_sha)).replace('ABC_SOURCE',repr(abc_source)).replace('ABC_PATH',repr(abc_path))
+  import ast
+  for key,path in (('PROC_CTYPES_PY_DIGEST',c.ctypes.__file__),('PROC_CTYPES_EXT_DIGEST',sys.modules['_ctypes'].__file__)):
+   ctypes_held=c._hold_bytes(path,c.EXECUTABLE_LIMIT)
+   try:selector_setup=selector_setup.replace(key,repr(ctypes_held.sha256));ctypes_held.recheck('E_STALE')
+   finally:ctypes_held.close()
+  helper_tree=ast.parse(selector_setup)
+  helper_raw=ast.literal_eval(next(n.value for n in helper_tree.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='_scope_process_helper_raw' for t in n.targets)))
+  self.process_helper_raw=helper_raw
+  helper_path=self.paths[1].with_name('first-git-process-helper.py')
+  helper_fd=os.open(helper_path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o444)
+  try:
+   assert os.write(helper_fd,helper_raw)==len(helper_raw)
+   os.fchmod(helper_fd,0o444)
+  finally:os.close(helper_fd)
   record='''        try:
             relation_base=BaseException.__dict__
             def relation_field(value,key):
@@ -10004,6 +10627,9 @@ print(relation_result)
                             counts=None
                         elif len(json.dumps(counts,sort_keys=True,separators=(',',':'),ensure_ascii=True).encode())>256:counts=None
                     group={'facts':dict(counts) if counts is not None else 'GAP','binding':TOKEN,'selectors_source_sha256':_scope_select_source_sha,'native_origin_sha256':_scope_select_native_sha}
+                    if type(state.get('process_snapshot')) is dict:
+                        extended=dict(group);extended['first_git_process_snapshot']={'status':'OBSERVED','facts':state['process_snapshot']}
+                        if len(json.dumps(extended,sort_keys=True,separators=(',',':'),ensure_ascii=True).encode())<=1024:group=extended
                     return group if len(json.dumps(group,sort_keys=True,separators=(',',':'),ensure_ascii=True).encode())<=1024 else 'GAP'
                 except (NameError,KeyError,TypeError,ValueError,AttributeError,UnicodeError,RecursionError,OverflowError,MemoryError):return 'GAP'
             relation_foreground=[False,'GAP']
@@ -10179,6 +10805,9 @@ print(relation_result)
   self.restored=False
  def before_call(self):
   for item,raw in zip(self.held,self.copies):item.recheck('E_STALE');assert item.raw==raw
+  helper=c._hold_bytes(str(self.paths[1].with_name('first-git-process-helper.py')),c.EXECUTABLE_LIMIT)
+  try:assert helper.raw==self.process_helper_raw;helper.recheck('E_STALE')
+  finally:helper.close()
  @staticmethod
  def identity(value):
   return (value.st_dev,value.st_ino,stat.S_IFMT(value.st_mode),value.st_uid,value.st_gid,stat.S_IMODE(value.st_mode),value.st_nlink)
