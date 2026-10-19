@@ -838,6 +838,7 @@ else
 fi
 python_bin=$("$python_candidate" -I -S -B -c 'import os,sys;print(os.path.realpath(sys.executable))')
 "$python_bin" -I -S -B -c 'import sys;assert sys.version_info >= (3,11)' || fail 'existing Python 3.11+ required'
+scope_original_checks() {
 /bin/ln -s "$python_bin" "$bin/python3"
 "$python_bin" -I -S -B - "$gate_program" "$tmp/environment-reasons.jq" <<'PY_REASON_PROGRAM'
 import pathlib,sys
@@ -4839,7 +4840,7 @@ for directory in (runtime, runtime / 'no-hooks'):
     assert stat.S_IMODE(state.st_mode) == 0o700 and state.st_uid == os.getuid()
     runtime_metadata.append({'path': str(directory), 'identity': [state.st_dev, state.st_ino, state.st_mode,
         state.st_uid, state.st_gid, state.st_nlink, state.st_size, state.st_mtime_ns, state.st_ctime_ns]})
-name = str(guard_file)
+name = str(Path(sys.argv[0]))
 before = tuple(os.lstat(name))
 def identity(value): return tuple(value)
 def uptime(): return time.monotonic()
@@ -4979,7 +4980,7 @@ def first_git_reference_controls(guard, channel, area, clock_name):
     helper = work / 'channel.py'
     helper.write_text(own_channel)
     guard_path = work / 'actual-guard.py'
-    guard_path.write_text(heredoc('PY_MAC_FIXED_RUNTIME_GUARD'))
+    assert not guard_path.exists()
     marker = location / 'whole-owner.deleted'
     receipt = location / 'whole-owner.saved.receipt'
     variables = '\n'.join(key + '=' + repr(str(value)) for key, value in {
@@ -7948,6 +7949,8 @@ PY_TERMINAL_TEST
 pass 'terminal append and byte caps are independent; framed commitment binds the first snapshot'
 scope_stage_points[5]=$SECONDS
 
+}
+
 genuine_platform=$(/usr/bin/uname -s)
 genuine_chown=/bin/chown
 [ "$genuine_platform" != Darwin ] || genuine_chown=/usr/sbin/chown
@@ -8340,8 +8343,7 @@ PY_MAC_IDS
   setup_genuine_paths
 }
 
-run_genuine_macos_runtime_guard_controls() {
-  local operator_name guard_source entry_source
+prepare_genuine_macos_runtime_guard_controls() {
   operator_name=$(/usr/bin/id -un) || fail 'guard operator identity'
   guard_source="$tmp/runtime-guard/guard.py"
   guard_control="$tmp/runtime-guard-controls.py"
@@ -9633,6 +9635,11 @@ from pathlib import Path
 import sys
 compile(Path(sys.argv[1]).read_bytes(), sys.argv[1], 'exec')
 PY_GUARD_SYNTAX
+}
+
+run_genuine_macos_runtime_guard_controls() {
+  local operator_name guard_source entry_source
+  prepare_genuine_macos_runtime_guard_controls
   scope_fixture_owner_launch true
   scope_fixture_owner_launch false
 }
@@ -11410,6 +11417,9 @@ run_genuine() {
   pass 'actual root anchor, distinct storage writer and read-only consumer authenticate one complete bundle'
 }
 
+# shellcheck disable=SC2329
+scope_original_suite() {
+  scope_original_checks
 mac_stdin_controls=$(/bin/cat <<'PY_MAC_STDIN_CONTROLS'
 import ast
 import hashlib
@@ -11580,3 +11590,45 @@ done
 
 run_genuine
 /usr/bin/printf 'scope qualification: %s focused checks passed\n' "$passes"
+}
+
+scope_first_git_reference() {
+  local operator_name guard_source entry_source
+  [ "$genuine_platform" = Darwin ] || fail 'reference requires the original disposable Mac role'
+  [ "$passes" -eq 0 ] || fail 'reference must precede every original suite check'
+  setup_genuine_macos
+  [ "$(/usr/bin/id -u "$genuine_consumer")" = 56001 ] || fail 'fixed reference consumer UID required'
+  prepare_genuine_macos_runtime_guard_controls
+  operator_name=$genuine_consumer
+  "$python_bin" -I -S -B - "$root/scripts/test/scope-qualification.test.sh" "$guard_control" "$scope_owner_channel_helper" <<'PY_FIRST_REFERENCE_COPY'
+from pathlib import Path
+import ast,hashlib,json,sys
+script=Path(sys.argv[1]).read_text()
+def body(tag):
+    mark="<<'"+tag+"'";start=script.index('\n',script.index(mark))+1
+    return script[start:script.index('\n'+tag+'\n',start)]+'\n'
+owner_source=body('PY_OBSERVER_OWNER_CONTROLS')
+names={'first_git_reference_execute','first_git_reference_validate','first_git_reference_driver'}
+parts=[node for node in ast.parse(owner_source).body if isinstance(node,ast.FunctionDef) and node.name in names]
+assert {node.name for node in parts}==names and len(parts)==3
+scope={'ast':ast}
+exec(compile(ast.Module(body=parts,type_ignores=[]),'actual-fixed-reference-copy','exec'),scope)
+driver_path,channel_path=map(Path,sys.argv[2:])
+original_driver,original_channel=driver_path.read_text(),channel_path.read_text()
+driver,channel,worker=scope['first_git_reference_driver'](original_driver,original_channel,owner_source)
+assert 'fixed_first_git_reference_phase()\nraise SystemExit(0)' in driver
+print(json.dumps({'fixed_reference_sources':{'driver':driver,'channel':channel,'worker':worker,
+    'original_driver_sha256':hashlib.sha256(original_driver.encode()).hexdigest(),
+    'original_channel_sha256':hashlib.sha256(original_channel.encode()).hexdigest()}},sort_keys=True),flush=True)
+driver_path.write_text(driver)
+channel_path.write_text(channel)
+PY_FIRST_REFERENCE_COPY
+  scope_owner_serial=1
+  scope_fixture_owner_launch false
+  [ "$scope_owner_state" = completed ] && [ "$scope_owner_status" -eq 0 ] || fail 'reference closure unknown'
+  trap - EXIT
+  cleanup
+  /usr/bin/printf 'REFERENCE_ONLY\n'
+}
+
+scope_first_git_reference
