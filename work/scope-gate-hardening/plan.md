@@ -1673,8 +1673,14 @@ and resource bounds. Keep the original five phases, completed status, eligibilit
 and closed-writer rules unchanged. Encoding or space failure omits only this
 optional group. Preserve the original sample fields, three records and existing
 stage priority; the original 1,024-byte row and 4,096-byte combined caps still hold.
-No other slot gains counts or success export. Counts do not authorize an
-optimization; any proposed work reduction still needs its own evidence and gate.
+No other slot gains counts or success export. Only in a session whose fixed
+cost_selected is False may observer_source omit count_classification calls that
+would immediately return without collecting data. Keep every original watched
+request, filename/set test, hash/eq effect, short circuit, result and exception,
+cache operation and trace event in its original order. Keep slot 0's eight counts
+and five phases unchanged. This permits no other work reduction or change to the
+Mac wrapper, guard, reader or evaluator. Apply the existing same-work equivalence
+and useful-work gate above before source preparation or full execution.
 
 Initialize eligibility to zero. Only the original terminal Python, after every
 original terminal assertion passes, may write one and close it before returning.
@@ -1717,6 +1723,12 @@ Missing facts, overflow, wrong types, encoding/cap and exporter failure may lose
 only counts, not the original samples, qualification, first error or cleanup gates.
 Measure full raw size and ordinary whole-work overhead without per-event timing,
 extra evaluator/reader calls or artificial heating before source preparation.
+For omitted unselected counter calls, compare the actual old/new extracted observer
+on the same selected and unselected owned sequences. Require zero unselected
+count_classification entries with unchanged original classification counts,
+effects, events and exceptions; preserve slot 0's eight counts and phase boundaries.
+Reuse the existing whole-work value gate: insufficient benefit or failed
+equivalence stops this candidate before full CI, without a deadline-success claim.
 Keep every original control. Show that early I1
 and terminal failures cannot qualify, and that a real ordinary ALRM handled after
 terminal completion exports once before deletion without changing status or
