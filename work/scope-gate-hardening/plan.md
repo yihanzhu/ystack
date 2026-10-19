@@ -9,7 +9,7 @@ Tracks #541. Risk is high. This is the nonterminal child-6 core. It authenticate
 the existing child-5 evidence at one exact revision. Issue #544 remains mandatory
 before child 6 completes or child 7 starts.
 
-Implementation PR: `review_size: accepted-exception`, 2,600–11,600 net changed
+Implementation PR: `review_size: accepted-exception`, 2,600–12,100 net changed
 lines. The private evidence reader, held-path and Git checks, closed evaluator
 relations, and a real two-principal origin fixture form one security boundary.
 Most of the range is proof: complete classification, bundle, Git, terminal and
@@ -903,6 +903,94 @@ real-principal positive and G3 blocked. Keep CPU/wall evidence NONE and producti
 identities empty. Preserve every prior failure. Do not replace either platform's
 proof with mocks, same-uid files, copied origin, permanent refusal or a skipped
 positive.
+
+## Fixed one-shot Git reference
+
+Use one temporary private `scope_first_git_reference` test boundary in
+`scope-qualification.test.sh`. Its fixed source entry replaces only that head's
+suite dispatch. Retain the complete original suite text and assertions. Add no
+argument, environment selector, workflow, product entry or fallback. Run this
+head once in a fresh invocation of the existing approved Mac workflow. It is a
+reference head and cannot be merged or accepted as complete scope/Mac proof.
+Do not run the original first-config foreground before or after the reference.
+Ordinary enablement controls are separate from this real reference invocation.
+
+Reuse the original fixed runtime authentication, fresh fixture/package setup,
+consumer role and cleanup. Require the original consumer UID 56001, authenticated
+physical P3.15 and fixed Git; refuse an identity mismatch instead of selecting
+another role or runtime. Prepare only the needed fixed setup through its existing
+commands and roles. Preserve every invoked safety check. Bind the new owned config
+bytes, modes, paths, source and environment before launch; do not reuse an old
+failed tree or claim that new path bytes match an earlier run. Retain the original
+nine-argument first-config shape and exact reader environment contract. Root-owned
+fixture preparation is not a second consumer reference or a comparison arm.
+
+Run exactly one consumer Git through standard `subprocess.Popen` and
+`communicate`, with empty input, three PIPEs, `close_fds=True` and
+`start_new_session=True`. Keep the original 30-second execution limit. Do not call
+product `_foreground`, `communicate_bounded`, a native collector or an evaluator
+for this reference. Standard communicate is a test capture method, not the
+product's incremental output cap or an independent kernel implementation. Use
+only the controlled small config. Save its complete stdout/stderr and existing
+call, error and closure evidence before result assertions. Require the original
+1 MiB stdout, 65,536-byte stderr, owner-output and ordinary-raw limits together;
+no success may discard, filter or truncate evidence to fit them. Add no collector.
+The product's online limits and success predicates do not change.
+
+Reuse `scope_fixture_owner_launch`, its authenticated stdin cancellation channel,
+`ScopeFixtureOwnerCancel` and the fixed `run_control` supervision boundary. Use
+one closed reference case for the fixed consumer, not a caller-selected program
+or UID. Keep the original 145-second owner deadline and its 15-second closing
+window. Admit launch only with the required execution and closing time remaining
+and no cancellation; never reset the outer alarm or extend any deadline. The
+reference worker uses the existing cancellation-to-unwind behavior. In its
+finally path call the unchanged `enforced-reproduction.stop_child` once on the
+actual owned Git Popen. Reserve that helper's existing ten-second bound inside
+the original closing allowance. It sends only its original TERM/KILL to that
+owned group and proves group disappearance and direct-child wait. Do not swallow
+PermissionError, retry cleanup or use the failed product foreground to reclaim it.
+
+Bind the reference completion to this actual Popen, its group disappearance,
+original wait result and three closed pipes, plus the authenticated current root
+driver, invocation and fixture. Extend only this fixed case's existing completion
+validation; an empty `foreground_calls` list is not reference proof. The root
+owner must also reap its worker, close its pipes and complete the original Bash
+wait/confirmation before any fixture or tmp deletion. Cancellation, uncertain
+launch, missing/stale proof, surviving group, failed wait or close keeps PENDING
+and zero deletion under the original rules. A partial record, cached returncode
+or marker alone grants no cleanup authority. Preserve the first error, signal and
+workflow restoration refusal. Prove this integration before the real reference;
+if it cannot close within these existing boundaries, do not dispatch it.
+
+On a successful reference and confirmed ordinary fixture cleanup, print
+`REFERENCE_ONLY` and exit zero from the scope phase. Emit no 37-check PASS marker
+and do not continue the original genuine case. Failure or unknown state remains
+nonzero/PENDING. The unchanged workflow may then run its original native suite;
+even a green job is not complete scope/Mac acceptance. Preserve the real workflow
+cleanup result separately; reference closure does not prove D/V/T restoration.
+After this one invocation reaches a terminal state and its original evidence is
+sealed, remove the temporary entry in a normal new commit. No complete scope/Mac
+proof or G3 may start while it remains. Preserve the old red evidence and all
+original tests. A reference result is a cross-run fact with cold-start and host
+state limits, not a root-cause verdict or a product fix. Final acceptance still
+requires the original complete Mac then same-head Linux, restoration and G3.
+
+Before dispatch, freeze the full generated reference source and bindings. Reuse
+one actual extracted owned-control lane with real short-lived children. Prove
+exact command/environment/input and one invocation, normal complete raw capture,
+nonzero/stderr refusal, timeout and cancellation, actual stop_child group reap,
+wait and all pipe closes. Cover launch failure, TERM/KILL failure, surviving group,
+wrong/missing completion and output overflow; no unknown case may delete data or
+continue the suite. Keep controlled failure seams explicit. Prove the fixed root
+owner receipt binds the reference child, rejects the empty original foreground
+proof and preserves the first failure. Ordinary same-UID controls do not prove the
+real Mac consumer or root chain. Preserve every existing ordinary/owner control,
+source inverse and safety proof. Measure the complete recursive new raw batch
+against 16 MiB before fresh independent source preparation and the one reference.
+Do not hide source, remove controls or compress evidence to fit. This exception
+adds no identity/select observer, runtime, source download, administrator command,
+permission, retry allowance or product behavior. Its removal does not retire any
+original UNKNOWN finding or relax the final proof.
 
 ## Private Linux fixture failure observation
 
