@@ -9,7 +9,7 @@ Tracks #541. Risk is high. This is the nonterminal child-6 core. It authenticate
 the existing child-5 evidence at one exact revision. Issue #544 remains mandatory
 before child 6 completes or child 7 starts.
 
-Implementation PR: `review_size: accepted-exception`, 2,600–13,000 net changed
+Implementation PR: `review_size: accepted-exception`, 2,600–13,400 net changed
 lines. The private evidence reader, held-path and Git checks, closed evaluator
 relations, and a real two-principal origin fixture form one security boundary.
 Most of the range is proof: complete classification, bundle, Git, terminal and
@@ -1210,7 +1210,7 @@ retain only existing positive exact-int pid and exact-int/null returncode.
 Cached None is not liveness. These are exception-mapping facts, not a snapshot at
 an earlier predicate: final cancelled=False excludes that one-way bool trigger;
 True cannot distinguish cancellation from a prior deadline failure. Only at the
-original _foreground rejection at line 1192, with that exact code/config binding,
+authenticated _foreground deadline/cancel rejection, with that exact code/config binding,
 allow an optional io group of at most 1,024 encoded bytes. Require original outputs
 as an exact dict of two exact-int fd keys and exact-bytearray values in the original
 stdout/stderr insertion order. Retain their lengths and original exact-int cap and
@@ -1230,19 +1230,39 @@ contents or lengths, whole locals, dynamic getters, callbacks or repr. Missing o
 invalid frame, command, object, scalar or binding is GAP. Apart from the fixed
 first_git_select_observation and first_git_process_snapshot below, do not poll, wait,
 getpgid, inspect proc/ps, send kill0, read a clock or add a syscall, query, trace
-callback or process. Keep original signals, Popen, call order and exceptions
-unchanged; these facts grant no cleanup or restoration permission. Keep
+callback or process. Apart from the owned cleanup repair below, keep original
+signals, Popen, call order and exceptions unchanged. These facts grant no cleanup
+or restoration permission. Keep
 cleanup_signal GAP when finally has overwritten the original loop value.
 
 Retire the four posterior builtin observations and only their method-specific
 controls. Preserve their complete evidence and UNKNOWN findings. This disposition
 replaces a diagnostic method; it does not claim a repair or change acceptance.
 
+Repair only the owned exception cleanup in product _foreground. Keep its first
+raised object as the outer exception. For the existing child with cached
+returncode None, attempt the original TERM then KILL once each, with the original
+ProcessLookupError handling. A different signal error must not skip the remaining
+original signal attempt or the one original child.wait(timeout=10). Retain signal
+and wait failures in a bounded, acyclic cause chain in occurrence order, with the
+latest cleanup failure as the first error's direct cause. A wait failure therefore
+takes that cause position without losing preceding signal failures. Successful
+wait cannot erase a signal error or turn the original failure into success.
+Keep the original finally responsibilities and order for selector, three pipes,
+handlers and signal mask on every exit. Add no signal, retry, poll, OS query or
+time allowance. Keep the original success path, I/O, cancellation and deadlines.
+Neither EPERM, wait return nor pipe closure proves group disappearance, deletion
+permission or restoration. Unknown closure remains PENDING. This repair does not
+establish the cause of the Git timeout or close historical UNKNOWN findings.
+
 Keep first_git_select_observation private to this same disposable reader copy.
 Bind the original execute_git first-config nine argv, code, source/copy and
 invocation. Consume once-only state before installing the adaptation around only
 its original _foreground call; wrong bindings, other Git calls and re-entry get
-no installation or counts. Preserve _foreground text, AST and code object. Keep
+no installation or counts. Bind the repaired, independently reviewed product
+_foreground text, AST and exact code object; the diagnostic copy must not edit it
+or retain stale source or line pins. Only the owned cleanup repair above may
+change that product boundary. Keep
 argument evaluation order and counts, the timeout expression and environment()
 once each, and the surrounding recheck/record_command positions. Add no
 evaluator, reader or Git invocation.
@@ -1250,7 +1270,17 @@ evaluator, reader or Git invocation.
 Use one fixed private native-selector adaptation that overrides only select.
 Bind the real already-loaded native class, constructor and select implementation
 to the authenticated runtime; names or mutable module attributes alone are not
-proof. Construct once through the original native constructor. Keep its native
+proof. Keep the file-extension/Mac branch. A built-in select branch must bind
+its exact module, authenticated bootstrap BuiltinImporter, spec/loader and
+selectors reference, default class and epoll backend to the same authenticated
+runtime and actual carrying object. Missing __file__, a built-in string or an
+arbitrary executable digest is not that proof. Use the same closed source-shape
+predicate in select_source_inputs and the generated binding; retain held bytes,
+rechecks, selectors/abc methods, constructor/globals/inheritance and backend
+identity. Do not invent an extension path or accept other no-file loaders. If
+existing runtime qualification cannot bind the actual carrier, STOP that branch;
+add no trust root, alternate implementation or Linux skip.
+Construct once through the original native constructor. Keep its native
 instance/resources and original register/get_map/unregister/close implementations,
 order and call counts. Add no extra select or other method call, generic registry,
 arbitrary proxy or public API. If the fixed class cannot preserve those behaviors
@@ -1339,9 +1369,12 @@ At the existing failure mapping, require the original exact foreground frame,
 code, first-config argv and this invocation's selector instance identity. Export
 only with retained cancelled exact False and the existing exact positive
 builtin-int PID, through either of two original exits: the original deadline
-Refusal then same-frame cleanup killpg PermissionError with native errno 1; or
-that exact deadline-site Refusal E_RUNTIME object reaching the mapping directly
-after original cleanup/finally returned normally, without a replacement error.
+Refusal with the same-frame killpg PermissionError, native errno 1, retained in
+its cleanup cause chain after the original cleanup wait succeeds, with no wait or
+finally failure; or that exact deadline-site Refusal E_RUNTIME object
+reaching the mapping directly after cleanup/finally returned normally, without a
+cleanup failure. Bind both chains to the newly reviewed product source and code;
+add no eligible failure site or observation field.
 The direct exit must bind the same original foreground code/frame, nine config
 argv, selector instance and invocation. It adds no error site or call. Normal
 cleanup return or cached returncode -15 proves no full-tree closure or restoration.
@@ -1356,7 +1389,8 @@ child or filesystem state and grants no cleanup permission. Prove native resourc
 closure and original cancellation through the actual boundary before enabling it.
 Outside first_git_process_snapshot, add no queries, clocks or processes. Do not
 replace original Popen/read/write/killpg/wait or their signal handling, add threads
-or grace, or alter an original deadline or exception. A select wrapper adds a private
+or grace, or alter an original deadline or exception beyond the owned cleanup
+contract above. A select wrapper adds a private
 traceback frame: bind it honestly and retain every original
 frame in order, the same exception and cause/context. Do not claim byte-identical
 whole tracebacks or let new frames displace original facts under existing bounds.
@@ -1407,8 +1441,17 @@ failure to prove its suppressed context; direct Refusal is a separate control,
 not OS-error coverage. Cover missing/wrong/cyclic/overlong context, exact frame
 identity versus a same-name wrong frame, and type, formatting and sink failures.
 For foreground facts, use the exact extracted mapping with original cancel and
-deadline refusals and controlled TERM/KILL OSError exits. Prove original exception
-identity, result, call count and whether cleanup wait was reached are unchanged.
+deadline refusals and controlled TERM/KILL OSError exits. Reuse real owned
+short-lived children in the existing foreground controls. Cover either signal
+failure, both failures, ProcessLookupError, successful wait and wait failure.
+Run the actual repaired _foreground code and prove the original first error's
+identity, complete cause order, original signal order/counts, exactly one cleanup
+wait(timeout=10), and the actual finally pipe/selector/handler/mask actions.
+Keep wait-failure cases fail-closed; distinguish a controlled error after a real
+wait from an unproven child closure. Update assertions that encoded skipped wait
+or a replacement signal error. Preserve all old negative cases and capture their
+new actual source/line/exception bindings before execution. These controlled
+PermissionErrors do not reproduce the CI kernel cause or prove full restoration.
 Cover existing native child fields, wrong frame/config argv, pseudo-child rejection,
 None without a liveness claim, GAP, encoding/cap and formatting/write failures.
 For io, prove original buffer order, bounds and channel provenance, partial EOF,
@@ -1419,7 +1462,12 @@ failure isolation. The original required record and first error must survive a
 failed optional group. Retain the complete original control sequence.
 For first_git_select_observation, extract the original _foreground and actual
 adaptation in the existing ordinary owner lane. Prove real runtime/class/method
-binding and a real native path; fixed scripted native-result seams are controlled
+binding and a real native path. On the actual supported Linux runtime, prove
+select_source_inputs, full capture construction and native binding against its
+real module/source shape. Keep the original six binding controls and add wrong
+loader/spec/module/carrier rejection. Preserve the real Mac extension/Kqueue path
+and all lifecycle/inverse controls. Metadata seams are not a real built-in positive;
+fixed scripted native-result seams are controlled
 branch evidence, not that proof. Preserve native construction, non-select calls,
 closure and original argument evaluation order/counts. Cover empty/nonempty exact
 lists with the same returned object, one delegation per original call, sentinel
