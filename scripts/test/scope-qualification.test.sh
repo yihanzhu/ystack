@@ -1121,28 +1121,28 @@ def observe(original,log,case,phase,argv,index):
     except ImportError:watched_weakref=None
     watched_busy = [False]
     def watched(frame):
-        if cost_selected:count_classification(0)
+        count_classification(0)
         code = frame.f_code
         key = id(code)
         found = watched_cache.get(key)
         if not watched_busy[0] and type(found) is tuple and found[0] is code:
-            if cost_selected:count_classification(3)
+            count_classification(3)
             return found[1]
         if watched_busy[0]:
-            return (((count_classification(1) if cost_selected else None) or frame.f_code.co_filename in source_codes) and
-                    frame.f_code in (source_codes[frame.f_code.co_filename],count_classification(2) if cost_selected else None)[0])
+            return ((count_classification(1) or frame.f_code.co_filename in source_codes) and
+                    frame.f_code in (source_codes[frame.f_code.co_filename],count_classification(2))[0])
         watched_busy[0] = True
         try:
-            if cost_selected:count_classification(1)
+            count_classification(1)
             in_source = frame.f_code.co_filename in source_codes
-            result = in_source and frame.f_code in (source_codes[frame.f_code.co_filename],count_classification(2) if cost_selected else None)[0]
+            result = in_source and frame.f_code in (source_codes[frame.f_code.co_filename],count_classification(2))[0]
             negative_marker=False
             try:
                 negative_marker=watched_weakref is not None and type(found) is watched_weakref.ReferenceType and found() is code
             except Exception:pass
-            if negative_marker and cost_selected:count_classification(4)
+            if negative_marker:count_classification(4)
             if in_source and len(watched_cache) < 512 and not negative_marker:
-                if cost_selected:count_classification(5)
+                count_classification(5)
                 try:
                     pending = [(code, 0)]
                     nodes = payload = 0
@@ -1150,7 +1150,7 @@ def observe(original,log,case,phase,argv,index):
                     while pending:
                         value, depth = pending.pop()
                         nodes += 1
-                        if cost_selected:count_classification(6)
+                        count_classification(6)
                         if nodes > 1024 or depth > 32:
                             reusable = False
                             break
@@ -1275,12 +1275,12 @@ def observe(original,log,case,phase,argv,index):
         if event!='call':return None
         if watched(frame):
             frame.f_trace_lines=frame.f_code.co_name=='recheck'
-            if cost_selected:count_classification(7)
+            count_classification(7)
             return trace
         parent=frame.f_back
         if parent is not None and watched(parent):
             frame.f_trace_lines=False
-            if cost_selected:count_classification(7)
+            count_classification(7)
             return trace
         return None
     previous=sys.gettrace()
@@ -5083,7 +5083,7 @@ def watched(frame):
     initialization=[n for n in ast.walk(parsed) if isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name) and n.targets[0].id=='authentication']
     assert len(initialization)==1
     initialization=ast.get_source_segment(program,initialization[0])+'\n'
-    adapter='cost_selected=True\nclassification_counts=[[0]*8]\n'+initialization+literals['primitive_source']+'\n'+ast.unparse(adapted)+'\n'+prefix+'\ndef cancel():pass\n'
+    adapter='classification_counts=[[0]*8]\n'+initialization+literals['primitive_source']+'\n'+ast.unparse(adapted)+'\n'+prefix+'\ndef cancel():pass\n'
     compile(adapter,'actual-observer-closed-name-adapter','exec')
     return program,adapter
 
@@ -5103,10 +5103,6 @@ def primitive_witness_controls(program):
             'observe':lambda *args:None,'dispatch':lambda *args:None}
         scope['authentication']=eval(compile(ast.Expression(assignments['authentication']),'actual-authentication-init','eval'),{})
         scope['classification_counts']=[[0]*8]
-        if 'cost_selected' in assignments:
-            selected=ast.literal_eval(assignments['cost_selected'])
-            assert type(selected) is bool
-            scope['cost_selected']=selected
         exec(compile(ast.Module(body=definitions,type_ignores=[]),'actual-primitive-counter-classifier','exec'),scope)
         table=scope['AuthenticationTable']({code.co_filename:scope['AuthenticationSet']({code})})
         scope['bound_codes']=table;scope['paired_codes']=types.MappingProxyType({code.co_filename:frozenset({code})})
@@ -5144,13 +5140,6 @@ def primitive_witness_controls(program):
         error=None;result=None
         try:result=scope['paired_bound'](outer if fault=='custom-reentry' else frame,'call')
         except BaseException as caught:error=caught
-        completed_evidence({'primitive_witness_actual_before_assert':{'case':fault,'result':result,
-            'error_type':None if error is None else type(error).__name__,'error_id':None if error is None else id(error),
-            'cause_id':None if error is None or error.__cause__ is None else id(error.__cause__),
-            'context_id':None if error is None or error.__context__ is None else id(error.__context__),
-            'original_error_ids':[id(value) for value in original_errors],
-            'same_original_exception':bool(error is not None and any(error is value for value in original_errors)),
-            'selected_binding':scope.get('cost_selected','ABSENT')}})
         if fault in ('normal','custom-reentry'):
             assert error is None
             if fault=='normal':assert result is True and scope['paired_bound'](frame,'call') is True
@@ -6335,80 +6324,6 @@ def code_auth_controls(observer,wrapper,area):
         records.append(completed_evidence({'cold_same_sequence':name,'records':cold_records,'no_detail_recording_or_json_inside_timer':True}))
     return records
 
-def unselected_counter_controls(program, area):
-    import textwrap
-    start=program.index('    watched_cache = {}\n');end=program.index('    def trace(',start)
-    current=textwrap.dedent(program[start:end])
-    dispatch=next(n for n in ast.walk(ast.parse(program)) if isinstance(n,ast.FunctionDef) and n.name=='dispatch')
-    current+='\n'+textwrap.dedent(ast.get_source_segment(program,dispatch))+'\n'
-    original=current.replace('if cost_selected:count_classification(', 'count_classification(')
-    original=original.replace('if negative_marker and cost_selected:', 'if negative_marker:')
-    original=original.replace('(count_classification(1) if cost_selected else None)', 'count_classification(1)')
-    original=original.replace('count_classification(2) if cost_selected else None', 'count_classification(2)')
-    assert original!=current
-    base=compile('def sample(): return sys._getframe()','owned-counter-source','exec').co_consts[0]
-    sentinel=ValueError('original counter sequence hash failure')
-    effects=[]
-    class Bad:
-        def __hash__(self):effects.append('bad-hash');raise sentinel
-    class Constant:
-        def __hash__(self):effects.append('hash');return hash(None)
-        def __eq__(self,other):effects.append('eq');return False
-    class Filename(str):
-        def __hash__(self):effects.append('filename-hash');return super().__hash__()
-        def __eq__(self,other):effects.append('filename-eq');return super().__eq__(other)
-    codes=[base,base.replace(),base.replace(co_name='wrong'),base.replace(co_filename='outside'),
-        base.replace(co_consts=([1],)),base.replace(co_consts=(Constant(),)),base.replace(co_consts=(Bad(),)),
-        base.replace(co_filename=Filename(base.co_filename))]
-    frames=[types.SimpleNamespace(f_code=code,f_back=None,f_trace_lines=True) for code in codes]
-    frames.append(types.SimpleNamespace(f_code=codes[3],f_back=frames[0],f_trace_lines=True))
-    reports=[];comparisons={};walls={}
-    for selected in (True,False):
-        for version,body in (('old',original),('new',current)):
-            table_counts=[0,0];nested=[];hook=[None];entry=[0];trace=object()
-            class Codes(set):
-                def __contains__(self,key):table_counts[1]+=1;return super().__contains__(key)
-            class Table(dict):
-                def __contains__(self,key):
-                    table_counts[0]+=1
-                    if hook[0] is not None:
-                        call,hook[0]=hook[0],None;nested.append(call())
-                    return super().__contains__(key)
-            scope={'types':types,'source_codes':Table({base.co_filename:Codes({base})}),
-                'cost_selected':selected,'classification_counts':[[0]*8 if selected else None],'trace':trace}
-            path=area/('counter-'+str(selected)+'-'+version+'.py');path.write_text(body)
-            exec(compile(body,str(path),'exec'),scope)
-            native=scope['count_classification']
-            def counted(which):entry[0]+=1;return native(which)
-            scope['count_classification']=counted;effects.clear();outcomes=[];errors=[];events=[]
-            began=time.monotonic()
-            for frame in frames:
-                for event in ('line','call','call','call'):
-                    frame.f_trace_lines=True
-                    try:
-                        result=scope['dispatch'](frame,event,None)
-                        outcomes.append(result is trace);events.append((event,frame.f_trace_lines))
-                    except Exception as error:
-                        outcomes.append(type(error).__name__);errors.append(error is sentinel)
-            hook[0]=lambda:scope['watched'](frames[1])
-            scope['watched'](types.SimpleNamespace(f_code=base.replace()))
-            elapsed=time.monotonic()-began
-            comparison=(outcomes,list(effects),table_counts,nested,errors,events,scope['classification_counts'][0])
-            reference=completed_evidence({'unselected_counter_sequence':{'selected':selected,'version':version,
-                'source_sha256':hashlib.sha256(body.encode()).hexdigest(),'requests':len(frames)*4+2,
-                'outcomes':outcomes,'effects':list(effects),'primitive_memberships':table_counts,'nested':nested,
-                'same_original_errors':errors,'dispatch_events':events,'counts':scope['classification_counts'][0],
-                'count_entries':entry[0],'whole_work_wall':elapsed,'per_event_timing':False}})
-            assert errors==[False]*3+[True]*3 and nested==[True]
-            if version=='old':comparisons[selected]=comparison
-            else:assert comparison==comparisons[selected]
-            if not selected:assert entry[0]==(0 if version=='new' else sum(comparisons[True][6]))
-            walls[(selected,version)]=elapsed;reports.append(reference)
-    assert walls[(False,'new')]<walls[(False,'old')], 'unselected whole-work benefit not established'
-    return completed_evidence({'unselected_counter_equivalence':{'same_work_references':reports,
-        'unselected_zero_counter_entries':True,'slot0_counts_preserved':True,'whole_work_benefit':True,
-        'old_unselected_wall':walls[(False,'old')],'new_unselected_wall':walls[(False,'new')]}})
-
 reports=[]
 temporary=tempfile.mkdtemp(prefix='scope-observer-owner-')
 print(json.dumps({'ordinary_tree':temporary,'on_failure':'RETAIN'}),flush=True)
@@ -6416,7 +6331,6 @@ try:
     clock_name='CLOCK_UPTIME_RAW' if sys.platform=='darwin' else 'CLOCK_MONOTONIC'
     area=Path(temporary).resolve();package=area/'package';(package/'shadow/v1').mkdir(parents=True);(package/'scope/v1').mkdir(parents=True)
     (package/'shadow/v1/_consumer.py').write_bytes(consumer)
-    reports.append(unselected_counter_controls(observer,area))
     reports.extend(code_auth_controls(observer,wrapper,area))
     reports.append(genuine_relation_controls(area))
     reports.append(launch_capture_controls(area))
@@ -6456,7 +6370,7 @@ finally:
     a=uncached_observer.index('    watched_cache = {}\n');b=uncached_observer.index('    def trace(frame,event,arg):\n',a)
     uncached_observer=uncached_observer[:a]+'    def watched(frame):\n        return (frame.f_code.co_filename in source_codes and\n                frame.f_code in source_codes[frame.f_code.co_filename])\n'+uncached_observer[b:]
     uncached_observer=uncached_observer.replace('        watched_cache.clear()\n','')
-    uncached_observer=uncached_observer.replace('            if cost_selected:count_classification(7)\n','')
+    uncached_observer=uncached_observer.replace('            count_classification(7)\n','')
     uncached_observer=uncached_observer.replace('    def trace(frame,event,arg):\n','    classification_counts=[None]\n    def trace(frame,event,arg):\n',1)
     def observe_case(code,kind):
         target=area/'value';target.write_bytes(b'actual owned file');log=area/'log';log.write_bytes(b'')
