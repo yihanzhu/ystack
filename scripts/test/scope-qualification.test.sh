@@ -1057,23 +1057,6 @@ def cost_export():
         if len(raw)<=4096:sys.stderr.buffer.write(raw)
     except BaseException:pass
 
-def cost_dashboard_binding(source,line,expression,arguments,binding,copy_sha):
-    call='  expect_reasons "dashboard shape $dashboard_case" '+chr(92)
-    if type(source) is not str or hashlib.sha256(source.encode()).hexdigest()!=binding['source'][3]['sha256']:return False
-    if binding['private_frontend']['sha256']!=copy_sha:return False
-    lines=source.splitlines()
-    if lines.count(call)!=1 or type(line) is not str or not line.isdecimal():return False
-    if int(line)!=lines.index(call)+1 or expression!='del(.body.flow)':return False
-    parent=os.path.dirname(COST['data'][0]);base=os.path.dirname(parent)
-    expected=[os.path.join(base,name) for name in ('scope.json','shadow-set.json','dashboard-shape.json',
-        'risk.json','kill.json','duty.json','marker.json','legacy-bundles','legacy-source.git')]
-    if arguments!=expected or binding.get('index')!=8 or binding.get('glob')!='evaluation-reasons':return False
-    if any(row['sample'] in COST_DASHBOARD for row in cost_rows()):return False
-    for sample in COST_DASHBOARD:
-        cost_bind(sample,binding['source'][0]['sha256'],binding['source'][1]['sha256'],
-            binding['private_frontend']['sha256'],binding['command_sha256'])
-    return True
-
 def cost_dashboard_observer(log,case,index,argv):
     if index!=8 or case!='evaluation-reasons':return False
     path=str(log)[:-6]+'.binding.json'
@@ -1088,12 +1071,11 @@ def cost_dashboard_observer(log,case,index,argv):
     expected=[os.path.join(os.path.dirname(os.path.dirname(COST['data'][0])),name)
         for name in ('legacy-bundles','legacy-source.git')]
     if len(argv)!=7 or argv[1]!='read' or argv[4:6]!=expected:return False
-    pair=[row for row in cost_rows() if row['sample'] in COST_DASHBOARD]
-    if len(pair)!=2 or any(row['completed'] for row in pair):return False
-    return all(row['source_sha256']==binding['source'][0]['sha256'] and
-        row['reader_sha256']==binding['source'][1]['sha256'] and
-        row['copy_sha256']==binding['private_frontend']['sha256'] and
-        row['argv_sha256']==binding['command_sha256'] for row in pair)
+    if any(row['sample'] in COST_DASHBOARD for row in cost_rows()):return False
+    for sample in COST_DASHBOARD:
+        cost_bind(sample,binding['source'][0]['sha256'],binding['source'][1]['sha256'],
+            binding['private_frontend']['sha256'],binding['command_sha256'])
+    return True
 
 def cost_frontend(source,sample,helper):
     import shlex
@@ -2208,7 +2190,13 @@ def dashboard_phase_controls():
             {'sha256':hashlib.sha256(source.encode()).hexdigest()}],
         'private_frontend':{'sha256':expected_copy},
         'command_sha256':hashlib.sha256(json.dumps(command,separators=(',',':')).encode()).hexdigest()}
-    select=module['cost_dashboard_binding'];arguments=command[2:]
+    binding_body=actual_body('PY_PROTECTED_BINDING')
+    binding_node=next(n for n in ast.parse(binding_body).body if isinstance(n,ast.FunctionDef) and n.name=='cost_dashboard_binding')
+    binding_scope={'hashlib':hashlib,'os':os}
+    exec(compile(ast.Module(body=[binding_node],type_ignores=[]),'actual-fixed-binding-predicate','exec'),binding_scope)
+    fixed_select=binding_scope['cost_dashboard_binding']
+    select=lambda *args:fixed_select(*args,str(area))
+    arguments=command[2:]
     outcomes=[]
     for name in ('line','expression','source','argv','copy','glob'):
         wrong=json.loads(json.dumps(binding));actual_source=source;line=call_line
@@ -2227,13 +2215,47 @@ def dashboard_phase_controls():
     selected=select(source,call_line,'del(.body.flow)',arguments,binding,expected_copy)
     print(json.dumps({'dashboard_first_before_assert':{'selected':selected,'rows':module['cost_rows']()}},sort_keys=True),flush=True)
     assert selected is True
-    assert select(source,call_line,'del(.body.flow)',arguments,binding,expected_copy) is False
     for expression in ('del(.body.telemetry)','del(.body.evaluator)','del(.body.catalog_ref)',
         'del(.body.coverage)','.body.extra_block = {}','.extra = true',
         '.body.core_contract.semantic_identity = "core.contracts.v1"','.body.coverage.families_total = 8',
         '.body.observed_at = "2026-02-30T00:00:00Z"','.body.evaluator.content.body.runtime.host_os = "plan9"',
         '.body.catalog_ref.kind = "eval_seed_set"'):
         assert select(source,call_line,expression,arguments,binding,expected_copy) is False
+    binding_audit=base/'enclosing-binding.py'
+    audit_program='import sys,json,os,hashlib,stat\nfrom pathlib import Path\n'
+    audit_program+='opened=[]\ndef audit(event,args):\n    if event=="open":opened.append(str(args[0]))\n'
+    audit_program+='sys.addaudithook(audit)\n'+binding_body+'\n'
+    audit_program+='print(json.dumps({"binding_open_events":opened}),flush=True)\n'
+    binding_audit.write_text(audit_program)
+    import tempfile
+    audit_base=pathlib.Path(tempfile.mkdtemp(prefix='dashboard-binding-'))
+    audit_area=audit_base/'stale';audit_area.mkdir()
+    audit_log=audit_area/'8.jsonl';audit_log.touch(mode=0o600)
+    audit_binding=audit_area/'8.binding.json';audit_binding.touch(mode=0o600)
+    audit_front=audit_area/'8.sh';audit_front.write_text('owned never-executed frontend\n');audit_front.chmod(0o500)
+    fields=('st_dev','st_ino','st_mode','st_uid','st_gid','st_nlink')
+    mapping={'copy_sha256':hashlib.sha256(audit_front.read_bytes()).hexdigest(),
+        'slot_identity':{name:[getattr(os.lstat(path),field) for field in fields] for name,path in
+            (('log',audit_log),('binding',audit_binding))}}
+    (audit_area/'8.lines.json').write_text(json.dumps(mapping)+'\n')
+    audit_args=[str(audit_base/name) for name in ('scope.json','shadow-set.json','dashboard-shape.json','risk.json',
+        'kill.json','duty.json','marker.json','legacy-bundles','legacy-source.git')]
+    for name in audit_args[:7]:pathlib.Path(name).write_bytes(b'{}\n')
+    for case,expression,chosen in (('selected','del(.body.flow)',True),('unselected','del(.body.telemetry)',False)):
+        argv=[sys.executable,'-I','-S','-B',str(binding_audit),str(root),str(audit_area),'8',
+            'evaluation-reasons',str(audit_front),call_line,expression,*audit_args]
+        rc,out,err=run(argv)
+        actual_binding=json.loads(audit_binding.read_bytes())
+        actual_opens=json.loads(out)['binding_open_events'] if out else []
+        print(json.dumps({'dashboard_enclosing_binding_before_assert':{'case':case,'argv':argv,'returncode':rc,
+            'stdout_hex':out.hex(),'stderr_hex':err.hex(),'binding':actual_binding,'open_events':actual_opens}},sort_keys=True),flush=True)
+        assert rc==0 and not err and actual_binding['dashboard_selected'] is chosen
+        assert not any(path.endswith('observer.py') for path in actual_opens)
+        expected_reads=[str(audit_area/'8.lines.json')]+audit_args[:7]+[str(root/name) for name in
+            ('scope/v1/evaluate-scope.sh','scope/v1/read-shadow-evidence.py','shadow/v1/_consumer.py',
+             'scripts/test/scope-qualification.test.sh')]+[str(audit_front)]
+        assert actual_opens==expected_reads[:1]+[str(audit_log),str(audit_binding)]+expected_reads[1:]+[str(audit_binding)]
+
     bound=dict(dashboard_selected=True,**binding)
     log=base/'8.jsonl';log.touch(mode=0o600)
     binding_path=base/'8.binding.json';binding_path.write_text(json.dumps(bound,separators=(',',':'))+'\n');binding_path.chmod(0o600)
@@ -2246,6 +2268,7 @@ def dashboard_phase_controls():
     assert not module['cost_dashboard_observer'](str(log),'evaluation-reasons',7,reader_argv)
     wrong_argv=list(reader_argv);wrong_argv[4]='wrong-bundle'
     assert not module['cost_dashboard_observer'](str(log),'evaluation-reasons',8,wrong_argv)
+    assert not module['cost_dashboard_observer'](str(log),'evaluation-reasons',8,reader_argv)
     composed=module['cost_frontend'](front,'dashboard-flow-frontend',helper)
     a=composed.index('scope_cost_original_cleanup()');b=composed.index('signal_exit()',a)
     cleanup=composed[a:b].replace(
@@ -2417,6 +2440,18 @@ identity = lambda value: (value.st_dev, value.st_ino, value.st_mode, value.st_ui
     value.st_gid, value.st_nlink, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
 
 
+def cost_dashboard_binding(source,line,expression,arguments,binding,copy_sha,base):
+    call='  expect_reasons "dashboard shape $dashboard_case" '+chr(92)
+    if type(source) is not str or hashlib.sha256(source.encode()).hexdigest()!=binding['source'][3]['sha256']:return False
+    if binding['private_frontend']['sha256']!=copy_sha:return False
+    lines=source.splitlines()
+    if lines.count(call)!=1 or type(line) is not str or not line.isdecimal():return False
+    if int(line)!=lines.index(call)+1 or expression!='del(.body.flow)':return False
+    expected=[os.path.join(base,name) for name in ('scope.json','shadow-set.json','dashboard-shape.json',
+        'risk.json','kill.json','duty.json','marker.json','legacy-bundles','legacy-source.git')]
+    if arguments!=expected or binding.get('index')!=8 or binding.get('glob')!='evaluation-reasons':return False
+    return True
+
 scope_source=[None]
 def measured(path, maximum):
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -2482,9 +2517,7 @@ except (OSError, AssertionError) as error:
     binding = {'status': 'OBSERVER_GAP', 'index': index, 'glob': glob,
                'boundary': 'case binding before evaluator', 'exception': type(error).__name__}
 if index==8 and binding['status']=='CASE_BINDING':
-    import runpy
-    module=runpy.run_path(str(area/'observer.py'))
-    selected=module['cost_dashboard_binding'](scope_source[0],dashboard_line,dashboard_expression,arguments,binding,mapping['copy_sha256'])
+    selected=cost_dashboard_binding(scope_source[0],dashboard_line,dashboard_expression,arguments,binding,mapping['copy_sha256'],str(area.parent))
     binding=dict(dashboard_selected=selected,**binding)
 raw = json.dumps(binding, separators=(',', ':'), ensure_ascii=True).encode() + b'\n'
 if len(raw) > 3072:
@@ -2568,7 +2601,7 @@ expect_reasons() {
   expected=$("$jq_bin" -c 'map(select(. != "scope.proposable")) + ["scope.sandbox-receipt-missing"] | sort | unique' <<<"$expected")
   shift 2
   local actual
-  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 8454 ]; then scope_dashboard_inflight=true; fi
+  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 8487 ]; then scope_dashboard_inflight=true; fi
   actual=$(evaluation_reasons "$@")
   scope_dashboard_inflight=false
   [ "$actual" = "$expected" ] || fail "$label expected $expected got $actual"
@@ -2592,7 +2625,7 @@ def heredoc(tag):
 prepare=heredoc('PY_STALE_PREPARE')
 functions=source[source.index('run_evaluator() {'):source.index('\nexpect_reasons() {')]
 functions=functions[:functions.index('\nexpect_validator_error() {')]+functions[functions.index('\nprepare_stale_binding() {'):]
-expected={'observer_source':'ec9a0dbbca6f2ce67f29f3fbeaeac12f380c88549b6137fc00ed439b6044abb3',
+expected={'observer_source':'374007fe4060938f6e552c5f0d152ca2a04655a042c35553ade31977f5dc5f18',
  'frontend_capture':'a21a722a59923fa6ad18f6f6dd26385d46dcd5a3733083f9d7625777d73c4af8',
  'emit_capture':'153556128c04167c2a73d6c91c86b37bd3e1d34eb35fdeea44e865803301afb4',
  'exit_capture':'95bc34214161aa79167d7f33e8cf4980d70177f7771fa5bf30672e8f0e1739ac'}
