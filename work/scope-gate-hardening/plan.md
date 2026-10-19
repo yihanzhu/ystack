@@ -9,7 +9,7 @@ Tracks #541. Risk is high. This is the nonterminal child-6 core. It authenticate
 the existing child-5 evidence at one exact revision. Issue #544 remains mandatory
 before child 6 completes or child 7 starts.
 
-Implementation PR: `review_size: accepted-exception`, 2,600–13,400 net changed
+Implementation PR: `review_size: accepted-exception`, 2,600–13,600 net changed
 lines. The private evidence reader, held-path and Git checks, closed evaluator
 relations, and a real two-principal origin fixture form one security boundary.
 Most of the range is proof: complete classification, bundle, Git, terminal and
@@ -1336,10 +1336,20 @@ including uint32 uid_t/gid_t. Check ctypes sizes, alignment and every offset.
 Call proc_pidinfo once with owned PID, flavor 13, arg zero and one zeroed 64-byte
 buffer. Missing symbol, unsupported ABI, denial, EINTR or return other than 64 is
 GAP with no retry. On exact success require matching PID; retain only PID, PPID,
-PGID, UID, numeric status and the bounded 16 comm bytes. Do not decode other fields
-or query argv, environment, a process table, descendants or another flavor.
-Do not use a sampler.
-This call runs only in the supervised helper, never in the reader thread; its
+PGID, UID, numeric status and the bounded 16 comm bytes. After that same-PID
+success, call proc_pidpath once for that PID through the same authenticated
+handle, with signature int(int,void*,uint32_t) and one zeroed 4,096-byte buffer.
+Bind its SDK declaration, buffer limit and libSystem export before use. Require
+an exact positive returned length below that limit and a matching NUL-terminated
+absolute path. Retain at most 256 path bytes as hex in optional image_path_hex;
+never truncate a longer path into a valid observation. Missing symbol, denial,
+EINTR, invalid type/length/termination, overlong data or encoding failure makes
+only that field GAP, preserving the valid six fields. Add no retry or fallback.
+Do not follow, normalize, open or query the returned pathname. The two queries
+are sequential, not an atomic identity proof; PID reuse or exec between them is
+not excluded. Apart from this image call, decode no other fields or query argv,
+environment, a process table, descendants or another flavor. Do not use a sampler.
+These calls run only in the supervised helper, never in the reader thread; their
 native duration has no synchronous one-second guarantee. All helper startup and
 authentication consume the same collection window. No new evaluator, reader or
 Git invocation is allowed; this helper is not a new product or runtime provider.
@@ -1356,9 +1366,10 @@ Retain at most 768 stdout bytes and 128 stderr bytes, fixed parsed fields and th
 observation status in one optional group of at most 1,024 encoded bytes. Overflow
 is GAP. Export only through the existing first-config failure record and its
 original eligible exits; no success output or new sink. Required old fields and
-all existing record/export/raw caps take priority. A matching PID/comm is only a
-post-launch stage clue, not birth identity, binary authentication, a blocked
-syscall or closure proof. It cannot authorize retry of the consumed reference.
+all existing record/export/raw caps take priority. A matching PID/comm or image
+pathname is only a post-launch stage clue, not birth identity, binary
+authentication, a blocked syscall or closure proof. It cannot authorize retry of
+the consumed reference.
 
 Before enabling this boundary, freeze its exact generated source and inverse.
 Use actual extracted ordinary controls for once-only/foreign-frame/other-call
@@ -1366,9 +1377,14 @@ rejection, exact counter/remaining admission, cancellation before and during spa
 the actual fixed helper and short TERM-resistant owned children, complete
 wait/group/pipe closure, source/runtime refusal, missing symbol, ABI/offset drift,
 exact and short native returns, denial/EINTR without retry, wrong PID/fields and
-16-byte/nonterminated comm encoding. Prove overflow and write-failure isolation,
-no extra native call, unchanged loaded-library boundary and exact frozen helper
-bytes. Ordinary local results do not establish the CI ABI, runtime or target state.
+16-byte/nonterminated comm encoding. For the image field, add an actual owned-child
+positive and controlled missing-symbol, denial/EINTR, invalid return/termination,
+wrong PID argument, overlong, binary-path encoding and cap/write-failure cases.
+Prove exactly one permitted call per API on the same PID, no image call after
+invalid short-info, valid six-field retention on image GAP, no pathname access,
+and unchanged cancellation, supervision and loaded-library boundary. Freeze the
+exact helper bytes and inverse. Ordinary local results do not establish the CI
+ABI, runtime or target state.
 Show original select arguments, results, exceptions, order and all deadlines
 unchanged; no artificial successful closure or extra evaluator/Git call. Keep every
 existing shared control. Measure the entire fresh recursive raw batch at 16 MiB
