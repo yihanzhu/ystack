@@ -9,7 +9,7 @@ Tracks #541. Risk is high. This is the nonterminal child-6 core. It authenticate
 the existing child-5 evidence at one exact revision. Issue #544 remains mandatory
 before child 6 completes or child 7 starts.
 
-Implementation PR: `review_size: accepted-exception`, 2,600–13,800 net changed
+Implementation PR: `review_size: accepted-exception`, 2,600–15,300 net changed
 lines. The private evidence reader, held-path and Git checks, closed evaluator
 relations, and a real two-principal origin fixture form one security boundary.
 Most of the range is proof: complete classification, bundle, Git, terminal and
@@ -17,7 +17,10 @@ authenticated-set controls, plus the same-contract owner, group, ACL, descriptor
 and receipt lifecycle. It also covers the complete fixed runtime guard and its
 owned native-format controls. It includes final-mode initialization and complete
 mode regressions for the five fixed fixture directories. The range preserves
-readable controls and does not relax tests, CI, review, or any acceptance standard.
+readable controls. The bounded first-Git sampler adds fixed tool/helper trust,
+owned supervision, a private report carrier and complete ordinary/real controls
+within this same diagnostic concern. It adds no generic process interface.
+The range does not relax tests, CI, review, or any acceptance standard.
 
 ## Files that change
 
@@ -432,8 +435,20 @@ failures, preserving the original error and preventing later probe/consumer use.
 Label controlled OS seams honestly. Linux must add no nofollow chmod. Same-uid
 owned controls prove construction only; the original full Mac must still prove
 this path with its real different-uid consumer and complete restoration. Include
-all old and new ordinary raw output under the original 16 MiB cap; do not truncate
-evidence, remove controls or relax cleanup to fit it.
+all old and new ordinary raw output under the private proof cap below; do not
+truncate evidence, remove controls or relax cleanup to fit it.
+
+The ordinary private proof cap remains 16 MiB. Only the complete proof package
+for the fixed first-Git sampler below may use 18 MiB, under the
+[approved bounded method](https://github.com/yihanzhu/ystack/issues/541#issuecomment-6290653581).
+That package includes every old and new raw record, complete report, source copy,
+encoding and positive/negative control. Measure its complete recursive bytes;
+projections do not prove it fits. Exceeding the cap stops publication. Keep every
+old control and raw field. Use only the existing lossless source sharing, with no
+truncation, hidden external payload or new compression protocol. This exception
+changes no source-read, stdout/stderr, group, record/export, interface, VM or other
+resource limit. Every reference to the ordinary private proof cap below uses this
+same narrow exception; unrelated proof retains its original limit.
 
 Run the real scope evaluator as the consumer account. The bundle and actual bare
 Git snapshot live outside the controlled store. Assert actual uid/gid, mode,
@@ -750,7 +765,7 @@ Collection, encoding or space failure omits only this field and cannot replace
 the original result or exception. Add no report on an original early-exit path,
 sink, writer, clock, query, callback, child or invocation. Keep all original fields,
 stdout/stderr and first-error ordering, the 65,536-byte child-output cap and the
-16 MiB ordinary raw cap. Guard bytes, safety reads, all local/global deadlines,
+ordinary private proof cap. Guard bytes, safety reads, all local/global deadlines,
 reap, pipes, PENDING, cleanup and restoration stay unchanged.
 
 Within this private boundary, use one zero-payload `.ready-complete` leaf at the
@@ -817,7 +832,8 @@ objects and 26 generated-source inverse checks and all other controls. Add no
 source read, query, OS/runtime/process/interface or trust root. This changes only
 report expression; no generic diff, compression, cache, logging framework or
 cross-run sharing. Measure the complete new batch's recursive raw under the same
-16 MiB cap; a projection cannot establish PASS or remove an earlier volume failure.
+ordinary private proof cap; a projection cannot establish PASS or remove an earlier
+volume failure.
 
 In existing CI, compare old and new observers on real owned calls and events.
 Cover identity refusal, real foreground return/reap, direct-callee stat/bool/errno,
@@ -878,8 +894,8 @@ Only `PY_GUARD_CONTROLS`, `PY_FIXTURE_OWNER_CHANNEL` and their necessary ordinar
 controls may change for this readiness boundary. Keep the four capture restrictions, classifiers,
 shared guard, entry and product consumer unchanged by it. Run the complete owner,
 21 layout and 17 same-call controls and static gates; measure the complete output
-against the original 16 MiB cap. Retain fresh exact-byte source preparation and
-the original same-final-head Mac/Linux, root-chain, restoration and G3 proof.
+against the ordinary private proof cap. Retain fresh exact-byte source preparation
+and the original same-final-head Mac/Linux, root-chain, restoration and G3 proof.
 
 Bind both complete composed scope stdin bodies in existing CI by bounded
 extraction, each body's digest and prelude-before-body order. For each body, run
@@ -1002,8 +1018,9 @@ owner receipt binds the reference child, rejects the empty original foreground
 proof and preserves the first failure. Ordinary same-UID controls do not prove the
 real Mac consumer or root chain. Preserve every existing ordinary/owner control,
 source inverse and safety proof. Measure the complete recursive new raw batch
-against 16 MiB. Complete fresh local proof, fresh independent source preparation
-and required CI before dispatching the corrective reference at that exact head.
+against the ordinary private proof cap. Complete fresh local proof, fresh independent
+source preparation and required CI before dispatching the corrective reference at
+that exact head.
 Do not hide source, remove controls or compress evidence to fit. This exception
 adds no identity/select observer, runtime, source download, administrator command,
 permission, further retry allowance or product behavior. Its removal does not
@@ -1311,86 +1328,190 @@ order and call counts. Add no extra select or other method call, generic registr
 arbitrary proxy or public API. If the fixed class cannot preserve those behaviors
 and original closure, STOP; do not select another interface.
 
-Allow only `first_git_process_snapshot` in this same private Mac fixture copy.
-Only at original select call 101, after 100 normal empty returns and no raised
-select, bind its live exact foreground frame/code, nine argv, selector and owned
-Popen PID. Invalid counters mean no observation; add no select or polling trigger.
-Require live cancelled exact False, a finite original end and at least three
-seconds remaining on that same monotonic clock. Consume the single attempt before
-spawn. Missing identity, cancellation or insufficient time means zero spawn/GAP;
-never use exception-mapping values, restart end or infer an outer budget.
-Run only the authenticated fixed Python P with -I -S -B and one frozen private
-helper source for this PID, at the same consumer UID with fixed C locale. Bind P,
-helper, consumer and ctypes bytes through the existing held/no-follow owner, ACL,
-mode, source and native-closure gates. Do not run ps or any setid helper, add a
-loader, or weaken the original runtime or system-cache authentication.
-Use only the helper's existing _DARWIN_ACL_FUNCTIONS.library handle for fixed
-/usr/lib/libSystem.B.dylib. Do not replace/reload that handle, change its ACL
-signatures, load libproc or another image, or use a fallback.
-Bind the installed SDK declarations and libSystem re-export evidence before use;
-header/stub hashes are provenance, not proof of the actual loaded library.
-On the original x86_64 runtime, require the declared proc_pidinfo signature
-int(int,int,uint64_t,void*,int), PROC_PIDT_SHORTBSDINFO 13 and the exact 64-byte
-proc_bsdshortinfo layout: four uint32 fields, comm[16], then eight uint32 fields,
-including uint32 uid_t/gid_t. Check ctypes sizes, alignment and every offset.
-Call proc_pidinfo once with owned PID, flavor 13, arg zero and one zeroed 64-byte
-buffer. Missing symbol, unsupported ABI, denial, EINTR or return other than 64 is
-GAP with no retry. On exact success require matching PID; retain only PID, PPID,
-PGID, UID, numeric status and the bounded 16 comm bytes. After that same-PID
-success, call proc_pidpath once for that PID through the same authenticated
-handle, with signature int(int,void*,uint32_t) and one zeroed 4,096-byte buffer.
-Bind its SDK declaration, buffer limit and libSystem export before use. Require
-an exact positive returned length below that limit and a matching NUL-terminated
-absolute path. Retain at most 256 path bytes as hex in optional image_path_hex;
-never truncate a longer path into a valid observation. Missing symbol, denial,
-EINTR, invalid type/length/termination, overlong data or encoding failure makes
-only that field GAP, preserving the valid six fields. Add no retry or fallback.
-Do not follow, normalize, open or query the returned pathname. The two queries
-are sequential, not an atomic identity proof; PID reuse or exec between them is
-not excluded. Apart from this image call, decode no other fields or query argv,
-environment, a process table, descendants or another flavor. Do not use a sampler.
-These calls run only in the supervised helper, never in the reader thread; their
-native duration has no synchronous one-second guarantee. All helper startup and
-authentication consume the same collection window. No new evaluator, reader or
-Git invocation is allowed; this helper is not a new product or runtime provider.
-This is one direct observation child in its own group with bounded pipes. Within
-the original end allow at most one second to collect and one second to terminate,
-kill if needed, wait and close its pipes, using the existing owned-child pattern.
-Check live cancellation during supervision; do not mask signals or swallow it.
-Keep original outer alarms effective. An early outer timeout still fails/PENDING;
-local admission does not promise outer time or successful closure. Uncertain
-observation-child closure means PENDING, no continuation, deletion or restoration.
-On known closure, unavailable/failed/invalid observation is GAP and original select
-still receives its original arguments once. Preserve all original calls and errors.
-Retain at most 768 stdout bytes and 128 stderr bytes, fixed parsed fields and the
-observation status in one optional group of at most 1,024 encoded bytes. Overflow
-is GAP. Export only through the existing first-config failure record and its
-original eligible exits; no success output or new sink. Required old fields and
-all existing record/export/raw caps take priority. A matching PID/comm or image
-pathname is only a post-launch stage clue, not birth identity, binary
-authentication, a blocked syscall or closure proof. It cannot authorize retry of
-the consumed reference.
+Keep `first_git_process_snapshot` as the single private observation boundary in
+this same disposable Mac fixture copy. Its sole live method is the approved
+fixed `/usr/bin/sample` route below. Preserve the prior proc-query source,
+ordinary controls, raw evidence and UNKNOWN findings. Do not invoke proc_pidinfo,
+proc_pidpath, ps, a process table, descendants or another PID query in this route.
+No query fallback, alternate collector, new Git reference, prewarm or retry is
+allowed. This is a bounded feasibility experiment, not a timeout repair.
 
-Before enabling this boundary, freeze its exact generated source and inverse.
-Use actual extracted ordinary controls for once-only/foreign-frame/other-call
-rejection, exact counter/remaining admission, cancellation before and during spawn,
-the actual fixed helper and short TERM-resistant owned children, complete
-wait/group/pipe closure, source/runtime refusal, missing symbol, ABI/offset drift,
-exact and short native returns, denial/EINTR without retry, wrong PID/fields and
-16-byte/nonterminated comm encoding. For the image field, add an actual owned-child
-positive and controlled missing-symbol, denial/EINTR, invalid return/termination,
-wrong PID argument, overlong, binary-path encoding and cap/write-failure cases.
-Prove exactly one permitted call per API on the same PID, no image call after
-invalid short-info, valid six-field retention on image GAP, no pathname access,
-and unchanged cancellation, supervision and loaded-library boundary. Freeze the
-exact helper bytes and inverse. Ordinary local results do not establish the CI
-ABI, runtime or target state.
-Show original select arguments, results, exceptions, order and all deadlines
-unchanged; no artificial successful closure or extra evaluator/Git call. Keep every
-existing shared control. Measure the entire fresh recursive raw batch at 16 MiB
-before publication, using only existing lossless source sharing. Retire this
-private observation after its actual evidence is used for a separately reviewed
-normal-path correction; keep the evidence and all shared lifecycle controls.
+| Fixed method limit | Requirement |
+| --- | --- |
+| Host and identity | Original macos-15-intel CI, consumer UID 56001 and its existing groups only. |
+| Sampler opportunities | At most one normal non-Git control, one real cancellation non-Git control, then one original owned first-Git sample. Both controls and all refusal proofs must pass before the Git sample. At most three starts total; no retry. |
+| Collection and closure | At most five seconds for startup, authentication, collection and complete report formation; then at most two seconds for termination, wait and pipe/group closure. All time remains inside the original deadlines. |
+| Original Git admission | Original select 101, after 100 normal empty returns, live cancellation False and at least eight seconds remaining to the original end. |
+| Report | One prebound private leaf and one raw report record per opportunity; at most 65,536 report bytes. A report at the limit is failure, not a complete stack. |
+| File growth limit | Only the sampler child sets RLIMIT_FSIZE soft=hard=65,536 before same-PID exec. Parent and original Git limits stay unchanged. |
+
+Allow only this tool's short suspension and resumption of the one owned target to
+obtain its stack. It changes target timing; do not describe it as passive reading.
+Keep the original 30-second Git deadline, 1,800-second outer alarm and original
+owner stop effective. Add no sudo, setid helper/service, task-read or attach
+permission, entitlement, signing, SIP change, install, network, runtime or tool.
+Existing fixture identity preparation grants none of those powers to the sampler.
+Any missing prerequisite in preparation means zero starts and STOP for this
+method. A failed control forbids every later sampler opportunity. Neither state
+changes the original Git call's semantics if that call is reached.
+
+Before the first sampler start, use the existing tool authentication boundary to
+hold and bind the actual system tool's physical path, complete bytes, owner,
+mode, ACL and named/held identity. Retain trusted interface material from that
+actual CI and its provenance. A local manual alone proves no CI identity,
+permission, exclusive creation or cancellation behavior. Do not execute help or
+version as another tool call. Missing or changed files, unknown provenance,
+extra dependencies or an unsupported interface stop with zero starts.
+Only after those checks confirm the exact syntax and meaning may the tool argv be:
+
+```text
+/usr/bin/sample PID 1 1 -file REPORT
+```
+
+PID comes only from the current owned child object. REPORT is only this
+opportunity's fixed, prebound private report path. The duration is one second;
+the interval is one millisecond. No name search, -wait, -mayDie, -e, -fullPaths,
+default /tmp report or TextEdit is allowed. The nominal duration does not bound
+startup or report formation; measure the whole five-second window.
+
+Use the existing authenticated physical P with -I -S -B, a fixed clean environment
+and C locale, and one frozen private helper. Bind P, helper and the actual resource
+module/source through the existing held/no-follow, owner, mode, ACL, source and
+native-closure checks. Keep the original runtime and system-cache authentication.
+The helper sets only the fixed file-size limit in this observation child, then
+execs the fixed sampler at the same PID. It cannot dispatch arbitrary commands or
+load another resource provider. There is one direct observation child in its own
+group with bounded pipes, never a second collector. Its startup, authentication,
+limit-setting and exec all consume the collection window. Failure consumes that
+opportunity without retry. Real child controls must prove the limit affects only
+this child; parent and original Git limits remain unchanged.
+
+Before any start, prove the tool's -file creation/overwrite semantics can meet
+one fixed leaf in an owned held private directory, no overwrite of an existing
+leaf, no following links and no other output file. Keep the path binding and
+held/name checks throughout use. Unknown semantics mean zero-start STOP; do not
+run first and add trust later. RLIMIT_FSIZE does not prove exclusive creation or
+restrict which file is written. No new file outside this boundary is permitted.
+After the writer closes, require stable held/name identity, a regular one-link
+file, exact bounded length and complete retained bytes before calling a report
+complete. Never follow paths found in the report or read other target files.
+
+The normal control uses one fresh same-UID non-Git short-lived child from the
+existing owner. Hold it at one fixed known waiting point. Its actual complete
+report must show an interpretable real wait frame or call chain. A process name,
+empty report, rc zero or hand-filled stack is insufficient. Before assertions,
+save complete report bytes, stdout/stderr, actual identity and measured times.
+Prove sampler normal exit, its entire owned group's disappearance, direct wait
+and all pipe closes. The target's original owner then uses its unchanged stop
+sequence to terminate and reap that target and close its group and pipes.
+
+The real cancellation control uses a second fresh same-UID non-Git child and
+the same tool/helper. At the original supervisor's first point at or after
+0.25 seconds from sampler launch, issue its existing cancellation request.
+Do not wait for an internal tool marker, select another instant or retry. If the
+tool exited before that point, cancellation is unproved and the control stops.
+Require an actual tool start, actual request and proved closure; arbitrary
+nonzero exit is insufficient. Record the internal tool stage UNKNOWN unless raw
+facts establish it. This one control does not cover every attach/suspend/resume
+window. Use only the existing stop sequence and each original owner to prove
+both complete owned groups terminated, direct waits succeeded and pipes closed.
+Do not require the target to continue running as a recovery proof. Its original
+owner must actually reclaim it. No manual SIGCONT, extra attach, root kill or
+new signal policy is allowed. Unproved closure means PENDING/STOP, zero deletion
+and no later sampler or real Git sample. Controlled OS seams cannot replace
+either real tool control.
+
+Only after both real controls and every refusal proof pass may the one original
+Git window use this method. Bind original select call 101, its preceding 100
+normal empty returns with no raised select, the exact live foreground frame/code,
+nine first-config argv, selector, current owned Popen and invocation. Invalid
+counters or bindings cause zero-start GAP. Require live cancelled exact False,
+a finite original end and at least eight seconds on that same monotonic clock.
+Consume once-only state before spawn. Never infer time or cancellation from an
+exception mapping, restart end or add a polling trigger. Preserve original
+argv/env, timeout expression, argument evaluation order and counts, and all
+recheck/record_command positions. Add no evaluator, reader or Git invocation.
+The two controls are not Git references. Same UID does not establish access to
+protected Git; denial of that actual target remains a failed observation.
+
+During supervision, check live cancellation and keep original signals and outer
+alarms effective. An admitted time window guarantees neither scheduling nor
+closure. Original cancellation/deadline events take priority; unknown closure
+still remains PENDING even when such an event occurs:
+
+| Actual original-call state | Required behavior |
+| --- | --- |
+| Real original cancellation or original deadline reached | Propagate through the original cancellation, exception and owner-cleanup chain. Do not swallow the event, block the original stop or extend its deadline. |
+| No original cancellation, still within the original deadline, observation child safely closed | Observer timeout, denial, nonzero exit or missing/invalid/over-limit report ends this diagnostic opportunity as GAP. Preserve failure raw, do not retry, and delegate original select with its original arguments exactly once. Zero-start GAP does the same. Do not stop Git early, manufacture/replace its exception or advance product state. |
+| Observation group, direct wait or pipe closure unknown | PENDING/STOP, no continuation, zero deletion and restoration refused. Perform only the original owner's existing stop responsibility, without new signal, permission or time. |
+
+A wait, cached returncode, report file, normal sampler exit or one successful
+cancellation is not a general closure guarantee. Observation-child closure does
+not prove target closure, birth identity, atomic image binding or restoration.
+The original Git owner must prove its actual target closure in that same run.
+
+Retain at most 768 stdout bytes and 128 stderr bytes under their existing caps.
+The actual tool controls must fit full stdout/stderr inside them; overflow fails,
+never truncates into success. Keep the existing optional group at 1,024 encoded
+bytes with its required fields and original failure-export eligibility unchanged.
+Do not insert report bytes into that group or change its old fields' meaning.
+Uncollected proc-query fields stay GAP; do not reuse an earlier invocation's facts.
+The sole new carrier is one private raw report record per fixed opportunity,
+through the same owned private proof chain. Retain full report bytes and SHA,
+source/copy/invocation and PID/call binding, actual UID, fixed argv, exit, measured
+timing and group/wait/pipe closure facts. Use the existing lossless byte encoding.
+A missing report has an explicit missing state; partial or invalid bytes are
+failure raw, never a complete stack or invented empty success. If size reaches
+65,536, SIGXFSZ occurs or another abnormal exit prevents completeness, fail this
+opportunity. Expected cancellation passes only its request-and-closure control,
+not normal report completeness. Such failure blocks later sampler starts in
+preparation/controls; the original Git window follows the three branches above.
+
+These at most three report leaves and records are private diagnostic raw only.
+They add no product observation field, public/success export or new failure-export
+allowance. The old records/exporters retain all required bytes and their original
+caps and priority. Count complete reports, failure raw, encoded records, copies,
+controls and source proof under the narrow private proof cap above; no report is
+an uncounted external payload. Read, seal and clean a report only after writer
+closure and all original identity and ownership gates. Unknown closure grants
+neither report cleanup nor restoration permission.
+
+Implement this boundary in dependency order: fixed tool/interface and exclusive
+report trust; child-only helper limit and bounded supervision; report binding;
+then the original select integration and complete controls. Before enabling any
+real sampler opportunity, freeze exact generated source and inverse and run
+ordinary controls on the actual extracted observation, original select and owner
+boundaries. Ordinary controls launch no sampler; they cannot replace or enlarge
+the three real opportunities. Cover source/interface refusal, wrong frame/argv/
+invocation, later selects, consumed attempts, insufficient time and cancellation before launch,
+with zero starts. Cover denial, early target exit, missing/malformed reports,
+limit hit/SIGXFSZ, launch/report timeout, real cancellation, and wait/group/pipe
+failure. Use actual fixed child limit controls to prove online enforcement and
+closure after a limit failure; a size check after unbounded writing is not proof.
+Keep controlled OS seams explicit and all existing ordinary/shared controls.
+
+Prove each of the three original-call branches and zero-start delegation through
+the actual boundaries, not a mirrored predicate. Closed-observer failure must
+delegate exactly once without stopping Git early. Preparation/control STOP must
+block later sampler starts. Preserve original argument evaluation order/counts,
+exception object and cause/context, original frames in order, signal/wait/finally
+actions and original stop timing. Prove once-only fixed opportunities and absence
+of live proc queries, extra Git, fallback or retries. Cover existing-leaf/link,
+identity drift, wrong owner/type/nlink, incomplete writer, encoding/write and
+all report/group/export/raw limits without losing original fields or failure.
+A simulated collector or synthetic stack cannot establish real tool controls.
+
+Require fresh independent exact-head/base source acceptance and required CI on
+the actual new bytes before the original CI opportunities. Old source acceptance
+cannot enable this method. Any unproved safe supervision, file trust, complete
+bounded output or control closure stops this route without a substitute. Retain
+all failure raw and UNKNOWN findings. A useful stack identifies only the observed
+execution/wait location under timing interference. It proves no root cause, repair,
+platform acceptance or merge permission. A correction needs normal plan gates,
+implementation and independent review. Retire the live sampler after its facts
+serve that separately reviewed correction; preserve its evidence and lifecycle
+controls. Complete final same-head Mac then Linux, real restoration, historical
+E_STALE resolution, separate G3, protected merge and #544 remain mandatory.
 
 For select counts retain only entered, returned, raised, nonempty, events_total
 and last_length.
@@ -1428,8 +1549,9 @@ Restore the exact temporary binding in finally on every exit, including install,
 constructor, delegation, cancellation and cleanup failures. This restores no
 child or filesystem state and grants no cleanup permission. Prove native resource
 closure and original cancellation through the actual boundary before enabling it.
-Outside first_git_process_snapshot, add no queries, clocks or processes. Do not
-replace original Popen/read/write/killpg/wait or their signal handling, add threads
+Outside first_git_process_snapshot and its two fixed non-Git controls, add no
+queries, clocks or processes. Do not replace original Popen/read/write/killpg/wait
+or their signal handling, add threads
 or grace, or alter an original deadline or exception beyond the owned cleanup
 contract above. A select wrapper adds a private
 traceback frame: bind it honestly and retain every original
@@ -1541,10 +1663,10 @@ controls retire; retain old raw evidence. These enablement proofs precede fresh
 independent source preparation and the original full Mac then same-H Linux proof.
 They neither establish the actual CI cause nor replace restoration or G3.
 Label controlled OS errors honestly; preserve all old and new ordinary raw output
-under the original 16 MiB cap without truncation or removal of controls.
-Apart from the fixed built-in carrier qualification, prove no added object
-queries, unchanged original error/status/calls and no success export within the
-same caps.
+under the ordinary private proof cap without truncation or removal of controls.
+Apart from the fixed built-in carrier qualification and the bounded sampler
+method, prove no added object queries, unchanged original error/status/calls and
+no success export within the same caps.
 Freeze complete generated copies before
 these ordinary controls. For the launch fields, use actual owned link creation and
 the original extracted selection/launch sites to prove that each retained value
