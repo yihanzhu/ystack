@@ -2656,7 +2656,7 @@ expect_reasons() {
   expected=$("$jq_bin" -c 'map(select(. != "scope.proposable")) + ["scope.sandbox-receipt-missing"] | sort | unique' <<<"$expected")
   shift 2
   local actual
-  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 8859 ]; then scope_dashboard_inflight=true; fi
+  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 8893 ]; then scope_dashboard_inflight=true; fi
   actual=$(evaluation_reasons "$@")
   scope_dashboard_inflight=false
   [ "$actual" = "$expected" ] || fail "$label expected $expected got $actual"
@@ -2831,7 +2831,7 @@ def authentication_rows_report(payload):
         reference={'order':order,'case':'auth_row','sha256':hashlib.sha256(body).hexdigest(),'bytes':len(body),'rows':1}
         carrier=canonical({'complete_owned_payload':reference,'payload':declaration})
         reference_cost=len(canonical(reference))
-        declaration_cost=len(carrier)+1+len(canonical(reference))+1
+        declaration_cost=len(carrier)+1+len(json.dumps(reference,sort_keys=True).encode())+2
         if declaration_cost+count*reference_cost>=count*len(raw):continue
         declarations[order]=declaration;references[raw]=reference;planned_index.append(reference);cost+=declaration_cost
     if not declarations:return payload
@@ -2847,7 +2847,7 @@ def authentication_rows_report(payload):
         raw=canonical(value)
         reference={'order':order,'case':'observer_actual:'+payload['observer_actual'],'sha256':hashlib.sha256(raw).hexdigest(),
             'bytes':len(raw),'rows':len(rows)}
-        return len(canonical({'complete_owned_payload':reference,'payload':value}))+1+len(canonical(reference))+1
+        return len(canonical({'complete_owned_payload':reference,'payload':value}))+1+len(json.dumps(reference,sort_keys=True).encode())+2
     if cost+report_cost(projected,len(planned_index))>=report_cost(payload,len(evidence)):return payload
     for order,declaration in declarations.items():
         if completed_evidence(declaration)!=planned_index[order]:raise ValueError('authentication declaration mismatch')
@@ -2856,7 +2856,7 @@ def authentication_rows_report(payload):
     return projected
 
 def authentication_rows_controls():
-    import contextlib,copy,io
+    import contextlib,copy,io,types
     def canonical(value):return json.dumps(value,sort_keys=True,separators=(',',':')).encode()
     row={'busy':False,'capacity':False,'code':101,'exception':'x'*700,'filename':1,'hit':True,'insert':False,
         'negative_hit':False,'nodes':0,'outside':None,'qualify':False,'retained_before':False,'set':1}
@@ -2916,8 +2916,42 @@ def authentication_rows_controls():
     assert len(evidence)==before
     # The ordinary control uses the same carriers and final index as every other payload.
     for item in records+second_records:print(json.dumps(item,sort_keys=True,separators=(',',':')),flush=True)
+    mixed_before=list(evidence)
+    profitable=[dict(row,code=code) for code in (201,202,203,204)]
+    near=dict(row,exception='x'*10)
+    mixed_rows=[item for item in profitable for _ in range(20)]+[near]*7
+    mixed={'observer_actual':'identity','authentication':{'rows':mixed_rows}}
+    mixed_stream=io.StringIO()
+    with contextlib.redirect_stdout(mixed_stream):
+        mixed_projected=authentication_rows_report(mixed)
+        completed_evidence(mixed_projected)
+    mixed_records=[json.loads(line) for line in mixed_stream.getvalue().splitlines()]
+    for item in mixed_records:print(json.dumps(item,sort_keys=True,separators=(',',':')),flush=True)
+    candidate_before=list(evidence[:len(mixed_before)+4]);candidate_index=list(candidate_before)
+    candidate_writer=types.FunctionType(completed_evidence.__code__,dict(completed_evidence.__globals__,evidence=candidate_index))
+    candidate_stream=io.StringIO()
+    with contextlib.redirect_stdout(candidate_stream):candidate=candidate_writer({'auth_row':near})
+    baseline_index=list(mixed_before)
+    baseline_writer=types.FunctionType(completed_evidence.__code__,dict(completed_evidence.__globals__,evidence=baseline_index))
+    baseline_stream=io.StringIO()
+    with contextlib.redirect_stdout(baseline_stream):baseline_writer(mixed)
+    def index_bytes(value):return json.dumps(value,sort_keys=True).encode()
+    full_cost=7*len(canonical(near));reference_cost=7*len(canonical(candidate))
+    legacy_cost=len(candidate_stream.getvalue().encode())+len(canonical(candidate))+1+reference_cost
+    actual_cost=len(candidate_stream.getvalue().encode())+len(index_bytes(candidate_index))-len(index_bytes(candidate_before))+reference_cost
+    mixed_cost=len(mixed_stream.getvalue().encode())+len(index_bytes(evidence))
+    baseline_cost=len(baseline_stream.getvalue().encode())+len(index_bytes(baseline_index))
+    threshold_reference=completed_evidence({'authentication_rows_threshold':{
+        'candidate_stdout':candidate_stream.getvalue(),'candidate_index_utf8':index_bytes(candidate_index).decode(),'candidate_index_before_utf8':index_bytes(candidate_before).decode(),
+        'full_report_stdout':baseline_stream.getvalue(),'full_report_index_utf8':index_bytes(baseline_index).decode(),
+        'mixed_index_utf8':index_bytes(evidence).decode(),'full_group_bytes':full_cost,'legacy_group_bytes':legacy_cost,'actual_group_bytes':actual_cost,
+        'mixed_output_and_index_bytes':mixed_cost,'full_output_and_index_bytes':baseline_cost}})
+    assert len(canonical(near))==200 and (full_cost,legacy_cost,actual_cost)==(1400,1396,1406)
+    assert mixed_cost<baseline_cost
+    assert mixed_projected['authentication']['rows'][-7:]==[near]*7,'non-beneficial near-threshold rows must remain full'
+    assert all(set(item)=={'order','case','sha256','bytes','rows'} for item in mixed_projected['authentication']['rows'][:-7])
     return {'authentication_rows_controls':'PASS','reconstruction':True,'negative_cases':checks,
-        'identity_field_order_multiplicity':True,'singleton_no_benefit_full':True,'encoding_and_write_identity':True}
+        'identity_field_order_multiplicity':True,'singleton_no_benefit_full':True,'encoding_and_write_identity':True,'mixed_near_threshold_reference':threshold_reference}
 
 def heredoc(tag):
     mark="<<'"+tag+"'";start=source.index('\n',source.index(mark))+1
