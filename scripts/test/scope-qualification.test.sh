@@ -2656,7 +2656,7 @@ expect_reasons() {
   expected=$("$jq_bin" -c 'map(select(. != "scope.proposable")) + ["scope.sandbox-receipt-missing"] | sort | unique' <<<"$expected")
   shift 2
   local actual
-  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 9451 ]; then scope_dashboard_inflight=true; fi
+  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 9466 ]; then scope_dashboard_inflight=true; fi
   actual=$(evaluation_reasons "$@")
   scope_dashboard_inflight=false
   [ "$actual" = "$expected" ] || fail "$label expected $expected got $actual"
@@ -5497,7 +5497,7 @@ def genuine_relation_controls(area):
     snapshot=location/'preexec';snapshot.mkdir()
     assert snapshot.parent==location and snapshot.is_relative_to(area) and not snapshot.is_relative_to(root)
     assert snapshot!=Path(sys.argv[1]).parent and snapshot!=(root/'scripts/test/scope-qualification.test.sh').parent
-    for fault in ('direct','reader','missing','wrong-sink','wrong-invocation','overflow','format','write','unknown','success','source-drift'):
+    for fault in ('direct','reader','missing','wrong-sink','wrong-invocation','overflow','format','write','unknown','success','source-drift','parent-drift'):
         base=location/fault;base.mkdir();package=base/'package';(package/'scope/v1').mkdir(parents=True)
         for name in ('evaluate-scope.sh','read-shadow-evidence.py'):
             path=package/'scope/v1'/name;path.write_bytes((root/'scope/v1'/name).read_bytes());path.chmod(0o755 if name.endswith('.sh') else 0o644)
@@ -5517,12 +5517,27 @@ def genuine_relation_controls(area):
             'reader_sha256':hashlib.sha256(reader.encode()).hexdigest(),'original_sha256':capture.binding['original_sha256'],
             'front_source':front,'reader_source':reader_report,'snapshot_root':str(snapshot),'sequence':len(reports)}),flush=True)
         reader_selector_validate(capture,reader_report)
+        if fault=='direct':
+            assert capture.sample_window_first
+            assert capture.paths[1].with_name('first-git-sample-helper.py').read_bytes()==capture.sample_helper_raw
+            assert (base/'first-git-sampler').is_dir()
+            sampler_binding=json.loads((base/'first-git-sampler-binding.json').read_bytes())
+            assert sampler_binding['copy_sha256']==capture.binding['copy_sha256'] and sampler_binding['invocation']==capture.token
         if fault=='source-drift':
             with capture.paths[0].open('ab') as stream:stream.write(b'\n')
             try:capture.before_call()
             except module.Refusal as error:assert error.code=='E_STALE'
             else:raise AssertionError('changed actual source accepted')
             reports.append({'case':fault,'actual_copy_recheck':'E_STALE','spawned':False})
+            for item in capture.held:item.close()
+            continue
+        if fault=='parent-drift':
+            (capture.paths[1].parent/'owned-parent-drift').write_bytes(b'owned-parent-drift\n')
+            try:capture.before_call()
+            except module.Refusal as error:assert error.code=='E_STALE'
+            else:raise AssertionError('changed actual held parent accepted')
+            assert not capture.restored and capture.pending.is_file()
+            reports.append({'case':fault,'actual_parent_recheck':'E_STALE','spawned':False})
             for item in capture.held:item.close()
             continue
         prelude=front[:front.index('sha256_path() {')]
@@ -5599,7 +5614,7 @@ def genuine_relation_controls(area):
         reports.append({'case':fault,'actual_returncode':result.returncode,'stdout_hex':result.stdout.hex(),
             'stderr_utf8':result.stderr.decode(),'capture_utf8':raw.decode(),'restore':capture.restored,
             'pending':capture.pending.exists(),'normal_admission':'actual original wait/EOF segment' if fault=='success' else None})
-    assert len(list(snapshot.iterdir()))==22
+    assert len(list(snapshot.iterdir()))==24
     return completed_evidence({'genuine_relation_controls':reports,'stable_sink_controls':stability,'scope':'actual insertions and original admission/exception boundaries with fixed ordinary UID and standalone entry adapters; no full evaluator/P/jq/root proof'})
 
 def link_mode_controls(area):
@@ -13011,11 +13026,6 @@ def _scope_sample_original(owner,pid,end,cancelled):
    reversed_front=reversed_front.replace(insertion+anchor,anchor,1) if anchor==launch else reversed_front.replace(anchor+insertion,anchor,1)
   assert reversed_front==front and self.copies[1].decode().replace(record+boundary,boundary,1).replace(selector_setup+select_anchor,select_anchor,1).replace(select_new,select_old,1)==reader
   self.binding['copy_sha256']=[sha(raw) for raw in self.copies]
-  self.held=[]
-  for path,raw in zip(self.paths,self.copies):
-   self.replace(path,raw)
-   item=c._hold_bytes(str(path),c.EXECUTABLE_LIMIT);assert item.raw==raw;item.recheck('E_STALE');self.held.append(item)
-  self.restored=False
   if self.sample_window_first:
    self.sample_helper_raw=ast.literal_eval(next(n.value for n in helper_tree.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='_scope_sample_helper_raw' for t in n.targets)))
    sample_helper=self.paths[1].with_name('first-git-sample-helper.py')
@@ -13033,6 +13043,11 @@ def _scope_sample_original(owner,pid,end,cancelled):
    fd=os.open(base/'first-git-sampler-binding.json',os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o444)
    try:assert os.write(fd,sample_binding_raw)==len(sample_binding_raw);os.fchmod(fd,0o444)
    finally:os.close(fd)
+  self.held=[]
+  for path,raw in zip(self.paths,self.copies):
+   self.replace(path,raw)
+   item=c._hold_bytes(str(path),c.EXECUTABLE_LIMIT);assert item.raw==raw;item.recheck('E_STALE');self.held.append(item)
+  self.restored=False
  def before_call(self):
   for item,raw in zip(self.held,self.copies):item.recheck('E_STALE');assert item.raw==raw
   helper=c._hold_bytes(str(self.paths[1].with_name('first-git-process-helper.py')),c.EXECUTABLE_LIMIT)
