@@ -2656,7 +2656,7 @@ expect_reasons() {
   expected=$("$jq_bin" -c 'map(select(. != "scope.proposable")) + ["scope.sandbox-receipt-missing"] | sort | unique' <<<"$expected")
   shift 2
   local actual
-  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 8893 ]; then scope_dashboard_inflight=true; fi
+  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 8993 ]; then scope_dashboard_inflight=true; fi
   actual=$(evaluation_reasons "$@")
   scope_dashboard_inflight=false
   [ "$actual" = "$expected" ] || fail "$label expected $expected got $actual"
@@ -2773,185 +2773,285 @@ from pathlib import Path
 import ast,hashlib,importlib.util,json,os,pwd,re,signal,stat,subprocess,sys,tempfile,time,types,shutil,traceback
 source=Path(sys.argv[1]).read_text()
 evidence=[]
-def completed_evidence(payload):
+def evidence_reference(payload,order):
     raw=json.dumps(payload,sort_keys=True,separators=(',',':')).encode()
     kind=next(iter(payload));value=payload[kind]
-    reference={'order':len(evidence),'case':kind+(':'+value if type(value) is str else ''),'sha256':hashlib.sha256(raw).hexdigest(),
-        'bytes':len(raw),'rows':len(payload.get('authentication',{}).get('rows',[])) if isinstance(payload.get('authentication'),dict) else 1}
+    if kind=='auth_rows':
+        rows=len(json.loads(value) if type(value) is str else value)
+    elif 'authentication_blocks' in payload:
+        rows=payload['authentication_blocks']['count']
+    else:rows=len(payload.get('authentication',{}).get('rows',[])) if isinstance(payload.get('authentication'),dict) else 1
+    return {'order':order,'case':kind+(':'+value if type(value) is str and kind!='auth_rows' else ''),
+        'sha256':hashlib.sha256(raw).hexdigest(),'bytes':len(raw),'rows':rows}
+def completed_evidence(payload):
+    reference=evidence_reference(payload,len(evidence))
     print(json.dumps({'complete_owned_payload':reference,'payload':payload},sort_keys=True,separators=(',',':')),flush=True)
     evidence.append(reference)
     return reference
 AUTHENTICATION_ROW_FIELDS={'busy','capacity','code','exception','filename','hit','insert','negative_hit',
     'nodes','outside','qualify','retained_before','set'}
-def authentication_rows_restore(projected,declarations,index,report_order):
+def authentication_block_input(payload):
+    if 'mac_observer_version' not in payload:
+        rows=payload['authentication']['rows']
+        return rows,'canonical',None,None,None
+    stderr=payload['stderr'];lines=stderr.splitlines(keepends=True)
+    found=[i for i,line in enumerate(lines) if line.startswith('AUTH_RESULT ')]
+    if len(found)!=1:raise ValueError('authentication producer line ambiguous')
+    position=found[0];line=lines[position]
+    if not line.endswith('\n'):raise ValueError('authentication producer line incomplete')
+    facts=json.loads(line[len('AUTH_RESULT '):-1])
+    keys=['requests','filename_memberships','code_set_memberships','new_actual_objects','rows','events','strong_references']
+    if type(facts) is not dict or list(facts)!=keys or 'AUTH_RESULT '+json.dumps(facts)+'\n'!=line:
+        raise ValueError('authentication producer default format mismatch')
+    rows=facts['rows']
+    prefix='AUTH_RESULT '+json.dumps({key:facts[key] for key in keys[:4]})[:-1]+', "rows": ['
+    suffix='], '+json.dumps({key:facts[key] for key in keys[5:]})[1:]+'\n'
+    if prefix+json.dumps(rows)[1:-1]+suffix!=line:raise ValueError('authentication producer rows mismatch')
+    return rows,'default',''.join(lines[:position])+prefix,suffix+''.join(lines[position+1:]),line
+
+def authentication_blocks_restore(projected,declarations,index,report_order):
     def canonical(value):return json.dumps(value,sort_keys=True,separators=(',',':')).encode()
-    authentication=projected['authentication'];binding=authentication['rows_binding'];rows=[]
-    for item in authentication['rows']:
-        if type(item) is dict and set(item)=={'order','case','sha256','bytes','rows'}:
-            reference=item;order=reference['order']
-            if type(order) is not int or not 0<=order<report_order or order not in declarations:
-                raise ValueError('authentication row reference unavailable')
-            declaration=declarations[order];raw=canonical(declaration)
-            expected={'order':order,'case':'auth_row','sha256':hashlib.sha256(raw).hexdigest(),'bytes':len(raw),'rows':1}
-            if canonical(reference)!=canonical(expected) or order>=len(index) or canonical(index[order])!=canonical(expected) or set(declaration)!={'auth_row'}:
-                raise ValueError('authentication row reference mismatch')
-            if type(declaration['auth_row']) is not dict or set(declaration['auth_row'])!=AUTHENTICATION_ROW_FIELDS:
-                raise ValueError('authentication declaration row schema mismatch')
-            rows.append(declaration['auth_row'])
+    binding=projected['authentication_blocks'];format_=binding['format']
+    fields={'format','width','count','bytes','sha256','projected_bytes','projected_sha256','payload_bytes','payload_sha256'}
+    if format_=='default':fields|={'line_bytes','line_sha256','stderr_bytes','stderr_sha256'}
+    if set(binding)!=fields or format_ not in ('canonical','default') or type(binding['width']) is not int or binding['width']!=2:
+        raise ValueError('authentication block binding mismatch')
+    for key in ('count','bytes','projected_bytes','payload_bytes')+ (('line_bytes','stderr_bytes') if format_=='default' else ()):
+        if type(binding[key]) is not int or binding[key]<0:raise ValueError('authentication block count type mismatch')
+    if format_=='default':
+        carrier=projected['stderr']
+        if type(carrier) is not dict or set(carrier)!={'prefix','blocks','suffix'}:raise ValueError('authentication stderr carrier mismatch')
+        blocks=carrier['blocks']
+    else:blocks=projected['authentication']['rows']
+    if type(blocks) is not list:raise ValueError('authentication block array mismatch')
+    rows=[];literals=[];used=set();first_references=[]
+    for position,item in enumerate(blocks):
+        reference=None
+        if type(item) is dict:
+            if set(item)!={'order','case','sha256','bytes','rows'}:raise ValueError('authentication block reference schema mismatch')
+            reference=item;order=item['order']
+            if type(order) is not int or not 0<=order<report_order or order not in declarations or order>=len(index):
+                raise ValueError('authentication block reference unavailable')
+            declaration=declarations[order]
+            if set(declaration)!={'auth_rows'}:raise ValueError('authentication block declaration mismatch')
+            item=declaration['auth_rows'];body=canonical(declaration)
+            decoded=json.loads(item) if type(item) is str else item
+            expected={'order':order,'case':'auth_rows','sha256':hashlib.sha256(body).hexdigest(),'bytes':len(body),'rows':len(decoded)}
+            if canonical(reference)!=canonical(expected) or canonical(index[order])!=canonical(expected):
+                raise ValueError('authentication block reference mismatch')
+            if order not in used:first_references.append(order)
+            used.add(order)
+        if format_=='default':
+            if type(item) is not str:raise ValueError('authentication literal block mismatch')
+            block=json.loads(item)
+            if json.dumps(block)!=item:raise ValueError('authentication default block mismatch')
+            literals.append(item[1:-1])
         else:
-            if type(item) is not dict or set(item)!=AUTHENTICATION_ROW_FIELDS:
-                raise ValueError('authentication full row schema mismatch')
-            rows.append(item)
-    projected_raw=canonical(authentication['rows']);raw=canonical(rows)
-    if (len(rows),len(projected_raw),hashlib.sha256(projected_raw).hexdigest(),len(raw),hashlib.sha256(raw).hexdigest())!=(
-            binding['count'],binding['bytes'],binding['sha256'],binding['full_bytes'],binding['full_sha256']):
-        raise ValueError('authentication row array mismatch')
-    restored=dict(projected);restored['authentication']=dict(authentication)
-    restored['authentication'].pop('rows_binding');restored['authentication']['rows']=rows
+            if type(item) is not list:raise ValueError('authentication complete block mismatch')
+            block=item
+        if type(block) is not list or not 1<=len(block)<=2 or (position<len(blocks)-1 and len(block)!=2):
+            raise ValueError('authentication block width mismatch')
+        if any(type(row) is not dict or set(row)!=AUTHENTICATION_ROW_FIELDS for row in block):
+            raise ValueError('authentication row schema mismatch')
+        rows.extend(block)
+    if used!=set(declarations) or first_references!=list(declarations):raise ValueError('authentication block declarations not closed')
+    raw=(json.dumps(rows).encode() if format_=='default' else canonical(rows));encoded=canonical(blocks)
+    if (len(rows),len(raw),hashlib.sha256(raw).hexdigest(),len(encoded),hashlib.sha256(encoded).hexdigest())!=(
+            binding['count'],binding['bytes'],binding['sha256'],binding['projected_bytes'],binding['projected_sha256']):
+        raise ValueError('authentication block array mismatch')
+    restored=dict(projected);restored.pop('authentication_blocks')
+    if format_=='default':
+        restored['stderr']=carrier['prefix']+', '.join(literals)+carrier['suffix']
+        actual_rows,actual_format,unused_prefix,unused_suffix,line=authentication_block_input(restored)
+        stderr=restored['stderr'].encode()
+        if actual_rows!=rows or (len(line.encode()),hashlib.sha256(line.encode()).hexdigest(),len(stderr),hashlib.sha256(stderr).hexdigest())!=(
+                binding['line_bytes'],binding['line_sha256'],binding['stderr_bytes'],binding['stderr_sha256']):
+            raise ValueError('authentication complete stderr mismatch')
+    else:
+        restored['authentication']=dict(projected['authentication']);restored['authentication']['rows']=rows
     raw=canonical(restored)
     if (len(raw),hashlib.sha256(raw).hexdigest())!=(binding['payload_bytes'],binding['payload_sha256']):
-        raise ValueError('authentication payload mismatch')
+        raise ValueError('authentication complete payload mismatch')
     return restored
 
-def authentication_rows_report(payload):
-    def canonical(value):return json.dumps(value,sort_keys=True,separators=(',',':')).encode()
-    authentication=payload['authentication']
-    if authentication is None:return payload
-    rows=authentication['rows'];original=canonical(payload);groups={}
-    for row in rows:
-        if type(row) is not dict or set(row)!=AUTHENTICATION_ROW_FIELDS:
+def authentication_blocks_evidence(payload):
+    active=sys.exc_info()
+    original_error=active[1]
+    if original_error is not None:
+        original_cause,original_context,original_suppress=original_error.__cause__,original_error.__context__,original_error.__suppress_context__
+    try:
+        def canonical(value):return json.dumps(value,sort_keys=True,separators=(',',':')).encode()
+        targeted=(payload.get('observer_actual') in ('identity','errno','bool','gap') and type(payload.get('authentication')) is dict or
+            payload.get('classifier_sequence') in ('watched','bound') and payload.get('version') in ('original','cached') or
+            payload.get('mac_observer_version') in ('new','wrong-code-same-name','uncached-modern'))
+        if not targeted or payload.get('authentication',True) is None:return completed_evidence(payload)
+        original=canonical(payload);rows,format_,prefix,suffix,line=authentication_block_input(payload)
+        if type(rows) is not list or any(type(row) is not dict or set(row)!=AUTHENTICATION_ROW_FIELDS for row in rows):
             raise ValueError('authentication original row schema mismatch')
-        raw=canonical(row)
-        if raw not in groups:groups[raw]=[row,0]
-        groups[raw][1]+=1
-    declarations={};references={};planned_index=list(evidence);cost=0
-    for raw,(row,count) in groups.items():
-        if count<2:continue
-        declaration={'auth_row':row};body=canonical(declaration);order=len(planned_index)
-        reference={'order':order,'case':'auth_row','sha256':hashlib.sha256(body).hexdigest(),'bytes':len(body),'rows':1}
-        carrier=canonical({'complete_owned_payload':reference,'payload':declaration})
-        reference_cost=len(canonical(reference))
-        declaration_cost=len(carrier)+1+len(json.dumps(reference,sort_keys=True).encode())+2
-        if declaration_cost+count*reference_cost>=count*len(raw):continue
-        declarations[order]=declaration;references[raw]=reference;planned_index.append(reference);cost+=declaration_cost
-    if not declarations:return payload
-    projected=dict(payload);projected['authentication']=dict(authentication)
-    projected_rows=[references[canonical(row)] if canonical(row) in references else row for row in rows]
-    projected['authentication']['rows']=projected_rows
-    raw=canonical(projected_rows);full=canonical(rows)
-    projected['authentication']['rows_binding']={'count':len(rows),'bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest(),
-        'full_bytes':len(full),'full_sha256':hashlib.sha256(full).hexdigest(),
-        'payload_bytes':len(original),'payload_sha256':hashlib.sha256(original).hexdigest()}
-    # Include the report declaration and its final index entry, whose order and digest also change.
-    def report_cost(value,order):
-        raw=canonical(value)
-        reference={'order':order,'case':'observer_actual:'+payload['observer_actual'],'sha256':hashlib.sha256(raw).hexdigest(),
-            'bytes':len(raw),'rows':len(rows)}
-        return len(canonical({'complete_owned_payload':reference,'payload':value}))+1+len(json.dumps(reference,sort_keys=True).encode())+2
-    if cost+report_cost(projected,len(planned_index))>=report_cost(payload,len(evidence)):return payload
-    for order,declaration in declarations.items():
-        if completed_evidence(declaration)!=planned_index[order]:raise ValueError('authentication declaration mismatch')
-    restored=authentication_rows_restore(projected,declarations,evidence,len(evidence))
-    if canonical(restored)!=original:raise ValueError('authentication payload reconstruction mismatch')
-    return projected
+        blocks=[rows[i:i+2] for i in range(0,len(rows),2)]
+        values=[json.dumps(block) for block in blocks] if format_=='default' else blocks
+        groups={}
+        for value in values:
+            raw=canonical(value)
+            if raw not in groups:groups[raw]=[value,0]
+            groups[raw][1]+=1
+        declarations={};references={};planned_index=list(evidence);cost=0
+        for raw,(value,count) in groups.items():
+            if count<2:continue
+            declaration={'auth_rows':value};body=canonical(declaration);order=len(planned_index)
+            block=json.loads(value) if format_=='default' else value
+            reference={'order':order,'case':'auth_rows','sha256':hashlib.sha256(body).hexdigest(),'bytes':len(body),'rows':len(block)}
+            carrier=canonical({'complete_owned_payload':reference,'payload':declaration})+b'\n'
+            declaration_cost=len(carrier)+len(json.dumps(planned_index+[reference],sort_keys=True).encode())-len(json.dumps(planned_index,sort_keys=True).encode())
+            full_cost=len(canonical(value[1:-1]))-2 if format_=='default' else len(raw)-2
+            if declaration_cost+count*len(canonical(reference))>=count*full_cost:continue
+            declarations[order]=declaration;references[raw]=reference;planned_index.append(reference);cost+=declaration_cost
+        if not declarations:return completed_evidence(payload)
+        projected=dict(payload);projected_blocks=[references.get(canonical(value),value) for value in values]
+        array=json.dumps(rows).encode() if format_=='default' else canonical(rows);encoded=canonical(projected_blocks)
+        binding={'format':format_,'width':2,'count':len(rows),'bytes':len(array),'sha256':hashlib.sha256(array).hexdigest(),
+            'projected_bytes':len(encoded),'projected_sha256':hashlib.sha256(encoded).hexdigest(),
+            'payload_bytes':len(original),'payload_sha256':hashlib.sha256(original).hexdigest()}
+        if format_=='default':
+            stderr=payload['stderr'].encode()
+            binding.update(line_bytes=len(line.encode()),line_sha256=hashlib.sha256(line.encode()).hexdigest(),
+                stderr_bytes=len(stderr),stderr_sha256=hashlib.sha256(stderr).hexdigest())
+            projected['stderr']={'prefix':prefix,'blocks':projected_blocks,'suffix':suffix}
+        else:
+            projected['authentication']=dict(payload['authentication']);projected['authentication']['rows']=projected_blocks
+        projected['authentication_blocks']=binding
+        def report_cost(value,index):
+            reference=evidence_reference(value,len(index))
+            return (len(canonical({'complete_owned_payload':reference,'payload':value}))+1+
+                len(json.dumps(index+[reference],sort_keys=True).encode())-len(json.dumps(index,sort_keys=True).encode()))
+        if cost+report_cost(projected,planned_index)>=report_cost(payload,evidence):return completed_evidence(payload)
+        for order,declaration in declarations.items():
+            if canonical(completed_evidence(declaration))!=canonical(planned_index[order]):raise ValueError('authentication declaration write mismatch')
+        restored=authentication_blocks_restore(projected,declarations,evidence,len(evidence))
+        if canonical(restored)!=original:raise ValueError('authentication complete reconstruction mismatch')
+        return completed_evidence(projected)
+    except BaseException:
+        if active[1] is None:raise
+    original_error.__cause__,original_error.__context__,original_error.__suppress_context__=original_cause,original_context,original_suppress
+    raise original_error.with_traceback(active[2])
 
-def authentication_rows_controls():
+def authentication_blocks_controls():
     import contextlib,copy,io,types
     def canonical(value):return json.dumps(value,sort_keys=True,separators=(',',':')).encode()
     row={'busy':False,'capacity':False,'code':101,'exception':'x'*700,'filename':1,'hit':True,'insert':False,
         'negative_hit':False,'nodes':0,'outside':None,'qualify':False,'retained_before':False,'set':1}
-    other=dict(row,code=102);different=dict(row,hit=False)
-    payload={'observer_actual':'identity','authentication':{'rows':[row,other,row,different,row,other]*10,
-        'actual_insert_hit_events':[[101,'insert']],'requests':60},'same_request':{'unchanged':True},'result':{'status':'FIRST_STALE'}}
-    stream=io.StringIO()
-    with contextlib.redirect_stdout(stream):projected=authentication_rows_report(payload)
-    records=[json.loads(line) for line in stream.getvalue().splitlines()]
-    declarations={item['complete_owned_payload']['order']:item['payload'] for item in records};report_order=len(evidence)
-    assert len(declarations)==3 and canonical(payload)!=canonical(projected)
-    assert authentication_rows_restore(projected,declarations,evidence,report_order)==payload
-    assert payload['authentication']['rows'][0] is row and 'rows_binding' not in payload['authentication']
-    second_stream=io.StringIO()
-    with contextlib.redirect_stdout(second_stream):second=authentication_rows_report(payload)
-    second_records=[json.loads(line) for line in second_stream.getvalue().splitlines()]
-    second_declarations={item['complete_owned_payload']['order']:item['payload'] for item in second_records}
-    assert set(declarations).isdisjoint(second_declarations)
-    assert authentication_rows_restore(second,second_declarations,evidence,len(evidence))==payload
-    checks=0
-    def rejected(value,owned=declarations,index=None,order=report_order):
+    other=dict(row,code=102);tail=dict(row,hit=False)
+    rows=[row,other]*20+[tail]
+    base={'observer_actual':'identity','authentication':{'rows':rows,'actual_insert_hit_events':[[101,'insert']]},
+        'same_request':{'unchanged':True},'result':{'status':'FIRST_STALE'}}
+    # Isolated writers keep owned threshold carriers out of the global index.
+    def boundary(payload):
+        scope=dict(globals(),evidence=[])
+        for name in ('evidence_reference','completed_evidence','authentication_block_input','authentication_blocks_restore','authentication_blocks_evidence'):
+            scope[name]=types.FunctionType(globals()[name].__code__,scope)
+        stream=io.StringIO()
+        with contextlib.redirect_stdout(stream):reference=scope['authentication_blocks_evidence'](payload)
+        records=[json.loads(line) for line in stream.getvalue().splitlines()]
+        declarations={item['complete_owned_payload']['order']:item['payload'] for item in records[:-1]}
+        projected=records[-1]['payload']
+        if declarations:
+            assert scope['authentication_blocks_restore'](projected,declarations,scope['evidence'],reference['order'])==payload
+        else:assert projected==payload
+        return scope,projected,declarations,stream.getvalue(),reference
+    forms=[]
+    for version in ('uncached-modern','cached'):
+        for kind in ('identity','errno','bool','gap'):
+            value=copy.deepcopy(base);value['observer_actual']=kind;value['version']=version;forms.append(value)
+    for name in ('watched','bound'):
+        for version in ('original','cached'):
+            forms.append({'classifier_sequence':name,'version':version,'authentication':{'rows':rows},'actual_results':[True,False]})
+    for version in ('new','wrong-code-same-name','uncached-modern'):
+        facts={'requests':len(rows),'filename_memberships':3,'code_set_memberships':2,'new_actual_objects':4,
+            'rows':rows,'events':[['actual','event']],'strong_references':True}
+        forms.append({'mac_observer_version':version,'actual_rc':1,'stdout':'owned stdout\n',
+            'stderr':'GUARD_OWNED_CLEANUP {"complete": true}\nAUTH_RESULT '+json.dumps(facts)+'\nPAIRED_RESULT {"literal": "\\u00e9"}\n'})
+    reports=[]
+    for payload in forms:
+        before=canonical(payload);scope,projected,declarations,stdout,reference=boundary(payload)
+        assert declarations and projected['authentication_blocks']['width']==2
+        actual,format_,prefix,suffix,line=authentication_block_input(payload)
+        assert len(actual)==41 and canonical(payload)==before
+        blocks=projected['stderr']['blocks'] if format_=='default' else projected['authentication']['rows']
+        assert type(blocks[-1]) is (str if format_=='default' else list)
+        reports.append({'kind':next(iter(payload)),'stdout':stdout,'index_utf8':json.dumps(scope['evidence'],sort_keys=True)})
+    scope,projected,declarations,stdout,reference=boundary(base);checks=0
+    def rejected(value,owned=None,index=None,order=None):
         nonlocal checks
-        try:authentication_rows_restore(value,owned,evidence if index is None else index,order)
-        except (ValueError,KeyError,TypeError):checks+=1
-        else:raise AssertionError('corrupt authentication report accepted')
-    rejected(projected,{})
-    for field,value in [('order',report_order),('order',-1),('case','foreign'),('sha256','0'*64),('bytes',0),('rows',2)]:
+        try:authentication_blocks_restore(value,declarations if owned is None else owned,
+            scope['evidence'] if index is None else index,reference['order'] if order is None else order)
+        except (ValueError,KeyError,TypeError,json.JSONDecodeError):checks+=1
+        else:raise AssertionError('corrupt authentication block report accepted')
+    rejected(projected,owned={});rejected(projected,index=[])
+    for field,value in [('order',reference['order']),('order',-1),('case','foreign'),('sha256','0'*64),('bytes',0),('rows',1)]:
         changed=copy.deepcopy(projected);changed['authentication']['rows'][0][field]=value;rejected(changed)
-    foreign=copy.deepcopy(declarations);first=next(iter(foreign));foreign[first]['auth_row']['code']=999
-    rejected(projected,foreign);rejected(projected,index=[])
-    for field in ('count','bytes','sha256','full_bytes','full_sha256','payload_bytes','payload_sha256'):
-        changed=copy.deepcopy(projected);changed['authentication']['rows_binding'][field]=0;rejected(changed)
+    foreign=copy.deepcopy(declarations);foreign[next(iter(foreign))]['auth_rows'][0]['code']=999;rejected(projected,owned=foreign)
+    for field in projected['authentication_blocks']:
+        changed=copy.deepcopy(projected);changed['authentication_blocks'][field]=0;rejected(changed)
     changed=copy.deepcopy(projected);changed['authentication']['rows'].reverse();rejected(changed)
     changed=copy.deepcopy(projected);changed['authentication']['rows'].pop();rejected(changed)
     changed=copy.deepcopy(projected);changed['same_request']['unchanged']=False;rejected(changed)
-    for rows in ([row],[dict(row,exception=None)]*2):
-        value={'observer_actual':'gap','authentication':{'rows':rows}}
-        with contextlib.redirect_stdout(io.StringIO()):assert authentication_rows_report(value) is value
-    assert authentication_rows_report({'authentication':None})=={'authentication':None}
-    for impostor in ({'order':0,'case':'auth_row','sha256':'0'*64,'bytes':1,'rows':1},{'code':101}):
-        try:authentication_rows_report({'observer_actual':'gap','authentication':{'rows':[impostor]}})
+    for key in AUTHENTICATION_ROW_FIELDS:
+        changed=copy.deepcopy(projected);changed['authentication']['rows'][-1][0][key]='different';rejected(changed)
+    for small in ([row],[dict(row,exception=None)]*4):
+        value={'observer_actual':'gap','authentication':{'rows':small}}
+        assert boundary(value)[1]==value and not boundary(value)[2]
+    assert boundary({'authentication':None})[1]=={'authentication':None}
+    for impostor in ({'order':0,'case':'auth_rows','sha256':'0'*64,'bytes':1,'rows':1},{'code':101}):
+        try:boundary({'observer_actual':'gap','authentication':{'rows':[impostor]}})
         except ValueError:checks+=1
         else:raise AssertionError('impostor original row accepted')
-    before=len(evidence);bad=copy.deepcopy(payload);bad['result']['bad']={1}
-    try:authentication_rows_report(bad)
-    except TypeError:pass
-    else:raise AssertionError('encoding failure lost')
-    assert len(evidence)==before
+    mixed=copy.deepcopy(base);near=dict(row,exception='x'*10)
+    mixed['authentication']['rows']=[row,other]*20+[near,near]*2
+    mscope,mprojected,mdeclarations,mstdout,mreference=boundary(mixed)
+    assert mprojected['authentication']['rows'][-2:]==[[near,near],[near,near]]
+    assert all(type(item) is dict for item in mprojected['authentication']['rows'][:-2])
+    baseline_index=[];baseline_stream=io.StringIO();baseline_scope=dict(globals(),evidence=baseline_index)
+    baseline=types.FunctionType(completed_evidence.__code__,baseline_scope)
+    with contextlib.redirect_stdout(baseline_stream):baseline(mixed)
+    assert len(mstdout.encode())+len(json.dumps(mscope['evidence'],sort_keys=True).encode())<len(baseline_stream.getvalue().encode())+len(json.dumps(baseline_index,sort_keys=True).encode())
+    reports.append({'mixed_stdout':mstdout,'mixed_index_utf8':json.dumps(mscope['evidence'],sort_keys=True),
+        'baseline_stdout':baseline_stream.getvalue(),'baseline_index_utf8':json.dumps(baseline_index,sort_keys=True)})
+    for value in (copy.deepcopy(forms[-1]),copy.deepcopy(forms[-1])):
+        value['stderr']=(value['stderr']+value['stderr'] if checks%2 else value['stderr'].replace('"requests": ', '"requests":',1))
+        try:boundary(value)
+        except ValueError:checks+=1
+        else:raise AssertionError('ambiguous or nondefault stderr accepted')
+    for field in ('line_bytes','line_sha256','stderr_bytes','stderr_sha256'):
+        mscope,mprojected,mdecl,mstdout,mref=boundary(forms[-1]);mprojected['authentication_blocks'][field]=0
+        try:authentication_blocks_restore(mprojected,mdecl,mscope['evidence'],mref['order'])
+        except ValueError:checks+=1
+        else:raise AssertionError('corrupt complete stderr accepted')
     failure=OSError('owned authentication writer failure')
     class BrokenWriter:
         def write(self,value):raise failure
         def flush(self):pass
-    try:
-        with contextlib.redirect_stdout(BrokenWriter()):authentication_rows_report(payload)
-    except OSError as exc:assert exc is failure
-    else:raise AssertionError('write failure lost')
-    assert len(evidence)==before
-    # The ordinary control uses the same carriers and final index as every other payload.
-    for item in records+second_records:print(json.dumps(item,sort_keys=True,separators=(',',':')),flush=True)
-    mixed_before=list(evidence)
-    profitable=[dict(row,code=code) for code in (201,202,203,204)]
-    near=dict(row,exception='x'*10)
-    mixed_rows=[item for item in profitable for _ in range(20)]+[near]*7
-    mixed={'observer_actual':'identity','authentication':{'rows':mixed_rows}}
-    mixed_stream=io.StringIO()
-    with contextlib.redirect_stdout(mixed_stream):
-        mixed_projected=authentication_rows_report(mixed)
-        completed_evidence(mixed_projected)
-    mixed_records=[json.loads(line) for line in mixed_stream.getvalue().splitlines()]
-    for item in mixed_records:print(json.dumps(item,sort_keys=True,separators=(',',':')),flush=True)
-    candidate_before=list(evidence[:len(mixed_before)+4]);candidate_index=list(candidate_before)
-    candidate_writer=types.FunctionType(completed_evidence.__code__,dict(completed_evidence.__globals__,evidence=candidate_index))
-    candidate_stream=io.StringIO()
-    with contextlib.redirect_stdout(candidate_stream):candidate=candidate_writer({'auth_row':near})
-    baseline_index=list(mixed_before)
-    baseline_writer=types.FunctionType(completed_evidence.__code__,dict(completed_evidence.__globals__,evidence=baseline_index))
-    baseline_stream=io.StringIO()
-    with contextlib.redirect_stdout(baseline_stream):baseline_writer(mixed)
-    def index_bytes(value):return json.dumps(value,sort_keys=True).encode()
-    full_cost=7*len(canonical(near));reference_cost=7*len(canonical(candidate))
-    legacy_cost=len(candidate_stream.getvalue().encode())+len(canonical(candidate))+1+reference_cost
-    actual_cost=len(candidate_stream.getvalue().encode())+len(index_bytes(candidate_index))-len(index_bytes(candidate_before))+reference_cost
-    mixed_cost=len(mixed_stream.getvalue().encode())+len(index_bytes(evidence))
-    baseline_cost=len(baseline_stream.getvalue().encode())+len(index_bytes(baseline_index))
-    threshold_reference=completed_evidence({'authentication_rows_threshold':{
-        'candidate_stdout':candidate_stream.getvalue(),'candidate_index_utf8':index_bytes(candidate_index).decode(),'candidate_index_before_utf8':index_bytes(candidate_before).decode(),
-        'full_report_stdout':baseline_stream.getvalue(),'full_report_index_utf8':index_bytes(baseline_index).decode(),
-        'mixed_index_utf8':index_bytes(evidence).decode(),'full_group_bytes':full_cost,'legacy_group_bytes':legacy_cost,'actual_group_bytes':actual_cost,
-        'mixed_output_and_index_bytes':mixed_cost,'full_output_and_index_bytes':baseline_cost}})
-    assert len(canonical(near))==200 and (full_cost,legacy_cost,actual_cost)==(1400,1396,1406)
-    assert mixed_cost<baseline_cost
-    assert mixed_projected['authentication']['rows'][-7:]==[near]*7,'non-beneficial near-threshold rows must remain full'
-    assert all(set(item)=={'order','case','sha256','bytes','rows'} for item in mixed_projected['authentication']['rows'][:-7])
-    return {'authentication_rows_controls':'PASS','reconstruction':True,'negative_cases':checks,
-        'identity_field_order_multiplicity':True,'singleton_no_benefit_full':True,'encoding_and_write_identity':True,'mixed_near_threshold_reference':threshold_reference}
+    bad=copy.deepcopy(base);bad['result']['bad']={1}
+    try:boundary(bad)
+    except TypeError:checks+=1
+    else:raise AssertionError('encoding failure lost')
+    for original in (None,RuntimeError('original owned error')):
+        cause=ValueError('owned cause');context=KeyError('owned context')
+        def invoke():
+            with contextlib.redirect_stdout(BrokenWriter()):authentication_blocks_evidence(base)
+        try:
+            if original is None:invoke()
+            else:
+                original.__cause__=cause;original.__context__=context
+                try:raise original
+                except RuntimeError:invoke()
+        except BaseException as exc:
+            assert exc is (failure if original is None else original)
+            if original is not None:assert exc.__cause__ is cause and exc.__context__ is context
+            checks+=1
+        else:raise AssertionError('original write failure lost')
+    return {'authentication_blocks_controls':'PASS','owned_data_only':True,'reconstructed_arrays':15,
+        'negative_cases':checks,'two_row_and_tail_one':True,'mixed_nonbeneficial_full':True,
+        'closed_control_carriers':reports,'original_error_priority':True}
 
 def heredoc(tag):
     mark="<<'"+tag+"'";start=source.index('\n',source.index(mark))+1
@@ -6997,7 +7097,7 @@ def code_auth_controls(observer,wrapper,area):
                     sum(row['qualify'] for row in authentication['rows']),sum(row['nodes'] for row in authentication['rows']),0]
                 assert scope['classification_counts'][0]==expected_counts
                 records.append(completed_evidence({'same_request_optional_counts':expected_counts,'primitive_witness_agreement':True}))
-            sequence_reference=completed_evidence({'classifier_sequence':name,'version':label,'actual_results':result_rows,'repeats':repeats,'custom_hash_eq':[Constant.calls,Filename.calls],'whole_wall':elapsed,'authentication':same_sequence})
+            sequence_reference=authentication_blocks_evidence({'classifier_sequence':name,'version':label,'actual_results':result_rows,'repeats':repeats,'custom_hash_eq':[Constant.calls,Filename.calls],'whole_wall':elapsed,'authentication':same_sequence})
             assert same_sequence['valid'] and all(value is True for value in repeats)
             if label=='cached':
                 assert repeated==(0,0)
@@ -7053,7 +7153,7 @@ def code_auth_controls(observer,wrapper,area):
         records.append(completed_evidence({'cold_same_sequence':name,'records':cold_records,'no_detail_recording_or_json_inside_timer':True}))
     return records
 
-reports=[completed_evidence(authentication_rows_controls())]
+reports=[completed_evidence(authentication_blocks_controls())]
 temporary=tempfile.mkdtemp(prefix='scope-observer-owner-')
 print(json.dumps({'ordinary_tree':temporary,'on_failure':'RETAIN'}),flush=True)
 try:
@@ -7178,7 +7278,7 @@ finally:
                 'failure_code_dictionary':{'objects':details['objects'],'files':details['files'],'names':details['names']} if proof['failures'] else None,
                 'primitive_steps':details['primitive_steps'],'failures':proof['failures'],'negative_dispatch_done':proof['negative_dispatch_done'],
                 'proof_wall_includes_oracle':True}
-        reference=completed_evidence(authentication_rows_report({'observer_actual':kind,'result':result,'callbacks':callbacks,'whole_wall':elapsed,'authentication':authentication,'same_request':paired}))
+        reference=authentication_blocks_evidence({'observer_actual':kind,'result':result,'callbacks':callbacks,'whole_wall':elapsed,'authentication':authentication,'same_request':paired})
         if same_request:
             assert not paired['failures'] and paired['negative_dispatch_done'] and paired['actual_digest']==paired['original_digest']
             assert paired['classifications']==facts['requests'] and paired['dispatch_checks'] and paired['local_checks']
@@ -7255,7 +7355,7 @@ finally:
         mac_program.write_bytes(wrapper_raw);mac_subject.write_bytes(subject_raw);mac_target.write_bytes(b'owned')
         started=time.monotonic()
         result=subprocess.run([sys.executable,'-I','-S','-B',str(mac_program),str(mac_subject),str(package),str(mac_target),str(mac_program)],capture_output=True,timeout=10)
-        raw_reference=completed_evidence({'mac_observer_version':version,'actual_rc':result.returncode,'stdout':result.stdout.decode(),'stderr':result.stderr.decode()})
+        raw_reference=authentication_blocks_evidence({'mac_observer_version':version,'actual_rc':result.returncode,'stdout':result.stdout.decode(),'stderr':result.stderr.decode()})
         assert result.returncode!=0
         def row(prefix):return json.loads(next(line[len(prefix):] for line in result.stderr.splitlines() if line.startswith(prefix)))
         clean=row(b'GUARD_OWNED_CLEANUP ');identity=row(b'GUARD_IDENTITY_REFUSAL ')
