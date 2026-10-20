@@ -867,8 +867,17 @@ ambiguous location cannot authorize reuse. Add no parser or offset codec, generi
 codec, compression, source diff, logging framework or handling of other stderr
 fields. All non-row `AUTH_RESULT` fields and `PAIRED_RESULT` remain full and unchanged.
 
-Build only a report copy after the original observation and timing end. Keep
-original full data for every original parse, assertion and same-request comparison.
+For the eight observer and four classifier arrays, build only a report copy after
+the original observation and timing end. Keep their independent useful-work,
+whole-call and no-prewarm gates unchanged. For the three fixed Mac reports,
+perform projection and full reconstruction verification at the existing
+`completed_evidence` point after the original child run returns, inside the
+original parent timing window. Preserve every original clock call's position and
+count, the report order, and every original parse/assert position. Save the
+complete original raw recoverably before the first result assertion. The actual
+elapsed value still includes this report work; do not claim isolated observer or
+classifier speed improvement from it. Keep original full data for every original
+parse, assertion and same-request comparison.
 Bind fixed width, each block's row count, full array count/byte length/SHA-256,
 original payload byte length/SHA-256 and, for Mac, default format plus complete
 line and stderr byte lengths/SHA-256. Before the original parses and assertions,
