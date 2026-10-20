@@ -835,6 +835,46 @@ cross-run sharing. Measure the complete new batch's recursive raw under the same
 ordinary private proof cap; a projection cannot establish PASS or remove an earlier
 volume failure.
 
+Only the eight completed `observer_actual.authentication.rows` arrays for the
+existing uncached-modern and cached identity, errno, bool and gap controls may
+also share exact full rows at this private reporting boundary. Use one fixed
+`auth_row` payload and the existing five-field order/case/sha256/bytes/rows
+reference. Emit each shared row's complete canonical payload before its first
+reference. Preserve every row position and multiplicity. Match complete canonical
+bytes, including actual code identities and every field; never normalize values
+or merge rows by code id alone. Keep singleton or non-beneficial rows full.
+Choose reuse only when the full declaration, all references and final index cost
+less than their full repeated bytes. Scope reuse to that one completed report;
+no cross-report or cross-run sharing is allowed.
+
+Build only a report copy after the original observation and timing end. Keep the
+original full array available to every original assertion and same-request check.
+Bind the projected array's count, complete canonical byte length and SHA-256,
+and the complete original payload's byte length and SHA-256. Reconstruct the
+full ordered array and payload byte for byte before the original result assertions.
+Reject missing, forward, foreign, wrong-length or wrong-digest references; an
+unproved reconstruction cannot stand in for full evidence. Change no collection,
+classification, callback, primitive comparison, event, timestamp, source read,
+OS operation, call, result, exception or deadline. Leave every other field and
+payload full and unchanged, including Mac stderr/AUTH_RESULT/PAIRED_RESULT,
+classifier_sequence, actual_insert_hit_events and same_request. Reuse the existing
+full-before-reference writer and final index; add no generic codec, compression,
+source diff, logging framework, output path or execution opportunity.
+
+Use the actual extracted reporting boundary with owned data to prove exact
+reconstruction of all eight actual arrays and full payloads. Cover different
+identities and field values, order/multiplicity, singleton/non-beneficial rows,
+wrong or missing/forward/foreign references, count/length/digest corruption and
+encoding/write failure. Keep original errors and all original controls, the six
+shared sources, 26 source inverses, 21 reader proofs, complete same-request
+comparisons and fresh source preparation. Count the first full declarations,
+every reference, final index, generated-source copies and all new controls in
+the complete recursive ordinary raw total. Measure the new actual local batch
+and complete CI ordinary output against the unchanged 16 MiB cap. A static
+estimate, smaller projection, omitted carrier or green CI is not a capacity pass.
+An overrun stops acceptance; do not widen sharing or budgets, trim proof or add
+a retry to make it fit.
+
 In existing CI, compare old and new observers on real owned calls and events.
 Cover identity refusal, real foreground return/reap, direct-callee stat/bool/errno,
 exceptions and early GAP. Compare event order and field meaning while retaining
