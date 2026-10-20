@@ -2656,7 +2656,7 @@ expect_reasons() {
   expected=$("$jq_bin" -c 'map(select(. != "scope.proposable")) + ["scope.sandbox-receipt-missing"] | sort | unique' <<<"$expected")
   shift 2
   local actual
-  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 8721 ]; then scope_dashboard_inflight=true; fi
+  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 8859 ]; then scope_dashboard_inflight=true; fi
   actual=$(evaluation_reasons "$@")
   scope_dashboard_inflight=false
   [ "$actual" = "$expected" ] || fail "$label expected $expected got $actual"
@@ -2781,6 +2781,144 @@ def completed_evidence(payload):
     print(json.dumps({'complete_owned_payload':reference,'payload':payload},sort_keys=True,separators=(',',':')),flush=True)
     evidence.append(reference)
     return reference
+AUTHENTICATION_ROW_FIELDS={'busy','capacity','code','exception','filename','hit','insert','negative_hit',
+    'nodes','outside','qualify','retained_before','set'}
+def authentication_rows_restore(projected,declarations,index,report_order):
+    def canonical(value):return json.dumps(value,sort_keys=True,separators=(',',':')).encode()
+    authentication=projected['authentication'];binding=authentication['rows_binding'];rows=[]
+    for item in authentication['rows']:
+        if type(item) is dict and set(item)=={'order','case','sha256','bytes','rows'}:
+            reference=item;order=reference['order']
+            if type(order) is not int or not 0<=order<report_order or order not in declarations:
+                raise ValueError('authentication row reference unavailable')
+            declaration=declarations[order];raw=canonical(declaration)
+            expected={'order':order,'case':'auth_row','sha256':hashlib.sha256(raw).hexdigest(),'bytes':len(raw),'rows':1}
+            if canonical(reference)!=canonical(expected) or order>=len(index) or canonical(index[order])!=canonical(expected) or set(declaration)!={'auth_row'}:
+                raise ValueError('authentication row reference mismatch')
+            if type(declaration['auth_row']) is not dict or set(declaration['auth_row'])!=AUTHENTICATION_ROW_FIELDS:
+                raise ValueError('authentication declaration row schema mismatch')
+            rows.append(declaration['auth_row'])
+        else:
+            if type(item) is not dict or set(item)!=AUTHENTICATION_ROW_FIELDS:
+                raise ValueError('authentication full row schema mismatch')
+            rows.append(item)
+    projected_raw=canonical(authentication['rows']);raw=canonical(rows)
+    if (len(rows),len(projected_raw),hashlib.sha256(projected_raw).hexdigest(),len(raw),hashlib.sha256(raw).hexdigest())!=(
+            binding['count'],binding['bytes'],binding['sha256'],binding['full_bytes'],binding['full_sha256']):
+        raise ValueError('authentication row array mismatch')
+    restored=dict(projected);restored['authentication']=dict(authentication)
+    restored['authentication'].pop('rows_binding');restored['authentication']['rows']=rows
+    raw=canonical(restored)
+    if (len(raw),hashlib.sha256(raw).hexdigest())!=(binding['payload_bytes'],binding['payload_sha256']):
+        raise ValueError('authentication payload mismatch')
+    return restored
+
+def authentication_rows_report(payload):
+    def canonical(value):return json.dumps(value,sort_keys=True,separators=(',',':')).encode()
+    authentication=payload['authentication']
+    if authentication is None:return payload
+    rows=authentication['rows'];original=canonical(payload);groups={}
+    for row in rows:
+        if type(row) is not dict or set(row)!=AUTHENTICATION_ROW_FIELDS:
+            raise ValueError('authentication original row schema mismatch')
+        raw=canonical(row)
+        if raw not in groups:groups[raw]=[row,0]
+        groups[raw][1]+=1
+    declarations={};references={};planned_index=list(evidence);cost=0
+    for raw,(row,count) in groups.items():
+        if count<2:continue
+        declaration={'auth_row':row};body=canonical(declaration);order=len(planned_index)
+        reference={'order':order,'case':'auth_row','sha256':hashlib.sha256(body).hexdigest(),'bytes':len(body),'rows':1}
+        carrier=canonical({'complete_owned_payload':reference,'payload':declaration})
+        reference_cost=len(canonical(reference))
+        declaration_cost=len(carrier)+1+len(canonical(reference))+1
+        if declaration_cost+count*reference_cost>=count*len(raw):continue
+        declarations[order]=declaration;references[raw]=reference;planned_index.append(reference);cost+=declaration_cost
+    if not declarations:return payload
+    projected=dict(payload);projected['authentication']=dict(authentication)
+    projected_rows=[references[canonical(row)] if canonical(row) in references else row for row in rows]
+    projected['authentication']['rows']=projected_rows
+    raw=canonical(projected_rows);full=canonical(rows)
+    projected['authentication']['rows_binding']={'count':len(rows),'bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest(),
+        'full_bytes':len(full),'full_sha256':hashlib.sha256(full).hexdigest(),
+        'payload_bytes':len(original),'payload_sha256':hashlib.sha256(original).hexdigest()}
+    # Include the report declaration and its final index entry, whose order and digest also change.
+    def report_cost(value,order):
+        raw=canonical(value)
+        reference={'order':order,'case':'observer_actual:'+payload['observer_actual'],'sha256':hashlib.sha256(raw).hexdigest(),
+            'bytes':len(raw),'rows':len(rows)}
+        return len(canonical({'complete_owned_payload':reference,'payload':value}))+1+len(canonical(reference))+1
+    if cost+report_cost(projected,len(planned_index))>=report_cost(payload,len(evidence)):return payload
+    for order,declaration in declarations.items():
+        if completed_evidence(declaration)!=planned_index[order]:raise ValueError('authentication declaration mismatch')
+    restored=authentication_rows_restore(projected,declarations,evidence,len(evidence))
+    if canonical(restored)!=original:raise ValueError('authentication payload reconstruction mismatch')
+    return projected
+
+def authentication_rows_controls():
+    import contextlib,copy,io
+    def canonical(value):return json.dumps(value,sort_keys=True,separators=(',',':')).encode()
+    row={'busy':False,'capacity':False,'code':101,'exception':'x'*700,'filename':1,'hit':True,'insert':False,
+        'negative_hit':False,'nodes':0,'outside':None,'qualify':False,'retained_before':False,'set':1}
+    other=dict(row,code=102);different=dict(row,hit=False)
+    payload={'observer_actual':'identity','authentication':{'rows':[row,other,row,different,row,other]*10,
+        'actual_insert_hit_events':[[101,'insert']],'requests':60},'same_request':{'unchanged':True},'result':{'status':'FIRST_STALE'}}
+    stream=io.StringIO()
+    with contextlib.redirect_stdout(stream):projected=authentication_rows_report(payload)
+    records=[json.loads(line) for line in stream.getvalue().splitlines()]
+    declarations={item['complete_owned_payload']['order']:item['payload'] for item in records};report_order=len(evidence)
+    assert len(declarations)==3 and canonical(payload)!=canonical(projected)
+    assert authentication_rows_restore(projected,declarations,evidence,report_order)==payload
+    assert payload['authentication']['rows'][0] is row and 'rows_binding' not in payload['authentication']
+    second_stream=io.StringIO()
+    with contextlib.redirect_stdout(second_stream):second=authentication_rows_report(payload)
+    second_records=[json.loads(line) for line in second_stream.getvalue().splitlines()]
+    second_declarations={item['complete_owned_payload']['order']:item['payload'] for item in second_records}
+    assert set(declarations).isdisjoint(second_declarations)
+    assert authentication_rows_restore(second,second_declarations,evidence,len(evidence))==payload
+    checks=0
+    def rejected(value,owned=declarations,index=None,order=report_order):
+        nonlocal checks
+        try:authentication_rows_restore(value,owned,evidence if index is None else index,order)
+        except (ValueError,KeyError,TypeError):checks+=1
+        else:raise AssertionError('corrupt authentication report accepted')
+    rejected(projected,{})
+    for field,value in [('order',report_order),('order',-1),('case','foreign'),('sha256','0'*64),('bytes',0),('rows',2)]:
+        changed=copy.deepcopy(projected);changed['authentication']['rows'][0][field]=value;rejected(changed)
+    foreign=copy.deepcopy(declarations);first=next(iter(foreign));foreign[first]['auth_row']['code']=999
+    rejected(projected,foreign);rejected(projected,index=[])
+    for field in ('count','bytes','sha256','full_bytes','full_sha256','payload_bytes','payload_sha256'):
+        changed=copy.deepcopy(projected);changed['authentication']['rows_binding'][field]=0;rejected(changed)
+    changed=copy.deepcopy(projected);changed['authentication']['rows'].reverse();rejected(changed)
+    changed=copy.deepcopy(projected);changed['authentication']['rows'].pop();rejected(changed)
+    changed=copy.deepcopy(projected);changed['same_request']['unchanged']=False;rejected(changed)
+    for rows in ([row],[dict(row,exception=None)]*2):
+        value={'observer_actual':'gap','authentication':{'rows':rows}}
+        with contextlib.redirect_stdout(io.StringIO()):assert authentication_rows_report(value) is value
+    assert authentication_rows_report({'authentication':None})=={'authentication':None}
+    for impostor in ({'order':0,'case':'auth_row','sha256':'0'*64,'bytes':1,'rows':1},{'code':101}):
+        try:authentication_rows_report({'observer_actual':'gap','authentication':{'rows':[impostor]}})
+        except ValueError:checks+=1
+        else:raise AssertionError('impostor original row accepted')
+    before=len(evidence);bad=copy.deepcopy(payload);bad['result']['bad']={1}
+    try:authentication_rows_report(bad)
+    except TypeError:pass
+    else:raise AssertionError('encoding failure lost')
+    assert len(evidence)==before
+    failure=OSError('owned authentication writer failure')
+    class BrokenWriter:
+        def write(self,value):raise failure
+        def flush(self):pass
+    try:
+        with contextlib.redirect_stdout(BrokenWriter()):authentication_rows_report(payload)
+    except OSError as exc:assert exc is failure
+    else:raise AssertionError('write failure lost')
+    assert len(evidence)==before
+    # The ordinary control uses the same carriers and final index as every other payload.
+    for item in records+second_records:print(json.dumps(item,sort_keys=True,separators=(',',':')),flush=True)
+    return {'authentication_rows_controls':'PASS','reconstruction':True,'negative_cases':checks,
+        'identity_field_order_multiplicity':True,'singleton_no_benefit_full':True,'encoding_and_write_identity':True}
+
 def heredoc(tag):
     mark="<<'"+tag+"'";start=source.index('\n',source.index(mark))+1
     return source[start:source.index('\n'+tag+'\n',start)]+'\n'
@@ -6881,7 +7019,7 @@ def code_auth_controls(observer,wrapper,area):
         records.append(completed_evidence({'cold_same_sequence':name,'records':cold_records,'no_detail_recording_or_json_inside_timer':True}))
     return records
 
-reports=[]
+reports=[completed_evidence(authentication_rows_controls())]
 temporary=tempfile.mkdtemp(prefix='scope-observer-owner-')
 print(json.dumps({'ordinary_tree':temporary,'on_failure':'RETAIN'}),flush=True)
 try:
@@ -7006,7 +7144,7 @@ finally:
                 'failure_code_dictionary':{'objects':details['objects'],'files':details['files'],'names':details['names']} if proof['failures'] else None,
                 'primitive_steps':details['primitive_steps'],'failures':proof['failures'],'negative_dispatch_done':proof['negative_dispatch_done'],
                 'proof_wall_includes_oracle':True}
-        reference=completed_evidence({'observer_actual':kind,'result':result,'callbacks':callbacks,'whole_wall':elapsed,'authentication':authentication,'same_request':paired})
+        reference=completed_evidence(authentication_rows_report({'observer_actual':kind,'result':result,'callbacks':callbacks,'whole_wall':elapsed,'authentication':authentication,'same_request':paired}))
         if same_request:
             assert not paired['failures'] and paired['negative_dispatch_done'] and paired['actual_digest']==paired['original_digest']
             assert paired['classifications']==facts['requests'] and paired['dispatch_checks'] and paired['local_checks']
