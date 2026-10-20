@@ -2656,7 +2656,7 @@ expect_reasons() {
   expected=$("$jq_bin" -c 'map(select(. != "scope.proposable")) + ["scope.sandbox-receipt-missing"] | sort | unique' <<<"$expected")
   shift 2
   local actual
-  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 8993 ]; then scope_dashboard_inflight=true; fi
+  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 9041 ]; then scope_dashboard_inflight=true; fi
   actual=$(evaluation_reasons "$@")
   scope_dashboard_inflight=false
   [ "$actual" = "$expected" ] || fail "$label expected $expected got $actual"
@@ -2945,10 +2945,11 @@ def authentication_blocks_controls():
     base={'observer_actual':'identity','authentication':{'rows':rows,'actual_insert_hit_events':[[101,'insert']]},
         'same_request':{'unchanged':True},'result':{'status':'FIRST_STALE'}}
     # Isolated writers keep owned threshold carriers out of the global index.
-    def boundary(payload):
-        scope=dict(globals(),evidence=[])
-        for name in ('evidence_reference','completed_evidence','authentication_block_input','authentication_blocks_restore','authentication_blocks_evidence'):
-            scope[name]=types.FunctionType(globals()[name].__code__,scope)
+    def boundary(payload,scope=None):
+        if scope is None:
+            scope=dict(globals(),evidence=[])
+            for name in ('evidence_reference','completed_evidence','authentication_block_input','authentication_blocks_restore','authentication_blocks_evidence'):
+                scope[name]=types.FunctionType(globals()[name].__code__,scope)
         stream=io.StringIO()
         with contextlib.redirect_stdout(stream):reference=scope['authentication_blocks_evidence'](payload)
         records=[json.loads(line) for line in stream.getvalue().splitlines()]
@@ -2979,6 +2980,15 @@ def authentication_blocks_controls():
         blocks=projected['stderr']['blocks'] if format_=='default' else projected['authentication']['rows']
         assert type(blocks[-1]) is (str if format_=='default' else list)
         reports.append({'kind':next(iter(payload)),'stdout':stdout,'index_utf8':json.dumps(scope['evidence'],sort_keys=True)})
+    same_scope,first_projected,first_declarations,first_stdout,first_reference=boundary(base)
+    first_index=json.dumps(same_scope['evidence'],sort_keys=True);same_writer=same_scope['completed_evidence']
+    continued,second_projected,second_declarations,second_stdout,second_reference=boundary(base,same_scope)
+    assert continued is same_scope and same_scope['completed_evidence'] is same_writer and first_declarations and second_declarations
+    assert set(first_declarations).isdisjoint(second_declarations)
+    assert same_scope['authentication_blocks_restore'](first_projected,first_declarations,same_scope['evidence'],first_reference['order'])==base
+    assert same_scope['authentication_blocks_restore'](second_projected,second_declarations,same_scope['evidence'],second_reference['order'])==base
+    reports.append({'same_writer_first_stdout':first_stdout,'same_writer_first_index_utf8':first_index,
+        'same_writer_second_stdout':second_stdout,'same_writer_final_index_utf8':json.dumps(same_scope['evidence'],sort_keys=True)})
     scope,projected,declarations,stdout,reference=boundary(base);checks=0
     def rejected(value,owned=None,index=None,order=None):
         nonlocal checks
@@ -3016,6 +3026,35 @@ def authentication_blocks_controls():
     assert len(mstdout.encode())+len(json.dumps(mscope['evidence'],sort_keys=True).encode())<len(baseline_stream.getvalue().encode())+len(json.dumps(baseline_index,sort_keys=True).encode())
     reports.append({'mixed_stdout':mstdout,'mixed_index_utf8':json.dumps(mscope['evidence'],sort_keys=True),
         'baseline_stdout':baseline_stream.getvalue(),'baseline_index_utf8':json.dumps(baseline_index,sort_keys=True)})
+    crossing_near=dict(row,exception='x'*92)
+    crossing=copy.deepcopy(base);crossing['authentication']['rows']=[row,other]*20+[crossing_near,crossing_near]*2
+    cscope,cprojected,cdeclarations,cstdout,creference=boundary(crossing)
+    assert cprojected['authentication']['rows'][-2:]==[[crossing_near,crossing_near]]*2
+    assert all(type(item) is dict for item in cprojected['authentication']['rows'][:-2])
+    candidate_before=copy.deepcopy(cscope['evidence'][:-1]);candidate_index=copy.deepcopy(candidate_before)
+    assert len(candidate_before)==1
+    candidate_scope=dict(globals(),evidence=candidate_index)
+    candidate_writer=types.FunctionType(completed_evidence.__code__,candidate_scope);candidate_stream=io.StringIO()
+    with contextlib.redirect_stdout(candidate_stream):candidate_reference=candidate_writer({'auth_rows':[crossing_near,crossing_near]})
+    all_references=[candidate_reference]*2
+    full_group_bytes=2*(len(canonical([crossing_near,crossing_near]))-2)
+    references_bytes=sum(len(canonical(item)) for item in all_references)
+    declaration_bytes=len(candidate_stream.getvalue().encode())
+    index_before_utf8=json.dumps(candidate_before,sort_keys=True);index_after_utf8=json.dumps(candidate_index,sort_keys=True)
+    actual_delta=len(index_after_utf8.encode())-len(index_before_utf8.encode())
+    underestimated=declaration_bytes+len(canonical(candidate_reference))+1+references_bytes
+    actual=declaration_bytes+actual_delta+references_bytes
+    assert underestimated<full_group_bytes<=actual
+    crossing_baseline_index=[];crossing_baseline_stream=io.StringIO()
+    crossing_baseline=types.FunctionType(completed_evidence.__code__,dict(globals(),evidence=crossing_baseline_index))
+    with contextlib.redirect_stdout(crossing_baseline_stream):crossing_baseline(crossing)
+    assert len(cstdout.encode())+len(json.dumps(cscope['evidence'],sort_keys=True).encode())<len(crossing_baseline_stream.getvalue().encode())+len(json.dumps(crossing_baseline_index,sort_keys=True).encode())
+    reports.append({'true_cost_threshold':{'exception_length':92,'fixed_block_width':2,'block_count':2,
+        'full_group_bytes':full_group_bytes,'underestimated_group_bytes':underestimated,'actual_group_bytes':actual,
+        'candidate_declaration_stdout':candidate_stream.getvalue(),'candidate_index_before_utf8':index_before_utf8,
+        'candidate_index_after_utf8':index_after_utf8,'default_index_delta':actual_delta,'all_references':all_references,
+        'mixed_stdout':cstdout,'mixed_index_utf8':json.dumps(cscope['evidence'],sort_keys=True),
+        'full_baseline_stdout':crossing_baseline_stream.getvalue(),'full_baseline_index_utf8':json.dumps(crossing_baseline_index,sort_keys=True)}})
     for value in (copy.deepcopy(forms[-1]),copy.deepcopy(forms[-1])):
         value['stderr']=(value['stderr']+value['stderr'] if checks%2 else value['stderr'].replace('"requests": ', '"requests":',1))
         try:boundary(value)
@@ -3031,13 +3070,18 @@ def authentication_blocks_controls():
         def write(self,value):raise failure
         def flush(self):pass
     bad=copy.deepcopy(base);bad['result']['bad']={1}
-    try:boundary(bad)
+    failure_index_before=json.dumps(same_scope['evidence'],sort_keys=True)
+    try:boundary(bad,same_scope)
     except TypeError:checks+=1
     else:raise AssertionError('encoding failure lost')
+    assert json.dumps(same_scope['evidence'],sort_keys=True)==failure_index_before
+    reports.append({'encoding_failure_index_before_utf8':failure_index_before,
+        'encoding_failure_index_after_utf8':json.dumps(same_scope['evidence'],sort_keys=True),'stdout':''})
     for original in (None,RuntimeError('original owned error')):
         cause=ValueError('owned cause');context=KeyError('owned context')
+        failure_index_before=json.dumps(same_scope['evidence'],sort_keys=True)
         def invoke():
-            with contextlib.redirect_stdout(BrokenWriter()):authentication_blocks_evidence(base)
+            with contextlib.redirect_stdout(BrokenWriter()):same_scope['authentication_blocks_evidence'](base)
         try:
             if original is None:invoke()
             else:
@@ -3049,9 +3093,13 @@ def authentication_blocks_controls():
             if original is not None:assert exc.__cause__ is cause and exc.__context__ is context
             checks+=1
         else:raise AssertionError('original write failure lost')
+        assert json.dumps(same_scope['evidence'],sort_keys=True)==failure_index_before
+        reports.append({'first_write_failure_original_active':original is not None,'stdout':'',
+            'index_before_utf8':failure_index_before,'index_after_utf8':json.dumps(same_scope['evidence'],sort_keys=True)})
     return {'authentication_blocks_controls':'PASS','owned_data_only':True,'reconstructed_arrays':15,
         'negative_cases':checks,'two_row_and_tail_one':True,'mixed_nonbeneficial_full':True,
-        'closed_control_carriers':reports,'original_error_priority':True}
+        'closed_control_carriers':reports,'original_error_priority':True,'same_writer_report_isolation':True,
+        'failure_index_unchanged':True,'true_default_index_threshold':True}
 
 def heredoc(tag):
     mark="<<'"+tag+"'";start=source.index('\n',source.index(mark))+1
