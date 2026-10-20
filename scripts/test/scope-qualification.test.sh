@@ -2656,7 +2656,7 @@ expect_reasons() {
   expected=$("$jq_bin" -c 'map(select(. != "scope.proposable")) + ["scope.sandbox-receipt-missing"] | sort | unique' <<<"$expected")
   shift 2
   local actual
-  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 9304 ]; then scope_dashboard_inflight=true; fi
+  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 9451 ]; then scope_dashboard_inflight=true; fi
   actual=$(evaluation_reasons "$@")
   scope_dashboard_inflight=false
   [ "$actual" = "$expected" ] || fail "$label expected $expected got $actual"
@@ -3718,7 +3718,7 @@ def stable_sink_controls(area,assembler):
     return reports
 
 OUTER_RUN_SOURCE_SHA='7f3571e66a1da98ccc2a876c426ea77fcddc010cbdb64d76342efde97ce77a64'
-OUTER_CAPTURE_SOURCE_SHA='f80dde3b32cc076ee79364c5fe07b106c5cc55bee4b740bce0f7c4adfe34a6d0'
+OUTER_CAPTURE_SOURCE_SHA='4f6d4b922ce13dc1c3b9f8b131e446a4d174ee7a63fdb4df6020d2acb7954989'
 def outer_timeout_boundary(assembler):
     tree=ast.parse(assembler)
     runs=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='run']
@@ -4085,7 +4085,7 @@ class OwnedOS:
             try:
                 result,passed=scope['_scope_sample_observe'](owner,123,100,[False],phase)
                 assert case not in ('unknown','exception') and passed==(case in ('normal','cancel'))
-                if case=='cancel':assert result['cancellation_requested'] and result['cancel_after_tool_start']>=0.25
+                if case=='cancel':assert result['cancellation_requested'] and result['cancel_after_launch']>=0.25
                 if case in ('early','timeout','overflow','limit-refusal'):assert scope['_scope_sample_state']['blocked']
                 records.append(completed_evidence({'case':'observer-'+case,'actual_record':result,'passed':passed,'owned_transport_only':True}))
             except BaseException as error:
@@ -4106,6 +4106,152 @@ class OwnedOS:
         scope.update(original);os.close(parent_fd)
     return completed_evidence({'fixed_sampler_owned_controls':records,'real_sample_starts':0,
         'scope':'actual extracted helper/report/closure/continuation; owned-data seams do not prove actual Mac controls or trusted CI interface'})
+
+def sample_supervision_controls(module,setup):
+    import io,resource,types
+    records=[]
+    cases=('early-marker','late-marker','no-marker','early-exit','tail-both','exact-cap','over-stdout','over-stderr',
+        'no-eof','timeout-tail','exception-tail','group-chain','wait-chain','pipe-chain','safe-gap-chain','cancel-chain','deadline-chain')
+    for case in cases:
+        scope={'c':module,'sys':sys,'json':json};exec(compile(setup,'actual-sampler-supervision-P1','exec'),scope)
+        clock=[0.0];events=[];children=[];stream_owner={};writers=[];bound_calls=[];saved=[];report_reads=[]
+        first=module.Refusal('E_RUNTIME') if case in ('cancel-chain','deadline-chain') else BaseException('original interrupt') if case=='exception-tail' else TimeoutError('original collection')
+        cause=ValueError('original cause');context=KeyError('original context');first.__cause__=cause;first.__context__=context
+        before=resource.getrlimit(resource.RLIMIT_FSIZE);chain=case.endswith('-chain')
+        class Clock:
+            @staticmethod
+            def monotonic():clock[0]+=0.01;return clock[0]
+            @staticmethod
+            def sleep(value):clock[0]+=value
+        class Child:
+            def __init__(self,target):
+                self.pid=500+len(children);self.returncode=None;self.target=target;self.stdin=io.BytesIO();self.ended=False
+                self.out_fd,self.out_writer=os.pipe();self.err_fd,self.err_writer=os.pipe()
+                self.stdout=os.fdopen(self.out_fd,'rb',buffering=0);self.stderr=os.fdopen(self.err_fd,'rb',buffering=0)
+                writers.extend([self.out_writer,self.err_writer]);stream_owner[self.stdout]=self;stream_owner[self.stderr]=self
+                marker=('SAMPLE_LIMIT '+json.dumps({'pid':self.pid,'uid':56001,'before':list(before),'after':[65536,65536]})+'\n').encode()
+                self.prefix=(json.dumps({'ready':True,'uid':56001,'limits':list(before)})+'\n').encode() if target else marker
+                if not target and case not in ('late-marker','no-marker'):self.prefix+=b'Sampling process 123\n'
+                os.write(self.out_writer,self.prefix)
+            def poll(self):return 0 if self.ended or not self.target and case=='early-exit' else None
+            def wait(self,timeout):
+                events.append(['wait',self.pid])
+                if not self.target and case=='wait-chain':raise subprocess.TimeoutExpired('owned sampler',timeout)
+                self.returncode=0;return 0
+        class Selector:
+            def __init__(self):self.mapping={};self.child=None
+            def register(self,stream,event):self.mapping[stream]=event;self.child=stream_owner[stream]
+            def unregister(self,stream):self.mapping.pop(stream)
+            def get_map(self):return self.mapping
+            def select(self,timeout):
+                if not self.child.target:
+                    if case=='cancel-chain':signal_handlers[module.signal.SIGTERM](module.signal.SIGTERM,None)
+                    elif case=='deadline-chain':clock[0]=1000
+                    elif chain or case in ('timeout-tail','exception-tail'):raise first
+                clock[0]+=min(timeout,0.02)
+                return [(types.SimpleNamespace(fileobj=stream),event) for stream,event in list(self.mapping.items())]
+            def close(self):self.mapping.clear()
+        def spawn(argv,**kwargs):
+            target='-c' in argv;child=Child(target);children.append(child);events.append(['spawn',child.pid,target,argv]);return child
+        def killpg(pid,number):
+            child=next(value for value in children if value.pid==pid);events.append(['killpg',pid,number])
+            if number==0:
+                if not child.target and case=='group-chain':return
+                raise ProcessLookupError()
+            if child.ended:return
+            child.ended=True
+            if not child.target:
+                tail=b'TERM stdout\n';error_tail=b'TERM stderr\n'
+                if case=='late-marker':tail=b'Sampling process 123\n'+tail
+                if case in ('exact-cap','over-stdout'):
+                    tail=b'x'*(768-len(child.prefix)+int(case=='over-stdout'))
+                if case in ('exact-cap','over-stderr'):error_tail=b'e'*(128+int(case=='over-stderr'))
+                os.write(child.out_writer,tail);os.write(child.err_writer,error_tail)
+            for fd in (child.out_writer,child.err_writer):
+                if not child.target and case in ('no-eof','pipe-chain') and fd==child.err_writer:continue
+                os.close(fd);writers.remove(fd)
+        held=types.SimpleNamespace(recheck=lambda code:None,sha256='a'*64)
+        prepared={'parent':types.SimpleNamespace(path='/owned/sampler-batch'),'identity':None,'files':[held,held,held],
+            'context':held,'helper':held,'binding':{'owned':True},'parent_limits':before,'held':[]}
+        view=types.SimpleNamespace(**vars(module));view.time=Clock;view.os=types.SimpleNamespace(**vars(os))
+        view.os.getuid=lambda:56001;view.os.killpg=killpg
+        view.subprocess=types.SimpleNamespace(Popen=spawn,PIPE=subprocess.PIPE,TimeoutExpired=subprocess.TimeoutExpired)
+        view.signal=types.SimpleNamespace(**vars(module.signal));view.signal.pthread_sigmask=lambda *args:set()
+        signal_handlers={}
+        def set_signal(number,handler):
+            previous=signal_handlers.get(number);signal_handlers[number]=handler;return previous
+        view.signal.signal=set_signal;view._source_root=lambda:'/owned/package';view._close_paths=lambda paths:None
+        def require(value,code):
+            if not value:assert code=='E_RUNTIME';raise first
+        if case in ('cancel-chain','deadline-chain'):view._require=require
+        scope['c']=view;scope['_scope_sample_parent_recheck']=lambda *args:None;scope['_scope_sample_absent']=lambda *args:None
+        scope['_scope_sample_preflight']=lambda owner:prepared
+        scope['_scope_sample_report']=lambda *args:report_reads.append(args) or {'state':'COMPLETE','raw_hex':b'owned report'.hex(),'complete':True}
+        scope['_scope_sample_write_record']=lambda parent,name,value:saved.append([name,value])
+        scope['_scope_select_state']['native_selector']=Selector
+        owner_space={'bound_calls':bound_calls,'result':object()}
+        exec("class Owner:\n def _foreground(self,*args):bound_calls.append(args);return result\n def recheck(self):pass\n",owner_space)
+        Owner=owner_space['Owner'];view._DarwinChildOwner=Owner;owner=Owner();owner.deadline=1000;owner.python=held
+        arguments=['/usr/bin/git','--no-replace-objects','--git-dir=/owned/git','config','--file','/owned/config','--name-only','--list','--no-includes']
+        call_args=(arguments,b'',12,128,30,{'PATH':'/usr/bin:/bin'})
+        try:
+            if chain:
+                view.selectors=types.SimpleNamespace(DefaultSelector=Selector,EVENT_READ=1)
+                methods={name:getattr(Selector,name) for name in ('__init__','register','get_map','unregister','close','select')}
+                scope['_scope_select_binding']=lambda:(Selector,methods,object)
+                try:returned=scope['_scope_select_call'](owner._foreground,*call_args)
+                except BaseException as error:
+                    assert case!='safe-gap-chain' and error is first and first.__cause__ is cause and first.__context__ is context
+                    assert bool(scope['_scope_select_state']['process_pending'])==(case!='cancel-chain') and bound_calls==[]
+                    assert len(children)==2 and scope['_scope_sample_state']['starts']==1
+                    assert children[0].target
+                    if case!='deadline-chain':assert all(stream.closed for stream in (children[0].stdin,children[0].stdout,children[0].stderr))
+                    count=len(children);scope['_scope_sample_original'](owner,123,1000,[False]);assert len(children)==count
+                    if case!='cancel-chain':
+                        try:scope['_scope_select_call'](owner._foreground,*call_args)
+                        except scope['ScopeProcessPending']:pass
+                        else:raise AssertionError('PENDING allowed a later original call')
+                    assert not bound_calls
+                else:
+                    assert case=='safe-gap-chain' and returned is owner_space['result'] and len(bound_calls)==1
+                    assert all(actual is expected for actual,expected in zip(bound_calls[0],call_args))
+                    assert not scope['_scope_select_state'].get('process_pending')
+                record=scope['_scope_sample_state']['records'][0]
+                if case in ('group-chain','wait-chain','pipe-chain'):assert record['target_closure']['complete'] and not record['closure']['complete']
+            else:
+                phase='git' if case in ('timeout-tail','exception-tail') else 'cancel'
+                scope['_scope_sample_state'].update(prepared=prepared,phase=phase,starts=2 if phase=='git' else 1)
+                failure=None
+                try:record,passed=scope['_scope_sample_observe'](owner,123,1000,[False],phase)
+                except BaseException as error:
+                    failure=error;record=scope['_scope_sample_state']['records'][0]
+                    assert case in ('over-stdout','over-stderr','no-eof','exception-tail')
+                    if case=='exception-tail':assert error is first and first.__cause__ is cause and first.__context__ is context
+                    else:assert scope['_scope_select_state']['process_pending']
+                else:
+                    assert passed==(case in ('early-marker','tail-both','exact-cap'))
+                    if case not in ('early-exit','timeout-tail'):
+                        assert record['cancellation_requested'] and 0.25<=record['cancel_after_launch']<0.30
+                    if case in ('late-marker','no-marker'):assert not record['tool_seen_before_cancel'] and scope['_scope_sample_state']['blocked']
+                    if case=='early-exit':assert scope['_scope_sample_state']['blocked'] and not record['cancellation_requested']
+                    if case=='timeout-tail':assert record['error_type']=='TimeoutError' and scope['_scope_sample_state']['blocked']
+                out=bytes.fromhex(record['stdout_hex']);err=bytes.fromhex(record['stderr_hex'])
+                assert out.startswith(children[0].prefix)
+                if case=='exact-cap':assert len(out)==768 and len(err)==128 and record['closure']['output_complete']
+                if case=='over-stdout':assert len(out)==769 and not record['closure']['complete'] and not report_reads
+                if case=='over-stderr':assert len(err)==129 and not record['closure']['complete'] and not report_reads
+                if case in ('tail-both','timeout-tail','exception-tail'):
+                    assert out.endswith(b'TERM stdout\n') and err==b'TERM stderr\n'
+                if failure is None or case=='exception-tail':assert record['closure']['stdout_tail_eof'] and record['closure']['stderr_eof']
+            print(json.dumps({'sampler_supervision_P1_before_assert':{'case':case,'record':record,'events':events,'bound_calls':len(bound_calls)}},sort_keys=True),flush=True)
+            records.append(completed_evidence({'sampler_supervision_P1':case,'actual_record':record,'owned_events':events,
+                'original_bound_calls':len(bound_calls),'real_sample_starts':0,'scope':'actual close/observe/controls/select; kernel owned pipes, controlled child/group/wait/time'}))
+        finally:
+            for fd in list(writers):os.close(fd);writers.remove(fd)
+            for child in children:
+                for stream in (child.stdin,child.stdout,child.stderr):
+                    if not stream.closed:stream.close()
+    return completed_evidence({'sampler_supervision_P1_controls':records,'real_sample_starts':0})
 
 def process_snapshot_controls(area,module):
     import ctypes,io,selectors,signal,types,traceback
@@ -4235,6 +4381,7 @@ def process_snapshot_controls(area,module):
         if fault.startswith('image-'):assert result['image_path_hex']=='GAP' and result['pid']==123
         reports.append({'case':'fields-'+fault,'result':result})
     sample_boundary_controls(area,module,setup)
+    sample_supervision_controls(module,setup)
     process_admission_controls(module,setup)
     process_unknown_controls(namespace,module)
     supervisor=namespace['_scope_process_supervise']
@@ -11862,7 +12009,7 @@ print(relation_result)
         assert cls is c.selectors.DefaultSelector and cls._selector_cls is backend and ctypes.pythonapi is api and api._handle==api_handle
         return path,c.digest(raw)
     finally:held.close()
-''' + "_scope_select_source_sha=SELECTORS_SHA\n_scope_select_native_sha=NATIVE_SHA\n_scope_select_state={'used':False,'suspended':False,'counts':None,'selector':None,'selector_class':None,'argv':None,'foreground':None}\ndef _scope_select_binding():\n    module_type=type(sys);module_fields=module_type.__dict__['__dict__'];modules=module_fields.__get__(sys)['modules']\n    assert type(modules) is dict and modules['sys'] is sys and modules['selectors'] is c.selectors\n    selectors=c.selectors;mapping=module_fields.__get__(selectors);loader=modules['_frozen_importlib_external']\n    assert type(selectors) is module_type and type(mapping['__loader__']) is loader.SourceFileLoader\n    assert mapping['__file__']==SELECTORS_PATH and mapping['__spec__'].origin==SELECTORS_PATH\n    code_type=type(_scope_select_binding.__code__);function_type=type(_scope_select_binding)\n    def code_at(code,*names):\n        for name in names:\n            matches=[value for value in code.co_consts if type(value) is code_type and value.co_name==name]\n            assert len(matches)==1\n            code=matches[0]\n        return code\n    selector_code=compile(SELECTORS_SOURCE,SELECTORS_PATH,'exec',dont_inherit=True)\n    abc=modules['abc'];abc_fields=module_fields.__get__(abc)\n    assert type(abc) is module_type and abc_fields['__file__']==ABC_PATH\n    abc_filename=ABC_PATH\n    if abc_fields['__spec__'].origin=='frozen':\n        bootstrap=modules['_frozen_importlib'];bootstrap_fields=module_fields.__get__(bootstrap)\n        assert type(bootstrap) is module_type and modules['importlib._bootstrap'] is bootstrap and loader._bootstrap is bootstrap\n        frozen=bootstrap_fields['FrozenImporter'];builtin=bootstrap_fields['BuiltinImporter']\n        assert type(frozen) is type and type(builtin) is type\n        assert module_fields.__get__(sys)['__loader__'] is builtin and module_fields.__get__(sys)['__spec__'].loader is builtin\n        assert bootstrap_fields['__loader__'] is frozen and bootstrap_fields['__spec__'].loader is frozen and bootstrap_fields['__spec__'].origin=='frozen'\n        assert abc_fields['__loader__'] is frozen and abc_fields['__spec__'].loader is frozen\n        for importer in (frozen,builtin):\n            for method in ('find_spec','create_module','exec_module'):\n                function=type.__dict__['__dict__'].__get__(importer)[method].__func__\n                assert type(function) is function_type and function.__globals__ is bootstrap_fields\n        abc_filename='<frozen abc>'\n    else:\n        assert type(abc_fields['__loader__']) is loader.SourceFileLoader and abc_fields['__spec__'].origin==ABC_PATH\n    abc_code=code_at(compile(ABC_SOURCE,abc_filename,'exec',dont_inherit=True),'ABCMeta')\n    meta=abc_fields['ABCMeta']\n    assert mapping['ABCMeta'] is meta\n    type_fields=type.__dict__['__dict__'];bases=type.__dict__['__bases__'];mro=type.__dict__['__mro__']\n    assert type(meta) is type and bases.__get__(meta)==(type,) and mro.__get__(meta)==(meta,type,object)\n    meta_fields=type_fields.__get__(meta)\n    for name in ('__getattribute__','__call__','__eq__','__hash__','mro'):\n        assert getattr(meta,name) is getattr(type,name)\n    for expected in abc_code.co_consts:\n        if type(expected) is code_type:\n            actual=meta_fields[expected.co_name]\n            if type(actual) is staticmethod:actual=actual.__func__\n            assert type(actual) is function_type and actual.__globals__ is abc_fields and actual.__code__==expected\n    abc_native=modules['_abc'];abc_native_fields=module_fields.__get__(abc_native)\n    assert type(abc_native) is module_type and abc_native_fields['__spec__'].origin=='built-in'\n    for name in ('_abc_init','_abc_register','_abc_instancecheck','_abc_subclasscheck'):\n        assert abc_fields[name] is abc_native_fields[name] and type(abc_fields[name]) is type(len)\n    base=mapping['BaseSelector'];implementation=mapping['_BaseSelectorImpl'];cls=mapping['DefaultSelector']\n    if cls is mapping.get('KqueueSelector'):\n        chain=(cls,implementation,base,object)\n        owners={'__init__':'KqueueSelector','register':'KqueueSelector','get_map':'_BaseSelectorImpl','unregister':'KqueueSelector','close':'KqueueSelector','select':'KqueueSelector'}\n    else:\n        assert cls is mapping.get('EpollSelector')\n        chain=(cls,mapping['_PollLikeSelector'],implementation,base,object)\n        owners={'__init__':'_PollLikeSelector','register':'_PollLikeSelector','get_map':'_BaseSelectorImpl','unregister':'_PollLikeSelector','close':'EpollSelector','select':'EpollSelector'}\n    for position,item in enumerate(chain[:-1]):\n        assert type(item) is meta\n        actual_bases=bases.__get__(item);actual_mro=mro.__get__(item)\n        assert len(actual_bases)==1 and actual_bases[0] is chain[position+1]\n        assert len(actual_mro)==len(chain)-position and all(left is right for left,right in zip(actual_mro,chain[position:]))\n    methods={}\n    for name,owner_name in owners.items():\n        owner=mapping[owner_name];method=type_fields.__get__(owner)[name]\n        assert getattr(cls,name) is method and type(method) is function_type\n        assert method.__globals__ is mapping and method.__code__==code_at(selector_code,owner_name,name)\n        methods[name]=method\n    native=modules['select'];native_fields=module_fields.__get__(native)\n    assert type(native) is module_type and mapping['select'] is native\n    actual_path,actual_digest=_scope_select_native_source(c)\n    assert actual_path==NATIVE_ORIGIN and actual_digest==_scope_select_native_sha\n    if cls is mapping.get('KqueueSelector'):\n        assert '_selector_cls' not in type_fields.__get__(cls)\n        backend=native_fields['kqueue']\n    else:\n        backend=type_fields.__get__(cls)['_selector_cls'];assert backend is native_fields['epoll']\n    new=backend.__dict__['__new__'];fields=type(new).__dict__\n    assert type(new) is type(len) and fields['__self__'].__get__(new) is backend\n    assert backend.__module__=='select' and type(backend) is type\n    return cls,methods,backend\n\ndef _scope_select_first_config(arguments):\n    if type(arguments) is not list or len(arguments)!=9 or not all(type(value) is str for value in arguments):return False\n    try:\n        for value in arguments:value.encode('utf-8','strict')\n        return (arguments[:2]==['/usr/bin/git','--no-replace-objects'] and arguments[2].startswith('--git-dir=/') and\n            arguments[3:5]==['config','--file'] and arguments[5].startswith('/') and\n            arguments[6:]==['--name-only','--list','--no-includes'] and len(json.dumps(arguments,ensure_ascii=True).encode())<=2048)\n    except (UnicodeError,TypeError,ValueError):return False\n\ndef _scope_select_call(bound,arguments,raw,cap,error_cap,timeout,environment):\n    state=_scope_select_state\n    if state['used']:\n        previous=state['suspended'];state['suspended']=True\n        try:return bound(arguments,raw,cap,error_cap,timeout,environment)\n        finally:state['suspended']=previous\n    if (type(bound) is not type(c._DarwinChildOwner._foreground.__get__(object(),object)) or\n            bound.__func__.__code__ is not c._DarwinChildOwner._foreground.__code__ or\n            type(bound.__self__) is not c._DarwinChildOwner or not _scope_select_first_config(arguments)):\n        return bound(arguments,raw,cap,error_cap,timeout,environment)\n    state['used']=True;state['argv']=arguments;state['foreground']=bound.__func__.__code__\n    original_class,methods,backend=_scope_select_binding()\n    state['counts']={'entered':0,'returned':0,'raised':0,'nonempty':0,'events_total':0,'last_length':'GAP'}\n    state['native_selector']=original_class;state['owner']=bound.__self__\n    state['process_snapshot']='GAP';state['process_attempted']=False;state['process_pending']=False\n    try:_scope_sample_controls(bound.__self__)\n    except BaseException:\n        _scope_sample_release()\n        raise\n    original_select=methods['select']\n    def increment(key,amount=1):\n        facts=state['counts']\n        if facts is None:return\n        try:\n            value=facts[key]\n            if type(value) is not int or type(amount) is not int or value<0 or amount<0 or value+amount>2147483647:state['counts']=None\n            else:facts[key]=value+amount\n        except (KeyError,TypeError,ValueError,OverflowError,MemoryError):state['counts']=None\n    class ScopeFirstConfigSelector(original_class):\n        __slots__=()\n        def select(self,*args,**kwargs):\n            if state['suspended']:return original_select(self,*args,**kwargs)\n            if state['selector'] is None:state['selector']=self\n            elif state['selector'] is not self:state['counts']=None\n            increment('entered')\n            first_git_process_snapshot(sys._getframe().f_back,self)\n            try:result=original_select(self,*args,**kwargs)\n            except BaseException:\n                increment('raised')\n                raise\n            increment('returned')\n            if type(result) is not list:state['counts']=None\n            elif state['counts'] is not None:\n                try:\n                    length=len(result)\n                    if length>2147483647:state['counts']=None\n                    else:\n                        state['counts']['last_length']=length\n                        increment('events_total',length)\n                        if length:increment('nonempty')\n                except (KeyError,TypeError,ValueError,OverflowError,MemoryError):state['counts']=None\n            return result\n    assert all(getattr(ScopeFirstConfigSelector,name) is methods[name] for name in ('__init__','register','get_map','unregister','close'))\n    state['selector_class']=ScopeFirstConfigSelector\n    container=bound.__func__.__globals__.get('selectors',c.selectors)\n    assert container.DefaultSelector is original_class\n    try:\n        try:container.DefaultSelector=ScopeFirstConfigSelector\n        except (AttributeError,TypeError,MemoryError):state['counts']=None\n        return bound(arguments,raw,cap,error_cap,timeout,environment)\n    finally:\n        container.DefaultSelector=original_class\n        _scope_sample_release()\n" + r"""
+''' + "_scope_select_source_sha=SELECTORS_SHA\n_scope_select_native_sha=NATIVE_SHA\n_scope_select_state={'used':False,'suspended':False,'counts':None,'selector':None,'selector_class':None,'argv':None,'foreground':None}\ndef _scope_select_binding():\n    module_type=type(sys);module_fields=module_type.__dict__['__dict__'];modules=module_fields.__get__(sys)['modules']\n    assert type(modules) is dict and modules['sys'] is sys and modules['selectors'] is c.selectors\n    selectors=c.selectors;mapping=module_fields.__get__(selectors);loader=modules['_frozen_importlib_external']\n    assert type(selectors) is module_type and type(mapping['__loader__']) is loader.SourceFileLoader\n    assert mapping['__file__']==SELECTORS_PATH and mapping['__spec__'].origin==SELECTORS_PATH\n    code_type=type(_scope_select_binding.__code__);function_type=type(_scope_select_binding)\n    def code_at(code,*names):\n        for name in names:\n            matches=[value for value in code.co_consts if type(value) is code_type and value.co_name==name]\n            assert len(matches)==1\n            code=matches[0]\n        return code\n    selector_code=compile(SELECTORS_SOURCE,SELECTORS_PATH,'exec',dont_inherit=True)\n    abc=modules['abc'];abc_fields=module_fields.__get__(abc)\n    assert type(abc) is module_type and abc_fields['__file__']==ABC_PATH\n    abc_filename=ABC_PATH\n    if abc_fields['__spec__'].origin=='frozen':\n        bootstrap=modules['_frozen_importlib'];bootstrap_fields=module_fields.__get__(bootstrap)\n        assert type(bootstrap) is module_type and modules['importlib._bootstrap'] is bootstrap and loader._bootstrap is bootstrap\n        frozen=bootstrap_fields['FrozenImporter'];builtin=bootstrap_fields['BuiltinImporter']\n        assert type(frozen) is type and type(builtin) is type\n        assert module_fields.__get__(sys)['__loader__'] is builtin and module_fields.__get__(sys)['__spec__'].loader is builtin\n        assert bootstrap_fields['__loader__'] is frozen and bootstrap_fields['__spec__'].loader is frozen and bootstrap_fields['__spec__'].origin=='frozen'\n        assert abc_fields['__loader__'] is frozen and abc_fields['__spec__'].loader is frozen\n        for importer in (frozen,builtin):\n            for method in ('find_spec','create_module','exec_module'):\n                function=type.__dict__['__dict__'].__get__(importer)[method].__func__\n                assert type(function) is function_type and function.__globals__ is bootstrap_fields\n        abc_filename='<frozen abc>'\n    else:\n        assert type(abc_fields['__loader__']) is loader.SourceFileLoader and abc_fields['__spec__'].origin==ABC_PATH\n    abc_code=code_at(compile(ABC_SOURCE,abc_filename,'exec',dont_inherit=True),'ABCMeta')\n    meta=abc_fields['ABCMeta']\n    assert mapping['ABCMeta'] is meta\n    type_fields=type.__dict__['__dict__'];bases=type.__dict__['__bases__'];mro=type.__dict__['__mro__']\n    assert type(meta) is type and bases.__get__(meta)==(type,) and mro.__get__(meta)==(meta,type,object)\n    meta_fields=type_fields.__get__(meta)\n    for name in ('__getattribute__','__call__','__eq__','__hash__','mro'):\n        assert getattr(meta,name) is getattr(type,name)\n    for expected in abc_code.co_consts:\n        if type(expected) is code_type:\n            actual=meta_fields[expected.co_name]\n            if type(actual) is staticmethod:actual=actual.__func__\n            assert type(actual) is function_type and actual.__globals__ is abc_fields and actual.__code__==expected\n    abc_native=modules['_abc'];abc_native_fields=module_fields.__get__(abc_native)\n    assert type(abc_native) is module_type and abc_native_fields['__spec__'].origin=='built-in'\n    for name in ('_abc_init','_abc_register','_abc_instancecheck','_abc_subclasscheck'):\n        assert abc_fields[name] is abc_native_fields[name] and type(abc_fields[name]) is type(len)\n    base=mapping['BaseSelector'];implementation=mapping['_BaseSelectorImpl'];cls=mapping['DefaultSelector']\n    if cls is mapping.get('KqueueSelector'):\n        chain=(cls,implementation,base,object)\n        owners={'__init__':'KqueueSelector','register':'KqueueSelector','get_map':'_BaseSelectorImpl','unregister':'KqueueSelector','close':'KqueueSelector','select':'KqueueSelector'}\n    else:\n        assert cls is mapping.get('EpollSelector')\n        chain=(cls,mapping['_PollLikeSelector'],implementation,base,object)\n        owners={'__init__':'_PollLikeSelector','register':'_PollLikeSelector','get_map':'_BaseSelectorImpl','unregister':'_PollLikeSelector','close':'EpollSelector','select':'EpollSelector'}\n    for position,item in enumerate(chain[:-1]):\n        assert type(item) is meta\n        actual_bases=bases.__get__(item);actual_mro=mro.__get__(item)\n        assert len(actual_bases)==1 and actual_bases[0] is chain[position+1]\n        assert len(actual_mro)==len(chain)-position and all(left is right for left,right in zip(actual_mro,chain[position:]))\n    methods={}\n    for name,owner_name in owners.items():\n        owner=mapping[owner_name];method=type_fields.__get__(owner)[name]\n        assert getattr(cls,name) is method and type(method) is function_type\n        assert method.__globals__ is mapping and method.__code__==code_at(selector_code,owner_name,name)\n        methods[name]=method\n    native=modules['select'];native_fields=module_fields.__get__(native)\n    assert type(native) is module_type and mapping['select'] is native\n    actual_path,actual_digest=_scope_select_native_source(c)\n    assert actual_path==NATIVE_ORIGIN and actual_digest==_scope_select_native_sha\n    if cls is mapping.get('KqueueSelector'):\n        assert '_selector_cls' not in type_fields.__get__(cls)\n        backend=native_fields['kqueue']\n    else:\n        backend=type_fields.__get__(cls)['_selector_cls'];assert backend is native_fields['epoll']\n    new=backend.__dict__['__new__'];fields=type(new).__dict__\n    assert type(new) is type(len) and fields['__self__'].__get__(new) is backend\n    assert backend.__module__=='select' and type(backend) is type\n    return cls,methods,backend\n\ndef _scope_select_first_config(arguments):\n    if type(arguments) is not list or len(arguments)!=9 or not all(type(value) is str for value in arguments):return False\n    try:\n        for value in arguments:value.encode('utf-8','strict')\n        return (arguments[:2]==['/usr/bin/git','--no-replace-objects'] and arguments[2].startswith('--git-dir=/') and\n            arguments[3:5]==['config','--file'] and arguments[5].startswith('/') and\n            arguments[6:]==['--name-only','--list','--no-includes'] and len(json.dumps(arguments,ensure_ascii=True).encode())<=2048)\n    except (UnicodeError,TypeError,ValueError):return False\n\ndef _scope_select_call(bound,arguments,raw,cap,error_cap,timeout,environment):\n    state=_scope_select_state\n    if state.get('process_pending'):raise ScopeProcessPending('sample boundary remains PENDING')\n    if state['used']:\n        previous=state['suspended'];state['suspended']=True\n        try:return bound(arguments,raw,cap,error_cap,timeout,environment)\n        finally:state['suspended']=previous\n    if (type(bound) is not type(c._DarwinChildOwner._foreground.__get__(object(),object)) or\n            bound.__func__.__code__ is not c._DarwinChildOwner._foreground.__code__ or\n            type(bound.__self__) is not c._DarwinChildOwner or not _scope_select_first_config(arguments)):\n        return bound(arguments,raw,cap,error_cap,timeout,environment)\n    state['used']=True;state['argv']=arguments;state['foreground']=bound.__func__.__code__\n    original_class,methods,backend=_scope_select_binding()\n    state['counts']={'entered':0,'returned':0,'raised':0,'nonempty':0,'events_total':0,'last_length':'GAP'}\n    state['native_selector']=original_class;state['owner']=bound.__self__\n    state['process_snapshot']='GAP';state['process_attempted']=False;state['process_pending']=False\n    try:_scope_sample_controls(bound.__self__)\n    except BaseException:\n        _scope_sample_release()\n        raise\n    if state.get('process_pending'):raise ScopeProcessPending('sample controls returned PENDING')\n    original_select=methods['select']\n    def increment(key,amount=1):\n        facts=state['counts']\n        if facts is None:return\n        try:\n            value=facts[key]\n            if type(value) is not int or type(amount) is not int or value<0 or amount<0 or value+amount>2147483647:state['counts']=None\n            else:facts[key]=value+amount\n        except (KeyError,TypeError,ValueError,OverflowError,MemoryError):state['counts']=None\n    class ScopeFirstConfigSelector(original_class):\n        __slots__=()\n        def select(self,*args,**kwargs):\n            if state['suspended']:return original_select(self,*args,**kwargs)\n            if state['selector'] is None:state['selector']=self\n            elif state['selector'] is not self:state['counts']=None\n            increment('entered')\n            first_git_process_snapshot(sys._getframe().f_back,self)\n            try:result=original_select(self,*args,**kwargs)\n            except BaseException:\n                increment('raised')\n                raise\n            increment('returned')\n            if type(result) is not list:state['counts']=None\n            elif state['counts'] is not None:\n                try:\n                    length=len(result)\n                    if length>2147483647:state['counts']=None\n                    else:\n                        state['counts']['last_length']=length\n                        increment('events_total',length)\n                        if length:increment('nonempty')\n                except (KeyError,TypeError,ValueError,OverflowError,MemoryError):state['counts']=None\n            return result\n    assert all(getattr(ScopeFirstConfigSelector,name) is methods[name] for name in ('__init__','register','get_map','unregister','close'))\n    state['selector_class']=ScopeFirstConfigSelector\n    container=bound.__func__.__globals__.get('selectors',c.selectors)\n    assert container.DefaultSelector is original_class\n    try:\n        try:container.DefaultSelector=ScopeFirstConfigSelector\n        except (AttributeError,TypeError,MemoryError):state['counts']=None\n        return bound(arguments,raw,cap,error_cap,timeout,environment)\n    finally:\n        container.DefaultSelector=original_class\n        _scope_sample_release()\n" + r"""
 _scope_process_helper_raw=rb'''import hashlib,importlib.util,json,os,stat,sys
 from pathlib import Path
 
@@ -12407,6 +12554,10 @@ def _scope_sample_close(child,selector,end,capture=None):
         for label,stream,cap in (('stdout_tail',child.stdout,capture['stdout']),('stderr',child.stderr,capture['stderr'])):
             raw=bytearray();eof=False
             try:
+                if cap<0:raise ValueError('sample cumulative output cap already exceeded')
+                if stream.closed:
+                    assert capture.get('stdout_eof' if label=='stdout_tail' else 'stderr_eof') is True
+                    captured[label+'_hex']='';captured[label+'_eof']=True;continue
                 c.os.set_blocking(stream.fileno(),False)
                 while c.time.monotonic()<close_end:
                     try:block=c.os.read(stream.fileno(),769)
@@ -12415,7 +12566,7 @@ def _scope_sample_close(child,selector,end,capture=None):
                     raw.extend(block)
                     if len(raw)>cap:break
             except BaseException as error:errors.append(error)
-            captured[label+'_hex']=bytes(raw).hex()
+            captured[label+'_hex']=bytes(raw).hex();captured[label+'_eof']=eof
             output_complete=output_complete and eof and len(raw)<=cap
     closed=output_complete
     for item in (selector,child.stdin,child.stdout,child.stderr):
@@ -12442,7 +12593,7 @@ def _scope_sample_observe(owner,pid,end,cancelled,phase):
         tool.sha256,manual.sha256,native.sha256,report]
     record={'phase':phase,'pid':pid,'uid':c.os.getuid(),'command':command,'tool_argv':['/usr/bin/sample',str(pid),'1','1','-file',report],
         'binding':prepared['binding'],'report':{'state':'NOT_READ_WRITER_OPEN','complete':False},'tool_stage':'UNKNOWN'}
-    start=c.time.monotonic();collection=min(end,start+5);request=False;buckets={};result=None;tool_seen=None
+    start=c.time.monotonic();collection=min(end,start+5);request=False;buckets={};result=None;tool_seen=None;eof_streams=set()
     state['starts']+=1
     try:
         child=c.subprocess.Popen(command,stdin=c.subprocess.PIPE,stdout=c.subprocess.PIPE,stderr=c.subprocess.PIPE,
@@ -12453,19 +12604,20 @@ def _scope_sample_observe(owner,pid,end,cancelled,phase):
         while selector.get_map():
             now=c.time.monotonic()
             c._require(cancelled[0] is False and now<end,'E_RUNTIME')
-            if phase=='cancel' and tool_seen is not None and now-tool_seen>=0.25:
+            if phase=='cancel' and now-start>=0.25:
                 if child.poll() is not None:raise ValueError('sample cancellation unproved: early exit')
-                request=True;record['cancel_after_tool_start']=now-tool_seen;break
+                request=True;record['cancel_after_launch']=now-start
+                record['tool_seen_before_cancel']=tool_seen is not None;break
             if now>=collection:raise TimeoutError('sample collection window')
             for key,events in selector.select(min(0.02,collection-now)):
                 stream=key.fileobj
                 try:block=c.os.read(stream.fileno(),769)
                 except BlockingIOError:continue
-                if not block:selector.unregister(stream);stream.close()
+                if not block:eof_streams.add(stream);selector.unregister(stream);stream.close()
                 else:
-                    if len(buckets[stream])+len(block)>limits[stream]:
-                        record['output_overflow']=True;record['overflow_chunk_hex']=block.hex();raise ValueError('sample output cap; incomplete failure raw')
                     buckets[stream].extend(block)
+                    if len(buckets[stream])>limits[stream]:
+                        record['output_overflow']=True;raise ValueError('sample output cap; incomplete failure raw')
                     if tool_seen is None and b'Sampling process' in bytes(buckets[child.stdout])+bytes(buckets[child.stderr]):
                         tool_seen=c.time.monotonic()
         if not request:
@@ -12478,12 +12630,14 @@ def _scope_sample_observe(owner,pid,end,cancelled,phase):
     finally:
         errors=[]
         if child is not None:
-            try:close,errors=_scope_sample_close(child,selector,end)
+            try:close,errors=_scope_sample_close(child,selector,end,{'stdout':768-len(buckets.get(child.stdout,b'')),
+                'stderr':128-len(buckets.get(child.stderr,b'')),
+                'stdout_eof':child.stdout in eof_streams,'stderr_eof':child.stderr in eof_streams})
             except BaseException as error:close={'complete':False,'supervisor':'UNKNOWN'};errors=[error]
         else:close={'complete':False,'construction':'UNKNOWN'}
         record.update(returncode=child.returncode if child is not None else None,elapsed=c.time.monotonic()-start,
-            stdout_hex=bytes(buckets.get(child.stdout,b'')).hex() if child is not None else '',
-            stderr_hex=bytes(buckets.get(child.stderr,b'')).hex() if child is not None else '',
+            stdout_hex=(bytes(buckets.get(child.stdout,b''))+bytes.fromhex(close.get('stdout_tail_hex',''))).hex() if child is not None else '',
+            stderr_hex=(bytes(buckets.get(child.stderr,b''))+bytes.fromhex(close.get('stderr_hex',''))).hex() if child is not None else '',
             closure=close,cancellation_requested=request,error_type=type(first).__name__ if first is not None else None)
         state['records'].append(record)
         if not close['complete']:
@@ -12506,7 +12660,7 @@ def _scope_sample_observe(owner,pid,end,cancelled,phase):
         record['actual_child_limit']=limit
         tool_started=b'Sampling process' in bytes.fromhex(record['stdout_hex'])+bytes.fromhex(record['stderr_hex'])
         record['actual_tool_start_raw']=tool_started or phase!='cancel' and result==0 and record['report']['complete']
-        good=(request and phase=='cancel' and first is None and tool_started and record.get('cancel_after_tool_start',0)>=0.25 or phase!='cancel' and first is None and result==0 and
+        good=(request and phase=='cancel' and first is None and tool_started and record.get('tool_seen_before_cancel') is True and record.get('cancel_after_launch',0)>=0.25 or phase!='cancel' and first is None and result==0 and
             record['report']['complete'])
         record['passed']=good
     except BaseException as error:
@@ -12547,7 +12701,7 @@ def _scope_sample_controls(owner):
         for number in (c.signal.SIGINT,c.signal.SIGTERM,c.signal.SIGHUP):handlers[number]=c.signal.signal(number,observe_signal)
         c.signal.pthread_sigmask(c.signal.SIG_SETMASK,previous)
         for phase in ('normal','cancel'):
-            target=None;selector=None;failure=None;record=None;passed=False;target_raw=b'';target_attempted=False
+            target=None;selector=None;failure=None;record=None;passed=False;target_raw=b'';target_attempted=False;failure_relation=None
             try:
                 assert owner.deadline-c.time.monotonic()>=10
                 target_attempted=True
@@ -12566,14 +12720,17 @@ def _scope_sample_controls(owner):
                     graph=text.split('Call graph:',1);assert len(graph)==2
                     graph=graph[1].split('Binary Images:',1)[0]
                     assert '['+str(target.pid)+']' in text and ('__read_nocancel' in graph or ' read (' in graph)
-            except BaseException as error:failure=error;passed=False
+            except BaseException as error:
+                failure=error;passed=False;failure_relation=(error.__cause__,error.__context__,error.__suppress_context__)
             finally:
                 if target is not None:
                     try:closure,errors=_scope_sample_close(target,selector,owner.deadline,{'stdout':768-len(target_raw),'stderr':128})
                     except BaseException as error:
                         closure={'complete':False,'supervisor':'UNKNOWN'}
-                        if failure is None:failure=error
+                        if failure is None:
+                            failure=error;failure_relation=(error.__cause__,error.__context__,error.__suppress_context__)
                 else:closure={'complete':not target_attempted,'target_construction':'UNKNOWN' if target_attempted else 'NOT_STARTED'}
+                if record is None and state['records'] and state['records'][-1]['phase']==phase:record=state['records'][-1]
                 if record is None:record={'phase':phase,'sampler_started':False,'failure_type':type(failure).__name__ if failure is not None else None}
                 if record is not None:
                     record['target_closure']=closure;record['control_passed']=passed and failure is None
@@ -12584,10 +12741,14 @@ def _scope_sample_controls(owner):
                         try:_scope_sample_write_record(state['prepared']['parent'],phase+'.json',record)
                         except BaseException as error:
                             passed=False
-                            if failure is None:failure=error
-                if not closure['complete']:
+                            if failure is None:
+                                failure=error;failure_relation=(error.__cause__,error.__context__,error.__suppress_context__)
+                if not closure['complete'] or _scope_select_state.get('process_pending'):
                     state['blocked']=True;_scope_select_state['process_pending']=True
-                    raise ScopeProcessPending('sample control target closure PENDING') from failure
+                    if failure is not None:
+                        failure.__cause__,failure.__context__,failure.__suppress_context__=failure_relation
+                        raise failure
+                    raise ScopeProcessPending('sample control closure PENDING')
             if failure is not None and not isinstance(failure,Exception):raise failure
             if original_cancelled[0]:
                 state['blocked']=True
