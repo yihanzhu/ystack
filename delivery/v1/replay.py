@@ -801,7 +801,10 @@ def hold_candidate_ref(candidate_root, expected_commit):
             except (BrokenPipeError, OSError):
                 pass
         if process.stdin is not None:
-            process.stdin.close()
+            try:
+                process.stdin.close()
+            except BrokenPipeError:
+                pass
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
