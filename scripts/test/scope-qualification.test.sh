@@ -1515,7 +1515,8 @@ PY_STALE_PREPARE
 scope_controls_state=started
 python3 -I -S -B - "$root" "$tmp/same-call-owned-controls" "${BASH_SOURCE[0]}" <<'PY_SAME_CALL_OWNED_CONTROLS'
 import ast,hashlib,json,os,pathlib,runpy,signal,stat,subprocess,sys,time
-root,area=map(pathlib.Path,sys.argv[1:3]);source=pathlib.Path(sys.argv[3]).read_text()
+root,area=map(pathlib.Path,sys.argv[1:3]);execution_source=pathlib.Path(sys.argv[3])
+source=(root/'scripts/test/scope-qualification.test.sh').read_text()
 area.mkdir()
 prepare=source.split("<<'PY_STALE_PREPARE'",1)[1].split('\n',1)[1].split('\nPY_STALE_PREPARE\n',1)[0]
 observer=ast.literal_eval(next(node.value for node in ast.parse(prepare).body
@@ -2241,20 +2242,41 @@ def dashboard_phase_controls():
     audit_args=[str(audit_base/name) for name in ('scope.json','shadow-set.json','dashboard-shape.json','risk.json',
         'kill.json','duty.json','marker.json','legacy-bundles','legacy-source.git')]
     for name in audit_args[:7]:pathlib.Path(name).write_bytes(b'{}\n')
-    for case,expression,chosen in (('selected','del(.body.flow)',True),('unselected','del(.body.telemetry)',False)):
-        argv=[sys.executable,'-I','-S','-B',str(binding_audit),str(root),str(audit_area),'8',
-            'evaluation-reasons',str(audit_front),call_line,expression,*audit_args]
-        rc,out,err=run(argv)
-        actual_binding=json.loads(audit_binding.read_bytes())
-        actual_opens=json.loads(out)['binding_open_events'] if out else []
-        print(json.dumps({'dashboard_enclosing_binding_before_assert':{'case':case,'argv':argv,'returncode':rc,
-            'stdout_hex':out.hex(),'stderr_hex':err.hex(),'binding':actual_binding,'open_events':actual_opens}},sort_keys=True),flush=True)
-        assert rc==0 and not err and actual_binding['dashboard_selected'] is chosen
-        assert not any(path.endswith('observer.py') for path in actual_opens)
-        expected_reads=[str(audit_area/'8.lines.json')]+audit_args[:7]+[str(root/name) for name in
-            ('scope/v1/evaluate-scope.sh','scope/v1/read-shadow-evidence.py','shadow/v1/_consumer.py',
-             'scripts/test/scope-qualification.test.sh')]+[str(audit_front)]
-        assert actual_opens==expected_reads[:1]+[str(audit_log),str(audit_binding)]+expected_reads[1:]+[str(audit_binding)]
+    writer_source=(root/'scripts/test/shadow-write.test.sh').read_text()
+    writer_body=writer_source.split("<<'PY'\n",1)[1].split('\nPY\n',1)[0]
+    scope_tail=ast.literal_eval(next(node.value for node in ast.walk(ast.parse(writer_body))
+        if isinstance(node,ast.Assign) and any(isinstance(target,ast.Name) and target.id=='scope_tail'
+            for target in node.targets)))
+    boundary='run_validator '+'"$tmp/scope.json" || fail'
+    assert source.count(boundary)==1
+    split=source.index(boundary)
+    nested_source=source[:split]+scope_tail+'\nexit "$?"\n'+source[split:]
+    loader=[]
+    for node in ast.parse(actual_body('PY_SAME_CALL_OWNED_CONTROLS')).body:
+        if isinstance(node,ast.Expr) and isinstance(node.value,ast.Call):break
+        if not isinstance(node,(ast.Import,ast.ImportFrom)):loader.append(node)
+    source_loader=compile(ast.Module(body=loader,type_ignores=[]),'actual-ordinary-source-boundary','exec')
+    for entry,executed in (('original',source),('nested',nested_source)):
+        execution_source=base/(entry+'.scope.sh');execution_source.write_text(executed)
+        context={'pathlib':pathlib,'sys':__import__('types').SimpleNamespace(
+            argv=['-',str(root),str(area),str(execution_source)])}
+        exec(source_loader,context)
+        control_source=context['source']
+        call_line=str(control_source.splitlines().index(call)+1)
+        for case,expression,chosen in (('selected','del(.body.flow)',True),('unselected','del(.body.telemetry)',False)):
+            argv=[sys.executable,'-I','-S','-B',str(binding_audit),str(root),str(audit_area),'8',
+                'evaluation-reasons',str(audit_front),call_line,expression,*audit_args]
+            rc,out,err=run(argv)
+            actual_binding=json.loads(audit_binding.read_bytes())
+            actual_opens=json.loads(out)['binding_open_events'] if out else []
+            print(json.dumps({'dashboard_enclosing_binding_before_assert':{'entry':entry,'case':case,'argv':argv,'returncode':rc,
+                'stdout_hex':out.hex(),'stderr_hex':err.hex(),'binding':actual_binding,'open_events':actual_opens}},sort_keys=True),flush=True)
+            assert rc==0 and not err and actual_binding['dashboard_selected'] is chosen,(entry,case,rc,err,actual_binding)
+            assert not any(path.endswith('observer.py') for path in actual_opens)
+            expected_reads=[str(audit_area/'8.lines.json')]+audit_args[:7]+[str(root/name) for name in
+                ('scope/v1/evaluate-scope.sh','scope/v1/read-shadow-evidence.py','shadow/v1/_consumer.py',
+                 'scripts/test/scope-qualification.test.sh')]+[str(audit_front)]
+            assert actual_opens==expected_reads[:1]+[str(audit_log),str(audit_binding)]+expected_reads[1:]+[str(audit_binding)]
 
     bound=dict(dashboard_selected=True,**binding)
     log=base/'8.jsonl';log.touch(mode=0o600)
