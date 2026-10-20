@@ -2186,6 +2186,9 @@ def dashboard_phase_controls():
          'duty.json','marker.json','legacy-bundles','legacy-source.git')]
     call='  expect_reasons "dashboard shape $dashboard_case" '+chr(92)
     call_line=str(source.splitlines().index(call)+1)
+    pins=[line.split(' -eq ',1)[1].split(' ]',1)[0] for line in source.splitlines()
+        if line.startswith('  if [ "${dashboard_case-}" = ')]
+    assert pins==[call_line],(pins,call_line)
     binding={'status':'CASE_BINDING','index':8,'glob':'evaluation-reasons',
         'source':[{'sha256':'a'*64},{'sha256':'b'*64},{'sha256':'d'*64},
             {'sha256':hashlib.sha256(source.encode()).hexdigest()}],
@@ -2623,7 +2626,7 @@ expect_reasons() {
   expected=$("$jq_bin" -c 'map(select(. != "scope.proposable")) + ["scope.sandbox-receipt-missing"] | sort | unique' <<<"$expected")
   shift 2
   local actual
-  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 8487 ]; then scope_dashboard_inflight=true; fi
+  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 8512 ]; then scope_dashboard_inflight=true; fi
   actual=$(evaluation_reasons "$@")
   scope_dashboard_inflight=false
   [ "$actual" = "$expected" ] || fail "$label expected $expected got $actual"
