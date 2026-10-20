@@ -1047,7 +1047,8 @@ The diagnostic boundary follows private candidate SHA-256
 `f807180c483a689ae6ebb8985fa99f4088836b6280da0d3591481b151fba6850`.
 These decoded-body hashes are the observation baseline. Keep the literals
 readable and multiline. Only `observer_source` may change for the trace dispatch,
-source-line binding, fixed phase facts and the classifier contract above;
+source-line binding, fixed phase facts, the first unresolved origin below and
+the classifier contract above;
 the other three bodies remain exact. Cost sampling adds no dispatch optimization;
 only the two classifiers above may reuse authenticated code results:
 
@@ -1099,7 +1100,8 @@ session-local classification reuse above; keep source authentication complete.
 Keep watched recheck line events and real direct-callee return/exception events,
 including callees outside watched files. Preserve component tracking and actual stat, bool,
 errno and identity returns. A watched-file filter alone is insufficient. This
-changes trace dispatch, not safety reads, capture fields, predicates or output.
+changes no safety read or predicate. Capture fields and output remain unchanged
+except for the fixed unresolved-origin record below.
 
 The existing HeldPath observer may serialize only original same-call return,
 exception and errno events and values already present in the original recheck
@@ -1111,10 +1113,37 @@ and actual same-call events. Missing values stay GAP. Add no stat, ACL query,
 enumeration, object reread, variable reset, rule change or held-directory entry
 to fill gaps or change the original predicate.
 
+At the existing observer's first authenticated E_STALE exception event, if no
+original HeldPath.recheck frame applies, retain one `UNRESOLVED_ORIGIN` record
+through the existing reader record and failure-only sink. Keep its original case,
+slot, phase and source/copy/invocation binding. Record only source, function and
+line for the exception point and nearest actual authenticated caller, plus
+`predicate_input`. Select the caller from that event's real f_back chain
+within the existing 16-frame bound. Use the existing authenticated source/code
+objects and original-line maps; matching filename/function strings alone do not
+authenticate a frame. Missing, foreign, out-of-bound or unmappable facts are GAP.
+Read `predicate_input` only from the original exception frame's already-present
+exact builtin bool `value`; otherwise record GAP. Do not infer False from E_STALE,
+read another frame's operands or evaluate the predicate again. If `_require`
+raises, retain that actual exception point and actual caller, with the same
+exception object and original propagation. This record is unresolved provenance,
+not a HeldPath observation or a root-cause conclusion.
+
+Freeze the first selected event before later propagation or another exception can
+replace it, including when its facts are GAP. Preserve the existing HeldPath record
+meaning and priority when that first event belongs to HeldPath.recheck. Add no
+second source map, all-locals dump, object read, stat/ACL query, Git/helper call,
+provider, PID query, new event trigger or diagnostic framework. Collection,
+encoding, cap or write failure cannot replace the original exception, cause/context,
+status or cleanup. Keep required old record fields first; insufficient space
+leaves this origin GAP. Do not expand frontend internal predicates, operands or
+loop indices without a later plan for an actually selected branch.
+
 Keep the 12,000-byte reader record, 16,384-byte sinks and combined failure export,
 and 512-byte frontend memory record before its bounded exit fields. Preserve the
-accepted sink-only identity/size checks and exact output format. At the existing
-failure-only export, use the active original protected slot or the current slot-8
+accepted sink-only identity/size checks and existing output envelope, with only
+the unresolved-origin form above added. At the existing failure-only export,
+use the active original protected slot or the current slot-8
 binding. Export at most the unchanged combined cap; missing current preparation
 exports GAP without reading or presenting a prior invocation's evidence. Preserve
 original exit behavior and do not export successes. Check sequential slot reuse,
@@ -1124,12 +1153,26 @@ The owned exit-zero control does not prove actual frontend success,
 which removes its traps before cleanup. Preserve the prior Mac stat-adapter limits;
 they do not prove actual Linux stat, evaluator execution or historical cause.
 
+Use owned data and the actual extracted observer boundary with real original
+E_STALE exceptions to prove the unresolved origin and `_require` caller selection.
+Pair authenticated callers with same-name/filename foreign code objects. Cover
+missing caller/line maps, existing exact bool versus absent or non-bool value,
+first-event freeze across later exceptions, unchanged HeldPath records, non-E_STALE
+and successful silence, GAP, caps and encoding/write failure. Preserve original
+exception identity, cause/context, call counts, propagation, wait/pipe closure and
+FD19 export priority. Do not substitute a mirrored predicate or hand-filled caller.
+Freeze the actual revised observer and inverse for fresh independent source
+acceptance. Use only the next already-required complete CI window; add no
+diagnostic CI or NO_REPRO rerun opportunity.
+
 Actual execution still needs accepted exact-head source preparation and the
 original test gate. Require separate independent implementation review of this
 boundary. Keep the historical Important finding and exact cause UNKNOWN. A current
 success or NO_REPRO cannot close that finding, hide a real failure or turn E_STALE
-into success. Preserve all original controls and complete same-head Linux and Mac
-proof before the separate core G3.
+into success. Historical closure requires a causal link from the captured path to
+the historical source bytes and input conditions, a demonstrated repair and a
+meaningful regression. Preserve all original controls and complete final same-head
+Mac then Linux proof before the separate core G3.
 
 ## Fixed same-call scope evidence
 
