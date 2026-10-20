@@ -438,17 +438,43 @@ this path with its real different-uid consumer and complete restoration. Include
 all old and new ordinary raw output under the private proof cap below; do not
 truncate evidence, remove controls or relax cleanup to fit it.
 
-The ordinary private proof cap remains 16 MiB. Only the complete proof package
-for the fixed first-Git sampler below may use 18 MiB, under the
+The ordinary private proof cap remains 16 MiB, including complete CI ordinary
+output. Under the [operator decision](https://github.com/yihanzhu/ystack/issues/541#issuecomment-6298929095),
+only this preserved #558 attempt's next original complete local source-preparation
+physical package may use 32 MiB (33,554,432 bytes). Count all raw at every level,
+complete generated and executed sources, the actual fourteen-file source root,
+ASTs, inverses, controls, bindings, full reports, metadata, indices and seals.
+Count separate physical copies separately. Omit future redundant copies only
+when their exact producer/consumer proof has independent acceptance. Preserve
+all historical evidence and failures. This one-time local exception gives no
+advance capacity PASS or additional execution opportunity.
+
+Account for files removed by original cleanup using only complete buffers and
+binding facts already held by their original fixed producers, in original order.
+Add no scan, source read, OS query or call; do not delay cleanup. Missing facts
+remain UNKNOWN. Before that one original preparation window, require the manager's
+complete reading of independent source/preparation review and exact-tuple GO.
+Reuse accepted successful controls only for their unchanged exact source and
+meaning; this cap change grants no additional rerun. Changed source, evidence or
+meaning
+requires fresh review and necessary revalidation. Complete fresh source
+preparation and original full Mac then same-head Linux proof remain required.
+Actual over-cap bytes, missing source or fields, an unclosed writer or any UNKNOWN
+stop acceptance and publication; retain all failure raw. Do not truncate, hide
+payload in another package, compress, cache across batches or add a framework.
+
+Only the complete proof package for the fixed first-Git sampler below may use
+18 MiB, under the
 [approved bounded method](https://github.com/yihanzhu/ystack/issues/541#issuecomment-6290653581).
 That package includes every old and new raw record, complete report, source copy,
 encoding and positive/negative control. Measure its complete recursive bytes;
 projections do not prove it fits. Exceeding the cap stops publication. Keep every
 old control and raw field. Use only the existing lossless source sharing, with no
-truncation, hidden external payload or new compression protocol. This exception
-changes no source-read, stdout/stderr, group, record/export, interface, VM or other
-resource limit. Every reference to the ordinary private proof cap below uses this
-same narrow exception; unrelated proof retains its original limit.
+truncation, hidden external payload or new compression protocol. These package
+exceptions change no source-read, stdout/stderr, group, record/export, interface,
+VM or other individual resource limit. References to the ordinary private proof
+cap apply only these two narrow exceptions; unrelated proof keeps its original
+limit.
 
 Run the real scope evaluator as the consumer account. The bundle and actual bare
 Git snapshot live outside the controlled store. Assert actual uid/gid, mode,
@@ -902,10 +928,11 @@ original-error propagation. Keep every original control, the six shared sources,
 source preparation. Count all first declarations, references, default indices,
 raw encodings, controls and every actual generated or copied source, including the
 fourteen-file runtime source root, in the complete recursive ordinary raw total.
-The new complete actual local batch and complete CI ordinary output must fit the
-unchanged 16 MiB cap. Static savings, projections or green CI cannot prove capacity.
-An overrun stops acceptance; do not widen sharing or budgets, trim evidence or
-controls, omit a source copy, or add a retry to make it fit.
+The new complete actual local batch must fit the one-time 32 MiB package limit
+above; complete CI ordinary output must fit its unchanged 16 MiB cap. Static
+savings, projections or green CI cannot prove capacity. An overrun or UNKNOWN
+stops acceptance; do not widen sharing or budgets, trim evidence or controls,
+omit a source copy, or add a retry to make it fit.
 
 In existing CI, compare old and new observers on real owned calls and events.
 Cover identity refusal, real foreground return/reap, direct-callee stat/bool/errno,
@@ -1501,12 +1528,25 @@ limit-setting and exec all consume the collection window. Failure consumes that
 opportunity without retry. Real child controls must prove the limit affects only
 this child; parent and original Git limits remain unchanged.
 
-Before any start, prove the tool's -file creation/overwrite semantics can meet
-one fixed leaf in an owned held private directory, no overwrite of an existing
-leaf, no following links and no other output file. Keep the path binding and
-held/name checks throughout use. Unknown semantics mean zero-start STOP; do not
-run first and add trust later. RLIMIT_FSIZE does not prove exclusive creation or
-restrict which file is written. No new file outside this boundary is permitted.
+Before any start, require the authenticated fixed tool and documented -file
+interface above, one fixed prebound report leaf absent at launch, and the existing
+owned private parent, held/name and no-follow checks. Refuse an existing leaf,
+including a symlink. Keep those bindings and checks throughout use. The
+[operator decision](https://github.com/yihanzhu/ystack/issues/541#issuecomment-6298929095)
+accepts this limited uncertainty for this bounded diagnostic. These checks can detect
+specified file and identity problems. They do not prove atomic exclusive/no-follow creation,
+continuous exclusion of every writer, or absence of auxiliary or unobserved
+temporary writes by the tool. RLIMIT_FSIZE limits growth, not writable paths.
+An apparently clean inventory is not proof of confinement or transient-write
+absence. This acceptance does not turn those unknowns into established facts.
+
+The sole intended output path remains that fixed report leaf. Do not direct the
+tool elsewhere, add an auxiliary output, or change its fixed argv. If execution
+requires wider intended write authority, stop and obtain a separate operator
+decision; this contract supplies none. Unexpected output observed by existing
+checks, identity drift or unproved closure fails the opportunity and blocks every
+later sampler start. Retain the original three Git-call branches and restoration
+rules; this grants no deletion, cleanup or additional inspection permission.
 After the writer closes, require stable held/name identity, a regular one-link
 file, exact bounded length and complete retained bytes before calling a report
 complete. Never follow paths found in the report or read other target files.
@@ -1591,8 +1631,8 @@ an uncounted external payload. Read, seal and clean a report only after writer
 closure and all original identity and ownership gates. Unknown closure grants
 neither report cleanup nor restoration permission.
 
-Implement this boundary in dependency order: fixed tool/interface and exclusive
-report trust; child-only helper limit and bounded supervision; report binding;
+Implement this boundary in dependency order: fixed tool/interface and the report
+file contract above; child-only helper limit and bounded supervision; report binding;
 then the original select integration and complete controls. Before enabling any
 real sampler opportunity, freeze exact generated source and inverse and run
 ordinary controls on the actual extracted observation, original select and owner
