@@ -835,45 +835,77 @@ cross-run sharing. Measure the complete new batch's recursive raw under the same
 ordinary private proof cap; a projection cannot establish PASS or remove an earlier
 volume failure.
 
-Only the eight completed `observer_actual.authentication.rows` arrays for the
-existing uncached-modern and cached identity, errno, bool and gap controls may
-also share exact full rows at this private reporting boundary. Use one fixed
-`auth_row` payload and the existing five-field order/case/sha256/bytes/rows
-reference. Emit each shared row's complete canonical payload before its first
-reference. Preserve every row position and multiplicity. Match complete canonical
-bytes, including actual code identities and every field; never normalize values
-or merge rows by code id alone. Keep singleton or non-beneficial rows full.
-Choose reuse only when the full declaration, all references and final index cost
-less than their full repeated bytes. Scope reuse to that one completed report;
-no cross-report or cross-run sharing is allowed.
+Only these fifteen completed authentication arrays may share full contiguous
+blocks at the existing private reporting boundary:
 
-Build only a report copy after the original observation and timing end. Keep the
-original full array available to every original assertion and same-request check.
-Bind the projected array's count, complete canonical byte length and SHA-256,
-and the complete original payload's byte length and SHA-256. Reconstruct the
-full ordered array and payload byte for byte before the original result assertions.
-Reject missing, forward, foreign, wrong-length or wrong-digest references; an
-unproved reconstruction cannot stand in for full evidence. Change no collection,
-classification, callback, primitive comparison, event, timestamp, source read,
-OS operation, call, result, exception or deadline. Leave every other field and
-payload full and unchanged, including Mac stderr/AUTH_RESULT/PAIRED_RESULT,
-classifier_sequence, actual_insert_hit_events and same_request. Reuse the existing
-full-before-reference writer and final index; add no generic codec, compression,
-source diff, logging framework, output path or execution opportunity.
+| Existing report | Exact arrays |
+| --- | --- |
+| `observer_actual` | `authentication.rows` for uncached-modern and cached identity, errno, bool and gap: eight arrays. |
+| `classifier_sequence` | `authentication.rows` for watched and bound, each at original and cached: four arrays. |
+| `mac_observer_version` | The fixed `AUTH_RESULT.rows` in stderr for new, wrong-code-same-name and uncached-modern: three arrays. |
 
-Use the actual extracted reporting boundary with owned data to prove exact
-reconstruction of all eight actual arrays and full payloads. Cover different
-identities and field values, order/multiplicity, singleton/non-beneficial rows,
-wrong or missing/forward/foreign references, count/length/digest corruption and
-encoding/write failure. Keep original errors and all original controls, the six
-shared sources, 26 source inverses, 21 reader proofs, complete same-request
-comparisons and fresh source preparation. Count the first full declarations,
-every reference, final index, generated-source copies and all new controls in
-the complete recursive ordinary raw total. Measure the new actual local batch
-and complete CI ordinary output against the unchanged 16 MiB cap. A static
-estimate, smaller projection, omitted carrier or green CI is not a capacity pass.
-An overrun stops acceptance; do not widen sharing or budgets, trim proof or add
-a retry to make it fit.
+Bind each array to its original producing call and completed report. Partition
+from its first row into fixed, non-overlapping blocks of two; retain a final
+one-row block. Match complete block bytes, preserving all actual fields, source
+and code identities, times, order and multiplicity. Never normalize or match by
+identity alone. Use one fixed `auth_rows` full payload and the existing five-field
+order/case/sha256/bytes/rows reference; rows is the block's actual row count.
+Reuse the existing full-before-reference writer and final index. Emit each
+complete block before its first reference. Keep single-use and
+non-beneficial blocks full. Reuse only when its full declaration, every reference
+and final default-format index together cost less than the full repeated bytes.
+No sharing crosses an array, report or run. Do not adapt block width or boundaries.
+
+For the three Mac reports, use only the existing fixed `AUTH_RESULT` producer's
+default `json.dumps` format. Require one unambiguous complete line and rows array,
+with the original insertion order, spaces, escapes, prefix and newline. Before
+reuse, prove that default serialization reproduces that entire original line
+byte for byte. Retain each complete block's default-format literal bytes and all
+original prefix/suffix bytes. Keep the actual original stderr object. Restore the
+array, complete line, stderr and enclosing payload byte for byte; wrong format or
+ambiguous location cannot authorize reuse. Add no parser or offset codec, generic
+codec, compression, source diff, logging framework or handling of other stderr
+fields. All non-row `AUTH_RESULT` fields and `PAIRED_RESULT` remain full and unchanged.
+
+For the eight observer and four classifier arrays, build only a report copy after
+the original observation and timing end. Keep their independent useful-work,
+whole-call and no-prewarm gates unchanged. For the three fixed Mac reports,
+perform projection and full reconstruction verification at the existing
+`completed_evidence` point after the original child run returns, inside the
+original parent timing window. Preserve every original clock call's position and
+count, the report order, and every original parse/assert position. Save the
+complete original raw recoverably before the first result assertion. The actual
+elapsed value still includes this report work; do not claim isolated observer or
+classifier speed improvement from it. Keep original full data for every original
+parse, assertion and same-request comparison.
+Bind fixed width, each block's row count, full array count/byte length/SHA-256,
+original payload byte length/SHA-256 and, for Mac, default format plus complete
+line and stderr byte lengths/SHA-256. Before the original parses and assertions,
+require full reconstruction and byte equality against those original objects.
+Reject missing, forward, foreign or reordered references, wrong block/array
+counts, lengths or digests, format ambiguity and encoding/write failures. Preserve
+the original actual error and its priority; representation failure cannot replace
+it or create success. Change no collection, classification, callback, primitive
+comparison, event, timestamp, source read, OS operation, call, caller, result,
+exception or deadline. Apart from these arrays' report representation, keep every
+other field and payload unchanged, including `classifier_sequence`,
+`actual_insert_hit_events` and `same_request`. Add no output path or execution
+opportunity.
+
+Use the actual extracted reporting boundary and owned data to prove complete
+reconstruction of all fifteen actual arrays and payloads. Cover two-row and final
+one-row blocks, distinct identities/fields, order/multiplicity, mixed full and
+shared blocks, non-beneficial reuse, default format and full stderr reconstruction,
+all reference/count/length/digest/format refusals, and encoding/write failure with
+original-error propagation. Keep every original control, the six shared sources,
+26 source inverses, 21 reader proofs, complete same-request comparisons and fresh
+source preparation. Count all first declarations, references, default indices,
+raw encodings, controls and every actual generated or copied source, including the
+fourteen-file runtime source root, in the complete recursive ordinary raw total.
+The new complete actual local batch and complete CI ordinary output must fit the
+unchanged 16 MiB cap. Static savings, projections or green CI cannot prove capacity.
+An overrun stops acceptance; do not widen sharing or budgets, trim evidence or
+controls, omit a source copy, or add a retry to make it fit.
 
 In existing CI, compare old and new observers on real owned calls and events.
 Cover identity refusal, real foreground return/reap, direct-callee stat/bool/errno,
