@@ -1127,6 +1127,7 @@ def observe(original,log,case,phase,argv,index):
     descriptor=None
     provisional=None
     record=None
+    selected=False
     gap=None
     events={}
     sources={str(original),str(original.parents[2]/'shadow/v1/_consumer.py')}
@@ -1270,7 +1271,7 @@ def observe(original,log,case,phase,argv,index):
         finally:
             watched_busy[0] = False
     def trace(frame,event,arg):
-        nonlocal record,gap
+        nonlocal record,gap,selected
         try:
             parent=frame.f_back
             if event=='return' and watched(frame):events.pop(id(frame),None)
@@ -1296,16 +1297,42 @@ def observe(original,log,case,phase,argv,index):
                 values.append({'function':frame.f_code.co_name,'caller_line':parent.f_lineno,
                     'exception':type(arg[1]).__name__,'errno':getattr(arg[1],'errno',None)})
                 del values[:-12]
-            if event!='exception' or record is not None or not watched(frame):return trace
+            if event!='exception' or selected or not watched(frame):return trace
             error=arg[1]
             if str(error)!='E_STALE':return trace
-            held_frame=frame
-            while held_frame is not None:
-                owner=held_frame.f_locals.get('self')
-                if held_frame.f_code.co_name=='recheck' and type(owner).__name__=='HeldPath':break
-                held_frame=held_frame.f_back
+            selected=True
+            held_frame=None
+            current=frame
+            for depth in range(16):
+                if current is None:break
+                owner=current.f_locals.get('self')
+                if (watched(current) and current.f_code.co_name=='recheck' and
+                        type(owner).__name__=='HeldPath'):
+                    held_frame=current
+                    break
+                current=current.f_back
             if held_frame is None:
-                gap='E_STALE outside original HeldPath recheck'
+                record={'status':'UNRESOLVED_ORIGIN','case':case,'case_index':index,'phase':phase,
+                    'exception':type(error).__name__,'elapsed':time.monotonic()-started,
+                    'guard':'GAP','caller':'GAP','predicate_input':'GAP'}
+                def location(current):
+                    if not watched(current):return 'GAP'
+                    code=current.f_code
+                    lines=source_lines.get(code.co_filename)
+                    line=current.f_lineno
+                    if (type(lines) is not list or type(line) is not int or not 1<=line<=len(lines) or
+                            type(code.co_name) is not str or not code.co_name.isascii() or len(code.co_name)>80):return 'GAP'
+                    return {'source':code.co_filename,'function':code.co_name,'line':line}
+                record['guard']=location(frame)
+                value=frame.f_locals.get('value')
+                if type(value) is bool:record['predicate_input']=value
+                current=frame.f_back
+                for depth in range(15):
+                    if current is None:break
+                    if watched(current):
+                        record['caller']=location(current)
+                        break
+                    current=current.f_back
                 return trace
             record={'status':'FIRST_STALE','case':case,'case_index':index,'phase':phase,
                 'exception':type(error).__name__,'predicate_input':frame.f_locals.get('value') if type(frame.f_locals.get('value')) is bool else None,'elapsed':time.monotonic()-started,
@@ -1379,6 +1406,9 @@ def observe(original,log,case,phase,argv,index):
                 payload['observer_gap']=gap
                 payload['capture_semantics']='original exception/return frames; no object reread'
                 encoded=json.dumps(payload,separators=(',',':'),ensure_ascii=True).encode()+b'\n'
+                if len(encoded)>12000 and payload.get('status')=='UNRESOLVED_ORIGIN':
+                    payload.update(guard='GAP',caller='GAP',predicate_input='GAP')
+                    encoded=json.dumps(payload,separators=(',',':'),ensure_ascii=True).encode()+b'\n'
                 if len(encoded)>12000:
                     payload['frames']=payload.get('frames',[])[:2]
                     payload['truncated']=True
@@ -2626,7 +2656,7 @@ expect_reasons() {
   expected=$("$jq_bin" -c 'map(select(. != "scope.proposable")) + ["scope.sandbox-receipt-missing"] | sort | unique' <<<"$expected")
   shift 2
   local actual
-  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 8512 ]; then scope_dashboard_inflight=true; fi
+  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 8721 ]; then scope_dashboard_inflight=true; fi
   actual=$(evaluation_reasons "$@")
   scope_dashboard_inflight=false
   [ "$actual" = "$expected" ] || fail "$label expected $expected got $actual"
@@ -2650,7 +2680,7 @@ def heredoc(tag):
 prepare=heredoc('PY_STALE_PREPARE')
 functions=source[source.index('run_evaluator() {'):source.index('\nexpect_reasons() {')]
 functions=functions[:functions.index('\nexpect_validator_error() {')]+functions[functions.index('\nprepare_stale_binding() {'):]
-expected={'observer_source':'374007fe4060938f6e552c5f0d152ca2a04655a042c35553ade31977f5dc5f18',
+expected={'observer_source':'70050620c9ac7db2ecd4fe9531e153d6c9a22765916e157afa0ae71d53df4e09',
  'frontend_capture':'a21a722a59923fa6ad18f6f6dd26385d46dcd5a3733083f9d7625777d73c4af8',
  'emit_capture':'153556128c04167c2a73d6c91c86b37bd3e1d34eb35fdeea44e865803301afb4',
  'exit_capture':'95bc34214161aa79167d7f33e8cf4980d70177f7771fa5bf30672e8f0e1739ac'}
@@ -2770,7 +2800,19 @@ timeless=timeless[:a]+"        runpy.run_path(str(original),run_name='__main__')
 a=timeless.index('        cost_points[4]=time.monotonic() if phase_selected else None\n');b=timeless.index('        try:\n            if descriptor is not None:',a)
 timeless=timeless[:a]+timeless[b:]
 timeless='import hashlib,json,os,runpy,stat,sys,time,types\n'+timeless
-old=timeless
+def stale_origin_inverse(code):
+    assert code.count('    selected=False\n')==1
+    code=code.replace('    selected=False\n','',1).replace('nonlocal record,gap,selected','nonlocal record,gap',1)
+    code=code.replace("if event!='exception' or selected or not watched(frame):return trace",
+                      "if event!='exception' or record is not None or not watched(frame):return trace",1)
+    a=code.index('            selected=True\n');b=code.index("            record={'status':'FIRST_STALE'",a)
+    assert hashlib.sha256(code[a:b].encode()).hexdigest()=='135365b945a18b6d2a4d7ad03231dcd5d87c5e5c7b4d1513edaf01e2f00fe31c'
+    code=code[:a]+"            held_frame=frame\n            while held_frame is not None:\n                owner=held_frame.f_locals.get('self')\n                if held_frame.f_code.co_name=='recheck' and type(owner).__name__=='HeldPath':break\n                held_frame=held_frame.f_back\n            if held_frame is None:\n                gap='E_STALE outside original HeldPath recheck'\n                return trace\n"+code[b:]
+    a=code.index("                if len(encoded)>12000 and payload.get('status')=='UNRESOLVED_ORIGIN':\n")
+    b=code.index('                if len(encoded)>12000:\n',a)
+    code=code[:a]+code[b:]
+    return code
+old=stale_origin_inverse(timeless)
 a=old.index('    watched_cache = {}\n');b=old.index('    def trace(frame,event,arg):\n',a)
 old=old[:a]+'    def watched(frame):\n        return (frame.f_code.co_filename in source_codes and\n                frame.f_code in source_codes[frame.f_code.co_filename])\n'+old[b:]
 old=old.replace('sys,time,types','sys,time',1)
@@ -6463,6 +6505,172 @@ except BaseException as error:
         reports.append({'case':case,'pid':child.pid,'returncode':returncode,'wait_reaped':child.returncode is not None,'stdout_closed':child.stdout.closed,'stderr_closed':child.stderr.closed,'subject_entered':entered,'cleanup_rows':len(rows),'actual_errors':errors,'stdout':stdout.decode(),'stderr':stderr.decode(),'completion_authorized':False})
     return completed_evidence({'wrapper_cancel_controls':reports,'scope':'ordinary actual pending/self signals; setup failures are fixed pre-operation seams; no root serial1 or readiness proof'})
 
+def unresolved_origin_controls(observer,area):
+    import builtins
+    owned=area/'unresolved-origin';(owned/'scope/v1').mkdir(parents=True);(owned/'shadow/v1').mkdir(parents=True)
+    consumer_path=owned/'shadow/v1/_consumer.py';consumer_path.write_bytes(consumer)
+    spec=importlib.util.spec_from_file_location('unresolved_owned_consumer',consumer_path)
+    c=importlib.util.module_from_spec(spec);sys.modules[spec.name]=c;spec.loader.exec_module(c)
+    reader=owned/'scope/v1/reader.py';log=owned/'record';log.write_bytes(b'')
+    program='''import builtins
+w=builtins._scope_origin_owned
+c=w['consumer']
+def known_caller():
+    w['calls']+=1
+    try:
+        raise w['context']
+    except KeyError:
+        c._require(w['value'],w['code'])
+def direct():
+    if w['mode']=='direct-bool':value=True
+    elif w['mode']=='direct-nonbool':value=0
+    raise w['sentinel']
+try:
+    if w['mode']=='foreign':w['foreign']()
+    elif w['mode'].startswith('direct-'):direct()
+    elif w['mode']=='first-gap':
+        try:known_caller()
+        except c.Refusal:
+            w['restore_maps']()
+            known_caller()
+    else:known_caller()
+except BaseException as error:
+    error.__cause__=w['cause']
+    w['original']=error
+    w['original_context']=error.__context__
+    raise
+finally:w['cleanup'].append('original-finally')
+'''
+    reader.write_text(program)
+    completed_evidence({'unresolved_origin_preexec':{'observer':observer,'observer_sha256':hashlib.sha256(observer.encode()).hexdigest(),
+        'reader_program':program,'reader_sha256':hashlib.sha256(reader.read_bytes()).hexdigest(),'consumer_sha256':hashlib.sha256(consumer_path.read_bytes()).hexdigest()}})
+    foreign={};exec(compile("def known_caller():\n    w['calls']+=1\n    c._require(False,'E_STALE')\n",str(reader),'exec'),foreign)
+    results=[];missing=object();prior=getattr(builtins,'_scope_origin_owned',missing)
+    try:
+        for case in ('known','int','list','direct-bool','direct-nonbool','direct-missing','foreign','deep',
+                     'missing-map','missing-caller','first-gap','collection','non-stale','success','encoding','cap','write','sink-priority'):
+            ns={};exec(compile(observer,'actual-origin-observer','exec'),ns)
+            w={'consumer':c,'value':0 if case=='int' else [] if case=='list' else case=='success',
+                'code':'E_RELATION' if case=='non-stale' else 'E_STALE','calls':0,'cleanup':[],
+                'context':KeyError('owned-context'),'cause':RuntimeError('owned-cause'),'sentinel':c.Refusal('E_STALE'),
+                'mode':case if case.startswith('direct-') or case in ('foreign','first-gap') else 'known'}
+            if case=='deep':
+                w['mode']='foreign';nested={};exec(compile("def known_caller(depth=17):\n    if depth:return known_caller(depth-1)\n    w['calls']+=1\n    c._require(False,'E_STALE')\n",str(reader),'exec'),nested);nested.update(w=w,c=c);w['foreign']=nested['known_caller']
+            foreign.update(w=w,c=c)
+            if case!='deep':w['foreign']=foreign['known_caller']
+            builtins._scope_origin_owned=w
+            prefix=b'F'*16300 if case=='sink-priority' else b'';log.write_bytes(prefix)
+            install=sys.settrace;previous_argv=sys.argv;write=os.write
+            def cell(fn,name):return dict(zip(fn.__code__.co_freevars,(item.cell_contents for item in fn.__closure__)))[name]
+            def admission(fn):
+                if fn is not None and case in ('missing-map','first-gap','missing-caller'):
+                    trace=cell(fn,'trace');maps=cell(trace,'source_lines');codes=cell(cell(trace,'watched'),'source_codes')
+                    saved={name:list(lines) for name,lines in maps.items()}
+                    w['restore_maps']=lambda:maps.update(saved)
+                    if case in ('missing-map','first-gap'):maps.clear()
+                    if case=='missing-caller':codes[str(reader)]=set()
+                install(fn)
+            def failed_write(fd,raw):
+                raise OSError('owned-record-write')
+            if case=='write':os.write=failed_write
+            dumps=ns['json'].dumps
+            def encode(value,*args,**kwargs):
+                if case=='encoding':raise UnicodeError('owned-encoding')
+                raw=dumps(value,*args,**kwargs)
+                if type(value) is dict and value.get('status')=='UNRESOLVED_ORIGIN' and type(value.get('guard')) is dict:
+                    return raw+' '*12000
+                return raw
+            if case in ('encoding','cap'):ns['json']=types.SimpleNamespace(dumps=encode)
+            if case=='collection':
+                clock=time.monotonic;reads=[]
+                def failed_clock():
+                    reads.append(1)
+                    if len(reads)==2:raise ValueError('owned-first-fact-failure')
+                    return clock()
+                ns['time']=types.SimpleNamespace(monotonic=failed_clock)
+            sys.settrace=admission;raised=None
+            try:
+                try:ns['observe'](reader,log,'owned-origin','owned-phase',[str(reader)],8)
+                except c.Refusal as error:raised=error
+            finally:
+                install(None);sys.settrace=install;sys.argv=previous_argv;os.write=write
+            raw=log.read_bytes();data=json.loads(raw) if raw and not prefix else None
+            if case!='success':
+                assert raised is w['original'] and raised.__cause__ is w['cause']
+                assert raised.__context__ is w['original_context']
+                assert '_require' in [item.name for item in traceback.extract_tb(raised.__traceback__)] or case.startswith('direct-')
+            else:assert raised is None
+            assert w['cleanup']==['original-finally'] and w['calls']==(0 if case.startswith('direct-') else 2 if case=='first-gap' else 1)
+            facts={'case':case,'raw_hex':raw.hex(),'same_original_error':raised is w.get('original'),
+                'same_cause_context':case=='success' or raised.__cause__ is w['cause'] and raised.__context__ is w['original_context'],
+                'calls':w['calls'],'cleanup':w['cleanup']}
+            completed_evidence({'unresolved_origin_actual':facts});results.append(facts)
+            if case in ('known','int','list','foreign','deep','missing-map','missing-caller','first-gap','cap') or case.startswith('direct-'):
+                assert data['status']=='UNRESOLVED_ORIGIN' and data['case_index']==8 and data['phase']=='owned-phase'
+                if case in ('missing-map','first-gap','cap'):assert data['guard']=='GAP'
+                else:
+                    assert data['guard']['function']==('direct' if case.startswith('direct-') else '_require')
+                    expected_source=reader if case.startswith('direct-') else consumer_path
+                    assert data['guard']['source']==str(expected_source)
+                    assert expected_source.read_text().splitlines()[data['guard']['line']-1].strip().startswith('raise')
+                if case in ('missing-map','first-gap','cap','missing-caller','deep'):assert data['caller']=='GAP'
+                else:assert data['caller']['function']==('<module>' if case=='foreign' or case.startswith('direct-') else 'known_caller')
+                expected=True if case=='direct-bool' else False if case in ('known','foreign','deep','missing-map','missing-caller','first-gap') else 'GAP'
+                assert data['predicate_input']==('GAP' if case=='cap' else expected)
+            elif case in ('non-stale','success','collection'):assert data['status']=='OBSERVER_GAP'
+            elif case in ('encoding','write'):assert raw==b''
+            elif case=='sink-priority':assert raw.startswith(prefix) and len(raw)<=16384 and b'UNRESOLVED_ORIGIN' not in raw[len(prefix):]
+        # A real owned process exercises the same observer and original refusal through wait and all three pipes.
+        child_program=owned/'child.py'
+        child_program.write_text("import builtins,importlib.util,json,sys\nfrom pathlib import Path\n"+
+            'consumer_path=Path('+repr(str(consumer_path))+')\n'+
+            "s=importlib.util.spec_from_file_location('child_origin_consumer',consumer_path)\nc=importlib.util.module_from_spec(s);sys.modules[s.name]=c;s.loader.exec_module(c)\n"+
+            "builtins._scope_origin_owned={'consumer':c,'calls':0,'cleanup':[],'context':KeyError('context'),'cause':RuntimeError('cause'),'value':False,'code':'E_STALE','mode':'known'}\n"+
+            'ns={}\nexec(compile('+repr(observer)+",'actual-child-observer','exec'),ns)\n"+
+            "try:ns['observe'](Path("+repr(str(reader))+"),Path("+repr(str(log))+"),'owned-child','owned-phase',["+repr(str(reader))+"],8)\n"+
+            "except c.Refusal as error:\n assert error is builtins._scope_origin_owned['original']\n print('ORIGINAL_E_STALE',flush=True)\n raise SystemExit(17)\n")
+        log.write_bytes(b'')
+        completed_evidence({'unresolved_origin_child_preexec':{'source':child_program.read_text(),'path':str(child_program),'sha256':hashlib.sha256(child_program.read_bytes()).hexdigest()}})
+        child=subprocess.Popen([sys.executable,'-I','-S','-B',str(child_program)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        try:out,err=child.communicate(b'',timeout=10)
+        finally:
+            if child.returncode is None:child.kill();child.wait(timeout=10)
+            for stream in (child.stdin,child.stdout,child.stderr):stream.close()
+        completed_evidence({'unresolved_origin_child':{'argv':[sys.executable,'-I','-S','-B',str(child_program)],'returncode':child.returncode,
+            'stdout_hex':out.hex(),'stderr_hex':err.hex(),'raw_hex':log.read_bytes().hex(),'pipes_closed':[stream.closed for stream in (child.stdin,child.stdout,child.stderr)]}})
+        assert child.returncode==17 and out==b'ORIGINAL_E_STALE\n' and not err
+        assert all(stream.closed for stream in (child.stdin,child.stdout,child.stderr)) and json.loads(log.read_bytes())['status']=='UNRESOLVED_ORIGIN'
+        binding=owned/'binding.json';mapping=owned/'lines.json'
+        binding.write_text(json.dumps({'status':'CASE_BINDING','index':8,'glob':'evaluation-reasons'})+'\n')
+        mapping.write_text(json.dumps({'line_map':{},'original_line_sha256':{},'copy_sha256':'0'*64})+'\n')
+        exporter=heredoc('PY_STALE_EXPORT');observed=log.read_bytes()
+        argv=[sys.executable,'-I','-S','-B','-',str(log),str(binding),str(mapping)]
+        exported=subprocess.run(argv,input=exporter.encode(),capture_output=True,timeout=10)
+        completed_evidence({'unresolved_origin_export':{'argv':argv,'returncode':exported.returncode,
+            'stdout_hex':exported.stdout.hex(),'stderr_hex':exported.stderr.hex()}})
+        assert exported.returncode==0 and not exported.stderr
+        assert json.loads(exported.stdout.splitlines()[1])==json.loads(observed)
+        # Only the existing platform stat-result seam is adapted; the actual FD19 write/EXIT chain runs.
+        exit_capture=literal(heredoc('PY_STALE_PREPARE'),'exit_capture')
+        expected=exit_capture.replace("diag_sink_now=$(/usr/bin/stat -Lc '%d:%i:%u:%g:%f:%h' /dev/fd/19 2>/dev/null) || diag_sink_now=''",'diag_sink_now=owned')
+        expected=expected.replace("diag_size=$(/usr/bin/stat -Lc '%s' /dev/fd/19 2>/dev/null) || diag_size=''",'diag_size='+str(len(observed)))
+        assert expected!=exit_capture and '/usr/bin/stat' not in expected
+        body='diag_record=\'{"status":"FRONTEND_ERROR","original_status":1}\'\ndiag_sink_ready=true\ndiag_sink_before=owned\n'
+        body+='cleanup(){ printf original-cleanup; }\nexec 19>>'+repr(str(log))+'\n'+expected+'\nexit 23\n'
+        fd19=subprocess.run(['/bin/bash','-c',body],capture_output=True,timeout=10)
+        raw=log.read_bytes();rows=raw.splitlines()
+        completed_evidence({'unresolved_origin_fd19':{'returncode':fd19.returncode,'stdout_hex':fd19.stdout.hex(),
+            'stderr_hex':fd19.stderr.hex(),'raw_hex':raw.hex(),'platform_stat_result_seam':True}})
+        assert fd19.returncode==23 and fd19.stdout==b'original-cleanup' and not fd19.stderr
+        assert rows[0]+b'\n'==observed and len(rows)==2
+        tail=json.loads(rows[1]);assert tail['frontend_exit_status']==23 and tail['cleanup_return_status']==0
+    finally:
+        if prior is missing:del builtins._scope_origin_owned
+        else:builtins._scope_origin_owned=prior
+    return completed_evidence({'unresolved_origin_controls':'PASS','cases':len(results),'actual_original_require':True,
+        'foreign_code_has_same_filename_and_name':True,'controlled_faults':['source-line-map','code-map','fact-clock','encoding','record-cap','write'],
+        'new_processes':'ordinary own-data child and existing export/FD19 controls; no evaluator/reader/Git/helper/sampler candidate invocation'})
+
 def code_auth_controls(observer,wrapper,area):
     import textwrap
     records=[]
@@ -6680,6 +6888,7 @@ try:
     clock_name='CLOCK_UPTIME_RAW' if sys.platform=='darwin' else 'CLOCK_MONOTONIC'
     area=Path(temporary).resolve();package=area/'package';(package/'shadow/v1').mkdir(parents=True);(package/'scope/v1').mkdir(parents=True)
     (package/'shadow/v1/_consumer.py').write_bytes(consumer)
+    reports.append(unresolved_origin_controls(observer,area))
     reports.extend(code_auth_controls(observer,wrapper,area))
     reports.append(genuine_relation_controls(area))
     reports.append(launch_capture_controls(area))
