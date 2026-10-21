@@ -3718,7 +3718,7 @@ def stable_sink_controls(area,assembler):
     return reports
 
 OUTER_RUN_SOURCE_SHA='7f3571e66a1da98ccc2a876c426ea77fcddc010cbdb64d76342efde97ce77a64'
-OUTER_CAPTURE_SOURCE_SHA='badc5e4c79dafae7e6d165b77f46b86d8c4fbcceab683ad20239f0e4e1c0e8de'
+OUTER_CAPTURE_SOURCE_SHA='e399356240dbb362ca28857f93b9b5ce195cd9283a0be36a41adcdc7b22ad89d'
 def outer_timeout_boundary(assembler):
     tree=ast.parse(assembler)
     runs=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='run']
@@ -12569,10 +12569,9 @@ def _scope_sample_close(child,selector,end,capture=None):
             except BaseException as error:errors.append(error);break
             c.time.sleep(min(0.005,max(0,boundary-c.time.monotonic())))
         left=boundary-c.time.monotonic()
-        if left>0:
-            try:waited=type(child.wait(timeout=left)) is int
-            except c.subprocess.TimeoutExpired:pass
-            except BaseException as error:errors.append(error)
+        try:waited=type(child.wait(timeout=max(0,left))) is int
+        except c.subprocess.TimeoutExpired:pass
+        except BaseException as error:errors.append(error)
         if gone and waited:break
     if not waited and c.time.monotonic()<close_end:
         try:waited=type(child.wait(timeout=close_end-c.time.monotonic())) is int
