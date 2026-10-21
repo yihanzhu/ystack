@@ -2656,7 +2656,7 @@ expect_reasons() {
   expected=$("$jq_bin" -c 'map(select(. != "scope.proposable")) + ["scope.sandbox-receipt-missing"] | sort | unique' <<<"$expected")
   shift 2
   local actual
-  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 9484 ]; then scope_dashboard_inflight=true; fi
+  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 9525 ]; then scope_dashboard_inflight=true; fi
   actual=$(evaluation_reasons "$@")
   scope_dashboard_inflight=false
   [ "$actual" = "$expected" ] || fail "$label expected $expected got $actual"
@@ -4562,13 +4562,29 @@ def process_snapshot_controls(area,module):
         traced_rule=rule_source.replace('accepted=base_rule(fd,state,ancestor)','qualification_state[:]=[state.st_mode,state.st_size];accepted=base_rule(fd,state,ancestor)',1)
         assert traced_rule.replace('qualification_state[:]=[state.st_mode,state.st_size];','',1)==rule_source
         qualification=[ast.parse(traced_rule).body[0] if node is rule_node else node for node in qualification]
-        for stimulus,mode in (('source-mode',0o664),('source-setid',0o544|0o4000),('source-recheck',0o444)):
+        for stimulus,mode in (('source-mode',0o664),('source-setid',0o544),('source-recheck',0o444)):
             target.chmod(mode)
             owned={'c':module,'os':os,'stat':stat,'Path':Path,'__file__':str(target),'held':[],
                 'sources':((str(target),hashlib.sha256(actual_helper).hexdigest()),),'_stage':'qualification-control','qualification_state':[]}
-            error=None;recheck_facts=None
+            error=None;recheck_facts=None;metadata_pair=None;metadata_states=[];refusal_location=None
+            qualification_code=compile(ast.Module(body=qualification,type_ignores=[]),'actual-owned-helper-qualification','exec')
+            if stimulus=='source-setid':
+                kernel_leaf=os.lstat(target);leaf_identity=(kernel_leaf.st_dev,kernel_leaf.st_ino)
+                assert not kernel_leaf.st_mode&0o6000
+                metadata_pair=(module._metadata,module._named_metadata)
+                def controlled_state(state,channel):
+                    kernel={name:getattr(state,name) for name in dir(state) if name.startswith('st_')}
+                    matched=(state.st_dev,state.st_ino)==leaf_identity
+                    if not matched:return state
+                    controlled=dict(kernel);controlled['st_mode']|=stat.S_ISUID
+                    metadata_states.append({'channel':channel,'kernel':kernel,'controlled':controlled,
+                        'leaf_identity':list(leaf_identity),'source':'original metadata result; only this owned leaf S_ISUID added'})
+                    return types.SimpleNamespace(**controlled)
+                def metadata(fd):return controlled_state(metadata_pair[0](fd),'held')
+                def named_metadata(name,parent_fd):return controlled_state(metadata_pair[1](name,parent_fd),'named')
+                module._metadata=metadata;module._named_metadata=named_metadata
             try:
-                exec(compile(ast.Module(body=qualification,type_ignores=[]),'actual-owned-helper-qualification','exec'),owned)
+                exec(qualification_code,owned)
                 if stimulus=='source-recheck':
                     item=owned['files'][0];acl_calls=[];original_acl=module._acl_state
                     def observed_acl(*args,**kwargs):
@@ -4582,17 +4598,42 @@ def process_snapshot_controls(area,module):
                         'acl_calls':len(acl_calls),'same_bytes':item.raw==actual_helper,'before_mode':item.held.before.st_mode}
                     target.chmod(0o664)
                     item.recheck('E_STALE')
-            except module.Refusal as caught:error=caught
-            finally:module._close_paths(owned['held'])
+            except module.Refusal as caught:
+                error=caught
+                if stimulus=='source-setid':
+                    trace=caught.__traceback__
+                    while trace is not None:
+                        if trace.tb_frame.f_code is qualification_code:
+                            caller=next((node for node in ast.walk(qualification[-1]) if isinstance(node,ast.Call)
+                                and node.lineno==trace.tb_lineno and isinstance(node.func,ast.Attribute) and node.func.attr=='_require'),None)
+                            refusal_location={'line':trace.tb_lineno,'authenticated_qualification_code':True,
+                                'predicate_source':None if caller is None else ast.get_source_segment(helper.decode(),caller),
+                                'helper_ast_sha256':hashlib.sha256(helper).hexdigest(),
+                                'actual_source_sha256':hashlib.sha256(actual_helper).hexdigest()}
+                        trace=trace.tb_next
+            finally:
+                try:module._close_paths(owned['held'])
+                finally:
+                    if metadata_pair is not None:module._metadata,module._named_metadata=metadata_pair
             reference=completed_evidence({'process_source_qualification_before_assert':{
                 'case':stimulus,'source_mode':mode,'actual_rule_state':owned['qualification_state'],
                 'recheck':recheck_facts,'error':None if error is None else error.code,
+                'controlled_metadata':metadata_states,'refusal_location':refusal_location,
+                'metadata_restored':metadata_pair is None or (module._metadata,module._named_metadata)==metadata_pair,
+                'held_after_close':len(owned['held']),
                 'helper_executed':False,'native_query_called':False,
                 'scope':'actual extracted owned-root/held/qualification statements; source bytes are only read, never spawned'}})
             target.chmod(0o444)
             assert type(error) is module.Refusal and error.code==('E_STALE' if stimulus=='source-recheck' else 'E_INSTALL')
             if stimulus=='source-recheck':assert recheck_facts['retained_rule'] and recheck_facts['acl_calls']>0 and recheck_facts['same_bytes']
-            elif stimulus=='source-setid':assert owned['qualification_state'][0]&0o6000
+            elif stimulus=='source-setid':
+                predicate=next(node for node in ast.walk(qualification[-1]) if isinstance(node,ast.Call)
+                    and isinstance(node.func,ast.Attribute) and node.func.attr=='_require'
+                    and ast.dump(node.args[0],include_attributes=False)==ast.dump(ast.parse('not current.before.st_mode&0o6000',mode='eval').body,include_attributes=False))
+                assert refusal_location is not None and refusal_location['line']==predicate.lineno
+                assert owned['qualification_state'][0]&0o6000 and metadata_states
+                assert {'held','named'}=={row['channel'] for row in metadata_states}
+                assert (module._metadata,module._named_metadata)==metadata_pair
             reports.append({'case':stimulus,'actual_reference':reference})
         assert target.read_bytes()==actual_helper
     finally:executable.close()
