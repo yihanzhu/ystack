@@ -489,3 +489,64 @@ This record-only appendix changes no policy, scope, acceptance standard or autho
 and requires separate independent review before publication.
 
 Prepared against base `b33ca2ed816629b7ab94481586db0d18960b21ff`.
+
+## Manager succession — 2026-10-21
+
+Operator yihanzhu directly told the current Codex session in chat:
+“我明确将 yihanzhu/ystack Roadmap 的管理工作，从旧 Codex session
+01a09ae7-9bd4-77f3-8c15-966143bebff4，交接给当前新 session。当前 session
+是唯一 manager。旧 session 停止新增调度。本条是我的直接交接决定。”
+
+The successor is Codex session `01a15e2e-9b80-71b1-b529-d3f6288591fa`, identified
+by its actual `CODEX_THREAD_ID`. It is the sole manager for `yihanzhu/ystack`.
+The old session stops new dispatch and retains no manager authority. The direct
+operator decision supplies authority; this record cannot appoint another manager.
+The old handoff's SHA-256 is
+`5b88ba0be6e2f9e23fb465fc4dc5667d19b918839133b2166821885a77ded418`.
+
+The same RC-1 and OD-1 boundaries continue. Ordinary in-scope work needs no repeated
+operator answer. No additional full windows or proposed #541 authorization POST
+are approved by this handoff. Current global AGENTS.md GPT routing applies: `gpt-6-astra`/high for
+coordination and independent review; `gpt-6-astra`/xhigh for critical safety or
+architecture decisions; `gpt-6.1-sol`/medium for implementation; `gpt-6.1-sol`/low
+for small isolated edits; and `gpt-6-luna`/low for extraction. Authors and read-only
+reviewers stay separate.
+Requested and directly reported runtime models must be recorded; an unreported
+runtime model stays UNKNOWN.
+
+The inherited attempt remains preserved, with no fresh acceptance claimed:
+
+| Field | Handoff state |
+| --- | --- |
+| Repository / branch | `yihanzhu/ystack` / `ystack/impl/scope-gate-hardening` |
+| PR / round / claim | #558 open / round 1 / `claimed` |
+| Local HEAD (H; unpublished) | `f738b86e3a914aa327a8dbbfe04e3d60bff24239` |
+| PR remote head | `cbd12c42d427d624ef9d877097286300687b3058` |
+| Base (B) | `ea8ac1a1aafb549fe8f05ba20f32485e23839538` |
+| Original worktree | Dirty; four tracked deletions UNRESOLVED; preserve untouched |
+| Full-window budget | 0; no new approval |
+| Historical I1 | UNKNOWN_BLOCKING |
+| Formal G3 | NOT_STARTED_R1 |
+| CPU / wall enforcement | NONE |
+| Native qualification / production accepted identities | BLOCKED / EMPTY |
+
+This appendix does not validate the PR remote head. H's source diff was independently
+accepted. Actual result acceptance covers only three ordinary cases; full Mac/Linux
+validation is absent. The four deletions have no accepted disposition. Preserve frozen #183, parked diagnostic #412, the dirty
+credential-export plan attempt, and the missing #544 worktree and ref state. Do not
+recreate or discard them. Automation stays PAUSED.
+
+The working order stays 7 → 8 → 9 → 10. Step 11 stays dropped and step 12 deferred
+on the existing conditions. No goal, policy, acceptance standard, authority or scope
+expands. All reserved actions remain reserved. Construction mode stays retired;
+no installation, activation, deployment, production action or real target execution
+is authorized. The dummy target stays read-only. Exact artifact hashes, claims,
+rounds cap, recovery, restoration, required CI and protected publishing remain gates.
+
+This is an RC-1 record-only appendix. It claims no CI, source acceptance or fresh
+review acceptance. Its PR must not merge before #558's full validation binds unchanged
+B, unless the necessary fresh review against a changed base is completed. The manager
+must read the complete independent review and verify exact head/base and required CI
+before OD-1 publishing. Historical evidence above remains unchanged.
+
+Prepared against base `ea8ac1a1aafb549fe8f05ba20f32485e23839538`.
