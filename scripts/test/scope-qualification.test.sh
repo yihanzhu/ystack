@@ -2656,7 +2656,7 @@ expect_reasons() {
   expected=$("$jq_bin" -c 'map(select(. != "scope.proposable")) + ["scope.sandbox-receipt-missing"] | sort | unique' <<<"$expected")
   shift 2
   local actual
-  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 9466 ]; then scope_dashboard_inflight=true; fi
+  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 9484 ]; then scope_dashboard_inflight=true; fi
   actual=$(evaluation_reasons "$@")
   scope_dashboard_inflight=false
   [ "$actual" = "$expected" ] || fail "$label expected $expected got $actual"
@@ -3718,7 +3718,7 @@ def stable_sink_controls(area,assembler):
     return reports
 
 OUTER_RUN_SOURCE_SHA='7f3571e66a1da98ccc2a876c426ea77fcddc010cbdb64d76342efde97ce77a64'
-OUTER_CAPTURE_SOURCE_SHA='2459529d1d6e06926195cf29729c7fd7f01e228b1e17ed028a94e0c72df51e12'
+OUTER_CAPTURE_SOURCE_SHA='badc5e4c79dafae7e6d165b77f46b86d8c4fbcceab683ad20239f0e4e1c0e8de'
 def outer_timeout_boundary(assembler):
     tree=ast.parse(assembler)
     runs=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='run']
@@ -3947,22 +3947,40 @@ class OwnedOS:
         view.os.stat=lambda *args,**kwargs:owned_stat(os.stat(*args,**kwargs))
         view._identity=real_identity;view.os.lstat=lambda path:owned_stat(os.lstat(path))
         scope['c']=view
-        directory_before=owned_stat(os.fstat(parent_fd))
+        directory_observed_before=os.fstat(parent_fd)
+        directory_before=owned_stat(directory_observed_before)
         parent.components=[types.SimpleNamespace(fd=parent_fd,name=None,before=directory_before,ancestor=False,rule=lambda *args:True)]
         identity=scope['_scope_sample_directory_identity'](directory_before)
         (sample_area/'directory-mtime-owned.data').write_bytes(b'owned metadata change')
+        directory_observed_after=os.fstat(parent_fd)
         scope['_scope_sample_parent_recheck'](parent,identity)
         try:
             scope['_scope_sample_parent_recheck'](parent,(identity[0],identity[1]+1)+identity[2:])
         except AssertionError:pass
         else:raise AssertionError('sampler directory identity drift accepted')
+        moved=sample_area.with_name(sample_area.name+'-held-original')
+        sample_area.rename(moved);sample_area.mkdir(mode=0o700)
+        try:
+            replacement=os.lstat(sample_area)
+            assert (replacement.st_dev,replacement.st_ino)!=(directory_observed_after.st_dev,directory_observed_after.st_ino)
+            try:scope['_scope_sample_parent_recheck'](parent,identity)
+            except AssertionError:pass
+            else:raise AssertionError('sampler directory replacement accepted')
+        finally:
+            sample_area.rmdir();moved.rename(sample_area)
+        scope['_scope_sample_parent_recheck'](parent,identity)
         sample_area.chmod(0o755)
         try:
             try:scope['_scope_sample_parent_recheck'](parent,identity)
             except AssertionError:pass
             else:raise AssertionError('sampler directory mode drift accepted')
         finally:sample_area.chmod(0o700)
-        records.append({'case':'held-directory-owned-write-vs-identity-mode','owned_mtime_change_accepted':True,'identity_mode_drift_refused':True,'uid_seam':True})
+        fields=('st_dev','st_ino','st_mode','st_uid','st_gid','st_nlink','st_mtime_ns','st_ctime_ns')
+        records.append({'case':'held-directory-owned-write-vs-identity-mode','owned_mtime_change_accepted':True,
+            'identity_mode_drift_refused':True,'actual_replacement_refused':True,'uid_seam':True,
+            'kernel_before':{name:getattr(directory_observed_before,name) for name in fields},
+            'kernel_after':{name:getattr(directory_observed_after,name) for name in fields},
+            'kernel_replacement':{name:getattr(replacement,name) for name in fields}})
         parent.components=[];scope['_scope_sample_parent_recheck']=lambda *args:None
         for case,payload in (('complete',b'complete\x00report\xff'),('empty',b''),('limit',b'x'*65536),('oversize',b'x'*65537)):
             path=sample_area/'git.sample';path.write_bytes(payload)
@@ -12422,7 +12440,7 @@ _scope_sample_environment={'PATH':'/usr/bin:/bin','LC_ALL':'C','LANG':'C'}
 _scope_sample_wait_source="import json,os,resource\nos.write(1,(json.dumps({'ready':True,'uid':os.getuid(),'limits':list(resource.getrlimit(resource.RLIMIT_FSIZE))},sort_keys=True)+'\\n').encode())\nos.read(0,1)\n"
 
 def _scope_sample_directory_identity(value):
-    return (value.st_dev,value.st_ino,value.st_mode,value.st_uid,value.st_gid,value.st_nlink)
+    return (value.st_dev,value.st_ino,value.st_mode,value.st_uid,value.st_gid)
 
 def _scope_sample_parent_recheck(parent,expected):
     current=c.os.fstat(parent.fd);named=c.os.lstat(parent.path)
@@ -13037,7 +13055,7 @@ def _scope_sample_original(owner,pid,end,cancelled):
    os.chown(sample_directory,consumer_uid,consumer_gid,follow_symlinks=False)
    sample_state=os.lstat(sample_directory)
    sample_binding={'invocation':self.token,'source_sha256':self.binding['original_sha256'],'copy_sha256':self.binding['copy_sha256'],
-    'helper_sha256':sha(self.sample_helper_raw),'directory_identity':[sample_state.st_dev,sample_state.st_ino,sample_state.st_mode,sample_state.st_uid,sample_state.st_gid,sample_state.st_nlink],
+    'helper_sha256':sha(self.sample_helper_raw),'directory_identity':[sample_state.st_dev,sample_state.st_ino,sample_state.st_mode,sample_state.st_uid,sample_state.st_gid],
     'reports':['normal.sample','cancel.sample','git.sample']}
    sample_binding_raw=canonical(sample_binding)
    fd=os.open(base/'first-git-sampler-binding.json',os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o444)
