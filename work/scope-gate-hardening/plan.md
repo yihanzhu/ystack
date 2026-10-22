@@ -468,8 +468,10 @@ meaning
 requires fresh review and necessary revalidation. Complete fresh source
 preparation and original full Mac then same-head Linux proof remain required.
 Actual over-cap bytes, missing source or fields, an unclosed writer or any UNKNOWN
-stop acceptance and publication; retain all failure raw. Do not truncate, hide
-payload in another package, compress, cache across batches or add a framework.
+stop acceptance and publication; retain all failure raw. Except for the private
+ordinary fee representation below, do not truncate, hide payload in another
+package, compress, cache across batches or add a framework. That exception never
+authorizes truncation, hidden external payload, cross-batch reuse or a framework.
 
 Only the complete proof package for the fixed first-Git sampler below may use
 18 MiB, under the
@@ -921,8 +923,9 @@ counts, lengths or digests, format ambiguity and encoding/write failures. Preser
 the original actual error and its priority; representation failure cannot replace
 it or create success. Change no collection, classification, callback, primitive
 comparison, event, timestamp, source read, OS operation, call, caller, result,
-exception or deadline. Apart from these arrays' report representation, keep every
-other field and payload unchanged, including `classifier_sequence`,
+exception or deadline. Apart from these arrays' report representation and the
+private ordinary fee representation below, keep every other field and payload
+unchanged, including `classifier_sequence`,
 `actual_insert_hit_events` and `same_request`. Add no output path or execution
 opportunity.
 
@@ -941,6 +944,86 @@ above; complete CI ordinary output must fit its unchanged 16 MiB cap. Static
 savings, projections or green CI cannot prove capacity. An overrun or UNKNOWN
 stops acceptance; do not widen sharing or budgets, trim evidence or controls,
 omit a source copy, or add a retry to make it fit.
+
+### Private ordinary fee representation
+
+Only the existing private ordinary fee observer may use one shared, lossless
+representation for its fee events and ledger payloads. Apply the same boundary to
+the old capture writers and the new 97 controls. Keep the source fixture,
+original functions, 97-case matrix, ten preparation stages and sealer unchanged.
+Keep every original atom, member and their order. Change only the representation
+inside the existing fee payload locations and their private producer/consumer.
+Do not add an output path, public interface, general codec or second workaround.
+This exception does not cover source, authentication, sampler or other payloads.
+
+Retain each original open, write and close call, its arguments, count and order,
+return value, exact exception object, cause, context, suppression and finally
+order. Use only the original producer's already-held inputs, returns and bindings.
+Add no source read, scan, OS query or descriptor. Record each positive and zero
+write separately in global call order. Recover its attempted byte count,
+returned count, exact successful prefix and SHA-256, status and original fields.
+Recover full original ledger views and their exact existing JSON serialization,
+including member order, spaces, escaping and newline. Added fine-grained fee facts
+for the new controls cannot replace their original recoverable aggregate view.
+A joined payload alone is not evidence of individual writes or their order.
+
+Bind every declaration and reference to its actual producer, run and descriptor
+lifecycle. Keep clear, overwrite, repeated content, close failure, unclosed state
+and numeric-FD reuse distinct. Preserve interleaving between targets. In
+particular, resolve an original readback's confirmation against the latest
+original event, not accumulated descriptor content or a whole declared buffer.
+Preserve every original full readback payload when that rule does not confirm it.
+Keep failed attempted inputs recoverable and charge their complete conservative
+unknown-write upper; neither a zero return nor a close failure proves completeness.
+
+The reviewed private recipe must fix its metadata declarations, ordered event
+representation and exact input-span/write-cut rules before execution. Share only
+identical fixed fee metadata and complete already-held fee input frames. Bind and
+verify every attempted span, positive-write cut and zero/error marker; retain full
+declarations before references in that same original fee value. Do not share
+across atoms, reports or runs. Reconstruct variable fields and prefix hashes from
+complete bytes and boundaries. Never replace a different input with a suffix by
+assumption, collapse repeated writes or infer an observed count from final content.
+Missing, forward, foreign or ambiguous references, bad order/count/span/digest,
+encoding/recording failure or missing closure leave UNKNOWN and stop acceptance.
+They cannot skip an original call, disturb its finally, replace its error or
+produce COMPLETE. Keep all original failure evidence and partial output.
+
+Prove a finite linear representation bound from the fixed producer source before
+GO. Let S be successful prefix bytes and N positive writes; use N<=S, without
+assuming full writes or an unproved short-write limit. Count full declarations,
+bound input frames, global order, every cut/marker and fixed-width scalar/index
+fields. Fix their widths from source-bound ranges. Bound zero/error/lifecycle
+records and failed attempted inputs separately from actual fixed call sites.
+Count repeated metadata and attempted suffixes wherever they remain. A linear
+bound alone does not prove that a cap fits.
+Do not substitute an arbitrary reserve, old actual size or a saving ratio. Count
+all tables, bitmaps or sequences, validators, generated source, failed encodings,
+physical copies and every actual report/raw/transport serialization layer.
+
+Use the same private decoder/validator for both writer families. Before existing
+fee assertions, fully reconstruct and compare the original logical events,
+ledger and serialized payload against already-held original data. Validation may
+stream through those complete objects in memory; do not create a huge expanded
+old-JSON disk copy and omit its cost. Keep full original data for every original
+parse and assertion. Keep original clock positions and count; include this work
+in the existing timing boundary, with no performance qualification claim.
+
+Add finite private boundary regressions without changing the 97-case matrix or
+adding a batch, stage, execution opportunity or OS operation. Cover one-byte and
+mixed positive short returns, zero/error after a prefix, attempted spans, global
+interleaving, repeated bytes, clear/overwrite, FD reuse, close failure/unclosed
+state, latest-event readback confirmation, all declaration/reference/format
+refusals and encoding/decoder failures. Compare original call logs and the same
+returned/error objects and exception relations, including finally and restoration.
+Prove byte-for-byte reconstruction of both full old ledger views and new-control
+fee views. Use owned in-memory seams honestly; they do not prove kernel short-write
+reachability. Keep every original control, full carrier and existing proof gate.
+
+This is only a fee representation exception. It grants no capacity PASS, budget,
+rerun, new window, publication, Mac/Linux run, credential or network authority.
+Every individual cap, fresh complete forecast, independent source/preparation
+review, actual acceptance, publication gate and UNKNOWN stop still applies.
 
 In existing CI, compare old and new observers on real owned calls and events.
 Cover identity refusal, real foreground return/reap, direct-callee stat/bool/errno,
