@@ -1605,12 +1605,16 @@ cancellation is not a general closure guarantee. Observation-child closure does
 not prove target closure, birth identity, atomic image binding or restoration.
 The original Git owner must prove its actual target closure in that same run.
 
-Retain at most 768 stdout bytes and 128 stderr bytes under their existing caps.
-The actual tool controls must fit full stdout/stderr inside them; overflow fails,
-never truncates into success. Keep the existing optional group at 1,024 encoded
-bytes with its required fields and original failure-export eligibility unchanged.
-Do not insert report bytes into that group or change its old fields' meaning.
-Uncollected proc-query fields stay GAP; do not reuse an earlier invocation's facts.
+Normal admission still requires full stdout at most 768 bytes and stderr at
+most 128 bytes. Overflow fails and blocks later sampler opportunities; never
+truncate it into success. A failure-only retention exception permits the complete
+prefix already read by that same opportunity: at most 1,537 stdout bytes and
+897 stderr bytes, at most 2,434 bytes combined. These are static bounds from the
+existing 769-byte read blocks, not required lengths or permission to read more.
+Keep the existing optional group at 1,024 encoded bytes with its required fields
+and original failure-export eligibility unchanged. Do not insert report bytes
+into that group or change its old fields' meaning. Uncollected proc-query fields
+stay GAP; do not reuse an earlier invocation's facts.
 The sole new carrier is one private raw report record per fixed opportunity,
 through the same owned private proof chain. Retain full report bytes and SHA,
 source/copy/invocation and PID/call binding, actual UID, fixed argv, exit, measured
@@ -1622,14 +1626,97 @@ opportunity. Expected cancellation passes only its request-and-closure control,
 not normal report completeness. Such failure blocks later sampler starts in
 preparation/controls; the original Git window follows the three branches above.
 
-These at most three report leaves and records are private diagnostic raw only.
-They add no product observation field, public/success export or new failure-export
-allowance. The old records/exporters retain all required bytes and their original
-caps and priority. Count complete reports, failure raw, encoded records, copies,
-controls and source proof under the narrow private proof cap above; no report is
-an uncounted external payload. Read, seal and clean a report only after writer
-closure and all original identity and ownership gates. Unknown closure grants
-neither report cleanup nor restoration permission.
+These at most three report leaves and records remain private diagnostic raw.
+They add no product observation field or public/success export. The only new
+failure export is the fixed private sampler carrier described below. All old
+records and exporters retain their complete bytes, eligibility, caps and priority,
+including the original 4,096-byte record/cost limits, 12,288-byte failure export
+and 1,024-byte optional group. Emit the old failure export first. Do not spend its
+allowance on this carrier or omit its fields to fit the new bytes.
+
+Keep this exception inside the existing first-Git sampler record writer and
+GenuineRelationCapture's fixed private sampler exporter. Save the same already
+held failure record in its original normal.json, cancel.json or git.json leaf;
+Git pending saves it before the original rethrow. Keep pending and the first
+failure object, cause and context. Add no stream, report, source or process read,
+collection pass, sampler opportunity, path, tool, permission or deadline.
+
+Only the same run's GenuineRelationCapture may read the original four metadata
+leaves through the original first-git-sampler private chain. Extend that existing
+exporter's read to failure only after the old export_failure authenticates the
+actual original reader wait, reader-attempted phase, same invocation token and
+writer completion. Keep all original held/name, owner, one-link, no-follow,
+length and stable-file checks. A stable stat or fsync cannot prove writer closure.
+Unknown writer closure means no metadata read and WRITER_CLOSURE_UNKNOWN.
+A closed metadata writer may describe a pending target or sampler. This grants
+no read of an unclosed .sample report; its original closure gate still applies.
+
+Carry exact metadata bytes, length and SHA through the existing lossless hex
+encoding as UNVERIFIED_FAILURE_RAW, with the original private carrier and binding.
+GenuineRelationCapture emits these additional failure-carrier bytes through the
+original workflow stdout, CI job logs and existing native evidence transport.
+The manager and independent reviewer use them as evidence. They also inherit the
+actual access and retention of those logs and transport; private names and hex
+provide no confidentiality or new ACL. The repository is public. GitHub and
+principals with existing Actions-log read permission can access this output;
+manager/reviewer use is not exclusive readership. Retention configuration and
+historical ACL are unverified and unchanged. The operator decision must cover
+these additional failure bytes in the original logs under this existing visibility.
+No new admin query, reader enumeration or retention proof is required by this
+proposal. This grants no new destination, public comment or general external
+publication. Do not claim schema validity,
+counts, closure or GO from those raw bytes. Invalid JSON, fields, counts or binding
+stay UNKNOWN/REVISE pending source-bound complete-raw review. NOT_SAVED means only
+that a metadata leaf is absent; it cannot refund a start or prove none occurred.
+EXPORT_FAILED and WRITER_CLOSURE_UNKNOWN have no success meaning. A private export
+failure must remain explicit, preserve the original failure and its cause/context,
+and leave the original finish-to-run failure assertion reachable on its original
+non-cancellation failure path. Keep the original complete-control record capture,
+finally handling and final signal checks unchanged in meaning. Only the new
+pending-record saves use this rule: if an original first/failure already exists,
+optional record I/O must not replace its same object, cause, context or suppress
+flag, or its original propagation/suppression. With no earlier first/failure,
+propagate a record-I/O InterruptedError, KeyboardInterrupt or SystemExit as that
+same object. Ordinary record errors do not join original close errors or change
+pending/cause. The original chain still decides live cancellation and deadline;
+metadata exception classes cannot rewrite its priority, signal policy, stop
+responsibility or time. If publishing EXPORT_FAILED also fails, retain both
+export failure types in the current capture; evidence stays UNKNOWN and STOP.
+
+The retained prefix contributes at most 4,868 ASCII bytes inside each record's
+hex, and 9,736 characters when that record is hex-wrapped once by the carrier.
+Across the original three opportunities this contribution is at most 29,208
+characters per carrier copy. These bounds exclude all JSON, bindings, report,
+preflight, argv and other metadata; they are not complete record/package bounds.
+Count every physical record, encoding, copy, stdout transport and native tool
+repetition at its actual producer stage, together with complete reports, source
+proof, controls, indices and late bytes, under the unchanged 18 MiB sampler cap.
+Do not deduplicate payload charges, borrow ordinary/local capacity or truncate
+evidence. A projection cannot prove fit; unknown capacity or overflow stops.
+
+Read, seal and clean a report only after writer closure and all original identity
+and ownership gates. Unknown closure grants neither report cleanup nor restoration.
+This exception grants no real start or rerun. Keep all original success, count,
+owned-group, direct-wait, pipe, pending, stop and restoration requirements. Prove
+its overflow, writer-unknown, pending-metadata, Git save and double-export-failure
+branches through the actual extracted writer and finish-to-run boundaries in
+ordinary controls, with controlled OS seams explicit. For pending-record I/O in
+all three phases, cover both an earlier first/failure and none, checking actual
+exception identity, cause/context/suppress and original propagation/suppression.
+Also prove unchanged complete-control and final signal behavior. Such controls
+establish no real tool positive or recovered historical facts.
+
+The retention exception applies only to the original 769-byte read blocks with
+768/128 success caps. Remove it when an accepted source-bound read/retention
+contract proves that no already-read stdout/stderr prefix can exceed those caps,
+including closure reads in all three phases. Remove the dedicated failure-carrier
+exception when the accepted standard failure-output contract carries the same
+complete fixed metadata bytes, length, SHA and binding after authenticated writer
+closure, in all three phases, within its caps and old-field priority, without
+this dedicated branch. A read-block, success-cap, writer-closure, metadata/carrier,
+log readership or purpose change requires fresh artifact review and any necessary
+operator decision before reuse. A second use outside this fixed boundary has no
+permission from this exception.
 
 Implement this boundary in dependency order: fixed tool/interface and the report
 file contract above; child-only helper limit and bounded supervision; report binding;
