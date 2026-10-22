@@ -22,8 +22,7 @@ c = e.c
 require, canonical, sha, parse = e.require, e.canonical, e.sha, e.parse
 NAMES = (*e.EVIDENCE_NAMES, "bundle.json")
 REQUEST_KEYS = e.REQUEST_BODY_KEYS | {"scope_id", "allowed_paths"}
-CONFIG_KEYS = {"core.repositoryformatversion", "core.filemode", "core.bare",
-               "core.logallrefupdates", "core.ignorecase", "core.precomposeunicode", "extensions.objectformat"}
+
 
 
 @dataclasses.dataclass(frozen=True)
@@ -204,9 +203,25 @@ class _Workspace:
             "command", operation, "-f", str(source), str(path)], source)
         require(raw.strip() == b"true", "E_RELATION")
 
+    def execute_git(self, argv, limit):
+        return self.execute("write-git-inspection", argv, SOURCE / "shadow/v1/write-shadow.py",
+                            output_limit=limit)
+
+    def git_owner(self, repository):
+        if not hasattr(self, "git_owners"):
+            self.git_owners = {}
+        key = str(repository)
+        if key not in self.git_owners:
+            owner = c._ReadOnlyGit(key, self)
+            self.owned.append(owner)
+            self.git_owners[key] = owner
+        return self.git_owners[key]
+
     def git_read(self, repository, args, limit):
-        return self.execute("write-git-inspection", ["/usr/bin/git", "--no-replace-objects",
-            "--git-dir=" + str(repository), *args], SOURCE / "shadow/v1/write-shadow.py", output_limit=limit)
+        try:
+            return self.git_owner(repository).read(args, limit)
+        except c.Refusal as exc:
+            raise e.Refusal(exc.code) from exc
 
     def close(self):
         owned = self.owned
@@ -452,26 +467,10 @@ def _record_relations(files, incident, result, fresh_origin, anchor, write=None)
 
 
 def _git_inventory(ws, repository, revision):
-    config = ws.hold(repository / "config", e.OUTPUT_LIMIT).raw
-    config_path = ws.capture("config-" + str(len(ws.inputs)) + ".txt", config)
-    keys = ws.git_read(repository, ["config", "--file", str(config_path), "--name-only", "--list", "--no-includes"], e.OUTPUT_LIMIT)
-    require(set(keys.decode().splitlines()) <= CONFIG_KEYS, "E_RELATION")
-    require(ws.git_read(repository, ["rev-parse", "--is-bare-repository"], 16) == b"true\n"
-            and ws.git_read(repository, ["rev-parse", "--show-object-format"], 16) == (revision["hash_algorithm"] + "\n").encode(), "E_RELATION")
-    forbidden = ["commondir", "shallow", "info/grafts", "objects/info/alternates", "refs/replace"]
-    require(not any(os.path.lexists(repository / name) for name in forbidden), "E_RELATION")
-    require(not any((repository / "worktrees").glob("*"))
-            and not any((repository / "objects/pack").glob("*.promisor")), "E_RELATION")
-    raw = ws.git_read(repository, ["ls-tree", "-r", "-t", "-z", "--full-tree", revision["commit_id"]], 16 * e.OUTPUT_LIMIT)
-    require(not raw or raw.endswith(b"\0"), "E_RELATION")
-    facts = {}
-    for line in raw.split(b"\0")[:-1]:
-        head, name = line.split(b"\t", 1)
-        mode, kind, oid = head.decode("ascii").split(" ")
-        path = name.decode("utf-8")
-        require(path not in facts and c._writer_oid(oid) and len(oid) == (40 if revision["hash_algorithm"] == "sha1" else 64), "E_RELATION")
-        facts[path] = (mode, kind, oid)
-    return facts
+    try:
+        return ws.git_owner(repository).inventory(revision)
+    except c.Refusal as exc:
+        raise e.Refusal(exc.code) from exc
 
 
 def _write_files(ws, frozen, incident, source_facts):

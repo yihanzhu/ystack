@@ -418,53 +418,53 @@ def stable_file(path: Path, limit: int = c.EXECUTABLE_LIMIT,
         raise
 
 
+class _DarwinLedger:
+    def __init__(self, record_command):
+        self.record = record_command
+
+    def record_command(self, role, argv, executable_sha256, component_sha256):
+        self.record(role, argv, executable_sha256, component_sha256)
+
+    @staticmethod
+    def native_status(native):
+        return _native_child_status(native)
+
+    @staticmethod
+    def native_pending(status):
+        return _native_child_pending(status)
+
+    @staticmethod
+    def native_cleanup(native, deadline):
+        return _native_child_cleanup(native, deadline)
+
+    @staticmethod
+    def native_communicate(native, raw, output_limit, error_limit, timeout):
+        child, stdout, stderr = _communicate_native(native, raw, output_limit, error_limit, timeout)
+        return child.returncode, stdout, stderr
+
+
 class _DarwinUUIDResolver(c._DarwinUUIDResolver):
     def __init__(self, python: StableFile, source: StableFile, deadline: float,
                  record_command: Callable[[str, list[str], str, str], None]) -> None:
-        self.python = python
-        self.source = source
-        self.deadline = deadline
-        self.record_command = record_command
-        expected_source = (SOURCE / "shadow/v1/_consumer.py").resolve(strict=True)
-        require(Path(self.python.held.path) == Path(sys.executable)
-                and Path(self.source.held.path) == expected_source, "E_DEPENDENCY")
-        self.recheck()
+        self.python, self.source = python, source
+        self.deadline, self.record_command = deadline, record_command
+        self.owner = c._DarwinChildOwner(python, source, deadline, _DarwinLedger(record_command))
 
     def recheck(self) -> None:
-        self.python.recheck("E_DEPENDENCY")
-        self.source.recheck("E_DEPENDENCY")
-        require(Path(sys.executable).resolve(strict=True) == Path(self.python.held.path)
-                and (SOURCE / "shadow/v1/_consumer.py").resolve(strict=True)
-                == Path(self.source.held.path), "E_DEPENDENCY")
+        try:
+            self.owner.recheck()
+        except c.Refusal as exc:
+            raise Refusal(exc.code) from exc
 
     def resolve(self, uuids: list[str]) -> list[dict]:
-        require(len(uuids) <= c.DARWIN_UUID_COUNT_LIMIT
-                and all(c._uuid_hex(value) for value in uuids), "E_ACL")
-        if not uuids:
-            return []
-        self.recheck()
-        argv = [str(self.python.held.path), "-I", "-S", "-B", str(self.source.held.path),
-                "_resolve-darwin-uuids"]
-        env = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"}
-        self.record_command("darwin-acl-uuid-resolution", argv, self.python.sha256,
-                            self.source.sha256)
-        output = run_bounded("darwin-acl-uuid-resolution", argv,
-                             stdin=c.canonical(uuids), timeout=10,
-                             output_limit=c.DARWIN_UUID_OUTPUT_LIMIT, env=env,
-                             deadline=self.deadline)
-        self.recheck()
-        rows = c._json_array(output, c.DARWIN_UUID_OUTPUT_LIMIT, "E_ACL")
-        require(len(rows) == len(uuids), "E_ACL")
-        for uuid, row in zip(uuids, rows):
-            require(isinstance(row, dict) and set(row) == {"uuid", "status", "kind", "id"}
-                    and row["uuid"] == uuid, "E_ACL")
-            if row["status"] == "resolved":
-                require(row["kind"] in ("user", "group") and integer(row["id"])
-                        and 0 <= row["id"] <= 0xffffffff, "E_ACL")
-            else:
-                require(row["status"] == "unresolved" and row["kind"] is None
-                        and row["id"] is None, "E_ACL")
-        return rows
+        try:
+            require(len(uuids) <= c.DARWIN_UUID_COUNT_LIMIT
+                    and all(c._uuid_hex(value) for value in uuids), "E_ACL")
+            if uuids:
+                require(CancellationSignals.active is not None, "E_RUNTIME")
+            return self.owner.resolve(uuids, CancellationSignals.active)
+        except c.Refusal as exc:
+            raise Refusal(exc.code) from exc
 
 
 class _DarwinGroupReader(c._DarwinGroupReader):
@@ -472,20 +472,12 @@ class _DarwinGroupReader(c._DarwinGroupReader):
         self.resolver = resolver
 
     def contains(self, gid: int) -> bool:
-        require(integer(gid) and 0 <= gid <= 0xffffffff, "E_ACL")
-        resolver = self.resolver
-        resolver.recheck()
-        argv = [str(resolver.python.held.path), "-I", "-S", "-B",
-                str(resolver.source.held.path), "_read-darwin-group"]
-        env = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"}
-        resolver.record_command("darwin-group-membership", argv, resolver.python.sha256,
-                                resolver.source.sha256)
-        output = run_bounded("darwin-group-membership", argv, stdin=c.canonical({"gid": gid}),
-                             timeout=10, output_limit=16, env=env,
-                             deadline=resolver.deadline)
-        resolver.recheck()
-        require(output in (c.canonical([]), c.canonical([gid])), "E_ACL")
-        return output == c.canonical([gid])
+        try:
+            require(integer(gid) and 0 <= gid <= 0xffffffff, "E_ACL")
+            require(CancellationSignals.active is not None, "E_RUNTIME")
+            return self.resolver.owner.contains(gid, CancellationSignals.active)
+        except c.Refusal as exc:
+            raise Refusal(exc.code) from exc
 
 
 class _NativeRelease:
