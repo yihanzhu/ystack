@@ -3718,7 +3718,7 @@ def stable_sink_controls(area,assembler):
     return reports
 
 OUTER_RUN_SOURCE_SHA='7f3571e66a1da98ccc2a876c426ea77fcddc010cbdb64d76342efde97ce77a64'
-OUTER_CAPTURE_SOURCE_SHA='e399356240dbb362ca28857f93b9b5ce195cd9283a0be36a41adcdc7b22ad89d'
+OUTER_CAPTURE_SOURCE_SHA='c5e83ecb162a10b248700377932bdea77ff1bbd28352e13226b2770ee6b9975c'
 def outer_timeout_boundary(assembler):
     tree=ast.parse(assembler)
     runs=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='run']
@@ -4109,7 +4109,14 @@ class OwnedOS:
             except BaseException as error:
                 assert case in ('unknown','exception')
                 if case=='exception':assert error is first and first.__cause__ is cause and first.__context__ is context
-                if case=='unknown':assert scope['_scope_select_state']['process_pending'] and not saved
+                if case=='unknown':
+                    record=scope['_scope_sample_state']['records'][-1]
+                    assert type(error) is scope['ScopeProcessPending']
+                    assert scope['_scope_select_state']['process_pending'] and saved==[record]
+                    assert saved[0] is record and record['report']['state']=='NOT_READ_WRITER_OPEN'
+                    count=len(calls);starts=scope['_scope_sample_state']['starts']
+                    scope['_scope_sample_original'](owner,123,100,[False])
+                    assert len(calls)==count and scope['_scope_sample_state']['starts']==starts
                 records.append({'case':'observer-'+case,'pending':scope['_scope_select_state']['process_pending'],'original_identity':error is first})
             assert len(calls)==1 and calls[0][0][-1]=='/owned/batch/'+phase+'.sample'
             assert scope['_scope_sample_state']['starts']==(2 if phase=='cancel' else 3)
@@ -4258,6 +4265,11 @@ def sample_supervision_controls(module,setup):
                 if case=='exact-cap':assert len(out)==768 and len(err)==128 and record['closure']['output_complete']
                 if case=='over-stdout':assert len(out)==769 and not record['closure']['complete'] and not report_reads
                 if case=='over-stderr':assert len(err)==129 and not record['closure']['complete'] and not report_reads
+                if case in ('exact-cap','over-stdout','over-stderr'):
+                    assert record['helper_popen_attempted'] and record['helper_popen_returned']
+                    assert record['starts_before']==1 and record['starts_after']==2
+                    assert record['closure']['physical_pipes_closed']
+                    if case!='exact-cap':assert record['report']['state']=='NOT_READ_WRITER_OPEN'
                 if case in ('tail-both','timeout-tail','exception-tail'):
                     assert out.endswith(b'TERM stdout\n') and err==b'TERM stderr\n'
                 if failure is None or case=='exception-tail':assert record['closure']['stdout_tail_eof'] and record['closure']['stderr_eof']
@@ -4270,6 +4282,318 @@ def sample_supervision_controls(module,setup):
                 for stream in (child.stdin,child.stdout,child.stderr):
                     if not stream.closed:stream.close()
     return completed_evidence({'sampler_supervision_P1_controls':records,'real_sample_starts':0})
+
+def sample_failure_record_controls(area,module,setup):
+    import resource,types
+    limits=resource.getrlimit(resource.RLIMIT_FSIZE)
+    phases=('normal','cancel','git')
+    records=[];carrier_inputs={}
+    faults=[('overflow',None,None,None),('overflow-stderr',None,None,None)]
+    faults.extend(('pending',operation,kind,earlier)
+        for operation in ('write','close')
+        for kind in (OSError,InterruptedError,KeyboardInterrupt,SystemExit)
+        for earlier in (None,RuntimeError,KeyboardInterrupt))
+    for phase in phases:
+        for index,(fault,operation,kind,earlier) in enumerate(faults):
+            directory=area/('sampler-record-'+phase+'-'+str(index));directory.mkdir(mode=0o700)
+            parent_fd=os.open(directory,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+            clock=[0.0];streams={};children=[];events=[];injected=[];reports=[];released=[]
+            first=earlier('held first') if earlier is not None else None
+            cause=ValueError('held cause');context=KeyError('held context')
+            if first is not None:
+                first.__cause__=cause;first.__context__=context;first.__suppress_context__=True
+            scope={'c':module,'sys':sys,'json':json}
+            exec(compile(setup,'actual-failure-record-setup','exec'),scope)
+            state=scope['_scope_sample_state'];select_state=scope['_scope_select_state']
+            class Stream:
+                def __init__(self,chunks=(),held=False):
+                    self.chunks=list(chunks);self.held=held;self.closed=False
+                    self.number=-1000-len(streams);streams[self.number]=self
+                def fileno(self):return self.number
+                def close(self):self.closed=True
+                def read(self,maximum):
+                    if self.chunks:
+                        raw=self.chunks.pop(0)
+                        if len(raw)>maximum:self.chunks.insert(0,raw[maximum:])
+                        return raw[:maximum]
+                    if self.held:raise BlockingIOError()
+                    return b''
+            class Child:
+                def __init__(self,command):
+                    self.pid=700+len(children);self.target='-c' in command
+                    self.returncode=None;self.alive=True;self.stdin=Stream()
+                    self.phase=state['phase'];self.stdin.close()
+                    if self.target:
+                        raw=(json.dumps({'ready':True,'uid':56001,'limits':list(limits)})+'\n').encode()
+                        self.stdout=Stream([raw],True);self.stderr=Stream([],True)
+                    else:
+                        header=('SAMPLE_LIMIT '+json.dumps({'pid':self.pid,'uid':56001,
+                            'before':list(limits),'after':[65536,65536]})+'\nSampling process fixed-control\n').encode()
+                        self.header=header
+                        stdout=[header];stderr=[]
+                        if self.phase==phase and fault=='overflow':stdout=[header.ljust(768,b'x'),b'x'*769]
+                        if self.phase==phase and fault=='overflow-stderr':stderr=[b'e'*128,b'e'*769]
+                        held=self.phase=='cancel'
+                        self.stdout=Stream(stdout,held);self.stderr=Stream(stderr,held)
+                    for stream in (self.stdout,self.stderr):stream.child=self
+                    children.append(self);events.append(['spawn',self.pid,self.target,self.phase])
+                def poll(self):return self.returncode
+                def wait(self,timeout):
+                    self.returncode=0 if self.returncode is None else self.returncode
+                    self.alive=False;return self.returncode
+            class Clock:
+                @staticmethod
+                def monotonic():clock[0]+=0.001;return clock[0]
+                @staticmethod
+                def sleep(value):clock[0]+=value
+            class Selector:
+                def __init__(self):self.mapping={}
+                def register(self,stream,event):self.mapping[stream]=event
+                def unregister(self,stream):self.mapping.pop(stream)
+                def get_map(self):return self.mapping
+                def select(self,timeout):
+                    clock[0]+=min(timeout,0.02)
+                    if self.mapping:
+                        child=next(iter(self.mapping)).child
+                        if first is not None and not child.target and child.phase==phase:raise first
+                    return [(types.SimpleNamespace(fileobj=stream),event) for stream,event in list(self.mapping.items())]
+                def close(self):self.mapping.clear()
+            def killpg(pid,number):
+                child=next(child for child in children if child.pid==pid)
+                unknown=(fault=='pending' and child.phase==phase and (child.target or phase=='git' or first is not None))
+                if unknown:return
+                if not child.alive:raise ProcessLookupError()
+                if number:
+                    child.alive=False;child.returncode=-number
+                    child.stdout.held=False;child.stderr.held=False
+            def read(fd,maximum):
+                if fd in streams:return streams[fd].read(maximum)
+                return os.read(fd,maximum)
+            def write(fd,raw):
+                if operation=='write' and state['phase']==phase:
+                    error=kind('owned metadata write');injected.append(error);raise error
+                return os.write(fd,raw)
+            def close(fd):
+                os.close(fd)
+                if operation=='close' and state['phase']==phase:
+                    error=kind('owned metadata close');injected.append(error);raise error
+            def report(parent,leaf,identity):
+                reports.append(leaf)
+                child=next(child for child in reversed(children) if child.target) if phase!='git' else None
+                pid=child.pid if child is not None else 123
+                raw=('['+str(pid)+'] Call graph: __read_nocancel Binary Images:').encode()
+                return {'state':'COMPLETE','raw_hex':raw.hex(),'complete':True}
+            view=types.SimpleNamespace(**vars(module));view.os=types.SimpleNamespace(**vars(os))
+            view.os.read=read;view.os.write=write;view.os.close=close
+            view.os.killpg=killpg;view.os.set_blocking=lambda *args:None;view.os.getuid=lambda:56001
+            view.time=Clock;view.subprocess=types.SimpleNamespace(Popen=lambda command,**options:Child(command),
+                PIPE=subprocess.PIPE,TimeoutExpired=subprocess.TimeoutExpired)
+            view.signal=types.SimpleNamespace(**vars(module.signal));handlers={}
+            view.signal.pthread_sigmask=lambda *args:set()
+            def handler(number,value):
+                prior=handlers.get(number);handlers[number]=value;return prior
+            view.signal.signal=handler;view._source_root=lambda:'/owned/package'
+            view._close_paths=lambda paths:released.append(paths)
+            held=types.SimpleNamespace(recheck=lambda *args:None,sha256='a'*64)
+            prepared={'parent':types.SimpleNamespace(path=str(directory),fd=parent_fd),'identity':None,
+                'files':[held,held,held],'context':held,'helper':held,'binding':{'case':directory.name},
+                'parent_limits':limits,'held':[]}
+            scope['c']=view;scope['_scope_sample_parent_recheck']=lambda *args:None
+            scope['_scope_sample_absent']=lambda *args:None
+            scope['_scope_sample_preflight']=lambda owner:prepared
+            scope['_scope_sample_report']=report;select_state['native_selector']=Selector
+            owner=types.SimpleNamespace(deadline=1000,recheck=lambda:None,python=held)
+            error=None
+            try:
+                if phase=='git':
+                    state.update(prepared=prepared,phase='git',starts=2)
+                    try:scope['_scope_sample_observe'](owner,123,1000,[False],'git')
+                    except BaseException as caught:error=caught
+                else:
+                    state.update(prepared=None,phase='normal',starts=0)
+                    try:scope['_scope_sample_controls'](owner)
+                    except BaseException as caught:error=caught
+                assert error is not None and state['blocked'] and select_state['process_pending']
+                record=state['records'][-1];assert record['phase']==phase
+                if fault.startswith('overflow'):
+                    assert type(error) is ValueError and str(error)=='sample output cap; incomplete failure raw'
+                    assert record['output_overflow'] and not record['closure']['complete']
+                    assert record['report']['state']=='NOT_READ_WRITER_OPEN'
+                    helper=next(child for child in reversed(children) if not child.target)
+                    expected_stdout=helper.header.ljust(768,b'x')+b'x'*769 if fault=='overflow' else helper.header
+                    expected_stderr=b'e'*897 if fault=='overflow-stderr' else b''
+                    assert bytes.fromhex(record['stdout_hex'])==expected_stdout
+                    assert bytes.fromhex(record['stderr_hex'])==expected_stderr
+                    assert phase+'.sample' not in reports
+                    raw=(directory/(phase+'.json')).read_bytes();saved=json.loads(raw)
+                    assert saved==record and saved['starts_after']==phases.index(phase)+1
+                    if fault=='overflow':carrier_inputs[phase]=raw
+                else:
+                    assert len(injected)==1
+                    if first is not None:
+                        assert error is first and error.__cause__ is cause and error.__context__ is context
+                        assert error.__suppress_context__ is True
+                    elif kind is OSError:
+                        assert type(error) is scope['ScopeProcessPending'] and error.__cause__ is None
+                    else:
+                        assert error is injected[0] and error.__cause__ is None and error.__context__ is None
+                        assert error.__suppress_context__ is False
+                    if phase=='git':assert not reports
+                starts=state['starts'];count=len(children)
+                scope['_scope_sample_original'](owner,123,1000,[False])
+                assert state['starts']==starts and len(children)==count
+                scope['_scope_sample_release']()
+                assert state['prepared'] is prepared and not released
+                facts={'phase':phase,'fault':fault,'operation':operation,'record_error':kind.__name__ if kind else None,
+                    'earlier':earlier.__name__ if earlier else None,'error':type(error).__name__,
+                    'same_first':first is not None and error is first,'same_record_interrupt':bool(injected) and error is injected[0],
+                    'record':record,'events':events,'report_reads':reports,'real_sample_starts':0,
+                    'scope':'actual generated observe/controls/close/writer/release; explicit child, time, signal and group seams; actual metadata FD'}
+                records.append(completed_evidence({'sampler_failure_record':facts}))
+            finally:
+                os.close(parent_fd)
+                for stream in streams.values():stream.close()
+    assert set(carrier_inputs)==set(phases)
+    completed_evidence({'sampler_failure_record_controls':records,'real_sample_starts':0})
+    return carrier_inputs
+
+def sample_failure_carrier_controls(area,module,inputs):
+    import io,types
+    assembler=heredoc('PY_GENUINE_ASSEMBLER');tree=ast.parse(assembler)
+    capture_node=next(node for node in tree.body if isinstance(node,ast.ClassDef) and node.name=='GenuineRelationCapture')
+    names=('identity','stable_sink','export_failure','export_sampler_records','finish')
+    methods=[node for node in capture_node.body if isinstance(node,ast.FunctionDef) and node.name in names]
+    assert {node.name for node in methods}==set(names)
+    extracted=ast.ClassDef(name='SamplerFailureCapture',bases=[],keywords=[],body=methods,decorator_list=[])
+    capture_tree=ast.fix_missing_locations(ast.Module(body=[extracted],type_ignores=[]))
+    run_node=next(node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=='run')
+    final_assert=next(node for node in run_node.body if isinstance(node,ast.Assert))
+    leaves=('preflight.json','normal.json','cancel.json','git.json')
+    cases=[(phase,'raw') for phase in ('normal','cancel','git')]
+    cases.extend(('git',fault) for fault in ('invalid-utf8','invalid-json','counter-float','wrong-phase',
+        'missing-helper','unknown-field','wait-gap','before-reader','foreign-token','missing-reader',
+        'absent','symlink','permission','print-once','print-always','print-interrupt'))
+    records=[]
+    for index,(phase,fault) in enumerate(cases):
+        base=area/('sampler-carrier-'+str(index));base.mkdir(mode=0o700)
+        metadata=base/'first-git-sampler';metadata.mkdir(mode=0o700)
+        package=base/'package';events=[];opens=[];lines=[];print_errors=[];calls=[]
+        payloads=dict(inputs)
+        if fault=='invalid-utf8':payloads[phase]=b'\xff\x00failure'
+        elif fault=='invalid-json':payloads[phase]=b'{bad\n'
+        elif fault in ('counter-float','wrong-phase','missing-helper','unknown-field'):
+            value=json.loads(payloads[phase])
+            if fault=='counter-float':value['starts_after']=1.0
+            if fault=='wrong-phase':value['phase']='normal'
+            if fault=='missing-helper':value.pop('helper_popen_returned')
+            if fault=='unknown-field':value['unvalidated_extra_field']=True
+            payloads[phase]=(json.dumps(value,sort_keys=True)+'\n').encode()
+        for name,raw in payloads.items():
+            path=metadata/(name+'.json')
+            if fault=='absent' and name==phase:continue
+            if fault=='symlink' and name==phase:
+                path.symlink_to(base/'outside-metadata');continue
+            path.write_bytes(raw);path.chmod(0o444)
+        token='a'*64
+        rows=[{'boundary':'bash','binding':token,'phase':'reader-attempted','wait':'1','line':0},
+            {'boundary':'reader','binding':token,'exception':'ValueError','trace':[],'trace_truncated':False}]
+        if fault=='wait-gap':rows[0]['wait']='GAP'
+        if fault=='before-reader':rows[0]['phase']='before-reader'
+        if fault=='foreign-token':rows[1]['binding']='b'*64
+        if fault=='missing-reader':rows.pop()
+        sink=base/'relation.jsonl'
+        sink.write_bytes(b''.join((json.dumps(row,sort_keys=True,separators=(',',':'))+'\n').encode() for row in rows))
+        sink.chmod(0o600)
+        class Outlet:
+            def __init__(self):self.buffer=io.BytesIO()
+            def write(self,raw):
+                events.append('old-failure');return self.buffer.write(raw)
+        stderr=Outlet()
+        def opened(path,*args,**options):
+            opens.append(str(path))
+            if fault=='permission' and Path(path).parent==metadata:raise PermissionError('owned metadata read refusal')
+            return os.open(path,*args,**options)
+        proxy=types.SimpleNamespace(**vars(os));proxy.open=opened
+        interrupt=InterruptedError('owned carrier interruption')
+        def printed(value,**options):
+            decoded=json.loads(value)
+            if 'fixed_first_git_sampler_carrier' in decoded:
+                events.append('carrier')
+                if fault=='print-interrupt':print_errors.append(interrupt);raise interrupt
+                if fault=='print-always' or fault=='print-once' and not print_errors:
+                    error=OSError('owned carrier publication');print_errors.append(error);raise error
+            lines.append(decoded)
+        result=subprocess.CompletedProcess(['owned transport'],1,b'',b'E_RELATION\n')
+        def returned(argv,**options):
+            calls.append((argv,options));return result
+        namespace={'os':proxy,'stat':stat,'json':json,'sys':types.SimpleNamespace(platform='darwin',
+            stderr=types.SimpleNamespace(buffer=stderr)),'base':base,'package':package,
+            'consumer_uid':os.getuid(),'c':module,'sha':lambda raw:hashlib.sha256(raw).hexdigest(),
+            'canonical':capture_canonical(assembler),'print':printed,'env':{'OWNED':'transport'},
+            'subprocess':types.SimpleNamespace(run=returned,PIPE=subprocess.PIPE),'pathlib':__import__('pathlib')}
+        exec(compile(capture_tree,'actual-sampler-carrier-class','exec'),namespace)
+        exec(compile(ast.Module(body=[run_node],type_ignores=[]),'actual-sampler-carrier-run','exec'),namespace)
+        capture=namespace['SamplerFailureCapture']()
+        capture.sink=sink;capture.sink_identity=capture.identity(os.lstat(sink))
+        capture.token=token;capture.binding={'invocation':token};capture.sample_window_first=True
+        capture.line_map={};capture.before_call=lambda:events.append('before-call')
+        namespace['relation_capture']=capture
+        capture.export_failure(result)
+        original_failure=stderr.buffer.getvalue()
+        stderr.buffer.seek(0);stderr.buffer.truncate();events.clear();opens.clear()
+        error=None
+        try:namespace['run']([str(package/'scope/v1/evaluate-scope.sh')])
+        except BaseException as caught:error=caught
+        assert len(calls)==1 and calls[0][0]==[str(package/'scope/v1/evaluate-scope.sh')]
+        assert set(calls[0][1])=={'input','stdout','stderr','env','timeout'}
+        assert calls[0][1]['timeout']==180 and calls[0][1]['env'] is namespace['env']
+        assert stderr.buffer.getvalue()==original_failure
+        assert events[0]=='before-call'
+        if original_failure:assert events[1]=='old-failure'
+        else:assert 'old-failure' not in events
+        carriers=[line for line in lines if 'fixed_first_git_sampler_carrier' in line]
+        if fault=='print-interrupt':
+            assert error is interrupt and print_errors==[interrupt] and not carriers
+        else:
+            assert type(error) is AssertionError
+            trace=error.__traceback__;frames=[]
+            while trace is not None:
+                frames.append((trace.tb_frame.f_code,trace.tb_lineno));trace=trace.tb_next
+            assert frames[-1]==(namespace['run'].__code__,final_assert.lineno)
+        metadata_opens=[path for path in opens if Path(path).parent==metadata]
+        if fault in ('wait-gap','before-reader','foreign-token','missing-reader'):
+            assert not metadata_opens and len(carriers)==1
+            assert carriers[0]['binding']==capture.binding
+            assert carriers[0]['fixed_first_git_sampler_carrier']==[
+                {'name':name,'state':'WRITER_CLOSURE_UNKNOWN','raw_utf8':None} for name in leaves]
+        elif fault in ('permission','symlink','print-once'):
+            assert len(carriers)==1
+            expected_type='PermissionError' if fault=='permission' else 'OSError'
+            assert capture.sample_export_failure==expected_type
+            assert carriers[0]['fixed_first_git_sampler_carrier']==[
+                {'name':name,'state':'EXPORT_FAILED','raw_utf8':None,'error_type':expected_type} for name in leaves]
+        elif fault=='print-always':
+            assert not carriers and len(print_errors)==2
+            assert capture.sample_export_failure==capture.sample_export_publication_failure=='OSError'
+        elif fault!='print-interrupt':
+            assert len(carriers)==1 and carriers[0]['binding']==capture.binding
+            carrier=carriers[0]['fixed_first_git_sampler_carrier'];assert [row['name'] for row in carrier]==list(leaves)
+            assert carrier[0]=={'name':'preflight.json','state':'NOT_SAVED','raw_utf8':None}
+            for row in carrier[1:]:
+                name=row['name'][:-5]
+                if fault=='absent' and name==phase:
+                    assert row=={'name':row['name'],'state':'NOT_SAVED','raw_utf8':None}
+                else:
+                    raw=payloads[name]
+                    assert row=={'name':name+'.json','state':'UNVERIFIED_FAILURE_RAW','raw_hex':raw.hex(),
+                        'bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest()}
+        assert result.returncode==1 and result.stdout==b'' and result.stderr==b'E_RELATION\n'
+        records.append(completed_evidence({'sampler_failure_carrier':{'phase':phase,'fault':fault,
+            'metadata_opens':metadata_opens,'events':events,'carriers':carriers,
+            'old_stderr_hex':original_failure.hex(),'run_error':type(error).__name__,
+            'publication_errors':[type(value).__name__ for value in print_errors],
+            'real_sample_starts':0,'scope':'actual extracted exporter/finish/run; real owned sink and metadata; fixed transport and publication seams'}}))
+    return completed_evidence({'sampler_failure_carrier_controls':records,'real_sample_starts':0})
 
 def process_snapshot_controls(area,module):
     import ctypes,io,selectors,signal,types,traceback
@@ -4400,6 +4724,8 @@ def process_snapshot_controls(area,module):
         reports.append({'case':'fields-'+fault,'result':result})
     sample_boundary_controls(area,module,setup)
     sample_supervision_controls(module,setup)
+    sampler_failure_inputs=sample_failure_record_controls(area,module,setup)
+    sample_failure_carrier_controls(area,module,sampler_failure_inputs)
     process_admission_controls(module,setup)
     process_unknown_controls(namespace,module)
     supervisor=namespace['_scope_process_supervise']
@@ -12648,7 +12974,7 @@ def _scope_sample_close(child,selector,end,capture=None):
         try:item.close()
         except BaseException as error:errors.append(error);closed=False
     closed=closed and all(stream.closed for stream in (child.stdin,child.stdout,child.stderr))
-    return dict(captured,group_gone=gone,waited=waited,pipes_closed=closed,output_complete=output_complete,complete=gone and waited and closed and not errors),errors
+    return dict(captured,group_gone=gone,waited=waited,pipes_closed=closed,physical_pipes_closed=all(stream.closed for stream in (child.stdin,child.stdout,child.stderr)),output_complete=output_complete,complete=gone and waited and closed and not errors),errors
 
 def _scope_sample_observe(owner,pid,end,cancelled,phase):
     state=_scope_sample_state;prepared=state['prepared'];child=None;selector=None;first=None;close=None;first_relation=None
@@ -12665,12 +12991,16 @@ def _scope_sample_observe(owner,pid,end,cancelled,phase):
     command=[sys.executable,'-I','-S','-B',helper,str(pid),c.digest(_scope_sample_helper_raw),owner.python.sha256,
         tool.sha256,manual.sha256,native.sha256,report]
     record={'phase':phase,'pid':pid,'uid':c.os.getuid(),'command':command,'tool_argv':['/usr/bin/sample',str(pid),'1','1','-file',report],
-        'binding':prepared['binding'],'report':{'state':'NOT_READ_WRITER_OPEN','complete':False},'tool_stage':'UNKNOWN'}
+        'binding':prepared['binding'],'report':{'state':'NOT_READ_WRITER_OPEN','complete':False},'tool_stage':'UNKNOWN',
+        'starts_before':state['starts'],'helper_popen_attempted':False,'helper_popen_returned':False}
     start=c.time.monotonic();collection=min(end,start+5);request=False;buckets={};result=None;tool_seen=None;eof_streams=set()
     state['starts']+=1
+    record['starts_after']=state['starts']
     try:
+        record['helper_popen_attempted']=True
         child=c.subprocess.Popen(command,stdin=c.subprocess.PIPE,stdout=c.subprocess.PIPE,stderr=c.subprocess.PIPE,
             env=_scope_sample_environment,close_fds=True,start_new_session=True)
+        record['helper_popen_returned']=True
         record['sampler_pid']=child.pid;selector=_scope_select_state['native_selector']();child.stdin.close()
         buckets={child.stdout:bytearray(),child.stderr:bytearray()};limits={child.stdout:768,child.stderr:128}
         for stream in buckets:c.os.set_blocking(stream.fileno(),False);selector.register(stream,c.selectors.EVENT_READ)
@@ -12715,6 +13045,11 @@ def _scope_sample_observe(owner,pid,end,cancelled,phase):
         state['records'].append(record)
         if not close['complete']:
             state['blocked']=True;_scope_select_state['process_pending']=True
+            if phase=='git':
+                try:_scope_sample_write_record(parent,'git.json',record)
+                except BaseException as record_error:
+                    record['record_write_error_type']=type(record_error).__name__
+                    if first is None and isinstance(record_error,(InterruptedError,KeyboardInterrupt,SystemExit)):raise
             if first is not None:
                 first.__cause__,first.__context__,first.__suppress_context__=first_relation
                 raise first
@@ -12774,6 +13109,7 @@ def _scope_sample_controls(owner):
         for number in (c.signal.SIGINT,c.signal.SIGTERM,c.signal.SIGHUP):handlers[number]=c.signal.signal(number,observe_signal)
         c.signal.pthread_sigmask(c.signal.SIG_SETMASK,previous)
         for phase in ('normal','cancel'):
+            starts_before=state['starts']
             target=None;selector=None;failure=None;record=None;passed=False;target_raw=b'';target_attempted=False;failure_relation=None
             try:
                 assert owner.deadline-c.time.monotonic()>=10
@@ -12810,12 +13146,20 @@ def _scope_sample_controls(owner):
                     record['target_ready_raw_hex']=target_raw.hex()
                     record['target_stdout_tail_hex']=closure.get('stdout_tail_hex');record['target_stderr_hex']=closure.get('stderr_hex')
                     record['target_argv']=[sys.executable,'-I','-S','-B','-c',_scope_sample_wait_source]
+                    record.update(binding=state['prepared']['binding'],uid=c.os.getuid(),starts_before=starts_before,
+                        starts_after=state['starts'],target_popen_attempted=target_attempted,target_popen_returned=target is not None)
                     if closure['complete']:
                         try:_scope_sample_write_record(state['prepared']['parent'],phase+'.json',record)
                         except BaseException as error:
                             passed=False
                             if failure is None:
                                 failure=error;failure_relation=(error.__cause__,error.__context__,error.__suppress_context__)
+                    else:
+                        state['blocked']=True;_scope_select_state['process_pending']=True
+                        try:_scope_sample_write_record(state['prepared']['parent'],phase+'.json',record)
+                        except BaseException as record_error:
+                            if failure is None and isinstance(record_error,(InterruptedError,KeyboardInterrupt,SystemExit)):raise
+                            record['record_write_error_type']=type(record_error).__name__
                 if not closure['complete'] or _scope_select_state.get('process_pending'):
                     state['blocked']=True;_scope_select_state['process_pending']=True
                     if failure is not None:
@@ -13160,34 +13504,59 @@ def _scope_sample_original(owner,pid,end,cancelled):
     'bash':selected.get('bash','GAP'),'probe':selected.get('probe','GAP'),'reader':selected.get('reader','GAP'),
     'writer_completion':('reader not started' if bash['phase']=='before-reader' else 'original wait observed') if writers_closed else 'GAP','restoration':'PENDING'}
    encoded=(json.dumps(payload,sort_keys=True,separators=(',',':'),ensure_ascii=True)+'\n').encode()
-   if len(encoded)<=12288:sys.stderr.buffer.write(encoded)
+   if len(encoded)<=12288:
+    sys.stderr.buffer.write(encoded)
+    return {'binding':self.token,'reader_waited':bool(writers_closed and bash['phase']=='reader-attempted' and 'reader' in selected),
+     'wait':int(bash['wait']) if writers_closed and bash['wait'].isdigit() else None}
   except BaseException:pass
+ def export_sampler_records(self,failure=False,writer=None):
+  if not (sys.platform=='darwin' and self.sample_window_first):return
+  names=('preflight.json','normal.json','cancel.json','git.json')
+  writer_closed=(type(writer) is dict and set(writer)=={'binding','reader_waited','wait'} and writer['binding']==self.token and
+   writer['reader_waited'] is True and type(writer['wait']) is int and 0<=writer['wait']<127)
+  if failure and not writer_closed:
+   carrier=[{'name':name,'state':'WRITER_CLOSURE_UNKNOWN','raw_utf8':None} for name in names]
+   print(json.dumps({'fixed_first_git_sampler_carrier':carrier,'binding':self.binding},sort_keys=True),flush=True)
+   return
+  carrier=[]
+  for name in names:
+   path=base/'first-git-sampler'/name
+   try:fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+   except FileNotFoundError:
+    carrier.append({'name':name,'state':'NOT_SAVED','raw_utf8':None});continue
+   try:
+    before=os.fstat(fd);assert stat.S_ISREG(before.st_mode) and before.st_nlink==1 and before.st_uid==consumer_uid
+    assert not before.st_mode&(0o6000|stat.S_IWGRP|stat.S_IWOTH) and before.st_size<=c.EXECUTABLE_LIMIT
+    raw=bytearray()
+    while len(raw)<=c.EXECUTABLE_LIMIT:
+     chunk=os.read(fd,min(65536,c.EXECUTABLE_LIMIT+1-len(raw)))
+     if not chunk:break
+     raw.extend(chunk)
+    assert len(raw)==before.st_size and self.stable_sink(before)==self.stable_sink(os.fstat(fd))==self.stable_sink(os.lstat(path))
+   finally:os.close(fd)
+   if failure:
+    carrier.append({'name':name,'state':'UNVERIFIED_FAILURE_RAW','raw_hex':bytes(raw).hex(),'bytes':len(raw),'sha256':sha(raw)})
+    continue
+   value=json.loads(raw)
+   if name!='preflight.json':
+    assert value['target_closure']['complete'] if name in ('normal.json','cancel.json') else value['closure']['complete']
+    if 'closure' in value:assert value['closure']['complete']
+   carrier.append({'name':name,'state':'SAVED_CLOSED','raw_utf8':bytes(raw).decode('utf-8','strict'),'bytes':len(raw),'sha256':sha(raw)})
+  print(json.dumps({'fixed_first_git_sampler_carrier':carrier,'binding':self.binding},sort_keys=True),flush=True)
  def finish(self,result):
   if result.returncode!=0 or not result.stdout or result.stderr:
-   self.export_failure(result);return
-  if sys.platform=='darwin' and self.sample_window_first:
-   carrier=[]
-   for name in ('preflight.json','normal.json','cancel.json','git.json'):
-    path=base/'first-git-sampler'/name
-    try:fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
-    except FileNotFoundError:
-     carrier.append({'name':name,'state':'NOT_SAVED','raw_utf8':None});continue
-    try:
-     before=os.fstat(fd);assert stat.S_ISREG(before.st_mode) and before.st_nlink==1 and before.st_uid==consumer_uid
-     assert not before.st_mode&(0o6000|stat.S_IWGRP|stat.S_IWOTH) and before.st_size<=c.EXECUTABLE_LIMIT
-     raw=bytearray()
-     while len(raw)<=c.EXECUTABLE_LIMIT:
-      block=os.read(fd,min(65536,c.EXECUTABLE_LIMIT+1-len(raw)))
-      if not block:break
-      raw.extend(block)
-     assert len(raw)==before.st_size and self.stable_sink(before)==self.stable_sink(os.fstat(fd))==self.stable_sink(os.lstat(path))
-    finally:os.close(fd)
-    value=json.loads(raw)
-    if name!='preflight.json':
-     assert value['target_closure']['complete'] if name in ('normal.json','cancel.json') else value['closure']['complete']
-     if 'closure' in value:assert value['closure']['complete']
-    carrier.append({'name':name,'state':'SAVED_CLOSED','raw_utf8':bytes(raw).decode('utf-8','strict'),'bytes':len(raw),'sha256':sha(raw)})
-   print(json.dumps({'fixed_first_git_sampler_carrier':carrier,'binding':self.binding},sort_keys=True),flush=True)
+   writer=self.export_failure(result)
+   try:self.export_sampler_records(failure=True,writer=writer)
+   except InterruptedError:raise
+   except Exception as export_error:
+    self.sample_export_failure=type(export_error).__name__
+    carrier=[{'name':name,'state':'EXPORT_FAILED','raw_utf8':None,'error_type':self.sample_export_failure}
+     for name in ('preflight.json','normal.json','cancel.json','git.json')]
+    try:print(json.dumps({'fixed_first_git_sampler_carrier':carrier,'binding':self.binding},sort_keys=True),flush=True)
+    except InterruptedError:raise
+    except Exception as publication_error:self.sample_export_publication_failure=type(publication_error).__name__
+   return
+  self.export_sampler_records()
   # Exact original normal admission includes COMMIT, successful wait, empty stderr and EOF.
   for item,raw in zip(self.held,self.copies):item.recheck('E_STALE');assert item.raw==raw
   for item in self.held:item.close()
