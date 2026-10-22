@@ -9,7 +9,7 @@ Tracks #541. Risk is high. This is the nonterminal child-6 core. It authenticate
 the existing child-5 evidence at one exact revision. Issue #544 remains mandatory
 before child 6 completes or child 7 starts.
 
-Implementation PR: `review_size: accepted-exception`, 2,600–15,300 net changed
+Implementation PR: `review_size: accepted-exception`, 2,600–16,300 net changed
 lines. The private evidence reader, held-path and Git checks, closed evaluator
 relations, and a real two-principal origin fixture form one security boundary.
 Most of the range is proof: complete classification, bundle, Git, terminal and
@@ -21,6 +21,14 @@ readable controls. The bounded first-Git sampler adds fixed tool/helper trust,
 owned supervision, a private report carrier and complete ordinary/real controls
 within this same diagnostic concern. It adds no generic process interface.
 The range does not relax tests, CI, review, or any acceptance standard.
+
+The same failure-record boundary needs complete, readable CI controls through
+its actual generated observe/control/select/close and authenticated finish-to-run
+paths, using the existing private fixture helpers. Cover the complete already-read
+failure prefixes, pending-record I/O, writer/read authentication, original-output
+priority and first-failure propagation. Add no test framework or mirror of runtime
+predicates. This range grants no new test execution, local window, Mac/Linux run,
+or capacity acceptance.
 
 ## Files that change
 
