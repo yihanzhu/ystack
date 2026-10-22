@@ -2656,7 +2656,7 @@ expect_reasons() {
   expected=$("$jq_bin" -c 'map(select(. != "scope.proposable")) + ["scope.sandbox-receipt-missing"] | sort | unique' <<<"$expected")
   shift 2
   local actual
-  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 9525 ]; then scope_dashboard_inflight=true; fi
+  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 9851 ]; then scope_dashboard_inflight=true; fi
   actual=$(evaluation_reasons "$@")
   scope_dashboard_inflight=false
   [ "$actual" = "$expected" ] || fail "$label expected $expected got $actual"
