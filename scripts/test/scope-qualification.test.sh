@@ -512,7 +512,8 @@ check_eval_trial_policy() {
       --argjson passed "$passed" --argjson failed "$failed" \
       --argjson inconclusive "$inconclusive" '
       .body.families |= map(if .family_id == "stale-moved-artifacts" then
-        .trial_policy = {kind:$kind,minimum_trials:(if $kind == "multi" then 3 else 1 end)} |
+        .trial_policy = (if $kind == "multi" then {kind:$kind,minimum_trials:3}
+                         else {kind:$kind} end) |
         .cases = {total:$total,passed:$passed,failed:$failed,inconclusive:$inconclusive}
         else . end)
     ' "$tmp/dashboard.json" >"$dashboard"
