@@ -10251,7 +10251,7 @@ rows[-1]['role']+='a'
 refusal(lambda:reader_at('document-over-limit',rows).terminal(b'original'),'E_LIMIT')
 print('terminal limits: 4096 append, 4097 refusal, independent exact 1 MiB and overflow PASS',flush=True)
 package=area/'package';package.mkdir();(package/'scope').mkdir()
-for component in ('core','shadow','control','enforcement','adapters','preparation','telemetry','maintenance','evals','scripts'):
+for component in ('core','shadow','sandbox','control','enforcement','adapters','preparation','telemetry','maintenance','evals','scripts'):
     shutil.copytree(root/component,package/component)
 shutil.copytree(root/'scope/v1',package/'scope/v1')
 reader_path=package/'scope/v1/read-shadow-evidence.py';frontend=package/'scope/v1/evaluate-scope.sh'
@@ -15406,7 +15406,7 @@ for family in coverage_n.FAMILIES:
 coverage_sudo=['/usr/bin/sudo','-n','-u','#'+str(uid),'--',sys.executable,'-I','-S','-B',anchor/'host-supervisor.py','coverage-read']
 coverage_consumer=['/usr/bin/sudo','-n','-u',consumer,'--']
 # The Linux outer setup owns the one exact sudoers rule. macOS requires an existing authorized equivalent.
-def coverage_install_pages(qualifying,current,interval,pulls):
+def coverage_install_pages(qualifying,current,interval,pulls,collector_failure=None):
     baseline_rules=[{'rule_id':kind,'target_pattern':'main','enforcement':'active','bypass_actors':[],
         'rule_type':kind,'parameters':{}} for kind in sorted(coverage_n.REQUIRED_RULES|{'fifth-rule'})]
     snapshots={'baseline':{'branch_node_id':'branch.scope-fixture','commit_id':interval[0]['commit_id'],
@@ -15429,6 +15429,26 @@ def coverage_install_pages(qualifying,current,interval,pulls):
         'assert 0<len(request)<=1048576\n'+
         'sys.stdout.buffer.write(module.frame_write('+repr([(b'capture.json',canonical(capture))]+
             [(f'raw/{index:04d}'.encode(),raw) for index,raw in enumerate(pages)])+'))\n').encode()
+    if collector_failure is not None:
+        actions={
+            'nonzero':'raise SystemExit(7)\n',
+            'signal':'import os,signal;os.kill(os.getpid(),signal.SIGTERM)\n',
+            'oversized':'sys.stdout.buffer.write(b"x"*(66*1024*1024));raise SystemExit(0)\n',
+            'stderr':'sys.stderr.buffer.write(b"x"*16385);raise SystemExit(0)\n',
+            'malformed':'sys.stdout.buffer.write(b"not a frame");raise SystemExit(0)\n',
+            'timeout':'import time;time.sleep(150)\n',
+            'cancel':'import time;time.sleep(150)\n',
+            'partial-store':'import os,json;os.mkdir('+repr(str(store))+ '+"/"+json.loads(request)["id"]+"/payload",0o750)\n',
+            'receipt-failure':'import os,json;fd=os.open('+repr(str(store))+ '+"/"+json.loads(request)["id"]+"/receipt.json",os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o440);os.close(fd)\n',
+            'orphan':'import os,signal,time;pid=os.fork()\nif pid==0:\n signal.signal(signal.SIGTERM,signal.SIG_IGN)\n while True:time.sleep(1)\nraise SystemExit(0)\n'}
+        assert collector_failure in actions
+        marker=(str(base/'writer-work')+'/collector-')
+        prelude=('import json,os\n'+'state=json.loads(request)\n'+
+            'fd=os.open('+repr(marker)+'+state["id"],os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o440)\n'+
+            'os.write(fd,(str(os.getpid())+" "+str(os.getppid())+" "+str(os.getpgrp())+"\\n").encode());os.fsync(fd);os.close(fd)\n')
+        point=b'sys.stdout.buffer.write(module.frame_write('
+        assert collector_source.count(point)==1
+        collector_source=collector_source.replace(point,(prelude+actions[collector_failure]).encode()+point,1)
     put(coverage_collector,collector_source,0o555)
     package_files=[{'role':'normalizer','path':str(coverage_normalizer),'sha256':sha(coverage_normalizer.read_bytes())},
                    {'role':'collector','path':str(coverage_collector),'sha256':sha(collector_source)}]
@@ -15610,6 +15630,89 @@ try:
     else:raise AssertionError('first genuine receipt replay accepted during second same-R evaluation')
     print(json.dumps({'coverage_same_revision_requests':'PASS','first':first['request_ref'],'second':second['request_ref'],
         'genuine_first_receipt_replay':'refused','new_genuine_attempt':'authenticated'},sort_keys=True),flush=True)
+    coverage_read_source=put(base/'coverage-read-control.py',b'''import importlib.util,os,pathlib,sys,time
+base=pathlib.Path(__file__).parent
+source=base/'package/shadow/v1/_consumer.py'
+spec=importlib.util.spec_from_file_location('coverage_real_consumer',source)
+c=importlib.util.module_from_spec(spec);sys.modules[spec.name]=c;spec.loader.exec_module(c)
+class Ledger:
+ def record_command(self,role,argv,executable,component):
+  assert role in {'darwin-acl-uuid-resolution','darwin-group-membership'}
+owned=[];anchor=configuration=store=None
+try:
+ python=c._hold_bytes(sys.executable,c.EXECUTABLE_LIMIT);owned.append(python)
+ consumer=c._hold_bytes(str(source),c.EXECUTABLE_LIMIT);owned.append(consumer)
+ darwin=c._DarwinChildOwner(python,consumer,time.monotonic()+120,Ledger()) if sys.platform=='darwin' else None
+ anchor=c.load_anchor(darwin,darwin)
+ configuration=c.load_coverage_configuration(anchor)
+ c._require(configuration is not None,'E_CONFIG')
+ request=c._hold_bytes(str(base/'coverage-read-request.json'),c.DOCUMENT_LIMIT);owned.append(request)
+ store=c._HeldCoverageRead(anchor,configuration,request.raw)
+ store.recheck();configuration.recheck();anchor.recheck()
+ print(c.canonical({'origin':c._json(store.observation,c.DOCUMENT_LIMIT,'E_STORE'),'receipt_sha256':c.digest(store.snapshots['receipt.json'])}).decode(),end='')
+except Exception as error:
+ code=getattr(error,'code','E_RUNTIME')
+ print(code,file=sys.stderr);raise SystemExit(65)
+finally:
+ for item in (store,configuration,anchor,*reversed(owned)):
+  if item is not None:item.close()
+''',0o555)
+    put(base/'coverage-read-request.json',second_request)
+    coverage_read_argv=coverage_consumer+[sys.executable,'-I','-S','-B',coverage_read_source]
+    read_positive=json.loads(run(coverage_read_argv))
+    assert read_positive['origin']['body']['result']=='authenticated'
+    def coverage_read_refusal(label,mutate,restore):
+        try:
+            mutate()
+            result=subprocess.run(list(map(str,coverage_read_argv)),stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env,timeout=120)
+            assert result.returncode!=0 and result.stdout==b'' and len(result.stderr)<=16384
+            print(json.dumps({'coverage_held_source_negative':label,'returncode':result.returncode,
+                'stderr':result.stderr.decode('utf8','backslashreplace')},sort_keys=True),flush=True)
+        finally:restore()
+    source_config_bytes=coverage_config_path.read_bytes()
+    for key,value in (('operation','other.v1'),('coverage_rule_version','other.v1'),('queries',[]),
+        ('source_package_path',str(coverage_root/'missing-package.json')),('source_package_sha256','e'*64),
+        ('collector_path',str(coverage_root/'missing-collector')),('collector_sha256','e'*64),
+        ('accepted_set_path',str(coverage_root/'other-accepted.json')),('accepted_set_sha256','e'*64),
+        ('source_id','source.foreign'),('store_id','store.foreign'),('principal_uid',consumer_uid),('consumer_gid',consumer_gid)):
+        changed=json.loads(source_config_bytes);changed['body'][key]=value
+        coverage_read_refusal('config-'+key,lambda changed=changed:put(coverage_config_path,changed),lambda:put(coverage_config_path,source_config_bytes))
+    absent_config=coverage_config_path.with_name('coverage-source-config.absent')
+    coverage_read_refusal('config-absent',lambda:coverage_config_path.rename(absent_config),lambda:absent_config.rename(coverage_config_path))
+    source_set_bytes=coverage_set_path.read_bytes()
+    for label,rows in (('empty',[]),('duplicate',json.loads(source_set_bytes)['body']['identities']*2)):
+        changed=json.loads(source_set_bytes);changed['body']['identities']=rows
+        changed_raw=canonical(changed)
+        changed_config=json.loads(source_config_bytes);changed_config['body']['accepted_set_sha256']=sha(changed_raw)
+        coverage_read_refusal('accepted-'+label,
+            lambda changed_raw=changed_raw,changed_config=changed_config:(put(coverage_set_path,changed_raw),put(coverage_config_path,changed_config)),
+            lambda:(put(coverage_set_path,source_set_bytes),put(coverage_config_path,source_config_bytes)))
+    for path in (coverage_config_path,coverage_set_path,coverage_manifest,coverage_collector,coverage_normalizer,anchor/'host-supervisor.py'):
+        raw=path.read_bytes();mode=stat.S_IMODE(path.stat().st_mode)
+        coverage_read_refusal('package-bytes-'+path.name,lambda path=path,raw=raw:put(path,raw+b' ',mode),lambda path=path,raw=raw,mode=mode:put(path,raw,mode))
+        coverage_read_refusal('package-owner-'+path.name,lambda path=path:os.chown(path,uid,-1),lambda path=path:os.chown(path,0,-1))
+        coverage_read_refusal('package-mode-'+path.name,lambda path=path:os.chmod(path,0o666),lambda path=path,mode=mode:os.chmod(path,mode))
+    for path in sorted(second_path.rglob('*')):
+        if path.is_file():
+            raw=path.read_bytes()
+            coverage_read_refusal('stored-bytes-'+str(path.relative_to(second_path)),lambda path=path,raw=raw:path.write_bytes(raw+b' '),lambda path=path,raw=raw:path.write_bytes(raw))
+        old=path.stat();mode=stat.S_IMODE(old.st_mode)
+        coverage_read_refusal('stored-owner-'+str(path.relative_to(second_path)),lambda path=path:os.chown(path,consumer_uid,-1),lambda path=path,uid=old.st_uid:os.chown(path,uid,-1))
+        coverage_read_refusal('stored-group-'+str(path.relative_to(second_path)),lambda path=path:os.chown(path,-1,consumer_gid),lambda path=path,gid=old.st_gid:os.chown(path,-1,gid))
+        coverage_read_refusal('stored-mode-'+str(path.relative_to(second_path)),lambda path=path:os.chmod(path,0o777),lambda path=path,mode=mode:os.chmod(path,mode))
+        if path.is_file():
+            link=path.with_name(path.name+'.hardlink')
+            coverage_read_refusal('stored-link-'+str(path.relative_to(second_path)),lambda path=path,link=link:os.link(path,link),lambda link=link:link.unlink())
+            saved=path.with_name(path.name+'.saved')
+            coverage_read_refusal('stored-symlink-'+str(path.relative_to(second_path)),lambda path=path,saved=saved:(path.rename(saved),path.symlink_to(saved.name)),
+                lambda path=path,saved=saved:(path.unlink(),saved.rename(path)))
+        if sys.platform=='darwin':
+            coverage_read_refusal('stored-acl-'+str(path.relative_to(second_path)),lambda path=path:run(['/bin/chmod','+a','everyone allow write',path]),lambda path=path:run(['/bin/chmod','-N',path]))
+        else:
+            coverage_read_refusal('stored-acl-'+str(path.relative_to(second_path)),lambda path=path:run(['/usr/bin/setfacl','-m','u:'+consumer+':rw',path]),lambda path=path:run(['/usr/bin/setfacl','-b',path]))
+    assert json.loads(run(coverage_read_argv))['origin']['body']['result']=='authenticated'
+    print(json.dumps({'genuine_source_store_controls':'PASS','source_origin':'fresh controlled-storage.v1',
+        'caller_copy_counts':False,'root_publisher_expectation':coverage_publisher_identity},sort_keys=True),flush=True)
     # The independent root expectation stays unchanged when the raw PR actor changes.
     for field,value in (('publisher_identity_ref',dict(coverage_publisher_identity,id='publisher.foreign')),
                         ('number',0),('base_commit_id',b),('head_commit_id',b),('merge_commit_id',b),
@@ -15624,6 +15727,69 @@ try:
         print(json.dumps({'coverage_publisher_negative':field,'result':'closed' if result is None else 'stale',
             'root_publisher_expectation_unchanged':True},sort_keys=True),flush=True)
     coverage_install_pages(qualifying,current,interval,[pull])
+    # Each archived change keeps the exact bundle inventory and marker digests coherent.
+    def coverage_damage_current(label,name,path,value):
+        damaged=dict(current)
+        changed=dict(current['files']);document=json.loads(changed[name]);node=document
+        for part in path[:-1]:node=node[part]
+        node[path[-1]]=value
+        changed[name]=canonical(document)
+        record=json.loads(changed['shadow-record.json'])
+        if name=='qualified-identity.json':
+            record['body']['qualified_identity']=document['body']
+            record['body']['qualified_identity_ref']['sha256']=sha(changed[name])
+            changed['shadow-record.json']=canonical(record)
+        damaged['record']=changed['shadow-record.json'];damaged['files']=changed
+        damaged['identity']=record['body']['qualified_identity']
+        marker=json.loads(current['marker']);marker['body']['files']=[{'name':key,'size_bytes':len(raw),'sha256':sha(raw)} for key,raw in sorted(changed.items())]
+        damaged['marker']=canonical(marker)
+        damaged['label']='damage-'+label
+        damaged['bundle']=base/'snapshots'/('damage-'+label)
+        damaged['bundle'].mkdir(mode=0o755);damaged['bundle'].chmod(0o755)
+        for key,raw in changed.items():put(damaged['bundle']/key,raw)
+        put(damaged['bundle']/'bundle.json',damaged['marker'])
+        result=coverage_evaluate_pair(qualifying,damaged,allow_closed=True)
+        assert result is None or result['body']['evidence']['coverage']['state']=='stale'
+        print(json.dumps({'coverage_current_damage':label,'file':name,'path':path,
+            'result':'closed' if result is None else 'stale'},sort_keys=True),flush=True)
+    qbody=current['identity']
+    for key in ('model_request','adapter_config_refs','prompt_refs','skill_refs','verification_instructions_ref'):
+        value=json.loads(canonical(qbody[key]))
+        if key=='model_request':value['model_id']='model.foreign'
+        elif key=='skill_refs':value=[{'content_id':'skill.foreign','media_type':'text/plain','sha256':sha(b'foreign skill')}]
+        elif type(value) is list:value[0]=dict(value[0],sha256=sha(b'foreign artifact')) if 'sha256' in value[0] else dict(value[0],object_id='e'*40)
+        else:value['sha256']=sha(b'foreign instructions')
+        coverage_damage_current('identity-'+key,'qualified-identity.json',['body',key],value)
+    material=json.loads(current['files']['materialization-input.json'])
+    profile=material['resolved_profile']['content']['body']
+    for key in ('profile_ref','profile_source','selection_ref','bindings'):
+        value=json.loads(canonical(profile[key]))
+        if key=='bindings':
+            value[0]['binding']['binding_id']='binding.foreign'
+        else:
+            first_key=next(iter(value));value[first_key]='foreign'
+        coverage_damage_current('profile-'+key,'materialization-input.json',['resolved_profile','content','body',key],value)
+    for slot in ('provider_id','model_id','effort_id'):
+        coverage_damage_current('model-'+slot,'qualified-identity.json',['body','model_request',slot],'foreign')
+    for key in ('resolved_profile_ref','stage_request_ref','target_revision'):
+        value=dict(qbody[key]);value['commit_id' if key=='target_revision' else 'sha256']='e'*(40 if key=='target_revision' else 64)
+        coverage_damage_current('current-'+key,'qualified-identity.json',['body',key],value)
+    for label,name,path,value in (
+        ('source-revision','incident.json',['body','git_revision_ref','commit_id'],'e'*40),
+        ('materialization-source','preparation-record.json',['source','commit_id'],'e'*40),
+        ('materialization-tree','preparation-record.json',['source','tree_id'],'e'*40),
+        ('candidate-parent','preparation-record.json',['candidate','parent_commit_id'],'e'*40),
+        ('candidate-tree','preparation-record.json',['candidate','tree_id'],'e'*40),
+        ('stage-result','shadow-record.json',['body','materialization','value','stage_result_ref','sha256'],'e'*64),
+        ('sandbox-evaluation','shadow-record.json',['body','environment','evaluation','value','evaluation_ref','sha256'],'e'*64),
+        ('sandbox-receipt','shadow-record.json',['body','sandbox','receipt_ref','sha256'],'e'*64),
+        ('origin-ref','shadow-record.json',['body','sandbox','origin','observation_sha256'],'e'*64),
+        ('publisher-base','shadow-record.json',['body','write','publisher_request','body','base_revision','commit_id'],'e'*40),
+        ('postcheck-ref','shadow-record.json',['body','write','post_write_verification','candidate_tree_id'],'e'*40),
+        ('registry-anchor','registry.json',['body','environments',0,'source_root_commit'],'e'*40),
+        ('control-policy-set','policy-set.json',['id'],'policy-set.foreign'),
+        ('sandbox-policy','policy.json',['id'],'sandbox-policy.foreign')):
+        coverage_damage_current(label,name,path,value)
     exact=list(map(str,coverage_sudo))
     variants=[exact+['extra'],exact[:-1],exact[:6]+['-S','-I','-B',*exact[9:]],
               exact[:5]+['/usr/bin/false',*exact[6:]],exact[:-2]+[str(base/'genuine-reader.py'),'coverage-read'],
@@ -15665,6 +15831,64 @@ try:
     assert coverage_evaluate_pair(qualifying,current)['body']['evidence']['coverage']['state']=='authenticated'
     print(json.dumps({'coverage_final_hold_mutations':'PASS','root':'stale','old_receipt':'stale',
         'source_receipt':'stale','expectation':'stale','fresh_reacquisition':'authenticated'},sort_keys=True),flush=True)
+    source_request_template=json.loads(second_request)
+    lifecycle_runs=[]
+    for lifecycle_case in ('nonzero','signal','oversized','stderr','malformed','partial-store','receipt-failure','orphan','timeout','cancel'):
+        coverage_install_pages(qualifying,current,interval,[pull],collector_failure=lifecycle_case)
+        source_request=json.loads(canonical(source_request_template))
+        nonce=os.urandom(32).hex();attempt_id='coverage.'+nonce
+        source_request['id']=source_request['body']['attempt_id']=attempt_id
+        source_request['body']['nonce']=nonce
+        source_request['body']['source_package_ref']=e.document_ref(coverage_manifest.read_bytes())
+        source_request['body']['source_accepted_set_ref']=e.document_ref(coverage_set_path.read_bytes())
+        source_raw=canonical(source_request)
+        owned=None
+        started=time.monotonic()
+        try:
+            owned=subprocess.Popen(list(map(str,coverage_consumer+coverage_sudo)),stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+                env={'PATH':'/usr/bin:/bin','LC_ALL':'C','LANG':'C'},start_new_session=True,close_fds=True)
+            if lifecycle_case=='cancel':
+                owned.stdin.write(source_raw);owned.stdin.close();owned.stdin=None
+                mark=base/'writer-work'/('collector-'+attempt_id)
+                deadline=time.monotonic()+30
+                while not mark.exists():
+                    assert owned.poll() is None and time.monotonic()<deadline
+                    time.sleep(0.01)
+                collector_pid,supervisor_pid,group_pid=map(int,mark.read_text().split())
+                assert collector_pid==group_pid and supervisor_pid>0
+                os.kill(supervisor_pid,signal.SIGTERM)
+                stdout,stderr=owned.communicate(timeout=20)
+            else:
+                stdout,stderr=owned.communicate(source_raw,timeout=130)
+            assert owned.returncode!=0 and stdout==b'' and 0<len(stderr)<=16384
+            elapsed=time.monotonic()-started
+            assert elapsed<=130
+            mark=base/'writer-work'/('collector-'+attempt_id)
+            assert mark.exists()
+            collector_pid,supervisor_pid,group_pid=map(int,mark.read_text().split())
+            deadline=time.monotonic()+10
+            while True:
+                try:os.killpg(group_pid,0)
+                except ProcessLookupError:break
+                assert time.monotonic()<deadline,'source collector process group survived cleanup'
+                time.sleep(0.01)
+            attempt=store/attempt_id
+            if (attempt/'receipt.json').exists():
+                try:coverage_n.document((attempt/'receipt.json').read_bytes())
+                except coverage_n.Refusal:pass
+                else:raise AssertionError('failed collector wrote a complete source receipt')
+            lifecycle_runs.append({'case':lifecycle_case,'attempt_id':attempt_id,'returncode':owned.returncode,
+                'elapsed':elapsed,'stderr_utf8':stderr.decode('utf8','backslashreplace'),'collector_group_absent':True,'wait_completed_once':True})
+            print(json.dumps({'coverage_source_lifecycle':lifecycle_runs[-1]},sort_keys=True),flush=True)
+        finally:
+            if owned is not None and owned.returncode is None:
+                os.killpg(owned.pid,signal.SIGTERM)
+                try:owned.communicate(timeout=12)
+                except subprocess.TimeoutExpired:
+                    os.killpg(owned.pid,signal.SIGKILL);owned.communicate(timeout=8)
+    put(base/'coverage-lifecycle.json',{'runs':lifecycle_runs})
+    coverage_install_pages(qualifying,current,interval,[pull])
+    assert coverage_evaluate_pair(qualifying,current)['body']['evidence']['coverage']['state']=='authenticated'
     assert len({row['source_attempt'] for row in coverage_attempts})==len(coverage_attempts)
     print(json.dumps({'genuine_coverage_contract':'PASS','real_source_uid':uid,'real_consumer_uid':consumer_uid,
         'interval':'A ordinary B own publisher C R','age_neighbors':[-1,0,1],'target_write':False,

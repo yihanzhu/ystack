@@ -3003,12 +3003,13 @@ class _CoverageInstallation:
         require(os.path.realpath(path) == path, "E_INSTALL_ACL")
         fds = secure_ancestor_fds(path, os.getuid())
         for index, fd in enumerate(fds):
+            self.held.append((fd, path if index == len(fds) - 1 else None, self.state(fd)))
+        for index, fd in enumerate(fds):
             state = os.fstat(fd)
             require(state.st_uid == 0 and not (state.st_mode & 0o022), "E_INSTALL_ACL")
             if index == len(fds) - 1:
                 require(stat.S_ISREG(state.st_mode) and (hardlinks or state.st_nlink == 1)
                         and 0 < state.st_size <= maximum, "E_CONFIG")
-            self.held.append((fd, path if index == len(fds) - 1 else None, self.state(fd)))
         fd = fds[-1]
         raw = os.pread(fd, maximum + 1, 0)
         require(0 < len(raw) <= maximum, "E_CONFIG")
@@ -3020,15 +3021,20 @@ class _CoverageInstallation:
     def owned_directory(self, path, mode):
         require(os.path.realpath(path) == path, "E_STORE")
         fds = secure_ancestor_fds(path, os.getuid())
-        for fd in fds[:-1]:
-            state = os.fstat(fd)
-            require(state.st_uid == 0 and not state.st_mode & 0o022, "E_INSTALL_ACL")
-            self.held.append((fd, None, self.state(fd)))
         fd = fds[-1]
-        state = os.fstat(fd)
-        require(stat.S_ISDIR(state.st_mode) and state.st_uid == self.host["principal_uid"]
-                and stat.S_IMODE(state.st_mode) == mode, "E_STORE")
-        return fd
+        for ancestor in fds[:-1]:
+            self.held.append((ancestor, None, self.state(ancestor)))
+        try:
+            for ancestor in fds[:-1]:
+                state = os.fstat(ancestor)
+                require(state.st_uid == 0 and not state.st_mode & 0o022, "E_INSTALL_ACL")
+            state = os.fstat(fd)
+            require(stat.S_ISDIR(state.st_mode) and state.st_uid == self.host["principal_uid"]
+                    and stat.S_IMODE(state.st_mode) == mode, "E_STORE")
+            return fd
+        except BaseException:
+            os.close(fd)
+            raise
 
     @staticmethod
     def state(fd):
@@ -3111,33 +3117,47 @@ def _coverage_collector(installation, request_raw):
         require(frame_write(records) == bytes(stdout), "E_SOURCE_FRAME")
         return records
     finally:
-        if child is not None:
-            try:
-                if child.returncode is None:
-                    try:
-                        os.killpg(child.pid, signal.SIGTERM)
-                    except ProcessLookupError:
-                        pass
-                    try:
-                        child.wait(timeout=2)
-                    except subprocess.TimeoutExpired:
-                        os.killpg(child.pid, signal.SIGKILL)
-                        child.wait(timeout=8)
-                else:
+        try:
+            if child is not None:
+                try:
+                    cleanup_end = time.monotonic() + 10
+                    if child.returncode is None:
+                        try:
+                            os.killpg(child.pid, signal.SIGTERM)
+                        except ProcessLookupError:
+                            pass
+                        try:
+                            child.wait(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            try:
+                                os.killpg(child.pid, signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass
+                            child.wait(timeout=max(0.001, cleanup_end - time.monotonic()))
                     try:
                         os.killpg(child.pid, 0)
                     except ProcessLookupError:
                         pass
                     else:
+                        # A collector leader exit never releases ownership of its descendants.
                         os.killpg(child.pid, signal.SIGKILL)
+                        while time.monotonic() < cleanup_end:
+                            try:
+                                os.killpg(child.pid, 0)
+                            except ProcessLookupError:
+                                break
+                            time.sleep(0.01)
+                        else:
+                            refuse("E_SOURCE_RUNTIME")
                         refuse("E_SOURCE_RUNTIME")
-            finally:
-                for stream in (child.stdin, child.stdout, child.stderr):
-                    if stream is not None:
-                        stream.close()
-        selector.close()
-        for number, handler in old.items():
-            signal.signal(number, handler)
+                finally:
+                    for stream in (child.stdin, child.stdout, child.stderr):
+                        if stream is not None:
+                            stream.close()
+        finally:
+            selector.close()
+            for number, handler in old.items():
+                signal.signal(number, handler)
 
 
 def write_coverage_payload(attempt_fd, uid, gid, request_raw, raw_manifest, observation, pages):
