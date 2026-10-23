@@ -1,7 +1,7 @@
 ---
 intent-blob: 6feb2ad7dd5f096bdd483ed9bace07cae2c24be5
 risk: high
-drafted: 2026-10-06
+drafted: 2026-10-23
 ---
 # Spec: inactive shadow-consumer integration
 
@@ -10,8 +10,9 @@ Tracks #506. Step-8 child concern 5. The amended intent was accepted at
 not installation, a native run or qualification. The VM spec R13.4 allows this work while CPU
 and wall enforcement remain `none`.
 
-`review_size: accepted-exception`, 500–550 lines for this G2 artifact. The coherent
-origin, verifier-binding, deterministic-record and native-dependency contract needs this range.
+`review_size: accepted-exception`, 590–650 lines for this G2 artifact. The coherent
+origin, verifier-binding, deterministic-record, authenticated policy snapshot and
+native-dependency contract needs this range.
 The exception changes only the soft size budget; it grants no scope or proof waiver.
 
 ## Requirements
@@ -39,9 +40,12 @@ The exception changes only the soft size budget; it grants no scope or proof wai
 
 1. Invoke `PYTHON -I -S -B SOURCE/shadow/v1/enforced-reproduction.py reproduce REQUEST WORK
    OUTPUT`, or the same prefix with `write-shadow.py prepare REQUEST BUNDLE WORK OUTPUT`.
-   PYTHON is the trusted caller's identified physical Python >=3.11 interpreter, never PATH
-   lookup; children use that same interpreter. These are additional drivers, not a change to
-   the old command.
+   `write-shadow.py prepare-policy REQUEST BUNDLE WORK OUTPUT` uses the same prefix and
+   arguments for the new policy-bound form. `prepare` keeps the old 32-file form;
+   `prepare-policy` selects only the fixed 33-file form. Neither infers a form from file
+   count or caller content. PYTHON is the trusted caller's identified physical Python
+   >=3.11 interpreter, never PATH lookup; children use that same interpreter. No verb
+   grants a scope, launch, publication or qualification permission.
 2. REQUEST is canonical JSON with envelope `{schema_version:1,kind,id,body}`.
    `shadow_enforced_request.body` has exactly `attempt_id`, `attempt_number`, `incident`,
    `claim`, `duty_evaluation`, `materialization_input`, `qualified_identity`,
@@ -206,12 +210,20 @@ The exception changes only the soft size budget; it grants no scope or proof wai
 
 1. Keep envelope kind `shadow_reproduction_record`, schema 1, for references used by later
    children. New bodies add the mandatory discriminator `record_form`:
-   `enforced-reproduction.v1` or `withheld-write.v1`. Absence denotes only the unchanged
-   legacy form. Never infer a form by a receipt-shaped field.
+   `enforced-reproduction.v1`, `withheld-write.v1` or `withheld-write-policy.v1`.
+   Absence denotes only the unchanged legacy form. Never infer a form by a receipt-shaped
+   field. The new form is an explicit extension of the write evidence contract. The old
+   form keeps `scope-gate-hardening` R3's exact 32-file baseline and exact-revision meaning;
+   enforced/no-change and legacy readers retain their existing rules.
 2. Start from the existing driver's body fields and relations, including incident, revision,
    qualified identity, environment evaluation, materialization, check and trace refs. New
    forms add exactly `record_form`, `sandbox`, `producer_invocations` (0), and
-   `consumer_provenance_ref`; the write form also adds R8's `write`. Completed check tool is
+   `consumer_provenance_ref`; both write forms also add R8's `write`. Only
+   `withheld-write-policy.v1` adds top-level `scope_policy_ref`, exactly
+   `{name:"scope-policy.json",size_bytes,sha256}`. Size is an integer from 1 through
+   1,048,576; SHA is 64 lowercase hex digits over the raw snapshot. Other forms forbid
+   this field. Keep every other identity field and the complete qualified-identity,
+   profile, binding, control and environment relations unchanged. Completed check tool is
    `tool.verifier`, bound to receipt verifier identity; top-level outcome stays `no-change`
    for match, `reproduced` for mismatch, otherwise `inconclusive`. Materialization outcome is
    separate.
@@ -267,6 +279,13 @@ The exception changes only the soft size budget; it grants no scope or proof wai
    `record_form`, `incident_sha256`, `target_revision`, `files`. It excludes itself from
    files. A consumer verifies exact directory inventory, every digest and cross-document
    relation; a valid self-authored checksum inventory alone proves no origin.
+8. The new write form's outer bundle adds exactly `scope-policy.json` to the old write
+   inventory: the 29 evidence files, `publisher-body.txt`, this snapshot and the final
+   `bundle.json` marker. Its marker uses `withheld-write-policy.v1` and inventories the
+   snapshot by exact size and raw SHA-256. The frozen input reproduction and its 29-file
+   evidence inventory stay unchanged. Old write inventory stays 29 evidence files plus
+   `publisher-body.txt` and its marker. Unknown, mixed, extra or missing members refuse.
+   An outer checksum or `scope_policy_ref` alone never authenticates policy bytes.
 
 ### R6. Freeze first, then prepare a separate write attempt
 
@@ -279,13 +298,15 @@ The exception changes only the soft size budget; it grants no scope or proof wai
    candidate in the write attempt’s provenance. The reproduction must have satisfied
    enforcement and a completed match or mismatch; failed, stale or simulated production
    bundles cannot be upgraded by supplying them to this command.
-2. The write commits only that already finished bundle and the seed generated by unchanged
-   `incident-to-eval.sh convert`. Its own launch request, receipt, record, trace and
+2. The old write form commits only that already finished bundle and the seed generated by
+   unchanged `incident-to-eval.sh convert`. The policy-bound form adds only R7's fixed
+   scope-policy snapshot. Its own launch request, receipt, record, trace and
    verification plan stay outside the candidate. Consequently no receipt needs to hash a tree
    containing itself. Reproduction and write attempts have separate identities and receipts;
    both subjects remain explicit.
 3. The frozen tuple is the exact BUNDLE bytes, request input bytes other than write attempt
-   id, and source revision. Repeat it in two fresh directories. Candidate tree, write set and
+   id, and source revision; for the policy-bound form it also includes the held scope-policy
+   snapshot bytes. Repeat it in two fresh directories. Candidate tree, write set and
    publisher request must be byte-identical. Fresh write nonce/timing belongs only to outer
    attempt evidence, never the written bundle, candidate tree or would-be publisher request.
 
@@ -294,20 +315,24 @@ The exception changes only the soft size budget; it grants no scope or proof wai
 1. Let ROOT be `ystack-evidence/<incident-id>/`. Require the incident id to be one safe path
    segment under the scope glob rules. Refuse if ROOT already exists in any form at the source
    revision. Every target path is directly under ROOT: the 29 R5 evidence filenames,
-   `bundle.json`, `eval-seed.json`, and `README.md`. Copy BUNDLE bytes unchanged.
+   `bundle.json`, `eval-seed.json`, and `README.md`. The policy-bound form adds exactly
+   `scope-policy.json` directly under ROOT; the original 32 files remain complete.
+   Copy BUNDLE bytes unchanged.
    `eval-seed.json` is the converter's sole output, renamed without byte changes. README is
    exactly `Shadow evidence. Publication is withheld.\n` on one line. Every new file is mode
    100644.
-2. Require `allowed_paths` to equal those 32 exact paths. Check each against the unchanged
-   scope policy's protected prefixes/segments/root files, the mode record's forbidden
+2. Require `allowed_paths` to equal exactly 32 paths for `prepare`, or the fixed 33 paths
+   for `prepare-policy`. These are two closed inventories, never a configurable list or a
+   relaxed maximum. Check each against the held scope policy's protected
+   prefixes/segments/root files, the mode record's forbidden
    paths/prefixes and the target `.ystack/` boundary. Reject path aliases, symlinks,
    binary/non-UTF-8 content, modifications, deletes and renames. Names are data; no shell or
    Git pathspec interpretation is permitted.
 3. Produce one deterministic textual add-only patch in sorted path order. Refuse above
    1,048,576 patch bytes; never truncate, omit evidence, split this incident's publication, or
    use a direct Git write to bypass the materializer. Its contract has exactly those allowed
-   paths, 32 changed paths, that patch ceiling and the existing
-   no-binary/no-symlink/no-submodule/bare-repository settings.
+   paths, exactly 32 or 33 changed paths for the selected form, that patch ceiling and
+   the existing no-binary/no-symlink/no-submodule/bare-repository settings.
 4. The new input builder starts from the validated no-change input. Keep its
    profile/manifests, resolved profile, repository/source and requester unchanged. Bind the
    write request’s validated claim and duty to their actual bytes; require the same
@@ -321,11 +346,25 @@ The exception changes only the soft size budget; it grants no scope or proof wai
    and field mapping, then the existing core/protocol validators must accept the generated
    input before the materializer runs.
 5. Call the unchanged materializer, verify its complete response and actual tree, and require
-   all 32 paths added with exact mode/blob bytes and no other change. The candidate commit's
-   only parent is the requested target revision. Run the unchanged preparation component and
+   all of the selected form's 32 or 33 paths added with exact mode/blob bytes and no other
+   change. The candidate commit's only parent is the requested target revision. Run the unchanged preparation component and
    R4 verification on this write candidate, using the original incident check, which still
    names the unchanged source file. Derive the new qualified identity from the generated
    request/profile/instruction bytes; never copy the old request ref onto the new run.
+6. For `prepare-policy`, capture only the fixed reviewed package path
+   `scope/v1/scope-policy.json` through the existing held no-follow reader. Require a
+   bounded canonical JSON snapshot of at most 1,048,576 bytes. Use this one held object's
+   bytes for every path-policy decision, the candidate file and the outer snapshot.
+   Never reread a pathname to supply another copy, accept a caller policy/ref, or fill a
+   missing historical snapshot from the current package. Hold and recheck named identity,
+   descriptor and bytes through admission and the final completion seal. Any drift refuses
+   before the marker; there is no partial successful bundle.
+7. The extra file is a normal add-only mode-100644 candidate blob. Its raw SHA-256 and Git
+   blob id must agree with the write set and the unchanged preparation manifest. The actual
+   candidate tree and preparation record then enter the existing sandbox launch subject,
+   pre-launch expectation and authenticated controlled-store receipt. Do not add a VM
+   subject field, receipt field, control hash, trust root, installed policy selector or
+   configurable closure. The new file uses this existing authentication chain.
 
 ### R8. Withheld request, admission and post-write plan
 
@@ -350,8 +389,29 @@ The exception changes only the soft size budget; it grants no scope or proof wai
    write/request/verification fields makes the form malformed.
 5. Preserve the full outer R4/R5 evidence with this write-form record, its generated
    input/response and preparation records. Its completion marker inventories those files plus
-   `publisher-body.txt`; no outer file is added to ROOT. The existing scope evaluator
-   continues refusing this form until child 6 lands.
+   `publisher-body.txt` and, only for the policy-bound form, `scope-policy.json`.
+   The new outer policy snapshot is copied to ROOT. The write attempt's own request,
+   receipt, record and marker remain outside its candidate. Child 6 acceptance requires
+   its own separately accepted artifact and plan; this form adds no scope authority.
+6. To consume the new form, authenticate the existing receipt/preparation/candidate chain
+   and read ROOT's fixed policy blob through the held Git reader. Require its exact bytes
+   to equal the outer `scope-policy.json`; recompute raw size/SHA-256 and Git blob id,
+   manifest, whole write set, deterministic patch, generated materialization input and
+   post-write verification relations. `scope_policy_ref` must name those same bytes.
+   Recomputed outer checksums, refs or provenance cannot replace this receipt-bound blob.
+7. Later-revision coverage under Step-8 parent R3 may use only matching
+   `withheld-write-policy.v1` qualifying/current records. Derive each historical/current
+   scope-policy identity from its own authenticated snapshot. The current snapshot must
+   also equal the evaluator's held fixed policy bytes; then require qualifying and current
+   snapshots to agree. A difference returns to the shadow gate under the existing coverage
+   invalidation rule. Old or mixed forms cannot prove that history. Keep all other closed
+   coverage-identity fields and per-revision derived checks unchanged. Old 32-file records
+   remain usable only under their original exact-revision contract, with no policy backfill.
+   Child 6 must implement these consumption rules through its own spec/plan amendment.
+8. Missing, malformed, duplicate, unknown-form or inconsistent snapshot/ref/inventory
+   evidence fails closed under the existing shape/relation errors. Held-object drift keeps
+   its existing stale refusal. No failure falls back to the old form, omits the policy file,
+   emits a completion marker or creates an authorization result.
 
 ### R9. Proof, files and landing slices
 
@@ -375,6 +435,26 @@ The exception changes only the soft size budget; it grants no scope or proof wai
    determinism, no nonce/time leakage, zero producer calls, withheld-only publication and no
    source/store writes. Production-shaped tests must refuse the shipped empty accepted set and
    CPU/wall `none`. Preserve old shadow suites.
+   For the new form, run the actual `write-shadow.py prepare-policy` producer through the
+   real materializer, preparation, verifier/checker and controlled-store reader paths in
+   the existing authorized fixture. Prove the emitted outer snapshot, fixed candidate blob,
+   manifest, write set, patch, record ref and post-check all bind the policy actually used.
+   This genuine producer output is required; handwritten records or checksum-only fixtures
+   are not positives. Retain R9.1's simulation labels and all native/platform requirements.
+   Repeat the frozen tuple with the same policy bytes in two fresh directories and require
+   deterministic 33-path output. Prove old `prepare` still yields exactly 32 paths and old
+   enforced/no-change and exact-revision compatibility remains intact.
+   Reject a missing/extra/renamed policy file, wrong size/digest/blob/ref, mixed form, 32-path
+   new form, 33-path old form, alternate caller policy and policy mutation after capture.
+   Include a replacement of the outer snapshot with all outer checksums/refs recomputed:
+   it must fail against the receipt-bound candidate blob. Rewriting candidate/manifest and
+   their dependent hashes while retaining the genuine receipt must also fail.
+   The separately gated child-6 integration tests must consume genuine producer outputs:
+   equal authenticated qualifying/current policy plus current held policy is a positive;
+   different historical/current snapshots, current snapshot versus evaluator policy drift,
+   omitted snapshot/current-package substitution and mixed/old coverage forms all refuse.
+   Pair refusals with matching-policy positives. Preserve every non-policy identity field
+   in these cases to isolate this relation; this amendment does not change those fields.
 4. New files: `shadow/v1/enforced-reproduction.py`, `shadow/v1/write-shadow.py`,
    `shadow/v1/_consumer.py`, `shadow/v1/write-materialization-input.jq`,
    `shadow/v1/_cancel_release.c`, `shadow/v1/build-cancel-release.sh`; the five exact R10
@@ -384,7 +464,11 @@ The exception changes only the soft size budget; it grants no scope or proof wai
    `scripts/test/portable-core-schema.test.sh` (only the R10.9 expected-path addition),
    `scripts/test/sandbox-receipt.test.sh`, `scripts/test/shadow-slice.test.sh` (compatibility
    only), `docs/components.md`, `RESTORE.md`, `ci/required-files.txt`. Add new
-   restore-critical entries once.
+   restore-critical entries once. The policy-bound producer extension is confined to the
+   existing `write-shadow.py`, `_consumer.py`, `write-materialization-input.jq`,
+   `scripts/test/shadow-write.test.sh` and matching docs. It adds no component or installed
+   file. Child-6 reader/gate and `scope-qualification.test.sh` changes need their own
+   accepted scope; they are not authorized by this producer specification.
 5. Five sequential implementation PRs, each with its tests and restore/doc entries: (1) R10
    fixed binding tuple/evaluator/checker; (2) private origin/payload reader; (3) enforced
    reproduction and launch/record integration; (4) deterministic write input/materialization;

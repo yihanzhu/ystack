@@ -1,7 +1,7 @@
 ---
 intent-blob: d2ada8661ac87c6c9f1abfc8a751a38c8aeb33cf
 risk: high
-drafted: 2026-10-13
+drafted: 2026-10-23
 ---
 
 # Spec: authenticate later-revision scope coverage
@@ -24,7 +24,8 @@ child 6 completes or child 7 starts.
    `coverage_base` and one fresh current evidence set at revision R. Both sets use
    #541's authentic child-5 bundle, controlled-store origin, fixed receipt,
    native registry and complete record-form checks. The qualifying set is fixed;
-   the current set is produced for this evaluation.
+   the current set is produced for this evaluation. Both records must use child
+   5's explicit `withheld-write-policy.v1` form produced by `prepare-policy`.
 3. The scope records one exact coverage block: `coverage_base`,
    `coverage_rule_version: "scope-coverage.v1"`, and sorted unique refs to its
    qualifying shadow records. Existing `shadow_evidence_refs` name the current
@@ -47,6 +48,25 @@ child 6 completes or child 7 starts.
    validated block, then requires them to match the authenticated qualifying
    records and Git facts. No caller field can mark a candidate attribute or source
    fact authentic.
+7. Consume the new form under `shadow-consumer-integration/spec.md` R5/R7/R8.
+   Its candidate retains all 32 original files and adds only
+   `ystack-evidence/<incident-id>/scope-policy.json`, mode `100644`.
+   Its outer bundle adds only `scope-policy.json` to the old write inventory.
+   The record body's `scope_policy_ref` is exactly
+   `{name:"scope-policy.json",size_bytes,sha256}`: size is an integer from 1
+   through 1,048,576; SHA is 64 lowercase hex digits over the canonical raw bytes.
+   Authenticate each record's existing receipt, pre-launch expectation,
+   preparation record/manifest and candidate tree. Read the fixed candidate blob
+   through the held Git reader and require its bytes to equal the outer snapshot.
+   Recompute size, raw SHA-256, Git blob id, manifest, all 33 write-set rows,
+   deterministic patch, generated materialization input and post-check relations.
+   An outer checksum, record ref or provenance field alone proves no origin.
+8. The new form extends the coverage path only through this explicit contract.
+   `scope-gate-hardening` R3's exact 32-file rule remains the old
+   `withheld-write.v1` baseline. Preserve its original exact-revision semantics
+   and existing enforced/no-change rules. Old or mixed forms cannot prove
+   later-revision coverage. Never infer a form from file count, relax an inventory
+   to a maximum, omit the new snapshot or fall back to an old form on failure.
 
 ### R2. Closed coverage identity
 
@@ -69,6 +89,15 @@ child 6 completes or child 7 starts.
 3. `model_request` remains in the identity although this workflow invokes no
    model. Any identity difference returns to the shadow gate. A caller-supplied
    identity digest cannot replace the field-by-field comparison.
+4. Derive qualifying and current scope-policy bytes from their own R1.7
+   authenticated snapshots. The current snapshot must also equal the evaluator's
+   held fixed `scope/v1/scope-policy.json` bytes. Require the two authenticated
+   snapshots to be byte-identical before coverage can pass. Never read the current
+   package for both historical identities or fill a missing snapshot from it.
+   Keep these held snapshots through the existing provisional/final origin checks
+   and completion seal. Missing or inconsistent evidence fails closed; policy drift
+   retains R8.3's eval-gate-then-shadow-gate invalidation. No other closed identity
+   field, per-revision derived relation or qualifying timestamp changes.
 
 ### R3. Evaluator-owned current request
 
@@ -322,6 +351,19 @@ child 6 completes or child 7 starts.
 8. Run complete scope, child-5 consumer/write, sandbox receipt/launcher, core
    profile/stage/duty, materializer, schema and integration suites plus the full
    CI matrix. The exact plan must name paths and commands. Quick CI is not proof.
+9. Consume genuine `prepare-policy` producer outputs through the existing
+   materializer, preparation, verifier/checker, controlled-store and held Git
+   readers. Retain fixture simulation labels and all native/platform proof duties.
+   Prove matching qualifying/current snapshots and matching held current policy
+   pass the policy relation. Pair that control with different historical/current
+   snapshots, current/evaluator mismatch, missing snapshot/current-package
+   backfill, old/mixed forms, wrong size/ref/name and 32/33 inventory mismatch.
+   Replace the outer snapshot and recompute every outer checksum/ref: the
+   receipt-bound candidate comparison must still refuse. Change candidate,
+   manifest and dependent hashes while retaining the genuine receipt: refuse.
+   Keep every other closed identity field equal in these paired cases. Prove old
+   32-file exact-revision compatibility and preserve all R9.1–8 proof; handwritten
+   records or permanent refusal do not satisfy the new producer/consumer positive.
 
 ## Design
 
@@ -350,6 +392,14 @@ populate an accepted production environment.
 Implementation is high risk. A separately accepted plan must select exact paths,
 bound every fixed document and command, estimate readable size, and map all R9
 proof before code starts.
+
+The policy-bound producer needs child 5's separate high-risk plan and proof.
+This consumer amendment needs its own accepted high-risk plan amendment before
+the preserved #544 attempt resumes. Neither G2 record grants implementation or
+execution authority by itself. The operator's implementation-first decision allows
+inactive repository work before the final #558 acceptance batch; all #558 and
+#544 proof remains required. It grants no installation, network, VM, source,
+credential or new trust-root authority.
 
 ## Out of scope
 
