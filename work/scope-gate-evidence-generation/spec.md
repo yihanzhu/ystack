@@ -59,7 +59,9 @@ Tracks #681。对应父 `step8-bounded-write-readiness/spec.md` R8 child 9。
    缺失/错误 decision 的原有 violated/inconclusive 含义必须保留。
    不改实际 stage request 的 `gate_decision_refs` 来适配另一个 claim。
 5. 用 consumer 私有目录和 held descriptors 冻结 basis、claim、四份 stage 输入、
-   shadow/dashboard/marker、bundle 与运行包。原始输入在结束前须重新核对。
+   shadow/dashboard/marker、bundle 与运行包。非 store 的输入、anchor、package、
+   Git、request 和 expectation 持续持有到完成。store acquisitions 按 R3.10–14
+   分阶段持有；初次认证不跨 source sibling 写入。原始输入在结束前须重新核对。
    其 canonical 编码、大小、唯一根、无重复键、文件类型及稳定性检查不能放宽。
 6. 在 source 启动前，由 consumer 生成 32 字节 OS 随机 nonce 和唯一调用 id。
    写入并 fsync canonical `kill_register_source_request` 与 expectation 及目录。
@@ -120,6 +122,33 @@ Tracks #681。对应父 `step8-bounded-write-readiness/spec.md` R8 child 9。
    生产路径失败关闭。此项不建立 production provider，不安装 source，不联网。
    后续真实使用仍需原专门授权。publisher 前和 post-write 的新读取属于 child 11；
    此次观察不能被缓存为它们的许可。
+10. 同一 store 最多依次经历本次 kill source 和 scope 内的 coverage source 两次
+    sibling 创建。第一次读取 core attempts 是 provisional。kill request 和
+    expectation durable 后，先完整 recheck，再释放全部持有该 store root 的
+    acquisitions，才可启动 kill source。失败时不得 release 后继续求值。
+11. kill source 完成并收割后，完整重新认证全部已用 core attempts 和 kill source
+    attempt，取得 fresh origins，才可生成 gate 输出并进入 scope 消费。
+    若 scope 需要 #544 coverage source，这组 acquisitions 仍是 provisional。
+    scope reader 创建并持久化自己的 request/expectation 后，统一 recheck 并释放
+    outer consumer 和 inner reader 的全部 store acquisitions，才可启动 coverage。
+    非 store holds 继续保留；不可遗漏 outer kill/core holds。
+12. 最后一次所需 source 完成并收割后，完整重新认证本次使用的全部 attempts：
+    core、kill source，以及 scope 的 qualifying/current 和 coverage source。
+    不需要 coverage 时，R3.11 的重新认证就是此 final acquisition。
+    重跑完整 origin、receipt、payload、request、expectation 和关系检查。
+    使用同一 store 身份和安全配置；已用 attempt 的对象身份、非 root metadata
+    和所有非 origin 字节必须匹配此前冻结值。payload 改动后稳定仍须拒绝。
+    合法 sibling 创建只使重新获取时的 root metadata 和由此派生的 fresh origin
+    变化；不得忽略或放宽任何一次持有期间的 root metadata 比较。
+13. 初始 origin refs 留在各自已冻结的 source request/expectation 中，证明当时
+    请求绑定的观察。final fresh origins 按同一 attempt 和 receipt/payload 摘要
+    绑定本次完成时的重新认证。二者分别保留；不得重写请求来替换初始 refs，
+    也不得把旧 origin 或 copied bytes 当 final authentication。
+14. 最终 acquisition 由一个明确 owner 保持到完成标志写入前的最终 recheck。
+    inner reader 不能提前关闭仍由完成包依赖的 holds。final acquisition 之后
+    不再创建任何 source sibling；root 或任一已用 attempt 漂移即失败。
+    plan 精确定义私有 scope reader 的阶段交接与持有责任，不增加公共开关。
+    此协议不重置或延长 R5.7 的总 deadline。
 
 ## R4. Register 验证与确定性投影
 
@@ -175,7 +204,9 @@ Tracks #681。对应父 `step8-bounded-write-readiness/spec.md` R8 child 9。
    输出一个完成包：完整 scope、三份 evaluation、state、attempt、实际四份输入、
    claim、source request/expectation/receipt/origin 和最终 scope evaluation。
    一个 canonical manifest 列出每项实际大小和 SHA-256，另绑定 basis 与运行包。
-   不把 manifest 当来源证明。完成标志在全部校验和子进程收割之后最后写入。
+   manifest 分别绑定请求中的初始 origin refs 与 R3.13 的 final fresh origins。
+   不把 manifest 当来源证明。完成标志在全部校验、收割和 final holds recheck
+   之后最后写入；随后才释放 final holds。
 6. 实际 malformed、unreadable、source/关系失败、输入漂移、runtime 漂移、超限、
    timeout、signal、非零退出或未确认 reap，均为非零失败且不留下完成包。
    不伪造 kill violated 来掩盖 source 未认证，也不把失败输出当部分可用证据。
@@ -210,6 +241,11 @@ Tracks #681。对应父 `step8-bounded-write-readiness/spec.md` R8 child 9。
 7. source 测试覆盖错误仓库/分支、两次 tip 移动、旧 tip、缺页/cursor、原始字节
    或 normalizer 变更、复制 receipt、未接受身份、owner/group/mode/ACL/link/metadata
    换包、超限、deadline、signal、子进程存活和清理失败。每个拒绝证明无完成包。
+   必须有真实 kill source 加 coverage source 两次 sibling 创建的完整正向。
+   成对测试 final acquisition 后改 root、旧 core attempt 或任一 source attempt
+   均无完成包；provisional 释放后旧 payload 被改且随后稳定仍被完整重认证拒绝。
+   验证两份 source request 保持原始 origin refs，而完成包绑定最终 fresh origins；
+   遗漏重认证、复用旧 origin、提前释放 final holds 或第三次 sibling 写入均拒绝。
 8. 保留 control、scope、core stage/profile/duty、child-5 consumer、receipt/source
    和相关集成测试。新 restore-critical 文件进入 manifest，文档说明低层兼容边界。
    plan 必须列准确路径、命令和完整测试映射。规定 CI 和独立审查仍是硬门槛；
