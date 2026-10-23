@@ -1083,7 +1083,6 @@ of one result keeps `E_RUNTIME`. The catalog remains seven seeded and two declar
 Sources, relay, replay, real seeds and operator labels for the two declared
 families remain due in later batches. No new seed or activation ships here.
 
-
 Restore the eight paths listed under "Inactive deploy and rollback gates" in
 [`ci/required-files.txt`](ci/required-files.txt) from one commit, then run:
 
