@@ -1076,6 +1076,14 @@ fail-closed handling of malformed, moved, or edited inputs. The framework remain
 inactive and observation only. It does not run a candidate or adapter, invoke a
 model, use a credential or network, grant qualification, or activate a profile.
 
+A required `multi` family must meet its `minimum_trials` with every case passed;
+`single` families still need at least one case and all passed. A dashboard refuses
+repeated family/case pairs across distinct results as `E_SHAPE`; repeated input
+of one result keeps `E_RUNTIME`. The catalog remains seven seeded and two declared.
+Sources, relay, replay, real seeds and operator labels for the two declared
+families remain due in later batches. No new seed or activation ships here.
+
+
 Restore the eight paths listed under "Inactive deploy and rollback gates" in
 [`ci/required-files.txt`](ci/required-files.txt) from one commit, then run:
 
