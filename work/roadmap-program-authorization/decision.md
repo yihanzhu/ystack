@@ -489,3 +489,34 @@ This record-only appendix changes no policy, scope, acceptance standard or autho
 and requires separate independent review before publication.
 
 Prepared against base `b33ca2ed816629b7ab94481586db0d18960b21ff`.
+
+## Program decision — implementation-first delivery order (2026-10-23)
+
+Operator yihanzhu directly told manager Codex session
+`01a15e2e-9b80-71b1-b529-d3f6288591fa`:
+“批准调整交付顺序。先完成 Roadmap 剩余的仓库内实现和测试，保持未激活；保留 #558 的全部验收欠项，最后集中闭合。不要降低验收标准，普通步骤自主推进，别再扩展诊断工程。”
+
+This RC-1 record-only appendix records that direct decision for `yihanzhu/ystack`.
+The named manager directly received the handoff on 2026-10-21. This file does not
+appoint a manager or supply authority. PR #676 remains a preserved draft attempt.
+
+Complete the remaining inactive repository implementation and tests first.
+Implementation may precede acceptance of an explicitly bound dependency. That does
+not accept the dependency or count as completed Roadmap acceptance. Keep #558's
+full original local validation, complete final-head Mac then same-head Linux proof,
+actual restoration, I1 closure, independent G3 and protected merge outstanding for
+final closure together. #544 remains required. Step 11 stays dropped; step 12 stays
+deferred on the existing conditions. Acceptance standards and required tests do not
+change. Do not extend diagnostic engineering.
+New development tests do not borrow or reset #558 LOCAL7/D accounting or remaining
+opportunities. Keep its original budget and failures preserved.
+
+The artifact chain, separately accepted high-risk plans before code, separate
+independent review, exact head/base evidence, required CI and protected merge remain
+hard gates. Preserve existing attempts and their unresolved evidence. This decision
+authorizes no activation, installation, real target execution, new credentials or
+network scope, config/bootstrap change, or disposition. The dummy target stays
+read-only. CPU wall is `NONE`; native qualification is `BLOCKED`; production is
+`EMPTY`; automation is `PAUSED`. ROADMAP.md and governance files stay unchanged.
+
+Prepared against base `b991877ba8b2f41e184b2d2ee51715451d1c0ba1`.
