@@ -1,19 +1,261 @@
 ---
-spec-blob: 1aa98f5b467bbca0ee01d45f105129737ea24422
+spec-blob: fb1bbec3d8c0fd2bba0a6353da05bf03107e97a4
 risk: high
-drafted: 2026-10-11
+drafted: 2026-10-23
 ---
 # Plan: inactive shadow-consumer integration
 
 Tracks #506. This implements Step-8 child 5 under the accepted spec. The authoring base
-is `9295d658405afaae98cfea724fba24184f271fe1`; base movement is external context, not
+is `5d90fe574336968b05ce258354e9f46d0912222b`; base movement is external context, not
 permission to change meaning. Intent blob: `6feb2ad7dd5f096bdd483ed9bace07cae2c24be5`.
 
-Plan PR: `review_size: accepted-exception`, 900–1200 lines. The five-slice contract,
-closed native context, fixed native signal checkpoint, direct-result release and
-State-owned child handoff, and the fixed writer-child roles need one coherent
-implementation brief. The range keeps complete signal/fd/platform and fixed
-child-lifecycle proof readable and changes only the soft size budget.
+Plan PR: `review_size: accepted-exception`, 1400–1550 lines. The focused producer
+extension and its proof map preserve the complete accepted signal/fd/platform,
+child-lifecycle and writer contracts. This range keeps those obligations readable
+and changes only the soft size budget.
+
+## Authenticated scope-policy producer amendment
+
+This section plans the accepted policy-bound form in spec R2, R5–R9. It extends
+one existing producer. The five original slices below are retained implementation
+and proof contracts, not five new builds. Their source exists on the authoring
+base. Their outstanding failures and platform/native acceptance remain outstanding.
+This amendment neither resumes SC-CANCEL-6 nor changes the preserved #558 attempt.
+For the new form only, this section extends the old 32-file writer mapping and
+outer inventory below. All other original contracts remain binding.
+
+### One implementation carrier and gates
+
+| Item | Exact binding |
+| --- | --- |
+| Authoring base | `5d90fe574336968b05ce258354e9f46d0912222b` |
+| Accepted producer spec | `fb1bbec3d8c0fd2bba0a6353da05bf03107e97a4`, merged through PR #688 |
+| Sole implementation branch | `codex/impl/scope-coverage-authentication`, original #544 attempt |
+| Paused checkpoint | `44c8ded3ad850767cfd7bb469aecb4d182e8784e` |
+| Retained implementation worktree | `/private/tmp/ystack-coverage-impl-20261023`, clean paused |
+| Source comparison only | M3 `fe6593e1b09960d165f0a5b0b3db555f06f182eb`; no permission to import that attempt |
+
+Keep the original #544 claim, branch and history. The same original Sol 6.1 medium
+coder implements this producer change and child-6 consumption once on that branch.
+Do not open a producer implementation branch, duplicate intake or second build.
+C5 owns the producer contract and proof; #544 owns reader/gate coverage and its
+integration proof. The #544 spec and high-risk plan must separately name the same
+carrier and these shared producer paths. Neither plan alone permits resume.
+
+First merge both independently accepted high-risk plans through protected PRs.
+The separately reviewed #544 spec proposal has blob
+`618928cb8cb30a4ad95d8b39dc3126cd806c5444`. Require its actual protected merge
+and current artifact hashes too; an artifact review does not fix source.
+Reconcile the preserved carrier's local/remote head, PR state, base, claim and
+clean worktree before an ordinary merge of the accepted fresh main. The first
+parent is the reconciled paused head; the second is that exact main. Preserve all
+existing implementation commits. A conflict needs an explicit, reviewed resolution;
+never reset, rebase, replay, clean, abandon or silently replace the attempt.
+
+Before the next code commit, bind both intent/spec/plan chains and the accepted
+plan-base to the fresh default OID. A later base move needs fresh non-author
+read-only review and manager reaffirmation under AGENTS.md. Changed meaning needs
+the affected artifact gate. The manager records the exact tuple and resume claim.
+Old G2/plan/CI passes cannot accept new source. Complete source review and required
+CI follow implementation; final platform/native proof remains a separate obligation.
+
+### Source map and exact paths
+
+At the authoring base, `write-shadow.py` blob is
+`4790655f9378636cacf8f4ec7929c88abcfce9bc`, `_consumer.py` is
+`7cc30398ae99cf771ef6aa3b267592ed6809c0cd`, the input builder is
+`c6e0018996757a8e971f51d93af7cf773f951b7b`, and `shadow-write.test.sh` is
+`a91f8f53b39604fdf8a840588dac485ffd48df52`. `_Workspace` already holds the fixed
+scope policy. `_write_files` uses it for path checks but omits it from the candidate.
+`write_contract`, `_candidate_facts` and the jq builder fix the old count at 32. `_admit`,
+`_outer_record`, `write` and `main` close over the old form and outer inventory.
+
+The checkpoint already contains M3's private `_HeldBundle`, `_ReadOnlyGit`,
+`_HeldStoreRead` and scope child ownership, plus its writer `git_owner` integration.
+These symbols are absent from main's `_consumer.py`. Keep that existing carrier
+history and recheck its closure after merging main. Producer snapshot construction
+uses the existing main writer and needs no new #558 reader import. Extending the
+checkpoint's shared `_HeldBundle` is part of this same carrier's integration; do
+not copy another reader, introduce a shim or assert that M3 is merged/accepted.
+Its retained dependencies still need #544 source review and the original #558 proof.
+
+Only these six producer paths may change under this amendment:
+
+| Path | Bounded change |
+| --- | --- |
+| `shadow/v1/write-shadow.py` | Explicit verb/form; same held policy bytes; fixed candidate/outer sets; ref, admission and completion relations |
+| `shadow/v1/_consumer.py` | Closed 32/33 `write_contract`; extend existing carrier `_HeldBundle` inventory/ref checks for the explicit new form |
+| `shadow/v1/write-materialization-input.jq` | Fixed form metadata and exact selected contract/inventory checks in both existing phases |
+| `scripts/test/shadow-write.test.sh` | Actual producer, compatibility, determinism, mutation and authenticated-candidate attacks in the existing fixture |
+| `docs/components.md` | Two explicit verbs/forms, historical-policy binding and proof limits |
+| `RESTORE.md` | Existing producer/consumer relationship and fixed snapshot contract |
+
+No new file is required. All six existing files are already restore-tracked; do
+not change `ci/required-files.txt` for a candidate evidence file. Consumer changes
+in `scope/v1/read-shadow-evidence.py`, `scope/v1/scope-gates.jq` and
+`scripts/test/scope-qualification.test.sh` require #544's accepted path set. This
+plan does not authorize those paths, native C/build, enforced-reproduction, VM,
+control policy, installed config, receipt shape or constitution changes.
+
+Estimate the incremental producer code, tests and docs at 600–1100 net lines:
+roughly 150–300 for closed construction/admission/shared inventory, 400–700 for
+paired actual-output tests, and the remaining documentation. This is an estimate
+for the producer portion, not a second PR or a replacement for #544's complete
+carrier budget. Its plan must account for the full preserved consumer change plus
+this portion as one historical-policy authentication concern. Return for a size
+amendment if needed; keep complete readable code and tests rather than meeting a
+number by compression, deletion or a duplicate implementation.
+
+### Fixed implementation steps
+
+1. Keep `prepare REQUEST BUNDLE WORK OUTPUT` selecting `withheld-write.v1`.
+   Add only `prepare-policy` with identical arguments selecting
+   `withheld-write-policy.v1`. Carry a private closed form value from this dispatch
+   through workspace, builder, admission and marker. Reject unknown verbs/forms.
+   REQUEST keeps its exact keys; it accepts no form, policy path, bytes or ref.
+   No file-count inference, public selector or configurable inventory is added.
+2. For the new verb, bound the already held fixed
+   `scope/v1/scope-policy.json` to 1..1048576 bytes and require canonical JSON.
+   Use that object's raw bytes for parse/path decisions, ROOT's policy blob and
+   outer `scope-policy.json`. Keep its descriptor and named-object identity in
+   the existing workspace owner. Never supply a later pathname read as a copy.
+   Preserve mode-record checks and all old form path decisions.
+3. Leave the frozen reproduction `NAMES` unchanged: 29 evidence files and its
+   marker. Build an explicit old set of those 30 plus seed and README, or that
+   exact set plus `scope-policy.json` for the new form. Compare sorted REQUEST
+   paths against the selected set before converter/materializer effects. Require
+   absent ROOT and all existing protected-path, alias, text, mode and patch rules.
+   The extra file uses mode 100644 and existing `evidence_patch`; it is not an
+   outer receipt, request or marker copied into its own candidate.
+4. Extend the private `write_contract` with a closed form argument; retain its
+   existing call's old-form behavior for legacy callers. The form selects the
+   exact 32/33 maximum and exact filenames, never `len(paths)` as authority.
+   Add internally generated `record_form` and `incident_id` to both retained
+   builder metadata documents. Require exactly the existing metadata keys plus
+   these two; only the final phase also has `stage_request_sha256`. The jq builder
+   accepts only those two form values and derives the exact sorted ROOT filenames from the fixed incident id, and checks
+   metadata paths and the complete contract. Keep its two phases, role-17 argv,
+   rawfile patch/contract inputs and all other field mappings unchanged. Reject
+   missing/unknown/mixed metadata instead of falling back; update the carrier's
+   separately gated reader reconstruction consistently. Old generated protocol
+   input, contract and patch bytes remain identical for an unchanged old tuple.
+5. Use actual materializer response, source/candidate tree and raw Git blob facts
+   to verify every selected path. `_candidate_facts` requires exactly the selected
+   32/33 changed paths, the sole source parent and no extra delta.
+   Existing preparation `prepare`/`inspect`, frame construction, expectation,
+   verifier, bound evaluator/checker and controlled-store read authenticate the
+   candidate. New policy size/SHA/Git blob must match the manifest and whole write
+   set. Preserve the VM subject, control, receipt, qualified identity and all
+   profile/binding/environment fields; add no trust root or accepted identity.
+6. Extend `_outer_record` and `_record_relations` by the explicit form only. The
+   new body alone adds `scope_policy_ref` with exactly `name`, `size_bytes`,
+   `sha256`; name is `scope-policy.json`, size is a non-boolean integer in the
+   fixed bound, and SHA is lower-case 64-hex over raw bytes. Old/reproduction forms
+   forbid it. Keep `write`'s nine keys and every existing relation unchanged.
+   `_admit` compares the same held bytes, outer copy and actual candidate blob,
+   ref, manifest, complete patch/input/write set, publisher request and post-check.
+   Recompute relationships; matching caller-supplied hashes are insufficient.
+7. In the carrier's `_HeldBundle`, select the exact inventory from the explicit
+   form. Reproduction remains 30 total files; old outer write remains 31; new
+   outer write is 32 including the marker, whose inventory has 31 entries.
+   Preserve existing per-file and aggregate bounds; the policy limit is 1 MiB.
+   Reject missing/extra/renamed files, unknown/mixed form and bad closed ref.
+   Inventory validation alone grants no authenticity. #544's reader must prove
+   outer bytes equal the policy blob in the receipt-bound candidate and derive
+   historical identity there. Only two new-form records can supply coverage;
+   current snapshot must also equal current evaluator-held policy before equality
+   with qualifying snapshot. Old 32-file exact-revision use remains unchanged.
+8. Recheck held/named policy identity and bytes through `_admit` and the last
+   child-free workspace seal. Repeat that seal after all output evidence files
+   are written and fsynced, before `retain_completion`/`prepare_completion`, while
+   the policy owner is still held. Final resolver-backed checks precede provenance
+   freeze, as before. Keep command ledger entries for
+   actual calls only; snapshot copying adds no fake role. Add the outer policy to
+   the exact output inventory, then prepare the canonical marker with the explicit
+   form. Existing native completion remains the sole L/marker owner. No child,
+   parsing, hashing, new callback or cleanup is moved after its commit boundary.
+
+Preserve existing error codes and first-failure ordering. Usage is `E_USAGE`;
+request shape/canonical/limit failures retain their existing codes. Snapshot/ref/
+form/tree inconsistencies use existing shape/relation refusal. Held-object drift
+retains the reader's stale refusal and the writer's existing public error mapping.
+Parent-context, origin, receipt, enforcement and payload failures retain their
+original boundary/reasons and raw first failure. A write refuses incomplete
+materialization or verification. No failure downgrades to old form, drops the
+snapshot, creates a completion marker or fabricates inconclusive success.
+
+### Proof mapping and execution boundary
+
+Extend the existing writer fixture, not a test framework or production hook.
+Keep its real public-entry subprocess and schema-2 parent-context path. Distinguish
+actual producer/component execution from substituted launch/OS identity observations.
+A genuine producer output is required even where the fixture's trust is simulated.
+Never claim such a fixture supplies native qualification or real store origin.
+
+| Proof in `shadow-write.test.sh` | Required positive and refusal pair |
+| --- | --- |
+| Dispatch and fixed sets | Actual old `prepare` produces 32 candidate paths and old form; actual `prepare-policy` produces 33 and new form. Unknown verb, caller policy/form key, old33, new32 and extra/renamed/missing member refuse. Frozen reproduction stays byte-identical. |
+| Held snapshot | Actual path checks, candidate and outer use the same canonical held bytes. Empty/oversized/noncanonical/duplicate-key policy, changed descriptor/named identity or bytes after capture, before admission and at final seal refuse without marker. Existing no-follow/ACL/link checks remain paired. |
+| Builder and admission | Both real jq phases and protocol validation accept the exact new contract. Unknown/missing form metadata, wrong max/path set, extra contract field, wrong size/digest/Git blob/ref, boolean size and mixed record/marker form refuse with dependent digests recomputed. Old input and contract bytes remain equal. |
+| Full producer chain | Actual materializer, preparation/inspect, fixed verifier, bound evaluator/checker and controlled-store reader produce the new output. Check policy blob, manifest, whole write set, patch, generated input, receipt subject and post-check against retained raw bytes. Assertions cannot replace any of those components with a handwritten successful record. |
+| Outer replacement | Start from that completed output. Replace outer policy and recompute its ref, record and all outer inventory/provenance checksums. Reader still refuses against the unchanged receipt-bound candidate blob. Pair with the untouched output. |
+| Candidate replacement | Change policy candidate blob/tree/manifest and their dependent outer digests but keep the genuine receipt. Reject its candidate/preparation/launch relation. No test-generated replacement receipt may hide the attack. |
+| Determinism and compatibility | Two fresh new-form attempts of the same frozen tuple and policy give identical candidate tree, write set, publisher request and post-check. Nonce/timing stay outer. Original old-form two-attempt determinism, enforced/no-change, legacy and exact-revision cases still pass. |
+| Failure boundaries | Retain all existing origin, timeout, cancellation, metadata, helper, role16–18, protected/add-only, size, source/store purity and marker-last cases. A failed new relation asserts its last boundary and absent later effects/marker; original raw failures are not discarded. |
+
+The two authenticated-candidate attack checks are joint integration requirements:
+writer tests produce the genuine bundle; #544's existing scope suite consumes it
+through the retained reader. Its separately accepted plan owns the reader calls and
+scope assertions. That suite also pairs equal qualifying/current/current-held
+policy with historical/current differences, current-held drift, omitted snapshot,
+current-package backfill and mixed/old coverage forms. Hold every non-policy
+identity field equal to isolate each policy relation. Never treat a standalone
+outer checksum test as this authenticated proof.
+
+Before any test invocation, use an already trusted physical Python >=3.11 and
+existing tools. Verify the regular non-symlink executable jq cache at
+`${TMPDIR:-/tmp}/ystack-portable-core-jq16/jq-osx-amd64` on Darwin or `jq-linux64`
+on Linux x86_64. SHA-256 must respectively be
+`5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef` or
+`af986793a515d500ab2d35f8d2aecd656e764504b789b66d7e1a0b727a124c44`; only after
+that check run its `--version` and require `jq-1.6`. A missing/mismatched cache or
+Python stops that local run. Some old suites download on a cache miss: do not
+invoke them in that state. Do not install or download dependencies. Recheck the
+cache before each suite and use the existing network-denied execution environment.
+
+Run complete existing suites with `bash scripts/test/NAME`, retaining raw exit and
+stdout/stderr plus exact implementation head, base and tool identities:
+
+| Test group | Exact NAME values and condition |
+| --- | --- |
+| Writer and enforced regression | `shadow-write.test.sh`, `shadow-enforced.test.sh`; these build/load native fixtures. Run only in the existing authorized disposable execution environment with accepted dependency evidence. Do not run this group on the current Mac under this amendment. |
+| Legacy shadow and trace | `shadow-slice.test.sh`, `shadow-assembler.test.sh`, `shadow-self-host-evidence.test.sh`, `telemetry-trace-ledger.test.sh`, `telemetry-trace-store.test.sh`; preserve original Step-8 trace shapes, all events and unavailable metrics. |
+| Bound control and receipts | `control-sandbox-bound.test.sh`, `control-sandbox-policy.test.sh`, `sandbox-receipt.test.sh` |
+| Materialization and seed | `file-digest-verifier.test.sh`, `candidate-content-preparation.test.sh`, `local-git-materializer-protocol.test.sh`, `local-git-materializer-adapter.test.sh`, `maintenance-loop.test.sh` |
+| Shared consumer integration | `scope-qualification.test.sh`, with #544's accepted genuine-output coverage additions and old exact-revision cases |
+| Schema | `portable-core-schema.test.sh`, with exact candidate files in the tracked index; no tracked-path list expansion is expected |
+
+These commands specify complete suites, not selectors or extracted test snippets.
+Inspect each suite's execution requirements before use. Only run ordinary suites
+locally when they do not require native/root/privileged/source execution outside
+current authorization. Existing CI can run the complete relevant ordinary suites;
+record their exact results separately from the final platform proof. Run pinned
+shellcheck 0.11.0 `-x -S style` on the changed shell test only when that verified tool
+already exists, and require normal protected-PR CI. Missing tools are not passes.
+No new public selector, diagnostic harness, SDK/source collection or test framework
+is part of this amendment.
+
+Keep all original Mac/Linux, actual native, helper/source closure, cancellation,
+store and six-shard milestone obligations below. If the authorized fixture or
+platform evidence is not available now, prepare the code and tests and record the
+exact proof still owed for the final concentrated #558 window. Do not install
+accounts/sudoers, invoke sudo, touch the fixed host anchor, start native/source
+execution or acquire new evidence permissions to run it here. Do not report
+unexecuted, refused, failed or unavailable proof as PASS. This plan cannot close
+#544 or #558 by itself. CPU/wall remain NONE; native remains BLOCKED; production
+accepted identities remain EMPTY; automation remains PAUSED.
+
+## Retained five-slice implementation and proof contract
 
 ## Files that change
 
@@ -41,7 +283,7 @@ Intermediate entry points refuse operations whose remaining checks are not imple
 they cannot emit a completed write bundle early. No other source or accepted artifact
 changes. Slice 4 has exactly ten paths: its seven table entries plus the common set.
 
-The current SC-CANCEL-6 repair claim is the exact seven-path subset
+The retained SC-CANCEL-6 repair contract is the exact seven-path subset
 `shadow/v1/_cancel_release.c`, `shadow/v1/build-cancel-release.sh`,
 `shadow/v1/_consumer.py`, `shadow/v1/enforced-reproduction.py`,
 `scripts/test/shadow-enforced.test.sh`, `docs/components.md` and `RESTORE.md`.
@@ -1177,8 +1419,8 @@ Use the existing pinned jq 1.6 fixture cache; a system jq with a different versi
 cannot substitute. No new tool installation is needed. Use shellcheck 0.11.0 with
 `-x -S style` on changed shell files and the repository’s required quick CI.
 SC-CANCEL-3 remains a repair of original PR #519. Full run `38051431041` remains failed and
-formal G3 remains NOT PASS. After this plan is independently accepted and protected-merged,
-resume only the preserved clean implementation attempt by an ordinary merge whose first
+formal G3 remains NOT PASS. For that separately resumed SC-CANCEL repair, after its applicable gates,
+resume only its preserved clean implementation attempt by an ordinary merge whose first
 parent is its verified current head and second parent is the accepted new main. Verify the
 clean state, ordered parents, tree, history and unchanged implementation bytes before push,
 then obtain a fresh exact claim/evidence tuple. Do not reset, clean, stash, rebase, force,
