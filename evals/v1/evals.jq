@@ -1009,6 +1009,8 @@ def dashboard_results_ok($result_shas):
   ($result_shas | type == "array" and length >= 1 and length <= 16 and
    all(.[]; schema::sha256_ok) and (length == (unique | length))) and
   length == ($result_shas | length) and
+  ([.[].body.cases[] | [.family_id,.case_id]] |
+   length == (unique | length)) and
   all(.[]; schema::exact_fields(["body","id","kind","schema_version"];[]) and
            .schema_version == 1 and .kind == "eval_run_result" and
            (.body.seed_source as $source | active_seed_sources | index($source) != null) and
