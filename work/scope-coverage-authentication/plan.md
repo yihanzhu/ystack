@@ -52,10 +52,11 @@ concern 的冲突，暂停协调原 foundation gate，不自行扩大下列路�
 
 生产契约来自已合并的 child 5 spec blob
 `fb1bbec3d8c0fd2bba0a6353da05bf03107e97a4`。对应 producer plan 已独审 ACCEPT，
-PR #690 尚待受保护合并。其
-head `4a9fdf72466e5599521f7d9964187dd87aa6c0f3`、base
-`604a3d28cf5222be72220a343ded85b2a87eb7b4`、plan blob
-`ebfc9e1d2c661cab78f87a9b9c2fa82116195310`，不能据此宣称已合并或已实现。
+并由 PR #690 受保护合入 main
+`38583f4bd49923166fad866df88f637404be3f0c`。其被审 head 为
+`4a9fdf72466e5599521f7d9964187dd87aa6c0f3`、base 为
+`604a3d28cf5222be72220a343ded85b2a87eb7b4`，合入的 plan blob 保持
+`ebfc9e1d2c661cab78f87a9b9c2fa82116195310`。plan 合入不代表实现或验收完成。
 该 plan 定义生产步骤与生产测试；本 plan 定义共同 carrier、完整路径并集、
 消费步骤与端到端证明。其六个 producer 路径只是责任子集；其尺寸估计只是分项。
 同一实现 PR 仅使用上面的整体尺寸声明。
