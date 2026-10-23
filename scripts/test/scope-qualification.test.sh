@@ -4,7 +4,7 @@ set -euo pipefail
 export LC_ALL=C
 umask 077
 
-if [ "${YSTACK_SCOPE_TEST_BOUNDED:-0}" != 1 ]; then
+if [ "${1:-}" != --coverage-pure ] && [ "${YSTACK_SCOPE_TEST_BOUNDED:-0}" != 1 ]; then
   YSTACK_SCOPE_TEST_BOUNDED=1 exec /usr/bin/perl -e 'alarm 1800; exec @ARGV; die "exec failed: $!\n"' /bin/bash "$0"
 fi
 
@@ -15,6 +15,250 @@ policy="$root/scope/v1/scope-policy.json"
 record_program="$root/scope/v1/workflow-scope.jq"
 gate_program="$root/scope/v1/scope-gates.jq"
 repo_marker="$root/config/construction-mode.json"
+
+coverage_pure_tests() {
+  "$1" -I -S -B - "$root" <<'PY_COVERAGE_PURE'
+import copy, importlib.util, json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+def load(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+n = load('coverage_actual_normalizer', root/'sandbox/v1/coverage-source.py')
+h = load('coverage_actual_supervisor', root/'sandbox/v1/host-supervisor.py')
+passed = 0
+def check(value, label):
+    global passed
+    assert value, label
+    passed += 1
+    print('ok coverage %d - %s' % (passed, label))
+def refuses(call, label):
+    try:
+        call()
+    except (n.Refusal, h.FrameError, KeyError, TypeError, ValueError):
+        check(True, label)
+    else:
+        raise AssertionError(label)
+def reference(kind='artifact', version=1):
+    return {'schema_version':version, 'kind':kind, 'id':'fixture.'+kind, 'sha256':n.digest(kind.encode())}
+base = {'repository_id':'repo.fixture', 'hash_algorithm':'sha1', 'commit_id':'a'*40}
+current = dict(base, commit_id='d'*40)
+nonce = n.digest(b'fresh fixture nonce')
+body = {'attempt_id':'coverage.'+nonce, 'nonce':nonce, 'repository_id':'repo.fixture',
+        'coverage_base':base, 'evaluated_revision':current, 'coverage_rule_version':n.RULE_VERSION,
+        'documents':{name:reference() for name in n.DOCUMENT_NAMES},
+        'qualifying_shadow_record_refs':[reference('shadow_reproduction_record')],
+        'current_shadow_record_refs':[reference('shadow_reproduction_record')],
+        'resolved_profile_ref':reference('resolved_profile',2), 'stage_request_ref':reference('stage_request',2),
+        'stage_result_ref':reference('stage_result',2), 'materialization_refs':[{'environment_id':'env.fixture','sha256':n.digest(b'materialization')}],
+        'publisher_request_refs':[{'environment_id':'env.fixture','sha256':n.digest(b'publisher')}],
+        'post_check_refs':[{'environment_id':'env.fixture','sha256':n.digest(b'postcheck')}],
+        'qualifying_receipt_refs':[reference('sandbox_enforcement_receipt')], 'git_observation_sha256':n.digest(b'git'),
+        'source_package_ref':reference('coverage_source_package'), 'source_accepted_set_ref':reference('coverage_source_accepted_identity_set')}
+request = n.canonical({'schema_version':1,'kind':'coverage_source_request','id':body['attempt_id'],'body':body})
+rule = lambda name: {'rule_id':name,'target_pattern':'main','enforcement':'active','bypass_actors':[], 'rule_type':name,'parameters':{}}
+rules = sorted([rule(name) for name in n.REQUIRED_RULES|{'fifth-rule'}],key=lambda r:r['rule_id'])
+commits = [{'index':i,'commit_id':char*40,'parent_commit_id':None if i==0 else 'abcd'[i-1]*40,'tree_id':str(i+1)*40} for i,char in enumerate('abcd')]
+pages = [n.canonical({'schema_version':1,'repository':{'repository_id':'repo.fixture','node_id':'repo-node'},
+    'default_branch':{'name':'main','node_id':'branch-node'},'branch_snapshots':{
+    'baseline':{'branch_node_id':'branch-node','commit_id':'a'*40,'observed_at':'2026-09-23T00:00:00Z'},
+    'current':{'branch_node_id':'branch-node','commit_id':'d'*40,'observed_at':'2026-10-23T00:00:00Z'}},'commits':commits}),
+    n.canonical({'schema_version':1,'pull_requests':[]}),
+    n.canonical({'schema_version':1,'baseline':rules,'current':rules,'events':[]})]
+capture = {'pages':[{'family':family,'page_index':0,'response_status':200,'input_cursor':None,'output_cursor':None} for family in n.FAMILIES]}
+records = [(b'capture.json',n.canonical(capture))]+[(('raw/%04d'%i).encode(),raw) for i,raw in enumerate(pages)]
+frame = h.frame_write(records)
+manifest, retained = n.captured(h.frame_read(frame),request)
+observed = n.normalize(manifest,retained,request)
+check(json.loads(observed)['first_parent_commits']==commits,'actual frame/raw-manifest/normalizer complete interval positive')
+check(len(json.loads(observed)['branch_rules']['current'])==5,'unchanged fifth rule remains in full applicable set')
+def changed_page(index, change):
+    changed = list(pages)
+    doc = json.loads(changed[index]);change(doc);changed[index]=n.canonical(doc)
+    rows = [(b'capture.json',n.canonical(capture))]+[(('raw/%04d'%i).encode(),raw) for i,raw in enumerate(changed)]
+    raw_manifest, raw_pages = n.captured(rows,request)
+    return n.normalize(raw_manifest,raw_pages,request)
+for label, index, change in [
+    ('foreign repository',0,lambda d:d['repository'].update(repository_id='repo.foreign')),
+    ('foreign baseline branch',0,lambda d:d['branch_snapshots']['baseline'].update(branch_node_id='other')),
+    ('wrong current tip',0,lambda d:d['branch_snapshots']['current'].update(commit_id='e'*40)),
+    ('missing middle commit',0,lambda d:d['commits'].pop(1)),
+    ('duplicate commit',0,lambda d:d['commits'].insert(1,d['commits'][1])),
+    ('reordered commits',0,lambda d:d['commits'].reverse()),
+    ('alternate parent',0,lambda d:d['commits'][2].update(parent_commit_id='f'*40)),
+    ('base parent must be null',0,lambda d:d['commits'][0].update(parent_commit_id='f'*40)),
+    ('tree malformed',0,lambda d:d['commits'][1].update(tree_id='invalid')),
+    ('rule addition',2,lambda d:d['current'].append(rule('sixth'))),
+    ('rule deletion',2,lambda d:d['current'].pop()),
+    ('fifth permanent change',2,lambda d: d['current'][1].update(parameters={'minimum':2})),
+    ('unknown raw field',0,lambda d:d.update(provider='caller'))]:
+    refuses(lambda index=index,change=change:changed_page(index,change),label)
+for field, value in [('rule_id','changed'),('target_pattern','other'),('enforcement','evaluate'),('bypass_actors',['actor']),('rule_type','other'),('parameters',{'new':True})]:
+    refuses(lambda field=field,value=value:changed_page(2,lambda d:d['current'][1].update({field:value})),'rule field '+field)
+for before,after in [('b'*64,'c'*64),('b'*64,'b'*64)]:
+    event={'event_id':'event.fixture','event_time':'2026-10-01T00:00:00Z','actor_identity':reference(),
+           'operation':'update','rule_id':'fifth-rule','before_sha256':before,'after_sha256':after}
+    refuses(lambda event=event:changed_page(2,lambda d:d['events'].append(event)),'fifth intermediate state or unexplained jump')
+for index, field, value in [(0,'response_status',500),(0,'page_index',1),(0,'input_cursor','caller'),(0,'output_cursor','missing-next'),(1,'family','unknown')]:
+    damaged=copy.deepcopy(records);cap=copy.deepcopy(capture);cap['pages'][index][field]=value;damaged[0]=(b'capture.json',n.canonical(cap))
+    refuses(lambda damaged=damaged:n.captured(damaged,request),'capture '+field)
+for damaged,label in [(records[:-1],'missing family'),(records+[records[-1]],'duplicate raw page'),([records[0],records[2],records[1],records[3]],'reordered raw page')]:
+    refuses(lambda damaged=damaged:n.captured(damaged,request),label)
+for raw,label in [(frame[:-1],'truncated frame'),(frame+b'x','frame tail'),(bytes([frame[0]^1])+frame[1:],'frame magic')]:
+    refuses(lambda raw=raw:h.frame_read(raw),label)
+for delta,result in [('2026-10-22T23:59:59Z',True),('2026-10-23T00:00:00Z',True),('2026-10-23T00:00:01Z',False),('2026-10-23T00:00:00.000000001Z',False),('2026-09-22T23:59:59Z',False)]:
+    check(n.age_ok('2026-09-23T00:00:00Z',delta)==result,'exact age '+delta)
+check(n.age_ok('2026-09-23T00:00:00.1Z','2026-10-23T00:00:00.1Z'),'equal fractional precision exact age')
+for time in ('2026-02-30T00:00:00Z','2026-10-23T00:00:60Z','2026-10-23T00:00:00+00:00','2026-10-23T00:00:00.Z','x'):
+    refuses(lambda time=time:n.age_ok(time,'2026-10-23T00:00:00Z'),'malformed time '+time)
+for field in sorted(n.REQUEST_FIELDS):
+    damaged=json.loads(request);del damaged['body'][field]
+    refuses(lambda damaged=damaged:n.request(n.canonical(damaged)),'closed request missing '+field)
+damaged=json.loads(request);damaged['body']['nonce']='e'*64
+refuses(lambda:n.request(n.canonical(damaged)),'attempt binds nonce')
+damaged=json.loads(request);damaged['body']['endpoint']='https://caller.invalid'
+refuses(lambda:n.request(n.canonical(damaged)),'caller cannot select endpoint')
+replayed=list(retained);replayed[0]+=b' '
+refuses(lambda:n.normalize(manifest,replayed,request),'raw bytes cannot change behind manifest')
+changed=json.loads(request);changed['body']['nonce']='e'*64;changed['id']=changed['body']['attempt_id']='coverage.'+'e'*64
+refuses(lambda:n.normalize(manifest,retained,n.canonical(changed)),'fresh request rejects prior raw-manifest binding')
+print('coverage normalizer phase PASS:',passed,'; genuine source principal positive NOT RUN')
+# These are data and Git boundary tests. They do not authenticate a controlled-store origin.
+host={'store_id':'store.fixture','principal_uid':12345,'consumer_gid':23456}
+config={'source_id':'source.fixture','operation':n.OPERATION,'coverage_rule_version':n.RULE_VERSION,'queries':n.QUERIES,
+    'source_package_path':'/fixed/package.json','source_package_sha256':n.digest(b'package'),
+    'collector_path':'/fixed/collector','collector_sha256':n.digest(b'collector'),
+    'publisher_identity_ref':reference('publisher_identity'),'accepted_set_path':'/fixed/accepted.json',
+    'accepted_set_sha256':n.digest(b'accepted'),**host}
+config_document={'schema_version':1,'kind':'coverage_source_config','id':'source.fixture','body':config}
+check(n.source_config(n.canonical(config_document),host)['body']['publisher_identity_ref']==reference('publisher_identity'),'config owns publisher expectation')
+for key in config:
+    changed=copy.deepcopy(config_document);del changed['body'][key]
+    refuses(lambda changed=changed:n.source_config(n.canonical(changed),host),'closed source config missing '+key)
+changed=copy.deepcopy(config_document);changed['body']['principal_uid']=1
+refuses(lambda:n.source_config(n.canonical(changed),host),'source principal must match existing host')
+source={'source_id':'source.fixture','host_supervisor_sha256':n.digest(b'supervisor'),
+        'source_package_sha256':config['source_package_sha256'],'collector_sha256':config['collector_sha256'],
+        'normalizer_sha256':n.digest(b'normalizer'),'accepted_source_identity_ref':reference('coverage_source_accepted_identity_set')}
+receipt_body={'operation':n.OPERATION,'version':1,'store_id':host['store_id'],'attempt_id':body['attempt_id'],
+    'request_sha256':n.digest(request),'nonce':nonce,'source_identity':source,'query':n.query(body),
+    'raw_manifest_sha256':n.digest(manifest),'observation_sha256':n.digest(observed),
+    'started_at':'2026-10-23T00:00:00Z','completed_at':'2026-10-23T00:00:01Z','outcome':'complete','effects':['read-forge-metadata']}
+receipt={'schema_version':1,'kind':'forge_coverage_source_receipt','id':body['attempt_id'],'body':receipt_body}
+check(n.receipt(n.canonical(receipt),request,host,source,manifest,observed)==receipt,'complete receipt/request/nonce/query/digest relation')
+for key in receipt_body:
+    changed=copy.deepcopy(receipt);del changed['body'][key]
+    refuses(lambda changed=changed:n.receipt(n.canonical(changed),request,host,source,manifest,observed),'receipt missing '+key)
+for key,value in [('nonce','f'*64),('request_sha256','f'*64),('store_id','store.other'),('attempt_id','other'),('outcome','failed'),('effects',['target-write']),('completed_at','2026-10-22T00:00:00Z')]:
+    changed=copy.deepcopy(receipt);changed['body'][key]=value
+    refuses(lambda changed=changed:n.receipt(n.canonical(changed),request,host,source,manifest,observed),'receipt wrong '+key)
+for key in source:
+    changed=copy.deepcopy(receipt);changed['body']['source_identity'][key]='other'
+    refuses(lambda changed=changed:n.receipt(n.canonical(changed),request,host,source,manifest,observed),'receipt source identity '+key)
+for field in n.query(body):
+    changed=copy.deepcopy(receipt);changed['body']['query'][field]=None
+    refuses(lambda changed=changed:n.receipt(n.canonical(changed),request,host,source,manifest,observed),'receipt query '+field)
+accepted_row={'source_id':config['source_id'],'operation':n.OPERATION,'proof_state':'qualified',
+    'host_supervisor_sha256':source['host_supervisor_sha256'],'source_package_sha256':config['source_package_sha256'],
+    'collector_sha256':config['collector_sha256'],'normalizer_sha256':source['normalizer_sha256']}
+accepted_doc={'schema_version':1,'kind':'coverage_source_accepted_identity_set','id':'source.accepted',
+    'body':{'activation_state':'inactive','identities':[accepted_row]}}
+accepted_config=dict(config,accepted_set_sha256=n.digest(n.canonical(accepted_doc)))
+def accept(doc):
+    raw=n.canonical(doc);cfg=dict(accepted_config,accepted_set_sha256=n.digest(raw))
+    return n.accepted(raw,cfg,source['host_supervisor_sha256'],config['source_package_sha256'],config['collector_sha256'],source['normalizer_sha256'])
+check(accept(accepted_doc)==accepted_doc,'one complete qualified source identity')
+for rows in ([],[accepted_row,accepted_row]):
+    changed=copy.deepcopy(accepted_doc);changed['body']['identities']=rows
+    refuses(lambda changed=changed:accept(changed),'source accepted identity cardinality '+str(len(rows)))
+for key in accepted_row:
+    changed=copy.deepcopy(accepted_doc);changed['body']['identities'][0][key]='foreign'
+    refuses(lambda changed=changed:accept(changed),'accepted identity mismatch '+key)
+# Run the concrete private Git owner and child lifecycle against real objects.
+import os, subprocess, tempfile, time
+reader_module=load('coverage_actual_reader',root/'scope/v1/read-shadow-evidence.py')
+c=reader_module.c
+with tempfile.TemporaryDirectory(prefix='coverage-git-') as area:
+    area=pathlib.Path(area).resolve();repo=area/'source.git'
+    env={'PATH':'/usr/bin:/bin','LANG':'C','LC_ALL':'C','GIT_AUTHOR_NAME':'coverage','GIT_AUTHOR_EMAIL':'coverage@example.invalid',
+         'GIT_COMMITTER_NAME':'coverage','GIT_COMMITTER_EMAIL':'coverage@example.invalid','GIT_AUTHOR_DATE':'2000-01-01T00:00:00Z','GIT_COMMITTER_DATE':'2000-01-01T00:00:00Z'}
+    subprocess.run(['/usr/bin/git','init','-q','--bare',str(repo)],check=True,env=env)
+    def git(args,raw=None):
+        return subprocess.check_output(['/usr/bin/git','--git-dir='+str(repo),*args],input=raw,env=env).decode().strip()
+    def blob(raw):return git(['hash-object','-w','--stdin'],raw)
+    source_blob=blob(b'source\n');evidence_blob=blob(b'own evidence\n')
+    def tree(rows):return git(['mktree'],''.join('%s %s %s\t%s\n'%row for row in rows).encode())
+    ta=tree([('100644','blob',source_blob,'source.txt')]);a=git(['commit-tree',ta],b'A\n')
+    ordinary_blob=blob(b'ordinary\n');tb=tree([('100644','blob',source_blob,'source.txt'),('100644','blob',ordinary_blob,'ordinary.txt')]);b=git(['commit-tree',tb,'-p',a],b'B\n')
+    te=tree([('100644','blob',evidence_blob,'evidence.json')]);th=tree([('100644','blob',source_blob,'source.txt'),('040000','tree',te,'ystack-evidence')]);head=git(['commit-tree',th,'-p',a],b'head\n')
+    tc=tree([('100644','blob',source_blob,'source.txt'),('100644','blob',ordinary_blob,'ordinary.txt'),('040000','tree',te,'ystack-evidence')]);merge=git(['commit-tree',tc,'-p',b,'-p',head],b'C\n')
+    final_blob=blob(b'last\n');tr=tree([('100644','blob',source_blob,'source.txt'),('100644','blob',ordinary_blob,'ordinary.txt'),('100644','blob',final_blob,'last.txt'),('040000','tree',te,'ystack-evidence')]);r=git(['commit-tree',tr,'-p',merge],b'R\n')
+    git(['symbolic-ref','HEAD','refs/heads/main']);git(['update-ref','refs/heads/main',r])
+    revision=lambda oid:{'repository_id':'repo.fixture','hash_algorithm':'sha1','commit_id':oid}
+    publisher={'schema_version':1,'kind':'shadow_publisher_request','id':'publisher.fixture','body':{
+        'branch':'ystack/evidence/fixture','target_repository_id':'repo.fixture','base_revision':revision(a),'candidate_tree_id':th}}
+    write_set=[{'path':'ystack-evidence/evidence.json','mode':'100644','sha256':n.digest(b'own evidence\n'),'git_blob_oid':evidence_blob,'add_only':True}]
+    retained={'shadow-record.json':n.canonical({'body':{'write':{'publisher_request':publisher,'write_set':write_set}}})}
+    pull={'node_id':'pr-node','number':1,'publisher_identity_ref':config['publisher_identity_ref'],
+        'base_commit_id':a,'head_commit_id':head,'merge_commit_id':merge,'merged':True,'merged_at':'2026-10-23T00:00:00Z',
+        'source_branch':'ystack/evidence/fixture','scope_id':'scope.fixture','changed_paths':['ystack-evidence/evidence.json'],
+        'publisher_request_sha256':n.digest(n.canonical(publisher))}
+    observation={'repository':{'repository_id':'repo.fixture','node_id':'repo-node'},'default_branch':{'name':'main','node_id':'branch-node'},
+        'branch_snapshots':{'baseline':{'commit_id':a},'current':{'commit_id':r}},
+        'first_parent_commits':[{'index':i,'commit_id':oid,'parent_commit_id':parent,'tree_id':tree_id} for i,(oid,parent,tree_id) in enumerate([(a,None,ta),(b,a,tb),(merge,b,tc),(r,merge,tr)])],
+        'publisher_pull_requests':[pull]}
+    reader=reader_module._Reader.__new__(reader_module._Reader)
+    reader.owned=[];reader.inputs=[];reader.commands=[];reader.commands_open=True;reader.anchor=None
+    reader.deadline=time.monotonic()+120;reader.scratch=area;reader.captures=area/'captures';reader.captures.mkdir()
+    reader.runtime=area/'runtime';reader.runtime.mkdir();reader.no_hooks=reader.runtime/'no-hooks';reader.no_hooks.mkdir()
+    reader.git_root=repo;reader.scope={'id':'scope.fixture'};reader.scope_body={'coverage':{'coverage_base':revision(a)},'qualified_identity':{'target_revision':revision(r)}}
+    reader.coverage_configuration=type('DataOnlyConfiguration',(),{'normalizer':n,'config':config})()
+    reader.python=reader.hold(pathlib.Path(sys.executable).resolve(),c.EXECUTABLE_LIMIT)
+    reader.consumer=reader.hold(root/'shadow/v1/_consumer.py',c.EXECUTABLE_LIMIT)
+    reader.git_binary=reader.hold(pathlib.Path('/usr/bin/git'),c.EXECUTABLE_LIMIT,hardlinks=True)
+    reader.jq=reader.hold(pathlib.Path('/usr/bin/jq'),c.EXECUTABLE_LIMIT)
+    reader.darwin=c._DarwinChildOwner(reader.python,reader.consumer,reader.deadline,reader)
+    reader.git=c._ReadOnlyGit(str(repo),reader);reader.owned.append(reader.git)
+    try:
+        try:
+            result=reader.coverage_interval(observation,[retained])
+        except c.Refusal as error:
+            trace=error.__traceback__
+            while trace is not None:
+                if trace.tb_frame.f_code.co_name=='_foreground':
+                    print('coverage actual owner stderr',repr(trace.tb_frame.f_locals.get('stderr')),flush=True)
+                trace=trace.tb_next
+            raise
+        check(result['commit_count']==4,'actual held Git/child owner A ordinary B own publisher C R interval')
+        for label,mutate in [('foreign publisher',lambda d:d['publisher_pull_requests'][0].update(publisher_identity_ref=reference('foreign'))),
+            ('wrong publisher base',lambda d:d['publisher_pull_requests'][0].update(base_commit_id=b)),
+            ('wrong publisher head',lambda d:d['publisher_pull_requests'][0].update(head_commit_id=b)),
+            ('wrong publisher merge',lambda d:d['publisher_pull_requests'][0].update(merge_commit_id=b)),
+            ('wrong publisher path',lambda d:d['publisher_pull_requests'][0].update(changed_paths=['other'])),
+            ('wrong publisher scope',lambda d:d['publisher_pull_requests'][0].update(scope_id='scope.foreign')),
+            ('wrong source branch',lambda d:d['publisher_pull_requests'][0].update(source_branch='other')),
+            ('wrong retained request',lambda d:d['publisher_pull_requests'][0].update(publisher_request_sha256='f'*64)),
+            ('other default branch',lambda d:d['default_branch'].update(name='other')),
+            ('second parent interval',lambda d:d['first_parent_commits'][1].update(commit_id=head)),
+            ('missing Git interval',lambda d:d['first_parent_commits'].pop(1))]:
+            damaged=copy.deepcopy(observation);mutate(damaged)
+            try:reader.coverage_interval(damaged,[retained])
+            except c.Refusal:check(True,'actual held Git refuses '+label)
+            else:raise AssertionError(label)
+        check(any(row['role']=='scope-git-inspection' for row in reader.commands),'actual Git commands retained in closed ledger')
+    finally:
+        reader.close()
+print('coverage data and concrete Git tests PASS:',passed,'; controlled-store principal positive NOT RUN')
+PY_COVERAGE_PURE
+}
+if [ "${1:-}" = --coverage-pure ]; then
+  [ "$#" -eq 1 ] || exit 64
+  coverage_python=$(python3 -I -S -B -c 'import os,sys; print(os.path.realpath(sys.executable))')
+  coverage_pure_tests "$coverage_python"
+  exit "$?"
+fi
 
 fail() { /usr/bin/printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 passes=0
@@ -844,6 +1088,7 @@ else
 fi
 python_bin=$("$python_candidate" -I -S -B -c 'import os,sys;print(os.path.realpath(sys.executable))')
 "$python_bin" -I -S -B -c 'import sys;assert sys.version_info >= (3,11)' || fail 'existing Python 3.11+ required'
+coverage_pure_tests "$python_bin" || fail 'coverage data and actual Git tests'
 /bin/ln -s "$python_bin" "$bin/python3"
 "$python_bin" -I -S -B - "$gate_program" "$tmp/environment-reasons.jq" <<'PY_REASON_PROGRAM'
 import pathlib,sys
@@ -10253,6 +10498,8 @@ genuine_writer_identity=''
 genuine_consumer_identity=''
 genuine_group_identity=''
 genuine_base_identity=''
+genuine_coverage_sudoers=''
+genuine_coverage_sudoers_created=false
 genuine_anchor_identity=''
 genuine_libexec_identity=''
 genuine_anchor_parents=()
@@ -10281,6 +10528,32 @@ remove_fixture_directory() {
 }
 cleanup_genuine() {
   local failed=0 index
+  if [ "$genuine_coverage_sudoers_created" = true ]; then
+    /usr/bin/sudo -n -- "$genuine_python" -I -S -B - "$genuine_coverage_sudoers" "$genuine_consumer" "$genuine_writer" "$genuine_python" <<'PY_COVERAGE_SUDOERS_CLEANUP' || return 1
+import os,pwd,stat,sys
+path,consumer,writer,python=sys.argv[1:]
+assert os.getuid()==0 and path.startswith('/etc/sudoers.d/ystack_coverage_')
+uid=pwd.getpwnam(writer).pw_uid
+expected=(consumer+' ALL=(#'+str(uid)+') NOPASSWD:NOSETENV: '+python+' -I -S -B /usr/local/libexec/ystack-sandbox/v1/supervisor/host-supervisor.py coverage-read\n').encode()
+parent=os.open('/etc/sudoers.d',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+try:
+    try:fd=os.open(os.path.basename(path),os.O_RDONLY|os.O_NOFOLLOW,dir_fd=parent)
+    except FileNotFoundError:fd=None
+    if fd is not None:
+        try:
+            state=os.fstat(fd);named=os.stat(os.path.basename(path),dir_fd=parent,follow_symlinks=False)
+            assert stat.S_ISREG(state.st_mode) and state.st_uid==state.st_gid==0 and stat.S_IMODE(state.st_mode)==0o440 and state.st_nlink==1
+            assert (state.st_dev,state.st_ino)==(named.st_dev,named.st_ino) and os.read(fd,len(expected)+1)==expected
+            os.unlink(os.path.basename(path),dir_fd=parent);os.fsync(parent)
+        finally:os.close(fd)
+    try:os.stat(os.path.basename(path),dir_fd=parent,follow_symlinks=False)
+    except FileNotFoundError:pass
+    else:raise AssertionError('coverage sudoers still present')
+finally:os.close(parent)
+print('coverage exact-command sudoers removed and absence verified',flush=True)
+PY_COVERAGE_SUDOERS_CLEANUP
+    genuine_coverage_sudoers_created=false
+  fi
   if [ -n "$genuine_base" ] && [ -e "$genuine_base/runtime-guard-cleanup-uncertain" ]; then
     /usr/bin/printf 'genuine-cleanup: FAIL; owned command/helper cleanup pending; preserving fixture objects\n' >&2
     return 1
@@ -10379,6 +10652,30 @@ setup_genuine_linux() {
     [[ " $actual_groups " = *" $fixture_gid "* ]] || fail 'actual principal membership'
   scope_stage_points[8]=$SECONDS
   setup_genuine_paths
+  genuine_coverage_sudoers="/etc/sudoers.d/ystack_coverage_$token"
+  [ ! -e "$genuine_coverage_sudoers" ] && [ ! -L "$genuine_coverage_sudoers" ] || fail 'existing coverage sudoers file'
+  genuine_coverage_sudoers_created=true
+  /usr/bin/sudo -n "$genuine_python" -I -S -B - "$genuine_coverage_sudoers" "$genuine_consumer" "$writer_uid" "$genuine_python" <<'PY_COVERAGE_SUDOERS' || fail 'coverage sudoers exact-command setup'
+import os,stat,subprocess,sys
+path,consumer,uid,python=sys.argv[1:]
+assert os.getuid()==0 and path.startswith('/etc/sudoers.d/ystack_coverage_')
+assert uid.isdigit() and int(uid)>0 and consumer.startswith('yscc_')
+assert os.path.realpath(python)==python and all(char.isalnum() or char in '/._-' for char in python)
+command=python+' -I -S -B /usr/local/libexec/ystack-sandbox/v1/supervisor/host-supervisor.py coverage-read'
+raw=(consumer+' ALL=(#'+uid+') NOPASSWD:NOSETENV: '+command+'\n').encode()
+parent=os.open('/etc/sudoers.d',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+fd=None
+try:
+    state=os.fstat(parent);assert state.st_uid==0 and not state.st_mode&0o022
+    fd=os.open(os.path.basename(path),os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=parent)
+    assert os.write(fd,raw)==len(raw)
+    os.fchown(fd,0,0);os.fchmod(fd,0o440);os.fsync(fd);os.fsync(parent)
+finally:
+    if fd is not None:os.close(fd)
+    os.close(parent)
+subprocess.run(['/usr/sbin/visudo','-cf',path],check=True)
+print('coverage exact-command sudoers created and visudo validated',flush=True)
+PY_COVERAGE_SUDOERS
 }
 
 genuine_mac_stdin_prelude=$(/bin/cat <<'PY_MAC_STDIN_PRELUDE'
@@ -13932,7 +14229,9 @@ print(json.dumps({'genuine_scope_contract': 'PASS', 'synthetic_runtime_facts': T
 
 readonly_scope_raw=(doc_root/'scope.json').read_bytes()
 fixed_scope=json.loads(readonly_scope_raw)
-fixed_scope['body'].update(workflow_id='workflow.shadow-evidence-commit',task_class='task.commit-shadow-evidence')
+fixed_scope['body'].update(workflow_id='workflow.shadow-evidence-commit',task_class='task.commit-shadow-evidence',
+    coverage={'coverage_base':identity['body']['target_revision'],'coverage_rule_version':'scope-coverage.v1',
+              'qualifying_shadow_record_refs':[e.document_ref(shadow_record)]})
 try:
     put(doc_root/'scope.json',fixed_scope)
     fixed_nochange=json.loads(run(scope_argv))['body']['evidence']['shadow_bundle_facts']
@@ -13945,8 +14244,8 @@ try:
         refuse(scope_argv,'classification-partial-'+key,b'E_SHAPE')
         mixed=json.loads(canonical(fixed_scope));mixed['body'][key]=json.loads(readonly_scope_raw)['body'][key]
         put(doc_root/'scope.json',mixed)
-        assert run([jq,'-r','-f',package/'scope/v1/workflow-scope.jq',doc_root/'scope.json'])==b''
-        refuse(scope_argv,'classification-mixed-'+key,b'E_RELATION')
+        assert run([jq,'-r','-f',package/'scope/v1/workflow-scope.jq',doc_root/'scope.json'])==b'"E_SHAPE"\n'
+        refuse(scope_argv,'classification-mixed-'+key,b'E_SHAPE')
 finally:
     put(doc_root/'scope.json',readonly_scope_raw)
 assert (doc_root/'scope.json').read_bytes()==readonly_scope_raw
@@ -14097,7 +14396,9 @@ for root, dirs, names in os.walk(source):
 sibling_scope = json.loads(run(scope_argv))
 assert sibling_scope['body']['evidence']['shadow_bundle_facts'][0]['authentication']['state'] == 'authenticated'
 scope_doc['body'].update(workflow_id='workflow.shadow-evidence-commit', task_class='task.commit-shadow-evidence',
-    allowed_paths=paths, qualified_identity=write_identity['body'], shadow_evidence_refs=[e.document_ref(outer_record)])
+    allowed_paths=paths, qualified_identity=write_identity['body'], shadow_evidence_refs=[e.document_ref(outer_record)],
+    coverage={'coverage_base':write_identity['body']['target_revision'],'coverage_rule_version':'scope-coverage.v1',
+              'qualifying_shadow_record_refs':[e.document_ref(outer_record)]})
 for name in ('risk','duty'):
     gate = json.loads((doc_root / (name+'.json')).read_bytes())
     gate['body']['stage']['request_ref'] = write_identity['body']['stage_request_ref']
@@ -14710,6 +15011,668 @@ ack_path.unlink()
 assert json.loads(run(scope_argv))['body']['evidence']['shadow_bundle_facts'][0]['authentication']['state']=='authenticated'
 print(json.dumps({'through_use_controls':'PASS','sibling_before':'PASS','sibling_during':{'public':'E_RUNTIME','reader':'E_STALE'},
     'original_timing_unchanged':True,'watched_cancellation':'E_RUNTIME'},sort_keys=True),flush=True)
+
+
+def build_coverage_revision(commit, tree, label, terminated, template_files, template_record):
+    work = base / ('coverage-work-' + label)
+    work.mkdir(mode=0o700)
+    coverage_terminated = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(terminated))
+    coverage_admitted = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(terminated - 1))
+    coverage_prompt_refs = json.loads(template_record)['body']['qualified_identity']['prompt_refs']
+    run(['/bin/bash',package/'scripts/test/local-git-materializer-fixtures.sh','build',work/'built',jq,'sha1',commit,tree])
+    original=json.loads((work/'built/input.json').read_bytes())
+    for row in original['payloads']:
+     if row['input_id']=='input.producer-patch':row['data']=''
+    for row in original['trust_context']['verified_payloads']:
+     if row['input_id']=='input.producer-patch':row['content']['data']='';row['sha256']=sha(b'')
+    for row in original['stage_request']['content']['body']['inputs']:
+     if row['input_id']=='input.producer-patch':row['value']['value']['value']['sha256']=sha(b'')
+    original['stage_request']['sha256']=sha(canonical(original['stage_request']['content']))
+    generation=json.loads((package/'core/v2/generation-registry.json').read_bytes())[-1]['generation_id'];modules=package/'core/v2/generations'/generation/'modules'
+    def component(relative,args,raw=None,role=None):return run(['/bin/bash','-p',package/relative,*args],raw,role,package/relative)
+    def materialize(doc,label):
+     path=put(work/(label+'-input.json'),doc);candidate=work/(label+'-candidate');scratch=work/(label+'-materializer');candidate.mkdir(mode=0o700);scratch.mkdir(mode=0o700)
+     raw=component('adapters/local-git-materializer/v1/materialize.sh',['materialize',path,'fixture.target',source,candidate,scratch,helper,jq],role='materialization');response=json.loads(raw)
+     receipt=json.loads(response['payloads'][0]['data']);print(json.dumps({'candidate_directory':str(candidate),'receipt_candidate':receipt['candidate']},sort_keys=True),flush=True)
+     return path,raw,candidate
+    prior_path,prior_raw,_=materialize(original,'prior');prior=json.loads(prior_raw)
+    prior_request=put(work/'prior-request.json',original['stage_request']['content']);prior_profile=put(work/'prior-profile.json',original['resolved_profile']['content']);prior_result=put(work/'prior-result.json',prior['stage_result'])
+    duty_raw=component('control/v1/evaluate-duty.sh',['evaluate',package/'control/v1/control-policy-set-sandbox-bound.json',prior_request,prior_profile,prior_result]);duty=json.loads(duty_raw);assert duty['body']['verdict']=='satisfied'
+    incident = json.loads(template_files['incident.json'])
+    incident['id'] = 'incident.coverage-' + label
+    incident['body']['git_revision_ref']['commit_id'] = commit
+    instruction = e.make_instruction(incident)
+    policy=json.loads((package/'control/v1/sandbox-bound-policy.json').read_bytes());claim={'schema_version':1,'kind':'execution_environment_claim','id':environment,'body':{key:policy['body'][key] for key in ('environment','filesystem','isolation','limits','network','resources','sensitive_material')}}
+    claim['body'].update(declaration_status='complete',duty_evaluation_ref=e.document_ref(duty_raw),effects={'external_writes':False,'target_writes':False},execution_identity={'adapter_instance_id':'instance.verifier','execution_boundary_id':'boundary.verifier','principal_id':'principal.verifier','role':'verifier'},policy_set_ref=e.document_ref((package/'control/v1/control-policy-set-sandbox-bound.json').read_bytes()),stage_result_ref=duty['body']['stage']['result_ref'],tools=[{key:value for key,value in policy['body']['tools'][0].items() if key!='identity_binding'}|{'sha256':sha(verifier.read_bytes())}])
+    claim_raw=canonical(claim);observation={'schema_version':1,'kind':'sandbox_verifier_observation','id':'sandbox.observation.verifier','body':{'environment_id':environment,'environment_entry_sha256':sha(canonical(entry)),'target_repository_id':'fixture.target','accepted_set_sha256':sha(canonical(accepted)),'verifier_sha256':sha(verifier.read_bytes())}}
+    put(work/'duty.json',duty_raw);put(work/'claim.json',claim_raw);put(work/'observation.json',observation)
+    evaluation_raw=component('control/v1/evaluate-bound-sandbox.sh',['evaluate',work/'duty.json',work/'claim.json',work/'observation.json'],role='sandbox-bound-evaluation');assert json.loads(evaluation_raw)['body']['verdict']=='satisfied'
+    q=json.loads(canonical(original));q['stage_request']['content']['body']['environment_ref']={'environment_id':environment,'fingerprint_sha256':sha(claim_raw)};q['stage_request']['sha256']=sha(canonical(q['stage_request']['content']))
+    q_path, response_raw, candidate_root = materialize(q, 'consumer')
+    response_path = put(work / 'response.json', response_raw)
+    protocol = package / 'adapters/local-git-materializer/v1/protocol.jq'
+    run([jq, '-L', modules, '-e', '--arg', 'command', 'validate-input', '-f', protocol, q_path],
+        role='materializer-input-validation', component=protocol)
+    response_check = put(work / 'response-check.json', e.response_check(q, response_raw))
+    run([jq, '-L', modules, '-e', '--arg', 'command', 'validate-response', '-f', protocol, response_check],
+        role='materializer-response-validation', component=protocol)
+    prep, scratch = work / 'preparation', work / 'preparation-scratch'
+    scratch.mkdir(mode=0o700)
+    preparation_source = package / 'preparation/v1/prepare-candidate.py'
+    common = ['--input', q_path, '--input-sha256', sha(q_path.read_bytes()),
+              '--response', response_path, '--response-sha256', sha(response_raw),
+              '--candidate-repository', candidate_root / 'repository.git', '--output', prep,
+              '--scratch', scratch, '--jq', jq]
+    run([sys.executable, '-I', '-S', '-B', preparation_source, 'prepare', *common],
+        role='candidate-preparation', component=preparation_source)
+    for path in scratch.iterdir():
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+    run([sys.executable, '-I', '-S', '-B', preparation_source, 'inspect', *common],
+        role='candidate-inspection', component=preparation_source)
+    record_raw = (prep / 'record.json').read_bytes()
+    manifest_raw = (prep / 'manifest.json').read_bytes()
+    manifest = json.loads(manifest_raw)
+    identity = {'schema_version': 1, 'kind': 'qualified_identity', 'id': 'identity.scope-genuine',
+                'body': {'adapter_config_refs': [{'content_id': 'producer-config',
+                          'media_type': 'application/json', 'sha256': sha(b'fixed producer config')}],
+                         'model_request': {'effort_id': 'high', 'model_id': 'model.fixture',
+                                           'provider_id': 'provider.fixture'},
+                         'prompt_refs': [{'location': {'kind': 'path', 'value': 'source.txt'},
+                           'mode': '100644', 'object_id': blob, 'object_type': 'blob',
+                           'revision': incident['body']['git_revision_ref']}],
+                         'resolved_profile_ref': e.pair_ref(q['resolved_profile']), 'skill_refs': [],
+                         'stage_request_ref': e.pair_ref(q['stage_request']),
+                         'target_revision': incident['body']['git_revision_ref'],
+                         'verification_instructions_ref': {'content_id': 'verification-instructions',
+                           'media_type': 'text/plain', 'sha256': sha(instruction)}}}
+    identity['body']['prompt_refs'] = coverage_prompt_refs
+    identity_raw = canonical(identity)
+    run([jq, '-L', modules, '-r', '--arg', 'repository_id', 'fixture.target', '--arg',
+         'hash_algorithm', 'sha1', '--arg', 'commit_id', commit, '-f',
+         package / 'shadow/v1/qualified-identity.jq'], identity_raw,
+        role='qualified-identity-validation', component=package / 'shadow/v1/qualified-identity.jq')
+    e.validate_input_relations(q, incident, claim, identity, instruction)
+    component('shadow/v1/validate-incident.sh', ['validate', put(work / 'incident.json', incident)],
+              role='incident-validation')
+    from types import SimpleNamespace
+    facts_anchor = SimpleNamespace(config=config['body'], registry=c._parse_registry(canonical(registry)),
+        installed={role: (pathlib.Path(path).read_bytes(), sha(pathlib.Path(path).read_bytes()))
+                   for role, path in installed.items()})
+    attempt_id = 'attempt.coverage-' + label + '-first'
+    request = {'id': attempt_id, 'body': {'attempt_id': attempt_id}}
+    launch_raw, expectation_raw = e.make_launch(facts_anchor, request, canonical(incident),
+        evaluation_raw, canonical(observation), record_raw, manifest_raw, instruction)
+    launch = json.loads(launch_raw)
+    expectation = json.loads(expectation_raw)
+    result_raw = canonical({'schema_version': 1, 'kind': 'file_digest_verifier_payload',
+                           'id': 'file-digest-payload', 'body': {
+                             'check': {'path': 'source.txt', 'expected_sha256': sha(content)},
+                             'instruction_sha256': sha(instruction),
+                             'observed': {'sha256': sha(content), 'size_bytes': len(content)},
+                             'outcome': 'match', 'reason_id': 'file.match'}})
+    evidence_raw = canonical({'schema_version': 1, 'kind': 'sandbox_evidence_manifest',
+                              'id': 'evidence-manifest', 'body': {'files': [{
+                                'name_hex': b'file-digest-result.json'.hex(),
+                                'sha256': sha(result_raw), 'size_bytes': len(result_raw)}]}})
+    bounds = {'cpu_time_ms': (30000, 1000, 1, 'guest-supervisor'),
+              'wall_time_ms': (60000, 2000, 1, 'host-supervisor'),
+              'memory_bytes': (536870912, 1048576, 4096, 'guest-supervisor'),
+              'output_bytes': (10485760, len(result_raw), 1, 'guest-supervisor'),
+              'process_count': (32, 1, 1, 'guest-supervisor'),
+              'scratch_bytes': (16777216, 4096, 4096, 'guest-supervisor')}
+    limits = {key: {'bound': bound, 'observed': observed, 'resolution': resolution,
+                   'observation': 'complete', 'enforcement': 'hard', 'reached': False,
+                   'mechanism_id': mechanisms[key], 'observer': observer}
+              for key, (bound, observed, resolution, observer) in bounds.items()}
+    receipt_raw = canonical({'schema_version': 1, 'kind': 'sandbox_enforcement_receipt',
+        'id': 'receipt.' + sha(launch_raw), 'body': {
+            'contract_version': 'v1', 'origin': {'producer_role': 'host-supervisor',
+              'store_id': config['body']['store_id'], 'accepted_set_sha256': sha(canonical(accepted))},
+            'attempt': expectation['body']['attempt'], 'control': launch['body']['control'],
+            'subject': launch['body']['subject'],
+            'identities': {key: {'state': 'observed', 'sha256': value} for key, value in identities.items()},
+            'limits': limits,
+            'teardown': {'state': 'confirmed', 'tree_terminated': True, 'storage_destroyed': True},
+            'lifecycle': {'admission': 'admitted', 'runtime': 'completed', 'control_deadline': 'met'},
+            'payload': {'stdout_sha256': sha(b''), 'stderr_sha256': sha(b''),
+              'evidence_manifest_sha256': sha(evidence_raw), 'exit_state': 'exited', 'exit_code': 0},
+            'timing': {'admitted_at': coverage_admitted, 'terminated_at': coverage_terminated},
+            'outcome': {'verdict': 'satisfied', 'reason_ids': ['enforcement.satisfied']}}})
+    put(base / 'storage-input.json', {'attempt_id': attempt_id, 'receipt_utf8': receipt_raw.decode(),
+        'stdout_utf8': '', 'stderr_utf8': '', 'manifest_utf8': evidence_raw.decode(),
+        'evidence_utf8': result_raw.decode()})
+    run(['/usr/bin/sudo', '-n', '-u', writer, '--', sys.executable, '-I', '-S', '-B',
+         base / 'genuine-writer.py'])
+    origin_raw = run(['/usr/bin/sudo', '-n', '-u', consumer, '--', sys.executable,
+                      '-I', '-S', '-B', base / 'genuine-reader.py', attempt_id])
+    origin = json.loads(origin_raw)
+    put(work / 'receipt.json', receipt_raw)
+    put(work / 'expectation.json', expectation_raw)
+    put(work / 'evaluation.json', evaluation_raw)
+    checker_raw = component('enforcement/v1/check-sandbox-receipt.sh',
+        ['check-bound', work / 'receipt.json', work / 'expectation.json', work / 'evaluation.json',
+         work / 'observation.json'], role='sandbox-receipt-check')
+    checker = json.loads(checker_raw)
+    assert checker['body']['check_verdict'] == 'valid' and checker['body']['enforcement_verdict'] == 'satisfied'
+    trace_raw = e.trace_ledger(incident, attempt_id, environment, 'no-change', 'tool.verifier',
+                               evaluation_raw, checker_raw)
+    trace_path = put(work / 'trace.json', trace_raw)
+    trace_receipt = component('telemetry/v1/validate-trace-ledger.sh',
+        ['validate', incident['id'], attempt_id, trace_path], role='trace-validation')
+    provenance = canonical({'schema_version': 1, 'kind': 'shadow_consumer_provenance', 'id': attempt_id,
+        'body': {'activation_state': 'inactive', 'authority': 'none',
+          'instruction_utf8': instruction.decode(), 'instruction_sha256': sha(instruction),
+          'observation': observation, 'observation_sha256': sha(canonical(observation)),
+          'helper_source_sha256': sha((package / c.HELPER_SOURCE).read_bytes()),
+          'helper_build_record_sha256': sha(canonical({'compiler': '/usr/bin/cc', 'fixture_only': True,
+               'helper_source_sha256': sha((package / c.HELPER_SOURCE).read_bytes()),
+               'helper_executable_sha256': sha(helper.read_bytes())})),
+          'helper_executable_sha256': sha(helper.read_bytes()),
+          'consumer_source_sha256': sha((package / 'shadow/v1/enforced-reproduction.py').read_bytes()),
+          'python_sha256': sha(pathlib.Path(sys.executable).read_bytes()), 'jq_sha256': sha(jq.read_bytes()),
+          'native_release': native, 'commands': commands}})
+    material_receipt = json.loads(json.loads(response_raw)['payloads'][0]['data'])
+    stage_result = json.loads(response_raw)['stage_result']
+    content_ref = lambda name, media, raw: {'content_id': name, 'media_type': media, 'sha256': sha(raw)}
+    shadow_record = canonical({'schema_version': 1, 'kind': 'shadow_reproduction_record',
+     'id': incident['id'], 'body': {
+      'record_form': 'enforced-reproduction.v1', 'activation_state': 'inactive', 'authority': 'none',
+      'deploy_authority': 'none', 'effects': ['caller-disposable-candidate-repository'],
+      'evaluation_mode': 'observation-only', 'shadow': True,
+      'qualification': {'state': 'unavailable', 'reason_id': 'shadow.unqualified'},
+      'outcome': 'no-change', 'reason_id': 'check.passed-at-revision',
+      'observed_at': incident['body']['observed_at'], 'target_repository_id': 'fixture.target',
+      'git_revision_ref': incident['body']['git_revision_ref'], 'qualified_identity': identity['body'],
+      'qualified_identity_ref': content_ref('shadow-qualified-identity', 'application/vnd.ystack.qualified-identity+json', identity_raw),
+      'incident_ref': content_ref('shadow-incident-record', 'application/vnd.ystack.shadow-incident-record+json', canonical(incident)),
+      'environment': {'environment_id': environment,
+        'claim_ref': content_ref('shadow-environment-claim', 'application/vnd.ystack.control-execution-environment-claim+json', claim_raw),
+        'registry_ref': content_ref('shadow-environment-registry', 'application/vnd.ystack.shadow-environment-registry+json', canonical(registry)),
+        'evaluation': {'state': 'present', 'value': {'verdict': 'satisfied',
+          'reason_ids': json.loads(evaluation_raw)['body']['reason_ids'],
+          'evaluation_ref': content_ref('shadow-sandbox-evaluation', 'application/vnd.ystack.control-evaluation+json', evaluation_raw)}}},
+      'materialization': {'state': 'present', 'value': {'adapter_id': 'adapter.local-git-materializer.v1',
+        'outcome': 'no-change', 'source': material_receipt['source'], 'candidate': material_receipt['candidate'],
+        'stage_result_ref': e.document_ref(canonical(stage_result))}},
+      'check': {'failing_check': incident['body']['failing_check'], 'execution': {'state': 'present',
+        'value': {'tool_id': 'tool.verifier', 'observed_sha256': sha(content), 'matches_expected': True}}},
+      'sandbox': {'state': 'satisfied', 'reason_id': 'shadow.sandbox-satisfied',
+        'launch_request_ref': e.document_ref(launch_raw), 'expectation_ref': e.document_ref(expectation_raw),
+        'receipt_ref': e.document_ref(receipt_raw), 'check_ref': e.document_ref(checker_raw),
+        'origin': {'state': 'authenticated', 'store_id': config['body']['store_id'],
+           'method': 'controlled-storage.v1', 'observation_sha256': sha(origin_raw)},
+        'payload_ref': content_ref('file-digest-result', 'application/json', result_raw)},
+      'producer_invocations': 0, 'consumer_provenance_ref': e.document_ref(provenance),
+      'trace_ledger_ref': content_ref('shadow-trace-ledger', 'application/vnd.ystack.telemetry-trace-ledger+json', trace_raw)}})
+    files = {'incident.json': canonical(incident), 'claim.json': claim_raw, 'duty-evaluation.json': duty_raw,
+     'materialization-input.json': q_path.read_bytes(), 'materialization-response.json': response_raw,
+     'qualified-identity.json': identity_raw, 'preparation-record.json': record_raw,
+     'preparation-manifest.json': manifest_raw, 'sandbox-evaluation.json': evaluation_raw,
+     'sandbox-request.json': launch_raw, 'sandbox-expectation.json': expectation_raw,
+     'sandbox-receipt.json': receipt_raw, 'sandbox-check.json': checker_raw,
+     'origin-observation.json': origin_raw, 'payload-stdout.txt': b'', 'payload-stderr.txt': b'',
+     'evidence-manifest.json': evidence_raw, 'file-digest-result.json': result_raw,
+     'consumer-provenance.json': provenance, 'shadow-record.json': shadow_record,
+     'trace-ledger.json': trace_raw, 'trace-receipt.json': trace_receipt}
+    for name, role in {'evaluator-driver.txt':'evaluator_driver', 'evaluator-program.txt':'evaluator_program',
+                      'policy.json':'control_policy', 'decision.json':'control_decision',
+                      'policy-set.json':'control_policy_set', 'accepted-identities.json':'accepted_set',
+                      'registry.json':'registry'}.items():
+        files[name] = pathlib.Path(installed[role]).read_bytes()
+    assert set(files) == set(e.EVIDENCE_NAMES)
+    marker = canonical({'schema_version': 1, 'kind': 'shadow_consumer_bundle',
+        'id': 'bundle.' + sha(files['incident.json'])[:32], 'body': {
+          'activation_state': 'inactive', 'record_form': 'enforced-reproduction.v1',
+          'incident_sha256': sha(files['incident.json']), 'target_revision': incident['body']['git_revision_ref'],
+          'files': [{'name': name, 'size_bytes': len(files[name]), 'sha256': sha(files[name])}
+                    for name in sorted(files)]}})
+    bundle = base / 'bundles' / sha(shadow_record)
+    bundle.mkdir(mode=0o755)
+    bundle.chmod(0o755)
+    for name, raw in files.items():
+        put(bundle / name, raw)
+    put(bundle / 'bundle.json', marker)
+    print(json.dumps({'genuine_enforced_bundle': str(bundle), 'record_sha256': sha(shadow_record),
+                      'actual_storage_writer_uid': uid, 'actual_consumer_uid': consumer_uid,
+                      'synthetic_runtime_facts': True, 'vm_executed': False}, sort_keys=True), flush=True)
+
+    frozen = dict(files, **{'bundle.json': marker})
+    seed_dir = work / 'seed'
+    seed_dir.mkdir(mode=0o700)
+    seed_raw = component('maintenance/v1/incident-to-eval.sh',
+        ['convert', put(work / 'frozen-incident.json', frozen['incident.json']),
+         put(work / 'frozen-record.json', frozen['shadow-record.json']), seed_dir],
+        role='write-seed-conversion')
+    assert [path.name for path in seed_dir.iterdir()] == ['eval-seed-case-stale-moved-artifacts.json']
+    assert (seed_dir / 'eval-seed-case-stale-moved-artifacts.json').read_bytes() == seed_raw
+    prefix = 'ystack-evidence/' + incident['id'] + '/'
+    write_files = {prefix + name: raw for name, raw in frozen.items()}
+    write_files[prefix + 'eval-seed.json'] = seed_raw
+    write_files[prefix + 'README.md'] = b'Shadow evidence. Publication is withheld.\n'
+    paths = sorted(write_files)
+    patch_raw, write_set = c.evidence_patch(write_files, 'sha1')
+    assert len(write_set) == 32
+    write_attempt = 'attempt.coverage-' + label + '-write'
+    contract_raw = c.write_contract(paths)
+    contract_path = put(work / 'write-contract.json', contract_raw)
+    patch_path = put(work / 'write.patch', patch_raw)
+    metadata = {key: sha(raw) for key, raw in c.WRITE_TEXTS.items()}
+    metadata.update(contract=sha(contract_raw), patch=sha(patch_raw), allowed_paths=paths,
+        attempt_id=write_attempt, suffix=sha(write_attempt.encode())[:32],
+        environment_id=environment, claim_sha256=sha(claim_raw))
+    builder = package / 'shadow/v1/write-materialization-input.jq'
+    def build_phase(phase, input_path, metadata_path):
+        return run([jq, '-L', modules, '-S', '-c', '--arg', 'phase', phase,
+            '--rawfile', 'contract', contract_path, '--rawfile', 'patch', patch_path,
+            '--slurpfile', 'metadata', metadata_path, '-f', builder, input_path],
+            role='write-materialization-input', component=builder, limit=8*1024*1024)
+    first_raw = build_phase('stage-request', q_path, put(work / 'write-metadata-first.json', metadata))
+    first = json.loads(first_raw)
+    assert canonical(first['original']) == frozen['materialization-input.json']
+    metadata['stage_request_sha256'] = sha(canonical(first['stage_request']))
+    write_input_raw = build_phase('final-input', put(work / 'write-first.json', first_raw),
+        put(work / 'write-metadata-final.json', metadata))
+    write_input = json.loads(write_input_raw)
+    write_input_path, write_response_raw, write_candidate = materialize(write_input, 'write')
+    assert write_input_path.read_bytes() == write_input_raw
+    write_response_path = put(work / 'write-response.json', write_response_raw)
+    run([jq, '-L', modules, '-e', '--arg', 'command', 'validate-input', '-f', protocol, write_input_path],
+        role='materializer-input-validation', component=protocol)
+    write_check = put(work / 'write-response-check.json', e.response_check(write_input, write_response_raw))
+    run([jq, '-L', modules, '-e', '--arg', 'command', 'validate-response', '-f', protocol, write_check],
+        role='materializer-response-validation', component=protocol)
+    write_prep, write_scratch = work / 'write-preparation', work / 'write-preparation-scratch'
+    write_scratch.mkdir(mode=0o700)
+    write_common = ['--input', write_input_path, '--input-sha256', sha(write_input_raw),
+        '--response', write_response_path, '--response-sha256', sha(write_response_raw),
+        '--candidate-repository', write_candidate / 'repository.git', '--output', write_prep,
+        '--scratch', write_scratch, '--jq', jq]
+    run([sys.executable, '-I', '-S', '-B', preparation_source, 'prepare', *write_common],
+        role='candidate-preparation', component=preparation_source)
+    for path in write_scratch.iterdir():
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+    run([sys.executable, '-I', '-S', '-B', preparation_source, 'inspect', *write_common],
+        role='candidate-inspection', component=preparation_source)
+    write_record_raw = (write_prep / 'record.json').read_bytes()
+    write_manifest_raw = (write_prep / 'manifest.json').read_bytes()
+    write_identity = json.loads(identity_raw)
+    write_identity['body']['stage_request_ref'] = e.pair_ref(write_input['stage_request'])
+    write_identity_raw = canonical(write_identity)
+    launch_raw, expectation_raw = e.make_launch(facts_anchor,
+        {'id': write_attempt, 'body': {'attempt_id': write_attempt}}, canonical(incident),
+        evaluation_raw, canonical(observation), write_record_raw, write_manifest_raw, instruction)
+    launch, expectation = json.loads(launch_raw), json.loads(expectation_raw)
+    write_receipt = json.loads(receipt_raw)
+    write_receipt['id'] = 'receipt.' + sha(launch_raw)
+    write_receipt['body'].update(attempt=expectation['body']['attempt'], control=launch['body']['control'],
+        subject=launch['body']['subject'], timing={'admitted_at':coverage_admitted,'terminated_at':coverage_terminated})
+    write_receipt_raw = canonical(write_receipt)
+    put(base / 'storage-input.json', {'attempt_id': write_attempt, 'receipt_utf8': write_receipt_raw.decode(),
+        'stdout_utf8': '', 'stderr_utf8': '', 'manifest_utf8': evidence_raw.decode(),
+        'evidence_utf8': result_raw.decode()})
+    run(['/usr/bin/sudo', '-n', '-u', writer, '--', sys.executable, '-I', '-S', '-B',
+         base / 'genuine-writer.py'])
+    write_origin_raw = run(['/usr/bin/sudo', '-n', '-u', consumer, '--', sys.executable,
+        '-I', '-S', '-B', base / 'genuine-reader.py', write_attempt])
+    write_checker_raw = component('enforcement/v1/check-sandbox-receipt.sh',
+        ['check-bound', put(work / 'write-receipt.json', write_receipt_raw),
+         put(work / 'write-expectation.json', expectation_raw), work / 'evaluation.json',
+         work / 'observation.json'], role='sandbox-receipt-check')
+    assert json.loads(write_checker_raw)['body']['enforcement_verdict'] == 'satisfied'
+    write_trace_raw = e.trace_ledger(incident, write_attempt, environment, 'no-change', 'tool.verifier',
+        evaluation_raw, write_checker_raw)
+    write_trace_receipt = component('telemetry/v1/validate-trace-ledger.sh',
+        ['validate', incident['id'], write_attempt, put(work / 'write-trace.json', write_trace_raw)],
+        role='trace-validation')
+    write_provenance = json.loads(provenance)
+    write_provenance['id'] = write_attempt
+    write_provenance['body'].update(consumer_source_sha256=sha((package / 'shadow/v1/write-shadow.py').read_bytes()),
+                                     commands=commands)
+    write_provenance_raw = canonical(write_provenance)
+    write_material_receipt = json.loads(json.loads(write_response_raw)['payloads'][0]['data'])
+    write_tree = write_material_receipt['candidate']['tree_id']
+    publisher, publisher_body = w._publisher(incident, write_tree)
+    write_section = {'bundle_ref': w._bundle_ref(frozen['bundle.json']), 'scope_id': scope_doc['id'],
+        'workflow_id': 'workflow.shadow-evidence-commit', 'task_class': 'task.commit-shadow-evidence',
+        'write_set': write_set, 'publisher_request': publisher,
+        'admission': {'state':'checked', 'effect':'none', 'request_sha256':sha(canonical(publisher)),
+                      'write_set_sha256':sha(canonical(write_set))},
+        'publication': {'state':'withheld','reason_id':'shadow.write-not-published'},
+        'post_write_verification': {'target_revision':incident['body']['git_revision_ref'],
+                                   'candidate_tree_id':write_tree, 'write_set':write_set}}
+    outer_files = dict(files)
+    outer_files.update({'materialization-input.json':write_input_raw, 'materialization-response.json':write_response_raw,
+        'preparation-record.json':write_record_raw, 'preparation-manifest.json':write_manifest_raw,
+        'qualified-identity.json':write_identity_raw, 'sandbox-request.json':launch_raw,
+        'sandbox-expectation.json':expectation_raw, 'sandbox-receipt.json':write_receipt_raw,
+        'sandbox-check.json':write_checker_raw, 'origin-observation.json':write_origin_raw,
+        'trace-ledger.json':write_trace_raw, 'trace-receipt.json':write_trace_receipt,
+        'consumer-provenance.json':write_provenance_raw, 'publisher-body.txt':publisher_body})
+    materialized = SimpleNamespace(response_raw=write_response_raw, evaluation_raw=evaluation_raw,
+                                   qualified_identity_raw=write_identity_raw)
+    outer_record = w._outer_record(SimpleNamespace(anchor=facts_anchor), materialized, frozen,
+                                  outer_files, write_section, write_provenance_raw, write_trace_raw)
+    outer_files['shadow-record.json'] = outer_record
+    w._record_relations(outer_files, incident, json.loads(result_raw)['body'], write_origin_raw,
+                        facts_anchor, write_section)
+    outer_marker = canonical({'schema_version':1,'kind':'shadow_consumer_bundle',
+        'id':'bundle.'+sha(frozen['incident.json'])[:32], 'body':{
+          'activation_state':'inactive', 'record_form':'withheld-write.v1',
+          'incident_sha256':sha(frozen['incident.json']), 'target_revision':incident['body']['git_revision_ref'],
+          'files':[{'name':name,'size_bytes':len(outer_files[name]),'sha256':sha(outer_files[name])}
+                   for name in sorted(outer_files)]}})
+    outer_bundle = base / 'snapshots' / sha(outer_record)
+    outer_bundle.mkdir(mode=0o755)
+    outer_bundle.chmod(0o755)
+    for name, raw in outer_files.items():
+        put(outer_bundle / name, raw)
+    put(outer_bundle / 'bundle.json', outer_marker)
+    shutil.copytree(write_candidate / 'repository.git/objects', source / 'objects', dirs_exist_ok=True)
+    for root, dirs, names in os.walk(source):
+        pathlib.Path(root).chmod(0o755)
+        for name in names:
+            (pathlib.Path(root) / name).chmod(0o444)
+    bundle.rename(base / 'snapshots' / bundle.name)
+    return {'files':outer_files, 'marker':outer_marker, 'record':outer_record,
+            'bundle':outer_bundle, 'candidate':write_material_receipt['candidate'],
+            'publisher':publisher, 'paths':paths, 'identity':write_identity['body'],
+            'duty':duty, 'claim':claim, 'label':label, 'terminated_at':coverage_terminated}
+
+coverage_n = load('fixture_actual_coverage_normalizer', package/'sandbox/v1/coverage-source.py')
+coverage_root = base/'coverage-source'
+coverage_root.mkdir(mode=0o755)
+coverage_normalizer = anchor/'coverage-source.py'
+shutil.copyfile(package/'sandbox/v1/coverage-source.py',coverage_normalizer)
+coverage_normalizer.chmod(0o444)
+coverage_publisher_identity = {'schema_version':1,'kind':'publisher_identity','id':'publisher.scope-fixture',
+    'sha256':sha(b'root-fixed offline fixture publisher')}
+coverage_collector = coverage_root/'collector'
+coverage_manifest = coverage_root/'package.json'
+coverage_set_path = anchor/'coverage-source-accepted-identities.json'
+coverage_config_path = anchor/'coverage-source-config.json'
+coverage_schema_paths=[]
+for family in coverage_n.FAMILIES:
+    fields={coverage_n.FAMILIES[0]:['branch_snapshots','commits','default_branch','repository','schema_version'],
+            coverage_n.FAMILIES[1]:['pull_requests','schema_version'],
+            coverage_n.FAMILIES[2]:['baseline','current','events','schema_version']}[family]
+    path=put(coverage_root/(family+'.json'),{'schema_version':1,'family':family,'operation':coverage_n.OPERATION,'page_fields':fields})
+    coverage_schema_paths.append((family,path))
+coverage_sudo=['/usr/bin/sudo','-n','-u','#'+str(uid),'--',sys.executable,'-I','-S','-B',anchor/'host-supervisor.py','coverage-read']
+coverage_consumer=['/usr/bin/sudo','-n','-u',consumer,'--']
+# The Linux outer setup owns the one exact sudoers rule. macOS requires an existing authorized equivalent.
+def coverage_install_pages(qualifying,current,interval,pulls):
+    baseline_rules=[{'rule_id':kind,'target_pattern':'main','enforcement':'active','bypass_actors':[],
+        'rule_type':kind,'parameters':{}} for kind in sorted(coverage_n.REQUIRED_RULES|{'fifth-rule'})]
+    snapshots={'baseline':{'branch_node_id':'branch.scope-fixture','commit_id':interval[0]['commit_id'],
+                          'observed_at':qualifying['terminated_at']},
+               'current':{'branch_node_id':'branch.scope-fixture','commit_id':interval[-1]['commit_id'],
+                          'observed_at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())}}
+    pages=[canonical({'schema_version':1,'repository':{'repository_id':'fixture.target','node_id':'repo.scope-fixture'},
+        'default_branch':{'name':'main','node_id':'branch.scope-fixture'},'branch_snapshots':snapshots,'commits':interval}),
+        canonical({'schema_version':1,'pull_requests':pulls}),
+        canonical({'schema_version':1,'baseline':baseline_rules,'current':baseline_rules,'events':[]})]
+    capture={'pages':[{'family':family,'page_index':0,'response_status':200,'input_cursor':None,'output_cursor':None}
+                      for family in coverage_n.FAMILIES]}
+    # Pin raw offline forge pages inside the measured collector executable.
+    collector_source=('#!'+sys.executable+'\n'+
+        'import importlib.util,sys\n'+
+        'spec=importlib.util.spec_from_file_location("fixed_supervisor",'+repr(str(anchor/'host-supervisor.py'))+')\n'+
+        'module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)\n'+
+        'assert sys.argv[1:]==["coverage-read.v1"]\n'+
+        'request=sys.stdin.buffer.read(1048577)\n'+
+        'assert 0<len(request)<=1048576\n'+
+        'sys.stdout.buffer.write(module.frame_write('+repr([(b'capture.json',canonical(capture))]+
+            [(f'raw/{index:04d}'.encode(),raw) for index,raw in enumerate(pages)])+'))\n').encode()
+    put(coverage_collector,collector_source,0o555)
+    package_files=[{'role':'normalizer','path':str(coverage_normalizer),'sha256':sha(coverage_normalizer.read_bytes())},
+                   {'role':'collector','path':str(coverage_collector),'sha256':sha(collector_source)}]
+    package_files += [{'role':'schema.'+family,'path':str(path),'sha256':sha(path.read_bytes())}
+                      for family,path in coverage_schema_paths]
+    package_doc={'schema_version':1,'kind':'coverage_source_package','id':'coverage.fixture.package','body':{
+        'operation':coverage_n.OPERATION,'files':sorted(package_files,key=lambda row:row['role'])}}
+    put(coverage_manifest,package_doc)
+    accepted_doc={'schema_version':1,'kind':'coverage_source_accepted_identity_set','id':'coverage.fixture.accepted','body':{
+        'activation_state':'inactive','identities':[{'source_id':'source.scope-fixture','operation':coverage_n.OPERATION,
+        'proof_state':'qualified','host_supervisor_sha256':sha((anchor/'host-supervisor.py').read_bytes()),
+        'source_package_sha256':sha(coverage_manifest.read_bytes()),'collector_sha256':sha(collector_source),
+        'normalizer_sha256':sha(coverage_normalizer.read_bytes())}]}}
+    put(coverage_set_path,accepted_doc)
+    config_doc={'schema_version':1,'kind':'coverage_source_config','id':'coverage.fixture.config','body':{
+        'source_id':'source.scope-fixture','operation':coverage_n.OPERATION,'coverage_rule_version':coverage_n.RULE_VERSION,
+        'queries':coverage_n.QUERIES,'source_package_path':str(coverage_manifest),
+        'source_package_sha256':sha(coverage_manifest.read_bytes()),'collector_path':str(coverage_collector),
+        'collector_sha256':sha(collector_source),'publisher_identity_ref':coverage_publisher_identity,
+        'accepted_set_path':str(coverage_set_path),'accepted_set_sha256':sha(coverage_set_path.read_bytes()),
+        **{key:config['body'][key] for key in ('store_id','principal_uid','consumer_gid')}}}
+    put(coverage_config_path,config_doc)
+    return pages,capture
+
+coverage_template_files=dict(outer_files)
+coverage_template_record=outer_record
+coverage_original_scope=(doc_root/'scope.json').read_bytes()
+coverage_original_documents={name:(doc_root/(name+'.json')).read_bytes() for name in ('risk','kill','duty','shadow-set')}
+coverage_original_head=git(['rev-parse','refs/heads/main'])
+coverage_attempts=[]
+def coverage_evaluate_pair(qualifying,current,allow_closed=False,at_ready=None):
+    selected=json.loads(coverage_original_scope)
+    selected['body'].update(qualified_identity=current['identity'],shadow_evidence_refs=[e.document_ref(current['record'])],
+        allowed_paths=current['paths'],coverage={'coverage_base':qualifying['identity']['target_revision'],
+        'coverage_rule_version':coverage_n.RULE_VERSION,'qualifying_shadow_record_refs':[e.document_ref(qualifying['record'])]})
+    for name in ('risk','duty'):
+        value=json.loads(coverage_original_documents[name])
+        value['body']['stage'].update(request_ref=current['identity']['stage_request_ref'],
+            resolved_profile_ref=current['identity']['resolved_profile_ref'],
+            result_ref=e.document_ref(canonical(json.loads(current['files']['materialization-response.json'])['stage_result'])))
+        put(doc_root/(name+'.json'),value)
+    for name in ('risk','kill'):
+        value=json.loads((doc_root/(name+'.json')).read_bytes())
+        value['body']['duty_evaluation_ref']=e.document_ref((doc_root/'duty.json').read_bytes())
+        put(doc_root/(name+'.json'),value)
+    for key,name in (('risk_gate_evaluation_ref','risk'),('kill_switch_evaluation_ref','kill'),('duty_separation_evaluation_ref','duty')):
+        selected['body']['gate_evidence_refs'][key]=e.document_ref((doc_root/(name+'.json')).read_bytes())
+    put(doc_root/'scope.json',selected)
+    put(doc_root/'shadow-set.json',{'schema_version':1,'kind':'shadow_evidence_set','id':'scope.coverage.records',
+        'body':{'records':[json.loads(qualifying['record']),json.loads(current['record'])]}})
+    original_directories=list((base/'bundles').iterdir())
+    holding=base/('coverage-hold-'+current['label']);holding.mkdir(mode=0o755)
+    for path in original_directories:path.rename(holding/path.name)
+    installed=[]
+    try:
+        for item in (qualifying,current):
+            target=base/'bundles'/sha(item['record'])
+            item['bundle'].rename(target);installed.append((target,item['bundle']))
+        before={str(path.relative_to(store)):path.read_bytes() for item in (qualifying,current) for path in (store/ json.loads(item['files']['sandbox-request.json'])['id']).rglob('*') if path.is_file()}
+        if at_ready is not None:
+            at_ready()
+            return None
+        if allow_closed:
+            completed=subprocess.run(list(map(str,scope_argv)),stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env,timeout=180)
+            if completed.returncode!=0:
+                assert completed.stdout==b'' and completed.stderr in (b'E_RELATION\n',b'E_RUNTIME\n',b'E_STALE\n')
+                print(json.dumps({'coverage_closed':completed.returncode,'stderr':completed.stderr.decode()},sort_keys=True),flush=True)
+                return None
+            raw=completed.stdout
+        else:
+            raw=run(scope_argv)
+        result=json.loads(raw)
+        after={str(path.relative_to(store)):path.read_bytes() for item in (qualifying,current) for path in (store/json.loads(item['files']['sandbox-request.json'])['id']).rglob('*') if path.is_file()}
+        assert before==after
+        return result
+    finally:
+        for target,original in installed:target.rename(original)
+        for path in holding.iterdir():path.rename(base/'bundles'/path.name)
+        holding.rmdir()
+
+try:
+    original_facts={}
+    for row in git(['ls-tree','-r','-t','-z',coverage_original_head]).encode().split(b'\0'):
+        if row:
+            head,name=row.split(b'\t');original_facts[name.decode()]=tuple(head.decode().split())
+    for neighbor in (-1,0,1):
+        age_started=time.monotonic()
+        matched=False
+        correction=0
+        for retry in range(8):
+            assert time.monotonic()-age_started<=120
+            label='age-'+str(neighbor).replace('-','m')+'-'+str(retry)
+            while time.time()%1>0.08:time.sleep(0.005)
+            original_time=int(time.time())+correction-2592000-neighbor
+            qualifying=build_coverage_revision(coverage_original_head,git(['rev-parse',coverage_original_head+'^{tree}']),label+'-q',original_time,
+                coverage_template_files,coverage_template_record)
+            # A -> ordinary B -> own publisher merge C -> ordinary R.
+            a=coverage_original_head
+            candidate=qualifying['candidate']['commit_id']
+            base_facts=dict(original_facts)
+            ordinary=git(['hash-object','-w','--stdin'],b'ordinary coverage source\n')
+            base_facts['coverage-ordinary.txt']=('100644','blob',ordinary)
+            tb=object_tree(base_facts);b=git(['commit-tree',tb,'-p',a],b'coverage B\n')
+            candidate_facts={}
+            for row in git(['ls-tree','-r','-t','-z',candidate]).encode().split(b'\0'):
+                if row:
+                    head,name=row.split(b'\t');candidate_facts[name.decode()]=tuple(head.decode().split())
+            merged=dict(candidate_facts);merged['coverage-ordinary.txt']=('100644','blob',ordinary)
+            tc=object_tree(merged);merge=git(['commit-tree',tc,'-p',b,'-p',candidate],b'coverage C\n')
+            last=git(['hash-object','-w','--stdin'],b'last coverage source\n');merged['coverage-last.txt']=('100644','blob',last)
+            tr=object_tree(merged);r=git(['commit-tree',tr,'-p',merge],b'coverage R\n')
+            git(['symbolic-ref','HEAD','refs/heads/main']);git(['update-ref','refs/heads/main',r])
+            current=build_coverage_revision(r,tr,label+'-r',int(time.time()),coverage_template_files,coverage_template_record)
+            interval=[{'index':i,'commit_id':commit_id,'parent_commit_id':parent,'tree_id':tree_id}
+                for i,(commit_id,parent,tree_id) in enumerate([(a,None,git(['rev-parse',a+'^{tree}'])),(b,a,tb),(merge,b,tc),(r,merge,tr)])]
+            pull={'node_id':'pr.coverage-'+label,'number':len(coverage_attempts)+1,'publisher_identity_ref':coverage_publisher_identity,
+                'base_commit_id':a,'head_commit_id':candidate,'merge_commit_id':merge,'merged':True,
+                'merged_at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),'source_branch':qualifying['publisher']['body']['branch'],
+                'scope_id':scope_doc['id'],'changed_paths':qualifying['paths'],'publisher_request_sha256':sha(canonical(qualifying['publisher']))}
+            coverage_install_pages(qualifying,current,interval,[pull])
+            result=coverage_evaluate_pair(qualifying,current)
+            coverage=result['body']['evidence']['coverage']
+            attempts=sorted(path for path in store.iterdir() if path.name.startswith('coverage.'))
+            assert attempts
+            latest=max(attempts,key=lambda path:path.stat().st_mtime_ns)
+            receipt=json.loads((latest/'receipt.json').read_bytes())
+            terminated=json.loads(qualifying['files']['sandbox-receipt.json'])['body']['timing']['terminated_at']
+            completed=receipt['body']['completed_at']
+            delta=coverage_n.utc(completed)-coverage_n.utc(terminated)
+            coverage_attempts.append({'label':label,'qualifying_terminated_at':terminated,'source_completed_at':completed,
+                'delta':str(delta),'source_attempt':latest.name,'coverage_state':coverage['state']})
+            print(json.dumps({'coverage_age_attempt':coverage_attempts[-1]},sort_keys=True),flush=True)
+            put(base/'coverage-attempts.json',{'attempts':coverage_attempts})
+            expected=2592000+neighbor
+            correction+=int(delta-expected)
+            if delta==expected:
+                assert coverage['state']==('authenticated' if neighbor<=0 else 'stale')
+                matched=True
+                break
+        assert matched, 'exact coverage age fixture could not reach the intended real-clock delta'
+    young_label='young'
+    qualifying=build_coverage_revision(coverage_original_head,git(['rev-parse',coverage_original_head+'^{tree}']),young_label+'-q',int(time.time())-86400,
+        coverage_template_files,coverage_template_record)
+    a=coverage_original_head
+    candidate=qualifying['candidate']['commit_id']
+    b_tree=dict(original_facts);ordinary=git(['hash-object','-w','--stdin'],b'young ordinary\n');b_tree['coverage-ordinary.txt']=('100644','blob',ordinary)
+    tb=object_tree(b_tree);b=git(['commit-tree',tb,'-p',a],b'young B\n')
+    c_tree={}
+    for row in git(['ls-tree','-r','-t','-z',candidate]).encode().split(b'\0'):
+        if row:
+            head,name=row.split(b'\t');c_tree[name.decode()]=tuple(head.decode().split())
+    c_tree['coverage-ordinary.txt']=('100644','blob',ordinary)
+    tc=object_tree(c_tree);merge=git(['commit-tree',tc,'-p',b,'-p',candidate],b'young C\n')
+    r_tree=dict(c_tree);last=git(['hash-object','-w','--stdin'],b'young last\n');r_tree['coverage-last.txt']=('100644','blob',last)
+    tr=object_tree(r_tree);r=git(['commit-tree',tr,'-p',merge],b'young R\n')
+    git(['update-ref','refs/heads/main',r])
+    current=build_coverage_revision(r,tr,young_label+'-r',int(time.time()),coverage_template_files,coverage_template_record)
+    interval=[{'index':i,'commit_id':oid,'parent_commit_id':parent,'tree_id':tid} for i,(oid,parent,tid) in
+        enumerate([(a,None,git(['rev-parse',a+'^{tree}'])),(b,a,tb),(merge,b,tc),(r,merge,tr)])]
+    pull={'node_id':'pr.coverage-young','number':1000,'publisher_identity_ref':coverage_publisher_identity,
+        'base_commit_id':a,'head_commit_id':candidate,'merge_commit_id':merge,'merged':True,
+        'merged_at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),'source_branch':qualifying['publisher']['body']['branch'],
+        'scope_id':scope_doc['id'],'changed_paths':qualifying['paths'],'publisher_request_sha256':sha(canonical(qualifying['publisher']))}
+    coverage_install_pages(qualifying,current,interval,[pull])
+    first=coverage_evaluate_pair(qualifying,current)['body']['evidence']['coverage']
+    second=coverage_evaluate_pair(qualifying,current)['body']['evidence']['coverage']
+    assert first['state']==second['state']=='authenticated'
+    assert first['request_ref']!=second['request_ref'] and first['receipt_ref']!=second['receipt_ref'] and first['origin_ref']!=second['origin_ref']
+    first_path=store/first['request_ref']['id']
+    second_path=store/second['request_ref']['id']
+    first_request=(first_path/'payload/request.json').read_bytes()
+    second_request=(second_path/'payload/request.json').read_bytes()
+    assert json.loads(first_request)['body']['nonce']!=json.loads(second_request)['body']['nonce']
+    try:
+        coverage_n.receipt((first_path/'receipt.json').read_bytes(),second_request,config['body'],
+            json.loads((first_path/'receipt.json').read_bytes())['body']['source_identity'],
+            (first_path/'payload/raw-manifest.json').read_bytes(),(first_path/'payload/observation.json').read_bytes())
+    except coverage_n.Refusal:pass
+    else:raise AssertionError('first genuine receipt replay accepted during second same-R evaluation')
+    print(json.dumps({'coverage_same_revision_requests':'PASS','first':first['request_ref'],'second':second['request_ref'],
+        'genuine_first_receipt_replay':'refused','new_genuine_attempt':'authenticated'},sort_keys=True),flush=True)
+    # The independent root expectation stays unchanged when the raw PR actor changes.
+    for field,value in (('publisher_identity_ref',dict(coverage_publisher_identity,id='publisher.foreign')),
+                        ('number',0),('base_commit_id',b),('head_commit_id',b),('merge_commit_id',b),
+                        ('source_branch','ystack/evidence/foreign'),('scope_id','scope.foreign'),
+                        ('changed_paths',['ystack-evidence/foreign.json']),('publisher_request_sha256','e'*64)):
+        bad_pull=json.loads(canonical(pull));bad_pull[field]=value
+        coverage_install_pages(qualifying,current,interval,[bad_pull])
+        expected_config=coverage_config_path.read_bytes()
+        result=coverage_evaluate_pair(qualifying,current,allow_closed=True)
+        assert result is None or result['body']['evidence']['coverage']['state']=='stale'
+        assert coverage_config_path.read_bytes()==expected_config
+        print(json.dumps({'coverage_publisher_negative':field,'result':'closed' if result is None else 'stale',
+            'root_publisher_expectation_unchanged':True},sort_keys=True),flush=True)
+    coverage_install_pages(qualifying,current,interval,[pull])
+    exact=list(map(str,coverage_sudo))
+    variants=[exact+['extra'],exact[:-1],exact[:6]+['-S','-I','-B',*exact[9:]],
+              exact[:5]+['/usr/bin/false',*exact[6:]],exact[:-2]+[str(base/'genuine-reader.py'),'coverage-read'],
+              exact[:-1]+['launch'],exact[:5]+['/bin/sh'],exact[:5]+['/usr/bin/env','PATH=/usr/bin:/bin',*exact[5:]],
+              exact[:5]+[sys.executable,'-I','-S','-B',str(base/'genuine-writer.py')]]
+    for index,variant in enumerate(variants):
+        result=subprocess.run(list(map(str,coverage_consumer))+variant,input=second_request,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env,timeout=20)
+        assert result.returncode!=0 and result.stdout==b''
+        print(json.dumps({'coverage_exact_sudo_negative':index,'returncode':result.returncode,
+            'stderr_utf8':result.stderr.decode('utf8','backslashreplace')},sort_keys=True),flush=True)
+    for path in (ready_path,ack_path):
+        os.mkfifo(path,0o600);os.chown(path,consumer_uid,consumer_gid)
+    try:
+        old_receipt=store/json.loads(qualifying['files']['sandbox-request.json'])['id']/'receipt.json'
+        old_raw=old_receipt.read_bytes()
+        coverage_evaluate_pair(qualifying,current,at_ready=lambda:through_use('coverage-old-receipt-after-final-read',old_receipt,
+            lambda:old_receipt.write_bytes(old_raw+b' '),lambda:old_receipt.write_bytes(old_raw)))
+        coverage_evaluate_pair(qualifying,current,at_ready=lambda:through_use('coverage-root-after-final-read',store,
+            lambda:os.utime(store,None),lambda:None))
+        saved_source=[]
+        def change_source_receipt():
+            latest=max((path for path in store.iterdir() if path.name.startswith('coverage.')),key=lambda path:path.stat().st_mtime_ns)
+            path=latest/'receipt.json';saved_source.append((path,path.read_bytes()));path.write_bytes(saved_source[-1][1]+b' ')
+        def restore_source_receipt():
+            path,raw=saved_source.pop();path.write_bytes(raw)
+        coverage_evaluate_pair(qualifying,current,at_ready=lambda:through_use('coverage-source-receipt-after-final-read',store,
+            change_source_receipt,restore_source_receipt))
+        saved_expectation=[]
+        def change_expectation():
+            paths=list(consumer_work.glob('ystack-scope-evaluate.*/reader-runtime/coverage.*/expectation.json'))
+            assert len(paths)==1
+            path=paths[0];saved_expectation.append((path,path.read_bytes()));path.write_bytes(saved_expectation[-1][1]+b' ')
+        def restore_expectation():
+            path,raw=saved_expectation.pop();path.write_bytes(raw)
+        coverage_evaluate_pair(qualifying,current,at_ready=lambda:through_use('coverage-expectation-after-final-read',store,
+            change_expectation,restore_expectation))
+    finally:
+        ready_path.unlink();ack_path.unlink()
+    assert coverage_evaluate_pair(qualifying,current)['body']['evidence']['coverage']['state']=='authenticated'
+    print(json.dumps({'coverage_final_hold_mutations':'PASS','root':'stale','old_receipt':'stale',
+        'source_receipt':'stale','expectation':'stale','fresh_reacquisition':'authenticated'},sort_keys=True),flush=True)
+    assert len({row['source_attempt'] for row in coverage_attempts})==len(coverage_attempts)
+    print(json.dumps({'genuine_coverage_contract':'PASS','real_source_uid':uid,'real_consumer_uid':consumer_uid,
+        'interval':'A ordinary B own publisher C R','age_neighbors':[-1,0,1],'target_write':False,
+        'network':False,'production_identity':False,'native_qualification':False},sort_keys=True),flush=True)
+finally:
+    git(['update-ref','refs/heads/main',coverage_original_head])
+    put(doc_root/'scope.json',coverage_original_scope)
+    for name,raw in coverage_original_documents.items():put(doc_root/(name+'.json'),raw)
 
 PY_GENUINE_ASSEMBLER
 }

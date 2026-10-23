@@ -990,6 +990,156 @@ def read_store_attempt(anchor: Anchor, attempt_id: str, *,
             if failure is None:
                 raise
 
+class _CoverageConfiguration:
+    def __init__(self, anchor):
+        import importlib.util
+        self.anchor, self.held = anchor, []
+        try:
+            root = next(item for item in anchor.held if item.path == ANCHOR)
+            rule = _root_rule(anchor.resolver)
+            def child(name):
+                item = _open_child(root, name, False, rule, "E_CONFIG")
+                self.held.append(item)
+                return item.read(DOCUMENT_LIMIT, "E_CONFIG")
+            self.config_raw = child("coverage-source-config.json")
+            self.accepted_raw = child("coverage-source-accepted-identities.json")
+            normalizer = _open_child(root, "coverage-source.py", False, rule, "E_INSTALL")
+            self.held.append(normalizer)
+            normalizer_raw = normalizer.read(EXECUTABLE_LIMIT, "E_INSTALL")
+            source = _open_held(os.path.join(_source_root(), "sandbox/v1/coverage-source.py"), False,
+                                lambda _fd, _state, _ancestor: True, "E_INSTALL")
+            self.held.append(source)
+            _require(source.read(EXECUTABLE_LIMIT, "E_INSTALL") == normalizer_raw, "E_INSTALL")
+            spec = importlib.util.spec_from_file_location("scope_coverage_source", normalizer.path)
+            _require(spec is not None and spec.loader is not None, "E_INSTALL")
+            self.normalizer = importlib.util.module_from_spec(spec)
+            exec(compile(normalizer_raw, normalizer.path, "exec"), self.normalizer.__dict__)
+            n = self.normalizer
+            self.config = n.source_config(self.config_raw, anchor.config)["body"]
+            _require(self.config["accepted_set_path"] == ANCHOR + "/coverage-source-accepted-identities.json", "E_CONFIG")
+            package_file = _open_held(self.config["source_package_path"], False, rule, "E_INSTALL")
+            self.held.append(package_file)
+            self.package_raw = package_file.read(DOCUMENT_LIMIT, "E_INSTALL")
+            package = n.package(self.package_raw, self.config)
+            for row in package["body"]["files"]:
+                item = _open_held(row["path"], False, rule, "E_INSTALL")
+                self.held.append(item)
+                raw = item.read(EXECUTABLE_LIMIT if row["role"] == "collector" else DOCUMENT_LIMIT, "E_INSTALL")
+                _require(digest(raw) == row["sha256"], "E_INSTALL")
+                if row["role"] == "normalizer":
+                    _require(row["path"] == normalizer.path and raw == normalizer_raw, "E_INSTALL")
+                elif row["role"].startswith("schema."):
+                    n.query_schema(raw, row["role"][7:])
+                elif row["role"] == "collector":
+                    _require(item.before.st_mode & 0o111 != 0, "E_INSTALL")
+            supervisor = next(item for item in anchor.held if item.path == ANCHOR + "/host-supervisor.py")
+            supervisor_raw = supervisor.read(EXECUTABLE_LIMIT, "E_INSTALL")
+            repo_supervisor = _open_held(os.path.join(_source_root(), "sandbox/v1/host-supervisor.py"), False,
+                                       lambda _fd, _state, _ancestor: True, "E_INSTALL")
+            self.held.append(repo_supervisor)
+            _require(repo_supervisor.read(EXECUTABLE_LIMIT, "E_INSTALL") == supervisor_raw, "E_INSTALL")
+            n.accepted(self.accepted_raw, self.config, digest(supervisor_raw), digest(self.package_raw),
+                       self.config["collector_sha256"], digest(normalizer_raw))
+            self.identity = n.source_identity(self.config, self.accepted_raw, digest(supervisor_raw), digest(normalizer_raw))
+            self.hashes = {item.path: digest(item.read(EXECUTABLE_LIMIT, "E_INSTALL")) for item in self.held}
+            self.recheck()
+        except BaseException:
+            self.close()
+            raise
+
+    def recheck(self, code="E_STALE"):
+        self.anchor.recheck(code)
+        for item in self.held:
+            item.recheck(code)
+            if stat.S_ISREG(item.before.st_mode):
+                _require(digest(item.read(EXECUTABLE_LIMIT, code)) == self.hashes[item.path], code)
+
+    def close(self):
+        held, self.held = self.held, []
+        _close_paths(held)
+
+
+def load_coverage_configuration(anchor):
+    root = next(item for item in anchor.held if item.path == ANCHOR)
+    names = set(os.listdir(root.fd))
+    optional = {"coverage-source-config.json", "coverage-source-accepted-identities.json"}
+    if not (names & optional):
+        return None
+    _require(optional <= names, "E_CONFIG")
+    return _CoverageConfiguration(anchor)
+
+
+class _HeldCoverageRead(_HeldStoreRead):
+    def __init__(self, anchor, configuration, request_raw):
+        self.anchor, self.configuration = anchor, configuration
+        self.attempt_id = configuration.normalizer.request(request_raw)["id"]
+        self.held = []
+        self.snapshots, self.observation = read_coverage_attempt(anchor, configuration, request_raw, _owner=self)
+
+    def recheck(self, code="E_STALE"):
+        super().recheck(code)
+        self.configuration.recheck(code)
+        raw = next(item for item in self.held if item.path.endswith("/payload/raw"))
+        _require(set(os.listdir(raw.fd)) == {name.rsplit("/", 1)[1] for name in self.snapshots
+                                            if name.startswith("payload/raw/")}, code)
+
+
+def read_coverage_attempt(anchor, configuration, request_raw, *, _owner=None):
+    n = configuration.normalizer
+    requested = n.request(request_raw)
+    attempt_id = requested["id"]
+    _require(_owner is None or isinstance(_owner, _HeldCoverageRead), "E_STORE")
+    uid, gid = anchor.config["principal_uid"], anchor.config["consumer_gid"]
+    opened, snapshots, observations = [], {}, []
+    try:
+        configuration.recheck("E_STORE")
+        store = _open_held(anchor.config["store_root"], True, _store_rule(uid, gid, 0o750, True, anchor.resolver), "E_STORE")
+        opened.append(store)
+        def directory(parent, name, relative):
+            item = _open_child(parent, name, True, _store_rule(uid, gid, 0o750, True, anchor.resolver), "E_STORE")
+            opened.append(item)
+            observations.append(_observation(item, relative))
+            return item
+        attempt = directory(store, attempt_id, attempt_id)
+        payload = directory(attempt, "payload", "payload")
+        raw_dir = directory(payload, "raw", "payload/raw")
+        observations.insert(0, _observation(store, "."))
+        _require(set(os.listdir(attempt.fd)) == {"receipt.json", "payload"}
+                 and set(os.listdir(payload.fd)) == {"request.json", "raw-manifest.json", "observation.json", "raw"}, "E_STORE")
+        names = sorted(os.listdir(raw_dir.fd))
+        _require(3 <= len(names) <= n.PAGE_LIMIT and names == [f"{index:04d}" for index in range(len(names))], "E_STORE")
+        total = 0
+        fixed = [(attempt, "receipt.json", "receipt.json"),
+                 *[(payload, name, "payload/" + name) for name in ("request.json", "raw-manifest.json", "observation.json")],
+                 *[(raw_dir, name, "payload/raw/" + name) for name in names]]
+        for parent, name, relative in fixed:
+            item = _open_child(parent, name, False, _store_rule(uid, gid, 0o440, False, anchor.resolver), "E_STORE")
+            opened.append(item)
+            raw = item.read(DOCUMENT_LIMIT, "E_STORE")
+            snapshots[relative] = raw
+            observations.append(_observation(item, relative, raw))
+            if relative.startswith("payload/raw/"):
+                total += len(raw)
+                _require(total <= n.RAW_LIMIT, "E_STORE")
+        _require(snapshots["payload/request.json"] == request_raw, "E_STORE")
+        rebuilt = n.normalize(snapshots["payload/raw-manifest.json"],
+            [snapshots["payload/raw/" + name] for name in names], request_raw)
+        _require(rebuilt == snapshots["payload/observation.json"], "E_STORE")
+        n.receipt(snapshots["receipt.json"], request_raw, anchor.config, configuration.identity,
+                  snapshots["payload/raw-manifest.json"], rebuilt)
+        for item in opened:
+            item.recheck("E_STALE")
+        configuration.recheck("E_STALE")
+        origin = canonical({"schema_version": 1, "kind": "shadow_origin_observation", "id": attempt_id,
+            "body": {"store_id": anchor.config["store_id"], "attempt_id": attempt_id,
+                     "entries": observations, "result": "authenticated"}})
+        if _owner is not None:
+            _owner.held, opened = opened, []
+        return snapshots, origin
+    finally:
+        _close_paths(opened)
+
+
 def _closed_scope_child(argv: list[str], env: dict[str, str], owner) -> None:
     _require(type(argv) is list and argv and all(type(value) is str and value and "\0" not in value
                                                for value in argv), "E_RUNTIME")
@@ -998,6 +1148,10 @@ def _closed_scope_child(argv: list[str], env: dict[str, str], owner) -> None:
         _require(env == {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"}, "E_RUNTIME")
         return
     ledger = owner.ledger
+    coverage = getattr(owner, "_coverage_invocation", None)
+    if coverage is not None and argv == coverage:
+        _require(env == {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"}, "E_RUNTIME")
+        return
     _require(hasattr(ledger, "environment") and env == ledger.environment(), "E_RUNTIME")
     root = _source_root()
     if argv[0] == "/usr/bin/git":
@@ -1162,10 +1316,44 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
         _require(output in (canonical([]), canonical([gid])), "E_ACL")
         return output == canonical([gid])
 
+    def coverage_source(self, request_raw):
+        ledger = self.ledger
+        anchor = ledger.anchor_for()
+        configuration = ledger.coverage_configuration
+        _require(isinstance(configuration, _CoverageConfiguration), "E_RUNTIME")
+        configuration.normalizer.request(request_raw)
+        sudo = _hold_bytes("/usr/bin/sudo", EXECUTABLE_LIMIT, "E_DEPENDENCY", hardlinks=True)
+        try:
+            _require(sudo.held.path == "/usr/bin/sudo", "E_DEPENDENCY")
+            supervisor = next(item for item in anchor.held if item.path == ANCHOR + "/host-supervisor.py")
+            supervisor_sha = digest(supervisor.read(EXECUTABLE_LIMIT, "E_DEPENDENCY"))
+            argv = ["/usr/bin/sudo", "-n", "-u", "#" + str(anchor.config["principal_uid"]), "--",
+                    self.python.held.path, "-I", "-S", "-B", supervisor.path, "coverage-read"]
+            self.recheck()
+            sudo.recheck("E_DEPENDENCY")
+            configuration.recheck()
+            ledger.record_source_command(argv, request_raw, sudo.sha256, self.python.sha256, supervisor_sha)
+            self._coverage_invocation = argv
+            try:
+                result = self._foreground(argv, request_raw, 0, 16384,
+                    min(120, self.deadline - time.monotonic()),
+                    {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"})
+            finally:
+                self._coverage_invocation = None
+            _require(result == b"", "E_RUNTIME")
+            self.recheck()
+            sudo.recheck("E_DEPENDENCY")
+            configuration.recheck()
+            _require(digest(supervisor.read(EXECUTABLE_LIMIT, "E_STALE")) == supervisor_sha, "E_STALE")
+        finally:
+            sudo.close()
+
     def _foreground(self, argv, raw, cap, error_cap, timeout, env):
         _closed_scope_child(argv, env, self)
-        _require(0 < timeout <= 120 and type(cap) is int and 0 < cap <= 16 * DOCUMENT_LIMIT
-                 and error_cap == 65536, "E_RUNTIME")
+        source = getattr(self, "_coverage_invocation", None)
+        _require(0 < timeout <= 120 and type(cap) is int
+                 and ((source is not None and argv == source and cap == 0 and error_cap == 16384)
+                      or (source is None and 0 < cap <= 16 * DOCUMENT_LIMIT and error_cap == 65536)), "E_RUNTIME")
         previous = signal.pthread_sigmask(signal.SIG_BLOCK,
                                           {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
         child = None

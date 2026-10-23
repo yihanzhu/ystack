@@ -45,11 +45,11 @@ def _unique(pairs):
     return result
 
 
-def document(raw):
+def document(raw, *, raw_page=False):
     require(type(raw) is bytes and 0 < len(raw) <= DOCUMENT_LIMIT)
     try:
         value = json.loads(raw, object_pairs_hook=_unique)
-        require(type(value) is dict and canonical(value) == raw)
+        require(type(value) is dict and (raw_page or canonical(value) == raw))
         return value
     except (ValueError, UnicodeError, TypeError, RecursionError):
         raise Refusal() from None
@@ -272,7 +272,7 @@ def normalize(raw_manifest, pages, request_raw):
     rows = manifest(raw_manifest, pages, request_raw)
     families = {family: [] for family in FAMILIES}
     for row, raw in zip(rows, pages):
-        page = document(raw)
+        page = document(raw, raw_page=True)
         require(page.get("schema_version") == 1 and type(page.get("schema_version")) is int)
         families[row["family"]].append(page)
     history = families[FAMILIES[0]]
@@ -351,7 +351,7 @@ def normalize(raw_manifest, pages, request_raw):
     require(len(events) <= 4096)
     event_ids = set()
     previous_time = utc(snapshots["baseline"]["observed_at"])
-    state_digest = digest(canonical(baseline))
+    state_digests = {row["rule_id"]: digest(canonical(row)) for row in baseline}
     for event in events:
         exact(event, {"event_id", "event_time", "actor_identity", "operation", "rule_id", "before_sha256", "after_sha256"})
         text(event["event_id"], 256)
@@ -367,7 +367,7 @@ def normalize(raw_manifest, pages, request_raw):
         sha(event["after_sha256"])
         # Every intermediate applicable set must remain exactly baseline, including unknown rule kinds.
         require(event["operation"] == "update" and event["rule_id"] in {row["rule_id"] for row in baseline}
-                and event["before_sha256"] == event["after_sha256"] == state_digest)
+                and event["before_sha256"] == event["after_sha256"] == state_digests[event["rule_id"]])
     require(current == baseline)
     result = {"repository": repository, "default_branch": branch, "branch_snapshots": snapshots,
               "first_parent_commits": commits, "publisher_pull_requests": pulls,
@@ -375,3 +375,107 @@ def normalize(raw_manifest, pages, request_raw):
     raw = canonical(result)
     require(len(raw) <= DOCUMENT_LIMIT)
     return raw
+
+
+def doc_ref(raw):
+    value = document(raw)
+    return {key: value[key] for key in ("schema_version", "kind", "id")} | {"sha256": digest(raw)}
+
+
+def physical(path):
+    text(path, 4096)
+    require(path.startswith("/") and all(part not in {"", ".", ".."} for part in path[1:].split("/")))
+
+
+def source_config(raw, host):
+    value = document(raw)
+    body = envelope(value, "coverage_source_config")
+    exact(body, {"source_id", "operation", "coverage_rule_version", "queries", "source_package_path",
+        "source_package_sha256", "collector_path", "collector_sha256", "publisher_identity_ref",
+        "accepted_set_path", "accepted_set_sha256", "store_id", "principal_uid", "consumer_gid"})
+    identity(body["source_id"])
+    require(body["operation"] == OPERATION and body["coverage_rule_version"] == RULE_VERSION and body["queries"] == QUERIES)
+    for key in ("source_package_path", "collector_path", "accepted_set_path"):
+        physical(body[key])
+    for key in ("source_package_sha256", "collector_sha256", "accepted_set_sha256"):
+        sha(body[key])
+        require(body[key] not in {"0" * 64, "1" * 64})
+    reference(body["publisher_identity_ref"])
+    for key in ("store_id", "principal_uid", "consumer_gid"):
+        require(body[key] == host[key] and type(body[key]) is type(host[key]))
+    return value
+
+
+def package(raw, config):
+    require(digest(raw) == config["source_package_sha256"])
+    value = document(raw)
+    body = envelope(value, "coverage_source_package")
+    exact(body, {"operation", "files"})
+    require(body["operation"] == OPERATION)
+    names = {"normalizer", "collector"} | {"schema." + family for family in FAMILIES}
+    rows = body["files"]
+    sorted_unique(rows, lambda row: row["role"], 5, 5)
+    require({row["role"] for row in rows} == names)
+    paths = set()
+    for row in rows:
+        exact(row, {"role", "path", "sha256"})
+        physical(row["path"])
+        sha(row["sha256"])
+        require(row["sha256"] not in {"0" * 64, "1" * 64} and row["path"] not in paths)
+        paths.add(row["path"])
+        if row["role"] == "collector":
+            require(row["path"] == config["collector_path"] and row["sha256"] == config["collector_sha256"])
+    return value
+
+
+def query_schema(raw, family):
+    value = document(raw)
+    exact(value, {"schema_version", "family", "operation", "page_fields"})
+    fields = {FAMILIES[0]: ["branch_snapshots", "commits", "default_branch", "repository", "schema_version"],
+              FAMILIES[1]: ["pull_requests", "schema_version"],
+              FAMILIES[2]: ["baseline", "current", "events", "schema_version"]}
+    require(value == {"schema_version": 1, "family": family, "operation": OPERATION, "page_fields": fields[family]})
+
+
+def accepted(raw, config, supervisor_sha256, package_sha256, collector_sha256, normalizer_sha256):
+    require(digest(raw) == config["accepted_set_sha256"])
+    value = document(raw)
+    body = envelope(value, "coverage_source_accepted_identity_set")
+    exact(body, {"activation_state", "identities"})
+    require(body["activation_state"] == "inactive" and type(body["identities"]) is list and len(body["identities"]) == 1)
+    row = body["identities"][0]
+    expected = {"source_id": config["source_id"], "operation": OPERATION, "proof_state": "qualified",
+        "host_supervisor_sha256": supervisor_sha256, "source_package_sha256": package_sha256,
+        "collector_sha256": collector_sha256, "normalizer_sha256": normalizer_sha256}
+    require(row == expected)
+    for key, value_hash in expected.items():
+        if key.endswith("sha256"):
+            sha(value_hash)
+            require(value_hash not in {"0" * 64, "1" * 64})
+    return value
+
+
+def source_identity(config, accepted_raw, supervisor_sha256, normalizer_sha256):
+    return {"source_id": config["source_id"], "host_supervisor_sha256": supervisor_sha256,
+            "source_package_sha256": config["source_package_sha256"], "collector_sha256": config["collector_sha256"],
+            "normalizer_sha256": normalizer_sha256, "accepted_source_identity_ref": doc_ref(accepted_raw)}
+
+
+def receipt(raw, request_raw, config, source, raw_manifest, observation):
+    requested = request(request_raw)
+    value = document(raw)
+    body = envelope(value, "forge_coverage_source_receipt")
+    exact(body, {"operation", "version", "store_id", "attempt_id", "request_sha256", "nonce", "source_identity",
+        "query", "raw_manifest_sha256", "observation_sha256", "started_at", "completed_at", "outcome", "effects"})
+    require(value["id"] == requested["id"] and body["operation"] == OPERATION
+            and type(body["version"]) is int and body["version"] == 1
+            and body["store_id"] == config["store_id"] and body["attempt_id"] == requested["id"]
+            and body["request_sha256"] == digest(request_raw) and body["nonce"] == requested["body"]["nonce"]
+            and body["source_identity"] == source and body["query"] == query(requested["body"])
+            and body["raw_manifest_sha256"] == digest(raw_manifest)
+            and body["observation_sha256"] == digest(observation)
+            and body["outcome"] == "complete" and body["effects"] == ["read-forge-metadata"])
+    require(re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", body["started_at"]) is not None
+            and re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", body["completed_at"]) is not None
+            and utc(body["started_at"]) <= utc(body["completed_at"]))
+    return value

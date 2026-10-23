@@ -1269,3 +1269,18 @@ root setup and cleanup. Reuse an already available trusted physical runtime and 
 dependency closure. Do not install one or change the current development Mac. Neither
 platform's synthetic completed-run fields establish native qualification, CPU/wall proof,
 source coverage or scope enablement.
+
+Restore `sandbox/v1/coverage-source.py` with the scope reader, host supervisor and
+shadow consumer. They implement one inactive, fixed `coverage-read.v1` boundary.
+The restore manifest includes the normalizer. No production source configuration,
+collector, credential, route or accepted identity is shipped. Do not manufacture
+those files during restore. Optional source configuration and accepted identities
+belong to a separately authorized root-owned installation.
+
+The source receipt and its exact payload/raw inventory must remain intact for any
+authenticated evaluation. Copied JSON and archived origin observations cannot
+replace a fresh controlled-store read. Run the scope qualification suite, launcher,
+shadow enforced/write/self-host, receipt, materializer protocol/adapter, schema and
+full matrix checks before acceptance. The `--coverage-pure` scope test mode needs
+no root actions and proves only bounded data behavior. Actual Linux and macOS
+source-principal proof remains mandatory and needs its authorized disposable host.

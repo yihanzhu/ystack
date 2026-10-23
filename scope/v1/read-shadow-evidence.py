@@ -52,6 +52,8 @@ class _Reader:
         self.deadline = DEADLINE
         self.anchor = None
         self.modules = None
+        self.coverage_configuration = None
+        self.authentication_revision = None
         try:
             require(PACKAGE.resolve() == PACKAGE and sys.version_info >= (3, 11), "E_RUNTIME")
             for path in (scope_path, set_path, bundle_root, git_root, output.parent):
@@ -246,7 +248,7 @@ class _Reader:
         require(all(files[name] == anchor.installed[role][0] for name, role in fixed.items()))
         incident, record = parse(files["incident.json"]), parse(files["shadow-record.json"])
         body, revision = record["body"], incident["body"]["git_revision_ref"]
-        require(same(revision, self.scope_body["qualified_identity"]["target_revision"])
+        require(same(revision, self.authentication_revision or self.scope_body["qualified_identity"]["target_revision"])
                 and body["target_repository_id"] == self.scope_body["target_repository_id"])
         selected = [row for row in anchor.registry[1] if row["environment_id"] == body["environment"]["environment_id"]]
         accepted = [row for row in anchor.accepted[1] if row["environment_id"] == body["environment"]["environment_id"]]
@@ -254,7 +256,8 @@ class _Reader:
         registry = selected[0]
         require(registry["proof_state"] == "native-qualified"
                 and registry["target_repository_id"] == body["target_repository_id"]
-                and registry["source_root_commit"] == revision["commit_id"])
+                and registry["source_root_commit"] == (self.scope_body["coverage"]["coverage_base"]["commit_id"]
+                    if "coverage" in self.scope_body else revision["commit_id"]))
         receipt = parse(files["sandbox-receipt.json"])
         for slot, value in receipt["body"]["identities"].items():
             require(set(value) == {"state", "sha256"} and value["state"] == "observed"
@@ -674,6 +677,204 @@ class _Reader:
                 "--rawfile", "patch", patch_path, "--slurpfile", "metadata", final_metadata]
         return self.jq_check("shadow/v1/write-materialization-input.jq", args, first_raw, limit=8 * c.DOCUMENT_LIMIT)
 
+    def record_source_command(self, argv, request_raw, sudo_sha, python_sha, supervisor_sha):
+        self.record_command("coverage-source-boundary", argv, sudo_sha, supervisor_sha)
+        self.commands[-1].update(request_sha256=c.digest(request_raw), python_sha256=python_sha)
+
+    def coverage_identity(self, files):
+        record = parse(files["shadow-record.json"])["body"]
+        q = record["qualified_identity"]
+        profile = parse(files["materialization-input.json"])["resolved_profile"]["content"]["body"]
+        environment = record["environment"]["environment_id"]
+        registry = [row for row in self.anchor.registry[1] if row["environment_id"] == environment]
+        require(len(registry) == 1)
+        return {"scope_id": self.scope["id"], "workflow_id": self.scope_body["workflow_id"],
+            "task_class": self.scope_body["task_class"],
+            **{key: q[key] for key in ("model_request", "adapter_config_refs", "prompt_refs", "skill_refs", "verification_instructions_ref")},
+            "resolved_profile": {key: profile[key] for key in ("profile_ref", "profile_source", "selection_ref", "bindings")},
+            "environment_id": environment, "registry_entry": registry[0],
+            "control_policy_set_ref": ref(files["policy-set.json"]),
+            "sandbox_policy_sha256": c.digest(files["policy.json"]),
+            "scope_policy_sha256": self.package_sources["scope/v1/scope-policy.json"].sha256,
+            "coverage_base": self.scope_body["coverage"]["coverage_base"], "coverage_rule_version": "scope-coverage.v1"}
+
+    def coverage_interval(self, observation, retained_files):
+        n = self.coverage_configuration.normalizer
+        base = self.scope_body["coverage"]["coverage_base"]
+        revision = self.scope_body["qualified_identity"]["target_revision"]
+        head = self.hold(self.git_root / "HEAD", c.DOCUMENT_LIMIT).raw
+        require(head.startswith(b"ref: refs/heads/") and head.endswith(b"\n"))
+        branch_name = head[len(b"ref: refs/heads/"):-1].decode("utf-8")
+        require(branch_name == observation["default_branch"]["name"])
+        named_ref = self.git_root / "refs/heads" / branch_name
+        if os.path.lexists(named_ref):
+            require(self.hold(named_ref, c.DOCUMENT_LIMIT).raw == (revision["commit_id"] + "\n").encode())
+        else:
+            packed = self.hold(self.git_root / "packed-refs", c.DOCUMENT_LIMIT).raw
+            matches = [line for line in packed.splitlines() if not line.startswith((b"#", b"^"))
+                       and line.endswith(b" refs/heads/" + branch_name.encode())]
+            require(matches == [(revision["commit_id"] + " refs/heads/" + branch_name).encode()])
+        rows = observation["first_parent_commits"]
+        commits = []
+        oid = revision["commit_id"]
+        while True:
+            require(len(commits) < 4096 and oid not in {row["commit_id"] for row in commits})
+            tree, parents = self.commit(oid)
+            commits.append({"commit_id": oid, "tree_id": tree,
+                            "parent_commit_id": None if oid == base["commit_id"] else (parents[0] if parents else None)})
+            if oid == base["commit_id"]:
+                break
+            require(parents)
+            oid = parents[0]
+        commits.reverse()
+        require(rows == [dict(row, index=index) for index, row in enumerate(commits)])
+        require(observation["repository"]["repository_id"] == revision["repository_id"]
+                and observation["branch_snapshots"]["current"]["commit_id"] == revision["commit_id"]
+                and observation["branch_snapshots"]["baseline"]["commit_id"] == base["commit_id"])
+        pulls = observation["publisher_pull_requests"]
+        used = set()
+        previous = self.git.inventory(base)
+        for row in commits[1:]:
+            facts = self.git.inventory(dict(revision, commit_id=row["commit_id"]))
+            changed = sorted(path for path in set(previous) | set(facts)
+                if previous.get(path) != facts.get(path) and
+                (previous.get(path, (None, None))[1] == "blob" or facts.get(path, (None, None))[1] == "blob"))
+            require(not any(path == ".ystack" or path.startswith(".ystack/") or path == ".github/workflows"
+                            or path.startswith(".github/workflows/") for path in changed))
+            evidence = [path for path in changed if path == "ystack-evidence" or path.startswith("ystack-evidence/")]
+            if evidence:
+                require(changed == evidence and all(path not in previous and facts.get(path, ())[:2] == ("100644", "blob") for path in evidence))
+                candidates = [pull for pull in pulls if pull["merge_commit_id"] == row["commit_id"]]
+                require(len(candidates) == 1)
+                pull = candidates[0]
+                require(pull["publisher_identity_ref"] == self.coverage_configuration.config["publisher_identity_ref"]
+                        and pull["scope_id"] == self.scope["id"] and pull["changed_paths"] == evidence
+                        and pull["merged"] is True)
+                matching = []
+                for files in retained_files:
+                    body = parse(files["shadow-record.json"])["body"]
+                    publisher = body["write"]["publisher_request"]
+                    p = publisher["body"]
+                    if (c.digest(c.canonical(publisher)) == pull["publisher_request_sha256"]
+                            and p["branch"] == pull["source_branch"] and p["target_repository_id"] == revision["repository_id"]
+                            and p["base_revision"]["commit_id"] == pull["base_commit_id"]
+                            and p["candidate_tree_id"] == self.commit(pull["head_commit_id"])[0]
+                            and [item["path"] for item in body["write"]["write_set"]] == evidence):
+                        matching.append(files)
+                require(len(matching) == 1)
+                head_tree, head_parents = self.commit(pull["head_commit_id"])
+                require(head_parents == [pull["base_commit_id"]])
+                head_facts = self.git.inventory(dict(revision, commit_id=pull["head_commit_id"]))
+                base_facts = self.git.inventory(dict(revision, commit_id=pull["base_commit_id"]))
+                head_changes = sorted(path for path in set(base_facts) | set(head_facts)
+                    if base_facts.get(path) != head_facts.get(path) and
+                    (base_facts.get(path, (None, None))[1] == "blob" or head_facts.get(path, (None, None))[1] == "blob"))
+                require(head_changes == evidence and all(path not in base_facts and head_facts[path] == facts[path] for path in evidence))
+                for item in parse(matching[0]["shadow-record.json"])["body"]["write"]["write_set"]:
+                    raw = self.git.read(["cat-file", "blob", facts[item["path"]][2]], 8 * c.DOCUMENT_LIMIT)
+                    require(facts[item["path"]] == (item["mode"], "blob", item["git_blob_oid"])
+                            and c.digest(raw) == item["sha256"] and item["add_only"] is True)
+                used.add(pull["node_id"])
+            previous = facts
+        require(used == {pull["node_id"] for pull in pulls})
+        return {"sha256": c.digest(c.canonical(rows)), "commit_count": len(rows)}
+
+    def source_coverage(self, qualifying, current, row_groups):
+        missing = {"state": "stale"}
+        required = self.scope_body["required_shadow_environments"]
+        if not (set(qualifying) == set(current) == set(required)
+                and all(row["authentication"]["state"] == "authenticated" for rows in row_groups for row in rows if row["claimed"])):
+            return missing
+        anchor = self.anchor_for()
+        configuration = c.load_coverage_configuration(anchor)
+        if configuration is None:
+            return missing
+        self.coverage_configuration = configuration
+        self.owned.append(configuration)
+        n = configuration.normalizer
+        for environment in required:
+            require(same(self.coverage_identity(qualifying[environment]), self.coverage_identity(current[environment])))
+            require(parse(qualifying[environment]["shadow-record.json"])["body"]["record_form"]
+                    == parse(current[environment]["shadow-record.json"])["body"]["record_form"] == "withheld-write.v1")
+        documents = {}
+        for name in n.DOCUMENT_NAMES:
+            documents[name] = ref(self.hold(self.scratch / (name + ".json"), c.DOCUMENT_LIMIT).raw)
+        risk, duty = (parse(self.hold(self.scratch / (name + ".json"), c.DOCUMENT_LIMIT).raw) for name in ("risk", "duty"))
+        identity = self.scope_body["qualified_identity"]
+        require(same(risk["body"]["stage"]["request_ref"], identity["stage_request_ref"])
+                and same(duty["body"]["stage"]["request_ref"], identity["stage_request_ref"])
+                and same(risk["body"]["stage"]["resolved_profile_ref"], identity["resolved_profile_ref"])
+                and same(duty["body"]["stage"]["resolved_profile_ref"], identity["resolved_profile_ref"])
+                and same(risk["body"]["stage"]["result_ref"], duty["body"]["stage"]["result_ref"]))
+        require(all(same(ref(c.canonical(parse(files["materialization-response.json"])["stage_result"])),
+                         duty["body"]["stage"]["result_ref"]) for files in current.values()))
+        nonce = os.urandom(32).hex()
+        attempt = "coverage." + nonce
+        def hashes(name):
+            return [{"environment_id": environment, "sha256": c.digest(c.canonical(parse(files["shadow-record.json"])["body"]["write"][name]))}
+                    for environment, files in sorted(current.items())]
+        git_observation = {"base": self.scope_body["coverage"]["coverage_base"], "current": identity["target_revision"],
+            "base_tree": self.commit(self.scope_body["coverage"]["coverage_base"]["commit_id"])[0],
+            "current_tree": self.commit(identity["target_revision"]["commit_id"])[0], "config_sha256": c.digest(self.git.config)}
+        body = {"attempt_id": attempt, "nonce": nonce, "repository_id": self.scope_body["target_repository_id"],
+            "coverage_base": self.scope_body["coverage"]["coverage_base"], "evaluated_revision": identity["target_revision"],
+            "coverage_rule_version": "scope-coverage.v1", "documents": documents,
+            "qualifying_shadow_record_refs": sorted(self.scope_body["coverage"]["qualifying_shadow_record_refs"], key=c.canonical),
+            "current_shadow_record_refs": sorted(self.scope_body["shadow_evidence_refs"], key=c.canonical),
+            "resolved_profile_ref": identity["resolved_profile_ref"], "stage_request_ref": identity["stage_request_ref"],
+            "stage_result_ref": duty["body"]["stage"]["result_ref"],
+            "materialization_refs": [{"environment_id": environment, "sha256": c.digest(files["materialization-response.json"])}
+                                      for environment, files in sorted(current.items())],
+            "publisher_request_refs": hashes("publisher_request"), "post_check_refs": hashes("post_write_verification"),
+            "qualifying_receipt_refs": sorted([ref(files["sandbox-receipt.json"]) for files in qualifying.values()], key=c.canonical),
+            "git_observation_sha256": c.digest(c.canonical(git_observation)),
+            "source_package_ref": n.doc_ref(configuration.package_raw), "source_accepted_set_ref": n.doc_ref(configuration.accepted_raw)}
+        request_raw = c.canonical({"schema_version": 1, "kind": "coverage_source_request", "id": attempt, "body": body})
+        n.request(request_raw)
+        expectation = {key: body[key] for key in ("attempt_id", "nonce", "coverage_base", "evaluated_revision",
+            "stage_request_ref", "resolved_profile_ref", "stage_result_ref", "source_package_ref", "source_accepted_set_ref")}
+        expectation.update(request_sha256=c.digest(request_raw), scope_ref=documents["scope"])
+        workspace = self.runtime / attempt
+        workspace.mkdir(mode=0o700)
+        parent = os.open(self.runtime, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(parent)
+        finally:
+            os.close(parent)
+        for name, raw in (("request.json", request_raw), ("expectation.json", c.canonical({"schema_version": 1,
+                          "kind": "coverage_source_expectation", "id": attempt, "body": expectation}))):
+            write_exclusive(workspace / name, raw, mode=0o600)
+            self.hold(workspace / name, c.DOCUMENT_LIMIT)
+        self.directory(workspace)
+        self.recheck()
+        provisional = [item for item in self.owned if isinstance(item, c._HeldStoreRead)]
+        for item in provisional:
+            item.recheck()
+        for item in provisional:
+            item.close()
+            self.owned.remove(item)
+        self.darwin.coverage_source(request_raw)
+        source = c._HeldCoverageRead(anchor, configuration, request_raw)
+        self.owned.append(source)
+        for files_by_environment, rows in zip((qualifying, current), row_groups):
+            self.authentication_revision = (self.scope_body["coverage"]["coverage_base"] if files_by_environment is qualifying else identity["target_revision"])
+            for environment, files in files_by_environment.items():
+                facts = self._authenticate(files)
+                row = next(row for row in rows if row["environment_id"] == environment)
+                require(all(same(value, row["facts"][key]) for key, value in facts.items() if key != "fresh_origin_ref"))
+                row["facts"] = facts
+        observed = parse(source.snapshots["payload/observation.json"])
+        receipt = parse(source.snapshots["receipt.json"])
+        interval = self.coverage_interval(observed, list(qualifying.values()) + list(current.values()))
+        require(all(n.age_ok(parse(files["sandbox-receipt.json"])["body"]["timing"]["terminated_at"], receipt["body"]["completed_at"])
+                    for files in qualifying.values()))
+        require(n.utc(observed["branch_snapshots"]["current"]["observed_at"]) <= n.utc(receipt["body"]["completed_at"]))
+        self.recheck()
+        return {"state": "authenticated", "request_ref": ref(request_raw), "receipt_ref": ref(source.snapshots["receipt.json"]),
+            "origin_ref": ref(source.observation), "observation_sha256": c.digest(source.snapshots["payload/observation.json"]),
+            "interval": interval, "coverage_base": body["coverage_base"], "evaluated_revision": body["evaluated_revision"],
+            "current_binding_sha256": c.digest(c.canonical(body)), "qualifying_rows": row_groups[0]}
+
     def evaluate(self):
         document = self.shadow_set
         require(set(document) == {"schema_version", "kind", "id", "body"}
@@ -691,17 +892,24 @@ class _Reader:
             "evaluation_mode", "git_revision_ref", "incident_ref", "materialization", "observed_at", "outcome",
             "qualification", "qualified_identity", "qualified_identity_ref", "reason_id", "shadow",
             "target_repository_id", "trace_ledger_ref"}
-        rows, digests, allowed_directories, identities = [], set(), set(), set()
+        rows, qualifying_rows = [], []
+        digests, allowed_directories = set(), set()
         named = set(os.listdir(self.bundle_root.fd))
+        coverage = self.scope_body.get("coverage")
+        require(bool(coverage) == workflow)
+        groups = [("current", references, identity["target_revision"], rows)]
+        if coverage is not None:
+            groups.insert(0, ("qualifying", coverage["qualifying_shadow_record_refs"], coverage["coverage_base"], qualifying_rows))
+        role_files = {"qualifying": {}, "current": {}}
         for record in records:
-            require(type(record) is dict and set(record) == {"schema_version", "kind", "id", "body"}
-                    and type(record["schema_version"]) is int and record["schema_version"] == 1
-                    and record["kind"] == "shadow_reproduction_record" and c._id(record["id"])
-                    and type(record["body"]) is dict)
             raw = c.canonical(record)
             digest = c.digest(raw)
             require(digest not in digests)
             digests.add(digest)
+            require(type(record) is dict and set(record) == {"schema_version", "kind", "id", "body"}
+                    and type(record["schema_version"]) is int and record["schema_version"] == 1
+                    and record["kind"] == "shadow_reproduction_record" and c._id(record["id"])
+                    and type(record["body"]) is dict)
             body = record["body"]
             form = body.get("record_form", "legacy")
             require(form in {"legacy", "enforced-reproduction.v1", "withheld-write.v1"})
@@ -709,46 +917,58 @@ class _Reader:
             if form == "withheld-write.v1":
                 additions.add("write")
             require(set(body) == base_keys | additions)
-            claimed = any(reference["id"] == record["id"] and reference["sha256"] == digest for reference in references)
-            match = (body["target_repository_id"] == self.scope_body["target_repository_id"]
-                     and same(body["git_revision_ref"], identity["target_revision"])
-                     and same(body["qualified_identity"], identity))
-            eligible = claimed and match and form != "legacy"
-            environment = body["environment"]["environment_id"]
-            row = {"record_ref": ref(raw), "record_form": form, "claimed": claimed,
-                "eligible": eligible, "environment_id": environment,
-                "authentication": {"state": "missing"}, "facts": {}}
-            if form == "legacy":
-                require(digest not in named)
-            elif claimed:
-                allowed_directories.add(digest)
-            if eligible:
-                require(environment not in identities)
-                identities.add(environment)
-                require(environment in self.scope_body["required_shadow_environments"])
-                require(form != "withheld-write.v1" or workflow)
-                if digest in named:
-                    held = c._HeldBundle(self.bundle_root, digest, form)
-                    self.owned.append(held)
-                    require(held.files["shadow-record.json"] == raw)
-                    if form == "enforced-reproduction.v1":
-                        require(body["materialization"]["value"]["outcome"] == "no-change")
-                    else:
-                        require(body["materialization"]["value"]["outcome"] == "changed")
-                    if os.path.lexists(c.ANCHOR):
-                        row["facts"] = self.fixed_bundle(held)
-                        row["authentication"] = {"state": "authenticated"}
-            rows.append(row)
+            for role, refs, revision, output_rows in groups:
+                claimed = any(reference["id"] == record["id"] and reference["sha256"] == digest for reference in refs)
+                same_identity = (same(body["qualified_identity"], identity) if role == "current" else
+                    all(same(body["qualified_identity"][key], identity[key]) for key in
+                        ("model_request", "adapter_config_refs", "prompt_refs", "skill_refs", "verification_instructions_ref")))
+                match = body["target_repository_id"] == self.scope_body["target_repository_id"] and same(body["git_revision_ref"], revision) and same_identity
+                eligible = claimed and match and form != "legacy"
+                environment = body["environment"]["environment_id"]
+                row = {"record_ref": ref(raw), "record_form": form, "claimed": claimed,
+                    "eligible": eligible, "environment_id": environment,
+                    "authentication": {"state": "missing"}, "facts": {}}
+                if form == "legacy":
+                    require(digest not in named)
+                elif claimed:
+                    allowed_directories.add(digest)
+                if eligible:
+                    require(environment not in role_files[role])
+                    require(environment in self.scope_body["required_shadow_environments"])
+                    require(form != "withheld-write.v1" or workflow)
+                    if digest in named:
+                        held = c._HeldBundle(self.bundle_root, digest, form)
+                        self.owned.append(held)
+                        require(held.files["shadow-record.json"] == raw)
+                        require(body["materialization"]["value"]["outcome"] == ("no-change" if form == "enforced-reproduction.v1" else "changed"))
+                        role_files[role][environment] = held.files
+                        if os.path.lexists(c.ANCHOR):
+                            self.authentication_revision = revision
+                            row["facts"] = self.fixed_bundle(held)
+                            row["authentication"] = {"state": "authenticated"}
+                output_rows.append(row)
         require(named <= allowed_directories)
-        for reference in references:
-            require(sum(reference["id"] == row["record_ref"]["id"]
-                        and reference["sha256"] == row["record_ref"]["sha256"] for row in rows) == 1)
+        for _role, refs, _revision, output_rows in groups:
+            for reference in refs:
+                require(sum(reference["id"] == row["record_ref"]["id"]
+                            and reference["sha256"] == row["record_ref"]["sha256"] for row in output_rows) == 1)
+        coverage_result = None
+        if workflow:
+            try:
+                coverage_result = self.source_coverage(role_files["qualifying"], role_files["current"], [qualifying_rows, rows])
+            except BaseException as error:
+                if getattr(error, "code", "") in {"E_STALE", "E_RUNTIME", "E_LIMIT", "E_DEPENDENCY"}:
+                    raise
+                if isinstance(error, (KeyboardInterrupt, SystemExit, InterruptedError)):
+                    raise
+                coverage_result = {"state": "stale"}
         self.recheck()
         result = {"schema_version": 1, "kind": "scope_shadow_evidence_observation", "id": self.scope["id"],
             "body": {"scope_ref": ref(self.scope_raw), "shadow_set_ref": ref(self.set_raw),
                 "rows": sorted(rows, key=lambda row: row["record_ref"]["sha256"]),
                 "git": {"repository_kind": "bare", "hash_algorithm": identity["target_revision"]["hash_algorithm"],
-                    "config_sha256": c.digest(self.git.config)}, "commands": self.commands}}
+                    "config_sha256": c.digest(self.git.config)}, "commands": self.commands,
+                **({"coverage": coverage_result} if workflow else {})}}
         return c.canonical(result)
 
 
@@ -809,8 +1029,8 @@ class _ControlFIFO:
             self.parent.close()
 
 
-def write_exclusive(path, raw):
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400)
+def write_exclusive(path, raw, mode=0o400):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
     try:
         sent = 0
         while sent < len(raw):

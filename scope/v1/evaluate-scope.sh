@@ -182,6 +182,7 @@ python_bin=$("$python_bin" -I -S -B -c 'import os,sys;print(os.path.realpath(sys
 case "$python_bin" in /*) ;; *) emit_error E_RUNTIME ;; esac
 reader_sha=$(sha256_path "$reader") || emit_error E_RUNTIME
 consumer_sha=$(sha256_path "$repo/shadow/v1/_consumer.py") || emit_error E_RUNTIME
+coverage_normalizer_sha=$(sha256_path "$repo/sandbox/v1/coverage-source.py") || emit_error E_RUNTIME
 python_sha=$(sha256_path "$python_bin") || emit_error E_RUNTIME
 jq_sha=$(sha256_path "$jq_bin") || emit_error E_RUNTIME
 locator_snapshot() {
@@ -289,6 +290,7 @@ driver_sha=$(sha256_path "$source_path") || emit_error E_RUNTIME
   --arg duty_sha "$duty_sha" --arg marker_sha "$marker_sha" \
   >"$scratch/evaluation.json" 2>/dev/null || emit_error E_RUNTIME
 
+[ "$(sha256_path "$repo/sandbox/v1/coverage-source.py")" = "$coverage_normalizer_sha" ] &&
 [ "$(sha256_path "$reader")" = "$reader_sha" ] &&
   [ "$(sha256_path "$repo/shadow/v1/_consumer.py")" = "$consumer_sha" ] &&
   [ "$(sha256_path "$python_bin")" = "$python_sha" ] &&
@@ -444,7 +446,10 @@ require_canonical "$scratch/terminal.json"
   (.body | keys == ["commands","observation_sha256"]) and
   .body.observation_sha256 == $original_sha and
   (.body.commands | type == "array" and length <= 4096 and
-    all(.[]; keys == ["argv_sha256","component_sha256","executable_sha256","role"] and
+    all(.[]; (if .role == "coverage-source-boundary" then
+        keys == ["argv_sha256","component_sha256","executable_sha256","python_sha256","request_sha256","role"] and
+        all(.request_sha256,.python_sha256; type == "string" and test("\\A[0-9a-f]{64}\\z"))
+      else keys == ["argv_sha256","component_sha256","executable_sha256","role"] end) and
       (.role | type == "string" and test("\\A[a-z0-9][a-z0-9._:-]{0,127}\\z")) and
       all(.argv_sha256,.component_sha256,.executable_sha256;
         type == "string" and test("\\A[0-9a-f]{64}\\z")))) and
@@ -461,14 +466,15 @@ require_canonical "$scratch/final-observation.json"
   [ "$(sha256_path "$scratch/terminal.json")" = "$commit_sha" ] || emit_error E_STALE
 /usr/bin/cmp -s "$scratch/observation/terminal.json" "$scratch/terminal.json" || emit_error E_STALE
 [ "$(locator_snapshot 2>"$scratch/locator-error")" = "$locator_before" ] || emit_error E_STALE
-for required in "$source_path" "$policy" "$record_program" "$program" "$reader" "$repo/shadow/v1/_consumer.py" "$python_bin" "$jq_bin"; do
+for required in "$source_path" "$policy" "$record_program" "$program" "$reader" "$repo/shadow/v1/_consumer.py" "$repo/sandbox/v1/coverage-source.py" "$python_bin" "$jq_bin"; do
   [ -f "$required" ] && [ ! -L "$required" ] || emit_error E_STALE
 done
 [ "$(sha256_path "$source_path")" = "$driver_sha" ] &&
   [ "$(sha256_path "$policy")" = "$policy_sha" ] &&
   [ "$(sha256_path "$record_program")" = "$record_program_sha" ] &&
   [ "$(sha256_path "$program")" = "$program_sha" ] &&
-  [ "$(sha256_path "$reader")" = "$reader_sha" ] &&
+  [ "$(sha256_path "$repo/sandbox/v1/coverage-source.py")" = "$coverage_normalizer_sha" ] &&
+[ "$(sha256_path "$reader")" = "$reader_sha" ] &&
   [ "$(sha256_path "$repo/shadow/v1/_consumer.py")" = "$consumer_sha" ] &&
   [ "$(sha256_path "$python_bin")" = "$python_sha" ] &&
   [ "$(sha256_path "$jq_bin")" = "$jq_sha" ] || emit_error E_STALE

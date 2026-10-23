@@ -1936,3 +1936,27 @@ synthetic storage fixtures. The native capsule measures and loads the real curre
 binary with RTLD_NOW|LOCAL, without creating State or executing startup, VM or publisher.
 The current development Mac cannot run account or anchor setup. Its genuine positive
 requires the separately authorized reserved evidence host described in the accepted plan.
+
+The inactive scope reader also has one fixed `coverage-read.v1` source boundary.
+Only the exact shadow-evidence write workflow admits a coverage block. The reader
+owns a fresh durable request and expectation. It authenticates both evidence sets,
+releases provisional store holds before source creation, then authenticates both
+sets again. Final holds stay live through the evaluator's `SEAL` handshake.
+`sandbox/v1/coverage-source.py` validates the three fixed raw-page families and
+normalizes the complete first-parent, publisher-PR and applicable-rule interval.
+The bare Git comparison and original qualifying receipt time remain independent
+checks. The public evaluator still takes the same nine inputs.
+
+Production has no source configuration, collector, credential, network route or
+accepted source identity. The optional root-owned anchor siblings are
+`coverage-source-config.json` and `coverage-source-accepted-identities.json`.
+They select one measured finite source package and one publisher identity. Missing
+configuration returns `scope.enablement-stale`. No coverage result enables a scope.
+The controlled source inventory is receipt-last: `receipt.json`, plus
+`payload/request.json`, `payload/raw-manifest.json`, `payload/observation.json`
+and consecutive `payload/raw/0000` pages. The dedicated reader checks every file
+and directory with the existing ownership, ACL, no-follow and held-object rules.
+
+Run `bash scripts/test/scope-qualification.test.sh --coverage-pure` for the bounded
+normalizer, raw-frame, exact-age and replay cases without root setup. These checks
+do not replace the required distinct-principal Linux and macOS integration proof.

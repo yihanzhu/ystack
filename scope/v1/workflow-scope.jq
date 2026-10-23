@@ -146,6 +146,12 @@ def gate_evidence_refs_ok:
   (.duty_separation_evaluation_ref |
    document_ref_ok(1; "duty_separation_evaluation"));
 
+def coverage_ok($repository_id):
+  exact(["coverage_base", "coverage_rule_version", "qualifying_shadow_record_refs"]) and
+  .coverage_rule_version == "scope-coverage.v1" and
+  (.coverage_base | git_revision_ref_ok and .repository_id == $repository_id) and
+  (.qualifying_shadow_record_refs | bounded_set(1; 16; shadow_evidence_ref_ok));
+
 def shape_ok:
   exact(["body", "id", "kind", "schema_version"]) and
   # The scope id must leave room for the "proposal." prefix the emitted
@@ -159,7 +165,11 @@ def shape_ok:
      "qualified_identity", "required_eval_families",
      "required_proof_kinds", "required_shadow_environments", "risk_tier",
      "scope_version", "shadow_evidence_refs", "target_repository_id",
-     "task_class", "workflow_id"]) and
+     "task_class", "workflow_id"] +
+     (if .workflow_id == "workflow.shadow-evidence-commit" and .task_class == "task.commit-shadow-evidence"
+      then ["coverage"] else [] end)) and
+   ((.workflow_id == "workflow.shadow-evidence-commit") == (.task_class == "task.commit-shadow-evidence")) and
+   (if has("coverage") then (.coverage | coverage_ok($body.target_repository_id)) else true end) and
    (.activation_state | type == "string") and
    (.authority | type == "string") and
    (.scope_version | type == "string") and

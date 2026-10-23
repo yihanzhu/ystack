@@ -677,11 +677,38 @@ def measured_row:
       (.materialization_ref | exact(["sha256"]) and (.sha256 | sha256_ok))) end) and
   (if .record_form == "legacy" then (.eligible | not) and .authentication.state == "missing" else true end);
 
+def measured_command:
+  (if .role == "coverage-source-boundary" then
+     exact(["role","argv_sha256","executable_sha256","component_sha256","request_sha256","python_sha256"]) and
+     (.request_sha256 | sha256_ok) and (.python_sha256 | sha256_ok)
+   else exact(["role","argv_sha256","executable_sha256","component_sha256"]) end) and
+  (.role | id_ok) and (.argv_sha256 | sha256_ok) and
+  (.executable_sha256 | sha256_ok) and (.component_sha256 | sha256_ok);
+
+def measured_coverage($scope_doc):
+  (. == {state:"stale"}) or
+  (exact(["state","request_ref","receipt_ref","origin_ref","observation_sha256","interval",
+          "coverage_base","evaluated_revision","current_binding_sha256","qualifying_rows"]) and
+   .state == "authenticated" and
+   (.request_ref | measured_document_ref and .kind == "coverage_source_request") and
+   (.receipt_ref | measured_document_ref and .kind == "forge_coverage_source_receipt") and
+   (.origin_ref | measured_document_ref and .kind == "shadow_origin_observation") and
+   (.observation_sha256 | sha256_ok) and (.current_binding_sha256 | sha256_ok) and
+   (.interval | exact(["sha256","commit_count"]) and (.sha256 | sha256_ok) and
+      (.commit_count | int_ok and . >= 1 and . <= 4096)) and
+   .coverage_base == $scope_doc.body.coverage.coverage_base and
+   .evaluated_revision == $scope_doc.body.qualified_identity.target_revision and
+   (.qualifying_rows | bounded_set(1;16;measured_row;.record_ref.sha256)) and
+   (.qualifying_rows as $rows | $scope_doc.body.coverage.qualifying_shadow_record_refs | all(. as $ref |
+     $rows | any(.record_ref == $ref and .claimed and .eligible and .authentication.state == "authenticated"))));
+
 def measured_observation($scope_doc; $set):
   exact(["schema_version","kind","id","body"]) and .schema_version == 1 and
   .kind == "scope_shadow_evidence_observation" and .id == $scope_doc.id and
   (.body |
-   exact(["scope_ref","shadow_set_ref","rows","git","commands"]) and
+   exact(["scope_ref","shadow_set_ref","rows","git","commands"] +
+     (if $scope_doc.body | has("coverage") then ["coverage"] else [] end)) and
+   (if $scope_doc.body | has("coverage") then (.coverage | measured_coverage($scope_doc)) else true end) and
    .scope_ref == document_ref($scope_doc;$scope_sha) and
    .shadow_set_ref == document_ref($set;$shadow_set_sha) and
    (.rows | bounded_set(1;16;measured_row;.record_ref.sha256)) and
@@ -690,14 +717,13 @@ def measured_observation($scope_doc; $set):
     .hash_algorithm == $scope_doc.body.qualified_identity.target_revision.hash_algorithm and
     (.config_sha256 | sha256_ok)) and
    (.commands | type == "array" and length >= 3 and length <= 4096 and
-    all(.[]; exact(["role","argv_sha256","executable_sha256","component_sha256"]) and
-      (.role | id_ok) and (.argv_sha256 | sha256_ok) and
-      (.executable_sha256 | sha256_ok) and (.component_sha256 | sha256_ok))));
+    all(.[]; measured_command)));
 
 $policy[0].body as $p |
 $scope[0] as $scope_doc |
 $scope_doc.body as $s |
 $s.qualified_identity as $identity |
+($s.workflow_id == "workflow.shadow-evidence-commit" and $s.task_class == "task.commit-shadow-evidence") as $covered_write |
 $s.gate_evidence_refs as $gate_refs |
 $shadow_set[0] as $set |
 $dashboard[0] as $dash |
@@ -944,7 +970,10 @@ def claimed_by_scope($refs): . as $record |
     else empty end]
  else ["scope.eval-family-unseeded", "scope.eval-failing"] end) as $eval_reasons |
 
-((if $s.risk_tier != "routine" then ["scope.tier-not-routine"] else [] end) +
+((if $covered_write and ($measured_ok | not) then ["scope.enablement-stale"]
+  elif $covered_write and $measured[0].body.coverage.state != "authenticated" then ["scope.enablement-stale"]
+  else [] end) +
+ (if $s.risk_tier != "routine" then ["scope.tier-not-routine"] else [] end) +
  (if $risk_ok and $risk_doc.body.classification.declared_tier == "routine" and
      $risk_doc.body.classification.minimum_tier == "routine" and
      $risk_doc.body.verdict != "violated"
@@ -996,7 +1025,7 @@ content_ref("operating-mode-marker"; "application/json"; $marker_sha) as $mode_r
   git_snapshot: $measured[0].body.git,
   shadow_set_ref: document_ref($set; $shadow_set_sha),
   unclaimed_shadow_records: $unclaimed
-} as $evidence |
+} + (if $covered_write then {coverage:$measured[0].body.coverage} else {} end) as $evidence |
 
 {
   schema_version: 1,
