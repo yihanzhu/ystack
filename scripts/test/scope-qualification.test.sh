@@ -1103,7 +1103,7 @@ PY_REASON_PROGRAM
   {state:"present",value:{verdict:"satisfied",reason_ids:[],evaluation_ref:{
     content_id:"shadow-sandbox-evaluation",
     media_type:"application/vnd.ystack.control-evaluation+json",sha256:$sha}}} as $value |
-  ["legacy","enforced-reproduction.v1","withheld-write.v1"] |
+  ["legacy","enforced-reproduction.v1","withheld-write.v1","withheld-write-policy.v1"] |
   map(. as $form | ["sandbox.declaration-satisfied","sandbox.verifier-binding-satisfied"] |
     map(. as $reason | {form:$form,value:($value | .value.reason_ids=[$reason]),
       expected:(if $form == "legacy" then $reason == "sandbox.declaration-satisfied"
@@ -8722,7 +8722,8 @@ layout_source=ast.get_source_segment(assembler,layout)+'\n'
 (area/'layout.py').write_text(layout_source)
 layout_old="for name in ('tools','work','bundles','identities','snapshots'):(base/name).mkdir(mode=0o755)\nwork=base/'work';work.chmod(0o700)\n"
 (area/'layout-old.py').write_text(layout_old)
-consumer_calls=sorted([node for node in ast.walk(tree) if isinstance(node,ast.Expr)
+coverage_fixture=next(node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=='build_coverage_revision')
+consumer_calls=sorted([node for node in ast.walk(tree) if node.lineno<coverage_fixture.lineno and isinstance(node,ast.Expr)
     and isinstance(node.value,ast.Call) and isinstance(node.value.func,ast.Attribute) and node.value.func.attr=='mkdir'
     and any(k.arg=='mode' and isinstance(k.value,ast.Constant) and k.value.value==0o755 for k in node.value.keywords)
     and node.lineno!=layout.body[1].lineno],key=lambda node:node.lineno)
@@ -14275,7 +14276,8 @@ patch_path = put(work / 'write.patch', patch_raw)
 metadata = {key: sha(raw) for key, raw in c.WRITE_TEXTS.items()}
 metadata.update(contract=sha(contract_raw), patch=sha(patch_raw), allowed_paths=paths,
     attempt_id=write_attempt, suffix=sha(write_attempt.encode())[:32],
-    environment_id=environment, claim_sha256=sha(claim_raw))
+    environment_id=environment, claim_sha256=sha(claim_raw),
+    record_form="withheld-write.v1", incident_id=incident["id"])
 builder = package / 'shadow/v1/write-materialization-input.jq'
 def build_phase(phase, input_path, metadata_path):
     return run([jq, '-L', modules, '-S', '-c', '--arg', 'phase', phase,
@@ -15013,7 +15015,8 @@ print(json.dumps({'through_use_controls':'PASS','sibling_before':'PASS','sibling
     'original_timing_unchanged':True,'watched_cancellation':'E_RUNTIME'},sort_keys=True),flush=True)
 
 
-def build_coverage_revision(commit, tree, label, terminated, template_files, template_record):
+def build_coverage_revision(commit, tree, label, terminated, template_files, template_record, record_form="withheld-write-policy.v1"):
+    commands_start=len(commands)
     work = base / ('coverage-work-' + label)
     work.mkdir(mode=0o700)
     coverage_terminated = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(terminated))
@@ -15173,7 +15176,7 @@ def build_coverage_revision(commit, tree, label, terminated, template_files, tem
           'helper_executable_sha256': sha(helper.read_bytes()),
           'consumer_source_sha256': sha((package / 'shadow/v1/enforced-reproduction.py').read_bytes()),
           'python_sha256': sha(pathlib.Path(sys.executable).read_bytes()), 'jq_sha256': sha(jq.read_bytes()),
-          'native_release': native, 'commands': commands}})
+          'native_release': native, 'commands': commands[commands_start:]}})
     material_receipt = json.loads(json.loads(response_raw)['payloads'][0]['data'])
     stage_result = json.loads(response_raw)['stage_result']
     content_ref = lambda name, media, raw: {'content_id': name, 'media_type': media, 'sha256': sha(raw)}
@@ -15240,153 +15243,117 @@ def build_coverage_revision(commit, tree, label, terminated, template_files, tem
                       'synthetic_runtime_facts': True, 'vm_executed': False}, sort_keys=True), flush=True)
 
     frozen = dict(files, **{'bundle.json': marker})
-    seed_dir = work / 'seed'
-    seed_dir.mkdir(mode=0o700)
-    seed_raw = component('maintenance/v1/incident-to-eval.sh',
-        ['convert', put(work / 'frozen-incident.json', frozen['incident.json']),
-         put(work / 'frozen-record.json', frozen['shadow-record.json']), seed_dir],
-        role='write-seed-conversion')
-    assert [path.name for path in seed_dir.iterdir()] == ['eval-seed-case-stale-moved-artifacts.json']
-    assert (seed_dir / 'eval-seed-case-stale-moved-artifacts.json').read_bytes() == seed_raw
+    # SIMULATED VM identity/launch facts; the write producer and native owner run unchanged.
     prefix = 'ystack-evidence/' + incident['id'] + '/'
-    write_files = {prefix + name: raw for name, raw in frozen.items()}
-    write_files[prefix + 'eval-seed.json'] = seed_raw
-    write_files[prefix + 'README.md'] = b'Shadow evidence. Publication is withheld.\n'
-    paths = sorted(write_files)
-    patch_raw, write_set = c.evidence_patch(write_files, 'sha1')
-    assert len(write_set) == 32
+    assert record_form in {'withheld-write.v1','withheld-write-policy.v1'}
+    policy_form=record_form=='withheld-write-policy.v1'
+    paths = sorted(prefix+name for name in [*e.EVIDENCE_NAMES,'bundle.json','eval-seed.json','README.md',*(['scope-policy.json'] if policy_form else [])])
     write_attempt = 'attempt.coverage-' + label + '-write'
-    contract_raw = c.write_contract(paths)
-    contract_path = put(work / 'write-contract.json', contract_raw)
-    patch_path = put(work / 'write.patch', patch_raw)
-    metadata = {key: sha(raw) for key, raw in c.WRITE_TEXTS.items()}
-    metadata.update(contract=sha(contract_raw), patch=sha(patch_raw), allowed_paths=paths,
-        attempt_id=write_attempt, suffix=sha(write_attempt.encode())[:32],
-        environment_id=environment, claim_sha256=sha(claim_raw))
-    builder = package / 'shadow/v1/write-materialization-input.jq'
-    def build_phase(phase, input_path, metadata_path):
-        return run([jq, '-L', modules, '-S', '-c', '--arg', 'phase', phase,
-            '--rawfile', 'contract', contract_path, '--rawfile', 'patch', patch_path,
-            '--slurpfile', 'metadata', metadata_path, '-f', builder, input_path],
-            role='write-materialization-input', component=builder, limit=8*1024*1024)
-    first_raw = build_phase('stage-request', q_path, put(work / 'write-metadata-first.json', metadata))
-    first = json.loads(first_raw)
-    assert canonical(first['original']) == frozen['materialization-input.json']
-    metadata['stage_request_sha256'] = sha(canonical(first['stage_request']))
-    write_input_raw = build_phase('final-input', put(work / 'write-first.json', first_raw),
-        put(work / 'write-metadata-final.json', metadata))
-    write_input = json.loads(write_input_raw)
-    write_input_path, write_response_raw, write_candidate = materialize(write_input, 'write')
-    assert write_input_path.read_bytes() == write_input_raw
-    write_response_path = put(work / 'write-response.json', write_response_raw)
-    run([jq, '-L', modules, '-e', '--arg', 'command', 'validate-input', '-f', protocol, write_input_path],
-        role='materializer-input-validation', component=protocol)
-    write_check = put(work / 'write-response-check.json', e.response_check(write_input, write_response_raw))
-    run([jq, '-L', modules, '-e', '--arg', 'command', 'validate-response', '-f', protocol, write_check],
-        role='materializer-response-validation', component=protocol)
-    write_prep, write_scratch = work / 'write-preparation', work / 'write-preparation-scratch'
-    write_scratch.mkdir(mode=0o700)
-    write_common = ['--input', write_input_path, '--input-sha256', sha(write_input_raw),
-        '--response', write_response_path, '--response-sha256', sha(write_response_raw),
-        '--candidate-repository', write_candidate / 'repository.git', '--output', write_prep,
-        '--scratch', write_scratch, '--jq', jq]
-    run([sys.executable, '-I', '-S', '-B', preparation_source, 'prepare', *write_common],
-        role='candidate-preparation', component=preparation_source)
-    for path in write_scratch.iterdir():
-        if path.is_dir() and not path.is_symlink():
-            shutil.rmtree(path)
-        else:
-            path.unlink()
-    run([sys.executable, '-I', '-S', '-B', preparation_source, 'inspect', *write_common],
-        role='candidate-inspection', component=preparation_source)
-    write_record_raw = (write_prep / 'record.json').read_bytes()
-    write_manifest_raw = (write_prep / 'manifest.json').read_bytes()
-    write_identity = json.loads(identity_raw)
-    write_identity['body']['stage_request_ref'] = e.pair_ref(write_input['stage_request'])
-    write_identity_raw = canonical(write_identity)
-    launch_raw, expectation_raw = e.make_launch(facts_anchor,
-        {'id': write_attempt, 'body': {'attempt_id': write_attempt}}, canonical(incident),
-        evaluation_raw, canonical(observation), write_record_raw, write_manifest_raw, instruction)
-    launch, expectation = json.loads(launch_raw), json.loads(expectation_raw)
-    write_receipt = json.loads(receipt_raw)
-    write_receipt['id'] = 'receipt.' + sha(launch_raw)
-    write_receipt['body'].update(attempt=expectation['body']['attempt'], control=launch['body']['control'],
-        subject=launch['body']['subject'], timing={'admitted_at':coverage_admitted,'terminated_at':coverage_terminated})
-    write_receipt_raw = canonical(write_receipt)
-    put(base / 'storage-input.json', {'attempt_id': write_attempt, 'receipt_utf8': write_receipt_raw.decode(),
-        'stdout_utf8': '', 'stderr_utf8': '', 'manifest_utf8': evidence_raw.decode(),
-        'evidence_utf8': result_raw.decode()})
-    run(['/usr/bin/sudo', '-n', '-u', writer, '--', sys.executable, '-I', '-S', '-B',
-         base / 'genuine-writer.py'])
-    write_origin_raw = run(['/usr/bin/sudo', '-n', '-u', consumer, '--', sys.executable,
-        '-I', '-S', '-B', base / 'genuine-reader.py', write_attempt])
-    write_checker_raw = component('enforcement/v1/check-sandbox-receipt.sh',
-        ['check-bound', put(work / 'write-receipt.json', write_receipt_raw),
-         put(work / 'write-expectation.json', expectation_raw), work / 'evaluation.json',
-         work / 'observation.json'], role='sandbox-receipt-check')
-    assert json.loads(write_checker_raw)['body']['enforcement_verdict'] == 'satisfied'
-    write_trace_raw = e.trace_ledger(incident, write_attempt, environment, 'no-change', 'tool.verifier',
-        evaluation_raw, write_checker_raw)
-    write_trace_receipt = component('telemetry/v1/validate-trace-ledger.sh',
-        ['validate', incident['id'], write_attempt, put(work / 'write-trace.json', write_trace_raw)],
-        role='trace-validation')
-    write_provenance = json.loads(provenance)
-    write_provenance['id'] = write_attempt
-    write_provenance['body'].update(consumer_source_sha256=sha((package / 'shadow/v1/write-shadow.py').read_bytes()),
-                                     commands=commands)
-    write_provenance_raw = canonical(write_provenance)
-    write_material_receipt = json.loads(json.loads(write_response_raw)['payloads'][0]['data'])
-    write_tree = write_material_receipt['candidate']['tree_id']
-    publisher, publisher_body = w._publisher(incident, write_tree)
-    write_section = {'bundle_ref': w._bundle_ref(frozen['bundle.json']), 'scope_id': scope_doc['id'],
-        'workflow_id': 'workflow.shadow-evidence-commit', 'task_class': 'task.commit-shadow-evidence',
-        'write_set': write_set, 'publisher_request': publisher,
-        'admission': {'state':'checked', 'effect':'none', 'request_sha256':sha(canonical(publisher)),
-                      'write_set_sha256':sha(canonical(write_set))},
-        'publication': {'state':'withheld','reason_id':'shadow.write-not-published'},
-        'post_write_verification': {'target_revision':incident['body']['git_revision_ref'],
-                                   'candidate_tree_id':write_tree, 'write_set':write_set}}
-    outer_files = dict(files)
-    outer_files.update({'materialization-input.json':write_input_raw, 'materialization-response.json':write_response_raw,
-        'preparation-record.json':write_record_raw, 'preparation-manifest.json':write_manifest_raw,
-        'qualified-identity.json':write_identity_raw, 'sandbox-request.json':launch_raw,
-        'sandbox-expectation.json':expectation_raw, 'sandbox-receipt.json':write_receipt_raw,
-        'sandbox-check.json':write_checker_raw, 'origin-observation.json':write_origin_raw,
-        'trace-ledger.json':write_trace_raw, 'trace-receipt.json':write_trace_receipt,
-        'consumer-provenance.json':write_provenance_raw, 'publisher-body.txt':publisher_body})
-    materialized = SimpleNamespace(response_raw=write_response_raw, evaluation_raw=evaluation_raw,
-                                   qualified_identity_raw=write_identity_raw)
-    outer_record = w._outer_record(SimpleNamespace(anchor=facts_anchor), materialized, frozen,
-                                  outer_files, write_section, write_provenance_raw, write_trace_raw)
-    outer_files['shadow-record.json'] = outer_record
-    w._record_relations(outer_files, incident, json.loads(result_raw)['body'], write_origin_raw,
-                        facts_anchor, write_section)
-    outer_marker = canonical({'schema_version':1,'kind':'shadow_consumer_bundle',
-        'id':'bundle.'+sha(frozen['incident.json'])[:32], 'body':{
-          'activation_state':'inactive', 'record_form':'withheld-write.v1',
-          'incident_sha256':sha(frozen['incident.json']), 'target_revision':incident['body']['git_revision_ref'],
-          'files':[{'name':name,'size_bytes':len(outer_files[name]),'sha256':sha(outer_files[name])}
-                   for name in sorted(outer_files)]}})
-    outer_bundle = base / 'snapshots' / sha(outer_record)
+    request_inputs = {'incident':put(work/'producer-incident.json',canonical(incident)),
+        'claim':put(work/'producer-claim.json',claim_raw), 'duty_evaluation':put(work/'producer-duty.json',duty_raw),
+        'materialization_input':q_path, 'qualified_identity':put(work/'producer-identity.json',identity_raw),
+        'source_git_dir':source, 'jq':jq, 'closure_helper':helper}
+    producer_request = {'schema_version':1,'kind':'shadow_write_request','id':write_attempt,'body':{
+        'attempt_id':write_attempt,'attempt_number':1,'scope_id':scope_doc['id'],'allowed_paths':paths,
+        **{key:str(value) for key,value in request_inputs.items()}}}
+    producer_request_path=put(work/'producer-request.json',producer_request,0o400)
+    producer_work,producer_output=work/'producer-work',work/'producer-output'
+    producer_work.mkdir(mode=0o700);producer_output.mkdir(mode=0o700)
+    frozen_provenance=json.loads(files['consumer-provenance.json'])['body']
+    parent_context={key:frozen_provenance[key] for key in ('helper_source_sha256','helper_build_record_sha256','helper_executable_sha256')}
+    parent_context.update(helper_executable_size=helper.stat().st_size,helper_path=str(helper),native_release={
+        key:native[key] for key in ('source_sha256','build_script_sha256','build_record_sha256','binary_size',
+            'binary_sha256','python_sha256','python_abi','dependency_record_sha256','loader_mode')})
+    parent_context['native_release'].update(binary_path=str(native_binary),python_path=sys.executable)
+    context_path=put(work/'producer-parent.json',{'schema_version':2,'kind':'shadow_consumer_parent_context',
+        'id':'shadow.parent','body':parent_context},0o400)
+    supervisor=load('coverage_fixture_frame_decoder',package/'sandbox/v1/host-supervisor.py')
+    def simulated_launch(anchor_value,frame,deadline):
+        values=dict(supervisor.frame_read(frame))
+        framed_launch=json.loads(values[b'request.json'])
+        framed_manifest=json.loads(values[b'manifest.json'])
+        verify_root=work/'producer-verifier';verify_root.mkdir(mode=0o700)
+        candidate_dir,evidence_dir,scratch_dir=[verify_root/name for name in ('candidate','evidence','scratch')]
+        for path in (candidate_dir,evidence_dir,scratch_dir):path.mkdir(mode=0o700)
+        for entry in framed_manifest['entries']:
+            if entry['kind']=='directory':(candidate_dir/entry['path']).mkdir(parents=True,exist_ok=True)
+        for index,entry in enumerate(row for row in framed_manifest['entries'] if row['kind']=='file'):
+            raw=values[f'candidate/{index:05d}'.encode()]
+            assert len(raw)==entry['size_bytes'] and sha(raw)==entry['sha256']
+            target=candidate_dir/entry['path'];target.parent.mkdir(parents=True,exist_ok=True);put(target,raw,0o400)
+        checked=subprocess.run([str(verifier),'verify','--candidate',str(candidate_dir),'--evidence',str(evidence_dir)],
+            input=values[b'instruction'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=30,
+            env={'PATH':'/usr/bin:/bin','LANG':'C','LC_ALL':'C','TMPDIR':str(scratch_dir)})
+        assert checked.returncode==0 and not checked.stdout and not checked.stderr
+        actual_result=(evidence_dir/'file-digest-result.json').read_bytes()
+        actual_evidence=canonical({'schema_version':1,'kind':'sandbox_evidence_manifest','id':'evidence-manifest','body':{
+            'files':[{'name_hex':b'file-digest-result.json'.hex(),'sha256':sha(actual_result),'size_bytes':len(actual_result)}]}})
+        expected=json.loads((producer_work/'launch/sandbox-expectation.json').read_bytes())
+        synthetic_receipt=json.loads(receipt_raw)
+        synthetic_receipt['id']='receipt.'+sha(values[b'request.json'])
+        synthetic_receipt['body'].update(attempt=expected['body']['attempt'],control=framed_launch['body']['control'],
+            subject=framed_launch['body']['subject'])
+        synthetic_receipt['body']['payload']['evidence_manifest_sha256']=sha(actual_evidence)
+        synthetic_receipt['body']['limits']['output_bytes']['observed']=len(actual_result)
+        put(base/'storage-input.json',{'attempt_id':write_attempt,'receipt_utf8':canonical(synthetic_receipt).decode(),
+            'stdout_utf8':'','stderr_utf8':'','manifest_utf8':actual_evidence.decode(),'evidence_utf8':actual_result.decode()})
+        run(['/usr/bin/sudo','-n','-u',writer,'--',sys.executable,'-I','-S','-B',base/'genuine-writer.py'])
+        return 0
+    producer_log=work/'producer-raw.log'
+    sys.stdout.flush();sys.stderr.flush()
+    producer_pid=os.fork()
+    if producer_pid==0:
+        try:
+            with producer_log.open('wb') as stream:
+                os.dup2(stream.fileno(),1);os.dup2(stream.fileno(),2)
+                os.setgid(gid)
+                e._launch=simulated_launch
+                fd=os.open(context_path,os.O_RDONLY|os.O_NOFOLLOW);os.dup2(fd,3)
+                if fd!=3:os.close(fd)
+                e._runtime_callbacks_clear();e.gc.disable()
+                census=e._NativeThreadCensus();census.observe()
+                admission=e._StartupAdmission(e._STARTUP_KEY,sys.executable,sha(pathlib.Path(sys.executable).read_bytes()),
+                    sys.version,tuple(sys.version_info[:2]),e._runtime_module_origins(),census)
+                code=w.main(['write-shadow.py','prepare-policy' if policy_form else 'prepare',str(producer_request_path),str(bundle),
+                    str(producer_work),str(producer_output)],admission)
+                sys.stdout.flush();sys.stderr.flush()
+                os._exit(code)
+        except BaseException:
+            import traceback
+            traceback.print_exc();sys.stderr.flush();os._exit(1)
+    waited,status=os.waitpid(producer_pid,0)
+    print(json.dumps({'producer_operation':'prepare-policy' if policy_form else 'prepare','SIMULATED':['startup admission','VM identity','launch receipt'],
+        'actual':['public writer','native owner','materializer','preparation','fixed verifier','checker','store reader'],
+        'wait_status':status,'raw_log_utf8':producer_log.read_bytes().decode('utf8','backslashreplace')},sort_keys=True),flush=True)
+    assert waited==producer_pid and os.WIFEXITED(status) and os.WEXITSTATUS(status)==0
+    outer_files={path.name:path.read_bytes() for path in producer_output.iterdir() if path.name!='bundle.json'}
+    outer_marker=(producer_output/'bundle.json').read_bytes();outer_record=outer_files['shadow-record.json']
+    actual_record=json.loads(outer_record)['body'];write_section=actual_record['write']
+    assert actual_record['record_form']==record_form and len(write_section['write_set'])==(33 if policy_form else 32)
+    if policy_form:
+        assert outer_files['scope-policy.json']==(package/'scope/v1/scope-policy.json').read_bytes()
+        c.check_scope_policy_ref(actual_record['scope_policy_ref'],outer_files['scope-policy.json'])
+    else:
+        assert 'scope-policy.json' not in outer_files and 'scope_policy_ref' not in actual_record
+    write_material_receipt=json.loads(json.loads(outer_files['materialization-response.json'])['payloads'][0]['data'])
+    outer_bundle=base/'snapshots'/sha(outer_record)
     outer_bundle.mkdir(mode=0o755)
     outer_bundle.chmod(0o755)
-    for name, raw in outer_files.items():
-        put(outer_bundle / name, raw)
-    put(outer_bundle / 'bundle.json', outer_marker)
-    shutil.copytree(write_candidate / 'repository.git/objects', source / 'objects', dirs_exist_ok=True)
-    for root, dirs, names in os.walk(source):
-        pathlib.Path(root).chmod(0o755)
-        for name in names:
-            (pathlib.Path(root) / name).chmod(0o444)
-    bundle.rename(base / 'snapshots' / bundle.name)
-    return {'files':outer_files, 'marker':outer_marker, 'record':outer_record,
-            'bundle':outer_bundle, 'candidate':write_material_receipt['candidate'],
-            'publisher':publisher, 'paths':paths, 'identity':write_identity['body'],
-            'duty':duty, 'claim':claim, 'label':label, 'terminated_at':coverage_terminated}
+    for path in producer_output.iterdir():put(outer_bundle/path.name,path.read_bytes())
+    shutil.copytree(producer_work/'candidate/repository.git/objects',source/'objects',dirs_exist_ok=True)
+    for directory,dirs,names in os.walk(source):
+        pathlib.Path(directory).chmod(0o755)
+        for name in names:(pathlib.Path(directory)/name).chmod(0o444)
+    bundle.rename(base/'snapshots'/bundle.name)
+    return {'files':outer_files,'marker':outer_marker,'record':outer_record,'bundle':outer_bundle,
+        'candidate':write_material_receipt['candidate'],'publisher':write_section['publisher_request'],'paths':paths,
+        'identity':actual_record['qualified_identity'],'duty':duty,'claim':claim,'label':label,
+        'terminated_at':coverage_terminated}
 
 coverage_n = load('fixture_actual_coverage_normalizer', package/'sandbox/v1/coverage-source.py')
 coverage_root = base/'coverage-source'
 coverage_root.mkdir(mode=0o755)
+coverage_root.chmod(0o755)
 coverage_normalizer = anchor/'coverage-source.py'
 shutil.copyfile(package/'sandbox/v1/coverage-source.py',coverage_normalizer)
 coverage_normalizer.chmod(0o444)
@@ -15482,7 +15449,7 @@ coverage_attempts=[]
 def coverage_evaluate_pair(qualifying,current,allow_closed=False,at_ready=None):
     selected=json.loads(coverage_original_scope)
     selected['body'].update(qualified_identity=current['identity'],shadow_evidence_refs=[e.document_ref(current['record'])],
-        allowed_paths=current['paths'],coverage={'coverage_base':qualifying['identity']['target_revision'],
+        allowed_paths=sorted(set(qualifying['paths'])|set(current['paths'])),coverage={'coverage_base':qualifying['identity']['target_revision'],
         'coverage_rule_version':coverage_n.RULE_VERSION,'qualifying_shadow_record_refs':[e.document_ref(qualifying['record'])]})
     for name in ('risk','duty'):
         value=json.loads(coverage_original_documents[name])
@@ -15500,7 +15467,7 @@ def coverage_evaluate_pair(qualifying,current,allow_closed=False,at_ready=None):
     put(doc_root/'shadow-set.json',{'schema_version':1,'kind':'shadow_evidence_set','id':'scope.coverage.records',
         'body':{'records':[json.loads(qualifying['record']),json.loads(current['record'])]}})
     original_directories=list((base/'bundles').iterdir())
-    holding=base/('coverage-hold-'+current['label']);holding.mkdir(mode=0o755)
+    holding=base/('coverage-hold-'+current['label']);holding.mkdir(mode=0o755);holding.chmod(0o755)
     for path in original_directories:path.rename(holding/path.name)
     installed=[]
     try:
@@ -15735,6 +15702,9 @@ finally:
         node[path[-1]]=value
         changed[name]=canonical(document)
         record=json.loads(changed['shadow-record.json'])
+        if name=='scope-policy.json':
+            record['body']['scope_policy_ref']=c.scope_policy_ref(changed[name])
+            changed['shadow-record.json']=canonical(record)
         if name=='qualified-identity.json':
             record['body']['qualified_identity']=document['body']
             record['body']['qualified_identity_ref']['sha256']=sha(changed[name])
@@ -15752,6 +15722,35 @@ finally:
         assert result is None or result['body']['evidence']['coverage']['state']=='stale'
         print(json.dumps({'coverage_current_damage':label,'file':name,'path':path,
             'result':'closed' if result is None else 'stale'},sort_keys=True),flush=True)
+    coverage_damage_current('outer-policy-with-recomputed-marker','scope-policy.json',['body','accepted_shadow_outcomes'],['reproduced','no-change'])
+    coverage_damage_current('typed-policy-size','shadow-record.json',['body','scope_policy_ref','size_bytes'],True)
+    coverage_damage_current('policy-reference-hash','shadow-record.json',['body','scope_policy_ref','sha256'],'0'*64)
+    fixed_policy_path=package/'scope/v1/scope-policy.json'
+    fixed_policy_before=fixed_policy_path.read_bytes()
+    fixed_policy_mode=fixed_policy_path.stat().st_mode & 0o777
+    different_policy=json.loads(fixed_policy_before)
+    different_policy['body']['accepted_shadow_outcomes'].reverse()
+    different_policy_raw=canonical(different_policy)
+    assert different_policy_raw!=fixed_policy_before
+    try:
+        put(fixed_policy_path,different_policy_raw,fixed_policy_mode)
+        held_mismatch=coverage_evaluate_pair(qualifying,current,allow_closed=True)
+        assert held_mismatch is None or held_mismatch['body']['evidence']['coverage']['state']=='stale'
+        historical=build_coverage_revision(a,git(['rev-parse',a+'^{tree}']),'policy-historical',int(time.time())-86400,
+            coverage_template_files,coverage_template_record)
+    finally:put(fixed_policy_path,fixed_policy_before,fixed_policy_mode)
+    historical_mismatch=coverage_evaluate_pair(historical,current,allow_closed=True)
+    assert historical_mismatch is None or historical_mismatch['body']['evidence']['coverage']['state']=='stale'
+    old_qualifying=build_coverage_revision(a,git(['rev-parse',a+'^{tree}']),'policy-old-q',int(time.time())-86400,
+        coverage_template_files,coverage_template_record,'withheld-write.v1')
+    old_current=build_coverage_revision(r,tr,'policy-old-r',int(time.time()),coverage_template_files,coverage_template_record,'withheld-write.v1')
+    for left,right,label in ((old_qualifying,current,'mixed-old-new'),(qualifying,old_current,'mixed-new-old'),
+                              (old_qualifying,old_current,'both-old')):
+        refused=coverage_evaluate_pair(left,right,allow_closed=True)
+        assert refused is None or refused['body']['evidence']['coverage']['state']=='stale'
+        print(json.dumps({'policy_pair':label,'coverage':'closed' if refused is None else 'stale',
+            'current_policy_backfill':False,'SIMULATED':['VM identity','launch receipt']},sort_keys=True),flush=True)
+    assert coverage_evaluate_pair(qualifying,current)['body']['evidence']['coverage']['state']=='authenticated'
     qbody=current['identity']
     for key in ('model_request','adapter_config_refs','prompt_refs','skill_refs','verification_instructions_ref'):
         value=json.loads(canonical(qbody[key]))
@@ -15809,6 +15808,14 @@ finally:
             lambda:old_receipt.write_bytes(old_raw+b' '),lambda:old_receipt.write_bytes(old_raw)))
         coverage_evaluate_pair(qualifying,current,at_ready=lambda:through_use('coverage-root-after-final-read',store,
             lambda:os.utime(store,None),lambda:None))
+        current_policy=package/'scope/v1/scope-policy.json'
+        current_policy_raw=current_policy.read_bytes()
+        coverage_evaluate_pair(qualifying,current,at_ready=lambda:through_use('coverage-held-current-policy-after-final-read',current_policy,
+            lambda:put(current_policy,current_policy_raw+b' '),lambda:put(current_policy,current_policy_raw)))
+        qualifying_policy=base/'bundles'/sha(qualifying['record'])/'scope-policy.json'
+        qualifying_policy_raw=qualifying['files']['scope-policy.json']
+        coverage_evaluate_pair(qualifying,current,at_ready=lambda:through_use('coverage-held-qualifying-policy-after-final-read',qualifying_policy,
+            lambda:put(qualifying_policy,qualifying_policy_raw+b' '),lambda:put(qualifying_policy,qualifying_policy_raw)))
         saved_source=[]
         def change_source_receipt():
             latest=max((path for path in store.iterdir() if path.name.startswith('coverage.')),key=lambda path:path.stat().st_mtime_ns)

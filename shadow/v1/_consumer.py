@@ -1467,12 +1467,14 @@ SHADOW_EVIDENCE_NAMES = (
 
 class _HeldBundle:
     def __init__(self, parent: HeldPath, name: str, form: str) -> None:
-        _require(form in {"enforced-reproduction.v1", "withheld-write.v1"}, "E_RELATION")
+        _require(form in {"enforced-reproduction.v1", "withheld-write.v1", "withheld-write-policy.v1"}, "E_RELATION")
         self.held: list[HeldPath] = []
         self.files: dict[str, bytes] = {}
         self.names = set(SHADOW_EVIDENCE_NAMES) | {"bundle.json"}
-        if form == "withheld-write.v1":
+        if form in {"withheld-write.v1", "withheld-write-policy.v1"}:
             self.names.add("publisher-body.txt")
+        if form == "withheld-write-policy.v1":
+            self.names.add("scope-policy.json")
         try:
             directory = _open_child(parent, name, True,
                                     lambda _fd, _state, _ancestor: True, "E_RELATION")
@@ -1502,6 +1504,12 @@ class _HeldBundle:
                                "sha256": digest(self.files[filename])}
                               for filename in sorted(self.names - {"bundle.json"})]}}
             _require(canonical(marker) == canonical(expected), "E_RELATION")
+            record = _json(self.files["shadow-record.json"], DOCUMENT_LIMIT, "E_RELATION")
+            _require(record["body"]["record_form"] == form, "E_RELATION")
+            if form == "withheld-write-policy.v1":
+                check_scope_policy_ref(record["body"].get("scope_policy_ref"), self.files["scope-policy.json"])
+            else:
+                _require("scope_policy_ref" not in record["body"], "E_RELATION")
             self.recheck()
         except BaseException:
             self.close()
@@ -1754,8 +1762,9 @@ def write_path_ok(path: object, policy: dict, mode: dict) -> bool:
     return path not in mode["forbidden_paths"]
 
 
-def evidence_patch(files: dict[str, bytes], algorithm: str) -> tuple[bytes, list[dict]]:
-    _require(algorithm in {"sha1", "sha256"} and len(files) == 32, "E_RELATION")
+def evidence_patch(files: dict[str, bytes], algorithm: str, record_form="withheld-write.v1") -> tuple[bytes, list[dict]]:
+    _require(record_form in {"withheld-write.v1", "withheld-write-policy.v1"}, "E_RELATION")
+    _require(algorithm in {"sha1", "sha256"} and len(files) == (33 if record_form == "withheld-write-policy.v1" else 32), "E_RELATION")
     chunks = []
     facts = []
     for path, raw in sorted(files.items()):
@@ -1783,9 +1792,23 @@ def evidence_patch(files: dict[str, bytes], algorithm: str) -> tuple[bytes, list
     return b"".join(chunks), facts
 
 
-def write_contract(paths: list[str]) -> bytes:
+def scope_policy_ref(raw: bytes) -> dict:
+    _require(type(raw) is bytes and 1 <= len(raw) <= DOCUMENT_LIMIT, "E_RELATION")
+    _json(raw, DOCUMENT_LIMIT, "E_RELATION")
+    return {"name": "scope-policy.json", "size_bytes": len(raw), "sha256": digest(raw)}
+
+
+def check_scope_policy_ref(value: object, raw: bytes) -> None:
+    _require(type(value) is dict and set(value) == {"name", "size_bytes", "sha256"}
+             and _integer(value["size_bytes"]) and 1 <= value["size_bytes"] <= DOCUMENT_LIMIT
+             and value["name"] == "scope-policy.json" and _sha(value["sha256"]), "E_RELATION")
+    _require(canonical(value) == canonical(scope_policy_ref(raw)), "E_RELATION")
+
+
+def write_contract(paths: list[str], record_form="withheld-write.v1") -> bytes:
+    _require(record_form in {"withheld-write.v1", "withheld-write-policy.v1"}, "E_RELATION")
     return canonical({"schema_version": 1, "kind": "local_git_materialization_contract",
-        "allowed_paths": paths, "max_patch_bytes": 1_048_576, "max_changed_paths": 32,
+        "allowed_paths": paths, "max_patch_bytes": 1_048_576, "max_changed_paths": 33 if record_form == "withheld-write-policy.v1" else 32,
         "allowed_modes": ["100644", "100755"], "allow_binary_patch": False,
         "allow_symlinks": False, "allow_submodules": False, "candidate_repository_kind": "bare"})
 

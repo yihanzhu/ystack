@@ -1284,3 +1284,20 @@ shadow enforced/write/self-host, receipt, materializer protocol/adapter, schema 
 full matrix checks before acceptance. The `--coverage-pure` scope test mode needs
 no root actions and proves only bounded data behavior. Actual Linux and macOS
 source-principal proof remains mandatory and needs its authorized disposable host.
+
+
+Restore the policy-bearing write form with `write-shadow.py`,
+`write-materialization-input.jq`, `_consumer.py` and the scope reader/gates.
+`prepare-policy` adds the held canonical scope policy to the candidate and outer
+bundle. Preserve its exact `scope_policy_ref` and raw `scope-policy.json` bytes.
+Do not add a current policy to an older record during restore. Existing
+`prepare` records keep their old inventory and exact-revision behavior. Only two
+authenticated policy-form records with equal policy bytes can prove later
+coverage, and those bytes must match the evaluator's held current policy.
+
+Run `bash scripts/test/shadow-write.test.sh` and the authorized full scope
+qualification fixture with the pinned jq and native prerequisites. The fixture
+uses the actual producer, materializer, preparation, verifier, checker and store
+reader. Its SIMULATED VM and launch facts do not replace Linux/macOS native or
+source-principal acceptance. Missing tools and unexecuted integration remain
+explicit validation debt; restore does not install their prerequisites.

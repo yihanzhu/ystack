@@ -490,21 +490,21 @@ def materialization_ok($revision; $repository; $form):
      (.value |
       exact(["adapter_id","candidate","outcome","source","stage_result_ref"]) and
       .adapter_id == "adapter.local-git-materializer.v1" and
-      .outcome == (if $form == "withheld-write.v1" then "changed" else "no-change" end) and
+      .outcome == (if $form == "withheld-write.v1" or $form == "withheld-write-policy.v1" then "changed" else "no-change" end) and
       (.candidate |
        exact(["commit_id","hash_algorithm","parent_commit_id","repository_kind",
          "tree_id"]) and
        .repository_kind == "bare" and
        .hash_algorithm == $revision.hash_algorithm and
        (.commit_id | oid_ok($revision.hash_algorithm)) and
-       (if $form == "withheld-write.v1" then true else .commit_id == $revision.commit_id end) and
+       (if $form == "withheld-write.v1" or $form == "withheld-write-policy.v1" then true else .commit_id == $revision.commit_id end) and
        .parent_commit_id == $revision.commit_id and
        (.tree_id | oid_ok($revision.hash_algorithm))) and
       (. as $materialization | .source |
        exact(["repository_id","hash_algorithm","commit_id","tree_id"]) and
        .repository_id == $repository and .hash_algorithm == $revision.hash_algorithm and
        .commit_id == $revision.commit_id and (.tree_id | oid_ok($revision.hash_algorithm)) and
-       (if $form == "withheld-write.v1" then true else .tree_id == $materialization.candidate.tree_id end)) and
+       (if $form == "withheld-write.v1" or $form == "withheld-write-policy.v1" then true else .tree_id == $materialization.candidate.tree_id end)) and
       (.stage_result_ref | core_document_ref_ok("stage_result")))
    end);
 
@@ -583,6 +583,10 @@ def slice_state_ok:
          (.value.matches_expected == ($state.execution == "matched"))
     end));
 
+def scope_policy_ref_ok:
+  exact(["name","size_bytes","sha256"]) and .name == "scope-policy.json" and
+  (.size_bytes | int_ok and . >= 1 and . <= 1048576) and (.sha256 | sha256_ok);
+
 def shadow_record_ok:
   exact(["body","id","kind","schema_version"]) and
   .schema_version == 1 and .kind == "shadow_reproduction_record" and
@@ -590,14 +594,16 @@ def shadow_record_ok:
   (.body |
    . as $body |
    ($body.record_form // "legacy") as $form |
-   ($form == "legacy" or $form == "enforced-reproduction.v1" or $form == "withheld-write.v1") and
+   ($form == "legacy" or $form == "enforced-reproduction.v1" or $form == "withheld-write.v1" or $form == "withheld-write-policy.v1") and
    exact(["activation_state","authority","check","deploy_authority","effects",
      "environment","evaluation_mode","git_revision_ref","incident_ref",
      "materialization","observed_at","outcome","qualification",
      "qualified_identity","qualified_identity_ref","reason_id",
      "shadow","target_repository_id","trace_ledger_ref"] +
      (if $form == "legacy" then [] else ["record_form","sandbox","producer_invocations","consumer_provenance_ref"] end) +
-     (if $form == "withheld-write.v1" then ["write"] else [] end)) and
+     (if $form == "withheld-write.v1" or $form == "withheld-write-policy.v1" then ["write"] else [] end) +
+     (if $form == "withheld-write-policy.v1" then ["scope_policy_ref"] else [] end)) and
+   (if $form == "withheld-write-policy.v1" then (.scope_policy_ref | scope_policy_ref_ok) else true end) and
    (if $form == "legacy" then true else
       (.producer_invocations | int_ok) and .producer_invocations == 0 and
       (.consumer_provenance_ref | exact(["schema_version","kind","id","sha256"]) and
@@ -665,16 +671,21 @@ def measured_document_ref:
 def measured_row:
   exact(["record_ref","record_form","claimed","eligible","environment_id","authentication","facts"]) and
   (.record_ref | measured_document_ref and .kind == "shadow_reproduction_record") and
-  (.record_form as $form | ["legacy","enforced-reproduction.v1","withheld-write.v1"] | index($form) != null) and
+  (.record_form as $form | ["legacy","enforced-reproduction.v1","withheld-write.v1","withheld-write-policy.v1"] | index($form) != null) and
   (.claimed | type == "boolean") and (.eligible | type == "boolean") and (.environment_id | id_ok) and
   (.authentication | exact(["state"]) and (.state == "missing" or .state == "authenticated")) and
   (if .authentication.state == "missing" then .facts == {} else
     .eligible and (.facts |
       exact(["bundle_ref","receipt_ref","check_ref","fresh_origin_ref","archived_origin_ref",
-             "registry_ref","accepted_set_ref","materialization_ref"]) and
+             "registry_ref","accepted_set_ref","materialization_ref"] +
+        (if .scope_policy_ref != null then ["scope_policy_ref"] else [] end)) and
       all(.bundle_ref,.receipt_ref,.check_ref,.fresh_origin_ref,.archived_origin_ref,.registry_ref,.accepted_set_ref;
           measured_document_ref) and
       (.materialization_ref | exact(["sha256"]) and (.sha256 | sha256_ok))) end) and
+  (if .authentication.state == "authenticated" then
+     (if .record_form == "withheld-write-policy.v1" then (.facts.scope_policy_ref | scope_policy_ref_ok)
+      else (.facts | has("scope_policy_ref") | not) end)
+   else true end) and
   (if .record_form == "legacy" then (.eligible | not) and .authentication.state == "missing" else true end);
 
 def measured_command:

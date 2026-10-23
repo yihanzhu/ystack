@@ -1960,3 +1960,27 @@ and directory with the existing ownership, ACL, no-follow and held-object rules.
 Run `bash scripts/test/scope-qualification.test.sh --coverage-pure` for the bounded
 normalizer, raw-frame, exact-age and replay cases without root setup. These checks
 do not replace the required distinct-principal Linux and macOS integration proof.
+
+
+`write-shadow.py prepare-policy REQUEST BUNDLE WORK OUTPUT` selects the closed
+`withheld-write-policy.v1` form. It holds the fixed package scope policy once.
+The same canonical raw bytes govern paths, enter the candidate at mode `100644`,
+and enter the outer bundle as `scope-policy.json`. The record adds only
+`scope_policy_ref`, with fixed name, byte count and SHA-256. The write section
+still has nine keys. Its candidate has 33 files; its outer bundle has 32 files,
+including a marker that inventories 31 entries. The frozen reproduction remains
+29 evidence files plus its marker. The existing `prepare` operation retains its
+32-file candidate and `withheld-write.v1` form.
+
+The reader verifies the policy blob against the candidate tree, manifest, patch,
+generated input, write set, post-check and outer snapshot. Later coverage needs
+two independently authenticated policy-form records. Each identity uses its own
+snapshot digest. Both snapshots must equal each other and the evaluator's held
+current policy bytes before a source request. Old or mixed forms remain available
+for exact-revision reads and cannot prove later coverage. Current policy bytes
+cannot fill missing historical evidence. Final held checks run before completion.
+
+The write suite exercises the actual `prepare-policy` producer twice and retains
+old-form assertions. The scope fixture consumes actual producer outputs for both
+coverage sides. Its VM identities and launch receipts are explicitly SIMULATED.
+Those tests do not establish native qualification or genuine platform execution.

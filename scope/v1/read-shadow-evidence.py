@@ -344,7 +344,8 @@ class _Reader:
             "check_ref": ref(checked), "fresh_origin_ref": ref(store.observation),
             "archived_origin_ref": ref(files["origin-observation.json"]),
             "registry_ref": ref(files["registry.json"]), "accepted_set_ref": ref(files["accepted-identities.json"]),
-            "materialization_ref": {"sha256": c.digest(files["materialization-response.json"])}}
+            "materialization_ref": {"sha256": c.digest(files["materialization-response.json"])},
+            **({"scope_policy_ref": body["scope_policy_ref"]} if body["record_form"] == "withheld-write-policy.v1" else {})}
 
     def origin(self, document, snapshots, attempt_id, anchor):
         require(set(document) == {"schema_version", "kind", "id", "body"}
@@ -591,6 +592,10 @@ class _Reader:
                 and write["task_class"] == self.scope_body["task_class"] == "task.commit-shadow-evidence")
         prefix = "ystack-evidence/" + incident["id"] + "/"
         names = set(c.SHADOW_EVIDENCE_NAMES) | {"bundle.json", "eval-seed.json", "README.md"}
+        policy_form = body["record_form"] == "withheld-write-policy.v1"
+        if policy_form:
+            names.add("scope-policy.json")
+            c.check_scope_policy_ref(body["scope_policy_ref"], files["scope-policy.json"])
         paths = sorted(prefix + name for name in names)
         rows = write["write_set"]
         require(type(rows) is list and [row.get("path") for row in rows] == paths)
@@ -604,7 +609,7 @@ class _Reader:
             raw = self.git.read(["cat-file", "blob", row["git_blob_oid"]], limit + 1)
             require(len(raw) <= limit and c.digest(raw) == row["sha256"])
             frozen_files[row["path"]] = raw
-        patch, expected_rows = c.evidence_patch(frozen_files, incident["body"]["git_revision_ref"]["hash_algorithm"])
+        patch, expected_rows = c.evidence_patch(frozen_files, incident["body"]["git_revision_ref"]["hash_algorithm"], body["record_form"])
         require(same(rows, expected_rows))
         directories = {"/".join(path.split("/")[:index]) for path in paths for index in range(1, len(path.split("/")))}
         require(all(facts.get(path) == value or (path in directories and value[:2] == ("040000", "tree")
@@ -613,7 +618,10 @@ class _Reader:
                 == {row["path"]: ("100644", "blob", row["git_blob_oid"]) for row in rows})
         require({path for path, value in facts.items() if path not in source_facts and value[1] == "tree"}
                 == directories - set(source_facts))
-        policy = parse(self.package_sources["scope/v1/scope-policy.json"].raw)
+        policy_raw = files["scope-policy.json"] if policy_form else self.package_sources["scope/v1/scope-policy.json"].raw
+        policy = parse(policy_raw)
+        if policy_form:
+            require(frozen_files[prefix + "scope-policy.json"] == policy_raw)
         marker_raw = self.package_sources["config/construction-mode.json"].raw
         require(len(marker_raw) <= 8 * c.DOCUMENT_LIMIT)
         try:
@@ -643,7 +651,7 @@ class _Reader:
         seed_record = self.capture("seed-record-" + str(len(self.inputs)) + ".json", frozen["shadow-record.json"])
         seed = self.component("maintenance/v1/incident-to-eval.sh", ["convert", seed_incident, seed_record, seed_dir])
         require(seed == frozen_files[prefix + "eval-seed.json"])
-        require(self.rebuild_input(frozen, paths, patch, files["claim.json"], parse(files["sandbox-request.json"])["id"])
+        require(self.rebuild_input(frozen, paths, patch, files["claim.json"], parse(files["sandbox-request.json"])["id"], body["record_form"])
                 == files["materialization-input.json"])
         publisher, publisher_body = self.writer._publisher(incident, tree)
         require(same(write["publisher_request"], publisher) and files["publisher-body.txt"] == publisher_body
@@ -657,13 +665,15 @@ class _Reader:
         import fnmatch
         return any(fnmatch.fnmatchcase(path, pattern) for pattern in self.scope_body["allowed_paths"])
 
-    def rebuild_input(self, frozen, paths, patch, claim, attempt):
-        contract_path = self.capture("contract-" + str(len(self.inputs)) + ".json", c.write_contract(paths))
+    def rebuild_input(self, frozen, paths, patch, claim, attempt, record_form="withheld-write.v1"):
+        contract = c.write_contract(paths, record_form)
+        contract_path = self.capture("contract-" + str(len(self.inputs)) + ".json", contract)
         patch_path = self.capture("patch-" + str(len(self.inputs)) + ".txt", patch)
         metadata = {key: c.digest(raw) for key, raw in c.WRITE_TEXTS.items()}
-        metadata.update({"contract": c.digest(c.write_contract(paths)), "patch": c.digest(patch), "allowed_paths": paths,
+        metadata.update({"contract": c.digest(contract), "patch": c.digest(patch), "allowed_paths": paths,
             "attempt_id": attempt, "suffix": c.digest(attempt.encode())[:32], "environment_id": parse(claim)["id"],
-            "claim_sha256": c.digest(claim)})
+            "claim_sha256": c.digest(claim), "record_form": record_form,
+            "incident_id": parse(frozen["incident.json"])["id"]})
         first_metadata = self.capture("metadata-" + str(len(self.inputs)) + ".json", c.canonical(metadata))
         args = ["-S", "-c", "--arg", "phase", "stage-request", "--rawfile", "contract", contract_path,
                 "--rawfile", "patch", patch_path, "--slurpfile", "metadata", first_metadata]
@@ -695,7 +705,7 @@ class _Reader:
             "environment_id": environment, "registry_entry": registry[0],
             "control_policy_set_ref": ref(files["policy-set.json"]),
             "sandbox_policy_sha256": c.digest(files["policy.json"]),
-            "scope_policy_sha256": self.package_sources["scope/v1/scope-policy.json"].sha256,
+            "scope_policy_sha256": c.digest(files["scope-policy.json"]),
             "coverage_base": self.scope_body["coverage"]["coverage_base"], "coverage_rule_version": "scope-coverage.v1"}
 
     def coverage_interval(self, observation, retained_files):
@@ -793,9 +803,14 @@ class _Reader:
         self.owned.append(configuration)
         n = configuration.normalizer
         for environment in required:
+            qualifying_body = parse(qualifying[environment]["shadow-record.json"])["body"]
+            current_body = parse(current[environment]["shadow-record.json"])["body"]
+            require(qualifying_body["record_form"] == current_body["record_form"] == "withheld-write-policy.v1")
+            c.check_scope_policy_ref(qualifying_body["scope_policy_ref"], qualifying[environment]["scope-policy.json"])
+            c.check_scope_policy_ref(current_body["scope_policy_ref"], current[environment]["scope-policy.json"])
+            require(qualifying[environment]["scope-policy.json"] == current[environment]["scope-policy.json"]
+                    == self.package_sources["scope/v1/scope-policy.json"].raw)
             require(same(self.coverage_identity(qualifying[environment]), self.coverage_identity(current[environment])))
-            require(parse(qualifying[environment]["shadow-record.json"])["body"]["record_form"]
-                    == parse(current[environment]["shadow-record.json"])["body"]["record_form"] == "withheld-write.v1")
         documents = {}
         for name in n.DOCUMENT_NAMES:
             documents[name] = ref(self.hold(self.scratch / (name + ".json"), c.DOCUMENT_LIMIT).raw)
@@ -912,10 +927,12 @@ class _Reader:
                     and type(record["body"]) is dict)
             body = record["body"]
             form = body.get("record_form", "legacy")
-            require(form in {"legacy", "enforced-reproduction.v1", "withheld-write.v1"})
+            require(form in {"legacy", "enforced-reproduction.v1", "withheld-write.v1", "withheld-write-policy.v1"})
             additions = set() if form == "legacy" else {"record_form", "sandbox", "producer_invocations", "consumer_provenance_ref"}
-            if form == "withheld-write.v1":
+            if form in {"withheld-write.v1", "withheld-write-policy.v1"}:
                 additions.add("write")
+            if form == "withheld-write-policy.v1":
+                additions.add("scope_policy_ref")
             require(set(body) == base_keys | additions)
             for role, refs, revision, output_rows in groups:
                 claimed = any(reference["id"] == record["id"] and reference["sha256"] == digest for reference in refs)
@@ -935,7 +952,7 @@ class _Reader:
                 if eligible:
                     require(environment not in role_files[role])
                     require(environment in self.scope_body["required_shadow_environments"])
-                    require(form != "withheld-write.v1" or workflow)
+                    require(form not in {"withheld-write.v1", "withheld-write-policy.v1"} or workflow)
                     if digest in named:
                         held = c._HeldBundle(self.bundle_root, digest, form)
                         self.owned.append(held)
