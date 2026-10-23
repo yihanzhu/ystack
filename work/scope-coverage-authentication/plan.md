@@ -12,7 +12,11 @@ workflow and task. The accepted #541 core remains the exact-revision foundation.
 Both deliveries must pass before child 6 completes or child 7 starts.
 
 Implementation PR: `review_size: accepted-exception`, 3,600–5,400 net changed
-lines. This is one end-to-end coverage authentication concern. The preserved
+lines. This range applies to the final #544 diff against a main that already
+contains the separately accepted and protected-merged foundation. Count that
+actual diff in full; do not subtract unmerged inherited files to fit this range.
+It does not cover or authorize publication of M3. This is one end-to-end coverage
+authentication concern. The preserved
 #544 checkpoint adds 2,464 net lines over its M3 foundation. The producer portion
 adds an estimated 600–1,100 lines. Reader integration, paired policy tests, and
 completion of the existing damage proof supply the remaining range. These are
@@ -29,6 +33,22 @@ overrun returns through the separate plan amendment gate before more code.
 `fe6593e1b09960d165f0a5b0b3db555f06f182eb`、原 claim 和全部实现历史。
 原 Sol 6.1 / medium 作者在此 carrier 完成一次 producer → reader → coverage
 实现。不得另建 producer 实现分支、PR、intake 或替代 attempt。
+
+M3 是保留的未验收依赖，尚未合入当前 main。当前 carrier 相对 main 的 diff
+同时包含 inherited foundation 与 #544 自身改动，不能当作上面预算内的可发布
+#544 diff，也不能把 inherited 源码视为已接受。本修订只提前 inactive 代码与
+测试准备；不提前 foundation 的验收、发布或 G3。
+
+| 阶段 | 必须满足的边界 |
+| --- | --- |
+| 提前实现 | 两份 plan 通过下述 gate 后，在原 carrier 修改本 concern 的允许路径。保留 inherited foundation；其授权、完整源码审查、测试与验收仍属于原 #558/#541 gate。 |
+| foundation 合入 | 先完成 #558/#541 的全部原标准和 required proof，经其自身独审、CI 与 protected merge 合入 foundation。普通测试或本文档不代替任何原缺项。 |
+| #544 最终发布与 G3 | 原 carrier 普通 merge 届时精确 main，保留全部历史。重核 artifact hashes、实际 diff 的完整 allowlist 与整体尺寸，取得 fresh exact-head/base 独审和 CI，并完成 #544 全部证明，才可发布实现 PR、通过 G3 或合入。 |
+
+最终 diff 若仍含未合入的 foundation 内容，停止发布；不得扩大本预算包揽 M3，
+也不得复制、重建或另开实现来隐藏该内容。foundation 自身修订在其原 gate
+完成；本 plan 不授权在 carrier 改写那部分。后续普通 merge 若产生超出本
+concern 的冲突，暂停协调原 foundation gate，不自行扩大下列路径或语义。
 
 生产契约来自已合并的 child 5 spec blob
 `fb1bbec3d8c0fd2bba0a6353da05bf03107e97a4`。对应 producer plan 已独审 ACCEPT，
@@ -51,7 +71,10 @@ default OID、各自 intent/spec/plan blob、风险、原 carrier head、claim �
 
 ## Files that change
 
-The plan PR changes only this file. The implementation may change only:
+The plan PR changes only this file. The following union allowlist permits only
+this concern's own changes on the preserved carrier. It does not authorize its
+inherited foundation changes or replace their separate gate. After that foundation
+lands, the final #544 diff against the merged main must contain only these paths:
 
 - `scope/v1/read-shadow-evidence.py` — extend the #541 private reader with the
   qualifying/current pair, evaluator-owned request, fixed source launch, source
