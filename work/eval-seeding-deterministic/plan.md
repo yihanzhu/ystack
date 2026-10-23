@@ -653,7 +653,7 @@ outside the allowlist, including `framework.jq`, `run.sh`, `run-evals.sh`, every
 seed, config and policies, remain unchanged. Search old and new program/driver
 SHA-256s outside `work/` to verify exactly the stated pin chain.
 
-Before any eval test, in the existing network-restricted environment, verify the
+Before any local eval test, in the existing network-restricted environment, verify the
 existing jq cache. Do not run a test whose bootstrap would download:
 
 ```sh
@@ -711,13 +711,24 @@ full scope script and all assertions runnable in CI and at final validation.
 Do not run #558's full local scope window, sudo/root/native target tests or
 `run-all.sh` locally for this batch.
 
+仅当 PR 1a 的本地固定 jq 1.6 缓存缺失时，可用既有 `workflow_dispatch` 满足
+上述八个 eval suite 和 scope 机制证明。本地执行仍记为 `NOTRUN`；保留原 cache
+preflight 失败、private prefix 准备及其原始记录。CI 必须检出同一最终实现提交，
+记录完整 head、run 和 job 身份，完整执行上述八个 eval suite，以及包含全部
+`check_eval_trial_policy` 断言的完整 `scope-qualification.test.sh`。逐项保存完整
+日志，核对所有断言通过、每个 suite 成功退出 0。聚合绿灯不足以接受证明。
+缺失输出、失败或超时仍是未解决证据。此路径仅覆盖 PR 1a 的这些 fixture 机制；
+不泛化为免本地测试，也不授权本地下载、安装或新增网络范围。不新增 workflow、
+selector 或测试框架。#558 的完整本地 macOS/Linux、native 和 I1 验收仍待完成。
+
 Required automatic `ci` and fresh independent Bugs/Security/Compliance review bind
 the exact PR head/base. Apply `work/ci-minimum-roadmap/decision.md`: quick green
 means only its named checks. The full dispatched matrix remains required at its
-named runnable milestones and the original final consolidated acceptance. It
-never substitutes for the complete relevant PR 1a proof above, and this proof never
-substitutes for full scope/native/platform acceptance. Resolve every Important
-finding before the named manager's protected merge.
+named runnable milestones and the original final consolidated acceptance. A
+dispatched run satisfies the specified PR 1a proof only through the bounded CI
+path above. Neither local nor CI mechanism proof substitutes for full
+scope/native/platform acceptance. Resolve every Important finding before the
+named manager's protected merge.
 
 ### Dependent-batch proof obligations
 
