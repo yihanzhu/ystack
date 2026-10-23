@@ -129,7 +129,8 @@ Tracks #681。对应父 `step8-bounded-write-readiness/spec.md` R8 child 9。
    固定 owner 由认证的 bootstrap/source 身份证明，不由 register 自称。
 2. entries 每项恰含 `scope_kind/scope_id/state`，仅 global/repository/workflow；
    global id 为 `*`，其余是有效 id，state 为 cleared 或 stop。
-   write_entries 每项恰含 `scope_id/state`，scope_id 是 workflow id。
+   write_entries 每项恰含 `scope_id/state`，scope_id 是 `workflow_scope.id`。
+   它不能使用 `workflow_id`，也不能解锁同一 workflow 的其他 scope。
    两组各最多 1024 项，按身份排序且唯一。不能有 stage/attempt 或未知字段。
    匹配当前 global、repository、workflow 的观察 entry 各须恰有一项。
 3. 从认证 bootstrap 检查每次 register 变化：revision 必须严格增加。
