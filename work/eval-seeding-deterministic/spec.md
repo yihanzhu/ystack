@@ -1,7 +1,7 @@
 ---
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
-drafted: 2026-09-27
+drafted: 2026-10-23
 ---
 
 # Spec: seed the two declared eval families without model graders
@@ -22,25 +22,40 @@ trials. It ships no model call, credential, network use, activation or write.
 
 ### R1. Order and dependencies
 
-1. Landing depends on merged child concerns 5 (real write-shadow evidence) and 9 (real
-   gate evidence) (`spec.md:295`, `:299`), which themselves follow 6 and 7. Drafting
-   does not. No seed is built from a stand-in record.
-2. Three implementation PRs, in this order: **PR 1** framework and consumer (R2, R3,
-   R5, R8.3-R8.5); then **PR 2** reviewer seed (R6-R8) and **PR 3** malicious seed
-   (R4-R5), in either order. PR 1 changes no catalog entry, so both families stay
-   `declared` until their own seed PR.
-3. This spec reads only merged artifacts. Where a requirement needs a field defined by
-   concern 5, 6 or 9, the plan maps it to that concern's merged file by `path:line`. A
-   field that cannot be mapped stops the plan and returns here.
+1. 真实 source、relay、replay 和 seed 的交付仍依赖 child 5 的真实 write-shadow
+   evidence 与 child 9 的真实 gate evidence（`spec.md:295`, `:299`）。它们仍须
+   满足 concerns 6、7 的前置条件。PR 1a 的独立机制可先落地。任何 seed 都不能用
+   替代记录构造。此分期只改变交付顺序，不改变 intent 的最终成果或验收标准。
+2. 按下表交付。PR 1a 是完整、inactive 的产品机制与测试；PR 1b 保留原 framework
+   交付中依赖真实字段的部分。PR 2、PR 3 在 PR 1b 后交付，二者顺序可互换。
+
+   | 交付 | 完整要求 | Catalog 与 intake |
+   | --- | --- | --- |
+   | PR 1a：最小试次与去重 | R2 的 M2、M3、M4 及对应测试 | Catalog 字节不变；两 family 仍为 `declared` |
+   | PR 1b：source、relay、replay | R2 的 M5、R3、R5、R8.3–R8.5 的机制 | Catalog 字节不变；真实 seed 验收仍待完成 |
+   | PR 2：reviewer seed | R6–R8 全部要求 | 仅此 family 可在验收后成为 `seeded` |
+   | PR 3：malicious seed | R4–R5 全部要求 | 仅此 family 可在验收后成为 `seeded` |
+
+   PR 1a 不添加 source、closure、seed 或人工标签。其测试调用真实 shipped 程序，
+   只在临时目录构造隔离 fixture。Fixture 不作为真实证据、seed、标签批准或
+   sandbox/native 执行记录。PR 1a、PR 1b 和先落地的 seed PR 只 `Tracks #439`。
+   只有全部要求与真实 seed 验收完成后的最后一批可 `Closes #439`。
+   机制测试通过不能宣称这两个 family 已 seeded 或 passed。
+3. 计划只引用 merged artifacts。PR 1a 先将独立机制、pin 链和测试映射到当前源码。
+   PR 1b、PR 2、PR 3 所需的 concern 5、6、9 字段，须在各批开始前映射到 merged
+   `path:line`。尚未取得的真实 control、gate、enablement、scope、记录授权和完整
+   replay recipe 均保留为未满足依赖；不得用 fixture 补齐原 S1–S10。
+   对应批次仍有字段不能映射时，停止该批计划并返回 G2。先行机制不要求重建尚未
+   可用的 replay closure，也不免除后续完整闭包核对。每批代码前都须有独立接受的
+   high-risk plan；计划由另一作者修订，并绑定本 spec 的新 blob。
 
 ### R2. The `multi` trial policy: framework change and contract
 
-No `multi` family has ever run, and nothing combines trials today: `evals.jq` grades
-each case alone (`evals/v1/evals.jq:613-647`) and only checks the policy's shape
-(`:201-205`); the dashboard copies the policy through (`:939`); the scope gate counts a
-required family as passing when it has at least one case and every case passed
-(`scope/v1/scope-gates.jq:876-890`), whatever its minimum. So a framework change is
-needed. The catalog's policies stay as they are. The contract:
+`evals.jq` 按 case 评分，dashboard 汇总 case；scope gate 当前只要求至少一个
+case 且全部通过（`scope/v1/scope-gates.jq:876-890`）。它未执行 `multi` 的最小
+试次数。跨 result 的同 family、同 case 也未去重。PR 1a 补齐这两个机制。
+`framework.jq` 已有 record trial fold，保持不变。Catalog 的 policy 保持不变。
+完整合同如下：
 
 1. **M1. One trial, one record.** In a run result a trial is one case, with a
    `case_id` distinct within its seed set. In a record bundle a trial is one
@@ -52,16 +67,19 @@ needed. The catalog's policies stay as they are. The contract:
    (`:876-890`), a required `multi` family whose `cases.total` is below its
    dashboard-copied `trial_policy.minimum_trials` yields the existing
    `scope.eval-failing`. No new reason id and no dashboard shape change.
-4. **M4. No double counting.** `build-dashboard` and `validate-dashboard`
-   (`evals.jq:1033-1052`) refuse with `E_SHAPE` when one `case_id` of one family
-   appears in more than one input result. Today's inputs never repeat a case, so
-   existing dashboards are unaffected.
+4. **M4. No double counting.** 不同 input result 中，同一 family 的同一
+   `case_id` 不能重复。`build-dashboard` 拒绝为 `E_SHAPE`，
+   `validate-dashboard` 返回 false（`evals.jq:1008-1052`）。Driver 对这种重复
+   返回 `E_SHAPE`。重复输入同一 result 保留原 `E_RUNTIME`。不同 family 的同名
+   case 不算重复。没有重复 case 的既有 dashboard 行为保持不变。
 5. **M5. Record trials meet the minimum.** The record relay (R8.3) refuses a bundle
    whose case `trial_count` is below the family's `minimum_trials`.
-6. **Tests.** `scripts/test/evals-dashboard.test.sh` gains M4 cases.
-   `scripts/test/scope-qualification.test.sh` gains M3 cases, built in the existing
-   dashboard fixture (`:225-240`): a `multi` family at minimum minus one, at the
-   minimum, and with one failed trial. All existing checks pass unchanged.
+6. **Tests.** PR 1a 的 `scripts/test/evals-dashboard.test.sh` 覆盖 M4 的跨 result
+   重复、同 result 原错误码、不同 family 同名 case，以及直接 build/validate 拒绝。
+   `scripts/test/scope-qualification.test.sh` 覆盖 M2、M3：`multi` 在 minimum−1
+   拒绝；达到 minimum 且全过接受；达到 minimum 但有 failed 或 inconclusive 拒绝。
+   测试还须证明 `single` 的既有行为、shipped catalog 字节及 declared 状态不变。
+   所有既有检查保持；PR 1b 和 seed PR 仍须完成 M5 与 R4–R8 的全部测试。
 
 ### R3. Two new seed sources
 
@@ -85,15 +103,15 @@ needed. The catalog's policies stay as they are. The contract:
    `trace_event_shape` (`:812`), which accept `grader_kind: "human"` only for the
    reviews source; `evaluator_shape` (`:236-277`), which gains the pinned
    `shadow_closure` (R5) and `record_closure` (R8.3); the dashboard coverage bound
-   `enum_set_ok(1;8;…)` (`:997`), raised to 9; and M4.
+   `enum_set_ok(1;8;…)` (`:997`), raised to 9; M4 在 PR 1a 交付。
 3. `scope/v1/scope-gates.jq` is a declared copy of the dashboard shape and must stay
    in sync (`:1-10`). Its complete edits: `seed_sources` (`:98-102`),
    `active_seed_sources` (`:119-122`), the `evaluator_shape` field list (`:149`), the
-   coverage bound (`:240`) and M3. `scope-qualification.test.sh` checks the copied
+   coverage bound (`:240`); M3 在 PR 1a 交付。`scope-qualification.test.sh` checks the copied
    lists equal the `evals.jq` lists.
 4. `evals/v1/evals-driver.sh` gains one replay per source in its dispatch
    (`:659-676`). The driver and `evals/v1/evals-launcher.sh` snapshot the two new
-   closures and update the pins R9.4 lists for PR 1.
+   closures and update the pins R9.4 lists for PR 1b.
 
 ### R4. `malicious-instructions`: four trials, graded deterministically
 
@@ -176,8 +194,8 @@ closure file changes the evaluator document, so old results are never read as ne
 
 **Two disjoint lists.** Every file the replay reads is in exactly one of them:
 - *Pinned closure* (above): every executable replay component and every policy or
-  program file it reads, including `scope/v1/scope-gates.jq`, which PR 1 changes
-  (R3.3). The malicious trials are recorded after PR 1 lands, so they bind its
+  program file it reads, including `scope/v1/scope-gates.jq`, which PR 1b changes
+  (R3.3). The malicious trials are recorded after PR 1b lands, so they bind its
   version; any later change to a closure file changes the evaluator document and
   needs the trials re-recorded through their own gate.
 - *Archived data inputs*: exactly `evals/v1/eval-catalog.json` and
@@ -329,7 +347,7 @@ always goes in the closure.
    (`adapter_closure`, `control_closure`, `orchestrator_closure`,
    `eval_framework_evaluator`), the seeded and declared counts and statuses, the
    source vocabulary and the pinned program, catalog and driver digests:
-   - PR 1 adds evaluator fields (R3.2), so the hand-built evaluator fixtures in
+   - PR 1b adds evaluator fields (R3.2), so the hand-built evaluator fixtures in
      `scripts/test/shadow-self-host-evidence.test.sh:913-942` (and its fixture digest
      list at `:979-981`) and `scripts/test/scope-qualification.test.sh:250-275` gain
      `shadow_closure` and `record_closure`.
@@ -340,7 +358,7 @@ always goes in the closure.
    The other hits need no change and are not allowed paths: the closure checks at
    `evals-adapters.test.sh:114`, `evals-approvals.test.sh:98`,
    `evals-boundaries.test.sh:97`, `evals-duty.test.sh:97`, `evals-events.test.sh:97`
-   and `evals-plans.test.sh:94` cover closures PR 1 leaves as they are; their
+   and `evals-plans.test.sh:94` cover closures PR 1b leaves as they are; their
    per-family catalog checks name seeded families only; the dashboard fixtures in
    `scope-qualification.test.sh:302-327`, `shadow-self-host-evidence.test.sh:949-973`
    and `maintenance-loop.test.sh:62-75` are hand-built with fixed values, not read
@@ -348,7 +366,12 @@ always goes in the closure.
    `evals-framework.test.sh:158-213` use a core-stage-run seed, which the new relay
    branch (R8.4) does not touch. A changed file found anywhere else stops the PR and
    returns to the plan.
-3. **Allowed paths.** PR 1: `evals/v1/evals.jq`, `evals/v1/evals-driver.sh`,
+3. **Allowed paths.** PR 1a 仅允许 `evals/v1/evals.jq`、
+   `evals/v1/evals-driver.sh`、`evals/v1/evals-launcher.sh`、`scope/v1/scope-gates.jq`、
+   `scripts/test/evals-dashboard.test.sh`、`scripts/test/scope-qualification.test.sh`、
+   `docs/components.md`、`RESTORE.md`。程序改动只限 M2–M4 及必要 pin；文档只描述
+   已交付机制与仍未满足的 seed 验收。不得加入新 source、closure 或 grader。
+   PR 1b: `evals/v1/evals.jq`, `evals/v1/evals-driver.sh`,
    `evals/v1/evals-launcher.sh`, `scope/v1/scope-gates.jq`,
    `scripts/test/evals-dashboard.test.sh`, `scripts/test/scope-qualification.test.sh`,
    `scripts/test/evals-framework.test.sh` (new shapes, with fixtures the test builds
@@ -362,7 +385,10 @@ always goes in the closure.
 4. **Pin chain.** Found by grepping the repository for the SHA-256 of every file in
    `evals/v1/` and of `scope/v1/scope-gates.jq`. Each PR updates, in this order, every
    literal its own changes move, and no other:
-   - **PR 1.** (a) Each changed or newly pinned closure file's digest (R5 closure,
+   - **PR 1a.** 先更新 `evals.jq` 的 digest，位置为 `evals-driver.sh:75` 和
+     `evals-launcher.sh:148`；再更新 driver digest，位置为 `evals-launcher.sh:150`。
+     不增加 closure pin 或 catalog pin。后续计划须按实际 base 核对整条必要 pin 链。
+   - **PR 1b.** (a) Each changed or newly pinned closure file's digest (R5 closure,
      `record_closure`, including `scope-gates.jq`), written wherever closure digests
      live today: the `expected_*_closure` lists in `evals.jq` (for example `:89`),
      the `verify_hash` lines in `evals-driver.sh` (for example `:132`) and the
@@ -411,14 +437,10 @@ in CI; wiring the record report into anything but the relay; enablement.
 
 - **Risk is high.** Eval policy, seed and scope-gate change. An operator-merged
   plan-only PR precedes code.
-- **Size.** PR 1 touches the evaluator program, driver, launcher and scope gate; the
-  plan states an evidence-based one-concern `review_size` range or splits it. This
-  spec PR is `review_size: accepted-exception`: one concern, this one file, 420-450
-  added lines. The overrun is the closed lists (edits, tests, archive split and pin
-  chain) that exact-path completeness needs; splitting them would scatter one
-  contract. It waives only the soft line signal.
+- **Size.** 各批计划按完整机制与测试给出范围。不能为压缩范围删测试或交付空实现。
+  本 spec amendment 为 `review_size: standard`，只改变同一 concern 的分期与映射。
 - **Unmerged siblings.** Invariant field paths and part of the closure come from
-  concerns 5, 6 and 9. R1.3 makes the plan stop on any gap.
+  concerns 5, 6 and 9. R1.3 makes the dependent plan stop on any gap.
 - **The forge-text trial is structural.** No component in the closure accepts forge
   text, so it passes by construction. Its value is regression: a later component that
   reads forge text must be added to the closure and then faces this trial.
