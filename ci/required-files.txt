@@ -134,6 +134,11 @@ scripts/test/portable-profile-resolution-loader-trap.c
 scripts/test/portable-profile-resolution-fixtures.sh
 scripts/test/portable-profile-resolution.test.sh
 
+# Inactive trusted parent for the profile resolver
+resolver/v1/trusted-launch.c
+resolver/v1/resolve-profile.sh
+scripts/test/resolver-trusted-launch.test.sh
+
 # Inactive portable core accounted-validation generation
 core/v1/generations/g-71433a31f52f37041a41b5a8812f79c4c0f5f26c79265788c8d625a9c6f9686b/modules/schema.jq
 core/v1/generations/g-71433a31f52f37041a41b5a8812f79c4c0f5f26c79265788c8d625a9c6f9686b/core-ingress.sh
@@ -211,6 +216,46 @@ control/v1/sandbox.jq
 control/v1/evaluate-sandbox.sh
 scripts/test/control-sandbox-policy.test.sh
 
+# Bound sandbox verifier declaration
+control/v1/sandbox-bound-policy.json
+control/v1/sandbox-bound-decision.json
+control/v1/control-policy-set-sandbox-bound.json
+control/v1/sandbox-bound.jq
+control/v1/evaluate-bound-sandbox.sh
+scripts/test/control-sandbox-bound.test.sh
+
+# Sandbox boundary decision records
+work/real-sandbox-boundary/intent.md
+work/real-sandbox-boundary/spec.md
+work/real-sandbox-boundary/plan.md
+
+# Inactive sandbox receipt check
+enforcement/v1/accepted-identities.json
+enforcement/v1/sandbox-receipt.jq
+enforcement/v1/check-sandbox-receipt.sh
+scripts/test/sandbox-receipt.test.sh
+work/enforcement-evidence-binding/intent.md
+work/enforcement-evidence-binding/spec.md
+work/enforcement-evidence-binding/plan.md
+
+# Inactive VM launcher and supervisor
+sandbox/v1/host-supervisor.py
+sandbox/v1/runtime-vfkit.py
+sandbox/v1/build-guest.py
+sandbox/v1/qualify.py
+sandbox/v1/guest/common.h
+sandbox/v1/guest/common.c
+sandbox/v1/guest/init.c
+sandbox/v1/guest/supervisor.c
+sandbox/v1/guest/probe.c
+scripts/test/sandbox-launcher.test.sh
+scripts/test/sandbox-guest.test.sh
+scripts/test/sandbox-fake-runtime.py
+scripts/test/sandbox-guest-harness.c
+work/vm-launcher-supervisor/intent.md
+work/vm-launcher-supervisor/spec.md
+work/vm-launcher-supervisor/plan.md
+
 # Inactive credential policy and evaluator
 control/v1/credential-policy.json
 control/v1/credential-policy-decision.json
@@ -260,6 +305,8 @@ scripts/test/default-github-actions-ci-adapter.test.sh
 telemetry/v1/trace-ledger.jq
 telemetry/v1/validate-trace-ledger.sh
 scripts/test/telemetry-trace-ledger.test.sh
+telemetry/v1/trace-store.py
+scripts/test/telemetry-trace-store.test.sh
 
 # Inactive hermetic eval-record evaluator
 evals/v1/framework.jq
@@ -273,6 +320,8 @@ scripts/test/local-git-materializer-adapter.test.sh
 # Inactive offline delivery replay
 delivery/v1/replay.py
 scripts/test/delivery-replay.test.sh
+scripts/test/replay-materialization-result.test.sh
+docs/replay-materialization-result.md
 work/delivery-loop-first/plan.md
 
 # Inactive Claude Code producer normalizer payload
@@ -303,6 +352,14 @@ scripts/test/default-dormant-publisher-adapter.test.sh
 # Inactive deterministic verifier normalizer payload
 adapters/deterministic-verifier/v1/normalize.jq
 scripts/test/default-deterministic-verifier-adapter.test.sh
+
+# Inactive fixed file-digest verifier
+verifiers/file-digest/v1/verifier.c
+verifiers/file-digest/v1/build.sh
+scripts/test/file-digest-verifier.test.sh
+work/fixed-file-digest-verifier/intent.md
+work/fixed-file-digest-verifier/spec.md
+work/fixed-file-digest-verifier/plan.md
 
 # Inactive default profile assembly
 profiles/default/v1/profile.json
@@ -357,6 +414,11 @@ scope/v1/scope-gates.jq
 scope/v1/evaluate-scope.sh
 scripts/test/scope-qualification.test.sh
 
+# Step 8 bounded-write readiness decision records
+work/step8-bounded-write-readiness/intent.md
+work/step8-bounded-write-readiness/spec.md
+work/step8-bounded-write-readiness/plan.md
+
 # Inactive target packaging
 packaging/v1/build-release.sh
 packaging/v1/install.sh
@@ -408,3 +470,125 @@ work/roadmap-program-authorization/decision.md
 shadow/v1/assemble-materialization-input.sh
 shadow/v1/materialization-input.jq
 scripts/test/shadow-assembler.test.sh
+
+# Inactive durable delivery ledger
+orchestrator/v1/delivery-ledger.py
+scripts/test/orchestrator-delivery-ledger.test.sh
+docs/delivery-ledger.md
+
+# First self-host shadow evidence
+shadow/evidence/self-host-transition/v1/README.md
+shadow/evidence/self-host-transition/v1/checksums.json
+shadow/evidence/self-host-transition/v1/control-policy-set.json
+shadow/evidence/self-host-transition/v1/core-package-closure.json
+shadow/evidence/self-host-transition/v1/duty-evaluation.json
+shadow/evidence/self-host-transition/v1/environment-claim.json
+shadow/evidence/self-host-transition/v1/post/assembled/finish-condition.txt
+shadow/evidence/self-host-transition/v1/post/assembled/input.json
+shadow/evidence/self-host-transition/v1/post/assembled/output-contract-decision.txt
+shadow/evidence/self-host-transition/v1/post/assembled/policy-decision.txt
+shadow/evidence/self-host-transition/v1/post/assembled/resolved-profile-ref.json
+shadow/evidence/self-host-transition/v1/post/assembled/stage-request-ref.json
+shadow/evidence/self-host-transition/v1/post/assembled/verification-instructions.txt
+shadow/evidence/self-host-transition/v1/post/incident.json
+shadow/evidence/self-host-transition/v1/post/materialization-receipt.json
+shadow/evidence/self-host-transition/v1/post/qualified-identity.json
+shadow/evidence/self-host-transition/v1/post/sandbox-evaluation.json
+shadow/evidence/self-host-transition/v1/post/state/materialization-result.json
+shadow/evidence/self-host-transition/v1/post/state/shadow-record.json
+shadow/evidence/self-host-transition/v1/post/state/trace-ledger.json
+shadow/evidence/self-host-transition/v1/post/state/trace-receipt.json
+shadow/evidence/self-host-transition/v1/pre/assembled/finish-condition.txt
+shadow/evidence/self-host-transition/v1/pre/assembled/input.json
+shadow/evidence/self-host-transition/v1/pre/assembled/output-contract-decision.txt
+shadow/evidence/self-host-transition/v1/pre/assembled/policy-decision.txt
+shadow/evidence/self-host-transition/v1/pre/assembled/resolved-profile-ref.json
+shadow/evidence/self-host-transition/v1/pre/assembled/stage-request-ref.json
+shadow/evidence/self-host-transition/v1/pre/assembled/verification-instructions.txt
+shadow/evidence/self-host-transition/v1/pre/incident.json
+shadow/evidence/self-host-transition/v1/pre/materialization-receipt.json
+shadow/evidence/self-host-transition/v1/pre/qualified-identity.json
+shadow/evidence/self-host-transition/v1/pre/sandbox-evaluation.json
+shadow/evidence/self-host-transition/v1/pre/state/materialization-result.json
+shadow/evidence/self-host-transition/v1/pre/state/shadow-record.json
+shadow/evidence/self-host-transition/v1/pre/state/trace-ledger.json
+shadow/evidence/self-host-transition/v1/pre/state/trace-receipt.json
+shadow/evidence/self-host-transition/v1/prerequisite/environment-declaration.json
+shadow/evidence/self-host-transition/v1/prerequisite/input.json
+shadow/evidence/self-host-transition/v1/prerequisite/materialization-receipt.json
+shadow/evidence/self-host-transition/v1/prerequisite/resolved-profile-document.json
+shadow/evidence/self-host-transition/v1/prerequisite/stage-request.json
+shadow/evidence/self-host-transition/v1/prerequisite/stage-result.json
+shadow/evidence/self-host-transition/v1/requester.json
+shadow/evidence/self-host-transition/v1/resolved-profile.json
+shadow/evidence/self-host-transition/v1/verification-instructions.md
+scripts/test/shadow-self-host-evidence.test.sh
+
+# First external-target shadow evidence
+shadow/evidence/external-dummy-target/v1/README.md
+shadow/evidence/external-dummy-target/v1/checksums.json
+shadow/evidence/external-dummy-target/v1/control-policy-set.json
+shadow/evidence/external-dummy-target/v1/core-package-closure.json
+shadow/evidence/external-dummy-target/v1/duty-evaluation.json
+shadow/evidence/external-dummy-target/v1/environment-claim.json
+shadow/evidence/external-dummy-target/v1/post/assembled/finish-condition.txt
+shadow/evidence/external-dummy-target/v1/post/assembled/input.json
+shadow/evidence/external-dummy-target/v1/post/assembled/output-contract-decision.txt
+shadow/evidence/external-dummy-target/v1/post/assembled/policy-decision.txt
+shadow/evidence/external-dummy-target/v1/post/assembled/resolved-profile-ref.json
+shadow/evidence/external-dummy-target/v1/post/assembled/stage-request-ref.json
+shadow/evidence/external-dummy-target/v1/post/assembled/verification-instructions.txt
+shadow/evidence/external-dummy-target/v1/post/incident.json
+shadow/evidence/external-dummy-target/v1/post/materialization-receipt.json
+shadow/evidence/external-dummy-target/v1/post/qualified-identity.json
+shadow/evidence/external-dummy-target/v1/post/sandbox-evaluation.json
+shadow/evidence/external-dummy-target/v1/post/state/materialization-result.json
+shadow/evidence/external-dummy-target/v1/post/state/shadow-record.json
+shadow/evidence/external-dummy-target/v1/post/state/trace-ledger.json
+shadow/evidence/external-dummy-target/v1/post/state/trace-receipt.json
+shadow/evidence/external-dummy-target/v1/pre/assembled/finish-condition.txt
+shadow/evidence/external-dummy-target/v1/pre/assembled/input.json
+shadow/evidence/external-dummy-target/v1/pre/assembled/output-contract-decision.txt
+shadow/evidence/external-dummy-target/v1/pre/assembled/policy-decision.txt
+shadow/evidence/external-dummy-target/v1/pre/assembled/resolved-profile-ref.json
+shadow/evidence/external-dummy-target/v1/pre/assembled/stage-request-ref.json
+shadow/evidence/external-dummy-target/v1/pre/assembled/verification-instructions.txt
+shadow/evidence/external-dummy-target/v1/pre/incident.json
+shadow/evidence/external-dummy-target/v1/pre/materialization-receipt.json
+shadow/evidence/external-dummy-target/v1/pre/qualified-identity.json
+shadow/evidence/external-dummy-target/v1/pre/sandbox-evaluation.json
+shadow/evidence/external-dummy-target/v1/pre/state/materialization-result.json
+shadow/evidence/external-dummy-target/v1/pre/state/shadow-record.json
+shadow/evidence/external-dummy-target/v1/pre/state/trace-ledger.json
+shadow/evidence/external-dummy-target/v1/pre/state/trace-receipt.json
+shadow/evidence/external-dummy-target/v1/prerequisite/environment-declaration.json
+shadow/evidence/external-dummy-target/v1/prerequisite/input.json
+shadow/evidence/external-dummy-target/v1/prerequisite/materialization-receipt.json
+shadow/evidence/external-dummy-target/v1/prerequisite/resolved-profile-document.json
+shadow/evidence/external-dummy-target/v1/prerequisite/stage-request.json
+shadow/evidence/external-dummy-target/v1/prerequisite/stage-result.json
+shadow/evidence/external-dummy-target/v1/requester.json
+shadow/evidence/external-dummy-target/v1/resolved-profile.json
+shadow/evidence/external-dummy-target/v1/verification-instructions.md
+
+# Current Roadmap minimal CI decision and proof
+work/ci-minimum-roadmap/decision.md
+scripts/test/ci-minimum.check.sh
+
+# Inactive candidate content preparation
+preparation/v1/prepare-candidate.py
+scripts/test/candidate-content-preparation.test.sh
+scripts/test/candidate-content-preparation-fixtures.py
+docs/candidate-content-preparation.md
+
+# Inactive shadow consumer trust boundary
+shadow/v1/_consumer.py
+shadow/v1/_cancel_release.c
+shadow/v1/build-cancel-release.sh
+shadow/v1/enforced-reproduction.py
+scripts/test/shadow-enforced.test.sh
+
+shadow/v1/write-shadow.py
+shadow/v1/write-materialization-input.jq
+scripts/test/shadow-write.test.sh
+.github/workflows/scope-genuine-macos.yml

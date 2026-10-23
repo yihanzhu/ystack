@@ -34,10 +34,100 @@ invocation documents remain version 1 while emitted core documents use schema 2.
 The shell runtime is deliberately mode 0644. A trusted parent must start it with a
 direct fixed-path `execve`, an empty environment allowlist, fixed dependencies, and
 the test-proven resource limits. `scripts/test/portable-profile-resolution.test.sh`
-is the only shipped launcher today; it is proof, not a production activation path.
+was the only shipped launcher through the prior round; this spec supersedes that
+round's "a production trusted parent is not implemented" sentence
+(`work/portable-profile-resolution/spec.md:256-257`) — see "Inactive trusted parent
+for the profile resolver" below for the compiled parent and its public entry.
 The private native snapshot helper is the exception recorded in
 `work/portable-profile-resolution/spec.md`. Remove it only when every supported
 runtime has an equivalent accepted descriptor-relative no-follow API.
+
+The inactive runtime selects Git from one exact installed platform observation:
+`/usr/bin/uname -sm`. Linux x86_64 uses `/usr/bin/git`; Darwin x86_64 and arm64
+use `/Library/Developer/CommandLineTools/usr/bin/git`. The final uname, Git,
+`/bin/dd` and `/usr/bin/od` files must be regular, executable and not symlinks.
+Missing tools, another platform, malformed bytes or a failed pipeline refuse with
+`E_RUNTIME dependency`. There is no discovery, fallback or installer.
+
+The private observer passes at most 65 raw bytes through dd to od before shell
+capture, rejects more than 64, and matches the exact LF-terminated platform bytes.
+It checks every pipeline stage. The existing launcher deadline covers stalled tools;
+a separately sourced component call has no independent probe timeout.
+
+All five Git positions use the initialized selection. Existing object validation,
+source isolation, budgets, watchdog and empty runtime HOME/TMPDIR requirements remain.
+Native proof records the actual tested platform and executable hashes; mapping a
+platform does not qualify an untested architecture. Component controls do not replace
+native launcher evidence. The available native development proof is Darwin arm64;
+Linux x86_64 runs the complete suite in required CI. Darwin x86_64 needs its own
+actual run before qualification. The direct installed CLT Git must continue to meet the
+same behavior and cleanup contract; changed tools require fresh evidence.
+
+This dependency repair does not install or activate a runtime. The production trusted
+parent must separately reconcile its library pin and new fixed dependencies through
+its own artifact gates. No preserved parent work or proposed cache exception is
+accepted by this runtime change.
+
+## Inactive trusted parent for the profile resolver
+
+`resolver/v1/trusted-launch.c` is the compiled parent that starts the inactive
+profile resolver runtime above; `resolver/v1/resolve-profile.sh` is its public
+entry. Neither selects or activates a profile, authenticates a repository map,
+executes selected content, or accesses a remote or credential. **The entry is the
+only supported way to launch this component.** `resolver/v1/resolve-profile.sh`
+is the launch; `resolver/v1/trusted-launch.c` is not an interface — running the
+compiled parent directly, without the entry, is a test harness for
+`scripts/test/resolver-trusted-launch.test.sh` and is unsupported for anything
+else. The parent can pin every file the runtime loads but cannot pin a compiled
+binary, so only the entry — which compiles the helper from a blob-pinned source
+into a directory it made itself — establishes where the helper's bytes came
+from. The parent does not detect direct invocation and performs every one of its
+checks on every caller regardless, so a direct run that succeeds is not a
+supported configuration and is not evidence that one exists.
+
+The entry supports exactly two invocation forms, both of which carry `-p`: the
+shebang launch (`resolver/v1/resolve-profile.sh <jq> <output> <request> <map>`)
+and an explicit `bash -p resolver/v1/resolve-profile.sh <jq> <output> <request>
+<map>`. The marker word its own re-exec uses internally is not a public entry
+point. An invocation without `-p` **from a clean environment** — marker word or
+not — exits 78 at the entry's first statement having created nothing and read
+nothing; a non-`-p` invocation from a polluted environment, direct or marker, is
+**outside the safety claim** — unsupported, with the caller's own code able to
+run ahead of the refusal. The entry ships as git mode `100755`: the shebang
+launch is one of the two supported forms and a `100644` entry fails it with
+`Permission denied` and exit `126`. The repository's structure check enforces
+executability for `scripts/*.sh` alone, which does not cover `resolver/v1/`, so
+this mode cannot be inferred from CI and is checked directly
+(`git ls-files --stage resolver/v1/resolve-profile.sh`).
+
+**Darwin prerequisite:** the Command Line Tools must be installed. The entry
+compiles with `/Library/Developer/CommandLineTools/usr/bin/clang` rather than
+the `xcrun` shim at `/usr/bin/cc`, and refuses `E_RUNTIME` when the CLT is
+absent. The entry is rebuilt from committed source on every invocation — nothing
+compiled is cached, installed, or restored.
+
+A successful launch prints one informational `runtime-pgid: <n>` line on
+stderr — best-effort, so a caller whose stderr is a pipe it is not draining may
+not see it. An interrupted launch prints one `parent-signal: <NAME> group
+<pgid>` or `parent-signal: <NAME> no-runtime` line from the parent, and beside
+it the entry's own `entry-signal: <NAME> forwarded <pid>` (or `no-parent`)
+line — **only when stderr is a regular file, and no such line at all
+otherwise**: a terminal, `/dev/null`, a pipe, a FIFO, and a socket all lose it.
+Redirect stderr to a file to see it. In every other case the exit status and the
+parent's own `parent-signal:` line are the record; output on stderr is not by
+itself a failure signal.
+
+The write root is the caller's output root on both platforms, for this
+component as for the runtime it launches — one write root, no exception. Caller
+`HOME` and `TMPDIR` are never a write location; the entry's own sandbox
+`HOME`/`TMPDIR` live under `<output>/.run` for the duration of the compile and
+are gone before the parent is launched.
+
+Restoring these files does not select a live profile or regenerate `/yshifu`.
+Run `bash scripts/test/resolver-trusted-launch.test.sh` for the focused proof;
+`scripts/test/portable-profile-resolution.test.sh` remains the unchanged
+resolver regression, run through the shipped public entry as well as the test
+launcher.
 
 ## Inactive default profile assembly
 
@@ -103,6 +193,17 @@ generation remains immutable and restorable.
 through the existing local Git materializer. It then checks one repo-relative
 candidate blob against a supplied SHA-256 and records a private, resumable state.
 It never executes candidate code or a user command string.
+
+An optional planner delivery key selects journal version 2 for the one supported
+`dispatch-stage` operation and attempt 1. That format stores the complete validated
+materializer response, its actual typed stage result, and receipt bytes at the same
+atomic journal boundary as the candidate identity. A matching redelivery reuses the
+stored result. Read mode holds the permanent replay lock, rechecks the frozen input,
+tools, source, candidate, response, and result relations, and returns the stored facts
+without advancing a phase or running the verifier. Version 1 remains the unbound
+format and cannot be promoted into original-result evidence. See the
+[stored materialization result guide](replay-materialization-result.md) for the key,
+commands, limits, exit codes, crash behavior, and restoration boundary.
 
 Review and publisher records are supplied offline test observations. Each names the
 exact request digest, candidate tree, and candidate commit, and all three must match
@@ -192,6 +293,14 @@ but that grants no authority or permission and does not cancel or run anything.
 The package stays inactive, reads no credential, activates no profile, and performs
 no candidate, network, publish, deploy, signal, or external-write action.
 
+`control/v1/evaluate-bound-sandbox.sh` is the fixed declaration path for a measured
+file verifier. It accepts only the shipped bound policy set, a satisfied duty result
+from that same set, one complete environment claim, and one verifier observation.
+The measured verifier digest must equal the claim digest and a value in that
+environment's accepted list. Its result remains declaration-only. The shipped list
+is empty, so the repository cannot produce a satisfied result without disposable
+test copies.
+
 ## Inactive sandbox-policy evaluator
 
 `control/v1/evaluate-sandbox.sh` checks one execution-environment claim against
@@ -206,6 +315,52 @@ The result is declaration-only: `satisfied`, `violated`, or `inconclusive`. Even
 grants no authority, qualification, or permission. The package stays inactive,
 runs no candidate or adapter, reads no credential, activates no profile, and
 performs no network, publish, deploy, or external-write action.
+
+The [accepted sandbox boundary decision](../work/real-sandbox-boundary/spec.md)
+is complete as an architecture decision; real execution remains blocked.
+Its boundary map and four separately gated implementation concerns define what
+must be resolved before use. This decision ships no runtime, and the evaluator's
+declaration-only result still grants no enforcement proof or qualification.
+
+## Inactive sandbox receipt check
+
+`enforcement/v1/check-sandbox-receipt.sh` checks one sandbox enforcement receipt
+against the consumer's expectation for that attempt and the declaration-only
+sandbox evaluation that admitted the launch. It reads the sandbox policy,
+decision and policy set, the environment registry and
+`enforcement/v1/accepted-identities.json` from the repository, never from
+arguments. It returns `valid` or `refused` with a closed list of reasons and, for
+a valid receipt, an enforcement verdict of `satisfied`, `violated` or `failed`,
+as the [accepted receipt contract](../work/enforcement-evidence-binding/spec.md)
+defines.
+
+The check proves shape, binding to one attempt, the accepted identities and
+internal consistency. It never proves origin, and its output always says
+`origin_check: "not-performed"`: a receipt is authentic only when the consumer
+reads it itself from the host supervisor's store, which does not exist yet. The
+shipped accepted identity set is empty, so no receipt can be `valid` today. The
+check is inactive, grants no authority or qualification, changes no gate, and
+runs no candidate, supervisor or network action. Declaration-only sandbox
+evaluations keep their meaning.
+
+The explicit `check-bound` verb adds the measured observation and verifies the
+bound policy, decision, set, evaluator sources, evaluation, expectation and receipt
+together. It requires the receipt's verifier digest to equal the observed digest,
+even if the accepted list contains more than one value. `check` continues to use
+the original fixed tuple. Neither verb authenticates where receipt bytes came from.
+
+## Inactive VM launcher and supervisor
+
+`sandbox/v1/host-supervisor.py` is the only producer of sandbox enforcement
+receipts ([spec](../work/vm-launcher-supervisor/spec.md)). It refuses before launch
+unless every byte identity, binding and candidate file matches, freezes the
+candidate by copy, boots one offline guest through `sandbox/v1/runtime-vfkit.py`,
+runs the fixed verifier under the guest supervisor, tears down and writes one
+receipt into its own store. Nothing runs it outside its tests: no host
+configuration, account or store exists, and the shipped accepted set is empty, so
+every receipt is refused. CPU and wall time are `enforcement: "none"`, so no receipt
+can be `satisfied`. The tests use a fake runtime and prove contracts, not the Apple
+VM boundary.
 
 ## Inactive credential-policy evaluator
 
@@ -222,6 +377,30 @@ produce `satisfied`. The package stays inactive, reads no credential material or
 credential-like environment value, grants no authority or qualification, activates
 no profile, and performs no candidate, adapter, network, publish, deploy, or
 external-write action.
+
+The three input-mutation tests allow at most three fully reconciled setups using
+that original evaluator. Only a proved missed setup window may retry; exhaustion
+fails. All original mutation, refusal, restoration and cleanup assertions remain
+required. This test setup grants no credentials, qualification or activation.
+
+The credential-policy test now treats its private outer control handoff as one
+transaction. The child publishes its canonical PID and process-group identity by
+writing, closing and atomically renaming a private record. The parent opens the
+final record without following links, checks that it is a regular file, applies a
+bounded exact grammar, and matches both fields to the Bash job it launched before
+writing the one finite release token.
+
+Once release may have occurred, failure handling becomes wait-only. The launching
+Bash is the only consumer of that saved job and retires its authority only after a
+confirmed direct wait. A trapped signal, release error or later observation cannot
+turn into a successful control. Unconfirmed wait state retains the case evidence;
+actual descendant events and the direct child status are reported as separate
+facts. The regression matrix exercises atomic publication, refusal records, signal
+boundaries, release failures and retirement on real private workers.
+
+This evidence does not identify the unique cause of a historical CI failure. It
+does not change the evaluator or grant credential qualification, authority or
+activation.
 
 ## Inactive evidence-integrity evaluator
 
@@ -279,6 +458,25 @@ pending deliveries, with redeliveries first and stable stage-key order; work tha
 does not fit is listed as deferred. Scanner recovery actions and reasons remain
 data in the plan. The filter does not dispatch, schedule, execute recovery, write
 state, use a credential or network, activate a profile, publish, or touch a target.
+
+## Inactive durable delivery ledger
+
+`orchestrator/v1/delivery-ledger.py` persists the existing planner's delivery
+ledger in a dedicated owned local store. Initialize, read and conditional update
+use a fixed direct Python entry. Canonical exports carry actual SHA256 references.
+The planner itself still only validates reference shape and matching identity.
+
+All calls hold one permanent flock. A single process writes bounded loose Git
+objects and publishes one exact-old-tip ref update by atomic rename. Full history
+validation precedes read, replay and new updates. Exact replay survives a lost
+reply; retained crash residue counts toward all resource limits. No automatic
+cleanup, arbitrary Git writer, subprocess, network or provider action is included.
+
+See [the delivery ledger guide](delivery-ledger.md) for the exact invocation,
+state transitions, limits, recovery boundary and restoration requirements.
+The focused `scripts/test/orchestrator-delivery-ledger.test.sh` covers actual
+public transitions, independent Git/jq/planner checks and held crash boundaries.
+The component remains inactive and grants no qualification or target authority.
 
 ## Inactive GitHub forge normalizer payload
 
@@ -366,9 +564,43 @@ telemetry/v1/validate-trace-ledger.sh validate SESSION_ID ATTEMPT_ID LEDGER.json
 The chain detects an unrehashed change; it is not a signature or an authority
 grant. The package stays inactive and repo-only. It does not collect telemetry,
 run a tool or adapter, read a credential, use a network, write a ledger, activate
-a profile, qualify a workflow, publish, deploy, or touch a target. A later unit
-must provide durable append, retention, access, and recovery behavior before it
-can claim a telemetry ledger runtime.
+a profile, qualify a workflow, publish, deploy, or touch a target. The
+[inactive telemetry trace store](#inactive-telemetry-trace-store) adds bounded
+durable append and read-back for sealed bundles; no shipped component calls it, and
+live collection, retention policy and caller wiring remain later work.
+
+## Inactive telemetry trace store
+
+`telemetry/v1/trace-store.py` keeps complete sealed trace bundles, byte for byte, in
+a local store outside the scratch that made them. It runs only under the identified
+interpreter and empty environment of the [delivery ledger](delivery-ledger.md), with
+`-I -S -B` and no `TMPDIR`:
+
+```text
+initialize STORE_ROOT STORE_ID
+append STORE_ROOT STORE_ID EXPECTED_TIP SCRATCH_ROOT JQ_BIN SESSION_ID ATTEMPT_ID LEDGER
+read STORE_ROOT JQ_BIN STORAGE_RECEIPT OUTPUT
+list STORE_ROOT STORE_ID
+```
+
+Append runs the unchanged validator above on a private snapshot and never reads a
+caller's receipt. A record keeps the exact bundle, the validator's exact receipt and
+the validator, program and jq digests, keyed by the receipt's session, attempt and
+final-digest replay key. One session and attempt may hold several records, told apart
+only by final digest; none is newest. Publication is one expected-tip
+compare-and-swap of a single ref in a bare SHA-1 repository the program writes
+itself, without running Git. An identical replay returns the same storage receipt and
+adds nothing. Read writes the exact bytes to a new 0400 file only after re-checking
+the storage receipt and re-running the same validator revision.
+
+A store holds at most 1,024 records of up to 1 MiB each and 256 MiB of files. A full
+store refuses; there is no eviction, pruning, garbage collection, repair or history
+rewrite, and a stale ref lock or partial initialization waits for the operator. The
+proof covers process-crash recovery for this contract only, not producer
+authenticity, power loss, same-UID or administrator rollback, or a session service.
+The store is inactive, grants no authority, qualifies no fact, uses no network or
+credential and ships no default location. No shipped component calls it; a later
+publisher binds to it by storage receipt in its own gate.
 
 ## Inactive hermetic eval-record evaluator
 
@@ -429,6 +661,28 @@ inputs; they do not claim this materialization capability. The package is not
 qualified, selected, installed, or activated. It reads no credential, contacts no
 provider or real target during construction, and cannot push, publish, merge, or
 grant authority.
+
+## Inactive candidate content preparation
+
+`preparation/v1/prepare-candidate.py` accepts one exact approved materializer input,
+its actual response, and the resulting owned bare candidate repository. It reruns
+the real response and portable-core validators from measured private copies, admits
+the closed repository layout, recomputes raw Git object identities, and exports the
+whole candidate tree without checkout, attributes, filters, hooks or candidate code.
+
+The output bundle contains exact input and response bytes, a raw candidate content
+root, a complete measured manifest, a completion record and a permanent lock. Files
+preserve Git's executable distinction as local 0400 or 0500 modes. The component
+remeasures the source and output before publication. `inspect` can recover a fully
+published bundle after a lost reply, but cannot finish or repair an interrupted one.
+
+This boundary prepares bytes only. Its owned local files remain mutable by the same
+account, and its record is neither an authenticated receipt nor sandbox evidence.
+The later supervisor still owns provenance, transfer remeasurement, descriptor
+closure, read-only isolation and the fixed verifier invocation and resource limits.
+The component is inactive and uses no network, credential, real target, model,
+publisher, installation, activation, release or deployment path. See
+[the operating and restoration guide](candidate-content-preparation.md).
 
 ## Inactive Claude Code producer normalizer payload
 
@@ -541,6 +795,27 @@ grant authority or qualification, or activate a profile. A later assembly PR may
 add its manifest and inactive default-set binding only after the payload has a
 durable commit on main. A runnable verifier still requires a separately qualified
 sandbox launcher and fixed verification implementation.
+
+## Inactive fixed file-digest verifier
+
+`verifiers/file-digest/v1/verifier.c` is the fixed file-digest verifier of the
+[sandbox boundary decision](../work/real-sandbox-boundary/spec.md), specified in
+[its spec](../work/fixed-file-digest-verifier/spec.md). It accepts only the sandbox
+policy's fixed invocation and four-variable environment. It reads one trusted
+instruction from standard input and one bounded regular file under the candidate
+root, following no link. It writes one canonical payload: `match`, `mismatch` or one
+closed refusal reason. The digest is SHA-256 over the raw file bytes, not a Git
+object id. `verifiers/file-digest/v1/build.sh` builds it with the host compiler and
+records the source, build-script, compiler and executable digests.
+
+The payload is untrusted verifier output and never a receipt; only the host
+supervisor binds it, by digest. Nothing runs the verifier outside its test. The
+shadow slice still records `tool.git-blob-digest`, the sandbox policy keeps its
+all-ones demonstration tool digest, and no build digest is accepted anywhere. The
+test proves component behaviour on a build whose sandbox root is a temporary
+directory. The production build at `/sandbox`, mounts, limits, containment and
+guest-toolchain identity stay unproven until the launcher and supervisor concern
+qualifies them.
 
 ## Inactive eval and trace framework
 
@@ -896,6 +1171,13 @@ Each gate evaluation's id must be the one its evaluator derives (the stage resul
 
 The catalog metadata each dashboard family carries (grader kinds, trial policy, seed status, seed sources) must be metadata a valid eval catalog can hold; a family called seeded with no seed source is malformed.
 
+The [accepted step 8 bounded-write readiness decision](../work/step8-bounded-write-readiness/spec.md)
+names the first bounded-write workflow and the evidence that must exist before
+any write scope can be proposed. It ships no runtime. No write scope is
+proposable today, this evaluator still refuses an enabled or push-allowed
+scope, and each of the decision's twelve ordered child concerns needs its own
+gates before anything can write.
+
 ## Inactive target packaging
 
 `packaging/v1/` is the roadmap item 10 pair: `build-release.sh` writes a versioned
@@ -1191,12 +1473,16 @@ text in a regular, non-symlink file inside a fixed size. Validating a record
 creates no issue, no change request, and no deploy authority.
 
 `shadow/v1/shadow-environments.json` is the committed list of execution
-environments a shadow run may use. It lists two entries today:
-`env.local-macos-fixture` (`fixtures-only`, `unproven`) and
-`env.local-macos-ystack-self` (`self-host`, `unproven`). Each entry binds one
-target repository id and one source repository, named by that repository's own
-root commit. Adding an environment is a reviewed change to that file; no run
-may add one.
+environments a shadow run may use. It lists four entries today:
+`env.local-macos-fixture` (`fixtures-only`, `unproven`),
+`env.local-macos-ystack-self` (`self-host`, `unproven`),
+`env.local-macos-dummy-target` (`external-target`, `unproven`), which binds the
+external dummy target `repo.ystack-dummy-target` by its root commit, and
+`env.local-macos-vm-dummy-target` (`external-target`, `unproven`), the VM guest
+environment, which inherits nothing from the checkout entry. Each entry
+binds one target repository id and one source repository, named by that
+repository's own root commit. Adding an environment is a reviewed change to
+that file; no run may add one.
 
 `shadow/v1/reproduce.sh` is the driver. It takes one incident record, one
 execution-environment claim, the control policy set and duty evaluation that
@@ -1289,11 +1575,15 @@ Two invocations are supported: executing the file so its `#!/bin/bash -p`
 shebang starts bash, or `env -i PATH=/usr/bin:/bin LC_ALL=C /bin/bash -p
 <script> assemble <repository-id> <source-git-dir> <commit-id>
 <attempt-timestamp> <profile-dir> <resolved-profile-file> <jq-binary>
-<output-dir> <environment-claim-file>`. Invoking the `__assemble_clean` marker
-verb directly is not one of them and carries no safety claim. Tree content is
-the materializer's own check, not this component's, so a source that trips
-its tree scan comes back `materialization.refused` from the driver rather
-than a refusal from this component.
+<output-dir> <environment-claim-file> <requester-file>`. Invoking the
+`__assemble_clean` marker verb directly is not one of them and carries no
+safety claim. Tree content is the materializer's own check, not this
+component's, so a source that trips its tree scan comes back
+`materialization.refused` from the driver rather than a refusal from this
+component. The requester file is the caller's own identity: it is refused
+unless it is an `actor_ref` with an actor role (`manager`, `operator`, or
+`orchestrator`) that collides with no binding in the supplied resolved
+profile.
 
 The profile, the six shipped manifests, and the producer config are pinned by
 SHA-256 in `shadow/v1/materialization-input.jq`: any supplied document whose
@@ -1306,6 +1596,138 @@ tree-content scan is not duplicated. Run the focused proof with:
 
 ```sh
 bash scripts/test/shadow-assembler.test.sh
+```
+
+## First self-host shadow evidence
+
+`shadow/evidence/self-host-transition/v1/` holds the repository's first pair
+of real, genuine self-host shadow runs (issue #264, `work/shadow-self-host-run/`):
+one file-digest check (`config/construction-mode.json`) evaluated at the
+post-transition revision `0427390224c25147650f1bd3b6e43ed6911b97a7` (outcome
+`reproduced`) and again at its pre-transition first parent
+`d3f6d525328838b9c2de819699e53d8909ab7a3f` (outcome `no-change`, a control
+observation rather than a second reported incident). Both runs used the
+accepted `resolver-trusted-parent` and `shadow-input-assembler` dependencies,
+the shipped, unmodified `shadow/v1/reproduce.sh` driver, and the shipped
+`control/v1/evaluate-sandbox.sh` evaluated exactly as shipped — a
+declaration-only evaluation with no real execution boundary.
+
+This is evidence, not a capability. The retained `sandbox-evaluation.json`
+documents carry the shipped `enforcement_proof: "declaration-only"`,
+`authority_effect: "none"` and `qualification_effect: "none"` markers, and any
+`satisfied` verdict among them carries only `sandbox.declaration-satisfied`:
+the claim matched the declared policy, and enforcement stays `unproven`. The
+retained policy and claim bytes keep the shipped verifier tool digest of 64
+ones that `control/v1/sandbox-policy.json` pins; that value is the shipped
+demonstration value, never a real tool identity
+(`work/real-sandbox-boundary/spec.md` requirement 5), and it is retained
+rather than scrubbed because rewriting it would make the shipped evaluator's
+`satisfied` verdict unreachable and would misstate what was evaluated. Every
+other digest this evidence carries names real, recomputable committed bytes:
+none of it is the repeated-character placeholder style
+`scripts/test/shadow-slice.test.sh` builds its own fixtures from. A real
+execution boundary remains a separate, step-8 prerequisite
+(`work/real-sandbox-boundary/spec.md`); nothing here substitutes for it, and
+the `env.local-macos-ystack-self` registry entry
+(`shadow/v1/shadow-environments.json`) stays `proof_state: unproven`.
+
+Both cases' unchanged shadow records were also fed, read-only, through the
+shipped `scope/v1/evaluate-scope.sh` (a clearly marked inactive compatibility
+harness — compatibility is not qualification, and the harness creates no live
+scope authority) and the shipped `maintenance/v1/incident-to-eval.sh`. The
+scope evaluator accepts both records under its complete shape and reference
+checks and classifies the workflow in its own vocabulary,
+`outcome: "not-proposable"` with
+`qualification: {state: "unavailable", reason_id: "scope.enablement-requires-operator-pr"}`.
+The maintenance converter maps each incident and its matching record to the
+`stale-moved-artifacts` family — `{accepted, stale}` for the post case,
+`{accepted, completed}` for the pre case — with
+`qualification: {state: "unavailable", reason_id: "maintenance.no-adapter-exists"}`,
+and refuses either cross-pairing of an incident with the other case's record.
+No live eval seed case was added or changed by this task.
+
+See `shadow/evidence/self-host-transition/v1/README.md` for the two input
+tuples, the real dependency commits and digests, the replay recipe, and the
+before/after source-integrity comparison, and
+`shadow/evidence/self-host-transition/v1/verification-instructions.md` for
+the minimal, tool-free procedure to check the one file-digest condition by
+hand. Run the focused offline proof, which reads only the committed evidence
+bytes and performs no self-host reproduction, credential use, or model call,
+with:
+
+```sh
+bash scripts/test/shadow-self-host-evidence.test.sh
+```
+
+## First external-target shadow evidence
+
+`shadow/evidence/external-dummy-target/v1/` holds the first pair of real,
+genuine shadow runs against an external repository's history (issue #426,
+`work/external-target-shadow-run/`): one file-digest check (`src/greet.sh`)
+evaluated at the post-change revision `e7da8f7b8f88c2a9cb4670dc453c5223a9c2d15e`
+of `yihanzhu/ystack-dummy-target` (outcome `reproduced`) and again at its
+single parent `413a2f02a46ababa987039be65089e95c1916765` (outcome
+`no-change`, a control observation rather than a second reported incident).
+Both runs used the same shipped, unmodified `shadow/v1/reproduce.sh` driver,
+`shadow/v1/assemble-materialization-input.sh` assembler,
+`adapters/local-git-materializer/v1` materializer, and
+`control/v1/evaluate-sandbox.sh` evaluator that #373 exercised against
+ystack's own history — through their supported public interfaces, unchanged,
+against a repository that shares nothing with ystack.
+
+This is the portability half of Roadmap step 7's evidence, not a new
+capability. No component was special-cased, patched, or edited for this
+target: every target relation in the shipped pieces takes the repository id
+from its input and compares it. The environment registry entry
+`env.local-macos-dummy-target` (`shadow/v1/shadow-environments.json`) binds
+`repo.ystack-dummy-target` by its root commit and stays
+`proof_state: unproven`; this task does not change that. As in the self-host
+evidence, the retained `sandbox-evaluation.json` documents carry the shipped
+`enforcement_proof: "declaration-only"`, `authority_effect: "none"` and
+`qualification_effect: "none"` markers, and any `satisfied` verdict among
+them carries only `sandbox.declaration-satisfied`. The retained policy and
+claim bytes keep the shipped verifier tool digest of 64 ones that
+`control/v1/sandbox-policy.json` pins — the shipped demonstration value,
+never a real tool identity (`work/real-sandbox-boundary/spec.md`
+requirement 5). A real execution boundary remains a separate, step-8
+prerequisite; nothing here substitutes for it.
+
+**Portability result.** Target-facing fields (each incident, the stage
+requests, both resolved-profile documents' `repository_context_ref`, the
+materialization receipts, the qualified identities, and the shadow records)
+all name `repo.ystack-dummy-target`. Control-plane fields keep naming
+`repo.ystack`, because they point at the unchanged ystack default profile,
+its six manifests, the producer prompt and this slug's plan — a mixed
+identity that fixture tests had exercised but no real run had, until now.
+
+Both cases' unchanged shadow records were also fed, read-only, through the
+shipped `scope/v1/evaluate-scope.sh` (a clearly marked inactive
+compatibility harness) and the shipped `maintenance/v1/incident-to-eval.sh`,
+with a scope for `repo.ystack-dummy-target` requiring
+`env.local-macos-dummy-target`. The scope evaluator accepts both records
+under its complete shape and reference checks and reports, in its own
+vocabulary, `outcome: "not-proposable"` with
+`qualification: {state: "unavailable", reason_id: "scope.enablement-requires-operator-pr"}`
+and no live authority. The maintenance converter maps each incident and its
+matching record to the `stale-moved-artifacts` family — `{accepted, stale}`
+for the post case, `{accepted, completed}` for the pre case — with
+`qualification: {state: "unavailable", reason_id: "maintenance.no-adapter-exists"}`,
+and refuses either cross-pairing of an incident with the other case's
+record. No live eval seed case was added or changed by this task.
+
+See `shadow/evidence/external-dummy-target/v1/README.md` for the two input
+tuples, the frozen runtime and dependency digests, the portability result in
+full, the operator's confirmations, the replay recipe, and the before/after
+source-integrity comparison, and
+`shadow/evidence/external-dummy-target/v1/verification-instructions.md` for
+the minimal, tool-free procedure to check the one file-digest condition by
+hand. Run the focused offline proof, shared with the self-host bundle in one
+table-driven harness, which reads only the committed evidence bytes and
+performs no external-target reproduction, credential use, or model call,
+with:
+
+```sh
+bash scripts/test/shadow-self-host-evidence.test.sh
 ```
 
 ## Inactive maintenance loop
@@ -1408,3 +1830,79 @@ bash scripts/test/maintenance-loop.test.sh
 
 It builds its own fixtures, seals its own trace ledgers, and proves the happy
 paths byte for byte on a repeat run alongside every refusal above.
+
+## Inactive shadow consumer trust reader
+`shadow/v1/_consumer.py` reads descriptor-3 context, dependencies, the root-owned
+installation, and its store through stable held descriptors.
+
+`shadow/v1/enforced-reproduction.py` is the explicit inactive reproduction entry.
+It validates and materializes a no-change request, prepares and inspects the
+candidate, evaluates the fixed bound declaration, persists a nonce-bearing launch
+request and receipt expectation, and frames the prepared export. Its production
+launch path is fixed to the installed supervisor account; repository tests replace
+only that private launch boundary. A completed run reopens the controlled store,
+checks the bound receipt and fixed verifier result, validates a sealed trace, and
+writes the exact 29-file frozen bundle with `bundle.json` last. It has no write,
+publisher, activation, installation, or qualification path.
+
+`shadow/v1/_cancel_release.c` is the private single-thread cancellation-release
+boundary. `shadow/v1/build-cancel-release.sh` compiles it only for a reviewed Python
+runtime into a new private test or provisioning directory and records the exact source,
+compiler, arguments, ABI, and output. The consumer loads only parent-accepted bytes by
+absolute path with `RTLD_NOW|RTLD_LOCAL`; it never builds or installs them.
+On macOS the recorded recipe uses GNU C11 and the standard bundle linker flags. The
+module, State, method bindings, and required first-use roots exist before the first
+census. After that census and before product work, the native state captures the caller
+mask, installs fixed native HUP/INT/TERM handlers, and keeps those signals blocked. Existing Python checkpoints use
+one non-consuming native pending-signal observation. The same state owns child process
+identity and the exact completion bytes through the first marker byte, durability point,
+action and mask restoration, and final close. Unknown signal, child, or platform behavior
+refuses before its effect. Linux keeps its separate C11 release contract and adds the
+public close-from action after the fixed stdio and pipe actions. Platform admission
+requires the held parent build and runtime records to match the fixed public-call controls
+and provider evidence. Linux also requires the public session, mask, default-action,
+close-from, and wait capabilities used by the fixed child recipe. macOS checks the fixed
+default spawn-filter path before preparation and again immediately before spawn while the
+parent holds and rechecks its protected ancestors.
+On protected macOS runs, primary or effective group membership is decided locally.
+Supplementary membership is read once by a distinct State-owned private child with fixed
+Python, source, arguments, environment, input, output, and cleanup; the parent never
+initializes Darwin's extended group service.
+
+```sh
+bash scripts/test/shadow-enforced.test.sh
+```
+
+## Inactive shadow write materialization
+
+`shadow/v1/write-shadow.py` has a private preparation path for one frozen enforced
+reproduction. It reopens the original controlled store and reruns the fixed evaluator
+and checker before constructing the exact 32 add-only evidence files. The unchanged
+seed converter, materializer and preparation components produce the candidate. The
+consumer checks actual tree, parent, modes and raw bytes, then performs the original
+incident check through a separate write attempt. Frozen reproduction bytes stay unchanged.
+
+`shadow/v1/write-materialization-input.jq` owns the two fixed JSON phases. Patch and
+contract bytes use raw files, within the existing native argv bound. Native roles
+16–18 are only the fixed converter, builder and read-only Git inspection commands.
+They use the existing State owner and general cleared environment; role 19 refuses.
+The public isolated `prepare REQUEST BUNDLE WORK OUTPUT` entry now completes an
+inactive `withheld-write.v1` bundle under the original native owner. Descriptor 3
+must supply the schema-2 parent context. The private admission checks actual candidate
+facts, the frozen bundle and the separate authenticated write receipt. It emits a
+neutral request and a post-write check description, with no publication authority.
+`publisher-body.txt` stays outside the 32-file candidate. Publication remains withheld.
+
+The final provenance includes every fixed child command before admission seals the
+record and trace. The completion marker inventories the original 29 outer evidence
+names plus the publisher body. Native L occurs after ordinary owners close. A failure
+or cancellation can retain partial evidence but cannot create the completion marker.
+Two fresh disposable attempts prove identical trees, write sets, request bytes and
+post-write digests. The unchanged scope evaluator still refuses the new record form.
+The shipped accepted set stays empty; CPU/wall enforcement is none and native
+qualification remains blocked. No publisher implementation ships here.
+
+`shadow-write.test.sh` reuses the unchanged enforced test's disposable real-chain
+fixture by inserting writer controls into a temporary script copy. It also runs the
+complete original regression. Only fixture identity/origin and supervisor launch are
+simulated; converter, builder, materializer, preparation, verifier and checker are real.

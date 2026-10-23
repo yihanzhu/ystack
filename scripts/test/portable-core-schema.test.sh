@@ -832,7 +832,8 @@ schema_import_path_ok() {
     adapters/deterministic-verifier/v1/normalize.jq|\
     evals/v1/framework.jq|\
     evals/v1/evals.jq|\
-    orchestrator/v1/reconciliation-plan.jq|orchestrator/v1/state-scanner.jq) ;;
+    orchestrator/v1/reconciliation-plan.jq|orchestrator/v1/state-scanner.jq|\
+    shadow/v1/materialization-input.jq) ;;
     scripts/test/default-codex-native-reviewer-adapter.test.sh|\
     scripts/test/default-dormant-publisher-adapter.test.sh|\
     scripts/test/default-deterministic-verifier-adapter.test.sh|\
@@ -928,6 +929,7 @@ done < <(git -C "$schema_root" ls-files -z)
 schema_v2_corrective_expected_hits="$schema_test_tmp/v2-corrective-expected-hits"
 printf '%s\n' \
   ci/required-files.txt \
+  control/v1/control-policy-set-sandbox-bound.json \
   control/v1/control-policy-set.json \
   core/v2/generation-registry.json \
   "core/v2/generations/$schema_v2_corrective_generation/core-ingress.sh" \
@@ -939,11 +941,19 @@ printf '%s\n' \
   orchestrator/v1/state-scanner-driver.sh \
   orchestrator/v1/state-scanner-launcher.sh \
   orchestrator/v1/state-scanner.jq \
+  resolver/v1/resolve-profile.sh \
+  resolver/v1/trusted-launch.c \
   scripts/core-contract.sh \
   scripts/lib/profile-resolution.sh \
   scripts/test/orchestrator-state-scanner.test.sh \
   scripts/test/portable-core-schema.test.sh \
-  scripts/test/portable-core-v2-evidence-identity.test.sh > \
+  scripts/test/portable-core-v2-evidence-identity.test.sh \
+  shadow/evidence/external-dummy-target/v1/control-policy-set.json \
+  shadow/evidence/external-dummy-target/v1/core-package-closure.json \
+  shadow/evidence/external-dummy-target/v1/duty-evaluation.json \
+  shadow/evidence/self-host-transition/v1/control-policy-set.json \
+  shadow/evidence/self-host-transition/v1/core-package-closure.json \
+  shadow/evidence/self-host-transition/v1/duty-evaluation.json > \
   "$schema_v2_corrective_expected_hits"
 if cmp -s "$schema_v2_corrective_live_hits" "$schema_v2_corrective_expected_hits"; then
   schema_guard_passed=$((schema_guard_passed + 1))

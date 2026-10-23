@@ -19,6 +19,94 @@ fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 passed=0
 pass() { passed=$((passed + 1)); printf 'ok %s - %s\n' "$passed" "$1"; }
 
+guard_cleanup_wrapper="$tmp/guard-cleanup.py"
+cat >"$guard_cleanup_wrapper" <<'PYTHON'
+import importlib.util
+import os
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(sys.argv[1]).parent))
+spec = importlib.util.spec_from_file_location("replay", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+
+def check_cleanup(close_error):
+    events = []
+    read_fd, write_fd = os.pipe()
+    os.close(write_fd)
+    output = os.fdopen(read_fd, "rb", buffering=0)
+
+    class Input:
+        def write(self, value):
+            events.append(("write", value))
+            return len(value)
+
+        def flush(self):
+            events.append(("flush",))
+            if events.count(("flush",)) == 2:
+                raise BrokenPipeError("abort flush")
+
+        def close(self):
+            events.append(("input-close",))
+            raise close_error
+
+    class Output:
+        def fileno(self):
+            events.append(("fileno",))
+            return output.fileno()
+
+        def close(self):
+            events.append(("output-close",))
+            output.close()
+
+    class Child:
+        stdin = Input()
+        stdout = Output()
+
+        def poll(self):
+            events.append(("poll", None))
+            return None
+
+        def wait(self, timeout):
+            events.append(("wait", timeout))
+            return 0
+
+    child = Child()
+    original_popen = module.subprocess.Popen
+    module.subprocess.Popen = lambda *args, **kwargs: child
+    entered = False
+    caught = None
+    try:
+        try:
+            with module.hold_candidate_ref(Path(sys.argv[2]), "a" * 40):
+                entered = True
+        except Exception as error:
+            caught = error
+        print("guard cleanup events:", repr(events), "error:", repr(caught), flush=True)
+        prepare = ("option no-deref\nstart\nverify refs/heads/candidate " + "a" * 40 + "\nprepare\n").encode()
+        assert events[:3] == [("write", prepare), ("flush",), ("fileno",)], events
+        assert events[3:7] == [("poll", None), ("write", b"abort\n"), ("flush",), ("input-close",)], events
+        assert not entered, "protected body entered"
+        if isinstance(close_error, BrokenPipeError):
+            assert type(caught) is module.ReplayError, repr(caught)
+            assert str(caught) == "candidate repository identity guard failed", repr(caught)
+            assert events[7:] == [("wait", 5), ("output-close",)], events
+            assert output.closed, "output remained open"
+        else:
+            assert caught is close_error, repr(caught)
+    finally:
+        module.subprocess.Popen = original_popen
+        output.close()
+
+
+check_cleanup(BrokenPipeError("input close"))
+check_cleanup(OSError("unrelated input close"))
+PYTHON
+python3 "$guard_cleanup_wrapper" "$replay" "$tmp" || fail guard-cleanup
+pass 'guard rejection survives broken input close and unrelated close errors remain visible'
+
 platform=$(/usr/bin/uname -s):$(/usr/bin/uname -m)
 case "$platform" in
   Linux:x86_64) asset=jq-linux64; asset_sha=af986793a515d500ab2d35f8d2aecd656e764504b789b66d7e1a0b727a124c44 ;;
@@ -882,14 +970,20 @@ python3 "$replay" --input "$base_input" --source-repository-id fixture.target --
 held_lock_pid=$!
 ( sleep 60; kill -9 "$held_lock_pid" 2>/dev/null ) &
 held_lock_watchdog=$!
-if wait "$held_lock_pid"; then fail held-lock-status; fi
+if wait "$held_lock_pid"; then held_lock_status=0; else held_lock_status=$?; fi
 kill "$held_lock_watchdog" 2>/dev/null || true
+held_lock_fail() {
+  printf 'held-lock replay exit status: %s\n' "$held_lock_status" >&2
+  cat "$tmp/held-lock.out" >&2
+  fail "$1"
+}
+[ "$held_lock_status" -ne 0 ] || held_lock_fail held-lock-status
 if ! grep -Fq 'delivery replay: candidate repository identity guard failed' "$tmp/held-lock.out" ||
    grep -Fq Traceback "$tmp/held-lock.out"; then
-  fail held-lock-error
+  held_lock_fail held-lock-error
 fi
 jq -e '.phase=="publish-wait" and (has("publisher")|not)' "$tmp/held-lock-state/run.json" >/dev/null ||
-  fail held-lock-state
+  held_lock_fail held-lock-state
 touch "$tmp/held-lock-release"
 wait "$ref_holder_pid" || fail held-lock-release
 python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \

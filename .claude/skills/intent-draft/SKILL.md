@@ -57,5 +57,12 @@ Template — keep all six sections and headings exact:
     ## Open questions
     <what the operator or the design stage must still answer>
 
+**Normative content only.** The intent keeps the six sections above and nothing else.
+Never add a per-round changelog, "this round adds N lines" accounting, a history of the
+intent's own line count, or a size range restated in more than one place — that is
+review record and goes in the PR description or a PR comment. A review round edits
+these sections in place: change the words, do not append a paragraph that narrates the
+change (see `work/README.md` > Artifact hygiene).
+
 **Write in plain language.** Short sentences, everyday words — the reader is a
 tired human, not another agent (see AGENTS.md > PR rules).

@@ -1,0 +1,1 @@
+Validate the committed input.json against adapters/local-git-materializer/v1/protocol.jq under the pinned jq before it is handed to the driver.

@@ -54,8 +54,32 @@ That test obtains the pinned jq 1.6 release with its recorded digest, compiles t
 single private no-follow helper and the test-owned direct-`execve` launcher with the
 host compiler, creates hermetic SHA-1/SHA-256 repositories, and validates the output
 with the restored `scripts/core-contract.sh`. No compiled helper is installed or
-restored. A future activation must separately qualify and bind a production trusted
-parent; restoring these files does not select a live profile.
+restored.
+
+### Restore the inactive trusted parent for the profile resolver
+
+Confirm the three files listed under "Inactive trusted parent for the profile
+resolver" in [`ci/required-files.txt`](ci/required-files.txt) —
+`resolver/v1/trusted-launch.c`, `resolver/v1/resolve-profile.sh` (git mode
+`100755`), and `scripts/test/resolver-trusted-launch.test.sh` — then run:
+
+```sh
+bash scripts/test/resolver-trusted-launch.test.sh
+```
+
+That test provisions the pinned jq 1.6 release the way
+`scripts/test/shadow-slice.test.sh` does, runs the shipped entry against a real
+committed `profiles/default/v1` request, resolves it through the shipped parent
+and the existing test launcher, and `cmp`s the two outputs. It also drives the
+parent directly, as a test-only harness, to prove the parent's own refusals
+independent of the entry, and asserts the R10 mechanism, cleanup, umask,
+descriptor, and signal cases. On Darwin it requires the Command Line Tools
+(the entry compiles with `/Library/Developer/CommandLineTools/usr/bin/clang`,
+not the `xcrun` shim). Nothing compiled is installed or cached — the entry
+rebuilds the parent and helper from committed source on every invocation. A
+future activation must separately qualify and bind this as a production launch
+path; restoring these files does not select a live profile, activate a profile,
+or run the Roadmap step-7 self-host run.
 
 ### Restore the inactive offline delivery replay
 
@@ -154,6 +178,15 @@ after the operating-mode transition. It reads `config/construction-mode.json`
 read-only and only ever compares it. Restoring these files grants no authority and
 performs no model, credential, network, provider, publish, forge, or target
 
+Restore the step 8 bounded-write decision's
+[intent](work/step8-bounded-write-readiness/intent.md),
+[spec](work/step8-bounded-write-readiness/spec.md) and
+[plan](work/step8-bounded-write-readiness/plan.md) from the same commit, using
+the decision-record block in [the manifest](ci/required-files.txt). Read the
+spec for the first workflow, the evidence required before any write and the
+ordered child concerns. Restoring these records enables no scope, commits no
+kill-switch register and grants no write, credential or publisher.
+
 ### Restore the inactive target packaging
 
 Restore the four paths listed under “Inactive target packaging” in
@@ -239,6 +272,100 @@ look-alike default profile, an unpinned config source, a malformed or
 oversized input, and a finished input over the driver's own size cap.
 Restoring these records materializes nothing on its own: the assembler is
 read-only and resolves no profile.
+
+### Restore the first self-host shadow evidence
+
+Restore `shadow/evidence/self-host-transition/v1/` from the paths listed under
+“First self-host shadow evidence” in
+[`ci/required-files.txt`](ci/required-files.txt), and restore
+`scripts/test/shadow-self-host-evidence.test.sh`,
+together with the shadow reproduction slice, the shadow materialization input
+assembler, the control policy set and its evaluators, the workflow-scope
+qualification evaluator, and the maintenance loop the evidence was checked
+against, then run:
+
+```sh
+bash scripts/test/shadow-self-host-evidence.test.sh
+```
+
+The proof reads the committed evidence bytes only: the inventory in
+`checksums.json`, canonical JSON, incident validation, identity and reference
+equality, the two required outcomes, the empty patch payload and network-deny
+stage request, the materialization result and its receipt, the trace seal,
+the retained declaration-only sandbox evaluation and its all-ones
+demonstration verifier digest, the core package closure, and the approved
+requester identity — plus negative cases that mutate a copy of the evidence
+and require the check to fail. It then exercises the shipped scope evaluator
+as a clearly marked inactive compatibility harness and the shipped
+maintenance converter, both read-only. Restoring these records performs no
+self-host reproduction, obtains no credential, calls no model, registers or
+qualifies no environment, and changes the registry's `proof_state` not at
+all: `env.local-macos-ystack-self` stays `unproven`.
+
+### Restore the first external-target shadow evidence
+
+Restore `shadow/evidence/external-dummy-target/v1/` from the paths listed
+under "First external-target shadow evidence" in
+[`ci/required-files.txt`](ci/required-files.txt), and restore
+`scripts/test/shadow-self-host-evidence.test.sh`, together with the shadow
+reproduction slice, the shadow materialization input assembler, the control
+policy set and its evaluators, the workflow-scope qualification evaluator,
+and the maintenance loop the evidence was checked against, then run:
+
+```sh
+bash scripts/test/shadow-self-host-evidence.test.sh
+```
+
+The proof reads the committed evidence bytes only, for both bundles: the
+inventory in each bundle's `checksums.json`, canonical JSON, incident
+validation, identity and reference equality, the two required outcomes, the
+empty patch payload and network-deny stage request, the materialization
+result and its receipt, the trace seal, the retained declaration-only
+sandbox evaluation and its all-ones demonstration verifier digest, the core
+package closure, the approved requester identity, the bundle's own record
+and registry ids, and the portability result — every `repository_id` and
+`target_repository_id` in the bundle on one of two fixed lists, naming
+`repo.ystack-dummy-target` or `repo.ystack` — plus negative cases that
+mutate a copy of the evidence and require the check to fail. It then
+exercises the shipped scope evaluator as a clearly marked inactive
+compatibility harness and the shipped maintenance converter, both
+read-only. Restoring these records performs no external-target
+reproduction, obtains no credential, calls no model, registers or qualifies
+no environment, and changes the registry's `proof_state` not at all:
+`env.local-macos-dummy-target` stays `unproven`.
+
+### Restore the inactive fixed file-digest verifier
+
+Restore the paths listed under “Inactive fixed file-digest verifier” in
+[`ci/required-files.txt`](ci/required-files.txt) from one commit, then run:
+
+```sh
+bash scripts/test/file-digest-verifier.test.sh
+```
+
+The proof builds the production executable with
+`bash verifiers/file-digest/v1/build.sh build <new-directory>` and a test build
+whose only difference is its sandbox root. It shows match, mismatch and every
+closed refusal against real files, digests checked independently, byte-identical
+rebuilds and payloads, and an unchanged candidate. The build uses no network; the
+test fetches only the pinned jq 1.6 release, as the other suites do. Restoring
+these records installs nothing, runs no verifier in a sandbox, accepts no digest,
+and performs no model, credential, publish or target operation.
+
+### Restore the inactive VM launcher and supervisor
+
+Restore the paths listed under "Inactive VM launcher and supervisor" in
+[`ci/required-files.txt`](ci/required-files.txt) from one commit, then run:
+
+```sh
+bash scripts/test/sandbox-guest.test.sh
+bash scripts/test/sandbox-launcher.test.sh
+```
+
+They prove the guest frame, plan and wiring code with the host compiler, and the
+host supervisor against a fake runtime, fixture store and test-only accepted set.
+Restoring installs no runtime, account, sudo rule or store, boots no VM, accepts no
+identity and uses no network beyond the pinned jq 1.6 release.
 
 ### Restore the inactive maintenance loop
 
@@ -433,12 +560,14 @@ That checklist covers:
   command** (unlike the labels loop), and **branch protection isn't available on free
   private repos** — it needs a paid plan or a public repo. If you can't enable it, **CI is
   still the hard gate** (see Safety rails); you just lose the server-side enforcement.
-- **CI** — comes from [`.github/workflows/ci.yml`](.github/workflows/ci.yml): a
-  `checks` job (structure check, shellcheck, sharding proof, rename gate), six
-  parallel `test` shards each running
-  `scripts/test/run-all.sh --shard <index>/<count>`, and an aggregate `ci` job
-  that stays the **hard merge gate**. Restore it by having this repo's
-  `.github/workflows/` present on `main`. Don't copy its steps here — link to it.
+- **CI** — comes from [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+  Pull requests and main pushes run the `checks` job (structure check, shellcheck,
+  sharding proof, rename gate, Roadmap content guards and minimal-gate proof).
+  Manual `workflow_dispatch` additionally runs six parallel `test` shards through
+  `scripts/test/run-all.sh --shard <index>/<count>`. The aggregate `ci` job stays
+  the **hard merge gate** and fails if the matrix result does not match the event.
+  Restore it by having this repo's `.github/workflows/` present on `main`. Don't copy
+  its steps here — link to it.
   - The structure check enforces the full backup against
     [`ci/required-files.txt`](ci/required-files.txt) — the **source of truth** for every
     restore-critical file. It fails the build if any listed path is missing (and if a
@@ -616,6 +745,40 @@ inactive and declaration-only. It does not enforce or qualify a real sandbox, ru
 a candidate or adapter, use a credential, activate a profile, or perform a network
 or external-write action.
 
+Restore the sandbox decision's [intent](work/real-sandbox-boundary/intent.md),
+[spec](work/real-sandbox-boundary/spec.md) and
+[plan](work/real-sandbox-boundary/plan.md) from the same commit, using the
+decision-record block in [the manifest](ci/required-files.txt). Read the spec
+for the accepted blockers and later implementation dependencies. Restoring
+these records and the declaration evaluator does not restore a qualified
+launcher; real execution remains blocked.
+
+Restore the six paths in the manifest's bound sandbox-control block, then run:
+
+```sh
+bash scripts/test/control-sandbox-bound.test.sh
+bash scripts/test/sandbox-receipt.test.sh
+```
+
+The bound evaluator requires one measured verifier digest across its claim,
+observation and same-environment accepted set. The receipt check selects this tuple
+only through `check-bound`. The shipped accepted set is empty, CPU and wall
+enforcement remain unavailable, and neither command authenticates receipt origin.
+
+Restore the seven paths in the manifest's inactive sandbox receipt check block,
+then run:
+
+```sh
+bash scripts/test/sandbox-receipt.test.sh
+```
+
+This checks kind separation, receipt and expectation shape, placeholder digests,
+attempt, subject and control binding, the accepted identity set, accounting
+rows, outcome derivation, driver input limits and postflight mutation detection.
+The check is inactive and never authenticates origin. Restoring it installs no
+supervisor or receipt store, selects no runtime or credential, and makes no
+receipt count as enforcement.
+
 Restore the five paths in the manifest's inactive credential-policy block, then
 run:
 
@@ -719,7 +882,7 @@ default-set wiring. The pure jq payload is offline and unqualified. It does not
 call GitHub, use a credential, rerun, cancel, or dispatch work, change a
 repository, grant authority or qualification, or activate a profile.
 
-Restore the three paths in the manifest's inactive telemetry trace-record validator block,
+Restore the first three paths in the manifest's inactive telemetry trace-record validator block,
 then run:
 
 ```sh
@@ -732,8 +895,22 @@ tail, deterministic bounded receipts, and fail-closed handling of duplicates,
 replay, reorder, truncation, tampering, time reversal, malformed input, symlinks,
 and unverified runtimes. It does not collect or write telemetry, grant authority or
 qualification, run a tool or adapter, use a credential or network, activate a
-profile, publish, deploy, or touch a target. Durable append, retention, access,
-and recovery behavior is later work.
+profile, publish, deploy, or touch a target. The validator itself stores nothing.
+
+Restore the last two paths of the same manifest block,
+`telemetry/v1/trace-store.py` and `scripts/test/telemetry-trace-store.test.sh`,
+together with the validator paths above, then run:
+
+```sh
+bash scripts/test/telemetry-trace-store.test.sh
+```
+
+This proves byte-exact read-back after the source scratch is deleted, identical and
+conflicting replay, stale and concurrent writers, every crash state around the ref
+update, unchanged state after invalid input, corrupt stored data, capacity refusal
+and the store and environment boundaries, on disposable local stores. It restores no
+store contents, creates no store location, wires no caller, uses no credential or
+network beyond the digest-checked jq 1.6 download, and activates nothing.
 
 Restore the three paths in the manifest's inactive hermetic eval-record evaluator block,
 then run:
@@ -1018,3 +1195,53 @@ Real lessons from setting this up:
   `scripts/codex-review.sh <PR#>` from the target repo's clone. Check the Codex CLI is
   installed and signed in (`codex` runs), and that the script is invoked by absolute path.
   Claude and Codex never talk directly — the PR is the only message bus.
+
+### Restore the inactive shadow consumer trust reader
+Restore `shadow/v1/_consumer.py`, `shadow/v1/_cancel_release.c`,
+`shadow/v1/build-cancel-release.sh`, `shadow/v1/enforced-reproduction.py`, and their
+focused test with the sandbox bound controls. The entry remains inactive: a
+real native launch still needs the separately reserved host installation and
+qualification. The test compiles the private extension into its temporary fixture; it
+does not install or activate it. Verify framing, native release, durable prelaunch state,
+store evidence, fixed verifier relations, trace sealing, and the exact completion
+inventory with:
+
+```sh
+bash scripts/test/shadow-enforced.test.sh
+```
+
+On macOS, also require the recorded GNU C11 bundle recipe, the fixed native signal owner,
+the saved caller mask, non-consuming pending checkpoints, State-owned child lifecycle,
+and exact-byte native completion commit. Bind the actual system providers and spawn-filter
+state used by the reviewed runtime. Missing signal, child, identity, or lifecycle proof
+remains a refusal before its effect.
+Protected Darwin restoration also requires the fixed State-owned supplementary-group
+child. Primary or effective gid matches start no query; supplementary results are only
+the exact requested gid or an empty array, and any child or protocol failure refuses.
+
+On Linux, also require the recorded C11 recipe and the public close-from action after the
+fixed stdio and pipe actions. Prove with an explicitly inheritable ordinary descriptor and
+high descriptor that neither reaches exec. Production admission requires the matching
+package, build ID, source bodies, wait, signal, and release evidence to bind the exact
+production bytes. On macOS, hold and recheck the protected default spawn-filter ancestors
+and require the fixed path to remain absent through the second check immediately before
+spawn.
+
+### Restore inactive shadow write materialization
+
+Restore `shadow/v1/write-shadow.py`, `shadow/v1/write-materialization-input.jq` and
+`scripts/test/shadow-write.test.sh` beside the enforced consumer and its native source.
+The writer reauthenticates frozen evidence, prepares 32 additions, verifies the actual
+candidate, and validates the withheld request through one private admission boundary.
+The isolated public `prepare REQUEST BUNDLE WORK OUTPUT` entry requires descriptor-3
+schema-2 context and the reviewed physical Python/native source. It seals an inactive
+`withheld-write.v1` outer bundle only after the separate authenticated write check.
+The marker includes the publisher body; the candidate includes only frozen evidence.
+Publication stays withheld, and the existing scope evaluator refuses this form.
+Never substitute archived origin for a fresh controlled-store read or enlarge the
+native role/argv/environment contract. No branch transport or publisher is restored.
+
+Run `bash scripts/test/shadow-write.test.sh`. It includes the full unchanged enforced
+regression and real writer component checks in disposable fixtures. Retain final native
+build/source and command evidence; synthetic receipt/installation proof grants no native
+qualification. The shipped accepted set stays empty and CPU/wall enforcement stays none.

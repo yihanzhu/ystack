@@ -31,21 +31,21 @@ umask 077
 # marker word and verb, the argument count, the script-path normalization,
 # and the marker branch's alias reset.
 # copy-begin materialize.sh:22-29
-[ "$#" -eq 10 ] || emit_error E_USAGE
+[ "$#" -eq 11 ] || emit_error E_USAGE
 script_path=${BASH_SOURCE[0]}
 case "$script_path" in /*) ;; *) script_path="$(pwd -P)/$script_path" ;; esac
 [ -f "$script_path" ] && [ ! -L "$script_path" ] || emit_error E_RUNTIME
 if [ "$1" = assemble ]; then
   exec /usr/bin/env -i PATH="${PATH:-/usr/bin:/bin}" LC_ALL=C \
     /bin/bash "$script_path" __assemble_clean "$2" "$3" "$4" "$5" "$6" "$7" "$8" \
-    "$9" "${10}"
+    "$9" "${10}" "${11}"
 fi
 [ "$1" = __assemble_clean ] || emit_error E_USAGE
 # copy-end materialize.sh:22-29
 builtin unalias -a
 builtin shopt -u expand_aliases
 
-# Requirement 1's nine positional arguments, the verb already consumed above.
+# Requirement 1's ten positional arguments, the verb already consumed above.
 repository_id=$2
 source_git_dir=$3
 source_commit=$4
@@ -55,6 +55,7 @@ resolved_profile_file=$7
 jq_bin=$8
 output_dir=$9
 claim_file=${10}
+requester_file=${11}
 
 sha256_path() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'; }
 
@@ -91,7 +92,7 @@ overlaps() {
 # (2) every path argument absolute; existence/symlink-ness defers to (7),
 # except the source directory (2.4) and the output directory (6) below.
 for path_argument in "$source_git_dir" "$profile_dir" "$resolved_profile_file" \
-  "$jq_bin" "$output_dir" "$claim_file"; do
+  "$jq_bin" "$output_dir" "$claim_file" "$requester_file"; do
   case "$path_argument" in /*) ;; *) emit_error E_USAGE ;; esac
 done
 
@@ -133,7 +134,7 @@ esac
 [ "$("$jq_bin" --version 2>/dev/null)" = jq-1.6 ] || emit_error E_RUNTIME
 
 manifest_names="claude-code-producer codex-native-reviewer deterministic-verifier dormant-publisher github-actions-ci local-git-materializer"
-for required in "$resolved_profile_file" "$claim_file" \
+for required in "$resolved_profile_file" "$claim_file" "$requester_file" \
   "$profile_dir/profile.json" "$profile_dir/producer-config.json"; do
   [ -f "$required" ] && [ ! -L "$required" ] || emit_error E_RUNTIME
 done
@@ -205,11 +206,13 @@ for manifest_name in $manifest_names; do
 done
 size_ok "$resolved_profile_file" 8388608
 size_ok "$claim_file" 1048576
+size_ok "$requester_file" 1048576
 for required in "$profile_dir/profile.json" "$profile_dir/producer-config.json" "$profile_dir/manifests/"*.json; do
   canonical_json "$required"
 done
 canonical_json "$resolved_profile_file"
 canonical_json "$claim_file"
+canonical_json "$requester_file"
 
 profile_sha256=$(sha256_path "$profile_dir/profile.json")
 producer_config_sha256=$(sha256_path "$profile_dir/producer-config.json")
@@ -234,6 +237,7 @@ common_args=(-n -L "$modules"
   --slurpfile profile "$profile_dir/profile.json"
   --slurpfile resolved_profile "$resolved_profile_file"
   --slurpfile claim "$claim_file"
+  --slurpfile requester "$requester_file"
   --slurpfile manifest_ci "$profile_dir/manifests/github-actions-ci.json"
   --slurpfile manifest_forge "$profile_dir/manifests/local-git-materializer.json"
   --slurpfile manifest_producer "$profile_dir/manifests/claude-code-producer.json"
@@ -285,13 +289,15 @@ physical_dir "$source_git_dir" || emit_error E_TARGET
 # text while a failure comes back as a status this script can name.
 source_pure() (
   emit_error() { exit 1; }
-# copy-begin materialize.sh:271-332
+# copy-begin materialize.sh:271-276
 git_dir() {
   local directory=$1
   shift
   "${git_env[@]}" /usr/bin/git --no-replace-objects --git-dir="$directory" "$@"
 }
 
+# copy-end materialize.sh:271-276
+# copy-begin materialize.sh:284-339
 source_inventory="$run_root/source-filesystem"
 source_inventory_byte_limit=8388608
 source_inventory_entry_limit=65536
@@ -348,8 +354,8 @@ done < "$source_config"
   [ ! -d "$source_git_dir/refs/replace" ] &&
   [ -z "$(find "$source_git_dir/objects/pack" -type f -name '*.promisor' -print -quit 2>/dev/null)" ] ||
   emit_error E_SOURCE_GIT
-# copy-end materialize.sh:271-332
-# copy-begin materialize.sh:333-347
+# copy-end materialize.sh:284-339
+# copy-begin materialize.sh:340-354
 packed_refs="$source_git_dir/packed-refs"
 if [ -e "$packed_refs" ]; then
   [ -f "$packed_refs" ] && [ ! -L "$packed_refs" ] || emit_error E_SOURCE_GIT
@@ -365,8 +371,8 @@ if [ -e "$packed_refs" ]; then
     emit_error E_SOURCE_GIT
   fi
 fi
-# copy-end materialize.sh:333-347
-# copy-begin materialize.sh:348-360
+# copy-end materialize.sh:340-354
+# copy-begin materialize.sh:355-367
 if find "$source_git_dir/hooks" -type f ! -name '*.sample' -print -quit 2>/dev/null |
    /usr/bin/grep -q .; then
   emit_error E_SOURCE_HOOK
@@ -380,7 +386,7 @@ source_commit_size=$(git_dir "$source_git_dir" cat-file -s "$source_commit" 2>/d
   emit_error E_SOURCE_IDENTITY
 [ "$source_commit_type" = commit ] && [ "$source_commit_size" -le 1048576 ] ||
   emit_error E_SOURCE_LIMIT
-# copy-end materialize.sh:348-360
+# copy-end materialize.sh:355-367
   exit 0
 )
 source_pure || emit_error E_TARGET

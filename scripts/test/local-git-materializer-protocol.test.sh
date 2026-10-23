@@ -337,6 +337,364 @@ no_change_result="$tmp/no-change-result.json"
   "$no_change_result" >/dev/null || fail no-change-result-surface
 pass 'verified no-change receipt binds the no-change result'
 
+response="$tmp/response.json"
+"$jq_bin" -S -c -n --slurpfile result "$result" --rawfile receipt "$receipt" \
+  --arg receipt_sha "$(sha_file "$receipt")" '{
+    schema_version:1,kind:"local_git_materialization_response",
+    stage_result:$result[0],payloads:[{
+      content_id:"candidate.materialization.receipt",media_type:"application/json",
+      sha256:$receipt_sha,data:$receipt}],authority:"none",
+    qualification:{state:"unavailable",reason_id:"adapter.unqualified"},
+    effects:["caller-disposable-candidate-repository"]
+  }' > "$response"
+stage_result_sha=$(sha_file "$result")
+response_bundle="$tmp/response-bundle.json"
+"$jq_bin" -S -c -n --slurpfile input "$input" --slurpfile response "$response" \
+  --slurpfile receipt "$verified_receipt" --rawfile receipt_utf8 "$receipt" \
+  --arg stage_result_sha256 "$stage_result_sha" '{input:$input[0],response:$response[0],
+    verified_receipt:$receipt[0],receipt_utf8:$receipt_utf8,
+    stage_result_sha256:$stage_result_sha256}' > "$response_bundle"
+"$jq_bin" -e -L "$modules" --arg command validate-response \
+  -f "$protocol" "$response_bundle" >/dev/null ||
+  fail validate-response
+pass 'supplied response validates without generating replacement evidence'
+
+"$jq_bin" -e --slurpfile input "$input" --arg receipt_sha "$receipt_sha" '
+  .schema_version==1 and .kind=="local_git_materialization_response" and
+  .authority=="none" and
+  .qualification=={state:"unavailable",reason_id:"adapter.unqualified"} and
+  .effects==["caller-disposable-candidate-repository"] and
+  .payloads==[{content_id:"candidate.materialization.receipt",
+    media_type:"application/json",sha256:$receipt_sha,data:.payloads[0].data}] and
+  .stage_result.schema_version==2 and .stage_result.kind=="stage_result" and
+  .stage_result.id==$input[0].attempt.result_id and
+  .stage_result.body.request_ref=={
+    schema_version:$input[0].stage_request.content.schema_version,
+    kind:$input[0].stage_request.content.kind,id:$input[0].stage_request.content.id,
+    sha256:$input[0].stage_request.sha256} and
+  .stage_result.body.resolved_profile_ref=={
+    schema_version:$input[0].resolved_profile.content.schema_version,
+    kind:$input[0].resolved_profile.content.kind,id:$input[0].resolved_profile.content.id,
+    sha256:$input[0].resolved_profile.sha256} and
+  .stage_result.body.attempt_id==$input[0].attempt.attempt_id and
+  .stage_result.body.attempt_number==$input[0].attempt.attempt_number and
+  .stage_result.body.status=="completed" and
+  .stage_result.body.outcome=={family:"change",value:"changed"} and
+  .stage_result.body.outputs==[{output_id:"candidate.repository",ref:{
+    content_id:"candidate.materialization.receipt",media_type:"application/json",
+    sha256:$receipt_sha}}] and .stage_result.body.diagnostics==[] and
+  .stage_result.body.evidence==[{evidence_id:"evidence.local-git-materialization",
+    kind:"deterministic",verdict:"passed",proof_ref:{
+      content_id:"candidate.materialization.receipt",media_type:"application/json",
+      sha256:$receipt_sha}}] and
+  .stage_result.body.execution.metadata=={
+    kind:"deterministic",provider:{state:"not-applicable"},
+    model:{state:"not-applicable"},snapshot:{state:"not-applicable"},
+    effort:{state:"not-applicable"},prompt:{state:"not-applicable"},
+    skills:{state:"not-applicable"},tools:{state:"recorded",value:[],source_ref:{
+      content_id:"candidate.materialization.receipt",media_type:"application/json",
+      sha256:$receipt_sha}}} and
+  .stage_result.body.started_at==$input[0].attempt.started_at and
+  .stage_result.body.finished_at==$input[0].attempt.finished_at and
+  .stage_result.body.recorded_at==$input[0].attempt.recorded_at
+' "$response" >/dev/null || fail independent-fixed-response-facts
+pass 'independent assertions bind every fixed response receipt reference and metadata fact'
+
+expect_fixed_response_reject() {
+  local name=$1 filter=$2 core_valid=${3:-no}
+  local source_response=${4:-$response} source_bundle=${5:-$response_bundle}
+  local mutated="$tmp/fixed-$name-response.json"
+  local stage="$tmp/fixed-$name-stage.json"
+  local bundle="$tmp/fixed-$name-bundle.json"
+  local digest
+  "$jq_bin" -S -c "$filter" "$source_response" > "$mutated"
+  "$jq_bin" -S -c '.stage_result' "$mutated" > "$stage"
+  digest=$(sha_file "$stage")
+  if [ "$core_valid" = yes ]; then
+    "$core" validate-stage-run "$fixture/stage-request.json" \
+      "$fixture/resolved-profile.json" "$stage" || fail "$name not core-valid"
+  fi
+  "$jq_bin" -S -c --slurpfile response "$mutated" --arg sha "$digest" \
+    '.response=$response[0] | .stage_result_sha256=$sha' \
+    "$source_bundle" > "$bundle"
+  if "$jq_bin" -e -L "$modules" --arg command validate-response \
+      -f "$protocol" "$bundle" >/dev/null 2>&1; then
+    fail "$name accepted"
+  fi
+  pass "P08 direct fixed response rejects $name"
+}
+
+expect_fixed_response_reject response-schema-version '.schema_version=2'
+expect_fixed_response_reject response-kind '.kind="other_response"'
+expect_fixed_response_reject response-authority '.authority="write"'
+expect_fixed_response_reject response-qualification-state \
+  '.qualification.state="available"'
+expect_fixed_response_reject response-qualification-reason \
+  '.qualification.reason_id="adapter.other"'
+expect_fixed_response_reject response-effects-empty '.effects=[]'
+expect_fixed_response_reject response-effects-extra '.effects += ["extra-effect"]'
+expect_fixed_response_reject response-payload-missing '.payloads=[]'
+expect_fixed_response_reject response-payload-extra '.payloads += [.payloads[0]]'
+expect_fixed_response_reject response-payload-content-id \
+  '.payloads[0].content_id="other.receipt"'
+expect_fixed_response_reject response-payload-media-type \
+  '.payloads[0].media_type="application/octet-stream"'
+expect_fixed_response_reject response-payload-digest '.payloads[0].sha256=("0"*64)'
+expect_fixed_response_reject response-payload-data '.payloads[0].data="{}\n"'
+expect_fixed_response_reject response-extra '.extra=true'
+expect_fixed_response_reject response-missing-authority 'del(.authority)'
+expect_fixed_response_reject output-receipt-digest \
+  '.stage_result.body.outputs[0].ref.sha256=("0"*64)' yes
+expect_fixed_response_reject output-receipt-content-id \
+  '.stage_result.body.outputs[0].ref.content_id="other.receipt"' yes
+expect_fixed_response_reject output-receipt-media-type \
+  '.stage_result.body.outputs[0].ref.media_type="application/octet-stream"'
+expect_fixed_response_reject output-id \
+  '.stage_result.body.outputs[0].output_id="candidate.other"'
+expect_fixed_response_reject output-cardinality \
+  '.stage_result.body.outputs += [.stage_result.body.outputs[0]]'
+expect_fixed_response_reject evidence-receipt-digest \
+  '.stage_result.body.evidence[0].proof_ref.sha256=("0"*64)' yes
+expect_fixed_response_reject evidence-receipt-content-id \
+  '.stage_result.body.evidence[0].proof_ref.content_id="other.receipt"' yes
+expect_fixed_response_reject evidence-receipt-media-type \
+  '.stage_result.body.evidence[0].proof_ref.media_type="application/octet-stream"' yes
+expect_fixed_response_reject evidence-id \
+  '.stage_result.body.evidence[0].evidence_id="evidence.other"' yes
+expect_fixed_response_reject evidence-kind \
+  '.stage_result.body.evidence[0].kind="observed"'
+expect_fixed_response_reject evidence-verdict \
+  '.stage_result.body.evidence[0].verdict="failed"'
+expect_fixed_response_reject evidence-cardinality \
+  '.stage_result.body.evidence += [.stage_result.body.evidence[0]]'
+expect_fixed_response_reject tools-receipt-digest \
+  '.stage_result.body.execution.metadata.tools.source_ref.sha256=("0"*64)' yes
+expect_fixed_response_reject tools-receipt-content-id \
+  '.stage_result.body.execution.metadata.tools.source_ref.content_id="other.receipt"' yes
+expect_fixed_response_reject tools-receipt-media-type \
+  '.stage_result.body.execution.metadata.tools.source_ref.media_type="application/octet-stream"' yes
+expect_fixed_response_reject tools-computed \
+  '.stage_result.body.execution.metadata.tools.state="computed"' yes
+expect_fixed_response_reject tools-value \
+  '.stage_result.body.execution.metadata.tools.value=["unexpected"]'
+expect_fixed_response_reject metadata-kind \
+  '.stage_result.body.execution.metadata.kind="interactive"'
+for fact in provider model snapshot effort prompt skills; do
+  expect_fixed_response_reject "metadata-$fact" \
+    ".stage_result.body.execution.metadata.$fact={state:\"unavailable\"}"
+done
+expect_fixed_response_reject metadata-extra \
+  '.stage_result.body.execution.metadata.extra=true'
+expect_fixed_response_reject execution-extra \
+  '.stage_result.body.execution.extra=true'
+expect_fixed_response_reject performer \
+  '.stage_result.body.execution.performer.principal_id="principal.other"'
+expect_fixed_response_reject reported-by \
+  '.stage_result.body.reported_by.principal_id="principal.other"'
+expect_fixed_response_reject actual-binding \
+  '.stage_result.body.execution.actual_binding.binding_id="binding.other"'
+expect_fixed_response_reject environment \
+  '.stage_result.body.execution.environment.environment_id="environment.other"'
+expect_fixed_response_reject capability \
+  '.stage_result.body.execution.used_capability.id="core.forge.other.v1"'
+expect_fixed_response_reject request-ref \
+  '.stage_result.body.request_ref.sha256=("0"*64)'
+expect_fixed_response_reject result-request-ref-schema-version \
+  '.stage_result.body.request_ref.schema_version=1'
+expect_fixed_response_reject result-request-ref-kind \
+  '.stage_result.body.request_ref.kind="profile"'
+expect_fixed_response_reject result-request-ref-id \
+  '.stage_result.body.request_ref.id="request.other"'
+expect_fixed_response_reject resolved-profile-ref \
+  '.stage_result.body.resolved_profile_ref.sha256=("0"*64)'
+expect_fixed_response_reject result-resolved-profile-ref-schema-version \
+  '.stage_result.body.resolved_profile_ref.schema_version=1'
+expect_fixed_response_reject result-resolved-profile-ref-kind \
+  '.stage_result.body.resolved_profile_ref.kind="profile"'
+expect_fixed_response_reject result-resolved-profile-ref-id \
+  '.stage_result.body.resolved_profile_ref.id="resolved.other"'
+expect_fixed_response_reject attempt-id '.stage_result.body.attempt_id="attempt.other"'
+expect_fixed_response_reject attempt-number '.stage_result.body.attempt_number=2'
+expect_fixed_response_reject result-schema-version '.stage_result.schema_version=1'
+expect_fixed_response_reject result-kind '.stage_result.kind="other_result"'
+expect_fixed_response_reject result-id '.stage_result.id="result.other"'
+expect_fixed_response_reject result-extra '.stage_result.extra=true'
+expect_fixed_response_reject body-extra '.stage_result.body.extra=true'
+expect_fixed_response_reject body-missing-reported-by \
+  'del(.stage_result.body.reported_by)'
+expect_fixed_response_reject execution-missing-metadata \
+  'del(.stage_result.body.execution.metadata)'
+expect_fixed_response_reject metadata-missing-tools \
+  'del(.stage_result.body.execution.metadata.tools)'
+expect_fixed_response_reject output-missing-ref \
+  'del(.stage_result.body.outputs[0].ref)'
+expect_fixed_response_reject evidence-missing-proof-ref \
+  'del(.stage_result.body.evidence[0].proof_ref)'
+expect_fixed_response_reject status '.stage_result.body.status="failed"'
+expect_fixed_response_reject outcome-family '.stage_result.body.outcome.family="other"'
+expect_fixed_response_reject diagnostics '.stage_result.body.diagnostics=[{}]'
+expect_fixed_response_reject started-at \
+  '.stage_result.body.started_at="2026-08-30T00:00:00Z"'
+expect_fixed_response_reject finished-at \
+  '.stage_result.body.finished_at="2026-08-30T00:00:03Z"'
+expect_fixed_response_reject recorded-at \
+  '.stage_result.body.recorded_at="2026-08-30T00:00:04Z"'
+expect_fixed_response_reject changed-outcome-no-change \
+  '.stage_result.body.outcome.value="no-change" | .stage_result.body.outputs=[]'
+expect_fixed_response_reject changed-outcome-unsupported \
+  '.stage_result.body.outcome.value="unsupported" | .stage_result.body.outputs=[]'
+expect_fixed_response_reject changed-missing-candidate-output \
+  '.stage_result.body.outputs=[]'
+
+expect_rehashed_receipt_reject() {
+  local name=$1 filter=$2
+  local mutated_receipt="$tmp/receipt-fact-$name.json"
+  local pair="$tmp/receipt-fact-$name-pair.json"
+  local mutated="$tmp/receipt-fact-$name-response.json"
+  local stage="$tmp/receipt-fact-$name-stage.json"
+  local bundle="$tmp/receipt-fact-$name-bundle.json"
+  local receipt_digest stage_digest
+  "$jq_bin" -S -c "$filter" "$receipt" > "$mutated_receipt"
+  receipt_digest=$(sha_file "$mutated_receipt")
+  "$jq_bin" -S -c -n --slurpfile receipt "$mutated_receipt" \
+    --arg sha "$receipt_digest" '{content:$receipt[0],sha256:$sha}' > "$pair"
+  "$jq_bin" -S -c --rawfile receipt "$mutated_receipt" \
+    --arg sha "$receipt_digest" '
+      .payloads[0].data=$receipt | .payloads[0].sha256=$sha |
+      .stage_result.body.outputs[0].ref.sha256=$sha |
+      .stage_result.body.evidence[0].proof_ref.sha256=$sha |
+      .stage_result.body.execution.metadata.tools.source_ref.sha256=$sha
+    ' "$response" > "$mutated"
+  "$jq_bin" -S -c '.stage_result' "$mutated" > "$stage"
+  stage_digest=$(sha_file "$stage")
+  "$jq_bin" -S -c --slurpfile response "$mutated" --slurpfile pair "$pair" \
+    --rawfile receipt "$mutated_receipt" --arg stage_sha "$stage_digest" '
+      .response=$response[0] | .verified_receipt=$pair[0] |
+      .receipt_utf8=$receipt | .stage_result_sha256=$stage_sha
+    ' "$response_bundle" > "$bundle"
+  if "$jq_bin" -e -L "$modules" --arg command validate-response \
+      -f "$protocol" "$bundle" >/dev/null 2>&1; then
+    fail "$name accepted"
+  fi
+  pass "P08 direct fully rehashed receipt rejects $name"
+}
+
+expect_rehashed_receipt_reject request-ref '.request_ref.sha256=("0"*64)'
+expect_rehashed_receipt_reject receipt-request-ref-schema-version \
+  '.request_ref.schema_version=1'
+expect_rehashed_receipt_reject receipt-request-ref-kind '.request_ref.kind="profile"'
+expect_rehashed_receipt_reject receipt-request-ref-id '.request_ref.id="request.other"'
+expect_rehashed_receipt_reject receipt-version '.schema_version=2'
+expect_rehashed_receipt_reject receipt-kind '.kind="other_receipt"'
+expect_rehashed_receipt_reject adapter-id '.adapter.id="adapter.other"'
+expect_rehashed_receipt_reject adapter-version '.adapter.version="v2"'
+expect_rehashed_receipt_reject adapter-status '.adapter.status="active"'
+expect_rehashed_receipt_reject attempt-id '.attempt.attempt_id="attempt.other"'
+expect_rehashed_receipt_reject attempt-number '.attempt.attempt_number=2'
+expect_rehashed_receipt_reject resolved-profile-ref \
+  '.resolved_profile_ref.sha256=("0"*64)'
+expect_rehashed_receipt_reject receipt-resolved-profile-ref-schema-version \
+  '.resolved_profile_ref.schema_version=1'
+expect_rehashed_receipt_reject receipt-resolved-profile-ref-kind \
+  '.resolved_profile_ref.kind="profile"'
+expect_rehashed_receipt_reject receipt-resolved-profile-ref-id \
+  '.resolved_profile_ref.id="resolved.other"'
+expect_rehashed_receipt_reject manifest-ref '.manifest_ref.sha256=("0"*64)'
+expect_rehashed_receipt_reject receipt-manifest-ref-schema-version \
+  '.manifest_ref.schema_version=1'
+expect_rehashed_receipt_reject receipt-manifest-ref-kind '.manifest_ref.kind="profile"'
+expect_rehashed_receipt_reject receipt-manifest-ref-id '.manifest_ref.id="adapter.other"'
+expect_rehashed_receipt_reject materialization-contract-ref \
+  '.materialization_contract_ref.sha256=("0"*64)'
+expect_rehashed_receipt_reject receipt-materialization-contract-ref-content-id \
+  '.materialization_contract_ref.content_id="contract.other"'
+expect_rehashed_receipt_reject receipt-materialization-contract-ref-media-type \
+  '.materialization_contract_ref.media_type="application/octet-stream"'
+expect_rehashed_receipt_reject patch-ref '.patch_ref.sha256=("0"*64)'
+expect_rehashed_receipt_reject receipt-patch-ref-content-id \
+  '.patch_ref.content_id="patch.other"'
+expect_rehashed_receipt_reject receipt-patch-ref-media-type \
+  '.patch_ref.media_type="application/octet-stream"'
+expect_rehashed_receipt_reject source-repository '.source.repository_id="fixture.other"'
+expect_rehashed_receipt_reject source-algorithm '.source.hash_algorithm="sha256"'
+expect_rehashed_receipt_reject source-commit '.source.commit_id=("9"*40)'
+expect_rehashed_receipt_reject source-tree '.source.tree_id=("0"*40)'
+expect_rehashed_receipt_reject candidate-kind '.candidate.repository_kind="worktree"'
+expect_rehashed_receipt_reject candidate-algorithm '.candidate.hash_algorithm="sha256"'
+expect_rehashed_receipt_reject candidate-commit '.candidate.commit_id="invalid"'
+expect_rehashed_receipt_reject candidate-tree '.candidate.tree_id="invalid"'
+expect_rehashed_receipt_reject candidate-parent '.candidate.parent_commit_id=("6"*40)'
+expect_rehashed_receipt_reject changed-paths-count '.changed_paths.count=2'
+expect_rehashed_receipt_reject changed-paths-digest '.changed_paths.sha256="invalid"'
+expect_rehashed_receipt_reject receipt-extra '.extra=true'
+expect_rehashed_receipt_reject receipt-missing-patch-ref 'del(.patch_ref)'
+
+no_change_response="$tmp/no-change-response.json"
+no_change_stage_sha=$(sha_file "$no_change_result")
+no_change_receipt_sha=$(sha_file "$no_change_receipt")
+"$jq_bin" -S -c -n --slurpfile result "$no_change_result" \
+  --rawfile receipt "$no_change_receipt" --arg receipt_sha "$no_change_receipt_sha" '{
+    schema_version:1,kind:"local_git_materialization_response",stage_result:$result[0],
+    payloads:[{content_id:"candidate.materialization.receipt",media_type:"application/json",
+      sha256:$receipt_sha,data:$receipt}],authority:"none",
+    qualification:{state:"unavailable",reason_id:"adapter.unqualified"},
+    effects:["caller-disposable-candidate-repository"]
+  }' > "$no_change_response"
+no_change_bundle="$tmp/no-change-response-bundle.json"
+"$jq_bin" -S -c -n --slurpfile input "$input" \
+  --slurpfile response "$no_change_response" --slurpfile receipt "$no_change_pair" \
+  --rawfile receipt_utf8 "$no_change_receipt" \
+  --arg stage_result_sha256 "$no_change_stage_sha" '{input:$input[0],response:$response[0],
+    verified_receipt:$receipt[0],receipt_utf8:$receipt_utf8,
+    stage_result_sha256:$stage_result_sha256}' > "$no_change_bundle"
+"$jq_bin" -e -L "$modules" --arg command validate-response \
+  -f "$protocol" "$no_change_bundle" >/dev/null || fail validate-no-change-response
+"$jq_bin" -e '.response.stage_result.body.outputs==[] and
+  .response.stage_result.body.evidence[0].proof_ref ==
+    .response.stage_result.body.execution.metadata.tools.source_ref and
+  .response.stage_result.body.evidence[0].proof_ref.sha256 == .verified_receipt.sha256' \
+  "$no_change_bundle" >/dev/null || fail independent-no-change-fixed-facts
+pass 'supplied no-change response retains exact evidence and tools receipt links'
+
+expect_fixed_response_reject no-change-outcome-changed '
+  .stage_result.body.outcome.value="changed" |
+  .stage_result.body.outputs=[{output_id:"candidate.repository",
+    ref:.stage_result.body.evidence[0].proof_ref}]
+' no "$no_change_response" "$no_change_bundle"
+expect_fixed_response_reject no-change-outcome-unsupported \
+  '.stage_result.body.outcome.value="unsupported" | .stage_result.body.outputs=[]' \
+  no "$no_change_response" "$no_change_bundle"
+expect_fixed_response_reject no-change-unexpected-candidate-output '
+  .stage_result.body.outputs=[{output_id:"candidate.repository",
+    ref:.stage_result.body.evidence[0].proof_ref}]
+' no "$no_change_response" "$no_change_bundle"
+
+bad_response="$tmp/bad-response.json"
+"$jq_bin" -S -c '.effects += ["extra-effect"]' "$response" > "$bad_response"
+bad_response_bundle="$tmp/bad-response-bundle.json"
+"$jq_bin" -S -c --slurpfile response "$bad_response" '.response=$response[0]' \
+  "$response_bundle" > "$bad_response_bundle"
+if "$jq_bin" -e -L "$modules" --arg command validate-response \
+    -f "$protocol" "$bad_response_bundle" >/dev/null 2>&1; then
+  fail validate-response-effect
+fi
+pass 'response validator rejects added effect claims'
+
+bad_result_response="$tmp/bad-result-response.json"
+"$jq_bin" -S -c '.stage_result.body.attempt_number += 1' "$response" > "$bad_result_response"
+bad_result="$tmp/bad-result.json"
+"$jq_bin" -S -c '.stage_result' "$bad_result_response" > "$bad_result"
+bad_result_bundle="$tmp/bad-result-bundle.json"
+"$jq_bin" -S -c --slurpfile response "$bad_result_response" \
+  --arg sha "$(sha_file "$bad_result")" \
+  '.response=$response[0] | .stage_result_sha256=$sha' \
+  "$response_bundle" > "$bad_result_bundle"
+if "$jq_bin" -e -L "$modules" --arg command validate-response \
+    -f "$protocol" "$bad_result_bundle" >/dev/null 2>&1; then
+  fail validate-response-attempt
+fi
+pass 'response validator rejects a rehashed result relation mismatch'
+
 if "$jq_bin" -L "$modules" --arg command receipt --arg source_hash_algorithm sha1 \
     --arg source_commit INVALID --arg source_tree "$source_tree" \
     --arg candidate_commit "$source_commit" --arg candidate_tree "$source_tree" \
