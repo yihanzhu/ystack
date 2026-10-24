@@ -259,8 +259,9 @@ The preserved source is not an accepted foundation merely because it is locally
 clean, has a source review, or passes pure tests.
 
 The first private core-v3 checkpoint must finish its exact source review and required
-full CI before checkpoint two starts. Preserve its actual source, test and registry
-bytes. This amendment then needs independent G2 acceptance and a separate high-risk
+full CI before checkpoint two starts. Preserve its actual source, fixture and registry
+bytes. Section 6.6 permits one runner-only provenance correction for the later plan
+amendment; every other first-checkpoint assertion and byte remains fixed. This amendment then needs independent G2 acceptance and a separate high-risk
 plan amendment. That plan must record explicit dependency adoption and a read-only
 source preflight. It must enumerate the complete inherited paths and cost separately
 from the new paths below, bind the first checkpoint and the preserved dependency,
@@ -457,7 +458,7 @@ no new source trust root, native ABI, owner registration or provenance command i
 needed. A pure Python call must not fabricate an external command-ledger row.
 Missing, replaced, aliased, changed or unbound module bytes refuse completion.
 
-After the accepted adoption/plan gates, only these eight paths may change for the
+After the accepted adoption/plan gates, only these nine paths may change for the
 new second-checkpoint concern. They are not permission to edit other inherited code.
 
 | Exact path | Allowed purpose |
@@ -469,6 +470,7 @@ new second-checkpoint concern. They are not permission to edit other inherited c
 | `scripts/test/publisher-admission.test.sh` | Closed offline common-boundary and source-closure proofs through actual functions and real disposable Git objects |
 | `scripts/test/shadow-write.test.sh` | Actual writer-route paired proof, retained safety assertions and finite private-copy closure updates |
 | `scripts/test/shadow-enforced.test.sh` | Exact private fixture source-copy update for the new module; retain all original assertions |
+| `scripts/test/portable-core-v3-publisher.test.sh` | Correct only the original-plan provenance check inside `static_case` / `registry-exact`, as specified below; preserve all other checks |
 | `ci/required-files.txt` | Restore entries for the new private module and its test only |
 
 The reader path is absent from the comparison main and belongs to the preserved
@@ -476,11 +478,74 @@ source dependency. Its adoption must be explicit before editing. Do not silently
 copy it into this allowlist. Keep `_consumer.py`, core generations/registries,
 `write-materialization-input.jq`, existing policies, live config, native helpers,
 workflows and public wrappers byte-identical to the adopted baseline in this phase.
-Keep all first-checkpoint core-v3 files and counters intact. No `publish.py`, extra
+Keep all first-checkpoint core-v3 package, fixture and registry files and counters
+intact. The sole runner exception below does not reopen its other assertions. No `publish.py`, extra
 fixture product, new public argument or production configuration is in this list.
 The plan must justify a readable new and cumulative review-size range from the
 actual adoption diff and test inventory. An overrun returns through that gate;
 never reduce proof or hide inherited changes to meet a size target.
+
+
+The existing v3 runner's `registry-exact` case correctly fixes the registry's
+`parent_plan_merge_commit` to `c6c3f74181ea86f85be87ecf4431e67a5f272d82` and its
+`parent_spec_blob` to `e55e2aaeb179d7e06f229805744b2be49cbfa1bf`. It then hashes the
+current working-tree `work/fixed-evidence-publication/plan.md` as the old plan.
+That last check must use the actual initial parent commit's bytes instead. A later
+accepted plan amendment changes current planning; it cannot rewrite the generation's
+original provenance. Keep the registry and all published generation bytes unchanged.
+
+Limit the runner edit to obtaining and checking that initial plan provenance:
+
+1. First verify the canonical registry and its exact fixed entry as before. Require
+   the full pinned commit to resolve as that same commit object. Read the fixed path
+   `work/fixed-evidence-publication/plan.md` from that commit's tree, with regular-file
+   mode `100644`, not from HEAD, a branch name, working files or a declared blob.
+2. Capture all original plan bytes with `git show <pinned-commit>:<fixed-plan-path>`.
+   Require the actual tree entry and recomputed Git blob to equal
+   `d8aa60b213cf7fce29c386b0eac49401c36643ff`, and the raw-file SHA-256 to equal
+   `810ec947448c9731d1cb47e3acb0f26e7e7fe11e982b36b25caaf2a13f4ae4e3`.
+   Check its `spec-blob` against the registry's original `parent_spec_blob`. These
+   checks consume actual bytes; an OID printed in registry or plan text is not proof.
+3. A shallow checkout may lack the pinned commit or its required tree/blob objects.
+   In the existing, manager-authorized
+   CI job for `yihanzhu/ystack` only, first require the existing `origin` to identify
+   one of `https://github.com/yihanzhu/ystack` or
+   `https://github.com/yihanzhu/ystack.git`, with no other resolved fetch URL,
+   embedded credential, alternate host or repository. Use that existing checkout's read-only Git access.
+   It may run this single fixed read, at most once and within the existing job deadline:
+
+   ```text
+   git -C <existing-checkout> -c fetch.recurseSubmodules=false -c gc.auto=0 -c http.followRedirects=false fetch --no-tags --no-prune --refmap= --no-recurse-submodules --no-write-fetch-head --depth=1 origin c6c3f74181ea86f85be87ecf4431e67a5f272d82
+   ```
+
+   Probe local objects without an implicit lazy network read; a partial-clone or
+   object-indirection setup cannot trigger another read. The plan must make this
+   condition explicit for its existing checkout. The commit and repository are fixed
+   constants, not caller parameters. No branch
+   destination/refspec, tags, submodule fetch, push, new remote, credential change,
+   tool install, HTTP/API downloader or second host is allowed. This fills only the
+   CI checkout's object/shallow metadata; it does not move its checked-out branch
+   or rewrite published history. Then repeat the commit/tree/raw-byte checks above.
+   Preserve the exact argv, exit and resulting object/byte hashes in the proof.
+4. Outside that already authorized CI read context, missing objects stop the local
+   proof as NOTRUN with a nonzero suite result. A missing object, denied read, timeout,
+   wrong repository, failed fetch or mismatched actual byte/hash is never a skip or
+   green fallback. Do not use a supplied hash, current plan, cached text without its
+   actual commit/tree binding, or an unverified archive as a substitute. No fetch is
+   needed when the pinned object and its required tree/blob objects are already local.
+
+Keep the canonical/exact registry assertion, public-wrapper and old-export hashes,
+restore check, complete 606 case/route rows, 626 inherited assertions, forced routes,
+all original result counters and execution ledgers intact. Add bounded provenance
+proof alongside them: an amended current plan with the unchanged actual original
+parent must pass; missing original objects without authorized read must fail;
+wrong original tree/blob/raw SHA must fail; and a real shallow CI checkout must obtain
+and check the pinned bytes through the single allowed read. Preserve existing failures.
+The new admission suite may own these additional closed cases, but it must exercise
+the runner's actual provenance code, not a copied predicate. The separate high-risk
+plan fixes the exact local and shallow-CI test procedure and records all actual
+outputs. No ordinary suite success or declared registry value replaces this proof.
+This narrow CI repository read grants no publisher transport or runtime authority.
 
 #### 6.7. Finite source proof and accurate checkpoint status
 
