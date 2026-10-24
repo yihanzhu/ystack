@@ -21,7 +21,15 @@ def adapter_manifest_body_ok:
   (.offered_capabilities | schema::enum_set_ok(0;3;schema::capability_ids)) and
   (.offered_permissions | schema::enum_set_ok(0;5;schema::permission_ids)) and
   (.offered_tools | schema::bounded_set(0;32;schema::tool_ref_ok;.tool_id)) and
-  optional_ok("config_contract_ref";schema::scope_ref_purpose_ok("config-contract"));
+  optional_ok("config_contract_ref";schema::scope_ref_purpose_ok("config-contract")) and
+  (if .offered_roles | index("publisher") != null then
+     .offered_roles == ["publisher"] and
+     .offered_execution_kinds == ["deterministic"] and
+     .offered_capabilities == ["core.publisher.publish-evidence.v3"] and
+     .offered_permissions == schema::permissions_for_capability(
+       "core.publisher.publish-evidence.v3";"deterministic") and
+     .offered_tools == []
+   else true end);
 
 def adapter_manifest_shape_ok:
   schema::envelope_ok("adapter_manifest") and
@@ -64,6 +72,7 @@ def profile_binding_shape_ok:
   (.skill_refs | schema::bounded_set(0;32;schema::git_object_ref_ok;schema::git_key)) and
   (.requested_tools | schema::bounded_set(0;32;schema::tool_ref_ok;.tool_id)) and
   optional_ok("model_request";model_request_ok) and
+  (if .role == "publisher" then .requested_tools == [] else true end) and
   (.requested_capabilities |
    schema::enum_set_ok(0;1;schema::capability_ids)) and
   (.requested_permissions |
@@ -234,7 +243,7 @@ def document_pair_ok($kind):
 
 def document_ref_for_pair($pair):
   {
-    schema_version:2,
+    schema_version:3,
     kind:$pair.content.kind,
     id:$pair.content.id,
     sha256:$pair.sha256

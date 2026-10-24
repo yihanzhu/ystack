@@ -79,7 +79,7 @@ def stage_result_body_shape_ok:
     ["request_ref","resolved_profile_ref","attempt_id","attempt_number",
      "reported_by","status","outputs","diagnostics","evidence","recorded_at"];
     ["outcome","reason","stale_observations","delta_ref","execution",
-     "started_at","finished_at"]) and
+     "started_at","finished_at","publication"]) and
   (.request_ref | schema::document_ref_kind_ok("stage_request")) and
   (.resolved_profile_ref |
    schema::document_ref_kind_ok("resolved_profile")) and
@@ -89,6 +89,7 @@ def stage_result_body_shape_ok:
   (.reported_by | schema::actor_ref_ok) and
   (.status == "completed" or .status == "skipped" or .status == "stale" or
    .status == "blocked" or .status == "failed" or .status == "cancelled") and
+  optional_ok("publication";schema::publication_shape_ok) and
   optional_ok("outcome";outcome_shape_ok) and
   optional_ok("reason";reason_shape_ok) and
   optional_ok("stale_observations";
@@ -149,8 +150,41 @@ def local_time_order_ok:
   else true
   end;
 
+def publication_self_relations_ok:
+  if has("publication") | not then true
+  else
+    .publication as $publication |
+    $publication.branch.state as $branch |
+    $publication.change_request.state as $pr |
+    $publication.post_write.state as $post |
+    ($branch == "created" or $pr == "not-attempted") and
+    ($post == "not-run" or ($branch == "created" and $pr == "created")) and
+    (has("execution") or
+      ($branch == "not-attempted" and $pr == "not-attempted" and $post == "not-run")) and
+    .outputs == [] and (has("delta_ref") | not) and
+    (if has("execution") then (.evidence | map(.kind)) == ["deterministic"] else true end) and
+    (if has("outcome") then
+       .outcome.family == "change" and .outcome.value != "no-change"
+     else true end) and
+    (if .status == "completed" then
+       $branch == "created" and $pr == "created" and $post == "matched" and
+       (if .outcome.value == "changed" then
+          all(.evidence[];.verdict == "passed") and
+          (.execution.metadata | [.provider,.model,.effort,.prompt,.skills,.tools] |
+           all(.[];.state != "unavailable"))
+        else all(.evidence[];.verdict != "passed") end)
+     elif has("execution") then
+       (.status == "failed" or .status == "cancelled") and
+       .outcome == {family:"change",value:"inconclusive"}
+     else true end) and
+    (if $post == "mismatched" then
+       .reason.reason_id == "publisher.post-write-mismatch"
+     else true end)
+  end;
+
 def stage_result_self_ok:
-  stage_result_body_shape_ok and status_presence_ok and local_time_order_ok;
+  stage_result_body_shape_ok and status_presence_ok and local_time_order_ok and
+  publication_self_relations_ok;
 
 def expected_stale_value($request; $observation):
   $observation.selector as $selector |
@@ -298,8 +332,34 @@ def check_outcome_ok($result):
    else $result.outcome == {family:"check",value:"passed"}
    end);
 
+def publisher_outcome_ok($result):
+  $result.outcome ==
+    {family:"change",value:(if requested_fact_gap($result) or
+      any($result.evidence[];.verdict != "passed") then "inconclusive" else "changed" end)};
+
+def publisher_result_relation_ok($request; $resolved; $result):
+  if $request.operation.capability_id != "core.publisher.publish-evidence.v3" then
+    ($result | has("publication") | not)
+  else
+    $result.publication as $publication |
+    ($result | has("publication")) and $result.attempt_number == 1 and
+    (if $publication.branch.state == "created" then
+       $publication.branch.head == $request.source.value.value.revision
+     else true end) and
+    (if $publication.post_write.state != "not-run" then
+       [$resolved.bindings[] | select(.binding.role == "verifier")] as $verifiers |
+       [$resolved.bindings[] | select(.binding.role == "publisher")] as $publishers |
+       ($verifiers | length) == 1 and ($publishers | length) == 1 and
+       $publication.post_write.verified_by == stage_request::projected_performer($verifiers[0]) and
+       all(["adapter_instance_id","principal_id","execution_boundary_id"][];
+         . as $key | $verifiers[0].binding[$key] != $publishers[0].binding[$key])
+     else true end)
+  end;
+
 def completed_outcome_ok($request; $result):
-  if $request.operation.capability_id ==
+  if $request.operation.capability_id == "core.publisher.publish-evidence.v3" then
+    publisher_outcome_ok($result)
+  elif $request.operation.capability_id ==
      "core.forge.materialize-candidate.v2" then
     forge_outcome_ok($request.operation;$result)
   elif $request.operation.role == "producer" then
@@ -353,6 +413,8 @@ def stage_result_relation_ok($request_pair; $resolved_pair; $result):
          stale_observation_relation_ok($request_pair.content.body;.))
    else true
    end) and
+  publisher_result_relation_ok(
+    $request_pair.content.body;$resolved_pair.content.body;$result) and
   status_external_relation_ok($request_pair.content.body;$result) and
   passing_evidence_execution_ok(
     $request_pair.content.body;$resolved_pair.content.body;$result) and

@@ -824,6 +824,68 @@ v2_activation_path_ok() {
   esac
 }
 
+schema_v3_registry="$schema_root/core/v3/generation-registry.json"
+schema_v3_generation="$("$schema_jq" -r '.[0].generation_id' "$schema_v3_registry")"
+schema_v3_preimage='fixed-evidence-publication|issue=701|intent-blob=4a7f1573eb5c47947e2dc360d39f12e12847b7c6|semantic=core.contracts.v3'
+schema_v3_digest="$(printf '%s' "$schema_v3_preimage" | shasum -a 256 | awk '{print $1}')"
+[ "$schema_v3_generation" = "g-$schema_v3_digest" ] || fail_case "v3 identity preimage"
+v3_generation_path_ok() {
+  case "$1" in
+    "core/v3/generations/$schema_v3_generation/contracts.jq"|\
+    "core/v3/generations/$schema_v3_generation/core-ingress.sh"|\
+    "core/v3/generations/$schema_v3_generation/modules/schema.jq"|\
+    "core/v3/generations/$schema_v3_generation/modules/profile_graph.jq"|\
+    "core/v3/generations/$schema_v3_generation/modules/stage_request.jq"|\
+    "core/v3/generations/$schema_v3_generation/modules/result_facts.jq"|\
+    "core/v3/generations/$schema_v3_generation/modules/result_truth.jq") return 0 ;;
+    *) return 1 ;;
+  esac
+}
+v3_activation_path_ok() {
+  case "$1" in
+    core/v3/generation-registry.json|ci/required-files.txt|\
+    "core/v3/generations/$schema_v3_generation/core-ingress.sh"|\
+    scripts/test/portable-core-v3-publisher.test.sh|\
+    scripts/test/portable-core-v3-publisher-fixtures.jq|\
+    scripts/test/portable-core-v3-publisher-rules.tsv|\
+    work/fixed-evidence-publication/spec.md|\
+    work/fixed-evidence-publication/plan.md) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+while IFS= read -r -d '' schema_v3_path; do
+  if git -C "$schema_root" show ":$schema_v3_path" 2>/dev/null |
+       grep -F "$schema_v3_generation" >/dev/null; then
+    v3_activation_path_ok "$schema_v3_path" || fail_case "v3 identity outside closed hit list: $schema_v3_path"
+  fi
+  case "$schema_v3_path" in
+    core/v3/generations/*)
+      v3_generation_path_ok "$schema_v3_path" || fail_case "unknown v3 member: $schema_v3_path"
+      ;;
+  esac
+done < <(git -C "$schema_root" ls-files -z)
+for schema_v3_invalid in scripts/core-v3-loader.sh work/other/loader.jq scripts/test/other-loader.sh; do
+  if v3_activation_path_ok "$schema_v3_invalid" || v3_generation_path_ok "$schema_v3_invalid"; then
+    fail_case "v3 guard accepted outside path: $schema_v3_invalid"
+  fi
+done
+for schema_v3_member in "$schema_root/core/v3/generations/$schema_v3_generation"/modules/*.jq \
+  "$schema_root/core/v3/generations/$schema_v3_generation/contracts.jq"; do
+  if ! "$schema_jq" -Rse --arg pattern "$schema_module_directive_pattern" '
+    gsub("import[[:space:]]+\"(schema|profile_graph|stage_request|result_facts|result_truth)\"[[:space:]]+as[[:space:]]+[a-z_]+[[:space:]]*;";"") |
+    test($pattern) | not
+  ' "$schema_v3_member" >/dev/null; then
+    fail_case "v3 import name outside fixed grammar"
+  fi
+  if grep -E 'include|search[[:space:]]*:|import.*\{' "$schema_v3_member" >/dev/null; then
+    fail_case "v3 import metadata/include forbidden"
+  fi
+done
+if "$schema_jq" -Rse --arg pattern "$schema_module_directive_pattern" 'test($pattern)' \
+  "$schema_root/core/v3/generations/$schema_v3_generation/modules/schema.jq" >/dev/null; then
+  fail_case "v3 schema must be import-free"
+fi
+
 schema_import_path_ok() {
   local import_path="$1"
   local test_path
@@ -845,7 +907,8 @@ schema_import_path_ok() {
       ;;
     *)
       private_generation_path_ok "$import_path" ||
-        v2_generation_path_ok "$import_path" || return 1
+        v2_generation_path_ok "$import_path" ||
+        v3_generation_path_ok "$import_path" || return 1
       ;;
   esac
 }

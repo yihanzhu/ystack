@@ -6,12 +6,23 @@ def policy_table:
       {id:"forge", class:"protected", execution_kinds:["deterministic"], capabilities:["core.forge.materialize-candidate.v2"]},
       {id:"identity", class:"dormant", execution_kinds:["deterministic"], capabilities:[]},
       {id:"producer", class:"protected", execution_kinds:["deterministic","model"], capabilities:["core.harness.produce.v1"]},
-      {id:"publisher", class:"protected-dormant", execution_kinds:["deterministic"], capabilities:[]},
+      {id:"publisher", class:"protected", execution_kinds:["deterministic"], capabilities:["core.publisher.publish-evidence.v3"]},
       {id:"reviewer", class:"protected", execution_kinds:["deterministic","model"], capabilities:["core.review.change.v1"]},
       {id:"verifier", class:"protected", execution_kinds:["deterministic"], capabilities:["core.verify.run.v1"]}
     ],
     actor_only_roles: ["manager","observer","operator","orchestrator"],
     capabilities: [
+      {
+        id:"core.publisher.publish-evidence.v3",
+        role:"publisher",
+        argument_shape:"publish-evidence",
+        outcome_family:"change",
+        permissions_by_execution:{
+          deterministic:["core.perm.evidence-publication.create.v3","core.perm.evidence.write.v1","core.perm.target.read.v1"]
+        },
+        allowed_evidence:["deterministic"],
+        required_evidence:["deterministic"]
+      },
       {
         id:"core.forge.materialize-candidate.v2",
         role:"forge",
@@ -60,6 +71,7 @@ def policy_table:
       }
     ],
     permissions: [
+      {id:"core.perm.evidence-publication.create.v3",resource:"exact-evidence-publication",actions:["create-branch","open-change-request"]},
       {id:"core.perm.candidate.execute.v1",resource:"exact-candidate",actions:["execute"]},
       {id:"core.perm.candidate-repository.write.v2",resource:"caller-disposable-candidate-repository",actions:["write"]},
       {id:"core.perm.evidence.write.v1",resource:"current-attempt-evidence",actions:["append"]},
@@ -393,3 +405,54 @@ def git_key:
   [.revision.repository_id,.revision.hash_algorithm,.revision.commit_id,
    .location.kind,(.location.value // ""),.object_type,.object_id,.mode];
 def source_git_key: .source | git_key;
+
+
+def publisher_incident_id_ok:
+  id_ok and test("\\A[a-z0-9][a-z0-9._-]{0,127}\\z") and
+  (contains("..") | not) and (endswith(".") | not) and
+  (endswith(".lock") | not);
+
+def publisher_write_row_ok:
+  exact_fields(["path","mode","sha256","git_blob_oid","add_only"];[]) and
+  (.path | repo_path_ok and utf8bytelength <= 4096) and
+  .mode == "100644" and .add_only == true and
+  (.sha256 | sha256_ok) and (.git_blob_oid | git_oid_ok);
+
+def publisher_arguments_shape_ok:
+  exact_fields(["incident_id","scope_id","branch","candidate_input_id",
+    "body_input_id","shadow_input_id","title","write_set","publication_contract"];[]) and
+  (.incident_id | publisher_incident_id_ok) and (.scope_id | id_ok) and
+  (.branch | short_text_ok) and (.title | short_text_ok) and
+  (.candidate_input_id | id_ok) and (.body_input_id | id_ok) and
+  (.shadow_input_id | id_ok) and
+  (.write_set | bounded_set(1;256;publisher_write_row_ok;.path)) and
+  (.publication_contract | delivered_scope_ok("output-contract"));
+
+def publication_action_shape_ok($branch):
+  if .state == "not-attempted" then exact_fields(["state"];[])
+  elif .state == "absent" or .state == "unknown" then
+    exact_fields(["state","proof_ref"];[]) and (.proof_ref | content_ref_ok)
+  elif .state == "created" then
+    (.proof_ref | content_ref_ok) and
+    (if $branch then
+       exact_fields(["state","proof_ref","head"];[]) and
+       (.head | git_revision_ref_ok)
+     else
+       exact_fields(["state","proof_ref","change_request_id"];[]) and
+       (.change_request_id | id_ok)
+     end)
+  else false end;
+
+def publication_post_shape_ok:
+  if .state == "not-run" then exact_fields(["state"];[])
+  else
+    exact_fields(["state","proof_ref","verified_by"];[]) and
+    (.state == "matched" or .state == "mismatched" or .state == "unknown") and
+    (.proof_ref | content_ref_ok) and (.verified_by | actor_ref_ok)
+  end;
+
+def publication_shape_ok:
+  exact_fields(["branch","change_request","post_write"];[]) and
+  (.branch | publication_action_shape_ok(true)) and
+  (.change_request | publication_action_shape_ok(false)) and
+  (.post_write | publication_post_shape_ok);

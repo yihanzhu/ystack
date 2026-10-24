@@ -34,7 +34,8 @@ def instruction_media_type_ok:
 
 def capability_arguments_shape_ok($capability):
   schema::argument_shape_for_capability($capability) as $shape |
-  if $shape == "materialize-candidate" then
+  if $shape == "publish-evidence" then schema::publisher_arguments_shape_ok
+  elif $shape == "materialize-candidate" then
     schema::exact_fields(
       ["source_tree_input_id","candidate_output_id",
        "materialization_contract","network_mode"];
@@ -124,7 +125,9 @@ def stage_request_shape_ok:
   (.body | stage_request_body_shape_ok);
 
 def operation_capability_scope($operation):
-  if $operation.arguments | has("output_contract") then
+  if $operation.arguments | has("publication_contract") then
+    $operation.arguments.publication_contract
+  elif $operation.arguments | has("output_contract") then
     $operation.arguments.output_contract
   elif $operation.arguments | has("allowed_delta") then
     $operation.arguments.allowed_delta
@@ -253,6 +256,50 @@ def forge_materialization_relation_ok($body):
   else true
   end;
 
+def publisher_request_relation_ok($body):
+  if $body.operation.capability_id != "core.publisher.publish-evidence.v3" then true
+  else
+    $body.operation.arguments as $args |
+    [$body.inputs[] | select(.input_id == $args.candidate_input_id)] as $candidates |
+    [$body.inputs[] | select(.input_id == $args.body_input_id)] as $bodies |
+    [$body.inputs[] | select(.input_id == $args.shadow_input_id)] as $shadows |
+    [$args.candidate_input_id,$args.body_input_id,$args.shadow_input_id] as $data_ids |
+    [$body.finish_condition.input_id,$body.verification_instruction.input_id,
+     $args.publication_contract.input_id] as $instruction_ids |
+    $body.workflow_id == "workflow.shadow-evidence-commit" and
+    $body.task_class_id == "task.commit-shadow-evidence" and
+    $body.stage_id == "stage.publish" and
+    $args.branch == ("ystack/evidence/" + $args.incident_id) and
+    $args.title == ("Shadow evidence: " + $args.incident_id) and
+    $body.target_revision.state == "present" and $body.base.state == "present" and
+    $body.target_revision == $body.base and
+    $body.source.state == "present" and $body.source.value.type == "git-object" and
+    ($candidates | length) == 1 and ($bodies | length) == 1 and
+    ($shadows | length) == 1 and
+    ($data_ids | unique | length) == 3 and
+    all($data_ids[]; . as $id | $instruction_ids | index($id) == null) and
+    $candidates[0].value.type == "artifact" and
+    $candidates[0].value.value == $body.source.value and
+    $body.source.value.value.object_type == "tree" and
+    $body.source.value.value.location == {kind:"root"} and
+    $body.source.value.value.revision != $body.base.value and
+    $body.source.value.value.revision.hash_algorithm == $body.base.value.hash_algorithm and
+    all($body.inputs[];
+      if .value.type == "artifact" and .value.value.type == "git-object" then
+        .value.value.value.revision.hash_algorithm == $body.base.value.hash_algorithm
+      else true end) and
+    $bodies[0].value.type == "artifact" and $bodies[0].value.value.type == "content" and
+    $bodies[0].value.value.value.media_type == "text/plain" and
+    $shadows[0].value.type == "artifact" and $shadows[0].value.value.type == "content" and
+    $shadows[0].value.value.value.media_type == "application/json" and
+    all($args.write_set[];
+      (.path | startswith("ystack-evidence/" + $args.incident_id + "/")) and
+      (.path | split("/") | length) == 3 and
+      (.git_blob_oid | length) ==
+        (if $body.base.value.hash_algorithm == "sha1" then 40 else 64 end)) and
+    ($body | has("grant_ref")) and ($body | has("qualification_ref"))
+  end;
+
 def absent_target_relation_ok($body):
   if $body.target_revision.state == "absent" then
     $body.operation.role == "producer" and
@@ -270,7 +317,7 @@ def stage_request_self_relations_ok:
   verifier_candidate_relation_ok($body) and
   reviewer_change_relation_ok($body) and
   forge_materialization_relation_ok($body) and
-  absent_target_relation_ok($body);
+  absent_target_relation_ok($body) and publisher_request_relation_ok($body);
 
 def stage_request_self_ok:
   stage_request_shape_ok and

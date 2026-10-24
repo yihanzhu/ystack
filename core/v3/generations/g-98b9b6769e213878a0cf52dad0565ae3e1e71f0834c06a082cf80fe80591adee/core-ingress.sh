@@ -291,6 +291,20 @@ portable_core_ingress_open() {
     }
   done
 
+  for required_dir in \
+    "$expected_dir/contracts.jq" \
+    "$expected_dir/core-ingress.sh" \
+    "$expected_dir/modules/schema.jq" \
+    "$expected_dir/modules/profile_graph.jq" \
+    "$expected_dir/modules/stage_request.jq" \
+    "$expected_dir/modules/result_facts.jq" \
+    "$expected_dir/modules/result_truth.jq"; do
+    portable_core_ingress_regular_file "$required_dir" || {
+      portable_core_ingress_error E_RUNTIME
+      return 1
+    }
+  done
+
   PORTABLE_CORE_INGRESS_REPO_ROOT="$repo_root"
   PORTABLE_CORE_INGRESS_MODULE_DIR="$expected_dir/modules"
   PORTABLE_CORE_INGRESS_SCHEMA="$PORTABLE_CORE_INGRESS_MODULE_DIR/schema.jq"

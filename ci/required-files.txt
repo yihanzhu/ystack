@@ -600,3 +600,6 @@ core/v3/generations/g-98b9b6769e213878a0cf52dad0565ae3e1e71f0834c06a082cf80fe805
 core/v3/generations/g-98b9b6769e213878a0cf52dad0565ae3e1e71f0834c06a082cf80fe80591adee/modules/schema.jq
 core/v3/generations/g-98b9b6769e213878a0cf52dad0565ae3e1e71f0834c06a082cf80fe80591adee/modules/stage_request.jq
 core/v3/generation-registry.json
+scripts/test/portable-core-v3-publisher.test.sh
+scripts/test/portable-core-v3-publisher-fixtures.jq
+scripts/test/portable-core-v3-publisher-rules.tsv
