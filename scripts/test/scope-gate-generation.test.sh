@@ -229,6 +229,99 @@ extended=dict(legacy,initial_origin_refs=[owner],gate_call_ref=owner)
 check(n.request(n.canonical(env('coverage_source_request',legacy['attempt_id'],extended)))['body']==extended)
 for extension in [dict(initial_origin_refs=[owner]),dict(gate_call_ref=owner),dict(initial_origin_refs=[],gate_call_ref=owner)]:
     reject(n.request,n.canonical(env('coverage_source_request',legacy['attempt_id'],dict(legacy,**extension))))
+# Run the generator's tuple comparison on two controlled environments after its auth boundary.
+spec=importlib.util.spec_from_file_location('gate_test_enforced',root/'shadow/v1/enforced-reproduction.py')
+enforced=importlib.util.module_from_spec(spec);sys.modules[spec.name]=enforced;spec.loader.exec_module(enforced)
+for conflict in (None,'stage_request','resolved_profile','stage_result','policy_set'):
+    with tempfile.TemporaryDirectory() as tmp:
+        output=pathlib.Path(tmp)
+        for name in ('stage-request','resolved-profile','stage-result','policy-set'):(output/'objects'/name).mkdir(parents=True)
+        request_doc=env('stage_request','request.multi',{})
+        profile_doc=env('resolved_profile','profile.multi',{})
+        result_doc=env('stage_result','result.multi',{})
+        policy_doc=n.document((root/'control/v1/control-policy-set.json').read_bytes())
+        def material(request_doc,profile_doc,result_doc,policy_doc):
+            return {'materialization-input.json':n.canonical({name:dict(content=value,sha256=n.digest(n.canonical(value)))
+                for name,value in [('stage_request',request_doc),('resolved_profile',profile_doc)]}),
+                'materialization-response.json':n.canonical(dict(stage_result=result_doc)), 'policy-set.json':n.canonical(policy_doc)}
+        first=material(request_doc,profile_doc,result_doc,policy_doc)
+        docs=dict(stage_request=copy.deepcopy(request_doc),resolved_profile=copy.deepcopy(profile_doc),
+            stage_result=copy.deepcopy(result_doc),policy_set=copy.deepcopy(policy_doc))
+        if conflict is not None:docs[conflict]['id']+='-other'
+        second=material(*[docs[name] for name in ('stage_request','resolved_profile','stage_result','policy_set')])
+        class InputReader:
+            darwin=None
+            scope_body=dict(required_shadow_environments=['environment.one','environment.two'])
+            def authenticate_bundles(self,current_only):
+                check(current_only is True)
+                return ([dict(claimed=True,authentication=dict(state='authenticated'))]*2,[],
+                    dict(current={'environment.one':first,'environment.two':second},qualifying={}))
+            def hold(self,path,limit):
+                held=g.c._hold_bytes(str(path),limit);owned.append(held);return held
+        owned=[];pair_calls=[];real_pair_ref=enforced.pair_ref
+        def measured_pair(pair):pair_calls.append(copy.deepcopy(pair));return real_pair_ref(pair)
+        enforced.pair_ref=measured_pair
+        reader=InputReader();reader.enforced=enforced
+        generator=g._Generator.__new__(g._Generator);generator.reader=reader;generator.output=output;generator.held=[];generator.outputs={}
+        generator.basis=env('workflow_scope','scope.multi',dict(qualified_identity=dict(stage_request_ref=g.ref(n.canonical(request_doc)),resolved_profile_ref=g.ref(n.canonical(profile_doc)))))
+        generator.session=g._GateStoreSession('generation.multi','b'*64,time.monotonic()+10);generator.session.reader=reader
+        try:
+            if conflict is None:
+                generator.inputs()
+                check(set(generator.outputs)=={'stage-request','resolved-profile','stage-result','policy-set'})
+                check([generator.outputs[name].read_bytes() for name in ('stage-request','resolved-profile','stage-result','policy-set')]
+                    ==[n.canonical(value) for value in (request_doc,profile_doc,result_doc,policy_doc)])
+            else:
+                try:generator.inputs()
+                except g.c.Refusal as error:check(error.code=='E_RELATION')
+                else:raise AssertionError('generator accepted cross-environment '+conflict+' conflict')
+                check(not generator.outputs and not list(output.rglob('value.json')))
+            check(len(pair_calls)==4)
+        finally:
+            enforced.pair_ref=real_pair_ref
+            for held in reversed(owned+generator.held):held.close()
+# A legal old-origin request reaches the actual C_REQUEST equality guard over a real wire.
+for stale in (False,True):
+    fresh_origin=dict(owner,id='origin.fresh',sha256='1'*64)
+    old_origin=dict(owner,id='origin.old',sha256='2'*64)
+    fresh_body=dict(extended,initial_origin_refs=[fresh_origin])
+    fresh_request=env('coverage_source_request',fresh_body['attempt_id'],fresh_body)
+    sent=copy.deepcopy(fresh_request)
+    if stale:sent['body']['initial_origin_refs']=[old_origin]
+    sent_raw=n.canonical(sent);check(n.request(sent_raw)==sent)
+    wanted={key:sent['body'][key] for key in ('attempt_id','nonce','coverage_base','evaluated_revision','stage_request_ref',
+        'resolved_profile_ref','stage_result_ref','source_package_ref','source_accepted_set_ref','initial_origin_refs','gate_call_ref')}
+    wanted.update(request_sha256=n.digest(sent_raw),scope_ref=sent['body']['documents']['scope'])
+    left,right=socket.socketpair();deadline=time.monotonic()+10
+    outer=g._GateStoreSession('generation.origins','b'*64,deadline);outer.phase='K_DONE';outer.initialized=True
+    outer.remote={'inner.1':copy.deepcopy(binding)}
+    outer.wire=g.c._GateWire(left,deadline,outer.call_id,'a'*64,outer.binding)
+    peer=g.c._GateWire(right,deadline,outer.call_id,'a'*64,outer.binding)
+    calls=[];written=[]
+    class OriginReader:
+        coverage_configuration=object()
+        def source_coverage(self,qualifying,current,rows):
+            check(self._coverage_prepare_only and self._coverage_nonce==fresh_body['nonce'])
+            calls.append('fresh reconstruction');return n.canonical(fresh_request)
+        def recheck(self):calls.append('recheck')
+        def release_stores(self):calls.append('release')
+    outer.reader=OriginReader()
+    outer.authenticate_core=lambda:([],[],dict(qualifying={},current={}))
+    outer.generator=type('Outputs',(),dict(put=lambda self,name,raw:written.append((name,raw))))()
+    peer.send('C_REQUEST',dict(request=sent,expectation=wanted,acquisitions=['inner.1']))
+    try:
+        if stale:
+            try:outer.pump()
+            except g.c.Refusal as error:check(error.code=='E_RELATION')
+            else:raise AssertionError('generator accepted old origins in new handoff')
+            check(calls==['fresh reconstruction'] and not written and outer.coverage_request_raw is None)
+        else:
+            outer.pump();check(peer.receive()==('C_REQUEST_ACK',{}))
+            check(calls==['fresh reconstruction','recheck','release'])
+            check(written[0]==('coverage-request',n.canonical(fresh_request)))
+            check(n.document(written[1][1])['body']==wanted and outer.phase=='C_REQUEST')
+        check(outer.reader._coverage_prepare_only is False and outer.reader._coverage_nonce is None)
+    finally:left.close();right.close()
 # Invalid canonical inputs make the real fixed shell children fail without source setup.
 with tempfile.TemporaryDirectory() as tmp:
     directory=pathlib.Path(tmp)

@@ -16666,6 +16666,9 @@ finally:
         gate_ready.unlink();gate_ack.unlink()
     # Corrupt only private test copies. The production entry has no test selector.
     gate_protocol_variants={
+        'old-origins-new-handoff':('read-shadow-evidence.py',
+            b'    def request(self, request_raw, expectation):\n        self.wire.exchange("C_REQUEST",',
+            b'    def request(self, request_raw, expectation):\n        document = parse(request_raw)\n        origins = parse(self.kill_request_raw)["body"]["initial_origin_refs"]\n        document["body"]["initial_origin_refs"] = origins\n        request_raw = c.canonical(document)\n        expectation = dict(expectation, initial_origin_refs=origins, request_sha256=c.digest(request_raw))\n        self.wire.exchange("C_REQUEST",'),
         'omitted-acquisition':('read-shadow-evidence.py',b'"acquisitions": sorted(self.acquisitions.values())',b'"acquisitions": sorted(self.acquisitions.values())[1:]'),
         'duplicate-INIT':('read-shadow-evidence.py',b'self.wire.send("INIT_ACK", {})',b'self.wire.send("INIT_ACK", {}); self.wire.send("INIT_ACK", {})'),
         'wrong-owner':('read-shadow-evidence.py',b'identity = "inner." + str(self.serial)',b'identity = "other." + str(self.serial)'),
