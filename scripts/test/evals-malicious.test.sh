@@ -764,6 +764,16 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
                 path = attempt/name;path.write_bytes(raw);path.chmod(0o440)
             held = consumer._HeldStoreRead(export_anchor,attempt_id)
             try:
+                acquired = export_anchor.private_observations['storage_reads'][-1]
+                assert acquired['error'] is None and len(acquired['held']) == len(held.held)
+                for actual,recorded in zip(held.held,acquired['held']):
+                    assert bytes.fromhex(recorded['path']) == os.fsencode(actual.path)
+                    assert len(recorded['components']) == len(actual.components)
+                    assert recorded['components'][0]['name'] is None
+                    for component,row in zip(actual.components,recorded['components']):
+                        assert row['before'] == consumer._stat_values(component.before)
+                        assert row['after'] == row['named_after'] == consumer._stat_values(os.fstat(component.fd))
+                    assert 'access_acl' in recorded['components'][-1]
                 snapshot = held.snapshots['sandbox-export.bin']
                 assert len(snapshot.chunks) == consumer.EXPORT_LIMIT//65536
                 assert all(type(chunk) is bytes and len(chunk) == 65536 for chunk in snapshot.chunks)
@@ -867,6 +877,15 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
                 refuses(lambda:consumer.read_store_attempt(anchor,attempt_id),'export-digest-mismatch')
                 print('ok complete 12MiB conditional binary held inventory/origin/binding - '+launch+
                       '; capture path only, full accounting/replay remain separate')
+                refuses(lambda:consumer.read_store_attempt(export_anchor,'attempt.absent'),
+                        'actual-store-open-failure-retained')
+                failed_read = export_anchor.private_observations['storage_reads'][-1]
+                assert failed_read['error']['category'] == 'Refusal'
+                assert failed_read['error']['code'] == 'E_STORE'
+                assert failed_read['error']['errno'] == consumer.errno.ENOENT
+                assert len(failed_read['held']) == 1
+                assert len(failed_read['held'][0]['components']) >= 2
+                assert export_anchor.private_observations['unusable'] is True
             finally:held.close()
         private_held.close()
         failed_private_held.close()

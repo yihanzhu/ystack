@@ -69,9 +69,10 @@ def _clock_value(site, value, kind):
     return value
 
 class Refusal(Exception):
-    def __init__(self, code: str):
+    def __init__(self, code: str, *, os_errno: int | None = None):
         super().__init__(code)
         self.code = code
+        self.os_errno = os_errno
 
 def _require(value: bool, code: str) -> None:
     if not value:
@@ -424,8 +425,8 @@ def _clone(parent: HeldPath, code: str) -> list[HeldComponent]:
             _close_components(rows, exc)
         except Refusal:
             raise
-        except OSError:
-            raise Refusal(code) from None
+        except OSError as error:
+            raise Refusal(code, os_errno=error.errno) from None
 
 def _open_held(path: str, directory: bool, rule: Rule, code: str,
                allow_hardlinks: bool = False) -> HeldPath:
@@ -461,8 +462,8 @@ def _open_held(path: str, directory: bool, rule: Rule, code: str,
             _close_components(rows, exc)
         except Refusal:
             raise
-        except (OSError, ValueError):
-            raise Refusal(code) from None
+        except (OSError, ValueError) as error:
+            raise Refusal(code, os_errno=getattr(error, "errno", None)) from None
 
 def _open_child(parent: HeldPath, name: str, directory: bool, rule: Rule, code: str) -> HeldPath:
     _require(isinstance(name, str) and name and "/" not in name and name not in (".", ".."), code)
@@ -485,8 +486,8 @@ def _open_child(parent: HeldPath, name: str, directory: bool, rule: Rule, code: 
             _close_components(rows, exc)
         except Refusal:
             raise
-        except (OSError, ValueError):
-            raise Refusal(code) from None
+        except (OSError, ValueError) as error:
+            raise Refusal(code, os_errno=getattr(error, "errno", None)) from None
 
 def _linux_acl_xattr(fd: int, name: str) -> list[tuple[int, int, int]] | None:
     try:
@@ -894,18 +895,33 @@ class Anchor:
     private_observations: dict = dataclasses.field(default_factory=dict)
     storage_entry_count: int = 0
 
-    def retain_storage(self, attempt_id, rows, failure):
-        if self.storage_entry_count + len(rows) > 65536:
+    def retain_storage(self, attempt_id, rows, failure, held=()):
+        count = len(rows) + sum(len(item.components) for item in held)
+        if self.storage_entry_count + count > 65536:
             self.private_observations["unusable"] = True
             return
-        self.storage_entry_count += len(rows)
+        self.storage_entry_count += count
         error = None
         if failure is not None:
             self.private_observations["unusable"] = True
-            error = {"category": type(failure).__name__, "errno": getattr(failure, "errno", None),
+            error = {"category": type(failure).__name__,
+                     "errno": getattr(failure, "os_errno", getattr(failure, "errno", None)),
                      "code": getattr(failure, "code", None)}
+        acquired = []
+        for item in held:
+            components = []
+            for component in item.components:
+                row = {"name": None if component.name is None else os.fsencode(component.name).hex(),
+                       "before": _stat_values(component.before),
+                       "after": None if component.after is None else _stat_values(component.after),
+                       "named_after": None if component.named_after is None else _stat_values(component.named_after)}
+                observed_acl = getattr(component.rule, "observations", {}).get(component.fd)
+                if observed_acl is not None:
+                    row.update(access_acl=observed_acl[0], default_acl=observed_acl[1])
+                components.append(row)
+            acquired.append({"path": os.fsencode(item.path).hex(), "components": components})
         self.private_observations.setdefault("storage_reads", []).append(
-            {"attempt_id": attempt_id, "entries": rows, "error": error})
+            {"attempt_id": attempt_id, "entries": rows, "held": acquired, "error": error})
 
     def retain_entropy(self, role, value):
         _require(role in {"reproduction", "write", "kill", "coverage"}
@@ -1492,7 +1508,8 @@ def read_store_attempt(anchor: Anchor, attempt_id: str, *,
     finally:
         if hasattr(anchor, "retain_storage"):
             try:
-                anchor.retain_storage(attempt_id, storage_rows, failure)
+                anchor.retain_storage(attempt_id, storage_rows, failure,
+                                      opened if opened else _owner.held if _owner is not None else ())
             except MemoryError:
                 anchor.private_observations["unusable"] = True
         try:
