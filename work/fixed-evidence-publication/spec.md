@@ -17,7 +17,7 @@ A separately accepted high-risk plan must land before implementation.
 | R1 | Implement the complete fixed publisher concern, preserving the accepted contract and both real caller routes. |
 | R2 | The first source checkpoint is a complete private core-v3 package for all five document kinds, with every rule owner, ingress, root, finite proof and restore entries. |
 | R3 | Preserve all v1/v2 generations, their meaning, the selected wrapper, default profiles and live configuration. |
-| R4 | Prepare shared offline admission and the real shadow route only after exact source reconciliation and an accepted scope/plan amendment. |
+| R4 | Implement the shared offline admission and real shadow caller specified in section 6 after exact dependency adoption and a separately accepted plan amendment. Preserve the future actual publisher caller as a final gate. |
 | R5 | Stop before runtime code depends on undefined transport, identity, credential, durable dispatch or authenticated readback bindings. |
 | R6 | Partial source stays on the same implementation attempt. No incomplete implementation PR, G3 or issue closure substitutes for complete final acceptance. |
 
@@ -238,43 +238,315 @@ This CI use is a test checkpoint only, does not consume a #558 real-run window,
 and grants no G3, delivery, runtime execution or first-write permission. Automatic
 quick CI is not the full matrix. Relevant complete proof remains mandatory.
 
-### 6. Deferred source and runtime gates
+### 6. Shared offline admission and the second source checkpoint
 
-Before the second checkpoint, reconcile source
-`22d25c96f28ed42da0a5722b6b5ea0e65946274c`, including
-`shadow/v1/write-shadow.py` blob `fc596350cab560a138c2059e8096542aa75554b8`:
-exact repository, branch/local and remote heads, PR state, revision/blob, old/current
-base and clean/dirty worktree. Obtain explicit adoption scope and source preflight
-through an accepted G2 amendment and separate high-risk plan or plan amendment.
-Preserve all outstanding source proof. Do not alter, duplicate or copy that attempt
-before those gates. Without them, stop at the complete private core checkpoint.
+This section specifies the next bounded source checkpoint. It does not complete
+R1. The actual shadow writer must use the shared admission. The actual publisher
+caller and its six-field comparison remain final acceptance gates. No test caller,
+helper import, preparation-only command or empty `publish.py` counts as that caller.
 
-That amendment must bind the shared admission and actual shadow path, exact six-field
-mapping, held body/title bytes, 32/33-file inventories, full Git diff/base/parent/root
-checks, path-policy owners, withholding and post-write plan. It must name exact files
-and finite integration proof. Do not manufacture a publisher stage/profile/grant for
-shadow, copy schema or create a test-only second caller. This G2 permits none of those
-future paths to be edited yet.
+#### 6.1. Preserve and adopt the exact source dependency
 
-Child 11's transport actions/failures, real identity and narrow credential enforcement,
-durable incident reservation/dispatch mechanism and independent authenticated readback
-need primary facts under the proper separate access authorization. Accept their exact
-design and plan before writing dependent runtime code. An empty adapter, arbitrary
-callable or public transport framework cannot fill a missing binding.
+Reconcile `yihanzhu/ystack` source
+`22d25c96f28ed42da0a5722b6b5ea0e65946274c` on the preserved
+`codex/impl/scope-gate-evidence-generation` attempt, including
+`shadow/v1/write-shadow.py` blob `fc596350cab560a138c2059e8096542aa75554b8`.
+Bind its exact local and remote heads or remote absence, PR state, old/current base,
+clean/dirty worktree, whole inherited diff and required source proof. The comparison
+main `c6c3f74181ea86f85be87ecf4431e67a5f272d82` has writer blob
+`4790655f9378636cacf8f4ec7929c88abcfce9bc`. These are different source versions.
+The preserved source is not an accepted foundation merely because it is locally
+clean, has a source review, or passes pure tests.
+
+The first private core-v3 checkpoint must finish its exact source review and required
+full CI before checkpoint two starts. Preserve its actual source, test and registry
+bytes. This amendment then needs independent G2 acceptance and a separate high-risk
+plan amendment. That plan must record explicit dependency adoption and a read-only
+source preflight. It must enumerate the complete inherited paths and cost separately
+from the new paths below, bind the first checkpoint and the preserved dependency,
+and state the exact ordinary merge sequence into the same #701 implementation branch.
+Do not copy selected dependency files, reset, rebase, replace or discard either attempt.
+The source preflight must cover conflicts and every inherited source change. If the
+dependency changes, rebind and review its exact new source before adoption.
+
+Early inactive source/tests may proceed after those source gates. Unfinished genuine,
+native, integration and G3 proof remain due. Before final publication of #701's
+implementation PR, #558/#541/#544/#681 must satisfy their original applicable proof
+and protected foundation merges. Then merge current main normally, measure the
+entire actual PR diff, and obtain fresh complete review and CI. Inherited code is not
+already merged code. A source checkpoint never waives those final requirements.
+
+#### 6.2. One shared owner, with shadow authentication left in place
+
+Create the private module `publisher/v1/_admission.py`. It owns only the common
+fixed-evidence byte, path and Git relations and the resulting publication plan.
+It has no CLI, configuration, source selector, provider adapter, network action,
+credential, reservation, subprocess callback or dispatch entry. It does not import
+or activate core v3. Existing held Git inspection remains the only I/O it uses.
+
+Use one `admit_write` function as the complete common admission boundary. Give it
+closed private input fields for the actual incident, generated materialization input
+and response bytes, frozen bundle bytes, candidate file bytes, outer file bytes,
+write-section bytes, record form, scope ID, exact allowed paths, held policy/mode
+bytes and the existing held source/candidate Git owners. The writer retains the original source
+inventory captured before materialization as an immutable comparison input. The
+future caller captures its own base inventory under its held owner and rechecks it;
+a supplied inventory alone never proves Git facts. These
+are evidence inputs, not caller-provided `checked` flags or authority. Do not accept
+an arbitrary module, callable, Git runner, schema or policy predicate as an input.
+The plan fixes these private field names and byte limits before code.
+
+The module reuses the fixed `shadow/v1/_consumer.py` owners for canonical bytes,
+`write_path_ok`, `evidence_patch`, `scope_policy_ref` and `_ReadOnlyGit`. Resolve that
+one already loaded, fixed-origin consumer module; do not load a second consumer
+instance or duplicate its schema and primitive predicates. The two Git owners use
+the existing concrete owner and command ledger. Their repository identity, object
+format, held paths, configuration exclusions and command allowlist remain unchanged.
+The shared module does not gain a generic executor or a public extension interface.
+
+Move the deterministic publisher-request/body construction and candidate Git relation
+checks to private functions in that module. `admit_write` must invoke those same
+owners. The writer may delegate its earlier candidate check and its `_publisher`
+compatibility helper to them; it must not retain another common predicate. Keep
+`_bundle_ref` construction in one owner as needed by common admission and its
+existing reader-facing writer helper. A thin delegate supplies no separate decision.
+
+| Boundary | Required owner and order |
+| --- | --- |
+| Original bundle and actual materialization | Writer keeps `_inventory`, `_authenticated_frozen`, `_materialize` and `_verify_write`, including same-anchor/principal/store checks, actual preparation, fresh receipt and evaluation. |
+| Complete common admission | The real writer `_admit` calls shared `admit_write` on those retained inputs. The module recomputes all common relations in sections 6.3–6.5. Earlier candidate checks do not replace this final call. |
+| Shadow-only completion | Writer retains captured claim/duty/input/response/preparation/identity/evaluation/verification-byte equality, fresh provenance construction, `_outer_record`, `_record_relations`, sealed rechecks, exclusive writes, fsync, native completion and cleanup. |
+| Independent evidence reader | `scope/v1/read-shadow-evidence.py` retains its own authentication, historical/current policy and Git/receipt checks. Its writer dependency must include the new held module. It is not a publisher caller. |
+| Future actual publisher | After the runtime fact gates in 6.8, the concrete publisher must call this same admission, compare the actual core-valid request against every mapped field, and obey the original runtime contract. |
+
+A common admission result is private immutable data: exact candidate/revision facts,
+canonical publisher-request bytes, exact title/body bytes, complete write-set bytes,
+admission digests and post-write plan. It confers no permission, result success,
+readback authentication or dispatch right. Discard it on any source/input/hold change.
+Do not cache it across owner lifetimes. Any refusal still stops the actual writer
+before a successful completion marker. Preserve the original error translation,
+nonzero exit, overall deadline, held-object lifecycle and cancellation behavior.
+
+#### 6.3. Closed publisher mapping and held text bytes
+
+The publisher envelope remains schema 1, kind `shadow_publisher_request`. Its ID is
+the incident ID. Its body has exactly these six fields. The table describes both
+common admission now and the actual publisher comparison required later.
+
+| Body field | Common evidence source | Future core request comparison |
+| --- | --- | --- |
+| `target_repository_id` | Original incident repository and held Git revision identity | `body.target_repository_id` |
+| `branch` | Exactly `ystack/evidence/<incident_id>` | `body.operation.arguments.branch` |
+| `base_revision` | Original incident `git_revision_ref`; actual source commit | The present `body.target_revision.value` and `body.base.value`, both equal to the admitted base/parent |
+| `candidate_tree_id` | Actual candidate commit/tree and every admitted blob | Candidate source root-tree binding and the authenticated publisher-request field |
+| `title` | Exactly `Shadow evidence: <incident_id>` as UTF-8 bytes | `body.operation.arguments.title` as UTF-8 bytes |
+| `body_sha256` | SHA-256 of the held exact `publisher-body.txt` bytes | Raw body input selected by `body.operation.arguments.body_input_id` |
+
+The envelope ID also equals `body.operation.arguments.incident_id`; it is not a seventh body
+field. Here `arguments` means `body.operation.arguments`. The outer write scope equals
+`arguments.scope_id`. The workflow/task remain
+`workflow.shadow-evidence-commit` and `task.commit-shadow-evidence`; compare their
+actual request fields. The future publisher also binds `candidate_input_id`,
+`shadow_input_id`, `write_set` and `publication_contract` by the binding contract.
+Do not infer a publish stage, profile, permission or grant from the shadow request.
+
+Apply the binding contract's incident alphabet, length and exclusions before using
+it in a root, branch or title: `[a-z0-9][a-z0-9._-]{0,127}`, no `..`, and no final `.`
+or `.lock`, plus the existing core ID rule. Refuse malformed IDs without normalizing.
+The sole body is the following UTF-8 text with exactly one final LF:
+
+```text
+Shadow evidence for <incident_id>. Publication is withheld.
+```
+
+The title has no added LF. Compute hashes from held raw bytes, with no newline
+conversion, Unicode normalization or later reread from a replaceable path. Compare
+raw body bytes as well as their hash. Hold and recheck their source files and parent
+paths through the writer's final marker. A digest or shape check alone cannot bind a
+different actual field. Changed legal values must fail the corresponding relation.
+
+#### 6.4. Exact inventory, complete Git relation and path policy
+
+Preserve both existing forms. An old `withheld-write.v1` candidate has exactly 32
+files. A `withheld-write-policy.v1` candidate has exactly 33. The 32 consist of the
+29 names in the existing fixed `SHADOW_EVIDENCE_NAMES`, the original `bundle.json`,
+`eval-seed.json` and `README.md`. The only 33rd name is `scope-policy.json`.
+Every candidate file is directly below `ystack-evidence/<incident_id>/`.
+Do not confuse that candidate with the new outer bundle: its payload is the 29 fixed
+names plus `publisher-body.txt`, plus `scope-policy.json` only in the policy form;
+its own `bundle.json` completes that outer bundle. It is never the frozen inner
+`bundle.json`. Keep their separate bytes, digests and references.
+
+The original 30 frozen files must equal their actual candidate bytes. Reuse the
+actual incident-to-eval converter for `eval-seed.json`; preserve the exact existing
+README bytes. For the policy form, compare the held current package policy, actual
+candidate policy blob and outer policy bytes; verify the closed
+`{name,size_bytes,sha256}` reference against raw bytes. Keep the historical/current
+policy authenticity and evaluator-held-current equality in their existing owners.
+Do not backfill old forms, infer policy from a current package, mix forms or let an
+old form satisfy a policy-authenticated R3 claim. No existing historical proof is
+reissued or relabelled.
+
+Common admission must independently establish all of the following from its held
+inputs. The fixed Git reader may supply the raw facts; neither a response receipt
+nor a supplied write set may substitute for actual object inspection.
+
+1. Source repository ID, hash algorithm and base equal the incident revision. The
+   source inventory still equals the pre-materialization snapshot. Candidate commit
+   differs from base, uses the same algorithm/repository identity, and has exactly
+   one actual parent equal to base. Its actual root tree equals the claimed tree.
+2. Enumerate the complete base and candidate trees. Every old leaf remains at the
+   same path, mode, type and OID. Only necessary ancestor tree OIDs may change.
+   Added leaves equal the entire expected 32/33-row write set. Added trees equal
+   only their necessary directories. Refuse unrelated changes, deletions, type or
+   mode changes, submodules, symlinks, executable files and extra empty trees.
+3. The incident root and any case-folded alias or descendant are absent at base.
+   An existing `ystack-evidence` ancestor must be exactly that named tree, with no
+   differently cased alias or non-tree object. Retain strict parent-path/held-path
+   checks and the Git owner's replace/graft/shallow/alternate/worktree exclusions.
+4. Each sorted unique write-set row has exactly `path`, `mode`, `sha256`,
+   `git_blob_oid`, `add_only`; mode is `100644`, and add_only is boolean true.
+   Recompute byte count, SHA-256 and Git blob OID from each actual blob. Compare
+   its exact bytes against the retained candidate file. Both SHA-1 and SHA-256
+   Git object formats retain their correct native OID lengths.
+5. The actual paths equal the caller's already accepted exact `allowed_paths`.
+   Reuse `write_path_ok` on held package policy and mode for every path. Keep
+   `.git`/`.ystack`, protected segments/root files/prefixes, traversal, aliases,
+   control characters, UTF-8 path length and all existing limits. A request does
+   not grant its own path allowance; shadow keeps its original scope checks and
+   the future publisher keeps its actual permission, scope and kill-switch gates.
+6. Recompute the full add-only patch and all rows with `evidence_patch`. Keep the
+   1,048,576-byte patch limit, 4,096-byte UTF-8 path limit, UTF-8/nonbinary rules,
+   raw-size checks, exact inventory and current helper limits. Do not weaken them
+   to make a fixture pass. Recheck both held Git owners and all source bytes before
+   returning and at the existing final sealed boundaries.
+
+#### 6.5. Withholding, admission and the post-write plan
+
+Retain the exact nine keys of the shadow write section: `bundle_ref`, `scope_id`,
+`workflow_id`, `task_class`, `write_set`, `publisher_request`, `admission`,
+`publication`, `post_write_verification`. Compare the frozen bundle reference,
+actual generated `stage_request.content` workflow/task, scope, complete write set,
+publisher request and held body bytes. Do not misread the stage content wrapper.
+
+Publication remains exactly `{state:"withheld",reason_id:"shadow.write-not-published"}`.
+Admission remains exactly `{state:"checked",effect:"none",request_sha256:...,write_set_sha256:...}`,
+using canonical request and write-set bytes. The exact post-write plan remains
+`{target_revision:<base>,candidate_tree_id:<actual tree>,write_set:<complete rows>}`.
+It is the plan for later verification, not evidence that publication happened or
+that readback matched. The shared result must expose these actual values to both
+callers; a boolean result is insufficient. Preserve the current record and receipt
+shapes. No new authority, success status or provenance event is introduced.
+
+#### 6.6. Source closure and exact second-checkpoint paths
+
+The new module must be part of the existing authenticated source closure. Load it
+only from the fixed physical package path, never from caller input, environment,
+ambient search paths or a directory-wide module allowance. The writer pins its exact
+SHA-256 in writer source, checks held raw bytes before loading those same bytes,
+and keeps the held module and its parents under the existing rechecks. This makes
+`consumer_source_sha256` of the writer bind the new helper without changing the
+provenance envelope. The plan fixes the module's final digest before review; any
+helper edit requires updating that one pin and fresh source proof.
+
+Add only that exact module origin to `_runtime_module_origins`. Load it before the
+startup module-origin snapshot, and preserve origin equality and no-hook/thread
+checks throughout. Reader loading must hold the same fixed module and verify its
+writer pin and fixed consumer identity. Reuse existing held-byte/path machinery;
+no new source trust root, native ABI, owner registration or provenance command is
+needed. A pure Python call must not fabricate an external command-ledger row.
+Missing, replaced, aliased, changed or unbound module bytes refuse completion.
+
+After the accepted adoption/plan gates, only these eight paths may change for the
+new second-checkpoint concern. They are not permission to edit other inherited code.
+
+| Exact path | Allowed purpose |
+| --- | --- |
+| `publisher/v1/_admission.py` | One private common admission owner and its fixed data helpers |
+| `shadow/v1/write-shadow.py` | Exact helper load/pin/hold; common delegates and actual `_admit` call; preserve shadow-only gates |
+| `shadow/v1/enforced-reproduction.py` | Admit only the exact new fixed module origin; no other runtime change |
+| `scope/v1/read-shadow-evidence.py` | Hold/check the new fixed writer dependency; no change to authentication or coverage rules |
+| `scripts/test/publisher-admission.test.sh` | Closed offline common-boundary and source-closure proofs through actual functions and real disposable Git objects |
+| `scripts/test/shadow-write.test.sh` | Actual writer-route paired proof, retained safety assertions and finite private-copy closure updates |
+| `scripts/test/shadow-enforced.test.sh` | Exact private fixture source-copy update for the new module; retain all original assertions |
+| `ci/required-files.txt` | Restore entries for the new private module and its test only |
+
+The reader path is absent from the comparison main and belongs to the preserved
+source dependency. Its adoption must be explicit before editing. Do not silently
+copy it into this allowlist. Keep `_consumer.py`, core generations/registries,
+`write-materialization-input.jq`, existing policies, live config, native helpers,
+workflows and public wrappers byte-identical to the adopted baseline in this phase.
+Keep all first-checkpoint core-v3 files and counters intact. No `publish.py`, extra
+fixture product, new public argument or production configuration is in this list.
+The plan must justify a readable new and cumulative review-size range from the
+actual adoption diff and test inventory. An overrun returns through that gate;
+never reduce proof or hide inherited changes to meet a size target.
+
+#### 6.7. Finite source proof and accurate checkpoint status
+
+The high-risk plan must enumerate each case below with a stable ID, actual entry,
+assertion, paired positive and raw receipt. Expand the stated closed families into
+individual rows before code. Count all rows and preserve every existing assertion.
+Do not replace meaningful relations with malformed-shape examples or static text
+search. A passed private helper test proves neither an actual caller nor genuine
+native qualification.
+
+| Proof family | Required cases and actual route |
+| --- | --- |
+| Real writer integration | Both 32/33 forms reach the shared boundary from real writer `_admit` and retain withholding. Existing actual producer/receipt checks remain in that route. Demonstrate refusal propagation and that bypass/removal of the shared call would fail an owned route assertion. Tests cannot be the second caller. Keep fixture/native-launch classifications explicit. |
+| Six fields and linked identity | One legal-value mismatch for each of the six body fields; envelope incident ID, scope, workflow and task mismatches; wrong actual candidate/body bytes. For each, a genuine matching offline-data baseline reaches the same predicate. |
+| Text and hashes | Wrong held body bytes with a recomputed hash, missing/extra final LF, wrong legal title, stale body hash and wrong request/write-set digest. Restore the exact bytes/digests and observe the paired admission. No normalization. |
+| Forms and inventory | Both forms; remove each required name, add an extra name, wrong root and case alias, nested path, duplicated/unsorted rows, mixed forms, old-form policy backfill, altered frozen marker and actual policy bytes with recomputed outer hashes. Retain old 32-form byte compatibility and policy-authenticated R3 refusal rules. |
+| Full Git and raw rows | Both object algorithms; candidate equal to base; zero, two or wrong parent; wrong actual tree; unrelated old file modification/deletion/mode/type; extra leaf/tree; preexisting root/alias; symlink/submodule/executable; wrong raw SHA/OID/size; patch-limit boundaries. Cases use real disposable object databases through the fixed reader. |
+| Path and scope | Exact allowed-path mismatch and each existing path-policy refusal family, including `.ystack`, traversal, case alias, protected prefix/root/segment and held mode restrictions. Keep limits and original policy bytes. |
+| Source closure and lifetime | Missing/wrong pin, wrong origin, symlinked parent/leaf, module mutation before/after admission, changed source/candidate or held body after admission. Verify refusal at existing final checks with no successful marker. A private copy is enumerated and counted; it cannot widen production loading. |
+| Preserved shadow and reader gates | Keep original frozen authentication, fresh receipt, same anchor/principal/store, retained bytes, provenance/record rebuild, historical/current policy, nonce/lifecycle, sealed rechecks and completion assertions. Run unchanged scope generation/qualification regressions as applicable; no stub success or weakened fallback. |
+
+Use the existing test environment and CI workflow only. Run the new named suite and
+existing `shadow-write.test.sh`, `shadow-enforced.test.sh`,
+`scope-gate-generation.test.sh` and `scope-qualification.test.sh` suites with their supported modes, plus the complete
+six-shard matrix at the source milestone. Keep explicit pure, fixture, genuine and
+native labels. A missing runtime/configuration/authorization yields NOTRUN or BLOCKED
+for that proof, never a simulated pass. Bind exact head/base, source pins, all case
+counts, stdout/stderr and exits. Keep all previous failure records and original debts.
+The reviewer reads the actual named assertions and complete relevant outputs; aggregate
+green alone is insufficient. No workflow edit, installation or widened execution
+permission follows from this source plan.
+
+Record checkpoint two as `SOURCE_SHARED_ADMISSION_SHADOW_ONLY` only when its exact
+static review and all source-checkpoint proof required by the accepted plan have passed. If required source tests are NOTRUN,
+record preparation only and keep the checkpoint pending. This status explicitly
+leaves the actual publisher caller, final integration and G3 incomplete. No partial
+implementation PR or completed #701 is permitted. The same preserved branch may be
+pushed solely for the accepted existing-CI checkpoint, as in section 5.
+
+#### 6.8. Scoped runtime STOP and complete final acceptance
+
+Child 11's concrete transport actions/failures, actual identity and narrow credential
+enforcement, durable incident reservation/dispatch mechanism and independent
+authenticated readback need primary facts under the proper separate access
+authorization. Until accepted exact design and plan bind those facts, stop before
+writing their dependent runtime code or making any real call. Missing facts at this
+boundary do not prevent the fully defined inactive source work above. Do not create
+an empty publisher, generic adapter, arbitrary callable, invented native authority,
+synthetic credential or success result to fill the gap. No new network or credential
+access is needed to prepare this offline source.
 
 Final #701 acceptance retains the binding contract section 7 in full: both actual
-source caller routes through the same admission, real concrete publisher binding,
-finite fake branch-then-PR success, foreign/replaced branch and existing-PR refusal,
-partial effects, crash/cancellation/lost response, durable at-most-once dispatch,
-no retry or renewed incident budget, separate authenticated read-only post-write
-verification, normal package/consumer assembly, full integration and restoration.
-Runtime qualification, credential/sandbox/identity enforcement and first real write
-remain separate reserved gates. Fixtures establish no such real-world evidence.
+source caller routes through the same admission, exact six-field and surrounding
+request/input comparisons, real concrete publisher binding, finite fake branch-then-PR
+success, foreign/replaced branch and existing-PR refusal, partial effects,
+crash/cancellation/lost response, durable at-most-once dispatch, no retry or renewed
+incident budget, separate authenticated read-only post-write verification, normal
+package/consumer assembly, full integration and restoration. Runtime qualification,
+credential/sandbox/identity enforcement and first real write remain separate reserved
+gates. Fixtures establish no such real-world evidence.
 
 ## Out of scope
 
 This G2 writes only its frontmatter path. No plan, code or tests are written here.
-The first later source phase excludes admission/runtime paths, public assembly,
+The first source phase excludes admission/runtime paths. The second permits only
+section 6.6 after its gates. Both source phases exclude public assembly,
 provider/API/SDK access, credential acquisition, new network scope, target execution,
 install, activation, live selection, config/bootstrap, production and real writes.
 No default/protected-branch push, merge, approval, labels or comments beyond the one
@@ -291,9 +563,11 @@ Risk is high: this implements a new security-sensitive contract major and its
 validation boundaries. Independent G2 and a separately accepted high-risk plan
 must precede source preparation. No author accepts their own artifact.
 
-Sections 2–5 answer the intent's package/path/proof question. Section 6 carries the
-source-adoption and runtime-fact questions forward with exact stop conditions.
+Sections 2–5 define the private package checkpoint. Section 6 defines the shared
+admission and actual shadow checkpoint, its adoption gates and its exact limits.
+Its runtime-fact STOP remains specific to the dependent runtime code.
 The complete seven-member baseline is about 3,405 lines before new rules/tests.
 The high-risk plan must justify one readable complete-package review allowance;
 no 300-line target permits dropping owners or proof. Final runtime scope and its
-cumulative implementation review range require the later accepted amendment.
+cumulative implementation review range require a later accepted amendment.
+The second source plan must separately justify its new and inherited cost.
