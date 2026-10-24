@@ -135,6 +135,12 @@ jq_bin="$jqdir/jq"
   "$root/adapters/local-git-materializer/v1/object-closure.c" -o "$jqdir/object-closure"
 /bin/chmod 0555 "$jqdir/object-closure"
 run_path="$jqdir:/usr/bin:/bin"
+scope_python_candidate=$(command -v python3.14 2>/dev/null || command -v python3)
+if [ -x /opt/homebrew/bin/python3.14 ]; then scope_python_candidate=/opt/homebrew/bin/python3.14; fi
+scope_python=$("$scope_python_candidate" -I -S -B -c 'import os,sys;print(os.path.realpath(sys.executable))')
+"$scope_python" -I -S -B -c 'import sys;assert sys.version_info >= (3,11)' || fail 'existing scope Python 3.11+ required'
+/bin/ln -s "$scope_python" "$jqdir/python3"
+
 
 # ---------------------------------------------------------------------------
 # The complete expected evidence layout (work/shadow-self-host-run/plan.md,
@@ -1543,6 +1549,12 @@ scope_dir="$tmp/scope-harness-$b_scope_slug"
 /bin/rm -rf -- "$scope_dir"
 /bin/mkdir -m 700 "$scope_dir"
 evaluator="$root/scope/v1/evaluate-scope.sh"
+legacy_bundle_root="$scope_dir/legacy-bundles"
+legacy_source_git="$scope_dir/legacy-source.git"
+/bin/mkdir -m 700 "$legacy_bundle_root"
+/usr/bin/git init --bare "$legacy_source_git" >"$tmp/legacy-git-init.out" 2>"$tmp/legacy-git-init.err"
+
+
 repo_marker="$root/config/construction-mode.json"
 
 pre_record="$evdir/pre/state/shadow-record.json"
@@ -1834,7 +1846,7 @@ for scope_case in pre post; do
   if ! PATH="$run_path" "$evaluator" evaluate \
       "$scope_dir/scope-$scope_case.json" "$scope_dir/shadow-set.json" "$tmp/dashboard.json" \
       "$scope_dir/risk-$scope_case.json" "$scope_dir/kill-$scope_case.json" "$scope_dir/duty-$scope_case.json" \
-      "$tmp/marker.json" >"$scope_dir/evaluation-$scope_case.json" 2>"$tmp/scope-$scope_case.err"; then
+      "$tmp/marker.json" "$legacy_bundle_root" "$legacy_source_git" >"$scope_dir/evaluation-$scope_case.json" 2>"$tmp/scope-$scope_case.err"; then
     fail "scope harness ($scope_case): evaluate-scope.sh refused the two real shadow records ($(cat "$tmp/scope-$scope_case.err"))"
   fi
 # A seeded failing eval keeps inputs well-formed while yielding scope.eval-failing.
@@ -1842,15 +1854,17 @@ for scope_case in pre post; do
 # compatibility harness creates no authority or workflow enablement.
   "$jq_bin" -e -n --slurpfile e "$scope_dir/evaluation-$scope_case.json" '
     $e[0].body.outcome == "not-proposable" and
-    $e[0].body.reason_ids == ["scope.eval-failing"] and
+    $e[0].body.reason_ids == ["scope.eval-failing","scope.sandbox-receipt-missing"] and
     $e[0].body.qualification ==
       {state:"unavailable",reason_id:"scope.enablement-requires-operator-pr"} and
     $e[0].body.authority == "none" and $e[0].body.enabled == false and
     ($e[0].body.evidence.shadow_records | length) == 2 and
+    ($e[0].body.evidence.shadow_bundle_facts | length == 2 and
+      all(.eligible == false and .authentication.state == "missing")) and
     $e[0].body.proposal.state == "absent"
   ' >/dev/null 2>&1 ||
-    fail "scope harness ($scope_case): the evaluator did not report the exact not-proposable classification, with the specific scope.eval-failing refusal reason and no live authority"
-  pass "scope harness ($scope_case case's own identity, inactive compatibility only): the shipped evaluate-scope.sh accepts the two real unchanged shadow records and the nine-family dashboard under its complete shape and reference checks, with this case's own identity fully field-validated, and reports the exact not-proposable classification in its own vocabulary — refused for the specific scope.eval-failing reason, distinct from scope.malformed — with qualification still unavailable and no live authority"
+    fail "scope harness ($scope_case): the evaluator did not report the exact not-proposable classification, with the specific eval-failing and authentic-receipt-missing refusal reasons and no live authority"
+  pass "scope harness ($scope_case case's own identity, inactive compatibility only): the shipped evaluate-scope.sh accepts the two real unchanged shadow records and the nine-family dashboard under its complete shape and reference checks, with this case's own identity fully field-validated, and reports the exact not-proposable classification in its own vocabulary — refused for the specific eval-failing and authentic-receipt-missing reasons, distinct from scope.malformed — with qualification still unavailable and no live authority"
 done
 
 # ===========================================================================

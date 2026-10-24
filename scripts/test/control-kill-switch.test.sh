@@ -228,6 +228,19 @@ PATH="$bin:/usr/bin:/bin" "$evaluator" evaluate "$policy_set" "$state" "$attempt
 /usr/bin/cmp -s "$tmp/cleared.out" "$tmp/cleared-repeat.out" || fail 'repeat bytes'
 pass 'deterministic repeat'
 
+register_state="$tmp/register-state.json"
+"$jq_bin" -S -c '.body.register_ref={schema_version:1,kind:"kill_switch_register",id:"register.test",sha256:("9"*64)}' \
+  "$state" >"$register_state" || fail 'register state fixture'
+make_attempt "$register_state" "$duty" "$tmp/register-attempt.json" || fail 'register attempt'
+expect_eval register-state-compatible satisfied kill.cleared-current "$register_state" "$tmp/register-attempt.json" "$duty"
+"$jq_bin" -S -c '.body.entries[0].state="stop"' "$register_state" >"$tmp/register-stop.json"
+make_attempt "$tmp/register-stop.json" "$duty" "$tmp/register-stop-attempt.json" || fail 'register stop attempt'
+expect_eval register-stop-priority violated kill.stop.global "$tmp/register-stop.json" "$tmp/register-stop-attempt.json" "$duty"
+for field in kind schema_version sha256 extra; do
+  "$jq_bin" -S -c --arg field "$field" '.body.register_ref[$field]="invalid"' "$register_state" >"$tmp/register-invalid.json"
+  expect_error "register-invalid-$field" E_RELATION "$policy_set" "$tmp/register-invalid.json" "$tmp/register-attempt.json" "$duty"
+done
+
 for scope in global repository workflow stage attempt; do
   stopped="$tmp/stop-$scope.json"
   "$jq_bin" -S -c --arg scope "$scope" \

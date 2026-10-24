@@ -2959,6 +2959,316 @@ def cmd_digest(argv):
         sys.stdout.write(sha256_hex(handle.read()) + "\n")
 
 
+class _CoverageInstallation:
+    def __init__(self, operation="coverage-read"):
+        require(operation in {"coverage-read", "kill-register-read"}, "E_USAGE")
+        self.operation = operation
+        prefix = "coverage-source" if operation == "coverage-read" else "kill-register-source"
+        import types
+        self.held, self.files = [], {}
+        try:
+            self.root = install_directory()
+            require(self.root == "/usr/local/libexec/ystack-sandbox/v1/supervisor"
+                    and os.path.realpath(__file__) == self.root + "/host-supervisor.py", "E_CONFIG")
+            host_raw = self.open(self.root + "/host-config.json", 1024 * 1024)
+            self.host, loaded_raw = load_config(self.files[self.root + "/host-config.json"][0])
+            require(host_raw == loaded_raw and self.host["principal_uid"] == os.getuid() != 0, "E_CONFIG")
+            normalizer_raw = self.open(self.root + "/coverage-source.py", 1024 * 1024)
+            self.n = types.ModuleType("coverage_source")
+            exec(compile(normalizer_raw, self.root + "/coverage-source.py", "exec"), self.n.__dict__)
+            n = self.n if operation == "coverage-read" else self.n._KillNormalizer
+            self.n = n
+            config_raw = self.open(self.root + "/" + prefix + "-config.json", n.DOCUMENT_LIMIT)
+            self.config = n.source_config(config_raw, self.host)["body"]
+            require(self.config["accepted_set_path"] == self.root + "/" + prefix + "-accepted-identities.json", "E_CONFIG")
+            self.accepted_raw = self.open(self.config["accepted_set_path"], n.DOCUMENT_LIMIT)
+            self.package_raw = self.open(self.config["source_package_path"], n.DOCUMENT_LIMIT)
+            package = n.package(self.package_raw, self.config)
+            for row in package["body"]["files"]:
+                raw = self.open(row["path"], 16 * n.DOCUMENT_LIMIT if row["role"] == "collector" else n.DOCUMENT_LIMIT)
+                n.require(n.digest(raw) == row["sha256"])
+                if row["role"] == "normalizer":
+                    n.require(row["path"] == self.root + "/coverage-source.py" and raw == normalizer_raw)
+                elif row["role"].startswith("schema."):
+                    n.query_schema(raw, row["role"][7:])
+                elif row["role"] == "collector":
+                    require(os.fstat(self.files[row["path"]][0]).st_mode & 0o111 != 0, "E_CONFIG")
+            supervisor_raw = self.open(self.root + "/host-supervisor.py", 16 * n.DOCUMENT_LIMIT)
+            self.open(sys.executable, 16 * n.DOCUMENT_LIMIT, hardlinks=True)
+            n.accepted(self.accepted_raw, self.config, n.digest(supervisor_raw), n.digest(self.package_raw),
+                       self.config["collector_sha256"], n.digest(normalizer_raw))
+            self.identity = n.source_identity(self.config, self.accepted_raw, n.digest(supervisor_raw), n.digest(normalizer_raw))
+            self.recheck()
+        except BaseException:
+            self.close()
+            raise
+
+    def open(self, path, maximum, hardlinks=False):
+        require(os.path.realpath(path) == path, "E_INSTALL_ACL")
+        fds = secure_ancestor_fds(path, os.getuid())
+        for index, fd in enumerate(fds):
+            self.held.append((fd, path if index == len(fds) - 1 else None, self.state(fd)))
+        for index, fd in enumerate(fds):
+            state = os.fstat(fd)
+            require(state.st_uid == 0 and not (state.st_mode & 0o022), "E_INSTALL_ACL")
+            if index == len(fds) - 1:
+                require(stat.S_ISREG(state.st_mode) and (hardlinks or state.st_nlink == 1)
+                        and 0 < state.st_size <= maximum, "E_CONFIG")
+        fd = fds[-1]
+        raw = os.pread(fd, maximum + 1, 0)
+        require(0 < len(raw) <= maximum, "E_CONFIG")
+        if path in self.files:
+            require(self.files[path][1] == raw, "E_CONFIG")
+        self.files[path] = (fd, raw)
+        return raw
+
+    def owned_directory(self, path, mode):
+        require(os.path.realpath(path) == path, "E_STORE")
+        fds = secure_ancestor_fds(path, os.getuid())
+        fd = fds[-1]
+        for ancestor in fds[:-1]:
+            self.held.append((ancestor, None, self.state(ancestor)))
+        try:
+            for ancestor in fds[:-1]:
+                state = os.fstat(ancestor)
+                require(state.st_uid == 0 and not state.st_mode & 0o022, "E_INSTALL_ACL")
+            state = os.fstat(fd)
+            require(stat.S_ISDIR(state.st_mode) and state.st_uid == self.host["principal_uid"]
+                    and stat.S_IMODE(state.st_mode) == mode, "E_STORE")
+            return fd
+        except BaseException:
+            os.close(fd)
+            raise
+
+    @staticmethod
+    def state(fd):
+        state = os.fstat(fd)
+        return (state.st_dev, state.st_ino, state.st_mode, state.st_uid, state.st_gid,
+                state.st_nlink, state.st_size, state.st_mtime_ns, state.st_ctime_ns)
+
+    def recheck(self):
+        for fd, path, before in self.held:
+            require(self.state(fd) == before, "E_STALE")
+            check_acl_fd(fd, os.getuid())
+            if path is not None:
+                current = os.stat(path, follow_symlinks=False)
+                require((current.st_dev, current.st_ino) == before[:2], "E_STALE")
+        for fd, raw in self.files.values():
+            require(os.pread(fd, len(raw) + 1, 0) == raw, "E_STALE")
+
+    def close(self):
+        held, self.held = self.held, []
+        for fd, _path, _before in reversed(held):
+            os.close(fd)
+
+
+def _coverage_collector(installation, request_raw):
+    import selectors
+    child = None
+    selector = selectors.DefaultSelector()
+    end = time.monotonic() + 105
+    old = {}
+    cancelled = [False]
+    def cancel(_number, _frame):
+        cancelled[0] = True
+    try:
+        for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            old[number] = signal.signal(number, cancel)
+        installation.recheck()
+        child = subprocess.Popen([installation.config["collector_path"], installation.n.OPERATION],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env={"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"}, close_fds=True, start_new_session=True)
+        outputs = {child.stdout.fileno(): bytearray(), child.stderr.fileno(): bytearray()}
+        limits = {child.stdout.fileno(): 65 * 1024 * 1024 + 16384, child.stderr.fileno(): 16384}
+        for stream in (child.stdin, child.stdout, child.stderr):
+            os.set_blocking(stream.fileno(), False)
+        selector.register(child.stdin, selectors.EVENT_WRITE)
+        selector.register(child.stdout, selectors.EVENT_READ)
+        selector.register(child.stderr, selectors.EVENT_READ)
+        sent = 0
+        while selector.get_map():
+            require(not cancelled[0] and time.monotonic() < end, "E_SOURCE_RUNTIME")
+            for key, _events in selector.select(min(0.1, max(0, end - time.monotonic()))):
+                stream = key.fileobj
+                if stream is child.stdin:
+                    try:
+                        count = os.write(stream.fileno(), request_raw[sent:sent + 65536])
+                    except BlockingIOError:
+                        continue
+                    require(count > 0, "E_SOURCE_RUNTIME")
+                    sent += count
+                    if sent == len(request_raw):
+                        selector.unregister(stream)
+                        stream.close()
+                else:
+                    try:
+                        raw = os.read(stream.fileno(), 65536)
+                    except BlockingIOError:
+                        continue
+                    if not raw:
+                        selector.unregister(stream)
+                        stream.close()
+                    else:
+                        buffer = outputs[key.fd]
+                        require(len(buffer) + len(raw) <= limits[key.fd], "E_SOURCE_LIMIT")
+                        buffer.extend(raw)
+        result = child.wait(timeout=max(0.001, end - time.monotonic()))
+        require(not cancelled[0] and result == 0, "E_SOURCE_RUNTIME")
+        stdout, stderr = list(outputs.values())
+        require(not stderr, "E_SOURCE_RUNTIME")
+        installation.recheck()
+        records = frame_read(bytes(stdout))
+        require(frame_write(records) == bytes(stdout), "E_SOURCE_FRAME")
+        return records
+    finally:
+        try:
+            if child is not None:
+                try:
+                    cleanup_end = time.monotonic() + 10
+                    if child.returncode is None:
+                        try:
+                            os.killpg(child.pid, signal.SIGTERM)
+                        except ProcessLookupError:
+                            pass
+                        try:
+                            child.wait(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            try:
+                                os.killpg(child.pid, signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass
+                            child.wait(timeout=max(0.001, cleanup_end - time.monotonic()))
+                    try:
+                        os.killpg(child.pid, 0)
+                    except ProcessLookupError:
+                        pass
+                    else:
+                        # A collector leader exit never releases ownership of its descendants.
+                        os.killpg(child.pid, signal.SIGKILL)
+                        while time.monotonic() < cleanup_end:
+                            try:
+                                os.killpg(child.pid, 0)
+                            except ProcessLookupError:
+                                break
+                            time.sleep(0.01)
+                        else:
+                            refuse("E_SOURCE_RUNTIME")
+                        refuse("E_SOURCE_RUNTIME")
+                finally:
+                    for stream in (child.stdin, child.stdout, child.stderr):
+                        if stream is not None:
+                            stream.close()
+        finally:
+            selector.close()
+            for number, handler in old.items():
+                signal.signal(number, handler)
+
+
+def write_coverage_payload(attempt_fd, uid, gid, request_raw, raw_manifest, observation, pages):
+    payload = mkdir_excl(attempt_fd, "payload", uid, gid)
+    try:
+        for name, raw in (("request.json", request_raw), ("raw-manifest.json", raw_manifest), ("observation.json", observation)):
+            write_excl(payload, name, raw, uid, gid)
+        raw_fd = mkdir_excl(payload, "raw", uid, gid)
+        try:
+            for index, raw in enumerate(pages):
+                write_excl(raw_fd, f"{index:04d}", raw, uid, gid)
+            os.fsync(raw_fd)
+        finally:
+            os.close(raw_fd)
+        os.fsync(payload)
+    finally:
+        os.close(payload)
+    os.fsync(attempt_fd)
+
+
+def run_coverage_read(argv):
+    require(argv in (["coverage-read"], ["kill-register-read"]), "E_USAGE")
+    operation = argv[0]
+    installation = _CoverageInstallation(operation)
+    store = work = nonce_dir = attempt = None
+    try:
+        require(argv == [operation], "E_USAGE")
+        n, host = installation.n, installation.host
+        request_raw = sys.stdin.buffer.read(n.DOCUMENT_LIMIT + 1)
+        requested = n.request(request_raw)
+        body = requested["body"]
+        require(body["source_package_ref"] == n.doc_ref(installation.package_raw)
+                and body["source_accepted_set_ref"] == n.doc_ref(installation.accepted_raw), "E_CONFIG")
+        if operation == "kill-register-read":
+            require(all(body[key] == installation.config[key] for key in ("control_repository", "default_branch", "bootstrap")), "E_CONFIG")
+        uid, gid = host["principal_uid"], host["consumer_gid"]
+        store = check_store_root(host["store_root"], uid, gid)
+        store_checked = installation.owned_directory(host["store_root"], 0o750)
+        try:
+            require((os.fstat(store).st_dev, os.fstat(store).st_ino) ==
+                    (os.fstat(store_checked).st_dev, os.fstat(store_checked).st_ino), "E_STORE")
+        finally:
+            os.close(store_checked)
+        work = installation.owned_directory(host["work_root"], 0o700)
+        work_state = os.fstat(work)
+        require(work_state.st_uid == uid and stat.S_IMODE(work_state.st_mode) == 0o700, "E_STORE")
+        check_acl_fd(work, uid)
+        work_before = os.fstat(work)
+        require(os.path.realpath(host["work_root"]) == host["work_root"]
+                and os.path.realpath(host["store_root"]) == host["store_root"], "E_STORE")
+        try:
+            os.mkdir("nonces", 0o700, dir_fd=work)
+        except FileExistsError:
+            pass
+        nonce_dir = os.open("nonces", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=work)
+        state = os.fstat(nonce_dir)
+        require(state.st_uid == uid and stat.S_IMODE(state.st_mode) == 0o700, "E_STORE")
+        check_acl_fd(nonce_dir, uid)
+        try:
+            write_excl(nonce_dir, sha256_hex(bytes.fromhex(body["nonce"])), b"", uid, gid, 0o400)
+        except FileExistsError:
+            refuse("E_NONCE_REUSED")
+        os.fsync(nonce_dir)
+        os.fsync(work)
+        attempt = create_attempt_dir(store, uid, gid, requested["id"])
+        started = utc_stamp(time.time())
+        records = _coverage_collector(installation, request_raw)
+        raw_manifest, pages = n.captured(records, request_raw)
+        observation = n.normalize(raw_manifest, pages, request_raw)
+        require(n.normalize(raw_manifest, pages, request_raw) == observation, "E_SOURCE_NORMALIZATION")
+        installation.recheck()
+        require(store_root_state_ok(store, uid, gid), "E_STORE")
+        for path, fd in ((host["store_root"], store), (host["work_root"], work)):
+            named, held = os.stat(path, follow_symlinks=False), os.fstat(fd)
+            require((named.st_dev, named.st_ino) == (held.st_dev, held.st_ino), "E_STALE")
+        require((work_before.st_dev, work_before.st_ino) == (os.fstat(work).st_dev, os.fstat(work).st_ino), "E_STALE")
+        write_coverage_payload(attempt, uid, gid, request_raw, raw_manifest, observation, pages)
+        completed = utc_stamp(time.time())
+        receipt = canonical({"schema_version": 1, "kind": "forge_coverage_source_receipt", "id": requested["id"], "body": {
+            "operation": n.OPERATION, "version": 1, "store_id": host["store_id"], "attempt_id": requested["id"],
+            "request_sha256": sha256_hex(request_raw), "nonce": body["nonce"], "source_identity": installation.identity,
+            "query": (n.query(body, observation) if operation == "kill-register-read" else n.query(body)), "raw_manifest_sha256": sha256_hex(raw_manifest),
+            "observation_sha256": sha256_hex(observation), "started_at": started, "completed_at": completed,
+            "outcome": "complete", "effects": ["read-forge-metadata"]}})
+        if operation == "kill-register-read":
+            value = json.loads(receipt)
+            value["kind"] = "kill_register_source_receipt"
+            value["body"]["call_id"] = value["body"].pop("attempt_id")
+            del value["body"]["nonce"]
+            value["body"]["effects"] = ["read-forge-metadata", "read-register"]
+            receipt = canonical(value)
+        n.receipt(receipt, request_raw, host, installation.identity, raw_manifest, observation)
+        installation.recheck()
+        writing, attempt = attempt, None
+        write_receipt_file(store, writing, uid, gid, receipt)
+        installation.recheck()
+    except Refusal:
+        raise
+    except Exception:
+        refuse("E_SOURCE_RUNTIME")
+    finally:
+        for fd in (attempt, nonce_dir, work, store):
+            if fd is not None:
+                os.close(fd)
+        installation.close()
+
+
 TEST_ONLY_COMMANDS = ("frame-write", "frame-read", "digest")
 
 
@@ -2978,7 +3288,15 @@ def main():
             cmd_digest(rest)
         return
     try:
-        run_launch(sys.argv[1:])
+        if sys.argv[1:] and sys.argv[1] in {"coverage-read", "kill-register-read"}:
+            try:
+                run_coverage_read(sys.argv[1:])
+            except Refusal:
+                raise
+            except Exception:
+                refuse("E_SOURCE_RUNTIME")
+        else:
+            run_launch(sys.argv[1:])
     except Refusal as exc:
         sys.stderr.write(exc.code + "\n")
         sys.exit(65)

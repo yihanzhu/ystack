@@ -92,7 +92,9 @@ def state_shape_ok:
   exact(["body","id","kind","schema_version"]) and
   .schema_version == 1 and .kind == "kill_switch_state" and (.id | id_ok) and
   (.body |
-    exact(["activation_state","attempt_id","authority_epoch","entries","revision"]) and
+    (exact(["activation_state","attempt_id","authority_epoch","entries","revision"]) or
+     (exact(["activation_state","attempt_id","authority_epoch","entries","register_ref","revision"]) and
+      (.register_ref | identity_ref_ok("kill_switch_register")))) and
     .activation_state == "inactive" and (.attempt_id | id_ok) and
     (.authority_epoch | id_ok) and
     (.revision | type == "number" and . >= 1 and . <= 9007199254740991 and

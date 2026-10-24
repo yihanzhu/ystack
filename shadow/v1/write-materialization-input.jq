@@ -30,8 +30,18 @@ def request($original; $m):
     else . end) | sort_by(.input_id));
 
 ($metadata | require(length==1) | .[0]) as $m |
+require($phase == "stage-request" or $phase == "final-input") |
+require(($m | type) == "object" and ($m | keys | sort) ==
+  (["allowed_paths", "attempt_id", "claim_sha256", "contract", "environment_id", "finish", "incident_id", "output_contract", "patch", "policy", "record_form", "suffix", "verify"] +
+    (if $phase == "final-input" then ["stage_request_sha256"] else [] end) | sort)) |
+require($m.record_form == "withheld-write.v1" or $m.record_form == "withheld-write-policy.v1") |
+require($m.incident_id | type == "string" and test("\\A[a-z0-9][a-z0-9._-]{0,127}\\z")) |
+require($m.allowed_paths == ((["accepted-identities.json", "claim.json", "consumer-provenance.json", "decision.json", "duty-evaluation.json", "evaluator-driver.txt", "evaluator-program.txt", "evidence-manifest.json", "file-digest-result.json", "incident.json", "materialization-input.json", "materialization-response.json", "origin-observation.json", "payload-stderr.txt", "payload-stdout.txt", "policy-set.json", "policy.json", "preparation-manifest.json", "preparation-record.json", "qualified-identity.json", "registry.json", "sandbox-check.json", "sandbox-evaluation.json", "sandbox-expectation.json", "sandbox-receipt.json", "sandbox-request.json", "shadow-record.json", "trace-ledger.json", "trace-receipt.json", "bundle.json", "eval-seed.json", "README.md"] +
+  (if $m.record_form == "withheld-write-policy.v1" then ["scope-policy.json"] else [] end)) |
+  map("ystack-evidence/" + $m.incident_id + "/" + .) | sort)) |
+
 require(($contract|fromjson) == {schema_version:1,kind:"local_git_materialization_contract",
-  allowed_paths:$m.allowed_paths,max_patch_bytes:1048576,max_changed_paths:32,
+  allowed_paths:$m.allowed_paths,max_patch_bytes:1048576,max_changed_paths:(if $m.record_form == "withheld-write-policy.v1" then 33 else 32 end),
   allowed_modes:["100644","100755"],allow_binary_patch:false,allow_symlinks:false,
   allow_submodules:false,candidate_repository_kind:"bare"}) |
 if $phase=="stage-request" then

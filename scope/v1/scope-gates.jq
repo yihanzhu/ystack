@@ -456,11 +456,8 @@ def absent_section_ok($reasons):
   exact(["reason_id","state"]) and .state == "absent" and
   (.reason_id as $reason | $reasons | index($reason) != null);
 
-# The sandbox evaluation the slice copies out of control/v1/sandbox.jq when the
-# environment is listed and that evaluator returned a document. The verdict
-# vocabulary and the satisfied/reason pairing are that evaluator's own
-# (control/v1/sandbox.jq:254-256).
-def environment_evaluation_ok:
+# Each record form retains the reason from its actual declaration or bound evaluator.
+def environment_evaluation_ok($form):
   type == "object" and
   (if .state == "absent"
    then absent_section_ok(["environment.evaluation-refused","environment.unlisted"])
@@ -473,7 +470,8 @@ def environment_evaluation_ok:
       (.reason_ids |
        type == "array" and length >= 1 and length <= 64 and all(.[]; id_ok)) and
       ((.verdict == "satisfied") ==
-       (.reason_ids == ["sandbox.declaration-satisfied"])) and
+       (.reason_ids == [(if $form == "legacy" then "sandbox.declaration-satisfied"
+                        else "sandbox.verifier-binding-satisfied" end)])) and
       (.evaluation_ref |
        shadow_ref_ok("shadow-sandbox-evaluation";
          "application/vnd.ystack.control-evaluation+json")))
@@ -484,7 +482,7 @@ def environment_evaluation_ok:
 # relations the slice asserts over that receipt before recording it: the
 # materialization ran at this record's own repository and revision, changed
 # nothing, and named the core v2 stage result it produced.
-def materialization_ok($revision; $repository):
+def materialization_ok($revision; $repository; $form):
   type == "object" and
   (if .state == "absent"
    then absent_section_ok(["materialization.not-attempted","materialization.refused"])
@@ -493,27 +491,27 @@ def materialization_ok($revision; $repository):
      (.value |
       exact(["adapter_id","candidate","outcome","source","stage_result_ref"]) and
       .adapter_id == "adapter.local-git-materializer.v1" and
-      # A shadow reproduction materializes the incident revision with an empty
-      # patch, so the only materialization a real record can carry is a
-      # no-change one; any other stage-result outcome is not a shadow record.
-      .outcome == "no-change" and
+      .outcome == (if $form == "withheld-write.v1" or $form == "withheld-write-policy.v1" then "changed" else "no-change" end) and
       (.candidate |
        exact(["commit_id","hash_algorithm","parent_commit_id","repository_kind",
          "tree_id"]) and
        .repository_kind == "bare" and
        .hash_algorithm == $revision.hash_algorithm and
-       .commit_id == $revision.commit_id and
+       (.commit_id | oid_ok($revision.hash_algorithm)) and
+       (if $form == "withheld-write.v1" or $form == "withheld-write-policy.v1" then true else .commit_id == $revision.commit_id end) and
        .parent_commit_id == $revision.commit_id and
        (.tree_id | oid_ok($revision.hash_algorithm))) and
-      .source == {repository_id: $repository,
-        hash_algorithm: $revision.hash_algorithm,
-        commit_id: $revision.commit_id, tree_id: .candidate.tree_id} and
+      (. as $materialization | .source |
+       exact(["repository_id","hash_algorithm","commit_id","tree_id"]) and
+       .repository_id == $repository and .hash_algorithm == $revision.hash_algorithm and
+       .commit_id == $revision.commit_id and (.tree_id | oid_ok($revision.hash_algorithm)) and
+       (if $form == "withheld-write.v1" or $form == "withheld-write-policy.v1" then true else .tree_id == $materialization.candidate.tree_id end)) and
       (.stage_result_ref | core_document_ref_ok("stage_result")))
    end);
 
 # The check block: the incident's failing check verbatim, and the execution
 # section the slice records only after digesting the blob at that path.
-def check_block_ok:
+def check_block_ok($form):
   . as $check |
   exact(["execution","failing_check"]) and
   ($check.failing_check | failing_check_ok) and
@@ -528,7 +526,7 @@ def check_block_ok:
       ($check.failing_check.kind == "file-digest") and
       (.value |
        exact(["matches_expected","observed_sha256","tool_id"]) and
-       .tool_id == "tool.git-blob-digest" and
+       .tool_id == (if $form == "legacy" then "tool.git-blob-digest" else "tool.verifier" end) and
        (.observed_sha256 | sha256_ok) and
        .matches_expected ==
          (.observed_sha256 == $check.failing_check.expected_sha256))
@@ -586,17 +584,33 @@ def slice_state_ok:
          (.value.matches_expected == ($state.execution == "matched"))
     end));
 
+def scope_policy_ref_ok:
+  exact(["name","size_bytes","sha256"]) and .name == "scope-policy.json" and
+  (.size_bytes | int_ok and . >= 1 and . <= 1048576) and (.sha256 | sha256_ok);
+
 def shadow_record_ok:
   exact(["body","id","kind","schema_version"]) and
   .schema_version == 1 and .kind == "shadow_reproduction_record" and
   (.id | id_ok) and
   (.body |
    . as $body |
+   ($body.record_form // "legacy") as $form |
+   ($form == "legacy" or $form == "enforced-reproduction.v1" or $form == "withheld-write.v1" or $form == "withheld-write-policy.v1") and
    exact(["activation_state","authority","check","deploy_authority","effects",
      "environment","evaluation_mode","git_revision_ref","incident_ref",
      "materialization","observed_at","outcome","qualification",
      "qualified_identity","qualified_identity_ref","reason_id",
-     "shadow","target_repository_id","trace_ledger_ref"]) and
+     "shadow","target_repository_id","trace_ledger_ref"] +
+     (if $form == "legacy" then [] else ["record_form","sandbox","producer_invocations","consumer_provenance_ref"] end) +
+     (if $form == "withheld-write.v1" or $form == "withheld-write-policy.v1" then ["write"] else [] end) +
+     (if $form == "withheld-write-policy.v1" then ["scope_policy_ref"] else [] end)) and
+   (if $form == "withheld-write-policy.v1" then (.scope_policy_ref | scope_policy_ref_ok) else true end) and
+   (if $form == "legacy" then true else
+      (.producer_invocations | int_ok) and .producer_invocations == 0 and
+      (.consumer_provenance_ref | exact(["schema_version","kind","id","sha256"]) and
+       .schema_version == 1 and .kind == "shadow_consumer_provenance" and (.id | id_ok) and (.sha256 | sha256_ok)) and
+      (.sandbox | type == "object" and .state == "satisfied" and
+       .reason_id == "shadow.sandbox-satisfied") end) and
    .activation_state == "inactive" and .authority == "none" and
    .deploy_authority == "none" and .shadow == true and
    .evaluation_mode == "observation-only" and
@@ -637,10 +651,10 @@ def shadow_record_ok:
     (.registry_ref |
      shadow_ref_ok("shadow-environment-registry";
        "application/vnd.ystack.shadow-environment-registry+json")) and
-    (.evaluation | environment_evaluation_ok)) and
+    (.evaluation | environment_evaluation_ok($form))) and
    (.materialization |
-    materialization_ok($body.git_revision_ref; $body.target_repository_id)) and
-   (.check | check_block_ok) and
+    materialization_ok($body.git_revision_ref; $body.target_repository_id; $form)) and
+   (.check | check_block_ok($form)) and
    # The shadow slice's closed outcome vocabulary, which is the one this
    # component's policy names; anything else is not a shadow record this
    # evaluator understands, so the set is malformed.
@@ -650,10 +664,78 @@ def shadow_record_ok:
     index($outcome) != null) and
    slice_state_ok);
 
+def measured_document_ref:
+  exact(["schema_version","kind","id","sha256"]) and
+  (.schema_version | int_ok) and .schema_version == 1 and
+  (.kind | id_ok) and (.id | id_ok) and (.sha256 | sha256_ok);
+
+def measured_row:
+  exact(["record_ref","record_form","claimed","eligible","environment_id","authentication","facts"]) and
+  (.record_ref | measured_document_ref and .kind == "shadow_reproduction_record") and
+  (.record_form as $form | ["legacy","enforced-reproduction.v1","withheld-write.v1","withheld-write-policy.v1"] | index($form) != null) and
+  (.claimed | type == "boolean") and (.eligible | type == "boolean") and (.environment_id | id_ok) and
+  (.authentication | exact(["state"]) and (.state == "missing" or .state == "authenticated")) and
+  (if .authentication.state == "missing" then .facts == {} else
+    .eligible and (.facts |
+      exact(["bundle_ref","receipt_ref","check_ref","fresh_origin_ref","archived_origin_ref",
+             "registry_ref","accepted_set_ref","materialization_ref"] +
+        (if .scope_policy_ref != null then ["scope_policy_ref"] else [] end)) and
+      all(.bundle_ref,.receipt_ref,.check_ref,.fresh_origin_ref,.archived_origin_ref,.registry_ref,.accepted_set_ref;
+          measured_document_ref) and
+      (.materialization_ref | exact(["sha256"]) and (.sha256 | sha256_ok))) end) and
+  (if .authentication.state == "authenticated" then
+     (if .record_form == "withheld-write-policy.v1" then (.facts.scope_policy_ref | scope_policy_ref_ok)
+      else (.facts | has("scope_policy_ref") | not) end)
+   else true end) and
+  (if .record_form == "legacy" then (.eligible | not) and .authentication.state == "missing" else true end);
+
+def measured_command:
+  (if .role == "coverage-source-boundary" then
+     exact(["role","argv_sha256","executable_sha256","component_sha256","request_sha256","python_sha256"]) and
+     (.request_sha256 | sha256_ok) and (.python_sha256 | sha256_ok)
+   else exact(["role","argv_sha256","executable_sha256","component_sha256"]) end) and
+  (.role | id_ok) and (.argv_sha256 | sha256_ok) and
+  (.executable_sha256 | sha256_ok) and (.component_sha256 | sha256_ok);
+
+def measured_coverage($scope_doc):
+  (. == {state:"stale"}) or
+  (exact(["state","request_ref","receipt_ref","origin_ref","observation_sha256","interval",
+          "coverage_base","evaluated_revision","current_binding_sha256","qualifying_rows"]) and
+   .state == "authenticated" and
+   (.request_ref | measured_document_ref and .kind == "coverage_source_request") and
+   (.receipt_ref | measured_document_ref and .kind == "forge_coverage_source_receipt") and
+   (.origin_ref | measured_document_ref and .kind == "shadow_origin_observation") and
+   (.observation_sha256 | sha256_ok) and (.current_binding_sha256 | sha256_ok) and
+   (.interval | exact(["sha256","commit_count"]) and (.sha256 | sha256_ok) and
+      (.commit_count | int_ok and . >= 1 and . <= 4096)) and
+   .coverage_base == $scope_doc.body.coverage.coverage_base and
+   .evaluated_revision == $scope_doc.body.qualified_identity.target_revision and
+   (.qualifying_rows | bounded_set(1;16;measured_row;.record_ref.sha256)) and
+   (.qualifying_rows as $rows | $scope_doc.body.coverage.qualifying_shadow_record_refs | all(. as $ref |
+     $rows | any(.record_ref == $ref and .claimed and .eligible and .authentication.state == "authenticated"))));
+
+def measured_observation($scope_doc; $set):
+  exact(["schema_version","kind","id","body"]) and .schema_version == 1 and
+  .kind == "scope_shadow_evidence_observation" and .id == $scope_doc.id and
+  (.body |
+   exact(["scope_ref","shadow_set_ref","rows","git","commands"] +
+     (if $scope_doc.body | has("coverage") then ["coverage"] else [] end)) and
+   (if $scope_doc.body | has("coverage") then (.coverage | measured_coverage($scope_doc)) else true end) and
+   .scope_ref == document_ref($scope_doc;$scope_sha) and
+   .shadow_set_ref == document_ref($set;$shadow_set_sha) and
+   (.rows | bounded_set(1;16;measured_row;.record_ref.sha256)) and
+   (.git | exact(["repository_kind","hash_algorithm","config_sha256"]) and
+    .repository_kind == "bare" and
+    .hash_algorithm == $scope_doc.body.qualified_identity.target_revision.hash_algorithm and
+    (.config_sha256 | sha256_ok)) and
+   (.commands | type == "array" and length >= 3 and length <= 4096 and
+    all(.[]; measured_command)));
+
 $policy[0].body as $p |
 $scope[0] as $scope_doc |
 $scope_doc.body as $s |
 $s.qualified_identity as $identity |
+($s.workflow_id == "workflow.shadow-evidence-commit" and $s.task_class == "task.commit-shadow-evidence") as $covered_write |
 $s.gate_evidence_refs as $gate_refs |
 $shadow_set[0] as $set |
 $dashboard[0] as $dash |
@@ -798,7 +880,7 @@ $duty_doc.body.verdict as $verdict |
 (if $set_ok then
    [range(0; $set.body.records | length) as $index |
     $set.body.records[$index] as $record |
-    {schema_version: 1, kind: "shadow_reproduction_record", id: $record.id,
+    {record_form: ($record.body.record_form // "legacy"), schema_version: 1, kind: "shadow_reproduction_record", id: $record.id,
      sha256: $record_shas[$index],
      environment_id: $record.body.environment.environment_id,
      outcome: $record.body.outcome,
@@ -810,7 +892,7 @@ $duty_doc.body.verdict as $verdict |
 # The two binding fields are dropped from the reported evidence: they are how a
 # record is matched to this scope, not new facts about it, and the scope already
 # carries both.
-($bound_records | map(del(.qualified_identity, .target_revision))) as $records |
+($bound_records | map(del(.qualified_identity, .target_revision, .record_form))) as $records |
 
 # The scope names the shadow records it claims as its own, by id and by digest.
 # A supplied record counts only when one of those refs names it exactly, so a
@@ -834,10 +916,18 @@ def claimed_by_scope($refs): . as $record |
 # target version, and a record from another identity is evidence about a
 # different scope; either way it does not qualify this one, and a required
 # environment left uncovered by the remainder is `scope.shadow-evidence-missing`.
+($claimed | map(select(.target_repository_id == $s.target_repository_id and
+  .target_revision == $identity.target_revision and .qualified_identity == $identity))) as $matching_declared |
+($measured | length == 1 and (.[0] | measured_observation($scope_doc;$set))) as $measured_ok |
+($measured[0].body.rows // []) as $measured_rows |
+($bound_records | all(. as $record | $measured_rows |
+  any(.record_ref.id == $record.id and .record_ref.sha256 == $record.sha256 and
+      .record_form == $record.record_form and .environment_id == $record.environment_id))) as $measured_bound |
 ($claimed |
- map(select(.target_repository_id == $s.target_repository_id and
-   .target_revision == $identity.target_revision and
-   .qualified_identity == $identity))) as $mine |
+ map(select(.record_form != "legacy" and .target_repository_id == $s.target_repository_id and
+   .target_revision == $identity.target_revision and .qualified_identity == $identity)) |
+ map(select(. as $record | $measured_rows | any(.record_ref.sha256 == $record.sha256 and
+   .eligible and .claimed and .authentication.state == "authenticated")))) as $mine |
 
 # A glob is protected when it names, or could expand into, a path the roadmap's
 # high-risk list reserves. A wildcard in any directory segment could expand into
@@ -888,22 +978,29 @@ def claimed_by_scope($refs): . as $record |
     else empty end]
  else ["scope.eval-family-unseeded", "scope.eval-failing"] end) as $eval_reasons |
 
-((if $s.risk_tier != "routine" then ["scope.tier-not-routine"] else [] end) +
+((if $covered_write and ($measured_ok | not) then ["scope.enablement-stale"]
+  elif $covered_write and $measured[0].body.coverage.state != "authenticated" then ["scope.enablement-stale"]
+  else [] end) +
+ (if $s.risk_tier != "routine" then ["scope.tier-not-routine"] else [] end) +
  (if $risk_ok and $risk_doc.body.classification.declared_tier == "routine" and
      $risk_doc.body.classification.minimum_tier == "routine" and
      $risk_doc.body.verdict != "violated"
   then [] else ["scope.tier-not-routine"] end) +
  (if $protected then ["scope.protected-path"] else [] end) +
- (if $set_ok and $refs_resolved and
+ (if $measured_ok and $measured_bound and $set_ok and $refs_resolved and
      ($s.required_shadow_environments |
       all(. as $environment |
-          $mine |
+          $matching_declared |
           any(. as $record |
               $record.environment_id == $environment and
               ($p.accepted_shadow_outcomes | index($record.outcome) != null))))
   then [] else ["scope.shadow-evidence-missing"] end) +
+ (if $measured_ok and $measured_bound and
+     ($s.required_shadow_environments | all(. as $environment |
+       $mine | (map(select(.environment_id == $environment)) | length == 1)))
+  then [] else ["scope.sandbox-receipt-missing"] end) +
  (if $set_ok and
-     ($mine |
+     ($matching_declared |
       any(. as $record |
           $p.refused_shadow_outcomes | index($record.outcome) != null) | not)
   then [] else ["scope.shadow-inconclusive"] end) +
@@ -914,7 +1011,7 @@ def claimed_by_scope($refs): . as $record |
   else ["scope.duty-violation"] end) +
  (if $mode_state == "unknown" then ["scope.mode-construction"] else [] end) +
  (if $shas_ok and $set_ok and $dash_ok and $risk_ok and $kill_ok and $duty_ok and
-     $mode_ok and $gates_bound and $gates_consistent
+     $mode_ok and $gates_bound and $gates_consistent and $measured_ok and $measured_bound
   then [] else ["scope.malformed"] end) |
  sort | unique) as $refusals |
 
@@ -932,9 +1029,11 @@ content_ref("operating-mode-marker"; "application/json"; $marker_sha) as $mode_r
   policy_ref: $policy_ref,
   risk_evaluation_ref: document_ref($risk_doc; $risk_sha),
   shadow_records: $records,
+  shadow_bundle_facts: ($measured_rows | map({record_ref,record_form,eligible,authentication,facts})),
+  git_snapshot: $measured[0].body.git,
   shadow_set_ref: document_ref($set; $shadow_set_sha),
   unclaimed_shadow_records: $unclaimed
-} as $evidence |
+} + (if $covered_write then {coverage:$measured[0].body.coverage} else {} end) as $evidence |
 
 {
   schema_version: 1,

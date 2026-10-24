@@ -11,6 +11,9 @@ import os
 import stat
 import subprocess
 import sys
+import selectors
+import signal
+import time
 from typing import Callable
 
 ANCHOR = "/usr/local/libexec/ystack-sandbox/v1/supervisor"
@@ -373,10 +376,11 @@ def _darwin_acl(fd: int, resolver: _DarwinUUIDResolver | None) -> list[tuple[int
         while True:
             ctypes.set_errno(0)
             rc = lib.acl_get_entry(acl, selector, ctypes.byref(entry))
+            entry_errno = ctypes.get_errno()
             if rc != 0:
-                if ctypes.get_errno() != 0:
-                    raise OSError(ctypes.get_errno(), "acl_get_entry")
-                break
+                if rc == -1 and entry_errno == errno.EINVAL and selector == -1 and captured:
+                    break
+                raise OSError(entry_errno or errno.EIO, "acl_get_entry")
             selector = -1
             tag.value, perms.value = 0, None
             if lib.acl_get_tag_type(entry, ctypes.byref(tag)) != 0:
@@ -443,9 +447,11 @@ def _root_rule(resolver: _DarwinUUIDResolver | None = None) -> Rule:
             return False
         if sys.platform != "darwin":
             return _linux_install_acl_ok(access) and _linux_install_acl_ok(default)
-        dangerous = sum(1 << n for n in (2, 4, 5, 6, 8, 10, 12, 13))
-        return not any(tag == 1 and identifier != 0 and bits & dangerous
-                       for tag, identifier, bits in access)
+        dangerous = (1 << 2) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 8) | (1 << 10) | (1 << 12) | (1 << 13)
+        for tag, identifier, bits in access:
+            if tag == 1 and identifier != 0 and bits & dangerous:
+                return False
+        return True
     return check
 
 def _installed_rule(principal_uid: int, resolver: _DarwinUUIDResolver | None = None) -> Rule:
@@ -458,9 +464,11 @@ def _installed_rule(principal_uid: int, resolver: _DarwinUUIDResolver | None = N
             return False
         if sys.platform != "darwin":
             return _linux_install_acl_ok(access) and _linux_install_acl_ok(default)
-        dangerous = sum(1 << n for n in (2, 4, 5, 6, 8, 10, 12, 13))
-        return not any(tag == 1 and bits & dangerous and identifier not in (0, principal_uid)
-                       for tag, identifier, bits in access)
+        dangerous = (1 << 2) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 8) | (1 << 10) | (1 << 12) | (1 << 13)
+        for tag, identifier, bits in access:
+            if tag == 1 and bits & dangerous and identifier not in (0, principal_uid):
+                return False
+        return True
     return check
 
 def _store_rule(uid: int, gid: int, mode: int, directory: bool,
@@ -839,8 +847,42 @@ def _hex_name(value: object) -> bool:
     return (isinstance(value, str) and bool(value) and len(value) % 2 == 0
             and len(value) <= 510 and all(char in "0123456789abcdef" for char in value))
 
-def read_store_attempt(anchor: Anchor, attempt_id: str) -> tuple[dict[str, bytes], bytes]:
-    _require(_id(attempt_id), "E_STORE")
+class _HeldStoreRead:
+    def __init__(self, anchor: Anchor, attempt_id: str) -> None:
+        self.anchor, self.attempt_id = anchor, attempt_id
+        self.held: list[HeldPath] = []
+        self.snapshots, self.observation = read_store_attempt(anchor, attempt_id, _owner=self)
+
+    def recheck(self, code: str = "E_STALE") -> None:
+        self.anchor.recheck(code)
+        for item in self.held:
+            item.recheck(code)
+            relative = os.path.relpath(item.path, self.anchor.config["store_root"])
+            if stat.S_ISREG(item.before.st_mode):
+                name = relative[len(self.attempt_id) + 1:]
+                _require(name in self.snapshots and item.read(len(self.snapshots[name]), code)
+                         == self.snapshots[name], code)
+            else:
+                names = set(os.listdir(item.fd))
+                if relative == ".":
+                    _require(self.attempt_id in names, code)
+                elif relative == self.attempt_id:
+                    _require(names == {"receipt.json", "payload"}, code)
+                elif relative == self.attempt_id + "/payload":
+                    expected = {name.split("/")[1] for name in self.snapshots if name.startswith("payload/")}
+                    _require(names == expected, code)
+                elif relative == self.attempt_id + "/payload/evidence":
+                    _require(names == {name.split("/")[2] for name in self.snapshots
+                                       if name.startswith("payload/evidence/")}, code)
+
+    def close(self) -> None:
+        held, self.held = self.held, []
+        _close_paths(held)
+
+
+def read_store_attempt(anchor: Anchor, attempt_id: str, *,
+                       _owner: _HeldStoreRead | None = None) -> tuple[dict[str, bytes], bytes]:
+    _require(_id(attempt_id) and (_owner is None or isinstance(_owner, _HeldStoreRead)), "E_STORE")
     anchor.recheck("E_STORE")
     uid, gid = anchor.config["principal_uid"], anchor.config["consumer_gid"]
     root = anchor.config["store_root"]
@@ -935,6 +977,8 @@ def read_store_attempt(anchor: Anchor, attempt_id: str) -> tuple[dict[str, bytes
                                  "id": attempt_id, "body": {"store_id": anchor.config["store_id"],
                                      "attempt_id": attempt_id, "entries": observations,
                                      "result": "authenticated"}})
+        if _owner is not None:
+            _owner.held, opened = opened, []
         return snapshots, observation
     except BaseException as exc:
         failure = exc
@@ -945,6 +989,735 @@ def read_store_attempt(anchor: Anchor, attempt_id: str) -> tuple[dict[str, bytes
         except OSError:
             if failure is None:
                 raise
+
+class _CoverageConfiguration:
+    def __init__(self, anchor, operation="coverage-read"):
+        _require(operation in {"coverage-read", "kill-register-read"}, "E_CONFIG")
+        self.operation = operation
+        prefix = "coverage-source" if operation == "coverage-read" else "kill-register-source"
+        import importlib.util
+        self.anchor, self.held = anchor, []
+        try:
+            root = next(item for item in anchor.held if item.path == ANCHOR)
+            rule = _root_rule(anchor.resolver)
+            def child(name):
+                item = _open_child(root, name, False, rule, "E_CONFIG")
+                self.held.append(item)
+                return item.read(DOCUMENT_LIMIT, "E_CONFIG")
+            self.config_raw = child(prefix + "-config.json")
+            self.accepted_raw = child(prefix + "-accepted-identities.json")
+            normalizer = _open_child(root, "coverage-source.py", False, rule, "E_INSTALL")
+            self.held.append(normalizer)
+            normalizer_raw = normalizer.read(EXECUTABLE_LIMIT, "E_INSTALL")
+            source = _open_held(os.path.join(_source_root(), "sandbox/v1/coverage-source.py"), False,
+                                lambda _fd, _state, _ancestor: True, "E_INSTALL")
+            self.held.append(source)
+            _require(source.read(EXECUTABLE_LIMIT, "E_INSTALL") == normalizer_raw, "E_INSTALL")
+            spec = importlib.util.spec_from_file_location("scope_coverage_source", normalizer.path)
+            _require(spec is not None and spec.loader is not None, "E_INSTALL")
+            self.normalizer = importlib.util.module_from_spec(spec)
+            exec(compile(normalizer_raw, normalizer.path, "exec"), self.normalizer.__dict__)
+            n = self.normalizer if operation == "coverage-read" else self.normalizer._KillNormalizer
+            self.normalizer = n
+            self.config = n.source_config(self.config_raw, anchor.config)["body"]
+            _require(self.config["accepted_set_path"] == ANCHOR + "/" + prefix + "-accepted-identities.json", "E_CONFIG")
+            package_file = _open_held(self.config["source_package_path"], False, rule, "E_INSTALL")
+            self.held.append(package_file)
+            self.package_raw = package_file.read(DOCUMENT_LIMIT, "E_INSTALL")
+            package = n.package(self.package_raw, self.config)
+            for row in package["body"]["files"]:
+                item = _open_held(row["path"], False, rule, "E_INSTALL")
+                self.held.append(item)
+                raw = item.read(EXECUTABLE_LIMIT if row["role"] == "collector" else DOCUMENT_LIMIT, "E_INSTALL")
+                _require(digest(raw) == row["sha256"], "E_INSTALL")
+                if row["role"] == "normalizer":
+                    _require(row["path"] == normalizer.path and raw == normalizer_raw, "E_INSTALL")
+                elif row["role"].startswith("schema."):
+                    n.query_schema(raw, row["role"][7:])
+                elif row["role"] == "collector":
+                    _require(item.before.st_mode & 0o111 != 0, "E_INSTALL")
+            supervisor = next(item for item in anchor.held if item.path == ANCHOR + "/host-supervisor.py")
+            supervisor_raw = supervisor.read(EXECUTABLE_LIMIT, "E_INSTALL")
+            repo_supervisor = _open_held(os.path.join(_source_root(), "sandbox/v1/host-supervisor.py"), False,
+                                       lambda _fd, _state, _ancestor: True, "E_INSTALL")
+            self.held.append(repo_supervisor)
+            _require(repo_supervisor.read(EXECUTABLE_LIMIT, "E_INSTALL") == supervisor_raw, "E_INSTALL")
+            n.accepted(self.accepted_raw, self.config, digest(supervisor_raw), digest(self.package_raw),
+                       self.config["collector_sha256"], digest(normalizer_raw))
+            self.identity = n.source_identity(self.config, self.accepted_raw, digest(supervisor_raw), digest(normalizer_raw))
+            self.hashes = {item.path: digest(item.read(EXECUTABLE_LIMIT, "E_INSTALL")) for item in self.held}
+            self.recheck()
+        except BaseException:
+            self.close()
+            raise
+
+    def recheck(self, code="E_STALE"):
+        self.anchor.recheck(code)
+        for item in self.held:
+            item.recheck(code)
+            if stat.S_ISREG(item.before.st_mode):
+                _require(digest(item.read(EXECUTABLE_LIMIT, code)) == self.hashes[item.path], code)
+
+    def close(self):
+        held, self.held = self.held, []
+        _close_paths(held)
+
+
+def load_coverage_configuration(anchor, operation="coverage-read"):
+    _require(operation in {"coverage-read", "kill-register-read"}, "E_CONFIG")
+    prefix = "coverage-source" if operation == "coverage-read" else "kill-register-source"
+    root = next(item for item in anchor.held if item.path == ANCHOR)
+    names = set(os.listdir(root.fd))
+    optional = {prefix + "-config.json", prefix + "-accepted-identities.json"}
+    if not (names & optional):
+        return None
+    _require(optional <= names, "E_CONFIG")
+    return _CoverageConfiguration(anchor, operation)
+
+
+class _HeldCoverageRead(_HeldStoreRead):
+    def __init__(self, anchor, configuration, request_raw):
+        self.anchor, self.configuration = anchor, configuration
+        self.attempt_id = configuration.normalizer.request(request_raw)["id"]
+        self.held = []
+        self.snapshots, self.observation = read_coverage_attempt(anchor, configuration, request_raw, _owner=self)
+
+    def recheck(self, code="E_STALE"):
+        super().recheck(code)
+        self.configuration.recheck(code)
+        raw = next(item for item in self.held if item.path.endswith("/payload/raw"))
+        _require(set(os.listdir(raw.fd)) == {name.rsplit("/", 1)[1] for name in self.snapshots
+                                            if name.startswith("payload/raw/")}, code)
+
+
+def read_coverage_attempt(anchor, configuration, request_raw, *, _owner=None):
+    n = configuration.normalizer
+    requested = n.request(request_raw)
+    attempt_id = requested["id"]
+    _require(_owner is None or isinstance(_owner, _HeldCoverageRead), "E_STORE")
+    uid, gid = anchor.config["principal_uid"], anchor.config["consumer_gid"]
+    opened, snapshots, observations = [], {}, []
+    try:
+        configuration.recheck("E_STORE")
+        store = _open_held(anchor.config["store_root"], True, _store_rule(uid, gid, 0o750, True, anchor.resolver), "E_STORE")
+        opened.append(store)
+        def directory(parent, name, relative):
+            item = _open_child(parent, name, True, _store_rule(uid, gid, 0o750, True, anchor.resolver), "E_STORE")
+            opened.append(item)
+            observations.append(_observation(item, relative))
+            return item
+        attempt = directory(store, attempt_id, attempt_id)
+        payload = directory(attempt, "payload", "payload")
+        raw_dir = directory(payload, "raw", "payload/raw")
+        observations.insert(0, _observation(store, "."))
+        _require(set(os.listdir(attempt.fd)) == {"receipt.json", "payload"}
+                 and set(os.listdir(payload.fd)) == {"request.json", "raw-manifest.json", "observation.json", "raw"}, "E_STORE")
+        names = sorted(os.listdir(raw_dir.fd))
+        _require(len(n.FAMILIES) <= len(names) <= n.PAGE_LIMIT and names == [f"{index:04d}" for index in range(len(names))], "E_STORE")
+        total = 0
+        fixed = [(attempt, "receipt.json", "receipt.json"),
+                 *[(payload, name, "payload/" + name) for name in ("request.json", "raw-manifest.json", "observation.json")],
+                 *[(raw_dir, name, "payload/raw/" + name) for name in names]]
+        for parent, name, relative in fixed:
+            item = _open_child(parent, name, False, _store_rule(uid, gid, 0o440, False, anchor.resolver), "E_STORE")
+            opened.append(item)
+            raw = item.read(DOCUMENT_LIMIT, "E_STORE")
+            snapshots[relative] = raw
+            observations.append(_observation(item, relative, raw))
+            if relative.startswith("payload/raw/"):
+                total += len(raw)
+                _require(total <= n.RAW_LIMIT, "E_STORE")
+        _require(snapshots["payload/request.json"] == request_raw, "E_STORE")
+        rebuilt = n.normalize(snapshots["payload/raw-manifest.json"],
+            [snapshots["payload/raw/" + name] for name in names], request_raw)
+        _require(rebuilt == snapshots["payload/observation.json"], "E_STORE")
+        n.receipt(snapshots["receipt.json"], request_raw, anchor.config, configuration.identity,
+                  snapshots["payload/raw-manifest.json"], rebuilt)
+        for item in opened:
+            item.recheck("E_STALE")
+        configuration.recheck("E_STALE")
+        origin = canonical({"schema_version": 1, "kind": "shadow_origin_observation", "id": attempt_id,
+            "body": {"store_id": anchor.config["store_id"], "attempt_id": attempt_id,
+                     "entries": observations, "result": "authenticated"}})
+        if _owner is not None:
+            _owner.held, opened = opened, []
+        return snapshots, origin
+    finally:
+        _close_paths(opened)
+
+
+def _closed_scope_child(argv: list[str], env: dict[str, str], owner) -> None:
+    _require(type(argv) is list and argv and all(type(value) is str and value and "\0" not in value
+                                               for value in argv), "E_RUNTIME")
+    python = [owner.python.held.path, "-I", "-S", "-B", owner.source.held.path]
+    if argv[:-1] == python and argv[-1] in {"_resolve-darwin-uuids", "_read-darwin-group"}:
+        _require(env == {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"}, "E_RUNTIME")
+        return
+    ledger = owner.ledger
+    gate = getattr(owner, "_gate_invocation", None)
+    if gate is not None and argv == gate:
+        _require(env == ledger.environment() and len(argv) == 13
+                 and argv[:4] == ["/bin/bash", "-p", os.path.join(_source_root(), "scope/v1/evaluate-scope.sh"), "evaluate"]
+                 and all(_physical(path) for path in argv[4:]), "E_RUNTIME")
+        return
+    coverage = getattr(owner, "_coverage_invocation", None)
+    if coverage is not None and argv == coverage:
+        _require(env == {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"}, "E_RUNTIME")
+        return
+    _require(hasattr(ledger, "environment") and env == ledger.environment(), "E_RUNTIME")
+    root = _source_root()
+    if argv[0] == "/usr/bin/git":
+        _require(len(argv) >= 4 and argv[1] == "--no-replace-objects"
+                 and argv[2].startswith("--git-dir=") and _physical(argv[2][10:]), "E_RUNTIME")
+        args = argv[3:]
+        fixed = args in (["rev-parse", "--is-bare-repository"], ["rev-parse", "--show-object-format"])
+        config = (len(args) == 6 and args[0:2] == ["config", "--file"] and _physical(args[2])
+                  and args[3:] == ["--name-only", "--list", "--no-includes"])
+        tree = len(args) == 6 and args[:5] == ["ls-tree", "-r", "-t", "-z", "--full-tree"] and _writer_oid(args[5])
+        obj = len(args) == 3 and args[0] == "cat-file" and args[1] in {"commit", "blob"} and _writer_oid(args[2])
+        _require(fixed or config or tree or obj, "E_RUNTIME")
+        return
+    if argv[:2] == ["/bin/bash", "-p"]:
+        scripts = {"control/v1/evaluate-duty.sh": ("evaluate", 4),
+            "control/v1/evaluate-risk-gates.sh": ("evaluate", 6),
+            "control/v1/evaluate-kill-switch.sh": ("evaluate", 4),
+            "control/v1/evaluate-bound-sandbox.sh": ("evaluate", 3),
+            "shadow/v1/validate-incident.sh": ("validate", 1),
+            "enforcement/v1/check-sandbox-receipt.sh": ("check-bound", 4),
+            "maintenance/v1/incident-to-eval.sh": ("convert", 3)}
+        for relative, (operation, count) in scripts.items():
+            if argv[2:4] == [os.path.join(root, relative), operation]:
+                _require(len(argv) == 4 + count and all(_physical(path) for path in argv[4:]), "E_RUNTIME")
+                return
+        _require(len(argv) == 7 and argv[2:4] == [os.path.join(root, "telemetry/v1/validate-trace-ledger.sh"), "validate"]
+                 and _id(argv[4]) and _id(argv[5]) and _physical(argv[6]), "E_RUNTIME")
+        return
+    _require(argv[0] == ledger.jq.held.path and ledger.jq.sha256 == JQ_SHA256[sys.platform]
+             and argv[1:3] == ["-L", str(ledger.modules)] and argv[-2] == "-f"
+             and argv[-1] in {os.path.join(root, relative) for relative in (
+                 "shadow/v1/qualified-identity.jq", "adapters/local-git-materializer/v1/protocol.jq",
+                 "shadow/v1/write-materialization-input.jq", "scope/v1/workflow-scope.jq")}, "E_RUNTIME")
+    args = argv[3:-2]
+    program = os.path.basename(argv[-1])
+    if program == "workflow-scope.jq":
+        _require(args == ["-r", "--arg", "gate_basis", "basis"], "E_RUNTIME")
+    elif program == "qualified-identity.jq":
+        _require(len(args) == 10 and args[:3] == ["-r", "--arg", "repository_id"]
+                 and _id(args[3]) and args[4:6] == ["--arg", "hash_algorithm"]
+                 and args[6] in {"sha1", "sha256"} and args[7:9] == ["--arg", "commit_id"]
+                 and _writer_oid(args[9]), "E_RUNTIME")
+    elif program == "protocol.jq":
+        _require(len(args) == 4 and args[:3] == ["-e", "--arg", "command"]
+                 and args[3] in {"validate-input", "validate-response"}, "E_RUNTIME")
+    else:
+        _require(len(args) == 14 and args[:4] == ["-S", "-c", "--arg", "phase"]
+                 and args[4] in {"stage-request", "final-input"}
+                 and args[5:7] == ["--rawfile", "contract"] and _physical(args[7])
+                 and args[8:10] == ["--rawfile", "patch"] and _physical(args[10])
+                 and args[11:13] == ["--slurpfile", "metadata"] and _physical(args[13]), "E_RUNTIME")
+
+
+@dataclasses.dataclass
+class _HeldBytes:
+    held: HeldPath
+    raw: bytes
+
+    @property
+    def sha256(self) -> str:
+        return digest(self.raw)
+
+    def recheck(self, code: str = "E_STALE") -> None:
+        self.held.recheck(code)
+        _require(self.held.read(len(self.raw), code) == self.raw, code)
+
+    def close(self) -> None:
+        self.held.close()
+
+
+def _hold_bytes(path: str, limit: int, code: str = "E_RELATION", hardlinks=False) -> _HeldBytes:
+    held = _open_held(path, False, lambda _fd, _state, _ancestor: True, code,
+                      allow_hardlinks=hardlinks)
+    try:
+        return _HeldBytes(held, held.read(limit, code))
+    except BaseException:
+        held.close()
+        raise
+
+
+class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
+    def __init__(self, python, source, deadline: float, ledger) -> None:
+        self.python, self.source = python, source
+        self.deadline, self.ledger = deadline, ledger
+        self.context = None
+        self.recheck()
+
+    def recheck(self) -> None:
+        self.python.recheck("E_DEPENDENCY")
+        self.source.recheck("E_DEPENDENCY")
+        _require(self.python.held.path == sys.executable
+                 and os.path.realpath(sys.executable) == sys.executable
+                 and self.source.held.path == os.path.join(_source_root(), "shadow/v1/_consumer.py"),
+                 "E_DEPENDENCY")
+
+    def _checkpoint(self) -> None:
+        if self.context is not None:
+            self.context.checkpoint()
+
+    def _fixed(self, operation: str, raw: bytes, cap: int, context=None) -> bytes:
+        _require(operation in {"_resolve-darwin-uuids", "_read-darwin-group"}, "E_RUNTIME")
+        self.context = context
+        self.recheck()
+        role = "darwin-acl-uuid-resolution" if operation == "_resolve-darwin-uuids" else "darwin-group-membership"
+        argv = [self.python.held.path, "-I", "-S", "-B", self.source.held.path, operation]
+        self.ledger.record_command(role, argv, self.python.sha256, self.source.sha256)
+        env = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"}
+        remaining = min(10, self.deadline - time.monotonic())
+        _require(remaining > 0, "E_RUNTIME")
+        if context is None:
+            output = self._foreground(argv, raw, cap, 65536, remaining, env)
+        else:
+            native = context.native
+            _require(native is not None and self.ledger.native_status(native)[0] in {0, 4}, "E_RUNTIME")
+            self._checkpoint()
+            attempted = False
+            try:
+                attempted = True
+                native.prepare_child((1 if operation == "_resolve-darwin-uuids" else 15,
+                    os.fsencode(argv[0]), tuple(os.fsencode(item) for item in argv),
+                    tuple(os.fsencode(f"{key}={env[key]}") for key in sorted(env))))
+                native.spawn_child()
+                status = self.ledger.native_status(native)
+                _require(status[0] == 3 and status[3] == 1 and status[4] == 0
+                         and status[1] > 0 and status[2] == status[1] and status[23] == 0, "E_RUNTIME")
+                self._checkpoint()
+                result, output, error = self.ledger.native_communicate(native, raw, cap, 65536, remaining)
+                _require(type(result) is int and result == 0 and not error, "E_RUNTIME")
+            except BaseException as exc:
+                try:
+                    try:
+                        status = self.ledger.native_status(native)
+                    except MemoryError:
+                        if attempted:
+                            self.ledger.native_cleanup(native, time.monotonic() + 10)
+                        raise
+                    if attempted and status[0] == 3 and self.ledger.native_pending(status):
+                        self.ledger.native_cleanup(native, time.monotonic() + 10)
+                except BaseException as cleanup_exc:
+                    raise exc from cleanup_exc
+                raise
+        self.recheck()
+        return output
+
+    def resolve(self, uuids: list[str], context=None) -> list[dict]:
+        _require(type(uuids) is list and len(uuids) <= DARWIN_UUID_COUNT_LIMIT
+                 and all(_uuid_hex(value) for value in uuids), "E_ACL")
+        if not uuids:
+            return []
+        output = self._fixed("_resolve-darwin-uuids", canonical(uuids), DARWIN_UUID_OUTPUT_LIMIT, context)
+        rows = _json_array(output, DARWIN_UUID_OUTPUT_LIMIT, "E_ACL")
+        _require(len(rows) == len(uuids), "E_ACL")
+        for uuid, row in zip(uuids, rows):
+            _require(type(row) is dict and set(row) == {"uuid", "status", "kind", "id"}
+                     and row["uuid"] == uuid, "E_ACL")
+            if row["status"] == "resolved":
+                _require(row["kind"] in {"user", "group"} and _integer(row["id"])
+                         and 0 <= row["id"] <= 0xffffffff, "E_ACL")
+            else:
+                _require(row["status"] == "unresolved" and row["kind"] is None
+                         and row["id"] is None, "E_ACL")
+        return rows
+
+    def contains(self, gid: int, context=None) -> bool:
+        _require(_integer(gid) and 0 <= gid <= 0xffffffff, "E_ACL")
+        output = self._fixed("_read-darwin-group", canonical({"gid": gid}), 16, context)
+        _require(output in (canonical([]), canonical([gid])), "E_ACL")
+        return output == canonical([gid])
+
+    def coverage_source(self, request_raw):
+        return self._source_read(request_raw, "coverage-read")
+
+    def kill_register_source(self, request_raw):
+        return self._source_read(request_raw, "kill-register-read")
+
+    def _source_read(self, request_raw, operation):
+        _require(operation in {"coverage-read", "kill-register-read"}, "E_RUNTIME")
+        ledger = self.ledger
+        anchor = ledger.anchor_for()
+        configuration = ledger.coverage_configuration if operation == "coverage-read" else ledger.kill_configuration
+        _require(isinstance(configuration, _CoverageConfiguration), "E_RUNTIME")
+        configuration.normalizer.request(request_raw)
+        sudo = _hold_bytes("/usr/bin/sudo", EXECUTABLE_LIMIT, "E_DEPENDENCY", hardlinks=True)
+        try:
+            _require(sudo.held.path == "/usr/bin/sudo", "E_DEPENDENCY")
+            supervisor = next(item for item in anchor.held if item.path == ANCHOR + "/host-supervisor.py")
+            supervisor_sha = digest(supervisor.read(EXECUTABLE_LIMIT, "E_DEPENDENCY"))
+            argv = ["/usr/bin/sudo", "-n", "-u", "#" + str(anchor.config["principal_uid"]), "--",
+                    self.python.held.path, "-I", "-S", "-B", supervisor.path, operation]
+            self.recheck()
+            sudo.recheck("E_DEPENDENCY")
+            configuration.recheck()
+            ledger.record_source_command(argv, request_raw, sudo.sha256, self.python.sha256, supervisor_sha)
+            self._coverage_invocation = argv
+            try:
+                result = self._foreground(argv, request_raw, 0, 16384,
+                    min(120, self.deadline - time.monotonic()),
+                    {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"})
+            finally:
+                self._coverage_invocation = None
+            _require(result == b"", "E_RUNTIME")
+            self.recheck()
+            sudo.recheck("E_DEPENDENCY")
+            configuration.recheck()
+            _require(digest(supervisor.read(EXECUTABLE_LIMIT, "E_STALE")) == supervisor_sha, "E_STALE")
+        finally:
+            sudo.close()
+
+    def gate_scope(self, arguments, session):
+        _require(type(arguments) is list and len(arguments) == 9 and all(_physical(path) for path in arguments), "E_RUNTIME")
+        argv = ["/bin/bash", "-p", os.path.join(_source_root(), "scope/v1/evaluate-scope.sh"), "evaluate", *arguments]
+        self._gate_invocation, self._gate_session = argv, session
+        try:
+            self.ledger.record_command("gate-scope-driver", argv, self.ledger.bash.sha256,
+                                       self.ledger.package_sources["scope/v1/evaluate-scope.sh"].sha256)
+            return self._foreground(argv, b"", DOCUMENT_LIMIT, 65536,
+                min(300, self.deadline - time.monotonic()), self.ledger.environment())
+        finally:
+            self._gate_invocation = self._gate_session = None
+
+    def _foreground(self, argv, raw, cap, error_cap, timeout, env):
+        _closed_scope_child(argv, env, self)
+        source = getattr(self, "_coverage_invocation", None)
+        _require(0 < timeout <= (300 if argv == getattr(self, "_gate_invocation", None) else 120) and type(cap) is int
+                 and ((source is not None and argv == source and cap == 0 and error_cap == 16384)
+                      or (source is None and 0 < cap <= 16 * DOCUMENT_LIMIT and error_cap == 65536)), "E_RUNTIME")
+        inherited = getattr(self.ledger, "store_session", None) is not None
+        end = min(time.monotonic() + timeout, self.deadline - 10) if inherited else time.monotonic() + timeout
+        _require(end > time.monotonic(), "E_RUNTIME")
+        previous = signal.pthread_sigmask(signal.SIG_BLOCK,
+                                          {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
+        child = None
+        selector = selectors.DefaultSelector()
+        cancelled = [False]
+        old_handlers = {}
+        def observe_signal(_number, _frame):
+            cancelled[0] = True
+        try:
+            for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+                old_handlers[number] = signal.signal(number, observe_signal)
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+            _require(not cancelled[0], "E_RUNTIME")
+            gate = (getattr(self, "_gate_session", None)
+                    if argv == getattr(self, "_gate_invocation", None) else None)
+            saved_fd = None
+            if gate is not None:
+                try:
+                    saved_fd = os.dup(6)
+                except OSError:
+                    pass
+                os.dup2(gate.child_socket.fileno(), 6, inheritable=True)
+            try:
+                child = subprocess.Popen(argv, pass_fds=((6,) if gate is not None else ()), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, env=env, close_fds=True, start_new_session=True)
+            finally:
+                if gate is not None:
+                    if saved_fd is None:
+                        os.close(6)
+                    else:
+                        os.dup2(saved_fd, 6)
+                        os.close(saved_fd)
+            if gate is not None:
+                gate.child_socket.close()
+                selector.register(gate.wire.sock, selectors.EVENT_READ)
+            outputs = {child.stdout.fileno(): bytearray(), child.stderr.fileno(): bytearray()}
+            limits = {child.stdout.fileno(): cap, child.stderr.fileno(): error_cap}
+            for stream in (child.stdin, child.stdout, child.stderr):
+                os.set_blocking(stream.fileno(), False)
+            selector.register(child.stdout, selectors.EVENT_READ)
+            selector.register(child.stderr, selectors.EVENT_READ)
+            if raw:
+                selector.register(child.stdin, selectors.EVENT_WRITE)
+            else:
+                child.stdin.close()
+            sent = 0
+            while selector.get_map():
+                _require(not cancelled[0] and time.monotonic() < end, "E_RUNTIME")
+                for key, events in selector.select(min(0.1, max(0, end - time.monotonic()))):
+                    stream = key.fileobj
+                    if gate is not None and stream is gate.wire.sock:
+                        gate.pump()
+                        while not gate.closed and gate.wire.pending():
+                            gate.pump()
+                        if gate.closed:
+                            selector.unregister(stream)
+                        continue
+                    if stream is child.stdin:
+                        try:
+                            count = os.write(stream.fileno(), raw[sent:sent + 65536])
+                        except BlockingIOError:
+                            continue
+                        _require(count > 0, "E_RUNTIME")
+                        sent += count
+                        if sent == len(raw):
+                            selector.unregister(stream)
+                            stream.close()
+                    else:
+                        try:
+                            chunk = os.read(stream.fileno(), 65536)
+                        except BlockingIOError:
+                            continue
+                        if not chunk:
+                            selector.unregister(stream)
+                            stream.close()
+                        else:
+                            bucket = outputs[key.fd]
+                            _require(len(bucket) + len(chunk) <= limits[key.fd], "E_LIMIT")
+                            bucket.extend(chunk)
+            result = child.wait(timeout=max(0.001, end - time.monotonic()))
+            _require(not cancelled[0] and result == 0, "E_RUNTIME")
+            try:
+                os.killpg(child.pid, 0)
+            except ProcessLookupError:
+                pass
+            else:
+                raise Refusal("E_RUNTIME")
+            if gate is not None:
+                _require(gate.closed and not gate.wire.buffer, "E_RUNTIME")
+                gate.wire.sock.settimeout(max(0.001, min(1, self.deadline - time.monotonic())))
+                _require(gate.wire.sock.recv(1) == b"", "E_RUNTIME")
+            stdout, stderr = list(outputs.values())
+            _require(not stderr, "E_RUNTIME")
+            return bytes(stdout)
+        except BaseException as exc:
+            cleanup_errors = []
+            if child is not None:
+                cleanup_end = min(self.deadline, time.monotonic() + 10) if inherited else time.monotonic() + 10
+                try:
+                    try:
+                        os.killpg(child.pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+                    if child.returncode is None:
+                        try:
+                            child.wait(timeout=max(0.001, min(2, cleanup_end - time.monotonic())))
+                        except subprocess.TimeoutExpired:
+                            pass
+                    try:
+                        os.killpg(child.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    if child.returncode is None:
+                        child.wait(timeout=max(0.001, cleanup_end - time.monotonic()))
+                    while True:
+                        try:
+                            os.killpg(child.pid, 0)
+                        except ProcessLookupError:
+                            break
+                        _require(time.monotonic() < cleanup_end, "E_RUNTIME")
+                        time.sleep(min(0.01, max(0, cleanup_end - time.monotonic())))
+                except BaseException as cleanup_exc:
+                    cleanup_errors.append(cleanup_exc)
+            if cleanup_errors:
+                cause = None
+                retained = [exc]
+                for cleanup_exc in cleanup_errors:
+                    if any(cleanup_exc is prior for prior in retained):
+                        continue
+                    cleanup_exc.__cause__ = cause
+                    cause = cleanup_exc
+                    retained.append(cleanup_exc)
+                if cause is not None:
+                    raise exc from cause
+            raise
+        finally:
+            signal.pthread_sigmask(signal.SIG_BLOCK,
+                                    {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
+            try:
+                selector.close()
+                if child is not None:
+                    for stream in (child.stdin, child.stdout, child.stderr):
+                        if stream is not None and not stream.closed:
+                            stream.close()
+                for number, handler in old_handlers.items():
+                    signal.signal(number, handler)
+            finally:
+                signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+
+
+
+SHADOW_EVIDENCE_NAMES = (
+    "accepted-identities.json", "claim.json", "consumer-provenance.json", "decision.json",
+    "duty-evaluation.json", "evaluator-driver.txt", "evaluator-program.txt",
+    "evidence-manifest.json", "file-digest-result.json", "incident.json",
+    "materialization-input.json", "materialization-response.json", "origin-observation.json",
+    "payload-stderr.txt", "payload-stdout.txt", "policy-set.json", "policy.json",
+    "preparation-manifest.json", "preparation-record.json", "qualified-identity.json",
+    "registry.json", "sandbox-check.json", "sandbox-evaluation.json",
+    "sandbox-expectation.json", "sandbox-receipt.json", "sandbox-request.json",
+    "shadow-record.json", "trace-ledger.json", "trace-receipt.json",
+)
+
+class _HeldBundle:
+    def __init__(self, parent: HeldPath, name: str, form: str) -> None:
+        _require(form in {"enforced-reproduction.v1", "withheld-write.v1", "withheld-write-policy.v1"}, "E_RELATION")
+        self.held: list[HeldPath] = []
+        self.files: dict[str, bytes] = {}
+        self.names = set(SHADOW_EVIDENCE_NAMES) | {"bundle.json"}
+        if form in {"withheld-write.v1", "withheld-write-policy.v1"}:
+            self.names.add("publisher-body.txt")
+        if form == "withheld-write-policy.v1":
+            self.names.add("scope-policy.json")
+        try:
+            directory = _open_child(parent, name, True,
+                                    lambda _fd, _state, _ancestor: True, "E_RELATION")
+            self.held.append(directory)
+            _require(set(os.listdir(directory.fd)) == self.names, "E_RELATION")
+            total = 0
+            for filename in sorted(self.names):
+                item = _open_child(directory, filename, False,
+                                   lambda _fd, _state, _ancestor: True, "E_RELATION")
+                self.held.append(item)
+                limit = (8 * DOCUMENT_LIMIT if filename == "materialization-input.json" else
+                         2 * DOCUMENT_LIMIT if filename == "preparation-manifest.json" else DOCUMENT_LIMIT)
+                raw = item.read(limit, "E_STALE")
+                total += len(raw)
+                _require(total <= 48 * DOCUMENT_LIMIT, "E_LIMIT")
+                if filename.endswith(".json"):
+                    _json(raw, limit, "E_RELATION")
+                self.files[filename] = raw
+            incident = _json(self.files["incident.json"], DOCUMENT_LIMIT, "E_RELATION")
+            marker = _json(self.files["bundle.json"], DOCUMENT_LIMIT, "E_RELATION")
+            expected = {"schema_version": 1, "kind": "shadow_consumer_bundle",
+                "id": "bundle." + digest(self.files["incident.json"])[:32], "body": {
+                    "activation_state": "inactive", "record_form": form,
+                    "incident_sha256": digest(self.files["incident.json"]),
+                    "target_revision": incident["body"]["git_revision_ref"],
+                    "files": [{"name": filename, "size_bytes": len(self.files[filename]),
+                               "sha256": digest(self.files[filename])}
+                              for filename in sorted(self.names - {"bundle.json"})]}}
+            _require(canonical(marker) == canonical(expected), "E_RELATION")
+            record = _json(self.files["shadow-record.json"], DOCUMENT_LIMIT, "E_RELATION")
+            _require(record["body"]["record_form"] == form, "E_RELATION")
+            if form == "withheld-write-policy.v1":
+                check_scope_policy_ref(record["body"].get("scope_policy_ref"), self.files["scope-policy.json"])
+            else:
+                _require("scope_policy_ref" not in record["body"], "E_RELATION")
+            self.recheck()
+        except BaseException:
+            self.close()
+            raise
+
+    def recheck(self, code: str = "E_STALE") -> None:
+        _require(set(os.listdir(self.held[0].fd)) == self.names, code)
+        for item in self.held:
+            item.recheck(code)
+        for item in self.held[1:]:
+            filename = os.path.basename(item.path)
+            _require(item.read(len(self.files[filename]), code) == self.files[filename], code)
+
+    def close(self) -> None:
+        held, self.held = self.held, []
+        _close_paths(held)
+
+
+GIT_CONFIG_KEYS = {"core.repositoryformatversion", "core.filemode", "core.bare",
+                   "core.logallrefupdates", "core.ignorecase", "core.precomposeunicode",
+                   "extensions.objectformat"}
+
+class _ReadOnlyGit:
+    """Held bare object database with only the child-5 inspection commands."""
+    def __init__(self, repository: str, ledger) -> None:
+        self.repository = repository
+        self.ledger = ledger
+        self.held: list[HeldPath] = []
+        try:
+            config = _open_held(os.path.join(repository, "config"), False,
+                                lambda _fd, _state, _ancestor: True, "E_RELATION")
+            try:
+                self.config = config.read(DOCUMENT_LIMIT, "E_RELATION")
+            finally:
+                config.close()
+            self.config_path = str(ledger.capture("config-" + str(len(ledger.inputs)) + ".txt",
+                                                self.config))
+            for path, directory, hardlinks in (
+                    (repository, True, False),
+                    (os.path.join(repository, "objects"), True, False),
+                    (os.path.join(repository, "config"), False, False),
+                    ("/usr/bin/git", False, True)):
+                item = _open_held(path, directory, lambda _fd, _state, _ancestor: True,
+                                  "E_RELATION", allow_hardlinks=hardlinks)
+                self.held.append(item)
+            self.recheck()
+        except BaseException:
+            self.close()
+            raise
+
+    def recheck(self, code: str = "E_RELATION") -> None:
+        for item in self.held:
+            item.recheck(code)
+        _require(self.held[2].read(DOCUMENT_LIMIT, code) == self.config, code)
+        forbidden = ("commondir", "shallow", "info/grafts", "objects/info/alternates", "refs/replace")
+        _require(not any(os.path.lexists(os.path.join(self.repository, name))
+                         for name in forbidden), code)
+        worktrees = os.path.join(self.repository, "worktrees")
+        _require(not os.path.lexists(worktrees) or
+                 (os.path.isdir(worktrees) and not os.listdir(worktrees)), code)
+        pack = os.path.join(self.repository, "objects/pack")
+        _require(not os.path.lexists(pack) or
+                 (os.path.isdir(pack) and not any(name.endswith(".promisor")
+                                                for name in os.listdir(pack))), code)
+
+    def read(self, arguments: list[str], limit: int) -> bytes:
+        fixed = arguments in (["config", "--file", self.config_path, "--name-only", "--list", "--no-includes"],
+                              ["rev-parse", "--is-bare-repository"],
+                              ["rev-parse", "--show-object-format"])
+        tree = (len(arguments) == 6 and arguments[:5] ==
+                ["ls-tree", "-r", "-t", "-z", "--full-tree"] and _writer_oid(arguments[5]))
+        obj = (len(arguments) == 3 and arguments[0] == "cat-file"
+               and arguments[1] in {"commit", "blob"} and _writer_oid(arguments[2]))
+        _require((fixed or tree or obj) and type(limit) is int
+                 and 0 < limit <= 16 * DOCUMENT_LIMIT, "E_RELATION")
+        self.recheck()
+        raw = self.ledger.execute_git(["/usr/bin/git", "--no-replace-objects",
+                                      "--git-dir=" + self.repository, *arguments], limit)
+        self.recheck()
+        _require(len(raw) <= limit, "E_LIMIT")
+        return raw
+
+    def shape(self, algorithm: str) -> None:
+        _require(algorithm in {"sha1", "sha256"}, "E_RELATION")
+        keys = self.read(["config", "--file", self.config_path, "--name-only", "--list", "--no-includes"],
+                         DOCUMENT_LIMIT)
+        try:
+            _require(set(keys.decode("utf-8").splitlines()) <= GIT_CONFIG_KEYS, "E_RELATION")
+        except UnicodeError:
+            raise Refusal("E_RELATION") from None
+        _require(self.read(["rev-parse", "--is-bare-repository"], 16) == b"true\n"
+                 and self.read(["rev-parse", "--show-object-format"], 16)
+                 == (algorithm + "\n").encode(), "E_RELATION")
+
+    def inventory(self, revision: dict) -> dict:
+        self.shape(revision["hash_algorithm"])
+        raw = self.read(["ls-tree", "-r", "-t", "-z", "--full-tree", revision["commit_id"]],
+                        16 * DOCUMENT_LIMIT)
+        _require(not raw or raw.endswith(b"\0"), "E_RELATION")
+        facts = {}
+        try:
+            for line in raw.split(b"\0")[:-1]:
+                header, name = line.split(b"\t", 1)
+                mode, kind, oid = header.decode("ascii").split(" ")
+                path = name.decode("utf-8")
+                _require(path not in facts and _writer_oid(oid)
+                         and len(oid) == (40 if revision["hash_algorithm"] == "sha1" else 64),
+                         "E_RELATION")
+                facts[path] = (mode, kind, oid)
+        except (UnicodeError, ValueError):
+            raise Refusal("E_RELATION") from None
+        return facts
+
+    def close(self) -> None:
+        owned, self.held = self.held, []
+        _close_paths(owned)
+
 
 def _read_resolver_input() -> bytes:
     raw = bytearray()
@@ -1080,8 +1853,9 @@ def write_path_ok(path: object, policy: dict, mode: dict) -> bool:
     return path not in mode["forbidden_paths"]
 
 
-def evidence_patch(files: dict[str, bytes], algorithm: str) -> tuple[bytes, list[dict]]:
-    _require(algorithm in {"sha1", "sha256"} and len(files) == 32, "E_RELATION")
+def evidence_patch(files: dict[str, bytes], algorithm: str, record_form="withheld-write.v1") -> tuple[bytes, list[dict]]:
+    _require(record_form in {"withheld-write.v1", "withheld-write-policy.v1"}, "E_RELATION")
+    _require(algorithm in {"sha1", "sha256"} and len(files) == (33 if record_form == "withheld-write-policy.v1" else 32), "E_RELATION")
     chunks = []
     facts = []
     for path, raw in sorted(files.items()):
@@ -1109,9 +1883,23 @@ def evidence_patch(files: dict[str, bytes], algorithm: str) -> tuple[bytes, list
     return b"".join(chunks), facts
 
 
-def write_contract(paths: list[str]) -> bytes:
+def scope_policy_ref(raw: bytes) -> dict:
+    _require(type(raw) is bytes and 1 <= len(raw) <= DOCUMENT_LIMIT, "E_RELATION")
+    _json(raw, DOCUMENT_LIMIT, "E_RELATION")
+    return {"name": "scope-policy.json", "size_bytes": len(raw), "sha256": digest(raw)}
+
+
+def check_scope_policy_ref(value: object, raw: bytes) -> None:
+    _require(type(value) is dict and set(value) == {"name", "size_bytes", "sha256"}
+             and _integer(value["size_bytes"]) and 1 <= value["size_bytes"] <= DOCUMENT_LIMIT
+             and value["name"] == "scope-policy.json" and _sha(value["sha256"]), "E_RELATION")
+    _require(canonical(value) == canonical(scope_policy_ref(raw)), "E_RELATION")
+
+
+def write_contract(paths: list[str], record_form="withheld-write.v1") -> bytes:
+    _require(record_form in {"withheld-write.v1", "withheld-write-policy.v1"}, "E_RELATION")
     return canonical({"schema_version": 1, "kind": "local_git_materialization_contract",
-        "allowed_paths": paths, "max_patch_bytes": 1_048_576, "max_changed_paths": 32,
+        "allowed_paths": paths, "max_patch_bytes": 1_048_576, "max_changed_paths": 33 if record_form == "withheld-write-policy.v1" else 32,
         "allowed_modes": ["100644", "100755"], "allow_binary_patch": False,
         "allow_symlinks": False, "allow_submodules": False, "candidate_repository_kind": "bare"})
 
@@ -1122,3 +1910,81 @@ WRITE_TEXTS = {
     "output_contract": b"Add only the listed evidence files; preserve all existing target files.\n",
     "policy": b"Routine candidate-only evidence preparation. Network and publication are denied.\n",
 }
+
+
+class _GateWire:
+    """Bounded private frames on the generator's inherited socket, never a CLI input."""
+    def __init__(self, sock, deadline, call_id=None, nonce=None, binding=None):
+        self.sock, self.deadline = sock, deadline
+        self.call_id, self.nonce, self.binding = call_id, nonce, binding
+        self.sent = self.received = 0
+        self.sent_bytes = self.received_bytes = 0
+        self.buffer = bytearray()
+
+    def send(self, phase, body):
+        import struct
+        _require(type(phase) is str and type(body) is dict, "E_RUNTIME")
+        self.sent += 1
+        raw = canonical({"version": 1, "call_id": self.call_id, "nonce": self.nonce,
+            "sequence": self.sent, "phase": phase, "binding": self.binding, "body": body})
+        _require(len(raw) <= DOCUMENT_LIMIT and time.monotonic() < self.deadline, "E_RUNTIME")
+        self.sent_bytes += len(raw)
+        _require(self.sent_bytes <= 64 * DOCUMENT_LIMIT, "E_LIMIT")
+        self.sock.settimeout(max(0.001, self.deadline - time.monotonic()))
+        self.sock.sendall(struct.pack("!I", len(raw)) + raw)
+
+    def receive(self):
+        import struct
+        while len(self.buffer) < 4 or len(self.buffer) < 4 + struct.unpack("!I", self.buffer[:4])[0]:
+            _require(time.monotonic() < self.deadline, "E_RUNTIME")
+            self.sock.settimeout(max(0.001, self.deadline - time.monotonic()))
+            chunk = self.sock.recv(65536)
+            _require(bool(chunk), "E_RUNTIME")
+            self.buffer.extend(chunk)
+            if len(self.buffer) >= 4:
+                _require(0 < struct.unpack("!I", self.buffer[:4])[0] <= DOCUMENT_LIMIT, "E_LIMIT")
+        size = struct.unpack("!I", self.buffer[:4])[0]
+        raw = bytes(self.buffer[4:4 + size]); del self.buffer[:4 + size]
+        self.received_bytes += len(raw)
+        _require(self.received_bytes <= 64 * DOCUMENT_LIMIT, "E_LIMIT")
+        row = _json(raw, DOCUMENT_LIMIT, "E_RUNTIME")
+        _require(set(row) == {"version", "call_id", "nonce", "sequence", "phase", "binding", "body"}
+                 and type(row["version"]) is int and row["version"] == 1
+                 and type(row["sequence"]) is int and row["sequence"] == self.received + 1
+                 and type(row["body"]) is dict and type(row["phase"]) is str, "E_RUNTIME")
+        if self.call_id is None:
+            _require(row["phase"] == "INIT" and _id(row["call_id"]) and _sha(row["nonce"]) and _sha(row["binding"]), "E_RUNTIME")
+            self.call_id, self.nonce, self.binding = row["call_id"], row["nonce"], row["binding"]
+        _require((row["call_id"], row["nonce"], row["binding"]) ==
+                 (self.call_id, self.nonce, self.binding), "E_RUNTIME")
+        self.received += 1
+        return row["phase"], row["body"]
+
+    def pending(self):
+        import struct
+        return len(self.buffer) >= 4 and len(self.buffer) >= 4 + struct.unpack("!I", self.buffer[:4])[0]
+
+    def exchange(self, phase, body):
+        self.send(phase, body)
+        reply, result = self.receive()
+        _require(reply == phase + "_ACK", "E_RUNTIME")
+        return result
+
+
+def _gate_store_binding(item):
+    _require(isinstance(item, _HeldStoreRead), "E_STORE")
+    item.recheck()
+    origin = _json(item.observation, DOCUMENT_LIMIT, "E_STORE")
+    entries = []
+    for row in origin["body"]["entries"]:
+        row = dict(row)
+        if row["name"] == ".":
+            # A sibling changes only root bookkeeping between separate acquisitions.
+            row["metadata_before"] = row["metadata_before"][:6]
+            row["metadata_after"] = row["metadata_after"][:6]
+        entries.append(row)
+    return {"store_id": item.anchor.config["store_id"], "attempt_id": item.attempt_id,
+        "ancestors": [list(_identity(component.before)) for component in item.held[0].components[:-1]],
+        "entries": entries, "snapshots": [{"name": name, "size": len(raw), "sha256": digest(raw)}
+            for name, raw in sorted(item.snapshots.items())],
+        "origin_ref": {"schema_version": 1, "kind": origin["kind"], "id": origin["id"], "sha256": digest(item.observation)}}
