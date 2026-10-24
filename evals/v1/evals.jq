@@ -107,6 +107,11 @@ def expected_adapter_closure:
      sha256:"ff2ec298eef102f94f28995f5306adeba8e078d19e4c22860c3b167cd9b7c37a"}
   ];
 
+def expected_record_closure:
+  ([expected_core_closure[] | select(.path | endswith("/modules/schema.jq"))] +
+   [{path:"evals/v1/framework.jq",sha256:"d164a102919f42ef002e93c8b515b58028604819e6c09b87c6e4afadb0bbcce4"},
+    {path:"evals/v1/run.sh",sha256:"51770c5597d55bf05020502796810637bfbe697038a541ea6124530c0fffe55c"}]);
+
 def ref_shape($content_id; $media_type):
   schema::content_ref_ok and
   .content_id == $content_id and .media_type == $media_type;
@@ -137,7 +142,7 @@ def seed_sources:
   ["adapter-tests.contract.v1","adapters.provider-normalizers.v1",
    "control.duty-separation.v1","control.risk-gates.v1","control.sandbox-policy.v1",
    "core.stage-run.v2","orchestrator.reconciliation-plan.v1",
-   "orchestrator.state-scanner.v1"];
+   "orchestrator.state-scanner.v1","reviews.independent-verdicts.v1"];
 def stage_statuses:
   ["blocked","cancelled","completed","failed","skipped","stale"];
 def core_error_tokens:
@@ -146,7 +151,7 @@ def request_roles: ["producer","reviewer","verifier"];
 def active_seed_sources:
   ["adapters.provider-normalizers.v1","control.duty-separation.v1","control.risk-gates.v1",
    "control.sandbox-policy.v1","core.stage-run.v2","orchestrator.reconciliation-plan.v1",
-   "orchestrator.state-scanner.v1"];
+   "orchestrator.state-scanner.v1","reviews.independent-verdicts.v1"];
 def risk_gates_error_tokens: ["E_DUTY","E_LIMIT","E_RELATION","E_RUNTIME","E_USAGE"];
 def duty_error_tokens:
   ["E_CORE","E_LIMIT","E_POLICY_SET","E_RELATION","E_RUNTIME","E_USAGE"];
@@ -193,6 +198,7 @@ def tool_content_id($source):
   elif $source == "control.risk-gates.v1" then "control-evaluator-driver.risk-gates.v1"
   elif $source == "control.duty-separation.v1" then
     "control-evaluator-driver.duty-separation.v1"
+  elif $source == "reviews.independent-verdicts.v1" then "eval-record-evaluator.v1"
   else "orchestrator-reconciliation-planner.v1" end;
 def tool_media_type($source):
   if $source == "orchestrator.reconciliation-plan.v1" then "text/x-jq"
@@ -241,11 +247,12 @@ def evaluator_shape:
    schema::exact_fields(
      ["adapter_closure","bootstrap_ref","catalog_ref","control_closure","core_closure",
       "core_contract","driver_ref","launcher_ref","orchestrator_closure","program_ref",
-      "runtime"];[]) and
+      "record_closure","runtime"];[]) and
    .core_contract == expected_core and .core_closure == expected_core_closure and
    .orchestrator_closure == expected_orchestrator_closure and
    .control_closure == expected_control_closure and
    .adapter_closure == expected_adapter_closure and
+   .record_closure == expected_record_closure and
    (.bootstrap_ref | ref_shape("evals-framework-bootstrap.v1";"text/x-shellscript")) and
    (.launcher_ref | ref_shape("evals-framework-launcher.v1";"text/x-shellscript")) and
    # Shipped artifacts are pinned to the digests the launcher and driver verified,
@@ -379,6 +386,8 @@ def expectation_shape($source):
   elif $source == "control.risk-gates.v1" then risk_gates_expectation_shape
   elif $source == "control.duty-separation.v1" then duty_expectation_shape
   elif $source == "adapters.provider-normalizers.v1" then normalizer_expectation_shape
+  elif $source == "reviews.independent-verdicts.v1" then
+    . == {disposition:"human-graded",status:"passed"}
   else planner_expectation_shape end;
 
 def stage_run_case_shape:
@@ -492,6 +501,57 @@ def scanner_case_shape:
 def run_id_prefix: "evals.run.";
 def seed_set_id_ok: schema::id_ok and ((run_id_prefix + .) | schema::id_ok);
 
+def comment_id_ok: type == "string" and test("\A[1-9][0-9]*\z") and length <= 32;
+def review_path_ok:
+  type == "string" and
+  test("\Aevals/v1/seeds/reviewer-severity/verdicts/[1-9][0-9]*[.]md\z") and length <= 255;
+def review_file_shape:
+  schema::exact_fields(["path","sha256"];[]) and
+  (.path | review_path_ok) and (.sha256 | schema::sha256_ok);
+def review_labels_shape:
+  schema::parsed_limits_ok and
+  schema::exact_fields(["body","id","kind","schema_version"];[]) and
+  .schema_version == 1 and .kind == "eval_labels" and
+  .id == "evals.reviewer-severity.labels.v1" and
+  (.body | schema::exact_fields(["trials"];[]) and
+   (.trials | schema::bounded_set(1;16;
+     schema::exact_fields(["comment_id","verdict_sha256","findings","missed_important","grade_status"];[]) and
+     (.comment_id | comment_id_ok) and (.verdict_sha256 | schema::sha256_ok) and
+     (.grade_status == "passed" or .grade_status == "failed") and
+     (.findings | type == "array" and length <= 256 and
+      all(.[]; schema::exact_fields(["index","tag","label"];[]) and
+        (.index | schema::int_ok and . > 0) and
+        (.tag as $v | ["P0","P1","P2","P3"] | index($v) != null) and
+        (.label as $v | ["important","nit","not-a-defect"] | index($v) != null)) and
+      (map(.index) | length == (unique | length))) and
+     (.missed_important | type == "array" and length <= 256 and
+      all(.[]; schema::exact_fields(["summary","evidence_link"];[]) and
+        (.summary | type == "string" and length >= 1 and length <= 280 and
+         (test("[\r\n]") | not)) and
+        (.evidence_link | type == "string" and length >= 1 and length <= 2048)));
+     .comment_id)));
+def review_approval_shape:
+  schema::exact_fields(["body","id","kind","schema_version"];[]) and
+  .schema_version == 1 and .kind == "eval_label_approval" and
+  .id == "evals.reviewer-severity.approval.v1" and
+  (.body | schema::exact_fields(["family_id","labels_sha256","selected_comment_ids",
+    "decision_request_id","request_comment_id","approval_comment_id",
+    "approval_comment_url","approver","approved_at"];[]) and
+   .family_id == "reviewer-severity-false-positive-negative" and .approver == "yihanzhu" and
+   (.labels_sha256 | schema::sha256_ok) and (.approved_at | schema::time_ok) and
+   (.selected_comment_ids | schema::bounded_set(1;16;comment_id_ok;.)) and
+   (.decision_request_id | schema::short_text_ok) and
+   (.request_comment_id | comment_id_ok) and (.approval_comment_id | comment_id_ok) and
+   (.approval_comment_url | type == "string" and length >= 1 and length <= 2048));
+def review_case_shape:
+  schema::exact_fields(["case_id","expectation","family_id","verdict"];[]) and
+  .family_id == "reviewer-severity-false-positive-negative" and
+  .expectation == {disposition:"human-graded",status:"passed"} and
+  (.verdict | schema::exact_fields(["comment_id","path","sha256"];[]) and
+   (.comment_id | comment_id_ok) and (.path | review_path_ok) and
+   .path == ("evals/v1/seeds/reviewer-severity/verdicts/" + .comment_id + ".md") and
+   (.sha256 | schema::sha256_ok)) and .case_id == ("review." + .verdict.comment_id);
+
 def seed_set_shape:
   schema::exact_fields(["body","id","kind","schema_version"];[]) and
   .schema_version == 1 and .kind == "eval_seed_set" and (.id | seed_set_id_ok) and
@@ -526,6 +586,13 @@ def seed_set_shape:
     elif .seed_source == "adapters.provider-normalizers.v1" then
       .shared == {} and
       (.cases | schema::bounded_set(1;64;normalizer_case_shape;.case_id))
+    elif .seed_source == "reviews.independent-verdicts.v1" then
+      (.shared | schema::exact_fields(["bundle","labels","files"];[]) and
+       (.bundle | control_pair_shape("eval_bundle")) and
+       (.labels | control_pair_shape("eval_labels")) and
+       (.labels.content | review_labels_shape) and
+       (.files | schema::bounded_set(1;16;review_file_shape;.path))) and
+      (.cases | schema::bounded_set(1;16;review_case_shape;.case_id))
     else
       .shared == {} and
       (.cases | schema::bounded_set(1;64;planner_case_shape;.case_id))
@@ -601,6 +668,10 @@ def observation_shape($source):
   elif $source == "control.risk-gates.v1" then risk_gates_observation_shape
   elif $source == "control.duty-separation.v1" then duty_observation_shape
   elif $source == "adapters.provider-normalizers.v1" then normalizer_observation_shape
+  elif $source == "reviews.independent-verdicts.v1" then
+    schema::exact_fields(["case_id","disposition","error_token","status"];[]) and
+    (.case_id | schema::id_ok) and .disposition == "human-graded" and
+    .error_token == {state:"absent"} and (.status as $v | verdicts | index($v) != null)
   else planner_observation_shape end;
 
 def observation_set_shape($source):
@@ -610,8 +681,16 @@ def observation_set_shape($source):
 
 # Deterministic grading. A family without a deterministic grader cannot be
 # decided here and stays inconclusive; nothing is inferred from silence.
-def grade($family; $expectation; $observation):
-  if ($family.grader_kinds | index("deterministic")) == null then
+def grade($source; $family; $expectation; $observation):
+  if $source == "reviews.independent-verdicts.v1" then
+    if $observation == null then
+      {verdict:"inconclusive",reason_id:"evals.observation-missing"}
+    elif $observation.status == "passed" then
+      {verdict:"passed",reason_id:"evals.expectation-met"}
+    elif $observation.status == "failed" then
+      {verdict:"failed",reason_id:"evals.human-grade-failed"}
+    else {verdict:"inconclusive",reason_id:"evals.human-grade-inconclusive"} end
+  elif ($family.grader_kinds | index("deterministic")) == null then
     {verdict:"inconclusive",reason_id:"evals.no-deterministic-grader"}
   elif $observation == null then
     {verdict:"inconclusive",reason_id:"evals.observation-missing"}
@@ -646,16 +725,17 @@ def grade($family; $expectation; $observation):
     else {verdict:"failed",reason_id:"evals.error-token-mismatch"} end
   end;
 
-def grader_kind_for($family):
-  if ($family.grader_kinds | index("deterministic")) != null
+def grader_kind_for($source; $family):
+  if $source == "reviews.independent-verdicts.v1" then "human"
+  elif ($family.grader_kinds | index("deterministic")) != null
   then "deterministic" else "none" end;
 
-def trace_event($case; $family; $tool_ref; $evaluator_ref):
+def trace_event($source; $case; $family; $tool_ref; $evaluator_ref):
   {
     event_kind:"eval-case",
     case_id:$case.case_id,
     family_id:$family.family_id,
-    grader_kind:grader_kind_for($family),
+    grader_kind:grader_kind_for($source;$family),
     tool_ref:$tool_ref,
     adapter:{state:"absent"},
     gate:{state:"absent"},
@@ -686,6 +766,8 @@ def tool_ref($source; $case):
              elif $source == "control.sandbox-policy.v1" then $sandbox_sha256
              elif $source == "control.risk-gates.v1" then $risk_gates_sha256
              elif $source == "control.duty-separation.v1" then $duty_sha256
+             elif $source == "reviews.independent-verdicts.v1" then
+               (expected_record_closure[] | select(.path == "evals/v1/run.sh") | .sha256)
              else $planner_sha256 end)}
   end;
 
@@ -694,6 +776,9 @@ def tool_ref_ok($source):
     schema::content_ref_ok and .media_type == "text/x-jq" and
     (.content_id | test("\\Aadapter-normalizer\\.(codex-cli-producer|codex-native-reviewer|github-actions-ci|github-forge|gitlab-forge)\\.v1\\z")) and
     .sha256 == $normalizer_shas[.content_id | ltrimstr("adapter-normalizer.") | rtrimstr(".v1")]
+  elif $source == "reviews.independent-verdicts.v1" then
+    ref_shape("eval-record-evaluator.v1";"text/x-shellscript") and
+    .sha256 == (expected_record_closure[] | select(.path == "evals/v1/run.sh") | .sha256)
   else ref_shape(tool_content_id($source);tool_media_type($source)) end;
 
 def build_run_result(
@@ -705,11 +790,11 @@ def build_run_result(
      . as $case |
      $families[$case.family_id] as $family |
      $observed[$case.case_id] as $observation |
-     grade($family;$case.expectation;$observation) as $graded |
+     grade($seed_set.body.seed_source;$family;$case.expectation;$observation) as $graded |
      {
        case_id:$case.case_id,
        family_id:$case.family_id,
-       grader_kind:grader_kind_for($family),
+       grader_kind:grader_kind_for($seed_set.body.seed_source;$family),
        expectation:$case.expectation,
        observation:(if $observation == null then {state:"absent"}
                     else {state:"present",value:$observation} end),
@@ -734,6 +819,8 @@ def build_run_result(
           elif $seed_set.body.seed_source == "adapters.provider-normalizers.v1" then
             {content_id:"adapter-provider-snapshot.v1",
              media_type:"application/json",sha256:$case.input.sha256}
+          elif $seed_set.body.seed_source == "reviews.independent-verdicts.v1" then
+            {content_id:"review-verdict.v1",media_type:"text/markdown",sha256:$case.verdict.sha256}
           else
             {content_id:"orchestrator-reconciliation-input.v1",
              media_type:"application/json",sha256:$case.input.sha256}
@@ -761,7 +848,7 @@ def build_run_result(
       },
       cases:$cases,
       trace:($seed_set.body.cases | sort_by(.case_id) | map(
-        trace_event(.;$families[.family_id];tool_ref($seed_set.body.seed_source;.);
+        trace_event($seed_set.body.seed_source;.;$families[.family_id];tool_ref($seed_set.body.seed_source;.);
                     evaluator_ref($evaluator_sha))))
     }
   };
@@ -772,6 +859,8 @@ def subject_ref_shape($source):
     schema::document_ref_kind_ok("stage_result")
   elif $source == "orchestrator.reconciliation-plan.v1" then
     ref_shape("orchestrator-reconciliation-input.v1";"application/json")
+  elif $source == "reviews.independent-verdicts.v1" then
+    ref_shape("review-verdict.v1";"text/markdown")
   elif $source == "adapters.provider-normalizers.v1" then
     ref_shape("adapter-provider-snapshot.v1";"application/json")
   elif $source == "control.risk-gates.v1" then
@@ -794,7 +883,8 @@ def case_result_shape($source):
      "reason_id","subject_ref","verdict"];[]) and
   (.case_id | schema::id_ok) and
   (.family_id as $id | family_ids | index($id) != null) and
-  (.grader_kind == "deterministic" or .grader_kind == "none") and
+  (if $source == "reviews.independent-verdicts.v1" then .grader_kind == "human"
+   else .grader_kind == "deterministic" or .grader_kind == "none" end) and
   (.expectation | expectation_shape($source)) and
   (.observation | present_shape(observation_shape($source))) and
   (.verdict as $v | verdicts | index($v) != null) and
@@ -809,7 +899,8 @@ def trace_event_shape($source):
      "identity","latency","tool_ref"];[]) and
   .event_kind == "eval-case" and (.case_id | schema::id_ok) and
   (.family_id as $id | family_ids | index($id) != null) and
-  (.grader_kind == "deterministic" or .grader_kind == "none") and
+  (if $source == "reviews.independent-verdicts.v1" then .grader_kind == "human"
+   else .grader_kind == "deterministic" or .grader_kind == "none" end) and
   (.tool_ref | tool_ref_ok($source)) and
   .adapter == {state:"absent"} and .gate == {state:"absent"} and
   .latency == {state:"absent"} and .cost == {state:"absent"} and

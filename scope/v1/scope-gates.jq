@@ -99,7 +99,7 @@ def seed_sources:
   ["adapter-tests.contract.v1","adapters.provider-normalizers.v1",
    "control.duty-separation.v1","control.risk-gates.v1","control.sandbox-policy.v1",
    "core.stage-run.v2","orchestrator.reconciliation-plan.v1",
-   "orchestrator.state-scanner.v1"];
+   "orchestrator.state-scanner.v1","reviews.independent-verdicts.v1"];
 def trial_policy_shape:
   (exact_fields(["kind"];[]) and .kind == "single") or
   (exact_fields(["kind","minimum_trials"];[]) and .kind == "multi" and
@@ -119,7 +119,7 @@ def family_ids:
 def active_seed_sources:
   ["adapters.provider-normalizers.v1","control.duty-separation.v1","control.risk-gates.v1",
    "control.sandbox-policy.v1","core.stage-run.v2","orchestrator.reconciliation-plan.v1",
-   "orchestrator.state-scanner.v1"];
+   "orchestrator.state-scanner.v1","reviews.independent-verdicts.v1"];
 
 def flow_metric_ids:
   ["accepted-plan-to-merge-time","dora-instability","dora-throughput","escaped-defects",
@@ -138,7 +138,7 @@ def dashboard_id: "evals.dashboard.v1";
 # also make an unrelated edit anywhere in the tree refuse every scope. It reads
 # the block the framework emits structurally instead: the evaluator document's
 # own identity, every body key, the portable core contract, each shipped
-# artifact reference by content id and media type, the four closures as
+# artifact reference by content id and media type, the five closures as
 # path/digest lists, and the runtime block down to the pinned jq 1.6 digests.
 def closure_shape:
   type == "array" and length >= 1 and length <= 64 and
@@ -154,12 +154,13 @@ def evaluator_shape:
    exact_fields(
      ["adapter_closure","bootstrap_ref","catalog_ref","control_closure","core_closure",
       "core_contract","driver_ref","launcher_ref","orchestrator_closure","program_ref",
-      "runtime"];[]) and
+      "record_closure","runtime"];[]) and
    .core_contract == expected_core and
    (.core_closure | closure_shape) and
    (.orchestrator_closure | closure_shape) and
    (.control_closure | closure_shape) and
    (.adapter_closure | closure_shape) and
+   (.record_closure | closure_shape and length == 3) and
    (.bootstrap_ref | ref_shape("evals-framework-bootstrap.v1";"text/x-shellscript")) and
    (.launcher_ref | ref_shape("evals-framework-launcher.v1";"text/x-shellscript")) and
    (.driver_ref | ref_shape("evals-framework-driver.v1";"text/x-shellscript")) and
