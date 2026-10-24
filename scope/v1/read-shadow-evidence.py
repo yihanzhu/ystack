@@ -511,7 +511,7 @@ class _Reader:
         mapping = {"receipt.json": "sandbox-receipt.json", "payload/stdout": "payload-stdout.txt",
             "payload/stderr": "payload-stderr.txt", "payload/evidence-manifest.json": "evidence-manifest.json",
             "payload/evidence/0000": "file-digest-result.json"}
-        require(set(store.snapshots) - {"capture.json"} == set(mapping)
+        require(set(store.snapshots) - {"capture.json", "sandbox-export.bin"} == set(mapping)
                 and all(store.snapshots[key] == files[name] for key, name in mapping.items()))
         self.origin(parse(files["origin-observation.json"]), store.snapshots, launch["id"], anchor)
         self.origin(parse(store.observation), store.snapshots, launch["id"], anchor)

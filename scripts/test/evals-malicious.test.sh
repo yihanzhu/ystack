@@ -190,6 +190,57 @@ for label, incomplete in [('pipe-eof',False),('pipe-timeout',True),
     assert pipes == [host._driver_output_values(0,[b'stopped\n'],incomplete,False)]
     assert pipes[0] == ((None,b'') if incomplete else (0,b'stopped\n'))
     print('ok host pipe pair - '+label)
+import os
+import tempfile
+with tempfile.TemporaryDirectory(prefix='ystack-runtime-identity-values-') as directory:
+    area = Path(directory)
+    slot_names = ('guest_kernel','guest_init','guest_supervisor','image','toolchain',
+                  'runtime_vfkit','runtime_driver','vm_service','guest_kernel_config','verifier')
+    slots = {name:(name+' ordinary bytes\n').encode() for name in slot_names}
+    slots['dyld_cache_files'] = [b'ordinary dyld zero\n',b'ordinary dyld one\n']
+    descriptors = {}
+    try:
+        for name in slot_names:
+            path = area/name;path.write_bytes(slots[name]);descriptors[name] = os.open(path,os.O_RDONLY)
+        descriptors['dyld_cache_files'] = []
+        for index,raw in enumerate(slots['dyld_cache_files']):
+            path = area/('dyld'+str(index));path.write_bytes(raw)
+            descriptors['dyld_cache_files'].append(os.open(path,os.O_RDONLY))
+        for missing in (None,'guest_kernel','verifier','guest_kernel_config','dyld_cache_files'):
+            original_unreadable = host.os.environ.get('YSTACK_TEST_IDENTITY_UNREADABLE')
+            if missing is None: host.os.environ.pop('YSTACK_TEST_IDENTITY_UNREADABLE',None)
+            else: host.os.environ['YSTACK_TEST_IDENTITY_UNREADABLE'] = missing
+            try: actual = host.measure_identities(descriptors,b'instruction',b'config',b'supervisor',b'python')
+            finally:
+                if original_unreadable is None: host.os.environ.pop('YSTACK_TEST_IDENTITY_UNREADABLE',None)
+                else: host.os.environ['YSTACK_TEST_IDENTITY_UNREADABLE'] = original_unreadable
+            raw = dict(slots)
+            if missing is not None: raw[missing] = None
+            offline = replay._identity_values(root,raw,b'instruction',b'config',b'supervisor',b'python')
+            assert actual == offline,missing
+            print('ok actual held runtime identity/composite/offline whole tuple - '+str(missing))
+        chunked = dict(slots,guest_kernel=(slots['guest_kernel'][:3],slots['guest_kernel'][3:]))
+        assert replay._identity_values(root,chunked,b'instruction',b'config',b'supervisor',b'python') == replay._identity_values(
+            root,slots,b'instruction',b'config',b'supervisor',b'python')
+        for label,raw in [('missing-key',{key:value for key,value in slots.items() if key != 'image'}),
+                ('extra-key',dict(slots,unexpected=b'x')),('wrong-type',dict(slots,image=1)),
+                ('over-count',dict(slots,dyld_cache_files=[b'x']*65))]:
+            try: replay._identity_values(root,raw,b'instruction',b'config',b'supervisor',b'python')
+            except Exception as error: assert type(error).__name__ == 'Refusal',label
+            else: raise AssertionError(label)
+        chunk = b'x'*1048576
+        finite = {name:(chunk,)*64 for name in slot_names}
+        finite.update(verifier=b'',guest_kernel_config=b'',image=(chunk,)*192,
+                      dyld_cache_files=[(chunk,)*64]*54)
+        assert host._runtime_slot_input_values(finite) == (4*1024*1024*1024,64)
+        over = dict(finite,image=finite['image']+(b'x',))
+        try: host._runtime_slot_input_values(over)
+        except host.Refusal as error: assert error.code == 'E_CAPTURE'
+        else: raise AssertionError('runtime total over 4GiB')
+        print('ok actual runtime input counter at 4GiB/64 and one byte over; finite immutable chunk references only, no 4GiB allocation or hashing')
+    finally:
+        for value in descriptors.values():
+            for fd in value if type(value) is list else [value]: os.close(fd)
 PY_HOST_VALUES
 /usr/bin/python3 -I -S -B - "$root" <<'PY_VERIFIER_VALUES'
 import hashlib
@@ -555,6 +606,7 @@ def load(name,path):
     return module
 host = load('capture_host',root/'sandbox/v1/host-supervisor.py')
 consumer = load('capture_consumer',root/'shadow/v1/_consumer.py')
+capture_replay = load('capture_replay',root/'evals/v1/replay-malicious.py')
 request = host.canonical({'ordinary':'request bytes'})
 group = {'host':{'process':[],'driver_rest':[]}}
 def refuses(function,label):
@@ -641,7 +693,26 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
         over_limit = host._capture_values(boundary_id+'a',request,boundary_group,True)
         assert not json.loads(over_limit)['body']['complete'] and json.loads(over_limit)['body']['raw'] == {}
         print('ok exact capture document boundary and one-byte-over envelope; primitive schema/case admission remain separate')
+        for operation,source_role in (('kill-register-read','kill'),('coverage-read','coverage')):
+            metadata = {'family':'fixture','page_index':0,'response_status':200,
+                        'input_cursor':None,'output_cursor':None}
+            records = [(b'capture.json',host.canonical({'pages':[metadata]})),(b'raw/0000',b'{}\n')]
+            clocks = {'wall':[],'monotonic':[],'complete':True}
+            result = host._source_capture_values('attempt.source',request,records,[b'{}\n'],clocks,True,operation)
+            source_raw = consumer._capture_envelope(result,'attempt.source',host.sha256_hex(request),seed=True)
+            assert source_raw == {'source_pages':{source_role:[dict(metadata,body_hex=b'{}\n'.hex())]},
+                                  'clocks':{'wall':[],'monotonic':[]}}
+            assert consumer._capture_export_binding(source_raw,{'capture.json':result},source=True) is None
+            overflow = host._source_capture_values('attempt.source',request,records,
+                [bytes(1024*1024)],clocks,True,operation)
+            assert json.loads(overflow)['body'] == {'request_sha256':host.sha256_hex(request),
+                'raw':{},'complete':False}
+            print('ok source capture operation binding and pre-hex document overflow - '+operation)
         for launch in ('reproduction','write'):
+            before_work = copy.deepcopy(consumer._export_work)
+            def spent(site,field):
+                return (consumer._export_work.get(site,{}).get(field,0)
+                        - before_work.get(site,{}).get(field,0))
             attempt_id = 'attempt.export.'+launch
             attempt = store/attempt_id;attempt.mkdir(mode=0o750);attempt.chmod(0o750)
             payload = attempt/'payload';payload.mkdir(mode=0o750);payload.chmod(0o750)
@@ -662,10 +733,26 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
                 path = attempt/name;path.write_bytes(raw);path.chmod(0o440)
             held = consumer._HeldStoreRead(anchor,attempt_id)
             try:
+                snapshot = held.snapshots['sandbox-export.bin']
+                assert len(snapshot.chunks) == consumer.EXPORT_LIMIT//65536
+                assert all(type(chunk) is bytes and len(chunk) == 65536 for chunk in snapshot.chunks)
+                try: snapshot.chunks = ()
+                except consumer.dataclasses.FrozenInstanceError: pass
+                else: raise AssertionError('mutable export snapshot')
+                assert spent('consumer.held-acquisition','calls') == 1
+                assert spent('consumer.held-acquisition','read_bytes') == len(export)
+                assert spent('consumer.independent-sha','calls') == 1
+                assert spent('consumer.independent-sha','read_bytes') == len(export)
                 assert held.snapshots == values
-                assert consumer._origin_values(held.snapshots,held.storage_rows,
+                assert spent('consumer.whole-equality','calls') == 1
+                assert spent('consumer.whole-equality','read_bytes') == 2*len(export)
+                assert capture_replay._origin_values(root,held.snapshots,held.storage_rows,
                     {'attempt_id':attempt_id,'platform':sys.platform},
                     {'host-config.json':config_raw}) == held.observation
+                assert spent('consumer.independent-sha','calls') == 1
+                assert spent('consumer.independent-sha','read_bytes') == len(export)
+                offline_work = sys.modules['malicious_origin_values']._export_work
+                assert offline_work['consumer.independent-sha'] == {'calls':1,'read_bytes':len(export)}
                 assert consumer._capture_for_replay(held.snapshots,attempt_id,request,launch=launch) == export_group
                 refuses(lambda:consumer._capture_for_replay(held.snapshots,attempt_id,request,
                     launch='write' if launch == 'reproduction' else 'reproduction'),'cross-launch')
@@ -689,6 +776,11 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
                     {k:v for k,v in held.snapshots.items() if k != 'sandbox-export.bin'}),'missing-binary')
                 refuses(lambda:consumer._capture_export_binding(group,held.snapshots),'unused-binary')
                 held.recheck()
+                assert spent('consumer.completion-reread','calls') == 1
+                assert spent('consumer.completion-reread','read_bytes') == 2*len(export)
+                print(json.dumps({'launch':launch,'consumer_work':{
+                    site:{field:spent(site,field) for field in ('calls','read_bytes')}
+                    for site in consumer._export_work},'offline_origin_work':offline_work},sort_keys=True))
                 path = attempt/'sandbox-export.bin';path.chmod(0o640)
                 with path.open('r+b') as output:
                     output.seek(-1,os.SEEK_END);output.write(b'x')
@@ -715,6 +807,42 @@ def load(name,path):
 replay = load('projection_replay',root/'evals/v1/replay-malicious.py')
 launch = load('projection_launch',root/'shadow/v1/enforced-reproduction.py')
 preparation = load('projection_preparation',root/'preparation/v1/prepare-candidate.py')
+with preparation.tempfile.TemporaryDirectory(prefix='ystack-preparation-name-values-') as directory:
+    scratch = Path(directory).resolve()
+    deadline = preparation.time.monotonic()+30
+    boundary = preparation.hold_boundary(scratch,'directory',deadline,private_leaf=True)
+    token_hex = preparation.secrets.token_hex
+    observed = []
+    def actual_entropy_with_one_collision(size):
+        value = token_hex(size);observed.append(value)
+        if len(observed) == 1:
+            (scratch/preparation._workspace_name_values(value)).mkdir(mode=0o700)
+        return value
+    preparation.secrets.token_hex = actual_entropy_with_one_collision
+    try:
+        context = preparation.create_context(types.SimpleNamespace(scratch=str(scratch),
+            _boundaries={'scratch':boundary}),deadline)
+        try:
+            retained = preparation._preparation_names[-1]
+            assert retained == [{'entropy':observed[0],'errno':preparation.errno.EEXIST},
+                                {'entropy':observed[1],'errno':None}]
+            assert context.scratch.name == preparation._preparation_names_values(observed,[True,False])
+            assert context.scratch.is_dir() and len(observed) == 2
+            for entropy,collisions in [([],[]),([observed[0]],[0]),([observed[0]],[]),
+                    ([observed[0]],[True]),([observed[0],'g'*16],[True,False]),
+                    ([observed[0]]*129,[True]*128+[False]),
+                    ([observed[0]]*2,[False,False])]:
+                try: preparation._preparation_names_values(entropy,collisions)
+                except preparation.Refusal as error: assert error.token == 'E_INPUT'
+                else: raise AssertionError('preparation entropy/collision shape')
+            try: preparation._preparation_names_values([observed[0]]*128,[True]*128)
+            except preparation.Refusal as error: assert error.token == 'E_IO'
+            else: raise AssertionError('128 collisions')
+            print('ok actual preparation workspace entropy/collision acquisition and same naming owner; bounded refusal matrix')
+        finally: context.close_boundaries()
+    finally:
+        preparation.secrets.token_hex = token_hex
+        if boundary.descriptors: boundary.close()
 incident = launch.canonical({'id':'incident.ordinary','body':{'target_repository_id':'repo.ordinary'}})
 record = launch.canonical({'source':{'repository_id':'repo.ordinary','hash_algorithm':'sha1',
     'commit_id':'a'*40,'tree_id':'b'*40},'candidate':{'commit_id':'c'*40,'tree_id':'d'*40}})

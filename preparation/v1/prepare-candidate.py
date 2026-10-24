@@ -30,6 +30,8 @@ from typing import Any, BinaryIO, Iterable, Iterator
 
 _clock_observations = {"wall": [], "monotonic": []}
 _clock_complete = True
+_preparation_names = []
+_preparation_names_complete = True
 
 
 def _clock_value(site, value, kind):
@@ -1960,20 +1962,56 @@ def _record_values(input_sha256, response_sha256, response, details, receipt, ma
     }
 
 
+def _workspace_name_values(entropy):
+    if (type(entropy) is not str or len(entropy) != 16
+            or any(char not in '0123456789abcdef' for char in entropy)):
+        raise Refusal("E_INPUT")
+    return "candidate-preparation-" + entropy
+
+
+def _preparation_names_values(entropy, collisions):
+    if (type(entropy) is not list or type(collisions) is not list
+            or not 1 <= len(entropy) <= 128 or len(entropy) != len(collisions)
+            or any(type(value) is not bool for value in collisions)):
+        raise Refusal("E_INPUT")
+    names = [_workspace_name_values(value) for value in entropy]
+    if any(not collision for collision in collisions[:-1]):
+        raise Refusal("E_INPUT")
+    if collisions[-1]:
+        if len(collisions) != 128:
+            raise Refusal("E_INPUT")
+        raise Refusal("E_IO")
+    return names[-1]
+
+
 def create_context(args: argparse.Namespace, deadline: float) -> Context:
+    global _preparation_names_complete
     repo_root = Path(__file__).resolve().parents[2]
     scratch_parent = Path(args.scratch)
     scratch_parent_fd = args._boundaries["scratch"].fd
+    naming = []
+    if len(_preparation_names) < 4096:
+        _preparation_names.append(naming)
+    else:
+        _preparation_names_complete = False
     for _ in range(128):
         check_deadline(deadline)
-        name = f"candidate-preparation-{secrets.token_hex(8)}"
+        entropy = secrets.token_hex(8)
+        name = _workspace_name_values(entropy)
         try:
             os.mkdir(name, 0o700, dir_fd=scratch_parent_fd)
+            naming.append({"entropy": entropy, "errno": None})
             break
         except FileExistsError:
+            naming.append({"entropy": entropy, "errno": errno.EEXIST})
             continue
+        except OSError as exc:
+            naming.append({"entropy": entropy, "errno": exc.errno})
+            raise
     else:
-        raise Refusal("E_IO")
+        _preparation_names_values([row["entropy"] for row in naming], [True] * len(naming))
+    name = _preparation_names_values([row["entropy"] for row in naming],
+                                    [row["errno"] == errno.EEXIST for row in naming])
     scratch = scratch_parent / name
     context_boundary = hold_created_directory(args._boundaries["scratch"], name, scratch, deadline)
     context = Context(args=args, repo_root=repo_root, scratch=scratch,

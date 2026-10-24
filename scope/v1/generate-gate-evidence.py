@@ -101,7 +101,7 @@ def _origins_values(observations):
         rows[c.digest(observation)] = {"observation": parse(observation),
             "receipt_sha256": c.digest(snapshots["receipt.json"]),
             "payload": [{"name": name, "size_bytes": len(raw), "sha256": c.digest(raw)}
-                for name, raw in sorted(snapshots.items()) if name not in {"receipt.json", "capture.json"}]}
+                for name, raw in sorted(snapshots.items()) if name not in {"receipt.json", "capture.json", "sandbox-export.bin"}]}
     return [rows[key] for key in sorted(rows)]
 
 

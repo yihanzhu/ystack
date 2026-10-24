@@ -371,7 +371,7 @@ def _authenticated_frozen(ws, files, incident):
     mapping = {"receipt.json": "sandbox-receipt.json", "payload/stdout": "payload-stdout.txt",
         "payload/stderr": "payload-stderr.txt", "payload/evidence-manifest.json": "evidence-manifest.json",
         "payload/evidence/0000": "file-digest-result.json"}
-    require(set(snapshots) - {"capture.json"} == set(mapping)
+    require(set(snapshots) - {"capture.json", "sandbox-export.bin"} == set(mapping)
             and all(snapshots[key] == files[name] for key, name in mapping.items()), "E_RELATION")
     check = ws.component("sandbox-receipt-check", "enforcement/v1/check-sandbox-receipt.sh",
         ["check-bound", str(ws.work / "frozen/sandbox-receipt.json"), str(ws.work / "frozen/sandbox-expectation.json"),

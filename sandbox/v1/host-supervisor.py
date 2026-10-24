@@ -633,11 +633,18 @@ def sha256_fd(fd):
     a kernel image) can be multi-gigabyte on a real host, and only its
     digest is ever needed."""
     os.lseek(fd, 0, os.SEEK_SET)
+    def chunks():
+        while True:
+            chunk = os.read(fd, 1048576)
+            if not chunk:
+                return
+            yield chunk
+    return _slot_sha_values(chunks())
+
+
+def _slot_sha_values(chunks):
     digest = hashlib.sha256()
-    while True:
-        chunk = os.read(fd, 1048576)
-        if not chunk:
-            break
+    for chunk in chunks:
         digest.update(chunk)
     return digest.hexdigest()
 
@@ -1125,25 +1132,68 @@ def measure_identities(identity_fds, instruction_raw, host_config_raw, host_supe
         except OSError:
             return None
 
+    slot_digests = {slot: hash_slot(slot) for slot in
+                    ("guest_kernel", "guest_init", "guest_supervisor", "image", "toolchain")}
+    verifier_raw = read_slot("verifier")
+    slot_digests.update({slot: hash_slot(slot) for slot in ("runtime_vfkit", "runtime_driver", "vm_service")})
+    slot_digests["dyld_cache_files"] = hash_slot_list("dyld_cache_files")
+    kernel_config_raw = read_slot("guest_kernel_config")
+    return _measured_identity_values(slot_digests, verifier_raw, kernel_config_raw,
+                                     instruction_raw, host_config_raw, host_supervisor_raw, python_raw)
+
+
+def _runtime_slot_input_values(slots):
+    fixed = {"guest_kernel", "guest_init", "guest_supervisor", "image", "toolchain",
+             "runtime_vfkit", "runtime_driver", "vm_service", "dyld_cache_files", "verifier", "guest_kernel_config"}
+    require(type(slots) is dict and set(slots) == fixed, "E_CAPTURE")
+    require(slots["dyld_cache_files"] is None or type(slots["dyld_cache_files"]) is list, "E_CAPTURE")
+    streams = [value for key, value in slots.items() if key != "dyld_cache_files"]
+    streams += slots["dyld_cache_files"] or []
+    require(len(streams) <= 64, "E_CAPTURE")
+    total = 0
+    for value in streams:
+        require(value is None or type(value) is bytes
+                or type(value) is tuple and all(type(chunk) is bytes and len(chunk) <= 1048576
+                                               for chunk in value), "E_CAPTURE")
+        total += 0 if value is None else len(value) if type(value) is bytes else sum(map(len, value))
+        require(total <= 4 * 1024 * 1024 * 1024, "E_CAPTURE")
+    require(all(slots[key] is None or type(slots[key]) is bytes
+                for key in ("verifier", "guest_kernel_config")), "E_CAPTURE")
+    return total, len(streams)
+
+
+def _runtime_identity_values(slots, instruction_raw, host_config_raw, host_supervisor_raw, python_raw):
+    _runtime_slot_input_values(slots)
+    def measured(value):
+        if value is None:
+            return None
+        chunks = ((memoryview(value)[offset:offset + 1048576]
+                   for offset in range(0, len(value), 1048576)) if type(value) is bytes else value)
+        return _slot_sha_values(chunks)
+    digests = {key: measured(value) for key, value in slots.items()
+               if key not in {"dyld_cache_files", "verifier", "guest_kernel_config"}}
+    digests["dyld_cache_files"] = (None if slots["dyld_cache_files"] is None else
+                                  [measured(value) for value in slots["dyld_cache_files"]])
+    if digests["dyld_cache_files"] is not None and None in digests["dyld_cache_files"]:
+        digests["dyld_cache_files"] = None
+    return _measured_identity_values(digests, slots["verifier"], slots["guest_kernel_config"],
+                                     instruction_raw, host_config_raw, host_supervisor_raw, python_raw)
+
+
+def _measured_identity_values(slot_digests, verifier_raw, kernel_config_raw,
+                              instruction_raw, host_config_raw, host_supervisor_raw, python_raw):
     def observe(raw):
         return ("observed", sha256_hex(raw)) if raw is not None else ("unobserved", None)
 
     def observe_digest(digest):
         return ("observed", digest) if digest is not None else ("unobserved", None)
 
-    result = {slot: observe_digest(hash_slot(slot)) for slot in
+    result = {slot: observe_digest(slot_digests[slot]) for slot in
               ("guest_kernel", "guest_init", "guest_supervisor", "image", "toolchain")}
-    # findings-477-r8.md finding 3 (R10.4): the verifier is the one slot
-    # whose bytes are needed again later (build_input_disk's own
-    # "verifier" record) -- read and retained HERE, through this single
-    # already-R10.1-validated fd, computing its digest from those same
-    # retained bytes (never a second hash_slot()-then-reread pair) so
-    # the caller never needs its own later re-read of this fd at all.
-    verifier_raw = read_slot("verifier")
     result["verifier"] = observe(verifier_raw)
 
-    constituents = [hash_slot(slot) for slot in ("runtime_vfkit", "runtime_driver", "vm_service")]
-    dyld_cache_digests = hash_slot_list("dyld_cache_files")
+    constituents = [slot_digests[slot] for slot in ("runtime_vfkit", "runtime_driver", "vm_service")]
+    dyld_cache_digests = slot_digests["dyld_cache_files"]
     if None in constituents or dyld_cache_digests is None:
         result["host_runtime"] = ("unobserved", None)
     else:
@@ -1153,7 +1203,6 @@ def measure_identities(identity_fds, instruction_raw, host_config_raw, host_supe
                   for i, d in enumerate(dyld_cache_digests)]
         result["host_runtime"] = observe(canonical({"files": files}))
 
-    kernel_config_raw = read_slot("guest_kernel_config")
     if kernel_config_raw is None:
         result["guest_kernel_config"] = ("unobserved", None)
     else:
@@ -1554,7 +1603,8 @@ def _capture_values(attempt_id, request_raw, raw, complete):
     return canonical(value)
 
 
-def _source_capture_values(attempt_id, request_raw, records, pages, clock_values, complete):
+def _source_capture_values(attempt_id, request_raw, records, pages, clock_values, complete, operation):
+    require(operation in {"kill-register-read", "coverage-read"}, "E_CAPTURE")
     captured_group = {}
     capture_complete = complete
     metadata = [row | {"body_hex": ""} for row in json.loads(records[0][1])["pages"]]
@@ -3641,7 +3691,7 @@ def run_coverage_read(argv):
         capture = None
         try:
             capture = _source_capture_values(requested["id"], request_raw, records, pages,
-                _capture_clocks, _capture_clocks["complete"])
+                _capture_clocks, _capture_clocks["complete"], operation)
         except (MemoryError, ValueError, TypeError, Refusal):
             pass
         capture_fd = None

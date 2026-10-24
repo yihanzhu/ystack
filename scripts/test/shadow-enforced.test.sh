@@ -2089,12 +2089,79 @@ def acl_value(value):
     return observe
 def acl_mask_equivalence():
     current = pathlib.Path(c.__file__).read_text()
-    reverse_blocks = [('        for tag, identifier, bits in access:\n            if tag == 1 and identifier != 0 and bits & dangerous:\n                return False\n        return True', '        return not any(tag == 1 and identifier != 0 and bits & dangerous\n                       for tag, identifier, bits in access)'), ('        for tag, identifier, bits in access:\n            if tag == 1 and bits & dangerous and identifier not in (0, principal_uid):\n                return False\n        return True', '        return not any(tag == 1 and bits & dangerous and identifier not in (0, principal_uid)\n                       for tag, identifier, bits in access)')]
-    original = current
-    for replacement, previous in reverse_blocks:
-        assert original.count(replacement) == 1
-        original = original.replace(replacement, previous, 1)
-    assert hashlib.sha256(original.encode()).hexdigest() == '420ff579a419d23db6b7dc7e4dcf781726b4e000f8dad03e31d3239f051833db'
+    historical = {
+        'old': {
+            '_root_rule': '''def _root_rule(resolver: _DarwinUUIDResolver | None = None) -> Rule:
+    def check(fd: int, state: os.stat_result, _ancestor: bool) -> bool:
+        if state.st_uid != 0 or state.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            return False
+        try:
+            access, default = _acl_state(fd, resolver)
+        except (OSError, Refusal):
+            return False
+        if sys.platform != "darwin":
+            return _linux_install_acl_ok(access) and _linux_install_acl_ok(default)
+        dangerous = (1 << 2) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 8) | (1 << 10) | (1 << 12) | (1 << 13)
+        return not any(tag == 1 and identifier != 0 and bits & dangerous
+                       for tag, identifier, bits in access)
+    return check''',
+            '_installed_rule': '''def _installed_rule(principal_uid: int, resolver: _DarwinUUIDResolver | None = None) -> Rule:
+    def check(fd: int, state: os.stat_result, _ancestor: bool) -> bool:
+        if state.st_uid not in (0, principal_uid) or state.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            return False
+        try:
+            access, default = _acl_state(fd, resolver)
+        except (OSError, Refusal):
+            return False
+        if sys.platform != "darwin":
+            return _linux_install_acl_ok(access) and _linux_install_acl_ok(default)
+        dangerous = (1 << 2) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 8) | (1 << 10) | (1 << 12) | (1 << 13)
+        return not any(tag == 1 and bits & dangerous and identifier not in (0, principal_uid)
+                       for tag, identifier, bits in access)
+    return check''',
+        },
+        'new': {
+            '_root_rule': '''def _root_rule(resolver: _DarwinUUIDResolver | None = None) -> Rule:
+    def check(fd: int, state: os.stat_result, _ancestor: bool) -> bool:
+        if state.st_uid != 0 or state.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            return False
+        try:
+            access, default = _acl_state(fd, resolver)
+        except (OSError, Refusal):
+            return False
+        if sys.platform != "darwin":
+            return _linux_install_acl_ok(access) and _linux_install_acl_ok(default)
+        dangerous = (1 << 2) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 8) | (1 << 10) | (1 << 12) | (1 << 13)
+        for tag, identifier, bits in access:
+            if tag == 1 and identifier != 0 and bits & dangerous:
+                return False
+        return True
+    return check''',
+            '_installed_rule': '''def _installed_rule(principal_uid: int, resolver: _DarwinUUIDResolver | None = None) -> Rule:
+    def check(fd: int, state: os.stat_result, _ancestor: bool) -> bool:
+        if state.st_uid not in (0, principal_uid) or state.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            return False
+        try:
+            access, default = _acl_state(fd, resolver)
+        except (OSError, Refusal):
+            return False
+        if sys.platform != "darwin":
+            return _linux_install_acl_ok(access) and _linux_install_acl_ok(default)
+        dangerous = (1 << 2) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 8) | (1 << 10) | (1 << 12) | (1 << 13)
+        for tag, identifier, bits in access:
+            if tag == 1 and bits & dangerous and identifier not in (0, principal_uid):
+                return False
+        return True
+    return check''',
+        },
+    }
+    historical_module_sha256 = '420ff579a419d23db6b7dc7e4dcf781726b4e000f8dad03e31d3239f051833db'
+    actual_pins = {'_linux_install_acl_ok': '9e5efc3d188220d5b707b9794becbc43cce717c9d610786efe8883345840c51b', '_installed_acl_values': 'bfc459ee8e83b822f0ef12bec9b26f9e624c62eeffc0952aacad2078297e8d77', '_root_rule': 'e2b1a86cd931331fe88da13bd8a414c283aa4ff61bcab3d337faa8c290de4802', '_installed_rule': 'b3915afaa27e61cac253ba02b0cec72bfeb9831135278b99af3ae01c825c7054'}
+    actual_functions = {node.name: ast.get_source_segment(current, node)
+        for node in ast.parse(current).body if isinstance(node, ast.FunctionDef) and node.name in actual_pins}
+    assert set(actual_functions) == set(actual_pins)
+    assert all(hashlib.sha256(body.encode()).hexdigest() == actual_pins[name]
+               for name, body in actual_functions.items())
     expected_sources = {'_root_rule': {'old': 'af22ae2221580e7d65ef28e702b69c8653ffde0c965d500b52a1d8c5a28abaa5', 'new': '0b09217defef12508065a0fb8dbb43cd5ba3bd2f432281a18c0f0b138435e273'}, '_installed_rule': {'old': '976684eafda4c87744529283c19e94e4113e108c3d9c9a2f17346239997b4cad', 'new': 'd11b36310a1c712c7ab66521a0a6c7b8231feed6eac6a554296b07408798be6f'}}
     rows = []
     dangerous_bits = (4, 16, 32, 64, 256, 1024, 4096, 8192)
@@ -2103,11 +2170,11 @@ def acl_mask_equivalence():
              for bits in dangerous_bits + (13684, 0, 2, 32768)]
     for name in ('_root_rule', '_installed_rule'):
         sources = []
-        for version, text in (('old', original), ('new', current)):
-            node = next(n for n in ast.parse(text).body if isinstance(n, ast.FunctionDef) and n.name == name)
-            extracted = ast.get_source_segment(text, node)
+        for version in ('old', 'new'):
+            extracted = historical[version][name]
             assert hashlib.sha256(extracted.encode()).hexdigest() == expected_sources[name][version]
             sources.append(extracted)
+        sources.append(actual_functions[name])
         samples = [('darwin', [(tag, identity, bits)], None, None, 0, 0o555) for tag, identity, bits in cases]
         samples += [('darwin', [(1, 456, 4), (1, 0, 4)], None, None, 0, 0o555),
                     ('darwin', [], None, None, 999, 0o555), ('darwin', [], None, None, 0, 0o575),
@@ -2118,7 +2185,7 @@ def acl_mask_equivalence():
                     (OSError('fixed ACL failure'), c.Refusal('E_ACL'), MemoryError('fixed ACL memory'))]
         for platform, access, default, fault, uid, mode in samples:
             results = []
-            for extracted in sources:
+            for source_index, extracted in enumerate(sources):
                 calls = []
                 class ObservedRows(list):
                     def __iter__(self):
@@ -2132,7 +2199,13 @@ def acl_mask_equivalence():
                     return (None if access is None else ObservedRows(access),
                             None if default is None else ObservedRows(default))
                 namespace = dict(vars(c), sys=types.SimpleNamespace(platform=platform), _acl_state=observe)
-                exec(compile('from __future__ import annotations\n' + extracted, 'actual-' + name, 'exec'), namespace)
+                exec(compile('from __future__ import annotations\n' + actual_functions['_linux_install_acl_ok'] + '\n' + actual_functions['_installed_acl_values'] + '\n' + extracted, 'actual-' + name, 'exec'), namespace)
+                shared_calls = []
+                shared_owner = namespace['_installed_acl_values']
+                def shared_values(platform_value, access_value, default_value, principals):
+                    shared_calls.append((platform_value, principals))
+                    return shared_owner(platform_value, access_value, default_value, principals)
+                namespace['_installed_acl_values'] = shared_values
                 resolver = object()
                 rule = namespace[name](123, resolver) if name == '_installed_rule' else namespace[name](resolver)
                 state = types.SimpleNamespace(st_uid=uid, st_mode=stat.S_IFDIR | mode)
@@ -2149,8 +2222,11 @@ def acl_mask_equivalence():
                     assert sum(call[0] == 'acl' for call in calls) == 1
                 if isinstance(fault, (OSError, c.Refusal)):
                     assert outcome is False
+                reached = uid != 999 and not mode & 0o022 and fault is None
+                assert shared_calls == ([(platform, (0, 123) if name == '_installed_rule' else (0,))]
+                                        if source_index == 2 and reached else [])
                 results.append((outcome, [(entry[0], entry[1]) for entry in calls]))
-            assert results[0] == results[1], (name, platform, access, default, type(fault).__name__, results)
+            assert results[0] == results[1] == results[2], (name, platform, access, default, type(fault).__name__, results)
             rows.append({'rule': name, 'platform': platform, 'outcome': results[0][0], 'calls': len(results[0][1])})
         for extracted in sources:
             calls = []
@@ -2161,13 +2237,34 @@ def acl_mask_equivalence():
                 calls.append((held_fd, held_resolver))
                 return next(observations), None
             namespace = dict(vars(c), sys=types.SimpleNamespace(platform='darwin'), _acl_state=observe)
-            exec(compile('from __future__ import annotations\n' + extracted, 'actual-continuous-' + name, 'exec'), namespace)
+            exec(compile('from __future__ import annotations\n' + actual_functions['_linux_install_acl_ok'] + '\n' + actual_functions['_installed_acl_values'] + '\n' + extracted, 'actual-continuous-' + name, 'exec'), namespace)
             rule = namespace[name](123, resolver) if name == '_installed_rule' else namespace[name](resolver)
             state = types.SimpleNamespace(st_uid=0, st_mode=stat.S_IFDIR | 0o555)
             assert [rule(fd, state, False) for _ in range(3)] == [False, True, False]
             assert calls == [(fd, resolver)] * 3
+        needle = ('return _installed_acl_values(sys.platform, access, default, '
+                  + ('(0, principal_uid))' if name == '_installed_rule' else '(0,))'))
+        assert actual_functions[name].count(needle) == 1
+        for control, replacement in (
+                ('mutation', 'return _installed_acl_values(sys.platform, access, default, (0, 123, 456))'),
+                ('deletion', 'return True')):
+            namespace = dict(vars(c), sys=types.SimpleNamespace(platform='darwin'),
+                             _acl_state=lambda *_: ([(1, 456, 4)], None))
+            source = actual_functions[name].replace(needle, replacement, 1)
+            exec(compile('from __future__ import annotations\n' + actual_functions['_linux_install_acl_ok']
+                         + '\n' + actual_functions['_installed_acl_values'] + '\n' + source,
+                         'private-ACL-' + control, 'exec'), namespace)
+            rule = namespace[name](123) if name == '_installed_rule' else namespace[name]()
+            state = types.SimpleNamespace(st_uid=0, st_mode=stat.S_IFDIR | 0o555)
+            changed_outcome = rule(fd, state, False)
+            exec(compile('from __future__ import annotations\n' + historical['new'][name],
+                         'original-ACL-control', 'exec'), namespace)
+            oracle = namespace[name](123) if name == '_installed_rule' else namespace[name]()
+            assert oracle(fd, state, False) is False and changed_outcome is True
+            print('ok actual shared ACL call negative control detected - ' + name + '/' + control)
     print(json.dumps({'acl_mask_equivalence': rows, 'same_closure_fresh_observations': True,
-                      'source_hashes': expected_sources, 'fixed_mask': 13684}, sort_keys=True))
+                      'source_hashes': expected_sources, 'actual_source_hashes': actual_pins,
+                      'historical_module_sha256': historical_module_sha256, 'fixed_mask': 13684}, sort_keys=True))
 acl_mask_equivalence()
 
 c.sys.platform = "linux"
@@ -2299,14 +2396,15 @@ ok(not c._root_rule(FixedResolver())(fd, root_state, False) and acl_calls[0] == 
 
 c.sys.platform = "linux"
 c._acl_state = lambda _fd, _resolver=None: (None, None)
-store_state = types.SimpleNamespace(st_mode=stat.S_IFDIR | 0o750, st_uid=123, st_gid=456)
+store_stat = dict(st_dev=1, st_ino=2, st_nlink=1, st_size=0, st_mtime_ns=3, st_ctime_ns=4)
+store_state = types.SimpleNamespace(**store_stat, st_mode=stat.S_IFDIR | 0o750, st_uid=123, st_gid=456)
 ok(c._store_rule(123, 456, 0o750, True)(fd, store_state, False), "Linux no-ACL store control")
 c._acl_state = lambda _fd, _resolver=None: ([(0x10, 0, 0)], None)
 ok(not c._store_rule(123, 456, 0o750, True)(fd, store_state, False), "store rejects any ACL")
 c._acl_state = lambda _fd, _resolver=None: (None, None)
-wrong_owner = types.SimpleNamespace(st_mode=stat.S_IFDIR | 0o750, st_uid=124, st_gid=456)
-wrong_group = types.SimpleNamespace(st_mode=stat.S_IFDIR | 0o750, st_uid=123, st_gid=457)
-wrong_mode = types.SimpleNamespace(st_mode=stat.S_IFDIR | 0o770, st_uid=123, st_gid=456)
+wrong_owner = types.SimpleNamespace(**store_stat, st_mode=stat.S_IFDIR | 0o750, st_uid=124, st_gid=456)
+wrong_group = types.SimpleNamespace(**store_stat, st_mode=stat.S_IFDIR | 0o750, st_uid=123, st_gid=457)
+wrong_mode = types.SimpleNamespace(**store_stat, st_mode=stat.S_IFDIR | 0o770, st_uid=123, st_gid=456)
 ok(not c._store_rule(123, 456, 0o750, True)(fd, wrong_owner, False), "store owner exact")
 ok(not c._store_rule(123, 456, 0o750, True)(fd, wrong_group, False), "store group exact")
 ok(not c._store_rule(123, 456, 0o750, True)(fd, wrong_mode, False), "store mode exact")

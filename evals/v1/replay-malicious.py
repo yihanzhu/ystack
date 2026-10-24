@@ -46,6 +46,10 @@ def _origin_values(runtime_root, files, storage_rows, identity_context, source_b
     owner = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = owner
     spec.loader.exec_module(owner)
+    if "sandbox-export.bin" in files and type(files["sandbox-export.bin"]) is not bytes:
+        files = dict(files)
+        value = files["sandbox-export.bin"]
+        files["sandbox-export.bin"] = value if type(value) is tuple else value.chunks
     return owner._origin_values(files, storage_rows, identity_context, source_bytes)
 
 
@@ -111,6 +115,14 @@ def _gate_values(runtime_root, inputs):
     return {"state": state, "attempt": attempt, "scope": scope,
         "origins": owner._origins_values(inputs["observations"]), "manifest": manifest,
         "complete": owner._completion_values(inputs["id"], manifest)}
+
+
+def _identity_values(runtime_root, slots, instruction_raw, config_raw, supervisor_raw, python_raw):
+    spec = importlib.util.spec_from_file_location(
+        "malicious_identity_values", Path(runtime_root) / "sandbox/v1/host-supervisor.py")
+    owner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(owner)
+    return owner._runtime_identity_values(slots, instruction_raw, config_raw, supervisor_raw, python_raw)
 
 
 def _runtime_values(runtime_root, start_raw, config_raw, driver_rest):

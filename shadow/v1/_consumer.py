@@ -82,7 +82,111 @@ def canonical(value: object) -> bytes:
                       allow_nan=False).encode("utf-8") + b"\n"
 
 def digest(data: bytes) -> str:
+    if isinstance(data, _ExportSnapshot):
+        return data.sha256()
     return hashlib.sha256(data).hexdigest()
+
+
+_export_work = {}
+
+
+def _export_read_charge(site, amount, *, call=False):
+    _require(type(amount) is int and amount >= 0, "E_LIMIT")
+    row = _export_work.setdefault(site, {"calls": 0, "read_bytes": 0})
+    total = sum(value["read_bytes"] for value in _export_work.values())
+    _require(total + amount <= 1536 * DOCUMENT_LIMIT, "E_LIMIT")
+    row["calls"] += int(call)
+    row["read_bytes"] += amount
+
+
+@dataclasses.dataclass(frozen=True, eq=False)
+class _ExportSnapshot:
+    chunks: tuple[bytes, ...]
+    owner: object
+    acquisition_sha: str
+    size: int = dataclasses.field(init=False)
+
+    def __post_init__(self):
+        object.__setattr__(self, "chunks", tuple(self.chunks))
+        object.__setattr__(self, "size", sum(map(len, self.chunks)))
+        _require(self.size <= EXPORT_LIMIT and all(type(chunk) is bytes and len(chunk) <= 65536
+                                                  for chunk in self.chunks), "E_STORE")
+
+    def __len__(self):
+        return self.size
+
+    def sha256(self):
+        _export_read_charge("consumer.independent-sha", 0, call=True)
+        measured = hashlib.sha256()
+        for chunk in self.chunks:
+            _export_read_charge("consumer.independent-sha", len(chunk))
+            measured.update(chunk)
+        return measured.hexdigest()
+
+    def __eq__(self, other):
+        if not isinstance(other, (_ExportSnapshot, bytes, bytearray, memoryview)):
+            return NotImplemented
+        if len(self) != len(other):
+            return False
+        _export_read_charge("consumer.whole-equality", 0, call=True)
+        right = iter(other.chunks) if isinstance(other, _ExportSnapshot) else iter((other,))
+        current, offset = memoryview(b""), 0
+        for chunk in self.chunks:
+            left = memoryview(chunk)
+            while left:
+                if offset == len(current):
+                    current, offset = memoryview(next(right)), 0
+                size = min(len(left), len(current) - offset)
+                _export_read_charge("consumer.whole-equality", size * 2)
+                if left[:size] != current[offset:offset + size]:
+                    return False
+                left, offset = left[size:], offset + size
+        return True
+
+    def recheck(self, item, code):
+        _require(self.owner is item and item.before.st_size == self.size, code)
+        item.recheck(code)
+        _export_read_charge("consumer.completion-reread", 0, call=True)
+        measured = hashlib.sha256()
+        try:
+            os.lseek(item.fd, 0, os.SEEK_SET)
+            for chunk in self.chunks:
+                expected = memoryview(chunk)
+                while expected:
+                    _require(sum(value["read_bytes"] for value in _export_work.values())
+                             + len(expected) * 2 <= 1536 * DOCUMENT_LIMIT, "E_LIMIT")
+                    current = os.read(item.fd, len(expected))
+                    _require(bool(current), code)
+                    _export_read_charge("consumer.completion-reread", len(current) * 2)
+                    _require(current == expected[:len(current)], code)
+                    measured.update(current)
+                    expected = expected[len(current):]
+        except (OSError, ValueError):
+            raise Refusal(code) from None
+        _require(measured.hexdigest() == self.acquisition_sha, code)
+        item.recheck(code)
+
+
+def _read_export_snapshot(item, code):
+    item.recheck(code)
+    _require(0 <= item.before.st_size <= EXPORT_LIMIT, code)
+    chunks, remaining, measured = [], item.before.st_size, hashlib.sha256()
+    _export_read_charge("consumer.held-acquisition", 0, call=True)
+    try:
+        os.lseek(item.fd, 0, os.SEEK_SET)
+        while remaining:
+            _require(sum(value["read_bytes"] for value in _export_work.values())
+                     + min(65536, remaining) <= 1536 * DOCUMENT_LIMIT, "E_LIMIT")
+            chunk = os.read(item.fd, min(65536, remaining))
+            _require(bool(chunk), code)
+            _export_read_charge("consumer.held-acquisition", len(chunk))
+            measured.update(chunk)
+            chunks.append(chunk)
+            remaining -= len(chunk)
+    except (OSError, ValueError):
+        raise Refusal(code) from None
+    item.recheck(code)
+    return _ExportSnapshot(chunks, item, measured.hexdigest())
 
 def _integer(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
@@ -909,21 +1013,28 @@ def _observation(item: HeldPath, relative: str, raw: bytes | None = None, *, sto
             "named_after": _stat_values(component.named_after),
             "access_acl": acl[0], "default_acl": acl[1],
             "directory_names": item.directory_names, "read_error": None})
-    return _observation_values(relative, _stat_values(item.before), _stat_values(after), raw)
+    acquired = isinstance(raw, _ExportSnapshot)
+    if acquired:
+        _require(raw.owner is item and len(raw) == item.before.st_size, "E_STORE")
+    return _observation_values(relative, _stat_values(item.before), _stat_values(after), raw,
+                               acquisition=acquired)
 
 
-def _observation_values(relative, before, after, raw=None):
+def _observation_values(relative, before, after, raw=None, *, acquisition=False):
     row = {"name": relative, "device": before["dev"], "inode": before["ino"],
            "mode": stat.S_IMODE(before["mode"]), "uid": before["uid"], "gid": before["gid"],
            "kind": "directory" if stat.S_ISDIR(before["mode"]) else "file",
            "metadata_before": list(_identity_values(before)),
            "metadata_after": list(_identity_values(after))}
     if raw is not None:
-        row.update({"size": len(raw), "sha256": digest(raw)})
+        row.update({"size": len(raw), "sha256": raw.acquisition_sha if acquisition else digest(raw)})
     return row
 
 
 def _origin_values(files, storage_rows, identity_context, source_bytes):
+    if type(files.get("sandbox-export.bin")) is tuple:
+        files = dict(files)
+        files["sandbox-export.bin"] = _ExportSnapshot(files["sandbox-export.bin"], None, None)
     config = _parse_config(source_bytes["host-config.json"])
     attempt_id, platform = identity_context["attempt_id"], identity_context["platform"]
     _require(type(storage_rows) is list and len(storage_rows) <= 65536 and _id(attempt_id), "E_STORE")
@@ -1008,7 +1119,8 @@ def _capture_export_binding(groups, snapshots, *, launch=None, source=False):
     _require(present == (reference is not None) and (not source or not present), "E_STORE")
     if reference is not None:
         raw = snapshots["sandbox-export.bin"]
-        _require(len(raw) == reference["size_bytes"] and digest(raw) == reference["sha256"]
+        measured = raw.acquisition_sha if isinstance(raw, _ExportSnapshot) else digest(raw)
+        _require(len(raw) == reference["size_bytes"] and measured == reference["sha256"]
                  and (launch is None or reference["launch"] == launch), "E_STORE")
     return reference
 
@@ -1057,8 +1169,11 @@ class _HeldStoreRead:
             relative = os.path.relpath(item.path, self.anchor.config["store_root"])
             if stat.S_ISREG(item.before.st_mode):
                 name = relative[len(self.attempt_id) + 1:]
-                _require(name in self.snapshots and item.read(len(self.snapshots[name]), code)
-                         == self.snapshots[name], code)
+                _require(name in self.snapshots, code)
+                if name == "sandbox-export.bin":
+                    self.snapshots[name].recheck(item, code)
+                else:
+                    _require(item.read(len(self.snapshots[name]), code) == self.snapshots[name], code)
             else:
                 names = set(item.listdir())
                 if relative == ".":
@@ -1167,7 +1282,8 @@ def read_store_attempt(anchor: Anchor, attempt_id: str, *,
                        DOCUMENT_LIMIT if name in ("receipt.json", "payload/evidence-manifest.json")
                        else OUTPUT_LIMIT)
             _require(item.before.st_size <= maximum, "E_STORE")
-            raw = manifest_raw if item is manifest_item else item.read_exact(item.before.st_size, "E_STORE")
+            raw = (_read_export_snapshot(item, "E_STORE") if name == "sandbox-export.bin" else
+                   manifest_raw if item is manifest_item else item.read_exact(item.before.st_size, "E_STORE"))
             _require(len(raw) == item.before.st_size, "E_STORE")
             snapshots[name] = raw
             observations.append(_observation(item, name, raw, storage_rows=storage_rows))
