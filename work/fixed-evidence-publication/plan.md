@@ -868,7 +868,13 @@ separate disposable databases. Do not assume lexical ordering puts the new suite
 first, and do not delete existing objects to manufacture this case. If the actual job is not shallow/missing, P07 remains NOTRUN and needs
 another authorized existing-CI run with its normal shallow checkout. No workflow
 change, new download or alternative CI is authorized. The new suite records that
-one fetch for the provenance function; later callers only use the obtained objects.
+one fetch for the provenance function; later callers in that same checkout only
+use those objects. Pin the extracted function bytes to the runner's actual function
+and require its one real `registry-exact` call site. Each CI job/checkout must prove
+its own context, fetch count and actual object bytes. Shard 6 receipts cannot prove
+shard 4's read or success. The same spec contract bounds each authorized existing
+checkout to at most one fixed read; this plan grants no extra read or cross-job
+credential transfer. Until actual outputs exist, P07 stays NOTRUN.
 
 ### Validation and final stop
 
