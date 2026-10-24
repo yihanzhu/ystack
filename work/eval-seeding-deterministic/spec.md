@@ -22,10 +22,11 @@ trials. It ships no model call, credential, network use, activation or write.
 
 ### R1. Order and dependencies
 
-1. 真实 source、relay、replay 和 seed 的交付仍依赖 child 5 的真实 write-shadow
+1. 真实 source、relay、replay 和 seed 的完整交付仍依赖 child 5 的真实 write-shadow
    evidence 与 child 9 的真实 gate evidence（`spec.md:295`, `:299`）。它们仍须
-   满足 concerns 6、7 的前置条件。PR 1a 的独立机制可先落地。任何 seed 都不能用
-   替代记录构造。此分期只改变交付顺序，不改变 intent 的最终成果或验收标准。
+   满足 concerns 6、7 的前置条件。PR 1a 的独立机制可先落地。PR 1b 可按下述门槛
+   先实现已有真实接口的 review source/relay；这不接受尚未完成的依赖。任何 seed
+   都不能用替代记录构造。此分期只改变实施顺序，不改变 intent 的最终成果或验收标准。
 2. 按下表交付。PR 1a 是完整、inactive 的产品机制与测试；PR 1b 保留原 framework
    交付中依赖真实字段的部分。PR 2、PR 3 在 PR 1b 后交付，二者顺序可互换。
 
@@ -41,13 +42,45 @@ trials. It ships no model call, credential, network use, activation or write.
    sandbox/native 执行记录。PR 1a、PR 1b 和先落地的 seed PR 只 `Tracks #439`。
    只有全部要求与真实 seed 验收完成后的最后一批可 `Closes #439`。
    机制测试通过不能宣称这两个 family 已 seeded 或 passed。
-3. 计划只引用 merged artifacts。PR 1a 先将独立机制、pin 链和测试映射到当前源码。
-   PR 1b、PR 2、PR 3 所需的 concern 5、6、9 字段，须在各批开始前映射到 merged
-   `path:line`。尚未取得的真实 control、gate、enablement、scope、记录授权和完整
-   replay recipe 均保留为未满足依赖；不得用 fixture 补齐原 S1–S10。
-   对应批次仍有字段不能映射时，停止该批计划并返回 G2。先行机制不要求重建尚未
-   可用的 replay closure，也不免除后续完整闭包核对。每批代码前都须有独立接受的
-   high-risk plan；计划由另一作者修订，并绑定本 spec 的新 blob。
+3. 计划仍绑定已 merged 的 intent/spec 与真实源码。PR 1a 的范围、实现和证明门槛
+   不变。PR 1b 内先行的 review source/relay 只需映射其实际读取的接口、字段与
+   record closure，包括现有 `evals/v1/run.sh evaluate` 和 `framework.jq`。
+   完整实现 M5、固定审批锚、R8.3 的逐项转抄核对、实际 record evaluator 调用、
+   R8.4 状态传递及对应正负机制测试。不得用自写判分替代 record evaluator。
+   真实 first-write scope（S6）与四次录制授权（S8）分别保留为 PR 2、PR 3 的门槛，
+   不阻止这段已映射机制的源码。真实标签、grade status 和 exact approval 仍只由
+   operator 提供。PR 2 前 shipped approval pin 保持 `none`，不生成审批记录；
+   临时 fixture 只证明机制，不能证明已获批准或 family 已 seeded。
+4. PR 1b 仍是两 source、relay 和 replay 的同一次完整交付。先行代码保留在同一
+   attempt；不得把未就绪子段称为功能已完成，或发布缺少完整 replay 的 PR 1b。
+   不写空函数、占位 dispatch、伪造 observation，或用永久拒绝替代尚未实现的功能。
+   malicious recipe 的 S1–S5、S7、S9、S10 必须在相应代码开始前逐项映射。
+   child 9（#681）的实际 consumer/source 尚未写出时，不能用其 plan、手工 verdict
+   或 fixture 补齐 S3、完整执行命令、非派生字段与实际 recipe。已有 child-5
+   producer/child-6 reader 的字段也只按其精确 source 映射，不推断整体已完成。
+   尚未取得的真实 control、gate、enablement、scope 和记录授权继续列为欠项。
+5. 对 malicious recipe，R4.6 的全部重算标准与 S10 停止条件保持不变。固定
+   sandbox/store/source 边界、fresh nonce 或不可离线重算字段不能藏在旧 shell
+   recipe 中。必须先基于实际 #681 source 提出具体方案并通过原 G2，才能修订
+   对应 high-risk plan 并实施。此次顺序修订不提供或接受该方案。不把 archived
+   receipt 当成实际 source 重跑，不注入固定 nonce，不删比较字段，不用 mock
+   冒充 genuine 输出。未满足时只停止该依赖子段；先行 relay 不承担这些效果。
+6. 实施可先于明确绑定依赖的验收。使用保留的未合入实现前，经理须记录精确
+   repository、branch、head/base、worktree/PR 状态、artifact blobs 与未解决证明，
+   并直接取得独立 source preflight。不存在的 source 不能由这种记录补齐。
+   不复制或重建依赖，不把 source 预审叫作 G3、已合入或 native 通过。
+   每段代码前仍须有独立接受并合入的 high-risk plan，绑定本 spec 的新 blob。
+   依赖或计划含义变化时，保留 attempt，先经独立 plan amendment 再续写；若字段
+   或方案超出 accepted spec，则先回 G2。不得由实施 coder 修改 accepted artifacts。
+7. PR 1b 最终接受与发布前，须普通 merge 包含所需实际实现的精确 fresh main，
+   完成 S1–S10 适用字段的 merged `path:line`、完整 closure/overlap/pin 核对、
+   整体 diff 审查、全部相关测试、fresh CI 与独立接受。R5 的完整 closure不能由
+   旧47项、下界或猜测上限代替；现有64项上限不变，确需改变时先回 G2。
+   PR 2 保留真实 scope、verdict、operator labels 与 exact approval；PR 3 保留真实
+   control/gate evidence、全部四次实际 trial 与 S8 授权。两批原验收均不变。
+   #558 的原完整验收最后集中闭合；其原失败、
+   native/platform、source/restoration 和 G3 要求不被机制证明替代。现有失败矩阵
+   不能算通过，旧 head 的成功也不能接受新 head。无新增执行、网络、安装或激活权限。
 
 ### R2. The `multi` trial policy: framework change and contract
 
@@ -439,8 +472,10 @@ in CI; wiring the record report into anything but the relay; enablement.
   plan-only PR precedes code.
 - **Size.** 各批计划按完整机制与测试给出范围。不能为压缩范围删测试或交付空实现。
   本 spec amendment 为 `review_size: standard`，只改变同一 concern 的分期与映射。
-- **Unmerged siblings.** Invariant field paths and part of the closure come from
-  concerns 5, 6 and 9. R1.3 makes the dependent plan stop on any gap.
+- **Unmerged siblings.** Invariant fields and part of the closure come from
+  concerns 5, 6 and 9. R1 permits only the mapped review mechanism to start first.
+  Missing actual source or an unresolved S10 recipe stops the dependent work;
+  preflight never replaces merged dependencies or their final proof.
 - **The forge-text trial is structural.** No component in the closure accepts forge
   text, so it passes by construction. Its value is regression: a later component that
   reads forge text must be added to the closure and then faces this trial.
