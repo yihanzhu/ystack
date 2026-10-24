@@ -892,6 +892,20 @@ class Anchor:
     resolver: _DarwinUUIDResolver | None
     identity_context: dict | None = None
     private_observations: dict = dataclasses.field(default_factory=dict)
+    storage_entry_count: int = 0
+
+    def retain_storage(self, attempt_id, rows, failure):
+        if self.storage_entry_count + len(rows) > 65536:
+            self.private_observations["unusable"] = True
+            return
+        self.storage_entry_count += len(rows)
+        error = None
+        if failure is not None:
+            self.private_observations["unusable"] = True
+            error = {"category": type(failure).__name__, "errno": getattr(failure, "errno", None),
+                     "code": getattr(failure, "code", None)}
+        self.private_observations.setdefault("storage_reads", []).append(
+            {"attempt_id": attempt_id, "entries": rows, "error": error})
 
     def retain_entropy(self, role, value):
         _require(role in {"reproduction", "write", "kill", "coverage"}
@@ -1156,6 +1170,47 @@ def _capture_for_replay(snapshots, attempt_id, request_raw, *, launch=None):
     return groups
 
 
+def _capture_copy_room(work, amount, exported, *, case=False):
+    fields = ("read_bytes", "write_bytes", "physical_bytes",
+              "export_read_bytes", "export_write_bytes", "export_physical_bytes")
+    _require(all(type(work[key]) is int and work[key] >= 0 for key in fields), "E_LIMIT")
+    limits = (512, 256, 256, 384, 192, 192) if case else (2048, 1024, 1024, 1536, 768, 768)
+    _require(all(work[key] + (amount if index < 3 or exported else 0)
+                 <= limit * DOCUMENT_LIMIT for index, (key, limit) in enumerate(zip(fields, limits))), "E_LIMIT")
+    nonexport = (128, 64, 64) if case else (512, 256, 256)
+    _require(all(0 <= work[key] - work["export_" + key]
+                 and work[key] - work["export_" + key] + (0 if exported else amount)
+                 <= limit * DOCUMENT_LIMIT for key, limit in zip(fields[:3], nonexport)), "E_LIMIT")
+
+
+def _private_capture_observations(value, work, case_work):
+    encoded = bytearray()
+    reserved = 0
+    encoder = json.JSONEncoder(ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    for piece in encoder.iterencode(value):
+        _require(len(piece) <= DOCUMENT_LIMIT, "E_LIMIT")
+        size = sum(1 if ord(char) < 128 else 2 if ord(char) < 2048 else
+                   3 if ord(char) < 65536 else 4 for char in piece)
+        _require(len(encoded) + size + 1 <= DOCUMENT_LIMIT, "E_LIMIT")
+        for counter, limit, nonexport in ((work, 2048, 512), (case_work, 512, 128)):
+            _require(counter["read_bytes"] + reserved + size * 3 + 1 <= limit * DOCUMENT_LIMIT
+                     and counter["read_bytes"] - counter["export_read_bytes"] + reserved
+                     + size * 3 + 1 <= nonexport * DOCUMENT_LIMIT, "E_LIMIT")
+        raw = piece.encode("utf-8")
+        encoded.extend(raw)
+        work["read_bytes"] += size
+        case_work["read_bytes"] += size
+        reserved += size * 2
+    result = bytes(encoded)
+    work["read_bytes"] += len(encoded)
+    case_work["read_bytes"] += len(encoded)
+    result += b"\n"
+    work["read_bytes"] += len(encoded) + 1
+    case_work["read_bytes"] += len(encoded) + 1
+    work["calls"]["consumer-json-buffer"] = work["calls"].get("consumer-json-buffer", 0) + 1
+    return result
+
+
 class _HeldStoreRead:
     def __init__(self, anchor: Anchor, attempt_id: str) -> None:
         self.anchor, self.attempt_id = anchor, attempt_id
@@ -1190,6 +1245,112 @@ class _HeldStoreRead:
     def close(self) -> None:
         held, self.held = self.held, []
         _close_paths(held)
+
+    def copy_capture(self, parent, request_raw, launch, work):
+        _require(type(launch) is str and launch in {"reproduction", "write"}
+                 and isinstance(parent, HeldPath) and len(parent.components) > 1
+                 and bool(self.held) and type(work) is dict, "E_STORE")
+        _capture_for_replay(self.snapshots, self.attempt_id, request_raw, launch=launch)
+        _require(len(self.observation) <= DOCUMENT_LIMIT, "E_LIMIT")
+        _require(type(self.anchor.identity_context) is dict
+                 and not self.anchor.private_observations.get("unusable", False)
+                 and _clock_complete
+                 and getattr(self.anchor.resolver, "observations_complete", True), "E_STORE")
+        parent.recheck("E_STORE")
+        state = _metadata(parent.fd)
+        _require(stat.S_ISDIR(state.st_mode) and state.st_uid == os.geteuid()
+                 and stat.S_IMODE(state.st_mode) == 0o700, "E_STORE")
+        access, default = _acl_state(parent.fd, self.anchor.resolver)
+        _require(access == [] if sys.platform == "darwin" else access is None and default is None, "E_STORE")
+        work.setdefault("files", 0)
+        work.setdefault("read_bytes", 0)
+        work.setdefault("write_bytes", 0)
+        work.setdefault("physical_bytes", 0)
+        work.setdefault("export_read_bytes", 0)
+        work.setdefault("export_write_bytes", 0)
+        work.setdefault("export_physical_bytes", 0)
+        work.setdefault("export_files", 0)
+        work.setdefault("calls", {})
+        case_key = str(state.st_dev) + ":" + str(state.st_ino)
+        case_work = work.setdefault("cases", {}).setdefault(case_key,
+            {key: 0 for key in ("files", "read_bytes", "write_bytes", "physical_bytes",
+                               "export_read_bytes", "export_write_bytes", "export_physical_bytes", "export_files")})
+        _capture_copy_room(work, 0, False)
+        _capture_copy_room(case_work, 0, False, case=True)
+        consumer_raw = _private_capture_observations({"attempt_id": self.attempt_id,
+            "request_sha256": digest(request_raw),
+            "storage": self.storage_rows,
+            "storage_reads": self.anchor.private_observations.get("storage_reads", []),
+            "identity_context": self.anchor.identity_context,
+            "entropy": self.anchor.private_observations.get("entropy", {}),
+            "clocks": _clock_observations}, work, case_work)
+        os.mkdir(launch, 0o700, dir_fd=parent.fd)
+        after_parent = _metadata(parent.fd)
+        _require((after_parent.st_dev, after_parent.st_ino, after_parent.st_uid, after_parent.st_gid,
+                  after_parent.st_mode) == (state.st_dev, state.st_ino, state.st_uid, state.st_gid, state.st_mode)
+                 and _identity(after_parent) == _identity(_named_metadata(
+                     parent.components[-1].name, parent.components[-2].fd)), "E_STORE")
+        parent.components[-1].before = after_parent
+        directory = os.open(launch, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent.fd)
+        try:
+            directory_state = _metadata(directory)
+            _require(stat.S_ISDIR(directory_state.st_mode) and directory_state.st_uid == os.geteuid()
+                     and stat.S_IMODE(directory_state.st_mode) == 0o700, "E_STORE")
+            def write(name, chunks, exported=False):
+                _require(work["files"] < 256 and case_work["files"] < 256
+                         and (not exported or work["export_files"] < 64 and case_work["export_files"] < 16), "E_LIMIT")
+                target = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                                 0o600, dir_fd=directory)
+                work["files"] += 1
+                case_work["files"] += 1
+                work["export_files"] += int(exported)
+                case_work["export_files"] += int(exported)
+                work["calls"][name] = work["calls"].get(name, 0) + 1
+                size = 0
+                try:
+                    for chunk in chunks:
+                        view = memoryview(chunk)
+                        while view:
+                            bounded = view[:65536]
+                            amount = len(bounded)
+                            _capture_copy_room(work, amount, exported)
+                            _capture_copy_room(case_work, amount, exported, case=True)
+                            count = os.write(target, bounded)
+                            _require(0 < count <= amount, "E_STORE")
+                            size += count
+                            for key in ("read_bytes", "write_bytes", "physical_bytes"):
+                                work[key] += count
+                                case_work[key] += count
+                                if exported:
+                                    work["export_" + key] += count
+                                    case_work["export_" + key] += count
+                            view = view[count:]
+                    os.fchmod(target, 0o400)
+                    os.fsync(target)
+                    final = _metadata(target)
+                    named = _named_metadata(name, directory)
+                    _require(stat.S_ISREG(final.st_mode) and final.st_uid == os.geteuid()
+                             and final.st_nlink == 1 and final.st_size == size
+                             and stat.S_IMODE(final.st_mode) == 0o400
+                             and _identity(final) == _identity(named), "E_STORE")
+                finally:
+                    os.close(target)
+            write("capture.json", (self.snapshots["capture.json"],))
+            if "sandbox-export.bin" in self.snapshots:
+                write("sandbox-export.bin", self.snapshots["sandbox-export.bin"].chunks, True)
+            write("origin-observation.json", (self.observation,))
+            write("consumer-observations.json", (consumer_raw,))
+            os.fsync(directory)
+            os.fsync(parent.fd)
+            final_directory = _metadata(directory)
+            named_directory = _named_metadata(launch, parent.fd)
+            _require((final_directory.st_dev, final_directory.st_ino, final_directory.st_uid,
+                      final_directory.st_mode) == (directory_state.st_dev, directory_state.st_ino,
+                                                   directory_state.st_uid, directory_state.st_mode)
+                     and _identity(final_directory) == _identity(named_directory), "E_STORE")
+            parent.recheck("E_STORE")
+        finally:
+            os.close(directory)
 
 
 def read_store_attempt(anchor: Anchor, attempt_id: str, *,
@@ -1321,6 +1482,11 @@ def read_store_attempt(anchor: Anchor, attempt_id: str, *,
         failure = exc
         raise
     finally:
+        if hasattr(anchor, "retain_storage"):
+            try:
+                anchor.retain_storage(attempt_id, storage_rows, failure)
+            except MemoryError:
+                anchor.private_observations["unusable"] = True
         try:
             _close_paths(opened)
         except OSError:

@@ -626,6 +626,10 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
                           for key in consumer.IDENTITY_KEYS}}
     config_raw = consumer.canonical({'schema_version':1,'kind':'sandbox_host_config','id':'host.ordinary','body':config})
     anchor = types.SimpleNamespace(config=config,config_raw=config_raw,resolver=None,recheck=lambda *_:None)
+    anchor.identity_context = {'uid':os.getuid(),'euid':os.geteuid(),'gid':os.getgid(),
+        'egid':os.getegid(),'groups':os.getgroups(),'platform':sys.platform,
+        'uuid_replies':None,'group_replies':None}
+    anchor.private_observations = {}
     original_acl = consumer._acl_state
     consumer._acl_state = lambda *_: ([],None) if sys.platform == 'darwin' else (None,None)
     try:
@@ -708,6 +712,13 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
             assert json.loads(overflow)['body'] == {'request_sha256':host.sha256_hex(request),
                 'raw':{},'complete':False}
             print('ok source capture operation binding and pre-hex document overflow - '+operation)
+        private = area/'private-recorder';private.mkdir(mode=0o700);private.chmod(0o700)
+        failed_private = area/'failed-private-recorder';failed_private.mkdir(mode=0o700);failed_private.chmod(0o700)
+        private_held = consumer._open_held(str(private),True,
+            consumer._store_rule(os.getuid(),os.getgid(),0o700,True), 'E_STORE')
+        failed_private_held = consumer._open_held(str(failed_private),True,
+            consumer._store_rule(os.getuid(),os.getgid(),0o700,True), 'E_STORE')
+        private_work = {}
         for launch in ('reproduction','write'):
             before_work = copy.deepcopy(consumer._export_work)
             def spent(site,field):
@@ -729,9 +740,11 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
                 'payload/evidence-manifest.json':host.empty_evidence_manifest()[0],
                 'capture.json':host._capture_values(attempt_id,request,export_group,True),
                 'sandbox-export.bin':export}
+            export_anchor = consumer.Anchor(config,config_raw,[],{},('',[]),('',[]),None,
+                                            identity_context=anchor.identity_context)
             for name,raw in values.items():
                 path = attempt/name;path.write_bytes(raw);path.chmod(0o440)
-            held = consumer._HeldStoreRead(anchor,attempt_id)
+            held = consumer._HeldStoreRead(export_anchor,attempt_id)
             try:
                 snapshot = held.snapshots['sandbox-export.bin']
                 assert len(snapshot.chunks) == consumer.EXPORT_LIMIT//65536
@@ -775,6 +788,53 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
                 refuses(lambda:consumer._capture_export_binding(export_group,
                     {k:v for k,v in held.snapshots.items() if k != 'sandbox-export.bin'}),'missing-binary')
                 refuses(lambda:consumer._capture_export_binding(group,held.snapshots),'unused-binary')
+                prior_copy = dict(private_work)
+                held.copy_capture(private_held,request,launch,private_work)
+                assert private_work['export_read_bytes']-prior_copy.get('export_read_bytes',0) == len(export)
+                assert private_work['export_write_bytes']-prior_copy.get('export_write_bytes',0) == len(export)
+                assert private_work['export_physical_bytes']-prior_copy.get('export_physical_bytes',0) == len(export)
+                assert private_work['export_files']-prior_copy.get('export_files',0) == 1
+                assert {path.name for path in (private/launch).iterdir()} == {
+                    'capture.json','sandbox-export.bin','origin-observation.json','consumer-observations.json'}
+                consumer_observations = (private/launch/'consumer-observations.json').read_bytes()
+                assert json.loads(consumer_observations) == {'attempt_id':attempt_id,
+                    'request_sha256':host.sha256_hex(request),'storage':held.storage_rows,
+                    'storage_reads':export_anchor.private_observations['storage_reads'],
+                    'identity_context':anchor.identity_context,'entropy':{},'clocks':consumer._clock_observations}
+                copied = private/launch/'sandbox-export.bin'
+                assert copied.stat().st_size == len(export) and copied.stat().st_mode & 0o777 == 0o400
+                measured = consumer.hashlib.sha256()
+                validation_bytes = 0
+                with copied.open('rb') as stream:
+                    while True:
+                        chunk = stream.read(65536)
+                        if not chunk: break
+                        measured.update(chunk);validation_bytes += len(chunk)
+                assert validation_bytes == len(export) and measured.hexdigest() == reference['sha256']
+                print(json.dumps({'private_copy_work':private_work,
+                    'additional_ordinary_destination_validation_read_bytes':validation_bytes,
+                    'additional_ordinary_consumer_doc_validation_input_bytes':len(consumer_observations)},sort_keys=True))
+                failed_state = failed_private_held.before
+                failed_key = str(failed_state.st_dev)+':'+str(failed_state.st_ino)
+                fields = ('files','read_bytes','write_bytes','physical_bytes','export_read_bytes',
+                          'export_write_bytes','export_physical_bytes','export_files')
+                failure_work = {key:0 for key in fields}
+                case_work = {key:0 for key in fields}
+                case_work.update(write_bytes=192*1024*1024-65536,
+                    export_write_bytes=192*1024*1024-65536)
+                failure_work['cases'] = {failed_key:case_work}
+                failure_work.update(write_bytes=case_work['write_bytes'],
+                                    export_write_bytes=case_work['export_write_bytes'])
+                initial_writes = failure_work['write_bytes']
+                refuses(lambda:held.copy_capture(failed_private_held,request,launch,failure_work),
+                        'private-copy-case-write-limit')
+                partial = failed_private/launch/'sandbox-export.bin'
+                assert partial.stat().st_size == 65536
+                assert partial.stat().st_mode & 0o777 == 0o600
+                assert case_work['export_write_bytes'] == 192*1024*1024
+                print(json.dumps({'capacity_counter_prestate_only':initial_writes,
+                    'actual_failed_fixture_write_bytes':failure_work['write_bytes']-initial_writes,
+                    'retained_partial_export_bytes':partial.stat().st_size},sort_keys=True))
                 held.recheck()
                 assert spent('consumer.completion-reread','calls') == 1
                 assert spent('consumer.completion-reread','read_bytes') == 2*len(export)
@@ -790,6 +850,8 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
                 print('ok complete 12MiB conditional binary held inventory/origin/binding - '+launch+
                       '; capture path only, full accounting/replay remain separate')
             finally:held.close()
+        private_held.close()
+        failed_private_held.close()
     finally:consumer._acl_state = original_acl
 PY_CAPTURE_VALUES
 /usr/bin/python3 -I -S -B - "$root" <<'PY_LAUNCH_PREPARATION_VALUES'
