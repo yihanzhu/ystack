@@ -340,7 +340,7 @@ integer/null for poll/wait, integer for driver/kill/cleanup/read/close, boolean 
 thread/select observations. Non-export bytes remain limited to checked driver
 replies and pipe reads, in their existing inline representation; they must equal
 the shared driver owner's reconstructed output. Only `run_vm.export-read`, the original D `fh.read()` at
-`host-supervisor.py:2190–2192`, uses the following closed variant in `bytes`:
+`host-supervisor.py:2190–2192`, uses this closed variant in final recorder RAW12 `bytes`:
 `{role:"sandbox-export-bytes",launch,size_bytes,sha256}`. Launch is exactly
 `reproduction` or `write`, derived from that trial's fixed caller and attempt.
 Size is the measured whole read length, an integer from 0 through 12,582,912;
@@ -354,6 +354,46 @@ Each launch consumes at most one such row and file; the case has at most two.
 Reject inline export hex, mixed representations, cross-launch references,
 duplicate/unused files, a reference at another site or any unknown key. Clock and
 signal records still use their separate arrays. No site dispatches a syscall.
+
+Only the controlled host capture uses the private intermediate reference
+`{role:"sandbox-export-capture-bytes",size_bytes,sha256}` at that same export-read
+site. It has no launch. Its existing envelope binds the exact launch-request SHA
+and attempt; the same held `sandbox-export.bin` supplies the whole measured bytes.
+All size, return/errno, file-count and error/unreached rules above still apply.
+Host capture readers accept only this intermediate form. Final RAW12 and seed
+readers accept only the final form; neither is an alternate at the other stage.
+
+Only the existing reproduction run and writer `_verify_write` callers project
+this intermediate through the existing private consumer/recorder boundary. Each
+requires its already validated, frozen outer request and exact launch request,
+the same held capture/binary, and the validated receipt/expectation relation.
+The fixed reproduction caller requires `shadow_enforced_request`; the fixed writer
+requires `shadow_write_request`. They derive `reproduction` and `write` respectively.
+Require matching outer id/body attempt, launch id/body attempt, capture id,
+receipt/expectation attempt, and capture/receipt/expectation launch-request SHA
+against the exact launch bytes. No supplied role, launch or validation flag can
+replace those checks; no guessing from attempt names, subject or instruction.
+
+The projection changes only that intermediate reference into the final reference.
+Retain the original host capture bytes; origin remains bound to those bytes.
+Offline rebuilds the original envelope/intermediate ref and the final projection
+with the same owners and independently reconstructed caller/request relationship;
+it cannot derive the expected launch from the final ref it is checking. Both
+production and offline routes must preserve every independent relation check.
+No native request field, stdin package field, CLI/env selector or public primitive
+is added. No extra export read, binary copy or full-byte hash pass is added by the
+projection. Its small metadata work still pays the existing non-export budgets;
+all document, resource and read/write caps and complete-byte proofs remain.
+
+Existing capture-held-values, shadow-enforced/write and paired replay tests cover:
+(1) both full 12 MiB positive captures and exact original envelope/origin rebuild;
+(2) cross-stage shapes, wrong site/role, mixed, missing or extra keys;
+(3) caller/kind and request/attempt/receipt/expectation digest mismatches;
+(4) cross-launch capture/binary swaps even for equal bytes, duplicates/unused files;
+(5) held size/hash/ACL/parent/final drift and unchanged empty/short/error/unreached paths;
+(6) deletion of either projection route or envelope rebuild, and final-launch or
+original-capture mutation. Keep the existing production/offline paired proofs,
+source-page exclusion, budget boundary tests and all other acceptance requirements.
 
 The held file contains the complete value returned by that same original
 `fh.read()`, including every padding byte. Retain it before the original value
@@ -424,7 +464,8 @@ not re-read a path later to pretend it was the held read. Add a fixed
 `capture.json` sibling of `receipt.json` within the existing controlled attempt,
 with the same principal/group and read-only file rule. Its exact envelope is
 `schema_version:1`, `kind:"malicious_source_capture"`, `id:attempt_id` and
-`body:{request_sha256,raw,complete}`. Raw is the corresponding closed B group;
+`body:{request_sha256,raw,complete}`. Raw is the corresponding closed B group,
+with only the host export reference using the intermediate form defined above;
 request_sha256 is recomputed from held request bytes; complete is true only after
 all required observations and existing final checks finish. It contains only the
 host, guest and source observations needed above, never secret bytes. The consumer
