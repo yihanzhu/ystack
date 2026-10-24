@@ -675,17 +675,9 @@ $marker[0] as $mode_doc |
    type == "array" and length >= 1 and length <= 16 and
    all(.[]; shadow_record_ok)) and
   ((.body.records | length) == ($record_shas | length)))) as $set_ok |
-# The dashboard is judged against the evals framework's complete emitted shape,
-# copied at the top of this file, and not against a subset of it: a stub that
-# carried only the fields this evaluator reads could otherwise drive a
-# proposable outcome. Four of that predicate's parameters are identities only an
-# evals run holds — the catalog document, the evaluator digest, the result
-# digests, and the observation time — so they are read back out of the candidate
-# and the comparisons against them are checked here instead, for what a
-# self-supplied value cannot establish: the catalog reference is a well-formed
-# schema-version-1 eval_catalog reference, the evaluator digest is a digest, and
-# the observation time is a real UTC timestamp. The scope-specific family reads
-# this evaluator makes on top of the shape are kept as they were.
+# The held content digest binds the evaluator pair, not the evals' provenance.
+# Scope checks the complete emitted shape and family policy without replaying
+# evals or verifying other components' closure files. Qualification stays unavailable.
 ($dash |
  # A type guard first, so a block of the wrong type is a refusal rather than a
  # jq error part way through reading it.
@@ -697,10 +689,11 @@ $marker[0] as $mode_doc |
   (.families |
    type == "array" and
    all(.[]; type == "object" and (.cases | type == "object")))) and
+ ($dashboard_evaluator_sha | sha256_ok) and
  dashboard_shape(
    {schema_version: .body.catalog_ref.schema_version,
     kind: .body.catalog_ref.kind, id: .body.catalog_ref.id};
-   .body.catalog_ref.sha256; .body.evaluator.sha256; null;
+   .body.catalog_ref.sha256; $dashboard_evaluator_sha; null;
    (.body.inputs | map(.result_sha256)); .body.observed_at) and
  (.body.catalog_ref | document_ref_ok(1; "eval_catalog")) and
  (.body.evaluator.sha256 | sha256_ok) and

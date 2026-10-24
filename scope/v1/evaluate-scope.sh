@@ -155,6 +155,18 @@ policy_sha=$(sha256_path "$scratch/policy.json") || emit_error E_RUNTIME
 scope_sha=$(sha256_path "$scratch/scope.json") || emit_error E_RUNTIME
 shadow_set_sha=$(sha256_path "$scratch/shadow-set.json") || emit_error E_RUNTIME
 dashboard_sha=$(sha256_path "$scratch/dashboard.json") || emit_error E_RUNTIME
+dashboard_evaluator_sha=''
+"$jq_bin" -S -c '
+  if (.body | type) == "object" then
+    if (.body.evaluator | type) == "object" then
+      if (.body.evaluator.content | type) == "object" then .body.evaluator.content
+      else empty end
+    else empty end
+  else empty end
+' "$scratch/dashboard.json" >"$scratch/dashboard-evaluator.json" 2>/dev/null || emit_error E_RUNTIME
+if [ -s "$scratch/dashboard-evaluator.json" ]; then
+  dashboard_evaluator_sha=$(sha256_path "$scratch/dashboard-evaluator.json") || emit_error E_RUNTIME
+fi
 risk_sha=$(sha256_path "$scratch/risk.json") || emit_error E_RUNTIME
 kill_sha=$(sha256_path "$scratch/kill.json") || emit_error E_RUNTIME
 duty_sha=$(sha256_path "$scratch/duty.json") || emit_error E_RUNTIME
@@ -176,6 +188,7 @@ driver_sha=$(sha256_path "$source_path") || emit_error E_RUNTIME
   --arg mode_repo_state "$mode_repo_state" \
   --arg policy_sha "$policy_sha" --arg scope_sha "$scope_sha" \
   --arg shadow_set_sha "$shadow_set_sha" --arg dashboard_sha "$dashboard_sha" \
+  --arg dashboard_evaluator_sha "$dashboard_evaluator_sha" \
   --arg risk_sha "$risk_sha" --arg kill_sha "$kill_sha" \
   --arg duty_sha "$duty_sha" --arg marker_sha "$marker_sha" \
   >"$scratch/evaluation.json" 2>/dev/null || emit_error E_RUNTIME
