@@ -9,8 +9,8 @@ allowed-paths:
 
 Tracks #701. This high-risk plan retains the first private core checkpoint and
 adds the shared offline admission checkpoint below. Each phase must pass its own
-prerequisites. This amendment needs independent acceptance and protected merge
-before second-phase implementation. The accepted intent blob is
+prerequisites. This dependency refresh needs independent acceptance and protected merge
+before the next compatibility edits on the preserved second-phase carrier. The accepted intent blob is
 `4a7f1573eb5c47947e2dc360d39f12e12847b7c6`.
 The binding publisher contract remains `fixed-publisher-write-contract/spec.md`
 blob `68ff3f7e673752b624710bebf540822164239234`, sections 1–7 in full.
@@ -19,11 +19,11 @@ Implementation source-phase review_size: accepted-exception — retain the first
 phase's 4,500–8,000 added/changed-line allowance. Allow 2,500–6,500 for the second
 phase and 31,000–36,500 for the combined inactive source. The new work covers one
 shared owner, its real caller, exact loading, finite tests and provenance proof.
-The dependency has 21,333 additions and 265 deletions across 25 paths against its
+The dependency has 21,337 additions and 268 deletions across 27 paths against its
 merge base; the first core checkpoint has 7,039 additions and one deletion across
 13 paths. These are separate inputs to review, not an additive merged-diff claim.
 Measure all overlapping paths and actual conflict resolutions after ordinary merges.
-Count inherited code and the whole 16,899-line qualification suite in review; do
+Count inherited code and the whole 16,900-line qualification suite in review; do
 not deduct tests, compress code or weaken proof to meet the range. An overrun pauses
 this same attempt for a separate amendment. Final runtime scope and its actual
 PR range require a later accepted amendment after foundation merges.
@@ -420,17 +420,19 @@ transport, a grant, a new native interface or a second test-only caller.
 
 | Preserved input | Required identity |
 | --- | --- |
-| First checkpoint | `codex/impl/fixed-evidence-publication`, head `6daabc84067b32a57d7323457c9170887712ff2b`, original base `c6c3f74181ea86f85be87ecf4431e67a5f272d82` |
-| Dependency D | `codex/impl/scope-gate-evidence-generation`, head `22d25c96f28ed42da0a5722b6b5ea0e65946274c`, including ancestor `787fbbf2799d22bc557ea957395c72fb40072c86` |
+| Original first checkpoint (historical) | `codex/impl/fixed-evidence-publication`, head `6daabc84067b32a57d7323457c9170887712ff2b`, original base `c6c3f74181ea86f85be87ecf4431e67a5f272d82` |
+| Current second-phase carrier | `codex/impl/fixed-evidence-publication`, clean head `1a04df91eac6cad16ff372d41fefaca3d72c375e`, parent `8b944f336a17637792b844ee24819328601d34e4`, tree `76ce0bcec3442827ad18e99ada65a2cb0325d3ae` |
+| Dependency D | `codex/impl/scope-gate-evidence-generation`, head `2514193924d81d8bbebe72479b97f7a47bdc0e58`, parent `7b4e87796debdb3389c307a31a6d417f376541ef`; original `22d25c96f28ed42da0a5722b6b5ea0e65946274c` and `787fbbf2799d22bc557ea957395c72fb40072c86` ancestry preserved |
 | D source writer | `shadow/v1/write-shadow.py`, blob `fc596350cab560a138c2059e8096542aa75554b8` |
 | D comparison | merge base `573c02c0902a0b67a7168bef9a01263c0cf2b6a6`; comparison-main writer blob `4790655f9378636cacf8f4ec7929c88abcfce9bc` |
-| Amendment base | `ff1b8462c012a194cc7abd4befda2ec6ecfd8d71`; current spec and intent are the frontmatter chain |
+| Previous amendment base | `ff1b8462c012a194cc7abd4befda2ec6ecfd8d71`; preserved history |
+| Dependency-refresh draft base | `dd13438e1ccb266c1c288bed8b7c9fdc9375516b`; spec and intent remain the frontmatter chain |
 
-1. Close the first checkpoint on its exact head with independent complete source
-   review and the required complete six-shard CI proof. Preserve all original
-   R0/R1 failures and the rounds cap. A static-only acceptance or running/green
-   aggregate without raw proof is insufficient. This plan grants no autonomous
-   extra repair round. A genuinely later planned phase cannot hide an old failure.
+1. Continue the existing second-phase carrier at the exact head above. Preserve
+   its earlier core/admission receipts, R0/R1 failures, failed CI `40076448634` and
+   original core R0–R3 cap. Do not return to first-phase preparation or create R0
+   again. Existing required full proof remains due; source completion is not
+   acceptance. This refresh grants no extra repair round or implementation PR.
 2. Have a separate read-only reviewer preflight D's complete raw diff, all inherited
    source paths below, their original artifact/proof obligations and both source
    worktrees. The manager must freshly bind repository, branches, local/remote
@@ -438,22 +440,49 @@ transport, a grant, a new native interface or a second test-only caller.
    tracking-ref absence cannot establish remote absence. Source preflight and
    adoption accept inactive source use only; unfinished foundation proof stays due.
 3. After clean independent preflight and this plan's protected merge, the manager
-   explicitly adopts that exact D on #701. Resume only its same clean first-phase
-   carrier. Record new `plan-base`; merge that exact current main into the carrier,
+   explicitly adopts the refreshed exact D on #701. Resume only the same clean
+   second-phase carrier. Record new `plan-base`; merge that exact current main into the carrier,
    then merge exact D, using ordinary two-parent merges. First parents are the
    preserved carrier heads; second parents are the recorded main and D respectively.
    Do not cherry-pick, copy selected files, reset, rebase, force, replace a worktree
    or start a duplicate attempt. A moved D requires fresh preflight and adoption.
+   This resume waits for #709's required proof and actual protected landing, then
+   binds the fetched main containing that fix and this accepted plan. Neither a
+   running CI nor an unmerged PR is main; no predicted merge OID is usable.
 4. Capture actual merge exits, parents, every conflict and its complete resolution.
    Preserve conflict state; do not improvise a changed design. Only resolutions
    that preserve both accepted sources may advance under fresh independent review.
    Review the full combined tree, all inherited changes and source closures before
-   new admission code. Compare the actual merged diff and counts against this range.
+   any further source compatibility edit. Compare the actual merged diff and counts against this range.
    No permission to change an inherited file follows from adopting it.
-5. Implement only the ten second-phase paths below. Freeze helper bytes and the
+5. Continue only the necessary compatibility work within the ten second-phase paths below. Freeze helper bytes and the
    writer's literal SHA-256 together before source review. Run finite proof and
    the existing full matrix on the same branch. Rebind every changed head/base.
    Keep no implementation PR until the complete final contract is satisfied.
+
+Spec 6.1 explicitly permits a changed dependency after exact rebinding and fresh
+preflight. This refresh changes no admission contract or ten-path authored scope.
+D's only source delta from original 22d is +5/-4 across these four paths:
+
+| Inherited compatibility change | Exact refreshed D blob |
+| --- | --- |
+| `enforcement/v1/sandbox-receipt.jq`: two policy-set pins only | `eb18f926de7a49aef15df57177d8e189a52e8406` |
+| `scripts/test/sandbox-launcher.test.sh`: control_real legacy policy SHA only | `3bed4eb822e6b0e96aacaae3fb7a6095d3c37e6c` |
+| `scripts/test/scope-qualification.test.sh`: ordinary Reader fixture `store_session=None` | `17faa9cfc68ef2b97afd527a3521fa9e0b91010c` |
+| `scripts/test/shadow-enforced.test.sh`: static ACL whole-module context pin only | `cedb918524915a7d191fd382608a380964cc0da8` |
+
+The first two paths are newly enumerated inheritance, never new #701 edit rights.
+D's writer and consumer bytes are unchanged from 22d. Preserve the ordinary fixture
+initialization and the ACL guard's two unique inverse transforms, four function
+pins and every behavior assertion. Preflight the guard against the actual combined
+consumer bytes after both merges; never blindly reuse a context SHA, derive an
+expected hash dynamically, delete a guard or introduce a product fallback.
+Any required static context rebind is reviewed as that inherited guard's exact
+merge compatibility, not permission for other test or consumer changes. Record
+all overlap resolutions and complete three-tree diffs; unexpected scope stops.
+D's R0–R3/source-preparation status and unfinished genuine/full-suite/G3 proof stay
+separate. Re-run the original source-checkpoint proof on the final combined head;
+old greens, copied dependency files or a new round label cannot substitute.
 
 The full inherited path set is closed. The figures below are the additions and
 deletions in D relative to its stated merge base, not new edit allowances:
@@ -467,6 +496,7 @@ deletions in D relative to its stated merge base, not new edit allowances:
 | `control/v1/kill-switch-decision.json` | 1 / 1 |
 | `control/v1/kill-switch.jq` | 3 / 1 |
 | `docs/components.md` | 136 / 3 |
+| `enforcement/v1/sandbox-receipt.jq` | 2 / 2 |
 | `sandbox/v1/coverage-source.py` | 813 / 0 |
 | `sandbox/v1/host-supervisor.py` | 319 / 1 |
 | `scope/v1/evaluate-scope.sh` | 258 / 7 |
@@ -476,8 +506,9 @@ deletions in D relative to its stated merge base, not new edit allowances:
 | `scope/v1/scope-policy.json` | 1 / 1 |
 | `scope/v1/workflow-scope.jq` | 19 / 5 |
 | `scripts/test/control-kill-switch.test.sh` | 13 / 0 |
+| `scripts/test/sandbox-launcher.test.sh` | 1 / 1 |
 | `scripts/test/scope-gate-generation.test.sh` | 480 / 0 |
-| `scripts/test/scope-qualification.test.sh` | 15604 / 64 |
+| `scripts/test/scope-qualification.test.sh` | 15605 / 64 |
 | `scripts/test/shadow-enforced.test.sh` | 341 / 19 |
 | `scripts/test/shadow-self-host-evidence.test.sh` | 18 / 4 |
 | `scripts/test/shadow-write.test.sh` | 183 / 11 |
@@ -880,7 +911,7 @@ credential transfer. Until actual outputs exist, P07 stays NOTRUN.
 
 Run `git diff --check`, Python compile checks without executing imports or leaving
 bytecode, shell parsing and the pinned shellcheck on all affected shell files.
-Verify the ten-path new edit set separately from the exact 25-path adoption set
+Verify the ten-path new edit set separately from the exact 27-path adoption set
 and preserved thirteen-path core checkpoint. Check full manifest restoration of
 the helper/test and unchanged public selection. Run these actual suites:
 
