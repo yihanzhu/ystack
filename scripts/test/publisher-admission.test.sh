@@ -5,7 +5,48 @@ export LC_ALL=C
 root=$(CDPATH='' cd -P -- "${BASH_SOURCE[0]%/*}/../.." && pwd -P)
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/ystack-publisher-admission.XXXXXX")
 tmp=$(CDPATH='' cd -P -- "$tmp" && pwd -P)
-trap 'rm -rf -- "$tmp"' EXIT
+_admission_finish() {
+  local prior=$? raw_status=0
+  /usr/bin/python3 -I -S -B - "$tmp" "$prior" <<'PY_ADMISSION_RAW' || raw_status=$?
+import base64
+import hashlib
+import json
+from pathlib import Path
+import stat
+import sys
+
+area = Path(sys.argv[1])
+print("ADMISSION-RAW-BEGIN", json.dumps({"suite_exit": int(sys.argv[2])}), flush=True)
+roots = [area / "receipts"] + sorted(path for path in area.iterdir() if path.name.endswith("-provenance"))
+for directory in roots:
+    if not directory.exists():
+        continue
+    assert directory.is_dir() and not directory.is_symlink()
+    for path in sorted(directory.rglob("*")):
+        if path.is_dir():
+            continue
+        assert stat.S_ISREG(path.lstat().st_mode) and not path.is_symlink()
+        raw = path.read_bytes()
+        name = str(path.relative_to(area))
+        print("ADMISSION-RAW-FILE", json.dumps({"path": name, "bytes": len(raw),
+            "sha256": hashlib.sha256(raw).hexdigest(), "encoding": "base64"}), flush=True)
+        for offset in range(0, len(raw), 3072):
+            print("ADMISSION-RAW-CHUNK", json.dumps({"path": name, "offset": offset,
+                "data": base64.b64encode(raw[offset:offset + 3072]).decode("ascii")}), flush=True)
+        print("ADMISSION-RAW-END-FILE", json.dumps({"path": name, "bytes": len(raw)}), flush=True)
+print("ADMISSION-RAW-END", flush=True)
+PY_ADMISSION_RAW
+  if [ "$raw_status" -ne 0 ]; then
+    printf 'FAIL: admission raw export exit=%s original-exit=%s\n' "$raw_status" "$prior" >&2
+    if [ "$prior" -eq 0 ]; then prior=$raw_status; fi
+  fi
+  if ! rm -rf -- "$tmp"; then
+    if [ "$prior" -eq 0 ]; then prior=1; fi
+  fi
+  trap - EXIT
+  exit "$prior"
+}
+trap _admission_finish EXIT
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 sha_file() { shasum -a 256 "$1" | awk '{print $1}'; }
 _admission_package_closure() {
@@ -24,6 +65,15 @@ assert package.resolve() == package
 for path in (helper, helper.parent, helper.parent.parent):
     assert not path.is_symlink()
 assert helper.is_file() and stat.S_IMODE(helper.stat().st_mode) == 0o644
+package_state = package.stat()
+for path, required_mode in ((helper.parent.parent, 0o755), (helper.parent, 0o755), (helper, 0o644)):
+    state = path.lstat()
+    assert path.resolve() == path and not stat.S_ISLNK(state.st_mode)
+    assert stat.S_IMODE(state.st_mode) == required_mode
+    assert state.st_uid == package_state.st_uid and state.st_gid == package_state.st_gid
+if site == "Q4":
+    import os
+    assert os.getuid() == 0 and package_state.st_uid == 0 and package_state.st_gid == 0
 original = helper.read_bytes()
 original_mode = stat.S_IMODE(helper.stat().st_mode)
 source_hash = hashlib.sha256(original).hexdigest()
@@ -76,11 +126,17 @@ def actual_load():
                 sys.modules[name] = previous
 
 
-def receipt(suffix, phase, actual):
+def receipt(suffix, phase, actual, error=None):
     print("ADMISSION-CLOSURE", json.dumps(dict(case_id=site+suffix, phase=phase, route=route,
         package=str(package), source_sha256=source_hash, expected="REFUSE" if phase=="mutation" else "OK",
-        exit=1 if phase=="mutation" else 0, stdout="", stderr="", actual=actual, marker_written=False,
-        classification="owned package source closure; original site assertions retained"), sort_keys=True), flush=True)
+        package_owner=[package_state.st_uid, package_state.st_gid],
+        helper_state=None if not helper.exists() else dict(mode=oct(stat.S_IMODE(helper.lstat().st_mode)),
+            uid=helper.lstat().st_uid, gid=helper.lstat().st_gid, sha256=hashlib.sha256(helper.read_bytes()).hexdigest()),
+        parent_states=[dict(path=str(path), mode=oct(stat.S_IMODE(path.lstat().st_mode)),
+            uid=path.lstat().st_uid, gid=path.lstat().st_gid) for path in (helper.parent.parent, helper.parent)],
+        exit=1 if phase=="mutation" else 0, stdout="", stderr="", actual=actual, refusal=error, marker_written=False,
+        classification="genuine root-owned package after original genuine assertions" if site=="Q4" else
+            "owned package source closure; original site assertions retained", native_qualification=False), sort_keys=True), flush=True)
 
 
 actual_load()
@@ -99,7 +155,7 @@ for suffix, mutation in (("b", "missing"), ("c", "altered")):
             actual_load()
         except BaseException as exc:
             assert isinstance(exc, (OSError, SystemExit)) or type(exc).__name__ == "Refusal", type(exc)
-            receipt(suffix, "mutation", "REFUSE")
+            receipt(suffix, "mutation", "REFUSE", {"type": type(exc).__name__, "code": str(getattr(exc, "code", exc))})
         else:
             raise AssertionError(site + suffix + " changed helper accepted")
     finally:
@@ -334,14 +390,34 @@ def command(argv, raw=b"", *, env=None, checked=True):
     global serial
     serial += 1
     prefix = receipts / ("command-%06d" % serial)
-    record = {"argv": list(map(str, argv)), "start_ns": time.time_ns()}
-    result = subprocess.run(argv, input=raw, env=env, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, timeout=60)
-    prefix.with_suffix(".stdout").write_bytes(result.stdout)
-    prefix.with_suffix(".stderr").write_bytes(result.stderr)
-    record.update(exit=result.returncode, end_ns=time.time_ns(),
-                  stdin_sha256=digest(raw))
+    record = {"argv": list(map(str, argv)), "start_ns": time.time_ns(), "stdin_sha256": digest(raw)}
+    result = None
+    failure = None
+    try:
+        result = subprocess.run(argv, input=raw, env=env, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, timeout=60)
+        output, error = result.stdout, result.stderr
+        record["exit"] = result.returncode
+    except subprocess.TimeoutExpired as exc:
+        output, error = exc.stdout or b"", exc.stderr or b""
+        record.update(exit=None, failure="TimeoutExpired", timeout_seconds=60)
+        failure = exc
+    except OSError as exc:
+        output, error = b"", str(exc).encode()
+        record.update(exit=None, failure=type(exc).__name__)
+        failure = exc
+    # Full fixture pack transfer is construction data, not an inspected-object proof.
+    # The actual Git owner reads and every P object/metadata output are retained raw.
+    if "pack-objects" in argv:
+        record.update(stdout_retention="fixture pack transfer only; inspected objects retained separately",
+                      stdout_bytes=len(output), stdout_sha256=digest(output))
+    else:
+        prefix.with_suffix(".stdout").write_bytes(output)
+    prefix.with_suffix(".stderr").write_bytes(error)
+    record["end_ns"] = time.time_ns()
     prefix.with_suffix(".json").write_bytes(canonical(record))
+    if failure is not None:
+        raise failure
     if checked:
         assert result.returncode == 0, (argv, result.stderr)
     return result
@@ -711,14 +787,35 @@ def checked_call(ident, phase, inputs, expected):
               "input_hashes": input_hashes(inputs), "holds_before": before,
               "start_ns": time.time_ns(), "marker_present": False, "stdout": "", "stderr": ""}
     result = None
+    unexpected = None
     try:
         result = a.admit_write(inputs)
         status = "OK"
     except c.Refusal as exc:
         status = exc.code
+        frames = []
+        traceback = exc.__traceback__
+        while traceback is not None:
+            frames.append({"file": traceback.tb_frame.f_code.co_filename,
+                           "function": traceback.tb_frame.f_code.co_name, "line": traceback.tb_lineno})
+            traceback = traceback.tb_next
+        record["refusal_frames"] = frames
+    except BaseException as exc:
+        status = type(exc).__name__
+        record["unexpected_exception"] = repr(exc)
+        unexpected = exc
     record.update(status=status, holds_after=[len(inputs.source_git.held), len(inputs.candidate_git.held)],
                   end_ns=time.time_ns(), exit=0 if status == "OK" else 1)
     (receipts / (ident + "-" + phase + ".json")).write_bytes(canonical(record))
+    if unexpected is not None:
+        raise unexpected
+    if ident == "G26" and phase == "mutation":
+        helper_text = Path(a.__file__).read_text()
+        relation = '_require(revision["repository_id"] == incident["body"]["target_repository_id"])'
+        assert helper_text.count(relation) == 1
+        target_line = helper_text[:helper_text.index(relation)].count("\n") + 1
+        assert any(frame["file"] == str(Path(a.__file__)) and frame["function"] == "candidate_facts"
+                   and frame["line"] == target_line for frame in record.get("refusal_frames", [])), record
     assert (status == "OK") == (expected == "OK"), (ident, phase, status, expected)
     assert before == record["holds_after"]
     if result is not None:
@@ -1122,17 +1219,44 @@ def repository_mismatch(fixture):
     frozen["bundle.json"] = canonical(marker)
     files = dict(fixture.files)
     files.update({fixture.prefix + name: raw for name, raw in frozen.items()})
-    value = copy.deepcopy(fixture.write)
-    value["bundle_ref"]["sha256"] = digest(frozen["bundle.json"])
-    value["publisher_request"]["body"]["base_revision"] = incident["body"]["git_revision_ref"]
-    value["post_write_verification"]["target_revision"] = incident["body"]["git_revision_ref"]
-    value["admission"]["request_sha256"] = digest(canonical(value["publisher_request"]))
-    outer = dict(fixture.outer)
-    record = json.loads(outer["shadow-record.json"])
-    record["body"]["write"] = value
-    outer["shadow-record.json"] = canonical(record)
-    return dataclasses.replace(fixture.inputs, incident_raw=canonical(incident), frozen_files=tuple(sorted(frozen.items())),
-        candidate_files=tuple(sorted(files.items())), write_raw=canonical(value), outer_files=tuple(sorted(outer.items())))
+    destination = fixture.mutations / "repository-relation.git"
+    shutil.copytree(fixture.candidate, destination)
+    saved = {name: getattr(fixture, name) for name in (
+        "candidate", "incident", "revision", "frozen", "files", "outer", "response", "rows", "write",
+        "request", "tree", "commit", "candidate_rows")}
+    try:
+        fixture.candidate = destination
+        fixture.incident = incident
+        fixture.revision = incident["body"]["git_revision_ref"]
+        fixture.frozen, fixture.files = frozen, files
+        fixture.outer = dict(fixture.outer, **{"incident.json": canonical(incident)})
+        fixture.rebuild_candidate()
+        owner = c._ReadOnlyGit(str(destination), fixture.ledger)
+        fixture.owners.append(owner)
+        actual = owner.inventory(dict(fixture.revision, commit_id=fixture.commit))
+        assert fixture.source_owner.inventory(fixture.revision) == fixture.inventory
+        expected = {row["path"]: ("100644", "blob", row["git_blob_oid"]) for row in fixture.rows}
+        assert {path: row for path, row in actual.items() if path not in fixture.inventory and row[1] != "tree"} == expected
+        for row in fixture.rows:
+            raw = owner.read(["cat-file", "blob", row["git_blob_oid"]], len(files[row["path"]]) + 1)
+            assert raw == files[row["path"]] and digest(raw) == row["sha256"]
+        commit_raw = owner.read(["cat-file", "commit", fixture.commit], 1_048_576)
+        assert native_oid(commit_raw, "commit", fixture.algorithm) == fixture.commit
+        headers = commit_raw.split(b"\n\n", 1)[0].splitlines()
+        assert [line for line in headers if line.startswith(b"parent ")] == [("parent " + fixture.base_commit).encode()]
+        assert [line for line in headers if line.startswith(b"tree ")] == [("tree " + fixture.tree).encode()]
+        altered = fixture.rebound(incident_raw=canonical(incident), frozen_files=tuple(sorted(frozen.items())), candidate_git=owner)
+        record = {"case_id": "G26", "phase": "actual-Git-companion", "revision": fixture.revision,
+                  "candidate_commit_id": fixture.commit, "candidate_tree_id": fixture.tree,
+                  "rows": fixture.rows, "source_inventory": sorted(fixture.inventory.items()),
+                  "candidate_inventory": sorted(actual.items()), "all_blob_bytes_match": True,
+                  "request_sha256": digest(canonical(fixture.write["publisher_request"])),
+                  "write_set_sha256": digest(canonical(fixture.rows))}
+        (receipts / "G26-companion.json").write_bytes(canonical(record))
+        return altered
+    finally:
+        for name, value in saved.items():
+            setattr(fixture, name, value)
 
 
 paired("G26", repository_mismatch)
@@ -1677,7 +1801,10 @@ assert set(observed) | set(DELEGATED) == set(CASES)
 for ident, path in DELEGATED.items():
     owner_raw = (root / path).read_bytes()
     if ident[0] in {"Q", "S"}:
-        assert ident[:2].encode() in owner_raw and (b"_admission_package_closure" in owner_raw or ident.startswith("Q4")), (ident, "missing actual package site")
+        assert ident[:2].encode() in owner_raw and b"_admission_package_closure" in owner_raw, (ident, "missing actual package site")
+        if ident.startswith("Q4"):
+            assert b"prepare_genuine_admission_closure()" in owner_raw
+            assert b'"$genuine_base/genuine-admission-closure.py" "$genuine_base/package" Q4 reader' in owner_raw
     else:
         assert ident.encode() in owner_raw, (ident, "missing delegated actual writer row")
 for group in ("A", "G", "L", "I", "C", "M", "Q", "S"):

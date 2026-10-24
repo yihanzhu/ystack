@@ -3848,6 +3848,8 @@ done
 [ -f "$root/publisher/v1/_admission.py" ] && [ ! -L "$root/publisher" ] &&
   [ ! -L "$root/publisher/v1" ] && [ ! -L "$root/publisher/v1/_admission.py" ] || fail 'S1 helper source'
 /bin/cp "$root/publisher/v1/_admission.py" "$fixture/publisher/v1/_admission.py"
+/bin/chmod 0755 "$fixture/publisher" "$fixture/publisher/v1"
+/bin/chmod 0644 "$fixture/publisher/v1/_admission.py"
 /usr/bin/cmp "$root/publisher/v1/_admission.py" "$fixture/publisher/v1/_admission.py" || fail 'S1 helper bytes'
 for name in evaluate-bound-sandbox.sh sandbox-bound.jq sandbox-bound-policy.json \
   sandbox-bound-decision.json control-policy-set-sandbox-bound.json validate.sh policy-set.jq; do

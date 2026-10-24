@@ -354,8 +354,16 @@ scope_fixture_signal=''
 scope_dashboard_inflight=false
 trap 'scope_stage_freeze;scope_fixture_signal=ALRM;if [ "$scope_owner_waiting" = true ]; then scope_owner_state=unknown;fi;scope_fixture_owner_cancel || :;exit 142' ALRM
 
+admission_q4_state=not-started
 cleanup() {
   local prior=$? cleanup_status=0
+  if [ "$admission_q4_state" = not-started ]; then
+    /usr/bin/printf '%s\n' 'ADMISSION-CLOSURE Q4a NOTRUN/BLOCKED: original genuine gate/assertions not completed' \
+      'ADMISSION-CLOSURE Q4b NOTRUN/BLOCKED: guarded missing-helper recipe not executed' \
+      'ADMISSION-CLOSURE Q4c NOTRUN/BLOCKED: guarded altered-helper recipe not executed'
+  elif [ "$admission_q4_state" != completed ]; then
+    /usr/bin/printf 'ADMISSION-CLOSURE Q4 INCOMPLETE original-exit=%s; retain actual failure above\n' "$prior" >&2
+  fi
   if ! scope_fixture_owner_cancel; then cleanup_status=1; fi
   if ! scope_fixture_owner_wait; then
     /usr/bin/printf 'fixture-cleanup: FAIL_PENDING; owner completion is unknown\n' >&2
@@ -10142,6 +10150,8 @@ done
 [ -f "$root/publisher/v1/_admission.py" ] && [ ! -L "$root/publisher" ] &&
   [ ! -L "$root/publisher/v1" ] && [ ! -L "$root/publisher/v1/_admission.py" ] || fail 'helper source'
 /bin/cp "$root/publisher/v1/_admission.py" "$tmp/portable/publisher/v1/_admission.py"
+/bin/chmod 0755 "$tmp/portable/publisher" "$tmp/portable/publisher/v1"
+/bin/chmod 0644 "$tmp/portable/publisher/v1/_admission.py"
 /usr/bin/cmp "$root/publisher/v1/_admission.py" "$tmp/portable/publisher/v1/_admission.py" || fail 'helper bytes'
 for shipped in scope-policy.json workflow-scope.jq scope-gates.jq validate-scope.sh \
   evaluate-scope.sh read-shadow-evidence.py; do
@@ -10196,6 +10206,8 @@ race_marker_case() {
   [ -f "$root/publisher/v1/_admission.py" ] && [ ! -L "$root/publisher" ] &&
     [ ! -L "$root/publisher/v1" ] && [ ! -L "$root/publisher/v1/_admission.py" ] || fail 'helper source'
   /bin/cp "$root/publisher/v1/_admission.py" "$race_repo/publisher/v1/_admission.py"
+  /bin/chmod 0755 "$race_repo/publisher" "$race_repo/publisher/v1"
+  /bin/chmod 0644 "$race_repo/publisher/v1/_admission.py"
   /usr/bin/cmp "$root/publisher/v1/_admission.py" "$race_repo/publisher/v1/_admission.py" || fail 'helper bytes'
   for shipped in scope-policy.json workflow-scope.jq scope-gates.jq \
     validate-scope.sh evaluate-scope.sh read-shadow-evidence.py; do
@@ -10275,6 +10287,9 @@ helper=root/'publisher/v1/_admission.py'
 assert helper.is_file() and not any(path.is_symlink() for path in (helper,helper.parent,helper.parent.parent))
 (package/'publisher/v1').mkdir(parents=True)
 shutil.copyfile(helper,package/'publisher/v1/_admission.py')
+(package/'publisher').chmod(0o755)
+(package/'publisher/v1').chmod(0o755)
+(package/'publisher/v1/_admission.py').chmod(0o644)
 assert helper.read_bytes()==(package/'publisher/v1/_admission.py').read_bytes()
 reader_path=package/'scope/v1/read-shadow-evidence.py';frontend=package/'scope/v1/evaluate-scope.sh'
 reader_source=reader_path.read_text();frontend_source=frontend.read_text()
@@ -16735,6 +16750,27 @@ finally:
 
 PY_GENUINE_ASSEMBLER
 }
+prepare_genuine_admission_closure() {
+  "$python_bin" -I -S -B - "$root/scripts/test/publisher-admission.test.sh" "$tmp/genuine-admission-closure.py" <<'PY_PREPARE_Q4_CLOSURE'
+import hashlib
+from pathlib import Path
+import sys
+source = Path(sys.argv[1]).read_bytes()
+opening = b"<<'PY_ADMISSION_CLOSURE'\n"
+closing = b"\nPY_ADMISSION_CLOSURE\n"
+assert source.count(opening) == source.count(closing) == 1
+start = source.index(opening) + len(opening)
+raw = source[start:source.index(closing, start)] + b"\n"
+assert b'if site == "Q4":' in raw and b'assert os.getuid() == 0' in raw
+compile(raw, "genuine-admission-closure.py", "exec")
+destination = Path(sys.argv[2])
+assert not destination.exists()
+destination.write_bytes(raw)
+assert destination.read_bytes() == raw
+print("Q4 guarded recipe source SHA256", hashlib.sha256(raw).hexdigest(), flush=True)
+PY_PREPARE_Q4_CLOSURE
+}
+
 run_genuine() {
   scope_stage_points[6]=$SECONDS
   case "$genuine_platform" in
@@ -16745,8 +16781,9 @@ run_genuine() {
   prepare_genuine_reader
   if [ "$genuine_platform" = Darwin ]; then run_genuine_macos_runtime_guard_controls; fi
   prepare_genuine_assembler
+  prepare_genuine_admission_closure
   local script
-  for script in genuine-reader.py genuine-assembler.py; do
+  for script in genuine-reader.py genuine-assembler.py genuine-admission-closure.py; do
     /usr/bin/sudo -n /bin/cp -- "$tmp/$script" "$genuine_base/$script" || fail 'fixed fixture source copy'
     /usr/bin/sudo -n "$genuine_chown" -- 0:0 "$genuine_base/$script" || fail 'fixed fixture source ownership'
     /usr/bin/sudo -n /bin/chmod -- 0555 "$genuine_base/$script" || fail 'fixed fixture source mode'
@@ -16754,6 +16791,13 @@ run_genuine() {
   /usr/bin/sudo -n "$genuine_python" -I -S -B "$genuine_base/genuine-assembler.py" \
     "$genuine_base" "$genuine_writer" "$genuine_consumer" "$genuine_group" "$jq_cache" "$tmp"
   pass 'actual root anchor, distinct storage writer and read-only consumer authenticate one complete bundle'
+  /usr/bin/sudo -n /usr/bin/cmp "$tmp/genuine-admission-closure.py" "$genuine_base/genuine-admission-closure.py" ||
+    fail 'Q4 exact guarded recipe bytes'
+  admission_q4_state=in-progress
+  /usr/bin/sudo -n "$genuine_python" -I -S -B \
+    "$genuine_base/genuine-admission-closure.py" "$genuine_base/package" Q4 reader ||
+    fail 'Q4 actual genuine helper baseline/refusal/restoration closure'
+  admission_q4_state=completed
 }
 
 mac_stdin_controls=$(/bin/cat <<'PY_MAC_STDIN_CONTROLS'
@@ -16925,7 +16969,4 @@ for stdin_boundary in PY_MAC_RUNTIME PY_MAC_IMPORT_CLOSURE; do
 done
 
 run_genuine
-/usr/bin/printf '%s\n' 'ADMISSION-CLOSURE Q4a NOTRUN/BLOCKED: genuine helper paired source proof requires original reserved authorization/environment' \
-  'ADMISSION-CLOSURE Q4b NOTRUN/BLOCKED: no premature missing-helper loader failure counts as genuine proof' \
-  'ADMISSION-CLOSURE Q4c NOTRUN/BLOCKED: no premature altered-helper loader failure counts as genuine proof'
 /usr/bin/printf 'scope qualification: %s focused checks passed\n' "$passes"

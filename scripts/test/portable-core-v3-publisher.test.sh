@@ -317,6 +317,7 @@ loader_cell() {
 }
 _original_plan_provenance() {
   /usr/bin/python3 -I -S -B - "$root" "$tmp" <<'PY_ORIGINAL_PLAN'
+import base64
 import hashlib
 import json
 import os
@@ -353,15 +354,27 @@ def run(arguments, *, fetch=False, checked=True):
     remaining = 120 - (time.monotonic() - started)
     require(remaining > 0, "deadline")
     begin = time.time()
-    result = subprocess.run(argv, env=environment, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, timeout=remaining)
+    failure = None
+    try:
+        result = subprocess.run(argv, env=environment, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, timeout=remaining)
+        output, error, status = result.stdout, result.stderr, result.returncode
+    except subprocess.TimeoutExpired as exc:
+        output, error, status = exc.stdout or b"", exc.stderr or b"", None
+        failure = exc
+    except OSError as exc:
+        output, error, status = b"", str(exc).encode(), None
+        failure = exc
     item = {"argv": argv, "started_epoch": begin, "ended_epoch": time.time(),
-            "exit": result.returncode, "stdout_sha256": hashlib.sha256(result.stdout).hexdigest(),
-            "stderr_sha256": hashlib.sha256(result.stderr).hexdigest()}
+            "exit": status, "stdout_sha256": hashlib.sha256(output).hexdigest(),
+            "stderr_sha256": hashlib.sha256(error).hexdigest(),
+            "failure": None if failure is None else type(failure).__name__}
     record["commands"].append(item)
     index = len(record["commands"])
-    (receipts / (str(index) + ".stdout")).write_bytes(result.stdout)
-    (receipts / (str(index) + ".stderr")).write_bytes(result.stderr)
+    (receipts / (str(index) + ".stdout")).write_bytes(output)
+    (receipts / (str(index) + ".stderr")).write_bytes(error)
+    if failure is not None:
+        raise failure
     require(not checked or result.returncode == 0, "git refusal")
     return result
 
@@ -439,6 +452,17 @@ except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as exc:
     print("original-plan provenance: " + str(exc), file=sys.stderr)
 finally:
     (receipts / "receipt.json").write_text(json.dumps(record, sort_keys=True, indent=2) + "\n")
+    print("ORIGINAL-PLAN-RAW-BEGIN", json.dumps({"checkout": str(checkout), "status": record.get("status")}), flush=True)
+    for path in sorted(receipts.iterdir()):
+        require(path.is_file() and not path.is_symlink(), "raw receipt shape")
+        raw = path.read_bytes()
+        print("ORIGINAL-PLAN-RAW-FILE", json.dumps({"path": path.name, "bytes": len(raw),
+            "sha256": hashlib.sha256(raw).hexdigest(), "encoding": "base64"}), flush=True)
+        for offset in range(0, len(raw), 3072):
+            print("ORIGINAL-PLAN-RAW-CHUNK", json.dumps({"path": path.name, "offset": offset,
+                "data": base64.b64encode(raw[offset:offset + 3072]).decode("ascii")}), flush=True)
+        print("ORIGINAL-PLAN-RAW-END-FILE", json.dumps({"path": path.name, "bytes": len(raw)}), flush=True)
+    print("ORIGINAL-PLAN-RAW-END", flush=True)
 if record.get("status") != "OK":
     raise SystemExit(1)
 print(json.dumps(record, sort_keys=True))
