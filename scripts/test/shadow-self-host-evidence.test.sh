@@ -1674,6 +1674,12 @@ record_closure_fixture=$("$jq_bin" -n --arg path "$record_schema" '
        family("reviewer-severity-false-positive-negative";"declared";0;0;0),
        family("stale-moved-artifacts";"seeded";7;1;0)]}}' \
   >"$tmp/dashboard.json"
+"$jq_bin" -S -c '.body.evaluator.content' "$tmp/dashboard.json" \
+  >"$tmp/harness-dashboard-evaluator.json" || fail 'scope harness evaluator content'
+harness_evaluator_sha=$(sha_file "$tmp/harness-dashboard-evaluator.json")
+"$jq_bin" -S -c --arg sha "$harness_evaluator_sha" '.body.evaluator.sha256 = $sha' \
+  "$tmp/dashboard.json" >"$tmp/harness-dashboard-bound.json" || fail 'scope harness evaluator binding'
+/bin/mv "$tmp/harness-dashboard-bound.json" "$tmp/dashboard.json"
 "$jq_bin" -e '
   [.body.core_contract.package_ref.sha256, .body.catalog_ref.sha256,
    .body.evaluator.sha256, .body.evaluator.content.body.core_contract.package_ref.sha256,

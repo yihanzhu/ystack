@@ -157,11 +157,9 @@ shadow_set_sha=$(sha256_path "$scratch/shadow-set.json") || emit_error E_RUNTIME
 dashboard_sha=$(sha256_path "$scratch/dashboard.json") || emit_error E_RUNTIME
 dashboard_evaluator_sha=''
 "$jq_bin" -S -c '
-  if type == "object" then
-    if (.body | type) == "object" then
-      if (.body.evaluator | type) == "object" then
-        if (.body.evaluator.content | type) == "object" then .body.evaluator.content
-        else empty end
+  if (.body | type) == "object" then
+    if (.body.evaluator | type) == "object" then
+      if (.body.evaluator.content | type) == "object" then .body.evaluator.content
       else empty end
     else empty end
   else empty end

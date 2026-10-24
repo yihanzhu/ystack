@@ -60,6 +60,23 @@ jq_bin="$bin/jq"
 
 run_validator() { PATH="$bin:/usr/bin:/bin" "$validator" validate "$1"; }
 run_evaluator() { PATH="$bin:/usr/bin:/bin" "$evaluator" evaluate "$@"; }
+bind_dashboard_evaluator() {
+  local source=$1 target=$2 content_sha
+  "$jq_bin" -S -c '
+    if (.body | type) == "object" then
+      if (.body.evaluator | type) == "object" then
+        if (.body.evaluator.content | type) == "object" then .body.evaluator.content
+        else empty end
+      else empty end
+    else empty end
+  ' "$source" >"$tmp/dashboard-evaluator-content.json"
+  if [ -s "$tmp/dashboard-evaluator-content.json" ]; then
+    content_sha=$(sha256_path "$tmp/dashboard-evaluator-content.json")
+    "$jq_bin" -S -c --arg sha "$content_sha" '.body.evaluator.sha256 = $sha' "$source" >"$target"
+  else
+    /bin/cp "$source" "$target"
+  fi
+}
 expect_validator_error() {
   local label=$1 expected=$2 input=$3 status=0 out
   out=$(run_validator "$input" 2>&1 >/dev/null) || status=$?
@@ -352,6 +369,8 @@ record_closure_fixture=$("$jq_bin" -n --arg path "$record_schema" '
        family("repeated-cancelled-missed-events";"seeded";5;0;0),
        family("reviewer-severity-false-positive-negative";"declared";0;0;0),
        family("stale-moved-artifacts";"seeded";7;0;0)]}}' >"$tmp/dashboard.json"
+bind_dashboard_evaluator "$tmp/dashboard.json" "$tmp/dashboard-bound.json"
+/bin/mv "$tmp/dashboard-bound.json" "$tmp/dashboard.json"
 
 # The three gate evaluations are complete documents in the shape their own
 # evaluators emit — control/v1/risk-gates.jq, control/v1/kill-switch.jq, and
@@ -1317,7 +1336,13 @@ pass 'evidence that parses but does not hold its shape is refused as malformed'
 # of the framework's real top-level blocks missing, or one key more than it
 # emits, is malformed, and the eval reasons follow because a dashboard that is
 # not a dashboard grades nothing.
-for dashboard_case in 'del(.body.flow)' 'del(.body.telemetry)' \
+for dashboard_case in 'del(.body)' '.body = null' '.body = []' '.body = "text"' '.body = 1' '.body = false' \
+  '.body.evaluator = null' '.body.evaluator = []' '.body.evaluator = false' \
+  '.body.evaluator = "text"' '.body.evaluator = 1' \
+  'del(.body.evaluator.content)' '.body.evaluator.content = null' \
+  '.body.evaluator.content = []' '.body.evaluator.content = "text"' \
+  '.body.evaluator.content = 1' '.body.evaluator.content = false' \
+  'del(.body.flow)' 'del(.body.telemetry)' \
   'del(.body.evaluator)' 'del(.body.catalog_ref)' 'del(.body.coverage)' \
   '.body.extra_block = {}' '.extra = true' \
   '.body.core_contract.semantic_identity = "core.contracts.v1"' \
@@ -1331,11 +1356,87 @@ for dashboard_case in 'del(.body.flow)' 'del(.body.telemetry)' \
   '.body.catalog_ref.kind = "eval_seed_set"'; do
   "$jq_bin" -S -c "$dashboard_case" "$tmp/dashboard.json" \
     >"$tmp/dashboard-shape.json"
-  expect_reasons "dashboard shape $dashboard_case" \
-    '["scope.eval-failing","scope.eval-family-unseeded","scope.malformed"]' \
-    "${good[@]:0:2}" "$tmp/dashboard-shape.json" "${good[@]:3}"
+  bind_dashboard_evaluator "$tmp/dashboard-shape.json" "$tmp/dashboard-shape-bound.json"
+  /bin/mv "$tmp/dashboard-shape-bound.json" "$tmp/dashboard-shape.json"
+  run_evaluator "${good[@]:0:2}" "$tmp/dashboard-shape.json" "${good[@]:3}" \
+    >"$tmp/dashboard-shape-evaluation.json" 2>"$tmp/dashboard-shape-evaluation.err"
+  [ ! -s "$tmp/dashboard-shape-evaluation.err" ] || fail "dashboard shape $dashboard_case stderr"
+  "$jq_bin" -e '.body.outcome == "not-proposable" and
+    .body.reason_ids == ["scope.eval-failing","scope.eval-family-unseeded","scope.malformed"] and
+    .body.proposal == {state:"absent"}' "$tmp/dashboard-shape-evaluation.json" >/dev/null ||
+    fail "dashboard shape $dashboard_case must return its semantic refusal"
 done
 pass 'the dashboard is validated against the evals framework complete emitted shape'
+
+run_evaluator "${good[@]}" >"$tmp/binding-baseline.json" 2>"$tmp/binding-baseline.err"
+[ ! -s "$tmp/binding-baseline.err" ] || fail 'bound baseline wrote stderr'
+"$jq_bin" -e '
+  .body.outcome == "proposable" and .body.reason_ids == ["scope.proposable"] and
+  .body.activation_state == "inactive" and .body.authority == "none" and
+  .body.authority_effect == "none" and .body.enabled == false and
+  .body.evaluation_mode == "observation-only" and .body.reference_semantics == "identity-only" and
+  .body.qualification.state == "unavailable" and .body.proposal.state == "present" and
+  .body.proposal.document.body.activation_state == "inactive" and
+  .body.proposal.document.body.authority == "none" and
+  .body.proposal.document.body.enabled == false and
+  .body.proposal.document.body.push_allowed == false and
+  .body.proposal.document.body.qualification.state == "unavailable" and
+  .body.proposal.document.body.enablement.state == "blocked"
+' "$tmp/binding-baseline.json" >/dev/null || fail 'bound baseline semantics'
+"$jq_bin" -S -c '.body.evaluator.content.body.record_closure[0].sha256 |=
+  (if . == ("0" * 64) then ("1" * 64) else ("0" * 64) end)' \
+  "$tmp/dashboard.json" >"$tmp/dashboard-binding-stale.json"
+"$jq_bin" -e -n --slurpfile baseline "$tmp/dashboard.json" \
+  --slurpfile changed "$tmp/dashboard-binding-stale.json" '
+  $baseline[0] as $before | $changed[0] as $after |
+  $before.body.evaluator.sha256 == $after.body.evaluator.sha256 and
+  $before.body.evaluator.content != $after.body.evaluator.content and
+  ($after.body.evaluator.content.body.record_closure[0].sha256 |
+    type == "string" and test("\\A[0-9a-f]{64}\\z")) and
+  ($before | .body.evaluator.content.body.record_closure[0].sha256 =
+    $after.body.evaluator.content.body.record_closure[0].sha256) == $after
+' >/dev/null || fail 'binding negative must change only one valid closure digest'
+"$jq_bin" -S -c '.body.evaluator.content' "$tmp/dashboard.json" >"$tmp/binding-original.content.json"
+"$jq_bin" -S -c '.body.evaluator.content' "$tmp/dashboard-binding-stale.json" >"$tmp/binding-changed.content.json"
+if /usr/bin/cmp -s "$tmp/binding-original.content.json" "$tmp/binding-changed.content.json"; then
+  fail 'binding negative must change actual C1 content bytes'
+fi
+run_evaluator "${good[@]:0:2}" "$tmp/dashboard-binding-stale.json" "${good[@]:3}" \
+  >"$tmp/binding-stale.json" 2>"$tmp/binding-stale.err"
+[ ! -s "$tmp/binding-stale.err" ] || fail 'stale binding wrote stderr'
+"$jq_bin" -e '
+  .body.outcome == "not-proposable" and
+  .body.reason_ids == ["scope.eval-failing","scope.eval-family-unseeded","scope.malformed"] and
+  .body.proposal == {state:"absent"} and .body.enabled == false and
+  .body.activation_state == "inactive" and .body.authority == "none" and
+  .body.authority_effect == "none" and .body.reference_semantics == "identity-only" and
+  .body.qualification.state == "unavailable"
+' "$tmp/binding-stale.json" >/dev/null || fail 'stale evaluator content digest must refuse'
+bind_dashboard_evaluator "$tmp/dashboard-binding-stale.json" "$tmp/dashboard-binding-rebound.json"
+/usr/bin/cmp -s "$tmp/binding-changed.content.json" "$tmp/dashboard-evaluator-content.json" ||
+  fail 'the positive must hash the exact changed C1 bytes'
+"$jq_bin" -e -n --slurpfile stale "$tmp/dashboard-binding-stale.json" \
+  --slurpfile rebound "$tmp/dashboard-binding-rebound.json" '
+  $stale[0] as $before | $rebound[0] as $after |
+  $before.body.evaluator.content == $after.body.evaluator.content and
+  $before.body.evaluator.sha256 != $after.body.evaluator.sha256 and
+  ($before | .body.evaluator.sha256 = $after.body.evaluator.sha256) == $after
+' >/dev/null || fail 'binding positive must rebind exactly the same changed content'
+run_evaluator "${good[@]:0:2}" "$tmp/dashboard-binding-rebound.json" "${good[@]:3}" \
+  >"$tmp/binding-rebound.json" 2>"$tmp/binding-rebound.err"
+[ ! -s "$tmp/binding-rebound.err" ] || fail 'rebound binding wrote stderr'
+for result_name in baseline rebound; do
+  "$jq_bin" -S -c '.body | {outcome,reason_ids,activation_state,authority,authority_effect,
+    enabled,evaluation_mode,reference_semantics,qualification,
+    proposal:{state:.proposal.state,activation_state:.proposal.document.body.activation_state,
+      authority:.proposal.document.body.authority,enabled:.proposal.document.body.enabled,
+      push_allowed:.proposal.document.body.push_allowed,
+      qualification:.proposal.document.body.qualification,enablement:.proposal.document.body.enablement}}' \
+    "$tmp/binding-$result_name.json" >"$tmp/binding-$result_name.semantic"
+done
+/usr/bin/cmp -s "$tmp/binding-baseline.semantic" "$tmp/binding-rebound.semantic" ||
+  fail 'rehashing the same changed content must restore baseline semantics'
+pass 'scope rejects a valid closure change with its old digest and accepts its actual rebind'
 
 expect_evaluator_error evaluator-non-canonical E_CANONICAL "$tmp/pretty.json" \
   "${good[@]:1}"
@@ -1352,6 +1453,14 @@ expect_evaluator_error evaluator-scope-relation E_RELATION "$tmp/bad-enabled.jso
 expect_evaluator_error evaluator-arity E_USAGE "${good[@]:0:6}"
 /usr/bin/printf '[1,2]\n' >"$tmp/array-root.json"
 expect_evaluator_error evaluator-array-root E_PARSE "$tmp/array-root.json" "${good[@]:1}"
+for root_value in null false 0 '"text"'; do
+  "$jq_bin" -S -c -n "$root_value" >"$tmp/dashboard-nonobject.json"
+  root_status=0
+  run_evaluator "${good[@]:0:2}" "$tmp/dashboard-nonobject.json" "${good[@]:3}" \
+    >"$tmp/dashboard-nonobject.out" 2>"$tmp/dashboard-nonobject.err" || root_status=$?
+  [ "$root_status" -ne 0 ] && [ ! -s "$tmp/dashboard-nonobject.out" ] &&
+    [ "$(<"$tmp/dashboard-nonobject.err")" = E_PARSE ] || fail "dashboard root $root_value must keep E_PARSE"
+done
 pass 'the evaluator fails closed on bad, oversized, multi-root, symlink, and short calls'
 
 # A scope record that moved is a different record: the evaluation binds the exact
