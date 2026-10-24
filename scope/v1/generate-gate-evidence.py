@@ -323,8 +323,9 @@ class _Generator:
             for path in sorted((PACKAGE / folder).iterdir()):
                 if path.is_file() and path.suffix in {".sh", ".jq", ".json", ".py"}:
                     self.package(str(path.relative_to(PACKAGE)))
-        require(self.reader.jq_check("scope/v1/workflow-scope.jq", ["-r", "--arg", "gate_basis", "basis"], c.canonical(self.basis)) == b"", "E_SHAPE")
         self.hold(self.output)
+        self.check()
+        require(self.reader.jq_check("scope/v1/workflow-scope.jq", ["-r", "--arg", "gate_basis", "basis"], c.canonical(self.basis)) == b"", "E_SHAPE")
 
     def path(self, name):
         return self.output / "objects" / name / "value.json"
@@ -344,15 +345,25 @@ class _Generator:
     def put(self, name, raw):
         require(name not in self.outputs and type(raw) is bytes and len(raw) <= c.DOCUMENT_LIMIT, "E_LIMIT")
         path = self.path(name)
-        r.write_exclusive(path, raw)
+        written = r.write_exclusive(path, raw, resolver=self.reader.darwin if self.reader is not None else None)
         self.outputs[name] = path
-        self.hold(path)
+        self.hold_written(path, raw, written)
         return path
+
+    def hold_written(self, path, raw, written):
+        held = self.hold(path)
+        require(held.raw == raw and c._identity(held.held.before) == written, "E_STALE")
+        return held
 
     def check(self):
         require(self.active and time.monotonic() < self.deadline, "E_RUNTIME")
         for held in self.held:
             held.recheck("E_STALE")
+            path = Path(held.held.path if isinstance(held, c._HeldBytes) else held.path)
+            if self.reader is not None and (path == self.output or self.output in path.parents):
+                fd = held.held.fd if isinstance(held, c._HeldBytes) else held.fd
+                access, default = c._acl_state(fd, self.reader.darwin)
+                require((access == [] if sys.platform == "darwin" else access is None and default is None), "E_STALE")
         if getattr(self, "reader", None) is not None:
             self.reader.recheck()
 
@@ -499,8 +510,8 @@ class _Generator:
                     {"origin_ref": ref(source.observation), "files": rows})))
                 for row, (_filename, raw) in zip(rows, sorted(source.snapshots.items())):
                     path = self.output / row["output"]
-                    r.write_exclusive(path, raw)
-                    self.hold(path)
+                    written = r.write_exclusive(path, raw, resolver=self.reader.darwin)
+                    self.hold_written(path, raw, written)
         self.check()
         rows = []
         for path in sorted(self.output.rglob("*")):
@@ -513,12 +524,29 @@ class _Generator:
             "source_initial_origin_refs": {"kill": parse(self.session.kill_request_raw)["body"]["initial_origin_refs"],
                 "coverage": parse(self.session.coverage_request_raw)["body"]["initial_origin_refs"] if self.session.coverage_request_raw else []}}))
         require(len(manifest) <= c.DOCUMENT_LIMIT, "E_LIMIT")
-        r.write_exclusive(self.output / "manifests/manifest.json", manifest)
-        self.hold(self.output / "manifests/manifest.json")
+        written = r.write_exclusive(self.output / "manifests/manifest.json", manifest, resolver=self.reader.darwin)
+        self.hold_written(self.output / "manifests/manifest.json", manifest, written)
+        self.check()
+        self.sync_directories()
         self.check()
         self.session.complete()
         r.write_exclusive(self.output / "completion/COMPLETE.json", c.canonical(envelope("scope_gate_generation_complete", self.request["id"],
-            {"manifest_sha256": c.digest(manifest), "activation_state": "inactive", "authority": "none", "enabled": False})))
+            {"manifest_sha256": c.digest(manifest), "activation_state": "inactive", "authority": "none", "enabled": False})), resolver=self.reader.darwin)
+
+    def sync_directories(self):
+        # Child directory links must be durable before COMPLETE can name the package.
+        for folder, directories, _files in os.walk(self.output, topdown=False, followlinks=False):
+            require(time.monotonic() <= self.deadline, "E_RUNTIME")
+            path = Path(folder)
+            require(not path.is_symlink() and all(not (path / name).is_symlink() for name in directories), "E_STALE")
+            fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                before = c._identity(os.fstat(fd))
+                require(before == c._identity(os.lstat(path)), "E_STALE")
+                os.fsync(fd)
+                require(before == c._identity(os.fstat(fd)) == c._identity(os.lstat(path)), "E_STALE")
+            finally:
+                os.close(fd)
 
     def close(self):
         self.active = False

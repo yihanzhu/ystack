@@ -2,7 +2,9 @@
 set -euo pipefail
 { [ "$#" -eq 0 ] || { [ "$#" -eq 1 ] && [ "$1" = --pure ]; }; } || { printf '%s\n' 'usage: scope-gate-generation.test.sh --pure' >&2; exit 1; }
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
-python3 -I -S -B - "$repo" <<'PY'
+python_bin=$(command -v python3)
+python_bin=$("$python_bin" -I -S -B -c 'import os,sys;print(os.path.realpath(sys.executable))')
+"$python_bin" -I -S -B - "$repo" <<'PY'
 import copy,hashlib,importlib.util,pathlib,sys
 root=pathlib.Path(sys.argv[1])
 spec=importlib.util.spec_from_file_location('gate_source',root/'sandbox/v1/coverage-source.py')
@@ -227,5 +229,159 @@ extended=dict(legacy,initial_origin_refs=[owner],gate_call_ref=owner)
 check(n.request(n.canonical(env('coverage_source_request',legacy['attempt_id'],extended)))['body']==extended)
 for extension in [dict(initial_origin_refs=[owner]),dict(gate_call_ref=owner),dict(initial_origin_refs=[],gate_call_ref=owner)]:
     reject(n.request,n.canonical(env('coverage_source_request',legacy['attempt_id'],dict(legacy,**extension))))
+# Invalid canonical inputs make the real fixed shell children fail without source setup.
+with tempfile.TemporaryDirectory() as tmp:
+    directory=pathlib.Path(tmp)
+    document=directory/'input.json';document.write_bytes(b'{}\n')
+    class RunnerLedger:
+        store_session=object()
+        def environment(self):return {'PATH':'/usr/bin:/bin','LC_ALL':'C','LANG':'C'}
+    runtime=g.c._hold_bytes(sys.executable,g.c.EXECUTABLE_LIMIT)
+    consumer_source=g.c._hold_bytes(str(root/'shadow/v1/_consumer.py'),g.c.EXECUTABLE_LIMIT)
+    actual=[];popen=g.c.subprocess.Popen
+    def traced_popen(*args,**kwargs):
+        child=popen(*args,**kwargs);actual.append((args[0],child));return child
+    ledger=RunnerLedger()
+    runner=g.c._DarwinChildOwner(runtime,consumer_source,time.monotonic()+20,ledger)
+    left,right=socket.socketpair()
+    peer=g.c._GateWire(socket.socket(fileno=os.dup(right.fileno())),time.monotonic()+15,'generation.runner','a'*64,'b'*64)
+    peer.send('INIT_ACK',{});peer.sock.close()
+    class RunnerSession:
+        child_socket=right
+        wire=g.c._GateWire(left,time.monotonic()+15,'generation.runner','a'*64,'b'*64)
+        closed=False
+        def pump(self):
+            check(self.child_socket.fileno()==-1)
+            check(self.wire.receive()==('INIT_ACK',{}))
+            for relative,operation,count in [('shadow/v1/validate-incident.sh','validate',1),('enforcement/v1/check-sandbox-receipt.sh','check-bound',4)]:
+                nested=['/bin/bash','-p',str(root/relative),operation,*[str(document)]*count]
+                before=len(actual)
+                try:runner._foreground(nested,b'',1024,65536,5,ledger.environment())
+                except g.c.Refusal as error:check(error.code=='E_RUNTIME')
+                else:raise AssertionError('invalid fixed checker unexpectedly succeeded')
+                check(len(actual)==before+1 and actual[-1][0]==nested)
+                check(actual[-1][1].pid>0 and actual[-1][1].returncode is not None)
+                check(all(stream.closed for stream in (actual[-1][1].stdin,actual[-1][1].stdout,actual[-1][1].stderr)))
+            self.closed=True
+    session=RunnerSession()
+    outer=['/bin/bash','-p',str(root/'scope/v1/evaluate-scope.sh'),'evaluate',*[str(document)]*9]
+    runner._gate_invocation=outer;runner._gate_session=session
+    g.c.subprocess.Popen=traced_popen
+    try:
+        try:runner._foreground(outer,b'',1024,65536,10,ledger.environment())
+        except g.c.Refusal as error:check(error.code=='E_RUNTIME')
+        else:raise AssertionError('invalid fixed scope driver unexpectedly succeeded')
+        check(session.closed and len(actual)==3)
+        check(all(child.pid>0 and child.returncode is not None for argv,child in actual))
+        check(all(stream.closed for argv,child in actual for stream in (child.stdin,child.stdout,child.stderr)))
+    finally:
+        g.c.subprocess.Popen=popen
+        left.close();right.close();consumer_source.close();runtime.close()
+with tempfile.TemporaryDirectory() as tmp:
+    path=pathlib.Path(tmp)/'exclusive.json'
+    identity=g.r.write_exclusive(path,b'{}\n')
+    check(path.read_bytes()==b'{}\n' and identity==g.c._identity(path.stat()))
+    gate_reject(g.r.write_exclusive,path,b'{"replaced":true}\n')
+    check(path.read_bytes()==b'{}\n')
+    target=pathlib.Path(tmp)/'original';target.write_bytes(b'original\n')
+    alias=pathlib.Path(tmp)/'alias';alias.symlink_to(target)
+    gate_reject(g.r.write_exclusive,alias,b'overwrite\n');check(target.read_bytes()==b'original\n')
+with tempfile.TemporaryDirectory() as tmp:
+    output=pathlib.Path(tmp)/'output';output.mkdir(mode=0o700)
+    relative=['private/reader-captures/gate-0000','private/reader-runtime/gate-0000/dependency',
+        'private/reader-runtime/no-hooks','private/observation','objects/kill-evidence/raw-0000',
+        'objects/coverage-evidence/raw-0000','completion','manifests']
+    for name in relative:(output/name).mkdir(mode=0o700,parents=True)
+    generator=g._Generator.__new__(g._Generator);generator.output=output;generator.deadline=time.monotonic()+10
+    expected={g.c._identity(path.stat())[:2] for path in [output,*output.rglob('*')] if path.is_dir()}
+    synced=[];fsync=g.os.fsync
+    def traced_fsync(fd):
+        synced.append(g.c._identity(g.os.fstat(fd))[:2]);fsync(fd)
+    g.os.fsync=traced_fsync
+    try:generator.sync_directories()
+    finally:g.os.fsync=fsync
+    check(set(synced)==expected and len(synced)==len(expected))
+    check(synced[-1]==g.c._identity(output.stat())[:2])
+    def failed_fsync(fd):raise OSError('injected directory fsync failure')
+    g.os.fsync=failed_fsync
+    try:
+        try:generator.sync_directories()
+        except OSError:check(not (output/'completion/COMPLETE.json').exists())
+        else:raise AssertionError('directory fsync failure ignored')
+    finally:g.os.fsync=fsync
+    alias=output/'private/alias';alias.symlink_to(output/'objects',target_is_directory=True)
+    gate_reject(generator.sync_directories)
+raw_manifest,raw_pages=n._KillNormalizer.captured(framed(pages),request)
+observation=n.kill_normalize(raw_manifest,raw_pages,request)
+source_identity={'source_id':'source.test','host_supervisor_sha256':'a'*64,'source_package_sha256':'b'*64,'collector_sha256':'c'*64,'normalizer_sha256':'d'*64,'accepted_source_identity_ref':owner}
+receipt_body=dict(operation=n.KILL_OPERATION,version=1,store_id='store.test',call_id=body['call_id'],request_sha256=n.digest(request),source_identity=source_identity,
+    query=n._KillNormalizer.query(body,observation),raw_manifest_sha256=n.digest(raw_manifest),observation_sha256=n.digest(observation),
+    started_at='2026-10-23T00:00:00Z',completed_at='2026-10-23T00:00:01Z',outcome='complete',effects=['read-forge-metadata','read-register'])
+check(n._KillNormalizer.receipt(n.canonical(env('kill_register_source_receipt',body['call_id'],receipt_body)),request,dict(store_id='store.test'),source_identity,raw_manifest,observation)['body']==receipt_body)
+for changed in [dict(started_at='2026-10-23T00:00:02Z',completed_at='2026-10-23T00:00:03Z'),dict(completed_at='2026-10-23T00:00:00Z'),dict(query={}),dict(outcome='partial')]:
+    reject(n._KillNormalizer.receipt,n.canonical(env('kill_register_source_receipt',body['call_id'],dict(receipt_body,**changed))),request,dict(store_id='store.test'),source_identity,raw_manifest,observation)
+# Execute only the actual fixture's pre-producer data transformation; no producer or native entry runs.
+import ast,re
+text=(root/'scripts/test/scope-qualification.test.sh').read_text()
+start=re.search(r"<<'PY_GENUINE_ASSEMBLER'[^\n]*\n",text).end();end=text.index('\nPY_GENUINE_ASSEMBLER',start)
+module=ast.parse(text[start:end]);builder=next(node for node in module.body if isinstance(node,ast.FunctionDef) and node.name=='build_coverage_revision')
+branch=next(node for node in builder.body if isinstance(node,ast.If) and ast.unparse(node.test)=='risk_assertion is not None')
+compiled=compile(ast.Module(body=branch.body,type_ignores=[]),'actual-risk-input-fixture','exec')
+for assertion in ('accept','reject'):
+    stage=env('stage_request','request.seed',dict(risk=dict(tier=dict(namespace='core',name='routine'),reason_ids=[],policy_ref={},required_gate_refs=[]),source=dict(state='present',value=dict(content_id='source.test')),requested_at='2026-10-23T00:00:00Z',gate_decision_refs=[]))
+    reviewer=dict(binding=dict(role='reviewer',adapter_instance_id='instance.review',principal_id='principal.review',execution_boundary_id='boundary.review'),adapter_implementation=dict(id='implementation.review',version='1.0.0'))
+    profile=env('resolved_profile','profile.test',dict(bindings=[reviewer]))
+    q=dict(stage_request=dict(content=stage,sha256=n.digest(n.canonical(stage))),resolved_profile=dict(content=profile,sha256=n.digest(n.canonical(profile))))
+    written=[]
+    context=dict(json=g.json,risk_assertion=assertion,q=q,canonical=n.canonical,sha=n.digest,package=root,label='pure-'+assertion,work=pathlib.Path('/unopened-fixture'),put=lambda path,raw:written.append((str(path),raw)))
+    exec(compiled,context)
+    request_doc=q['stage_request']['content'];claim_doc=context['risk_claim'];claim_raw=context['risk_claim_raw']
+    basis=copy.deepcopy(request_doc);del basis['body']['gate_decision_refs']
+    check(claim_doc['body']['request_basis_sha256']==n.digest(n.canonical(basis)[:-1]))
+    check(claim_doc['body']['request_basis_sha256']!=n.digest(n.canonical(basis)))
+    check(q['stage_request']['sha256']==n.digest(n.canonical(request_doc)))
+    check(request_doc['body']['gate_decision_refs'][0]['decision_record_ref']['sha256']==n.digest(claim_raw))
+    check(claim_doc['body']['decision']['value']['asserted_decision']==assertion)
+    check(claim_doc['body']['decision']['value']['decided_by']['principal_id']=='principal.review')
+    check(written==[('/unopened-fixture/risk-claim.json',claim_raw)])
+# Exercise the actual entry cleanup and marker writes with a bounded filesystem owner.
+original_generator=g._Generator
+for fault in ('fsync','run','close','deadline','cancel','preserved'):
+    with tempfile.TemporaryDirectory() as tmp:
+        output=pathlib.Path(tmp)/'output'
+        if fault=='preserved':
+            (output/'completion').mkdir(parents=True)
+            (output/'completion/COMPLETE.json').write_bytes(b'preserved\n')
+        class CompletionOwner:
+            sync_directories=original_generator.sync_directories
+            def __init__(self,arguments):
+                self.output=output;self.created=False;self.deadline=time.monotonic()+10
+                if fault=='preserved':raise ValueError('preexisting output')
+                output.mkdir(mode=0o700);self.created=True
+                for name in ('completion','objects','objects/value'):(output/name).mkdir(mode=0o700)
+            def run(self):
+                g.r.write_exclusive(output/'objects/value/value.json',b'{}\n')
+                self.sync_directories()
+                if fault=='fsync':raise AssertionError('directory fsync should have failed')
+                g.r.write_exclusive(output/'completion/COMPLETE.json',b'{}\n')
+                if fault=='run':raise ValueError('post-marker error')
+                if fault=='cancel':raise InterruptedError('cancelled')
+                if fault=='deadline':self.deadline=time.monotonic()-1
+            def close(self):
+                if fault=='close':raise OSError('close failure')
+        g._Generator=CompletionOwner
+        fsync=g.os.fsync
+        if fault=='fsync':
+            def fail_directory_sync(fd):
+                if g.stat.S_ISDIR(g.os.fstat(fd).st_mode):raise OSError('directory barrier failure')
+                fsync(fd)
+            g.os.fsync=fail_directory_sync
+        try:
+            try:g.main([])
+            except (ValueError,OSError,InterruptedError,g.c.Refusal):pass
+            else:raise AssertionError('entry failure unexpectedly returned success')
+            marker=output/'completion/COMPLETE.json'
+            check(marker.read_bytes()==b'preserved\n' if fault=='preserved' else not marker.exists())
+        finally:g._Generator=original_generator;g.os.fsync=fsync
 print(f'PASS {checks} pure parser / projection / Git-history / closed argv / socket lifecycle controls; no source/native execution')
 PY

@@ -1387,7 +1387,7 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
     def _foreground(self, argv, raw, cap, error_cap, timeout, env):
         _closed_scope_child(argv, env, self)
         source = getattr(self, "_coverage_invocation", None)
-        _require(0 < timeout <= (300 if getattr(self, "_gate_invocation", None) is not None else 120) and type(cap) is int
+        _require(0 < timeout <= (300 if argv == getattr(self, "_gate_invocation", None) else 120) and type(cap) is int
                  and ((source is not None and argv == source and cap == 0 and error_cap == 16384)
                       or (source is None and 0 < cap <= 16 * DOCUMENT_LIMIT and error_cap == 65536)), "E_RUNTIME")
         inherited = getattr(self.ledger, "store_session", None) is not None
@@ -1406,7 +1406,8 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
                 old_handlers[number] = signal.signal(number, observe_signal)
             signal.pthread_sigmask(signal.SIG_SETMASK, previous)
             _require(not cancelled[0], "E_RUNTIME")
-            gate = getattr(self, "_gate_session", None)
+            gate = (getattr(self, "_gate_session", None)
+                    if argv == getattr(self, "_gate_invocation", None) else None)
             saved_fd = None
             if gate is not None:
                 try:

@@ -15072,7 +15072,7 @@ print(json.dumps({'through_use_controls':'PASS','sibling_before':'PASS','sibling
 def coverage_git(args,raw=None):
     return git(args,raw).decode('utf-8').strip()
 
-def build_coverage_revision(commit, tree, label, terminated, template_files, template_record, record_form="withheld-write-policy.v1"):
+def build_coverage_revision(commit, tree, label, terminated, template_files, template_record, record_form="withheld-write-policy.v1", risk_assertion=None):
     commands_start=len(commands)
     work = base / ('coverage-work-' + label)
     work.mkdir(mode=0o700)
@@ -15108,6 +15108,41 @@ def build_coverage_revision(commit, tree, label, terminated, template_files, tem
     put(work/'duty.json',duty_raw);put(work/'claim.json',claim_raw);put(work/'observation.json',observation)
     evaluation_raw=component('control/v1/evaluate-bound-sandbox.sh',['evaluate',work/'duty.json',work/'claim.json',work/'observation.json'],role='sandbox-bound-evaluation');assert json.loads(evaluation_raw)['body']['verdict']=='satisfied'
     q=json.loads(canonical(original));q['stage_request']['content']['body']['environment_ref']={'environment_id':environment,'fingerprint_sha256':sha(claim_raw)};q['stage_request']['sha256']=sha(canonical(q['stage_request']['content']))
+    risk_claim_raw=None
+    if risk_assertion is not None:
+        assert risk_assertion in ('accept','reject')
+        stage_request=json.loads(canonical(q['stage_request']['content']))
+        stage_request['id']='request.gate-'+label
+        body=stage_request['body'];body['risk']['tier']={'namespace':'core','name':'routine'}
+        body['risk']['reason_ids']=['shadow.reproduction.read-only']
+        policy_ref={'content_id':'control-policy.risk-gates','media_type':'application/vnd.ystack.control-policy+json',
+            'sha256':sha((package/'control/v1/risk-gates-policy.json').read_bytes())}
+        assert policy_ref['sha256']=='3d8f0802777b4d7a63ded72643aca5cc8afd7613b76b5463291ca0ea63607a7e'
+        subject={'type':'artifact','value':body['source']['value']}
+        descriptor={'schema_version':1,'kind':'risk_policy_scope','policy_ref':policy_ref,'subject_ref':subject}
+        requirement={'schema_version':1,'kind':'risk_gate_requirement','declared_tier':'routine','policy_ref':policy_ref,'subject_ref':subject}
+        policy_scope={'purpose':'policy','decision_record_ref':policy_ref,'subject_ref':subject,'scope_sha256':sha(canonical(descriptor)[:-1])}
+        required_scope={'purpose':'gate-requirement','decision_record_ref':policy_ref,'subject_ref':subject,'scope_sha256':sha(canonical(requirement)[:-1])}
+        body['risk'].update(policy_ref=policy_scope,required_gate_refs=[required_scope])
+        basis=json.loads(canonical(stage_request));del basis['body']['gate_decision_refs']
+        basis_sha=sha(canonical(basis)[:-1])
+        reviewers=[row for row in q['resolved_profile']['content']['body']['bindings'] if row['binding']['role']=='reviewer']
+        assert len(reviewers)==1
+        reviewer=reviewers[0]
+        actor={key:reviewer['binding'][key] for key in ('role','adapter_instance_id','principal_id','execution_boundary_id')}
+        actor.update(implementation_id=reviewer['adapter_implementation']['id'],implementation_version=reviewer['adapter_implementation']['version'])
+        risk_claim={'schema_version':1,'kind':'risk_gate_decision_claim','id':'risk.claim.gate-'+label,'body':{
+            'activation_state':'inactive','classification':{'tier':'routine','reason_ids':body['risk']['reason_ids']},
+            'policy_ref':policy_scope,'required_gate_refs':[required_scope],'request_basis_sha256':basis_sha,
+            'decision':{'state':'present','value':{'asserted_decision':risk_assertion,'decided_by':actor,
+                'decision_kind':'independent-plan-check','recorded_at':body['requested_at']}}}}
+        risk_claim_raw=canonical(risk_claim)
+        body['gate_decision_refs']=[{'purpose':'gate-decision','decision_record_ref':{'content_id':risk_claim['id'],
+            'media_type':'application/vnd.ystack.risk-gate-decision-claim+json','sha256':sha(risk_claim_raw)},
+            'subject_ref':subject,'scope_sha256':basis_sha}]
+        q['stage_request']={'content':stage_request,'sha256':sha(canonical(stage_request))}
+        assert q['resolved_profile']['sha256']==sha(canonical(q['resolved_profile']['content']))
+        put(work/'risk-claim.json',risk_claim_raw)
     q_path, response_raw, candidate_root = materialize(q, 'consumer')
     response_path = put(work / 'response.json', response_raw)
     protocol = package / 'adapters/local-git-materializer/v1/protocol.jq'
@@ -15313,6 +15348,9 @@ def build_coverage_revision(commit, tree, label, terminated, template_files, tem
     producer_request = {'schema_version':1,'kind':'shadow_write_request','id':write_attempt,'body':{
         'attempt_id':write_attempt,'attempt_number':1,'scope_id':scope_doc['id'],'allowed_paths':paths,
         **{key:str(value) for key,value in request_inputs.items()}}}
+    if risk_assertion is not None:
+        producer_request={'schema_version':1,'kind':'shadow_enforced_request','id':write_attempt,'body':{
+            'attempt_id':write_attempt,'attempt_number':1,**{key:str(value) for key,value in request_inputs.items()}}}
     producer_request_path=put(work/'producer-request.json',producer_request,0o400)
     producer_work,producer_output=work/'producer-work',work/'producer-output'
     producer_work.mkdir(mode=0o700);producer_output.mkdir(mode=0o700)
@@ -15371,21 +15409,39 @@ def build_coverage_revision(commit, tree, label, terminated, template_files, tem
                 census=e._NativeThreadCensus();census.observe()
                 admission=e._StartupAdmission(e._STARTUP_KEY,sys.executable,sha(pathlib.Path(sys.executable).read_bytes()),
                     sys.version,tuple(sys.version_info[:2]),e._runtime_module_origins(),census)
-                code=w.main(['write-shadow.py','prepare-policy' if policy_form else 'prepare',str(producer_request_path),str(bundle),
-                    str(producer_work),str(producer_output)],admission)
+                if risk_assertion is None:
+                    code=w.main(['write-shadow.py','prepare-policy' if policy_form else 'prepare',str(producer_request_path),str(bundle),
+                        str(producer_work),str(producer_output)],admission)
+                else:
+                    code=e.main(['enforced-reproduction.py','reproduce',str(producer_request_path),str(producer_work),str(producer_output)],admission)
                 sys.stdout.flush();sys.stderr.flush()
                 os._exit(code)
         except BaseException:
             import traceback
             traceback.print_exc();sys.stderr.flush();os._exit(1)
     waited,status=os.waitpid(producer_pid,0)
-    print(json.dumps({'producer_operation':'prepare-policy' if policy_form else 'prepare','SIMULATED':['startup admission','VM identity','launch receipt'],
-        'actual':['public writer','native owner','materializer','preparation','fixed verifier','checker','store reader'],
+    print(json.dumps({'producer_operation':('reproduce' if risk_assertion is not None else 'prepare-policy' if policy_form else 'prepare'),'SIMULATED':['startup admission','VM identity','launch receipt'],
+        'actual':[('public enforced producer' if risk_assertion is not None else 'public writer'),'native owner','materializer','preparation','fixed verifier','checker','store reader'],
         'wait_status':status,'raw_log_utf8':producer_log.read_bytes().decode('utf8','backslashreplace')},sort_keys=True),flush=True)
     assert waited==producer_pid and os.WIFEXITED(status) and os.WEXITSTATUS(status)==0
     outer_files={path.name:path.read_bytes() for path in producer_output.iterdir() if path.name!='bundle.json'}
     outer_marker=(producer_output/'bundle.json').read_bytes();outer_record=outer_files['shadow-record.json']
-    actual_record=json.loads(outer_record)['body'];write_section=actual_record['write']
+    actual_record=json.loads(outer_record)['body']
+    if risk_assertion is not None:
+        assert actual_record['record_form']=='enforced-reproduction.v1'
+        assert outer_files['materialization-input.json']==q_path.read_bytes()
+        assert json.loads(outer_files['qualified-identity.json'])['body']['stage_request_ref']==e.pair_ref(q['stage_request'])
+        actual_bundle=base/'snapshots'/sha(outer_record);actual_bundle.mkdir(mode=0o755);actual_bundle.chmod(0o755)
+        for path in producer_output.iterdir():put(actual_bundle/path.name,path.read_bytes())
+        shutil.copytree(producer_work/'candidate/repository.git/objects',source/'objects',dirs_exist_ok=True)
+        for directory,dirs,names in os.walk(source):
+            pathlib.Path(directory).chmod(0o755)
+            for name in names:(pathlib.Path(directory)/name).chmod(0o444)
+        bundle.rename(base/'snapshots'/bundle.name)
+        return {'files':outer_files,'marker':outer_marker,'record':outer_record,'bundle':actual_bundle,
+            'identity':actual_record['qualified_identity'],'paths':json.loads(gate_enforced_scope)['body']['allowed_paths'],
+            'label':label,'risk_claim':json.loads(risk_claim_raw),'risk_assertion':risk_assertion,'producer_work':producer_work}
+    write_section=actual_record['write']
     assert actual_record['record_form']==record_form and len(write_section['write_set'])==(33 if policy_form else 32)
     if policy_form:
         assert outer_files['scope-policy.json']==(package/'scope/v1/scope-policy.json').read_bytes()
@@ -16330,7 +16386,11 @@ finally:
             code+=('import os,pathlib\np=pathlib.Path('+repr(str(mutation))+')\n'+
                 'raw=p.read_bytes();p.chmod(0o640);p.write_bytes(raw+b" ");p.write_bytes(raw);p.chmod(0o440)\n')
         records=[(b'capture.json',canonical(capture))]+[(f'raw/{i:04d}'.encode(),raw) for i,raw in enumerate(pages)]
-        code+='sys.stdout.buffer.write(module.frame_write('+repr(records)+'))\n'
+        code+=('import json,time\nrecords='+repr(records)+'\n'+
+            'snapshot=json.loads(records[1][1]);now=time.strftime("%Y-%m-%dT%H:%M:%SZ",time.gmtime())\n'+
+            'snapshot["before"]["observed_at"]=now;snapshot["after"]["observed_at"]=now\n'+
+            'records[1]=(records[1][0],module.canonical(snapshot))\n'+
+            'sys.stdout.buffer.write(module.frame_write(records))\n')
         put(gate_collector,code.encode(),0o555)
         package_files=[{'role':'normalizer','path':str(coverage_normalizer),'sha256':sha(coverage_normalizer.read_bytes())},
             {'role':'collector','path':str(gate_collector),'sha256':sha(gate_collector.read_bytes())}]
@@ -16352,6 +16412,7 @@ finally:
     gate_area=base/'gate-consumers';gate_area.mkdir(mode=0o755);gate_area.chmod(0o755)
     gate_runs=[]
     def gate_claim(item):
+        if 'risk_claim' in item:return item['risk_claim']
         request=json.loads(item['files']['materialization-input.json'])['stage_request']['content']
         risk=request['body']['risk']
         basis=json.loads(canonical(request));basis['body']['gate_decision_refs']=[]
@@ -16400,6 +16461,12 @@ finally:
                 scope=obj('scope');original=request['body']['scope_basis']
                 del scope['body']['gate_evidence_refs'];assert canonical(scope)==canonical(original)
                 assert obj('risk')['body']['verdict'] in ('inconclusive','violated')
+                if 'risk_assertion' in current:
+                    assert obj('duty')['body']['verdict']=='satisfied'
+                    expected_verdict,expected_reasons=(('inconclusive',['decision.provenance-unqualified']) if current['risk_assertion']=='accept'
+                        else ('violated',['decision.rejected']))
+                    assert obj('risk')['body']['verdict']==expected_verdict and obj('risk')['body']['reason_ids']==expected_reasons
+                    assert canonical(request['body']['risk_claim'])==canonical(current['risk_claim'])
                 assert obj('scope-evaluation')['body']['authority']=='none' and obj('scope-evaluation')['body']['enabled'] is False
                 assert obj('kill')['body']['duty_evaluation_ref']==e.document_ref(canonical(obj('duty')))
                 assert obj('state')['body']['register_ref']['kind']=='kill_switch_register'
@@ -16429,6 +16496,10 @@ finally:
                     except subprocess.TimeoutExpired:
                         os.killpg(child.pid,signal.SIGKILL);child.communicate(timeout=10)
         return coverage_evaluate_pair(qualifying,current,at_ready=invoke)
+    for assertion in ('accept','reject'):
+        item=build_coverage_revision(coverage_original_head,coverage_git(['rev-parse',coverage_original_head+'^{tree}']),
+            'gate-risk-'+assertion,int(time.time()),coverage_template_files,coverage_template_record,risk_assertion=assertion)
+        gate_case('actual-enforced-risk-'+assertion,None,item)
     gate_case('actual-single-source-enforced',None,gate_enforced_fixture)
     gate_case('actual-two-sibling-sources',qualifying,current)
     gate_case('same-stage-fresh-nonce',qualifying,current)

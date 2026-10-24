@@ -807,4 +807,7 @@ class _KillNormalizer:
                 and body["raw_manifest_sha256"] == digest(raw_manifest) and body["observation_sha256"] == digest(observation)
                 and body["outcome"] == "complete" and body["effects"] == ["read-forge-metadata", "read-register"]
                 and utc(body["started_at"]) <= utc(body["completed_at"]))
+        snapshots = document(observation)["snapshots"]
+        require(utc(body["started_at"]) <= utc(snapshots["before"]["observed_at"])
+                <= utc(snapshots["after"]["observed_at"]) <= utc(body["completed_at"]))
         return value

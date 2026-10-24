@@ -231,23 +231,22 @@ class _Reader:
             path = self.captures / f"gate-{len(self.inputs):04d}" / name
         else:
             path = self.captures / name
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400)
-        try:
-            sent = 0
-            while sent < len(raw):
-                count = os.write(fd, raw[sent:])
-                require(count > 0, "E_RUNTIME")
-                sent += count
-        finally:
-            os.fsync(fd)
-            os.close(fd)
         if self.store_session is not None:
-            parent = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            written = write_exclusive(path, raw, resolver=self.darwin)
+        else:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400)
             try:
-                os.fsync(parent)
+                sent = 0
+                while sent < len(raw):
+                    count = os.write(fd, raw[sent:])
+                    require(count > 0, "E_RUNTIME")
+                    sent += count
             finally:
-                os.close(parent)
-            self.hold(path, max(c.DOCUMENT_LIMIT, len(raw)))
+                os.fsync(fd)
+                os.close(fd)
+        if self.store_session is not None:
+            held = self.hold(path, max(c.DOCUMENT_LIMIT, len(raw)))
+            require(held.raw == raw and c._identity(held.held.before) == written, "E_STALE")
         self.inputs.append((path, raw))
         return path
 
@@ -277,7 +276,7 @@ class _Reader:
             "id": self.scope["id"], "body": {
                 "observation_sha256": c.digest(observation), "commands": self.commands}})
         require(0 < len(raw) <= c.DOCUMENT_LIMIT, "E_LIMIT")
-        write_exclusive(self.output.parent / "terminal.json", raw)
+        write_exclusive(self.output.parent / "terminal.json", raw, resolver=self.darwin)
         return raw
 
     def execute_git(self, argv, limit):
@@ -998,7 +997,7 @@ class _Reader:
         prepared = (("request.json", request_raw), ("expectation.json", c.canonical({"schema_version": 1,
                           "kind": "coverage_source_expectation", "id": attempt, "body": expectation})))
         for name, raw in prepared:
-            write_exclusive(workspace / name, raw, mode=0o600)
+            write_exclusive(workspace / name, raw, mode=0o600, resolver=self.darwin)
         for name, _raw in prepared:
             self.hold(workspace / name, c.DOCUMENT_LIMIT)
         self.directory(workspace)
@@ -1199,22 +1198,44 @@ class _ControlFIFO:
             self.parent.close()
 
 
-def write_exclusive(path, raw, mode=0o400):
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
+def write_exclusive(path, raw, mode=0o400, resolver=None):
+    parent = c._open_held(str(path.parent), True,
+        lambda _fd, state, ancestor: ancestor or state.st_uid == os.getuid(), "E_RUNTIME")
+    fd = None
     try:
+        parent.recheck("E_STALE")
+        before = set(os.listdir(parent.fd))
+        require(path.name not in before, "E_STALE")
+        fd = os.open(path.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                     mode, dir_fd=parent.fd)
         sent = 0
         while sent < len(raw):
             count = os.write(fd, raw[sent:])
             require(count > 0, "E_RUNTIME")
             sent += count
         os.fsync(fd)
+        state = os.fstat(fd)
+        require(stat.S_ISREG(state.st_mode) and state.st_uid == os.getuid() and state.st_nlink == 1
+                and stat.S_IMODE(state.st_mode) == mode, "E_RUNTIME")
+        if sys.platform != "darwin" or resolver is not None:
+            access, default = c._acl_state(fd, resolver)
+            require((access == [] if sys.platform == "darwin" else access is None and default is None), "E_RUNTIME")
+        written = c._identity(state)
+        require(c._identity(os.stat(path.name, dir_fd=parent.fd, follow_symlinks=False)) == written, "E_STALE")
+        require(set(os.listdir(parent.fd)) == before | {path.name}, "E_STALE")
+        require(c._identity(os.fstat(parent.fd))[:6] == c._identity(parent.before)[:6], "E_STALE")
+        require(c._identity(os.lstat(path.parent))[:6] == c._identity(parent.before)[:6], "E_STALE")
+        for index, component in enumerate(parent.components[:-1]):
+            require(c._identity(c._metadata(component.fd)) == c._identity(component.before), "E_STALE")
+            if component.name is not None:
+                require(c._identity(c._named_metadata(component.name, parent.components[index - 1].fd))
+                        == c._identity(component.before), "E_STALE")
+        os.fsync(parent.fd)
+        return written
     finally:
-        os.close(fd)
-    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
-        os.fsync(directory)
-    finally:
-        os.close(directory)
+        if fd is not None:
+            os.close(fd)
+        parent.close()
 
 
 def main(arguments):
@@ -1238,7 +1259,7 @@ def main(arguments):
         raw = reader.evaluate()
         require(len(raw) <= c.DOCUMENT_LIMIT, "E_LIMIT")
         reader.recheck()
-        write_exclusive(reader.output, raw)
+        write_exclusive(reader.output, raw, resolver=reader.darwin)
         reader.inputs.append((reader.output, raw))
         reader.recheck()
         if gate_session is not None:
