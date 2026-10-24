@@ -25,19 +25,23 @@ G1 为 #682，G2 为 #685。main 已包含两份历史 policy plan，尚未包�
 | 保留依赖 | 精确身份与状态 |
 | --- | --- |
 | M3 foundation | `fe6593e1b09960d165f0a5b0b3db555f06f182eb`；未合入、未验收，全部原 #558/#541 proof 保留 |
-| #544 source 映射点 | `787fbbf2799d22bc557ea957395c72fb40072c86`；原 `codex/impl/scope-coverage-authentication` 的 clean 检查点；未合入、未验收，R1 独审待定 |
+| #544 source 映射点 | `787fbbf2799d22bc557ea957395c72fb40072c86`；原 `codex/impl/scope-coverage-authentication` 的 clean 检查点；source ACCEPT，未合入，G3 BLOCKED |
 | #544 intent | `d2ada8661ac87c6c9f1abfc8a751a38c8aeb33cf`；与当前 main 一致 |
 | #544 plan / spec | `1237c85af242ea15b8a930938a1863baaf606078` / `618928cb8cb30a4ad95d8b39dc3126cd806c5444`；artifacts 已 protected merge，不能代表实现通过 |
 | child-5 intent | `6feb2ad7dd5f096bdd483ed9bace07cae2c24be5`；与当前 main 一致 |
 | child-5 plan / spec | `ebfc9e1d2c661cab78f87a9b9c2fa82116195310` / `fb1bbec3d8c0fd2bba0a6353da05bf03107e97a4`；artifacts 已 protected merge，不能代表 producer proof 通过 |
 
-原 `170fac30b888a7414105336fcd30159ffba3b42b` 的独立源码预审为 REVISE。
-两项 P1 为新 form/认证链及历史区间攻击测试覆盖，以及历史 policy 负例的 publisher
-关系混杂。787fbbf 已提交两份 suite 的修复，R1 独审仍 PENDING，两项 P1 尚未关闭。
-其 parent `130efa00deddbb829dbe3a64e611948329604119` 是 170fac 与指定 main
-cf50464 的普通 merge。相关 production source/helper 原字节未变；测试修复不能
-自动继承源码接受。计划接受前必须由经理读取本检查点的完整原始 R1 verdict，确认
-两项 P1 闭合并完成 source preflight。此准备稿不构成依赖接受或 implementation GO。
+本检查点的独立 R1 原始结论为 `Source-verdict: ACCEPT`、Important 0。
+原两项 P1 的源码缺口已关闭：必需测试覆盖已补齐，历史 policy 反例已隔离 publisher
+关系。依赖状态严格为 `SOURCE_COMPLETE_WAITING_GENUINE_PROOF`。
+经理已全文读取报告与逐项 map，并记录在
+[#544 源码接受记录](https://github.com/yihanzhu/ystack/issues/544#issuecomment-6377638423)。
+报告 SHA-256：`6733f12c06ffaa086c857cba690fe1e319b20833ebdd236975d89ee3fba2d13b`；
+map SHA-256：`52bef1fa08b06408c59a737e23af39c889dfa9a61eaaddc52aab3a5d02786bef`。
+parent `130efa00deddbb829dbe3a64e611948329604119` 保留普通 merge 历史。
+十个映射 source/helper 原字节未变；R1 完整 delta 和六份 artifact 链已核。
+全部真实 proof 仍 PREPARED / NOT RUN，G3 BLOCKED、foundation 未合入。
+此源码接受可供提前 inactive 实施的计划采用，不单独授予 implementation GO。
 
 | 实际接口（787fbbf） | 私有接线与必须保留的关系 |
 | --- | --- |
@@ -54,7 +58,7 @@ cf50464 的普通 merge。相关 production source/helper 原字节未变；测�
 reader blob 为 `118f010b8540e1bb79c28ee9cf42a618de731a63`，shared consumer 为
 `013bf3ec67a282722e8817716cd9a7412d65cd00`，coverage normalizer 为
 `f360d6155f0ed58594b357340f3b3437907aa3f2`，host supervisor 为
-`1c75e28c49a7ac182f71bb381f5c621acf69c770`。它们只固定当前预读对象。
+`1c75e28c49a7ac182f71bb381f5c621acf69c770`。它们固定本次已完成源码预审的依赖对象，不证明运行或合入。
 
 当前 `source_coverage` 在 durable request 后只关闭自己 owned 中的
 `_HeldStoreRead`，随后重认证 qualifying/current；没有 outer registry/handoff。
@@ -63,14 +67,14 @@ reader blob 为 `118f010b8540e1bb79c28ee9cf42a618de731a63`，shared consumer 为
 
 | 门槛 | 允许的下一步 |
 | --- | --- |
-| 计划准备 | 使用上述真实 source 完成架构映射；保留 unmerged/unaccepted 和两项 P1 状态 |
-| 计划接受 | 原 carrier 精确 787fbbf clean head、两项 P1 闭合、完整 source preflight 和本 plan fresh 独审；经理记录本计划与依赖的精确 tuple |
+| 源码依赖准备 | 精确 787fbbf 为 SOURCE_COMPLETE_WAITING_GENUINE_PROOF；原两 P1 源码缺口关闭，真实 proof 与未合入状态保留 |
+| 计划接受 | 复核原 carrier 的精确 787fbbf clean tuple、上列 raw 接受与源码映射；本 plan 仍须 fresh 独审和 protected merge |
 | 提前 inactive 实施 | 在获接受的计划与经理明确 build tuple 下，采用精确保留依赖准备本 concern 代码/tests；不要求把 source 预审称为 G3 或已合入，不替代任何原 proof |
 | foundation 与 #544 合入 | #558/#541 全部原标准先闭合并 protected merge；#544 按自身计划完成全部 proof、实际 diff 审查、CI 与 protected merge |
 | #681 最终发布/G3 | 原实现 carrier 普通 merge 含上述实现的精确 main，核完整 diff/允许路径/尺寸，重新 exact-head/base 独审和 CI，完成本 spec 全部证明 |
 
-计划接受前的 source preflight 必须读修复后的完整相关 source 和 helper，而非只看
-测试摘要。记录 source head、parent/base、两条 artifact chain、文件 blobs/SHA-256，
+本 plan 独审须核对已绑定的完整相关 source/helper 与原始 R1 接受，不以测试摘要
+替代。核对 source head、parent/base、两条 artifact chain、文件 blobs/SHA-256，
 逐项核上表的全部 store 取得/释放点、closed argv、ledger、source request/receipt、
 raw schemas、fresh origins、private protocol 和 fixture。测试-only delta 也须独审，
 不能自动继承原 REVISE 结论或把测试文件存在当 PASS；接口语义改变则先修订计划。
@@ -78,7 +82,7 @@ raw schemas、fresh origins、private protocol 和 fixture。测试-only delta �
 最终合入基础后，计算 main→head 的完整 diff，不扣除 inherited 行数来满足预算。
 若仍含未合入 foundation，停止 #681 发布，不扩大预算包揽依赖。
 无 reset/rebase、重建 attempt 或死 shim；不借等待先落无 consumer 的 schema。
-本 concern 不修改 #544 producer 或补它的 P1；改动若需要超出本允许集，返回计划门槛。
+本 concern 不修改 #544 producer 或接手其运行验收；改动若需要超出本允许集，返回计划门槛。
 
 ## 精确改动范围与交付
 
