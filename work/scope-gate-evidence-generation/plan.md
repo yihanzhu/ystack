@@ -25,17 +25,21 @@ G1 为 #682，G2 为 #685。main 已包含两份历史 policy plan，尚未包�
 | 保留依赖 | 精确身份与状态 |
 | --- | --- |
 | M3 foundation | `fe6593e1b09960d165f0a5b0b3db555f06f182eb`；未合入、未验收，全部原 #558/#541 proof 保留 |
-| #544 source 映射点 | `170fac30b888a7414105336fcd30159ffba3b42b`；原 `codex/impl/scope-coverage-authentication` 的 clean 检查点；未合入、未验收 |
+| #544 source 映射点 | `787fbbf2799d22bc557ea957395c72fb40072c86`；原 `codex/impl/scope-coverage-authentication` 的 clean 检查点；未合入、未验收，R1 独审待定 |
+| #544 intent | `d2ada8661ac87c6c9f1abfc8a751a38c8aeb33cf`；与当前 main 一致 |
 | #544 plan / spec | `1237c85af242ea15b8a930938a1863baaf606078` / `618928cb8cb30a4ad95d8b39dc3126cd806c5444`；artifacts 已 protected merge，不能代表实现通过 |
+| child-5 intent | `6feb2ad7dd5f096bdd483ed9bace07cae2c24be5`；与当前 main 一致 |
 | child-5 plan / spec | `ebfc9e1d2c661cab78f87a9b9c2fa82116195310` / `fb1bbec3d8c0fd2bba0a6353da05bf03107e97a4`；artifacts 已 protected merge，不能代表 producer proof 通过 |
 
-170fac 的独立源码预审为 REVISE，仍有两项 P1：必需的新 form/认证链及历史区间
-攻击测试未完整进入现有 suite；历史不同-policy 负例同时破坏 publisher 关系。
-未发现额外产品认证绕过，不等于通过审查。本计划采用它来准备实际架构映射。
-计划接受前必须绑定原作者修复后的 clean head、完整原始独审、两项 P1 的闭合证据，
-并核查从 170fac 到该 head 的全部 delta。此准备稿不构成依赖接受或 implementation GO。
+原 `170fac30b888a7414105336fcd30159ffba3b42b` 的独立源码预审为 REVISE。
+两项 P1 为新 form/认证链及历史区间攻击测试覆盖，以及历史 policy 负例的 publisher
+关系混杂。787fbbf 已提交两份 suite 的修复，R1 独审仍 PENDING，两项 P1 尚未关闭。
+其 parent `130efa00deddbb829dbe3a64e611948329604119` 是 170fac 与指定 main
+cf50464 的普通 merge。相关 production source/helper 原字节未变；测试修复不能
+自动继承源码接受。计划接受前必须由经理读取本检查点的完整原始 R1 verdict，确认
+两项 P1 闭合并完成 source preflight。此准备稿不构成依赖接受或 implementation GO。
 
-| 实际接口（170fac） | 私有接线与必须保留的关系 |
+| 实际接口（787fbbf） | 私有接线与必须保留的关系 |
 | --- | --- |
 | `_Reader.__init__`、`evaluate`、`fixed_bundle`、`_authenticate` | 拆分固定的 bundle 认证阶段供新 consumer 复用；保留 owned、inputs、package_sources、anchor 与 Git owner，不复制 reader |
 | `_authenticate` → `git_relations` → `write_relations` → `_authenticate(frozen)` | 原始 materialization candidate/manifest/launch subject/expectation/receipt/checker 全链；递归 prerequisite 同样产生 store holds，必须登记和重新认证 |
@@ -60,7 +64,7 @@ reader blob 为 `118f010b8540e1bb79c28ee9cf42a618de731a63`，shared consumer 为
 | 门槛 | 允许的下一步 |
 | --- | --- |
 | 计划准备 | 使用上述真实 source 完成架构映射；保留 unmerged/unaccepted 和两项 P1 状态 |
-| 计划接受 | 原 carrier 新 clean head、两项 P1 闭合、完整 source preflight 和本 plan fresh 独审；经理记录本计划与依赖的精确 tuple |
+| 计划接受 | 原 carrier 精确 787fbbf clean head、两项 P1 闭合、完整 source preflight 和本 plan fresh 独审；经理记录本计划与依赖的精确 tuple |
 | 提前 inactive 实施 | 在获接受的计划与经理明确 build tuple 下，采用精确保留依赖准备本 concern 代码/tests；不要求把 source 预审称为 G3 或已合入，不替代任何原 proof |
 | foundation 与 #544 合入 | #558/#541 全部原标准先闭合并 protected merge；#544 按自身计划完成全部 proof、实际 diff 审查、CI 与 protected merge |
 | #681 最终发布/G3 | 原实现 carrier 普通 merge 含上述实现的精确 main，核完整 diff/允许路径/尺寸，重新 exact-head/base 独审和 CI，完成本 spec 全部证明 |
@@ -69,7 +73,7 @@ reader blob 为 `118f010b8540e1bb79c28ee9cf42a618de731a63`，shared consumer 为
 测试摘要。记录 source head、parent/base、两条 artifact chain、文件 blobs/SHA-256，
 逐项核上表的全部 store 取得/释放点、closed argv、ledger、source request/receipt、
 raw schemas、fresh origins、private protocol 和 fixture。测试-only delta 也须独审，
-不能自动继承 170fac 结论；接口语义改变则先重写相应计划内容。
+不能自动继承原 REVISE 结论或把测试文件存在当 PASS；接口语义改变则先修订计划。
 
 最终合入基础后，计算 main→head 的完整 diff，不扣除 inherited 行数来满足预算。
 若仍含未合入 foundation，停止 #681 发布，不扩大预算包揽依赖。
@@ -101,7 +105,7 @@ raw schemas、fresh origins、private protocol 和 fixture。测试-only delta �
 3,000–5,200 行，仅适用于 foundation 与 #544 正式合入后的本 concern 完整 diff。
 依据当前 reader 1,109 行、source normalizer 481 行及
 #544 source 接线约 1,294 行新增，预计 production glue/normalizer 约占一半，
-完整同合同 fixture 和破坏用例约占另一半。复用现有约 16,093 行的 scope 测试基础。
+完整同合同 fixture 和破坏用例约占另一半。复用现有 16,452 行的 scope 测试基础。
 不复制其中账号、ACL、安装和收割框架。若完整实现超出范围，先保留 clean attempt，
 另行计划修订与独审；不压缩代码、裁剪测试或用空 schema PR 分割行数。
 
