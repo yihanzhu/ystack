@@ -100,8 +100,11 @@ raw schemas、fresh origins、private protocol 和 fixture。测试-only delta �
 | `control/v1/kill-switch.jq` | state 的封闭 `register_ref` 扩展，保留旧低层形状与原判定 |
 | `control/v1/kill-switch-decision.json` | 只更新实际 program 摘要 |
 | `control/v1/control-policy-set.json`、`control/v1/control-policy-set-sandbox-bound.json` | 只更新 kill decision 的传递摘要 |
+| `enforcement/v1/sandbox-receipt.jq` | 只更新 legacy/bound 两个 policy-set 固定摘要，闭合当前实际文件身份 |
+| `scripts/test/sandbox-launcher.test.sh` | 只更新 `control_real` 的实际 legacy policy-set 摘要 |
+| `scripts/test/shadow-enforced.test.sh` | 只重绑 `acl_mask_equivalence` 两段逆变换后的整模块静态摘要 |
 | `scripts/test/scope-gate-generation.test.sh` | 新 consumer 的纯解析、投影、关闭参数与普通 hermetic 测试 |
-| `scripts/test/scope-qualification.test.sh` | 在现有 genuine fixture 中加入完整单/双 source 路径和全部破坏场景 |
+| `scripts/test/scope-qualification.test.sh` | 在现有 genuine fixture 中加入完整单/双 source 路径和全部破坏场景；普通 `__new__` Reader fixture 明确初始化 `store_session=None` |
 | `scripts/test/control-kill-switch.test.sh` | 新旧 state 兼容、stop 优先级、摘要绑定回归 |
 | `docs/components.md`、`RESTORE.md`、`ci/required-files.txt` | 入口、inactive 边界、运行条件、恢复清单与证明命令 |
 
@@ -309,7 +312,10 @@ risk 的 duty 再生成和逐字比较保留。risk 仍仅 inconclusive/violated
 source/输入/关系/runtime 失败必须非零，不能伪造一个 kill verdict 掩盖失败。
 
 修改 `kill-switch.jq` 后以脚本计算实际 SHA-256，依次更新 kill decision 与两个当前
-policy sets。保持其他字段逐字不变。duty/risk driver、policy 与 decision 不需改变。
+policy sets。其余字段逐字不变。再把两份当前 policy set 的实际摘要传递到 `sandbox-receipt.jq` 的
+固定 pin，并更新 launcher `control_real` 的 legacy 摘要。模式、其他 pin、形状、
+跨文档关系和错误路径保持不变；不兼容旧摘要，不删除固定身份检查。
+duty/risk driver、policy 与 decision 不需改变。
 consumer 不补改 bundle 内旧 policy set；不匹配当前 closure 的历史 bundle 应拒绝。
 fixture 用当前包重新生产真实 bundle，不能 patch 完成的 receipt 或归档证据。
 若新接受的依赖增加其他 restore-critical/hash closure 文件，先修改 plan 允许集再实施。
@@ -336,6 +342,24 @@ IPC 和清理只使用这个 deadline 的剩余量。私有交接传 absolute de
 子进程存活或 cleanup 不确定统一撤销完成资格。超时后仍报告未收割，不谎称已停止。
 
 ## 测试与验收
+
+普通 `__new__` Reader fixture 仅补 `store_session=None`，与真实构造器默认值一致。
+保留实际 capture、Git inspection、commands ledger 和 close；不增加 product fallback。
+ACL 等义测试仅更新整模块静态期望。先核候选 consumer 的完整实际差分，确认两段
+逆变换各唯一命中、四个目标函数固定摘要全部不变，再计算逆变换后的整模块摘要。
+候选上下文变化时重新核对，不照抄历史摘要。保留整模块 guard，不在运行时用 actual
+生成 expected，不改变函数期望或 ACL 算法；摘要匹配不能替代行为执行。
+
+| 兼容证明 | 必须保留并完成的原验证 |
+| --- | --- |
+| `sandbox-receipt.test.sh` | legacy/bound 当前实际文件与 wrapper 正例；同形状身份篡改、错误/陈旧摘要拒绝；CPU none 不可满足 |
+| `sandbox-launcher.test.sh` | `control_real` 交实际 shipped checker；全部原正负期望 |
+| `scope-qualification.test.sh` | 普通 fixture 实际 capture 后的四 commit interval 正例；错误 publisher/branch/interval 拒绝；commands ledger 与 cleanup |
+| `shadow-enforced.test.sh` | 两段唯一逆变换、四个固定函数摘要；全部 Darwin/Linux 样本、dangerous mask 13684、ownership/mode、观察次数/顺序、异常传播、同闭包三次 fresh observation |
+
+上表不是缩减 suite 的选择器。下列全部原命令、完整 suite 和 milestone full matrix
+仍须执行。若现有 receipt 回归缺少必要覆盖，先返回计划门精确增加测试允许路径。
+不为此次兼容修复改 reader product、consumer 算法、历史归档或其他路径。
 
 新增 pure suite 自动由现有 `run-all.sh` 发现；不改 runner 或 workflow。
 真实正向扩展现有 `scope-qualification.test.sh` 的固定 genuine fixture。
