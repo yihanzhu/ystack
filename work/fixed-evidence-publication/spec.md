@@ -458,7 +458,7 @@ no new source trust root, native ABI, owner registration or provenance command i
 needed. A pure Python call must not fabricate an external command-ledger row.
 Missing, replaced, aliased, changed or unbound module bytes refuse completion.
 
-After the accepted adoption/plan gates, only these nine paths may change for the
+After the accepted adoption/plan gates, only these ten paths may change for the
 new second-checkpoint concern. They are not permission to edit other inherited code.
 
 | Exact path | Allowed purpose |
@@ -470,6 +470,7 @@ new second-checkpoint concern. They are not permission to edit other inherited c
 | `scripts/test/publisher-admission.test.sh` | Closed offline common-boundary and source-closure proofs through actual functions and real disposable Git objects |
 | `scripts/test/shadow-write.test.sh` | Actual writer-route paired proof, retained safety assertions and finite private-copy closure updates |
 | `scripts/test/shadow-enforced.test.sh` | Exact private fixture source-copy update for the new module; retain all original assertions |
+| `scripts/test/scope-qualification.test.sh` | Add only the exact new helper to its actual private writer/reader packages, with the closure proof below; retain all original assertions and execution modes |
 | `scripts/test/portable-core-v3-publisher.test.sh` | Correct only the original-plan provenance check inside `static_case` / `registry-exact`, as specified below; preserve all other checks |
 | `ci/required-files.txt` | Restore entries for the new private module and its test only |
 
@@ -485,6 +486,35 @@ The plan must justify a readable new and cumulative review-size range from the
 actual adoption diff and test inventory. An overrun returns through that gate;
 never reduce proof or hide inherited changes to meet a size target.
 
+
+
+Every actual private writer/reader package must include the same fixed helper.
+The adopted `22d25c96f28ed42da0a5722b6b5ea0e65946274c` qualification suite has these
+four copy points; its genuine assembler later loads the copied writer at line 12407:
+
+| Existing qualification copy point | Private package |
+| --- | --- |
+| Lines 10134–10139 | Portable package |
+| Lines 10182–10187 | Marker-race package |
+| Lines 10255–10258 | Terminal-controls package |
+| Lines 10737–10738 | Genuine package |
+
+At each point, add only `publisher/v1/_admission.py` and the necessary physical
+`publisher/v1` parent directories inside that existing package. Do not copy the
+whole publisher directory. Verify the fixed source and destination regular file,
+parent paths, raw bytes/digest and the package's existing ownership/mode rules.
+For the genuine copy, include the new paths before its existing root-ownership and
+mode normalization; do not change those controls. Do not relax the writer/reader
+loader, change execution modes or assertions, or alter genuine/native classification,
+#558 ledger hashes/budgets or retained failures to accommodate this copy.
+
+The separate high-risk plan must enumerate every actual private-package copy point
+and fix paired closure proof: the exact helper present must reach the original
+intended writer/reader assertions; missing or altered helper must refuse at its
+actual closure boundary. A missing-helper refusal cannot count as a normal-path
+positive. Preserve the original proof even where its runtime remains NOTRUN/BLOCKED.
+`scope-gate-generation.test.sh` loads the real repository root and does not construct
+such a private writer package; this amendment does not add that path.
 
 The existing v3 runner's `registry-exact` case correctly fixes the registry's
 `parent_plan_merge_commit` to `c6c3f74181ea86f85be87ecf4431e67a5f272d82` and its
