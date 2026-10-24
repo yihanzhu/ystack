@@ -488,7 +488,8 @@ Keep fixture-dependent relay/dashboard cases in the same existing framework test
 so its private repository builder is not duplicated. Keep the existing dashboard
 suite's PR 1a regression group unchanged. Update scope and shadow self-host fixture
 fields/digests as above, with real C1 inner SHA before outer refs, and assert the
-closed shape plus the paired scope content-binding behavior in those tests.
+closed shape in both fixtures. Put the paired content-binding assertions in the
+scope test.
 Use their normal entry points; no test selector or diagnostics framework.
 
 Before tests, run the cache preflight under Proof. It grants no download. Run all
@@ -497,7 +498,13 @@ record evaluator's suite). Preserve full argv/head/base/platform/output/exit for
 each. Run syntax, diff, pin/unchanged-file and existing rename checks. Local full
 scope/native/root/#558 windows remain outside this segment. The unchanged scope
 mechanism prefix may be used with exactly the recorded preparation/bounds below;
-it does not cover new full integration assertions. In the existing CI environment,
+it does not cover the new paired content-binding assertions in the full scope
+script. A missing fixed jq cache means local `NOTRUN`; stop without downloading.
+An authorized existing `workflow_dispatch` may test the exact source checkpoint
+in CI. Record that head, each complete command, named assertions and actual exit.
+It is CI evidence for that checkpoint, not local execution, the final combined
+PR 1b, genuine/native proof or resolution of any old failed run. Add no workflow,
+selector or diagnostic path. In the existing CI environment,
 require full `scope-qualification.test.sh`, `shadow-self-host-evidence.test.sh`,
 `maintenance-loop.test.sh`, `portable-core-schema.test.sh`, the eight eval suites,
 `eval-framework.test.sh` and `run-all-sharding.check.sh` on the final combined head.
