@@ -22,6 +22,7 @@ HELPER_SOURCE = "adapters/local-git-materializer/v1/object-closure.c"
 HELPER_SOURCE_SHA256 = "f1616b908c97e8a091029c24b3f2e1f8827171cbdee4d47195c66afd3e961e27"
 PARENT_LIMIT, DOCUMENT_LIMIT = 16 * 1024, 1024 * 1024
 CAPTURE_LIMIT = DOCUMENT_LIMIT
+EXPORT_LIMIT = 12 * DOCUMENT_LIMIT
 EXECUTABLE_LIMIT, OUTPUT_LIMIT = 16 * 1024 * 1024, 10 * 1024 * 1024
 JQ_SHA256 = {"darwin": "5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef",
              "linux": "af986793a515d500ab2d35f8d2aecd656e764504b789b66d7e1a0b727a124c44"}
@@ -966,7 +967,50 @@ def _hex_name(value: object) -> bool:
             and len(value) <= 510 and all(char in "0123456789abcdef" for char in value))
 
 def _attempt_names(snapshots):
-    return {"receipt.json", "payload"} | ({"capture.json"} if "capture.json" in snapshots else set())
+    return ({"receipt.json", "payload"}
+            | ({"capture.json"} if "capture.json" in snapshots else set())
+            | ({"sandbox-export.bin"} if "sandbox-export.bin" in snapshots else set()))
+
+
+def _capture_export_reference(groups):
+    host = groups.get("host", {})
+    _require(type(host) is dict, "E_STORE")
+    rows = host.get("process", [])
+    _require(type(rows) is list and len(rows) <= 4096, "E_STORE")
+    reference, reached = None, False
+    for row in rows:
+        _require(type(row) is dict, "E_STORE")
+        value = row.get("bytes")
+        if row.get("site") != "run_vm.export-read":
+            _require(type(value) is not dict, "E_STORE")
+            continue
+        _require(set(row) == {"site", "ordinal", "return", "errno", "bytes", "timeout"}
+                 and type(row["ordinal"]) is int and row["ordinal"] == 0
+                 and row["timeout"] is None and not reached, "E_STORE")
+        reached = True
+        if value is None:
+            _require(row["return"] is None and type(row["errno"]) is int
+                     and row["errno"] > 0, "E_STORE")
+            continue
+        _require(type(value) is dict and set(value) == {"role", "launch", "size_bytes", "sha256"}
+                 and value["role"] == "sandbox-export-bytes"
+                 and type(value["launch"]) is str and value["launch"] in {"reproduction", "write"}
+                 and type(value["size_bytes"]) is int and 0 <= value["size_bytes"] <= EXPORT_LIMIT
+                 and _sha(value["sha256"]) and row["errno"] is None
+                 and type(row["return"]) is int and row["return"] == value["size_bytes"], "E_STORE")
+        reference = value
+    return reference
+
+
+def _capture_export_binding(groups, snapshots, *, launch=None, source=False):
+    reference = _capture_export_reference(groups)
+    present = "sandbox-export.bin" in snapshots
+    _require(present == (reference is not None) and (not source or not present), "E_STORE")
+    if reference is not None:
+        raw = snapshots["sandbox-export.bin"]
+        _require(len(raw) == reference["size_bytes"] and digest(raw) == reference["sha256"]
+                 and (launch is None or reference["launch"] == launch), "E_STORE")
+    return reference
 
 
 def _capture_envelope(raw, attempt_id, request_sha256, *, seed=False):
@@ -985,6 +1029,7 @@ def _capture_envelope(raw, attempt_id, request_sha256, *, seed=False):
     if seed:
         _require(body["complete"] and bool(body["raw"]), "E_STORE")
     groups = body["raw"]
+    _capture_export_reference(groups)
     remaining = {name: group for name, group in groups.items() if name not in {"host", "guest"}}
     _require(len(canonical(remaining)) <= 4 * DOCUMENT_LIMIT
              and all(len(canonical(groups[name])) <= 4 * DOCUMENT_LIMIT
@@ -992,9 +1037,11 @@ def _capture_envelope(raw, attempt_id, request_sha256, *, seed=False):
     return body["raw"]
 
 
-def _capture_for_replay(snapshots, attempt_id, request_raw):
+def _capture_for_replay(snapshots, attempt_id, request_raw, *, launch=None):
     _require("capture.json" in snapshots, "E_STORE")
-    return _capture_envelope(snapshots["capture.json"], attempt_id, digest(request_raw), seed=True)
+    groups = _capture_envelope(snapshots["capture.json"], attempt_id, digest(request_raw), seed=True)
+    _capture_export_binding(groups, snapshots, launch=launch)
+    return groups
 
 
 class _HeldStoreRead:
@@ -1055,7 +1102,8 @@ def read_store_attempt(anchor: Anchor, attempt_id: str, *,
                              _observation(payload, "payload", storage_rows=storage_rows)))
         attempt_names = set(attempt.listdir())
         _require(attempt_names in ({"payload", "receipt.json"},
-                                   {"payload", "receipt.json", "capture.json"}), "E_STORE")
+                                   {"payload", "receipt.json", "capture.json"},
+                                   {"payload", "receipt.json", "capture.json", "sandbox-export.bin"}), "E_STORE")
         payload_names = set(payload.listdir())
         fixed = {"stdout", "stderr", "evidence-manifest.json"}
         optional = ({"refusal.json"} if "refusal.json" in payload_names else set())
@@ -1070,6 +1118,10 @@ def read_store_attempt(anchor: Anchor, attempt_id: str, *,
             capture = _open_child(attempt, "capture.json", False,
                                  _store_rule(uid, gid, 0o440, False, anchor.resolver), "E_STORE")
             opened.append(capture); files.append((capture, "capture.json"))
+        if "sandbox-export.bin" in attempt_names:
+            export = _open_child(attempt, "sandbox-export.bin", False,
+                                 _store_rule(uid, gid, 0o440, False, anchor.resolver), "E_STORE")
+            opened.append(export); files.append((export, "sandbox-export.bin"))
         for name in sorted(fixed | optional):
             item = _open_child(payload, name, False,
                                _store_rule(uid, gid, 0o440, False, anchor.resolver), "E_STORE")
@@ -1110,7 +1162,8 @@ def read_store_attempt(anchor: Anchor, attempt_id: str, *,
         for item, name in files:
             output_name = (name in ("payload/stdout", "payload/stderr")
                            or name.startswith("payload/evidence/"))
-            maximum = (remaining if output_name else CAPTURE_LIMIT if name == "capture.json" else
+            maximum = (remaining if output_name else EXPORT_LIMIT if name == "sandbox-export.bin" else
+                       CAPTURE_LIMIT if name == "capture.json" else
                        DOCUMENT_LIMIT if name in ("receipt.json", "payload/evidence-manifest.json")
                        else OUTPUT_LIMIT)
             _require(item.before.st_size <= maximum, "E_STORE")
@@ -1127,7 +1180,8 @@ def read_store_attempt(anchor: Anchor, attempt_id: str, *,
             receipt_body = _json(snapshots["receipt.json"], DOCUMENT_LIMIT, "E_STORE").get("body", {})
             attempt_body = receipt_body.get("attempt", {}) if type(receipt_body) is dict else {}
             _require(type(attempt_body) is dict, "E_STORE")
-            _capture_envelope(snapshots["capture.json"], attempt_id, attempt_body.get("launch_request_sha256"))
+            groups = _capture_envelope(snapshots["capture.json"], attempt_id, attempt_body.get("launch_request_sha256"))
+            _capture_export_binding(groups, snapshots)
         _require(set(attempt.listdir()) == attempt_names
                  and set(payload.listdir()) == payload_names, "E_STORE")
         if rows:
@@ -1304,7 +1358,8 @@ def read_coverage_attempt(anchor, configuration, request_raw, *, _owner=None):
         n.receipt(snapshots["receipt.json"], request_raw, anchor.config, configuration.identity,
                   snapshots["payload/raw-manifest.json"], rebuilt)
         if "capture.json" in snapshots:
-            _capture_envelope(snapshots["capture.json"], attempt_id, digest(request_raw))
+            groups = _capture_envelope(snapshots["capture.json"], attempt_id, digest(request_raw))
+            _capture_export_binding(groups, snapshots, source=True)
         _require(set(attempt.listdir()) == attempt_names, "E_STALE")
         for item in opened:
             item.recheck("E_STALE")

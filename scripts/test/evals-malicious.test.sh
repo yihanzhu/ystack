@@ -625,7 +625,7 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
                       {'path':'/ordinary','values':[1,None,'\x00\b\t\r\f']}):
             assert host._capture_size(value,1024*1024)+1 == len(host.canonical(value))
         boundary_id = 'attempt.capture.boundary'
-        boundary_group = {'host':{'process':[{'site':'run_vm.export-read','ordinal':0,
+        boundary_group = {'host':{'process':[{'site':'run_driver.read','ordinal':0,
             'return':0,'errno':None,'bytes':'','timeout':None}], 'driver_rest':[], 'signals':[]},
             'clocks':{'wall':[],'monotonic':[]}}
         row = boundary_group['host']['process'][0]
@@ -641,6 +641,63 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
         over_limit = host._capture_values(boundary_id+'a',request,boundary_group,True)
         assert not json.loads(over_limit)['body']['complete'] and json.loads(over_limit)['body']['raw'] == {}
         print('ok exact capture document boundary and one-byte-over envelope; primitive schema/case admission remain separate')
+        for launch in ('reproduction','write'):
+            attempt_id = 'attempt.export.'+launch
+            attempt = store/attempt_id;attempt.mkdir(mode=0o750);attempt.chmod(0o750)
+            payload = attempt/'payload';payload.mkdir(mode=0o750);payload.chmod(0o750)
+            export = host.frame_write([(b'stdout',b''),(b'stderr',b'')])
+            export += bytes(consumer.EXPORT_LIMIT-len(export))
+            reference = {'role':'sandbox-export-bytes','launch':launch,
+                         'size_bytes':len(export),'sha256':host.sha256_hex(export)}
+            export_group = {'host':{'process':[{'site':'run_vm.export-read','ordinal':0,
+                'return':len(export),'errno':None,'bytes':reference,'timeout':None}],
+                'driver_rest':[],'signals':[]}}
+            values = {'receipt.json':host.canonical({'body':{'attempt':{
+                'attempt_id':attempt_id,'launch_request_sha256':host.sha256_hex(request)}}}),
+                'payload/stdout':b'','payload/stderr':b'',
+                'payload/evidence-manifest.json':host.empty_evidence_manifest()[0],
+                'capture.json':host._capture_values(attempt_id,request,export_group,True),
+                'sandbox-export.bin':export}
+            for name,raw in values.items():
+                path = attempt/name;path.write_bytes(raw);path.chmod(0o440)
+            held = consumer._HeldStoreRead(anchor,attempt_id)
+            try:
+                assert held.snapshots == values
+                assert consumer._origin_values(held.snapshots,held.storage_rows,
+                    {'attempt_id':attempt_id,'platform':sys.platform},
+                    {'host-config.json':config_raw}) == held.observation
+                assert consumer._capture_for_replay(held.snapshots,attempt_id,request,launch=launch) == export_group
+                refuses(lambda:consumer._capture_for_replay(held.snapshots,attempt_id,request,
+                    launch='write' if launch == 'reproduction' else 'reproduction'),'cross-launch')
+                refuses(lambda:consumer._capture_export_binding(export_group,held.snapshots,source=True),'source-binary')
+                for label,change in [('missing-role',lambda v:v.pop('role')),
+                        ('extra-key',lambda v:v.update(path='other')),
+                        ('wrong-size-type',lambda v:v.update(size_bytes=True)),
+                        ('over-size',lambda v:v.update(size_bytes=consumer.EXPORT_LIMIT+1))]:
+                    changed = copy.deepcopy(export_group);change(changed['host']['process'][0]['bytes'])
+                    refuses(lambda:consumer._capture_export_binding(changed,held.snapshots),label)
+                for label,change in [('inline-export',lambda r:r.update(bytes='00')),
+                        ('wrong-site',lambda r:r.update(site='run_driver.read')),
+                        ('wrong-return',lambda r:r.update(**{'return':0})),
+                        ('wrong-ordinal',lambda r:r.update(ordinal=1))]:
+                    changed = copy.deepcopy(export_group);change(changed['host']['process'][0])
+                    refuses(lambda:consumer._capture_export_binding(changed,held.snapshots),label)
+                duplicate = copy.deepcopy(export_group)
+                duplicate['host']['process'] *= 2
+                refuses(lambda:consumer._capture_export_binding(duplicate,held.snapshots),'duplicate-export')
+                refuses(lambda:consumer._capture_export_binding(export_group,
+                    {k:v for k,v in held.snapshots.items() if k != 'sandbox-export.bin'}),'missing-binary')
+                refuses(lambda:consumer._capture_export_binding(group,held.snapshots),'unused-binary')
+                held.recheck()
+                path = attempt/'sandbox-export.bin';path.chmod(0o640)
+                with path.open('r+b') as output:
+                    output.seek(-1,os.SEEK_END);output.write(b'x')
+                path.chmod(0o440)
+                refuses(held.recheck,'export-tail-changed-after-held-read')
+                refuses(lambda:consumer.read_store_attempt(anchor,attempt_id),'export-digest-mismatch')
+                print('ok complete 12MiB conditional binary held inventory/origin/binding - '+launch+
+                      '; capture path only, full accounting/replay remain separate')
+            finally:held.close()
     finally:consumer._acl_state = original_acl
 PY_CAPTURE_VALUES
 /usr/bin/python3 -I -S -B - "$root" <<'PY_LAUNCH_PREPARATION_VALUES'
