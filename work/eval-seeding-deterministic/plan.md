@@ -1,5 +1,5 @@
 ---
-spec-blob: 4a36d06aec6730bf6f0e3285c61a923dcd6ff943
+spec-blob: b1da5e966cf729c384326a94a168be256540b798
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-23
@@ -7,13 +7,14 @@ drafted: 2026-10-23
 # Plan: eval-seeding-deterministic
 
 Tracks #439. Risk: high (`artifact-high`). The accepted spec fixes four batches.
-This plan makes PR 1a ready for independent plan review. It keeps the dependent
-batches below, with their full gates. It does not accept their missing evidence.
+PR 1a retains its accepted scope and proof. This amendment prepares only the
+review source/relay part of PR 1b under R1.3–R1.7. PR 1b remains one complete
+two-source delivery. Its malicious replay and the seed batches retain their gates.
 
 | Batch | Delivery | Before its first code commit |
 | --- | --- | --- |
 | PR 1a | R2 M2–M4: minimum trials and distinct family/case pairs | This plan accepted and merged; fresh main and exact hash links |
-| PR 1b | M5, R3, R5, R8.3–R8.5: sources, relay and replay | S1–S10 and complete closure remapped to merged dependencies; separately accepted plan amendment |
+| PR 1b | M5, R3, R5, R8.3–R8.5: sources, relay and replay | Review relay: this amendment merged and exact source preflight; malicious replay: actual source map, concrete R4.6/S10 G2 solution and later accepted plan |
 | PR 2 | R6–R8: real reviewer seeds and operator labels | PR 1b; refreshed plan, real scope and operator approval |
 | PR 3 | R4–R5: four real malicious trials | PR 1b; refreshed plan, complete real control/recipe and S8 authorization |
 
@@ -35,22 +36,28 @@ may use `Closes #439`. Mechanism fixtures never count as seeds or real evidence.
    Only ACCEPT and the named manager's recorded Roadmap acceptance update plan-base.
    Changed meaning returns to a separate plan-only amendment. The coder never edits
    accepted artifacts. Preserve claims, round limits and exact attempt identities.
-3. One implementation batch runs at a time. Reconcile the implementation branch/PR
-   before each batch; preserve prior attempts without reset, rebase, force or cleanup.
-   The old plan ref `7cf1f73d7a0c1f36c652831326080e70e9b0585c` and its missing
-   registered worktree remain preserved. This amendment does not recreate them.
-4. PR 1b, PR 2 and PR 3 still require child 5's real write-shadow evidence and child
-   9's real gate evidence, with concerns 6 and 7 satisfied as R1.1 requires.
-   Before each dependent batch, another plan author maps its fields to merged
-   `path:line`, re-enumerates closure and pins, and obtains independent high-risk
-   plan acceptance. Any unmapped field returns that batch to G2. Fixtures cannot
-   fill S1–S10. The remaining inactive implementation and tests may proceed in the
-   accepted order; #558's original complete acceptance remains for the final
-   consolidated validation. This does not reduce control, native or platform proof.
-5. PR 2 still needs the operator's labels and exact approval. PR 3 needs S8.
+3. Preserve each batch's implementation branch and PR. PR 1a stays on its own
+   attempt; do not enlarge it into PR 1b. The manager may start the mapped inactive
+   PR 1b segment using the exact unmerged dependency below after fresh independent
+   source preflight. Preserve claims, unresolved evidence and prior history without
+   reset, rebase, force or cleanup. The old plan ref
+   `7cf1f73d7a0c1f36c652831326080e70e9b0585c` and its missing registered worktree
+   remain preserved. This amendment does not recreate them.
+4. PR 1b's final delivery, PR 2 and PR 3 still require child 5's real write-shadow
+   evidence and child 9's real gate evidence, with concerns 6 and 7 satisfied.
+   Only the mapped review mechanism below may start first. Before malicious code,
+   map S1–S5, S7, S9 and S10 from actual source, settle the concrete R4.6/S10
+   solution through the original G2, then accept and merge its high-risk plan.
+   Before PR 1b publication and acceptance, merge exact fresh main containing all
+   required implementations and remap all applicable rows to merged `path:line`.
+   Re-enumerate the entire closure, overlaps and pins; run full relevant proof and
+   fresh independent review. A partial dependency, plan or fixture cannot fill a row.
+5. PR 2 still needs S6's actual merged scope, real verdicts, operator labels and
+   exact approval. PR 3 needs the real control, all four actual trials and S8.
    No recording, credentials, network, install, activation or real target run is
-   authorized here. No implementation of the dependent batches starts under the
-   provisional source readings below.
+   authorized here. #558's complete original acceptance remains for final
+   consolidated validation, including its failures, native/platform, source,
+   restoration and G3 obligations. Mechanism tests replace none of them.
 
 ## PR 1a: minimum trials and distinct cases (R2 M2–M4)
 
@@ -151,17 +158,258 @@ existing eval checks (`:847–891`) and every later assertion. This named test g
 also allows the private bounded proof below to run the exact committed assertions;
 it adds no CLI option, environment selector or reusable test framework.
 
+## PR 1b now: complete review source and record relay
+
+### Identity, dependencies and stop point
+
+The artifact base is `bb3522ecd2bc0022f5ae4458150411f12d6a33dd`. The accepted
+spec blob is the frontmatter value. Before code, the manager records the merged
+plan-base and applies the fresh-base independent review rule above.
+
+The manager-designated unique PR 1b carrier is
+`codex/impl/eval-source-relay-replay`, worktree
+`/private/tmp/ystack-eval-source-relay-replay-20261023`. It is not yet created.
+Local refs/worktrees contain no prior PR 1b attempt. Before creation the manager
+rechecks remote refs, PRs and worktrees; a matching attempt must be reconciled and
+used. A conflicting identity stops. Review code and later malicious code stay on
+this one carrier. No incomplete PR 1b is published or called a finished feature.
+
+The source dependency is repository `yihanzhu/ystack`, branch
+`codex/impl/eval-trial-integrity`, PR #687 (open/draft), worktree
+`/private/tmp/ystack-eval-trial-impl-20261023`, clean head
+`8d834bc82030ecc5832b770fd6ef7d97cf1d928f`, old base
+`8bbf2826b83cc226494590f839a90d0b009bc55a`. Its accepted artifact links are intent
+`a4197f299974e62bb2b97e004b75182012abbb87`, prior spec
+`4a36d06aec6730bf6f0e3285c61a923dcd6ff943`, and plan
+`59a8c6a0b959bc2be765d7c637ac4cb120c36dd2`. The new carrier binds this amended
+plan and the current spec. Fresh independent source preflight must reconcile the
+old tuple, preserved M2–M4 diff and new artifact chain before adopting 8d834bc.
+Start from accepted fresh main and normally merge that exact dependency, retaining
+history. If it has already landed, verify ancestry and the full content instead.
+Do not copy its implementation or edit its branch. Record the resulting pre-code
+head and base; any unexpected source change requires new preflight/plan review.
+
+The exact head's eight eval suites and complete scope suite's 45 named assertions
+exited 0 in run `40041038739`; its full matrix FAILED with the preserved shadow-write
+ELF package failure. Earlier run `40035947598` passed a different head/base and is
+not evidence for this head. Neither is G3 or a merge acceptance. Keep all original
+logs, the PR 686 cache/CI proof boundary below and every unresolved failure.
+
+Review relay reads no #544/#681 producer or #558 implementation. Do not import
+those branches for this segment. #681's partial
+`43ded5cca583206e247c9f171d8599d9e98f00f3` is not a completed source or S-row map.
+After the review segment and tests, preserve a clean checkpoint on this carrier.
+The malicious source, dispatch, closure and recipe remain unimplemented until
+R1.4–R1.6's separate gates pass. Do not add placeholder functions, empty closure
+lists, fabricated observations or a permanent-refusal implementation.
+
+### Exact paths and actual interfaces
+
+This segment uses only the ten PR 1b paths listed below. Change the six production
+and documentation paths plus the four existing tests only as specified here.
+There is no new file, public option, environment override, grader, test framework
+or install path. The catalog SHA-256 and two declared families remain unchanged.
+
+Line anchors below are from exact dependency 8d834bc. The unchanged record files
+also match the artifact base. Rebind anchors and hashes after the ordinary merge;
+resolve unexpected semantic differences before code.
+
+| Actual interface | Reads and required use |
+| --- | --- |
+| `evals/v1/framework.jq:46–190` | `body.cases[].value.body.trial_count`, ordered trial/attempt ids, wrapper refs, completed trials, human grades and their relations |
+| `framework.jq:196–242` | Actual report `body.cases[].trials[]` has `attempt_id`, `trial_ref`, `trial_index`, times and `status`; report binds bundle, framework and suite refs |
+| `evals/v1/run.sh:48–147` | `evaluate BUNDLE`, canonical single bundle, actual measured wrapper hashes and record relations; fixed registry/schema/framework reads |
+| `evals-driver.sh:78–144,160–183,660–709` | Runtime pins, existing jq arguments, `produce_result` validation/dispatch and final output validation |
+| `evals-driver.sh:187–255,273–289` | Dashboard replays each pair in fresh work; scanner supplies the private fixed jq cache pattern |
+| `evals-launcher.sh:21–57,151–264,267–340,418–475` | Held file snapshots, existing closure staging, input snapshots, evaluator construction and completion rechecks |
+| `evals.jq:236–277,375–382,495–540,597–665,678–697,718–812` | Closed evaluator/seed/observation shapes, grading, tool/subject refs and case/trace validation |
+| `scope-gates.jq:98–122,149–186,240` | Matching source vocabulary, closed evaluator body and coverage bound |
+
+The complete **record** closure is three files, sorted by path:
+
+| Path | SHA-256 |
+| --- | --- |
+| `core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/modules/schema.jq` | `8d1d02d36ac7ada778f05248f9413062b3fc251499914c15d79f003bbd009ade` |
+| `evals/v1/framework.jq` | `d164a102919f42ef002e93c8b515b58028604819e6c09b87c6e4afadb0bbcce4` |
+| `evals/v1/run.sh` | `51770c5597d55bf05020502796810637bfbe697038a541ea6124530c0fffe55c` |
+
+`run.sh` also opens `core/v2/generation-registry.json`, already in core_closure,
+SHA-256 `3950ce43c3073b97759db23fb7e4ce533cbc1d8a8fe4917db6ee1ee0a8e78f94`.
+The schema overlaps core_closure once; framework/run are the two new snapshots.
+Its jq is the existing digest-checked runtime binary. Bundle bytes are a trial
+input, not closure. This inventory does not claim any shadow closure bound.
+
+### Implementation steps for this segment
+
+1. **Closed shapes.** Add only `reviews.independent-verdicts.v1` to both programs'
+   sorted `seed_sources` and `active_seed_sources` blocks. Add required
+   `record_closure` to their exact evaluator field lists. `evals.jq` requires the
+   exact three entries above; scope validates the same closed path/digest shape.
+   Do not add an empty `shadow_closure` or advertise malicious dispatch. This is an
+   intermediate checkpoint of one unpublished delivery. The later mapped segment
+   must add the second source and complete six-closure contract before publication.
+   Keep coverage's existing maximum 8 during this segment (eight active sources);
+   final two-source code raises it to 9 as R3.3 requires. Never change the 64-entry
+   closure bound. Update only `record_closure` in the two hand-built evaluator
+   fixtures and their digest lists now; both fields are required in the final PR.
+2. **Review records.** Implement the R8.3 review case and shared shapes described
+   in the final-delivery section below. Pin a single representation for R7.1:
+   `labels` is a schema-1 `eval_labels` envelope with id
+   `evals.reviewer-severity.labels.v1`, body exactly `{trials}`. Each entry is
+   exactly `{comment_id,verdict_sha256,findings,missed_important,grade_status}`;
+   findings are `{index,tag,label}` and missed entries `{summary,evidence_link}`.
+   Use positive decimal-string comment ids consistently in labels, approval,
+   verdict filename and `review.<id>`; require distinct ids in sorted order.
+   Finding indexes are distinct positive integers, tags P0–P3, labels R7.1's three
+   values; missed summaries are one line, at most 280 characters. Grade status is
+   passed/failed only. Validate field types, exact keys and existing parsed limits.
+   This stores operator decisions; it does not assign labels or infer grades.
+   Validate approval's exact schema-1 envelope/id and the nine R7.2 body fields,
+   family id, approver `yihanzhu`, timestamp and distinct sorted selection. An extra
+   field or caller approval property is invalid. No approval is shipped now.
+3. **Program result path.** Extend `expectation_shape`, `seed_set_shape` and
+   `observation_shape` only for reviews. Add `$source` through `grade`,
+   `grader_kind_for`, `trace_event` and their callers. R8.4 passes through status
+   with the existing reason vocabulary specified below; other human/model families
+   retain `evals.no-deterministic-grader`. Require `human` in review cases and trace,
+   and refuse it for the other sources. Tool ref is `eval-record-evaluator.v1`,
+   shell media type, the pinned `run.sh` digest. Subject ref is
+   `review-verdict.v1`, text/markdown, the case's verdict digest. Keep M2–M4,
+   existing source branches and direct jq argument interface unchanged.
+4. **Hold files once.** Implement the final section's `stage_expected` rule now for
+   record closure and review files, after existing closure loops. Reuse the schema
+   snapshot only on exact digest and regular non-symlink identity. Stage each
+   review `shared.files` entry from the repository's fixed verdict prefix, never
+   an arbitrary caller path. Validate relative path grammar and prefix before any
+   read; reject traversal, aliases, symlink files and symlink parent escapes.
+   Resolve reuse consistently across dashboard pairs; two digests for one path
+   refuse `E_RELATION`. A missing or changed verdict is `E_RELATION`; a closure
+   pin mismatch is `E_STALE`. Retain the current snapshot byte limits and private
+   modes. Stage canonical bundle/labels content pairs in private work, recompute
+   their LF-terminated hashes and compare the supplied digests before use.
+5. **Fixed approval.** Add `review_approval_sha256=none` in the driver and matching
+   `review_approval_sha=none` in the launcher. Implement the complete conditional
+   fixed-path snapshot/check path now: with `none` there is no approval read or
+   copy; with a digest, only the shipped
+   `evals/v1/seeds/reviewer-severity/approval.json` can supply it. Use `E_STALE` for
+   missing/changed pinned file, including final recheck. No caller digest, extra CLI
+   argument or environment value can select this anchor. PR 2 supplies its genuine
+   file and replaces the two pins; it does not introduce a second relay path.
+6. **Transcription and M5.** Add an explicit reviews arm to both `produce_result`
+   source check and dispatch. In `replay_review_cases`, after ordinary seed shape
+   validation, `none` is `E_STALE`. A valid pinned approval must match the labels
+   digest and exact selected ids. Validate pair/envelope/anchor first, call step 7
+   to obtain a held validated report, then finish these transcription checks before
+   using any reported status. This preserves record-parser error precedence.
+   Require one record case, model execution, one
+   `grader.operator` human grader, and completed trials. Require N between the
+   runtime catalog family's actual minimum (currently 5) and the unchanged record
+   limit 16. N must equal trial_count and the counts of distinct attempts, seed
+   cases, labels and grades; no positional zip can hide duplication. Match grades
+   by full trial_ref, then comment id via attempt_id. Check every R8.3 bullet:
+   selected ids; grade evidence present and matching approved labels digest;
+   grade status equals its label; trial output present and matching labelled and
+   held verdict digest; each label/trial/seed case/verdict selected exactly once.
+   Require case expected_ref and grade evidence to name labels, both grader refs
+   to name the same rubric, and graded_at to equal approval time (R8.1).
+   Shape violations use `E_SHAPE`; these relationship/M5 mismatches use
+   `E_RELATION`. Do not decide a grade from finding tags or prose.
+7. **Actual evaluator call.** Stage the existing verified jq into a fresh private
+   `TMPDIR/ystack-portable-core-jq16/<platform-asset>` using the scanner pattern.
+   Invoke `/usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin TMPDIR=... /bin/bash
+   "$runtime/evals/v1/run.sh" evaluate "$bundle_file"` with stdin closed. Capture
+   status/stdout/stderr separately. Recognized record errors retain their existing
+   token; unknown error, unexpected stderr or malformed report is `E_RUNTIME`,
+   with no result output. Check canonical single report, kind, exact bundle,
+   framework and suite refs, one case and the complete unique trial/attempt set.
+   Take each observation from `body.cases[0].trials[]` by attempt_id after these
+   checks. Do not copy status from labels or fabricate a report. Do not require
+   aggregate passed here: a faithfully approved failed trial must remain failed.
+   PR 2 alone requires the genuine bundle's aggregate passed for seed acceptance.
+   Keep defensive inconclusive propagation in the jq grader; labels remain
+   passed/failed, so test that defensive branch directly, not with fake approval.
+8. **Seal and pins.** Add all record closure pins to driver `verify_runtime`,
+   launcher staging/evaluator/recheck and program `expected_record_closure`.
+   Recheck every held verdict and approval before emitting any result/dashboard,
+   in addition to the existing runtime/input seals. No raw verdict text executes.
+   Update program digest in driver/launcher, then final driver digest in launcher.
+   Baseline program is `54ed69652ae21428309a273c0542ceb7931bcc557e475943f4f42fcf6d03d8ac`;
+   driver is `ed09f445d0252c248f7ced3a36ceccde40aca6febe31bb614cd40799ef8eb99d`.
+   Search every old/new digest outside work/. Unexpected moved pins stop for a
+   plan amendment. Scope's changed digest enters shadow closure only after that
+   later closure is actually mapped. Leave record evaluator and its own pins intact.
+9. **Docs and checkpoint.** Describe the completed review mechanism, its inactive
+   state, `none` approval and pending malicious replay/seeds in the existing eval
+   sections. Do not use the final two-source wording below before both exist.
+   Complete the tests below, preserve raw results and stop at a clean checkpoint.
+   A new dependency or required path returns to the separate artifact gates.
+
+### Complete review mechanism tests
+
+Extend `scripts/test/evals-framework.test.sh` in its existing temporary directory.
+Use the unchanged `scripts/test/eval-framework.test.sh:39–174` wrapper hashing and
+record-building pattern, but build one five-trial human case for these fixtures.
+Do not edit that singular-name test. Private helper functions stay inside the
+existing plural-name test. Synthetic labels/approval are fixture data only.
+
+Create a private repository copy of the actual closure and eval entry files. The
+only code substitutions are fixed catalog digest literals (two in driver, one in
+launcher), the two `none` approval literals and the dependent launcher driver pin.
+Count and verify each substitution; save/check the exact diff. The private catalog
+seeds only the review family; all policy/grader bytes remain unchanged. The fixture
+approval pins its synthetic labels and ids. Run the same launcher, driver, jq
+program and unchanged record evaluator, with all digest checks active. Add no
+production override or test dispatch. First prove the shipped tree still refuses
+the source with `E_SHAPE`; the private seeded catalog with `none` must refuse
+`E_STALE`. These copies prove mechanism only, not real approval or shipped seeding.
+
+| Requirement | Positive and negative proof through actual entry points |
+| --- | --- |
+| Actual report and status relay | Real `run.sh evaluate` and private `run-evals.sh run` produce matching per-attempt statuses; five passed trials succeed; another internally approved fixture with one failed label/grade yields one failed result with `evals.human-grade-failed`, not command failure |
+| Determinism and report identity | Two runs at the same observed_at compare byte-for-byte; tool ref uses actual run.sh digest, subject refs use exact verdict bytes, all cases and trace have human; dashboard reproduces the generated result |
+| M5 and one-to-one | Minimum 5 and 6 pass; consistent 4-trial bundle is `E_RELATION`; duplicate attempt, duplicate/missing/extra label or seed case, wrong selected set and extra grade refuse; recompute all wrapper and pair hashes so each test reaches the relation check |
+| All transcription links | Independently change grade status in either direction, evidence digest, output digest, label verdict digest and a verdict file; each refuses, without output; permute comment-id associations across trial indexes with valid record ordering and rehashed refs to prove matching by identity |
+| Fixed approval attack | Replace labels, grades, bundle, selection and every caller hash together; keep the fixed approval unchanged: `E_RELATION`; change fixed approval file without changing its literal: `E_STALE`; caller approval field is `E_SHAPE` |
+| Actual record validation | Validly rehash a broken trial index/case ref or wrapper relation: actual run.sh refuses; missing/extra wrapper keys and malformed canonical bundle refuse with their record error; no hand-made successful report |
+| Shape and grading | Direct jq build/validate: review missing observation is inconclusive; status inconclusive uses R8.4; human required for reviews and refused for other sources; existing human/model-only source still inconclusive; exact field/prefix/id rules reject invalid inputs |
+| Held files and pins | Tamper each of the two new record files or overlapping schema: `E_STALE`; missing/symlink/traversal verdict, conflicting shared path digest and verdict-byte tamper refuse; ordinary repeated valid paths reuse snapshots; retain existing tamper-order assertions |
+| Dashboard integrity | Real private review result aggregates with a real existing-family result; two distinct results repeating review cases refuse `E_SHAPE`; same result twice stays `E_RUNTIME`; forged status with recomputed result digest refuses `E_RELATION` |
+| Shared contract | Byte-equal source blocks in both programs; evaluator record_closure equals the three shipped hashes; missing/extra evaluator fields and malformed closure entries refuse in both programs; wrong pinned digests refuse in the eval program/launcher; scope refuses a changed closure with its old bound ref; M2–M4 and catalog digest/7 seeded/2 declared/138-case baseline remain intact |
+
+Keep fixture-dependent relay/dashboard cases in the same existing framework test
+so its private repository builder is not duplicated. Keep the existing dashboard
+suite's PR 1a regression group unchanged. Update scope and shadow self-host fixture
+fields/digests as above and assert the new closed shape in those existing tests.
+Use their normal entry points; no test selector or diagnostics framework.
+
+Before tests, run the cache preflight under Proof. It grants no download. Run all
+eight eval suites there plus `bash scripts/test/eval-framework.test.sh` (the actual
+record evaluator's suite). Preserve full argv/head/base/platform/output/exit for
+each. Run syntax, diff, pin/unchanged-file and existing rename checks. Local full
+scope/native/root/#558 windows remain outside this segment. The unchanged scope
+mechanism prefix may be used with exactly the recorded preparation/bounds below;
+it does not cover new full integration assertions. In the existing CI environment,
+require full `scope-qualification.test.sh`, `shadow-self-host-evidence.test.sh`,
+`maintenance-loop.test.sh`, `portable-core-schema.test.sh`, the eight eval suites,
+`eval-framework.test.sh` and `run-all-sharding.check.sh` on the final combined head.
+Record each command and actual exit, not just aggregate status. The normal full
+matrix and independent review remain final PR 1b gates. Do not reuse old green
+runs, generalize PR 1a's cache exception or count missing output as pass. No test
+result authorizes genuine source/native execution or closes #558.
+
 ## Dependent batches: unresolved source map
 
 The remainder preserves the source/relay/replay and real seed design. Its old
 line readings and 47-path inventory were taken on `611fcfb`; they are inputs to
 the required later plan amendment, not a claim about current closure completeness.
-Before PR 1b, remap every S row and every fixed-path read, including the overlap
-split, from merged code. Repeat the relevant mapping before PR 2 and PR 3. No old
+Before malicious code, remap S1–S5, S7, S9 and S10 from actual source and pass
+the R4.6/S10 G2 and plan gates. Before final PR 1b acceptance, remap every
+applicable row and fixed-path read, including overlaps, from merged code. Repeat
+the relevant mapping before PR 2 and PR 3. No old
 line number, missing real record or unavailable native execution becomes a fixture
 substitute. A bound or allowed-path expansion returns to G2.
 
-### Sibling map (required before dependent code)
+### Sibling map (malicious code and final delivery gates)
 
 | Row | Needed by | What must be mapped | Prior reading; must be remapped |
 | --- | --- | --- | --- |
@@ -234,6 +482,12 @@ Allowed paths, exactly R9.3's PR 1b list: `evals/v1/evals.jq`,
 `scripts/test/evals-dashboard.test.sh`, `scripts/test/scope-qualification.test.sh`,
 `scripts/test/evals-framework.test.sh`, `scripts/test/shadow-self-host-evidence.test.sh`,
 `docs/components.md`, `RESTORE.md`. No catalog entry changes (R1.2). No new file.
+
+The following is the retained full-delivery design. Only its review-related
+parts are executable under the precise segment above. The malicious shapes,
+recipe, shadow closure and overlap counts remain provisional and grant no code
+authority. The later actual-source G2/plan amendment replaces their old readings
+before implementation. All final two-source behavior and tests remain required.
 
 Commits run in pin order (R9.4): `scope-gates.jq` first, so its final digest is
 what `evals.jq` pins; then `evals.jq`; then the driver; the launcher last, since it
@@ -385,7 +639,7 @@ Preserve PR 1a's minimum check.
   (for example `planted-text.txt` or a control input) reuse the first copy when the
   digests agree. A shared path named with two digests is `E_RELATION`.
 - Reviews approval anchor: `review_approval_sha=none` beside `:150`. PR 2 replaces
-  `none` with the digest and adds the copy step (R9.4 PR 2(b)).
+  `none` with the digest and activates the fixed-path copy step (R9.4 PR 2(b)).
 - R9.4(b) `program_sha` at `:148`, then (c) `driver_sha` at `:150`, both last.
 
 ### Commit 5: tests (R2.6, R3.3, R9.2)
@@ -476,7 +730,7 @@ Allowed paths: `evals/v1/eval-catalog.json`, `evals/v1/seed-set-reviews.json`,
    `seed_status: "seeded"`, `seed_sources: ["reviews.independent-verdicts.v1"]`
    (R9.1). (a) catalog digest at `evals-driver.sh:80`, `:164`,
    `evals-launcher.sh:149`; (b) `approval.json` digest replacing `none` in both files,
-   plus the launcher copy step (`stage_expected` with TOKEN `E_STALE` to
+   plus the launcher fixed-path copy step (`stage_expected` with TOKEN `E_STALE` to
    `$runtime/evals/v1/seeds/reviewer-severity/approval.json`, after the closure
    staging); (c) `driver_sha` at `evals-launcher.sh:150`. `evals-framework.test.sh`'s
    copy loop (`:358-360`) gains `seeds/reviewer-severity/approval.json` with its
@@ -602,29 +856,29 @@ gates (R9.6).
   M2–M4. About 25–45 lines cover predicates/error handling/pins, 170–290 cover
   launcher, direct-program and scope regressions, and 15–30 cover docs. Use readable
   complete tests; an overrun pauses for a separate size amendment, never test cuts.
-- PR 1b: `review_size: accepted-exception`, 750-1,050 net added lines, one concern:
-  the two sources' program, driver, launcher and scope-gate plumbing. Recheck this
-  estimate in the required dependency plan amendment. About 230 in `evals.jq` (47-entry
-  closure plus shapes), 330 in the driver (two replays), 150 in the launcher, 15 in
-  `scope-gates.jq`, 150 in tests, 20 in docs. Precedents:
-  `work/shadow-input-assembler/plan.md` (1,199 measured), `work/external-target-shadow-run/plan.md` evidence PR (1,000-1,400),
-  `work/credential-control-identity-handoff/plan.md` (900-1,400).
+- PR 1b: `review_size: accepted-exception`, expected 1,400–2,200 net added lines
+  for the one complete two-source/relay/replay concern. Review source, binding,
+  staging and seals need about 400–650; its complete mechanism tests 350–550;
+  docs 20–40. The later replay/source/closure work is provisionally 400–650 and
+  its complete tests 230–310. This does not authorize that unmapped code. Its
+  required later plan must re-estimate from actual source and full proof before
+  work resumes. Do not compress code or cut tests to fit. A changed range uses
+  independent scoped plan review under Roadmap delegation; it never waives gates.
 - PR 2: `review_size: accepted-exception`, 450-850 net added lines, one concern: one
   operator-graded seed and its test. 150-450 of them are verbatim verdict bytes, which
   cannot leave the PR whose test checks their digests.
 - PR 3: `review_size: standard`, about 300-400 net added lines.
-- This plan-only amendment: `review_size: standard`. One concern: PR 1a's complete
-  mechanism delivery and preservation of the dependent batches' gates.
+- This plan-only amendment: `review_size: standard`. One concern: the mapped
+  review relay implementation segment under the accepted R1 order change.
 
 Each range waives only the soft line signal, never scope, tests, CI, review or human
 merge.
 
 ## Risks
 
-- **Untested driver branches in PR 1b.** The shipped catalog refuses both new sources
-  (`seed_set_bound`, `evals.jq:535-540`), so PR 1b can prove shapes and grading
-  and pins but not the two replays end to end; PR 2 and PR 3's tests do. A PR 1b
-  reviewer should read both replay functions against R4-R8 directly.
+- **Declared catalog.** Private pinned fixture trees must exercise the full review
+  relay, not only jq grading. They do not establish genuine operator approval or
+  seeding. The final malicious replay still needs its actual source and recipe.
 - **Sibling drift.** Concern 6 edits `scope-gates.jq`, and concern 5 likely edits
   `reproduce.sh` and the evidence layout, so every line here moves. The plan update
   re-verifies them; code never follows a stale number.
@@ -732,7 +986,8 @@ named manager's protected merge.
 
 ### Dependent-batch proof obligations
 
-PR 1b's later plan amendment must bind the updated pin searches, complete closure
+The review segment binds its exact proof above. PR 1b's later malicious plan
+amendment must bind the updated pin searches, complete closure
 and overlap accounting, all eight existing eval suites, complete relevant scope
 and shadow integration, maintenance-loop and portable-core-schema regressions,
 and `scripts/test/run-all-sharding.check.sh`.
