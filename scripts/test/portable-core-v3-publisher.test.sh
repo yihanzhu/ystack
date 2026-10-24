@@ -93,6 +93,8 @@ change_file() {
   mv "$tmp/changed.json" "$tmp/case/$file.json"
 }
 refresh_refs() {
+  change_file resolved '.body.profile_ref.sha256=$sha | .body.profile_source.value_sha256=$sha' \
+    --arg sha "$(sha_file "$tmp/case/profile.json")"
   change_file request '.body.resolved_profile_ref.sha256=$sha' --arg sha "$(sha_file "$tmp/case/resolved.json")"
   change_file result '.body.resolved_profile_ref.sha256=$sha | .body.request_ref.sha256=$request_sha' \
     --arg sha "$(sha_file "$tmp/case/resolved.json")" --arg request_sha "$(sha_file "$tmp/case/request.json")"
@@ -122,7 +124,10 @@ make_case() {
       else change_file "$target" '.schema_version=$version' --argjson version "${case_id#major-}"; fi ;;
     dormant-offer) target=manifest-publisher; change_file "$target" '.body.offered_roles=["identity"] | .body.offered_capabilities=[] | .body.offered_permissions=[]' ;;
     profile-*|resolved-*|separation-*|projection-*|registry-model-publisher)
-      case "$route" in D-profile|P) target=profile ;; *) target=resolved ;; esac
+      case "$case_id:$route" in
+        projection-*|*:D-resolved|*:T) target=resolved ;;
+        *) target=profile ;;
+      esac
       change_file "$target" 'import "portable-core-v3-publisher-fixtures" as f; f::profile_mutation($id)' --arg id "$case_id" ;;
     union-*|effect-*|no-execution-dispatch|result-*|publication-missing|cross-*|status-*|failed-*|cancelled-*|fact-gap-*|identity-mismatch-*|nonpassing-changed|post-mismatch-completed|ref-*|time-before-request)
       target=result
