@@ -258,7 +258,8 @@ every listed applicable route, with fully valid companion documents.
 | `input-{missing,wrong-type,wrong-media,reused-data,instruction-collision,contract-mismatch}` | stage_request / request | D,T | E_RELATION |
 | `input-duplicate` | stage_request / request | D,T | E_SHAPE |
 | `required-{grant,qualification}` | stage_request / request | D,T | E_RELATION |
-| `row-{mode,add-only,digest,malformed-oid,path-alias,path-backslash,path-control,path-4097,unsorted,duplicate,empty,257}` | schema / value-shapes | D,T | E_SHAPE |
+| `row-{mode,add-only,digest,malformed-oid,path-alias,path-backslash,path-control,path-4097,unsorted,duplicate,empty}` | schema / value-shapes | D,T | E_SHAPE |
+| `row-257` | schema / value-shapes | D,T | E_LIMIT |
 | `row-{outside-root,nested-filename,algorithm-length}` | stage_request / request | D,T | E_RELATION |
 | `effect-<branch>-<pr>-<post>`: branch and PR each `{not-attempted,absent,created,unknown}`, post `{not-run,matched,mismatched,unknown}` | result_truth / publication-self | D,T | Exact ten OK triples below; the other 54 are E_RELATION |
 | `no-execution-dispatch` | result_truth / publication-self | D,T | E_RELATION |
@@ -282,6 +283,8 @@ IDs fail shape; registered-but-wrong request permissions fail relation. Publishe
 binding tools/skills/model/prompt checks belong to binding shape. Request derived
 branch/title, incident-root and algorithm-length comparisons belong to relations.
 Case IDs expand the exact brace sets, with no runtime-selected cases or expectations.
+The inherited parsed-limit pass rejects a 257-row write set before shape checks;
+`row-257` therefore expects E_LIMIT through both complete routes.
 
 The ten OK `(branch,pr,post)` triples are:
 `(not-attempted,not-attempted,not-run)`, `(absent,not-attempted,not-run)`,
@@ -297,10 +300,21 @@ status rows cover skipped/stale/blocked and pre-execution cases. These are liter
 claim-validation cases, not authenticated publication observations.
 
 Force failures in owned disposable copies of the complete new package, preserving
-its fixed physical layout. One selected valid fixture must pass before mutation.
-Change exactly the named owner predicate to false for that row; the unchanged
-root/ingress must now return the literal error. Never edit a product working file
-for fault injection. Restore/rebuild only the owned disposable copy between cases.
+its fixed physical layout. Identify each cell by mode, unique target document ID,
+and one exact owner call site/phase. First require that cell's complete valid input
+set to return OK. Then make only that target invocation return false. Preserve
+normal behavior for all other calls, including earlier companions and other uses
+of the same predicate. The full ingress/root route must return the listed error.
+Never make a shared predicate globally false. If its arguments lose document
+identity, target the unique document's owner-call boundary; equal binding arrays
+cannot identify a target. Run one fault per cell with every companion still valid.
+
+For each cell, use a further disposable negative control that bypasses only the
+target invocation while retaining the narrow injection. It must return OK, so the
+cell's required-error assertion fails and catches that missing call. A remaining
+companion failure invalidates the proof. Record baseline, targeted rejection and
+caught missing-call control separately. Never edit a product working file for
+fault injection. Restore/rebuild only owned disposable copies between cases.
 
 | Forced ID | Owner predicate boundary | D | P | T | Expected |
 | --- | --- | --- | --- | --- | --- |
