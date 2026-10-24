@@ -307,7 +307,7 @@ rows and derived state remain outputs of C.
 | `guest.control` | Ordered primitive results of the existing controller: monotonic timespec, poll return/revents/errno, waitpid pid/status/errno, cgroup.events bytes, exec-channel bytes/EOF/errno, kill return/errno and fanotify event fields/reply return. | Closed operation tags are `now,launch,poll,wait,population,exec-read,kill,fan-read,fan-reply`; no function names or arbitrary calls. At most 4096 records, each at most 8192 bytes (including the existing 4096-byte fanotify read). Expected next operation and all decisions come from the shared existing controller expressions; wrong order or extra results reject. No recorded tree_terminated/verifier_started/deadline verdict is an input. |
 | `guest.control` launch record | At the sole `launch_and_control` launch site (`supervisor.c:1404`; real clone at `:1419` in the bound source), retain the real `ops->launch` return from `production_launch` / `ys_clone3_into_cgroup`. | Exactly `{tag:"launch",pid,errno}`; pid is a signed 32-bit integer, errno is null for a nonnegative return or a positive signed-32-bit errno captured immediately on clone failure. Exactly one record after the initial successful clock/deadline construction; zero only when that construction fails. Nonpositive return follows the existing failure branch. No PID is inferred from a later wait. |
 | `guest.counters` | Exact cpu.stat, memory.peak, memory.events, pids.peak, pids.events bytes or read errno; output file stat tuples; output/scratch statvfs; raw evidence directory names and file bytes. | Counter reads preserve the existing 64/256-byte bounds; evidence count at most 10000 and payload total at most 10 MiB. The value owner computes rounded CPU, reached flags, observations, sizes, names, report and frame. A guest report is not a raw input. |
-| `host.process` | Ordered real driver exit code/stdout/stderr, Popen error or pid, poll/wait result or timeout/error, killpg result, signal numbers, drain-thread start/join observations, export read/error and cleanup syscall return/errno. | Only the fixed launch/state/stop/poll/wait/kill/drain/export/cleanup sites of `run_vm` and finalization; at most 4096 records, diagnostics capped by the existing 64 KiB bound. The shared owner derives stop acceptance, runtime_error, confirmed termination, teardown, deadline and limit rows. Raw export bytes must equal the rebuilt guest frame; they cannot replace it. |
+| `host.process` | Ordered real driver exit code/stdout/stderr, Popen error or pid, poll/wait result or timeout/error, killpg result, signal numbers, drain-thread start/join observations, export read/error and cleanup syscall return/errno. | Only the fixed launch/state/stop/poll/wait/kill/drain/export/cleanup sites of `run_vm` and finalization; at most 4096 records, diagnostics capped by the existing 64 KiB bound. The shared owner derives stop acceptance, runtime_error, confirmed termination, teardown, deadline and limit rows. The complete export read uses the fixed `sandbox-export-bytes` role below. Compare it with the rebuilt guest frame including its zero tail; it cannot replace guest recomputation. |
 | `host.driver_rest` | The fixed driver's `rest` return primitives at `runtime-vfkit.py:89–99`: response status and raw body bytes, or the caught transport exception category/errno and its phase. | Ordered `{call,operation,reply,error}` records, at most 4096 per host run and charged to its 4 MiB control budget. Operation is only `state` or `stop`. Reply is null or exactly `{status,body_hex}`, status integer 100–999, body at most 65537 bytes. Error is null or exactly `{phase,category,errno}`; phase is `request`, `getresponse` or `read`; category is `OSError` or `HTTPException`; errno is null or a signed-32-bit integer. Exactly one of reply/error is non-null. No recorded running/stopped/error classification is an input. |
 | `source_pages.kill` and `.coverage` | Captured remote response bytes plus `{family,page_index,response_status,input_cursor,output_cursor}` from the real fixed collector boundary. | Existing families and order; 128 pages per operation, 1 MiB per page, 64 MiB total per operation. Rebuild raw_size, raw_sha256, request_sha256, raw manifest, normalized observation and receipt. No credentials or authorization headers are retained. |
 | `commands.runtime_values` | Git version reply; Python version/ABI/sysconfig values and Unicode version from the qualified recording runtime. OS wait status and errno are retained separately by fixed component role. | Existing native build-record configuration keys only; version strings at most 128 bytes. At most 4096 commands. Recompute argv from the recipe and historical locators; hash source/executable bytes. Normal component stdout, stderr, exit classification, argv_sha256 and command list are not claimed inputs: rerun or recompute their actual owner. |
@@ -337,10 +337,87 @@ allow/deny and first-inode history. No supplied fan decision is accepted.
 Host process rows have exactly `site`, `ordinal`, `return`, `errno`, `bytes` and
 `timeout`; unused fields are null. Return types are fixed per site: pid for spawn,
 integer/null for poll/wait, integer for driver/kill/cleanup/read/close, boolean for
-thread/select observations. Bytes occur only for checked driver replies, pipe reads
-and raw export; clock and signal records use the separate arrays. The raw bytes must agree with the shared driver's
-and guest owner's reconstructed output. Sites are the named operations in A/B,
-not arbitrary syscall names; replay cannot dispatch them.
+thread/select observations. Non-export bytes remain limited to checked driver
+replies and pipe reads, in their existing inline representation; they must equal
+the shared driver owner's reconstructed output. Only `run_vm.export-read`, the original D `fh.read()` at
+`host-supervisor.py:2190–2192`, uses this closed variant in final recorder RAW12 `bytes`:
+`{role:"sandbox-export-bytes",launch,size_bytes,sha256}`. Launch is exactly
+`reproduction` or `write`, derived from that trial's fixed caller and attempt.
+Size is the measured whole read length, an integer from 0 through 12,582,912;
+SHA-256 is measured from those same bytes. No path, offset, prefix, tail length,
+codec selector or acceptance flag is allowed. These fields bind bytes; none is a
+verdict. The reference must match exactly one held file of that launch role and
+that capture's attempt/request. A successful read has `return=size_bytes`, null
+errno and this reference. A read error keeps the original error observation,
+null bytes and no file. A site not reached has neither a row nor a file.
+Each launch consumes at most one such row and file; the case has at most two.
+Reject inline export hex, mixed representations, cross-launch references,
+duplicate/unused files, a reference at another site or any unknown key. Clock and
+signal records still use their separate arrays. No site dispatches a syscall.
+
+Only the controlled host capture uses the private intermediate reference
+`{role:"sandbox-export-capture-bytes",size_bytes,sha256}` at that same export-read
+site. It has no launch. Its existing envelope binds the exact launch-request SHA
+and attempt; the same held `sandbox-export.bin` supplies the whole measured bytes.
+All size, return/errno, file-count and error/unreached rules above still apply.
+Host capture readers accept only this intermediate form. Final RAW12 and seed
+readers accept only the final form; neither is an alternate at the other stage.
+
+Only the existing reproduction run and writer `_verify_write` callers project
+this intermediate through the existing private consumer/recorder boundary. Each
+requires its already validated, frozen outer request and exact launch request,
+the same held capture/binary, and the validated receipt/expectation relation.
+The fixed reproduction caller requires `shadow_enforced_request`; the fixed writer
+requires `shadow_write_request`. They derive `reproduction` and `write` respectively.
+Require matching outer id/body attempt, launch id/body attempt, capture id,
+receipt/expectation attempt, and capture/receipt/expectation launch-request SHA
+against the exact launch bytes. No supplied role, launch or validation flag can
+replace those checks; no guessing from attempt names, subject or instruction.
+
+The projection changes only that intermediate reference into the final reference.
+Retain the original host capture bytes; origin remains bound to those bytes.
+Offline rebuilds the original envelope/intermediate ref and the final projection
+with the same owners and independently reconstructed caller/request relationship;
+it cannot derive the expected launch from the final ref it is checking. Both
+production and offline routes must preserve every independent relation check.
+No native request field, stdin package field, CLI/env selector or public primitive
+is added. No extra export read, binary copy or full-byte hash pass is added by the
+projection. Its small metadata work still pays the existing non-export budgets;
+all document, resource and read/write caps and complete-byte proofs remain.
+
+Existing capture-held-values, shadow-enforced/write and paired replay tests cover:
+(1) both full 12 MiB positive captures and exact original envelope/origin rebuild;
+(2) cross-stage shapes, wrong site/role, mixed, missing or extra keys;
+(3) caller/kind and request/attempt/receipt/expectation digest mismatches;
+(4) cross-launch capture/binary swaps even for equal bytes, duplicates/unused files;
+(5) held size/hash/ACL/parent/final drift and unchanged empty/short/error/unreached paths;
+(6) deletion of either projection route or envelope rebuild, and final-launch or
+original-capture mutation. Keep the existing production/offline paired proofs,
+source-page exclusion, budget boundary tests and all other acceptance requirements.
+
+The held file contains the complete value returned by that same original
+`fh.read()`, including every padding byte. Retain it before the original value
+is lost. Do not re-open the native export later to fabricate that observation.
+The fixed host creates a 12,582,912-byte export disk (`EXPORT_DISK_BYTES` in D);
+a normal unchanged disk read is therefore exactly 12 MiB. Preserve actual shorter
+reads and read errors as observations, not padded or inferred successes. A larger
+read makes capture ineligible without changing the original native processing.
+Do not trim, compress, hex-encode or externalize any other raw field under this role.
+
+Offline replay reads the bounded held file and verifies its measured size/hash
+and final held-file stability. The same host `frame_read` owner consumes all
+bytes, retaining bad magic, truncation, end length, digest and nonzero-tail
+rejection. The actual guest value owner separately rebuilds the frame from its
+closed observations and actual verifier payload. After the source bytes pass the
+original frame checks, compare the rebuilt frame plus zero bytes to the measured
+whole read length against every original byte. Refuse a rebuilt frame longer
+than the read. This uses the existing frame format; it does not trust a stored
+padding verdict or compare a reconstructed value with itself. Normal reads
+compare all 12 MiB. Short/error branches retain the original owner result and
+must not acquire a new success classification. Neither parsed export records nor
+a host receipt supplies the guest owner's inputs. Stop confirmation and reap
+still precede the original export read. Live read, observer and cleanup order,
+all failure branches and ordinary outputs remain unchanged.
 
 All driver calls, including `argv`, have contiguous zero-based indices in the
 order selected by the shared host controller. REST rows refer to those indices;
@@ -387,7 +464,8 @@ not re-read a path later to pretend it was the held read. Add a fixed
 `capture.json` sibling of `receipt.json` within the existing controlled attempt,
 with the same principal/group and read-only file rule. Its exact envelope is
 `schema_version:1`, `kind:"malicious_source_capture"`, `id:attempt_id` and
-`body:{request_sha256,raw,complete}`. Raw is the corresponding closed B group;
+`body:{request_sha256,raw,complete}`. Raw is the corresponding closed B group,
+with only the host export reference using the intermediate form defined above;
 request_sha256 is recomputed from held request bytes; complete is true only after
 all required observations and existing final checks finish. It contains only the
 host, guest and source observations needed above, never secret bytes. The consumer
@@ -396,10 +474,21 @@ copying its bytes into the recorder's private output. Consumer-side stat, comman
 and entropy observations are retained in that private output, outside the normal
 bundle. Their canonical envelope and refs are reconstructed too.
 
-The new attempt inventory is exactly `{receipt.json,payload,capture.json}`. Keep
-legacy `{receipt.json,payload}` readable for its old consumers, but it cannot seed
-this replay. No arbitrary sibling or payload entry becomes allowed. A capture
-must bind the actual attempt and request bytes and complete successfully; missing,
+The capture attempt inventory is exactly `{receipt.json,payload,capture.json}`,
+plus the sole fixed sibling `sandbox-export.bin` if and only if the complete
+export-read row has its byte reference. Source-page attempts never have that
+sibling. The file has the same principal/group, read-only mode, held-descriptor,
+ACL, regular-file, non-symlink-parent and final stability rules as capture.
+The consumer copies the whole held bytes into the private recorder output;
+it admits no arbitrary sibling or verifier payload entry. In each trial's fixed
+shared-file inventory, the only export paths are `exports/reproduction.bin` and
+`exports/write.bin`, under that trial's existing seed directory. The launcher
+resolves the validated launch role to these paths, never a caller path or limit.
+Every existing inventory predicate and recheck must agree on this exact set.
+Keep legacy `{receipt.json,payload}` readable for its old consumers, but it cannot
+seed this replay. An older capture without an export reference cannot substitute
+for an expected export read. The normal shadow bundle's file set stays unchanged.
+A capture must bind the actual attempt and request bytes and complete successfully; missing,
 partial, overflowed, changed or mismatched capture makes recording unusable as a
 seed. It never changes the native result or excuses teardown. The guest frame's
 one fixed control-observation record is produced by the supervisor, outside the
@@ -519,16 +608,75 @@ hash-only substitution or omitting a member is forbidden. A real runtime that
 exceeds either ceiling needs a normal G2 resource amendment before seed recording.
 No actual runtime byte inventory or permission is inferred by this design.
 
+The complete export is a separate fixed raw-byte role, not a qualified runtime
+slot or repository source. The following explicitly replaces the old 16 MiB
+all-raw ceiling. That number remains the non-export observation sub-ceiling.
+All limits apply together; a role name never exempts bytes from a total.
+MiB means 1,048,576 bytes. Per-case limits cover both launches together.
+
+| Raw recording resource | Per case | All four trials together |
+| --- | --- | --- |
+| Original full export byte inputs | At most 2 files, each at most 12 MiB; total 24 MiB | At most 8 files; total 96 MiB |
+| Non-export raw observations | 16 MiB; guest, host, storage and remaining primitives each retain 4 MiB | 64 MiB, with every per-case sub-limit retained |
+| Unified logical raw inputs, export included | 40 MiB | 160 MiB |
+| Export physical storage, including every retained or temporary copy | 192 MiB; at most 16 physical files | 768 MiB; at most 64 physical files |
+| Unified raw physical storage, export and non-export included | 256 MiB; non-export at most 64 MiB | 1,024 MiB; non-export at most 256 MiB |
+| Cumulative export bytes written / read during one bounded recording or replay operation | 192 / 384 MiB | 768 / 1,536 MiB |
+| Cumulative unified raw bytes written / read during that operation | 256 / 512 MiB | 1,024 / 2,048 MiB |
+
+Logical totals count every observation occurrence, including duplicate/overlapping
+fields and original repeated reads. The one permitted export observation per
+launch is counted in full. Its reference and enclosing JSON are also charged to
+the host/non-export limits. A read does not acquire free logical capacity by
+pointing to bytes counted for another launch. Physical totals count all actual
+copies across controlled storage, recorder output, original export disk while
+retained, installed snapshots, reconstructed comparison files, archives and
+scratch. Charge new logs and metadata to their existing role and the unified raw
+ledger when they describe or copy raw observations. No bytes leave an applicable
+ledger merely because a file is called a sidecar, slot, archive or log.
+A retained original from an earlier operation remains in the storage total.
+Repeated reads, hashing, final rechecks, copies and reconstruction consume the
+cumulative read/write budgets; do not reset them at a nested helper or dashboard
+pair. The manager must bind the finite operation and all still-retained material
+before a later recording/replay. Additional real operations remain subject to S8.
+
+For normal exports, the eight source files alone require 96 MiB; source plus one
+installed copy require 192 MiB. These are lower bounds, not a final total or a
+retention authorization. Four complete copies of both exports per case consume
+96 MiB per case and 384 MiB across four trials, before other raw material.
+The stated ceilings leave finite space for further counted copies and metadata;
+the plan must show the complete actual copy/read/write and peak-storage ledger.
+No claim of fit may omit original storage, overlap, archives, reconstruction,
+repeated verification or retained failed attempts. The existing 1–256 shared-file
+and manifest bounds still include the export references. Reject a package that
+exceeds any bound; never truncate, silently omit or replace whole bytes by hashes.
+
+JSON limits stay intact. The paused `64dda8e74157aea2809889b662ee84ea2c90930c`
+source has `evals-launcher.sh:snapshot_input` at 1,048,576 bytes for each seed or
+result input. `_consumer.py` has `DOCUMENT_LIMIT=CAPTURE_LIMIT=1,048,576` and
+`_capture_envelope` parses capture under that cap. Host `_capture_values` also
+budgets the full canonical capture envelope, including its LF, at 1 MiB. Keep
+those actual entry limits, canonical/envelope/array checks and lower per-document
+limits. The 4 MiB partitions and 16 MiB non-export total do not enlarge a 1 MiB
+JSON document. Complete export bytes travel only as the fixed held binary files;
+no JSON document embeds their encoding. The role reader copies in at most 64 KiB
+chunks, rejects before the next capture allocation/write crosses a bound, then
+supplies at most one complete 12 MiB file at a time to the unchanged frame owner.
+Bound both the source and rebuilt frame before any comparison allocation.
+The native original `fh.read()` itself retains its existing behavior.
+
 All other source and ordinary trial-file limits stay at their existing owner
 limits. Source snapshots are each at most 16 MiB and their sum at most 32 MiB;
-source total is counted before any execution. The new raw observation class has a
-16 MiB aggregate ceiling: guest/host control records each at most 4 MiB, storage
-records at most 4 MiB and remaining primitives at most 4 MiB. Git/preparation uses
-its existing 256 MiB storage and 384 MiB scratch ceilings. Source page bytes remain
-at most 64 MiB per operation. Count bytes across overlapping fields and repeated
-reads; reject before allocation or write that would exceed a limit. No sparse-file,
-compressed-size or excluded-sidecar accounting shortcut. Existing timeouts remain;
-ordinary offline proof never claims CPU/wall enforcement or native qualification.
+source total is counted before any execution. Git/preparation retains 256 MiB
+storage and 384 MiB scratch; source pages retain 64 MiB per operation and all
+applicable non-export/raw/JSON limits. Runtime slots retain their 4 GiB/64-slot
+and two-copy limits. The complete input/output resource receipt includes these
+classes, every applicable total and the raw ledger above; overlapping charges
+remain visible. Reject before the next allocation/write exceeds an applicable
+limit. No sparse-file, compressed-size or excluded-sidecar shortcut. Existing
+timeouts remain. These are inactive design ceilings only. Real recording,
+retention, runtime collection and resource windows still need their reserved
+authorization; ordinary offline proof grants no native qualification.
 
 #### E. Proof and remaining gates
 
@@ -558,6 +706,21 @@ return, wait zero, matching/foreign PID, EINTR and deadline expiry before and af
 launch/wait. Changing only the launch PID must affect the existing matching test;
 no child_reaped fixture flag may bypass it. Ordinary fixtures prove these cases;
 none opens a socket, launches a guest or supplies native qualification.
+
+Require an ordinary synthetic full 12 MiB export baseline for each of reproduction
+and write, with both held files successfully captured and consumed in one case.
+The fixture must fit all JSON and unified budgets and produce complete capture;
+permanent overflow/complete=false is not this positive. Separately preserve the
+current native enforcement refusal below. Test full zero tail, one nonzero last
+byte, bad digest, bad end length/magic, truncation, empty/short read, read errno,
+missing/duplicate/cross-launch reference, changed held bytes/size/hash and an
+export reference at another process site. Check stop/reap/read order. Compare the
+whole padded rebuild; deleting either full-source parse or guest recomputation,
+or mutating either production/offline call, must fail its narrow test. Require
+boundary/one-over proof for each new file/count/sub-total/unified/physical/read/
+write bound. Include two-copy lower-bound accounting and extra retained, archive,
+log, overlapping and repeated-read charges. Tests call existing owners and entry
+points; this adds no diagnostics framework, prefix codec or general externalizer.
 
 Retain all existing host-supervisor, guest-value, receipt, consumer, preparation,
 gate-generation, scope, eval, restoration and cancellation regressions. The shared
@@ -873,10 +1036,9 @@ in CI; wiring the record report into anything but the relay; enablement.
 
 - **Risk is high.** Eval policy, seed and scope-gate change. An operator-merged
   plan-only PR precedes code.
-- **Size.** This spec amendment uses `review_size: accepted-exception` with a
-  300–650 changed-line range for the one malicious replay recipe: raw field table,
-  shared owners, exact closure, resource bounds and proof. The separate high-risk
-  plan must set the whole PR 1b implementation range, including the preserved relay
+- **Size.** This spec amendment uses `review_size: standard` for the one fixed host-export
+  representation, complete byte comparison, resource accounting and proof.
+  The separate high-risk plan must set the whole PR 1b implementation range, including the preserved relay
   code, every owner extraction and all tests. It must count inherited code and
   failed/retained proof; no partial implementation is a finished PR. Do not trim
   requirements or tests to meet the soft line budget.
