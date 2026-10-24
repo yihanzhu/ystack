@@ -607,3 +607,4 @@ scripts/test/portable-core-v3-publisher-rules.tsv
 sandbox/v1/coverage-source.py
 scripts/test/scope-gate-generation.test.sh
 scope/v1/generate-gate-evidence.py
+publisher/v1/_admission.py

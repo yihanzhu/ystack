@@ -10134,6 +10134,11 @@ fake_repo="$tmp/portable/scope/v1"
 for component_dir in core shadow control enforcement adapters preparation telemetry maintenance evals scripts; do
   /bin/cp -R "$root/$component_dir" "$tmp/portable/$component_dir"
 done
+/bin/mkdir -p "$tmp/portable/publisher/v1"
+[ -f "$root/publisher/v1/_admission.py" ] && [ ! -L "$root/publisher" ] &&
+  [ ! -L "$root/publisher/v1" ] && [ ! -L "$root/publisher/v1/_admission.py" ] || fail 'helper source'
+/bin/cp "$root/publisher/v1/_admission.py" "$tmp/portable/publisher/v1/_admission.py"
+/usr/bin/cmp "$root/publisher/v1/_admission.py" "$tmp/portable/publisher/v1/_admission.py" || fail 'helper bytes'
 for shipped in scope-policy.json workflow-scope.jq scope-gates.jq validate-scope.sh \
   evaluate-scope.sh read-shadow-evidence.py; do
   /bin/cp "$root/scope/v1/$shipped" "$fake_repo/$shipped"
@@ -10182,6 +10187,11 @@ race_marker_case() {
   for component_dir in core shadow control enforcement adapters preparation telemetry maintenance evals scripts; do
     /bin/cp -R "$root/$component_dir" "$race_repo/$component_dir"
   done
+  /bin/mkdir -p "$race_repo/publisher/v1"
+  [ -f "$root/publisher/v1/_admission.py" ] && [ ! -L "$root/publisher" ] &&
+    [ ! -L "$root/publisher/v1" ] && [ ! -L "$root/publisher/v1/_admission.py" ] || fail 'helper source'
+  /bin/cp "$root/publisher/v1/_admission.py" "$race_repo/publisher/v1/_admission.py"
+  /usr/bin/cmp "$root/publisher/v1/_admission.py" "$race_repo/publisher/v1/_admission.py" || fail 'helper bytes'
   for shipped in scope-policy.json workflow-scope.jq scope-gates.jq \
     validate-scope.sh evaluate-scope.sh read-shadow-evidence.py; do
     /bin/cp "$root/scope/v1/$shipped" "$race_repo/scope/v1/$shipped"
@@ -10255,6 +10265,11 @@ package=area/'package';package.mkdir();(package/'scope').mkdir()
 for component in ('core','shadow','sandbox','control','enforcement','adapters','preparation','telemetry','maintenance','evals','scripts'):
     shutil.copytree(root/component,package/component)
 shutil.copytree(root/'scope/v1',package/'scope/v1')
+helper=root/'publisher/v1/_admission.py'
+assert helper.is_file() and not any(path.is_symlink() for path in (helper,helper.parent,helper.parent.parent))
+(package/'publisher/v1').mkdir(parents=True)
+shutil.copyfile(helper,package/'publisher/v1/_admission.py')
+assert helper.read_bytes()==(package/'publisher/v1/_admission.py').read_bytes()
 reader_path=package/'scope/v1/read-shadow-evidence.py';frontend=package/'scope/v1/evaluate-scope.sh'
 reader_source=reader_path.read_text();frontend_source=frontend.read_text()
 argv=[str(frontend),'evaluate',*documents,str(tmp/'legacy-bundles'),str(tmp/'legacy-source.git')]
@@ -10737,6 +10752,11 @@ setup_genuine_paths() {
   for component_dir in scope shadow sandbox core config scripts adapters preparation control enforcement telemetry maintenance evals verifiers; do
     /usr/bin/sudo -n /bin/cp -R -- "$root/$component_dir" "$genuine_base/package/$component_dir" || fail 'fixed package copy'
   done
+  [ -f "$root/publisher/v1/_admission.py" ] && [ ! -L "$root/publisher" ] &&
+    [ ! -L "$root/publisher/v1" ] && [ ! -L "$root/publisher/v1/_admission.py" ] || fail 'Q4 helper source'
+  /usr/bin/sudo -n /bin/mkdir -p -- "$genuine_base/package/publisher/v1" || fail 'Q4 helper parents'
+  /usr/bin/sudo -n /bin/cp -- "$root/publisher/v1/_admission.py" "$genuine_base/package/publisher/v1/_admission.py" || fail 'Q4 helper copy'
+  /usr/bin/cmp "$root/publisher/v1/_admission.py" "$genuine_base/package/publisher/v1/_admission.py" || fail 'Q4 helper bytes'
   /usr/bin/sudo -n "$genuine_chown" -R -- 0:0 "$genuine_base/package" || fail 'root package ownership'
   /usr/bin/sudo -n /bin/chmod -R -- a+rX,go-w "$genuine_base/package" || fail 'root package mode'
   if [ "$genuine_platform" = Darwin ]; then

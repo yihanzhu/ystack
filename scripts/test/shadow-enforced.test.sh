@@ -3844,6 +3844,11 @@ fixture="$real/package"
 for component_dir in adapters core preparation control enforcement shadow telemetry scripts; do
   /bin/cp -R "$root/$component_dir" "$fixture/$component_dir"
 done
+/bin/mkdir -p "$fixture/publisher/v1"
+[ -f "$root/publisher/v1/_admission.py" ] && [ ! -L "$root/publisher" ] &&
+  [ ! -L "$root/publisher/v1" ] && [ ! -L "$root/publisher/v1/_admission.py" ] || fail 'S1 helper source'
+/bin/cp "$root/publisher/v1/_admission.py" "$fixture/publisher/v1/_admission.py"
+/usr/bin/cmp "$root/publisher/v1/_admission.py" "$fixture/publisher/v1/_admission.py" || fail 'S1 helper bytes'
 for name in evaluate-bound-sandbox.sh sandbox-bound.jq sandbox-bound-policy.json \
   sandbox-bound-decision.json control-policy-set-sandbox-bound.json validate.sh policy-set.jq; do
   /bin/cp "$root/control/v1/$name" "$fixture/control/v1/$name"

@@ -202,7 +202,7 @@ def _runtime_module_origins() -> tuple[str, ...]:
         path = Path(origin)
         require(path.is_absolute(), "E_RUNTIME")
         resolved = path.resolve(strict=True)
-        require(_path_below(resolved, stdlib) or resolved in {driver, consumer, writer, _NATIVE_ORIGIN},
+        require(_path_below(resolved, stdlib) or resolved in {driver, consumer, writer, SOURCE / "publisher/v1/_admission.py", _NATIVE_ORIGIN},
                 "E_RUNTIME")
         origins.append(str(resolved))
     return tuple(sorted(set(origins)))

@@ -15,11 +15,31 @@ SOURCE = Path(__file__).resolve().parents[2]
 _spec = importlib.util.spec_from_file_location("ystack_shadow_enforced", SOURCE / "shadow/v1/enforced-reproduction.py")
 if _spec is None or _spec.loader is None:
     raise SystemExit("E_RUNTIME")
-e = importlib.util.module_from_spec(_spec)
-sys.modules[_spec.name] = e
-_spec.loader.exec_module(e)
+e = sys.modules.get(_spec.name)
+if e is None:
+    e = importlib.util.module_from_spec(_spec)
+    sys.modules[_spec.name] = e
+    _spec.loader.exec_module(e)
+else:
+    if Path(e.__file__).absolute() != SOURCE / "shadow/v1/enforced-reproduction.py":
+        raise SystemExit("E_RUNTIME")
+    if sys.modules.get("ystack_shadow_consumer") is not e.c:
+        raise SystemExit("E_RUNTIME")
 c = e.c
 require, canonical, sha, parse = e.require, e.canonical, e.sha, e.parse
+
+_ADMISSION_SHA256 = "aadac15726dbfe64b7a171ba74e319cf2df3b6d0fcd71bc810698f13030cf294"
+_ADMISSION_PATH = SOURCE / "publisher/v1/_admission.py"
+require(_ADMISSION_PATH.resolve(strict=True) == _ADMISSION_PATH, "E_RUNTIME")
+_ADMISSION_SOURCE = e.stable_file(_ADMISSION_PATH)
+require(_ADMISSION_SOURCE.sha256 == _ADMISSION_SHA256, "E_RUNTIME")
+_admission_spec = importlib.util.spec_from_file_location("ystack_publisher_admission", _ADMISSION_PATH)
+require(_admission_spec is not None and _admission_spec.loader is not None, "E_RUNTIME")
+a = importlib.util.module_from_spec(_admission_spec)
+sys.modules[_admission_spec.name] = a
+exec(compile(_ADMISSION_SOURCE.raw, str(_ADMISSION_PATH), "exec"), a.__dict__)
+require(a.c is c, "E_RUNTIME")
+_ADMISSION_SOURCE.recheck("E_RUNTIME")
 NAMES = (*e.EVIDENCE_NAMES, "bundle.json")
 REQUEST_KEYS = e.REQUEST_BODY_KEYS | {"scope_id", "allowed_paths"}
 
@@ -85,6 +105,9 @@ class _Workspace:
                 (work / "dependencies" / name).mkdir(mode=0o700)
             self.python = self.hold(Path(sys.executable), c.EXECUTABLE_LIMIT)
             self.consumer = self.hold(SOURCE / "shadow/v1/_consumer.py", c.EXECUTABLE_LIMIT)
+            self.admission_source = self.hold(_ADMISSION_PATH, c.EXECUTABLE_LIMIT)
+            require(self.admission_source.raw == _ADMISSION_SOURCE.raw
+                    and self.admission_source.sha256 == _ADMISSION_SHA256 and a.c is c, "E_RUNTIME")
             def command(role, argv, executable_sha256, component_sha256):
                 self.commands.append({"role": role, "argv_sha256": sha(canonical(argv)),
                     "executable_sha256": executable_sha256, "component_sha256": component_sha256})
@@ -166,6 +189,9 @@ class _Workspace:
         return path
 
     def recheck(self, sealed=False):
+        _ADMISSION_SOURCE.recheck("E_RUNTIME")
+        require(sys.modules.get("ystack_publisher_admission") is a
+                and sys.modules.get("ystack_shadow_consumer") is c and a.c is c, "E_RUNTIME")
         for path, raw in self.inputs:
             require(e.read_regular(path, max(1, len(raw))) == raw, "E_RELATION")
         for item in self.owned:
@@ -552,29 +578,12 @@ def _build_input(ws, original_raw, paths, patch, claim_raw):
 
 
 def _candidate_facts(ws, response_raw, incident, source_facts, files, expected):
-    receipt = parse(parse(response_raw)["payloads"][0]["data"].encode())
-    revision = incident["body"]["git_revision_ref"]
-    require(expected == c.evidence_patch(files, revision["hash_algorithm"], ws.record_form)[1], "E_RELATION")
-    candidate = receipt["candidate"]
-    require(candidate["parent_commit_id"] == revision["commit_id"] and receipt["changed_paths"]["count"] == (33 if ws.record_form == "withheld-write-policy.v1" else 32), "E_RELATION")
-    repository = ws.work / "candidate/repository.git"
-    candidate_revision = dict(revision, commit_id=candidate["commit_id"])
-    facts = _git_inventory(ws, repository, candidate_revision)
-    commit = ws.git_read(repository, ["cat-file", "commit", candidate["commit_id"]], e.OUTPUT_LIMIT)
-    headers = commit.split(b"\n\n", 1)[0].splitlines()
-    require([line[7:].decode() for line in headers if line.startswith(b"parent ")] == [revision["commit_id"]]
-            and [line[5:].decode() for line in headers if line.startswith(b"tree ")] == [candidate["tree_id"]], "E_RELATION")
-    expected_directories = {"/".join(path.split("/")[:index]) for path in files for index in range(1, len(path.split("/")))}
-    require(all(facts.get(path) == value or (path in expected_directories
-        and value[:2] == ("040000", "tree") and facts.get(path, ())[:2] == value[:2])
-        for path, value in source_facts.items()), "E_RELATION")
-    additions = {path: value for path, value in facts.items() if path not in source_facts and value[1] != "tree"}
-    require(additions == {row["path"]: ("100644", "blob", row["git_blob_oid"]) for row in expected}, "E_RELATION")
-    require({path for path in facts if path not in source_facts and facts[path][1] == "tree"} == expected_directories - set(source_facts), "E_RELATION")
-    for row in expected:
-        raw = ws.git_read(repository, ["cat-file", "blob", row["git_blob_oid"]], len(files[row["path"]]) + 1)
-        require(raw == files[row["path"]] and sha(raw) == row["sha256"], "E_RELATION")
-    return candidate
+    try:
+        return a.candidate_facts(ws.git_owner(ws.paths["source_git_dir"]),
+            ws.git_owner(ws.work / "candidate/repository.git"), response_raw, incident,
+            source_facts, files, expected, ws.record_form)
+    except c.Refusal as exc:
+        raise e.Refusal(exc.code) from exc
 
 
 def _verify_write(ws, incident, input_raw, record_raw, manifest_raw, evaluation_raw, observation_raw):
@@ -705,19 +714,11 @@ def prepare(request_path: Path, bundle: Path, work: Path, output: Path, parent: 
 
 
 def _bundle_ref(raw):
-    return {"content_id": "shadow-consumer-bundle",
-        "media_type": "application/vnd.ystack.shadow-consumer-bundle+json", "sha256": sha(raw)}
+    return a.bundle_ref(raw)
 
 
 def _publisher(incident, tree):
-    identity = incident["id"]
-    body = ("Shadow evidence for " + identity + ". Publication is withheld.\n").encode()
-    request = {"schema_version": 1, "kind": "shadow_publisher_request", "id": identity,
-        "body": {"target_repository_id": incident["body"]["target_repository_id"],
-            "branch": "ystack/evidence/" + identity,
-            "base_revision": incident["body"]["git_revision_ref"], "candidate_tree_id": tree,
-            "title": "Shadow evidence: " + identity, "body_sha256": sha(body)}}
-    return request, body
+    return a.publisher(incident, tree)
 
 
 def _write_provenance(ws, incident):
@@ -737,27 +738,26 @@ def _write_provenance(ws, incident):
 def _admit(ws, materialized, frozen, files, write):
     incident = parse(frozen["incident.json"])
     revision = incident["body"]["git_revision_ref"]
-    require(set(write) == {"bundle_ref", "scope_id", "workflow_id", "task_class", "write_set",
-        "publisher_request", "admission", "publication", "post_write_verification"}, "E_RELATION")
-    generated = parse(materialized.input_raw, 8 * e.OUTPUT_LIMIT)
-    stage = generated["stage_request"]["content"]["body"]
-    request, body = _publisher(incident, materialized.candidate_tree_id)
+    draft = dict(files)
+    draft["shadow-record.json"] = _outer_record(ws, materialized, frozen, files, write,
+        files["consumer-provenance.json"], files["trace-ledger.json"], ws.record_form)
+    inputs = a._AdmissionInputs(
+        frozen["incident.json"], materialized.response_raw, canonical(write), materialized.input_raw,
+        tuple(sorted(frozen.items())), tuple(sorted(materialized.files.items())), tuple(sorted(draft.items())),
+        ws.hold(ws.work / "seed/eval-seed-case-stale-moved-artifacts.json", e.OUTPUT_LIMIT).raw,
+        ws.record_form, ws.request_doc["body"]["scope_id"], tuple(ws.request_doc["body"]["allowed_paths"]),
+        ws.components[SOURCE / "scope/v1/scope-policy.json"].raw,
+        ws.components[SOURCE / "config/construction-mode.json"].raw,
+        tuple(sorted(materialized.source_facts.items())), ws.git_owner(ws.paths["source_git_dir"]),
+        ws.git_owner(materialized.candidate_repository))
+    try:
+        admitted = a.admit_write(inputs)
+    except c.Refusal as exc:
+        raise e.Refusal(exc.code) from exc
+    require(admitted.candidate_commit_id == materialized.candidate_commit_id
+            and admitted.candidate_tree_id == materialized.candidate_tree_id, "E_RELATION")
     write_set = materialized.write_set
-    require(canonical(write["bundle_ref"]) == canonical(_bundle_ref(frozen["bundle.json"]))
-        and write["scope_id"] == ws.request_doc["body"]["scope_id"]
-        and write["workflow_id"] == stage["workflow_id"] == "workflow.shadow-evidence-commit"
-        and write["task_class"] == stage["task_class_id"] == "task.commit-shadow-evidence"
-        and canonical(write["write_set"]) == canonical(write_set)
-        and canonical(write_set) == canonical(c.evidence_patch(materialized.files, revision["hash_algorithm"], ws.record_form)[1])
-        and [row["path"] for row in write_set] == ws.request_doc["body"]["allowed_paths"]
-        and canonical(write["publisher_request"]) == canonical(request) and files["publisher-body.txt"] == body
-        and request["body"]["body_sha256"] == sha(files["publisher-body.txt"])
-        and canonical(write["publication"]) == canonical({"state": "withheld", "reason_id": "shadow.write-not-published"})
-        and canonical(write["post_write_verification"]) == canonical({"target_revision": revision,
-            "candidate_tree_id": materialized.candidate_tree_id, "write_set": write_set}), "E_RELATION")
-    expected = {"state": "checked", "effect": "none", "request_sha256": sha(canonical(request)),
-        "write_set_sha256": sha(canonical(write_set))}
-    require(canonical(write["admission"]) == canonical(expected), "E_RELATION")
+    expected = parse(admitted.admission_raw)
     prefix = "ystack-evidence/" + incident["id"] + "/"
     require(all(materialized.files[prefix + name] == raw for name, raw in frozen.items()), "E_RELATION")
     require(set(files) == set(e.EVIDENCE_NAMES) | {"publisher-body.txt"}
@@ -785,6 +785,17 @@ def _admit(ws, materialized, frozen, files, write):
     files["consumer-provenance.json"] = provenance
     files["shadow-record.json"] = _outer_record(ws, materialized, frozen, files, write,
         provenance, files["trace-ledger.json"], ws.record_form)
+    final_body = parse(files["shadow-record.json"])["body"]
+    draft_body = parse(draft["shadow-record.json"])["body"]
+    require(final_body["write"] == draft_body["write"]
+            and final_body.get("scope_policy_ref") == draft_body.get("scope_policy_ref")
+            and files.get("scope-policy.json") == draft.get("scope-policy.json")
+            and canonical(final_body["write"]["publisher_request"]) == admitted.publisher_request_raw
+            and files["publisher-body.txt"] == admitted.body_raw
+            and canonical(final_body["write"]["write_set"]) == admitted.write_set_raw
+            and canonical(final_body["write"]["admission"]) == admitted.admission_raw
+            and canonical(final_body["write"]["post_write_verification"]) == admitted.post_write_plan_raw,
+            "E_RELATION")
     result = parse(files["file-digest-result.json"])["body"]
     _record_relations(files, incident, result, files["origin-observation.json"], ws.anchor, write)
     ws.recheck(sealed=True)

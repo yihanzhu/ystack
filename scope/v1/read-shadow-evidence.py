@@ -161,7 +161,7 @@ class _Reader:
             self.consumer = self.hold(SOURCE, c.EXECUTABLE_LIMIT)
             self.self_source = self.hold(Path(__file__).absolute(), c.EXECUTABLE_LIMIT)
             self.package_sources = {}
-            for relative in ("shadow/v1/write-shadow.py", "shadow/v1/enforced-reproduction.py",
+            for relative in ("publisher/v1/_admission.py", "shadow/v1/write-shadow.py", "shadow/v1/enforced-reproduction.py",
                              "scope/v1/scope-policy.json", "config/construction-mode.json",
                              "core/v2/generation-registry.json"):
                 if relative != "config/construction-mode.json" or os.path.lexists(PACKAGE / relative):
@@ -221,6 +221,10 @@ class _Reader:
         for loaded, expected in ((module.e, "shadow/v1/enforced-reproduction.py"),
                                  (module.c, "shadow/v1/_consumer.py")):
             require(Path(loaded.__file__).absolute() == PACKAGE / expected)
+        helper = self.package_sources["publisher/v1/_admission.py"]
+        require(module._ADMISSION_SHA256 == helper.sha256 and module._ADMISSION_SOURCE.raw == helper.raw
+                and module.a.c is module.c and sys.modules.get("ystack_publisher_admission") is module.a
+                and Path(module.a.__file__).absolute() == PACKAGE / "publisher/v1/_admission.py", "E_RUNTIME")
         self.recheck()
         return module
 

@@ -18,7 +18,7 @@ def run_writer_tests():
     import copy, signal
     from contextlib import contextmanager
     global scenario_work, scenario_output, scenario_mode, scenario_request
-    module_names = ("shadow_writer_test_subject", "ystack_shadow_enforced", "ystack_shadow_consumer")
+    module_names = ("shadow_writer_test_subject", "ystack_shadow_enforced", "ystack_shadow_consumer", "ystack_publisher_admission")
     module_state = {name: sys.modules.get(name) for name in module_names}
     spec = importlib.util.spec_from_file_location("shadow_writer_test_subject", package / "shadow/v1/write-shadow.py")
     w = importlib.util.module_from_spec(spec)
