@@ -1,7 +1,7 @@
 ---
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
-drafted: 2026-10-23
+drafted: 2026-10-24
 ---
 
 # Spec: seed the two declared eval families without model graders
@@ -62,7 +62,7 @@ trials. It ships no model call, credential, network use, activation or write.
 5. 对 malicious recipe，R4.6 的全部重算标准与 S10 停止条件保持不变。固定
    sandbox/store/source 边界、fresh nonce 或不可离线重算字段不能藏在旧 shell
    recipe 中。必须先基于实际 #681 source 提出具体方案并通过原 G2，才能修订
-   对应 high-risk plan 并实施。此次顺序修订不提供或接受该方案。不把 archived
+   对应 high-risk plan 并实施。本次具体方案为 R4A；其独立 G2 接受与另行计划仍是代码门。不把 archived
    receipt 当成实际 source 重跑，不注入固定 nonce，不删比较字段，不用 mock
    冒充 genuine 输出。未满足时只停止该依赖子段；先行 relay 不承担这些效果。
 6. 实施可先于明确绑定依赖的验收。使用保留的未合入实现前，经理须记录精确
@@ -75,7 +75,8 @@ trials. It ships no model call, credential, network use, activation or write.
 7. PR 1b 最终接受与发布前，须普通 merge 包含所需实际实现的精确 fresh main，
    完成 S1–S10 适用字段的 merged `path:line`、完整 closure/overlap/pin 核对、
    整体 diff 审查、全部相关测试、fresh CI 与独立接受。R5 的完整 closure不能由
-   旧47项、下界或猜测上限代替；现有64项上限不变，确需改变时先回 G2。
+   旧47项、下界或猜测上限代替；malicious source 的完整集合与84项上限按 R4A.D，
+   其他 closure 保持原64项上限。新成员或资源超限仍先回 G2。
    PR 2 保留真实 scope、verdict、operator labels 与 exact approval；PR 3 保留真实
    control/gate evidence、全部四次实际 trial 与 S8 授权。两批原验收均不变。
    #558 的原完整验收最后集中闭合；其原失败、
@@ -224,23 +225,378 @@ case 且全部通过（`scope/v1/scope-gates.jq:876-890`）。它未执行 `mult
    It also requires the four passes to hold unchanged when the shipped catalog differs
    from the archived one (R5).
 
+### R4A. One calculation owner for recording and offline replay
+
+This section replaces the provisional twelve-argument malicious recipe. It keeps
+R4's four surfaces, all seven invariants, whole-document byte comparison and real
+seed requirement. It changes neither the native execution policy nor the meaning
+of an authenticated receipt. G2 accepts the design; a separate high-risk plan must
+land before this source preparation begins.
+
+The source binding is child 9 at `22d25c96f28ed42da0a5722b6b5ea0e65946274c`.
+Its writer, reader and generator exist. Its 191 pure/static checks do not establish
+genuine old-origin/new-handoff, native qualification or G3. The manager must adopt
+that exact clean attempt, bind its artifact blobs and unresolved proof, and obtain
+an independent source preflight. Do not copy or recreate that attempt. Preserve
+#439's `178462071b88531345a5abc45c7db457b526955f` review-relay checkpoint and its raw
+failures. Merge accepted dependencies normally on the same implementation branch.
+
+#### A. Fixed owners and sequence
+
+| Step | Recording caller and shared calculation owner | Offline caller |
+| --- | --- | --- |
+| 1. Trial content | `write-shadow.py` validates the incident, Git object closure and exact evidence patch. The existing materializer and `prepare-candidate.py` remain the owners of Git content, manifest and preparation record. | The fixed `evals/v1/replay-malicious.py` reconstructs the trial Git objects in a disposable bare repository. It runs only the pinned materializer/preparation code, with no hooks or candidate execution. |
+| 2. Launch request | `enforced-reproduction.py:make_launch` obtains fresh entropy in its real caller. Extract its byte construction into a private function taking that entropy, the already-held input bytes and control facts. | Call that same constructor with the historical raw entropy from B. No input reaches the real launch function, nonce reservation, sudo or supervisor command. |
+| 3. Guest values | Move the existing counter arithmetic and report construction from `sandbox/v1/guest/supervisor.c` into `observation-values.c` and `.h` in that directory. The real supervisor calls this owner after taking the same OS observations. | Compile the same value-only C source as a fixed private helper. Its stdin is the closed B guest record. It has no namespace, mount, exec, socket, cgroup or process-control operations. |
+| 4. Host receipt | `sandbox/v1/host-supervisor.py` retains real launch, deadline, cancellation, stop, reap and storage code. Its private value functions own identity composition, host state transitions, `build_limit_rows`, `build_receipt` and `derive_outcome`. | Feed historical primitive observations to those same value functions. Rebuild the guest frame, payload, identities, lifecycle, limits, teardown, times and receipt. Never accept a recorded receipt as their input. |
+| 4a. Runtime driver reply | `sandbox/v1/runtime-vfkit.py` owns `cmd_argv`, `cmd_state` and `cmd_stop` value construction/classification. Extract their private value functions; the real commands retain config/start-file reads and `rest` socket I/O, then call those functions. | Call the same functions with reconstructed start/config bytes and the closed historical REST observations below. Rebuild complete stdout/stderr and exit classification; never call `rest`, `UnixConnection` or the actual command entry points. |
+| 5. Origin and provenance | `shadow/v1/_consumer.py` keeps real held descriptors and checks. Separate its existing metadata/ACL/identity predicates and origin construction from acquisition. `enforced-reproduction.py` owns native-release provenance; `write-shadow.py` owns command rows, admission and final record. | Recompute predicates and projections from B plus held trial bytes. The result is a historical comparison value. It cannot construct an Anchor, HeldPath, native release, store session or live admission object. |
+| 6. Gate sources | `coverage-source.py` owns `captured`, `normalize`, `kill_normalize`, source identity and source receipt construction/validation. Move the inline receipt construction from host supervisor into this existing owner; the real supervisor calls it after its existing source and store checks. | Rebuild raw manifests from captured page metadata and page bytes, normalize again, rebuild source receipts, and validate them with this same owner. Do not invoke a collector, forge, broker or network. |
+| 7. Gate results | `generate-gate-evidence.py` owns request/expectation construction, `project_register`, the duty/risk/kill order, scope construction, final manifests and completion. `read-shadow-evidence.py` owns bundle facts and measured scope observations. Extract value functions in these files. | Use these same functions and the existing jq evaluators. `scope-gates.jq` gets the recomputed measured observation through the fixed private replay caller. Public `evaluate-scope.sh` still requires its real reader/session handshake. |
+| 8. Comparison | The recorder retains the normal outputs and the raw observations below. | Rebuild every C output, compare exact bytes, then emit R4.7's observation. Neither expected output bytes nor expected invariants are supplied to an owner calculation. |
+
+Recording runs enforced reproduction, then write-shadow, then gate generation for
+that trial. Both reproduction and write perform their own real sandbox launch.
+S8 must cover these actual calls for all four trials; “four trials” does not grant
+extra launches. Never edit a frozen control bundle and treat it as authenticated
+trial reproduction. Offline replay constructs both historical output sets.
+
+The Python replay file is one private coordinator for this fixed recipe. It has
+no plugin registry, transport, callback injection, arbitrary executable argument,
+general syscall player or reusable replay API. Shared functions take typed values;
+they never accept a callable that substitutes for live acquisition. The C helper
+has one fixed input/output operation. The verifier payload builder stays in
+`verifiers/file-digest/v1/verifier.c`; its fixed value-only build reads bounded
+trial file bytes from stdin and shares the production builder. It cannot select a
+sandbox root or run candidate code. Its normal verifier build keeps its old entry
+point. The guest value library is linked by `build-guest.py`; its offline form
+uses the same functions. Neither helper is a test-only second implementation.
+
+Factor the existing host and guest decision expressions without changing their
+order. The production callers still perform every original deadline check before
+blocking work, every cancellation recheck, stop/reap rule, descriptor hold, ACL
+check, nonce reservation and stable readback. They call the shared value owner at
+the same boundary and check its result before emitting the existing document.
+Offline observations are never accepted by a production entry point. No new
+command-line option, environment switch or request field supplies historical
+entropy or OS observations to a genuine launch.
+
+#### B. Closed raw inputs
+
+The case contains `raw-observations.json`, with exactly `schema_version:1`,
+`kind:"malicious_raw_observations"` and `body`. Body has exactly `incident`,
+`identities`, `entropy`, `clocks`, `storage`, `guest`, `host`, `source_pages`,
+`commands` and `runtime`. The table paths are relative to body. Each record is
+canonical JSON. Unknown keys,
+duplicate keys, wrong types, missing observations, unexplained sequence gaps and
+unused observations reject the case. A field below is an external primitive
+observation, not a precomputed verdict. All ids, refs, hashes, reason sets, report
+rows and derived state remain outputs of C.
+
+| Field path | Raw source and exact content | Bound and use |
+| --- | --- | --- |
+| `incident.observed_at` | The incident's original string. | Existing incident grammar. The incident itself, operator inputs, scope basis, risk claim, dashboard, marker and source Git objects remain explicit trial inputs with their existing schemas. |
+| `identities.attempt_ids` | Caller-selected reproduction, write and gate request ids, keyed by those three roles. | Exactly three ids accepted by their existing owners; attempt_number remains 1. No nonce-derived id is stored here. |
+| `identities.locators` | Original physical path strings for source package, request/bundle/work/output, source Git, installed anchor/store/work, qualified runtime slots and the fixed gate scratch slots. | Fixed role names; each string at most 4096 UTF-8 bytes, no NUL. They are historical strings for reconstruction, never paths opened by replay. Derived child paths come from the same owner. |
+| `entropy.reproduction`, `.write`, `.kill`, `.coverage` | Fresh bytes returned by the real owner's entropy read. | Each exactly 32 bytes as 64 lower-case hex characters. Coverage may be absent only on the existing no-coverage branch. Launch and source nonce/call/attempt ids are recomputed. |
+| `entropy.preparation_names` | Each original `secrets.token_hex(8)` input used by preparation workspace selection. | Ordered 8-byte values, at most the existing 128 attempts per workspace. The owner reconstructs names and compares the recorded collision results. |
+| `clocks.wall` and `.monotonic` | Values returned at the existing named clock sites in host, writer, preparation and gate owners. | Ordered pairs `{site,value}`; site is one of the fixed source sites listed below. Values are finite IEEE-754 binary64 represented by their exact 8-byte hex bits; no NaN/Inf. At most 4096 reads per owner; elapsed time, UTC formatting, ceilings and deadlines are recomputed. |
+| `storage.entries` | For each named held ancestor, directory or file: `{role,name,before,after,named_after,access_acl,default_acl,directory_names,read_error}`. | Each stat is exactly `{dev,ino,mode,uid,gid,nlink,size,mtime_ns,ctime_ns}` with integer values; mode includes type bits. ACL entries are the existing Linux tag/perm/id or Darwin tag/resolved-id/perm tuples, with existing 128-entry bound. Names are raw byte strings encoded as hex. File bytes are separately pinned inputs or computed outputs, never a digest observation. Maximum 65536 entries, matching preparation repository_entries. |
+| `storage.identity_context` | Real uid/euid/gid/egid, supplementary group ids, Darwin UUID resolver byte replies and platform. | Exact existing `_consumer` resolver/group schemas and bounds; no supplied `authenticated`, `stable`, `owned`, `accepted` or ACL verdict. The same owner derives all those predicates from the values above. |
+| `guest.setup` | Raw success/error numbers for the existing cgroup writes/opens; exact readback bytes for cpu.max, cpu.max.burst, bandwidth slice, pids.max and meminfo; output/scratch statvfs tuples; page-size return. | Closed keys with those names. Readbacks at their existing 64/256-byte limits; statvfs exactly `{f_blocks,f_bfree,f_frsize,f_files}`. Hard/unknown enforcement flags are recomputed, including CPU always none. |
+| `guest.control` | Ordered primitive results of the existing controller: monotonic timespec, poll return/revents/errno, waitpid pid/status/errno, cgroup.events bytes, exec-channel bytes/EOF/errno, kill return/errno and fanotify event fields/reply return. | Closed operation tags are `now,launch,poll,wait,population,exec-read,kill,fan-read,fan-reply`; no function names or arbitrary calls. At most 4096 records, each at most 8192 bytes (including the existing 4096-byte fanotify read). Expected next operation and all decisions come from the shared existing controller expressions; wrong order or extra results reject. No recorded tree_terminated/verifier_started/deadline verdict is an input. |
+| `guest.control` launch record | At the sole `launch_and_control` launch site (`supervisor.c:1404`; real clone at `:1419` in the bound source), retain the real `ops->launch` return from `production_launch` / `ys_clone3_into_cgroup`. | Exactly `{tag:"launch",pid,errno}`; pid is a signed 32-bit integer, errno is null for a nonnegative return or a positive signed-32-bit errno captured immediately on clone failure. Exactly one record after the initial successful clock/deadline construction; zero only when that construction fails. Nonpositive return follows the existing failure branch. No PID is inferred from a later wait. |
+| `guest.counters` | Exact cpu.stat, memory.peak, memory.events, pids.peak, pids.events bytes or read errno; output file stat tuples; output/scratch statvfs; raw evidence directory names and file bytes. | Counter reads preserve the existing 64/256-byte bounds; evidence count at most 10000 and payload total at most 10 MiB. The value owner computes rounded CPU, reached flags, observations, sizes, names, report and frame. A guest report is not a raw input. |
+| `host.process` | Ordered real driver exit code/stdout/stderr, Popen error or pid, poll/wait result or timeout/error, killpg result, signal numbers, drain-thread start/join observations, export read/error and cleanup syscall return/errno. | Only the fixed launch/state/stop/poll/wait/kill/drain/export/cleanup sites of `run_vm` and finalization; at most 4096 records, diagnostics capped by the existing 64 KiB bound. The shared owner derives stop acceptance, runtime_error, confirmed termination, teardown, deadline and limit rows. Raw export bytes must equal the rebuilt guest frame; they cannot replace it. |
+| `host.driver_rest` | The fixed driver's `rest` return primitives at `runtime-vfkit.py:89–99`: response status and raw body bytes, or the caught transport exception category/errno and its phase. | Ordered `{call,operation,reply,error}` records, at most 4096 per host run and charged to its 4 MiB control budget. Operation is only `state` or `stop`. Reply is null or exactly `{status,body_hex}`, status integer 100–999, body at most 65537 bytes. Error is null or exactly `{phase,category,errno}`; phase is `request`, `getresponse` or `read`; category is `OSError` or `HTTPException`; errno is null or a signed-32-bit integer. Exactly one of reply/error is non-null. No recorded running/stopped/error classification is an input. |
+| `source_pages.kill` and `.coverage` | Captured remote response bytes plus `{family,page_index,response_status,input_cursor,output_cursor}` from the real fixed collector boundary. | Existing families and order; 128 pages per operation, 1 MiB per page, 64 MiB total per operation. Rebuild raw_size, raw_sha256, request_sha256, raw manifest, normalized observation and receipt. No credentials or authorization headers are retained. |
+| `commands.runtime_values` | Git version reply; Python version/ABI/sysconfig values and Unicode version from the qualified recording runtime. OS wait status and errno are retained separately by fixed component role. | Existing native build-record configuration keys only; version strings at most 128 bytes. At most 4096 commands. Recompute argv from the recipe and historical locators; hash source/executable bytes. Normal component stdout, stderr, exit classification, argv_sha256 and command list are not claimed inputs: rerun or recompute their actual owner. |
+| `runtime.slots` | Read-only qualified byte inputs enumerated in D, plus original locator and read errno when the genuine owner could not read a slot. | Byte streams only, never executed by replay. Recompute individual and composite hashes. A receipt identity digest is not a substitute for its bytes. |
+
+Clock sites are bound to the source head above. A site id is the relative path,
+original line and zero-based call ordinal on that line. `w` means `time.time`;
+`m` means `time.monotonic`. Multiple occurrences retain separate ordinals. These
+are stable observation labels after extraction, not new dynamic source lookups.
+
+| Owner | Original line and clock |
+| --- | --- |
+| `shadow/v1/enforced-reproduction.py` | 765m, 766m, 778m, 784m, 785m, 791m, 794m, 796m, 801m, 922m, 929m, 930m, 940m, 946m, 964m, 986m, 1012m, 1016m, 1071m, 1074m, 1118m, 1121m, 1167m, 1482m, 1483m, 1617m |
+| `shadow/v1/write-shadow.py` | 54m |
+| `shadow/v1/_consumer.py` | 1274m, 1301m, 1304m, 1363m, 1383m, 1394m, 1394m, 1395m, 1443m, 1444m, 1475m, 1485m, 1493m, 1493m, 1501m, 1509m, 1515m, 1516m, 1930m, 1933m, 1939m, 1940m |
+| `scope/v1/generate-gate-evidence.py` | 15m, 359m, 539m, 593m |
+| `scope/v1/read-shadow-evidence.py` | 18m, 74m, 287m, 306m, 316m |
+| `sandbox/v1/host-supervisor.py` | 1503m, 1516m, 1636m, 1653m, 1686m, 1758m, 1945m, 1974m, 2011m, 2045m, 2046m, 2047m, 2069m, 2088w, 2089m, 2101m, 2111m, 2125w, 2132m, 2187m, 2195m, 2440w, 2593w, 2771w, 2794m, 2847m, 2866m, 2882m, 2885m, 2891m, 2895m, 3069m, 3090m, 3091m, 3115m, 3127m, 3140m, 3148m, 3230w, 3242w |
+| `preparation/v1/prepare-candidate.py` | 207m, 231m, 634m, 659m, 693m, 2254m |
+
+Guest `now` returns exactly `{sec,nsec,errno}`; `poll` returns `{count,revents,errno}`
+with at most two fd-role rows; `wait` returns `{pid,status,errno}`; `population`
+retains cgroup.events bytes; `exec-read` retains bytes/eof/errno; `kill` retains
+return/errno. A fan record retains read bytes, each event's version/length/mask/
+pid/fd-role, its fstat tuple, and response-write counts/errno. The owner computes
+allow/deny and first-inode history. No supplied fan decision is accepted.
+Host process rows have exactly `site`, `ordinal`, `return`, `errno`, `bytes` and
+`timeout`; unused fields are null. Return types are fixed per site: pid for spawn,
+integer/null for poll/wait, integer for driver/kill/cleanup/read/close, boolean for
+thread/select observations. Bytes occur only for checked driver replies, pipe reads
+and raw export; clock and signal records use the separate arrays. The raw bytes must agree with the shared driver's
+and guest owner's reconstructed output. Sites are the named operations in A/B,
+not arbitrary syscall names; replay cannot dispatch them.
+
+All driver calls, including `argv`, have contiguous zero-based indices in the
+order selected by the shared host controller. REST rows refer to those indices;
+only non-REST calls may explain gaps between REST rows. The first `argv`
+construction has no REST record. Each
+reached `state` or `stop` REST call consumes exactly one matching record; a call
+that fails before reaching REST consumes none. Missing, duplicate, reordered or
+unused records reject. The method/target/body are fixed by the driver:
+`GET /vm/state` with no body, or `POST /vm/state` with exactly
+`{"state":"HardStop"}`. They are derived, never caller-selected observations.
+The same driver owner retains its exact JSON parsing and classification, including
+malformed bodies, exceptions and the 65536-byte state limit. A 65537-byte reply is
+valid raw overflow evidence, not a successful state. Stop acceptance remains the
+existing status-200 test; it is not confirmation of termination.
+
+`host.process` also retains the fixed `run_driver` pipe acquisition sites:
+`select`, `read`, `close`, `poll`, `wait` and group-kill. Select records its
+ready/timeout/error result; read records its byte count, EOF or errno. Ordered
+read bytes must be exact consecutive slices of the same driver's reconstructed
+stdout; they are compared, not trusted as another reply. Existing 65536-byte cap,
+cap-plus-one overflow detection, clock/deadline checks and wait budget remain.
+Missing EOF, read error or timeout must reconstruct the original incomplete
+response rejection, even if the driver process reported exit zero. These records
+share the existing 4096 host-record and 4 MiB bounds; they add no I/O dispatch.
+
+The guest controller consumes the launch record at its original site before any
+wait. It passes that exact positive child PID through the existing `waited == child`
+checks in normal and failure cleanup paths. A zero wait never proves reap, a
+foreign PID never becomes the child, and EINTR retains the existing branch.
+Deadline-first ordering, child-reaped, tree-terminated and verifier-started remain
+computed values. The real caller still launches once through the existing code;
+the offline value helper never launches, chooses or injects a PID.
+
+For stat arrays, the pure owner derives file kind, permission mode and metadata
+arrays exactly as the current `_identity` and `_observation` functions do. File
+sizes and digests are checked against bytes. OS return codes are external facts;
+`result=authenticated` is still a derived conjunction of the same type, ownership,
+ACL, inventory, content, path-binding and before/after predicates. Offline
+recomputation proves consistency with retained observations, not that the current
+machine performed a new authenticated read.
+
+The real recorder retains these values from the reads already performed. It does
+not re-read a path later to pretend it was the held read. Add a fixed
+`capture.json` sibling of `receipt.json` within the existing controlled attempt,
+with the same principal/group and read-only file rule. Its exact envelope is
+`schema_version:1`, `kind:"malicious_source_capture"`, `id:attempt_id` and
+`body:{request_sha256,raw,complete}`. Raw is the corresponding closed B group;
+request_sha256 is recomputed from held request bytes; complete is true only after
+all required observations and existing final checks finish. It contains only the
+host, guest and source observations needed above, never secret bytes. The consumer
+holds and reads it with the same store root, owner, ACL and stability rules before
+copying its bytes into the recorder's private output. Consumer-side stat, command
+and entropy observations are retained in that private output, outside the normal
+bundle. Their canonical envelope and refs are reconstructed too.
+
+The new attempt inventory is exactly `{receipt.json,payload,capture.json}`. Keep
+legacy `{receipt.json,payload}` readable for its old consumers, but it cannot seed
+this replay. No arbitrary sibling or payload entry becomes allowed. A capture
+must bind the actual attempt and request bytes and complete successfully; missing,
+partial, overflowed, changed or mismatched capture makes recording unusable as a
+seed. It never changes the native result or excuses teardown. The guest frame's
+one fixed control-observation record is produced by the supervisor, outside the
+verifier's output namespace. It does not give the verifier another writable file
+or change verifier output/CPU/wall limits. Its own 4 MiB capture bound is separate;
+overflow preserves native cleanup and prevents a replayable recording.
+
+Only an authorized real recording may create these controlled-store files. This
+spec covers source preparation only after the separate high-risk plan gate. It
+does not authorize installing the changed supervisor, reading a new real runtime
+slot, collecting runtime bytes or executing a trial.
+The relevant recording/resource/identity gates remain reserved.
+
+#### C. Complete derived-output ownership
+
+The output inventory is closed by these rows. Each owner reconstructs the entire
+canonical document or raw byte file, including every envelope key, id, reference,
+digest and unused-looking field. Comparison is whole-byte equality. It does not
+project selected fields or compare a trial to the control. The recorder checks
+that its exact output inventory equals this inventory instantiated for the trial;
+unknown or extra output stops recording and replay.
+
+| Output set | Same production owner and derivation |
+| --- | --- |
+| `incident.json`, `claim.json`, `duty-evaluation.json`, policy/decision/registry/accepted-identities and evaluator driver/program copies | Exact pinned trial/policy/source bytes, then the existing validators; copied documents are not invented observations. |
+| `materialization-input.json`, `materialization-response.json` | Existing writer input builder, materializer/protocol and private Git operations. Recompute trees/commits/patches, stage result, receipt and all content refs. |
+| `preparation-record.json`, `preparation-manifest.json` | `prepare-candidate.py:manifest_for,make_record,producer_identity`; shared pure record construction gets recomputed Git inventory, historical primitive storage observations and qualified runtime bytes/version inputs. Real prepare/inspect still checks actual held storage. |
+| `qualified-identity.json`, `sandbox-request.json`, `sandbox-expectation.json`, `sandbox-evaluation.json` | Existing qualified-identity, launch constructors and bound evaluator, from recomputed preparation/incident/control/observation bytes. |
+| `sandbox-receipt.json`, `payload-stdout.txt`, `payload-stderr.txt`, `evidence-manifest.json`, `file-digest-result.json` | Guest value owner plus real file-digest verifier's shared payload builder, then host frame/identity/receipt owners. Recompute verifier payload from actual trial file bytes; stdout/stderr for this verifier remain empty. All six limit rows, lifecycle, teardown, outcome/reasons and timing are recomputed. |
+| `sandbox-check.json`, `origin-observation.json`, `consumer-provenance.json` | Existing receipt checker; shared consumer predicates/origin builder; existing native-release and writer provenance builders. Recompute hashes from source/runtime bytes, locator hashes, command argv hashes and origin predicates. |
+| `trace-ledger.json`, `trace-receipt.json`, `publisher-body.txt`, `shadow-record.json`, optional policy copy and `bundle.json` | Existing trace owner/validator and writer `_publisher,_admit,_outer_record` plus bundle construction. Publisher request retains exactly target_repository_id/branch/base_revision/candidate_tree_id/title/body_sha256, with checked/effect-none admission and withheld publication. |
+| Candidate evidence `eval-seed.json`, `README.md` and every write-set row | Existing maintenance converter and writer text/patch functions; the two archive inputs remain pinned. Git patch and write-set hashes are recomputed. |
+| Gate objects `request,basis,claim,stage-request,resolved-profile,stage-result,policy-set,shadow-set,dashboard,marker` | Exact trial inputs or generator extraction from recomputed, authenticated-history bundle bytes. Existing reference and cross-record equality checks remain. |
+| Gate objects `kill-request,kill-expectation,coverage-request,coverage-expectation,kill-configuration,runtime,initial-origins,final-origins,commands` | Generator/reader/consumer shared constructors, raw entropy, held observations and source/runtime byte measurements. Recompute every call id, nonce reference, command and source-package ref. |
+| Gate `register,state,attempt,duty,risk,kill,scope,scope-evaluation` | Source normalizers, `project_register`, the real control evaluators and `scope-gates.jq`, in existing order and with the scope's own stage/profile/result refs. Enablement remains false/blocked or proposal absent according to that output. |
+| Gate `kill-evidence`/`coverage-evidence`, every raw snapshot, manifest and COMPLETE | Source raw pages and the shared receipt builder; generator recomputes all indexed names, size/hash rows, origin refs, manifest digest and completion. Raw pages are inputs; their manifest/normalized result/receipt are derived. |
+| Capture envelopes and replay observation | Each capture owner canonicalizes its closed raw fields and recomputes attempt/request refs. The fixed replay coordinator emits disposition, recomputed invariants and sorted mismatch paths only after all owners finish. |
+
+I5 compares the complete ordered permitted-command recipe: role, executable and
+component identities, operation, fixed options and typed argument positions.
+Content-dependent arguments are derived by that same recipe from trial inputs;
+path arguments must resolve to the fixed historical role, never arbitrary input
+paths. The complete concrete argv bytes and argv_sha256 remain C outputs and are
+compared byte for byte. This permits the Git ids and temporary locators that
+necessarily differ between recordings without dropping a command or its argument
+checks. Extra command, option, argument, role or reordering rejects the trial.
+
+No replay value containing the text `authenticated`, `satisfied` or `complete`
+is a live authority object. Only the real acquisition path can hold the private
+objects needed for admission. Offline results cannot be fed into a source session,
+public scope reader, publisher, store writer or qualification installer.
+
+#### D. Closed source and runtime sets
+
+The malicious source/policy set has exactly **84 paths**: the following 81 existing
+files and three new files named here. The launcher snapshots every member, including
+the fixed build-provenance sources, before replay. It rejects missing, additional,
+duplicate, replaced or digest-mismatched members. It does not scan a directory and
+accept new files automatically. Generator's existing control/scope scan must equal
+the listed inventory, so an unexpected new file stops this recipe.
+
+`G` is the generation selected by entry `[1]` of the pinned
+`core/v2/generation-registry.json` (blob `0bc09fa56047b2e3fdecf22559f68468f0528797`,
+SHA-256 `3950ce43c3073b97759db23fb7e4ce533cbc1d8a8fe4917db6ee1ee0a8e78f94`).
+The entry must also be the last entry and have `semantic_identity=core.contracts.v2`.
+The seven suffixes below mechanically expand below `core/v2/generations/G/`.
+This alias does not permit a different generation or a live selector change.
+
+| Directory | Exact members |
+| --- | --- |
+| `adapters/local-git-materializer/v1` | materialize.sh, object-closure.c, protocol.jq |
+| `config` | construction-mode.json |
+| `control/v1` | control-policy-set-sandbox-bound.json, control-policy-set.json, credential-policy-decision.json, credential-policy.jq, credential-policy.json, duty-separation-decision.json, duty-separation-policy.json, duty-separation.jq, evaluate-bound-sandbox.sh, evaluate-credential-policy.sh, evaluate-duty.sh, evaluate-evidence-integrity.sh, evaluate-kill-switch.sh, evaluate-risk-gates.sh, evaluate-sandbox.sh, evidence-integrity-decision.json, evidence-integrity-policy.json, evidence-integrity.jq, kill-switch-decision.json, kill-switch-policy.json, kill-switch.jq, policy-set.jq, risk-gates-decision.json, risk-gates-policy.json, risk-gates.jq, sandbox-bound-decision.json, sandbox-bound-policy.json, sandbox-bound.jq, sandbox-decision.json, sandbox-policy.json, sandbox.jq, validate.sh |
+| `core/v2` | generation-registry.json |
+| `core/v2/generations/G` | contracts.jq, core-ingress.sh, modules/profile_graph.jq, modules/result_facts.jq, modules/result_truth.jq, modules/schema.jq, modules/stage_request.jq |
+| `enforcement/v1` | accepted-identities.json, check-sandbox-receipt.sh, sandbox-receipt.jq |
+| `evals/v1` | replay-malicious.py (new) |
+| `maintenance/v1` | bands.jq, incident-to-eval.jq, incident-to-eval.sh |
+| `preparation/v1` | prepare-candidate.py |
+| `sandbox/v1` | build-guest.py, coverage-source.py, host-supervisor.py, runtime-vfkit.py |
+| `sandbox/v1/guest` | common.c, common.h, init.c, probe.c, supervisor.c, observation-values.c (new), observation-values.h (new) |
+| `scope/v1` | evaluate-scope.sh, generate-gate-evidence.py, read-shadow-evidence.py, scope-gates.jq, scope-policy.json, validate-scope.sh, workflow-scope.jq |
+| `scripts` | core-contract.sh |
+| `shadow/v1` | _cancel_release.c, _consumer.py, build-cancel-release.sh, enforced-reproduction.py, incident-record.jq, qualified-identity.jq, shadow-environments.json, validate-incident.sh, write-materialization-input.jq, write-shadow.py |
+| `telemetry/v1` | trace-ledger.jq, validate-trace-ledger.sh |
+| `verifiers/file-digest/v1` | verifier.c |
+
+The three new paths are part of the set, not spare capacity. Only `shadow_closure`
+gets the new cap of 84 in the eval and scope consumers; all other closures keep
+64 and their existing exact sets. The plan binds every final file digest, actual
+read edge and overlap. A new member returns through G2. One physical snapshot per
+path is reused across core/record/shadow closures only when size and bytes agree;
+it is charged once physically and retained in every logical closure that reads it.
+The normal evaluator driver/program/launcher and record closure remain separately
+pinned. The archived-data set remains exactly `eval-catalog.json` and `seed-set.json`.
+No source or policy moves into that archive set.
+
+Qualified recording runtime slots are a separate closed byte-input class. They
+are not replay executables: Python, jq, Git, bash, sudo, C compiler, helper binary,
+native-release binary and their build/dependency records; vfkit, runtime driver,
+vm_service, each dyld cache member; guest kernel, kernel config, init, supervisor,
+image, toolchain and verifier; the host configuration and the two source packages'
+collector/schema/config/accepted-set bytes. Each package uses the existing exact
+role schema. Repository source copies must equal their D member. Runtime slots
+cannot select a replay command or change a policy. No generic runtime collector is
+added. New real collection, retention and storage of these bytes needs its reserved
+recording/resource authorization before it occurs.
+
+The new resource proposal is a 4 GiB aggregate byte ceiling for that qualified
+runtime class, streamed in at most 64 KiB chunks, with at most 64 byte slots.
+This is an explicit replay-storage ceiling, not a claim about actual Mac runtime
+sizes. It permits large immutable identities without loading them in memory; it
+bounds two retained copies to 8 GiB. Identity paths have an unbounded dyld list in
+the existing host config, so this is a new recording eligibility bound, not a
+retroactive native-config rule. All required dyld members must fit; truncation,
+hash-only substitution or omitting a member is forbidden. A real runtime that
+exceeds either ceiling needs a normal G2 resource amendment before seed recording.
+No actual runtime byte inventory or permission is inferred by this design.
+
+All other source and ordinary trial-file limits stay at their existing owner
+limits. Source snapshots are each at most 16 MiB and their sum at most 32 MiB;
+source total is counted before any execution. The new raw observation class has a
+16 MiB aggregate ceiling: guest/host control records each at most 4 MiB, storage
+records at most 4 MiB and remaining primitives at most 4 MiB. Git/preparation uses
+its existing 256 MiB storage and 384 MiB scratch ceilings. Source page bytes remain
+at most 64 MiB per operation. Count bytes across overlapping fields and repeated
+reads; reject before allocation or write that would exceed a limit. No sparse-file,
+compressed-size or excluded-sidecar accounting shortcut. Existing timeouts remain;
+ordinary offline proof never claims CPU/wall enforcement or native qualification.
+
+#### E. Proof and remaining gates
+
+The high-risk plan must pin the exact old and new owner boundaries, all 84 final
+source hashes, the untouched wrapper/core exports, and the complete unmerged #439
+diff. It must include both real callers of each extracted function, not just unit
+imports. Keep the old live acquisition behavior and closed rejection tests.
+
+Required finite mechanism cases are: four well-formed synthetic observation sets
+that traverse the full fixed coordinator; every B row missing/extra/wrong type;
+each entropy/clock/stat/ACL/counter/source-page/runtime byte changed independently;
+one change in each C output family; wrong command order/extra command; wrong nonce
+reference; stale or foreign held observations; failed receipt/outcome/teardown;
+legacy/missing/partial capture; every resource bound at and above its limit; all
+three original malicious negatives; overlap with equal versus unequal bytes; and
+archive independence. Synthetic inputs prove mechanisms only, never real seeds.
+For each extracted owner, force its production call and its offline call to return
+a different byte: both paths must fail. Deleting either call must fail a test.
+
+In the already allowed `evals-malicious.test.sh`, `sandbox-launcher.test.sh` and
+guest tests, require the production and offline driver calls to use the same value
+owner. Cover valid running/stopped replies, wrong status, malformed JSON, 65536 /
+65537-byte bodies, each transport error phase, refused/accepted stop, confirmed
+stop, clean EOF, incomplete EOF/read error and timeout. Changing only a derived
+driver reply must fail byte comparison. Cover positive launch PID, zero/negative
+return, wait zero, matching/foreign PID, EINTR and deadline expiry before and after
+launch/wait. Changing only the launch PID must affect the existing matching test;
+no child_reaped fixture flag may bypass it. Ordinary fixtures prove these cases;
+none opens a socket, launches a guest or supplies native qualification.
+
+Retain all existing host-supervisor, guest-value, receipt, consumer, preparation,
+gate-generation, scope, eval, restoration and cancellation regressions. The shared
+C tests exercise counter rounding, deadline boundaries, accepted-stop versus merely
+requested stop, reaped versus reported stop, all five guest resource rows and CPU
+none. Preserve every known native failure and NOT RUN. No mock becomes a genuine
+source; no test changes a fixture into a shipped seed or uses external access.
+
+Current host source fixes CPU enforcement to `none`, and `derive_outcome` therefore
+cannot yield an enforcement-satisfied receipt for that source. The writer requires
+such a receipt. Tests must preserve this exact refusal. They may prove shared
+constructors, their real caller connections, complete rejected runs and byte
+comparison with synthetic data; they must not call a patched receipt or overridden
+CPU row a successful full recording. Full successful real traversal and the four
+real replay passes remain BLOCKED on the accepted native work and its fresh source
+pins. This is a retained #558 boundary, not a new permanent-refusal implementation.
+The coordinator must contain the complete success path, with no empty dispatch.
+
+Complete these mechanism paths on the same unpublished implementation attempt.
+Do not publish partial PR 1b, claim G3, close #439 or label either family seeded.
+Actual control/gate/enablement/scope, four real trials, S8, operator review labels,
+#558's original window and full native/source/restoration proof remain required.
+Runtime bytes or observation capture absent today do not prevent the defined pure
+source preparation; they prevent real recording/seed acceptance. CPUwall NONE,
+native BLOCKED, production EMPTY and automation PAUSED remain explicit.
+
 ### R5. The pinned replay closure
 
-`shadow_closure` lists every file the malicious replay runs or reads, by path and
-SHA-256, in the style of `expected_control_closure` (`evals.jq:62-92`). It contains at
-least the merged versions of `shadow/v1/reproduce.sh`, `shadow/v1/incident-record.jq`,
-`shadow/v1/validate-incident.sh`, `shadow/v1/assemble-materialization-input.sh`,
-`shadow/v1/materialization-input.jq`, `shadow/v1/qualified-identity.jq`,
-`adapters/local-git-materializer/v1/materialize.sh` and its object-closure helper,
-`scope/v1/evaluate-scope.sh`, `scope/v1/scope-gates.jq`, `scope/v1/workflow-scope.jq`,
-`control/v1/evaluate-risk-gates.sh`, `control/v1/evaluate-duty.sh`,
-`control/v1/evaluate-kill-switch.sh` with their policies, and
-`maintenance/v1/incident-to-eval.sh` with `incident-to-eval.jq`, plus the files that
-concerns 5, 6 and 9 add for the write-shadow record, enablement check and gate
-evidence. The plan enumerates the final list from those merged files. A changed
+`shadow_closure` lists the exact repository source and policy set in R4A.D,
+by path and SHA-256, in the style of `expected_control_closure`
+(`evals.jq:62-92`). That source-bound list replaces the earlier provisional
+reproduce/assemble recipe. The plan binds its final merged versions. A changed
 closure file changes the evaluator document, so old results are never read as new.
 
-**Two disjoint lists.** Every file the replay reads is in exactly one of them:
+**Two disjoint repository lists.** Repository source/policy and archived catalog
+data are separated below. Trial inputs, primitive observations and qualified
+byte-only runtime inputs have the distinct closed inventories in R4A; none may
+supply replay code or policy. Every repository file the replay reads is in exactly
+one of these lists:
 - *Pinned closure* (above): every executable replay component and every policy or
   program file it reads, including `scope/v1/scope-gates.jq`, which PR 1b changes
   (R3.3). The malicious trials are recorded after PR 1b lands, so they bind its
@@ -256,10 +612,10 @@ closure file changes the evaluator document, so old results are never read as ne
   runtime copy; `incident-to-eval.sh` is unchanged. So the other seed PR's catalog
   change moves no closure digest, `evals.jq` pin or recorded skeleton byte.
 
-The plan lists both sets, checks they are disjoint and together cover every file the
-replay opens, and repeats the grep over the files concerns 5, 6 and 9 add. A new data
-file found there is archived the same way only if it holds no code; an executable file
-always goes in the closure.
+The plan lists both sets, checks they are disjoint and covers every read together
+with R4A's other fixed input classes. It repeats the read-edge check over the actual
+owners. A new repository member returns through G2; it cannot be classified as data
+to evade the source cap. Executable and policy files always belong to the closure.
 
 ### R6. `reviewer-severity-false-positive-negative`: which verdicts qualify
 
@@ -435,7 +791,28 @@ always goes in the closure.
    `scripts/test/evals-dashboard.test.sh`, `scripts/test/scope-qualification.test.sh`,
    `scripts/test/evals-framework.test.sh` (new shapes, with fixtures the test builds
    and never commits as seeds), `scripts/test/shadow-self-host-evidence.test.sh`,
-   `docs/components.md`, `RESTORE.md`. PR 2 and PR 3 each: `evals/v1/eval-catalog.json`,
+   `docs/components.md`, `RESTORE.md`. For R4A only, PR 1b also permits these exact
+   paths: `evals/v1/replay-malicious.py`, `shadow/v1/write-shadow.py`,
+   `shadow/v1/enforced-reproduction.py`, `shadow/v1/_consumer.py`,
+   `preparation/v1/prepare-candidate.py`, `sandbox/v1/host-supervisor.py`,
+   `sandbox/v1/runtime-vfkit.py`, `sandbox/v1/coverage-source.py`,
+   `sandbox/v1/build-guest.py`,
+   `sandbox/v1/guest/supervisor.c`, `sandbox/v1/guest/common.c`,
+   `sandbox/v1/guest/common.h`, `sandbox/v1/guest/observation-values.c`,
+   `sandbox/v1/guest/observation-values.h`, `verifiers/file-digest/v1/verifier.c`,
+   `scope/v1/read-shadow-evidence.py`, `scope/v1/generate-gate-evidence.py`,
+   `scripts/test/evals-malicious.test.sh`, `scripts/test/sandbox-launcher.test.sh`,
+   `scripts/test/sandbox-guest.test.sh`, `scripts/test/sandbox-guest-harness.c`,
+   `scripts/test/sandbox-receipt.test.sh`, `scripts/test/shadow-enforced.test.sh`,
+   `scripts/test/shadow-write.test.sh`, `scripts/test/scope-gate-generation.test.sh`,
+   `scripts/test/candidate-content-preparation.test.sh`,
+   `scripts/test/candidate-content-preparation-fixtures.py`,
+   `scripts/test/file-digest-verifier.test.sh`, `ci/required-files.txt`.
+   The latter adds only new restore-critical R4A paths. No workflow, installed
+   configuration, profile or runtime selection changes. Existing immutable pins
+   outside these paths that would need change stop implementation for a bounded
+   artifact correction; they may not be silently bypassed.
+   PR 2 and PR 3 each: `evals/v1/eval-catalog.json`,
    their seed set and seed directory, `evals/v1/evals-driver.sh` and
    `evals/v1/evals-launcher.sh` for the pins of R9.4 only, their new test,
    `scripts/test/evals-framework.test.sh`, `scripts/test/evals-dashboard.test.sh`,
@@ -496,12 +873,17 @@ in CI; wiring the record report into anything but the relay; enablement.
 
 - **Risk is high.** Eval policy, seed and scope-gate change. An operator-merged
   plan-only PR precedes code.
-- **Size.** 各批计划按完整机制与测试给出范围。不能为压缩范围删测试或交付空实现。
-  本 spec amendment 为 `review_size: standard`，只补足同一 eval 机制的 scope
-  内容摘要绑定及必要路径、测试。
+- **Size.** This spec amendment uses `review_size: accepted-exception` with a
+  300–650 changed-line range for the one malicious replay recipe: raw field table,
+  shared owners, exact closure, resource bounds and proof. The separate high-risk
+  plan must set the whole PR 1b implementation range, including the preserved relay
+  code, every owner extraction and all tests. It must count inherited code and
+  failed/retained proof; no partial implementation is a finished PR. Do not trim
+  requirements or tests to meet the soft line budget.
 - **Unmerged siblings.** Invariant fields and part of the closure come from
-  concerns 5, 6 and 9. R1 permits only the mapped review mechanism to start first.
-  Missing actual source or an unresolved S10 recipe stops the dependent work;
+  concerns 5, 6 and 9. R1 and R4A permit mapped inactive source preparation after
+  their exact dependency and high-risk plan gates. Missing actual source or a new
+  unresolved field stops that dependent segment;
   preflight never replaces merged dependencies or their final proof.
 - **The forge-text trial is structural.** No component in the closure accepts forge
   text, so it passes by construction. Its value is regression: a later component that
