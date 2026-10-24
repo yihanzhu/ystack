@@ -991,7 +991,10 @@ def read_store_attempt(anchor: Anchor, attempt_id: str, *,
                 raise
 
 class _CoverageConfiguration:
-    def __init__(self, anchor):
+    def __init__(self, anchor, operation="coverage-read"):
+        _require(operation in {"coverage-read", "kill-register-read"}, "E_CONFIG")
+        self.operation = operation
+        prefix = "coverage-source" if operation == "coverage-read" else "kill-register-source"
         import importlib.util
         self.anchor, self.held = anchor, []
         try:
@@ -1001,8 +1004,8 @@ class _CoverageConfiguration:
                 item = _open_child(root, name, False, rule, "E_CONFIG")
                 self.held.append(item)
                 return item.read(DOCUMENT_LIMIT, "E_CONFIG")
-            self.config_raw = child("coverage-source-config.json")
-            self.accepted_raw = child("coverage-source-accepted-identities.json")
+            self.config_raw = child(prefix + "-config.json")
+            self.accepted_raw = child(prefix + "-accepted-identities.json")
             normalizer = _open_child(root, "coverage-source.py", False, rule, "E_INSTALL")
             self.held.append(normalizer)
             normalizer_raw = normalizer.read(EXECUTABLE_LIMIT, "E_INSTALL")
@@ -1014,9 +1017,10 @@ class _CoverageConfiguration:
             _require(spec is not None and spec.loader is not None, "E_INSTALL")
             self.normalizer = importlib.util.module_from_spec(spec)
             exec(compile(normalizer_raw, normalizer.path, "exec"), self.normalizer.__dict__)
-            n = self.normalizer
+            n = self.normalizer if operation == "coverage-read" else self.normalizer._KillNormalizer
+            self.normalizer = n
             self.config = n.source_config(self.config_raw, anchor.config)["body"]
-            _require(self.config["accepted_set_path"] == ANCHOR + "/coverage-source-accepted-identities.json", "E_CONFIG")
+            _require(self.config["accepted_set_path"] == ANCHOR + "/" + prefix + "-accepted-identities.json", "E_CONFIG")
             package_file = _open_held(self.config["source_package_path"], False, rule, "E_INSTALL")
             self.held.append(package_file)
             self.package_raw = package_file.read(DOCUMENT_LIMIT, "E_INSTALL")
@@ -1059,14 +1063,16 @@ class _CoverageConfiguration:
         _close_paths(held)
 
 
-def load_coverage_configuration(anchor):
+def load_coverage_configuration(anchor, operation="coverage-read"):
+    _require(operation in {"coverage-read", "kill-register-read"}, "E_CONFIG")
+    prefix = "coverage-source" if operation == "coverage-read" else "kill-register-source"
     root = next(item for item in anchor.held if item.path == ANCHOR)
     names = set(os.listdir(root.fd))
-    optional = {"coverage-source-config.json", "coverage-source-accepted-identities.json"}
+    optional = {prefix + "-config.json", prefix + "-accepted-identities.json"}
     if not (names & optional):
         return None
     _require(optional <= names, "E_CONFIG")
-    return _CoverageConfiguration(anchor)
+    return _CoverageConfiguration(anchor, operation)
 
 
 class _HeldCoverageRead(_HeldStoreRead):
@@ -1107,7 +1113,7 @@ def read_coverage_attempt(anchor, configuration, request_raw, *, _owner=None):
         _require(set(os.listdir(attempt.fd)) == {"receipt.json", "payload"}
                  and set(os.listdir(payload.fd)) == {"request.json", "raw-manifest.json", "observation.json", "raw"}, "E_STORE")
         names = sorted(os.listdir(raw_dir.fd))
-        _require(3 <= len(names) <= n.PAGE_LIMIT and names == [f"{index:04d}" for index in range(len(names))], "E_STORE")
+        _require(len(n.FAMILIES) <= len(names) <= n.PAGE_LIMIT and names == [f"{index:04d}" for index in range(len(names))], "E_STORE")
         total = 0
         fixed = [(attempt, "receipt.json", "receipt.json"),
                  *[(payload, name, "payload/" + name) for name in ("request.json", "raw-manifest.json", "observation.json")],
@@ -1317,9 +1323,16 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
         return output == canonical([gid])
 
     def coverage_source(self, request_raw):
+        return self._source_read(request_raw, "coverage-read")
+
+    def kill_register_source(self, request_raw):
+        return self._source_read(request_raw, "kill-register-read")
+
+    def _source_read(self, request_raw, operation):
+        _require(operation in {"coverage-read", "kill-register-read"}, "E_RUNTIME")
         ledger = self.ledger
         anchor = ledger.anchor_for()
-        configuration = ledger.coverage_configuration
+        configuration = ledger.coverage_configuration if operation == "coverage-read" else ledger.kill_configuration
         _require(isinstance(configuration, _CoverageConfiguration), "E_RUNTIME")
         configuration.normalizer.request(request_raw)
         sudo = _hold_bytes("/usr/bin/sudo", EXECUTABLE_LIMIT, "E_DEPENDENCY", hardlinks=True)
@@ -1328,7 +1341,7 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
             supervisor = next(item for item in anchor.held if item.path == ANCHOR + "/host-supervisor.py")
             supervisor_sha = digest(supervisor.read(EXECUTABLE_LIMIT, "E_DEPENDENCY"))
             argv = ["/usr/bin/sudo", "-n", "-u", "#" + str(anchor.config["principal_uid"]), "--",
-                    self.python.held.path, "-I", "-S", "-B", supervisor.path, "coverage-read"]
+                    self.python.held.path, "-I", "-S", "-B", supervisor.path, operation]
             self.recheck()
             sudo.recheck("E_DEPENDENCY")
             configuration.recheck()
@@ -1379,7 +1392,8 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
                 selector.register(child.stdin, selectors.EVENT_WRITE)
             else:
                 child.stdin.close()
-            end, sent = time.monotonic() + timeout, 0
+            end, sent = min(time.monotonic() + timeout, self.deadline - 10), 0
+            _require(end > time.monotonic(), "E_RUNTIME")
             while selector.get_map():
                 _require(not cancelled[0] and time.monotonic() < end, "E_RUNTIME")
                 for key, events in selector.select(min(0.1, max(0, end - time.monotonic()))):
@@ -1422,7 +1436,7 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
                     except BaseException as cleanup_exc:
                         cleanup_errors.append(cleanup_exc)
                 try:
-                    child.wait(timeout=10)
+                    child.wait(timeout=max(0.001, min(10, self.deadline - time.monotonic())))
                 except BaseException as cleanup_exc:
                     cleanup_errors.append(cleanup_exc)
             if cleanup_errors:

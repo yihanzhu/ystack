@@ -140,7 +140,12 @@ DOCUMENT_NAMES = ("scope", "shadow-set", "dashboard", "risk", "kill", "duty", "m
 def request(raw):
     value = document(raw)
     body = envelope(value, "coverage_source_request")
-    exact(body, REQUEST_FIELDS)
+    require(set(body) in (REQUEST_FIELDS, REQUEST_FIELDS | {"initial_origin_refs", "gate_call_ref"}))
+    if "gate_call_ref" in body:
+        reference(body["gate_call_ref"])
+        sorted_unique(body["initial_origin_refs"], canonical, 1, 128)
+        for row in body["initial_origin_refs"]:
+            reference(row)
     require(body["attempt_id"] == value["id"])
     sha(body["nonce"])
     require(value["id"] == "coverage." + body["nonce"])
@@ -180,18 +185,18 @@ def cursor(value):
         text(value, 1024)
 
 
-def capture_rows(value):
+def capture_rows(value, families=FAMILIES):
     exact(value, {"pages"})
     rows = value["pages"]
-    require(type(rows) is list and 3 <= len(rows) <= PAGE_LIMIT)
+    require(type(rows) is list and len(families) <= len(rows) <= PAGE_LIMIT)
     family_index = -1
     previous = None
     index = 0
     seen_cursors = set()
     for row in rows:
         exact(row, {"family", "page_index", "response_status", "input_cursor", "output_cursor"})
-        require(row["family"] in FAMILIES)
-        selected = FAMILIES.index(row["family"])
+        require(row["family"] in families)
+        selected = families.index(row["family"])
         if selected != family_index:
             require(selected == family_index + 1 and previous is None)
             family_index, index = selected, 0
@@ -208,14 +213,14 @@ def capture_rows(value):
         index += 1
         if previous is None:
             require(row is rows[-1] or rows[rows.index(row) + 1]["family"] != row["family"])
-    require(family_index == len(FAMILIES) - 1 and previous is None)
+    require(family_index == len(families) - 1 and previous is None)
     return rows
 
 
-def captured(records, request_raw):
+def captured(records, request_raw, families=FAMILIES):
     require(type(records) is list and 4 <= len(records) <= PAGE_LIMIT + 1
             and records[0][0] == b"capture.json")
-    rows = capture_rows(document(records[0][1]))
+    rows = capture_rows(document(records[0][1]), families)
     require(len(rows) == len(records) - 1)
     pages = []
     manifest = []
@@ -231,7 +236,7 @@ def captured(records, request_raw):
     return raw_manifest, pages
 
 
-def manifest(raw, pages, request_raw):
+def manifest(raw, pages, request_raw, families=FAMILIES):
     value = document(raw)
     exact(value, {"pages"})
     require(type(value["pages"]) is list and len(value["pages"]) == len(pages))
@@ -244,7 +249,7 @@ def manifest(raw, pages, request_raw):
                 and row["raw_sha256"] == digest(page) and row["request_sha256"] == digest(request_raw))
         capture.append({key: row[key] for key in ("family", "page_index", "response_status", "input_cursor", "output_cursor")})
     require(sum(map(len, pages)) <= RAW_LIMIT)
-    capture_rows({"pages": capture})
+    capture_rows({"pages": capture}, families)
     return value["pages"]
 
 
@@ -479,3 +484,334 @@ def receipt(raw, request_raw, config, source, raw_manifest, observation):
             and re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", body["completed_at"]) is not None
             and utc(body["started_at"]) <= utc(body["completed_at"]))
     return value
+
+
+KILL_OPERATION = "kill-register-read.v1"
+KILL_FAMILIES = ("repository-default-branch", "first-parent-register-history",
+                 "default-branch-ref-history", "operator-merges")
+KILL_QUERIES = [{"family": family, "schema_version": 1} for family in KILL_FAMILIES]
+KILL_BINDINGS = {"basis_ref", "claim_ref", "stage_request_ref", "resolved_profile_ref", "stage_result_ref",
+                 "policy_set_ref", "shadow_set_ref", "dashboard_ref", "marker_ref", "runtime_ref",
+                 "source_package_ref", "source_accepted_set_ref"}
+
+
+def kill_bootstrap(value):
+    exact(value, {"commit_id", "register_sha256", "revision", "authority_epoch", "owner_identity", "event_sequence"})
+    oid(value["commit_id"])
+    sha(value["register_sha256"])
+    integer(value["revision"], 1)
+    identity(value["authority_epoch"])
+    reference(value["owner_identity"])
+    integer(value["event_sequence"])
+
+
+def kill_register(raw):
+    value = document(raw)
+    body = envelope(value, "kill_switch_register")
+    exact(body, {"revision", "authority_epoch", "entries", "write_entries"})
+    integer(body["revision"], 1)
+    identity(body["authority_epoch"])
+    sorted_unique(body["entries"], lambda row: (row["scope_kind"], row["scope_id"]), maximum=1024)
+    for row in body["entries"]:
+        exact(row, {"scope_kind", "scope_id", "state"})
+        require(row["scope_kind"] in {"global", "repository", "workflow"})
+        if row["scope_kind"] == "global":
+            require(row["scope_id"] == "*")
+        else:
+            identity(row["scope_id"])
+        require(row["state"] in {"cleared", "stop"})
+    sorted_unique(body["write_entries"], lambda row: row["scope_id"], maximum=1024)
+    for row in body["write_entries"]:
+        exact(row, {"scope_id", "state"})
+        identity(row["scope_id"])
+        require(row["state"] in {"cleared", "stop"})
+    return value
+
+
+def kill_request(raw):
+    value = document(raw)
+    body = envelope(value, "kill_register_source_request")
+    exact(body, KILL_BINDINGS | {"operation", "version", "call_id", "nonce", "target_repository_id",
+        "control_repository", "default_branch", "bootstrap", "bundle_refs", "initial_origin_refs", "git_observation_sha256"})
+    require(body["operation"] == KILL_OPERATION and type(body["version"]) is int and body["version"] == 1)
+    sha(body["nonce"])
+    require(value["id"] == body["call_id"] == "kill-register." + body["nonce"])
+    identity(body["target_repository_id"])
+    exact(body["control_repository"], {"repository_id", "node_id", "hash_algorithm"})
+    identity(body["control_repository"]["repository_id"])
+    text(body["control_repository"]["node_id"], 256)
+    require(body["control_repository"]["hash_algorithm"] in {"sha1", "sha256"})
+    exact(body["default_branch"], {"name", "node_id"})
+    for item in body["default_branch"].values():
+        text(item, 256)
+    kill_bootstrap(body["bootstrap"])
+    for name in KILL_BINDINGS:
+        reference(body[name])
+    for name in ("bundle_refs", "initial_origin_refs"):
+        sorted_unique(body[name], canonical, 1, 128)
+        for row in body[name]:
+            reference(row)
+    sha(body["git_observation_sha256"])
+    return value
+
+
+def _git_object(raw_hex, kind, expected, algorithm):
+    require(type(raw_hex) is str and len(raw_hex) <= 2 * DOCUMENT_LIMIT
+            and re.fullmatch(r"(?:[0-9a-f]{2})*", raw_hex) is not None)
+    raw = bytes.fromhex(raw_hex)
+    oid(expected, algorithm)
+    framed = kind.encode() + b" " + str(len(raw)).encode() + b"\0" + raw
+    require(hashlib.new(algorithm, framed).hexdigest() == expected)
+    return raw
+
+
+def _kill_commit(row, algorithm):
+    exact(row, {"commit_id", "commit_hex", "trees", "register_hex"})
+    raw = _git_object(row["commit_hex"], "commit", row["commit_id"], algorithm)
+    headers, separator, _message = raw.partition(b"\n\n")
+    require(separator and b"\0" not in headers)
+    lines = headers.split(b"\n")
+    require(lines[0].startswith(b"tree "))
+    tree_id = lines[0][5:].decode("ascii")
+    oid(tree_id, algorithm)
+    parents = [line[7:].decode("ascii") for line in lines if line.startswith(b"parent ")]
+    for parent in parents:
+        oid(parent, algorithm)
+    require(len(parents) == len(set(parents)))
+    require(type(row["trees"]) is list and len(row["trees"]) == 2)
+    wanted = (b"config", b"kill-switch.json")
+    for index, proof in enumerate(row["trees"]):
+        exact(proof, {"oid", "raw_hex"})
+        require(proof["oid"] == tree_id)
+        tree = _git_object(proof["raw_hex"], "tree", tree_id, algorithm)
+        width = 20 if algorithm == "sha1" else 32
+        entries, names = [], set()
+        while tree:
+            prefix, nul, remaining = tree.partition(b"\0")
+            require(nul and len(remaining) >= width)
+            mode, space, name = prefix.partition(b" ")
+            require(space and name and b"/" not in name and name not in {b".", b".."}
+                    and name not in names and mode in {b"40000", b"100644", b"100755", b"120000", b"160000"})
+            names.add(name)
+            entries.append((name + (b"/" if mode == b"40000" else b""), mode, name, remaining[:width].hex()))
+            tree = remaining[width:]
+        require([entry[0] for entry in entries] == sorted(entry[0] for entry in entries))
+        selected = [entry for entry in entries if entry[2] == wanted[index]]
+        require(len(selected) == 1 and selected[0][1] == (b"40000" if index == 0 else b"100644"))
+        tree_id = selected[0][3]
+    register_raw = _git_object(row["register_hex"], "blob", tree_id, algorithm)
+    register = kill_register(register_raw)
+    return {"commit_id": row["commit_id"], "parents": parents, "tree_id": lines[0][5:].decode(),
+            "register_blob": tree_id, "register_sha256": digest(register_raw), "register": register}, register_raw
+
+
+def kill_normalize(raw_manifest, pages, request_raw):
+    body = kill_request(request_raw)["body"]
+    rows = manifest(raw_manifest, pages, request_raw, KILL_FAMILIES)
+    grouped = {family: [] for family in KILL_FAMILIES}
+    for row, raw in zip(rows, pages):
+        page = document(raw, raw_page=True)
+        require(type(page.get("schema_version")) is int and page["schema_version"] == 1)
+        grouped[row["family"]].append(page)
+    require(len(grouped[KILL_FAMILIES[0]]) == 1)
+    snapshot = grouped[KILL_FAMILIES[0]][0]
+    exact(snapshot, {"schema_version", "repository", "default_branch", "before", "after", "start_sequence", "end_sequence"})
+    require(snapshot["repository"] == body["control_repository"] and snapshot["default_branch"] == body["default_branch"])
+    algorithm = body["control_repository"]["hash_algorithm"]
+    for role in ("before", "after"):
+        exact(snapshot[role], {"commit_id", "observed_at"})
+        oid(snapshot[role]["commit_id"], algorithm)
+        utc(snapshot[role]["observed_at"])
+    require(snapshot["before"]["commit_id"] == snapshot["after"]["commit_id"]
+            and utc(snapshot["before"]["observed_at"]) <= utc(snapshot["after"]["observed_at"]))
+    integer(snapshot["start_sequence"])
+    integer(snapshot["end_sequence"], snapshot["start_sequence"])
+    require(snapshot["start_sequence"] == body["bootstrap"]["event_sequence"])
+    commits, raws = [], []
+    for page in grouped[KILL_FAMILIES[1]]:
+        exact(page, {"schema_version", "commits"})
+        require(type(page["commits"]) is list)
+        for row in page["commits"]:
+            facts, raw = _kill_commit(row, algorithm)
+            commits.append(facts)
+            raws.append(raw)
+    require(1 <= len(commits) <= 4096 and len({row["commit_id"] for row in commits}) == len(commits)
+            and commits[0]["commit_id"] == body["bootstrap"]["commit_id"]
+            and commits[-1]["commit_id"] == snapshot["after"]["commit_id"])
+    boot = body["bootstrap"]
+    require(commits[0]["register_sha256"] == boot["register_sha256"]
+            and commits[0]["register"]["body"]["revision"] == boot["revision"])
+    changes = []
+    for index, row in enumerate(commits):
+        register = row["register"]["body"]
+        require(register["authority_epoch"] == boot["authority_epoch"])
+        if index:
+            previous = commits[index - 1]
+            require(row["parents"] and row["parents"][0] == previous["commit_id"])
+            if raws[index] != raws[index - 1]:
+                require(register["revision"] > previous["register"]["body"]["revision"])
+                changes.append(row)
+    events = []
+    for page in grouped[KILL_FAMILIES[2]]:
+        exact(page, {"schema_version", "events"})
+        require(type(page["events"]) is list)
+        events.extend(page["events"])
+    require(len(events) == snapshot["end_sequence"] - snapshot["start_sequence"] and len(events) <= 4096)
+    cursor_commit = commits[0]["commit_id"]
+    positions = {row["commit_id"]: index for index, row in enumerate(commits)}
+    previous_time = None
+    for sequence, event in enumerate(events, snapshot["start_sequence"] + 1):
+        exact(event, {"sequence", "before", "after", "branch_node_id", "actor", "action", "at"})
+        require(type(event["sequence"]) is int and event["sequence"] == sequence
+                and event["branch_node_id"] == body["default_branch"]["node_id"] and event["action"] == "update"
+                and event["before"] == cursor_commit and event["after"] in positions
+                and positions[event["after"]] > positions[cursor_commit])
+        reference(event["actor"])
+        instant = utc(event["at"])
+        require((previous_time is None or previous_time <= instant) and instant <= utc(snapshot["after"]["observed_at"]))
+        previous_time, cursor_commit = instant, event["after"]
+    require(cursor_commit == commits[-1]["commit_id"])
+    merges = []
+    for page in grouped[KILL_FAMILIES[3]]:
+        exact(page, {"schema_version", "merges"})
+        require(type(page["merges"]) is list)
+        merges.extend(page["merges"])
+    require(len(merges) == len(changes))
+    seen = set()
+    for row, changed in zip(merges, changes):
+        exact(row, {"pull_request_id", "repository_node_id", "branch_node_id", "base", "head", "merge", "parents",
+                    "path", "blob_oid", "actor", "owner_authorization", "merged_at"})
+        text(row["pull_request_id"], 256)
+        require(row["pull_request_id"] not in seen)
+        seen.add(row["pull_request_id"])
+        require(row["repository_node_id"] == body["control_repository"]["node_id"]
+                and row["branch_node_id"] == body["default_branch"]["node_id"]
+                and row["merge"] == changed["commit_id"] and row["parents"] == changed["parents"]
+                and len(row["parents"]) == 2 and row["base"] == row["parents"][0] and row["head"] == row["parents"][1]
+                and row["path"] == "config/kill-switch.json" and row["blob_oid"] == changed["register_blob"]
+                and row["actor"] == boot["owner_identity"])
+        exact(row["owner_authorization"], {"identity", "repository_node_id", "permission", "valid_at"})
+        require(row["owner_authorization"] == {"identity": boot["owner_identity"],
+            "repository_node_id": body["control_repository"]["node_id"], "permission": "owner", "valid_at": row["merged_at"]})
+        require(utc(row["merged_at"]) <= utc(snapshot["after"]["observed_at"]))
+        matching = [event for event in events if event["after"] == row["merge"]]
+        require(len(matching) == 1 and matching[0]["actor"] == row["actor"] and matching[0]["before"] == row["base"])
+    result = {"repository": snapshot["repository"], "default_branch": snapshot["default_branch"],
+        "snapshots": {role: snapshot[role] for role in ("before", "after")}, "bootstrap": boot,
+        "first_parent_commits": [{key: value for key, value in row.items() if key != "register"} for row in commits],
+        "ref_events": events, "operator_merges": merges, "register": commits[-1]["register"],
+        "register_sha256": digest(raws[-1])}
+    raw = canonical(result)
+    require(len(raw) <= DOCUMENT_LIMIT)
+    return raw
+
+
+class _KillNormalizer:
+    """The second literal operation shares the existing installed source boundary."""
+    OPERATION, FAMILIES, QUERIES = KILL_OPERATION, KILL_FAMILIES, KILL_QUERIES
+    DOCUMENT_LIMIT, PAGE_LIMIT, RAW_LIMIT = DOCUMENT_LIMIT, PAGE_LIMIT, RAW_LIMIT
+    request = staticmethod(kill_request)
+    normalize = staticmethod(kill_normalize)
+    doc_ref, digest, require = staticmethod(doc_ref), staticmethod(digest), staticmethod(require)
+    source_identity = staticmethod(source_identity)
+
+    @staticmethod
+    def captured(records, request_raw):
+        return captured(records, request_raw, KILL_FAMILIES)
+
+    @staticmethod
+    def query(body):
+        return {key: body[key] for key in ("control_repository", "default_branch", "bootstrap")} | {"families": KILL_QUERIES}
+
+    @staticmethod
+    def source_config(raw, host):
+        value = document(raw)
+        body = envelope(value, "kill_register_source_config")
+        exact(body, {"source_id", "operation", "queries", "source_package_path", "source_package_sha256", "collector_path",
+            "collector_sha256", "accepted_set_path", "accepted_set_sha256", "store_id", "principal_uid", "consumer_gid",
+            "control_repository", "default_branch", "bootstrap"})
+        require(body["operation"] == KILL_OPERATION and body["queries"] == KILL_QUERIES)
+        identity(body["source_id"])
+        for key in ("source_package_path", "collector_path", "accepted_set_path"):
+            physical(body[key])
+        for key in ("source_package_sha256", "collector_sha256", "accepted_set_sha256"):
+            sha(body[key])
+            require(body[key] not in {"0" * 64, "1" * 64})
+        for key in ("store_id", "principal_uid", "consumer_gid"):
+            require(body[key] == host[key] and type(body[key]) is type(host[key]))
+        kill_bootstrap(body["bootstrap"])
+        exact(body["control_repository"], {"repository_id", "node_id", "hash_algorithm"})
+        identity(body["control_repository"]["repository_id"])
+        text(body["control_repository"]["node_id"], 256)
+        require(body["control_repository"]["hash_algorithm"] in {"sha1", "sha256"})
+        exact(body["default_branch"], {"name", "node_id"})
+        for item in body["default_branch"].values():
+            text(item, 256)
+        return value
+
+    @staticmethod
+    def package(raw, config):
+        require(digest(raw) == config["source_package_sha256"])
+        value = document(raw)
+        body = envelope(value, "kill_register_source_package")
+        exact(body, {"operation", "files"})
+        require(body["operation"] == KILL_OPERATION)
+        names = {"normalizer", "collector"} | {"schema." + family for family in KILL_FAMILIES}
+        sorted_unique(body["files"], lambda row: row["role"], 6, 6)
+        require({row["role"] for row in body["files"]} == names)
+        paths = set()
+        for row in body["files"]:
+            exact(row, {"role", "path", "sha256"})
+            physical(row["path"])
+            sha(row["sha256"])
+            require(row["sha256"] not in {"0" * 64, "1" * 64} and row["path"] not in paths)
+            paths.add(row["path"])
+            if row["role"] == "collector":
+                require(row["path"] == config["collector_path"] and row["sha256"] == config["collector_sha256"])
+        return value
+
+    @staticmethod
+    def query_schema(raw, family):
+        fields = {KILL_FAMILIES[0]: ["after", "before", "default_branch", "end_sequence", "repository", "schema_version", "start_sequence"],
+                  KILL_FAMILIES[1]: ["commits", "schema_version"], KILL_FAMILIES[2]: ["events", "schema_version"],
+                  KILL_FAMILIES[3]: ["merges", "schema_version"]}
+        require(family in fields and document(raw) == {"schema_version": 1, "family": family,
+            "operation": KILL_OPERATION, "page_fields": fields[family]})
+
+    @staticmethod
+    def accepted(raw, config, supervisor_sha256, package_sha256, collector_sha256, normalizer_sha256):
+        require(digest(raw) == config["accepted_set_sha256"])
+        body = envelope(document(raw), "kill_register_source_accepted_identity_set")
+        exact(body, {"activation_state", "identities"})
+        expected = {"source_id": config["source_id"], "operation": KILL_OPERATION, "proof_state": "qualified",
+            "host_supervisor_sha256": supervisor_sha256, "source_package_sha256": package_sha256,
+            "collector_sha256": collector_sha256, "normalizer_sha256": normalizer_sha256}
+        require(body["activation_state"] == "inactive" and body["identities"] == [expected])
+        for key, value in expected.items():
+            if key.endswith("sha256"):
+                sha(value)
+                require(value not in {"0" * 64, "1" * 64})
+
+    @staticmethod
+    def receipt(raw, request_raw, host, source, raw_manifest, observation):
+        requested = kill_request(request_raw)
+        value = document(raw)
+        body = envelope(value, "kill_register_source_receipt")
+        exact(body, {"operation", "version", "store_id", "call_id", "request_sha256", "source_identity", "query",
+                     "raw_manifest_sha256", "observation_sha256", "started_at", "completed_at", "outcome", "effects"})
+        require(value["id"] == requested["id"] and body["call_id"] == requested["id"]
+                and body["operation"] == KILL_OPERATION and type(body["version"]) is int and body["version"] == 1
+                and body["store_id"] == host["store_id"] and body["request_sha256"] == digest(request_raw)
+                and body["source_identity"] == source and body["query"] == _KillNormalizer.query(requested["body"])
+                and body["raw_manifest_sha256"] == digest(raw_manifest) and body["observation_sha256"] == digest(observation)
+                and body["outcome"] == "complete" and body["effects"] == ["read-forge-metadata", "read-register"]
+                and utc(body["started_at"]) <= utc(body["completed_at"]))
+        return value
+
+
+def _operation(operation):
+    require(operation in {"coverage-read", "kill-register-read"})
+    if operation == "kill-register-read":
+        return _KillNormalizer
+    import sys
+    return sys.modules[__name__]

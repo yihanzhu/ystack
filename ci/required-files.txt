@@ -594,3 +594,4 @@ scripts/test/shadow-write.test.sh
 scope/v1/read-shadow-evidence.py
 .github/workflows/scope-genuine-macos.yml
 sandbox/v1/coverage-source.py
+scripts/test/scope-gate-generation.test.sh

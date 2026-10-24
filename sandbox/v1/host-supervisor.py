@@ -2960,7 +2960,10 @@ def cmd_digest(argv):
 
 
 class _CoverageInstallation:
-    def __init__(self):
+    def __init__(self, operation="coverage-read"):
+        require(operation in {"coverage-read", "kill-register-read"}, "E_USAGE")
+        self.operation = operation
+        prefix = "coverage-source" if operation == "coverage-read" else "kill-register-source"
         import types
         self.held, self.files = [], {}
         try:
@@ -2973,10 +2976,11 @@ class _CoverageInstallation:
             normalizer_raw = self.open(self.root + "/coverage-source.py", 1024 * 1024)
             self.n = types.ModuleType("coverage_source")
             exec(compile(normalizer_raw, self.root + "/coverage-source.py", "exec"), self.n.__dict__)
-            n = self.n
-            config_raw = self.open(self.root + "/coverage-source-config.json", n.DOCUMENT_LIMIT)
+            n = self.n if operation == "coverage-read" else self.n._KillNormalizer
+            self.n = n
+            config_raw = self.open(self.root + "/" + prefix + "-config.json", n.DOCUMENT_LIMIT)
             self.config = n.source_config(config_raw, self.host)["body"]
-            require(self.config["accepted_set_path"] == self.root + "/coverage-source-accepted-identities.json", "E_CONFIG")
+            require(self.config["accepted_set_path"] == self.root + "/" + prefix + "-accepted-identities.json", "E_CONFIG")
             self.accepted_raw = self.open(self.config["accepted_set_path"], n.DOCUMENT_LIMIT)
             self.package_raw = self.open(self.config["source_package_path"], n.DOCUMENT_LIMIT)
             package = n.package(self.package_raw, self.config)
@@ -3071,7 +3075,7 @@ def _coverage_collector(installation, request_raw):
         for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
             old[number] = signal.signal(number, cancel)
         installation.recheck()
-        child = subprocess.Popen([installation.config["collector_path"], "coverage-read.v1"],
+        child = subprocess.Popen([installation.config["collector_path"], installation.n.OPERATION],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             env={"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"}, close_fds=True, start_new_session=True)
         outputs = {child.stdout.fileno(): bytearray(), child.stderr.fileno(): bytearray()}
@@ -3179,16 +3183,20 @@ def write_coverage_payload(attempt_fd, uid, gid, request_raw, raw_manifest, obse
 
 
 def run_coverage_read(argv):
-    installation = _CoverageInstallation()
+    require(argv in (["coverage-read"], ["kill-register-read"]), "E_USAGE")
+    operation = argv[0]
+    installation = _CoverageInstallation(operation)
     store = work = nonce_dir = attempt = None
     try:
-        require(argv == ["coverage-read"], "E_USAGE")
+        require(argv == [operation], "E_USAGE")
         n, host = installation.n, installation.host
         request_raw = sys.stdin.buffer.read(n.DOCUMENT_LIMIT + 1)
         requested = n.request(request_raw)
         body = requested["body"]
         require(body["source_package_ref"] == n.doc_ref(installation.package_raw)
                 and body["source_accepted_set_ref"] == n.doc_ref(installation.accepted_raw), "E_CONFIG")
+        if operation == "kill-register-read":
+            require(all(body[key] == installation.config[key] for key in ("control_repository", "default_branch", "bootstrap")), "E_CONFIG")
         uid, gid = host["principal_uid"], host["consumer_gid"]
         store = check_store_root(host["store_root"], uid, gid)
         store_checked = installation.owned_directory(host["store_root"], 0o750)
@@ -3238,6 +3246,13 @@ def run_coverage_read(argv):
             "query": n.query(body), "raw_manifest_sha256": sha256_hex(raw_manifest),
             "observation_sha256": sha256_hex(observation), "started_at": started, "completed_at": completed,
             "outcome": "complete", "effects": ["read-forge-metadata"]}})
+        if operation == "kill-register-read":
+            value = json.loads(receipt)
+            value["kind"] = "kill_register_source_receipt"
+            value["body"]["call_id"] = value["body"].pop("attempt_id")
+            del value["body"]["nonce"]
+            value["body"]["effects"] = ["read-forge-metadata", "read-register"]
+            receipt = canonical(value)
         n.receipt(receipt, request_raw, host, installation.identity, raw_manifest, observation)
         installation.recheck()
         writing, attempt = attempt, None
@@ -3273,7 +3288,7 @@ def main():
             cmd_digest(rest)
         return
     try:
-        if sys.argv[1:] and sys.argv[1] == "coverage-read":
+        if sys.argv[1:] and sys.argv[1] in {"coverage-read", "kill-register-read"}:
             try:
                 run_coverage_read(sys.argv[1:])
             except Refusal:
