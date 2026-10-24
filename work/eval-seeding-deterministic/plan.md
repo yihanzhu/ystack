@@ -1,5 +1,5 @@
 ---
-spec-blob: 50dc777c4d67209819ce7f607a4078ad65ad12ae
+spec-blob: 24522e5e2e576b9f2045701673078a79d5378c55
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-24
@@ -940,17 +940,40 @@ cannot write its record. Do not install or run this new capture path on a real h
 
 ### Full export role and bounded operation ledger
 
-These anchors bind the paused 64dda8e source, not an accepted implementation.
+These line anchors bind the immutable 64dda8e source, not a current resume tuple.
 Use only the existing 40 edit paths; all nine adoption-only paths and the exact
 84-member source closure remain unchanged. Rebind final line/blob/hash receipts.
 
 | Existing site | Required change within its existing owner |
 | --- | --- |
-| host `_record_process:52`, `run_vm:2568–2582`, `_capture_values:1547`, `_write_capture_file:1575` | Only `run_vm.export-read.bytes` gains R4A.B's closed role/launch/size/SHA reference. Retain the same original whole `fh.read()` value before it is lost. Write the fixed sibling from those bytes with exclusive creation/fsync/readback before marking capture complete; never reopen export.img later. Keep native read, observer, stop/reap, error and cleanup order. A capture write/limit failure makes capture unusable, preserving native results and teardown. |
+| host `_record_process:52`, `run_vm:2568–2582`, `_capture_values:1547`, `_write_capture_file:1575` | Only `run_vm.export-read.bytes` gains the host-only `{role:"sandbox-export-capture-bytes",size_bytes,sha256}` reference, with no launch. Retain the same original whole `fh.read()` value before it is lost. Write the fixed sibling from those bytes with exclusive creation/fsync/readback before marking capture complete; never reopen export.img later. Keep native read, observer, stop/reap, error and cleanup order. A capture write/limit failure makes capture unusable, preserving native results and teardown. |
 | consumer `_attempt_names:968`, `_capture_envelope:972`, `_capture_for_replay:995`, `_origin_values`, `read_store_attempt:1033`, `_HeldStoreRead.recheck:1006` | Share the exact conditional inventory and reference/attempt/request binding. Acquire the binary through the existing held-file/ACL path, with its fixed 12 MiB ceiling. Include it in every origin, full-byte recheck and capture copy. A changed file or unmatched reference refuses; no absent-field fallback. |
 | consumer `read_coverage_attempt` and derived held readers; scope reader/generator store acquisition and final checks | Keep source-page attempts binary-free. Apply the same inventory on every initial, recursive, release/reacquisition and completion check. Count every actual reread, including earlier attempts and overlapping holds; no cached hash replaces a required check. |
 | launcher `snapshot_file:21`, `stage_expected:56`, `snapshot_input:270`, shared-file staging | Select only `exports/reproduction.bin` or `exports/write.bin` below the validated trial directory from the fixed launch role. Stream at most 64 KiB per chunk; keep held source/installed file, modes, parents, exclusive create and completion seals. No caller path/limit, codec or general externalizer. Charge repeated references even when one equal snapshot is physically reused. |
 | coordinator `_host_result_values:178` and fixed guest/verifier value calls | Read one bounded held binary at a time. Pass all original bytes through unchanged host `frame_read:134` first. Independently rebuild the guest frame from its closed observations and actual verifier payload, then compare frame plus zero padding to the actual read length against every source byte. Bound both inputs before allocation. Parsed source records or host receipts never become guest inputs. |
+
+The host capture validator accepts only that three-key intermediate reference;
+final recorder RAW12 and seed validators accept only the existing four-key
+`{role:"sandbox-export-bytes",launch,size_bytes,sha256}` reference. No stage accepts
+the other's form. Keep the original capture envelope and fixed binary inventory.
+
+At the existing reproduction run and writer `_verify_write` calls, use the private
+consumer/recorder boundary after the original receipt/expectation checks. Require
+the already validated frozen outer request kind to match that fixed caller:
+`shadow_enforced_request` gives reproduction; `shadow_write_request` gives write.
+Bind outer id/body attempt, exact launch id/body attempt, capture id and
+receipt/expectation attempt, plus their launch-request SHA against the same exact
+launch bytes and same held capture/binary. No caller-supplied role, launch, path,
+limit or checked flag substitutes for these relations. Do not infer a launch from
+attempt names, subject or instruction; native request/package/argv/env stay fixed.
+
+Project only the reference into final RAW12. Preserve original capture bytes and
+origin binding; reconstruct that original envelope/intermediate ref offline too.
+The same owners rebuild final projection from the independently reconstructed
+caller/request relationship, never from the final ref's claimed launch. Projection
+adds no binary read, copy or full-byte hash pass; charge its small metadata work to
+the existing non-export limits. All acquisition/origin hashes, completion rechecks,
+R1 call counts/caps and independent guest/full-tail comparison below stay intact.
 
 The process row keeps exactly its original six keys. Only the original export-read
 site permits the role object; successful read has return=size, null errno and one
@@ -1254,6 +1277,18 @@ RAW12 adds these finite vectors to the existing tests, with no new entry point:
 | EXP.limit.NAME.at / .over | existing LIM group in evals-malicious/framework plus actual capture/held tests: export file bytes/count, all four non-export partitions, non-export/unified logical totals, export/non-export/unified physical bytes, export physical file count, cumulative export/unified reads and writes, per-case and four-trial totals, 1 MiB JSON and 256 shared-file inventory. Valid boundary plus one byte/file/reference/read step over for each; preserve every other dimension. |
 | EXP.accounting | same LIM and existing dashboard split-pair tests: original/installed two-copy lower bound, all eight copy roles, overlapping raw fields, archive/log/scratch and retained failures, repeated hashes/rechecks, both pairs sharing one aggregate budget. Extra charge cannot reset or disappear after a refusal. |
 
+The same ordinary capture-held-values, shadow-enforced/write and replay sites also
+cover this closed launch-binding set; these supplement every EXP row above:
+
+| ID | Required ordinary assertion / paired negative |
+| --- | --- |
+| EXP.bind01 | Both complete 12 MiB launches have the correct final role; original host envelope and origin rebuild exactly. |
+| EXP.bind02 | Intermediate/final refs at the wrong stage, wrong role/site, mixed form, missing/extra key refuse. |
+| EXP.bind03 | Caller/outer-kind mismatch and independently changed request, attempt or receipt/expectation digest refuse. |
+| EXP.bind04 | Cross-launch capture/binary swaps refuse even for equal bytes; retain duplicate/unused/missing and source-page negatives. |
+| EXP.bind05 | Held size/hash/ACL/parent/final drift refuses; empty/short/error/unreached keeps native lifecycle and original frame semantics. |
+| EXP.bind06 | Separately delete production projection, offline projection or original-envelope rebuild; each paired assertion fails. Mutate final launch or original capture independently and require refusal. |
+
 Keep required genuine paired routes NOTRUN until their original gate permits them;
 ordinary two-file complete capture remains required and cannot use that exception.
 The old capture JSON boundary fixture uses inline export bytes at 64:628–643.
@@ -1537,7 +1572,7 @@ gates (R9.6).
   operator-graded seed and its test. 150-450 of them are verbatim verdict bytes, which
   cannot leave the PR whose test checks their digests.
 - PR 3: `review_size: standard`, about 300-400 net added lines.
-- This plan-only amendment: `review_size: standard`, expected 150–400 changed
+- This plan-only amendment: `review_size: standard`, expected 20–80 changed
   lines. One concern: the fixed whole-export role, actual readers, complete finite
   resource ledger and proof. Preserve the full inherited plan and all its gates.
 
