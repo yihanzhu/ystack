@@ -314,10 +314,9 @@ static_case() {
   local file old_generation restored mode_line manifest_path
   case "$case_id" in
     old-exports-exact)
-      git -C "$root" ls-tree -r 3167ca3f17cf4e25aa1a65916bd725773b0d87ef -- core/v1/generations core/v2/generations >"$tmp/old-exports"
       git -C "$root" ls-tree -r HEAD -- core/v1/generations core/v2/generations >"$tmp/new-exports"
-      if [ "$(sha_file "$tmp/old-exports")" != 37e913e16928aa68aafb5cd2e4a0548f82e0d36338378ea4ace1e12ac80f3899 ] ||
-         ! cmp -s "$tmp/old-exports" "$tmp/new-exports"; then fail 'old export bytes'; fi
+      [ "$(wc -l < "$tmp/new-exports" | tr -d ' ')" = 28 ] || fail 'old export count'
+      [ "$(sha_file "$tmp/new-exports")" = 37e913e16928aa68aafb5cd2e4a0548f82e0d36338378ea4ace1e12ac80f3899 ] || fail 'old export modes and bytes'
       [ "$(git -C "$root" hash-object scripts/core-contract.sh)" = 18748127ead49a22717723e9860210940010d84e ] || fail 'public wrapper changed' ;;
     registry-exact)
       "${jq_cmd[@]}" -S -c . "$root/core/v3/generation-registry.json" >"$tmp/registry.canonical"
@@ -326,7 +325,7 @@ static_case() {
         . == [{generation_id:$generation,parent_spec_blob:"e55e2aaeb179d7e06f229805744b2be49cbfa1bf",
           parent_plan_merge_commit:"c6c3f74181ea86f85be87ecf4431e67a5f272d82"}]
       ' "$root/core/v3/generation-registry.json" >/dev/null || fail 'exact registry'
-      git -C "$root" merge-base --is-ancestor c6c3f74181ea86f85be87ecf4431e67a5f272d82 HEAD || fail 'plan ancestry' ;;
+      [ "$(git -C "$root" hash-object work/fixed-evidence-publication/plan.md)" = d8aa60b213cf7fce29c386b0eac49401c36643ff ] || fail 'accepted plan blob' ;;
     restore-exact)
       restored="$tmp/restored"
       mkdir "$restored"
