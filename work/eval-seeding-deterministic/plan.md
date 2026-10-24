@@ -1,5 +1,5 @@
 ---
-spec-blob: b1da5e966cf729c384326a94a168be256540b798
+spec-blob: e98ae942a4b57bce8a3beaa3c85b9e614c0ac27c
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-23
@@ -8,8 +8,8 @@ drafted: 2026-10-23
 
 Tracks #439. Risk: high (`artifact-high`). The accepted spec fixes four batches.
 PR 1a retains its accepted scope and proof. This amendment prepares only the
-review source/relay part of PR 1b under R1.3–R1.7. PR 1b remains one complete
-two-source delivery. Its malicious replay and the seed batches retain their gates.
+review source/relay part of PR 1b under R1.3–R1.7, including R3.3's measured
+scope content binding. PR 1b remains one complete two-source delivery. Its malicious replay and the seed batches retain their gates.
 
 | Batch | Delivery | Before its first code commit |
 | --- | --- | --- |
@@ -162,17 +162,22 @@ it adds no CLI option, environment selector or reusable test framework.
 
 ### Identity, dependencies and stop point
 
-The artifact base is `bb3522ecd2bc0022f5ae4458150411f12d6a33dd`. The accepted
-spec blob is the frontmatter value. Before code, the manager records the merged
-plan-base and applies the fresh-base independent review rule above.
+The artifact base is `ff22e7aa04e73dbfcee7e70fa1bc815fd1131e81`. The accepted
+spec blob is the frontmatter value. Independent acceptance and protected merge
+of this plan precede resumed code. The manager records the merged plan-base;
+a later base move requires the fresh independent review rule above.
 
-The manager-designated unique PR 1b carrier is
-`codex/impl/eval-source-relay-replay`, worktree
-`/private/tmp/ystack-eval-source-relay-replay-20261023`. It is not yet created.
-Local refs/worktrees contain no prior PR 1b attempt. Before creation the manager
-rechecks remote refs, PRs and worktrees; a matching attempt must be reconciled and
-used. A conflicting identity stops. Review code and later malicious code stay on
-this one carrier. No incomplete PR 1b is published or called a finished feature.
+The unique existing PR 1b carrier is `codex/impl/eval-source-relay-replay`, worktree
+`/private/tmp/ystack-eval-source-relay-replay-20261023`, paused clean at
+`b5d2f52ef6102b6a30c9b9546ba35277faf544de`, parent
+`2919c113f0fca4dd5e6936dbc84807d3d02c4fe0`. Its original base/plan-base is
+`573c02c0902a0b67a7168bef9a01263c0cf2b6a6`, PR and remote branch absent.
+Preserve original claim #439 comment `6378091304`. The original Sol author
+resumes only after the new gates, on this same carrier. Do not create a second
+implementation or rewrite history. Normally merge exact fresh main containing
+this plan, then rebind head/base, full artifact links, source and required proof.
+Unexpected identity or dirt stops the affected attempt. Review code and later
+malicious code remain one unpublished delivery; incomplete PR 1b cannot publish.
 
 The source dependency is repository `yihanzhu/ystack`, branch
 `codex/impl/eval-trial-integrity`, PR #687 (open/draft), worktree
@@ -181,13 +186,13 @@ The source dependency is repository `yihanzhu/ystack`, branch
 `8bbf2826b83cc226494590f839a90d0b009bc55a`. Its accepted artifact links are intent
 `a4197f299974e62bb2b97e004b75182012abbb87`, prior spec
 `4a36d06aec6730bf6f0e3285c61a923dcd6ff943`, and plan
-`59a8c6a0b959bc2be765d7c637ac4cb120c36dd2`. The new carrier binds this amended
-plan and the current spec. Fresh independent source preflight must reconcile the
-old tuple, preserved M2–M4 diff and new artifact chain before adopting 8d834bc.
-Start from accepted fresh main and normally merge that exact dependency, retaining
-history. If it has already landed, verify ancestry and the full content instead.
-Do not copy its implementation or edit its branch. Record the resulting pre-code
-head and base; any unexpected source change requires new preflight/plan review.
+`59a8c6a0b959bc2be765d7c637ac4cb120c36dd2`. The dependency was adopted in
+pre-code head `71009e06db29e2716d21feed0cd10e12e857a9f3`, ordered parents
+573c02c and 8d834bc. Retain that original preflight and merge history; do not
+re-adopt, copy or recreate its implementation. Before resume, independently
+reconcile the preserved M2–M4 diff and the entire current source against the new
+artifact chain. Unmerged dependencies remain unaccepted. Record any changed
+external base and obtain fresh review; a semantic change needs an amendment.
 
 The exact head's eight eval suites and complete scope suite's 45 named assertions
 exited 0 in run `40041038739`; its full matrix FAILED with the preserved shadow-write
@@ -205,14 +210,17 @@ lists, fabricated observations or a permanent-refusal implementation.
 
 ### Exact paths and actual interfaces
 
-This segment uses only the ten PR 1b paths listed below. Change the six production
-and documentation paths plus the four existing tests only as specified here.
+This segment uses only the eleven PR 1b paths listed below: seven production
+and documentation paths plus four existing tests. The content-binding fix itself
+changes only the four paths in its table below; preserve all other relay work.
 There is no new file, public option, environment override, grader, test framework
 or install path. The catalog SHA-256 and two declared families remain unchanged.
 
-Line anchors below are from exact dependency 8d834bc. The unchanged record files
-also match the artifact base. Rebind anchors and hashes after the ordinary merge;
-resolve unexpected semantic differences before code.
+The original relay anchors below are from exact dependency 8d834bc. Review relay
+code now exists in paused b5d2f52; do not reimplement it. The content-binding
+anchors below use that paused source. The unchanged record files also match the
+artifact base. Rebind anchors and hashes after the ordinary merge; resolve any
+unexpected semantic difference before code.
 
 | Actual interface | Reads and required use |
 | --- | --- |
@@ -263,6 +271,8 @@ input, not closure. This inventory does not claim any shadow closure bound.
    final two-source code raises it to 9 as R3.3 requires. Never change the 64-entry
    closure bound. Update only `record_closure` in the two hand-built evaluator
    fixtures and their digest lists now; both fields are required in the final PR.
+   Bind their real evaluator content SHA as specified below; a placeholder SHA
+   no longer satisfies the scope contract.
 2. **Review records.** Implement the R8.3 review case and shared shapes described
    in the final-delivery section below. Pin a single representation for R7.1:
    `labels` is a schema-1 `eval_labels` envelope with id
@@ -355,6 +365,88 @@ input, not closure. This inventory does not claim any shadow closure bound.
    Complete the tests below, preserve raw results and stop at a clean checkpoint.
    A new dependency or required path returns to the separate artifact gates.
 
+### Scope content binding: resume this four-file fix (R3.3, R9.2)
+
+| Path and paused-source anchor | Necessary change |
+| --- | --- |
+| `scope/v1/evaluate-scope.sh:17,74–85,154–196` | Measure the held dashboard's evaluator content with C1 bytes and pass a private digest; retain outer hashes and completion checks |
+| `scope/v1/scope-gates.jq:143–163,679–720` | Compare that measurement in `dashboard_shape` and preserve all structural guards; correct the self-supplied-digest comment |
+| `scripts/test/scope-qualification.test.sh:278–354,516–584,1320–1338` | Real baseline content SHA; old-SHA rejection and same-content rebind positive through `run_evaluator`; retain original shape and M2–M4 assertions |
+| `scripts/test/shadow-self-host-evidence.test.sh:1573–1698` | Bind the shared hand-built baseline before its outer digest/refs; preserve every existing evidence assertion |
+
+1. In the scope driver, after input snapshots pass their existing canonical checks
+   and before invoking the scope program, derive content only from
+   `$scratch/dashboard.json`. Use the existing `jq_bin` 1.6 with `-S -c` to write
+   `$scratch/dashboard-evaluator.json`: sorted compact UTF-8 JSON and exactly one
+   trailing LF, matching the actual eval launcher. Do not pass its bytes through
+   shell command substitution, which removes LF. Use existing `sha256_path` on
+   this file. The private shell variable and jq argument are both named
+   `dashboard_evaluator_sha`; pass with `--arg dashboard_evaluator_sha ...` beside
+   the existing dashboard digest. No public positional argument, environment
+   override, caller digest or second evaluator path is added.
+2. Guard extraction with nested type checks for dashboard body, evaluator and
+   content before indexing their children. When any is missing or not an object,
+   emit no extracted document and leave the private measurement empty. A valid
+   object always emits nonempty C1 bytes and is hashed. Do not use jq `-e`'s empty
+   result exit as an error here. An actual jq/I/O/hash execution failure remains
+   `E_RUNTIME`; malformed parent data proceeds to the original semantic refusal.
+   Never hash a fallback object or trust candidate SHA as a substitute.
+3. In `$dash_ok`, retain its type guards and all `evaluator_shape` checks. Require
+   the private measurement to satisfy `sha256_ok`, then pass it as the third
+   argument of `dashboard_shape`, replacing the current candidate
+   `.body.evaluator.sha256` argument. Its existing equality now checks actual
+   content against candidate SHA. Do not add the private value to output or
+   broaden qualification. On a wrong pair, the original invalid-dashboard path
+   yields `not-proposable`, proposal `{state:"absent"}` and sorted reasons
+   `["scope.eval-failing","scope.eval-family-unseeded","scope.malformed"]`
+   for the otherwise-good fixture. This normal result exits 0 with empty stderr.
+   Preserve `reference_semantics:"identity-only"`, observation-only, unavailable
+   qualification, inactive, authority/authority_effect none, enabled false and
+   the proposable baseline's blocked enablement. Scope does not replay eval or
+   verify other components' actual closure files. Rewrite only the relevant old
+   comment to distinguish pair integrity from those unchanged limits.
+4. Keep measuring the entire held dashboard for output evidence. Keep all existing
+   final source/policy hashes and comparisons of original inputs against snapshots,
+   including marker rechecks. Measure and evaluate the same held document; do not
+   reopen the caller dashboard for extraction. C1 extraction does not replace
+   canonical input checks or the existing `E_STALE` tamper path.
+5. In both tests, finish the hand-built evaluator content first. Write its C1 bytes
+   to a temporary file, use that test's existing SHA helper (`sha256_path` or
+   `sha_file`), and set `.body.evaluator.sha256` in a separate canonical dashboard
+   file before replacing the constructed fixture. Do this before any baseline
+   scope run, whole-dashboard digest or downstream reference. In the shadow test,
+   bind inside its existing one-time dashboard construction block, so repeated
+   bundles reuse the same correct baseline. Retain all family counts and existing
+   checks. Do not copy a literal corrective generation id into any new path; use
+   the already verified registry/core_closure relation above. The maintenance
+   fixture does not enter this scope path and remains unchanged.
+6. Add paired assertions beside the scope test's existing dashboard-shape group.
+   First require the real bound baseline's exact outcome/reasons and inert fields.
+   From that baseline change only one `record_closure` digest to a different valid
+   64-hex value; preserve all keys, three paths, ordering, count and the old inner
+   SHA. Prove the inner content bytes changed while the SHA field did not. Invoke
+   the real `run_evaluator` and assert the refusal in step 3, including exit 0,
+   empty stderr and absent proposal. Then extract exactly that changed content,
+   hash its C1 bytes and update only its inner SHA. Run again and require baseline
+   outcome/reasons and unchanged authority fields. Compare projected semantic
+   fields, not the whole output whose evidence dashboard SHA must change.
+7. Add missing/wrong-type body, evaluator and content parents to the existing
+   malformed-dashboard checks. Require the original refusal rather than jq error.
+   Keep existing shape mutations; when they alter an object evaluator content,
+   rebind its real SHA so those tests still isolate the original shape rule.
+   Do not rebind the dedicated old-SHA negative. Preserve missing/extra closure,
+   malformed digest, input-tamper, completed-snapshot and all M2–M4 assertions.
+   No shape-only rejection substitutes for the valid-digest relation negative.
+8. After the fix, search actual final bytes for every moved digest and measure any
+   required pin from that same head. Neither scope file has a current fixed pin
+   in the review relay; the driver already measures its own and program bytes
+   for completion rechecks.
+   The eventual R5 shadow closure includes both files and must take their final
+   hashes during its later actual-source mapping. Do not prefill that closure or
+   change any product pin here before implementation. A new pin consumer outside
+   the eleven paths requires a separate amendment. Record complete full-PR diff
+   and fresh source review after the original carrier merges the accepted plan.
+
 ### Complete review mechanism tests
 
 Extend `scripts/test/evals-framework.test.sh` in its existing temporary directory.
@@ -390,12 +482,13 @@ the source with `E_SHAPE`; the private seeded catalog with `none` must refuse
 | Shape and grading | Direct jq build/validate: review missing observation is inconclusive; status inconclusive uses R8.4; human required for reviews and refused for other sources; existing human/model-only source still inconclusive; exact field/prefix/id rules reject invalid inputs |
 | Held files and pins | Tamper each of the two new record files or overlapping schema: `E_STALE`; missing/symlink/traversal verdict, conflicting shared path digest and verdict-byte tamper refuse; ordinary repeated valid paths reuse snapshots; retain existing tamper-order assertions |
 | Dashboard integrity | Real private review result aggregates with a real existing-family result; two distinct results repeating review cases refuse `E_SHAPE`; same result twice stays `E_RUNTIME`; forged status with recomputed result digest refuses `E_RELATION` |
-| Shared contract | Byte-equal source blocks in both programs; evaluator record_closure equals the three shipped hashes; missing/extra evaluator fields and malformed closure entries refuse in both programs; wrong pinned digests refuse in the eval program/launcher; scope refuses a changed closure with its old bound ref; M2–M4 and catalog digest/7 seeded/2 declared/138-case baseline remain intact |
+| Shared contract | Byte-equal source blocks in both programs; evaluator record_closure equals the three shipped hashes; missing/extra evaluator fields and malformed closure entries refuse in both programs; wrong pinned digests refuse in the eval program/launcher; scope measures content and refuses a valid closure-digest change with its old SHA, then restores baseline after a real same-content rebind; M2–M4 and catalog digest/7 seeded/2 declared/138-case baseline remain intact |
 
 Keep fixture-dependent relay/dashboard cases in the same existing framework test
 so its private repository builder is not duplicated. Keep the existing dashboard
 suite's PR 1a regression group unchanged. Update scope and shadow self-host fixture
-fields/digests as above and assert the new closed shape in those existing tests.
+fields/digests as above, with real C1 inner SHA before outer refs, and assert the
+closed shape plus the paired scope content-binding behavior in those tests.
 Use their normal entry points; no test selector or diagnostics framework.
 
 Before tests, run the cache preflight under Proof. It grants no download. Run all
@@ -495,7 +588,8 @@ not list, so that stops and returns to G2.
 
 Allowed paths, exactly R9.3's PR 1b list: `evals/v1/evals.jq`,
 `evals/v1/evals-driver.sh`, `evals/v1/evals-launcher.sh`, `scope/v1/scope-gates.jq`,
-`scripts/test/evals-dashboard.test.sh`, `scripts/test/scope-qualification.test.sh`,
+`scope/v1/evaluate-scope.sh`, `scripts/test/evals-dashboard.test.sh`,
+`scripts/test/scope-qualification.test.sh`,
 `scripts/test/evals-framework.test.sh`, `scripts/test/shadow-self-host-evidence.test.sh`,
 `docs/components.md`, `RESTORE.md`. No catalog entry changes (R1.2). No new file.
 
@@ -505,18 +599,23 @@ recipe, shadow closure and overlap counts remain provisional and grant no code
 authority. The later actual-source G2/plan amendment replaces their old readings
 before implementation. All final two-source behavior and tests remain required.
 
-Commits run in pin order (R9.4): `scope-gates.jq` first, so its final digest is
-what `evals.jq` pins; then `evals.jq`; then the driver; the launcher last, since it
-pins the driver.
+Commits run in pin order (R9.4): finish `scope-gates.jq` and `evaluate-scope.sh`
+first, so the later actual shadow closure pins their final bytes; then `evals.jq`,
+the eval driver and the launcher, which pins that driver. Scope content binding
+uses its existing driver and the private argument described above.
 
-### Commit 1: `scope/v1/scope-gates.jq` (R3.3)
+### Commit 1: scope program and driver (R3.3)
 
 `seed_sources` (`:98-102`) and `active_seed_sources` (`:119-122`) gain both new
 sources in sorted order; commit 2 writes the same bytes in `evals.jq`.
 `evaluator_shape` (`:149-186`) adds both field names to the list at `:155-157` and
 `(.shadow_closure | closure_shape) and (.record_closure | closure_shape)`; its
 comment at `:141` says six closures. Coverage bound `:240` becomes `(1;9;…)`.
-Preserve PR 1a's minimum check.
+Preserve PR 1a's minimum check. Retain the measured `dashboard_evaluator_sha`
+argument from `evaluate-scope.sh` and compare it in `dashboard_shape`; never
+restore the candidate's SHA as its own expected value. The four-file fix above
+supplies the C1 extraction, malformed-parent behavior, identity-only limit and
+completion checks for the full delivery too.
 
 ### Commit 2: `evals/v1/evals.jq`
 
@@ -573,8 +672,8 @@ Preserve PR 1a's minimum check.
   (`:678-697`): malicious is `shadow-reproduce.v1`, `text/x-shellscript`, digest the
   `shadow/v1/reproduce.sh` entry of `expected_shadow_closure`; reviews is
   `eval-record-evaluator.v1`, `text/x-shellscript`, digest the `evals/v1/run.sh`
-  entry of `expected_record_closure`. No new `--arg`: every direct invocation in the
-  tests (for example `evals-framework.test.sh:184-203`) keeps working unchanged.
+  entry of `expected_record_closure`. No new eval-program `--arg`: direct calls
+  in the tests (for example `evals-framework.test.sh:184-203`) keeps working unchanged.
 - `subject_ref` (`:718-740`) and `subject_ref_shape` (`:769-789`): malicious
   `{content_id:"malicious-trial.v1",media_type:"application/json",sha256:manifest.sha256}`;
   reviews `{content_id:"review-verdict.v1",media_type:"text/markdown",sha256:verdict.sha256}`.
@@ -677,8 +776,12 @@ Preserve PR 1a's minimum check.
   evaluator fixture (`:264-271`) gains `shadow_closure` and `record_closure`. A new
   check requires the `def seed_sources:` and `def active_seed_sources:` blocks (from
   the def line to the first line ending `];`) to be byte-equal in both programs.
+  Bind real C1 content SHA before outer refs and preserve the four-file fix's
+  valid-digest/old-SHA negative, real rebind positive, type and shape checks.
 - `shadow-self-host-evidence.test.sh`: the fixture (`:923-926`) gains both closures
-  and the digest list (`:978-981`) gains their digests.
+  and the digest list (`:978-981`) gains their digests. Measure the completed
+  evaluator content with C1 and bind its actual SHA before outer digests/refs;
+  retain every existing baseline outcome and assertion.
 
 ### Commit 6: docs
 
@@ -845,9 +948,9 @@ the seven existing seed sets, every other catalog field and family, and every pa
 outside each PR's list stay byte-identical. No test outside the lists changes: the
 six family suites' closure-count and tamper checks (`evals-adapters.test.sh:114`,
 `evals-approvals.test.sh:98`, `evals-boundaries.test.sh:97`, `evals-duty.test.sh:97`,
-`evals-events.test.sh:97`, `evals-plans.test.sh:94`), the hand-built dashboards
-(`scope-qualification.test.sh:302-327`, `shadow-self-host-evidence.test.sh:949-973`,
-`maintenance-loop.test.sh:60-74`), the tool pins (`evals-framework.test.sh:190`,
+`evals-events.test.sh:97`, `evals-plans.test.sh:94`), the family counts in the
+hand-built scope/shadow dashboards and the entire maintenance dashboard fixture
+(`maintenance-loop.test.sh:60-74`), the tool pins (`evals-framework.test.sh:190`,
 `:225`, `:294`) and `portable-core-schema.test.sh`, whose closed generation-id list
 (`:938-953`) is why PR 3 references control inputs instead of copying them. A new
 file that would need that list stops the PR and returns to G2.
@@ -872,20 +975,24 @@ gates (R9.6).
   M2–M4. About 25–45 lines cover predicates/error handling/pins, 170–290 cover
   launcher, direct-program and scope regressions, and 15–30 cover docs. Use readable
   complete tests; an overrun pauses for a separate size amendment, never test cuts.
-- PR 1b: `review_size: accepted-exception`, expected 1,400–2,200 net added lines
-  for the one complete two-source/relay/replay concern. Review source, binding,
-  staging and seals need about 400–650; its complete mechanism tests 350–550;
-  docs 20–40. The later replay/source/closure work is provisionally 400–650 and
-  its complete tests 230–310. This does not authorize that unmapped code. Its
-  required later plan must re-estimate from actual source and full proof before
-  work resumes. Do not compress code or cut tests to fit. A changed range uses
-  independent scoped plan review under Roadmap delegation; it never waives gates.
+- PR 1b: `review_size: accepted-exception`, expected 1,800–2,400 net added lines
+  for the whole two-source/relay/replay concern against its actual publication
+  base. Count inherited unmerged M2–M4 code and tests; do not subtract a dependency
+  merely because its author or branch differs. About 1,050–1,200 cover the review
+  relay and inherited mechanism; 80–160 the four-file content binding and paired
+  tests; 400–650 the later source/closure work; 230–310 its complete replay tests;
+  40–80 final integration pins/docs. These are readable source/test estimates,
+  not limits on assertions. The later actual-source plan must re-estimate before
+  malicious work resumes. Record additions/deletions/net against fresh main and
+  the inherited/source-only breakdown separately in PR evidence, never hide the
+  whole diff. A changed range needs independent plan review; no test cuts, code
+  compression, scope expansion or reduced CI to meet the range.
 - PR 2: `review_size: accepted-exception`, 450-850 net added lines, one concern: one
   operator-graded seed and its test. 150-450 of them are verbatim verdict bytes, which
   cannot leave the PR whose test checks their digests.
 - PR 3: `review_size: standard`, about 300-400 net added lines.
-- This plan-only amendment: `review_size: standard`. One concern: the mapped
-  review relay implementation segment under the accepted R1 order change.
+- This plan-only amendment: `review_size: standard`. One concern: measured
+  evaluator content binding within the same review relay segment.
 
 Each range waives only the soft line signal, never scope, tests, CI, review or human
 merge.
