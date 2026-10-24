@@ -18,39 +18,63 @@ observation-only、authority none、enabled false。#558 的欠项最后集中�
 
 ## 依赖门槛与源码映射
 
-设计基线为 main `23c80e1dc798417268e183a7e1ecc0f8829bfcf9`。
+设计基线为 main `cf50464bbc771eb9d1e5b6f39d8b761c917e0bc0`。
 intent blob 为 `2aa4196fe3adc89837f4dfdebc197017d6e2f753`。
-G1 为 #682，G2 为 #685。当前 main 尚无 M3 的私有 reader。
-以下两个提交仅用于准确读代码，不是已验收或可安装的依赖：
+G1 为 #682，G2 为 #685。main 已包含两份历史 policy plan，尚未包含下列实现。
 
-| 只读检查点 | 已看到的实现位置 | 本计划需要的接线 |
-| --- | --- | --- |
-| M3 `fe6593e1b09960d165f0a5b0b3db555f06f182eb` | `scope/v1/read-shadow-evidence.py` 的 `_Reader`、`fixed_bundle`、`_authenticate`；`shadow/v1/_consumer.py` 的 held paths、bundle、Git 与 child owner | 共用当前 bundle 的完整认证和私有状态，不复制 reader |
-| #544 `44c8ded3ad850767cfd7bb469aecb4d182e8784e` | `_Reader.source_coverage`、`coverage_identity`、`coverage_interval`；`_HeldCoverageRead`、`_CoverageConfiguration`；supervisor 的 `_CoverageInstallation`、`_coverage_collector`、`run_coverage_read` | 固定增加 kill 操作，扩展同一生命周期，并协调 outer/inner acquisitions |
+| 保留依赖 | 精确身份与状态 |
+| --- | --- |
+| M3 foundation | `fe6593e1b09960d165f0a5b0b3db555f06f182eb`；未合入、未验收，全部原 #558/#541 proof 保留 |
+| #544 source 映射点 | `170fac30b888a7414105336fcd30159ffba3b42b`；原 `codex/impl/scope-coverage-authentication` 的 clean 检查点；未合入、未验收 |
+| #544 plan / spec | `1237c85af242ea15b8a930938a1863baaf606078` / `618928cb8cb30a4ad95d8b39dc3126cd806c5444`；artifacts 已 protected merge，不能代表实现通过 |
+| child-5 plan / spec | `ebfc9e1d2c661cab78f87a9b9c2fa82116195310` / `fb1bbec3d8c0fd2bba0a6353da05bf03107e97a4`；artifacts 已 protected merge，不能代表 producer proof 通过 |
 
-#544 当前暂停处理历史 scope-policy 绑定和 producer-chain 缺口。新 form 的
-spec、生产链修复、#544 spec/plan/source 必须先分别接受。本计划不接手这些修改。
-当前 `_Reader.source_coverage` 只释放自己 `owned` 中的 `_HeldStoreRead`。
-它没有 outer handoff；现有 `READY/SEAL/COMMIT` 也会在 scope driver 返回前关闭 reader。
-下文协议是待实现的改动，不是检查点已经存在的能力。
+170fac 的独立源码预审为 REVISE，仍有两项 P1：必需的新 form/认证链及历史区间
+攻击测试未完整进入现有 suite；历史不同-policy 负例同时破坏 publisher 关系。
+未发现额外产品认证绕过，不等于通过审查。本计划采用它来准备实际架构映射。
+计划接受前必须绑定原作者修复后的 clean head、完整原始独审、两项 P1 的闭合证据，
+并核查从 170fac 到该 head 的全部 delta。此准备稿不构成依赖接受或 implementation GO。
 
-在首个实现提交前，经理记录依赖的完整 accepted commit、intent/spec/plan blobs、
-当前 implementation base 和 clean tuple。独立审者重新读取这些实际文件，核对：
+| 实际接口（170fac） | 私有接线与必须保留的关系 |
+| --- | --- |
+| `_Reader.__init__`、`evaluate`、`fixed_bundle`、`_authenticate` | 拆分固定的 bundle 认证阶段供新 consumer 复用；保留 owned、inputs、package_sources、anchor 与 Git owner，不复制 reader |
+| `_authenticate` → `git_relations` → `write_relations` → `_authenticate(frozen)` | 原始 materialization candidate/manifest/launch subject/expectation/receipt/checker 全链；递归 prerequisite 同样产生 store holds，必须登记和重新认证 |
+| `write_relations`、`rebuild_input` | 新 `withheld-write-policy.v1` 精确 33-file candidate、outer policy ref/raw、Git policy blob 与 rebuilt input；旧 32-file 规则不变 |
+| `coverage_identity`、`source_coverage` | policy 从各自 bundle 得到；两侧 ref/raw 完整有效，historical=current=evaluator-held policy 才进入 coverage；不回填当前包伪造历史 |
+| `_HeldStoreRead`、`_HeldCoverageRead` | 全 held path 与祖先、exact inventory、snapshot、fresh observation；包括同 attempt 的每个 acquisition 和递归 prerequisite |
+| `_CoverageConfiguration`、`read_coverage_attempt` | 同一 anchor 的 root-owned config/package/accepted identity；supervisor/normalizer 原字节与仓库测量一致；held raw 重建 observation |
+| `_DarwinChildOwner.coverage_source`、`_closed_scope_child`、`_foreground` | 既有固定 sudo/Python/supervisor argv、command ledger、process-group owner 与唯一 reap；新增固定 kill 方法和私有事件交接 |
+| `_CoverageInstallation`、`_coverage_collector`、`run_coverage_read` | 固定安装准入、105 秒 collector、nonce claim、durable store 与 receipt-last；扩展两个 literal 操作，不复制 source |
+| reader `main`/`_ControlFIFO` 与 scope driver | 当前 `READY/SEAL/COMMIT` 在 driver 返回前关闭 reader；新增 outer 接管确认，仍真实运行原 scope 求值 |
 
-1. 新 form 对原始 scope-policy、producer invocations、materialization 与 source
-   历史的认证闭合；当前与 qualifying bundle 不借当前 policy 掩盖旧字节。
-2. reader 的完整认证入口、全部 store acquisition 类型和释放点；每次重新认证仍
-   重跑 checker、native registry、accepted set、form、request、write relation 与 refs。
-3. 固定 source 的 configuration、collector frame、normalizer、principal/group、
-   nonce claim、receipt-last、deadline、command ledger 和 cleanup 的实际边界。
-4. scope driver 的参数、private channel、runtime closure、终止帧和测试 fixture。
-   记录这些文件的 Git blobs 与 SHA-256，不以符号同名代替比较。
+reader blob 为 `118f010b8540e1bb79c28ee9cf42a618de731a63`，shared consumer 为
+`013bf3ec67a282722e8817716cd9a7412d65cd00`，coverage normalizer 为
+`f360d6155f0ed58594b357340f3b3437907aa3f2`，host supervisor 为
+`1c75e28c49a7ac182f71bb381f5c621acf69c770`。它们只固定当前预读对象。
 
-只有路径或符号改名且语义完全相同，才可按非语义 base refresh 重新独审。
-语义、allowed paths、ownership 或协议改变，须先更新本 plan 并独审接受。
-缺失上述 accepted tuple 就停止实现接线；不能把预期提交填作已接受依赖。
-不借等待依赖先落无 consumer 的 schema、重复 source 或永久拒绝实现。
-这项门槛只阻止本 concern 的实施，不要求提前闭合 #558 的集中运行验收。
+当前 `source_coverage` 在 durable request 后只关闭自己 owned 中的
+`_HeldStoreRead`，随后重认证 qualifying/current；没有 outer registry/handoff。
+`_foreground` 当前 close_fds 且只泵 stdin/stdout/stderr，没有新私有通道。
+下文的共同 owner、kill operation、通道和 deadline 交接全部是待实施改动。
+
+| 门槛 | 允许的下一步 |
+| --- | --- |
+| 计划准备 | 使用上述真实 source 完成架构映射；保留 unmerged/unaccepted 和两项 P1 状态 |
+| 计划接受 | 原 carrier 新 clean head、两项 P1 闭合、完整 source preflight 和本 plan fresh 独审；经理记录本计划与依赖的精确 tuple |
+| 提前 inactive 实施 | 在获接受的计划与经理明确 build tuple 下，采用精确保留依赖准备本 concern 代码/tests；不要求把 source 预审称为 G3 或已合入，不替代任何原 proof |
+| foundation 与 #544 合入 | #558/#541 全部原标准先闭合并 protected merge；#544 按自身计划完成全部 proof、实际 diff 审查、CI 与 protected merge |
+| #681 最终发布/G3 | 原实现 carrier 普通 merge 含上述实现的精确 main，核完整 diff/允许路径/尺寸，重新 exact-head/base 独审和 CI，完成本 spec 全部证明 |
+
+计划接受前的 source preflight 必须读修复后的完整相关 source 和 helper，而非只看
+测试摘要。记录 source head、parent/base、两条 artifact chain、文件 blobs/SHA-256，
+逐项核上表的全部 store 取得/释放点、closed argv、ledger、source request/receipt、
+raw schemas、fresh origins、private protocol 和 fixture。测试-only delta 也须独审，
+不能自动继承 170fac 结论；接口语义改变则先重写相应计划内容。
+
+最终合入基础后，计算 main→head 的完整 diff，不扣除 inherited 行数来满足预算。
+若仍含未合入 foundation，停止 #681 发布，不扩大预算包揽依赖。
+无 reset/rebase、重建 attempt 或死 shim；不借等待先落无 consumer 的 schema。
+本 concern 不修改 #544 producer 或补它的 P1；改动若需要超出本允许集，返回计划门槛。
 
 ## 精确改动范围与交付
 
@@ -74,7 +98,8 @@ spec、生产链修复、#544 spec/plan/source 必须先分别接受。本计划
 | `docs/components.md`、`RESTORE.md`、`ci/required-files.txt` | 入口、inactive 边界、运行条件、恢复清单与证明命令 |
 
 实现采用一个完整 consumer 交付。`review_size: accepted-exception`，预计净变更
-3,000–5,200 行。依据现有 reader 约 1,092 行、source normalizer 481 行及
+3,000–5,200 行，仅适用于 foundation 与 #544 正式合入后的本 concern 完整 diff。
+依据当前 reader 1,109 行、source normalizer 481 行及
 #544 source 接线约 1,294 行新增，预计 production glue/normalizer 约占一半，
 完整同合同 fixture 和破坏用例约占另一半。复用现有约 16,093 行的 scope 测试基础。
 不复制其中账号、ACL、安装和收割框架。若完整实现超出范围，先保留 clean attempt，
@@ -105,11 +130,16 @@ basis 的检查复用 `workflow-scope.jq` 的同一字段谓词，只允许缺�
 不要通过虚构三份 refs 让完整 scope validator 先通过。
 
 在 `_Reader` 中分离当前 bundle 解析/认证与后续 coverage/输出阶段。
+保留 `fixed_bundle` 的 owner 生命周期和 `_authenticate` 的递归前置认证。
+每个实际取得的 store 对象立即登记：role、attempt、store identity、frozen snapshots、
+non-root metadata、认证输入和全部 derivation refs。相同 attempt 的 aliases 不得漏登记。
 新 consumer 调用同一固定函数，保留它的全部 relation 检查；不能仿写简化 reader。
 仅从 scope 当前 refs 和 qualified identity 唯一命中的 bundle 提取：
-`materialization-input.json.stage_request`、`.resolved_profile.content`、
+`materialization-input.json.stage_request.content`、`.resolved_profile.content`、
 `materialization-response.json.stage_result` 及 `policy-set.json`。
-以原 canonical 子文档字节为准，验证原 envelope 与 public-core request/profile/result。
+先验证 stage_request/resolved_profile 两个 content pair 的完整 wrapper、declared SHA
+与 canonical content bytes，再取原子文档交 driver，不能把 pair wrapper 当 request。
+验证原 envelope 与 public-core request/profile/result。
 所有 required environments 必须指向同一四元组。缺一、多组、旧 attempt 均拒绝。
 不得拿 prerequisite result/duty，或改变 `gate_decision_refs` 适配 claim。
 
@@ -198,17 +228,20 @@ consumer 重跑 normalizer 并逐字比较，再验证 request/expectation 与�
 交给 `evaluate-scope.sh`，driver 再交给自己的 reader；不开放 CLI/环境 provider。
 通道采用有限、定长上界的 canonical 帧，含版本、call id、随机 session nonce、
 消息序号、当前阶段和 frozen binding 摘要。每帧最多 1 MiB；重复、越序、EOF、超时拒绝。
+在新 consumer 内定义唯一私有 `_GateStoreSession`，由 outer 持有状态机和全部
+acquisition 清单。inner 的本地 descriptors 是其登记子集；每次取得、重核、释放、
+接管均按同一有限协议确认。这个 owner 不提供公共 callback、通用 store API 或权限。
 通道只协调生命周期，不能认证来源或代替任何 receipt/origin 检查。
 外部伪造通道至多使求值失败；不能省略认证或提升 verdict。公开低层无通道时保持原协议。
 
 | 阶段 | store holds 与动作 |
 | --- | --- |
-| P0 | outer 用现有 reader 完整认证 current core；保留 byte/object/non-root metadata 快照。全部 provisional |
+| P0 | outer 用现有 reader 完整认证 current 及递归 prerequisite core；登记每个实际 acquisition 与 frozen byte/object/non-root metadata。全部 provisional |
 | K_REQUEST | kill request/expectation durable 后，outer 完整 recheck；释放自己的所有 store-root acquisitions，保留非 store holds；失败即停止 |
 | K_DONE | source 成功且确实 reap 后，outer 完整重认证所有 core 和 kill source；比较 frozen bytes/对象/关系，取得 fresh origins。需要 coverage 时仍 provisional |
-| C_REQUEST | inner 正常认证 qualifying/current，生成并 fsync coverage request/expectation。发送请求绑定和全部 attempt 清单；outer 验证与实际 frozen inputs 一致 |
-| C_RELEASE | outer 与 inner 各自完整 recheck。outer 先释放其所有 core/kill store holds 并确认；inner 再 recheck 并释放全部自身 store holds。两方确认后才启动 coverage source |
-| C_DONE | source 确实 reap；inner 完整重认证 qualifying/current/coverage 及 handoff 中的 core/kill。outer 同样重新取得全部 attempts，并重复完整认证和 frozen 比较 |
+| C_REQUEST | inner 正常认证 qualifying/current 及其递归 prerequisites，先登记到同一 owner；生成并 fsync coverage request/expectation。发送请求绑定与完整闭包，outer 对照实际认证输入核对 |
+| C_RELEASE | outer 与 inner 各自完整 recheck。outer 先释放其全部登记 core/prerequisite/kill acquisitions 并确认；inner 再 recheck 并释放其全部登记 acquisitions。清单必须归零后才启动 coverage source |
+| C_DONE | source 确实 reap；inner 完整重认证 qualifying/current、全部递归 prerequisites、coverage 和交接的 core/kill。outer 按同一闭包重新取得全部 attempts，重复完整认证和 frozen 比较 |
 | FINAL_OWNER | outer 的全部 final acquisitions 建立后确认接管；inner 仍持有自己的 final reads 到原 SEAL/COMMIT，不能在 outer 成功接管前关闭 |
 | COMPLETE | scope driver 完成、退出且 reap 后，只有 outer 持有最终全部 acquisitions。outer 核对所有输出、原输入、运行包和 holds，最后写完成标志，然后释放 |
 
@@ -219,7 +252,8 @@ current facts；不能仅比较 inner 帧或重读 receipt。kill 的 final acqu
 配置、request、receipt、manifest、raw normalizer 与关系验证。
 
 每个 acquisition 持有期间 root metadata 比较完全不变。合法 sibling 只允许两次
-acquisition 之间 root metadata/fresh origin 变化。每个已使用 attempt 的对象身份、
+acquisition 之间 root metadata/fresh origin 变化。完整闭包包括 writer 的 frozen prerequisite；不能只比较返回的 current row facts。
+每个已使用 attempt 的对象身份、
 非 root metadata、全部非 origin 原字节及关系必须匹配最早冻结值；改后稳定也拒绝。
 root identity、安全配置、owner/group/mode/ACL 不得借重取更换。
 初始 origin refs 永远留在两份已冻结请求中；manifest 分别列出初始和 final fresh refs，
@@ -227,7 +261,8 @@ root identity、安全配置、owner/group/mode/ACL 不得借重取更换。
 final 之后禁止第三次 sibling。任意 root/core/source 变动都不能留下完成标志。
 
 修改 `_Reader.evaluate` 以复用认证结果，而非重复执行 source；source 状态只能单向
-推进。所有 `_HeldStoreRead` 派生类型与同 root aliases 都登记到具体 owner 中。
+推进。所有 `_HeldStoreRead` 派生类型、递归 prerequisite 与同 root aliases 都登记到
+同一 `_GateStoreSession`；原 reader owned 保存对应本地责任，release 必须同步移除。
 禁止只遍历某一已知 subtype 而漏掉 kill/core hold。非 store 持有列表永不在 source
 交接时关闭。最终 owner 的 close 在完成标志 durable 后执行；失败路径先撤销完成资格。
 
@@ -285,6 +320,8 @@ consumer 入场即设 monotonic deadline = start + 300 秒。所有 driver、sou
 IPC 和清理只使用这个 deadline 的剩余量。私有交接传 absolute deadline 并取更短上界，
 不能在新 reader 或 source 返回后重置。保留 source 120 秒、collector 105 秒等更短限制。
 预留最多 10 秒给 TERM→KILL→唯一 reap；无足够剩余预算时不启动新子进程。
+现有 `_foreground` 用局部 timeout 和独立 10 秒 cleanup，本接线须将它们上界
+收紧到同一 outer deadline；保留原低层调用语义，不能把继承 deadline 延后。
 复用具体 `_DarwinChildOwner._foreground` 的进程组清理；增加固定 scope 调用的
 双向事件泵以响应上述帧，不启动第二套通用 runner。
 终止仅针对自己登记的 child/process group。SIGINT/TERM/HUP、非零、超限、坏帧、
@@ -351,6 +388,8 @@ checks、aggregate ci 和外部 required checks；不新增 workflow。quick CI 
 检查与 pinned shellcheck 0.11.0 的 `-x -S style`。新入口和新 test 加入恢复清单一次；
 列明运行包中既有 source 文件，保持可恢复性。检查无任何未允许路径或 production 值。
 独立 reviewer 按 Bugs/Security/Compliance 三轮阅读完整 exact-head/base diff 和原始证明。
-所有 Important 解决后，经理按当前 Roadmap 委托记录 accepted tuple 与 protected merge。
+所有 Important 解决后，经理按当前 Roadmap 委托记录 accepted tuple。
+最终 protected merge 与 G3 还须满足上表的 foundation/#544 合入和本 concern 全部证明，
+不能仅凭 inactive 代码准备或源码预审提前发布实现 PR。
 若运行授权或 genuine proof 未闭合，准确保留集中验收欠项；不以本计划、普通测试、
 quick green 或合并记录替代 #558 最终验收。
