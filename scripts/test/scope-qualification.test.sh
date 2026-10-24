@@ -210,6 +210,7 @@ with tempfile.TemporaryDirectory(prefix='coverage-git-') as area:
         'first_parent_commits':[{'index':i,'commit_id':oid,'parent_commit_id':parent,'tree_id':tree_id} for i,(oid,parent,tree_id) in enumerate([(a,None,ta),(b,a,tb),(merge,b,tc),(r,merge,tr)])],
         'publisher_pull_requests':[pull]}
     reader=reader_module._Reader.__new__(reader_module._Reader)
+    reader.store_session=None
     reader.owned=[];reader.inputs=[];reader.commands=[];reader.commands_open=True;reader.anchor=None
     reader.deadline=time.monotonic()+120;reader.scratch=area;reader.captures=area/'captures';reader.captures.mkdir()
     reader.runtime=area/'runtime';reader.runtime.mkdir();reader.no_hooks=reader.runtime/'no-hooks';reader.no_hooks.mkdir()

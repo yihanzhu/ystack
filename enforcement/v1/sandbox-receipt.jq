@@ -454,8 +454,8 @@ def decision_pin:
   if $mode == "bound" then "c8685bc8d15bb2375ab2263b0add5c151aa7c763fa3197bbacf886606f87df47"
   else "c3e89800147d55f7c726ec66c82031915a4220d3eb7867e143f60d7026223bbd" end;
 def policy_set_pin:
-  if $mode == "bound" then "53cc568504e37bf2abf9542fab988b0f9d021ff40bf67872eb3432bcacaaf16d"
-  else "3fff018a4a7cbd9d8c69339ce1cd20c7f940b7af8080b12afe36e57961757eb8" end;
+  if $mode == "bound" then "a50d1ab32ef5964c9e3074084870bffa264fd138f325d830d166135545e3dc8d"
+  else "a3f9a8d16bd60a0cfc32da3e802a207c1e225013b7ef115030ef567d0ccd366a" end;
 
 def pinned_files_ok:
   (if $policy_sha != policy_pin then error("fixed-file-identity:policy") else true end) and

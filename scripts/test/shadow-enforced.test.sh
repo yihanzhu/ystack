@@ -2094,7 +2094,7 @@ def acl_mask_equivalence():
     for replacement, previous in reverse_blocks:
         assert original.count(replacement) == 1
         original = original.replace(replacement, previous, 1)
-    assert hashlib.sha256(original.encode()).hexdigest() == '662311c6d7ca101fadaabdcdae49fb8341b0874acfe006575386ec26c36a1fc2'
+    assert hashlib.sha256(original.encode()).hexdigest() == '420ff579a419d23db6b7dc7e4dcf781726b4e000f8dad03e31d3239f051833db'
     expected_sources = {'_root_rule': {'old': 'af22ae2221580e7d65ef28e702b69c8653ffde0c965d500b52a1d8c5a28abaa5', 'new': '0b09217defef12508065a0fb8dbb43cd5ba3bd2f432281a18c0f0b138435e273'}, '_installed_rule': {'old': '976684eafda4c87744529283c19e94e4113e108c3d9c9a2f17346239997b4cad', 'new': 'd11b36310a1c712c7ab66521a0a6c7b8231feed6eac6a554296b07408798be6f'}}
     rows = []
     dangerous_bits = (4, 16, 32, 64, 256, 1024, 4096, 8192)
