@@ -249,6 +249,7 @@ failures. Merge accepted dependencies normally on the same implementation branch
 | 2. Launch request | `enforced-reproduction.py:make_launch` obtains fresh entropy in its real caller. Extract its byte construction into a private function taking that entropy, the already-held input bytes and control facts. | Call that same constructor with the historical raw entropy from B. No input reaches the real launch function, nonce reservation, sudo or supervisor command. |
 | 3. Guest values | Move the existing counter arithmetic and report construction from `sandbox/v1/guest/supervisor.c` into `observation-values.c` and `.h` in that directory. The real supervisor calls this owner after taking the same OS observations. | Compile the same value-only C source as a fixed private helper. Its stdin is the closed B guest record. It has no namespace, mount, exec, socket, cgroup or process-control operations. |
 | 4. Host receipt | `sandbox/v1/host-supervisor.py` retains real launch, deadline, cancellation, stop, reap and storage code. Its private value functions own identity composition, host state transitions, `build_limit_rows`, `build_receipt` and `derive_outcome`. | Feed historical primitive observations to those same value functions. Rebuild the guest frame, payload, identities, lifecycle, limits, teardown, times and receipt. Never accept a recorded receipt as their input. |
+| 4a. Runtime driver reply | `sandbox/v1/runtime-vfkit.py` owns `cmd_argv`, `cmd_state` and `cmd_stop` value construction/classification. Extract their private value functions; the real commands retain config/start-file reads and `rest` socket I/O, then call those functions. | Call the same functions with reconstructed start/config bytes and the closed historical REST observations below. Rebuild complete stdout/stderr and exit classification; never call `rest`, `UnixConnection` or the actual command entry points. |
 | 5. Origin and provenance | `shadow/v1/_consumer.py` keeps real held descriptors and checks. Separate its existing metadata/ACL/identity predicates and origin construction from acquisition. `enforced-reproduction.py` owns native-release provenance; `write-shadow.py` owns command rows, admission and final record. | Recompute predicates and projections from B plus held trial bytes. The result is a historical comparison value. It cannot construct an Anchor, HeldPath, native release, store session or live admission object. |
 | 6. Gate sources | `coverage-source.py` owns `captured`, `normalize`, `kill_normalize`, source identity and source receipt construction/validation. Move the inline receipt construction from host supervisor into this existing owner; the real supervisor calls it after its existing source and store checks. | Rebuild raw manifests from captured page metadata and page bytes, normalize again, rebuild source receipts, and validate them with this same owner. Do not invoke a collector, forge, broker or network. |
 | 7. Gate results | `generate-gate-evidence.py` owns request/expectation construction, `project_register`, the duty/risk/kill order, scope construction, final manifests and completion. `read-shadow-evidence.py` owns bundle facts and measured scope observations. Extract value functions in these files. | Use these same functions and the existing jq evaluators. `scope-gates.jq` gets the recomputed measured observation through the fixed private replay caller. Public `evaluate-scope.sh` still requires its real reader/session handshake. |
@@ -303,9 +304,11 @@ rows and derived state remain outputs of C.
 | `storage.entries` | For each named held ancestor, directory or file: `{role,name,before,after,named_after,access_acl,default_acl,directory_names,read_error}`. | Each stat is exactly `{dev,ino,mode,uid,gid,nlink,size,mtime_ns,ctime_ns}` with integer values; mode includes type bits. ACL entries are the existing Linux tag/perm/id or Darwin tag/resolved-id/perm tuples, with existing 128-entry bound. Names are raw byte strings encoded as hex. File bytes are separately pinned inputs or computed outputs, never a digest observation. Maximum 65536 entries, matching preparation repository_entries. |
 | `storage.identity_context` | Real uid/euid/gid/egid, supplementary group ids, Darwin UUID resolver byte replies and platform. | Exact existing `_consumer` resolver/group schemas and bounds; no supplied `authenticated`, `stable`, `owned`, `accepted` or ACL verdict. The same owner derives all those predicates from the values above. |
 | `guest.setup` | Raw success/error numbers for the existing cgroup writes/opens; exact readback bytes for cpu.max, cpu.max.burst, bandwidth slice, pids.max and meminfo; output/scratch statvfs tuples; page-size return. | Closed keys with those names. Readbacks at their existing 64/256-byte limits; statvfs exactly `{f_blocks,f_bfree,f_frsize,f_files}`. Hard/unknown enforcement flags are recomputed, including CPU always none. |
-| `guest.control` | Ordered primitive results of the existing controller: monotonic timespec, poll return/revents/errno, waitpid pid/status/errno, cgroup.events bytes, exec-channel bytes/EOF/errno, kill return/errno and fanotify event fields/reply return. | Closed operation tags are `now,poll,wait,population,exec-read,kill,fan-read,fan-reply`; no function names or arbitrary calls. At most 4096 records, each at most 8192 bytes (including the existing 4096-byte fanotify read). Expected next operation and all decisions come from the shared existing controller expressions; wrong order or extra results reject. No recorded tree_terminated/verifier_started/deadline verdict is an input. |
+| `guest.control` | Ordered primitive results of the existing controller: monotonic timespec, poll return/revents/errno, waitpid pid/status/errno, cgroup.events bytes, exec-channel bytes/EOF/errno, kill return/errno and fanotify event fields/reply return. | Closed operation tags are `now,launch,poll,wait,population,exec-read,kill,fan-read,fan-reply`; no function names or arbitrary calls. At most 4096 records, each at most 8192 bytes (including the existing 4096-byte fanotify read). Expected next operation and all decisions come from the shared existing controller expressions; wrong order or extra results reject. No recorded tree_terminated/verifier_started/deadline verdict is an input. |
+| `guest.control` launch record | At the sole `launch_and_control` launch site (`supervisor.c:1404`; real clone at `:1419` in the bound source), retain the real `ops->launch` return from `production_launch` / `ys_clone3_into_cgroup`. | Exactly `{tag:"launch",pid,errno}`; pid is a signed 32-bit integer, errno is null for a nonnegative return or a positive signed-32-bit errno captured immediately on clone failure. Exactly one record after the initial successful clock/deadline construction; zero only when that construction fails. Nonpositive return follows the existing failure branch. No PID is inferred from a later wait. |
 | `guest.counters` | Exact cpu.stat, memory.peak, memory.events, pids.peak, pids.events bytes or read errno; output file stat tuples; output/scratch statvfs; raw evidence directory names and file bytes. | Counter reads preserve the existing 64/256-byte bounds; evidence count at most 10000 and payload total at most 10 MiB. The value owner computes rounded CPU, reached flags, observations, sizes, names, report and frame. A guest report is not a raw input. |
 | `host.process` | Ordered real driver exit code/stdout/stderr, Popen error or pid, poll/wait result or timeout/error, killpg result, signal numbers, drain-thread start/join observations, export read/error and cleanup syscall return/errno. | Only the fixed launch/state/stop/poll/wait/kill/drain/export/cleanup sites of `run_vm` and finalization; at most 4096 records, diagnostics capped by the existing 64 KiB bound. The shared owner derives stop acceptance, runtime_error, confirmed termination, teardown, deadline and limit rows. Raw export bytes must equal the rebuilt guest frame; they cannot replace it. |
+| `host.driver_rest` | The fixed driver's `rest` return primitives at `runtime-vfkit.py:89–99`: response status and raw body bytes, or the caught transport exception category/errno and its phase. | Ordered `{call,operation,reply,error}` records, at most 4096 per host run and charged to its 4 MiB control budget. Operation is only `state` or `stop`. Reply is null or exactly `{status,body_hex}`, status integer 100–999, body at most 65537 bytes. Error is null or exactly `{phase,category,errno}`; phase is `request`, `getresponse` or `read`; category is `OSError` or `HTTPException`; errno is null or a signed-32-bit integer. Exactly one of reply/error is non-null. No recorded running/stopped/error classification is an input. |
 | `source_pages.kill` and `.coverage` | Captured remote response bytes plus `{family,page_index,response_status,input_cursor,output_cursor}` from the real fixed collector boundary. | Existing families and order; 128 pages per operation, 1 MiB per page, 64 MiB total per operation. Rebuild raw_size, raw_sha256, request_sha256, raw manifest, normalized observation and receipt. No credentials or authorization headers are retained. |
 | `commands.runtime_values` | Git version reply; Python version/ABI/sysconfig values and Unicode version from the qualified recording runtime. OS wait status and errno are retained separately by fixed component role. | Existing native build-record configuration keys only; version strings at most 128 bytes. At most 4096 commands. Recompute argv from the recipe and historical locators; hash source/executable bytes. Normal component stdout, stderr, exit classification, argv_sha256 and command list are not claimed inputs: rerun or recompute their actual owner. |
 | `runtime.slots` | Read-only qualified byte inputs enumerated in D, plus original locator and read errno when the genuine owner could not read a slot. | Byte streams only, never executed by replay. Recompute individual and composite hashes. A receipt identity digest is not a substitute for its bytes. |
@@ -333,11 +336,43 @@ pid/fd-role, its fstat tuple, and response-write counts/errno. The owner compute
 allow/deny and first-inode history. No supplied fan decision is accepted.
 Host process rows have exactly `site`, `ordinal`, `return`, `errno`, `bytes` and
 `timeout`; unused fields are null. Return types are fixed per site: pid for spawn,
-integer/null for poll/wait, integer for driver/kill/cleanup, boolean for thread
-observations. Bytes occur only for driver replies and raw export; clock and signal
-records use the separate arrays. The raw bytes must agree with the shared driver's
+integer/null for poll/wait, integer for driver/kill/cleanup/read/close, boolean for
+thread/select observations. Bytes occur only for checked driver replies, pipe reads
+and raw export; clock and signal records use the separate arrays. The raw bytes must agree with the shared driver's
 and guest owner's reconstructed output. Sites are the named operations in A/B,
 not arbitrary syscall names; replay cannot dispatch them.
+
+All driver calls, including `argv`, have contiguous zero-based indices in the
+order selected by the shared host controller. REST rows refer to those indices;
+only non-REST calls may explain gaps between REST rows. The first `argv`
+construction has no REST record. Each
+reached `state` or `stop` REST call consumes exactly one matching record; a call
+that fails before reaching REST consumes none. Missing, duplicate, reordered or
+unused records reject. The method/target/body are fixed by the driver:
+`GET /vm/state` with no body, or `POST /vm/state` with exactly
+`{"state":"HardStop"}`. They are derived, never caller-selected observations.
+The same driver owner retains its exact JSON parsing and classification, including
+malformed bodies, exceptions and the 65536-byte state limit. A 65537-byte reply is
+valid raw overflow evidence, not a successful state. Stop acceptance remains the
+existing status-200 test; it is not confirmation of termination.
+
+`host.process` also retains the fixed `run_driver` pipe acquisition sites:
+`select`, `read`, `close`, `poll`, `wait` and group-kill. Select records its
+ready/timeout/error result; read records its byte count, EOF or errno. Ordered
+read bytes must be exact consecutive slices of the same driver's reconstructed
+stdout; they are compared, not trusted as another reply. Existing 65536-byte cap,
+cap-plus-one overflow detection, clock/deadline checks and wait budget remain.
+Missing EOF, read error or timeout must reconstruct the original incomplete
+response rejection, even if the driver process reported exit zero. These records
+share the existing 4096 host-record and 4 MiB bounds; they add no I/O dispatch.
+
+The guest controller consumes the launch record at its original site before any
+wait. It passes that exact positive child PID through the existing `waited == child`
+checks in normal and failure cleanup paths. A zero wait never proves reap, a
+foreign PID never becomes the child, and EINTR retains the existing branch.
+Deadline-first ordering, child-reaped, tree-terminated and verifier-started remain
+computed values. The real caller still launches once through the existing code;
+the offline value helper never launches, chooses or injects a PID.
 
 For stat arrays, the pure owner derives file kind, permission mode and metadata
 arrays exactly as the current `_identity` and `_observation` functions do. File
@@ -512,6 +547,17 @@ three original malicious negatives; overlap with equal versus unequal bytes; and
 archive independence. Synthetic inputs prove mechanisms only, never real seeds.
 For each extracted owner, force its production call and its offline call to return
 a different byte: both paths must fail. Deleting either call must fail a test.
+
+In the already allowed `evals-malicious.test.sh`, `sandbox-launcher.test.sh` and
+guest tests, require the production and offline driver calls to use the same value
+owner. Cover valid running/stopped replies, wrong status, malformed JSON, 65536 /
+65537-byte bodies, each transport error phase, refused/accepted stop, confirmed
+stop, clean EOF, incomplete EOF/read error and timeout. Changing only a derived
+driver reply must fail byte comparison. Cover positive launch PID, zero/negative
+return, wait zero, matching/foreign PID, EINTR and deadline expiry before and after
+launch/wait. Changing only the launch PID must affect the existing matching test;
+no child_reaped fixture flag may bypass it. Ordinary fixtures prove these cases;
+none opens a socket, launches a guest or supplies native qualification.
 
 Retain all existing host-supervisor, guest-value, receipt, consumer, preparation,
 gate-generation, scope, eval, restoration and cancellation regressions. The shared
@@ -749,7 +795,8 @@ to evade the source cap. Executable and policy files always belong to the closur
    paths: `evals/v1/replay-malicious.py`, `shadow/v1/write-shadow.py`,
    `shadow/v1/enforced-reproduction.py`, `shadow/v1/_consumer.py`,
    `preparation/v1/prepare-candidate.py`, `sandbox/v1/host-supervisor.py`,
-   `sandbox/v1/coverage-source.py`, `sandbox/v1/build-guest.py`,
+   `sandbox/v1/runtime-vfkit.py`, `sandbox/v1/coverage-source.py`,
+   `sandbox/v1/build-guest.py`,
    `sandbox/v1/guest/supervisor.c`, `sandbox/v1/guest/common.c`,
    `sandbox/v1/guest/common.h`, `sandbox/v1/guest/observation-values.c`,
    `sandbox/v1/guest/observation-values.h`, `verifiers/file-digest/v1/verifier.c`,
