@@ -1046,6 +1046,13 @@ def _observation_values(relative, before, after, raw=None, *, acquisition=False)
 
 
 def _origin_values(files, storage_rows, identity_context, source_bytes):
+    _require(type(identity_context) is dict and set(identity_context) == {"attempt_id", "platform"}
+             and type(identity_context["platform"]) is str
+             and identity_context["platform"] in {"linux", "darwin"}, "E_STORE")
+    def name_value(value):
+        _require(type(value) is str and len(value) % 2 == 0
+                 and all(char in "0123456789abcdef" for char in value), "E_STORE")
+        return bytes.fromhex(value).decode("utf-8", "surrogateescape")
     if type(files.get("sandbox-export.bin")) is tuple:
         files = dict(files)
         files["sandbox-export.bin"] = _ExportSnapshot(files["sandbox-export.bin"], None, None)
@@ -1057,7 +1064,7 @@ def _origin_values(files, storage_rows, identity_context, source_bytes):
         _require(type(row) is dict and set(row) == {"role", "name", "before", "after", "named_after",
             "access_acl", "default_acl", "directory_names", "read_error"}
             and row["role"] == "store" and row["read_error"] is None, "E_STORE")
-        name = bytes.fromhex(row["name"]).decode("utf-8", "surrogateescape")
+        name = name_value(row["name"])
         _require(name not in names, "E_STORE"); names.add(name)
         before = row["before"]
         _require(_identity_values(before) == _identity_values(row["after"])
@@ -1069,8 +1076,9 @@ def _origin_values(files, storage_rows, identity_context, source_bytes):
             _require(before["nlink"] == 1 and before["size"] == len(files[name]), "E_STORE")
         listed = row["directory_names"]
         if listed is not None:
-            _require(type(listed) is list and len(listed) == len(set(listed)), "E_STORE")
-            listed_names = {bytes.fromhex(value).decode("utf-8", "surrogateescape") for value in listed}
+            _require(type(listed) is list and len(listed) <= 65536, "E_STORE")
+            listed_names = {name_value(value) for value in listed}
+            _require(len(listed) == len(listed_names), "E_STORE")
             if name == attempt_id:
                 _require(listed_names == _attempt_names(files), "E_STORE")
             elif name == "payload":

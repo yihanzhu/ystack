@@ -652,6 +652,24 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
                     {'attempt_id':attempt_id,'platform':sys.platform},{'host-config.json':config_raw})
                 assert rebuilt == held.observation
                 if complete:
+                    storage_mutations = [
+                        ('missing',lambda rows:rows[0].pop('name')),
+                        ('extra',lambda rows:rows[0].update(extra=True)),
+                        ('wrong-name-type',lambda rows:rows[0].update(name=[])),
+                        ('nonhex-name',lambda rows:rows[0].update(name='gg')),
+                        ('odd-name',lambda rows:rows[0].update(name='2')),
+                        ('uppercase-name',lambda rows:rows[0].update(name='2E')),
+                        ('wrong-stat-type',lambda rows:rows[0]['before'].update(dev=True)),
+                        ('read-error',lambda rows:rows[0].update(read_error=5)),
+                        ('wrong-list-type',lambda rows:rows[1].update(directory_names={})),
+                        ('wrong-entry-type',lambda rows:rows[1].update(directory_names=[[]])),
+                        ('nonhex-entry',lambda rows:rows[1].update(directory_names=['gg'])),
+                        ('over-entry-count',lambda rows:rows[1].update(directory_names=['00']*65537))]
+                    for label,mutate in storage_mutations:
+                        changed = copy.deepcopy(held.storage_rows);mutate(changed)
+                        refuses(lambda:consumer._origin_values(held.snapshots,changed,
+                            {'attempt_id':attempt_id,'platform':sys.platform},
+                            {'host-config.json':config_raw}),'storage-shape-'+label)
                     assert consumer._capture_for_replay(held.snapshots,attempt_id,request) == group
                     print('ok capture envelope and actual held inventory - new; not a complete case replay')
                     for label,change in [('extra-key',lambda v:v.update(extra=True)),
