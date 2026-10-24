@@ -15,13 +15,15 @@ import unicodedata
 
 PACKAGE = Path(__file__).absolute().parents[2]
 SOURCE = PACKAGE / "shadow/v1/_consumer.py"
-DEADLINE = time.monotonic() + 300
+_entry_clock = time.monotonic()
+DEADLINE = _entry_clock + 300
 _spec = importlib.util.spec_from_file_location("scope_shadow_consumer", SOURCE)
 if _spec is None or _spec.loader is None or SOURCE.resolve() != SOURCE:
     raise SystemExit("E_RUNTIME")
 c = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = c
 _spec.loader.exec_module(c)
+c._clock_value('scope/v1/read-shadow-evidence.py:18:0', _entry_clock, 'monotonic')
 
 
 def require(value, code="E_RELATION"):
@@ -40,6 +42,95 @@ def ref(raw):
     document = parse(raw)
     return {"schema_version": document["schema_version"], "kind": document["kind"],
             "id": document["id"], "sha256": c.digest(raw)}
+
+
+def _origin_projection_values(document, snapshots, attempt_id, config):
+    require(set(document) == {"schema_version", "kind", "id", "body"}
+            and type(document["schema_version"]) is int and document["schema_version"] == 1
+            and document["kind"] == "shadow_origin_observation" and document["id"] == attempt_id)
+    body = document["body"]
+    require(set(body) == {"store_id", "attempt_id", "entries", "result"}
+            and body["store_id"] == config["store_id"] and body["attempt_id"] == attempt_id
+            and body["result"] == "authenticated" and type(body["entries"]) is list)
+    directory_names = {".", attempt_id, "payload", "payload/evidence"}
+    expected = set(snapshots) | directory_names
+    names = []
+    for row in body["entries"]:
+        require(type(row) is dict)
+        names.append(row.get("name"))
+        file = row.get("kind") == "file"
+        require(set(row) == {"name", "device", "inode", "mode", "uid", "gid", "kind",
+            "metadata_before", "metadata_after"} | ({"size", "sha256"} if file else set()))
+        require(row["name"] in expected and row["uid"] == config["principal_uid"]
+                and row["gid"] == config["consumer_gid"]
+                and row["mode"] == (0o440 if file else 0o750)
+                and row["kind"] == ("file" if row["name"] in snapshots else "directory")
+                and all(type(row[key]) is int for key in ("device", "inode", "mode", "uid", "gid"))
+                and type(row["metadata_before"]) is list and len(row["metadata_before"]) == 10
+                and all(type(value) is int for value in row["metadata_before"])
+                and same(row["metadata_before"], row["metadata_after"]))
+        metadata = row["metadata_before"]
+        require(metadata[:6] == [row["device"], row["inode"], stat.S_IFREG if file else stat.S_IFDIR,
+                row["uid"], row["gid"], row["mode"]]
+                and metadata[6] >= 1 and metadata[7] >= 0 and metadata[8] >= 0 and metadata[9] >= 0)
+        if file:
+            require(metadata[6] == 1 and metadata[7] == row["size"])
+            raw = snapshots[row["name"]]
+            require(type(row["size"]) is int and row["size"] == len(raw) and row["sha256"] == c.digest(raw))
+    require(len(names) == len(set(names)) and set(names) == expected)
+
+def _record_refs_values(files, body, attempt, config):
+    expected = {"state": "satisfied", "reason_id": "shadow.sandbox-satisfied",
+        "launch_request_ref": ref(files["sandbox-request.json"]),
+        "expectation_ref": ref(files["sandbox-expectation.json"]), "receipt_ref": ref(files["sandbox-receipt.json"]),
+        "check_ref": ref(files["sandbox-check.json"]), "origin": {"state": "authenticated",
+            "store_id": config["store_id"], "method": "controlled-storage.v1",
+            "observation_sha256": c.digest(files["origin-observation.json"])},
+        "payload_ref": {"content_id": "file-digest-result", "media_type": "application/json",
+            "sha256": c.digest(files["file-digest-result.json"])}}
+    require(same(body["sandbox"], expected))
+    content = {"incident_ref": ("shadow-incident-record", "application/vnd.ystack.shadow-incident-record+json", "incident.json"),
+        "qualified_identity_ref": ("shadow-qualified-identity", "application/vnd.ystack.qualified-identity+json", "qualified-identity.json"),
+        "trace_ledger_ref": ("shadow-trace-ledger", "application/vnd.ystack.telemetry-trace-ledger+json", "trace-ledger.json")}
+    for key, (identity, media, name) in content.items():
+        require(same(body[key], {"content_id": identity, "media_type": media, "sha256": c.digest(files[name])}))
+    environment = body["environment"]
+    require(same(environment["claim_ref"], {"content_id": "shadow-environment-claim",
+        "media_type": "application/vnd.ystack.control-execution-environment-claim+json", "sha256": c.digest(files["claim.json"])}))
+    require(same(environment["registry_ref"], {"content_id": "shadow-environment-registry",
+        "media_type": "application/vnd.ystack.shadow-environment-registry+json", "sha256": c.digest(files["registry.json"])}))
+
+def _launch_expectation_values(files, config, registry, record_body, prep, instruction, control_values):
+    launch, expectation = parse(files["sandbox-request.json"]), parse(files["sandbox-expectation.json"])
+    launch_body = launch["body"]
+    subject = {"environment_id": config["environment_id"],
+        "environment_entry_sha256": c.digest(c.canonical(registry)), "target_repository_id": record_body["target_repository_id"],
+        "source": prep["source"], "candidate": {"preparation_record_sha256": c.digest(files["preparation-record.json"]),
+            "manifest_sha256": c.digest(files["preparation-manifest.json"]), "commit_id": prep["candidate"]["commit_id"],
+            "tree_id": prep["candidate"]["tree_id"]}, "incident_sha256": c.digest(files["incident.json"])}
+    require(set(launch) == {"schema_version", "kind", "id", "body"}
+            and type(launch["schema_version"]) is int and launch["schema_version"] == 1
+            and launch["kind"] == "sandbox_launch_request" and c._id(launch["id"])
+            and set(launch_body) == {"attempt", "control", "instruction_sha256", "nonce", "store_id", "subject"}
+            and c._sha(launch_body["nonce"]))
+    require(same(launch_body["subject"], subject)
+            and same(launch_body["control"], control_values)
+            and launch_body["instruction_sha256"] == c.digest(instruction)
+            and launch_body["store_id"] == config["store_id"]
+            and same(launch_body["attempt"], {"attempt_id": launch["id"], "attempt_number": 1})
+            and same(expectation, {"schema_version": 1, "kind": "sandbox_receipt_expectation", "id": launch["id"],
+                "body": {"attempt": launch_body["attempt"] | {"launch_request_sha256": c.digest(files["sandbox-request.json"])},
+                    "control": launch_body["control"], "store_id": config["store_id"], "subject": subject}}))
+    return launch
+
+
+def _bundle_facts_values(files, checked, fresh_origin, body):
+    return {"bundle_ref": ref(files["bundle.json"]), "receipt_ref": ref(files["sandbox-receipt.json"]),
+        "check_ref": ref(checked), "fresh_origin_ref": ref(fresh_origin),
+        "archived_origin_ref": ref(files["origin-observation.json"]),
+        "registry_ref": ref(files["registry.json"]), "accepted_set_ref": ref(files["accepted-identities.json"]),
+        "materialization_ref": {"sha256": c.digest(files["materialization-response.json"])},
+        **({"scope_policy_ref": body["scope_policy_ref"]} if body["record_form"] == "withheld-write-policy.v1" else {})}
 
 
 class _Owned(list):
@@ -71,7 +162,7 @@ class _GateReaderSession:
         self.wire = c._GateWire(socket.socket(fileno=os.dup(6)), DEADLINE)
         phase, body = self.wire.receive()
         require(phase == "INIT" and set(body) == {"deadline", "gate_call_ref", "initial_origin_refs", "kill_request"}, "E_RUNTIME")
-        require(type(body["deadline"]) in {int, float} and time.monotonic() < body["deadline"] <= DEADLINE, "E_RUNTIME")
+        require(type(body["deadline"]) in {int, float} and c._clock_value('scope/v1/read-shadow-evidence.py:74:0',time.monotonic(),'monotonic') < body["deadline"] <= DEADLINE, "E_RUNTIME")
         self.deadline = body["deadline"]
         self.wire.deadline = self.deadline - 10
         self.gate_call_ref, self.initial_origin_refs = body["gate_call_ref"], body["initial_origin_refs"]
@@ -284,7 +375,7 @@ class _Reader:
         self.record_command("scope-git-inspection", argv, self.git_binary.sha256,
                             self.consumer.sha256)
         result = self.darwin._foreground(argv, b"", limit, 65536,
-            min(30, self.deadline - time.monotonic()), self.environment())
+            min(30, self.deadline - c._clock_value('scope/v1/read-shadow-evidence.py:287:0',time.monotonic(),'monotonic')), self.environment())
         self.recheck()
         return result
 
@@ -303,7 +394,7 @@ class _Reader:
         self.recheck()
         self.record_command("scope-fixed-check", argv, self.bash.sha256, source.sha256)
         result = self.darwin._foreground(argv, raw, limit, 65536,
-            min(120, self.deadline - time.monotonic()), self.environment())
+            min(120, self.deadline - c._clock_value('scope/v1/read-shadow-evidence.py:306:0',time.monotonic(),'monotonic')), self.environment())
         self.recheck()
         return result
 
@@ -313,7 +404,7 @@ class _Reader:
         self.recheck()
         self.record_command("scope-fixed-json-check", argv, self.jq.sha256, source.sha256)
         result = self.darwin._foreground(argv, raw, limit, 65536,
-            min(30, self.deadline - time.monotonic()), self.environment())
+            min(30, self.deadline - c._clock_value('scope/v1/read-shadow-evidence.py:316:0',time.monotonic(),'monotonic')), self.environment())
         self.recheck()
         return result
 
@@ -413,32 +504,14 @@ class _Reader:
         self.jq_check("adapters/local-git-materializer/v1/protocol.jq",
             ["-e", "--arg", "command", "validate-response"], response_check)
         prep, manifest = parse(files["preparation-record.json"]), parse(files["preparation-manifest.json"])
-        launch, expectation = parse(files["sandbox-request.json"]), parse(files["sandbox-expectation.json"])
-        launch_body = launch["body"]
-        subject = {"environment_id": anchor.config["environment_id"],
-            "environment_entry_sha256": c.digest(c.canonical(registry)), "target_repository_id": body["target_repository_id"],
-            "source": prep["source"], "candidate": {"preparation_record_sha256": c.digest(files["preparation-record.json"]),
-                "manifest_sha256": c.digest(files["preparation-manifest.json"]), "commit_id": prep["candidate"]["commit_id"],
-                "tree_id": prep["candidate"]["tree_id"]}, "incident_sha256": c.digest(files["incident.json"])}
-        require(set(launch) == {"schema_version", "kind", "id", "body"}
-                and type(launch["schema_version"]) is int and launch["schema_version"] == 1
-                and launch["kind"] == "sandbox_launch_request" and c._id(launch["id"])
-                and set(launch_body) == {"attempt", "control", "instruction_sha256", "nonce", "store_id", "subject"}
-                and c._sha(launch_body["nonce"]))
-        require(same(launch_body["subject"], subject)
-                and same(launch_body["control"], self.enforced.control(anchor, evaluation))
-                and launch_body["instruction_sha256"] == c.digest(instruction)
-                and launch_body["store_id"] == anchor.config["store_id"]
-                and same(launch_body["attempt"], {"attempt_id": launch["id"], "attempt_number": 1})
-                and same(expectation, {"schema_version": 1, "kind": "sandbox_receipt_expectation", "id": launch["id"],
-                    "body": {"attempt": launch_body["attempt"] | {"launch_request_sha256": c.digest(files["sandbox-request.json"])},
-                        "control": launch_body["control"], "store_id": anchor.config["store_id"], "subject": subject}}))
+        launch = _launch_expectation_values(files, anchor.config, registry, body, prep,
+            instruction, self.enforced.control(anchor, evaluation))
         store = c._HeldStoreRead(anchor, launch["id"])
         self.owned.append(store)
         mapping = {"receipt.json": "sandbox-receipt.json", "payload/stdout": "payload-stdout.txt",
             "payload/stderr": "payload-stderr.txt", "payload/evidence-manifest.json": "evidence-manifest.json",
             "payload/evidence/0000": "file-digest-result.json"}
-        require(set(store.snapshots) == set(mapping)
+        require(set(store.snapshots) - {"capture.json"} == set(mapping)
                 and all(store.snapshots[key] == files[name] for key, name in mapping.items()))
         self.origin(parse(files["origin-observation.json"]), store.snapshots, launch["id"], anchor)
         self.origin(parse(store.observation), store.snapshots, launch["id"], anchor)
@@ -459,68 +532,13 @@ class _Reader:
         self.git_relations(files, material_input, incident, body)
         store.recheck()
         anchor.recheck("E_STALE")
-        return {"bundle_ref": ref(files["bundle.json"]), "receipt_ref": ref(files["sandbox-receipt.json"]),
-            "check_ref": ref(checked), "fresh_origin_ref": ref(store.observation),
-            "archived_origin_ref": ref(files["origin-observation.json"]),
-            "registry_ref": ref(files["registry.json"]), "accepted_set_ref": ref(files["accepted-identities.json"]),
-            "materialization_ref": {"sha256": c.digest(files["materialization-response.json"])},
-            **({"scope_policy_ref": body["scope_policy_ref"]} if body["record_form"] == "withheld-write-policy.v1" else {})}
+        return _bundle_facts_values(files, checked, store.observation, body)
 
     def origin(self, document, snapshots, attempt_id, anchor):
-        require(set(document) == {"schema_version", "kind", "id", "body"}
-                and type(document["schema_version"]) is int and document["schema_version"] == 1
-                and document["kind"] == "shadow_origin_observation" and document["id"] == attempt_id)
-        body = document["body"]
-        require(set(body) == {"store_id", "attempt_id", "entries", "result"}
-                and body["store_id"] == anchor.config["store_id"] and body["attempt_id"] == attempt_id
-                and body["result"] == "authenticated" and type(body["entries"]) is list)
-        directory_names = {".", attempt_id, "payload", "payload/evidence"}
-        expected = set(snapshots) | directory_names
-        names = []
-        for row in body["entries"]:
-            require(type(row) is dict)
-            names.append(row.get("name"))
-            file = row.get("kind") == "file"
-            require(set(row) == {"name", "device", "inode", "mode", "uid", "gid", "kind",
-                "metadata_before", "metadata_after"} | ({"size", "sha256"} if file else set()))
-            require(row["name"] in expected and row["uid"] == anchor.config["principal_uid"]
-                    and row["gid"] == anchor.config["consumer_gid"]
-                    and row["mode"] == (0o440 if file else 0o750)
-                    and row["kind"] == ("file" if row["name"] in snapshots else "directory")
-                    and all(type(row[key]) is int for key in ("device", "inode", "mode", "uid", "gid"))
-                    and type(row["metadata_before"]) is list and len(row["metadata_before"]) == 10
-                    and all(type(value) is int for value in row["metadata_before"])
-                    and same(row["metadata_before"], row["metadata_after"]))
-            metadata = row["metadata_before"]
-            require(metadata[:6] == [row["device"], row["inode"], stat.S_IFREG if file else stat.S_IFDIR,
-                    row["uid"], row["gid"], row["mode"]]
-                    and metadata[6] >= 1 and metadata[7] >= 0 and metadata[8] >= 0 and metadata[9] >= 0)
-            if file:
-                require(metadata[6] == 1 and metadata[7] == row["size"])
-                raw = snapshots[row["name"]]
-                require(type(row["size"]) is int and row["size"] == len(raw) and row["sha256"] == c.digest(raw))
-        require(len(names) == len(set(names)) and set(names) == expected)
+        return _origin_projection_values(document, snapshots, attempt_id, anchor.config)
 
     def record_refs(self, files, body, attempt, anchor):
-        expected = {"state": "satisfied", "reason_id": "shadow.sandbox-satisfied",
-            "launch_request_ref": ref(files["sandbox-request.json"]),
-            "expectation_ref": ref(files["sandbox-expectation.json"]), "receipt_ref": ref(files["sandbox-receipt.json"]),
-            "check_ref": ref(files["sandbox-check.json"]), "origin": {"state": "authenticated",
-                "store_id": anchor.config["store_id"], "method": "controlled-storage.v1",
-                "observation_sha256": c.digest(files["origin-observation.json"])},
-            "payload_ref": {"content_id": "file-digest-result", "media_type": "application/json",
-                "sha256": c.digest(files["file-digest-result.json"])}}
-        require(same(body["sandbox"], expected))
-        content = {"incident_ref": ("shadow-incident-record", "application/vnd.ystack.shadow-incident-record+json", "incident.json"),
-            "qualified_identity_ref": ("shadow-qualified-identity", "application/vnd.ystack.qualified-identity+json", "qualified-identity.json"),
-            "trace_ledger_ref": ("shadow-trace-ledger", "application/vnd.ystack.telemetry-trace-ledger+json", "trace-ledger.json")}
-        for key, (identity, media, name) in content.items():
-            require(same(body[key], {"content_id": identity, "media_type": media, "sha256": c.digest(files[name])}))
-        environment = body["environment"]
-        require(same(environment["claim_ref"], {"content_id": "shadow-environment-claim",
-            "media_type": "application/vnd.ystack.control-execution-environment-claim+json", "sha256": c.digest(files["claim.json"])}))
-        require(same(environment["registry_ref"], {"content_id": "shadow-environment-registry",
-            "media_type": "application/vnd.ystack.shadow-environment-registry+json", "sha256": c.digest(files["registry.json"])}))
+        return _record_refs_values(files, body, attempt, anchor.config)
 
     def provenance(self, files, instruction, observation, attempt, write):
         document = parse(files["consumer-provenance.json"])
@@ -956,7 +974,11 @@ class _Reader:
                 and same(risk["body"]["stage"]["result_ref"], duty["body"]["stage"]["result_ref"]))
         require(all(same(ref(c.canonical(parse(files["materialization-response.json"])["stage_result"])),
                          duty["body"]["stage"]["result_ref"]) for files in current.values()))
-        nonce = getattr(self, "_coverage_nonce", None) or os.urandom(32).hex()
+        nonce = getattr(self, "_coverage_nonce", None)
+        if not nonce:
+            entropy = os.urandom(32)
+            anchor.retain_entropy("coverage", entropy)
+            nonce = entropy.hex()
         attempt = "coverage." + nonce
         def hashes(name):
             return [{"environment_id": environment, "sha256": c.digest(c.canonical(parse(files["shadow-record.json"])["body"]["write"][name]))}

@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <sys/types.h>
 #include <time.h>
+#include <sys/statvfs.h>
 
 struct guest_row { uint64_t observed; const char *observation, *enforcement; int reached;
                     uint64_t resolution; };
@@ -25,6 +26,12 @@ struct ys_setup_observations {
 struct ys_setup_flags { int cpu_hard, pids_hard, memory_hard, output_hard, scratch_hard; };
 int ys_u64_values(int read_ok, const char *bytes, uint64_t *value);
 int ys_readback_matches(int read_ok, const char *bytes, uint64_t expected);
+int ys_write_count_values(ssize_t count, size_t requested, int close_result);
+int ys_setup_write_text(const struct ys_plan_limits *limits, size_t slot, char *text, size_t capacity);
+int ys_setup_presence_values(const struct ys_plan_limits *limits,
+                              const struct ys_setup_observations *raw,
+                              uint64_t write_mask, uint64_t read_mask);
+int ys_counter_presence_values(int memory_peak_ok, int pids_peak_ok, uint64_t events_mask);
 void ys_setup_values(const struct ys_plan_limits *limits, const struct ys_setup_observations *raw,
                       uint64_t memory_bound, struct ys_setup_flags *flags);
 void ys_report_setup_values(struct report_state *state, const struct ys_setup_flags *flags,
@@ -67,9 +74,40 @@ struct ys_controller_event {
     pid_t waited;
     struct timespec now;
     short revents[2];
+    size_t fd_count;
+    int fd_roles[2];
     ssize_t read_count;
     unsigned char bytes[sizeof(struct ys_exec_outcome) * 2U];
 };
+struct ys_control_capture {
+    char *bytes;
+    size_t length, capacity, count, raw_cursor;
+    int incomplete;
+};
+void ys_capture_stat(struct ys_control_capture *capture, const char *site,
+                       int result, int error_number, const struct stat *st);
+void ys_capture_statvfs(struct ys_control_capture *capture, const char *site,
+                          int result, int error_number, const struct statvfs *sv);
+struct ys_evidence_capture { struct ys_control_capture *capture; size_t count; };
+void ys_capture_evidence_entry(const char *name, int result, int error_number,
+                                 const struct stat *st, void *context);
+void ys_capture_raw(struct ys_control_capture *capture, const char *row, size_t length);
+void ys_capture_io(struct ys_control_capture *capture, const char *name, long long result,
+                     int error_number, const void *bytes, size_t length);
+int ys_capture_fits(const struct ys_frame_writer *frame, off_t capacity, size_t length);
+char *ys_capture_document(const struct ys_control_capture *setup,
+                           const struct ys_control_capture *control,
+                           const struct ys_control_capture *counters, size_t *length);
+void ys_capture_now(struct ys_control_capture *capture, int ok, const struct timespec *now, int error_number);
+void ys_capture_launch(struct ys_control_capture *capture, pid_t pid, int error_number);
+void ys_capture_event(struct ys_control_capture *capture, const struct ys_controller_event *event);
+void ys_capture_population(struct ys_control_capture *capture, ssize_t count, const char *bytes, int error_number);
+struct ys_fan_stat { int fd, result, error_number; struct stat value; };
+void ys_capture_fan_read(struct ys_control_capture *capture, ssize_t result, int error_number,
+                          const unsigned char *bytes, const struct ys_fan_stat *stats, size_t count);
+void ys_capture_fan_reply(struct ys_control_capture *capture, ssize_t result, int error_number);
+void ys_capture_controls(struct ys_control_capture *capture, const struct ys_control_capture *rows);
+void ys_capture_kill(struct ys_control_capture *capture, int result, int error_number);
 struct ys_controller_state {
     int phase, has_fan, remaining, polled;
     size_t count, current;

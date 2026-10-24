@@ -21,10 +21,50 @@ import os
 import select
 import signal
 import stat
+import struct
 import subprocess
 import sys
 import threading
 import time
+
+_capture_clocks = None
+_capture_process = None
+_driver_capture_dir = None
+
+
+def _record_clock(kind, site, value):
+    if _capture_clocks is not None:
+        if len(_capture_clocks["wall"]) + len(_capture_clocks["monotonic"]) >= 4096:
+            _capture_clocks["complete"] = False
+        else:
+            _capture_clocks[kind].append({"site": site, "value": struct.pack(">d", value).hex()})
+    return value
+
+
+def _wall(site):
+    return _record_clock("wall", site, time.time())
+
+
+def _monotonic(site):
+    return _record_clock("monotonic", site, time.monotonic())
+
+
+def _record_process(site, result=None, error=None, raw=None, timeout=None):
+    if _capture_process is None:
+        return
+    ordinals = _capture_process["ordinals"]
+    ordinal = ordinals.get(site, 0)
+    ordinals[site] = ordinal + 1
+    row = {"site": site, "ordinal": ordinal, "return": result, "errno": error,
+           "bytes": "" if raw is not None else None, "timeout": timeout}
+    size = len(canonical(row)) + (0 if raw is None else len(raw) * 2)
+    if len(_capture_process["rows"]) >= 4096 or _capture_process["bytes"] + size > 4 * 1024 * 1024:
+        _capture_process["complete"] = False
+    else:
+        if raw is not None:
+            row["bytes"] = raw.hex()
+        _capture_process["rows"].append(row)
+        _capture_process["bytes"] += size
 
 # --- canonical JSON, matching preparation/v1/prepare-candidate.py:281-284 --
 def canonical(value):
@@ -1434,12 +1474,111 @@ def write_payload(attempt_fd, uid, gid, payload, evidence=()):
 def write_receipt_file(store_fd, attempt_fd, uid, gid, receipt_bytes):
     """Writes receipt.json into the already-claimed attempt_fd (payload/
     already written by write_payload), then fsyncs up to the store root."""
+    capture_fd = None
+    if _capture_process is not None and "request_raw" in _capture_process:
+        try:
+            capture_fd = os.dup(attempt_fd)
+        except OSError:
+            _capture_process["complete"] = False
     try:
-        write_excl(attempt_fd, "receipt.json", receipt_bytes, uid, gid)
-        os.fsync(attempt_fd)
+        try:
+            write_excl(attempt_fd, "receipt.json", receipt_bytes, uid, gid)
+            os.fsync(attempt_fd)
+        finally:
+            os.close(attempt_fd)
+        os.fsync(store_fd)
+        if capture_fd is not None:
+            try:
+                raw = {"host": {"process": _capture_process["rows"],
+                                "driver_rest": _capture_process["driver_rest"],
+                                "signals": _capture_process["signals"]},
+                       "clocks": {key: _capture_clocks[key] for key in ("wall", "monotonic")}}
+                if "guest" in _capture_process:
+                    raw["guest"] = _capture_process["guest"]
+                capture = _capture_values(_capture_process["attempt_id"], _capture_process["request_raw"],
+                    raw, _capture_process["complete"] and _capture_clocks["complete"])
+                _write_capture_file(store_fd, capture_fd, uid, gid, capture)
+            except (ValueError, TypeError, Refusal, MemoryError):
+                _capture_process["complete"] = False
     finally:
-        os.close(attempt_fd)
-    os.fsync(store_fd)
+        if capture_fd is not None:
+            try:
+                os.close(capture_fd)
+            except OSError:
+                _capture_process["complete"] = False
+
+
+def _capture_size(value, limit, depth=0):
+    if limit < 0 or depth > 64:
+        return limit + 1 if limit >= 0 else 1
+    if value is None:
+        return 4
+    if type(value) is bool:
+        return 4 if value else 5
+    if type(value) is int:
+        return limit + 1 if value.bit_length() > limit * 4 else len(str(value))
+    if type(value) is str:
+        size = 2
+        for char in value:
+            code = ord(char)
+            if 0xD800 <= code <= 0xDFFF:
+                return limit + 1
+            size += (2 if char in '\\"\b\t\n\f\r' else 6 if code < 32 else
+                     1 if code < 128 else 2 if code < 2048 else 3 if code < 65536 else 4)
+            if size > limit:
+                return size
+        return size
+    if type(value) in (dict, list):
+        size = 2
+        for index, item in enumerate(value):
+            size += int(index != 0)
+            if type(value) is dict:
+                if type(item) is not str:
+                    return limit + 1
+                size += _capture_size(item, limit - size, depth + 1) + 1
+                item = value[item]
+            size += _capture_size(item, limit - size, depth + 1)
+            if size > limit:
+                return size
+        return size
+    return limit + 1
+
+
+def _capture_values(attempt_id, request_raw, raw, complete):
+    require(type(raw) is dict and set(raw) <= {"host", "guest", "source_pages", "clocks", "runtime"}
+            and type(complete) is bool, "E_CAPTURE")
+    value = {"schema_version": 1, "kind": "malicious_source_capture", "id": attempt_id,
+             "body": {"request_sha256": sha256_hex(request_raw), "raw": raw, "complete": complete}}
+    if _capture_size(value, 1024 * 1024 - 1) + 1 > 1024 * 1024:
+        value["body"].update(raw={}, complete=False)
+    return canonical(value)
+
+
+def _source_capture_values(attempt_id, request_raw, records, pages, clock_values, complete):
+    captured_group = {}
+    capture_complete = complete
+    metadata = [row | {"body_hex": ""} for row in json.loads(records[0][1])["pages"]]
+    candidate_group = {"source_pages": {"kill" if operation == "kill-register-read" else "coverage": metadata},
+        "clocks": {key: clock_values[key] for key in ("wall", "monotonic")}}
+    envelope = {"schema_version": 1, "kind": "malicious_source_capture", "id": attempt_id,
+        "body": {"request_sha256": sha256_hex(request_raw), "raw": candidate_group, "complete": capture_complete}}
+    encoded_cost = _capture_size(envelope, 1024 * 1024 - 1) + 1 + sum(map(len, pages)) * 2
+    if encoded_cost <= 1024 * 1024:
+        for row, page in zip(metadata, pages):
+            row["body_hex"] = page.hex()
+        captured_group = candidate_group
+    else:
+        capture_complete = False
+    return _capture_values(attempt_id, request_raw, captured_group, capture_complete)
+
+
+def _write_capture_file(store_fd, attempt_fd, uid, gid, capture):
+    try:
+        write_excl(attempt_fd, "capture.json", capture, uid, gid)
+        os.fsync(attempt_fd)
+        os.fsync(store_fd)
+    except OSError:
+        pass
 
 
 # --- R9: the real launch path -- disks, plan.json, the driver interface,
@@ -1500,7 +1639,7 @@ def control_deadline_for_elapsed(admission_mono):
     too, not just its successful-spawn path, so a startup overrun is
     never silently dropped just because the runtime never actually
     started."""
-    elapsed_ms = (time.monotonic() - admission_mono) * 1000
+    elapsed_ms = (_monotonic('sandbox/v1/host-supervisor.py:1503:0') - admission_mono) * 1000
     return "exceeded" if elapsed_ms > runtime_start_deadline_s() * 1000 else "met"
 
 
@@ -1513,7 +1652,7 @@ def abandonment_deadline_passed(admission_mono):
     only for the poll loop to kill it immediately, an avoidable
     unconfirmed teardown past the deadline. Once past, the attempt
     finalizes not-started the same way a pending cancellation does."""
-    return time.monotonic() - admission_mono >= sigkill_deadline_s()
+    return _monotonic('sandbox/v1/host-supervisor.py:1516:0') - admission_mono >= sigkill_deadline_s()
 
 
 def export_read_deadline_s():
@@ -1603,11 +1742,15 @@ def _kill_driver_group(proc):
     # never just proc.pid, so an abandoned helper is cleaned up too.
     try:
         os.killpg(proc.pid, signal.SIGKILL)
-    except OSError:
+        _record_process("run_driver.group-kill", result=0)
+    except OSError as exc:
+        _record_process("run_driver.group-kill", error=exc.errno)
         pass
     try:
-        proc.wait(timeout=2)
+        waited = proc.wait(timeout=2)
+        _record_process("run_driver.group-reap", result=waited, timeout=False)
     except subprocess.TimeoutExpired:
+        _record_process("run_driver.group-reap", timeout=True)
         pass
 
 
@@ -1617,7 +1760,77 @@ def _driver_output_values(returncode, chunks, incomplete, overflow):
     return returncode, b"".join(chunks)
 
 
+def _open_driver_capture():
+    if _capture_process is None or _driver_capture_dir is None:
+        return None
+    directory = fd = None
+    try:
+        directory = os.open(_driver_capture_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        state = os.fstat(directory)
+        if state.st_uid != os.getuid() or stat.S_IMODE(state.st_mode) != 0o700:
+            _capture_process["complete"] = False
+            return None
+        fd = os.open("driver.capture", os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                     0o600, dir_fd=directory)
+        os.unlink("driver.capture", dir_fd=directory)
+        magic = b"YSTACK_REST_CAPTURE_V1\n"
+        if fd >= 256 or os.write(fd, magic) != len(magic):
+            _capture_process["complete"] = False
+            closing, fd = fd, None
+            os.close(closing)
+        return fd
+    except OSError:
+        _capture_process["complete"] = False
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        return None
+    finally:
+        if directory is not None:
+            try:
+                os.close(directory)
+            except OSError:
+                _capture_process["complete"] = False
+
+
 def run_driver(driver_path, args, timeout_s=2.0):
+    capture_fd = _open_driver_capture()
+    call = None
+    if _capture_process is not None:
+        call = _capture_process.get("driver_call", -1) + 1
+        _capture_process["driver_call"] = call
+    try:
+        return _run_driver_process(driver_path, args, timeout_s, capture_fd)
+    finally:
+        if capture_fd is not None:
+            try:
+                if args and args[0] in ("state", "stop"):
+                    before = os.fstat(capture_fd)
+                    raw = os.pread(capture_fd, 132096, len(b"YSTACK_REST_CAPTURE_V1\n"))
+                    after = os.fstat(capture_fd)
+                    value = json.loads(raw)
+                    require(canonical(value) == raw and set(value) == {"reply", "error"}
+                            and (before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+                                == (after.st_size, after.st_mtime_ns, after.st_ctime_ns), "E_CAPTURE")
+                    row = {"call": call, "operation": args[0], **value}
+                    size = len(canonical(row))
+                    if _capture_process["bytes"] + size > 4 * 1024 * 1024:
+                        _capture_process["complete"] = False
+                    else:
+                        _capture_process["driver_rest"].append(row)
+                        _capture_process["bytes"] += size
+            except (OSError, ValueError, TypeError, Refusal):
+                _capture_process["complete"] = False
+            finally:
+                try:
+                    os.close(capture_fd)
+                except OSError:
+                    _capture_process["complete"] = False
+
+
+def _run_driver_process(driver_path, args, timeout_s, capture_fd):
     """The fixed driver interface (plan.md): empty environment, stdin
     /dev/null, stdout capped 65,536 bytes, 2,000 ms per call. Reads with a
     bounded os.read/select loop (cap+1 bytes) rather than subprocess.run's
@@ -1628,18 +1841,24 @@ def run_driver(driver_path, args, timeout_s=2.0):
     cap = 65536
     try:
         devnull = open(os.devnull, "rb")
-    except OSError:
+    except OSError as exc:
+        _record_process("run_driver.open", error=exc.errno)
         return None, b""
+    _record_process("run_driver.open", result=0)
     try:
         try:
             proc = subprocess.Popen([driver_path] + list(args), stdin=devnull,
                                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                     env={}, start_new_session=True)
-        except OSError:
+                                     env={}, start_new_session=True,
+                                     pass_fds=() if capture_fd is None else (capture_fd,))
+            _record_process("run_driver.spawn", result=proc.pid)
+        except OSError as exc:
+            _record_process("run_driver.spawn", error=exc.errno)
             return None, b""
     finally:
         devnull.close()
-    deadline = time.monotonic() + timeout_s
+        _record_process("run_driver.close-devnull", result=0)
+    deadline = _monotonic('sandbox/v1/host-supervisor.py:1636:0') + timeout_s
     chunks, total, overflow = [], 0, False
     # findings-477-r15.md finding 2: distinct from a clean EOF (an empty
     # os.read(): the driver -- and everything it left behind -- has
@@ -1656,13 +1875,15 @@ def run_driver(driver_path, args, timeout_s=2.0):
     incomplete = False
     read_fd = proc.stdout.fileno()
     while True:
-        remaining = deadline - time.monotonic()
+        remaining = deadline - _monotonic('sandbox/v1/host-supervisor.py:1653:0')
         if remaining <= 0:
             incomplete = True
             break
         try:
             ready, _, _ = select.select([read_fd], [], [], remaining)
-        except OSError:
+            _record_process("run_driver.select", result=bool(ready), timeout=not bool(ready))
+        except OSError as exc:
+            _record_process("run_driver.select", error=exc.errno)
             incomplete = True
             break
         if not ready:
@@ -1670,7 +1891,9 @@ def run_driver(driver_path, args, timeout_s=2.0):
             break
         try:
             chunk = os.read(read_fd, 65536)
-        except OSError:
+            _record_process("run_driver.read", result=len(chunk), raw=chunk)
+        except OSError as exc:
+            _record_process("run_driver.read", error=exc.errno)
             incomplete = True
             break
         if not chunk:
@@ -1682,22 +1905,32 @@ def run_driver(driver_path, args, timeout_s=2.0):
             break
     try:
         proc.stdout.close()
-    except OSError:
+        _record_process("run_driver.close", result=0)
+    except OSError as exc:
+        _record_process("run_driver.close", error=exc.errno)
         pass
     if incomplete:
         _kill_driver_group(proc)
         return _driver_output_values(proc.returncode, chunks, incomplete, overflow)
-    if proc.poll() is None:
+    polled = proc.poll()
+    _record_process("run_driver.poll", result=polled)
+    if polled is None:
         try:
-            proc.wait(timeout=max(0.0, deadline - time.monotonic()))
+            waited = proc.wait(timeout=max(0.0, deadline - _monotonic('sandbox/v1/host-supervisor.py:1686:0')))
+            _record_process("run_driver.wait", result=waited, timeout=False)
         except subprocess.TimeoutExpired:
+            _record_process("run_driver.wait", timeout=True)
             try:
                 os.killpg(proc.pid, signal.SIGKILL)
-            except OSError:
+                _record_process("run_driver.kill", result=0)
+            except OSError as exc:
+                _record_process("run_driver.kill", error=exc.errno)
                 pass
             try:
-                proc.wait(timeout=2)
+                waited = proc.wait(timeout=2)
+                _record_process("run_driver.reap", result=waited, timeout=False)
             except subprocess.TimeoutExpired:
+                _record_process("run_driver.reap", timeout=True)
                 return None, b""
     if overflow:
         _kill_driver_group(proc)  # findings-477-r16.md finding 2
@@ -1760,7 +1993,7 @@ def bounded_driver_call(fn, admission_mono, signal_seen, result):
     unused, when overdue); overdue is True when the call was skipped
     because SIGKILL's own deadline had already passed -- the caller
     escalates exactly as it does for the top-of-loop check."""
-    elapsed = time.monotonic() - admission_mono
+    elapsed = _monotonic('sandbox/v1/host-supervisor.py:1758:0') - admission_mono
     if elapsed >= sigkill_deadline_s():
         return None, True
     call_budget = sigkill_deadline_s() - elapsed
@@ -1951,7 +2184,9 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
     reaping and finalization alike -- not just this function's own
     lifetime, closing the window between Popen and handler installation
     a signal could otherwise fall through."""
+    global _driver_capture_dir
     work_root = config["work_root"]
+    _driver_capture_dir = os.path.join(work_root, attempt_id)
     test_self_signal("YSTACK_TEST_SELF_SIGNAL_BEFORE_SPAWN")
     if signal_seen[0] or abandonment_deadline_passed(admission_mono):
         # findings-477-r6.md finding 1(a): a cancellation already pending
@@ -2031,7 +2266,9 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
     try:
         proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=write_fd, stderr=write_fd,
                                  env=scrub_dyld_env(), start_new_session=True, close_fds=True)
-    except (OSError, ValueError):  # findings-477-r10.md: a NUL-in-argv belt-and-braces catch
+        _record_process("run_vm.spawn", result=proc.pid)
+    except (OSError, ValueError) as exc:  # findings-477-r10.md: a NUL-in-argv belt-and-braces catch
+        _record_process("run_vm.spawn", error=getattr(exc, "errno", None))
         os.close(read_fd)
         os.close(write_fd)
         os.close(log_fd)
@@ -2046,8 +2283,10 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
             # start new thread") under host thread/resource exhaustion.
             raise RuntimeError("YSTACK_TEST_DRAIN_START_FAIL")
         drain.start()
+        _record_process("run_vm.drain-start", result=True)
         drain_started = True
     except Exception as exc:  # noqa: BLE001 -- see comment below
+        _record_process("run_vm.drain-start", result=False, error=getattr(exc, "errno", None))
         # findings-477-r15.md finding 1: proc has ALREADY actually
         # spawned by this point -- Thread.start() (or anything else in
         # this narrow post-spawn window) raising here must never abort
@@ -2072,7 +2311,7 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
 
     result["control_deadline"] = control_deadline_for_elapsed(admission_mono)
 
-    spawn_mono = time.monotonic()
+    spawn_mono = _monotonic('sandbox/v1/host-supervisor.py:1945:0')
     host_state = _host_state()
 
     def do_sigkill():
@@ -2082,7 +2321,9 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
         nonlocal host_state
         try:
             os.killpg(proc.pid, signal.SIGKILL)
-        except OSError:
+            _record_process("run_vm.kill", result=0)
+        except OSError as exc:
+            _record_process("run_vm.kill", error=exc.errno)
             pass
         host_state, _ = _host_step(host_state, {"kind": "killed"})
 
@@ -2099,7 +2340,7 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
         # 2 below: bounded_driver_call repeats this same check before
         # EVERY call it wraps, including a second call later this same
         # iteration).
-        elapsed = time.monotonic() - admission_mono
+        elapsed = _monotonic('sandbox/v1/host-supervisor.py:1974:0') - admission_mono
         host_state, action = _host_step(host_state, {
             "kind": "clock", "cancelled": result["cancelled"], "elapsed": elapsed,
             "sigkill": sigkill_deadline_s(), "hardstop": hardstop_deadline_s()})
@@ -2135,7 +2376,7 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
                     # for runtime_error -- never a merely-attempted one.
                     result["hard_stop"] = host_state["hard_stop"]
 
-        since_spawn = time.monotonic() - spawn_mono
+        since_spawn = _monotonic('sandbox/v1/host-supervisor.py:2011:0') - spawn_mono
         state, overdue = bounded_driver_call(
             lambda budget: driver_state(driver_path, socket_path, timeout_s=budget),
             admission_mono, signal_seen, result)
@@ -2158,6 +2399,7 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
         # driver_reported_error True in that iteration and is preserved
         # untouched here -- this only guards the CURRENT observation.
         exit_code = proc.poll()
+        _record_process("run_vm.poll", result=exit_code)
         host_state, action = _host_step(host_state, {
             "kind": "poll", "state": state, "since_spawn": since_spawn,
             "startup": startup_deadline_s(), "exit_code": exit_code,
@@ -2173,11 +2415,12 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
             # clean exit whose endpoint happened to vanish first is never
             # misclassified just because our own proc.poll() call landed
             # a moment too early.
-            recheck_budget = min(0.2, max(0.0, sigkill_deadline_s() - (time.monotonic() - admission_mono)))
-            recheck_deadline = time.monotonic() + recheck_budget
-            while exit_code is None and time.monotonic() < recheck_deadline:
+            recheck_budget = min(0.2, max(0.0, sigkill_deadline_s() - (_monotonic('sandbox/v1/host-supervisor.py:2045:0') - admission_mono)))
+            recheck_deadline = _monotonic('sandbox/v1/host-supervisor.py:2046:0') + recheck_budget
+            while exit_code is None and _monotonic('sandbox/v1/host-supervisor.py:2047:0') < recheck_deadline:
                 time.sleep(0.01)
                 exit_code = proc.poll()
+                _record_process("run_vm.recheck-poll", result=exit_code)
             host_state, action = _host_step(host_state, {
                 "kind": "poll", "state": state, "since_spawn": since_spawn,
                 "startup": startup_deadline_s(), "exit_code": exit_code,
@@ -2192,7 +2435,7 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
         # poll_interval_s(), so a slow poll can't also oversleep past one.
         remaining = poll_interval_s()
         for deadline_s in (hardstop_deadline_s(), sigkill_deadline_s()):
-            left = deadline_s - (time.monotonic() - admission_mono)
+            left = deadline_s - (_monotonic('sandbox/v1/host-supervisor.py:2069:0') - admission_mono)
             if left > 0:
                 remaining = min(remaining, left)
         if remaining > 0:
@@ -2211,8 +2454,8 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
         # is this instant, not whenever a wait() we never issue would
         # have returned.
         reaped = False
-        terminated_at = time.time()
-        end_mono = time.monotonic()  # findings-477-r12.md finding 3: see below
+        terminated_at = _wall('sandbox/v1/host-supervisor.py:2088:0')
+        end_mono = _monotonic('sandbox/v1/host-supervisor.py:2089:0')  # findings-477-r12.md finding 3: see below
     else:
         # R9.1/R9.5: the 58s abandonment deadline stays active while
         # reaping too -- two fixed 5s waits here (a driver "stopped" at
@@ -2224,38 +2467,46 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
         # already passed, SIGKILL immediately with no wait at all.
         reaped = False
         abandon_mono = admission_mono + sigkill_deadline_s()
-        remaining = abandon_mono - time.monotonic()
+        remaining = abandon_mono - _monotonic('sandbox/v1/host-supervisor.py:2101:0')
         if remaining > 0:
             try:
-                proc.wait(timeout=remaining)
+                waited = proc.wait(timeout=remaining)
+                _record_process("run_vm.wait", result=waited, timeout=False)
                 reaped = True
             except subprocess.TimeoutExpired:
+                _record_process("run_vm.wait", timeout=True)
                 try:
                     os.killpg(proc.pid, signal.SIGKILL)
-                except OSError:
+                    _record_process("run_vm.reap-kill", result=0)
+                except OSError as exc:
+                    _record_process("run_vm.reap-kill", error=exc.errno)
                     pass
-                remaining = abandon_mono - time.monotonic()
+                remaining = abandon_mono - _monotonic('sandbox/v1/host-supervisor.py:2111:0')
                 if remaining > 0:
                     try:
-                        proc.wait(timeout=remaining)
+                        waited = proc.wait(timeout=remaining)
+                        _record_process("run_vm.reap", result=waited, timeout=False)
                         reaped = True
                     except subprocess.TimeoutExpired:
+                        _record_process("run_vm.reap", timeout=True)
                         pass
         else:
             try:
                 os.killpg(proc.pid, signal.SIGKILL)
-            except OSError:
+                _record_process("run_vm.expired-kill", result=0)
+            except OSError as exc:
+                _record_process("run_vm.expired-kill", error=exc.errno)
                 pass
         if os.environ.get("YSTACK_TEST_REAP_FAIL"):
             reaped = False
-        terminated_at = time.time()
+        terminated_at = _wall('sandbox/v1/host-supervisor.py:2125:0')
         # findings-477-r12.md finding 3 (spec R9's "admission to confirmed
         # VM stop"): captured HERE, immediately alongside terminated_at,
         # not after drain.join() below -- the drain thread can still be
         # processing buffered runtime.log output for up to its own 2s
         # join timeout after the process is already reaped, which must
         # never inflate the reported wall observation.
-        end_mono = time.monotonic()
+        end_mono = _monotonic('sandbox/v1/host-supervisor.py:2132:0')
         # A "stopped" mailbox report is independent of the process's
         # actual exit status: a runtime that says stopped but then exits
         # abnormally (crashes right after writing its own report) is
@@ -2268,7 +2519,11 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
         # report False anyway) is skipped entirely in that case, falling
         # straight through to the plain close() below.
         drain.join(timeout=2)
-    if drain_started and drain.is_alive():
+        _record_process("run_vm.drain-join", result=True)
+    drain_alive = drain.is_alive() if drain_started else False
+    if drain_started:
+        _record_process("run_vm.drain-alive", result=drain_alive)
+    if drain_alive:
         # findings-477-r13.md finding 1: still blocked on read_fd (e.g. a
         # grandchild process still holding the pipe's write end open) --
         # ask it to stop and give it one more bounded wait to confirm,
@@ -2276,7 +2531,11 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
         # read from or write to.
         drain_stop.set()
         drain.join(timeout=2)
-    if drain_started and drain.is_alive():
+        _record_process("run_vm.drain-stop-join", result=True)
+    drain_alive = drain.is_alive() if drain_started else False
+    if drain_started:
+        _record_process("run_vm.drain-final-alive", result=drain_alive)
+    if drain_alive:
         # Never observed in practice (the 0.2s select-poll bound above
         # means drain_stop is checked well within either 2s join), but if
         # it somehow ever happens, closing these two descriptors now
@@ -2287,7 +2546,9 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
             "warning: drain thread for %s did not stop within bound; leaking read_fd/log_fd\n" % attempt_id)
     else:
         os.close(read_fd)
+        _record_process("run_vm.close-read", result=0)
         os.close(log_fd)
+        _record_process("run_vm.close-log", result=0)
 
     host_state, _ = _host_step(host_state, {
         "kind": "reap", "reaped": reaped, "returncode": proc.returncode,
@@ -2301,15 +2562,24 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
         # otherwise every guest row stays unavailable, never a payload
         # read from a disk a still-running (or never-reaped) runtime
         # could still be writing to.
-        export_read_began = time.monotonic()
+        export_read_began = _monotonic('sandbox/v1/host-supervisor.py:2187:0')
         test_slow("YSTACK_TEST_SLOW_EXPORT_READ_MS")
         try:
             with open(export_path, "rb") as fh:
                 export_raw = fh.read()
+                _record_process("run_vm.export-read", result=len(export_raw), raw=export_raw)
             export_records = frame_read(export_raw)
-        except (OSError, FrameError):
+            export_records, guest_capture = _guest_capture_values(export_records)
+            if _capture_process is not None:
+                if guest_capture is None:
+                    _capture_process["complete"] = False
+                else:
+                    _capture_process["guest"] = guest_capture
+        except (OSError, FrameError) as exc:
+            if isinstance(exc, OSError):
+                _record_process("run_vm.export-read", error=exc.errno)
             export_records = None
-        if (time.monotonic() - export_read_began) > export_read_deadline_s():
+        if (_monotonic('sandbox/v1/host-supervisor.py:2195:0') - export_read_began) > export_read_deadline_s():
             result["control_deadline"] = "exceeded"
         validated = validate_export(export_records, plan_sha256)
     export = _export_values(validated)
@@ -2408,6 +2678,28 @@ def export_records_ok(export_records):
         else:
             return False
     return has_report and has_stdout and has_stderr and evidence_indexes == set(range(len(evidence_indexes)))
+
+
+def _guest_capture_values(export_records):
+    if export_records is None:
+        return None, None
+    captures = [raw for name, raw in export_records if name == b"control-observation.json"]
+    if len(captures) != 1:
+        return export_records, None
+    records = [(name, raw) for name, raw in export_records if name != b"control-observation.json"]
+    raw = captures[0]
+    if len(raw) > 4 * 1024 * 1024:
+        return records, None
+    try:
+        bounded_json_nesting(raw)
+        value = json.loads(raw)
+        require(type(value) is dict and set(value) == {"control", "counters", "setup"}
+                and type(value["control"]) is list and len(value["control"]) <= 4096
+                and type(value["counters"]) is dict and type(value["setup"]) is dict
+                and canonical(value) == raw, "E_CAPTURE")
+    except (ValueError, RecursionError, Refusal):
+        return records, None
+    return records, value
 
 
 def validate_export(export_records, plan_sha256):
@@ -2509,7 +2801,7 @@ def stub_run_result(control_deadline="met"):
     driver/Popen failure that happened only after the startup budget was
     already blown still keeps failure.supervisor-timeout (R9.4), rather
     than this stub silently resetting control_deadline to "met"."""
-    return _stub_run_values(control_deadline, time.time())
+    return _stub_run_values(control_deadline, _wall('sandbox/v1/host-supervisor.py:2440:0'))
 
 
 def _stub_run_values(control_deadline, terminated_at):
@@ -2653,7 +2945,7 @@ def identities_for_receipt(measured):
 
 def build_receipt(config, accepted_set_sha256, request_doc, request_body, launch_request_sha256,
                    admitted_at, identities, admission, run, storage_destroyed=True):
-    terminated_at = time.time() if run is None else run["terminated_at"]
+    terminated_at = _wall('sandbox/v1/host-supervisor.py:2593:0') if run is None else run["terminated_at"]
     return _receipt_values(config, accepted_set_sha256, request_doc, request_body, launch_request_sha256,
                            admitted_at, identities, admission, run, storage_destroyed, terminated_at)
 
@@ -2736,6 +3028,11 @@ def test_hook_swap_store_ancestor(target):
 
 
 def run_launch(argv):
+    global _capture_clocks, _capture_process, _driver_capture_dir
+    _driver_capture_dir = None
+    _capture_clocks = {"wall": [], "monotonic": [], "complete": True}
+    _capture_process = {"rows": [], "ordinals": {}, "bytes": 0, "complete": True,
+                        "driver_rest": [], "signals": []}
     # R10.1: the ACL walk is checked before anything else, usage included.
     # This process itself runs as the principal (directly under sudo, R13.3;
     # the same account under test, R15.1), so os.getuid() *is* the
@@ -2810,6 +3107,7 @@ def run_launch(argv):
     require(len(raw) <= 88080384, "E_PACKAGE")
     package = parse_package(raw)
     request_doc, request_body = parse_request(package["request.json"])
+    _capture_process.update(request_raw=package["request.json"], attempt_id=request_body["attempt"]["attempt_id"])
     launch_request_sha256 = sha256_hex(package["request.json"])
     require(request_body["store_id"] == config["store_id"], "E_STORE_ID")
 
@@ -2852,7 +3150,7 @@ def run_launch(argv):
     # E_STORE_WRITE/exit 70, never a bare traceback (R10.4).
     try:
         attempt_fd = create_attempt_dir(store_fd, principal_uid, config["consumer_gid"], attempt_id)
-        admitted_at = time.time()
+        admitted_at = _wall('sandbox/v1/host-supervisor.py:2771:0')
         reason_ids, measured, verifier_raw = phase_b_reasons(
             config, request_body, package, identity_fds, installed_digests, registry_environments,
             accepted_environments, config_raw, host_supervisor_raw, python_raw)
@@ -2875,7 +3173,7 @@ def run_launch(argv):
         # admits the attempt (after identity hashing/validation, not
         # before it) -- slow validation (the dyld cache files especially)
         # must never consume the VM's own execution allowance.
-        admission_mono = time.monotonic()
+        admission_mono = _monotonic('sandbox/v1/host-supervisor.py:2794:0')
         if reason_ids:
             # R9.3: no-launch receipt -- refused, runtime "completed" (nothing
             # ran, so nothing errored), payload/refusal.json alongside it.
@@ -2900,6 +3198,10 @@ def run_launch(argv):
 
             def on_signal(signum, frame):
                 signal_seen[0] = True
+                if len(_capture_process["signals"]) < 4096:
+                    _capture_process["signals"].append(signum)
+                else:
+                    _capture_process["complete"] = False
 
             old_handlers = {sig: signal.signal(sig, on_signal)
                              for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
@@ -2928,7 +3230,7 @@ def run_launch(argv):
                         # created before the failure -- clean up exactly
                         # what it made, as before.
                         candidate_names = ["%05d" % i for i in range(len(package["candidate"]))]
-                        storage_removal_began = time.monotonic()
+                        storage_removal_began = _monotonic('sandbox/v1/host-supervisor.py:2847:0')
                         test_slow("YSTACK_TEST_SLOW_STORAGE_REMOVAL_MS")
                         storage_destroyed = remove_frozen(config["work_root"], attempt_id, candidate_names)
                     else:
@@ -2947,7 +3249,7 @@ def run_launch(argv):
                     # (or its own cleanup) that alone already overran
                     # the startup budget.
                     run_result = stub_run_result(control_deadline_for_elapsed(admission_mono))
-                    if created[0] and (time.monotonic() - storage_removal_began) > storage_removal_deadline_s():
+                    if created[0] and (_monotonic('sandbox/v1/host-supervisor.py:2866:0') - storage_removal_began) > storage_removal_deadline_s():
                         run_result["control_deadline"] = "exceeded"
                 else:
                     manifest = parse_manifest(package["manifest.json"])
@@ -2963,20 +3265,20 @@ def run_launch(argv):
                         # elapsed startup status too, as the driver-argv/
                         # Popen paths do.
                         run_result = stub_run_result(control_deadline_for_elapsed(admission_mono))
-                    storage_removal_began = time.monotonic()
+                    storage_removal_began = _monotonic('sandbox/v1/host-supervisor.py:2882:0')
                     test_slow("YSTACK_TEST_SLOW_STORAGE_REMOVAL_MS")
                     storage_destroyed = remove_frozen(config["work_root"], attempt_id, candidate_names)
-                    if (time.monotonic() - storage_removal_began) > storage_removal_deadline_s():
+                    if (_monotonic('sandbox/v1/host-supervisor.py:2885:0') - storage_removal_began) > storage_removal_deadline_s():
                         run_result["control_deadline"] = "exceeded"
                 test_slow("YSTACK_TEST_SLOW_FINALIZE_MS")
                 test_self_signal("YSTACK_TEST_SELF_SIGNAL_AT_FINALIZE")
                 payload = [("stdout", run_result["stdout_raw"]), ("stderr", run_result["stderr_raw"]),
                            ("evidence-manifest.json", run_result["evidence_manifest_bytes"])]
-                payload_write_began = time.monotonic()
+                payload_write_began = _monotonic('sandbox/v1/host-supervisor.py:2891:0')
                 test_slow("YSTACK_TEST_SLOW_PAYLOAD_WRITE_MS")
                 write_payload(attempt_fd, principal_uid, config["consumer_gid"], payload,
                               run_result["evidence_payload"])
-                if (time.monotonic() - payload_write_began) > payload_write_deadline_s():
+                if (_monotonic('sandbox/v1/host-supervisor.py:2895:0') - payload_write_began) > payload_write_deadline_s():
                     run_result["control_deadline"] = "exceeded"
                 # The lifecycle (control_deadline included) is only
                 # finalized here, after payload writing -- never before.
@@ -3082,6 +3384,8 @@ class _CoverageInstallation:
             n.accepted(self.accepted_raw, self.config, n.digest(supervisor_raw), n.digest(self.package_raw),
                        self.config["collector_sha256"], n.digest(normalizer_raw))
             self.identity = n.source_identity(self.config, self.accepted_raw, n.digest(supervisor_raw), n.digest(normalizer_raw))
+            self.source_bytes = {"host": host_raw, "config": config_raw, "accepted": self.accepted_raw,
+                "package": self.package_raw, "supervisor": supervisor_raw, "normalizer": normalizer_raw}
             self.recheck()
         except BaseException:
             self.close()
@@ -3150,7 +3454,7 @@ def _coverage_collector(installation, request_raw):
     import selectors
     child = None
     selector = selectors.DefaultSelector()
-    end = time.monotonic() + 105
+    end = _monotonic('sandbox/v1/host-supervisor.py:3069:0') + 105
     old = {}
     cancelled = [False]
     def cancel(_number, _frame):
@@ -3171,8 +3475,8 @@ def _coverage_collector(installation, request_raw):
         selector.register(child.stderr, selectors.EVENT_READ)
         sent = 0
         while selector.get_map():
-            require(not cancelled[0] and time.monotonic() < end, "E_SOURCE_RUNTIME")
-            for key, _events in selector.select(min(0.1, max(0, end - time.monotonic()))):
+            require(not cancelled[0] and _monotonic('sandbox/v1/host-supervisor.py:3090:0') < end, "E_SOURCE_RUNTIME")
+            for key, _events in selector.select(min(0.1, max(0, end - _monotonic('sandbox/v1/host-supervisor.py:3091:0')))):
                 stream = key.fileobj
                 if stream is child.stdin:
                     try:
@@ -3196,7 +3500,7 @@ def _coverage_collector(installation, request_raw):
                         buffer = outputs[key.fd]
                         require(len(buffer) + len(raw) <= limits[key.fd], "E_SOURCE_LIMIT")
                         buffer.extend(raw)
-        result = child.wait(timeout=max(0.001, end - time.monotonic()))
+        result = child.wait(timeout=max(0.001, end - _monotonic('sandbox/v1/host-supervisor.py:3115:0')))
         require(not cancelled[0] and result == 0, "E_SOURCE_RUNTIME")
         stdout, stderr = list(outputs.values())
         require(not stderr, "E_SOURCE_RUNTIME")
@@ -3208,7 +3512,7 @@ def _coverage_collector(installation, request_raw):
         try:
             if child is not None:
                 try:
-                    cleanup_end = time.monotonic() + 10
+                    cleanup_end = _monotonic('sandbox/v1/host-supervisor.py:3127:0') + 10
                     if child.returncode is None:
                         try:
                             os.killpg(child.pid, signal.SIGTERM)
@@ -3221,7 +3525,7 @@ def _coverage_collector(installation, request_raw):
                                 os.killpg(child.pid, signal.SIGKILL)
                             except ProcessLookupError:
                                 pass
-                            child.wait(timeout=max(0.001, cleanup_end - time.monotonic()))
+                            child.wait(timeout=max(0.001, cleanup_end - _monotonic('sandbox/v1/host-supervisor.py:3140:0')))
                     try:
                         os.killpg(child.pid, 0)
                     except ProcessLookupError:
@@ -3229,7 +3533,7 @@ def _coverage_collector(installation, request_raw):
                     else:
                         # A collector leader exit never releases ownership of its descendants.
                         os.killpg(child.pid, signal.SIGKILL)
-                        while time.monotonic() < cleanup_end:
+                        while _monotonic('sandbox/v1/host-supervisor.py:3148:0') < cleanup_end:
                             try:
                                 os.killpg(child.pid, 0)
                             except ProcessLookupError:
@@ -3267,6 +3571,9 @@ def write_coverage_payload(attempt_fd, uid, gid, request_raw, raw_manifest, obse
 
 
 def run_coverage_read(argv):
+    global _capture_clocks, _capture_process
+    _capture_clocks = {"wall": [], "monotonic": [], "complete": True}
+    _capture_process = None
     require(argv in (["coverage-read"], ["kill-register-read"]), "E_USAGE")
     operation = argv[0]
     installation = _CoverageInstallation(operation)
@@ -3311,7 +3618,7 @@ def run_coverage_read(argv):
         os.fsync(nonce_dir)
         os.fsync(work)
         attempt = create_attempt_dir(store, uid, gid, requested["id"])
-        started = utc_stamp(time.time())
+        started_wall = _wall('sandbox/v1/host-supervisor.py:3230:0')
         records = _coverage_collector(installation, request_raw)
         raw_manifest, pages = n.captured(records, request_raw)
         observation = n.normalize(raw_manifest, pages, request_raw)
@@ -3323,25 +3630,37 @@ def run_coverage_read(argv):
             require((named.st_dev, named.st_ino) == (held.st_dev, held.st_ino), "E_STALE")
         require((work_before.st_dev, work_before.st_ino) == (os.fstat(work).st_dev, os.fstat(work).st_ino), "E_STALE")
         write_coverage_payload(attempt, uid, gid, request_raw, raw_manifest, observation, pages)
-        completed = utc_stamp(time.time())
-        receipt = canonical({"schema_version": 1, "kind": "forge_coverage_source_receipt", "id": requested["id"], "body": {
-            "operation": n.OPERATION, "version": 1, "store_id": host["store_id"], "attempt_id": requested["id"],
-            "request_sha256": sha256_hex(request_raw), "nonce": body["nonce"], "source_identity": installation.identity,
-            "query": (n.query(body, observation) if operation == "kill-register-read" else n.query(body)), "raw_manifest_sha256": sha256_hex(raw_manifest),
-            "observation_sha256": sha256_hex(observation), "started_at": started, "completed_at": completed,
-            "outcome": "complete", "effects": ["read-forge-metadata"]}})
-        if operation == "kill-register-read":
-            value = json.loads(receipt)
-            value["kind"] = "kill_register_source_receipt"
-            value["body"]["call_id"] = value["body"].pop("attempt_id")
-            del value["body"]["nonce"]
-            value["body"]["effects"] = ["read-forge-metadata", "read-register"]
-            receipt = canonical(value)
+        completed_wall = _wall('sandbox/v1/host-supervisor.py:3242:0')
+        rebuilt_manifest, rebuilt_pages, rebuilt_observation, receipt = n._source_values(
+            request_raw, installation.source_bytes, records,
+            {"operation": operation, "started_wall": started_wall, "completed_wall": completed_wall})
+        require((rebuilt_manifest, rebuilt_pages, rebuilt_observation) == (raw_manifest, pages, observation),
+                "E_SOURCE_NORMALIZATION")
         n.receipt(receipt, request_raw, host, installation.identity, raw_manifest, observation)
         installation.recheck()
+        capture = None
+        try:
+            capture = _source_capture_values(requested["id"], request_raw, records, pages,
+                _capture_clocks, _capture_clocks["complete"])
+        except (MemoryError, ValueError, TypeError, Refusal):
+            pass
+        capture_fd = None
+        try:
+            capture_fd = os.dup(attempt)
+        except OSError:
+            pass
         writing, attempt = attempt, None
-        write_receipt_file(store, writing, uid, gid, receipt)
-        installation.recheck()
+        try:
+            write_receipt_file(store, writing, uid, gid, receipt)
+            installation.recheck()
+            if capture_fd is not None and capture is not None:
+                _write_capture_file(store, capture_fd, uid, gid, capture)
+        finally:
+            if capture_fd is not None:
+                try:
+                    os.close(capture_fd)
+                except OSError:
+                    pass
     except Refusal:
         raise
     except Exception:

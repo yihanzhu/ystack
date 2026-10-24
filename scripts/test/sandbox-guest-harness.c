@@ -478,6 +478,42 @@ static int cmd_observation_values(void)
     ys_scratch_values(&row, 1, 3U, 1U, 4096U, 8192U);
     if (row.observed != 8192U || !row.reached || row.resolution != 4096U) return 1;
     if (ys_launch_pid_valid(0) || ys_launch_pid_valid(-1) || !ys_launch_pid_valid(17)) return 1;
+    {
+        struct ys_plan_limits limits = {0};
+        struct ys_setup_observations raw = {0};
+        size_t i;
+        uint64_t parsed;
+        char text[64];
+        limits.cpu_max = 45000; limits.cpu_max_burst = 0;
+        limits.bandwidth_slice_us = 1000; limits.pids_max = 64;
+        for (i = 0; i < 4U; i++) {
+            raw.writes[i] = raw.reads[i] = 1;
+            if (!ys_setup_write_text(&limits, i, text, sizeof text)) return 1;
+            if (i == 0U) strcpy(raw.readbacks[i], "45000 100000\n");
+            else strcpy(raw.readbacks[i], text);
+            if (!ys_write_count_values((ssize_t)strlen(text), strlen(text), 0) ||
+                ys_write_count_values((ssize_t)strlen(text) - 1, strlen(text), 0) ||
+                ys_write_count_values((ssize_t)strlen(text), strlen(text), -1)) return 1;
+        }
+        if (!ys_setup_presence_values(&limits, &raw, 15, 15) ||
+            ys_setup_presence_values(&limits, &raw, 14, 15) ||
+            ys_setup_presence_values(&limits, &raw, 15, 14) ||
+            ys_setup_presence_values(&limits, &raw, 31, 15) ||
+            ys_setup_presence_values(&limits, &raw, 15, 31)) return 1;
+        raw.writes[1] = raw.writes[2] = raw.reads[1] = raw.reads[2] = 0;
+        raw.readbacks[1][0] = raw.readbacks[2][0] = '\0';
+        raw.reads[0] = 0; raw.readbacks[0][0] = '\0';
+        if (!ys_setup_presence_values(&limits, &raw, 9, 9) ||
+            ys_setup_presence_values(&limits, &raw, 9, 8) ||
+            ys_setup_presence_values(&limits, &raw, 11, 9)) return 1;
+        raw.writes[0] = 0;
+        if (!ys_setup_presence_values(&limits, &raw, 9, 8) ||
+            ys_setup_presence_values(&limits, &raw, 9, 9)) return 1;
+        if (!ys_u64_values(1, "not numeric", &parsed) || parsed != 0 ||
+            !ys_counter_presence_values(1, 0, 1) || ys_counter_presence_values(1, 0, 0) ||
+            ys_counter_presence_values(1, 0, 3) || !ys_counter_presence_values(0, 1, 2) ||
+            !ys_counter_presence_values(0, 0, 0)) return 1;
+    }
     for (variant = 0; variant < 4; variant++) {
         struct ys_controller_state state;
         struct timespec deadline = {1, 0};
@@ -513,7 +549,191 @@ static int cmd_observation_values(void)
             state.result.child_reaped != (variant != 2) ||
             (state.branch == CONTROLLER_NORMAL) != (variant != 2)) return 1;
     }
-    puts("guest value owner: counters, geometry, launch, wait zero/matching/wrong/EINTR: ok");
+    {
+        struct ys_control_capture capture = {0};
+        struct timespec now = {12, 34};
+        struct ys_controller_event event;
+        size_t saved_length;
+        ys_capture_now(&capture, 1, &now, 0);
+        ys_capture_launch(&capture, -1, EAGAIN);
+        memset(&event, 0, sizeof event);
+        event.action = YS_ACTION_WAIT; event.waited = -1; event.error_number = EINTR;
+        ys_capture_event(&capture, &event);
+        if (capture.incomplete || capture.count != 3U || capture.bytes == NULL ||
+            strstr(capture.bytes, "\"sec\":12") == NULL ||
+            strstr(capture.bytes, "\"pid\":-1,\"tag\":\"launch\"") == NULL ||
+            strstr(capture.bytes, "\"pid\":-1,\"status\":0,\"tag\":\"wait\"") == NULL) {
+            free(capture.bytes); return 1;
+        }
+        ys_capture_now(&capture, 0, NULL, EIO);
+        if (strstr(capture.bytes, "\"nsec\":null,\"sec\":null") == NULL) {
+            free(capture.bytes); return 1;
+        }
+        while (capture.count < 4096U) ys_capture_launch(&capture, 17, 0);
+        saved_length = capture.length;
+        ys_capture_launch(&capture, 18, 0);
+        if (!capture.incomplete || capture.count != 4096U || capture.length != saved_length) {
+            free(capture.bytes); return 1;
+        }
+        free(capture.bytes);
+    }
+    puts("guest value owner: counters, geometry, launch, wait zero/matching/wrong/EINTR, bounded primitive capture: ok");
+    return 0;
+}
+
+static int cmd_inventory_capture(int argc, char **argv)
+{
+    struct ys_control_capture setup = {0}, control = {0}, counters = {0};
+    struct ys_evidence_capture observation = { &counters, 0 };
+    char **names = NULL, *json;
+    size_t count = 0, length, i;
+    int dirfd;
+    enum ys_plan_status result;
+    if (argc != 3) return 2;
+    dirfd = open(argv[2], O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    result = ys_evidence_inventory_observed(dirfd, &names, &count,
+                                             ys_capture_evidence_entry, &observation);
+    json = ys_capture_document(&setup, &control, &counters, &length);
+    if (json != NULL) { puts(json); free(json); }
+    for (i = 0; i < count; i++) free(names[i]);
+    free(names); free(counters.bytes);
+    return result == YS_PLAN_OK && json != NULL ? 0 : 1;
+}
+
+static int capture_report_frame(const char *capture, size_t capture_length, unsigned char digest[32])
+{
+    struct ys_setup_observations raw = {0};
+    struct ys_setup_flags flags;
+    struct ys_plan_limits limits = {0};
+    struct report_state report = {0};
+    struct ys_frame_writer writer;
+    struct ys_frame_reader reader;
+    FILE *file = tmpfile();
+    char plan_hash[65], *json;
+    size_t length, index = 0;
+    int fd, result = 0;
+    if (file == NULL) return 0;
+    fd = fileno(file);
+    memset(plan_hash, '0', 64U); plan_hash[64] = '\0';
+    raw.meminfo_ok = 1; strcpy(raw.meminfo, "MemTotal: 100 kB\n");
+    ys_setup_values(&limits, &raw, 536870912ULL, &flags);
+    ys_report_setup_values(&report, &flags, 4096);
+    report.verifier_started = report.tree_terminated = 1;
+    ys_cpu_values(&report.cpu, 1, "usage_usec 1001\n", 30000);
+    ys_memory_values(&report.memory, 1, 1, 4096, "oom_kill 0\n", 536870912ULL);
+    ys_tasks_values(&report.tasks, 1, 1, 1, "max 0\n", 64);
+    ys_output_values(&report.output, 1, 0, 1, 9, 40960);
+    ys_scratch_values(&report.scratch, 1, 10, 9, 4096, 40960);
+    json = ys_build_report_json(plan_hash, &report, NULL, &length);
+    if (json == NULL) goto done;
+    if (strstr(json, "\"cpu_time_ms\":{\"enforcement\":\"none\",\"observation\":\"complete\",\"observed\":2") == NULL) goto free_json;
+    ys_sha256_bytes(json, length, digest);
+    if (!ys_frame_writer_open(&writer, fd) ||
+        ys_frame_writer_put(&writer, "report.json", 11U, json, length) != YS_FRAME_OK ||
+        ys_frame_writer_put(&writer, "stdout", 6U, "", 0U) != YS_FRAME_OK ||
+        ys_frame_writer_put(&writer, "stderr", 6U, "", 0U) != YS_FRAME_OK) goto free_json;
+    if (capture != NULL && ys_frame_writer_put(&writer, "control-observation.json", 24U,
+                                               capture, capture_length) != YS_FRAME_OK) goto free_json;
+    if (ys_frame_writer_close(&writer) != YS_FRAME_OK ||
+        ys_frame_reader_open(&reader, fd, writer.offset) != YS_FRAME_OK) goto free_json;
+    for (;;) {
+        struct ys_frame_record record;
+        static const char *const names[] = {"report.json", "stdout", "stderr", "control-observation.json"};
+        if (ys_frame_reader_next(&reader, &record) != YS_FRAME_OK) goto free_json;
+        if (record.is_end) break;
+        if (index >= (capture ? 4U : 3U) || strcmp(record.name, names[index]) != 0 ||
+            (index == 0U && (record.length != length || memcmp(record.content, json, length) != 0)) ||
+            (index == 3U && (record.length != capture_length || memcmp(record.content, capture, capture_length) != 0))) {
+            free(record.content); goto free_json;
+        }
+        index++; free(record.content);
+    }
+    result = index == (capture ? 4U : 3U);
+free_json:
+    free(json);
+done:
+    fclose(file); return result;
+}
+
+static int cmd_observation_capture(void)
+{
+    struct ys_control_capture setup = {0}, control = {0}, counters = {0};
+    struct ys_controller_event event;
+    struct ys_frame_writer frame;
+    struct timespec now = {12, 34};
+    struct statvfs sv;
+    struct stat st;
+    struct ys_fan_stat fan;
+    char *json, *large;
+    unsigned char with_capture[32], without_capture[32];
+    size_t length, overhead = sizeof "{\"control\":[],\"counters\":{},\"setup\":{}}" - 1U;
+    memset(&sv, 0, sizeof sv); memset(&st, 0, sizeof st);
+    sv.f_blocks = 10; sv.f_bfree = 9; sv.f_frsize = 4096; sv.f_files = 3;
+    st.st_mode = S_IFREG | 0600; st.st_size = 2; st.st_nlink = 1;
+    errno = EBUSY;
+    ys_capture_io(&setup, "z_read", -1, EIO, "", 0);
+    ys_capture_io(&setup, "a_read", 2, 0, "{}", 2);
+    ys_capture_statvfs(&setup, "output", 0, 0, &sv);
+    ys_capture_stat(&counters, "stdout", 0, 0, &st);
+    ys_capture_now(&control, 1, &now, 0);
+    ys_capture_launch(&control, 17, 0);
+    memset(&event, 0, sizeof event); event.action = YS_ACTION_POLL;
+    event.value = 1; event.fd_count = 1; event.fd_roles[0] = 2; event.revents[0] = POLLIN;
+    ys_capture_event(&control, &event);
+    ys_capture_population(&control, 12, "populated 0\n", 0);
+    memset(&fan, 0, sizeof fan); fan.fd = 27; fan.result = -1; fan.error_number = EIO;
+    ys_capture_fan_read(&control, -1, EINTR, NULL, &fan, 0);
+    ys_capture_fan_reply(&control, -1, EIO);
+    ys_capture_kill(&control, 0, EIO);
+    json = ys_capture_document(&setup, &control, &counters, &length);
+    if (json == NULL || errno != EBUSY || strstr(json, "\"role\":\"exec\"") == NULL ||
+        strstr(json, "\"errno\":5,\"return\":-1,\"tag\":\"fan-reply\"") == NULL ||
+        strstr(json, "\"setup\":{\"a_read\"") == NULL || strlen(json) != length) return 1;
+    if (!capture_report_frame(json, length, with_capture)) return 1;
+    puts(json); free(json);
+    ys_capture_io(&setup, "a_read", 0, 0, "", 0);
+    json = ys_capture_document(&setup, &control, &counters, &length);
+    if (!setup.incomplete || json != NULL ||
+        !capture_report_frame(NULL, 0U, without_capture) ||
+        memcmp(with_capture, without_capture, sizeof with_capture) != 0) return 1;
+    free(setup.bytes); free(control.bytes); free(counters.bytes);
+    memset(&setup, 0, sizeof setup); memset(&control, 0, sizeof control); memset(&counters, 0, sizeof counters);
+    large = malloc(4U * 1024U * 1024U + 1U);
+    if (large == NULL) return 1;
+    length = 4U * 1024U * 1024U - overhead;
+    memcpy(large, "\"padding\":\"", 11U);
+    memset(large + 11U, 'a', length - 12U); large[length - 1U] = '\"'; large[length] = '\0';
+    ys_capture_raw(&setup, large, length);
+    json = ys_capture_document(&setup, &control, &counters, &length);
+    if (json == NULL || length != 4U * 1024U * 1024U) return 1;
+    free(json);
+    memset(&frame, 0, sizeof frame); frame.offset = 123;
+    if (!ys_capture_fits(&frame, (off_t)(123U + length + 77U), length) ||
+        ys_capture_fits(&frame, (off_t)(123U + length + 76U), length)) return 1;
+    ys_capture_io(&counters, "extra", 0, 0, "", 0);
+    if (ys_capture_document(&setup, &control, &counters, &length) != NULL ||
+        !capture_report_frame(NULL, 0U, without_capture) ||
+        memcmp(with_capture, without_capture, sizeof with_capture) != 0) return 1;
+    free(large); free(setup.bytes); free(counters.bytes);
+    memset(&control, 0, sizeof control);
+    large = calloc(4096U, 1);
+    if (large == NULL) return 1;
+    ys_capture_fan_read(&control, 4062, 0, (const unsigned char *)large, NULL, 0);
+    if (control.incomplete || control.length != 8192U || control.count != 1U) return 1;
+    ys_capture_fan_read(&control, 4063, 0, (const unsigned char *)large, NULL, 0);
+    if (!control.incomplete || control.length != 8192U || control.count != 1U) return 1;
+    free(large); free(control.bytes);
+    memset(&counters, 0, sizeof counters);
+    {
+        struct ys_evidence_capture evidence = { &counters, 9999U };
+        size_t before;
+        ys_capture_evidence_entry("last", 0, 0, &st, &evidence);
+        if (counters.incomplete || evidence.count != 10000U) return 1;
+        before = counters.length;
+        ys_capture_evidence_entry("extra", 0, 0, &st, &evidence);
+        if (!counters.incomplete || counters.length != before || evidence.count != 10000U) return 1;
+    }
+    free(counters.bytes);
     return 0;
 }
 
@@ -530,6 +750,8 @@ int main(int argc, char **argv)
     if (strcmp(argv[1], "exec-report") == 0) return cmd_exec_report(argc, argv);
     if (strcmp(argv[1], "verify") == 0) return cmd_verify_report(argc, argv);
     if (strcmp(argv[1], "observation-values") == 0 && argc == 2) return cmd_observation_values();
+    if (strcmp(argv[1], "observation-capture") == 0 && argc == 2) return cmd_observation_capture();
+    if (strcmp(argv[1], "inventory-capture") == 0) return cmd_inventory_capture(argc, argv);
     usage();
     return 2;
 }

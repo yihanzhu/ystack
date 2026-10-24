@@ -68,6 +68,65 @@ hf="$tmp/build-fault/harness"
 h="$h1"
 "$h" observation-values || fail 'shared guest observation values'
 pass 'shared guest counters, geometry and controller preserve matching wait, zero, wrong pid and EINTR'
+"$h" observation-capture > "$tmp/observation.json" || fail 'bounded private guest observations'
+"$python" - "$tmp/observation.json" <<'PY_CAPTURE'
+import json
+import pathlib
+import sys
+raw = pathlib.Path(sys.argv[1]).read_bytes()
+value = json.loads(raw)
+assert raw == json.dumps(value, sort_keys=True, separators=(',', ':')).encode() + b'\n'
+assert set(value) == {'control', 'counters', 'setup'}
+assert value['setup']['a_read'] == {'bytes': '7b7d', 'errno': None, 'return': 2}
+assert value['setup']['z_read'] == {'bytes': '', 'errno': 5, 'return': -1}
+assert [row['tag'] for row in value['control']] == [
+    'now', 'launch', 'poll', 'population', 'fan-read', 'fan-reply', 'kill']
+assert value['control'][2]['revents'] == [{'revents': 1, 'role': 'exec'}]
+assert value['counters']['stdout']['stat']['size'] == 2
+assert value['setup']['output']['stat']['f_bfree'] == 9
+PY_CAPTURE
+pass 'shared guest values build the same report through complete frames with and without capture; canonical raw failures, duplicates, exact 4MiB and frame capacity stay bounded'
+/bin/mkdir -m 700 "$tmp/capture-inventory"
+/usr/bin/printf '{}' > "$tmp/capture-inventory/result.json"
+check_capture_inventory() {
+  "$python" - "$1" <<'PY_CAPTURE_INVENTORY'
+import json
+import pathlib
+import sys
+value = json.loads(pathlib.Path(sys.argv[1]).read_bytes())['counters']
+assert value['entry_0000_name']['bytes'] == b'result.json'.hex()
+assert value['entry_0000_stat']['stat']['size'] == 2
+assert value['directory'] == {'bytes':'', 'errno':None, 'return':0}
+PY_CAPTURE_INVENTORY
+}
+"$h" inventory-capture "$tmp/capture-inventory" > "$tmp/capture-inventory.json"
+check_capture_inventory "$tmp/capture-inventory.json" || fail 'actual evidence acquisition capture'
+for capture_control in mutation deletion; do
+  copy="$tmp/capture-$capture_control"
+  /bin/mkdir -m 700 "$copy"
+  /bin/cp "$guest_dir/common.c" "$guest_dir/common.h" "$guest_dir/observation-values.c" "$guest_dir/observation-values.h" "$copy/"
+  "$python" - "$copy/common.c" "$capture_control" <<'PY_CAPTURE_CONTROL'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+source = path.read_text()
+call = 'observer(de->d_name, result, result < 0 ? saved : 0, &st, context);'
+assert source.count(call) == 1
+replacement = ('observer(NULL, result, result < 0 ? saved : 0, &st, context);'
+               if sys.argv[2] == 'mutation' else '(void)context;')
+path.write_text(source.replace(call, replacement))
+PY_CAPTURE_CONTROL
+  /usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 -I"$copy" \
+    "$harness_src" "$copy/common.c" "$copy/observation-values.c" -o "$copy/harness"
+  if "$copy/harness" inventory-capture "$tmp/capture-inventory" > "$copy/raw.json" 2> "$copy/error"; then
+    if check_capture_inventory "$copy/raw.json" > "$copy/check.stdout" 2> "$copy/check.stderr"; then
+      fail "actual evidence capture call $capture_control escaped its paired assertion"
+    fi
+  fi
+done
+pass 'actual ordinary evidence acquisition reaches the shared raw owner; narrow call mutation and deletion are detected'
+
+
 # FIPS 180-4 vectors, through the code (ys_sha256_bytes via `digest`).
 : > "$tmp/fips-empty"
 /usr/bin/printf 'abc' > "$tmp/fips-abc"
@@ -262,6 +321,103 @@ expect_plan_err() { # expect_plan_err <desc> <file>
 genplan "$tmp/plan-ok.json" ok '[]'
 expect_plan_ok 'a well-formed empty-entries plan' "$tmp/plan-ok.json" 0
 pass 'a well-formed sandbox_guest_plan (fixed argv/environment, empty entries, both hashes, all nine limits, canonical trailing LF) is accepted'
+/usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 -DYSTACK_COMMON_VALUES_ONLY \
+  -DYSTACK_OBSERVATION_VALUES_MAIN -I"$guest_dir" \
+  "$guest_dir/observation-values.c" "$guest_dir/common.c" -o "$tmp/guest-values"
+cat > "$tmp/capture-wire.py" <<'PY_CAPTURE_WIRE'
+import json
+from pathlib import Path
+import struct
+import subprocess
+import sys
+helper, plan_path = sys.argv[1:]
+plan = Path(plan_path).read_bytes()
+limits = json.loads(plan)['body']['limits']
+def n(value): return struct.pack('>Q', value & ((1 << 64) - 1))
+def blob(value): return n(len(value)) + value
+keys = ('cpu_max', 'cpu_max_burst', 'bandwidth_slice_us', 'pids_max')
+texts = [(str(limits[key]) + (' 100000\n' if index == 0 else '\n')).encode()
+         for index, key in enumerate(keys)]
+counts = [len(value) for value in texts]
+def wire(write_mask=15, read_mask=15, write_counts=None, closes=None, reads=None, readbacks=None, initial_page_size=4096):
+    write_counts = counts if write_counts is None else write_counts
+    closes = [0] * 4 if closes is None else closes
+    reads = [1] * 4 if reads is None else reads
+    readbacks = texts if readbacks is None else readbacks
+    value = b'YSVAL02\n' + blob(plan) + n(write_mask) + n(read_mask) + n(0)
+    if initial_page_size is not None:
+        value += n(initial_page_size)
+    for index in range(4):
+        value += n(write_counts[index]) + n(closes[index]) + n(reads[index]) + blob(readbacks[index])
+    value += n(1) + blob(b'MemTotal: 100 kB\n')
+    value += n(1) + n(limits['output_tmpfs_bytes']) + n(1) + n(limits['output_inodes'])
+    value += n(1) + n(limits['scratch_bytes']) + n(1) + n(limits['scratch_inodes']) + n(4096)
+    return value + n(0) + n(0) + n(0)
+def check(label, value, accept):
+    result = subprocess.run([helper], input=value, capture_output=True, env={}, timeout=10)
+    assert (result.returncode == 0) == accept and not result.stdout and not result.stderr, label
+check('all setup calls reached', wire(), True)
+check('initial page size missing', wire(initial_page_size=None), False)
+check('initial page size zero', wire(initial_page_size=0), False)
+check('initial page size negative', wire(initial_page_size=-1), False)
+empty_plan = plan
+value = json.loads(plan)
+value['body']['entries'] = [
+    {'kind':'directory', 'mode':'0500', 'path':name, 'sha256':None, 'size_bytes':None}
+    for name in ('a', 'b')]
+plan = json.dumps(value, sort_keys=True, separators=(',', ':')).encode() + b'\n'
+check('initial geometry overflow', wire(initial_page_size=(1 << 63) - 1), False)
+check('initial geometry directories baseline', wire(), True)
+plan = empty_plan
+
+for label, wm, rm in [('missing write', 14, 15), ('missing read', 15, 14),
+                      ('extra write', 31, 15), ('extra read', 15, 31)]:
+    check(label, wire(write_mask=wm, read_mask=rm), False)
+skip_counts = [0, -1, -1, counts[3]]
+skip_closes = [0, -1, -1, 0]
+skip_reads = [0, 0, 0, 1]
+skip_back = [b'', b'', b'', texts[3]]
+check('short write skips dependent CPU reads', wire(9, 8, skip_counts, skip_closes, skip_reads, skip_back), True)
+skip_counts[0] = counts[0]; skip_closes[0] = -1
+check('close failure overrides complete write', wire(9, 8, skip_counts, skip_closes, skip_reads, skip_back), True)
+skip_closes[0] = 0
+check('failed read is reached', wire(9, 9, skip_counts, skip_closes, skip_reads, skip_back), True)
+check('failed read cannot be missing', wire(9, 8, skip_counts, skip_closes, skip_reads, skip_back), False)
+print('private YSVAL02 shared setup presence/count/close controls: ok; ordinary no-report data construction')
+PY_CAPTURE_WIRE
+"$python" "$tmp/capture-wire.py" "$tmp/guest-values" "$tmp/plan-ok.json"
+for page_control in mutation deletion; do
+  copy="$tmp/page-$page_control"
+  /bin/mkdir -m 700 "$copy"
+  /bin/cp "$guest_dir/common.c" "$guest_dir/common.h" "$guest_dir/observation-values.c" "$guest_dir/observation-values.h" "$copy/"
+  "$python" - "$copy/observation-values.c" "$page_control" <<'PY_PAGE_CONTROL'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+source = path.read_text()
+call = 'ys_candidate_geometry(&plan, (uint64_t)initial_page_size,\n                                   &candidate_bytes, &candidate_inodes)'
+assert source.count(call) == 1
+replacement = (call.replace('(uint64_t)initial_page_size', '1U')
+               if sys.argv[2] == 'mutation'
+               else '((void)&candidate_bytes, (void)&candidate_inodes, 1)')
+path.write_text(source.replace(call, replacement))
+PY_PAGE_CONTROL
+  /usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 -DYSTACK_COMMON_VALUES_ONLY \
+    -DYSTACK_OBSERVATION_VALUES_MAIN -I"$copy" \
+    "$copy/observation-values.c" "$copy/common.c" -o "$copy/guest-values"
+  if "$python" "$tmp/capture-wire.py" "$copy/guest-values" "$tmp/plan-ok.json" \
+      > "$copy/check.stdout" 2> "$copy/check.stderr"; then
+    fail "initial page-size owner call $page_control escaped its paired assertion"
+  fi
+  "$python" - "$copy/check.stderr" <<'PY_PAGE_EXPECTED'
+from pathlib import Path
+import sys
+assert 'initial geometry overflow' in Path(sys.argv[1]).read_text()
+PY_PAGE_EXPECTED
+done
+pass 'private YSVAL02 initial page-size uses the same geometry owner; missing, invalid, overflow, call mutation and deletion are detected'
+pass 'private YSVAL02 helper uses the same setup owner for reached, missing, extra, short-write, close-failure and failed-read paths'
+
 for mode in unknownkey dupkey missingkey misorder; do
   genplan "$tmp/plan-$mode.json" "$mode" '[]'
   expect_plan_err "a $mode plan" "$tmp/plan-$mode.json"

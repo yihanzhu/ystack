@@ -23,6 +23,49 @@ int ys_readback_matches(int read_ok, const char *bytes, uint64_t expected)
     return ys_u64_values(read_ok, bytes, &value) && value == expected;
 }
 
+int ys_write_count_values(ssize_t count, size_t requested, int close_result)
+{
+    return close_result == 0 && count == (ssize_t)requested;
+}
+
+int ys_setup_write_text(const struct ys_plan_limits *lim, size_t slot, char *text, size_t capacity)
+{
+    int count;
+    if (slot == 0U) count = snprintf(text, capacity, "%llu 100000\n", (unsigned long long)lim->cpu_max);
+    else if (slot == 1U) count = snprintf(text, capacity, "%llu\n", (unsigned long long)lim->cpu_max_burst);
+    else if (slot == 2U) count = snprintf(text, capacity, "%llu\n", (unsigned long long)lim->bandwidth_slice_us);
+    else if (slot == 3U) count = snprintf(text, capacity, "%llu\n", (unsigned long long)lim->pids_max);
+    else return 0;
+    return count >= 0 && (size_t)count < capacity;
+}
+
+int ys_setup_presence_values(const struct ys_plan_limits *lim,
+                              const struct ys_setup_observations *raw,
+                              uint64_t write_mask, uint64_t read_mask)
+{
+    uint64_t expected_writes = 9U, expected_reads = 0U;
+    size_t i;
+    if (raw->writes[0] && ys_readback_matches(raw->reads[0], raw->readbacks[0], lim->cpu_max)) {
+        expected_writes |= 2U;
+        if (raw->writes[1] && ys_readback_matches(raw->reads[1], raw->readbacks[1], lim->cpu_max_burst))
+            expected_writes |= 4U;
+    }
+    for (i = 0; i < 4U; i++) {
+        uint64_t bit = 1ULL << i;
+        if ((raw->writes[i] != 0 && raw->writes[i] != 1) ||
+            (raw->reads[i] != 0 && raw->reads[i] != 1)) return 0;
+        if ((expected_writes & bit) && raw->writes[i]) expected_reads |= bit;
+        if (!(expected_writes & bit) && raw->writes[i]) return 0;
+        if (!(expected_reads & bit) && (raw->reads[i] || raw->readbacks[i][0] != '\0')) return 0;
+    }
+    return write_mask == expected_writes && read_mask == expected_reads;
+}
+
+int ys_counter_presence_values(int memory_peak_ok, int pids_peak_ok, uint64_t events_mask)
+{
+    return events_mask == (uint64_t)((memory_peak_ok ? 1U : 0U) | (pids_peak_ok ? 2U : 0U));
+}
+
 void ys_setup_values(const struct ys_plan_limits *lim, const struct ys_setup_observations *raw,
                       uint64_t memory_bound, struct ys_setup_flags *flags)
 {
@@ -451,6 +494,344 @@ static int json_appendf(struct json_writer *w, const char *format, ...)
     return 1;
 }
 
+static void capture_fragment(struct ys_control_capture *capture, const char *row, size_t length, int control)
+{
+    struct json_writer writer = { capture->bytes, capture->length, capture->capacity };
+    int saved = errno;
+    if (capture->incomplete || capture->count >= (control ? 4096U : 65536U) || (control && length > 8192U) ||
+        length + 1U > 4U * 1024U * 1024U - capture->length) {
+        capture->incomplete = 1;
+        errno = saved;
+        return;
+    }
+    if (!json_reserve(&writer, length + 1U)) {
+        capture->incomplete = 1;
+    } else {
+        if (capture->count != 0U) writer.buf[writer.len++] = ',';
+        memcpy(writer.buf + writer.len, row, length);
+        writer.len += length;
+        writer.buf[writer.len] = '\0';
+        capture->count++;
+    }
+    capture->bytes = writer.buf;
+    capture->length = writer.len;
+    capture->capacity = writer.cap;
+    errno = saved;
+}
+
+static void capture_row(struct ys_control_capture *capture, const char *row, size_t length)
+{
+    capture_fragment(capture, row, length, 1);
+}
+
+void ys_capture_statvfs(struct ys_control_capture *capture, const char *site,
+                             int result, int error_number, const struct statvfs *sv)
+{
+    char row[512], error[32];
+    int n, saved = errno;
+    if (result < 0) snprintf(error, sizeof error, "%d", error_number);
+    else strcpy(error, "null");
+    if (result < 0)
+        n = snprintf(row, sizeof row, "\"%s\":{\"errno\":%s,\"return\":%d,\"stat\":null}", site, error, result);
+    else
+        n = snprintf(row, sizeof row, "\"%s\":{\"errno\":null,\"return\":%d,\"stat\":{\"f_bfree\":%llu,\"f_blocks\":%llu,\"f_files\":%llu,\"f_frsize\":%llu}}",
+            site, result, (unsigned long long)sv->f_bfree, (unsigned long long)sv->f_blocks,
+            (unsigned long long)sv->f_files, (unsigned long long)sv->f_frsize);
+    if (n < 0 || (size_t)n >= sizeof row) capture->incomplete = 1;
+    else ys_capture_raw(capture, row, (size_t)n);
+    errno = saved;
+}
+
+void ys_capture_stat(struct ys_control_capture *capture, const char *site,
+                          int result, int error_number, const struct stat *st)
+{
+    char row[768];
+    int n, saved = errno;
+    if (result < 0)
+        n = snprintf(row, sizeof row, "\"%s\":{\"errno\":%d,\"return\":%d,\"stat\":null}", site, error_number, result);
+    else
+        n = snprintf(row, sizeof row, "\"%s\":{\"errno\":null,\"return\":%d,\"stat\":{\"dev\":%llu,\"gid\":%llu,\"ino\":%llu,\"mode\":%llu,\"nlink\":%llu,\"size\":%lld,\"uid\":%llu}}",
+            site, result, (unsigned long long)st->st_dev, (unsigned long long)st->st_gid,
+            (unsigned long long)st->st_ino, (unsigned long long)st->st_mode,
+            (unsigned long long)st->st_nlink, (long long)st->st_size, (unsigned long long)st->st_uid);
+    if (n < 0 || (size_t)n >= sizeof row) capture->incomplete = 1;
+    else ys_capture_raw(capture, row, (size_t)n);
+    errno = saved;
+}
+
+void ys_capture_evidence_entry(const char *name, int result, int error_number,
+                                     const struct stat *st, void *context)
+{
+    struct ys_evidence_capture *state = context;
+    struct ys_control_capture *capture = state->capture;
+    char site[80];
+    if (name == NULL) {
+        ys_capture_io(capture, "directory", error_number != 0 ? -1 : result, error_number, "", 0U);
+        return;
+    }
+    if (state->count >= 10000U) { capture->incomplete = 1; return; }
+    snprintf(site, sizeof site, "entry_%04zu_name", state->count);
+    ys_capture_io(capture, site, 0, 0, name, strlen(name));
+    snprintf(site, sizeof site, "entry_%04zu_stat", state->count++);
+    ys_capture_stat(capture, site, result, error_number, st);
+}
+
+void ys_capture_raw(struct ys_control_capture *capture, const char *row, size_t length)
+{
+    size_t at = 0, end, key_length;
+    char *key_end;
+    int saved = errno;
+    if (capture->incomplete || length < 4U || row[0] != '\"' ||
+        (key_end = strchr(row + 1, '\"')) == NULL) { capture->incomplete = 1; return; }
+    key_length = (size_t)(key_end - row) + 1U;
+    if (capture->length != 0U &&
+        strncmp(row, capture->bytes + capture->raw_cursor, key_length) > 0)
+        at = capture->raw_cursor;
+    while (at < capture->length) {
+        int comparison = strncmp(row, capture->bytes + at, key_length);
+        int depth = 0, string = 0, escaped = 0;
+        if (comparison == 0 && capture->bytes[at + key_length] == ':') {
+            capture->incomplete = 1; errno = saved; return;
+        }
+        if (comparison < 0) break;
+        for (end = at; end < capture->length; end++) {
+            char c = capture->bytes[end];
+            if (string) {
+                if (escaped) escaped = 0;
+                else if (c == '\\') escaped = 1;
+                else if (c == '\"') string = 0;
+            } else if (c == '\"') string = 1;
+            else if (c == '{' || c == '[') depth++;
+            else if (c == '}' || c == ']') depth--;
+            else if (c == ',' && depth == 0) break;
+        }
+        at = end < capture->length ? end + 1U : end;
+    }
+    {
+        size_t previous = capture->length;
+        capture_fragment(capture, row, length, 0);
+        if (!capture->incomplete && at < previous) {
+            char *copy = malloc(length + 1U);
+            if (copy == NULL) capture->incomplete = 1;
+            else {
+                memcpy(copy, row, length); copy[length] = ',';
+                memmove(capture->bytes + at + length + 1U, capture->bytes + at, previous - at);
+                memcpy(capture->bytes + at, copy, length + 1U);
+                free(copy);
+            }
+        }
+        if (!capture->incomplete) capture->raw_cursor = at;
+    }
+    errno = saved;
+}
+
+void ys_capture_io(struct ys_control_capture *capture, const char *name, long long result,
+                     int error_number, const void *bytes, size_t length)
+{
+    struct json_writer writer = {0};
+    char *hex, error[32];
+    int saved = errno, overhead;
+    if (result < 0) snprintf(error, sizeof error, "%d", error_number);
+    else strcpy(error, "null");
+    overhead = snprintf(NULL, 0, "\"%s\":{\"bytes\":\"\",\"errno\":%s,\"return\":%lld}", name, error, result);
+    if (capture->incomplete || overhead < 0 || capture->length > 4U * 1024U * 1024U ||
+        length > 2U * 1024U * 1024U ||
+        length * 2U + (size_t)overhead + (capture->count ? 1U : 0U) > 4U * 1024U * 1024U - capture->length) {
+        capture->incomplete = 1; errno = saved; return;
+    }
+    hex = malloc(length * 2U + 1U);
+    if (hex == NULL) { capture->incomplete = 1; errno = saved; return; }
+    ys_hex_encode(bytes, length, hex); hex[length * 2U] = '\0';
+    if (!json_appendf(&writer, "\"%s\":{\"bytes\":\"%s\",\"errno\":", name, hex) ||
+        !(result < 0 ? json_appendf(&writer, "%d", error_number) : json_appendf(&writer, "null")) ||
+        !json_appendf(&writer, ",\"return\":%lld}", result))
+        capture->incomplete = 1;
+    else ys_capture_raw(capture, writer.buf, writer.len);
+    free(writer.buf); free(hex); errno = saved;
+}
+
+int ys_capture_fits(const struct ys_frame_writer *frame, off_t capacity, size_t length)
+{
+    return frame->offset >= 0 && capacity >= frame->offset &&
+        length <= 4U * 1024U * 1024U &&
+        (uint64_t)(capacity - frame->offset) >= (uint64_t)length + 77U;
+}
+
+char *ys_capture_document(const struct ys_control_capture *setup,
+                           const struct ys_control_capture *control,
+                           const struct ys_control_capture *counters, size_t *length)
+{
+    struct json_writer writer = {0};
+    if (setup->incomplete || control->incomplete || counters->incomplete ||
+        setup->length + control->length + counters->length > 4U * 1024U * 1024U -
+            (sizeof "{\"control\":[],\"counters\":{},\"setup\":{}}" - 1U))
+        return NULL;
+    if (!json_appendf(&writer, "{\"control\":[%s],\"counters\":{%s},\"setup\":{%s}}",
+        control->bytes ? control->bytes : "", counters->bytes ? counters->bytes : "",
+        setup->bytes ? setup->bytes : "")) { free(writer.buf); return NULL; }
+    *length = writer.len;
+    return writer.buf;
+}
+
+void ys_capture_now(struct ys_control_capture *capture, int ok, const struct timespec *now,
+                    int error_number)
+{
+    char row[256], error[32];
+    int count;
+    if (ok) strcpy(error, "null");
+    else (void)snprintf(error, sizeof error, "%d", error_number);
+    if (ok)
+        count = snprintf(row, sizeof row, "{\"errno\":null,\"nsec\":%lld,\"sec\":%lld,\"tag\":\"now\"}",
+                         (long long)now->tv_nsec, (long long)now->tv_sec);
+    else
+        count = snprintf(row, sizeof row, "{\"errno\":%s,\"nsec\":null,\"sec\":null,\"tag\":\"now\"}", error);
+    if (count < 0 || (size_t)count >= sizeof row) capture->incomplete = 1;
+    else capture_row(capture, row, (size_t)count);
+}
+
+void ys_capture_launch(struct ys_control_capture *capture, pid_t pid, int error_number)
+{
+    char row[128], error[32];
+    int count;
+    if (pid >= 0) strcpy(error, "null");
+    else (void)snprintf(error, sizeof error, "%d", error_number);
+    count = snprintf(row, sizeof row, "{\"errno\":%s,\"pid\":%lld,\"tag\":\"launch\"}", error, (long long)pid);
+    if (count < 0 || (size_t)count >= sizeof row) capture->incomplete = 1;
+    else capture_row(capture, row, (size_t)count);
+}
+
+void ys_capture_population(struct ys_control_capture *capture, ssize_t count, const char *bytes,
+                           int error_number)
+{
+    char row[768], error[32], hex[513];
+    int length;
+    size_t size = count > 0 ? (size_t)count : 0U;
+    if (size > 256U) { capture->incomplete = 1; return; }
+    ys_hex_encode((const unsigned char *)bytes, size, hex); hex[size * 2U] = '\0';
+    if (count >= 0) strcpy(error, "null");
+    else (void)snprintf(error, sizeof error, "%d", error_number);
+    length = snprintf(row, sizeof row, "{\"bytes\":\"%s\",\"errno\":%s,\"tag\":\"population\"}", hex, error);
+    if (length < 0 || (size_t)length >= sizeof row) capture->incomplete = 1;
+    else capture_row(capture, row, (size_t)length);
+}
+
+void ys_capture_kill(struct ys_control_capture *capture, int result, int error_number)
+{
+    char row[128], error[32];
+    int length;
+    if (result) strcpy(error, "null");
+    else (void)snprintf(error, sizeof error, "%d", error_number);
+    length = snprintf(row, sizeof row, "{\"errno\":%s,\"return\":%d,\"tag\":\"kill\"}", error, result);
+    if (length < 0 || (size_t)length >= sizeof row) capture->incomplete = 1;
+    else capture_row(capture, row, (size_t)length);
+}
+
+void ys_capture_fan_reply(struct ys_control_capture *capture, ssize_t result, int error_number)
+{
+    char row[160], error[32];
+    int n;
+    if (result < 0) snprintf(error, sizeof error, "%d", error_number);
+    else strcpy(error, "null");
+    n = snprintf(row, sizeof row, "{\"errno\":%s,\"return\":%lld,\"tag\":\"fan-reply\"}", error, (long long)result);
+    if (n < 0 || (size_t)n >= sizeof row) capture->incomplete = 1;
+    else capture_row(capture, row, (size_t)n);
+}
+
+void ys_capture_controls(struct ys_control_capture *capture, const struct ys_control_capture *rows)
+{
+    size_t at = 0;
+    if (rows->incomplete) capture->incomplete = 1;
+    while (!capture->incomplete && at < rows->length) {
+        const char *end = strchr(rows->bytes + at, '}');
+        if (end == NULL) { capture->incomplete = 1; return; }
+        capture_row(capture, rows->bytes + at, (size_t)(end - rows->bytes) - at + 1U);
+        at = (size_t)(end - rows->bytes) + 2U;
+    }
+}
+
+void ys_capture_fan_read(struct ys_control_capture *capture, ssize_t result, int error_number,
+                          const unsigned char *bytes, const struct ys_fan_stat *stats, size_t count)
+{
+    struct json_writer writer = {0};
+    char hex[8193], error[32];
+    size_t size = result > 0 ? (size_t)result : 0U, i;
+    int saved = errno, prefix, suffix;
+    if (size > 4096U || count > 170U) { capture->incomplete = 1; return; }
+    ys_hex_encode(bytes, size, hex); hex[size * 2U] = '\0';
+    if (result < 0) snprintf(error, sizeof error, "%d", error_number);
+    else strcpy(error, "null");
+    prefix = snprintf(NULL, 0, "{\"bytes\":\"%s\",\"errno\":%s,\"events\":[", hex, error);
+    suffix = snprintf(NULL, 0, "],\"return\":%lld,\"tag\":\"fan-read\"}", (long long)result);
+    if (prefix < 0 || suffix < 0 || (size_t)prefix + (size_t)suffix > 8192U ||
+        !json_appendf(&writer, "{\"bytes\":\"%s\",\"errno\":%s,\"events\":[", hex, error)) goto fail;
+    for (i = 0; i < count; i++) {
+        struct ys_control_capture stat = {0};
+        ys_capture_stat(&stat, "stat", stats[i].result, stats[i].error_number, &stats[i].value);
+        int required;
+        required = snprintf(NULL, 0, "%s{\"fd\":%d,%s}", i ? "," : "", stats[i].fd, stat.bytes ? stat.bytes : "");
+        if (stat.incomplete || required < 0 || writer.len + (size_t)required + (size_t)suffix > 8192U ||
+            !json_appendf(&writer, "%s{\"fd\":%d,%s}",
+                                             i ? "," : "", stats[i].fd, stat.bytes)) {
+            free(stat.bytes); goto fail;
+        }
+        free(stat.bytes);
+    }
+    if (!json_appendf(&writer, "],\"return\":%lld,\"tag\":\"fan-read\"}", (long long)result)) goto fail;
+    capture_row(capture, writer.buf, writer.len);
+    free(writer.buf); errno = saved; return;
+fail:
+    capture->incomplete = 1; free(writer.buf); errno = saved;
+}
+
+void ys_capture_event(struct ys_control_capture *capture, const struct ys_controller_event *event)
+{
+    char row[1024], error[32], hex[sizeof event->bytes * 2U + 1U];
+    int count = -1, failed = 0;
+    switch (event->action) {
+    case YS_ACTION_NOW:
+        ys_capture_now(capture, event->value, &event->now, event->error_number);
+        return;
+    case YS_ACTION_POLL: failed = event->value < 0; break;
+    case YS_ACTION_WAIT: failed = event->waited < 0; break;
+    case YS_ACTION_EXEC_READ: failed = event->read_count < 0; break;
+    default: return;
+    }
+    if (!failed) strcpy(error, "null");
+    else (void)snprintf(error, sizeof error, "%d", event->error_number);
+    if (event->action == YS_ACTION_POLL) {
+        struct json_writer writer = {0};
+        size_t i;
+        if (event->fd_count > 2U || !json_appendf(&writer,
+                "{\"count\":%d,\"errno\":%s,\"revents\":[", event->value, error)) {
+            capture->incomplete = 1; free(writer.buf); return;
+        }
+        for (i = 0; i < event->fd_count; i++) {
+            if ((event->fd_roles[i] != 1 && event->fd_roles[i] != 2) ||
+                !json_appendf(&writer, "%s{\"revents\":%d,\"role\":\"%s\"}",
+                i ? "," : "", event->revents[i], event->fd_roles[i] == 1 ? "fan" : "exec")) {
+                capture->incomplete = 1; free(writer.buf); return;
+            }
+        }
+        if (!json_appendf(&writer, "],\"tag\":\"poll\"}")) capture->incomplete = 1;
+        else capture_row(capture, writer.buf, writer.len);
+        free(writer.buf); return;
+    }
+    else if (event->action == YS_ACTION_WAIT)
+        count = snprintf(row, sizeof row,
+            "{\"errno\":%s,\"pid\":%lld,\"status\":%d,\"tag\":\"wait\"}",
+            error, (long long)event->waited, event->wait_status);
+    else {
+        size_t length = event->read_count > 0 ? (size_t)event->read_count : 0U;
+        if (length > sizeof event->bytes) { capture->incomplete = 1; return; }
+        ys_hex_encode(event->bytes, length, hex); hex[length * 2U] = '\0';
+        count = snprintf(row, sizeof row,
+            "{\"bytes\":\"%s\",\"eof\":%s,\"errno\":%s,\"tag\":\"exec-read\"}",
+            hex, event->read_count == 0 ? "true" : "false", error);
+    }
+    if (count < 0 || (size_t)count >= sizeof row) capture->incomplete = 1;
+    else capture_row(capture, row, (size_t)count);
+}
+
 static int append_row(struct json_writer *w, const char *name, const struct guest_row *r)
 {
     if (r->observation != NULL && strcmp(r->observation, "unavailable") == 0)
@@ -689,10 +1070,14 @@ int main(int argc, char **argv)
     char **names = NULL, plan_hex[65], cpu[256], peak[128], events[256];
     char *json = NULL;
     uint64_t page_size, total, value = 0, blocks, free_blocks, fragment;
+    uint64_t write_mask = 0, read_mask = 0, events_mask = 0;
+    int strict_capture = 0, memory_peak_ok = 0, pids_peak_ok = 0;
     int ok, inventory_ok, result = 1, plan_loaded = 0;
     (void)argv;
     memset(&report, 0, sizeof report); memset(&setup, 0, sizeof setup);
-    if (argc != 1 || !value_read(&reader, magic, sizeof magic) || memcmp(magic, "YSVAL01\n", 8) != 0) goto done;
+    if (argc != 1 || !value_read(&reader, magic, sizeof magic)) goto done;
+    strict_capture = memcmp(magic, "YSVAL02\n", 8) == 0;
+    if (!strict_capture && memcmp(magic, "YSVAL01\n", 8) != 0) goto done;
     plan_length = (size_t)value_uint(&reader);
     if (plan_length > 16U * 1024U * 1024U) goto done;
     plan_raw = malloc(plan_length == 0U ? 1U : plan_length);
@@ -700,8 +1085,25 @@ int main(int argc, char **argv)
         ys_plan_parse(plan_raw, plan_length, &plan) != YS_PLAN_OK) goto done;
     plan_loaded = 1;
     ys_sha256_bytes(plan_raw, plan_length, digest); ys_hex_encode(digest, sizeof digest, plan_hex);
+    if (strict_capture) {
+        write_mask = value_uint(&reader); read_mask = value_uint(&reader);
+        int64_t initial_page_size;
+        uint64_t candidate_bytes, candidate_inodes;
+        events_mask = value_uint(&reader);
+        initial_page_size = value_int(&reader);
+        if (initial_page_size <= 0 ||
+            !ys_candidate_geometry(&plan, (uint64_t)initial_page_size,
+                                   &candidate_bytes, &candidate_inodes)) goto done;
+    }
     for (i = 0; i < 4U; i++) {
-        setup.writes[i] = (int)value_uint(&reader); setup.reads[i] = (int)value_uint(&reader);
+        if (strict_capture) {
+            char text[64];
+            int64_t count = value_int(&reader), closed = value_int(&reader);
+            if (!ys_setup_write_text(&plan.limits, i, text, sizeof text) || count < -1 ||
+                count > (int64_t)strlen(text) || (closed != 0 && closed != -1)) goto done;
+            setup.writes[i] = ys_write_count_values((ssize_t)count, strlen(text), (int)closed);
+        } else setup.writes[i] = (int)value_uint(&reader);
+        setup.reads[i] = (int)value_uint(&reader);
         value_text(&reader, setup.readbacks[i], sizeof setup.readbacks[i]);
     }
     setup.meminfo_ok = (int)value_uint(&reader); value_text(&reader, setup.meminfo, sizeof setup.meminfo);
@@ -710,6 +1112,7 @@ int main(int argc, char **argv)
     setup.scratch_ok = (int)value_uint(&reader);
     setup.scratch_blocks = value_uint(&reader); setup.scratch_fragment = value_uint(&reader); setup.scratch_files = value_uint(&reader);
     page_size = value_uint(&reader);
+    if (strict_capture && !ys_setup_presence_values(&plan.limits, &setup, write_mask, read_mask)) goto done;
     ys_setup_values(&plan.limits, &setup, 536870912ULL, &flags);
     ys_report_setup_values(&report, &flags, page_size);
     if (!value_controller(&reader, &plan, &control) || reader.failed) goto done;
@@ -724,13 +1127,14 @@ int main(int argc, char **argv)
     ok = (int)value_uint(&reader); value_text(&reader, cpu, sizeof cpu);
     ys_cpu_values(&report.cpu, report.tree_terminated, ok ? cpu : NULL, 30000ULL);
     ok = (int)value_uint(&reader); value_text(&reader, peak, sizeof peak);
-    ok = ys_u64_values(ok, peak, &value);
+    ok = ys_u64_values(ok, peak, &value); memory_peak_ok = ok;
     value_text(&reader, events, sizeof events);
     ys_memory_values(&report.memory, report.tree_terminated, ok, value, events, 536870912ULL);
     ok = (int)value_uint(&reader); value_text(&reader, peak, sizeof peak);
-    ok = ys_u64_values(ok, peak, &value);
+    ok = ys_u64_values(ok, peak, &value); pids_peak_ok = ok;
     value_text(&reader, events, sizeof events);
     ys_tasks_values(&report.tasks, report.tree_terminated, ok, value, events, plan.limits.pids_max);
+    if (strict_capture && !ys_counter_presence_values(memory_peak_ok, pids_peak_ok, events_mask)) goto done;
     for (i = 0; i < 2U; i++) {
         ok = (int)value_uint(&reader); value = value_uint(&reader);
         if (ok) { if (i == 0U) report.stdout_bytes = value; else report.stderr_bytes = value; }

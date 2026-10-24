@@ -1007,12 +1007,24 @@ int ys_test_exec_fail_phase = 0;
 #endif
 enum ys_plan_status ys_evidence_inventory(int dirfd, char ***names_out, size_t *count_out)
 {
+    return ys_evidence_inventory_observed(dirfd, names_out, count_out, NULL, NULL);
+}
+
+enum ys_plan_status ys_evidence_inventory_observed(int dirfd, char ***names_out,
+                                                    size_t *count_out,
+                                                    ys_evidence_observer observer, void *context)
+{
     DIR *dh;
     struct dirent *de;
     struct ys_evidence_row *rows = NULL;
     size_t count = 0, cap = 0, i;
     dh = fdopendir(dirfd);
-    if (dh == NULL) return YS_PLAN_ERR_IO;
+    if (dh == NULL) {
+        int saved = errno;
+        if (observer != NULL) observer(NULL, -1, saved, NULL, context);
+        errno = saved;
+        return YS_PLAN_ERR_IO;
+    }
     for (;;) {
         struct stat st;
         errno = 0;
@@ -1027,11 +1039,19 @@ enum ys_plan_status ys_evidence_inventory(int dirfd, char ***names_out, size_t *
         de = readdir(dh);
 #endif
         if (de == NULL) {
+            int saved = errno;
+            if (observer != NULL) observer(NULL, 0, saved, NULL, context);
+            errno = saved;
             if (errno != 0) goto io_fail; /* a real readdir() failure, not end-of-directory */
             break;
         }
         if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0) continue;
-        if (fstatat(dirfd, de->d_name, &st, AT_SYMLINK_NOFOLLOW) != 0) goto io_fail;
+        {
+            int result = fstatat(dirfd, de->d_name, &st, AT_SYMLINK_NOFOLLOW), saved = errno;
+            if (observer != NULL) observer(de->d_name, result, result < 0 ? saved : 0, &st, context);
+            errno = saved;
+            if (result != 0) goto io_fail;
+        }
         if (!ys_evidence_entry_values(st.st_mode)) continue;
         if (count == cap) {
             size_t nc = (cap == 0U) ? 8U : cap * 2U;

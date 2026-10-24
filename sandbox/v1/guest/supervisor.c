@@ -90,6 +90,10 @@
 #define CPU_TIME_BOUND_MS 30000ULL
 #define GUEST_MEMORY_BYTES 536870912ULL
 
+static struct ys_control_capture control_capture, setup_capture, counters_capture;
+static uint64_t setup_write_mask, setup_read_mask;
+static struct ys_evidence_capture evidence_capture = { &counters_capture, 0 };
+
 static void die(const char *what)
 {
     fprintf(stderr, "supervisor: %s: %s\n", what, strerror(errno));
@@ -102,8 +106,10 @@ static int write_file(const char *path, const char *data, size_t len)
     ssize_t n;
     if (fd < 0) return 0;
     n = write(fd, data, len);
-    if (close(fd) != 0) return 0;
-    return n == (ssize_t)len;
+    {
+        int closed = close(fd);
+        return ys_write_count_values(n, len, closed);
+    }
 }
 
 static int write_str(const char *path, const char *s) { return write_file(path, s, strlen(s)); }
@@ -114,26 +120,66 @@ static int write_str(const char *path, const char *s) { return write_file(path, 
 static ssize_t read_file(const char *path, char *buf, size_t cap)
 {
     int fd = open(path, O_RDONLY | O_CLOEXEC);
+    int read_error;
     ssize_t n;
     if (fd < 0) return -1;
     n = read(fd, buf, cap - 1);
+    read_error = errno;
     (void)close(fd);
-    if (n < 0) return -1;
+    if (n < 0) { errno = read_error; return -1; }
     buf[n] = '\0';
     return n;
+}
+
+static ssize_t observed_read(struct ys_control_capture *capture, const char *site,
+                               const char *path, char *buf, size_t cap)
+{
+    char name[80];
+    int fd = open(path, O_RDONLY | O_CLOEXEC), saved = errno, closed, close_error;
+    ssize_t result;
+    snprintf(name, sizeof name, "%s_open", site);
+    ys_capture_io(capture, name, fd, saved, "", 0U);
+    if (fd < 0) { errno = saved; return -1; }
+    result = read(fd, buf, cap - 1U); saved = errno;
+    ys_capture_io(capture, site, result, saved, buf, result > 0 ? (size_t)result : 0U);
+    closed = close(fd); close_error = errno;
+    snprintf(name, sizeof name, "%s_close", site);
+    ys_capture_io(capture, name, closed, close_error, "", 0U);
+    if (result < 0) { errno = saved; return -1; }
+    buf[result] = '\0';
+    return result;
+}
+
+static int observed_write(const char *site, const char *path, const char *text)
+{
+    char name[80];
+    int fd = open(path, O_WRONLY | O_CLOEXEC), saved = errno, closed;
+    ssize_t count;
+    snprintf(name, sizeof name, "%s_open", site);
+    ys_capture_io(&setup_capture, name, fd, saved, "", 0U);
+    if (fd < 0) { errno = saved; return 0; }
+    count = write(fd, text, strlen(text)); saved = errno;
+    ys_capture_io(&setup_capture, site, count, saved, "", 0U);
+    closed = close(fd); saved = errno;
+    snprintf(name, sizeof name, "%s_close", site);
+    ys_capture_io(&setup_capture, name, closed, saved, "", 0U);
+    errno = saved;
+    return ys_write_count_values(count, strlen(text), closed);
 }
 
 static int read_u64(const char *path, uint64_t *out)
 {
     char buf[128];
-    int ok = read_file(path, buf, sizeof buf) >= 0;
+    int ok = observed_read(&counters_capture, strstr(path, "memory") ? "memory_peak" : "pids_peak", path, buf, sizeof buf) >= 0;
     return ys_u64_values(ok, ok ? buf : "", out);
 }
 
 static int setup_readback(const char *path, uint64_t expected,
                            struct ys_setup_observations *raw, size_t index)
 {
-    raw->reads[index] = read_file(path, raw->readbacks[index], sizeof raw->readbacks[index]) >= 0;
+    static const char *const sites[] = {"cpu_max", "cpu_max_burst", "bandwidth_slice_us", "pids_max"};
+    setup_read_mask |= 1ULL << index;
+    raw->reads[index] = observed_read(&setup_capture, sites[index], path, raw->readbacks[index], sizeof raw->readbacks[index]) >= 0;
     return ys_readback_matches(raw->reads[index], raw->readbacks[index], expected);
 }
 
@@ -324,45 +370,61 @@ static int setup_cgroup(const struct ys_plan_limits *lim, struct cgroup_setup *o
     memset(&raw, 0, sizeof raw);
     memset(out, 0, sizeof *out);
     out->cgroup_fd = -1;
-    if (!write_str(CGROUP_ROOT "/cgroup.subtree_control", "+cpu +pids +memory\n")) return 0;
+    if (!observed_write("subtree_control_write", CGROUP_ROOT "/cgroup.subtree_control", "+cpu +pids +memory\n")) return 0;
     if (!mkdir_p(TREE_CGROUP, 0755)) return 0;
-    snprintf(buf, sizeof buf, "%llu 100000\n", (unsigned long long)lim->cpu_max);
-    raw.writes[0] = write_str(TREE_CGROUP "/cpu.max", buf);
+    (void)ys_setup_write_text(lim, 0U, buf, sizeof buf);
+    setup_write_mask |= 1U;
+    raw.writes[0] = observed_write("cpu_max_write", TREE_CGROUP "/cpu.max", buf);
     if (raw.writes[0] && setup_readback(TREE_CGROUP "/cpu.max", lim->cpu_max, &raw, 0)) {
-        snprintf(buf, sizeof buf, "%llu\n", (unsigned long long)lim->cpu_max_burst);
-        raw.writes[1] = write_str(TREE_CGROUP "/cpu.max.burst", buf);
+        (void)ys_setup_write_text(lim, 1U, buf, sizeof buf);
+        setup_write_mask |= 2U;
+        raw.writes[1] = observed_write("cpu_max_burst_write", TREE_CGROUP "/cpu.max.burst", buf);
         if (raw.writes[1] && setup_readback(TREE_CGROUP "/cpu.max.burst", lim->cpu_max_burst, &raw, 1)) {
-            snprintf(buf, sizeof buf, "%llu\n", (unsigned long long)lim->bandwidth_slice_us);
-            raw.writes[2] = write_str("/proc/sys/kernel/sched_cfs_bandwidth_slice_us", buf);
+            (void)ys_setup_write_text(lim, 2U, buf, sizeof buf);
+            setup_write_mask |= 4U;
+            raw.writes[2] = observed_write("bandwidth_slice_us_write", "/proc/sys/kernel/sched_cfs_bandwidth_slice_us", buf);
             if (raw.writes[2])
                 (void)setup_readback("/proc/sys/kernel/sched_cfs_bandwidth_slice_us", lim->bandwidth_slice_us, &raw, 2);
         }
     }
-    snprintf(buf, sizeof buf, "%llu\n", (unsigned long long)lim->pids_max);
-    raw.writes[3] = write_str(TREE_CGROUP "/pids.max", buf);
+    (void)ys_setup_write_text(lim, 3U, buf, sizeof buf);
+    setup_write_mask |= 8U;
+    raw.writes[3] = observed_write("pids_max_write", TREE_CGROUP "/pids.max", buf);
     if (raw.writes[3]) (void)setup_readback(TREE_CGROUP "/pids.max", lim->pids_max, &raw, 3);
-    raw.meminfo_ok = read_file("/proc/meminfo", raw.meminfo, sizeof raw.meminfo) >= 0;
+    raw.meminfo_ok = observed_read(&setup_capture, "meminfo", "/proc/meminfo", raw.meminfo, sizeof raw.meminfo) >= 0;
     raw.output_ok = statvfs(OUTPUT_DIR, &sv) == 0;
+    ys_capture_statvfs(&setup_capture, "output", raw.output_ok ? 0 : -1, errno, &sv);
     if (raw.output_ok) {
         raw.output_blocks = (uint64_t)sv.f_blocks;
         raw.output_fragment = (uint64_t)sv.f_frsize;
         raw.output_files = (uint64_t)sv.f_files;
     }
     raw.scratch_ok = statvfs(SCRATCH_DIR, &sv) == 0;
+    ys_capture_statvfs(&setup_capture, "scratch", raw.scratch_ok ? 0 : -1, errno, &sv);
     if (raw.scratch_ok) {
         raw.scratch_blocks = (uint64_t)sv.f_blocks;
         raw.scratch_fragment = (uint64_t)sv.f_frsize;
         raw.scratch_files = (uint64_t)sv.f_files;
     }
+    {
+        int saved = errno;
+        if (!ys_setup_presence_values(lim, &raw, setup_write_mask, setup_read_mask))
+            setup_capture.incomplete = 1;
+        errno = saved;
+    }
     ys_setup_values(lim, &raw, GUEST_MEMORY_BYTES, &out->values);
     out->cgroup_fd = open(TREE_CGROUP, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    ys_capture_io(&setup_capture, "cgroup_open", out->cgroup_fd, errno, "", 0U);
     return out->cgroup_fd >= 0;
 }
 
 static int cgroup_populated(void)
 {
     char buf[256];
-    int ok = read_file(TREE_CGROUP "/cgroup.events", buf, sizeof buf) >= 0;
+    ssize_t count = read_file(TREE_CGROUP "/cgroup.events", buf, sizeof buf);
+    int saved = errno, ok = count >= 0;
+    ys_capture_population(&control_capture, count, buf, saved);
+    errno = saved;
     return ys_population_values(ok, ok ? buf : "");
 }
 
@@ -901,14 +963,18 @@ static int ys_test_channel_eintr;
 static int ys_test_report_sizes;
 #endif
 
-static int evidence_file_size(const char *path, off_t *size_out)
+static int evidence_file_size(const char *path, off_t *size_out, size_t index)
 {
 #ifdef YSTACK_SUPERVISOR_TEST
     if (ys_test_report_sizes) { *size_out = (off_t)strlen(path); return 1; }
 #endif
     {
         struct stat st;
-        if (stat(path, &st) != 0 || st.st_size < 0) return 0;
+        char site[80];
+        int result = stat(path, &st), saved = errno;
+        snprintf(site, sizeof site, "evidence_%04zu_report_stat", index);
+        ys_capture_stat(&counters_capture, site, result, saved, &st);
+        if (result != 0 || st.st_size < 0) return 0;
         *size_out = st.st_size;
         return 1;
     }
@@ -931,7 +997,7 @@ static char *build_report_json(const char plan_sha256_hex[65],
         int count;
         if (strlen(state->evidence_names[i]) > 255U) goto done;
         count = snprintf(path, sizeof path, "%s/%s", EVIDENCE_SUBDIR, state->evidence_names[i]);
-        if (count < 0 || (size_t)count >= sizeof path || !evidence_file_size(path, &size)) goto done;
+        if (count < 0 || (size_t)count >= sizeof path || !evidence_file_size(path, &size, i)) goto done;
         sizes[i] = (uint64_t)size;
     }
     result = ys_build_report_json(plan_sha256_hex, state, sizes, length);
@@ -996,19 +1062,27 @@ static int inode_history_record(struct fanotify_state *fs, dev_t dev, ino_t ino)
  * (R7.1: "allows only the first open of an empty inode"). */
 static int fanotify_service(struct fanotify_state *fs)
 {
-    char buf[4096];
+    unsigned char buf[4096];
     ssize_t len;
-    size_t offset = 0, next;
-    int event_fd;
-    len = read(fs->fd, buf, sizeof buf);
-    if (len < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) return 1;
-    if (len <= 0) return 0;
-    while (ys_fan_next((const unsigned char *)buf, (size_t)len, offset, &event_fd, &next)) {
+    size_t offset = 0, next, count = 0;
+    struct ys_fan_stat stats[170];
+    struct ys_control_capture replies = {0};
+    int event_fd, result = 1, read_error, final_error;
+    len = read(fs->fd, buf, sizeof buf); read_error = errno;
+    if (len < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) goto done;
+    if (len <= 0) { result = 0; goto done; }
+    while (ys_fan_next(buf, (size_t)len, offset, &event_fd, &next)) {
         struct fanotify_response resp;
         struct stat st;
         int allow = 0;
         if (event_fd >= 0) {
-            int stat_result = fstat(event_fd, &st);
+            int stat_result = fstat(event_fd, &st), saved = errno;
+            if (count < 170U) {
+                stats[count].fd = event_fd; stats[count].result = stat_result;
+                stats[count].error_number = saved;
+                if (stat_result == 0) stats[count].value = st;
+                count++;
+            } else control_capture.incomplete = 1;
             allow = ys_fan_open_values(fs->seen, &fs->seen_count, stat_result,
                                         stat_result == 0 ? st.st_mode : 0,
                                         stat_result == 0 ? st.st_size : 0,
@@ -1021,16 +1095,24 @@ static int fanotify_service(struct fanotify_state *fs)
                 size_t written = 0;
                 while (written < sizeof resp) {
                     ssize_t n = write(fs->fd, bytes + written, sizeof resp - written);
-                    if (n < 0 && errno == EINTR) { (void)close(event_fd); return 0; }
-                    if (n <= 0) { (void)close(event_fd); return 0; }
+                    int error_number = errno;
+                    ys_capture_fan_reply(&replies, n, error_number);
+                    errno = error_number;
+                    if (n < 0 && errno == EINTR) { (void)close(event_fd); result = 0; goto done; }
+                    if (n <= 0) { (void)close(event_fd); result = 0; goto done; }
                     written += (size_t)n;
                 }
             }
             (void)close(event_fd);
-        } else return 0;
+        } else { result = 0; goto done; }
         offset = next;
     }
-    return 1;
+done:
+    final_error = errno;
+    ys_capture_fan_read(&control_capture, len, read_error, buf, stats, count);
+    ys_capture_controls(&control_capture, &replies);
+    free(replies.bytes); errno = final_error;
+    return result;
 }
 
 struct controller_ops {
@@ -1070,8 +1152,15 @@ static enum controller_branch control_child(pid_t child, struct fanotify_state *
             {
                 struct pollfd fds[2];
                 nfds_t count = 0, i;
-                if (fan->fd >= 0) fds[count++] = (struct pollfd){ fan->fd, POLLIN, 0 };
-                if (!state.outcome.eof) fds[count++] = (struct pollfd){ outcome_fd, POLLIN | POLLHUP, 0 };
+                if (fan->fd >= 0) {
+                    event.fd_roles[count] = 1;
+                    fds[count++] = (struct pollfd){ fan->fd, POLLIN, 0 };
+                }
+                if (!state.outcome.eof) {
+                    event.fd_roles[count] = 2;
+                    fds[count++] = (struct pollfd){ outcome_fd, POLLIN | POLLHUP, 0 };
+                }
+                event.fd_count = count;
                 event.value = ops->poll_fds(fds, count, state.remaining > 200 ? 200 : state.remaining, opaque);
                 for (i = 0; i < count; i++) event.revents[i] = fds[i].revents;
             }
@@ -1102,6 +1191,8 @@ static enum controller_branch control_child(pid_t child, struct fanotify_state *
             return CONTROLLER_FAILURE;
         }
         event.error_number = errno;
+        ys_capture_event(&control_capture, &event);
+        errno = event.error_number;
         action = ys_controller_step(&state, &event);
     }
     *result = state.result;
@@ -1121,10 +1212,20 @@ static int launch_and_control(uint64_t milliseconds, struct fanotify_state *fan,
 {
     struct timespec start, deadline;
     pid_t child;
+    int now_ok, saved;
+    free(control_capture.bytes);
+    memset(&control_capture, 0, sizeof control_capture);
     memset(result, 0, sizeof *result);
-    if (!ops->now(&start, opaque) || !ys_deadline_after_ms(&start, milliseconds, &deadline))
+    now_ok = ops->now(&start, opaque);
+    saved = errno;
+    ys_capture_now(&control_capture, now_ok, &start, saved);
+    errno = saved;
+    if (!now_ok || !ys_deadline_after_ms(&start, milliseconds, &deadline))
         return 0;
     child = ops->launch(opaque);
+    saved = errno;
+    ys_capture_launch(&control_capture, child, saved);
+    errno = saved;
     if (!ys_launch_pid_valid(child)) return 0;
     *child_out = child;
     return enter_normal_finish(control_child(child, fan, outcome_fd, &deadline,
@@ -1140,6 +1241,7 @@ static pid_t production_launch(void *opaque)
 {
     struct production_launch_state *state = opaque;
     pid_t child = ys_clone3_into_cgroup(state->cgroup_fd);
+    int launch_error = errno;
     if (child == 0) {
         (void)close(state->outcome_reader);
         child_main(state->instruction_fd, state->stdout_fd, state->stderr_fd,
@@ -1149,6 +1251,7 @@ static pid_t production_launch(void *opaque)
     (void)close(state->stdout_fd); (void)close(state->stderr_fd);
     (void)close(state->instruction_fd); (void)close(state->outcome_writer);
     state->outcome_writer = -1;
+    errno = launch_error;
     return child;
 }
 static int production_now(struct timespec *value, void *opaque)
@@ -1160,7 +1263,15 @@ static pid_t production_wait(pid_t child, int *status, void *opaque)
 static int production_population(void *opaque)
 { (void)opaque; return cgroup_populated(); }
 static int production_kill(void *opaque)
-{ (void)opaque; return write_str(TREE_CGROUP "/cgroup.kill", "1"); }
+{
+    int result, saved;
+    (void)opaque;
+    result = write_str(TREE_CGROUP "/cgroup.kill", "1");
+    saved = errno;
+    ys_capture_kill(&control_capture, result, saved);
+    errno = saved;
+    return result;
+}
 static int production_fan(struct fanotify_state *fan, void *opaque)
 { (void)opaque; return fanotify_service(fan); }
 static void production_tick(void *opaque)
@@ -1252,6 +1363,7 @@ int main(void)
     if (!mkdir_p("/ys", 0700)) goto export_partial;
     deadline_ms = plan.limits.tree_deadline_ms;
     measured_page_size = sysconf(_SC_PAGESIZE);
+    ys_capture_io(&setup_capture, "page_size", measured_page_size, errno, "", 0U);
     if (measured_page_size <= 0) goto export_partial;
     page_size = (uint64_t)measured_page_size;
 
@@ -1307,7 +1419,9 @@ int main(void)
         goto export_partial;
 
     if (!setup_cgroup(&plan.limits, &cg)) goto export_partial;
-    ys_report_setup_values(&rs, &cg.values, (uint64_t)sysconf(_SC_PAGESIZE));
+    measured_page_size = sysconf(_SC_PAGESIZE);
+    ys_capture_io(&setup_capture, "report_page_size", measured_page_size, errno, "", 0U);
+    ys_report_setup_values(&rs, &cg.values, (uint64_t)measured_page_size);
 
     /* R6.1's tmpfs root, prepared entirely before clone3 so the child does
      * nothing but pivot into it. Everything lives under /sandbox (R6.1,
@@ -1360,42 +1474,71 @@ int main(void)
     {
         uint64_t v = 0;
         char cpu[256], events[256];
-        int ok = rs.tree_terminated && read_file(TREE_CGROUP "/cpu.stat", cpu, sizeof cpu) >= 0;
+        int memory_peak_ok, pids_peak_ok;
+        uint64_t events_mask = 0;
+        int ok = rs.tree_terminated && observed_read(&counters_capture, "cpu_stat", TREE_CGROUP "/cpu.stat", cpu, sizeof cpu) >= 0;
         ys_cpu_values(&rs.cpu, rs.tree_terminated, ok ? cpu : NULL, CPU_TIME_BOUND_MS);
 
         ok = rs.tree_terminated && read_u64(TREE_CGROUP "/memory.peak", &v);
+        memory_peak_ok = ok;
         events[0] = '\0';
-        if (ok && read_file(TREE_CGROUP "/memory.events", events, sizeof events) < 0)
-            events[0] = '\0';
+        if (ok) {
+            events_mask |= 1U;
+            if (observed_read(&counters_capture, "memory_events", TREE_CGROUP "/memory.events", events, sizeof events) < 0)
+                events[0] = '\0';
+        }
         ys_memory_values(&rs.memory, rs.tree_terminated, ok, v, events, GUEST_MEMORY_BYTES);
 
         ok = rs.tree_terminated && read_u64(TREE_CGROUP "/pids.peak", &v);
+        pids_peak_ok = ok;
         events[0] = '\0';
-        if (ok && read_file(TREE_CGROUP "/pids.events", events, sizeof events) < 0)
-            events[0] = '\0';
+        if (ok) {
+            events_mask |= 2U;
+            if (observed_read(&counters_capture, "pids_events", TREE_CGROUP "/pids.events", events, sizeof events) < 0)
+                events[0] = '\0';
+        }
         ys_tasks_values(&rs.tasks, rs.tree_terminated, ok, v, events, plan.limits.pids_max);
 
+        if (!ys_counter_presence_values(memory_peak_ok, pids_peak_ok, events_mask))
+            counters_capture.incomplete = 1;
         if (rs.tree_terminated) {
             struct stat st;
             struct statvfs sv;
             uint64_t total_bytes = 0;
             int inventory_ok, output_fs_ok, scratch_fs_ok;
-            if (stat(OUTPUT_DIR "/stdout", &st) == 0) rs.stdout_bytes = (uint64_t)st.st_size;
-            if (stat(OUTPUT_DIR "/stderr", &st) == 0) rs.stderr_bytes = (uint64_t)st.st_size;
+            {
+                int result = stat(OUTPUT_DIR "/stdout", &st);
+                ys_capture_stat(&counters_capture, "stdout", result, errno, &st);
+                if (result == 0) rs.stdout_bytes = (uint64_t)st.st_size;
+            }
+            {
+                int result = stat(OUTPUT_DIR "/stderr", &st);
+                ys_capture_stat(&counters_capture, "stderr", result, errno, &st);
+                if (result == 0) rs.stderr_bytes = (uint64_t)st.st_size;
+            }
             total_bytes = rs.stdout_bytes + rs.stderr_bytes;
-            inventory_ok = ys_evidence_inventory(open(EVIDENCE_SUBDIR, O_RDONLY | O_DIRECTORY | O_CLOEXEC),
-                                                 &rs.evidence_names, &rs.evidence_count) == YS_PLAN_OK;
+            inventory_ok = ys_evidence_inventory_observed(open(EVIDENCE_SUBDIR, O_RDONLY | O_DIRECTORY | O_CLOEXEC),
+                                                 &rs.evidence_names, &rs.evidence_count,
+                                                 ys_capture_evidence_entry, &evidence_capture) == YS_PLAN_OK;
             if (inventory_ok) {
                 for (i = 0; i < rs.evidence_count; i++) {
                     char p[300];
                     snprintf(p, sizeof p, "%s/%s", EVIDENCE_SUBDIR, rs.evidence_names[i]);
-                    if (stat(p, &st) == 0) total_bytes += (uint64_t)st.st_size;
+                    {
+                        char site[80];
+                        int result = stat(p, &st), saved = errno;
+                        snprintf(site, sizeof site, "evidence_%04zu_size", i);
+                        ys_capture_stat(&counters_capture, site, result, saved, &st);
+                        if (result == 0) total_bytes += (uint64_t)st.st_size;
+                    }
                 }
             }
             output_fs_ok = statvfs(OUTPUT_DIR, &sv) == 0;
+            ys_capture_statvfs(&counters_capture, "output", output_fs_ok ? 0 : -1, errno, &sv);
             ys_output_values(&rs.output, inventory_ok, total_bytes, output_fs_ok,
                               output_fs_ok ? (uint64_t)sv.f_bfree : 0U, plan.limits.output_tmpfs_bytes);
             scratch_fs_ok = statvfs(SCRATCH_DIR, &sv) == 0;
+            ys_capture_statvfs(&counters_capture, "scratch", scratch_fs_ok ? 0 : -1, errno, &sv);
             ys_scratch_values(&rs.scratch, scratch_fs_ok,
                                scratch_fs_ok ? (uint64_t)sv.f_blocks : 0U,
                                scratch_fs_ok ? (uint64_t)sv.f_bfree : 0U,
@@ -1436,6 +1579,8 @@ export_partial:
                             if (n <= 0) break;
                             got2 += (size_t)n;
                         }
+                        ys_capture_io(&counters_capture, "stdout_bytes", (long long)got1, 0, stdout_buf, got1);
+                        ys_capture_io(&counters_capture, "stderr_bytes", (long long)got2, 0, stderr_buf, got2);
                         frame_ok = got1 == rs.stdout_bytes && got2 == rs.stderr_bytes &&
                             ys_frame_writer_put(&w, "report.json", 11U, report, report_len) ==
                                 YS_FRAME_OK &&
@@ -1458,28 +1603,53 @@ export_partial:
                                 frame_ok = 0; break;
                             }
                             fd = open(path, O_RDONLY | O_CLOEXEC);
-                            if (fd >= 0 && fstat(fd, &st) == 0) {
-                                buf = malloc(st.st_size ? (size_t)st.st_size : 1U);
-                                if (buf != NULL) {
-                                    size_t got = 0;
-                                    while ((off_t)got < st.st_size) {
-                                        ssize_t n = read(fd, buf + got, (size_t)st.st_size - got);
-                                        if (n <= 0) break;
-                                        got += (size_t)n;
-                                    }
-                                    if ((off_t)got != st.st_size ||
-                                        ys_frame_writer_put(&w, name, (size_t)name_len, buf, got) !=
-                                            YS_FRAME_OK)
-                                        frame_ok = 0;
-                                    free(buf);
+                            {
+                                char site[80];
+                                int stat_result = fd >= 0 ? fstat(fd, &st) : -1, saved = errno;
+                                snprintf(site, sizeof site, "evidence_%04zu_export_stat", i);
+                                if (fd >= 0 && stat_result == 0) {
+                                    buf = malloc(st.st_size ? (size_t)st.st_size : 1U);
+                                    if (buf != NULL) {
+                                        size_t got = 0;
+                                        while ((off_t)got < st.st_size) {
+                                            ssize_t n = read(fd, buf + got, (size_t)st.st_size - got);
+                                            if (n <= 0) break;
+                                            got += (size_t)n;
+                                        }
+                                        {
+                                            char site[80];
+                                            snprintf(site, sizeof site, "evidence_%04zu_bytes", i);
+                                            ys_capture_io(&counters_capture, site, (long long)got, 0, buf, got);
+                                        }
+                                        if ((off_t)got != st.st_size ||
+                                            ys_frame_writer_put(&w, name, (size_t)name_len, buf, got) !=
+                                                YS_FRAME_OK)
+                                            frame_ok = 0;
+                                        free(buf);
+                                    } else frame_ok = 0;
                                 } else frame_ok = 0;
-                            } else frame_ok = 0;
+                                ys_capture_stat(&counters_capture, site, stat_result, saved, &st);
+                            }
                             if (fd >= 0) (void)close(fd);
                         }
                     }
                     if (sfd >= 0) (void)close(sfd);
                     if (efd >= 0) (void)close(efd);
                     free(stdout_buf); free(stderr_buf);
+                    if (frame_ok) {
+                        size_t observation_length;
+                        char *observation = ys_capture_document(&setup_capture, &control_capture,
+                                                                 &counters_capture, &observation_length);
+                        if (observation != NULL) {
+                            off_t capacity;
+                            if (ys_frame_descriptor_capacity(export_fd, &capacity) == YS_FRAME_OK &&
+                                ys_capture_fits(&w, capacity, observation_length) &&
+                                ys_frame_writer_put(&w, "control-observation.json", 24U,
+                                                     observation, observation_length) != YS_FRAME_OK)
+                                frame_ok = 0;
+                            free(observation);
+                        }
+                    }
                     if (frame_ok && ys_frame_writer_close(&w) != YS_FRAME_OK) frame_ok = 0;
                 }
                 free(report);

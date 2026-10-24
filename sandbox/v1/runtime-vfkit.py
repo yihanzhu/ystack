@@ -100,14 +100,41 @@ class UnixConnection(http.client.HTTPConnection):
         self.sock.connect(self.unix_path)
 
 
+def _capture_rest(reply, error):
+    import stat
+    magic = b"YSTACK_REST_CAPTURE_V1\n"
+    try:
+        value = canonical({"reply": reply, "error": error})
+    except (ValueError, TypeError, MemoryError):
+        return
+    for fd in range(3, 256):
+        try:
+            state = os.fstat(fd)
+            if (not stat.S_ISREG(state.st_mode) or state.st_nlink != 0
+                    or stat.S_IMODE(state.st_mode) != 0o600 or state.st_uid != os.getuid()
+                    or state.st_size != len(magic) or os.pread(fd, len(magic), 0) != magic):
+                continue
+            os.pwrite(fd, value, len(magic))
+            return
+        except OSError:
+            continue
+
+
 def rest(path, method, target, body=None):
     """(status, body bytes) or None when the endpoint cannot be reached."""
     conn = UnixConnection(path)
+    phase = "request"
     try:
         conn.request(method, target, body=body, headers={"Content-Type": "application/json"} if body else {})
+        phase = "getresponse"
         response = conn.getresponse()
-        return response.status, response.read(65537)
-    except (OSError, http.client.HTTPException):
+        phase = "read"
+        raw = response.read(65537)
+        _capture_rest({"status": response.status, "body_hex": raw.hex()}, None)
+        return response.status, raw
+    except (OSError, http.client.HTTPException) as exc:
+        _capture_rest(None, {"phase": phase, "category": "OSError" if isinstance(exc, OSError) else "HTTPException",
+                             "errno": getattr(exc, "errno", None)})
         return None
     finally:
         conn.close()

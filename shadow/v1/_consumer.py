@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import stat
+import struct
 import subprocess
 import sys
 import selectors
@@ -20,6 +21,7 @@ ANCHOR = "/usr/local/libexec/ystack-sandbox/v1/supervisor"
 HELPER_SOURCE = "adapters/local-git-materializer/v1/object-closure.c"
 HELPER_SOURCE_SHA256 = "f1616b908c97e8a091029c24b3f2e1f8827171cbdee4d47195c66afd3e961e27"
 PARENT_LIMIT, DOCUMENT_LIMIT = 16 * 1024, 1024 * 1024
+CAPTURE_LIMIT = DOCUMENT_LIMIT
 EXECUTABLE_LIMIT, OUTPUT_LIMIT = 16 * 1024 * 1024, 10 * 1024 * 1024
 JQ_SHA256 = {"darwin": "5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef",
              "linux": "af986793a515d500ab2d35f8d2aecd656e764504b789b66d7e1a0b727a124c44"}
@@ -51,6 +53,19 @@ DARWIN_UUID_INPUT_LIMIT = 16 * 1024
 DARWIN_UUID_OUTPUT_LIMIT = 32 * 1024
 DARWIN_UUID_COUNT_LIMIT = 128
 DARWIN_SYSTEM_C = "/usr/lib/libSystem.B.dylib"
+_clock_observations = {}
+_clock_complete = True
+
+
+def _clock_value(site, value, kind):
+    global _clock_complete
+    owner = site.rsplit(":", 2)[0]
+    rows = _clock_observations.setdefault(owner, {"wall": [], "monotonic": []})
+    if len(rows["wall"]) + len(rows["monotonic"]) >= 4096:
+        _clock_complete = False
+    else:
+        rows[kind].append({"site": site, "value": struct.pack(">d", value).hex()})
+    return value
 
 class Refusal(Exception):
     def __init__(self, code: str):
@@ -146,10 +161,21 @@ def _named_metadata(name: str, parent_fd: int) -> os.stat_result:
     """Private no-follow name observation seam used only by in-process fixtures."""
     return os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
 
+def _stat_values(value: os.stat_result) -> dict:
+    return {key: getattr(value, "st_" + key) for key in
+            ("dev", "ino", "mode", "uid", "gid", "nlink", "size", "mtime_ns", "ctime_ns")}
+
+
+def _identity_values(value: dict) -> tuple[int, ...]:
+    _require(type(value) is dict and set(value) == {
+        "dev", "ino", "mode", "uid", "gid", "nlink", "size", "mtime_ns", "ctime_ns"}
+        and all(type(number) is int for number in value.values()), "E_STORE")
+    return (value["dev"], value["ino"], stat.S_IFMT(value["mode"]), value["uid"], value["gid"],
+            stat.S_IMODE(value["mode"]), value["nlink"], value["size"], value["mtime_ns"], value["ctime_ns"])
+
+
 def _identity(value: os.stat_result) -> tuple[int, ...]:
-    return (value.st_dev, value.st_ino, stat.S_IFMT(value.st_mode), value.st_uid, value.st_gid,
-            stat.S_IMODE(value.st_mode), value.st_nlink, value.st_size,
-            value.st_mtime_ns, value.st_ctime_ns)
+    return _identity_values(_stat_values(value))
 
 Rule = Callable[[int, os.stat_result, bool], bool]
 
@@ -160,11 +186,19 @@ class HeldComponent:
     before: os.stat_result
     rule: Rule
     ancestor: bool
+    after: os.stat_result | None = None
+    named_after: os.stat_result | None = None
 
 @dataclasses.dataclass
 class HeldPath:
     path: str
     components: list[HeldComponent]
+    directory_names: list[str] | None = None
+
+    def listdir(self):
+        names = os.listdir(self.fd)
+        self.directory_names = [os.fsencode(name).hex() for name in names]
+        return names
 
     @property
     def fd(self) -> int:
@@ -192,6 +226,7 @@ class HeldPath:
             except (OSError, ValueError):
                 raise Refusal(code) from None
             _require(_identity(after) == expected and _identity(after_named) == expected, code)
+            component.after, component.named_after = after, after_named
 
     def seal_recheck(self, code: str) -> None:
         for index, component in enumerate(self.components):
@@ -203,6 +238,7 @@ class HeldPath:
                 raise Refusal(code) from None
             expected = _identity(component.before)
             _require(_identity(current) == expected and _identity(named) == expected, code)
+            component.after, component.named_after = current, named
 
     def read(self, maximum: int, code: str) -> bytes:
         self.recheck(code)
@@ -437,6 +473,21 @@ def _linux_install_acl_ok(entries: list[tuple[int, int, int]] | None) -> bool:
     return entries is None or not any(tag in (0x02, 0x08) or (tag == 0x10 and perms & 2)
                                       for tag, perms, _identifier in entries)
 
+
+def _installed_acl_values(platform, access, default, principals):
+    if platform != "darwin":
+        return _linux_install_acl_ok(access) and _linux_install_acl_ok(default)
+    dangerous = (1 << 2) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 8) | (1 << 10) | (1 << 12) | (1 << 13)
+    return not any(tag == 1 and identifier not in principals and bits & dangerous
+                   for tag, identifier, bits in access)
+
+
+def _store_values(uid, gid, mode, directory, state, access, default, platform):
+    kind = stat.S_ISDIR(state["mode"]) if directory else stat.S_ISREG(state["mode"])
+    acl_absent = access == [] if platform == "darwin" else access is None and default is None
+    return (kind and state["uid"] == uid and state["gid"] == gid
+            and stat.S_IMODE(state["mode"]) == mode and acl_absent)
+
 def _root_rule(resolver: _DarwinUUIDResolver | None = None) -> Rule:
     def check(fd: int, state: os.stat_result, _ancestor: bool) -> bool:
         if state.st_uid != 0 or state.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
@@ -445,13 +496,9 @@ def _root_rule(resolver: _DarwinUUIDResolver | None = None) -> Rule:
             access, default = _acl_state(fd, resolver)
         except (OSError, Refusal):
             return False
-        if sys.platform != "darwin":
-            return _linux_install_acl_ok(access) and _linux_install_acl_ok(default)
-        dangerous = (1 << 2) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 8) | (1 << 10) | (1 << 12) | (1 << 13)
-        for tag, identifier, bits in access:
-            if tag == 1 and identifier != 0 and bits & dangerous:
-                return False
-        return True
+        check.observations[fd] = (access, default)
+        return _installed_acl_values(sys.platform, access, default, (0,))
+    check.observations = {}
     return check
 
 def _installed_rule(principal_uid: int, resolver: _DarwinUUIDResolver | None = None) -> Rule:
@@ -462,13 +509,9 @@ def _installed_rule(principal_uid: int, resolver: _DarwinUUIDResolver | None = N
             access, default = _acl_state(fd, resolver)
         except (OSError, Refusal):
             return False
-        if sys.platform != "darwin":
-            return _linux_install_acl_ok(access) and _linux_install_acl_ok(default)
-        dangerous = (1 << 2) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 8) | (1 << 10) | (1 << 12) | (1 << 13)
-        for tag, identifier, bits in access:
-            if tag == 1 and bits & dangerous and identifier not in (0, principal_uid):
-                return False
-        return True
+        check.observations[fd] = (access, default)
+        return _installed_acl_values(sys.platform, access, default, (0, principal_uid))
+    check.observations = {}
     return check
 
 def _store_rule(uid: int, gid: int, mode: int, directory: bool,
@@ -480,10 +523,9 @@ def _store_rule(uid: int, gid: int, mode: int, directory: bool,
             access, default = _acl_state(fd, resolver)
         except (OSError, Refusal):
             return False
-        kind = stat.S_ISDIR(state.st_mode) if directory else stat.S_ISREG(state.st_mode)
-        acl_absent = access == [] if sys.platform == "darwin" else access is None and default is None
-        return (kind and state.st_uid == uid and state.st_gid == gid and stat.S_IMODE(state.st_mode) == mode
-                and acl_absent)
+        check.observations[fd] = (access, default)
+        return _store_values(uid, gid, mode, directory, _stat_values(state), access, default, sys.platform)
+    check.observations = {}
     return check
 
 def _read_plain_fd(fd: int, maximum: int) -> bytes:
@@ -743,6 +785,18 @@ class Anchor:
     registry: tuple[str, list[dict]]
     accepted: tuple[str, list[dict]]
     resolver: _DarwinUUIDResolver | None
+    identity_context: dict | None = None
+    private_observations: dict = dataclasses.field(default_factory=dict)
+
+    def retain_entropy(self, role, value):
+        _require(role in {"reproduction", "write", "kill", "coverage"}
+                 and type(value) is bytes and len(value) == 32, "E_RUNTIME")
+        values = self.private_observations.setdefault("entropy", {}).setdefault(role, [])
+        if len(values) >= 4096:
+            self.private_observations["unusable"] = True
+        else:
+            values.append(value.hex())
+
     def recheck(self, code: str = "E_INSTALL") -> None:
         for item in self.held:
             item.recheck(code)
@@ -777,12 +831,18 @@ def load_anchor(resolver: _DarwinUUIDResolver | None = None,
         config_raw = config_file.read(DOCUMENT_LIMIT, "E_CONFIG")
         config = _parse_config(config_raw)
         uid, gid = config["principal_uid"], config["consumer_gid"]
-        _require(uid > 0 and uid not in (os.getuid(), os.geteuid()), "E_CONFIG")
+        _require(uid > 0, "E_CONFIG")
+        real_uid, effective_uid = os.getuid(), os.geteuid()
+        _require(uid not in (real_uid, effective_uid), "E_CONFIG")
         primary_groups = (os.getgid(), os.getegid())
+        groups = None
         member = gid in primary_groups
         if not member:
-            member = (group_reader.contains(gid) if group_reader is not None
-                      else gid in os.getgroups())
+            if group_reader is not None:
+                member = group_reader.contains(gid)
+            else:
+                groups = os.getgroups()
+                member = gid in groups
         _require(member, "E_CONFIG")
         installed: dict[str, tuple[bytes, str]] = {}
         source_root = _source_root()
@@ -802,6 +862,11 @@ def load_anchor(resolver: _DarwinUUIDResolver | None = None,
         registry = _parse_registry(installed["registry"][0])
         accepted = _parse_accepted(installed["accepted_set"][0])
         result = Anchor(config, config_raw, held, installed, registry, accepted, resolver)
+        result.identity_context = {"uid": real_uid, "euid": effective_uid,
+            "gid": primary_groups[0], "egid": primary_groups[1], "groups": groups,
+            "platform": sys.platform,
+            "uuid_replies": resolver.uuid_replies if isinstance(resolver, _DarwinChildOwner) else None,
+            "group_replies": group_reader.group_replies if isinstance(group_reader, _DarwinChildOwner) else None}
         result.recheck()
         return result
     except BaseException as exc:
@@ -832,20 +897,105 @@ def verifier_observation(anchor: Anchor, environment_id: str, target_repository_
                           "target_repository_id": target_repository_id,
                           "verifier_sha256": verifier_sha}})
 
-def _observation(item: HeldPath, relative: str, raw: bytes | None = None) -> dict:
-    state = item.before
-    row = {"name": relative, "device": state.st_dev, "inode": state.st_ino,
-           "mode": stat.S_IMODE(state.st_mode), "uid": state.st_uid, "gid": state.st_gid,
-           "kind": "directory" if stat.S_ISDIR(state.st_mode) else "file",
-           "metadata_before": list(_identity(state)),
-           "metadata_after": list(_identity(_metadata(item.fd)))}
+def _observation(item: HeldPath, relative: str, raw: bytes | None = None, *, storage_rows=None) -> dict:
+    after = _metadata(item.fd)
+    if storage_rows is not None:
+        component = item.components[-1]
+        acl = getattr(component.rule, "observations", {}).get(item.fd)
+        _require(component.named_after is not None and acl is not None, "E_STORE")
+        storage_rows.append({"role": "store", "name": os.fsencode(relative).hex(),
+            "before": _stat_values(item.before), "after": _stat_values(after),
+            "named_after": _stat_values(component.named_after),
+            "access_acl": acl[0], "default_acl": acl[1],
+            "directory_names": item.directory_names, "read_error": None})
+    return _observation_values(relative, _stat_values(item.before), _stat_values(after), raw)
+
+
+def _observation_values(relative, before, after, raw=None):
+    row = {"name": relative, "device": before["dev"], "inode": before["ino"],
+           "mode": stat.S_IMODE(before["mode"]), "uid": before["uid"], "gid": before["gid"],
+           "kind": "directory" if stat.S_ISDIR(before["mode"]) else "file",
+           "metadata_before": list(_identity_values(before)),
+           "metadata_after": list(_identity_values(after))}
     if raw is not None:
         row.update({"size": len(raw), "sha256": digest(raw)})
     return row
 
+
+def _origin_values(files, storage_rows, identity_context, source_bytes):
+    config = _parse_config(source_bytes["host-config.json"])
+    attempt_id, platform = identity_context["attempt_id"], identity_context["platform"]
+    _require(type(storage_rows) is list and len(storage_rows) <= 65536 and _id(attempt_id), "E_STORE")
+    observations, names = [], set()
+    for row in storage_rows:
+        _require(type(row) is dict and set(row) == {"role", "name", "before", "after", "named_after",
+            "access_acl", "default_acl", "directory_names", "read_error"}
+            and row["role"] == "store" and row["read_error"] is None, "E_STORE")
+        name = bytes.fromhex(row["name"]).decode("utf-8", "surrogateescape")
+        _require(name not in names, "E_STORE"); names.add(name)
+        before = row["before"]
+        _require(_identity_values(before) == _identity_values(row["after"])
+                 == _identity_values(row["named_after"]), "E_STORE")
+        file = name in files
+        _require(_store_values(config["principal_uid"], config["consumer_gid"], 0o440 if file else 0o750,
+            not file, before, row["access_acl"], row["default_acl"], platform), "E_STORE")
+        if file:
+            _require(before["nlink"] == 1 and before["size"] == len(files[name]), "E_STORE")
+        listed = row["directory_names"]
+        if listed is not None:
+            _require(type(listed) is list and len(listed) == len(set(listed)), "E_STORE")
+            listed_names = {bytes.fromhex(value).decode("utf-8", "surrogateescape") for value in listed}
+            if name == attempt_id:
+                _require(listed_names == _attempt_names(files), "E_STORE")
+            elif name == "payload":
+                _require(listed_names == {key.split("/")[1] for key in files if key.startswith("payload/")}, "E_STORE")
+            elif name == "payload/evidence":
+                _require(listed_names == {key.split("/")[2] for key in files if key.startswith("payload/evidence/")}, "E_STORE")
+            elif name == ".":
+                _require(attempt_id in listed_names, "E_STORE")
+        observations.append(_observation_values(name, before, row["after"], files[name] if file else None))
+    directories = {".", attempt_id, "payload"} | ({"payload/evidence"} if any(
+        name.startswith("payload/evidence/") for name in files) else set())
+    _require(names == set(files) | directories, "E_STORE")
+    return canonical({"schema_version": 1, "kind": "shadow_origin_observation", "id": attempt_id,
+        "body": {"store_id": config["store_id"], "attempt_id": attempt_id,
+                 "entries": observations, "result": "authenticated"}})
+
 def _hex_name(value: object) -> bool:
     return (isinstance(value, str) and bool(value) and len(value) % 2 == 0
             and len(value) <= 510 and all(char in "0123456789abcdef" for char in value))
+
+def _attempt_names(snapshots):
+    return {"receipt.json", "payload"} | ({"capture.json"} if "capture.json" in snapshots else set())
+
+
+def _capture_envelope(raw, attempt_id, request_sha256, *, seed=False):
+    value = _json(raw, CAPTURE_LIMIT, "E_STORE")
+    _require(set(value) == {"schema_version", "kind", "id", "body"}
+             and type(value["schema_version"]) is int and value["schema_version"] == 1
+             and value["kind"] == "malicious_source_capture" and value["id"] == attempt_id
+             and type(value["body"]) is dict, "E_STORE")
+    body = value["body"]
+    _require(set(body) == {"request_sha256", "raw", "complete"}
+             and body["request_sha256"] == request_sha256 and _sha(request_sha256)
+             and type(body["complete"]) is bool and type(body["raw"]) is dict
+             and set(body["raw"]) <= {"host", "guest", "source_pages", "clocks", "runtime"}
+             and all(type(group) is dict for group in body["raw"].values())
+             and canonical(value) == raw, "E_STORE")
+    if seed:
+        _require(body["complete"] and bool(body["raw"]), "E_STORE")
+    groups = body["raw"]
+    remaining = {name: group for name, group in groups.items() if name not in {"host", "guest"}}
+    _require(len(canonical(remaining)) <= 4 * DOCUMENT_LIMIT
+             and all(len(canonical(groups[name])) <= 4 * DOCUMENT_LIMIT
+                     for name in ("host", "guest") if name in groups), "E_STORE")
+    return body["raw"]
+
+
+def _capture_for_replay(snapshots, attempt_id, request_raw):
+    _require("capture.json" in snapshots, "E_STORE")
+    return _capture_envelope(snapshots["capture.json"], attempt_id, digest(request_raw), seed=True)
+
 
 class _HeldStoreRead:
     def __init__(self, anchor: Anchor, attempt_id: str) -> None:
@@ -863,11 +1013,11 @@ class _HeldStoreRead:
                 _require(name in self.snapshots and item.read(len(self.snapshots[name]), code)
                          == self.snapshots[name], code)
             else:
-                names = set(os.listdir(item.fd))
+                names = set(item.listdir())
                 if relative == ".":
                     _require(self.attempt_id in names, code)
                 elif relative == self.attempt_id:
-                    _require(names == {"receipt.json", "payload"}, code)
+                    _require(names == _attempt_names(self.snapshots), code)
                 elif relative == self.attempt_id + "/payload":
                     expected = {name.split("/")[1] for name in self.snapshots if name.startswith("payload/")}
                     _require(names == expected, code)
@@ -889,6 +1039,7 @@ def read_store_attempt(anchor: Anchor, attempt_id: str, *,
     opened: list[HeldPath] = []
     snapshots: dict[str, bytes] = {}
     observations: list[dict] = []
+    storage_rows = []
     failure = None
     try:
         store = _open_held(root, True, _store_rule(uid, gid, 0o750, True, anchor.resolver), "E_STORE")
@@ -899,11 +1050,13 @@ def read_store_attempt(anchor: Anchor, attempt_id: str, *,
         payload = _open_child(attempt, "payload", True,
                               _store_rule(uid, gid, 0o750, True, anchor.resolver), "E_STORE")
         opened.append(payload)
-        observations.extend((_observation(store, "."), _observation(attempt, attempt_id),
-                             _observation(payload, "payload")))
-        attempt_names = set(os.listdir(attempt.fd))
-        _require(attempt_names == {"payload", "receipt.json"}, "E_STORE")
-        payload_names = set(os.listdir(payload.fd))
+        observations.extend((_observation(store, ".", storage_rows=storage_rows),
+                             _observation(attempt, attempt_id, storage_rows=storage_rows),
+                             _observation(payload, "payload", storage_rows=storage_rows)))
+        attempt_names = set(attempt.listdir())
+        _require(attempt_names in ({"payload", "receipt.json"},
+                                   {"payload", "receipt.json", "capture.json"}), "E_STORE")
+        payload_names = set(payload.listdir())
         fixed = {"stdout", "stderr", "evidence-manifest.json"}
         optional = ({"refusal.json"} if "refusal.json" in payload_names else set())
         evidence_present = "evidence" in payload_names
@@ -913,6 +1066,10 @@ def read_store_attempt(anchor: Anchor, attempt_id: str, *,
         receipt = _open_child(attempt, "receipt.json", False,
                               _store_rule(uid, gid, 0o440, False, anchor.resolver), "E_STORE")
         opened.append(receipt); files.append((receipt, "receipt.json"))
+        if "capture.json" in attempt_names:
+            capture = _open_child(attempt, "capture.json", False,
+                                 _store_rule(uid, gid, 0o440, False, anchor.resolver), "E_STORE")
+            opened.append(capture); files.append((capture, "capture.json"))
         for name in sorted(fixed | optional):
             item = _open_child(payload, name, False,
                                _store_rule(uid, gid, 0o440, False, anchor.resolver), "E_STORE")
@@ -939,8 +1096,8 @@ def read_store_attempt(anchor: Anchor, attempt_id: str, *,
         if rows:
             evidence = _open_child(payload, "evidence", True,
                                    _store_rule(uid, gid, 0o750, True, anchor.resolver), "E_STORE")
-            opened.append(evidence); observations.append(_observation(evidence, "payload/evidence"))
-            _require(sorted(os.listdir(evidence.fd)) == expected_evidence, "E_STORE")
+            opened.append(evidence); observations.append(_observation(evidence, "payload/evidence", storage_rows=storage_rows))
+            _require(sorted(evidence.listdir()) == expected_evidence, "E_STORE")
             for name in expected_evidence:
                 item = _open_child(evidence, name, False,
                                    _store_rule(uid, gid, 0o440, False, anchor.resolver), "E_STORE")
@@ -953,32 +1110,42 @@ def read_store_attempt(anchor: Anchor, attempt_id: str, *,
         for item, name in files:
             output_name = (name in ("payload/stdout", "payload/stderr")
                            or name.startswith("payload/evidence/"))
-            maximum = (remaining if output_name else
+            maximum = (remaining if output_name else CAPTURE_LIMIT if name == "capture.json" else
                        DOCUMENT_LIMIT if name in ("receipt.json", "payload/evidence-manifest.json")
                        else OUTPUT_LIMIT)
             _require(item.before.st_size <= maximum, "E_STORE")
             raw = manifest_raw if item is manifest_item else item.read_exact(item.before.st_size, "E_STORE")
             _require(len(raw) == item.before.st_size, "E_STORE")
             snapshots[name] = raw
-            observations.append(_observation(item, name, raw))
+            observations.append(_observation(item, name, raw, storage_rows=storage_rows))
             if output_name:
                 remaining -= len(raw)
         for index, row in enumerate(rows):
             raw = snapshots[f"payload/evidence/{index:04d}"]
             _require(len(raw) == row["size_bytes"] and digest(raw) == row["sha256"], "E_STORE")
-        _require(set(os.listdir(attempt.fd)) == attempt_names
-                 and set(os.listdir(payload.fd)) == payload_names, "E_STORE")
+        if "capture.json" in snapshots:
+            receipt_body = _json(snapshots["receipt.json"], DOCUMENT_LIMIT, "E_STORE").get("body", {})
+            attempt_body = receipt_body.get("attempt", {}) if type(receipt_body) is dict else {}
+            _require(type(attempt_body) is dict, "E_STORE")
+            _capture_envelope(snapshots["capture.json"], attempt_id, attempt_body.get("launch_request_sha256"))
+        _require(set(attempt.listdir()) == attempt_names
+                 and set(payload.listdir()) == payload_names, "E_STORE")
         if rows:
-            _require(sorted(os.listdir(evidence.fd)) == expected_evidence, "E_STORE")
+            _require(sorted(evidence.listdir()) == expected_evidence, "E_STORE")
         for item in opened:
             item.recheck("E_STORE")
+            relative = os.path.relpath(item.path, root)
+            if relative.startswith(attempt_id + "/"):
+                relative = relative[len(attempt_id) + 1:]
+            for row in storage_rows:
+                if row["name"] == os.fsencode(relative).hex():
+                    row["directory_names"] = item.directory_names
         anchor.recheck("E_STORE")
-        observation = canonical({"schema_version": 1, "kind": "shadow_origin_observation",
-                                 "id": attempt_id, "body": {"store_id": anchor.config["store_id"],
-                                     "attempt_id": attempt_id, "entries": observations,
-                                     "result": "authenticated"}})
+        observation = _origin_values(snapshots, storage_rows,
+            {"attempt_id": attempt_id, "platform": sys.platform}, {"host-config.json": anchor.config_raw})
         if _owner is not None:
             _owner.held, opened = opened, []
+            _owner.storage_rows = storage_rows
         return snapshots, observation
     except BaseException as exc:
         failure = exc
@@ -1067,7 +1234,7 @@ def load_coverage_configuration(anchor, operation="coverage-read"):
     _require(operation in {"coverage-read", "kill-register-read"}, "E_CONFIG")
     prefix = "coverage-source" if operation == "coverage-read" else "kill-register-source"
     root = next(item for item in anchor.held if item.path == ANCHOR)
-    names = set(os.listdir(root.fd))
+    names = set(root.listdir())
     optional = {prefix + "-config.json", prefix + "-accepted-identities.json"}
     if not (names & optional):
         return None
@@ -1086,7 +1253,7 @@ class _HeldCoverageRead(_HeldStoreRead):
         super().recheck(code)
         self.configuration.recheck(code)
         raw = next(item for item in self.held if item.path.endswith("/payload/raw"))
-        _require(set(os.listdir(raw.fd)) == {name.rsplit("/", 1)[1] for name in self.snapshots
+        _require(set(raw.listdir()) == {name.rsplit("/", 1)[1] for name in self.snapshots
                                             if name.startswith("payload/raw/")}, code)
 
 
@@ -1110,18 +1277,21 @@ def read_coverage_attempt(anchor, configuration, request_raw, *, _owner=None):
         payload = directory(attempt, "payload", "payload")
         raw_dir = directory(payload, "raw", "payload/raw")
         observations.insert(0, _observation(store, "."))
-        _require(set(os.listdir(attempt.fd)) == {"receipt.json", "payload"}
-                 and set(os.listdir(payload.fd)) == {"request.json", "raw-manifest.json", "observation.json", "raw"}, "E_STORE")
-        names = sorted(os.listdir(raw_dir.fd))
+        attempt_names = set(attempt.listdir())
+        _require(attempt_names in ({"receipt.json", "payload"}, {"receipt.json", "payload", "capture.json"})
+                 and set(payload.listdir()) == {"request.json", "raw-manifest.json", "observation.json", "raw"}, "E_STORE")
+        names = sorted(raw_dir.listdir())
         _require(len(n.FAMILIES) <= len(names) <= n.PAGE_LIMIT and names == [f"{index:04d}" for index in range(len(names))], "E_STORE")
         total = 0
         fixed = [(attempt, "receipt.json", "receipt.json"),
                  *[(payload, name, "payload/" + name) for name in ("request.json", "raw-manifest.json", "observation.json")],
                  *[(raw_dir, name, "payload/raw/" + name) for name in names]]
+        if "capture.json" in attempt_names:
+            fixed.append((attempt, "capture.json", "capture.json"))
         for parent, name, relative in fixed:
             item = _open_child(parent, name, False, _store_rule(uid, gid, 0o440, False, anchor.resolver), "E_STORE")
             opened.append(item)
-            raw = item.read(DOCUMENT_LIMIT, "E_STORE")
+            raw = item.read(CAPTURE_LIMIT if relative == "capture.json" else DOCUMENT_LIMIT, "E_STORE")
             snapshots[relative] = raw
             observations.append(_observation(item, relative, raw))
             if relative.startswith("payload/raw/"):
@@ -1133,6 +1303,9 @@ def read_coverage_attempt(anchor, configuration, request_raw, *, _owner=None):
         _require(rebuilt == snapshots["payload/observation.json"], "E_STORE")
         n.receipt(snapshots["receipt.json"], request_raw, anchor.config, configuration.identity,
                   snapshots["payload/raw-manifest.json"], rebuilt)
+        if "capture.json" in snapshots:
+            _capture_envelope(snapshots["capture.json"], attempt_id, digest(request_raw))
+        _require(set(attempt.listdir()) == attempt_names, "E_STALE")
         for item in opened:
             item.recheck("E_STALE")
         configuration.recheck("E_STALE")
@@ -1249,7 +1422,19 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
         self.python, self.source = python, source
         self.deadline, self.ledger = deadline, ledger
         self.context = None
+        self.uuid_replies = []
+        self.group_replies = []
+        self.observation_bytes = 0
+        self.observations_complete = True
         self.recheck()
+
+    def _retain_identity_reply(self, rows, metadata, output):
+        cost = len(canonical(metadata | {"bytes": ""})) + 2 * len(output)
+        if self.observation_bytes + cost > 4 * DOCUMENT_LIMIT:
+            self.observations_complete = False
+            return
+        rows.append(metadata | {"bytes": output.hex()})
+        self.observation_bytes += cost
 
     def recheck(self) -> None:
         self.python.recheck("E_DEPENDENCY")
@@ -1271,7 +1456,7 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
         argv = [self.python.held.path, "-I", "-S", "-B", self.source.held.path, operation]
         self.ledger.record_command(role, argv, self.python.sha256, self.source.sha256)
         env = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"}
-        remaining = min(10, self.deadline - time.monotonic())
+        remaining = min(10, self.deadline - _clock_value('shadow/v1/_consumer.py:1274:0',time.monotonic(),'monotonic'))
         _require(remaining > 0, "E_RUNTIME")
         if context is None:
             output = self._foreground(argv, raw, cap, 65536, remaining, env)
@@ -1298,10 +1483,10 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
                         status = self.ledger.native_status(native)
                     except MemoryError:
                         if attempted:
-                            self.ledger.native_cleanup(native, time.monotonic() + 10)
+                            self.ledger.native_cleanup(native, _clock_value('shadow/v1/_consumer.py:1301:0',time.monotonic(),'monotonic') + 10)
                         raise
                     if attempted and status[0] == 3 and self.ledger.native_pending(status):
-                        self.ledger.native_cleanup(native, time.monotonic() + 10)
+                        self.ledger.native_cleanup(native, _clock_value('shadow/v1/_consumer.py:1304:0',time.monotonic(),'monotonic') + 10)
                 except BaseException as cleanup_exc:
                     raise exc from cleanup_exc
                 raise
@@ -1314,6 +1499,7 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
         if not uuids:
             return []
         output = self._fixed("_resolve-darwin-uuids", canonical(uuids), DARWIN_UUID_OUTPUT_LIMIT, context)
+        self._retain_identity_reply(self.uuid_replies, {"uuids": list(uuids)}, output)
         rows = _json_array(output, DARWIN_UUID_OUTPUT_LIMIT, "E_ACL")
         _require(len(rows) == len(uuids), "E_ACL")
         for uuid, row in zip(uuids, rows):
@@ -1330,6 +1516,7 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
     def contains(self, gid: int, context=None) -> bool:
         _require(_integer(gid) and 0 <= gid <= 0xffffffff, "E_ACL")
         output = self._fixed("_read-darwin-group", canonical({"gid": gid}), 16, context)
+        self._retain_identity_reply(self.group_replies, {"gid": gid}, output)
         _require(output in (canonical([]), canonical([gid])), "E_ACL")
         return output == canonical([gid])
 
@@ -1360,7 +1547,7 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
             self._coverage_invocation = argv
             try:
                 result = self._foreground(argv, request_raw, 0, 16384,
-                    min(120, self.deadline - time.monotonic()),
+                    min(120, self.deadline - _clock_value('shadow/v1/_consumer.py:1363:0',time.monotonic(),'monotonic')),
                     {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"})
             finally:
                 self._coverage_invocation = None
@@ -1380,7 +1567,7 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
             self.ledger.record_command("gate-scope-driver", argv, self.ledger.bash.sha256,
                                        self.ledger.package_sources["scope/v1/evaluate-scope.sh"].sha256)
             return self._foreground(argv, b"", DOCUMENT_LIMIT, 65536,
-                min(300, self.deadline - time.monotonic()), self.ledger.environment())
+                min(300, self.deadline - _clock_value('shadow/v1/_consumer.py:1383:0',time.monotonic(),'monotonic')), self.ledger.environment())
         finally:
             self._gate_invocation = self._gate_session = None
 
@@ -1391,8 +1578,8 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
                  and ((source is not None and argv == source and cap == 0 and error_cap == 16384)
                       or (source is None and 0 < cap <= 16 * DOCUMENT_LIMIT and error_cap == 65536)), "E_RUNTIME")
         inherited = getattr(self.ledger, "store_session", None) is not None
-        end = min(time.monotonic() + timeout, self.deadline - 10) if inherited else time.monotonic() + timeout
-        _require(end > time.monotonic(), "E_RUNTIME")
+        end = min(_clock_value('shadow/v1/_consumer.py:1394:0',time.monotonic(),'monotonic') + timeout, self.deadline - 10) if inherited else _clock_value('shadow/v1/_consumer.py:1394:1',time.monotonic(),'monotonic') + timeout
+        _require(end > _clock_value('shadow/v1/_consumer.py:1395:0',time.monotonic(),'monotonic'), "E_RUNTIME")
         previous = signal.pthread_sigmask(signal.SIG_BLOCK,
                                           {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
         child = None
@@ -1440,8 +1627,8 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
                 child.stdin.close()
             sent = 0
             while selector.get_map():
-                _require(not cancelled[0] and time.monotonic() < end, "E_RUNTIME")
-                for key, events in selector.select(min(0.1, max(0, end - time.monotonic()))):
+                _require(not cancelled[0] and _clock_value('shadow/v1/_consumer.py:1443:0',time.monotonic(),'monotonic') < end, "E_RUNTIME")
+                for key, events in selector.select(min(0.1, max(0, end - _clock_value('shadow/v1/_consumer.py:1444:0',time.monotonic(),'monotonic')))):
                     stream = key.fileobj
                     if gate is not None and stream is gate.wire.sock:
                         gate.pump()
@@ -1472,7 +1659,7 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
                             bucket = outputs[key.fd]
                             _require(len(bucket) + len(chunk) <= limits[key.fd], "E_LIMIT")
                             bucket.extend(chunk)
-            result = child.wait(timeout=max(0.001, end - time.monotonic()))
+            result = child.wait(timeout=max(0.001, end - _clock_value('shadow/v1/_consumer.py:1475:0',time.monotonic(),'monotonic')))
             _require(not cancelled[0] and result == 0, "E_RUNTIME")
             try:
                 os.killpg(child.pid, 0)
@@ -1482,7 +1669,7 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
                 raise Refusal("E_RUNTIME")
             if gate is not None:
                 _require(gate.closed and not gate.wire.buffer, "E_RUNTIME")
-                gate.wire.sock.settimeout(max(0.001, min(1, self.deadline - time.monotonic())))
+                gate.wire.sock.settimeout(max(0.001, min(1, self.deadline - _clock_value('shadow/v1/_consumer.py:1485:0',time.monotonic(),'monotonic'))))
                 _require(gate.wire.sock.recv(1) == b"", "E_RUNTIME")
             stdout, stderr = list(outputs.values())
             _require(not stderr, "E_RUNTIME")
@@ -1490,7 +1677,7 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
         except BaseException as exc:
             cleanup_errors = []
             if child is not None:
-                cleanup_end = min(self.deadline, time.monotonic() + 10) if inherited else time.monotonic() + 10
+                cleanup_end = min(self.deadline, _clock_value('shadow/v1/_consumer.py:1493:0',time.monotonic(),'monotonic') + 10) if inherited else _clock_value('shadow/v1/_consumer.py:1493:1',time.monotonic(),'monotonic') + 10
                 try:
                     try:
                         os.killpg(child.pid, signal.SIGTERM)
@@ -1498,7 +1685,7 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
                         pass
                     if child.returncode is None:
                         try:
-                            child.wait(timeout=max(0.001, min(2, cleanup_end - time.monotonic())))
+                            child.wait(timeout=max(0.001, min(2, cleanup_end - _clock_value('shadow/v1/_consumer.py:1501:0',time.monotonic(),'monotonic'))))
                         except subprocess.TimeoutExpired:
                             pass
                     try:
@@ -1506,14 +1693,14 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
                     except ProcessLookupError:
                         pass
                     if child.returncode is None:
-                        child.wait(timeout=max(0.001, cleanup_end - time.monotonic()))
+                        child.wait(timeout=max(0.001, cleanup_end - _clock_value('shadow/v1/_consumer.py:1509:0',time.monotonic(),'monotonic')))
                     while True:
                         try:
                             os.killpg(child.pid, 0)
                         except ProcessLookupError:
                             break
-                        _require(time.monotonic() < cleanup_end, "E_RUNTIME")
-                        time.sleep(min(0.01, max(0, cleanup_end - time.monotonic())))
+                        _require(_clock_value('shadow/v1/_consumer.py:1515:0',time.monotonic(),'monotonic') < cleanup_end, "E_RUNTIME")
+                        time.sleep(min(0.01, max(0, cleanup_end - _clock_value('shadow/v1/_consumer.py:1516:0',time.monotonic(),'monotonic'))))
                 except BaseException as cleanup_exc:
                     cleanup_errors.append(cleanup_exc)
             if cleanup_errors:
@@ -1570,7 +1757,7 @@ class _HeldBundle:
             directory = _open_child(parent, name, True,
                                     lambda _fd, _state, _ancestor: True, "E_RELATION")
             self.held.append(directory)
-            _require(set(os.listdir(directory.fd)) == self.names, "E_RELATION")
+            _require(set(directory.listdir()) == self.names, "E_RELATION")
             total = 0
             for filename in sorted(self.names):
                 item = _open_child(directory, filename, False,
@@ -1607,7 +1794,7 @@ class _HeldBundle:
             raise
 
     def recheck(self, code: str = "E_STALE") -> None:
-        _require(set(os.listdir(self.held[0].fd)) == self.names, code)
+        _require(set(self.held[0].listdir()) == self.names, code)
         for item in self.held:
             item.recheck(code)
         for item in self.held[1:]:
@@ -1927,17 +2114,17 @@ class _GateWire:
         self.sent += 1
         raw = canonical({"version": 1, "call_id": self.call_id, "nonce": self.nonce,
             "sequence": self.sent, "phase": phase, "binding": self.binding, "body": body})
-        _require(len(raw) <= DOCUMENT_LIMIT and time.monotonic() < self.deadline, "E_RUNTIME")
+        _require(len(raw) <= DOCUMENT_LIMIT and _clock_value('shadow/v1/_consumer.py:1930:0',time.monotonic(),'monotonic') < self.deadline, "E_RUNTIME")
         self.sent_bytes += len(raw)
         _require(self.sent_bytes <= 64 * DOCUMENT_LIMIT, "E_LIMIT")
-        self.sock.settimeout(max(0.001, self.deadline - time.monotonic()))
+        self.sock.settimeout(max(0.001, self.deadline - _clock_value('shadow/v1/_consumer.py:1933:0',time.monotonic(),'monotonic')))
         self.sock.sendall(struct.pack("!I", len(raw)) + raw)
 
     def receive(self):
         import struct
         while len(self.buffer) < 4 or len(self.buffer) < 4 + struct.unpack("!I", self.buffer[:4])[0]:
-            _require(time.monotonic() < self.deadline, "E_RUNTIME")
-            self.sock.settimeout(max(0.001, self.deadline - time.monotonic()))
+            _require(_clock_value('shadow/v1/_consumer.py:1939:0',time.monotonic(),'monotonic') < self.deadline, "E_RUNTIME")
+            self.sock.settimeout(max(0.001, self.deadline - _clock_value('shadow/v1/_consumer.py:1940:0',time.monotonic(),'monotonic')))
             chunk = self.sock.recv(65536)
             _require(bool(chunk), "E_RUNTIME")
             self.buffer.extend(chunk)

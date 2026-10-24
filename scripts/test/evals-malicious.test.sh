@@ -336,6 +336,79 @@ with tempfile.TemporaryDirectory(prefix='ystack-guest-value-pairs-') as director
     assert records[1:] == [(b'stdout',b''),(b'stderr',b''),(b'evidence/0000',b'{}')]
     assert host.frame_write(records) == frame
     print('ok fixed guest helper - same report/counter/controller/frame owners; no live operations')
+    def io_value(result,raw=b'',error=None):
+        return {'return':result,'bytes':raw.hex(),'errno':error}
+    def read_values(group,name,raw):
+        group[name+'_open']=io_value(3)
+        group[name]=io_value(len(raw),raw)
+        group[name+'_close']=io_value(0)
+    def stat_values(size=0):
+        return {'return':0,'errno':None,'stat':{'dev':2,'gid':501,'ino':123,
+            'mode':0o100600,'nlink':1,'size':size,'uid':501}}
+    def filesystem(blocks,free,fragment,files):
+        return {'return':0,'errno':None,'stat':{'f_blocks':blocks,'f_bfree':free,'f_frsize':fragment,'f_files':files}}
+    setup={'page_size':io_value(4096),'report_page_size':io_value(4096),'cgroup_open':io_value(4)}
+    for key in ('cpu_max','cpu_max_burst','bandwidth_slice_us','pids_max'):
+        text=(str(limits[key])+(' 100000\n' if key=='cpu_max' else '\n')).encode()
+        setup[key+'_write_open']=io_value(3)
+        setup[key+'_write']=io_value(len(text))
+        setup[key+'_write_close']=io_value(0)
+        read_values(setup,key,(str(limits[key])+'\n').encode())
+    setup['subtree_control_write_open']=io_value(3)
+    setup['subtree_control_write']=io_value(len(b'+cpu +pids +memory\n'))
+    setup['subtree_control_write_close']=io_value(0)
+    read_values(setup,'meminfo',b'MemTotal: 100 kB\n')
+    setup['output']=filesystem(limits['output_tmpfs_bytes'],1,1,limits['output_inodes'])
+    setup['scratch']=filesystem(limits['scratch_bytes'],1,1,limits['scratch_inodes'])
+    def raw_now(n):return {'tag':'now','sec':0,'nsec':n,'errno':None}
+    primitive_control=[raw_now(0),{'tag':'launch','pid':17,'errno':None},raw_now(1),
+        {'tag':'poll','count':1,'errno':None,'revents':[{'role':'exec','revents':17}]},raw_now(2),
+        {'tag':'exec-read','bytes':ready.hex(),'eof':False,'errno':None},
+        {'tag':'exec-read','bytes':'','eof':True,'errno':None},raw_now(3),
+        {'tag':'wait','pid':17,'status':0,'errno':None},raw_now(4),raw_now(5),
+        {'tag':'population','bytes':b'populated 0\n'.hex(),'errno':None},
+        {'tag':'exec-read','bytes':'','eof':True,'errno':None},raw_now(6)]
+    counters={}
+    for name,value in [('cpu_stat',b'usage_usec 1001\n'),('memory_peak',b'4096\n'),
+                       ('memory_events',b'oom_kill 0\n'),('pids_peak',b'1\n'),('pids_events',b'max 0\n')]:
+        read_values(counters,name,value)
+    for name in ('stdout','stderr'):
+        counters[name]=stat_values()
+        counters[name+'_bytes']=io_value(0)
+    counters['entry_0000_name']=io_value(len(b'result.json'),b'result.json')
+    counters['entry_0000_stat']=stat_values(2)
+    counters['directory']=io_value(0)
+    for suffix in ('size','report_stat','export_stat'):
+        counters['evidence_0000_'+suffix]=stat_values(2)
+    counters['evidence_0000_bytes']=io_value(2,b'{}')
+    counters['output']=filesystem(10,1,4096,64)
+    counters['scratch']=filesystem(10,9,4096,64)
+    guest_raw={'setup':setup,'control':primitive_control,'counters':counters}
+    bridge_wire=replay._guest_wire_values(plan,guest_raw)
+    bridge_work=area/'bridge';bridge_work.mkdir(mode=0o700)
+    assert replay._guest_values(root,bridge_work,bridge_wire)==frame
+    print('ok synthetic closed guest RAW -> strict02 -> same original report/frame bytes; Linux production route NOTRUN')
+    import copy
+    for label,change in [
+            ('setup-missing',lambda d:d['setup'].pop('meminfo_open')),
+            ('setup-extra',lambda d:d['setup'].update(unknown=io_value(0))),
+            ('setup-wrong-type',lambda d:d['setup']['page_size'].update(**{'return':True})),
+            ('setup-over-read',lambda d:d['setup']['cpu_max'].update(bytes='ff'*128,**{'return':128})),
+            ('control-missing',lambda d:d['control'].pop(2)),
+            ('control-extra',lambda d:d['control'][0].update(unknown=0)),
+            ('control-wrong-type',lambda d:d['control'][0].update(sec=True)),
+            ('control-over-read',lambda d:d['control'][5].update(bytes='00'*33)),
+            ('counter-missing',lambda d:d['counters'].pop('cpu_stat_open')),
+            ('counter-extra',lambda d:d['counters'].update(unknown=io_value(0))),
+            ('counter-wrong-type',lambda d:d['counters']['stdout']['stat'].update(size=True)),
+            ('counter-over-name',lambda d:d['counters']['entry_0000_name'].update(bytes='61'*256,**{'return':256}))]:
+        damaged=copy.deepcopy(guest_raw);change(damaged)
+        try:bad_wire=replay._guest_wire_values(plan,damaged)
+        except ValueError:pass
+        else:
+            rejected=subprocess.run([str(bridge_work/'guest-values')],input=bad_wire,capture_output=True,env={},timeout=10)
+            assert rejected.returncode!=0,label
+        print('ok strict guest bridge refuses - '+label)
     helper = work/'guest-values'
     suffix = wire[counter_offset:]
     wait_zero = events[:6]+[number(2)+number(0)+number(0)+number(0),now(4),now(5),
@@ -463,3 +536,366 @@ with tempfile.TemporaryDirectory(prefix='ystack-guest-value-pairs-') as director
         assert not any(line.strip().endswith(('_'+name,name)) for line in symbols.stdout.decode().splitlines()),name
     print('ok fixed guest helper - no native process, namespace, mount or socket imports')
 PY_GUEST_VALUES
+/usr/bin/python3 -I -S -B - "$root" <<'PY_CAPTURE_VALUES'
+import copy
+import importlib.util
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+import types
+
+root = Path(sys.argv[1])
+def load(name,path):
+    spec = importlib.util.spec_from_file_location(name,path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+host = load('capture_host',root/'sandbox/v1/host-supervisor.py')
+consumer = load('capture_consumer',root/'shadow/v1/_consumer.py')
+request = host.canonical({'ordinary':'request bytes'})
+group = {'host':{'process':[],'driver_rest':[]}}
+def refuses(function,label):
+    try:function()
+    except consumer.Refusal:
+        print('ok capture refuses - '+label)
+    else:raise AssertionError(label)
+
+with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as directory:
+    area = Path(directory).resolve()
+    store = area/'store';store.mkdir(mode=0o750);store.chmod(0o750)
+    config = {'principal_uid':os.getuid(),'consumer_gid':os.getgid(),'store_id':'store.ordinary',
+        'environment_id':'environment.ordinary','store_root':str(store),'work_root':str(area/'work'),
+        'runtime':{'driver':'/ordinary/driver','vfkit':'/ordinary/vfkit'},
+        'installed_files':{key:'/ordinary/installed/'+key for key in consumer.INSTALLED_SOURCES},
+        'identity_paths':{key: ['/ordinary/dyld'] if key == 'dyld_cache_files' else '/ordinary/identity/'+key
+                          for key in consumer.IDENTITY_KEYS}}
+    config_raw = consumer.canonical({'schema_version':1,'kind':'sandbox_host_config','id':'host.ordinary','body':config})
+    anchor = types.SimpleNamespace(config=config,config_raw=config_raw,resolver=None,recheck=lambda *_:None)
+    original_acl = consumer._acl_state
+    consumer._acl_state = lambda *_: ([],None) if sys.platform == 'darwin' else (None,None)
+    try:
+        for index,complete in enumerate((None,False,True)):
+            attempt_id = 'attempt.capture.'+str(index)
+            attempt = store/attempt_id;attempt.mkdir(mode=0o750);attempt.chmod(0o750)
+            payload = attempt/'payload';payload.mkdir(mode=0o750);payload.chmod(0o750)
+            values = {'receipt.json':host.canonical({'body':{'attempt':{
+                'attempt_id':attempt_id,'launch_request_sha256':host.sha256_hex(request)}}}),
+                'payload/stdout':b'','payload/stderr':b'',
+                'payload/evidence-manifest.json':host.empty_evidence_manifest()[0]}
+            if complete is not None:values['capture.json'] = host._capture_values(attempt_id,request,group,complete)
+            for name,raw in values.items():
+                path = attempt/name;path.write_bytes(raw);path.chmod(0o440)
+            held = consumer._HeldStoreRead(anchor,attempt_id)
+            try:
+                assert held.snapshots == values
+                held.recheck()
+                rebuilt = consumer._origin_values(held.snapshots,held.storage_rows,
+                    {'attempt_id':attempt_id,'platform':sys.platform},{'host-config.json':config_raw})
+                assert rebuilt == held.observation
+                if complete:
+                    assert consumer._capture_for_replay(held.snapshots,attempt_id,request) == group
+                    print('ok capture envelope and actual held inventory - new; not a complete case replay')
+                    for label,change in [('extra-key',lambda v:v.update(extra=True)),
+                            ('wrong-attempt',lambda v:v.update(id='other')),
+                            ('wrong-request',lambda v:v['body'].update(request_sha256='a'*64)),
+                            ('wrong-complete-type',lambda v:v['body'].update(complete=1))]:
+                        changed = json.loads(values['capture.json']);change(changed)
+                        refuses(lambda:consumer._capture_envelope(consumer.canonical(changed),attempt_id,
+                            host.sha256_hex(request)),label)
+                    path = attempt/'capture.json';path.chmod(0o640)
+                    path.write_bytes(values['capture.json'].replace(b'"complete":true',b'"complete":false'))
+                    path.chmod(0o440)
+                    refuses(held.recheck,'changed-after-held-read')
+                else:
+                    refuses(lambda:consumer._capture_for_replay(held.snapshots,attempt_id,request),
+                            'legacy-missing' if complete is None else 'partial')
+                    print('ok actual held inventory - '+('legacy' if complete is None else 'partial capture'))
+            finally:held.close()
+            extra = attempt/'unknown';extra.write_bytes(b'x');extra.chmod(0o440)
+            refuses(lambda:consumer.read_store_attempt(anchor,attempt_id),'extra-attempt-entry')
+        oversized = host._capture_values('attempt.capture.overflow',request,
+            {'host':{'process':['x'*(4*1024*1024)],'driver_rest':[]}},True)
+        assert json.loads(oversized)['body']['complete'] is False
+        assert json.loads(oversized)['body']['raw'] == {}
+        print('ok capture overflow - incomplete; no seed admission')
+        for value in (None,True,False,0,-17,'quote" slash\\ newline\n','中文',
+                      {'path':'/ordinary','values':[1,None,'\x00\b\t\r\f']}):
+            assert host._capture_size(value,1024*1024)+1 == len(host.canonical(value))
+        boundary_id = 'attempt.capture.boundary'
+        boundary_group = {'host':{'process':[{'site':'run_vm.export-read','ordinal':0,
+            'return':0,'errno':None,'bytes':'','timeout':None}], 'driver_rest':[], 'signals':[]},
+            'clocks':{'wall':[],'monotonic':[]}}
+        row = boundary_group['host']['process'][0]
+        row['return'] = 500000
+        overhead = len(host._capture_values(boundary_id,request,boundary_group,True))
+        if (1024*1024-overhead) % 2:
+            boundary_id += 'a';overhead += 1
+        row['bytes'] = '00'*((1024*1024-overhead)//2)
+        row['return'] = len(row['bytes'])//2
+        at_limit = host._capture_values(boundary_id,request,boundary_group,True)
+        assert len(at_limit) == 1024*1024 and json.loads(at_limit)['body']['complete']
+        assert consumer._capture_envelope(at_limit,boundary_id,host.sha256_hex(request)) == boundary_group
+        over_limit = host._capture_values(boundary_id+'a',request,boundary_group,True)
+        assert not json.loads(over_limit)['body']['complete'] and json.loads(over_limit)['body']['raw'] == {}
+        print('ok exact capture document boundary and one-byte-over envelope; primitive schema/case admission remain separate')
+    finally:consumer._acl_state = original_acl
+PY_CAPTURE_VALUES
+/usr/bin/python3 -I -S -B - "$root" <<'PY_LAUNCH_PREPARATION_VALUES'
+import importlib.util
+from pathlib import Path
+import sys
+import types
+
+root = Path(sys.argv[1])
+def load(name,path):
+    spec = importlib.util.spec_from_file_location(name,path)
+    owner = importlib.util.module_from_spec(spec);sys.modules[name] = owner
+    spec.loader.exec_module(owner)
+    return owner
+replay = load('projection_replay',root/'evals/v1/replay-malicious.py')
+launch = load('projection_launch',root/'shadow/v1/enforced-reproduction.py')
+preparation = load('projection_preparation',root/'preparation/v1/prepare-candidate.py')
+incident = launch.canonical({'id':'incident.ordinary','body':{'target_repository_id':'repo.ordinary'}})
+record = launch.canonical({'source':{'repository_id':'repo.ordinary','hash_algorithm':'sha1',
+    'commit_id':'a'*40,'tree_id':'b'*40},'candidate':{'commit_id':'c'*40,'tree_id':'d'*40}})
+manifest = launch.canonical({'ordinary':'manifest'})
+evaluation = launch.canonical({'ordinary':'evaluation'})
+observation = launch.canonical({'ordinary':'observation'})
+request = {'body':{'attempt_id':'attempt.ordinary'}}
+names = ('control_policy','control_decision','control_policy_set','evaluator_driver','evaluator_program')
+installed = {name:((name+' ordinary source').encode(),launch.sha((name+' ordinary source').encode()))
+             for name in names}
+anchor = types.SimpleNamespace(config={'environment_id':'environment.ordinary','store_id':'store.ordinary'},
+    registry=('registry-sha',[{'environment_id':'environment.ordinary'}]),installed=installed)
+actual_entropy = []
+urandom = launch.os.urandom
+def observed_entropy(size):
+    value = urandom(size);actual_entropy.append(value);return value
+launch.os.urandom = observed_entropy
+try:
+    actual = launch.make_launch(anchor,request,incident,evaluation,observation,record,manifest,b'instruction')
+    assert len(actual_entropy) == 1 and len(actual_entropy[0]) == 32
+    context = {'environment_id':anchor.config['environment_id'],'store_id':anchor.config['store_id'],
+               'registry':anchor.registry[1]}
+    control = {'context':context,'control':launch.control(anchor,evaluation)}
+    offline = replay._launch_values(root,launch.canonical(request),incident,evaluation,observation,
+                                    record,manifest,b'instruction',control,actual_entropy[0])
+    assert actual == offline
+    changed = bytes([actual_entropy[0][0]^1])+actual_entropy[0][1:]
+    assert replay._launch_values(root,launch.canonical(request),incident,evaluation,observation,
+        record,manifest,b'instruction',control,changed) != actual
+    try:launch.make_launch(anchor,request,b'{}',evaluation,observation,record,manifest,b'instruction')
+    except (KeyError,launch.Refusal):pass
+    else:raise AssertionError('invalid subject')
+    assert len(actual_entropy) == 1
+finally:launch.os.urandom = urandom
+print('ok synthetic actual launch/offline bytes - same control, subject and entropy owners; refusal before entropy')
+
+source_bytes = {'component':b'ordinary component','python':b'ordinary executable','git':b'ordinary git'}
+identities = {'jq':{'sha256':'e'*64},'core':{'sha256':'f'*64}}
+context = types.SimpleNamespace(args=types.SimpleNamespace(input_sha256='1'*64,response_sha256='2'*64),
+    source_observation=[],identities=identities,deadline=1,
+    boundaries={name:types.SimpleNamespace(fd=index) for index,name in enumerate(('component_source','python','git'),1)})
+sources = {1:source_bytes['component'],2:source_bytes['python'],3:source_bytes['git']}
+calls = []
+read_limited,run_child,clean_env = preparation.read_limited,preparation.run_child,preparation.clean_git_env
+def held_read(path,maximum,**kwargs):
+    calls.append(('held-read',kwargs['source_fd']));return sources[kwargs['source_fd']]
+def version_command(ctx,argv,**kwargs):
+    assert argv == [preparation.GIT,'--version'] and kwargs['output_limit'] == 128
+    calls.append(('version',tuple(argv)));return b'git version ordinary\n'
+preparation.read_limited,preparation.run_child,preparation.clean_git_env = held_read,version_command,lambda _:{}
+try:
+    inventory = [{'kind':'file','path':'ordinary.txt','size_bytes':2,'sha256':preparation.sha256(b'{}')}]
+    response = {'stage_result':{'body':{'outcome':{'value':'changed'}}}}
+    details = {'stage_result_sha256':'3'*64,'verified_receipt':{'sha256':'4'*64}}
+    receipt = {'source':{'repository_id':'repo.ordinary','hash_algorithm':'sha1','commit_id':'a'*40,'tree_id':'b'*40},
+        'candidate':{'hash_algorithm':'sha1','commit_id':'c'*40,'tree_id':'d'*40,'parent_commit_id':'a'*40},
+        'attempt':{'attempt_id':'attempt.ordinary','attempt_number':1},'request_ref':{},'resolved_profile_ref':{}}
+    manifest = preparation.canonical(preparation.manifest_for(inventory))
+    actual = preparation.canonical(preparation.make_record(context,{},response,details,receipt,manifest))
+    assert calls[:3] == [('held-read',1),('held-read',2),('held-read',3)] and calls[3][0] == 'version'
+    runtime = {'git_version':b'git version ordinary\n','python_version':sys.version.splitlines()[0],
+               'unicode_version':preparation.unicodedata.unidata_version}
+    offline_manifest,offline,completion = replay._preparation_values(root,inventory,source_bytes,runtime,
+        identities,'1'*64,'2'*64,response,details,receipt,[])
+    assert offline_manifest == manifest and offline == actual
+    assert completion == preparation.completion_envelope(actual,manifest)
+finally:preparation.read_limited,preparation.run_child,preparation.clean_git_env = read_limited,run_child,clean_env
+print('ok synthetic actual preparation/offline manifest, producer, record and completion bytes - held acquisition retained')
+PY_LAUNCH_PREPARATION_VALUES
+
+/usr/bin/python3 -I -S -B - "$root" <<'PY_REST_CAPTURE'
+import errno
+import importlib.util
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+
+root = Path(sys.argv[1])
+def load(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    owner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(owner)
+    return owner
+host = load('capture_process_owner', root/'sandbox/v1/host-supervisor.py')
+driver = load('capture_rest_owner', root/'sandbox/v1/runtime-vfkit.py')
+magic = b'YSTACK_REST_CAPTURE_V1\n'
+
+class Connection:
+    phase = None
+    status = 200
+    body = b'{"state":"VirtualMachineStateStopped"}'
+    calls = []
+    def __init__(self, path):
+        assert path == '/ordinary-not-opened'
+    def request(self, method, target, **kwargs):
+        self.calls.append((method, target, kwargs))
+        if self.phase == 'request':raise OSError(errno.ECONNREFUSED, 'ordinary refusal')
+    def getresponse(self):
+        if self.phase == 'getresponse':raise driver.http.client.HTTPException('ordinary response')
+        return self
+    def read(self, size):
+        assert size == 65537
+        if self.phase == 'read':raise OSError(errno.EIO, 'ordinary read')
+        return self.body
+    def close(self):self.calls.append('closed')
+
+driver.UnixConnection = Connection
+with tempfile.TemporaryDirectory() as directory:
+    os.chmod(directory, 0o700)
+    host._driver_capture_dir = directory
+    def reset():
+        host._capture_process = {'rows':[], 'ordinals':{}, 'bytes':0,
+            'complete':True, 'driver_rest':[]}
+    for phase in (None, 'request', 'getresponse', 'read'):
+        reset()
+        fd = host._open_driver_capture()
+        assert fd is not None and os.fstat(fd).st_nlink == 0
+        assert os.listdir(directory) == []
+        Connection.phase = phase
+        reply = driver.rest('/ordinary-not-opened', 'GET', '/vm/state')
+        raw = os.pread(fd, 132096, len(magic))
+        value = json.loads(raw)
+        assert raw == driver.canonical(value)
+        if phase is None:
+            assert reply == (200, Connection.body)
+            assert value == {'reply':{'status':200, 'body_hex':Connection.body.hex()}, 'error':None}
+        else:
+            assert reply is None and value['reply'] is None
+            assert value['error']['phase'] == phase
+            assert value['error']['category'] == ('HTTPException' if phase == 'getresponse' else 'OSError')
+        assert Connection.calls[-1] == 'closed'
+        os.close(fd)
+    reset()
+    script = Path(directory)/'ordinary-driver'
+    script.write_text('#!/usr/bin/python3\nimport importlib.util,sys\n'
+        's=importlib.util.spec_from_file_location("owner",'+repr(str(root/'sandbox/v1/runtime-vfkit.py'))+')\n'
+        'm=importlib.util.module_from_spec(s);s.loader.exec_module(m)\n'
+        'm._capture_rest({"status":200,"body_hex":"7b7d"},None)\n'
+        'sys.stdout.buffer.write(b"stopped\\n")\n')
+    script.chmod(0o700)
+    result = host.run_driver(str(script), ['state','/ordinary-not-opened'])
+    assert result == (0,b'stopped\n')
+    assert host._capture_process['complete']
+    assert host._capture_process['driver_rest'] == [
+        {'call':0,'operation':'state','reply':{'status':200,'body_hex':'7b7d'},'error':None}]
+    reads = [row for row in host._capture_process['rows'] if row['site']=='run_driver.read']
+    assert b''.join(bytes.fromhex(row['bytes']) for row in reads) == b'stopped\n'
+    assert reads[-1]['return'] == 0
+    script.write_text('#!/usr/bin/python3\nimport sys\nsys.stdout.buffer.write(b"stopped\\n")\n')
+    reset()
+    assert host.run_driver(str(script), ['state','/ordinary-not-opened']) == result
+    assert not host._capture_process['complete'] and not host._capture_process['driver_rest']
+    assert sorted(os.listdir(directory)) == ['ordinary-driver']
+print('ok actual REST owner request/getresponse/read primitives and inherited private capture; missing capture preserves driver result')
+PY_REST_CAPTURE
+
+/usr/bin/python3 -I -S -B - "$root" <<'PY_WRITER_VALUES'
+import importlib.util
+from pathlib import Path
+import sys
+import tempfile
+import types
+root = Path(sys.argv[1])
+def load(name,path):
+    spec=importlib.util.spec_from_file_location(name,path)
+    owner=importlib.util.module_from_spec(spec);sys.modules[name]=owner
+    spec.loader.exec_module(owner);return owner
+writer=load('actual_write_projection_owner',root/'shadow/v1/write-shadow.py')
+replay=load('offline_write_projection_owner',root/'evals/v1/replay-malicious.py')
+def document(kind,identity,body):
+    return writer.canonical({'schema_version':1,'kind':kind,'id':identity,'body':body})
+incident={'schema_version':1,'kind':'shadow_incident','id':'incident.ordinary','body':{
+    'target_repository_id':'repo.ordinary',
+    'git_revision_ref':{'repository_id':'repo.ordinary','hash_algorithm':'sha1','commit_id':'a'*40},
+    'failing_check':{'kind':'file-digest','path':'ordinary.txt','expected_sha256':'b'*64}}}
+frozen={name:document('ordinary_document','ordinary.'+str(i),{}) for i,name in enumerate(writer.NAMES)}
+frozen['incident.json']=writer.canonical(incident)
+frozen['shadow-record.json']=document('shadow_reproduction_record','incident.ordinary',
+    {'environment':{'claim_ref':{'sha256':'c'*64}}})
+files={name:frozen[name] for name in writer.e.EVIDENCE_NAMES}
+files['file-digest-result.json']=document('file_digest_result','result.ordinary',
+    {'outcome':'match','observed':{'sha256':'b'*64}})
+prefix='ystack-evidence/'+incident['id']+'/'
+materialized_files={prefix+name:raw for name,raw in frozen.items()}
+materialized_files[prefix+'eval-seed.json']=document('eval_seed_case','seed.ordinary',{})
+materialized_files[prefix+'README.md']=b'Shadow evidence. Publication is withheld.\n'
+write_set=writer.c.evidence_patch(materialized_files,'sha1')[1]
+request={'id':'attempt.write.ordinary','body':{'scope_id':'scope.ordinary',
+    'allowed_paths':[row['path'] for row in write_set]}}
+input_raw=writer.canonical({'stage_request':{'content':{'body':{
+    'workflow_id':'workflow.shadow-evidence-commit','task_class_id':'task.commit-shadow-evidence'}}}})
+response_raw=writer.canonical({'payloads':[{'data':writer.canonical({
+    'source':incident['body']['git_revision_ref'],
+    'candidate':{'tree_id':'d'*40}}).decode()}],
+    'stage_result':{'schema_version':2,'kind':'stage_result','id':'stage.ordinary',
+        'body':{'outcome':{'value':'changed'}}}})
+evaluation_raw=document('control_evaluation','evaluation.ordinary',{'verdict':'satisfied','reason_ids':[]})
+qualified_raw=document('qualified_identity','qualified.ordinary',{'environment_id':'environment.ordinary'})
+native={key:'e'*64 for key in writer.c.NATIVE_RELEASE_KEYS}
+native.update(binary_path='/ordinary/native',python_path='/ordinary/python',binary_size=123,
+    python_abi='ordinary',loader_mode='ordinary')
+parent={'native_release':native,**{key:'f'*64 for key in writer.c.HASH_KEYS}}
+commands=[{'role':'ordinary','argv_sha256':'a'*64}]
+observation=document('write_observation','observation.ordinary',{})
+trace=document('telemetry_trace_ledger','trace.ordinary',{})
+materialized=types.SimpleNamespace(input_raw=input_raw,response_raw=response_raw,evaluation_raw=evaluation_raw,
+    qualified_identity_raw=qualified_raw,candidate_tree_id='d'*40,write_set=write_set,files=materialized_files)
+with tempfile.TemporaryDirectory() as area:
+    work=Path(area);(work/'observation').mkdir()
+    (work/'observation/write-observation.json').write_bytes(observation)
+    ws=types.SimpleNamespace(request_doc=request,parent=parent,work=work,commands=commands,
+        components={writer.SOURCE/'shadow/v1/write-shadow.py':types.SimpleNamespace(sha256='1'*64)},
+        python=types.SimpleNamespace(sha256='2'*64),jq=types.SimpleNamespace(sha256='3'*64),
+        anchor=types.SimpleNamespace(config={'store_id':'store.ordinary'}))
+    active=writer.e.CancellationSignals.active
+    writer.e.CancellationSignals.active=types.SimpleNamespace(native=types.SimpleNamespace(
+        provenance=lambda context:writer.e._NativeRelease.provenance(None,context)))
+    try:provenance=writer._write_provenance(ws,incident)
+    finally:writer.e.CancellationSignals.active=active
+    publisher,publisher_body=writer._publisher(incident,'d'*40)
+    stage=writer.parse(input_raw)['stage_request']['content']['body']
+    write=writer._write_section_values(frozen['bundle.json'],'scope.ordinary',stage,write_set,
+        publisher,incident['body']['git_revision_ref'],'d'*40)
+    actual_files=dict(files,**{'publisher-body.txt':publisher_body,'consumer-provenance.json':provenance})
+    actual_files['shadow-record.json']=writer._outer_record(ws,materialized,frozen,actual_files,write,provenance,trace)
+    context={'request':request,'record_form':'withheld-write.v1','scope_policy_raw':None,
+        'store_id':'store.ordinary','parent':parent,'consumer_sha256':'1'*64,'python_sha256':'2'*64,
+        'jq_sha256':'3'*64,'native_context':parent,'commands':commands,'observation':observation,'trace':trace}
+    offline,marker,admission=replay._writer_values(root,frozen,files,vars(materialized),context)
+    assert offline==actual_files and marker==writer._bundle_values(actual_files,incident,'withheld-write.v1')
+    assert admission==write['admission']
+    damaged=dict(context);damaged['request']={'id':request['id'],'body':dict(request['body'],allowed_paths=[])}
+    try:replay._writer_values(root,frozen,files,vars(materialized),damaged)
+    except writer.c.Refusal:pass
+    except Exception as error:
+        assert type(error).__name__=='Refusal'
+    else:raise AssertionError('admission paths control missing')
+print('ok synthetic writer caller/offline full provenance, admission, outer record and bundle; native Git/authority route not claimed')
+PY_WRITER_VALUES

@@ -466,6 +466,51 @@ def source_identity(config, accepted_raw, supervisor_sha256, normalizer_sha256):
             "normalizer_sha256": normalizer_sha256, "accepted_source_identity_ref": doc_ref(accepted_raw)}
 
 
+def _source_values(request_raw, configuration_bytes, pages, primitive_values):
+    exact(configuration_bytes, {"host", "config", "accepted", "package", "supervisor", "normalizer"})
+    exact(primitive_values, {"operation", "started_wall", "completed_wall"})
+    import math
+    import time
+    for name in ("started_wall", "completed_wall"):
+        require(type(primitive_values[name]) is float and math.isfinite(primitive_values[name]))
+    operation = primitive_values["operation"]
+    require(operation in {"coverage-read", "kill-register-read"})
+    owner = _KillNormalizer if operation == "kill-register-read" else _CoverageValues
+    host = document(configuration_bytes["host"])["body"]
+    config = owner.source_config(configuration_bytes["config"], host)["body"]
+    owner.package(configuration_bytes["package"], config)
+    supervisor_sha = digest(configuration_bytes["supervisor"])
+    normalizer_sha = digest(configuration_bytes["normalizer"])
+    owner.accepted(configuration_bytes["accepted"], config, supervisor_sha,
+                   digest(configuration_bytes["package"]), config["collector_sha256"], normalizer_sha)
+    source = owner.source_identity(config, configuration_bytes["accepted"], supervisor_sha, normalizer_sha)
+    requested = owner.request(request_raw)
+    body = requested["body"]
+    require(body["source_package_ref"] == doc_ref(configuration_bytes["package"])
+            and body["source_accepted_set_ref"] == doc_ref(configuration_bytes["accepted"]))
+    if operation == "kill-register-read":
+        require(all(body[key] == config[key] for key in ("control_repository", "default_branch", "bootstrap")))
+    raw_manifest, raw_pages = owner.captured(pages, request_raw)
+    observation = owner.normalize(raw_manifest, raw_pages, request_raw)
+    result = {"operation": owner.OPERATION, "version": 1, "store_id": host["store_id"],
+        "attempt_id": requested["id"], "request_sha256": digest(request_raw), "nonce": body["nonce"],
+        "source_identity": source, "query": (owner.query(body, observation)
+            if operation == "kill-register-read" else owner.query(body)),
+        "raw_manifest_sha256": digest(raw_manifest), "observation_sha256": digest(observation),
+        "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(primitive_values["started_wall"])),
+        "completed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(primitive_values["completed_wall"])),
+        "outcome": "complete", "effects": ["read-forge-metadata"]}
+    kind = "forge_coverage_source_receipt"
+    if operation == "kill-register-read":
+        kind = "kill_register_source_receipt"
+        result["call_id"] = result.pop("attempt_id")
+        del result["nonce"]
+        result["effects"] = ["read-forge-metadata", "read-register"]
+    raw_receipt = canonical({"schema_version": 1, "kind": kind, "id": requested["id"], "body": result})
+    owner.receipt(raw_receipt, request_raw, host, source, raw_manifest, observation)
+    return raw_manifest, raw_pages, observation, raw_receipt
+
+
 def receipt(raw, request_raw, config, source, raw_manifest, observation):
     requested = request(request_raw)
     value = document(raw)
@@ -706,6 +751,19 @@ def kill_normalize(raw_manifest, pages, request_raw):
     return raw
 
 
+class _CoverageValues:
+    OPERATION = OPERATION
+    request = staticmethod(request)
+    captured = staticmethod(captured)
+    normalize = staticmethod(normalize)
+    source_config = staticmethod(source_config)
+    package = staticmethod(package)
+    accepted = staticmethod(accepted)
+    source_identity = staticmethod(source_identity)
+    query = staticmethod(query)
+    receipt = staticmethod(receipt)
+
+
 class _KillNormalizer:
     """The second literal operation shares the existing installed source boundary."""
     OPERATION, FAMILIES, QUERIES = KILL_OPERATION, KILL_FAMILIES, KILL_QUERIES
@@ -714,6 +772,7 @@ class _KillNormalizer:
     normalize = staticmethod(kill_normalize)
     doc_ref, digest, require = staticmethod(doc_ref), staticmethod(digest), staticmethod(require)
     source_identity = staticmethod(source_identity)
+    _source_values = staticmethod(_source_values)
 
     @staticmethod
     def captured(records, request_raw):

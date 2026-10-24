@@ -12,7 +12,8 @@ import stat
 import sys
 import time
 
-ENTRY_DEADLINE = time.monotonic() + 300
+_entry_clock = time.monotonic()
+ENTRY_DEADLINE = _entry_clock + 300
 PACKAGE = Path(__file__).absolute().parents[2]
 _spec = importlib.util.spec_from_file_location("gate_evidence_reader", PACKAGE / "scope/v1/read-shadow-evidence.py")
 if _spec is None or _spec.loader is None:
@@ -21,6 +22,7 @@ r = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = r
 _spec.loader.exec_module(r)
 c = r.c
+c._clock_value('scope/v1/generate-gate-evidence.py:15:0', _entry_clock, 'monotonic')
 require, parse, ref = r.require, r.parse, r.ref
 
 
@@ -82,6 +84,40 @@ def _normalizer():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _scope_values(basis, duty, risk, kill):
+    scope = json.loads(c.canonical(basis))
+    scope["body"]["gate_evidence_refs"] = {"duty_separation_evaluation_ref": ref(duty),
+        "risk_gate_evaluation_ref": ref(risk), "kill_switch_evaluation_ref": ref(kill)}
+    require(c.canonical({**scope, "body": {key: value for key, value in scope["body"].items() if key != "gate_evidence_refs"}})
+            == c.canonical(basis))
+    return c.canonical(scope)
+
+
+def _origins_values(observations):
+    rows = {}
+    for observation, snapshots in observations:
+        rows[c.digest(observation)] = {"observation": parse(observation),
+            "receipt_sha256": c.digest(snapshots["receipt.json"]),
+            "payload": [{"name": name, "size_bytes": len(raw), "sha256": c.digest(raw)}
+                for name, raw in sorted(snapshots.items()) if name not in {"receipt.json", "capture.json"}]}
+    return [rows[key] for key in sorted(rows)]
+
+
+def _manifest_values(identity, rows, initial_origins, final_origins, kill_request_raw, coverage_request_raw):
+    manifest = c.canonical(envelope("scope_gate_generation_manifest", identity,
+        {"activation_state": "inactive", "authority": "none", "enabled": False, "files": rows,
+         "initial_origin_refs": initial_origins, "final_origin_refs": final_origins,
+         "source_initial_origin_refs": {"kill": parse(kill_request_raw)["body"]["initial_origin_refs"],
+             "coverage": parse(coverage_request_raw)["body"]["initial_origin_refs"] if coverage_request_raw else []}}))
+    require(len(manifest) <= c.DOCUMENT_LIMIT, "E_LIMIT")
+    return manifest
+
+
+def _completion_values(identity, manifest):
+    return c.canonical(envelope("scope_gate_generation_complete", identity,
+        {"manifest_sha256": c.digest(manifest), "activation_state": "inactive", "authority": "none", "enabled": False}))
 
 
 def _stable_binding(binding):
@@ -356,7 +392,7 @@ class _Generator:
         return held
 
     def check(self):
-        require(self.active and time.monotonic() < self.deadline, "E_RUNTIME")
+        require(self.active and c._clock_value('scope/v1/generate-gate-evidence.py:359:0',time.monotonic(),'monotonic') < self.deadline, "E_RUNTIME")
         for held in self.held:
             held.recheck("E_STALE")
             path = Path(held.held.path if isinstance(held, c._HeldBytes) else held.path)
@@ -396,13 +432,8 @@ class _Generator:
                 and ref(tuples[0][1]) == self.basis["body"]["qualified_identity"]["resolved_profile_ref"])
 
     def observations(self):
-        rows = {}
-        for item, _key, _binding in self.session.local.values():
-            rows[c.digest(item.observation)] = {"observation": parse(item.observation),
-                "receipt_sha256": c.digest(item.snapshots["receipt.json"]),
-                "payload": [{"name": name, "size_bytes": len(raw), "sha256": c.digest(raw)}
-                    for name, raw in sorted(item.snapshots.items()) if name != "receipt.json"]}
-        return [rows[key] for key in sorted(rows)]
+        return _origins_values([(item.observation, item.snapshots)
+            for item, _key, _binding in self.session.local.values()])
 
     def kill_source(self):
         reader, session = self.reader, self.session
@@ -417,7 +448,9 @@ class _Generator:
             for held in (reader.python, reader.bash, reader.git_binary, reader.jq)], "files": [
             {"path": name, "sha256": held.sha256} for name, held in sorted(reader.package_sources.items())]}))
         self.put("runtime", runtime)
-        nonce = os.urandom(32).hex()
+        entropy = os.urandom(32)
+        reader.anchor.retain_entropy("kill", entropy)
+        nonce = entropy.hex()
         call_id = "kill-register." + nonce
         config = configuration.config
         require(config["control_repository"]["repository_id"] != self.basis["body"]["target_repository_id"])
@@ -484,12 +517,7 @@ class _Generator:
         killed = parse(kill)["body"]
         require(killed["state_ref"] == ref(state) and killed["attempt_ref"] == ref(attempt)
                 and killed["duty_evaluation_ref"] == ref(duty))
-        scope = json.loads(c.canonical(self.basis))
-        scope["body"]["gate_evidence_refs"] = {"duty_separation_evaluation_ref": ref(duty),
-            "risk_gate_evaluation_ref": ref(risk), "kill_switch_evaluation_ref": ref(kill)}
-        self.put("scope", c.canonical(scope))
-        require(c.canonical({**scope, "body": {key: value for key, value in scope["body"].items() if key != "gate_evidence_refs"}})
-                == c.canonical(self.basis))
+        self.put("scope", _scope_values(self.basis, duty, risk, kill))
         for name in ("duty", "risk", "state", "attempt", "kill", "scope"):
             self.reader.hold(self.outputs[name], c.DOCUMENT_LIMIT)
         self.session.start_scope()
@@ -503,12 +531,14 @@ class _Generator:
         self.put("commands", c.canonical(envelope("gate_driver_commands", self.request["id"], {"commands": self.reader.commands, "argv": self.reader.gate_commands})))
         for name, source in (("kill-evidence", self.session.kill_source), ("coverage-evidence", self.session.coverage_source)):
             if source is not None:
+                source_files = sorted((filename, raw) for filename, raw in source.snapshots.items()
+                                      if filename != "capture.json")
                 rows = [{"name": filename, "output": str((self.output / "objects" / name / f"raw-{index:04d}/value.raw").relative_to(self.output)),
                          "size_bytes": len(raw), "sha256": c.digest(raw)}
-                        for index, (filename, raw) in enumerate(sorted(source.snapshots.items()))]
+                        for index, (filename, raw) in enumerate(source_files)]
                 self.put(name, c.canonical(envelope("gate_source_evidence", self.request["id"],
                     {"origin_ref": ref(source.observation), "files": rows})))
-                for row, (_filename, raw) in zip(rows, sorted(source.snapshots.items())):
+                for row, (_filename, raw) in zip(rows, source_files):
                     path = self.output / row["output"]
                     written = r.write_exclusive(path, raw, resolver=self.reader.darwin)
                     self.hold_written(path, raw, written)
@@ -519,24 +549,20 @@ class _Generator:
             if path.is_file():
                 raw = path.read_bytes()
                 rows.append({"name": str(path.relative_to(self.output)), "size_bytes": len(raw), "sha256": c.digest(raw)})
-        manifest = c.canonical(envelope("scope_gate_generation_manifest", self.request["id"], {"activation_state": "inactive", "authority": "none",
-            "enabled": False, "files": rows, "initial_origin_refs": self.session.initial_origin_refs, "final_origin_refs": self.session.final_origins,
-            "source_initial_origin_refs": {"kill": parse(self.session.kill_request_raw)["body"]["initial_origin_refs"],
-                "coverage": parse(self.session.coverage_request_raw)["body"]["initial_origin_refs"] if self.session.coverage_request_raw else []}}))
-        require(len(manifest) <= c.DOCUMENT_LIMIT, "E_LIMIT")
+        manifest = _manifest_values(self.request["id"], rows, self.session.initial_origin_refs,
+            self.session.final_origins, self.session.kill_request_raw, self.session.coverage_request_raw)
         written = r.write_exclusive(self.output / "manifests/manifest.json", manifest, resolver=self.reader.darwin)
         self.hold_written(self.output / "manifests/manifest.json", manifest, written)
         self.check()
         self.sync_directories()
         self.check()
         self.session.complete()
-        r.write_exclusive(self.output / "completion/COMPLETE.json", c.canonical(envelope("scope_gate_generation_complete", self.request["id"],
-            {"manifest_sha256": c.digest(manifest), "activation_state": "inactive", "authority": "none", "enabled": False})), resolver=self.reader.darwin)
+        r.write_exclusive(self.output / "completion/COMPLETE.json", _completion_values(self.request["id"], manifest), resolver=self.reader.darwin)
 
     def sync_directories(self):
         # Child directory links must be durable before COMPLETE can name the package.
         for folder, directories, _files in os.walk(self.output, topdown=False, followlinks=False):
-            require(time.monotonic() <= self.deadline, "E_RUNTIME")
+            require(c._clock_value('scope/v1/generate-gate-evidence.py:539:0',time.monotonic(),'monotonic') <= self.deadline, "E_RUNTIME")
             path = Path(folder)
             require(not path.is_symlink() and all(not (path / name).is_symlink() for name in directories), "E_STALE")
             fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
@@ -590,7 +616,7 @@ def main(arguments):
         generator.__init__(arguments)
         generator.run()
         generator.close()
-        require(time.monotonic() <= generator.deadline, "E_RUNTIME")
+        require(c._clock_value('scope/v1/generate-gate-evidence.py:593:0',time.monotonic(),'monotonic') <= generator.deadline, "E_RUNTIME")
     except BaseException:
         if generator is not None:
             try:

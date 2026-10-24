@@ -9,6 +9,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 
 struct ys_sha256_ctx {
     uint32_t state[8];
@@ -207,6 +208,11 @@ void ys_exec(const char *const *argv, const char *const *envp, int instruction_f
  * not what it claims to be. `names_out[i]` (malloc'd, caller frees each and
  * the array) receives the i-th file's name in that order. */
 enum ys_plan_status ys_evidence_inventory(int dirfd, char ***names_out, size_t *count_out);
+typedef void (*ys_evidence_observer)(const char *name, int result, int error_number,
+                                      const struct stat *st, void *context);
+enum ys_plan_status ys_evidence_inventory_observed(int dirfd, char ***names_out,
+                                                    size_t *count_out,
+                                                    ys_evidence_observer observer, void *context);
 
 #ifdef YSTACK_TEST_FAULT_INJECT
 /* Test-only hook, compiled only when this translation unit is built with

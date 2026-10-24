@@ -480,6 +480,22 @@ class _DarwinGroupReader(c._DarwinGroupReader):
             raise Refusal(exc.code) from exc
 
 
+def _native_provenance_values(context: dict) -> dict:
+    native = context["native_release"]
+    return {"context_version": 2,
+        "source_sha256": native["source_sha256"],
+        "build_script_sha256": native["build_script_sha256"],
+        "build_record_sha256": native["build_record_sha256"],
+        "binary_locator_sha256": sha(native["binary_path"].encode()),
+        "binary_size": native["binary_size"],
+        "binary_sha256": native["binary_sha256"],
+        "python_locator_sha256": sha(native["python_path"].encode()),
+        "python_sha256": native["python_sha256"],
+        "python_abi": native["python_abi"],
+        "dependency_record_sha256": native["dependency_record_sha256"],
+        "loader_mode": native["loader_mode"]}
+
+
 class _NativeRelease:
     _BUILD_KEYS = {"platform", "architecture", "source_sha256", "build_script_sha256",
         "compiler_path", "compiler_sha256", "compiler_version_sha256", "argv",
@@ -604,19 +620,7 @@ class _NativeRelease:
             self.compiler.recheck("E_DEPENDENCY")
 
     def provenance(self, context: dict) -> dict:
-        native = context["native_release"]
-        return {"context_version": 2,
-            "source_sha256": native["source_sha256"],
-            "build_script_sha256": native["build_script_sha256"],
-            "build_record_sha256": native["build_record_sha256"],
-            "binary_locator_sha256": sha(native["binary_path"].encode()),
-            "binary_size": native["binary_size"],
-            "binary_sha256": native["binary_sha256"],
-            "python_locator_sha256": sha(native["python_path"].encode()),
-            "python_sha256": native["python_sha256"],
-            "python_abi": native["python_abi"],
-            "dependency_record_sha256": native["dependency_record_sha256"],
-            "loader_mode": native["loader_mode"]}
+        return _native_provenance_values(context)
 
     def close(self) -> None:
         failure = None
@@ -762,8 +766,8 @@ def run_bounded(role: str, argv: list[str], *, stdin: bytes = b"", timeout: int 
                 deadline: float | None = None) -> bytes:
     require(all(isinstance(item, str) and item for item in argv), "E_RUNTIME")
     if deadline is not None:
-        require(deadline > time.monotonic(), "E_RUNTIME")
-    remaining = timeout if deadline is None else min(timeout, deadline - time.monotonic())
+        require(deadline > c._clock_value('shadow/v1/enforced-reproduction.py:765:0',time.monotonic(),'monotonic'), "E_RUNTIME")
+    remaining = timeout if deadline is None else min(timeout, deadline - c._clock_value('shadow/v1/enforced-reproduction.py:766:0',time.monotonic(),'monotonic'))
     try:
         child, stdout, stderr = spawn_bounded(role, argv, stdin, output_limit, STDERR_LIMIT,
                                                remaining, env)
@@ -775,30 +779,30 @@ def run_bounded(role: str, argv: list[str], *, stdin: bytes = b"", timeout: int 
 
 
 def _stop_child(child: subprocess.Popen) -> None:
-    end = time.monotonic() + 10
+    end = c._clock_value('shadow/v1/enforced-reproduction.py:778:0',time.monotonic(),'monotonic') + 10
     for sent in (signal.SIGTERM, signal.SIGKILL):
         try:
             os.killpg(child.pid, sent)
         except ProcessLookupError:
             pass
-        boundary = end if sent == signal.SIGKILL else min(end, time.monotonic() + 5)
-        while time.monotonic() < boundary:
+        boundary = end if sent == signal.SIGKILL else min(end, c._clock_value('shadow/v1/enforced-reproduction.py:784:0',time.monotonic(),'monotonic') + 5)
+        while c._clock_value('shadow/v1/enforced-reproduction.py:785:0',time.monotonic(),'monotonic') < boundary:
             child.poll()
             try:
                 os.killpg(child.pid, 0)
             except ProcessLookupError:
                 if child.poll() is None:
-                    child.wait(timeout=max(0.001, end - time.monotonic()))
+                    child.wait(timeout=max(0.001, end - c._clock_value('shadow/v1/enforced-reproduction.py:791:0',time.monotonic(),'monotonic')))
                 return
             except PermissionError:
-                time.sleep(max(0, min(0.02, boundary - time.monotonic())))
+                time.sleep(max(0, min(0.02, boundary - c._clock_value('shadow/v1/enforced-reproduction.py:794:0',time.monotonic(),'monotonic'))))
                 continue
-            time.sleep(max(0, min(0.02, boundary - time.monotonic())))
+            time.sleep(max(0, min(0.02, boundary - c._clock_value('shadow/v1/enforced-reproduction.py:796:0',time.monotonic(),'monotonic'))))
     try:
         os.killpg(child.pid, 0)
     except ProcessLookupError:
         if child.poll() is None:
-            child.wait(timeout=max(0.001, end - time.monotonic()))
+            child.wait(timeout=max(0.001, end - c._clock_value('shadow/v1/enforced-reproduction.py:801:0',time.monotonic(),'monotonic')))
         return
     raise Refusal("E_RUNTIME")
 
@@ -919,15 +923,15 @@ def _native_child_cleanup(native: object, deadline: float) -> None:
         nonlocal observation_failed
         status = snapshot()
         while (not observation_failed and "observe_child_exit" in _native_child_pending(status)
-               and time.monotonic() < end):
+               and c._clock_value('shadow/v1/enforced-reproduction.py:922:0',time.monotonic(),'monotonic') < end):
             returned = attempt(native.observe_child_exit)
             status = snapshot()
             if not returned:
                 observation_failed = True
                 break
             if not status[11]:
-                time.sleep(min(0.02, max(0, end - time.monotonic())))
-    observe_until(min(deadline, time.monotonic() + 5))
+                time.sleep(min(0.02, max(0, end - c._clock_value('shadow/v1/enforced-reproduction.py:929:0',time.monotonic(),'monotonic'))))
+    observe_until(min(deadline, c._clock_value('shadow/v1/enforced-reproduction.py:930:0',time.monotonic(),'monotonic') + 5))
     status = snapshot()
     if "kill_child_group" in _native_child_pending(status):
         attempt(native.kill_child_group)
@@ -937,13 +941,13 @@ def _native_child_cleanup(native: object, deadline: float) -> None:
         attempt(native.reap_child)
     status = snapshot()
     while ("check_child_group" in _native_child_pending(status)
-           and time.monotonic() < deadline):
+           and c._clock_value('shadow/v1/enforced-reproduction.py:940:0',time.monotonic(),'monotonic') < deadline):
         returned = attempt(native.check_child_group)
         status = snapshot()
         if not returned:
             break
         if not status[18]:
-            time.sleep(min(0.02, max(0, deadline - time.monotonic())))
+            time.sleep(min(0.02, max(0, deadline - c._clock_value('shadow/v1/enforced-reproduction.py:946:0',time.monotonic(),'monotonic'))))
     if first is not None:
         raise first
     require(status[17] == status[18] == status[19] == status[24] == 1
@@ -961,7 +965,7 @@ def _communicate_native(native: object, input_raw: bytes, stdout_limit: int,
     closes = {stdin_fd: native.close_child_stdin, stdout_fd: native.close_child_stdout,
               stderr_fd: native.close_child_stderr}
     closed: set[int] = set()
-    end = time.monotonic() + timeout
+    end = c._clock_value('shadow/v1/enforced-reproduction.py:964:0',time.monotonic(),'monotonic') + timeout
     def close_fd(fd: int) -> None:
         if fd not in closed:
             try:
@@ -983,7 +987,7 @@ def _communicate_native(native: object, input_raw: bytes, stdout_limit: int,
         sent = 0
         while selector.get_map():
             CancellationSignals.checkpoint()
-            remaining = end - time.monotonic()
+            remaining = end - c._clock_value('shadow/v1/enforced-reproduction.py:986:0',time.monotonic(),'monotonic')
             require(remaining > 0, "E_RUNTIME")
             for key, mask in selector.select(min(remaining, 0.1)):
                 fd = key.fd
@@ -1009,11 +1013,11 @@ def _communicate_native(native: object, input_raw: bytes, stdout_limit: int,
         CancellationSignals.checkpoint()
         status = _native_child_status(native)
         while not status[11]:
-            require(time.monotonic() < end, "E_RUNTIME")
+            require(c._clock_value('shadow/v1/enforced-reproduction.py:1012:0',time.monotonic(),'monotonic') < end, "E_RUNTIME")
             native.observe_child_exit()
             status = _native_child_status(native)
             if not status[11]:
-                time.sleep(min(0.02, max(0, end - time.monotonic())))
+                time.sleep(min(0.02, max(0, end - c._clock_value('shadow/v1/enforced-reproduction.py:1016:0',time.monotonic(),'monotonic'))))
             CancellationSignals.checkpoint()
         returncode = _native_returncode(status)
         normal = (returncode == 0 and status[6:9] == (1, 0, 0)
@@ -1068,10 +1072,10 @@ def spawn_bounded(role: str, argv: list[str], input_raw: bytes, stdout_limit: in
                 status = _native_child_status(native)
             except MemoryError:
                 if attempted:
-                    _native_child_cleanup(native, time.monotonic() + 10)
+                    _native_child_cleanup(native, c._clock_value('shadow/v1/enforced-reproduction.py:1071:0',time.monotonic(),'monotonic') + 10)
                 raise
             if attempted and status[0] == 3 and _native_child_pending(status):
-                _native_child_cleanup(native, time.monotonic() + 10)
+                _native_child_cleanup(native, c._clock_value('shadow/v1/enforced-reproduction.py:1074:0',time.monotonic(),'monotonic') + 10)
         except BaseException as cleanup_exc:
             raise exc from cleanup_exc
         raise
@@ -1115,10 +1119,10 @@ def communicate_bounded(child: subprocess.Popen, input_raw: bytes, stdout_limit:
             selector.register(child.stdin, selectors.EVENT_WRITE)
         else:
             child.stdin.close()
-        sent = 0; end = time.monotonic() + timeout
+        sent = 0; end = c._clock_value('shadow/v1/enforced-reproduction.py:1118:0',time.monotonic(),'monotonic') + timeout
         while selector.get_map():
             CancellationSignals.checkpoint()
-            remaining = end - time.monotonic()
+            remaining = end - c._clock_value('shadow/v1/enforced-reproduction.py:1121:0',time.monotonic(),'monotonic')
             if remaining <= 0:
                 raise Refusal("E_RUNTIME")
             ready = selector.select(min(remaining, 0.1))
@@ -1164,7 +1168,7 @@ def communicate_bounded(child: subprocess.Popen, input_raw: bytes, stdout_limit:
                     bucket.extend(chunk)
         CancellationSignals.checkpoint()
         try:
-            child.wait(timeout=max(0.001, end - time.monotonic()))
+            child.wait(timeout=max(0.001, end - c._clock_value('shadow/v1/enforced-reproduction.py:1167:0',time.monotonic(),'monotonic')))
         except subprocess.TimeoutExpired:
             raise Refusal("E_RUNTIME") from None
         CancellationSignals.checkpoint()
@@ -1353,8 +1357,13 @@ def frame_write(records: Iterable[tuple[bytes, bytes]]) -> bytes:
 def control(anchor: c.Anchor, evaluation_raw: bytes) -> dict:
     names = ("control_policy", "control_decision", "control_policy_set",
              "evaluator_driver", "evaluator_program")
-    return {name.removeprefix("control_") + "_sha256": anchor.installed[name][1]
-            for name in names} | {"sandbox_evaluation_sha256": sha(evaluation_raw)}
+    return _control_values({name: anchor.installed[name][0] for name in names}, evaluation_raw)
+
+
+def _control_values(files, evaluation_raw):
+    names = ("control_policy", "control_decision", "control_policy_set", "evaluator_driver", "evaluator_program")
+    return {name.removeprefix("control_") + "_sha256": sha(files[name]) for name in names} | {
+        "sandbox_evaluation_sha256": sha(evaluation_raw)}
 
 
 def document_ref(raw: bytes) -> dict:
@@ -1451,20 +1460,43 @@ def require_no_change(response_raw: bytes, incident: dict) -> dict:
 def make_launch(anchor: c.Anchor, request: dict, incident_raw: bytes, evaluation_raw: bytes,
                 observation_raw: bytes, record_raw: bytes, manifest_raw: bytes,
                 instruction: bytes) -> tuple[bytes, bytes]:
+    context = {"environment_id": anchor.config["environment_id"], "store_id": anchor.config["store_id"],
+               "registry": anchor.registry[1]}
+    _launch_subject_values(context, incident_raw, record_raw, manifest_raw)
+    _attempt_id = request["body"]["attempt_id"]
+    controls = control(anchor, evaluation_raw)
+    control_values = {"context": context, "control": controls}
+    entropy = os.urandom(32)
+    if hasattr(anchor, "retain_entropy"):
+        role = {"shadow_write_request": "write", "shadow_enforced_request": "reproduction"}.get(request.get("kind"))
+        if role is not None:
+            anchor.retain_entropy(role, entropy)
+    return _launch_values(canonical(request), incident_raw, evaluation_raw, observation_raw,
+                          record_raw, manifest_raw, instruction, control_values, entropy)
+
+
+def _launch_subject_values(context, incident_raw, record_raw, manifest_raw):
     incident = parse(incident_raw); prep = parse(record_raw)
-    selected = [row for row in anchor.registry[1]
-                if row["environment_id"] == anchor.config["environment_id"]]
+    selected = [row for row in context["registry"] if row["environment_id"] == context["environment_id"]]
     require(len(selected) == 1, "E_RELATION")
     source, candidate = prep["source"], prep["candidate"]
-    subject = {"environment_id": anchor.config["environment_id"],
+    return {"environment_id": context["environment_id"],
         "environment_entry_sha256": sha(canonical(selected[0])),
         "target_repository_id": incident["body"]["target_repository_id"],
         "source": source, "candidate": {"preparation_record_sha256": sha(record_raw),
             "manifest_sha256": sha(manifest_raw), "commit_id": candidate["commit_id"],
             "tree_id": candidate["tree_id"]}, "incident_sha256": sha(incident_raw)}
+
+
+def _launch_values(request_raw, incident_raw, evaluation_raw, observation_raw, record_raw, manifest_raw,
+                    instruction, control_values, entropy):
+    require(type(entropy) is bytes and len(entropy) == 32, "E_RELATION")
+    request = parse(request_raw)
+    context = control_values["context"]
+    subject = _launch_subject_values(context, incident_raw, record_raw, manifest_raw)
     body = {"attempt": {"attempt_id": request["body"]["attempt_id"], "attempt_number": 1},
-        "control": control(anchor, evaluation_raw), "instruction_sha256": sha(instruction),
-        "nonce": os.urandom(32).hex(), "store_id": anchor.config["store_id"], "subject": subject}
+        "control": control_values["control"], "instruction_sha256": sha(instruction),
+        "nonce": entropy.hex(), "store_id": context["store_id"], "subject": subject}
     launch = canonical({"schema_version": 1, "kind": "sandbox_launch_request",
                         "id": request["body"]["attempt_id"], "body": body})
     expectation_body = {"attempt": body["attempt"] | {"launch_request_sha256": sha(launch)},
@@ -1479,8 +1511,8 @@ def _native_launch(anchor: c.Anchor, frame: bytes, deadline: float) -> int:
     argv = ["/usr/bin/sudo", "-n", "-u", f"#{anchor.config['principal_uid']}", "--",
             sys.executable, str(Path(c.ANCHOR) / "host-supervisor.py"), "launch"]
     env = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"}
-    require(deadline > time.monotonic(), "E_RUNTIME")
-    remaining = min(180, deadline - time.monotonic())
+    require(deadline > c._clock_value('shadow/v1/enforced-reproduction.py:1482:0',time.monotonic(),'monotonic'), "E_RUNTIME")
+    remaining = min(180, deadline - c._clock_value('shadow/v1/enforced-reproduction.py:1483:0',time.monotonic(),'monotonic'))
     try:
         child, stdout, stderr = spawn_bounded("sandbox-launch-boundary", argv, frame, 0,
                                               STDERR_LIMIT, remaining, env)
@@ -1614,7 +1646,7 @@ def seal(output: Path, held_output: StableDirectory, files: dict[str, bytes],
 
 
 def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None = None) -> bytes:
-    started = time.monotonic(); deadline = started + OVERALL_SECONDS
+    started = c._clock_value('shadow/v1/enforced-reproduction.py:1617:0',time.monotonic(),'monotonic'); deadline = started + OVERALL_SECONDS
     context = c.capture_parent_context() if parent is None else parent
     work_hold = output_hold = None
     helper = jq = anchor = bash = python_file = sudo_file = None

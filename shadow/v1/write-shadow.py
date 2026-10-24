@@ -51,7 +51,7 @@ class _Workspace:
         self.inputs = []
         self.components = {}
         self.commands = []
-        self.deadline = time.monotonic() + e.OVERALL_SECONDS
+        self.deadline = c._clock_value('shadow/v1/write-shadow.py:54:0',time.monotonic(),'monotonic') + e.OVERALL_SECONDS
         self.work, self.output, self.parent = work, output, parent
         try:
             self.request = self.hold(request, e.REQUEST_LIMIT)
@@ -371,7 +371,8 @@ def _authenticated_frozen(ws, files, incident):
     mapping = {"receipt.json": "sandbox-receipt.json", "payload/stdout": "payload-stdout.txt",
         "payload/stderr": "payload-stderr.txt", "payload/evidence-manifest.json": "evidence-manifest.json",
         "payload/evidence/0000": "file-digest-result.json"}
-    require(set(snapshots) == set(mapping) and all(snapshots[key] == files[name] for key, name in mapping.items()), "E_RELATION")
+    require(set(snapshots) - {"capture.json"} == set(mapping)
+            and all(snapshots[key] == files[name] for key, name in mapping.items()), "E_RELATION")
     check = ws.component("sandbox-receipt-check", "enforcement/v1/check-sandbox-receipt.sh",
         ["check-bound", str(ws.work / "frozen/sandbox-receipt.json"), str(ws.work / "frozen/sandbox-expectation.json"),
          str(ws.work / "frozen/sandbox-evaluation.json"), str(observation_path)])
@@ -724,48 +725,64 @@ def _write_provenance(ws, incident):
     native = e.CancellationSignals.active.native
     instruction = e.make_instruction(incident)
     observation = (ws.work / "observation/write-observation.json").read_bytes()
-    return canonical({"schema_version": 1, "kind": "shadow_consumer_provenance", "id": ws.request_doc["id"],
+    return _write_provenance_values(ws.request_doc["id"], instruction, observation, ws.parent,
+        ws.components[SOURCE / "shadow/v1/write-shadow.py"].sha256, ws.python.sha256, ws.jq.sha256,
+        native.provenance(ws.parent), ws.commands)
+
+
+def _write_provenance_values(identity, instruction, observation, parent, consumer_sha256,
+                             python_sha256, jq_sha256, native_release, commands):
+    return canonical({"schema_version": 1, "kind": "shadow_consumer_provenance", "id": identity,
         "body": {"activation_state": "inactive", "authority": "none", "instruction_utf8": instruction.decode(),
             "instruction_sha256": sha(instruction), "observation": parse(observation), "observation_sha256": sha(observation),
-            "helper_source_sha256": ws.parent["helper_source_sha256"], "helper_build_record_sha256": ws.parent["helper_build_record_sha256"],
-            "helper_executable_sha256": ws.parent["helper_executable_sha256"],
-            "consumer_source_sha256": ws.components[SOURCE / "shadow/v1/write-shadow.py"].sha256,
-            "python_sha256": ws.python.sha256, "jq_sha256": ws.jq.sha256,
-            "native_release": native.provenance(ws.parent), "commands": ws.commands}})
+            "helper_source_sha256": parent["helper_source_sha256"], "helper_build_record_sha256": parent["helper_build_record_sha256"],
+            "helper_executable_sha256": parent["helper_executable_sha256"],
+            "consumer_source_sha256": consumer_sha256,
+            "python_sha256": python_sha256, "jq_sha256": jq_sha256,
+            "native_release": native_release, "commands": commands}})
 
 
-def _admit(ws, materialized, frozen, files, write):
+def _admission_values(request_doc, record_form, input_raw, candidate_tree_id, write_set,
+                      materialized_files, frozen, files, write, scope_policy_raw):
     incident = parse(frozen["incident.json"])
     revision = incident["body"]["git_revision_ref"]
     require(set(write) == {"bundle_ref", "scope_id", "workflow_id", "task_class", "write_set",
         "publisher_request", "admission", "publication", "post_write_verification"}, "E_RELATION")
-    generated = parse(materialized.input_raw, 8 * e.OUTPUT_LIMIT)
+    generated = parse(input_raw, 8 * e.OUTPUT_LIMIT)
     stage = generated["stage_request"]["content"]["body"]
-    request, body = _publisher(incident, materialized.candidate_tree_id)
-    write_set = materialized.write_set
+    request, body = _publisher(incident, candidate_tree_id)
     require(canonical(write["bundle_ref"]) == canonical(_bundle_ref(frozen["bundle.json"]))
-        and write["scope_id"] == ws.request_doc["body"]["scope_id"]
+        and write["scope_id"] == request_doc["body"]["scope_id"]
         and write["workflow_id"] == stage["workflow_id"] == "workflow.shadow-evidence-commit"
         and write["task_class"] == stage["task_class_id"] == "task.commit-shadow-evidence"
         and canonical(write["write_set"]) == canonical(write_set)
-        and canonical(write_set) == canonical(c.evidence_patch(materialized.files, revision["hash_algorithm"], ws.record_form)[1])
-        and [row["path"] for row in write_set] == ws.request_doc["body"]["allowed_paths"]
+        and canonical(write_set) == canonical(c.evidence_patch(materialized_files, revision["hash_algorithm"], record_form)[1])
+        and [row["path"] for row in write_set] == request_doc["body"]["allowed_paths"]
         and canonical(write["publisher_request"]) == canonical(request) and files["publisher-body.txt"] == body
         and request["body"]["body_sha256"] == sha(files["publisher-body.txt"])
         and canonical(write["publication"]) == canonical({"state": "withheld", "reason_id": "shadow.write-not-published"})
         and canonical(write["post_write_verification"]) == canonical({"target_revision": revision,
-            "candidate_tree_id": materialized.candidate_tree_id, "write_set": write_set}), "E_RELATION")
+            "candidate_tree_id": candidate_tree_id, "write_set": write_set}), "E_RELATION")
     expected = {"state": "checked", "effect": "none", "request_sha256": sha(canonical(request)),
         "write_set_sha256": sha(canonical(write_set))}
     require(canonical(write["admission"]) == canonical(expected), "E_RELATION")
     prefix = "ystack-evidence/" + incident["id"] + "/"
-    require(all(materialized.files[prefix + name] == raw for name, raw in frozen.items()), "E_RELATION")
+    require(all(materialized_files[prefix + name] == raw for name, raw in frozen.items()), "E_RELATION")
     require(set(files) == set(e.EVIDENCE_NAMES) | {"publisher-body.txt"}
-            | ({"scope-policy.json"} if ws.record_form == "withheld-write-policy.v1" else set()), "E_RELATION")
-    if ws.record_form == "withheld-write-policy.v1":
-        raw = ws.components[SOURCE / "scope/v1/scope-policy.json"].raw
-        require(files["scope-policy.json"] == materialized.files[prefix + "scope-policy.json"] == raw, "E_RELATION")
+            | ({"scope-policy.json"} if record_form == "withheld-write-policy.v1" else set()), "E_RELATION")
+    if record_form == "withheld-write-policy.v1":
+        raw = scope_policy_raw
+        require(files["scope-policy.json"] == materialized_files[prefix + "scope-policy.json"] == raw, "E_RELATION")
         c.scope_policy_ref(raw)
+    return expected, incident, revision
+
+
+def _admit(ws, materialized, frozen, files, write):
+    policy = (ws.components[SOURCE / "scope/v1/scope-policy.json"].raw
+              if ws.record_form == "withheld-write-policy.v1" else None)
+    expected, incident, revision = _admission_values(ws.request_doc, ws.record_form,
+        materialized.input_raw, materialized.candidate_tree_id, materialized.write_set,
+        materialized.files, frozen, files, write, policy)
     retained = {"claim.json": (ws.work / "captured/claim.json").read_bytes(),
         "duty-evaluation.json": (ws.work / "captured/duty_evaluation.json").read_bytes(),
         "materialization-input.json": materialized.input_raw,
@@ -792,18 +809,25 @@ def _admit(ws, materialized, frozen, files, write):
 
 
 def _outer_record(ws, materialized, frozen, files, write, provenance, trace, record_form="withheld-write.v1"):
+    return _outer_record_values(ws.anchor.config["store_id"], materialized.response_raw,
+        materialized.evaluation_raw, materialized.qualified_identity_raw,
+        frozen, files, write, provenance, trace, record_form)
+
+
+def _outer_record_values(store_id, response_raw, evaluation_raw, qualified_identity_raw,
+                         frozen, files, write, provenance, trace, record_form="withheld-write.v1"):
     incident = parse(frozen["incident.json"])
     body = parse(frozen["shadow-record.json"])["body"]
-    response = parse(materialized.response_raw)
+    response = parse(response_raw)
     receipt = parse(response["payloads"][0]["data"].encode())
     stage = response["stage_result"]
-    evaluation = parse(materialized.evaluation_raw)
+    evaluation = parse(evaluation_raw)
     result = parse(files["file-digest-result.json"])["body"]
     outcome = "no-change" if result["outcome"] == "match" else "reproduced"
     require(record_form in {"withheld-write.v1", "withheld-write-policy.v1"}, "E_RELATION")
-    body.update(record_form=record_form, qualified_identity=parse(materialized.qualified_identity_raw)["body"],
+    body.update(record_form=record_form, qualified_identity=parse(qualified_identity_raw)["body"],
         qualified_identity_ref={"content_id": "shadow-qualified-identity",
-            "media_type": "application/vnd.ystack.qualified-identity+json", "sha256": sha(materialized.qualified_identity_raw)},
+            "media_type": "application/vnd.ystack.qualified-identity+json", "sha256": sha(qualified_identity_raw)},
         outcome=outcome, reason_id="check.passed-at-revision" if outcome == "no-change" else "check.failed-at-revision",
         materialization={"state": "present", "value": {"adapter_id": "adapter.local-git-materializer.v1",
             "outcome": stage["body"]["outcome"]["value"], "source": receipt["source"], "candidate": receipt["candidate"],
@@ -820,16 +844,34 @@ def _outer_record(ws, materialized, frozen, files, write, provenance, trace, rec
     body["environment"]["evaluation"] = {"state": "present", "value": {
         "verdict": evaluation["body"]["verdict"], "reason_ids": evaluation["body"]["reason_ids"],
         "evaluation_ref": {"content_id": "shadow-sandbox-evaluation",
-            "media_type": "application/vnd.ystack.control-evaluation+json", "sha256": sha(materialized.evaluation_raw)}}}
+            "media_type": "application/vnd.ystack.control-evaluation+json", "sha256": sha(evaluation_raw)}}}
     body["sandbox"] = {"state": "satisfied", "reason_id": "shadow.sandbox-satisfied",
         "launch_request_ref": e.document_ref(files["sandbox-request.json"]),
         "expectation_ref": e.document_ref(files["sandbox-expectation.json"]),
         "receipt_ref": e.document_ref(files["sandbox-receipt.json"]), "check_ref": e.document_ref(files["sandbox-check.json"]),
-        "origin": {"state": "authenticated", "store_id": ws.anchor.config["store_id"],
+        "origin": {"state": "authenticated", "store_id": store_id,
             "method": "controlled-storage.v1", "observation_sha256": sha(files["origin-observation.json"])},
         "payload_ref": {"content_id": "file-digest-result", "media_type": "application/json",
             "sha256": sha(files["file-digest-result.json"])}}
     return canonical({"schema_version": 1, "kind": "shadow_reproduction_record", "id": incident["id"], "body": body})
+
+
+def _bundle_values(files, incident, record_form):
+    rows = [{"name": name, "size_bytes": len(raw), "sha256": sha(raw)} for name, raw in sorted(files.items())]
+    return canonical({"schema_version": 1, "kind": "shadow_consumer_bundle", "id": "bundle." + sha(files["incident.json"])[:32],
+        "body": {"activation_state": "inactive", "record_form": record_form,
+            "incident_sha256": sha(files["incident.json"]), "target_revision": incident["body"]["git_revision_ref"], "files": rows}})
+
+
+def _write_section_values(bundle_raw, scope_id, stage, write_set, publisher, revision, candidate_tree_id):
+    return {"bundle_ref": _bundle_ref(bundle_raw),
+        "scope_id": scope_id, "workflow_id": stage["workflow_id"],
+        "task_class": stage["task_class_id"], "write_set": write_set, "publisher_request": publisher,
+        "admission": {"state": "checked", "effect": "none", "request_sha256": sha(canonical(publisher)),
+            "write_set_sha256": sha(canonical(write_set))},
+        "publication": {"state": "withheld", "reason_id": "shadow.write-not-published"},
+        "post_write_verification": {"target_revision": revision,
+            "candidate_tree_id": candidate_tree_id, "write_set": write_set}}
 
 
 def write(request_path: Path, bundle: Path, work: Path, output: Path, parent: dict, record_form="withheld-write.v1"):
@@ -840,14 +882,9 @@ def write(request_path: Path, bundle: Path, work: Path, output: Path, parent: di
         incident = parse(frozen["incident.json"])
         publisher, publisher_body = _publisher(incident, materialized.candidate_tree_id)
         stage = parse(materialized.input_raw, 8 * e.OUTPUT_LIMIT)["stage_request"]["content"]["body"]
-        write_section = {"bundle_ref": _bundle_ref(frozen["bundle.json"]),
-            "scope_id": ws.request_doc["body"]["scope_id"], "workflow_id": stage["workflow_id"],
-            "task_class": stage["task_class_id"], "write_set": materialized.write_set, "publisher_request": publisher,
-            "admission": {"state": "checked", "effect": "none", "request_sha256": sha(canonical(publisher)),
-                "write_set_sha256": sha(canonical(materialized.write_set))},
-            "publication": {"state": "withheld", "reason_id": "shadow.write-not-published"},
-            "post_write_verification": {"target_revision": incident["body"]["git_revision_ref"],
-                "candidate_tree_id": materialized.candidate_tree_id, "write_set": materialized.write_set}}
+        write_section = _write_section_values(frozen["bundle.json"], ws.request_doc["body"]["scope_id"],
+            stage, materialized.write_set, publisher, incident["body"]["git_revision_ref"],
+            materialized.candidate_tree_id)
         files = {name: frozen[name] for name in e.EVIDENCE_NAMES}
         files.update({"claim.json": (work / "captured/claim.json").read_bytes(),
             "duty-evaluation.json": (work / "captured/duty_evaluation.json").read_bytes(),
@@ -871,10 +908,7 @@ def write(request_path: Path, bundle: Path, work: Path, output: Path, parent: di
         _admit(ws, materialized, frozen, files, write_section)
         ws.anchor.seal_recheck()
         ws.recheck(sealed=True)
-        rows = [{"name": name, "size_bytes": len(raw), "sha256": sha(raw)} for name, raw in sorted(files.items())]
-        marker = canonical({"schema_version": 1, "kind": "shadow_consumer_bundle", "id": "bundle." + sha(files["incident.json"])[:32],
-            "body": {"activation_state": "inactive", "record_form": ws.record_form,
-                "incident_sha256": sha(files["incident.json"]), "target_revision": incident["body"]["git_revision_ref"], "files": rows}})
+        marker = _bundle_values(files, incident, ws.record_form)
         directory = ws.output_hold.held.fd
         for name, raw in sorted(files.items()):
             e.CancellationSignals.checkpoint()

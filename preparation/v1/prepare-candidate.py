@@ -28,6 +28,19 @@ import unicodedata
 from typing import Any, BinaryIO, Iterable, Iterator
 
 
+_clock_observations = {"wall": [], "monotonic": []}
+_clock_complete = True
+
+
+def _clock_value(site, value, kind):
+    global _clock_complete
+    if len(_clock_observations["wall"]) + len(_clock_observations["monotonic"]) >= 4096:
+        _clock_complete = False
+    else:
+        _clock_observations[kind].append({"site": site, "value": struct.pack(">d", value).hex()})
+    return value
+
+
 LIMITS = {
     "input_bytes": 8 * 1024 * 1024,
     "response_bytes": 1 * 1024 * 1024,
@@ -204,7 +217,7 @@ class Context:
     input_hashes: dict[str, str] = dataclasses.field(default_factory=dict)
 
     def remaining(self, child: bool = False) -> float:
-        left = self.deadline - time.monotonic()
+        left = self.deadline - _clock_value('preparation/v1/prepare-candidate.py:207:0',time.monotonic(),'monotonic')
         if left <= 0:
             raise Refusal("E_TIMEOUT", 75)
         return min(left, LIMITS["child_seconds"]) if child else left
@@ -228,7 +241,7 @@ def stat_identity(value: os.stat_result) -> tuple[int, int, int, int, int, int]:
 
 
 def check_deadline(deadline: float) -> None:
-    if time.monotonic() >= deadline:
+    if _clock_value('preparation/v1/prepare-candidate.py:231:0',time.monotonic(),'monotonic') >= deadline:
         raise Refusal("E_TIMEOUT", 75)
 
 
@@ -631,7 +644,7 @@ def run_child(ctx: Context, argv: list[str], *, stdin: bytes | None = None,
               env: dict[str, str] | None = None, pass_fds: tuple[int, ...] = (),
               stdout_consumer: Any = None) -> bytes:
     ctx.check_deadline()
-    child_deadline = min(ctx.deadline, time.monotonic() + LIMITS["child_seconds"])
+    child_deadline = min(ctx.deadline, _clock_value('preparation/v1/prepare-candidate.py:634:0',time.monotonic(),'monotonic') + LIMITS["child_seconds"])
     try:
         process = subprocess.Popen(argv, stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
@@ -656,7 +669,7 @@ def run_child(ctx: Context, argv: list[str], *, stdin: bytes | None = None,
             os.set_blocking(process.stdin.fileno(), False)
             selector.register(process.stdin, selectors.EVENT_WRITE, "stdin")
         while selector.get_map():
-            remaining = min(child_deadline, ctx.deadline) - time.monotonic()
+            remaining = min(child_deadline, ctx.deadline) - _clock_value('preparation/v1/prepare-candidate.py:659:0',time.monotonic(),'monotonic')
             if remaining <= 0:
                 raise Refusal("E_TIMEOUT", 75)
             for key, _ in selector.select(min(remaining, 0.25)):
@@ -690,7 +703,7 @@ def run_child(ctx: Context, argv: list[str], *, stdin: bytes | None = None,
                     target.extend(chunk)
                 if key.data == "stderr":
                     ctx.ledger.charge("child_output_bytes", len(chunk), LIMITS["invocation_diagnostic_bytes"])
-        wait_remaining = min(child_deadline, ctx.deadline) - time.monotonic()
+        wait_remaining = min(child_deadline, ctx.deadline) - _clock_value('preparation/v1/prepare-candidate.py:693:0',time.monotonic(),'monotonic')
         if wait_remaining <= 0:
             raise Refusal("E_TIMEOUT", 75)
         status = process.wait(timeout=wait_remaining)
@@ -1858,17 +1871,26 @@ def producer_identity(ctx: Context) -> dict[str, Any]:
     git_data = read_limited(Path(GIT), LIMITS["dependency_bytes"],
                             source_fd=ctx.boundaries["git"].fd, deadline=ctx.deadline,
                             single_link=False)
-    script_sha, executable_sha, git_sha = map(sha256, (script_data, executable_data, git_data))
-    git_version = run_child(ctx, [GIT, "--version"], output_limit=128,
-                            env=clean_git_env(ctx)).decode("ascii", "strict").strip()
+    measured = _producer_source_values(script_data, executable_data, git_data)
+    git_reply = run_child(ctx, [GIT, "--version"], output_limit=128, env=clean_git_env(ctx))
     python_version = sys.version.splitlines()[0]
+    return _producer_values(measured, git_reply, python_version, unicodedata.unidata_version, ctx.identities)
+
+
+def _producer_source_values(script_data, executable_data, git_data):
+    script_sha, executable_sha, git_sha = map(sha256, (script_data, executable_data, git_data))
+    return {"source_sha256": script_sha, "python_sha256": executable_sha, "git_sha256": git_sha}
+
+
+def _producer_values(measured, git_reply, python_version, unicode_version, identities):
+    git_version = git_reply.decode("ascii", "strict").strip()
     if len(python_version.encode("ascii", "strict")) > 128 or len(git_version) > 128:
         raise Refusal("E_DEPENDENCY")
-    return {"component_id": COMPONENT_ID, "source_sha256": script_sha,
-            "python": {"executable_sha256": executable_sha, "version": python_version},
-            "git": {"executable_sha256": git_sha, "version": git_version},
-            "jq": ctx.identities["jq"], "protocol_sha256": BASE_DEPENDENCIES["adapters/local-git-materializer/v1/protocol.jq"],
-            "core": ctx.identities["core"], "unicode_version": unicodedata.unidata_version}
+    return {"component_id": COMPONENT_ID, "source_sha256": measured["source_sha256"],
+            "python": {"executable_sha256": measured["python_sha256"], "version": python_version},
+            "git": {"executable_sha256": measured["git_sha256"], "version": git_version},
+            "jq": identities["jq"], "protocol_sha256": BASE_DEPENDENCIES["adapters/local-git-materializer/v1/protocol.jq"],
+            "core": identities["core"], "unicode_version": unicode_version}
 
 
 def completion_envelope(record_data: bytes, manifest_data: bytes) -> bytes:
@@ -1905,13 +1927,21 @@ def recheck_source(ctx: Context) -> None:
 
 def make_record(ctx: Context, input_value: dict[str, Any], response: dict[str, Any],
                 details: dict[str, Any], receipt: dict[str, Any], manifest_data: bytes) -> dict[str, Any]:
+    result = _record_values(ctx.args.input_sha256, ctx.args.response_sha256, response, details, receipt,
+                             manifest_data, ctx.source_observation, None)
+    result["producer"] = producer_identity(ctx)
+    return result
+
+
+def _record_values(input_sha256, response_sha256, response, details, receipt, manifest_data,
+                    source_observation, producer):
     outcome = response["stage_result"]["body"]["outcome"]["value"]
     candidate = receipt["candidate"]
     source = receipt["source"]
     return {
         "schema_version": 1, "kind": "candidate_content_preparation", "status": "completed",
         "authority": "none", "qualification": "unavailable",
-        "input_sha256": ctx.args.input_sha256, "response_sha256": ctx.args.response_sha256,
+        "input_sha256": input_sha256, "response_sha256": response_sha256,
         "stage_result_sha256": details["stage_result_sha256"],
         "receipt_sha256": details["verified_receipt"]["sha256"],
         "request_ref": receipt["request_ref"], "resolved_profile_ref": receipt["resolved_profile_ref"],
@@ -1923,8 +1953,8 @@ def make_record(ctx: Context, input_value: dict[str, Any], response: dict[str, A
                       "tree_id": candidate["tree_id"], "parent_commit_id": candidate["parent_commit_id"],
                       "outcome": outcome},
         "manifest_sha256": sha256(manifest_data),
-        "storage_observation_sha256": sha256(canonical(ctx.source_observation)),
-        "producer": producer_identity(ctx),
+        "storage_observation_sha256": sha256(canonical(source_observation)),
+        "producer": producer,
         "ownership": {"state": "local-preparation-complete", "immutable": False,
                       "authenticated_receipt": False, "supervisor_handoff": "required"},
     }
@@ -2251,7 +2281,7 @@ def parse_args(argv: list[str], deadline: float) -> argparse.Namespace:
 
 def main(argv: list[str]) -> int:
     context: Context | None = None
-    deadline = time.monotonic() + LIMITS["operation_seconds"]
+    deadline = _clock_value('preparation/v1/prepare-candidate.py:2254:0',time.monotonic(),'monotonic') + LIMITS["operation_seconds"]
     try:
         args = parse_args(argv, deadline)
         context = create_context(args, deadline)
