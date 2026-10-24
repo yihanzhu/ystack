@@ -1215,6 +1215,240 @@ cat "$tmp/legacy-evaluation.json" "$tmp/write-evaluation.json"
     print(scope_check.stdout.decode())
     ok(json.loads((root / "enforcement/v1/accepted-identities.json").read_bytes())["body"]["environments"] == [], "shipped accepted set stays empty")
     ok(w.main(["write-shadow.py", "prepare", "request", "bundle", "work", "output"]) == 1, "public prepare refuses without trusted startup admission")
+    # Paired admission rows use this existing real writer fixture and native owner.
+    # Its launch/store simulation remains unqualified.
+    helper_path = package / "publisher/v1/_admission.py"
+    writer_path = package / "shadow/v1/write-shadow.py"
+    helper_original = helper_path.read_bytes()
+    writer_original = writer_path.read_bytes()
+    phase2_cases = set()
+    def phase2_load(helper_raw=helper_original, writer_raw=writer_original):
+        nonlocal w
+        import hashlib
+        prior = getattr(w, "_ADMISSION_SOURCE", None)
+        if prior is not None:
+            prior.close()
+        helper_path.chmod(0o600)
+        helper_path.write_bytes(helper_raw)
+        helper_path.chmod(0o644)
+        original_pin = hashlib.sha256(helper_original).hexdigest().encode()
+        current_pin = hashlib.sha256(helper_raw).hexdigest().encode()
+        assert writer_raw.count(original_pin) == 1
+        writer_path.chmod(0o600)
+        writer_path.write_bytes(writer_raw.replace(original_pin, current_pin))
+        writer_path.chmod(0o644)
+        spec = importlib.util.spec_from_file_location("shadow_writer_test_subject", writer_path)
+        subject = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = subject
+        spec.loader.exec_module(subject)
+        assert subject.e is e and subject.c is c and subject.a.c is c
+        w = subject
+        return subject
+    def phase2_receipt(ident, phase, paths, **fields):
+        import hashlib
+        value = {"case_id":ident,"phase":phase,"route":"W","marker_present":(paths[3]/"bundle.json").exists(),
+            "helper_sha256":hashlib.sha256(helper_path.read_bytes()).hexdigest(),
+            "writer_sha256":hashlib.sha256(writer_path.read_bytes()).hexdigest(),
+            "classification":"real writer/native owner with simulated fixture launch; no qualification",**fields}
+        print("ADMISSION-W",json.dumps(value,sort_keys=True),flush=True)
+    def phase2_positive(ident, policy=False):
+        paths=case("admission-"+ident,policy_form=policy)
+        fresh_inputs(paths)
+        calls=[]
+        original=w.a.admit_write
+        def observe(inputs):
+            result=original(inputs)
+            calls.append((inputs,result))
+            return result
+        w.a.admit_write=observe
+        try:
+            retained=complete(paths,record_form="withheld-write-policy.v1" if policy else "withheld-write.v1")
+        finally:
+            w.a.admit_write=original
+        ok(len(calls)==1,"actual writer final common call exactly once: "+ident)
+        inputs,result=calls[0]
+        record=json.loads(retained["shadow-record.json"])["body"]
+        ok(result.publisher_request_raw==canonical(record["write"]["publisher_request"]) and
+            result.write_set_raw==canonical(record["write"]["write_set"]) and
+            result.admission_raw==canonical(record["write"]["admission"]) and
+            result.post_write_plan_raw==canonical(record["write"]["post_write_verification"]) and
+            result.body_raw==retained["publisher-body.txt"],"actual admitted values equal final retained bytes: "+ident)
+        if policy:
+            draft=json.loads(dict(inputs.outer_files)["shadow-record.json"])["body"]
+            ok(draft["scope_policy_ref"]==record["scope_policy_ref"]==c.scope_policy_ref(retained["scope-policy.json"]),
+                "draft and final use actual held policy bytes/ref")
+        phase2_receipt(ident,"baseline",paths,common_calls=len(calls),expected="OK",actual="OK")
+        return paths
+    phase2_load()
+    phase2_positive("A01")
+    phase2_cases.add("A01")
+    phase2_positive("A02",True)
+    phase2_cases.add("A02")
+    target=b'    _require(type(inputs) is _AdmissionInputs, "E_SHAPE")\n'
+    assert helper_original.count(target)==1
+    forced=helper_original.replace(target,target+b'    _require(inputs.scope_id != "scope.fixture-write", "E_RELATION")\n',1)
+    phase2_load(forced)
+    forced_paths=case("admission-A03-target")
+    fresh_inputs(forced_paths)
+    complete(forced_paths,refusal=True)
+    ok(not (forced_paths[3]/"bundle.json").exists(),"A03 targeted common refusal propagates before marker")
+    phase2_receipt("A03","targeted-refusal",forced_paths,expected="E_RELATION",actual="E_RELATION")
+    phase2_load()
+    phase2_positive("A03-restored")
+    phase2_cases.add("A03")
+    call=b'        admitted = a.admit_write(inputs)\n'
+    assert writer_original.count(call)==1
+    bypass=b'''        admitted = a._AdmissionResult(canonical(revision), materialized.candidate_commit_id,
+            materialized.candidate_tree_id, canonical(write["publisher_request"]),
+            write["publisher_request"]["body"]["title"].encode(), files["publisher-body.txt"],
+            canonical(write["write_set"]), canonical(write["admission"]), canonical(write["post_write_verification"]))
+'''
+    omitted=writer_original.replace(call,bypass,1)
+    phase2_load(helper_original,omitted)
+    control_baseline=case("admission-A04-omitted-normal")
+    fresh_inputs(control_baseline)
+    complete(control_baseline)
+    phase2_receipt("A04","omission-valid-baseline",control_baseline,expected="OK",actual="OK")
+    phase2_load(forced,omitted)
+    missing_call=case("admission-A04-caught-control")
+    fresh_inputs(missing_call)
+    try:
+        complete(missing_call,refusal=True)
+    except AssertionError as exc:
+        ok(str(exc)=="complete writer negative unexpectedly accepted","A04 catches the required-refusal assertion itself")
+        ok((missing_call[3]/"bundle.json").exists(),"A04 missing-call control genuinely completed its owned fixture")
+        phase2_receipt("A04","caught-missing-call",missing_call,expected="required-refusal assertion fails",actual=str(exc))
+    else:
+        raise AssertionError("A04 failed to detect omitted final common call")
+    phase2_load()
+    phase2_positive("A04-restored")
+    phase2_cases.add("A04")
+    for ident in ("C04","C08","C09","C10","C11","C12"):
+        phase2_load()
+        phase2_positive(ident+"-baseline")
+        paths=case("admission-"+ident+"-target")
+        fresh_inputs(paths)
+        original_admit=w._admit
+        originals=[]
+        def alter_before_or_after(ws,materialized,frozen,files,section):
+            if ident=="C04":
+                w.a.__spec__.origin=str(package/"shadow/v1/_consumer.py")
+            if ident=="C08":
+                originals.append((helper_path,helper_path.read_bytes(),helper_path.stat().st_mode))
+                helper_path.chmod(0o600)
+                helper_path.write_bytes(helper_original+b"\n")
+            result=original_admit(ws,materialized,frozen,files,section)
+            if ident=="C09":
+                target_path=helper_path
+            elif ident=="C10":
+                target_path=ws.paths["source_git_dir"]/"config"
+            elif ident=="C11":
+                target_path=materialized.candidate_repository/"config"
+            elif ident=="C12":
+                target_path=ws.work/"captured/publisher-body.txt"
+            else:
+                return result
+            originals.append((target_path,target_path.read_bytes(),target_path.stat().st_mode))
+            target_path.chmod(0o600)
+            target_path.write_bytes(target_path.read_bytes()+b"\n")
+            return result
+        w._admit=alter_before_or_after
+        try:
+            complete(paths,refusal=True)
+            phase2_receipt(ident,"targeted-refusal",paths,expected="refusal before marker",actual="refusal")
+        finally:
+            for path,raw,mode_value in reversed(originals):
+                path.chmod(0o600);path.write_bytes(raw);path.chmod(mode_value&0o777)
+            phase2_load()
+        phase2_positive(ident+"-restored")
+        phase2_cases.add(ident)
+    # The early retained guard preserves the original no-later-child assertions.
+    # A second fresh read protects the actual gap after common admission.
+    phase2_load()
+    guard_call=b'    _retained_write(ws, materialized, frozen, files)\n'
+    assert writer_original.count(guard_call)==2
+    no_early_guard=writer_original.replace(guard_call,b'    pass\n',1)
+    phase2_load(helper_original,no_early_guard)
+    original_admit=w._admit
+    early_control=[]
+    def missing_early_guard(ws,materialized,frozen,files,section):
+        files=dict(files,**{"materialization-response.json":b"{}\n"})
+        before=copy.deepcopy(ws.commands)
+        try:
+            return original_admit(ws,materialized,frozen,files,section)
+        except e.Refusal:
+            try:
+                assert ws.commands==before,"original retained-mismatch no-later-child assertion"
+            except AssertionError as exc:
+                early_control.append(str(exc))
+            raise
+    w._admit=missing_early_guard
+    paths=case("early-retained-omission-control");fresh_inputs(paths)
+    complete(paths,refusal=True)
+    ok(early_control==["original retained-mismatch no-later-child assertion"],
+        "removing only early guard breaks original no-later-child assertion")
+    print("ADMISSION-W retained-beforeguard omission CAUGHT",flush=True)
+    phase2_load()
+    original_guard=w._retained_write
+    guard_calls=[]
+    def late_gap(ws,materialized,frozen,files):
+        guard_calls.append(1)
+        if len(guard_calls)==2:
+            files["materialization-response.json"]=b"{}\n"
+        return original_guard(ws,materialized,frozen,files)
+    w._retained_write=late_gap
+    paths=case("late-retained-gap-control");fresh_inputs(paths)
+    complete(paths,refusal=True)
+    ok(len(guard_calls)==2 and not (paths[3]/"bundle.json").exists(),"late retained fresh read refuses actual gap mutation")
+    print("ADMISSION-W retained-afterguard gap REFUSED",flush=True)
+    phase2_load()
+    phase2_positive("retained-guards-restored")
+    for phase in ("draft", "final"):
+        phase2_load()
+        phase2_positive("policy-ref-"+phase+"-baseline",True)
+        paths=case("policy-ref-"+phase+"-target",policy_form=True)
+        fresh_inputs(paths)
+        original_builder=w._outer_record
+        record_calls=[]
+        common_calls=[]
+        original_common=w.a.admit_write
+        def observe_common(inputs):
+            common_calls.append(1)
+            return original_common(inputs)
+        def alter_policy_ref(*args):
+            raw=original_builder(*args)
+            record_calls.append(1)
+            target=1 if phase=="draft" else 2
+            if len(record_calls)==target:
+                value=json.loads(raw)
+                value["body"]["scope_policy_ref"]["size_bytes"]+=1
+                return canonical(value)
+            return raw
+        w.a.admit_write=observe_common
+        w._outer_record=alter_policy_ref
+        complete(paths,refusal=True,record_form="withheld-write-policy.v1")
+        ok(len(record_calls)==(1 if phase=="draft" else 2) and len(common_calls)==1,
+            "legal typed policy reference change reaches actual "+phase+" comparison")
+        phase2_receipt("policy-ref-"+phase,"targeted-refusal",paths,
+            expected="E_RELATION",actual="E_RELATION",record_calls=len(record_calls),common_calls=len(common_calls))
+        phase2_load()
+        phase2_positive("policy-ref-"+phase+"-restored",True)
+    closure_text=(root/"scripts/test/publisher-admission.test.sh").read_text()
+    closure_start=closure_text.index("_admission_package_closure() {\n")
+    closure_end=closure_text.index("\n}\n",closure_start)+3
+    assert closure_text.count("_admission_package_closure() {")==1
+    closure_script=fixture/"source-closure.sh"
+    closure_script.write_text(closure_text[closure_start:closure_end]+"\n_admission_package_closure \"$1\" \"$2\" writer\n")
+    for site in ("S2","S3"):
+        result=subprocess.run(["/bin/bash",str(closure_script),str(package),site],
+            env={"PATH":"/usr/bin:/bin","LC_ALL":"C","python_bin":sys.executable},
+            stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=120)
+        print(result.stdout.decode(),flush=True)
+        ok(result.returncode==0 and not result.stderr,"actual shared S2/S3 package helper closure: "+site+result.stderr.decode())
+    # S2a/S2b/S2c and S3a/S3b/S3c share one physical package, not two copies.
+    ok(phase2_cases=={"A01","A02","A03","A04","C04","C08","C09","C10","C11","C12"},
+        "exact writer-owned finite row inventory")
+    print("ADMISSION-W total=10 expected=10 passed=10 plus paired baselines/restorations and retained gap controls",flush=True)
     scenario_work, scenario_output = original_work, original_output
     scenario_mode, scenario_request = original_mode, original_request
     for name, previous in module_state.items():

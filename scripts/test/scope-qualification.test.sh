@@ -10127,6 +10127,10 @@ moved_sha=$("$jq_bin" -r '.body.scope_ref.sha256' "$tmp/evaluation-moved.json")
   fail 'a moved scope produced the same evaluation'
 pass 'the evaluation is bound to the exact bytes of every input it read'
 
+/usr/bin/sed -n '/^_admission_package_closure() {$/,/^}$/p' "$root/scripts/test/publisher-admission.test.sh" >"$tmp/admission-closure-functions.sh"
+# shellcheck source=/dev/null
+source "$tmp/admission-closure-functions.sh"
+
 # The same component in a tree with no committed mode marker: the supplied marker
 # is then all there is, and the evaluator still never enables anything.
 fake_repo="$tmp/portable/scope/v1"
@@ -10155,6 +10159,7 @@ PATH="$bin:/usr/bin:/bin" "$fake_repo/evaluate-scope.sh" evaluate "${good[@]:0:6
 ' "$tmp/evaluation-portable.json" >/dev/null ||
   fail 'the portable copy enabled something or misread the mode'
 pass 'with no committed mode marker the outcome is still only a blocked proposal'
+_admission_package_closure "$tmp/portable" Q1 reader
 # In that same portable tree an unknown status is not operating: only "active"
 # and "retired" mean anything, and a typo fails closed.
 "$jq_bin" -S -c -n '{schema_version:1,status:"activ"}' >"$tmp/marker-typo.json"
@@ -10216,6 +10221,7 @@ PY_MUTATE
     evaluate "${good[@]:0:6}" "$tmp/marker.json" "$tmp/legacy-bundles" "$tmp/legacy-source.git" 2>&1 >/dev/null) || status=$?
   [ "$status" -ne 0 ] || fail "$label accepted a marker that changed mid-run"
   [ "$out" = E_STALE ] || fail "$label expected E_STALE got $out"
+  _admission_package_closure "$race_repo" Q2 reader
 }
 race_marker_case rewritten "$tmp/marker.json"
 race_marker_case appeared ''
@@ -10487,10 +10493,13 @@ for label,code in (
              driver_change=frontend_source.replace(boundary,inserted+boundary),
              expected='E_RUNTIME' if label=='fifo' else 'E_RELATION')
 print('terminal protocol framing, EOF, nonzero, first-open FIFO and committed-byte tampering PASS',flush=True)
+reader_path.write_text(reader_source)
+frontend.chmod(0o700);frontend.write_text(frontend_source);frontend.chmod(0o500)
 try:cost_module['cost_qualify']()
 except BaseException:pass
 PY_TERMINAL_TEST
 pass 'terminal append and byte caps are independent; framed commitment binds the first snapshot'
+_admission_package_closure "$tmp/terminal-controls/package" Q3 reader
 scope_stage_points[5]=$SECONDS
 
 genuine_platform=$(/usr/bin/uname -s)
@@ -16916,4 +16925,7 @@ for stdin_boundary in PY_MAC_RUNTIME PY_MAC_IMPORT_CLOSURE; do
 done
 
 run_genuine
+/usr/bin/printf '%s\n' 'ADMISSION-CLOSURE Q4a NOTRUN/BLOCKED: genuine helper paired source proof requires original reserved authorization/environment' \
+  'ADMISSION-CLOSURE Q4b NOTRUN/BLOCKED: no premature missing-helper loader failure counts as genuine proof' \
+  'ADMISSION-CLOSURE Q4c NOTRUN/BLOCKED: no premature altered-helper loader failure counts as genuine proof'
 /usr/bin/printf 'scope qualification: %s focused checks passed\n' "$passes"

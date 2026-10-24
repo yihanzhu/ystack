@@ -224,7 +224,8 @@ class _Reader:
         helper = self.package_sources["publisher/v1/_admission.py"]
         require(module._ADMISSION_SHA256 == helper.sha256 and module._ADMISSION_SOURCE.raw == helper.raw
                 and module.a.c is module.c and sys.modules.get("ystack_publisher_admission") is module.a
-                and Path(module.a.__file__).absolute() == PACKAGE / "publisher/v1/_admission.py", "E_RUNTIME")
+                and Path(module.a.__file__).absolute() == PACKAGE / "publisher/v1/_admission.py"
+                and module.a.__spec__.origin == str(PACKAGE / "publisher/v1/_admission.py"), "E_RUNTIME")
         self.recheck()
         return module
 

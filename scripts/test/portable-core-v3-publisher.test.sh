@@ -315,6 +315,135 @@ loader_cell() {
   assert_route E_RUNTIME "$tmp/load/$relative" "$mode" "${inputs[@]}"
   rm -rf "$tmp/load" "$tmp/load-saved" "$tmp/held"
 }
+_original_plan_provenance() {
+  /usr/bin/python3 -I -S -B - "$root" "$tmp" <<'PY_ORIGINAL_PLAN'
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+checkout = Path(sys.argv[1]).absolute()
+receipts = Path(sys.argv[2]) / "original-plan-provenance"
+receipts.mkdir(exist_ok=True)
+commit = "c6c3f74181ea86f85be87ecf4431e67a5f272d82"
+plan_path = "work/fixed-evidence-publication/plan.md"
+blob_pin = "d8aa60b213cf7fce29c386b0eac49401c36643ff"
+raw_pin = "810ec947448c9731d1cb47e3acb0f26e7e7fe11e982b36b25caaf2a13f4ae4e3"
+spec_pin = "e55e2aaeb179d7e06f229805744b2be49cbfa1bf"
+started = time.monotonic()
+record = {"commit": commit, "path": plan_path, "fetch_count": 0, "commands": []}
+blocked = {"GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR",
+           "GIT_DIR", "GIT_WORK_TREE", "GIT_CONFIG", "GIT_CONFIG_COUNT", "GIT_NAMESPACE",
+           "GIT_REPLACE_REF_BASE", "GIT_CONFIG_PARAMETERS", "GIT_SHALLOW_FILE",
+           "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"}
+environment = dict(os.environ, GIT_NO_LAZY_FETCH="1", GIT_NO_REPLACE_OBJECTS="1")
+
+
+def require(value, reason):
+    if not value:
+        raise RuntimeError(reason)
+
+
+def run(arguments, *, fetch=False, checked=True):
+    argv = (["git", "-C", str(checkout)] if fetch else
+            ["git", "--no-replace-objects", "-C", str(checkout)]) + arguments
+    remaining = 120 - (time.monotonic() - started)
+    require(remaining > 0, "deadline")
+    begin = time.time()
+    result = subprocess.run(argv, env=environment, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, timeout=remaining)
+    item = {"argv": argv, "started_epoch": begin, "ended_epoch": time.time(),
+            "exit": result.returncode, "stdout_sha256": hashlib.sha256(result.stdout).hexdigest(),
+            "stderr_sha256": hashlib.sha256(result.stderr).hexdigest()}
+    record["commands"].append(item)
+    index = len(record["commands"])
+    (receipts / (str(index) + ".stdout")).write_bytes(result.stdout)
+    (receipts / (str(index) + ".stderr")).write_bytes(result.stderr)
+    require(not checked or result.returncode == 0, "git refusal")
+    return result
+
+
+def metadata(label):
+    value = {"head": run(["rev-parse", "HEAD"]).stdout.decode().strip(),
+             "refs": run(["for-each-ref", "--format=%(refname) %(objectname)"]).stdout.decode()}
+    for name in ("FETCH_HEAD", "shallow"):
+        path = Path(run(["rev-parse", "--git-path", name]).stdout.decode().strip())
+        if not path.is_absolute():
+            path = checkout / path
+        require(not path.is_symlink(), "metadata symlink")
+        raw = path.read_bytes() if path.exists() else None
+        value[name] = None if raw is None else {"sha256": hashlib.sha256(raw).hexdigest(),
+                                               "size": len(raw)}
+        if raw is not None:
+            (receipts / (label + "." + name)).write_bytes(raw)
+    record[label] = value
+
+
+try:
+    require(not any(name in os.environ for name in blocked), "object environment indirection")
+    require(not any(name in os.environ for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+        "http_proxy", "https_proxy", "all_proxy", "GIT_PROXY_COMMAND")), "proxy environment redirection")
+    require(checkout.resolve(strict=True) == checkout, "checkout origin")
+    common = Path(run(["rev-parse", "--git-common-dir"]).stdout.decode().strip())
+    gitdir = Path(run(["rev-parse", "--absolute-git-dir"]).stdout.decode().strip())
+    if not common.is_absolute():
+        common = checkout / common
+    require(common.resolve(strict=True) == gitdir.resolve(strict=True), "common directory indirection")
+    for name in ("commondir", "info/grafts", "objects/info/alternates", "objects/info/http-alternates", "refs/replace"):
+        require(not os.path.lexists(gitdir / name), "object indirection " + name)
+    pack = gitdir / "objects/pack"
+    require(not pack.exists() or not any(path.name.endswith(".promisor") for path in pack.iterdir()), "promisor packs")
+    keys = run(["config", "--name-only", "--list", "--no-includes"]).stdout.decode().lower().splitlines()
+    require(not any(key.startswith(("include.", "includeif.", "url.", "remote."))
+                    and (key.startswith(("include.", "includeif.", "url.")) or key.endswith((".promisor", ".partialclonefilter")))
+                    for key in keys), "partial clone or URL rewrite")
+    require(not any(key in {"extensions.partialclone", "core.alternaterefscommand"}
+                    or key.startswith("http.") and key.endswith((".proxy", ".followredirects"))
+                    or key in {"http.proxy", "http.followredirects", "https.proxy"} for key in keys), "redirect/proxy configuration")
+    urls = run(["remote", "get-url", "--all", "origin"], checked=False)
+    origin = urls.stdout.decode().splitlines() if urls.returncode == 0 else []
+    require(len(origin) == 1 and origin[0] in {"https://github.com/yihanzhu/ystack", "https://github.com/yihanzhu/ystack.git"}, "origin identity")
+    record["origin"] = origin[0]
+    metadata("before")
+    present = run(["cat-file", "-e", commit + "^{commit}"], checked=False).returncode == 0
+    record["objects_present_before"] = present
+    if not present:
+        require(os.environ.get("GITHUB_ACTIONS") == "true"
+                and os.environ.get("GITHUB_REPOSITORY") == "yihanzhu/ystack"
+                and os.environ.get("GITHUB_WORKSPACE") == str(checkout)
+                and os.environ.get("GITHUB_SHA") == record["before"]["head"], "NOTRUN missing original objects outside exact CI")
+        require(not (receipts / "fetch-attempted").exists(), "second fetch forbidden")
+        (receipts / "fetch-attempted").write_text(commit + "\n")
+        record["fetch_count"] = 1
+        run(["-c", "fetch.recurseSubmodules=false", "-c", "gc.auto=0", "-c", "http.followRedirects=false",
+             "fetch", "--no-tags", "--no-prune", "--refmap=", "--no-recurse-submodules",
+             "--no-write-fetch-head", "--depth=1", "origin", commit], fetch=True)
+    metadata("after")
+    require(record["before"]["head"] == record["after"]["head"]
+            and record["before"]["refs"] == record["after"]["refs"]
+            and record["before"]["FETCH_HEAD"] == record["after"]["FETCH_HEAD"], "checkout mutation")
+    require(run(["cat-file", "-t", commit]).stdout == b"commit\n", "original commit type")
+    entry = run(["ls-tree", "-z", commit, "--", plan_path]).stdout
+    require(entry == ("100644 blob " + blob_pin + "\t" + plan_path + "\0").encode(), "original plan tree/blob pin")
+    raw = run(["show", commit + ":" + plan_path]).stdout
+    actual_blob = hashlib.sha1(("blob " + str(len(raw)) + "\0").encode() + raw).hexdigest()
+    require(actual_blob == blob_pin and hashlib.sha256(raw).hexdigest() == raw_pin, "original raw bytes")
+    require(raw.splitlines().count(("spec-blob: " + spec_pin).encode()) == 1, "original spec link")
+    record.update(status="OK", plan_blob=actual_blob, plan_sha256=hashlib.sha256(raw).hexdigest())
+    (receipts / "plan.raw").write_bytes(raw)
+except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as exc:
+    record.update(status="NOTRUN/refusal", reason=str(exc))
+    print("original-plan provenance: " + str(exc), file=sys.stderr)
+finally:
+    (receipts / "receipt.json").write_text(json.dumps(record, sort_keys=True, indent=2) + "\n")
+if record.get("status") != "OK":
+    raise SystemExit(1)
+print(json.dumps(record, sort_keys=True))
+PY_ORIGINAL_PLAN
+}
 static_case() {
   local file old_generation restored mode_line manifest_path route
   case "$case_id" in
@@ -330,7 +459,7 @@ static_case() {
         . == [{generation_id:$generation,parent_spec_blob:"e55e2aaeb179d7e06f229805744b2be49cbfa1bf",
           parent_plan_merge_commit:"c6c3f74181ea86f85be87ecf4431e67a5f272d82"}]
       ' "$root/core/v3/generation-registry.json" >/dev/null || fail 'exact registry'
-      [ "$(git -C "$root" hash-object work/fixed-evidence-publication/plan.md)" = d8aa60b213cf7fce29c386b0eac49401c36643ff ] || fail 'accepted plan blob' ;;
+      _original_plan_provenance || fail 'original accepted plan provenance' ;;
     restore-exact)
       restored="$tmp/restored"
       mkdir "$restored"

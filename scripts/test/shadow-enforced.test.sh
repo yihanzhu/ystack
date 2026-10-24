@@ -4417,3 +4417,8 @@ scenario_mode="success";scenario_output=None
 native.close()
 print(f"shadow-enforced-real-reproduce: {checks} checks passed")
 PY
+
+/usr/bin/sed -n '/^_admission_package_closure() {$/,/^}$/p' "$root/scripts/test/publisher-admission.test.sh" >"$tmp/admission-closure-functions.sh"
+# shellcheck source=/dev/null
+source "$tmp/admission-closure-functions.sh"
+_admission_package_closure "$fixture" S1 writer

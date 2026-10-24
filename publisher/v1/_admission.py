@@ -34,7 +34,7 @@ def _parse(raw, limit=_LIMIT):
     return c._json(raw, limit, "E_SHAPE")
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class _AdmissionInputs:
     incident_raw: bytes
     generated_response_raw: bytes
@@ -54,7 +54,7 @@ class _AdmissionInputs:
     candidate_git: c._ReadOnlyGit
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class _AdmissionResult:
     base_revision_raw: bytes
     candidate_commit_id: str
@@ -123,6 +123,8 @@ def candidate_facts(source_git, candidate_git, response_raw, incident, source_fa
     candidate_revision = dict(revision, commit_id=candidate["commit_id"])
     facts = candidate_git.inventory(candidate_revision)
     commit = candidate_git.read(["cat-file", "commit", candidate["commit_id"]], _LIMIT)
+    _require(c.hashlib.new(algorithm, ("commit " + str(len(commit)) + "\0").encode() + commit).hexdigest()
+             == candidate["commit_id"])
     headers = commit.split(b"\n\n", 1)[0].splitlines()
     _require([line[7:].decode() for line in headers if line.startswith(b"parent ")] == [revision["commit_id"]]
              and [line[5:].decode() for line in headers if line.startswith(b"tree ")] == [candidate["tree_id"]])
@@ -146,6 +148,7 @@ def admit_write(inputs):
     _require(sys.modules.get("ystack_shadow_consumer") is c, "E_RUNTIME")
     _require(inputs.record_form in {"withheld-write.v1", "withheld-write-policy.v1"})
     incident = _parse(inputs.incident_raw)
+    publisher(incident, incident["body"]["git_revision_ref"]["commit_id"])
     write = _parse(inputs.write_raw)
     generated = _parse(inputs.generated_input_raw, 8 * _LIMIT)
     _parse(inputs.generated_response_raw)
@@ -165,16 +168,21 @@ def admit_write(inputs):
         names.add("scope-policy.json")
     _require(set(files) == {prefix + name for name in names})
     _require(set(outer) == set(_NAMES) | {"publisher-body.txt"} | ({"scope-policy.json"} if policy_form else set()))
+    outer_record = _parse(outer["shadow-record.json"])
+    _require(outer_record.get("schema_version") == 1 and type(outer_record.get("schema_version")) is int
+             and outer_record.get("kind") == "shadow_reproduction_record" and outer_record.get("id") == incident["id"]
+             and outer_record["body"]["record_form"] == inputs.record_form
+             and c.canonical(outer_record["body"]["write"]) == inputs.write_raw)
     _require(all(files[prefix + name] == raw for name, raw in frozen.items()))
     _require(files[prefix + "eval-seed.json"] == inputs.seed_raw
              and files[prefix + "README.md"] == b"Shadow evidence. Publication is withheld.\n")
     marker = _parse(frozen["bundle.json"])
     marker_rows = [{"name": name, "size_bytes": len(raw), "sha256": c.digest(raw)}
                    for name, raw in sorted(frozen.items()) if name != "bundle.json"]
-    _require(marker["body"]["files"] == marker_rows)
+    _require(c.canonical(marker["body"]["files"]) == c.canonical(marker_rows))
     if policy_form:
         _require(files[prefix + "scope-policy.json"] == outer["scope-policy.json"] == inputs.policy_raw)
-        reference = _parse(outer["shadow-record.json"])["body"].get("scope_policy_ref")
+        reference = outer_record["body"].get("scope_policy_ref")
         c.check_scope_policy_ref(reference, inputs.policy_raw)
     _require(type(inputs.allowed_paths) is tuple and len(inputs.allowed_paths) <= 33
              and all(type(path) is str and len(path.encode()) <= 4096 for path in inputs.allowed_paths), "E_LIMIT")
@@ -193,8 +201,7 @@ def admit_write(inputs):
     revision = incident["body"]["git_revision_ref"]
     patch, rows = c.evidence_patch(files, revision["hash_algorithm"], inputs.record_form)
     _require(len(patch) <= _LIMIT, "E_LIMIT")
-    candidate = candidate_facts(inputs.source_git, inputs.candidate_git, inputs.generated_response_raw,
-        incident, source, files, rows, inputs.record_form)
+    candidate = _parse(_parse(inputs.generated_response_raw)["payloads"][0]["data"].encode())["candidate"]
     request, body = publisher(incident, candidate["tree_id"])
     request_raw, rows_raw = c.canonical(request), c.canonical(rows)
     admission = {"state": "checked", "effect": "none", "request_sha256": c.digest(request_raw),
@@ -208,6 +215,8 @@ def admit_write(inputs):
         "post_write_verification": post}
     _require(stage["workflow_id"] == expected["workflow_id"] and stage["task_class_id"] == expected["task_class"])
     _require(c.canonical(write) == c.canonical(expected) and outer["publisher-body.txt"] == body)
+    candidate_facts(inputs.source_git, inputs.candidate_git, inputs.generated_response_raw,
+        incident, source, files, rows, inputs.record_form)
     inputs.source_git.recheck()
     inputs.candidate_git.recheck()
     return _AdmissionResult(c.canonical(revision), candidate["commit_id"], candidate["tree_id"],

@@ -28,18 +28,24 @@ else:
 c = e.c
 require, canonical, sha, parse = e.require, e.canonical, e.sha, e.parse
 
-_ADMISSION_SHA256 = "aadac15726dbfe64b7a171ba74e319cf2df3b6d0fcd71bc810698f13030cf294"
+_ADMISSION_SHA256 = "18ab1bbc63235f717d24be50abe222b57656fcb9e6464cdc283616d4a58b0c04"
 _ADMISSION_PATH = SOURCE / "publisher/v1/_admission.py"
 require(_ADMISSION_PATH.resolve(strict=True) == _ADMISSION_PATH, "E_RUNTIME")
 _ADMISSION_SOURCE = e.stable_file(_ADMISSION_PATH)
-require(_ADMISSION_SOURCE.sha256 == _ADMISSION_SHA256, "E_RUNTIME")
-_admission_spec = importlib.util.spec_from_file_location("ystack_publisher_admission", _ADMISSION_PATH)
-require(_admission_spec is not None and _admission_spec.loader is not None, "E_RUNTIME")
-a = importlib.util.module_from_spec(_admission_spec)
-sys.modules[_admission_spec.name] = a
-exec(compile(_ADMISSION_SOURCE.raw, str(_ADMISSION_PATH), "exec"), a.__dict__)
-require(a.c is c, "E_RUNTIME")
-_ADMISSION_SOURCE.recheck("E_RUNTIME")
+try:
+    require(_ADMISSION_SOURCE.sha256 == _ADMISSION_SHA256, "E_RUNTIME")
+    _admission_spec = importlib.util.spec_from_file_location("ystack_publisher_admission", _ADMISSION_PATH)
+    require(_admission_spec is not None and _admission_spec.loader is not None, "E_RUNTIME")
+    a = importlib.util.module_from_spec(_admission_spec)
+    sys.modules[_admission_spec.name] = a
+    exec(compile(_ADMISSION_SOURCE.raw, str(_ADMISSION_PATH), "exec"), a.__dict__)
+    require(a.c is c and a.__spec__.origin == str(_ADMISSION_PATH)
+            and Path(a.__file__).absolute() == _ADMISSION_PATH, "E_RUNTIME")
+    _ADMISSION_SOURCE.recheck("E_RUNTIME")
+except BaseException:
+    _ADMISSION_SOURCE.close()
+    raise
+
 NAMES = (*e.EVIDENCE_NAMES, "bundle.json")
 REQUEST_KEYS = e.REQUEST_BODY_KEYS | {"scope_id", "allowed_paths"}
 
@@ -191,7 +197,9 @@ class _Workspace:
     def recheck(self, sealed=False):
         _ADMISSION_SOURCE.recheck("E_RUNTIME")
         require(sys.modules.get("ystack_publisher_admission") is a
-                and sys.modules.get("ystack_shadow_consumer") is c and a.c is c, "E_RUNTIME")
+                and sys.modules.get("ystack_shadow_consumer") is c and a.c is c
+                and a.__spec__.origin == str(_ADMISSION_PATH)
+                and Path(a.__file__).absolute() == _ADMISSION_PATH, "E_RUNTIME")
         for path, raw in self.inputs:
             require(e.read_regular(path, max(1, len(raw))) == raw, "E_RELATION")
         for item in self.owned:
@@ -735,9 +743,32 @@ def _write_provenance(ws, incident):
             "native_release": native.provenance(ws.parent), "commands": ws.commands}})
 
 
+def _retained_write(ws, materialized, frozen, files):
+    incident = parse(frozen["incident.json"])
+    prefix = "ystack-evidence/" + incident["id"] + "/"
+    require(all(materialized.files[prefix + name] == raw for name, raw in frozen.items()), "E_RELATION")
+    require(set(files) == set(e.EVIDENCE_NAMES) | {"publisher-body.txt"}
+            | ({"scope-policy.json"} if ws.record_form == "withheld-write-policy.v1" else set()), "E_RELATION")
+    if ws.record_form == "withheld-write-policy.v1":
+        raw = ws.components[SOURCE / "scope/v1/scope-policy.json"].raw
+        require(files["scope-policy.json"] == materialized.files[prefix + "scope-policy.json"] == raw, "E_RELATION")
+        c.scope_policy_ref(raw)
+    retained = {"claim.json": (ws.work / "captured/claim.json").read_bytes(),
+        "duty-evaluation.json": (ws.work / "captured/duty_evaluation.json").read_bytes(),
+        "materialization-input.json": materialized.input_raw,
+        "materialization-response.json": materialized.response_raw,
+        "preparation-record.json": materialized.preparation_record_raw,
+        "preparation-manifest.json": materialized.preparation_manifest_raw,
+        "qualified-identity.json": materialized.qualified_identity_raw,
+        "sandbox-evaluation.json": materialized.evaluation_raw, **materialized.verification_files}
+    require(all(files[name] == raw for name, raw in retained.items()), "E_RELATION")
+    require(files["publisher-body.txt"] == _publisher(incident, materialized.candidate_tree_id)[1], "E_RELATION")
+
+
 def _admit(ws, materialized, frozen, files, write):
     incident = parse(frozen["incident.json"])
     revision = incident["body"]["git_revision_ref"]
+    _retained_write(ws, materialized, frozen, files)
     draft = dict(files)
     draft["shadow-record.json"] = _outer_record(ws, materialized, frozen, files, write,
         files["consumer-provenance.json"], files["trace-ledger.json"], ws.record_form)
@@ -758,23 +789,7 @@ def _admit(ws, materialized, frozen, files, write):
             and admitted.candidate_tree_id == materialized.candidate_tree_id, "E_RELATION")
     write_set = materialized.write_set
     expected = parse(admitted.admission_raw)
-    prefix = "ystack-evidence/" + incident["id"] + "/"
-    require(all(materialized.files[prefix + name] == raw for name, raw in frozen.items()), "E_RELATION")
-    require(set(files) == set(e.EVIDENCE_NAMES) | {"publisher-body.txt"}
-            | ({"scope-policy.json"} if ws.record_form == "withheld-write-policy.v1" else set()), "E_RELATION")
-    if ws.record_form == "withheld-write-policy.v1":
-        raw = ws.components[SOURCE / "scope/v1/scope-policy.json"].raw
-        require(files["scope-policy.json"] == materialized.files[prefix + "scope-policy.json"] == raw, "E_RELATION")
-        c.scope_policy_ref(raw)
-    retained = {"claim.json": (ws.work / "captured/claim.json").read_bytes(),
-        "duty-evaluation.json": (ws.work / "captured/duty_evaluation.json").read_bytes(),
-        "materialization-input.json": materialized.input_raw,
-        "materialization-response.json": materialized.response_raw,
-        "preparation-record.json": materialized.preparation_record_raw,
-        "preparation-manifest.json": materialized.preparation_manifest_raw,
-        "qualified-identity.json": materialized.qualified_identity_raw,
-        "sandbox-evaluation.json": materialized.evaluation_raw, **materialized.verification_files}
-    require(all(files[name] == raw for name, raw in retained.items()), "E_RELATION")
+    _retained_write(ws, materialized, frozen, files)
     require(_git_inventory(ws, ws.paths["source_git_dir"], revision) == materialized.source_facts, "E_RELATION")
     candidate = _candidate_facts(ws, materialized.response_raw, incident, materialized.source_facts,
         materialized.files, write_set)
@@ -787,8 +802,8 @@ def _admit(ws, materialized, frozen, files, write):
         provenance, files["trace-ledger.json"], ws.record_form)
     final_body = parse(files["shadow-record.json"])["body"]
     draft_body = parse(draft["shadow-record.json"])["body"]
-    require(final_body["write"] == draft_body["write"]
-            and final_body.get("scope_policy_ref") == draft_body.get("scope_policy_ref")
+    require(canonical(final_body["write"]) == canonical(draft_body["write"])
+            and canonical(final_body.get("scope_policy_ref")) == canonical(draft_body.get("scope_policy_ref"))
             and files.get("scope-policy.json") == draft.get("scope-policy.json")
             and canonical(final_body["write"]["publisher_request"]) == admitted.publisher_request_raw
             and files["publisher-body.txt"] == admitted.body_raw
@@ -850,6 +865,7 @@ def write(request_path: Path, bundle: Path, work: Path, output: Path, parent: di
         frozen = {name: (work / "frozen" / name).read_bytes() for name in NAMES}
         incident = parse(frozen["incident.json"])
         publisher, publisher_body = _publisher(incident, materialized.candidate_tree_id)
+        ws.capture("publisher-body.txt", publisher_body)
         stage = parse(materialized.input_raw, 8 * e.OUTPUT_LIMIT)["stage_request"]["content"]["body"]
         write_section = {"bundle_ref": _bundle_ref(frozen["bundle.json"]),
             "scope_id": ws.request_doc["body"]["scope_id"], "workflow_id": stage["workflow_id"],
@@ -879,6 +895,8 @@ def write(request_path: Path, bundle: Path, work: Path, output: Path, parent: di
         trace_receipt = ws.component("trace-validation", "telemetry/v1/validate-trace-ledger.sh",
             ["validate", incident["id"], ws.request_doc["id"], str(trace_path)])
         files.update({"trace-ledger.json": trace, "trace-receipt.json": trace_receipt})
+        body_hold = ws.hold(work / "captured/publisher-body.txt", e.OUTPUT_LIMIT)
+        require(body_hold.raw == files["publisher-body.txt"], "E_RELATION")
         _admit(ws, materialized, frozen, files, write_section)
         ws.anchor.seal_recheck()
         ws.recheck(sealed=True)
