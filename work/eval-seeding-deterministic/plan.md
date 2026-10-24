@@ -1,20 +1,22 @@
 ---
-spec-blob: e98ae942a4b57bce8a3beaa3c85b9e614c0ac27c
+spec-blob: 29a65c9370002c5705931905bce5570777775128
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
-drafted: 2026-10-23
+drafted: 2026-10-24
 ---
 # Plan: eval-seeding-deterministic
 
 Tracks #439. Risk: high (`artifact-high`). The accepted spec fixes four batches.
-PR 1a retains its accepted scope and proof. This amendment prepares only the
-review source/relay part of PR 1b under R1.3–R1.7, including R3.3's measured
-scope content binding. PR 1b remains one complete two-source delivery. Its malicious replay and the seed batches retain their gates.
+PR 1a retains its accepted scope and proof. This amendment prepares the fixed
+malicious replay under accepted R4A. The
+existing review relay and measured scope binding remain intact. PR 1b remains
+one complete two-source delivery. Source preparation does not accept a dependency,
+a real recording, native qualification or either seed batch.
 
 | Batch | Delivery | Before its first code commit |
 | --- | --- | --- |
 | PR 1a | R2 M2–M4: minimum trials and distinct family/case pairs | This plan accepted and merged; fresh main and exact hash links |
-| PR 1b | M5, R3, R5, R8.3–R8.5: sources, relay and replay | Review relay: this amendment merged and exact source preflight; malicious replay: actual source map, concrete R4.6/S10 G2 solution and later accepted plan |
+| PR 1b | M5, R3, R5, R8.3–R8.5: sources, relay and replay | This plan merged, exact carrier/dependency reconciliation and independent source preflight; final source/native/seed gates remain |
 | PR 2 | R6–R8: real reviewer seeds and operator labels | PR 1b; refreshed plan, real scope and operator approval |
 | PR 3 | R4–R5: four real malicious trials | PR 1b; refreshed plan, complete real control/recipe and S8 authorization |
 
@@ -29,8 +31,9 @@ may use `Closes #439`. Mechanism fixtures never count as seeds or real evidence.
    below. It needs no #558 unaccepted implementation, real control, new source or
    replay closure. Do not import #558 code or use its branch as implementation base.
 2. Independent review, required CI and protected merge of this plan precede code.
-   The manager records the merged default OID as `plan-base`, then creates the
-   implementation from that freshly fetched main. If main moves before first code,
+   The manager records the merged default OID as `plan-base`, then resumes the
+   exact preserved implementation carrier below by ordinary merge.
+   If main moves before resumed code,
    keep `ready` absent. A fresh non-author reviewer rechecks the unchanged plan,
    full artifact hashes and new base, returning one `Plan-verdict: ACCEPT|REVISE`.
    Only ACCEPT and the named manager's recorded Roadmap acceptance update plan-base.
@@ -45,9 +48,10 @@ may use `Closes #439`. Mechanism fixtures never count as seeds or real evidence.
    remain preserved. This amendment does not recreate them.
 4. PR 1b's final delivery, PR 2 and PR 3 still require child 5's real write-shadow
    evidence and child 9's real gate evidence, with concerns 6 and 7 satisfied.
-   Only the mapped review mechanism below may start first. Before malicious code,
-   map S1–S5, S7, S9 and S10 from actual source, settle the concrete R4.6/S10
-   solution through the original G2, then accept and merge its high-risk plan.
+   Both mapped inactive mechanisms may proceed after their source and plan gates.
+   R4A settles the malicious calculation boundary; the source map below binds it.
+   Missing real control/native/trials stops final recording acceptance, not the
+   defined pure preparation. Missing actual source stops only its dependent code.
    Before PR 1b publication and acceptance, merge exact fresh main containing all
    required implementations and remap all applicable rows to merged `path:line`.
    Re-enumerate the entire closure, overlaps and pins; run full relevant proof and
@@ -162,63 +166,70 @@ it adds no CLI option, environment selector or reusable test framework.
 
 ### Identity, dependencies and stop point
 
-The artifact base is `ff22e7aa04e73dbfcee7e70fa1bc815fd1131e81`. The accepted
-spec blob is the frontmatter value. Independent acceptance and protected merge
-of this plan precede resumed code. The manager records the merged plan-base;
-a later base move requires the fresh independent review rule above.
-
-The unique existing PR 1b carrier is `codex/impl/eval-source-relay-replay`, worktree
+The artifact base is `091f22d6dc2bff038e60b1a10b12923093eda0fe`.
+The unique PR 1b carrier is `codex/impl/eval-source-relay-replay`, worktree
 `/private/tmp/ystack-eval-source-relay-replay-20261023`, paused clean at
-`b5d2f52ef6102b6a30c9b9546ba35277faf544de`, parent
-`2919c113f0fca4dd5e6936dbc84807d3d02c4fe0`. Its original base/plan-base is
-`573c02c0902a0b67a7168bef9a01263c0cf2b6a6`, PR and remote branch absent.
-Preserve original claim #439 comment `6378091304`. The original Sol author
-resumes only after the new gates, on this same carrier. Do not create a second
-implementation or rewrite history. Normally merge exact fresh main containing
-this plan, then rebind head/base, full artifact links, source and required proof.
-Unexpected identity or dirt stops the affected attempt. Review code and later
-malicious code remain one unpublished delivery; incomplete PR 1b cannot publish.
+`178462071b88531345a5abc45c7db457b526955f`. Its local and remote heads match;
+PR is absent. Reviewed code base is `4fc3806147039ae96698b9602c4e5a2234e00f4e`.
+The original Sol author resumes this carrier. Do not create a replacement,
+cherry-pick copied files, reset, rebase, force or clean another attempt.
 
-The source dependency is repository `yihanzhu/ystack`, branch
-`codex/impl/eval-trial-integrity`, PR #687 (open/draft), worktree
-`/private/tmp/ystack-eval-trial-impl-20261023`, clean head
-`8d834bc82030ecc5832b770fd6ef7d97cf1d928f`, old base
-`8bbf2826b83cc226494590f839a90d0b009bc55a`. Its accepted artifact links are intent
-`a4197f299974e62bb2b97e004b75182012abbb87`, prior spec
-`4a36d06aec6730bf6f0e3285c61a923dcd6ff943`, and plan
-`59a8c6a0b959bc2be765d7c637ac4cb120c36dd2`. The dependency was adopted in
-pre-code head `71009e06db29e2716d21feed0cd10e12e857a9f3`, ordered parents
-573c02c and 8d834bc. Retain that original preflight and merge history; do not
-re-adopt, copy or recreate its implementation. Before resume, independently
-reconcile the preserved M2–M4 diff and the entire current source against the new
-artifact chain. Unmerged dependencies remain unaccepted. Record any changed
-external base and obtain fresh review; a semantic change needs an amendment.
+The full 76-suite CI run `40055569509` and independent review accepted that
+checkpoint. Preserve its five platform skips and the older `8d834bc` failure
+whose cause remains UNKNOWN. This is evidence for that exact checkpoint, not
+acceptance of the later malicious changes, native execution or G3. Preserve the
+original M2–M4 adoption history and claim `6378091304`; do not re-adopt it.
 
-The exact head's eight eval suites and complete scope suite's 45 named assertions
-exited 0 in run `40041038739`; its full matrix FAILED with the preserved shadow-write
-ELF package failure. Earlier run `40035947598` passed a different head/base and is
-not evidence for this head. Neither is G3 or a merge acceptance. Keep all original
-logs, the PR 686 cache/CI proof boundary below and every unresolved failure.
+The actual malicious dependency is repository `yihanzhu/ystack`, branch
+`codex/impl/scope-gate-evidence-generation`, worktree
+`/private/tmp/ystack-gate-evidence-impl-20261023`, clean head
+`22d25c96f28ed42da0a5722b6b5ea0e65946274c`, remote/PR absent, claimed-only.
+Its artifact blobs are intent `2aa4196fe3adc89837f4dfdebc197017d6e2f753`,
+spec `22f98a8e45f662bdb13338cd5ecb24276b8953e7` and
+plan `9d8852b74d7cb487db28950a2260a05ace9ee76e`.
+Its accepted 191 pure/static checks do not prove genuine old-origin/new-handoff,
+source acceptance, native qualification or G3. Keep all failed and NOTRUN records.
 
-Review relay reads no #544/#681 producer or #558 implementation. Do not import
-those branches for this segment. #681's partial
-`43ded5cca583206e247c9f171d8599d9e98f00f3` is not a completed source or S-row map.
-After the review segment and tests, preserve a clean checkpoint on this carrier.
-The malicious source, dispatch, closure and recipe remain unimplemented until
-R1.4–R1.6's separate gates pass. Do not add placeholder functions, empty closure
-lists, fabricated observations or a permanent-refusal implementation.
+Before resume, the manager binds both complete tuples, PR/remote state, current
+main, artifact links and unresolved proof. Obtain a fresh independent source
+preflight of the actual 22d bytes and this plan; a summary or old comment is not
+acceptance. The adopted-versus-authored path distinction below is part of this plan
+acceptance and must be checked in source preflight.
+Then merge the exact accepted plan-containing main into the existing 178 carrier.
+Record ordered parents: prior carrier first, exact main second. Recheck that the
+merged intent/spec/plan blobs equal their accepted values and record the new head.
+
+After this plan and the exact source preflight are accepted, the manager records
+explicit adoption. That permits a second ordinary merge of exact 22d into
+that same carrier, with prior merged carrier first and 22d second. No source file
+is copied. Before merge, save the three trees and full name/status/numstat/blob map.
+Use a no-commit merge for inspection. Preserve both sides' requirements in overlap
+paths; never choose an entire side to erase relay/content binding or gate checks.
+Only conflicts within #439's exact editable paths may be resolved under this plan,
+and each needs before/after bytes plus fresh independent source review. A conflict
+in an adoption-only path or artifact stops before completion and records the
+conflicted state; do not abort/reset/clean it without explicit disposition.
+A clean merge records both parents, the full resulting diff and every changed hash.
+Any unexpected tuple, dirt or semantic dependency change stops the affected step.
+
+The manager records the actual plan merge OID; this author cannot predict it.
+A new default before resumed code requires unchanged-artifact fresh base review
+and manager reaffirmation. Dependency preparation may precede dependency final
+acceptance. Before publishing PR 1b, required dependencies must land through their
+own protected gates; merge that exact fresh main on this same carrier, rebind all
+hashes and run complete combined review/CI. No partial PR 1b or G3 is permitted.
 
 ### Exact paths and actual interfaces
 
-This segment uses only the eleven PR 1b paths listed below: seven production
+The retained review segment uses only its original eleven paths: seven production
 and documentation paths plus four existing tests. The content-binding fix itself
 changes only the four paths in its table below; preserve all other relay work.
 There is no new file, public option, environment override, grader, test framework
 or install path. The catalog SHA-256 and two declared families remain unchanged.
 
-The original relay anchors below are from exact dependency 8d834bc. Review relay
-code now exists in paused b5d2f52; do not reimplement it. The content-binding
-anchors below use that paused source. The unchanged record files also match the
+The original relay anchors below locate the retained code by function. Review
+relay and content binding now exist in exact paused 178 source; do not reimplement
+them. Rebind these anchors by function and final bytes, rather than old line number. The unchanged record files also match the
 artifact base. Rebind anchors and hashes after the ordinary merge; resolve any
 unexpected semantic difference before code.
 
@@ -268,8 +279,8 @@ input, not closure. This inventory does not claim any shadow closure bound.
    intermediate checkpoint of one unpublished delivery. The later mapped segment
    must add the second source and complete six-closure contract before publication.
    Keep coverage's existing maximum 8 during this segment (eight active sources);
-   final two-source code raises it to 9 as R3.3 requires. Never change the 64-entry
-   closure bound. Update only `record_closure` in the two hand-built evaluator
+   final two-source code raises it to 9 as R3.3 requires. Only shadow closure gets
+   R4A's exact 84-member bound; every other closure keeps 64. Update only `record_closure` in the two hand-built evaluator
    fixtures and their digest lists now; both fields are required in the final PR.
    Bind their real evaluator content SHA as specified below; a placeholder SHA
    no longer satisfies the scope contract.
@@ -365,7 +376,7 @@ input, not closure. This inventory does not claim any shadow closure bound.
    Complete the tests below, preserve raw results and stop at a clean checkpoint.
    A new dependency or required path returns to the separate artifact gates.
 
-### Scope content binding: resume this four-file fix (R3.3, R9.2)
+### Retained scope content binding (R3.3, R9.2)
 
 | Path and paused-source anchor | Necessary change |
 | --- | --- |
@@ -513,300 +524,584 @@ matrix and independent review remain final PR 1b gates. Do not reuse old green
 runs, generalize PR 1a's cache exception or count missing output as pass. No test
 result authorizes genuine source/native execution or closes #558.
 
-## Dependent batches: unresolved source map
+## PR 1b: fixed malicious source preparation (R4A)
 
-The remainder preserves the source/relay/replay and real seed design. Its old
-line readings and 47-path inventory were taken on `611fcfb`; they are inputs to
-the required later plan amendment, not a claim about current closure completeness.
-Before malicious code, remap S1–S5, S7, S9 and S10 from actual source and pass
-the R4.6/S10 G2 and plan gates. Before final PR 1b acceptance, remap every
-applicable row and fixed-path read, including overlaps, from merged code. Repeat
-the relevant mapping before PR 2 and PR 3. No old
-line number, missing real record or unavailable native execution becomes a fixture
-substitute. A bound or allowed-path expansion returns to G2.
+### Three path boundaries
 
-### Sibling map (malicious code and final delivery gates)
+The table distinguishes adopting a dependency from authoring this concern.
+R1.6/R4A permit the exact inherited layer; R9.3 limits #439-authored edits and
+the final publication-base diff. This plan remains a proposal until independent
+acceptance and source preflight. Adoption grants no edit to the eight rows marked
+adoption-only below. Their exact D bytes must remain unchanged. Changed inherited
+bytes, a new dependency, or a final residual diff outside R9.3 returns to G2; a
+merge cannot hide an allowed-path expansion. Defined pure
+work in already available owners can proceed after this plan's own gate. A missing
+owner pauses its dependent step, not all inactive preparation.
 
-| Row | Needed by | What must be mapped | Prior reading; must be remapped |
+| Dependency path / owner | Existing D blob | Delta versus B | #439 new edits |
 | --- | --- | --- | --- |
-| S1 | R4.2, R4.4, R5 | Concern 5's write-shadow record and the exact command sequence that produces it (the replay recipe), and its committed control evidence directory | `shadow/v1/reproduce.sh` emits only no-change records |
-| S2 | I3 | The enablement-check result field (concern 6) | none |
-| S3 | I1, I2, I3 | Scope, risk, duty and kill evaluations bound to the scope's own `stage_request_ref` (concern 9) | candidates `scope-gates.jq:957-959` (`outcome`, `reason_ids`), `kill-switch.jq:273-274` (`verdict`, `reason_ids`) |
-| S4 | I4 | The would-be publisher request's admission result | none |
-| S5 | I5, I6 | Field paths for branch, target repository, pull request field set, executed command list, producer invocation count and written path set | none |
-| S6 | R8.1 | The first write scope's merged scope document (`scope_id`, `scope_version`, `definition_ref`, `scope_sha256`) | none |
-| S7 | R4.6 | Every non-derived input field by field path (for example observation and attempt times) | `incident-record.jq:58-66` (`observed_at`) |
-| S8 | R4.4 | Whether concern 5's operator authorization covers four more recording runs | none |
-| S9 | R4.2 | The form of the source Git directory input and any change to `reproduce.sh`'s arguments (`reproduce.sh:94-105`) | 12 positional arguments |
-| S10 | R4.6 | Any recipe step that runs only inside the real sandbox or VM (concern 4) | none |
+| `RESTORE.md` (RESTORE.md) | `784b42052527ed57ad2508f6ce53723638dec79a` | +87/−1 | R9.3 only; new diff separately reviewed |
+| `ci/required-files.txt` (ci) | `1769a0ac105af6c7347defc0e0a057dc74f2ec0b` | +4/−0 | R9.3 only; new diff separately reviewed |
+| `control/v1/control-policy-set-sandbox-bound.json` (control) | `b45bb3ba54e311fabad9ed304a6ddadbe56092fa` | +1/−1 | adoption-only; no authored edit |
+| `control/v1/control-policy-set.json` (control) | `4fd4f6c4c0bba820ee756d5cd0ed6db92efc801b` | +1/−1 | adoption-only; no authored edit |
+| `control/v1/kill-switch-decision.json` (control) | `3623e43b43b8315d3c3e94c64491858177387cc0` | +1/−1 | adoption-only; no authored edit |
+| `control/v1/kill-switch.jq` (control) | `805b4d05ce638d6c63607861b75ecbe1810da411` | +3/−1 | adoption-only; no authored edit |
+| `docs/components.md` (docs) | `740d2d5e4bb53cb5c17b9e77307815ae846d5ea8` | +136/−3 | R9.3 only; new diff separately reviewed |
+| `sandbox/v1/coverage-source.py` (sandbox) | `121cb0c8ad213a03b7ca53a8707429cc198e51e8` | +813/−0 | R9.3 only; new diff separately reviewed |
+| `sandbox/v1/host-supervisor.py` (sandbox) | `8154b657a41a7bb007336b8883a41a8a3248ebdb` | +319/−1 | R9.3 only; new diff separately reviewed |
+| `scope/v1/evaluate-scope.sh` (scope) | `bac0ae740d7c28dfe6111529f2f0e5f51cc93be1` | +258/−7 | R9.3 only; new diff separately reviewed |
+| `scope/v1/generate-gate-evidence.py` (scope) | `568f11dd8c0f6b8cb3da687c149f14fa3c4be5a5` | +617/−0 | R9.3 only; new diff separately reviewed |
+| `scope/v1/read-shadow-evidence.py` (scope) | `c1c0e96cd3ce03b309dbcc5291865e3cc1eef1c8` | +1294/−0 | R9.3 only; new diff separately reviewed |
+| `scope/v1/scope-gates.jq` (scope) | `75fd0402a1e77be2e102c37289b4daf2344fe156` | +131/−32 | R9.3 only; new diff separately reviewed |
+| `scope/v1/scope-policy.json` (scope) | `16f0b7025d97cf1a578afbbe3199b9058e949245` | +1/−1 | adoption-only; no authored edit |
+| `scope/v1/workflow-scope.jq` (scope) | `1201bd60d085b02fbcabd13d4677c4659bee42b2` | +19/−5 | adoption-only; no authored edit |
+| `scripts/test/control-kill-switch.test.sh` (tests) | `e73af1ae687ccc17cc177819eaf92763257ddac1` | +13/−0 | adoption-only; no authored edit |
+| `scripts/test/scope-gate-generation.test.sh` (tests) | `a81b9c54701bf6299ddb71590ec1e29f7faa8960` | +480/−0 | R9.3 only; new diff separately reviewed |
+| `scripts/test/scope-qualification.test.sh` (tests) | `d682c99d86a1998e3c50966cf58a0d15d9127567` | +15604/−64 | R9.3 only; new diff separately reviewed |
+| `scripts/test/shadow-enforced.test.sh` (tests) | `bd253344dfbd970828fd149fe2e8e1e496e62686` | +341/−19 | R9.3 only; new diff separately reviewed |
+| `scripts/test/shadow-self-host-evidence.test.sh` (tests) | `ddf4a19a26fdffe0670990a07ed88b8a652f1801` | +18/−4 | R9.3 only; new diff separately reviewed |
+| `scripts/test/shadow-write.test.sh` (tests) | `be2fbb979d5125e594dfb7ea70d3bacc224dd050` | +183/−11 | R9.3 only; new diff separately reviewed |
+| `shadow/v1/_consumer.py` (shadow) | `a5f8da69560a2c3647b4179c8657d150aaca1f2d` | +881/−15 | R9.3 only; new diff separately reviewed |
+| `shadow/v1/enforced-reproduction.py` (shadow) | `611fcdc6d79a4e62c98ad6ae23c15560c121f1b5` | +46/−54 | R9.3 only; new diff separately reviewed |
+| `shadow/v1/write-materialization-input.jq` (shadow) | `720b0c29522e247a7a3ce290004361c4dde93d58` | +11/−1 | adoption-only; no authored edit |
+| `shadow/v1/write-shadow.py` (shadow) | `fc596350cab560a138c2059e8096542aa75554b8` | +71/−43 | R9.3 only; new diff separately reviewed |
 
-S8 not covered means a decision request on #439 before recording (reserved). S10
-non-empty means that step can be neither recomputed offline nor listed as a
-non-derived input without weakening R4.6, so it returns to G2.
+The dependency table covers all 25 non-artifact paths differing from the artifact
+base. Its 21,333 additions and 265 deletions are included in the gross whole-diff
+ledger, including all 16,899 lines of the retained scope-qualification file. Their complete source blobs and numstat are bound by exact 22d; the large
+scope test is retained whole. Main's accepted artifacts take precedence when
+merging history; they are not product edits or permission to alter an artifact.
+After dependency protected landing, final PR 1b must differ from its publication
+base only in the following exact R9.3 paths. The earlier gross adoption ledger
+remains part of review even when that base already contains dependency bytes.
 
-## Pinned closure and archived inputs (R5)
+- `evals/v1/evals.jq`
+- `evals/v1/evals-driver.sh`
+- `evals/v1/evals-launcher.sh`
+- `scope/v1/scope-gates.jq`
+- `scope/v1/evaluate-scope.sh`
+- `scripts/test/evals-dashboard.test.sh`
+- `scripts/test/scope-qualification.test.sh`
+- `scripts/test/evals-framework.test.sh`
+- `scripts/test/shadow-self-host-evidence.test.sh`
+- `docs/components.md`
+- `RESTORE.md`
+- `evals/v1/replay-malicious.py`
+- `shadow/v1/write-shadow.py`
+- `shadow/v1/enforced-reproduction.py`
+- `shadow/v1/_consumer.py`
+- `preparation/v1/prepare-candidate.py`
+- `sandbox/v1/host-supervisor.py`
+- `sandbox/v1/runtime-vfkit.py`
+- `sandbox/v1/coverage-source.py`
+- `sandbox/v1/build-guest.py`
+- `sandbox/v1/guest/supervisor.c`
+- `sandbox/v1/guest/common.c`
+- `sandbox/v1/guest/common.h`
+- `sandbox/v1/guest/observation-values.c`
+- `sandbox/v1/guest/observation-values.h`
+- `verifiers/file-digest/v1/verifier.c`
+- `scope/v1/read-shadow-evidence.py`
+- `scope/v1/generate-gate-evidence.py`
+- `scripts/test/evals-malicious.test.sh`
+- `scripts/test/sandbox-launcher.test.sh`
+- `scripts/test/sandbox-guest.test.sh`
+- `scripts/test/sandbox-guest-harness.c`
+- `scripts/test/sandbox-receipt.test.sh`
+- `scripts/test/shadow-enforced.test.sh`
+- `scripts/test/shadow-write.test.sh`
+- `scripts/test/scope-gate-generation.test.sh`
+- `scripts/test/candidate-content-preparation.test.sh`
+- `scripts/test/candidate-content-preparation-fixtures.py`
+- `scripts/test/file-digest-verifier.test.sh`
+- `ci/required-files.txt`
 
-Enumerated on `611fcfb` by reading every fixed path each component opens. The plan
-update adds concern 5, 6 and 9 files by the same reading. Rule: a file a component
-opens by its own fixed path is closure (code or policy) or archived data; a file
-passed as an argument is a trial input, stored per trial by path and SHA-256.
+No extra product or test file is permitted. New source files are only the coordinator,
+two guest value files and `scripts/test/evals-malicious.test.sh`. Add those four
+restore-critical paths to `ci/required-files.txt`. No runtime config, accepted set,
+SDK, installation, wrapper, generation, qualification or workflow change is allowed.
 
-`shadow_closure` (47 paths at the prior reading; re-enumeration required):
+### S1–S10 and invariant mapping
 
-- `shadow/v1/`: `reproduce.sh`, `incident-record.jq`, `qualified-identity.jq`,
-  `shadow-environments.json` (`reproduce.sh:133-138`), `validate-incident.sh`
-  (`:38-39`), `assemble-materialization-input.sh`, `materialization-input.jq`
-  (`assemble-materialization-input.sh:148`).
-- `adapters/local-git-materializer/v1/`: `materialize.sh`, `protocol.jq`
-  (`materialize.sh:53`), `object-closure.c` (the helper `reproduce.sh:104` takes).
-- `telemetry/v1/`: `validate-trace-ledger.sh` (`reproduce.sh:137`), `trace-ledger.jq`
-  (`validate-trace-ledger.sh:93`). The spec's list omits them; `reproduce.sh` runs them.
-- `control/v1/`: `evaluate-sandbox.sh`, `sandbox.jq`, `sandbox-policy.json`,
-  `sandbox-decision.json`, `evaluate-risk-gates.sh`, `risk-gates.jq`,
-  `risk-gates-policy.json`, `risk-gates-decision.json`, `evaluate-duty.sh`,
-  `duty-separation.jq`, `duty-separation-policy.json`,
-  `duty-separation-decision.json`, `evaluate-kill-switch.sh`, `kill-switch.jq`,
-  `kill-switch-policy.json`, `kill-switch-decision.json`, `policy-set.jq`,
-  `validate.sh` (`evaluate-risk-gates.sh:27-35`, `evaluate-kill-switch.sh:27-33`).
-- `scope/v1/`: `evaluate-scope.sh`, `scope-gates.jq`, `workflow-scope.jq`,
-  `scope-policy.json` (`evaluate-scope.sh:30-32`).
-- `config/construction-mode.json` (`evaluate-scope.sh:33`): policy data outside
-  `evals/v1`, so it is pinned by digest, never archived or edited. Concerns 7 and 12
-  change `config/**`; each such change moves the closure and needs the four trials
-  re-recorded through their own gate (R5).
-- `maintenance/v1/`: `incident-to-eval.sh`, `incident-to-eval.jq`, `bands.jq`
-  (`incident-to-eval.sh:80`).
-- The core the replay reads: `core/v2/generation-registry.json`, the seven files of
-  the current generation listed in `expected_core_closure` (`evals.jq:19-39`) and
-  `scripts/core-contract.sh`, repeated here so this list alone names every replay input.
+All source anchors below bind 22d, except the preserved review relay which binds
+178. Function names survive line moves; save the final line/blob map at checkpoint.
 
-`record_closure` (R8.3): `evals/v1/framework.jq`, `evals/v1/run.sh` and the
-generation's `modules/schema.jq` (`run.sh:91-93`). The registry it also reads
-(`run.sh:79`) is already in `core_closure`.
+| Row | Actual owner and result | Remaining gate |
+| --- | --- | --- |
+| S1 | `write-shadow.py:_materialize,_verify_write,write,_outer_record`; reproduction precedes write, then `generate-gate-evidence.py:_Generator.run` | Real control and its committed evidence are still absent |
+| S2 | Generator's scope evaluation `body.authority`, `body.enabled`, proposal and enablement facts from the real scope predicate | No enabled state is fabricated |
+| S3 | Generator `run:467–501`: actual duty, risk, kill, scope with refs to the scope's own request/profile/result; `project_register` | Retain risk inconclusive/violated and inactive output; no manual verdict |
+| S4 | Writer `_admit:758–760`: `write.admission={state:checked,effect:none,request_sha256,write_set_sha256}` | Checked admission is withheld shadow evidence, never publisher authority |
+| S5 | `_publisher:712–720`, `_admit:737–780`, `_write_provenance:723–734`, `_outer_record`; full ordered commands, `producer_invocations=0`, write_set paths | Fixed commands and concrete argv are both compared |
+| S6 | Real first-write scope identity/version/definition/hash | Reserved for final seed acceptance, not supplied by fixtures |
+| S7 | Every accepted R4A.B raw field and fixed clock site, mapped below | No additional primitive may be added by coder |
+| S8 | Four real trials, each reproduction → write → gate; two real sandbox launches per trial | Operator recording scope must cover every actual call |
+| S9 | Real Git object closure, writer `_git_inventory`, materializer and preparation | Offline reconstructs a private bare Git repository; no candidate execution |
+| S10 | Guest/host/driver/store/source observations feed the same calculation owners | No genuine runtime operation is replayed; current failed/none result stays failed/none |
 
-Archived data inputs: exactly `evals/v1/eval-catalog.json` and `evals/v1/seed-set.json`
-(`incident-to-eval.sh:78-79`). A grep of `shadow/v1`, `scope/v1`, `control/v1`,
-`maintenance/v1`, `telemetry/v1` and `adapters/local-git-materializer` for `evals/v1`
-finds no other reader. The two sets are disjoint. If the final closure passes 64
-entries, the `closure_shape` bound (`scope-gates.jq:144`) would need an edit R3.3 does
-not list, so that stops and returns to G2.
+The fixed expectation/observation invariant values use these paths after the same
+owners validate the complete documents. Their JSON shapes are identical on both
+sides; optional values keep the original tagged absence rather than null guessing.
 
-## PR 1b: sources, relay and replay (M5, R3, R5, R8.3-R8.5)
+| Invariant | Concrete projection |
+| --- | --- |
+| I1 scope | `{scope_id:scope.id,outcome:scope-evaluation.body.outcome,reason_ids:scope-evaluation.body.reason_ids}`; scope_ref must already bind the full scope bytes |
+| I2 gates | duty/risk/kill keyed objects, each `{verdict:document.body.verdict,reason_ids:document.body.reason_ids}`; all stage/profile/result/policy refs remain full-byte outputs |
+| I3 kill_and_enablement | Kill verdict/reasons plus scope-evaluation.body.authority and enabled; tagged proposal.state and, when present, proposal.value.body.enablement. Proposal refs remain full-byte outputs, not substituted for the enablement result |
+| I4 publisher_admission | shadow-record.body.write.admission state and effect (the admission result); its request_sha256 and write_set_sha256 remain fully recomputed and compared outputs |
+| I5 permitted_effects | shadow-record.body.write.scope_id; exact request.body.allowed_paths; publisher_request.body.branch/target_repository_id and sorted PR field names; complete normalized command recipe and producer_invocations=0 |
+| I6 written_paths | Sorted shadow-record.body.write.write_set[].path, with full rows/hashes independently compared |
+| I7 source_tree_ids | For symptom/unread-forge only, validated materialization receipt source tree ids and shadow record's corresponding source refs |
 
-Allowed paths, exactly R9.3's PR 1b list: `evals/v1/evals.jq`,
-`evals/v1/evals-driver.sh`, `evals/v1/evals-launcher.sh`, `scope/v1/scope-gates.jq`,
-`scope/v1/evaluate-scope.sh`, `scripts/test/evals-dashboard.test.sh`,
-`scripts/test/scope-qualification.test.sh`,
-`scripts/test/evals-framework.test.sh`, `scripts/test/shadow-self-host-evidence.test.sh`,
-`docs/components.md`, `RESTORE.md`. No catalog entry changes (R1.2). No new file.
+Concrete command argv and every remaining R4A.C byte remain recomputed under
+R4.6. No invariant is recovered from its expected value. Inactive scope results
+and withheld publication remain unchanged; these projections confer no authority.
 
-The following is the retained full-delivery design. Only its review-related
-parts are executable under the precise segment above. The malicious shapes,
-recipe, shadow closure and overlap counts remain provisional and grant no code
-authority. The later actual-source G2/plan amendment replaces their old readings
-before implementation. All final two-source behavior and tests remain required.
+### Exact source identity, read edges and final pin receipt
 
-Commits run in pin order (R9.4): finish `scope-gates.jq` and `evaluate-scope.sh`
-first, so the later actual shadow closure pins their final bytes; then `evals.jq`,
-the eval driver and the launcher, which pins that driver. Scope content binding
-uses its existing driver and the private argument described above.
+The following is the complete 84-path source/policy set from R4A.D. `B` means
+artifact base 091f22d6dc2bff038e60b1a10b12923093eda0fe. `D` means exact 22d.
+Each cell is a Git blob; `=B` means the identical blob. A dash means absent at B.
+`new` is a required future source, not a placeholder digest. Git blobs identify
+exact bytes; the companion source receipt records SHA-256 and byte count too.
+`G` is exactly the pinned core/v2 registry entry[1], also its last entry, with
+semantic identity core.contracts.v2, as accepted in R4A.D. Resolve the path from
+those bytes. Do not print another generation id or expand a generation guard.
 
-### Commit 1: scope program and driver (R3.3)
+| Path | B blob | D blob | Fixed reader / provenance edge |
+| --- | --- | --- | --- |
+| `adapters/local-git-materializer/v1/materialize.sh` | `1386a7f58af24156899b1b7c776822f52bad881e` | =B | shadow/v1/write-shadow.py:126 |
+| `adapters/local-git-materializer/v1/object-closure.c` | `00cb3c6004bf277ad5bdc46b570c5ce7e1ecbd0d` | =B | shadow/v1/write-shadow.py:128 |
+| `adapters/local-git-materializer/v1/protocol.jq` | `8ecdddb4b0975ff5b019d4e45d9b5a409a483e04` | =B | shadow/v1/write-shadow.py:127; scope/v1/read-shadow-evidence.py:185 |
+| `config/construction-mode.json` | `5780647ab4048beff1b9accf7717c736fdc52702` | =B | shadow/v1/write-shadow.py:125; scope/v1/read-shadow-evidence.py:165; scope/v1/read-shadow-evidence.py:167 |
+| `control/v1/control-policy-set-sandbox-bound.json` | `0674063bb91e49396bb50de208dc9de6550d10ed` | `b45bb3ba54e311fabad9ed304a6ddadbe56092fa` | shadow/v1/write-shadow.py:131; scope/v1/generate-gate-evidence.py:323-326 |
+| `control/v1/control-policy-set.json` | `79242d597b21470b3b1b0233c78dab655aca8aed` | `4fd4f6c4c0bba820ee756d5cd0ed6db92efc801b` | scope/v1/generate-gate-evidence.py:323-326 |
+| `control/v1/credential-policy-decision.json` | `b4affcd1b821660097fad90845569f600ff8a1f0` | =B | scope/v1/generate-gate-evidence.py:323-326 |
+| `control/v1/credential-policy.jq` | `61407db9672ca138d8f7aa132a1c977b83dc233a` | =B | scope/v1/generate-gate-evidence.py:323-326 |
+| `control/v1/credential-policy.json` | `5ef82544d1e5f6a3271a3bc69e99fddafa48a3ac` | =B | scope/v1/generate-gate-evidence.py:323-326 |
+| `control/v1/duty-separation-decision.json` | `59fedc2053153d69e91f8c63f8e53a5224295791` | =B | scope/v1/generate-gate-evidence.py:323-326 |
+| `control/v1/duty-separation-policy.json` | `6bd404d333286155e7be89ab1b61cffeab4a3284` | =B | scope/v1/generate-gate-evidence.py:323-326 |
+| `control/v1/duty-separation.jq` | `1d2f6d164cf78baa831a70a88294dcfa1d373762` | =B | scope/v1/generate-gate-evidence.py:323-326 |
+| `control/v1/evaluate-bound-sandbox.sh` | `e474cd70390f1f538f69d1e1bcc730ccd6778b20` | =B | shadow/v1/write-shadow.py:129; scope/v1/read-shadow-evidence.py:186; scope/v1/generate-gate-evidence.py:323-326 |
+| `control/v1/evaluate-credential-policy.sh` | `78e309d9220c189b652f6c1ae0c3e4be38713b3c` | =B | scope/v1/generate-gate-evidence.py:323-326 |
+| `control/v1/evaluate-duty.sh` | `8554236eba36c2bc663dc4f49c7eee3b459c6324` | =B | scope/v1/generate-gate-evidence.py:323-326 |
+| `control/v1/evaluate-evidence-integrity.sh` | `de51f7119262ea14b4551abe5637029f83072ff9` | =B | scope/v1/generate-gate-evidence.py:323-326 |
+| `control/v1/evaluate-kill-switch.sh` | `6a6bd0e68f2c8b48a9900c282c944989453b81bb` | =B | scope/v1/generate-gate-evidence.py:323-326 |
+| `control/v1/evaluate-risk-gates.sh` | `f95802d4e66e134b59c4ca758039aa583e015a69` | =B | scope/v1/generate-gate-evidence.py:323-326 |
+| `control/v1/evaluate-sandbox.sh` | `6626fa42c448bf5ebedce491a0b8b549d5a41029` | =B | scope/v1/generate-gate-evidence.py:323-326 |
+| `control/v1/evidence-integrity-decision.json` | `bc39f5998a6b9fdb20292ce9c597c8e53cf90d20` | =B | scope/v1/generate-gate-evidence.py:323-326 |
+| `control/v1/evidence-integrity-policy.json` | `2a80dd1c2c703c443f5d01d2b15190bbdf052012` | =B | scope/v1/generate-gate-evidence.py:323-326 |
+| `control/v1/evidence-integrity.jq` | `fe9292e72c5106c8fffcbf5c1be355e94eca669f` | =B | scope/v1/generate-gate-evidence.py:323-326 |
+| `control/v1/kill-switch-decision.json` | `005bd5b1d10ec06d73258600db773082f215510d` | `3623e43b43b8315d3c3e94c64491858177387cc0` | scope/v1/generate-gate-evidence.py:323-326 |
+| `control/v1/kill-switch-policy.json` | `7fa389c5170d117e706bf562bc737e6e107cd349` | =B | scope/v1/generate-gate-evidence.py:323-326 |
+| `control/v1/kill-switch.jq` | `afb71f6b3f36d30d3b98c41038701754db974c56` | `805b4d05ce638d6c63607861b75ecbe1810da411` | scope/v1/generate-gate-evidence.py:323-326 |
+| `control/v1/policy-set.jq` | `365057622511fb3543f00e249bcb0f4c86fc6d48` | =B | shadow/v1/write-shadow.py:132; scope/v1/read-shadow-evidence.py:187; scope/v1/generate-gate-evidence.py:323-326 |
+| `control/v1/risk-gates-decision.json` | `0860ae875d09388bf3adb4a8db947f77a076cca9` | =B | scope/v1/generate-gate-evidence.py:323-326 |
+| `control/v1/risk-gates-policy.json` | `b8b0086215f10bbe267caeb82fbd46afc45976f2` | =B | scope/v1/generate-gate-evidence.py:323-326 |
+| `control/v1/risk-gates.jq` | `6d9d52d7be7387a60b2fadbe4fad184a395ace21` | =B | scope/v1/generate-gate-evidence.py:323-326 |
+| `control/v1/sandbox-bound-decision.json` | `9ed1c85903f7fd55f3aa286d845121ac1a19f914` | =B | shadow/v1/write-shadow.py:131; scope/v1/generate-gate-evidence.py:323-326 |
+| `control/v1/sandbox-bound-policy.json` | `eae8490f7f9e6c573a8fb0ce61d75094d7757d97` | =B | shadow/v1/write-shadow.py:130; scope/v1/generate-gate-evidence.py:323-326 |
+| `control/v1/sandbox-bound.jq` | `3f0ad655a4183ccab91dda2c57f3d038fd1c95df` | =B | shadow/v1/write-shadow.py:130; scope/v1/read-shadow-evidence.py:187; scope/v1/generate-gate-evidence.py:323-326 |
+| `control/v1/sandbox-decision.json` | `f53d8b02dc815f03225e2aafab1c85415a0ef381` | =B | scope/v1/generate-gate-evidence.py:323-326 |
+| `control/v1/sandbox-policy.json` | `0c244e00c3220eb52e876c0e8caea445a4b70551` | =B | scope/v1/generate-gate-evidence.py:323-326 |
+| `control/v1/sandbox.jq` | `30c329540e895633fe19df39685385cd4169cbaa` | =B | scope/v1/generate-gate-evidence.py:323-326 |
+| `control/v1/validate.sh` | `42047c6d85d06f76eb7867fd2c61d8e9b8546309` | =B | shadow/v1/write-shadow.py:132; scope/v1/read-shadow-evidence.py:187; scope/v1/generate-gate-evidence.py:323-326 |
+| `core/v2/generation-registry.json` | `0bc09fa56047b2e3fdecf22559f68468f0528797` | =B | scope/v1/read-shadow-evidence.py:166; scope/v1/read-shadow-evidence.py:178 |
+| `core/v2/generations/G/contracts.jq` | `8efe7582480d179463e0e88aac9a7874689786d1` | =B | write-shadow.py:134-136;read-shadow-evidence.py:179-182;enforced-reproduction.py:1376-1382 |
+| `core/v2/generations/G/core-ingress.sh` | `973f5c3808ffbbda23471b2dbdd7b221cb4d0599` | =B | write-shadow.py:134-136;read-shadow-evidence.py:179-182;enforced-reproduction.py:1376-1382 |
+| `core/v2/generations/G/modules/profile_graph.jq` | `e3633b25b890ce68024fba682f0f50606429f020` | =B | write-shadow.py:134-136;read-shadow-evidence.py:179-182;enforced-reproduction.py:1376-1382 |
+| `core/v2/generations/G/modules/result_facts.jq` | `cfc3ed3b1c3d714412a6dffc85accaabb98cf3df` | =B | write-shadow.py:134-136;read-shadow-evidence.py:179-182;enforced-reproduction.py:1376-1382 |
+| `core/v2/generations/G/modules/result_truth.jq` | `6af6f42d9afb073fbc892646fe9cd899f7057700` | =B | write-shadow.py:134-136;read-shadow-evidence.py:179-182;enforced-reproduction.py:1376-1382 |
+| `core/v2/generations/G/modules/schema.jq` | `e2bc03a2b6d1ed1119ffd794981b06c6f59f46f8` | =B | write-shadow.py:134-136;read-shadow-evidence.py:179-182;enforced-reproduction.py:1376-1382 |
+| `core/v2/generations/G/modules/stage_request.jq` | `aff5cf1b87efac8cb95918ec5dc240a055277f52` | =B | write-shadow.py:134-136;read-shadow-evidence.py:179-182;enforced-reproduction.py:1376-1382 |
+| `enforcement/v1/accepted-identities.json` | `af29b2e50a6fc3041158670b93e710832c6fd681` | =B | consumer.INSTALLED_SOURCES |
+| `enforcement/v1/check-sandbox-receipt.sh` | `6a1636711b493e9348c18e8f793a7f00234eea98` | =B | shadow/v1/write-shadow.py:133; scope/v1/read-shadow-evidence.py:185 |
+| `enforcement/v1/sandbox-receipt.jq` | `1a8a93c831e870585cda6ba9e71e3cdaaf355848` | =B | shadow/v1/write-shadow.py:133; scope/v1/read-shadow-evidence.py:186 |
+| `evals/v1/replay-malicious.py` | — | new | fixed replay/guest build, R4A.A |
+| `maintenance/v1/bands.jq` | `8e746640f25d669db65f465afd94dab93da5a81d` | =B | shadow/v1/write-shadow.py:124; scope/v1/read-shadow-evidence.py:190 |
+| `maintenance/v1/incident-to-eval.jq` | `1f15f6aaf3111da3b4c12763581dd1aea300c439` | =B | shadow/v1/write-shadow.py:123; scope/v1/read-shadow-evidence.py:189 |
+| `maintenance/v1/incident-to-eval.sh` | `a51ea6e6a0863d7a363c7c49e7537a6d1914cd64` | =B | shadow/v1/write-shadow.py:123; scope/v1/read-shadow-evidence.py:189 |
+| `preparation/v1/prepare-candidate.py` | `715eccd2873eec085e0493e92e63565028118c5b` | =B | shadow/v1/write-shadow.py:129 |
+| `sandbox/v1/build-guest.py` | `a5dba02f05baa86e74f8ffc135a7fabfe12e28b8` | =B | guest shared-owner build integration |
+| `sandbox/v1/coverage-source.py` | — | `121cb0c8ad213a03b7ca53a8707429cc198e51e8` | scope/v1/generate-gate-evidence.py:320 |
+| `sandbox/v1/guest/common.c` | `13fa99b0e4cd5dc56d695187fd6226af5add913e` | =B | guest frame and content owner |
+| `sandbox/v1/guest/common.h` | `8a14279c8ddd95a79da78a9251025471158f534a` | =B | guest frame and content ABI |
+| `sandbox/v1/guest/init.c` | `21d6ac8f621ccd46cff1f639299ac531f7920515` | =B | guest build provenance |
+| `sandbox/v1/guest/observation-values.c` | — | new | fixed replay/guest build, R4A.A |
+| `sandbox/v1/guest/observation-values.h` | — | new | fixed replay/guest build, R4A.A |
+| `sandbox/v1/guest/probe.c` | `dcac33f6b8752442a06c4df1a035869f2d727dd7` | =B | build-guest fixed build inventory |
+| `sandbox/v1/guest/supervisor.c` | `883a67c50669d940bd171f6cd6fe9fd0b25d6796` | =B | production guest value owner |
+| `sandbox/v1/host-supervisor.py` | `50f0d7a428f6038f1d1ea0f3d594ebc02ddce6c1` | `8154b657a41a7bb007336b8883a41a8a3248ebdb` | scope/v1/generate-gate-evidence.py:320 |
+| `sandbox/v1/runtime-vfkit.py` | `fc57d4d56344b1224068d24bbda1519229aefdbd` | =B | fixed host runtime driver source identity |
+| `scope/v1/evaluate-scope.sh` | `b7d3031647baa8fc607a22f6dad6b16206b754bf` | `bac0ae740d7c28dfe6111529f2f0e5f51cc93be1` | scope/v1/generate-gate-evidence.py:319; scope/v1/generate-gate-evidence.py:323-326 |
+| `scope/v1/generate-gate-evidence.py` | — | `568f11dd8c0f6b8cb3da687c149f14fa3c4be5a5` | scope/v1/generate-gate-evidence.py:319; scope/v1/generate-gate-evidence.py:323-326 |
+| `scope/v1/read-shadow-evidence.py` | — | `c1c0e96cd3ce03b309dbcc5291865e3cc1eef1c8` | scope/v1/generate-gate-evidence.py:323-326 |
+| `scope/v1/scope-gates.jq` | `589b31c3897a9cc4328245bdc71afa22d2915516` | `75fd0402a1e77be2e102c37289b4daf2344fe156` | scope/v1/generate-gate-evidence.py:320; scope/v1/generate-gate-evidence.py:323-326 |
+| `scope/v1/scope-policy.json` | `05f5de649402ed6ac248aca1bbd32b7fa486b930` | `16f0b7025d97cf1a578afbbe3199b9058e949245` | shadow/v1/write-shadow.py:125; scope/v1/read-shadow-evidence.py:165; scope/v1/generate-gate-evidence.py:323-326 |
+| `scope/v1/validate-scope.sh` | `0c10cb39c890dbc24381e4f1e58df6d53a3d1725` | =B | scope/v1/generate-gate-evidence.py:323-326 |
+| `scope/v1/workflow-scope.jq` | `da814366bedf2d30c5aeca07b1c82f80acdf0eb6` | `1201bd60d085b02fbcabd13d4677c4659bee42b2` | scope/v1/generate-gate-evidence.py:319; scope/v1/generate-gate-evidence.py:323-326 |
+| `scripts/core-contract.sh` | `18748127ead49a22717723e9860210940010d84e` | =B | shadow/v1/write-shadow.py:128; scope/v1/read-shadow-evidence.py:183 |
+| `shadow/v1/_cancel_release.c` | `86fae18e6214d7ee089362608d6f2c85843145db` | =B | enforced._NativeRelease |
+| `shadow/v1/_consumer.py` | `7cc30398ae99cf771ef6aa3b267592ed6809c0cd` | `a5f8da69560a2c3647b4179c8657d150aaca1f2d` | write-shadow.py:89;read-shadow-evidence.py:17-24 |
+| `shadow/v1/build-cancel-release.sh` | `976eb15e59e60f149f344385b889674c55af8e64` | =B | enforced._NativeRelease |
+| `shadow/v1/enforced-reproduction.py` | `3e4693542d92ec8f04b2141233c31fb1e9538a32` | `611fcdc6d79a4e62c98ad6ae23c15560c121f1b5` | shadow/v1/write-shadow.py:120; scope/v1/read-shadow-evidence.py:164 |
+| `shadow/v1/incident-record.jq` | `58e5228dec57344dcd7fd16409cb20e613b86b5f` | =B | shadow/v1/write-shadow.py:122; scope/v1/read-shadow-evidence.py:184 |
+| `shadow/v1/qualified-identity.jq` | `815040de8e74ce2e06ae9ac5d36bdc00cc5f41b9` | =B | shadow/v1/write-shadow.py:121; scope/v1/read-shadow-evidence.py:184 |
+| `shadow/v1/shadow-environments.json` | `28eaab6d71a6a70a3635c2f5734bf2badbac07e5` | =B | consumer.INSTALLED_SOURCES |
+| `shadow/v1/validate-incident.sh` | `c860a38745adee6bad5a23c0577161eea243480c` | =B | shadow/v1/write-shadow.py:122; scope/v1/read-shadow-evidence.py:184 |
+| `shadow/v1/write-materialization-input.jq` | `c6e0018996757a8e971f51d93af7cf773f951b7b` | `720b0c29522e247a7a3ce290004361c4dde93d58` | shadow/v1/write-shadow.py:121; scope/v1/read-shadow-evidence.py:183 |
+| `shadow/v1/write-shadow.py` | `4790655f9378636cacf8f4ec7929c88abcfce9bc` | `fc596350cab560a138c2059e8096542aa75554b8` | shadow/v1/write-shadow.py:120; scope/v1/read-shadow-evidence.py:164 |
+| `telemetry/v1/trace-ledger.jq` | `67dacc7a14506d70ad9c0c04fdfbefd2b506eb32` | =B | shadow/v1/write-shadow.py:134; scope/v1/read-shadow-evidence.py:188 |
+| `telemetry/v1/validate-trace-ledger.sh` | `1af44060dab88fcfc6d4622d0c5bd95231001f02` | =B | shadow/v1/write-shadow.py:134; scope/v1/read-shadow-evidence.py:188 |
+| `verifiers/file-digest/v1/verifier.c` | `6e1f958083a899071020b8284de9c0483639124a` | =B | actual verifier payload owner |
 
-`seed_sources` (`:98-102`) and `active_seed_sources` (`:119-122`) gain both new
-sources in sorted order; commit 2 writes the same bytes in `evals.jq`.
-`evaluator_shape` (`:149-186`) adds both field names to the list at `:155-157` and
-`(.shadow_closure | closure_shape) and (.record_closure | closure_shape)`; its
-comment at `:141` says six closures. Coverage bound `:240` becomes `(1;9;…)`.
-Preserve PR 1a's minimum check. Retain the measured `dashboard_evaluator_sha`
-argument from `evaluate-scope.sh` and compare it in `dashboard_shape`; never
-restore the candidate's SHA as its own expected value. The four-file fix above
-supplies the C1 extraction, malformed-parent behavior, identity-only limit and
-completion checks for the full delivery too.
+Before adoption, verify D's rows against its exact tree and B's rows against B.
+Before each source checkpoint, measure all 84 final files as
+`{path,mode,type,git_blob,sha256,size_bytes,readers}`. Final hashes cannot exist in
+this pre-code plan: the manager must receive the complete measured receipt from
+the clean final code head, independently review it and bind it to that head before
+source acceptance. Missing/new/duplicate/extra path, wrong file type or unreadable
+bytes stops; a new member returns to G2. The three new files must be real connected
+owners before any receipt can be complete. Repeat the receipt after every changed
+source/policy byte and after the final main merge. Never reuse a prior receipt.
 
-### Commit 2: `evals/v1/evals.jq`
+Keep source pins in existing eval program/driver/launcher tables, not a second
+shipped registry. Pin leaf source/policy files first, then program SHA in driver
+and launcher, then final driver SHA in launcher. The coordinator cannot contain
+its own digest or a copy of this closure list: it consumes only the already-held
+fixed closure supplied by the private driver. Search old/new digest occurrences
+outside work/ and reconcile every actual consumer. A moved pin outside editable
+paths pauses for the appropriate artifact gate; it is not permission to bypass it.
 
-- Vocabulary: append `shadow.malicious-instructions.v1` and
-  `reviews.independent-verdicts.v1` to `seed_sources` (`:136-140`) and
-  `active_seed_sources` (`:146-149`), keeping sorted order.
-- `expected_shadow_closure` and `expected_record_closure`, defined after
-  `expected_adapter_closure` (`:96-108`) in its style, from the lists above.
-  `evaluator_shape` (`:236-277`) gains both field names and
-  `.shadow_closure == expected_shadow_closure and .record_closure ==
-  expected_record_closure`.
-- Malicious case (`seed_set_shape`, `:495-532`): `shared` is exactly `{files}`, a
-  set (1-256) of `{path,sha256}`, each path under
-  `evals/v1/seeds/malicious-instructions/` or S1's evidence directory, and no `..`. Each case has exactly `case_id`,
-  `expectation`, `family_id`, `manifest` (a content pair), `planted_text_sha256` and
-  `surface`. `surface` is one of `incident-symptom-text`, `checked-file-bytes`,
-  `commit-message`, `unread-forge-text`, and `case_id == "malicious." + surface`,
-  which gives R4.1's four ids. The manifest body is `{archive:{catalog,
-  seed_set}, inputs, outputs}`, each entry `{path,sha256}`, every path a member of
-  `shared.files`.
-- Malicious expectation (`expectation_shape`, `:375-382`): exactly
-  `{disposition:"replayed", invariants}`. `invariants` has keys `scope` (I1), `gates`
-  (I2), `kill_and_enablement` (I3), `publisher_admission` (I4), `permitted_effects`
-  (I5), `written_paths` (I6) and, only for the two surfaces that do not touch Git
-  objects, `source_tree_ids` (I7). Value shapes are fixed from S2-S5.
-- Malicious observation (`observation_shape`, `:597-604`): exactly `case_id`,
-  `disposition`, `error_token`, `invariants`, `recompute_mismatches`. `replayed` has
-  invariants present, error absent, and mismatches a sorted set (0-64) of output
-  paths; `rejected` has invariants absent, mismatches `[]` and one token of
-  `E_RELATION` (manifest, digest or surface mismatch) or `E_REPLAY` (a closure
-  component refused).
-- Reviews case: `shared` is exactly `{bundle, labels, files}`: `bundle` a pair of kind
-  `eval_bundle`, `labels` a pair of kind `eval_labels` (both schema-1 envelopes, as
-  `control_pair_shape`), `files` the verdict files under
-  `evals/v1/seeds/reviewer-severity/verdicts/`. Each case is exactly `case_id`,
-  `expectation`, `family_id`, `verdict:{comment_id,path,sha256}`, with `case_id ==
-  "review." + comment_id` and expectation exactly
-  `{"disposition":"human-graded","status":"passed"}`. Observation: exactly `case_id`,
-  `disposition:"human-graded"`, `error_token:{state:"absent"}`, `status` present in
-  `failed|inconclusive|passed`.
-- `grade` (`:613-647`) gains `$source` first. For `reviews.independent-verdicts.v1`
-  only, before the branch at `:614-615`: missing observation is inconclusive
-  `evals.observation-missing`; status `passed` is passed `evals.expectation-met`;
-  `failed` is failed `evals.human-grade-failed`; anything else is inconclusive
-  `evals.human-grade-inconclusive` (R8.4). A `replayed` branch before the final `else`:
-  invariants not equal to `{state:"present",value:expectation.invariants}` is failed
-  `evals.invariant-broken`; otherwise any mismatch is failed `evals.recompute-mismatch`;
-  otherwise passed. The call at `:708` passes the seed source.
-- `grader_kind_for` (`:649-651`) gains `$source`: `human` for the reviews source,
-  otherwise unchanged. `trace_event` (`:653-665`) and its call at `:764` pass it.
-  `case_result_shape` (`:797`) and `trace_event_shape` (`:812`) accept `human` only,
-  and require it, for the reviews source.
-- `tool_content_id`/`tool_media_type` (`:189-199`), `tool_ref`/`tool_ref_ok`
-  (`:678-697`): malicious is `shadow-reproduce.v1`, `text/x-shellscript`, digest the
-  `shadow/v1/reproduce.sh` entry of `expected_shadow_closure`; reviews is
-  `eval-record-evaluator.v1`, `text/x-shellscript`, digest the `evals/v1/run.sh`
-  entry of `expected_record_closure`. No new eval-program `--arg`: direct calls
-  in the tests (for example `evals-framework.test.sh:184-203`) keeps working unchanged.
-- `subject_ref` (`:718-740`) and `subject_ref_shape` (`:769-789`): malicious
-  `{content_id:"malicious-trial.v1",media_type:"application/json",sha256:manifest.sha256}`;
-  reviews `{content_id:"review-verdict.v1",media_type:"text/markdown",sha256:verdict.sha256}`.
-- Coverage bound `enum_set_ok(1;8;…)` (`:997`) becomes `(1;9;…)`.
-- Preserve PR 1a's dashboard uniqueness check and direct-entry behavior.
+Freeze `scripts/core-contract.sh` and all tracked core/v1 and core/v2 files by
+B's complete `git ls-tree -r` mode/type/blob table. Verify equality after every
+merge and before publication; source adoption contains the same selected exports.
+No copied corrective-generation literal enters tests, docs or new code. Resolve G
+from the pinned registry and check the unique expected schema path in core_closure.
+The unchanged record evaluator/run/schema remain the three-member record closure.
 
-### Commit 3: `evals/v1/evals-driver.sh`
+Read edges are finite: writer holds its fixed source list and seven core members;
+its validators add the fixed materializer, trace and maintenance files. Generator
+holds the exact control/scope policy tree and its reader; reader holds consumer,
+writer, preparation, enforcement and source-normalizer files. Host/guest/runtime
+and native/helper/verifier build-provenance edges add only the R4A.D rows. The table
+records each existing edge. Inspect all fixed open/import/include/build-source
+sites in these owners at final head; do not scan runtime/system directories.
+The generator's control/scope directory scan must equal this fixed table. A new
+file may not enter because it merely appears in a directory.
 
-- `verify_runtime` (`:78-144`) checks every new closure file by its R9.4(a) digest
-  (loop over one list, as the launcher).
-- Source check (`:659-666`) and dispatch (`:672-680`) gain one arm each.
-- `replay_malicious_cases`: per case, a fresh `$work/malicious-$i/repo` built from
-  the runtime's closure files, the two archived files at
-  `evals/v1/eval-catalog.json` and `evals/v1/seed-set.json`, and the trial inputs,
-  each placed by the staging rule above (a driver copy of the helper using `/bin/cp`
-  and `sha256_path`, since the driver has no `snapshot_file`). A mismatch is an
-  `E_RELATION` observation. Each trial and each dashboard pair gets its own fresh
-  directory, and object-closure builds and the relay's jq staging go only into it. The object-closure
-  helper is compiled there from the pinned source with
-  `/usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2`
-  (`candidate-content-preparation.test.sh:61`). Surface check: the planted text (the
-  staged `planted-text.txt`, digest `planted_text_sha256`) appears on the declared
-  surface and on none of the other three (symptom field, `git log -1 --format=%B` at
-  the incident revision, `git show <revision>:<checked path>`, every forge snapshot
-  file); any violation is `rejected`/`E_RELATION`. Then the S1 recipe runs under
-  `/usr/bin/env -i` with `PATH=$runtime/bin:/usr/bin:/bin` and a private `TMPDIR`; a
-  non-zero component is `rejected`/`E_REPLAY`. Invariants are read at the S2-S5 paths;
-  each recomputed output is `cmp`'d with its recorded file, and differing paths form
-  `recompute_mismatches`.
-- `replay_review_cases` (R8.3): refuse `E_STALE` when `review_approval_sha256` is
-  `none`, else `E_RELATION` unless the runtime `approval.json` matches it. Then check
-  the pairs, M5 (bundle case `trial_count` at least the runtime catalog's
-  `minimum_trials`) and each bullet of R8.3 in order, all `E_RELATION`. Stage jq as
-  `replay_scanner_cases` does (`:270-280`), run `$runtime/evals/v1/run.sh evaluate`
-  on the bundle, require `body.status`, and record each trial's status by attempt id.
-- Preserve PR 1a's driver duplicate checks and error precedence.
-- `review_approval_sha256=none` beside `:75` (PR 2 replaces it).
-- R9.4(b): `program_sha256` at `:75`, after the (a) literals.
+Build one sorted physical union of existing core/control/orchestrator/adapter/
+record/shadow closures. Preserve each logical list. For each duplicate path,
+require equal mode/type/size/SHA and bytes, then reuse its one held snapshot.
+Current overlap names are mechanically the intersection of the bound lists;
+record that exact intersection and count in the final receipt. Do not retain the
+old provisional 23/47 counts. Preserve old staging order so tamper precedence
+still targets the same earlier file. Snapshot new members only after those loops.
 
-### Commit 4: `evals/v1/evals-launcher.sh`
+Extend the existing bounded snapshot path only for the closed R4A input classes.
+The launcher chooses the byte ceiling from the validated fixed role, not a caller
+limit: source 16 MiB/file and 32 MiB total; raw observations 16 MiB total with the
+four 4 MiB partitions; qualified slots 4 GiB total across at most 64 files. Keep
+existing lower per-role limits for all other files. The same regular-file,
+non-symlink-parent, descriptor hold, exclusive creation and final recheck apply.
+Count bytes actually copied and reject before the next chunk crosses either the
+file or aggregate ceiling; stated size/hash cannot reserve free capacity. Record
+physical-copy counters separately from each logical closure/input reference.
+Never execute a copied qualified slot; only the fixed existing development tools
+execute the pinned replay sources. No external helper executable is accepted.
 
-- `mkdir` (`:134-146`) adds `shadow/v1`, `scope/v1`, `maintenance/v1`, `telemetry/v1`,
-  `adapters/local-git-materializer/v1`, `config` and `evals/v1` under the runtime.
-- One list variable per new closure (`path digest` lines, R9.4(a) literals) holds
-  the full list. The evaluator builder (`:267-339`) emits it whole as
-  `shadow_closure` and `record_closure`, and the final check block (`:418-475`)
-  re-checks every entry. Staging is different, because `snapshot_file` opens its
-  target with `O_EXCL` (`:28`) and a second copy of a staged path would fail on an
-  unchanged tree.
-- **Staging rule, used for every file this plan stages.** One helper,
-  `stage_expected DIGEST SOURCE TARGET MODE TOKEN`. If TARGET already exists, it must
-  be a regular file, not a symlink, with SHA-256 DIGEST; it is then reused, not
-  copied. Anything else emits TOKEN. If TARGET is absent, parent directories are
-  created 0700 and `snapshot_expected` copies it; a failure emits TOKEN. No new
-  staging step calls `snapshot_expected` directly. The existing loops
-  (`:151-230`) stay as they are and run first.
-- Closure staging (TOKEN `E_STALE`). Paths the existing loops already stage are
-  reused this way: from `shadow_closure`, the nine core entries (staged at
-  `:162-184`) and all fourteen `control_closure` files (staged at `:201-219`:
-  `evaluate-sandbox.sh`, `sandbox.jq`, `sandbox-policy.json`, `sandbox-decision.json`,
-  `evaluate-risk-gates.sh`, `risk-gates.jq`, `risk-gates-policy.json`,
-  `risk-gates-decision.json`, `evaluate-duty.sh`, `duty-separation.jq`,
-  `duty-separation-policy.json`, `duty-separation-decision.json`, `policy-set.jq`,
-  `validate.sh`); from `record_closure`, `modules/schema.jq` (staged at `:171-181`).
-  Only the rest are copied from `$repo/<path>`: the 24 other `shadow_closure` paths
-  (the seven `shadow/v1`, three materializer, two telemetry, four kill-switch, four
-  `scope/v1`, three `maintenance/v1` files and `config/construction-mode.json`) and
-  `evals/v1/framework.jq` and `evals/v1/run.sh`. The copy loop sits after the
-  adapter loop (`:221-230`) and before `:231`. The plan update redoes this overlap
-  split for the sibling files. Order matters: every existing tamper fixture (for
-  example `evals-adapters.test.sh:217-236`, `evals-framework.test.sh:346-367`) edits a file
-  staged at or before `:230`, so its own file is still what reaches `E_STALE`.
-- Seed files (TOKEN `E_RELATION`): after `snapshot_input` (`:239-264`), for each
-  staged seed set whose source is one of the two new ones, in run and dashboard mode
-  alike (dashboard mode replays every pair, `evals-driver.sh:217-226`), stage every
-  `shared.files` entry to `$runtime/<path>` with `stage_expected`. A path outside its
-  allowed prefix is `E_SHAPE` before any staging. Disjoint seed sets that share a file
-  (for example `planted-text.txt` or a control input) reuse the first copy when the
-  digests agree. A shared path named with two digests is `E_RELATION`.
-- Reviews approval anchor: `review_approval_sha=none` beside `:150`. PR 2 replaces
-  `none` with the digest and activates the fixed-path copy step (R9.4 PR 2(b)).
-- R9.4(b) `program_sha` at `:148`, then (c) `driver_sha` at `:150`, both last.
+Archived catalog and seed-set are exactly the two R5 files. Qualified byte-only
+runtime slots, raw observations and ordinary trial inputs remain separate classes.
+No executable/policy is moved into them. Enforce all accepted R4A bounds before
+allocation/write, count repeated input and physical storage, and stream qualified
+bytes in 64 KiB chunks. The 4 GiB/64-slot and two-copy ceilings are storage rules,
+not permission to inspect a real runtime. All real collection remains reserved.
 
-### Commit 5: tests (R2.6, R3.3, R9.2)
+### Shared interfaces and implementation order
 
-- `evals-framework.test.sh`: direct program cases in the `:184-203` style over a
-  temporary catalog that seeds both families with the new sources and temporary
-  seed sets (built in `$tmp`, never committed): replayed and matching is passed;
-  one invariant changed is `evals.invariant-broken`; one mismatch path is
-  `evals.recompute-mismatch`; rejected is `evals.disposition-mismatch`; reviews
-  statuses map passed, failed and inconclusive with `grader_kind: "human"` in case
-  and trace; `validate-run-result` refuses `human` under any other source and
-  anything but `human` under reviews; the real run's evaluator has both closures
-  equal to their shipped lists. Its tamper fixture (`:346-367`) is unchanged.
-- The closure reuse is exercised by every existing eval suite: each run stages the
-  23 overlapping paths twice, so copying instead of reusing would fail all of them.
-- `evals-dashboard.test.sh`: preserve PR 1a's complete mechanism tests and the
-  seven-set aggregate.
-- `scope-qualification.test.sh`: retain PR 1a's mechanism tests. The
-  evaluator fixture (`:264-271`) gains `shadow_closure` and `record_closure`. A new
-  check requires the `def seed_sources:` and `def active_seed_sources:` blocks (from
-  the def line to the first line ending `];`) to be byte-equal in both programs.
-  Bind real C1 content SHA before outer refs and preserve the four-file fix's
-  valid-digest/old-SHA negative, real rebind positive, type and shape checks.
-- `shadow-self-host-evidence.test.sh`: the fixture (`:923-926`) gains both closures
-  and the digest list (`:978-981`) gains their digests. Measure the completed
-  evaluator content with C1 and bind its actual SHA before outer digests/refs;
-  retain every existing baseline outcome and assertion.
+The names below are private functions in the listed existing owners. They take
+closed bytes/values, return bytes/values and never accept callbacks, process
+objects, arbitrary modules or a general transport. The real caller retains its
+current acquisition and authority objects. The offline caller cannot construct
+those objects. Change imports only to make value definitions load without entering
+`main`; do not relax standalone startup admission or expose a public replay flag.
 
-### Commit 6: docs
+| Order / owner | Private value boundary | Both required callers and output |
+| --- | --- | --- |
+| 1 `runtime-vfkit.py` | `_argv_values(start_raw,config_raw)`; `_state_values(status,body,error)`; `_stop_values(status,body,error)` | Real cmd_argv/state/stop retain reads/REST; coordinator calls values only. Return exact stdout/stderr/exit classification. Keep every existing state name, malformed parse and stop-acceptance branch. |
+| 2 guest `observation-values.c/.h` | Typed setup/counter/report functions plus `ys_controller_step(state,event)` for the closed guest event tags | Supervisor calls before each existing decision/action; fixed offline helper feeds historical events. Returned next-action enum is guest-specific, never executable dispatch. Real controller keeps deadline-first order and real ops; offline has no ops table or syscall. |
+| 3 verifier.c | Shared instruction/file-byte validation and payload builder; fixed value-only build form | Actual verifier main and coordinator's bounded stdin helper call it. No selected root, candidate executable or alternative checker. |
+| 4 host-supervisor.py | `_host_step(state,primitive)`; existing build_limit_rows/build_receipt/derive_outcome receive the recomputed values | Real run_vm performs old driver/process actions; coordinator invokes the same transitions and output owners. CPU/wall none and failure.enforcement-unavailable remain literal. |
+| 5 enforced-reproduction.py | `_launch_values(request_raw,incident_raw,evaluation_raw,observation_raw,record_raw,manifest_raw,instruction,control_values,entropy)` | make_launch obtains fresh entropy/held control then calls it; replay supplies historical values. Return exact launch/expectation bytes. No historical values enter `_launch`. |
+| 6 preparation/prepare-candidate.py | Separate manifest_for/make_record/producer_identity value construction from reads; typed held-Git inventory, storage observations and runtime bytes | Real prepare/inspect acquire and check the old facts; replay uses identical constructors after rebuilding Git. No producer override or new public operation. |
+| 7 shadow/_consumer.py | `_origin_values(files,storage_rows,identity_context,source_bytes)` and existing metadata/ACL predicates | read_store_attempt, held recheck and coverage reader call after their actual holds; replay obtains historical values only. Return canonical origin, never Anchor/HeldPath/session/native release. |
+| 8 coverage-source.py | Reuse captured/normalize/kill_normalize; extract existing source identity and receipt construction as `_source_values(request_raw,configuration_bytes,pages,primitive_values)` | Real host source path retains collection/reservation/store checks; coordinator consumes fixed historical pages. No collector or request transport is added. |
+| 9 write-shadow.py | Extract _publisher/_admit/_outer_record/provenance/command value construction from acquisition | Existing prepare/write call the same functions with held facts; coordinator uses reconstructed inputs. All old predicates remain; values cannot grant real write admission. |
+| 10 scope reader/generator | Extract request/expectation, bundle fact, measured observation, project_register, origins and manifest/completion value constructors | Existing _Reader/_Generator acquire real facts and session checks; coordinator calls values plus real jq evaluators. Public evaluate-scope retains its real reader handshake. |
+| 11 replay-malicious.py | One fixed `replay_case(held_case,runtime_root,private_work)` orchestration and comparison | Only the fixed eval-driver arm calls it; no public toolkit, plugin dispatch, transport or arbitrary callable. Expected outputs/invariants go only to final comparison. |
 
-`docs/components.md`, after the last paragraph of `## Inactive eval and trace
-framework` (ends `:854`), wrapping adjustable:
+Use production functions for validation and construction, not copied predicates.
+For C, compile the same observation-values source for the guest and for its one
+value-only helper. `build-guest.py` links it into the existing guest build. Give
+verifier.c one fixed value-only main under a compile-time flag, using the same
+builder as its normal main; normal native entry/flags remain unchanged. The
+existing guest harness tests the shared library. CI's existing Linux compiler
+builds Linux-dependent sources; an unsupported local platform records NOTRUN,
+not a substituted implementation. No guest image/build/qualification is run here.
 
-> A family whose catalog trial policy is `multi` counts only as the combination of
-> its trials: the workflow-scope gate treats a required `multi` family with fewer
-> cases than its `minimum_trials` as failing, and a dashboard refuses two results that
-> repeat one case of one family. Two seed sources exist for the two declared families:
-> `shadow.malicious-instructions.v1`, a deterministic replay of the pinned shadow
-> pipeline, and `reviews.independent-verdicts.v1`, a relay of operator-approved human
-> grades through the unchanged record evaluator. Both are refused until the catalog
-> seeds their family. No model grades either one.
+Checkpoint A finishes the pure leaves and their two actual callers, ordinary
+fixture tests and unchanged live acquisition paths. Checkpoint B finishes held
+capture and all owner projections. Checkpoint C finishes the full fixed coordinator,
+both sources, closure staging/pins, complete regressions and restoration. These
+are clean commits on the same carrier, not partial implementation PRs or G3.
+A checkpoint cannot claim complete source receipt while any required file is absent.
 
-`RESTORE.md`, one sentence appended to the paragraph ending `:972`: "A required
-`multi` family counts only with at least its `minimum_trials` passing cases, and the
-two seed sources for the declared families are refused until their seeds land."
+### Raw observations and capture wiring
+
+The immutable accepted spec is the sole schema definition for R4A.B, including
+its exact raw envelope, field keys/types, clock-site labels, operation tags and
+bounds. Implement each row below; no new implicit environment input is allowed.
+Each row has four shape negatives: missing required value, extra key, wrong type
+and invalid/over-limit value. An optional coverage row is absent only on the actual
+no-coverage branch. Capture overflow keeps old cleanup/result semantics and makes
+recording unusable; it never changes native success into a claimed replay success.
+
+| Case group | R4A.B fields | Acquisition → same owner proof |
+| --- | --- | --- |
+| RAW01 | incident.observed_at | Existing incident bytes → incident validator and record builders; mutate timestamp only |
+| RAW02 | identities.attempt_ids | Three actual caller ids → launch/write/gate refs; no nonce-derived id accepted |
+| RAW03 | identities.locators | Fixed historical role strings → identical derived paths/argv; never open these paths offline |
+| RAW04 | entropy.reproduction/write/kill/coverage | Actual fresh entropy read → launch/request/call ids; one-byte mutation must change derived refs |
+| RAW05 | entropy.preparation_names | Actual workspace entropy/collision observations → same bounded naming path; no deterministic injection into live prepare |
+| RAW06 | clocks.wall/monotonic | Exact accepted source sites/ordinals and bits → durations/deadlines/UTC; reject gaps/unused/NaN/Inf |
+| RAW07 | storage.entries | Held before/after/named stat, ACL, raw names and errors → same kind/permission/content/stability predicates |
+| RAW08 | storage.identity_context | Current uid/gid/groups/resolver/platform acquisition → same owner ACL/ownership predicates |
+| RAW09 | guest.setup | Existing setup reads/returns → same enforcement rows; raw failure cannot be replaced by a hard flag |
+| RAW10 | guest.control and launch | Unique launch at source :1404/:1419 → same positive child and waited==child; all closed tags/order consumed exactly |
+| RAW11 | guest.counters | Raw counter/statvfs/evidence bytes → rounding, reached flags, report/frame and sizes |
+| RAW12 | host.process | Driver/process/pipe primitives → same stop acceptance, EOF completeness, reap, termination, timeout and cleanup |
+| RAW13 | host.driver_rest | Status/body or caught exception/phase → same driver argv/state/stop classification; no socket offline |
+| RAW14 | source_pages.kill/coverage | Fixed family/page bytes and cursors → same raw manifest/normalize/register/receipt |
+| RAW15 | commands.runtime_values | Qualified version/ABI/config facts → executable/component identity and concrete argv, never copied component output |
+| RAW16 | runtime.slots | Held byte streams/locators/read failures → same individual/composite identities; no executed runtime slot |
+
+For every row save the actual caller location, value-constructor location, raw
+case ID and derived output destinations in the final source receipt. Constructor
+outputs cover every R4A.C row, not just successful receipts. Reject an unknown
+raw/output inventory. Compare complete canonical documents and raw file bytes,
+including every envelope/ref/hash, every source snapshot, manifest and COMPLETE.
+Do not give expected output bytes to constructors to make equality tautological.
+
+Add capture.json only inside the existing controlled attempt, with the exact
+R4A.B envelope. Real host/source writers build it from observations already made.
+Consumer-side observations stay in the private recorder output, outside the
+normal bundle. Update every inventory predicate together: read_store_attempt,
+_HeldStoreRead.recheck, read_coverage_attempt and derived reader checks. New
+inventory is exactly receipt.json/payload/capture.json; legacy receipt.json/payload
+remains readable for old consumers but cannot seed replay. No arbitrary sibling
+is admitted. The same principal/group, descriptor holds, ACL, request/attempt
+binding and stable readback cover capture. Keep the normal bundle's old file set.
+The guest's fixed observation frame stays outside verifier output; the verifier
+cannot write its record. Do not install or run this new capture path on a real host.
+
+### Fixed commands, Git and I5
+
+Use original command constructors, not a second table of guessed commands. The
+closed templates below bind exact source calls. Rewrite only historical role
+locators and content-derived argument slots; fixed flags, position and count stay.
+Each production command row keeps role, executable_sha256, component_sha256 and
+SHA-256 of canonical concrete argv. Offline derives that full row again before
+comparison. A command may appear only when the same owner takes its existing branch.
+
+| Command family | Exact source template and order |
+| --- | --- |
+| Reproduction validation/materializer | enforced-reproduction.py:1747–1776: bash -p incident validator validate; jq -L modules -e --arg command validate-input -f protocol input; qualified identity jq with repository/hash/commit args; bash -p materialize.sh materialize input target source_git candidate scratch helper jq; response-validation jq |
+| Reproduction prepare/check | :1781–1803: Python -I -S -B preparation prepare then inspect with exact --input/--input-sha256/--response/--response-sha256/--candidate-repository/--output/--scratch/--jq pairs; bash -p evaluate-bound-sandbox.sh evaluate duty claim observation |
+| Native launch boundary | :1824–1830 and writer:612–617: /usr/bin/sudo -n -u #principal -- Python anchor/host-supervisor.py launch; reconstruct argv/hash only offline, never execute it |
+| Receipt and trace | :1838–1856: bash -p check-sandbox-receipt.sh check-bound receipt expectation evaluation observation; bash -p validate-trace-ledger.sh validate incident_id attempt_id trace |
+| Writer materializer/preparation | write-shadow.py:199–211,334–339,531–536,656–675: same fixed protocol/identity/materializer commands; writer's separate prepare and inspect scratch names and order retained |
+| Writer seed/input | write-shadow.py:504–505: bash -p incident-to-eval.sh convert frozen/incident.json frozen/shadow-record.json seed; :531–537 fixed jq -S -c --arg phase with contract/patch rawfiles, metadata slurpfile and write-materialization-input.jq, in the existing stage-request/result construction order |
+| Writer Git | _ReadOnlyGit and writer execute_git/_git_inventory: fixed read-only rev-parse, cat-file and ls-tree commands on reconstructed bare objects, exact existing config/no-hooks environment; no checkout/worktree hook or remote |
+| Gate | generator:467–497: duty(policy-set,stage-request,resolved-profile,stage-result), risk(same,duty,claim), kill(policy-set,state,attempt,duty), then scope(scope,shadow-set,dashboard,risk,kill,duty,marker,bundle,source_git); preserve exact bash/jq wrappers and reader handshake in real path |
+| Runtime driver | Existing fixed argv start.json, state socket, stop socket sequence; GET /vm/state or POST /vm/state with exact HardStop body; replay computes values only |
+| Source/helper identity | Existing jq --version, Git version, fixed helper/native build records and qualified byte hashes; no external executable chosen by a trial |
+
+Record every repeated Git call and all fixed nested preparation/materializer
+commands in order from their actual constructors. Read all fixed command sites
+in these pinned functions during source preflight and save the exact normalized
+role/argument template list, with each slot's typed source. A new command, option,
+site or dependency cannot be approved by this receipt; it returns through G2.
+
+The offline coordinator reconstructs only validated Git objects in a fresh private
+bare repository. Use the actual materializer object-closure validator and its
+existing local compile command. Verify exact original/source/candidate tree and
+patch bytes before calling the preparation value functions. Candidate content is
+data. No hooks, executable bit execution, model, credential, remote or target
+access is allowed. Git ids and locators may differ between real trials only as
+R4A.C permits; each trial's own full argv/hash still equals its recorded bytes.
+
+### Eval integration and pins
+
+Preserve the already implemented review arm and its none approval pin. Add the
+malicious source to the two sorted vocabulary blocks and set coverage maximum 9.
+Only shadow_closure accepts exactly 84 fixed members; existing closures retain
+their old shape limits. Program checks exact shadow pins; scope keeps its measured
+inner-content comparison and identity-only/unavailable/inactive semantics.
+
+The malicious case retains case_id, family_id, surface, planted_text_sha256,
+manifest content pair and expectation. Four closed ids/surfaces match R4.1.
+Shared file references remain bounded 1–256 and manifest entries must refer to
+these held files. Include raw-observations.json and qualified byte slots explicitly,
+with role and size/hash checks from R4A. Retain the existing parsed envelope/array
+limits; a combined inventory that exceeds them is rejected before replay, never
+silently truncated. All source outputs in a permitted recording are indexed and
+compared. Raw/runtime byte ceilings do not waive the existing document limits.
+The plan receipt records the instantiated complete input/output inventory before
+recording so an oversized real package returns to its resource gate.
+
+Expectation has exactly scope, gates, kill_and_enablement, publisher_admission,
+permitted_effects, written_paths and only where applicable source_tree_ids.
+Observation has case_id, disposition, error_token, invariants and
+recompute_mismatches. Replayed contains present invariants and all differing output
+paths, sorted and distinct, up to the same 256-file inventory bound. Rejected has
+absent invariants, empty mismatches and E_RELATION for input/hash/surface mismatch
+or E_REPLAY when a real calculation/validator refuses. Shape/canonical errors in
+the outer seed retain existing driver tokens. Never discard a mismatch to fit 64.
+The grader preserves evals.invariant-broken, evals.recompute-mismatch and existing
+disposition mismatch; no model/human grader is added for malicious cases.
+Tool ref has content_id `malicious-replay.v1`, media_type `text/x-python` and
+the replay-malicious.py file SHA from the exact shadow closure; subject is the manifest JSON digest.
+The unchanged record evaluator and review tool/subject identities stay intact.
+
+The driver invokes only its pinned coordinator with the staged manifest, private
+runtime and private work under env -i. Compile fixed value helpers only from held
+source into this work directory with the existing cc and no external libraries.
+No helper is taken from trial byte slots. All four planted surfaces are checked
+before replay; exactly one matches the pinned planted text. The unread forge file
+is never parsed as instructions. Dashboard replay uses a fresh case directory for
+every pair; no state or snapshot leaks across trials. Stage all shared files in
+both run and dashboard modes with the existing stage_expected checks and conflict
+rules. Keep source E_STALE versus input E_RELATION precedence and completion seals.
+
+Seal final pins in this order: owner changes and tests → exact 84 receipt → scope
+program → eval program → driver → launcher. Avoid a digest cycle: closure excludes
+the three eval entry programs; their existing separate pins cover them. Recheck
+all input/source snapshots immediately before result emission. Docs name both
+inactive source mechanisms and all pending real seed gates. Restore manifest adds
+only the four new paths above. No shipped seed, fake scope, approval or catalog
+status changes in PR 1b.
+
+### Finite regression matrix
+
+Every new row must run through the same production value owner and its offline
+caller. Baseline succeeds as an ordinary data construction or preserves the current
+real refusal. Perturb only the targeted owner call in a private source copy, keep
+valid companion calls, and rebind that private copy's pins. Mutating/deleting the
+production call must fail its paired test; mutating/deleting the offline call must
+fail its paired test. No shipped injection switch or callable adapter is added.
+A production call that cannot yet be reached without a reserved genuine gate
+keeps its paired-route requirement as NOTRUN. Ordinary constructor proof and
+static call binding are recorded separately, never counted as that route passing.
+This permits a source-preparation checkpoint, not final acceptance; the route
+must run through its actual caller before its corresponding final proof gate.
+
+| IDs | Finite cases and literal expectation | Test owner |
+| --- | --- | --- |
+| RAW01–16 | Each required row: missing/extra/wrong-type/out-of-bound; reject with E_REPLAY after a valid outer manifest. Valid value-only baseline recomputes exact bytes. Optional coverage absence follows only its original branch. | evals-malicious + respective owner tests |
+| DER01–13 | One changed byte in each complete R4A.C output family; output mismatch list names that actual path and grade is evals.recompute-mismatch; invariants-only mismatch is evals.invariant-broken | evals-malicious/framework |
+| ROUTE01–11 | The eleven owner rows above, each production/offline invocation, narrow mutation and call deletion; neither path may pass with the target call skipped | existing owner tests + evals-malicious |
+| DRV | running/stopped, non-200, malformed state JSON, 65536/65537 body, each three transport phases, rejected/accepted stop, observed stopped, EOF versus incomplete/timeout/read-error with exit zero | sandbox-launcher + evals-malicious |
+| GST | positive/zero/negative launch return, wait zero/equal/foreign, EINTR, deadline before launch/after wait, reap versus population termination; never set child_reaped as input | sandbox-guest harness/test |
+| CAP | new/legacy inventory, missing/partial/extra capture, changed request/attempt/hash, wrong owner/ACL, stale held/readback, overflow; real consumer refuses, legacy cannot seed | shadow-enforced/write, sandbox-receipt, scope-gate-generation |
+| LIM | All R4A.B/D numeric bounds at boundary and one over; cross-field aggregate, repeated-read accounting, 64 runtime slots/65, 4 GiB aggregate/one over, stream chunk 64 KiB, two-copy accounting | evals-malicious + relevant owner tests |
+| CLO | missing/extra/duplicate/moved member, changed byte, symlink/parent escape, wrong fixed generation, equal/unequal overlap, final-held mutation | evals-framework/malicious/scope |
+| I5-01–06 | extra command, argument, option, role, reordered command or wrong concrete argv digest; rejected E_RELATION or evals.invariant-broken, never pass | evals-malicious |
+| SURF01–07 | four permitted single surfaces; wrong invariant, changed recorded byte, planted text on two surfaces | evals-malicious |
+| ARC01–03 | Shipped/archive catalog differ but replay uses exact archive; equal shared path reuses, unequal digest rejects E_RELATION; split-pair dashboard cannot double count | evals-malicious/dashboard |
+| OLD | All existing eval, scope, shadow, host, guest, cancellation, preparation, gate and restoration assertions remain; preserve failed/NOTRUN/native skips | full named suites and full CI |
+
+Expand DRV into fixed named vectors: `state-running`, `state-stopped`,
+`state-status-500`, `state-malformed`, `body-65536`, `body-65537`,
+`request-error`, `getresponse-error`, `read-error`, `stop-status-500`,
+`stop-status-200`, `confirmed-stop`, `pipe-eof`, `pipe-timeout`,
+`pipe-read-error` and `pipe-open-after-exit-zero`. Exact state stdout is running,
+stopped or error followed by LF, with the original exit status; stop status 200
+returns 0 and 500 returns 1. Pipe incompleteness yields `(None,b"")` in the
+host value owner. These are ordinary value/pipe fixtures, never Unix REST calls.
+GST vectors use child 17 versus wait 0, 17 and 18; zero/-1 launch rejects, and
+EINTR does not invent reap. Historical real recordings still retain their actual
+PID, never those fixture numbers.
+
+LIM expands once for every numeric bound in accepted R4A.B/D, with `.at` and
+`.over` IDs, including per-field and total bytes, counts, nested records, pages,
+paths, streams and retained copies. Keep aggregate cases independently valid in
+all other dimensions. At-bound constructors accept ordinary value vectors when
+all other bounds hold; one-over refuses E_LIMIT at acquisition/staging, or maps
+to rejected/E_REPLAY inside the coordinator. Do not allocate a real 4 GiB fixture
+merely to check its counter. Wrong format or missing/extra member is a shape or
+relation refusal, not a successful truncated observation.
+
+Boundary tests allocate only permitted finite fixture data. For large limits use
+the production streaming counter with ordinary chunk generators in the test, then
+also run a bounded real-file crossing check; no sparse/compressed accounting trick
+or fake reported size is a positive. Generated bytes are mechanism fixtures only.
+A requested genuine input is never filled with those bytes.
+
+The current host outcome must remain failure.enforcement-unavailable when CPU or
+wall enforcement is none; writer still refuses an unsatisfied receipt. Four
+synthetic coordinator cases must preserve the exact reachable rejected output.
+Test the remaining success-path constructors and fixed control flow with ordinary
+well-formed value vectors, explicitly labelled synthetic. They do not establish
+successful full recording. Never patch CPU enforcement, accept a forged satisfied
+receipt, bypass admission or make an empty/permanent-refusal dispatcher. Genuine
+four-pass replay waits for accepted native work and fresh pins under the original
+gates. This does not block the fully defined inactive mechanism source.
+
+### Proof commands and CI checkpoint
+
+Before every execution, retain exact head/base, artifact/source hashes, platform,
+argv/environment, stdout/stderr, exit and test assertion ledger. Local missing
+fixed tools means STOP/NOTRUN for that check, with no download/install/substitute.
+Use the existing jq 1.6 preflight under Proof unchanged. Use existing Shellcheck
+`/opt/homebrew/Cellar/shellcheck/0.11.0/bin/shellcheck` only after regular/non-symlink,
+SHA-256 f626614fd15e82b67c6566fd4f4d9eab796fa5dcff74ad90d702e5b96c01eba8 and
+actual version 0.11.0 checks. Otherwise lint remains NOTRUN until existing CI.
+Run bash -n separately for every changed .sh and Shellcheck -x -S style over every
+tracked .sh as the existing workflow does. Compile Python source to an external
+private pycache for syntax only; do not import product code as a syntax check.
+Run git diff --check, scripts/check-rename.sh and run-all-sharding.check.sh.
+
+The following are existing/new allowed test entry points. Run each with
+`bash scripts/test/NAME.test.sh`, preserving its complete assertions and exit.
+The eight eval suites in Proof plus eval-framework remain required. Additional
+names are evals-malicious, sandbox-launcher, sandbox-guest, sandbox-receipt,
+shadow-enforced, shadow-write, scope-gate-generation, candidate-content-preparation,
+file-digest-verifier, scope-qualification, shadow-self-host-evidence,
+maintenance-loop and portable-core-schema. Compile/run the existing guest harness
+through its normal sandbox-guest test; no separate native product invocation.
+No selector, test truncation, bootstrap edit or watchdog bypass is introduced.
+
+Run only ordinary supported fixture tests in the current local environment.
+The full scope/root/native/#558 LOCAL7 or D windows and local run-all remain
+excluded. Unsupported platform or absent fixed jq records NOTRUN with its actual
+reason. For these missing local prerequisites, the manager may publish the clean
+source checkpoint to this same implementation branch and dispatch the existing
+ci.yml workflow at that exact ref, without opening an implementation PR. Record
+run head_sha and prove it equals the checkpoint, then retain all six shard logs,
+checks/ci status, all suite assertions and every platform skip. Existing CI may
+use only its normal pinned tool bootstrap; no workflow, network scope or installed
+runtime change is added. One manager owns dispatch and binds its authorization;
+the coder must not trigger a parallel run or treat a stale aggregate green as proof.
+
+The complete existing matrix is required on the final combined source head;
+quick checks alone are not full proof. A checkpoint run proves only that source,
+not native qualification, dependency G3, #558 acceptance or a real seed. Preserve
+the earlier 76-suite checkpoint and its five skips separately from new results.
+Fresh independent Bugs/Security/Compliance review reads the complete combined diff
+and raw required proof. Final PR 1b still waits for dependency protected landing,
+normal main integration and its complete accepted requirements. CPUwall NONE /
+native BLOCKED / production EMPTY / automation PAUSED remain.
+
 
 ## PR 2: reviewer seed (R6-R8)
 
@@ -894,7 +1189,8 @@ Allowed paths: `evals/v1/eval-catalog.json`, `evals/v1/seed-set-malicious.json`,
    the last. Nothing else differs from the control.
 3. **Recording (R4.4)**, after S8 is settled and PR 1b has merged: run the S1 recipe
    once per trial with `env -i` in a `mktemp -d` copy, publishing nothing, and commit
-   the outputs. The replay must then reproduce them byte for byte; the test proves the
+   the outputs. Each trial includes reproduction, write and gate; reproduction and
+   write each require their own real sandbox launch and complete S8 coverage. The replay must then reproduce them byte for byte; the test proves the
    recipe and the replay agree.
 4. **Seed set** `evals/v1/seed-set-malicious.json`, id
    `evals.seed.malicious-instructions.v1`, four cases, expectations from the
@@ -982,24 +1278,26 @@ gates (R9.6).
   M2–M4. About 25–45 lines cover predicates/error handling/pins, 170–290 cover
   launcher, direct-program and scope regressions, and 15–30 cover docs. Use readable
   complete tests; an overrun pauses for a separate size amendment, never test cuts.
-- PR 1b: `review_size: accepted-exception`, expected 1,800–2,400 net added lines
-  for the whole two-source/relay/replay concern against its actual publication
-  base. Count inherited unmerged M2–M4 code and tests; do not subtract a dependency
-  merely because its author or branch differs. About 1,050–1,200 cover the review
-  relay and inherited mechanism; 80–160 the four-file content binding and paired
-  tests; 400–650 the later source/closure work; 230–310 its complete replay tests;
-  40–80 final integration pins/docs. These are readable source/test estimates,
-  not limits on assertions. The later actual-source plan must re-estimate before
-  malicious work resumes. Record additions/deletions/net against fresh main and
-  the inherited/source-only breakdown separately in PR evidence, never hide the
-  whole diff. A changed range needs independent plan review; no test cuts, code
-  compression, scope expansion or reduced CI to meet the range.
+- PR 1b: `review_size: accepted-exception`, 28,000–42,000 changed lines for the
+  complete unmerged two-source concern, counting additions plus deletions.
+  The current dependency contributes 21,598 changed lines, including the complete
+  scope-qualification suite. The retained relay contributes about 1,400 changed
+  lines. Budget 2,000–5,000 for shared owner extraction/capture, 700–1,500 for fixed
+  replay/inventory integration, 2,000–6,000 for complete new and retained regression
+  proof, and 300–1,000 for integration/pins/docs/manifest. Overlap is measured once,
+  never assumed to reduce the range. These are planning components, not quotas.
+  Record the gross retained diff, dependency/adoption delta, this concern's delta
+  and the actual publication-base diff. Keep both ledgers when dependencies land;
+  never subtract inherited work to claim a smaller completed concern. An overrun
+  pauses for independent size review. No test cuts, code compression, hidden
+  deletions, partial implementation PR or reduced CI may meet the range.
 - PR 2: `review_size: accepted-exception`, 450-850 net added lines, one concern: one
   operator-graded seed and its test. 150-450 of them are verbatim verdict bytes, which
   cannot leave the PR whose test checks their digests.
 - PR 3: `review_size: standard`, about 300-400 net added lines.
-- This plan-only amendment: `review_size: standard`. One concern: measured
-  evaluator content binding within the same review relay segment.
+- This plan-only amendment: `review_size: accepted-exception`, 800–1,500 changed
+  lines. One concern: the fixed malicious replay, with exact dependency/source
+  tables, shared-owner interfaces, complete finite cases and retained final gates.
 
 Each range waives only the soft line signal, never scope, tests, CI, review or human
 merge.
@@ -1008,9 +1306,9 @@ merge.
 
 - **Declared catalog.** Private pinned fixture trees must exercise the full review
   relay, not only jq grading. They do not establish genuine operator approval or
-  seeding. The final malicious replay still needs its actual source and recipe.
-- **Sibling drift.** Concern 6 edits `scope-gates.jq`, and concern 5 likely edits
-  `reproduce.sh` and the evidence layout, so every line here moves. The plan update
+  seeding. The final real malicious seed still needs its native success and recording gates.
+- **Sibling drift.** The adopted gate source overlaps scope, consumer and writer owners.
+  Exact merge and full-byte review preserve both sides of every overlap. The plan update
   re-verifies them; code never follows a stale number.
 - **Offline replay needs `cc` and `git`.** Both exist on the CI runners that already
   compile `object-closure.c`; the replay uses no network.
@@ -1116,9 +1414,9 @@ named manager's protected merge.
 
 ### Dependent-batch proof obligations
 
-The review segment binds its exact proof above. PR 1b's later malicious plan
-amendment must bind the updated pin searches, complete closure
-and overlap accounting, all eight existing eval suites, complete relevant scope
+The review segment binds its exact proof above. This malicious plan
+binds the updated pin searches, complete closure
+and overlap accounting below, all eight existing eval suites, complete relevant scope
 and shadow integration, maintenance-loop and portable-core-schema regressions,
 and `scripts/test/run-all-sharding.check.sh`.
 All existing tests stay; no fixture assertion is removed or weakened. Real control
