@@ -108,6 +108,12 @@ done
   .body.proposable_risk_tiers == ["routine"]
 ' "$policy" >/dev/null || fail 'policy contract'
 pass 'the shipped gate policy is canonical, inactive, and routine-only'
+for vocabulary in seed_sources active_seed_sources; do
+  /usr/bin/sed -n "/^def $vocabulary:/,/];/p" "$root/evals/v1/evals.jq" >"$tmp/eval-$vocabulary"
+  /usr/bin/sed -n "/^def $vocabulary:/,/];/p" "$gate_program" >"$tmp/scope-$vocabulary"
+  /usr/bin/cmp -s "$tmp/eval-$vocabulary" "$tmp/scope-$vocabulary" || fail "$vocabulary differs"
+done
+pass 'scope and eval source vocabularies match byte for byte'
 
 # The identities qualification is attached to. The scope records them, the shadow
 # records say which revision they ran against, and the evaluator binds the two.
@@ -228,7 +234,27 @@ observed_check_sha=60303ae22b998861bce3b28f33eec1be758a213c86c93c076dbe9f558c11c
 # is here field for field — the portable core contract the framework pins, the
 # catalog and evaluator references, the run inputs, coverage, quality, recovery,
 # and the absent telemetry and flow metrics.
-"$jq_bin" -S -c -n '
+[ "$(/usr/bin/shasum -a 256 "$root/core/v2/generation-registry.json" | /usr/bin/awk '{print $1}')" = \
+  3950ce43c3073b97759db23fb7e4ce533cbc1d8a8fe4917db6ee1ee0a8e78f94 ] || exit 1
+record_generation=$("$jq_bin" -er '
+  if type == "array" and length >= 1 and all(.[]; .semantic_identity == "core.contracts.v2" and
+    (.generation_id | type == "string" and test("\\Ag-[0-9a-f]{64}\\z")))
+  then .[-1].generation_id else error("E_STALE") end
+' "$root/core/v2/generation-registry.json") || exit 1
+record_schema="core/v2/generations/$record_generation/modules/schema.jq"
+record_core=$("$jq_bin" -n "$(/usr/bin/sed -n '/^def expected_core_closure:/,/^  ];/p' "$root/evals/v1/evals.jq") expected_core_closure") || exit 1
+"$jq_bin" -e -n --arg path "$record_schema" --argjson core "$record_core" '
+  [$core[] | select(.path == $path)] ==
+  [{path:$path,sha256:"8d1d02d36ac7ada778f05248f9413062b3fc251499914c15d79f003bbd009ade"}]
+' >/dev/null || exit 1
+[ "$(/usr/bin/shasum -a 256 "$root/$record_schema" | /usr/bin/awk '{print $1}')" = \
+  8d1d02d36ac7ada778f05248f9413062b3fc251499914c15d79f003bbd009ade ] || exit 1
+record_closure_fixture=$("$jq_bin" -n --arg path "$record_schema" '
+  [{path:$path,sha256:"8d1d02d36ac7ada778f05248f9413062b3fc251499914c15d79f003bbd009ade"},
+   {path:"evals/v1/framework.jq",sha256:"d164a102919f42ef002e93c8b515b58028604819e6c09b87c6e4afadb0bbcce4"},
+   {path:"evals/v1/run.sh",sha256:"51770c5597d55bf05020502796810637bfbe697038a541ea6124530c0fffe55c"}]
+') || exit 1
+"$jq_bin" -S -c -n --argjson record_closure "$record_closure_fixture" '
   def family($id;$status;$total;$failed;$inconclusive):
     {family_id:$id,seed_status:$status,
      seed_sources:(if $status == "seeded" then ["core.stage-run.v2"] else [] end),
@@ -269,6 +295,7 @@ observed_check_sha=60303ae22b998861bce3b28f33eec1be758a213c86c93c076dbe9f558c11c
              "5555555555555555555555555555555555555555555555555555555555555555"),
            adapter_closure:closure("adapters/codex-native-reviewer/v1/normalize.jq";
              "6666666666666666666666666666666666666666666666666666666666666666"),
+           record_closure:$record_closure,
            bootstrap_ref:{content_id:"evals-framework-bootstrap.v1",
              media_type:"text/x-shellscript",
              sha256:"7777777777777777777777777777777777777777777777777777777777777777"},
@@ -1297,6 +1324,10 @@ for dashboard_case in 'del(.body.flow)' 'del(.body.telemetry)' \
   '.body.coverage.families_total = 8' \
   '.body.observed_at = "2026-02-30T00:00:00Z"' \
   '.body.evaluator.content.body.runtime.host_os = "plan9"' \
+  'del(.body.evaluator.content.body.record_closure)' \
+  '.body.evaluator.content.body.record_closure += [.body.evaluator.content.body.record_closure[0]]' \
+  '.body.evaluator.content.body.record_closure[0].sha256 = "invalid"' \
+  '.body.evaluator.content.body.record_closure[0].extra = true' \
   '.body.catalog_ref.kind = "eval_seed_set"'; do
   "$jq_bin" -S -c "$dashboard_case" "$tmp/dashboard.json" \
     >"$tmp/dashboard-shape.json"

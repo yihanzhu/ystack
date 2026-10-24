@@ -53,6 +53,23 @@ snapshot_expected() {
   [ "$status" -eq 0 ] && [ "$(sha256_path "$target")" = "$expected" ]
 }
 
+stage_expected() {
+  local digest=$1 source=$2 target=$3 mode=$4 token=$5 parent
+  parent=${source%/*}
+  while [ "$parent" != / ]; do
+    [ -d "$parent" ] && [ ! -L "$parent" ] || emit_error "$token"
+    parent=${parent%/*}
+    [ -n "$parent" ] || parent=/
+  done
+  if [ -e "$target" ] || [ -L "$target" ]; then
+    [ -f "$target" ] && [ ! -L "$target" ] || emit_error "$token"
+    [ "$(sha256_path "$target")" = "$digest" ] || emit_error "$token"
+  else
+    /bin/mkdir -p "${target%/*}" || emit_error "$token"
+    snapshot_expected "$digest" "$source" "$target" "$mode" || emit_error "$token"
+  fi
+}
+
 # run SEED-SET.json OBSERVED_AT
 # dashboard OBSERVED_AT SEED-SET.json RUN-RESULT.json [SEED-SET.json RUN-RESULT.json]...
 mode=${1:-}
@@ -145,9 +162,10 @@ generation_runtime="$runtime/core/v2/generations/$generation"
 /bin/mkdir -m 0700 "$generation_runtime" "$generation_runtime/modules" ||
   emit_error E_RUNTIME
 
-program_sha=0decdae3ec132758d269fd9c6ff706aae5e49d41ae2faeb633a54a1252aadd62
+program_sha=18bfacfaabbb87fc6bb3e4be8d182cc81a9d526caa4db8e17c51d583b52e1009
+review_approval_sha=none
 catalog_sha=0239138447a8f9fd420cb3c5da31660d8f75c85099d80d89a040dce2878a4cac
-driver_sha=7b3314154f1c1fb9c8ea7e5a480ed65cf6e663fa3df79295e9fbf23fd867fbc1
+driver_sha=c5fe4b2c71189a6079b7f76a19f998f7e96659cdf9f3152e8e35e0b049c00a4d
 snapshot_file "$source_dir/run-evals.sh" "$runtime/bootstrap.sh" 1048576 0400 ||
   emit_error E_RUNTIME
 bootstrap_sha=$(sha256_path "$runtime/bootstrap.sh") || emit_error E_RUNTIME
@@ -230,6 +248,25 @@ for member in \
 done
 snapshot_expected "$jq_sha" "$jq_source" "$runtime/bin/jq" 0500 || emit_error E_RUNTIME
 bash_sha=$(sha256_path /bin/bash) || emit_error E_RUNTIME
+record_generation=$("$runtime/bin/jq" -er '
+  if type == "array" and length >= 1 and all(.[];
+    .semantic_identity == "core.contracts.v2" and
+    (.generation_id | type == "string" and test("\\Ag-[0-9a-f]{64}\\z")))
+  then .[-1].generation_id else error("E_STALE") end
+' "$runtime/core/v2/generation-registry.json" 2>/dev/null) || emit_error E_STALE
+record_schema="core/v2/generations/$record_generation/modules/schema.jq"
+record_files="$record_schema 8d1d02d36ac7ada778f05248f9413062b3fc251499914c15d79f003bbd009ade
+evals/v1/framework.jq d164a102919f42ef002e93c8b515b58028604819e6c09b87c6e4afadb0bbcce4
+evals/v1/run.sh 51770c5597d55bf05020502796810637bfbe697038a541ea6124530c0fffe55c"
+while read -r path digest; do
+  stage_expected "$digest" "$repo/$path" "$runtime/$path" 0400 E_STALE
+done <<< "$record_files"
+if [ "$review_approval_sha" != none ]; then
+  [[ "$review_approval_sha" =~ ^[0-9a-f]{64}$ ]] || emit_error E_STALE
+  stage_expected "$review_approval_sha" "$repo/evals/v1/seeds/reviewer-severity/approval.json" \
+    "$runtime/evals/v1/seeds/reviewer-severity/approval.json" 0400 E_STALE
+fi
+: >"$runtime/review-files.tsv" || emit_error E_RUNTIME
 snapshot_input() {
   local status=0
   snapshot_file "$1" "$2" 1048576 0400 || status=$?
@@ -263,11 +300,40 @@ else
   input_document="$scratch/inputs/manifest.json"
 fi
 seed_sha=$(sha256_path "$input_document") || emit_error E_RUNTIME
+review_seed_inputs=("$scratch/input.json")
+if [ "$mode" = dashboard ]; then
+  review_seed_inputs=()
+  for ((j=0; j<pair_count; j++)); do review_seed_inputs+=("$scratch/inputs/seed-$j.json"); done
+fi
+for review_seed in "${review_seed_inputs[@]}"; do
+  review_source=$("$runtime/bin/jq" -r '.body.seed_source // empty' "$review_seed" 2>/dev/null) || continue
+  [ "$review_source" = reviews.independent-verdicts.v1 ] || continue
+  "$runtime/bin/jq" -e '
+    any(.body.families[]; .family_id == "reviewer-severity-false-positive-negative" and
+      .seed_status == "seeded" and (.seed_sources | index("reviews.independent-verdicts.v1") != null))
+  ' "$runtime/catalog.json" >/dev/null 2>&1 || emit_error E_SHAPE
+  "$runtime/bin/jq" -e '
+    .body.shared.files | type == "array" and length >= 1 and length <= 16 and
+    all(.[]; type == "object" and (keys == ["path","sha256"]) and
+      (.path | type == "string" and
+       test("\\Aevals/v1/seeds/reviewer-severity/verdicts/[1-9][0-9]*[.]md\\z") and length <= 255) and
+      (.sha256 | type == "string" and test("\\A[0-9a-f]{64}\\z")))
+  ' "$review_seed" >/dev/null 2>&1 || emit_error E_SHAPE
+  "$runtime/bin/jq" -r '.body.shared.files[] | [.sha256,.path] | @tsv' "$review_seed" \
+    >"$scratch/review-files.current" || emit_error E_RUNTIME
+  while IFS=$'\t' read -r digest path; do
+    stage_expected "$digest" "$repo/$path" "$runtime/$path" 0400 E_RELATION
+    /usr/bin/printf '%s\t%s\n' "$digest" "$path" >>"$runtime/review-files.tsv" || emit_error E_RUNTIME
+  done <"$scratch/review-files.current"
+done
+record_closure=$("$runtime/bin/jq" -R -s -c '
+  split("\n") | map(select(length > 0) | split(" ") | {path:.[0],sha256:.[1]})
+' <<< "$record_files") || emit_error E_RUNTIME
 
 "$runtime/bin/jq" -S -c -n \
   --arg bootstrap_sha "$bootstrap_sha" --arg launcher_sha "$launcher_sha" \
   --arg driver_sha "$driver_sha" --arg program_sha "$program_sha" \
-  --arg catalog_sha "$catalog_sha" \
+  --arg catalog_sha "$catalog_sha" --argjson record_closure "$record_closure" \
   --arg jq_sha "$jq_sha" --arg bash_sha "$bash_sha" \
   --arg host_os "$host_os" --arg host_arch "$host_arch" \
   --arg jq_arch "$jq_arch" --arg execution_mode "$execution_mode" '
@@ -323,6 +389,7 @@ seed_sha=$(sha256_path "$input_document") || emit_error E_RUNTIME
         {path:"control/v1/sandbox.jq",sha256:"83b08ff4817157bbda76aa3c85142cb9f297a0dc8cdb760f7c8eeebf6bbc0ef3"},
         {path:"control/v1/validate.sh",sha256:"cf173ad0eaa08244bf636e3937845e894b21f14291fc5e66753e8673bdd2bd2a"}
       ],
+      record_closure:$record_closure,
       bootstrap_ref:ref("evals-framework-bootstrap.v1";"text/x-shellscript";$bootstrap_sha),
       launcher_ref:ref("evals-framework-launcher.v1";"text/x-shellscript";$launcher_sha),
       driver_ref:ref("evals-framework-driver.v1";"text/x-shellscript";$driver_sha),
@@ -338,6 +405,10 @@ seed_sha=$(sha256_path "$input_document") || emit_error E_RUNTIME
   }
 ' > "$runtime/evaluator.json" 2>/dev/null || emit_error E_RUNTIME
 evaluator_sha=$(sha256_path "$runtime/evaluator.json") || emit_error E_RUNTIME
+"$runtime/bin/jq" -e --arg path "$record_schema" '
+  [.body.core_closure[] | select(.path == $path)] ==
+    [{path:$path,sha256:"8d1d02d36ac7ada778f05248f9413062b3fc251499914c15d79f003bbd009ade"}]
+' "$runtime/evaluator.json" >/dev/null 2>&1 || emit_error E_STALE
 
 output="$scratch/output.json"
 error="$scratch/error"
@@ -473,6 +544,20 @@ fi
 [ "$(sha256_path "$input_document")" = "$seed_sha" ] &&
 [ "$(sha256_path "$runtime/evaluator.json")" = "$evaluator_sha" ] ||
   emit_error E_RUNTIME
+while read -r path digest; do
+  [ -f "$runtime/$path" ] && [ ! -L "$runtime/$path" ] &&
+    [ "$(sha256_path "$runtime/$path")" = "$digest" ] || emit_error E_STALE
+done <<< "$record_files"
+while IFS=$'\t' read -r digest path; do
+  [ -f "$runtime/$path" ] && [ ! -L "$runtime/$path" ] &&
+    [ "$(sha256_path "$runtime/$path")" = "$digest" ] || emit_error E_RELATION
+done <"$runtime/review-files.tsv"
+if [ "$review_approval_sha" != none ]; then
+  [ -f "$runtime/evals/v1/seeds/reviewer-severity/approval.json" ] &&
+    [ ! -L "$runtime/evals/v1/seeds/reviewer-severity/approval.json" ] &&
+    [ "$(sha256_path "$runtime/evals/v1/seeds/reviewer-severity/approval.json")" = "$review_approval_sha" ] ||
+    emit_error E_STALE
+fi
 /bin/cat "$output" || emit_error E_RUNTIME
 trap - EXIT HUP INT TERM
 cleanup

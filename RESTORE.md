@@ -1080,8 +1080,14 @@ A required `multi` family must meet its `minimum_trials` with every case passed;
 `single` families still need at least one case and all passed. A dashboard refuses
 repeated family/case pairs across distinct results as `E_SHAPE`; repeated input
 of one result keeps `E_RUNTIME`. The catalog remains seven seeded and two declared.
-Sources, relay, replay, real seeds and operator labels for the two declared
-families remain due in later batches. No new seed or activation ships here.
+The review source relays actual human trial reports through the unchanged record
+evaluator. Its three-file record closure follows the fixed registry to the schema
+already in the core closure. Labels, trials, grades, verdict bytes and selected
+comment ids must match the fixed approval one to one, with the runtime catalog
+minimum met. Held closure, verdict and approval bytes are sealed before output.
+Both approval pins remain `none`; both families remain declared. Real labels,
+seeds and the malicious source/replay still require their later gates. This
+intermediate mechanism stays inactive and does not grant authority.
 
 Restore the eight paths listed under "Inactive deploy and rollback gates" in
 [`ci/required-files.txt`](ci/required-files.txt) from one commit, then run:

@@ -844,9 +844,23 @@ A dashboard refuses distinct results that repeat a `[family_id, case_id]` pair
 with `E_SHAPE`. The same case id in different families counts separately.
 Repeating the same result retains `E_RUNTIME`.
 
-The malicious-instructions and reviewer-severity families remain declared.
-Their sources, relay, replay, real seeds and operator labels still require the
-later accepted batches. These checks add no seed or authority and enable nothing.
+The review source `reviews.independent-verdicts.v1` relays human trial statuses
+from the unchanged `evals/v1/run.sh evaluate` record evaluator. It first checks a
+fixed operator approval, then matches the labels, verdict bytes, trial refs and
+attempt ids. The trial count must meet the runtime catalog minimum. A matched
+failed grade remains failed; the relay does not judge the verdict text.
+
+The record closure holds exactly the record program, its driver and the schema
+selected by the pinned registry. The launcher holds each verdict once and reuses
+it only for the same digest. Closure, verdict and approval bytes are checked again
+before output. Grader implementation and instruction refs use
+`evals.reviewer-severity.rubric.v1` (`text/markdown`); label refs use
+`evals.reviewer-severity.labels.v1` (`application/vnd.ystack.eval-labels+json`).
+
+Both families remain declared. The fixed review approval pins are `none`, so no
+review run is admitted by the shipped catalog. Real seeds and operator labels,
+and the malicious source, closure and replay, remain pending. This intermediate
+review mechanism grants nothing and remains inactive.
 
 The seeded cases in `evals/v1/seed-set.json` replay canonical core-v2 stage runs
 through the real portable core (`scripts/core-contract.sh validate-stage-run`).

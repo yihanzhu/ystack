@@ -1571,7 +1571,27 @@ pre_identity=$("$jq_bin" -c '.body' "$evdir/pre/qualified-identity.json")
 # fixture, built once and reused by every bundle: nothing in it is
 # bundle-specific.
 if [ ! -f "$tmp/dashboard.json" ]; then
-"$jq_bin" -S -c -n --arg run_id "evals.run.self-host-harness" '
+[ "$(/usr/bin/shasum -a 256 "$root/core/v2/generation-registry.json" | /usr/bin/awk '{print $1}')" = \
+  3950ce43c3073b97759db23fb7e4ce533cbc1d8a8fe4917db6ee1ee0a8e78f94 ] || exit 1
+record_generation=$("$jq_bin" -er '
+  if type == "array" and length >= 1 and all(.[]; .semantic_identity == "core.contracts.v2" and
+    (.generation_id | type == "string" and test("\\Ag-[0-9a-f]{64}\\z")))
+  then .[-1].generation_id else error("E_STALE") end
+' "$root/core/v2/generation-registry.json") || exit 1
+record_schema="core/v2/generations/$record_generation/modules/schema.jq"
+record_core=$("$jq_bin" -n "$(/usr/bin/sed -n '/^def expected_core_closure:/,/^  ];/p' "$root/evals/v1/evals.jq") expected_core_closure") || exit 1
+"$jq_bin" -e -n --arg path "$record_schema" --argjson core "$record_core" '
+  [$core[] | select(.path == $path)] ==
+  [{path:$path,sha256:"8d1d02d36ac7ada778f05248f9413062b3fc251499914c15d79f003bbd009ade"}]
+' >/dev/null || exit 1
+[ "$(/usr/bin/shasum -a 256 "$root/$record_schema" | /usr/bin/awk '{print $1}')" = \
+  8d1d02d36ac7ada778f05248f9413062b3fc251499914c15d79f003bbd009ade ] || exit 1
+record_closure_fixture=$("$jq_bin" -n --arg path "$record_schema" '
+  [{path:$path,sha256:"8d1d02d36ac7ada778f05248f9413062b3fc251499914c15d79f003bbd009ade"},
+   {path:"evals/v1/framework.jq",sha256:"d164a102919f42ef002e93c8b515b58028604819e6c09b87c6e4afadb0bbcce4"},
+   {path:"evals/v1/run.sh",sha256:"51770c5597d55bf05020502796810637bfbe697038a541ea6124530c0fffe55c"}]
+') || exit 1
+"$jq_bin" -S -c -n --arg run_id "evals.run.self-host-harness" --argjson record_closure "$record_closure_fixture" '
   def absent($reason): {state:"absent",reason_id:$reason};
   def closure($path;$sha): [{path:$path,sha256:$sha}];
   def family($id;$status;$total;$failed;$inconclusive):
@@ -1605,6 +1625,7 @@ if [ ! -f "$tmp/dashboard.json" ]; then
            orchestrator_closure:closure("orchestrator/v1/scan-state.sh";("4" * 64)),
            control_closure:closure("control/v1/kill-switch.jq";("5" * 64)),
            adapter_closure:closure("adapters/codex-native-reviewer/v1/normalize.jq";("6" * 64)),
+           record_closure:$record_closure,
            bootstrap_ref:{content_id:"evals-framework-bootstrap.v1",
              media_type:"text/x-shellscript",sha256:("7" * 64)},
            launcher_ref:{content_id:"evals-framework-launcher.v1",
@@ -1660,6 +1681,7 @@ if [ ! -f "$tmp/dashboard.json" ]; then
    (.body.evaluator.content.body.orchestrator_closure[].sha256),
    (.body.evaluator.content.body.control_closure[].sha256),
    (.body.evaluator.content.body.adapter_closure[].sha256),
+   (.body.evaluator.content.body.record_closure[].sha256),
    .body.evaluator.content.body.bootstrap_ref.sha256,
    .body.evaluator.content.body.launcher_ref.sha256,
    .body.evaluator.content.body.driver_ref.sha256,

@@ -72,8 +72,115 @@ duty_sha256=146e73dc880d363e889f32140ac375997fb709e3101de32b8d9603f1f38ca0fa
 normalizer_shas='{"codex-cli-producer":"dc2fff5f40517b3dc7a633f90483c661b9a4b2e7e4f1f40d9aa7c8edcf268f25","codex-native-reviewer":"7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603","github-actions-ci":"690d9a8c35dc49f61a533d1ce1a9041e34895e5d337eb454bafa3a2e4d878df7","github-forge":"b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be","gitlab-forge":"ff2ec298eef102f94f28995f5306adeba8e078d19e4c22860c3b167cd9b7c37a"}'
 jq_bin="$runtime/bin/jq"
 work="$runtime_parent/work"
-program_sha256=0decdae3ec132758d269fd9c6ff706aae5e49d41ae2faeb633a54a1252aadd62
+program_sha256=18bfacfaabbb87fc6bb3e4be8d182cc81a9d526caa4db8e17c51d583b52e1009
+review_approval_sha256=none
 driver_sha256=$(sha256_path "$self") || emit_error E_RUNTIME
+
+verify_review_files() {
+  local digest path
+  [ -f "$runtime/review-files.tsv" ] && [ ! -L "$runtime/review-files.tsv" ] || return 1
+  while IFS=$'\t' read -r digest path; do
+    verify_hash "$digest" "$runtime/$path" || return 1
+  done < "$runtime/review-files.tsv"
+}
+verify_review_approval() {
+  if [ "$review_approval_sha256" != none ]; then
+    verify_hash "$review_approval_sha256" "$runtime/evals/v1/seeds/reviewer-severity/approval.json" || return 1
+  fi
+}
+verify_record_runtime() {
+  local record_generation schema_path
+  verify_hash d164a102919f42ef002e93c8b515b58028604819e6c09b87c6e4afadb0bbcce4 \
+    "$runtime/evals/v1/framework.jq" &&
+  verify_hash 51770c5597d55bf05020502796810637bfbe697038a541ea6124530c0fffe55c \
+    "$runtime/evals/v1/run.sh" || return 1
+  record_generation=$("$jq_bin" -er '
+    if type == "array" and length >= 1 and all(.[];
+      .semantic_identity == "core.contracts.v2" and
+      (.generation_id | type == "string" and test("\\Ag-[0-9a-f]{64}\\z")))
+    then .[-1].generation_id else error("E_STALE") end
+  ' "$runtime/core/v2/generation-registry.json" 2>/dev/null) || return 1
+  schema_path="core/v2/generations/$record_generation/modules/schema.jq"
+  "$jq_bin" -e --arg path "$schema_path" '
+    [.body.core_closure[] | select(.path == $path)] ==
+      [{path:$path,sha256:"8d1d02d36ac7ada778f05248f9413062b3fc251499914c15d79f003bbd009ade"}]
+  ' "$evaluator" >/dev/null 2>&1 || return 1
+  verify_hash 8d1d02d36ac7ada778f05248f9413062b3fc251499914c15d79f003bbd009ade \
+    "$runtime/$schema_path"
+}
+review_check() {
+  local operation=$1 candidate=$2 token=$3 checked
+  checked=$(run_program "$operation" "$work/empty-observations.json" "$candidate" 2>/dev/null) ||
+    emit_error E_RUNTIME
+  [ "$checked" = true ] || emit_error "$token"
+}
+replay_review_cases() {
+  local approval="$runtime/evals/v1/seeds/reviewer-severity/approval.json"
+  local bundle="$work/review-bundle.json" labels="$work/review-labels.json"
+  local report="$work/review-report.json" error="$work/review-record.err"
+  local section expected actual platform jq_asset record_tmp record_status token canonical
+  [ "$review_approval_sha256" != none ] || emit_error E_STALE
+  verify_hash "$review_approval_sha256" "$approval" || emit_error E_STALE
+  single_root "$approval" || emit_error E_PARSE
+  "$jq_bin" -S -c . "$approval" >"$work/review-approval.canonical" 2>/dev/null || emit_error E_PARSE
+  /usr/bin/cmp -s "$approval" "$work/review-approval.canonical" || emit_error E_CANONICAL
+  review_check validate-review-approval "$approval" E_SHAPE
+  for section in bundle labels; do
+    "$jq_bin" -S -c --arg section "$section" '.body.shared[$section].content' "$input" \
+      >"$work/review-$section.json" || emit_error E_RUNTIME
+    expected=$("$jq_bin" -r --arg section "$section" '.body.shared[$section].sha256' "$input") ||
+      emit_error E_RUNTIME
+    actual=$(sha256_path "$work/review-$section.json") || emit_error E_RUNTIME
+    [ "$actual" = "$expected" ] || emit_error E_RELATION
+  done
+  [ -f "$labels" ] || emit_error E_RUNTIME
+  review_check validate-review-anchor "$approval" E_RELATION
+  platform=$(/usr/bin/uname -s):$(/usr/bin/uname -m) || emit_error E_RUNTIME
+  case "$platform" in
+    Linux:x86_64) jq_asset=jq-linux64 ;;
+    Darwin:x86_64|Darwin:arm64) jq_asset=jq-osx-amd64 ;;
+    *) emit_error E_RUNTIME ;;
+  esac
+  record_tmp="$work/record-tmp"
+  /bin/mkdir -m 0700 "$record_tmp" "$record_tmp/ystack-portable-core-jq16" || emit_error E_RUNTIME
+  /bin/cp "$jq_bin" "$record_tmp/ystack-portable-core-jq16/$jq_asset" || emit_error E_RUNTIME
+  /bin/chmod 0500 "$record_tmp/ystack-portable-core-jq16/$jq_asset" || emit_error E_RUNTIME
+  record_status=0
+  /usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin TMPDIR="$record_tmp" \
+    /bin/bash "$runtime/evals/v1/run.sh" evaluate "$bundle" \
+    </dev/null >"$report" 2>"$error" || record_status=$?
+  if [ "$record_status" -ne 0 ]; then
+    [ ! -s "$report" ] || emit_error E_RUNTIME
+    token=$(/bin/cat "$error") || emit_error E_RUNTIME
+    case "$token" in
+      E_SHAPE|E_STALE|E_RELATION|E_PARSE|E_CANONICAL|E_LIMIT|E_RUNTIME) emit_error "$token" ;;
+      *) emit_error E_RUNTIME ;;
+    esac
+  fi
+  [ ! -s "$error" ] || emit_error E_RUNTIME
+  single_root "$report" || emit_error E_RUNTIME
+  canonical="$work/review-report.canonical"
+  "$jq_bin" -S -c . "$report" >"$canonical" 2>/dev/null || emit_error E_RUNTIME
+  /usr/bin/cmp -s "$report" "$canonical" || emit_error E_RUNTIME
+  "$jq_bin" -e '.body.cases | length == 1 and .[0].value.body.execution_kind == "model"' \
+    "$bundle" >/dev/null 2>&1 || emit_error E_RELATION
+  review_check validate-review-report "$report" E_RUNTIME
+  review_check validate-review-relations "$approval" E_RELATION
+  verify_review_approval || emit_error E_STALE
+  verify_review_files || emit_error E_RELATION
+  i=0
+  while [ "$i" -lt "$case_count" ]; do
+    case_id=$("$jq_bin" -r ".body.cases[$i].case_id" "$input") || emit_error E_RUNTIME
+    observation=$("$jq_bin" -S -c --arg id "$case_id" '
+      [.body.cases[0].trials[] | select(.attempt_id == $id)] as $trials |
+      if ($trials | length) == 1 then
+        {case_id:$id,disposition:"human-graded",error_token:{state:"absent"},status:$trials[0].status}
+      else error("E_RUNTIME") end
+    ' "$report") || emit_error E_RUNTIME
+    record_observation "$observation"
+    i=$((i + 1))
+  done
+}
 
 verify_runtime() {
   verify_hash "$program_sha256" "$program" &&
@@ -139,6 +246,8 @@ verify_runtime() {
     "$runtime/orchestrator/v1/state-scanner-launcher.sh" &&
   verify_hash 722afbf8a20ecf6f1d61b045186dc97b22fea1457f167ec87ac5b31b317e34ae \
     "$runtime/orchestrator/v1/state-scanner.jq" &&
+  verify_record_runtime &&
+  verify_review_approval &&
   verify_hash "$evaluator_sha256" "$evaluator" &&
   verify_hash "$program_seed_sha" "$input_document"
 }
@@ -249,6 +358,7 @@ run_dashboard() {
   [ "$(run_program validate-dashboard "$work/empty-observations.json" "$dashboard" 2>/dev/null)" = true ] ||
     emit_error E_RUNTIME
   verify_runtime || emit_error E_STALE
+  verify_review_files || emit_error E_RELATION
   /bin/cat "$dashboard" || emit_error E_RUNTIME
   exit 0
 }
@@ -666,7 +776,7 @@ produce_result() {
   case "$seed_source" in
     adapters.provider-normalizers.v1|control.duty-separation.v1) ;;
     control.risk-gates.v1|control.sandbox-policy.v1) ;;
-    core.stage-run.v2) ;;
+    core.stage-run.v2|reviews.independent-verdicts.v1) ;;
     orchestrator.reconciliation-plan.v1|orchestrator.state-scanner.v1) ;;
     *) emit_error E_SHAPE ;;
   esac
@@ -676,6 +786,7 @@ produce_result() {
   /usr/bin/printf '[' > "$observations" || emit_error E_RUNTIME
 
   case "$seed_source" in
+    reviews.independent-verdicts.v1) replay_review_cases ;;
     core.stage-run.v2) replay_stage_run_cases ;;
     orchestrator.state-scanner.v1) replay_scanner_cases ;;
     control.sandbox-policy.v1) replay_sandbox_cases ;;
@@ -696,6 +807,7 @@ produce_result() {
 if [ "$mode" = run ]; then
   produce_result
   verify_runtime || emit_error E_STALE
+  verify_review_files || emit_error E_RELATION
   /bin/cat "$work/run-result.json" || emit_error E_RUNTIME
 else
   run_dashboard

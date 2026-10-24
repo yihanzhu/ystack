@@ -501,10 +501,10 @@ def scanner_case_shape:
 def run_id_prefix: "evals.run.";
 def seed_set_id_ok: schema::id_ok and ((run_id_prefix + .) | schema::id_ok);
 
-def comment_id_ok: type == "string" and test("\A[1-9][0-9]*\z") and length <= 32;
+def comment_id_ok: type == "string" and test("\\A[1-9][0-9]*\\z") and length <= 32;
 def review_path_ok:
   type == "string" and
-  test("\Aevals/v1/seeds/reviewer-severity/verdicts/[1-9][0-9]*[.]md\z") and length <= 255;
+  test("\\Aevals/v1/seeds/reviewer-severity/verdicts/[1-9][0-9]*[.]md\\z") and length <= 255;
 def review_file_shape:
   schema::exact_fields(["path","sha256"];[]) and
   (.path | review_path_ok) and (.sha256 | schema::sha256_ok);
@@ -531,6 +531,7 @@ def review_labels_shape:
         (.evidence_link | type == "string" and length >= 1 and length <= 2048)));
      .comment_id)));
 def review_approval_shape:
+  schema::parsed_limits_ok and
   schema::exact_fields(["body","id","kind","schema_version"];[]) and
   .schema_version == 1 and .kind == "eval_label_approval" and
   .id == "evals.reviewer-severity.approval.v1" and
@@ -679,8 +680,8 @@ def observation_set_shape($source):
   all(.[]; observation_shape($source)) and
   (map(.case_id) as $ids | ($ids | length) == ($ids | unique | length));
 
-# Deterministic grading. A family without a deterministic grader cannot be
-# decided here and stays inconclusive; nothing is inferred from silence.
+# Only the review source may relay an existing human grade. Other families
+# without a deterministic grader stay inconclusive.
 def grade($source; $family; $expectation; $observation):
   if $source == "reviews.independent-verdicts.v1" then
     if $observation == null then
@@ -1108,8 +1109,83 @@ def dashboard_results_ok($result_shas):
            (.body.evaluator.content | evaluator_shape) and
            (.body.catalog_ref.sha256 == $catalog_sha256));
 
+def review_labels_ref($seed):
+  {content_id:"evals.reviewer-severity.labels.v1",
+   media_type:"application/vnd.ystack.eval-labels+json",sha256:$seed.body.shared.labels.sha256};
+def review_anchor_ok($seed;$approval):
+  $approval.body as $a | $seed.body.shared.labels as $labels |
+  $a.labels_sha256 == $labels.sha256 and
+  $a.selected_comment_ids == ($labels.content.body.trials | map(.comment_id));
+def review_report_ok($seed;$report):
+  $seed.body.shared.bundle as $bundle | $bundle.content.body as $b |
+  ($b.trials | map(.value.body.attempt_id) | sort) as $attempts |
+  ($b.trials | map(.ref) | sort) as $refs |
+  ($report | schema::exact_fields(["body","id","kind","schema_version"];[]) and
+   .schema_version == 1 and .kind == "eval_report" and .id == $bundle.content.id and
+   (.body | schema::exact_fields(["mode","bundle_ref","framework_ref","suite_ref","status","cases"];[]) and
+    .mode == "evaluation-only" and
+    .bundle_ref == {content_id:$bundle.content.id,
+      media_type:"application/vnd.ystack.eval-bundle+json",sha256:$bundle.sha256} and
+    .framework_ref == $b.suite.value.body.framework_ref and .suite_ref == $b.suite.ref and
+    (.status as $v | ["passed","failed","inconclusive","unavailable"] | index($v) != null) and
+    (.cases | type == "array" and length == 1) and
+    (.cases[0] | schema::exact_fields(["case_ref","execution_kind","status","trials"];[]) and
+     .case_ref == $b.cases[0].ref and .execution_kind == "model" and
+     (.status as $v | ["passed","failed","inconclusive","unavailable"] | index($v) != null) and
+     (.trials | type == "array" and length == ($attempts | length) and
+      (map(.attempt_id) | sort) == $attempts and (map(.trial_ref) | sort) == $refs and
+      all(.[]; . as $t |
+        schema::exact_fields(["attempt_id","finished_at","started_at","status","trial_index","trial_ref"];[]) and
+        (.status as $v | ["passed","failed","inconclusive","unavailable"] | index($v) != null) and
+        any($b.trials[]; .ref == $t.trial_ref and .value.body.attempt_id == $t.attempt_id and
+          .value.body.trial_index == $t.trial_index and
+          .value.body.started_at == $t.started_at and .value.body.finished_at == $t.finished_at))))));
+def review_relations_ok($seed;$approval;$catalog):
+  $seed.body as $s | $s.shared.bundle.content.body as $b |
+  $s.shared.labels.content.body.trials as $labels |
+  $approval.body as $a | $b.cases[0].value.body as $case |
+  [$catalog.body.families[] | select(.family_id == "reviewer-severity-false-positive-negative")][0]
+    .trial_policy.minimum_trials as $minimum |
+  ($labels | length) as $n |
+  $n >= $minimum and $n <= 16 and
+  ($b.cases | length) == 1 and $case.execution_kind == "model" and
+  $case.trial_count == $n and ($b.trials | length) == $n and ($b.grades | length) == $n and
+  ($s.cases | length) == $n and ($s.shared.files | length) == $n and
+  ($b.trials | map(.value.body.attempt_id) | unique | length) == $n and
+  ($s.cases | map(.verdict.comment_id) | sort) == $a.selected_comment_ids and
+  ($b.trials | map(.value.body.attempt_id | ltrimstr("review.")) | sort) == $a.selected_comment_ids and
+  $case.expected_ref == review_labels_ref($seed) and
+  ($case.graders | length) == 1 and
+  $case.graders[0].grader_id == "grader.operator" and $case.graders[0].grader_kind == "human" and
+  ($case.graders[0].implementation_ref | ref_shape("evals.reviewer-severity.rubric.v1";"text/markdown")) and
+  $case.graders[0].instructions_ref == $case.graders[0].implementation_ref and
+  all($b.trials[]; . as $trial |
+    [$labels[] | select(("review." + .comment_id) == $trial.value.body.attempt_id)] as $ls |
+    [$b.grades[] | select(.value.body.trial_ref == $trial.ref)] as $gs |
+    ($ls | length) == 1 and ($gs | length) == 1 and
+    $trial.value.body.status == "completed" and
+    ($gs[0].value.body | .evidence_ref == {state:"present",value:review_labels_ref($seed)} and
+      .status == $ls[0].grade_status and .graded_at == $a.approved_at and
+      .grader_id == "grader.operator" and .grader_kind == "human" and
+      .grader_ref == $case.graders[0].implementation_ref) and
+    [$s.cases[] | select(.verdict.comment_id == $ls[0].comment_id)] as $seeds |
+    ($seeds | length) == 1 and
+    $trial.value.body.output_ref == {state:"present",value:{content_id:"review-verdict.v1",
+      media_type:"text/markdown",sha256:$ls[0].verdict_sha256}} and
+    $seeds[0].verdict.sha256 == $ls[0].verdict_sha256 and
+    [$s.shared.files[] | select(.path == $seeds[0].verdict.path)] ==
+      [{path:$seeds[0].verdict.path,sha256:$ls[0].verdict_sha256}]);
+
 # Driver entry points, selected with --arg evals_operation.
-if $evals_operation == "validate-catalog" then
+if $evals_operation == "validate-review-approval" then
+  $candidate_docs[0] | review_approval_shape
+elif $evals_operation == "validate-review-anchor" then
+  review_anchor_ok($seed_set_docs[0];$candidate_docs[0])
+elif $evals_operation == "validate-review-report" then
+  review_report_ok($seed_set_docs[0];$candidate_docs[0])
+elif $evals_operation == "validate-review-relations" then
+  review_relations_ok($seed_set_docs[0];$candidate_docs[0];$catalog_docs[0])
+elif $evals_operation == "validate-catalog" then
   $catalog_docs[0] | catalog_shape
 elif $evals_operation == "validate-seed-set" then
   $seed_set_docs[0] | seed_set_bound($catalog_docs[0])

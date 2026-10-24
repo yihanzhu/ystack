@@ -320,6 +320,19 @@ for mutation in '.body.catalog_ref.sha256 = ("a" * 64)' \
 done
 # An archived result may not claim a program, driver, or catalog that never ran,
 # even when the embedded evaluator's own digest is recomputed to match.
+for closure_filter in 'del(.body.evaluator.content.body.record_closure)' \
+  '.body.evaluator.content.body.record_closure += [.body.evaluator.content.body.record_closure[0]]' \
+  '.body.evaluator.content.body.record_closure[0].sha256=("e"*64)' \
+  '.body.evaluator.content.body.record_closure[0].extra=true'; do
+  "$jq_bin" -S -c "$closure_filter" "$first" >"$tmp/review-bad-closure.json"
+  "$jq_bin" -S -c '.body.evaluator.content' "$tmp/review-bad-closure.json" >"$tmp/evaluator.json"
+  closure_sha=$(sha_file "$tmp/evaluator.json")
+  "$jq_bin" -S -c --arg sha "$closure_sha" '.body.evaluator.sha256=$sha' \
+    "$tmp/review-bad-closure.json" >"$tmp/review-rebound-closure.json"
+  [ "$(validate_result "$tmp/review-rebound-closure.json")" = false ] || fail 'record closure contract'
+done
+"$jq_bin" -S -c '.body.evaluator.content' "$first" >"$tmp/evaluator.json"
+pass 'the exact record closure remains required after rebinding its evaluator digest'
 for ref in program_ref driver_ref catalog_ref; do
   "$jq_bin" -S -c --arg ref "$ref" '.body.evaluator.content.body[$ref].sha256 = ("b" * 64)' \
     "$first" > "$tmp/rebound.json"
@@ -355,7 +368,7 @@ for component in orchestrator/v1 control/v1 adapters; do
     /bin/mkdir -p "$copy/$component" && /bin/cp -R "$root/$component/." "$copy/$component/"
   fi
 done
-for f in run-evals.sh evals-launcher.sh evals-driver.sh evals.jq eval-catalog.json seed-set.json; do
+for f in run-evals.sh evals-launcher.sh evals-driver.sh evals.jq eval-catalog.json seed-set.json framework.jq run.sh; do
   /bin/cp "$root/evals/v1/$f" "$copy/evals/v1/$f"
 done
 /usr/bin/printf '\n# tampered\n' >> "$copy/evals/v1/evals.jq"
@@ -365,5 +378,448 @@ fi
 [ ! -s "$tmp/stale.out" ] && [ "$(<"$tmp/stale.err")" = E_STALE ] ||
   fail "edited program was not refused: [$(<"$tmp/stale.err")]"
 pass 'an edited program is refused as stale before anything runs'
+
+[ "$(sha_file "$root/core/v2/generation-registry.json")" = \
+  3950ce43c3073b97759db23fb7e4ce533cbc1d8a8fe4917db6ee1ee0a8e78f94 ] || fail 'record registry pin'
+record_generation=$("$jq_bin" -er '
+  if type == "array" and length >= 1 and all(.[]; .semantic_identity == "core.contracts.v2" and
+    (.generation_id | type == "string" and test("\\Ag-[0-9a-f]{64}\\z")))
+  then .[-1].generation_id else error("E_STALE") end
+' "$root/core/v2/generation-registry.json") || fail 'record registry grammar'
+record_schema="core/v2/generations/$record_generation/modules/schema.jq"
+"$jq_bin" -e --arg path "$record_schema" '
+  [.body.evaluator.content.body.core_closure[] | select(.path == $path)] ==
+  [{path:$path,sha256:"8d1d02d36ac7ada778f05248f9413062b3fc251499914c15d79f003bbd009ade"}] and
+  .body.evaluator.content.body.record_closure ==
+  [{path:$path,sha256:"8d1d02d36ac7ada778f05248f9413062b3fc251499914c15d79f003bbd009ade"},
+   {path:"evals/v1/framework.jq",sha256:"d164a102919f42ef002e93c8b515b58028604819e6c09b87c6e4afadb0bbcce4"},
+   {path:"evals/v1/run.sh",sha256:"51770c5597d55bf05020502796810637bfbe697038a541ea6124530c0fffe55c"}]
+' "$first" >/dev/null || fail 'record closure follows registry and core schema'
+[ "$(sha_file "$root/$record_schema")" = \
+  8d1d02d36ac7ada778f05248f9413062b3fc251499914c15d79f003bbd009ade ] || fail 'record schema bytes'
+review_wrap() {
+  local digest
+  digest=$(sha_file "$1") || fail 'review wrapper digest'
+  "$jq_bin" -S -c -n --arg sha "$digest" --slurpfile value "$1" '
+    {ref:{content_id:$value[0].id,media_type:"application/vnd.ystack.eval-record+json",sha256:$sha},
+     value:$value[0]}' >"$2" || fail 'review wrapper'
+}
+review_rehash() {
+  local source=$1 target=$2 section index count digest
+  /bin/cp "$source" "$tmp/review-rehash.json" || fail 'review rehash copy'
+  for section in suite cases trials grades; do
+    if [ "$section" = suite ]; then count=1
+    else count=$("$jq_bin" -r --arg s "$section" '.body[$s]|length' "$tmp/review-rehash.json"); fi
+    index=0
+    while [ "$index" -lt "$count" ]; do
+      "$jq_bin" -S -c --arg s "$section" --argjson i "$index" '
+        if $s == "suite" then .body.suite.value else .body[$s][$i].value end
+      ' "$tmp/review-rehash.json" >"$tmp/review-value.json" || fail 'review rehash value'
+      digest=$(sha_file "$tmp/review-value.json") || fail 'review rehash digest'
+      "$jq_bin" -S -c --arg s "$section" --argjson i "$index" --arg sha "$digest" '
+        if $s == "suite" then .body.suite.ref.sha256 = $sha
+        else .body[$s][$i].ref.sha256 = $sha end
+      ' "$tmp/review-rehash.json" >"$tmp/review-next.json" || fail 'review rehash wrapper'
+      if [ "$section" = suite ]; then
+        "$jq_bin" -S -c '.body.suite.ref as $r | .body.cases |= map(.value.body.suite_ref = $r)' \
+          "$tmp/review-next.json" >"$tmp/review-rehash.json" || fail 'review suite refs'
+      elif [ "$section" = cases ]; then
+        "$jq_bin" -S -c --argjson i "$index" '.body.cases[$i].ref as $r |
+          .body.trials |= map(.value.body.case_ref = $r)' "$tmp/review-next.json" \
+          >"$tmp/review-rehash.json" || fail 'review case refs'
+      elif [ "$section" = trials ]; then
+        "$jq_bin" -S -c --argjson i "$index" '.body.trials[$i].ref as $r |
+          .body.grades |= map(if .value.body.trial_ref.content_id == $r.content_id
+            then .value.body.trial_ref = $r else . end)' "$tmp/review-next.json" \
+          >"$tmp/review-rehash.json" || fail 'review trial refs'
+      else /bin/mv "$tmp/review-next.json" "$tmp/review-rehash.json" || fail 'review grade refs'; fi
+      index=$((index + 1))
+    done
+  done
+  /bin/cp "$tmp/review-rehash.json" "$target" || fail 'review rehash result'
+}
+review_seed_from() {
+  local repo=$1 bundle=$2 labels=$3 target=$4
+  "$jq_bin" -S -c -n --slurpfile bundle "$bundle" --slurpfile labels "$labels" \
+    --arg bundle_sha "$(sha_file "$bundle")" --arg labels_sha "$(sha_file "$labels")" \
+    --slurpfile catalog "$catalog" '
+    {schema_version:1,kind:"eval_seed_set",id:"evals.seed.reviews.fixture",
+     body:{core_contract:$catalog[0].body.core_contract,seed_source:"reviews.independent-verdicts.v1",
+       shared:{bundle:{content:$bundle[0],sha256:$bundle_sha},labels:{content:$labels[0],sha256:$labels_sha},
+         files:[$labels[0].body.trials[] | {path:("evals/v1/seeds/reviewer-severity/verdicts/" + .comment_id + ".md"),
+           sha256:.verdict_sha256}]},
+       cases:[$labels[0].body.trials[] | {case_id:("review." + .comment_id),
+         family_id:"reviewer-severity-false-positive-negative",
+         expectation:{disposition:"human-graded",status:"passed"},
+         verdict:{comment_id:.comment_id,path:("evals/v1/seeds/reviewer-severity/verdicts/" + .comment_id + ".md"),
+           sha256:.verdict_sha256}}]}}' >"$target" || fail "review seed $repo"
+}
+review_substitute() {
+  local source=$1 target=$2 before=$3 after=$4 count=$5
+  "$jq_bin" -R -s -j --arg before "$before" --arg after "$after" --argjson count "$count" '
+    if (split($before) | length) == ($count + 1) then split($before) | join($after)
+    else error("unexpected substitution count") end
+  ' "$source" >"$target.next" || fail 'private fixture substitution count'
+  /bin/mv "$target.next" "$target" || fail 'private fixture substitution'
+}
+review_fixture() {
+  local name=$1 n=$2 failed=$3 repo="$tmp/review-$1" dir i id status
+  /bin/mkdir -p "$repo/evals/v1/seeds/reviewer-severity/verdicts" "$repo/core/v2" "$repo/scripts" || fail 'review fixture dirs'
+  /bin/cp -R "$root/evals/v1/." "$repo/evals/v1/" || fail 'review entry copy'
+  /bin/cp -R "$root/core/v2/." "$repo/core/v2/" || fail 'review core copy'
+  /bin/cp "$root/scripts/core-contract.sh" "$repo/scripts/core-contract.sh" || fail 'review front door copy'
+  for dir in orchestrator control adapters; do /bin/cp -R "$root/$dir" "$repo/$dir" || fail 'review closure copy'; done
+  dir="$repo/evals/v1/seeds/reviewer-severity"
+  : >"$repo/labels.jsonl"
+  i=1
+  while [ "$i" -le "$n" ]; do
+    id=$((1000 + i)); status=passed
+    if [ "$i" -eq "$failed" ]; then status=failed; fi
+    /usr/bin/printf 'Fixture verdict %s\n' "$id" >"$dir/verdicts/$id.md"
+    "$jq_bin" -S -c -n --arg id "$id" --arg status "$status" --arg sha "$(sha_file "$dir/verdicts/$id.md")" '
+      {comment_id:$id,verdict_sha256:$sha,
+       findings:[{index:1,tag:"P0",label:"important"},{index:2,tag:"P1",label:"nit"},
+         {index:3,tag:"P2",label:"not-a-defect"},{index:4,tag:"P3",label:"nit"}],
+       missed_important:(if $status == "failed" then
+         [{summary:"Fixture missed finding",evidence_link:"https://example.invalid/fixture"}] else [] end),
+       grade_status:$status}
+    ' >>"$repo/labels.jsonl" || fail 'fixture label'
+    i=$((i + 1))
+  done
+  "$jq_bin" -S -c -s '{schema_version:1,kind:"eval_labels",id:"evals.reviewer-severity.labels.v1",body:{trials:.}}' \
+    "$repo/labels.jsonl" >"$repo/labels.json" || fail 'fixture labels'
+  "$jq_bin" -S -c -n --arg sha "$(sha_file "$repo/labels.json")" --slurpfile labels "$repo/labels.json" '
+    {schema_version:1,kind:"eval_label_approval",id:"evals.reviewer-severity.approval.v1",body:{
+      family_id:"reviewer-severity-false-positive-negative",labels_sha256:$sha,
+      selected_comment_ids:[$labels[0].body.trials[].comment_id],decision_request_id:"FIXTURE-ONLY",
+      request_comment_id:"9001",approval_comment_id:"9002",approval_comment_url:"https://example.invalid/fixture",
+      approver:"yihanzhu",approved_at:"2026-09-05T00:00:00Z"}}
+  ' >"$dir/approval.json" || fail 'fixture approval'
+  "$jq_bin" -S -c -n --arg framework "$(sha_file "$root/evals/v1/framework.jq")" '
+    def ref($id;$media;$sha): {content_id:$id,media_type:$media,sha256:$sha};
+    {schema_version:1,kind:"eval_suite",id:"suite.review-fixture",body:{suite_version:"v1",
+      framework_ref:ref("eval-framework.v1";"application/vnd.ystack.eval-framework+jq";$framework),
+      scope:{scope_id:"scope.fixture",scope_version:"v1",scope_sha256:("a"*64),
+        definition_ref:ref("fixture-scope";"application/json";("a"*64))},case_ids:["case.reviews"]}}
+  ' >"$repo/suite.value" || fail 'fixture suite'
+  review_wrap "$repo/suite.value" "$repo/suite.wrap"
+  "$jq_bin" -S -c -n --argjson n "$n" --arg labels_sha "$(sha_file "$repo/labels.json")" \
+    --slurpfile suite "$repo/suite.wrap" '
+    {schema_version:1,kind:"eval_case",id:"case.reviews",body:{case_version:"v1",
+     suite_ref:$suite[0].ref,execution_kind:"model",
+     input_ref:{content_id:"fixture-input",media_type:"text/markdown",sha256:("b"*64)},
+     expected_ref:{content_id:"evals.reviewer-severity.labels.v1",media_type:"application/vnd.ystack.eval-labels+json",sha256:$labels_sha},
+     trial_count:$n,trial_ids:[range(1;$n+1)|"trial." + ((1000+.)|tostring)],
+     attempt_ids:[range(1;$n+1)|"review." + ((1000+.)|tostring)],
+     graders:[{grader_id:"grader.operator",grader_kind:"human",
+       implementation_ref:{content_id:"evals.reviewer-severity.rubric.v1",media_type:"text/markdown",sha256:("c"*64)},
+       instructions_ref:{content_id:"evals.reviewer-severity.rubric.v1",media_type:"text/markdown",sha256:("c"*64)}}]}}
+  ' >"$repo/case.value" || fail 'fixture case'
+  review_wrap "$repo/case.value" "$repo/case.wrap"
+  : >"$repo/trials.jsonl"; : >"$repo/grades.jsonl"
+  i=1
+  while [ "$i" -le "$n" ]; do
+    id=$((1000 + i))
+    "$jq_bin" -S -c -n --arg id "$id" --argjson index "$i" --slurpfile case "$repo/case.wrap" \
+      --arg sha "$(sha_file "$dir/verdicts/$id.md")" '
+      {schema_version:1,kind:"eval_trial",id:("trial."+$id),body:{trial_version:"v1",
+        case_ref:$case[0].ref,trial_index:$index,attempt_id:("review."+$id),
+        started_at:"2026-09-01T00:00:00Z",finished_at:"2026-09-01T00:00:10Z",status:"completed",
+        output_ref:{state:"present",value:{content_id:"review-verdict.v1",media_type:"text/markdown",sha256:$sha}},
+        reason:{state:"absent"}}}' >"$repo/trial.value" || fail 'fixture trial'
+    review_wrap "$repo/trial.value" "$repo/trial.wrap"
+    /bin/cat "$repo/trial.wrap" >>"$repo/trials.jsonl"
+    "$jq_bin" -S -c -n --arg id "$id" --slurpfile trial "$repo/trial.wrap" \
+      --slurpfile labels "$repo/labels.json" --slurpfile case "$repo/case.wrap" '
+      {schema_version:1,kind:"eval_grade",id:("grade."+$id),body:{grade_version:"v1",trial_ref:$trial[0].ref,
+        grader_id:"grader.operator",grader_kind:"human",grader_ref:$case[0].value.body.graders[0].implementation_ref,
+        graded_at:"2026-09-05T00:00:00Z",status:([$labels[0].body.trials[]|select(.comment_id==$id)][0].grade_status),
+        evidence_ref:{state:"present",value:$case[0].value.body.expected_ref},reason:{state:"absent"}}}
+    ' >"$repo/grade.value" || fail 'fixture grade'
+    review_wrap "$repo/grade.value" "$repo/grade.wrap"
+    /bin/cat "$repo/grade.wrap" >>"$repo/grades.jsonl"
+    i=$((i + 1))
+  done
+  "$jq_bin" -S -c -s . "$repo/trials.jsonl" >"$repo/trials.json"
+  "$jq_bin" -S -c -s . "$repo/grades.jsonl" >"$repo/grades.json"
+  "$jq_bin" -S -c -n --slurpfile suite "$repo/suite.wrap" --slurpfile case "$repo/case.wrap" \
+    --slurpfile trials "$repo/trials.json" --slurpfile grades "$repo/grades.json" '
+    {schema_version:1,kind:"eval_bundle",id:"bundle.review-fixture",
+      body:{suite:$suite[0],cases:$case,trials:$trials[0],grades:$grades[0]}}
+  ' >"$repo/bundle.json" || fail 'fixture bundle'
+  review_seed_from "$repo" "$repo/bundle.json" "$repo/labels.json" "$repo/seed.json"
+  "$jq_bin" -S -c '.body.families |= map(if .family_id == "reviewer-severity-false-positive-negative" then
+    .seed_status="seeded" | .seed_sources=["reviews.independent-verdicts.v1"] else . end)' "$catalog" \
+    >"$repo/evals/v1/eval-catalog.json" || fail 'private seeded catalog'
+  if [ "$name" = wrong-selection ]; then
+    "$jq_bin" -S -c '.body.selected_comment_ids[4]="1999"' "$dir/approval.json" >"$repo/approval.next"
+    /bin/mv "$repo/approval.next" "$dir/approval.json"
+  elif [ "$name" = approval-shape ]; then
+    "$jq_bin" -S -c '.body.extra=true' "$dir/approval.json" >"$repo/approval.next"
+    /bin/mv "$repo/approval.next" "$dir/approval.json"
+  fi
+  local catalog_sha approval_sha private_driver_sha
+  catalog_sha=$(sha_file "$repo/evals/v1/eval-catalog.json"); approval_sha=$(sha_file "$dir/approval.json")
+  review_substitute "$repo/evals/v1/evals-driver.sh" "$repo/evals/v1/evals-driver.sh" \
+    0239138447a8f9fd420cb3c5da31660d8f75c85099d80d89a040dce2878a4cac "$catalog_sha" 2
+  review_substitute "$repo/evals/v1/evals-launcher.sh" "$repo/evals/v1/evals-launcher.sh" \
+    0239138447a8f9fd420cb3c5da31660d8f75c85099d80d89a040dce2878a4cac "$catalog_sha" 1
+  if [ "$name" != none ]; then
+    review_substitute "$repo/evals/v1/evals-driver.sh" "$repo/evals/v1/evals-driver.sh" \
+      review_approval_sha256=none "review_approval_sha256=$approval_sha" 1
+    review_substitute "$repo/evals/v1/evals-launcher.sh" "$repo/evals/v1/evals-launcher.sh" \
+      review_approval_sha=none "review_approval_sha=$approval_sha" 1
+  fi
+  private_driver_sha=$(sha_file "$repo/evals/v1/evals-driver.sh")
+  review_substitute "$repo/evals/v1/evals-launcher.sh" "$repo/evals/v1/evals-launcher.sh" \
+    "driver_sha=$driver_sha" "driver_sha=$private_driver_sha" 1
+  for section in evals-driver.sh evals-launcher.sh; do
+    /usr/bin/diff -u "$root/evals/v1/$section" "$repo/evals/v1/$section" >"$repo/$section.diff"
+    status=$?; [ "$status" -eq 1 ] || fail 'private fixture must have exact literal diff'
+    /bin/cat "$repo/$section.diff"
+  done
+  /usr/bin/grep -qxF "program_sha256=$program_sha" "$repo/evals/v1/evals-driver.sh" || fail 'fixture program pin'
+  /usr/bin/grep -qxF "driver_sha=$private_driver_sha" "$repo/evals/v1/evals-launcher.sh" || fail 'fixture driver pin'
+}
+review_expect_error() {
+  local name=$1 token=$2 repo=$3 seed=$4 status=0
+  "$repo/evals/v1/run-evals.sh" run "$seed" "$observed_at" \
+    >"$tmp/review-$name.out" 2>"$tmp/review-$name.err" || status=$?
+  [ "$status" -ne 0 ] && [ ! -s "$tmp/review-$name.out" ] &&
+    [ "$(<"$tmp/review-$name.err")" = "$token" ] ||
+    fail "review $name: status$status [$(<"$tmp/review-$name.err")] expected $token"
+  pass "review fixture $name refuses $token without output"
+}
+review_fixture five 5 0
+review_fixture six 6 0
+review_fixture four 4 0
+review_fixture failed 5 1
+review_fixture none 5 0
+review_fixture wrong-selection 5 0
+review_fixture approval-shape 5 0
+review_expect_error shipped-declared E_SHAPE "$root" "$tmp/review-five/seed.json"
+for record_variant in pretty multiple-roots; do
+  if [ "$record_variant" = pretty ]; then
+    "$jq_bin" . "$tmp/review-five/bundle.json" >"$tmp/review-record-invalid.json"; token=E_CANONICAL
+  else
+    /bin/cat "$tmp/review-five/bundle.json" "$tmp/review-five/bundle.json" >"$tmp/review-record-invalid.json"; token=E_PARSE
+  fi
+  status=0
+  "$tmp/review-five/evals/v1/run.sh" evaluate "$tmp/review-record-invalid.json" \
+    >"$tmp/review-record-$record_variant.out" 2>"$tmp/review-record-$record_variant.err" || status=$?
+  [ "$status" -ne 0 ] && [ ! -s "$tmp/review-record-$record_variant.out" ] &&
+    [ "$(<"$tmp/review-record-$record_variant.err")" = "$token" ] || fail "actual record $record_variant"
+  pass "actual record evaluator refuses $record_variant with $token"
+done
+review_expect_error no-fixed-approval E_STALE "$tmp/review-none" "$tmp/review-none/seed.json"
+review_expect_error below-minimum E_RELATION "$tmp/review-four" "$tmp/review-four/seed.json"
+for review_name in five six failed; do
+  review_repo="$tmp/review-$review_name"
+  "$review_repo/evals/v1/run.sh" evaluate "$review_repo/bundle.json" >"$review_repo/record-report.json" || fail 'actual record evaluate'
+  "$review_repo/evals/v1/run-evals.sh" run "$review_repo/seed.json" "$observed_at" \
+    >"$review_repo/result.json" 2>"$review_repo/result.err" || fail "review $review_name run"
+  [ ! -s "$review_repo/result.err" ] || fail 'review positive stderr'
+  "$jq_bin" -e --slurpfile report "$review_repo/record-report.json" \
+    --arg run_sha "$(sha_file "$root/evals/v1/run.sh")" \
+    --slurpfile seed "$review_repo/seed.json" '
+    .body as $body |
+    all($body.cases[]; . as $case |
+      .grader_kind == "human" and .verdict ==
+        ([$report[0].body.cases[0].trials[]|select(.attempt_id == $case.case_id)][0].status) and
+      .subject_ref.sha256 == ([$seed[0].body.cases[]|select(.case_id == $case.case_id)][0].verdict.sha256)) and
+    all($body.trace[]; .grader_kind == "human" and
+      .tool_ref == {content_id:"eval-record-evaluator.v1",media_type:"text/x-shellscript",sha256:$run_sha})
+  ' "$review_repo/result.json" >/dev/null || fail 'actual record statuses and refs'
+  pass "review $review_name relays actual record statuses and pinned refs"
+done
+"$jq_bin" -e '.body.summary == {total:5,passed:4,failed:1,inconclusive:0} and
+  (.body.cases[]|select(.case_id == "review.1001")|.reason_id == "evals.human-grade-failed")' \
+  "$tmp/review-failed/result.json" >/dev/null || fail 'approved failed status must remain failed'
+"$tmp/review-five/evals/v1/run-evals.sh" run "$tmp/review-five/seed.json" "$observed_at" \
+  >"$tmp/review-five/repeat.json" || fail 'review repeat'
+/usr/bin/cmp -s "$tmp/review-five/result.json" "$tmp/review-five/repeat.json" || fail 'review repeat bytes'
+
+for mutation in status-down status-up evidence output rubric expected graded-at trial-index case-ref extra-wrapper; do
+  review_repo="$tmp/review-five"
+  if [ "$mutation" = status-up ]; then review_repo="$tmp/review-failed"; fi
+  case "$mutation" in
+    status-down) filter='.body.grades[0].value.body.status="failed"'; token=E_RELATION ;;
+    status-up) filter='.body.grades[0].value.body.status="passed"'; token=E_RELATION ;;
+    evidence) filter='.body.grades[0].value.body.evidence_ref.value.sha256=("e"*64)'; token=E_RELATION ;;
+    output) filter='.body.trials[0].value.body.output_ref.value.sha256=("e"*64)'; token=E_RELATION ;;
+    rubric) filter='.body.cases[0].value.body.graders[0].instructions_ref.sha256=("e"*64)'; token=E_RELATION ;;
+    expected) filter='.body.cases[0].value.body.expected_ref.sha256=("e"*64)'; token=E_RELATION ;;
+    graded-at) filter='.body.grades[0].value.body.graded_at="2026-09-04T00:00:00Z"'; token=E_RELATION ;;
+    trial-index) filter='.body.trials[0].value.body.trial_index=2'; token=E_RELATION ;;
+    case-ref) filter='.body.suite.value.body.case_ids=["case.other"]'; token=E_RELATION ;;
+    extra-wrapper) filter='.body.grades[0].extra=true'; token=E_SHAPE ;;
+  esac
+  "$jq_bin" -S -c "$filter" "$review_repo/bundle.json" >"$tmp/review-mutated.json" || fail 'bundle mutation'
+  review_rehash "$tmp/review-mutated.json" "$tmp/review-mutated.bundle.json"
+  review_seed_from "$review_repo" "$tmp/review-mutated.bundle.json" "$review_repo/labels.json" "$tmp/review-mutated.seed.json"
+  review_expect_error "$mutation" "$token" "$review_repo" "$tmp/review-mutated.seed.json"
+done
+"$jq_bin" -S -c 'del(.body.grades[0].ref)' "$tmp/review-five/bundle.json" >"$tmp/review-wrapper-missing.bundle.json"
+review_seed_from "$tmp/review-five" "$tmp/review-wrapper-missing.bundle.json" "$tmp/review-five/labels.json" "$tmp/review-wrapper-missing.seed.json"
+review_expect_error missing-wrapper-ref E_SHAPE "$tmp/review-five" "$tmp/review-wrapper-missing.seed.json"
+for mutation in duplicate-attempt extra-grade missing-grade swapped-comments; do
+  case "$mutation" in
+    duplicate-attempt) filter='.body.trials[1].value.body.attempt_id="review.1001"' ;;
+    extra-grade) filter='.body.grades += [.body.grades[0]]' ;;
+    missing-grade) filter='.body.grades |= .[1:]' ;;
+    swapped-comments) filter='.body.trials[0].value.body.attempt_id="review.1002" |
+      .body.trials[1].value.body.attempt_id="review.1001" |
+      .body.cases[0].value.body.attempt_ids[0]="review.1002" |
+      .body.cases[0].value.body.attempt_ids[1]="review.1001"' ;;
+  esac
+  "$jq_bin" -S -c "$filter" "$tmp/review-five/bundle.json" >"$tmp/review-mutated.json" || fail 'identity mutation'
+  review_rehash "$tmp/review-mutated.json" "$tmp/review-mutated.bundle.json"
+  review_seed_from "$tmp/review-five" "$tmp/review-mutated.bundle.json" "$tmp/review-five/labels.json" "$tmp/review-mutated.seed.json"
+  review_expect_error "$mutation" E_RELATION "$tmp/review-five" "$tmp/review-mutated.seed.json"
+done
+/bin/cp "$tmp/review-five/evals/v1/seeds/reviewer-severity/verdicts/1001.md" \
+  "$tmp/review-five/evals/v1/seeds/reviewer-severity/verdicts/1999.md"
+for mutation in duplicate-label missing-label extra-label verdict-label-digest; do
+  case "$mutation" in
+    duplicate-label) filter='.body.trials += [.body.trials[0]]'; token=E_SHAPE ;;
+    missing-label) filter='.body.trials |= .[1:]'; token=E_RELATION ;;
+    extra-label) filter='.body.trials += [(.body.trials[0] | .comment_id="1999")]'; token=E_RELATION ;;
+    verdict-label-digest) filter='.body.trials[0].verdict_sha256=("e"*64)'; token=E_RELATION ;;
+  esac
+  "$jq_bin" -S -c "$filter" "$tmp/review-five/labels.json" >"$tmp/review-mutated.labels.json" || fail 'label mutation'
+  review_seed_from "$tmp/review-five" "$tmp/review-five/bundle.json" "$tmp/review-mutated.labels.json" "$tmp/review-mutated.seed.json"
+  review_expect_error "$mutation" "$token" "$tmp/review-five" "$tmp/review-mutated.seed.json"
+done
+label_case=0
+for label_filter in '.body.trials[0].comment_id="01001"' \
+  '.body.trials[0].extra=true' '.body.trials[0].grade_status="inconclusive"' \
+  '.body.trials[0].findings[0].index=0' '.body.trials[0].findings[0].tag="P4"' \
+  '.body.trials[0].findings[0].label="unknown"' \
+  '.body.trials[0].findings += [.body.trials[0].findings[0]]' \
+  '.body.trials[0].missed_important=[{summary:"two\nlines",evidence_link:"fixture"}]'; do
+  "$jq_bin" -S -c "$label_filter" "$tmp/review-five/labels.json" >"$tmp/review-mutated.labels.json"
+  review_seed_from "$tmp/review-five" "$tmp/review-five/bundle.json" "$tmp/review-mutated.labels.json" "$tmp/review-mutated.seed.json"
+  label_case=$((label_case + 1))
+  review_expect_error "label-shape-$label_case" E_SHAPE "$tmp/review-five" "$tmp/review-mutated.seed.json"
+done
+for mutation in duplicate-seed missing-seed extra-seed caller-approval traversal; do
+  token=E_RELATION
+  case "$mutation" in
+    duplicate-seed) filter='.body.cases += [.body.cases[0]]'; token=E_SHAPE ;;
+    missing-seed) filter='.body.cases |= .[1:]' ;;
+    extra-seed) filter='.body.cases += [(.body.cases[0] | .case_id="review.1999" |
+      .verdict.comment_id="1999" | .verdict.path="evals/v1/seeds/reviewer-severity/verdicts/1999.md")]' ;;
+    caller-approval) filter='.body.shared.approval={state:"present"}'; token=E_SHAPE ;;
+    traversal) filter='.body.shared.files[0].path="evals/v1/seeds/reviewer-severity/verdicts/../1001.md"'; token=E_SHAPE ;;
+  esac
+  "$jq_bin" -S -c "$filter" "$tmp/review-five/seed.json" >"$tmp/review-mutated.seed.json" || fail 'seed mutation'
+  review_expect_error "$mutation" "$token" "$tmp/review-five" "$tmp/review-mutated.seed.json"
+done
+review_repo="$tmp/review-five"
+for file in evals/v1/run.sh evals/v1/framework.jq "$record_schema"; do
+  /bin/cp "$review_repo/$file" "$tmp/review-saved-file" || fail 'closure backup'
+  /usr/bin/printf '\n' >>"$review_repo/$file"
+  review_expect_error "closure-${file##*/}" E_STALE "$review_repo" "$review_repo/seed.json"
+  /bin/cp "$tmp/review-saved-file" "$review_repo/$file" || fail 'closure restore'
+done
+verdict_file="$review_repo/evals/v1/seeds/reviewer-severity/verdicts/1001.md"
+/bin/cp "$verdict_file" "$tmp/review-saved-verdict"
+/bin/rm "$verdict_file"
+review_expect_error missing-verdict E_RELATION "$review_repo" "$review_repo/seed.json"
+/bin/ln -s "$tmp/review-saved-verdict" "$verdict_file"
+review_expect_error symlink-verdict E_RELATION "$review_repo" "$review_repo/seed.json"
+/bin/rm "$verdict_file"
+/bin/cp "$tmp/review-saved-verdict" "$verdict_file"
+/usr/bin/printf 'tampered\n' >>"$verdict_file"
+review_expect_error verdict-bytes E_RELATION "$review_repo" "$review_repo/seed.json"
+/bin/cp "$tmp/review-saved-verdict" "$verdict_file"
+/bin/mv "$review_repo/evals/v1/seeds/reviewer-severity/verdicts" "$review_repo/held-verdicts"
+/bin/ln -s "$review_repo/held-verdicts" "$review_repo/evals/v1/seeds/reviewer-severity/verdicts"
+review_expect_error parent-symlink E_RELATION "$review_repo" "$review_repo/seed.json"
+/bin/rm "$review_repo/evals/v1/seeds/reviewer-severity/verdicts"
+/bin/mv "$review_repo/held-verdicts" "$review_repo/evals/v1/seeds/reviewer-severity/verdicts"
+"$jq_bin" -S -c '.body.shared.files += [(.body.shared.files[0] | .sha256=("e"*64))]' \
+  "$review_repo/seed.json" >"$tmp/review-conflicting-files.json"
+review_expect_error conflicting-shared-digest E_RELATION "$review_repo" "$tmp/review-conflicting-files.json"
+approval_file="$review_repo/evals/v1/seeds/reviewer-severity/approval.json"
+/bin/cp "$approval_file" "$tmp/review-saved-approval"
+/usr/bin/printf '\n' >>"$approval_file"
+review_expect_error changed-fixed-approval E_STALE "$review_repo" "$review_repo/seed.json"
+/bin/cp "$tmp/review-saved-approval" "$approval_file"
+"$review_repo/evals/v1/run-evals.sh" run "$review_repo/evals/v1/seed-set.json" "$observed_at" \
+  >"$review_repo/core-result.json" || fail 'private real core run'
+"$review_repo/evals/v1/run-evals.sh" dashboard "$observed_at" \
+  "$review_repo/seed.json" "$review_repo/result.json" \
+  "$review_repo/evals/v1/seed-set.json" "$review_repo/core-result.json" \
+  >"$review_repo/dashboard.json" || fail 'review and core dashboard'
+"$jq_bin" -e '.body.quality.total == 13 and .body.quality.passed == 13 and
+  (.body.inputs|length)==2' "$review_repo/dashboard.json" >/dev/null || fail 'review/core dashboard counts'
+"$review_repo/evals/v1/run-evals.sh" run "$review_repo/seed.json" 2026-09-04T00:00:00Z \
+  >"$review_repo/earlier.json" || fail 'review earlier run'
+for variant in identical distinct forged; do
+  case "$variant" in
+    identical) second="$review_repo/result.json"; token=E_RUNTIME ;;
+    distinct) second="$review_repo/earlier.json"; token=E_SHAPE ;;
+    forged)
+      "$jq_bin" -S -c '.body.cases[0].verdict="failed" | .body.summary.passed-=1 | .body.summary.failed+=1' \
+        "$review_repo/earlier.json" >"$review_repo/forged.json"
+      second="$review_repo/forged.json"; token=E_RELATION ;;
+  esac
+  status=0
+  "$review_repo/evals/v1/run-evals.sh" dashboard "$observed_at" \
+    "$review_repo/seed.json" "$review_repo/result.json" "$review_repo/seed.json" "$second" \
+    >"$tmp/review-dashboard-$variant.out" 2>"$tmp/review-dashboard-$variant.err" || status=$?
+  [ "$status" -ne 0 ] && [ ! -s "$tmp/review-dashboard-$variant.out" ] &&
+    [ "$(<"$tmp/review-dashboard-$variant.err")" = "$token" ] || fail "review dashboard $variant"
+  pass "review dashboard $variant preserves $token"
+done
+/bin/cp "$tmp/review-six/evals/v1/seeds/reviewer-severity/verdicts/1006.md" \
+  "$tmp/review-five/evals/v1/seeds/reviewer-severity/verdicts/1006.md"
+review_expect_error coordinated-caller-rewrite E_RELATION "$tmp/review-five" "$tmp/review-six/seed.json"
+review_expect_error wrong-selected-set E_RELATION "$tmp/review-wrong-selection" "$tmp/review-wrong-selection/seed.json"
+review_expect_error approval-shape E_SHAPE "$tmp/review-approval-shape" "$tmp/review-approval-shape/seed.json"
+review_direct() {
+  local operation=$1 observation=$2 candidate=$3
+  "$jq_bin" -S -c -n -L "$modules" \
+    --arg evals_operation "$operation" --arg program_sha256 "$program_sha" \
+    --arg driver_sha256 "$(sha_file "$tmp/review-five/evals/v1/evals-driver.sh")" \
+    --arg catalog_sha256 "$(sha_file "$tmp/review-five/evals/v1/eval-catalog.json")" \
+    --arg evaluator_sha256 "$(sha_file "$tmp/review-evaluator.json")" \
+    --arg seed_set_sha256 "$(sha_file "$tmp/review-five/seed.json")" \
+    --arg tool_sha256 "$(sha_file "$root/scripts/core-contract.sh")" \
+    --arg scanner_sha256 "$(sha_file "$root/orchestrator/v1/scan-state.sh")" \
+    --arg planner_sha256 "$(sha_file "$root/orchestrator/v1/reconciliation-plan.jq")" \
+    --arg sandbox_sha256 "$(sha_file "$root/control/v1/evaluate-sandbox.sh")" \
+    --arg risk_gates_sha256 "$(sha_file "$root/control/v1/evaluate-risk-gates.sh")" \
+    --arg duty_sha256 "$(sha_file "$root/control/v1/evaluate-duty.sh")" \
+    --argjson normalizer_shas '{}' --arg observed_at "$observed_at" \
+    --slurpfile catalog_docs "$tmp/review-five/evals/v1/eval-catalog.json" \
+    --slurpfile seed_set_docs "$tmp/review-five/seed.json" --slurpfile observation_docs "$observation" \
+    --slurpfile evaluator_docs "$tmp/review-evaluator.json" --slurpfile candidate_docs "$candidate" \
+    --slurpfile result_docs "$first" --argjson result_shas '[]' -f "$program"
+}
+"$jq_bin" -S -c '.body.evaluator.content' "$tmp/review-five/result.json" >"$tmp/review-evaluator.json"
+"$jq_bin" -S -c '[.body.cases[].observation.value]' "$tmp/review-five/result.json" >"$tmp/review-observations.json"
+for variant in missing inconclusive; do
+  if [ "$variant" = missing ]; then filter='.[1:]'; reason=evals.observation-missing
+  else filter='.[0].status="inconclusive"'; reason=evals.human-grade-inconclusive; fi
+  "$jq_bin" -S -c "$filter" "$tmp/review-observations.json" >"$tmp/review-direct-observations.json"
+  review_direct build-run-result "$tmp/review-direct-observations.json" "$first" \
+    >"$tmp/review-direct-result.json" || fail 'direct review grade'
+  "$jq_bin" -e --arg reason "$reason" '.body.cases[0].verdict == "inconclusive" and
+    .body.cases[0].reason_id == $reason and .body.cases[0].grader_kind == "human"' \
+    "$tmp/review-direct-result.json" >/dev/null || fail 'defensive review inconclusive'
+  [ "$(review_direct validate-run-result "$tmp/review-direct-observations.json" "$tmp/review-direct-result.json")" = true ] ||
+    fail 'defensive review validation'
+done
+for field in cases trace; do
+  "$jq_bin" -S -c --arg field "$field" '.body[$field][0].grader_kind="deterministic"' \
+    "$tmp/review-five/result.json" >"$tmp/review-bad-human.json"
+  [ "$(review_direct validate-run-result "$tmp/review-observations.json" "$tmp/review-bad-human.json")" = false ] ||
+    fail "review requires human $field"
+done
+"$jq_bin" -S -c '.body.cases[0].grader_kind="human"' "$first" >"$tmp/review-human-core.json"
+[ "$(validate_result "$tmp/review-human-core.json")" = false ] || fail 'human forbidden on core source'
+pass 'review direct build/validate preserves defensive inconclusive and source-specific human grading'
 
 /usr/bin/printf '1..%s\n' "$passes"
