@@ -48,7 +48,7 @@ def _unique(pairs):
 def document(raw, *, raw_page=False):
     require(type(raw) is bytes and 0 < len(raw) <= DOCUMENT_LIMIT)
     try:
-        value = json.loads(raw, object_pairs_hook=_unique)
+        value = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique)
         require(type(value) is dict and (raw_page or canonical(value) == raw))
         return value
     except (ValueError, UnicodeError, TypeError, RecursionError):
@@ -720,8 +720,9 @@ class _KillNormalizer:
         return captured(records, request_raw, KILL_FAMILIES)
 
     @staticmethod
-    def query(body):
-        return {key: body[key] for key in ("control_repository", "default_branch", "bootstrap")} | {"families": KILL_QUERIES}
+    def query(body, observation):
+        observed = document(observation)
+        return {key: body[key] for key in ("control_repository", "default_branch", "bootstrap")} | {"families": KILL_QUERIES, "branch_snapshots": observed["snapshots"]}
 
     @staticmethod
     def source_config(raw, host):
@@ -802,16 +803,8 @@ class _KillNormalizer:
         require(value["id"] == requested["id"] and body["call_id"] == requested["id"]
                 and body["operation"] == KILL_OPERATION and type(body["version"]) is int and body["version"] == 1
                 and body["store_id"] == host["store_id"] and body["request_sha256"] == digest(request_raw)
-                and body["source_identity"] == source and body["query"] == _KillNormalizer.query(requested["body"])
+                and body["source_identity"] == source and body["query"] == _KillNormalizer.query(requested["body"], observation)
                 and body["raw_manifest_sha256"] == digest(raw_manifest) and body["observation_sha256"] == digest(observation)
                 and body["outcome"] == "complete" and body["effects"] == ["read-forge-metadata", "read-register"]
                 and utc(body["started_at"]) <= utc(body["completed_at"]))
         return value
-
-
-def _operation(operation):
-    require(operation in {"coverage-read", "kill-register-read"})
-    if operation == "kill-register-read":
-        return _KillNormalizer
-    import sys
-    return sys.modules[__name__]

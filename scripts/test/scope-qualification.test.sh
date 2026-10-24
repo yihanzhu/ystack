@@ -10535,7 +10535,7 @@ import os,pwd,stat,sys
 path,consumer,writer,python=sys.argv[1:]
 assert os.getuid()==0 and path.startswith('/etc/sudoers.d/ystack_coverage_')
 uid=pwd.getpwnam(writer).pw_uid
-expected=(consumer+' ALL=(#'+str(uid)+') NOPASSWD:NOSETENV: '+python+' -I -S -B /usr/local/libexec/ystack-sandbox/v1/supervisor/host-supervisor.py coverage-read\n').encode()
+expected=''.join(consumer+' ALL=(#'+str(uid)+') NOPASSWD:NOSETENV: '+python+' -I -S -B /usr/local/libexec/ystack-sandbox/v1/supervisor/host-supervisor.py '+operation+'\n' for operation in ('coverage-read','kill-register-read')).encode()
 parent=os.open('/etc/sudoers.d',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
 try:
     try:fd=os.open(os.path.basename(path),os.O_RDONLY|os.O_NOFOLLOW,dir_fd=parent)
@@ -10663,7 +10663,7 @@ assert os.getuid()==0 and path.startswith('/etc/sudoers.d/ystack_coverage_')
 assert uid.isdigit() and int(uid)>0 and consumer.startswith('yscc_')
 assert os.path.realpath(python)==python and all(char.isalnum() or char in '/._-' for char in python)
 command=python+' -I -S -B /usr/local/libexec/ystack-sandbox/v1/supervisor/host-supervisor.py coverage-read'
-raw=(consumer+' ALL=(#'+uid+') NOPASSWD:NOSETENV: '+command+'\n').encode()
+raw=''.join(consumer+' ALL=(#'+uid+') NOPASSWD:NOSETENV: '+command.rsplit(' ',1)[0]+' '+operation+'\n' for operation in ('coverage-read','kill-register-read')).encode()
 parent=os.open('/etc/sudoers.d',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
 fd=None
 try:
@@ -14218,6 +14218,9 @@ scope_raw = run(scope_argv)
 assert relation_capture.restored
 relation_capture=None
 put(base / 'genuine-scope-evaluation.json', scope_raw)
+gate_enforced_scope=(doc_root/'scope.json').read_bytes()
+gate_enforced_fixture={'files':dict(files),'record':shadow_record,'bundle':base/'snapshots'/sha(shadow_record),
+    'identity':identity['body'],'paths':scope_doc['body']['allowed_paths'],'label':'gate-enforced'}
 evaluation = json.loads(scope_raw)
 facts = evaluation['body']['evidence']['shadow_bundle_facts']
 assert len(facts) == 1 and facts[0]['eligible'] is True
@@ -15501,10 +15504,13 @@ coverage_original_documents={name:(doc_root/(name+'.json')).read_bytes() for nam
 coverage_original_head=coverage_git(['rev-parse','refs/heads/main'])
 coverage_attempts=[]
 def coverage_evaluate_pair(qualifying,current,allow_closed=False,at_ready=None):
-    selected=json.loads(coverage_original_scope)
-    selected['body'].update(qualified_identity=current['identity'],shadow_evidence_refs=[e.document_ref(current['record'])],
-        allowed_paths=sorted(set(qualifying['paths'])|set(current['paths'])),coverage={'coverage_base':qualifying['identity']['target_revision'],
-        'coverage_rule_version':coverage_n.RULE_VERSION,'qualifying_shadow_record_refs':[e.document_ref(qualifying['record'])]})
+    selected=json.loads(coverage_original_scope if qualifying is not None else gate_enforced_scope)
+    items=(qualifying,current) if qualifying is not None else (current,)
+    selected['body'].update(qualified_identity=current['identity'],shadow_evidence_refs=[e.document_ref(current['record'])])
+    if qualifying is not None:
+        selected['body'].update(allowed_paths=sorted(set(qualifying['paths'])|set(current['paths'])),
+            coverage={'coverage_base':qualifying['identity']['target_revision'],'coverage_rule_version':coverage_n.RULE_VERSION,
+                'qualifying_shadow_record_refs':[e.document_ref(qualifying['record'])]})
     for name in ('risk','duty'):
         value=json.loads(coverage_original_documents[name])
         value['body']['stage'].update(request_ref=current['identity']['stage_request_ref'],
@@ -15519,16 +15525,16 @@ def coverage_evaluate_pair(qualifying,current,allow_closed=False,at_ready=None):
         selected['body']['gate_evidence_refs'][key]=e.document_ref((doc_root/(name+'.json')).read_bytes())
     put(doc_root/'scope.json',selected)
     put(doc_root/'shadow-set.json',{'schema_version':1,'kind':'shadow_evidence_set','id':'scope.coverage.records',
-        'body':{'records':[json.loads(qualifying['record']),json.loads(current['record'])]}})
+        'body':{'records':[json.loads(item['record']) for item in items]}})
     original_directories=list((base/'bundles').iterdir())
     holding=base/('coverage-hold-'+current['label']);holding.mkdir(mode=0o755);holding.chmod(0o755)
     for path in original_directories:path.rename(holding/path.name)
     installed=[]
     try:
-        for item in (qualifying,current):
+        for item in items:
             target=base/'bundles'/sha(item['record'])
             item['bundle'].rename(target);installed.append((target,item['bundle']))
-        before={str(path.relative_to(store)):path.read_bytes() for item in (qualifying,current) for path in (store/ json.loads(item['files']['sandbox-request.json'])['id']).rglob('*') if path.is_file()}
+        before={str(path.relative_to(store)):path.read_bytes() for item in items for path in (store/ json.loads(item['files']['sandbox-request.json'])['id']).rglob('*') if path.is_file()}
         if at_ready is not None:
             at_ready()
             return None
@@ -15542,7 +15548,7 @@ def coverage_evaluate_pair(qualifying,current,allow_closed=False,at_ready=None):
         else:
             raw=run(scope_argv)
         result=json.loads(raw)
-        after={str(path.relative_to(store)):path.read_bytes() for item in (qualifying,current) for path in (store/json.loads(item['files']['sandbox-request.json'])['id']).rglob('*') if path.is_file()}
+        after={str(path.relative_to(store)):path.read_bytes() for item in items for path in (store/json.loads(item['files']['sandbox-request.json'])['id']).rglob('*') if path.is_file()}
         assert before==after
         return result
     finally:
@@ -16252,6 +16258,373 @@ finally:
     print(json.dumps({'genuine_coverage_contract':'PASS','real_source_uid':uid,'real_consumer_uid':consumer_uid,
         'interval':'A ordinary B own publisher C R','age_neighbors':[-1,0,1],'target_write':False,
         'network':False,'production_identity':False,'native_qualification':False},sort_keys=True),flush=True)
+    # This is the same root-owned offline source fixture, with the second fixed operation.
+    gate_n=coverage_n._KillNormalizer
+    gate_root=base/'gate-source';gate_root.mkdir(mode=0o755);gate_root.chmod(0o755)
+    control_git=gate_root/'control.git'
+    run(['/usr/bin/git','init','--bare',control_git])
+    def control(args,raw=None):
+        return run(['/usr/bin/git','--git-dir='+str(control_git),*args],raw).decode().strip()
+    def control_commit(register,parents=()):
+        raw=canonical(register)
+        blob=control(['hash-object','-w','--stdin'],raw)
+        inner=control(['mktree'],('100644 blob '+blob+'\tkill-switch.json\n').encode())
+        tree=control(['mktree'],('040000 tree '+inner+'\tconfig\n').encode())
+        args=['commit-tree',tree]
+        for parent in parents:args+=['-p',parent]
+        commit=control(args,b'fixed operator register\n')
+        row={'commit_id':commit,'commit_hex':git_control_bytes('commit',commit).hex(),
+            'trees':[{'oid':tree,'raw_hex':git_control_bytes('tree',tree).hex()},
+                     {'oid':inner,'raw_hex':git_control_bytes('tree',inner).hex()}],
+            'register_hex':raw.hex()}
+        return row,blob
+    def git_control_bytes(kind,oid):
+        return run(['/usr/bin/git','--git-dir='+str(control_git),'cat-file',kind,oid])
+    owner={'schema_version':1,'kind':'operator_identity','id':'operator.gate-fixture','sha256':sha(b'fixed fixture owner')}
+    register={'schema_version':1,'kind':'kill_switch_register','id':'register.fixture','body':{
+        'revision':1,'authority_epoch':'epoch.fixture','entries':[
+            {'scope_kind':kind,'scope_id':identity,'state':'cleared'} for kind,identity in
+            [('global','*'),('repository','fixture.target'),('workflow','workflow.shadow-evidence-commit')]],'write_entries':[]}}
+    enforced_workflow=json.loads(gate_enforced_fixture['files']['materialization-input.json'])['stage_request']['content']['body']['workflow_id']
+    if enforced_workflow!='workflow.shadow-evidence-commit':
+        register['body']['entries'].append({'scope_kind':'workflow','scope_id':enforced_workflow,'state':'cleared'})
+        register['body']['entries'].sort(key=lambda row:(row['scope_kind'],row['scope_id']))
+    bootstrap_row,bootstrap_blob=control_commit(register)
+    bootstrap={'commit_id':bootstrap_row['commit_id'],'register_sha256':sha(canonical(register)),
+        'revision':1,'authority_epoch':'epoch.fixture','owner_identity':owner,'event_sequence':100}
+    control_repository={'repository_id':'fixture.control','node_id':'R_gate_control','hash_algorithm':'sha1'}
+    control_branch={'name':'main','node_id':'REF_gate_main'}
+    control(['update-ref','refs/heads/main',bootstrap_row['commit_id']])
+    gate_collector=gate_root/'collector';gate_manifest=gate_root/'package.json'
+    gate_config=anchor/'kill-register-source-config.json'
+    gate_accepted=anchor/'kill-register-source-accepted-identities.json'
+    gate_schema_fields={gate_n.FAMILIES[0]:['after','before','default_branch','end_sequence','repository','schema_version','start_sequence'],
+        gate_n.FAMILIES[1]:['commits','schema_version'],gate_n.FAMILIES[2]:['events','schema_version'],gate_n.FAMILIES[3]:['merges','schema_version']}
+    gate_schemas=[]
+    for family,fields in gate_schema_fields.items():
+        path=put(gate_root/(family+'.json'),{'schema_version':1,'family':family,'operation':gate_n.OPERATION,'page_fields':fields})
+        gate_schemas.append((family,path))
+    def gate_pages(commits=None,events=None,merges=None):
+        commits=commits or [bootstrap_row];events=events or [];merges=merges or []
+        tip=commits[-1]['commit_id'];now=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())
+        return [canonical({'schema_version':1,'repository':control_repository,'default_branch':control_branch,
+            'before':{'commit_id':tip,'observed_at':now},'after':{'commit_id':tip,'observed_at':now},
+            'start_sequence':100,'end_sequence':100+len(events)}),canonical({'schema_version':1,'commits':commits}),
+            canonical({'schema_version':1,'events':events}),canonical({'schema_version':1,'merges':merges})]
+    def gate_install(pages=None,capture=None,failure=None,mutation=None):
+        pages=gate_pages() if pages is None else pages
+        capture=capture or {'pages':[{'family':family,'page_index':0,'response_status':200,'input_cursor':None,'output_cursor':None} for family in gate_n.FAMILIES]}
+        actions={'nonzero':'raise SystemExit(7)\n','signal':'import os,signal;os.kill(os.getpid(),signal.SIGTERM)\n',
+            'malformed':'sys.stdout.buffer.write(b"bad-frame");raise SystemExit(0)\n',
+            'oversized':'sys.stdout.buffer.write(b"x"*(66*1024*1024));raise SystemExit(0)\n',
+            'stderr':'sys.stderr.buffer.write(b"x"*16385);raise SystemExit(0)\n',
+            'timeout':'import time;time.sleep(150)\n',
+            'orphan':'import os,signal,time\nif os.fork()==0:\n signal.signal(signal.SIGTERM,signal.SIG_IGN)\n while True:time.sleep(1)\nraise SystemExit(0)\n'}
+        code=('#!'+sys.executable+'\nimport importlib.util,sys\n'+
+            'spec=importlib.util.spec_from_file_location("fixed_supervisor",'+repr(str(anchor/'host-supervisor.py'))+')\n'+
+            'module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)\n'+
+            'assert sys.argv[1:]==["kill-register-read.v1"]\n'+
+            'request=sys.stdin.buffer.read(1048577);assert 0<len(request)<=1048576\n')
+        if failure is not None:code+=actions[failure]
+        if mutation is not None:
+            code+=('import os,pathlib\np=pathlib.Path('+repr(str(mutation))+')\n'+
+                'raw=p.read_bytes();p.chmod(0o640);p.write_bytes(raw+b" ");p.write_bytes(raw);p.chmod(0o440)\n')
+        records=[(b'capture.json',canonical(capture))]+[(f'raw/{i:04d}'.encode(),raw) for i,raw in enumerate(pages)]
+        code+='sys.stdout.buffer.write(module.frame_write('+repr(records)+'))\n'
+        put(gate_collector,code.encode(),0o555)
+        package_files=[{'role':'normalizer','path':str(coverage_normalizer),'sha256':sha(coverage_normalizer.read_bytes())},
+            {'role':'collector','path':str(gate_collector),'sha256':sha(gate_collector.read_bytes())}]
+        package_files += [{'role':'schema.'+family,'path':str(path),'sha256':sha(path.read_bytes())} for family,path in gate_schemas]
+        put(gate_manifest,{'schema_version':1,'kind':'kill_register_source_package','id':'gate.fixture.package','body':{
+            'operation':gate_n.OPERATION,'files':sorted(package_files,key=lambda row:row['role'])}})
+        put(gate_accepted,{'schema_version':1,'kind':'kill_register_source_accepted_identity_set','id':'gate.fixture.accepted','body':{
+            'activation_state':'inactive','identities':[{'source_id':'source.gate-fixture','operation':gate_n.OPERATION,'proof_state':'qualified',
+            'host_supervisor_sha256':sha((anchor/'host-supervisor.py').read_bytes()),'source_package_sha256':sha(gate_manifest.read_bytes()),
+            'collector_sha256':sha(gate_collector.read_bytes()),'normalizer_sha256':sha(coverage_normalizer.read_bytes())}]}})
+        put(gate_config,{'schema_version':1,'kind':'kill_register_source_config','id':'gate.fixture.config','body':{
+            'source_id':'source.gate-fixture','operation':gate_n.OPERATION,'queries':gate_n.QUERIES,
+            'source_package_path':str(gate_manifest),'source_package_sha256':sha(gate_manifest.read_bytes()),
+            'collector_path':str(gate_collector),'collector_sha256':sha(gate_collector.read_bytes()),
+            'accepted_set_path':str(gate_accepted),'accepted_set_sha256':sha(gate_accepted.read_bytes()),
+            'control_repository':control_repository,'default_branch':control_branch,'bootstrap':bootstrap,
+            **{key:config['body'][key] for key in ('store_id','principal_uid','consumer_gid')}}})
+    gate_install()
+    gate_area=base/'gate-consumers';gate_area.mkdir(mode=0o755);gate_area.chmod(0o755)
+    gate_runs=[]
+    def gate_claim(item):
+        request=json.loads(item['files']['materialization-input.json'])['stage_request']['content']
+        risk=request['body']['risk']
+        basis=json.loads(canonical(request));basis['body']['gate_decision_refs']=[]
+        return {'schema_version':1,'kind':'risk_gate_decision_claim','id':'risk.claim.gate-fixture','body':{
+            'activation_state':'inactive','classification':{'tier':risk['tier']['name'],'reason_ids':risk['reason_ids']},
+            'decision':{'state':'absent'},'policy_ref':risk['policy_ref'],'required_gate_refs':risk['required_gate_refs'],
+            'request_basis_sha256':sha(canonical(basis))}}
+    def gate_case(label,qualifying,current,expected=True,request_change=None,at_ready=None,selected_package=package,cancel=False):
+        case=gate_area/(str(len(gate_runs))+'-'+label);case.mkdir(mode=0o700);os.chown(case,consumer_uid,consumer_gid)
+        def invoke():
+            selected=json.loads((doc_root/'scope.json').read_bytes());del selected['body']['gate_evidence_refs']
+            request={'schema_version':1,'kind':'scope_gate_generation_request','id':'gate.'+str(len(gate_runs)),
+                'body':{'scope_basis':selected,'risk_claim':gate_claim(current)}}
+            if request_change is not None:request_change(request)
+            request_path=put(case/'request.json',request)
+            output=case/'output'
+            argv=['/usr/bin/sudo','-n','-u',consumer,'--','/usr/bin/env','-i',
+                'PATH='+str(tools)+':/usr/bin:/bin','LC_ALL=C','LANG=C',sys.executable,'-I','-S','-B',
+                selected_package/'scope/v1/generate-gate-evidence.py','generate',request_path,
+                doc_root/'shadow-set.json',doc_root/'dashboard.json',doc_root/'marker.json',base/'bundles',source,output]
+            child=None
+            try:
+                if at_ready is None:
+                    completed=subprocess.run(list(map(str,argv)),stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env,timeout=320)
+                else:
+                    child=subprocess.Popen(list(map(str,argv)),stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env,start_new_session=True)
+                    at_ready(child,output)
+                    stdout,stderr=child.communicate(timeout=320)
+                    completed=subprocess.CompletedProcess(argv,child.returncode,stdout,stderr)
+                marker=output/'completion/COMPLETE.json'
+                entry={'case':label,'argv':list(map(str,argv)),'returncode':completed.returncode,'stdout_hex':completed.stdout.hex(),
+                    'stderr_utf8':completed.stderr.decode('utf8','backslashreplace'),'complete':marker.exists(),'output':str(output)}
+                gate_runs.append(entry);put(base/'gate-runs.json',{'runs':gate_runs})
+                print(json.dumps({'gate_consumer_case':entry},sort_keys=True),flush=True)
+                assert completed.stdout==b''
+                if not expected:
+                    assert completed.returncode!=0 and not marker.exists()
+                    return None
+                assert completed.returncode==0 and not completed.stderr and marker.is_file()
+                complete=json.loads(marker.read_bytes());manifest=output/'manifests/manifest.json'
+                assert complete['body']['manifest_sha256']==sha(manifest.read_bytes())
+                manifest_doc=json.loads(manifest.read_bytes())
+                for row in manifest_doc['body']['files']:
+                    raw=(output/row['name']).read_bytes();assert len(raw)==row['size_bytes'] and sha(raw)==row['sha256']
+                obj=lambda name:json.loads((output/'objects'/name/'value.json').read_bytes())
+                scope=obj('scope');original=request['body']['scope_basis']
+                del scope['body']['gate_evidence_refs'];assert canonical(scope)==canonical(original)
+                assert obj('risk')['body']['verdict'] in ('inconclusive','violated')
+                assert obj('scope-evaluation')['body']['authority']=='none' and obj('scope-evaluation')['body']['enabled'] is False
+                assert obj('kill')['body']['duty_evaluation_ref']==e.document_ref(canonical(obj('duty')))
+                assert obj('state')['body']['register_ref']['kind']=='kill_switch_register'
+                initial=obj('kill-request')['body']['initial_origin_refs'];final=obj('final-origins')['body']['origins']
+                assert initial and final and initial!=final
+                assert all(row['kind']=='shadow_origin_observation' for row in final)
+                commands=obj('commands')['body']['commands']
+                actual_argv=obj('commands')['body']['argv']
+                assert len(commands)==len(actual_argv) and all(row['argv_sha256']==sha(canonical(call['argv'])) for row,call in zip(commands,actual_argv))
+                driver_paths=[str(selected_package/relative) for relative in ('control/v1/evaluate-duty.sh',
+                    'control/v1/evaluate-risk-gates.sh','control/v1/evaluate-kill-switch.sh')]
+                driver_paths.append(str(selected_package/'scope/v1/evaluate-scope.sh'))
+                assert [row['argv'][2] for row in actual_argv if len(row['argv'])>2 and row['argv'][2] in driver_paths]==driver_paths
+                actual=[row['argv_sha256'] for row in commands]
+                assert len(actual)==len(commands) and all(len(value)==64 for value in actual)
+                assert sum(row['role']=='kill-register-source-boundary' for row in commands)==1
+                if qualifying is not None:
+                    evidence=obj('coverage-evidence');assert evidence['body']['files']
+                    req=json.loads(next((output/row['output']).read_bytes() for row in evidence['body']['files'] if row['name']=='payload/request.json'))
+                    assert req['body']['gate_call_ref']==e.document_ref(canonical(obj('kill-request')))
+                    assert req['body']['initial_origin_refs']!=initial
+                return {'output':output,'objects':obj,'manifest':manifest_doc}
+            finally:
+                if child is not None and child.poll() is None:
+                    os.killpg(child.pid,signal.SIGTERM)
+                    try:child.communicate(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(child.pid,signal.SIGKILL);child.communicate(timeout=10)
+        return coverage_evaluate_pair(qualifying,current,at_ready=invoke)
+    gate_case('actual-single-source-enforced',None,gate_enforced_fixture)
+    gate_case('actual-two-sibling-sources',qualifying,current)
+    gate_case('same-stage-fresh-nonce',qualifying,current)
+    # The helper preserves output ownership; direct receipt replay uses actual held source bytes.
+    kill_attempts=sorted(path for path in store.iterdir() if path.name.startswith('kill-register.'))
+    assert len(kill_attempts)>=2
+    replay=kill_attempts[-2];fresh=kill_attempts[-1]
+    fresh_request=(fresh/'payload/request.json').read_bytes()
+    try:gate_n.receipt((replay/'receipt.json').read_bytes(),fresh_request,config['body'],
+        json.loads((fresh/'receipt.json').read_bytes())['body']['source_identity'],
+        (replay/'payload/raw-manifest.json').read_bytes(),(replay/'payload/observation.json').read_bytes())
+    except coverage_n.Refusal:pass
+    else:raise AssertionError('genuine kill receipt replay accepted')
+    def gate_register_revision(value,parents=None):
+        # Source pages contain actual Git bytes; the fixed collector owns the identity facts.
+        branch_head=control(['rev-parse','refs/heads/main'])
+        topic,_blob=control_commit(value,(branch_head,))
+        merged,blob=control_commit(value,(branch_head,topic['commit_id']))
+        control(['update-ref','refs/heads/main',merged['commit_id']])
+        now=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())
+        event={'sequence':101,'before':branch_head,'after':merged['commit_id'],'branch_node_id':control_branch['node_id'],
+            'actor':owner,'action':'update','at':now}
+        merge={'pull_request_id':'PR_gate_'+merged['commit_id'],'repository_node_id':control_repository['node_id'],
+            'branch_node_id':control_branch['node_id'],'base':branch_head,'head':topic['commit_id'],
+            'merge':merged['commit_id'],'parents':[branch_head,topic['commit_id']],'path':'config/kill-switch.json',
+            'blob_oid':blob,'actor':owner,'owner_authorization':{'identity':owner,'repository_node_id':control_repository['node_id'],
+                'permission':'owner','valid_at':now},'merged_at':now}
+        return gate_pages([bootstrap_row,merged],[event],[merge]),event,merge,merged
+    for kind in ('global','repository','workflow'):
+        control(['update-ref','refs/heads/main',bootstrap_row['commit_id']])
+        changed=json.loads(canonical(register));changed['body']['revision']=2
+        selected='*' if kind=='global' else 'fixture.target' if kind=='repository' else 'workflow.shadow-evidence-commit'
+        for entry in changed['body']['entries']:
+            if entry['scope_kind']==kind and entry['scope_id']==selected:entry['state']='stop'
+        pages,event,merge,merged=gate_register_revision(changed)
+        gate_install(pages);gate_case('real-register-stop-'+kind,qualifying,current)
+        latest=max((path for path in gate_area.iterdir() if (path/'output/completion/COMPLETE.json').exists()),key=lambda path:path.stat().st_mtime_ns)
+        evaluated=json.loads((latest/'output/objects/kill/value.json').read_bytes())
+        assert evaluated['body']['verdict']=='violated' and 'kill.stop.'+kind in evaluated['body']['reason_ids']
+    control(['update-ref','refs/heads/main',bootstrap_row['commit_id']])
+    changed=json.loads(canonical(register));changed['body']['revision']=2
+    good_pages,event,merge,merged=gate_register_revision(changed)
+    gate_install(good_pages);gate_case('real-owner-merge-cleared',qualifying,current)
+    for family,key,value,label in [(2,'events',[dict(event,action='delete')],'branch-delete-recreate'),
+        (2,'events',[dict(event,before=merged['commit_id'],after=bootstrap_row['commit_id'])],'ref-rewrite'),
+        (2,'events',[],'ref-gap'),(3,'merges',[],'register-direct-push'),
+        (3,'merges',[dict(merge,actor=dict(owner,id='operator.foreign'))],'foreign-operator'),
+        (3,'merges',[dict(merge,owner_authorization=dict(merge['owner_authorization'],permission='write'))],'non-owner-merge')]:
+        pages=list(good_pages);page=json.loads(pages[family]);page[key]=value;pages[family]=canonical(page)
+        gate_install(pages);gate_case(label,qualifying,current,False)
+    rollback_events=[dict(event,sequence=101),dict(event,sequence=102,before=merged['commit_id'],after=bootstrap_row['commit_id']),dict(event,sequence=103)]
+    rollback_pages=gate_pages([bootstrap_row,merged],rollback_events,[merge])
+    gate_install(rollback_pages);gate_case('ref-rollback-then-restore',qualifying,current,False)
+    third,blob=control_commit(register,(merged['commit_id'],))
+    aba_event=dict(event,sequence=102,before=merged['commit_id'],after=third['commit_id'])
+    aba_pages=gate_pages([bootstrap_row,merged,third],[event,aba_event],[merge])
+    gate_install(aba_pages);gate_case('register-a-b-a',qualifying,current,False)
+    for label,body_change in [('same-revision',lambda body:(body.update(revision=1),body['entries'][0].update(state='stop'))),
+        ('epoch-reset',lambda body:body.update(authority_epoch='epoch.other')),
+        ('missing-global',lambda body:body.update(entries=[row for row in body['entries'] if row['scope_kind']!='global'])),
+        ('duplicate-global',lambda body:body['entries'].insert(0,dict(body['entries'][0]))),
+        ('write-entry-unknown',lambda body:body.update(write_entries=[{'scope_id':'scope.foreign','state':'invalid'}]))]:
+        control(['update-ref','refs/heads/main',bootstrap_row['commit_id']])
+        value=json.loads(canonical(changed));body_change(value['body'])
+        pages,_event,_merge,_merged=gate_register_revision(value)
+        gate_install(pages);gate_case(label,qualifying,current,False)
+    control(['update-ref','refs/heads/main',bootstrap_row['commit_id']])
+    value=json.loads(canonical(changed));value['body']['write_entries']=[{'scope_id':scope_doc['id'],'state':'stop'}]
+    pages,_event,_merge,_merged=gate_register_revision(value);gate_install(pages)
+    gate_case('write-stop-does-not-grant-or-change-observation',qualifying,current)
+    control(['update-ref','refs/heads/main',bootstrap_row['commit_id']])
+    gate_install()
+    pristine=gate_pages()
+    for family,key,value,label in [(0,'repository',dict(control_repository,repository_id='fixture.target'),'wrong-control-repository'),
+        (0,'default_branch',dict(control_branch,node_id='REF_foreign'),'wrong-branch'),
+        (0,'before',{'commit_id':'a'*40,'observed_at':'2026-10-23T00:00:00Z'},'moving-tip'),
+        (0,'end_sequence',101,'missing-ref-event'),(1,'commits',[],'missing-register-history')]:
+        pages=list(pristine);page=json.loads(pages[family]);page[key]=value;pages[family]=canonical(page)
+        gate_install(pages);gate_case(label,qualifying,current,False)
+    for label in ('nonzero','signal','malformed','oversized','stderr','timeout','orphan'):
+        gate_install(failure=label);gate_case('kill-source-'+label,qualifying,current,False)
+    for field,value in [('page_index',1),('response_status',500),('output_cursor','unfinished')]:
+        capture={'pages':[{'family':family,'page_index':0,'response_status':200,'input_cursor':None,'output_cursor':None} for family in gate_n.FAMILIES]}
+        capture['pages'][0][field]=value;gate_install(capture=capture);gate_case('capture-'+field,qualifying,current,False)
+    old_payload=store/json.loads(current['files']['sandbox-request.json'])['id']/'payload/evidence/0000'
+    old_bytes=old_payload.read_bytes()
+    gate_install(mutation=old_payload);gate_case('payload-restored-after-provisional-release',qualifying,current,False)
+    assert old_payload.read_bytes()==old_bytes
+    gate_install()
+    for label,change in [('caller-gate-refs',lambda v:v['body']['scope_basis']['body'].update(gate_evidence_refs={})),
+        ('claim-shape',lambda v:v['body'].update(provider='/tmp/provider')),
+        ('old-stage',lambda v:v['body']['scope_basis']['body']['qualified_identity']['stage_request_ref'].update(id='request.old'))]:
+        gate_case(label,qualifying,current,False,request_change=change)
+    for path in (gate_config,gate_accepted,gate_manifest,gate_collector,coverage_normalizer):
+        original=path.read_bytes();mode=stat.S_IMODE(path.stat().st_mode)
+        try:
+            put(path,original+b' ',mode);gate_case('source-package-'+path.name,qualifying,current,False)
+        finally:put(path,original,mode)
+    for name in ('stage_request','resolved_profile'):
+        path=current['bundle']/'materialization-input.json'
+        original=path.read_bytes();changed=json.loads(original);changed[name]['sha256']='f'*64
+        try:
+            put(path,changed);gate_case('content-pair-'+name,qualifying,current,False)
+        finally:put(path,original)
+    exact=[str(value) for value in coverage_sudo[:-1]]+['kill-register-read']
+    for variant in [exact+['extra'],exact[:-1],exact[:-1]+['launch'],exact[:5]+['/bin/sh'],
+        exact[:5]+['/usr/bin/env','PATH=/usr/bin:/bin',*exact[5:]],exact[:6]+['-S','-I','-B',*exact[9:]]]:
+        denied=subprocess.run(list(map(str,coverage_consumer))+variant,input=fresh_request,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env,timeout=20)
+        assert denied.returncode!=0 and denied.stdout==b''
+        print(json.dumps({'gate_exact_sudo_denial':variant,'exit':denied.returncode,'stderr':denied.stderr.decode('utf8','backslashreplace')},sort_keys=True),flush=True)
+    gate_race=base/'gate-through-use-package';shutil.copytree(package,gate_race)
+    gate_frontend=gate_race/'scope/v1/evaluate-scope.sh'
+    gate_frontend_raw=gate_frontend.read_bytes()
+    gate_ready=consumer_work/'gate-ready';gate_ack=consumer_work/'gate-ack'
+    for path in (gate_ready,gate_ack):os.mkfifo(path,0o600);os.chown(path,consumer_uid,consumer_gid)
+    gate_sync=("exec 9<>"+str(gate_ack)+" || emit_error E_RUNTIME\n"+
+        "/usr/bin/printf 'ACQUIRED\\n' >"+str(gate_ready)+" || emit_error E_RUNTIME\n"+
+        "reply=''\nIFS= read -r -t 30 reply <&9 || emit_error E_RUNTIME\nexec 9>&-\n"+
+        "case \"$reply\" in CONTINUE) ;; CANCEL) kill -s TERM \"$BASHPID\" ;; *) emit_error E_RUNTIME ;; esac\n").encode()
+    assert gate_frontend_raw.count(seal_boundary)==1
+    put(gate_frontend,gate_frontend_raw.replace(seal_boundary,gate_sync+seal_boundary),0o555)
+    def gate_at_ready(change,cancel=False):
+        def action(child,output):
+            ready=os.open(gate_ready,os.O_RDONLY|os.O_NONBLOCK|os.O_NOFOLLOW)
+            try:
+                end=time.monotonic()+270;received=b''
+                while received!=b'ACQUIRED\n':
+                    assert child.poll() is None and time.monotonic()<end
+                    selected,_,_=select.select([ready],[],[],0.05)
+                    if selected:received+=os.read(ready,64)
+                    assert len(received)<=9
+                change(output)
+                ack=os.open(gate_ack,os.O_WRONLY|os.O_NONBLOCK|os.O_NOFOLLOW)
+                try:
+                    frame=b'CANCEL\n' if cancel else b'CONTINUE\n';assert os.write(ack,frame)==len(frame)
+                finally:os.close(ack)
+            finally:os.close(ready)
+        return action
+    try:
+        gate_case('actual-final-owner-READY-positive',qualifying,current,selected_package=gate_race,
+            at_ready=gate_at_ready(lambda output:None))
+        for name in ('request','basis','claim','stage-request','resolved-profile','stage-result','policy-set','state','attempt',
+                     'duty','risk','kill','scope','runtime','coverage-request','coverage-expectation'):
+            def mutate_output(output,name=name):
+                path=output/'objects'/name/'value.json';path.chmod(0o600);path.write_bytes(path.read_bytes()+b' ');path.chmod(0o400)
+            gate_case('held-output-'+name,qualifying,current,False,selected_package=gate_race,at_ready=gate_at_ready(mutate_output))
+        for kind in ('root','core','kill','coverage'):
+            saved=[]
+            def mutate_store(output,kind=kind):
+                if kind=='root':os.utime(store,None);return
+                if kind=='core':attempt=json.loads(current['files']['sandbox-request.json'])['id'];path=store/attempt/'payload/evidence/0000'
+                else:
+                    prefix='kill-register.' if kind=='kill' else 'coverage.'
+                    latest=max((path for path in store.iterdir() if path.name.startswith(prefix)),key=lambda path:path.stat().st_mtime_ns)
+                    path=latest/'payload/observation.json'
+                saved.append((path,path.read_bytes(),stat.S_IMODE(path.stat().st_mode)))
+                path.chmod(0o640);path.write_bytes(path.read_bytes()+b' ');path.chmod(0o440)
+            try:gate_case('final-store-'+kind,qualifying,current,False,selected_package=gate_race,at_ready=gate_at_ready(mutate_store))
+            finally:
+                for path,raw,mode in saved:put(path,raw,mode)
+        gate_case('final-call-cancel',qualifying,current,False,selected_package=gate_race,
+            at_ready=gate_at_ready(lambda output:None,True))
+    finally:
+        gate_ready.unlink();gate_ack.unlink()
+    # Corrupt only private test copies. The production entry has no test selector.
+    gate_protocol_variants={
+        'omitted-acquisition':('read-shadow-evidence.py',b'"acquisitions": sorted(self.acquisitions.values())',b'"acquisitions": sorted(self.acquisitions.values())[1:]'),
+        'duplicate-INIT':('read-shadow-evidence.py',b'self.wire.send("INIT_ACK", {})',b'self.wire.send("INIT_ACK", {}); self.wire.send("INIT_ACK", {})'),
+        'wrong-owner':('read-shadow-evidence.py',b'identity = "inner." + str(self.serial)',b'identity = "other." + str(self.serial)'),
+        'third-sibling-request':('read-shadow-evidence.py',b'self.store_session.source_done()',b'self.store_session.source_done(); self.store_session.request(request_raw, expectation)'),
+        'early-inner-close':('read-shadow-evidence.py',b'gate_session.final()',b'reader.release_stores(); gate_session.final()'),
+        'outer-hold-not-released':('read-shadow-evidence.py',b'for item in stores:\n            item.close()',b'for item in stores[1:]:\n            item.close()'),
+        'deadline-expired':('generate-gate-evidence.py',b'self.deadline = ENTRY_DEADLINE',b'self.deadline = time.monotonic() - 1')}
+    for label,(filename,old,new) in gate_protocol_variants.items():
+        variant=base/('gate-protocol-'+label);shutil.copytree(package,variant)
+        path=variant/'scope/v1'/filename;raw=path.read_bytes();assert old in raw
+        put(path,raw.replace(old,new,1),0o555)
+        gate_case(label,qualifying,current,False,selected_package=variant)
+    # A fresh source request cannot reuse a claimed nonce, even for the same stage.
+    replayed=subprocess.run(list(map(str,coverage_consumer))+exact,input=fresh_request,
+        stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env,timeout=20)
+    assert replayed.returncode!=0 and replayed.stdout==b''
+    for target in (store,fresh,fresh/'payload',fresh/'receipt.json'):
+        before=target.stat();raw=target.read_bytes() if target.is_file() else None
+        attempts=[['/bin/chmod','777',str(target)],['/bin/mv',str(target),str(target)+'.moved'],['/bin/ln',str(target),str(target)+'.linked'],['/bin/rm','-rf',str(target)]]
+        for argv in attempts:
+            denied=subprocess.run(list(map(str,coverage_consumer))+argv,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env,timeout=20)
+            assert denied.returncode!=0
+            current_state=target.stat();assert (current_state.st_dev,current_state.st_ino,current_state.st_mode)==(before.st_dev,before.st_ino,before.st_mode)
+            if raw is not None:assert target.read_bytes()==raw
+    gate_install()
+    assert coverage_evaluate_pair(qualifying,current)['body']['evidence']['coverage']['state']=='authenticated'
+    gate_case('actual-producer-after-negative-controls',qualifying,current)
+    print(json.dumps({'gate_generation_protocol':'PASS','source_uid':uid,'consumer_uid':consumer_uid,
+        'native_qualification':False,'production_identity':False,'network':False,'target_write':False,
+        'publication':False,'grant':False,'activation':False},sort_keys=True),flush=True)
 finally:
     coverage_git(['update-ref','refs/heads/main',coverage_original_head])
     put(doc_root/'scope.json',coverage_original_scope)

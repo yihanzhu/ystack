@@ -66,6 +66,12 @@ finish_reader() {
 }
 remaining_time() {
   local remaining=$((300 - SECONDS + reader_started))
+  if [ -n "${YSTACK_GATE_DEADLINE:-}" ]; then
+    local inherited
+    inherited=$("$python_bin" -I -S -B -c 'import math,sys,time; print(math.floor(float(sys.argv[1])-time.monotonic()))' "$YSTACK_GATE_DEADLINE") || emit_error E_RUNTIME
+    case "$inherited" in ''|*[!0-9]*) emit_error E_RUNTIME ;; esac
+    [ "$inherited" -ge "$remaining" ] || remaining=$inherited
+  fi
   [ "$remaining" -gt 0 ] || emit_error E_RUNTIME
   /usr/bin/printf '%s' "$remaining"
 }

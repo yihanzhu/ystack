@@ -42,14 +42,93 @@ def ref(raw):
             "id": document["id"], "sha256": c.digest(raw)}
 
 
+class _Owned(list):
+    def __init__(self, reader):
+        super().__init__()
+        self.reader = reader
+
+    def append(self, item):
+        if isinstance(item, c._HeldStoreRead) and self.reader.store_session is not None:
+            try:
+                self.reader.store_session.acquire(item)
+            except BaseException:
+                item.close()
+                raise
+        super().append(item)
+
+    def remove(self, item):
+        if isinstance(item, c._HeldStoreRead) and self.reader.store_session is not None:
+            self.reader.store_session.release(item)
+        super().remove(item)
+
+
+class _GateReaderSession:
+    is_inner = True
+
+    def __init__(self):
+        import socket
+        require(stat.S_ISSOCK(os.fstat(6).st_mode), "E_RUNTIME")
+        self.wire = c._GateWire(socket.socket(fileno=os.dup(6)), DEADLINE)
+        phase, body = self.wire.receive()
+        require(phase == "INIT" and set(body) == {"deadline", "gate_call_ref", "initial_origin_refs", "kill_request"}, "E_RUNTIME")
+        require(type(body["deadline"]) in {int, float} and time.monotonic() < body["deadline"] <= DEADLINE, "E_RUNTIME")
+        self.deadline = body["deadline"]
+        self.wire.deadline = self.deadline - 10
+        self.gate_call_ref, self.initial_origin_refs = body["gate_call_ref"], body["initial_origin_refs"]
+        self.kill_request_raw = c.canonical(body["kill_request"])
+        require(ref(self.kill_request_raw) == self.gate_call_ref, "E_RELATION")
+        self.bindings = {}
+        self.acquisitions, self.serial = {}, 0
+        self.wire.send("INIT_ACK", {})
+
+    def acquire(self, item):
+        self.serial += 1
+        identity = "inner." + str(self.serial)
+        binding = c._gate_store_binding(item)
+        self.wire.exchange("ACQUIRE", {"acquisition": identity, "binding": binding})
+        self.acquisitions[id(item)] = identity
+        self.bindings[identity] = binding
+
+    def release(self, item):
+        identity = self.acquisitions.pop(id(item))
+        self.wire.exchange("RELEASE", {"acquisition": identity})
+        del self.bindings[identity]
+
+    def coverage_origins(self):
+        rows = {c.canonical(binding["origin_ref"]): binding["origin_ref"] for binding in self.bindings.values()}
+        require(all(c.canonical(row) in rows for row in self.initial_origin_refs), "E_STALE")
+        return sorted(rows.values(), key=c.canonical)
+
+    def request(self, request_raw, expectation):
+        self.wire.exchange("C_REQUEST", {"request": parse(request_raw), "expectation": expectation,
+            "acquisitions": sorted(self.acquisitions.values())})
+
+    def released(self):
+        require(not self.acquisitions, "E_RUNTIME")
+        self.wire.exchange("C_RELEASED", {})
+
+    def source_done(self):
+        self.wire.exchange("C_DONE", {"acquisitions": sorted(self.acquisitions.values())})
+
+    def final(self):
+        self.wire.exchange("FINAL_OWNER", {"acquisitions": sorted(self.acquisitions.values())})
+
+    def close(self):
+        require(not self.acquisitions, "E_RUNTIME")
+        self.wire.exchange("CLOSED", {})
+        self.wire.sock.close()
+
+
 class _Reader:
-    def __init__(self, scope_path, set_path, bundle_root, git_root, output):
-        self.owned = []
-        self.inputs, self.commands = [], []
+    def __init__(self, scope_path, set_path, bundle_root, git_root, output, *, store_session=None, deadline=None, document_paths=None):
+        self.document_paths = document_paths or {}
+        self.store_session = store_session
+        self.owned = _Owned(self)
+        self.inputs, self.commands, self.gate_commands = [], [], []
         self.commands_open = True
         self.output = output
         self.scratch = output.parent.parent
-        self.deadline = DEADLINE
+        self.deadline = min(DEADLINE, deadline) if deadline is not None else DEADLINE
         self.anchor = None
         self.modules = None
         self.coverage_configuration = None
@@ -69,6 +148,11 @@ class _Reader:
             require(self.runtime.is_dir() and self.runtime.resolve() == self.runtime
                     and stat.S_IMODE(self.runtime.stat().st_mode) == 0o700
                     and self.runtime.stat().st_uid == os.getuid(), "E_RUNTIME")
+            self.private_slot = 0
+            if store_session is not None:
+                for index in range(4096):
+                    (self.captures / f"gate-{index:04d}").mkdir(mode=0o700)
+                    (self.runtime / f"gate-{index:04d}").mkdir(mode=0o700)
             self.no_hooks = self.runtime / "no-hooks"
             require(self.no_hooks.is_dir() and self.no_hooks.resolve() == self.no_hooks
                     and stat.S_IMODE(self.no_hooks.stat().st_mode) == 0o700
@@ -142,7 +226,11 @@ class _Reader:
 
     def capture(self, name, raw):
         require("/" not in name and name not in {"", ".", ".."})
-        path = self.captures / name
+        if self.store_session is not None:
+            require(len(self.inputs) < 4096, "E_LIMIT")
+            path = self.captures / f"gate-{len(self.inputs):04d}" / name
+        else:
+            path = self.captures / name
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400)
         try:
             sent = 0
@@ -151,13 +239,34 @@ class _Reader:
                 require(count > 0, "E_RUNTIME")
                 sent += count
         finally:
+            os.fsync(fd)
             os.close(fd)
+        if self.store_session is not None:
+            parent = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                os.fsync(parent)
+            finally:
+                os.close(parent)
+            self.hold(path, max(c.DOCUMENT_LIMIT, len(raw)))
         self.inputs.append((path, raw))
+        return path
+
+    def fresh_runtime_directory(self, name):
+        if self.store_session is None:
+            path = self.runtime / name
+            path.mkdir(mode=0o700)
+            return path
+        require(self.private_slot < 4096, "E_LIMIT")
+        path = self.runtime / f"gate-{self.private_slot:04d}"
+        self.private_slot += 1
+        require(not list(path.iterdir()), "E_STALE")
         return path
 
     def record_command(self, role, argv, executable, component):
         require(self.commands_open, "E_RUNTIME")
         require(len(self.commands) < 4096, "E_LIMIT")
+        if self.store_session is not None:
+            self.gate_commands.append({"role": role, "argv": argv, "executable_sha256": executable, "component_sha256": component})
         self.commands.append({"role": role, "argv_sha256": c.digest(c.canonical(argv)),
                               "executable_sha256": executable, "component_sha256": component})
 
@@ -186,7 +295,8 @@ class _Reader:
             "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null",
             "GIT_NO_REPLACE_OBJECTS": "1", "GIT_NO_LAZY_FETCH": "1", "GIT_TERMINAL_PROMPT": "0",
             "GIT_OPTIONAL_LOCKS": "0", "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.hooksPath",
-            "GIT_CONFIG_VALUE_0": str(self.no_hooks)}
+            "GIT_CONFIG_VALUE_0": str(self.no_hooks),
+            **({"YSTACK_GATE_DEADLINE": str(self.deadline)} if self.store_session is not None else {})}
 
     def component(self, relative, arguments, raw=b"", limit=c.DOCUMENT_LIMIT):
         source = self.package_sources[relative]
@@ -223,12 +333,22 @@ class _Reader:
             self.owned.append(self.anchor)
         return self.anchor
 
+    def release_stores(self):
+        self.recheck()
+        stores = [item for item in self.owned if isinstance(item, c._HeldStoreRead)]
+        for item in stores:
+            item.recheck()
+        for item in stores:
+            item.close()
+            self.owned.remove(item)
+
     def close(self):
-        owned, self.owned = self.owned, []
+        owned = list(self.owned)
         first = None
         for item in reversed(owned):
             try:
                 item.close()
+                self.owned.remove(item)
             except BaseException as exc:
                 if first is None:
                     first = exc
@@ -645,8 +765,7 @@ class _Reader:
                 and sum(map(len, frozen_files.values())) <= 48 * c.DOCUMENT_LIMIT
                 and parse(frozen["shadow-record.json"])["body"]["record_form"] == "enforced-reproduction.v1")
         self._authenticate(frozen)
-        seed_dir = self.runtime / ("seed-" + str(len(self.inputs)))
-        seed_dir.mkdir(mode=0o700)
+        seed_dir = self.fresh_runtime_directory("seed-" + str(len(self.inputs)))
         seed_incident = self.capture("seed-incident-" + str(len(self.inputs)) + ".json", frozen["incident.json"])
         seed_record = self.capture("seed-record-" + str(len(self.inputs)) + ".json", frozen["shadow-record.json"])
         seed = self.component("maintenance/v1/incident-to-eval.sh", ["convert", seed_incident, seed_record, seed_dir])
@@ -688,8 +807,11 @@ class _Reader:
         return self.jq_check("shadow/v1/write-materialization-input.jq", args, first_raw, limit=8 * c.DOCUMENT_LIMIT)
 
     def record_source_command(self, argv, request_raw, sudo_sha, python_sha, supervisor_sha):
-        self.record_command("coverage-source-boundary", argv, sudo_sha, supervisor_sha)
+        role = "kill-register-source-boundary" if argv[-1] == "kill-register-read" else "coverage-source-boundary"
+        self.record_command(role, argv, sudo_sha, supervisor_sha)
         self.commands[-1].update(request_sha256=c.digest(request_raw), python_sha256=python_sha)
+        if self.store_session is not None:
+            self.gate_commands[-1].update(request_sha256=c.digest(request_raw), python_sha256=python_sha)
 
     def coverage_identity(self, files):
         record = parse(files["shadow-record.json"])["body"]
@@ -789,6 +911,17 @@ class _Reader:
         require(used == {pull["node_id"] for pull in pulls})
         return {"sha256": c.digest(c.canonical(rows)), "commit_count": len(rows)}
 
+    def authenticate_gate_kill(self):
+        if self.store_session is not None and self.store_session.is_inner:
+            configuration = getattr(self, "kill_configuration", None)
+            if configuration is None:
+                configuration = c.load_coverage_configuration(self.anchor_for(), "kill-register-read")
+                require(configuration is not None, "E_CONFIG")
+                self.kill_configuration = configuration
+                self.owned.append(configuration)
+            source = c._HeldCoverageRead(self.anchor_for(), configuration, self.store_session.kill_request_raw)
+            self.owned.append(source)
+
     def source_coverage(self, qualifying, current, row_groups):
         missing = {"state": "stale"}
         required = self.scope_body["required_shadow_environments"]
@@ -798,6 +931,7 @@ class _Reader:
         anchor = self.anchor_for()
         configuration = c.load_coverage_configuration(anchor)
         if configuration is None:
+            require(self.store_session is None, "E_RELATION")
             return missing
         self.coverage_configuration = configuration
         self.owned.append(configuration)
@@ -813,8 +947,8 @@ class _Reader:
             require(same(self.coverage_identity(qualifying[environment]), self.coverage_identity(current[environment])))
         documents = {}
         for name in n.DOCUMENT_NAMES:
-            documents[name] = ref(self.hold(self.scratch / (name + ".json"), c.DOCUMENT_LIMIT).raw)
-        risk, duty = (parse(self.hold(self.scratch / (name + ".json"), c.DOCUMENT_LIMIT).raw) for name in ("risk", "duty"))
+            documents[name] = ref(self.hold(self.document_paths.get(name, self.scratch / (name + ".json")), c.DOCUMENT_LIMIT).raw)
+        risk, duty = (parse(self.hold(self.document_paths.get(name, self.scratch / (name + ".json")), c.DOCUMENT_LIMIT).raw) for name in ("risk", "duty"))
         identity = self.scope_body["qualified_identity"]
         require(same(risk["body"]["stage"]["request_ref"], identity["stage_request_ref"])
                 and same(duty["body"]["stage"]["request_ref"], identity["stage_request_ref"])
@@ -823,7 +957,7 @@ class _Reader:
                 and same(risk["body"]["stage"]["result_ref"], duty["body"]["stage"]["result_ref"]))
         require(all(same(ref(c.canonical(parse(files["materialization-response.json"])["stage_result"])),
                          duty["body"]["stage"]["result_ref"]) for files in current.values()))
-        nonce = os.urandom(32).hex()
+        nonce = getattr(self, "_coverage_nonce", None) or os.urandom(32).hex()
         attempt = "coverage." + nonce
         def hashes(name):
             return [{"environment_id": environment, "sha256": c.digest(c.canonical(parse(files["shadow-record.json"])["body"]["write"][name]))}
@@ -844,30 +978,36 @@ class _Reader:
             "qualifying_receipt_refs": sorted([ref(files["sandbox-receipt.json"]) for files in qualifying.values()], key=c.canonical),
             "git_observation_sha256": c.digest(c.canonical(git_observation)),
             "source_package_ref": n.doc_ref(configuration.package_raw), "source_accepted_set_ref": n.doc_ref(configuration.accepted_raw)}
+        if self.store_session is not None:
+            body.update(initial_origin_refs=self.store_session.coverage_origins(), gate_call_ref=self.store_session.gate_call_ref)
         request_raw = c.canonical({"schema_version": 1, "kind": "coverage_source_request", "id": attempt, "body": body})
         n.request(request_raw)
+        if getattr(self, "_coverage_prepare_only", False):
+            return request_raw
         expectation = {key: body[key] for key in ("attempt_id", "nonce", "coverage_base", "evaluated_revision",
             "stage_request_ref", "resolved_profile_ref", "stage_result_ref", "source_package_ref", "source_accepted_set_ref")}
+        if self.store_session is not None:
+            expectation.update(initial_origin_refs=body["initial_origin_refs"], gate_call_ref=body["gate_call_ref"])
         expectation.update(request_sha256=c.digest(request_raw), scope_ref=documents["scope"])
-        workspace = self.runtime / attempt
-        workspace.mkdir(mode=0o700)
+        workspace = self.fresh_runtime_directory(attempt)
         parent = os.open(self.runtime, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
             os.fsync(parent)
         finally:
             os.close(parent)
-        for name, raw in (("request.json", request_raw), ("expectation.json", c.canonical({"schema_version": 1,
-                          "kind": "coverage_source_expectation", "id": attempt, "body": expectation}))):
+        prepared = (("request.json", request_raw), ("expectation.json", c.canonical({"schema_version": 1,
+                          "kind": "coverage_source_expectation", "id": attempt, "body": expectation})))
+        for name, raw in prepared:
             write_exclusive(workspace / name, raw, mode=0o600)
+        for name, _raw in prepared:
             self.hold(workspace / name, c.DOCUMENT_LIMIT)
         self.directory(workspace)
         self.recheck()
-        provisional = [item for item in self.owned if isinstance(item, c._HeldStoreRead)]
-        for item in provisional:
-            item.recheck()
-        for item in provisional:
-            item.close()
-            self.owned.remove(item)
+        if self.store_session is not None and self.store_session.is_inner:
+            self.store_session.request(request_raw, expectation)
+        self.release_stores()
+        if self.store_session is not None and self.store_session.is_inner:
+            self.store_session.released()
         self.darwin.coverage_source(request_raw)
         source = c._HeldCoverageRead(anchor, configuration, request_raw)
         self.owned.append(source)
@@ -885,12 +1025,15 @@ class _Reader:
                     for files in qualifying.values()))
         require(n.utc(observed["branch_snapshots"]["current"]["observed_at"]) <= n.utc(receipt["body"]["completed_at"]))
         self.recheck()
+        if self.store_session is not None and self.store_session.is_inner:
+            self.authenticate_gate_kill()
+            self.store_session.source_done()
         return {"state": "authenticated", "request_ref": ref(request_raw), "receipt_ref": ref(source.snapshots["receipt.json"]),
             "origin_ref": ref(source.observation), "observation_sha256": c.digest(source.snapshots["payload/observation.json"]),
             "interval": interval, "coverage_base": body["coverage_base"], "evaluated_revision": body["evaluated_revision"],
             "current_binding_sha256": c.digest(c.canonical(body)), "qualifying_rows": row_groups[0]}
 
-    def evaluate(self):
+    def authenticate_bundles(self, current_only=False):
         document = self.shadow_set
         require(set(document) == {"schema_version", "kind", "id", "body"}
                 and type(document["schema_version"]) is int and document["schema_version"] == 1
@@ -949,7 +1092,7 @@ class _Reader:
                     require(digest not in named)
                 elif claimed:
                     allowed_directories.add(digest)
-                if eligible:
+                if eligible and (not current_only or role == "current"):
                     require(environment not in role_files[role])
                     require(environment in self.scope_body["required_shadow_environments"])
                     require(form not in {"withheld-write.v1", "withheld-write-policy.v1"} or workflow)
@@ -969,11 +1112,21 @@ class _Reader:
             for reference in refs:
                 require(sum(reference["id"] == row["record_ref"]["id"]
                             and reference["sha256"] == row["record_ref"]["sha256"] for row in output_rows) == 1)
+        self.recheck()
+        return rows, qualifying_rows, role_files
+
+    def evaluate(self):
+        rows, qualifying_rows, role_files = self.authenticate_bundles()
+        workflow = self.scope_body["workflow_id"] == "workflow.shadow-evidence-commit"
+        identity = self.scope_body["qualified_identity"]
+        self.authenticate_gate_kill()
         coverage_result = None
         if workflow:
             try:
                 coverage_result = self.source_coverage(role_files["qualifying"], role_files["current"], [qualifying_rows, rows])
             except BaseException as error:
+                if self.store_session is not None:
+                    raise
                 if getattr(error, "code", "") in {"E_STALE", "E_RUNTIME", "E_LIMIT", "E_DEPENDENCY"}:
                     raise
                 if isinstance(error, (KeyboardInterrupt, SystemExit, InterruptedError)):
@@ -1073,14 +1226,23 @@ def main(arguments):
         signal.signal(number, cancel)
     control = _ControlFIFO(paths[-1].parent.parent)
     reader = None
+    gate_session = None
     try:
-        reader = _Reader(*paths)
+        try:
+            private = stat.S_ISSOCK(os.fstat(6).st_mode)
+        except OSError:
+            private = False
+        if private:
+            gate_session = _GateReaderSession()
+        reader = _Reader(*paths, store_session=gate_session, deadline=gate_session.deadline if gate_session else None)
         raw = reader.evaluate()
         require(len(raw) <= c.DOCUMENT_LIMIT, "E_LIMIT")
         reader.recheck()
         write_exclusive(reader.output, raw)
         reader.inputs.append((reader.output, raw))
         reader.recheck()
+        if gate_session is not None:
+            gate_session.final()
         require(os.write(1, b"READY\n") == 6, "E_RUNTIME")
         message = sys.stdin.buffer.read(8)
         require(message == b"SEAL\n", "E_RUNTIME")
@@ -1093,6 +1255,8 @@ def main(arguments):
         try:
             if reader is not None:
                 reader.close()
+            if gate_session is not None:
+                gate_session.close()
         finally:
             control.close()
 

@@ -1154,6 +1154,12 @@ def _closed_scope_child(argv: list[str], env: dict[str, str], owner) -> None:
         _require(env == {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"}, "E_RUNTIME")
         return
     ledger = owner.ledger
+    gate = getattr(owner, "_gate_invocation", None)
+    if gate is not None and argv == gate:
+        _require(env == ledger.environment() and len(argv) == 13
+                 and argv[:4] == ["/bin/bash", "-p", os.path.join(_source_root(), "scope/v1/evaluate-scope.sh"), "evaluate"]
+                 and all(_physical(path) for path in argv[4:]), "E_RUNTIME")
+        return
     coverage = getattr(owner, "_coverage_invocation", None)
     if coverage is not None and argv == coverage:
         _require(env == {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"}, "E_RUNTIME")
@@ -1172,7 +1178,10 @@ def _closed_scope_child(argv: list[str], env: dict[str, str], owner) -> None:
         _require(fixed or config or tree or obj, "E_RUNTIME")
         return
     if argv[:2] == ["/bin/bash", "-p"]:
-        scripts = {"control/v1/evaluate-bound-sandbox.sh": ("evaluate", 3),
+        scripts = {"control/v1/evaluate-duty.sh": ("evaluate", 4),
+            "control/v1/evaluate-risk-gates.sh": ("evaluate", 6),
+            "control/v1/evaluate-kill-switch.sh": ("evaluate", 4),
+            "control/v1/evaluate-bound-sandbox.sh": ("evaluate", 3),
             "shadow/v1/validate-incident.sh": ("validate", 1),
             "enforcement/v1/check-sandbox-receipt.sh": ("check-bound", 4),
             "maintenance/v1/incident-to-eval.sh": ("convert", 3)}
@@ -1187,10 +1196,12 @@ def _closed_scope_child(argv: list[str], env: dict[str, str], owner) -> None:
              and argv[1:3] == ["-L", str(ledger.modules)] and argv[-2] == "-f"
              and argv[-1] in {os.path.join(root, relative) for relative in (
                  "shadow/v1/qualified-identity.jq", "adapters/local-git-materializer/v1/protocol.jq",
-                 "shadow/v1/write-materialization-input.jq")}, "E_RUNTIME")
+                 "shadow/v1/write-materialization-input.jq", "scope/v1/workflow-scope.jq")}, "E_RUNTIME")
     args = argv[3:-2]
     program = os.path.basename(argv[-1])
-    if program == "qualified-identity.jq":
+    if program == "workflow-scope.jq":
+        _require(args == ["-r", "--arg", "gate_basis", "basis"], "E_RUNTIME")
+    elif program == "qualified-identity.jq":
         _require(len(args) == 10 and args[:3] == ["-r", "--arg", "repository_id"]
                  and _id(args[3]) and args[4:6] == ["--arg", "hash_algorithm"]
                  and args[6] in {"sha1", "sha256"} and args[7:9] == ["--arg", "commit_id"]
@@ -1361,12 +1372,27 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
         finally:
             sudo.close()
 
+    def gate_scope(self, arguments, session):
+        _require(type(arguments) is list and len(arguments) == 9 and all(_physical(path) for path in arguments), "E_RUNTIME")
+        argv = ["/bin/bash", "-p", os.path.join(_source_root(), "scope/v1/evaluate-scope.sh"), "evaluate", *arguments]
+        self._gate_invocation, self._gate_session = argv, session
+        try:
+            self.ledger.record_command("gate-scope-driver", argv, self.ledger.bash.sha256,
+                                       self.ledger.package_sources["scope/v1/evaluate-scope.sh"].sha256)
+            return self._foreground(argv, b"", DOCUMENT_LIMIT, 65536,
+                min(300, self.deadline - time.monotonic()), self.ledger.environment())
+        finally:
+            self._gate_invocation = self._gate_session = None
+
     def _foreground(self, argv, raw, cap, error_cap, timeout, env):
         _closed_scope_child(argv, env, self)
         source = getattr(self, "_coverage_invocation", None)
-        _require(0 < timeout <= 120 and type(cap) is int
+        _require(0 < timeout <= (300 if getattr(self, "_gate_invocation", None) is not None else 120) and type(cap) is int
                  and ((source is not None and argv == source and cap == 0 and error_cap == 16384)
                       or (source is None and 0 < cap <= 16 * DOCUMENT_LIMIT and error_cap == 65536)), "E_RUNTIME")
+        inherited = getattr(self.ledger, "store_session", None) is not None
+        end = min(time.monotonic() + timeout, self.deadline - 10) if inherited else time.monotonic() + timeout
+        _require(end > time.monotonic(), "E_RUNTIME")
         previous = signal.pthread_sigmask(signal.SIG_BLOCK,
                                           {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
         child = None
@@ -1380,8 +1406,27 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
                 old_handlers[number] = signal.signal(number, observe_signal)
             signal.pthread_sigmask(signal.SIG_SETMASK, previous)
             _require(not cancelled[0], "E_RUNTIME")
-            child = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            gate = getattr(self, "_gate_session", None)
+            saved_fd = None
+            if gate is not None:
+                try:
+                    saved_fd = os.dup(6)
+                except OSError:
+                    pass
+                os.dup2(gate.child_socket.fileno(), 6, inheritable=True)
+            try:
+                child = subprocess.Popen(argv, pass_fds=((6,) if gate is not None else ()), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE, env=env, close_fds=True, start_new_session=True)
+            finally:
+                if gate is not None:
+                    if saved_fd is None:
+                        os.close(6)
+                    else:
+                        os.dup2(saved_fd, 6)
+                        os.close(saved_fd)
+            if gate is not None:
+                gate.child_socket.close()
+                selector.register(gate.wire.sock, selectors.EVENT_READ)
             outputs = {child.stdout.fileno(): bytearray(), child.stderr.fileno(): bytearray()}
             limits = {child.stdout.fileno(): cap, child.stderr.fileno(): error_cap}
             for stream in (child.stdin, child.stdout, child.stderr):
@@ -1392,12 +1437,18 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
                 selector.register(child.stdin, selectors.EVENT_WRITE)
             else:
                 child.stdin.close()
-            end, sent = min(time.monotonic() + timeout, self.deadline - 10), 0
-            _require(end > time.monotonic(), "E_RUNTIME")
+            sent = 0
             while selector.get_map():
                 _require(not cancelled[0] and time.monotonic() < end, "E_RUNTIME")
                 for key, events in selector.select(min(0.1, max(0, end - time.monotonic()))):
                     stream = key.fileobj
+                    if gate is not None and stream is gate.wire.sock:
+                        gate.pump()
+                        while not gate.closed and gate.wire.pending():
+                            gate.pump()
+                        if gate.closed:
+                            selector.unregister(stream)
+                        continue
                     if stream is child.stdin:
                         try:
                             count = os.write(stream.fileno(), raw[sent:sent + 65536])
@@ -1422,21 +1473,46 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
                             bucket.extend(chunk)
             result = child.wait(timeout=max(0.001, end - time.monotonic()))
             _require(not cancelled[0] and result == 0, "E_RUNTIME")
+            try:
+                os.killpg(child.pid, 0)
+            except ProcessLookupError:
+                pass
+            else:
+                raise Refusal("E_RUNTIME")
+            if gate is not None:
+                _require(gate.closed and not gate.wire.buffer, "E_RUNTIME")
+                gate.wire.sock.settimeout(max(0.001, min(1, self.deadline - time.monotonic())))
+                _require(gate.wire.sock.recv(1) == b"", "E_RUNTIME")
             stdout, stderr = list(outputs.values())
             _require(not stderr, "E_RUNTIME")
             return bytes(stdout)
         except BaseException as exc:
             cleanup_errors = []
-            if child is not None and child.returncode is None:
-                for number in (signal.SIGTERM, signal.SIGKILL):
+            if child is not None:
+                cleanup_end = min(self.deadline, time.monotonic() + 10) if inherited else time.monotonic() + 10
+                try:
                     try:
-                        os.killpg(child.pid, number)
+                        os.killpg(child.pid, signal.SIGTERM)
                     except ProcessLookupError:
                         pass
-                    except BaseException as cleanup_exc:
-                        cleanup_errors.append(cleanup_exc)
-                try:
-                    child.wait(timeout=max(0.001, min(10, self.deadline - time.monotonic())))
+                    if child.returncode is None:
+                        try:
+                            child.wait(timeout=max(0.001, min(2, cleanup_end - time.monotonic())))
+                        except subprocess.TimeoutExpired:
+                            pass
+                    try:
+                        os.killpg(child.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    if child.returncode is None:
+                        child.wait(timeout=max(0.001, cleanup_end - time.monotonic()))
+                    while True:
+                        try:
+                            os.killpg(child.pid, 0)
+                        except ProcessLookupError:
+                            break
+                        _require(time.monotonic() < cleanup_end, "E_RUNTIME")
+                        time.sleep(min(0.01, max(0, cleanup_end - time.monotonic())))
                 except BaseException as cleanup_exc:
                     cleanup_errors.append(cleanup_exc)
             if cleanup_errors:
@@ -1833,3 +1909,81 @@ WRITE_TEXTS = {
     "output_contract": b"Add only the listed evidence files; preserve all existing target files.\n",
     "policy": b"Routine candidate-only evidence preparation. Network and publication are denied.\n",
 }
+
+
+class _GateWire:
+    """Bounded private frames on the generator's inherited socket, never a CLI input."""
+    def __init__(self, sock, deadline, call_id=None, nonce=None, binding=None):
+        self.sock, self.deadline = sock, deadline
+        self.call_id, self.nonce, self.binding = call_id, nonce, binding
+        self.sent = self.received = 0
+        self.sent_bytes = self.received_bytes = 0
+        self.buffer = bytearray()
+
+    def send(self, phase, body):
+        import struct
+        _require(type(phase) is str and type(body) is dict, "E_RUNTIME")
+        self.sent += 1
+        raw = canonical({"version": 1, "call_id": self.call_id, "nonce": self.nonce,
+            "sequence": self.sent, "phase": phase, "binding": self.binding, "body": body})
+        _require(len(raw) <= DOCUMENT_LIMIT and time.monotonic() < self.deadline, "E_RUNTIME")
+        self.sent_bytes += len(raw)
+        _require(self.sent_bytes <= 64 * DOCUMENT_LIMIT, "E_LIMIT")
+        self.sock.settimeout(max(0.001, self.deadline - time.monotonic()))
+        self.sock.sendall(struct.pack("!I", len(raw)) + raw)
+
+    def receive(self):
+        import struct
+        while len(self.buffer) < 4 or len(self.buffer) < 4 + struct.unpack("!I", self.buffer[:4])[0]:
+            _require(time.monotonic() < self.deadline, "E_RUNTIME")
+            self.sock.settimeout(max(0.001, self.deadline - time.monotonic()))
+            chunk = self.sock.recv(65536)
+            _require(bool(chunk), "E_RUNTIME")
+            self.buffer.extend(chunk)
+            if len(self.buffer) >= 4:
+                _require(0 < struct.unpack("!I", self.buffer[:4])[0] <= DOCUMENT_LIMIT, "E_LIMIT")
+        size = struct.unpack("!I", self.buffer[:4])[0]
+        raw = bytes(self.buffer[4:4 + size]); del self.buffer[:4 + size]
+        self.received_bytes += len(raw)
+        _require(self.received_bytes <= 64 * DOCUMENT_LIMIT, "E_LIMIT")
+        row = _json(raw, DOCUMENT_LIMIT, "E_RUNTIME")
+        _require(set(row) == {"version", "call_id", "nonce", "sequence", "phase", "binding", "body"}
+                 and type(row["version"]) is int and row["version"] == 1
+                 and type(row["sequence"]) is int and row["sequence"] == self.received + 1
+                 and type(row["body"]) is dict and type(row["phase"]) is str, "E_RUNTIME")
+        if self.call_id is None:
+            _require(row["phase"] == "INIT" and _id(row["call_id"]) and _sha(row["nonce"]) and _sha(row["binding"]), "E_RUNTIME")
+            self.call_id, self.nonce, self.binding = row["call_id"], row["nonce"], row["binding"]
+        _require((row["call_id"], row["nonce"], row["binding"]) ==
+                 (self.call_id, self.nonce, self.binding), "E_RUNTIME")
+        self.received += 1
+        return row["phase"], row["body"]
+
+    def pending(self):
+        import struct
+        return len(self.buffer) >= 4 and len(self.buffer) >= 4 + struct.unpack("!I", self.buffer[:4])[0]
+
+    def exchange(self, phase, body):
+        self.send(phase, body)
+        reply, result = self.receive()
+        _require(reply == phase + "_ACK", "E_RUNTIME")
+        return result
+
+
+def _gate_store_binding(item):
+    _require(isinstance(item, _HeldStoreRead), "E_STORE")
+    item.recheck()
+    origin = _json(item.observation, DOCUMENT_LIMIT, "E_STORE")
+    entries = []
+    for row in origin["body"]["entries"]:
+        row = dict(row)
+        if row["name"] == ".":
+            # A sibling changes only root bookkeeping between separate acquisitions.
+            row["metadata_before"] = row["metadata_before"][:6]
+            row["metadata_after"] = row["metadata_after"][:6]
+        entries.append(row)
+    return {"store_id": item.anchor.config["store_id"], "attempt_id": item.attempt_id,
+        "ancestors": [list(_identity(component.before)) for component in item.held[0].components[:-1]],
+        "entries": entries, "snapshots": [{"name": name, "size": len(raw), "sha256": digest(raw)}
+            for name, raw in sorted(item.snapshots.items())],
+        "origin_ref": {"schema_version": 1, "kind": origin["kind"], "id": origin["id"], "sha256": digest(item.observation)}}

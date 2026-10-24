@@ -1984,3 +1984,58 @@ The write suite exercises the actual `prepare-policy` producer twice and retains
 old-form assertions. The scope fixture consumes actual producer outputs for both
 coverage sides. Its VM identities and launch receipts are explicitly SIMULATED.
 Those tests do not establish native qualification or genuine platform execution.
+
+### Gate evidence generation (inactive)
+
+| Step | Fixed component | Result |
+| --- | --- | --- |
+| Freeze | `scope/v1/generate-gate-evidence.py` and the existing scope reader | One authenticated current materialization and its prerequisite closure |
+| Read control | Existing supervisor `kill-register-read` | A fresh, read-only register source attempt |
+| Evaluate | Existing duty, risk, kill and scope shell drivers, in that order | Their original observation verdicts and bytes |
+| Finish | One private store owner and a bounded socket channel | Fresh final acquisitions held through the completion marker |
+
+The fixed entry is:
+
+```text
+python3 -I -S -B scope/v1/generate-gate-evidence.py generate REQUEST SHADOW_SET DASHBOARD MARKER BUNDLE_ROOT SOURCE_GIT_DIR OUTPUT_DIR
+```
+
+REQUEST is canonical schema 1 `scope_gate_generation_request`. Its body contains
+only `scope_basis` and `risk_claim`. The basis is a normal workflow scope without
+`gate_evidence_refs`. The claim remains unqualified. The consumer extracts the
+request and resolved profile from their validated content pairs. It takes the
+result and policy set from that same authenticated materialization. Every required
+environment must name the same four documents. Existing risk and duty rules remain
+in force. A legitimate violated or inconclusive verdict remains an observation.
+
+The optional root-owned siblings `kill-register-source-config.json` and
+`kill-register-source-accepted-identities.json` use the existing source principal,
+group, store, anchor and supervisor. Missing configuration fails the generator.
+The fixed source package must supply full raw Git objects, register tree proofs,
+continuous default-ref history and owner-merge facts from an operator-accepted
+bootstrap. It must cover all four query families. This repository does not ship or
+install a collector, bootstrap, register, accepted source identity or credential.
+
+The output directory must be new and physical. It contains `objects/`, private
+reader data, `manifests/manifest.json` and the final
+`completion/COMPLETE.json`. The completion marker binds the manifest digest.
+Both source requests retain their original origin refs. Final observations and
+fresh origins are separate objects. All source acquisitions, including recursive
+prerequisites and aliases, have one owner. Each source runs only after all store
+holds have been released. Non-store inputs remain held. The original scope reader
+closes only after the outer owner has acquired the complete final closure.
+
+The total deadline is 300 seconds, including IPC and cleanup. Timeout, cancellation,
+source failure, stale data, an incomplete handoff or uncertain child cleanup leaves
+no completion marker. The result stays inactive, observation-only, authority none
+and enabled false. It does not clear a stop, admit a write, publish or activate.
+`write_entries.scope_id` names the workflow scope document, not a workflow class.
+
+`bash scripts/test/scope-gate-generation.test.sh --pure` checks parsing, projection,
+raw history, fixed arguments and private lifecycle data without jq, source setup
+or native execution. The ordinary test entry runs the same suite. The existing
+scope qualification fixture contains the distinct-principal generator/source path
+and its negative controls. Run that fixture only on its authorized disposable
+host. Its simulated VM facts still do not prove native qualification. Pure and
+static checks do not close the outstanding foundation, source, integration or G3
+proof requirements.

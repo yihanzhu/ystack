@@ -1301,3 +1301,33 @@ uses the actual producer, materializer, preparation, verifier, checker and store
 reader. Its SIMULATED VM and launch facts do not replace Linux/macOS native or
 source-principal acceptance. Missing tools and unexecuted integration remain
 explicit validation debt; restore does not install their prerequisites.
+
+Restore `scope/v1/generate-gate-evidence.py` and
+`scripts/test/scope-gate-generation.test.sh` with the scope reader, scope shell/jq
+files, shadow consumer, `sandbox/v1/coverage-source.py` and host supervisor.
+Restore the kill-switch jq program, its decision and both current policy sets as
+one measured package. Preserve historical bundle bytes and policy snapshots.
+The restore manifest lists the new entry and executable test exactly once.
+
+The generator adds no installation or activation. Keep the existing anchor and
+source principal boundaries. Do not create a kill register, bootstrap, collector,
+accepted identity, account or sudoers rule during restore. The two optional fixed
+kill-source configuration siblings belong to a separately authorized installation.
+Their absence makes the new entry fail closed. The ordinary low-level evaluators
+retain their explicit-input interface and old state shape.
+
+Use the fixed generator command documented in `docs/components.md`. Keep its new
+output directory intact. `completion/COMPLETE.json` is valid only with the exact
+`manifests/manifest.json`, its listed bytes and the complete source request/receipt
+inventory. Initial origin refs remain in their original requests. The final fresh
+origins do not replace them. A completion marker conveys no write authority.
+
+Run `bash scripts/test/scope-gate-generation.test.sh --pure` for ordinary parser,
+projection, history, compatibility and lifecycle controls. Then run the original
+kill, duty, risk, foundation, schema, materializer, receipt, launcher, shadow and
+scope suites with their pinned prerequisites. A missing jq cache is NOT RUN; do not
+fetch a replacement as part of this check. The genuine scope fixture, all six full
+matrix shards and the original Linux/macOS native/source requirements remain
+mandatory acceptance work. Pure checks, restored source and quick CI do not replace
+those proofs. CPU/wall remains NONE, native qualification BLOCKED, production EMPTY
+and automation PAUSED until their separate acceptance steps are complete.

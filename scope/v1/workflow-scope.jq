@@ -152,7 +152,7 @@ def coverage_ok($repository_id):
   (.coverage_base | git_revision_ref_ok and .repository_id == $repository_id) and
   (.qualifying_shadow_record_refs | bounded_set(1; 16; shadow_evidence_ref_ok));
 
-def shape_ok:
+def scope_shape_ok($basis):
   exact(["body", "id", "kind", "schema_version"]) and
   # The scope id must leave room for the "proposal." prefix the emitted
   # enablement proposal carries, so every proposal id is itself a valid id.
@@ -161,11 +161,12 @@ def shape_ok:
   (.body |
    . as $body |
    exact(["activation_state", "allowed_paths", "authority", "enabled",
-     "gate_evidence_refs", "max_attempts", "push_allowed",
+     "max_attempts", "push_allowed",
      "qualified_identity", "required_eval_families",
      "required_proof_kinds", "required_shadow_environments", "risk_tier",
      "scope_version", "shadow_evidence_refs", "target_repository_id",
      "task_class", "workflow_id"] +
+     (if $basis then [] else ["gate_evidence_refs"] end) +
      (if .workflow_id == "workflow.shadow-evidence-commit" and .task_class == "task.commit-shadow-evidence"
       then ["coverage"] else [] end)) and
    ((.workflow_id == "workflow.shadow-evidence-commit") == (.task_class == "task.commit-shadow-evidence")) and
@@ -186,7 +187,7 @@ def shape_ok:
    (.shadow_evidence_refs | bounded_set(1; 16; shadow_evidence_ref_ok)) and
    (.qualified_identity |
     qualified_identity_ok($body.target_repository_id)) and
-   (.gate_evidence_refs | gate_evidence_refs_ok) and
+   (if $basis then true else (.gate_evidence_refs | gate_evidence_refs_ok) end) and
    (.max_attempts |
     type == "number" and . == floor and . >= 1 and . <= 8));
 
@@ -200,7 +201,10 @@ def relations_ok:
   ($body.workflow_id | startswith("workflow.")) and
   ($body.task_class | startswith("task."));
 
-if (shape_ok | not) then "E_SHAPE"
+def shape_ok: scope_shape_ok(false);
+def basis_ok: scope_shape_ok(true) and relations_ok;
+
+if ((if $ARGS.named.gate_basis == "basis" then scope_shape_ok(true) else shape_ok end) | not) then "E_SHAPE"
 elif (relations_ok | not) then "E_RELATION"
 else empty
 end

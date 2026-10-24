@@ -3243,7 +3243,7 @@ def run_coverage_read(argv):
         receipt = canonical({"schema_version": 1, "kind": "forge_coverage_source_receipt", "id": requested["id"], "body": {
             "operation": n.OPERATION, "version": 1, "store_id": host["store_id"], "attempt_id": requested["id"],
             "request_sha256": sha256_hex(request_raw), "nonce": body["nonce"], "source_identity": installation.identity,
-            "query": n.query(body), "raw_manifest_sha256": sha256_hex(raw_manifest),
+            "query": (n.query(body, observation) if operation == "kill-register-read" else n.query(body)), "raw_manifest_sha256": sha256_hex(raw_manifest),
             "observation_sha256": sha256_hex(observation), "started_at": started, "completed_at": completed,
             "outcome": "complete", "effects": ["read-forge-metadata"]}})
         if operation == "kill-register-read":
