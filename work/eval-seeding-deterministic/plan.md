@@ -1,5 +1,5 @@
 ---
-spec-blob: 29a65c9370002c5705931905bce5570777775128
+spec-blob: 50dc777c4d67209819ce7f607a4078ad65ad12ae
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-24
@@ -169,39 +169,64 @@ it adds no CLI option, environment selector or reusable test framework.
 The artifact base is `091f22d6dc2bff038e60b1a10b12923093eda0fe`.
 The unique PR 1b carrier is `codex/impl/eval-source-relay-replay`, worktree
 `/private/tmp/ystack-eval-source-relay-replay-20261023`, paused clean at
-`178462071b88531345a5abc45c7db457b526955f`. Its local and remote heads match;
-PR is absent. Reviewed code base is `4fc3806147039ae96698b9602c4e5a2234e00f4e`.
+`64dda8e74157aea2809889b662ee84ea2c90930c`, parent
+`f55240e3e3dac290f5dcf9602fce19a930bb8154`. Its remote checkpoint remains
+`178462071b88531345a5abc45c7db457b526955f`; PR is absent. That earlier checkpoint
+uses reviewed code base `4fc3806147039ae96698b9602c4e5a2234e00f4e`.
+The existing adoption and A/B history remain; do not repeat adoption or reset a
+source round. After this plan passes its gates, rebind the current preserved
+carrier and normally merge the exact plan-containing main before new code.
 The original Sol author resumes this carrier. Do not create a replacement,
 cherry-pick copied files, reset, rebase, force or clean another attempt.
 
 The full 76-suite CI run `40055569509` and independent review accepted that
-checkpoint. Preserve its five platform skips and the older `8d834bc` failure
+earlier 178 checkpoint. Preserve its five platform skips and the older `8d834bc` failure
 whose cause remains UNKNOWN. This is evidence for that exact checkpoint, not
 acceptance of the later malicious changes, native execution or G3. Preserve the
 original M2–M4 adoption history and claim `6378091304`; do not re-adopt it.
 
-The actual malicious dependency is repository `yihanzhu/ystack`, branch
+The original malicious dependency binding is repository `yihanzhu/ystack`, branch
 `codex/impl/scope-gate-evidence-generation`, worktree
 `/private/tmp/ystack-gate-evidence-impl-20261023`, clean head
 `22d25c96f28ed42da0a5722b6b5ea0e65946274c`, remote/PR absent, claimed-only.
 Its artifact blobs are intent `2aa4196fe3adc89837f4dfdebc197017d6e2f753`,
 spec `22f98a8e45f662bdb13338cd5ecb24276b8953e7` and
 plan `9d8852b74d7cb487db28950a2260a05ace9ee76e`.
-Its accepted 191 pure/static checks do not prove genuine old-origin/new-handoff,
+Its original 191 pure/static checks do not prove genuine old-origin/new-handoff,
 source acceptance, native qualification or G3. Keep all failed and NOTRUN records.
+
+The same dependency carrier has a source-prepared compatibility refresh at
+`2514193924d81d8bbebe72479b97f7a47bdc0e58`, parent
+`7b4e87796debdb3389c307a31a6d417f376541ef`, comparison base
+`38f482a173135535731cf9a5c69ad7c111695262`. Its intent/spec blobs stay as above;
+plan is `f41d4cc6b93c86a0fde0f121f654c85c97b9fdb9`. Only receipt policy pins,
+launcher control_real pin, ordinary Reader fixture initialization and ACL test
+context pin differ from original D. Treat 22d as the original adopted identity;
+The refreshed 251419 R3 verdict is Source-verdict ACCEPT, Important 0, with status
+SOURCE_COMPLETE_WAITING_GENUINE_PROOF. Raw report SHA-256:
+`a8f3efca7d6ff0235a81ad3456671d51725b8223000e6e2813326d27ce71af31`.
+Use 251419 only after the manager reads that full verdict and records fresh
+formal adoption/preflight. Preserve D R0–R3, all three P2 records, actual CI
+failures and unresolved full-suite/native/G3 proof; source preparation is not merge.
+Do not implement or copy these fixes in #439. First normally merge the accepted
+plan-containing main into current B, then normally merge the exact accepted
+refreshed D on that same carrier, recording ordered parents and every overlap.
+A pending/REVISE verdict or an unexpected D byte pauses that dependency step.
 
 Before resume, the manager binds both complete tuples, PR/remote state, current
 main, artifact links and unresolved proof. Obtain a fresh independent source
-preflight of the actual 22d bytes and this plan; a summary or old comment is not
-acceptance. The adopted-versus-authored path distinction below is part of this plan
+preflight of the actual refreshed D bytes and this plan; a summary or old comment is not
+acceptance. The source preflight must cover the refreshed D tuple, its complete raw R3 verdict
+and the inherited four-path delta. The adopted-versus-authored path distinction below is part of this plan
 acceptance and must be checked in source preflight.
-Then merge the exact accepted plan-containing main into the existing 178 carrier.
+Then merge the exact accepted plan-containing main into the preserved current carrier.
 Record ordered parents: prior carrier first, exact main second. Recheck that the
 merged intent/spec/plan blobs equal their accepted values and record the new head.
 
-After this plan and the exact source preflight are accepted, the manager records
-explicit adoption. That permits a second ordinary merge of exact 22d into
-that same carrier, with prior merged carrier first and 22d second. No source file
+The following adoption sequence governs only an adoption not yet completed.
+Preserve a recorded completed adoption as history. After plan and exact source
+preflight acceptance, the manager records explicit adoption. It permits an ordinary merge of the exact accepted refreshed D into
+that same carrier, with prior merged carrier first and accepted refreshed D second. No source file
 is copied. Before merge, save the three trees and full name/status/numstat/blob map.
 Use a no-commit merge for inspection. Preserve both sides' requirements in overlap
 paths; never choose an entire side to erase relay/content binding or gate checks.
@@ -531,9 +556,10 @@ result authorizes genuine source/native execution or closes #558.
 The table distinguishes adopting a dependency from authoring this concern.
 R1.6/R4A permit the exact inherited layer; R9.3 limits #439-authored edits and
 the final publication-base diff. This plan remains a proposal until independent
-acceptance and source preflight. Adoption grants no edit to the eight rows marked
-adoption-only below. Their exact D bytes must remain unchanged. Changed inherited
-bytes, a new dependency, or a final residual diff outside R9.3 returns to G2; a
+acceptance and source preflight. Adoption grants no edit to the nine rows marked
+adoption-only below. Their exact adopted bytes must remain unchanged. Inherited
+changes beyond this exact refresh, a new dependency, or a final residual diff
+outside R9.3 returns to G2; a
 merge cannot hide an allowed-path expansion. Defined pure
 work in already available owners can proceed after this plan's own gate. A missing
 owner pauses its dependent step, not all inactive preparation.
@@ -547,6 +573,7 @@ owner pauses its dependent step, not all inactive preparation.
 | `control/v1/kill-switch-decision.json` (control) | `3623e43b43b8315d3c3e94c64491858177387cc0` | +1/−1 | adoption-only; no authored edit |
 | `control/v1/kill-switch.jq` (control) | `805b4d05ce638d6c63607861b75ecbe1810da411` | +3/−1 | adoption-only; no authored edit |
 | `docs/components.md` (docs) | `740d2d5e4bb53cb5c17b9e77307815ae846d5ea8` | +136/−3 | R9.3 only; new diff separately reviewed |
+| `enforcement/v1/sandbox-receipt.jq` (enforcement) | `eb18f926de7a49aef15df57177d8e189a52e8406` | +2/−2 | refreshed D adoption-only; no authored edit |
 | `sandbox/v1/coverage-source.py` (sandbox) | `121cb0c8ad213a03b7ca53a8707429cc198e51e8` | +813/−0 | R9.3 only; new diff separately reviewed |
 | `sandbox/v1/host-supervisor.py` (sandbox) | `8154b657a41a7bb007336b8883a41a8a3248ebdb` | +319/−1 | R9.3 only; new diff separately reviewed |
 | `scope/v1/evaluate-scope.sh` (scope) | `bac0ae740d7c28dfe6111529f2f0e5f51cc93be1` | +258/−7 | R9.3 only; new diff separately reviewed |
@@ -556,9 +583,10 @@ owner pauses its dependent step, not all inactive preparation.
 | `scope/v1/scope-policy.json` (scope) | `16f0b7025d97cf1a578afbbe3199b9058e949245` | +1/−1 | adoption-only; no authored edit |
 | `scope/v1/workflow-scope.jq` (scope) | `1201bd60d085b02fbcabd13d4677c4659bee42b2` | +19/−5 | adoption-only; no authored edit |
 | `scripts/test/control-kill-switch.test.sh` (tests) | `e73af1ae687ccc17cc177819eaf92763257ddac1` | +13/−0 | adoption-only; no authored edit |
+| `scripts/test/sandbox-launcher.test.sh` (tests) | `3bed4eb822e6b0e96aacaae3fb7a6095d3c37e6c` | +1/−1 | R9.3 only; new diff separately reviewed |
 | `scripts/test/scope-gate-generation.test.sh` (tests) | `a81b9c54701bf6299ddb71590ec1e29f7faa8960` | +480/−0 | R9.3 only; new diff separately reviewed |
-| `scripts/test/scope-qualification.test.sh` (tests) | `d682c99d86a1998e3c50966cf58a0d15d9127567` | +15604/−64 | R9.3 only; new diff separately reviewed |
-| `scripts/test/shadow-enforced.test.sh` (tests) | `bd253344dfbd970828fd149fe2e8e1e496e62686` | +341/−19 | R9.3 only; new diff separately reviewed |
+| `scripts/test/scope-qualification.test.sh` (tests) | `17faa9cfc68ef2b97afd527a3521fa9e0b91010c` | +15605/−64 | R9.3 only; new diff separately reviewed |
+| `scripts/test/shadow-enforced.test.sh` (tests) | `cedb918524915a7d191fd382608a380964cc0da8` | +341/−19 | R9.3 only; new diff separately reviewed |
 | `scripts/test/shadow-self-host-evidence.test.sh` (tests) | `ddf4a19a26fdffe0670990a07ed88b8a652f1801` | +18/−4 | R9.3 only; new diff separately reviewed |
 | `scripts/test/shadow-write.test.sh` (tests) | `be2fbb979d5125e594dfb7ea70d3bacc224dd050` | +183/−11 | R9.3 only; new diff separately reviewed |
 | `shadow/v1/_consumer.py` (shadow) | `a5f8da69560a2c3647b4179c8657d150aaca1f2d` | +881/−15 | R9.3 only; new diff separately reviewed |
@@ -566,9 +594,9 @@ owner pauses its dependent step, not all inactive preparation.
 | `shadow/v1/write-materialization-input.jq` (shadow) | `720b0c29522e247a7a3ce290004361c4dde93d58` | +11/−1 | adoption-only; no authored edit |
 | `shadow/v1/write-shadow.py` (shadow) | `fc596350cab560a138c2059e8096542aa75554b8` | +71/−43 | R9.3 only; new diff separately reviewed |
 
-The dependency table covers all 25 non-artifact paths differing from the artifact
-base. Its 21,333 additions and 265 deletions are included in the gross whole-diff
-ledger, including all 16,899 lines of the retained scope-qualification file. Their complete source blobs and numstat are bound by exact 22d; the large
+The dependency table covers all 27 non-artifact paths of refreshed D differing from
+artifact base 091f22d6dc2bff038e60b1a10b12923093eda0fe. Its 21,337 additions and 268 deletions are included in the gross whole-diff
+ledger, including all 16,900 lines of the retained scope-qualification file. Their complete source blobs and numstat bind exact 251419; the large
 scope test is retained whole. Main's accepted artifacts take precedence when
 merging history; they are not product edits or permission to alter an artifact.
 After dependency protected landing, final PR 1b must differ from its publication
@@ -623,8 +651,10 @@ SDK, installation, wrapper, generation, qualification or workflow change is allo
 
 ### S1–S10 and invariant mapping
 
-All source anchors below bind 22d, except the preserved review relay which binds
-178. Function names survive line moves; save the final line/blob map at checkpoint.
+Original source anchors and raw clock labels below bind 22d, except the retained
+review relay at 178. Refreshed D changes only the four compatibility paths above;
+it adds no command or raw observation site. Preserve original observation labels;
+save the actual final line/blob map at each checkpoint.
 
 | Row | Actual owner and result | Remaining gate |
 | --- | --- | --- |
@@ -660,7 +690,8 @@ and withheld publication remain unchanged; these projections confer no authority
 ### Exact source identity, read edges and final pin receipt
 
 The following is the complete 84-path source/policy set from R4A.D. `B` means
-artifact base 091f22d6dc2bff038e60b1a10b12923093eda0fe. `D` means exact 22d.
+artifact base 091f22d6dc2bff038e60b1a10b12923093eda0fe. `D` means refreshed 251419, subject to the source gate above. It retains all
+original 22d source bytes except the receipt pin change identified below.
 Each cell is a Git blob; `=B` means the identical blob. A dash means absent at B.
 `new` is a required future source, not a placeholder digest. Git blobs identify
 exact bytes; the companion source receipt records SHA-256 and byte count too.
@@ -716,7 +747,7 @@ those bytes. Do not print another generation id or expand a generation guard.
 | `core/v2/generations/G/modules/stage_request.jq` | `aff5cf1b87efac8cb95918ec5dc240a055277f52` | =B | write-shadow.py:134-136;read-shadow-evidence.py:179-182;enforced-reproduction.py:1376-1382 |
 | `enforcement/v1/accepted-identities.json` | `af29b2e50a6fc3041158670b93e710832c6fd681` | =B | consumer.INSTALLED_SOURCES |
 | `enforcement/v1/check-sandbox-receipt.sh` | `6a1636711b493e9348c18e8f793a7f00234eea98` | =B | shadow/v1/write-shadow.py:133; scope/v1/read-shadow-evidence.py:185 |
-| `enforcement/v1/sandbox-receipt.jq` | `1a8a93c831e870585cda6ba9e71e3cdaaf355848` | =B | shadow/v1/write-shadow.py:133; scope/v1/read-shadow-evidence.py:186 |
+| `enforcement/v1/sandbox-receipt.jq` | `1a8a93c831e870585cda6ba9e71e3cdaaf355848` | `eb18f926de7a49aef15df57177d8e189a52e8406` | shadow/v1/write-shadow.py:133; scope/v1/read-shadow-evidence.py:186 |
 | `evals/v1/replay-malicious.py` | — | new | fixed replay/guest build, R4A.A |
 | `maintenance/v1/bands.jq` | `8e746640f25d669db65f465afd94dab93da5a81d` | =B | shadow/v1/write-shadow.py:124; scope/v1/read-shadow-evidence.py:190 |
 | `maintenance/v1/incident-to-eval.jq` | `1f15f6aaf3111da3b4c12763581dd1aea300c439` | =B | shadow/v1/write-shadow.py:123; scope/v1/read-shadow-evidence.py:189 |
@@ -800,8 +831,9 @@ still targets the same earlier file. Snapshot new members only after those loops
 
 Extend the existing bounded snapshot path only for the closed R4A input classes.
 The launcher chooses the byte ceiling from the validated fixed role, not a caller
-limit: source 16 MiB/file and 32 MiB total; raw observations 16 MiB total with the
-four 4 MiB partitions; qualified slots 4 GiB total across at most 64 files. Keep
+limit: source 16 MiB/file and 32 MiB total; non-export raw observations 16 MiB
+with four 4 MiB partitions; full exports and unified raw use the ledger below;
+qualified slots 4 GiB total across at most 64 files. Keep
 existing lower per-role limits for all other files. The same regular-file,
 non-symlink-parent, descriptor hold, exclusive creation and final recheck apply.
 Count bytes actually copied and reject before the next chunk crosses either the
@@ -879,7 +911,7 @@ recording unusable; it never changes native success into a claimed replay succes
 | RAW09 | guest.setup | Existing setup reads/returns → same enforcement rows; raw failure cannot be replaced by a hard flag |
 | RAW10 | guest.control and launch | Unique launch at source :1404/:1419 → same positive child and waited==child; all closed tags/order consumed exactly |
 | RAW11 | guest.counters | Raw counter/statvfs/evidence bytes → rounding, reached flags, report/frame and sizes |
-| RAW12 | host.process | Driver/process/pipe primitives → same stop acceptance, EOF completeness, reap, termination, timeout and cleanup |
+| RAW12 | host.process | Driver/process/pipe primitives and the fixed whole `sandbox-export-bytes` read → same stop acceptance, EOF completeness, reap, full frame/tail validation, termination, timeout and cleanup |
 | RAW13 | host.driver_rest | Status/body or caught exception/phase → same driver argv/state/stop classification; no socket offline |
 | RAW14 | source_pages.kill/coverage | Fixed family/page bytes and cursors → same raw manifest/normalize/register/receipt |
 | RAW15 | commands.runtime_values | Qualified version/ABI/config facts → executable/component identity and concrete argv, never copied component output |
@@ -897,12 +929,201 @@ R4A.B envelope. Real host/source writers build it from observations already made
 Consumer-side observations stay in the private recorder output, outside the
 normal bundle. Update every inventory predicate together: read_store_attempt,
 _HeldStoreRead.recheck, read_coverage_attempt and derived reader checks. New
-inventory is exactly receipt.json/payload/capture.json; legacy receipt.json/payload
-remains readable for old consumers but cannot seed replay. No arbitrary sibling
-is admitted. The same principal/group, descriptor holds, ACL, request/attempt
-binding and stable readback cover capture. Keep the normal bundle's old file set.
+inventory is exactly receipt.json/payload/capture.json, plus sandbox-export.bin
+if and only if the matching export-read reference is present. Source-page attempts
+never admit that binary. Legacy receipt.json/payload remains readable for old
+consumers but cannot seed replay. The same principal/group, 0440 file/0750 directory
+rules, held descriptors, ACL, regular-file/no-symlink parents, request/attempt
+binding and stable readback cover both capture and binary. Keep the normal bundle's old file set.
 The guest's fixed observation frame stays outside verifier output; the verifier
 cannot write its record. Do not install or run this new capture path on a real host.
+
+### Full export role and bounded operation ledger
+
+These anchors bind the paused 64dda8e source, not an accepted implementation.
+Use only the existing 40 edit paths; all nine adoption-only paths and the exact
+84-member source closure remain unchanged. Rebind final line/blob/hash receipts.
+
+| Existing site | Required change within its existing owner |
+| --- | --- |
+| host `_record_process:52`, `run_vm:2568–2582`, `_capture_values:1547`, `_write_capture_file:1575` | Only `run_vm.export-read.bytes` gains R4A.B's closed role/launch/size/SHA reference. Retain the same original whole `fh.read()` value before it is lost. Write the fixed sibling from those bytes with exclusive creation/fsync/readback before marking capture complete; never reopen export.img later. Keep native read, observer, stop/reap, error and cleanup order. A capture write/limit failure makes capture unusable, preserving native results and teardown. |
+| consumer `_attempt_names:968`, `_capture_envelope:972`, `_capture_for_replay:995`, `_origin_values`, `read_store_attempt:1033`, `_HeldStoreRead.recheck:1006` | Share the exact conditional inventory and reference/attempt/request binding. Acquire the binary through the existing held-file/ACL path, with its fixed 12 MiB ceiling. Include it in every origin, full-byte recheck and capture copy. A changed file or unmatched reference refuses; no absent-field fallback. |
+| consumer `read_coverage_attempt` and derived held readers; scope reader/generator store acquisition and final checks | Keep source-page attempts binary-free. Apply the same inventory on every initial, recursive, release/reacquisition and completion check. Count every actual reread, including earlier attempts and overlapping holds; no cached hash replaces a required check. |
+| launcher `snapshot_file:21`, `stage_expected:56`, `snapshot_input:270`, shared-file staging | Select only `exports/reproduction.bin` or `exports/write.bin` below the validated trial directory from the fixed launch role. Stream at most 64 KiB per chunk; keep held source/installed file, modes, parents, exclusive create and completion seals. No caller path/limit, codec or general externalizer. Charge repeated references even when one equal snapshot is physically reused. |
+| coordinator `_host_result_values:178` and fixed guest/verifier value calls | Read one bounded held binary at a time. Pass all original bytes through unchanged host `frame_read:134` first. Independently rebuild the guest frame from its closed observations and actual verifier payload, then compare frame plus zero padding to the actual read length against every source byte. Bound both inputs before allocation. Parsed source records or host receipts never become guest inputs. |
+
+The process row keeps exactly its original six keys. Only the original export-read
+site permits the role object; successful read has return=size, null errno and one
+file. Read errno has null bytes/no file; an unreached site has neither. Preserve
+empty/short reads and the original frame refusal. More than 12 MiB makes capture
+ineligible without changing the original native read. Each launch consumes its
+reference/file exactly once; duplicate, unused, cross-launch, wrong-site, inline
+hex, extra-key and mixed forms refuse. No prefix or tail-verdict representation.
+
+Keep launcher seed/result `snapshot_input`, consumer DOCUMENT_LIMIT/CAPTURE_LIMIT
+and host's complete LF-terminated canonical capture envelope at 1,048,576 bytes.
+The binary never appears as JSON/hex. Reference/envelope bytes remain non-export
+host charges. Keep all smaller document, array, shared-file (1–256), manifest,
+source-page and original guest limits. All limits below apply at once; no role
+renaming or overlap excludes bytes. MiB is 1,048,576 bytes.
+
+| Resource | One case, both launches | Four trials in the same operation |
+| --- | --- | --- |
+| Original exports | 2 files × at most 12 MiB = 24 MiB | 8 files / 96 MiB |
+| Non-export / four partitions | 16 MiB / guest, host, storage, remaining each 4 MiB | 64 MiB, per-case partitions retained |
+| Unified logical raw | 40 MiB | 160 MiB |
+| Export physical bytes / files | 192 MiB / 16 | 768 MiB / 64 |
+| Unified physical / non-export physical | 256 / 64 MiB | 1,024 / 256 MiB |
+| Export cumulative write / read | 192 / 384 MiB | 768 / 1,536 MiB |
+| Unified cumulative write / read | 256 / 512 MiB | 1,024 / 2,048 MiB |
+
+Use private counters at the existing host capture, consumer copy, launcher staging
+and coordinator read/compare sites. Their complete receipt is private accounting,
+not a new raw field, public API or authority token. The top-level recorder or eval
+launcher aggregates all leaf counts; failure cannot discard a leaf charge.
+Bind one top-level recording or one run/dashboard replay as the operation. Its
+private counters are shared across both launches, every case, nested owner and
+all dashboard pairs; no helper/pair reset. Before a later operation, include all
+still-retained files from earlier operations in physical occupancy. Count each
+raw occurrence logically, each physical copy physically, and each byte copied,
+hashed, parsed, compared or reread in cumulative work. Fuse a hash with a read
+only when the implementation actually uses that same byte pass. Metadata-only
+stat/ACL checks have no export-byte charge; their raw rows/logs still cost bytes.
+Do not omit failed attempts or remove their evidence to make the budget fit.
+
+The finite normal fixture uses N=24 MiB (two actual 12 MiB files). The table names
+all eight possible retained copy pairs. Each occupied pair costs N and 2 files;
+these are counted roles, not permission to duplicate on every helper call.
+
+| Copy pair | Owner / accounting point |
+| --- | --- |
+| Original export disks | host build_export_disk/run_vm; count original allocation and any guest overwrite separately as writes; include disks until original cleanup actually removes them |
+| Controlled capture siblings | host capture writer; full original read values, never a reconstructed export |
+| Private recorder copies | consumer capture copy through held descriptors; outside the normal shadow bundle |
+| Seed source files | fixed trial exports paths; a distinct copy costs N even when recorder bytes match |
+| Retained archive copies | recording/seed handoff; distinct from seed files and from R5's two catalog data inputs |
+| Installed snapshots | launcher fixed-role staging; one per equal physical input, retain every logical reference |
+| Rebuilt comparison files | coordinator's independently generated frame plus bounded zero padding; both launches count |
+| Failed-retained or scratch copies | all extra raw copies share this measured occupancy, never an excluded sidecar; previous failures count even on a successful operation |
+
+At full occupancy these eight pairs are 192 MiB/16 files, four trials 768 MiB/64.
+Recording's six possible retained pairs are original, controlled, recorder, seed,
+archive and failed/scratch: 144 MiB/12 files. Initial disk writes plus one full
+bounded guest overwrite and these five copy writes cost at most 7N=168 MiB;
+an additional N of charged raw scratch writes reaches the 192 MiB write ceiling.
+Replay starts with all six retained pairs still charged, then installs and rebuilds
+one pair each: 192 MiB/16 files; those new writes cost 2N=48 MiB. New scratch or
+failure output must fit remaining measured space; no ninth pair is silently made.
+A retained failed file is not overwritten or deleted to reuse that allowance.
+These are complete finite schedules, not a claim that two copies cover storage.
+
+The selected ordinary positive creates original, controlled, recorder and seed
+pairs; it creates installed and rebuilt pairs during replay. Archive and
+failed/scratch copies are each zero calls/bytes in this successful fixture. Their
+mandatory retention, failure and boundary tests remain; any actual such copy
+still consumes the caps above. It does not remove an archive required by another
+recipe. Both full export frames have at most 64 KiB of non-padding records per
+launch; every remaining byte of each 12 MiB file is present and checked.
+
+Use these three concrete private same-pass changes in the existing owners. They
+are planned implementation work, not a claim about paused B64. (1) Only the new
+export branch of `read_store_attempt` reads through the held descriptor in 64 KiB
+chunks while updating the acquisition SHA. `_observation`/`_observation_values`
+consume that exact acquisition result for this binary's first SHA; it is bound to
+the same immutable raw value, descriptor, length and before/after checks. It is
+never caller-supplied or a hash cache. `_origin_values` still independently hashes
+the full raw bytes on every invocation, including the returned origin and the
+fixture's separate origin rebuild. No other observation path changes. (2) The
+controlled writer's readback computes SHA in its actual 64 KiB read loop and
+compares it to the separately computed original SHA; it does not add another
+full-buffer digest pass. (3) The export branch of `_HeldStoreRead.recheck` and the
+fixed-role launcher completion checks stream actual held bytes and compare them
+to the retained acquisition bytes in the same loop. Both comparison inputs are
+charged. Where a completion SHA is required, update a fresh hash state in this
+same loop and compare its digest too. Keep every original recheck invocation,
+metadata/ACL/parent/named-file check and independent equality/hash relationship.
+Do not replace a final reread with an earlier digest or remove a check at the cap.
+
+Counts below are per launch; multiplying their byte charges by two gives the
+listed pair charge N=24 MiB. A fused pass is charged once per input traversed;
+independent digest/equality passes remain separate. The bounded frame allowance
+includes frame construction, header/content copying and digest work; the full
+unchanged `frame_read` gets two complete traversals plus 1 MiB per pair, covering
+its tail slice/scan and the small frame work. The fixture must measure these
+charges and assert the exact named call counts, not use unnamed recheck credit.
+
+| Recording owner / actual calls per launch | Pair read charge |
+| --- | --- |
+| host `run_vm`: original `fh.read` once, original export SHA once | 2N |
+| host original `frame_read` once; all tail, header, content and digest work | at most 2N + 1 MiB |
+| controlled writer: copy original value once; fused readback/SHA once | 2N |
+| consumer `read_store_attempt`: held acquisition/first observation SHA once; returned `_origin_values` second independent SHA once | 2N |
+| existing capture-held-values fixture `held.snapshots == values`: compare both complete binary values once | 2N |
+| fixture `:595–597`: separate `_origin_values` rebuild and its third independent SHA once; compare complete origin document | N; document comparison is non-export |
+| private recorder copy once; fixed seed copy once | 2N |
+| `_HeldStoreRead.recheck` once at fixture completion, after copies and independent origin rebuild: held reread/equality against snapshot | 2N, both inputs |
+| `read_exact`/`read_store_attempt` metadata completion checks, anchor checks and close; no extra full-byte call | 0 export bytes; metadata charged non-export |
+| archive / failed / scratch copy and their byte checks | 0 calls in this positive |
+| Recording total | 15N + 1 MiB = 361 MiB |
+
+The fixture retains its existing full `held.snapshots == values` and independent
+origin equality assertions. Its existing `held.recheck()` call becomes the final
+completion check after those assertions and the copies; it is still called once
+per held attempt. Separate drift cases still call it after their mutation and
+must refuse. No nested scope/coverage reader is invoked by this selected ordinary
+positive. Those full production routes and all their recursive calls remain
+mandatory in their separately budgeted existing proofs; this count cannot stand
+in for them. Both launch attempts execute all rows, not one representative file.
+
+| Replay owner / actual calls per launch | Pair read charge |
+| --- | --- |
+| launcher `snapshot_file` copy once; `snapshot_expected` installed SHA once; held seed post-copy reread/equality once | 4N (copy 1, installed SHA 1, two equality inputs 2) |
+| coordinator held installed acquisition/SHA once in its fixed-role chunk loop | N |
+| coordinator `_origin_values:43` into consumer `_origin_values`: independent full export SHA once | N |
+| coordinator `_host_result_values:178`: unchanged full-source `frame_read` once | at most 2N + 1 MiB |
+| independent guest frame construction/digest from guest observations and actual verifier payload | at most 1 MiB; no source-derived guest input |
+| rebuilt complete file SHA once; streamed whole source/rebuilt equality once | 3N (SHA 1, both equality inputs 2) |
+| installed completion reread/equality/fresh SHA once; seed-source completion reread/equality/fresh SHA once, each against its own retained acquisition | 4N, both inputs for each; fresh SHAs in those actual loops |
+| archive / failed / scratch verification | 0 calls in this positive |
+| Replay total | 15N + 2 MiB = 362 MiB |
+
+Final source checks in replay target its held seed source, not a reopened native
+export disk. Metadata-only completion/close checks remain at each owner. No
+consumer observation SHA, origin rebuild, fixture equality or completion reread
+is hidden in a spare allowance. These recording and replay schedules independently
+fit the 384 MiB export-read cap; four cases cost 1,444 and 1,448 MiB respectively,
+within 1,536 MiB. A new call must be charged before admission; it cannot consume
+the named calls' budget by deleting them. The full real recipe must also have an
+actual ledger before recording, but this positive's complete ledger is fixed here.
+
+For this positive, require each capture JSON at most 256 KiB and all non-export
+logical occurrences, envelopes, duplicate references, metadata and logs together
+at most 1 MiB. Non-export physical bytes are at most 4 MiB, writes/reads at most
+8/16 MiB. Measure these counts. Recording has four retained pairs (96 MiB) and
+five pair writes (initial disk, guest overwrite, controlled, recorder, seed =
+120 MiB). Replay retains those four pairs and adds installed/rebuilt pairs
+(144 MiB), writing 48 MiB. The resulting bounded totals are:
+
+| Selected successful operation | Logical / physical MiB | Write / read MiB | Four cases: logical / physical / write / read MiB |
+| --- | --- | --- | --- |
+| Recording | 25 / 100 | 128 / 377 | 100 / 400 / 512 / 1,508 |
+| Replay | 25 / 148 | 56 / 378 | 100 / 592 / 224 / 1,512 |
+
+Both are below all original caps. Two disjoint dashboard pairs split the four
+trials; each case executes the complete replay count once. Shared/overlapping
+references and any pre-refusal work remain charged. Repeated cases still hit M4.
+Other recipes with archives, scratch or retained failures use the full eight-pair
+occupancy and cumulative caps above; successful-fixture zeros never exempt them.
+
+The positive exercises capture, held reads, install, full-source parsing, independent
+guest rebuild, whole-byte comparison and completion seals. It must reach complete
+capture for both files, not permanent overflow. It is not a successful native or
+full real pipeline claim. The source path, normal failed/native outcome and every
+production/offline paired route remain separately required by the matrix below.
+Source snapshots keep 16 MiB/file and 32 MiB total; runtime slots keep 4 GiB/64 files
+and two-copy limits; Git/preparation keeps 256 MiB storage/384 MiB scratch. All
+source pages and any raw bytes in these classes also pay applicable raw/JSON
+charges. No new runtime collection, recording, retention or resource permission.
 
 ### Fixed commands, Git and I5
 
@@ -951,7 +1172,7 @@ inner-content comparison and identity-only/unavailable/inactive semantics.
 The malicious case retains case_id, family_id, surface, planted_text_sha256,
 manifest content pair and expectation. Four closed ids/surfaces match R4.1.
 Shared file references remain bounded 1–256 and manifest entries must refer to
-these held files. Include raw-observations.json and qualified byte slots explicitly,
+these held files. Include raw-observations.json, the two conditional fixed export roles and qualified byte slots explicitly,
 with role and size/hash checks from R4A. Retain the existing parsed envelope/array
 limits; a combined inventory that exceeds them is rejected before replay, never
 silently truncated. All source outputs in a permitted recording are indexed and
@@ -1012,13 +1233,34 @@ must run through its actual caller before its corresponding final proof gate.
 | ROUTE01–11 | The eleven owner rows above, each production/offline invocation, narrow mutation and call deletion; neither path may pass with the target call skipped | existing owner tests + evals-malicious |
 | DRV | running/stopped, non-200, malformed state JSON, 65536/65537 body, each three transport phases, rejected/accepted stop, observed stopped, EOF versus incomplete/timeout/read-error with exit zero | sandbox-launcher + evals-malicious |
 | GST | positive/zero/negative launch return, wait zero/equal/foreign, EINTR, deadline before launch/after wait, reap versus population termination; never set child_reaped as input | sandbox-guest harness/test |
-| CAP | new/legacy inventory, missing/partial/extra capture, changed request/attempt/hash, wrong owner/ACL, stale held/readback, overflow; real consumer refuses, legacy cannot seed | shadow-enforced/write, sandbox-receipt, scope-gate-generation |
+| CAP | new/legacy inventory, conditional export sibling, missing/partial/extra capture, changed request/attempt/hash, wrong owner/ACL, stale held/readback, overflow; real consumer refuses, legacy cannot seed | shadow-enforced/write, sandbox-receipt, scope-gate-generation |
 | LIM | All R4A.B/D numeric bounds at boundary and one over; cross-field aggregate, repeated-read accounting, 64 runtime slots/65, 4 GiB aggregate/one over, stream chunk 64 KiB, two-copy accounting | evals-malicious + relevant owner tests |
 | CLO | missing/extra/duplicate/moved member, changed byte, symlink/parent escape, wrong fixed generation, equal/unequal overlap, final-held mutation | evals-framework/malicious/scope |
 | I5-01–06 | extra command, argument, option, role, reordered command or wrong concrete argv digest; rejected E_RELATION or evals.invariant-broken, never pass | evals-malicious |
 | SURF01–07 | four permitted single surfaces; wrong invariant, changed recorded byte, planted text on two surfaces | evals-malicious |
 | ARC01–03 | Shipped/archive catalog differ but replay uses exact archive; equal shared path reuses, unequal digest rejects E_RELATION; split-pair dashboard cannot double count | evals-malicious/dashboard |
 | OLD | All existing eval, scope, shadow, host, guest, cancellation, preparation, gate and restoration assertions remain; preserve failed/NOTRUN/native skips | full named suites and full CI |
+
+RAW12 adds these finite vectors to the existing tests, with no new entry point:
+
+| IDs / vectors | Same owner and existing test site |
+| --- | --- |
+| EXP.complete-two | `evals-malicious.test.sh` existing capture-held-values group (64 source:550–644), extended with the two actual 12 MiB files and the ledger above; `_capture_values`, actual held store reader, fixed launcher staging and `_host_result_values`/guest rebuild all consume the whole files. Check complete=true, exact role/use counts and all byte/file/read/write counters. |
+| EXP.tail, last-byte, digest, end-length, magic, truncated, empty, short, errno | `sandbox-launcher.test.sh` existing frame and export-stop groups plus evals-malicious host-result values; original `frame_read` and real run_vm read/error branch retain their exact rejection, native result and cleanup. Last-byte changes only byte 12,582,911; compare all original bytes. |
+| EXP.missing, duplicate, unused, cross-launch, cross-attempt, cross-request, wrong-site, inline, extra-key | capture-held-values group and shadow-enforced/write store tests; actual `_capture_envelope`, exact attempt inventory, fixed role selection and coordinator all refuse the independently malformed relation. Source-page reader also rejects a binary sibling. |
+| EXP.held-bytes, size, hash, mode, ACL, parent-link, final-drift | actual held reader/recheck in evals-malicious and shadow-enforced; launcher shared-file staging and final seals in framework/malicious; tamper one field at a time, keep other relations valid. |
+| EXP.stop, reap, read-order, cleanup | existing launcher export-stop fixture (64 source:2252–2576) and host controller/offline paired tests; no read before both confirmed stop and reap, including error/timeout paths. |
+| EXP.parse-route, guest-route | existing guest harness/test and evals-malicious host/guest owner tests; separately delete full-source parse, guest rebuild, production call or offline call, then mutate each result. Each narrow test fails with its companion calls intact; no source-derived guest input. |
+| EXP.limit.NAME.at / .over | existing LIM group in evals-malicious/framework plus actual capture/held tests: export file bytes/count, all four non-export partitions, non-export/unified logical totals, export/non-export/unified physical bytes, export physical file count, cumulative export/unified reads and writes, per-case and four-trial totals, 1 MiB JSON and 256 shared-file inventory. Valid boundary plus one byte/file/reference/read step over for each; preserve every other dimension. |
+| EXP.accounting | same LIM and existing dashboard split-pair tests: original/installed two-copy lower bound, all eight copy roles, overlapping raw fields, archive/log/scratch and retained failures, repeated hashes/rechecks, both pairs sharing one aggregate budget. Extra charge cannot reset or disappear after a refusal. |
+
+Keep required genuine paired routes NOTRUN until their original gate permits them;
+ordinary two-file complete capture remains required and cannot use that exception.
+The old capture JSON boundary fixture uses inline export bytes at 64:628–643.
+Move that fixture payload to valid bounded non-export records, retaining exact
+1 MiB/one-byte-over checks; do not let forbidden inline export shape mask the cap.
+No result above waives RAW01–16, DER01–13, ROUTE01–11, all other LIM/CLO/I5/SURF/ARC,
+source84 hash receipt, original full suites, full CI or final native/seed/G3 proof.
 
 Expand DRV into fixed named vectors: `state-running`, `state-stopped`,
 `state-status-500`, `state-malformed`, `body-65536`, `body-65537`,
@@ -1280,7 +1522,7 @@ gates (R9.6).
   complete tests; an overrun pauses for a separate size amendment, never test cuts.
 - PR 1b: `review_size: accepted-exception`, 28,000–42,000 changed lines for the
   complete unmerged two-source concern, counting additions plus deletions.
-  The current dependency contributes 21,598 changed lines, including the complete
+  The refreshed dependency contributes 21,605 changed lines, including the complete
   scope-qualification suite. The retained relay contributes about 1,400 changed
   lines. Budget 2,000–5,000 for shared owner extraction/capture, 700–1,500 for fixed
   replay/inventory integration, 2,000–6,000 for complete new and retained regression
@@ -1295,9 +1537,9 @@ gates (R9.6).
   operator-graded seed and its test. 150-450 of them are verbatim verdict bytes, which
   cannot leave the PR whose test checks their digests.
 - PR 3: `review_size: standard`, about 300-400 net added lines.
-- This plan-only amendment: `review_size: accepted-exception`, 800–1,500 changed
-  lines. One concern: the fixed malicious replay, with exact dependency/source
-  tables, shared-owner interfaces, complete finite cases and retained final gates.
+- This plan-only amendment: `review_size: standard`, expected 150–400 changed
+  lines. One concern: the fixed whole-export role, actual readers, complete finite
+  resource ledger and proof. Preserve the full inherited plan and all its gates.
 
 Each range waives only the soft line signal, never scope, tests, CI, review or human
 merge.
