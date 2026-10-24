@@ -1984,6 +1984,21 @@ def _preparation_names_values(entropy, collisions):
     return names[-1]
 
 
+def _preparation_workspace_values(rows):
+    if (type(rows) is not list or not 1 <= len(rows) <= 128
+            or any(type(row) is not dict or set(row) != {"entropy", "errno"}
+                   or row["errno"] is not None and
+                   (type(row["errno"]) is not int or not 1 <= row["errno"] <= 2147483647)
+                   for row in rows)):
+        raise Refusal("E_INPUT")
+    for row in rows:
+        _workspace_name_values(row["entropy"])
+    if any(row["errno"] not in (None, errno.EEXIST) for row in rows):
+        raise Refusal("E_IO")
+    return _preparation_names_values([row["entropy"] for row in rows],
+                                    [row["errno"] == errno.EEXIST for row in rows])
+
+
 def create_context(args: argparse.Namespace, deadline: float) -> Context:
     global _preparation_names_complete
     repo_root = Path(__file__).resolve().parents[2]
@@ -2009,9 +2024,8 @@ def create_context(args: argparse.Namespace, deadline: float) -> Context:
             naming.append({"entropy": entropy, "errno": exc.errno})
             raise
     else:
-        _preparation_names_values([row["entropy"] for row in naming], [True] * len(naming))
-    name = _preparation_names_values([row["entropy"] for row in naming],
-                                    [row["errno"] == errno.EEXIST for row in naming])
+        _preparation_workspace_values(naming)
+    name = _preparation_workspace_values(naming)
     scratch = scratch_parent / name
     context_boundary = hold_created_directory(args._boundaries["scratch"], name, scratch, deadline)
     context = Context(args=args, repo_root=repo_root, scratch=scratch,

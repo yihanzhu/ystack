@@ -24,6 +24,15 @@ def _launch_values(runtime_root, request_raw, incident_raw, evaluation_raw, obse
         record_raw, manifest_raw, instruction, control_values, entropy)
 
 
+def _preparation_workspace_values(runtime_root, rows):
+    spec = importlib.util.spec_from_file_location(
+        "malicious_workspace_values", Path(runtime_root) / "preparation/v1/prepare-candidate.py")
+    owner = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = owner
+    spec.loader.exec_module(owner)
+    return owner._preparation_workspace_values(rows)
+
+
 def _preparation_values(runtime_root, inventory, source_bytes, runtime_values, identities,
                          input_sha256, response_sha256, response, details, receipt, storage_observation):
     spec = importlib.util.spec_from_file_location(

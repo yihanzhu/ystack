@@ -907,7 +907,20 @@ with preparation.tempfile.TemporaryDirectory(prefix='ystack-preparation-name-val
             assert retained == [{'entropy':observed[0],'errno':preparation.errno.EEXIST},
                                 {'entropy':observed[1],'errno':None}]
             assert context.scratch.name == preparation._preparation_names_values(observed,[True,False])
+            assert context.scratch.name == replay._preparation_workspace_values(root,retained)
             assert context.scratch.is_dir() and len(observed) == 2
+            for label,rows,token in [
+                    ('missing',[{'entropy':observed[0]}],'E_INPUT'),
+                    ('extra',[{'entropy':observed[0],'errno':None,'extra':1}],'E_INPUT'),
+                    ('wrong-type',[{'entropy':observed[0],'errno':True}],'E_INPUT'),
+                    ('invalid-errno',[{'entropy':observed[0],'errno':2147483648}],'E_INPUT'),
+                    ('failed-mkdir',[{'entropy':observed[0],'errno':preparation.errno.EACCES}],'E_IO'),
+                    ('unused-after-success',retained+[{'entropy':observed[0],'errno':None}],'E_INPUT'),
+                    ('over-128',[{'entropy':observed[0],'errno':preparation.errno.EEXIST}]*129,'E_INPUT')]:
+                for owner in (preparation,sys.modules['malicious_workspace_values']):
+                    try: owner._preparation_workspace_values(rows)
+                    except owner.Refusal as error: assert error.token == token,(label,error.token)
+                    else: raise AssertionError('preparation raw workspace '+label)
             for entropy,collisions in [([],[]),([observed[0]],[0]),([observed[0]],[]),
                     ([observed[0]],[True]),([observed[0],'g'*16],[True,False]),
                     ([observed[0]]*129,[True]*128+[False]),
