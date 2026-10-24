@@ -1,6 +1,7 @@
 ---
-spec-blob: b9a68fca1aa756ec76baa26471d707026bc42fab
-drafted: 2026-10-13
+spec-blob: 618928cb8cb30a4ad95d8b39dc3126cd806c5444
+risk: high
+drafted: 2026-10-23
 ---
 
 # Plan: authenticate later-revision scope coverage
@@ -10,16 +11,71 @@ Tracks #544. Risk is high. This is the mandatory second delivery of Step 8 child
 workflow and task. The accepted #541 core remains the exact-revision foundation.
 Both deliveries must pass before child 6 completes or child 7 starts.
 
-Implementation PR: `review_size: accepted-exception`, 4,800–7,200 net changed
-lines. The fixed source operation, current-request ownership, raw history
-normalizer, full Git comparison, and real two-principal source fixture are one
-authentication boundary. About half of the range is the complete positive and
-damage-case proof. The range does not relax readability, tests, CI, review, or
-any acceptance standard.
+Implementation PR: `review_size: accepted-exception`, 3,600–5,400 net changed
+lines. This range applies to the final #544 diff against a main that already
+contains the separately accepted and protected-merged foundation. Count that
+actual diff in full; do not subtract unmerged inherited files to fit this range.
+It does not cover or authorize publication of M3. This is one end-to-end coverage
+authentication concern. The preserved
+#544 checkpoint adds 2,464 net lines over its M3 foundation. The producer portion
+adds an estimated 600–1,100 lines. Reader integration, paired policy tests, and
+completion of the existing damage proof supply the remaining range. These are
+estimates, not targets. Preserve readable code and all required tests. A material
+overrun returns through the separate plan amendment gate before more code.
+
+## Preserved carrier and pre-code gate
+
+本修订只闭合历史 policy 的生产与消费。意图 blob 保持
+`d2ada8661ac87c6c9f1abfc8a751a38c8aeb33cf`，风险保持 high。
+唯一实现 carrier 是 `codex/impl/scope-coverage-authentication`，工作树为
+`/private/tmp/ystack-coverage-impl-20261023`。暂停的 clean head 是
+`44c8ded3ad850767cfd7bb469aecb4d182e8784e`。保留其 M3 基础
+`fe6593e1b09960d165f0a5b0b3db555f06f182eb`、原 claim 和全部实现历史。
+原 Sol 6.1 / medium 作者在此 carrier 完成一次 producer → reader → coverage
+实现。不得另建 producer 实现分支、PR、intake 或替代 attempt。
+
+M3 是保留的未验收依赖，尚未合入当前 main。当前 carrier 相对 main 的 diff
+同时包含 inherited foundation 与 #544 自身改动，不能当作上面预算内的可发布
+#544 diff，也不能把 inherited 源码视为已接受。本修订只提前 inactive 代码与
+测试准备；不提前 foundation 的验收、发布或 G3。
+
+| 阶段 | 必须满足的边界 |
+| --- | --- |
+| 提前实现 | 两份 plan 通过下述 gate 后，在原 carrier 修改本 concern 的允许路径。保留 inherited foundation；其授权、完整源码审查、测试与验收仍属于原 #558/#541 gate。 |
+| foundation 合入 | 先完成 #558/#541 的全部原标准和 required proof，经其自身独审、CI 与 protected merge 合入 foundation。普通测试或本文档不代替任何原缺项。 |
+| #544 最终发布与 G3 | 原 carrier 普通 merge 届时精确 main，保留全部历史。重核 artifact hashes、实际 diff 的完整 allowlist 与整体尺寸，取得 fresh exact-head/base 独审和 CI，并完成 #544 全部证明，才可发布实现 PR、通过 G3 或合入。 |
+
+最终 diff 若仍含未合入的 foundation 内容，停止发布；不得扩大本预算包揽 M3，
+也不得复制、重建或另开实现来隐藏该内容。foundation 自身修订在其原 gate
+完成；本 plan 不授权在 carrier 改写那部分。后续普通 merge 若产生超出本
+concern 的冲突，暂停协调原 foundation gate，不自行扩大下列路径或语义。
+
+生产契约来自已合并的 child 5 spec blob
+`fb1bbec3d8c0fd2bba0a6353da05bf03107e97a4`。对应 producer plan 已独审 ACCEPT，
+并由 PR #690 受保护合入 main
+`38583f4bd49923166fad866df88f637404be3f0c`。其被审 head 为
+`4a9fdf72466e5599521f7d9964187dd87aa6c0f3`、base 为
+`604a3d28cf5222be72220a343ded85b2a87eb7b4`，合入的 plan blob 保持
+`ebfc9e1d2c661cab78f87a9b9c2fa82116195310`。plan 合入不代表实现或验收完成。
+该 plan 定义生产步骤与生产测试；本 plan 定义共同 carrier、完整路径并集、
+消费步骤与端到端证明。其六个 producer 路径只是责任子集；其尺寸估计只是分项。
+同一实现 PR 仅使用上面的整体尺寸声明。
+
+两份 high-risk plan 必须各自独审并受保护合并，才能继续代码。若 producer
+plan 的契约改变，先修订本引用并重新审查。经理记录包含两份 plan 的最新
+default OID、各自 intent/spec/plan blob、风险、原 carrier head、claim 和 clean
+状态。旧 GO 不继承。base 再变时先 fresh review/reaffirmation，不能直接开工。
+由原作者普通 merge 该精确 main 到原 carrier。不得 reset、rebase、覆盖旧状态。
+源码冲突只能在下列已接受路径内解决；语义超出两份契约即暂停并返回相应 gate。
+恢复前再核对三向闭合：main 的上游 blob、两份 plan 的 hash link、carrier
+实际合入的 artifact bytes 全部一致。每轮记录新 exact head/base 和独审 round。
 
 ## Files that change
 
-The plan PR changes only this file. The implementation may change only:
+The plan PR changes only this file. The following union allowlist permits only
+this concern's own changes on the preserved carrier. It does not authorize its
+inherited foundation changes or replace their separate gate. After that foundation
+lands, the final #544 diff against the merged main must contain only these paths:
 
 - `scope/v1/read-shadow-evidence.py` — extend the #541 private reader with the
   qualifying/current pair, evaluator-owned request, fixed source launch, source
@@ -38,25 +94,34 @@ The plan PR changes only this file. The implementation may change only:
 - `sandbox/v1/coverage-source.py` — new private schema and normalizer for the
   fixed collector frame, raw forge pages, and canonical coverage observation.
 - `shadow/v1/_consumer.py` — add the dedicated fixed source-configuration and
-  coverage-attempt readers by reusing the existing held-path controls.
+  coverage-attempt readers by reusing the existing held-path controls; admit the
+  fixed policy form and its exact held inventory under the producer contract.
+- `shadow/v1/write-shadow.py` — implement the accepted explicit `prepare-policy`
+  producer path, fixed policy snapshot, candidate and outer-record binding.
+- `shadow/v1/write-materialization-input.jq` — rebuild only the closed old/new
+  form inventories and generated-input metadata required by that producer plan.
+- `scripts/test/shadow-write.test.sh` — implement the producer plan's actual
+  production and tamper pairs; retain the old-form regression proof.
 - `scripts/test/scope-qualification.test.sh` — add the full same-contract source
   fixture and every R9 positive and negative.
 - `docs/components.md` and `RESTORE.md` — document the inactive source boundary,
-  fixed files, restore set, and proof commands.
+  fixed files, restore set, old/new form distinction, and proof commands. These
+  two paths plus the four shadow paths above are the six-path producer subset.
 - `ci/required-files.txt` — add `sandbox/v1/coverage-source.py` exactly once.
 
 Do not change a workflow, `scripts/test/run-all.sh`, portable-core capability,
 profile binding, duty or stage contract, tracked production source configuration,
 registry, accepted identity, credential, network route, installation script,
-publisher, target writer, or construction marker. The implementation uses
+publication authority, target writer, or construction marker. The implementation uses
 `Closes #544` only after #541 is complete; that closes child 6, with no activation.
 
-Before the first code commit, compare the accepted #541 implementation with its
-plan and bind this work to the actual private reader, runner, Git owner, bundle
-reader, and fixture symbols. A name-only or layout-only difference is a normal
-base update and must be recorded in this plan's exact tuple and review. A changed
-contract, extra authority, or missing safety control returns through this plan
-gate. Do not create a second implementation because a private symbol moved.
+当前 checkpoint 已有 `_Reader.write_relations`、`rebuild_input`、
+`coverage_identity`、`source_coverage`、`read` 和 `fixed_bundle`。共享边界是
+`_HeldBundle`、`_ReadOnlyGit`、`_HeldStoreRead` 与既有 child owner。
+继续这些函数和已实现的 source 路径，保留 M3 的 Git owner 与 held reader。
+不得从旧 main 复制另一套 reader，也不得增加兼容 shim。新 restore-critical
+文件仍只有 `sandbox/v1/coverage-source.py`，manifest 恰好登记一次。
+六个 producer 路径已有登记；生成的 candidate policy 不是仓库 restore 文件。
 
 ## Fixed public flow
 
@@ -120,6 +185,59 @@ outside the closed identity is recomputed for R, including target and candidate
 Git facts, stage/profile/result refs, materialization, publisher request,
 post-check, sandbox receipt and current source refs. A value matching the base is
 neither required nor sufficient.
+
+## 历史 policy 的固定消费路径
+
+生产步骤按 child 5 plan 执行。显式命令是
+`write-shadow.py prepare-policy REQUEST BUNDLE WORK OUTPUT`。原 `prepare`
+和旧 `withheld-write.v1` 保持原 32-file exact-revision 语义。新 form 固定为
+`withheld-write-policy.v1`；不得由文件数或调用方 bool 推断。下列消费改动与
+producer 在同一 carrier 完成，随后才运行端到端证明。
+
+| 现有边界 | 必须完成的改动 |
+| --- | --- |
+| `write-shadow.py` 的 workspace、candidate、admission、outer record | 按 producer plan 使用同一 held 固定 policy，产生真实 candidate 与 preparation，再将相同 bytes 放入 outer record。不得按当前路径重读或补填历史值。 |
+| `_HeldBundle` 与 `_Reader.read` | 将新 form 加入闭合集合。只对新 form 要求 `scope_policy_ref` 和固定 snapshot 文件。旧 form 禁止这两个新增项。维持原 owner、inventory、receipt 与最终 recheck。 |
+| `_Reader.write_relations` | 从 receipt/preparation 所绑定的实际 candidate tree 读取固定 policy blob。完整复算新 form 的 33-file write set、patch、generated input、postcheck 和原有所有关系。 |
+| `_Reader.rebuild_input` | 与 producer builder 共用相同闭合 form 选择和 `incident_id`。两阶段生成 metadata 都含这两个字段；只有 final 阶段含 `stage_request_sha256`。原 form 的生成结果保持不变。 |
+| `_Reader.coverage_identity` 与 `source_coverage` | 使用各 record 已认证的 snapshot 构造其 policy identity。在 source 请求前比较 qualifying/current bytes，并单独核验 current 与 evaluator held policy 相等。 |
+| `fixed_bundle` 与 `scope-gates.jq` | 新 form 的内部 measured facts 加且仅加闭合 `scope_policy_ref`。旧 facts 不加。更新 record/body/measured-row 及 write-materialization 分支的固定 form 集合，保留其他闭合字段与决定顺序。 |
+
+新 candidate 固定增加 `ystack-evidence/<incident-id>/scope-policy.json`，mode
+`100644`。它与旧 32 个文件合为精确 33 个。frozen reproduction 仍是原 29 个
+evidence 文件加 bundle marker，不加入 policy。新 outer bundle 在原 31 个文件
+上增加固定 `scope-policy.json`，总计 32 个；marker 恰好列出 31 个 entry。
+不能把这三种 inventory 的数量混用，也不能按 caller 提供的任意路径选择文件。
+
+`scope_policy_ref` 只有 `name`、`size_bytes`、`sha256`。name 固定为
+`scope-policy.json`。size 是 1 至 1,048,576 的非 bool 整数。sha256 是小写
+64 位十六进制。reader 读取 canonical JSON 的原始 bytes，核验实际 size、
+SHA-256、candidate Git blob 和 manifest。outer bytes 必须与 actual candidate
+固定 blob 完全相同。完整链保持 candidate tree → preparation manifest/record →
+launch subject/prelaunch expectation → controlled-store receipt → held reader。
+仅重算 outer checksum 不构成认证。不得增加 VM subject、receipt authority、
+trust root、source/provider、配置开关或公共 policy selector。
+
+每个 qualifying record 和 current record 都取自己的 snapshot。移除
+`coverage_identity` 用当前 `package_sources["scope/v1/scope-policy.json"]`
+填充两侧历史 identity 的做法。current snapshot 还必须与 evaluator 从固定
+package 持有的 policy 原始 bytes 相同。qualifying/current bytes 相同后才比较
+其他 closed identity 并建立 coverage request；摘要仅代表已经认证的 bytes。
+候选 blob、outer、当前 evaluator policy 任一缺失、不同或未认证都不产生 coverage。
+
+新 form 不能改变 closed scope/workflow/task/model/artifact/profile/environment/
+registry identity，也不能改变 current revision 派生、Git interval、时间或 source
+认证规则。旧 form、混合 form、current package backfill 都不能证明历史 coverage。
+旧 form 的 exact-revision 支持保持。policy 改变仍触发父规则的 Eval → shadow
+失效重跑，不得缩为只重跑 shadow。`workflow-scope.jq` 的公共 coverage shape 和
+九参数 evaluator 不变。新内部 facts 只由实际 reader 生成；jq 不接受调用方证明。
+
+policy snapshot 和 candidate relation 也属于 provisional 全量认证结果。source
+request/expectation durable 后只释放原 controlled-store acquisitions。继续持有
+非 store inputs、snapshot 所在 bundle、package、anchor 和 Git。source 写完后重开
+全部 qualifying/current attempts，重新认证上述完整链，并比较原 bytes/non-origin
+refs；不能只比较缓存 policy hash。最终 fresh origins 与其他 held objects 一直保留
+到 completion，此时不得再创建 sibling。下面的 deadline、失败与 cleanup 规则不变。
 
 ## Evaluator-owned request
 
@@ -346,6 +464,13 @@ credential, publisher, target-write, activation, or production authority.
 
 ## Same-contract fixture
 
+以下是必须实现和完成的证明，不授予新的管理员或执行权限。只有已明确授权的
+disposable 环境可执行相应 exact-command setup。若现有授权未覆盖新的
+`coverage-read` sudo 命令，先完成 fixture 代码、完整命令与预期断言，保留
+`NOT_RUN`，由经理在集中验收的具体资源包中核验执行权。当前 Mac 不安装账号、
+sudoers、anchor 或 source。inactive 代码与普通回归不必等待 native 验收完成；
+真实 positive、G3 和 #558 完整验收仍不得据此通过。
+
 Extend the #541 fixture in `scope-qualification.test.sh`; do not add a second
 fixture framework. On Linux CI, reuse its unique dedicated writer, distinct
 read-only consumer, consumer group, root-owned anchor, controlled store, and
@@ -410,6 +535,24 @@ positive.
 
 ## Proof and completion
 
+新增 policy 证明使用真实 `prepare-policy` producer 输出，经既有 fixture 的
+materializer/preparation、receipt、reader 路径消费。不得手写一个“已认证”record
+代替正例。普通机制测试与真正不同 principal 的 source positive 分开记账。
+每个负例保留其余 closed identity 和 revision 条件，并配对应同-policy 正例。
+
+| 测试位置 | 成对证明 |
+| --- | --- |
+| `shadow-write.test.sh` | 真实新 producer 产生精确 33-file candidate、固定 policy ref、完整关系；旧 `prepare` 仍为原 32-file。对照 new32、old33、错误 path/mode/inventory 必拒绝。 |
+| `shadow-write.test.sh` | 同一 held policy 贯穿 candidate 与 outer；在 snapshot、candidate 或最后 seal 前改 policy 必拒绝。ref 的缺项、额外项、错误 name、bool/越界 size、错误 digest 必拒绝。 |
+| `scope-qualification.test.sh` | 两个真实新 form records 各自产生并认证相同 policy，current 等于 evaluator held policy，完整 source/history 条件满足时 coverage 通过。历史 policy 与 current 不同必拒绝。 |
+| `scope-qualification.test.sh` | 两 record policy 相同但 current 与 evaluator held policy 不同必拒绝；更新当前 package 不能补填历史缺失或修复旧 form。新/旧混合与两个旧 form 都不能证明 later-revision coverage。 |
+| `scope-qualification.test.sh` | 改 outer snapshot 并重算 ref、marker 和所有 outer checksums，保留 genuine candidate/preparation/receipt，仍拒绝。candidate、manifest 和相关 hash 一起改，但保留原 genuine receipt，也拒绝。 |
+| `scope-qualification.test.sh` | snapshot 不在 receipt 所绑定的 actual candidate、仅保存 current hash、缺固定文件或任意替代文件均拒绝；相同 policy 的真实链对照通过。 |
+| `scope-qualification.test.sh` | 新 form 正例必须经过 provisional → durable request → release → source sibling → final full authentication；final root、old attempt、source attempt 或 policy 任一 mutation 必拒绝。 |
+
+这些测试增加到现有完整 suite，不用新 selector、独立 fixture framework 或永久
+拒绝替代完整路径。producer plan 的生产端测试义务仍全量适用；下列原 R9 一项不减。
+
 Besides the real positive, cover every spec R9 case:
 
 - exact write pair; each partial and mixed pair; read-only exact-revision positive
@@ -439,8 +582,9 @@ Besides the real positive, cover every spec R9 case:
 - no target write, publication, credential, network call, production config,
   accepted production identity, activation, or capability/profile change.
 
-Preserve every #541 core positive and negative. Run and retain complete output on
-the exact implementation head for:
+保留全部 #541 core positive 和 negative。在获准的对应环境执行以下完整
+suites，保留完整原始 stdout/stderr、实际 exit、环境与同一 final implementation
+head。没有执行权限或前置条件时标明 `NOT_RUN`，不能标成 skip/pass：
 
 ```sh
 bash scripts/test/scope-qualification.test.sh
@@ -455,13 +599,22 @@ bash scripts/test/portable-core-schema.test.sh
 bash scripts/test/run-all.sh
 ```
 
-Run the materializer protocol and adapter suites shown above and every related
-integration test discovered by the existing full runner. Do not create an alias
-for an absent aggregate test name. Run the real principal proof on Linux and
-macOS and record OS, filesystem, uid/gid/groups, ACL, timestamps, source package
-and exact head. Dispatch the six-shard full matrix from that head and require all
-shards, checks, aggregate CI, and external required checks green. Quick CI is
-additional evidence only.
+在相应已授权环境运行上述 materializer protocol、adapter suites，以及现有
+full runner 发现的全部相关 integration tests。不得为不存在的 aggregate test
+另造别名。在 Linux 和 macOS 完成真实 principal 证明，记录 OS、filesystem、
+uid/gid/groups、ACL、timestamps、source package 和 exact head。在该 head
+完成六分片 full matrix，全部 shards、checks、aggregate CI 与外部 required
+checks 必须通过。quick CI 仅是额外证据。
+
+恢复时保留原普通 source 128 项结果及其 exact-head 归属。原四个 Git-owner
+失败、SDK/runtime `UNKNOWN`、genuine fixtures `NOT_RUN` 仍是原始事实，不能用
+此文档或新普通测试覆盖。不得重跑 Mac probes、SDK、官方 GET 或新诊断。
+不得在本地盲跑完整 scope suite 或 full LOCAL7，也不占用 #558 完整窗口。
+旧 82 ordinary 特定资源包不授权本轮新 development tests。普通安全机制回归可用
+既有开发/CI 权限；真实 principal 测试须另有匹配的准确执行权。
+测试所需固定 Python、jq 与其他工具按 producer plan 校验；缓存缺失不触发下载或
+安装。代码可在 inactive 状态完成，所有未执行证明和完整日志随原 carrier 保留，
+最后集中验收仍必须满足完整标准。quick CI 不代表 native 或完整 #558 window。
 
 Before publication, run `git diff --check`, compare the diff with this exact path
 list, verify intent/spec/plan blobs and risk, require the new manifest entry once,

@@ -1,49 +1,169 @@
 ---
-spec-blob: dd630293a9515f14d3f9d2d116fabc15593f2000
+spec-blob: 4a36d06aec6730bf6f0e3285c61a923dcd6ff943
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
-drafted: 2026-09-28
+drafted: 2026-10-23
 ---
 # Plan: eval-seeding-deterministic
 
-Tracks #439. Risk: high (`artifact-high`). Independent review, green CI and operator
-merge of this plan come before any code. The spec (blob above) is the contract: three
-implementation PRs (R1.2), exact allowed paths (R9.3) and the pin chain (R9.4) are
-followed literally. This plan fixes the readings the spec leaves to it.
+Tracks #439. Risk: high (`artifact-high`). The accepted spec fixes four batches.
+This plan makes PR 1a ready for independent plan review. It keeps the dependent
+batches below, with their full gates. It does not accept their missing evidence.
 
-Every `path:line` below was re-checked on origin/main `611fcfb`. No file in `evals/`,
-`scope/`, `shadow/`, `control/`, `maintenance/`, `adapters/`, `scripts/test/`,
-`REVIEW.md` or `scripts/codex-review.sh` changed since the spec's base `272ec0f`, and
-every spec citation still holds, with two range readings: the driver's source check
-and dispatch are `evals-driver.sh:659-666` and `:672-680`, and the `scope-gates.jq`
-evaluator field list is `:155-157` in `evaluator_shape` (`:149-186`).
+| Batch | Delivery | Before its first code commit |
+| --- | --- | --- |
+| PR 1a | R2 M2–M4: minimum trials and distinct family/case pairs | This plan accepted and merged; fresh main and exact hash links |
+| PR 1b | M5, R3, R5, R8.3–R8.5: sources, relay and replay | S1–S10 and complete closure remapped to merged dependencies; separately accepted plan amendment |
+| PR 2 | R6–R8: real reviewer seeds and operator labels | PR 1b; refreshed plan, real scope and operator approval |
+| PR 3 | R4–R5: four real malicious trials | PR 1b; refreshed plan, complete real control/recipe and S8 authorization |
 
-## Dependency gate
+PR 1a and PR 1b keep the catalog byte-identical. Each seed batch changes only its
+own family's seed status and source after acceptance. PR 1a, PR 1b and the first
+seed batch use `Tracks #439`. Only the last batch, after every requirement passes,
+may use `Closes #439`. Mechanism fixtures never count as seeds or real evidence.
 
-1. **Landing.** No implementation branch is created until step-8 concerns 5 and 9
-   have merged their implementations (they follow 6 and 7, R1.1). On 2026-09-28 none
-   of 5, 6, 7 or 9 has an intake; the open step-8 child intakes are #437 (concern 3),
-   #438 (8) and #439 (10), and #436 (2) is closed. No seed is built from a stand-in
-   record.
-2. **Sibling map, then a plan update.** The rows S1-S10 below are defined by
-   concerns 5, 6 and 9, which do not exist on main. After they merge and before PR 1's
-   first code commit, this plan is updated through a plan-only PR on
-   `ystack/plan/eval-seeding-deterministic` that maps every row to a merged
-   `path:line`, re-runs the closure grep (R5) and the pin-chain grep (R9.4), and
-   re-verifies every line number here against the new base. Independent review, CI and
-   operator merge accept it as for this plan. A row that cannot be mapped returns to G2
-   (R1.3); nothing is guessed. Only then is `plan-base` recorded.
-3. **One deterministic branch.** `work/README.md` allows one open PR per slug and
-   stage, so the three PRs are sequential on `ystack/impl/eval-seeding-deterministic`,
-   each created fresh from updated main after the previous one merges: PR 1, then
-   whichever seed PR is ready first, then the other. PR 1 and the first seed PR use
-   `Tracks #439`; only the last one uses `Closes #439`.
-4. **Operator gates inside the seed PRs.** PR 2 needs the operator's label approval
-   (R7.2). PR 3's recording needs S8.
+## Dependency and stage gates
 
-### Sibling map (filled by the plan update)
+1. PR 1a uses main `9b2cd7ccd853bb362c04d99fccc2b6a4c1b56c53` for the source map
+   below. It needs no #558 unaccepted implementation, real control, new source or
+   replay closure. Do not import #558 code or use its branch as implementation base.
+2. Independent review, required CI and protected merge of this plan precede code.
+   The manager records the merged default OID as `plan-base`, then creates the
+   implementation from that freshly fetched main. If main moves before first code,
+   keep `ready` absent. A fresh non-author reviewer rechecks the unchanged plan,
+   full artifact hashes and new base, returning one `Plan-verdict: ACCEPT|REVISE`.
+   Only ACCEPT and the named manager's recorded Roadmap acceptance update plan-base.
+   Changed meaning returns to a separate plan-only amendment. The coder never edits
+   accepted artifacts. Preserve claims, round limits and exact attempt identities.
+3. One implementation batch runs at a time. Reconcile the implementation branch/PR
+   before each batch; preserve prior attempts without reset, rebase, force or cleanup.
+   The old plan ref `7cf1f73d7a0c1f36c652831326080e70e9b0585c` and its missing
+   registered worktree remain preserved. This amendment does not recreate them.
+4. PR 1b, PR 2 and PR 3 still require child 5's real write-shadow evidence and child
+   9's real gate evidence, with concerns 6 and 7 satisfied as R1.1 requires.
+   Before each dependent batch, another plan author maps its fields to merged
+   `path:line`, re-enumerates closure and pins, and obtains independent high-risk
+   plan acceptance. Any unmapped field returns that batch to G2. Fixtures cannot
+   fill S1–S10. The remaining inactive implementation and tests may proceed in the
+   accepted order; #558's original complete acceptance remains for the final
+   consolidated validation. This does not reduce control, native or platform proof.
+5. PR 2 still needs the operator's labels and exact approval. PR 3 needs S8.
+   No recording, credentials, network, install, activation or real target run is
+   authorized here. No implementation of the dependent batches starts under the
+   provisional source readings below.
 
-| Row | Needed by | What must be mapped | Today on main |
+## PR 1a: minimum trials and distinct cases (R2 M2–M4)
+
+Allowed paths, exactly the R9.3 subset:
+
+- `evals/v1/evals.jq`
+- `evals/v1/evals-driver.sh`
+- `evals/v1/evals-launcher.sh`
+- `scope/v1/scope-gates.jq`
+- `scripts/test/evals-dashboard.test.sh`
+- `scripts/test/scope-qualification.test.sh`
+- `docs/components.md`
+- `RESTORE.md`
+
+No new file, source, closure, grader, catalog or record-evaluator change. The
+shipped catalog SHA-256 stays
+`0239138447a8f9fd420cb3c5da31660d8f75c85099d80d89a040dce2878a4cac`.
+Both named families remain `declared` with empty sources. Trial policies and all
+existing grader kinds stay byte-identical.
+
+### Implementation order and current source map
+
+1. **Scope minimum.** In `scope-gates.jq:875–892`, retain the unseeded/missing-family
+   branch and the existing checks for zero cases, failed, inconclusive and
+   passed != total. Add the `multi` minimum check to the failing branch: when
+   `trial_policy.kind == "multi"` and total < `minimum_trials`, emit the existing
+   `scope.eval-failing`. A `single` family still needs at least one case and all
+   passed. No dashboard shape, reason id, qualification or enablement rule changes.
+2. **Program uniqueness.** Extend `evals.jq:1008–1016` `dashboard_results_ok` to
+   require that the flattened `.body.cases[]` pairs `[.family_id,.case_id]` are
+   unique. Compare pair arrays, not concatenated strings. The existing
+   `build-dashboard` and `validate-dashboard` entries (`:1033–1052`) then reject
+   duplicates as `E_SHAPE` and boolean false. Retain result-digest uniqueness,
+   catalog/evaluator validation and canonical dashboard reconstruction. Do not
+   alter `build_dashboard`'s shape, totals or family policy copy (`:901–954`).
+3. **Driver error boundary.** In `evals-driver.sh:187–248` `run_dashboard`, keep the
+   pair replay and byte comparison through `:236` unchanged. After collecting the
+   result digests at `:239`, reject duplicate result digests as today's `E_RUNTIME`
+   before checking family/case duplicates. For distinct results, check the same
+   pair uniqueness over validated `results.jsonl`; false emits `E_SHAPE`, while
+   a jq execution failure remains `E_RUNTIME`. Keep all earlier parse, shape,
+   canonical and relation errors, including forged-result `E_RELATION`. Do not
+   turn every failed `build-dashboard` into `E_SHAPE`.
+4. **Pins.** Compute the final program SHA-256 and update driver `:75` and launcher
+   `:148`. Then compute the final driver digest and update launcher `:150`.
+   The base program digest is
+   `f5eee09d02d54934cf9313f5a9e2731dbfe6c4e83b4f5f49eaa5073a19040cd7`;
+   the base driver digest is
+   `5bc88cd11185a4fb3029ee3cb9b746b588c965ab5b7fb15507431d8eb499beb6`.
+   A repository digest search finds these three references only outside `work/`.
+   The current scope program digest has no shipped pin. Do not add a closure pin.
+   Re-run the search at implementation base; an extra moved pin outside these
+   allowed paths stops for a plan amendment.
+5. **Tests below.** All fixtures live in each existing test's temporary directory.
+   Add no committed seed, approval, fixture scope or fake native receipt. Keep all
+   existing assertions and the normal full-test entry points.
+6. **Docs.** In `docs/components.md` under `Inactive eval and trace framework`
+   (`:820`, catalog count at `:830–837`), and `RESTORE.md`'s eval explanation
+   (`:1071`), describe the minimum and duplicate-pair behavior. State seven seeded,
+   two declared; sources/relay/replay, real seeds and operator labels remain due.
+   Do not describe later sources as shipped.
+
+### Complete mechanism test map
+
+| Requirement | Fixture and entry point | Required result |
+| --- | --- | --- |
+| M4 cross-result repeat | Dashboard test's shipped core result plus its no-newline/earlier-time result (`:120–123`), through `run-evals.sh dashboard` | Distinct digests verified; `E_SHAPE`, nonzero exit, no stdout |
+| Original duplicate input | Keep dashboard test `duplicate-result` (`:158–159`) | Same pair twice remains `E_RUNTIME` |
+| Pair identity includes family | Two temporary valid seed sets from shipped core cases, one case each from different families, both renamed to the same case id; produce both results through `run-evals.sh run`, then dashboard | Accepted; two cases, each family counted once |
+| Distinct cases in one family | Two temporary valid seed sets with disjoint cases from one shipped family; run both, then dashboard | Accepted; two cases and two runs for that family |
+| Direct program rejection | Feed the cross-result repeat to the shipped jq program's `build-dashboard` and `validate-dashboard` | Build errors with `E_SHAPE` and no JSON; validate returns exactly false |
+| Direct program acceptance | Feed the corresponding no-repeat fixtures to both direct entries | Build succeeds; validate true on its canonical output |
+| M2/M3 below floor | Temporary scope-test dashboard: `stale-moved-artifacts` uses multi/minimum 3, total 2, all passed | Only `scope.eval-failing`; proposal absent |
+| M2/M3 floor and above | Same fixture with total 3, then 4, all passed | Baseline `scope.proposable`; output remains inactive, enabled false |
+| M2/M3 failed/inconclusive | Total 3, with one failed, then one inconclusive; remaining passed | Only `scope.eval-failing`; proposal absent |
+| Single regression | Same required seeded family, single/minimum 1: zero; one passed; one failed; one inconclusive | Zero/failed/inconclusive refuse; one passed matches baseline |
+| Declared regression | Require malicious family from the unchanged temporary dashboard | `scope.eval-family-unseeded`; no proposal |
+| Catalog boundary | Fixed digest and both declared families checked in dashboard test; retain existing seven-set aggregate and framework catalog assertions | Original bytes, 7 seeded / 2 declared, unchanged 138-case aggregate |
+
+In `evals-dashboard.test.sh`, put new cases beside the existing duplicate test.
+Use its `expect_error` helper. Generate valid run results through the launcher;
+do not forge a result for a driver positive case. Derive the selected core module
+path and direct jq arguments using `evals-framework.test.sh:184–203` and driver
+`run_program`; read actual program/driver/tool digests. Obtain evaluator content
+and digest from a generated result. Supply every normal jq argument and the
+actual result file digests. Use a valid no-repeat dashboard as the candidate for
+the duplicate validate test so failure isolates its inputs. These direct calls
+test the shipped program, not a copied predicate.
+
+In `scope-qualification.test.sh`, add `check_eval_trial_policy` immediately after
+`mutate_scope` (`:495`), then call it unconditionally. The existing setup through
+`:490` supplies whole scope, dashboard, shadow and gate fixtures and `good`.
+Use `run_evaluator` with the changed dashboard and unchanged other arguments.
+Require baseline reasons exactly `["scope.proposable"]` before mutations. Check
+outcome, reasons and inert proposal state, not reasons alone. Build every mutation
+from the original dashboard so cases cannot contaminate each other. Keep the
+existing eval checks (`:847–891`) and every later assertion. This named test group
+also allows the private bounded proof below to run the exact committed assertions;
+it adds no CLI option, environment selector or reusable test framework.
+
+## Dependent batches: unresolved source map
+
+The remainder preserves the source/relay/replay and real seed design. Its old
+line readings and 47-path inventory were taken on `611fcfb`; they are inputs to
+the required later plan amendment, not a claim about current closure completeness.
+Before PR 1b, remap every S row and every fixed-path read, including the overlap
+split, from merged code. Repeat the relevant mapping before PR 2 and PR 3. No old
+line number, missing real record or unavailable native execution becomes a fixture
+substitute. A bound or allowed-path expansion returns to G2.
+
+### Sibling map (required before dependent code)
+
+| Row | Needed by | What must be mapped | Prior reading; must be remapped |
 | --- | --- | --- | --- |
 | S1 | R4.2, R4.4, R5 | Concern 5's write-shadow record and the exact command sequence that produces it (the replay recipe), and its committed control evidence directory | `shadow/v1/reproduce.sh` emits only no-change records |
 | S2 | I3 | The enablement-check result field (concern 6) | none |
@@ -67,7 +187,7 @@ update adds concern 5, 6 and 9 files by the same reading. Rule: a file a compone
 opens by its own fixed path is closure (code or policy) or archived data; a file
 passed as an argument is a trial input, stored per trial by path and SHA-256.
 
-`shadow_closure` (47 paths today, sorted by path in the program):
+`shadow_closure` (47 paths at the prior reading; re-enumeration required):
 
 - `shadow/v1/`: `reproduce.sh`, `incident-record.jq`, `qualified-identity.jq`,
   `shadow-environments.json` (`reproduce.sh:133-138`), `validate-incident.sh`
@@ -107,9 +227,9 @@ finds no other reader. The two sets are disjoint. If the final closure passes 64
 entries, the `closure_shape` bound (`scope-gates.jq:144`) would need an edit R3.3 does
 not list, so that stops and returns to G2.
 
-## PR 1: framework and consumer (R2, R3, R5, R8.3-R8.5)
+## PR 1b: sources, relay and replay (M5, R3, R5, R8.3-R8.5)
 
-Allowed paths, exactly R9.3's PR 1 list: `evals/v1/evals.jq`,
+Allowed paths, exactly R9.3's PR 1b list: `evals/v1/evals.jq`,
 `evals/v1/evals-driver.sh`, `evals/v1/evals-launcher.sh`, `scope/v1/scope-gates.jq`,
 `scripts/test/evals-dashboard.test.sh`, `scripts/test/scope-qualification.test.sh`,
 `scripts/test/evals-framework.test.sh`, `scripts/test/shadow-self-host-evidence.test.sh`,
@@ -119,16 +239,14 @@ Commits run in pin order (R9.4): `scope-gates.jq` first, so its final digest is
 what `evals.jq` pins; then `evals.jq`; then the driver; the launcher last, since it
 pins the driver.
 
-### Commit 1: `scope/v1/scope-gates.jq` (R3.3, M3)
+### Commit 1: `scope/v1/scope-gates.jq` (R3.3)
 
 `seed_sources` (`:98-102`) and `active_seed_sources` (`:119-122`) gain both new
 sources in sorted order; commit 2 writes the same bytes in `evals.jq`.
 `evaluator_shape` (`:149-186`) adds both field names to the list at `:155-157` and
 `(.shadow_closure | closure_shape) and (.record_closure | closure_shape)`; its
-comment at `:141` says six closures. Coverage bound `:240` becomes `(1;9;…)`. M3: in the eval-reason block (`:875-892`), after the `:887-890`
-branch, add `elif $entry.trial_policy.kind == "multi" and $entry.cases.total <
-$entry.trial_policy.minimum_trials then "scope.eval-failing"`. No reason id, policy or
-dashboard shape change.
+comment at `:141` says six closures. Coverage bound `:240` becomes `(1;9;…)`.
+Preserve PR 1a's minimum check.
 
 ### Commit 2: `evals/v1/evals.jq`
 
@@ -191,9 +309,7 @@ dashboard shape change.
   `{content_id:"malicious-trial.v1",media_type:"application/json",sha256:manifest.sha256}`;
   reviews `{content_id:"review-verdict.v1",media_type:"text/markdown",sha256:verdict.sha256}`.
 - Coverage bound `enum_set_ok(1;8;…)` (`:997`) becomes `(1;9;…)`.
-- M4: `dashboard_results_ok` (`:1008-1016`) also requires that no `[family_id,
-  case_id]` pair appears in two of the results, so `build-dashboard` raises `E_SHAPE`
-  and `validate-dashboard` is false (`:1033-1052`).
+- Preserve PR 1a's dashboard uniqueness check and direct-entry behavior.
 
 ### Commit 3: `evals/v1/evals-driver.sh`
 
@@ -224,9 +340,7 @@ dashboard shape change.
   `minimum_trials`) and each bullet of R8.3 in order, all `E_RELATION`. Stage jq as
   `replay_scanner_cases` does (`:270-280`), run `$runtime/evals/v1/run.sh evaluate`
   on the bundle, require `body.status`, and record each trial's status by attempt id.
-- M4 in `run_dashboard` (`:187-248`), after the pair loop and before `:241`: if the
-  result digests are distinct and a `[family_id, case_id]` pair repeats, emit
-  `E_SHAPE`. Identical results keep today's `E_RUNTIME` (`evals-dashboard.test.sh:158`).
+- Preserve PR 1a's driver duplicate checks and error precedence.
 - `review_approval_sha256=none` beside `:75` (PR 2 replaces it).
 - R9.4(b): `program_sha256` at `:75`, after the (a) literals.
 
@@ -287,13 +401,9 @@ dashboard shape change.
   equal to their shipped lists. Its tamper fixture (`:346-367`) is unchanged.
 - The closure reuse is exercised by every existing eval suite: each run stages the
   23 overlapping paths twice, so copying instead of reusing would fail all of them.
-- `evals-dashboard.test.sh`: M4, after `:158`: `seed-set.json` with its result plus
-  the no-newline copy with its earlier result (`:121-123`) is `E_SHAPE`; the seven-set
-  dashboard (`:62-90`) is unchanged.
-- `scope-qualification.test.sh`: M3 after `:889-890`, on the existing fixture with
-  `stale-moved-artifacts` set to `{kind:"multi",minimum_trials:3}`: total 2 all
-  passed is `["scope.eval-failing"]`; total 3 all passed gives the unmutated
-  fixture's reasons; total 3 with one failed is `["scope.eval-failing"]`. The
+- `evals-dashboard.test.sh`: preserve PR 1a's complete mechanism tests and the
+  seven-set aggregate.
+- `scope-qualification.test.sh`: retain PR 1a's mechanism tests. The
   evaluator fixture (`:264-271`) gains `shadow_closure` and `record_closure`. A new
   check requires the `def seed_sources:` and `def active_seed_sources:` blocks (from
   the def line to the first line ending `];`) to be byte-equal in both programs.
@@ -402,7 +512,7 @@ Allowed paths: `evals/v1/eval-catalog.json`, `evals/v1/seed-set-malicious.json`,
    and SHA-256, never copied. Only changed inputs are committed: the incident, a Git
    bundle for the two Git surfaces (form fixed by S9), and forge snapshot files for
    the last. Nothing else differs from the control.
-3. **Recording (R4.4)**, after S8 is settled and PR 1 has merged: run the S1 recipe
+3. **Recording (R4.4)**, after S8 is settled and PR 1b has merged: run the S1 recipe
    once per trial with `env -i` in a `mktemp -d` copy, publishing nothing, and commit
    the outputs. The replay must then reproduce them byte for byte; the test proves the
    recipe and the replay agree.
@@ -488,9 +598,13 @@ gates (R9.6).
 
 ## Review size
 
-- PR 1: `review_size: accepted-exception`, 750-1,050 net added lines, one concern:
-  the multi-trial contract and the two sources' program, driver, launcher and
-  scope-gate plumbing, which R1.2 fixes as one PR. About 230 in `evals.jq` (47-entry
+- PR 1a: `review_size: standard`, expected 220–380 net added lines. One concern:
+  M2–M4. About 25–45 lines cover predicates/error handling/pins, 170–290 cover
+  launcher, direct-program and scope regressions, and 15–30 cover docs. Use readable
+  complete tests; an overrun pauses for a separate size amendment, never test cuts.
+- PR 1b: `review_size: accepted-exception`, 750-1,050 net added lines, one concern:
+  the two sources' program, driver, launcher and scope-gate plumbing. Recheck this
+  estimate in the required dependency plan amendment. About 230 in `evals.jq` (47-entry
   closure plus shapes), 330 in the driver (two replays), 150 in the launcher, 15 in
   `scope-gates.jq`, 150 in tests, 20 in docs. Precedents:
   `work/shadow-input-assembler/plan.md` (1,199 measured), `work/external-target-shadow-run/plan.md` evidence PR (1,000-1,400),
@@ -499,21 +613,17 @@ gates (R9.6).
   operator-graded seed and its test. 150-450 of them are verbatim verdict bytes, which
   cannot leave the PR whose test checks their digests.
 - PR 3: `review_size: standard`, about 300-400 net added lines.
-- This plan-only PR: `review_size: accepted-exception`, 540-580 lines in this one
-  file (529 measured at the first head), one concern: this plan. The overrun is the
-  sibling map (S1-S10), the closure enumeration with its overlap split, and the three
-  per-PR pin chains, which the exact-path completeness of R1.3, R5 and R9.4 needs.
-  Precedents: #448, this slug's spec (432 lines, accepted exception), and #445
-  (400 lines, at the soft budget).
+- This plan-only amendment: `review_size: standard`. One concern: PR 1a's complete
+  mechanism delivery and preservation of the dependent batches' gates.
 
 Each range waives only the soft line signal, never scope, tests, CI, review or human
 merge.
 
 ## Risks
 
-- **Untested driver branches in PR 1.** The shipped catalog refuses both new sources
-  (`seed_set_bound`, `evals.jq:535-540`), so PR 1 can prove shapes, grading, M3, M4
-  and pins but not the two replays end to end; PR 2 and PR 3's tests do. A PR 1
+- **Untested driver branches in PR 1b.** The shipped catalog refuses both new sources
+  (`seed_set_bound`, `evals.jq:535-540`), so PR 1b can prove shapes and grading
+  and pins but not the two replays end to end; PR 2 and PR 3's tests do. A PR 1b
   reviewer should read both replay functions against R4-R8 directly.
 - **Sibling drift.** Concern 6 edits `scope-gates.jq`, and concern 5 likely edits
   `reproduce.sh` and the evidence layout, so every line here moves. The plan update
@@ -531,49 +641,112 @@ merge.
 
 ## Proof
 
-For each PR, BASE is its recorded base (full OID). Record command, head, platform and
-full output.
+### PR 1a local and CI evidence
+
+Record the full head/base, platform, commands, exit status and complete output.
+Static checks: both artifact links and high risk; exact eight-path allowlist;
+`git diff --check BASE HEAD`; `bash -n` on both changed shell programs and both
+changed tests; `bash scripts/check-rename.sh`; pinned shellcheck 0.11.0 if already
+available. Missing pinned tools stop that check; do not install or download.
+Verify the catalog digest above and byte equality from base. Verify all paths
+outside the allowlist, including `framework.jq`, `run.sh`, `run-evals.sh`, every
+seed, config and policies, remain unchanged. Search old and new program/driver
+SHA-256s outside `work/` to verify exactly the stated pin chain.
+
+Before any local eval test, in the existing network-restricted environment, verify the
+existing jq cache. Do not run a test whose bootstrap would download:
 
 ```sh
-git rev-parse HEAD:work/eval-seeding-deterministic/intent.md   # a4197f29…
-git rev-parse HEAD:work/eval-seeding-deterministic/spec.md     # dd630293…
-git rev-parse HEAD:work/eval-seeding-deterministic/plan.md     # accepted plan blob
-git show HEAD:work/eval-seeding-deterministic/spec.md | sed -n '1,5p'
-git show HEAD:work/eval-seeding-deterministic/plan.md | sed -n '1,6p'
-git diff --name-only BASE HEAD
-git diff --check BASE HEAD
-git diff --quiet BASE HEAD -- config ROADMAP.md AGENTS.md REVIEW.md NORTH_STAR.md \
-  .github scripts/merge-pr.sh scripts/codex-review.sh scripts/test/run-all.sh \
-  scripts/lib evals/v1/framework.jq evals/v1/run.sh evals/v1/run-evals.sh && echo unchanged
-for f in $(git ls-files evals/v1) scope/v1/scope-gates.jq; do
-  h=$(shasum -a 256 "$f" | cut -c1-64); git grep -n "$h" -- . ':!work'; done
+case "$(/usr/bin/uname -s):$(/usr/bin/uname -m)" in
+  Darwin:*) eval_jq_asset=jq-osx-amd64
+    eval_jq_sha=5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef ;;
+  Linux:x86_64) eval_jq_asset=jq-linux64
+    eval_jq_sha=af986793a515d500ab2d35f8d2aecd656e764504b789b66d7e1a0b727a124c44 ;;
+  *) exit 1 ;;
+esac
+eval_jq_cache="${TMPDIR:-/tmp}/ystack-portable-core-jq16/$eval_jq_asset"
+[ -f "$eval_jq_cache" ] && [ ! -L "$eval_jq_cache" ] && [ -x "$eval_jq_cache" ] || exit 1
+[ "$(/usr/bin/shasum -a 256 "$eval_jq_cache" | /usr/bin/awk '{print $1}')" = "$eval_jq_sha" ] || exit 1
+[ "$("$eval_jq_cache" --version)" = jq-1.6 ] || exit 1
 ```
 
-Require both hash links and `risk: high`, exactly the PR's allowed paths, `--check`
-silent, `unchanged`, and each file's digest found at exactly the literals R9.4 names
-for it, and nowhere else. Then:
+Use the same TMPDIR and recheck before each command. Cache absence, mismatch or
+unsupported platform stops; it grants no download. Run each full eval suite:
 
 ```sh
-bash scripts/check-rename.sh
-for t in evals-framework evals-dashboard evals-events evals-plans evals-boundaries \
-  evals-adapters evals-approvals evals-duty scope-qualification \
-  shadow-self-host-evidence maintenance-loop portable-core-schema; do
-  bash "scripts/test/$t.test.sh" || echo "FAILED: $t"; done
-bash scripts/test/run-all-sharding.check.sh
+bash scripts/test/evals-dashboard.test.sh
+bash scripts/test/evals-framework.test.sh
+bash scripts/test/evals-events.test.sh
+bash scripts/test/evals-plans.test.sh
+bash scripts/test/evals-boundaries.test.sh
+bash scripts/test/evals-adapters.test.sh
+bash scripts/test/evals-approvals.test.sh
+bash scripts/test/evals-duty.test.sh
 ```
 
-PR 2 adds `bash scripts/test/evals-reviews.test.sh` and `bash evals/v1/run.sh evaluate
-evals/v1/seeds/reviewer-severity/bundle.json`; PR 3 adds
-`bash scripts/test/evals-malicious.test.sh`. Seed PRs also run the manifest loop:
+Each must finish with exit 0 and its full assertion output. A timeout, missing
+output or failure is unresolved evidence. Do not continue as though it passed.
+
+For the local scope mechanism proof, create one private temporary shell file from
+this head's `scope-qualification.test.sh`, from its beginning through the unique
+unconditional `check_eval_trial_policy` call. Copy those lines exactly. Replace
+only the test's single `root=` assignment with the absolute reviewed checkout
+path, shell-quoted, because the copy lives outside `scripts/test`. Verify exactly
+one replacement and one terminal call, then record source SHA-256, selected line
+range, generated-file SHA-256 and the complete diff showing that root substitution.
+Run `bash -n` on the private file. Use the cache preflight above, then run:
 
 ```sh
-grep -v -e '^$' -e '^#' ci/required-files.txt | while IFS= read -r f; do
-  [ -f "$f" ] || echo "missing required file: $f"; done
+YSTACK_SCOPE_TEST_BOUNDED=1 /usr/bin/perl -e 'alarm 300; exec @ARGV' \
+  /bin/bash "$eval_scope_proof"
 ```
 
-It prints nothing, no `FAILED:` line appears, and every command exits 0. Do not run
-`scripts/test/run-all.sh` locally; each PR records a green dispatched `ci` on its exact head (R9.5). PR 2's
-reviewer also checks `approval.json` against the forge (R7.2). A fresh non-author
-reviewer applies Bugs, Security and Compliance passes to the full diff, the hash links
-and this evidence; the manager resolves every Important finding before the
-operator-gated merge.
+`eval_scope_proof` is that private file's absolute path. The external alarm keeps
+the existing 300-second bound. Require all matrix assertions and exit 0. This
+executes the shipped evaluator with the committed test group and whole temporary
+fixtures. It is only the PR 1a scope mechanism proof. It is not a complete scope
+suite, #558 acceptance, genuine native execution or the full matrix. No test
+selector, watchdog bypass or diagnostic framework is shipped. Keep the normal
+full scope script and all assertions runnable in CI and at final validation.
+Do not run #558's full local scope window, sudo/root/native target tests or
+`run-all.sh` locally for this batch.
+
+仅当 PR 1a 的本地固定 jq 1.6 缓存缺失时，可用既有 `workflow_dispatch` 满足
+上述八个 eval suite 和 scope 机制证明。本地执行仍记为 `NOTRUN`；保留原 cache
+preflight 失败、private prefix 准备及其原始记录。CI 必须检出同一最终实现提交，
+记录完整 head、run 和 job 身份，完整执行上述八个 eval suite，以及包含全部
+`check_eval_trial_policy` 断言的完整 `scope-qualification.test.sh`。逐项保存完整
+日志，核对所有断言通过、每个 suite 成功退出 0。聚合绿灯不足以接受证明。
+缺失输出、失败或超时仍是未解决证据。此路径仅覆盖 PR 1a 的这些 fixture 机制；
+不泛化为免本地测试，也不授权本地下载、安装或新增网络范围。不新增 workflow、
+selector 或测试框架。#558 的完整本地 macOS/Linux、native 和 I1 验收仍待完成。
+
+Required automatic `ci` and fresh independent Bugs/Security/Compliance review bind
+the exact PR head/base. Apply `work/ci-minimum-roadmap/decision.md`: quick green
+means only its named checks. The full dispatched matrix remains required at its
+named runnable milestones and the original final consolidated acceptance. A
+dispatched run satisfies the specified PR 1a proof only through the bounded CI
+path above. Neither local nor CI mechanism proof substitutes for full
+scope/native/platform acceptance. Resolve every Important finding before the
+named manager's protected merge.
+
+### Dependent-batch proof obligations
+
+PR 1b's later plan amendment must bind the updated pin searches, complete closure
+and overlap accounting, all eight existing eval suites, complete relevant scope
+and shadow integration, maintenance-loop and portable-core-schema regressions,
+and `scripts/test/run-all-sharding.check.sh`.
+All existing tests stay; no fixture assertion is removed or weakened. Real control
+and genuine native/platform requirements remain exactly as accepted. Their safe
+execution and complete source map must be established before dependent acceptance.
+
+PR 2 additionally runs `scripts/test/evals-reviews.test.sh` and `evals/v1/run.sh
+evaluate evals/v1/seeds/reviewer-severity/bundle.json`, including every R7.6/R8.5
+negative case. Its reviewer checks `approval.json` against the forge under the
+operator's explicit label decision. PR 3 additionally runs
+`scripts/test/evals-malicious.test.sh`, including four real replays, each failure
+mutation, archived-catalog independence and shared-file staging regressions.
+Both seed batches verify every required manifest file, exact catalog-only field
+changes, count changes and their own final pin chain. Required CI and independent
+review remain mandatory. No mechanism result closes the outstanding real seed or
+#558 acceptance obligations.
