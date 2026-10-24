@@ -223,13 +223,20 @@ is never cleared automatically, including after refusal or a pre-write crash.
 Immediately before each write, recheck the grant, enablement, kill switch,
 qualification, authenticated coverage, write set and exact target/base. Follow
 Step 8 R5's fresh kill-switch checks at start, pre-write and post-write. Missing
-or stale facts refuse. The branch and the incident's pull request must not already
-exist. The target must independently refuse default/protected-branch pushes.
-The authenticated repository context and grant identify the one destination base
-branch; it must still point to the bound base revision. Only create the exact new
-branch at the already verified candidate commit, then open its one pull request
-against that destination. No update or force operation, repair push, cleanup
-deletion, duplicate pull request or automatic write retry is permitted. Check the base before each write and in the separate post-write read.
+or stale facts refuse. The target must independently refuse default/protected-branch
+pushes. The authenticated repository context and grant identify the one destination
+base branch; it must still point to the bound base revision.
+
+Before branch creation, require both the exact branch and the incident's pull
+request to be absent. Create only that new branch at the verified candidate commit.
+Before opening the pull request, require proof that this attempt created the branch
+and that the branch still has the exact candidate head. The incident's pull request
+must still be absent. Refuse a foreign, replaced or mismatched branch. Then open
+exactly one pull request against the bound destination. These action-specific
+checks do not replace the common checks above or permit another dispatch.
+No update or force operation, repair push, cleanup deletion, duplicate pull request
+or automatic write retry is permitted. Check the base before each write and in the
+separate post-write read.
 A base race makes the attempt nonpassing and preserves any partial effects; never
 claim that a check followed by a write was atomic. This spec proves no forge API
 behavior or race-prevention mechanism.
@@ -316,10 +323,14 @@ These are required future proofs, not tests run or authorized by this G2:
 - Prove request/grant/actual-use separation. A valid request, offered capability,
   profile or digest alone must not dispatch anything. Missing policies, credentials,
   reservation, qualification or kill-switch state refuse without a write.
-- With an owned finite fake transport, prove the full success and every result row:
-  definite branch refusal, branch-only effect, pull request refusal, lost responses,
-  cancellation and crash at each dispatch boundary, post-write mismatch and unknown
-  observations. Re-entry under another request/scope cannot repeat either action.
+- With an owned finite fake transport, prove the full success and every result row.
+  Success creates the branch first, then opens the pull request exactly once after
+  proving this attempt owns the branch and its head still equals the candidate.
+  Reject a foreign same-name branch, a replaced branch head and an existing pull
+  request. Cover definite branch refusal, branch-only effect, pull request refusal,
+  lost responses, cancellation and crash at each dispatch boundary, post-write
+  mismatch and unknown observations. Re-entry under another request/scope cannot
+  repeat either action.
 - Prove the post-write reader has distinct authenticated identity and no write
   capability. Fabricated acknowledgement, stale proof or an incomplete remote diff
   cannot pass. Retained evidence must reconstruct what was dispatched and observed.
