@@ -2459,7 +2459,7 @@ def dashboard_phase_controls():
     command=[str(area/'8.sh'),'evaluate']+[str(area/name) for name in
         ('scope.json','shadow-set.json','dashboard-shape.json','risk.json','kill.json',
          'duty.json','marker.json','legacy-bundles','legacy-source.git')]
-    call='  expect_reasons "dashboard shape $dashboard_case" '+chr(92)
+    call='  dashboard_shape_evaluation "${good[@]:0:2}" "$tmp/dashboard-shape.json" "${good[@]:3}" '+chr(92)
     call_line=str(source.splitlines().index(call)+1)
     pins=[line.split(' -eq ',1)[1].split(' ]',1)[0] for line in source.splitlines()
         if line.startswith('  if [ "${dashboard_case-}" = ')]
@@ -2758,7 +2758,7 @@ identity = lambda value: (value.st_dev, value.st_ino, value.st_mode, value.st_ui
 
 
 def cost_dashboard_binding(source,line,expression,arguments,binding,copy_sha,base):
-    call='  expect_reasons "dashboard shape $dashboard_case" '+chr(92)
+    call='  dashboard_shape_evaluation "${good[@]:0:2}" "$tmp/dashboard-shape.json" "${good[@]:3}" '+chr(92)
     if type(source) is not str or hashlib.sha256(source.encode()).hexdigest()!=binding['source'][3]['sha256']:return False
     if binding['private_frontend']['sha256']!=copy_sha:return False
     lines=source.splitlines()
@@ -2865,7 +2865,7 @@ if index == 8 and binding['status'] != 'CASE_BINDING':
     raise SystemExit(1)
 PY_PROTECTED_BINDING
 }
-evaluation_reasons() {
+evaluation_document() {
   local out evaluator=$evaluator diagnostic_index=8 diagnostic_ready=false
   if [ "$1" = "$tmp/protected.json" ]; then
     diagnostic_index=$protected_index
@@ -2911,16 +2911,23 @@ PY_STALE_EXPORT
       fi
       fail "evaluator refused a well-formed call ($1): $(/usr/bin/printf '%s' "$out" | /usr/bin/tail -c 300)"
     }
-  /usr/bin/printf '%s' "$out" | "$jq_bin" -c '.body.reason_ids'
+  /usr/bin/printf '%s' "$out"
+}
+evaluation_reasons() {
+  evaluation_document "$@" | "$jq_bin" -c '.body.reason_ids'
+}
+dashboard_shape_evaluation() {
+  local scope_dashboard_line=${BASH_LINENO[0]}
+  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 10225 ]; then scope_dashboard_inflight=true; fi
+  evaluation_document "$@"
+  scope_dashboard_inflight=false
 }
 expect_reasons() {
   local label=$1 expected=$2 scope_dashboard_line=${BASH_LINENO[0]}
   expected=$("$jq_bin" -c 'map(select(. != "scope.proposable")) + ["scope.sandbox-receipt-missing"] | sort | unique' <<<"$expected")
   shift 2
   local actual
-  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 9851 ]; then scope_dashboard_inflight=true; fi
   actual=$(evaluation_reasons "$@")
-  scope_dashboard_inflight=false
   [ "$actual" = "$expected" ] || fail "$label expected $expected got $actual"
 }
 expect_evaluator_error() {
@@ -10215,7 +10222,7 @@ for dashboard_case in 'del(.body)' '.body = null' '.body = []' '.body = "text"' 
     >"$tmp/dashboard-shape.json"
   bind_dashboard_evaluator "$tmp/dashboard-shape.json" "$tmp/dashboard-shape-bound.json"
   /bin/mv "$tmp/dashboard-shape-bound.json" "$tmp/dashboard-shape.json"
-  run_evaluator "${good[@]:0:2}" "$tmp/dashboard-shape.json" "${good[@]:3}" \
+  dashboard_shape_evaluation "${good[@]:0:2}" "$tmp/dashboard-shape.json" "${good[@]:3}" \
     >"$tmp/dashboard-shape-evaluation.json" 2>"$tmp/dashboard-shape-evaluation.err"
   [ ! -s "$tmp/dashboard-shape-evaluation.err" ] || fail "dashboard shape $dashboard_case stderr"
   "$jq_bin" -e '.body.outcome == "not-proposable" and

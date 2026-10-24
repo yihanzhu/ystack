@@ -25,6 +25,7 @@
 
 #define _GNU_SOURCE
 #include "common.h"
+#include "observation-values.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <grp.h>
@@ -125,18 +126,15 @@ static ssize_t read_file(const char *path, char *buf, size_t cap)
 static int read_u64(const char *path, uint64_t *out)
 {
     char buf[128];
-    if (read_file(path, buf, sizeof buf) < 0) return 0;
-    *out = strtoull(buf, NULL, 10);
-    return 1;
+    int ok = read_file(path, buf, sizeof buf) >= 0;
+    return ys_u64_values(ok, ok ? buf : "", out);
 }
 
-/* True iff `path`'s first token equals `want` exactly (a cgroup R7.1
- * parameter's own readback: "45000 100000" must be read back matching
- * what was written, not merely parsed and re-derived). */
-static int file_starts_with_u64(const char *path, uint64_t want)
+static int setup_readback(const char *path, uint64_t expected,
+                           struct ys_setup_observations *raw, size_t index)
 {
-    uint64_t got;
-    return read_u64(path, &got) && got == want;
+    raw->reads[index] = read_file(path, raw->readbacks[index], sizeof raw->readbacks[index]) >= 0;
+    return ys_readback_matches(raw->reads[index], raw->readbacks[index], expected);
 }
 
 /* --- reading the whole input frame into memory ---------------------------- */
@@ -261,55 +259,6 @@ static int mount_tmpfs(const char *target, uint64_t size_bytes, uint64_t nr_inod
     return mount("tmpfs", target, "tmpfs", MS_NOSUID, opts) == 0;
 }
 
-static int checked_add_u64(uint64_t a, uint64_t b, uint64_t *out)
-{
-    if (UINT64_MAX - a < b) return 0;
-    *out = a + b;
-    return 1;
-}
-
-static int checked_mul_u64(uint64_t a, uint64_t b, uint64_t *out)
-{
-    if (a != 0U && b > UINT64_MAX / a) return 0;
-    *out = a * b;
-    return 1;
-}
-
-static int rounded_allocation(uint64_t bytes, uint64_t page_size, uint64_t *out)
-{
-    uint64_t with_slack;
-    if (page_size == 0U) return 0;
-    if (bytes == 0U) { *out = 0U; return 1; }
-    if (!checked_add_u64(bytes, page_size - 1U, &with_slack)) return 0;
-    *out = (with_slack / page_size) * page_size;
-    return 1;
-}
-
-static int candidate_geometry(const struct ys_guest_plan *plan, uint64_t page_size,
-                              uint64_t *size_bytes, uint64_t *nr_inodes)
-{
-    uint64_t data = 0U, directories = 1U, metadata, rounded;
-    size_t i;
-    for (i = 0; i < plan->entry_count; i++) {
-        if (plan->entries[i].is_file) {
-            if (!rounded_allocation(plan->entries[i].size_bytes, page_size, &rounded) ||
-                !checked_add_u64(data, rounded, &data))
-                return 0;
-        } else if (!checked_add_u64(directories, 1U, &directories)) {
-            return 0;
-        }
-    }
-    /* One page per directory covers tmpfs directory-entry and inode metadata. */
-    if (!checked_mul_u64(directories, page_size, &metadata) ||
-        !checked_add_u64(data, metadata, size_bytes))
-        return 0;
-    if (*size_bytes == 0U) *size_bytes = page_size;
-    if (plan->entry_count == SIZE_MAX ||
-        !checked_add_u64(1U, (uint64_t)plan->entry_count, nr_inodes))
-        return 0;
-    return *nr_inodes > 0U;
-}
-
 static int mkdir_p(const char *path, mode_t mode)
 {
     if (mkdir(path, mode) == 0) return 1;
@@ -363,64 +312,49 @@ static int bind_into_newroot(const char *src, const char *leaf, int ro, int noex
  * requires every configured parameter to have been confirmed this way
  * (R7.3), never merely written. */
 struct cgroup_setup {
-    int cpu_hard, pids_hard, memory_hard, output_hard, scratch_hard;
+    struct ys_setup_flags values;
     int cgroup_fd;
 };
-
-/* /proc/meminfo's first line is "MemTotal:%8lu kB\n". */
-static int read_u64_kb(const char *path, uint64_t *out)
-{
-    char buf[256];
-    const char *p;
-    if (read_file(path, buf, sizeof buf) < 0) return 0;
-    p = strchr(buf, ':');
-    if (p == NULL) return 0;
-    *out = strtoull(p + 1, NULL, 10);
-    return 1;
-}
 
 static int setup_cgroup(const struct ys_plan_limits *lim, struct cgroup_setup *out)
 {
     char buf[64];
-    uint64_t mem_total_kb = 0;
+    struct ys_setup_observations raw;
+    struct statvfs sv;
+    memset(&raw, 0, sizeof raw);
     memset(out, 0, sizeof *out);
     out->cgroup_fd = -1;
     if (!write_str(CGROUP_ROOT "/cgroup.subtree_control", "+cpu +pids +memory\n")) return 0;
     if (!mkdir_p(TREE_CGROUP, 0755)) return 0;
     snprintf(buf, sizeof buf, "%llu 100000\n", (unsigned long long)lim->cpu_max);
-    if (write_str(TREE_CGROUP "/cpu.max", buf) &&
-        file_starts_with_u64(TREE_CGROUP "/cpu.max", lim->cpu_max)) {
+    raw.writes[0] = write_str(TREE_CGROUP "/cpu.max", buf);
+    if (raw.writes[0] && setup_readback(TREE_CGROUP "/cpu.max", lim->cpu_max, &raw, 0)) {
         snprintf(buf, sizeof buf, "%llu\n", (unsigned long long)lim->cpu_max_burst);
-        if (write_str(TREE_CGROUP "/cpu.max.burst", buf) &&
-            file_starts_with_u64(TREE_CGROUP "/cpu.max.burst", lim->cpu_max_burst)) {
+        raw.writes[1] = write_str(TREE_CGROUP "/cpu.max.burst", buf);
+        if (raw.writes[1] && setup_readback(TREE_CGROUP "/cpu.max.burst", lim->cpu_max_burst, &raw, 1)) {
             snprintf(buf, sizeof buf, "%llu\n", (unsigned long long)lim->bandwidth_slice_us);
-            if (write_str("/proc/sys/kernel/sched_cfs_bandwidth_slice_us", buf) &&
-                file_starts_with_u64("/proc/sys/kernel/sched_cfs_bandwidth_slice_us",
-                                      lim->bandwidth_slice_us))
-                out->cpu_hard = 1;
+            raw.writes[2] = write_str("/proc/sys/kernel/sched_cfs_bandwidth_slice_us", buf);
+            if (raw.writes[2])
+                (void)setup_readback("/proc/sys/kernel/sched_cfs_bandwidth_slice_us", lim->bandwidth_slice_us, &raw, 2);
         }
     }
     snprintf(buf, sizeof buf, "%llu\n", (unsigned long long)lim->pids_max);
-    if (write_str(TREE_CGROUP "/pids.max", buf) &&
-        file_starts_with_u64(TREE_CGROUP "/pids.max", lim->pids_max))
-        out->pids_hard = 1;
-    /* memory_bytes (R7 table): the configured "parameter" is the guest's
-     * own fixed RAM ceiling (there is no per-tree memory.max this concern
-     * sets: the bound is the VM's shape, R5.4), confirmed by reading it
-     * back from the kernel rather than trusting the boot command line. */
-    if (read_u64_kb("/proc/meminfo", &mem_total_kb) && mem_total_kb * 1024ULL <= GUEST_MEMORY_BYTES)
-        out->memory_hard = 1;
-    {
-        struct statvfs sv;
-        if (statvfs(OUTPUT_DIR, &sv) == 0 &&
-            (uint64_t)sv.f_blocks * sv.f_frsize == lim->output_tmpfs_bytes &&
-            (uint64_t)sv.f_files == lim->output_inodes)
-            out->output_hard = 1;
-        if (statvfs(SCRATCH_DIR, &sv) == 0 &&
-            (uint64_t)sv.f_blocks * sv.f_frsize == lim->scratch_bytes &&
-            (uint64_t)sv.f_files == lim->scratch_inodes)
-            out->scratch_hard = 1;
+    raw.writes[3] = write_str(TREE_CGROUP "/pids.max", buf);
+    if (raw.writes[3]) (void)setup_readback(TREE_CGROUP "/pids.max", lim->pids_max, &raw, 3);
+    raw.meminfo_ok = read_file("/proc/meminfo", raw.meminfo, sizeof raw.meminfo) >= 0;
+    raw.output_ok = statvfs(OUTPUT_DIR, &sv) == 0;
+    if (raw.output_ok) {
+        raw.output_blocks = (uint64_t)sv.f_blocks;
+        raw.output_fragment = (uint64_t)sv.f_frsize;
+        raw.output_files = (uint64_t)sv.f_files;
     }
+    raw.scratch_ok = statvfs(SCRATCH_DIR, &sv) == 0;
+    if (raw.scratch_ok) {
+        raw.scratch_blocks = (uint64_t)sv.f_blocks;
+        raw.scratch_fragment = (uint64_t)sv.f_frsize;
+        raw.scratch_files = (uint64_t)sv.f_files;
+    }
+    ys_setup_values(lim, &raw, GUEST_MEMORY_BYTES, &out->values);
     out->cgroup_fd = open(TREE_CGROUP, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     return out->cgroup_fd >= 0;
 }
@@ -428,11 +362,8 @@ static int setup_cgroup(const struct ys_plan_limits *lim, struct cgroup_setup *o
 static int cgroup_populated(void)
 {
     char buf[256];
-    char *line;
-    if (read_file(TREE_CGROUP "/cgroup.events", buf, sizeof buf) < 0) return -1;
-    line = strstr(buf, "populated ");
-    if (line == NULL) return -1;
-    return (line[10] == '0') ? 0 : 1;
+    int ok = read_file(TREE_CGROUP "/cgroup.events", buf, sizeof buf) >= 0;
+    return ys_population_values(ok, ok ? buf : "");
 }
 
 /* --- clone3 (R6.1) ---------------------------------------------------------
@@ -956,55 +887,9 @@ static void child_main(int instruction_fd, int stdout_fd, int stderr_fd, int out
     _exit(125); /* unreached: ys_exec never returns */
 }
 
-struct exec_channel_state {
-    unsigned char bytes[2U * sizeof(struct ys_exec_outcome)];
-    size_t length;
-    int eof;
-    int invalid;
-};
 #ifdef YSTACK_SUPERVISOR_TEST
 static int ys_test_channel_eintr;
 #endif
-
-static int drain_exec_channel(int fd, struct exec_channel_state *state)
-{
-    for (;;) {
-        ssize_t n;
-        if (state->length == sizeof state->bytes) { state->invalid = 1; return 0; }
-#ifdef YSTACK_SUPERVISOR_TEST
-        if (ys_test_channel_eintr > 0) {
-            ys_test_channel_eintr--; errno = EINTR; n = -1;
-        } else
-#endif
-        n = read(fd, state->bytes + state->length, sizeof state->bytes - state->length);
-        if (n > 0) { state->length += (size_t)n; continue; }
-        if (n == 0) { state->eof = 1; return 1; }
-        if (errno == EINTR) return 1;
-        if (errno == EAGAIN || errno == EWOULDBLOCK) return 1;
-        state->invalid = 1;
-        return 0;
-    }
-}
-
-static int exec_channel_confirms_execution(const struct exec_channel_state *state,
-                                           int child_status)
-{
-    struct ys_exec_outcome first;
-    if (state->invalid || !state->eof || state->length != sizeof first ||
-        !WIFEXITED(child_status))
-        return 0;
-    memcpy(&first, state->bytes, sizeof first);
-    return first.kind == YS_EXEC_READY && first.phase == YS_EXEC_PHASE_EXECVE &&
-           first.reserved == 0 && first.error_number == 0;
-}
-
-static int execution_was_verified(const struct exec_channel_state *state, int child_status,
-                                  int child_reaped, int tree_terminated,
-                                  int tree_deadline_fired, int containment_failure)
-{
-    return child_reaped && tree_terminated && !tree_deadline_fired &&
-           !containment_failure && exec_channel_confirms_execution(state, child_status);
-}
 
 /* --- report.json (R8.2) ---------------------------------------------------
  * Keys sorted exactly as host-supervisor.py's own validate_export checks
@@ -1012,22 +897,8 @@ static int execution_was_verified(const struct exec_channel_state *state, int ch
  * canonical-JSON convention throughout). Bounded, hand-built: no general
  * string escaping is needed anywhere in this document (every string field
  * is hex). */
-struct guest_row { uint64_t observed; const char *observation, *enforcement; int reached;
-                    uint64_t resolution; };
-struct report_state {
-    int verifier_started, tree_deadline_fired, tree_terminated;
-    int exit_signaled; int exit_code;
-    uint64_t stdout_bytes, stderr_bytes;
-    struct guest_row cpu, memory, output, tasks, scratch;
-    char **evidence_names; size_t evidence_count;
-};
-
-struct json_writer { char *buf; size_t len, cap; };
-
 #ifdef YSTACK_SUPERVISOR_TEST
-static size_t ys_test_report_cap_limit;
 static int ys_test_report_sizes;
-static int ys_test_format_failure;
 #endif
 
 static int evidence_file_size(const char *path, off_t *size_out)
@@ -1043,115 +914,30 @@ static int evidence_file_size(const char *path, off_t *size_out)
     }
 }
 
-static int json_reserve(struct json_writer *w, size_t additional)
-{
-    size_t needed, next;
-    char *grown;
-    if (SIZE_MAX - w->len <= additional) return 0;
-    needed = w->len + additional + 1U;
-    if (needed <= w->cap) return 1;
-    next = w->cap == 0U ? 1024U : w->cap;
-    while (next < needed) {
-        if (next > SIZE_MAX / 2U) { next = needed; break; }
-        next *= 2U;
-    }
-#ifdef YSTACK_SUPERVISOR_TEST
-    if (ys_test_report_cap_limit != 0U && next > ys_test_report_cap_limit) return 0;
-#endif
-    grown = realloc(w->buf, next);
-    if (grown == NULL) return 0;
-    w->buf = grown;
-    w->cap = next;
-    return 1;
-}
-
-static int json_appendf(struct json_writer *w, const char *format, ...)
-{
-    va_list ap, copy;
-    int required, written;
-    va_start(ap, format);
-#ifdef YSTACK_SUPERVISOR_TEST
-    if (ys_test_format_failure) { va_end(ap); return 0; }
-#endif
-    va_copy(copy, ap);
-    required = vsnprintf(NULL, 0, format, copy);
-    va_end(copy);
-    if (required < 0 || !json_reserve(w, (size_t)required)) { va_end(ap); return 0; }
-    written = vsnprintf(w->buf + w->len, w->cap - w->len, format, ap);
-    va_end(ap);
-    if (written != required || (size_t)written >= w->cap - w->len) return 0;
-    w->len += (size_t)written;
-    return 1;
-}
-
-static int append_row(struct json_writer *w, const char *name, const struct guest_row *r)
-{
-    if (r->observation != NULL && strcmp(r->observation, "unavailable") == 0)
-        return json_appendf(w,
-                            "\"%s\":{\"enforcement\":\"%s\",\"observation\":\"unavailable\","
-                            "\"observed\":null,\"reached\":false,\"resolution\":%llu}",
-                            name, r->enforcement, (unsigned long long)r->resolution);
-    return json_appendf(w,
-                        "\"%s\":{\"enforcement\":\"%s\",\"observation\":\"%s\","
-                        "\"observed\":%llu,\"reached\":%s,\"resolution\":%llu}",
-                        name, r->enforcement, r->observation,
-                        (unsigned long long)r->observed, r->reached ? "true" : "false",
-                        (unsigned long long)r->resolution);
-}
-
-/* Builds the canonical report.json bytes into a malloc'd buffer (caller
- * frees). Missing evidence metadata, invalid names and any formatting or
- * allocation failure abort the report rather than emitting partial JSON. */
 static char *build_report_json(const char plan_sha256_hex[65],
-                                const struct report_state *s, size_t *len_out)
+                                const struct report_state *state, size_t *length)
 {
-    struct json_writer w = { NULL, 0U, 0U };
+    uint64_t *sizes = NULL;
+    char *result = NULL;
     size_t i;
-    if (s->evidence_count > 10000U) goto fail;
-    if (!json_appendf(&w, "{\"body\":{\"evidence_files\":[")) goto fail;
-    for (i = 0; i < s->evidence_count; i++) {
-        char hex[513];
-        size_t namelen = strlen(s->evidence_names[i]);
-        off_t file_size;
-        char path[300];
-        int path_len;
-        if (namelen > 255U) goto fail;
-        ys_hex_encode((const unsigned char *)s->evidence_names[i], namelen, hex);
-        hex[namelen * 2U] = '\0';
-        path_len = snprintf(path, sizeof path, "%s/%s", EVIDENCE_SUBDIR, s->evidence_names[i]);
-        if (path_len < 0 || (size_t)path_len >= sizeof path) goto fail;
-        if (!evidence_file_size(path, &file_size)) goto fail;
-        if (!json_appendf(&w, "%s{\"index\":%zu,\"name_hex\":\"%s\",\"size_bytes\":%lld}",
-                          (i == 0U) ? "" : ",", i, hex, (long long)file_size))
-            goto fail;
+    if (state->evidence_count > 10000U) return NULL;
+    if (state->evidence_count != 0U) {
+        sizes = calloc(state->evidence_count, sizeof *sizes);
+        if (sizes == NULL) return NULL;
     }
-    if (!json_appendf(&w, "],")) goto fail;
-    if (s->exit_signaled)
-        { if (!json_appendf(&w, "\"exit_code\":null,\"exit_state\":\"signaled\",")) goto fail; }
-    else
-        { if (!json_appendf(&w, "\"exit_code\":%d,\"exit_state\":\"exited\",", s->exit_code)) goto fail; }
-    if (!json_appendf(&w, "\"limits\":{") ||
-        !append_row(&w, "cpu_time_ms", &s->cpu) || !json_appendf(&w, ",") ||
-        !append_row(&w, "memory_bytes", &s->memory) || !json_appendf(&w, ",") ||
-        !append_row(&w, "output_bytes", &s->output) || !json_appendf(&w, ",") ||
-        !append_row(&w, "process_count", &s->tasks) || !json_appendf(&w, ",") ||
-        !append_row(&w, "scratch_bytes", &s->scratch) ||
-        !json_appendf(&w,
-                      "},\"plan_sha256\":\"%.64s\",\"stderr_bytes\":%llu,\"stdout_bytes\":%llu,"
-                      "\"tree_deadline_fired\":%s,\"tree_terminated\":%s,\"verifier_started\":%s},"
-                      "\"id\":\"sandbox.guest-report.v1\",\"kind\":\"sandbox_guest_report\","
-                      "\"schema_version\":1}\n",
-                      plan_sha256_hex, (unsigned long long)s->stderr_bytes,
-                      (unsigned long long)s->stdout_bytes,
-                      s->tree_deadline_fired ? "true" : "false",
-                      s->tree_terminated ? "true" : "false",
-                      s->verifier_started ? "true" : "false"))
-        goto fail;
-    *len_out = w.len;
-    return w.buf;
-fail:
-    free(w.buf);
-    return NULL;
+    for (i = 0; i < state->evidence_count; i++) {
+        char path[300];
+        off_t size;
+        int count;
+        if (strlen(state->evidence_names[i]) > 255U) goto done;
+        count = snprintf(path, sizeof path, "%s/%s", EVIDENCE_SUBDIR, state->evidence_names[i]);
+        if (count < 0 || (size_t)count >= sizeof path || !evidence_file_size(path, &size)) goto done;
+        sizes[i] = (uint64_t)size;
+    }
+    result = ys_build_report_json(plan_sha256_hex, state, sizes, length);
+done:
+    free(sizes);
+    return result;
 }
 
 /* --- fanotify first-open rule (R7.1's output_bytes row, R8.1) -------------
@@ -1164,7 +950,6 @@ fail:
  * only the verifier's own opens under /sandbox/evidence are ever
  * evaluated. Tracks already-opened inodes in a fixed-size table sized to
  * the plan's own output_inodes bound. */
-struct seen_inode { dev_t dev; ino_t ino; };
 struct fanotify_state {
     int fd;
     struct seen_inode seen[256];
@@ -1197,15 +982,12 @@ static int fanotify_open_mark(struct fanotify_state *fs)
 #endif
 }
 
+#ifdef YSTACK_SUPERVISOR_TEST
 static int inode_history_record(struct fanotify_state *fs, dev_t dev, ino_t ino)
 {
-    size_t i;
-    for (i = 0; i < fs->seen_count; i++)
-        if (fs->seen[i].dev == dev && fs->seen[i].ino == ino) return 0;
-    if (fs->seen_count >= sizeof fs->seen / sizeof fs->seen[0]) return 0;
-    fs->seen[fs->seen_count++] = (struct seen_inode){ dev, ino };
-    return 1;
+    return ys_inode_history_record(fs->seen, &fs->seen_count, dev, ino);
 }
+#endif
 
 /* Reads and answers every pending permission event; called whenever
  * poll() reports the fanotify fd readable. Approves the first open of an
@@ -1216,41 +998,41 @@ static int fanotify_service(struct fanotify_state *fs)
 {
     char buf[4096];
     ssize_t len;
-    struct fanotify_event_metadata *m;
+    size_t offset = 0, next;
+    int event_fd;
     len = read(fs->fd, buf, sizeof buf);
     if (len < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) return 1;
     if (len <= 0) return 0;
-    for (m = (struct fanotify_event_metadata *)buf; FAN_EVENT_OK(m, len); m = FAN_EVENT_NEXT(m, len)) {
+    while (ys_fan_next((const unsigned char *)buf, (size_t)len, offset, &event_fd, &next)) {
         struct fanotify_response resp;
         struct stat st;
         int allow = 0;
-        if (m->fd >= 0) {
-            if (fstat(m->fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_size == 0 &&
-                inode_history_record(fs, st.st_dev, st.st_ino))
-                allow = 1;
-            resp.fd = m->fd;
+        if (event_fd >= 0) {
+            int stat_result = fstat(event_fd, &st);
+            allow = ys_fan_open_values(fs->seen, &fs->seen_count, stat_result,
+                                        stat_result == 0 ? st.st_mode : 0,
+                                        stat_result == 0 ? st.st_size : 0,
+                                        stat_result == 0 ? st.st_dev : 0,
+                                        stat_result == 0 ? st.st_ino : 0);
+            resp.fd = event_fd;
             resp.response = allow ? FAN_ALLOW : FAN_DENY;
             {
                 const unsigned char *bytes = (const unsigned char *)&resp;
                 size_t written = 0;
                 while (written < sizeof resp) {
                     ssize_t n = write(fs->fd, bytes + written, sizeof resp - written);
-                    if (n < 0 && errno == EINTR) { (void)close(m->fd); return 0; }
-                    if (n <= 0) { (void)close(m->fd); return 0; }
+                    if (n < 0 && errno == EINTR) { (void)close(event_fd); return 0; }
+                    if (n <= 0) { (void)close(event_fd); return 0; }
                     written += (size_t)n;
                 }
             }
-            (void)close(m->fd);
+            (void)close(event_fd);
         } else return 0;
+        offset = next;
     }
     return 1;
 }
 
-enum controller_branch { CONTROLLER_FAILURE, CONTROLLER_NORMAL };
-struct controller_result {
-    int child_status, child_reaped, tree_terminated, deadline_fired;
-    int containment_failure, kill_failed, verifier_started;
-};
 struct controller_ops {
     int (*now)(struct timespec *, void *);
     int (*poll_fds)(struct pollfd *, nfds_t, int, void *);
@@ -1262,127 +1044,68 @@ struct controller_ops {
     pid_t (*launch)(void *);
 };
 
-static int deadline_after_ms(const struct timespec *start, uint64_t milliseconds,
-                             struct timespec *deadline)
-{
-    uint64_t seconds = milliseconds / 1000U;
-    uint64_t nanoseconds = (milliseconds % 1000U) * 1000000U + (uint64_t)start->tv_nsec;
-    uint64_t carry = nanoseconds / 1000000000U;
-    if (start->tv_sec < 0 || start->tv_nsec < 0 || start->tv_nsec >= 1000000000L ||
-        seconds > (uint64_t)INT64_MAX - (uint64_t)start->tv_sec ||
-        carry > (uint64_t)INT64_MAX - (uint64_t)start->tv_sec - seconds)
-        return 0;
-    deadline->tv_sec = start->tv_sec + (time_t)seconds + (time_t)carry;
-    deadline->tv_nsec = (long)(nanoseconds % 1000000000U);
-    return deadline->tv_sec >= start->tv_sec;
-}
-
-static int deadline_remaining(const struct timespec *deadline,
-                              const struct controller_ops *ops, void *opaque,
-                              int *milliseconds)
-{
-    struct timespec now;
-    int64_t seconds, nanoseconds, value;
-    if (!ops->now(&now, opaque)) return -1;
-    if (now.tv_sec > deadline->tv_sec ||
-        (now.tv_sec == deadline->tv_sec && now.tv_nsec >= deadline->tv_nsec))
-        return 0;
-    seconds = (int64_t)deadline->tv_sec - (int64_t)now.tv_sec;
-    nanoseconds = (int64_t)deadline->tv_nsec - (int64_t)now.tv_nsec;
-    if (nanoseconds < 0) { seconds--; nanoseconds += 1000000000; }
-    if (seconds > INT_MAX / 1000) value = INT_MAX;
-    else {
-        value = seconds * 1000 + (nanoseconds + 999999) / 1000000;
-        if (value > INT_MAX) value = INT_MAX;
-    }
-    *milliseconds = (int)value;
-    return 1;
-}
-
 static enum controller_branch control_child(pid_t child, struct fanotify_state *fan,
                                               int outcome_fd,
                                               const struct timespec *deadline,
                                               const struct controller_ops *ops, void *opaque,
                                               struct controller_result *result)
 {
-    struct exec_channel_state outcome;
-    int failed = 0;
-    memset(result, 0, sizeof *result);
-    memset(&outcome, 0, sizeof outcome);
-    for (;;) {
-        struct pollfd fds[2];
-        nfds_t count = 0, p;
-        int remaining, polled, status;
-        pid_t waited;
-        int time_state = deadline_remaining(deadline, ops, opaque, &remaining);
-        if (time_state <= 0) { result->deadline_fired = time_state == 0; failed = 1; break; }
-        if (fan->fd >= 0) fds[count++] = (struct pollfd){ fan->fd, POLLIN, 0 };
-        if (!outcome.eof) fds[count++] = (struct pollfd){ outcome_fd, POLLIN | POLLHUP, 0 };
-        polled = ops->poll_fds(fds, count, remaining > 200 ? 200 : remaining, opaque);
-        time_state = deadline_remaining(deadline, ops, opaque, &remaining);
-        if (time_state <= 0) { result->deadline_fired = time_state == 0; failed = 1; break; }
-        if (polled < 0) { if (errno == EINTR) continue; failed = 1; break; }
-        for (p = 0; p < count; p++) {
-            if ((fds[p].fd == fan->fd && (fds[p].revents & (POLLERR | POLLHUP | POLLNVAL))) ||
-                (fds[p].fd == outcome_fd && (fds[p].revents & (POLLERR | POLLNVAL)))) {
-                failed = 1; break;
-            }
-            if (fds[p].fd == fan->fd && (fds[p].revents & POLLIN) &&
-                !ops->service_fan(fan, opaque)) { failed = 1; break; }
-            if (fds[p].fd == outcome_fd && (fds[p].revents & (POLLIN | POLLHUP)) &&
-                !drain_exec_channel(outcome_fd, &outcome)) { failed = 1; break; }
-            time_state = deadline_remaining(deadline, ops, opaque, &remaining);
-            if (time_state <= 0) {
-                result->deadline_fired = time_state == 0; failed = 1; break;
-            }
-        }
-        if (failed) break;
-        waited = ops->wait_child(child, &status, opaque);
-        time_state = deadline_remaining(deadline, ops, opaque, &remaining);
-        if (time_state <= 0) { result->deadline_fired = time_state == 0; failed = 1; break; }
-        if (waited < 0) { if (errno == EINTR) continue; failed = 1; break; }
-        if (waited == 0) continue;
-        if (waited != child) { failed = 1; break; }
-        result->child_reaped = 1;
-        result->child_status = status;
-        for (;;) {
-            int populated;
-            time_state = deadline_remaining(deadline, ops, opaque, &remaining);
-            if (time_state <= 0) {
-                result->deadline_fired = time_state == 0; failed = 1; break;
-            }
-            populated = ops->population(opaque);
-            if (populated < 0) { failed = 1; break; }
-            if (populated == 0) { result->tree_terminated = 1; break; }
+    struct ys_controller_state state;
+    enum ys_controller_action action = YS_ACTION_NOW;
+    ys_controller_init(&state, child, fan->fd >= 0, deadline);
+    while (action != YS_ACTION_DONE) {
+        struct ys_controller_event event;
+        memset(&event, 0, sizeof event);
+        event.action = action;
+        switch (action) {
+        case YS_ACTION_TICK_NOW:
             ops->tick(opaque);
+            event.action = YS_ACTION_NOW;
+            event.value = ops->now(&event.now, opaque);
+            break;
+        case YS_ACTION_NOW:
+            event.value = ops->now(&event.now, opaque);
+            break;
+        case YS_ACTION_POLL:
+            {
+                struct pollfd fds[2];
+                nfds_t count = 0, i;
+                if (fan->fd >= 0) fds[count++] = (struct pollfd){ fan->fd, POLLIN, 0 };
+                if (!state.outcome.eof) fds[count++] = (struct pollfd){ outcome_fd, POLLIN | POLLHUP, 0 };
+                event.value = ops->poll_fds(fds, count, state.remaining > 200 ? 200 : state.remaining, opaque);
+                for (i = 0; i < count; i++) event.revents[i] = fds[i].revents;
+            }
+            break;
+        case YS_ACTION_WAIT:
+            event.waited = ops->wait_child(child, &event.wait_status, opaque);
+            break;
+        case YS_ACTION_POPULATION:
+            event.value = ops->population(opaque);
+            break;
+        case YS_ACTION_FAN_READ:
+            event.value = ops->service_fan(fan, opaque);
+            break;
+        case YS_ACTION_EXEC_READ:
+#ifdef YSTACK_SUPERVISOR_TEST
+            if (ys_test_channel_eintr > 0) {
+                ys_test_channel_eintr--; errno = EINTR; event.read_count = -1;
+            } else
+#endif
+            event.read_count = read(outcome_fd, event.bytes, sizeof state.outcome.bytes - state.outcome.length);
+            break;
+        case YS_ACTION_KILL:
+            event.value = ops->kill_tree(opaque);
+            break;
+        default:
+            state.branch = CONTROLLER_FAILURE;
+            *result = state.result;
+            return CONTROLLER_FAILURE;
         }
-        if (failed) break;
-        if (!drain_exec_channel(outcome_fd, &outcome)) { failed = 1; break; }
-        time_state = deadline_remaining(deadline, ops, opaque, &remaining);
-        if (time_state <= 0) { result->deadline_fired = time_state == 0; failed = 1; break; }
-        result->verifier_started = execution_was_verified(&outcome, status, 1, 1, 0, 0);
-        return result->verifier_started ? CONTROLLER_NORMAL : CONTROLLER_FAILURE;
+        event.error_number = errno;
+        action = ys_controller_step(&state, &event);
     }
-    result->containment_failure = 1;
-    if (!ops->kill_tree(opaque)) result->kill_failed = 1;
-    for (;;) {
-        int remaining, time_state = deadline_remaining(deadline, ops, opaque, &remaining);
-        int status, populated;
-        pid_t waited;
-        if (time_state <= 0) { if (time_state == 0) result->deadline_fired = 1; break; }
-        if (!result->child_reaped) {
-            waited = ops->wait_child(child, &status, opaque);
-            if (waited == child) {
-                result->child_reaped = 1; result->child_status = status;
-            } else if (waited < 0 && errno != EINTR) break;
-        }
-        populated = ops->population(opaque);
-        if (populated < 0) break;
-        if (populated == 0) result->tree_terminated = 1;
-        if (result->child_reaped && result->tree_terminated) break;
-        ops->tick(opaque);
-    }
-    return CONTROLLER_FAILURE;
+    *result = state.result;
+    return state.branch;
 }
 
 static int enter_normal_finish(enum controller_branch branch, struct fanotify_state *fan)
@@ -1399,10 +1122,10 @@ static int launch_and_control(uint64_t milliseconds, struct fanotify_state *fan,
     struct timespec start, deadline;
     pid_t child;
     memset(result, 0, sizeof *result);
-    if (!ops->now(&start, opaque) || !deadline_after_ms(&start, milliseconds, &deadline))
+    if (!ops->now(&start, opaque) || !ys_deadline_after_ms(&start, milliseconds, &deadline))
         return 0;
     child = ops->launch(opaque);
-    if (child <= 0) return 0;
+    if (!ys_launch_pid_valid(child)) return 0;
     *child_out = child;
     return enter_normal_finish(control_child(child, fan, outcome_fd, &deadline,
                                               ops, opaque, result), fan);
@@ -1535,7 +1258,7 @@ int main(void)
     /* candidate tmpfs: materialized, then finalized read-only (R5.5). */
     {
         uint64_t total, inodes;
-        if (!candidate_geometry(&plan, page_size, &total, &inodes)) goto export_partial;
+        if (!ys_candidate_geometry(&plan, page_size, &total, &inodes)) goto export_partial;
         if (!mkdir_p(CANDIDATE_DIR, 0700) ||
             !mount_tmpfs(CANDIDATE_DIR, total, inodes))
             goto export_partial;
@@ -1550,8 +1273,8 @@ int main(void)
     /* tools tmpfs: the verifier only, root-owned, read-only+executable. */
     {
         uint64_t verifier_allocation, tools_size;
-        if (!rounded_allocation((uint64_t)in.verifier_len, page_size, &verifier_allocation) ||
-            !checked_add_u64(verifier_allocation, page_size, &tools_size) ||
+        if (!ys_rounded_allocation((uint64_t)in.verifier_len, page_size, &verifier_allocation) ||
+            !ys_checked_add_u64(verifier_allocation, page_size, &tools_size) ||
             !mkdir_p(TOOLS_DIR, 0700) || !mount_tmpfs(TOOLS_DIR, tools_size, 2U))
             goto export_partial;
     }
@@ -1584,16 +1307,7 @@ int main(void)
         goto export_partial;
 
     if (!setup_cgroup(&plan.limits, &cg)) goto export_partial;
-    rs.cpu.enforcement = "none"; /* R7.2: always, unconditionally */
-    rs.cpu.resolution = 1; /* cpu.stat usage_usec rounded up to ms */
-    rs.memory.enforcement = cg.memory_hard ? "hard" : "unknown";
-    rs.memory.resolution = (uint64_t)sysconf(_SC_PAGESIZE);
-    rs.output.enforcement = cg.output_hard ? "hard" : "unknown";
-    rs.output.resolution = 1; /* summed stream/evidence file sizes, byte-exact */
-    rs.tasks.enforcement = cg.pids_hard ? "hard" : "unknown";
-    rs.tasks.resolution = 1; /* pids.peak */
-    rs.scratch.enforcement = cg.scratch_hard ? "hard" : "unknown";
-    rs.scratch.resolution = 4096; /* statvfs f_frsize is confirmed below; a safe default */
+    ys_report_setup_values(&rs, &cg.values, (uint64_t)sysconf(_SC_PAGESIZE));
 
     /* R6.1's tmpfs root, prepared entirely before clone3 so the child does
      * nothing but pivot into it. Everything lives under /sandbox (R6.1,
@@ -1644,80 +1358,48 @@ int main(void)
      * "complete" requires it); otherwise every row this loop has not
      * already marked "none" stays "unavailable". */
     {
-        const char *obs = rs.tree_terminated ? "complete" : "unavailable";
-        uint64_t v;
-        rs.cpu.observation = obs;
-        if (rs.tree_terminated) {
-            char buf[256];
-            char *p = (read_file(TREE_CGROUP "/cpu.stat", buf, sizeof buf) >= 0)
-                          ? strstr(buf, "usage_usec ")
-                          : NULL;
-            if (p != NULL) {
-                uint64_t usec = strtoull(p + 11, NULL, 10);
-                rs.cpu.observed = (usec + 999ULL) / 1000ULL; /* rounded up to ms */
-                rs.cpu.reached = rs.cpu.observed >= CPU_TIME_BOUND_MS;
-            } else {
-                rs.cpu.observation = "unavailable";
-            }
-        } else {
-            rs.cpu.observation = "unavailable";
-        }
+        uint64_t v = 0;
+        char cpu[256], events[256];
+        int ok = rs.tree_terminated && read_file(TREE_CGROUP "/cpu.stat", cpu, sizeof cpu) >= 0;
+        ys_cpu_values(&rs.cpu, rs.tree_terminated, ok ? cpu : NULL, CPU_TIME_BOUND_MS);
 
-        rs.memory.observation = obs;
-        if (rs.tree_terminated && read_u64(TREE_CGROUP "/memory.peak", &v)) {
-            char events[256];
-            rs.memory.observed = v;
-            rs.memory.reached = v >= GUEST_MEMORY_BYTES;
-            if (read_file(TREE_CGROUP "/memory.events", events, sizeof events) >= 0) {
-                char *p = strstr(events, "oom_kill ");
-                if (p != NULL && strtoull(p + 9, NULL, 10) > 0) rs.memory.reached = 1;
-            }
-        } else {
-            rs.memory.observation = "unavailable";
-        }
+        ok = rs.tree_terminated && read_u64(TREE_CGROUP "/memory.peak", &v);
+        events[0] = '\0';
+        if (ok && read_file(TREE_CGROUP "/memory.events", events, sizeof events) < 0)
+            events[0] = '\0';
+        ys_memory_values(&rs.memory, rs.tree_terminated, ok, v, events, GUEST_MEMORY_BYTES);
 
-        rs.tasks.observation = obs;
-        if (rs.tree_terminated && read_u64(TREE_CGROUP "/pids.peak", &v)) {
-            char events[256];
-            rs.tasks.observed = v;
-            rs.tasks.reached = v >= plan.limits.pids_max;
-            if (read_file(TREE_CGROUP "/pids.events", events, sizeof events) >= 0) {
-                char *p = strstr(events, "max ");
-                if (p != NULL && strtoull(p + 4, NULL, 10) > 0) rs.tasks.reached = 1;
-            }
-        } else {
-            rs.tasks.observation = "unavailable";
-        }
+        ok = rs.tree_terminated && read_u64(TREE_CGROUP "/pids.peak", &v);
+        events[0] = '\0';
+        if (ok && read_file(TREE_CGROUP "/pids.events", events, sizeof events) < 0)
+            events[0] = '\0';
+        ys_tasks_values(&rs.tasks, rs.tree_terminated, ok, v, events, plan.limits.pids_max);
 
         if (rs.tree_terminated) {
             struct stat st;
             struct statvfs sv;
             uint64_t total_bytes = 0;
+            int inventory_ok, output_fs_ok, scratch_fs_ok;
             if (stat(OUTPUT_DIR "/stdout", &st) == 0) rs.stdout_bytes = (uint64_t)st.st_size;
             if (stat(OUTPUT_DIR "/stderr", &st) == 0) rs.stderr_bytes = (uint64_t)st.st_size;
             total_bytes = rs.stdout_bytes + rs.stderr_bytes;
-            if (ys_evidence_inventory(open(EVIDENCE_SUBDIR, O_RDONLY | O_DIRECTORY | O_CLOEXEC),
-                                       &rs.evidence_names, &rs.evidence_count) == YS_PLAN_OK) {
+            inventory_ok = ys_evidence_inventory(open(EVIDENCE_SUBDIR, O_RDONLY | O_DIRECTORY | O_CLOEXEC),
+                                                 &rs.evidence_names, &rs.evidence_count) == YS_PLAN_OK;
+            if (inventory_ok) {
                 for (i = 0; i < rs.evidence_count; i++) {
                     char p[300];
                     snprintf(p, sizeof p, "%s/%s", EVIDENCE_SUBDIR, rs.evidence_names[i]);
                     if (stat(p, &st) == 0) total_bytes += (uint64_t)st.st_size;
                 }
-                rs.output.observation = "complete";
-            } else {
-                rs.output.observation = "partial"; /* a hard-link alias or read failure */
             }
-            rs.output.observed = total_bytes;
-            if (statvfs(OUTPUT_DIR, &sv) == 0)
-                rs.output.reached = (sv.f_bfree == 0) || total_bytes >= plan.limits.output_tmpfs_bytes;
-            if (statvfs(SCRATCH_DIR, &sv) == 0) {
-                rs.scratch.observed = ((uint64_t)sv.f_blocks - sv.f_bfree) * sv.f_frsize;
-                rs.scratch.resolution = (uint64_t)sv.f_frsize;
-                rs.scratch.observation = "complete";
-                rs.scratch.reached = (sv.f_bfree == 0) || rs.scratch.observed >= plan.limits.scratch_bytes;
-            } else {
-                rs.scratch.observation = "unavailable";
-            }
+            output_fs_ok = statvfs(OUTPUT_DIR, &sv) == 0;
+            ys_output_values(&rs.output, inventory_ok, total_bytes, output_fs_ok,
+                              output_fs_ok ? (uint64_t)sv.f_bfree : 0U, plan.limits.output_tmpfs_bytes);
+            scratch_fs_ok = statvfs(SCRATCH_DIR, &sv) == 0;
+            ys_scratch_values(&rs.scratch, scratch_fs_ok,
+                               scratch_fs_ok ? (uint64_t)sv.f_blocks : 0U,
+                               scratch_fs_ok ? (uint64_t)sv.f_bfree : 0U,
+                               scratch_fs_ok ? (uint64_t)sv.f_frsize : 0U, plan.limits.scratch_bytes);
         } else {
             rs.output.observation = "unavailable";
             rs.scratch.observation = "unavailable";
@@ -2012,18 +1694,18 @@ static int test_fanotify_service(const char *directory)
 static int test_checked_arithmetic(void)
 {
     uint64_t result;
-    if (!checked_add_u64(0U, 0U, &result) || result != 0U ||
-        !checked_add_u64(UINT64_MAX - 1U, 1U, &result) || result != UINT64_MAX ||
-        checked_add_u64(UINT64_MAX, 1U, &result))
+    if (!ys_checked_add_u64(0U, 0U, &result) || result != 0U ||
+        !ys_checked_add_u64(UINT64_MAX - 1U, 1U, &result) || result != UINT64_MAX ||
+        ys_checked_add_u64(UINT64_MAX, 1U, &result))
         return 0;
-    if (!checked_mul_u64(0U, UINT64_MAX, &result) || result != 0U ||
-        !checked_mul_u64(UINT64_MAX, 1U, &result) || result != UINT64_MAX ||
-        checked_mul_u64(UINT64_MAX, 2U, &result))
+    if (!ys_checked_mul_u64(0U, UINT64_MAX, &result) || result != 0U ||
+        !ys_checked_mul_u64(UINT64_MAX, 1U, &result) || result != UINT64_MAX ||
+        ys_checked_mul_u64(UINT64_MAX, 2U, &result))
         return 0;
-    if (!rounded_allocation(1U, 65536U, &result) || result != 65536U ||
-        !rounded_allocation(65536U, 65536U, &result) || result != 65536U ||
-        !rounded_allocation(65537U, 65536U, &result) || result != 131072U ||
-        rounded_allocation(UINT64_MAX, 65536U, &result))
+    if (!ys_rounded_allocation(1U, 65536U, &result) || result != 65536U ||
+        !ys_rounded_allocation(65536U, 65536U, &result) || result != 65536U ||
+        !ys_rounded_allocation(65537U, 65536U, &result) || result != 131072U ||
+        ys_rounded_allocation(UINT64_MAX, 65536U, &result))
         return 0;
     return 1;
 }
@@ -2039,25 +1721,25 @@ static int test_geometry(void)
     plan.entries = entries;
     plan.entry_count = 10U;
     for (i = 0; i < 10U; i++) { entries[i].is_file = 1; entries[i].size_bytes = 1U; }
-    if (!candidate_geometry(&plan, 16384U, &size, &inodes) ||
+    if (!ys_candidate_geometry(&plan, 16384U, &size, &inodes) ||
         size != 11U * 16384U || inodes != 11U)
         return 0;
     plan.entry_count = 0U;
-    if (!candidate_geometry(&plan, 8192U, &size, &inodes) || size != 8192U || inodes != 1U)
+    if (!ys_candidate_geometry(&plan, 8192U, &size, &inodes) || size != 8192U || inodes != 1U)
         return 0;
     plan.entry_count = 1U;
     entries[0].size_bytes = 8192U;
-    if (!candidate_geometry(&plan, 8192U, &size, &inodes) || size != 16384U || inodes != 2U)
+    if (!ys_candidate_geometry(&plan, 8192U, &size, &inodes) || size != 16384U || inodes != 2U)
         return 0;
     entries[0].size_bytes = UINT64_MAX;
-    if (candidate_geometry(&plan, 8192U, &size, &inodes)) return 0;
+    if (ys_candidate_geometry(&plan, 8192U, &size, &inodes)) return 0;
     entries[0].size_bytes = 8193U;
     entries[1].is_file = 0;
     plan.entry_count = 2U;
-    if (!candidate_geometry(&plan, 8192U, &size, &inodes) ||
+    if (!ys_candidate_geometry(&plan, 8192U, &size, &inodes) ||
         size != 4U * 8192U || inodes != 3U)
         return 0;
-    if (candidate_geometry(&plan, 0U, &size, &inodes)) return 0;
+    if (ys_candidate_geometry(&plan, 0U, &size, &inodes)) return 0;
     if (!candidate_count_matches(&plan, 1U) || candidate_count_matches(&plan, 0U) ||
         candidate_count_matches(&plan, 2U))
         return 0;
@@ -2646,7 +2328,7 @@ static int fake_controller_case(int initial_ms, int poll_advance, int fan_advanc
 static int test_controller_failures(void)
 {
     struct timespec near_limit = { (time_t)INT64_MAX, 999999999L }, deadline;
-    return !deadline_after_ms(&near_limit, 1U, &deadline) &&
+    return !ys_deadline_after_ms(&near_limit, 1U, &deadline) &&
            fake_controller_case(-1, 0, 0, 0, 1, 0, 1, 0, 0) &&
            fake_controller_case(5, 0, 0, 0, 1, 0, 1, 1, 0) &&
            fake_controller_case(0, 5, 0, 0, 1, 0, 1, 1, 0) &&

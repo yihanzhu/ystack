@@ -21,9 +21,11 @@
  */
 
 #include "../../sandbox/v1/guest/common.h"
+#include "../../sandbox/v1/guest/observation-values.h"
 
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -456,6 +458,65 @@ static int cmd_verify_report(int argc, char **argv)
     return 0;
 }
 
+static int cmd_observation_values(void)
+{
+    struct guest_row row = {0, "unavailable", "none", 0, 1};
+    uint64_t rounded;
+    int variant;
+    if (!ys_rounded_allocation(4097U, 4096U, &rounded) || rounded != 8192U ||
+        ys_rounded_allocation(UINT64_MAX, 4096U, &rounded)) return 1;
+    ys_cpu_values(&row, 1, "usage_usec 1001\n", 2U);
+    if (row.observed != 2U || !row.reached || strcmp(row.observation, "complete") != 0) return 1;
+    ys_cpu_values(&row, 0, "usage_usec 1001\n", 2U);
+    if (strcmp(row.observation, "unavailable") != 0) return 1;
+    ys_memory_values(&row, 1, 1, 1U, "oom_kill 1\n", 2U);
+    if (row.observed != 1U || !row.reached) return 1;
+    ys_tasks_values(&row, 1, 1, 1U, "max 0\n", 2U);
+    if (row.reached) return 1;
+    ys_output_values(&row, 0, 2U, 1, 1U, 2U);
+    if (!row.reached || strcmp(row.observation, "partial") != 0) return 1;
+    ys_scratch_values(&row, 1, 3U, 1U, 4096U, 8192U);
+    if (row.observed != 8192U || !row.reached || row.resolution != 4096U) return 1;
+    if (ys_launch_pid_valid(0) || ys_launch_pid_valid(-1) || !ys_launch_pid_valid(17)) return 1;
+    for (variant = 0; variant < 4; variant++) {
+        struct ys_controller_state state;
+        struct timespec deadline = {1, 0};
+        enum ys_controller_action action = YS_ACTION_NOW;
+        size_t calls = 0;
+        int waits = 0, reads = 0;
+        ys_controller_init(&state, 17, 0, &deadline);
+        while (action != YS_ACTION_DONE && calls++ < 100U) {
+            struct ys_controller_event event;
+            memset(&event, 0, sizeof event);
+            event.action = action == YS_ACTION_TICK_NOW ? YS_ACTION_NOW : action;
+            event.value = 1;
+            if (event.action == YS_ACTION_NOW) {
+                event.now.tv_nsec = (long)calls;
+                if (variant == 2 && calls > 20U) event.now.tv_sec = 1;
+                if (variant == 3 && waits == 1) event.error_number = EINTR;
+            }
+            else if (action == YS_ACTION_POLL) event.revents[0] = POLLIN | POLLHUP;
+            else if (action == YS_ACTION_WAIT) {
+                event.waited = variant == 1 && waits++ == 0 ? 0 : variant == 2 ? 18 : 17;
+                if (variant == 3 && waits++ == 0) { event.waited = -1; event.error_number = EINTR; }
+            } else if (action == YS_ACTION_POPULATION) event.value = 0;
+            else if (action == YS_ACTION_EXEC_READ) {
+                if (reads++ == 0) {
+                    struct ys_exec_outcome ready = { YS_EXEC_READY, YS_EXEC_PHASE_EXECVE, 0, 0 };
+                    event.read_count = (ssize_t)sizeof ready;
+                    memcpy(event.bytes, &ready, sizeof ready);
+                }
+            }
+            action = ys_controller_step(&state, &event);
+        }
+        if (action != YS_ACTION_DONE || state.result.verifier_started != (variant != 2) ||
+            state.result.child_reaped != (variant != 2) ||
+            (state.branch == CONTROLLER_NORMAL) != (variant != 2)) return 1;
+    }
+    puts("guest value owner: counters, geometry, launch, wait zero/matching/wrong/EINTR: ok");
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 2) usage();
@@ -468,6 +529,7 @@ int main(int argc, char **argv)
     if (strcmp(argv[1], "inventory") == 0) return cmd_inventory(argc, argv);
     if (strcmp(argv[1], "exec-report") == 0) return cmd_exec_report(argc, argv);
     if (strcmp(argv[1], "verify") == 0) return cmd_verify_report(argc, argv);
+    if (strcmp(argv[1], "observation-values") == 0 && argc == 2) return cmd_observation_values();
     usage();
     return 2;
 }

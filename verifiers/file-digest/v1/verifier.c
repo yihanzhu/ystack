@@ -195,6 +195,7 @@ static void hex_encode(const unsigned char *in, size_t len, char *out)
 
 /* R2. Invocation and environment. */
 
+#ifndef YSTACK_VERIFIER_VALUES_ONLY
 static int argv_ok(int argc, char **argv)
 {
     if (argc != 6) return 0;
@@ -237,6 +238,8 @@ static void refuse_invocation(const char *code)
     (void)dprintf(STDERR_FILENO, "%s\n", code);
     exit(64);
 }
+
+#endif
 
 /* UTF-8 decoding (shortest form only) for R3.3 and R4. */
 
@@ -473,6 +476,162 @@ static size_t build_payload(unsigned char *out, const char *outcome, const char 
     return pos;
 }
 
+struct verifier_values {
+    const char *outcome;
+    const char *reason_id;
+    int have_check;
+    unsigned char check_path[MAX_PATH_BYTES];
+    size_t check_path_len;
+    char expected_hex[65];
+    char instruction_hex_storage[65];
+    const char *instruction_hex;
+    int have_observed;
+    char observed_hex[65];
+    size_t observed_size;
+    struct component comps[MAX_PATH_COMPONENTS];
+    size_t comp_count;
+};
+
+static int instruction_values(const unsigned char *raw, size_t n, int transport_ok,
+                               struct verifier_values *v)
+{
+    memset(v, 0, sizeof *v);
+    v->outcome = "refused";
+    if (!transport_ok) { v->reason_id = "instruction.transport-rejected"; return 0; }
+    if (n == INSTRUCTION_READ_LIMIT) { v->reason_id = "instruction.oversize"; return 0; }
+    {
+        unsigned char digest[32];
+        sha256_bytes(raw, n, digest);
+        hex_encode(digest, sizeof digest, v->instruction_hex_storage);
+        v->instruction_hex = v->instruction_hex_storage;
+    }
+
+    {
+        size_t lf[3];
+        size_t lf_count = 0;
+        size_t i;
+        int malformed = 0;
+        size_t line2_len, line3_len;
+        size_t path_off, path_len, digest_off, digest_len;
+        int has_control = 0;
+
+        for (i = 0; i < n && lf_count < 3U; i++) {
+            if (raw[i] == '\n') lf[lf_count++] = i;
+        }
+        if (lf_count < 3U) {
+            v->outcome = "refused";
+            v->reason_id = "instruction.malformed";
+            return 0;
+        }
+        if (n > lf[2] + 1U) {
+            v->outcome = "refused";
+            v->reason_id = "instruction.trailing";
+            return 0;
+        }
+
+        if (lf[0] != strlen(INSTRUCTION_HEADER) ||
+            memcmp(raw, INSTRUCTION_HEADER, lf[0]) != 0) {
+            malformed = 1;
+        }
+
+        line2_len = lf[1] - lf[0] - 1U;
+        if (!malformed && (line2_len < 5U || memcmp(raw + lf[0] + 1U, "path ", 5U) != 0)) {
+            malformed = 1;
+        }
+
+        line3_len = lf[2] - lf[1] - 1U;
+        if (!malformed && (line3_len < 7U || memcmp(raw + lf[1] + 1U, "sha256 ", 7U) != 0)) {
+            malformed = 1;
+        }
+
+        if (!malformed) {
+            for (i = 0; i < n; i++) {
+                if (raw[i] == '\r' || raw[i] == '\0') {
+                    malformed = 1;
+                    break;
+                }
+            }
+        }
+        if (!malformed && lf[0] > 0U && raw[lf[0] - 1U] == ' ') malformed = 1;
+        if (!malformed && line2_len > 0U && raw[lf[1] - 1U] == ' ') malformed = 1;
+        if (!malformed && line3_len > 0U && raw[lf[2] - 1U] == ' ') malformed = 1;
+
+        path_off = lf[0] + 1U + 5U;
+        path_len = line2_len - 5U;
+        digest_off = lf[1] + 1U + 7U;
+        digest_len = line3_len - 7U;
+
+        if (!malformed) {
+            if (digest_len != 64U) {
+                malformed = 1;
+            } else {
+                for (i = 0; i < 64U; i++) {
+                    unsigned char c = raw[digest_off + i];
+                    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) {
+                        malformed = 1;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!malformed && !utf8_validate(raw + path_off, path_len, &has_control)) {
+            malformed = 1;
+        }
+
+        if (malformed) {
+            v->outcome = "refused";
+            v->reason_id = "instruction.malformed";
+            return 0;
+        }
+
+        {
+
+            if (!path_r4_ok(raw + path_off, path_len, has_control, v->comps,
+                             &v->comp_count)) {
+                v->outcome = "refused";
+                v->reason_id = "instruction.path-rejected";
+                return 0;
+            }
+
+            v->have_check = 1;
+            memcpy(v->check_path, raw + path_off, path_len);
+            v->check_path_len = path_len;
+            memcpy(v->expected_hex, raw + digest_off, 64U);
+            v->expected_hex[64] = '\0';
+
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void file_byte_values(const unsigned char *raw, size_t length,
+                              int *have_observed, char observed_hex[65], size_t *observed_size)
+{
+    unsigned char digest[32];
+    sha256_bytes(raw, length, digest);
+    hex_encode(digest, sizeof digest, observed_hex);
+    *observed_size = length;
+    *have_observed = 1;
+}
+
+static void file_result_values(struct verifier_values *v, const char *read_reason)
+{
+    if (read_reason != NULL) { v->outcome = "refused"; v->reason_id = read_reason; }
+    else if (strcmp(v->observed_hex, v->expected_hex) == 0) {
+        v->outcome = "match"; v->reason_id = "file.match";
+    } else { v->outcome = "mismatch"; v->reason_id = "file.mismatch"; }
+}
+
+static size_t payload_values(unsigned char *out, const struct verifier_values *v)
+{
+    return build_payload(out, v->outcome, v->reason_id, v->have_check, v->check_path,
+                         v->check_path_len, v->expected_hex, v->instruction_hex,
+                         v->have_observed, v->observed_hex, v->observed_size);
+}
+
+#ifndef YSTACK_VERIFIER_VALUES_ONLY
 static void die_output(const char *code)
 {
     (void)dprintf(STDERR_FILENO, "%s\n", code);
@@ -634,13 +793,7 @@ static const char *read_candidate(const unsigned char *path, size_t path_len,
                 break;
             }
 
-            {
-                unsigned char digest[32];
-                sha256_bytes(candidate_buffer, total, digest);
-                hex_encode(digest, sizeof digest, observed_hex);
-                *observed_size = total;
-                *have_observed = 1;
-            }
+            file_byte_values(candidate_buffer, total, have_observed, observed_hex, observed_size);
         }
     }
 
@@ -650,182 +803,79 @@ static const char *read_candidate(const unsigned char *path, size_t path_len,
     return reason;
 }
 
-/* R3. Instruction transport and framing. */
+#endif
 
+#ifndef YSTACK_VERIFIER_VALUES_ONLY
 static unsigned char instruction_buffer[INSTRUCTION_READ_LIMIT];
 
 int main(int argc, char **argv)
 {
     struct stat fd0_stat;
+    struct verifier_values values;
     size_t n = 0;
-    const char *outcome = "refused";
-    const char *reason_id = NULL;
-    int have_check = 0;
-    unsigned char check_path[MAX_PATH_BYTES];
-    size_t check_path_len = 0;
-    char expected_hex[65];
-    char instruction_hex_storage[65];
-    const char *instruction_hex = NULL;
-    int have_observed = 0;
-    char observed_hex[65];
-    size_t observed_size = 0;
-    unsigned char payload_out[PAYLOAD_BUFFER_SIZE];
-    size_t payload_len;
-
+    int transport_ok = 1;
+    unsigned char payload[PAYLOAD_BUFFER_SIZE];
     if (!argv_ok(argc, argv)) refuse_invocation("E_USAGE");
     if (!environment_ok(environ)) refuse_invocation("E_ENVIRONMENT");
-
-    if (fstat(0, &fd0_stat) != 0 || !S_ISREG(fd0_stat.st_mode)) {
-        outcome = "refused";
-        reason_id = "instruction.transport-rejected";
-        goto write_result;
+    if (fstat(0, &fd0_stat) != 0 || !S_ISREG(fd0_stat.st_mode)) transport_ok = 0;
+    while (transport_ok && n < INSTRUCTION_READ_LIMIT) {
+        ssize_t count = read(0, instruction_buffer + n, INSTRUCTION_READ_LIMIT - n);
+        if (count < 0) { if (errno == EINTR) continue; transport_ok = 0; break; }
+        if (count == 0) break;
+        n += (size_t)count;
     }
-
-    for (;;) {
-        ssize_t r;
-        if (n == INSTRUCTION_READ_LIMIT) break;
-        r = read(0, instruction_buffer + n, INSTRUCTION_READ_LIMIT - n);
-        if (r < 0) {
-            if (errno == EINTR) continue;
-            outcome = "refused";
-            reason_id = "instruction.transport-rejected";
-            goto write_result;
-        }
-        if (r == 0) break;
-        n += (size_t)r;
+    if (instruction_values(instruction_buffer, n, transport_ok, &values)) {
+        const char *reason = read_candidate(values.check_path, values.check_path_len,
+                                             values.comps, values.comp_count, &values.have_observed,
+                                             values.observed_hex, &values.observed_size);
+        file_result_values(&values, reason);
     }
-
-    if (n == INSTRUCTION_READ_LIMIT) {
-        outcome = "refused";
-        reason_id = "instruction.oversize";
-        goto write_result;
-    }
-
-    {
-        unsigned char digest[32];
-        sha256_bytes(instruction_buffer, n, digest);
-        hex_encode(digest, sizeof digest, instruction_hex_storage);
-        instruction_hex = instruction_hex_storage;
-    }
-
-    {
-        size_t lf[3];
-        size_t lf_count = 0;
-        size_t i;
-        int malformed = 0;
-        size_t line2_len, line3_len;
-        size_t path_off, path_len, digest_off, digest_len;
-        int has_control = 0;
-
-        for (i = 0; i < n && lf_count < 3U; i++) {
-            if (instruction_buffer[i] == '\n') lf[lf_count++] = i;
-        }
-        if (lf_count < 3U) {
-            outcome = "refused";
-            reason_id = "instruction.malformed";
-            goto write_result;
-        }
-        if (n > lf[2] + 1U) {
-            outcome = "refused";
-            reason_id = "instruction.trailing";
-            goto write_result;
-        }
-
-        if (lf[0] != strlen(INSTRUCTION_HEADER) ||
-            memcmp(instruction_buffer, INSTRUCTION_HEADER, lf[0]) != 0) {
-            malformed = 1;
-        }
-
-        line2_len = lf[1] - lf[0] - 1U;
-        if (!malformed && (line2_len < 5U || memcmp(instruction_buffer + lf[0] + 1U, "path ", 5U) != 0)) {
-            malformed = 1;
-        }
-
-        line3_len = lf[2] - lf[1] - 1U;
-        if (!malformed && (line3_len < 7U || memcmp(instruction_buffer + lf[1] + 1U, "sha256 ", 7U) != 0)) {
-            malformed = 1;
-        }
-
-        if (!malformed) {
-            for (i = 0; i < n; i++) {
-                if (instruction_buffer[i] == '\r' || instruction_buffer[i] == '\0') {
-                    malformed = 1;
-                    break;
-                }
-            }
-        }
-        if (!malformed && lf[0] > 0U && instruction_buffer[lf[0] - 1U] == ' ') malformed = 1;
-        if (!malformed && line2_len > 0U && instruction_buffer[lf[1] - 1U] == ' ') malformed = 1;
-        if (!malformed && line3_len > 0U && instruction_buffer[lf[2] - 1U] == ' ') malformed = 1;
-
-        path_off = lf[0] + 1U + 5U;
-        path_len = line2_len - 5U;
-        digest_off = lf[1] + 1U + 7U;
-        digest_len = line3_len - 7U;
-
-        if (!malformed) {
-            if (digest_len != 64U) {
-                malformed = 1;
-            } else {
-                for (i = 0; i < 64U; i++) {
-                    unsigned char c = instruction_buffer[digest_off + i];
-                    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) {
-                        malformed = 1;
-                        break;
-                    }
-                }
-            }
-        }
-
-        if (!malformed && !utf8_validate(instruction_buffer + path_off, path_len, &has_control)) {
-            malformed = 1;
-        }
-
-        if (malformed) {
-            outcome = "refused";
-            reason_id = "instruction.malformed";
-            goto write_result;
-        }
-
-        {
-            struct component comps[MAX_PATH_COMPONENTS];
-            size_t comp_count = 0;
-
-            if (!path_r4_ok(instruction_buffer + path_off, path_len, has_control, comps,
-                             &comp_count)) {
-                outcome = "refused";
-                reason_id = "instruction.path-rejected";
-                goto write_result;
-            }
-
-            have_check = 1;
-            memcpy(check_path, instruction_buffer + path_off, path_len);
-            check_path_len = path_len;
-            memcpy(expected_hex, instruction_buffer + digest_off, 64U);
-            expected_hex[64] = '\0';
-
-            {
-                const char *walk_reason = read_candidate(check_path, check_path_len, comps,
-                                                          comp_count, &have_observed,
-                                                          observed_hex, &observed_size);
-                if (walk_reason != NULL) {
-                    outcome = "refused";
-                    reason_id = walk_reason;
-                } else if (strcmp(observed_hex, expected_hex) == 0) {
-                    outcome = "match";
-                    reason_id = "file.match";
-                } else {
-                    outcome = "mismatch";
-                    reason_id = "file.mismatch";
-                }
-            }
-        }
-    }
-
-write_result:
-    payload_len = build_payload(payload_out, outcome, reason_id, have_check, check_path,
-                                 check_path_len, expected_hex, instruction_hex, have_observed,
-                                 observed_hex, observed_size);
-    write_payload(payload_out, payload_len);
+    write_payload(payload, payload_values(payload, &values));
     return 0;
 }
+#else
+static int read_exact_value(void *out, size_t length)
+{
+    size_t total = 0;
+    while (total < length) {
+        size_t count = fread((unsigned char *)out + total, 1, length - total, stdin);
+        if (count == 0) return 0;
+        total += count;
+    }
+    return 1;
+}
+
+static int read_length(uint32_t *value)
+{
+    unsigned char bytes[4];
+    if (!read_exact_value(bytes, sizeof bytes)) return 0;
+    *value = ((uint32_t)bytes[0] << 24) | ((uint32_t)bytes[1] << 16) |
+             ((uint32_t)bytes[2] << 8) | bytes[3];
+    return 1;
+}
+
+int main(int argc, char **argv)
+{
+    unsigned char magic[8], instruction[INSTRUCTION_READ_LIMIT];
+    static unsigned char file[CANDIDATE_READ_LIMIT];
+    unsigned char payload[PAYLOAD_BUFFER_SIZE];
+    uint32_t instruction_length, file_length;
+    struct verifier_values values;
+    size_t length;
+    (void)argv;
+    if (argc != 1 || !read_exact_value(magic, sizeof magic) || memcmp(magic, "YSFDV01\n", 8) != 0 ||
+        !read_length(&instruction_length) || instruction_length > sizeof instruction ||
+        !read_exact_value(instruction, instruction_length) || !read_length(&file_length) ||
+        file_length > sizeof file || !read_exact_value(file, file_length) || fgetc(stdin) != EOF || ferror(stdin))
+        return 1;
+    if (instruction_values(instruction, instruction_length, 1, &values)) {
+        if (file_length > MAX_CANDIDATE_BYTES) file_result_values(&values, "file.oversize");
+        else {
+            file_byte_values(file, file_length, &values.have_observed, values.observed_hex, &values.observed_size);
+            file_result_values(&values, NULL);
+        }
+    }
+    length = payload_values(payload, &values);
+    return fwrite(payload, 1, length, stdout) == length && fflush(stdout) == 0 ? 0 : 1;
+}
+#endif

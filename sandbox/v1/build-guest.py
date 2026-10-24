@@ -51,7 +51,7 @@ def sha256_file(path):
 
 _GUEST_TARGETS = [
     ("init", ["init.c"], True),
-    ("supervisor", ["supervisor.c"], True),
+    ("supervisor", ["supervisor.c", "observation-values.c"], True),
     ("probe", ["probe.c"], True),
 ]
 
@@ -60,9 +60,11 @@ def _targets():
     """Return the closed set of mandatory guest and verifier targets."""
     out = []
     for name, extra, needs_common in _GUEST_TARGETS:
-        src = os.path.join(GUEST_DIR, extra[0])
-        sources = [src] + ([os.path.join(GUEST_DIR, "common.c")] if needs_common else [])
+        sources = [os.path.join(GUEST_DIR, path) for path in extra]
+        sources += [os.path.join(GUEST_DIR, "common.c")] if needs_common else []
         headers = [os.path.join(GUEST_DIR, "common.h")] if needs_common else []
+        if name == "supervisor":
+            headers.append(os.path.join(GUEST_DIR, "observation-values.h"))
         out.append((name, sources, headers))
     out.append(("verifier", [VERIFIER_SRC], []))
     return out

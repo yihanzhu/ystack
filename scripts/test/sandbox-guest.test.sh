@@ -51,7 +51,7 @@ phase_failed() {
 }
 cc_build() {
   /usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 -I"$guest_dir" \
-    "$harness_src" "$guest_dir/common.c" -o "$1"
+    "$harness_src" "$guest_dir/common.c" "$guest_dir/observation-values.c" -o "$1"
 }
 /bin/mkdir -m 700 "$tmp/build1" "$tmp/build2"
 h1="$tmp/build1/harness"; h2="$tmp/build2/harness"
@@ -64,8 +64,10 @@ pass 'two host-compiler builds of the harness (guest common code) are byte-ident
 hf="$tmp/build-fault/harness"
 /bin/mkdir -m 700 "$tmp/build-fault"
 /usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 -DYSTACK_TEST_FAULT_INJECT -I"$guest_dir" \
-  "$harness_src" "$guest_dir/common.c" -o "$hf"
+  "$harness_src" "$guest_dir/common.c" "$guest_dir/observation-values.c" -o "$hf"
 h="$h1"
+"$h" observation-values || fail 'shared guest observation values'
+pass 'shared guest counters, geometry and controller preserve matching wait, zero, wrong pid and EINTR'
 # FIPS 180-4 vectors, through the code (ys_sha256_bytes via `digest`).
 : > "$tmp/fips-empty"
 /usr/bin/printf 'abc' > "$tmp/fips-abc"
@@ -714,8 +716,9 @@ source_paths = [item['path'] for item in body_a['sources']]
 assert 'verifiers/file-digest/v1/verifier.c' in source_paths
 assert {'sandbox/v1/guest/init.c', 'sandbox/v1/guest/probe.c',
         'sandbox/v1/guest/supervisor.c', 'sandbox/v1/guest/common.c',
+        'sandbox/v1/guest/observation-values.c',
         'verifiers/file-digest/v1/verifier.c'} == set(source_paths)
-assert [item['path'] for item in body_a['headers']] == ['sandbox/v1/guest/common.h']
+assert [item['path'] for item in body_a['headers']] == ['sandbox/v1/guest/common.h', 'sandbox/v1/guest/observation-values.h']
 assert body_a['flags'] == ['-std=c11', '-Wall', '-Wextra', '-Werror', '-O2', '-static', '-target', 'aarch64-linux-musl']
 for item in body_a['sources'] + body_a['headers']:
     assert item['sha256'] == digest(os.path.join(sys.argv[6], item['path']))
@@ -876,13 +879,13 @@ private_left=$(/usr/bin/find "$tmp" -maxdepth 1 \
   fail "build-guest.py left private build state behind: $private_left"
 pass 'compile removes every private archive copy, extraction directory and staging directory after both success and failure'
 
-for missing in init.c supervisor.c probe.c common.c common.h verifier.c; do
+for missing in init.c supervisor.c probe.c common.c common.h observation-values.c observation-values.h verifier.c; do
   case_root="$tmp/missing-$missing"
   /bin/mkdir -p "$case_root/sandbox/v1/guest" "$case_root/verifiers/file-digest/v1"
   /bin/chmod 700 "$case_root/sandbox/v1/guest" "$case_root/verifiers/file-digest/v1"
   /bin/cp "$build_guest" "$case_root/sandbox/v1/build-guest.py"
   /bin/cp "$guest_dir/init.c" "$guest_dir/probe.c" "$guest_dir/supervisor.c" "$guest_dir/common.c" \
-    "$guest_dir/common.h" "$case_root/sandbox/v1/guest/"
+    "$guest_dir/common.h" "$guest_dir/observation-values.c" "$guest_dir/observation-values.h" "$case_root/sandbox/v1/guest/"
   /bin/cp "$root/verifiers/file-digest/v1/verifier.c" \
     "$case_root/verifiers/file-digest/v1/verifier.c"
   if [ "$missing" = verifier.c ]; then
@@ -908,7 +911,7 @@ case_root="$tmp/symlink-probe-source"
 /bin/chmod 700 "$case_root/sandbox/v1/guest" "$case_root/verifiers/file-digest/v1"
 /bin/cp "$build_guest" "$case_root/sandbox/v1/build-guest.py"
 /bin/cp "$guest_dir/init.c" "$guest_dir/probe.c" "$guest_dir/supervisor.c" \
-  "$guest_dir/common.c" "$guest_dir/common.h" "$case_root/sandbox/v1/guest/"
+  "$guest_dir/common.c" "$guest_dir/common.h" "$guest_dir/observation-values.c" "$guest_dir/observation-values.h" "$case_root/sandbox/v1/guest/"
 /bin/cp "$root/verifiers/file-digest/v1/verifier.c" \
   "$case_root/verifiers/file-digest/v1/verifier.c"
 /bin/mv "$case_root/sandbox/v1/guest/probe.c" "$case_root/probe-real.c"
@@ -1017,7 +1020,7 @@ if [ "$(/usr/bin/uname -s)" = Linux ]; then
   pass 'the production init setup path preserves directory and mount order, stops at every injected failure and hands off only to /supervisor'
   /usr/bin/cc -std=c11 -Wall -Wextra -O1 -g -fno-omit-frame-pointer \
     -fsanitize=address,undefined -DYSTACK_SUPERVISOR_TEST -DYSTACK_TEST_FAULT_INJECT -I"$guest_dir" \
-    "$guest_dir/supervisor.c" "$guest_dir/common.c" -o "$tmp/linuxcc/supervisor-production-test"
+    "$guest_dir/supervisor.c" "$guest_dir/common.c" "$guest_dir/observation-values.c" -o "$tmp/linuxcc/supervisor-production-test"
   /bin/mkdir -m 700 "$tmp/supervisor-production"
   ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
     "$tmp/linuxcc/supervisor-production-test" "$tmp/supervisor-production" \

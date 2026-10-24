@@ -1611,6 +1611,12 @@ def _kill_driver_group(proc):
         pass
 
 
+def _driver_output_values(returncode, chunks, incomplete, overflow):
+    if incomplete or overflow:
+        return None, b""
+    return returncode, b"".join(chunks)
+
+
 def run_driver(driver_path, args, timeout_s=2.0):
     """The fixed driver interface (plan.md): empty environment, stdin
     /dev/null, stdout capped 65,536 bytes, 2,000 ms per call. Reads with a
@@ -1680,7 +1686,7 @@ def run_driver(driver_path, args, timeout_s=2.0):
         pass
     if incomplete:
         _kill_driver_group(proc)
-        return None, b""
+        return _driver_output_values(proc.returncode, chunks, incomplete, overflow)
     if proc.poll() is None:
         try:
             proc.wait(timeout=max(0.0, deadline - time.monotonic()))
@@ -1695,8 +1701,7 @@ def run_driver(driver_path, args, timeout_s=2.0):
                 return None, b""
     if overflow:
         _kill_driver_group(proc)  # findings-477-r16.md finding 2
-        return None, b""
-    return proc.returncode, b"".join(chunks)
+    return _driver_output_values(proc.returncode, chunks, incomplete, overflow)
 
 
 def driver_argv(driver_path, start_path):
@@ -1807,6 +1812,131 @@ def _drain_capped(read_fd, cap, log_fd, stop_event):
             take = chunk[:cap - written]
             os.write(log_fd, take)
             written += len(take)
+
+
+def _host_state():
+    return dict.fromkeys(("stop_requested", "stop_accepted", "stop_is_hardstop",
+                          "sigkill_sent", "confirmed_stopped", "stopped_via_mailbox",
+                          "driver_reported_error", "escalated_sigkill", "cancelled",
+                          "stop_issued", "hard_stop", "tree_terminated"), False)
+
+
+def _host_step(state, primitive):
+    state = dict(state)
+    kind = primitive["kind"]
+    action = "continue"
+    if kind == "clock":
+        state["cancelled"] = state["cancelled"] or primitive["cancelled"]
+        if primitive["elapsed"] >= primitive["sigkill"] and not state["sigkill_sent"]:
+            action = "kill"
+        else:
+            if primitive["elapsed"] >= primitive["hardstop"]:
+                state["stop_is_hardstop"] = True
+            if state["cancelled"] or state["stop_is_hardstop"]:
+                state["stop_requested"] = True
+    elif kind == "stop":
+        state["stop_accepted"] = primitive["accepted"]
+        if state["stop_accepted"]:
+            state["stop_issued"] = True
+            if state["stop_is_hardstop"]:
+                state["hard_stop"] = True
+    elif kind == "killed":
+        state["sigkill_sent"] = state["escalated_sigkill"] = True
+    elif kind == "state":
+        if primitive["value"] == "stopped":
+            state["confirmed_stopped"] = state["stopped_via_mailbox"] = True
+            action = "confirmed"
+    elif kind == "poll":
+        code = primitive["exit_code"]
+        current_error = (primitive["state"] == "error"
+                         and primitive["since_spawn"] >= primitive["startup"] and code is None)
+        if current_error and not primitive["rechecked"]:
+            action = "recheck"
+        else:
+            if current_error:
+                state["driver_reported_error"] = True
+            if code is not None:
+                if code == primitive["stopped_exit_status"]:
+                    state["confirmed_stopped"] = True
+                action = "exited"
+    elif kind == "reap":
+        if (state["stopped_via_mailbox"] and primitive["reaped"]
+                and primitive["returncode"] is not None
+                and primitive["returncode"] != primitive["stopped_exit_status"]):
+            state["driver_reported_error"] = True
+        state["tree_terminated"] = state["confirmed_stopped"] and primitive["reaped"]
+    else:
+        raise ValueError("host transition")
+    return state, action
+
+
+def _export_values(validated):
+    verifier_started = False
+    guest = None
+    tree_deadline_fired = False
+    exit_state, exit_code = "not-started", None
+    stdout_raw, stderr_raw = b"", b""
+    evidence_payload = []
+    evidence_manifest_bytes = canonical({"body": {"files": []}, "id": "evidence-manifest",
+                                          "kind": "sandbox_evidence_manifest", "schema_version": 1})
+    if validated is not None:
+        gbody = validated["body"]
+        verifier_started = gbody["verifier_started"]
+        tree_deadline_fired = gbody["tree_deadline_fired"]
+        guest = gbody["limits"]
+        stdout_raw, stderr_raw = validated["stdout"], validated["stderr"]
+        # Stored under payload/evidence/<nnnn> by index (spec R10.2),
+        # never by name_hex: the guest's own filename can legally be up
+        # to YS_FRAME_NAME_MAX (255 decoded bytes, 510 hex characters) --
+        # far past what many host filesystems allow in one path
+        # component. The manifest (below) is the one place name_hex is
+        # recorded; a consumer correlates a stored file to its manifest
+        # entry by content (sha256), unambiguous regardless of naming.
+        evidence_payload = [(("%04d" % ef["index"]), ef["content"])
+                             for ef in validated["evidence"]]
+        evidence_manifest_bytes = canonical(
+            {"body": {"files": sorted(
+                [{"name_hex": ef["name_hex"], "sha256": ef["sha256"], "size_bytes": ef["size_bytes"]}
+                 for ef in validated["evidence"]], key=lambda f: f["name_hex"])},
+             "id": "evidence-manifest", "kind": "sandbox_evidence_manifest", "schema_version": 1})
+        exit_state, exit_code = gbody["exit_state"], gbody["exit_code"]
+    return {"guest": guest, "verifier_started": verifier_started,
+            "tree_deadline_fired": tree_deadline_fired, "exit_state": exit_state,
+            "exit_code": exit_code, "stdout_raw": stdout_raw, "stderr_raw": stderr_raw,
+            "evidence_payload": evidence_payload, "evidence_manifest_bytes": evidence_manifest_bytes}
+
+
+def _run_result_values(export, tree_terminated, hard_stop, cancelled, driver_reported_error,
+                         control_deadline, admission_mono, end_mono, terminated_at, stop_issued):
+    guest = export["guest"]
+    stdout_raw, stderr_raw = export["stdout_raw"], export["stderr_raw"]
+    evidence_manifest_bytes = export["evidence_manifest_bytes"]
+    empty = empty_sha256()
+    runtime_error = (guest is None or not export["verifier_started"] or hard_stop
+                     or cancelled or not tree_terminated or driver_reported_error)
+    wall_complete = tree_terminated
+    wall_ms = math.ceil((end_mono - admission_mono) * 1000) if wall_complete else None
+    return {
+        "runtime": "error" if runtime_error else "completed",
+        "control_deadline": control_deadline,
+        "tree_terminated": tree_terminated,
+        "terminated_at": terminated_at,
+        "exit_state": export["exit_state"],
+        "exit_code": export["exit_code"],
+        "stdout_sha256": sha256_hex(stdout_raw) if stdout_raw else empty,
+        "stderr_sha256": sha256_hex(stderr_raw) if stderr_raw else empty,
+        "evidence_manifest_sha256": sha256_hex(evidence_manifest_bytes),
+        "stdout_raw": stdout_raw, "stderr_raw": stderr_raw,
+        "evidence_manifest_bytes": evidence_manifest_bytes,
+        "evidence_payload": export["evidence_payload"],
+        "limits": build_limit_rows(guest, wall_ms,
+                                    # findings-477-r11.md: reached is an
+                                    # issued stop (stop_issued,
+                                    # never bare cancellation) or the
+                                    # guest's own deadline -- R7.3.
+                                    export["tree_deadline_fired"] or stop_issued,
+                                    wall_complete),
+    }
 
 
 def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_raw, verifier_raw,
@@ -1943,20 +2073,18 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
     result["control_deadline"] = control_deadline_for_elapsed(admission_mono)
 
     spawn_mono = time.monotonic()
-    stop_requested = stop_accepted = stop_is_hardstop = False
-    sigkill_sent = confirmed_stopped = stopped_via_mailbox = False
-    driver_reported_error = escalated_sigkill = False
+    host_state = _host_state()
 
     def do_sigkill():
         # Shared by every overdue-SIGKILL check below (the loop top and
         # after each bounded_driver_call) -- exactly one escalation,
         # never a per-call-site copy that could drift.
-        nonlocal sigkill_sent, escalated_sigkill
+        nonlocal host_state
         try:
             os.killpg(proc.pid, signal.SIGKILL)
         except OSError:
             pass
-        sigkill_sent = escalated_sigkill = True
+        host_state, _ = _host_step(host_state, {"kind": "killed"})
 
     while True:
         # R9.2: record cancellation before any exit check this iteration
@@ -1972,15 +2100,14 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
         # EVERY call it wraps, including a second call later this same
         # iteration).
         elapsed = time.monotonic() - admission_mono
-        if elapsed >= sigkill_deadline_s() and not sigkill_sent:
+        host_state, action = _host_step(host_state, {
+            "kind": "clock", "cancelled": result["cancelled"], "elapsed": elapsed,
+            "sigkill": sigkill_deadline_s(), "hardstop": hardstop_deadline_s()})
+        if action == "kill":
             do_sigkill()
             break
-        if elapsed >= hardstop_deadline_s():
-            stop_is_hardstop = True
-        if (result["cancelled"] or stop_is_hardstop):
-            stop_requested = True
 
-        if stop_requested and not stop_accepted:
+        if host_state["stop_requested"] and not host_state["stop_accepted"]:
             # finding 1(b): retry every iteration until the runtime
             # actually ACCEPTS the stop (or SIGKILL fires) -- a rejected
             # stop (REST endpoint not up yet) must not silently give up
@@ -1995,18 +2122,18 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
                 # deferred to the next iteration's own top-of-loop check.
                 do_sigkill()
                 break
-            stop_accepted = accepted
-            if stop_accepted:
+            host_state, _ = _host_step(host_state, {"kind": "stop", "accepted": accepted})
+            if host_state["stop_accepted"]:
                 # findings-477-r11.md: the one place a stop is actually
                 # issued, for either reason (HardStop-deadline or
                 # cancellation) -- the wall row's reached (R7.3) is
                 # derived from this flag alone, never from "cancelled"
                 # by itself.
-                result["stop_issued"] = True
-                if stop_is_hardstop:
+                result["stop_issued"] = host_state["stop_issued"]
+                if host_state["stop_is_hardstop"]:
                     # Only an ACCEPTED stop counts as "HardStop issued"
                     # for runtime_error -- never a merely-attempted one.
-                    result["hard_stop"] = True
+                    result["hard_stop"] = host_state["hard_stop"]
 
         since_spawn = time.monotonic() - spawn_mono
         state, overdue = bounded_driver_call(
@@ -2016,8 +2143,8 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
             do_sigkill()
             break
 
-        if state == "stopped":
-            confirmed_stopped = stopped_via_mailbox = True
+        host_state, action = _host_step(host_state, {"kind": "state", "value": state})
+        if action == "confirmed":
             break
         # findings-477-r9.md finding 2: check the process's own exit
         # status BEFORE deciding the current state=="error" observation
@@ -2031,7 +2158,11 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
         # driver_reported_error True in that iteration and is preserved
         # untouched here -- this only guards the CURRENT observation.
         exit_code = proc.poll()
-        if state == "error" and since_spawn >= startup_deadline_s() and exit_code is None:
+        host_state, action = _host_step(host_state, {
+            "kind": "poll", "state": state, "since_spawn": since_spawn,
+            "startup": startup_deadline_s(), "exit_code": exit_code,
+            "stopped_exit_status": stopped_exit_status, "rechecked": False})
+        if action == "recheck":
             # findings-477-r13ci.md: exit_code is None here can still
             # mean "already exited, not yet reaped" (an OS reap-timing
             # race, worse under load) rather than "genuinely still
@@ -2047,20 +2178,15 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
             while exit_code is None and time.monotonic() < recheck_deadline:
                 time.sleep(0.01)
                 exit_code = proc.poll()
-            if exit_code is None:
-                # R5.4: past the startup grace, preserve the error but keep
-                # supervising the live process -- HardStop/SIGKILL/
-                # cancellation below, exiting only on reaped exit or
-                # abandonment, never a bare break into a blind wait that
-                # would itself disable the normal shutdown path.
-                driver_reported_error = True
+            host_state, action = _host_step(host_state, {
+                "kind": "poll", "state": state, "since_spawn": since_spawn,
+                "startup": startup_deadline_s(), "exit_code": exit_code,
+                "stopped_exit_status": stopped_exit_status, "rechecked": True})
         if exit_code is not None:
             # Accept stopped_exit_status regardless of HardStop or an
             # earlier driver-state error: result["hard_stop"]/
             # driver_reported_error keep those error causes separate,
             # never masking a genuinely confirmed, reaped stop.
-            if exit_code == stopped_exit_status:
-                confirmed_stopped = True
             break
         # Bound the sleep by the soonest host deadline, not a flat
         # poll_interval_s(), so a slow poll can't also oversleep past one.
@@ -2077,7 +2203,7 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
     # never actually gets reaped (or a fake wait() timeout, the
     # test-only YSTACK_TEST_REAP_FAIL hook below) must not claim
     # termination the host never actually confirmed.
-    if escalated_sigkill:
+    if host_state["escalated_sigkill"]:
         # R9.5: the unconfirmed-stop path finalizes at the abandonment
         # instant itself -- SIGKILL was already sent at the 58s deadline
         # inside the poll loop above; no further wait() here (blocking up
@@ -2134,9 +2260,6 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
         # actual exit status: a runtime that says stopped but then exits
         # abnormally (crashes right after writing its own report) is
         # still an error, never silently accepted as a clean completion.
-        if stopped_via_mailbox and reaped and proc.returncode is not None \
-                and proc.returncode != stopped_exit_status:
-            driver_reported_error = True
     if drain_started:
         # findings-477-r15.md finding 1: drain_started is False when
         # drain.start() itself failed above -- Thread.join() raises
@@ -2166,16 +2289,10 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
         os.close(read_fd)
         os.close(log_fd)
 
-    tree_terminated = confirmed_stopped and reaped
-    verifier_started = False
-    guest = None
-    tree_deadline_fired = False
-    exit_state, exit_code = "not-started", None
-    empty = empty_sha256()
-    stdout_raw, stderr_raw = b"", b""
-    evidence_payload = []
-    evidence_manifest_bytes = canonical({"body": {"files": []}, "id": "evidence-manifest",
-                                          "kind": "sandbox_evidence_manifest", "schema_version": 1})
+    host_state, _ = _host_step(host_state, {
+        "kind": "reap", "reaped": reaped, "returncode": proc.returncode,
+        "stopped_exit_status": stopped_exit_status})
+    tree_terminated = host_state["tree_terminated"]
     validated = None
     if tree_terminated:
         # R5.3: stop before read -- the export disk is only guaranteed to
@@ -2195,54 +2312,12 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
         if (time.monotonic() - export_read_began) > export_read_deadline_s():
             result["control_deadline"] = "exceeded"
         validated = validate_export(export_records, plan_sha256)
-    if validated is not None:
-        gbody = validated["body"]
-        verifier_started = gbody["verifier_started"]
-        tree_deadline_fired = gbody["tree_deadline_fired"]
-        guest = gbody["limits"]
-        stdout_raw, stderr_raw = validated["stdout"], validated["stderr"]
-        # Stored under payload/evidence/<nnnn> by index (spec R10.2),
-        # never by name_hex: the guest's own filename can legally be up
-        # to YS_FRAME_NAME_MAX (255 decoded bytes, 510 hex characters) --
-        # far past what many host filesystems allow in one path
-        # component. The manifest (below) is the one place name_hex is
-        # recorded; a consumer correlates a stored file to its manifest
-        # entry by content (sha256), unambiguous regardless of naming.
-        evidence_payload = [(("%04d" % ef["index"]), ef["content"])
-                             for ef in validated["evidence"]]
-        evidence_manifest_bytes = canonical(
-            {"body": {"files": sorted(
-                [{"name_hex": ef["name_hex"], "sha256": ef["sha256"], "size_bytes": ef["size_bytes"]}
-                 for ef in validated["evidence"]], key=lambda f: f["name_hex"])},
-             "id": "evidence-manifest", "kind": "sandbox_evidence_manifest", "schema_version": 1})
-        exit_state, exit_code = gbody["exit_state"], gbody["exit_code"]
+    export = _export_values(validated)
     if signal_seen[0]:  # last recheck, catches a signal from any wait above
         result["cancelled"] = True
-    runtime_error = (guest is None or not verifier_started or result["hard_stop"]
-                     or result["cancelled"] or not tree_terminated or driver_reported_error)
-    wall_complete = tree_terminated
-    wall_ms = math.ceil((end_mono - admission_mono) * 1000) if wall_complete else None
-    return {
-        "runtime": "error" if runtime_error else "completed",
-        "control_deadline": result["control_deadline"],
-        "tree_terminated": tree_terminated,
-        "terminated_at": terminated_at,
-        "exit_state": exit_state,
-        "exit_code": exit_code,
-        "stdout_sha256": sha256_hex(stdout_raw) if stdout_raw else empty,
-        "stderr_sha256": sha256_hex(stderr_raw) if stderr_raw else empty,
-        "evidence_manifest_sha256": sha256_hex(evidence_manifest_bytes),
-        "stdout_raw": stdout_raw, "stderr_raw": stderr_raw,
-        "evidence_manifest_bytes": evidence_manifest_bytes,
-        "evidence_payload": evidence_payload,
-        "limits": build_limit_rows(guest, wall_ms,
-                                    # findings-477-r11.md: reached is an
-                                    # issued stop (result["stop_issued"],
-                                    # never bare cancellation) or the
-                                    # guest's own deadline -- R7.3.
-                                    tree_deadline_fired or result["stop_issued"],
-                                    wall_complete),
-    }
+    return _run_result_values(export, tree_terminated, result["hard_stop"], result["cancelled"],
+                              host_state["driver_reported_error"], result["control_deadline"],
+                              admission_mono, end_mono, terminated_at, result["stop_issued"])
 
 
 GUEST_LIMIT_ROWS = ("cpu_time_ms", "memory_bytes", "output_bytes", "process_count", "scratch_bytes")
@@ -2434,10 +2509,14 @@ def stub_run_result(control_deadline="met"):
     driver/Popen failure that happened only after the startup budget was
     already blown still keeps failure.supervisor-timeout (R9.4), rather
     than this stub silently resetting control_deadline to "met"."""
+    return _stub_run_values(control_deadline, time.time())
+
+
+def _stub_run_values(control_deadline, terminated_at):
     empty = empty_sha256()
     empty_manifest, empty_manifest_sha = empty_evidence_manifest()
     return {"runtime": "error", "control_deadline": control_deadline, "tree_terminated": True,
-            "terminated_at": time.time(), "exit_state": "not-started", "exit_code": None,
+            "terminated_at": terminated_at, "exit_state": "not-started", "exit_code": None,
             "stdout_sha256": empty, "stderr_sha256": empty,
             "evidence_manifest_sha256": empty_manifest_sha,
             "stdout_raw": b"", "stderr_raw": b"", "evidence_manifest_bytes": empty_manifest,
@@ -2574,6 +2653,13 @@ def identities_for_receipt(measured):
 
 def build_receipt(config, accepted_set_sha256, request_doc, request_body, launch_request_sha256,
                    admitted_at, identities, admission, run, storage_destroyed=True):
+    terminated_at = time.time() if run is None else run["terminated_at"]
+    return _receipt_values(config, accepted_set_sha256, request_doc, request_body, launch_request_sha256,
+                           admitted_at, identities, admission, run, storage_destroyed, terminated_at)
+
+
+def _receipt_values(config, accepted_set_sha256, request_doc, request_body, launch_request_sha256,
+                   admitted_at, identities, admission, run, storage_destroyed, terminated_at):
     """run is None for a refused (no-launch) attempt -- every row
     unavailable/unknown, payload not-started, teardown/timing the R9.3
     no-launch rule (storage_destroyed follows the frozen-copy removal
@@ -2590,7 +2676,6 @@ def build_receipt(config, accepted_set_sha256, request_doc, request_body, launch
                    "exit_code": None}
         teardown = {"state": "confirmed" if storage_destroyed else "failed",
                     "tree_terminated": True, "storage_destroyed": storage_destroyed}
-        terminated_at = time.time()
     else:
         limits = run["limits"]
         lifecycle = {"admission": admission, "runtime": run["runtime"],
@@ -2606,7 +2691,6 @@ def build_receipt(config, accepted_set_sha256, request_doc, request_body, launch
             teardown_state = "failed"
         teardown = {"state": teardown_state, "tree_terminated": run["tree_terminated"],
                     "storage_destroyed": storage_destroyed}
-        terminated_at = run["terminated_at"]
     body = {
         "attempt": {"attempt_id": request_body["attempt"]["attempt_id"],
                     "attempt_number": request_body["attempt"]["attempt_number"],

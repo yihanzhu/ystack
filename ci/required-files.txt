@@ -386,6 +386,9 @@ evals/v1/run-evals.sh
 evals/v1/evals-launcher.sh
 evals/v1/evals-driver.sh
 evals/v1/evals.jq
+evals/v1/replay-malicious.py
+sandbox/v1/guest/observation-values.c
+sandbox/v1/guest/observation-values.h
 evals/v1/eval-catalog.json
 evals/v1/seed-set.json
 evals/v1/seed-set-events.json
@@ -402,6 +405,7 @@ scripts/test/evals-adapters.test.sh
 scripts/test/evals-approvals.test.sh
 scripts/test/evals-duty.test.sh
 scripts/test/evals-dashboard.test.sh
+scripts/test/evals-malicious.test.sh
 
 # Component write-ups indexed from README.md (restore-critical documentation)
 docs/components.md

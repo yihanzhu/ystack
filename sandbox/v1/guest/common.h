@@ -225,4 +225,9 @@ extern int ys_test_outcome_write_mode;
 extern int ys_test_exec_fail_phase;
 #endif
 
+struct ys_evidence_row { char *name; ino_t ino; nlink_t links; };
+int ys_evidence_entry_values(mode_t mode);
+enum ys_plan_status ys_evidence_values(struct ys_evidence_row *rows, size_t count,
+                                       char ***names_out, size_t *count_out);
+
 #endif

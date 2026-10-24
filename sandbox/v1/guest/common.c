@@ -146,6 +146,7 @@ static void encode_be64(uint64_t v, unsigned char out[8])
     unsigned i;
     for (i = 0; i < 8U; i++) out[i] = (unsigned char)(v >> (56U - 8U * i));
 }
+#ifndef YSTACK_COMMON_VALUES_ONLY
 static uint64_t decode_be64(const unsigned char in[8])
 {
     uint64_t v = 0;
@@ -153,6 +154,7 @@ static uint64_t decode_be64(const unsigned char in[8])
     for (i = 0; i < 8U; i++) v = (v << 8) | (uint64_t)in[i];
     return v;
 }
+#endif
 int ys_frame_writer_open(struct ys_frame_writer *w, int fd)
 {
     w->fd = fd; w->offset = 0; w->closed = 0;
@@ -198,6 +200,7 @@ enum ys_frame_status ys_frame_writer_close(struct ys_frame_writer *w)
     w->closed = 1;
     return YS_FRAME_OK;
 }
+#ifndef YSTACK_COMMON_VALUES_ONLY
 /* Exact pread; a short read here (bounds already checked by the caller) is
  * always YS_FRAME_ERR_IO, never an ordinary truncation. */
 static int read_exact(int fd, off_t offset, void *buf, size_t len)
@@ -375,6 +378,7 @@ enum ys_frame_status ys_record_set_finish(const struct ys_record_set_state *stat
     return (state->step >= 3U) ? YS_FRAME_OK : YS_FRAME_ERR_MISSING;
 }
 
+#endif
 /* --- Strict UTF-8 and the preparation path range --------------------------- */
 static int utf8_decode_one(const unsigned char *s, size_t len, size_t i, size_t *consumed,
                             uint32_t *cp)
@@ -684,6 +688,42 @@ void ys_plan_free(struct ys_guest_plan *plan)
     plan->entries = NULL;
     plan->entry_count = 0;
 }
+static int cmp_evidence_row(const void *a, const void *b)
+{
+    const struct ys_evidence_row *ra = a, *rb = b;
+    return strcmp(ra->name, rb->name);
+}
+int ys_evidence_entry_values(mode_t mode) { return S_ISREG(mode); }
+
+enum ys_plan_status ys_evidence_values(struct ys_evidence_row *rows, size_t count,
+                                       char ***names_out, size_t *count_out)
+{
+    size_t i;
+    int refused = 0;
+    char **names;
+    for (i = 0; i < count; i++) if (rows[i].links != (nlink_t)1) refused = 1;
+    qsort(rows, count, sizeof *rows, cmp_evidence_row);
+    for (i = 0; i + 1 < count && !refused; i++)
+        if (rows[i].ino == rows[i + 1].ino) refused = 1;
+    if (refused) {
+        for (i = 0; i < count; i++) free(rows[i].name);
+        free(rows);
+        return YS_PLAN_ERR_SCHEMA;
+    }
+    names = malloc((count == 0U ? 1U : count) * sizeof *names);
+    if (names == NULL) {
+        for (i = 0; i < count; i++) free(rows[i].name);
+        free(rows);
+        return YS_PLAN_ERR_IO;
+    }
+    for (i = 0; i < count; i++) names[i] = rows[i].name;
+    free(rows);
+    *names_out = names;
+    *count_out = count;
+    return YS_PLAN_OK;
+}
+
+#ifndef YSTACK_COMMON_VALUES_ONLY
 /* Splits `path` into its parent directory and leaf component, walking from
  * `dirfd` one component at a time (never handing the kernel a long
  * concatenated string): a 4,096-byte, 64-component candidate path easily
@@ -965,20 +1005,12 @@ size_t ys_test_readdir_fail_at = 0;
 int ys_test_outcome_write_mode = 0;
 int ys_test_exec_fail_phase = 0;
 #endif
-struct evidence_row { char *name; ino_t ino; };
-static int cmp_evidence_row(const void *a, const void *b)
-{
-    const struct evidence_row *ra = a, *rb = b;
-    return strcmp(ra->name, rb->name);
-}
 enum ys_plan_status ys_evidence_inventory(int dirfd, char ***names_out, size_t *count_out)
 {
     DIR *dh;
     struct dirent *de;
-    struct evidence_row *rows = NULL;
+    struct ys_evidence_row *rows = NULL;
     size_t count = 0, cap = 0, i;
-    char **names;
-    int refused = 0;
     dh = fdopendir(dirfd);
     if (dh == NULL) return YS_PLAN_ERR_IO;
     for (;;) {
@@ -1000,42 +1032,25 @@ enum ys_plan_status ys_evidence_inventory(int dirfd, char ***names_out, size_t *
         }
         if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0) continue;
         if (fstatat(dirfd, de->d_name, &st, AT_SYMLINK_NOFOLLOW) != 0) goto io_fail;
-        if (!S_ISREG(st.st_mode)) continue;
+        if (!ys_evidence_entry_values(st.st_mode)) continue;
         if (count == cap) {
             size_t nc = (cap == 0U) ? 8U : cap * 2U;
-            struct evidence_row *grown = realloc(rows, nc * sizeof *grown);
+            struct ys_evidence_row *grown = realloc(rows, nc * sizeof *grown);
             if (grown == NULL) goto io_fail;
             rows = grown; cap = nc;
         }
         rows[count].name = strdup(de->d_name);
         if (rows[count].name == NULL) goto io_fail;
         rows[count].ino = st.st_ino;
-        if (st.st_nlink != (nlink_t)1) refused = 1;
+        rows[count].links = st.st_nlink;
         count++;
     }
     closedir(dh);
-    qsort(rows, count, sizeof *rows, cmp_evidence_row);
-    for (i = 0; i + 1 < count && !refused; i++)
-        if (rows[i].ino == rows[i + 1].ino) refused = 1;
-    if (refused) {
-        for (i = 0; i < count; i++) free(rows[i].name);
-        free(rows);
-        return YS_PLAN_ERR_SCHEMA;
-    }
-    names = malloc((count == 0U ? 1U : count) * sizeof *names);
-    if (names == NULL) {
-        for (i = 0; i < count; i++) free(rows[i].name);
-        free(rows);
-        return YS_PLAN_ERR_IO;
-    }
-    for (i = 0; i < count; i++) names[i] = rows[i].name;
-    free(rows);
-    *names_out = names;
-    *count_out = count;
-    return YS_PLAN_OK;
+    return ys_evidence_values(rows, count, names_out, count_out);
 io_fail:
     closedir(dh);
     for (i = 0; i < count; i++) free(rows[i].name);
     free(rows);
     return YS_PLAN_ERR_IO;
 }
+#endif
