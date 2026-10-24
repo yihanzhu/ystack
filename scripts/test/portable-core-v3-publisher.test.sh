@@ -225,10 +225,10 @@ force_cell() {
   "${jq_cmd[@]}" -Rsr --arg marker "$marker" --arg wrapper "$wrapper" '
     index($marker) as $start | if $start == null then error("missing forced predicate") else
     .[0:$start] as $prefix | .[$start:] as $rest |
-    ($rest | index("\n\ndef ")) as $end |
-    if $end == null then error("missing predicate end") else
-      ($rest[0:$end] | sub("def [a-z_]+";"def forced_original")) as $original |
-      $prefix+$original+"\n\n"+($wrapper | gsub("\\\\n";"\n"))+$rest[$end:]
+    ($rest | index("\n\ndef ")) as $definition_end |
+    if $definition_end == null then error("missing predicate end") else
+      ($rest[0:$definition_end] | sub("def [a-z_]+";"def forced_original")) as $original |
+      $prefix+$original+"\n\n"+($wrapper | gsub("\\\\n";"\n"))+$rest[$definition_end:]
     end end
   ' "$tmp/force-source" >"$tmp/forced/$relative/$fault_file"
   assert_route "$expected" "$tmp/forced/$relative" "$mode" "${inputs[@]}"
@@ -248,8 +248,8 @@ replace_owned() {
     else
       index("def "+$phase+":") as $start |
       .[0:$start] as $prefix | .[$start:] as $rest |
-      ($rest | index("\n\ndef ")) as $end |
-      $prefix+($rest[0:$end] | split($needle) | if length != 2 then error("target call count") else join($replacement) end)+$rest[$end:]
+      ($rest | index("\n\ndef ")) as $definition_end |
+      $prefix+($rest[0:$definition_end] | split($needle) | if length != 2 then error("target call count") else join($replacement) end)+$rest[$definition_end:]
     end
   ' "$tmp/replace-source" >"$file"
 }
