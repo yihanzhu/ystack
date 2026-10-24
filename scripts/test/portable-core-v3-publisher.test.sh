@@ -316,7 +316,7 @@ loader_cell() {
   rm -rf "$tmp/load" "$tmp/load-saved" "$tmp/held"
 }
 static_case() {
-  local file old_generation restored mode_line manifest_path
+  local file old_generation restored mode_line manifest_path route
   case "$case_id" in
     old-exports-exact)
       git -C "$root" ls-tree -r HEAD -- core/v1/generations core/v2/generations >"$tmp/new-exports"
