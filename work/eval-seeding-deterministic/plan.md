@@ -1017,41 +1017,103 @@ failure output must fit remaining measured space; no ninth pair is silently made
 A retained failed file is not overwritten or deleted to reuse that allowance.
 These are complete finite schedules, not a claim that two copies cover storage.
 
-| Recording read work, in full-pair upper bounds | Charge |
+The selected ordinary positive creates original, controlled, recorder and seed
+pairs; it creates installed and rebuilt pairs during replay. Archive and
+failed/scratch copies are each zero calls/bytes in this successful fixture. Their
+mandatory retention, failure and boundary tests remain; any actual such copy
+still consumes the caps above. It does not remove an archive required by another
+recipe. Both full export frames have at most 64 KiB of non-padding records per
+launch; every remaining byte of each 12 MiB file is present and checked.
+
+Use these three concrete private same-pass changes in the existing owners. They
+are planned implementation work, not a claim about paused B64. (1) Only the new
+export branch of `read_store_attempt` reads through the held descriptor in 64 KiB
+chunks while updating the acquisition SHA. `_observation`/`_observation_values`
+consume that exact acquisition result for this binary's first SHA; it is bound to
+the same immutable raw value, descriptor, length and before/after checks. It is
+never caller-supplied or a hash cache. `_origin_values` still independently hashes
+the full raw bytes on every invocation, including the returned origin and the
+fixture's separate origin rebuild. No other observation path changes. (2) The
+controlled writer's readback computes SHA in its actual 64 KiB read loop and
+compares it to the separately computed original SHA; it does not add another
+full-buffer digest pass. (3) The export branch of `_HeldStoreRead.recheck` and the
+fixed-role launcher completion checks stream actual held bytes and compare them
+to the retained acquisition bytes in the same loop. Both comparison inputs are
+charged. Where a completion SHA is required, update a fresh hash state in this
+same loop and compare its digest too. Keep every original recheck invocation,
+metadata/ACL/parent/named-file check and independent equality/hash relationship.
+Do not replace a final reread with an earlier digest or remove a check at the cap.
+
+Counts below are per launch; multiplying their byte charges by two gives the
+listed pair charge N=24 MiB. A fused pass is charged once per input traversed;
+independent digest/equality passes remain separate. The bounded frame allowance
+includes frame construction, header/content copying and digest work; the full
+unchanged `frame_read` gets two complete traversals plus 1 MiB per pair, covering
+its tail slice/scan and the small frame work. The fixture must measure these
+charges and assert the exact named call counts, not use unnamed recheck credit.
+
+| Recording owner / actual calls per launch | Pair read charge |
 | --- | --- |
-| Original read, its SHA, and original full frame parse | 3N |
-| Controlled write's source pass; controlled readback plus independent hash | 3N |
-| Consumer acquisition plus hash | 2N |
-| Recorder, seed, archive and failed/scratch copy source passes | 4N |
-| Required final held-byte rechecks, counted individually | up to 4N |
-| Total admissible schedule | at most 16N = 384 MiB |
-| Replay read work, including final checks | Charge |
-| Seed-to-installed copy, installed hash, source post-copy byte recheck | 3N |
-| Installed held acquisition and separate hash; full source frame parse | 3N |
-| Rebuilt file hash; comparison reading both original and rebuilt files | 3N |
-| Final installed byte recheck/hash and final original byte recheck/hash | 4N |
-| Retained archive verification read/hash; extra held reread if reached | up to 3N |
-| Total admissible schedule | at most 16N = 384 MiB |
+| host `run_vm`: original `fh.read` once, original export SHA once | 2N |
+| host original `frame_read` once; all tail, header, content and digest work | at most 2N + 1 MiB |
+| controlled writer: copy original value once; fused readback/SHA once | 2N |
+| consumer `read_store_attempt`: held acquisition/first observation SHA once; returned `_origin_values` second independent SHA once | 2N |
+| existing capture-held-values fixture `held.snapshots == values`: compare both complete binary values once | 2N |
+| fixture `:595–597`: separate `_origin_values` rebuild and its third independent SHA once; compare complete origin document | N; document comparison is non-export |
+| private recorder copy once; fixed seed copy once | 2N |
+| `_HeldStoreRead.recheck` once at fixture completion, after copies and independent origin rebuild: held reread/equality against snapshot | 2N, both inputs |
+| `read_exact`/`read_store_attempt` metadata completion checks, anchor checks and close; no extra full-byte call | 0 export bytes; metadata charged non-export |
+| archive / failed / scratch copy and their byte checks | 0 calls in this positive |
+| Recording total | 15N + 1 MiB = 361 MiB |
 
-Every actual call consumes these counters, including `_HeldStoreRead.recheck` and
-all recursive scope/store acquisitions. The table does not authorize skipping a
-call at the cap. More calls, retained copies, larger raw inputs or an extra archive
-must pass the same budget before allocation/write; otherwise stop that operation.
-Before real recording, instantiate the complete actual call/copy ledger for its
-full recipe, not only this ordinary two-export fixture. If required calls cannot
-fit, return through R4A's resource gate without removing checks or shrinking bytes.
+The fixture retains its existing full `held.snapshots == values` and independent
+origin equality assertions. Its existing `held.recheck()` call becomes the final
+completion check after those assertions and the copies; it is still called once
+per held attempt. Separate drift cases still call it after their mutation and
+must refuse. No nested scope/coverage reader is invoked by this selected ordinary
+positive. Those full production routes and all their recursive calls remain
+mandatory in their separately budgeted existing proofs; this count cannot stand
+in for them. Both launch attempts execute all rows, not one representative file.
 
-For the required ordinary positive, use the existing fixed test builders with
-both complete export frames and zero tails. Require each capture JSON at most
-256 KiB and all non-export logical occurrences, envelopes, duplicate references,
-metadata and logs together at most 1 MiB. Retain at most 4 MiB non-export physical
-bytes and charge at most 8/16 MiB cumulative non-export writes/reads. Verify these
-actual counts rather than assume them. The above export schedules then give at
-most 25 MiB logical, 196 MiB physical, 200/400 MiB cumulative write/read per case,
-within every applicable ceiling. Four cases give at most 100, 784, 800/1,600 MiB.
-Two disjoint dashboard pairs split the four trials; every case consumes its full
-schedule once while shared and overlapping raw references remain charged. Repeated
-cases still hit M4; any work before that refusal and retained failures stays counted.
+| Replay owner / actual calls per launch | Pair read charge |
+| --- | --- |
+| launcher `snapshot_file` copy once; `snapshot_expected` installed SHA once; held seed post-copy reread/equality once | 4N (copy 1, installed SHA 1, two equality inputs 2) |
+| coordinator held installed acquisition/SHA once in its fixed-role chunk loop | N |
+| coordinator `_origin_values:43` into consumer `_origin_values`: independent full export SHA once | N |
+| coordinator `_host_result_values:178`: unchanged full-source `frame_read` once | at most 2N + 1 MiB |
+| independent guest frame construction/digest from guest observations and actual verifier payload | at most 1 MiB; no source-derived guest input |
+| rebuilt complete file SHA once; streamed whole source/rebuilt equality once | 3N (SHA 1, both equality inputs 2) |
+| installed completion reread/equality/fresh SHA once; seed-source completion reread/equality/fresh SHA once, each against its own retained acquisition | 4N, both inputs for each; fresh SHAs in those actual loops |
+| archive / failed / scratch verification | 0 calls in this positive |
+| Replay total | 15N + 2 MiB = 362 MiB |
+
+Final source checks in replay target its held seed source, not a reopened native
+export disk. Metadata-only completion/close checks remain at each owner. No
+consumer observation SHA, origin rebuild, fixture equality or completion reread
+is hidden in a spare allowance. These recording and replay schedules independently
+fit the 384 MiB export-read cap; four cases cost 1,444 and 1,448 MiB respectively,
+within 1,536 MiB. A new call must be charged before admission; it cannot consume
+the named calls' budget by deleting them. The full real recipe must also have an
+actual ledger before recording, but this positive's complete ledger is fixed here.
+
+For this positive, require each capture JSON at most 256 KiB and all non-export
+logical occurrences, envelopes, duplicate references, metadata and logs together
+at most 1 MiB. Non-export physical bytes are at most 4 MiB, writes/reads at most
+8/16 MiB. Measure these counts. Recording has four retained pairs (96 MiB) and
+five pair writes (initial disk, guest overwrite, controlled, recorder, seed =
+120 MiB). Replay retains those four pairs and adds installed/rebuilt pairs
+(144 MiB), writing 48 MiB. The resulting bounded totals are:
+
+| Selected successful operation | Logical / physical MiB | Write / read MiB | Four cases: logical / physical / write / read MiB |
+| --- | --- | --- | --- |
+| Recording | 25 / 100 | 128 / 377 | 100 / 400 / 512 / 1,508 |
+| Replay | 25 / 148 | 56 / 378 | 100 / 592 / 224 / 1,512 |
+
+Both are below all original caps. Two disjoint dashboard pairs split the four
+trials; each case executes the complete replay count once. Shared/overlapping
+references and any pre-refusal work remain charged. Repeated cases still hit M4.
+Other recipes with archives, scratch or retained failures use the full eight-pair
+occupancy and cumulative caps above; successful-fixture zeros never exempt them.
 
 The positive exercises capture, held reads, install, full-source parsing, independent
 guest rebuild, whole-byte comparison and completion seals. It must reach complete
@@ -1475,7 +1537,7 @@ gates (R9.6).
   operator-graded seed and its test. 150-450 of them are verbatim verdict bytes, which
   cannot leave the PR whose test checks their digests.
 - PR 3: `review_size: standard`, about 300-400 net added lines.
-- This plan-only amendment: `review_size: standard`, expected 150–300 changed
+- This plan-only amendment: `review_size: standard`, expected 150–400 changed
   lines. One concern: the fixed whole-export role, actual readers, complete finite
   resource ledger and proof. Preserve the full inherited plan and all its gates.
 
