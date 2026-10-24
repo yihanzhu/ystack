@@ -32,47 +32,61 @@ def canonical(value):
                        separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
 
 
-def configured_vfkit():
-    path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "host-config.json")
+def _start_body(start_raw):
+    doc = json.loads(start_raw)
+    body = doc["body"]
+    valid = (doc["kind"] == "sandbox_runtime_start" and doc["schema_version"] == 1
+             and set(body) == START_KEYS and body["command_line"] == COMMAND_LINE
+             and body["cpu_count"] == 1 and body["memory_bytes"] == MEMORY_BYTES)
+    if not valid:
+        raise ValueError("start values")
+    paths = [body[k] for k in ("export_disk", "initramfs", "input_disk", "kernel", "rest_socket")]
+    # vfkit splits option values on commas; a quote or NUL would break them.
+    if not all(isinstance(p, str) and p.startswith("/") and not set(p) & {",", '"', "\0"}
+                            for p in paths):
+        raise ValueError("start paths")
+    if len(os.fsencode(body["rest_socket"])) > SOCKET_PATH_MAX:
+        raise ValueError("socket path")
+    return body
+
+
+def _argv_values(start_raw, config_raw):
     try:
-        with open(path, "rb") as handle:
-            vfkit = json.loads(handle.read())["body"]["runtime"]["vfkit"]
-    except (OSError, ValueError, KeyError, TypeError):
-        fail()
-    if not (isinstance(vfkit, str) and vfkit.startswith("/")):
-        fail()
-    return vfkit
+        body = _start_body(start_raw)
+        vfkit = json.loads(config_raw)["body"]["runtime"]["vfkit"]
+        if not (isinstance(vfkit, str) and vfkit.startswith("/")):
+            raise ValueError("vfkit path")
+    except (ValueError, KeyError, TypeError):
+        return 1, b"", b""
+    bootloader = 'linux,kernel=%s,initrd=%s,cmdline="%s"' % (body["kernel"], body["initramfs"], COMMAND_LINE)
+    argv = [vfkit, "--cpus", "1", "--memory", str(MEMORY_BYTES // 1048576),
+            "--bootloader", bootloader,
+            "--device", "virtio-blk,path=%s,readonly" % body["input_disk"],
+            "--device", "virtio-blk,path=%s" % body["export_disk"],
+            "--restful-uri", "unix://%s" % body["rest_socket"]]
+    return 0, canonical({"argv": argv, "stopped_exit_status": 0}), b""
+
+
+def _emit(values):
+    status, out, err = values
+    sys.stdout.buffer.write(out)
+    sys.stderr.buffer.write(err)
+    return status
 
 
 def cmd_argv(args):
     if len(args) != 1:
         fail()
+    path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "host-config.json")
     try:
         with open(args[0], "rb") as handle:
-            doc = json.loads(handle.read())
-        body = doc["body"]
-        valid = (doc["kind"] == "sandbox_runtime_start" and doc["schema_version"] == 1
-                 and set(body) == START_KEYS and body["command_line"] == COMMAND_LINE
-                 and body["cpu_count"] == 1 and body["memory_bytes"] == MEMORY_BYTES)
+            start_raw = handle.read()
+        _start_body(start_raw)
+        with open(path, "rb") as handle:
+            config_raw = handle.read()
     except (OSError, ValueError, KeyError, TypeError):
         fail()
-    if not valid:
-        fail()
-    paths = [body[k] for k in ("export_disk", "initramfs", "input_disk", "kernel", "rest_socket")]
-    # vfkit splits option values on commas; a quote or NUL would break them.
-    if not all(isinstance(p, str) and p.startswith("/") and not set(p) & {",", '"', "\0"}
-                            for p in paths):
-        fail()
-    if len(os.fsencode(body["rest_socket"])) > SOCKET_PATH_MAX:
-        fail()
-    bootloader = 'linux,kernel=%s,initrd=%s,cmdline="%s"' % (body["kernel"], body["initramfs"], COMMAND_LINE)
-    argv = [configured_vfkit(), "--cpus", "1", "--memory", str(MEMORY_BYTES // 1048576),
-            "--bootloader", bootloader,
-            "--device", "virtio-blk,path=%s,readonly" % body["input_disk"],
-            "--device", "virtio-blk,path=%s" % body["export_disk"],
-            "--restful-uri", "unix://%s" % body["rest_socket"]]
-    sys.stdout.buffer.write(canonical({"argv": argv, "stopped_exit_status": 0}))
-    return 0
+    return _emit(_argv_values(start_raw, config_raw))
 
 
 class UnixConnection(http.client.HTTPConnection):
@@ -99,29 +113,38 @@ def rest(path, method, target, body=None):
         conn.close()
 
 
-def cmd_state(args):
-    if len(args) != 1:
-        fail()
-    reply = rest(args[0], "GET", "/vm/state")
+def _state_values(status, body, error):
     state = "error"
-    if reply is not None and reply[0] == 200 and len(reply[1]) <= 65536:
+    if error is None and status == 200 and len(body) <= 65536:
         try:
-            name = json.loads(reply[1])["state"]
+            name = json.loads(body)["state"]
         except (ValueError, KeyError, TypeError):
             name = None
         if name == "VirtualMachineStateStopped":
             state = "stopped"
         elif name in RUNNING_STATES:
             state = "running"
-    sys.stdout.write(state + "\n")
-    return 0
+    return 0, (state + "\n").encode("ascii"), b""
+
+
+def _stop_values(status, body, error):
+    return (0 if error is None and status == 200 else 1), b"", b""
+
+
+def cmd_state(args):
+    if len(args) != 1:
+        fail()
+    reply = rest(args[0], "GET", "/vm/state")
+    return _emit(_state_values(reply[0], reply[1], None) if reply is not None
+                 else _state_values(None, b"", True))
 
 
 def cmd_stop(args):
     if len(args) != 1:
         fail()
     reply = rest(args[0], "POST", "/vm/state", b'{"state":"HardStop"}')
-    return 0 if reply is not None and reply[0] == 200 else 1
+    return _emit(_stop_values(reply[0], reply[1], None) if reply is not None
+                 else _stop_values(None, b"", True))
 
 
 def main():

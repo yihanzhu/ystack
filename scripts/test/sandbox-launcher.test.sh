@@ -3475,7 +3475,7 @@ socketserver.UnixStreamServer(path, H).serve_forever()
 PY
 /bin/chmod 0755 "$vf/vfkit" "$vf/driver"
 "$python" - "$vf" "$vfrun" <<'PY'
-import json, os, subprocess, sys, time
+import importlib.util, io, json, os, subprocess, sys, time, types
 vf, run = sys.argv[1:]
 def drive(*args):
     p = subprocess.run([vf + "/driver"] + list(args), env={}, stdin=subprocess.DEVNULL, capture_output=True, timeout=10)
@@ -3502,6 +3502,83 @@ argv = ["%s/vfkit" % vf, "--cpus", "1", "--memory", "512", "--bootloader",
         "--device", "virtio-blk,path=/w/a/input.img,readonly", "--device", "virtio-blk,path=/w/a/export.img",
         "--restful-uri", "unix://" + sock]
 assert (rc, out) == (0, json.dumps({"argv": argv, "stopped_exit_status": 0}, sort_keys=True, separators=(",", ":")) + "\n"), out
+spec = importlib.util.spec_from_file_location("vfkit_values", vf + "/driver")
+if spec is None:
+    from importlib.machinery import SourceFileLoader
+    spec = importlib.util.spec_from_loader("vfkit_values", SourceFileLoader("vfkit_values", vf + "/driver"))
+values = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(values)
+start_raw = open(run + "/start.json", "rb").read()
+config_raw = open(vf + "/host-config.json", "rb").read()
+assert values._argv_values(start_raw, config_raw) == (rc, out.encode(), b"")
+for bad_start, bad_config in ((b"{", config_raw), (start_raw, b"{"),
+                              (start_raw, b'{"body":{"runtime":{"vfkit":"relative"}}}')):
+    assert values._argv_values(bad_start, bad_config) == (1, b"", b"")
+
+def emitted(call):
+    old_out, old_err = sys.stdout, sys.stderr
+    out, err = io.BytesIO(), io.BytesIO()
+    try:
+        sys.stdout, sys.stderr = types.SimpleNamespace(buffer=out), types.SimpleNamespace(buffer=err)
+        status = call()
+        return status, out.getvalue(), err.getvalue()
+    finally:
+        sys.stdout, sys.stderr = old_out, old_err
+
+state_body = b'{"state":"VirtualMachineStateRunning"}'
+vectors = [("state-running", 200, state_body, b"running\n"),
+           ("state-stopped", 200, b'{"state":"VirtualMachineStateStopped"}', b"stopped\n"),
+           ("state-status-500", 500, state_body, b"error\n"),
+           ("state-malformed", 200, b"{", b"error\n"),
+           ("body-65536", 200, state_body.ljust(65536), b"running\n"),
+           ("body-65537", 200, state_body.ljust(65537), b"error\n")]
+vectors += [(name, 200, json.dumps({"state": name}).encode(), b"running\n")
+            for name in sorted(values.RUNNING_STATES)]
+old_rest = values.rest
+for label, status, body, expected in vectors:
+    calls = []
+    def fixture_rest(*args):
+        calls.append(args)
+        return status, body
+    values.rest = fixture_rest
+    direct = values._state_values(status, body, None)
+    assert direct == (0, expected, b""), label
+    assert emitted(lambda: values.cmd_state([sock])) == direct, label
+    assert calls == [(sock, "GET", "/vm/state")], label
+for status in (200, 500):
+    calls = []
+    values.rest = fixture_rest
+    direct = values._stop_values(status, b"ignored", None)
+    assert direct == (0 if status == 200 else 1, b"", b"")
+    assert emitted(lambda: values.cmd_stop([sock])) == direct
+    assert calls == [(sock, "POST", "/vm/state", b'{"state":"HardStop"}')]
+values.rest = old_rest
+
+old_connection = values.UnixConnection
+for phase in ("request", "getresponse", "read"):
+    for category in (OSError, values.http.client.HTTPException):
+        closed = []
+        class BrokenConnection:
+            def __init__(self, path):
+                assert path == sock
+            def request(self, *args, **kwargs):
+                if phase == "request": raise category("ordinary fixture")
+            def getresponse(self):
+                if phase == "getresponse": raise category("ordinary fixture")
+                return self
+            status = 200
+            def read(self, limit):
+                assert limit == 65537
+                raise category("ordinary fixture")
+            def close(self):
+                closed.append(True)
+        values.UnixConnection = BrokenConnection
+        error = {"phase": phase, "category": category.__name__, "errno": None}
+        assert emitted(lambda: values.cmd_state([sock])) == values._state_values(None, b"", error)
+        assert emitted(lambda: values.cmd_stop([sock])) == values._stop_values(None, b"", error)
+        assert closed == [True, True]
+values.UnixConnection = old_connection
+print("runtime value pairs: argv/state/stop and three transport phases passed", flush=True)
 for bad in ({"cpu_count": 2}, {"memory_bytes": 1048576}, {"command_line": "console=ttyS0"}, {"kernel": "/k,x/Image"}, {"kernel": "k/Image"}):
     assert drive("argv", start(sock, **bad)) == (1, ""), bad
 long_sock = run + "/" + "s" * (102 - len(run) - 1)
