@@ -229,13 +229,24 @@ The complete **record** closure is three files, sorted by path:
 
 | Path | SHA-256 |
 | --- | --- |
-| `core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/modules/schema.jq` | `8d1d02d36ac7ada778f05248f9413062b3fc251499914c15d79f003bbd009ade` |
+| Schema path from the pinned registry and exact core_closure, derived below | `8d1d02d36ac7ada778f05248f9413062b3fc251499914c15d79f003bbd009ade` |
 | `evals/v1/framework.jq` | `d164a102919f42ef002e93c8b515b58028604819e6c09b87c6e4afadb0bbcce4` |
 | `evals/v1/run.sh` | `51770c5597d55bf05020502796810637bfbe697038a541ea6124530c0fffe55c` |
 
 `run.sh` also opens `core/v2/generation-registry.json`, already in core_closure,
 SHA-256 `3950ce43c3073b97759db23fb7e4ce533cbc1d8a8fe4917db6ee1ee0a8e78f94`.
 The schema overlaps core_closure once; framework/run are the two new snapshots.
+Derive the schema path exactly as `run.sh:84–94` does: verify this registry's
+fixed SHA-256, require a nonempty array whose entries have semantic identity
+`core.contracts.v2` and valid generation-id grammar, then read
+`.[-1].generation_id`. The path is
+`core/v2/generations/$generation/modules/schema.jq`. Require exactly one matching
+path in the already bound `expected_core_closure`, with the schema digest in the
+table; verify those file bytes too. Record closure has exactly these three paths,
+with exactly one schema overlap. A changed registry, missing/extra schema match,
+path mismatch or digest mismatch refuses. This permits no arbitrary new generation
+and omits no path, digest or file-count check.
+
 Its jq is the existing digest-checked runtime binary. Bundle bytes are a trial
 input, not closure. This inventory does not claim any shadow closure bound.
 
@@ -350,7 +361,12 @@ Extend `scripts/test/evals-framework.test.sh` in its existing temporary director
 Use the unchanged `scripts/test/eval-framework.test.sh:39–174` wrapper hashing and
 record-building pattern, but build one five-trial human case for these fixtures.
 Do not edit that singular-name test. Private helper functions stay inside the
-existing plural-name test. Synthetic labels/approval are fixture data only.
+existing plural-name test. Derive its schema path by the pinned-registry relation
+above and cross-check the unique exact core_closure entry. Do not copy the literal
+generation id into this or other tests outside the existing closed allowlist.
+Existing allowed production files keep their fixed pins. Do not alter the guard,
+its allowlist, or encode/split a generation id to evade it. Synthetic labels and
+approval are fixture data only.
 
 Create a private repository copy of the actual closure and eval entry files. The
 only code substitutions are fixed catalog digest literals (two in driver, one in
