@@ -1040,15 +1040,104 @@ def run_writer_tests():
         policy_outputs.append((retained, record, policy_paths))
     ok(policy_outputs[0][1]["body"]["write"] == policy_outputs[1][1]["body"]["write"],
        "two prepare-policy attempts keep complete candidate and write-section determinism")
-    for retained, record, paths in policy_outputs:
-        c.check_scope_policy_ref(record["body"]["scope_policy_ref"], retained["scope-policy.json"])
-        for label, value in (("boolean-size", dict(record["body"]["scope_policy_ref"], size_bytes=True)),
-                             ("extra-key", dict(record["body"]["scope_policy_ref"], extra="x")),
-                             ("wrong-name", dict(record["body"]["scope_policy_ref"], name="policy.json")),
-                             ("wrong-hash", dict(record["body"]["scope_policy_ref"], sha256="0"*64))):
-            try:c.check_scope_policy_ref(value, retained["scope-policy.json"])
-            except c.Refusal:ok(True, "policy reference rejects " + label)
-            else:raise AssertionError("policy reference accepted " + label)
+    def check_policy_bundle(name,positive,label):
+        bundle_parent=c._open_held(str(fixture),True,lambda _fd,_state,_ancestor:True,"E_RELATION")
+        try:
+            try:held=c._HeldBundle(bundle_parent,name,"withheld-write-policy.v1")
+            except c.Refusal:ok(not positive,"actual producer bundle rejects "+label)
+            else:
+                try:held.recheck();ok(positive,"actual producer bundle accepts exact policy ref")
+                finally:held.close()
+        finally:bundle_parent.close()
+    for output_index,(retained, record, paths) in enumerate(policy_outputs):
+        actual_ref=record["body"]["scope_policy_ref"]
+        c.check_scope_policy_ref(actual_ref,retained["scope-policy.json"])
+        ref_cases=[("missing-"+key,{name:value for name,value in actual_ref.items() if name!=key}) for key in actual_ref]
+        ref_cases += [("extra",dict(actual_ref,extra="x")),("name",dict(actual_ref,name="policy.json")),
+            ("digest-upper",dict(actual_ref,sha256="A"*64)),("digest-short",dict(actual_ref,sha256="a"*63)),
+            ("digest-mismatch",dict(actual_ref,sha256="0"*64)),("digest-null",dict(actual_ref,sha256=None)),
+            ("digest-bool",dict(actual_ref,sha256=True)),("name-null",dict(actual_ref,name=None)),
+            ("ref-array",[]),("ref-null",None),("ref-bool",False)]
+        for value in (True,False,0,-1,1,1048576,1048577,1.0,"1",None):
+            ref_cases.append(("size-"+repr(value),dict(actual_ref,size_bytes=value)))
+        for label,value in [("exact",actual_ref),*ref_cases]:
+            name="policy-ref-"+str(output_index)+"-"+label
+            location=fixture/name;location.mkdir(mode=0o700)
+            changed=dict(retained);document=copy.deepcopy(record)
+            document["body"]["scope_policy_ref"]=value
+            changed["shadow-record.json"]=canonical(document)
+            marker=json.loads(changed["bundle.json"])
+            marker["body"]["files"]=[{"name":key,"size_bytes":len(raw),"sha256":sha(raw)}
+                for key,raw in sorted(changed.items()) if key!="bundle.json"]
+            changed["bundle.json"]=canonical(marker)
+            for key,raw in changed.items():write(location/key,raw,0o400)
+            check_policy_bundle(name,label=="exact",label)
+        for label in ("missing","extra","renamed","noncanonical","empty","overlimit"):
+            name="policy-inventory-"+str(output_index)+"-"+label;location=fixture/name;location.mkdir(mode=0o700)
+            changed=dict(retained)
+            if label=="missing":changed.pop("scope-policy.json")
+            elif label=="extra":changed["extra-policy.json"]=changed["scope-policy.json"]
+            elif label=="renamed":changed["scope-policy-renamed.json"]=changed.pop("scope-policy.json")
+            elif label=="noncanonical":changed["scope-policy.json"]+=b" "
+            elif label=="empty":changed["scope-policy.json"]=b""
+            else:changed["scope-policy.json"]=b" "*1048577
+            marker=json.loads(changed["bundle.json"])
+            marker["body"]["files"]=[{"name":key,"size_bytes":len(raw),"sha256":sha(raw)}
+                for key,raw in sorted(changed.items()) if key!="bundle.json"]
+            changed["bundle.json"]=canonical(marker)
+            for key,raw in changed.items():write(location/key,raw,0o400)
+            check_policy_bundle(name,False,label)
+    maximum_policy=canonical({"padding":"x"*(1048576-len(canonical({"padding":""})))})
+    ok(len(maximum_policy)==1048576 and c.scope_policy_ref(maximum_policy)["size_bytes"]==1048576,
+       "canonical policy accepts exact one-MiB reference bound in full suite")
+    for raw in (b"",b"{}",b"[]\n",b'{"x":1,"x":2}\n',b'{"x":NaN}\n',b"\xff",maximum_policy+b" "):
+        try:c.scope_policy_ref(raw)
+        except c.Refusal:ok(True,"canonical policy bytes/size reject in full suite")
+        else:raise AssertionError("invalid policy raw accepted")
+    for policy_form,request_policy in ((True,False),(False,True)):
+        wrong_count=case("new32" if policy_form else "old33",policy_form=request_policy)
+        fresh_inputs(wrong_count)
+        complete(wrong_count,refusal=True,record_form="withheld-write-policy.v1" if policy_form else "withheld-write.v1")
+        ok(not (wrong_count[3]/"bundle.json").exists(),"actual producer refuses new32/old33 without form inference")
+    for retained,record,source_paths in (policy_outputs[0],(first_complete,first_record,first_complete_paths)):
+        form=record["body"]["record_form"];policy_form=form=="withheld-write-policy.v1"
+        fact_paths=case("policy-candidate-facts-"+form,policy_form=policy_form)
+        with partial_owner():
+            ws=w._Workspace(*fact_paths,parent,form)
+            try:
+                shutil.copytree(source_paths[2]/"candidate/repository.git",ws.work/"candidate/repository.git")
+                repository=ws.work/"candidate/repository.git"
+                incident_doc=json.loads(retained["incident.json"])
+                revision=incident_doc["body"]["git_revision_ref"]
+                response_doc=json.loads(retained["materialization-response.json"])
+                receipt_doc=json.loads(response_doc["payloads"][0]["data"])
+                facts=w._git_inventory(ws,repository,dict(revision,commit_id=receipt_doc["candidate"]["commit_id"]))
+                source_facts=w._git_inventory(ws,base/"source.git",revision)
+                rows=record["body"]["write"]["write_set"]
+                expected_files={row["path"]:ws.git_read(repository,["cat-file","blob",row["git_blob_oid"]],1048577*8) for row in rows}
+                w._candidate_facts(ws,canonical(response_doc),incident_doc,source_facts,expected_files,rows)
+                ok(True,"actual "+form+" candidate positive before policy Git mutations")
+                policy_path="ystack-evidence/"+incident_doc["id"]+"/scope-policy.json"
+                new_blob=object_write(["hash-object","-w","--stdin"],canonical({"wrong":"policy blob"}))
+                mutations=("missing","extra","renamed","wrong-mode","wrong-blob") if policy_form else ("old33",)
+                for label in mutations:
+                    altered=dict(facts)
+                    if label=="missing":altered.pop(policy_path)
+                    elif label=="extra":altered[policy_path+".extra"]=("100644","blob",new_blob)
+                    elif label=="renamed":altered[policy_path+".renamed"]=altered.pop(policy_path)
+                    elif label=="wrong-mode":altered[policy_path]=("100755","blob",altered[policy_path][2])
+                    else:altered[policy_path]=("100644","blob",new_blob)
+                    tree=changed_tree(altered)
+                    commit=object_write(["commit-tree",tree,"-p",revision["commit_id"]],b"policy candidate negative\n")
+                    changed_response=copy.deepcopy(response_doc);changed_receipt=json.loads(changed_response["payloads"][0]["data"])
+                    changed_receipt["candidate"].update(commit_id=commit,tree_id=tree)
+                    changed_receipt["changed_paths"]["count"]=len(rows)+(-1 if label=="missing" else 1 if label in {"extra","old33"} else 0)
+                    receipt_raw=canonical(changed_receipt)
+                    changed_response["payloads"][0].update(data=receipt_raw.decode(),sha256=sha(receipt_raw))
+                    try:w._candidate_facts(ws,canonical(changed_response),incident_doc,source_facts,expected_files,rows)
+                    except e.Refusal:ok(True,"actual policy Git candidate refuses "+form+"/"+label)
+                    else:raise AssertionError("policy Git candidate accepted "+label)
+            finally:ws.close()
     for phase in ("capture", "admit", "final-fsync"):
         damaged = case("policy-held-"+phase, policy_form=True)
         fresh_inputs(damaged)

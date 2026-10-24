@@ -14586,6 +14586,57 @@ reader=module._Reader(location/'scope.json',location/('set.json' if case and cas
 files={name:(area/name).read_bytes() for name in c.SHADOW_EVIDENCE_NAMES+('publisher-body.txt','bundle.json')}
 incident=json.loads(files['incident.json']);body=json.loads(files['shadow-record.json'])['body']
 try:
+    if case and case['mode']=='coverage-policy':
+        files={path.name:path.read_bytes() for path in pathlib.Path(case['bundle']).iterdir()}
+        incident=json.loads(files['incident.json']);body=json.loads(files['shadow-record.json'])['body']
+        reader.authentication_revision=incident['body']['git_revision_ref']
+        if case.get('observation') is not None:
+            anchor=reader.anchor_for();configuration=c.load_coverage_configuration(anchor)
+            assert configuration is not None
+            reader.coverage_configuration=configuration;reader.owned.append(configuration)
+            retained=[{path.name:path.read_bytes() for path in pathlib.Path(directory).iterdir()} for directory in case['retained']]
+            if case.get('policy_relation') is not None:
+                identities=[reader.coverage_identity(value) for value in retained]
+                digests=[value.pop('scope_policy_sha256') for value in identities]
+                assert len(identities)==2 and identities[0]==identities[1]
+                assert (digests[0]==digests[1])==(case['policy_relation']=='same')
+                print(json.dumps({'closed_identity_except_policy':'equal','policy_relation':case['policy_relation']}),flush=True)
+            if case['expected']=='interval-refusal':
+                reader._authenticate(files)
+                try:reader.coverage_interval(case['observation'],retained)
+                except c.Refusal as error:
+                    assert error.code=='E_RELATION',error.code
+                    reached=[];tb=error.__traceback__
+                    while tb:
+                        if tb.tb_frame.f_code is module._Reader.coverage_interval.__code__:reached.append(tb.tb_lineno)
+                        tb=tb.tb_next
+                    lines=source.read_text().splitlines()
+                    assert any(case['needle'] in ' '.join(lines[max(0,n-2):n+4]) for n in reached),(case['needle'],reached)
+                    print(json.dumps({'actual_git_interval_refusal':label,'lines':reached,'current_record':'fully authenticated'}),flush=True)
+                else:raise AssertionError('actual changed Git interval accepted '+label)
+                raise SystemExit(0)
+            interval=reader.coverage_interval(case['observation'],retained)
+            assert interval['commit_count']==len(case['observation']['first_parent_commits'])
+        if case['expected']=='receipt-bound-refusal':
+            reader.git_relations(files,json.loads(files['materialization-input.json']),incident,body)
+            try:reader._authenticate(files)
+            except c.Refusal as error:
+                assert error.code=='E_RELATION',error.code
+                reached=[];tb=error.__traceback__
+                while tb:
+                    if tb.tb_frame.f_code is module._Reader._authenticate.__code__:reached.append(tb.tb_lineno)
+                    tb=tb.tb_next
+                lines=source.read_text().splitlines()
+                assert any('checked == files[' in ' '.join(lines[max(0,n-2):n+4]) for n in reached),reached
+                print(json.dumps({'linked_candidate_manifest':'internally verified by actual git_relations',
+                    'receipt_boundary':'refused','lines':reached,'original_store_receipt_preserved':True}),flush=True)
+            else:raise AssertionError('linked candidate/manifest rewrite authenticated by original receipt')
+        else:
+            facts=reader._authenticate(files)
+            assert facts['receipt_ref']['sha256']==c.digest(files['sandbox-receipt.json'])
+            print(json.dumps({'actual_policy_reader':'authenticated','interval':'verified' if case.get('observation') is not None else 'not requested',
+                'form':body['record_form'],'SIMULATED':['startup admission','VM identity','launch receipt']}),flush=True)
+        raise SystemExit(0)
     if label in ('qualified','unproven'):
         if label=='unproven':files['registry.json']=(package/'shadow/v1/shadow-environments.json').read_bytes()
         operation=lambda:reader._authenticate(files)
@@ -15015,6 +15066,9 @@ print(json.dumps({'through_use_controls':'PASS','sibling_before':'PASS','sibling
     'original_timing_unchanged':True,'watched_cancellation':'E_RUNTIME'},sort_keys=True),flush=True)
 
 
+def coverage_git(args,raw=None):
+    return git(args,raw).decode('utf-8').strip()
+
 def build_coverage_revision(commit, tree, label, terminated, template_files, template_record, record_form="withheld-write-policy.v1"):
     commands_start=len(commands)
     work = base / ('coverage-work-' + label)
@@ -15348,7 +15402,7 @@ def build_coverage_revision(commit, tree, label, terminated, template_files, tem
     return {'files':outer_files,'marker':outer_marker,'record':outer_record,'bundle':outer_bundle,
         'candidate':write_material_receipt['candidate'],'publisher':write_section['publisher_request'],'paths':paths,
         'identity':actual_record['qualified_identity'],'duty':duty,'claim':claim,'label':label,
-        'terminated_at':coverage_terminated}
+        'terminated_at':coverage_terminated,'producer_work':producer_work}
 
 coverage_n = load('fixture_actual_coverage_normalizer', package/'sandbox/v1/coverage-source.py')
 coverage_root = base/'coverage-source'
@@ -15373,7 +15427,7 @@ for family in coverage_n.FAMILIES:
 coverage_sudo=['/usr/bin/sudo','-n','-u','#'+str(uid),'--',sys.executable,'-I','-S','-B',anchor/'host-supervisor.py','coverage-read']
 coverage_consumer=['/usr/bin/sudo','-n','-u',consumer,'--']
 # The Linux outer setup owns the one exact sudoers rule. macOS requires an existing authorized equivalent.
-def coverage_install_pages(qualifying,current,interval,pulls,collector_failure=None):
+def coverage_install_pages(qualifying,current,interval,pulls,collector_failure=None,rule_history=None):
     baseline_rules=[{'rule_id':kind,'target_pattern':'main','enforcement':'active','bypass_actors':[],
         'rule_type':kind,'parameters':{}} for kind in sorted(coverage_n.REQUIRED_RULES|{'fifth-rule'})]
     snapshots={'baseline':{'branch_node_id':'branch.scope-fixture','commit_id':interval[0]['commit_id'],
@@ -15383,7 +15437,7 @@ def coverage_install_pages(qualifying,current,interval,pulls,collector_failure=N
     pages=[canonical({'schema_version':1,'repository':{'repository_id':'fixture.target','node_id':'repo.scope-fixture'},
         'default_branch':{'name':'main','node_id':'branch.scope-fixture'},'branch_snapshots':snapshots,'commits':interval}),
         canonical({'schema_version':1,'pull_requests':pulls}),
-        canonical({'schema_version':1,'baseline':baseline_rules,'current':baseline_rules,'events':[]})]
+        canonical({'schema_version':1,**(rule_history if rule_history is not None else {'baseline':baseline_rules,'current':baseline_rules,'events':[]})})]
     capture={'pages':[{'family':family,'page_index':0,'response_status':200,'input_cursor':None,'output_cursor':None}
                       for family in coverage_n.FAMILIES]}
     # Pin raw offline forge pages inside the measured collector executable.
@@ -15444,7 +15498,7 @@ coverage_template_files=dict(outer_files)
 coverage_template_record=outer_record
 coverage_original_scope=(doc_root/'scope.json').read_bytes()
 coverage_original_documents={name:(doc_root/(name+'.json')).read_bytes() for name in ('risk','kill','duty','shadow-set')}
-coverage_original_head=git(['rev-parse','refs/heads/main'])
+coverage_original_head=coverage_git(['rev-parse','refs/heads/main'])
 coverage_attempts=[]
 def coverage_evaluate_pair(qualifying,current,allow_closed=False,at_ready=None):
     selected=json.loads(coverage_original_scope)
@@ -15496,9 +15550,215 @@ def coverage_evaluate_pair(qualifying,current,allow_closed=False,at_ready=None):
         for path in holding.iterdir():path.rename(base/'bundles'/path.name)
         holding.rmdir()
 
+
+def coverage_reader_policy_control(item,label,expected='authenticated',observation=None,retained=None,needle=None,policy_relation=None):
+    label='coverage-policy-'+label
+    scratch=relation_area/label;scratch.mkdir(mode=0o700);os.chown(scratch,consumer_uid,consumer_gid)
+    for name in ('reader-captures','reader-runtime','observation','reader-runtime/no-hooks'):
+        child=scratch/name;child.mkdir(mode=0o700);os.chown(child,consumer_uid,consumer_gid)
+    relation_cases.append({'label':label,'mode':'coverage-policy','bundle':str(base/'bundles'/sha(item['record']) if (base/'bundles'/sha(item['record'])).exists() else item['bundle']),
+        'expected':expected,'needle':needle,'observation':observation,'policy_relation':policy_relation,
+        'retained':[str(base/'bundles'/sha(value['record']) if (base/'bundles'/sha(value['record'])).exists() else value['bundle']) for value in retained or []]})
+    put(relation_area/'cases.json',relation_cases)
+    run([*relation_argv,label])
+
+
+def coverage_linked_policy_attack(item):
+    work=base/'coverage-linked-candidate-attack';work.mkdir(mode=0o700)
+    original=dict(item['files']);changed=dict(original)
+    original_response=json.loads(original['materialization-response.json'])
+    original_material_receipt=json.loads(original_response['payloads'][0]['data'])
+    original_candidate=original_material_receipt['candidate']
+    original_record=json.loads(original['shadow-record.json'])
+    revision=original_record['body']['git_revision_ref']
+    rows=original_record['body']['write']['write_set']
+    candidate_files={row['path']:git(['cat-file','blob',row['git_blob_oid']]) for row in rows}
+    policy_path='ystack-evidence/'+json.loads(original['incident.json'])['id']+'/scope-policy.json'
+    different=json.loads(original['scope-policy.json']);different['body']['accepted_shadow_outcomes'].reverse()
+    changed['scope-policy.json']=canonical(different)
+    assert changed['scope-policy.json']!=original['scope-policy.json']
+    candidate_files[policy_path]=changed['scope-policy.json']
+    patch,write_set=c.evidence_patch(candidate_files,revision['hash_algorithm'],'withheld-write-policy.v1')
+    contract=c.write_contract(sorted(candidate_files),'withheld-write-policy.v1')
+    contract_path=put(work/'contract.json',contract);patch_path=put(work/'patch.txt',patch)
+    metadata=json.loads((item['producer_work']/'builder/metadata-first.json').read_bytes())
+    metadata.update(contract=sha(contract),patch=sha(patch),allowed_paths=sorted(candidate_files))
+    builder=package/'shadow/v1/write-materialization-input.jq'
+    def phase(name,input_path,metadata_path):
+        return run([jq,'-L',modules,'-S','-c','--arg','phase',name,'--rawfile','contract',contract_path,
+            '--rawfile','patch',patch_path,'--slurpfile','metadata',metadata_path,'-f',builder,input_path])
+    first=phase('stage-request',item['producer_work']/'frozen/materialization-input.json',put(work/'metadata-first.json',metadata))
+    metadata['stage_request_sha256']=sha(canonical(json.loads(first)['stage_request']))
+    changed['materialization-input.json']=phase('final-input',put(work/'first.json',first),put(work/'metadata-final.json',metadata))
+    input_path=put(work/'input.json',changed['materialization-input.json'])
+    candidate=work/'candidate';candidate.mkdir(mode=0o700)
+    scratch=work/'materializer';scratch.mkdir(mode=0o700)
+    changed['materialization-response.json']=run(['/bin/bash','-p',package/'adapters/local-git-materializer/v1/materialize.sh',
+        'materialize',input_path,revision['repository_id'],source,candidate,scratch,helper,jq])
+    response_path=put(work/'response.json',changed['materialization-response.json'])
+    response=json.loads(changed['materialization-response.json']);material_receipt=json.loads(response['payloads'][0]['data'])
+    preparation=work/'preparation';prep_scratch=work/'preparation-scratch';prep_scratch.mkdir(mode=0o700)
+    preparation_source=package/'preparation/v1/prepare-candidate.py'
+    common=['--input',input_path,'--input-sha256',sha(changed['materialization-input.json']),
+        '--response',response_path,'--response-sha256',sha(changed['materialization-response.json']),
+        '--candidate-repository',candidate/'repository.git','--output',preparation,'--scratch',prep_scratch,'--jq',jq]
+    run([sys.executable,'-I','-S','-B',preparation_source,'prepare',*common])
+    for path in prep_scratch.iterdir():
+        if path.is_dir() and not path.is_symlink():shutil.rmtree(path)
+        else:path.unlink()
+    run([sys.executable,'-I','-S','-B',preparation_source,'inspect',*common])
+    changed['preparation-record.json']=(preparation/'record.json').read_bytes()
+    changed['preparation-manifest.json']=(preparation/'manifest.json').read_bytes()
+    prep=json.loads(changed['preparation-record.json']);manifest=json.loads(changed['preparation-manifest.json'])
+    policy_entry=next(row for row in manifest['entries'] if row['path']==policy_path)
+    assert policy_entry['sha256']==sha(changed['scope-policy.json']) and policy_entry['size_bytes']==len(changed['scope-policy.json'])
+    assert prep['input_sha256']==sha(changed['materialization-input.json']) and prep['response_sha256']==sha(changed['materialization-response.json'])
+    assert prep['manifest_sha256']==sha(changed['preparation-manifest.json'])
+    assert prep['candidate']['commit_id']==material_receipt['candidate']['commit_id']!=original_candidate['commit_id']
+    assert prep['candidate']['tree_id']==material_receipt['candidate']['tree_id']!=original_candidate['tree_id']
+    assert material_receipt['source']==original_material_receipt['source']
+    assert material_receipt['candidate']['parent_commit_id']==original_candidate['parent_commit_id']==revision['commit_id']
+    original_rows={row['path']:row for row in rows};changed_rows={row['path']:row for row in write_set}
+    assert set(original_rows)==set(changed_rows) and len(changed_rows)==33
+    assert all(original_rows[path]==changed_rows[path] for path in original_rows if path!=policy_path)
+    assert original_rows[policy_path]['mode']==changed_rows[policy_path]['mode']=='100644'
+    actual_blob=run(['/usr/bin/git','--no-replace-objects','--git-dir='+str(candidate/'repository.git'),'cat-file','blob',policy_entry['blob_oid']])
+    assert actual_blob==changed['scope-policy.json']
+    identity=json.loads(original['qualified-identity.json'])
+    identity['body']['stage_request_ref']=e.pair_ref(json.loads(changed['materialization-input.json'])['stage_request'])
+    changed['qualified-identity.json']=canonical(identity)
+    launch=json.loads(original['sandbox-request.json']);expectation=json.loads(original['sandbox-expectation.json'])
+    launch['body']['subject'].update(source=prep['source'],candidate={'preparation_record_sha256':sha(changed['preparation-record.json']),
+        'manifest_sha256':sha(changed['preparation-manifest.json']),'commit_id':prep['candidate']['commit_id'],'tree_id':prep['candidate']['tree_id']})
+    changed['sandbox-request.json']=canonical(launch)
+    expectation['body']['subject']=launch['body']['subject']
+    expectation['body']['attempt']['launch_request_sha256']=sha(changed['sandbox-request.json'])
+    changed['sandbox-expectation.json']=canonical(expectation)
+    old_launch=json.loads(original['sandbox-request.json']);old_expectation=json.loads(original['sandbox-expectation.json'])
+    assert launch['id']==old_launch['id'] and launch['body']['attempt']==old_launch['body']['attempt']
+    assert {key:value for key,value in launch['body'].items() if key!='subject'}=={key:value for key,value in old_launch['body'].items() if key!='subject'}
+    assert {key:value for key,value in launch['body']['subject'].items() if key!='candidate'}=={key:value for key,value in old_launch['body']['subject'].items() if key!='candidate'}
+    assert expectation['body']['control']==old_expectation['body']['control'] and expectation['body']['store_id']==old_expectation['body']['store_id']
+    assert {key:value for key,value in expectation['body']['attempt'].items() if key!='launch_request_sha256'}==old_launch['body']['attempt']
+    original_sandbox_receipt=json.loads(original['sandbox-receipt.json'])
+    assert original_sandbox_receipt['body']['attempt']['attempt_id']==launch['id']==expectation['body']['attempt']['attempt_id']
+    assert json.loads(original['sandbox-receipt.json'])['body']['subject']['candidate']!=launch['body']['subject']['candidate']
+    publisher,publisher_body=w._publisher(json.loads(original['incident.json']),prep['candidate']['tree_id'])
+    changed['publisher-body.txt']=publisher_body
+    write_section=json.loads(canonical(original_record['body']['write']))
+    write_section.update(write_set=write_set,publisher_request=publisher,
+        admission={'state':'checked','effect':'none','request_sha256':sha(canonical(publisher)),'write_set_sha256':sha(canonical(write_set))},
+        post_write_verification={'target_revision':revision,'candidate_tree_id':prep['candidate']['tree_id'],'write_set':write_set})
+    frozen={path.name:path.read_bytes() for path in (item['producer_work']/'frozen').iterdir()}
+    from types import SimpleNamespace
+    materialized=SimpleNamespace(response_raw=changed['materialization-response.json'],evaluation_raw=changed['sandbox-evaluation.json'],
+        qualified_identity_raw=changed['qualified-identity.json'])
+    changed['shadow-record.json']=w._outer_record(SimpleNamespace(anchor=SimpleNamespace(config=config['body'])),materialized,frozen,
+        changed,write_section,changed['consumer-provenance.json'],changed['trace-ledger.json'],'withheld-write-policy.v1')
+    actual_changed={name for name in original if changed[name]!=original[name]}
+    assert actual_changed=={'scope-policy.json','materialization-input.json','materialization-response.json',
+        'preparation-record.json','preparation-manifest.json','qualified-identity.json','sandbox-request.json',
+        'sandbox-expectation.json','shadow-record.json'}
+    old_publisher=original_record['body']['write']['publisher_request']
+    assert publisher['id']==old_publisher['id']
+    assert {key:value for key,value in publisher['body'].items() if key!='candidate_tree_id'}=={key:value for key,value in old_publisher['body'].items() if key!='candidate_tree_id'}
+    assert changed['sandbox-receipt.json']==original['sandbox-receipt.json']
+    assert changed['origin-observation.json']==original['origin-observation.json']
+    attempt=json.loads(original['sandbox-request.json'])['id'];receipt_before=(store/attempt/'receipt.json').read_bytes()
+    assert receipt_before==original['sandbox-receipt.json']
+    marker=json.loads(item['marker']);marker['body']['files']=[{'name':name,'size_bytes':len(raw),'sha256':sha(raw)} for name,raw in sorted(changed.items())]
+    attacked=dict(item,files=changed,record=changed['shadow-record.json'],marker=canonical(marker),identity=identity['body'],label='linked-policy-attack')
+    attacked['bundle']=base/'snapshots'/'linked-policy-attack';attacked['bundle'].mkdir(mode=0o755);attacked['bundle'].chmod(0o755)
+    for name,raw in changed.items():put(attacked['bundle']/name,raw)
+    put(attacked['bundle']/'bundle.json',attacked['marker'])
+    shutil.copytree(candidate/'repository.git/objects',source/'objects',dirs_exist_ok=True)
+    for directory,dirs,names in os.walk(source):
+        pathlib.Path(directory).chmod(0o755)
+        for name in names:(pathlib.Path(directory)/name).chmod(0o444)
+    return attacked,attempt,receipt_before
+
+def coverage_tree_facts(commit):
+    facts={}
+    for row in coverage_git(['ls-tree','-r','-t','-z',commit]).encode().split(b'\0'):
+        if row:
+            head,path=row.split(b'\t');facts[path.decode()]=tuple(head.decode().split())
+    return facts
+
+def coverage_chain(qualifying,label,current_form='withheld-write-policy.v1',damage=None):
+    first=qualifying['identity']['target_revision']['commit_id']
+    before=coverage_tree_facts(first)
+    candidate=qualifying['candidate']['commit_id']
+    ordinary=coverage_git(['hash-object','-w','--stdin'],('ordinary '+label+'\n').encode())
+    b_facts=dict(before)
+    if damage not in ('direct-evidence','foreign-evidence'):b_facts['coverage-chain.txt']=('100644','blob',ordinary)
+    transient=None
+    if damage in ('ystack-transient','workflow-transient'):
+        transient='.ystack/transient.json' if damage=='ystack-transient' else '.github/workflows/transient.yml'
+        pieces=transient.split('/')
+        for depth in range(1,len(pieces)):
+            b_facts.setdefault('/'.join(pieces[:depth]),('040000','tree',first))
+        b_facts[transient]=('100644','blob',ordinary)
+    if damage in ('direct-evidence','foreign-evidence'):
+        b_facts['ystack-evidence/'+damage+'.json']=('100644','blob',ordinary)
+    b_tree=object_tree(b_facts);second=coverage_git(['commit-tree',b_tree,'-p',first],('coverage B '+label+'\n').encode())
+    c_facts=coverage_tree_facts(candidate)
+    if damage not in ('direct-evidence','foreign-evidence'):c_facts['coverage-chain.txt']=('100644','blob',ordinary)
+    if damage in ('direct-evidence','foreign-evidence'):
+        c_facts['ystack-evidence/'+damage+'.json']=b_facts['ystack-evidence/'+damage+'.json']
+    c_tree=object_tree(c_facts);merge=coverage_git(['commit-tree',c_tree,'-p',second,'-p',candidate],('coverage C '+label+'\n').encode())
+    r_facts=dict(c_facts);last=coverage_git(['hash-object','-w','--stdin'],('last '+label+'\n').encode())
+    if damage not in ('deleted-evidence','rewritten-evidence'):r_facts['coverage-chain-last.txt']=('100644','blob',last)
+    if damage=='deleted-evidence':r_facts.pop(qualifying['paths'][0])
+    if damage=='rewritten-evidence':r_facts[qualifying['paths'][0]]=('100644','blob',last)
+    r_tree=object_tree(r_facts);revision=coverage_git(['commit-tree',r_tree,'-p',merge],('coverage R '+label+'\n').encode())
+    coverage_git(['update-ref','refs/heads/main',revision])
+    current=build_coverage_revision(revision,r_tree,label+'-current',int(time.time()),coverage_template_files,coverage_template_record,current_form)
+    interval=[{'index':index,'commit_id':oid,'parent_commit_id':parent,'tree_id':tree} for index,(oid,parent,tree) in enumerate([
+        (first,None,coverage_git(['rev-parse',first+'^{tree}'])),(second,first,b_tree),(merge,second,c_tree),(revision,merge,r_tree)])]
+    pull={'node_id':'pr.'+label,'number':1000,'publisher_identity_ref':coverage_publisher_identity,
+        'base_commit_id':first,'head_commit_id':candidate,'merge_commit_id':merge,'merged':True,
+        'merged_at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),'source_branch':qualifying['publisher']['body']['branch'],
+        'scope_id':scope_doc['id'],'changed_paths':qualifying['paths'],'publisher_request_sha256':sha(canonical(qualifying['publisher']))}
+    pulls=[pull]
+    if damage=='foreign-evidence':
+        foreign_path='ystack-evidence/foreign-evidence.json'
+        pulls.insert(0,dict(pull,node_id='pr.foreign-'+label,number=999,
+            publisher_identity_ref=dict(coverage_publisher_identity,id='publisher.foreign'),
+            head_commit_id=second,merge_commit_id=second,source_branch='ystack/evidence/foreign',
+            changed_paths=[foreign_path],publisher_request_sha256=sha(b'foreign publisher request')))
+    assert pull['head_commit_id']==qualifying['candidate']['commit_id']
+    assert pull['publisher_request_sha256']==sha(canonical(qualifying['publisher']))
+    assert pull['changed_paths']==qualifying['paths'] and pull['source_branch']==qualifying['publisher']['body']['branch']
+    if damage in ('direct-evidence','foreign-evidence'):
+        actual_second=coverage_tree_facts(second)
+        changed={path for path in set(before)|set(actual_second) if before.get(path)!=actual_second.get(path)
+            and (before.get(path,(None,None))[1]=='blob' or actual_second.get(path,(None,None))[1]=='blob')}
+        assert changed=={'ystack-evidence/'+damage+'.json'}
+    if damage in ('deleted-evidence','rewritten-evidence'):
+        actual_last=coverage_tree_facts(revision)
+        changed={path for path in set(c_facts)|set(actual_last) if c_facts.get(path)!=actual_last.get(path)
+            and (c_facts.get(path,(None,None))[1]=='blob' or actual_last.get(path,(None,None))[1]=='blob')}
+        assert changed=={qualifying['paths'][0]}
+    if transient is not None:
+        assert transient not in before and transient in coverage_tree_facts(second) and transient not in coverage_tree_facts(merge)
+    return current,interval,pulls
+
+def coverage_observation(qualifying,current,interval,pulls,label):
+    pages,capture=coverage_install_pages(qualifying,current,interval,pulls)
+    request=json.loads(second_request)
+    request['body']['coverage_base']=qualifying['identity']['target_revision']
+    request['body']['evaluated_revision']=current['identity']['target_revision']
+    raw=canonical(request)
+    records=[(b'capture.json',canonical(capture)),*[(f'raw/{index:04d}'.encode(),page) for index,page in enumerate(pages)]]
+    manifest,raw_pages=coverage_n.captured(records,raw)
+    observation=json.loads(coverage_n.normalize(manifest,raw_pages,raw))
+    assert observation['first_parent_commits']==interval and observation['publisher_pull_requests']==pulls
+    print(json.dumps({'coverage_nonpolicy_pages':label,'normalizer':'valid complete raw pages','commits':len(interval),'pulls':len(pulls)}),flush=True)
+    return observation
+
 try:
     original_facts={}
-    for row in git(['ls-tree','-r','-t','-z',coverage_original_head]).encode().split(b'\0'):
+    for row in coverage_git(['ls-tree','-r','-t','-z',coverage_original_head]).encode().split(b'\0'):
         if row:
             head,name=row.split(b'\t');original_facts[name.decode()]=tuple(head.decode().split())
     for neighbor in (-1,0,1):
@@ -15510,27 +15770,27 @@ try:
             label='age-'+str(neighbor).replace('-','m')+'-'+str(retry)
             while time.time()%1>0.08:time.sleep(0.005)
             original_time=int(time.time())+correction-2592000-neighbor
-            qualifying=build_coverage_revision(coverage_original_head,git(['rev-parse',coverage_original_head+'^{tree}']),label+'-q',original_time,
+            qualifying=build_coverage_revision(coverage_original_head,coverage_git(['rev-parse',coverage_original_head+'^{tree}']),label+'-q',original_time,
                 coverage_template_files,coverage_template_record)
             # A -> ordinary B -> own publisher merge C -> ordinary R.
             a=coverage_original_head
             candidate=qualifying['candidate']['commit_id']
             base_facts=dict(original_facts)
-            ordinary=git(['hash-object','-w','--stdin'],b'ordinary coverage source\n')
+            ordinary=coverage_git(['hash-object','-w','--stdin'],b'ordinary coverage source\n')
             base_facts['coverage-ordinary.txt']=('100644','blob',ordinary)
-            tb=object_tree(base_facts);b=git(['commit-tree',tb,'-p',a],b'coverage B\n')
+            tb=object_tree(base_facts);b=coverage_git(['commit-tree',tb,'-p',a],b'coverage B\n')
             candidate_facts={}
-            for row in git(['ls-tree','-r','-t','-z',candidate]).encode().split(b'\0'):
+            for row in coverage_git(['ls-tree','-r','-t','-z',candidate]).encode().split(b'\0'):
                 if row:
                     head,name=row.split(b'\t');candidate_facts[name.decode()]=tuple(head.decode().split())
             merged=dict(candidate_facts);merged['coverage-ordinary.txt']=('100644','blob',ordinary)
-            tc=object_tree(merged);merge=git(['commit-tree',tc,'-p',b,'-p',candidate],b'coverage C\n')
-            last=git(['hash-object','-w','--stdin'],b'last coverage source\n');merged['coverage-last.txt']=('100644','blob',last)
-            tr=object_tree(merged);r=git(['commit-tree',tr,'-p',merge],b'coverage R\n')
-            git(['symbolic-ref','HEAD','refs/heads/main']);git(['update-ref','refs/heads/main',r])
+            tc=object_tree(merged);merge=coverage_git(['commit-tree',tc,'-p',b,'-p',candidate],b'coverage C\n')
+            last=coverage_git(['hash-object','-w','--stdin'],b'last coverage source\n');merged['coverage-last.txt']=('100644','blob',last)
+            tr=object_tree(merged);r=coverage_git(['commit-tree',tr,'-p',merge],b'coverage R\n')
+            coverage_git(['symbolic-ref','HEAD','refs/heads/main']);coverage_git(['update-ref','refs/heads/main',r])
             current=build_coverage_revision(r,tr,label+'-r',int(time.time()),coverage_template_files,coverage_template_record)
             interval=[{'index':i,'commit_id':commit_id,'parent_commit_id':parent,'tree_id':tree_id}
-                for i,(commit_id,parent,tree_id) in enumerate([(a,None,git(['rev-parse',a+'^{tree}'])),(b,a,tb),(merge,b,tc),(r,merge,tr)])]
+                for i,(commit_id,parent,tree_id) in enumerate([(a,None,coverage_git(['rev-parse',a+'^{tree}'])),(b,a,tb),(merge,b,tc),(r,merge,tr)])]
             pull={'node_id':'pr.coverage-'+label,'number':len(coverage_attempts)+1,'publisher_identity_ref':coverage_publisher_identity,
                 'base_commit_id':a,'head_commit_id':candidate,'merge_commit_id':merge,'merged':True,
                 'merged_at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),'source_branch':qualifying['publisher']['body']['branch'],
@@ -15557,24 +15817,24 @@ try:
                 break
         assert matched, 'exact coverage age fixture could not reach the intended real-clock delta'
     young_label='young'
-    qualifying=build_coverage_revision(coverage_original_head,git(['rev-parse',coverage_original_head+'^{tree}']),young_label+'-q',int(time.time())-86400,
+    qualifying=build_coverage_revision(coverage_original_head,coverage_git(['rev-parse',coverage_original_head+'^{tree}']),young_label+'-q',int(time.time())-86400,
         coverage_template_files,coverage_template_record)
     a=coverage_original_head
     candidate=qualifying['candidate']['commit_id']
-    b_tree=dict(original_facts);ordinary=git(['hash-object','-w','--stdin'],b'young ordinary\n');b_tree['coverage-ordinary.txt']=('100644','blob',ordinary)
-    tb=object_tree(b_tree);b=git(['commit-tree',tb,'-p',a],b'young B\n')
+    b_tree=dict(original_facts);ordinary=coverage_git(['hash-object','-w','--stdin'],b'young ordinary\n');b_tree['coverage-ordinary.txt']=('100644','blob',ordinary)
+    tb=object_tree(b_tree);b=coverage_git(['commit-tree',tb,'-p',a],b'young B\n')
     c_tree={}
-    for row in git(['ls-tree','-r','-t','-z',candidate]).encode().split(b'\0'):
+    for row in coverage_git(['ls-tree','-r','-t','-z',candidate]).encode().split(b'\0'):
         if row:
             head,name=row.split(b'\t');c_tree[name.decode()]=tuple(head.decode().split())
     c_tree['coverage-ordinary.txt']=('100644','blob',ordinary)
-    tc=object_tree(c_tree);merge=git(['commit-tree',tc,'-p',b,'-p',candidate],b'young C\n')
-    r_tree=dict(c_tree);last=git(['hash-object','-w','--stdin'],b'young last\n');r_tree['coverage-last.txt']=('100644','blob',last)
-    tr=object_tree(r_tree);r=git(['commit-tree',tr,'-p',merge],b'young R\n')
-    git(['update-ref','refs/heads/main',r])
+    tc=object_tree(c_tree);merge=coverage_git(['commit-tree',tc,'-p',b,'-p',candidate],b'young C\n')
+    r_tree=dict(c_tree);last=coverage_git(['hash-object','-w','--stdin'],b'young last\n');r_tree['coverage-last.txt']=('100644','blob',last)
+    tr=object_tree(r_tree);r=coverage_git(['commit-tree',tr,'-p',merge],b'young R\n')
+    coverage_git(['update-ref','refs/heads/main',r])
     current=build_coverage_revision(r,tr,young_label+'-r',int(time.time()),coverage_template_files,coverage_template_record)
     interval=[{'index':i,'commit_id':oid,'parent_commit_id':parent,'tree_id':tid} for i,(oid,parent,tid) in
-        enumerate([(a,None,git(['rev-parse',a+'^{tree}'])),(b,a,tb),(merge,b,tc),(r,merge,tr)])]
+        enumerate([(a,None,coverage_git(['rev-parse',a+'^{tree}'])),(b,a,tb),(merge,b,tc),(r,merge,tr)])]
     pull={'node_id':'pr.coverage-young','number':1000,'publisher_identity_ref':coverage_publisher_identity,
         'base_commit_id':a,'head_commit_id':candidate,'merge_commit_id':merge,'merged':True,
         'merged_at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),'source_branch':qualifying['publisher']['body']['branch'],
@@ -15725,31 +15985,123 @@ finally:
     coverage_damage_current('outer-policy-with-recomputed-marker','scope-policy.json',['body','accepted_shadow_outcomes'],['reproduced','no-change'])
     coverage_damage_current('typed-policy-size','shadow-record.json',['body','scope_policy_ref','size_bytes'],True)
     coverage_damage_current('policy-reference-hash','shadow-record.json',['body','scope_policy_ref','sha256'],'0'*64)
+    attacked,attacked_attempt,original_receipt=coverage_linked_policy_attack(current)
+    coverage_evaluate_pair(qualifying,current,at_ready=lambda:coverage_reader_policy_control(current,'linked-before-positive'))
+    coverage_evaluate_pair(qualifying,attacked,at_ready=lambda:coverage_reader_policy_control(attacked,'linked-receipt-attack','receipt-bound-refusal'))
+    assert (store/attacked_attempt/'receipt.json').read_bytes()==original_receipt
+    attack_result=coverage_evaluate_pair(qualifying,attacked,allow_closed=True)
+    assert attack_result is None or attack_result['body']['evidence']['coverage']['state']=='stale'
+    assert (store/attacked_attempt/'receipt.json').read_bytes()==original_receipt
+    assert coverage_evaluate_pair(qualifying,current)['body']['evidence']['coverage']['state']=='authenticated'
     fixed_policy_path=package/'scope/v1/scope-policy.json'
     fixed_policy_before=fixed_policy_path.read_bytes()
     fixed_policy_mode=fixed_policy_path.stat().st_mode & 0o777
-    different_policy=json.loads(fixed_policy_before)
-    different_policy['body']['accepted_shadow_outcomes'].reverse()
-    different_policy_raw=canonical(different_policy)
-    assert different_policy_raw!=fixed_policy_before
+    different_policy=json.loads(fixed_policy_before);different_policy['body']['accepted_shadow_outcomes'].reverse()
+    different_policy_raw=canonical(different_policy);assert different_policy_raw!=fixed_policy_before
     try:
         put(fixed_policy_path,different_policy_raw,fixed_policy_mode)
-        held_mismatch=coverage_evaluate_pair(qualifying,current,allow_closed=True)
-        assert held_mismatch is None or held_mismatch['body']['evidence']['coverage']['state']=='stale'
-        historical=build_coverage_revision(a,git(['rev-parse',a+'^{tree}']),'policy-historical',int(time.time())-86400,
+        held_mismatch=coverage_evaluate_pair(qualifying,current)
+        assert held_mismatch['body']['evidence']['coverage']['state']=='stale'
+        historical=build_coverage_revision(a,coverage_git(['rev-parse',a+'^{tree}']),'policy-historical',int(time.time())-86400,
             coverage_template_files,coverage_template_record)
+        matching_current,matching_interval,matching_pulls=coverage_chain(historical,'policy-matching')
+        matching_observation=coverage_observation(historical,matching_current,matching_interval,matching_pulls,'policy-matching')
+        coverage_evaluate_pair(historical,matching_current,at_ready=lambda:coverage_reader_policy_control(
+            matching_current,'historical-same-policy-interval',observation=matching_observation,retained=[historical,matching_current],policy_relation='same'))
+        coverage_evaluate_pair(historical,matching_current,at_ready=lambda:coverage_reader_policy_control(historical,'historical-same-policy-auth'))
+        assert coverage_evaluate_pair(historical,matching_current)['body']['evidence']['coverage']['state']=='authenticated'
     finally:put(fixed_policy_path,fixed_policy_before,fixed_policy_mode)
-    historical_mismatch=coverage_evaluate_pair(historical,current,allow_closed=True)
-    assert historical_mismatch is None or historical_mismatch['body']['evidence']['coverage']['state']=='stale'
-    old_qualifying=build_coverage_revision(a,git(['rev-parse',a+'^{tree}']),'policy-old-q',int(time.time())-86400,
+    matching_revision=matching_current['identity']['target_revision']['commit_id']
+    matching_tree=coverage_git(['rev-parse',matching_revision+'^{tree}'])
+    different_current=build_coverage_revision(matching_revision,matching_tree,'policy-different-current',int(time.time()),
+        coverage_template_files,coverage_template_record)
+    different_observation=coverage_observation(historical,different_current,matching_interval,matching_pulls,'policy-only-different')
+    coverage_evaluate_pair(historical,different_current,at_ready=lambda:coverage_reader_policy_control(
+        different_current,'historical-different-policy-interval',observation=different_observation,retained=[historical,different_current],policy_relation='different'))
+    coverage_evaluate_pair(historical,different_current,at_ready=lambda:coverage_reader_policy_control(historical,'historical-different-policy-auth'))
+    assert sha(historical['files']['scope-policy.json'])==sha(matching_current['files']['scope-policy.json'])!=sha(different_current['files']['scope-policy.json'])
+    assert different_observation['publisher_pull_requests']==matching_pulls
+    assert different_observation['first_parent_commits']==matching_interval
+    isolated=coverage_evaluate_pair(historical,different_current)
+    assert isolated['body']['evidence']['coverage']['state']=='stale'
+    assert all(row['authentication']['state']=='authenticated' for row in isolated['body']['evidence']['shadow_bundle_facts'])
+    print(json.dumps({'policy_only_pair':'same policy authenticated; different policy stale',
+        'both_records':'independently fully authenticated','closed_identity_except_policy':'equal',
+        'actual_git_source_publisher':'both verified against matching candidate/tree/paths/request',
+        'SIMULATED':['startup admission','VM identity','launch receipt']}),flush=True)
+    old_qualifying=build_coverage_revision(a,coverage_git(['rev-parse',a+'^{tree}']),'policy-old-q',int(time.time())-86400,
         coverage_template_files,coverage_template_record,'withheld-write.v1')
-    old_current=build_coverage_revision(r,tr,'policy-old-r',int(time.time()),coverage_template_files,coverage_template_record,'withheld-write.v1')
-    for left,right,label in ((old_qualifying,current,'mixed-old-new'),(qualifying,old_current,'mixed-new-old'),
-                              (old_qualifying,old_current,'both-old')):
-        refused=coverage_evaluate_pair(left,right,allow_closed=True)
-        assert refused is None or refused['body']['evidence']['coverage']['state']=='stale'
-        print(json.dumps({'policy_pair':label,'coverage':'closed' if refused is None else 'stale',
-            'current_policy_backfill':False,'SIMULATED':['VM identity','launch receipt']},sort_keys=True),flush=True)
+    for left,form,label in ((old_qualifying,'withheld-write-policy.v1','mixed-old-new'),
+                            (qualifying,'withheld-write.v1','mixed-new-old'),
+                            (old_qualifying,'withheld-write.v1','both-old')):
+        right,valid_interval,valid_pulls=coverage_chain(left,'policy-'+label,form)
+        observed=coverage_observation(left,right,valid_interval,valid_pulls,label)
+        coverage_evaluate_pair(left,right,at_ready=lambda:coverage_reader_policy_control(right,label+'-interval',
+            observation=observed,retained=[left,right]))
+        coverage_evaluate_pair(left,right,at_ready=lambda:coverage_reader_policy_control(left,label+'-qualifying'))
+        refused=coverage_evaluate_pair(left,right)
+        assert refused['body']['evidence']['coverage']['state']=='stale'
+        assert all(row['authentication']['state']=='authenticated' for row in refused['body']['evidence']['shadow_bundle_facts'])
+        print(json.dumps({'policy_pair':label,'coverage':'stale','nonpolicy_git_publisher':'valid','current_policy_backfill':False}),flush=True)
+    coverage_git(['update-ref','refs/heads/main',r]);coverage_install_pages(qualifying,current,interval,[pull])
+    assert coverage_evaluate_pair(qualifying,current)['body']['evidence']['coverage']['state']=='authenticated'
+    interval_cases=(
+        ('ystack-transient','path == ".ystack"'),
+        ('workflow-transient','path == ".ystack"'),
+        ('direct-evidence','len(candidates) == 1'),
+        ('foreign-evidence','pull["publisher_identity_ref"] =='),
+        ('deleted-evidence','changed == evidence and all'),
+        ('rewritten-evidence','changed == evidence and all'))
+    git_control,git_interval,git_pulls=coverage_chain(qualifying,'git-interval-positive')
+    git_observation=coverage_observation(qualifying,git_control,git_interval,git_pulls,'actual-Git-positive')
+    coverage_evaluate_pair(qualifying,git_control,at_ready=lambda:coverage_reader_policy_control(git_control,
+        'git-interval-positive',observation=git_observation,retained=[qualifying,git_control]))
+    assert coverage_evaluate_pair(qualifying,git_control)['body']['evidence']['coverage']['state']=='authenticated'
+    for label,needle in interval_cases:
+        changed_current,changed_interval,changed_pulls=coverage_chain(qualifying,'git-'+label,damage=label)
+        observed=coverage_observation(qualifying,changed_current,changed_interval,changed_pulls,label)
+        coverage_evaluate_pair(qualifying,changed_current,at_ready=lambda:coverage_reader_policy_control(changed_current,
+            'git-'+label,'interval-refusal',observed,[qualifying,changed_current],needle))
+        result=coverage_evaluate_pair(qualifying,changed_current)
+        assert result['body']['evidence']['coverage']['state']=='stale'
+        assert all(row['authentication']['state']=='authenticated' for row in result['body']['evidence']['shadow_bundle_facts'])
+        print(json.dumps({'actual_git_history_negative':label,'current_authentication':'complete',
+            'coverage':'stale','raw_rows_match_actual_objects':True}),flush=True)
+    coverage_git(['update-ref','refs/heads/main',r])
+    rule_pages,_=coverage_install_pages(qualifying,current,interval,[pull])
+    baseline_rules=json.loads(rule_pages[2])['baseline']
+    fifth=next(row for row in baseline_rules if row['rule_id']=='fifth-rule')
+    changed_fifth=json.loads(canonical(fifth));changed_fifth['parameters']={'required':'changed-fifth-rule'}
+    baseline_digest,changed_digest=sha(canonical(fifth)),sha(canonical(changed_fifth))
+    assert baseline_digest!=changed_digest
+    baseline_time=int(coverage_n.utc(qualifying['terminated_at']))
+    event_times=[time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime(baseline_time+offset)) for offset in (1,2)]
+    def fifth_events(changed):
+        middle=changed_digest if changed else baseline_digest
+        return [{'event_id':'event.fifth.'+str(index),'event_time':event_times[index],
+            'actor_identity':coverage_publisher_identity,'operation':'update','rule_id':'fifth-rule',
+            'before_sha256':before,'after_sha256':after} for index,(before,after) in enumerate([
+                (baseline_digest,middle),(middle,baseline_digest)])]
+    for label,history,valid in (
+        ('no-op-events',{'baseline':baseline_rules,'current':baseline_rules,'events':fifth_events(False)},True),
+        ('baseline-changed-baseline',{'baseline':baseline_rules,'current':baseline_rules,'events':fifth_events(True)},False),
+        ('permanent-fifth-change',{'baseline':baseline_rules,'current':[changed_fifth if row['rule_id']=='fifth-rule' else row for row in baseline_rules],
+            'events':[fifth_events(True)[0]]},False)):
+        pages,capture=coverage_install_pages(qualifying,current,interval,[pull],rule_history=history)
+        raw_history=json.loads(pages[2]);assert raw_history==dict(history,schema_version=1)
+        if label=='baseline-changed-baseline':
+            assert raw_history['baseline']==raw_history['current'] and raw_history['events'][0]['after_sha256']==raw_history['events'][1]['before_sha256']==changed_digest
+        records=[(b'capture.json',canonical(capture)),*[(f'raw/{index:04d}'.encode(),page) for index,page in enumerate(pages)]]
+        manifest,raw_pages=coverage_n.captured(records,second_request)
+        try:coverage_n.normalize(manifest,raw_pages,second_request)
+        except coverage_n.Refusal:assert not valid,'unchanged full rule sequence refused'
+        else:assert valid,'changed fifth-rule intermediate/full endpoint accepted'
+        result=coverage_evaluate_pair(qualifying,current,allow_closed=not valid)
+        if valid:assert result['body']['evidence']['coverage']['state']=='authenticated'
+        else:assert result is None or result['body']['evidence']['coverage']['state']=='stale'
+        print(json.dumps({'actual_rule_history':label,'baseline_digest':baseline_digest,'changed_digest':changed_digest,
+            'events':history['events'],'coverage':'authenticated' if valid else 'refused/stale'}),flush=True)
+    coverage_install_pages(qualifying,current,interval,[pull])
     assert coverage_evaluate_pair(qualifying,current)['body']['evidence']['coverage']['state']=='authenticated'
     qbody=current['identity']
     for key in ('model_request','adapter_config_refs','prompt_refs','skill_refs','verification_instructions_ref'):
@@ -15901,7 +16253,7 @@ finally:
         'interval':'A ordinary B own publisher C R','age_neighbors':[-1,0,1],'target_write':False,
         'network':False,'production_identity':False,'native_qualification':False},sort_keys=True),flush=True)
 finally:
-    git(['update-ref','refs/heads/main',coverage_original_head])
+    coverage_git(['update-ref','refs/heads/main',coverage_original_head])
     put(doc_root/'scope.json',coverage_original_scope)
     for name,raw in coverage_original_documents.items():put(doc_root/(name+'.json'),raw)
 
