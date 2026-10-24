@@ -138,10 +138,25 @@ case 且全部通过（`scope/v1/scope-gates.jq:876-890`）。它未执行 `mult
    `shadow_closure` (R5) and `record_closure` (R8.3); the dashboard coverage bound
    `enum_set_ok(1;8;…)` (`:997`), raised to 9; M4 在 PR 1a 交付。
 3. `scope/v1/scope-gates.jq` is a declared copy of the dashboard shape and must stay
-   in sync (`:1-10`). Its complete edits: `seed_sources` (`:98-102`),
+   in sync (`:1-10`). Its edits include `seed_sources` (`:98-102`),
    `active_seed_sources` (`:119-122`), the `evaluator_shape` field list (`:149`), the
-   coverage bound (`:240`); M3 在 PR 1a 交付。`scope-qualification.test.sh` checks the copied
-   lists equal the `evals.jq` lists.
+   coverage bound (`:240`) and the evaluator content/SHA comparison below.
+   M3 在 PR 1a 交付。`scope-qualification.test.sh` checks the copied lists equal the
+   `evals.jq` lists.
+   **内层内容绑定。** `scope/v1/evaluate-scope.sh` 从已持有的 dashboard 快照读取
+   `.body.evaluator.content`。按上游相同的 C1 字节规则量测其 SHA-256：jq 1.6
+   `-S -c` 输出的排序、紧凑 UTF-8 JSON，末尾恰好一个 LF。量测来自这些实际字节，
+   不是候选的 `.body.evaluator.sha256`。Driver 只经私有参数把量测值传给 scope
+   predicate；predicate 要求该值等于候选内层 SHA，并保留全部 shape 检查。
+   不增加 caller 参数或环境 override，不把自报 SHA 当作量测值。
+   保留整个 dashboard 的摘要、现有输入持有和完成前重查。父块类型错误仍走原
+   拒绝路径，不能让新增提取变成偶发 jq 异常。内容与内层 SHA 不符时，保持既有
+   无效 dashboard 的语义拒绝：`not-proposable`，proposal absent；正常返回此
+   结果可以是 exit 0。合法内容与其真实重算 SHA 一起提交时恢复原 baseline 判断。
+   此比较只证明内层 pair 一致。Scope 不重放 eval，不核验其他组件 closure 的
+   实际文件，也不因此证明真实 eval 或资格。`reference_semantics: identity-only`、
+   `qualification: unavailable`、inactive、authority none、enabled false 及 proposal
+   的 enablement blocked 均保持。更新相关注释，准确区分内容绑定与这些权限边界。
 4. `evals/v1/evals-driver.sh` gains one replay per source in its dispatch
    (`:659-676`). The driver and `evals/v1/evals-launcher.sh` snapshot the two new
    closures and update the pins R9.4 lists for PR 1b.
@@ -383,7 +398,15 @@ always goes in the closure.
    - PR 1b adds evaluator fields (R3.2), so the hand-built evaluator fixtures in
      `scripts/test/shadow-self-host-evidence.test.sh:913-942` (and its fixture digest
      list at `:979-981`) and `scripts/test/scope-qualification.test.sh:250-275` gain
-     `shadow_closure` and `record_closure`.
+     `shadow_closure` and `record_closure`。两个 fixture 的 baseline 必须按 R3.3 的
+     C1 字节真实计算 evaluator content SHA，在生成整个 dashboard 的摘要和下游
+     refs 前写入该值。不得继续用占位摘要。
+     `scope-qualification.test.sh` 通过真实 scope entry 成对检查：只把一个 closure
+     digest 改为另一个合法 64-hex 值，保留原 paths、顺序、数量、keys 和旧内层 SHA，
+     必须得到既有语义拒绝且无 proposal；再为同一改动内容真实重算内层 SHA，必须
+     恢复 baseline outcome/reasons。测试判断输出语义，不能误要求进程非零。
+     保留原 shape、父块类型、输入 tamper 和完成前重查负例；新增提取不能用 jq
+     异常替代原拒绝。两个 fixture 的其他既有断言保持。
    - PR 2 and PR 3 each change the shipped seeded and declared counts, asserted in
      `scripts/test/evals-framework.test.sh:83-84` (and its pass message at `:90`) and
      `scripts/test/evals-dashboard.test.sh:71`: 8 and 1 after the first seed PR, 9
@@ -392,10 +415,12 @@ always goes in the closure.
    `evals-adapters.test.sh:114`, `evals-approvals.test.sh:98`,
    `evals-boundaries.test.sh:97`, `evals-duty.test.sh:97`, `evals-events.test.sh:97`
    and `evals-plans.test.sh:94` cover closures PR 1b leaves as they are; their
-   per-family catalog checks name seeded families only; the dashboard fixtures in
-   `scope-qualification.test.sh:302-327`, `shadow-self-host-evidence.test.sh:949-973`
-   and `maintenance-loop.test.sh:62-75` are hand-built with fixed values, not read
-   from the shipped catalog; and the misfiled and model-only cases in
+   per-family catalog checks name seeded families only. The family counts in the
+   hand-built dashboards in `scope-qualification.test.sh:302-327`,
+   `shadow-self-host-evidence.test.sh:949-973` and `maintenance-loop.test.sh:62-75`
+   are fixed values, not read from the shipped catalog, and stay unchanged.
+   The maintenance fixture does not enter scope evaluation and needs no inner-SHA
+   change. The misfiled and model-only cases in
    `evals-framework.test.sh:158-213` use a core-stage-run seed, which the new relay
    branch (R8.4) does not touch. A changed file found anywhere else stops the PR and
    returns to the plan.
@@ -406,6 +431,7 @@ always goes in the closure.
    已交付机制与仍未满足的 seed 验收。不得加入新 source、closure 或 grader。
    PR 1b: `evals/v1/evals.jq`, `evals/v1/evals-driver.sh`,
    `evals/v1/evals-launcher.sh`, `scope/v1/scope-gates.jq`,
+   `scope/v1/evaluate-scope.sh` (R3.3 内层内容量测与私有传值),
    `scripts/test/evals-dashboard.test.sh`, `scripts/test/scope-qualification.test.sh`,
    `scripts/test/evals-framework.test.sh` (new shapes, with fixtures the test builds
    and never commits as seeds), `scripts/test/shadow-self-host-evidence.test.sh`,
@@ -471,7 +497,8 @@ in CI; wiring the record report into anything but the relay; enablement.
 - **Risk is high.** Eval policy, seed and scope-gate change. An operator-merged
   plan-only PR precedes code.
 - **Size.** 各批计划按完整机制与测试给出范围。不能为压缩范围删测试或交付空实现。
-  本 spec amendment 为 `review_size: standard`，只改变同一 concern 的分期与映射。
+  本 spec amendment 为 `review_size: standard`，只补足同一 eval 机制的 scope
+  内容摘要绑定及必要路径、测试。
 - **Unmerged siblings.** Invariant fields and part of the closure come from
   concerns 5, 6 and 9. R1 permits only the mapped review mechanism to start first.
   Missing actual source or an unresolved S10 recipe stops the dependent work;
