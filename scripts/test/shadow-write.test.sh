@@ -31,7 +31,7 @@ def run_writer_tests():
     fixture = work / "writer-fixtures"
     fixture.mkdir(mode=0o700)
     counter = 0
-    def case(name, mutate=None, frozen_change=None):
+    def case(name, mutate=None, frozen_change=None, policy_form=False):
         nonlocal counter
         counter += 1
         directory = fixture / (str(counter) + "-" + name)
@@ -43,6 +43,9 @@ def run_writer_tests():
         request_doc["body"]["allowed_paths"] = sorted(
             "ystack-evidence/" + json.loads((output / "incident.json").read_bytes())["id"] + "/" + name
             for name in [*e.EVIDENCE_NAMES, "bundle.json", "README.md", "eval-seed.json"])
+        if policy_form:
+            request_doc["body"]["allowed_paths"].append("ystack-evidence/" + json.loads((output / "incident.json").read_bytes())["id"] + "/scope-policy.json")
+            request_doc["body"]["allowed_paths"].sort()
         if mutate:
             mutate(request_doc)
         frozen = output
@@ -332,7 +335,7 @@ def run_writer_tests():
         else:
             raise AssertionError("unsafe patch accepted")
     def root_refusal(source_facts):
-        fake = types.SimpleNamespace(request_doc=json.loads(paths[0].read_bytes()),
+        fake = types.SimpleNamespace(record_form="withheld-write.v1", request_doc=json.loads(paths[0].read_bytes()),
             components={package / "scope/v1/scope-policy.json": types.SimpleNamespace(raw=canonical(policy)),
                         package / "config/construction-mode.json": types.SimpleNamespace(raw=canonical(mode))})
         try:
@@ -515,7 +518,7 @@ def run_writer_tests():
                     raise AssertionError(role + " pending cancellation accepted")
         finally:
             signal.signal(signal.SIGTERM, old_term)
-    def complete(paths, refusal=False, mode="success"):
+    def complete(paths, refusal=False, mode="success", record_form="withheld-write.v1"):
         global scenario_work, scenario_output, scenario_mode, scenario_request
         scenario_work, scenario_output = paths[2], paths[3]
         scenario_mode, scenario_request = mode, paths[0]
@@ -536,7 +539,7 @@ def run_writer_tests():
         e._launch = timed_fixture_launch
         try:
             with e.CancellationSignals(reset()):
-                marker = w.write(*paths, parent)
+                marker = w.write(*paths, parent, record_form)
                 ok(not (paths[3] / "bundle.json").exists(), "writer marker stays absent before native L")
         except (e.Refusal, c.Refusal) as exc:
             if not refusal:
@@ -1002,13 +1005,179 @@ def run_writer_tests():
     public_record = json.loads((public_paths[3] / "shadow-record.json").read_bytes())
     ok(public_record["body"]["write"]["publication"] == {"state": "withheld", "reason_id": "shadow.write-not-published"},
        "public native completion keeps publication withheld")
-    for operation in ("prepare", "reproduce", "publish"):
+    policy_outputs = []
+    for index in range(2):
+        policy_paths = case("public-policy-" + str(index), policy_form=True)
+        fresh_inputs(policy_paths, fresh_duty=bool(index))
+        process = subprocess.run([sys.executable, "-I", "-S", "-B", str(native_public_runner),
+            *map(str, (base, package, physical_python, native_binary, native_record, dependency_record, parent_helper, collector)),
+            *map(str, policy_paths), "prepare-policy"],
+            env={"PATH":"/usr/bin:/bin", "LC_ALL":"C", "LANG":"C"},
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=600)
+        print("fresh public policy writer SIMULATED launch", process.stdout.decode())
+        ok(process.returncode == 0 and process.stderr == b"",
+           "prepare-policy actual public producer and native owner, SIMULATED launch: " + process.stderr.decode())
+        retained = {path.name:path.read_bytes() for path in policy_paths[3].iterdir()}
+        record = json.loads(retained["shadow-record.json"])
+        marker = json.loads(retained["bundle.json"])
+        policy_raw = (package/"scope/v1/scope-policy.json").read_bytes()
+        expected_ref = c.scope_policy_ref(policy_raw)
+        ok(set(retained) == set(e.EVIDENCE_NAMES) | {"publisher-body.txt", "scope-policy.json", "bundle.json"},
+           "policy outer has exactly 32 files, without changing frozen reproduction inventory")
+        ok(record["body"]["record_form"] == marker["body"]["record_form"] == "withheld-write-policy.v1" and
+           record["body"]["scope_policy_ref"] == expected_ref and retained["scope-policy.json"] == policy_raw,
+           "new form binds canonical held policy raw bytes with exact typed reference")
+        ok(len(record["body"]["write"]) == 9 and len(record["body"]["write"]["write_set"]) == 33,
+           "new form keeps nine write keys and only adds policy candidate file")
+        prefix = "ystack-evidence/" + incident["id"] + "/"
+        row = next(row for row in record["body"]["write"]["write_set"] if row["path"] == prefix+"scope-policy.json")
+        ok(row["mode"] == "100644" and row["sha256"] == sha(policy_raw), "policy candidate is exact raw 100644 addition")
+        candidate = policy_paths[2]/"candidate/repository.git"
+        actual_policy = subprocess.run(["/usr/bin/git", "--no-replace-objects", "--git-dir="+str(candidate),
+            "cat-file", "blob", row["git_blob_oid"]], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        ok(actual_policy.returncode == 0 and not actual_policy.stderr and actual_policy.stdout == policy_raw,
+           "actual materialized candidate policy equals outer and held bytes")
+        policy_outputs.append((retained, record, policy_paths))
+    ok(policy_outputs[0][1]["body"]["write"] == policy_outputs[1][1]["body"]["write"],
+       "two prepare-policy attempts keep complete candidate and write-section determinism")
+    def check_policy_bundle(name,positive,label):
+        bundle_parent=c._open_held(str(fixture),True,lambda _fd,_state,_ancestor:True,"E_RELATION")
+        try:
+            try:held=c._HeldBundle(bundle_parent,name,"withheld-write-policy.v1")
+            except c.Refusal:ok(not positive,"actual producer bundle rejects "+label)
+            else:
+                try:held.recheck();ok(positive,"actual producer bundle accepts exact policy ref")
+                finally:held.close()
+        finally:bundle_parent.close()
+    for output_index,(retained, record, paths) in enumerate(policy_outputs):
+        actual_ref=record["body"]["scope_policy_ref"]
+        c.check_scope_policy_ref(actual_ref,retained["scope-policy.json"])
+        ref_cases=[("missing-"+key,{name:value for name,value in actual_ref.items() if name!=key}) for key in actual_ref]
+        ref_cases += [("extra",dict(actual_ref,extra="x")),("name",dict(actual_ref,name="policy.json")),
+            ("digest-upper",dict(actual_ref,sha256="A"*64)),("digest-short",dict(actual_ref,sha256="a"*63)),
+            ("digest-mismatch",dict(actual_ref,sha256="0"*64)),("digest-null",dict(actual_ref,sha256=None)),
+            ("digest-bool",dict(actual_ref,sha256=True)),("name-null",dict(actual_ref,name=None)),
+            ("ref-array",[]),("ref-null",None),("ref-bool",False)]
+        for value in (True,False,0,-1,1,1048576,1048577,1.0,"1",None):
+            ref_cases.append(("size-"+repr(value),dict(actual_ref,size_bytes=value)))
+        for label,value in [("exact",actual_ref),*ref_cases]:
+            name="policy-ref-"+str(output_index)+"-"+label
+            location=fixture/name;location.mkdir(mode=0o700)
+            changed=dict(retained);document=copy.deepcopy(record)
+            document["body"]["scope_policy_ref"]=value
+            changed["shadow-record.json"]=canonical(document)
+            marker=json.loads(changed["bundle.json"])
+            marker["body"]["files"]=[{"name":key,"size_bytes":len(raw),"sha256":sha(raw)}
+                for key,raw in sorted(changed.items()) if key!="bundle.json"]
+            changed["bundle.json"]=canonical(marker)
+            for key,raw in changed.items():write(location/key,raw,0o400)
+            check_policy_bundle(name,label=="exact",label)
+        for label in ("missing","extra","renamed","noncanonical","empty","overlimit"):
+            name="policy-inventory-"+str(output_index)+"-"+label;location=fixture/name;location.mkdir(mode=0o700)
+            changed=dict(retained)
+            if label=="missing":changed.pop("scope-policy.json")
+            elif label=="extra":changed["extra-policy.json"]=changed["scope-policy.json"]
+            elif label=="renamed":changed["scope-policy-renamed.json"]=changed.pop("scope-policy.json")
+            elif label=="noncanonical":changed["scope-policy.json"]+=b" "
+            elif label=="empty":changed["scope-policy.json"]=b""
+            else:changed["scope-policy.json"]=b" "*1048577
+            marker=json.loads(changed["bundle.json"])
+            marker["body"]["files"]=[{"name":key,"size_bytes":len(raw),"sha256":sha(raw)}
+                for key,raw in sorted(changed.items()) if key!="bundle.json"]
+            changed["bundle.json"]=canonical(marker)
+            for key,raw in changed.items():write(location/key,raw,0o400)
+            check_policy_bundle(name,False,label)
+    maximum_policy=canonical({"padding":"x"*(1048576-len(canonical({"padding":""})))})
+    ok(len(maximum_policy)==1048576 and c.scope_policy_ref(maximum_policy)["size_bytes"]==1048576,
+       "canonical policy accepts exact one-MiB reference bound in full suite")
+    for raw in (b"",b"{}",b"[]\n",b'{"x":1,"x":2}\n',b'{"x":NaN}\n',b"\xff",maximum_policy+b" "):
+        try:c.scope_policy_ref(raw)
+        except c.Refusal:ok(True,"canonical policy bytes/size reject in full suite")
+        else:raise AssertionError("invalid policy raw accepted")
+    for policy_form,request_policy in ((True,False),(False,True)):
+        wrong_count=case("new32" if policy_form else "old33",policy_form=request_policy)
+        fresh_inputs(wrong_count)
+        complete(wrong_count,refusal=True,record_form="withheld-write-policy.v1" if policy_form else "withheld-write.v1")
+        ok(not (wrong_count[3]/"bundle.json").exists(),"actual producer refuses new32/old33 without form inference")
+    for retained,record,source_paths in (policy_outputs[0],(first_complete,first_record,first_complete_paths)):
+        form=record["body"]["record_form"];policy_form=form=="withheld-write-policy.v1"
+        fact_paths=case("policy-candidate-facts-"+form,policy_form=policy_form)
+        with partial_owner():
+            ws=w._Workspace(*fact_paths,parent,form)
+            try:
+                shutil.copytree(source_paths[2]/"candidate/repository.git",ws.work/"candidate/repository.git")
+                repository=ws.work/"candidate/repository.git"
+                incident_doc=json.loads(retained["incident.json"])
+                revision=incident_doc["body"]["git_revision_ref"]
+                response_doc=json.loads(retained["materialization-response.json"])
+                receipt_doc=json.loads(response_doc["payloads"][0]["data"])
+                facts=w._git_inventory(ws,repository,dict(revision,commit_id=receipt_doc["candidate"]["commit_id"]))
+                source_facts=w._git_inventory(ws,base/"source.git",revision)
+                rows=record["body"]["write"]["write_set"]
+                expected_files={row["path"]:ws.git_read(repository,["cat-file","blob",row["git_blob_oid"]],1048577*8) for row in rows}
+                w._candidate_facts(ws,canonical(response_doc),incident_doc,source_facts,expected_files,rows)
+                ok(True,"actual "+form+" candidate positive before policy Git mutations")
+                policy_path="ystack-evidence/"+incident_doc["id"]+"/scope-policy.json"
+                new_blob=object_write(["hash-object","-w","--stdin"],canonical({"wrong":"policy blob"}))
+                mutations=("missing","extra","renamed","wrong-mode","wrong-blob") if policy_form else ("old33",)
+                for label in mutations:
+                    altered=dict(facts)
+                    if label=="missing":altered.pop(policy_path)
+                    elif label=="extra":altered[policy_path+".extra"]=("100644","blob",new_blob)
+                    elif label=="renamed":altered[policy_path+".renamed"]=altered.pop(policy_path)
+                    elif label=="wrong-mode":altered[policy_path]=("100755","blob",altered[policy_path][2])
+                    else:altered[policy_path]=("100644","blob",new_blob)
+                    tree=changed_tree(altered)
+                    commit=object_write(["commit-tree",tree,"-p",revision["commit_id"]],b"policy candidate negative\n")
+                    changed_response=copy.deepcopy(response_doc);changed_receipt=json.loads(changed_response["payloads"][0]["data"])
+                    changed_receipt["candidate"].update(commit_id=commit,tree_id=tree)
+                    changed_receipt["changed_paths"]["count"]=len(rows)+(-1 if label=="missing" else 1 if label in {"extra","old33"} else 0)
+                    receipt_raw=canonical(changed_receipt)
+                    changed_response["payloads"][0].update(data=receipt_raw.decode(),sha256=sha(receipt_raw))
+                    try:w._candidate_facts(ws,canonical(changed_response),incident_doc,source_facts,expected_files,rows)
+                    except e.Refusal:ok(True,"actual policy Git candidate refuses "+form+"/"+label)
+                    else:raise AssertionError("policy Git candidate accepted "+label)
+            finally:ws.close()
+    for phase in ("capture", "admit", "final-fsync"):
+        damaged = case("policy-held-"+phase, policy_form=True)
+        fresh_inputs(damaged)
+        policy_path = package/"scope/v1/scope-policy.json"
+        original_policy, original_mode = policy_path.read_bytes(), policy_path.stat().st_mode & 0o777
+        original_files, original_admit, original_fsync = w._write_files, w._admit, w.os.fsync
+        changed = False
+        def mutate_policy():
+            nonlocal changed
+            if not changed:
+                changed = True
+                policy_path.chmod(0o600)
+                policy_path.write_bytes(original_policy+b" ")
+        def changed_files(*args):
+            result = original_files(*args)
+            if phase == "capture":mutate_policy()
+            return result
+        def changed_admit(*args):
+            result = original_admit(*args)
+            if phase == "admit":mutate_policy()
+            return result
+        def changed_fsync(fd):
+            result = original_fsync(fd)
+            if phase == "final-fsync" and set(path.name for path in damaged[3].iterdir()) == set(e.EVIDENCE_NAMES) | {"publisher-body.txt", "scope-policy.json"}:
+                mutate_policy()
+            return result
+        w._write_files, w._admit, w.os.fsync = changed_files, changed_admit, changed_fsync
+        try:
+            complete(damaged, refusal=True, record_form="withheld-write-policy.v1")
+            ok(changed and not (damaged[3]/"bundle.json").exists(), "held policy mutation refuses before native L at "+phase)
+        finally:
+            w._write_files, w._admit, w.os.fsync = original_files, original_admit, original_fsync
+            policy_path.chmod(0o600);policy_path.write_bytes(original_policy);policy_path.chmod(original_mode)
+    for operation in ("prepare", "prepare-policy", "reproduce", "publish"):
         untrusted = case("public-untrusted-" + operation)
         untrusted_argv = [sys.executable, "-I", "-S", "-B", str(package / "shadow/v1/write-shadow.py"), operation,
             *map(str, untrusted)]
         process = subprocess.run(untrusted_argv, env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
-        expected_code = b"E_PARENT_CONTEXT\n" if operation == "prepare" else b"E_USAGE\n"
+        expected_code = b"E_PARENT_CONTEXT\n" if operation in {"prepare", "prepare-policy"} else b"E_USAGE\n"
         ok(process.returncode == 1 and process.stdout == b"" and process.stderr == expected_code,
            "actual isolated public entry refuses untrusted context or unavailable operation: " + operation)
         ok(not any(untrusted[2].iterdir()) and not any(untrusted[3].iterdir()),
@@ -1021,6 +1190,7 @@ def run_writer_tests():
     scope_source = (root / "scripts/test/scope-qualification.test.sh").read_text()
     scope_boundary = 'run_validator "$tmp/scope.json" || fail'
     ok(scope_source.count(scope_boundary) == 1, "existing scope fixture has one fixed evaluator boundary")
+    scope_suffix = scope_source[scope_source.index(scope_boundary):]
     scope_prelude = scope_source[:scope_source.index(scope_boundary)]
     scope_root = 'root=$(CDPATH=\'\' cd -P -- "${BASH_SOURCE[0]%/*}/../.." && pwd -P)'
     ok(scope_prelude.count(scope_root) == 1, "scope fixture keeps fixed physical repository root")
@@ -1034,14 +1204,14 @@ run_evaluator "${good[@]}" > "$tmp/legacy-evaluation.json"
 "$jq_bin" -S -c --slurpfile write_record "$1" '.body.records=[$write_record[0]]' "$tmp/shadow-set.json" > "$tmp/write-set.json"
 scope_for_shadow "$tmp/write-set.json" "$tmp/write-scope.json"
 run_evaluator "$tmp/write-scope.json" "$tmp/write-set.json" "$tmp/dashboard.json" "$tmp/risk.json" "$tmp/kill.json" "$tmp/duty.json" "$tmp/marker.json" > "$tmp/write-evaluation.json"
-"$jq_bin" -e '.body.outcome=="not-proposable" and (.body.reason_ids | index("scope.malformed") != null) and .body.authority_effect=="none"' "$tmp/write-evaluation.json" >/dev/null || fail 'write form was accepted by old evaluator'
+"$jq_bin" -e '.body.outcome=="not-proposable" and (.body.reason_ids | index("scope.sandbox-receipt-missing") != null) and .body.authority_effect=="none" and (.body.evidence.shadow_bundle_facts | all(.eligible==false and .authentication.state=="missing"))' "$tmp/write-evaluation.json" >/dev/null || fail 'unrelated write form supplied authentic evidence'
 cat "$tmp/legacy-evaluation.json" "$tmp/write-evaluation.json"
 '''
-    write(scope_script, (scope_prelude + scope_tail).encode(), 0o500)
+    write(scope_script, (scope_prelude + scope_tail + '\nexit "$?"\n' + scope_suffix).encode(), 0o500)
     scope_check = subprocess.run(["/bin/bash", str(scope_script), str(supplied_record)],
         env={"PATH": "/usr/bin:/bin", "LC_ALL": "C", "TMPDIR": str(base.parent.parent), "YSTACK_SCOPE_TEST_BOUNDED": "1"},
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300)
-    ok(scope_check.returncode == 0, "unchanged actual scope evaluator refuses complete write form; legacy positive remains valid: " + scope_check.stderr.decode())
+    ok(scope_check.returncode == 0, "actual scope evaluator keeps unrelated write and legacy records unqualified: " + scope_check.stderr.decode())
     print(scope_check.stdout.decode())
     ok(json.loads((root / "enforcement/v1/accepted-identities.json").read_bytes())["body"]["environments"] == [], "shipped accepted set stays empty")
     ok(w.main(["write-shadow.py", "prepare", "request", "bundle", "work", "output"]) == 1, "public prepare refuses without trusted startup admission")
@@ -1153,11 +1323,13 @@ if context_fd!=3:os.close(context_fd)
 scenario_work,scenario_output=paths[2:]
 scenario_mode,scenario_request="success",paths[0]
 assert e._NATIVE_ORIGIN is None and "_cancel_release" not in sys.modules
-code=writer.main(["write-shadow.py","prepare",*map(str,paths)],admission)
+operation=sys.argv[13] if len(sys.argv)==14 else "prepare"
+assert operation in {"prepare","prepare-policy"}
+code=writer.main(["write-shadow.py",operation,*map(str,paths)],admission)
 assert code==0,"fresh public main refusal"
 assert (paths[3]/"bundle.json").exists()
 record=json.loads((paths[3]/"shadow-record.json").read_bytes())
-assert record["body"]["record_form"]=="withheld-write.v1"
+assert record["body"]["record_form"]==("withheld-write-policy.v1" if operation=="prepare-policy" else "withheld-write.v1")
 print(json.dumps({"fresh_public_main":True,"descriptor3":"actual readonly regular schema2","native_first_load":str(e._NATIVE_ORIGIN),"record":record},sort_keys=True))
 """
 (tmp/"writer-public-entry.py").write_text(public_prelude+public_body)

@@ -1237,7 +1237,8 @@ The isolated public `prepare REQUEST BUNDLE WORK OUTPUT` entry requires descript
 schema-2 context and the reviewed physical Python/native source. It seals an inactive
 `withheld-write.v1` outer bundle only after the separate authenticated write check.
 The marker includes the publisher body; the candidate includes only frozen evidence.
-Publication stays withheld, and the existing scope evaluator refuses this form.
+Publication stays withheld. The hardened scope evaluator can authenticate this form
+only for its fixed write workflow and task, with a fresh controlled-store read.
 Never substitute archived origin for a fresh controlled-store read or enlarge the
 native role/argv/environment contract. No branch transport or publisher is restored.
 
@@ -1245,3 +1246,88 @@ Run `bash scripts/test/shadow-write.test.sh`. It includes the full unchanged enf
 regression and real writer component checks in disposable fixtures. Retain final native
 build/source and command evidence; synthetic receipt/installation proof grants no native
 qualification. The shipped accepted set stays empty and CPU/wall enforcement stays none.
+
+
+### Restore the inactive scope evidence gate
+
+Restore `scope/v1/read-shadow-evidence.py`, the scope shell/jq/policy files,
+`shadow/v1/_consumer.py`, the enforced consumer, writer, and every fixed component
+listed in `ci/required-files.txt`. Keep the actual bare Git snapshot and digest-named
+bundles outside the controlled store. The scope entry takes the original seven documents
+followed by `BUNDLE_ROOT SOURCE_GIT_DIR`; it requires existing physical Python 3.11+ and
+pinned jq 1.6. No tool discovery fallback installs a dependency.
+
+Run `bash scripts/test/scope-qualification.test.sh`, the enforced and writer suites,
+and the self-host evidence compatibility suite. The genuine Linux section runs only on
+an existing disposable hosted CI runner with noninteractive sudo. It refuses an existing
+anchor, creates unique fixture accounts/group and root-owned paths, uses the real four
+storage functions, and records identity-checked cleanup even after a failure. It never
+starts a VM or publisher. Legacy/same-uid fixtures remain compatibility evidence.
+
+On macOS, keep genuine proof blocked until the reserved host owner authorizes its actual
+root setup and cleanup. Reuse an already available trusted physical runtime and complete
+dependency closure. Do not install one or change the current development Mac. Neither
+platform's synthetic completed-run fields establish native qualification, CPU/wall proof,
+source coverage or scope enablement.
+
+Restore `sandbox/v1/coverage-source.py` with the scope reader, host supervisor and
+shadow consumer. They implement one inactive, fixed `coverage-read.v1` boundary.
+The restore manifest includes the normalizer. No production source configuration,
+collector, credential, route or accepted identity is shipped. Do not manufacture
+those files during restore. Optional source configuration and accepted identities
+belong to a separately authorized root-owned installation.
+
+The source receipt and its exact payload/raw inventory must remain intact for any
+authenticated evaluation. Copied JSON and archived origin observations cannot
+replace a fresh controlled-store read. Run the scope qualification suite, launcher,
+shadow enforced/write/self-host, receipt, materializer protocol/adapter, schema and
+full matrix checks before acceptance. The `--coverage-pure` scope test mode needs
+no root actions and proves only bounded data behavior. Actual Linux and macOS
+source-principal proof remains mandatory and needs its authorized disposable host.
+
+
+Restore the policy-bearing write form with `write-shadow.py`,
+`write-materialization-input.jq`, `_consumer.py` and the scope reader/gates.
+`prepare-policy` adds the held canonical scope policy to the candidate and outer
+bundle. Preserve its exact `scope_policy_ref` and raw `scope-policy.json` bytes.
+Do not add a current policy to an older record during restore. Existing
+`prepare` records keep their old inventory and exact-revision behavior. Only two
+authenticated policy-form records with equal policy bytes can prove later
+coverage, and those bytes must match the evaluator's held current policy.
+
+Run `bash scripts/test/shadow-write.test.sh` and the authorized full scope
+qualification fixture with the pinned jq and native prerequisites. The fixture
+uses the actual producer, materializer, preparation, verifier, checker and store
+reader. Its SIMULATED VM and launch facts do not replace Linux/macOS native or
+source-principal acceptance. Missing tools and unexecuted integration remain
+explicit validation debt; restore does not install their prerequisites.
+
+Restore `scope/v1/generate-gate-evidence.py` and
+`scripts/test/scope-gate-generation.test.sh` with the scope reader, scope shell/jq
+files, shadow consumer, `sandbox/v1/coverage-source.py` and host supervisor.
+Restore the kill-switch jq program, its decision and both current policy sets as
+one measured package. Preserve historical bundle bytes and policy snapshots.
+The restore manifest lists the new entry and executable test exactly once.
+
+The generator adds no installation or activation. Keep the existing anchor and
+source principal boundaries. Do not create a kill register, bootstrap, collector,
+accepted identity, account or sudoers rule during restore. The two optional fixed
+kill-source configuration siblings belong to a separately authorized installation.
+Their absence makes the new entry fail closed. The ordinary low-level evaluators
+retain their explicit-input interface and old state shape.
+
+Use the fixed generator command documented in `docs/components.md`. Keep its new
+output directory intact. `completion/COMPLETE.json` is valid only with the exact
+`manifests/manifest.json`, its listed bytes and the complete source request/receipt
+inventory. Initial origin refs remain in their original requests. The final fresh
+origins do not replace them. A completion marker conveys no write authority.
+
+Run `bash scripts/test/scope-gate-generation.test.sh --pure` for ordinary parser,
+projection, history, compatibility and lifecycle controls. Then run the original
+kill, duty, risk, foundation, schema, materializer, receipt, launcher, shadow and
+scope suites with their pinned prerequisites. A missing jq cache is NOT RUN; do not
+fetch a replacement as part of this check. The genuine scope fixture, all six full
+matrix shards and the original Linux/macOS native/source requirements remain
+mandatory acceptance work. Pure checks, restored source and quick CI do not replace
+those proofs. CPU/wall remains NONE, native qualification BLOCKED, production EMPTY
+and automation PAUSED until their separate acceptance steps are complete.

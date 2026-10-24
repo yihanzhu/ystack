@@ -22,8 +22,7 @@ c = e.c
 require, canonical, sha, parse = e.require, e.canonical, e.sha, e.parse
 NAMES = (*e.EVIDENCE_NAMES, "bundle.json")
 REQUEST_KEYS = e.REQUEST_BODY_KEYS | {"scope_id", "allowed_paths"}
-CONFIG_KEYS = {"core.repositoryformatversion", "core.filemode", "core.bare",
-               "core.logallrefupdates", "core.ignorecase", "core.precomposeunicode", "extensions.objectformat"}
+
 
 
 @dataclasses.dataclass(frozen=True)
@@ -45,7 +44,9 @@ class MaterializedWrite:
 
 
 class _Workspace:
-    def __init__(self, request: Path, bundle: Path, work: Path, output: Path, parent: dict):
+    def __init__(self, request: Path, bundle: Path, work: Path, output: Path, parent: dict, record_form="withheld-write.v1"):
+        require(record_form in {"withheld-write.v1", "withheld-write-policy.v1"}, "E_RELATION")
+        self.record_form = record_form
         self.owned = []
         self.inputs = []
         self.components = {}
@@ -134,6 +135,8 @@ class _Workspace:
             paths = [SOURCE / path for path in relative] + list(self.modules.glob("*.jq"))
             paths += [self.modules.parent / "core-ingress.sh", self.modules.parent / "contracts.jq"]
             self.components = {path: self.hold(path, 8 * e.OUTPUT_LIMIT) for path in paths}
+            if self.record_form == "withheld-write-policy.v1":
+                c.scope_policy_ref(self.components[SOURCE / "scope/v1/scope-policy.json"].raw)
             require(self.components[SOURCE / c.HELPER_SOURCE].sha256 == parent["helper_source_sha256"], "E_RELATION")
             c.verify_helper_source()
             self.helper.recheck()
@@ -204,9 +207,25 @@ class _Workspace:
             "command", operation, "-f", str(source), str(path)], source)
         require(raw.strip() == b"true", "E_RELATION")
 
+    def execute_git(self, argv, limit):
+        return self.execute("write-git-inspection", argv, SOURCE / "shadow/v1/write-shadow.py",
+                            output_limit=limit)
+
+    def git_owner(self, repository):
+        if not hasattr(self, "git_owners"):
+            self.git_owners = {}
+        key = str(repository)
+        if key not in self.git_owners:
+            owner = c._ReadOnlyGit(key, self)
+            self.owned.append(owner)
+            self.git_owners[key] = owner
+        return self.git_owners[key]
+
     def git_read(self, repository, args, limit):
-        return self.execute("write-git-inspection", ["/usr/bin/git", "--no-replace-objects",
-            "--git-dir=" + str(repository), *args], SOURCE / "shadow/v1/write-shadow.py", output_limit=limit)
+        try:
+            return self.git_owner(repository).read(args, limit)
+        except c.Refusal as exc:
+            raise e.Refusal(exc.code) from exc
 
     def close(self):
         owned = self.owned
@@ -374,16 +393,22 @@ def _record_relations(files, incident, result, fresh_origin, anchor, write=None)
         and type(record["schema_version"]) is int and record["schema_version"] == 1
         and type(record["body"]) is dict, "E_RELATION")
     body = record["body"]
+    form = body.get("record_form")
+    require(form in ({"withheld-write.v1", "withheld-write-policy.v1"} if write is not None else {"enforced-reproduction.v1"}), "E_RELATION")
     require(set(body) == {"record_form", "activation_state", "authority", "deploy_authority",
         "effects", "evaluation_mode", "shadow", "qualification", "outcome", "reason_id", "observed_at",
         "target_repository_id", "git_revision_ref", "qualified_identity", "qualified_identity_ref",
         "incident_ref", "environment", "materialization", "check", "sandbox", "producer_invocations",
-        "consumer_provenance_ref", "trace_ledger_ref"} | ({"write"} if write is not None else set()), "E_RELATION")
+        "consumer_provenance_ref", "trace_ledger_ref"} | ({"write"} if write is not None else set()) | ({"scope_policy_ref"} if form == "withheld-write-policy.v1" else set()), "E_RELATION")
+    if form == "withheld-write-policy.v1":
+        c.check_scope_policy_ref(body["scope_policy_ref"], files["scope-policy.json"])
+    else:
+        require("scope-policy.json" not in files, "E_RELATION")
     if write is not None:
         require(canonical(body["write"]) == canonical(write), "E_RELATION")
     outcome = "no-change" if result["outcome"] == "match" else "reproduced"
     require(record["schema_version"] == 1 and record["kind"] == "shadow_reproduction_record"
-            and record["id"] == incident["id"] and body["record_form"] == ("withheld-write.v1" if write is not None else "enforced-reproduction.v1")
+            and record["id"] == incident["id"] and body["record_form"] == form
             and body["activation_state"] == "inactive" and body["authority"] == "none"
             and body["deploy_authority"] == "none" and body["shadow"] is True
             and body["qualification"] == {"state": "unavailable", "reason_id": "shadow.unqualified"}
@@ -452,26 +477,10 @@ def _record_relations(files, incident, result, fresh_origin, anchor, write=None)
 
 
 def _git_inventory(ws, repository, revision):
-    config = ws.hold(repository / "config", e.OUTPUT_LIMIT).raw
-    config_path = ws.capture("config-" + str(len(ws.inputs)) + ".txt", config)
-    keys = ws.git_read(repository, ["config", "--file", str(config_path), "--name-only", "--list", "--no-includes"], e.OUTPUT_LIMIT)
-    require(set(keys.decode().splitlines()) <= CONFIG_KEYS, "E_RELATION")
-    require(ws.git_read(repository, ["rev-parse", "--is-bare-repository"], 16) == b"true\n"
-            and ws.git_read(repository, ["rev-parse", "--show-object-format"], 16) == (revision["hash_algorithm"] + "\n").encode(), "E_RELATION")
-    forbidden = ["commondir", "shallow", "info/grafts", "objects/info/alternates", "refs/replace"]
-    require(not any(os.path.lexists(repository / name) for name in forbidden), "E_RELATION")
-    require(not any((repository / "worktrees").glob("*"))
-            and not any((repository / "objects/pack").glob("*.promisor")), "E_RELATION")
-    raw = ws.git_read(repository, ["ls-tree", "-r", "-t", "-z", "--full-tree", revision["commit_id"]], 16 * e.OUTPUT_LIMIT)
-    require(not raw or raw.endswith(b"\0"), "E_RELATION")
-    facts = {}
-    for line in raw.split(b"\0")[:-1]:
-        head, name = line.split(b"\t", 1)
-        mode, kind, oid = head.decode("ascii").split(" ")
-        path = name.decode("utf-8")
-        require(path not in facts and c._writer_oid(oid) and len(oid) == (40 if revision["hash_algorithm"] == "sha1" else 64), "E_RELATION")
-        facts[path] = (mode, kind, oid)
-    return facts
+    try:
+        return ws.git_owner(repository).inventory(revision)
+    except c.Refusal as exc:
+        raise e.Refusal(exc.code) from exc
 
 
 def _write_files(ws, frozen, incident, source_facts):
@@ -480,7 +489,11 @@ def _write_files(ws, frozen, incident, source_facts):
     root = "ystack-evidence/" + incident_id
     policy = parse(ws.components[SOURCE / "scope/v1/scope-policy.json"].raw)
     mode = json.loads(ws.components[SOURCE / "config/construction-mode.json"].raw)
-    paths = sorted(root + "/" + name for name in [*NAMES, "eval-seed.json", "README.md"])
+    names = [*NAMES, "eval-seed.json", "README.md"]
+    if ws.record_form == "withheld-write-policy.v1":
+        c.scope_policy_ref(ws.components[SOURCE / "scope/v1/scope-policy.json"].raw)
+        names.append("scope-policy.json")
+    paths = sorted(root + "/" + name for name in names)
     require(ws.request_doc["body"]["allowed_paths"] == paths
             and all(c.write_path_ok(path, policy, mode) for path in paths), "E_RELATION")
     require(not any(path.lower() == root.lower() or path.lower().startswith(root.lower() + "/")
@@ -496,13 +509,15 @@ def _write_files(ws, frozen, incident, source_facts):
     files = {root + "/" + name: raw for name, raw in frozen.items()}
     files[root + "/eval-seed.json"] = seed_raw
     files[root + "/README.md"] = b"Shadow evidence. Publication is withheld.\n"
-    patch, facts = c.evidence_patch(files, incident["body"]["git_revision_ref"]["hash_algorithm"])
+    if ws.record_form == "withheld-write-policy.v1":
+        files[root + "/scope-policy.json"] = ws.components[SOURCE / "scope/v1/scope-policy.json"].raw
+    patch, facts = c.evidence_patch(files, incident["body"]["git_revision_ref"]["hash_algorithm"], ws.record_form)
     return files, paths, patch, facts
 
 
 def _build_input(ws, original_raw, paths, patch, claim_raw):
     builder = SOURCE / "shadow/v1/write-materialization-input.jq"
-    contract = c.write_contract(paths)
+    contract = c.write_contract(paths, ws.record_form)
     contract_path = ws.capture("contract.json", contract, "builder")
     patch_path = ws.capture("producer.patch", patch, "builder")
     metadata = {key: sha(value) for key, value in c.WRITE_TEXTS.items()}
@@ -510,7 +525,8 @@ def _build_input(ws, original_raw, paths, patch, claim_raw):
         ws.capture(key + ".txt", raw, "builder")
     metadata.update({"contract": sha(contract), "patch": sha(patch), "allowed_paths": paths,
         "attempt_id": ws.request_doc["id"], "suffix": sha(ws.request_doc["id"].encode())[:32],
-        "environment_id": parse(claim_raw)["id"], "claim_sha256": sha(claim_raw)})
+        "environment_id": parse(claim_raw)["id"], "claim_sha256": sha(claim_raw),
+        "record_form": ws.record_form, "incident_id": parse((ws.work / "frozen/incident.json").read_bytes())["id"]})
     def phase(name, input_path, metadata_path):
         return ws.execute("write-materialization-input", [ws.jq.snapshot.path, "-L", str(ws.modules),
             "-S", "-c", "--arg", "phase", name, "--rawfile", "contract", str(contract_path),
@@ -538,9 +554,9 @@ def _build_input(ws, original_raw, paths, patch, claim_raw):
 def _candidate_facts(ws, response_raw, incident, source_facts, files, expected):
     receipt = parse(parse(response_raw)["payloads"][0]["data"].encode())
     revision = incident["body"]["git_revision_ref"]
-    require(expected == c.evidence_patch(files, revision["hash_algorithm"])[1], "E_RELATION")
+    require(expected == c.evidence_patch(files, revision["hash_algorithm"], ws.record_form)[1], "E_RELATION")
     candidate = receipt["candidate"]
-    require(candidate["parent_commit_id"] == revision["commit_id"] and receipt["changed_paths"]["count"] == 32, "E_RELATION")
+    require(candidate["parent_commit_id"] == revision["commit_id"] and receipt["changed_paths"]["count"] == (33 if ws.record_form == "withheld-write-policy.v1" else 32), "E_RELATION")
     repository = ws.work / "candidate/repository.git"
     candidate_revision = dict(revision, commit_id=candidate["commit_id"])
     facts = _git_inventory(ws, repository, candidate_revision)
@@ -732,7 +748,7 @@ def _admit(ws, materialized, frozen, files, write):
         and write["workflow_id"] == stage["workflow_id"] == "workflow.shadow-evidence-commit"
         and write["task_class"] == stage["task_class_id"] == "task.commit-shadow-evidence"
         and canonical(write["write_set"]) == canonical(write_set)
-        and canonical(write_set) == canonical(c.evidence_patch(materialized.files, revision["hash_algorithm"])[1])
+        and canonical(write_set) == canonical(c.evidence_patch(materialized.files, revision["hash_algorithm"], ws.record_form)[1])
         and [row["path"] for row in write_set] == ws.request_doc["body"]["allowed_paths"]
         and canonical(write["publisher_request"]) == canonical(request) and files["publisher-body.txt"] == body
         and request["body"]["body_sha256"] == sha(files["publisher-body.txt"])
@@ -744,7 +760,12 @@ def _admit(ws, materialized, frozen, files, write):
     require(canonical(write["admission"]) == canonical(expected), "E_RELATION")
     prefix = "ystack-evidence/" + incident["id"] + "/"
     require(all(materialized.files[prefix + name] == raw for name, raw in frozen.items()), "E_RELATION")
-    require(set(files) == set(e.EVIDENCE_NAMES) | {"publisher-body.txt"}, "E_RELATION")
+    require(set(files) == set(e.EVIDENCE_NAMES) | {"publisher-body.txt"}
+            | ({"scope-policy.json"} if ws.record_form == "withheld-write-policy.v1" else set()), "E_RELATION")
+    if ws.record_form == "withheld-write-policy.v1":
+        raw = ws.components[SOURCE / "scope/v1/scope-policy.json"].raw
+        require(files["scope-policy.json"] == materialized.files[prefix + "scope-policy.json"] == raw, "E_RELATION")
+        c.scope_policy_ref(raw)
     retained = {"claim.json": (ws.work / "captured/claim.json").read_bytes(),
         "duty-evaluation.json": (ws.work / "captured/duty_evaluation.json").read_bytes(),
         "materialization-input.json": materialized.input_raw,
@@ -763,14 +784,14 @@ def _admit(ws, materialized, frozen, files, write):
     provenance = _write_provenance(ws, incident)
     files["consumer-provenance.json"] = provenance
     files["shadow-record.json"] = _outer_record(ws, materialized, frozen, files, write,
-        provenance, files["trace-ledger.json"])
+        provenance, files["trace-ledger.json"], ws.record_form)
     result = parse(files["file-digest-result.json"])["body"]
     _record_relations(files, incident, result, files["origin-observation.json"], ws.anchor, write)
     ws.recheck(sealed=True)
     return expected
 
 
-def _outer_record(ws, materialized, frozen, files, write, provenance, trace):
+def _outer_record(ws, materialized, frozen, files, write, provenance, trace, record_form="withheld-write.v1"):
     incident = parse(frozen["incident.json"])
     body = parse(frozen["shadow-record.json"])["body"]
     response = parse(materialized.response_raw)
@@ -779,7 +800,8 @@ def _outer_record(ws, materialized, frozen, files, write, provenance, trace):
     evaluation = parse(materialized.evaluation_raw)
     result = parse(files["file-digest-result.json"])["body"]
     outcome = "no-change" if result["outcome"] == "match" else "reproduced"
-    body.update(record_form="withheld-write.v1", qualified_identity=parse(materialized.qualified_identity_raw)["body"],
+    require(record_form in {"withheld-write.v1", "withheld-write-policy.v1"}, "E_RELATION")
+    body.update(record_form=record_form, qualified_identity=parse(materialized.qualified_identity_raw)["body"],
         qualified_identity_ref={"content_id": "shadow-qualified-identity",
             "media_type": "application/vnd.ystack.qualified-identity+json", "sha256": sha(materialized.qualified_identity_raw)},
         outcome=outcome, reason_id="check.passed-at-revision" if outcome == "no-change" else "check.failed-at-revision",
@@ -792,6 +814,8 @@ def _outer_record(ws, materialized, frozen, files, write, provenance, trace):
         consumer_provenance_ref=e.document_ref(provenance),
         trace_ledger_ref={"content_id": "shadow-trace-ledger", "media_type": "application/vnd.ystack.telemetry-trace-ledger+json",
             "sha256": sha(trace)}, write=write)
+    if record_form == "withheld-write-policy.v1":
+        body["scope_policy_ref"] = c.scope_policy_ref(files["scope-policy.json"])
     body["environment"]["claim_ref"]["sha256"] = sha(files["claim.json"])
     body["environment"]["evaluation"] = {"state": "present", "value": {
         "verdict": evaluation["body"]["verdict"], "reason_ids": evaluation["body"]["reason_ids"],
@@ -808,8 +832,8 @@ def _outer_record(ws, materialized, frozen, files, write, provenance, trace):
     return canonical({"schema_version": 1, "kind": "shadow_reproduction_record", "id": incident["id"], "body": body})
 
 
-def write(request_path: Path, bundle: Path, work: Path, output: Path, parent: dict):
-    ws = _Workspace(request_path, bundle, work, output, parent)
+def write(request_path: Path, bundle: Path, work: Path, output: Path, parent: dict, record_form="withheld-write.v1"):
+    ws = _Workspace(request_path, bundle, work, output, parent, record_form)
     try:
         materialized = _materialize(ws)
         frozen = {name: (work / "frozen" / name).read_bytes() for name in NAMES}
@@ -834,6 +858,8 @@ def write(request_path: Path, bundle: Path, work: Path, output: Path, parent: di
             "qualified-identity.json": materialized.qualified_identity_raw,
             "sandbox-evaluation.json": materialized.evaluation_raw,
             "publisher-body.txt": publisher_body, **materialized.verification_files})
+        if ws.record_form == "withheld-write-policy.v1":
+            files["scope-policy.json"] = ws.components[SOURCE / "scope/v1/scope-policy.json"].raw
         result = parse(files["file-digest-result.json"])["body"]
         outcome = "no-change" if result["outcome"] == "match" else "reproduced"
         trace = e.trace_ledger(incident, ws.request_doc["id"], parse(files["claim.json"])["id"],
@@ -847,7 +873,7 @@ def write(request_path: Path, bundle: Path, work: Path, output: Path, parent: di
         ws.recheck(sealed=True)
         rows = [{"name": name, "size_bytes": len(raw), "sha256": sha(raw)} for name, raw in sorted(files.items())]
         marker = canonical({"schema_version": 1, "kind": "shadow_consumer_bundle", "id": "bundle." + sha(files["incident.json"])[:32],
-            "body": {"activation_state": "inactive", "record_form": "withheld-write.v1",
+            "body": {"activation_state": "inactive", "record_form": ws.record_form,
                 "incident_sha256": sha(files["incident.json"]), "target_revision": incident["body"]["git_revision_ref"], "files": rows}})
         directory = ws.output_hold.held.fd
         for name, raw in sorted(files.items()):
@@ -857,6 +883,7 @@ def write(request_path: Path, bundle: Path, work: Path, output: Path, parent: di
         ws.output_hold.recheck("E_RELATION")
         require(set(os.listdir(directory)) == set(files), "E_RELATION")
         os.fsync(directory)
+        ws.recheck(sealed=True)
         require(e.CancellationSignals.retain_completion(directory) is True, "E_RUNTIME")
         e.CancellationSignals.prepare_completion(marker)
         return marker
@@ -886,14 +913,15 @@ def main(argv, admission=None):
     native = owner = None
     try:
         require(isinstance(admission, e._StartupAdmission) and admission.key is e._STARTUP_KEY, "E_RUNTIME")
-        require(len(argv) == 6 and argv[1] == "prepare", "E_USAGE")
+        require(len(argv) == 6 and argv[1] in {"prepare", "prepare-policy"}, "E_USAGE")
         context = c.capture_parent_context()
         native = e._NativeRelease(context, admission)
         admission = dataclasses.replace(admission, native=native, module_origins=e._runtime_module_origins())
         owner = e.CancellationSignals(admission)
         with owner:
             try:
-                write(*map(Path, argv[2:]), context)
+                write(*map(Path, argv[2:]), context,
+                    "withheld-write-policy.v1" if argv[1] == "prepare-policy" else "withheld-write.v1")
             except BaseException as exc:
                 closing, native = native, None
                 try:

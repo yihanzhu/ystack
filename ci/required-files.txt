@@ -591,6 +591,7 @@ scripts/test/shadow-enforced.test.sh
 shadow/v1/write-shadow.py
 shadow/v1/write-materialization-input.jq
 scripts/test/shadow-write.test.sh
+scope/v1/read-shadow-evidence.py
 .github/workflows/scope-genuine-macos.yml
 core/v3/generations/g-98b9b6769e213878a0cf52dad0565ae3e1e71f0834c06a082cf80fe80591adee/contracts.jq
 core/v3/generations/g-98b9b6769e213878a0cf52dad0565ae3e1e71f0834c06a082cf80fe80591adee/core-ingress.sh
@@ -603,3 +604,6 @@ core/v3/generation-registry.json
 scripts/test/portable-core-v3-publisher.test.sh
 scripts/test/portable-core-v3-publisher-fixtures.jq
 scripts/test/portable-core-v3-publisher-rules.tsv
+sandbox/v1/coverage-source.py
+scripts/test/scope-gate-generation.test.sh
+scope/v1/generate-gate-evidence.py

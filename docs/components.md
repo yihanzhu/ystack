@@ -1014,7 +1014,8 @@ required `gate_evidence_refs` with exactly `risk_gate_evaluation_ref`,
 one evaluation by kind, id, and the digest of that evaluation's canonical bytes.
 
 The **evaluator** (`scope/v1/evaluate-scope.sh` with `scope/v1/scope-gates.jq`)
-reads seven documents: the scope record, a set of shadow reproduction records in
+reads nine inputs: seven documents, a held bundle root and an actual bare Git snapshot.
+The documents are the scope record, a set of shadow reproduction records in
 the shape step 7 emits, the eval dashboard, a risk-gates evaluation, a kill-switch
 evaluation, a duty-separation evaluation, and the operating-mode marker. It
 measures every one of them itself — including a digest over each individual shadow
@@ -1033,7 +1034,7 @@ separation is satisfied; and the mode is readable. Otherwise the answer is
 `scope.protected-path`, `scope.shadow-evidence-missing`,
 `scope.shadow-inconclusive`, `scope.eval-family-unseeded`, `scope.eval-failing`,
 `scope.kill-switch`, `scope.duty-violation`, `scope.mode-construction`, or
-`scope.malformed`.
+`scope.malformed`, or `scope.sandbox-receipt-missing`.
 
 A supplied shadow record counts **only** when one of the scope's
 `shadow_evidence_refs` names both its id and the digest the evaluator measured over
@@ -1898,7 +1899,8 @@ record and trace. The completion marker inventories the original 29 outer eviden
 names plus the publisher body. Native L occurs after ordinary owners close. A failure
 or cancellation can retain partial evidence but cannot create the completion marker.
 Two fresh disposable attempts prove identical trees, write sets, request bytes and
-post-write digests. The unchanged scope evaluator still refuses the new record form.
+post-write digests. The hardened scope reader can authenticate this record form only
+for `workflow.shadow-evidence-commit` plus `task.commit-shadow-evidence`.
 The shipped accepted set stays empty; CPU/wall enforcement is none and native
 qualification remains blocked. No publisher implementation ships here.
 
@@ -1906,3 +1908,134 @@ qualification remains blocked. No publisher implementation ships here.
 fixture by inserting writer controls into a temporary script copy. It also runs the
 complete original regression. Only fixture identity/origin and supervisor launch are
 simulated; converter, builder, materializer, preparation, verifier and checker are real.
+
+
+## Inactive scope evidence origin and write gate
+
+`scope/v1/evaluate-scope.sh evaluate SCOPE SHADOW_SET DASHBOARD RISK KILL DUTY MODE BUNDLE_ROOT SOURCE_GIT_DIR`
+uses the fixed physical `scope/v1/read-shadow-evidence.py`. Legacy declarations remain
+readable and never qualify. A claimed matching enforced or withheld record needs its
+complete digest-named bundle and a fresh read from the fixed root-owned supervisor
+anchor. Archived origin bytes preserve provenance; they cannot authenticate that read.
+Missing authentic evidence reports `scope.sandbox-receipt-missing` and creates no proposal.
+
+The reader holds the current package, inputs, bundle, bare Git snapshot and controlled
+store through the final check. The private READY/SEAL/CANCEL handshake keeps those
+owners live while jq checks the seven documents. Publication stays withheld. The fixed
+write workflow alone may consume the complete 32 add-only files; necessary ancestor
+trees may change, while existing leaves and unrelated trees must remain unchanged.
+Other workflows keep the exact-revision and no-change requirements.
+
+This core does not implement later-revision coverage, enablement or parent R3. The
+separate source coverage delivery remains required. Production accepted identities stay
+empty, CPU/wall enforcement stays none, and native qualification stays blocked.
+
+The genuine test uses actual host storage functions, a root anchor, a dedicated writer
+uid and a different read-only consumer uid. Its completed-run fields are explicitly
+synthetic storage fixtures. The native capsule measures and loads the real current
+binary with RTLD_NOW|LOCAL, without creating State or executing startup, VM or publisher.
+The current development Mac cannot run account or anchor setup. Its genuine positive
+requires the separately authorized reserved evidence host described in the accepted plan.
+
+The inactive scope reader also has one fixed `coverage-read.v1` source boundary.
+Only the exact shadow-evidence write workflow admits a coverage block. The reader
+owns a fresh durable request and expectation. It authenticates both evidence sets,
+releases provisional store holds before source creation, then authenticates both
+sets again. Final holds stay live through the evaluator's `SEAL` handshake.
+`sandbox/v1/coverage-source.py` validates the three fixed raw-page families and
+normalizes the complete first-parent, publisher-PR and applicable-rule interval.
+The bare Git comparison and original qualifying receipt time remain independent
+checks. The public evaluator still takes the same nine inputs.
+
+Production has no source configuration, collector, credential, network route or
+accepted source identity. The optional root-owned anchor siblings are
+`coverage-source-config.json` and `coverage-source-accepted-identities.json`.
+They select one measured finite source package and one publisher identity. Missing
+configuration returns `scope.enablement-stale`. No coverage result enables a scope.
+The controlled source inventory is receipt-last: `receipt.json`, plus
+`payload/request.json`, `payload/raw-manifest.json`, `payload/observation.json`
+and consecutive `payload/raw/0000` pages. The dedicated reader checks every file
+and directory with the existing ownership, ACL, no-follow and held-object rules.
+
+Run `bash scripts/test/scope-qualification.test.sh --coverage-pure` for the bounded
+normalizer, raw-frame, exact-age and replay cases without root setup. These checks
+do not replace the required distinct-principal Linux and macOS integration proof.
+
+
+`write-shadow.py prepare-policy REQUEST BUNDLE WORK OUTPUT` selects the closed
+`withheld-write-policy.v1` form. It holds the fixed package scope policy once.
+The same canonical raw bytes govern paths, enter the candidate at mode `100644`,
+and enter the outer bundle as `scope-policy.json`. The record adds only
+`scope_policy_ref`, with fixed name, byte count and SHA-256. The write section
+still has nine keys. Its candidate has 33 files; its outer bundle has 32 files,
+including a marker that inventories 31 entries. The frozen reproduction remains
+29 evidence files plus its marker. The existing `prepare` operation retains its
+32-file candidate and `withheld-write.v1` form.
+
+The reader verifies the policy blob against the candidate tree, manifest, patch,
+generated input, write set, post-check and outer snapshot. Later coverage needs
+two independently authenticated policy-form records. Each identity uses its own
+snapshot digest. Both snapshots must equal each other and the evaluator's held
+current policy bytes before a source request. Old or mixed forms remain available
+for exact-revision reads and cannot prove later coverage. Current policy bytes
+cannot fill missing historical evidence. Final held checks run before completion.
+
+The write suite exercises the actual `prepare-policy` producer twice and retains
+old-form assertions. The scope fixture consumes actual producer outputs for both
+coverage sides. Its VM identities and launch receipts are explicitly SIMULATED.
+Those tests do not establish native qualification or genuine platform execution.
+
+### Gate evidence generation (inactive)
+
+| Step | Fixed component | Result |
+| --- | --- | --- |
+| Freeze | `scope/v1/generate-gate-evidence.py` and the existing scope reader | One authenticated current materialization and its prerequisite closure |
+| Read control | Existing supervisor `kill-register-read` | A fresh, read-only register source attempt |
+| Evaluate | Existing duty, risk, kill and scope shell drivers, in that order | Their original observation verdicts and bytes |
+| Finish | One private store owner and a bounded socket channel | Fresh final acquisitions held through the completion marker |
+
+The fixed entry is:
+
+```text
+python3 -I -S -B scope/v1/generate-gate-evidence.py generate REQUEST SHADOW_SET DASHBOARD MARKER BUNDLE_ROOT SOURCE_GIT_DIR OUTPUT_DIR
+```
+
+REQUEST is canonical schema 1 `scope_gate_generation_request`. Its body contains
+only `scope_basis` and `risk_claim`. The basis is a normal workflow scope without
+`gate_evidence_refs`. The claim remains unqualified. The consumer extracts the
+request and resolved profile from their validated content pairs. It takes the
+result and policy set from that same authenticated materialization. Every required
+environment must name the same four documents. Existing risk and duty rules remain
+in force. A legitimate violated or inconclusive verdict remains an observation.
+
+The optional root-owned siblings `kill-register-source-config.json` and
+`kill-register-source-accepted-identities.json` use the existing source principal,
+group, store, anchor and supervisor. Missing configuration fails the generator.
+The fixed source package must supply full raw Git objects, register tree proofs,
+continuous default-ref history and owner-merge facts from an operator-accepted
+bootstrap. It must cover all four query families. This repository does not ship or
+install a collector, bootstrap, register, accepted source identity or credential.
+
+The output directory must be new and physical. It contains `objects/`, private
+reader data, `manifests/manifest.json` and the final
+`completion/COMPLETE.json`. The completion marker binds the manifest digest.
+Both source requests retain their original origin refs. Final observations and
+fresh origins are separate objects. All source acquisitions, including recursive
+prerequisites and aliases, have one owner. Each source runs only after all store
+holds have been released. Non-store inputs remain held. The original scope reader
+closes only after the outer owner has acquired the complete final closure.
+
+The total deadline is 300 seconds, including IPC and cleanup. Timeout, cancellation,
+source failure, stale data, an incomplete handoff or uncertain child cleanup leaves
+no completion marker. The result stays inactive, observation-only, authority none
+and enabled false. It does not clear a stop, admit a write, publish or activate.
+`write_entries.scope_id` names the workflow scope document, not a workflow class.
+
+`bash scripts/test/scope-gate-generation.test.sh --pure` checks parsing, projection,
+raw history, fixed arguments and private lifecycle data without jq, source setup
+or native execution. The ordinary test entry runs the same suite. The existing
+scope qualification fixture contains the distinct-principal generator/source path
+and its negative controls. Run that fixture only on its authorized disposable
+host. Its simulated VM facts still do not prove native qualification. Pure and
+static checks do not close the outstanding foundation, source, integration or G3
+proof requirements.
