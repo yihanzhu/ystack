@@ -1344,3 +1344,13 @@ matrix shards and the original Linux/macOS native/source requirements remain
 mandatory acceptance work. Pure checks, restored source and quick CI do not replace
 those proofs. CPU/wall remains NONE, native qualification BLOCKED, production EMPTY
 and automation PAUSED until their separate acceptance steps are complete.
+### Restore historical shadow control data
+
+Restore the 13 non-executable files listed under Fixed historical shadow archive
+control data in ci/required-files.txt. Their provenance.json binds the two original
+archive runtime commits and 12 exact control objects. The existing offline command
+`bash scripts/test/shadow-self-host-evidence.test.sh` verifies the fixed raw pin,
+closed inventory and complete bytes without old history, credentials or historical
+execution. Historical authenticity is separate from current control compatibility.
+Current drift still refuses current use. Neither result qualifies or activates a
+runtime. Restore the complete suite and unchanged archives together.
