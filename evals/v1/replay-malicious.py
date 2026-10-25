@@ -336,7 +336,11 @@ def _verifier_values(runtime_root, private_work, instruction_raw, file_raw):
     return result.stdout
 
 
-def _guest_wire_values(plan_raw, guest):
+def _guest_wire_values(runtime_root, plan_raw, guest):
+    spec = importlib.util.spec_from_file_location(
+        "malicious_guest_capture_size", Path(runtime_root)/"sandbox/v1/host-supervisor.py")
+    size_owner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(size_owner)
     if type(plan_raw) is not bytes or type(guest) is not dict or set(guest) != {"setup", "control", "counters"}:
         raise ValueError("guest observations")
     setup, control, counters = guest["setup"], guest["control"], guest["counters"]
@@ -448,8 +452,8 @@ def _guest_wire_values(plan_raw, guest):
         io("setup", name)
 
     def row_shape(row, keys):
-        if type(row) is not dict or set(row) != set(keys) or len(json.dumps(row, ensure_ascii=False,
-                sort_keys=True, separators=(",", ":"), allow_nan=False).encode()) + 1 > 8192:
+        if (type(row) is not dict or set(row) != set(keys)
+                or size_owner._capture_size(row, 8191) + 1 > 8192):
             raise ValueError("guest control row")
 
     def now(row):

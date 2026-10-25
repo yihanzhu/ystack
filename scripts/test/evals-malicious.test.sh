@@ -468,10 +468,24 @@ with tempfile.TemporaryDirectory(prefix='ystack-guest-value-pairs-') as director
     counters['output']=filesystem(10,1,4096,64)
     counters['scratch']=filesystem(10,9,4096,64)
     guest_raw={'setup':setup,'control':primitive_control,'counters':counters}
-    bridge_wire=replay._guest_wire_values(plan,guest_raw)
+    bridge_wire=replay._guest_wire_values(root,plan,guest_raw)
     bridge_work=area/'bridge';bridge_work.mkdir(mode=0o700)
     assert replay._guest_values(root,bridge_work,bridge_wire)==frame
     print('ok synthetic closed guest RAW -> strict02 -> same original report/frame bytes; Linux production route NOTRUN')
+    old_dumps = replay.json.dumps
+    def forbidden_row_encoding(*args,**kwargs):
+        raise AssertionError('row encoded before bounded size admission')
+    try:
+        replay.json.dumps = forbidden_row_encoding
+        assert replay._guest_wire_values(root,plan,guest_raw) == bridge_wire
+        import copy
+        oversized = copy.deepcopy(guest_raw)
+        oversized['control'][0]['sec'] = 'x'*8192
+        try:replay._guest_wire_values(root,plan,oversized)
+        except ValueError as error:assert str(error) == 'guest control row'
+        else:raise AssertionError('oversized row admitted')
+    finally:replay.json.dumps = old_dumps
+    print('ok guest control row exact owner bounds before JSON allocation, normal bridge unchanged')
     import copy
     for label,change in [
             ('setup-missing',lambda d:d['setup'].pop('meminfo_open')),
@@ -487,7 +501,7 @@ with tempfile.TemporaryDirectory(prefix='ystack-guest-value-pairs-') as director
             ('counter-wrong-type',lambda d:d['counters']['stdout']['stat'].update(size=True)),
             ('counter-over-name',lambda d:d['counters']['entry_0000_name'].update(bytes='61'*256,**{'return':256}))]:
         damaged=copy.deepcopy(guest_raw);change(damaged)
-        try:bad_wire=replay._guest_wire_values(plan,damaged)
+        try:bad_wire=replay._guest_wire_values(root,plan,damaged)
         except ValueError:pass
         else:
             rejected=subprocess.run([str(bridge_work/'guest-values')],input=bad_wire,capture_output=True,env={},timeout=10)
