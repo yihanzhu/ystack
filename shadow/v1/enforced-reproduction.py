@@ -1648,7 +1648,7 @@ def seal(output: Path, held_output: StableDirectory, files: dict[str, bytes],
 def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None = None) -> bytes:
     started = c._clock_value('shadow/v1/enforced-reproduction.py:1617:0',time.monotonic(),'monotonic'); deadline = started + OVERALL_SECONDS
     context = c.capture_parent_context() if parent is None else parent
-    work_hold = output_hold = None
+    work_hold = output_hold = held_store = None
     helper = jq = anchor = bash = python_file = sudo_file = None
     inputs: list[InputSnapshot] = []
     sources: list[StableFile] = []
@@ -1862,7 +1862,8 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
         launch_status = _launch(anchor, frame, deadline)
         sudo_file.recheck(); python_file.recheck(); supervisor.recheck("E_RELATION")
         require(launch_status == 0, "E_RUNTIME")
-        snapshots, origin_raw = c.read_store_attempt(anchor, request["id"])
+        held_store = c._HeldStoreRead(anchor, request["id"])
+        snapshots, origin_raw = held_store.snapshots, held_store.observation
         receipt_raw = snapshots["receipt.json"]
         receipt_path = work / "receipt/sandbox-receipt.json"; write_exclusive(receipt_path, receipt_raw)
         evaluation_path = work / "evaluation/sandbox-evaluation.json"; write_exclusive(evaluation_path, evaluation_raw)
@@ -1875,6 +1876,11 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
         require(checker["body"]["check_verdict"] == "valid"
                 and checker["body"]["enforcement_verdict"] == "satisfied",
                 "E_RELATION")
+        if held_store.record_reproduction(request_raw, launch_raw, expectation_raw) is not None:
+            try:
+                held_store.copy_capture(work_hold.held, launch_raw, "reproduction", anchor.recording_work)
+            except (c.Refusal, OSError, MemoryError):
+                anchor.private_observations["unusable"] = True
         evidence_manifest_raw = snapshots["payload/evidence-manifest.json"]
         evidence_manifest = parse(evidence_manifest_raw)
         result_raw, result = payload_result(snapshots, evidence_manifest, instruction, manifest,
@@ -1980,10 +1986,11 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
         work_hold.recheck(); output_hold.recheck()
         for source in sources: source.recheck()
         for item in inputs: item.recheck()
+        held_store.recheck()
         return seal(output, output_hold, files, incident, "enforced-reproduction.v1")
     finally:
         close_all([*reversed(inputs), *reversed(sources), python_file, sudo_file, bash,
-                   anchor, jq, helper, work_hold, output_hold])
+                   held_store, anchor, jq, helper, work_hold, output_hold])
 
 
 def main(argv: list[str], admission: _StartupAdmission | None = None) -> int:

@@ -894,6 +894,7 @@ class Anchor:
     identity_context: dict | None = None
     private_observations: dict = dataclasses.field(default_factory=dict)
     storage_entry_count: int = 0
+    recording_work: dict = dataclasses.field(default_factory=dict)
 
     def retain_storage(self, attempt_id, rows, failure, held=()):
         count = len(rows) + sum(len(item.components) for item in held)
@@ -1121,7 +1122,7 @@ def _attempt_names(snapshots):
             | ({"sandbox-export.bin"} if "sandbox-export.bin" in snapshots else set()))
 
 
-def _capture_export_reference(groups):
+def _capture_export_reference(groups, *, final=False):
     host = groups.get("host", {})
     _require(type(host) is dict, "E_STORE")
     rows = host.get("process", [])
@@ -1141,9 +1142,10 @@ def _capture_export_reference(groups):
             _require(row["return"] is None and type(row["errno"]) is int
                      and row["errno"] > 0, "E_STORE")
             continue
-        _require(type(value) is dict and set(value) == {"role", "launch", "size_bytes", "sha256"}
-                 and value["role"] == "sandbox-export-bytes"
-                 and type(value["launch"]) is str and value["launch"] in {"reproduction", "write"}
+        keys = {"role", "size_bytes", "sha256"} | ({"launch"} if final else set())
+        _require(type(value) is dict and set(value) == keys
+                 and value["role"] == ("sandbox-export-bytes" if final else "sandbox-export-capture-bytes")
+                 and (not final or type(value["launch"]) is str and value["launch"] in {"reproduction", "write"})
                  and type(value["size_bytes"]) is int and 0 <= value["size_bytes"] <= EXPORT_LIMIT
                  and _sha(value["sha256"]) and row["errno"] is None
                  and type(row["return"]) is int and row["return"] == value["size_bytes"], "E_STORE")
@@ -1151,8 +1153,9 @@ def _capture_export_reference(groups):
     return reference
 
 
-def _capture_export_binding(groups, snapshots, *, launch=None, source=False):
-    reference = _capture_export_reference(groups)
+def _capture_export_binding(groups, snapshots, *, launch=None, source=False, final=False):
+    _require(final or launch is None, "E_STORE")
+    reference = _capture_export_reference(groups, final=final)
     present = "sandbox-export.bin" in snapshots
     _require(present == (reference is not None) and (not source or not present), "E_STORE")
     if reference is not None:
@@ -1187,11 +1190,58 @@ def _capture_envelope(raw, attempt_id, request_sha256, *, seed=False):
     return body["raw"]
 
 
-def _capture_for_replay(snapshots, attempt_id, request_raw, *, launch=None):
+def _capture_for_replay(snapshots, attempt_id, request_raw):
     _require("capture.json" in snapshots, "E_STORE")
     groups = _capture_envelope(snapshots["capture.json"], attempt_id, digest(request_raw), seed=True)
-    _capture_export_binding(groups, snapshots, launch=launch)
+    _capture_export_binding(groups, snapshots)
     return groups
+
+
+def _launch_capture_values(capture_raw, outer_raw, launch_raw, expectation_raw, receipt_raw, kind):
+    _require(kind in {"shadow_enforced_request", "shadow_write_request"}, "E_STORE")
+    outer = _json(outer_raw, DOCUMENT_LIMIT, "E_STORE")
+    launch = _json(launch_raw, DOCUMENT_LIMIT, "E_STORE")
+    expectation = _json(expectation_raw, DOCUMENT_LIMIT, "E_STORE")
+    receipt = _json(receipt_raw, DOCUMENT_LIMIT, "E_STORE")
+    for value, expected_kind in ((outer, kind), (launch, "sandbox_launch_request"),
+                                  (expectation, "sandbox_receipt_expectation"),
+                                  (receipt, "sandbox_enforcement_receipt")):
+        _require(set(value) == {"schema_version", "kind", "id", "body"}
+                 and type(value["schema_version"]) is int and value["schema_version"] == 1
+                 and value["kind"] == expected_kind and type(value["body"]) is dict, "E_STORE")
+    attempt_id = outer["body"].get("attempt_id")
+    _require(_id(attempt_id) and outer["id"] == attempt_id and launch["id"] == attempt_id
+             and expectation["id"] == attempt_id, "E_STORE")
+    attempt = {"attempt_id": attempt_id, "attempt_number": 1}
+    bound = attempt | {"launch_request_sha256": digest(launch_raw)}
+    _require(launch["body"].get("attempt") == attempt
+             and receipt["body"].get("attempt") == bound
+             and expectation["body"].get("attempt") == bound
+             and receipt["id"] == "receipt." + bound["launch_request_sha256"], "E_STORE")
+    for key in ("control", "subject"):
+        _require(key in launch["body"] and launch["body"][key] == expectation["body"].get(key)
+                 == receipt["body"].get(key), "E_STORE")
+    _require(type(receipt["body"].get("origin")) is dict
+             and launch["body"].get("store_id") == expectation["body"].get("store_id")
+             == receipt["body"]["origin"].get("store_id"), "E_STORE")
+    groups = _capture_envelope(capture_raw, attempt_id, bound["launch_request_sha256"], seed=True)
+    rebuilt = _capture_envelope_values(attempt_id, launch_raw, groups)
+    _require(rebuilt == capture_raw, "E_STORE")
+    reference = _capture_export_reference(groups)
+    if reference is None:
+        return groups
+    final_reference = reference | {"role": "sandbox-export-bytes",
+        "launch": "reproduction" if kind == "shadow_enforced_request" else "write"}
+    projected = groups | {"host": groups["host"] | {"process": [
+        row | {"bytes": final_reference} if row["site"] == "run_vm.export-read" else row
+        for row in groups["host"]["process"]]}}
+    _capture_export_reference(projected, final=True)
+    return projected
+
+
+def _capture_envelope_values(attempt_id, launch_raw, groups):
+    return canonical({"schema_version": 1, "kind": "malicious_source_capture", "id": attempt_id,
+        "body": {"request_sha256": digest(launch_raw), "raw": groups, "complete": True}})
 
 
 def _capture_copy_room(work, amount, exported, *, case=False):
@@ -1241,6 +1291,26 @@ class _HeldStoreRead:
         self.held: list[HeldPath] = []
         self.snapshots, self.observation = read_store_attempt(anchor, attempt_id, _owner=self)
 
+    def record_reproduction(self, outer_raw, launch_raw, expectation_raw):
+        return self._record_launch(outer_raw, launch_raw, expectation_raw, "shadow_enforced_request")
+
+    def record_write(self, outer_raw, launch_raw, expectation_raw):
+        return self._record_launch(outer_raw, launch_raw, expectation_raw, "shadow_write_request")
+
+    def _record_launch(self, outer_raw, launch_raw, expectation_raw, kind):
+        try:
+            groups = _launch_capture_values(self.snapshots.get("capture.json", b""), outer_raw,
+                launch_raw, expectation_raw, self.snapshots["receipt.json"], kind)
+            self.launch_binding = {"outer": _json(outer_raw, DOCUMENT_LIMIT, "E_STORE"),
+                "launch": _json(launch_raw, DOCUMENT_LIMIT, "E_STORE"),
+                "expectation": _json(expectation_raw, DOCUMENT_LIMIT, "E_STORE"),
+                "receipt": _json(self.snapshots["receipt.json"], DOCUMENT_LIMIT, "E_STORE")}
+            self.projected_capture = groups
+            return groups
+        except (Refusal, ValueError, TypeError, MemoryError):
+            self.anchor.private_observations["unusable"] = True
+            return None
+
     def recheck(self, code: str = "E_STALE") -> None:
         self.anchor.recheck(code)
         for item in self.held:
@@ -1274,7 +1344,7 @@ class _HeldStoreRead:
         _require(type(launch) is str and launch in {"reproduction", "write"}
                  and isinstance(parent, HeldPath) and len(parent.components) > 1
                  and bool(self.held) and type(work) is dict, "E_STORE")
-        _capture_for_replay(self.snapshots, self.attempt_id, request_raw, launch=launch)
+        _capture_for_replay(self.snapshots, self.attempt_id, request_raw)
         _require(len(self.observation) <= DOCUMENT_LIMIT, "E_LIMIT")
         _require(type(self.anchor.identity_context) is dict
                  and not self.anchor.private_observations.get("unusable", False)
@@ -1308,6 +1378,14 @@ class _HeldStoreRead:
             "identity_context": self.anchor.identity_context,
             "entropy": self.anchor.private_observations.get("entropy", {}),
             "clocks": _clock_observations}, work, case_work)
+        binding_raw = None
+        if "sandbox-export.bin" in self.snapshots:
+            _require(hasattr(self, "launch_binding") and hasattr(self, "projected_capture"), "E_STORE")
+            expected_launch = ("reproduction" if self.launch_binding["outer"]["kind"]
+                               == "shadow_enforced_request" else "write")
+            _require(launch == expected_launch, "E_STORE")
+            binding_raw = _private_capture_observations(self.launch_binding |
+                {"raw": self.projected_capture}, work, case_work)
         os.mkdir(launch, 0o700, dir_fd=parent.fd)
         after_parent = _metadata(parent.fd)
         _require((after_parent.st_dev, after_parent.st_ino, after_parent.st_uid, after_parent.st_gid,
@@ -1364,6 +1442,8 @@ class _HeldStoreRead:
                 write("sandbox-export.bin", self.snapshots["sandbox-export.bin"].chunks, True)
             write("origin-observation.json", (self.observation,))
             write("consumer-observations.json", (consumer_raw,))
+            if binding_raw is not None:
+                write("launch-binding.json", (binding_raw,))
             os.fsync(directory)
             os.fsync(parent.fd)
             final_directory = _metadata(directory)

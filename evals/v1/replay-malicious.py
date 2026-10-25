@@ -49,6 +49,33 @@ def _preparation_values(runtime_root, inventory, source_bytes, runtime_values, i
     return manifest, record, owner.completion_envelope(record, manifest)
 
 
+def _capture_projection_values(runtime_root, capture_raw, groups, outer_raw, launch_raw,
+                               expectation_raw, receipt_raw, kind):
+    spec = importlib.util.spec_from_file_location(
+        "malicious_capture_values", Path(runtime_root) / "shadow/v1/_consumer.py")
+    owner = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = owner
+    spec.loader.exec_module(owner)
+    outer = owner._json(outer_raw, owner.DOCUMENT_LIMIT, "E_STORE")
+    rebuilt = owner._capture_envelope_values(outer["body"]["attempt_id"], launch_raw, groups)
+    owner._require(rebuilt == capture_raw, "E_STORE")
+    projected = owner._launch_capture_values(rebuilt, outer_raw, launch_raw,
+                                            expectation_raw, receipt_raw, kind)
+    return rebuilt, projected
+
+
+def _reproduction_capture_values(runtime_root, capture_raw, groups, outer_raw, launch_raw,
+                                 expectation_raw, receipt_raw):
+    return _capture_projection_values(runtime_root, capture_raw, groups, outer_raw, launch_raw,
+        expectation_raw, receipt_raw, "shadow_enforced_request")
+
+
+def _write_capture_values(runtime_root, capture_raw, groups, outer_raw, launch_raw,
+                          expectation_raw, receipt_raw):
+    return _capture_projection_values(runtime_root, capture_raw, groups, outer_raw, launch_raw,
+        expectation_raw, receipt_raw, "shadow_write_request")
+
+
 def _origin_values(runtime_root, files, storage_rows, identity_context, source_bytes):
     spec = importlib.util.spec_from_file_location(
         "malicious_origin_values", Path(runtime_root) / "shadow/v1/_consumer.py")

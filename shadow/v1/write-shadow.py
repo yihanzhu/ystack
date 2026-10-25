@@ -48,6 +48,7 @@ class _Workspace:
         require(record_form in {"withheld-write.v1", "withheld-write-policy.v1"}, "E_RELATION")
         self.record_form = record_form
         self.owned = []
+        self.launch_holds = []
         self.inputs = []
         self.components = {}
         self.commands = []
@@ -173,6 +174,12 @@ class _Workspace:
                 item.seal_recheck()
             elif hasattr(item, "recheck"):
                 item.recheck()
+        for item in self.launch_holds:
+            if sealed:
+                item.recheck()
+            else:
+                for path in item.held:
+                    path.recheck("E_RELATION")
         native = e.CancellationSignals.active.native if e.CancellationSignals.active else None
         require(isinstance(native, e._NativeRelease), "E_RUNTIME")
         native.recheck()
@@ -228,8 +235,9 @@ class _Workspace:
             raise e.Refusal(exc.code) from exc
 
     def close(self):
-        owned = self.owned
+        owned = self.owned + self.launch_holds
         self.owned = []
+        self.launch_holds = []
         e.close_all(reversed(owned))
 
 
@@ -620,7 +628,9 @@ def _verify_write(ws, incident, input_raw, record_raw, manifest_raw, evaluation_
         supervisor.recheck("E_RELATION")
     finally:
         sudo.close()
-    snapshots, origin_raw = c.read_store_attempt(ws.anchor, ws.request_doc["id"])
+    held_store = c._HeldStoreRead(ws.anchor, ws.request_doc["id"])
+    ws.launch_holds.append(held_store)
+    snapshots, origin_raw = held_store.snapshots, held_store.observation
     receipt_path = ws.capture("write-receipt.json", snapshots["receipt.json"], "receipt")
     evaluation_path = ws.capture("write-evaluation.json", evaluation_raw, "checks")
     observation_path = ws.capture("write-verifier-observation.json", observation_raw, "checks")
@@ -628,6 +638,11 @@ def _verify_write(ws, incident, input_raw, record_raw, manifest_raw, evaluation_
         ["check-bound", str(receipt_path), str(expectation_path), str(evaluation_path), str(observation_path)])
     check = parse(checker_raw)
     require(check["body"]["check_verdict"] == "valid" and check["body"]["enforcement_verdict"] == "satisfied", "E_RELATION")
+    if held_store.record_write(ws.request.raw, launch_raw, expectation_raw) is not None:
+        try:
+            held_store.copy_capture(ws.work_hold.held, launch_raw, "write", ws.anchor.recording_work)
+        except (c.Refusal, OSError, MemoryError):
+            ws.anchor.private_observations["unusable"] = True
     result_raw, _result = e.payload_result(snapshots, parse(snapshots["payload/evidence-manifest.json"]),
         instruction, manifest, parse(snapshots["receipt.json"]))
     files = {"sandbox-request.json": launch_raw, "sandbox-expectation.json": expectation_raw,

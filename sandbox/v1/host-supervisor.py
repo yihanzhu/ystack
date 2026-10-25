@@ -57,11 +57,26 @@ def _record_process(site, result=None, error=None, raw=None, timeout=None):
     ordinals[site] = ordinal + 1
     row = {"site": site, "ordinal": ordinal, "return": result, "errno": error,
            "bytes": "" if raw is not None else None, "timeout": timeout}
-    size = len(canonical(row)) + (0 if raw is None else len(raw) * 2)
+    export = site == "run_vm.export-read" and raw is not None
+    if export:
+        if len(raw) > 12582912 or "export_raw" in _capture_process:
+            _capture_process["complete"] = False
+            return
+        try:
+            measured_sha = sha256_hex(raw)
+        except (ValueError, MemoryError):
+            _capture_process["complete"] = False
+            return
+        row["bytes"] = {"role": "sandbox-export-capture-bytes", "size_bytes": len(raw),
+                        "sha256": measured_sha}
+        _capture_process["export_raw"] = raw
+        _capture_process["export_sha"] = row["bytes"]["sha256"]
+        _capture_process.setdefault("export_work", {})["original_sha"] = len(raw)
+    size = len(canonical(row)) + (0 if raw is None or export else len(raw) * 2)
     if len(_capture_process["rows"]) >= 4096 or _capture_process["bytes"] + size > 4 * 1024 * 1024:
         _capture_process["complete"] = False
     else:
-        if raw is not None:
+        if raw is not None and not export:
             row["bytes"] = raw.hex()
         _capture_process["rows"].append(row)
         _capture_process["bytes"] += size
@@ -1544,10 +1559,13 @@ def write_receipt_file(store_fd, attempt_fd, uid, gid, receipt_bytes):
                        "clocks": {key: _capture_clocks[key] for key in ("wall", "monotonic")}}
                 if "guest" in _capture_process:
                     raw["guest"] = _capture_process["guest"]
+                if "export_raw" in _capture_process:
+                    _write_capture_export(capture_fd, uid, gid, _capture_process["export_raw"],
+                                          _capture_process["export_sha"], _capture_process["export_work"])
                 capture = _capture_values(_capture_process["attempt_id"], _capture_process["request_raw"],
                     raw, _capture_process["complete"] and _capture_clocks["complete"])
                 _write_capture_file(store_fd, capture_fd, uid, gid, capture)
-            except (ValueError, TypeError, Refusal, MemoryError):
+            except (OSError, ValueError, TypeError, Refusal, MemoryError):
                 _capture_process["complete"] = False
     finally:
         if capture_fd is not None:
@@ -1629,6 +1647,57 @@ def _write_capture_file(store_fd, attempt_fd, uid, gid, capture):
         os.fsync(store_fd)
     except OSError:
         pass
+
+
+def _write_capture_export(attempt_fd, uid, gid, raw, original_sha, work):
+    require(type(raw) is bytes and len(raw) <= 12582912, "E_CAPTURE")
+    fd = os.open("sandbox-export.bin", os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                 0o600, dir_fd=attempt_fd)
+    try:
+        offset = 0
+        view = memoryview(raw)
+        while offset < len(raw):
+            count = os.write(fd, view[offset:offset + 65536])
+            require(count > 0, "E_CAPTURE")
+            offset += count
+            work["controlled_copy"] = work.get("controlled_copy", 0) + count
+            work["controlled_write"] = work.get("controlled_write", 0) + count
+        os.fchown(fd, uid, gid)
+        os.fchmod(fd, 0o440)
+        os.fsync(fd)
+        before = os.fstat(fd)
+        require(stat.S_ISREG(before.st_mode) and before.st_uid == uid and before.st_gid == gid
+                and stat.S_IMODE(before.st_mode) == 0o440 and before.st_nlink == 1
+                and before.st_size == len(raw), "E_CAPTURE")
+        os.lseek(fd, 0, os.SEEK_SET)
+        measured, total = hashlib.sha256(), 0
+        while True:
+            chunk = os.read(fd, min(65536, len(raw) + 1 - total))
+            if not chunk:
+                break
+            total += len(chunk)
+            work["controlled_readback"] = work.get("controlled_readback", 0) + len(chunk)
+            require(total <= len(raw), "E_CAPTURE")
+            measured.update(chunk)
+        named = os.stat("sandbox-export.bin", dir_fd=attempt_fd, follow_symlinks=False)
+        after = os.fstat(fd)
+        identity = lambda value: (value.st_dev, value.st_ino, value.st_uid, value.st_gid,
+                                  value.st_mode, value.st_nlink, value.st_size,
+                                  value.st_mtime_ns, value.st_ctime_ns)
+        require(total == len(raw) and identity(before) == identity(after) == identity(named)
+                and measured.hexdigest() == original_sha, "E_CAPTURE")
+        os.fsync(attempt_fd)
+    finally:
+        os.close(fd)
+
+
+def _read_export_value(stream):
+    raw = stream.read()
+    if _capture_process is not None:
+        work = _capture_process.setdefault("export_work", {})
+        work["original_read"] = work.get("original_read", 0) + len(raw)
+    _record_process("run_vm.export-read", result=len(raw), raw=raw)
+    return raw
 
 
 # --- R9: the real launch path -- disks, plan.json, the driver interface,
@@ -2616,8 +2685,7 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
         test_slow("YSTACK_TEST_SLOW_EXPORT_READ_MS")
         try:
             with open(export_path, "rb") as fh:
-                export_raw = fh.read()
-                _record_process("run_vm.export-read", result=len(export_raw), raw=export_raw)
+                export_raw = _read_export_value(fh)
             export_records = frame_read(export_raw)
             export_records, guest_capture = _guest_capture_values(export_records)
             if _capture_process is not None:

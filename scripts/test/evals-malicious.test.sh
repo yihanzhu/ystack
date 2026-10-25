@@ -730,6 +730,7 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
             assert json.loads(overflow)['body'] == {'request_sha256':host.sha256_hex(request),
                 'raw':{},'complete':False}
             print('ok source capture operation binding and pre-hex document overflow - '+operation)
+        originals = area/'originals';originals.mkdir(mode=0o700)
         private = area/'private-recorder';private.mkdir(mode=0o700);private.chmod(0o700)
         failed_private = area/'failed-private-recorder';failed_private.mkdir(mode=0o700);failed_private.chmod(0o700)
         private_held = consumer._open_held(str(private),True,
@@ -747,13 +748,30 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
             payload = attempt/'payload';payload.mkdir(mode=0o750);payload.chmod(0o750)
             export = host.frame_write([(b'stdout',b''),(b'stderr',b'')])
             export += bytes(consumer.EXPORT_LIMIT-len(export))
-            reference = {'role':'sandbox-export-bytes','launch':launch,
-                         'size_bytes':len(export),'sha256':host.sha256_hex(export)}
-            export_group = {'host':{'process':[{'site':'run_vm.export-read','ordinal':0,
-                'return':len(export),'errno':None,'bytes':reference,'timeout':None}],
-                'driver_rest':[],'signals':[]}}
-            values = {'receipt.json':host.canonical({'body':{'attempt':{
-                'attempt_id':attempt_id,'launch_request_sha256':host.sha256_hex(request)}}}),
+            outer = {'schema_version':1,'kind':'shadow_enforced_request' if launch == 'reproduction'
+                else 'shadow_write_request','id':attempt_id,'body':{'attempt_id':attempt_id}}
+            attempt_values = {'attempt_id':attempt_id,'attempt_number':1}
+            launch_body = {'attempt':attempt_values,'store_id':config['store_id'],
+                           'control':{'ordinary':'control'},'subject':{'ordinary':'subject'}}
+            request = host.canonical({'schema_version':1,'kind':'sandbox_launch_request',
+                                      'id':attempt_id,'body':launch_body})
+            bound_attempt = attempt_values | {'launch_request_sha256':host.sha256_hex(request)}
+            expectation = host.canonical({'schema_version':1,'kind':'sandbox_receipt_expectation',
+                'id':attempt_id,'body':launch_body | {'attempt':bound_attempt}})
+            receipt = host.canonical({'schema_version':1,'kind':'sandbox_enforcement_receipt',
+                'id':'receipt.'+host.sha256_hex(request),'body':{'attempt':bound_attempt,
+                'control':launch_body['control'],'subject':launch_body['subject'],
+                'origin':{'store_id':config['store_id']}}})
+            host._capture_process = {'rows':[],'ordinals':{},'bytes':0,'complete':True,
+                'driver_rest':[],'signals':[],'request_raw':request,'attempt_id':attempt_id}
+            host._capture_clocks = {'wall':[],'monotonic':[],'complete':True}
+            original = originals/(launch+'.bin')
+            assert original.write_bytes(export) == len(export)
+            with original.open('rb') as stream:export = host._read_export_value(stream)
+            reference = host._capture_process['rows'][0]['bytes']
+            export_group = {'host':{'process':host._capture_process['rows'],
+                'driver_rest':[],'signals':[]},'clocks':{'wall':[],'monotonic':[]}}
+            values = {'receipt.json':receipt,
                 'payload/stdout':b'','payload/stderr':b'',
                 'payload/evidence-manifest.json':host.empty_evidence_manifest()[0],
                 'capture.json':host._capture_values(attempt_id,request,export_group,True),
@@ -761,7 +779,16 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
             export_anchor = consumer.Anchor(config,config_raw,[],{},('',[]),('',[]),None,
                                             identity_context=anchor.identity_context)
             for name,raw in values.items():
+                if name in {'receipt.json','capture.json','sandbox-export.bin'}:continue
                 path = attempt/name;path.write_bytes(raw);path.chmod(0o440)
+            store_fd = os.open(store,os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                attempt_fd = os.open(attempt,os.O_RDONLY | os.O_DIRECTORY)
+                host.write_receipt_file(store_fd,attempt_fd,os.getuid(),os.getgid(),receipt)
+            finally:os.close(store_fd)
+            assert host._capture_process['complete'] is True
+            assert host._capture_process['export_work'] == {key:len(export) for key in
+                ('original_read','original_sha','controlled_copy','controlled_write','controlled_readback')}
             held = consumer._HeldStoreRead(export_anchor,attempt_id)
             try:
                 acquired = export_anchor.private_observations['storage_reads'][-1]
@@ -794,8 +821,39 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
                 assert spent('consumer.independent-sha','read_bytes') == len(export)
                 offline_work = sys.modules['malicious_origin_values']._export_work
                 assert offline_work['consumer.independent-sha'] == {'calls':1,'read_bytes':len(export)}
-                assert consumer._capture_for_replay(held.snapshots,attempt_id,request,launch=launch) == export_group
-                refuses(lambda:consumer._capture_for_replay(held.snapshots,attempt_id,request,
+                assert consumer._capture_for_replay(held.snapshots,attempt_id,request) == export_group
+                projected = (held.record_reproduction if launch == 'reproduction' else held.record_write)(
+                    host.canonical(outer),request,expectation)
+                assert projected is not None
+                final_ref = consumer._capture_export_reference(projected,final=True)
+                assert final_ref == reference | {'role':'sandbox-export-bytes','launch':launch}
+                replay_projection = (capture_replay._reproduction_capture_values if launch == 'reproduction'
+                                     else capture_replay._write_capture_values)
+                rebuilt_capture,offline_projection = replay_projection(root,values['capture.json'],
+                    export_group,host.canonical(outer),request,expectation,receipt)
+                assert rebuilt_capture == held.snapshots['capture.json'] and offline_projection == projected
+                for label,index,mutate in [
+                    ('outer-kind',0,lambda v:v.update(kind='shadow_write_request' if launch == 'reproduction' else 'shadow_enforced_request')),
+                    ('outer-attempt',0,lambda v:v['body'].update(attempt_id='attempt.other')),
+                    ('outer-id',0,lambda v:v.update(id='attempt.other')),
+                    ('launch-id',1,lambda v:v.update(id='attempt.other')),
+                    ('launch-bytes',1,lambda v:v['body'].update(nonce='a'*64)),
+                    ('expectation-attempt',2,lambda v:v['body']['attempt'].update(attempt_id='attempt.other')),
+                    ('expectation-sha',2,lambda v:v['body']['attempt'].update(launch_request_sha256='a'*64)),
+                    ('receipt-attempt',3,lambda v:v['body']['attempt'].update(attempt_id='attempt.other')),
+                    ('receipt-sha',3,lambda v:v['body']['attempt'].update(launch_request_sha256='a'*64))]:
+                    raw_documents = [host.canonical(outer),request,expectation,receipt]
+                    changed = json.loads(raw_documents[index]);mutate(changed)
+                    raw_documents[index] = host.canonical(changed)
+                    refuses(lambda:consumer._launch_capture_values(values['capture.json'],*raw_documents,
+                        outer['kind']),'binding-'+label)
+                    try:replay_projection(root,values['capture.json'],export_group,*raw_documents)
+                    except Exception as error:
+                        assert type(error).__name__ == 'Refusal' and str(error) == 'E_STORE'
+                    else:raise AssertionError('offline binding-'+label)
+                refuses(lambda:consumer._capture_export_reference(projected),'final-at-host-stage')
+                refuses(lambda:consumer._capture_export_reference(export_group,final=True),'host-at-final-stage')
+                refuses(lambda:consumer._capture_export_binding(projected,held.snapshots,final=True,
                     launch='write' if launch == 'reproduction' else 'reproduction'),'cross-launch')
                 refuses(lambda:consumer._capture_export_binding(export_group,held.snapshots,source=True),'source-binary')
                 for label,change in [('missing-role',lambda v:v.pop('role')),
@@ -817,13 +875,19 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
                     {k:v for k,v in held.snapshots.items() if k != 'sandbox-export.bin'}),'missing-binary')
                 refuses(lambda:consumer._capture_export_binding(group,held.snapshots),'unused-binary')
                 prior_copy = dict(private_work)
+                for component in private_held.components:
+                    current = os.fstat(component.fd)
+                    assert consumer._identity(component.before) == consumer._identity(current), (
+                        component.name,consumer._stat_values(component.before),consumer._stat_values(current))
                 held.copy_capture(private_held,request,launch,private_work)
                 assert private_work['export_read_bytes']-prior_copy.get('export_read_bytes',0) == len(export)
                 assert private_work['export_write_bytes']-prior_copy.get('export_write_bytes',0) == len(export)
                 assert private_work['export_physical_bytes']-prior_copy.get('export_physical_bytes',0) == len(export)
                 assert private_work['export_files']-prior_copy.get('export_files',0) == 1
                 assert {path.name for path in (private/launch).iterdir()} == {
-                    'capture.json','sandbox-export.bin','origin-observation.json','consumer-observations.json'}
+                    'capture.json','sandbox-export.bin','origin-observation.json','consumer-observations.json',
+                    'launch-binding.json'}
+                assert json.loads((private/launch/'launch-binding.json').read_bytes()) == held.launch_binding | {'raw':projected}
                 consumer_observations = (private/launch/'consumer-observations.json').read_bytes()
                 assert json.loads(consumer_observations) == {'attempt_id':attempt_id,
                     'request_sha256':host.sha256_hex(request),'storage':held.storage_rows,
