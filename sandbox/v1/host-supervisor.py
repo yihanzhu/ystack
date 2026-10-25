@@ -1585,17 +1585,49 @@ def mkdir_excl(parent_fd, name, uid, gid, on_created=None):
     return fd
 
 
-def write_excl(parent_fd, name, data, uid, gid, mode=0o440):
-    fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode=0o600, dir_fd=parent_fd)
+def write_excl(parent_fd, name, data, uid, gid, mode=0o440, capture_work=None):
+    fd, phase = None, "open"
     try:
+        fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode=0o600, dir_fd=parent_fd)
+        if capture_work is not None:
+            capture_work["files"] = capture_work.get("files", 0) + 1
+            _capture_note(capture_work, phase, fd, name=name)
         written = 0
         while written < len(data):
-            written += os.write(fd, data[written:])
-        os.fchown(fd, uid, gid)
-        os.fchmod(fd, mode)
-        os.fsync(fd)
+            phase = "write"
+            count = os.write(fd, data[written:] if capture_work is None else memoryview(data)[written:written+65536])
+            if capture_work is not None:
+                capture_work["write_bytes"] = capture_work.get("write_bytes", 0) + count
+                capture_work["physical_bytes"] = capture_work.get("physical_bytes", 0) + count
+                _capture_note(capture_work, phase, count, name=name)
+                require(count > 0, "E_CAPTURE")
+            written += count
+        phase = "chown"
+        result = os.fchown(fd, uid, gid)
+        if capture_work is not None:
+            _capture_note(capture_work, phase, result, name=name)
+        phase = "chmod"
+        result = os.fchmod(fd, mode)
+        if capture_work is not None:
+            _capture_note(capture_work, phase, result, name=name)
+        phase = "fsync"
+        result = os.fsync(fd)
+        if capture_work is not None:
+            _capture_note(capture_work, phase, result, name=name)
+    except OSError as error:
+        if capture_work is not None:
+            _capture_note(capture_work, phase, error=error.errno, name=name)
+        raise
     finally:
-        os.close(fd)
+        if fd is not None:
+            try:
+                result = os.close(fd)
+                if capture_work is not None:
+                    _capture_note(capture_work, "close", result, name=name)
+            except OSError as error:
+                if capture_work is not None:
+                    _capture_note(capture_work, "close", error=error.errno, name=name)
+                raise
 
 
 def work_root_attempt_exists(work_root, attempt_id):
@@ -1658,43 +1690,31 @@ def write_payload(attempt_fd, uid, gid, payload, evidence=()):
 def write_receipt_file(store_fd, attempt_fd, uid, gid, receipt_bytes):
     """Writes receipt.json into the already-claimed attempt_fd (payload/
     already written by write_payload), then fsyncs up to the store root."""
-    capture_fd = None
+    try:
+        write_excl(attempt_fd, "receipt.json", receipt_bytes, uid, gid)
+        os.fsync(attempt_fd)
+    finally:
+        os.close(attempt_fd)
+    os.fsync(store_fd)
     if _capture_process is not None and "request_raw" in _capture_process:
         try:
-            capture_fd = os.dup(attempt_fd)
-        except OSError:
+            raw = {"host": {"process": _capture_process["rows"],
+                            "driver_rest": _capture_process["driver_rest"],
+                            "signals": _capture_process["signals"]},
+                   "clocks": {key: _capture_clocks[key] for key in ("wall", "monotonic")}}
+            if "guest" in _capture_process:
+                raw["guest"] = _capture_process["guest"]
+            if "runtime_reads" in _capture_process:
+                raw["runtime"] = {"slots": _capture_process["runtime_reads"]}
+            work = _capture_process.setdefault("publication_work", {})
+            published = _write_capture_file(store_fd, uid, gid, _capture_process["attempt_id"],
+                _capture_process["request_raw"], raw, _capture_process["complete"] and _capture_clocks["complete"],
+                _capture_process.get("export_raw"), _capture_process.get("export_sha"),
+                _capture_process.get("export_work"), work)
+        except (OSError, ValueError, TypeError, Refusal, MemoryError):
+            published = False
+        if not published:
             _capture_process["complete"] = False
-    try:
-        try:
-            write_excl(attempt_fd, "receipt.json", receipt_bytes, uid, gid)
-            os.fsync(attempt_fd)
-        finally:
-            os.close(attempt_fd)
-        os.fsync(store_fd)
-        if capture_fd is not None:
-            try:
-                raw = {"host": {"process": _capture_process["rows"],
-                                "driver_rest": _capture_process["driver_rest"],
-                                "signals": _capture_process["signals"]},
-                       "clocks": {key: _capture_clocks[key] for key in ("wall", "monotonic")}}
-                if "guest" in _capture_process:
-                    raw["guest"] = _capture_process["guest"]
-                if "runtime_reads" in _capture_process:
-                    raw["runtime"] = {"slots": _capture_process["runtime_reads"]}
-                if "export_raw" in _capture_process:
-                    _write_capture_export(capture_fd, uid, gid, _capture_process["export_raw"],
-                                          _capture_process["export_sha"], _capture_process["export_work"])
-                capture = _capture_values(_capture_process["attempt_id"], _capture_process["request_raw"],
-                    raw, _capture_process["complete"] and _capture_clocks["complete"])
-                _write_capture_file(store_fd, capture_fd, uid, gid, capture)
-            except (OSError, ValueError, TypeError, Refusal, MemoryError):
-                _capture_process["complete"] = False
-    finally:
-        if capture_fd is not None:
-            try:
-                os.close(capture_fd)
-            except OSError:
-                _capture_process["complete"] = False
 
 
 def _capture_size(value, limit, depth=0):
@@ -1733,14 +1753,22 @@ def _capture_size(value, limit, depth=0):
     return limit + 1
 
 
-def _capture_values(attempt_id, request_raw, raw, complete):
+def _capture_document_values(attempt_id, request_raw, raw, complete, work=None):
     require(type(raw) is dict and set(raw) <= {"host", "guest", "source_pages", "clocks", "runtime"}
             and type(complete) is bool, "E_CAPTURE")
     value = {"schema_version": 1, "kind": "malicious_source_capture", "id": attempt_id,
              "body": {"request_sha256": sha256_hex(request_raw), "raw": raw, "complete": complete}}
-    if _capture_size(value, 1024 * 1024 - 1) + 1 > 1024 * 1024:
+    measured_size = _capture_size(value, 1024 * 1024 - 1) + 1
+    if work is not None:
+        work["read_bytes"] = work.get("read_bytes", 0) + len(request_raw) + measured_size
+        _capture_note(work, "capture-prebuild", request_hash_bytes=len(request_raw), size_probe_bytes=measured_size)
+    if measured_size > 1024 * 1024:
         value["body"].update(raw={}, complete=False)
-    return canonical(value)
+    return value
+
+
+def _capture_values(attempt_id, request_raw, raw, complete):
+    return canonical(_capture_document_values(attempt_id, request_raw, raw, complete))
 
 
 def _capture_completion_values(attempt_id, request_raw, capture_raw):
@@ -1753,7 +1781,169 @@ def _capture_completion_values(attempt_id, request_raw, capture_raw):
     return canonical(value)
 
 
-def _source_capture_values(attempt_id, request_raw, records, pages, clock_values, complete, operation):
+def _capture_note(work, site, result=None, error=None, **fields):
+    row = {"site": site, "return": result, "errno": error} | fields
+    size = _capture_size(row, 16383) + 1
+    rows = work.setdefault("operations", [])
+    require(size <= 16384 and len(rows) < 4096
+            and work.get("metadata_bytes", 0) + size <= 4 * 1024 * 1024, "E_CAPTURE")
+    rows.append(row)
+    work["metadata_bytes"] = work.get("metadata_bytes", 0) + size
+
+
+def _capture_rename_noreplace(parent_fd, source, destination, work):
+    require(type(source) is bytes and type(destination) is bytes
+            and ((source, destination) == (b".completion.pending", b"complete.json")
+                 or destination.startswith(b".capture-") and source == destination + b".pending"
+                 and id_ok(destination[9:].decode("ascii"))), "E_CAPTURE")
+    require(sys.platform in {"darwin", "linux"}, "E_CAPTURE")
+    symbol = "renameatx_np" if sys.platform == "darwin" else "renameat2"
+    try:
+        rename = getattr(_darwin_libc() if sys.platform == "darwin" else ctypes.CDLL(None, use_errno=True), symbol)
+    except (AttributeError, OSError) as error:
+        _capture_note(work, "rename-symbol", error=getattr(error, "errno", None),
+                      symbol=symbol, category=type(error).__name__)
+        refuse("E_CAPTURE")
+    rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    rename.restype = ctypes.c_int
+    ctypes.set_errno(0)
+    result = rename(parent_fd, source, parent_fd, destination,
+                    0x00000004 if sys.platform == "darwin" else (1 << 0))
+    error = ctypes.get_errno()
+    _capture_note(work, symbol, result, error,
+                  source=source.decode("ascii"), destination=destination.decode("ascii"))
+    require(result == 0, "E_CAPTURE")
+
+
+def _capture_sync(fd, work, site):
+    try:
+        result = os.fsync(fd)
+    except OSError as error:
+        _capture_note(work, site, error=error.errno)
+        raise
+    _capture_note(work, site, result)
+
+
+def _capture_close(fd, work, site):
+    try:
+        result = os.close(fd)
+    except OSError as error:
+        _capture_note(work, site, error=error.errno)
+        raise
+    _capture_note(work, site, result)
+
+
+def _capture_identity(state):
+    return (state.st_dev, state.st_ino, state.st_uid, state.st_gid, state.st_mode,
+            state.st_nlink, state.st_size, state.st_mtime_ns, state.st_ctime_ns)
+
+
+def _capture_file_shape(state, uid, gid, size):
+    return (stat.S_ISREG(state.st_mode) and state.st_uid == uid and state.st_gid == gid
+            and stat.S_IMODE(state.st_mode) == 0o440 and state.st_nlink == 1 and state.st_size == size)
+
+
+def _capture_directory_check(store, directory, name, expected, uid, gid, work):
+    require(1 <= len(expected) <= 3, "E_CAPTURE")
+    state, named = os.fstat(directory), os.stat(name, dir_fd=store, follow_symlinks=False)
+    names = []
+    with os.scandir(directory) as entries:
+        for entry in entries:
+            names.append(entry.name)
+            if len(names) > len(expected):
+                break
+    _capture_note(work, "directory-check", state=list(_capture_identity(state)),
+                  named=list(_capture_identity(named)), names=[os.fsencode(item).hex() for item in names])
+    require(_capture_identity(state) == _capture_identity(named)
+            and store_root_state_ok(directory, uid, gid) and store_root_state_ok(store, uid, gid)
+            and set(names) == set(expected), "E_CAPTURE")
+    for filename, size in expected.items():
+        fd = os.open(filename, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory)
+        try:
+            before = os.fstat(fd)
+            file_named = os.stat(filename, dir_fd=directory, follow_symlinks=False)
+            _capture_note(work, "file-check", name=filename, state=list(_capture_identity(before)),
+                          named=list(_capture_identity(file_named)))
+            require(_capture_file_shape(before, uid, gid, size)
+                    and _capture_identity(before) == _capture_identity(file_named), "E_CAPTURE")
+            require((darwin_acl_entries(fd) == [] if sys.platform == "darwin" else
+                     linux_read_acl_xattr(fd, "system.posix_acl_access") is None), "E_CAPTURE")
+            require(_capture_identity(before) == _capture_identity(os.fstat(fd))
+                    == _capture_identity(os.stat(filename, dir_fd=directory, follow_symlinks=False)), "E_CAPTURE")
+        except OSError as error:
+            _capture_note(work, "file-check", error=error.errno, name=filename)
+            raise
+        finally:
+            _capture_close(fd, work, "file-check-close")
+
+
+def _capture_completion_readback(directory, uid, gid, expected, work):
+    fd = os.open(".completion.pending", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory)
+    try:
+        before = os.fstat(fd)
+        require(len(expected) <= 512 and _capture_file_shape(before, uid, gid, len(expected)), "E_CAPTURE")
+        actual = os.read(fd, 513)
+        _capture_note(work, "completion-readback", len(actual))
+        work["read_bytes"] = work.get("read_bytes", 0) + len(actual) * 2 + len(expected)
+        require(actual == expected and _capture_identity(before) == _capture_identity(os.fstat(fd))
+                == _capture_identity(os.stat(".completion.pending", dir_fd=directory,
+                                              follow_symlinks=False)), "E_CAPTURE")
+    except OSError as error:
+        _capture_note(work, "completion-readback", error=error.errno)
+        raise
+    finally:
+        _capture_close(fd, work, "completion-readback-close")
+
+
+def _publish_capture(store_fd, uid, gid, attempt_id, request_raw, raw, complete,
+                     export_raw=None, export_sha=None, export_work=None, work=None):
+    require(id_ok(attempt_id) and type(request_raw) is bytes, "E_CAPTURE")
+    if work is None:
+        work = {}
+    value = _capture_document_values(attempt_id, request_raw, raw, complete, work)
+    require(value["body"]["complete"] is True and bool(value["body"]["raw"]), "E_CAPTURE")
+    capture_raw = canonical(value)
+    work["read_bytes"] = work.get("read_bytes", 0) + 3 * len(capture_raw)
+    references = [row["bytes"] for row in value["body"]["raw"].get("host", {}).get("process", [])
+                  if row["site"] == "run_vm.export-read" and type(row["bytes"]) is dict]
+    require((export_raw is not None) == bool(references) and len(references) <= 1, "E_CAPTURE")
+    if export_raw is not None:
+        require(references[0] == {"role": "sandbox-export-capture-bytes",
+                "size_bytes": len(export_raw), "sha256": export_sha}, "E_CAPTURE")
+    pending, published = (".capture-" + attempt_id + ".pending").encode(), (".capture-" + attempt_id).encode()
+    require(store_root_state_ok(store_fd, uid, gid), "E_CAPTURE")
+    def created():
+        work["directories"] = work.get("directories", 0) + 1
+        _capture_note(work, "capture-directory-created", name=pending.decode())
+    directory = mkdir_excl(store_fd, pending, uid, gid, on_created=created)
+    try:
+        write_excl(directory, "capture.json", capture_raw, uid, gid, capture_work=work)
+        expected = {"capture.json": len(capture_raw)}
+        if export_raw is not None:
+            _write_capture_export(directory, uid, gid, export_raw, export_sha, export_work, work)
+            expected["sandbox-export.bin"] = len(export_raw)
+        _capture_directory_check(store_fd, directory, pending, expected, uid, gid, work)
+        _capture_sync(directory, work, "pending-directory-fsync")
+        _capture_sync(store_fd, work, "pending-store-fsync")
+        _capture_rename_noreplace(store_fd, pending, published, work)
+        _capture_directory_check(store_fd, directory, published, expected, uid, gid, work)
+        _capture_sync(directory, work, "published-directory-fsync")
+        _capture_sync(store_fd, work, "published-store-fsync")
+        completion = _capture_completion_values(attempt_id, request_raw, capture_raw)
+        work["read_bytes"] = work.get("read_bytes", 0) + len(request_raw) + len(capture_raw) + 4 * len(completion)
+        write_excl(directory, ".completion.pending", completion, uid, gid, capture_work=work)
+        _capture_completion_readback(directory, uid, gid, completion, work)
+        expected[".completion.pending"] = len(completion)
+        _capture_directory_check(store_fd, directory, published, expected, uid, gid, work)
+        _capture_sync(directory, work, "completion-directory-fsync")
+        _capture_sync(store_fd, work, "completion-store-fsync")
+        _capture_rename_noreplace(directory, b".completion.pending", b"complete.json", work)
+        return completion
+    finally:
+        _capture_close(directory, work, "capture-directory-close")
+
+
+def _source_capture_group_values(attempt_id, request_raw, records, pages, clock_values, complete, operation):
     require(operation in {"kill-register-read", "coverage-read"}, "E_CAPTURE")
     captured_group = {}
     capture_complete = complete
@@ -1769,31 +1959,66 @@ def _source_capture_values(attempt_id, request_raw, records, pages, clock_values
         captured_group = candidate_group
     else:
         capture_complete = False
-    return _capture_values(attempt_id, request_raw, captured_group, capture_complete)
+    return captured_group, capture_complete
 
 
-def _write_capture_file(store_fd, attempt_fd, uid, gid, capture):
+def _source_capture_values(attempt_id, request_raw, records, pages, clock_values, complete, operation):
+    group, final_complete = _source_capture_group_values(
+        attempt_id, request_raw, records, pages, clock_values, complete, operation)
+    return _capture_values(attempt_id, request_raw, group, final_complete)
+
+
+def _write_capture_file(store_fd, uid, gid, attempt_id, request_raw, raw, complete,
+                        export_raw=None, export_sha=None, export_work=None, work=None):
     try:
-        write_excl(attempt_fd, "capture.json", capture, uid, gid)
-        os.fsync(attempt_fd)
-        os.fsync(store_fd)
-    except OSError:
-        pass
+        if work is None:
+            work = {}
+        _publish_capture(store_fd, uid, gid, attempt_id, request_raw, raw, complete,
+                         export_raw, export_sha, export_work, work)
+    except (OSError, ValueError, TypeError, Refusal, MemoryError) as error:
+        try:
+            if work is not None:
+                work["complete"] = False
+                work["failure"] = {"category": type(error).__name__, "errno": getattr(error, "errno", None),
+                                   "code": getattr(error, "code", None)}
+        except MemoryError:
+            pass
+        return False
+    else:
+        try:
+            work["complete"] = True
+        except MemoryError:
+            return False
+        return True
 
 
-def _write_capture_export(attempt_fd, uid, gid, raw, original_sha, work):
+def _write_capture_export(attempt_fd, uid, gid, raw, original_sha, work, publication_work=None):
     require(type(raw) is bytes and len(raw) <= 12582912, "E_CAPTURE")
-    fd = os.open("sandbox-export.bin", os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                 0o600, dir_fd=attempt_fd)
+    if publication_work is not None:
+        _capture_note(publication_work, "export-open-request", name="sandbox-export.bin")
+    try:
+        fd = os.open("sandbox-export.bin", os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                     0o600, dir_fd=attempt_fd)
+    except OSError as error:
+        if publication_work is not None:
+            _capture_note(publication_work, "export-open", error=error.errno)
+        raise
+    if publication_work is not None:
+        publication_work["files"] = publication_work.get("files", 0) + 1
     try:
         offset = 0
         view = memoryview(raw)
         while offset < len(raw):
+            if publication_work is not None:
+                publication_work["export_write_calls"] = publication_work.get("export_write_calls", 0) + 1
             count = os.write(fd, view[offset:offset + 65536])
             require(count > 0, "E_CAPTURE")
             offset += count
             work["controlled_copy"] = work.get("controlled_copy", 0) + count
             work["controlled_write"] = work.get("controlled_write", 0) + count
+            if publication_work is not None:
+                for key in ("write_bytes", "physical_bytes", "export_write_bytes"):
+                    publication_work[key] = publication_work.get(key, 0) + count
         os.fchown(fd, uid, gid)
         os.fchmod(fd, 0o440)
         os.fsync(fd)
@@ -1804,23 +2029,36 @@ def _write_capture_export(attempt_fd, uid, gid, raw, original_sha, work):
         os.lseek(fd, 0, os.SEEK_SET)
         measured, total = hashlib.sha256(), 0
         while True:
+            if publication_work is not None:
+                publication_work["export_read_calls"] = publication_work.get("export_read_calls", 0) + 1
             chunk = os.read(fd, min(65536, len(raw) + 1 - total))
             if not chunk:
                 break
             total += len(chunk)
             work["controlled_readback"] = work.get("controlled_readback", 0) + len(chunk)
+            if publication_work is not None:
+                for key in ("read_bytes", "export_read_bytes"):
+                    publication_work[key] = publication_work.get(key, 0) + len(chunk)
             require(total <= len(raw), "E_CAPTURE")
             measured.update(chunk)
         named = os.stat("sandbox-export.bin", dir_fd=attempt_fd, follow_symlinks=False)
         after = os.fstat(fd)
-        identity = lambda value: (value.st_dev, value.st_ino, value.st_uid, value.st_gid,
-                                  value.st_mode, value.st_nlink, value.st_size,
-                                  value.st_mtime_ns, value.st_ctime_ns)
-        require(total == len(raw) and identity(before) == identity(after) == identity(named)
+        require(total == len(raw) and _capture_identity(before) == _capture_identity(after) == _capture_identity(named)
                 and measured.hexdigest() == original_sha, "E_CAPTURE")
         os.fsync(attempt_fd)
+        if publication_work is not None:
+            _capture_note(publication_work, "export-readback-complete", total,
+                          writes=publication_work.get("export_write_calls", 0),
+                          reads=publication_work.get("export_read_calls", 0))
+    except OSError as error:
+        if publication_work is not None:
+            _capture_note(publication_work, "export-io-error", error=error.errno)
+        raise
     finally:
-        os.close(fd)
+        if publication_work is None:
+            os.close(fd)
+        else:
+            _capture_close(fd, publication_work, "export-close")
 
 
 def _read_export_value(stream):
@@ -3892,27 +4130,15 @@ def run_coverage_read(argv):
         installation.recheck()
         capture = None
         try:
-            capture = _source_capture_values(requested["id"], request_raw, records, pages,
+            capture = _source_capture_group_values(requested["id"], request_raw, records, pages,
                 _capture_clocks, _capture_clocks["complete"], operation)
         except (MemoryError, ValueError, TypeError, Refusal):
             pass
-        capture_fd = None
-        try:
-            capture_fd = os.dup(attempt)
-        except OSError:
-            pass
         writing, attempt = attempt, None
-        try:
-            write_receipt_file(store, writing, uid, gid, receipt)
-            installation.recheck()
-            if capture_fd is not None and capture is not None:
-                _write_capture_file(store, capture_fd, uid, gid, capture)
-        finally:
-            if capture_fd is not None:
-                try:
-                    os.close(capture_fd)
-                except OSError:
-                    pass
+        write_receipt_file(store, writing, uid, gid, receipt)
+        installation.recheck()
+        if capture is not None:
+            _write_capture_file(store, uid, gid, requested["id"], request_raw, capture[0], capture[1])
     except Refusal:
         raise
     except Exception:

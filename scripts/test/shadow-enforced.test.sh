@@ -3725,6 +3725,7 @@ installed={"control_policy":(policy,sha(policy)),"control_decision":(decision,sh
  "evaluator_program":(program,sha(program)),"accepted_set":(accepted,sha(accepted)),
  "registry":(registry_raw,sha(registry_raw))}
 class Anchor:
+ def __init__(self): self.private_observations={}; self.recording_work={}
  config={"environment_id":"env.fixture","store_id":"store.fixture","principal_uid":1234,
   "store_root":str(base/"store"),"work_root":str(base/"host-work"),"installed_files":{},
   "identity_paths":{"dyld_cache_files":[]}}

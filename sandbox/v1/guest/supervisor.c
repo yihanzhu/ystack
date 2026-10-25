@@ -1919,35 +1919,41 @@ static int test_geometry(void)
 
 static char *input_test_plan(size_t files, int include_directory, size_t *length)
 {
-    struct json_writer writer = { NULL, 0U, 0U };
+    char *buffer = NULL;
+    size_t used = 0U;
+    FILE *writer;
     unsigned char digest[32];
     char hex[65];
     size_t i;
     ys_sha256_bytes("c", 1U, digest); ys_hex_encode(digest, sizeof digest, hex);
-    if (!json_appendf(&writer,
+    writer = open_memstream(&buffer, &used);
+    if (writer == NULL) return NULL;
+    if (fprintf(writer,
         "{\"body\":{\"argv\":[\"/sandbox/tools/verifier\",\"verify\",\"--candidate\","
-        "\"/sandbox/candidate\",\"--evidence\",\"/sandbox/evidence\"],\"entries\":["))
+        "\"/sandbox/candidate\",\"--evidence\",\"/sandbox/evidence\"],\"entries\":[") < 0)
         goto fail;
-    if (include_directory && !json_appendf(&writer,
+    if (include_directory && fprintf(writer,
         "{\"kind\":\"directory\",\"mode\":\"0500\",\"path\":\"d\","
-        "\"sha256\":null,\"size_bytes\":null}")) goto fail;
+        "\"sha256\":null,\"size_bytes\":null}") < 0) goto fail;
     for (i = 0; i < files; i++)
-        if (!json_appendf(&writer,
+        if (fprintf(writer,
             "%s{\"kind\":\"file\",\"mode\":\"0400\",\"path\":\"f%02zu\","
             "\"sha256\":\"%s\",\"size_bytes\":1}",
-            (i != 0U || include_directory) ? "," : "", i, hex)) goto fail;
-    if (!json_appendf(&writer,
+            (i != 0U || include_directory) ? "," : "", i, hex) < 0) goto fail;
+    if (fprintf(writer,
         "],\"environment\":[\"LANG=C\",\"LC_ALL=C\",\"PATH=/sandbox/tools\","
         "\"TMPDIR=/sandbox/scratch\"],\"instruction_sha256\":\"%064d\","
         "\"limits\":{\"bandwidth_slice_us\":1,\"cpu_max\":2,\"cpu_max_burst\":3,"
         "\"output_inodes\":4,\"output_tmpfs_bytes\":5,\"pids_max\":6,"
         "\"scratch_bytes\":7,\"scratch_inodes\":8,\"tree_deadline_ms\":9},"
         "\"verifier_sha256\":\"%064d\"},\"kind\":\"sandbox_guest_plan\","
-        "\"schema_version\":1}\n", 0, 0)) goto fail;
-    *length = writer.len;
-    return writer.buf;
+        "\"schema_version\":1}\n", 0, 0) < 0) goto fail;
+    if (fclose(writer) != 0) { free(buffer); return NULL; }
+    *length = used;
+    return buffer;
 fail:
-    free(writer.buf);
+    (void)fclose(writer);
+    free(buffer);
     return NULL;
 }
 

@@ -689,6 +689,182 @@ for invalid in [('bad id',request,b'{}'),('a'*129,request,b'{}'),
         except Exception as error:assert type(error).__name__ == 'Refusal'
         else:raise AssertionError('invalid completion constructor input')
 print('ok shared host/offline completion constructor; exact original bytes, bounded canonical witness')
+if sys.platform in {'darwin','linux'}:
+    with tempfile.TemporaryDirectory(prefix='ystack-capture-publication-') as temporary:
+        publication_root = Path(temporary)
+        publication_root.chmod(0o750)
+        root_fd = os.open(publication_root,os.O_RDONLY|os.O_DIRECTORY)
+        try:
+            export = host.frame_write([(b'stdout',b''),(b'stderr',b'')])
+            export += bytes(consumer.EXPORT_LIMIT-len(export))
+            export_sha = host.sha256_hex(export)
+            process_row = {'site':'run_vm.export-read','ordinal':0,'return':len(export),'errno':None,
+                'bytes':{'role':'sandbox-export-capture-bytes','size_bytes':len(export),'sha256':export_sha},
+                'timeout':None}
+            publication_group = {'host':{'process':[process_row],'driver_rest':[],'signals':[]}}
+            publication_work, export_work = {}, {}
+            witness = host._publish_capture(root_fd,os.getuid(),os.getgid(),'attempt.publication',request,
+                publication_group,True,export,export_sha,export_work,publication_work)
+            directory = publication_root/'.capture-attempt.publication'
+            assert {p.name for p in directory.iterdir()} == {'capture.json','sandbox-export.bin','complete.json'}
+            captured = host._capture_values('attempt.publication',request,publication_group,True)
+            assert (directory/'capture.json').read_bytes() == captured
+            assert (directory/'complete.json').read_bytes() == witness
+            assert witness == capture_replay._capture_completion_values(root,'attempt.publication',request,captured)
+            assert (directory/'sandbox-export.bin').stat().st_size == len(export)
+            assert all(p.stat().st_mode & 0o777 == 0o440 for p in directory.iterdir())
+            assert directory.stat().st_mode & 0o777 == 0o750
+            assert publication_work['files'] == 3
+            assert publication_work['physical_bytes'] == publication_work['write_bytes'] == len(export)+len(captured)+len(witness)
+            assert export_work == {key:len(export) for key in ('controlled_copy','controlled_write','controlled_readback')}
+            renames = [row for row in publication_work['operations'] if row['site'] in {'renameatx_np','renameat2'}]
+            assert len(renames)==2 and all(row['return']==0 for row in renames)
+            old_inode = directory.stat().st_ino
+            collision_work = {}
+            try:host._publish_capture(root_fd,os.getuid(),os.getgid(),'attempt.publication',request,
+                publication_group,True,export,export_sha,{},collision_work)
+            except host.Refusal:pass
+            else:raise AssertionError('published capture replaced')
+            assert directory.stat().st_ino == old_inode and (directory/'complete.json').read_bytes() == witness
+            pending = publication_root/'.capture-attempt.publication.pending'
+            assert pending.is_dir() and not (pending/'complete.json').exists()
+            assert {p.name for p in pending.iterdir()} == {'capture.json','sandbox-export.bin'}
+            print(json.dumps({'Darwin_publication_work':publication_work,
+                'retained_collision_work':collision_work,'retained_collision_export_bytes':
+                (pending/'sandbox-export.bin').stat().st_size},sort_keys=True))
+            directory_fd = os.open(directory,os.O_RDONLY|os.O_DIRECTORY)
+            try:
+                existing = directory/'complete.json'
+                late = directory/'.completion.pending'
+                late.write_bytes(b'ordinary collision');late.chmod(0o440)
+                before_names = {p.name:(p.stat().st_ino,p.read_bytes()) for p in (existing,late)}
+                completion_collision = {}
+                try:host._capture_rename_noreplace(directory_fd,b'.completion.pending',b'complete.json',completion_collision)
+                except host.Refusal:pass
+                else:raise AssertionError('completion replaced')
+                assert {p.name:(p.stat().st_ino,p.read_bytes()) for p in (existing,late)} == before_names
+                assert completion_collision['operations'][-1]['return'] != 0
+                assert completion_collision['operations'][-1]['errno'] > 0
+                print(json.dumps({'actual_completion_collision':completion_collision},sort_keys=True))
+            finally:os.close(directory_fd)
+            original_sync = host._capture_sync
+            failure_work = {}
+            def fail_after_directory_rename(fd,work,site):
+                if site == 'published-directory-fsync':
+                    original_fsync = host.os.fsync
+                    def fail_fsync(_):raise OSError(5,'ordinary fixture sync failure')
+                    try:
+                        host.os.fsync = fail_fsync
+                        return original_sync(fd,work,site)
+                    finally:host.os.fsync = original_fsync
+                return original_sync(fd,work,site)
+            try:
+                host._capture_sync = fail_after_directory_rename
+                try:host._publish_capture(root_fd,os.getuid(),os.getgid(),'attempt.syncfailure',request,
+                    group,True,work=failure_work)
+                except OSError as error:assert error.errno==5
+                else:raise AssertionError('completion before published sync')
+            finally:host._capture_sync = original_sync
+            failed = publication_root/'.capture-attempt.syncfailure'
+            assert failed.is_dir() and {p.name for p in failed.iterdir()} == {'capture.json'}
+            assert (failed/'capture.json').read_bytes() == host._capture_values('attempt.syncfailure',request,group,True)
+            assert any(row['site']=='published-directory-fsync' and row['errno']==5
+                       for row in failure_work['operations'])
+            print(json.dumps({'simulated_sync_failure_actual_work':failure_work},sort_keys=True))
+            overflow_work = {}
+            overflow_group = {'host':{'process':[{'bytes':'x'*(1024*1024)}]}}
+            try:host._publish_capture(root_fd,os.getuid(),os.getgid(),'attempt.overflow',request,
+                overflow_group,True,work=overflow_work)
+            except host.Refusal:pass
+            else:raise AssertionError('capture overflow published')
+            assert not (publication_root/'.capture-attempt.overflow.pending').exists()
+            assert not (publication_root/'.capture-attempt.overflow').exists()
+            assert overflow_work['read_bytes'] > len(request)
+            print(json.dumps({'overflow_pre_refusal_work':overflow_work},sort_keys=True))
+            for size in (512,513):
+                bounded = publication_root/('.capture-attempt.readbound'+str(size))
+                bounded.mkdir(mode=0o750);bounded.chmod(0o750)
+                bounded_fd = os.open(bounded,os.O_RDONLY|os.O_DIRECTORY)
+                bounded_work = {}
+                expected_bytes = b'x'*size
+                try:
+                    host.write_excl(bounded_fd,'.completion.pending',expected_bytes,os.getuid(),os.getgid(),
+                                    capture_work=bounded_work)
+                    try:host._capture_completion_readback(bounded_fd,os.getuid(),os.getgid(),expected_bytes,bounded_work)
+                    except host.Refusal:assert size==513
+                    else:assert size==512
+                    assert bounded_work.get('read_bytes',0) == (3*size if size==512 else 0)
+                    assert (bounded/'.completion.pending').read_bytes()==expected_bytes
+                    print(json.dumps({'witness_readback_byte_boundary_only':size,
+                        'malformed_bytes_not_a_valid_completion':True,'actual_work':bounded_work},sort_keys=True))
+                finally:os.close(bounded_fd)
+            old_process,old_clocks = host._capture_process,host._capture_clocks
+            try:
+                for failed_sync in (False,True):
+                    io_attempt = 'attempt.nativeio.'+str(int(failed_sync))
+                    io_fd = host.mkdir_excl(root_fd,io_attempt,os.getuid(),os.getgid())
+                    host.write_payload(io_fd,os.getuid(),os.getgid(),[(b'stdout',b''),(b'stderr',b'')])
+                    native_receipt = host.canonical({'ordinary':'native writer byte control'})
+                    host._capture_process = {'rows':[],'ordinals':{},'bytes':0,'complete':True,
+                        'driver_rest':[],'signals':[],'request_raw':request,'attempt_id':io_attempt}
+                    host._capture_clocks = {'wall':[],'monotonic':[],'complete':True}
+                    try:
+                        if failed_sync:host._capture_sync=fail_after_directory_rename
+                        assert host.write_receipt_file(root_fd,io_fd,os.getuid(),os.getgid(),native_receipt) is None
+                    finally:host._capture_sync=original_sync
+                    native_path = publication_root/io_attempt
+                    assert {p.name for p in native_path.iterdir()} == {'receipt.json','payload'}
+                    assert (native_path/'receipt.json').read_bytes()==native_receipt
+                    captured_path=publication_root/('.capture-'+io_attempt)
+                    io_work=host._capture_process['publication_work']
+                    assert io_work['complete'] is (not failed_sync)
+                    assert (captured_path/'capture.json').is_file()
+                    assert (captured_path/'complete.json').exists() is (not failed_sync)
+                    if failed_sync:assert io_work['failure']['errno']==5
+                    print(json.dumps({'actual_native_receipt_writer_capture_failure':failed_sync,
+                        'receipt_payload_bytes_and_original_return_unchanged':True,
+                        'receipt_schema_or_native_qualification_not_claimed':True,'actual_work':io_work},sort_keys=True))
+                io_attempt='attempt.nativeio.originalerror'
+                io_fd=host.mkdir_excl(root_fd,io_attempt,os.getuid(),os.getgid())
+                host._capture_process=dict(host._capture_process,attempt_id=io_attempt)
+                original_write=host.write_excl
+                def native_write_failure(parent,name,*args,**kwargs):
+                    if name=='receipt.json':raise OSError(5,'ordinary native write failure')
+                    return original_write(parent,name,*args,**kwargs)
+                try:
+                    host.write_excl=native_write_failure
+                    try:host.write_receipt_file(root_fd,io_fd,os.getuid(),os.getgid(),native_receipt)
+                    except OSError as error:
+                        assert error.errno==5
+                        print(json.dumps({'simulated_native_write_errno_observed':error.errno,
+                                          'native_error_not_swallowed':True},sort_keys=True))
+                    else:raise AssertionError('native write failure swallowed')
+                finally:host.write_excl=original_write
+                assert not (publication_root/('.capture-'+io_attempt)).exists()
+                host._capture_process=None
+                for operation,role in (('kill-register-read','kill'),('coverage-read','coverage')):
+                    source_attempt='attempt.sourceio.'+role
+                    source_fd=host.mkdir_excl(root_fd,source_attempt,os.getuid(),os.getgid())
+                    host.write_payload(source_fd,os.getuid(),os.getgid(),[(b'stdout',b''),(b'stderr',b'')])
+                    host.write_receipt_file(root_fd,source_fd,os.getuid(),os.getgid(),native_receipt)
+                    meta={'family':'fixture','page_index':0,'response_status':200,'input_cursor':None,'output_cursor':None}
+                    records=[(b'capture.json',host.canonical({'pages':[meta]})),(b'raw/0000',b'{}\n')]
+                    source_group,source_complete=host._source_capture_group_values(source_attempt,request,records,
+                        [b'{}\n'],host._capture_clocks,True,operation)
+                    source_work={}
+                    host._write_capture_file(root_fd,os.getuid(),os.getgid(),source_attempt,request,
+                        source_group,source_complete,work=source_work)
+                    source_directory=publication_root/('.capture-'+source_attempt)
+                    assert source_work['complete'] is True
+                    assert {p.name for p in source_directory.iterdir()}=={'capture.json','complete.json'}
+                    assert {p.name for p in (publication_root/source_attempt).iterdir()}=={'receipt.json','payload'}
+                    print(json.dumps({'actual_source_writer_adapter':operation,'synthetic_pages_not_full_collector_route':True,
+                        'actual_work':source_work},sort_keys=True))
+            finally:host._capture_process,host._capture_clocks=old_process,old_clocks
+        finally:os.close(root_fd)
+    print('ok ordinary full export publication/completion, no-replace collision and pre-completion failure - '+sys.platform+'; not native qualification')
+else:
+    print('NOTRUN capture publication mechanism: unsupported ordinary host')
 def refuses(function,label):
     try:function()
     except consumer.Refusal:
