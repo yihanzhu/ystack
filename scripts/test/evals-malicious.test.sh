@@ -2024,6 +2024,11 @@ for label in cases:
         anchor=types.SimpleNamespace(config=config,config_raw=config_raw,resolver=None,recheck=lambda *_:None,
             identity_context={},private_observations={},capture_completion_owner=types.SimpleNamespace(
                 construct=lambda anchor,attempt_id,request,capture:host._capture_completion_values(attempt_id,request,capture)))
+        private_parents=[]
+        if label=='positive':
+            for ordinal in range(3):
+                parent=area/('private-'+str(ordinal));parent.mkdir(mode=0o700);parent.chmod(0o700)
+                private_parents.append(parent)
         native=None;held=None;refused=False
         try:
             native=consumer._HeldStoreRead(anchor,attempt_id)
@@ -2032,6 +2037,48 @@ for label in cases:
             if label=='positive':
                 assert not refused and held.snapshots=={'capture.json':original_capture,'complete.json':original_witness}
                 held.recheck()
+                native.capture=held
+                native.capture_origin=consumer._origin_values(native.snapshots,native.storage_rows,
+                    {'attempt_id':attempt_id,'platform':sys.platform},{'host-config.json':config_raw},
+                    capture_files=held.snapshots,capture_storage_rows=held.storage_rows)
+                anchor.capture_completion_owner.transfer=lambda *_:None
+                work={};retained=[]
+                actual_write=consumer.os.write
+                for ordinal,parent_path in enumerate(private_parents):
+                    parent=consumer._open_held(str(parent_path),True,
+                        consumer._store_rule(os.getuid(),os.getgid(),0o700,True),'E_STORE')
+                    state={'prefix_written':False}
+                    def partial_write(fd,data):
+                        if state['prefix_written']:raise OSError(5,'ordinary retained private-copy failure')
+                        state['prefix_written']=True
+                        return actual_write(fd,data[:3])
+                    try:
+                        if ordinal<2:consumer.os.write=partial_write
+                        try:native.copy_capture(parent,request,'reproduction',work)
+                        except OSError as error:assert ordinal<2 and error.errno==5
+                        else:assert ordinal==2
+                    finally:
+                        consumer.os.write=actual_write;parent.close()
+                    files=sorted((parent_path/'reproduction').iterdir())
+                    rows=[{'name':path.name,'inode':path.stat().st_ino,'size':path.stat().st_size,
+                           'mode':path.stat().st_mode & 0o777} for path in files]
+                    if ordinal<2:
+                        assert len(files)==1 and files[0].read_bytes()==original_capture[:3]
+                        assert rows[0]['size']==3 and rows[0]['mode']==0o600
+                    else:assert {row['name'] for row in rows}=={
+                        'capture.json','complete.json','origin-observation.json','consumer-observations.json'}
+                    retained.append(rows)
+                    physical=sum(row['size'] for group in retained for row in group)
+                    assert work['physical_bytes']==work['write_bytes']==physical
+                    assert work['files']==sum(len(group) for group in retained)
+                assert len(work['cases'])==3 and work['physical_bytes']>6
+                assert all((private_parents[index]/'reproduction/capture.json').stat().st_ino==retained[index][0]['inode']
+                           for index in (0,1))
+                print(json.dumps({'two_failed_copies_retained_before_later_positive':retained,
+                    'actual_shared_private_copy_work':work,
+                    'later_copy_is_not_overall_recording_eligibility':True,
+                    'additional_fixture_prefix_read_bytes':6,'additional_fixture_prefix_slice_copy_bytes':6,
+                    'additional_fixture_prefix_comparison_input_bytes':12},sort_keys=True))
             else:assert refused,label
         except consumer.Refusal:
             assert label=='legacy-flat',label
