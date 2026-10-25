@@ -1566,10 +1566,10 @@ def mkdir_excl(parent_fd, name, uid, gid, on_created=None, capture_work=None):
     fd, phase, failure = None, "mkdir", None
     try:
         result = os.mkdir(name, mode=0o700, dir_fd=parent_fd)
-        if capture_work is not None:
-            _capture_note(capture_work, phase, result, name=os.fsdecode(name))
         if on_created is not None:
             on_created()
+        if capture_work is not None:
+            _capture_note(capture_work, phase, result, name=os.fsdecode(name))
         phase = "directory-open"
         fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
         if capture_work is not None:
@@ -1590,17 +1590,19 @@ def mkdir_excl(parent_fd, name, uid, gid, on_created=None, capture_work=None):
             _capture_note(capture_work, phase, result, name=os.fsdecode(name))
     except BaseException as error:
         failure = error
-        if capture_work is not None:
-            capture_work.setdefault("failure", {"category": type(error).__name__,
-                "errno": getattr(error, "errno", None), "code": getattr(error, "code", None)})
-            _capture_note(capture_work, phase, error=getattr(error, "errno", None),
-                          name=os.fsdecode(name), category=type(error).__name__)
-        if fd is not None:
-            if capture_work is None:
-                os.close(fd)
-            else:
-                _capture_close(fd, capture_work, "directory-close", failure=failure,
-                               name=os.fsdecode(name))
+        try:
+            if capture_work is not None:
+                capture_work.setdefault("failure", {"category": type(error).__name__,
+                    "errno": getattr(error, "errno", None), "code": getattr(error, "code", None)})
+                _capture_note(capture_work, phase, error=getattr(error, "errno", None),
+                              name=os.fsdecode(name), category=type(error).__name__, failure=error)
+        finally:
+            if fd is not None:
+                if capture_work is None:
+                    os.close(fd)
+                else:
+                    _capture_close(fd, capture_work, "directory-close", failure=failure,
+                                   name=os.fsdecode(name))
         raise
     return fd
 
@@ -1640,7 +1642,7 @@ def write_excl(parent_fd, name, data, uid, gid, mode=0o440, capture_work=None):
             capture_work.setdefault("failure", {"category": type(error).__name__,
                 "errno": getattr(error, "errno", None), "code": getattr(error, "code", None)})
             _capture_note(capture_work, phase, error=getattr(error, "errno", None),
-                          name=name, category=type(error).__name__)
+                          name=name, category=type(error).__name__, failure=error)
         raise
     finally:
         if fd is not None:
@@ -1801,14 +1803,21 @@ def _capture_completion_values(attempt_id, request_raw, capture_raw):
     return canonical(value)
 
 
-def _capture_note(work, site, result=None, error=None, **fields):
-    row = {"site": site, "return": result, "errno": error} | fields
-    size = _capture_size(row, 16383) + 1
-    rows = work.setdefault("operations", [])
-    require(size <= 16384 and len(rows) < 4096
-            and work.get("metadata_bytes", 0) + size <= 4 * 1024 * 1024, "E_CAPTURE")
-    rows.append(row)
-    work["metadata_bytes"] = work.get("metadata_bytes", 0) + size
+def _capture_note(work, site, result=None, error=None, *, failure=None, **fields):
+    try:
+        row = {"site": site, "return": result, "errno": error} | fields
+        size = _capture_size(row, 16383) + 1
+        rows = work.setdefault("operations", [])
+        require(size <= 16384 and len(rows) < 4096
+                and work.get("metadata_bytes", 0) + size <= 4 * 1024 * 1024, "E_CAPTURE")
+        rows.append(row)
+        work["metadata_bytes"] = work.get("metadata_bytes", 0) + size
+    except (OSError, ValueError, TypeError, Refusal, MemoryError) as observed:
+        work["observations_incomplete"] = True
+        work.setdefault("observation_failure", {"category": type(observed).__name__,
+            "errno": getattr(observed, "errno", None), "code": getattr(observed, "code", None)})
+        if failure is None or getattr(observed, "_scope_signal_cancel", False):
+            raise
 
 
 def _capture_rename_noreplace(parent_fd, source, destination, work):
@@ -1822,7 +1831,7 @@ def _capture_rename_noreplace(parent_fd, source, destination, work):
         rename = getattr(_darwin_libc() if sys.platform == "darwin" else ctypes.CDLL(None, use_errno=True), symbol)
     except (AttributeError, OSError) as error:
         _capture_note(work, "rename-symbol", error=getattr(error, "errno", None),
-                      symbol=symbol, category=type(error).__name__)
+                      symbol=symbol, category=type(error).__name__, failure=error)
         refuse("E_CAPTURE")
     rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
     rename.restype = ctypes.c_int
@@ -1839,23 +1848,39 @@ def _capture_sync(fd, work, site):
     try:
         result = os.fsync(fd)
     except OSError as error:
-        _capture_note(work, site, error=error.errno)
+        _capture_note(work, site, error=error.errno, failure=error)
         raise
     _capture_note(work, site, result)
 
 
 def _capture_close(fd, work, site, *, failure=None, **fields):
-    if failure is not None:
-        work.setdefault("failure", {"category": type(failure).__name__,
-            "errno": getattr(failure, "errno", None), "code": getattr(failure, "code", None)})
+    close_error = None
     try:
         result = os.close(fd)
     except OSError as error:
-        _capture_note(work, site, error=error.errno, **fields)
-        if failure is None:
+        close_error = error
+        result = None
+    try:
+        work["close_calls"] = work.get("close_calls", 0) + 1
+        if failure is not None:
+            work.setdefault("failure", {"category": type(failure).__name__,
+                "errno": getattr(failure, "errno", None), "code": getattr(failure, "code", None)})
+        if close_error is not None:
+            work.setdefault("close_failure", {"category": type(close_error).__name__, "errno": close_error.errno})
+        _capture_note(work, site, result, getattr(close_error, "errno", None),
+                      failure=close_error if close_error is not None else failure, **fields)
+    except (OSError, ValueError, TypeError, Refusal, MemoryError) as observed:
+        try:
+            work["observations_incomplete"] = True
+            work["close_observations_incomplete"] = True
+        except MemoryError:
+            pass
+        if getattr(observed, "_scope_signal_cancel", False):
             raise
-    else:
-        _capture_note(work, site, result, **fields)
+        if failure is None and close_error is None:
+            raise
+    if close_error is not None and (failure is None or getattr(close_error, "_scope_signal_cancel", False)):
+        raise close_error
 
 
 def _capture_identity(state):
@@ -1899,7 +1924,7 @@ def _capture_directory_check(store, directory, name, expected, uid, gid, work):
         except BaseException as error:
             failure = error
             _capture_note(work, "file-check", error=getattr(error, "errno", None),
-                          name=filename, category=type(error).__name__)
+                          name=filename, category=type(error).__name__, failure=error)
             raise
         finally:
             _capture_close(fd, work, "file-check-close", failure=failure)
@@ -1912,15 +1937,16 @@ def _capture_completion_readback(directory, uid, gid, expected, work):
         before = os.fstat(fd)
         require(len(expected) <= 512 and _capture_file_shape(before, uid, gid, len(expected)), "E_CAPTURE")
         actual = os.read(fd, 513)
+        work["read_bytes"] = work.get("read_bytes", 0) + len(actual)
         _capture_note(work, "completion-readback", len(actual))
-        work["read_bytes"] = work.get("read_bytes", 0) + len(actual) * 2 + len(expected)
+        work["read_bytes"] += len(actual) + len(expected)
         require(actual == expected and _capture_identity(before) == _capture_identity(os.fstat(fd))
                 == _capture_identity(os.stat(".completion.pending", dir_fd=directory,
                                               follow_symlinks=False)), "E_CAPTURE")
     except BaseException as error:
         failure = error
         _capture_note(work, "completion-readback", error=getattr(error, "errno", None),
-                      category=type(error).__name__)
+                      category=type(error).__name__, failure=error)
         raise
     finally:
         _capture_close(fd, work, "completion-readback-close", failure=failure)
@@ -2036,7 +2062,7 @@ def _write_capture_export(attempt_fd, uid, gid, raw, original_sha, work, publica
                      0o600, dir_fd=attempt_fd)
     except OSError as error:
         if publication_work is not None:
-            _capture_note(publication_work, "export-open", error=error.errno)
+            _capture_note(publication_work, "export-open", error=error.errno, failure=error)
         raise
     if publication_work is not None:
         publication_work["files"] = publication_work.get("files", 0) + 1
@@ -2090,7 +2116,7 @@ def _write_capture_export(attempt_fd, uid, gid, raw, original_sha, work, publica
         failure = error
         if publication_work is not None:
             _capture_note(publication_work, "export-io-error", error=getattr(error, "errno", None),
-                          category=type(error).__name__)
+                          category=type(error).__name__, failure=error)
         raise
     finally:
         if publication_work is None:

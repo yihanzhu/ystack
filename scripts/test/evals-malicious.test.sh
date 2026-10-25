@@ -2046,6 +2046,92 @@ for label in cases:
             'host_publication_work':host._capture_process['publication_work'],
             'private_capture_work':getattr(native,'capture_work',None)},sort_keys=True))
 PY_CAPTURE_ADMISSION
+/usr/bin/python3 -I -S -B - "$root" <<'PY_CAPTURE_OBSERVER'
+import errno
+import importlib.util
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+
+root=Path(sys.argv[1])
+spec=importlib.util.spec_from_file_location('capture_observer_host',root/'sandbox/v1/host-supervisor.py')
+host=importlib.util.module_from_spec(spec);spec.loader.exec_module(host)
+for label in ('created-row-limit','open-row-limit','created-memory','open-memory','open-counter-memory','chown-memory-close'):
+    with tempfile.TemporaryDirectory(prefix='ystack-capture-observer-') as temporary:
+        area=Path(temporary).resolve();area.chmod(0o750)
+        store=os.open(area,os.O_RDONLY|os.O_DIRECTORY)
+        attempt_id='attempt.observer'
+        attempt=host.mkdir_excl(store,attempt_id,os.getuid(),os.getgid())
+        host.write_payload(attempt,os.getuid(),os.getgid(),[(b'stdout',b''),(b'stderr',b'')])
+        request=host.canonical({'ordinary':'request'});receipt=host.canonical({'ordinary':'native receipt'})
+        state={'opened':[],'closed':[],'append_failures':0,'actual_rows':[]}
+        class Work(dict):
+            def __setitem__(self,key,value):
+                if label=='open-counter-memory' and key=='close_calls':
+                    raise MemoryError('ordinary close accounting allocation failure')
+                return super().__setitem__(key,value)
+        work=Work()
+        class Rows(list):
+            def append(self,row):
+                selected=(label=='created-memory' and row['site']=='capture-directory-created'
+                    or label in ('open-memory','open-counter-memory') and row['site']=='directory-open'
+                    or label=='chown-memory-close' and row['site'] in ('directory-chown','directory-close'))
+                if selected:
+                    state['append_failures']+=1
+                    raise MemoryError('ordinary private observer append fixture')
+                super().append(row);state['actual_rows'].append(row)
+        prestate=4095 if label=='created-row-limit' else 4093 if label=='open-row-limit' else 0
+        work['operations']=Rows([{'capacity_prestate_only':True}]*prestate)
+        host._capture_process={'rows':[],'driver_rest':[],'signals':[],'complete':True,
+            'request_raw':request,'attempt_id':attempt_id,'publication_work':work}
+        host._capture_clocks={'wall':[],'monotonic':[],'complete':True}
+        opening,closing,chowning=os.open,os.close,os.fchown
+        def observed_open(name,*args,**kwargs):
+            fd=opening(name,*args,**kwargs)
+            if os.fsdecode(name).startswith('.capture-'):state['opened'].append(fd)
+            return fd
+        def observed_chown(fd,*args):
+            if label=='chown-memory-close' and fd in state['opened']:
+                raise OSError(errno.EIO,'ordinary original directory chown failure')
+            return chowning(fd,*args)
+        def observed_close(fd):
+            if fd in state['opened']:
+                state['closed'].append(fd);result=closing(fd)
+                if label=='chown-memory-close':raise OSError(errno.EBADF,'ordinary secondary close failure')
+                return result
+            return closing(fd)
+        try:
+            host.os.open=observed_open;host.os.close=observed_close;host.os.fchown=observed_chown
+            assert host.write_receipt_file(store,attempt,os.getuid(),os.getgid(),receipt) is None
+        finally:host.os.open=opening;host.os.close=closing;host.os.fchown=chowning
+        try:
+            assert work['directories']==1 and not work['complete'] and work['observations_incomplete']
+            assert state['opened']==state['closed'] and len(set(state['closed']))==len(state['closed'])
+            assert len(state['opened'])==(0 if label.startswith('created') else 1)
+            if label=='open-counter-memory':assert work['close_observations_incomplete'] and 'close_calls' not in work
+            else:assert work.get('close_calls',0)==len(state['opened'])
+            for fd in state['closed']:
+                try:os.fstat(fd)
+                except OSError as error:assert error.errno==errno.EBADF
+                else:raise AssertionError('private directory descriptor leaked')
+            if label=='chown-memory-close':
+                assert work['failure']['errno']==errno.EIO and work['close_failure']['errno']==errno.EBADF
+                assert work['observation_failure']['category']=='MemoryError'
+            elif label.endswith('row-limit'):
+                assert work['failure']['category']=='Refusal' and len(work['operations'])==4096
+            else:assert work['failure']['category']=='MemoryError'
+            assert (area/attempt_id/'receipt.json').read_bytes()==receipt
+            pending=area/('.capture-'+attempt_id+'.pending')
+            assert pending.is_dir() and list(pending.iterdir())==[]
+            print(json.dumps({'capture_observer_case':label,'capacity_row_prestate_only':prestate,
+                'pending_inode':pending.stat().st_ino,'pending_mode':pending.stat().st_mode & 0o777,
+                'state':state,'actual_work_without_capacity_placeholder_rows':
+                    {key:value for key,value in work.items() if key!='operations'},
+                'retained_operation_count':len(work['operations'])},sort_keys=True))
+        finally:os.close(store)
+PY_CAPTURE_OBSERVER
 /usr/bin/python3 -I -S -B - "$root" <<'PY_SOURCE_CANCEL'
 import importlib.util
 import json
