@@ -877,6 +877,7 @@ if sys.platform in {'darwin','linux'}:
                         receipt=host.canonical({'ordinary':'outer source native receipt'})
                         calls=[]
                         normalizer=types.SimpleNamespace(DOCUMENT_LIMIT=1024*1024,
+                            FAMILIES=('fixture',),PAGE_LIMIT=128,RAW_LIMIT=64*1024*1024,
                             request=json.loads,doc_ref=lambda raw:raw.decode(),
                             captured=lambda records,raw:(manifest,[b'{}\n']),
                             normalize=lambda *args:observation,
@@ -913,8 +914,44 @@ if sys.platform in {'darwin','linux'}:
                         assert (native_path/'receipt.json').read_bytes()==receipt
                         assert (native_path/'payload/request.json').read_bytes()==outer_request
                         assert (native_path/'payload/raw/0000').read_bytes()==b'{}\n'
+                        source_config={'principal_uid':os.getuid(),'consumer_gid':os.getgid(),
+                            'store_id':'store.outer','environment_id':'environment.outer',
+                            'store_root':str(publication_root.resolve()),'work_root':str(work_path.resolve()),
+                            'runtime':{'driver':'/ordinary/driver','vfkit':'/ordinary/vfkit'},
+                            'installed_files':{key:'/ordinary/installed/'+key for key in consumer.INSTALLED_SOURCES},
+                            'identity_paths':{key:['/ordinary/dyld'] if key=='dyld_cache_files' else '/ordinary/identity/'+key
+                                for key in consumer.IDENTITY_KEYS}}
+                        source_config_raw=consumer.canonical({'schema_version':1,'kind':'sandbox_host_config',
+                            'id':'host.outer','body':source_config})
+                        source_anchor=types.SimpleNamespace(config=source_config,config_raw=source_config_raw,
+                            resolver=None,recheck=lambda *args:None,private_observations={},
+                            capture_completion_owner=types.SimpleNamespace(construct=lambda anchor,attempt_id,request,capture:
+                                host._capture_completion_values(attempt_id,request,capture)))
+                        source_configuration=types.SimpleNamespace(normalizer=normalizer,identity={},recheck=lambda *args:None)
+                        original_source_acl=consumer._acl_state
+                        consumer._acl_state=lambda *args:([],None) if sys.platform=='darwin' else (None,None)
+                        native_source=None
+                        try:
+                            native_source=consumer._HeldCoverageRead(source_anchor,source_configuration,outer_request)
+                            assert native_source.snapshots['receipt.json']==receipt
+                            assert native_source.snapshots['payload/request.json']==outer_request
+                            assert 'capture.json' not in native_source.snapshots
+                            assert native_source.recheck() is None
+                            if failed_sync:
+                                assert source_anchor.private_observations['unusable'] is True
+                                assert not hasattr(native_source,'capture')
+                            else:
+                                assert native_source.capture.snapshots['complete.json']==host._capture_completion_values(
+                                    outer_id,outer_request,native_source.capture.snapshots['capture.json'])
+                                assert capture_replay._origin_values(root,native_source.snapshots,native_source.storage_rows,
+                                    {'attempt_id':outer_id,'platform':sys.platform},{'host-config.json':source_config_raw},
+                                    capture_files=native_source.capture.snapshots,
+                                    capture_storage_rows=native_source.capture.storage_rows)==native_source.capture_origin
+                        finally:
+                            if native_source is not None:native_source.close()
+                            consumer._acl_state=original_source_acl
                         print(json.dumps({'actual_run_coverage_read':True,'capture_failure':failed_sync,
-                            'normalization_installation_and_store_admission_are_fixture_doubles':True,
+                            'normalization_installation_store_admission_and_consumer_acl_are_fixture_doubles':True,
                             'actual_payload_receipt_publisher_and_return_preserved':True,
                             'actual_work':actual_work},sort_keys=True))
                 finally:
@@ -1582,6 +1619,125 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
             runtime_hold.close()
     finally:consumer._acl_state = original_acl
 PY_CAPTURE_VALUES
+capture_python=$(/usr/bin/python3 -I -S -B -c 'import os,sys;print(os.path.realpath(sys.executable))')
+for capture_route in reproduce write; do
+  for capture_drift in stable file parent native-failure; do
+    "$capture_python" -I -S -B - "$root" "$capture_route" "$capture_drift" <<'PY_CAPTURE_FINAL'
+import importlib.util
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+import types
+
+original,route,drift=Path(sys.argv[1]),sys.argv[2],sys.argv[3]
+with tempfile.TemporaryDirectory(prefix='ystack-capture-final-') as temporary:
+    area=Path(temporary).resolve()
+    package=area/'source'
+    copied=0
+    for relative in ('shadow/v1/_consumer.py','shadow/v1/enforced-reproduction.py',
+                     'shadow/v1/write-shadow.py','sandbox/v1/host-supervisor.py'):
+        path=package/relative;path.parent.mkdir(parents=True,exist_ok=True)
+        raw=(original/relative).read_bytes();copied+=len(raw);path.write_bytes(raw);path.chmod(0o440)
+    relative='shadow/v1/write-shadow.py' if route=='write' else 'shadow/v1/enforced-reproduction.py'
+    spec=importlib.util.spec_from_file_location('fixed_capture_main',package/relative)
+    entry=importlib.util.module_from_spec(spec);sys.modules[spec.name]=entry;spec.loader.exec_module(entry)
+    e=entry.e if route=='write' else entry
+    events=[]
+    class Native:
+        def __init__(self,*args):self.state='native-release.pending';events.append('native-created')
+        def recheck(self):events.append('native-recheck')
+        def block_entry(self):events.append('block-entry')
+        def arm_consumer(self):events.append('arm-consumer')
+        def checkpoint(self):return 'native-checkpoint.clear'
+        def hold_completion(self,fd):events.append('hold-completion')
+        def block_final(self):events.append('block-final')
+        def outcome(self):return self.state
+        def commit_completion(self,raw):
+            self.state='native-release.success';events.append('native-committed')
+        def abort_release(self):self.state='native-release.failure';events.append('native-aborted')
+        def close(self):
+            events.append('native-close')
+            if drift=='native-failure':raise OSError(5,'ordinary original native close failure')
+    e._NativeRelease=Native
+    e.c.capture_parent_context=lambda:{}
+    admission=e._StartupAdmission(e._STARTUP_KEY,sys.executable,
+        e.sha(Path(sys.executable).read_bytes()),sys.version,tuple(sys.version_info[:2]),(),
+        types.SimpleNamespace(observe=lambda:events.append('census')))
+    installed=area/'installed';installed.mkdir()
+    installed_host=installed/'host-supervisor.py'
+    installed_host.write_bytes((package/'sandbox/v1/host-supervisor.py').read_bytes());installed_host.chmod(0o440)
+    e.c.ANCHOR=str(installed)
+    work=area/'work';work.mkdir(mode=0o700)
+    output=area/'output';output.mkdir(mode=0o700)
+    installed_hold=e.c._open_held(str(installed_host),False,lambda *args:True,'E_STORE')
+    anchor=types.SimpleNamespace(held=[installed_hold],private_observations={},recording_work={},
+        seal_recheck=lambda:events.append('anchor-final'))
+    work_hold=e.stable_directory(work);output_hold=e.stable_directory(output)
+    incident={'id':'incident.ordinary','body':{'git_revision_ref':'a'*40}}
+    def drift_after_authentication():
+        assert e.CancellationSignals.active is not None
+        e._bind_capture_completion_owner(anchor)
+        assert getattr(anchor,'capture_completion_owner',None) is not None, (
+            anchor.private_observations,e._CAPTURE_OWNER_WORK)
+        assert anchor.capture_completion_owner is e.CancellationSignals.active.admission.capture_owner
+        anchor.capture_completion_owner.authenticate(anchor)
+        events.append('last-authentication')
+        path=package/'sandbox/v1/host-supervisor.py'
+        if drift=='file':path.chmod(0o640);path.write_bytes(path.read_bytes()+b'\n');path.chmod(0o440)
+        elif drift=='parent':path.parent.rename(path.parent.with_name('v1-moved'))
+        if drift in {'file','parent'}:events.append('source-drift')
+    if route=='reproduce':
+        def reproduce(*args,**kwargs):
+            drift_after_authentication()
+            files={name:b'{}\n' for name in e.EVIDENCE_NAMES}
+            e.seal(output,output_hold,files,incident,'enforced-reproduction.v1',
+                   _capture=(anchor,work_hold.held,None))
+        e.reproduce=reproduce
+        argv=['entry','reproduce','request',str(work),str(output)]
+    else:
+        frozen=work/'frozen';frozen.mkdir();captured=work/'captured';captured.mkdir()
+        for name in entry.NAMES:(frozen/name).write_bytes(e.canonical(incident if name=='incident.json' else
+            {'body':{'outcome':'match'}} if name=='file-digest-result.json' else {'id':'ordinary'}))
+        for name in ('claim.json','duty_evaluation.json'):(captured/name).write_bytes(e.canonical({'id':'ordinary'}))
+        materialized=types.SimpleNamespace(candidate_tree_id='a'*40,write_set=[],verification_files={},
+            input_raw=e.canonical({'stage_request':{'content':{'body':{}}}}),
+            **{name:b'{}\n' for name in ('response_raw','preparation_record_raw','preparation_manifest_raw',
+                'qualified_identity_raw','evaluation_raw')})
+        class Workspace:
+            def __init__(self,*args):
+                self.record_form='withheld-write.v1';self.request_doc={'id':'ordinary','body':{'scope_id':'scope.ordinary'}}
+                self.anchor=anchor;self.output_hold=output_hold;self.work_hold=work_hold
+                self.launch_holds=[types.SimpleNamespace()];self.checks=0
+                drift_after_authentication()
+            def capture(self,name,raw):path=captured/name;path.write_bytes(raw);return path
+            def component(self,*args):return b'{}\n'
+            def recheck(self,**kwargs):self.checks+=1;events.append('workspace-final')
+            def close(self):events.append('workspace-close')
+        entry._Workspace=Workspace;entry._materialize=lambda ws:materialized
+        entry._publisher=lambda *args:({},b'ordinary publisher')
+        entry._write_section_values=lambda *args:{};entry._admit=lambda *args:None
+        e.trace_ledger=lambda *args:b'{}\n'
+        argv=['entry','prepare','request','bundle',str(work),str(output)]
+    try:
+        result=entry.main(argv,admission)
+        assert result==(1 if drift=='native-failure' else 0),(result,events)
+        assert anchor.private_observations['recording_sealed'] is (drift not in {'file','parent'})
+        owner=anchor.capture_completion_owner
+        assert owner.source_closed and owner.work['close_calls']==1
+        assert owner.transferred==owner.work['read_bytes']==anchor.recording_work['read_bytes']
+        assert sum(case['read_bytes'] for case in anchor.recording_work['cases'].values())==owner.work['read_bytes']
+        assert events.index('last-authentication')<events.index('hold-completion')
+        print(json.dumps({'actual_main_signals_and_final_seal':route,'source_control':drift,
+            'native_backend_thread_census_parent_context_materialization_and_install_admission_are_fixture_doubles':True,
+            'not_native_or_complete_pipeline_qualification':True,'result':result,'events':events,
+            'fixture_source_copy_bytes':copied,'final_private_observations':anchor.private_observations,
+            'owner_work':owner.work,'recording_work':anchor.recording_work},sort_keys=True))
+    finally:installed_hold.close();work_hold.close();output_hold.close()
+PY_CAPTURE_FINAL
+  done
+done
 /usr/bin/python3 -I -S -B - "$root" <<'PY_LAUNCH_PREPARATION_VALUES'
 import importlib.util
 from pathlib import Path

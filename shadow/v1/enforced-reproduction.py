@@ -516,12 +516,7 @@ class _CaptureCompletionOwner:
         return result
 
     def transfer(self, work, case_work):
-        delta = self.work["read_bytes"] - self.transferred
-        c._capture_copy_room(work, delta, False, read_only=True)
-        c._capture_copy_room(case_work, delta, False, case=True, read_only=True)
-        work["read_bytes"] += delta
-        case_work["read_bytes"] += delta
-        self.transferred += delta
+        self.transferred += c._capture_transfer_work(self.work, work, case_work)
 
 
 def _load_capture_completion_owner():
@@ -560,12 +555,45 @@ def _bind_capture_completion_owner(anchor):
 
 
 def _close_capture_completion_owner(owner):
-    if owner is not None and owner.source is not None:
+    if owner is not None and owner.source is not None and not getattr(owner, "source_closed", False):
+        owner.source_closed = True
+        owner.work["close_calls"] = owner.work.get("close_calls", 0) + 1
         try:
             owner.source.close()
+            owner.work["close_return"] = None
         except Exception as error:
             owner.work["cleanup_error"] = {"category": type(error).__name__,
                                             "errno": getattr(error, "errno", None)}
+
+
+def _seal_capture_recording(anchor, parent, held_store=None):
+    owner = getattr(anchor, "capture_completion_owner", _CAPTURE_OWNER)
+    try:
+        require(owner is not None and not getattr(owner, "source_closed", False), "E_STORE")
+        owner.source.recheck("E_STORE")
+    except Exception as error:
+        anchor.private_observations["unusable"] = True
+        anchor.private_observations["completion_final_failure"] = {
+            "category": type(error).__name__,
+            "errno": getattr(error, "os_errno", getattr(error, "errno", None))}
+    finally:
+        _close_capture_completion_owner(owner)
+        if owner is not None and "cleanup_error" in owner.work:
+            anchor.private_observations["unusable"] = True
+        try:
+            case_key = str(parent.before.st_dev) + ":" + str(parent.before.st_ino)
+            case_work = c._capture_work_values(anchor.recording_work, case_key)
+            if owner is not None:
+                owner.transfer(anchor.recording_work, case_work)
+            elif "read_bytes" in _CAPTURE_OWNER_WORK:
+                c._capture_transfer_work(_CAPTURE_OWNER_WORK, anchor.recording_work, case_work)
+            if held_store is not None and hasattr(held_store, "capture_work"):
+                c._capture_transfer_work(held_store.capture_work, anchor.recording_work, case_work)
+        except Exception as error:
+            anchor.private_observations["unusable"] = True
+            anchor.private_observations["completion_accounting_failure"] = {
+                "category": type(error).__name__, "errno": getattr(error, "errno", None)}
+    anchor.private_observations["recording_sealed"] = not anchor.private_observations.get("unusable", False)
 
 
 class _DarwinLedger:
@@ -1829,7 +1857,7 @@ def trace_ledger(incident: dict, attempt_id: str, environment_id: str, outcome: 
 
 
 def seal(output: Path, held_output: StableDirectory, files: dict[str, bytes],
-         incident: dict, record_form: str) -> bytes:
+         incident: dict, record_form: str, *, _capture=None) -> bytes:
     require(set(files) == set(EVIDENCE_NAMES), "E_RELATION")
     directory = held_output.held.fd
     rows = [{"name": name, "size_bytes": len(files[name]), "sha256": sha(files[name])}
@@ -1846,6 +1874,8 @@ def seal(output: Path, held_output: StableDirectory, files: dict[str, bytes],
     held_output.recheck("E_RELATION")
     require(set(os.listdir(directory)) == set(EVIDENCE_NAMES), "E_RELATION")
     os.fsync(directory)
+    if _capture is not None:
+        _seal_capture_recording(*_capture)
     retained = CancellationSignals.retain_completion(directory)
     if retained is not True:
         raise Refusal("E_RUNTIME")
@@ -2199,7 +2229,8 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
         for source in sources: source.recheck()
         for item in inputs: item.recheck()
         held_store.recheck()
-        return seal(output, output_hold, files, incident, "enforced-reproduction.v1")
+        return seal(output, output_hold, files, incident, "enforced-reproduction.v1",
+                    _capture=(anchor, work_hold.held, held_store))
     finally:
         close_all([*reversed(inputs), *reversed(sources), python_file, sudo_file, bash,
                    held_store, anchor, jq, helper, work_hold, output_hold])

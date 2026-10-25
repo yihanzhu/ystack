@@ -936,6 +936,7 @@ def write(request_path: Path, bundle: Path, work: Path, output: Path, parent: di
         require(set(os.listdir(directory)) == set(files), "E_RELATION")
         os.fsync(directory)
         ws.recheck(sealed=True)
+        e._seal_capture_recording(ws.anchor, ws.work_hold.held, ws.launch_holds[-1])
         require(e.CancellationSignals.retain_completion(directory) is True, "E_RUNTIME")
         e.CancellationSignals.prepare_completion(marker)
         return marker

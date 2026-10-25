@@ -1317,6 +1317,7 @@ def _origin_values(files, storage_rows, identity_context, source_bytes, *,
         files["sandbox-export.bin"] = _ExportSnapshot(files["sandbox-export.bin"], None, None)
     config = _parse_config(source_bytes["host-config.json"])
     attempt_id, platform = identity_context["attempt_id"], identity_context["platform"]
+    source_payload = "payload/request.json" in files
     capture_directory = ".capture-" + attempt_id
     if capture_files is not None:
         _require(type(capture_files) is dict and set(capture_files) in (
@@ -1359,11 +1360,13 @@ def _origin_values(files, storage_rows, identity_context, source_bytes, *,
                 _require(listed_names == {key.split("/")[1] for key in files if key.startswith("payload/")}, "E_STORE")
             elif name == "payload/evidence":
                 _require(listed_names == {key.split("/")[2] for key in files if key.startswith("payload/evidence/")}, "E_STORE")
+            elif source_payload and name == "payload/raw":
+                _require(listed_names == {key.split("/")[2] for key in files if key.startswith("payload/raw/")}, "E_STORE")
             elif name == ".":
                 _require(attempt_id in listed_names, "E_STORE")
         observations.append(_observation_values(name, before, row["after"], files[name] if file else None))
-    directories = {".", attempt_id, "payload"} | ({"payload/evidence"} if any(
-        name.startswith("payload/evidence/") for name in files) else set())
+    directories = {".", attempt_id, "payload"} | ({"payload/raw"} if source_payload else
+        {"payload/evidence"} if any(name.startswith("payload/evidence/") for name in files) else set())
     if capture_files is not None:
         directories.add(capture_directory)
     _require(names == set(files) | directories, "E_STORE")
@@ -1522,6 +1525,17 @@ def _capture_copy_room(work, amount, exported, *, case=False, read_only=False):
                  <= limit * DOCUMENT_LIMIT for index,(key, limit) in enumerate(zip(fields[:3], nonexport))), "E_LIMIT")
 
 
+def _capture_transfer_work(source, work, case_work):
+    delta = source["read_bytes"] - source.get("transferred_read_bytes", 0)
+    _require(delta >= 0, "E_LIMIT")
+    _capture_copy_room(work, delta, False, read_only=True)
+    _capture_copy_room(case_work, delta, False, case=True, read_only=True)
+    work["read_bytes"] += delta
+    case_work["read_bytes"] += delta
+    source["transferred_read_bytes"] = source["read_bytes"]
+    return delta
+
+
 def _private_capture_observations(value, work, case_work):
     encoded = bytearray()
     reserved = 0
@@ -1622,12 +1636,7 @@ class _HeldCaptureRead:
                     _require(current == raw, code)
 
     def transfer(self, work, case_work):
-        delta = self.work["read_bytes"] - self.transferred
-        _capture_copy_room(work, delta, False, read_only=True)
-        _capture_copy_room(case_work, delta, False, case=True, read_only=True)
-        work["read_bytes"] += delta
-        case_work["read_bytes"] += delta
-        self.transferred += delta
+        self.transferred += _capture_transfer_work(self.work, work, case_work)
 
     def close(self):
         held, self.held = self.held, []
@@ -1666,7 +1675,7 @@ class _HeldStoreRead:
                     {"host-config.json": self.anchor.config_raw}, capture_files=self.capture.snapshots,
                     capture_storage_rows=self.capture.storage_rows)
             return groups
-        except (Refusal, ValueError, TypeError, MemoryError, OSError) as error:
+        except Exception as error:
             self.anchor.private_observations["unusable"] = True
             self.anchor.private_observations["capture_failure"] = {
                 "category": type(error).__name__,
@@ -1705,7 +1714,7 @@ class _HeldStoreRead:
         if hasattr(self, "capture"):
             try:
                 self.capture.recheck(code)
-            except (Refusal, OSError, ValueError, MemoryError):
+            except Exception:
                 self.anchor.private_observations["unusable"] = True
 
     def close(self) -> None:
@@ -2059,6 +2068,28 @@ class _HeldCoverageRead(_HeldStoreRead):
         self.attempt_id = configuration.normalizer.request(request_raw)["id"]
         self.held = []
         self.snapshots, self.observation = read_coverage_attempt(anchor, configuration, request_raw, _owner=self)
+        self.record_source(request_raw)
+
+    def record_source(self, request_raw):
+        try:
+            _require(request_raw == self.snapshots["payload/request.json"], "E_STORE")
+            self.capture = _HeldCaptureRead(self, request_raw, source=True)
+            self.capture_origin = _origin_values(self.snapshots, self.storage_rows,
+                {"attempt_id": self.attempt_id, "platform": sys.platform},
+                {"host-config.json": self.anchor.config_raw}, capture_files=self.capture.snapshots,
+                capture_storage_rows=self.capture.storage_rows)
+            return self.capture
+        except Exception as error:
+            self.anchor.private_observations["unusable"] = True
+            self.anchor.private_observations["source_capture_failure"] = {
+                "category": type(error).__name__,
+                "errno": getattr(error, "os_errno", getattr(error, "errno", None))}
+            if hasattr(self, "capture"):
+                try:
+                    self.capture.close()
+                except OSError as cleanup_error:
+                    self.capture_work["cleanup_errno"] = cleanup_error.errno
+            return None
 
     def recheck(self, code="E_STALE"):
         super().recheck(code)
@@ -2074,20 +2105,20 @@ def read_coverage_attempt(anchor, configuration, request_raw, *, _owner=None):
     attempt_id = requested["id"]
     _require(_owner is None or isinstance(_owner, _HeldCoverageRead), "E_STORE")
     uid, gid = anchor.config["principal_uid"], anchor.config["consumer_gid"]
-    opened, snapshots, observations = [], {}, []
+    opened, snapshots, storage_rows = [], {}, []
     try:
         configuration.recheck("E_STORE")
         store = _open_held(anchor.config["store_root"], True, _store_rule(uid, gid, 0o750, True, anchor.resolver), "E_STORE")
         opened.append(store)
+        _observation(store, ".", storage_rows=storage_rows)
         def directory(parent, name, relative):
             item = _open_child(parent, name, True, _store_rule(uid, gid, 0o750, True, anchor.resolver), "E_STORE")
             opened.append(item)
-            observations.append(_observation(item, relative))
+            _observation(item, relative, storage_rows=storage_rows)
             return item
         attempt = directory(store, attempt_id, attempt_id)
         payload = directory(attempt, "payload", "payload")
         raw_dir = directory(payload, "raw", "payload/raw")
-        observations.insert(0, _observation(store, "."))
         attempt_names = set(attempt.listdir())
         _require(attempt_names == {"receipt.json", "payload"}
                  and set(payload.listdir()) == {"request.json", "raw-manifest.json", "observation.json", "raw"}, "E_STORE")
@@ -2100,9 +2131,9 @@ def read_coverage_attempt(anchor, configuration, request_raw, *, _owner=None):
         for parent, name, relative in fixed:
             item = _open_child(parent, name, False, _store_rule(uid, gid, 0o440, False, anchor.resolver), "E_STORE")
             opened.append(item)
-            raw = item.read(CAPTURE_LIMIT if relative == "capture.json" else DOCUMENT_LIMIT, "E_STORE")
+            raw = item.read(DOCUMENT_LIMIT, "E_STORE")
             snapshots[relative] = raw
-            observations.append(_observation(item, relative, raw))
+            _observation(item, relative, storage_rows=storage_rows)
             if relative.startswith("payload/raw/"):
                 total += len(raw)
                 _require(total <= n.RAW_LIMIT, "E_STORE")
@@ -2115,12 +2146,18 @@ def read_coverage_attempt(anchor, configuration, request_raw, *, _owner=None):
         _require(set(attempt.listdir()) == attempt_names, "E_STALE")
         for item in opened:
             item.recheck("E_STALE")
+            relative = os.path.relpath(item.path, anchor.config["store_root"])
+            if relative.startswith(attempt_id + "/"):
+                relative = relative[len(attempt_id) + 1:]
+            for row in storage_rows:
+                if row["name"] == os.fsencode(relative).hex():
+                    row["directory_names"] = item.directory_names
         configuration.recheck("E_STALE")
-        origin = canonical({"schema_version": 1, "kind": "shadow_origin_observation", "id": attempt_id,
-            "body": {"store_id": anchor.config["store_id"], "attempt_id": attempt_id,
-                     "entries": observations, "result": "authenticated"}})
+        origin = _origin_values(snapshots, storage_rows,
+            {"attempt_id": attempt_id, "platform": sys.platform}, {"host-config.json": anchor.config_raw})
         if _owner is not None:
             _owner.held, opened = opened, []
+            _owner.storage_rows = storage_rows
         return snapshots, origin
     finally:
         _close_paths(opened)

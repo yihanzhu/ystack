@@ -221,6 +221,7 @@ class _Reader:
         self.scratch = output.parent.parent
         self.deadline = min(DEADLINE, deadline) if deadline is not None else DEADLINE
         self.anchor = None
+        self.capture_completion_owner = None
         self.modules = None
         self.coverage_configuration = None
         self.authentication_revision = None
@@ -266,6 +267,7 @@ class _Reader:
             self.darwin = c._DarwinChildOwner(self.python, self.consumer, self.deadline, self)
             self.writer = self.load_writer()
             self.enforced = self.writer.e
+            self.capture_completion_owner = self.enforced._load_capture_completion_owner()
             self.modules = self.enforced.core_modules(self.package_sources["core/v2/generation-registry.json"].raw)
             for source in sorted(self.modules.glob("*.jq")):
                 self.package_sources[str(source.relative_to(PACKAGE))] = self.hold(source, c.EXECUTABLE_LIMIT)
@@ -421,6 +423,14 @@ class _Reader:
             self.anchor = c.load_anchor(self.darwin if sys.platform == "darwin" else None,
                                        self.darwin if sys.platform == "darwin" else None)
             self.owned.append(self.anchor)
+            try:
+                require(self.capture_completion_owner is not None, "E_STORE")
+                self.capture_completion_owner.authenticate(self.anchor)
+                self.anchor.capture_completion_owner = self.capture_completion_owner
+            except Exception as error:
+                self.anchor.private_observations["unusable"] = True
+                self.anchor.private_observations["completion_owner_failure"] = {
+                    "category": type(error).__name__, "errno": getattr(error, "errno", None)}
         return self.anchor
 
     def release_stores(self):
@@ -442,6 +452,8 @@ class _Reader:
             except BaseException as exc:
                 if first is None:
                     first = exc
+        if self.capture_completion_owner is not None:
+            self.enforced._close_capture_completion_owner(self.capture_completion_owner)
         if first is not None:
             raise first
 
