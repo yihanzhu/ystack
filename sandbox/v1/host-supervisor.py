@@ -1562,28 +1562,47 @@ def remove_frozen(work_root, attempt_id, candidate_names):
 
 # --- R10.2 store writer: O_CREAT|O_EXCL relative to a directory fd, fsync,
 # then the final mode; directories 0750, files 0440. --------------------
-def mkdir_excl(parent_fd, name, uid, gid, on_created=None):
-    os.mkdir(name, mode=0o700, dir_fd=parent_fd)
-    if on_created is not None:
-        # findings-477-r12.md finding 2: called the instant os.mkdir
-        # itself succeeds -- before the open/fchown/fchmod/fsync
-        # finalization below, any step of which can still fail (e.g. the
-        # YSTACK_TEST_MKDIR_FINALIZE_FAIL hook) without undoing the fact
-        # that the directory now genuinely exists and belongs to this
-        # caller.
-        on_created()
-    fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+def mkdir_excl(parent_fd, name, uid, gid, on_created=None, capture_work=None):
+    fd, phase, failure = None, "mkdir", None
     try:
+        result = os.mkdir(name, mode=0o700, dir_fd=parent_fd)
+        if capture_work is not None:
+            _capture_note(capture_work, phase, result, name=os.fsdecode(name))
+        if on_created is not None:
+            on_created()
+        phase = "directory-open"
+        fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+        if capture_work is not None:
+            _capture_note(capture_work, phase, fd, name=os.fsdecode(name))
         if name == os.environ.get("YSTACK_TEST_MKDIR_FINALIZE_FAIL"):
             raise OSError("test-only simulated finalize failure")
-        os.fchown(fd, uid, gid)
-        os.fchmod(fd, 0o750)
-        os.fsync(fd)
-    except BaseException:
-        os.close(fd)
+        phase = "directory-chown"
+        result = os.fchown(fd, uid, gid)
+        if capture_work is not None:
+            _capture_note(capture_work, phase, result, name=os.fsdecode(name))
+        phase = "directory-chmod"
+        result = os.fchmod(fd, 0o750)
+        if capture_work is not None:
+            _capture_note(capture_work, phase, result, name=os.fsdecode(name))
+        phase = "directory-fsync"
+        result = os.fsync(fd)
+        if capture_work is not None:
+            _capture_note(capture_work, phase, result, name=os.fsdecode(name))
+    except BaseException as error:
+        failure = error
+        if capture_work is not None:
+            capture_work.setdefault("failure", {"category": type(error).__name__,
+                "errno": getattr(error, "errno", None), "code": getattr(error, "code", None)})
+            _capture_note(capture_work, phase, error=getattr(error, "errno", None),
+                          name=os.fsdecode(name), category=type(error).__name__)
+        if fd is not None:
+            if capture_work is None:
+                os.close(fd)
+            else:
+                _capture_close(fd, capture_work, "directory-close", failure=failure,
+                               name=os.fsdecode(name))
         raise
     return fd
-
 
 def write_excl(parent_fd, name, data, uid, gid, mode=0o440, capture_work=None):
     fd, phase = None, "open"
@@ -1927,7 +1946,7 @@ def _publish_capture(store_fd, uid, gid, attempt_id, request_raw, raw, complete,
     def created():
         work["directories"] = work.get("directories", 0) + 1
         _capture_note(work, "capture-directory-created", name=pending.decode())
-    directory = mkdir_excl(store_fd, pending, uid, gid, on_created=created)
+    directory = mkdir_excl(store_fd, pending, uid, gid, on_created=created, capture_work=work)
     failure = None
     try:
         write_excl(directory, "capture.json", capture_raw, uid, gid, capture_work=work)

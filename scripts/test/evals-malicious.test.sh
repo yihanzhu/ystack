@@ -1757,6 +1757,158 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
             runtime_hold.close()
     finally:consumer._acl_state = original_acl
 PY_CAPTURE_VALUES
+/usr/bin/python3 -I -S -B - "$root" <<'PY_CAPTURE_FAILURES'
+import ctypes
+import importlib.util
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+import types
+
+root=Path(sys.argv[1])
+spec=importlib.util.spec_from_file_location('capture_failure_host',root/'sandbox/v1/host-supervisor.py')
+host=importlib.util.module_from_spec(spec);spec.loader.exec_module(host)
+cases=[(name,phase) for name in ('capture.json','.completion.pending')
+       for phase in ('open','write','zero','short','chown','chmod','fsync','close')]
+cases += [('sync',site) for site in ('pending-directory-fsync','pending-store-fsync',
+    'published-directory-fsync','published-store-fsync','completion-directory-fsync','completion-store-fsync')]
+cases += [('held',str(ordinal)) for ordinal in (1,2,3)]
+cases += [('readback',phase) for phase in ('open','read','mismatch','close')]
+cases += [('rename',phase) for phase in ('directory-eio','completion-eio','completion-eintr',
+                                        'directory-committed-eio','completion-committed-eio')]
+cases += [('directory','close')]
+cases += [('capture-directory',phase) for phase in ('mkdir','open','chown','chmod','fsync','chown-close')]
+for ordinal,(target,phase) in enumerate(cases):
+    with tempfile.TemporaryDirectory(prefix='ystack-capture-failure-') as temporary:
+        area=Path(temporary).resolve();area.chmod(0o750)
+        store=os.open(area,os.O_RDONLY|os.O_DIRECTORY)
+        attempt_id='attempt.failure.%03d'%ordinal
+        attempt=host.mkdir_excl(store,attempt_id,os.getuid(),os.getgid())
+        host.write_payload(attempt,os.getuid(),os.getgid(),[(b'stdout',b''),(b'stderr',b'')])
+        request=host.canonical({'ordinary':'request','id':attempt_id})
+        receipt=host.canonical({'ordinary':'native receipt','id':attempt_id})
+        host._capture_clocks={'wall':[],'monotonic':[],'complete':True}
+        host._capture_process={'rows':[],'driver_rest':[],'signals':[],'complete':True,
+            'request_raw':request,'attempt_id':attempt_id}
+        original={name:getattr(host.os,name) for name in ('mkdir','open','read','write','fchown','fchmod','fsync','close')}
+        sync,check,rename=host._capture_sync,host._capture_directory_check,host._capture_rename_noreplace
+        roles={store:'store',attempt:'native-attempt'}
+        state={'site':None,'checks':0,'fired':False,'partial':False,'renames':0}
+        def fail():state['fired']=True;raise OSError(5,'ordinary controlled capture failure')
+        def making(name,*args,**kwargs):
+            if target=='capture-directory' and phase=='mkdir' and os.fsdecode(name).startswith('.capture-'):fail()
+            return original['mkdir'](name,*args,**kwargs)
+        def opening(name,flags,*args,**kwargs):
+            text=os.fsdecode(name)
+            if target==text and phase=='open':fail()
+            if target=='capture-directory' and phase=='open' and text.startswith('.capture-'):fail()
+            if target=='readback' and phase=='open' and text=='.completion.pending' and flags & os.O_ACCMODE==os.O_RDONLY:fail()
+            fd=original['open'](name,flags,*args,**kwargs)
+            roles[fd]=('capture-directory' if text.startswith('.capture-') else
+                       'witness-read' if text=='.completion.pending' and flags & os.O_ACCMODE==os.O_RDONLY else text)
+            return fd
+        def writing(fd,data):
+            if roles.get(fd)==target:
+                if phase=='write':fail()
+                if phase=='zero':state['fired']=True;return 0
+                if phase=='short':
+                    if state['partial']:fail()
+                    state['partial']=True
+                    return original['write'](fd,data[:3])
+            return original['write'](fd,data)
+        def chowning(fd,*args):
+            if roles.get(fd)==target and phase in ('chown','chown-close'):fail()
+            return original['fchown'](fd,*args)
+        def chmodding(fd,*args):
+            if roles.get(fd)==target and phase=='chmod':fail()
+            return original['fchmod'](fd,*args)
+        def syncing(fd):
+            if ((roles.get(fd)==target and phase=='fsync')
+                    or target=='sync' and state['site']==phase):fail()
+            return original['fsync'](fd)
+        def reading(fd,count):
+            if target=='readback' and roles.get(fd)=='witness-read':
+                if phase=='read':fail()
+                if phase=='mismatch':
+                    data=original['read'](fd,count);state['fired']=True
+                    return b'x'+data[1:]
+            return original['read'](fd,count)
+        def closing(fd):
+            role=roles.pop(fd,None);result=original['close'](fd)
+            if ((role==target and phase=='close')
+                    or target=='readback' and role=='witness-read' and phase=='close'
+                    or target=='directory' and role=='capture-directory' and phase=='close'
+                    or target=='capture-directory' and role=='capture-directory' and phase=='chown-close'):
+                state['fired']=True;raise OSError(9,'ordinary controlled capture close failure')
+            return result
+        def sync_site(fd,work,site):
+            state['site']=site
+            try:return sync(fd,work,site)
+            finally:state['site']=None
+        def held_check(store_fd,directory,name,expected,uid,gid,work):
+            state['checks']+=1
+            if target=='held' and state['checks']==int(phase):
+                state['fired']=True
+                os.chmod('capture.json',0o640,dir_fd=directory)
+            return check(store_fd,directory,name,expected,uid,gid,work)
+        def renaming(parent,source,destination,work):
+            state['renames']+=1
+            selected=(target=='rename' and ((phase.startswith('directory') and source.startswith(b'.capture-'))
+                or (phase.startswith('completion') and source==b'.completion.pending')))
+            if not selected:return rename(parent,source,destination,work)
+            state['fired']=True
+            symbol='renameatx_np' if sys.platform=='darwin' else 'renameat2'
+            provider=host._darwin_libc if sys.platform=='darwin' else host.ctypes.CDLL
+            class Fault:
+                def __call__(self,*args):
+                    if 'committed' in phase:
+                        real=getattr(provider() if sys.platform=='darwin' else provider(None,use_errno=True),symbol)
+                        real.argtypes=self.argtypes;real.restype=self.restype
+                        assert real(*args)==0
+                    ctypes.set_errno(4 if phase.endswith('eintr') else 5)
+                    return -1
+            replacement=lambda *args,**kwargs:types.SimpleNamespace(**{symbol:Fault()})
+            try:
+                if sys.platform=='darwin':host._darwin_libc=replacement
+                else:host.ctypes.CDLL=replacement
+                return rename(parent,source,destination,work)
+            finally:
+                if sys.platform=='darwin':host._darwin_libc=provider
+                else:host.ctypes.CDLL=provider
+        try:
+            for name,function in [('mkdir',making),('open',opening),('write',writing),('fchown',chowning),
+                    ('fchmod',chmodding),('fsync',syncing),('read',reading),('close',closing)]:setattr(host.os,name,function)
+            host._capture_sync=sync_site;host._capture_directory_check=held_check;host._capture_rename_noreplace=renaming
+            assert host.write_receipt_file(store,attempt,os.getuid(),os.getgid(),receipt) is None
+        finally:
+            for name,function in original.items():setattr(host.os,name,function)
+            host._capture_sync=sync;host._capture_directory_check=check;host._capture_rename_noreplace=rename
+        try:
+            assert state['fired'],(target,phase,state)
+            work=host._capture_process['publication_work']
+            assert work['complete'] is False and host._capture_process['complete'] is False
+            if target=='capture-directory' and phase=='chown-close':
+                assert work['failure']['errno']==5 and any(row.get('errno')==9 for row in work['operations'])
+            native=area/attempt_id
+            assert {path.name for path in native.iterdir()}=={'receipt.json','payload'}
+            assert (native/'receipt.json').read_bytes()==receipt
+            assert (native/'payload/stdout').read_bytes()==b'' and (native/'payload/stderr').read_bytes()==b''
+            pending=area/('.capture-'+attempt_id+'.pending');published=area/('.capture-'+attempt_id)
+            namespace=[]
+            for directory in (pending,published):
+                if directory.exists():
+                    namespace.append({'name':directory.name,'inode':directory.stat().st_ino,
+                        'files':[{'name':path.name,'inode':path.stat().st_ino,
+                                  'mode':path.stat().st_mode & 0o777,'bytes_hex':path.read_bytes().hex()}
+                                 for path in sorted(directory.iterdir())]})
+            committed=target=='rename' and phase=='completion-committed-eio' or target=='directory'
+            assert (published/'complete.json').exists() is committed
+            print(json.dumps({'capture_failure_case':[target,phase],'controlled_fault_not_native_qualification':True,
+                'native_receipt_and_return_unchanged':True,'state':state,'namespace':namespace,'actual_work':work},sort_keys=True))
+        finally:os.close(store)
+PY_CAPTURE_FAILURES
 /usr/bin/python3 -I -S -B - "$root" <<'PY_SOURCE_CANCEL'
 import importlib.util
 import json
