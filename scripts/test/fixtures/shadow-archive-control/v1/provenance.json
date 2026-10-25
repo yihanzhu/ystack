@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "kind": "shadow_archive_control_provenance",
+  "source_repository": "yihanzhu/ystack",
+  "runtime_bindings": [
+    {
+      "archive_path": "shadow/evidence/external-dummy-target/v1/",
+      "commit": "2ced5b37d1c0b405f281d980761f619c584d353e",
+      "tree": "cecf4c487a3bc93dde08fc655930a12e7be48018"
+    },
+    {
+      "archive_path": "shadow/evidence/self-host-transition/v1/",
+      "commit": "8b3e3f55037de84c441cfe4ca5231c98814a7bbd",
+      "tree": "71dda3114cac146c465e5de3b62fa8d792d6b0e9"
+    }
+  ],
+  "files": [
+    {
+      "source_path": "control/v1/credential-policy-decision.json",
+      "fixture_path": "scripts/test/fixtures/shadow-archive-control/v1/credential-policy-decision.json",
+      "git_mode": "100644",
+      "git_blob": "b4affcd1b821660097fad90845569f600ff8a1f0",
+      "sha256": "73877276c868eae2da9dcedf8eb465b0526ce26a66506691b9cedbba15f00615",
+      "size_bytes": 1583
+    },
+    {
+      "source_path": "control/v1/credential-policy.json",
+      "fixture_path": "scripts/test/fixtures/shadow-archive-control/v1/credential-policy.json",
+      "git_mode": "100644",
+      "git_blob": "5ef82544d1e5f6a3271a3bc69e99fddafa48a3ac",
+      "sha256": "2ba0ec54d11ab4e9d02993e9283c5f820c662a20cf33d2bff25b1393a5ee403d",
+      "size_bytes": 1444
+    },
+    {
+      "source_path": "control/v1/duty-separation-decision.json",
+      "fixture_path": "scripts/test/fixtures/shadow-archive-control/v1/duty-separation-decision.json",
+      "git_mode": "100644",
+      "git_blob": "59fedc2053153d69e91f8c63f8e53a5224295791",
+      "sha256": "4c2297341d1d389f21ace62b58b83e27a6ed248f9bf13a10fa385c4f8474af99",
+      "size_bytes": 1409
+    },
+    {
+      "source_path": "control/v1/duty-separation-policy.json",
+      "fixture_path": "scripts/test/fixtures/shadow-archive-control/v1/duty-separation-policy.json",
+      "git_mode": "100644",
+      "git_blob": "6bd404d333286155e7be89ab1b61cffeab4a3284",
+      "sha256": "b2663c0c0ae3d1d2e95b2e5d5ade7e00b2893f242a1143e90fad74659f6a41f9",
+      "size_bytes": 2104
+    },
+    {
+      "source_path": "control/v1/evidence-integrity-decision.json",
+      "fixture_path": "scripts/test/fixtures/shadow-archive-control/v1/evidence-integrity-decision.json",
+      "git_mode": "100644",
+      "git_blob": "bc39f5998a6b9fdb20292ce9c597c8e53cf90d20",
+      "sha256": "03e9225face347f1a4990beb6812f0e839d777cfbc6b95997d8031c4ad85e879",
+      "size_bytes": 1859
+    },
+    {
+      "source_path": "control/v1/evidence-integrity-policy.json",
+      "fixture_path": "scripts/test/fixtures/shadow-archive-control/v1/evidence-integrity-policy.json",
+      "git_mode": "100644",
+      "git_blob": "2a80dd1c2c703c443f5d01d2b15190bbdf052012",
+      "sha256": "8e630c4aaee1cf1d97b3c04e96da6bb8408a0a46a2ce42bca2583767ee42f604",
+      "size_bytes": 914
+    },
+    {
+      "source_path": "control/v1/kill-switch-decision.json",
+      "fixture_path": "scripts/test/fixtures/shadow-archive-control/v1/kill-switch-decision.json",
+      "git_mode": "100644",
+      "git_blob": "005bd5b1d10ec06d73258600db773082f215510d",
+      "sha256": "f0e88e03633c28d4916fa3480c4a4d27bc815da05891dc3efd8bc9c08b544941",
+      "size_bytes": 1604
+    },
+    {
+      "source_path": "control/v1/kill-switch-policy.json",
+      "fixture_path": "scripts/test/fixtures/shadow-archive-control/v1/kill-switch-policy.json",
+      "git_mode": "100644",
+      "git_blob": "7fa389c5170d117e706bf562bc737e6e107cd349",
+      "sha256": "b46eebfeb9de37eb0ebdb8fb297e0e200b537d0ca08dcf28eab7f91ef603e799",
+      "size_bytes": 503
+    },
+    {
+      "source_path": "control/v1/risk-gates-decision.json",
+      "fixture_path": "scripts/test/fixtures/shadow-archive-control/v1/risk-gates-decision.json",
+      "git_mode": "100644",
+      "git_blob": "0860ae875d09388bf3adb4a8db947f77a076cca9",
+      "sha256": "8e13f844fad5280aedc21a7d4c9b4bcf43f8eb0b0dd41a32a5989ce1473e28d5",
+      "size_bytes": 1563
+    },
+    {
+      "source_path": "control/v1/risk-gates-policy.json",
+      "fixture_path": "scripts/test/fixtures/shadow-archive-control/v1/risk-gates-policy.json",
+      "git_mode": "100644",
+      "git_blob": "b8b0086215f10bbe267caeb82fbd46afc45976f2",
+      "sha256": "3d8f0802777b4d7a63ded72643aca5cc8afd7613b76b5463291ca0ea63607a7e",
+      "size_bytes": 1844
+    },
+    {
+      "source_path": "control/v1/sandbox-decision.json",
+      "fixture_path": "scripts/test/fixtures/shadow-archive-control/v1/sandbox-decision.json",
+      "git_mode": "100644",
+      "git_blob": "f53d8b02dc815f03225e2aafab1c85415a0ef381",
+      "sha256": "c3e89800147d55f7c726ec66c82031915a4220d3eb7867e143f60d7026223bbd",
+      "size_bytes": 1459
+    },
+    {
+      "source_path": "control/v1/sandbox-policy.json",
+      "fixture_path": "scripts/test/fixtures/shadow-archive-control/v1/sandbox-policy.json",
+      "git_mode": "100644",
+      "git_blob": "0c244e00c3220eb52e876c0e8caea445a4b70551",
+      "sha256": "4afb62e44fd3ad055d157ee23bfcf2917811b9ec05e4923eaa989d95d53c0a5e",
+      "size_bytes": 1829
+    }
+  ]
+}
