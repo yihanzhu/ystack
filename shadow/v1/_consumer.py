@@ -1048,8 +1048,9 @@ class Anchor:
                   after_parent.st_mode) == (state.st_dev, state.st_ino, state.st_uid, state.st_gid, state.st_mode), "E_STORE")
         parent.components[-1].before = after_parent
         directory = os.open("qualified-runtime", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent.fd)
-        manifest = []
+        directory_failure = None
         try:
+            manifest = []
             directory_state = _metadata(directory)
             _require(_store_values(os.geteuid(), os.getegid(), 0o700, True,
                 _stat_values(directory_state), *_acl_state(directory, self.resolver), sys.platform), "E_STORE")
@@ -1061,9 +1062,10 @@ class Anchor:
                 name = role + (f".{index:04d}" if role == "dyld_cache_files" else "")
                 target = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                                  0o600, dir_fd=directory)
-                work["runtime_files"] += 1
-                total, measured = 0, hashlib.sha256()
+                file_failure = None
                 try:
+                    work["runtime_files"] += 1
+                    total, measured = 0, hashlib.sha256()
                     os.lseek(source.fd, 0, os.SEEK_SET)
                     while total < length:
                         count = min(65536, length - total)
@@ -1092,8 +1094,11 @@ class Anchor:
                         _stat_values(target_state), *_acl_state(target, self.resolver), sys.platform), "E_STORE")
                     _require(_identity(target_state) == _identity(_metadata(target))
                              == _identity(_named_metadata(name, directory)), "E_STORE")
+                except BaseException as error:
+                    file_failure = error
+                    raise
                 finally:
-                    os.close(target)
+                    _close_capture_copy(target, work, work, "qualified-runtime/" + name, file_failure)
                 source.recheck("E_STORE")
                 manifest.append({"slot": role, "index": index, "locator": source.path,
                     "size_bytes": total, "sha256": measured.hexdigest()})
@@ -1107,8 +1112,13 @@ class Anchor:
                      and _identity(final_directory) == _identity(_named_metadata("qualified-runtime", parent.fd)), "E_STORE")
             parent.recheck("E_STORE")
             return manifest
+        except BaseException as error:
+            directory_failure = error
+            if isinstance(error, MemoryError):
+                work["runtime_accounting_incomplete"] = True
+            raise
         finally:
-            os.close(directory)
+            _close_capture_copy(directory, work, work, "qualified-runtime", directory_failure)
 
     def retain_storage(self, attempt_id, rows, failure, held=()):
         count = len(rows) + sum(len(item.components) for item in held)
@@ -1561,19 +1571,34 @@ def _capture_transfer_work(source, work, case_work):
 
 
 def _close_capture_copy(fd, work, case_work, site, failure):
-    for counts in (work, case_work):
-        counts["close_calls"] = counts.get("close_calls", 0) + 1
+    close_error = None
     try:
         os.close(fd)
     except OSError as error:
-        rows = work.setdefault("close_failures", [])
-        if len(rows) < 4096:
-            rows.append({"site": site, "category": type(error).__name__, "errno": error.errno})
-        else:
+        close_error = error
+    try:
+        for counts in ((work,) if case_work is work else (work, case_work)):
+            counts["close_calls"] = counts.get("close_calls", 0) + 1
+        if close_error is not None:
+            rows = work.setdefault("close_failures", [])
+            if len(rows) < 4096:
+                rows.append({"site": site, "category": type(close_error).__name__, "errno": close_error.errno})
+            else:
+                work["close_observations_incomplete"] = True
+    except (OSError, ValueError, TypeError, Refusal, MemoryError) as observed:
+        try:
             work["close_observations_incomplete"] = True
-        if failure is None or (getattr(error, "_scope_signal_cancel", False)
-                               and not getattr(failure, "_scope_signal_cancel", False)):
+        except MemoryError:
+            pass
+        if (getattr(observed, "_scope_signal_cancel", False)
+                and not getattr(failure, "_scope_signal_cancel", False)
+                and not getattr(close_error, "_scope_signal_cancel", False)):
             raise
+        if failure is None and close_error is None:
+            raise
+    if close_error is not None and (failure is None or
+            getattr(close_error, "_scope_signal_cancel", False) and not getattr(failure, "_scope_signal_cancel", False)):
+        raise close_error
 
 
 def _private_capture_observations(value, work, case_work):
@@ -1858,14 +1883,14 @@ class _HeldStoreRead:
                          and (not exported or work["export_files"] < 64 and case_work["export_files"] < 16), "E_LIMIT")
                 target = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                                  0o600, dir_fd=directory)
-                work["files"] += 1
-                case_work["files"] += 1
-                work["export_files"] += int(exported)
-                case_work["export_files"] += int(exported)
-                work["calls"][name] = work["calls"].get(name, 0) + 1
                 size = 0
                 file_failure = None
                 try:
+                    work["files"] += 1
+                    case_work["files"] += 1
+                    work["export_files"] += int(exported)
+                    case_work["export_files"] += int(exported)
+                    work["calls"][name] = work["calls"].get(name, 0) + 1
                     for chunk in chunks:
                         view = memoryview(chunk)
                         while view:
@@ -1893,8 +1918,13 @@ class _HeldStoreRead:
                              and _identity(final) == _identity(named), "E_STORE")
                 except BaseException as error:
                     file_failure = error
-                    work.setdefault("copy_failure", {"site": name, "category": type(error).__name__,
-                        "errno": getattr(error, "os_errno", getattr(error, "errno", None))})
+                    try:
+                        work.setdefault("copy_failure", {"site": name, "category": type(error).__name__,
+                            "errno": getattr(error, "os_errno", getattr(error, "errno", None))})
+                        if isinstance(error, MemoryError):
+                            work["copy_accounting_incomplete"] = True
+                    except MemoryError:
+                        raise error
                     raise
                 finally:
                     _close_capture_copy(target, work, case_work, name, file_failure)
@@ -1917,8 +1947,13 @@ class _HeldStoreRead:
             parent.recheck("E_STORE")
         except BaseException as error:
             directory_failure = error
-            work.setdefault("copy_failure", {"site": launch, "category": type(error).__name__,
-                "errno": getattr(error, "os_errno", getattr(error, "errno", None))})
+            try:
+                work.setdefault("copy_failure", {"site": launch, "category": type(error).__name__,
+                    "errno": getattr(error, "os_errno", getattr(error, "errno", None))})
+                if isinstance(error, MemoryError):
+                    work["copy_accounting_incomplete"] = True
+            except MemoryError:
+                raise error
             raise
         finally:
             _close_capture_copy(directory, work, case_work, launch, directory_failure)

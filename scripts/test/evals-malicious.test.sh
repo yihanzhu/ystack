@@ -1635,6 +1635,9 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
         runtime_parent = area/'runtime-recorder';runtime_parent.mkdir(mode=0o700)
         runtime_limit = area/'runtime-limit';runtime_limit.mkdir(mode=0o700)
         runtime_limit_failed = area/'runtime-limit-failed';runtime_limit_failed.mkdir(mode=0o700)
+        runtime_counter_parents={}
+        for fault in ('runtime_files','close_calls','sha'):
+            path=area/('runtime-counter-'+fault);path.mkdir(mode=0o700);runtime_counter_parents[fault]=path
         runtime_hold = consumer._open_held(str(runtime_parent),True,
             consumer._store_rule(os.getuid(),os.getgid(),0o700,True),'E_STORE')
         try:
@@ -1677,7 +1680,7 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
             total_runtime = sum(len(value) for role,value in runtime_raw.items() if role != 'dyld_cache_files')
             total_runtime += sum(map(len,runtime_raw['dyld_cache_files']))
             assert runtime_work == {'runtime_read_bytes':total_runtime,'runtime_write_bytes':total_runtime,
-                'runtime_physical_bytes':total_runtime,'runtime_files':12}
+                'runtime_physical_bytes':total_runtime,'runtime_files':12,'close_calls':13}
             host._capture_process = {'complete':True,'runtime_locators':runtime_locators}
             descriptors = {role:[item.fd for item in value] if type(value) is list else value.fd
                            for role,value in runtime_sources.items()}
@@ -1751,6 +1754,37 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
                         'runtime_actual_fixture_copy_bytes':boundary_work['runtime_physical_bytes']-prestate,
                         'runtime_crossing':crossing},sort_keys=True))
                 finally:held_parent.close()
+            for fault,parent_path in runtime_counter_parents.items():
+                held_parent=consumer._open_held(str(parent_path),True,
+                    consumer._store_rule(os.getuid(),os.getgid(),0o700,True),'E_STORE')
+                class RuntimeCounters(dict):
+                    def __setitem__(self,key,value):
+                        if key==fault:raise MemoryError('ordinary qualified-slot counter allocation fixture')
+                        return super().__setitem__(key,value)
+                counter_work=RuntimeCounters();opened=[]
+                actual_open=consumer.os.open;actual_sha=consumer.hashlib.sha256
+                def counter_open(*args,**kwargs):
+                    fd=actual_open(*args,**kwargs);opened.append(fd);return fd
+                def counter_sha(*args,**kwargs):raise MemoryError('ordinary qualified-slot hash allocation fixture')
+                try:
+                    consumer.os.open=counter_open
+                    if fault=='sha':consumer.hashlib.sha256=counter_sha
+                    try:runtime_anchor.copy_runtime_slots(held_parent,runtime_sources,counter_work)
+                    except MemoryError:pass
+                    else:raise AssertionError('qualified runtime allocation failure not reached')
+                finally:
+                    consumer.os.open=actual_open;consumer.hashlib.sha256=actual_sha;held_parent.close()
+                assert len(opened)==2 and counter_work['runtime_accounting_incomplete']
+                for fd in opened:
+                    try:os.fstat(fd)
+                    except OSError as error:assert error.errno==9
+                    else:raise AssertionError('qualified runtime allocation failure leaked descriptor')
+                retained=[{'name':path.name,'inode':path.stat().st_ino,'size':path.stat().st_size,
+                           'mode':path.stat().st_mode & 0o777} for path in (parent_path/'qualified-runtime').iterdir()]
+                assert len(retained)==1
+                assert retained[0]['size']==(len(runtime_raw['dyld_cache_files'][0]) if fault=='close_calls' else 0)
+                print(json.dumps({'qualified_slot_allocation_failure':fault,'retained':retained,
+                    'actual_work_with_incomplete_counter_flag':counter_work,'opened_and_closed_fds':opened},sort_keys=True))
         finally:
             for value in runtime_sources.values():
                 for item in value if type(value) is list else [value]:item.close()
@@ -2026,7 +2060,7 @@ for label in cases:
                 construct=lambda anchor,attempt_id,request,capture:host._capture_completion_values(attempt_id,request,capture)))
         private_parents=[]
         if label=='positive':
-            for ordinal in range(3):
+            for ordinal in range(5):
                 parent=area/('private-'+str(ordinal));parent.mkdir(mode=0o700);parent.chmod(0o700)
                 private_parents.append(parent)
         native=None;held=None;refused=False
@@ -2043,38 +2077,59 @@ for label in cases:
                     capture_files=held.snapshots,capture_storage_rows=held.storage_rows)
                 anchor.capture_completion_owner.transfer=lambda *_:None
                 work={};retained=[]
-                actual_write=consumer.os.write
+                actual_write=consumer.os.write;actual_open=consumer.os.open
                 for ordinal,parent_path in enumerate(private_parents):
                     parent=consumer._open_held(str(parent_path),True,
                         consumer._store_rule(os.getuid(),os.getgid(),0o700,True),'E_STORE')
-                    state={'prefix_written':False}
+                    state={'prefix_written':False,'opened':[]}
+                    class CaseCounters(dict):
+                        def __setitem__(self,key,value):
+                            if ordinal==2 and key=='files' or ordinal==3 and key=='close_calls':
+                                raise MemoryError('ordinary private-copy counter allocation failure')
+                            return super().__setitem__(key,value)
+                    if ordinal in (2,3):
+                        state_key=str(parent.before.st_dev)+':'+str(parent.before.st_ino)
+                        work['cases'][state_key]=CaseCounters({key:0 for key in ('files','read_bytes','write_bytes',
+                            'physical_bytes','export_read_bytes','export_write_bytes','export_physical_bytes','export_files')})
+                    def opening(name,*args,**kwargs):
+                        fd=actual_open(name,*args,**kwargs);state['opened'].append(fd);return fd
                     def partial_write(fd,data):
                         if state['prefix_written']:raise OSError(5,'ordinary retained private-copy failure')
                         state['prefix_written']=True
                         return actual_write(fd,data[:3])
                     try:
+                        consumer.os.open=opening
                         if ordinal<2:consumer.os.write=partial_write
                         try:native.copy_capture(parent,request,'reproduction',work)
                         except OSError as error:assert ordinal<2 and error.errno==5
-                        else:assert ordinal==2
+                        except MemoryError:assert ordinal in (2,3)
+                        else:assert ordinal==4
                     finally:
-                        consumer.os.write=actual_write;parent.close()
+                        consumer.os.write=actual_write;consumer.os.open=actual_open;parent.close()
+                    for opened_fd in state['opened']:
+                        try:os.fstat(opened_fd)
+                        except OSError as error:assert error.errno==9
+                        else:raise AssertionError('private-copy counter failure leaked descriptor')
                     files=sorted((parent_path/'reproduction').iterdir())
                     rows=[{'name':path.name,'inode':path.stat().st_ino,'size':path.stat().st_size,
                            'mode':path.stat().st_mode & 0o777} for path in files]
                     if ordinal<2:
                         assert len(files)==1 and files[0].read_bytes()==original_capture[:3]
                         assert rows[0]['size']==3 and rows[0]['mode']==0o600
+                    elif ordinal in (2,3):
+                        assert len(files)==1 and work['copy_accounting_incomplete']
+                        assert rows[0]['size']==(0 if ordinal==2 else len(original_capture))
+                        if ordinal==3:assert work['close_observations_incomplete']
                     else:assert {row['name'] for row in rows}=={
                         'capture.json','complete.json','origin-observation.json','consumer-observations.json'}
                     retained.append(rows)
                     physical=sum(row['size'] for group in retained for row in group)
                     assert work['physical_bytes']==work['write_bytes']==physical
                     assert work['files']==sum(len(group) for group in retained)
-                assert len(work['cases'])==3 and work['physical_bytes']>6
+                assert len(work['cases'])==5 and work['physical_bytes']>6
                 assert all((private_parents[index]/'reproduction/capture.json').stat().st_ino==retained[index][0]['inode']
                            for index in (0,1))
-                print(json.dumps({'two_failed_copies_retained_before_later_positive':retained,
+                print(json.dumps({'two_failed_copies_and_two_counter_failures_retained_before_later_positive':retained,
                     'actual_shared_private_copy_work':work,
                     'later_copy_is_not_overall_recording_eligibility':True,
                     'additional_fixture_prefix_read_bytes':6,'additional_fixture_prefix_slice_copy_bytes':6,
