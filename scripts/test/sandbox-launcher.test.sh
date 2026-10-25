@@ -35,9 +35,13 @@ import hashlib
 import json
 import datetime
 from pathlib import Path
+import os
 import re
+import select
+import signal
 import subprocess
 import tempfile
+import time
 
 with tempfile.TemporaryDirectory(prefix='ystack-rename-declaration-') as temporary:
     area = Path(temporary)
@@ -49,34 +53,94 @@ with tempfile.TemporaryDirectory(prefix='ystack-rename-declaration-') as tempora
           + 'rename-declaration source-end', flush=True)
 
     def compile_fact(name, arguments):
-        stdout = area / (name + '.stdout')
-        stderr = area / (name + '.stderr')
         environment = {'LC_ALL': 'C', 'PATH': '/usr/bin:/bin'}
         print(json.dumps({'rename_declaration_command': name, 'argv': arguments,
                           'env': environment,
                           'started': datetime.datetime.now(datetime.timezone.utc).isoformat()}), flush=True)
-        timed_out = False
-        with stdout.open('wb') as out, stderr.open('wb') as err:
+        outputs = {'stdout': bytearray(), 'stderr': bytearray()}
+        complete = {'stdout': False, 'stderr': False}
+        reason = stop_result = status = process = None
+        streams = {}
+
+        def stop_compiler():
+            nonlocal stop_result
+            if stop_result is None and process is not None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    stop_result = {'return': 0, 'errno': None}
+                except OSError as error:
+                    stop_result = {'return': -1, 'errno': error.errno}
+
+        try:
+            process = subprocess.Popen(arguments, stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment,
+                start_new_session=True)
+            streams = {process.stdout.fileno(): ('stdout', process.stdout),
+                       process.stderr.fileno(): ('stderr', process.stderr)}
+            deadline = time.monotonic() + 30
+            while streams:
+                if reason is not None and stop_result is None:
+                    stop_compiler()
+                    deadline = time.monotonic() + 2
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    if reason is None:
+                        reason = 'timeout'
+                        continue
+                    break
+                ready, _, _ = select.select(list(streams), [], [], min(remaining, 0.1))
+                for fd in ready:
+                    label, pipe = streams[fd]
+                    room = 4 * 1024 * 1024 - len(outputs[label])
+                    raw = os.read(fd, min(65536, room))
+                    if raw:
+                        outputs[label].extend(raw)
+                        if len(outputs[label]) == 4 * 1024 * 1024:
+                            reason = reason or 'output_limit_reached'
+                            del streams[fd]
+                            pipe.close()
+                    else:
+                        complete[label] = True
+                        del streams[fd]
+                        pipe.close()
+            if reason is not None:
+                stop_compiler()
             try:
-                result = subprocess.run(arguments, stdin=subprocess.DEVNULL,
-                                        stdout=out, stderr=err, env=environment, timeout=30)
-                status = result.returncode
+                status = process.wait(timeout=2 if reason else max(0.01, deadline-time.monotonic()))
             except subprocess.TimeoutExpired:
-                timed_out = True
-                status = None
-        print(json.dumps({'rename_declaration_command': name, 'exit': status,
-                          'timeout': timed_out,
-                          'finished': datetime.datetime.now(datetime.timezone.utc).isoformat()}), flush=True)
-        for label, path in (('stdout', stdout), ('stderr', stderr)):
-            size = path.stat().st_size
-            if size > 4 * 1024 * 1024:
-                raise SystemExit('rename declaration output exceeds fixed 4MiB log bound')
-            print('rename-declaration ' + name + ' ' + label + '-begin', flush=True)
-            print(path.read_bytes().decode('utf-8', 'strict'), end='', flush=True)
-            print('\nrename-declaration ' + name + ' ' + label + '-end', flush=True)
-        if timed_out or status != 0:
-            raise SystemExit('rename declaration command failed')
-        return stdout.read_text()
+                reason = reason or 'wait_timeout'
+                stop_compiler()
+                try:
+                    status = process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    reason = 'unreaped_after_stop'
+        except OSError as error:
+            reason = 'os_error'
+            print(json.dumps({'rename_declaration_errno': error.errno}), flush=True)
+            stop_compiler()
+            if process is not None:
+                try:
+                    status = process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    reason = 'unreaped_after_stop'
+        finally:
+            for _, pipe in streams.values():
+                pipe.close()
+            print(json.dumps({'rename_declaration_command': name, 'exit': status,
+                'stop': stop_result, 'reason': reason, 'EOF_observed': complete,
+                'incomplete': reason is not None or not all(complete.values()),
+                'observed_bytes': {key: len(value) for key, value in outputs.items()},
+                'unobserved_suffix': {key: 'NONE' if value else 'UNKNOWN'
+                                      for key, value in complete.items()},
+                'finished': datetime.datetime.now(datetime.timezone.utc).isoformat()}), flush=True)
+            for label, raw in outputs.items():
+                print('rename-declaration ' + name + ' ' + label + '-hex-begin', flush=True)
+                for offset in range(0, len(raw), 4096):
+                    print(raw[offset:offset+4096].hex(), flush=True)
+                print('rename-declaration ' + name + ' ' + label + '-hex-end', flush=True)
+        if reason is not None or status != 0 or not all(complete.values()):
+            raise SystemExit('rename declaration command failed or incomplete')
+        return outputs['stdout'].decode('utf-8', 'strict')
 
     preprocessed = compile_fact('preprocess', ['/usr/bin/cc', '-std=gnu11', '-E', '-dD', str(source)])
     markers = set(re.findall(r'^#\s+\d+\s+"([^"]+)"', preprocessed, re.MULTILINE))
