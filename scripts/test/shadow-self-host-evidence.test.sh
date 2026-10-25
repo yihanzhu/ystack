@@ -473,11 +473,31 @@ require_bundle_present() {
 # mismatch, naming it on stderr.
 # ===========================================================================
 
+control_file_mode() {
+  local mode
+  case "$platform" in
+    Darwin:*) mode=$(/usr/bin/stat -f '%Lp' "$1" 2>/dev/null) || return 1 ;;
+    Linux:*) mode=$(/usr/bin/stat -c '%a' "$1" 2>/dev/null) || return 1 ;;
+    *) return 1 ;;
+  esac
+  case "$mode" in
+    [0-7]|[0-7][0-7]|[0-7][0-7][0-7]|[0-7][0-7][0-7][0-7]) ;;
+    *) return 1 ;;
+  esac
+  /usr/bin/printf '%s' "$mode"
+}
+control_file_nonexecutable() {
+  local mode
+  mode=$(control_file_mode "$1") || return 1
+  [ "$((8#$mode & 0111))" -eq 0 ]
+}
+
 control_fixture="$root/scripts/test/fixtures/shadow-archive-control/v1"
 control_provenance_sha=9ccb7fd6a84d6df0f3d1917db3edf706c2caf1f64c814462fcd7fa206e9bc8ac
 trusted_control_provenance="$tmp/trusted-control-provenance.json"
 [ -f "$control_fixture/provenance.json" ] && [ ! -L "$control_fixture/provenance.json" ] &&
   [ ! -x "$control_fixture/provenance.json" ] &&
+  control_file_nonexecutable "$control_fixture/provenance.json" &&
   [ "$(sha_file "$control_fixture/provenance.json")" = "$control_provenance_sha" ] || fail 'fixed provenance raw pin'
 /bin/cp "$control_fixture/provenance.json" "$trusted_control_provenance"
 /bin/chmod 0400 "$trusted_control_provenance"
@@ -540,6 +560,7 @@ check_control_fixture_data() {
     count=$((count + 1))
     [ -f "$f" ] && [ ! -L "$f" ] && [ ! -x "$f" ] ||
       { control_fixture_refusal fixture-type; return 1; }
+    control_file_nonexecutable "$f" || { control_fixture_refusal fixture-type; return 1; }
     name=${f##*/}
     [ "$name" = provenance.json ] && continue
     size=$("$jq_bin" -er --arg p "scripts/test/fixtures/shadow-archive-control/v1/$name" \
@@ -557,6 +578,7 @@ check_control_fixture() {
   [ -d "$d" ] && [ ! -L "$d" ] && [ -f "$d/provenance.json" ] &&
     [ ! -L "$d/provenance.json" ] && [ ! -x "$d/provenance.json" ] ||
     { control_fixture_refusal fixture-shape; return 1; }
+  control_file_nonexecutable "$d/provenance.json" || { control_fixture_refusal fixture-shape; return 1; }
   [ "$(sha_file "$d/provenance.json")" = "$control_provenance_sha" ] ||
     { control_fixture_refusal fixture-pin; return 1; }
   check_control_fixture_data "$d"
@@ -590,7 +612,7 @@ control_references_match() {
 
 run_control_checks() {
   local copy="$tmp/control-fixture-copy" current="$tmp/current-control-copy"
-  local name filter layer expected file mutation diagnostic changed=0
+  local name filter layer expected file mutation diagnostic mode actual_mode changed=0
   check_control_fixture "$control_fixture" || fail 'historical control fixture'
   control_references_match "$evdir/control-policy-set.json" "$control_fixture" || fail 'historical control references'
   control_references_match "$root/control/v1/control-policy-set.json" "$root/control/v1" || fail 'current control tuple'
@@ -679,6 +701,30 @@ run_control_checks() {
     /usr/bin/grep -qx fixture-shape "$tmp/control-refusal" || fail 'wrong provenance shape refusal'
     fresh_control_copy
     pass "provenance $mutation: shape refusal and restored positive"
+  done
+  for file in provenance.json sandbox-policy.json; do
+    for mode in 0654 0645; do
+      fresh_control_copy
+      if [ "$file" = sandbox-policy.json ]; then
+        check_control_fixture_data "$copy" || fail 'lower mode baseline'
+      fi
+      /bin/chmod "$mode" "$copy/$file"
+      actual_mode=$(control_file_mode "$copy/$file") || fail 'mode query refused'
+      [ "$((8#$actual_mode))" -eq "$((8#$mode))" ] || fail 'wrong actual execute-bit mutant mode'
+      [ "$(sha_file "$copy/$file")" = "$(sha_file "$control_fixture/$file")" ] &&
+        [ "$(sha_file "$copy/provenance.json")" = "$control_provenance_sha" ] || fail 'execute-bit mutant changed pinned bytes'
+      if [ "$file" = provenance.json ]; then
+        if check_control_fixture "$copy" 2>"$tmp/control-refusal"; then fail 'provenance execute bit accepted'; fi
+        diagnostic=fixture-shape
+      else
+        if check_control_fixture_data "$copy" 2>"$tmp/control-refusal"; then fail 'lower data execute bit accepted'; fi
+        diagnostic=fixture-type
+      fi
+      /usr/bin/grep -qx "$diagnostic" "$tmp/control-refusal" || fail 'wrong execute-bit refusal layer'
+      /bin/chmod 0644 "$copy/$file"
+      check_control_fixture "$copy" || fail 'execute-bit positive restoration'
+      pass "$file actual mode $actual_mode: execute-bit $diagnostic refusal and positive restoration"
+    done
   done
   /bin/ln -s "$control_fixture" "$tmp/control-fixture-link"
   if check_control_fixture "$tmp/control-fixture-link" 2>"$tmp/control-refusal"; then fail 'symlink fixture root accepted'; fi
