@@ -989,7 +989,7 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
                 assert json.loads(consumer_observations) == {'attempt_id':attempt_id,
                     'request_sha256':host.sha256_hex(request),'storage':held.storage_rows,
                     'storage_reads':export_anchor.private_observations['storage_reads'],
-                    'identity_context':anchor.identity_context,'entropy':{},'clocks':consumer._clock_observations}
+                    'identity_context':anchor.identity_context,'preparation':{},'entropy':{},'clocks':consumer._clock_observations}
                 copied = private/launch/'sandbox-export.bin'
                 assert copied.stat().st_size == len(export) and copied.stat().st_mode & 0o777 == 0o400
                 measured = consumer.hashlib.sha256()
@@ -1192,6 +1192,14 @@ def load(name,path):
 replay = load('projection_replay',root/'evals/v1/replay-malicious.py')
 launch = load('projection_launch',root/'shadow/v1/enforced-reproduction.py')
 preparation = load('projection_preparation',root/'preparation/v1/prepare-candidate.py')
+runtime_wire = {'git_version':b'git version ordinary\n'.hex(),'python_version':'ordinary python','unicode_version':'16.0.0'}
+assert replay._preparation_runtime_values(root,runtime_wire) == dict(runtime_wire,git_version=b'git version ordinary\n')
+for label,change in [('missing',lambda v:v.pop('git_version')),('extra',lambda v:v.update(argv=[])),
+        ('wrong-type',lambda v:v.update(python_version=True)),('over-limit',lambda v:v.update(git_version='00'*129))]:
+    changed = dict(runtime_wire);change(changed)
+    try:replay._preparation_runtime_values(root,changed)
+    except Exception as error:assert type(error).__name__ == 'Refusal',label
+    else:raise AssertionError('runtime values '+label)
 principal = 1 if launch.os.getuid() != 1 and launch.os.geteuid() != 1 else 2
 actual_context = launch.c._anchor_identity_context(principal,launch.os.getgid(),None,None)
 assert replay._identity_context_values(root,actual_context,principal,launch.os.getgid()) == actual_context
@@ -1234,6 +1242,47 @@ for label,change in [('missing',lambda v:v.pop('uid')),('extra',lambda v:v.updat
     except Exception as error:assert type(error).__name__ == 'Refusal',label
     else:raise AssertionError('identity context '+label)
 print('ok actual uid/gid acquisition/offline membership owners; Darwin wrapper raw reply and overflow forwarding; synthetic UUID wire only')
+with preparation.tempfile.TemporaryDirectory(prefix='ystack-private-recording-parent-') as directory:
+    work = Path(directory).resolve()
+    holder = launch.stable_directory(work)
+    try:
+        (work/'owned-output').write_bytes(b'ordinary owned workspace output')
+        try:holder.held.recheck('E_STORE')
+        except launch.c.Refusal:pass
+        else:raise AssertionError('old bookkeeping snapshot unexpectedly fresh')
+        holder._recording_parent().recheck('E_STORE')
+        work.chmod(0o750)
+        try:holder._recording_parent()
+        except launch.Refusal:pass
+        else:raise AssertionError('recording parent accepted mode drift')
+    finally:holder.close()
+print('ok actual StableDirectory recorder boundary accepts owned bookkeeping and rejects mode drift')
+with preparation.tempfile.TemporaryDirectory(prefix='ystack-preparation-relay-') as directory:
+    work = Path(directory).resolve();scratch_root = work/'preparation-scratch';scratch_root.mkdir(mode=0o700)
+    holder = launch.stable_directory(work)
+    private_owner = load('private_preparation_capture_producer',root/'preparation/v1/prepare-candidate.py')
+    boundary = private_owner.hold_boundary(scratch_root,'directory',private_owner.time.monotonic()+30,private_leaf=True)
+    ctx = private_owner.create_context(types.SimpleNamespace(operation='prepare',scratch=str(scratch_root),
+        _boundaries={'scratch':boundary}),private_owner.time.monotonic()+30)
+    input_bytes,response_bytes = b'ordinary input bytes',b'ordinary response bytes'
+    ctx.input_hashes = {'input':private_owner.sha256(input_bytes),'response':private_owner.sha256(response_bytes)}
+    private_owner._preparation_observations['runtime_values'].append(runtime_wire)
+    old_acl = launch.c._acl_state
+    launch.c._acl_state = lambda *_:([],None) if sys.platform == 'darwin' else (None,None)
+    try:
+        private_owner._write_preparation_observations(ctx,True)
+        raw = (ctx.scratch/'capture.json').read_bytes()
+        consumer_anchor = launch.c.Anchor({},b'',[],{},('',[]),('',[]),None)
+        before_modules = set(sys.modules)
+        retained_capture = holder._retain_preparation(consumer_anchor,'preparation-scratch','prepare',input_bytes,response_bytes)
+        assert set(sys.modules) == before_modules
+        assert retained_capture == replay._preparation_capture_values(root,raw,ctx.scratch.name,'prepare',input_bytes,response_bytes)
+        assert consumer_anchor.recording_work['read_bytes'] == 8*len(raw)
+        assert consumer_anchor.private_observations['preparation']['prepare'] == retained_capture
+        print('ok private preparation producer/held relay before cleanup/offline parser; synthetic version-wire transport fixture only')
+    finally:
+        launch.c._acl_state = old_acl
+        ctx.close_boundaries();holder.close()
 with preparation.tempfile.TemporaryDirectory(prefix='ystack-preparation-name-values-') as directory:
     scratch = Path(directory).resolve()
     deadline = preparation.time.monotonic()+30
@@ -1247,7 +1296,7 @@ with preparation.tempfile.TemporaryDirectory(prefix='ystack-preparation-name-val
         return value
     preparation.secrets.token_hex = actual_entropy_with_one_collision
     try:
-        context = preparation.create_context(types.SimpleNamespace(scratch=str(scratch),
+        context = preparation.create_context(types.SimpleNamespace(operation='prepare',scratch=str(scratch),
             _boundaries={'scratch':boundary}),deadline)
         try:
             retained = preparation._preparation_names[-1]
@@ -1256,6 +1305,37 @@ with preparation.tempfile.TemporaryDirectory(prefix='ystack-preparation-name-val
             assert context.scratch.name == preparation._preparation_names_values(observed,[True,False])
             assert context.scratch.name == replay._preparation_workspace_values(root,retained)
             assert context.scratch.is_dir() and len(observed) == 2
+            repository = scratch/'repository';repository.mkdir(mode=0o700)
+            for name in ('objects','objects/info','objects/pack','refs','refs/heads','refs/tags'):
+                (repository/name).mkdir(mode=0o700)
+            source_files = {'HEAD':b'ref: refs/heads/candidate\n','config':b'[core]\n bare = true\n',
+                            'refs/heads/candidate':b'1'*40+b'\n'}
+            for name,raw in source_files.items():(repository/name).write_bytes(raw)
+            context.args.candidate_repository = str(repository)
+            context.boundaries['candidate_repository'] = preparation.hold_boundary(repository,'directory',deadline,private_leaf=True)
+            context.algorithm = 'sha1'
+            start = len(preparation._preparation_observations['storage'])
+            facts,actual_storage = preparation.enumerate_storage(context)
+            storage_events = preparation._preparation_observations['storage'][start:]
+            assert replay._preparation_storage_values(root,storage_events,source_files,'sha1') == [actual_storage]
+            assert set(facts) == set(source_files)
+            for label,change in [('missing',lambda v:v[0].pop('stat')),
+                    ('extra',lambda v:v[0].update(extra=True)),
+                    ('wrong-type',lambda v:v[0]['stat'].update(ino=True)),
+                    ('invalid',lambda v:v.pop())]:
+                changed = copy.deepcopy(storage_events);change(changed)
+                try:replay._preparation_storage_values(root,changed,source_files,'sha1')
+                except Exception as error:assert type(error).__name__ == 'Refusal',label
+                else:raise AssertionError('preparation storage '+label)
+            native_ledger = preparation.dataclasses.asdict(context.ledger)
+            preparation._write_preparation_observations(context,False)
+            private_capture = context.scratch/'capture.json'
+            assert private_capture.stat().st_mode & 0o777 == 0o400
+            captured = preparation.strict_json(private_capture.read_bytes(),'E_INPUT')
+            assert captured['complete'] is False and captured['entropy']['preparation_names'][-1] == retained
+            assert preparation.dataclasses.asdict(context.ledger) == native_ledger
+            assert context.recording_work['write_bytes'] == private_capture.stat().st_size
+            print('ok actual preparation stat acquisition/storage owner/private capture; incomplete fixture never seeded')
             for label,rows,token in [
                     ('missing',[{'entropy':observed[0]}],'E_INPUT'),
                     ('extra',[{'entropy':observed[0],'errno':None,'extra':1}],'E_INPUT'),

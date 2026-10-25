@@ -32,6 +32,33 @@ _clock_observations = {"wall": [], "monotonic": []}
 _clock_complete = True
 _preparation_names = []
 _preparation_names_complete = True
+_preparation_observations = {"storage": [], "runtime_values": []}
+_preparation_observation_bytes = 0
+_preparation_observations_complete = True
+
+
+def _retain_preparation_observation(group, value):
+    global _preparation_observation_bytes, _preparation_observations_complete
+    try:
+        size = 1
+        for piece in json.JSONEncoder(ensure_ascii=False,sort_keys=True,separators=(",",":"),allow_nan=False).iterencode(value):
+            if len(piece) > 1024 * 1024:
+                _preparation_observations_complete = False
+                return
+            size += sum(1 if ord(char) < 128 else 2 if ord(char) < 2048 else
+                        3 if ord(char) < 65536 else 4 for char in piece)
+            if _preparation_observation_bytes + size > 1024 * 1024:
+                _preparation_observations_complete = False
+                return
+        _preparation_observations[group].append(value)
+        _preparation_observation_bytes += size
+    except (MemoryError, UnicodeError, ValueError):
+        _preparation_observations_complete = False
+
+
+def _storage_stat_values(value):
+    return {key: getattr(value, "st_" + key) for key in
+            ("dev", "ino", "mode", "uid", "gid", "nlink", "size", "mtime_ns", "ctime_ns")}
 
 
 def _clock_value(site, value, kind):
@@ -559,16 +586,26 @@ def boundaries_overlap(boundaries: Iterable[HeldBoundary]) -> None:
                 raise Refusal("E_IDENTITY", 2)
 
 
-def require_private_dir(path: Path, *, exists: bool = True) -> os.stat_result | None:
+def _private_directory_values(value, euid):
+    return (type(euid) is int and 0 <= euid <= 0xffffffff
+            and stat.S_ISDIR(value["mode"]) and not stat.S_ISLNK(value["mode"])
+            and value["uid"] == euid and not stat.S_IMODE(value["mode"]) & 0o077)
+
+
+def require_private_dir(path: Path, *, exists: bool = True, _observation=None) -> os.stat_result | None:
     try:
         st = os.lstat(path)
     except FileNotFoundError:
         if exists:
             raise Refusal("E_IDENTITY", 2)
         return None
-    if not stat.S_ISDIR(st.st_mode) or stat.S_ISLNK(st.st_mode) or st.st_uid != os.geteuid():
+    if not stat.S_ISDIR(st.st_mode) or stat.S_ISLNK(st.st_mode):
         raise Refusal("E_IDENTITY", 2)
-    if stat.S_IMODE(st.st_mode) & 0o077:
+    euid = os.geteuid()
+    value = _storage_stat_values(st)
+    if _observation is not None:
+        _observation.update(stat=value,euid=euid)
+    if not _private_directory_values(value,euid):
         raise Refusal("E_IDENTITY", 2)
     return st
 
@@ -1025,22 +1062,53 @@ def open_relative_file(root_fd: int, relative: str) -> int:
         os.close(current)
 
 
+def _file_fact_identity_values(value):
+    return (value["dev"],value["ino"],stat.S_IFMT(value["mode"]),value["uid"],value["nlink"],
+            value["size"],value["mtime_ns"],value["ctime_ns"])
+
+
+def _storage_stat_checked(value):
+    if (type(value) is not dict or set(value) != {"dev","ino","mode","uid","gid","nlink","size","mtime_ns","ctime_ns"}
+            or any(type(number) is not int for number in value.values())):
+        raise Refusal("E_STORAGE")
+    return value
+
+
+def _file_admission_values(value, euid):
+    return (type(euid) is int and 0 <= euid <= 0xffffffff
+            and stat.S_ISREG(value["mode"]) and not stat.S_ISLNK(value["mode"])
+            and value["uid"] == euid and value["nlink"] == 1)
+
+
+def _file_fact_values(relative, before, after, size, measured):
+    _storage_stat_checked(before);_storage_stat_checked(after)
+    if _file_fact_identity_values(before) != _file_fact_identity_values(after):
+        raise Refusal("E_STORAGE")
+    return FileFact(relative,stat.S_IMODE(before["mode"]),size,measured,before["dev"],before["ino"],
+                    before["uid"],before["nlink"],before["mtime_ns"],before["ctime_ns"])
+
+
+def _storage_entry_values(relative, directory, mode, size=None, measured=None):
+    value = {"path":relative,"type":"directory" if directory else "file","mode":f"{mode:04o}"}
+    if not directory:
+        value.update(size_bytes=size,sha256=measured)
+    return value
+
+
 def file_fact(ctx: Context, relative: str, maximum: int) -> FileFact:
     try:
         fd = open_relative_file(ctx.boundaries["candidate_repository"].fd, relative)
         st = os.fstat(fd)
-        if not stat.S_ISREG(st.st_mode) or stat.S_ISLNK(st.st_mode) or st.st_uid != os.geteuid() or st.st_nlink != 1:
+        if not stat.S_ISREG(st.st_mode) or stat.S_ISLNK(st.st_mode):
+            raise Refusal("E_STORAGE")
+        euid = os.geteuid()
+        if not _file_admission_values(_storage_stat_values(st),euid):
             raise Refusal("E_STORAGE")
         digest, size, _ = measure_fd(fd, maximum, ctx.deadline)
         after = os.fstat(fd)
-        identity = (st.st_dev, st.st_ino, stat.S_IFMT(st.st_mode), st.st_uid, st.st_nlink,
-                    st.st_size, st.st_mtime_ns, st.st_ctime_ns)
-        identity_after = (after.st_dev, after.st_ino, stat.S_IFMT(after.st_mode), after.st_uid,
-                          after.st_nlink, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
-        if identity != identity_after:
-            raise Refusal("E_STORAGE")
-        return FileFact(relative, stat.S_IMODE(st.st_mode), size, digest, st.st_dev, st.st_ino,
-                        st.st_uid, st.st_nlink, st.st_mtime_ns, st.st_ctime_ns)
+        _retain_preparation_observation("storage", {"site": "file_fact", "name": os.fsencode(relative).hex(),
+            "before": _storage_stat_values(st), "after": _storage_stat_values(after),"euid":euid})
+        return _file_fact_values(relative,_storage_stat_values(st),_storage_stat_values(after),size,digest)
     except Refusal:
         raise
     except OSError as exc:
@@ -1078,7 +1146,9 @@ def allowed_storage_path(relative: str, algorithm: str) -> tuple[str | None, boo
 def enumerate_storage(ctx: Context) -> tuple[dict[str, FileFact], list[dict[str, Any]]]:
     ctx.recheck_boundaries()
     repository = Path(ctx.args.candidate_repository)
-    root_st = require_private_dir(repository)
+    root_observation = {}
+    root_st = require_private_dir(repository,_observation=root_observation)
+    _retain_preparation_observation("storage", {"site":"enumerate_storage.begin",**root_observation})
     assert root_st is not None
     facts: dict[str, FileFact] = {}
     observation: list[dict[str, Any]] = []
@@ -1099,8 +1169,11 @@ def enumerate_storage(ctx: Context) -> tuple[dict[str, FileFact], list[dict[str,
                     if required_kind is None:
                         raise Refusal("E_STORAGE")
                     value = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
-                    if value.st_uid != os.geteuid() or value.st_dev != root_st.st_dev or \
-                            stat.S_ISLNK(value.st_mode):
+                    euid = os.geteuid()
+                    _retain_preparation_observation("storage", {"site": "enumerate_storage",
+                        "name": os.fsencode(relative).hex(), "stat": _storage_stat_values(value),"euid":euid})
+                    if not _storage_entry_admission_values(relative,_storage_stat_values(value),
+                        _storage_stat_values(root_st),euid,ctx.algorithm):
                         raise Refusal("E_STORAGE")
                     entry_count += 1
                     name_bytes += len(relative.encode("utf-8"))
@@ -1109,8 +1182,7 @@ def enumerate_storage(ctx: Context) -> tuple[dict[str, FileFact], list[dict[str,
                             raise Refusal("E_STORAGE")
                         child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory_fd)
                         stack.append((child, relative))
-                        observation.append({"path": relative, "type": "directory",
-                                            "mode": f"{stat.S_IMODE(value.st_mode):04o}"})
+                        observation.append(_storage_entry_values(relative,True,stat.S_IMODE(value.st_mode)))
                     elif stat.S_ISREG(value.st_mode):
                         if required_kind != "file":
                             raise Refusal("E_STORAGE")
@@ -1120,8 +1192,7 @@ def enumerate_storage(ctx: Context) -> tuple[dict[str, FileFact], list[dict[str,
                             raise Refusal("E_STORAGE")
                         seen_inodes.add((fact.dev, fact.ino))
                         facts[relative] = fact
-                        observation.append({"path": relative, "type": "file", "mode": f"{fact.mode:04o}",
-                                            "size_bytes": fact.size, "sha256": fact.sha256})
+                        observation.append(_storage_entry_values(relative,False,fact.mode,fact.size,fact.sha256))
                         storage_bytes += fact.size
                     else:
                         raise Refusal("E_STORAGE")
@@ -1141,7 +1212,88 @@ def enumerate_storage(ctx: Context) -> tuple[dict[str, FileFact], list[dict[str,
         raise Refusal("E_STORAGE")
     observation.sort(key=lambda item: item["path"].encode("utf-8"))
     ctx.recheck_boundaries()
+    _retain_preparation_observation("storage", {"site":"enumerate_storage.end"})
     return facts, observation
+
+
+def _storage_entry_admission_values(relative, value, root, euid, algorithm):
+    required_kind, _ = allowed_storage_path(relative,algorithm)
+    return (type(euid) is int and 0 <= euid <= 0xffffffff
+            and required_kind is not None and value["uid"] == euid and value["dev"] == root["dev"]
+            and not stat.S_ISLNK(value["mode"]) and
+            ((stat.S_ISDIR(value["mode"]) and required_kind == "directory")
+             or (stat.S_ISREG(value["mode"]) and required_kind == "file")))
+
+
+def _preparation_storage_values(events, source_files, algorithm):
+    if (type(events) is not list or len(events) > LIMITS["repository_entries"]
+            or type(source_files) is not dict or algorithm not in {"sha1","sha256"}):
+        raise Refusal("E_STORAGE")
+    scans, current, root, pending = [], None, None, None
+    seen, inodes = set(), set()
+    name_bytes = storage_bytes = 0
+    for event in events:
+        if type(event) is not dict or type(event.get("site")) is not str:
+            raise Refusal("E_STORAGE")
+        site = event["site"]
+        if site == "enumerate_storage.begin":
+            if current is not None or set(event) != {"site","stat","euid"}:
+                raise Refusal("E_STORAGE")
+            root = _storage_stat_checked(event["stat"])
+            if not _private_directory_values(root,event["euid"]):
+                raise Refusal("E_IDENTITY",2)
+            current, seen, inodes = [], set(), set()
+            name_bytes = storage_bytes = 0
+            continue
+        if site == "enumerate_storage.end":
+            if (set(event) != {"site"} or current is None or pending is not None
+                    or not {"HEAD","config","refs/heads/candidate"} <= seen):
+                raise Refusal("E_STORAGE")
+            scans.append(sorted(current,key=lambda row:row["path"].encode("utf-8")))
+            current = None
+            continue
+        if site not in {"enumerate_storage","file_fact"}:
+            raise Refusal("E_STORAGE")
+        name = event.get("name")
+        if (type(name) is not str or len(name) % 2 or len(name) > 2*LIMITS["repository_name_bytes"]
+                or any(char not in '0123456789abcdef' for char in name)):
+            raise Refusal("E_STORAGE")
+        try:relative = bytes.fromhex(name).decode("utf-8")
+        except UnicodeError as error:raise Refusal("E_STORAGE") from error
+        if site == "enumerate_storage":
+            if set(event) != {"site","name","stat","euid"} or current is None or pending is not None or relative in seen:
+                raise Refusal("E_STORAGE")
+            value = _storage_stat_checked(event["stat"])
+            if not _storage_entry_admission_values(relative,value,root,event["euid"],algorithm):
+                raise Refusal("E_STORAGE")
+            seen.add(relative);name_bytes += len(relative.encode("utf-8"))
+            if stat.S_ISDIR(value["mode"]):
+                current.append(_storage_entry_values(relative,True,stat.S_IMODE(value["mode"])))
+            else:pending = relative
+        else:
+            if set(event) != {"site","name","before","after","euid"} or relative not in source_files:
+                raise Refusal("E_STORAGE")
+            before, after = _storage_stat_checked(event["before"]), _storage_stat_checked(event["after"])
+            if not _file_admission_values(before,event["euid"]):
+                raise Refusal("E_STORAGE")
+            raw = source_files[relative]
+            if type(raw) is not bytes:
+                raise Refusal("E_STORAGE")
+            _, reverse = allowed_storage_path(relative,algorithm)
+            maximum = LIMITS["reverse_index_bytes"] if reverse else LIMITS["repository_file_bytes"]
+            if len(raw) > maximum or len(raw) != before["size"]:
+                raise Refusal("E_LIMIT")
+            fact = _file_fact_values(relative,before,after,len(raw),sha256(raw))
+            if current is not None:
+                if pending != relative or (fact.dev,fact.ino) in inodes:
+                    raise Refusal("E_STORAGE")
+                pending = None;inodes.add((fact.dev,fact.ino));storage_bytes += fact.size
+                current.append(_storage_entry_values(relative,False,fact.mode,fact.size,fact.sha256))
+        if len(seen) > LIMITS["repository_entries"] or name_bytes > LIMITS["repository_name_bytes"] or storage_bytes > LIMITS["storage_bytes"]:
+            raise Refusal("E_LIMIT")
+    if current is not None or not scans:
+        raise Refusal("E_STORAGE")
+    return scans
 
 
 def copy_storage(ctx: Context) -> None:
@@ -1876,12 +2028,26 @@ def producer_identity(ctx: Context) -> dict[str, Any]:
     measured = _producer_source_values(script_data, executable_data, git_data)
     git_reply = run_child(ctx, [GIT, "--version"], output_limit=128, env=clean_git_env(ctx))
     python_version = sys.version.splitlines()[0]
-    return _producer_values(measured, git_reply, python_version, unicodedata.unidata_version, ctx.identities)
+    result = _producer_values(measured, git_reply, python_version, unicodedata.unidata_version, ctx.identities)
+    _retain_preparation_observation("runtime_values", {"git_version": git_reply.hex(),
+        "python_version": python_version, "unicode_version": unicodedata.unidata_version})
+    return result
 
 
 def _producer_source_values(script_data, executable_data, git_data):
     script_sha, executable_sha, git_sha = map(sha256, (script_data, executable_data, git_data))
     return {"source_sha256": script_sha, "python_sha256": executable_sha, "git_sha256": git_sha}
+
+
+def _preparation_runtime_values(value):
+    if (type(value) is not dict or set(value) != {"git_version","python_version","unicode_version"}
+            or type(value["git_version"]) is not str or len(value["git_version"]) > 256
+            or len(value["git_version"]) % 2
+            or any(char not in '0123456789abcdef' for char in value["git_version"])
+            or any(type(value[key]) is not str or len(value[key]) > 128
+                   or any(ord(char) >= 128 for char in value[key]) for key in ("python_version","unicode_version"))):
+        raise Refusal("E_DEPENDENCY")
+    return value | {"git_version":bytes.fromhex(value["git_version"])}
 
 
 def _producer_values(measured, git_reply, python_version, unicode_version, identities):
@@ -2331,6 +2497,90 @@ def parse_args(argv: list[str], deadline: float) -> argparse.Namespace:
     return args
 
 
+def _preparation_capture_values(raw, workspace, operation, input_sha256, response_sha256):
+    if len(raw) > 1024*1024:
+        raise Refusal("E_LIMIT")
+    value = strict_json(raw,"E_INPUT")
+    if (type(value) is not dict or set(value) != {"operation","binding","entropy","clocks","storage","commands","complete"}
+            or value["complete"] is not True or value["operation"] != operation
+            or value["binding"] != {"input_sha256":input_sha256,"response_sha256":response_sha256}
+            or canonical(value) != raw):
+        raise Refusal("E_INPUT")
+    names = value["entropy"]
+    if type(names) is not dict or set(names) != {"preparation_names"} or type(names["preparation_names"]) is not list or len(names["preparation_names"]) != 1:
+        raise Refusal("E_INPUT")
+    if _preparation_workspace_values(names["preparation_names"][0]) != workspace:
+        raise Refusal("E_IDENTITY",2)
+    clocks = value["clocks"]
+    if type(clocks) is not dict or set(clocks) != {"wall","monotonic"} or clocks["wall"] != [] or type(clocks["monotonic"]) is not list or len(clocks["monotonic"]) > 4096:
+        raise Refusal("E_INPUT")
+    sites = {f"preparation/v1/prepare-candidate.py:{line}:0" for line in (207,231,634,659,693,2254)}
+    for row in clocks["monotonic"]:
+        if (type(row) is not dict or set(row) != {"site","value"} or type(row["site"]) is not str
+                or row["site"] not in sites or type(row["value"]) is not str or len(row["value"]) != 16
+                or any(char not in '0123456789abcdef' for char in row["value"])):
+            raise Refusal("E_INPUT")
+        number = struct.unpack(">d",bytes.fromhex(row["value"]))[0]
+        if number != number or number in (float('inf'),float('-inf')):
+            raise Refusal("E_INPUT")
+    commands = value["commands"]
+    if type(commands) is not dict or set(commands) != {"runtime_values"} or type(commands["runtime_values"]) is not list or len(commands["runtime_values"]) != 1:
+        raise Refusal("E_INPUT")
+    _preparation_runtime_values(commands["runtime_values"][0])
+    if type(value["storage"]) is not list or len(value["storage"]) > LIMITS["repository_entries"]:
+        raise Refusal("E_INPUT")
+    return value
+
+
+def _write_preparation_observations(ctx, complete):
+    work = {"read_bytes": 0, "write_bytes": 0, "physical_bytes": 0}
+    ctx.recording_work = work
+    value = {"operation":ctx.args.operation,"binding":{"input_sha256":ctx.input_hashes.get("input"),
+        "response_sha256":ctx.input_hashes.get("response")},"entropy": {"preparation_names": _preparation_names},
+        "clocks": _clock_observations, "storage": _preparation_observations["storage"],
+        "commands": {"runtime_values": _preparation_observations["runtime_values"]},
+        "complete": complete and _clock_complete and _preparation_names_complete and _preparation_observations_complete
+                    and bool(_preparation_observations["runtime_values"])}
+    encoded = bytearray()
+    try:
+        for piece in json.JSONEncoder(ensure_ascii=False,sort_keys=True,separators=(",",":"),allow_nan=False).iterencode(value):
+            if len(piece) > 1024 * 1024:
+                raise Refusal("E_LIMIT")
+            count = sum(1 if ord(char) < 128 else 2 if ord(char) < 2048 else
+                        3 if ord(char) < 65536 else 4 for char in piece)
+            if len(encoded) + count + 1 > 1024 * 1024:
+                raise Refusal("E_LIMIT")
+            encoded.extend(piece.encode("utf-8"))
+            work["read_bytes"] += count
+        raw = bytes(encoded) + b"\n"
+        work["read_bytes"] += 2 * len(encoded) + 1
+        if value["complete"]:
+            _preparation_capture_values(raw,ctx.scratch.name,ctx.args.operation,
+                ctx.input_hashes["input"],ctx.input_hashes["response"])
+        if ctx.ledger.scratch_bytes + len(raw) > LIMITS["scratch_bytes"]:
+            raise Refusal("E_LIMIT")
+        directory = ctx.boundaries["scratch_work"].fd
+        target = os.open("capture.json",os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                         0o600,dir_fd=directory)
+        try:
+            view = memoryview(raw)
+            while view:
+                sent = os.write(target,view[:65536])
+                if sent <= 0:
+                    raise Refusal("E_IO")
+                work["read_bytes"] += sent
+                work["write_bytes"] += sent
+                work["physical_bytes"] += sent
+                view = view[sent:]
+            os.fchmod(target,0o400)
+            os.fsync(target)
+        finally:
+            os.close(target)
+        os.fsync(directory)
+    except (Refusal, OSError, MemoryError, UnicodeError, ValueError):
+        ctx.recording_unusable = True
+
+
 def main(argv: list[str]) -> int:
     context: Context | None = None
     deadline = _clock_value('preparation/v1/prepare-candidate.py:2254:0',time.monotonic(),'monotonic') + LIMITS["operation_seconds"]
@@ -2353,6 +2603,10 @@ def main(argv: list[str]) -> int:
         except OSError:
             pass
     if context is not None:
+        try:
+            _write_preparation_observations(context, refusal is None)
+        except (OSError, Refusal, MemoryError, UnicodeError, ValueError):
+            context.recording_unusable = True
         if context.lock_fd >= 0:
             with contextlib.suppress(OSError):
                 os.close(context.lock_fd)

@@ -24,6 +24,33 @@ def _launch_values(runtime_root, request_raw, incident_raw, evaluation_raw, obse
         record_raw, manifest_raw, instruction, control_values, entropy)
 
 
+def _preparation_capture_values(runtime_root, raw, workspace, operation, input_raw, response_raw):
+    spec = importlib.util.spec_from_file_location(
+        "malicious_preparation_capture_values",Path(runtime_root)/"preparation/v1/prepare-candidate.py")
+    owner = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = owner
+    spec.loader.exec_module(owner)
+    return owner._preparation_capture_values(raw,workspace,operation,owner.sha256(input_raw),owner.sha256(response_raw))
+
+
+def _preparation_runtime_values(runtime_root, value):
+    spec = importlib.util.spec_from_file_location(
+        "malicious_preparation_runtime_values",Path(runtime_root)/"preparation/v1/prepare-candidate.py")
+    owner = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = owner
+    spec.loader.exec_module(owner)
+    return owner._preparation_runtime_values(value)
+
+
+def _preparation_storage_values(runtime_root, events, source_files, algorithm):
+    spec = importlib.util.spec_from_file_location(
+        "malicious_preparation_storage_values",Path(runtime_root)/"preparation/v1/prepare-candidate.py")
+    owner = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = owner
+    spec.loader.exec_module(owner)
+    return owner._preparation_storage_values(events,source_files,algorithm)
+
+
 def _preparation_workspace_values(runtime_root, rows):
     spec = importlib.util.spec_from_file_location(
         "malicious_workspace_values", Path(runtime_root) / "preparation/v1/prepare-candidate.py")

@@ -902,6 +902,74 @@ class Anchor:
     storage_entry_count: int = 0
     recording_work: dict = dataclasses.field(default_factory=dict)
 
+    def retain_preparation(self, parent, scratch_name, operation, input_raw, response_raw):
+        _require(scratch_name in {"preparation-scratch","inspection-scratch"}
+                 and operation in {"prepare","inspect"}, "E_STORE")
+        opened = []
+        failures = (Refusal,OSError,ValueError,TypeError,MemoryError,ImportError)
+        try:
+            uid, gid = os.geteuid(), os.getegid()
+            root = _open_child(parent,scratch_name,True,_store_rule(uid,gid,0o700,True),"E_STORE")
+            opened.append(root)
+            names = root.listdir()
+            _require(len(names) <= 128,"E_STORE")
+            work = self.recording_work
+            case_key = str(parent.before.st_dev)+":"+str(parent.before.st_ino)
+            case_work = _capture_work_values(work,case_key)
+            candidates = []
+            for name in sorted(names):
+                _require(name.startswith("candidate-preparation-")
+                         and len(name[len("candidate-preparation-"):]) == 16
+                         and all(char in '0123456789abcdef' for char in name[len("candidate-preparation-"):]),"E_STORE")
+                directory = _open_child(root,name,True,_store_rule(uid,gid,0o700,True),"E_STORE")
+                opened.append(directory)
+                try:
+                    item = _open_child(directory,"capture.json",False,_store_rule(uid,gid,0o400,False),"E_STORE")
+                except Refusal as error:
+                    if error.os_errno == errno.ENOENT:
+                        continue
+                    raise
+                opened.append(item)
+                length = item.before.st_size
+                _require(0 <= length <= DOCUMENT_LIMIT,"E_STORE")
+                item.recheck("E_STORE")
+                os.lseek(item.fd,0,os.SEEK_SET)
+                chunks, total = [], 0
+                def charge(amount):
+                    _capture_copy_room(work,amount,False,read_only=True)
+                    _capture_copy_room(case_work,amount,False,case=True,read_only=True)
+                    work["read_bytes"] += amount
+                    case_work["read_bytes"] += amount
+                while total < length:
+                    count = min(65536,length-total)
+                    _capture_copy_room(work,count,False,read_only=True)
+                    _capture_copy_room(case_work,count,False,case=True,read_only=True)
+                    chunk = os.read(item.fd,count)
+                    charge(len(chunk));_require(bool(chunk),"E_STORE")
+                    chunks.append(chunk);total += len(chunk)
+                charge(total)
+                raw = b"".join(chunks)
+                item.recheck("E_STORE")
+                charge(6*len(raw))
+                value = _json(raw,DOCUMENT_LIMIT,"E_STORE")
+                _require(set(value) == {"operation","binding","entropy","clocks","storage","commands","complete"}
+                         and value["complete"] is True and value["operation"] == operation
+                         and value["binding"] == {"input_sha256":digest(input_raw),"response_sha256":digest(response_raw)}
+                         and canonical(value) == raw,"E_STORE")
+                candidates.append(value)
+            _require(len(candidates) == 1,"E_STORE")
+            root.recheck("E_STORE")
+            values = self.private_observations.setdefault("preparation",{})
+            _require(operation not in values,"E_STORE")
+            values[operation] = candidates[0]
+            return candidates[0]
+        except failures:
+            self.private_observations["unusable"] = True
+            return None
+        finally:
+            try:_close_paths(opened)
+            except OSError:self.private_observations["unusable"] = True
+
     def copy_runtime_slots(self, parent, slots, work):
         fixed = {key: self.config["identity_paths"][key] for key in
             ("guest_kernel", "guest_init", "guest_supervisor", "image", "toolchain", "verifier",
@@ -1399,17 +1467,25 @@ def _capture_envelope_values(attempt_id, launch_raw, groups):
         "body": {"request_sha256": digest(launch_raw), "raw": groups, "complete": True}})
 
 
-def _capture_copy_room(work, amount, exported, *, case=False):
+def _capture_work_values(work, case_key):
+    fields = ("files","read_bytes","write_bytes","physical_bytes","export_read_bytes",
+              "export_write_bytes","export_physical_bytes","export_files")
+    for key in fields:work.setdefault(key,0)
+    work.setdefault("calls",{})
+    return work.setdefault("cases",{}).setdefault(case_key,{key:0 for key in fields})
+
+
+def _capture_copy_room(work, amount, exported, *, case=False, read_only=False):
     fields = ("read_bytes", "write_bytes", "physical_bytes",
               "export_read_bytes", "export_write_bytes", "export_physical_bytes")
     _require(all(type(work[key]) is int and work[key] >= 0 for key in fields), "E_LIMIT")
     limits = (512, 256, 256, 384, 192, 192) if case else (2048, 1024, 1024, 1536, 768, 768)
-    _require(all(work[key] + (amount if index < 3 or exported else 0)
+    _require(all(work[key] + (amount if (index < 3 or exported) and (not read_only or index in (0,3)) else 0)
                  <= limit * DOCUMENT_LIMIT for index, (key, limit) in enumerate(zip(fields, limits))), "E_LIMIT")
     nonexport = (128, 64, 64) if case else (512, 256, 256)
     _require(all(0 <= work[key] - work["export_" + key]
-                 and work[key] - work["export_" + key] + (0 if exported else amount)
-                 <= limit * DOCUMENT_LIMIT for key, limit in zip(fields[:3], nonexport)), "E_LIMIT")
+                 and work[key] - work["export_" + key] + (amount if not exported and (not read_only or index == 0) else 0)
+                 <= limit * DOCUMENT_LIMIT for index,(key, limit) in enumerate(zip(fields[:3], nonexport))), "E_LIMIT")
 
 
 def _private_capture_observations(value, work, case_work):
@@ -1531,6 +1607,7 @@ class _HeldStoreRead:
             "storage": self.storage_rows,
             "storage_reads": self.anchor.private_observations.get("storage_reads", []),
             "identity_context": self.anchor.identity_context,
+            "preparation": self.anchor.private_observations.get("preparation",{}),
             "entropy": self.anchor.private_observations.get("entropy", {}),
             "clocks": _clock_observations}, work, case_work)
         binding_raw = None

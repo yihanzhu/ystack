@@ -347,14 +347,34 @@ class StableFile:
 class StableDirectory:
     held: c.HeldPath
 
+    @staticmethod
+    def _leaf_identity(value):
+        return value.st_dev, value.st_ino, value.st_uid, value.st_gid, value.st_mode & 0o170777
+
+    def _recording_parent(self):
+        self.recheck()
+        leaf = self.held.components[-1]
+        current = c._metadata(leaf.fd)
+        named = c._named_metadata(leaf.name, self.held.components[-2].fd)
+        require(self._leaf_identity(current) == self._leaf_identity(leaf.before)
+                == self._leaf_identity(named) and c._identity(current) == c._identity(named), "E_WORKSPACE")
+        leaf.before = current
+        return self.held
+
+    def _retain_preparation(self, anchor, scratch_name, operation, input_raw, response_raw):
+        try:
+            return anchor.retain_preparation(self._recording_parent(),scratch_name,operation,input_raw,response_raw)
+        except (Refusal,c.Refusal,OSError,MemoryError):
+            anchor.private_observations["unusable"] = True
+            return None
+
     def recheck(self, code: str = "E_WORKSPACE") -> None:
         for index, component in enumerate(self.held.components):
             current = c._metadata(component.fd)
             named = (current if component.name is None else
                      c._named_metadata(component.name, self.held.components[index - 1].fd))
             if index + 1 == len(self.held.components):
-                stable = lambda value: (value.st_dev, value.st_ino, value.st_uid, value.st_gid,
-                                        value.st_mode & 0o170777)
+                stable = self._leaf_identity
                 require(stable(current) == stable(component.before)
                         and stable(named) == stable(component.before), code)
             else:
@@ -1827,6 +1847,7 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
             "--scratch", str(prep_scratch), "--jq", jq.snapshot.path]
         execute("candidate-preparation", prepare + ["prepare", *common], preparation_source,
                 timeout=300, env=env, deadline=deadline)
+        work_hold._retain_preparation(anchor,"preparation-scratch","prepare",input_raw,response_raw)
         for child in prep_scratch.iterdir():
             if child.is_dir() and not child.is_symlink():
                 shutil.rmtree(child)
@@ -1834,6 +1855,7 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
                 child.unlink()
         execute("candidate-inspection", prepare + ["inspect", *common], preparation_source,
                 timeout=300, env=env, deadline=deadline)
+        work_hold._retain_preparation(anchor,"preparation-scratch","inspect",input_raw,response_raw)
         record_raw = read_regular(prep / "record.json", 64 * 1024)
         manifest_raw = read_regular(prep / "manifest.json", 2 * OUTPUT_LIMIT)
         manifest = parse(manifest_raw, 2 * OUTPUT_LIMIT)
@@ -1888,8 +1910,8 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
                 "E_RELATION")
         if held_store.record_reproduction(request_raw, launch_raw, expectation_raw) is not None:
             try:
-                held_store.copy_capture(work_hold.held, launch_raw, "reproduction", anchor.recording_work)
-            except (c.Refusal, OSError, MemoryError):
+                held_store.copy_capture(work_hold._recording_parent(), launch_raw, "reproduction", anchor.recording_work)
+            except (Refusal,c.Refusal, OSError, MemoryError):
                 anchor.private_observations["unusable"] = True
         evidence_manifest_raw = snapshots["payload/evidence-manifest.json"]
         evidence_manifest = parse(evidence_manifest_raw)

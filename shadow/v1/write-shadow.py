@@ -640,8 +640,8 @@ def _verify_write(ws, incident, input_raw, record_raw, manifest_raw, evaluation_
     require(check["body"]["check_verdict"] == "valid" and check["body"]["enforcement_verdict"] == "satisfied", "E_RELATION")
     if held_store.record_write(ws.request.raw, launch_raw, expectation_raw) is not None:
         try:
-            held_store.copy_capture(ws.work_hold.held, launch_raw, "write", ws.anchor.recording_work)
-        except (c.Refusal, OSError, MemoryError):
+            held_store.copy_capture(ws.work_hold._recording_parent(), launch_raw, "write", ws.anchor.recording_work)
+        except (e.Refusal,c.Refusal, OSError, MemoryError):
             ws.anchor.private_observations["unusable"] = True
     result_raw, _result = e.payload_result(snapshots, parse(snapshots["payload/evidence-manifest.json"]),
         instruction, manifest, parse(snapshots["receipt.json"]))
@@ -689,6 +689,7 @@ def _materialize(ws):
         ws.execute("candidate-" + ("preparation" if operation == "prepare" else "inspection"),
             [sys.executable, "-I", "-S", "-B", str(preparation), operation, *common,
              "--scratch", str(work / scratch)], preparation, timeout=300)
+        ws.work_hold._retain_preparation(ws.anchor,scratch,operation,input_raw,response_raw)
     prep_raw = ws.hold(prep / "record.json", 64 * 1024).raw
     manifest_raw = ws.hold(prep / "manifest.json", 2 * e.OUTPUT_LIMIT).raw
     instruction = e.make_instruction(incident)
