@@ -52,6 +52,8 @@ REQUEST_BODY_KEYS = {"attempt_id", "attempt_number", "incident", "claim", "duty_
 WATCHED_SIGNALS = frozenset((signal.SIGTERM, signal.SIGHUP, signal.SIGINT))
 _STARTUP_KEY = object()
 _NATIVE_ORIGIN: Path | None = None
+_CAPTURE_OWNER = None
+_CAPTURE_OWNER_WORK = {}
 _CHILD_ROLES = {
     "darwin-acl-uuid-resolution": 1,
     "incident-validation": 2,
@@ -94,6 +96,7 @@ class _StartupAdmission:
     module_origins: tuple[str, ...]
     census: object
     native: object | None = None
+    capture_owner: object | None = None
 
 
 class _ProcTaskInfo(ctypes.Structure):
@@ -199,6 +202,12 @@ def _runtime_module_origins() -> tuple[str, ...]:
             if path_value is None:
                 continue
             origin = path_value
+        if _CAPTURE_OWNER is not None and module is _CAPTURE_OWNER.module:
+            require(origin == str(_CAPTURE_OWNER.path)
+                    and sys.modules.get(_CAPTURE_OWNER.name) is module
+                    and getattr(module, "__loader__", None) is _CAPTURE_OWNER, "E_RUNTIME")
+            origins.append(str(_CAPTURE_OWNER.path))
+            continue
         path = Path(origin)
         require(path.is_absolute(), "E_RUNTIME")
         resolved = path.resolve(strict=True)
@@ -330,14 +339,24 @@ class InputSnapshot:
 class StableFile:
     held: c.HeldPath
     raw: bytes
+    recording_work: dict | None = None
 
     @property
     def sha256(self) -> str:
         return sha(self.raw)
 
     def recheck(self, code: str = "E_RELATION") -> None:
+        if self.recording_work is not None:
+            self.recording_work["metadata_passes"] = self.recording_work.get("metadata_passes", 0) + 1
         self.held.recheck(code)
-        require(self.held.read(len(self.raw), code) == self.raw, code)
+        if self.recording_work is None:
+            require(self.held.read(len(self.raw), code) == self.raw, code)
+        else:
+            c._capture_copy_room(self.recording_work, 4 * len(self.raw), False, case=True, read_only=True)
+            current = self.held.read(len(self.raw), code, self.recording_work)
+            self.recording_work["read_bytes"] = self.recording_work.get("read_bytes", 0) + len(current) + len(self.raw)
+            self.recording_work["equality_bytes"] = self.recording_work.get("equality_bytes", 0) + len(current) + len(self.raw)
+            require(current == self.raw, code)
 
     def close(self) -> None:
         self.held.close()
@@ -425,17 +444,128 @@ class FixedSudo:
 
 
 def stable_file(path: Path, limit: int = c.EXECUTABLE_LIMIT,
-                code: str = "E_DEPENDENCY", allow_hardlinks: bool = False) -> StableFile:
+                code: str = "E_DEPENDENCY", allow_hardlinks: bool = False, recording_work=None) -> StableFile:
     held = c._open_held(str(path), False, lambda _fd, _state, _ancestor: True, code,
                        allow_hardlinks)
     try:
-        raw = held.read(limit, code)
-        result = StableFile(held, raw)
+        if recording_work is not None:
+            c._capture_copy_room(recording_work, 6 * min(limit, held.before.st_size),
+                                 False, case=True, read_only=True)
+        raw = held.read(limit, code) if recording_work is None else held.read(limit, code, recording_work)
+        result = StableFile(held, raw, recording_work)
         result.recheck(code)
         return result
     except BaseException:
         held.close()
         raise
+
+
+class _CaptureCompletionOwner:
+    name = "ystack_capture_completion_owner"
+
+    def __init__(self):
+        self.path = SOURCE / "sandbox/v1/host-supervisor.py"
+        self.source = self.module = self.loaded = None
+        self.work = _CAPTURE_OWNER_WORK
+        c._capture_work_values(self.work, "startup-source")
+        self.transferred = 0
+
+    def create_module(self, _spec):
+        return None
+
+    def exec_module(self, module):
+        module.__file__ = str(self.path)
+        self.loaded = self.source.raw
+        c._capture_copy_room(self.work, 3 * len(self.loaded), False, case=True, read_only=True)
+        self.work["read_bytes"] += len(self.loaded)
+        code = compile(self.loaded, str(self.path), "exec", dont_inherit=True)
+        loaded_sha = sha(self.loaded)
+        source_sha = self.source.sha256
+        self.work["read_bytes"] += 2 * len(self.loaded)
+        require(self.loaded is self.source.raw and loaded_sha == source_sha, "E_RUNTIME")
+        exec(code, module.__dict__)
+
+    def initialize(self):
+        require(CancellationSignals.active is None and self.name not in sys.modules, "E_RUNTIME")
+        self.source = stable_file(self.path, recording_work=self.work)
+        spec = importlib.util.spec_from_loader(self.name, self, origin=str(self.path))
+        self.module = importlib.util.module_from_spec(spec)
+        sys.modules[self.name] = self.module
+        self.exec_module(self.module)
+        self.source.recheck()
+        require(callable(self.module._capture_completion_values), "E_RUNTIME")
+
+    def authenticate(self, anchor):
+        self.source.recheck()
+        installed = next(item for item in anchor.held if item.path == str(Path(c.ANCHOR)/"host-supervisor.py"))
+        c._capture_copy_room(self.work, 4 * len(self.source.raw), False, case=True, read_only=True)
+        actual = installed.read(c.EXECUTABLE_LIMIT, "E_STORE", self.work)
+        c._capture_copy_room(self.work, len(actual) + len(self.source.raw), False, case=True, read_only=True)
+        self.work["read_bytes"] += len(actual) + len(self.source.raw)
+        self.work["installed_comparison_bytes"] = self.work.get("installed_comparison_bytes", 0) + len(actual) + len(self.source.raw)
+        require(actual == self.source.raw, "E_STORE")
+        self.source.recheck()
+
+    def construct(self, anchor, attempt_id, request_raw, capture_raw):
+        self.authenticate(anchor)
+        c._capture_copy_room(self.work, len(request_raw) + len(capture_raw) + 2048,
+                             False, case=True, read_only=True)
+        result = self.module._capture_completion_values(attempt_id, request_raw, capture_raw)
+        self.work["read_bytes"] += len(request_raw) + len(capture_raw) + 4 * len(result)
+        self.source.recheck()
+        return result
+
+    def transfer(self, work, case_work):
+        delta = self.work["read_bytes"] - self.transferred
+        c._capture_copy_room(work, delta, False, read_only=True)
+        c._capture_copy_room(case_work, delta, False, case=True, read_only=True)
+        work["read_bytes"] += delta
+        case_work["read_bytes"] += delta
+        self.transferred += delta
+
+
+def _load_capture_completion_owner():
+    global _CAPTURE_OWNER
+    candidate = None
+    try:
+        require(CancellationSignals.active is None and _CAPTURE_OWNER is None, "E_RUNTIME")
+        candidate = _CaptureCompletionOwner()
+        candidate.initialize()
+        _CAPTURE_OWNER = candidate
+        return candidate
+    except Exception as error:
+        if candidate is not None:
+            if candidate.module is not None and sys.modules.get(candidate.name) is candidate.module:
+                del sys.modules[candidate.name]
+            try:
+                if candidate.source is not None:
+                    candidate.source.close()
+            except (OSError, Refusal, c.Refusal) as cleanup_error:
+                _CAPTURE_OWNER_WORK["cleanup_error"] = type(cleanup_error).__name__
+        _CAPTURE_OWNER_WORK["failure"] = {"category": type(error).__name__, "errno": getattr(error, "errno", None)}
+        return None
+
+
+def _bind_capture_completion_owner(anchor):
+    active = CancellationSignals.active
+    owner = getattr(getattr(active, "admission", None), "capture_owner", None)
+    try:
+        require(isinstance(owner, _CaptureCompletionOwner), "E_STORE")
+        owner.authenticate(anchor)
+        anchor.capture_completion_owner = owner
+    except Exception as error:
+        anchor.private_observations["unusable"] = True
+        anchor.private_observations["completion_owner_failure"] = {
+            "category": type(error).__name__, "errno": getattr(error, "errno", None)}
+
+
+def _close_capture_completion_owner(owner):
+    if owner is not None and owner.source is not None:
+        try:
+            owner.source.close()
+        except Exception as error:
+            owner.work["cleanup_error"] = {"category": type(error).__name__,
+                                            "errno": getattr(error, "errno", None)}
 
 
 class _DarwinLedger:
@@ -1762,6 +1892,7 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
                     if sys.platform == "darwin" else None)
         group_reader = _DarwinGroupReader(resolver) if resolver is not None else None
         anchor = c.load_anchor(resolver, group_reader)
+        _bind_capture_completion_owner(anchor)
         _retain_native_runtime(anchor)
         exclusions = [SOURCE, request_path, Path(c.ANCHOR).parent, Path(anchor.config["store_root"]),
                       Path(anchor.config["work_root"]), *paths.values()]
@@ -2077,13 +2208,16 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
 def main(argv: list[str], admission: _StartupAdmission | None = None) -> int:
     native = None
     owner = None
+    capture_owner = None
     try:
         require(isinstance(admission, _StartupAdmission) and admission.key is _STARTUP_KEY,
                 "E_RUNTIME")
         require(len(argv) == 5 and argv[1] == "reproduce", "E_USAGE")
         context = c.capture_parent_context()
         native = _NativeRelease(context, admission)
+        capture_owner = _load_capture_completion_owner()
         admission = dataclasses.replace(admission, native=native,
+                                        capture_owner=capture_owner,
                                         module_origins=_runtime_module_origins())
         owner = CancellationSignals(admission)
         with owner:
@@ -2115,8 +2249,11 @@ def main(argv: list[str], admission: _StartupAdmission | None = None) -> int:
             print("E_RUNTIME", file=sys.stderr); return 1
         raise
     finally:
-        if native is not None:
-            native.close()
+        try:
+            if native is not None:
+                native.close()
+        finally:
+            _close_capture_completion_owner(capture_owner)
 
 
 if __name__ == "__main__":

@@ -93,6 +93,7 @@ class _Workspace:
                              if sys.platform == "darwin" else None)
             group = e._DarwinGroupReader(self.resolver) if self.resolver is not None else None
             self.anchor = c.load_anchor(self.resolver, group)
+            e._bind_capture_completion_owner(self.anchor)
             e._retain_native_runtime(self.anchor)
             self.owned.append(self.anchor)
             exclusions = [SOURCE, request, bundle, Path(c.ANCHOR).parent, *self.paths.values(),
@@ -962,12 +963,15 @@ def _startup():
 
 def main(argv, admission=None):
     native = owner = None
+    capture_owner = None
     try:
         require(isinstance(admission, e._StartupAdmission) and admission.key is e._STARTUP_KEY, "E_RUNTIME")
         require(len(argv) == 6 and argv[1] in {"prepare", "prepare-policy"}, "E_USAGE")
         context = c.capture_parent_context()
         native = e._NativeRelease(context, admission)
-        admission = dataclasses.replace(admission, native=native, module_origins=e._runtime_module_origins())
+        capture_owner = e._load_capture_completion_owner()
+        admission = dataclasses.replace(admission, native=native, capture_owner=capture_owner,
+                                        module_origins=e._runtime_module_origins())
         owner = e.CancellationSignals(admission)
         with owner:
             try:
@@ -993,8 +997,11 @@ def main(argv, admission=None):
             return 1
         raise
     finally:
-        if native is not None:
-            native.close()
+        try:
+            if native is not None:
+                native.close()
+        finally:
+            e._close_capture_completion_owner(capture_owner)
 
 
 if __name__ == "__main__":

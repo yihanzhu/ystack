@@ -352,21 +352,39 @@ class HeldPath:
             _require(_identity(current) == expected and _identity(named) == expected, code)
             component.after, component.named_after = current, named
 
-    def read(self, maximum: int, code: str) -> bytes:
+    def read(self, maximum: int, code: str, recording_work=None) -> bytes:
+        if recording_work is not None:
+            recording_work["metadata_passes"] = recording_work.get("metadata_passes", 0) + 1
         self.recheck(code)
         chunks, total = [], 0
         try:
             os.lseek(self.fd, 0, os.SEEK_SET)
             while True:
+                if recording_work is not None:
+                    if total == self.before.st_size:
+                        break
+                    _capture_copy_room(recording_work, total + 2 * min(65536, maximum + 1 - total),
+                                       False, case=True, read_only=True)
+                    recording_work["read_calls"] = recording_work.get("read_calls", 0) + 1
                 chunk = os.read(self.fd, min(65536, maximum + 1 - total))
                 if not chunk:
                     break
+                if recording_work is not None:
+                    recording_work["read_bytes"] = recording_work.get("read_bytes", 0) + len(chunk)
                 chunks.append(chunk)
                 total += len(chunk)
                 _require(total <= maximum, code)
-        except (OSError, ValueError):
+        except (OSError, ValueError) as error:
+            if recording_work is not None:
+                recording_work["read_error"] = {"category": type(error).__name__, "errno": getattr(error, "errno", None)}
             raise Refusal(code) from None
+        if recording_work is not None:
+            recording_work["metadata_passes"] = recording_work.get("metadata_passes", 0) + 1
         self.recheck(code)
+        if recording_work is not None:
+            _capture_copy_room(recording_work, total, False, case=True, read_only=True)
+            recording_work["read_bytes"] = recording_work.get("read_bytes", 0) + total
+            recording_work["join_bytes"] = recording_work.get("join_bytes", 0) + total
         return b"".join(chunks)
 
     def read_exact(self, length: int, code: str) -> bytes:
@@ -1602,6 +1620,10 @@ class _HeldStoreRead:
                                "export_read_bytes", "export_write_bytes", "export_physical_bytes", "export_files")})
         _capture_copy_room(work, 0, False)
         _capture_copy_room(case_work, 0, False, case=True)
+        completion_owner = getattr(self.anchor, "capture_completion_owner", None)
+        _require(completion_owner is not None, "E_STORE")
+        completion_owner.authenticate(self.anchor)
+        completion_owner.transfer(work, case_work)
         consumer_raw = _private_capture_observations({"attempt_id": self.attempt_id,
             "request_sha256": digest(request_raw),
             "storage": self.storage_rows,

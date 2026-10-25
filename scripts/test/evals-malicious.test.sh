@@ -927,6 +927,57 @@ if sys.platform in {'darwin','linux'}:
     print('ok ordinary full export publication/completion, no-replace collision and pre-completion failure - '+sys.platform+'; not native qualification')
 else:
     print('NOTRUN capture publication mechanism: unsupported ordinary host')
+enforced=load('capture_enforced_owner',root/'shadow/v1/enforced-reproduction.py')
+completion_owner=enforced._load_capture_completion_owner()
+assert completion_owner is not None, enforced._CAPTURE_OWNER_WORK
+assert completion_owner.loaded is completion_owner.source.raw
+assert completion_owner.module.__loader__ is completion_owner
+assert completion_owner.module.__spec__.origin==str(root/'sandbox/v1/host-supervisor.py')
+original_anchor_path=enforced.c.ANCHOR
+try:
+    with tempfile.TemporaryDirectory(prefix='ystack-completion-owner-') as temporary:
+        fixed=Path(temporary).resolve()
+        installed=fixed/'host-supervisor.py'
+        installed.write_bytes(completion_owner.source.raw)
+        installed.chmod(0o440)
+        enforced.c.ANCHOR=str(fixed)
+        held=enforced.c._open_held(str(installed),False,lambda *args:True,'E_STORE')
+        try:
+            anchor=types.SimpleNamespace(held=[held],private_observations={})
+            original_active=enforced.CancellationSignals.active
+            enforced.CancellationSignals.active=types.SimpleNamespace(
+                admission=types.SimpleNamespace(capture_owner=completion_owner))
+            try:enforced._bind_capture_completion_owner(anchor)
+            finally:enforced.CancellationSignals.active=original_active
+            assert anchor.capture_completion_owner is completion_owner and not anchor.private_observations
+            witness=completion_owner.construct(anchor,'attempt.owner',request,capture)
+            assert witness==host._capture_completion_values('attempt.owner',request,capture)
+            assert completion_owner.work['installed_comparison_bytes']>=2*len(completion_owner.source.raw)
+            total={};case=enforced.c._capture_work_values(total,'ordinary')
+            completion_owner.transfer(total,case)
+            charged=total['read_bytes']
+            assert charged==completion_owner.work['read_bytes'] and case['read_bytes']==charged
+            completion_owner.transfer(total,case)
+            assert total['read_bytes']==charged
+            installed.chmod(0o640)
+            installed.write_bytes(b'changed installed owner\n')
+            installed.chmod(0o440)
+            try:completion_owner.authenticate(anchor)
+            except enforced.c.Refusal:pass
+            else:raise AssertionError('installed owner drift admitted')
+            enforced.CancellationSignals.active=types.SimpleNamespace(
+                admission=types.SimpleNamespace(capture_owner=completion_owner))
+            try:assert enforced._bind_capture_completion_owner(anchor) is None
+            finally:enforced.CancellationSignals.active=original_active
+            assert anchor.private_observations['unusable'] is True
+            assert anchor.private_observations['completion_owner_failure']['category']=='Refusal'
+            print(json.dumps({'startup_same_byte_loader_and_installed_owner':True,
+                'ordinary_private_installed_fixture_not_real_anchor':True,
+                'actual_owner_work':completion_owner.work,'transferred_work':total},sort_keys=True))
+        finally:held.close()
+finally:
+    enforced.c.ANCHOR=original_anchor_path
+    enforced._close_capture_completion_owner(completion_owner)
 def refuses(function,label):
     try:function()
     except consumer.Refusal:
