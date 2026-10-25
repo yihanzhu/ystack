@@ -1607,6 +1607,7 @@ class _HeldStoreRead:
             "storage": self.storage_rows,
             "storage_reads": self.anchor.private_observations.get("storage_reads", []),
             "identity_context": self.anchor.identity_context,
+            "commands": self.anchor.private_observations.get("commands",{}),
             "preparation": self.anchor.private_observations.get("preparation",{}),
             "entropy": self.anchor.private_observations.get("entropy", {}),
             "clocks": _clock_observations}, work, case_work)

@@ -996,7 +996,7 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
                 assert json.loads(consumer_observations) == {'attempt_id':attempt_id,
                     'request_sha256':host.sha256_hex(request),'storage':held.storage_rows,
                     'storage_reads':export_anchor.private_observations['storage_reads'],
-                    'identity_context':anchor.identity_context,'preparation':{},'entropy':{},'clocks':consumer._clock_observations}
+                    'identity_context':anchor.identity_context,'commands':{},'preparation':{},'entropy':{},'clocks':consumer._clock_observations}
                 copied = private/launch/'sandbox-export.bin'
                 assert copied.stat().st_size == len(export) and copied.stat().st_mode & 0o777 == 0o400
                 measured = consumer.hashlib.sha256()
@@ -1251,6 +1251,46 @@ for label,change in [('missing',lambda v:v.pop('git_version')),('extra',lambda v
     try:replay._preparation_runtime_values(root,changed)
     except Exception as error:assert type(error).__name__ == 'Refusal',label
     else:raise AssertionError('runtime values '+label)
+native_values = {'platform':'darwin','architecture':'arm64','python_implementation':'cpython',
+    'python_version':'ordinary qualified Python','soabi':'cpython-ordinary','ext_suffix':'.ordinary.so',
+    'configuration':{key:None for key in launch._NATIVE_CONFIGURATION_KEYS}}
+native_locators = {'compiler':'/historical/compiler','include':'/historical/include',
+    'config_include':'/historical/config-include','source':'/historical/source.c','binary':'/historical/output.so'}
+native_argv = launch._native_argv_values(native_values['platform'], **native_locators)
+assert replay._native_runtime_values(root,native_values,native_locators) == native_argv
+assert native_argv == ['/historical/compiler','-std=gnu11','-Wall','-Wextra','-Werror',
+    '-O2','-fvisibility=hidden','-fPIC','-I/historical/include','-I/historical/config-include',
+    '-bundle','-undefined','dynamic_lookup','/historical/source.c','-o','/historical/output.so']
+linux_values = dict(native_values,platform='linux')
+assert replay._native_runtime_values(root,linux_values,native_locators) == launch._native_argv_values('linux', **native_locators)
+old_active = launch.CancellationSignals.active
+try:
+    native = object.__new__(launch._NativeRelease)
+    native.runtime_values = {'values':native_values,'locators':native_locators}
+    launch.CancellationSignals.active = types.SimpleNamespace(native=native)
+    retained_anchor = types.SimpleNamespace(private_observations={})
+    launch._retain_native_runtime(retained_anchor)
+    assert retained_anchor.private_observations == {'commands':{'runtime_values':[native.runtime_values]}}
+finally:launch.CancellationSignals.active = old_active
+import copy
+for label,change in [('missing',lambda v:v.pop('soabi')),('extra',lambda v:v.update(argv=[])),
+        ('wrong-type',lambda v:v.update(python_version=True)),
+        ('over-version',lambda v:v.update(python_version='x'*129)),
+        ('surrogate',lambda v:v.update(soabi='\ud800')),
+        ('configuration-missing',lambda v:v['configuration'].pop('Py_DEBUG')),
+        ('configuration-extra',lambda v:v['configuration'].update(derived_output=True)),
+        ('configuration-type',lambda v:v['configuration'].update(Py_DEBUG=[]))]:
+    changed = copy.deepcopy(native_values);change(changed)
+    try:replay._native_runtime_values(root,changed,native_locators)
+    except Exception as error:assert type(error).__name__ == 'Refusal',label
+    else:raise AssertionError('native runtime '+label)
+for label,change in [('missing',lambda v:v.pop('include')),('extra',lambda v:v.update(selector='other')),
+        ('type',lambda v:v.update(binary=[])),('bound',lambda v:v.update(include='x'*4097))]:
+    changed = dict(native_locators);change(changed)
+    try:replay._native_runtime_values(root,native_values,changed)
+    except Exception as error:assert type(error).__name__ == 'Refusal',label
+    else:raise AssertionError('native locator '+label)
+print('ok RAW15 shared native recipe/private retention/offline config and locator matrix; synthetic facts, native loader NOTRUN')
 principal = 1 if launch.os.getuid() != 1 and launch.os.geteuid() != 1 else 2
 actual_context = launch.c._anchor_identity_context(principal,launch.os.getgid(),None,None)
 assert replay._identity_context_values(root,actual_context,principal,launch.os.getgid()) == actual_context

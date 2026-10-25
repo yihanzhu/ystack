@@ -93,6 +93,7 @@ class _Workspace:
                              if sys.platform == "darwin" else None)
             group = e._DarwinGroupReader(self.resolver) if self.resolver is not None else None
             self.anchor = c.load_anchor(self.resolver, group)
+            e._retain_native_runtime(self.anchor)
             self.owned.append(self.anchor)
             exclusions = [SOURCE, request, bundle, Path(c.ANCHOR).parent, *self.paths.values(),
                 Path(self.anchor.config["store_root"]), Path(self.anchor.config["work_root"])]

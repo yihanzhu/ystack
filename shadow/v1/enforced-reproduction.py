@@ -526,6 +526,56 @@ def _native_provenance_values(context: dict) -> dict:
         "loader_mode": native["loader_mode"]}
 
 
+_NATIVE_CONFIGURATION_KEYS = ("CONFIG_ARGS", "Py_GIL_DISABLED", "Py_DEBUG", "Py_ENABLE_JIT",
+    "HAVE_PTHREAD_SIGMASK", "HAVE_BROKEN_PTHREAD_SIGMASK", "HAVE_SIGACTION")
+
+
+def _native_argv_values(platform, compiler, include, config_include, source, binary):
+    platform_flags = (["-bundle", "-undefined", "dynamic_lookup"]
+                      if platform == "darwin" else ["-shared"])
+    language = "-std=gnu11" if platform == "darwin" else "-std=c11"
+    return [compiler, language, "-Wall", "-Wextra", "-Werror", "-O2",
+        "-fvisibility=hidden", "-fPIC", "-I" + include, "-I" + config_include,
+        *platform_flags, source, "-o", binary]
+
+
+def _native_runtime_text(value, limit):
+    if type(value) is not str or not value or len(value) > limit:
+        return False
+    size = 0
+    for char in value:
+        code = ord(char)
+        if code == 0 or 0xD800 <= code <= 0xDFFF:
+            return False
+        size += 1 if code < 128 else 2 if code < 2048 else 3 if code < 65536 else 4
+        if size > limit:
+            return False
+    return True
+
+
+def _native_runtime_values(values, locators):
+    require(type(values) is dict and set(values) == {"platform", "architecture",
+        "python_implementation", "python_version", "soabi", "ext_suffix", "configuration"}, "E_RUNTIME")
+    require(all(_native_runtime_text(values[key], 128) for key in values if key != "configuration"), "E_RUNTIME")
+    configuration = values["configuration"]
+    require(type(configuration) is dict and set(configuration) == set(_NATIVE_CONFIGURATION_KEYS)
+            and all(value is None or type(value) in (str,int) for value in configuration.values())
+            and all(type(value) is not str or not value or _native_runtime_text(value, c.DOCUMENT_LIMIT)
+                    for value in configuration.values()), "E_RUNTIME")
+    require(type(locators) is dict and set(locators) == {"compiler", "include", "config_include", "source", "binary"}
+            and all(_native_runtime_text(value, 4096) for value in locators.values()), "E_RUNTIME")
+    return _native_argv_values(values["platform"], **locators)
+
+
+def _retain_native_runtime(anchor):
+    active = CancellationSignals.active
+    native = active.native if active is not None else None
+    if isinstance(native, _NativeRelease) and hasattr(native, "runtime_values"):
+        anchor.private_observations.setdefault("commands", {})["runtime_values"] = [native.runtime_values]
+    else:
+        anchor.private_observations["unusable"] = True
+
+
 class _NativeRelease:
     _BUILD_KEYS = {"platform", "architecture", "source_sha256", "build_script_sha256",
         "compiler_path", "compiler_sha256", "compiler_version_sha256", "argv",
@@ -567,18 +617,11 @@ class _NativeRelease:
                         (include, config_include, extension, abi)), "E_DEPENDENCY")
             compiler_path = Path("/usr/bin/cc").resolve(strict=True)
             self.compiler = stable_file(compiler_path, allow_hardlinks=True)
-            platform_flags = (["-bundle", "-undefined", "dynamic_lookup"]
-                              if sys.platform == "darwin" else ["-shared"])
-            language = "-std=gnu11" if sys.platform == "darwin" else "-std=c11"
-            expected_argv = [str(compiler_path), language, "-Wall", "-Wextra", "-Werror",
-                "-O2", "-fvisibility=hidden", "-fPIC", "-I" + include,
-                "-I" + config_include, *platform_flags, str(self.source.held.path), "-o",
-                str(self.binary.held.path)]
-            expected_configuration = {key: sysconfig.get_config_var(key) for key in (
-                "CONFIG_ARGS", "Py_GIL_DISABLED", "Py_DEBUG", "Py_ENABLE_JIT",
-                "HAVE_PTHREAD_SIGMASK", "HAVE_BROKEN_PTHREAD_SIGMASK", "HAVE_SIGACTION")}
+            expected_argv = _native_argv_values(sys.platform, str(compiler_path), include,
+                config_include, str(self.source.held.path), str(self.binary.held.path))
+            expected_configuration = {key: sysconfig.get_config_var(key) for key in _NATIVE_CONFIGURATION_KEYS}
             require(body["platform"] == sys.platform
-                    and body["architecture"] == os.uname().machine
+                    and body["architecture"] == (architecture := os.uname().machine)
                     and body["source_sha256"] == self.source.sha256
                     and body["build_script_sha256"] == self.script.sha256
                     and body["compiler_path"] == str(compiler_path)
@@ -598,6 +641,11 @@ class _NativeRelease:
                     and body["output_sha256"] == self.binary.sha256
                     and body["test_build"] is False
                     and native["loader_mode"] == "rtld-now-local.v1", "E_DEPENDENCY")
+            self.runtime_values = {"values": {"platform":sys.platform,"architecture":architecture,
+                "python_implementation":sys.implementation.name,"python_version":sys.version,
+                "soabi":abi,"ext_suffix":extension,"configuration":expected_configuration},
+                "locators":{"compiler":str(compiler_path),"include":include,"config_include":config_include,
+                    "source":str(self.source.held.path),"binary":str(self.binary.held.path)}}
             self.recheck()
             require(_NATIVE_ORIGIN is None and "_cancel_release" not in sys.modules,
                     "E_RUNTIME")
@@ -1714,6 +1762,7 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
                     if sys.platform == "darwin" else None)
         group_reader = _DarwinGroupReader(resolver) if resolver is not None else None
         anchor = c.load_anchor(resolver, group_reader)
+        _retain_native_runtime(anchor)
         exclusions = [SOURCE, request_path, Path(c.ANCHOR).parent, Path(anchor.config["store_root"]),
                       Path(anchor.config["work_root"]), *paths.values()]
         exclusions.extend(Path(value) for value in anchor.config["installed_files"].values())

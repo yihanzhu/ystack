@@ -24,6 +24,15 @@ def _launch_values(runtime_root, request_raw, incident_raw, evaluation_raw, obse
         record_raw, manifest_raw, instruction, control_values, entropy)
 
 
+def _native_runtime_values(runtime_root, values, locators):
+    spec = importlib.util.spec_from_file_location(
+        "malicious_native_runtime_values",Path(runtime_root)/"shadow/v1/enforced-reproduction.py")
+    owner = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = owner
+    spec.loader.exec_module(owner)
+    return owner._native_runtime_values(values, locators)
+
+
 def _preparation_capture_values(runtime_root, raw, workspace, operation, input_raw, response_raw):
     spec = importlib.util.spec_from_file_location(
         "malicious_preparation_capture_values",Path(runtime_root)/"preparation/v1/prepare-candidate.py")
