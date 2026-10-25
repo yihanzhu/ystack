@@ -1759,6 +1759,8 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
 PY_CAPTURE_VALUES
 /usr/bin/python3 -I -S -B - "$root" <<'PY_CAPTURE_FAILURES'
 import ctypes
+import hashlib
+import io
 import importlib.util
 import json
 import os
@@ -1780,6 +1782,7 @@ cases += [('rename',phase) for phase in ('directory-eio','completion-eio','compl
                                         'directory-committed-eio','completion-committed-eio')]
 cases += [('directory','close')]
 cases += [('capture-directory',phase) for phase in ('mkdir','open','chown','chmod','fsync','chown-close')]
+cases += [('sandbox-export.bin',phase) for phase in ('open','write','zero','short','chown','chmod','fsync','close','read','mismatch')]
 for ordinal,(target,phase) in enumerate(cases):
     with tempfile.TemporaryDirectory(prefix='ystack-capture-failure-') as temporary:
         area=Path(temporary).resolve();area.chmod(0o750)
@@ -1792,6 +1795,11 @@ for ordinal,(target,phase) in enumerate(cases):
         host._capture_clocks={'wall':[],'monotonic':[],'complete':True}
         host._capture_process={'rows':[],'driver_rest':[],'signals':[],'complete':True,
             'request_raw':request,'attempt_id':attempt_id}
+        if target=='sandbox-export.bin':
+            export=host.frame_write([(b'stdout',b''),(b'stderr',b'')])
+            export += bytes(12582912-len(export))
+            host._capture_process.update(ordinals={},bytes=0)
+            assert host._read_export_value(io.BytesIO(export))==export
         original={name:getattr(host.os,name) for name in ('mkdir','open','read','write','fchown','fchmod','fsync','close')}
         sync,check,rename=host._capture_sync,host._capture_directory_check,host._capture_rename_noreplace
         roles={store:'store',attempt:'native-attempt'}
@@ -1829,11 +1837,12 @@ for ordinal,(target,phase) in enumerate(cases):
                     or target=='sync' and state['site']==phase):fail()
             return original['fsync'](fd)
         def reading(fd,count):
-            if target=='readback' and roles.get(fd)=='witness-read':
+            if ((target=='readback' and roles.get(fd)=='witness-read')
+                    or target=='sandbox-export.bin' and roles.get(fd)==target):
                 if phase=='read':fail()
                 if phase=='mismatch':
                     data=original['read'](fd,count);state['fired']=True
-                    return b'x'+data[1:]
+                    return b'x'+data[1:] if data else data
             return original['read'](fd,count)
         def closing(fd):
             role=roles.pop(fd,None);result=original['close'](fd)
@@ -1891,6 +1900,14 @@ for ordinal,(target,phase) in enumerate(cases):
             assert work['complete'] is False and host._capture_process['complete'] is False
             if target=='capture-directory' and phase=='chown-close':
                 assert work['failure']['errno']==5 and any(row.get('errno')==9 for row in work['operations'])
+            if target=='sandbox-export.bin':
+                export_work=host._capture_process['export_work']
+                assert export_work['original_read']==export_work['original_sha']==12582912
+                copied=3 if phase=='short' else 0 if phase in ('open','write','zero') else 12582912
+                assert export_work.get('controlled_copy',0)==export_work.get('controlled_write',0)==copied
+                readback=12582912 if phase in ('close','mismatch') else 0
+                assert export_work.get('controlled_readback',0)==readback
+                assert work.get('export_write_bytes',0)==copied and work.get('export_read_bytes',0)==readback
             native=area/attempt_id
             assert {path.name for path in native.iterdir()}=={'receipt.json','payload'}
             assert (native/'receipt.json').read_bytes()==receipt
@@ -1901,12 +1918,14 @@ for ordinal,(target,phase) in enumerate(cases):
                 if directory.exists():
                     namespace.append({'name':directory.name,'inode':directory.stat().st_ino,
                         'files':[{'name':path.name,'inode':path.stat().st_ino,
-                                  'mode':path.stat().st_mode & 0o777,'bytes_hex':path.read_bytes().hex()}
+                                  'mode':path.stat().st_mode & 0o777,
+                                  **({'size':path.stat().st_size,'fixture_sha256':hashlib.sha256(path.read_bytes()).hexdigest()}
+                                     if path.name=='sandbox-export.bin' else {'bytes_hex':path.read_bytes().hex()})}
                                  for path in sorted(directory.iterdir())]})
             committed=target=='rename' and phase=='completion-committed-eio' or target=='directory'
             assert (published/'complete.json').exists() is committed
             print(json.dumps({'capture_failure_case':[target,phase],'controlled_fault_not_native_qualification':True,
-                'native_receipt_and_return_unchanged':True,'state':state,'namespace':namespace,'actual_work':work},sort_keys=True))
+                'native_receipt_and_return_unchanged':True,'state':state,'namespace':namespace,'actual_work':work,'actual_export_work':host._capture_process.get('export_work')},sort_keys=True))
         finally:os.close(store)
 PY_CAPTURE_FAILURES
 /usr/bin/python3 -I -S -B - "$root" <<'PY_SOURCE_CANCEL'
