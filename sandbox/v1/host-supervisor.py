@@ -1743,6 +1743,16 @@ def _capture_values(attempt_id, request_raw, raw, complete):
     return canonical(value)
 
 
+def _capture_completion_values(attempt_id, request_raw, capture_raw):
+    require(id_ok(attempt_id) and type(request_raw) is bytes and type(capture_raw) is bytes
+            and len(capture_raw) <= 1024 * 1024, "E_CAPTURE")
+    value = {"schema_version": 1, "kind": "malicious_capture_commit", "id": attempt_id,
+             "body": {"request_sha256": sha256_hex(request_raw),
+                      "capture_sha256": sha256_hex(capture_raw)}}
+    require(_capture_size(value, 511) + 1 <= 512, "E_CAPTURE")
+    return canonical(value)
+
+
 def _source_capture_values(attempt_id, request_raw, records, pages, clock_values, complete, operation):
     require(operation in {"kill-register-read", "coverage-read"}, "E_CAPTURE")
     captured_group = {}

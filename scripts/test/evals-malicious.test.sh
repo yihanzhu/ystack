@@ -659,6 +659,36 @@ consumer = load('capture_consumer',root/'shadow/v1/_consumer.py')
 capture_replay = load('capture_replay',root/'evals/v1/replay-malicious.py')
 request = host.canonical({'ordinary':'request bytes'})
 group = {'host':{'process':[],'driver_rest':[]}}
+for attempt_id in ('attempt.completion', 'a'*128):
+    capture = host._capture_values(attempt_id,request,group,True)
+    hashed = []
+    original_sha = host.sha256_hex
+    def observed_sha(raw):
+        hashed.append(raw)
+        return original_sha(raw)
+    host.sha256_hex = observed_sha
+    try:
+        witness = host._capture_completion_values(attempt_id,request,capture)
+    finally:host.sha256_hex = original_sha
+    assert len(hashed) == 2 and hashed[0] is request and hashed[1] is capture
+    assert witness == capture_replay._capture_completion_values(root,attempt_id,request,capture)
+    assert json.loads(witness) == {'schema_version':1,'kind':'malicious_capture_commit','id':attempt_id,
+        'body':{'request_sha256':original_sha(request),'capture_sha256':original_sha(capture)}}
+    assert len(witness) <= 512 and witness.endswith(b'\n')
+    assert host._capture_completion_values(attempt_id,request+b'x',capture) != witness
+    assert host._capture_completion_values(attempt_id,request,capture+b'x') != witness
+    print(json.dumps({'completion_constructor':attempt_id,'request_hash_bytes':len(request),
+        'capture_hash_bytes':len(capture),'witness_bytes':len(witness),
+        'canonical_processing_ceiling':4*len(witness)},sort_keys=True))
+for invalid in [('bad id',request,b'{}'),('a'*129,request,b'{}'),
+                ('attempt.completion',None,b'{}'),('attempt.completion',request,None),
+                ('attempt.completion',request,b'x'*(1024*1024+1))]:
+    for build in (lambda:host._capture_completion_values(*invalid),
+                  lambda:capture_replay._capture_completion_values(root,*invalid)):
+        try:build()
+        except Exception as error:assert type(error).__name__ == 'Refusal'
+        else:raise AssertionError('invalid completion constructor input')
+print('ok shared host/offline completion constructor; exact original bytes, bounded canonical witness')
 def refuses(function,label):
     try:function()
     except consumer.Refusal:

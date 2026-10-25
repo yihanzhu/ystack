@@ -85,6 +85,14 @@ def _preparation_values(runtime_root, inventory, source_bytes, runtime_values, i
     return manifest, record, owner.completion_envelope(record, manifest)
 
 
+def _capture_completion_values(runtime_root, attempt_id, request_raw, capture_raw):
+    spec = importlib.util.spec_from_file_location(
+        "malicious_capture_completion_values", Path(runtime_root)/"sandbox/v1/host-supervisor.py")
+    owner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(owner)
+    return owner._capture_completion_values(attempt_id, request_raw, capture_raw)
+
+
 def _capture_projection_values(runtime_root, capture_raw, groups, outer_raw, launch_raw,
                                expectation_raw, receipt_raw, kind):
     spec = importlib.util.spec_from_file_location(
