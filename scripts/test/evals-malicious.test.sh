@@ -1759,6 +1759,7 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
 PY_CAPTURE_VALUES
 /usr/bin/python3 -I -S -B - "$root" <<'PY_CAPTURE_FAILURES'
 import ctypes
+import errno
 import hashlib
 import io
 import importlib.util
@@ -1780,6 +1781,8 @@ cases += [('held',str(ordinal)) for ordinal in (1,2,3)]
 cases += [('readback',phase) for phase in ('open','read','mismatch','close')]
 cases += [('rename',phase) for phase in ('directory-eio','completion-eio','completion-eintr',
                                         'directory-committed-eio','completion-committed-eio')]
+cases += [('rename',site+'-'+kind) for site in ('directory','completion')
+          for kind in ('collision-file','collision-empty','collision-nonempty','missing-symbol','exdev','permission','eintr')]
 cases += [('directory','close')]
 cases += [('capture-directory',phase) for phase in ('mkdir','open','chown','chmod','fsync','chown-close')]
 cases += [('sandbox-export.bin',phase) for phase in ('open','write','zero','short','chown','chmod','fsync','close','read','mismatch')]
@@ -1868,6 +1871,19 @@ for ordinal,(target,phase) in enumerate(cases):
                 or (phase.startswith('completion') and source==b'.completion.pending')))
             if not selected:return rename(parent,source,destination,work)
             state['fired']=True
+            if 'collision-' in phase:
+                if phase.endswith('file'):
+                    collided=original['open'](destination,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600,dir_fd=parent)
+                    try:original['write'](collided,b'preexisting collision')
+                    finally:original['close'](collided)
+                else:
+                    original['mkdir'](destination,mode=0o750,dir_fd=parent)
+                    if phase.endswith('nonempty'):
+                        collided=original['open'](destination,os.O_RDONLY|os.O_DIRECTORY,dir_fd=parent)
+                        try:original['mkdir']('retained',mode=0o750,dir_fd=collided)
+                        finally:original['close'](collided)
+                state['collision_inode']=os.stat(destination,dir_fd=parent,follow_symlinks=False).st_ino
+                return rename(parent,source,destination,work)
             symbol='renameatx_np' if sys.platform=='darwin' else 'renameat2'
             provider=host._darwin_libc if sys.platform=='darwin' else host.ctypes.CDLL
             class Fault:
@@ -1876,9 +1892,9 @@ for ordinal,(target,phase) in enumerate(cases):
                         real=getattr(provider() if sys.platform=='darwin' else provider(None,use_errno=True),symbol)
                         real.argtypes=self.argtypes;real.restype=self.restype
                         assert real(*args)==0
-                    ctypes.set_errno(4 if phase.endswith('eintr') else 5)
+                    ctypes.set_errno(errno.EINTR if phase.endswith('eintr') else errno.EXDEV if phase.endswith('exdev') else errno.EACCES if phase.endswith('permission') else errno.EIO)
                     return -1
-            replacement=lambda *args,**kwargs:types.SimpleNamespace(**{symbol:Fault()})
+            replacement=lambda *args,**kwargs:types.SimpleNamespace(**({} if phase.endswith('missing-symbol') else {symbol:Fault()}))
             try:
                 if sys.platform=='darwin':host._darwin_libc=replacement
                 else:host.ctypes.CDLL=replacement
@@ -1914,16 +1930,26 @@ for ordinal,(target,phase) in enumerate(cases):
             assert (native/'payload/stdout').read_bytes()==b'' and (native/'payload/stderr').read_bytes()==b''
             pending=area/('.capture-'+attempt_id+'.pending');published=area/('.capture-'+attempt_id)
             namespace=[]
+            def retained_value(path):
+                if path.is_dir():return {'directory_names':sorted(child.name for child in path.iterdir())}
+                if path.name=='sandbox-export.bin':
+                    return {'size':path.stat().st_size,'fixture_sha256':hashlib.sha256(path.read_bytes()).hexdigest()}
+                return {'bytes_hex':path.read_bytes().hex()}
             for directory in (pending,published):
                 if directory.exists():
                     namespace.append({'name':directory.name,'inode':directory.stat().st_ino,
-                        'files':[{'name':path.name,'inode':path.stat().st_ino,
-                                  'mode':path.stat().st_mode & 0o777,
-                                  **({'size':path.stat().st_size,'fixture_sha256':hashlib.sha256(path.read_bytes()).hexdigest()}
-                                     if path.name=='sandbox-export.bin' else {'bytes_hex':path.read_bytes().hex()})}
-                                 for path in sorted(directory.iterdir())]})
+                        'files':([{'name':path.name,'inode':path.stat().st_ino,
+                                   'mode':path.stat().st_mode & 0o777,**retained_value(path)}
+                                  for path in sorted(directory.iterdir())] if directory.is_dir() else retained_value(directory))})
             committed=target=='rename' and phase=='completion-committed-eio' or target=='directory'
-            assert (published/'complete.json').exists() is committed
+            collision=target=='rename' and 'collision-' in phase
+            if collision:
+                destination=published/'complete.json' if phase.startswith('completion') else published
+                assert destination.stat().st_ino==state['collision_inode']
+                if phase.endswith('file'):assert destination.read_bytes()==b'preexisting collision'
+                elif phase.endswith('nonempty'):assert [child.name for child in destination.iterdir()]==['retained']
+                else:assert list(destination.iterdir())==[]
+            assert (published/'complete.json').exists() is (committed or collision and phase.startswith('completion'))
             print(json.dumps({'capture_failure_case':[target,phase],'controlled_fault_not_native_qualification':True,
                 'native_receipt_and_return_unchanged':True,'state':state,'namespace':namespace,'actual_work':work,'actual_export_work':host._capture_process.get('export_work')},sort_keys=True))
         finally:os.close(store)
