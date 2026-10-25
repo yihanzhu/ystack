@@ -860,6 +860,68 @@ if sys.platform in {'darwin','linux'}:
                     assert {p.name for p in (publication_root/source_attempt).iterdir()}=={'receipt.json','payload'}
                     print(json.dumps({'actual_source_writer_adapter':operation,'synthetic_pages_not_full_collector_route':True,
                         'actual_work':source_work},sort_keys=True))
+                original_installation=host._CoverageInstallation
+                original_collector=host._coverage_collector
+                original_store=host.check_store_root
+                original_stdin=host.sys.stdin
+                try:
+                    for failed_sync in (False,True):
+                        outer_id='attempt.outer.'+str(int(failed_sync))
+                        work_path=publication_root/('work-'+str(int(failed_sync)))
+                        work_path.mkdir(mode=0o700)
+                        outer_request=host.canonical({'id':outer_id,'body':{
+                            'nonce':('01' if failed_sync else '02')*32,
+                            'source_package_ref':'package','source_accepted_set_ref':'accepted'}})
+                        manifest=host.canonical({'pages':[meta]})
+                        observation=b'{}\n'
+                        receipt=host.canonical({'ordinary':'outer source native receipt'})
+                        calls=[]
+                        normalizer=types.SimpleNamespace(DOCUMENT_LIMIT=1024*1024,
+                            request=json.loads,doc_ref=lambda raw:raw.decode(),
+                            captured=lambda records,raw:(manifest,[b'{}\n']),
+                            normalize=lambda *args:observation,
+                            _source_values=lambda *args:(manifest,[b'{}\n'],observation,receipt),
+                            receipt=lambda *args:calls.append('receipt'))
+                        class Installation:
+                            n=normalizer
+                            host={'principal_uid':os.getuid(),'consumer_gid':os.getgid(),
+                                  'store_root':str(publication_root.resolve()),'work_root':str(work_path.resolve())}
+                            package_raw=b'package'
+                            accepted_raw=b'accepted'
+                            source_bytes={}
+                            identity={}
+                            def __init__(self,operation):assert operation=='coverage-read'
+                            def owned_directory(self,path,mode):
+                                assert (os.stat(path).st_mode & 0o777)==mode
+                                return os.open(path,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+                            def recheck(self):calls.append('recheck')
+                            def close(self):calls.append('close')
+                        host._CoverageInstallation=Installation
+                        host._coverage_collector=lambda *args:records
+                        host.check_store_root=lambda path,*args:os.open(path,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+                        host.sys.stdin=types.SimpleNamespace(buffer=__import__('io').BytesIO(outer_request))
+                        if failed_sync:host._capture_sync=fail_after_directory_rename
+                        try:assert host.run_coverage_read(['coverage-read']) is None
+                        finally:host._capture_sync=original_sync
+                        actual_work=host._capture_clocks['publication_work']
+                        assert actual_work['complete'] is (not failed_sync)
+                        assert actual_work['operations'] and actual_work['write_bytes']>0
+                        if failed_sync:assert actual_work['failure']['errno']==5
+                        assert calls.count('receipt')==1 and calls[-1]=='close'
+                        native_path=publication_root/outer_id
+                        assert {p.name for p in native_path.iterdir()}=={'receipt.json','payload'}
+                        assert (native_path/'receipt.json').read_bytes()==receipt
+                        assert (native_path/'payload/request.json').read_bytes()==outer_request
+                        assert (native_path/'payload/raw/0000').read_bytes()==b'{}\n'
+                        print(json.dumps({'actual_run_coverage_read':True,'capture_failure':failed_sync,
+                            'normalization_installation_and_store_admission_are_fixture_doubles':True,
+                            'actual_payload_receipt_publisher_and_return_preserved':True,
+                            'actual_work':actual_work},sort_keys=True))
+                finally:
+                    host._CoverageInstallation=original_installation
+                    host._coverage_collector=original_collector
+                    host.check_store_root=original_store
+                    host.sys.stdin=original_stdin
             finally:host._capture_process,host._capture_clocks=old_process,old_clocks
         finally:os.close(root_fd)
     print('ok ordinary full export publication/completion, no-replace collision and pre-completion failure - '+sys.platform+'; not native qualification')

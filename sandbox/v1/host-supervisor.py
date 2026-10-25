@@ -4128,17 +4128,26 @@ def run_coverage_read(argv):
                 "E_SOURCE_NORMALIZATION")
         n.receipt(receipt, request_raw, host, installation.identity, raw_manifest, observation)
         installation.recheck()
-        capture = None
+        capture = source_work = None
         try:
+            source_work = _capture_clocks.setdefault("publication_work", {})
             capture = _source_capture_group_values(requested["id"], request_raw, records, pages,
                 _capture_clocks, _capture_clocks["complete"], operation)
-        except (MemoryError, ValueError, TypeError, Refusal):
-            pass
+            source_work["preparation"] = "complete"
+        except (MemoryError, ValueError, TypeError, Refusal) as error:
+            _capture_clocks["complete"] = False
+            if source_work is not None:
+                try:
+                    source_work["complete"] = False
+                    source_work["failure"] = {"phase": "source-capture-preparation",
+                        "category": type(error).__name__, "errno": getattr(error, "errno", None)}
+                except MemoryError:
+                    pass
         writing, attempt = attempt, None
         write_receipt_file(store, writing, uid, gid, receipt)
         installation.recheck()
         if capture is not None:
-            _write_capture_file(store, uid, gid, requested["id"], request_raw, capture[0], capture[1])
+            _write_capture_file(store, uid, gid, requested["id"], request_raw, capture[0], capture[1], work=source_work)
     except Refusal:
         raise
     except Exception:
