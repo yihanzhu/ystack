@@ -1954,6 +1954,98 @@ for ordinal,(target,phase) in enumerate(cases):
                 'native_receipt_and_return_unchanged':True,'state':state,'namespace':namespace,'actual_work':work,'actual_export_work':host._capture_process.get('export_work')},sort_keys=True))
         finally:os.close(store)
 PY_CAPTURE_FAILURES
+/usr/bin/python3 -I -S -B - "$root" <<'PY_CAPTURE_ADMISSION'
+import importlib.util
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+import types
+
+root=Path(sys.argv[1])
+def load(name,path):
+    spec=importlib.util.spec_from_file_location(name,path)
+    module=importlib.util.module_from_spec(spec);sys.modules[name]=module;spec.loader.exec_module(module)
+    return module
+host=load('capture_admission_host',root/'sandbox/v1/host-supervisor.py')
+consumer=load('capture_admission_consumer',root/'shadow/v1/_consumer.py')
+consumer._acl_state=lambda *_: ([],None) if sys.platform=='darwin' else (None,None)
+cases=('positive','missing','empty','partial','duplicate','wrong-id','wrong-request','wrong-capture',
+       'extra-witness-key','512-malformed','513-over','extra-entry','witness-symlink','capture-symlink',
+       'witness-mode','directory-mode','legacy-flat','lost-directory')
+for label in cases:
+    with tempfile.TemporaryDirectory(prefix='ystack-capture-admission-') as temporary:
+        area=Path(temporary).resolve();store=area/'store';store.mkdir(mode=0o750);store.chmod(0o750)
+        attempt_id='attempt.admission';request=host.canonical({'ordinary':'request'})
+        receipt=host.canonical({'body':{'attempt':{'attempt_id':attempt_id,
+            'launch_request_sha256':host.sha256_hex(request)}}})
+        store_fd=os.open(store,os.O_RDONLY|os.O_DIRECTORY)
+        attempt=host.mkdir_excl(store_fd,attempt_id,os.getuid(),os.getgid())
+        host.write_payload(attempt,os.getuid(),os.getgid(),[(b'stdout',b''),(b'stderr',b''),(b'evidence-manifest.json',host.empty_evidence_manifest()[0])])
+        host._capture_clocks={'wall':[],'monotonic':[],'complete':True}
+        host._capture_process={'rows':[],'driver_rest':[],'signals':[],'complete':True,
+            'request_raw':request,'attempt_id':attempt_id}
+        try:assert host.write_receipt_file(store_fd,attempt,os.getuid(),os.getgid(),receipt) is None
+        finally:os.close(store_fd)
+        private=store/('.capture-'+attempt_id);witness=private/'complete.json';capture=private/'capture.json'
+        original_witness=witness.read_bytes();original_capture=capture.read_bytes()
+        def replace(path,raw):
+            path.chmod(0o640);path.write_bytes(raw);path.chmod(0o440)
+        if label=='missing':witness.unlink()
+        elif label=='empty':replace(witness,b'')
+        elif label=='partial':replace(witness,original_witness[:17])
+        elif label=='duplicate':replace(witness,original_witness+original_witness)
+        elif label in ('wrong-id','wrong-request','wrong-capture','extra-witness-key'):
+            changed=json.loads(original_witness)
+            if label=='wrong-id':changed['id']='attempt.other'
+            elif label=='wrong-request':changed['body']['request_sha256']='a'*64
+            elif label=='wrong-capture':changed['body']['capture_sha256']='a'*64
+            else:changed['extra']=True
+            replace(witness,host.canonical(changed))
+        elif label in ('512-malformed','513-over'):replace(witness,b'x'*(512 if label=='512-malformed' else 513))
+        elif label=='extra-entry':(private/'extra').write_bytes(b'kept')
+        elif label in ('witness-symlink','capture-symlink'):
+            path=witness if label=='witness-symlink' else capture
+            path.rename(area/'retained-original');path.symlink_to(area/'retained-original')
+        elif label=='witness-mode':witness.chmod(0o640)
+        elif label=='directory-mode':private.chmod(0o770)
+        elif label=='legacy-flat':
+            for path in (capture,witness):path.rename(store/attempt_id/path.name)
+            private.rmdir()
+        elif label=='lost-directory':private.rename(area/'retained-crash-directory')
+        config={'principal_uid':os.getuid(),'consumer_gid':os.getgid(),'store_root':str(store),
+            'store_id':'store.ordinary','environment_id':'environment.ordinary','work_root':str(area/'work'),
+            'runtime':{'driver':'/ordinary/driver','vfkit':'/ordinary/vfkit'},
+            'installed_files':{key:'/ordinary/installed/'+key for key in consumer.INSTALLED_SOURCES},
+            'identity_paths':{key:['/ordinary/dyld'] if key=='dyld_cache_files' else '/ordinary/identity/'+key
+                              for key in consumer.IDENTITY_KEYS}}
+        config_raw=host.canonical({'schema_version':1,'kind':'sandbox_host_config','id':'host.ordinary','body':config})
+        anchor=types.SimpleNamespace(config=config,config_raw=config_raw,resolver=None,recheck=lambda *_:None,
+            identity_context={},private_observations={},capture_completion_owner=types.SimpleNamespace(
+                construct=lambda anchor,attempt_id,request,capture:host._capture_completion_values(attempt_id,request,capture)))
+        native=None;held=None;refused=False
+        try:
+            native=consumer._HeldStoreRead(anchor,attempt_id)
+            try:held=consumer._HeldCaptureRead(native,request)
+            except consumer.Refusal:refused=True
+            if label=='positive':
+                assert not refused and held.snapshots=={'capture.json':original_capture,'complete.json':original_witness}
+                held.recheck()
+            else:assert refused,label
+        except consumer.Refusal:
+            assert label=='legacy-flat',label
+            refused=True
+        finally:
+            if held is not None:held.close()
+            if native is not None:native.close()
+        assert (store/attempt_id/'receipt.json').read_bytes()==receipt
+        assert (store/attempt_id/'payload/stdout').read_bytes()==b''
+        print(json.dumps({'capture_admission_case':label,'refused':refused,
+            'completion_constructor_is_fixture_owner':True,'ACL_admission_is_fixture_double':True,
+            'host_publication_work':host._capture_process['publication_work'],
+            'private_capture_work':getattr(native,'capture_work',None)},sort_keys=True))
+PY_CAPTURE_ADMISSION
 /usr/bin/python3 -I -S -B - "$root" <<'PY_SOURCE_CANCEL'
 import importlib.util
 import json
