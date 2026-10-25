@@ -649,10 +649,17 @@ run_control_checks() {
   done
   while IFS= read -r file; do
     file=${file##*/}
-    for mutation in missing changed; do
+    for mutation in missing changed same-length; do
       fresh_control_copy
-      if [ "$mutation" = missing ]; then /bin/rm "$copy/$file"; diagnostic=fixture-inventory
-      else printf ' ' >> "$copy/$file"; diagnostic=fixture-bytes; fi
+      case "$mutation" in
+        missing) /bin/rm "$copy/$file"; diagnostic=fixture-inventory ;;
+        changed) printf ' ' >> "$copy/$file"; diagnostic=fixture-bytes ;;
+        same-length)
+          printf '[' | /bin/dd of="$copy/$file" bs=1 count=1 conv=notrunc 2>/dev/null
+          [ "$(/usr/bin/wc -c < "$copy/$file")" = "$(/usr/bin/wc -c < "$control_fixture/$file")" ] || fail 'digest mutant changed length'
+          [ "$(sha_file "$copy/$file")" != "$(sha_file "$control_fixture/$file")" ] || fail 'digest mutant did not change bytes'
+          diagnostic=fixture-bytes ;;
+      esac
       if check_control_fixture "$copy" 2>"$tmp/control-refusal"; then fail "fixture $file/$mutation accepted"; fi
       /usr/bin/grep -qx "$diagnostic" "$tmp/control-refusal" || fail 'fixture byte/inventory wrong layer'
       control_references_match "$root/control/v1/control-policy-set.json" "$root/control/v1" || fail 'current positive must not rescue damaged history'
@@ -2132,6 +2139,7 @@ pass 'no live eval seed set was modified'
 # Driver: run every table entry. Commit 1 carries the self-host bundle only;
 # a later bundle is added to this list, never a sibling copy of this file.
 # ===========================================================================
+/bin/bash "$root/scripts/test/run-all.sh" --list
 bundles=(self-host external-dummy-target)
 for bundle_name in "${bundles[@]}"; do
   load_bundle "$bundle_name"
