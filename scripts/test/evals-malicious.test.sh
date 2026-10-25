@@ -957,6 +957,7 @@ if sys.platform in {'darwin','linux'}:
                                 for slot in (4095,4094):(private_sources/('gate-%04d'%slot)).mkdir(mode=0o700)
                                 reader=object.__new__(scope_capture_reader._Reader)
                                 reader.captures=private_sources.resolve();reader.source_capture_ordinal=0
+                                reader.source_capture_work=[]
                                 reader.inputs=[];reader.darwin=None
                                 acquisitions=[]
                                 reader.store_session=types.SimpleNamespace(acquire=lambda item:acquisitions.append(item.attempt_id))
@@ -977,9 +978,34 @@ if sys.platform in {'darwin','linux'}:
                                     assert source_anchor.recording_work['files']==8
                                     assert len(source_anchor.recording_work['cases'])==1
                                     assert native_source.recheck() is None and source_again.recheck() is None
+                                    final_owner_module=load('source_final_owner',root/'shadow/v1/enforced-reproduction.py')
+                                    installed_owner=private_sources/'installed-owner';installed_owner.mkdir(mode=0o700)
+                                    installed_path=installed_owner/'host-supervisor.py'
+                                    installed_bytes=(root/'sandbox/v1/host-supervisor.py').read_bytes()
+                                    installed_path.write_bytes(installed_bytes);installed_path.chmod(0o440)
+                                    final_owner_module.c.ANCHOR=str(installed_owner.resolve())
+                                    installed_hold=final_owner_module.c._open_held(str(installed_path.resolve()),False,
+                                        lambda *args:True,'E_STORE')
+                                    final_owner=final_owner_module._load_capture_completion_owner()
+                                    assert final_owner is not None,final_owner_module._CAPTURE_OWNER_WORK
+                                    try:
+                                        source_anchor.held=[installed_hold]
+                                        source_anchor.capture_completion_owner=final_owner
+                                        final_owner.authenticate(source_anchor)
+                                        reader.anchor=source_anchor;reader.enforced=final_owner_module
+                                        reader.seal_source_captures()
+                                        assert source_anchor.private_observations['recording_sealed'] is True
+                                        assert final_owner.work['transferred_read_bytes']==final_owner.work['read_bytes']
+                                        assert all(work['transferred_read_bytes']==work['read_bytes'] for work in reader.source_capture_work)
+                                        assert len(source_anchor.recording_work['cases'])==1
+                                    finally:
+                                        installed_hold.close();final_owner_module._close_capture_completion_owner(final_owner)
+                                        if sys.modules.get(final_owner.name) is final_owner.module:del sys.modules[final_owner.name]
                                     print(json.dumps({'actual_source_owned_append_and_private_copy':True,
                                         'two_reacquisitions_share_one_counter':True,
                                         'scope_session_and_completion_startup_are_fixture_doubles':True,
+                                        'actual_final_source_owner_and_tail_transfer':True,
+                                        'additional_fixture_installed_owner_copy_bytes':len(installed_bytes),
                                         'actual_work':source_anchor.recording_work},sort_keys=True))
                                 finally:source_again.close()
                         finally:

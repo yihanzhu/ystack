@@ -557,6 +557,7 @@ class _Generator:
         self.sync_directories()
         self.check()
         self.session.complete()
+        self.reader.seal_source_captures()
         r.write_exclusive(self.output / "completion/COMPLETE.json", _completion_values(self.request["id"], manifest), resolver=self.reader.darwin)
 
     def sync_directories(self):

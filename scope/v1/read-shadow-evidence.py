@@ -225,6 +225,7 @@ class _Reader:
         self.anchor = None
         self.capture_completion_owner = None
         self.source_capture_ordinal = 0
+        self.source_capture_work = []
         self.modules = None
         self.coverage_configuration = None
         self.authentication_revision = None
@@ -368,6 +369,7 @@ class _Reader:
     def terminal(self, observation):
         require(self.commands_open, "E_RUNTIME")
         self.commands_open = False
+        self.seal_source_captures()
         raw = c.canonical({"schema_version": 1, "kind": "scope_shadow_evidence_terminal",
             "id": self.scope["id"], "body": {
                 "observation_sha256": c.digest(observation), "commands": self.commands}})
@@ -439,6 +441,9 @@ class _Reader:
     def retain_source_capture(self, source):
         parent = None
         try:
+            require(len(self.source_capture_work) < 4096, "E_LIMIT")
+            if hasattr(source, "capture_work"):
+                self.source_capture_work.append(source.capture_work)
             require(hasattr(source, "capture") and self.source_capture_ordinal < 4096, "E_STORE")
             ordinal = self.source_capture_ordinal
             self.source_capture_ordinal += 1
@@ -462,6 +467,32 @@ class _Reader:
                 except OSError as error:
                     source.anchor.private_observations["unusable"] = True
                     source.anchor.private_observations["source_copy_close_errno"] = error.errno
+
+    def seal_source_captures(self):
+        parent = None
+        try:
+            require(self.anchor is not None, "E_STORE")
+            parent = c._open_held(str(self.captures), True,
+                c._store_rule(os.geteuid(), os.getegid(), 0o700, True, self.darwin), "E_STORE")
+            self.enforced._seal_capture_recording(self.anchor, parent)
+            key = str(parent.before.st_dev) + ":" + str(parent.before.st_ino)
+            case_work = c._capture_work_values(self.anchor.recording_work, key)
+            for work in self.source_capture_work:
+                c._capture_transfer_work(work, self.anchor.recording_work, case_work)
+        except Exception as error:
+            if self.anchor is not None:
+                self.anchor.private_observations["unusable"] = True
+                self.anchor.private_observations["source_seal_failure"] = {
+                    "category": type(error).__name__, "errno": getattr(error, "errno", None)}
+        finally:
+            if parent is not None:
+                try:
+                    parent.close()
+                except OSError as error:
+                    self.anchor.private_observations["unusable"] = True
+                    self.anchor.private_observations["source_seal_close_errno"] = error.errno
+            if self.anchor is not None:
+                self.anchor.private_observations["recording_sealed"] = not self.anchor.private_observations.get("unusable", False)
 
     def release_stores(self):
         self.recheck()
