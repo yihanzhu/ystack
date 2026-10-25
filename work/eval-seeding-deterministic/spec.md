@@ -459,42 +459,136 @@ ACL, inventory, content, path-binding and before/after predicates. Offline
 recomputation proves consistency with retained observations, not that the current
 machine performed a new authenticated read.
 
-The real recorder retains these values from the reads already performed. It does
-not re-read a path later to pretend it was the held read. Add a fixed
-`capture.json` sibling of `receipt.json` within the existing controlled attempt,
-with the same principal/group and read-only file rule. Its exact envelope is
+The real recorder retains values from the reads already performed. It does not
+re-read a path later to pretend it was the held read. Native attempts keep exactly
+`{receipt.json,payload}`. Capture uses one separate, fixed directory under the
+same held `store_root`: `.capture-<attempt_id>.pending` during construction and
+`.capture-<attempt_id>` after its single directory rename. These names derive only
+from the already validated native attempt id; their leading dot excludes the
+native attempt-id grammar. No caller supplies a path, selector or limit. The
+original host principal owns both names. Directories use the existing 0750,
+principal/group, ACL and non-symlink-parent rules; completed files use 0440.
+Neither the cleaned work_root nor the consumer's private output is host scratch.
+
+Inside the directory, `capture.json` keeps exactly the existing envelope:
 `schema_version:1`, `kind:"malicious_source_capture"`, `id:attempt_id` and
 `body:{request_sha256,raw,complete}`. Raw is the corresponding closed B group,
-with only the host export reference using the intermediate form defined above;
-request_sha256 is recomputed from held request bytes; complete is true only after
-all required observations and existing final checks finish. It contains only the
-host, guest and source observations needed above, never secret bytes. The consumer
-holds and reads it with the same store root, owner, ACL and stability rules before
-copying its bytes into the recorder's private output. Consumer-side stat, command
-and entropy observations are retained in that private output, outside the normal
-bundle. Their canonical envelope and refs are reconstructed too.
+with only the host export reference using the intermediate form defined above.
+The request digest comes from held request bytes. Complete is true only after all
+required observations and native final checks finish. The envelope contains only
+the host, guest and source observations needed above, never secret bytes.
+`sandbox-export.bin` is present if and only if the complete export-read row has
+its byte reference. Source-page captures never contain that file. Keep all whole
+byte, size, digest, held-descriptor, regular-file, ACL and stability checks.
 
-The capture attempt inventory is exactly `{receipt.json,payload,capture.json}`,
-plus the sole fixed sibling `sandbox-export.bin` if and only if the complete
-export-read row has its byte reference. Source-page attempts never have that
-sibling. The file has the same principal/group, read-only mode, held-descriptor,
-ACL, regular-file, non-symlink-parent and final stability rules as capture.
-The consumer copies the whole held bytes into the private recorder output;
-it admits no arbitrary sibling or verifier payload entry. In each trial's fixed
-shared-file inventory, the only export paths are `exports/reproduction.bin` and
-`exports/write.bin`, under that trial's existing seed directory. The launcher
-resolves the validated launch role to these paths, never a caller path or limit.
-Every existing inventory predicate and recheck must agree on this exact set.
-Keep legacy `{receipt.json,payload}` readable for its old consumers, but it cannot
-seed this replay. An older capture without an export reference cannot substitute
-for an expected export read. The normal shadow bundle's file set stays unchanged.
-A capture must bind the actual attempt and request bytes and complete successfully; missing,
-partial, overflowed, changed or mismatched capture makes recording unusable as a
-seed. It never changes the native result or excuses teardown. The guest frame's
-one fixed control-observation record is produced by the supervisor, outside the
-verifier's output namespace. It does not give the verifier another writable file
-or change verifier output/CPU/wall limits. Its own 4 MiB capture bound is separate;
-overflow preserves native cleanup and prevents a replayable recording.
+Build and validate the entire bounded canonical envelope before any capture file
+write. Its 1 MiB bound includes the final LF. An overflow must not publish a
+binary beside a substituted empty raw group. Finish the existing native receipt,
+payload, stop/reap and work-root cleanup sequence unchanged. Then create the
+pending capture directory exclusively. Write its fixed files exclusively from
+already held bytes, with all existing fsync, readback, ownership and completion
+checks. Sync the pending directory and store root. Publish the complete directory
+with one same-filesystem atomic no-replace rename, then sync the published
+directory and store root. All required checks and syncs must succeed. A platform
+without this no-replace operation cannot produce a usable capture; a check-then-
+replacing rename is not a substitute. No helper binary or new native input is added.
+
+Directory presence alone is not proof that the post-rename syncs succeeded.
+After they succeed, the same host writes one fixed private completion record to
+`.completion.pending` inside the published directory. Its canonical JSON plus LF
+is at most 512 bytes and has exactly `schema_version:1`,
+`kind:"malicious_capture_commit"`, `id:attempt_id` and
+`body:{request_sha256,capture_sha256}`. The digests bind the original held request
+and exact capture.json bytes; that capture binds every export byte. This record
+certifies the completed data publication checks, not native success. Create it
+exclusively, finalize its original owner/group and 0440 mode, fsync it, close its
+write descriptor successfully, and complete its held identity/content checks.
+Sync the published directory and store root again. Only then atomically rename
+`.completion.pending` to `complete.json` without replacement. There is no retry,
+compensating move, second status record or separate completion tool.
+
+The final completion-name rename is the commit point. It provides atomic
+visibility, not an additional claim of crash durability for that name. Every data-file and data-directory sync
+above, including those after the capture-directory rename, remains a hard gate.
+The completion record only reports those already completed operations. Its loss
+across a crash makes recording unusable; its presence never excuses a missing or
+changed data file. No later failed operation is repaired by rewriting this record.
+A failed or indeterminate final rename leaves the actual names untouched by any
+recovery code. Preserve its actual return/error; never infer that the move failed
+or succeeded. The recorder accepts only the one complete, stable committed
+inventory. That witness proves the earlier checks, not that the host received a
+successful return from the final rename. This is not an atomic durability promise.
+The host's native exit status, receipt and output-channel contracts stay unchanged.
+
+For a usable capture the exact published inventory is `{capture.json,complete.json}`
+plus `sandbox-export.bin` if and only if the matching reference exists. Pending
+names are never replay inputs. Any capture write, limit, ownership, readback, sync
+or pre-commit rename failure stops capture publication at its actual location.
+Retain all bytes and partial files there, including a published data directory
+without complete.json or with .completion.pending after a later failure. Do not
+remove, overwrite, truncate, migrate or retry them. A repeated attempt or occupied
+fixed destination refuses capture; it cannot repair an earlier attempt. Failure
+to preserve further metadata does not authorize a second write or cleanup of the
+original evidence. Native result and teardown still follow their original rules.
+
+The ordinary native reader checks only its original closed attempt inventory and
+receipt/payload relations. It does not admit extra attempt siblings or treat a
+capture failure as E_STORE for an otherwise valid native result. The recorder
+separately holds the fixed capture directory from that same authenticated store
+root. It requires the exact completed inventory and binds complete.json, capture,
+native receipt and the held request to the same attempt and request digest. It
+then applies all original owner/ACL/parent/size/hash checks and completion rechecks
+throughout every hold, copy, release and reacquisition. Missing, partial, unknown,
+changed or mismatched capture makes recording unusable as a seed. Nothing falls
+back to a partial directory, an older flat capture or a receipt as raw input.
+
+The two fixed launch callers still validate their outer request, actual launch,
+receipt and expectation before projecting the same held intermediate reference
+to the final launch role. Source readers use their actual source request/receipt
+binding and reject exports. Retain original capture and completion bytes and
+rebuild both canonical envelopes independently during offline comparison.
+Completion is historical host evidence, never an input to native admission or
+an independent guest calculation. Consumer-side stat, command and entropy
+observations stay in its private output. Reconstruct their envelopes, refs and
+origin from the actual separate held inventories; no cached verdict replaces a
+check. Every ordinary, recursive and final reader must use this same separation.
+
+The consumer copies the whole held bytes into its existing private recorder
+output. Trial export paths remain only `exports/reproduction.bin` and
+`exports/write.bin` under the trial's existing seed directory. Legacy native
+`{receipt.json,payload}` remains readable but cannot alone seed replay. The normal
+shadow bundle's file set stays unchanged. No automatic conversion of old captures
+or new public selector, status endpoint, partial reader or collection tool is added.
+
+All pending, published, completion, failed-retained and private copies count toward
+the existing physical/file and cumulative write/read budgets. Rename does not copy
+bytes or erase a previous charge. Completion bytes, metadata and repeated checks
+pay the existing non-export and unified budgets; partial operations pay their
+actual work. Keep all existing binary passes, independent recomputation and caps,
+including 12 MiB exports, 1 MiB JSON and the four raw partitions. The 40 edit paths,
+nine adoption-only paths and 84 source members do not change. No added helper,
+package, installation, authority or real recording is authorized by this layout.
+
+Existing capture-held-values, sandbox-launcher, shadow-enforced/write and source
+reader fixtures must prove both complete 12 MiB launches through this protocol.
+Inject failure at each file write/finalize/readback, directory rename and fsync,
+including post-directory-rename sync and the completion record's own write/sync/
+rename. Require retained actual partial bytes, no complete.json before all gates,
+unchanged native receipt/result/teardown and unusable recording for any failed
+prerequisite or missing/partial witness. Test both actual namespace outcomes of
+an indeterminate final witness rename; retain the error in either case and accept
+no incomplete data or witness. Cover another failure while finalizing the first failure, pre-existing
+pending/final names, missing/partial/duplicate completion, wrong attempt/request/
+capture digest, cross-launch and source/export swaps, extra entries, symlinks,
+owner/ACL/parent/held drift, limit and one-over-limit charges, and loss after crash.
+Delete each production/offline completion construction or check in the existing
+paired mutation proofs; neither route may pass without it. Preserve every old
+raw-error, full-tail, zero-padding, cleanup and failure fixture and all final debts.
+
+The guest frame's one fixed control-observation record remains supervisor-owned,
+outside the verifier output namespace. Its own 4 MiB capture bound is separate.
+It gives the verifier no writable file and changes no output/CPU/wall limit.
+Overflow preserves native cleanup and prevents a replayable recording.
 
 Only an authorized real recording may create these controlled-store files. This
 spec covers source preparation only after the separate high-risk plan gate. It
@@ -525,7 +619,7 @@ unknown or extra output stops recording and replay.
 | Gate objects `kill-request,kill-expectation,coverage-request,coverage-expectation,kill-configuration,runtime,initial-origins,final-origins,commands` | Generator/reader/consumer shared constructors, raw entropy, held observations and source/runtime byte measurements. Recompute every call id, nonce reference, command and source-package ref. |
 | Gate `register,state,attempt,duty,risk,kill,scope,scope-evaluation` | Source normalizers, `project_register`, the real control evaluators and `scope-gates.jq`, in existing order and with the scope's own stage/profile/result refs. Enablement remains false/blocked or proposal absent according to that output. |
 | Gate `kill-evidence`/`coverage-evidence`, every raw snapshot, manifest and COMPLETE | Source raw pages and the shared receipt builder; generator recomputes all indexed names, size/hash rows, origin refs, manifest digest and completion. Raw pages are inputs; their manifest/normalized result/receipt are derived. |
-| Capture envelopes and replay observation | Each capture owner canonicalizes its closed raw fields and recomputes attempt/request refs. The fixed replay coordinator emits disposition, recomputed invariants and sorted mismatch paths only after all owners finish. |
+| Capture/completion envelopes and replay observation | Each capture owner canonicalizes its closed raw fields and recomputes attempt/request refs; the completion owner rebuilds its request/capture digests from those original bytes. The fixed replay coordinator emits disposition, recomputed invariants and sorted mismatch paths only after all owners finish. |
 
 I5 compares the complete ordered permitted-command recipe: role, executable and
 component identities, operation, fixed options and typed argument positions.
