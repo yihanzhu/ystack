@@ -657,6 +657,8 @@ def load(name,path):
 host = load('capture_host',root/'sandbox/v1/host-supervisor.py')
 consumer = load('capture_consumer',root/'shadow/v1/_consumer.py')
 capture_replay = load('capture_replay',root/'evals/v1/replay-malicious.py')
+scope_capture_reader = load('capture_scope_reader',root/'scope/v1/read-shadow-evidence.py')
+scope_capture_reader.c=consumer
 request = host.canonical({'ordinary':'request bytes'})
 group = {'host':{'process':[],'driver_rest':[]}}
 for attempt_id in ('attempt.completion', 'a'*128):
@@ -925,8 +927,12 @@ if sys.platform in {'darwin','linux'}:
                             'id':'host.outer','body':source_config})
                         source_anchor=types.SimpleNamespace(config=source_config,config_raw=source_config_raw,
                             resolver=None,recheck=lambda *args:None,private_observations={},
+                            recording_work={},identity_context={'uid':os.getuid(),'euid':os.geteuid(),
+                                'gid':os.getgid(),'egid':os.getegid(),'groups':os.getgroups(),
+                                'platform':sys.platform,'uuid_replies':None,'group_replies':None},
                             capture_completion_owner=types.SimpleNamespace(construct=lambda anchor,attempt_id,request,capture:
-                                host._capture_completion_values(attempt_id,request,capture)))
+                                host._capture_completion_values(attempt_id,request,capture),
+                                authenticate=lambda anchor:None,transfer=lambda work,case:None))
                         source_configuration=types.SimpleNamespace(normalizer=normalizer,identity={},recheck=lambda *args:None)
                         original_source_acl=consumer._acl_state
                         consumer._acl_state=lambda *args:([],None) if sys.platform=='darwin' else (None,None)
@@ -947,6 +953,35 @@ if sys.platform in {'darwin','linux'}:
                                     {'attempt_id':outer_id,'platform':sys.platform},{'host-config.json':source_config_raw},
                                     capture_files=native_source.capture.snapshots,
                                     capture_storage_rows=native_source.capture.storage_rows)==native_source.capture_origin
+                                private_sources=work_path/'source-recorder';private_sources.mkdir(mode=0o700)
+                                for slot in (4095,4094):(private_sources/('gate-%04d'%slot)).mkdir(mode=0o700)
+                                reader=object.__new__(scope_capture_reader._Reader)
+                                reader.captures=private_sources.resolve();reader.source_capture_ordinal=0
+                                reader.inputs=[];reader.darwin=None
+                                acquisitions=[]
+                                reader.store_session=types.SimpleNamespace(acquire=lambda item:acquisitions.append(item.attempt_id))
+                                owned=scope_capture_reader._Owned(reader)
+                                owned.append(native_source)
+                                source_again=consumer._HeldCoverageRead(source_anchor,source_configuration,outer_request)
+                                try:
+                                    owned.append(source_again)
+                                    for ordinal,slot in enumerate((4095,4094)):
+                                        copied_source=private_sources/('gate-%04d'%slot)/('source-%04d'%ordinal)
+                                        assert {p.name for p in copied_source.iterdir()}=={
+                                            'capture.json','complete.json','origin-observation.json','consumer-observations.json'}
+                                        assert (copied_source/'capture.json').read_bytes()==native_source.capture.snapshots['capture.json']
+                                        assert (copied_source/'complete.json').read_bytes()==native_source.capture.snapshots['complete.json']
+                                        assert (copied_source/'origin-observation.json').read_bytes()==native_source.capture_origin
+                                        assert all(p.stat().st_mode & 0o777==0o400 for p in copied_source.iterdir())
+                                    assert acquisitions==[outer_id,outer_id]
+                                    assert source_anchor.recording_work['files']==8
+                                    assert len(source_anchor.recording_work['cases'])==1
+                                    assert native_source.recheck() is None and source_again.recheck() is None
+                                    print(json.dumps({'actual_source_owned_append_and_private_copy':True,
+                                        'two_reacquisitions_share_one_counter':True,
+                                        'scope_session_and_completion_startup_are_fixture_doubles':True,
+                                        'actual_work':source_anchor.recording_work},sort_keys=True))
+                                finally:source_again.close()
                         finally:
                             if native_source is not None:native_source.close()
                             consumer._acl_state=original_source_acl

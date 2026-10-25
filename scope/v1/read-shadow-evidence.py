@@ -146,6 +146,8 @@ class _Owned(list):
                 item.close()
                 raise
         super().append(item)
+        if isinstance(item, c._HeldCoverageRead):
+            self.reader.retain_source_capture(item)
 
     def remove(self, item):
         if isinstance(item, c._HeldStoreRead) and self.reader.store_session is not None:
@@ -222,6 +224,7 @@ class _Reader:
         self.deadline = min(DEADLINE, deadline) if deadline is not None else DEADLINE
         self.anchor = None
         self.capture_completion_owner = None
+        self.source_capture_ordinal = 0
         self.modules = None
         self.coverage_configuration = None
         self.authentication_revision = None
@@ -432,6 +435,33 @@ class _Reader:
                 self.anchor.private_observations["completion_owner_failure"] = {
                     "category": type(error).__name__, "errno": getattr(error, "errno", None)}
         return self.anchor
+
+    def retain_source_capture(self, source):
+        parent = None
+        try:
+            require(hasattr(source, "capture") and self.source_capture_ordinal < 4096, "E_STORE")
+            ordinal = self.source_capture_ordinal
+            self.source_capture_ordinal += 1
+            destination = self.captures
+            if self.store_session is not None:
+                slot = 4095 - ordinal
+                require(slot >= len(self.inputs), "E_LIMIT")
+                destination = self.captures / ("gate-%04d" % slot)
+            parent = c._open_held(str(destination), True,
+                c._store_rule(os.geteuid(), os.getegid(), 0o700, True, self.darwin), "E_STORE")
+            source.copy_source_capture(parent, ordinal, source.anchor.recording_work)
+        except Exception as error:
+            source.anchor.private_observations["unusable"] = True
+            source.anchor.private_observations["source_copy_failure"] = {
+                "category": type(error).__name__,
+                "errno": getattr(error, "os_errno", getattr(error, "errno", None))}
+        finally:
+            if parent is not None:
+                try:
+                    parent.close()
+                except OSError as error:
+                    source.anchor.private_observations["unusable"] = True
+                    source.anchor.private_observations["source_copy_close_errno"] = error.errno
 
     def release_stores(self):
         self.recheck()

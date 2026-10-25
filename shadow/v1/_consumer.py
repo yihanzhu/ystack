@@ -1729,8 +1729,11 @@ class _HeldStoreRead:
                     self.anchor.private_observations["unusable"] = True
 
     def copy_capture(self, parent, request_raw, launch, work):
-        _require(type(launch) is str and launch in {"reproduction", "write"}
-                 and isinstance(parent, HeldPath) and len(parent.components) > 1
+        _require(type(launch) is str and launch in {"reproduction", "write"}, "E_STORE")
+        return self._copy_capture(parent, request_raw, launch, work)
+
+    def _copy_capture(self, parent, request_raw, launch, work):
+        _require(isinstance(parent, HeldPath) and len(parent.components) > 1
                  and bool(self.held) and type(work) is dict, "E_STORE")
         capture_snapshots = self.capture.snapshots
         _capture_for_replay(capture_snapshots, self.attempt_id, request_raw)
@@ -1754,7 +1757,9 @@ class _HeldStoreRead:
         work.setdefault("export_physical_bytes", 0)
         work.setdefault("export_files", 0)
         work.setdefault("calls", {})
-        case_key = str(state.st_dev) + ":" + str(state.st_ino)
+        case_state = (parent.components[-2].before if isinstance(self, _HeldCoverageRead)
+                      and parent.components[-1].name.startswith("gate-") else state)
+        case_key = str(case_state.st_dev) + ":" + str(case_state.st_ino)
         case_work = work.setdefault("cases", {}).setdefault(case_key,
             {key: 0 for key in ("files", "read_bytes", "write_bytes", "physical_bytes",
                                "export_read_bytes", "export_write_bytes", "export_physical_bytes", "export_files")})
@@ -2090,6 +2095,13 @@ class _HeldCoverageRead(_HeldStoreRead):
                 except OSError as cleanup_error:
                     self.capture_work["cleanup_errno"] = cleanup_error.errno
             return None
+
+    def copy_source_capture(self, parent, ordinal, work):
+        _require(type(ordinal) is int and 0 <= ordinal < 4096, "E_LIMIT")
+        _capture_export_binding(_capture_for_replay(self.capture.snapshots, self.attempt_id,
+            self.snapshots["payload/request.json"]), self.capture.snapshots, source=True)
+        return self._copy_capture(parent, self.snapshots["payload/request.json"],
+                                  "source-%04d" % ordinal, work)
 
     def recheck(self, code="E_STALE"):
         super().recheck(code)
