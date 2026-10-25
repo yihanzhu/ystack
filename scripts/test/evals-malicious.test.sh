@@ -1117,6 +1117,7 @@ try:
 finally:
     enforced.c.ANCHOR=original_anchor_path
     enforced._close_capture_completion_owner(completion_owner)
+    if sys.modules.get(completion_owner.name) is completion_owner.module:del sys.modules[completion_owner.name]
 def refuses(function,label):
     try:function()
     except consumer.Refusal:
@@ -1320,6 +1321,22 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
                 ('original_read','original_sha','controlled_copy','controlled_write','controlled_readback'))
             assert host_work['frame_read_calls'] == 1
             assert 2*len(export) <= host_work['frame_read_bytes'] <= 2*len(export)+512*1024
+            selected_owner_module=load('selected_owner_'+launch,root/'shadow/v1/enforced-reproduction.py')
+            selected_owner=selected_owner_module._load_capture_completion_owner()
+            assert selected_owner is not None,selected_owner_module._CAPTURE_OWNER_WORK
+            owner_install=originals/('installed-owner-'+launch);owner_install.mkdir(mode=0o700)
+            owner_path=owner_install/'host-supervisor.py'
+            owner_path.write_bytes(selected_owner.source.raw);owner_path.chmod(0o440)
+            selected_owner_module.c.ANCHOR=str(owner_install.resolve())
+            installed_owner_hold=selected_owner_module.c._open_held(str(owner_path.resolve()),False,lambda *args:True,'E_STORE')
+            export_anchor.held=[installed_owner_hold]
+            export_anchor.recording_work=private_work
+            selected_active=selected_owner_module.CancellationSignals.active
+            selected_owner_module.CancellationSignals.active=types.SimpleNamespace(
+                admission=types.SimpleNamespace(capture_owner=selected_owner))
+            try:selected_owner_module._bind_capture_completion_owner(export_anchor)
+            finally:selected_owner_module.CancellationSignals.active=selected_active
+            assert export_anchor.capture_completion_owner is selected_owner and not export_anchor.private_observations
             held = consumer._HeldStoreRead(export_anchor,attempt_id)
             try:
                 acquired = export_anchor.private_observations['storage_reads'][-1]
@@ -1335,6 +1352,13 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
                 projected = (held.record_reproduction if launch == 'reproduction' else held.record_write)(
                     host.canonical(outer),request,expectation)
                 assert projected is not None
+                for mismatch in ('owner','anchor'):
+                    saved_owner=export_anchor.capture_completion_owner;saved_anchor=held.anchor
+                    if mismatch=='owner':export_anchor.capture_completion_owner=object()
+                    else:held.anchor=copy.copy(export_anchor)
+                    try:refuses(lambda:held.copy_capture(private_held,request,launch,{}),'cross-'+mismatch+'-capture-copy')
+                    finally:export_anchor.capture_completion_owner=saved_owner;held.anchor=saved_anchor
+                    assert not (private/launch).exists()
                 snapshot = held.capture.snapshots['sandbox-export.bin']
                 assert len(snapshot.chunks) == consumer.EXPORT_LIMIT//65536
                 assert all(type(chunk) is bytes and len(chunk) == 65536 for chunk in snapshot.chunks)
@@ -1512,6 +1536,10 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
                     'additional_ordinary_destination_validation_read_bytes':validation_bytes,
                     'additional_ordinary_consumer_doc_validation_input_bytes':len(consumer_observations)},sort_keys=True))
                 held.recheck()
+                selected_owner_module._seal_capture_recording(export_anchor,private_held,held)
+                assert export_anchor.private_observations['recording_sealed'] is True
+                assert selected_owner.work['transferred_read_bytes']==selected_owner.work['read_bytes']
+                assert selected_owner.work['authentication_calls']==2 and selected_owner.work['constructor_calls']==1
                 assert spent('consumer.completion-reread','calls') == 1
                 assert spent('consumer.completion-reread','read_bytes') == 2*len(export)
                 print(json.dumps({'launch':launch,'consumer_work':{
@@ -1531,7 +1559,10 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
                     'held_completion_equality_sha':spent('consumer.completion-reread','read_bytes')}
                 assert sum(value for key,value in ledger.items() if key != 'frame_read') == 13*len(export)
                 assert sum(ledger.values()) <= 15*len(export)+512*1024
-                recording_pair.append({'launch':launch,'completion_startup_binding_is_fixture_double':True,
+                recording_pair.append({'launch':launch,'actual_fixed_completion_owner':True,
+                    'installation_and_signals_admission_are_fixture_doubles':True,
+                    'actual_completion_owner_work':copy.deepcopy(selected_owner.work),
+                    'additional_fixture_installed_owner_copy_bytes':len(selected_owner.source.raw),
                     'calls':{'original_read':1,'original_sha':1,
                     'frame_read':host_work['frame_read_calls'],'controlled_copy':1,'controlled_readback_sha':1,
                     'held_acquisition_sha':spent('consumer.held-acquisition','calls'),
@@ -1584,7 +1615,10 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
                 assert len(failed_read['held']) == 1
                 assert len(failed_read['held'][0]['components']) >= 2
                 assert export_anchor.private_observations['unusable'] is True
-            finally:held.close()
+            finally:
+                held.close();installed_owner_hold.close()
+                selected_owner_module._close_capture_completion_owner(selected_owner)
+                if sys.modules.get(selected_owner.name) is selected_owner.module:del sys.modules[selected_owner.name]
         assert [row['launch'] for row in recording_pair] == ['reproduction','write']
         export_pair_read = sum(row['total_read_bytes'] for row in recording_pair)
         assert export_pair_read <= 15*24*1024*1024+1024*1024
@@ -1677,7 +1711,9 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
                                         os.getuid(),os.getgid(),runtime_receipt)
             finally:os.close(store_fd)
             runtime_anchor.identity_context = anchor.identity_context
-            runtime_anchor.capture_completion_owner=export_anchor.capture_completion_owner
+            runtime_anchor.capture_completion_owner=types.SimpleNamespace(
+                construct=lambda anchor,attempt_id,request,capture:host._capture_completion_values(attempt_id,request,capture),
+                authenticate=lambda anchor:None,transfer=lambda work,case:None)
             captured_runtime = consumer._HeldStoreRead(runtime_anchor,runtime_attempt)
             try:
                 group = captured_runtime.record_reproduction(runtime_outer,runtime_request,runtime_expectation)
@@ -1745,9 +1781,12 @@ g=load('source_cancel_generator',root/'scope/v1/generate-gate-evidence.py')
 generator_cancel_code=next(value for value in g.main.__code__.co_consts if isinstance(value,types.CodeType) and value.co_name=='cancel')
 assert generator_cancel_code.co_freevars==('generator',)
 for label in ('positive','io-eintr','io-error','copy-signal','copy-signal-close-error',
-              'parent-close-signal','parent-close-eintr','open-signal','read-signal',
+              'parent-close-signal','parent-close-eintr','open-signal','read-signal','constructor-read-signal',
               'seal-signal','seal-close-signal','seal-close-eintr',
-              'generator-copy-signal','generator-seal-close-signal'):
+              'generator-copy-signal','generator-seal-close-signal',
+              'metadata-before-signal','metadata-after-signal','named-before-signal','named-after-signal',
+              'metadata-eintr','named-eintr','copy-signal-target-close-error','copy-signal-directory-close-error',
+              'target-close-signal','directory-close-signal','target-close-eintr','directory-close-eintr'):
     case=label[len('generator-'):] if label.startswith('generator-') else label
     generator_state=types.SimpleNamespace(active=True)
     cell=(lambda value:lambda:value)(generator_state).__closure__[0]
@@ -1755,7 +1794,8 @@ for label in ('positive','io-eintr','io-error','copy-signal','copy-signal-close-
             if label.startswith('generator-') else reader_cancel)
     with tempfile.TemporaryDirectory(prefix='ystack-source-cancel-') as temporary:
         area=Path(temporary).resolve();area.chmod(0o700)
-        observed=[];fired=[];closed=[]
+        observed=[];fired=[];closed=[];opened={};raw_closed=[]
+        checking={'active':False,'metadata':0,'named':0}
         def handler(number,frame):
             try:cancel(number,frame)
             except InterruptedError as error:observed.append(error);raise
@@ -1770,27 +1810,62 @@ for label in ('positive','io-eintr','io-error','copy-signal','copy-signal-close-
         source.snapshots={'payload/request.json':raw};source.observation=b'{}\n';source.storage_rows=[]
         source.capture_origin=b'{}\n';source.capture_work=work
         source.capture=types.SimpleNamespace(snapshots={'capture.json':captured,
-            'complete.json':host._capture_completion_values(source.attempt_id,raw,captured)},transfer=lambda total,local:None)
+            'complete.json':host._capture_completion_values(source.attempt_id,raw,captured)},
+            completion_owner=anchor.capture_completion_owner,anchor=anchor,transfer=lambda total,local:None)
         reader=object.__new__(r._Reader)
         reader.captures=area;reader.source_capture_ordinal=0;reader.source_capture_work=[]
         reader.inputs=[];reader.darwin=None;reader.store_session=None;reader.anchor=anchor;reader.enforced=e
         owned=r._Owned(reader)
         input_path=area/'held-input';input_path.write_bytes(b'fixed input');input_path.chmod(0o400)
+        native_parent=None
+        if case in {'read-signal','constructor-read-signal'}:
+            native_store=area/'native-store';native_store.mkdir(mode=0o750);native_store.chmod(0o750)
+            capture_directory=native_store/('.capture-'+source.attempt_id)
+            capture_directory.mkdir(mode=0o750);capture_directory.chmod(0o750)
+            for name,value in source.capture.snapshots.items():
+                path=capture_directory/name;path.write_bytes(value);path.chmod(0o440)
+            anchor.config={'store_root':str(native_store),'principal_uid':os.getuid(),'consumer_gid':os.getgid()}
+            native_parent=c._open_held(str(native_store),True,lambda *args:True,'E_STORE')
+            source.held=[native_parent]
         input_hold=c._open_held(str(input_path),False,lambda *args:True,'E_STORE')
         original_open,original_read,original_write,original_close=c.os.open,c.os.read,c.os.write,c.HeldPath.close
+        original_os_close,original_metadata,original_named,original_recheck=c.os.close,c._metadata,c._named_metadata,c.HeldPath.recheck
+        original_dup=c.os.dup
         original_acl=c._acl_state
         def interrupt():
             fired.append(case);os.kill(os.getpid(),signal.SIGTERM)
             raise AssertionError('signal handler did not raise')
         def opening(*args,**kwargs):
             if case=='open-signal' and not fired:interrupt()
-            return original_open(*args,**kwargs)
+            fd=original_open(*args,**kwargs);opened[fd]=os.fsdecode(args[0]);return fd
+        def duplicating(fd):
+            copied=original_dup(fd);opened[copied]='dup';return copied
+        def metadata(fd):
+            if checking['active']:
+                checking['metadata']+=1
+                if not fired and ((case=='metadata-before-signal' and checking['metadata']==1)
+                                  or (case=='metadata-after-signal' and checking['metadata']==2)):interrupt()
+                if not fired and case=='metadata-eintr':
+                    fired.append(case);raise InterruptedError(4,'ordinary metadata EINTR')
+            return original_metadata(fd)
+        def named(*args):
+            if checking['active']:
+                checking['named']+=1
+                if not fired and ((case=='named-before-signal' and checking['named']==1)
+                                  or (case=='named-after-signal' and checking['named']==2)):interrupt()
+                if not fired and case=='named-eintr':
+                    fired.append(case);raise InterruptedError(4,'ordinary named metadata EINTR')
+            return original_named(*args)
+        def rechecking(held,code):
+            checking.update(active=True,metadata=0,named=0)
+            try:return original_recheck(held,code)
+            finally:checking['active']=False
         def reading(*args):
-            if case in {'read-signal','seal-signal'} and not fired:interrupt()
+            if case in {'read-signal','constructor-read-signal','seal-signal'} and not fired:interrupt()
             return original_read(*args)
         def writing(*args):
             if not fired:
-                if case in {'copy-signal','copy-signal-close-error'}:interrupt()
+                if case.startswith('copy-signal'):interrupt()
                 if case in {'io-eintr','io-error'}:
                     fired.append(case)
                     raise InterruptedError(4,'ordinary I/O EINTR') if case=='io-eintr' else OSError(5,'ordinary I/O error')
@@ -1802,17 +1877,44 @@ for label in ('positive','io-eintr','io-error','copy-signal','copy-signal-close-
                 fired.append(case);raise InterruptedError(4,'ordinary close EINTR')
             if case=='copy-signal-close-error':raise OSError(9,'ordinary secondary close failure')
             return result
-        if case=='read-signal':
-            anchor.capture_completion_owner.authenticate=lambda anchor:input_hold.read(1024,'E_STORE',work)
+        def raw_closing(fd):
+            role=opened.pop(fd,None)
+            result=original_os_close(fd);raw_closed.append(role)
+            target=role=='capture.json';directory=role=='source-0000'
+            if ((case=='copy-signal-target-close-error' and target)
+                    or (case=='copy-signal-directory-close-error' and directory)):
+                raise OSError(9,'ordinary raw secondary close failure')
+            if not fired:
+                if (case=='target-close-signal' and target) or (case=='directory-close-signal' and directory):interrupt()
+                if (case=='target-close-eintr' and target) or (case=='directory-close-eintr' and directory):
+                    fired.append(case);raise InterruptedError(4,'ordinary raw close EINTR')
+            return result
         if case.startswith('seal-'):
             anchor.capture_completion_owner=types.SimpleNamespace(source=e.StableFile(input_hold,b'fixed input',work),
                 work=work,transfer=lambda total,local:c._capture_transfer_work(work,total,local))
         caught=None
         try:
             c.os.open=opening;c.os.read=reading;c.os.write=writing;c.HeldPath.close=closing
+            c.os.close=raw_closing;c._metadata=metadata;c._named_metadata=named;c.HeldPath.recheck=rechecking
+            c.os.dup=duplicating
             c._acl_state=lambda *args:([],None) if sys.platform=='darwin' else (None,None)
             try:
                 if case.startswith('seal-'):reader.seal_source_captures()
+                elif case=='read-signal':
+                    del source.capture
+                    source.record_source(raw)
+                elif case=='constructor-read-signal':
+                    original_native_reader=c.read_coverage_attempt
+                    constructed=[]
+                    def native_reader(anchor,configuration,request_raw,*,_owner):
+                        _owner.held=[native_parent];_owner.storage_rows=[];constructed.append(_owner)
+                        return {'payload/request.json':request_raw},b'{}\n'
+                    c.read_coverage_attempt=native_reader
+                    try:c._HeldCoverageRead(anchor,types.SimpleNamespace(normalizer=types.SimpleNamespace(
+                        request=lambda raw:{'id':'attempt.cancel'})),raw)
+                    finally:
+                        c.read_coverage_attempt=original_native_reader
+                        if constructed:source=constructed[0]
                 else:owned.append(source)
             except BaseException as error:caught=error
             if 'signal' in case:
@@ -1826,17 +1928,27 @@ for label in ('positive','io-eintr','io-error','copy-signal','copy-signal-close-
             if case.startswith('seal-'):
                 assert work['transferred_read_bytes']==work['read_bytes']==anchor.recording_work['read_bytes']
                 assert anchor.private_observations['recording_sealed'] is False
-            assert (closed or case=='open-signal') and all(value==0 for value in closed)
+            assert not opened and all(value==0 for value in closed)
+            if 'metadata-' in case or 'named-' in case:
+                assert checking['metadata']>0
+                if case.startswith('named-'):assert checking['named']>0
+            if case in {'copy-signal-target-close-error','copy-signal-directory-close-error'}:
+                assert any(row['errno']==9 for row in anchor.recording_work['close_failures'])
+            if case=='constructor-read-signal':assert source.held==[] and native_parent.components==[]
             if label.startswith('generator-'):assert generator_state.active is False
             print(json.dumps({'actual_source_copy_append_or_seal_control':label,
                 'actual_handler_signal':bool(observed),'same_cancel_object':caught is observed[0] if observed else None,
                 'normalizer_session_installation_and_copy_inputs_are_fixture_doubles':True,
                 'private_observations':anchor.private_observations,'copy_work':anchor.recording_work,
-                'read_work':work,'closed_components':closed},sort_keys=True))
+                'read_work':source.capture_work,'closed_components':closed,'metadata_calls':checking,
+                'raw_closed_roles':raw_closed,'all_new_fds_closed':not opened},sort_keys=True))
         finally:
             c.os.open=original_open;c.os.read=original_read;c.os.write=original_write;c.HeldPath.close=original_close
+            c.os.close=original_os_close;c._metadata=original_metadata;c._named_metadata=original_named;c.HeldPath.recheck=original_recheck
+            c.os.dup=original_dup
             c._acl_state=original_acl;signal.signal(signal.SIGTERM,previous)
             input_hold.close()
+            if native_parent is not None:native_parent.close()
 PY_SOURCE_CANCEL
 capture_python=$(/usr/bin/python3 -I -S -B -c 'import os,sys;print(os.path.realpath(sys.executable))')
 for capture_route in reproduce write; do

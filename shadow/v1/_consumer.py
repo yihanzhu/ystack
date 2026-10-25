@@ -326,7 +326,9 @@ class HeldPath:
                 current = _metadata(component.fd)
                 named = (current if component.name is None else
                          _named_metadata(component.name, self.components[index - 1].fd))
-            except (OSError, ValueError):
+            except (OSError, ValueError) as error:
+                if getattr(error, "_scope_signal_cancel", False):
+                    raise
                 raise Refusal(code) from None
             expected = _identity(component.before)
             _require(_identity(current) == expected and _identity(named) == expected, code)
@@ -335,7 +337,9 @@ class HeldPath:
                 after = _metadata(component.fd)
                 after_named = (after if component.name is None else
                                _named_metadata(component.name, self.components[index - 1].fd))
-            except (OSError, ValueError):
+            except (OSError, ValueError) as error:
+                if getattr(error, "_scope_signal_cancel", False):
+                    raise
                 raise Refusal(code) from None
             _require(_identity(after) == expected and _identity(after_named) == expected, code)
             component.after, component.named_after = after, after_named
@@ -346,7 +350,9 @@ class HeldPath:
                 current = _metadata(component.fd)
                 named = (current if component.name is None else
                          _named_metadata(component.name, self.components[index - 1].fd))
-            except (OSError, ValueError):
+            except (OSError, ValueError) as error:
+                if getattr(error, "_scope_signal_cancel", False):
+                    raise
                 raise Refusal(code) from None
             expected = _identity(component.before)
             _require(_identity(current) == expected and _identity(named) == expected, code)
@@ -1554,6 +1560,22 @@ def _capture_transfer_work(source, work, case_work):
     return delta
 
 
+def _close_capture_copy(fd, work, case_work, site, failure):
+    for counts in (work, case_work):
+        counts["close_calls"] = counts.get("close_calls", 0) + 1
+    try:
+        os.close(fd)
+    except OSError as error:
+        rows = work.setdefault("close_failures", [])
+        if len(rows) < 4096:
+            rows.append({"site": site, "category": type(error).__name__, "errno": error.errno})
+        else:
+            work["close_observations_incomplete"] = True
+        if failure is None or (getattr(error, "_scope_signal_cancel", False)
+                               and not getattr(failure, "_scope_signal_cancel", False)):
+            raise
+
+
 def _private_capture_observations(value, work, case_work):
     encoded = bytearray()
     reserved = 0
@@ -1619,6 +1641,7 @@ class _HeldCaptureRead:
             _capture_export_binding(groups, self.snapshots, source=source)
             owner = getattr(self.anchor, "capture_completion_owner", None)
             _require(owner is not None, "E_STORE")
+            self.completion_owner = owner
             expected = owner.construct(self.anchor, self.attempt_id, request_raw, self.snapshots["capture.json"])
             _capture_copy_room(self.work, 4 * len(self.snapshots["complete.json"]),
                                False, case=True, read_only=True)
@@ -1796,8 +1819,8 @@ class _HeldStoreRead:
         _capture_copy_room(work, 0, False)
         _capture_copy_room(case_work, 0, False, case=True)
         completion_owner = getattr(self.anchor, "capture_completion_owner", None)
-        _require(completion_owner is not None, "E_STORE")
-        completion_owner.authenticate(self.anchor)
+        _require(completion_owner is not None and completion_owner is self.capture.completion_owner
+                 and self.capture.anchor is self.anchor, "E_STORE")
         completion_owner.transfer(work, case_work)
         self.capture.transfer(work, case_work)
         consumer_raw = _private_capture_observations({"attempt_id": self.attempt_id,
@@ -1825,6 +1848,7 @@ class _HeldStoreRead:
                      parent.components[-1].name, parent.components[-2].fd)), "E_STORE")
         parent.components[-1].before = after_parent
         directory = os.open(launch, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent.fd)
+        directory_failure = None
         try:
             directory_state = _metadata(directory)
             _require(stat.S_ISDIR(directory_state.st_mode) and directory_state.st_uid == os.geteuid()
@@ -1840,6 +1864,7 @@ class _HeldStoreRead:
                 case_work["export_files"] += int(exported)
                 work["calls"][name] = work["calls"].get(name, 0) + 1
                 size = 0
+                file_failure = None
                 try:
                     for chunk in chunks:
                         view = memoryview(chunk)
@@ -1866,8 +1891,13 @@ class _HeldStoreRead:
                              and final.st_nlink == 1 and final.st_size == size
                              and stat.S_IMODE(final.st_mode) == 0o400
                              and _identity(final) == _identity(named), "E_STORE")
+                except BaseException as error:
+                    file_failure = error
+                    work.setdefault("copy_failure", {"site": name, "category": type(error).__name__,
+                        "errno": getattr(error, "os_errno", getattr(error, "errno", None))})
+                    raise
                 finally:
-                    os.close(target)
+                    _close_capture_copy(target, work, case_work, name, file_failure)
             write("capture.json", (capture_snapshots["capture.json"],))
             write("complete.json", (capture_snapshots["complete.json"],))
             if "sandbox-export.bin" in capture_snapshots:
@@ -1885,8 +1915,13 @@ class _HeldStoreRead:
                                                    directory_state.st_uid, directory_state.st_mode)
                      and _identity(final_directory) == _identity(named_directory), "E_STORE")
             parent.recheck("E_STORE")
+        except BaseException as error:
+            directory_failure = error
+            work.setdefault("copy_failure", {"site": launch, "category": type(error).__name__,
+                "errno": getattr(error, "os_errno", getattr(error, "errno", None))})
+            raise
         finally:
-            os.close(directory)
+            _close_capture_copy(directory, work, case_work, launch, directory_failure)
 
 
 def read_store_attempt(anchor: Anchor, attempt_id: str, *,
@@ -2103,7 +2138,17 @@ class _HeldCoverageRead(_HeldStoreRead):
         self.attempt_id = configuration.normalizer.request(request_raw)["id"]
         self.held = []
         self.snapshots, self.observation = read_coverage_attempt(anchor, configuration, request_raw, _owner=self)
-        self.record_source(request_raw)
+        try:
+            self.record_source(request_raw)
+        except BaseException as error:
+            try:
+                self.close()
+            except OSError as cleanup_error:
+                anchor.private_observations["source_constructor_cleanup_errno"] = cleanup_error.errno
+                if (getattr(cleanup_error, "_scope_signal_cancel", False)
+                        and not getattr(error, "_scope_signal_cancel", False)):
+                    raise
+            raise
 
     def record_source(self, request_raw):
         try:

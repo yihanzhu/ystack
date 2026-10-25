@@ -496,7 +496,7 @@ class _CaptureCompletionOwner:
         require(callable(self.module._capture_completion_values), "E_RUNTIME")
 
     def authenticate(self, anchor):
-        self.source.recheck()
+        self.work["authentication_calls"] = self.work.get("authentication_calls", 0) + 1
         installed = next(item for item in anchor.held if item.path == str(Path(c.ANCHOR)/"host-supervisor.py"))
         c._capture_copy_room(self.work, 4 * len(self.source.raw), False, case=True, read_only=True)
         actual = installed.read(c.EXECUTABLE_LIMIT, "E_STORE", self.work)
@@ -508,11 +508,15 @@ class _CaptureCompletionOwner:
 
     def construct(self, anchor, attempt_id, request_raw, capture_raw):
         self.authenticate(anchor)
+        self.work["constructor_calls"] = self.work.get("constructor_calls", 0) + 1
+        self.work["constructor_incomplete"] = True
         c._capture_copy_room(self.work, len(request_raw) + len(capture_raw) + 2048,
                              False, case=True, read_only=True)
         result = self.module._capture_completion_values(attempt_id, request_raw, capture_raw)
-        self.work["read_bytes"] += len(request_raw) + len(capture_raw) + 4 * len(result)
-        self.source.recheck()
+        cost = len(request_raw) + len(capture_raw) + 4 * len(result)
+        self.work["read_bytes"] += cost
+        self.work["constructor_read_bytes"] = self.work.get("constructor_read_bytes", 0) + cost
+        self.work["constructor_incomplete"] = False
         return result
 
     def transfer(self, work, case_work):
