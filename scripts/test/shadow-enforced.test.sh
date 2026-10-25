@@ -2156,12 +2156,21 @@ def acl_mask_equivalence():
         },
     }
     historical_module_sha256 = '420ff579a419d23db6b7dc7e4dcf781726b4e000f8dad03e31d3239f051833db'
-    actual_pins = {'_linux_install_acl_ok': '9e5efc3d188220d5b707b9794becbc43cce717c9d610786efe8883345840c51b', '_installed_acl_values': 'bfc459ee8e83b822f0ef12bec9b26f9e624c62eeffc0952aacad2078297e8d77', '_root_rule': 'e2b1a86cd931331fe88da13bd8a414c283aa4ff61bcab3d337faa8c290de4802', '_installed_rule': 'b3915afaa27e61cac253ba02b0cec72bfeb9831135278b99af3ae01c825c7054'}
+    actual_pins = {'_linux_install_acl_ok': '9e5efc3d188220d5b707b9794becbc43cce717c9d610786efe8883345840c51b', '_installed_acl_values': 'bfc459ee8e83b822f0ef12bec9b26f9e624c62eeffc0952aacad2078297e8d77', '_root_rule': 'aa07754a8ffd8c9db2012ff17151dda9b1400acf8959a862a4b7e7bf1308677f', '_installed_rule': '5458aaa748c1caad42eab5cfc3514b3237838c4e65fd6b8179b1b785f9b4b193'}
     actual_functions = {node.name: ast.get_source_segment(current, node)
         for node in ast.parse(current).body if isinstance(node, ast.FunctionDef) and node.name in actual_pins}
     assert set(actual_functions) == set(actual_pins)
     assert all(hashlib.sha256(body.encode()).hexdigest() == actual_pins[name]
                for name, body in actual_functions.items())
+    pre_cancel_rule_pins = {'_root_rule': 'e2b1a86cd931331fe88da13bd8a414c283aa4ff61bcab3d337faa8c290de4802',
+                           '_installed_rule': 'b3915afaa27e61cac253ba02b0cec72bfeb9831135278b99af3ae01c825c7054'}
+    cancel_guard = ('except (OSError, Refusal) as error:\n'
+                    '            if getattr(error, "_scope_signal_cancel", False):\n'
+                    '                raise')
+    for name, expected in pre_cancel_rule_pins.items():
+        assert actual_functions[name].count(cancel_guard) == 1
+        before_cancel = actual_functions[name].replace(cancel_guard, 'except (OSError, Refusal):', 1)
+        assert hashlib.sha256(before_cancel.encode()).hexdigest() == expected
     expected_sources = {'_root_rule': {'old': 'af22ae2221580e7d65ef28e702b69c8653ffde0c965d500b52a1d8c5a28abaa5', 'new': '0b09217defef12508065a0fb8dbb43cd5ba3bd2f432281a18c0f0b138435e273'}, '_installed_rule': {'old': '976684eafda4c87744529283c19e94e4113e108c3d9c9a2f17346239997b4cad', 'new': 'd11b36310a1c712c7ab66521a0a6c7b8231feed6eac6a554296b07408798be6f'}}
     rows = []
     dangerous_bits = (4, 16, 32, 64, 256, 1024, 4096, 8192)
@@ -2242,6 +2251,28 @@ def acl_mask_equivalence():
             state = types.SimpleNamespace(st_uid=0, st_mode=stat.S_IFDIR | 0o555)
             assert [rule(fd, state, False) for _ in range(3)] == [False, True, False]
             assert calls == [(fd, resolver)] * 3
+        for marked in (False, True):
+            error = InterruptedError(errno.EINTR, 'ordinary ACL interruption fixture')
+            if marked: error._scope_signal_cancel = True
+            calls = []
+            def interrupted(held_fd, held_resolver):
+                calls.append((held_fd, held_resolver))
+                raise error
+            namespace = dict(vars(c), sys=types.SimpleNamespace(platform='darwin'), _acl_state=interrupted)
+            exec(compile('from __future__ import annotations\n' + actual_functions['_linux_install_acl_ok']
+                         + '\n' + actual_functions['_installed_acl_values'] + '\n' + actual_functions[name],
+                         'actual-ACL-interruption', 'exec'), namespace)
+            resolver = object()
+            rule = namespace[name](123, resolver) if name == '_installed_rule' else namespace[name](resolver)
+            state = types.SimpleNamespace(st_uid=0, st_mode=stat.S_IFDIR | 0o555)
+            try:
+                result = rule(fd, state, False)
+            except InterruptedError as raised:
+                assert marked and raised is error
+            else:
+                assert not marked and result is False
+            assert calls == [(fd, resolver)]
+            print('ok actual ACL ordinary EINTR versus injected private marker - ' + name + '/' + str(marked))
         needle = ('return _installed_acl_values(sys.platform, access, default, '
                   + ('(0, principal_uid))' if name == '_installed_rule' else '(0,))'))
         assert actual_functions[name].count(needle) == 1
@@ -2264,7 +2295,7 @@ def acl_mask_equivalence():
             print('ok actual shared ACL call negative control detected - ' + name + '/' + control)
     print(json.dumps({'acl_mask_equivalence': rows, 'same_closure_fresh_observations': True,
                       'source_hashes': expected_sources, 'actual_source_hashes': actual_pins,
-                      'historical_module_sha256': historical_module_sha256, 'fixed_mask': 13684}, sort_keys=True))
+                      'historical_module_sha256': historical_module_sha256, 'pre_cancel_rule_pins': pre_cancel_rule_pins, 'fixed_mask': 13684}, sort_keys=True))
 acl_mask_equivalence()
 
 c.sys.platform = "linux"
