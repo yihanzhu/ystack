@@ -160,7 +160,7 @@ with tempfile.TemporaryDirectory(prefix='ystack-rename-declaration-') as tempora
     statements = re.sub(r'^#.*$', '', preprocessed, flags=re.MULTILINE).split(';')
     declarations = [statement.strip() + ';' for statement in statements
                     if re.search(r'\brenameat2\s*\(', statement)]
-    definitions = re.findall(r'^#define\s+RENAME_NOREPLACE\b[^\n]*', preprocessed, re.MULTILINE)
+    definitions = list(dict.fromkeys(re.findall(r'^#define\s+RENAME_NOREPLACE\b[^\n]*', preprocessed, re.MULTILINE)))
     if len(declarations) != 1 or len(definitions) != 1:
         raise SystemExit('rename declaration or no-replace definition missing or ambiguous')
     print(json.dumps({'renameat2_declaration': declarations[0],
