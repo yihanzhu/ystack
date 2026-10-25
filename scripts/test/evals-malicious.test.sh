@@ -588,13 +588,16 @@ with tempfile.TemporaryDirectory(prefix='ystack-guest-value-pairs-') as director
     print('ok fixed guest helper - no native process, namespace, mount or socket imports')
 PY_GUEST_VALUES
 /usr/bin/python3 -I -S -B - "$root" <<'PY_CAPTURE_VALUES'
+import ast
 import copy
 import importlib.util
+import inspect
 import json
 import os
 from pathlib import Path
 import sys
 import tempfile
+import textwrap
 import types
 
 root = Path(sys.argv[1])
@@ -832,6 +835,67 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
                 rebuilt_capture,offline_projection = replay_projection(root,values['capture.json'],
                     export_group,host.canonical(outer),request,expectation,receipt)
                 assert rebuilt_capture == held.snapshots['capture.json'] and offline_projection == projected
+                def delete_call(function,attribute,replacement,namespace):
+                    tree = ast.parse(textwrap.dedent(inspect.getsource(function)))
+                    hits = []
+                    class Delete(ast.NodeTransformer):
+                        def visit_Call(self,node):
+                            if (isinstance(node.func,ast.Name) and node.func.id == attribute
+                                    or isinstance(node.func,ast.Attribute) and node.func.attr == attribute):
+                                hits.append(1)
+                                return ast.copy_location(ast.parse(replacement,mode='eval').body,node)
+                            return self.generic_visit(node)
+                    changed = Delete().visit(tree)
+                    assert len(hits) == 1
+                    space = dict(namespace)
+                    exec(compile(ast.fix_missing_locations(changed),'<capture-call-deletion>','exec'),space)
+                    return space[function.__name__]
+                method = held.record_reproduction if launch == 'reproduction' else held.record_write
+                original_method = consumer._HeldStoreRead._record_launch
+                original_projection = capture_replay._capture_projection_values
+                original_rebuild = consumer._capture_envelope_values
+                original_values = consumer._launch_capture_values
+                calls = []
+                def observed_rebuild(*args):
+                    calls.append(1)
+                    return original_rebuild(*args)
+                try:
+                    consumer._capture_envelope_values = observed_rebuild
+                    assert method(host.canonical(outer),request,expectation) == projected and len(calls) == 1
+                    for control in ('production','offline','envelope'):
+                        calls.clear()
+                        if control == 'production':
+                            consumer._HeldStoreRead._record_launch = delete_call(original_method,
+                                '_launch_capture_values',
+                                '_capture_envelope(self.snapshots["capture.json"],self.attempt_id,digest(launch_raw),seed=True)',
+                                consumer.__dict__)
+                        elif control == 'offline':
+                            capture_replay._capture_projection_values = delete_call(original_projection,
+                                '_launch_capture_values','groups',capture_replay.__dict__)
+                        else:
+                            consumer._launch_capture_values = delete_call(original_values,
+                                '_capture_envelope_values','capture_raw',consumer.__dict__)
+                        try:
+                            assert method(host.canonical(outer),request,expectation) == projected
+                            assert len(calls) == 1
+                            assert replay_projection(root,values['capture.json'],export_group,
+                                host.canonical(outer),request,expectation,receipt)[1] == projected
+                        except AssertionError:print('ok EXP.bind06 '+control+' call deletion detected - '+launch)
+                        else:raise AssertionError('undetected '+control+' deletion')
+                        finally:
+                            consumer._HeldStoreRead._record_launch = original_method
+                            capture_replay._capture_projection_values = original_projection
+                            consumer._launch_capture_values = original_values
+                finally:
+                    consumer._capture_envelope_values = original_rebuild
+                assert method(host.canonical(outer),request,expectation) == projected
+                changed_original = copy.deepcopy(export_group)
+                changed_original['clocks']['wall'].append({'site':'ordinary-clock','value':'0000000000000000'})
+                try:replay_projection(root,host._capture_values(attempt_id,request,changed_original,True),
+                    export_group,host.canonical(outer),request,expectation,receipt)
+                except Exception as error:
+                    assert type(error).__name__ == 'Refusal' and str(error) == 'E_STORE'
+                else:raise AssertionError('independently changed original capture accepted')
                 for label,index,mutate in [
                     ('outer-kind',0,lambda v:v.update(kind='shadow_write_request' if launch == 'reproduction' else 'shadow_enforced_request')),
                     ('outer-attempt',0,lambda v:v['body'].update(attempt_id='attempt.other')),
