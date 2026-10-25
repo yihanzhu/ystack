@@ -120,7 +120,8 @@ def _write_capture_values(runtime_root, capture_raw, groups, outer_raw, launch_r
         expectation_raw, receipt_raw, "shadow_write_request")
 
 
-def _origin_values(runtime_root, files, storage_rows, identity_context, source_bytes):
+def _origin_values(runtime_root, files, storage_rows, identity_context, source_bytes, *,
+                   capture_files=None, capture_storage_rows=None):
     spec = importlib.util.spec_from_file_location(
         "malicious_origin_values", Path(runtime_root) / "shadow/v1/_consumer.py")
     owner = importlib.util.module_from_spec(spec)
@@ -130,7 +131,12 @@ def _origin_values(runtime_root, files, storage_rows, identity_context, source_b
         files = dict(files)
         value = files["sandbox-export.bin"]
         files["sandbox-export.bin"] = value if type(value) is tuple else value.chunks
-    return owner._origin_values(files, storage_rows, identity_context, source_bytes)
+    if capture_files is not None and "sandbox-export.bin" in capture_files:
+        capture_files = dict(capture_files)
+        value = capture_files["sandbox-export.bin"]
+        capture_files["sandbox-export.bin"] = value if type(value) in (tuple, bytes) else value.chunks
+    return owner._origin_values(files, storage_rows, identity_context, source_bytes,
+        capture_files=capture_files, capture_storage_rows=capture_storage_rows)
 
 
 def _source_values(runtime_root, request_raw, configuration_bytes, pages, primitive_values):

@@ -1303,7 +1303,8 @@ def _observation_values(relative, before, after, raw=None, *, acquisition=False)
     return row
 
 
-def _origin_values(files, storage_rows, identity_context, source_bytes):
+def _origin_values(files, storage_rows, identity_context, source_bytes, *,
+                   capture_files=None, capture_storage_rows=None):
     _require(type(identity_context) is dict and set(identity_context) == {"attempt_id", "platform"}
              and type(identity_context["platform"]) is str
              and identity_context["platform"] in {"linux", "darwin"}, "E_STORE")
@@ -1316,6 +1317,19 @@ def _origin_values(files, storage_rows, identity_context, source_bytes):
         files["sandbox-export.bin"] = _ExportSnapshot(files["sandbox-export.bin"], None, None)
     config = _parse_config(source_bytes["host-config.json"])
     attempt_id, platform = identity_context["attempt_id"], identity_context["platform"]
+    capture_directory = ".capture-" + attempt_id
+    if capture_files is not None:
+        _require(type(capture_files) is dict and set(capture_files) in (
+            {"capture.json", "complete.json"},
+            {"capture.json", "complete.json", "sandbox-export.bin"})
+            and type(capture_storage_rows) is list, "E_STORE")
+        if type(capture_files.get("sandbox-export.bin")) is tuple:
+            capture_files = dict(capture_files)
+            capture_files["sandbox-export.bin"] = _ExportSnapshot(capture_files["sandbox-export.bin"], None, None)
+        files = dict(files) | {capture_directory + "/" + name: raw for name, raw in capture_files.items()}
+        storage_rows = storage_rows + capture_storage_rows
+    else:
+        _require(capture_storage_rows is None, "E_STORE")
     _require(type(storage_rows) is list and len(storage_rows) <= 65536 and _id(attempt_id), "E_STORE")
     observations, names = [], set()
     for row in storage_rows:
@@ -1339,6 +1353,8 @@ def _origin_values(files, storage_rows, identity_context, source_bytes):
             _require(len(listed) == len(listed_names), "E_STORE")
             if name == attempt_id:
                 _require(listed_names == _attempt_names(files), "E_STORE")
+            elif capture_files is not None and name == capture_directory:
+                _require(listed_names == set(capture_files), "E_STORE")
             elif name == "payload":
                 _require(listed_names == {key.split("/")[1] for key in files if key.startswith("payload/")}, "E_STORE")
             elif name == "payload/evidence":
@@ -1348,6 +1364,8 @@ def _origin_values(files, storage_rows, identity_context, source_bytes):
         observations.append(_observation_values(name, before, row["after"], files[name] if file else None))
     directories = {".", attempt_id, "payload"} | ({"payload/evidence"} if any(
         name.startswith("payload/evidence/") for name in files) else set())
+    if capture_files is not None:
+        directories.add(capture_directory)
     _require(names == set(files) | directories, "E_STORE")
     return canonical({"schema_version": 1, "kind": "shadow_origin_observation", "id": attempt_id,
         "body": {"store_id": config["store_id"], "attempt_id": attempt_id,
@@ -1358,9 +1376,7 @@ def _hex_name(value: object) -> bool:
             and len(value) <= 510 and all(char in "0123456789abcdef" for char in value))
 
 def _attempt_names(snapshots):
-    return ({"receipt.json", "payload"}
-            | ({"capture.json"} if "capture.json" in snapshots else set())
-            | ({"sandbox-export.bin"} if "sandbox-export.bin" in snapshots else set()))
+    return {"receipt.json", "payload"}
 
 
 def _capture_export_reference(groups, *, final=False):
@@ -1534,6 +1550,90 @@ def _private_capture_observations(value, work, case_work):
     return result
 
 
+class _HeldCaptureRead:
+    def __init__(self, native, request_raw, *, source=False):
+        self.native, self.anchor = native, native.anchor
+        self.attempt_id, self.request_raw = native.attempt_id, request_raw
+        self.held, self.snapshots, self.storage_rows = [], {}, []
+        self.work, self.transferred = {}, 0
+        _capture_work_values(self.work, self.attempt_id)
+        native.capture_work = self.work
+        self.directory_name = ".capture-" + self.attempt_id
+        try:
+            store = next(item for item in native.held if item.path == self.anchor.config["store_root"])
+            uid, gid = self.anchor.config["principal_uid"], self.anchor.config["consumer_gid"]
+            directory = _open_child(store, self.directory_name, True,
+                _store_rule(uid, gid, 0o750, True, self.anchor.resolver), "E_STORE")
+            self.held.append(directory)
+            self.names = set(directory.listdir())
+            _require(self.names in ({"capture.json", "complete.json"},
+                {"capture.json", "complete.json", "sandbox-export.bin"})
+                and (not source or "sandbox-export.bin" not in self.names), "E_STORE")
+            _observation(directory, self.directory_name, storage_rows=self.storage_rows)
+            for name in sorted(self.names):
+                item = _open_child(directory, name, False,
+                    _store_rule(uid, gid, 0o440, False, self.anchor.resolver), "E_STORE")
+                self.held.append(item)
+                maximum = EXPORT_LIMIT if name == "sandbox-export.bin" else 512 if name == "complete.json" else DOCUMENT_LIMIT
+                _require(item.before.st_size <= maximum, "E_STORE")
+                raw = (_read_export_snapshot(item, "E_STORE") if name == "sandbox-export.bin" else
+                       item.read(maximum, "E_STORE", self.work))
+                self.snapshots[name] = raw
+                _observation(item, self.directory_name + "/" + name, raw, storage_rows=self.storage_rows)
+                if not isinstance(raw, _ExportSnapshot):
+                    self.work["read_bytes"] += len(raw)
+            groups = _capture_envelope(self.snapshots["capture.json"], self.attempt_id,
+                                       digest(request_raw), seed=True)
+            _capture_export_binding(groups, self.snapshots, source=source)
+            owner = getattr(self.anchor, "capture_completion_owner", None)
+            _require(owner is not None, "E_STORE")
+            expected = owner.construct(self.anchor, self.attempt_id, request_raw, self.snapshots["capture.json"])
+            _capture_copy_room(self.work, 4 * len(self.snapshots["complete.json"]),
+                               False, case=True, read_only=True)
+            self.work["read_bytes"] += 4 * len(self.snapshots["complete.json"])
+            _json(self.snapshots["complete.json"], 512, "E_STORE")
+            _capture_copy_room(self.work, len(expected) + len(self.snapshots["complete.json"]),
+                               False, case=True, read_only=True)
+            self.work["read_bytes"] += len(expected) + len(self.snapshots["complete.json"])
+            _require(expected == self.snapshots["complete.json"], "E_STORE")
+            self.recheck(metadata_only=True)
+        except BaseException as error:
+            self.work["failure"] = {"category": type(error).__name__,
+                "errno": getattr(error, "os_errno", getattr(error, "errno", None))}
+            try:
+                self.close()
+            except OSError as cleanup_error:
+                self.work["cleanup_errno"] = cleanup_error.errno
+            raise
+
+    def recheck(self, code="E_STORE", *, metadata_only=False):
+        for item in self.held:
+            item.recheck(code)
+            if stat.S_ISDIR(item.before.st_mode):
+                _require(set(item.listdir()) == self.names, code)
+            elif not metadata_only:
+                raw = self.snapshots[os.path.basename(item.path)]
+                if isinstance(raw, _ExportSnapshot):
+                    raw.recheck(item, code)
+                else:
+                    current = item.read(len(raw), code, self.work)
+                    _capture_copy_room(self.work, len(current) + len(raw), False, case=True, read_only=True)
+                    self.work["read_bytes"] += len(current) + len(raw)
+                    _require(current == raw, code)
+
+    def transfer(self, work, case_work):
+        delta = self.work["read_bytes"] - self.transferred
+        _capture_copy_room(work, delta, False, read_only=True)
+        _capture_copy_room(case_work, delta, False, case=True, read_only=True)
+        work["read_bytes"] += delta
+        case_work["read_bytes"] += delta
+        self.transferred += delta
+
+    def close(self):
+        held, self.held = self.held, []
+        _close_paths(held)
+
+
 class _HeldStoreRead:
     def __init__(self, anchor: Anchor, attempt_id: str) -> None:
         self.anchor, self.attempt_id = anchor, attempt_id
@@ -1548,16 +1648,34 @@ class _HeldStoreRead:
 
     def _record_launch(self, outer_raw, launch_raw, expectation_raw, kind):
         try:
-            groups = _launch_capture_values(self.snapshots.get("capture.json", b""), outer_raw,
+            if not hasattr(self, "capture"):
+                self.capture = _HeldCaptureRead(self, launch_raw)
+            else:
+                _require(self.capture.request_raw == launch_raw and bool(self.capture.held), "E_STORE")
+                self.capture.recheck(metadata_only=True)
+            groups = _launch_capture_values(self.capture.snapshots["capture.json"], outer_raw,
                 launch_raw, expectation_raw, self.snapshots["receipt.json"], kind)
             self.launch_binding = {"outer": _json(outer_raw, DOCUMENT_LIMIT, "E_STORE"),
                 "launch": _json(launch_raw, DOCUMENT_LIMIT, "E_STORE"),
                 "expectation": _json(expectation_raw, DOCUMENT_LIMIT, "E_STORE"),
                 "receipt": _json(self.snapshots["receipt.json"], DOCUMENT_LIMIT, "E_STORE")}
             self.projected_capture = groups
+            if not hasattr(self, "capture_origin"):
+                self.capture_origin = _origin_values(self.snapshots, self.storage_rows,
+                    {"attempt_id": self.attempt_id, "platform": sys.platform},
+                    {"host-config.json": self.anchor.config_raw}, capture_files=self.capture.snapshots,
+                    capture_storage_rows=self.capture.storage_rows)
             return groups
-        except (Refusal, ValueError, TypeError, MemoryError):
+        except (Refusal, ValueError, TypeError, MemoryError, OSError) as error:
             self.anchor.private_observations["unusable"] = True
+            self.anchor.private_observations["capture_failure"] = {
+                "category": type(error).__name__,
+                "errno": getattr(error, "os_errno", getattr(error, "errno", None))}
+            if hasattr(self, "capture"):
+                try:
+                    self.capture.close()
+                except OSError as cleanup_error:
+                    self.capture_work["cleanup_errno"] = cleanup_error.errno
             return None
 
     def recheck(self, code: str = "E_STALE") -> None:
@@ -1584,16 +1702,29 @@ class _HeldStoreRead:
                 elif relative == self.attempt_id + "/payload/evidence":
                     _require(names == {name.split("/")[2] for name in self.snapshots
                                        if name.startswith("payload/evidence/")}, code)
+        if hasattr(self, "capture"):
+            try:
+                self.capture.recheck(code)
+            except (Refusal, OSError, ValueError, MemoryError):
+                self.anchor.private_observations["unusable"] = True
 
     def close(self) -> None:
         held, self.held = self.held, []
-        _close_paths(held)
+        try:
+            _close_paths(held)
+        finally:
+            if hasattr(self, "capture"):
+                try:
+                    self.capture.close()
+                except OSError:
+                    self.anchor.private_observations["unusable"] = True
 
     def copy_capture(self, parent, request_raw, launch, work):
         _require(type(launch) is str and launch in {"reproduction", "write"}
                  and isinstance(parent, HeldPath) and len(parent.components) > 1
                  and bool(self.held) and type(work) is dict, "E_STORE")
-        _capture_for_replay(self.snapshots, self.attempt_id, request_raw)
+        capture_snapshots = self.capture.snapshots
+        _capture_for_replay(capture_snapshots, self.attempt_id, request_raw)
         _require(len(self.observation) <= DOCUMENT_LIMIT, "E_LIMIT")
         _require(type(self.anchor.identity_context) is dict
                  and not self.anchor.private_observations.get("unusable", False)
@@ -1624,6 +1755,7 @@ class _HeldStoreRead:
         _require(completion_owner is not None, "E_STORE")
         completion_owner.authenticate(self.anchor)
         completion_owner.transfer(work, case_work)
+        self.capture.transfer(work, case_work)
         consumer_raw = _private_capture_observations({"attempt_id": self.attempt_id,
             "request_sha256": digest(request_raw),
             "storage": self.storage_rows,
@@ -1634,7 +1766,7 @@ class _HeldStoreRead:
             "entropy": self.anchor.private_observations.get("entropy", {}),
             "clocks": _clock_observations}, work, case_work)
         binding_raw = None
-        if "sandbox-export.bin" in self.snapshots:
+        if "sandbox-export.bin" in capture_snapshots:
             _require(hasattr(self, "launch_binding") and hasattr(self, "projected_capture"), "E_STORE")
             expected_launch = ("reproduction" if self.launch_binding["outer"]["kind"]
                                == "shadow_enforced_request" else "write")
@@ -1692,10 +1824,11 @@ class _HeldStoreRead:
                              and _identity(final) == _identity(named), "E_STORE")
                 finally:
                     os.close(target)
-            write("capture.json", (self.snapshots["capture.json"],))
-            if "sandbox-export.bin" in self.snapshots:
-                write("sandbox-export.bin", self.snapshots["sandbox-export.bin"].chunks, True)
-            write("origin-observation.json", (self.observation,))
+            write("capture.json", (capture_snapshots["capture.json"],))
+            write("complete.json", (capture_snapshots["complete.json"],))
+            if "sandbox-export.bin" in capture_snapshots:
+                write("sandbox-export.bin", capture_snapshots["sandbox-export.bin"].chunks, True)
+            write("origin-observation.json", (self.capture_origin,))
             write("consumer-observations.json", (consumer_raw,))
             if binding_raw is not None:
                 write("launch-binding.json", (binding_raw,))
@@ -1736,9 +1869,7 @@ def read_store_attempt(anchor: Anchor, attempt_id: str, *,
                              _observation(attempt, attempt_id, storage_rows=storage_rows),
                              _observation(payload, "payload", storage_rows=storage_rows)))
         attempt_names = set(attempt.listdir())
-        _require(attempt_names in ({"payload", "receipt.json"},
-                                   {"payload", "receipt.json", "capture.json"},
-                                   {"payload", "receipt.json", "capture.json", "sandbox-export.bin"}), "E_STORE")
+        _require(attempt_names == {"payload", "receipt.json"}, "E_STORE")
         payload_names = set(payload.listdir())
         fixed = {"stdout", "stderr", "evidence-manifest.json"}
         optional = ({"refusal.json"} if "refusal.json" in payload_names else set())
@@ -1749,14 +1880,6 @@ def read_store_attempt(anchor: Anchor, attempt_id: str, *,
         receipt = _open_child(attempt, "receipt.json", False,
                               _store_rule(uid, gid, 0o440, False, anchor.resolver), "E_STORE")
         opened.append(receipt); files.append((receipt, "receipt.json"))
-        if "capture.json" in attempt_names:
-            capture = _open_child(attempt, "capture.json", False,
-                                 _store_rule(uid, gid, 0o440, False, anchor.resolver), "E_STORE")
-            opened.append(capture); files.append((capture, "capture.json"))
-        if "sandbox-export.bin" in attempt_names:
-            export = _open_child(attempt, "sandbox-export.bin", False,
-                                 _store_rule(uid, gid, 0o440, False, anchor.resolver), "E_STORE")
-            opened.append(export); files.append((export, "sandbox-export.bin"))
         for name in sorted(fixed | optional):
             item = _open_child(payload, name, False,
                                _store_rule(uid, gid, 0o440, False, anchor.resolver), "E_STORE")
@@ -1797,13 +1920,11 @@ def read_store_attempt(anchor: Anchor, attempt_id: str, *,
         for item, name in files:
             output_name = (name in ("payload/stdout", "payload/stderr")
                            or name.startswith("payload/evidence/"))
-            maximum = (remaining if output_name else EXPORT_LIMIT if name == "sandbox-export.bin" else
-                       CAPTURE_LIMIT if name == "capture.json" else
+            maximum = (remaining if output_name else
                        DOCUMENT_LIMIT if name in ("receipt.json", "payload/evidence-manifest.json")
                        else OUTPUT_LIMIT)
             _require(item.before.st_size <= maximum, "E_STORE")
-            raw = (_read_export_snapshot(item, "E_STORE") if name == "sandbox-export.bin" else
-                   manifest_raw if item is manifest_item else item.read_exact(item.before.st_size, "E_STORE"))
+            raw = manifest_raw if item is manifest_item else item.read_exact(item.before.st_size, "E_STORE")
             _require(len(raw) == item.before.st_size, "E_STORE")
             snapshots[name] = raw
             observations.append(_observation(item, name, raw, storage_rows=storage_rows))
@@ -1812,12 +1933,6 @@ def read_store_attempt(anchor: Anchor, attempt_id: str, *,
         for index, row in enumerate(rows):
             raw = snapshots[f"payload/evidence/{index:04d}"]
             _require(len(raw) == row["size_bytes"] and digest(raw) == row["sha256"], "E_STORE")
-        if "capture.json" in snapshots:
-            receipt_body = _json(snapshots["receipt.json"], DOCUMENT_LIMIT, "E_STORE").get("body", {})
-            attempt_body = receipt_body.get("attempt", {}) if type(receipt_body) is dict else {}
-            _require(type(attempt_body) is dict, "E_STORE")
-            groups = _capture_envelope(snapshots["capture.json"], attempt_id, attempt_body.get("launch_request_sha256"))
-            _capture_export_binding(groups, snapshots)
         _require(set(attempt.listdir()) == attempt_names
                  and set(payload.listdir()) == payload_names, "E_STORE")
         if rows:
@@ -1974,7 +2089,7 @@ def read_coverage_attempt(anchor, configuration, request_raw, *, _owner=None):
         raw_dir = directory(payload, "raw", "payload/raw")
         observations.insert(0, _observation(store, "."))
         attempt_names = set(attempt.listdir())
-        _require(attempt_names in ({"receipt.json", "payload"}, {"receipt.json", "payload", "capture.json"})
+        _require(attempt_names == {"receipt.json", "payload"}
                  and set(payload.listdir()) == {"request.json", "raw-manifest.json", "observation.json", "raw"}, "E_STORE")
         names = sorted(raw_dir.listdir())
         _require(len(n.FAMILIES) <= len(names) <= n.PAGE_LIMIT and names == [f"{index:04d}" for index in range(len(names))], "E_STORE")
@@ -1982,8 +2097,6 @@ def read_coverage_attempt(anchor, configuration, request_raw, *, _owner=None):
         fixed = [(attempt, "receipt.json", "receipt.json"),
                  *[(payload, name, "payload/" + name) for name in ("request.json", "raw-manifest.json", "observation.json")],
                  *[(raw_dir, name, "payload/raw/" + name) for name in names]]
-        if "capture.json" in attempt_names:
-            fixed.append((attempt, "capture.json", "capture.json"))
         for parent, name, relative in fixed:
             item = _open_child(parent, name, False, _store_rule(uid, gid, 0o440, False, anchor.resolver), "E_STORE")
             opened.append(item)
@@ -1999,9 +2112,6 @@ def read_coverage_attempt(anchor, configuration, request_raw, *, _owner=None):
         _require(rebuilt == snapshots["payload/observation.json"], "E_STORE")
         n.receipt(snapshots["receipt.json"], request_raw, anchor.config, configuration.identity,
                   snapshots["payload/raw-manifest.json"], rebuilt)
-        if "capture.json" in snapshots:
-            groups = _capture_envelope(snapshots["capture.json"], attempt_id, digest(request_raw))
-            _capture_export_binding(groups, snapshots, source=True)
         _require(set(attempt.listdir()) == attempt_names, "E_STALE")
         for item in opened:
             item.recheck("E_STALE")
