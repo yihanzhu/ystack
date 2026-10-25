@@ -1,5 +1,5 @@
 ---
-spec-blob: 24522e5e2e576b9f2045701673078a79d5378c55
+spec-blob: b871bb927f6bdc005d9a5e1f6ab0670fd2465971
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-24
@@ -169,13 +169,18 @@ it adds no CLI option, environment selector or reusable test framework.
 The artifact base is `091f22d6dc2bff038e60b1a10b12923093eda0fe`.
 The unique PR 1b carrier is `codex/impl/eval-source-relay-replay`, worktree
 `/private/tmp/ystack-eval-source-relay-replay-20261023`, paused clean at
-`64dda8e74157aea2809889b662ee84ea2c90930c`, parent
-`f55240e3e3dac290f5dcf9602fce19a930bb8154`. Its remote checkpoint remains
+`cd5c4e8f92ac766f60ca2df8b8fb839ac6d863d9`, parent
+`10be18bddd73ffbc02ac8e52dc5ffd40059c4b73`. Preserve the earlier 64dda8e/f55240e
+checkpoint and all subsequent commits, including the eight source commits after
+70ab655. B is incomplete; C has not started. The capture-failure P1 and the full
+implemented recording ledger remain open until their exact proof passes. Its remote checkpoint remains
 `178462071b88531345a5abc45c7db457b526955f`; PR is absent. That earlier checkpoint
 uses reviewed code base `4fc3806147039ae96698b9602c4e5a2234e00f4e`.
 The existing adoption and A/B history remain; do not repeat adoption or reset a
 source round. After this plan passes its gates, rebind the current preserved
 carrier and normally merge the exact plan-containing main before new code.
+Recheck the actual combined tree and obtain fresh independent whole-source
+preflight before the manager authorizes the original Sol author to resume B.
 The original Sol author resumes this carrier. Do not create a replacement,
 cherry-pick copied files, reset, rebase, force or clean another attempt.
 
@@ -924,38 +929,130 @@ raw/output inventory. Compare complete canonical documents and raw file bytes,
 including every envelope/ref/hash, every source snapshot, manifest and COMPLETE.
 Do not give expected output bytes to constructors to make equality tautological.
 
-Add capture.json only inside the existing controlled attempt, with the exact
-R4A.B envelope. Real host/source writers build it from observations already made.
-Consumer-side observations stay in the private recorder output, outside the
-normal bundle. Update every inventory predicate together: read_store_attempt,
-_HeldStoreRead.recheck, read_coverage_attempt and derived reader checks. New
-inventory is exactly receipt.json/payload/capture.json, plus sandbox-export.bin
-if and only if the matching export-read reference is present. Source-page attempts
-never admit that binary. Legacy receipt.json/payload remains readable for old
-consumers but cannot seed replay. The same principal/group, 0440 file/0750 directory
-rules, held descriptors, ACL, regular-file/no-symlink parents, request/attempt
-binding and stable readback cover both capture and binary. Keep the normal bundle's old file set.
-The guest's fixed observation frame stays outside verifier output; the verifier
-cannot write its record. Do not install or run this new capture path on a real host.
+Keep the native attempt inventory exactly receipt.json/payload. Capture lives in
+`.capture-<attempt_id>.pending`, then `.capture-<attempt_id>`, directly under the
+same authenticated held store root. Only the original host principal writes it.
+Use the spec's exact completed inventory: capture.json, complete.json, and the
+conditional sandbox-export.bin. Source-page captures have no binary. Pending or
+old flat capture files never seed replay. The guest observation frame stays
+outside verifier output; normal shadow bundles and fixed trial export paths do
+not change. No real host installation or capture is authorized here.
+
+In host `_capture_values`, prebuild and validate the entire LF-terminated capture
+before opening a capture file. `_write_capture_export` keeps its original bytes,
+exclusive create, 0440 owner/group, fsync and fused full readback/SHA. Route the
+launch and source-page writers through one private directory publication owner.
+Keep native receipt/payload sync and stop/reap/work-root cleanup unchanged. Sync
+the completed pending directory and store root, rename the directory without
+replacement, then sync the published directory and store root. Only after these
+succeed construct the spec's at-most-512-byte completion envelope in the existing
+host value owner from exact request/capture bytes. Write .completion.pending
+exclusively; finalize ownership/mode, fsync, close the write fd, hold/read back and
+check its full bytes, identity and parents. Sync directory and store again, then
+perform the final no-replace rename to complete.json. There is no post-commit
+repair, retry, migration or extra status file. Keep all successful and partial
+work charged and all actual failed bytes at their actual fixed location.
+
+The completion name is the commit point, not a claim that its own rename is crash
+durable. A failed or indeterminate final rename keeps its actual return/errno and
+namespace outcome. No code infers rollback or retries it. The recorder requires
+the one complete stable inventory; the witness only certifies earlier completed
+checks. A failure before those gates or a missing/partial witness cannot seed.
+Keep private failure/counter observations in the existing host owner; fixture raw
+receipts retain actual return/errno even if a later close or observation also
+fails. Do not add a persistence channel, diagnostic file or native output change
+when the original failure prevents further recording.
+
+In `_consumer.py`, restore read_store_attempt, read_coverage_attempt and the
+native held recheck to their original receipt/payload closure. Add separate
+private capture acquisition only inside the recorder failure boundary, after the
+native receipt/expectation has passed. Reuse the same authenticated store hold;
+open the fixed capture directory and exact files with existing _open_child,
+_store_rule, HeldPath and ACL checks. Both launch callers still derive their role
+from the frozen outer request. Bind completion, capture, request, receipt and
+expectation to that same attempt/launch before projection. Source readers use
+their actual source request/receipt, with no export role. A capture refusal marks
+recording unusable and releases its holds; it must not escape as native E_STORE.
+Do not suppress a native receipt, inventory, ACL, teardown or admission failure.
+
+Keep native and capture snapshots separate. Origin/storage names identify their
+actual distinct held directories; never pretend the binary or witness was in
+the native attempt. Extend the existing origin value owner for these fixed names
+only. It independently checks both closed inventories and hashes every file on
+every original invocation. Consumer copy retains original capture and completion
+bytes in its existing private recording inventory: add complete.json beside
+capture.json in each fixed reproduction/write capture directory and each source
+capture's existing directory. Carry that exact relative file through the existing
+seed manifest and shared-file staging; retain the 1–256 shared-file bound. The
+private witness slot has a fixed 512-byte ceiling, never a caller-supplied bound.
+Offline rebuilds both through
+the host's same value constructors, using independently reconstructed request and
+capture bytes; it compares whole documents before final projection. The witness
+is never a guest input or a native success verdict. Update recursive scope/source
+readers, held release/reacquisition and final checks together. Keep every old
+independent SHA, equality and full export recheck; the directory move removes no
+byte pass. Keep legacy native reads and reject old flat captures for seeding.
+
+### Private no-replace binding and platform proof
+
+Use one private function at the two fixed host rename sites. It receives held
+parent descriptors and internally derived basenames, never caller paths. Keep
+ctypes in the existing host system boundary; no new library, helper executable,
+source member, syscall-number table, public selector or capability probe is added.
+Clear/read the saved errno around one call with use_errno=True. Preserve the
+actual return/errno, including EIO/EINTR, without automatic retry. Missing symbol,
+unsupported flag/filesystem, EXDEV, collision or any other error cannot fall back
+to replacing rename, copy/delete or a precheck-then-rename sequence.
+
+| Platform | Fixed binding and fact gate |
+| --- | --- |
+| Darwin | Existing _darwin_libc system library; renameatx_np has argtypes [c_int,c_char_p,c_int,c_char_p,c_uint], restype c_int. Pass source held directory fd, source basename bytes, destination held directory fd, destination basename bytes, flags RENAME_EXCL=0x00000004 only. Local SDK sys/stdio.h:37,53 provides the constant/prototype; sys/attr.h:360–364 identifies filesystem-dependent exclusive rename/open-file support. Header declarations do not prove runtime/filesystem support. |
+| Linux | Intended libc renameat2 no-replace boundary. Exact local Linux prototype, flag definition and symbol availability are UNKNOWN in this author's macOS evidence. Do not implement guessed argtypes, flag value or syscall number. First bind the primary declarations on the existing Linux CI runner as described below; use only those verified types/constant in the same private ctypes owner. No raw-syscall fallback. |
+
+After this plan's protected landing and fresh source GO, add one bounded fact step
+to existing sandbox-launcher.test.sh. On Linux use its existing C compiler to
+preprocess the fixed installed stdio.h with _GNU_SOURCE and linux/fs.h; retain
+header paths/bytes hashes, the complete renameat2 declaration and
+RENAME_NOREPLACE definition. Compile only a tiny temporary translation unit that
+includes those headers and refers to that declaration/constant; no executable,
+link/run, syscall or filesystem probe in this fact step. Preserve full compiler
+argv/stdout/stderr/exit. Missing headers/declaration/constant stops the Linux
+binding; never install or fetch them. Publish a clean same-carrier source
+checkpoint only through the manager's existing review/GO/CI path below. The
+manager reads the exact-head raw facts before Linux production binding is coded.
+Darwin/shared owners and accounting may proceed independently. This fact step
+neither skips existing assertions nor declares B complete.
+
+After the verified binding exists, existing ordinary temp-store fixtures exercise
+its real no-replace calls for both directory and completion-file publication.
+Prove success and collision with both destination bytes/inodes unchanged; retain
+return/errno and before/after names on errors. Both platforms need their ordinary
+positive, not permanent unsupported refusal. These temporary-directory mechanism
+checks grant no native sandbox qualification, real-store execution or platform
+acceptance. Preserve the original genuine macOS/Linux gates and actual NOTRUN.
 
 ### Full export role and bounded operation ledger
 
-These line anchors bind the immutable 64dda8e source, not a current resume tuple.
+Original line anchors below bind immutable 64dda8e; capture publication and
+consumer updates also bind cd5c4e8 host write_receipt_file/_write_capture_file/
+_write_capture_export and consumer _origin_values/read_store_attempt/
+_HeldStoreRead/read_coverage_attempt. Rebind final locations by function and hash;
+no old line number or source checkpoint is a current resume tuple.
 Use only the existing 40 edit paths; all nine adoption-only paths and the exact
 84-member source closure remain unchanged. Rebind final line/blob/hash receipts.
 
 | Existing site | Required change within its existing owner |
 | --- | --- |
-| host `_record_process:52`, `run_vm:2568–2582`, `_capture_values:1547`, `_write_capture_file:1575` | Only `run_vm.export-read.bytes` gains the host-only `{role:"sandbox-export-capture-bytes",size_bytes,sha256}` reference, with no launch. Retain the same original whole `fh.read()` value before it is lost. Write the fixed sibling from those bytes with exclusive creation/fsync/readback before marking capture complete; never reopen export.img later. Keep native read, observer, stop/reap, error and cleanup order. A capture write/limit failure makes capture unusable, preserving native results and teardown. |
-| consumer `_attempt_names:968`, `_capture_envelope:972`, `_capture_for_replay:995`, `_origin_values`, `read_store_attempt:1033`, `_HeldStoreRead.recheck:1006` | Share the exact conditional inventory and reference/attempt/request binding. Acquire the binary through the existing held-file/ACL path, with its fixed 12 MiB ceiling. Include it in every origin, full-byte recheck and capture copy. A changed file or unmatched reference refuses; no absent-field fallback. |
-| consumer `read_coverage_attempt` and derived held readers; scope reader/generator store acquisition and final checks | Keep source-page attempts binary-free. Apply the same inventory on every initial, recursive, release/reacquisition and completion check. Count every actual reread, including earlier attempts and overlapping holds; no cached hash replaces a required check. |
+| host `_record_process:52`, `run_vm:2568–2582`, `_capture_values:1547`, `_write_capture_file:1575` | Only `run_vm.export-read.bytes` gains the host-only `{role:"sandbox-export-capture-bytes",size_bytes,sha256}` reference, with no launch. Retain the same original whole `fh.read()` value before it is lost. Write the fixed file inside the separate capture directory from those bytes with exclusive creation/fsync/readback and the publication/completion sequence above; never reopen export.img later. Keep native read, observer, stop/reap, error and cleanup order. A capture write/limit failure makes capture unusable, preserving native results and teardown. |
+| consumer `_attempt_names:968`, `_capture_envelope:972`, `_capture_for_replay:995`, `_origin_values`, `read_store_attempt:1033`, `_HeldStoreRead.recheck:1006` | Keep the native inventory separate; share the exact completed capture inventory and completion/reference/attempt/request binding inside the private recorder. Acquire the binary through the existing held-file/ACL path, with its fixed 12 MiB ceiling. Include it in every origin, full-byte recheck and capture copy. A changed file or unmatched reference refuses; no absent-field fallback. |
+| consumer `read_coverage_attempt` and derived held readers; scope reader/generator store acquisition and final checks | Keep source-page captures binary-free and native attempts unchanged. Apply the two separate inventories and completion binding on every initial, recursive, release/reacquisition and completion check. Count every actual reread, including earlier attempts and overlapping holds; no cached hash replaces a required check. |
 | launcher `snapshot_file:21`, `stage_expected:56`, `snapshot_input:270`, shared-file staging | Select only `exports/reproduction.bin` or `exports/write.bin` below the validated trial directory from the fixed launch role. Stream at most 64 KiB per chunk; keep held source/installed file, modes, parents, exclusive create and completion seals. No caller path/limit, codec or general externalizer. Charge repeated references even when one equal snapshot is physically reused. |
 | coordinator `_host_result_values:178` and fixed guest/verifier value calls | Read one bounded held binary at a time. Pass all original bytes through unchanged host `frame_read:134` first. Independently rebuild the guest frame from its closed observations and actual verifier payload, then compare frame plus zero padding to the actual read length against every source byte. Bound both inputs before allocation. Parsed source records or host receipts never become guest inputs. |
 
 The host capture validator accepts only that three-key intermediate reference;
 final recorder RAW12 and seed validators accept only the existing four-key
 `{role:"sandbox-export-bytes",launch,size_bytes,sha256}` reference. No stage accepts
-the other's form. Keep the original capture envelope and fixed binary inventory.
+the other's form. Keep the original capture envelope and the separate completed capture inventory.
 
 At the existing reproduction run and writer `_verify_write` calls, use the private
 consumer/recorder boundary after the original receipt/expectation checks. Require
@@ -963,12 +1060,13 @@ the already validated frozen outer request kind to match that fixed caller:
 `shadow_enforced_request` gives reproduction; `shadow_write_request` gives write.
 Bind outer id/body attempt, exact launch id/body attempt, capture id and
 receipt/expectation attempt, plus their launch-request SHA against the same exact
-launch bytes and same held capture/binary. No caller-supplied role, launch, path,
+launch bytes and same held capture/binary/completion. No caller-supplied role, launch, path,
 limit or checked flag substitutes for these relations. Do not infer a launch from
 attempt names, subject or instruction; native request/package/argv/env stay fixed.
 
-Project only the reference into final RAW12. Preserve original capture bytes and
-origin binding; reconstruct that original envelope/intermediate ref offline too.
+Project only the reference into final RAW12. Preserve original capture/completion
+bytes and origin binding to the two actual directories; reconstruct the original
+envelope/intermediate ref and completion envelope offline too.
 The same owners rebuild final projection from the independently reconstructed
 caller/request relationship, never from the final ref's claimed launch. Projection
 adds no binary read, copy or full-byte hash pass; charge its small metadata work to
@@ -1021,7 +1119,7 @@ these are counted roles, not permission to duplicate on every helper call.
 | Copy pair | Owner / accounting point |
 | --- | --- |
 | Original export disks | host build_export_disk/run_vm; count original allocation and any guest overwrite separately as writes; include disks until original cleanup actually removes them |
-| Controlled capture siblings | host capture writer; full original read values, never a reconstructed export |
+| Controlled capture files | host separate capture-directory writer; full original read values, never a reconstructed export; pending-to-final rename retains the same inode/charge |
 | Private recorder copies | consumer capture copy through held descriptors; outside the normal shadow bundle |
 | Seed source files | fixed trial exports paths; a distinct copy costs N even when recorder bytes match |
 | Retained archive copies | recording/seed handoff; distinct from seed files and from R5's two catalog data inputs |
@@ -1049,8 +1147,8 @@ recipe. Both full export frames have at most 64 KiB of non-padding records per
 launch; every remaining byte of each 12 MiB file is present and checked.
 
 Use these three concrete private same-pass changes in the existing owners. They
-are planned implementation work, not a claim about paused B64. (1) Only the new
-export branch of `read_store_attempt` reads through the held descriptor in 64 KiB
+are planned implementation work, not a claim about paused B64. (1) Only the separate private
+capture reader's export branch reads through the held descriptor in 64 KiB
 chunks while updating the acquisition SHA. `_observation`/`_observation_values`
 consume that exact acquisition result for this binary's first SHA; it is bound to
 the same immutable raw value, descriptor, length and before/after checks. It is
@@ -1059,7 +1157,7 @@ the full raw bytes on every invocation, including the returned origin and the
 fixture's separate origin rebuild. No other observation path changes. (2) The
 controlled writer's readback computes SHA in its actual 64 KiB read loop and
 compares it to the separately computed original SHA; it does not add another
-full-buffer digest pass. (3) The export branch of `_HeldStoreRead.recheck` and the
+full-buffer digest pass. (3) The export branch of the separate capture hold's recheck and the
 fixed-role launcher completion checks stream actual held bytes and compare them
 to the retained acquisition bytes in the same loop. Both comparison inputs are
 charged. Where a completion SHA is required, update a fresh hash state in this
@@ -1080,19 +1178,19 @@ charges and assert the exact named call counts, not use unnamed recheck credit.
 | host `run_vm`: original `fh.read` once, original export SHA once | 2N |
 | host original `frame_read` once; all tail, header, content and digest work | at most 2N + 1 MiB |
 | controlled writer: copy original value once; fused readback/SHA once | 2N |
-| consumer `read_store_attempt`: held acquisition/first observation SHA once; returned `_origin_values` second independent SHA once | 2N |
+| consumer separate capture reader: held acquisition/first observation SHA once; returned `_origin_values` second independent SHA once | 2N |
 | existing capture-held-values fixture `held.snapshots == values`: compare both complete binary values once | 2N |
 | fixture `:595–597`: separate `_origin_values` rebuild and its third independent SHA once; compare complete origin document | N; document comparison is non-export |
 | private recorder copy once; fixed seed copy once | 2N |
-| `_HeldStoreRead.recheck` once at fixture completion, after copies and independent origin rebuild: held reread/equality against snapshot | 2N, both inputs |
+| separate capture hold recheck once at fixture completion, after copies and independent origin rebuild: held reread/equality against snapshot; native _HeldStoreRead still rechecks native files | 2N, both inputs |
 | `read_exact`/`read_store_attempt` metadata completion checks, anchor checks and close; no extra full-byte call | 0 export bytes; metadata charged non-export |
 | archive / failed / scratch copy and their byte checks | 0 calls in this positive |
 | Recording total | 15N + 1 MiB = 361 MiB |
 
 The fixture retains its existing full `held.snapshots == values` and independent
-origin equality assertions. Its existing `held.recheck()` call becomes the final
-completion check after those assertions and the copies; it is still called once
-per held attempt. Separate drift cases still call it after their mutation and
+origin equality assertions. Its existing capture-byte recheck moves with those
+holds to the final separate capture check after assertions and copies; it is still
+called once per capture. The native hold retains its own unchanged recheck. Separate drift cases still call it after their mutation and
 must refuse. No nested scope/coverage reader is invoked by this selected ordinary
 positive. Those full production routes and all their recursive calls remain
 mandatory in their separately budgeted existing proofs; this count cannot stand
@@ -1132,7 +1230,9 @@ five pair writes (initial disk, guest overwrite, controlled, recorder, seed =
 | Recording | 25 / 100 | 128 / 377 | 100 / 400 / 512 / 1,508 |
 | Replay | 25 / 148 | 56 / 378 | 100 / 592 / 224 / 1,512 |
 
-Both are below all original caps. Two disjoint dashboard pairs split the four
+These totals cover the original selected fixture before the completion/directory
+increment below; add that increment, do not spend these bounds twice.
+Two disjoint dashboard pairs split the four
 trials; each case executes the complete replay count once. Shared/overlapping
 references and any pre-refusal work remain charged. Repeated cases still hit M4.
 Other recipes with archives, scratch or retained failures use the full eight-pair
@@ -1147,6 +1247,101 @@ Source snapshots keep 16 MiB/file and 32 MiB total; runtime slots keep 4 GiB/64 
 and two-copy limits; Git/preparation keeps 256 MiB storage/384 MiB scratch. All
 source pages and any raw bytes in these classes also pay applicable raw/JSON
 charges. No new runtime collection, recording, retention or resource permission.
+
+### Completion and directory increment to the same operation ledger
+
+Keep every N row above unchanged, including the independent origin and fixture
+SHA, both equality inputs, all final rereads and the 361/362 MiB export-read
+schedules. They are planned schedules, not proof that the paused implementation's
+complete recording ledger is closed. B completion requires actual instrumented
+counts through the new owners and all old owners, including failure work.
+
+For the selected ordinary positive, per launch let C be capture.json bytes
+(C <= 256 KiB), R the actual request bytes (R <= 16 KiB), W the completion bytes
+(W <= 512), and M the complete incremental non-export metadata/observation/log
+bytes for the new directory/witness and changed fixed names (M <= 32 KiB).
+These are measured fixture bounds, not new production caps or free allowances.
+M includes host private operation/error accounting, directory/ACL/stat/name rows,
+extra origin entries and serialized fixed-path growth. Retain each actual row and
+its byte count. Existing raw row/array/JSON bounds still apply. The initial
+acquisition adds one directory _observation and one witness _observation per
+launch; relocated capture/binary observations retain their calls. Parent/ACL
+checks inside _clone/_open_child/HeldPath remain intact and enter M with their
+actual invocation counts. No generic 'metadata cost zero' exemption is allowed.
+
+The completion constructor independently hashes R and C once per invocation.
+Its bounded canonical construction charges up to four W traversals: field
+emission, UTF-8 materialization, LF-bearing copy and retained output transfer.
+Keep those separate from parsing, hashing and comparison inputs below. Count the
+actual traversals; if an implementation adds one, charge it rather than silently
+reusing a row. The following are additional work, not replacements for old rows.
+
+| Recording owner, calls per launch | Added read/processing bytes |
+| --- | --- |
+| Host completion constructor once; exclusive write once; readback once and separate two-input equality once | R+C+4W + W + 3W |
+| Consumer witness acquisition once, observation SHA once, returned-origin independent SHA once | 3W |
+| Consumer completion constructor once, actual witness parse once, full expected/actual comparison once | R+C+4W + W + 2W |
+| Fixture independent completion constructor once and equality once | R+C+4W + 2W |
+| Existing full snapshots equality and separate origin rebuild, extended to witness | 2W + W |
+| Private recorder copy once; seed copy once | 2W |
+| Final held witness read once and separate two-input equality once | 3W |
+| Incremental metadata: acquisition/serialization 4 passes; returned origin validation/encoding 4; fixture independent origin validation/encoding 4; origin equality 2; private/seed copies 2; completion comparison inputs 2; retained accounting/log encoding 2 | 20M |
+| Recording sum per launch | 3(R+C)+32W+20M |
+
+| Replay owner, calls per launch | Added read/processing bytes |
+| --- | --- |
+| Launcher witness copy and installed SHA once each; held seed read plus separate two-input equality once | 5W |
+| Coordinator witness acquisition plus independent SHA; origin SHA, once each | 3W |
+| Offline completion constructor once, actual parse once, whole-byte comparison once | R+C+4W + W + 2W |
+| Installed and seed witness completion: each reads once, hashes once and compares both complete inputs once | 8W |
+| Incremental metadata: launcher copy/SHA/source comparison 4 passes; coordinator acquisition/parse 2; independent origin validation/encoding/equality 6; installed/source final comparisons 4; retained accounting/log encoding 2 | 18M |
+| Replay sum per launch | R+C+23W+18M |
+
+Unlike the existing fused export rows, these new witness reads and buffer
+comparisons are charged separately. No new same-pass optimization is assumed.
+No rebuilt witness file is needed: the value owner returns bounded bytes for the
+whole-document comparison. Recording retains three witness files per launch
+(host, private recorder, seed), with 3W physical/write bytes. Replay keeps those
+three and adds one installed witness, giving 4W physical and W new writes.
+.completion.pending and complete.json are the same inode across rename, not two
+copies. Incremental metadata is retained in the existing private/seed documents
+(2M physical/writes per launch); replay adds its installed copy (3M physical,
+M new writes). Host counter buffers are not a new on-disk file. Count any actual
+additional log/archive/scratch file separately; it cannot enter the positive as
+an unlisted copy. Logical input increments are W+M per launch. The selected
+positive has zero additional failed/archive copies; failure tests retain theirs.
+
+At these bounds the pair increment is: logical 66,560 bytes; recording physical
+and writes 134,144 bytes and reads 3,014,656 bytes; replay physical 200,704 bytes,
+new writes 66,560 bytes and reads 1,760,256 bytes. Add these exact bytes to the
+prior positive totals. Four cases multiply every increment by four; both
+dashboard pairs share those same counters. No capture export file or N pass is
+added. The resulting recording total is at most 25 MiB+66,560 logical,
+100 MiB+134,144 physical, 128 MiB+134,144 written and 377 MiB+3,014,656 read.
+Replay is at most 25 MiB+66,560 logical, 148 MiB+200,704 physical,
+56 MiB+66,560 written and 378 MiB+1,760,256 read. Each stays below the unchanged
+per-case and four-case caps. The four partition limits still apply separately.
+
+For each source-page capture and each further recursive/reacquired/seed hold,
+append its actual owner/call row to the same operation receipt. A new completion
+constructor costs R+C+4W; parse W; independent SHA W (or C/R for that actual
+input); whole equality costs both input lengths; a separate held reread also costs its
+read length, and any separate fresh SHA costs that length again; each copy costs its actual source reads, writes and retained physical bytes. Record
+all directory/ACL/identity rows and their repeated processing as actual M work.
+Do not reset at source readers, launch boundaries or dashboard pairs. The two-
+launch positive above invokes no source-page or recursive route and substitutes
+for none. Their existing complete ordinary proofs and full real recipe need
+separate finite instantiated call tables before acceptance, not unnamed credit.
+
+A partial witness of k bytes costs k retained bytes and all attempted/actual
+transferred, parsed, hashed and compared bytes; any reserved-but-unknown work is
+reported as unknown, never zero or invented actual success. On read/write error
+retain both the measured prefix and the actual errno. Unknown exact work blocks
+acceptance of that recording ledger. Preflight includes all previous retained
+files; no deletion, truncation or rename refunds a charge. Test every added W/M
+charge at its applicable old cap and one step over, including two failed attempts
+retained before a later ordinary positive. Keep failed raw records even if a
+second close/sync/observation fails. No production persistence interface is added.
 
 ### Fixed commands, Git and I5
 
@@ -1256,7 +1451,7 @@ must run through its actual caller before its corresponding final proof gate.
 | ROUTE01–11 | The eleven owner rows above, each production/offline invocation, narrow mutation and call deletion; neither path may pass with the target call skipped | existing owner tests + evals-malicious |
 | DRV | running/stopped, non-200, malformed state JSON, 65536/65537 body, each three transport phases, rejected/accepted stop, observed stopped, EOF versus incomplete/timeout/read-error with exit zero | sandbox-launcher + evals-malicious |
 | GST | positive/zero/negative launch return, wait zero/equal/foreign, EINTR, deadline before launch/after wait, reap versus population termination; never set child_reaped as input | sandbox-guest harness/test |
-| CAP | new/legacy inventory, conditional export sibling, missing/partial/extra capture, changed request/attempt/hash, wrong owner/ACL, stale held/readback, overflow; real consumer refuses, legacy cannot seed | shadow-enforced/write, sandbox-receipt, scope-gate-generation |
+| CAP | native two-entry inventory plus separate committed capture inventory; conditional export, completion, partial/extra/cross-bound capture, wrong owner/ACL, stale held/readback and overflow; recorder refuses unusable capture while native checks/result remain unchanged | shadow-enforced/write, sandbox-receipt, scope-gate-generation |
 | LIM | All R4A.B/D numeric bounds at boundary and one over; cross-field aggregate, repeated-read accounting, 64 runtime slots/65, 4 GiB aggregate/one over, stream chunk 64 KiB, two-copy accounting | evals-malicious + relevant owner tests |
 | CLO | missing/extra/duplicate/moved member, changed byte, symlink/parent escape, wrong fixed generation, equal/unequal overlap, final-held mutation | evals-framework/malicious/scope |
 | I5-01–06 | extra command, argument, option, role, reordered command or wrong concrete argv digest; rejected E_RELATION or evals.invariant-broken, never pass | evals-malicious |
@@ -1270,7 +1465,7 @@ RAW12 adds these finite vectors to the existing tests, with no new entry point:
 | --- | --- |
 | EXP.complete-two | `evals-malicious.test.sh` existing capture-held-values group (64 source:550–644), extended with the two actual 12 MiB files and the ledger above; `_capture_values`, actual held store reader, fixed launcher staging and `_host_result_values`/guest rebuild all consume the whole files. Check complete=true, exact role/use counts and all byte/file/read/write counters. |
 | EXP.tail, last-byte, digest, end-length, magic, truncated, empty, short, errno | `sandbox-launcher.test.sh` existing frame and export-stop groups plus evals-malicious host-result values; original `frame_read` and real run_vm read/error branch retain their exact rejection, native result and cleanup. Last-byte changes only byte 12,582,911; compare all original bytes. |
-| EXP.missing, duplicate, unused, cross-launch, cross-attempt, cross-request, wrong-site, inline, extra-key | capture-held-values group and shadow-enforced/write store tests; actual `_capture_envelope`, exact attempt inventory, fixed role selection and coordinator all refuse the independently malformed relation. Source-page reader also rejects a binary sibling. |
+| EXP.missing, duplicate, unused, cross-launch, cross-attempt, cross-request, wrong-site, inline, extra-key | capture-held-values group and shadow-enforced/write store tests; actual `_capture_envelope`, separate native/capture inventories and witness binding, fixed role selection and coordinator all refuse the independently malformed relation. Source-page capture reader also rejects a binary. |
 | EXP.held-bytes, size, hash, mode, ACL, parent-link, final-drift | actual held reader/recheck in evals-malicious and shadow-enforced; launcher shared-file staging and final seals in framework/malicious; tamper one field at a time, keep other relations valid. |
 | EXP.stop, reap, read-order, cleanup | existing launcher export-stop fixture (64 source:2252–2576) and host controller/offline paired tests; no read before both confirmed stop and reap, including error/timeout paths. |
 | EXP.parse-route, guest-route | existing guest harness/test and evals-malicious host/guest owner tests; separately delete full-source parse, guest rebuild, production call or offline call, then mutate each result. Each narrow test fails with its companion calls intact; no source-derived guest input. |
@@ -1282,7 +1477,7 @@ cover this closed launch-binding set; these supplement every EXP row above:
 
 | ID | Required ordinary assertion / paired negative |
 | --- | --- |
-| EXP.bind01 | Both complete 12 MiB launches have the correct final role; original host envelope and origin rebuild exactly. |
+| EXP.bind01 | Both complete 12 MiB launches have the correct final role; original host/capture-completion envelopes and separate-directory origin rebuild exactly. |
 | EXP.bind02 | Intermediate/final refs at the wrong stage, wrong role/site, mixed form, missing/extra key refuse. |
 | EXP.bind03 | Caller/outer-kind mismatch and independently changed request, attempt or receipt/expectation digest refuse. |
 | EXP.bind04 | Cross-launch capture/binary swaps refuse even for equal bytes; retain duplicate/unused/missing and source-page negatives. |
@@ -1290,10 +1485,33 @@ cover this closed launch-binding set; these supplement every EXP row above:
 | EXP.bind06 | Separately delete production projection, offline projection or original-envelope rebuild; each paired assertion fails. Mutate final launch or original capture independently and require refusal. |
 
 Keep required genuine paired routes NOTRUN until their original gate permits them;
-ordinary two-file complete capture remains required and cannot use that exception.
+ordinary two-launch complete capture remains required and cannot use that exception.
 The old capture JSON boundary fixture uses inline export bytes at 64:628–643.
 Move that fixture payload to valid bounded non-export records, retaining exact
 1 MiB/one-byte-over checks; do not let forbidden inline export shape mask the cap.
+
+The capture publication vectors extend these same ordinary fixture groups:
+
+| ID | Actual owner/call and required proof |
+| --- | --- |
+| CAP.publish | sandbox-launcher temporary store invokes the real host publication owner and platform no-replace boundary. Preserve native receipt/payload bytes and all old syncs; assert exact data directory, complete.json, modes/ACL, true witness binding and two full exports through evals-malicious capture-held-values. |
+| CAP.fail.STEP | Inject one failure in each actual capture/witness create, write (including partial/zero write), chown/chmod, fsync, write-fd close, readback, held check and both rename sites. Save actual return/errno, names, inodes and partial bytes; no completion before prerequisites, no changed native result/teardown and no retry. Keep all earlier raw failures. |
+| CAP.rename | File and empty/nonempty directory destination collisions, unsupported/missing symbol, EXDEV, permission and EINTR/EIO. For the last witness rename simulate both unchanged and committed namespace outcomes with the same reported error; use actual namespace/strict witness checks, never pretend rollback. |
+| CAP.refailure | Fail capture, then fail its close/observation/finalization; preserve the first error and partial bytes plus the second error. Occupied pending/final names reject a later capture without overwriting either inode. |
+| CAP.bind | Missing/partial/duplicate witness; wrong id/request/capture SHA; cross-attempt/launch/source swaps; extra entries, old flat captures, symlink, owner/ACL/parent/held drift and simulated loss after crash all refuse recording. Native invalid receipt/payload still refuses independently. |
+| CAP.route | Shadow-enforced/write actual recorder boundaries and scope-gate/source readers keep native and recorder failures separate. Independently delete production/offline completion construction, validation, origin reconstruction or either projection call in existing private source-copy mutation tests; each paired assertion fails. |
+| CAP.cost | Actual per-owner receipt asserts every new row above, every unchanged N pass, partial bytes and prior retained occupancy; W=512/513 and each applicable original logical/physical/file/read/write/partition cap at/over. Ordinary 12 MiB positives must complete; full old suites remain. |
+
+The 512/513-byte witness boundary tests exercise the bounded reader before JSON
+validation. A malformed 512-byte document is not a successful complete witness;
+the positive uses the actual canonical envelope and measured W.
+Tests inject only through their existing private fixture substitutions. No shipped
+fault selector, general syscall harness or new test entry point is added. Run the
+existing whole sandbox-launcher, evals-malicious, shadow-enforced/write and source
+reader suites through the proof commands below. Ordinary filesystem publication
+is not a sandbox launch, genuine native/platform proof or a seed. Actual platform
+refusal and reserved route NOTRUN remain literal; full CI and final debts remain.
+
 No result above waives RAW01–16, DER01–13, ROUTE01–11, all other LIM/CLO/I5/SURF/ARC,
 source84 hash receipt, original full suites, full CI or final native/seed/G3 proof.
 
@@ -1572,9 +1790,10 @@ gates (R9.6).
   operator-graded seed and its test. 150-450 of them are verbatim verdict bytes, which
   cannot leave the PR whose test checks their digests.
 - PR 3: `review_size: standard`, about 300-400 net added lines.
-- This plan-only amendment: `review_size: standard`, expected 20–80 changed
-  lines. One concern: the fixed whole-export role, actual readers, complete finite
-  resource ledger and proof. Preserve the full inherited plan and all its gates.
+- This plan-only amendment: `review_size: standard`, expected 220–360 changed
+  lines. One concern: capture publication, separate native/recorder ownership,
+  completion facts, platform binding, complete incremental accounting and proof.
+  Preserve the full inherited plan and all its gates.
 
 Each range waives only the soft line signal, never scope, tests, CI, review or human
 merge.
