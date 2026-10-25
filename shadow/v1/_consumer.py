@@ -255,9 +255,15 @@ class _DarwinUUIDResolver:
     def resolve(self, uuids: list[str]) -> list[dict]:
         raise NotImplementedError
 
+    def raw_uuid_replies(self):
+        return None
+
 class _DarwinGroupReader:
     def contains(self, gid: int) -> bool:
         raise NotImplementedError
+
+    def raw_group_replies(self):
+        return None
 
 def _metadata(fd: int) -> os.stat_result:
     """Private OS observation seam used only by in-process fixtures."""
@@ -1048,6 +1054,73 @@ class Anchor:
         if failure is not None:
             raise failure
 
+def _principal_identity_values(principal_uid, real_uid, effective_uid):
+    return principal_uid > 0 and principal_uid not in (real_uid, effective_uid)
+
+
+def _group_context_values(gid, primary_groups, groups):
+    return gid in primary_groups or groups is not None and gid in groups
+
+
+def _anchor_identity_context(uid, gid, resolver, group_reader):
+    _require(uid > 0, "E_CONFIG")
+    real_uid, effective_uid = os.getuid(), os.geteuid()
+    _require(_principal_identity_values(uid, real_uid, effective_uid), "E_CONFIG")
+    primary_groups = (os.getgid(), os.getegid())
+    groups = None
+    member = _group_context_values(gid, primary_groups, groups)
+    if not member:
+        if group_reader is not None:
+            member = group_reader.contains(gid)
+        else:
+            groups = os.getgroups()
+            member = _group_context_values(gid, primary_groups, groups)
+    _require(member, "E_CONFIG")
+    return {"uid": real_uid, "euid": effective_uid, "gid": primary_groups[0], "egid": primary_groups[1],
+        "groups": groups, "platform": sys.platform,
+        "uuid_replies": resolver.raw_uuid_replies() if resolver is not None else None,
+        "group_replies": group_reader.raw_group_replies() if group_reader is not None else None}
+
+
+def _identity_context_values(context, principal_uid, consumer_gid):
+    _require(type(context) is dict and set(context) == {"uid", "euid", "gid", "egid", "groups",
+        "platform", "uuid_replies", "group_replies"} and type(context["platform"]) is str
+             and context["platform"] in {"darwin", "linux"}, "E_CONFIG")
+    _require(all(type(context[key]) is int and 0 <= context[key] <= 0xffffffff
+                 for key in ("uid", "euid", "gid", "egid")), "E_CONFIG")
+    _require(type(principal_uid) is int and type(consumer_gid) is int
+             and _principal_identity_values(principal_uid, context["uid"], context["euid"]), "E_CONFIG")
+    groups = context["groups"]
+    _require(groups is None or type(groups) is list and len(groups) <= DOCUMENT_LIMIT
+             and all(type(value) is int and 0 <= value <= 0xffffffff for value in groups), "E_CONFIG")
+    primary = (context["gid"], context["egid"])
+    member = _group_context_values(consumer_gid, primary, groups)
+    group_replies = context["group_replies"]
+    if not member and groups is None:
+        _require(context["platform"] == "darwin" and type(group_replies) is list
+                 and len(group_replies) == 1 and type(group_replies[0]) is dict
+                 and set(group_replies[0]) == {"gid", "bytes"}
+                 and group_replies[0]["gid"] == consumer_gid, "E_CONFIG")
+        raw = group_replies[0]["bytes"]
+        _require(type(raw) is str and len(raw) <= 32 and len(raw) % 2 == 0
+                 and all(char in "0123456789abcdef" for char in raw), "E_CONFIG")
+        member = _group_reply_values(consumer_gid, bytes.fromhex(raw))
+    else:
+        _require(group_replies in (None, []), "E_CONFIG")
+    _require(member, "E_CONFIG")
+    replies = context["uuid_replies"]
+    _require(replies is None or context["platform"] == "darwin" and type(replies) is list
+             and len(replies) <= 4096, "E_CONFIG")
+    for row in replies or []:
+        _require(type(row) is dict and set(row) == {"uuids", "bytes"}
+                 and type(row["uuids"]) is list and bool(row["uuids"])
+                 and type(row["bytes"]) is str and len(row["bytes"]) <= 2 * DARWIN_UUID_OUTPUT_LIMIT
+                 and len(row["bytes"]) % 2 == 0
+                 and all(char in "0123456789abcdef" for char in row["bytes"]), "E_CONFIG")
+        _uuid_reply_values(row["uuids"], bytes.fromhex(row["bytes"]))
+    return context
+
+
 def load_anchor(resolver: _DarwinUUIDResolver | None = None,
                 group_reader: _DarwinGroupReader | None = None) -> Anchor:
     held: list[HeldPath] = []
@@ -1065,19 +1138,7 @@ def load_anchor(resolver: _DarwinUUIDResolver | None = None,
         config_raw = config_file.read(DOCUMENT_LIMIT, "E_CONFIG")
         config = _parse_config(config_raw)
         uid, gid = config["principal_uid"], config["consumer_gid"]
-        _require(uid > 0, "E_CONFIG")
-        real_uid, effective_uid = os.getuid(), os.geteuid()
-        _require(uid not in (real_uid, effective_uid), "E_CONFIG")
-        primary_groups = (os.getgid(), os.getegid())
-        groups = None
-        member = gid in primary_groups
-        if not member:
-            if group_reader is not None:
-                member = group_reader.contains(gid)
-            else:
-                groups = os.getgroups()
-                member = gid in groups
-        _require(member, "E_CONFIG")
+        identity_context = _anchor_identity_context(uid, gid, resolver, group_reader)
         installed: dict[str, tuple[bytes, str]] = {}
         source_root = _source_root()
         for role, source_name in INSTALLED_SOURCES.items():
@@ -1096,11 +1157,7 @@ def load_anchor(resolver: _DarwinUUIDResolver | None = None,
         registry = _parse_registry(installed["registry"][0])
         accepted = _parse_accepted(installed["accepted_set"][0])
         result = Anchor(config, config_raw, held, installed, registry, accepted, resolver)
-        result.identity_context = {"uid": real_uid, "euid": effective_uid,
-            "gid": primary_groups[0], "egid": primary_groups[1], "groups": groups,
-            "platform": sys.platform,
-            "uuid_replies": resolver.uuid_replies if isinstance(resolver, _DarwinChildOwner) else None,
-            "group_replies": group_reader.group_replies if isinstance(group_reader, _DarwinChildOwner) else None}
+        result.identity_context = identity_context
         result.recheck()
         return result
     except BaseException as exc:
@@ -1957,7 +2014,36 @@ def _hold_bytes(path: str, limit: int, code: str = "E_RELATION", hardlinks=False
         raise
 
 
+def _uuid_reply_values(uuids, output):
+    _require(type(uuids) is list and len(uuids) <= DARWIN_UUID_COUNT_LIMIT
+             and all(_uuid_hex(value) for value in uuids), "E_ACL")
+    rows = _json_array(output, DARWIN_UUID_OUTPUT_LIMIT, "E_ACL")
+    _require(len(rows) == len(uuids), "E_ACL")
+    for uuid, row in zip(uuids, rows):
+        _require(type(row) is dict and set(row) == {"uuid", "status", "kind", "id"}
+                 and row["uuid"] == uuid, "E_ACL")
+        if row["status"] == "resolved":
+            _require(type(row["kind"]) is str and row["kind"] in {"user", "group"} and _integer(row["id"])
+                     and 0 <= row["id"] <= 0xffffffff, "E_ACL")
+        else:
+            _require(row["status"] == "unresolved" and row["kind"] is None
+                     and row["id"] is None, "E_ACL")
+    return rows
+
+
+def _group_reply_values(gid, output):
+    _require(_integer(gid) and 0 <= gid <= 0xffffffff, "E_ACL")
+    _require(output in (canonical([]), canonical([gid])), "E_ACL")
+    return output == canonical([gid])
+
+
 class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
+    def raw_uuid_replies(self):
+        return self.uuid_replies
+
+    def raw_group_replies(self):
+        return self.group_replies
+
     def __init__(self, python, source, deadline: float, ledger) -> None:
         self.python, self.source = python, source
         self.deadline, self.ledger = deadline, ledger
@@ -2040,25 +2126,13 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
             return []
         output = self._fixed("_resolve-darwin-uuids", canonical(uuids), DARWIN_UUID_OUTPUT_LIMIT, context)
         self._retain_identity_reply(self.uuid_replies, {"uuids": list(uuids)}, output)
-        rows = _json_array(output, DARWIN_UUID_OUTPUT_LIMIT, "E_ACL")
-        _require(len(rows) == len(uuids), "E_ACL")
-        for uuid, row in zip(uuids, rows):
-            _require(type(row) is dict and set(row) == {"uuid", "status", "kind", "id"}
-                     and row["uuid"] == uuid, "E_ACL")
-            if row["status"] == "resolved":
-                _require(row["kind"] in {"user", "group"} and _integer(row["id"])
-                         and 0 <= row["id"] <= 0xffffffff, "E_ACL")
-            else:
-                _require(row["status"] == "unresolved" and row["kind"] is None
-                         and row["id"] is None, "E_ACL")
-        return rows
+        return _uuid_reply_values(uuids, output)
 
     def contains(self, gid: int, context=None) -> bool:
         _require(_integer(gid) and 0 <= gid <= 0xffffffff, "E_ACL")
         output = self._fixed("_read-darwin-group", canonical({"gid": gid}), 16, context)
         self._retain_identity_reply(self.group_replies, {"gid": gid}, output)
-        _require(output in (canonical([]), canonical([gid])), "E_ACL")
-        return output == canonical([gid])
+        return _group_reply_values(gid, output)
 
     def coverage_source(self, request_raw):
         return self._source_read(request_raw, "coverage-read")

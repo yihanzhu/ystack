@@ -450,6 +450,13 @@ class _DarwinUUIDResolver(c._DarwinUUIDResolver):
         self.deadline, self.record_command = deadline, record_command
         self.owner = c._DarwinChildOwner(python, source, deadline, _DarwinLedger(record_command))
 
+    @property
+    def observations_complete(self):
+        return self.owner.observations_complete
+
+    def raw_uuid_replies(self):
+        return self.owner.raw_uuid_replies()
+
     def recheck(self) -> None:
         try:
             self.owner.recheck()
@@ -470,6 +477,9 @@ class _DarwinUUIDResolver(c._DarwinUUIDResolver):
 class _DarwinGroupReader(c._DarwinGroupReader):
     def __init__(self, resolver: _DarwinUUIDResolver) -> None:
         self.resolver = resolver
+
+    def raw_group_replies(self):
+        return self.resolver.owner.raw_group_replies()
 
     def contains(self, gid: int) -> bool:
         try:

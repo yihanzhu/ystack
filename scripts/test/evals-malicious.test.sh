@@ -1192,6 +1192,48 @@ def load(name,path):
 replay = load('projection_replay',root/'evals/v1/replay-malicious.py')
 launch = load('projection_launch',root/'shadow/v1/enforced-reproduction.py')
 preparation = load('projection_preparation',root/'preparation/v1/prepare-candidate.py')
+principal = 1 if launch.os.getuid() != 1 and launch.os.geteuid() != 1 else 2
+actual_context = launch.c._anchor_identity_context(principal,launch.os.getgid(),None,None)
+assert replay._identity_context_values(root,actual_context,principal,launch.os.getgid()) == actual_context
+resolver = object.__new__(launch._DarwinUUIDResolver)
+resolver.owner = object.__new__(launch.c._DarwinChildOwner)
+resolver.owner.uuid_replies = []
+resolver.owner.group_replies = []
+resolver.owner.observation_bytes = 0
+resolver.owner.observations_complete = True
+group_reader = launch._DarwinGroupReader(resolver)
+assert resolver.raw_uuid_replies() is resolver.owner.uuid_replies
+assert group_reader.raw_group_replies() is resolver.owner.group_replies
+uuid = '01'*16
+uuid_output = launch.c.canonical([{'uuid':uuid,'status':'resolved','kind':'user','id':launch.os.getuid()}])
+resolver.owner._retain_identity_reply(resolver.owner.uuid_replies,{'uuids':[uuid]},uuid_output)
+wire_context = dict(actual_context,platform='darwin',uuid_replies=resolver.raw_uuid_replies(),
+                    group_replies=list(group_reader.raw_group_replies()))
+assert replay._identity_context_values(root,wire_context,principal,launch.os.getgid()) == wire_context
+assert resolver.observations_complete is True
+resolver.owner.observations_complete = False
+assert resolver.observations_complete is False
+query_gid = max(launch.os.getgid(),launch.os.getegid())+1
+group_wire = launch.c.canonical([query_gid])
+def fixed_group_wire(operation,raw,cap,context):
+    assert operation == '_read-darwin-group' and raw == launch.c.canonical({'gid':query_gid}) and cap == 16
+    return group_wire
+resolver.owner._fixed = fixed_group_wire
+assert resolver.owner.contains(query_gid) is True
+group_context = dict(actual_context,platform='darwin',groups=None,
+    uuid_replies=resolver.raw_uuid_replies(),group_replies=group_reader.raw_group_replies())
+assert replay._identity_context_values(root,group_context,principal,query_gid) == group_context
+import copy
+assert replay._identity_context_values(root,wire_context,principal,launch.os.getgid()) == wire_context
+for label,change in [('missing',lambda v:v.pop('uid')),('extra',lambda v:v.update(authenticated=True)),
+        ('wrong-type',lambda v:v.update(uid=True)),('invalid',lambda v:v.update(euid=-1)),
+        ('wrong-platform-type',lambda v:v.update(platform=[])),
+        ('uuid-bytes',lambda v:v['uuid_replies'][0].update(bytes='zz'))]:
+    changed = copy.deepcopy(wire_context);change(changed)
+    try:replay._identity_context_values(root,changed,principal,launch.os.getgid())
+    except Exception as error:assert type(error).__name__ == 'Refusal',label
+    else:raise AssertionError('identity context '+label)
+print('ok actual uid/gid acquisition/offline membership owners; Darwin wrapper raw reply and overflow forwarding; synthetic UUID wire only')
 with preparation.tempfile.TemporaryDirectory(prefix='ystack-preparation-name-values-') as directory:
     scratch = Path(directory).resolve()
     deadline = preparation.time.monotonic()+30

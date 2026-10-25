@@ -153,6 +153,15 @@ def _gate_values(runtime_root, inputs):
         "complete": owner._completion_values(inputs["id"], manifest)}
 
 
+def _identity_context_values(runtime_root, context, principal_uid, consumer_gid):
+    spec = importlib.util.spec_from_file_location(
+        "malicious_identity_context_values", Path(runtime_root) / "shadow/v1/_consumer.py")
+    owner = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = owner
+    spec.loader.exec_module(owner)
+    return owner._identity_context_values(context, principal_uid, consumer_gid)
+
+
 def _identity_values(runtime_root, slots, instruction_raw, config_raw, supervisor_raw, python_raw,
                       read_observations=None):
     spec = importlib.util.spec_from_file_location(
