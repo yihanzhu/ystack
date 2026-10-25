@@ -148,9 +148,17 @@ def frame_write(records):
 
 def frame_read(data):
     """Returns [(name: bytes, content: bytes)] (no "end"); raises FrameError."""
+    work = (_capture_process.setdefault("export_work", {})
+            if _capture_process is not None and _capture_process.get("export_raw") is data else None)
+    def charge(amount):
+        if work is not None:
+            work["frame_read_bytes"] = work.get("frame_read_bytes", 0) + amount
+    if work is not None:
+        work["frame_read_calls"] = work.get("frame_read_calls", 0) + 1
     n = len(data)
     if n < len(FRAME_MAGIC):
         raise FrameError("E_FRAME_TRUNCATED")
+    charge(3 * len(FRAME_MAGIC))
     if data[:len(FRAME_MAGIC)] != FRAME_MAGIC:
         raise FrameError("E_FRAME_MAGIC")
     pos = len(FRAME_MAGIC)
@@ -159,27 +167,45 @@ def frame_read(data):
     while True:
         if pos + 1 > n:
             raise FrameError("E_FRAME_TRUNCATED")
+        charge(1)
         name_len = data[pos]
         if pos + 1 + name_len > n:
             raise FrameError("E_FRAME_TRUNCATED")
+        charge(name_len)
         name = data[pos + 1:pos + 1 + name_len]
         if pos + 1 + name_len + 8 > n:
             raise FrameError("E_FRAME_TRUNCATED")
+        charge(16)
         len_field = data[pos + 1 + name_len:pos + 1 + name_len + 8]
         length = int.from_bytes(len_field, "big")
         content_off = pos + 1 + name_len + 8
         if length > n - content_off:
             raise FrameError("E_FRAME_TRUNCATED")
+        charge(len(name) + len(FRAME_END))
         if name == FRAME_END:
             if length != 32:
                 raise FrameError("E_FRAME_DIGEST")
+            charge(96)
             if data[content_off:content_off + 32] != digest.digest():
                 raise FrameError("E_FRAME_DIGEST")
-            if any(b != 0 for b in data[content_off + 32:]):
-                raise FrameError("E_FRAME_TAIL")
+            tail = data[content_off + 32:]
+            charge(len(tail))
+            scanned = 0
+            def nonzero():
+                nonlocal scanned
+                for byte in tail:
+                    scanned += 1
+                    yield byte != 0
+            try:
+                if any(nonzero()):
+                    raise FrameError("E_FRAME_TAIL")
+            finally:
+                charge(scanned)
             return records
+        charge(length)
         content = data[content_off:content_off + length]
         header = bytes([name_len]) + name + len_field
+        charge(2 * len(header) + len(content))
         digest.update(header)
         digest.update(content)
         records.append((name, content))

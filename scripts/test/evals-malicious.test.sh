@@ -769,11 +769,13 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
         originals = area/'originals';originals.mkdir(mode=0o700)
         private = area/'private-recorder';private.mkdir(mode=0o700);private.chmod(0o700)
         failed_private = area/'failed-private-recorder';failed_private.mkdir(mode=0o700);failed_private.chmod(0o700)
+        seed_exports = area/'seed-exports';seed_exports.mkdir(mode=0o700)
         private_held = consumer._open_held(str(private),True,
             consumer._store_rule(os.getuid(),os.getgid(),0o700,True), 'E_STORE')
         failed_private_held = consumer._open_held(str(failed_private),True,
             consumer._store_rule(os.getuid(),os.getgid(),0o700,True), 'E_STORE')
         private_work = {}
+        recording_pair = []
         for launch in ('reproduction','write'):
             before_work = copy.deepcopy(consumer._export_work)
             def spent(site,field):
@@ -804,6 +806,7 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
             original = originals/(launch+'.bin')
             assert original.write_bytes(export) == len(export)
             with original.open('rb') as stream:export = host._read_export_value(stream)
+            assert host.frame_read(export) == [(b'stdout',b''),(b'stderr',b'')]
             reference = host._capture_process['rows'][0]['bytes']
             export_group = {'host':{'process':host._capture_process['rows'],
                 'driver_rest':[],'signals':[]},'clocks':{'wall':[],'monotonic':[]}}
@@ -823,8 +826,11 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
                 host.write_receipt_file(store_fd,attempt_fd,os.getuid(),os.getgid(),receipt)
             finally:os.close(store_fd)
             assert host._capture_process['complete'] is True
-            assert host._capture_process['export_work'] == {key:len(export) for key in
-                ('original_read','original_sha','controlled_copy','controlled_write','controlled_readback')}
+            host_work = host._capture_process['export_work']
+            assert all(host_work[key] == len(export) for key in
+                ('original_read','original_sha','controlled_copy','controlled_write','controlled_readback'))
+            assert host_work['frame_read_calls'] == 1
+            assert 2*len(export) <= host_work['frame_read_bytes'] <= 2*len(export)+512*1024
             held = consumer._HeldStoreRead(export_anchor,attempt_id)
             try:
                 acquired = export_anchor.private_observations['storage_reads'][-1]
@@ -972,6 +978,7 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
                     {k:v for k,v in held.snapshots.items() if k != 'sandbox-export.bin'}),'missing-binary')
                 refuses(lambda:consumer._capture_export_binding(group,held.snapshots),'unused-binary')
                 prior_copy = dict(private_work)
+                prior_export_copy_calls = private_work.get('calls',{}).get('sandbox-export.bin',0)
                 for component in private_held.components:
                     current = os.fstat(component.fd)
                     assert consumer._identity(component.before) == consumer._identity(current), (
@@ -994,15 +1001,58 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
                 assert copied.stat().st_size == len(export) and copied.stat().st_mode & 0o777 == 0o400
                 measured = consumer.hashlib.sha256()
                 validation_bytes = 0
-                with copied.open('rb') as stream:
+                seed = seed_exports/(launch+'.bin')
+                seed_written = 0
+                with copied.open('rb') as stream, seed.open('xb') as target:
                     while True:
                         chunk = stream.read(65536)
                         if not chunk: break
                         measured.update(chunk);validation_bytes += len(chunk)
+                        view = memoryview(chunk)
+                        while view:
+                            count = target.write(view)
+                            assert count is not None and 0 < count <= len(view)
+                            seed_written += count;view = view[count:]
+                    target.flush();os.fsync(target.fileno())
+                    os.fchmod(target.fileno(),0o400)
+                assert seed_written == validation_bytes == len(export)
+                assert seed.stat().st_size == len(export) and seed.stat().st_mode & 0o777 == 0o400
                 assert validation_bytes == len(export) and measured.hexdigest() == reference['sha256']
                 print(json.dumps({'private_copy_work':private_work,
                     'additional_ordinary_destination_validation_read_bytes':validation_bytes,
                     'additional_ordinary_consumer_doc_validation_input_bytes':len(consumer_observations)},sort_keys=True))
+                held.recheck()
+                assert spent('consumer.completion-reread','calls') == 1
+                assert spent('consumer.completion-reread','read_bytes') == 2*len(export)
+                print(json.dumps({'launch':launch,'consumer_work':{
+                    site:{field:spent(site,field) for field in ('calls','read_bytes')}
+                    for site in consumer._export_work},'offline_origin_work':offline_work},sort_keys=True))
+                ledger = {'original_read':host_work['original_read'],
+                    'original_sha':host_work['original_sha'],
+                    'frame_read':host_work['frame_read_bytes'],
+                    'controlled_copy':host_work['controlled_copy'],
+                    'controlled_readback_sha':host_work['controlled_readback'],
+                    'held_acquisition_sha':spent('consumer.held-acquisition','read_bytes'),
+                    'origin_sha':spent('consumer.independent-sha','read_bytes'),
+                    'snapshot_whole_equality':spent('consumer.whole-equality','read_bytes'),
+                    'independent_origin_sha':offline_work['consumer.independent-sha']['read_bytes'],
+                    'private_recorder_copy':private_work['export_read_bytes']-prior_copy.get('export_read_bytes',0),
+                    'fixed_seed_copy_and_destination_sha':validation_bytes,
+                    'held_completion_equality_sha':spent('consumer.completion-reread','read_bytes')}
+                assert sum(value for key,value in ledger.items() if key != 'frame_read') == 13*len(export)
+                assert sum(ledger.values()) <= 15*len(export)+512*1024
+                recording_pair.append({'launch':launch,'calls':{'original_read':1,'original_sha':1,
+                    'frame_read':host_work['frame_read_calls'],'controlled_copy':1,'controlled_readback_sha':1,
+                    'held_acquisition_sha':spent('consumer.held-acquisition','calls'),
+                    'origin_sha':spent('consumer.independent-sha','calls'),
+                    'snapshot_whole_equality':spent('consumer.whole-equality','calls'),
+                    'independent_origin_sha':offline_work['consumer.independent-sha']['calls'],
+                    'private_recorder_copy':private_work['calls']['sandbox-export.bin']-prior_export_copy_calls,
+                    'fixed_seed_copy_and_destination_sha':1,
+                    'held_completion_equality_sha':spent('consumer.completion-reread','calls')},
+                    'read_charges':ledger,'total_read_bytes':sum(ledger.values()),
+                    'seed_write_bytes':seed_written})
+                assert all(value == 1 for value in recording_pair[-1]['calls'].values())
                 failed_state = failed_private_held.before
                 failed_key = str(failed_state.st_dev)+':'+str(failed_state.st_ino)
                 fields = ('files','read_bytes','write_bytes','physical_bytes','export_read_bytes',
@@ -1024,18 +1074,13 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
                 print(json.dumps({'capacity_counter_prestate_only':initial_writes,
                     'actual_failed_fixture_write_bytes':failure_work['write_bytes']-initial_writes,
                     'retained_partial_export_bytes':partial.stat().st_size},sort_keys=True))
-                held.recheck()
-                assert spent('consumer.completion-reread','calls') == 1
-                assert spent('consumer.completion-reread','read_bytes') == 2*len(export)
-                print(json.dumps({'launch':launch,'consumer_work':{
-                    site:{field:spent(site,field) for field in ('calls','read_bytes')}
-                    for site in consumer._export_work},'offline_origin_work':offline_work},sort_keys=True))
                 path = attempt/'sandbox-export.bin';path.chmod(0o640)
                 with path.open('r+b') as output:
                     output.seek(-1,os.SEEK_END);output.write(b'x')
                 path.chmod(0o440)
                 refuses(held.recheck,'export-tail-changed-after-held-read')
                 refuses(lambda:consumer.read_store_attempt(anchor,attempt_id),'export-digest-mismatch')
+                print(json.dumps({'recording_ordinary_positive':recording_pair[-1]},sort_keys=True))
                 print('ok complete 12MiB conditional binary held inventory/origin/binding - '+launch+
                       '; capture path only, full accounting/replay remain separate')
                 refuses(lambda:consumer.read_store_attempt(export_anchor,'attempt.absent'),
@@ -1048,6 +1093,12 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
                 assert len(failed_read['held'][0]['components']) >= 2
                 assert export_anchor.private_observations['unusable'] is True
             finally:held.close()
+        assert [row['launch'] for row in recording_pair] == ['reproduction','write']
+        export_pair_read = sum(row['total_read_bytes'] for row in recording_pair)
+        assert export_pair_read <= 15*24*1024*1024+1024*1024
+        print(json.dumps({'recording_pair_export_read_bytes':export_pair_read,
+            'recording_pair_export_read_limit':15*24*1024*1024+1024*1024,
+            'non_export_and_failed_bytes_are_separate':True},sort_keys=True))
         private_held.close()
         failed_private_held.close()
         runtime_sources = {}
