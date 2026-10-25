@@ -29,6 +29,86 @@ case "$platform" in
     jq_sha=af986793a515d500ab2d35f8d2aecd656e764504b789b66d7e1a0b727a124c44 ;;
   *) fail "unsupported host $platform" ;;
 esac
+if [[ "$platform" == Linux:* ]]; then
+  "$python" - <<'PY_RENAME_DECLARATION'
+import hashlib
+import json
+import datetime
+from pathlib import Path
+import re
+import subprocess
+import tempfile
+
+with tempfile.TemporaryDirectory(prefix='ystack-rename-declaration-') as temporary:
+    area = Path(temporary)
+    source = area / 'declaration.c'
+    source.write_text('#define _GNU_SOURCE 1\n#include <stdio.h>\n#include <linux/fs.h>\n'
+        '__typeof__(&renameat2) ystack_rename_declaration = &renameat2;\n'
+        '__typeof__(RENAME_NOREPLACE) ystack_rename_flag = RENAME_NOREPLACE;\n')
+    print('rename-declaration source-begin\n' + source.read_text()
+          + 'rename-declaration source-end', flush=True)
+
+    def compile_fact(name, arguments):
+        stdout = area / (name + '.stdout')
+        stderr = area / (name + '.stderr')
+        environment = {'LC_ALL': 'C', 'PATH': '/usr/bin:/bin'}
+        print(json.dumps({'rename_declaration_command': name, 'argv': arguments,
+                          'env': environment,
+                          'started': datetime.datetime.now(datetime.timezone.utc).isoformat()}), flush=True)
+        timed_out = False
+        with stdout.open('wb') as out, stderr.open('wb') as err:
+            try:
+                result = subprocess.run(arguments, stdin=subprocess.DEVNULL,
+                                        stdout=out, stderr=err, env=environment, timeout=30)
+                status = result.returncode
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                status = None
+        print(json.dumps({'rename_declaration_command': name, 'exit': status,
+                          'timeout': timed_out,
+                          'finished': datetime.datetime.now(datetime.timezone.utc).isoformat()}), flush=True)
+        for label, path in (('stdout', stdout), ('stderr', stderr)):
+            size = path.stat().st_size
+            if size > 4 * 1024 * 1024:
+                raise SystemExit('rename declaration output exceeds fixed 4MiB log bound')
+            print('rename-declaration ' + name + ' ' + label + '-begin', flush=True)
+            print(path.read_bytes().decode('utf-8', 'strict'), end='', flush=True)
+            print('\nrename-declaration ' + name + ' ' + label + '-end', flush=True)
+        if timed_out or status != 0:
+            raise SystemExit('rename declaration command failed')
+        return stdout.read_text()
+
+    preprocessed = compile_fact('preprocess', ['/usr/bin/cc', '-std=gnu11', '-E', '-dD', str(source)])
+    markers = set(re.findall(r'^#\s+\d+\s+"([^"]+)"', preprocessed, re.MULTILINE))
+    for suffix in ('/stdio.h', '/linux/fs.h'):
+        paths = sorted(path for path in markers if path.endswith(suffix))
+        if len(paths) != 1 or not Path(paths[0]).is_absolute():
+            raise SystemExit('rename declaration fixed header identity missing or ambiguous')
+        header = Path(paths[0])
+        size = header.stat().st_size
+        if size > 1024 * 1024:
+            raise SystemExit('rename declaration fixed header exceeds 1MiB')
+        raw = header.read_bytes()
+        if len(raw) != size:
+            raise SystemExit('rename declaration fixed header changed length')
+        print(json.dumps({'rename_declaration_header': str(header), 'bytes': len(raw),
+                          'sha256': hashlib.sha256(raw).hexdigest()}), flush=True)
+    statements = re.sub(r'^#.*$', '', preprocessed, flags=re.MULTILINE).split(';')
+    declarations = [statement.strip() + ';' for statement in statements
+                    if re.search(r'\brenameat2\s*\(', statement)]
+    definitions = re.findall(r'^#define\s+RENAME_NOREPLACE\b[^\n]*', preprocessed, re.MULTILINE)
+    if len(declarations) != 1 or len(definitions) != 1:
+        raise SystemExit('rename declaration or no-replace definition missing or ambiguous')
+    print(json.dumps({'renameat2_declaration': declarations[0],
+                      'RENAME_NOREPLACE_definition': definitions[0]}), flush=True)
+    compile_fact('compile-only', ['/usr/bin/cc', '-std=gnu11', '-Wall', '-Wextra', '-Werror',
+                                 '-c', str(source), '-o', str(area / 'declaration.o')])
+    print('rename-declaration compile-only; dynamic symbol/runtime/filesystem support NOT PROVEN', flush=True)
+PY_RENAME_DECLARATION
+  pass 'Linux installed renameat2 declaration and RENAME_NOREPLACE definition; compile-only, no link or execution'
+else
+  /usr/bin/printf '%s\n' 'NOTRUN Linux renameat2 installed-header facts: non-Linux host'
+fi
 jq_cache_dir="${TMPDIR:-/tmp}/ystack-portable-core-jq16"
 /bin/mkdir -p "$jq_cache_dir"
 jq_cache="$jq_cache_dir/$jq_asset"
