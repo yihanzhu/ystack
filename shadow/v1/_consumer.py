@@ -896,6 +896,104 @@ class Anchor:
     storage_entry_count: int = 0
     recording_work: dict = dataclasses.field(default_factory=dict)
 
+    def copy_runtime_slots(self, parent, slots, work):
+        fixed = {key: self.config["identity_paths"][key] for key in
+            ("guest_kernel", "guest_init", "guest_supervisor", "image", "toolchain", "verifier",
+             "guest_kernel_config", "vm_service", "dyld_cache_files")}
+        fixed.update(runtime_vfkit=self.config["runtime"]["vfkit"],
+                     runtime_driver=self.config["runtime"]["driver"])
+        _require(type(slots) is dict and set(slots) == set(fixed)
+                 and type(slots["dyld_cache_files"]) is list
+                 and len(slots["dyld_cache_files"]) == len(fixed["dyld_cache_files"]), "E_STORE")
+        _require(len(slots) - 1 + len(slots["dyld_cache_files"]) <= 64, "E_LIMIT")
+        selected = []
+        for role in sorted(fixed):
+            items = slots[role] if role == "dyld_cache_files" else [slots[role]]
+            paths = fixed[role] if role == "dyld_cache_files" else [fixed[role]]
+            for index, (item, path) in enumerate(zip(items, paths)):
+                _require(isinstance(item, HeldPath) and item.path == path
+                         and stat.S_ISREG(item.before.st_mode), "E_STORE")
+                selected.append((role, index, item))
+        _require(len(selected) <= 64 and sum(item.before.st_size for _, _, item in selected)
+                 <= 4 * 1024 * 1024 * 1024, "E_LIMIT")
+        parent.recheck("E_STORE")
+        state = _metadata(parent.fd)
+        _require(state.st_uid == os.geteuid() and stat.S_ISDIR(state.st_mode)
+                 and stat.S_IMODE(state.st_mode) == 0o700, "E_STORE")
+        work.setdefault("runtime_read_bytes", 0)
+        work.setdefault("runtime_write_bytes", 0)
+        work.setdefault("runtime_physical_bytes", 0)
+        work.setdefault("runtime_files", 0)
+        _require(all(type(work[key]) is int and work[key] >= 0 for key in
+            ("runtime_read_bytes", "runtime_write_bytes", "runtime_physical_bytes", "runtime_files")), "E_LIMIT")
+        os.mkdir("qualified-runtime", 0o700, dir_fd=parent.fd)
+        after_parent = _metadata(parent.fd)
+        _require((after_parent.st_dev, after_parent.st_ino, after_parent.st_uid, after_parent.st_gid,
+                  after_parent.st_mode) == (state.st_dev, state.st_ino, state.st_uid, state.st_gid, state.st_mode), "E_STORE")
+        parent.components[-1].before = after_parent
+        directory = os.open("qualified-runtime", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent.fd)
+        manifest = []
+        try:
+            directory_state = _metadata(directory)
+            _require(_store_values(os.geteuid(), os.getegid(), 0o700, True,
+                _stat_values(directory_state), *_acl_state(directory, self.resolver), sys.platform), "E_STORE")
+            for role, index, source in selected:
+                source.recheck("E_STORE")
+                length = source.before.st_size
+                _require(0 <= length <= 4 * 1024 * 1024 * 1024
+                         and work["runtime_files"] < 64, "E_LIMIT")
+                name = role + (f".{index:04d}" if role == "dyld_cache_files" else "")
+                target = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                                 0o600, dir_fd=directory)
+                work["runtime_files"] += 1
+                total, measured = 0, hashlib.sha256()
+                try:
+                    os.lseek(source.fd, 0, os.SEEK_SET)
+                    while total < length:
+                        count = min(65536, length - total)
+                        _require(work["runtime_physical_bytes"] + count <= 4 * 1024 * 1024 * 1024, "E_LIMIT")
+                        chunk = os.read(source.fd, count)
+                        work["runtime_read_bytes"] += len(chunk)
+                        _require(bool(chunk), "E_STORE")
+                        measured.update(chunk)
+                        view = memoryview(chunk)
+                        while view:
+                            sent = os.write(target, view)
+                            _require(0 < sent <= len(view), "E_STORE")
+                            work["runtime_write_bytes"] += sent
+                            work["runtime_physical_bytes"] += sent
+                            view = view[sent:]
+                        total += len(chunk)
+                    os.fchmod(target, 0o400)
+                    os.fsync(target)
+                    target_state = _metadata(target)
+                    _require(stat.S_ISREG(target_state.st_mode) and target_state.st_uid == os.geteuid()
+                             and target_state.st_gid == os.getegid()
+                             and target_state.st_nlink == 1 and target_state.st_size == length
+                             and stat.S_IMODE(target_state.st_mode) == 0o400
+                             and _identity(target_state) == _identity(_named_metadata(name, directory)), "E_STORE")
+                    _require(_store_values(os.geteuid(), os.getegid(), 0o400, False,
+                        _stat_values(target_state), *_acl_state(target, self.resolver), sys.platform), "E_STORE")
+                    _require(_identity(target_state) == _identity(_metadata(target))
+                             == _identity(_named_metadata(name, directory)), "E_STORE")
+                finally:
+                    os.close(target)
+                source.recheck("E_STORE")
+                manifest.append({"slot": role, "index": index, "locator": source.path,
+                    "size_bytes": total, "sha256": measured.hexdigest()})
+            os.fsync(directory)
+            os.fsync(parent.fd)
+            final_directory = _metadata(directory)
+            _require((directory_state.st_dev, directory_state.st_ino, directory_state.st_uid,
+                      directory_state.st_gid, directory_state.st_mode) ==
+                     (final_directory.st_dev, final_directory.st_ino, final_directory.st_uid,
+                      final_directory.st_gid, final_directory.st_mode)
+                     and _identity(final_directory) == _identity(_named_metadata("qualified-runtime", parent.fd)), "E_STORE")
+            parent.recheck("E_STORE")
+            return manifest
+        finally:
+            os.close(directory)
+
     def retain_storage(self, attempt_id, rows, failure, held=()):
         count = len(rows) + sum(len(item.components) for item in held)
         if self.storage_entry_count + count > 65536:

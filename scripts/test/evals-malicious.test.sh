@@ -219,6 +219,39 @@ with tempfile.TemporaryDirectory(prefix='ystack-runtime-identity-values-') as di
             offline = replay._identity_values(root,raw,b'instruction',b'config',b'supervisor',b'python')
             assert actual == offline,missing
             print('ok actual held runtime identity/composite/offline whole tuple - '+str(missing))
+        previous_capture = host._capture_process
+        locators = {name:str(area/name) for name in slot_names}
+        locators['dyld_cache_files'] = [str(area/'dyld0'),str(area/'dyld1')]
+        runtime_config = host.canonical({'body':{'identity_paths':locators,
+            'runtime':{'vfkit':locators['runtime_vfkit'],'driver':locators['runtime_driver']}}})
+        try:
+            for failed_slot in (None,'guest_kernel','verifier','guest_kernel_config','dyld_cache_files'):
+                host._capture_process = {'complete':True,'runtime_locators':locators}
+                observed_fds = dict(descriptors)
+                if failed_slot == 'dyld_cache_files':
+                    observed_fds[failed_slot] = [descriptors[failed_slot][0],-1]
+                elif failed_slot is not None:
+                    observed_fds[failed_slot] = -1
+                actual = host.measure_identities(observed_fds,b'instruction',runtime_config,b'supervisor',b'python')
+                reads = host._capture_process['runtime_reads']
+                assert sum(row['errno'] is not None for row in reads) == int(failed_slot is not None)
+                if failed_slot is not None:
+                    assert next(row['errno'] for row in reads if row['errno'] is not None) == host.errno.EBADF
+                assert replay._identity_values(root,slots,b'instruction',runtime_config,b'supervisor',b'python',reads) == actual
+                print('ok actual runtime slot read errno/offline identity pair - '+str(failed_slot))
+            import copy
+            for label,change in [('missing',lambda v:v[0].pop('errno')),
+                    ('extra',lambda v:v[0].update(extra=0)),
+                    ('wrong-type',lambda v:v[0].update(errno=True)),
+                    ('invalid',lambda v:v[0].update(errno=-1)),
+                    ('changed-locator',lambda v:v[0].update(locator='/ordinary/changed')),
+                    ('unused',lambda v:v.append(dict(v[-1]))),
+                    ('reordered',lambda v:v.reverse())]:
+                changed = copy.deepcopy(reads);change(changed)
+                try:replay._identity_values(root,slots,b'instruction',runtime_config,b'supervisor',b'python',changed)
+                except Exception as error:assert type(error).__name__ == 'Refusal' and str(error) == 'E_CAPTURE'
+                else:raise AssertionError('runtime read shape '+label)
+        finally:host._capture_process = previous_capture
         chunked = dict(slots,guest_kernel=(slots['guest_kernel'][:3],slots['guest_kernel'][3:]))
         assert replay._identity_values(root,chunked,b'instruction',b'config',b'supervisor',b'python') == replay._identity_values(
             root,slots,b'instruction',b'config',b'supervisor',b'python')
@@ -1017,6 +1050,131 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
             finally:held.close()
         private_held.close()
         failed_private_held.close()
+        runtime_sources = {}
+        runtime_raw = {}
+        runtime_names = ('guest_kernel','guest_init','guest_supervisor','image','toolchain','verifier',
+                         'guest_kernel_config','vm_service','runtime_vfkit','runtime_driver')
+        runtime_locators = {}
+        runtime_parent = area/'runtime-recorder';runtime_parent.mkdir(mode=0o700)
+        runtime_limit = area/'runtime-limit';runtime_limit.mkdir(mode=0o700)
+        runtime_limit_failed = area/'runtime-limit-failed';runtime_limit_failed.mkdir(mode=0o700)
+        runtime_hold = consumer._open_held(str(runtime_parent),True,
+            consumer._store_rule(os.getuid(),os.getgid(),0o700,True),'E_STORE')
+        try:
+            for role in runtime_names:
+                raw = b'k'*65537 if role == 'guest_kernel' else (role+' ordinary input').encode()
+                path = originals/('runtime.'+role);path.write_bytes(raw);path.chmod(0o400)
+                runtime_raw[role] = raw;runtime_locators[role] = str(path)
+            runtime_sources['dyld_cache_files'] = []
+            runtime_locators['dyld_cache_files'] = []
+            runtime_raw['dyld_cache_files'] = []
+            for index in range(2):
+                raw = ('dyld ordinary '+str(index)).encode()
+                path = originals/('runtime.dyld'+str(index));path.write_bytes(raw);path.chmod(0o400)
+                runtime_raw['dyld_cache_files'].append(raw);runtime_locators['dyld_cache_files'].append(str(path))
+            for role,paths in runtime_locators.items():
+                selected_paths = paths if type(paths) is list else [paths]
+                opened = [consumer._open_held(path,False,
+                    consumer._store_rule(os.getuid(),os.getgid(),0o400,False),'E_STORE')
+                    for path in selected_paths]
+                runtime_sources[role] = opened if type(paths) is list else opened[0]
+            runtime_config = copy.deepcopy(config)
+            runtime_config['identity_paths'].update({key:value for key,value in runtime_locators.items()
+                if key not in {'runtime_vfkit','runtime_driver'}})
+            runtime_config['runtime'].update(vfkit=runtime_locators['runtime_vfkit'],driver=runtime_locators['runtime_driver'])
+            runtime_config_raw = host.canonical({'schema_version':1,'kind':'sandbox_host_config',
+                'id':'runtime.ordinary','body':runtime_config})
+            runtime_anchor = consumer.Anchor(runtime_config,runtime_config_raw,[],{},('',[]),('',[]),None)
+            runtime_work = {}
+            runtime_manifest = runtime_anchor.copy_runtime_slots(runtime_hold,runtime_sources,runtime_work)
+            copied_runtime = {role:[] if role == 'dyld_cache_files' else None for role in runtime_sources}
+            for row in runtime_manifest:
+                name = row['slot'] + ('.%04d'%row['index'] if row['slot'] == 'dyld_cache_files' else '')
+                path = runtime_parent/'qualified-runtime'/name
+                raw = path.read_bytes()
+                assert len(raw) == row['size_bytes'] and host.sha256_hex(raw) == row['sha256']
+                assert path.stat().st_mode & 0o777 == 0o400
+                if row['slot'] == 'dyld_cache_files':copied_runtime[row['slot']].append(raw)
+                else:copied_runtime[row['slot']] = raw
+            assert copied_runtime == runtime_raw
+            total_runtime = sum(len(value) for role,value in runtime_raw.items() if role != 'dyld_cache_files')
+            total_runtime += sum(map(len,runtime_raw['dyld_cache_files']))
+            assert runtime_work == {'runtime_read_bytes':total_runtime,'runtime_write_bytes':total_runtime,
+                'runtime_physical_bytes':total_runtime,'runtime_files':12}
+            host._capture_process = {'complete':True,'runtime_locators':runtime_locators}
+            descriptors = {role:[item.fd for item in value] if type(value) is list else value.fd
+                           for role,value in runtime_sources.items()}
+            measured = host.measure_identities(descriptors,b'instruction',runtime_config_raw,b'supervisor',b'python')
+            assert capture_replay._identity_values(root,copied_runtime,b'instruction',runtime_config_raw,
+                b'supervisor',b'python',host._capture_process['runtime_reads']) == measured
+            runtime_reads = host._capture_process['runtime_reads']
+            runtime_attempt = 'attempt.runtime.metadata'
+            runtime_request = host.canonical({'schema_version':1,'kind':'sandbox_launch_request',
+                'id':runtime_attempt,'body':{'attempt':{'attempt_id':runtime_attempt,'attempt_number':1},
+                'control':{},'subject':{},'store_id':runtime_config['store_id']}})
+            runtime_bound = {'attempt_id':runtime_attempt,'attempt_number':1,
+                             'launch_request_sha256':host.sha256_hex(runtime_request)}
+            runtime_receipt = host.canonical({'schema_version':1,'kind':'sandbox_enforcement_receipt',
+                'id':'receipt.'+host.sha256_hex(runtime_request),'body':{'attempt':runtime_bound,
+                'control':{},'subject':{},'origin':{'store_id':runtime_config['store_id']}}})
+            runtime_expectation = host.canonical({'schema_version':1,'kind':'sandbox_receipt_expectation',
+                'id':runtime_attempt,'body':{'attempt':runtime_bound,'control':{},'subject':{},
+                'store_id':runtime_config['store_id']}})
+            runtime_outer = host.canonical({'schema_version':1,'kind':'shadow_enforced_request',
+                'id':runtime_attempt,'body':{'attempt_id':runtime_attempt}})
+            runtime_attempt_path = store/runtime_attempt;runtime_attempt_path.mkdir(mode=0o750);runtime_attempt_path.chmod(0o750)
+            runtime_payload = runtime_attempt_path/'payload';runtime_payload.mkdir(mode=0o750);runtime_payload.chmod(0o750)
+            for name,raw in [('stdout',b''),('stderr',b''),('evidence-manifest.json',host.empty_evidence_manifest()[0])]:
+                path = runtime_payload/name;path.write_bytes(raw);path.chmod(0o440)
+            host._capture_process.update(rows=[],driver_rest=[],signals=[],request_raw=runtime_request,
+                                         attempt_id=runtime_attempt,ordinals={},bytes=0)
+            host._capture_clocks = {'wall':[],'monotonic':[],'complete':True}
+            store_fd = os.open(store,os.O_RDONLY | os.O_DIRECTORY)
+            try:host.write_receipt_file(store_fd,os.open(runtime_attempt_path,os.O_RDONLY | os.O_DIRECTORY),
+                                        os.getuid(),os.getgid(),runtime_receipt)
+            finally:os.close(store_fd)
+            runtime_anchor.identity_context = anchor.identity_context
+            captured_runtime = consumer._HeldStoreRead(runtime_anchor,runtime_attempt)
+            try:
+                group = captured_runtime.record_reproduction(runtime_outer,runtime_request,runtime_expectation)
+                assert group['runtime']['slots'] == runtime_reads
+                runtime_capture_work = {}
+                captured_runtime.copy_capture(runtime_hold,runtime_request,'reproduction',runtime_capture_work)
+                preserved = json.loads((runtime_parent/'reproduction/capture.json').read_bytes())
+                assert preserved['body']['raw']['runtime']['slots'] == runtime_reads
+                assert capture_replay._identity_values(root,copied_runtime,b'instruction',runtime_config_raw,
+                    b'supervisor',b'python',preserved['body']['raw']['runtime']['slots']) == measured
+                captured_runtime.recheck()
+            finally:captured_runtime.close()
+            print(json.dumps({'qualified_runtime_work':runtime_work,
+                'runtime_capture_work':runtime_capture_work,
+                'additional_ordinary_qualified_validation_input_bytes':total_runtime},sort_keys=True))
+            print('ok actual held qualified-slot streaming copy and original/offline identity owners; fixture bytes only')
+            for crossing,parent in [(False,runtime_limit),(True,runtime_limit_failed)]:
+                held_parent = consumer._open_held(str(parent),True,
+                    consumer._store_rule(os.getuid(),os.getgid(),0o700,True),'E_STORE')
+                prestate = 4*1024*1024*1024-total_runtime+int(crossing)
+                boundary_work = {'runtime_read_bytes':prestate,'runtime_write_bytes':prestate,
+                                 'runtime_physical_bytes':prestate,'runtime_files':1}
+                try:
+                    if crossing:
+                        refuses(lambda:runtime_anchor.copy_runtime_slots(held_parent,runtime_sources,boundary_work),
+                                'runtime-copy-real-file-crossing')
+                        partial = parent/'qualified-runtime/vm_service'
+                        assert partial.exists() and partial.stat().st_size == 0
+                        assert partial.stat().st_mode & 0o777 == 0o600
+                        assert 0 < boundary_work['runtime_physical_bytes']-prestate < total_runtime
+                    else:
+                        assert len(runtime_anchor.copy_runtime_slots(held_parent,runtime_sources,boundary_work)) == 12
+                        assert boundary_work['runtime_physical_bytes'] == 4*1024*1024*1024
+                    print(json.dumps({'runtime_capacity_counter_prestate_only':prestate,
+                        'runtime_actual_fixture_copy_bytes':boundary_work['runtime_physical_bytes']-prestate,
+                        'runtime_crossing':crossing},sort_keys=True))
+                finally:held_parent.close()
+        finally:
+            for value in runtime_sources.values():
+                for item in value if type(value) is list else [value]:item.close()
+            runtime_hold.close()
     finally:consumer._acl_state = original_acl
 PY_CAPTURE_VALUES
 /usr/bin/python3 -I -S -B - "$root" <<'PY_LAUNCH_PREPARATION_VALUES'

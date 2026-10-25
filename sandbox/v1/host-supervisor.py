@@ -1098,6 +1098,14 @@ def environment_unlisted(config, registry_environments, accepted_environments, s
 KERNEL_CONFIG_DEVICES = ["virtio-blk,readonly", "virtio-blk"]
 
 
+def _runtime_locator_values(value):
+    require(type(value) is str and len(value) <= 4096 and "\0" not in value
+            and not any(0xd800 <= ord(char) <= 0xdfff for char in value), "E_CAPTURE")
+    require(sum(1 if ord(char) < 128 else 2 if ord(char) < 2048 else
+                3 if ord(char) < 65536 else 4 for char in value) <= 4096, "E_CAPTURE")
+    return value
+
+
 def measure_identities(identity_fds, instruction_raw, host_config_raw, host_supervisor_raw,
                         python_raw):
     """R2.3: every slot's measured digest is the SHA-256 of its installed
@@ -1121,31 +1129,69 @@ def measure_identities(identity_fds, instruction_raw, host_config_raw, host_supe
     # "unreadable" here without touching any file's real permissions.
     forced_unreadable = os.environ.get("YSTACK_TEST_IDENTITY_UNREADABLE")
 
-    def read_slot(slot):
+    def observed(slot, index, error=None):
+        if _capture_process is not None:
+            try:
+                locators = _capture_process.get("runtime_locators", {})
+                locator = locators.get(slot)
+                if slot == "dyld_cache_files":
+                    locator = locator[index] if type(locator) is list and index < len(locator) else None
+                actual_errno = error.errno if error is not None else None
+                locator = _runtime_locator_values(locator)
+                if error is not None and (type(actual_errno) is not int or not 1 <= actual_errno <= 2147483647):
+                    _capture_process["complete"] = False
+                    return
+                rows = _capture_process.setdefault("runtime_reads", [])
+                if len(rows) >= 64:
+                    _capture_process["complete"] = False
+                else:
+                    rows.append({"slot": slot, "index": index, "locator": locator, "errno": actual_errno})
+            except (Refusal, MemoryError, UnicodeEncodeError):
+                _capture_process["complete"] = False
+
+    def forced(slot):
         if slot == forced_unreadable:
+            if _capture_process is not None:
+                _capture_process["complete"] = False
+            return True
+        return False
+
+    def read_slot(slot):
+        if forced(slot):
             return None
         try:
-            return read_all(identity_fds[slot])
-        except OSError:
+            raw = read_all(identity_fds[slot])
+            observed(slot, 0)
+            return raw
+        except OSError as error:
+            observed(slot, 0, error)
             return None
 
     def hash_slot(slot):
         # Streamed (sha256_fd), never a full read: this slot's bytes are
         # never needed, only their digest.
-        if slot == forced_unreadable:
+        if forced(slot):
             return None
         try:
-            return sha256_fd(identity_fds[slot])
-        except OSError:
+            measured = sha256_fd(identity_fds[slot])
+            observed(slot, 0)
+            return measured
+        except OSError as error:
+            observed(slot, 0, error)
             return None
 
     def hash_slot_list(slot):
-        if slot == forced_unreadable:
+        if forced(slot):
             return None
-        try:
-            return [sha256_fd(fd) for fd in identity_fds[slot]]
-        except OSError:
-            return None
+        measured = []
+        for index, fd in enumerate(identity_fds[slot]):
+            try:
+                measured.append(sha256_fd(fd))
+                observed(slot, index)
+            except OSError as error:
+                observed(slot, index, error)
+                return None
+        return measured
 
     slot_digests = {slot: hash_slot(slot) for slot in
                     ("guest_kernel", "guest_init", "guest_supervisor", "image", "toolchain")}
@@ -1162,6 +1208,7 @@ def _runtime_slot_input_values(slots):
              "runtime_vfkit", "runtime_driver", "vm_service", "dyld_cache_files", "verifier", "guest_kernel_config"}
     require(type(slots) is dict and set(slots) == fixed, "E_CAPTURE")
     require(slots["dyld_cache_files"] is None or type(slots["dyld_cache_files"]) is list, "E_CAPTURE")
+    require(len(slots) - 1 + len(slots["dyld_cache_files"] or []) <= 64, "E_CAPTURE")
     streams = [value for key, value in slots.items() if key != "dyld_cache_files"]
     streams += slots["dyld_cache_files"] or []
     require(len(streams) <= 64, "E_CAPTURE")
@@ -1177,7 +1224,54 @@ def _runtime_slot_input_values(slots):
     return total, len(streams)
 
 
-def _runtime_identity_values(slots, instruction_raw, host_config_raw, host_supervisor_raw, python_raw):
+def _runtime_read_values(slots, reads, config_raw):
+    _runtime_slot_input_values(slots)
+    require(type(reads) is list and len(reads) <= 64, "E_CAPTURE")
+    require(type(config_raw) is bytes and len(config_raw) <= 1048576, "E_CAPTURE")
+    rows = iter(reads)
+    result = dict(slots)
+    try:
+        config = json.loads(config_raw)["body"]
+        locators = config["identity_paths"] | {"runtime_vfkit": config["runtime"]["vfkit"],
+                                                "runtime_driver": config["runtime"]["driver"]}
+    except (ValueError, KeyError, TypeError):
+        refuse("E_CAPTURE")
+    def take(slot, index):
+        row = next(rows, None)
+        locator = locators.get(slot)
+        if slot == "dyld_cache_files":
+            require(type(locator) is list and index < len(locator), "E_CAPTURE")
+            locator = locator[index]
+        require(type(row) is dict and set(row) == {"slot", "index", "locator", "errno"}
+                and row["slot"] == slot and type(row["index"]) is int and row["index"] == index
+                and type(locator) is str and row["locator"] == locator
+                and (row["errno"] is None or type(row["errno"]) is int
+                     and 1 <= row["errno"] <= 2147483647), "E_CAPTURE")
+        _runtime_locator_values(locator)
+        return row["errno"]
+    order = ("guest_kernel", "guest_init", "guest_supervisor", "image", "toolchain", "verifier",
+             "runtime_vfkit", "runtime_driver", "vm_service", "dyld_cache_files", "guest_kernel_config")
+    for slot in order:
+        if slot == "dyld_cache_files":
+            require(type(slots[slot]) is list, "E_CAPTURE")
+            require(type(locators.get(slot)) is list and len(slots[slot]) == len(locators[slot]), "E_CAPTURE")
+            for index, raw in enumerate(slots[slot]):
+                if take(slot, index) is not None:
+                    result[slot] = None
+                    break
+                require(raw is not None, "E_CAPTURE")
+        elif take(slot, 0) is not None:
+            result[slot] = None
+        else:
+            require(slots[slot] is not None, "E_CAPTURE")
+    require(next(rows, None) is None, "E_CAPTURE")
+    return result
+
+
+def _runtime_identity_values(slots, instruction_raw, host_config_raw, host_supervisor_raw, python_raw,
+                             read_observations=None):
+    if read_observations is not None:
+        slots = _runtime_read_values(slots, read_observations, host_config_raw)
     _runtime_slot_input_values(slots)
     def measured(value):
         if value is None:
@@ -1559,6 +1653,8 @@ def write_receipt_file(store_fd, attempt_fd, uid, gid, receipt_bytes):
                        "clocks": {key: _capture_clocks[key] for key in ("wall", "monotonic")}}
                 if "guest" in _capture_process:
                     raw["guest"] = _capture_process["guest"]
+                if "runtime_reads" in _capture_process:
+                    raw["runtime"] = {"slots": _capture_process["runtime_reads"]}
                 if "export_raw" in _capture_process:
                     _write_capture_export(capture_fd, uid, gid, _capture_process["export_raw"],
                                           _capture_process["export_sha"], _capture_process["export_work"])
@@ -3171,6 +3267,8 @@ def run_launch(argv):
             fixed_fds[path] = secure_walk(path, os.getuid(), check_mode=False)
     require(os.getuid() != 0 and argv == ["launch"], "E_USAGE")
     config, config_raw = load_config(fixed_fds[config_path])
+    _capture_process["runtime_locators"] = config["identity_paths"] | {
+        "runtime_vfkit": config["runtime"]["vfkit"], "runtime_driver": config["runtime"]["driver"]}
     principal_uid = config["principal_uid"]
     require(principal_uid == os.getuid(), "E_CONFIG")
     for fd in fixed_fds.values():

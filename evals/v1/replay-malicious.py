@@ -153,12 +153,14 @@ def _gate_values(runtime_root, inputs):
         "complete": owner._completion_values(inputs["id"], manifest)}
 
 
-def _identity_values(runtime_root, slots, instruction_raw, config_raw, supervisor_raw, python_raw):
+def _identity_values(runtime_root, slots, instruction_raw, config_raw, supervisor_raw, python_raw,
+                      read_observations=None):
     spec = importlib.util.spec_from_file_location(
         "malicious_identity_values", Path(runtime_root) / "sandbox/v1/host-supervisor.py")
     owner = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(owner)
-    return owner._runtime_identity_values(slots, instruction_raw, config_raw, supervisor_raw, python_raw)
+    return owner._runtime_identity_values(slots, instruction_raw, config_raw, supervisor_raw, python_raw,
+                                          read_observations)
 
 
 def _runtime_values(runtime_root, start_raw, config_raw, driver_rest):
