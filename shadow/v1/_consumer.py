@@ -377,6 +377,9 @@ class HeldPath:
         except (OSError, ValueError) as error:
             if recording_work is not None:
                 recording_work["read_error"] = {"category": type(error).__name__, "errno": getattr(error, "errno", None)}
+                recording_work["read_incomplete"] = True
+                if getattr(error, "_scope_signal_cancel", False):
+                    raise
             raise Refusal(code) from None
         if recording_work is not None:
             recording_work["metadata_passes"] = recording_work.get("metadata_passes", 0) + 1
@@ -408,7 +411,8 @@ class HeldPath:
             try:
                 os.close(component.fd)
             except OSError as exc:
-                if failure is None:
+                if failure is None or (getattr(exc, "_scope_signal_cancel", False)
+                                       and not getattr(failure, "_scope_signal_cancel", False)):
                     failure = exc
         self.components.clear()
         if failure is not None:
@@ -420,7 +424,8 @@ def _close_components(rows: list[HeldComponent], failure: BaseException | None =
         try:
             os.close(row.fd)
         except OSError as exc:
-            if failure is None:
+            if failure is None or (getattr(exc, "_scope_signal_cancel", False)
+                                   and not getattr(failure, "_scope_signal_cancel", False)):
                 failure = exc
     if failure is not None:
         raise failure
@@ -432,7 +437,8 @@ def _close_paths(items: list[HeldPath]) -> None:
         try:
             item.close()
         except OSError as exc:
-            if failure is None:
+            if failure is None or (getattr(exc, "_scope_signal_cancel", False)
+                                   and not getattr(failure, "_scope_signal_cancel", False)):
                 failure = exc
     if failure is not None:
         raise failure
@@ -450,6 +456,8 @@ def _clone(parent: HeldPath, code: str) -> list[HeldComponent]:
         except Refusal:
             raise
         except OSError as error:
+            if getattr(error, "_scope_signal_cancel", False):
+                raise
             raise Refusal(code, os_errno=error.errno) from None
 
 def _open_held(path: str, directory: bool, rule: Rule, code: str,
@@ -487,6 +495,8 @@ def _open_held(path: str, directory: bool, rule: Rule, code: str,
         except Refusal:
             raise
         except (OSError, ValueError) as error:
+            if getattr(error, "_scope_signal_cancel", False):
+                raise
             raise Refusal(code, os_errno=getattr(error, "errno", None)) from None
 
 def _open_child(parent: HeldPath, name: str, directory: bool, rule: Rule, code: str) -> HeldPath:
@@ -511,6 +521,8 @@ def _open_child(parent: HeldPath, name: str, directory: bool, rule: Rule, code: 
         except Refusal:
             raise
         except (OSError, ValueError) as error:
+            if getattr(error, "_scope_signal_cancel", False):
+                raise
             raise Refusal(code, os_errno=getattr(error, "errno", None)) from None
 
 def _linux_acl_xattr(fd: int, name: str) -> list[tuple[int, int, int]] | None:
@@ -624,7 +636,9 @@ def _root_rule(resolver: _DarwinUUIDResolver | None = None) -> Rule:
             return False
         try:
             access, default = _acl_state(fd, resolver)
-        except (OSError, Refusal):
+        except (OSError, Refusal) as error:
+            if getattr(error, "_scope_signal_cancel", False):
+                raise
             return False
         check.observations[fd] = (access, default)
         return _installed_acl_values(sys.platform, access, default, (0,))
@@ -637,7 +651,9 @@ def _installed_rule(principal_uid: int, resolver: _DarwinUUIDResolver | None = N
             return False
         try:
             access, default = _acl_state(fd, resolver)
-        except (OSError, Refusal):
+        except (OSError, Refusal) as error:
+            if getattr(error, "_scope_signal_cancel", False):
+                raise
             return False
         check.observations[fd] = (access, default)
         return _installed_acl_values(sys.platform, access, default, (0, principal_uid))
@@ -651,7 +667,9 @@ def _store_rule(uid: int, gid: int, mode: int, directory: bool,
             return True
         try:
             access, default = _acl_state(fd, resolver)
-        except (OSError, Refusal):
+        except (OSError, Refusal) as error:
+            if getattr(error, "_scope_signal_cancel", False):
+                raise
             return False
         check.observations[fd] = (access, default)
         return _store_values(uid, gid, mode, directory, _stat_values(state), access, default, sys.platform)
@@ -1618,6 +1636,9 @@ class _HeldCaptureRead:
                 self.close()
             except OSError as cleanup_error:
                 self.work["cleanup_errno"] = cleanup_error.errno
+                if (getattr(cleanup_error, "_scope_signal_cancel", False)
+                        and not getattr(error, "_scope_signal_cancel", False)):
+                    raise
             raise
 
     def recheck(self, code="E_STORE", *, metadata_only=False):
@@ -1685,6 +1706,11 @@ class _HeldStoreRead:
                     self.capture.close()
                 except OSError as cleanup_error:
                     self.capture_work["cleanup_errno"] = cleanup_error.errno
+                    if (getattr(cleanup_error, "_scope_signal_cancel", False)
+                            and not getattr(error, "_scope_signal_cancel", False)):
+                        raise
+            if getattr(error, "_scope_signal_cancel", False):
+                raise
             return None
 
     def recheck(self, code: str = "E_STALE") -> None:
@@ -1714,8 +1740,10 @@ class _HeldStoreRead:
         if hasattr(self, "capture"):
             try:
                 self.capture.recheck(code)
-            except Exception:
+            except Exception as error:
                 self.anchor.private_observations["unusable"] = True
+                if getattr(error, "_scope_signal_cancel", False):
+                    raise
 
     def close(self) -> None:
         held, self.held = self.held, []
@@ -1725,8 +1753,10 @@ class _HeldStoreRead:
             if hasattr(self, "capture"):
                 try:
                     self.capture.close()
-                except OSError:
+                except OSError as error:
                     self.anchor.private_observations["unusable"] = True
+                    if getattr(error, "_scope_signal_cancel", False):
+                        raise
 
     def copy_capture(self, parent, request_raw, launch, work):
         _require(type(launch) is str and launch in {"reproduction", "write"}, "E_STORE")
@@ -2094,6 +2124,11 @@ class _HeldCoverageRead(_HeldStoreRead):
                     self.capture.close()
                 except OSError as cleanup_error:
                     self.capture_work["cleanup_errno"] = cleanup_error.errno
+                    if (getattr(cleanup_error, "_scope_signal_cancel", False)
+                            and not getattr(error, "_scope_signal_cancel", False)):
+                        raise
+            if getattr(error, "_scope_signal_cancel", False):
+                raise
             return None
 
     def copy_source_capture(self, parent, ordinal, work):

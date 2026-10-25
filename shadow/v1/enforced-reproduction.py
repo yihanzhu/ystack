@@ -529,6 +529,7 @@ def _load_capture_completion_owner():
         _CAPTURE_OWNER = candidate
         return candidate
     except Exception as error:
+        cancellation = error if getattr(error, "_scope_signal_cancel", False) else None
         if candidate is not None:
             if candidate.module is not None and sys.modules.get(candidate.name) is candidate.module:
                 del sys.modules[candidate.name]
@@ -537,7 +538,11 @@ def _load_capture_completion_owner():
                     candidate.source.close()
             except (OSError, Refusal, c.Refusal) as cleanup_error:
                 _CAPTURE_OWNER_WORK["cleanup_error"] = type(cleanup_error).__name__
+                if getattr(cleanup_error, "_scope_signal_cancel", False) and cancellation is None:
+                    cancellation = cleanup_error
         _CAPTURE_OWNER_WORK["failure"] = {"category": type(error).__name__, "errno": getattr(error, "errno", None)}
+        if cancellation is not None:
+            raise cancellation
         return None
 
 
@@ -552,6 +557,8 @@ def _bind_capture_completion_owner(anchor):
         anchor.private_observations["unusable"] = True
         anchor.private_observations["completion_owner_failure"] = {
             "category": type(error).__name__, "errno": getattr(error, "errno", None)}
+        if getattr(error, "_scope_signal_cancel", False):
+            raise
 
 
 def _close_capture_completion_owner(owner):
@@ -564,10 +571,13 @@ def _close_capture_completion_owner(owner):
         except Exception as error:
             owner.work["cleanup_error"] = {"category": type(error).__name__,
                                             "errno": getattr(error, "errno", None)}
+            if getattr(error, "_scope_signal_cancel", False):
+                raise
 
 
 def _seal_capture_recording(anchor, parent, held_store=None):
     owner = getattr(anchor, "capture_completion_owner", _CAPTURE_OWNER)
+    cancellation = None
     try:
         require(owner is not None and not getattr(owner, "source_closed", False), "E_STORE")
         owner.source.recheck("E_STORE")
@@ -576,8 +586,17 @@ def _seal_capture_recording(anchor, parent, held_store=None):
         anchor.private_observations["completion_final_failure"] = {
             "category": type(error).__name__,
             "errno": getattr(error, "os_errno", getattr(error, "errno", None))}
+        if getattr(error, "_scope_signal_cancel", False):
+            cancellation = error
     finally:
-        _close_capture_completion_owner(owner)
+        try:
+            _close_capture_completion_owner(owner)
+        except Exception as error:
+            anchor.private_observations["unusable"] = True
+            anchor.private_observations["completion_close_failure"] = {
+                "category": type(error).__name__, "errno": getattr(error, "errno", None)}
+            if getattr(error, "_scope_signal_cancel", False) and cancellation is None:
+                cancellation = error
         if owner is not None and "cleanup_error" in owner.work:
             anchor.private_observations["unusable"] = True
         try:
@@ -593,7 +612,11 @@ def _seal_capture_recording(anchor, parent, held_store=None):
             anchor.private_observations["unusable"] = True
             anchor.private_observations["completion_accounting_failure"] = {
                 "category": type(error).__name__, "errno": getattr(error, "errno", None)}
+            if getattr(error, "_scope_signal_cancel", False) and cancellation is None:
+                cancellation = error
     anchor.private_observations["recording_sealed"] = not anchor.private_observations.get("unusable", False)
+    if cancellation is not None:
+        raise cancellation
 
 
 class _DarwinLedger:

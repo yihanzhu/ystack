@@ -436,10 +436,13 @@ class _Reader:
                 self.anchor.private_observations["unusable"] = True
                 self.anchor.private_observations["completion_owner_failure"] = {
                     "category": type(error).__name__, "errno": getattr(error, "errno", None)}
+                if getattr(error, "_scope_signal_cancel", False):
+                    raise
         return self.anchor
 
     def retain_source_capture(self, source):
         parent = None
+        cancellation = None
         try:
             require(len(self.source_capture_work) < 4096, "E_LIMIT")
             if hasattr(source, "capture_work"):
@@ -460,6 +463,8 @@ class _Reader:
             source.anchor.private_observations["source_copy_failure"] = {
                 "category": type(error).__name__,
                 "errno": getattr(error, "os_errno", getattr(error, "errno", None))}
+            if getattr(error, "_scope_signal_cancel", False):
+                cancellation = error
         finally:
             if parent is not None:
                 try:
@@ -467,32 +472,50 @@ class _Reader:
                 except OSError as error:
                     source.anchor.private_observations["unusable"] = True
                     source.anchor.private_observations["source_copy_close_errno"] = error.errno
+                    if getattr(error, "_scope_signal_cancel", False) and cancellation is None:
+                        cancellation = error
+        if cancellation is not None:
+            raise cancellation
 
     def seal_source_captures(self):
         parent = None
+        cancellation = None
         try:
             require(self.anchor is not None, "E_STORE")
             parent = c._open_held(str(self.captures), True,
                 c._store_rule(os.geteuid(), os.getegid(), 0o700, True, self.darwin), "E_STORE")
             self.enforced._seal_capture_recording(self.anchor, parent)
-            key = str(parent.before.st_dev) + ":" + str(parent.before.st_ino)
-            case_work = c._capture_work_values(self.anchor.recording_work, key)
-            for work in self.source_capture_work:
-                c._capture_transfer_work(work, self.anchor.recording_work, case_work)
         except Exception as error:
             if self.anchor is not None:
                 self.anchor.private_observations["unusable"] = True
                 self.anchor.private_observations["source_seal_failure"] = {
                     "category": type(error).__name__, "errno": getattr(error, "errno", None)}
+            if getattr(error, "_scope_signal_cancel", False):
+                cancellation = error
         finally:
             if parent is not None:
+                try:
+                    key = str(parent.before.st_dev) + ":" + str(parent.before.st_ino)
+                    case_work = c._capture_work_values(self.anchor.recording_work, key)
+                    for work in self.source_capture_work:
+                        c._capture_transfer_work(work, self.anchor.recording_work, case_work)
+                except Exception as error:
+                    self.anchor.private_observations["unusable"] = True
+                    self.anchor.private_observations["source_tail_accounting_failure"] = {
+                        "category": type(error).__name__, "errno": getattr(error, "errno", None)}
+                    if getattr(error, "_scope_signal_cancel", False) and cancellation is None:
+                        cancellation = error
                 try:
                     parent.close()
                 except OSError as error:
                     self.anchor.private_observations["unusable"] = True
                     self.anchor.private_observations["source_seal_close_errno"] = error.errno
+                    if getattr(error, "_scope_signal_cancel", False) and cancellation is None:
+                        cancellation = error
             if self.anchor is not None:
                 self.anchor.private_observations["recording_sealed"] = not self.anchor.private_observations.get("unusable", False)
+        if cancellation is not None:
+            raise cancellation
 
     def release_stores(self):
         self.recheck()
@@ -1337,7 +1360,9 @@ def main(arguments):
     require(len(arguments) == 6 and arguments[0] == "read", "E_USAGE")
     paths = list(map(Path, arguments[1:]))
     def cancel(_number, _frame):
-        raise InterruptedError("scope reader cancelled")
+        error = InterruptedError("scope reader cancelled")
+        error._scope_signal_cancel = True
+        raise error
     for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGALRM):
         signal.signal(number, cancel)
     control = _ControlFIFO(paths[-1].parent.parent)

@@ -609,7 +609,9 @@ def main(arguments):
     def cancel(_number, _frame):
         if generator is not None:
             generator.active = False
-        raise InterruptedError("gate generation cancelled")
+        error = InterruptedError("gate generation cancelled")
+        error._scope_signal_cancel = True
+        raise error
     for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
         signal.signal(number, cancel)
     try:

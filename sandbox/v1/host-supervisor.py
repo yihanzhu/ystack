@@ -1587,6 +1587,7 @@ def mkdir_excl(parent_fd, name, uid, gid, on_created=None):
 
 def write_excl(parent_fd, name, data, uid, gid, mode=0o440, capture_work=None):
     fd, phase = None, "open"
+    failure = None
     try:
         fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode=0o600, dir_fd=parent_fd)
         if capture_work is not None:
@@ -1614,20 +1615,20 @@ def write_excl(parent_fd, name, data, uid, gid, mode=0o440, capture_work=None):
         result = os.fsync(fd)
         if capture_work is not None:
             _capture_note(capture_work, phase, result, name=name)
-    except OSError as error:
+    except BaseException as error:
+        failure = error
         if capture_work is not None:
-            _capture_note(capture_work, phase, error=error.errno, name=name)
+            capture_work.setdefault("failure", {"category": type(error).__name__,
+                "errno": getattr(error, "errno", None), "code": getattr(error, "code", None)})
+            _capture_note(capture_work, phase, error=getattr(error, "errno", None),
+                          name=name, category=type(error).__name__)
         raise
     finally:
         if fd is not None:
-            try:
-                result = os.close(fd)
-                if capture_work is not None:
-                    _capture_note(capture_work, "close", result, name=name)
-            except OSError as error:
-                if capture_work is not None:
-                    _capture_note(capture_work, "close", error=error.errno, name=name)
-                raise
+            if capture_work is None:
+                os.close(fd)
+            else:
+                _capture_close(fd, capture_work, "close", failure=failure, name=name)
 
 
 def work_root_attempt_exists(work_root, attempt_id):
@@ -1824,13 +1825,18 @@ def _capture_sync(fd, work, site):
     _capture_note(work, site, result)
 
 
-def _capture_close(fd, work, site):
+def _capture_close(fd, work, site, *, failure=None, **fields):
+    if failure is not None:
+        work.setdefault("failure", {"category": type(failure).__name__,
+            "errno": getattr(failure, "errno", None), "code": getattr(failure, "code", None)})
     try:
         result = os.close(fd)
     except OSError as error:
-        _capture_note(work, site, error=error.errno)
-        raise
-    _capture_note(work, site, result)
+        _capture_note(work, site, error=error.errno, **fields)
+        if failure is None:
+            raise
+    else:
+        _capture_note(work, site, result, **fields)
 
 
 def _capture_identity(state):
@@ -1859,6 +1865,7 @@ def _capture_directory_check(store, directory, name, expected, uid, gid, work):
             and set(names) == set(expected), "E_CAPTURE")
     for filename, size in expected.items():
         fd = os.open(filename, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory)
+        failure = None
         try:
             before = os.fstat(fd)
             file_named = os.stat(filename, dir_fd=directory, follow_symlinks=False)
@@ -1870,15 +1877,18 @@ def _capture_directory_check(store, directory, name, expected, uid, gid, work):
                      linux_read_acl_xattr(fd, "system.posix_acl_access") is None), "E_CAPTURE")
             require(_capture_identity(before) == _capture_identity(os.fstat(fd))
                     == _capture_identity(os.stat(filename, dir_fd=directory, follow_symlinks=False)), "E_CAPTURE")
-        except OSError as error:
-            _capture_note(work, "file-check", error=error.errno, name=filename)
+        except BaseException as error:
+            failure = error
+            _capture_note(work, "file-check", error=getattr(error, "errno", None),
+                          name=filename, category=type(error).__name__)
             raise
         finally:
-            _capture_close(fd, work, "file-check-close")
+            _capture_close(fd, work, "file-check-close", failure=failure)
 
 
 def _capture_completion_readback(directory, uid, gid, expected, work):
     fd = os.open(".completion.pending", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory)
+    failure = None
     try:
         before = os.fstat(fd)
         require(len(expected) <= 512 and _capture_file_shape(before, uid, gid, len(expected)), "E_CAPTURE")
@@ -1888,11 +1898,13 @@ def _capture_completion_readback(directory, uid, gid, expected, work):
         require(actual == expected and _capture_identity(before) == _capture_identity(os.fstat(fd))
                 == _capture_identity(os.stat(".completion.pending", dir_fd=directory,
                                               follow_symlinks=False)), "E_CAPTURE")
-    except OSError as error:
-        _capture_note(work, "completion-readback", error=error.errno)
+    except BaseException as error:
+        failure = error
+        _capture_note(work, "completion-readback", error=getattr(error, "errno", None),
+                      category=type(error).__name__)
         raise
     finally:
-        _capture_close(fd, work, "completion-readback-close")
+        _capture_close(fd, work, "completion-readback-close", failure=failure)
 
 
 def _publish_capture(store_fd, uid, gid, attempt_id, request_raw, raw, complete,
@@ -1916,6 +1928,7 @@ def _publish_capture(store_fd, uid, gid, attempt_id, request_raw, raw, complete,
         work["directories"] = work.get("directories", 0) + 1
         _capture_note(work, "capture-directory-created", name=pending.decode())
     directory = mkdir_excl(store_fd, pending, uid, gid, on_created=created)
+    failure = None
     try:
         write_excl(directory, "capture.json", capture_raw, uid, gid, capture_work=work)
         expected = {"capture.json": len(capture_raw)}
@@ -1939,8 +1952,11 @@ def _publish_capture(store_fd, uid, gid, attempt_id, request_raw, raw, complete,
         _capture_sync(store_fd, work, "completion-store-fsync")
         _capture_rename_noreplace(directory, b".completion.pending", b"complete.json", work)
         return completion
+    except BaseException as error:
+        failure = error
+        raise
     finally:
-        _capture_close(directory, work, "capture-directory-close")
+        _capture_close(directory, work, "capture-directory-close", failure=failure)
 
 
 def _source_capture_group_values(attempt_id, request_raw, records, pages, clock_values, complete, operation):
@@ -1979,8 +1995,8 @@ def _write_capture_file(store_fd, uid, gid, attempt_id, request_raw, raw, comple
         try:
             if work is not None:
                 work["complete"] = False
-                work["failure"] = {"category": type(error).__name__, "errno": getattr(error, "errno", None),
-                                   "code": getattr(error, "code", None)}
+                work.setdefault("failure", {"category": type(error).__name__, "errno": getattr(error, "errno", None),
+                                            "code": getattr(error, "code", None)})
         except MemoryError:
             pass
         return False
@@ -2005,6 +2021,7 @@ def _write_capture_export(attempt_fd, uid, gid, raw, original_sha, work, publica
         raise
     if publication_work is not None:
         publication_work["files"] = publication_work.get("files", 0) + 1
+    failure = None
     try:
         offset = 0
         view = memoryview(raw)
@@ -2050,15 +2067,17 @@ def _write_capture_export(attempt_fd, uid, gid, raw, original_sha, work, publica
             _capture_note(publication_work, "export-readback-complete", total,
                           writes=publication_work.get("export_write_calls", 0),
                           reads=publication_work.get("export_read_calls", 0))
-    except OSError as error:
+    except BaseException as error:
+        failure = error
         if publication_work is not None:
-            _capture_note(publication_work, "export-io-error", error=error.errno)
+            _capture_note(publication_work, "export-io-error", error=getattr(error, "errno", None),
+                          category=type(error).__name__)
         raise
     finally:
         if publication_work is None:
             os.close(fd)
         else:
-            _capture_close(fd, publication_work, "export-close")
+            _capture_close(fd, publication_work, "export-close", failure=failure)
 
 
 def _read_export_value(stream):

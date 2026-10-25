@@ -843,6 +843,47 @@ if sys.platform in {'darwin','linux'}:
                     else:raise AssertionError('native write failure swallowed')
                 finally:host.write_excl=original_write
                 assert not (publication_root/('.capture-'+io_attempt)).exists()
+                for primary_failure in (False,True):
+                    failed_id='attempt.close.'+str(int(primary_failure))
+                    failed_fd=host.mkdir_excl(root_fd,failed_id,os.getuid(),os.getgid())
+                    host.write_payload(failed_fd,os.getuid(),os.getgid(),[(b'stdout',b''),(b'stderr',b'')])
+                    host._capture_process={'rows':[],'ordinals':{},'bytes':0,'complete':True,
+                        'driver_rest':[],'signals':[],'request_raw':request,'attempt_id':failed_id}
+                    actual_open,actual_close,actual_chown=host.os.open,host.os.close,host.os.fchown
+                    target=[None]
+                    def opening(name,*args,**kwargs):
+                        fd=actual_open(name,*args,**kwargs)
+                        if name=='capture.json':target[0]=fd
+                        return fd
+                    def chowning(fd,*args):
+                        if fd==target[0] and primary_failure:raise OSError(5,'ordinary capture chown failure')
+                        return actual_chown(fd,*args)
+                    def closing(fd):
+                        result=actual_close(fd)
+                        if fd==target[0]:
+                            target[0]=None
+                            raise OSError(9,'ordinary capture secondary close failure')
+                        return result
+                    try:
+                        host.os.open=opening;host.os.close=closing;host.os.fchown=chowning
+                        assert host.write_receipt_file(root_fd,failed_fd,os.getuid(),os.getgid(),native_receipt) is None
+                    finally:host.os.open=actual_open;host.os.close=actual_close;host.os.fchown=actual_chown
+                    failed_work=host._capture_process['publication_work']
+                    assert failed_work['complete'] is False
+                    assert failed_work['failure']['errno']==(5 if primary_failure else 9)
+                    assert any(row['site']=='close' and row['errno']==9 for row in failed_work['operations'])
+                    if primary_failure:assert any(row['site']=='chown' and row['errno']==5 for row in failed_work['operations'])
+                    retained=publication_root/('.capture-'+failed_id+'.pending')/'capture.json'
+                    retained_bytes=retained.read_bytes()
+                    assert retained_bytes==host._capture_values(failed_id,request,{
+                        'host':{'process':[],'driver_rest':[],'signals':[]},
+                        'clocks':{key:host._capture_clocks[key] for key in ('wall','monotonic')}},True)
+                    assert (publication_root/failed_id/'receipt.json').read_bytes()==native_receipt
+                    assert {p.name for p in (publication_root/failed_id).iterdir()}=={'receipt.json','payload'}
+                    assert not (retained.parent/'complete.json').exists()
+                    print(json.dumps({'actual_capture_primary_and_close_failure':primary_failure,
+                        'retained_capture_hex':retained_bytes.hex(),'retained_mode':retained.stat().st_mode & 0o777,
+                        'native_result_and_receipt_unchanged':True,'actual_work':failed_work},sort_keys=True))
                 host._capture_process=None
                 for operation,role in (('kill-register-read','kill'),('coverage-read','coverage')):
                     source_attempt='attempt.sourceio.'+role
@@ -1680,6 +1721,123 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
             runtime_hold.close()
     finally:consumer._acl_state = original_acl
 PY_CAPTURE_VALUES
+/usr/bin/python3 -I -S -B - "$root" <<'PY_SOURCE_CANCEL'
+import importlib.util
+import json
+import os
+from pathlib import Path
+import signal
+import sys
+import tempfile
+import types
+
+root=Path(sys.argv[1])
+def load(name,path):
+    spec=importlib.util.spec_from_file_location(name,path)
+    module=importlib.util.module_from_spec(spec);sys.modules[name]=module;spec.loader.exec_module(module)
+    return module
+r=load('source_cancel_reader',root/'scope/v1/read-shadow-evidence.py');c=r.c
+host=load('source_cancel_host',root/'sandbox/v1/host-supervisor.py')
+e=load('source_cancel_final',root/'shadow/v1/enforced-reproduction.py')
+cancel_code=next(value for value in r.main.__code__.co_consts if isinstance(value,types.CodeType) and value.co_name=='cancel')
+reader_cancel=types.FunctionType(cancel_code,{'InterruptedError':InterruptedError})
+g=load('source_cancel_generator',root/'scope/v1/generate-gate-evidence.py')
+generator_cancel_code=next(value for value in g.main.__code__.co_consts if isinstance(value,types.CodeType) and value.co_name=='cancel')
+assert generator_cancel_code.co_freevars==('generator',)
+for label in ('positive','io-eintr','io-error','copy-signal','copy-signal-close-error',
+              'parent-close-signal','parent-close-eintr','open-signal','read-signal',
+              'seal-signal','seal-close-signal','seal-close-eintr',
+              'generator-copy-signal','generator-seal-close-signal'):
+    case=label[len('generator-'):] if label.startswith('generator-') else label
+    generator_state=types.SimpleNamespace(active=True)
+    cell=(lambda value:lambda:value)(generator_state).__closure__[0]
+    cancel=(types.FunctionType(generator_cancel_code,{'InterruptedError':InterruptedError},closure=(cell,))
+            if label.startswith('generator-') else reader_cancel)
+    with tempfile.TemporaryDirectory(prefix='ystack-source-cancel-') as temporary:
+        area=Path(temporary).resolve();area.chmod(0o700)
+        observed=[];fired=[];closed=[]
+        def handler(number,frame):
+            try:cancel(number,frame)
+            except InterruptedError as error:observed.append(error);raise
+        previous=signal.signal(signal.SIGTERM,handler)
+        raw=host.canonical({'ordinary':'source request'})
+        captured=host._capture_values('attempt.cancel',raw,{'source_pages':{'coverage':[]}},True)
+        work={};c._capture_work_values(work,'source-read')
+        anchor=types.SimpleNamespace(identity_context={},private_observations={},recording_work={},resolver=None,
+            capture_completion_owner=types.SimpleNamespace(authenticate=lambda anchor:None,transfer=lambda total,local:None))
+        source=object.__new__(c._HeldCoverageRead)
+        source.anchor=anchor;source.attempt_id='attempt.cancel';source.held=[object()]
+        source.snapshots={'payload/request.json':raw};source.observation=b'{}\n';source.storage_rows=[]
+        source.capture_origin=b'{}\n';source.capture_work=work
+        source.capture=types.SimpleNamespace(snapshots={'capture.json':captured,
+            'complete.json':host._capture_completion_values(source.attempt_id,raw,captured)},transfer=lambda total,local:None)
+        reader=object.__new__(r._Reader)
+        reader.captures=area;reader.source_capture_ordinal=0;reader.source_capture_work=[]
+        reader.inputs=[];reader.darwin=None;reader.store_session=None;reader.anchor=anchor;reader.enforced=e
+        owned=r._Owned(reader)
+        input_path=area/'held-input';input_path.write_bytes(b'fixed input');input_path.chmod(0o400)
+        input_hold=c._open_held(str(input_path),False,lambda *args:True,'E_STORE')
+        original_open,original_read,original_write,original_close=c.os.open,c.os.read,c.os.write,c.HeldPath.close
+        original_acl=c._acl_state
+        def interrupt():
+            fired.append(case);os.kill(os.getpid(),signal.SIGTERM)
+            raise AssertionError('signal handler did not raise')
+        def opening(*args,**kwargs):
+            if case=='open-signal' and not fired:interrupt()
+            return original_open(*args,**kwargs)
+        def reading(*args):
+            if case in {'read-signal','seal-signal'} and not fired:interrupt()
+            return original_read(*args)
+        def writing(*args):
+            if not fired:
+                if case in {'copy-signal','copy-signal-close-error'}:interrupt()
+                if case in {'io-eintr','io-error'}:
+                    fired.append(case)
+                    raise InterruptedError(4,'ordinary I/O EINTR') if case=='io-eintr' else OSError(5,'ordinary I/O error')
+            return original_write(*args)
+        def closing(held):
+            result=original_close(held);closed.append(len(held.components))
+            if not fired and case in {'parent-close-signal','seal-close-signal'}:interrupt()
+            if not fired and case in {'parent-close-eintr','seal-close-eintr'}:
+                fired.append(case);raise InterruptedError(4,'ordinary close EINTR')
+            if case=='copy-signal-close-error':raise OSError(9,'ordinary secondary close failure')
+            return result
+        if case=='read-signal':
+            anchor.capture_completion_owner.authenticate=lambda anchor:input_hold.read(1024,'E_STORE',work)
+        if case.startswith('seal-'):
+            anchor.capture_completion_owner=types.SimpleNamespace(source=e.StableFile(input_hold,b'fixed input',work),
+                work=work,transfer=lambda total,local:c._capture_transfer_work(work,total,local))
+        caught=None
+        try:
+            c.os.open=opening;c.os.read=reading;c.os.write=writing;c.HeldPath.close=closing
+            c._acl_state=lambda *args:([],None) if sys.platform=='darwin' else (None,None)
+            try:
+                if case.startswith('seal-'):reader.seal_source_captures()
+                else:owned.append(source)
+            except BaseException as error:caught=error
+            if 'signal' in case:
+                assert len(observed)==1 and caught is observed[0]
+                assert type(caught) is InterruptedError and caught._scope_signal_cancel is True
+                assert anchor.private_observations['unusable'] is True
+            else:
+                assert caught is None and owned==([] if case.startswith('seal-') else [source])
+                assert bool(anchor.private_observations.get('unusable')) is (case!='positive')
+            if case=='positive':assert len(list((area/'source-0000').iterdir()))==4
+            if case.startswith('seal-'):
+                assert work['transferred_read_bytes']==work['read_bytes']==anchor.recording_work['read_bytes']
+                assert anchor.private_observations['recording_sealed'] is False
+            assert (closed or case=='open-signal') and all(value==0 for value in closed)
+            if label.startswith('generator-'):assert generator_state.active is False
+            print(json.dumps({'actual_source_copy_append_or_seal_control':label,
+                'actual_handler_signal':bool(observed),'same_cancel_object':caught is observed[0] if observed else None,
+                'normalizer_session_installation_and_copy_inputs_are_fixture_doubles':True,
+                'private_observations':anchor.private_observations,'copy_work':anchor.recording_work,
+                'read_work':work,'closed_components':closed},sort_keys=True))
+        finally:
+            c.os.open=original_open;c.os.read=original_read;c.os.write=original_write;c.HeldPath.close=original_close
+            c._acl_state=original_acl;signal.signal(signal.SIGTERM,previous)
+            input_hold.close()
+PY_SOURCE_CANCEL
 capture_python=$(/usr/bin/python3 -I -S -B -c 'import os,sys;print(os.path.realpath(sys.executable))')
 for capture_route in reproduce write; do
   for capture_drift in stable file parent native-failure; do
