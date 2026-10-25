@@ -2064,10 +2064,10 @@ def _write_capture_export(attempt_fd, uid, gid, raw, original_sha, work, publica
         if publication_work is not None:
             _capture_note(publication_work, "export-open", error=error.errno, failure=error)
         raise
-    if publication_work is not None:
-        publication_work["files"] = publication_work.get("files", 0) + 1
     failure = None
     try:
+        if publication_work is not None:
+            publication_work["files"] = publication_work.get("files", 0) + 1
         offset = 0
         view = memoryview(raw)
         while offset < len(raw):
@@ -2115,6 +2115,8 @@ def _write_capture_export(attempt_fd, uid, gid, raw, original_sha, work, publica
     except BaseException as error:
         failure = error
         if publication_work is not None:
+            if isinstance(error, MemoryError):
+                publication_work["export_accounting_incomplete"] = True
             _capture_note(publication_work, "export-io-error", error=getattr(error, "errno", None),
                           category=type(error).__name__, failure=error)
         raise

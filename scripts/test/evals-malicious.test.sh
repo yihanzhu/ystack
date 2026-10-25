@@ -2095,6 +2095,7 @@ for label in cases:
 PY_CAPTURE_ADMISSION
 /usr/bin/python3 -I -S -B - "$root" <<'PY_CAPTURE_OBSERVER'
 import errno
+import io
 import importlib.util
 import json
 import os
@@ -2105,7 +2106,7 @@ import tempfile
 root=Path(sys.argv[1])
 spec=importlib.util.spec_from_file_location('capture_observer_host',root/'sandbox/v1/host-supervisor.py')
 host=importlib.util.module_from_spec(spec);spec.loader.exec_module(host)
-for label in ('created-row-limit','open-row-limit','created-memory','open-memory','open-counter-memory','chown-memory-close'):
+for label in ('created-row-limit','open-row-limit','created-memory','open-memory','open-counter-memory','chown-memory-close','export-counter-memory'):
     with tempfile.TemporaryDirectory(prefix='ystack-capture-observer-') as temporary:
         area=Path(temporary).resolve();area.chmod(0o750)
         store=os.open(area,os.O_RDONLY|os.O_DIRECTORY)
@@ -2118,6 +2119,8 @@ for label in ('created-row-limit','open-row-limit','created-memory','open-memory
             def __setitem__(self,key,value):
                 if label=='open-counter-memory' and key=='close_calls':
                     raise MemoryError('ordinary close accounting allocation failure')
+                if label=='export-counter-memory' and key=='files' and value==2:
+                    raise MemoryError('ordinary export file accounting allocation failure')
                 return super().__setitem__(key,value)
         work=Work()
         class Rows(list):
@@ -2134,10 +2137,14 @@ for label in ('created-row-limit','open-row-limit','created-memory','open-memory
         host._capture_process={'rows':[],'driver_rest':[],'signals':[],'complete':True,
             'request_raw':request,'attempt_id':attempt_id,'publication_work':work}
         host._capture_clocks={'wall':[],'monotonic':[],'complete':True}
+        if label=='export-counter-memory':
+            host._capture_process.update(ordinals={},bytes=0)
+            export=host.frame_write([(b'stdout',b''),(b'stderr',b'')]);export+=bytes(12582912-len(export))
+            assert host._read_export_value(io.BytesIO(export))==export
         opening,closing,chowning=os.open,os.close,os.fchown
         def observed_open(name,*args,**kwargs):
             fd=opening(name,*args,**kwargs)
-            if os.fsdecode(name).startswith('.capture-'):state['opened'].append(fd)
+            if os.fsdecode(name).startswith('.capture-') or os.fsdecode(name)=='sandbox-export.bin':state['opened'].append(fd)
             return fd
         def observed_chown(fd,*args):
             if label=='chown-memory-close' and fd in state['opened']:
@@ -2154,11 +2161,12 @@ for label in ('created-row-limit','open-row-limit','created-memory','open-memory
             assert host.write_receipt_file(store,attempt,os.getuid(),os.getgid(),receipt) is None
         finally:host.os.open=opening;host.os.close=closing;host.os.fchown=chowning
         try:
-            assert work['directories']==1 and not work['complete'] and work['observations_incomplete']
-            assert state['opened']==state['closed'] and len(set(state['closed']))==len(state['closed'])
-            assert len(state['opened'])==(0 if label.startswith('created') else 1)
+            assert work['directories']==1 and not work['complete']
+            assert work.get('observations_incomplete',False) or work.get('export_accounting_incomplete',False)
+            assert sorted(state['opened'])==sorted(state['closed']) and len(set(state['closed']))==len(state['closed'])
+            assert len(state['opened'])==(0 if label.startswith('created') else 2 if label=='export-counter-memory' else 1)
             if label=='open-counter-memory':assert work['close_observations_incomplete'] and 'close_calls' not in work
-            else:assert work.get('close_calls',0)==len(state['opened'])
+            else:assert work.get('close_calls',0)==(3 if label=='export-counter-memory' else len(state['opened']))
             for fd in state['closed']:
                 try:os.fstat(fd)
                 except OSError as error:assert error.errno==errno.EBADF
@@ -2171,7 +2179,12 @@ for label in ('created-row-limit','open-row-limit','created-memory','open-memory
             else:assert work['failure']['category']=='MemoryError'
             assert (area/attempt_id/'receipt.json').read_bytes()==receipt
             pending=area/('.capture-'+attempt_id+'.pending')
-            assert pending.is_dir() and list(pending.iterdir())==[]
+            assert pending.is_dir()
+            if label=='export-counter-memory':
+                assert {path.name for path in pending.iterdir()}=={'capture.json','sandbox-export.bin'}
+                assert (pending/'sandbox-export.bin').stat().st_size==0 and work['files']==1
+                assert work['export_accounting_incomplete']
+            else:assert list(pending.iterdir())==[]
             print(json.dumps({'capture_observer_case':label,'capacity_row_prestate_only':prestate,
                 'pending_inode':pending.stat().st_ino,'pending_mode':pending.stat().st_mode & 0o777,
                 'state':state,'actual_work_without_capacity_placeholder_rows':
