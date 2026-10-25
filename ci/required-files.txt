@@ -592,3 +592,18 @@ shadow/v1/write-shadow.py
 shadow/v1/write-materialization-input.jq
 scripts/test/shadow-write.test.sh
 .github/workflows/scope-genuine-macos.yml
+
+# Fixed historical shadow archive control data
+scripts/test/fixtures/shadow-archive-control/v1/credential-policy-decision.json
+scripts/test/fixtures/shadow-archive-control/v1/credential-policy.json
+scripts/test/fixtures/shadow-archive-control/v1/duty-separation-decision.json
+scripts/test/fixtures/shadow-archive-control/v1/duty-separation-policy.json
+scripts/test/fixtures/shadow-archive-control/v1/evidence-integrity-decision.json
+scripts/test/fixtures/shadow-archive-control/v1/evidence-integrity-policy.json
+scripts/test/fixtures/shadow-archive-control/v1/kill-switch-decision.json
+scripts/test/fixtures/shadow-archive-control/v1/kill-switch-policy.json
+scripts/test/fixtures/shadow-archive-control/v1/risk-gates-decision.json
+scripts/test/fixtures/shadow-archive-control/v1/risk-gates-policy.json
+scripts/test/fixtures/shadow-archive-control/v1/sandbox-decision.json
+scripts/test/fixtures/shadow-archive-control/v1/sandbox-policy.json
+scripts/test/fixtures/shadow-archive-control/v1/provenance.json

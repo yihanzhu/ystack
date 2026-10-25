@@ -1245,3 +1245,14 @@ Run `bash scripts/test/shadow-write.test.sh`. It includes the full unchanged enf
 regression and real writer component checks in disposable fixtures. Retain final native
 build/source and command evidence; synthetic receipt/installation proof grants no native
 qualification. The shipped accepted set stays empty and CPU/wall enforcement stays none.
+
+### Restore historical shadow control data
+
+Restore the 13 non-executable files listed under Fixed historical shadow archive
+control data in ci/required-files.txt. Their provenance.json binds the two original
+archive runtime commits and 12 exact control objects. The existing offline command
+`bash scripts/test/shadow-self-host-evidence.test.sh` verifies the fixed raw pin,
+closed inventory and complete bytes without old history, credentials or historical
+execution. Historical authenticity is separate from current control compatibility.
+Current drift still refuses current use. Neither result qualifies or activates a
+runtime. Restore the complete suite and unchanged archives together.

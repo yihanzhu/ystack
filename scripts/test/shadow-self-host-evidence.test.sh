@@ -473,6 +473,267 @@ require_bundle_present() {
 # mismatch, naming it on stderr.
 # ===========================================================================
 
+control_fixture="$root/scripts/test/fixtures/shadow-archive-control/v1"
+control_provenance_sha=9ccb7fd6a84d6df0f3d1917db3edf706c2caf1f64c814462fcd7fa206e9bc8ac
+trusted_control_provenance="$tmp/trusted-control-provenance.json"
+[ -f "$control_fixture/provenance.json" ] && [ ! -L "$control_fixture/provenance.json" ] &&
+  [ ! -x "$control_fixture/provenance.json" ] &&
+  [ "$(sha_file "$control_fixture/provenance.json")" = "$control_provenance_sha" ] || fail 'fixed provenance raw pin'
+/bin/cp "$control_fixture/provenance.json" "$trusted_control_provenance"
+/bin/chmod 0400 "$trusted_control_provenance"
+cat > "$tmp/control-manifest-mutants.tsv" <<'CONTROL_MUTANTS'
+commit	.runtime_bindings[0].commit=("0"*40)
+tree	.runtime_bindings[0].tree=("0"*40)
+archive-path	.runtime_bindings[0].archive_path="shadow/evidence/other/v1/"
+crossed-runtime	.runtime_bindings[0].commit=.runtime_bindings[1].commit
+runtime-order	.runtime_bindings|=reverse
+missing-runtime	.runtime_bindings|=.[1:]
+extra-runtime	.runtime_bindings += [.runtime_bindings[0]]
+unknown-runtime-field	.runtime_bindings[0].unknown=true
+missing-runtime-field	del(.runtime_bindings[0].tree)
+blob	.files[0].git_blob=("0"*40)
+source-path	.files[0].source_path="control/v1/other.json"
+fixture-path	.files[0].fixture_path="scripts/test/fixtures/other.json"
+mode	.files[0].git_mode="100755"
+digest	.files[0].sha256=("0"*64)
+size	.files[0].size_bytes+=1
+size-type	.files[0].size_bytes="1444"
+missing-file-field	del(.files[0].git_blob)
+unknown-file-field	.files[0].unknown=true
+row-order	.files|=reverse
+duplicate-row	.files[1]=.files[0]
+extra-row	.files += [.files[0]]
+missing-row	.files|=.[1:]
+empty-files	.files=[]
+files-type	.files={}
+schema-version	.schema_version=2
+kind	.kind="other"
+repository	.source_repository="other/repository"
+missing-root-field	del(.kind)
+unknown-root-field	.unknown=true
+root-type	[.]
+CONTROL_MUTANTS
+
+control_fixture_refusal() { /usr/bin/printf '%s\n' "$1" >&2; return 1; }
+check_control_fixture_data() {
+  local d=$1 f name count=0 size digest
+  [ -d "$d" ] && [ ! -L "$d" ] || { control_fixture_refusal fixture-inventory; return 1; }
+  "$jq_bin" -e -s --slurpfile trusted "$trusted_control_provenance" \
+    --arg archive "$b_rel/" --arg commit "$b_run_commit" '
+    length == 1 and (.[0] |
+      type == "object" and
+      keys == ["files","kind","runtime_bindings","schema_version","source_repository"] and
+      .schema_version == 1 and .kind == "shadow_archive_control_provenance" and
+      .source_repository == "yihanzhu/ystack" and
+      (.runtime_bindings | type == "array" and length == 2 and . == sort_by(.archive_path)) and
+      (.runtime_bindings | all(keys == ["archive_path","commit","tree"] and
+        ([.archive_path,.commit,.tree] | all(type == "string")))) and
+      (.files | type == "array" and length == 12 and . == sort_by(.source_path)) and
+      (.files | all(keys == ["fixture_path","git_blob","git_mode","sha256","size_bytes","source_path"] and
+        ([.source_path,.fixture_path,.git_mode,.git_blob,.sha256] | all(type == "string")) and
+        (.size_bytes | type == "number" and . > 0 and . == floor))) and
+      ([.runtime_bindings[] | select(.archive_path == $archive and .commit == $commit)] | length == 1)) and
+    .[0] == $trusted[0]
+  ' "$d/provenance.json" >/dev/null 2>&1 || { control_fixture_refusal fixture-schema; return 1; }
+  for f in "$d"/* "$d"/.[!.]* "$d"/..?*; do
+    if [ ! -e "$f" ] && [ ! -L "$f" ]; then continue; fi
+    count=$((count + 1))
+    [ -f "$f" ] && [ ! -L "$f" ] && [ ! -x "$f" ] ||
+      { control_fixture_refusal fixture-type; return 1; }
+    name=${f##*/}
+    [ "$name" = provenance.json ] && continue
+    size=$("$jq_bin" -er --arg p "scripts/test/fixtures/shadow-archive-control/v1/$name" \
+      '.files[] | select(.fixture_path == $p) | .size_bytes' "$trusted_control_provenance") ||
+      { control_fixture_refusal fixture-inventory; return 1; }
+    digest=$("$jq_bin" -er --arg p "scripts/test/fixtures/shadow-archive-control/v1/$name" \
+      '.files[] | select(.fixture_path == $p) | .sha256' "$trusted_control_provenance") || return 1
+    [ "$(/usr/bin/wc -c < "$f" | /usr/bin/tr -d ' ')" = "$size" ] &&
+      [ "$(sha_file "$f")" = "$digest" ] || { control_fixture_refusal fixture-bytes; return 1; }
+  done
+  [ "$count" -eq 13 ] || { control_fixture_refusal fixture-inventory; return 1; }
+}
+check_control_fixture() {
+  local d=$1
+  [ -d "$d" ] && [ ! -L "$d" ] && [ -f "$d/provenance.json" ] &&
+    [ ! -L "$d/provenance.json" ] && [ ! -x "$d/provenance.json" ] ||
+    { control_fixture_refusal fixture-shape; return 1; }
+  [ "$(sha_file "$d/provenance.json")" = "$control_provenance_sha" ] ||
+    { control_fixture_refusal fixture-pin; return 1; }
+  check_control_fixture_data "$d"
+}
+policy_filename_for_section() {
+  case "$1" in
+    credential-policy) /usr/bin/printf '%s' credential-policy.json ;;
+    *) /usr/bin/printf '%s-policy.json' "$1" ;;
+  esac
+}
+control_references_match() {
+  local set=$1 controls=$2 section policy decision
+  "$jq_bin" -e -s 'length == 1 and
+    (.[0].body.sections | type == "array" and length == 6 and
+      (map(.section_id) | sort) == ["credential-policy","duty-separation",
+        "evidence-integrity","kill-switch","risk-gates","sandbox"])' "$set" >/dev/null 2>&1 || return 1
+  for section in credential-policy duty-separation evidence-integrity kill-switch risk-gates sandbox; do
+    policy="$controls/$(policy_filename_for_section "$section")"
+    decision="$controls/$section-decision.json"
+    [ -f "$policy" ] && [ -f "$decision" ] || return 1
+    "$jq_bin" -e --arg s "$section" --arg ps "$(sha_file "$policy")" \
+      --arg ds "$(sha_file "$decision")" --arg pi "$("$jq_bin" -er .id "$policy")" \
+      --arg di "$("$jq_bin" -er .id "$decision")" '
+      [.body.sections[] | select(.section_id == $s)] | length == 1 and
+      .[0].policy_ref == {content_id:$pi,media_type:"application/vnd.ystack.control-policy+json",sha256:$ps} and
+      .[0].decision_ref == {content_id:$di,media_type:"application/vnd.ystack.control-decision+json",sha256:$ds} and
+      ($ps != ("0" * 64) and $ps != ("1" * 64) and $ds != ("0" * 64) and $ds != ("1" * 64))
+    ' "$set" >/dev/null 2>&1 || return 1
+  done
+}
+
+run_control_checks() {
+  local copy="$tmp/control-fixture-copy" current="$tmp/current-control-copy"
+  local name filter layer expected file mutation diagnostic changed=0
+  check_control_fixture "$control_fixture" || fail 'historical control fixture'
+  control_references_match "$evdir/control-policy-set.json" "$control_fixture" || fail 'historical control references'
+  control_references_match "$root/control/v1/control-policy-set.json" "$root/control/v1" || fail 'current control tuple'
+  pass 'historical original controls and current control tuple independently validate'
+  while IFS=$'\t' read -r file expected; do
+    if [ "$(sha_file "$root/control/v1/${file##*/}")" != "$expected" ]; then changed=1; fi
+  done < <("$jq_bin" -r '.files[] | [.source_path,.sha256] | @tsv' "$trusted_control_provenance")
+  if control_references_match "$evdir/control-policy-set.json" "$root/control/v1"; then
+    [ "$changed" -eq 0 ] || fail 'changed current bytes accepted for historical references'
+    pass 'archive current compatibility: matches actual current bytes; no qualification'
+  else
+    [ "$changed" -eq 1 ] || fail 'unchanged current vector unexpectedly refused'
+    pass 'archive current compatibility: REFUSED actual current drift; historical authenticity gives no fallback'
+  fi
+  fresh_control_copy() {
+    /bin/rm -rf -- "$copy"
+    /bin/cp -R "$control_fixture" "$copy"
+    /bin/chmod -R u+w "$copy"
+    check_control_fixture "$copy" || fail 'fixture mutation baseline'
+  }
+  while IFS=$'\t' read -r name filter; do
+    for layer in pin schema; do
+      fresh_control_copy
+      "$jq_bin" "$filter" "$copy/provenance.json" > "$tmp/provenance-mutant.json"
+      /bin/mv "$tmp/provenance-mutant.json" "$copy/provenance.json"
+      if [ "$layer" = pin ]; then
+        if check_control_fixture "$copy" 2>"$tmp/control-refusal"; then fail "pin mutant accepted: $name"; fi
+        diagnostic=fixture-pin
+      else
+        if check_control_fixture_data "$copy" 2>"$tmp/control-refusal"; then fail "schema mutant accepted: $name"; fi
+        diagnostic=fixture-schema
+      fi
+      /usr/bin/grep -qx "$diagnostic" "$tmp/control-refusal" || fail "wrong refusal layer: $name/$layer"
+      /bin/cp "$control_fixture/provenance.json" "$copy/provenance.json"
+      check_control_fixture "$copy" || fail "manifest restoration: $name/$layer"
+      pass "control manifest $name: $layer refusal and restoration"
+    done
+  done < "$tmp/control-manifest-mutants.tsv"
+  for mutation in duplicate-key byte-only multiple-values; do
+    fresh_control_copy
+    case "$mutation" in
+      duplicate-key) /usr/bin/sed 's/"schema_version": 1/"schema_version": 1, "schema_version": 1/' "$copy/provenance.json" > "$tmp/provenance-mutant.json" ;;
+      byte-only) /bin/cp "$copy/provenance.json" "$tmp/provenance-mutant.json"; printf ' ' >> "$tmp/provenance-mutant.json" ;;
+      multiple-values) /bin/cp "$copy/provenance.json" "$tmp/provenance-mutant.json"; printf '{}\n' >> "$tmp/provenance-mutant.json" ;;
+    esac
+    /bin/mv "$tmp/provenance-mutant.json" "$copy/provenance.json"
+    if check_control_fixture "$copy" 2>"$tmp/control-refusal"; then fail "raw manifest accepted: $mutation"; fi
+    /usr/bin/grep -qx fixture-pin "$tmp/control-refusal" || fail 'raw mutation did not reach pin'
+    if [ "$mutation" = multiple-values ]; then
+      if check_control_fixture_data "$copy" 2>"$tmp/control-refusal"; then fail 'multiple JSON values accepted'; fi
+      /usr/bin/grep -qx fixture-schema "$tmp/control-refusal" || fail 'multiple values wrong layer'
+    fi
+    /bin/cp "$control_fixture/provenance.json" "$copy/provenance.json"
+    check_control_fixture "$copy" || fail 'raw manifest restoration'
+    pass "control provenance $mutation: exact pin refusal and restoration"
+  done
+  while IFS= read -r file; do
+    file=${file##*/}
+    for mutation in missing changed; do
+      fresh_control_copy
+      if [ "$mutation" = missing ]; then /bin/rm "$copy/$file"; diagnostic=fixture-inventory
+      else printf ' ' >> "$copy/$file"; diagnostic=fixture-bytes; fi
+      if check_control_fixture "$copy" 2>"$tmp/control-refusal"; then fail "fixture $file/$mutation accepted"; fi
+      /usr/bin/grep -qx "$diagnostic" "$tmp/control-refusal" || fail 'fixture byte/inventory wrong layer'
+      control_references_match "$root/control/v1/control-policy-set.json" "$root/control/v1" || fail 'current positive must not rescue damaged history'
+      /bin/cp "$control_fixture/$file" "$copy/$file"
+      check_control_fixture "$copy" || fail 'fixture restoration'
+      pass "historical fixture $file: $mutation refused independently of valid current tuple; restored"
+    done
+  done < <("$jq_bin" -r '.files[].fixture_path' "$trusted_control_provenance")
+  for mutation in missing symlink executable; do
+    fresh_control_copy
+    case "$mutation" in
+      missing) /bin/rm "$copy/provenance.json" ;;
+      symlink) /bin/rm "$copy/provenance.json"; /bin/ln -s "$control_fixture/provenance.json" "$copy/provenance.json" ;;
+      executable) /bin/chmod u+x "$copy/provenance.json" ;;
+    esac
+    if check_control_fixture "$copy" 2>"$tmp/control-refusal"; then fail "provenance shape accepted: $mutation"; fi
+    /usr/bin/grep -qx fixture-shape "$tmp/control-refusal" || fail 'wrong provenance shape refusal'
+    fresh_control_copy
+    pass "provenance $mutation: shape refusal and restored positive"
+  done
+  /bin/ln -s "$control_fixture" "$tmp/control-fixture-link"
+  if check_control_fixture "$tmp/control-fixture-link" 2>"$tmp/control-refusal"; then fail 'symlink fixture root accepted'; fi
+  /usr/bin/grep -qx fixture-shape "$tmp/control-refusal" || fail 'wrong root shape refusal'
+  /bin/rm "$tmp/control-fixture-link"
+  check_control_fixture "$control_fixture" || fail 'fixture root restoration'
+  pass 'symlink root refused; fixed root positive restored'
+  for mutation in extra-file directory symlink executable fifo; do
+    fresh_control_copy
+    case "$mutation" in
+      extra-file) printf x > "$copy/extra"; diagnostic=fixture-inventory ;;
+      directory) /bin/mkdir "$copy/extra"; diagnostic=fixture-type ;;
+      symlink) /bin/rm "$copy/sandbox-policy.json"; /bin/ln -s "$control_fixture/sandbox-policy.json" "$copy/sandbox-policy.json"; diagnostic=fixture-type ;;
+      executable) /bin/chmod u+x "$copy/sandbox-policy.json"; diagnostic=fixture-type ;;
+      fifo) mkfifo "$copy/extra"; diagnostic=fixture-type ;;
+    esac
+    if check_control_fixture "$copy" 2>"$tmp/control-refusal"; then fail "fixture type accepted: $mutation"; fi
+    /usr/bin/grep -qx "$diagnostic" "$tmp/control-refusal" || fail 'wrong fixture type refusal'
+    fresh_control_copy
+    pass "fixture inventory/type $mutation refused; positive restored"
+  done
+  fresh_control_copy
+  printf ' ' >> "$copy/sandbox-policy.json"
+  "$jq_bin" --arg sha "$(sha_file "$copy/sandbox-policy.json")" \
+    '.files |= map(if .source_path == "control/v1/sandbox-policy.json" then .sha256=$sha | .size_bytes+=1 else . end)' \
+    "$copy/provenance.json" > "$tmp/provenance-mutant.json"
+  /bin/mv "$tmp/provenance-mutant.json" "$copy/provenance.json"
+  if check_control_fixture "$copy" 2>"$tmp/control-refusal"; then fail 'fixture plus manifest tamper accepted'; fi
+  /usr/bin/grep -qx fixture-pin "$tmp/control-refusal" || fail 'tamper did not reach fixed pin'
+  if check_control_fixture_data "$copy" 2>"$tmp/control-refusal"; then fail 'rewritten trusted vector accepted'; fi
+  /usr/bin/grep -qx fixture-schema "$tmp/control-refusal" || fail 'tamper did not reach trusted fixed values'
+  fresh_control_copy
+  pass 'fixture plus rewritten manifest refused at pin and independent fixed values; restored'
+  while IFS= read -r file; do
+    file=${file##*/}
+    /bin/rm -rf -- "$current"; /bin/mkdir "$current"
+    /bin/cp "$root/control/v1/"*.json "$current/"
+    control_references_match "$current/control-policy-set.json" "$current" || fail 'current mutation baseline'
+    printf ' ' >> "$current/$file"
+    if control_references_match "$current/control-policy-set.json" "$current"; then fail "current mutation accepted: $file"; fi
+    check_evidence "$evdir" historical-during-current-mismatch || fail 'current drift contaminated historical positive'
+    /bin/cp "$root/control/v1/$file" "$current/$file"
+    control_references_match "$current/control-policy-set.json" "$current" || fail 'current restoration'
+    pass "current $file: changed-byte refusal, historical positive and current restoration"
+  done < <("$jq_bin" -r '.files[].source_path' "$trusted_control_provenance")
+  for mutation in policy-ref decision-ref missing-section duplicate-section extra-section; do
+    control_references_match "$root/control/v1/control-policy-set.json" "$root/control/v1" || fail 'current reference baseline'
+    case "$mutation" in
+      policy-ref) filter='.body.sections[0].policy_ref.sha256=("0"*64)' ;;
+      decision-ref) filter='.body.sections[0].decision_ref.sha256=("0"*64)' ;;
+      missing-section) filter='.body.sections |= .[1:]' ;;
+      duplicate-section) filter='.body.sections[1]=.body.sections[0]' ;;
+      extra-section) filter='.body.sections += [.body.sections[0]]' ;;
+    esac
+    "$jq_bin" "$filter" "$root/control/v1/control-policy-set.json" > "$tmp/current-set-mutant.json"
+    if control_references_match "$tmp/current-set-mutant.json" "$root/control/v1"; then fail "current reference accepted: $mutation"; fi
+    check_evidence "$evdir" historical-during-current-reference-mismatch || fail 'current reference mutation affected archive'
+    control_references_match "$root/control/v1/control-policy-set.json" "$root/control/v1" || fail 'current reference restoration'
+    pass "current $mutation refused with independent historical positive; restored"
+  done
+}
+
 canonical_ok() {
   local f=$1
   [ -s "$f" ] || return 1
@@ -500,6 +761,7 @@ canonical_ok() {
 check_evidence() {
   local dir=$1 label=${2:-evidence}
   local case_name step
+  check_control_fixture "$control_fixture" || return 1
 
 # The manifest is excluded from its own inventory,
 # but its bytes must still be canonical.
@@ -965,37 +1227,16 @@ check_evidence() {
       return 1
     fi
   done
-  # requirement 2's reference-field recomputation, over the real committed
-  # bytes those fields name. Only the credential-policy section's shipped
-  # policy filename omits the section's own "-policy" suffix a second time
-  # (control/v1/credential-policy.json, not credential-policy-policy.json);
-  # every other section follows the plain "$section-policy.json" pattern.
-  policy_filename_for_section() {
-    case "$1" in
-      credential-policy) /usr/bin/printf '%s' 'credential-policy.json' ;;
-      *) /usr/bin/printf '%s-policy.json' "$1" ;;
-    esac
-  }
-  for section in credential-policy duty-separation evidence-integrity kill-switch \
-    risk-gates sandbox; do
-    local expect_policy expect_decision actual_policy actual_decision
-    expect_policy=$(sha_file "$root/control/v1/$(policy_filename_for_section "$section")")
-    expect_decision=$(sha_file "$root/control/v1/$section-decision.json")
-    actual_policy=$("$jq_bin" -r --arg s "$section" \
-      '.body.sections[] | select(.section_id == $s) | .policy_ref.sha256' "$dir/control-policy-set.json")
-    actual_decision=$("$jq_bin" -r --arg s "$section" \
-      '.body.sections[] | select(.section_id == $s) | .decision_ref.sha256' "$dir/control-policy-set.json")
-    [ "$actual_policy" = "$expect_policy" ] && [ "$actual_decision" = "$expect_decision" ] ||
-      { /usr/bin/printf '%s: %s: control-policy-set section %s reference mismatch\n' "$label" "$step" "$section" >&2; return 1; }
-  done
+  control_references_match "$dir/control-policy-set.json" "$control_fixture" ||
+    { /usr/bin/printf '%s: %s: historical control references mismatch\n' "$label" "$step" >&2; return 1; }
   "$jq_bin" -e -n --slurpfile set "$dir/control-policy-set.json" \
     --arg closure_sha "$(sha_file "$dir/core-package-closure.json")" '
     $set[0].body.core_contract.package_ref.sha256 == $closure_sha
   ' >/dev/null 2>&1 ||
     { /usr/bin/printf '%s: %s: control-policy-set core package_ref mismatch\n' "$label" "$step" >&2; return 1; }
   "$jq_bin" -e -n --slurpfile duty "$dir/duty-evaluation.json" \
-    --arg policy_sha "$(sha_file "$root/control/v1/duty-separation-policy.json")" \
-    --arg decision_sha "$(sha_file "$root/control/v1/duty-separation-decision.json")" \
+    --arg policy_sha "$(sha_file "$control_fixture/duty-separation-policy.json")" \
+    --arg decision_sha "$(sha_file "$control_fixture/duty-separation-decision.json")" \
     --arg set_sha "$(sha_file "$dir/control-policy-set.json")" \
     --arg req_sha "$(sha_file "$dir/prerequisite/stage-request.json")" \
     --arg prof_sha "$(sha_file "$dir/prerequisite/resolved-profile-document.json")" \
@@ -1302,6 +1543,7 @@ run_bundle_checks() {
 
 check_evidence "$evdir" 'evidence' || fail 'the committed evidence fails one or more offline checks'
 pass 'the committed evidence passes checksums.json inventory, canonical JSON, incident validation, identity/reference equality (both assembler refs recomputed from retained bytes, including the embedded stage_request.sha256/resolved_profile.sha256 fields), the prerequisite input binding to its retained request/profile extracts, each record binding its own retained identity, identity provenance against the resolved profile producer binding and pinned producer config, both outcomes, empty-patch/network-deny, materialization, trace seal, sandbox evaluation matching the recorded, sandbox evaluation recomputing byte-identical through the shipped evaluator over the retained policy-set/duty/claim, satisfied verdict, claim binding, declaration-only marker with reference recomputation (including each assembled requests own environment_ref.fingerprint_sha256 against the retained declaration/claim it names), core package closure, and the approved requester'
+run_control_checks
 
 # ---------------------------------------------------------------------------
 # check 13: negative cases. A copy of the evidence tree, mutated one way at a
