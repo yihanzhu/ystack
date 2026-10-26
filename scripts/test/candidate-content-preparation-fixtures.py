@@ -2760,7 +2760,7 @@ def raw16_scope_sudo_source(root: Path, *, observer_cancel_only=False) -> None:
                     path = base/role;path.write_bytes(b'never executed synthetic scope '+role.encode());path.chmod(0o400)
                     paths[role] = path
                 reader = object.__new__(scope._Reader)
-                reader.owned = [];reader.inputs = [];reader.commands = [];reader.gate_commands = []
+                reader.source_copies = [];reader.owned = [];reader.inputs = [];reader.commands = [];reader.gate_commands = []
                 reader.commands_open = True;reader.store_session = None;reader.capture_completion_owner = None
                 reader.captures = captures;reader.darwin = None
                 anchor = c.Anchor({'principal_uid': os.geteuid()}, b'', [], {}, ('', []), ('', []), None)
@@ -2911,7 +2911,7 @@ def raw16_scope_acquisitions(root: Path) -> None:
                 captures = base/'captures';captures.mkdir(mode=0o700)
                 sources = base/'sources';sources.mkdir(mode=0o700)
                 reader = object.__new__(scope._Reader)
-                reader.owned = [];reader.inputs = [];reader.captures = captures;reader.darwin = None
+                reader.source_copies = [];reader.owned = [];reader.inputs = [];reader.captures = captures;reader.darwin = None
                 anchor = c.Anchor({}, b'', [], {}, ('', []), ('', []), None)
                 reader.anchor = anchor;reader.capture_completion_owner = None
                 paths, acquired = {}, {}
@@ -4071,6 +4071,145 @@ def raw16_sudo_companion(root: Path) -> None:
                     anchor.close();holder.close();native.close()
     finally:c._acl_state = acl
     print(json.dumps({'fixed_sudo_companion_controls': results}, sort_keys=True))
+
+def raw16_scope_P_ownership(root: Path) -> None:
+    import ast
+    import tempfile
+    loaded = {}
+    for name, path in (("scope", "scope/v1/read-shadow-evidence.py"),
+                       ("host", "sandbox/v1/host-supervisor.py"),
+                       ("enforced", "shadow/v1/enforced-reproduction.py")):
+        spec = importlib.util.spec_from_file_location("scope_P_" + name, root / path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        loaded[name] = module
+    scope, host, enforced = (loaded[name] for name in ("scope", "host", "enforced"))
+    c = scope.c
+    main = next(node for node in ast.parse((root / "scope/v1/read-shadow-evidence.py").read_text()).body
+                if isinstance(node, ast.FunctionDef) and node.name == "main")
+    cancel = next(node for node in main.body if isinstance(node, ast.FunctionDef) and node.name == "cancel")
+    namespace = {}
+    exec(compile(ast.Module(body=[cancel], type_ignores=[]), "<scope-original-handler>", "exec"), namespace)
+    handler = namespace["cancel"]
+    acl, results = c._acl_state, []
+    c._acl_state = lambda *_: ([], None) if sys.platform == "darwin" else (None, None)
+    try:
+        for case in ("release", "seal", "close", "target-drift", "parent-mode",
+                     "register-memory", "register-A-close-B", "register-memory-close-B", "registered-cancel"):
+            with tempfile.TemporaryDirectory(prefix="ystack-reader-owned-P-") as temporary:
+                base = Path(temporary).resolve();base.chmod(0o700)
+                captures = base / "captures";captures.mkdir(mode=0o700)
+                reader = object.__new__(scope._Reader)
+                reader.source_copies = [];reader.source_capture_work = [];reader.source_capture_ordinal = 0
+                reader.owned = [];reader.inputs = [];reader.captures = captures;reader.darwin = None
+                reader.store_session = None;reader.capture_completion_owner = None;reader.enforced = enforced
+                anchor = c.Anchor({}, b"", [], {}, ("", []), ("", []), None)
+                reader.anchor = anchor
+                roles = (("python", "python"), ("jq", "jq"), ("bash", "bash"), ("git", "git_binary"))
+                for role, _attribute in roles:
+                    path = base / role;path.write_bytes(b"synthetic never executed runtime " + role.encode());path.chmod(0o400)
+                for role, attribute in roles:
+                    setattr(reader, attribute, reader.hold(base / role, c.EXECUTABLE_LIMIT))
+                request = c.canonical({"kind": "coverage_source_request", "id": "source.p.fixture"})
+                acquired, cancels, closes, active_P = [], [], {}, []
+                acquire, observe, close_fd = c._HeldCaptureCopy.acquire, c._capture_observe, os.close
+                def marked():
+                    try:handler(15, None)
+                    except InterruptedError as error:cancels.append(error);raise
+                class Registration(list):
+                    def append(self, value):
+                        if case == "registered-cancel":
+                            super().append(value)
+                            marked()
+                        if case == "register-A-close-B":marked()
+                        if case.startswith("register-memory"):raise MemoryError("controlled Reader registration")
+                        super().append(value)
+                reader.source_copies = Registration()
+                def acquisition(current, *args):
+                    result = acquire(current, *args)
+                    acquired.append(result)
+                    for held in result.owned:
+                        for row in held.components:closes[row.fd] = 0
+                    actual_close = result.close
+                    def close_P():
+                        active_P.append({row.fd for held in result.owned for row in held.components})
+                        try:actual_close()
+                        finally:active_P.pop()
+                    result.close = close_P
+                    return result
+                def observation(work, kind, site, value, *args, **kwargs):
+                    result = observe(work, kind, site, value, *args, **kwargs)
+                    if case in {"register-A-close-B", "register-memory-close-B"} and site == "held-close" and acquired and work is acquired[0].leaf and len(cancels) < (2 if case == "register-A-close-B" else 1):marked()
+                    return result
+                def closing(fd):
+                    if active_P and fd in active_P[-1]:closes[fd] += 1
+                    return close_fd(fd)
+                c._HeldCaptureCopy.acquire, c._capture_observe, os.close = acquisition, observation, closing
+                caught = None
+                try:
+                    try:reader.retain_source_runtime(request)
+                    except InterruptedError as error:caught = error
+                    if case.startswith("register"):
+                        assert len(acquired) == 1 and acquired[0].closed and not reader.source_copies
+                        assert anchor.private_observations.get("unusable") is True
+                        assert closes and all(count == 1 for count in closes.values()), "registration P once close"
+                        if case == "register-memory":assert caught is None
+                        else:assert cancels and caught is cancels[0]
+                    else:
+                        assert len(reader.source_copies) == 4 and all(not item.closed for item in reader.source_copies), (case, anchor.private_observations.get("unusable"), [leaf.get("failure") for leaf in anchor.recording_work.get("local_runtime_leaves", [])], [leaf.get("metadata_failure") for leaf in anchor.recording_work.get("scope_runtime_parent_work", [])])
+                        native = c._open_held(str(base), True, lambda *_: True, "E_STORE")
+                        captured = host._capture_values("source.p.fixture", request, {"source_pages": {"coverage": []}}, True)
+                        source = object.__new__(c._HeldCoverageRead)
+                        source.anchor = anchor;source.attempt_id = "source.p.fixture";source.held = [native]
+                        source.snapshots = {"payload/request.json": request};source.observation = b"{}\n"
+                        source.capture_origin = b"{}\n";source.storage_rows = [];source.capture_work = {}
+                        source.capture = object.__new__(c._HeldCaptureRead)
+                        source.capture.snapshots = {"capture.json": captured,
+                            "complete.json": host._capture_completion_values(source.attempt_id, request, captured)}
+                        source.capture.work = {};c._capture_work_values(source.capture.work, "synthetic-source-H-input")
+                        source.capture.transferred = 0;source.capture.anchor = anchor
+                        anchor.identity_context = {}
+                        anchor.capture_completion_owner = types.SimpleNamespace(transfer=lambda *_: None)
+                        source.capture.completion_owner = anchor.capture_completion_owner
+                        try:
+                            reader.retain_source_capture(source)
+                            reader.retain_source_capture(source)
+                            assert len(reader.source_copies) == 6 and not anchor.private_observations.get("unusable")
+                            for copied in reader.source_copies:
+                                copied.recheck()
+                                assert not copied.leaf.get("metadata_failure") and not copied.closed
+                            assert set(reader.source_copies[4].members) == {"capture.json", "complete.json", "origin-observation.json", "consumer-observations.json"}
+                            if case == "target-drift":
+                                target = Path(next(iter(reader.source_copies[0].members.values())).path)
+                                target.chmod(0o600);target.write_bytes(b"drift");target.chmod(0o400)
+                            if case == "parent-mode":captures.chmod(0o750)
+                            expected = {row.fd for copied in reader.source_copies for held in copied.owned for row in held.components}
+                            os.close = closing
+                            if case == "seal":
+                                anchor.capture_completion_owner = None
+                                reader.seal_source_captures()
+                                assert anchor.private_observations.get("recording_sealed") is not True
+                            elif case == "release":reader.release_stores()
+                            elif case == "close":reader.close()
+                            else:reader._close_source_copies()
+                            assert not reader.source_copies and all(item.closed and not item.owned for item in acquired)
+                            assert all(closes.get(fd) == 1 for fd in expected), ("Reader P once close", case, [(fd, closes.get(fd)) for fd in expected if closes.get(fd) != 1])
+                            if case in {"target-drift", "parent-mode"}:assert anchor.private_observations.get("unusable") is True
+                            assert os.fstat(native.fd)
+                        finally:
+                            os.close = close_fd
+                            native.close()
+                    results.append({"case": case, "P_acquisitions": len(acquired),
+                        "all_P_closed": all(item.closed for item in acquired), "work": anchor.recording_work,
+                        "completion_transport_and_qualification": "UNKNOWN fixture H input; not native production",
+                        "all_runtime_inputs": "TMP synthetic; none executed"})
+                finally:
+                    c._HeldCaptureCopy.acquire, c._capture_observe, os.close = acquire, observe, close_fd
+                    reader.close();anchor.close()
+    finally:c._acl_state = acl
+    print(json.dumps({"scope_actual_runtime_and_source_P_ownership": results}, sort_keys=True))
+
 
 def raw16_noexport_projection_values(root: Path) -> None:
     owners = {}

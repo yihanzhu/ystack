@@ -654,6 +654,7 @@ fixture.raw16_T_enforced_chain(root)
 fixture.raw16_open_child_pending(root)
 fixture.raw16_T_transition_refusals(root)
 fixture.raw16_noexport_projection_values(root)
+fixture.raw16_scope_P_ownership(root)
 PY_HP_HANDOFF
 /usr/bin/python3 -I -S -B - "$root" <<'PY_D_SOURCE_ACQUISITION'
 import importlib.util,sys
@@ -1761,7 +1762,7 @@ if sys.platform in {'darwin','linux'}:
                                 for slot in (4095,4094):(private_sources/('gate-%04d'%slot)).mkdir(mode=0o700)
                                 reader=object.__new__(scope_capture_reader._Reader)
                                 reader.captures=private_sources.resolve();reader.source_capture_ordinal=0
-                                reader.source_capture_work=[]
+                                reader.source_capture_work=[];reader.source_copies=[]
                                 reader.inputs=[];reader.darwin=None
                                 acquisitions=[]
                                 reader.store_session=types.SimpleNamespace(acquire=lambda item:acquisitions.append(item.attempt_id))
@@ -3285,7 +3286,7 @@ for label in ('positive','io-eintr','io-error','copy-signal','copy-signal-close-
             'complete.json':host._capture_completion_values(source.attempt_id,raw,captured)},
             completion_owner=anchor.capture_completion_owner,anchor=anchor,transfer=lambda total,local:None)
         reader=object.__new__(r._Reader)
-        reader.captures=area;reader.source_capture_ordinal=0;reader.source_capture_work=[]
+        reader.captures=area;reader.source_capture_ordinal=0;reader.source_capture_work=[];reader.source_copies=[]
         reader.inputs=[];reader.darwin=None;reader.store_session=None;reader.anchor=anchor;reader.enforced=e
         owned=r._Owned(reader)
         input_path=area/'held-input';input_path.write_bytes(b'fixed input');input_path.chmod(0o400)

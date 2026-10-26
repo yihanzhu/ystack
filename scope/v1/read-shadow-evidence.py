@@ -226,6 +226,7 @@ class _Reader:
         self.capture_completion_owner = None
         self.source_capture_ordinal = 0
         self.source_capture_work = []
+        self.source_copies = []
         self.modules = None
         self.coverage_configuration = None
         self.authentication_revision = None
@@ -440,11 +441,54 @@ class _Reader:
                     raise
         return self.anchor
 
+    def _recheck_source_copies(self, parent):
+        for copied in self.source_copies:
+            if copied.recorder_parent_path == parent.path:
+                copied.recheck()
+                require(not copied.closed and not copied.leaf.get("metadata_failure")
+                        and not c._capture_work_incomplete(copied.leaf), "E_STORE")
+
+    def _own_source_copy(self, copied, parent):
+        require(isinstance(copied, c._HeldCaptureCopy) and not copied.closed, "E_STORE")
+        try:
+            require(not any(item is copied for item in self.source_copies), "E_STORE")
+            self.source_copies.append(copied)
+            for item in self.source_copies:
+                if item.recorder_parent_path == parent.path:
+                    item.refresh_recorder_parent(parent)
+        except BaseException as primary:
+            if self.source_copies and self.source_copies[-1] is copied:
+                self.source_copies.pop()
+            try:copied.close()
+            except BaseException as closing:
+                if getattr(closing, "_scope_signal_cancel", False) and not getattr(primary, "_scope_signal_cancel", False):
+                    raise
+            raise
+
+    def _close_source_copies(self, primary=None):
+        copies, self.source_copies = self.source_copies, []
+        primary = sys.exc_info()[1] if primary is None else primary
+        cancellation = None
+        for copied in reversed(copies):
+            try:
+                try:copied.recheck()
+                finally:copied.close()
+            except Exception as error:
+                try:copied._failed(error, "scope-P-final-close", primary)
+                except Exception as observed:
+                    if getattr(observed, "_scope_signal_cancel", False) and cancellation is None:
+                        cancellation = observed
+                if getattr(error, "_scope_signal_cancel", False) and cancellation is None:
+                    cancellation = error
+        if cancellation is not None and not getattr(primary, "_scope_signal_cancel", False):
+            raise cancellation
+
     def retain_source_runtime(self, request_raw, sudo=None):
         anchor, parent, cancellation = self.anchor_for(), None, None
-        work, case_work = {}, None
+        work, case_work, retention_failed = {}, None, False
         def failed(site, error):
-            nonlocal cancellation
+            nonlocal cancellation, retention_failed
+            retention_failed = True
             anchor.private_observations["unusable"] = True
             if getattr(error, "_scope_signal_cancel", False) and cancellation is None:
                 cancellation = error
@@ -468,7 +512,9 @@ class _Reader:
                 ("bash", self.bash), ("git", self.git_binary))
             for role, item in inputs:
                 require(isinstance(item, c._HeldBytes), "E_STORE")
-                anchor.retain_runtime_acquisition(parent, role, item.held, item.raw, request_raw)
+                self._recheck_source_copies(parent)
+                copied = anchor.retain_runtime_acquisition(parent, role, item.held, item.raw, request_raw)
+                self._own_source_copy(copied, parent)
         except Exception as error:
             failed("scope-runtime-retain", error)
         finally:
@@ -488,12 +534,18 @@ class _Reader:
             c._capture_accounting_receipt(anchor)
         except Exception as error:
             failed("scope-runtime-tail-receipt", error)
+        if retention_failed:
+            try:self._close_source_copies(cancellation)
+            except Exception as error:
+                if getattr(error, "_scope_signal_cancel", False) and cancellation is None:
+                    cancellation = error
         if cancellation is not None:
             raise cancellation
 
     def retain_source_capture(self, source):
         parent = None
         cancellation = None
+        retention_failed = False
         try:
             require(len(self.source_capture_work) < 4096, "E_LIMIT")
             if hasattr(source, "capture_work"):
@@ -508,8 +560,11 @@ class _Reader:
                 destination = self.captures / ("gate-%04d" % slot)
             parent = c._open_held(str(destination), True,
                 c._store_rule(os.geteuid(), os.getegid(), 0o700, True, self.darwin), "E_STORE")
-            source.copy_source_capture(parent, ordinal, source.anchor.recording_work)
+            self._recheck_source_copies(parent)
+            copied = source.copy_source_capture(parent, ordinal, source.anchor.recording_work)
+            self._own_source_copy(copied, parent)
         except Exception as error:
+            retention_failed = True
             source.anchor.private_observations["unusable"] = True
             source.anchor.private_observations["source_copy_failure"] = {
                 "category": type(error).__name__,
@@ -521,10 +576,16 @@ class _Reader:
                 try:
                     parent.close()
                 except OSError as error:
+                    retention_failed = True
                     source.anchor.private_observations["unusable"] = True
                     source.anchor.private_observations["source_copy_close_errno"] = error.errno
                     if getattr(error, "_scope_signal_cancel", False) and cancellation is None:
                         cancellation = error
+        if retention_failed:
+            try:self._close_source_copies(cancellation)
+            except Exception as error:
+                if getattr(error, "_scope_signal_cancel", False) and cancellation is None:
+                    cancellation = error
         if cancellation is not None:
             raise cancellation
 
@@ -535,6 +596,7 @@ class _Reader:
             require(self.anchor is not None, "E_STORE")
             parent = c._open_held(str(self.captures), True,
                 c._store_rule(os.geteuid(), os.getegid(), 0o700, True, self.darwin), "E_STORE")
+            self._close_source_copies()
             self.enforced._seal_capture_recording(self.anchor, parent)
         except Exception as error:
             if self.anchor is not None:
@@ -574,6 +636,7 @@ class _Reader:
             raise cancellation
 
     def release_stores(self):
+        self._close_source_copies()
         self.recheck()
         stores = [item for item in self.owned if isinstance(item, c._HeldStoreRead)]
         for item in stores:
@@ -583,8 +646,13 @@ class _Reader:
             self.owned.remove(item)
 
     def close(self):
-        owned = list(self.owned)
         first = None
+        try:self._close_source_copies()
+        except BaseException as error:first = error
+        try:owned = list(self.owned)
+        except BaseException:
+            if getattr(first, "_scope_signal_cancel", False):raise first
+            raise
         for item in reversed(owned):
             try:
                 item.close()
