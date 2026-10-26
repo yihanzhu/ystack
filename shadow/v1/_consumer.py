@@ -342,6 +342,8 @@ def _copy_runtime_file(directory, name, snapshot, work, resolver):
                         failure = error
         if failure is not None:
             raise failure
+    return before, right_hash.hexdigest()
+
 
 
 def _runtime_source_check(item, work, resolver):
@@ -2731,6 +2733,95 @@ class _HeldCaptureRead:
                     raise cancellation
 
 
+class _HeldCaptureCopy:
+    def __init__(self, anchor, work, case_work):
+        self.anchor, self.work, self.case_work = anchor, work, case_work
+        self.leaf, self.members, self.runtime_sha256 = {}, {}, {}
+        self.directory, self.closed, self.owned = None, False, []
+        _capture_work_values(self.leaf, "P-capture-holds")
+        work.setdefault("P_hold_leaves", []).append(self.leaf)
+
+    def _failed(self, error, site):
+        self.anchor.private_observations["unusable"] = True
+        try:_capture_observation_error(self.leaf, "M", site, error)
+        except Exception as observed:
+            self.leaf["accounting_incomplete"] = True
+            if getattr(observed, "_scope_signal_cancel", False) and not getattr(error, "_scope_signal_cancel", False):
+                raise
+
+    def _transfer(self):
+        try:
+            if _capture_work_incomplete(self.leaf):
+                self.anchor.private_observations["unusable"] = True
+            _capture_transfer_work(self.leaf, self.work, self.case_work)
+            _capture_accounting_receipt(self.anchor)
+        except Exception as error:
+            self.leaf["transfer_incomplete"] = True
+            self._failed(error, "P-hold-transfer")
+            if getattr(error, "_scope_signal_cancel", False):raise
+
+    def _adopt(self, held):
+        try:self.owned.append(held)
+        except BaseException as error:
+            try:held.close()
+            except Exception as closing:
+                self._failed(closing, "P-hold-registration-close")
+                if getattr(closing, "_scope_signal_cancel", False) and not getattr(error, "_scope_signal_cancel", False):raise
+            raise
+
+    def acquire(self, parent, launch, file_states, runtime_hashes):
+        try:
+            self.directory = _open_child(parent, launch, True,
+                _store_rule(os.geteuid(), os.getegid(), 0o700, True, self.anchor.resolver), "E_STORE",
+                recording_work=self.leaf, accounting_kind="M")
+            self._adopt(self.directory)
+            for name, expected in file_states.items():
+                held = _open_child(self.directory, name, False,
+                    _store_rule(os.geteuid(), os.getegid(), 0o400, False, self.anchor.resolver), "E_STORE",
+                    recording_work=self.leaf, accounting_kind="M")
+                self._adopt(held)
+                self.members[name] = held
+                _require(_identity(held.before) == _identity(expected), "E_STORE")
+            self.runtime_sha256 = runtime_hashes
+            self._transfer()
+            return self
+        except BaseException:
+            self.close()
+            raise
+
+    def recheck(self):
+        if self.closed:return
+        try:
+            self.directory.recheck("E_STORE")
+            for held in self.members.values():held.recheck("E_STORE")
+        except Exception as error:
+            self._failed(error, "P-held-recheck")
+            if getattr(error, "_scope_signal_cancel", False):raise
+        finally:
+            active = sys.exc_info()[1]
+            try:self._transfer()
+            except Exception as error:
+                if getattr(error, "_scope_signal_cancel", False) and not getattr(active, "_scope_signal_cancel", False):raise
+
+    def close(self):
+        if self.closed:return
+        primary, cancellation = sys.exc_info()[1], None
+        held, self.owned = self.owned, []
+        self.closed = True
+        self.directory = None
+        for item in reversed(held):
+            try:item.close()
+            except Exception as error:
+                if getattr(error, "_scope_signal_cancel", False) and cancellation is None:cancellation = error
+                try:self._failed(error, "P-held-close")
+                except Exception as observed:
+                    if getattr(observed, "_scope_signal_cancel", False) and cancellation is None:cancellation = observed
+        try:self._transfer()
+        except Exception as error:
+            if getattr(error, "_scope_signal_cancel", False) and cancellation is None:cancellation = error
+        if cancellation is not None and not getattr(primary, "_scope_signal_cancel", False):raise cancellation
+
+
 class _HeldStoreRead:
     def __init__(self, anchor: Anchor, attempt_id: str) -> None:
         self.anchor, self.attempt_id = anchor, attempt_id
@@ -2904,7 +2995,8 @@ class _HeldStoreRead:
                      parent.components[-1].name, parent.components[-2].fd)), "E_STORE")
         parent.components[-1].before = after_parent
         directory = os.open(launch, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent.fd)
-        directory_failure = None
+        directory_failure, copied = None, None
+        file_states, runtime_hashes = {}, {}
         try:
             directory_state = _metadata(directory)
             _require(stat.S_ISDIR(directory_state.st_mode) and directory_state.st_uid == os.geteuid()
@@ -2955,6 +3047,7 @@ class _HeldStoreRead:
                              and final.st_nlink == 1 and final.st_size == size
                              and stat.S_IMODE(final.st_mode) == 0o400
                              and _identity(final) == _identity(named), "E_STORE")
+                    file_states[name] = final
                 except BaseException as error:
                     file_failure = error
                     try:
@@ -2971,8 +3064,10 @@ class _HeldStoreRead:
             write("complete.json", (capture_snapshots["complete.json"],))
             for runtime_name in sorted(_capture_runtime_files(_capture_for_replay(
                     capture_snapshots, self.attempt_id, request_raw))):
-                _copy_runtime_file(directory, runtime_name, capture_snapshots[runtime_name],
-                                   self.capture.work, self.anchor.resolver)
+                runtime_state, runtime_sha = _copy_runtime_file(directory, runtime_name,
+                    capture_snapshots[runtime_name], self.capture.work, self.anchor.resolver)
+                file_states[runtime_name] = runtime_state
+                runtime_hashes[runtime_name] = runtime_sha
             self.capture.transfer(work, case_work)
             if "sandbox-export.bin" in capture_snapshots:
                 write("sandbox-export.bin", capture_snapshots["sandbox-export.bin"].chunks, True)
@@ -2989,6 +3084,8 @@ class _HeldStoreRead:
                                                    directory_state.st_uid, directory_state.st_mode)
                      and _identity(final_directory) == _identity(named_directory), "E_STORE")
             parent.recheck("E_STORE")
+            copied = _HeldCaptureCopy(self.anchor, work, case_work)
+            copied.acquire(parent, launch, file_states, runtime_hashes)
         except BaseException as error:
             directory_failure = error
             try:
@@ -3000,7 +3097,12 @@ class _HeldStoreRead:
                 raise error
             raise
         finally:
-            _close_capture_copy(directory, work, case_work, launch, directory_failure)
+            try:_close_capture_copy(directory, work, case_work, launch, directory_failure)
+            except BaseException:
+                if copied is not None:copied.close()
+                raise
+            if directory_failure is not None and copied is not None:copied.close()
+        return copied
 
 
 def read_store_attempt(anchor: Anchor, attempt_id: str, *,

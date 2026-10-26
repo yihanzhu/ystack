@@ -2071,6 +2071,85 @@ def raw16_t_lifecycle(root: Path) -> None:
     print(json.dumps({'raw16_T_controls': completed, 'ordinary_synthetic_runtime_only': True,
         'actual_source_segments_not_full_native_route': True, 'receipts': receipts}, sort_keys=True))
 
+def raw16_hp_handoff(root: Path) -> None:
+    import ast
+    text = (root/'scripts/test/evals-malicious.test.sh').read_text()
+    body = text.split("<<'PY_RUNTIME_CONSUMER'\n",1)[1].split('\nPY_RUNTIME_CONSUMER',1)[0]
+    prefix = body.split('        copied_inventory.close();copied_inventory.close()\n',1)[0]
+    footer = body[body.rfind('finally:\n    if copied_inventory'):]
+    scope = ast.parse((root/'scope/v1/read-shadow-evidence.py').read_text())
+    main = next(node for node in scope.body if isinstance(node,ast.FunctionDef) and node.name=='main')
+    handler = next(node for node in main.body if isinstance(node,ast.FunctionDef) and node.name=='cancel')
+    callbacks = {};exec(compile(ast.Module(body=[handler],type_ignores=[]),'<actual-scope-cancel>','exec'),callbacks)
+    for case in ('stable','P-drift','close-observer-memory','transfer-memory','cancel-close-A-transfer-B','registration-memory'):
+        setup = "        hp_case="+repr(case)+"\n"
+        checks = """        import errno,signal
+        source_states={name:item.before for name,item in copied_inventory.members.items()}
+        original_observe=c._capture_observe;original_transfer=c._capture_transfer_work;original_close=os.close
+        events=[];fired=[]
+        def actual_cancel():
+            try:hp_handler(signal.SIGTERM,None)
+            except InterruptedError as error:
+                events.append(error)
+                return error
+        def observe(work,kind,site,value,*args,**kwargs):
+            if hp_case=='close-observer-memory' and work is copied_inventory.leaf and site=='held-close' and not fired:
+                fired.append(site);raise MemoryError('controlled actual P close observer')
+            return original_observe(work,kind,site,value,*args,**kwargs)
+        def transfer(source,work,case):
+            if source is copied_inventory.leaf and not fired and hp_case=='transfer-memory':
+                fired.append('transfer');raise MemoryError('controlled P tail transfer')
+            if source is copied_inventory.leaf and events and len(events)==1 and hp_case=='cancel-close-A-transfer-B':
+                raise actual_cancel()
+            return original_transfer(source,work,case)
+        watched={component.fd for item in copied_inventory.owned for component in item.components}
+        closed=[]
+        def close(fd):
+            original_close(fd)
+            if fd in watched:
+                closed.append(fd)
+                if hp_case=='cancel-close-A-transfer-B' and not events:raise actual_cancel()
+        caught=None
+        try:
+            c._capture_observe=observe;c._capture_transfer_work=transfer;os.close=close
+            if hp_case=='P-drift':
+                copied.chmod(0o600);copied.write_bytes(b'changed private bytes');copied.chmod(0o400)
+                copied_inventory.recheck()
+                assert anchor.private_observations.get('unusable') is True
+            if hp_case=='registration-memory':
+                class Reject(dict):
+                    def __setitem__(self,*args):raise MemoryError('controlled P member registration')
+                additional=c._HeldCaptureCopy(anchor,anchor.recording_work,c._capture_work_values(anchor.recording_work,'test-P'))
+                additional.members=Reject()
+                try:additional.acquire(parent,'reproduction',source_states,copied_inventory.runtime_sha256)
+                except MemoryError:pass
+                else:raise AssertionError('missing P registration refusal')
+                assert additional.closed and not additional.owned
+            try:copied_inventory.close()
+            except BaseException as error:caught=error
+            before_close=anchor.recording_work.get('held_close_calls',0)
+            copied_inventory.close()
+            assert anchor.recording_work.get('held_close_calls',0)==before_close
+            assert copied_inventory.closed and not copied_inventory.owned
+            assert set(closed)==watched and len(closed)==len(watched)
+            if hp_case=='cancel-close-A-transfer-B':
+                assert len(events)==2 and events[0] is not events[1] and caught is events[0]
+            else:assert caught is None
+            if hp_case in ('close-observer-memory','transfer-memory'):
+                assert fired and anchor.private_observations.get('unusable') is True
+                assert c._capture_work_incomplete(copied_inventory.leaf)
+            print(json.dumps({'HP_case':hp_case,'P_members':sorted(source_states),'P_runtime_SHA':copied_inventory.runtime_sha256,
+                'all_P_fd_closed_once':True,'same_first_cancel':caught is events[0] if events else None,
+                'actual_work':anchor.recording_work,'runtime_readback_old_counts_unchanged':True,
+                'extra_fixture_P_read':len(source_raw),'system_runtime_collection':False,'qualification':False},sort_keys=True))
+        finally:
+            c._capture_observe=original_observe;c._capture_transfer_work=original_transfer;os.close=original_close
+"""
+        namespace={'__name__':'hp_private_fixture','__file__':str(root/'scripts/test/evals-malicious.test.sh'),
+                   'hp_handler':callbacks['cancel']}
+        exec(compile(prefix+setup+checks+footer,'<existing-H-constructor-to-P-handoff>','exec'),namespace)
+
+
 def raw16_D_sources(root: Path, *, selected=None, evidence_directory=None) -> None:
     import tempfile
     import shutil

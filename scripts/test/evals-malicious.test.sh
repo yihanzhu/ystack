@@ -391,7 +391,7 @@ def load(name,path):
 h=load('runtime_copy_host',root/'sandbox/v1/host-supervisor.py')
 e=load('runtime_copy_enforced',root/'shadow/v1/enforced-reproduction.py');c=e.c
 previous=os.environ.get('YSTACK_SANDBOX_TRUST_ROOT');original_acl=c._acl_state;original_anchor=c.ANCHOR
-owner=installed_hold=native=parent=None
+owner=installed_hold=native=parent=copied_inventory=None
 try:
     with tempfile.TemporaryDirectory(prefix='ystack-runtime-consumer-') as temporary:
         base=Path(temporary).resolve();base.chmod(0o700);os.environ['YSTACK_SANDBOX_TRUST_ROOT']=str(base)
@@ -445,7 +445,7 @@ try:
             {'attempt_id':attempt,'platform':sys.platform},{'host-config.json':config_raw},
             capture_files=native.capture.snapshots,capture_storage_rows=native.capture.storage_rows)
         parent=c._open_held(str(private),True,c._store_rule(uid,gid,0o700,True),'E_STORE')
-        native.copy_capture(parent,request,'reproduction',anchor.recording_work)
+        copied_inventory=native.copy_capture(parent,request,'reproduction',anchor.recording_work)
         copied=private/'reproduction'/name
         assert copied.read_bytes()==source_raw and copied.stat().st_mode&0o777==0o400
         before_final=dict(native.capture.work['runtime'])
@@ -454,6 +454,15 @@ try:
         assert before_final['write_bytes']==before_final['copy_bytes']==len(source_raw)
         assert before_final['physical_bytes']==2*len(source_raw) and before_final['physical_files']==2
         native.recheck();native.close();native=None
+        assert isinstance(copied_inventory,c._HeldCaptureCopy)
+        assert name in copied_inventory.members and copied_inventory.members[name].path==str(copied)
+        assert copied_inventory.runtime_sha256[name]==c.digest(source_raw)
+        assert copied_inventory.members[name].before.st_mode&0o777==0o400
+        copied_inventory.recheck()
+        assert os.pread(copied_inventory.members[name].fd,len(source_raw),0)==source_raw
+        copied_inventory.close();copied_inventory.close()
+        assert copied_inventory.closed
+
         assert anchor.recording_work['runtime']['read_bytes']==6*len(source_raw)
         assert anchor.recording_work['runtime']['sha_bytes']==6*len(source_raw)
         case_work=next(value for key,value in anchor.recording_work['cases'].items() if value.get('runtime'))
@@ -523,6 +532,7 @@ try:
             'negative_cases':negative_results,'additional_fixture_template_reads':sum(map(len,template.values())),
             'full_M_Q_host_cost':'UNKNOWN; not a whole recording ledger'},sort_keys=True))
 finally:
+    if copied_inventory is not None:copied_inventory.close()
     if native is not None:native.close()
     if parent is not None:parent.close()
     if owner is not None:
@@ -621,6 +631,14 @@ spec=importlib.util.spec_from_file_location('raw16_parent_carrier_fixture',root/
 fixture=importlib.util.module_from_spec(spec);sys.modules[spec.name]=fixture;spec.loader.exec_module(fixture)
 fixture.raw16_parent_carrier(root)
 PY_PARENT_P_CARRIER
+/usr/bin/python3 -I -S -B - "$root" <<'PY_HP_HANDOFF'
+import importlib.util,sys
+from pathlib import Path
+root=Path(sys.argv[1])
+spec=importlib.util.spec_from_file_location('HP_fixture',root/'scripts/test/candidate-content-preparation-fixtures.py')
+fixture=importlib.util.module_from_spec(spec);sys.modules[spec.name]=fixture;spec.loader.exec_module(fixture)
+fixture.raw16_hp_handoff(root)
+PY_HP_HANDOFF
 /usr/bin/python3 -I -S -B - "$root" <<'PY_D_SOURCE_ACQUISITION'
 import importlib.util,sys
 from pathlib import Path

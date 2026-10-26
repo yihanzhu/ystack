@@ -49,6 +49,7 @@ class _Workspace:
         self.record_form = record_form
         self.owned = []
         self.launch_holds = []
+        self.copied_capture = None
         self.inputs = []
         self.components = {}
         self.commands = []
@@ -250,7 +251,9 @@ class _Workspace:
         owned = self.owned + self.launch_holds
         self.owned = []
         self.launch_holds = []
-        e.close_all(reversed(owned))
+        try:e.close_all(reversed(owned))
+        finally:
+            if self.copied_capture is not None:self.copied_capture.close()
 
 
 def _inventory(ws):
@@ -652,9 +655,10 @@ def _verify_write(ws, incident, input_raw, record_raw, manifest_raw, evaluation_
     require(check["body"]["check_verdict"] == "valid" and check["body"]["enforcement_verdict"] == "satisfied", "E_RELATION")
     if held_store.record_write(ws.request.raw, launch_raw, expectation_raw) is not None:
         try:
-            held_store.copy_capture(ws.work_hold._recording_parent(), launch_raw, "write", ws.anchor.recording_work)
-        except (e.Refusal,c.Refusal, OSError, MemoryError):
+            ws.copied_capture = held_store.copy_capture(ws.work_hold._recording_parent(), launch_raw, "write", ws.anchor.recording_work)
+        except (e.Refusal,c.Refusal, OSError, MemoryError) as error:
             ws.anchor.private_observations["unusable"] = True
+            if getattr(error, "_scope_signal_cancel", False):raise
     result_raw, _result = e.payload_result(snapshots, parse(snapshots["payload/evidence-manifest.json"]),
         instruction, manifest, parse(snapshots["receipt.json"]))
     files = {"sandbox-request.json": launch_raw, "sandbox-expectation.json": expectation_raw,
@@ -946,7 +950,7 @@ def write(request_path: Path, bundle: Path, work: Path, output: Path, parent: di
         require(set(os.listdir(directory)) == set(files), "E_RELATION")
         os.fsync(directory)
         ws.recheck(sealed=True)
-        e._seal_capture_recording(ws.anchor, ws.work_hold.held, ws.launch_holds[-1])
+        e._seal_capture_recording(ws.anchor, ws.work_hold.held, ws.launch_holds[-1], ws.copied_capture)
         require(e.CancellationSignals.retain_completion(directory) is True, "E_RUNTIME")
         e.CancellationSignals.prepare_completion(marker)
         return marker

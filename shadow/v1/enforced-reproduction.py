@@ -614,10 +614,13 @@ def _close_capture_completion_owner(owner):
                 raise
 
 
-def _seal_capture_recording(anchor, parent, held_store=None):
+def _seal_capture_recording(anchor, parent, held_store=None, copied_capture=None):
     owner = getattr(anchor, "capture_completion_owner", _CAPTURE_OWNER)
     cancellation = None
     try:
+        if copied_capture is not None:
+            copied_capture.recheck()
+            copied_capture.close()
         anchor.seal_local_runtime(parent)
         require(owner is not None and not getattr(owner, "source_closed", False), "E_STORE")
         owner.source.recheck("E_STORE")
@@ -1957,7 +1960,7 @@ def seal(output: Path, held_output: StableDirectory, files: dict[str, bytes],
 def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None = None) -> bytes:
     started = c._clock_value('shadow/v1/enforced-reproduction.py:1617:0',time.monotonic(),'monotonic'); deadline = started + OVERALL_SECONDS
     context = c.capture_parent_context() if parent is None else parent
-    work_hold = output_hold = held_store = None
+    work_hold = output_hold = held_store = copied_capture = None
     helper = jq = anchor = bash = python_file = sudo_file = None
     inputs: list[InputSnapshot] = []
     sources: list[StableFile] = []
@@ -2202,9 +2205,10 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
                 "E_RELATION")
         if held_store.record_reproduction(request_raw, launch_raw, expectation_raw) is not None:
             try:
-                held_store.copy_capture(work_hold._recording_parent(), launch_raw, "reproduction", anchor.recording_work)
-            except (Refusal,c.Refusal, OSError, MemoryError):
+                copied_capture = held_store.copy_capture(work_hold._recording_parent(), launch_raw, "reproduction", anchor.recording_work)
+            except (Refusal,c.Refusal, OSError, MemoryError) as error:
                 anchor.private_observations["unusable"] = True
+                if getattr(error, "_scope_signal_cancel", False):raise
         evidence_manifest_raw = snapshots["payload/evidence-manifest.json"]
         evidence_manifest = parse(evidence_manifest_raw)
         result_raw, result = payload_result(snapshots, evidence_manifest, instruction, manifest,
@@ -2312,10 +2316,13 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
         for item in inputs: item.recheck()
         held_store.recheck()
         return seal(output, output_hold, files, incident, "enforced-reproduction.v1",
-                    _capture=(anchor, work_hold.held, held_store))
+                    _capture=(anchor, work_hold.held, held_store, copied_capture))
     finally:
-        close_all([*reversed(inputs), *reversed(sources), python_file, sudo_file, bash,
-                   held_store, anchor, jq, helper, work_hold, output_hold])
+        try:
+            close_all([*reversed(inputs), *reversed(sources), python_file, sudo_file, bash,
+                       held_store, anchor, jq, helper, work_hold, output_hold])
+        finally:
+            if copied_capture is not None:copied_capture.close()
 
 
 def main(argv: list[str], admission: _StartupAdmission | None = None) -> int:
