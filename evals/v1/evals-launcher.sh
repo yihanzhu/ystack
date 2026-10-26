@@ -145,7 +145,7 @@ shadow_source_rows() {
     'scope/v1/workflow-scope.jq 2d1df5f99b7019c4c41aece4f9fb89b00785ca47f9f8a713b2f43b212481366a 9728 100644' \
     'scripts/core-contract.sh b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 9176 100755' \
     'shadow/v1/_cancel_release.c 00ef369edbed569d50471b97f64aef57591b7afb8d9f25c286bffa5725faf015 55056 100644' \
-    'shadow/v1/_consumer.py 6c0420b582d8df541a3a0019c67ed8bbb970c7584821f45ba74ea3ee512d63f1 240089 100644' \
+    'shadow/v1/_consumer.py 4ac62b943fcc126676993a6cc0cea04fd6dd3bb67495704e38dad4b9e8cba94e 240162 100644' \
     'shadow/v1/build-cancel-release.sh be1ad0afd99f72ea73fe52cca63c03381793710c587a82b57b9a38ed87c896d4 6169 100755' \
     'shadow/v1/enforced-reproduction.py e6ae3737054236d3609392474c74fbb0367279230d44a47e255327c1e0aae95c 121120 100755' \
     'shadow/v1/incident-record.jq 9ea6e1ec6556f54887ea6937533157856271aab68c74bda6d18dae1354d2687c 3695 100644' \

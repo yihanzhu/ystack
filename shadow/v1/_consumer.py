@@ -2848,6 +2848,7 @@ class _HeldCaptureCopy:
                 _require(_identity(held.before) == _identity(expected), "E_STORE")
             self.runtime_sha256 = runtime_hashes
             self._transfer()
+            _require(not _capture_work_incomplete(self.leaf), "E_STORE")
             return self
         except BaseException:
             self.close()

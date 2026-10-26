@@ -3153,6 +3153,90 @@ def _synthetic_parent_P_context(c, path):
         'parent-frame.bin':frame,'helper-build-record.json':helper,'native-dependency-record.json':dependency}
 
 
+def raw16_P_handoff_accounting(root: Path) -> None:
+    import ast
+    import tempfile
+    spec=importlib.util.spec_from_file_location('P_handoff_accounting',root/'shadow/v1/enforced-reproduction.py')
+    e=importlib.util.module_from_spec(spec);sys.modules[spec.name]=e;spec.loader.exec_module(e);c=e.c
+    acl=c._acl_state;c._acl_state=lambda *_:([],None) if sys.platform=='darwin' else (None,None)
+    syntax=ast.parse((root/'scope/v1/read-shadow-evidence.py').read_text())
+    main=next(node for node in syntax.body if isinstance(node,ast.FunctionDef) and node.name=='main')
+    handler=next(node for node in main.body if isinstance(node,ast.FunctionDef) and node.name=='cancel')
+    callbacks={};exec(compile(ast.Module(body=[handler],type_ignores=[]),'<actual-cancel>','exec'),callbacks)
+    output=[]
+    try:
+        for case in ('stable','P-transfer-error','P-transfer-cancel','P-receipt-error','P-receipt-cancel','nested-stable'):
+            with tempfile.TemporaryDirectory(prefix='ystack-P-handoff-accounting-') as temporary:
+                base=Path(temporary).resolve();base.chmod(0o700);work=base/'work';work.mkdir(mode=0o700)
+                context,values=_synthetic_parent_P_context(c,base/'synthetic-frame')
+                holder=e.stable_directory(work);anchor=c.Anchor({},b'',[],{},('',[]),('',[]),None)
+                request=c.canonical({'kind':'shadow_write_request','id':'p.accounting.fixture'})
+                transfer,receipt,adopt,closing=c._capture_transfer_work,c._capture_accounting_receipt,c._HeldCaptureCopy._adopt,os.close
+                owners,fired,cancellations,closed=[],[],[],[];watched=set();caught=None
+                def fault():
+                    fired.append(case)
+                    if case.endswith('cancel'):
+                        try:callbacks['cancel'](15,None)
+                        except InterruptedError as error:cancellations.append(error);raise
+                    raise MemoryError('controlled actual P_hold '+case)
+                def adopting(self,item):
+                    if self not in owners:owners.append(self)
+                    watched.update(component.fd for component in item.components)
+                    return adopt(self,item)
+                def transferring(leaf,*args,**kwargs):
+                    if case.startswith('P-transfer-') and owners and leaf is owners[0].leaf and not fired:fault()
+                    return transfer(leaf,*args,**kwargs)
+                def receipting(target):
+                    if case.startswith('P-receipt-') and owners and target is anchor and not fired:fault()
+                    return receipt(target)
+                def close(fd):
+                    result=closing(fd)
+                    if fd in watched:closed.append(fd)
+                    return result
+                try:
+                    c._capture_transfer_work,c._capture_accounting_receipt,c._HeldCaptureCopy._adopt,os.close=transferring,receipting,adopting,close
+                    if case=='nested-stable':
+                        c._capture_work_values(anchor.recording_work,'nested')
+                        os.mkdir('fixed-copy',0o700,dir_fd=holder.held.fd)
+                        c._refresh_recording_directory(holder.held,holder.held.before,anchor.recording_work)
+                        destination=c._open_child(holder.held,'fixed-copy',True,c._store_rule(os.geteuid(),os.getegid(),0o700,True),'E_STORE')
+                        try:
+                            state=c._copy_preparation_document(destination.fd,b'synthetic document\n',anchor.recording_work,None)
+                            c._refresh_recording_directory(destination,destination.before,anchor.recording_work)
+                        finally:destination.close()
+                        copied=c._HeldCaptureCopy(anchor,anchor.recording_work,c._capture_work_values(anchor.recording_work,'nested'))
+                        copied.acquire(holder.held,'fixed-copy',{'capture.json':state},{})
+                        holder._own_runtime(anchor,copied)
+                    else:
+                        try:copied=holder._retain_parent_inputs(anchor,context,request)
+                        except InterruptedError as error:copied=None;caught=error
+                    assert len(owners)==1
+                    owner=owners[0]
+                    if case.startswith('P-'):
+                        assert fired==[case] and copied is None and owner.closed and not owner.owned and not holder.runtime_copies, 'P-hold incomplete cannot return a live owner'
+                        assert owner.leaf.get('transfer_incomplete') is True
+                        assert anchor.private_observations.get('unusable') is True
+                        if case.endswith('cancel'):assert len(cancellations)==1 and caught is cancellations[0]
+                        else:assert caught is None
+                    else:
+                        assert copied is owner and not owner.closed and not c._capture_work_incomplete(owner.leaf)
+                        holder.close_runtime_copies()
+                    owner.close();owner.close()
+                    assert watched and len(closed)==len(watched) and set(closed)==watched
+                    for fd in watched:
+                        try:os.fstat(fd)
+                        except OSError as error:assert error.errno==errno.EBADF
+                        else:raise AssertionError('P accounting handoff leaked an FD')
+                    output.append({'case':case,'all_new_P_FDs_closed_once':len(closed),'P_leaf':owner.leaf,
+                        'P_work':anchor.recording_work,'native_frame_unchanged':dict(context)==dict(c._parent_context_values(context.context_raw,context.frame_raw,context.runtime_records)),
+                        'parent_semantics_and_full_qualification':'UNKNOWN / NOT_ACCEPTED'})
+                finally:
+                    c._capture_transfer_work,c._capture_accounting_receipt,c._HeldCaptureCopy._adopt,os.close=transfer,receipt,adopt,closing
+                    holder.close();anchor.close()
+    finally:c._acl_state=acl
+    print(json.dumps({'actual_P_hold_accounting_handoff':output},sort_keys=True))
+
+
 def raw16_parent_P_handoff(root: Path) -> None:
     import ast
     import tempfile
