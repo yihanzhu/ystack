@@ -2071,6 +2071,228 @@ def raw16_t_lifecycle(root: Path) -> None:
     print(json.dumps({'raw16_T_controls': completed, 'ordinary_synthetic_runtime_only': True,
         'actual_source_segments_not_full_native_route': True, 'receipts': receipts}, sort_keys=True))
 
+def raw16_D_sources(root: Path, *, selected=None, evidence_directory=None) -> None:
+    import tempfile
+    import shutil
+    import datetime
+    environment = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"}
+    if evidence_directory is not None:
+        evidence_directory.mkdir(mode=0o700, exist_ok=False)
+    launcher = (root/'evals/v1/evals-launcher.sh').read_text()
+    prefix = launcher.split('# run SEED-SET.json OBSERVED_AT', 1)[0]
+    engine = prefix.split("<<'PY_SHADOW_SOURCE'\n", 1)[1].split('\nPY_SHADOW_SOURCE', 1)[0]
+    generation = json.loads((root/'core/v2/generation-registry.json').read_bytes())[1]['generation_id']
+    table_script = prefix + "\ngeneration=$1\nrecord_generation=$1\nshadow_source_rows\n"
+    cases = ('actual-84', 'reuse-84', 'wrong-reused-bytes', 'same-changed-source-target',
+        'missing-file', 'extra-control', 'duplicate-table', 'missing-table', 'extra-table',
+        'source-parent-mode-drift', 'target-name-drift', 'short-write', 'write-error', 'fsync-error',
+        'close-error', 'registration-memory', 'linux-acl-present', 'linux-acl-unknown',
+        'darwin-acl-present', 'darwin-acl-free-error', 'cancel-A-close-B',
+        'ordinary-A-close-cancel-B', 'wrong-generation', 'registry-extra-key',
+        'per-file-at', 'per-file-over', 'total-at', 'total-over', 'core-record-shadow-overlap',
+        'source-fifo', 'target-fifo', 'wrong-reused-size')
+    if selected is not None:
+        assert set(selected) <= set(cases)
+        cases = selected
+    for case in cases:
+        with tempfile.TemporaryDirectory(prefix='ystack-D84-matrix-') as temporary:
+            base = Path(temporary).resolve();base.chmod(0o700)
+            table_run = subprocess.run(['/bin/bash', '-c', table_script, 'D-table', generation],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment)
+            assert table_run.returncode == 0, table_run.stderr
+            rows = table_run.stdout.decode().splitlines()
+            assert len(rows) == 84
+            entries = [row.split(' ') for row in rows]
+            source, target = base/'source', base/'target'
+            source.mkdir(mode=0o700);target.mkdir(mode=0o700)
+            source_copied = 0
+            for name, _digest, size, _mode in entries:
+                path = source/name;path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(root/name, path);source_copied += int(size)
+            first = entries[0][0]
+            if case in ('reuse-84', 'wrong-reused-bytes', 'same-changed-source-target', 'wrong-reused-size'):
+                for name, _digest, _size, _mode in entries:
+                    path = target/name;path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(source/name, path);path.chmod(0o400)
+                for path in target.rglob('*'):
+                    if path.is_dir():path.chmod(0o700)
+                if case not in ('reuse-84', 'wrong-reused-size'):
+                    path = target/first;raw = path.read_bytes()
+                    wrong = bytes([raw[0]^1])+raw[1:]
+                    path.chmod(0o600);path.write_bytes(wrong);path.chmod(0o400)
+                    if case == 'same-changed-source-target':
+                        path = source/first;mode = path.stat().st_mode&0o777
+                        path.write_bytes(wrong);path.chmod(mode)
+            if case == 'wrong-reused-size':
+                path=target/first;path.chmod(0o600);path.write_bytes(b'partial');path.chmod(0o400)
+            if case == 'source-fifo':
+                (source/first).unlink();os.mkfifo(source/first,0o600)
+            if case == 'target-fifo':
+                (target/first).parent.mkdir(parents=True,exist_ok=True)
+                for path in target.rglob('*'):
+                    if path.is_dir():path.chmod(0o700)
+                os.mkfifo(target/first,0o600)
+            overlap_before = None
+            if case == 'core-record-shadow-overlap':
+                import re
+                schema = next(row for row in entries if row[0].endswith('/modules/schema.jq'))
+                core_sha = re.search(r"'schema[.]jq ([0-9a-f]{64})'",launcher).group(1)
+                record_sha = re.search(r'record_files="\$record_schema ([0-9a-f]{64})',launcher).group(1)
+                assert core_sha == record_sha == schema[1]
+                parent=(target/schema[0]).parent;parent.mkdir(parents=True,exist_ok=True)
+                for path in target.rglob('*'):
+                    if path.is_dir():path.chmod(0o700)
+                common = prefix + '\nrepo=$1\nruntime=$2\nschema=$3\ncore_sha=$4\nrecord_sha=$5\n'
+                core_command=['/bin/bash','-c',common+'snapshot_expected "$core_sha" "$repo/$schema" "$runtime/$schema" 0400\n',
+                    'D-core-cache',str(source),str(target),schema[0],core_sha,record_sha]
+                core_result=subprocess.run(core_command,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=environment)
+                assert core_result.returncode==0,core_result.stderr
+                before=(target/schema[0]).stat()
+                cache_command=['/bin/bash','-c',common+'stage_expected "$record_sha" "$repo/$schema" "$runtime/$schema" 0400 E_STALE\n',
+                    'D-record-cache',str(source),str(target),schema[0],core_sha,record_sha]
+                cache_result=subprocess.run(cache_command,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=environment)
+                assert cache_result.returncode==0,cache_result.stderr
+                value=(target/schema[0]).stat()
+                fields=lambda row:(row.st_dev,row.st_ino,row.st_mode,row.st_uid,row.st_gid,row.st_nlink,
+                    row.st_size,row.st_mtime_ns,row.st_ctime_ns)
+                assert fields(before)==fields(value)
+                overlap_before={'path':schema[0],'dev':value.st_dev,'ino':value.st_ino,'size':value.st_size,
+                    'after_core_identity':fields(before),'after_record_identity':fields(value),
+                    'core_and_record_declared_sha':core_sha,'core_cache_argv':core_command,'cache_argv':cache_command,
+                    'core_cache_stdout':core_result.stdout.decode(),'core_cache_stderr':core_result.stderr.decode(),
+                    'cache_stdout':cache_result.stdout.decode(),'cache_stderr':cache_result.stderr.decode()}
+            if case == 'missing-file':(source/first).unlink()
+            if case == 'extra-control':(source/'control/v1/unexpected.py').write_bytes(b'not accepted source')
+            if case == 'duplicate-table':rows[-1] = rows[0]
+            if case == 'missing-table':rows.pop()
+            if case == 'extra-table':rows.append(rows[0])
+            if case in ('wrong-generation', 'registry-extra-key'):
+                path = source/'core/v2/generation-registry.json'
+                value = json.loads(path.read_bytes())
+                if case == 'wrong-generation':value[1]['generation_id'] = 'g-'+'f'*64
+                else:value[1]['unaccepted'] = True
+                raw = canonical_json(value);path.write_bytes(raw)
+                rows = [name+' '+hashlib.sha256(raw).hexdigest()+' '+str(len(raw))+' '+mode
+                    if name == 'core/v2/generation-registry.json' else ' '.join((name,digest,size,mode))
+                    for name,digest,size,mode in entries]
+            source_fill_bytes = 0
+            if case in ('per-file-at', 'total-at'):
+                sizes = [16*1024*1024]
+                if case == 'total-at':
+                    sizes.append(32*1024*1024-sum(int(row[2]) for row in entries[2:])-sizes[0])
+                for index, size in enumerate(sizes):
+                    path = source/entries[index][0]
+                    measured = hashlib.sha256()
+                    with path.open('wb') as output:
+                        remaining = size
+                        while remaining:
+                            chunk = b'S'*min(65536,remaining)
+                            assert output.write(chunk)==len(chunk)
+                            source_fill_bytes += len(chunk)
+                            measured.update(chunk);remaining -= len(chunk)
+                    entries[index][1:3] = [measured.hexdigest(),str(size)]
+                rows = [' '.join(row) for row in entries]
+            if case in ('per-file-over', 'total-over'):
+                entries[0][2] = str(16*1024*1024+(1 if case == 'per-file-over' else 0))
+                if case == 'total-over':entries[1][2]=str(16*1024*1024)
+                rows = [' '.join(row) for row in entries]
+            body = engine
+            injected = ''
+            if case == 'source-parent-mode-drift':
+                body = body.replace('    copy_inputs(rows)\n', '    os.chmod(source_root+"/control",0o777)\n    copy_inputs(rows)\n')
+            if case == 'target-name-drift':
+                body = body.replace('    final_checks(rows)\n', '    item=targets[next(iter(rows))]\n    os.rename(item["name"],item["name"]+".retained-failed",src_dir_fd=item["parent"]["fd"],dst_dir_fd=item["parent"]["fd"])\n    fd=os.open(item["name"],os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o400,dir_fd=item["parent"]["fd"])\n    os.close(fd)\n    final_checks(rows)\n')
+            if case in ('short-write', 'write-error'):
+                injected += "_write=os.write\n_events=[]\ndef injected_write(fd,data):\n    if not _events:\n        _events.append(True)\n"
+                injected += ("        return _write(fd,data[:3])\n" if case == 'short-write' else "        raise OSError(errno.ENOSPC,'controlled source write')\n")
+                injected += "    return _write(fd,data)\nos.write=injected_write\n"
+            if case == 'fsync-error':
+                injected += "def injected_sync(fd):\n    raise OSError(errno.EIO,'controlled source fsync')\nos.fsync=injected_sync\n"
+            if case == 'close-error':
+                injected += "_close=os.close\n_events=[]\ndef injected_close(fd):\n    _close(fd)\n    if not _events:\n        _events.append(True)\n        raise OSError(errno.EBADF,'controlled post-close failure')\nos.close=injected_close\n"
+            if case == 'registration-memory':
+                injected += "class RejectOwned(list):\n    def append(self,row):\n        raise MemoryError('controlled source fd registration')\nowned=RejectOwned()\n"
+            if case.startswith('linux-acl-'):
+                injected += "sys.platform='linux'\n"
+                injected += ("os.getxattr=lambda *args:b'present'\n" if case.endswith('present') else "def denied_xattr(*args):\n    raise OSError(errno.EPERM,'controlled fd ACL')\nos.getxattr=denied_xattr\n")
+            if case.startswith('darwin-acl-'):
+                injected += "import types\nsys.platform='darwin'\ndef fake_free(pointer):\n    work['fixture_free_calls']=work.get('fixture_free_calls',0)+1\n"
+                injected += ("    ctypes.set_errno(errno.EBADF)\n    return -1\n" if case.endswith('free-error') else "    return 0\n")
+                injected += "library=types.SimpleNamespace(acl_get_fd_np=lambda *args:1,acl_free=fake_free)\n"
+            if case in ('cancel-A-close-B', 'ordinary-A-close-cancel-B'):
+                injected += "_close=os.close\n_cancel_events=[]\n_close_events=[]\ndef event():\n    try:interrupt(signal.SIGTERM,None)\n    except InterruptedError as error:\n        _cancel_events.append(error)\n        return error\ndef stop_write(fd,data):\n"
+                injected += ("    raise event()\n" if case.startswith('cancel-A') else "    raise ValueError('controlled first source failure')\n")
+                injected += "def cancel_close(fd):\n    _close(fd)\n    if not _close_events:\n        _close_events.append(True)\n        raise event()\nos.write=stop_write\nos.close=cancel_close\n"
+                body = body.replace('print(json.dumps(work,', "work['fixture_same_first_marked']=failure is _cancel_events[0]\nwork['fixture_distinct_cancels']=len({id(error) for error in _cancel_events})\nprint(json.dumps(work,")
+            body = body.replace('failure = None\ntry:\n', injected+'\nfailure = None\ntry:\n')
+            command = ['/usr/bin/python3','-I','-S','-B','-',str(source),str(target),'\n'.join(rows)]
+            started = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            if evidence_directory is not None:
+                case_output = evidence_directory/case;case_output.mkdir(mode=0o700)
+                (case_output/'inline.py').write_bytes(body.encode())
+                (case_output/'command.json').write_text(json.dumps({'argv':command,'cwd':str(Path.cwd()),
+                    'environment':environment,'started':started},indent=2)+'\n')
+            result = subprocess.run(command, input=body.encode(),stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,env=environment)
+            finished = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            if evidence_directory is not None:
+                (case_output/'stdout.raw').write_bytes(result.stdout)
+                (case_output/'stderr.raw').write_bytes(result.stderr)
+                (case_output/'receipt.json').write_text(json.dumps({'argv':command,'environment':environment,
+                    'started':started,'finished':finished,'exit':result.returncode,
+                    'inline_sha256':hashlib.sha256(body.encode()).hexdigest()},indent=2)+'\n')
+            assert result.stdout, (case,result.returncode,result.stderr)
+            work = json.loads(result.stdout)
+            positive = case in ('actual-84','reuse-84','short-write','per-file-at','total-at','core-record-shadow-overlap')
+            assert result.returncode == (0 if positive else 1), (case,result.returncode,work.get('failures'),result.stderr)
+            assert work['data_and_close_complete'] is positive, case
+            if positive:
+                assert work['logical_occurrences'] == 84
+                for name,digest,size,_mode in entries:
+                    measured=hashlib.sha256();actual_size=0
+                    with (target/name).open('rb') as input_file:
+                        while True:
+                            raw=input_file.read(65536)
+                            if not raw:break
+                            actual_size+=len(raw);measured.update(raw)
+                    assert actual_size==int(size) and measured.hexdigest()==digest
+                    assert target.joinpath(name).stat().st_mode&0o777==0o400
+            if case == 'reuse-84':
+                assert work['created_files'] == work['write_bytes'] == work['physical_bytes'] == 0
+                assert work['reused_files']==84 and work['prior_physical_bytes']==source_copied
+            if case in ('duplicate-table','missing-table','extra-table','per-file-over','total-over'):
+                assert work['created_files']==work['read_bytes']==work['close_calls']==0
+            if case == 'core-record-shadow-overlap':
+                assert overlap_before is not None
+                after=(target/overlap_before['path']).stat()
+                assert (after.st_dev,after.st_ino,after.st_size)==(overlap_before['dev'],overlap_before['ino'],overlap_before['size'])
+                assert work['reused_files']==1 and work['created_files']==83
+                assert work['prior_physical_bytes']==overlap_before['size']
+                assert work['physical_bytes']+work['prior_physical_bytes']==work['logical_bytes']
+                overlap_before['logical_memberships']={'core':1,'record':1,'shadow':1}
+                overlap_before['native_Q_and_other_old_closure_costs']='UNKNOWN; original cache hashes are not fully metered'
+            if case == 'wrong-reused-size':assert work['prior_physical_bytes'] >= 7
+            if case == 'registration-memory':assert work['close_calls']==1 and work['accounting_incomplete'] is True
+            if case.startswith('darwin-acl-'):assert work['fixture_free_calls']==1
+            if case == 'cancel-A-close-B':
+                assert work['fixture_same_first_marked'] is True and work['fixture_distinct_cancels']==2
+            if case == 'ordinary-A-close-cancel-B':
+                assert work['fixture_same_first_marked'] is True and work['fixture_distinct_cancels']==1
+            if case == 'target-name-drift':assert (target/(first+'.retained-failed')).exists()
+            if case == 'write-error':assert (target/first).exists() and (target/first).stat().st_size==0
+            print(json.dumps({'D_case':case,'exit':result.returncode,'actual_D_work':work,'actual_cross_closure_cache':overlap_before,
+                'injected_private_inline_only': bool(injected) or case in ('source-parent-mode-drift','target-name-drift'),
+                'fixture_source_copy_logical_file_bytes':source_copied,'fixture_source_fill_actual_write_bytes':source_fill_bytes,
+                'synthetic_source_and_private_pin_override_for_boundary':case in ('per-file-at','total-at','per-file-over','total-over'),
+                'fixture_source_copy_backend_R_W_C':'UNKNOWN: shutil.copy2 backend not measured',
+                'fixture_target_prefill_logical_file_bytes':source_copied if case in ('reuse-84','wrong-reused-bytes','same-changed-source-target','wrong-reused-size') else 0,
+                'boundary_argv':command,'boundary_environment':environment,'started':started,'finished':finished,
+                'executed_inline_sha256':hashlib.sha256(body.encode()).hexdigest(),
+                'positive_validation_extra_target_read_sha_bytes':sum(int(row[2]) for row in entries) if positive else 0,
+                'full_cli_pinned_jq_route':'NOTRUN','whole_B_qualification':False,
+                'real_system_runtime_retention':False},sort_keys=True))
+
+
 def raw16_scope_sudo_source(root: Path, *, observer_cancel_only=False) -> None:
     import tempfile
     import ast

@@ -621,6 +621,14 @@ spec=importlib.util.spec_from_file_location('raw16_parent_carrier_fixture',root/
 fixture=importlib.util.module_from_spec(spec);sys.modules[spec.name]=fixture;spec.loader.exec_module(fixture)
 fixture.raw16_parent_carrier(root)
 PY_PARENT_P_CARRIER
+/usr/bin/python3 -I -S -B - "$root" <<'PY_D_SOURCE_ACQUISITION'
+import importlib.util,sys
+from pathlib import Path
+root=Path(sys.argv[1])
+spec=importlib.util.spec_from_file_location('D_source_fixture',root/'scripts/test/candidate-content-preparation-fixtures.py')
+fixture=importlib.util.module_from_spec(spec);sys.modules[spec.name]=fixture;spec.loader.exec_module(fixture)
+fixture.raw16_D_sources(root)
+PY_D_SOURCE_ACQUISITION
 /usr/bin/python3 -I -S -B - "$root" <<'PY_SCOPE_P_ACQUISITIONS'
 import importlib.util,sys
 from pathlib import Path

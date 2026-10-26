@@ -70,6 +70,515 @@ stage_expected() {
   fi
 }
 
+shadow_source_rows() {
+  [ "$record_generation" = "$generation" ] || return 1
+  /usr/bin/printf '%s\n' \
+    'adapters/local-git-materializer/v1/materialize.sh 9b806bb5e202f98166aae60d391107c29aa0d19176765bf48fef47155f9fd358 28742 100755' \
+    'adapters/local-git-materializer/v1/object-closure.c f1616b908c97e8a091029c24b3f2e1f8827171cbdee4d47195c66afd3e961e27 9312 100644' \
+    'adapters/local-git-materializer/v1/protocol.jq 232517c19455667cca795769ffc0d8edad7873a9d55be0c21166de5b436bf323 22709 100644' \
+    'config/construction-mode.json 5b3e0bafe63f84134e1b4aa2659e954bbbbd0bcc87d20716b03cd1b9d15a0fda 3178 100644' \
+    'control/v1/control-policy-set-sandbox-bound.json a50d1ab32ef5964c9e3074084870bffa264fd138f325d830d166135545e3dc8d 3057 100644' \
+    'control/v1/control-policy-set.json a3f9a8d16bd60a0cfc32da3e802a207c1e225013b7ef115030ef567d0ccd366a 3043 100644' \
+    'control/v1/credential-policy-decision.json 73877276c868eae2da9dcedf8eb465b0526ce26a66506691b9cedbba15f00615 1583 100644' \
+    'control/v1/credential-policy.jq 428ea96f23a18c6938421b9cc709d36ba83b34e2441347d5891a971f92d5ec77 13968 100644' \
+    'control/v1/credential-policy.json 2ba0ec54d11ab4e9d02993e9283c5f820c662a20cf33d2bff25b1393a5ee403d 1444 100644' \
+    'control/v1/duty-separation-decision.json 4c2297341d1d389f21ace62b58b83e27a6ed248f9bf13a10fa385c4f8474af99 1409 100644' \
+    'control/v1/duty-separation-policy.json b2663c0c0ae3d1d2e95b2e5d5ade7e00b2893f242a1143e90fad74659f6a41f9 2104 100644' \
+    'control/v1/duty-separation.jq b4e480748dd4fb7dec769b25f0f7649b0e5dc31f9de438bba690e9eab6ac236c 10060 100644' \
+    'control/v1/evaluate-bound-sandbox.sh 710615c6709250f40d0c494914e2577ee84896cde2b5828b4f457940b0347980 11866 100755' \
+    'control/v1/evaluate-credential-policy.sh 5c9bab9d00754d63e4ead770489564db8122c53ab1bc8b6e92c27719265c18f7 40417 100755' \
+    'control/v1/evaluate-duty.sh 146e73dc880d363e889f32140ac375997fb709e3101de32b8d9603f1f38ca0fa 21883 100755' \
+    'control/v1/evaluate-evidence-integrity.sh f0ecbe036601102db082d0a94c860ea868614ff79d06f2b37ec8dcd672c367a2 79982 100755' \
+    'control/v1/evaluate-kill-switch.sh ea1d40c50de706fa52198dc09e783ee613933aa0dbea72bfff8072becd79bb3b 19218 100755' \
+    'control/v1/evaluate-risk-gates.sh 0df2094a1a86901d5db8bd463cdeb295f455585b345096719bdc6dcd0b8852e8 18673 100755' \
+    'control/v1/evaluate-sandbox.sh 8c4b50e6ce324bbf8c3b14972356b153a40ab26c0dbcf54687e37d1133e8a3bb 10018 100755' \
+    'control/v1/evidence-integrity-decision.json 03e9225face347f1a4990beb6812f0e839d777cfbc6b95997d8031c4ad85e879 1859 100644' \
+    'control/v1/evidence-integrity-policy.json 8e630c4aaee1cf1d97b3c04e96da6bb8408a0a46a2ce42bca2583767ee42f604 914 100644' \
+    'control/v1/evidence-integrity.jq 3b57277a3eab151da66801254af65196fb6a71800486fe781232135169f68619 11254 100644' \
+    'control/v1/kill-switch-decision.json c6328eb730b9c73c30469b90874c7811adc7b27a512f905f4a8dcdcd356b69cd 1604 100644' \
+    'control/v1/kill-switch-policy.json b46eebfeb9de37eb0ebdb8fb297e0e200b537d0ca08dcf28eab7f91ef603e799 503 100644' \
+    'control/v1/kill-switch.jq 59378b0049c511160427a113559089a81c17d5501662bf3ac02650bdfaf58817 13863 100644' \
+    'control/v1/policy-set.jq 2be97550574ee4522fc0bd14780c92dee3c1b455f2c04b7763b0e437665a8d58 2560 100644' \
+    'control/v1/risk-gates-decision.json 8e13f844fad5280aedc21a7d4c9b4bcf43f8eb0b0dd41a32a5989ce1473e28d5 1563 100644' \
+    'control/v1/risk-gates-policy.json 3d8f0802777b4d7a63ded72643aca5cc8afd7613b76b5463291ca0ea63607a7e 1844 100644' \
+    'control/v1/risk-gates.jq d00fccd8e31b770c6df01fba17e3cc315d58edfbbf0a8055d66d537dc6ad21ff 13732 100644' \
+    'control/v1/sandbox-bound-decision.json c8685bc8d15bb2375ab2263b0add5c151aa7c763fa3197bbacf886606f87df47 1492 100644' \
+    'control/v1/sandbox-bound-policy.json ad1eab67be239e0f06f049bca91d51c475b3abb5917952a85c2a67f0450fbc6f 1875 100644' \
+    'control/v1/sandbox-bound.jq 66a90e8847d70d297f6ea73dfc7879ffe44f7cb173a119c091c93a48f5f4b5cc 16172 100644' \
+    'control/v1/sandbox-decision.json c3e89800147d55f7c726ec66c82031915a4220d3eb7867e143f60d7026223bbd 1459 100644' \
+    'control/v1/sandbox-policy.json 4afb62e44fd3ad055d157ee23bfcf2917811b9ec05e4923eaa989d95d53c0a5e 1829 100644' \
+    'control/v1/sandbox.jq 83b08ff4817157bbda76aa3c85142cb9f297a0dc8cdb760f7c8eeebf6bbc0ef3 14949 100644' \
+    'control/v1/validate.sh cf173ad0eaa08244bf636e3937845e894b21f14291fc5e66753e8673bdd2bd2a 3189 100755' \
+    'core/v2/generation-registry.json 3950ce43c3073b97759db23fb7e4ce533cbc1d8a8fe4917db6ee1ee0a8e78f94 614 100644' \
+    "core/v2/generations/${record_generation}/contracts.jq 65eb40b9afb9b4f1d809ed66d0f2ca625f656c34e856cedcde9cbbde857f0f0a 2632 100644" \
+    "core/v2/generations/${record_generation}/core-ingress.sh dfdd273ea98f8737188a2a347151b3ffc0e631e222abfaac55391d58dd2618e8 56400 100644" \
+    "core/v2/generations/${record_generation}/modules/profile_graph.jq c00f9cfbe88df5cb1dbcfbead61288ff7d68684d43d095e74f26e7820f0d7207 13338 100644" \
+    "core/v2/generations/${record_generation}/modules/result_facts.jq 8e49c2c091f1bbe525f7499e3fca072f6916a14d5bb34adbf121439e8ca2d281 6035 100644" \
+    "core/v2/generations/${record_generation}/modules/result_truth.jq ed4a9946a95ad0c701f74d6bd64c3b45264126927c2a53511d31c52241c7fd46 15385 100644" \
+    "core/v2/generations/${record_generation}/modules/schema.jq 8d1d02d36ac7ada778f05248f9413062b3fc251499914c15d79f003bbd009ade 16121 100644" \
+    "core/v2/generations/${record_generation}/modules/stage_request.jq 6572a6ecbac332dc9c4a8ef35acd1feebdc2e8aab04941fc0b756f3a5cbcf29e 15123 100644" \
+    'enforcement/v1/accepted-identities.json c75dcd8d9268cb42677f5aa526fd374c3e45f2ba0fe678f47562ae49ad6851a0 174 100644' \
+    'enforcement/v1/check-sandbox-receipt.sh 7db3412a4e740f79bde6af24891837fd5daa27d0811ff970b2f58534fcd59b97 10816 100755' \
+    'enforcement/v1/sandbox-receipt.jq 43ab3a97b90444be17958112b7ff63966d1052981313c81bcb463618adae8619 30838 100644' \
+    'evals/v1/replay-malicious.py 695c73dcf739e2a63c3758ea0b4d683546fd19a0f646e8a39b03661226b469a7 36612 100644' \
+    'maintenance/v1/bands.jq 594994c057a1130da6727f5f825d2fed3ff01de4a9fafe3a722d9e964f05c8e4 10714 100644' \
+    'maintenance/v1/incident-to-eval.jq 2229722267c3e9544d9cf53bd37d6d798f27adebad4a7439294989d0194ad92a 7237 100644' \
+    'maintenance/v1/incident-to-eval.sh e000f961d7851c48b650ca36ed0c60fd2bc97ffc32442214b3f8937efc97f967 7449 100755' \
+    'preparation/v1/prepare-candidate.py a860891bb3c20f757e2d15934e0ea6577cb3181b19e935a4c781e4f410f9fde5 138141 100644' \
+    'sandbox/v1/build-guest.py 9aceb3492800d14d1842132c96ff6c5bf8b1ca83ad37477f9210908a78b08074 11671 100755' \
+    'sandbox/v1/coverage-source.py 16b3204ce6a06a31199e585b71a41fc9949c307acd1a2782df5965d00fa8ed25 43901 100644' \
+    'sandbox/v1/guest/common.c 731db0f01a72c0e319a36ee668cff16d30e298b4a8a75b2a1a0317c8b738f732 44272 100644' \
+    'sandbox/v1/guest/common.h ef192e3fd3f5ae99f8e49b4bfbe58e6b0df6316d77c1690231b4138f4504cdd1 11926 100644' \
+    'sandbox/v1/guest/init.c f2de00c7af19291d31160c5d22427c6e5b90f2c5e9702736fa82e6d13533acd3 5039 100644' \
+    'sandbox/v1/guest/observation-values.c c93bf7ebc56b4c3ebb309f5314efed32f34799e8018a55b4163cdcabc08e6110 55289 100644' \
+    'sandbox/v1/guest/observation-values.h 8253a4e121c374792f86f2cbbdc8e65a39abbb10be2055f8db81b9966779ad96 8028 100644' \
+    'sandbox/v1/guest/probe.c ab17cae1f35aa09889c63bcf3758f63c15bdb84bd6be895b685a4317c3199d71 255622 100644' \
+    'sandbox/v1/guest/supervisor.c 905b2d57ba21c4a9b5622158135c547578bc7571d8b5ef43d5598e37a6688437 103685 100644' \
+    'sandbox/v1/host-supervisor.py 64639f621192705eb8e4e3a39ea17993d4b65563c4c5712991c954f0242f9afe 225420 100755' \
+    'sandbox/v1/runtime-vfkit.py 50a400dd73e8fa8d46cf93e5f8824ac80d5921cc1bf69d522bf11d4330050a14 6764 100755' \
+    'scope/v1/evaluate-scope.sh fe6048b5eada5d86531e085acd0a9f46b73028d348349ab932e8c59f4e2ed66a 25253 100755' \
+    'scope/v1/generate-gate-evidence.py 087fd3d31ef3096a216ce11ea7a5da2dbf9c0eb7b0cb46ac9d495fdff53e39c4 36067 100755' \
+    'scope/v1/read-shadow-evidence.py 52b40828a99c5a009a89500701142898970f35b9a8361a9be711a25191df9e94 92980 100644' \
+    'scope/v1/scope-gates.jq 302e882b4b351186987e8b5f3e13d1725d0e2e9f7a996a4033ea893bd0a87487 57306 100644' \
+    'scope/v1/scope-policy.json 5c6db4debedfcd7117735bd1d4bf907293f73972ec8909c4eab9f25cf6417fe5 1181 100644' \
+    'scope/v1/validate-scope.sh 99c0abae1bdcc3809dfac535a8b24137842abaec2418b90566b6ac8ff213b406 3194 100755' \
+    'scope/v1/workflow-scope.jq 2d1df5f99b7019c4c41aece4f9fb89b00785ca47f9f8a713b2f43b212481366a 9728 100644' \
+    'scripts/core-contract.sh b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 9176 100755' \
+    'shadow/v1/_cancel_release.c 00ef369edbed569d50471b97f64aef57591b7afb8d9f25c286bffa5725faf015 55056 100644' \
+    'shadow/v1/_consumer.py e874ca59a7dfd9da3383186f73151c05e14e09db0591503fde6ae8a8d536f946 231005 100644' \
+    'shadow/v1/build-cancel-release.sh be1ad0afd99f72ea73fe52cca63c03381793710c587a82b57b9a38ed87c896d4 6169 100755' \
+    'shadow/v1/enforced-reproduction.py 6d3de5e81f99e6d1c793e750f03ba4d93f4ee075d1c93d15ac781989e905134d 119034 100755' \
+    'shadow/v1/incident-record.jq 9ea6e1ec6556f54887ea6937533157856271aab68c74bda6d18dae1354d2687c 3695 100644' \
+    'shadow/v1/qualified-identity.jq 33267bca348ad2b4923a5858b4788a6ca6adf1a1e9f471ee4450d7fe06387071 5343 100644' \
+    'shadow/v1/shadow-environments.json 655771163e18384904eeaf2b7f22e3999957a037dce845b7fa6fdff2196ac4c7 1471 100644' \
+    'shadow/v1/validate-incident.sh c9f907bfd73307c977c4191d65f6783a3bf969c3bb0be988f14aa9cb66ebe262 4870 100755' \
+    'shadow/v1/write-materialization-input.jq 467a8f2901f053ff059302974ad80c5aaf1c805c6302e2333e1af0524fb3c510 4907 100644' \
+    'shadow/v1/write-shadow.py 6b5c38b34ce29be0f4e8241358406b99acb21c11920e5cd43fabaddb7a0bc5be 66057 100755' \
+    'telemetry/v1/trace-ledger.jq 5436deb48eca6d988a24bbce07855628edd3bc60386d9993a1169d6d373a4212 5849 100644' \
+    'telemetry/v1/validate-trace-ledger.sh fc4b7cdd36b5d48675ed1d851c7b2d4fe59d0c431a31f3c361d6196f8900e208 8095 100755' \
+    'verifiers/file-digest/v1/verifier.c fcf244b70dc6bcbfd1e6983e6c23d5f38a60654aa074adb472b0e749184dcfeb 28827 100644'
+}
+
+shadow_source_work_records=()
+snapshot_shadow_sources() {
+  local rows status=0 last
+  rows=$(shadow_source_rows) || return 1
+  shadow_source_work=$(/usr/bin/python3 -I -S -B - "$repo" "$runtime" "$rows" <<'PY_SHADOW_SOURCE'
+import ctypes
+import errno
+import hashlib
+import json
+import os
+import re
+import signal
+import stat
+import sys
+
+source_root, target_root, table = sys.argv[1:]
+work = {"rows": [], "read_bytes": 0, "write_bytes": 0, "sha_bytes": 0,
+        "equality_bytes": 0, "copy_bytes": 0, "physical_bytes": 0,
+        "logical_bytes": 0, "logical_occurrences": 0, "reused_files": 0,
+        "created_files": 0, "prior_physical_bytes": 0, "close_calls": 0, "observation_bytes": 0,
+        "table_bytes": len(table.encode()), "snapshots": [], "snapshot_metadata_bytes": 0,
+        "failures": [], "data_and_close_complete": False}
+owned, directories, sources, targets = [], {}, {}, {}
+library = None
+
+def cancelled(error):
+    return isinstance(error, KeyboardInterrupt) or getattr(error, "_D_source_cancel", False)
+
+def first_error(first, later):
+    return later if first is None or cancelled(later) and not cancelled(first) else first
+
+def require(value):
+    if not value:
+        raise ValueError("D_SOURCE")
+
+def note(site, *values):
+    row = [site, *values]
+    cost = len(json.dumps(row, separators=(",", ":")).encode()) + 1
+    require(work["observation_bytes"] + cost <= 1048576 - 65536)
+    work["rows"].append(row)
+    work["observation_bytes"] += cost
+
+def remember(site, error):
+    try:
+        work["failures"].append([site, type(error).__name__, getattr(error, "errno", None)])
+    except BaseException:
+        work["accounting_incomplete"] = True
+
+def identity(value):
+    return (value.st_dev, value.st_ino, stat.S_IFMT(value.st_mode), value.st_uid,
+            value.st_gid, stat.S_IMODE(value.st_mode), value.st_nlink, value.st_size,
+            value.st_mtime_ns, value.st_ctime_ns)
+
+def measured(fd):
+    value = os.fstat(fd)
+    note("fstat", fd, identity(value))
+    return value
+
+def absence(fd):
+    global library
+    before = identity(measured(fd))
+    pointer, failure = None, None
+    try:
+        if sys.platform == "linux":
+            empty = {getattr(errno, key) for key in ("ENODATA", "ENOATTR") if hasattr(errno, key)}
+            for key in ("system.posix_acl_access", "system.posix_acl_default"):
+                try:
+                    value = os.getxattr(fd, key)
+                except OSError as error:
+                    note("getxattr", fd, key, None, error.errno)
+                    if error.errno not in empty:
+                        raise
+                else:
+                    work["read_bytes"] += len(value)
+                    note("getxattr", fd, key, len(value), None)
+                    raise ValueError("D_ACL_PRESENT")
+        elif sys.platform == "darwin":
+            if library is None:
+                candidate = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+                candidate.acl_get_fd_np.argtypes = [ctypes.c_int, ctypes.c_int]
+                candidate.acl_get_fd_np.restype = ctypes.c_void_p
+                candidate.acl_free.argtypes = [ctypes.c_void_p]
+                candidate.acl_free.restype = ctypes.c_int
+                library = candidate
+            ctypes.set_errno(0)
+            pointer = library.acl_get_fd_np(fd, 0x100)
+            saved = ctypes.get_errno()
+            note("acl_get_fd_np", fd, pointer, saved)
+            require(not pointer and saved == errno.ENOENT)
+        else:
+            raise ValueError("D_PLATFORM")
+        require(identity(measured(fd)) == before)
+    except BaseException as error:
+        failure = error
+        raise
+    finally:
+        if pointer:
+            freeing = None
+            try:
+                ctypes.set_errno(0)
+                result = library.acl_free(pointer)
+                saved = ctypes.get_errno()
+                note("acl_free", fd, result, saved)
+                if result != 0:
+                    raise OSError(saved, "D ACL release")
+            except BaseException as error:
+                freeing = error
+                remember("acl-free", error)
+            if freeing is not None and first_error(failure, freeing) is freeing:
+                raise freeing
+
+def close_fd(fd, primary=None):
+    failure = None
+    try:
+        os.close(fd)
+    except BaseException as error:
+        failure = error
+        remember("close", error)
+    try:
+        work["close_calls"] += 1
+        note("close", fd, 0 if failure is None else -1,
+             getattr(failure, "errno", None))
+    except BaseException as error:
+        work["accounting_incomplete"] = True
+        failure = first_error(failure, error)
+    if failure is not None and first_error(primary, failure) is failure:
+        raise failure
+
+def close_one(row, primary=None):
+    if not row["closed"]:
+        row["closed"] = True
+        close_fd(row["fd"], primary)
+
+def acquire(path, parent, name, flags, mode=0o400):
+    if not flags & os.O_DIRECTORY:
+        require(hasattr(os, "O_NONBLOCK"))
+        flags |= os.O_NONBLOCK
+    fd = os.open(name if parent else path, flags, mode,
+                 dir_fd=parent["fd"] if parent else None)
+    try:
+        row = {"fd": fd, "parent": parent, "name": name, "path": path, "closed": False}
+        owned.append(row)
+    except BaseException as error:
+        close_fd(fd, error)
+        raise
+    note("open", parent["fd"] if parent else None, name, flags, fd)
+    row["before"] = measured(fd)
+    return row
+
+def check(row):
+    require(not row["closed"])
+    before = identity(row["before"])
+    require(identity(measured(row["fd"])) == before)
+    if row["parent"]:
+        current = os.stat(row["name"], dir_fd=row["parent"]["fd"], follow_symlinks=False)
+        note("named-stat", row["parent"]["fd"], row["name"], identity(current))
+        require(identity(current) == before)
+    absence(row["fd"])
+
+def trusted_directory(row, private=False):
+    value = row["before"]
+    require(stat.S_ISDIR(value.st_mode) and value.st_uid in {0, os.geteuid()})
+    require(not value.st_mode & 0o022 or value.st_uid == 0 and value.st_mode & stat.S_ISVTX)
+    if private:
+        require(value.st_uid == os.geteuid() and value.st_gid == os.getegid()
+                and stat.S_IMODE(value.st_mode) == 0o700)
+    check(row)
+
+def directory(path, create=False):
+    if path in directories:
+        check(directories[path])
+        return directories[path]
+    require(path.startswith("/") and os.path.normpath(path) == path)
+    if path == "/":
+        row = acquire(path, None, None, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    else:
+        parent = directory(os.path.dirname(path), create)
+        name = os.path.basename(path)
+        check(parent)
+        if create:
+            try:
+                os.mkdir(name, 0o700, dir_fd=parent["fd"])
+            except FileExistsError:
+                pass
+            else:
+                note("mkdir", parent["fd"], name, 0)
+                refresh(parent)
+        row = acquire(path, parent, name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    directories[path] = row
+    trusted_directory(row, path == target_root or path.startswith(target_root + "/"))
+    return row
+
+def refresh(row):
+    before, current = identity(row["before"]), measured(row["fd"])
+    require(before[:6] == identity(current)[:6])
+    row["before"] = current
+    check(row)
+
+def read_chunk(row, count):
+    value = os.read(row["fd"], count)
+    work["read_bytes"] += len(value)
+    note("read", row["fd"], count, len(value))
+    return value
+
+def scan(rows):
+    for folder in ("control/v1", "scope/v1"):
+        parent = directory(source_root + "/" + folder)
+        names = os.listdir(parent["fd"])
+        note("listdir", parent["fd"], names)
+        actual = set()
+        for name in names:
+            if name.endswith((".sh", ".jq", ".json", ".py")):
+                value = os.stat(name, dir_fd=parent["fd"], follow_symlinks=False)
+                note("scan-stat", parent["fd"], name, identity(value))
+                require(stat.S_ISREG(value.st_mode))
+                actual.add(folder + "/" + name)
+        require(actual == {name for name in rows if name.startswith(folder + "/")})
+        check(parent)
+
+def parse_table():
+    require(len(table.encode()) <= 1048576)
+    entries = table.splitlines()
+    require(len(entries) == 84)
+    rows = {}
+    for entry in entries:
+        fields = entry.split(" ")
+        require(len(fields) == 4)
+        name, digest, size, mode = fields
+        require(re.fullmatch(r"[A-Za-z0-9_./-]+", name) and not name.startswith("/")
+                and all(part not in {"", ".", ".."} for part in name.split("/"))
+                and re.fullmatch(r"[0-9a-f]{64}", digest)
+                and re.fullmatch(r"0|[1-9][0-9]*", size)
+                and mode in {"100644", "100755"} and name not in rows)
+        size = int(size)
+        require(size <= 16 * 1024 * 1024)
+        rows[name] = (digest, size, int(mode, 8) & 0o777)
+    require(sum(row[1] for row in rows.values()) <= 32 * 1024 * 1024)
+    return rows
+
+def source_inputs(rows):
+    for name, (_digest, size, mode) in rows.items():
+        parent = directory(os.path.dirname(source_root + "/" + name))
+        item = acquire(source_root + "/" + name, parent, os.path.basename(name), os.O_RDONLY | os.O_NOFOLLOW)
+        value = item["before"]
+        require(stat.S_ISREG(value.st_mode) and value.st_uid in {0, os.geteuid()}
+                and stat.S_IMODE(value.st_mode) == mode and value.st_size == size
+                and value.st_nlink == 1)
+        check(item)
+        sources[name] = item
+    scan(rows)
+    registry = sources["core/v2/generation-registry.json"]
+    registry_size = registry["before"].st_size
+    require(registry_size <= 1048576)
+    chunks, remaining = [], registry_size
+    while remaining:
+        chunk = read_chunk(registry, min(65536, remaining))
+        require(bool(chunk))
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    raw = b"".join(chunks)
+    work["registry_buffer_processing"] = "UNKNOWN: join/JSON processing is not in data-stream counters"
+    measured_hash = hashlib.sha256(raw).hexdigest()
+    work["sha_bytes"] += len(raw)
+    require(measured_hash == rows["core/v2/generation-registry.json"][0])
+    value = json.loads(raw)
+    work["registry_parse_bytes"] = len(raw)
+    require(type(value) is list and len(value) == 2 and value[1] == value[-1])
+    keys = {"authorization_comment_id", "concern", "generation_id", "parent_generation_id", "semantic_identity"}
+    for row in value:
+        require(type(row) is dict and set(row) == keys and row["semantic_identity"] == "core.contracts.v2"
+                and type(row["authorization_comment_id"]) is int and row["authorization_comment_id"] > 0
+                and type(row["concern"]) is str and bool(row["concern"])
+                and re.fullmatch(r"g-[0-9a-f]{64}", row["generation_id"])
+                and re.fullmatch(r"g-[0-9a-f]{64}", row["parent_generation_id"]))
+    require(value[1]["parent_generation_id"] == value[0]["generation_id"])
+    prefix = "core/v2/generations/" + value[1]["generation_id"] + "/"
+    require({name for name in rows if name.startswith("core/v2/generations/")} == {
+        prefix + suffix for suffix in ("contracts.jq", "core-ingress.sh", "modules/profile_graph.jq",
+            "modules/result_facts.jq", "modules/result_truth.jq", "modules/schema.jq", "modules/stage_request.jq")})
+
+def copy_inputs(rows):
+    for name, (expected, size, _mode) in rows.items():
+        original = sources[name]
+        parent = directory(os.path.dirname(target_root + "/" + name), True)
+        check(parent)
+        try:
+            target = acquire(target_root + "/" + name, parent, os.path.basename(name),
+                             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        except FileExistsError:
+            target = acquire(target_root + "/" + name, parent, os.path.basename(name), os.O_RDONLY | os.O_NOFOLLOW)
+            created = False
+            work["reused_files"] += 1
+            work["prior_physical_bytes"] += target["before"].st_size
+            require(target["before"].st_size == size)
+        else:
+            created = True
+            work["created_files"] += 1
+            refresh(parent)
+        work["logical_bytes"] += size
+        work["logical_occurrences"] += 1
+        os.lseek(original["fd"], 0, os.SEEK_SET)
+        digest, consumed = hashlib.sha256(), 0
+        while consumed < size:
+            chunk = read_chunk(original, min(65536, size - consumed))
+            require(bool(chunk))
+            consumed += len(chunk)
+            digest.update(chunk)
+            work["sha_bytes"] += len(chunk)
+            if created:
+                view = memoryview(chunk)
+                while view:
+                    sent = os.write(target["fd"], view)
+                    require(sent > 0)
+                    work["write_bytes"] += sent
+                    work["copy_bytes"] += sent
+                    work["physical_bytes"] += sent
+                    note("write", target["fd"], len(view), sent)
+                    view = view[sent:]
+        require(digest.hexdigest() == expected)
+        check(original)
+        if created:
+            os.fchmod(target["fd"], 0o400)
+            note("fchmod", target["fd"], 0o400)
+            os.fsync(target["fd"])
+            note("fsync", target["fd"], 0)
+            target["before"] = measured(target["fd"])
+            reader = acquire(target["path"], parent, target["name"], os.O_RDONLY | os.O_NOFOLLOW)
+            require(identity(reader["before"]) == identity(target["before"]))
+            close_one(target)
+            target = reader
+        state = target["before"]
+        require(stat.S_ISREG(state.st_mode) and state.st_uid == os.geteuid()
+                and state.st_gid == os.getegid() and state.st_nlink == 1
+                and stat.S_IMODE(state.st_mode) == 0o400 and state.st_size == size)
+        check(target)
+        record = {"path": name, "size_bytes": size, "source_sha256": digest.hexdigest(),
+                  "source_identity": identity(original["before"]),
+                  "snapshot_identity": identity(target["before"]), "reused": not created}
+        work["snapshot_metadata_bytes"] += len(json.dumps(record, separators=(",", ":")).encode())
+        work["snapshots"].append(record)
+        target["record"] = record
+        targets[name] = target
+
+def final_checks(rows):
+    scan(rows)
+    for row in directories.values():
+        check(row)
+        if row["path"] == target_root or row["path"].startswith(target_root + "/"):
+            os.fsync(row["fd"])
+            note("fsync-directory", row["fd"], 0)
+    for name, (expected, size, _mode) in rows.items():
+        left, right = sources[name], targets[name]
+        check(left);check(right)
+        os.lseek(left["fd"], 0, os.SEEK_SET);os.lseek(right["fd"], 0, os.SEEK_SET)
+        left_hash, right_hash, count = hashlib.sha256(), hashlib.sha256(), 0
+        while count < size:
+            amount = min(65536, size - count)
+            a, b = read_chunk(left, amount), read_chunk(right, amount)
+            work["equality_bytes"] += len(a) + len(b)
+            left_hash.update(a);right_hash.update(b)
+            work["sha_bytes"] += len(a) + len(b)
+            require(len(a) == len(b) == amount and a == b)
+            count += amount
+        require(left_hash.hexdigest() == right_hash.hexdigest() == expected)
+        previous_record_size = len(json.dumps(right["record"], separators=(",", ":")).encode())
+        right["record"]["final_source_sha256"] = left_hash.hexdigest()
+        right["record"]["snapshot_sha256"] = right_hash.hexdigest()
+        work["snapshot_metadata_bytes"] += (len(json.dumps(right["record"], separators=(",", ":")).encode())
+                                            - previous_record_size)
+        check(left);check(right)
+    for row in owned:
+        if not row["closed"]:
+            check(row)
+
+def interrupt(_number, _frame):
+    error = InterruptedError("D source acquisition cancelled")
+    error._D_source_cancel = True
+    raise error
+
+for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+    signal.signal(number, interrupt)
+
+failure = None
+try:
+    require(os.path.isabs(source_root) and os.path.isabs(target_root)
+            and os.path.normpath(source_root) == source_root and os.path.normpath(target_root) == target_root
+            and source_root != target_root and not source_root.startswith(target_root + "/")
+            and not target_root.startswith(source_root + "/"))
+    rows = parse_table()
+    source_inputs(rows)
+    directory(target_root)
+    copy_inputs(rows)
+    final_checks(rows)
+except BaseException as error:
+    failure = error
+    work["unobserved_call_results"] = "UNKNOWN; failed-operation counters are observed lower bounds"
+    if isinstance(error, MemoryError):
+        work["accounting_incomplete"] = True
+    remember("acquisition", error)
+finally:
+    for row in reversed(owned):
+        try:close_one(row, failure)
+        except BaseException as error:
+            failure = first_error(failure, error)
+    if failure is not None:
+        work.setdefault("unobserved_call_results", "UNKNOWN; failed-operation counters are observed lower bounds")
+    work["data_and_close_complete"] = failure is None and not work.get("accounting_incomplete", False)
+
+print(json.dumps(work, sort_keys=True, separators=(",", ":")))
+raise SystemExit(0 if work["data_and_close_complete"] else 1)
+PY_SHADOW_SOURCE
+  ) || status=$?
+  shadow_source_receipt_bytes=${#shadow_source_work}
+  shadow_source_work_records+=("$shadow_source_work")
+  last=$(( ${#shadow_source_work_records[@]} - 1 ))
+  shadow_source_receipt_total_bytes=$(( ${shadow_source_receipt_total_bytes:-0} + ${#shadow_source_work_records[$last]} ))
+  [ "$shadow_source_receipt_bytes" -le 1048576 ] || return 1
+  [ "$status" -eq 0 ]
+}
+
 # run SEED-SET.json OBSERVED_AT
 # dashboard OBSERVED_AT SEED-SET.json RUN-RESULT.json [SEED-SET.json RUN-RESULT.json]...
 mode=${1:-}
@@ -249,10 +758,16 @@ done
 snapshot_expected "$jq_sha" "$jq_source" "$runtime/bin/jq" 0500 || emit_error E_RUNTIME
 bash_sha=$(sha256_path /bin/bash) || emit_error E_RUNTIME
 record_generation=$("$runtime/bin/jq" -er '
-  if type == "array" and length >= 1 and all(.[];
+  if type == "array" and length == 2 and .[1] == .[-1] and all(.[];
+    type == "object" and keys == ["authorization_comment_id","concern","generation_id",
+      "parent_generation_id","semantic_identity"] and
+    (.authorization_comment_id | type == "number" and . == floor and . > 0) and
+    (.concern | type == "string" and length > 0) and
     .semantic_identity == "core.contracts.v2" and
-    (.generation_id | type == "string" and test("\\Ag-[0-9a-f]{64}\\z")))
-  then .[-1].generation_id else error("E_STALE") end
+    (.generation_id | type == "string" and test("\\Ag-[0-9a-f]{64}\\z")) and
+    (.parent_generation_id | type == "string" and test("\\Ag-[0-9a-f]{64}\\z"))) and
+    .[1].parent_generation_id == .[0].generation_id
+  then .[1].generation_id else error("E_STALE") end
 ' "$runtime/core/v2/generation-registry.json" 2>/dev/null) || emit_error E_STALE
 record_schema="core/v2/generations/$record_generation/modules/schema.jq"
 record_files="$record_schema 8d1d02d36ac7ada778f05248f9413062b3fc251499914c15d79f003bbd009ade
@@ -307,6 +822,9 @@ if [ "$mode" = dashboard ]; then
 fi
 for review_seed in "${review_seed_inputs[@]}"; do
   review_source=$("$runtime/bin/jq" -r '.body.seed_source // empty' "$review_seed" 2>/dev/null) || continue
+  if [ "$review_source" = shadow.malicious-instructions.v1 ]; then
+    snapshot_shadow_sources || emit_error E_STALE
+  fi
   [ "$review_source" = reviews.independent-verdicts.v1 ] || continue
   "$runtime/bin/jq" -e '
     any(.body.families[]; .family_id == "reviewer-severity-false-positive-negative" and
