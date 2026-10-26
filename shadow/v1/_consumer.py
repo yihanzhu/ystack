@@ -3599,13 +3599,19 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
             try:
                 sudo.close()
             except BaseException as error:
-                if source_failure is None:
-                    raise
-                anchor.private_observations["unusable"] = True
+                close_failure = error
                 try:
+                    anchor.private_observations["unusable"] = True
                     _capture_observation_error(anchor.recording_work, "M", "scope-native-sudo-close", error)
-                except Exception:
-                    anchor.recording_work["accounting_incomplete"] = True
+                except BaseException as observed:
+                    if (getattr(observed, "_scope_signal_cancel", False)
+                            and not getattr(close_failure, "_scope_signal_cancel", False)):
+                        close_failure = observed
+                    try:anchor.recording_work["accounting_incomplete"] = True
+                    except MemoryError:pass
+                if source_failure is None or (getattr(close_failure, "_scope_signal_cancel", False)
+                        and not getattr(source_failure, "_scope_signal_cancel", False)):
+                    raise close_failure
 
     def gate_scope(self, arguments, session):
         _require(type(arguments) is list and len(arguments) == 9 and all(_physical(path) for path in arguments), "E_RUNTIME")

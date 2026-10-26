@@ -2087,7 +2087,7 @@ def raw16_scope_sudo_source(root: Path) -> None:
     try:
         for case in ('stable', 'kill-stable', 'dup-ancestor', 'dup-target', 'dup-observer-memory',
                      'companion-close-observer', 'cancel-A-native-close-B', 'native-error-close-error',
-                     'dup-fstat', 'dup-row-allocation', 'companion-registration'):
+                     'dup-fstat', 'dup-row-allocation', 'companion-registration', 'native-error-close-cancel'):
             with tempfile.TemporaryDirectory(prefix='ystack-scope-sudo-') as temporary:
                 base = Path(temporary).resolve();base.chmod(0o700)
                 captures = base/'captures';captures.mkdir(mode=0o700)
@@ -2121,7 +2121,7 @@ def raw16_scope_sudo_source(root: Path) -> None:
                 first = c.Refusal('E_RUNTIME')
                 def foreground_fixture(*_args):
                     foreground.append(True)
-                    if case == 'native-error-close-error':raise first
+                    if case in ('native-error-close-error', 'native-error-close-cancel'):raise first
                     return b''
                 owner._foreground = foreground_fixture
                 hold_bytes, dup, close, observe = c._hold_bytes, os.dup, os.close, c._capture_observe
@@ -2151,7 +2151,7 @@ def raw16_scope_sudo_source(root: Path) -> None:
                     close(fd)
                     if fd in duplicated:closed.append(fd)
                     if original_holds and fd == original_holds[0][1] and 'native-close' not in injections:
-                        if case == 'cancel-A-native-close-B':
+                        if case in ('cancel-A-native-close-B', 'native-error-close-cancel'):
                             injections.append('native-close');raise handler_error()
                         if case == 'native-error-close-error':
                             injections.append('native-close');raise OSError(errno.EBADF, 'controlled secondary native close')
@@ -2185,11 +2185,13 @@ def raw16_scope_sudo_source(root: Path) -> None:
                         assert len(cancels) == 2 and cancels[0] is not cancels[1] and caught is cancels[0]
                         assert not foreground
                     elif case == 'native-error-close-error':assert caught is first and foreground == [True]
+                    elif case == 'native-error-close-cancel':
+                        assert len(cancels) == 1 and caught is cancels[0] and foreground == [True]
                     else:assert caught is None and foreground == [True]
                     assert len(original_holds) == 1 and original_holds[0][0].held.components == []
                     retained_chain = [component.fd for item, _work, _key in anchor.runtime_companions for component in item.components]
                     assert retained_chain == source_chain, (case, retained_chain, source_chain)
-                    if case in ('stable', 'kill-stable', 'companion-close-observer', 'native-error-close-error'):
+                    if case in ('stable', 'kill-stable', 'companion-close-observer', 'native-error-close-error', 'native-error-close-cancel'):
                         assert len(retained_chain) == original_holds[0][2]
                     for fd in retained_chain:os.fstat(fd)
                     parent = c._open_held(str(captures), True,
