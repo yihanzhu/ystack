@@ -1353,6 +1353,7 @@ class Anchor:
         _require(scratch_name in {"preparation-scratch", "inspection-scratch"}
                  and operation in {"prepare", "inspect"}, "E_STORE")
         opened, storage_rows, runtime_leaf = [], [], {}
+        T_companions = []
         _capture_work_values(runtime_leaf, "preparation:" + operation)
         self.recording_work.setdefault("preparation_leaves", []).append(runtime_leaf)
         failure, case_work, copied = None, None, None
@@ -1406,6 +1407,8 @@ class Anchor:
                 seal = _open_child(root, expected_seal, True, _store_rule(uid, gid, 0o700, True, self.resolver),
                                    "E_STORE", recording_work=runtime_leaf, accounting_kind="M")
                 opened.append(seal)
+                verified_sources = {prefix + "capture.json": item, expected_seal: seal}
+                verified_hashes = {}
                 contents = seal.listdir()
                 seal.recheck("E_STORE")
                 last = seal.components[-1]
@@ -1425,6 +1428,8 @@ class Anchor:
                     _observation(source, "preparation/" + selected_operation + "/" + filename,
                                  snapshot, storage_rows=storage_rows)
                     _require(snapshot.sha256() == runtime_files[filename]["sha256"], "E_STORE")
+                    verified_sources[filename] = source
+                    verified_hashes[filename] = snapshot.acquisition_sha
                     if selected_operation == operation:
                         file_states[filename], runtime_hashes[filename] = _copy_runtime_file(
                             destination.fd, filename, snapshot, runtime_leaf, self.resolver)
@@ -1436,6 +1441,14 @@ class Anchor:
                     os.fsync(destination.fd);os.fsync(parent.fd)
                     candidates.append(value)
                 item.recheck("E_STORE");seal.recheck("E_STORE")
+                T_source = _HeldPreparationSources(self, self.recording_work, case_work, {
+                    "operation": selected_operation, "input_raw": input_raw, "response_raw": response_raw,
+                    "capture_raw": raw, "capture_sha256": expected_seal[-64:], "marker": expected_seal,
+                    "root_before": root.before, "namespace": tuple(names),
+                    "target_states": {name: source.before for name, source in verified_sources.items()},
+                    "runtime_sha256": verified_hashes})
+                T_companions.append(T_source)
+                T_source.acquire_sources(root, verified_sources)
             _observation(root, "preparation/" + operation, storage_rows=storage_rows)
             _require(len(candidates) == 1, "E_STORE")
             root.recheck("E_STORE")
@@ -1444,6 +1457,7 @@ class Anchor:
             values[operation] = candidates[0]
             copied = _HeldCaptureCopy(self, self.recording_work, case_work)
             copied.acquire(parent, destination_name, file_states, runtime_hashes)
+            copied.T_companions = T_companions
         except BaseException as error:
             failure = error
             self.private_observations["unusable"] = True
@@ -1485,6 +1499,12 @@ class Anchor:
                                 and not getattr(tail_failure, "_scope_signal_cancel", False)):
                             tail_failure = error
                     copied = None
+                for T_source in reversed(T_companions):
+                    try:T_source.close()
+                    except BaseException as error:
+                        if tail_failure is None or (getattr(error, "_scope_signal_cancel", False)
+                                and not getattr(tail_failure, "_scope_signal_cancel", False)):
+                            tail_failure = error
             if (getattr(tail_failure, "_scope_signal_cancel", False)
                     and not getattr(failure, "_scope_signal_cancel", False)):
                 raise tail_failure
@@ -2783,6 +2803,7 @@ class _HeldCaptureCopy:
         self.leaf, self.members, self.runtime_sha256 = {}, {}, {}
         self.directory, self.closed, self.owned = None, False, []
         self.local_parent = False
+        self.T_companions = []
         self.recorder_parent_path, self.recorder_parent_index = None, None
         _capture_work_values(self.leaf, "P-capture-holds")
         work.setdefault("P_hold_leaves", []).append(self.leaf)
@@ -2817,23 +2838,26 @@ class _HeldCaptureCopy:
                 if getattr(closing, "_scope_signal_cancel", False) and not getattr(error, "_scope_signal_cancel", False):raise
             raise
 
+    def _clone_held(self, original, site="P-clone-allocation-close"):
+        rows = _clone(original, "E_STORE", self.leaf, "M")
+        try:
+            return HeldPath(original.path, rows, recording_work=self.leaf, accounting_kind="M")
+        except BaseException as primary:
+            while rows:
+                component = rows.pop()
+                try:_close_capture_copy(component.fd, self.leaf, self.leaf, site, primary)
+                except BaseException as error:
+                    if getattr(error, "_scope_signal_cancel", False) and not getattr(primary, "_scope_signal_cancel", False):
+                        primary = error
+            raise primary
+
     def acquire(self, parent, launch, file_states, runtime_hashes):
         try:
             self.recorder_parent_path = parent.path
             self.recorder_parent_index = len(parent.components) - 1
             if launch is None:
                 self.local_parent = True
-                rows = _clone(parent, "E_STORE", self.leaf, "M")
-                try:
-                    self.directory = HeldPath(parent.path, rows, recording_work=self.leaf, accounting_kind="M")
-                except BaseException as primary:
-                    while rows:
-                        component = rows.pop()
-                        try:_close_capture_copy(component.fd, self.leaf, self.leaf, "P-clone-allocation-close", primary)
-                        except BaseException as error:
-                            if getattr(error, "_scope_signal_cancel", False) and not getattr(primary, "_scope_signal_cancel", False):
-                                primary = error
-                    raise primary
+                self.directory = self._clone_held(parent)
             else:
                 self.directory = _open_child(parent, launch, True,
                     _store_rule(os.geteuid(), os.getegid(), 0o700, True, self.anchor.resolver), "E_STORE",
@@ -2867,6 +2891,7 @@ class _HeldCaptureCopy:
     def recheck(self):
         if self.closed:return
         try:
+            for T_source in self.T_companions:T_source.recheck()
             self.directory.recheck("E_STORE")
             for held in self.members.values():held.recheck("E_STORE")
         except Exception as error:
@@ -2884,6 +2909,13 @@ class _HeldCaptureCopy:
         held, self.owned = self.owned, []
         self.closed = True
         self.directory = None
+        sources, self.T_companions = self.T_companions, []
+        for source in reversed(sources):
+            try:
+                try:source.recheck()
+                finally:source.close()
+            except BaseException as error:
+                if getattr(error, "_scope_signal_cancel", False) and cancellation is None:cancellation = error
         for item in reversed(held):
             try:item.close()
             except Exception as error:
@@ -2895,6 +2927,40 @@ class _HeldCaptureCopy:
         except Exception as error:
             if getattr(error, "_scope_signal_cancel", False) and cancellation is None:cancellation = error
         if cancellation is not None and not getattr(primary, "_scope_signal_cancel", False):raise cancellation
+
+
+class _HeldPreparationSources(_HeldCaptureCopy):
+    def __init__(self, anchor, work, case_work, binding):
+        self.anchor, self.work, self.case_work = anchor, work, case_work
+        self.leaf, self.members, self.runtime_sha256 = {}, {}, {}
+        self.directory, self.closed, self.owned = None, False, []
+        self.local_parent, self.T_companions = False, []
+        self.recorder_parent_path, self.recorder_parent_index = None, None
+        self.binding, self.stable = binding, False
+        _capture_work_values(self.leaf, "T-source-holds")
+        work.setdefault("T_hold_leaves", []).append(self.leaf)
+
+    def _failed(self, error, site, primary=None):
+        self.stable = False
+        return super()._failed(error, site, primary)
+
+    def acquire_sources(self, root, sources):
+        try:
+            self.directory = self._clone_held(root, "T-clone-allocation-close")
+            self._adopt(self.directory)
+            for name, source in sources.items():
+                held = self._clone_held(source, "T-clone-allocation-close")
+                self._adopt(held)
+                self.members[name] = held
+                _require(_identity(held.before) == _identity(self.binding["target_states"][name]), "E_STORE")
+            self.runtime_sha256 = self.binding["runtime_sha256"]
+            self._transfer()
+            _require(not _capture_work_incomplete(self.leaf), "E_STORE")
+            self.stable = True
+            return self
+        except BaseException:
+            self.close()
+            raise
 
 
 class _HeldStoreRead:

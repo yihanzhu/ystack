@@ -3153,6 +3153,124 @@ def _synthetic_parent_P_context(c, path):
         'parent-frame.bin':frame,'helper-build-record.json':helper,'native-dependency-record.json':dependency}
 
 
+def _synthetic_T_live_files(c, scratch, operation, input_raw, response_raw):
+    rows=[];files={}
+    for ordinal,role in enumerate(('python','git','jq')):
+        name='raw16-t-v1-'+operation+'-runtime-'+role+'-'+str(ordinal).zfill(2)+'.bin'
+        raw=(b'never executed synthetic T '+role.encode())*103
+        path=scratch/name;path.write_bytes(raw);path.chmod(0o400);files[name]=raw
+        rows.append({'slot':role,'index':0,'ordinal':ordinal,'locator':str(path),'file':name,
+            'size_bytes':len(raw),'sha256':c.digest(raw),'errno':None})
+    value={'operation':operation,'binding':{'input_sha256':c.digest(input_raw),'response_sha256':c.digest(response_raw)},
+        'entropy':[],'clocks':[],'storage':[],'commands':[],'runtime':{'files':rows},'complete':True}
+    raw=c.canonical(value);name='raw16-t-v1-'+operation+'-capture.json'
+    path=scratch/name;path.write_bytes(raw);path.chmod(0o400);files[name]=raw
+    marker='raw16-t-v1-'+operation+'-complete-'+c.digest(raw);(scratch/marker).mkdir(mode=0o700)
+    return value,files,marker
+
+
+def raw16_T_live_stable(root: Path) -> None:
+    import ast
+    import tempfile
+    spec=importlib.util.spec_from_file_location('T_live_stable',root/'shadow/v1/enforced-reproduction.py')
+    e=importlib.util.module_from_spec(spec);sys.modules[spec.name]=e;spec.loader.exec_module(e);c=e.c
+    acl=c._acl_state;c._acl_state=lambda *_:([],None) if sys.platform=='darwin' else (None,None)
+    syntax=ast.parse((root/'scope/v1/read-shadow-evidence.py').read_text())
+    main=next(node for node in syntax.body if isinstance(node,ast.FunctionDef) and node.name=='main')
+    handler=next(node for node in main.body if isinstance(node,ast.FunctionDef) and node.name=='cancel')
+    callbacks={};exec(compile(ast.Module(body=[handler],type_ignores=[]),'<actual-cancel>','exec'),callbacks)
+    results=[]
+    try:
+        for case in ('stable','runtime-target-drift','capture-target-drift','root-mode','clone-failure','allocation-failure','registration-failure','transfer-failure','close-cancel'):
+            with tempfile.TemporaryDirectory(prefix='ystack-T-live-') as temporary:
+                base=Path(temporary).resolve();base.chmod(0o700);work=base/'work';work.mkdir(mode=0o700)
+                scratch=work/'preparation-scratch';scratch.mkdir(mode=0o700)
+                input_raw,response_raw=b'synthetic T input',b'synthetic T response'
+                value,files,marker=_synthetic_T_live_files(c,scratch,'prepare',input_raw,response_raw)
+                holder=e.stable_directory(work);anchor=c.Anchor({},b'',[],{},('',[]),('',[]),None)
+                request=c.canonical({'kind':'shadow_write_request','id':'t.live.fixture'})
+                dup,init,source_init,transfer,close_paths,closing=os.dup,c.HeldPath.__init__,c._HeldPreparationSources.__init__,c._capture_transfer_work,c._close_paths,os.close
+                originals,closed,fired,events,sources,T_duplicates=[],[],[],[],[],[];watched=set()
+                class Reject(list):
+                    def append(self,*args):raise MemoryError('controlled T source ownership registration')
+                def construct(self,*args,**kwargs):
+                    source_init(self,*args,**kwargs);sources.append(self)
+                    if case=='registration-failure':self.owned=Reject()
+                def duplicate(fd):
+                    if case=='clone-failure' and sources and not fired:
+                        fired.append(case);raise OSError(errno.EMFILE,'controlled T fullchain duplicate')
+                    value=dup(fd)
+                    if sources and not anchor.recording_work.get('P_hold_leaves'):T_duplicates.append(value)
+                    return value
+                def initialize(self,*args,**kwargs):
+                    if case=='allocation-failure' and sources and kwargs.get('recording_work') is sources[0].leaf and not fired:
+                        fired.append(case);raise MemoryError('controlled T HeldPath construction')
+                    return init(self,*args,**kwargs)
+                def transferring(leaf,*args,**kwargs):
+                    if case=='transfer-failure' and sources and leaf is sources[0].leaf and not fired:
+                        fired.append(case);raise MemoryError('controlled T transfer')
+                    return transfer(leaf,*args,**kwargs)
+                def original_close(items):
+                    originals.extend(component.fd for held in items for component in held.components)
+                    return close_paths(items)
+                def closing_T(fd):
+                    result=closing(fd)
+                    if fd in watched or fd in T_duplicates:
+                        closed.append(fd)
+                        if case=='close-cancel' and not events:
+                            try:callbacks['cancel'](15,None)
+                            except InterruptedError as error:events.append(error);raise
+                    return result
+                try:
+                    os.dup,c.HeldPath.__init__,c._HeldPreparationSources.__init__,c._capture_transfer_work,c._close_paths,os.close=duplicate,initialize,construct,transferring,original_close,closing_T
+                    copied=holder._retain_preparation(anchor,'preparation-scratch','prepare',input_raw,response_raw,request)
+                    os.dup,c.HeldPath.__init__,c._HeldPreparationSources.__init__,c._capture_transfer_work,c._close_paths=dup,init,source_init,transfer,close_paths
+                    assert len(sources)==1
+                    T=sources[0]
+                    if case.endswith('failure'):
+                        assert copied is None and T.closed and not T.owned and not holder.runtime_copies
+                        assert anchor.private_observations.get('unusable') is True
+                        assert len(closed)==len(T_duplicates) and set(closed)==set(T_duplicates), 'failed T acquisition must close each duplicate once'
+                        for fd in T_duplicates:
+                            try:os.fstat(fd)
+                            except OSError as error:assert error.errno==errno.EBADF
+                            else:raise AssertionError('failed T acquisition leaked an FD')
+                        results.append({'case':case,'T_leaf':T.leaf,'work':anchor.recording_work,'failed_T_new_FDs_closed_once':len(closed)});continue
+                    assert copied is holder.runtime_copies[0] and copied.T_companions==[T]
+                    assert T.stable and not T.closed and set(T.members)==set(files)|{marker}
+                    assert T.binding['capture_raw']==files['raw16-t-v1-prepare-capture.json']
+                    watched={component.fd for item in T.owned for component in item.components}
+                    assert watched.isdisjoint(originals)
+                    for fd in originals:
+                        try:os.fstat(fd)
+                        except OSError as error:assert error.errno==errno.EBADF
+                        else:raise AssertionError('original T close point moved')
+                    assert all(os.fstat(fd) for fd in watched)
+                    if case in ('runtime-target-drift','capture-target-drift'):
+                        name=('raw16-t-v1-prepare-runtime-python-00.bin' if case.startswith('runtime') else 'raw16-t-v1-prepare-capture.json')
+                        target=scratch/name;target.chmod(0o600)
+                        with target.open('r+b') as stream:stream.write(b'!')
+                        target.chmod(0o400)
+                    if case=='root-mode':scratch.chmod(0o750)
+                    copied.recheck()
+                    assert bool(anchor.private_observations.get('unusable'))==(case in ('runtime-target-drift','capture-target-drift','root-mode'))
+                    os.close=closing_T;caught=None
+                    try:holder.close_runtime_copies()
+                    except InterruptedError as error:caught=error
+                    assert T.closed and not T.owned and copied.closed
+                    T.close();assert len(closed)==len(watched) and set(closed)==watched
+                    if case=='close-cancel':assert len(events)==1 and caught is events[0]
+                    else:assert caught is None
+                    results.append({'case':case,'T_leaf':T.leaf,'P_leaf':copied.leaf,'work':anchor.recording_work,
+                        'original_T_FDs_closed_at_original_point':len(originals),'independent_T_FDs_closed_once':len(closed),
+                        'T_raw_binding':value['binding'],'producer_and_qualification':'synthetic / UNKNOWN'})
+                finally:
+                    os.dup,c.HeldPath.__init__,c._HeldPreparationSources.__init__,c._capture_transfer_work,c._close_paths,os.close=dup,init,source_init,transfer,close_paths,closing
+                    holder.close();anchor.close()
+    finally:c._acl_state=acl
+    print(json.dumps({'actual_stable_T_companions':results},sort_keys=True))
+
+
 def raw16_P_handoff_accounting(root: Path) -> None:
     import ast
     import tempfile
