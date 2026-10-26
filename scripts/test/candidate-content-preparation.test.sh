@@ -4,6 +4,14 @@ export LC_ALL=C
 umask 077
 
 root=$(CDPATH='' cd -P -- "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
+/usr/bin/python3 -I -S -B - "$root" <<'PY_RAW16_T_LIFECYCLE'
+import importlib.util,sys
+from pathlib import Path
+root=Path(sys.argv[1])
+spec=importlib.util.spec_from_file_location('raw16_T_ordinary_fixture',root/'scripts/test/candidate-content-preparation-fixtures.py')
+fixture=importlib.util.module_from_spec(spec);sys.modules[spec.name]=fixture;spec.loader.exec_module(fixture)
+fixture.raw16_t_lifecycle(root)
+PY_RAW16_T_LIFECYCLE
 component="$root/preparation/v1/prepare-candidate.py"
 helper="$root/scripts/test/candidate-content-preparation-fixtures.py"
 builder="$root/scripts/test/local-git-materializer-fixtures.sh"

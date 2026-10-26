@@ -389,6 +389,14 @@ class StableDirectory:
             if getattr(error, "_scope_signal_cancel", False):raise
             return None
 
+    def _retain_runtime(self, anchor, role, original, raw, caller_raw):
+        try:
+            anchor.retain_runtime_acquisition(self._recording_parent(), role, original, raw, caller_raw)
+        except (Refusal, c.Refusal, OSError, ValueError, MemoryError) as error:
+            anchor.private_observations["unusable"] = True
+            if getattr(error, "_scope_signal_cancel", False):
+                raise
+
     def recheck(self, code: str = "E_WORKSPACE") -> None:
         for index, component in enumerate(self.held.components):
             current = c._metadata(component.fd)
@@ -1986,7 +1994,13 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
         helper = c.snapshot_dependency(str(paths["closure_helper"]), context["helper_executable_sha256"],
             context["helper_executable_size"], str(deps / "helper" / "object-closure"), "object-closure")
         jq = c.snapshot_jq(str(paths["jq"]), str(deps / "jq" / "jq"))
+        work_hold._retain_runtime(anchor, "object_closure", helper.original, helper.acquisition_raw, request_raw)
+        helper.acquisition_raw = None
+        work_hold._retain_runtime(anchor, "jq", jq.original, jq.acquisition_raw, request_raw)
+        jq.acquisition_raw = None
+        work_hold._retain_runtime(anchor, "python", python_file.held, python_file.raw, request_raw)
         bash = fixed_bash()
+        work_hold._retain_runtime(anchor, "bash", bash.physical.held, bash.physical.raw, request_raw)
         sudo_file = fixed_sudo()
         helper_source = stable_file(SOURCE / "adapters/local-git-materializer/v1/object-closure.c")
         sources.append(helper_source)
@@ -2094,10 +2108,13 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
             "--response", str(response_path), "--response-sha256", sha(response_raw),
             "--candidate-repository", str(candidate / "repository.git"), "--output", str(prep),
             "--scratch", str(prep_scratch), "--jq", jq.snapshot.path]
+        reserved_preparation_name = c._preparation_reserved_name
         execute("candidate-preparation", prepare + ["prepare", *common], preparation_source,
                 timeout=300, env=env, deadline=deadline)
         work_hold._retain_preparation(anchor,"preparation-scratch","prepare",input_raw,response_raw,request_raw)
         for child in prep_scratch.iterdir():
+            if reserved_preparation_name(child.name):
+                continue
             if child.is_dir() and not child.is_symlink():
                 shutil.rmtree(child)
             else:

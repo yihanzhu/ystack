@@ -196,7 +196,8 @@ _RUNTIME_FIELDS = {"logical_bytes": 4 << 30, "files": 64, "physical_bytes": 24 <
     "sha_bytes": 80 << 30, "equality_bytes": 56 << 30, "copy_bytes": 20 << 30}
 _RUNTIME_ROLES = {"guest_kernel", "guest_init", "guest_supervisor", "image", "toolchain", "verifier",
     "guest_kernel_config", "runtime_vfkit", "runtime_driver", "vm_service", "dyld_cache_files",
-    "host_config", "host_supervisor_source", "host_python", "preparation_source", "python", "git", "jq"}
+    "host_config", "host_supervisor_source", "host_python", "python", "git", "jq",
+    "bash", "sudo", "compiler", "object_closure", "native_release", "native_build_record"}
 _RUNTIME_ROLES |= {"installed_" + name for name in ("accepted_set", "registry", "control_policy",
     "control_decision", "control_policy_set", "evaluator_driver", "evaluator_program")}
 
@@ -207,10 +208,15 @@ def _runtime_account(work, field, amount, *, window=False):
     limit = _RUNTIME_FIELDS[field] * (4 if window else 1)
     current = counts.get(field, 0)
     _require(type(current) is int and current >= 0 and current + amount <= limit, "E_LIMIT")
+    for key, multiplier in (("runtime_case_carry_in", 1), ("runtime_window_carry_in", 4)):
+        if key in work:
+            carry = work[key].get(field, 0)
+            _require(type(carry) is int and carry >= 0
+                     and carry + current + amount <= _RUNTIME_FIELDS[field] * multiplier, "E_LIMIT")
     counts[field] = current + amount
 
 
-def _runtime_inventory_values(group):
+def _runtime_inventory_values(group, preparation_operation=None):
     _require(type(group) is dict and set(group) in ({"files"}, {"slots", "files"})
              and type(group.get("files")) is list and 1 <= len(group["files"]) <= 64, "E_STORE")
     names, total = set(), 0
@@ -225,8 +231,13 @@ def _runtime_inventory_values(group):
             and len(os.fsencode(row["locator"])) <= 4096
             and type(row["size_bytes"]) is int and 0 <= row["size_bytes"] <= 4 << 30
             and _sha(row["sha256"]) and row["errno"] is None, "E_STORE")
-        _require(row["file"] == "runtime-" + str(ordinal).zfill(4) + "-" + row["slot"]
-                 + "-" + str(row["index"]).zfill(4) + ".bin" and row["file"] not in names, "E_STORE")
+        expected_name = ("runtime-" + str(ordinal).zfill(4) + "-" + row["slot"]
+                         + "-" + str(row["index"]).zfill(4) + ".bin")
+        if preparation_operation is not None:
+            _require(preparation_operation in {"prepare", "inspect"} and row["slot"] in {"python", "jq", "git"}, "E_STORE")
+            expected_name = ("raw16-t-v1-" + preparation_operation + "-runtime-" + row["slot"]
+                             + "-" + str(ordinal).zfill(2) + ".bin")
+        _require(row["file"] == expected_name and row["file"] not in names, "E_STORE")
         names.add(row["file"]);total += row["size_bytes"]
         _require(total <= 4 << 30, "E_LIMIT")
     return {row["file"]: row for row in group["files"]}
@@ -994,6 +1005,7 @@ class DependencySnapshot:
     snapshot: HeldPath
     sha256: str
     size: int
+    acquisition_raw: bytes | None = None
     def recheck(self) -> None:
         self.original.recheck("E_DEPENDENCY")
         raw = self.snapshot.read(self.size, "E_DEPENDENCY")
@@ -1048,7 +1060,7 @@ def snapshot_dependency(path: str, expected_sha256: str, expected_size: int,
                               lambda _fd, state, ancestor: ancestor or stat.S_IMODE(state.st_mode) == 0o500,
                               "E_DEPENDENCY")
         parent.close()
-        return DependencySnapshot(original, snapshot, expected_sha256, expected_size)
+        return DependencySnapshot(original, snapshot, expected_sha256, expected_size, raw)
     except (OSError, ValueError, Refusal):
         if directory:
             directory.close()
@@ -1188,16 +1200,34 @@ def _parse_accepted(raw: bytes) -> tuple[str, list[dict]]:
                  and all(_id_list(value) for value in row["mechanisms"].values()), "E_INSTALL")
     return digest(raw), body["environments"]
 
+def _preparation_reserved_name(name):
+    if type(name) is not str:
+        return False
+    for operation in ("prepare", "inspect"):
+        prefix = "raw16-t-v1-" + operation + "-"
+        if name == prefix + "capture.json":
+            return True
+        if name.startswith(prefix + "complete-") and _sha(name[len(prefix + "complete-"):]):
+            return True
+        for role in ("python", "jq", "git"):
+            stem = prefix + "runtime-" + role + "-"
+            index = name[len(stem):-4]
+            if (name.startswith(stem) and name.endswith(".bin") and len(index) == 2
+                    and all(char in "0123456789" for char in index) and int(index) < 64):
+                return True
+    return False
+
+
 def _preparation_capture_binding_values(raw, operation, input_raw, response_raw):
     _require(operation in {"prepare", "inspect"}, "E_STORE")
     value = _json(raw, DOCUMENT_LIMIT, "E_STORE")
     _require(set(value) == {"operation", "binding", "entropy", "clocks", "storage", "commands", "runtime", "complete"}
              and value["complete"] is True and value["operation"] == operation
              and value["binding"] == {"input_sha256": digest(input_raw), "response_sha256": digest(response_raw)}, "E_STORE")
-    runtime = _runtime_inventory_values(value["runtime"])
-    _require(len(runtime) == 4 and {row["slot"] for row in runtime.values()}
-             == {"preparation_source", "python", "git", "jq"}, "E_STORE")
-    return value, runtime, ".runtime-complete-" + digest(raw)
+    runtime = _runtime_inventory_values(value["runtime"], operation)
+    _require(len(runtime) == 3 and {row["slot"] for row in runtime.values()}
+             == {"python", "git", "jq"}, "E_STORE")
+    return value, runtime, "raw16-t-v1-" + operation + "-complete-" + digest(raw)
 
 
 def _preparation_seal_values(name, expected, before, after, named, uid, gid, access, default, platform, contents):
@@ -1314,30 +1344,30 @@ class Anchor:
             opened.append(root)
             names = root.listdir()
             _require(len(names) <= 128, "E_STORE")
-            candidates = []
-            for name in sorted(names):
+            reserved = {name for name in names if _preparation_reserved_name(name)}
+            for name in set(names) - reserved:
                 _require(name.startswith("candidate-preparation-") and len(name[len("candidate-preparation-"):]) == 16
                          and all(char in "0123456789abcdef" for char in name[len("candidate-preparation-"):]), "E_STORE")
-                directory = _open_child(root, name, True, _store_rule(uid, gid, 0o700, True, self.resolver),
-                                       "E_STORE", recording_work=runtime_leaf, accounting_kind="M")
-                opened.append(directory)
-                try:
-                    item = _open_child(directory, "capture.json", False, _store_rule(uid, gid, 0o400, False, self.resolver),
-                                       "E_STORE", recording_work=runtime_leaf, accounting_kind="M")
-                except Refusal as error:
-                    if error.os_errno == errno.ENOENT:continue
-                    raise
+            candidates = []
+            for selected_operation in ("prepare", "inspect"):
+                prefix = "raw16-t-v1-" + selected_operation + "-"
+                selected_names = {name for name in reserved if name.startswith(prefix)}
+                if selected_operation != operation and not selected_names:
+                    continue
+                item = _open_child(root, prefix + "capture.json", False,
+                    _store_rule(uid, gid, 0o400, False, self.resolver), "E_STORE",
+                    recording_work=runtime_leaf, accounting_kind="M")
                 opened.append(item)
                 raw = item.read(DOCUMENT_LIMIT, "E_STORE", runtime_leaf)
                 _capture_copy_room(runtime_leaf, 7 * len(raw), False, case=True, read_only=True)
                 runtime_leaf["read_bytes"] += 7 * len(raw)
-                value, runtime_files, expected_seal = _preparation_capture_binding_values(raw, operation, input_raw, response_raw)
-                listed = set(directory.listdir())
+                value, runtime_files, expected_seal = _preparation_capture_binding_values(
+                    raw, selected_operation, input_raw, response_raw)
                 runtime_leaf["read_bytes"] += len(raw)
-                _require({entry for entry in listed if entry.startswith(".runtime-complete")}
-                         == {expected_seal} and {entry for entry in listed if entry.startswith("runtime-")}
-                         == set(runtime_files), "E_STORE")
-                seal = _open_child(directory, expected_seal, True, _store_rule(uid, gid, 0o700, True, self.resolver),
+                _require(selected_names == set(runtime_files) | {prefix + "capture.json", expected_seal}, "E_STORE")
+                if selected_operation != operation:
+                    _require(self.private_observations.get("preparation", {}).get(selected_operation) == value, "E_STORE")
+                seal = _open_child(root, expected_seal, True, _store_rule(uid, gid, 0o700, True, self.resolver),
                                    "E_STORE", recording_work=runtime_leaf, accounting_kind="M")
                 opened.append(seal)
                 contents = seal.listdir()
@@ -1347,26 +1377,28 @@ class Anchor:
                 _preparation_seal_values(last.name, expected_seal, _stat_values(last.before),
                     _stat_values(last.after), _stat_values(last.named_after), uid, gid, access, default,
                     sys.platform, contents)
-                _observation(directory, "preparation/" + operation, storage_rows=storage_rows)
-                _observation(item, "preparation/" + operation + "/capture.json", raw, storage_rows=storage_rows)
-                _observation(seal, "preparation/" + operation + "/" + expected_seal, storage_rows=storage_rows)
+                _observation(item, "preparation/" + selected_operation + "/capture.json", raw, storage_rows=storage_rows)
+                _observation(seal, "preparation/" + selected_operation + "/" + expected_seal, storage_rows=storage_rows)
                 for filename in sorted(runtime_files):
-                    source = _open_child(directory, filename, False, _store_rule(uid, gid, 0o400, False, self.resolver),
+                    source = _open_child(root, filename, False, _store_rule(uid, gid, 0o400, False, self.resolver),
                                          "E_STORE", recording_work=runtime_leaf, accounting_kind="M")
                     opened.append(source)
                     snapshot = _RuntimeSnapshot(source, runtime_leaf)
                     _require(len(snapshot) == runtime_files[filename]["size_bytes"]
                              and snapshot.acquisition_sha == runtime_files[filename]["sha256"], "E_STORE")
-                    _observation(source, "preparation/" + operation + "/" + filename, snapshot, storage_rows=storage_rows)
+                    _observation(source, "preparation/" + selected_operation + "/" + filename,
+                                 snapshot, storage_rows=storage_rows)
                     _require(snapshot.sha256() == runtime_files[filename]["sha256"], "E_STORE")
-                    _copy_runtime_file(destination.fd, filename, snapshot, runtime_leaf, self.resolver)
-                _copy_preparation_document(destination.fd, raw, runtime_leaf, self.resolver)
-                _refresh_recording_directory(destination, destination_before, runtime_leaf)
-                _require(set(destination.listdir()) == set(runtime_files) | {"capture.json"}, "E_STORE")
-                os.fsync(destination.fd);os.fsync(parent.fd)
-                item.recheck("E_STORE");seal.recheck("E_STORE");directory.recheck("E_STORE")
-                self.retain_storage_reads(caller["id"], opened, storage_rows)
-                candidates.append(value)
+                    if selected_operation == operation:
+                        _copy_runtime_file(destination.fd, filename, snapshot, runtime_leaf, self.resolver)
+                if selected_operation == operation:
+                    _copy_preparation_document(destination.fd, raw, runtime_leaf, self.resolver)
+                    _refresh_recording_directory(destination, destination_before, runtime_leaf)
+                    _require(set(destination.listdir()) == set(runtime_files) | {"capture.json"}, "E_STORE")
+                    os.fsync(destination.fd);os.fsync(parent.fd)
+                    candidates.append(value)
+                item.recheck("E_STORE");seal.recheck("E_STORE")
+            _observation(root, "preparation/" + operation, storage_rows=storage_rows)
             _require(len(candidates) == 1, "E_STORE")
             root.recheck("E_STORE")
             values = self.private_observations.setdefault("preparation", {})
@@ -1380,20 +1412,95 @@ class Anchor:
             if getattr(error, "_scope_signal_cancel", False) or not isinstance(error, failures):raise
             return None
         finally:
+            tail_failure = None
+            try:
+                self.retain_storage(caller["id"] if "caller" in locals() and _id(caller.get("id")) else None,
+                                    storage_rows, failure, opened)
+            except (OSError, Refusal, ValueError, MemoryError) as error:
+                self.private_observations["unusable"] = True
+                runtime_leaf["storage_retention_incomplete"] = True
+                tail_failure = error
             try:_close_paths(opened)
             except (OSError, Refusal, MemoryError) as error:
                 self.private_observations["unusable"] = True
                 runtime_leaf["release_failure"] = {"category": type(error).__name__, "errno": getattr(error, "errno", None)}
-                if getattr(error, "_scope_signal_cancel", False) and not getattr(failure, "_scope_signal_cancel", False):raise
-            finally:
+                if tail_failure is None or (getattr(error, "_scope_signal_cancel", False)
+                        and not getattr(tail_failure, "_scope_signal_cancel", False)):
+                    tail_failure = error
+            try:
                 if case_work is not None:
-                    try:
-                        _capture_transfer_work(runtime_leaf, self.recording_work, case_work)
-                        _capture_accounting_receipt(self)
-                    except Exception as error:
-                        self.private_observations["unusable"] = True
-                        runtime_leaf["transfer_incomplete"] = True
-                        if getattr(error, "_scope_signal_cancel", False) and not getattr(failure, "_scope_signal_cancel", False):raise
+                    _capture_transfer_work(runtime_leaf, self.recording_work, case_work)
+                    _capture_accounting_receipt(self)
+            except Exception as error:
+                self.private_observations["unusable"] = True
+                runtime_leaf["transfer_incomplete"] = True
+                if tail_failure is None or (getattr(error, "_scope_signal_cancel", False)
+                        and not getattr(tail_failure, "_scope_signal_cancel", False)):
+                    tail_failure = error
+            if (getattr(tail_failure, "_scope_signal_cancel", False)
+                    and not getattr(failure, "_scope_signal_cancel", False)):
+                raise tail_failure
+
+    def retain_runtime_acquisition(self, parent, role, original, raw, caller_raw):
+        leaf, case_work, failure = {}, None, None
+        try:
+            _capture_work_values(leaf, "local-runtime")
+            self.recording_work.setdefault("local_runtime_leaves", []).append(leaf)
+            _require(role in {"python", "git", "jq", "bash", "sudo", "compiler", "object_closure",
+                             "native_release", "native_build_record"}
+                     and isinstance(original, HeldPath) and type(raw) is bytes, "E_STORE")
+            caller = _json(caller_raw, DOCUMENT_LIMIT, "E_STORE")
+            _require(caller.get("kind") in {"shadow_enforced_request", "shadow_write_request"}
+                     and _id(caller.get("id")), "E_STORE")
+            case_key = str(parent.before.st_dev) + ":" + str(parent.before.st_ino)
+            case_work = _capture_work_values(self.recording_work, case_key)
+            leaf["runtime_case_carry_in"] = case_work.get("runtime", {})
+            leaf["runtime_window_carry_in"] = self.recording_work.get("runtime", {})
+            values = self.private_observations.setdefault("local_runtime", [])
+            ordinal = len(self.recording_work["local_runtime_leaves"]) - 1
+            _require(ordinal < 64 and len(raw) == original.before.st_size, "E_LIMIT")
+            _runtime_account(leaf, "read_bytes", len(raw))
+            _runtime_account(leaf, "sha_bytes", len(raw))
+            expected = digest(raw)
+            snapshot = _RuntimeSnapshot(original, leaf)
+            _require(snapshot.acquisition_sha == expected, "E_STORE")
+            offset = 0
+            for chunk in snapshot.chunks:
+                _runtime_account(leaf, "read_bytes", len(chunk))
+                _runtime_account(leaf, "equality_bytes", 2 * len(chunk))
+                _require(chunk == memoryview(raw)[offset:offset + len(chunk)], "E_STORE")
+                offset += len(chunk)
+            _require(offset == len(raw), "E_STORE")
+            parent.recheck("E_STORE")
+            before = parent.before
+            name = "runtime-" + str(ordinal).zfill(4) + "-" + role + "-0000.bin"
+            _copy_runtime_file(parent.fd, name, snapshot, leaf, self.resolver)
+            _refresh_recording_directory(parent, before, leaf)
+            os.fsync(parent.fd)
+            original.recheck("E_STORE")
+            values.append({"slot": role, "index": 0, "ordinal": ordinal, "locator": original.path,
+                "file": name, "size_bytes": len(raw), "sha256": expected, "errno": None,
+                "request_sha256": digest(caller_raw), "attempt_id": caller["id"]})
+            _runtime_account(leaf, "read_bytes", len(caller_raw))
+            _runtime_account(leaf, "sha_bytes", len(caller_raw))
+        except BaseException as error:
+            failure = error
+            self.private_observations["unusable"] = True
+            leaf["failure"] = {"category": type(error).__name__,
+                "errno": getattr(error, "os_errno", getattr(error, "errno", None))}
+            if getattr(error, "_scope_signal_cancel", False) or not isinstance(error,
+                    (Refusal, OSError, ValueError, TypeError, MemoryError)):
+                raise
+        finally:
+            try:
+                if case_work is not None:
+                    _capture_transfer_work(leaf, self.recording_work, case_work)
+                    _capture_accounting_receipt(self)
+            except Exception as error:
+                self.private_observations["unusable"] = True
+                leaf["transfer_incomplete"] = True
+                if getattr(error, "_scope_signal_cancel", False) and not getattr(failure, "_scope_signal_cancel", False):
+                    raise
 
     def copy_runtime_slots(self, parent, slots, work):
         fixed = {key: self.config["identity_paths"][key] for key in

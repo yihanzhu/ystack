@@ -626,7 +626,7 @@ try:
         for role in ('python','git','jq'):
             path=fixtures/role;raw=(b'nonexecutable synthetic '+role.encode()+b' runtime bytes')*2000
             path.write_bytes(raw);path.chmod(0o400);paths[role]=path;raw_values[role]=raw
-        raw_values['preparation_source']=(root/'preparation/v1/prepare-candidate.py').read_bytes()
+        source_raw=(root/'preparation/v1/prepare-candidate.py').read_bytes()
         deadline=p.time.monotonic()+60
         boundaries={'scratch':p.hold_boundary(scratch,'directory',deadline,private_leaf=True),
             'component_source':p.hold_boundary(root/'preparation/v1/prepare-candidate.py','file',deadline)}
@@ -647,24 +647,25 @@ try:
             p.copy_dependencies(ctx)
             producer=p.producer_identity(ctx)
         finally:p.run_child=original_child;p.GIT=original_git;sys.executable=original_python
-        assert len(commands)==2 and len(ctx.runtime_inventory)==4
+        assert len(commands)==2 and len(ctx.runtime_inventory)==3
         assert producer['python']['executable_sha256']==p.sha256(raw_values['python'])
         assert producer['git']['executable_sha256']==p.sha256(raw_values['git'])
         p._write_preparation_observations(ctx,True)
-        raw=(ctx.scratch/'capture.json').read_bytes();value=p._preparation_capture_values(raw,ctx.scratch.name,'prepare',
+        capture=scratch/'raw16-t-v1-prepare-capture.json'
+        raw=capture.read_bytes();value=p._preparation_capture_values(raw,ctx.scratch.name,'prepare',
             p.sha256(input_raw),p.sha256(response_raw))
-        marker='.runtime-complete-'+p.sha256(raw)
+        marker='raw16-t-v1-prepare-complete-'+p.sha256(raw)
         assert not ctx.recording_unusable and ctx.recording_work['seal_created']
-        assert (ctx.scratch/marker).is_dir() and list((ctx.scratch/marker).iterdir())==[]
-        assert os.fstat(ctx.boundaries['scratch_work'].fd)
+        assert (scratch/marker).is_dir() and list((scratch/marker).iterdir())==[]
+        assert os.fstat(ctx.boundaries['scratch'].fd)
         total=sum(map(len,raw_values.values()))
-        assert ctx.recording_work['runtime']=={'files':4,'logical_bytes':total,'write_bytes':total,
+        assert ctx.recording_work['runtime']=={'files':3,'logical_bytes':total,'write_bytes':total,
             'physical_bytes':total,'copy_bytes':total,'read_bytes':2*total,'sha_bytes':2*total,'equality_bytes':2*total}
-        assert ctx.recording_work['close_calls']==10
+        assert ctx.recording_work['close_calls']==8
         holder=e.stable_directory(work)
         anchor=c.Anchor({},b'',[],{},('',[]),('',[]),None)
-        caller=c.canonical({'schema_version':1,'kind':'shadow_enforced_request','id':'attempt.T.fixture',
-            'body':{'attempt_id':'attempt.T.fixture'}})
+        caller=c.canonical({'schema_version':1,'kind':'shadow_enforced_request','id':'attempt.t.fixture',
+            'body':{'attempt_id':'attempt.t.fixture'}})
         retained=holder._retain_preparation(anchor,'preparation-scratch','prepare',input_raw,response_raw,caller)
         assert retained==value and not anchor.private_observations.get('unusable',False)
         assert replay._preparation_capture_values(root,raw,ctx.scratch.name,'prepare',input_raw,response_raw)==value
@@ -673,7 +674,7 @@ try:
         assert {path.name for path in destination.iterdir()}=={'capture.json'}|{row['file'] for row in ctx.runtime_inventory}
         assert (destination/'capture.json').read_bytes()==raw
         for row in ctx.runtime_inventory:
-            assert (ctx.scratch/row['file']).read_bytes()==raw_values[row['slot']]
+            assert (scratch/row['file']).read_bytes()==raw_values[row['slot']]
             assert (destination/row['file']).read_bytes()==raw_values[row['slot']]
         assert anchor.recording_work['runtime']['read_bytes']==anchor.recording_work['runtime']['sha_bytes']==5*total
         assert anchor.recording_work['runtime']['equality_bytes']==2*total
@@ -3598,14 +3599,25 @@ with preparation.tempfile.TemporaryDirectory(prefix='ystack-preparation-relay-')
     old_acl = launch.c._acl_state
     launch.c._acl_state = lambda *_:([],None) if sys.platform == 'darwin' else (None,None)
     try:
+        runtime_total = 0
+        for role in ('python','git','jq'):
+            runtime_path=work/('synthetic-'+role);runtime_raw=(role.encode()+b' fixture runtime')*37
+            runtime_path.write_bytes(runtime_raw);runtime_path.chmod(0o400)
+            held=private_owner.hold_boundary(runtime_path,'file',private_owner.time.monotonic()+30)
+            ctx.boundaries['runtime:'+role]=held
+            private_owner._retain_preparation_runtime(ctx,role,held,runtime_raw,private_owner.sha256(runtime_raw))
+            runtime_total+=len(runtime_raw)
         private_owner._write_preparation_observations(ctx,True)
-        raw = (ctx.scratch/'capture.json').read_bytes()
+        raw = (scratch_root/'raw16-t-v1-prepare-capture.json').read_bytes()
         consumer_anchor = launch.c.Anchor({},b'',[],{},('',[]),('',[]),None)
         before_modules = set(sys.modules)
-        retained_capture = holder._retain_preparation(consumer_anchor,'preparation-scratch','prepare',input_bytes,response_bytes)
+        retained_capture = holder._retain_preparation(consumer_anchor,'preparation-scratch','prepare',input_bytes,response_bytes,
+            launch.c.canonical({'kind':'shadow_enforced_request','id':'preparation.relay.fixture'}))
         assert set(sys.modules) == before_modules
         assert retained_capture == replay._preparation_capture_values(root,raw,ctx.scratch.name,'prepare',input_bytes,response_bytes)
-        assert consumer_anchor.recording_work['read_bytes'] == 8*len(raw)
+        assert consumer_anchor.recording_work['read_bytes'] >= 8*len(raw)
+        assert consumer_anchor.recording_work['runtime']['read_bytes'] == 5*runtime_total
+        assert consumer_anchor.recording_work['runtime']['write_bytes'] == runtime_total
         assert consumer_anchor.private_observations['preparation']['prepare'] == retained_capture
         print('ok private preparation producer/held relay before cleanup/offline parser; synthetic version-wire transport fixture only')
     finally:
@@ -3657,7 +3669,7 @@ with preparation.tempfile.TemporaryDirectory(prefix='ystack-preparation-name-val
                 else:raise AssertionError('preparation storage '+label)
             native_ledger = preparation.dataclasses.asdict(context.ledger)
             preparation._write_preparation_observations(context,False)
-            private_capture = context.scratch/'capture.json'
+            private_capture = scratch/'raw16-t-v1-prepare-capture.json'
             assert private_capture.stat().st_mode & 0o777 == 0o400
             captured = preparation.strict_json(private_capture.read_bytes(),'E_INPUT')
             assert captured['complete'] is False and captured['entropy']['preparation_names'][-1] == retained
@@ -3735,6 +3747,13 @@ context = types.SimpleNamespace(args=types.SimpleNamespace(input_sha256='1'*64,r
 sources = {1:source_bytes['component'],2:source_bytes['python'],3:source_bytes['git']}
 calls = []
 read_limited,run_child,clean_env = preparation.read_limited,preparation.run_child,preparation.clean_git_env
+retain_runtime=preparation._retain_preparation_runtime
+runtime_tees=[]
+def value_fixture_tee(ctx,role,boundary,raw,sha):
+    assert ctx is context and role in {'python','git'} and boundary is context.boundaries[role]
+    assert raw == source_bytes[role] and sha == preparation.sha256(raw)
+    runtime_tees.append(role)
+preparation._retain_preparation_runtime=value_fixture_tee
 def held_read(path,maximum,**kwargs):
     calls.append(('held-read',kwargs['source_fd']));return sources[kwargs['source_fd']]
 def version_command(ctx,argv,**kwargs):
@@ -3756,8 +3775,11 @@ try:
     offline_manifest,offline,completion = replay._preparation_values(root,inventory,source_bytes,runtime,
         identities,'1'*64,'2'*64,response,details,receipt,[])
     assert offline_manifest == manifest and offline == actual
+    assert runtime_tees == ['python','git']
     assert completion == preparation.completion_envelope(actual,manifest)
-finally:preparation.read_limited,preparation.run_child,preparation.clean_git_env = read_limited,run_child,clean_env
+finally:
+    preparation.read_limited,preparation.run_child,preparation.clean_git_env = read_limited,run_child,clean_env
+    preparation._retain_preparation_runtime=retain_runtime
 print('ok synthetic actual preparation/offline manifest, producer, record and completion bytes - held acquisition retained')
 PY_LAUNCH_PREPARATION_VALUES
 

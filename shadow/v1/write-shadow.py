@@ -110,11 +110,19 @@ class _Workspace:
             self.owned.append(self.helper)
             self.jq = c.snapshot_jq(str(self.paths["jq"]), str(work / "dependencies/jq/jq"))
             self.owned.append(self.jq)
+            self.work_hold._retain_runtime(self.anchor, "object_closure", self.helper.original,
+                                           self.helper.acquisition_raw, self.request.raw)
+            self.helper.acquisition_raw = None
+            self.work_hold._retain_runtime(self.anchor, "jq", self.jq.original, self.jq.acquisition_raw, self.request.raw)
+            self.jq.acquisition_raw = None
+            self.work_hold._retain_runtime(self.anchor, "python", self.python.held, self.python.raw, self.request.raw)
             self.bash = e.fixed_bash()
             self.owned.append(self.bash)
+            self.work_hold._retain_runtime(self.anchor, "bash", self.bash.physical.held, self.bash.physical.raw, self.request.raw)
             self.sudo = e.fixed_sudo()
             self.owned.append(self.sudo)
             self.git = self.hold(Path("/usr/bin/git").resolve(), c.EXECUTABLE_LIMIT, True)
+            self.work_hold._retain_runtime(self.anchor, "git", self.git.held, self.git.raw, self.request.raw)
             self.git_named = e.stable_file(Path("/usr/bin/git"), allow_hardlinks=True)
             self.owned.append(self.git_named)
             self.env = e.clean_env(Path(self.jq.snapshot.path), work / "runtime")
