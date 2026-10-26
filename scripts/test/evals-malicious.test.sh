@@ -1134,7 +1134,7 @@ with tempfile.TemporaryDirectory(prefix='ystack-capture-held-values-') as direct
         'identity_paths':{key: ['/ordinary/dyld'] if key == 'dyld_cache_files' else '/ordinary/identity/'+key
                           for key in consumer.IDENTITY_KEYS}}
     config_raw = consumer.canonical({'schema_version':1,'kind':'sandbox_host_config','id':'host.ordinary','body':config})
-    anchor = types.SimpleNamespace(config=config,config_raw=config_raw,resolver=None,recheck=lambda *_:None)
+    anchor = types.SimpleNamespace(config=config,config_raw=config_raw,resolver=None,recheck=lambda *_:None,recording_work={})
     anchor.identity_context = {'uid':os.getuid(),'euid':os.geteuid(),'gid':os.getgid(),
         'egid':os.getegid(),'groups':os.getgroups(),'platform':sys.platform,
         'uuid_replies':None,'group_replies':None}
@@ -2056,7 +2056,7 @@ for label in cases:
                               for key in consumer.IDENTITY_KEYS}}
         config_raw=host.canonical({'schema_version':1,'kind':'sandbox_host_config','id':'host.ordinary','body':config})
         anchor=types.SimpleNamespace(config=config,config_raw=config_raw,resolver=None,recheck=lambda *_:None,
-            identity_context={},private_observations={},capture_completion_owner=types.SimpleNamespace(
+            recording_work={},identity_context={},private_observations={},capture_completion_owner=types.SimpleNamespace(
                 construct=lambda anchor,attempt_id,request,capture:host._capture_completion_values(attempt_id,request,capture)))
         private_parents=[]
         if label=='positive':
@@ -2076,7 +2076,7 @@ for label in cases:
                     {'attempt_id':attempt_id,'platform':sys.platform},{'host-config.json':config_raw},
                     capture_files=held.snapshots,capture_storage_rows=held.storage_rows)
                 anchor.capture_completion_owner.transfer=lambda *_:None
-                work={};retained=[]
+                work=anchor.recording_work;retained=[]
                 actual_write=consumer.os.write;actual_open=consumer.os.open
                 for ordinal,parent_path in enumerate(private_parents):
                     parent=consumer._open_held(str(parent_path),True,
@@ -2247,6 +2247,142 @@ for label in ('created-row-limit','open-row-limit','created-memory','open-memory
                 'retained_operation_count':len(work['operations'])},sort_keys=True))
         finally:os.close(store)
 PY_CAPTURE_OBSERVER
+/usr/bin/python3 -I -S -B - "$root" <<'PY_CAPTURE_ACCOUNTING'
+import importlib.util
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+import types
+
+root=Path(sys.argv[1])
+def load(name,path):
+    spec=importlib.util.spec_from_file_location(name,path)
+    module=importlib.util.module_from_spec(spec);sys.modules[name]=module;spec.loader.exec_module(module)
+    return module
+e=load('wm_enforced',root/'shadow/v1/enforced-reproduction.py');c=e.c
+host=load('wm_host_values',root/'sandbox/v1/host-supervisor.py')
+with tempfile.TemporaryDirectory(prefix='ystack-private-accounting-') as temporary:
+    area=Path(temporary).resolve();path=area/'input';path.write_bytes(b'actual-input');path.chmod(0o400)
+    leaf={};c._capture_work_values(leaf,'leaf');leaf.update(input_kind='L',metadata_kind='M')
+    held=c._open_held(str(path),False,lambda *_:True,'E_STORE',recording_work=leaf,accounting_kind='M')
+    assert held.read(64,'E_STORE',leaf)==b'actual-input'
+    operation={};case=c._capture_work_values(operation,'case')
+    first=c._capture_transfer_work(leaf,operation,case)
+    assert first==operation['read_bytes']==case['read_bytes']
+    before=json.dumps(operation,sort_keys=True);assert c._capture_transfer_work(leaf,operation,case)==0
+    assert json.dumps(operation,sort_keys=True)==before
+    held.close();tail=c._capture_transfer_work(leaf,operation,case)
+    assert tail>0 and operation['held_close_calls']==leaf['held_close_calls'] and not held.components
+    assert operation['accounting']['L']['read_bytes']==2*len(b'actual-input')
+    assert operation['accounting']['M']['occurrences']==len(operation['accounting_rows'])
+    assert sum(row.get('read_bytes',0) for row in operation['accounting'].values())==operation['read_bytes']
+    try:c._capture_transfer_work(leaf,{},dict(case))
+    except c.Refusal:pass
+    else:raise AssertionError('cross-operation fee transfer accepted')
+    print(json.dumps({'wm_real_held_read_transfer_repeat_close_tail':operation,
+        'initial_read_charge':first,'later_close_charge':tail},sort_keys=True))
+    failing={};c._capture_work_values(failing,'leaf')
+    fd=c._open_held(str(path),False,lambda *_:True,'E_STORE',recording_work=failing,accounting_kind='M')
+    fd.read(64,'E_STORE',failing);fd.close()
+    class FailedCase(dict):
+        def __setitem__(self,key,value):
+            if key=='read_bytes':raise MemoryError('ordinary transfer counter allocation failure')
+            return super().__setitem__(key,value)
+    partial={};initial_case=c._capture_work_values(partial,'case');bad=FailedCase(initial_case)
+    try:c._capture_transfer_work(failing,partial,bad)
+    except MemoryError:pass
+    else:raise AssertionError('partial transfer failure not reached')
+    assert failing['transfer_incomplete'] and partial['transfer_incomplete'] and bad['transfer_incomplete']
+    assert partial['read_bytes']==failing['read_bytes']
+    prefix=dict(partial)
+    try:c._capture_transfer_work(failing,partial,bad)
+    except c.Refusal:pass
+    else:raise AssertionError('incomplete transfer replayed')
+    assert partial==prefix
+    print(json.dumps({'wm_partial_transfer_actual_global_read':partial['read_bytes'],
+        'case_read_counter':'UNKNOWN after allocation failure; initial value is not observed zero',
+        'retry_refused_without_refund':True},sort_keys=True))
+    error_work={};c._capture_work_values(error_work,'leaf')
+    error_hold=c._open_held(str(path),False,lambda *_:True,'E_STORE',recording_work=error_work,accounting_kind='M')
+    metadata=c._metadata
+    def failed_metadata(fd):
+        if fd==error_hold.fd:raise OSError(5,'ordinary observed metadata failure')
+        return metadata(fd)
+    try:
+        c._metadata=failed_metadata
+        try:error_hold.recheck('E_STORE')
+        except c.Refusal:pass
+        else:raise AssertionError('metadata failure accepted')
+    finally:c._metadata=metadata;error_hold.close()
+    errors=[row for row in error_work['accounting_rows'] if row['site']=='fstat-error']
+    assert len(errors)==1 and errors[0]['value']['errno']==5
+    error_total={};error_case=c._capture_work_values(error_total,'case')
+    c._capture_transfer_work(error_work,error_total,error_case)
+    assert any(row['field']=='metadata_failure' and row['value']['errno']==5 for row in error_total['leaf_failures'])
+    print('ok actual metadata errno retained before original refusal and close')
+    for boundary in ('open','dup'):
+        work={};c._capture_work_values(work,'leaf')
+        parent=c._open_held(str(area),True,lambda *_:True,'E_STORE')
+        actual_open,actual_dup,actual_close=c.os.open,c.os.dup,c.os.close
+        encode=c._private_capture_observations;opened=[];closed=[]
+        def opening(*args,**kwargs):
+            fd=actual_open(*args,**kwargs);opened.append(fd);return fd
+        def duplicating(*args):
+            fd=actual_dup(*args);opened.append(fd);return fd
+        def closing(fd):
+            if fd in opened:closed.append(fd)
+            return actual_close(fd)
+        def failed_encoding(value,*args):
+            if value['site']==('fstat' if boundary=='open' else 'dup'):
+                raise MemoryError('ordinary metadata encoding allocation failure')
+            return encode(value,*args)
+        try:
+            c.os.open=opening;c.os.dup=duplicating;c.os.close=closing;c._private_capture_observations=failed_encoding
+            try:
+                if boundary=='open':c._open_held(str(path),False,lambda *_:True,'E_STORE',recording_work=work,accounting_kind='M')
+                else:c._open_child(parent,'input',False,lambda *_:True,'E_STORE',recording_work=work,accounting_kind='M')
+            except MemoryError:pass
+            else:raise AssertionError('owned observation allocation failure did not occur')
+        finally:c.os.open=actual_open;c.os.dup=actual_dup;c.os.close=actual_close;c._private_capture_observations=encode;parent.close()
+        assert opened and sorted(opened)==sorted(closed) and work['accounting_incomplete']
+        for fd in opened:
+            try:os.fstat(fd)
+            except OSError as error:assert error.errno==9
+            else:raise AssertionError('observation failure leaked owned descriptor')
+        print(json.dumps({'wm_observer_allocation_boundary':boundary,'actual_fds_closed':closed,
+            'incomplete':work['accounting_incomplete']},sort_keys=True))
+    owner=e._CaptureCompletionOwner()
+    source_path=area/'source';source_path.write_bytes(b'ordinary owner bytes');source_path.chmod(0o400)
+    installed=area/'installed';installed.mkdir(mode=0o700)
+    installed_path=installed/'host-supervisor.py';installed_path.write_bytes(source_path.read_bytes());installed_path.chmod(0o400)
+    source_hold=c._open_held(str(source_path),False,lambda *_:True,'E_STORE',recording_work=owner.work,accounting_kind='M')
+    source_raw=source_hold.read(c.EXECUTABLE_LIMIT,'E_STORE',owner.work)
+    owner.source=e.StableFile(source_hold,source_raw,owner.work);owner.module=host
+    installed_hold=c._open_held(str(installed_path),False,lambda *_:True,'E_STORE')
+    anchor=types.SimpleNamespace(held=[installed_hold],recording_work={},private_observations={})
+    original_anchor=c.ANCHOR;c.ANCHOR=str(installed)
+    try:
+        request=host.canonical({'ordinary':'request'})
+        capture=host._capture_values('attempt.wm',request,{'source_pages':{'coverage':[]}},True)
+        witness=owner.construct(anchor,'attempt.wm',request,capture)
+        assert witness==host._capture_completion_values('attempt.wm',request,capture)
+        assert owner.work['accounting']['W']['read_bytes']==4*len(witness)
+        assert owner.work['accounting']['raw']['read_bytes']==len(request)+len(capture)
+        local=c._capture_work_values(anchor.recording_work,'case');owner.transfer(anchor.recording_work,local)
+        before=anchor.recording_work['read_bytes'];e._close_capture_completion_owner(owner)
+        owner.transfer(anchor.recording_work,local)
+        assert anchor.recording_work['read_bytes']>before and owner.work['transferred_read_bytes']==owner.work['read_bytes']
+        assert owner.work['close_calls']==1 and owner.work['held_close_calls']>0
+        receipt=c._capture_accounting_receipt(anchor)
+        assert receipt['classes']['W']['read_bytes']==4*len(witness)
+        assert receipt['complete'] is False and receipt['host_publication_work'].startswith('UNKNOWN')
+        print(json.dumps({'wm_actual_authenticate_construct_and_close_transfer':receipt,
+            'startup_loader_and_installed_admission_are_fixture_inputs':True,
+            'no_native_or_source_qualification':True},sort_keys=True))
+    finally:c.ANCHOR=original_anchor;installed_hold.close();e._close_capture_completion_owner(owner)
+PY_CAPTURE_ACCOUNTING
 /usr/bin/python3 -I -S -B - "$root" <<'PY_SOURCE_CANCEL'
 import importlib.util
 import json
@@ -2346,9 +2482,9 @@ for label in ('positive','io-eintr','io-error','copy-signal','copy-signal-close-
                 if not fired and case=='named-eintr':
                     fired.append(case);raise InterruptedError(4,'ordinary named metadata EINTR')
             return original_named(*args)
-        def rechecking(held,code):
+        def rechecking(held,code,*args,**kwargs):
             checking.update(active=True,metadata=0,named=0)
-            try:return original_recheck(held,code)
+            try:return original_recheck(held,code,*args,**kwargs)
             finally:checking['active']=False
         def reading(*args):
             if case in {'read-signal','constructor-read-signal','seal-signal'} and not fired:interrupt()

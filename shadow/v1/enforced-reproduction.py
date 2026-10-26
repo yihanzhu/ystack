@@ -348,7 +348,7 @@ class StableFile:
     def recheck(self, code: str = "E_RELATION") -> None:
         if self.recording_work is not None:
             self.recording_work["metadata_passes"] = self.recording_work.get("metadata_passes", 0) + 1
-        self.held.recheck(code)
+        self.held.recheck(code) if self.recording_work is None else self.held.recheck(code, self.recording_work)
         if self.recording_work is None:
             require(self.held.read(len(self.raw), code) == self.raw, code)
         else:
@@ -356,6 +356,7 @@ class StableFile:
             current = self.held.read(len(self.raw), code, self.recording_work)
             self.recording_work["read_bytes"] = self.recording_work.get("read_bytes", 0) + len(current) + len(self.raw)
             self.recording_work["equality_bytes"] = self.recording_work.get("equality_bytes", 0) + len(current) + len(self.raw)
+            c._capture_account(self.recording_work, "L", "read_bytes", len(current) + len(self.raw))
             require(current == self.raw, code)
 
     def close(self) -> None:
@@ -446,7 +447,7 @@ class FixedSudo:
 def stable_file(path: Path, limit: int = c.EXECUTABLE_LIMIT,
                 code: str = "E_DEPENDENCY", allow_hardlinks: bool = False, recording_work=None) -> StableFile:
     held = c._open_held(str(path), False, lambda _fd, _state, _ancestor: True, code,
-                       allow_hardlinks)
+                       allow_hardlinks, recording_work=recording_work, accounting_kind="M" if recording_work is not None else None)
     try:
         if recording_work is not None:
             c._capture_copy_room(recording_work, 6 * min(limit, held.before.st_size),
@@ -467,6 +468,9 @@ class _CaptureCompletionOwner:
         self.path = SOURCE / "sandbox/v1/host-supervisor.py"
         self.source = self.module = self.loaded = None
         self.work = _CAPTURE_OWNER_WORK
+        self.work["input_kind"] = "L"
+        self.work["metadata_kind"] = "M"
+        self.work["accounting_owner"] = "completion-owner"
         c._capture_work_values(self.work, "startup-source")
         self.transferred = 0
 
@@ -476,12 +480,15 @@ class _CaptureCompletionOwner:
     def exec_module(self, module):
         module.__file__ = str(self.path)
         self.loaded = self.source.raw
+        c._capture_account(self.work, "L", "logical_bytes", len(self.loaded))
         c._capture_copy_room(self.work, 3 * len(self.loaded), False, case=True, read_only=True)
         self.work["read_bytes"] += len(self.loaded)
+        c._capture_account(self.work, "L", "read_bytes", len(self.loaded))
         code = compile(self.loaded, str(self.path), "exec", dont_inherit=True)
         loaded_sha = sha(self.loaded)
         source_sha = self.source.sha256
         self.work["read_bytes"] += 2 * len(self.loaded)
+        c._capture_account(self.work, "L", "read_bytes", 2 * len(self.loaded))
         require(self.loaded is self.source.raw and loaded_sha == source_sha, "E_RUNTIME")
         exec(code, module.__dict__)
 
@@ -503,6 +510,7 @@ class _CaptureCompletionOwner:
         c._capture_copy_room(self.work, len(actual) + len(self.source.raw), False, case=True, read_only=True)
         self.work["read_bytes"] += len(actual) + len(self.source.raw)
         self.work["installed_comparison_bytes"] = self.work.get("installed_comparison_bytes", 0) + len(actual) + len(self.source.raw)
+        c._capture_account(self.work, "L", "read_bytes", len(actual) + len(self.source.raw))
         require(actual == self.source.raw, "E_STORE")
         self.source.recheck()
 
@@ -516,6 +524,8 @@ class _CaptureCompletionOwner:
         cost = len(request_raw) + len(capture_raw) + 4 * len(result)
         self.work["read_bytes"] += cost
         self.work["constructor_read_bytes"] = self.work.get("constructor_read_bytes", 0) + cost
+        c._capture_account(self.work, "raw", "read_bytes", len(request_raw) + len(capture_raw))
+        c._capture_account(self.work, "W", "read_bytes", 4 * len(result))
         self.work["constructor_incomplete"] = False
         return result
 
@@ -612,6 +622,7 @@ def _seal_capture_recording(anchor, parent, held_store=None):
                 c._capture_transfer_work(_CAPTURE_OWNER_WORK, anchor.recording_work, case_work)
             if held_store is not None and hasattr(held_store, "capture_work"):
                 c._capture_transfer_work(held_store.capture_work, anchor.recording_work, case_work)
+            c._capture_accounting_receipt(anchor)
         except Exception as error:
             anchor.private_observations["unusable"] = True
             anchor.private_observations["completion_accounting_failure"] = {

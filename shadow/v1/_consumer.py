@@ -306,10 +306,15 @@ class HeldPath:
     path: str
     components: list[HeldComponent]
     directory_names: list[str] | None = None
+    recording_work: dict | None = None
+    accounting_kind: str | None = None
 
     def listdir(self):
         names = os.listdir(self.fd)
         self.directory_names = [os.fsencode(name).hex() for name in names]
+        if self.recording_work is not None:
+            _capture_observe(self.recording_work, self.accounting_kind, "listdir", {
+                "fd": self.fd, "names": self.directory_names})
         return names
 
     @property
@@ -320,23 +325,25 @@ class HeldPath:
     def before(self) -> os.stat_result:
         return self.components[-1].before
 
-    def recheck(self, code: str) -> None:
+    def recheck(self, code: str, recording_work=None, accounting_kind=None) -> None:
+        work = self.recording_work if recording_work is None else recording_work
+        kind = accounting_kind or self.accounting_kind or (work.get("metadata_kind", "unresolved") if work is not None else None)
         for index, component in enumerate(self.components):
             try:
-                current = _metadata(component.fd)
+                current = _capture_metadata(component.fd, work, kind)
                 named = (current if component.name is None else
-                         _named_metadata(component.name, self.components[index - 1].fd))
+                         _capture_named_metadata(component.name, self.components[index - 1].fd, work, kind))
             except (OSError, ValueError) as error:
                 if getattr(error, "_scope_signal_cancel", False):
                     raise
                 raise Refusal(code) from None
             expected = _identity(component.before)
             _require(_identity(current) == expected and _identity(named) == expected, code)
-            _require(component.rule(component.fd, current, component.ancestor), code)
+            _require(_capture_rule(component.rule, component.fd, current, component.ancestor, work, kind), code)
             try:
-                after = _metadata(component.fd)
+                after = _capture_metadata(component.fd, work, kind)
                 after_named = (after if component.name is None else
-                               _named_metadata(component.name, self.components[index - 1].fd))
+                               _capture_named_metadata(component.name, self.components[index - 1].fd, work, kind))
             except (OSError, ValueError) as error:
                 if getattr(error, "_scope_signal_cancel", False):
                     raise
@@ -361,7 +368,7 @@ class HeldPath:
     def read(self, maximum: int, code: str, recording_work=None) -> bytes:
         if recording_work is not None:
             recording_work["metadata_passes"] = recording_work.get("metadata_passes", 0) + 1
-        self.recheck(code)
+        self.recheck(code) if recording_work is None else self.recheck(code, recording_work)
         chunks, total = [], 0
         try:
             os.lseek(self.fd, 0, os.SEEK_SET)
@@ -377,6 +384,7 @@ class HeldPath:
                     break
                 if recording_work is not None:
                     recording_work["read_bytes"] = recording_work.get("read_bytes", 0) + len(chunk)
+                    _capture_account(recording_work, recording_work.get("input_kind", "raw"), "read_bytes", len(chunk))
                 chunks.append(chunk)
                 total += len(chunk)
                 _require(total <= maximum, code)
@@ -389,11 +397,12 @@ class HeldPath:
             raise Refusal(code) from None
         if recording_work is not None:
             recording_work["metadata_passes"] = recording_work.get("metadata_passes", 0) + 1
-        self.recheck(code)
+        self.recheck(code) if recording_work is None else self.recheck(code, recording_work)
         if recording_work is not None:
             _capture_copy_room(recording_work, total, False, case=True, read_only=True)
             recording_work["read_bytes"] = recording_work.get("read_bytes", 0) + total
             recording_work["join_bytes"] = recording_work.get("join_bytes", 0) + total
+            _capture_account(recording_work, recording_work.get("input_kind", "raw"), "read_bytes", total)
         return b"".join(chunks)
 
     def read_exact(self, length: int, code: str) -> bytes:
@@ -414,12 +423,25 @@ class HeldPath:
     def close(self) -> None:
         failure = None
         for component in reversed(self.components):
+            close_error = None
             try:
                 os.close(component.fd)
             except OSError as exc:
+                close_error = exc
                 if failure is None or (getattr(exc, "_scope_signal_cancel", False)
                                        and not getattr(failure, "_scope_signal_cancel", False)):
                     failure = exc
+            if self.recording_work is not None:
+                try:
+                    self.recording_work["held_close_calls"] = self.recording_work.get("held_close_calls", 0) + 1
+                    _capture_observe(self.recording_work, "M", "held-close", {
+                        "return": 0 if close_error is None else -1,
+                        "errno": None if close_error is None else close_error.errno})
+                except (OSError, ValueError, TypeError, Refusal, MemoryError) as observed:
+                    try:self.recording_work["accounting_incomplete"] = True
+                    except MemoryError:pass
+                    if getattr(observed, "_scope_signal_cancel", False) and not getattr(failure, "_scope_signal_cancel", False):
+                        failure = observed
         self.components.clear()
         if failure is not None:
             raise failure
@@ -449,14 +471,16 @@ def _close_paths(items: list[HeldPath]) -> None:
     if failure is not None:
         raise failure
 
-def _clone(parent: HeldPath, code: str) -> list[HeldComponent]:
+def _clone(parent: HeldPath, code: str, recording_work=None, accounting_kind=None) -> list[HeldComponent]:
     rows = []
     try:
-        parent.recheck(code)
+        parent.recheck(code) if recording_work is None else parent.recheck(code, recording_work, accounting_kind)
         for row in parent.components:
             rows.append(HeldComponent(os.dup(row.fd), row.name, row.before, row.rule, row.ancestor))
+            if recording_work is not None:
+                _capture_observe(recording_work, accounting_kind, "dup", {"source_fd": row.fd, "fd": rows[-1].fd})
         return rows
-    except (OSError, Refusal) as exc:
+    except BaseException as exc:
         try:
             _close_components(rows, exc)
         except Refusal:
@@ -467,7 +491,7 @@ def _clone(parent: HeldPath, code: str) -> list[HeldComponent]:
             raise Refusal(code, os_errno=error.errno) from None
 
 def _open_held(path: str, directory: bool, rule: Rule, code: str,
-               allow_hardlinks: bool = False) -> HeldPath:
+               allow_hardlinks: bool = False, recording_work=None, accounting_kind=None) -> HeldPath:
     _require(_physical(path) and path != "/", code)
     parts = path.split("/")[1:]
     _require(all(part not in ("", ".", "..") for part in parts), code)
@@ -476,7 +500,8 @@ def _open_held(path: str, directory: bool, rule: Rule, code: str,
         fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         state = _metadata(fd)
         rows.append(HeldComponent(fd, None, state, rule, True))
-        _require(rule(fd, state, True), code)
+        if recording_work is not None:_capture_observe(recording_work, accounting_kind, "fstat", {"fd": fd, "stat": _stat_values(state)})
+        _require(_capture_rule(rule, fd, state, True, recording_work, accounting_kind), code)
         for index, name in enumerate(parts):
             last = index == len(parts) - 1
             flags = os.O_RDONLY | os.O_NOFOLLOW
@@ -487,15 +512,16 @@ def _open_held(path: str, directory: bool, rule: Rule, code: str,
             fd = os.open(name, flags, dir_fd=rows[-1].fd)
             state = _metadata(fd)
             rows.append(HeldComponent(fd, name, state, rule, not last))
-            _require(rule(fd, state, not last), code)
+            if recording_work is not None:_capture_observe(recording_work, accounting_kind, "fstat", {"fd": fd, "stat": _stat_values(state)})
+            _require(_capture_rule(rule, fd, state, not last, recording_work, accounting_kind), code)
         state = rows[-1].before
         _require((directory and stat.S_ISDIR(state.st_mode)) or
                  (not directory and stat.S_ISREG(state.st_mode)
                   and (allow_hardlinks or state.st_nlink == 1)), code)
-        result = HeldPath(path, rows)
+        result = HeldPath(path, rows, recording_work=recording_work, accounting_kind=accounting_kind)
         result.recheck(code)
         return result
-    except (OSError, ValueError, Refusal) as exc:
+    except BaseException as exc:
         try:
             _close_components(rows, exc)
         except Refusal:
@@ -505,9 +531,9 @@ def _open_held(path: str, directory: bool, rule: Rule, code: str,
                 raise
             raise Refusal(code, os_errno=getattr(error, "errno", None)) from None
 
-def _open_child(parent: HeldPath, name: str, directory: bool, rule: Rule, code: str) -> HeldPath:
+def _open_child(parent: HeldPath, name: str, directory: bool, rule: Rule, code: str, *, recording_work=None, accounting_kind=None) -> HeldPath:
     _require(isinstance(name, str) and name and "/" not in name and name not in (".", ".."), code)
-    rows = _clone(parent, code)
+    rows = _clone(parent, code, recording_work, accounting_kind)
     try:
         flags = os.O_RDONLY | os.O_NOFOLLOW | (os.O_DIRECTORY if directory else 0)
         if not directory and hasattr(os, "O_NONBLOCK"):
@@ -515,13 +541,14 @@ def _open_child(parent: HeldPath, name: str, directory: bool, rule: Rule, code: 
         fd = os.open(name, flags, dir_fd=rows[-1].fd)
         state = _metadata(fd)
         rows.append(HeldComponent(fd, name, state, rule, False))
-        _require(rule(fd, state, False), code)
+        if recording_work is not None:_capture_observe(recording_work, accounting_kind, "fstat", {"fd": fd, "stat": _stat_values(state)})
+        _require(_capture_rule(rule, fd, state, False, recording_work, accounting_kind), code)
         _require((directory and stat.S_ISDIR(state.st_mode)) or
                  (not directory and stat.S_ISREG(state.st_mode) and state.st_nlink == 1), code)
-        result = HeldPath(parent.path + "/" + name, rows)
+        result = HeldPath(parent.path + "/" + name, rows, recording_work=recording_work, accounting_kind=accounting_kind)
         result.recheck(code)
         return result
-    except (OSError, ValueError, Refusal) as exc:
+    except BaseException as exc:
         try:
             _close_components(rows, exc)
         except Refusal:
@@ -1309,7 +1336,7 @@ def verifier_observation(anchor: Anchor, environment_id: str, target_repository_
                           "verifier_sha256": verifier_sha}})
 
 def _observation(item: HeldPath, relative: str, raw: bytes | None = None, *, storage_rows=None) -> dict:
-    after = _metadata(item.fd)
+    after = _capture_metadata(item.fd, item.recording_work, item.accounting_kind)
     if storage_rows is not None:
         component = item.components[-1]
         acl = getattr(component.rule, "observations", {}).get(item.fd)
@@ -1319,6 +1346,8 @@ def _observation(item: HeldPath, relative: str, raw: bytes | None = None, *, sto
             "named_after": _stat_values(component.named_after),
             "access_acl": acl[0], "default_acl": acl[1],
             "directory_names": item.directory_names, "read_error": None})
+        if item.recording_work is not None:
+            _capture_observe(item.recording_work, item.accounting_kind, "storage-row", storage_rows[-1])
     acquired = isinstance(raw, _ExportSnapshot)
     if acquired:
         _require(raw.owner is item and len(raw) == item.before.st_size, "E_STORE")
@@ -1559,15 +1588,175 @@ def _capture_copy_room(work, amount, exported, *, case=False, read_only=False):
                  <= limit * DOCUMENT_LIMIT for index,(key, limit) in enumerate(zip(fields[:3], nonexport))), "E_LIMIT")
 
 
+def _capture_rule(rule, fd, state, ancestor, work, kind):
+    if work is None:
+        return rule(fd, state, ancestor)
+    previous = getattr(rule, "observations", {}).get(fd)
+    accepted = rule(fd, state, ancestor)
+    current = getattr(rule, "observations", {}).get(fd)
+    if current is not None and current is not previous:
+        _capture_observe(work, kind, "acl", {"access": current[0], "default": current[1]})
+    elif not accepted:
+        work["accounting_incomplete"] = True
+    return accepted
+
+
+def _capture_observe(work, kind, site, value, case_work=None):
+    if work is None:
+        return
+    kind = kind or "unresolved"
+    work["observation_calls"] = work.get("observation_calls", 0) + 1
+    row = {"owner": work.get("accounting_owner", "recorder"), "ordinal": work["observation_calls"],
+           "kind": kind, "site": site, "value": value}
+    before = work["read_bytes"]
+    try:
+        case_work = work if case_work is None else case_work
+        encoded = _private_capture_observations(row, work, case_work)
+        _capture_account(work, kind, "read_bytes", work["read_bytes"] - before)
+        _capture_account(work, kind, "logical_bytes", len(encoded))
+        _capture_account(work, kind, "occurrences", 1)
+        work.setdefault("accounting_rows", []).append(row)
+        if case_work is not work:
+            case_work["observation_calls"] = case_work.get("observation_calls", 0) + 1
+            _capture_account(case_work, kind, "read_bytes", work["read_bytes"] - before)
+            _capture_account(case_work, kind, "logical_bytes", len(encoded))
+            _capture_account(case_work, kind, "occurrences", 1)
+            case_work.setdefault("accounting_rows", []).append(row)
+        if kind == "unresolved":
+            work["M_classification_incomplete"] = True
+            case_work["M_classification_incomplete"] = True
+    except BaseException:
+        for counter in (work, case_work):
+            if counter is not None:
+                try:counter["accounting_incomplete"] = True
+                except MemoryError:pass
+        raise
+
+
+def _capture_observation_error(work, kind, site, error):
+    if work is None:
+        return
+    try:
+        work.setdefault("metadata_failure", {"site": site, "errno": getattr(error, "errno", None),
+            "category": type(error).__name__})
+        _capture_observe(work, kind, site, {"return": -1, "errno": getattr(error, "errno", None),
+            "category": type(error).__name__})
+    except (OSError, ValueError, TypeError, Refusal, MemoryError) as observed:
+        try:work["accounting_incomplete"] = True
+        except MemoryError:pass
+        if getattr(observed, "_scope_signal_cancel", False) and not getattr(error, "_scope_signal_cancel", False):
+            raise
+
+
+def _capture_metadata(fd, work, kind):
+    try:
+        value = _metadata(fd)
+    except (OSError, ValueError) as error:
+        _capture_observation_error(work, kind, "fstat-error", error)
+        raise
+    if work is not None:_capture_observe(work, kind, "fstat", {"fd": fd, "stat": _stat_values(value)})
+    return value
+
+
+def _capture_named_metadata(name, parent_fd, work, kind):
+    try:
+        value = _named_metadata(name, parent_fd)
+    except (OSError, ValueError) as error:
+        _capture_observation_error(work, kind, "stat-nofollow-error", error)
+        raise
+    if work is not None:_capture_observe(work, kind, "stat-nofollow", {"parent_fd": parent_fd, "name": os.fsencode(name).hex(), "stat": _stat_values(value)})
+    return value
+
+
+def _capture_accounting_receipt(anchor):
+    work = anchor.recording_work
+    receipt = anchor.private_observations.setdefault("accounting", {})
+    receipt["transferred_totals"] = {field: work.get(field, 0) for field in
+        ("read_bytes", "write_bytes", "physical_bytes", "files", "export_read_bytes",
+         "export_write_bytes", "export_physical_bytes", "export_files", "close_calls", "held_close_calls", "observation_calls")}
+    receipt["classes"] = work.get("accounting", {})
+    classified = sum(values.get("read_bytes", 0) for values in receipt["classes"].values())
+    receipt["unclassified_recorded_read_bytes"] = receipt["transferred_totals"]["read_bytes"] - receipt["transferred_totals"]["export_read_bytes"] - classified
+    receipt["cases"] = work.get("cases", {})
+    receipt["observations"] = work.get("accounting_rows", [])
+    receipt["failures"] = work.get("leaf_failures", [])
+    receipt["incomplete"] = {key: value for key, value in work.items()
+        if (key.endswith("incomplete") or key in {"transfer_incomplete", "M_classification_incomplete"}) and value}
+    receipt["host_publication_work"] = "UNKNOWN: private host work is not transported by the existing capture envelope"
+    receipt["complete"] = False
+    return receipt
+
+
+def _capture_account(work, kind, field, amount):
+    _require(kind in {"L", "W", "M", "raw", "unresolved"}
+             and field in {"logical_bytes", "read_bytes", "write_bytes", "physical_bytes", "files", "occurrences"}
+             and type(amount) is int and amount >= 0, "E_LIMIT")
+    categories = work.setdefault("accounting", {})
+    values = categories.setdefault(kind, {})
+    values[field] = values.get(field, 0) + amount
+    if kind == "unresolved":work["M_classification_incomplete"] = True
+
+
 def _capture_transfer_work(source, work, case_work):
-    delta = source["read_bytes"] - source.get("transferred_read_bytes", 0)
-    _require(delta >= 0, "E_LIMIT")
-    _capture_copy_room(work, delta, False, read_only=True)
-    _capture_copy_room(case_work, delta, False, case=True, read_only=True)
-    work["read_bytes"] += delta
-    case_work["read_bytes"] += delta
-    source["transferred_read_bytes"] = source["read_bytes"]
-    return delta
+    _require(not source.get("transfer_incomplete", False), "E_LIMIT")
+    target = source.get("transfer_target")
+    _require(target is None or target == id(work), "E_LIMIT")
+    fields = ("read_bytes", "write_bytes", "physical_bytes", "files", "export_read_bytes",
+              "export_write_bytes", "export_physical_bytes", "export_files", "close_calls", "held_close_calls", "observation_calls")
+    deltas = {}
+    for field in fields:
+        current, transferred = source.get(field, 0), source.get("transferred_" + field, 0)
+        _require(type(current) is int and type(transferred) is int and current >= transferred >= 0, "E_LIMIT")
+        deltas[field] = current - transferred
+    category_deltas = []
+    for kind, values in source.get("accounting", {}).items():
+        previous = source.get("transferred_accounting", {}).get(kind, {})
+        for field, amount in values.items():
+            prior = previous.get(field, 0)
+            _require(type(amount) is int and type(prior) is int and amount >= prior >= 0, "E_LIMIT")
+            category_deltas.append((kind, field, amount - prior))
+    for counter, per_case in ((work, False), (case_work, True)):
+        candidate = dict(counter)
+        for field, delta in deltas.items():candidate[field] = candidate.get(field, 0) + delta
+        _capture_copy_room(candidate, 0, False, case=per_case)
+        _require(candidate.get("files", 0) <= 256
+                 and candidate.get("export_files", 0) <= (16 if per_case else 64), "E_LIMIT")
+    try:
+        source["transfer_target"] = id(work)
+        for field, delta in deltas.items():
+            if delta:
+                work[field] = work.get(field, 0) + delta
+                case_work[field] = case_work.get(field, 0) + delta
+            source["transferred_" + field] = source.get(field, 0)
+        for kind, field, delta in category_deltas:
+            if delta:
+                _capture_account(work, kind, field, delta)
+                _capture_account(case_work, kind, field, delta)
+            source.setdefault("transferred_accounting", {}).setdefault(kind, {})[field] = source["accounting"][kind][field]
+        for flag in [key for key in source if key.endswith("incomplete") or key == "M_classification_incomplete"]:
+            if source.get(flag, False):
+                work[flag] = True
+                case_work[flag] = True
+        for name in ("failure", "metadata_failure", "read_error", "copy_failure", "cleanup_errno"):
+            if name in source and source.get("transferred_failures", {}).get(name) is not source[name]:
+                row = {"field": name, "value": source[name]}
+                work.setdefault("leaf_failures", []).append(row)
+                case_work.setdefault("leaf_failures", []).append(row)
+                source.setdefault("transferred_failures", {})[name] = source[name]
+        for name in ("close_failures", "accounting_rows"):
+            rows = source.get(name, [])
+            start = source.get("transferred_" + name, 0)
+            _require(type(start) is int and 0 <= start <= len(rows), "E_LIMIT")
+            if len(rows) > start:
+                work.setdefault(name, []).extend(rows[start:])
+                case_work.setdefault(name, []).extend(rows[start:])
+            source["transferred_" + name] = len(rows)
+    except BaseException:
+        for counter in (source, work, case_work):
+            try:counter["transfer_incomplete"] = True
+            except MemoryError:pass
+        raise
+    return deltas["read_bytes"]
 
 
 def _close_capture_copy(fd, work, case_work, site, failure):
@@ -1579,6 +1768,9 @@ def _close_capture_copy(fd, work, case_work, site, failure):
     try:
         for counts in ((work,) if case_work is work else (work, case_work)):
             counts["close_calls"] = counts.get("close_calls", 0) + 1
+        if "read_bytes" in work:
+            _capture_observe(work, "M", "close", {"site": site, "return": 0 if close_error is None else -1,
+                "errno": None if close_error is None else close_error.errno}, case_work)
         if close_error is not None:
             rows = work.setdefault("close_failures", [])
             if len(rows) < 4096:
@@ -1616,15 +1808,15 @@ def _private_capture_observations(value, work, case_work):
                      + size * 3 + 1 <= nonexport * DOCUMENT_LIMIT, "E_LIMIT")
         raw = piece.encode("utf-8")
         encoded.extend(raw)
-        work["read_bytes"] += size
-        case_work["read_bytes"] += size
+        for counts in ((work,) if work is case_work else (work, case_work)):
+            counts["read_bytes"] += size
         reserved += size * 2
     result = bytes(encoded)
-    work["read_bytes"] += len(encoded)
-    case_work["read_bytes"] += len(encoded)
+    for counts in ((work,) if work is case_work else (work, case_work)):
+        counts["read_bytes"] += len(encoded)
     result += b"\n"
-    work["read_bytes"] += len(encoded) + 1
-    case_work["read_bytes"] += len(encoded) + 1
+    for counts in ((work,) if work is case_work else (work, case_work)):
+        counts["read_bytes"] += len(encoded) + 1
     work["calls"]["consumer-json-buffer"] = work["calls"].get("consumer-json-buffer", 0) + 1
     return result
 
@@ -1636,13 +1828,15 @@ class _HeldCaptureRead:
         self.held, self.snapshots, self.storage_rows = [], {}, []
         self.work, self.transferred = {}, 0
         _capture_work_values(self.work, self.attempt_id)
+        self.work["accounting_owner"] = "capture:" + self.attempt_id
         native.capture_work = self.work
         self.directory_name = ".capture-" + self.attempt_id
         try:
             store = next(item for item in native.held if item.path == self.anchor.config["store_root"])
             uid, gid = self.anchor.config["principal_uid"], self.anchor.config["consumer_gid"]
             directory = _open_child(store, self.directory_name, True,
-                _store_rule(uid, gid, 0o750, True, self.anchor.resolver), "E_STORE")
+                _store_rule(uid, gid, 0o750, True, self.anchor.resolver), "E_STORE",
+                recording_work=self.work, accounting_kind="M")
             self.held.append(directory)
             self.names = set(directory.listdir())
             _require(self.names in ({"capture.json", "complete.json"},
@@ -1651,16 +1845,21 @@ class _HeldCaptureRead:
             _observation(directory, self.directory_name, storage_rows=self.storage_rows)
             for name in sorted(self.names):
                 item = _open_child(directory, name, False,
-                    _store_rule(uid, gid, 0o440, False, self.anchor.resolver), "E_STORE")
+                    _store_rule(uid, gid, 0o440, False, self.anchor.resolver), "E_STORE",
+                    recording_work=self.work, accounting_kind="M" if name == "complete.json" else "unresolved")
                 self.held.append(item)
                 maximum = EXPORT_LIMIT if name == "sandbox-export.bin" else 512 if name == "complete.json" else DOCUMENT_LIMIT
                 _require(item.before.st_size <= maximum, "E_STORE")
+                self.work["input_kind"] = "W" if name == "complete.json" else "raw"
                 raw = (_read_export_snapshot(item, "E_STORE") if name == "sandbox-export.bin" else
                        item.read(maximum, "E_STORE", self.work))
                 self.snapshots[name] = raw
+                if name == "complete.json":_capture_account(self.work, "W", "logical_bytes", len(raw))
+                elif name == "capture.json":_capture_account(self.work, "raw", "logical_bytes", len(raw))
                 _observation(item, self.directory_name + "/" + name, raw, storage_rows=self.storage_rows)
                 if not isinstance(raw, _ExportSnapshot):
                     self.work["read_bytes"] += len(raw)
+                    _capture_account(self.work, "W" if name == "complete.json" else "raw", "read_bytes", len(raw))
             groups = _capture_envelope(self.snapshots["capture.json"], self.attempt_id,
                                        digest(request_raw), seed=True)
             _capture_export_binding(groups, self.snapshots, source=source)
@@ -1671,10 +1870,12 @@ class _HeldCaptureRead:
             _capture_copy_room(self.work, 4 * len(self.snapshots["complete.json"]),
                                False, case=True, read_only=True)
             self.work["read_bytes"] += 4 * len(self.snapshots["complete.json"])
+            _capture_account(self.work, "W", "read_bytes", 4 * len(self.snapshots["complete.json"]))
             _json(self.snapshots["complete.json"], 512, "E_STORE")
             _capture_copy_room(self.work, len(expected) + len(self.snapshots["complete.json"]),
                                False, case=True, read_only=True)
             self.work["read_bytes"] += len(expected) + len(self.snapshots["complete.json"])
+            _capture_account(self.work, "W", "read_bytes", len(expected) + len(self.snapshots["complete.json"]))
             _require(expected == self.snapshots["complete.json"], "E_STORE")
             self.recheck(metadata_only=True)
         except BaseException as error:
@@ -1699,17 +1900,36 @@ class _HeldCaptureRead:
                 if isinstance(raw, _ExportSnapshot):
                     raw.recheck(item, code)
                 else:
+                    self.work["input_kind"] = "W" if os.path.basename(item.path) == "complete.json" else "raw"
                     current = item.read(len(raw), code, self.work)
                     _capture_copy_room(self.work, len(current) + len(raw), False, case=True, read_only=True)
                     self.work["read_bytes"] += len(current) + len(raw)
+                    _capture_account(self.work, self.work["input_kind"], "read_bytes", len(current) + len(raw))
                     _require(current == raw, code)
 
     def transfer(self, work, case_work):
+        self.transfer_target = (work, case_work)
         self.transferred += _capture_transfer_work(self.work, work, case_work)
 
     def close(self):
         held, self.held = self.held, []
-        _close_paths(held)
+        try:
+            _close_paths(held)
+        finally:
+            try:
+                target = getattr(self, "transfer_target", None)
+                if target is None:
+                    work = self.anchor.recording_work
+                    case_work = _capture_work_values(work, "unassigned:" + self.attempt_id)
+                    work["accounting_incomplete"] = True
+                else:
+                    work, case_work = target
+                self.transferred += _capture_transfer_work(self.work, work, case_work)
+                _capture_accounting_receipt(self.anchor)
+            except Exception as error:
+                self.anchor.private_observations["unusable"] = True
+                if getattr(error, "_scope_signal_cancel", False):
+                    raise
 
 
 class _HeldStoreRead:
@@ -1739,10 +1959,16 @@ class _HeldStoreRead:
                 "receipt": _json(self.snapshots["receipt.json"], DOCUMENT_LIMIT, "E_STORE")}
             self.projected_capture = groups
             if not hasattr(self, "capture_origin"):
+                self.capture.work["origin_incomplete"] = True
                 self.capture_origin = _origin_values(self.snapshots, self.storage_rows,
                     {"attempt_id": self.attempt_id, "platform": sys.platform},
                     {"host-config.json": self.anchor.config_raw}, capture_files=self.capture.snapshots,
                     capture_storage_rows=self.capture.storage_rows)
+                for name, raw in self.capture.snapshots.items():
+                    if name != "sandbox-export.bin":
+                        self.capture.work["read_bytes"] += len(raw)
+                        _capture_account(self.capture.work, "W" if name == "complete.json" else "raw", "read_bytes", len(raw))
+                self.capture.work["origin_incomplete"] = False
             return groups
         except Exception as error:
             self.anchor.private_observations["unusable"] = True
@@ -1848,6 +2074,7 @@ class _HeldStoreRead:
                  and self.capture.anchor is self.anchor, "E_STORE")
         completion_owner.transfer(work, case_work)
         self.capture.transfer(work, case_work)
+        before_encoding = work["read_bytes"]
         consumer_raw = _private_capture_observations({"attempt_id": self.attempt_id,
             "request_sha256": digest(request_raw),
             "storage": self.storage_rows,
@@ -1857,14 +2084,19 @@ class _HeldStoreRead:
             "preparation": self.anchor.private_observations.get("preparation",{}),
             "entropy": self.anchor.private_observations.get("entropy", {}),
             "clocks": _clock_observations}, work, case_work)
+        for counter in (work, case_work):
+            _capture_account(counter, "unresolved", "read_bytes", work["read_bytes"] - before_encoding)
         binding_raw = None
         if "sandbox-export.bin" in capture_snapshots:
             _require(hasattr(self, "launch_binding") and hasattr(self, "projected_capture"), "E_STORE")
             expected_launch = ("reproduction" if self.launch_binding["outer"]["kind"]
                                == "shadow_enforced_request" else "write")
             _require(launch == expected_launch, "E_STORE")
+            before_encoding = work["read_bytes"]
             binding_raw = _private_capture_observations(self.launch_binding |
                 {"raw": self.projected_capture}, work, case_work)
+            for counter in (work, case_work):
+                _capture_account(counter, "unresolved", "read_bytes", work["read_bytes"] - before_encoding)
         os.mkdir(launch, 0o700, dir_fd=parent.fd)
         after_parent = _metadata(parent.fd)
         _require((after_parent.st_dev, after_parent.st_ino, after_parent.st_uid, after_parent.st_gid,
@@ -1891,6 +2123,10 @@ class _HeldStoreRead:
                     work["export_files"] += int(exported)
                     case_work["export_files"] += int(exported)
                     work["calls"][name] = work["calls"].get(name, 0) + 1
+                    if not exported:
+                        kind = "W" if name == "complete.json" else "raw" if name == "capture.json" else "unresolved"
+                        _capture_account(work, kind, "files", 1)
+                        _capture_account(case_work, kind, "files", 1)
                     for chunk in chunks:
                         view = memoryview(chunk)
                         while view:
@@ -1907,6 +2143,10 @@ class _HeldStoreRead:
                                 if exported:
                                     work["export_" + key] += count
                                     case_work["export_" + key] += count
+                            if not exported:
+                                for counter in (work, case_work):
+                                    for field in ("read_bytes", "write_bytes", "physical_bytes"):
+                                        _capture_account(counter, kind, field, count)
                             view = view[count:]
                     os.fchmod(target, 0o400)
                     os.fsync(target)
