@@ -1102,12 +1102,28 @@ replace implementation.
 | scope/权限 | 全部repo inactive；slot never executes；stdout零；native attempt两成员不变；source captures不能夹export；无新helper/network/credential/install/activation/target |
 
 G2 and the separate high-risk plan permit only inactive mechanisms within the
-40 edit / 9 adoption-only / 84 source boundary. Actual parent path/head, original
-held record acquisition/qualification, fd3 publication and completion remain
-mandatory before real hookup, qualification or whole RAW16 acceptance. A producer
-outside 40 edit paths, a changed adoption-only file or a new source member needs
-an exact scope decision. No unknown parent filename is authorized. Fixtures
-cannot satisfy the production dependency.
+40 edit / 9 adoption-only / 84 source boundary. C source work may precede B
+acceptance only through frozen, precisely mapped real B interfaces. Before C
+code, independently accept and land a separate high-risk plan amendment, merge
+that accepted main normally into the same source carrier, and obtain fresh
+interface source preflight, an exact claim and the manager's explicit resume GO.
+Bind each C consumer to its actual owner, fields, types, bounds, caller and return
+values at that checkpoint. Unknown fields, missing owners or dependencies on an
+unapproved T protocol keep the affected code blocked. Never invent an interface
+or use fixtures to supply a missing production dependency.
+
+B's complete terminal, resource and cost proof, and all other original B proof,
+remain hard gates for C acceptance, seeding, final G3 and implementation merge.
+The changed source order does not defer existing runnable or full-CI milestones,
+or proof already due. It accepts no part of B and grants no T terminal flag,
+file or exit-code protocol, wider scope, budget or permission.
+
+Actual parent path/head, original held record acquisition/qualification, fd3
+publication and completion remain mandatory before real hookup, qualification
+or whole RAW16 acceptance. A producer outside 40 edit paths, a changed
+adoption-only file or a new source member needs an exact scope decision. No
+unknown parent filename is authorized. Fixtures cannot satisfy the production
+dependency.
 
 Retain all existing host-supervisor, guest-value, receipt, consumer, preparation,
 gate-generation, scope, eval, restoration and cancellation regressions. The shared
