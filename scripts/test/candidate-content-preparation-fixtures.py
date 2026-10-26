@@ -4261,6 +4261,187 @@ def raw16_noexport_projection_values(root: Path) -> None:
         "full_recording_costs_and_qualification": "NOT_PROVEN"}, sort_keys=True))
 
 
+def raw16_C1_case_values(replay, host):
+    import copy
+    ids = {role: 'ordinary.' + role for role in ('reproduction', 'write', 'gate')}
+    raw_requests = {role: host.canonical({'original': role}) for role in ids}
+    hashes = {role: host.sha256_hex(raw) for role, raw in raw_requests.items()}
+    incident = {'observed_at': '2026-10-26T00:00:00Z'}
+    rows = []
+    for index, role in enumerate(replay._CASE_ROLES):
+        local = {'entropy': {'preparation_names': []},
+            'clocks': {'wall': [], 'monotonic': [{'site': 'ordinary.' + role,
+                'value': struct.pack('>d', float(index)).hex()}]},
+            'storage': {'entries': [], 'identity_context': {'platform': sys.platform}},
+            'commands': {'runtime_values': []}, 'runtime': {'files': []}}
+        if '.' in role:
+            launch, operation = role.split('.')
+            binding = {'attempt_id': ids[launch], 'outer_request_sha256': hashes[launch],
+                'input_sha256': host.sha256_hex(b'input' + role.encode()),
+                'response_sha256': host.sha256_hex(b'response' + role.encode()), 'operation': operation}
+            raw = {'preparation': local}
+        elif role in ('reproduction', 'write'):
+            binding = {'attempt_id': ids[role], 'outer_request_sha256': hashes[role],
+                'request_sha256': host.sha256_hex(b'launch' + role.encode()), 'operation': 'launch'}
+            capture = {'host': {'process': [{'site': 'run_driver.state', 'ordinal': 0,
+                'return': index, 'errno': None, 'bytes': ('reply-' + role).encode().hex(), 'timeout': None}],
+                'driver_rest': [{'call': 0, 'reply': {'status': 200, 'body_hex': role.encode().hex()},
+                    'error': None, 'operation': 'state'}], 'signals': []},
+                'guest': {'setup': {'page_size': {'bytes': '', 'errno': None, 'return': 4096 + index}},
+                    'control': [{'tag': 'launch', 'pid': 700 + index}], 'counters': {}},
+                'clocks': copy.deepcopy(local['clocks'])}
+            raw = {'local': local, 'capture': capture}
+        elif role == 'gate':
+            binding = {'request_id': ids['gate'], 'request_sha256': hashes['gate']}
+            raw = {'generator': local, 'scope_reader': copy.deepcopy(local)}
+            raw['scope_reader']['clocks']['monotonic'][0]['value'] = struct.pack('>d', 99.0).hex()
+        else:
+            binding = {'gate_request_sha256': hashes['gate'], 'attempt_id': 'ordinary.' + role,
+                'request_sha256': host.sha256_hex(role.encode()),
+                'operation': 'kill-register-read' if role == 'kill' else 'coverage-read'}
+            del local['entropy']
+            raw = {'local': local, 'capture': {'source_pages': {role: []},
+                'clocks': {'wall': [], 'monotonic': []}}}
+        rows.append({'role': role, 'binding': binding, 'raw': raw})
+    locators = {role: {'request': '/ordinary/' + role} for role in replay._CASE_ROLES}
+    canonical = replay._case_v2_values(incident, ids, locators, rows)
+    assert replay._case_v2_validate(canonical, incident, ids, locators, rows)['body']['occurrences'] == rows
+    assert rows[2]['raw']['capture']['guest'] != rows[5]['raw']['capture']['guest']
+    assert rows[6]['raw']['generator']['clocks'] != rows[6]['raw']['scope_reader']['clocks']
+    negatives = []
+    for label in ('missing', 'duplicate', 'order', 'unknown', 'versioned-operation', 'cross-outer', 'cross-gate', 'null-coverage'):
+        changed = copy.deepcopy(rows)
+        if label == 'missing':changed.pop(1)
+        elif label == 'duplicate':changed[1] = copy.deepcopy(changed[0])
+        elif label == 'order':changed[0], changed[1] = changed[1], changed[0]
+        elif label == 'unknown':changed[0]['raw']['extra'] = {}
+        elif label == 'versioned-operation':changed[7]['binding']['operation'] = 'kill-register-read.v1'
+        elif label == 'cross-outer':changed[0]['binding']['outer_request_sha256'] = hashes['write']
+        elif label == 'cross-gate':changed[7]['binding']['gate_request_sha256'] = hashes['write']
+        else:changed[8] = None
+        try:replay._case_v2_values(incident, ids, locators, changed)
+        except (ValueError, TypeError):negatives.append(label)
+        else:raise AssertionError('case v2 construction admitted ' + label)
+    for label in ('guest-setup', 'host-reply', 'controller-order', 'rest-call', 'clock', 'cross-role'):
+        value = json.loads(canonical)
+        occurrences = value['body']['occurrences']
+        if label == 'guest-setup':occurrences[2]['raw']['capture']['guest']['setup']['page_size']['return'] += 1
+        elif label == 'host-reply':occurrences[5]['raw']['capture']['host']['process'][0]['bytes'] = 'ff'
+        elif label == 'controller-order':occurrences[2]['raw']['capture']['host']['process'][0]['ordinal'] = 1
+        elif label == 'rest-call':occurrences[5]['raw']['capture']['host']['driver_rest'][0]['call'] = 1
+        elif label == 'clock':occurrences[6]['raw']['scope_reader']['clocks'] = occurrences[6]['raw']['generator']['clocks']
+        else:occurrences[0]['binding'] = occurrences[3]['binding']
+        try:replay._case_v2_validate(host.canonical(value), incident, ids, locators, rows)
+        except ValueError:negatives.append(label)
+        else:raise AssertionError('case v2 projection admitted ' + label)
+    return {'full_v2_value_roundtrip': True, 'separate_launches_and_four_T': True,
+        'bytes': len(canonical), 'negatives': negatives,
+        'primitive_shapes_and_inputs': 'composition values only, not collection/qualification or native guest proof',
+        'valid_absence_branch': 'NOTRUN here; no missing-capture inference'}
+
+
+def raw16_C1_copy(root: Path) -> None:
+    body = (root/'scripts/test/evals-malicious.test.sh').read_text().split("<<'PY_RUNTIME_CONSUMER'\n", 1)[1].split('\nPY_RUNTIME_CONSUMER', 1)[0]
+    prefix = body.split('        native.recheck();native.close();native=None\n', 1)[0]
+    footer = body[body.rfind('finally:\n    if copied_inventory'):]
+    prefix = prefix.replace("        store=base/'store';", "        seed=base/'pending-S';seed.mkdir(mode=0o700)\n        store=base/'store';", 1)
+    prefix = prefix.replace("anchor=c.Anchor(config,config_raw,[installed_hold],{},('',[]),('',[]),None)",
+        "anchor=c.Anchor(config,config_raw,[installed_hold],{},('',[]),('',[]),c._DarwinUUIDResolver() if sys.platform=='darwin' else None)")
+    prefix = prefix.replace("c._store_rule(uid,gid,0o700,True),'E_STORE')", "c._store_rule(uid,gid,0o700,True,anchor.resolver),'E_STORE')")
+    cases = ('stable', 'initial-sha', 'tail', 'hash-allocation', 'write-limit', 'physical-limit',
+             'partial-budget', 'register-memory', 'register-A-close-B', 'ordinary-A-close-B', 'registered-cancel')
+    extra = '''        import ast,inspect,struct
+        replay=load('C1_actual_replay',root/'evals/v1/replay-malicious.py')
+        c._acl_state=original_acl
+        seed_parent=c._open_held(str(seed),True,c._store_rule(uid,gid,0o700,True,anchor.resolver),'E_STORE')
+        assembly=replay._SeedAssembly(seed_parent,anchor,'malicious.incident-symptom-text',anchor.recording_work,copied_inventory.case_work)
+        original_open,original_write,original_close=os.open,os.write,os.close
+        original_hash,original_held_close,original_child=replay.hashlib.sha256,c.HeldPath.close,c._open_child
+        fds,writes,closes,cancels,writer_live=[],[],{},[],set()
+        main=next(n for n in ast.parse((root/'scope/v1/read-shadow-evidence.py').read_text()).body if isinstance(n,ast.FunctionDef) and n.name=='main')
+        cancel=next(n for n in main.body if isinstance(n,ast.FunctionDef) and n.name=='cancel')
+        ns={};exec(compile(ast.Module(body=[cancel],type_ignores=[]),'<original-handler>', 'exec'),ns)
+        def marked():
+            try:ns['cancel'](15,None)
+            except InterruptedError as error:cancels.append(error);raise
+        def opening(path,flags,*args,**kwargs):
+            result=original_open(path,flags,*args,**kwargs)
+            if path=='runtime-copy.bin' and flags & os.O_CREAT:fds.append(result);writer_live.add(result)
+            return result
+        def writing(fd,raw):
+            result=original_write(fd,raw)
+            if fd in fds:writes.append(result)
+            return result
+        def closing(fd):
+            if fd in writer_live:
+                closes[fd]=closes.get(fd,0)+1;writer_live.remove(fd)
+            return original_close(fd)
+        def hashing(*args,**kwargs):
+            if C1_case=='hash-allocation' and inspect.currentframe().f_back.f_code is replay._SeedAssembly._copy_file.__code__:
+                raise MemoryError('controlled pre-open hash allocation')
+            return original_hash(*args,**kwargs)
+        def child(parent,name,*args,**kwargs):
+            if C1_case=='tail' and parent is assembly.root and name=='runtime-copy.bin':
+                fd=original_open(name,os.O_WRONLY|os.O_APPEND,dir_fd=parent.fd)
+                try:assert original_write(fd,b'tail')==4
+                finally:original_close(fd)
+            return original_child(parent,name,*args,**kwargs)
+        class Registration(list):
+            def append(self,item):
+                if C1_case=='registered-cancel':super().append(item);marked()
+                if C1_case=='register-A-close-B':marked()
+                if C1_case in ('register-memory','ordinary-A-close-B'):raise MemoryError('controlled S registration')
+                super().append(item)
+        def held_close(item):
+            result=original_held_close(item)
+            if item.path==str(seed/'runtime-copy.bin') and C1_case in ('register-A-close-B','ordinary-A-close-B'):marked()
+            return result
+        if C1_case.startswith('register') or C1_case=='ordinary-A-close-B':assembly.output_holds=Registration()
+        if C1_case in ('write-limit','partial-budget'):
+            assembly.case_work['runtime']['write_bytes']=c._RUNTIME_FIELDS['write_bytes']-(65536 if C1_case=='partial-budget' else 0)
+        if C1_case=='physical-limit':assembly.case_work['runtime']['physical_bytes']=c._RUNTIME_FIELDS['physical_bytes']
+        os.open,os.write,os.close,replay.hashlib.sha256,c.HeldPath.close,c._open_child=opening,writing,closing,hashing,held_close,child
+        caught=None
+        try:
+            try:assembly._copy(anchor,copied_inventory.members[name],'runtime-copy.bin',('f'*64 if C1_case=='initial-sha' else native_digest),'runtime')
+            except BaseException as error:caught=error
+        finally:os.open,os.write,os.close,replay.hashlib.sha256,c.HeldPath.close,c._open_child=original_open,original_write,original_close,original_hash,original_held_close,original_child
+        if C1_case=='stable':
+            assert caught is None, (type(caught).__name__, str(caught), getattr(caught,'code',None))
+            assert assembly.work['runtime']['read_bytes']==assembly.work['runtime']['sha_bytes']==3*len(source_raw)
+            assert assembly.work['runtime']['write_bytes']==assembly.work['runtime']['copy_bytes']==len(source_raw)
+            assert assembly.work['runtime']['equality_bytes']==2*len(source_raw)
+            assert (seed/'runtime-copy.bin').read_bytes()==source_raw
+            case_values=raw16_C1_case_values(replay,h)
+        else:
+            assert caught is not None and assembly.failure is not None,C1_case
+            if C1_case=='hash-allocation':assert not fds and not (seed/'runtime-copy.bin').exists()
+            if C1_case in ('write-limit','physical-limit'):assert not writes and (seed/'runtime-copy.bin').stat().st_size==0
+            if C1_case=='partial-budget':
+                assert writes==[65536] and (seed/'runtime-copy.bin').stat().st_size==65536
+                assert assembly.work['runtime']['write_bytes']==assembly.work['runtime']['physical_bytes']==65536
+            if C1_case in ('register-A-close-B','ordinary-A-close-B','registered-cancel'):assert caught is cancels[0]
+            case_values=None
+        try:assembly.close(caught)
+        except BaseException as error:assert caught is None or error is caught
+        assert assembly.closed and assembly.root is None and not assembly.output_holds
+        assert all(closes.get(fd)==1 for fd in fds), (C1_case,fds,closes)
+        seed_parent.close()
+        assert copied_inventory.closed is False and os.fstat(copied_inventory.directory.fd)
+        partial=(seed/'runtime-copy.bin').read_bytes() if (seed/'runtime-copy.bin').exists() else None
+        print(json.dumps({'C1_copy_case':C1_case,'writes':writes,'new_writer_FD_count':len(fds),
+            'S_bytes_before_fixture_cleanup':None if partial is None else partial.hex(),
+            'S_work':assembly.work,'case_work':assembly.case_work,'window_work':anchor.recording_work,
+            'case_values':case_values,'real_Darwin_ACL':sys.platform=='darwin',
+            'no_native_qualification_or_final_seed':True},sort_keys=True))
+'''
+    for case in cases:
+        namespace = {'C1_case': case, 'raw16_C1_case_values': raw16_C1_case_values}
+        argv = sys.argv;sys.argv = ['C1-copy-fixture', str(root)]
+        try:exec(compile(prefix + extra + footer, '<actual-held-C1-copy>', 'exec'), namespace)
+        finally:sys.argv = argv
+
+
 def main() -> int:
     try:
         args = parser().parse_args()
