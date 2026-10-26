@@ -693,17 +693,36 @@ def _close_paths(items: list[HeldPath]) -> None:
         raise failure
 
 def _clone(parent: HeldPath, code: str, recording_work=None, accounting_kind=None) -> list[HeldComponent]:
-    rows = []
+    rows, pending = [], None
     try:
         parent.recheck(code) if recording_work is None else parent.recheck(code, recording_work, accounting_kind)
         for row in parent.components:
-            rows.append(HeldComponent(os.dup(row.fd), row.name, row.before, row.rule, row.ancestor))
+            pending = os.dup(row.fd)
             if recording_work is not None:
-                _capture_observe(recording_work, accounting_kind, "dup", {"source_fd": row.fd, "fd": rows[-1].fd})
+                _capture_observe(recording_work, accounting_kind, "dup", {"source_fd": row.fd, "fd": pending})
+            component = HeldComponent(pending, row.name, row.before, row.rule, row.ancestor)
+            rows.append(component)
+            pending = None
         return rows
     except BaseException as exc:
         try:
-            _close_components(rows, exc)
+            if pending is not None:
+                try:
+                    if recording_work is None:os.close(pending)
+                    else:_close_capture_copy(pending, recording_work, recording_work, "clone-pending-close", exc)
+                except BaseException as closing:
+                    if getattr(closing, "_scope_signal_cancel", False) and not getattr(exc, "_scope_signal_cancel", False):
+                        exc = closing
+            if recording_work is None:
+                _close_components(rows, exc)
+            else:
+                while rows:
+                    row = rows.pop()
+                    try:_close_capture_copy(row.fd, recording_work, recording_work, "clone-rows-close", exc)
+                    except BaseException as closing:
+                        if getattr(closing, "_scope_signal_cancel", False) and not getattr(exc, "_scope_signal_cancel", False):
+                            exc = closing
+                raise exc
         except Refusal:
             raise
         except OSError as error:

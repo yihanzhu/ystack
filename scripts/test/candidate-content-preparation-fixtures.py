@@ -3169,6 +3169,70 @@ def _synthetic_T_live_files(c, scratch, operation, input_raw, response_raw):
     return value,files,marker
 
 
+def raw16_clone_pending_allocation(root: Path) -> None:
+    import ast
+    import tempfile
+    spec=importlib.util.spec_from_file_location('clone_pending',root/'shadow/v1/enforced-reproduction.py')
+    e=importlib.util.module_from_spec(spec);sys.modules[spec.name]=e;spec.loader.exec_module(e);c=e.c
+    acl=c._acl_state;c._acl_state=lambda *_:([],None) if sys.platform=='darwin' else (None,None)
+    syntax=ast.parse((root/'scope/v1/read-shadow-evidence.py').read_text())
+    main=next(node for node in syntax.body if isinstance(node,ast.FunctionDef) and node.name=='main')
+    handler=next(node for node in main.body if isinstance(node,ast.FunctionDef) and node.name=='cancel')
+    callbacks={};exec(compile(ast.Module(body=[handler],type_ignores=[]),'<actual-cancel>','exec'),callbacks)
+    results=[]
+    try:
+        for recorded in (False,True):
+            for case in ('stable','component-allocation','secondary-ordinary','first-cancel','close-first-cancel'):
+                with tempfile.TemporaryDirectory(prefix='ystack-clone-pending-') as temporary:
+                    base=Path(temporary).resolve();base.chmod(0o700)
+                    parent=c._open_held(str(base),True,c._store_rule(os.geteuid(),os.getegid(),0o700,True),'E_STORE')
+                    dup,component,closing=os.dup,c.HeldComponent,os.close
+                    duplicates,closed,events=[],[],[];primary=MemoryError('controlled component construction after successful dup')
+                    leaf={} if recorded else None
+                    if leaf is not None:c._capture_work_values(leaf,'pending-clone')
+                    def cancellation():
+                        try:callbacks['cancel'](15,None)
+                        except InterruptedError as error:events.append(error);return error
+                    def duplicate(fd):
+                        result=dup(fd);duplicates.append(result);return result
+                    def construct(*args,**kwargs):
+                        if case!='stable' and len(duplicates)==2:
+                            if case=='first-cancel':raise cancellation()
+                            raise primary
+                        return component(*args,**kwargs)
+                    def close(fd):
+                        result=closing(fd)
+                        if fd in duplicates:
+                            closed.append(fd)
+                            if len(duplicates)==2 and fd==duplicates[-1]:
+                                if case=='secondary-ordinary':raise OSError(errno.EIO,'controlled pending FD close error')
+                                if case in ('first-cancel','close-first-cancel'):raise cancellation()
+                        return result
+                    caught=None;rows=None
+                    try:
+                        os.dup,c.HeldComponent,os.close=duplicate,construct,close
+                        try:rows=c._clone(parent,'E_STORE',leaf,'M' if recorded else None)
+                        except BaseException as error:caught=error
+                        if case=='stable':
+                            assert caught is None and len(rows)==len(parent.components)
+                            c._close_components(rows)
+                        elif case=='first-cancel':assert len(events)==2 and events[0] is not events[1] and caught is events[0]
+                        elif case=='close-first-cancel':assert len(events)==1 and caught is events[0]
+                        else:assert caught is primary
+                        assert len(closed)==len(duplicates) and set(closed)==set(duplicates), 'pending dup must close before row registration completes'
+                        for fd in duplicates:
+                            try:os.fstat(fd)
+                            except OSError as error:assert error.errno==errno.EBADF
+                            else:raise AssertionError('pending clone FD leaked')
+                        assert all(os.fstat(item.fd) for item in parent.components)
+                        results.append({'recorded':recorded,'case':case,'new_FDs_closed_once':len(closed),
+                            'parent_still_live':True,'work':leaf,'no_recording_owner_cost':'UNKNOWN' if not recorded else None,
+                            'allocation_control':'actual HeldComponent construction failure after second successful dup; append under same pending ownership guard is source-reviewed, not separately injected'})
+                    finally:os.dup,c.HeldComponent,os.close=dup,component,closing;parent.close()
+    finally:c._acl_state=acl
+    print(json.dumps({'actual_pending_clone_allocation':results},sort_keys=True))
+
+
 def raw16_T_live_stable(root: Path) -> None:
     import ast
     import tempfile
