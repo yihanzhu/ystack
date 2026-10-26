@@ -711,15 +711,19 @@ def _store_rule(uid: int, gid: int, mode: int, directory: bool,
     check.observations = {}
     return check
 
-def _read_plain_fd(fd: int, maximum: int) -> bytes:
+def _read_parent_fd(fd: int) -> bytes:
     os.lseek(fd, 0, os.SEEK_SET)
-    chunks, total = [], 0
+    chunks, total, prefix, maximum = [], 0, b"", PARENT_LIMIT
     while True:
         part = os.read(fd, min(65536, maximum + 1 - total))
         if not part:
             return b"".join(chunks)
         chunks.append(part)
         total += len(part)
+        if len(prefix) < 8:
+            prefix += part[:8 - len(prefix)]
+            if prefix == PARENT_FRAME_MAGIC:
+                maximum = PARENT_FRAME_LIMIT
         _require(total <= maximum, "E_LIMIT")
 
 class _ParentContext(dict):
@@ -751,7 +755,7 @@ def capture_parent_context(fd: int = 3) -> dict:
     try:
         flags, before = fcntl.fcntl(fd, fcntl.F_GETFL), _metadata(fd)
         _require(flags & os.O_ACCMODE == os.O_RDONLY and stat.S_ISREG(before.st_mode), "E_PARENT_CONTEXT")
-        frame_raw = _read_plain_fd(fd, PARENT_FRAME_LIMIT)
+        frame_raw = _read_parent_fd(fd)
         after = _metadata(fd)
     except (OSError, ValueError, Refusal):
         raise Refusal("E_PARENT_CONTEXT") from None

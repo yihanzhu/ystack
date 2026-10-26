@@ -43,6 +43,25 @@ for label,raw in [('short-header',c.PARENT_FRAME_MAGIC),('short-context',frame()
     ('record-over',c.PARENT_FRAME_MAGIC+struct.pack('!III',1,c.DOCUMENT_LIMIT+1,1)),
     ('wrong-digest',frame(helper=c.canonical({'fixture':'changed'}))),
     ('noncanonical',frame(helper=helper+b' ')),('legacy-over',b' '*(c.PARENT_LIMIT+1))]:refuses(label,raw)
+read_traces=[]
+for label,raw,expected_bytes in [('legacy-at',b' '*c.PARENT_LIMIT,c.PARENT_LIMIT),
+        ('legacy-over-read-bound',b' '*(c.PARENT_FRAME_LIMIT+1),c.PARENT_LIMIT+1),
+        ('partial-magic',b'YSRAW16!'+b' '*c.PARENT_FRAME_LIMIT,c.PARENT_LIMIT+1),
+        ('legacy-valid',context,len(context)),('v3-valid',frame(),len(frame()))]:
+    original_read=c.os.read;trace=[]
+    def observed_read(fd,count):
+        result=original_read(fd,count);trace.append((count,len(result)));return result
+    try:
+        c.os.read=observed_read
+        try:read(raw)
+        except c.Refusal:assert label not in ('legacy-valid','v3-valid')
+    finally:c.os.read=original_read
+    assert sum(count for _,count in trace)==expected_bytes
+    if label!='v3-valid':
+        assert trace[0][0]==c.PARENT_LIMIT+1
+        assert len(trace)==(1 if expected_bytes>c.PARENT_LIMIT else 2)
+    read_traces.append({'case':label,'read_calls':trace,'observed_bytes':expected_bytes})
+print(json.dumps({'legacy_actual_read_traces':read_traces},sort_keys=True))
 assert c.PARENT_FRAME_LIMIT==2113556
 context_at=b' '*c.PARENT_LIMIT;record_at=b' '*c.DOCUMENT_LIMIT
 bound=c.PARENT_FRAME_MAGIC+struct.pack('!III',len(context_at),len(record_at),len(record_at))+context_at+record_at+record_at
