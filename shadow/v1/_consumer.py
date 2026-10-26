@@ -21,6 +21,8 @@ ANCHOR = "/usr/local/libexec/ystack-sandbox/v1/supervisor"
 HELPER_SOURCE = "adapters/local-git-materializer/v1/object-closure.c"
 HELPER_SOURCE_SHA256 = "f1616b908c97e8a091029c24b3f2e1f8827171cbdee4d47195c66afd3e961e27"
 PARENT_LIMIT, DOCUMENT_LIMIT = 16 * 1024, 1024 * 1024
+PARENT_FRAME_MAGIC = b"YSRAW16\0"
+PARENT_FRAME_LIMIT = 20 + PARENT_LIMIT + 2 * DOCUMENT_LIMIT
 CAPTURE_LIMIT = DOCUMENT_LIMIT
 EXPORT_LIMIT = 12 * DOCUMENT_LIMIT
 EXECUTABLE_LIMIT, OUTPUT_LIMIT = 16 * 1024 * 1024, 10 * 1024 * 1024
@@ -720,11 +722,36 @@ def _read_plain_fd(fd: int, maximum: int) -> bytes:
         total += len(part)
         _require(total <= maximum, "E_LIMIT")
 
+class _ParentContext(dict):
+    def __init__(self, body, context_raw, frame_raw, records):
+        super().__init__(body)
+        self.context_raw = context_raw
+        self.frame_raw = frame_raw
+        self.runtime_records = records
+
+
+def _parent_frame_values(raw):
+    if not raw.startswith(PARENT_FRAME_MAGIC):
+        _require(len(raw) <= PARENT_LIMIT, "E_PARENT_CONTEXT")
+        return raw, ()
+    _require(20 <= len(raw) <= PARENT_FRAME_LIMIT, "E_PARENT_CONTEXT")
+    lengths = struct.unpack("!III", raw[8:20])
+    _require(0 < lengths[0] <= PARENT_LIMIT
+             and all(0 < length <= DOCUMENT_LIMIT for length in lengths[1:])
+             and 20 + sum(lengths) == len(raw), "E_PARENT_CONTEXT")
+    end = 20 + lengths[0]
+    context = raw[20:end]
+    helper = raw[end:end + lengths[1]]
+    dependency = raw[end + lengths[1]:]
+    _require(helper != dependency, "E_PARENT_CONTEXT")
+    return context, (helper, dependency)
+
+
 def capture_parent_context(fd: int = 3) -> dict:
     try:
         flags, before = fcntl.fcntl(fd, fcntl.F_GETFL), _metadata(fd)
         _require(flags & os.O_ACCMODE == os.O_RDONLY and stat.S_ISREG(before.st_mode), "E_PARENT_CONTEXT")
-        raw = _read_plain_fd(fd, PARENT_LIMIT)
+        frame_raw = _read_plain_fd(fd, PARENT_FRAME_LIMIT)
         after = _metadata(fd)
     except (OSError, ValueError, Refusal):
         raise Refusal("E_PARENT_CONTEXT") from None
@@ -734,6 +761,11 @@ def capture_parent_context(fd: int = 3) -> dict:
         except OSError:
             pass
     _require(_identity(before) == _identity(after), "E_PARENT_CONTEXT")
+    raw, records = _parent_frame_values(frame_raw)
+    return _parent_context_values(raw, frame_raw, records)
+
+
+def _parent_context_values(raw, frame_raw, records):
     doc = _json(raw, PARENT_LIMIT, "E_PARENT_CONTEXT")
     _require(set(doc) == {"schema_version", "kind", "id", "body"} and _integer(doc["schema_version"])
              and doc["schema_version"] == 2 and doc["kind"] == "shadow_consumer_parent_context"
@@ -755,7 +787,18 @@ def capture_parent_context(fd: int = 3) -> dict:
              and isinstance(native["python_abi"], str) and 1 <= len(native["python_abi"]) <= 128
              and all(0x20 <= ord(char) <= 0x7e for char in native["python_abi"])
              and native["loader_mode"] == "rtld-now-local.v1", "E_PARENT_CONTEXT")
-    return body
+    if records:
+        helper, dependency = records
+        _json(helper, DOCUMENT_LIMIT, "E_PARENT_CONTEXT")
+        doc = _json(dependency, DOCUMENT_LIMIT, "E_PARENT_CONTEXT")
+        _require(digest(helper) == body["helper_build_record_sha256"]
+                 and digest(dependency) == native["dependency_record_sha256"], "E_PARENT_CONTEXT")
+        _require(set(doc) == {"schema_version", "kind", "id", "body"}
+                 and type(doc["schema_version"]) is int and doc["schema_version"] == 1
+                 and doc["kind"] == "shadow_runtime_dependency_record"
+                 and doc["id"] == "shadow.runtime-dependency"
+                 and isinstance(doc["body"], dict), "E_PARENT_CONTEXT")
+    return _ParentContext(body, raw, frame_raw, records)
 
 @dataclasses.dataclass
 class DependencySnapshot:

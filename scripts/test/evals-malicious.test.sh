@@ -3,6 +3,56 @@ set -euo pipefail
 export LC_ALL=C
 umask 077
 root=$(CDPATH='' cd -P -- "${BASH_SOURCE[0]%/*}/../.." && pwd -P)
+/usr/bin/python3 -I -S -B - "$root" <<'PY_PARENT_FRAME'
+import importlib.util,json,os,struct,sys,tempfile
+from pathlib import Path
+root=Path(sys.argv[1]);spec=importlib.util.spec_from_file_location('raw16_parent_consumer',root/'shadow/v1/_consumer.py')
+c=importlib.util.module_from_spec(spec);sys.modules[spec.name]=c;spec.loader.exec_module(c)
+helper=c.canonical({'fixture':'original helper record bytes'})
+dependency=c.canonical({'schema_version':1,'kind':'shadow_runtime_dependency_record',
+    'id':'shadow.runtime-dependency','body':{'fixture':'original dependency bytes'}})
+native={key:'a'*64 for key in ('source_sha256','build_script_sha256','build_record_sha256',
+    'binary_sha256','python_sha256','dependency_record_sha256')}
+native.update(binary_path='/fixture/native',binary_size=1,python_path='/fixture/python',python_abi='fixture-abi',
+    loader_mode='rtld-now-local.v1',dependency_record_sha256=c.digest(dependency))
+body={'helper_source_sha256':c.HELPER_SOURCE_SHA256,'helper_build_record_sha256':c.digest(helper),
+    'helper_executable_sha256':'b'*64,'helper_executable_size':1,'helper_path':'/fixture/helper','native_release':native}
+context=c.canonical({'schema_version':2,'kind':'shadow_consumer_parent_context','id':'shadow.parent','body':body})
+def frame(context=context,helper=helper,dependency=dependency):
+    return c.PARENT_FRAME_MAGIC+struct.pack('!III',len(context),len(helper),len(dependency))+context+helper+dependency
+cases=[]
+def read(raw):
+    with tempfile.TemporaryDirectory(prefix='ystack-parent-frame-') as temporary:
+        path=Path(temporary)/'fd3';path.write_bytes(raw);fd=os.open(path,os.O_RDONLY)
+        try:return c.capture_parent_context(fd)
+        finally:
+            try:os.fstat(fd)
+            except OSError as error:assert error.errno==9
+            else:raise AssertionError('fd3 not closed')
+def refuses(label,raw):
+    try:read(raw)
+    except c.Refusal:cases.append(label)
+    else:raise AssertionError(label)
+value=read(frame());assert dict(value)==body and value.context_raw==context
+assert value.frame_raw==frame() and value.runtime_records==(helper,dependency)
+legacy=read(context);assert dict(legacy)==body and legacy.runtime_records==() and legacy.frame_raw==context
+for label,raw in [('short-header',c.PARENT_FRAME_MAGIC),('short-context',frame()[:21]),
+    ('short-record',frame()[:-1]),('extra-tail',frame()+b'x'),('swapped',frame(helper=dependency,dependency=helper)),
+    ('duplicate',frame(dependency=helper)),('zero-context',c.PARENT_FRAME_MAGIC+struct.pack('!III',0,1,1)+b'{}'),
+    ('context-over',c.PARENT_FRAME_MAGIC+struct.pack('!III',c.PARENT_LIMIT+1,1,1)),
+    ('record-over',c.PARENT_FRAME_MAGIC+struct.pack('!III',1,c.DOCUMENT_LIMIT+1,1)),
+    ('wrong-digest',frame(helper=c.canonical({'fixture':'changed'}))),
+    ('noncanonical',frame(helper=helper+b' ')),('legacy-over',b' '*(c.PARENT_LIMIT+1))]:refuses(label,raw)
+assert c.PARENT_FRAME_LIMIT==2113556
+context_at=b' '*c.PARENT_LIMIT;record_at=b' '*c.DOCUMENT_LIMIT
+bound=c.PARENT_FRAME_MAGIC+struct.pack('!III',len(context_at),len(record_at),len(record_at))+context_at+record_at+record_at
+# Distinct records isolate framing from canonical/schema validation.
+bound=bound[:-1]+b'!'
+a,b=c._parent_frame_values(bound);assert len(a)==c.PARENT_LIMIT and tuple(map(len,b))==(c.DOCUMENT_LIMIT,)*2
+refuses('frame-over',bound+b'x')
+print(json.dumps({'ordinary_only':True,'real_parent_qualification':False,'v2_native_context_preserved':True,
+    'v3_payloads_retained':True,'fd_once_release':True,'negative_cases':cases,'frame_bound':len(bound)},sort_keys=True))
+PY_PARENT_FRAME
 /usr/bin/python3 -I -S -B - "$root" <<'PY_RUNTIME_VALUES'
 import copy
 import importlib.util
