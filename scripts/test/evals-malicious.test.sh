@@ -621,6 +621,15 @@ spec=importlib.util.spec_from_file_location('raw16_parent_carrier_fixture',root/
 fixture=importlib.util.module_from_spec(spec);sys.modules[spec.name]=fixture;spec.loader.exec_module(fixture)
 fixture.raw16_parent_carrier(root)
 PY_PARENT_P_CARRIER
+/usr/bin/python3 -I -S -B - "$root" <<'PY_SCOPE_P_ACQUISITIONS'
+import importlib.util,sys
+from pathlib import Path
+root=Path(sys.argv[1])
+spec=importlib.util.spec_from_file_location('raw16_scope_P_fixture',root/'scripts/test/candidate-content-preparation-fixtures.py')
+fixture=importlib.util.module_from_spec(spec);sys.modules[spec.name]=fixture;spec.loader.exec_module(fixture)
+fixture.raw16_scope_acquisitions(root)
+fixture.raw16_scope_sudo_source(root)
+PY_SCOPE_P_ACQUISITIONS
 /usr/bin/python3 -I -S -B - "$root" <<'PY_P_RAW16_ACQUISITIONS'
 import importlib.util,sys
 from pathlib import Path

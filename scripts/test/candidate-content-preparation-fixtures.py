@@ -2071,6 +2071,270 @@ def raw16_t_lifecycle(root: Path) -> None:
     print(json.dumps({'raw16_T_controls': completed, 'ordinary_synthetic_runtime_only': True,
         'actual_source_segments_not_full_native_route': True, 'receipts': receipts}, sort_keys=True))
 
+def raw16_scope_sudo_source(root: Path) -> None:
+    import tempfile
+    import ast
+    spec = importlib.util.spec_from_file_location('raw16_scope_sudo_reader', root/'scope/v1/read-shadow-evidence.py')
+    scope = importlib.util.module_from_spec(spec);sys.modules[spec.name] = scope;spec.loader.exec_module(scope)
+    c, results = scope.c, []
+    main = next(node for node in ast.parse((root/'scope/v1/read-shadow-evidence.py').read_text()).body
+        if isinstance(node, ast.FunctionDef) and node.name == 'main')
+    cancel = next(node for node in main.body if isinstance(node, ast.FunctionDef) and node.name == 'cancel')
+    namespace = {};exec(compile(ast.Module(body=[cancel], type_ignores=[]), '<actual-scope-handler>', 'exec'), namespace)
+    handler = namespace['cancel']
+    original_acl = c._acl_state
+    c._acl_state = lambda *_: ([], None) if sys.platform == 'darwin' else (None, None)
+    try:
+        for case in ('stable', 'kill-stable', 'dup-ancestor', 'dup-target', 'dup-observer-memory',
+                     'companion-close-observer', 'cancel-A-native-close-B', 'native-error-close-error',
+                     'dup-fstat', 'dup-row-allocation', 'companion-registration'):
+            with tempfile.TemporaryDirectory(prefix='ystack-scope-sudo-') as temporary:
+                base = Path(temporary).resolve();base.chmod(0o700)
+                captures = base/'captures';captures.mkdir(mode=0o700)
+                paths = {}
+                for role in ('sudo', 'python', 'jq', 'bash', 'git', 'supervisor'):
+                    path = base/role;path.write_bytes(b'never executed synthetic scope '+role.encode());path.chmod(0o400)
+                    paths[role] = path
+                reader = object.__new__(scope._Reader)
+                reader.owned = [];reader.inputs = [];reader.commands = [];reader.gate_commands = []
+                reader.commands_open = True;reader.store_session = None;reader.capture_completion_owner = None
+                reader.captures = captures;reader.darwin = None
+                anchor = c.Anchor({'principal_uid': os.geteuid()}, b'', [], {}, ('', []), ('', []), None)
+                reader.anchor = anchor
+                reader.python = reader.hold(paths['python'], c.EXECUTABLE_LIMIT)
+                reader.jq = reader.hold(paths['jq'], c.EXECUTABLE_LIMIT)
+                reader.bash = reader.hold(paths['bash'], c.EXECUTABLE_LIMIT)
+                reader.git_binary = reader.hold(paths['git'], c.EXECUTABLE_LIMIT)
+                supervisor = reader.hold(paths['supervisor'], c.EXECUTABLE_LIMIT)
+                supervisor.held.path = c.ANCHOR+'/host-supervisor.py'
+                anchor.held.append(supervisor.held)
+                configuration = object.__new__(c._CoverageConfiguration)
+                configuration.normalizer = types.SimpleNamespace(request=lambda _raw: None)
+                configuration.recheck = lambda: None
+                reader.coverage_configuration = configuration;reader.kill_configuration = configuration
+                owner = object.__new__(c._DarwinChildOwner)
+                owner.ledger = reader;owner.python = reader.python;owner.deadline = time.monotonic()+120
+                owner.recheck = lambda: None
+                request = c.canonical({'kind': 'kill_register_source_request' if case == 'kill-stable' else 'coverage_source_request',
+                    'id': 'coverage.sudo.fixture'})
+                foreground, original_holds, cancels, duplicated, closed, injections, source_chain = [], [], [], [], [], [], []
+                first = c.Refusal('E_RUNTIME')
+                def foreground_fixture(*_args):
+                    foreground.append(True)
+                    if case == 'native-error-close-error':raise first
+                    return b''
+                owner._foreground = foreground_fixture
+                hold_bytes, dup, close, observe = c._hold_bytes, os.dup, os.close, c._capture_observe
+                fstat, replace = os.fstat, c.dataclasses.replace
+                class RegistrationFailure(list):
+                    def append(self, _row):
+                        injections.append("registration");raise MemoryError("controlled companion registration")
+                if case == "companion-registration":anchor.runtime_companions = RegistrationFailure()
+                def held_fixture(path, *args, **kwargs):
+                    assert path == '/usr/bin/sudo'
+                    item = hold_bytes(str(paths['sudo']), *args, **kwargs)
+                    item.held.path = '/usr/bin/sudo'
+                    original_holds.append((item, item.held.fd, len(item.held.components)))
+                    return item
+                def handler_error():
+                    try:handler(signal.SIGTERM, None)
+                    except InterruptedError as error:
+                        cancels.append(error)
+                        return error
+                def dup_fixture(fd):
+                    ordinal = len(duplicated)
+                    if ((case == 'dup-ancestor' and ordinal == 0)
+                            or (case == 'dup-target' and ordinal == original_holds[0][2]-1)):
+                        injections.append('dup');raise OSError(errno.EMFILE, 'controlled dup failure')
+                    value = dup(fd);duplicated.append(value);return value
+                def close_fixture(fd):
+                    close(fd)
+                    if fd in duplicated:closed.append(fd)
+                    if original_holds and fd == original_holds[0][1] and 'native-close' not in injections:
+                        if case == 'cancel-A-native-close-B':
+                            injections.append('native-close');raise handler_error()
+                        if case == 'native-error-close-error':
+                            injections.append('native-close');raise OSError(errno.EBADF, 'controlled secondary native close')
+                def fstat_fixture(fd):
+                    if case == 'dup-fstat' and fd in source_chain and not injections:
+                        injections.append('fstat');raise OSError(errno.EIO, 'controlled duplicated hold fstat')
+                    return fstat(fd)
+                def replace_fixture(component, **kwargs):
+                    if case == 'dup-row-allocation' and not injections:
+                        injections.append('row-allocation');raise MemoryError('controlled duplicated row allocation')
+                    return replace(component, **kwargs)
+                def observed(work, kind, site, value, *args, **kwargs):
+                    if site == 'scope-sudo-dup' and value['return'] >= 0:source_chain.append(value['return'])
+                    if site == 'scope-sudo-dup' and not injections:
+                        if case == 'dup-observer-memory':
+                            injections.append('observer');raise MemoryError('controlled dup observer')
+                        if case == 'cancel-A-native-close-B':
+                            injections.append('cancel-A');raise handler_error()
+                    if (case == 'companion-close-observer' and site == 'held-close' and closed and not injections):
+                        injections.append('companion-close');raise MemoryError('controlled companion close observer')
+                    return observe(work, kind, site, value, *args, **kwargs)
+                c._hold_bytes, os.dup, os.close, c._capture_observe = held_fixture, dup_fixture, close_fixture, observed
+                os.fstat, c.dataclasses.replace = fstat_fixture, replace_fixture
+                caught = None
+                try:
+                    try:
+                        if case == 'kill-stable':owner.kill_register_source(request)
+                        else:owner.coverage_source(request)
+                    except BaseException as error:caught = error
+                    if case == 'cancel-A-native-close-B':
+                        assert len(cancels) == 2 and cancels[0] is not cancels[1] and caught is cancels[0]
+                        assert not foreground
+                    elif case == 'native-error-close-error':assert caught is first and foreground == [True]
+                    else:assert caught is None and foreground == [True]
+                    assert len(original_holds) == 1 and original_holds[0][0].held.components == []
+                    retained_chain = [component.fd for item, _work, _key in anchor.runtime_companions for component in item.components]
+                    assert retained_chain == source_chain, (case, retained_chain, source_chain)
+                    if case in ('stable', 'kill-stable', 'companion-close-observer', 'native-error-close-error'):
+                        assert len(retained_chain) == original_holds[0][2]
+                    for fd in retained_chain:os.fstat(fd)
+                    parent = c._open_held(str(captures), True,
+                        c._store_rule(os.geteuid(), os.getegid(), 0o700, True, None), 'E_STORE')
+                    try:anchor.seal_local_runtime(parent)
+                    finally:parent.close()
+                    assert sorted(closed) == sorted(duplicated)
+                    assert all(closed.count(fd) == 1 for fd in source_chain)
+                    if case in ('stable', 'kill-stable'):
+                        assert not anchor.private_observations.get('unusable', False)
+                        row = next(row for row in anchor.private_observations['local_runtime'] if row['slot'] == 'sudo')
+                        if case == 'kill-stable':
+                            assert {row['slot'] for row in anchor.private_observations['local_runtime']} == {'python', 'jq', 'bash', 'git', 'sudo'}
+                        assert row['slot'] == 'sudo' and row['request_sha256'] == c.digest(request)
+                        assert (captures/row['file']).read_bytes() == paths['sudo'].read_bytes()
+                    else:assert anchor.private_observations.get('unusable') is True
+                    results.append({'case': case, 'native_foreground_calls': len(foreground), 'native_original_closed_at_source_return': True,
+                        'first_cancel_same_object': caught is cancels[0] if cancels else None,
+                        'observed_dup_fds_including_P_reader': duplicated, 'retained_full_source_chain_dup_fds': source_chain,
+                        'once_closed_dup_fds': closed, 'injections': injections,
+                        'work': anchor.recording_work, 'validation_extra_read_bytes': 2*paths['sudo'].stat().st_size if case in ('stable', 'kill-stable') else 0})
+                finally:
+                    c._hold_bytes, os.dup, os.close, c._capture_observe = hold_bytes, dup, close, observe
+                    os.fstat, c.dataclasses.replace = fstat, replace
+                    anchor.held = []
+                    anchor.close();reader.close()
+    finally:c._acl_state = original_acl
+    print(json.dumps({'scope_actual_source_read_sudo_to_P_and_post_native_close_seal': results,
+        'fixed_sudo_and_supervisor_paths_mapped_to_TMP': True,
+        'native_foreground_normalizer_recheck_and_ACL_are_fixture_substitutes': True,
+        'system_runtime_read_or_execution': False, 'real_source_qualification': False}, sort_keys=True))
+
+
+def raw16_scope_acquisitions(root: Path) -> None:
+    import tempfile
+    spec = importlib.util.spec_from_file_location('raw16_scope_actual_reader', root/'scope/v1/read-shadow-evidence.py')
+    scope = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = scope
+    spec.loader.exec_module(scope)
+    c = scope.c
+    acl, results = c._acl_state, []
+    c._acl_state = lambda *_: ([], None) if sys.platform == 'darwin' else (None, None)
+    try:
+        for case in ('stable', 'source-drift', 'P-drift', 'occupied-P', 'parent-close-observer', 'invalid-caller'):
+            with tempfile.TemporaryDirectory(prefix='ystack-scope-P-') as temporary:
+                base = Path(temporary).resolve();base.chmod(0o700)
+                captures = base/'captures';captures.mkdir(mode=0o700)
+                sources = base/'sources';sources.mkdir(mode=0o700)
+                reader = object.__new__(scope._Reader)
+                reader.owned = [];reader.inputs = [];reader.captures = captures;reader.darwin = None
+                anchor = c.Anchor({}, b'', [], {}, ('', []), ('', []), None)
+                reader.anchor = anchor;reader.capture_completion_owner = None
+                paths, acquired = {}, {}
+                for role, attribute in (('python', 'python'), ('jq', 'jq'), ('bash', 'bash'), ('git', 'git_binary')):
+                    path = sources/role
+                    raw = (b'never executed scope original bytes ' + role.encode()) * 7
+                    path.write_bytes(raw);path.chmod(0o400)
+                    paths[role] = path;acquired[role] = raw
+                reference = {'sha256': 'a'*64}
+                stage = {'request_ref': reference, 'resolved_profile_ref': reference, 'result_ref': reference}
+                for name in ('risk', 'duty', 'scope'):
+                    path = base/(name+'.json')
+                    path.write_bytes(c.canonical({'schema_version': 1, 'kind': name, 'id': 'scope.fixture', 'body': {'stage': stage}}))
+                    path.chmod(0o400)
+                normalizer = types.SimpleNamespace(DOCUMENT_NAMES=('risk', 'duty', 'scope'),
+                    doc_ref=scope.ref, request=lambda raw: None)
+                configuration = types.SimpleNamespace(normalizer=normalizer, close=lambda: None,
+                    package_raw=c.canonical({'schema_version': 1, 'kind': 'package', 'id': 'scope.fixture'}),
+                    accepted_raw=c.canonical({'schema_version': 1, 'kind': 'accepted', 'id': 'scope.fixture'}))
+                reader.scope_body = {'required_shadow_environments': [], 'target_repository_id': 'repository.fixture',
+                    'qualified_identity': {'target_revision': {'commit_id': 'a'*40}, 'stage_request_ref': reference,
+                        'resolved_profile_ref': reference},
+                    'coverage': {'coverage_base': {'commit_id': 'b'*40}, 'qualifying_shadow_record_refs': []},
+                    'shadow_evidence_refs': []}
+                reader.document_paths = {name: base/(name+'.json') for name in ('risk', 'duty', 'scope')}
+                reader.scratch = base;reader.store_session = None;reader.git = types.SimpleNamespace(config=b'synthetic native config')
+                reader.commit = lambda _oid: ('c'*40, [])
+                reader._coverage_nonce = 'd'*64;reader._coverage_prepare_only = True
+                for role, attribute in (('python', 'python'), ('jq', 'jq'), ('bash', 'bash'), ('git', 'git_binary')):
+                    setattr(reader, attribute, reader.hold(paths[role], c.EXECUTABLE_LIMIT))
+                if case == 'source-drift':
+                    paths['python'].chmod(0o600);paths['python'].write_bytes(b'changed bytes');paths['python'].chmod(0o400)
+                if case == 'occupied-P':
+                    (captures/'runtime-0000-python-0000.bin').write_bytes(b'preserved partial')
+                load_configuration, observe = c.load_coverage_configuration, c._capture_observe
+                fired = []
+                def close_observer(work, kind, site, value, *args, **kwargs):
+                    if case == 'parent-close-observer' and site == 'held-close' and any(work is leaf for leaf in anchor.recording_work.get('scope_runtime_parent_work', [])) and not fired:
+                        fired.append(site)
+                        raise MemoryError('controlled real scope parent close observation')
+                    return observe(work, kind, site, value, *args, **kwargs)
+                c.load_coverage_configuration = lambda *_: configuration
+                c._capture_observe = close_observer
+                try:
+                    if case == 'invalid-caller':
+                        request = c.canonical({'kind': 'unrelated_request', 'id': 'scope.fixture'})
+                        reader.retain_source_runtime(request)
+                    else:
+                        request = reader.source_coverage({}, {}, [[], []])
+                        assert c._json(request, c.DOCUMENT_LIMIT, 'E_STORE')['kind'] == 'coverage_source_request'
+                    values = anchor.private_observations.get('local_runtime', [])
+                    if case in ('stable', 'P-drift', 'parent-close-observer'):
+                        assert [row['slot'] for row in values] == ['python', 'jq', 'bash', 'git'], (anchor.private_observations, anchor.recording_work)
+                        for row in values:
+                            assert row['request_sha256'] == c.digest(request)
+                            assert row['attempt_id'] == 'coverage.'+'d'*64
+                            assert (captures/row['file']).read_bytes() == acquired[row['slot']]
+                            assert stat.S_IMODE((captures/row['file']).stat().st_mode) == 0o400
+                        if case == 'P-drift':
+                            target = captures/values[0]['file']
+                            target.chmod(0o600);target.write_bytes(b'changed P bytes');target.chmod(0o400)
+                        parent = c._open_held(str(captures), True,
+                            c._store_rule(os.geteuid(), os.getegid(), 0o700, True, None), 'E_STORE')
+                        try:anchor.seal_local_runtime(parent)
+                        finally:parent.close()
+                        if case == 'stable':
+                            assert not anchor.private_observations.get('unusable', False)
+                            reader.source_capture_work = []
+                            def unresolved_capture_seal(current, _parent):
+                                current.private_observations['recording_sealed'] = False
+                                c._capture_accounting_receipt(current)
+                            reader.enforced = types.SimpleNamespace(_seal_capture_recording=unresolved_capture_seal)
+                            reader.seal_source_captures()
+                            assert anchor.private_observations['recording_sealed'] is False
+                        else:assert anchor.private_observations.get('unusable') is True
+                        if case == 'parent-close-observer':
+                            assert fired == ['held-close'] and anchor.recording_work['accounting_incomplete'] is True
+                    else:
+                        assert anchor.private_observations.get('unusable') is True
+                        if case == 'occupied-P':assert (captures/'runtime-0000-python-0000.bin').read_bytes() == b'preserved partial'
+                        if case == 'invalid-caller':assert not list(captures.iterdir())
+                    assert anchor.private_observations['accounting']['complete'] is False
+                    results.append({'case': case, 'work': anchor.recording_work,
+                        'actual_original_hold_bytes': {role: len(raw) for role, raw in acquired.items()},
+                        'validation_extra_read_bytes': sum(len(raw) for raw in acquired.values()) if values else 0,
+                        'physical_P_positive': case == 'stable', 'fixture_normalizer_and_git_values': True,
+                        'full_runtime_Q_and_host_work': 'UNKNOWN', 'system_runtime_read_or_execution': False})
+                finally:
+                    c.load_coverage_configuration, c._capture_observe = load_configuration, observe
+                    reader.close()
+    finally:c._acl_state = acl
+    print(json.dumps({'scope_actual_hold_and_source_coverage_to_P': results,
+        'ACL_prerequisite_is_fixture_substitute': True, 'full_scope_route_and_qualification': False}, sort_keys=True))
+
+
 def raw16_p_acquisitions(root: Path) -> None:
     import tempfile
     spec = importlib.util.spec_from_file_location('raw16_P_actual_reader', root/'shadow/v1/enforced-reproduction.py')

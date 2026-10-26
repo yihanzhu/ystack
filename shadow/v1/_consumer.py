@@ -1531,12 +1531,31 @@ class Anchor:
                              "native_release", "native_build_record"}
                      and isinstance(original, HeldPath) and type(raw) is bytes, "E_STORE")
             caller = _json(caller_raw, DOCUMENT_LIMIT, "E_STORE")
-            _require(caller.get("kind") in {"shadow_enforced_request", "shadow_write_request"}
+            _require(caller.get("kind") in {"shadow_enforced_request", "shadow_write_request",
+                     "coverage_source_request", "kill_register_source_request"}
                      and _id(caller.get("id")), "E_STORE")
             case_key = str(parent.before.st_dev) + ":" + str(parent.before.st_ino)
             case_work = _capture_work_values(self.recording_work, case_key)
             leaf["runtime_case_carry_in"] = case_work.get("runtime", {})
             leaf["runtime_window_carry_in"] = self.recording_work.get("runtime", {})
+            if role == "sudo" and caller["kind"] in {"coverage_source_request", "kill_register_source_request"}:
+                original.recheck("E_STORE", leaf, "M")
+                retained = HeldPath(original.path, [], recording_work=leaf, accounting_kind="M")
+                self.runtime_companions.append((retained, leaf, case_key))
+                for component in original.components:
+                    try:
+                        fd = os.dup(component.fd)
+                    except OSError as error:
+                        _capture_observation_error(leaf, "M", "scope-sudo-dup", error)
+                        raise
+                    try:
+                        retained.components.append(dataclasses.replace(component, fd=fd))
+                    except BaseException as error:
+                        _close_capture_copy(fd, leaf, leaf, "scope-sudo-dup-compensation", error)
+                        raise
+                    _capture_observe(leaf, "M", "scope-sudo-dup", {"source_fd": component.fd, "return": fd})
+                original.recheck("E_STORE", leaf, "M")
+                original = retained
             values = self.private_observations.setdefault("local_runtime", [])
             ordinal = len(self.recording_work["local_runtime_leaves"]) - 1
             _require(ordinal < 64 and len(raw) == original.before.st_size, "E_LIMIT")
@@ -3547,6 +3566,7 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
         _require(isinstance(configuration, _CoverageConfiguration), "E_RUNTIME")
         configuration.normalizer.request(request_raw)
         sudo = _hold_bytes("/usr/bin/sudo", EXECUTABLE_LIMIT, "E_DEPENDENCY", hardlinks=True)
+        source_failure = None
         try:
             _require(sudo.held.path == "/usr/bin/sudo", "E_DEPENDENCY")
             supervisor = next(item for item in anchor.held if item.path == ANCHOR + "/host-supervisor.py")
@@ -3556,6 +3576,9 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
             self.recheck()
             sudo.recheck("E_DEPENDENCY")
             configuration.recheck()
+            if operation == "kill-register-read":
+                ledger.retain_source_runtime(request_raw)
+            ledger.retain_source_runtime(request_raw, sudo)
             ledger.record_source_command(argv, request_raw, sudo.sha256, self.python.sha256, supervisor_sha)
             self._coverage_invocation = argv
             try:
@@ -3569,8 +3592,20 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
             sudo.recheck("E_DEPENDENCY")
             configuration.recheck()
             _require(digest(supervisor.read(EXECUTABLE_LIMIT, "E_STALE")) == supervisor_sha, "E_STALE")
+        except BaseException as error:
+            source_failure = error
+            raise
         finally:
-            sudo.close()
+            try:
+                sudo.close()
+            except BaseException as error:
+                if source_failure is None:
+                    raise
+                anchor.private_observations["unusable"] = True
+                try:
+                    _capture_observation_error(anchor.recording_work, "M", "scope-native-sudo-close", error)
+                except Exception:
+                    anchor.recording_work["accounting_incomplete"] = True
 
     def gate_scope(self, arguments, session):
         _require(type(arguments) is list and len(arguments) == 9 and all(_physical(path) for path in arguments), "E_RUNTIME")

@@ -440,6 +440,57 @@ class _Reader:
                     raise
         return self.anchor
 
+    def retain_source_runtime(self, request_raw, sudo=None):
+        anchor, parent, cancellation = self.anchor_for(), None, None
+        work, case_work = {}, None
+        def failed(site, error):
+            nonlocal cancellation
+            anchor.private_observations["unusable"] = True
+            if getattr(error, "_scope_signal_cancel", False) and cancellation is None:
+                cancellation = error
+            try:
+                c._capture_observation_error(work, "M", site, error)
+            except Exception as observed:
+                work["accounting_incomplete"] = True
+                if getattr(observed, "_scope_signal_cancel", False) and cancellation is None:
+                    cancellation = observed
+        try:
+            c._capture_work_values(work, "scope-runtime-parent")
+            anchor.recording_work.setdefault("scope_runtime_parent_work", []).append(work)
+            parent = c._open_held(str(self.captures), True,
+                c._store_rule(os.geteuid(), os.getegid(), 0o700, True, self.darwin), "E_STORE",
+                recording_work=work, accounting_kind="M")
+            key = str(parent.before.st_dev) + ":" + str(parent.before.st_ino)
+            case_work = c._capture_work_values(anchor.recording_work, key)
+            c._capture_transfer_work(work, anchor.recording_work, case_work)
+            inputs = (("sudo", sudo),) if sudo is not None else (
+                ("python", self.python), ("jq", self.jq),
+                ("bash", self.bash), ("git", self.git_binary))
+            for role, item in inputs:
+                require(isinstance(item, c._HeldBytes), "E_STORE")
+                anchor.retain_runtime_acquisition(parent, role, item.held, item.raw, request_raw)
+        except Exception as error:
+            failed("scope-runtime-retain", error)
+        finally:
+            if parent is not None:
+                try:
+                    parent.close()
+                except Exception as error:
+                    failed("scope-runtime-parent-close", error)
+        try:
+            if case_work is not None:
+                c._capture_transfer_work(work, anchor.recording_work, case_work)
+            else:
+                work["transfer_incomplete"] = True
+                anchor.recording_work["accounting_incomplete"] = True
+            if c._capture_work_incomplete(work) or c._capture_work_incomplete(anchor.recording_work):
+                anchor.private_observations["unusable"] = True
+            c._capture_accounting_receipt(anchor)
+        except Exception as error:
+            failed("scope-runtime-tail-receipt", error)
+        if cancellation is not None:
+            raise cancellation
+
     def retain_source_capture(self, source):
         parent = None
         cancellation = None
@@ -513,7 +564,12 @@ class _Reader:
                     if getattr(error, "_scope_signal_cancel", False) and cancellation is None:
                         cancellation = error
             if self.anchor is not None:
-                self.anchor.private_observations["recording_sealed"] = not self.anchor.private_observations.get("unusable", False)
+                if c._capture_work_incomplete(self.anchor.recording_work):
+                    self.anchor.private_observations["unusable"] = True
+                self.anchor.private_observations["recording_sealed"] = (
+                    self.anchor.private_observations.get("recording_sealed", False)
+                    and not self.anchor.private_observations.get("unusable", False)
+                    and self.anchor.private_observations.get("accounting", {}).get("complete") is True)
         if cancellation is not None:
             raise cancellation
 
@@ -1099,6 +1155,7 @@ class _Reader:
             body.update(initial_origin_refs=self.store_session.coverage_origins(), gate_call_ref=self.store_session.gate_call_ref)
         request_raw = c.canonical({"schema_version": 1, "kind": "coverage_source_request", "id": attempt, "body": body})
         n.request(request_raw)
+        self.retain_source_runtime(request_raw)
         if getattr(self, "_coverage_prepare_only", False):
             return request_raw
         expectation = {key: body[key] for key in ("attempt_id", "nonce", "coverage_base", "evaluated_revision",
