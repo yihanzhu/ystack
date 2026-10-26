@@ -351,7 +351,17 @@ observations or supplied verdicts. Ids retain their original owner grammars.
 | `reproduction`, `write` | `attempt_id`, `outer_request_sha256`, `request_sha256`, `operation`. Operation is `launch`; the outer kind is respectively `shadow_enforced_request` or `shadow_write_request`. Request is that caller's sandbox launch request. |
 | The four preparation roles | `attempt_id`, `outer_request_sha256`, `input_sha256`, `response_sha256`, `operation`. Operation is respectively `prepare` or `inspect`. Outer request and attempt come from that reproduction/writer caller; input/response are its exact materialization bytes. |
 | `gate` | `request_id`, `request_sha256`. Both come from the original `scope_gate_generation_request`. |
-| `kill`, `coverage` | `gate_request_sha256`, `attempt_id`, `request_sha256`, `operation`. Gate digest binds the same gate entry; request/id bind that original source request. Operation is respectively `kill-register-read` or `coverage-read`, retaining its existing versioned request-body value. |
+| `kill`, `coverage` | `gate_request_sha256`, `attempt_id`, `request_sha256`, `operation`. Gate digest binds the same gate entry; request/id bind that original source request. Private operation is exactly `kill-register-read` or `coverage-read`, respectively. |
+
+Derive each private operation from the fixed caller role and its existing source
+owner selection, independently of the candidate binding. These unversioned
+values are the only private representation; versioned aliases reject. The original
+kill request still requires `body.operation == "kill-register-read.v1"` through
+its existing owner. The original coverage request has no operation field; its
+closed schema remains unchanged. Its existing receipt owner still requires
+`body.operation == "coverage-read.v1"`. Keep both original validators and every
+request SHA, attempt/id, expectation and gate relationship check. Do not add an
+operation field to coverage requests or infer one from candidate metadata.
 
 The fixed caller establishes the expected role before reading its entry. Validate
 all original outer/request/attempt/receipt/expectation, qualification and completion
