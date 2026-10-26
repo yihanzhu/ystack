@@ -648,6 +648,7 @@ fixture.raw16_parent_P_Hcopy(root)
 fixture.raw16_P_handoff_accounting(root)
 fixture.raw16_T_live_stable(root)
 fixture.raw16_clone_pending_allocation(root)
+fixture.raw16_adopt_registered_cancel(root)
 PY_HP_HANDOFF
 /usr/bin/python3 -I -S -B - "$root" <<'PY_D_SOURCE_ACQUISITION'
 import importlib.util,sys

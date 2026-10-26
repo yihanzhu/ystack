@@ -3169,6 +3169,75 @@ def _synthetic_T_live_files(c, scratch, operation, input_raw, response_raw):
     return value,files,marker
 
 
+def raw16_adopt_registered_cancel(root: Path) -> None:
+    import ast
+    import tempfile
+    spec=importlib.util.spec_from_file_location('adopt_registered',root/'shadow/v1/enforced-reproduction.py')
+    e=importlib.util.module_from_spec(spec);sys.modules[spec.name]=e;spec.loader.exec_module(e);c=e.c
+    acl=c._acl_state;c._acl_state=lambda *_:([],None) if sys.platform=='darwin' else (None,None)
+    syntax=ast.parse((root/'scope/v1/read-shadow-evidence.py').read_text())
+    main=next(node for node in syntax.body if isinstance(node,ast.FunctionDef) and node.name=='main')
+    handler=next(node for node in main.body if isinstance(node,ast.FunctionDef) and node.name=='cancel')
+    callbacks={};exec(compile(ast.Module(body=[handler],type_ignores=[]),'<actual-cancel>','exec'),callbacks)
+    results=[]
+    try:
+        for kind in ('P','T'):
+            with tempfile.TemporaryDirectory(prefix='ystack-adopt-registered-') as temporary:
+                base=Path(temporary).resolve();base.chmod(0o700);work=base/'work';work.mkdir(mode=0o700)
+                context,metadata=_synthetic_parent_P_context(c,base/'frame')
+                scratch=work/'preparation-scratch';scratch.mkdir(mode=0o700)
+                input_raw,response_raw=b'synthetic input',b'synthetic response'
+                _synthetic_T_live_files(c,scratch,'prepare',input_raw,response_raw)
+                holder=e.stable_directory(work);anchor=c.Anchor({},b'',[],{},('',[]),('',[]),None)
+                request=c.canonical({'kind':'shadow_write_request','id':'adopt.registered.fixture'})
+                init,T_init,closing=c._HeldCaptureCopy.__init__,c._HeldPreparationSources.__init__,os.close
+                events,owners,close_methods,attempts=[],[],[],[];watched=set()
+                def cancel():
+                    try:callbacks['cancel'](15,None)
+                    except InterruptedError as error:events.append(error);return error
+                class AppendThenCancel(list):
+                    def append(self,held):
+                        super().append(held)
+                        watched.update(component.fd for component in held.components)
+                        actual=held.close
+                        def close():
+                            close_methods.append(held)
+                            return actual()
+                        held.close=close
+                        raise cancel()
+                def construct(self,*args,**kwargs):
+                    init(self,*args,**kwargs)
+                    if kind=='P':self.owned=AppendThenCancel();owners.append(self)
+                def construct_T(self,*args,**kwargs):
+                    T_init(self,*args,**kwargs)
+                    if kind=='T':self.owned=AppendThenCancel();owners.append(self)
+                def close(fd):
+                    if fd in watched:attempts.append(fd)
+                    result=closing(fd)
+                    if fd in watched and len(events)==1:raise cancel()
+                    return result
+                caught=None
+                try:
+                    c._HeldCaptureCopy.__init__,c._HeldPreparationSources.__init__,os.close=construct,construct_T,close
+                    try:
+                        if kind=='P':holder._retain_parent_inputs(anchor,context,request)
+                        else:holder._retain_preparation(anchor,'preparation-scratch','prepare',input_raw,response_raw,request)
+                    except InterruptedError as error:caught=error
+                    assert len(owners)==1 and owners[0].closed and not owners[0].owned
+                    assert len(events)==2 and events[0] is not events[1] and caught is events[0]
+                    assert len(close_methods)==1, 'registered owner must be released by its sole owner once'
+                    assert watched and len(attempts)==len(watched) and set(attempts)==watched
+                    assert not holder.runtime_copies and all(os.fstat(item.fd) for item in holder.held.components)
+                    results.append({'kind':kind,'append_completed_before_handler':True,'first_cancel_same_object':True,
+                        'HeldPath_close_calls':len(close_methods),'actual_FD_close_attempts':len(attempts),
+                        'work':anchor.recording_work,'producer_and_qualification':'UNKNOWN / not executed'})
+                finally:
+                    c._HeldCaptureCopy.__init__,c._HeldPreparationSources.__init__,os.close=init,T_init,closing
+                    holder.close();anchor.close()
+    finally:c._acl_state=acl
+    print(json.dumps({'actual_adopt_registered_cancel':results},sort_keys=True))
+
+
 def raw16_clone_pending_allocation(root: Path) -> None:
     import ast
     import tempfile
@@ -3182,12 +3251,12 @@ def raw16_clone_pending_allocation(root: Path) -> None:
     results=[]
     try:
         for recorded in (False,True):
-            for case in ('stable','component-allocation','secondary-ordinary','first-cancel','close-first-cancel'):
+            for case in ('stable','component-allocation','secondary-ordinary','first-cancel','close-first-cancel','append-success-cancel'):
                 with tempfile.TemporaryDirectory(prefix='ystack-clone-pending-') as temporary:
                     base=Path(temporary).resolve();base.chmod(0o700)
                     parent=c._open_held(str(base),True,c._store_rule(os.geteuid(),os.getegid(),0o700,True),'E_STORE')
                     dup,component,closing=os.dup,c.HeldComponent,os.close
-                    duplicates,closed,events=[],[],[];primary=MemoryError('controlled component construction after successful dup')
+                    duplicates,closed,events,attempts=[],[],[],[];primary=MemoryError('controlled component construction after successful dup')
                     leaf={} if recorded else None
                     if leaf is not None:c._capture_work_values(leaf,'pending-clone')
                     def cancellation():
@@ -3201,6 +3270,7 @@ def raw16_clone_pending_allocation(root: Path) -> None:
                             raise primary
                         return component(*args,**kwargs)
                     def close(fd):
+                        if fd in duplicates:attempts.append(fd)
                         result=closing(fd)
                         if fd in duplicates:
                             closed.append(fd)
@@ -3209,17 +3279,30 @@ def raw16_clone_pending_allocation(root: Path) -> None:
                                 if case in ('first-cancel','close-first-cancel'):raise cancellation()
                         return result
                     caught=None;rows=None
+                    import inspect
+                    lines,start=inspect.getsourcelines(c._clone)
+                    append_done=start+next(index for index,line in enumerate(lines) if line.strip()=='pending = None')
+                    previous_trace=sys.gettrace()
+                    def trace(frame,event,arg):
+                        if frame.f_code is not c._clone.__code__:return None
+                        if event=='line' and frame.f_lineno==append_done:
+                            assert frame.f_locals['rows'][-1].fd==frame.f_locals['pending'] and duplicates[-1]==frame.f_locals['pending']
+                            sys.settrace(previous_trace)
+                            raise cancellation()
+                        return trace
                     try:
                         os.dup,c.HeldComponent,os.close=duplicate,construct,close
+                        if case=='append-success-cancel':sys.settrace(trace)
                         try:rows=c._clone(parent,'E_STORE',leaf,'M' if recorded else None)
                         except BaseException as error:caught=error
                         if case=='stable':
                             assert caught is None and len(rows)==len(parent.components)
                             c._close_components(rows)
                         elif case=='first-cancel':assert len(events)==2 and events[0] is not events[1] and caught is events[0]
-                        elif case=='close-first-cancel':assert len(events)==1 and caught is events[0]
+                        elif case in ('close-first-cancel','append-success-cancel'):assert len(events)==1 and caught is events[0]
                         else:assert caught is primary
                         assert len(closed)==len(duplicates) and set(closed)==set(duplicates), 'pending dup must close before row registration completes'
+                        assert len(attempts)==len(duplicates) and set(attempts)==set(duplicates), 'registered pending FD must have one close attempt'
                         for fd in duplicates:
                             try:os.fstat(fd)
                             except OSError as error:assert error.errno==errno.EBADF
@@ -3227,8 +3310,10 @@ def raw16_clone_pending_allocation(root: Path) -> None:
                         assert all(os.fstat(item.fd) for item in parent.components)
                         results.append({'recorded':recorded,'case':case,'new_FDs_closed_once':len(closed),
                             'parent_still_live':True,'work':leaf,'no_recording_owner_cost':'UNKNOWN' if not recorded else None,
-                            'allocation_control':'actual HeldComponent construction failure after second successful dup; append under same pending ownership guard is source-reviewed, not separately injected'})
-                    finally:os.dup,c.HeldComponent,os.close=dup,component,closing;parent.close()
+                            'allocation_control':('actual append success before pending clear; real handler at line event' if case=='append-success-cancel' else 'actual HeldComponent construction failure after second successful dup; list allocation not separately injected')})
+                    finally:
+                        sys.settrace(previous_trace)
+                        os.dup,c.HeldComponent,os.close=dup,component,closing;parent.close()
     finally:c._acl_state=acl
     print(json.dumps({'actual_pending_clone_allocation':results},sort_keys=True))
 

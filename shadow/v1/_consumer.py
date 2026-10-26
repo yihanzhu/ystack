@@ -706,7 +706,7 @@ def _clone(parent: HeldPath, code: str, recording_work=None, accounting_kind=Non
         return rows
     except BaseException as exc:
         try:
-            if pending is not None:
+            if pending is not None and not (rows and rows[-1].fd == pending):
                 try:
                     if recording_work is None:os.close(pending)
                     else:_close_capture_copy(pending, recording_work, recording_work, "clone-pending-close", exc)
@@ -2851,10 +2851,11 @@ class _HeldCaptureCopy:
     def _adopt(self, held):
         try:self.owned.append(held)
         except BaseException as error:
-            try:held.close()
-            except Exception as closing:
-                self._failed(closing, "P-hold-registration-close", error)
-                if getattr(closing, "_scope_signal_cancel", False) and not getattr(error, "_scope_signal_cancel", False):raise
+            if not (self.owned and self.owned[-1] is held):
+                try:held.close()
+                except Exception as closing:
+                    self._failed(closing, "P-hold-registration-close", error)
+                    if getattr(closing, "_scope_signal_cancel", False) and not getattr(error, "_scope_signal_cancel", False):raise
             raise
 
     def _clone_held(self, original, site="P-clone-allocation-close"):
