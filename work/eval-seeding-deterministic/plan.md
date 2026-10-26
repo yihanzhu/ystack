@@ -1,5 +1,5 @@
 ---
-spec-blob: aa63e28140e35cbccae8e45ee95d9cc9d92e4080
+spec-blob: 0f4b97321f6b8e03ba5abe587a16f500097748a6
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-26
@@ -14,16 +14,18 @@ one complete two-source delivery. Source preparation does not accept a dependenc
 a real recording, native qualification or either seed batch.
 
 This plan binds accepted G2 spec blob
-`aa63e28140e35cbccae8e45ee95d9cc9d92e4080` at main
-`daea049d9c141c6ffc363829693c1d6be48e90e9`. RAW16 acquisition design
+`0f4b97321f6b8e03ba5abe587a16f500097748a6` at main
+`fa4151d44b16fd2cc6a37ff8357e9c8604019995`. RAW16 acquisition design
 locations retain historical source `c1d9d23e42e6efe2d6da1aae3d23b34564b4080d`
 and base `ae634c86701da04767c41a4d5f416f0c36517cf0`. T lifecycle sites bind
 `25af14412bbd6fc4b5c0b1ca03ba43e545ecb4bc`. Keep older clock/owner labels,
 adoption pins and frozen `6f219579f72f73ddd3703f32b5f4a102ae8c175c` as
-historical anchors, not current resume identities. The prior paused source
-`29687ec75d573c53bf5c40523ca2b6dc2a302e11` is also historical. Current source is
-paused clean at `2dd51dcd819b252cee6501c799b5f3fd9018c9ae`, including preserved WIP.
-Its previous GO is retired; B, T and C remain unaccepted. That paused source still
+historical anchors, not current resume identities. Earlier paused sources
+`29687ec75d573c53bf5c40523ca2b6dc2a302e11` and
+`2dd51dcd819b252cee6501c799b5f3fd9018c9ae` are also historical. Current source is
+paused clean at `40022eb3b86c72b3d4d19b6e76cf21c68a41b371`, including preserved WIP.
+Its replay D pin is stale; syntax checks are not semantic or source acceptance.
+Its previous GO is paused; B, T and C remain unaccepted. That paused source still
 has the prior artifacts; normally merge the accepted plan main into the preserved
 carrier before fresh exact-source preflight. The operator has accepted
 the resource, fd3 v3 and retention contract; that decision grants no actual
@@ -902,7 +904,11 @@ those objects. Change imports only to make value definitions load without enteri
 | 10 scope reader/generator | Extract request/expectation, bundle fact, measured observation, project_register, origins and manifest/completion value constructors | Existing _Reader/_Generator acquire real facts and session checks; coordinator calls values plus real jq evaluators. Public evaluate-scope retains its real reader handshake. |
 | 11 replay-malicious.py | One fixed `replay_case(held_case,runtime_root,private_work)` orchestration and comparison | Only the fixed eval-driver arm calls it; no public toolkit, plugin dispatch, transport or arbitrary callable. Expected outputs/invariants go only to final comparison. |
 
-Use production functions for validation and construction, not copied predicates.
+Instantiate these same owners independently for each applicable R4A.B occurrence.
+Keep both launch controllers, all four preparation calls and the two gate reader
+contexts separate. Each original request, sequence and output belongs to its
+actual caller; the table is not a single-case observation object. Use production
+functions for validation and construction, not copied predicates.
 For C, compile the same observation-values source for the guest and for its one
 value-only helper. `build-guest.py` links it into the existing guest build. Give
 verifier.c one fixed value-only main under a compile-time flag, using the same
@@ -945,36 +951,81 @@ claim complete source receipt while any required file is absent.
 
 ### Raw observations and capture wiring
 
-The immutable accepted spec is the sole schema definition for R4A.B, including
-its exact raw envelope, field keys/types, clock-site labels, operation tags and
-bounds. Implement each row below; no new implicit environment input is allowed.
-Each row has four shape negatives: missing required value, extra key, wrong type
-and invalid/over-limit value. An optional coverage row is absent only on the actual
-no-coverage branch. Capture overflow keeps old cleanup/result semantics and makes
-recording unusable; it never changes native success into a claimed replay success.
+The accepted spec is the sole schema definition for R4A.B. Construct its private
+case v2 envelope with case-level incident/identities and the exact ordered
+occurrences. Each entry has only role/binding/raw. Keep H/T/P, native and
+completion schemas and bytes unchanged. The ten logical groups are distributed
+across their original owners, not copied into nine empty or partial objects.
+The table paths below are logical paths inside the spec's fixed containers.
+No new implicit environment input is allowed.
 
-| Case group | R4A.B fields | Acquisition → same owner proof |
+At frozen source 40022eb3b86c72b3d4d19b6e76cf21c68a41b371, use these actual
+caller edges to select observations before checking candidate role labels:
+
+| Fixed occurrence / container | Existing caller and binding owner |
+| --- | --- |
+| reproduction.prepare, reproduction.inspect / preparation | enforced-reproduction.py:2394–2410 invokes and retains prepare, original cleanup, then inspect; `_preparation_capture_binding_values` checks each original T input/response/operation |
+| reproduction / local, capture | enforced-reproduction.py:2424–2449 constructs and runs its launch; `_capture_for_replay` and `_launch_capture_values` bind the held H/P to that outer/launch/expectation/receipt |
+| write.prepare, write.inspect / preparation | write-shadow.py:708–712 retains its two fixed operations from their separate scratch roots; use the same T binding owner independently |
+| write / local, capture | write-shadow.py:725 calls `_verify_write`; the fixed writer kind selects its own launch relationship through the same consumer owners |
+| gate / generator, scope_reader | generate-gate-evidence.py:349–354 creates its local reader/session; :523–525 calls gate_scope; consumer:3985–3995 invokes the existing evaluator; read-shadow-evidence.py:1503 creates the separate scope reader. Retain its original session/request/scope/store relation |
+| kill / local, capture | generate-gate-evidence.py:438–492 constructs and binds the kill source; gate.generator owns its entropy; original held source request/expectation/receipt/package and capture owners validate the source |
+| coverage / local, capture | read-shadow-evidence.py:1198–1224 constructs coverage only on its original branch; gate.scope_reader owns its entropy; retain that source's original held relationship checks |
+
+The four preparation occurrences precede their own launches in wire order;
+gate precedes kill and optional coverage. This is the spec's serialization order,
+not a replacement execution schedule. Preserve gate setup, source calls, scope
+branch and final origins/manifest/completion in the original native order.
+Do not infer a missing observation from an expected output, another occurrence,
+matching bytes or a held file with a plausible name. An unavailable genuine
+container or original interface keeps its dependent assembly step blocked.
+
+| Case group | R4A.B fields and occurrence | Acquisition → same owner proof |
 | --- | --- | --- |
-| RAW01 | incident.observed_at | Existing incident bytes → incident validator and record builders; mutate timestamp only |
-| RAW02 | identities.attempt_ids | Three actual caller ids → launch/write/gate refs; no nonce-derived id accepted |
-| RAW03 | identities.locators | Fixed historical role strings → identical derived paths/argv; never open these paths offline |
-| RAW04 | entropy.reproduction/write/kill/coverage | Actual fresh entropy read → launch/request/call ids; one-byte mutation must change derived refs |
-| RAW05 | entropy.preparation_names | Actual workspace entropy/collision observations → same bounded naming path; no deterministic injection into live prepare |
-| RAW06 | clocks.wall/monotonic | Exact accepted source sites/ordinals and bits → durations/deadlines/UTC; reject gaps/unused/NaN/Inf |
-| RAW07 | storage.entries | Held before/after/named stat, ACL, raw names and errors → same kind/permission/content/stability predicates |
-| RAW08 | storage.identity_context | Current uid/gid/groups/resolver/platform acquisition → same owner ACL/ownership predicates |
-| RAW09 | guest.setup | Existing setup reads/returns → same enforcement rows; raw failure cannot be replaced by a hard flag |
-| RAW10 | guest.control and launch | Unique launch at source :1404/:1419 → same positive child and waited==child; all closed tags/order consumed exactly |
-| RAW11 | guest.counters | Raw counter/statvfs/evidence bytes → rounding, reached flags, report/frame and sizes |
-| RAW12 | host.process | Driver/process/pipe primitives and the fixed whole `sandbox-export-bytes` read → same stop acceptance, EOF completeness, reap, full frame/tail validation, termination, timeout and cleanup |
-| RAW13 | host.driver_rest | Status/body or caught exception/phase → same driver argv/state/stop classification; no socket offline |
-| RAW14 | source_pages.kill/coverage | Fixed family/page bytes and cursors → same raw manifest/normalize/register/receipt |
-| RAW15 | commands.runtime_values | Qualified version/ABI/config facts → executable/component identity and concrete argv, never copied component output |
-| RAW16 | runtime.slots | Held byte streams/locators/read failures → same individual/composite identities; no executed runtime slot |
+| RAW01 | case incident.observed_at | Existing incident bytes → incident validator and record builders; mutate timestamp only |
+| RAW02 | case identities.attempt_ids | Three actual caller ids → launch/write/gate refs; no nonce-derived id accepted |
+| RAW03 | case identities.locators by fixed occurrence | Original role strings → identical derived paths/argv; never open these paths offline |
+| RAW04 | launch local entropy.reproduction/write; gate generator/scope_reader entropy.kill/coverage | Original fresh read in that caller → request/call ids; one-byte mutation changes derived refs |
+| RAW05 | each of four preparation containers' entropy.preparation_names | Original workspace entropy/collision observations → same bounded naming path; no live deterministic injection |
+| RAW06 | each applicable container's clocks.wall/monotonic | Original owner sites/ordinals and bits → durations/deadlines/UTC; reject gaps/unused/NaN/Inf; never concatenate controllers or gate contexts |
+| RAW07 | each local/preparation/gate container's storage.entries | Original held before/after/named stat, ACL, raw names/errors → same predicates; preserve every occurrence |
+| RAW08 | each original owner's storage.identity_context | Real uid/gid/groups/resolver/platform → same ACL/ownership predicates; another context cannot substitute |
+| RAW09 | each launch capture's guest.setup | Its own setup reads/returns → same enforcement rows; raw failure cannot become a hard flag |
+| RAW10 | each launch capture's guest.control and launch | Its own launch at historical :1404/:1419 → own positive PID and waited==child; consume all closed tags in original order |
+| RAW11 | each launch capture's guest.counters | Its own counter/statvfs/evidence bytes → report/frame, rounding, reached flags and sizes |
+| RAW12 | each launch capture's host.process | Own six-key process/pipe/export rows → stop, EOF, reap, frame/tail, timeout and cleanup; export binding does not stand in for the other rows |
+| RAW13 | each launch capture's host.driver_rest | Own zero-based host call indices and matching REST rows → driver argv/state/stop; no cross-launch mapping or socket offline |
+| RAW14 | each source capture's source_pages.kill/coverage | Original family/page/cursor order → raw manifest, normalization, register and receipt |
+| RAW15 | each applicable container's commands.runtime_values | Original qualified version/ABI/config facts → concrete argv/component identity; no copied component output |
+| RAW16 | each original owner's runtime inventory | Original fixed H/T/P inventory shape, full bytes/locators/read failures → individual/composite identities; no executed slots, renamed files or merged occurrences |
+
+Validate the spec's exact binding keys before projection. Launch bindings cover
+all groups, including paths without export. Preserve control/subject/store and
+outer/request/attempt/expectation/receipt checks. T bindings also retain the
+original caller/input/response/operation and native cleanup/terminal seals.
+Source bindings retain request SHA, attempt/id, gate refs, package/accepted-set,
+expectation, receipt, capture and completion. Derive private operation only from
+the fixed caller and original owner: kill-register-read or coverage-read. Reject
+versioned aliases. The original kill request owner still validates
+kill-register-read.v1; the original coverage receipt owner still validates
+coverage-read.v1. Coverage request has no operation field; do not add one.
+
+Require every mandatory occurrence once and no extra, duplicate, reordered or
+unused entry. Coverage and its locator/entropy/pages/runtime/request/capture/
+outputs are absent only when the same original gate calculation proves no call.
+No null/empty entry or supplied absence flag replaces that proof. A failed
+mandatory call cannot yield a shorter complete case. Within reached owners,
+retain actual errors and independently reconstruct unreachable sites. Keep every
+inner shape and allow empty arrays only where the original reached path allows.
+Each row retains missing-value, extra-key, wrong-type and invalid/over-limit
+negatives. Capture overflow keeps the old native cleanup/result semantics and
+makes recording unusable; it never changes native success into replay success.
 
 For every row save the actual caller location, value-constructor location, raw
-case ID and derived output destinations in the final source receipt. Constructor
-outputs cover every R4A.C row, not just successful receipts. Reject an unknown
+case ID, occurrence/container and derived output destinations in the final source
+receipt. Instantiate all 13 R4A.C output families for each applicable occurrence,
+not just successful receipts. Keep original paths/roles for equal-named outputs;
+rebuild original capture/completion/T documents before final comparison. Reject an unknown
 raw/output inventory. Compare complete canonical documents and raw file bytes,
 including every envelope/ref/hash, every source snapshot, manifest and COMPLETE.
 Do not give expected output bytes to constructors to make equality tautological.
@@ -1044,7 +1095,8 @@ seed manifest and shared-file staging; retain the 1–256 shared-file bound. The
 private witness slot has a fixed 512-byte ceiling, never a caller-supplied bound.
 Offline rebuilds both through
 the host's same value constructors, using independently reconstructed request and
-capture bytes; it compares whole documents before final projection. The witness
+capture bytes for that occurrence; it compares whole documents before final projection.
+Do not use the case v2 wrapper as a native capture envelope. The witness
 is never a guest input or a native success verdict. Update recursive scope/source
 readers, held release/reacquisition and final checks together. Keep every old
 independent SHA, equality and full export recheck; the directory move removes no
@@ -1280,7 +1332,8 @@ launch bytes and same held capture/binary/completion. No caller-supplied role, l
 limit or checked flag substitutes for these relations. Do not infer a launch from
 attempt names, subject or instruction; native request/package/argv/env stay fixed.
 
-Project only the reference into final RAW12. Preserve original capture/completion
+The occurrence binding covers all original groups, even with no export row.
+The export projection itself changes only the reference into final RAW12. Preserve original capture/completion
 bytes and origin binding to the two actual directories; reconstruct the original
 envelope/intermediate ref and completion envelope offline too.
 The same owners rebuild final projection from the independently reconstructed
@@ -1571,6 +1624,30 @@ second close/sync/observation fails. No production persistence interface is adde
 
 C的seed assembly必须实现为replay-malicious.py内一个私有固定数据步骤，由现有测试/受授权录制调用者持有对象调用；只消费已提交完整H/T/P，不运行native、collector或新命令。它排他写固定S角色文件并逐项复制、比较、封口。没有新的public CLI、用户选路径/limit或通用API。C launcher在run/dashboard按manifest固定role持有S并排他创建I；driver只调用固定replay_case；coordinator只读I并重算原owners。两次replay各有独立I，不能共用或释放前次I省账。
 
+Continue the preserved private `_SeedAssembly` in replay-malicious.py:713–1079;
+its pending-S copies and four acquisition methods are unaccepted WIP, not a
+complete case serializer. Complete the fixed v2 assembly in that boundary, not
+a second implementation. Its draft four-stage interface is not an accepted
+nine-occurrence lifecycle. Process each occurrence in its original live owner
+window. In particular, process prepare T before the original close or inspection
+replacement; never read closed T_history after launch. Do not require all four T,
+both launches and both sources to be live together, or extend a native hold.
+Complete that occurrence's P/S copy, independent fresh hashes, whole-byte equality
+and final parent/name/ACL/identity checks while the original P is genuinely live.
+Keep its pending S bytes, original seals and all incurred costs for later assembly.
+
+Wire order does not reorder acquisition, native cleanup, close or finally. Keep
+all original phase transitions and native outcomes. Successful case finalization
+waits for every required occurrence, original terminal/close/tail checks, retained
+S checks and S close, with the original B hard gates still required. Missing or
+uncertain original termination/ledger facts cannot be replaced by a new flag.
+A later stage cannot reopen a historical P/T path or use a saved digest instead
+of a full check that was due while it was held. Carry real gate facts through its
+existing session; an unavailable holder or field blocks the dependent step.
+Use only this fixed private data path; no general append/callback/provider,
+production caller, public API, collector, loader, transport or terminal protocol
+is introduced.
+
 下表每个L是一份完整byte集合的长度。R为新增实际文件读取；W为写出；H为SHA输入处理；E为完整比较两端之和；C为拷贝所访问字节。相同loop可同时有R/H/E费用，不能只报R。旧native本来发生的Q另列，不改其次数。
 
 | 固定步骤，全部存在时的每集合调用日程 | R | W | H | E | C |
@@ -1582,6 +1659,11 @@ C的seed assembly必须实现为replay-malicious.py内一个私有固定数据�
 | 窗口总计（上行两次） | 26L | 5L | 20L | 14L | 5L |
 
 原acquisition和原native反复StableFile/DependencySnapshot/配置recheck等计入Q：逐site实际read/write/hash/equality/copy分别保留；原read以memory raw复用时不虚构I/O，但hash/equality仍收费。Q不是26L表内的匿名余量。原metadata/JSON处理继续付原W/M账；此合同不调整M阈值或替它造通过结论。
+Case v2 wrappers, bindings and all encoded values pay their actual metadata,
+JSON and read/write/hash/compare costs under those same limits. Apply each
+original document/case/window cap to the complete representation, not separately
+to nine containers. Preserve every original raw byte, inventory and independent
+comparison; do not externalize fields or subtract repeated data to fit.
 
 S/I final检查既比较全bytes，也各自验证初次持有时的digest、parent/name/ACL；两边一起改成相同内容仍拒绝。原SHA与equality均保留；没有用“融合”删掉独立origin或identity SHA。
 
@@ -1592,7 +1674,7 @@ still has its existing unbounded list; these are recording eligibility limits,
 not a native-config restriction. Never truncate, omit or replace a member with
 its digest.
 
-RAW16合同明确替换原qualified aggregate 4GiB/64 slots和two-copy合计8GiB边界。新合同为每case完整qualified occurrence inventory≤4GiB/64，固定四case窗口合计≤16GiB/256；每case六层留存≤24GiB/384 physical files，全窗口≤96GiB/1,536。每case包含两launch、prepare/inspect、gate与两个source packages。这是operator直接接受的合同扩大，不能解释为原cap许可；它不授权实际资源使用。窗口固定为一次record/assembly、一次run和一次dashboard；所有case与窗口上限同时适用，helper、阶段和pair都不重置额度。
+RAW16合同明确替换原qualified aggregate 4GiB/64 slots和two-copy合计8GiB边界。新合同为每case完整qualified occurrence inventory≤4GiB/64，固定四case窗口合计≤16GiB/256；每case六层留存≤24GiB/384 physical files，全窗口≤96GiB/1,536。每case包含两launch、两caller各自的prepare/inspect、gate的两个原reader上下文与原分支要求的source packages。这是operator直接接受的合同扩大，不能解释为原cap许可；它不授权实际资源使用。窗口固定为一次record/assembly、一次run和一次dashboard；所有case与窗口上限同时适用，helper、阶段和pair都不重置额度。
 
 不得为维持64把不同原读取bytes合并。完整16类展开若超过64或4GiB，该真实recording不合格，改变上限须正常G2资源修订；没有实际runtime inventory，不能断言原真实四trial fit。机制正例必须用完整role和真实调用的有界fixture成功，不得把恒拒绝当完成。完整实例化inventory是#558/真实录制门的一部分。
 
@@ -1700,22 +1782,31 @@ R4A.C permits; each trial's own full argv/hash still equals its recorded bytes.
 For each C segment, first freeze and preflight its real interfaces under the
 source gates above, then implement the remaining path in this order:
 
-1. In replay-malicious.py add one private fixed seed-assembly step. Receive only
-   complete, genuinely held H/T/P inventories from the existing authorized caller;
-   never scan, collect or invoke native code. Validate request/attempt/operation,
-   qualification, capture/completion, full roles and every original-byte seal.
+1. Complete the preserved private seed assembly in replay-malicious.py. Receive
+   each complete H/T/P occurrence in its original genuine live window, following
+   the lifecycle above; never wait for all holders together. Do not scan, collect
+   or invoke native code. Validate every fixed occurrence and
+   original request/attempt/operation/qualification/completion relation above.
+   Build case incident/identities and the ordered v2 occurrence array from those
+   actual containers, with both gate contexts separate. Require the complete ten
+   logical groups and full original roles; no placeholder or omitted observation.
    Create S files exclusively, copy/hash once, then freshly read P/S for two
-   independent hashes and full equality. Retain partial output on all failures.
+   independent hashes and full equality. Validate actual encoded case size and
+   full inventories before successful finalization. Keep all original seals,
+   close/tail accounting and failures; retain partial output on every failure.
 2. In evals-launcher.sh stage each case's S into distinct I-run and I-dashboard,
    using fixed role/size and held source/installed paths. Apply the exact RAW16
    schedule above through final seals. Four cases run once each; two disjoint dashboard
    pairs replay those same four once each. Do not share or discard I between
    modes, cases or reruns to fit physical or work budgets.
 3. In evals-driver.sh add the malicious arm to the existing fixed dispatch.
-   Invoke only pinned replay_case. In replay-malicious.py finish the full owner
-   sequence, independent runtime identity/origin recomputation, every R4A.C
-   output, original envelope/completion rebuild and exact final comparison.
-   Expected bytes/invariants remain comparison inputs only. Never execute slots.
+   Invoke only pinned replay_case. Validate case v2, then independently bind and
+   project each occurrence into its original owner in the original call order.
+   Finish independent runtime identity/origin recomputation, all 13 R4A.C output
+   families for every applicable occurrence, original capture/completion/T
+   reconstruction and exact final comparison. Compare separately labelled
+   original outputs; expected bytes/invariants remain comparison inputs only.
+   Never execute slots or pass the combined wrapper into native code.
 4. Update eval/scope shapes and pins in their existing files, then the complete
    test/doc/restore paths already allowed. Recompute the full 84-member receipt.
    No parent file outside 40 edit, no edit to 9 adoption-only paths and no new
@@ -1732,7 +1823,11 @@ The malicious case retains case_id, family_id, surface, planted_text_sha256,
 manifest content pair and expectation. Four closed ids/surfaces match R4.1.
 Shared file references remain bounded 1–256 and manifest entries must refer to
 these held files. Include raw-observations.json, the two conditional fixed export roles and qualified byte slots explicitly,
-with role and size/hash checks from R4A. Retain the existing parsed envelope/array
+with role and size/hash checks from R4A. Require the exact private case v2 shape;
+reject ambiguous v1 case documents without conversion. Original H/T/P and
+completion documents retain their old formats and complete bytes. Retain all
+original single-owner tests and historical evidence when adding bound case tests.
+Charge all wrapper bytes to the complete case. Retain the existing parsed envelope/array
 limits; a combined inventory that exceeds them is rejected before replay, never
 silently truncated. All source outputs in a permitted recording are indexed and
 compared. Raw/runtime byte ceilings do not waive the existing document limits.
@@ -1787,9 +1882,9 @@ must run through its actual caller before its corresponding final proof gate.
 
 | IDs | Finite cases and literal expectation | Test owner |
 | --- | --- | --- |
-| RAW01–16 | Each required row: missing/extra/wrong-type/out-of-bound; reject with E_REPLAY after a valid outer manifest. Valid value-only baseline recomputes exact bytes. Optional coverage absence follows only its original branch. | evals-malicious + respective owner tests |
-| DER01–13 | One changed byte in each complete R4A.C output family; output mismatch list names that actual path and grade is evals.recompute-mismatch; invariants-only mismatch is evals.invariant-broken | evals-malicious/framework |
-| ROUTE01–11 | The eleven owner rows above, each production/offline invocation, narrow mutation and call deletion; neither path may pass with the target call skipped | existing owner tests + evals-malicious |
+| RAW01–16 | Each required row in every applicable occurrence/container: missing/extra/wrong-type/out-of-bound; reject with E_REPLAY after a valid outer manifest. Valid value-only baseline recomputes exact bytes. Coverage absence follows only its original branch; preserve actual errors and unreachable sites. | evals-malicious + respective owner tests |
+| DER01–13 | One changed byte in each complete R4A.C output family for every applicable occurrence; mismatch list names its original role/path and grade is evals.recompute-mismatch; invariants-only mismatch is evals.invariant-broken | evals-malicious/framework |
+| ROUTE01–11 | The eleven owner rows above, each applicable occurrence and production/offline invocation, narrow mutation and call deletion; neither path may pass with the target call skipped | existing owner tests + evals-malicious |
 | DRV | running/stopped, non-200, malformed state JSON, 65536/65537 body, each three transport phases, rejected/accepted stop, observed stopped, EOF versus incomplete/timeout/read-error with exit zero | sandbox-launcher + evals-malicious |
 | GST | positive/zero/negative launch return, wait zero/equal/foreign, EINTR, deadline before launch/after wait, reap versus population termination; never set child_reaped as input | sandbox-guest harness/test |
 | CAP | native two-entry inventory plus separate committed capture inventory; conditional export, completion, partial/extra/cross-bound capture, wrong owner/ACL, stale held/readback and overflow; recorder refuses unusable capture while native checks/result remain unchanged | shadow-enforced/write, sandbox-receipt, scope-gate-generation |
@@ -1815,6 +1910,17 @@ all old RAW/DER/ROUTE/LIM/CLO/I5/SURF/ARC and export/completion tests:
 | RT.failure | Partial/zero/unknown writes, first failure followed by close/ledger failure, occupied names and exact errno. Retain all files and charges; no successful seal, repair, retry, phase/pair reset or deleted/temp/dedup exemption. |
 | RT.T | Paired ordinary prepare→native cleanup→inspect and writer two-root positives through actual owners; preserved zero/partial/committed/uncertain T and unchanged native rmtree/unlink/error timing. Fixed-name collision, broad-prefix nonmember, extra/wrong/nonempty/missing marker, full C/runtime mutation with actual inputs fixed, op swap, source/parent/name/ACL drift, every new write/readback/sync/close/ledger failure, and both uncertain mkdir namespaces reject recording. At/over 128 total root entries includes T; all other caps and carry-in still apply. Separately delete production tee, predeclared cleanup exclusion, marker construction, consumer validation or recording-failure propagation in the existing private source-copy mutation route: each paired assertion must fail. Original SOURCE bytes/identity and full Q/overlap checks remain. No fixture closes the external caller/genuine gate. |
 | RT.C | Fixed assembly, run and two disjoint dashboard pairs each use their complete scheduled flow; extra/repeated case follows M4/manifest refusal. No missing owner, empty dispatch or permanent rejection counts as delivery. Real parent hookup/full RAW16 remains blocked until its source gate. |
+| CASE.layout | Complete v2 case with two independently bound launches, four preparation entries, both gate contexts and each reached source. Different setup/PID/REST/clocks survive assembly and original-owner projection. Reject duplicate/missing/extra/reordered entries, wrong containers, default empty groups, ambiguous v1 and omitted non-export observations. |
+| CASE.lifecycle | Process complete occurrences through their actual sequential live windows; prepare T completes P/S checks before original close/inspection replacement. A positive must not require simultaneous live holders or extended holds. Reject closed T_history/reopened P, skipped independent hash/equality/final identity, early case finalization, original terminal/close/tail failure and S-close failure. Preserve native order/outcome, first and later errors, partial S and all costs; existing B gates still block acceptance. |
+| CASE.binding | Swap each role/request/attempt/operation, T input/response, gate context/session or source package while keeping companion facts valid. Reject concatenated/renumbered controller streams and cross-launch PID/REST use, including no-export paths. Private versioned operation aliases refuse; original kill request and coverage receipt retain their versioned checks; adding operation to a coverage request refuses its original closed schema. |
+| CASE.absence | Original no-coverage branch omits exactly its occurrence, locator, entropy, pages, runtime, request/capture and outputs. Reached coverage with any such omission refuses. Supplied absence flags, null/empty substitutes, missing mandatory operations and unused observations refuse. |
+| CASE.projection | Independently delete or mutate assembly projection, replay projection or an original envelope/completion/T rebuild; each paired assertion fails. Every applicable C output is independently rebuilt and fully compared. Existing single-owner fixtures, assertions and raw proof remain; synthetic case fixtures cannot close genuine gates. |
+| CASE.cost | Measure the complete canonical wrapper/binding/values and inventories against each original applicable document/case/window limit at/over, with valid companion dimensions. Include all metadata/M/raw costs and actual work; no per-container cap reset, compression, omitted observations or fields moved to role files. |
+
+These CASE vectors extend evals-malicious/framework and the existing preparation,
+shadow and scope suites only. They add no test entry point or fixture transport.
+Apply DRV/GST tests independently to both launch controllers and retain their
+original errno, incomplete-read and reachable-refusal assertions.
 
 RAW12 adds these finite vectors to the existing tests, with no new entry point:
 
@@ -2152,9 +2258,10 @@ gates (R9.6).
   operator-graded seed and its test. 150-450 of them are verbatim verdict bytes, which
   cannot leave the PR whose test checks their digests.
 - PR 3: `review_size: standard`, about 300-400 net added lines.
-- This plan-only amendment: `review_size: standard`, expected 15–25 changed
-  lines. One concern: the complete PR 1b size estimate. Preserve all implementation
-  content, paths, source order, tests and acceptance gates.
+- This plan-only amendment: `review_size: standard`, expected 180–280 changed
+  lines. One concern: fixed case raw multiplicity and its existing owner
+  integration. Preserve all implementation content, paths, source order, tests
+  and acceptance gates; PR 1b retains its complete-concern range above.
 
 Each range waives only the soft line signal, never scope, tests, CI, review or human
 merge.
