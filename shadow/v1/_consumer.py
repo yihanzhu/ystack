@@ -2843,6 +2843,7 @@ class _HeldCaptureCopy:
         self.anchor, self.work, self.case_work = anchor, work, case_work
         self.leaf, self.members, self.runtime_sha256 = {}, {}, {}
         self.directory, self.closed, self.owned = None, False, []
+        self.consumer_snapshot = None
         self.local_parent = False
         self.T_companions, self.T_history = [], []
         self._released_owned, self._released_T = [], []
@@ -3353,6 +3354,7 @@ class _HeldStoreRead:
             parent.recheck("E_STORE")
             copied = _HeldCaptureCopy(self.anchor, work, case_work)
             copied.acquire(parent, launch, file_states, runtime_hashes)
+            copied.consumer_snapshot = consumer_raw
         except BaseException as error:
             directory_failure = error
             try:

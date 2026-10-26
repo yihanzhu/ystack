@@ -120,7 +120,7 @@ shadow_source_rows() {
     'enforcement/v1/accepted-identities.json c75dcd8d9268cb42677f5aa526fd374c3e45f2ba0fe678f47562ae49ad6851a0 174 100644' \
     'enforcement/v1/check-sandbox-receipt.sh 7db3412a4e740f79bde6af24891837fd5daa27d0811ff970b2f58534fcd59b97 10816 100755' \
     'enforcement/v1/sandbox-receipt.jq 43ab3a97b90444be17958112b7ff63966d1052981313c81bcb463618adae8619 30838 100644' \
-    'evals/v1/replay-malicious.py aa38a2a829ce341c77c2118f77a26deb5562e3628f7be0f603c43754f15a404f 90544 100644' \
+    'evals/v1/replay-malicious.py f6db42e1e4a8b2a855a3a0b85ae4ea962ae8fd0d212288ac5a59746e691deeda 96196 100644' \
     'maintenance/v1/bands.jq 594994c057a1130da6727f5f825d2fed3ff01de4a9fafe3a722d9e964f05c8e4 10714 100644' \
     'maintenance/v1/incident-to-eval.jq 2229722267c3e9544d9cf53bd37d6d798f27adebad4a7439294989d0194ad92a 7237 100644' \
     'maintenance/v1/incident-to-eval.sh e000f961d7851c48b650ca36ed0c60fd2bc97ffc32442214b3f8937efc97f967 7449 100755' \
@@ -138,14 +138,14 @@ shadow_source_rows() {
     'sandbox/v1/runtime-vfkit.py 50a400dd73e8fa8d46cf93e5f8824ac80d5921cc1bf69d522bf11d4330050a14 6764 100755' \
     'scope/v1/evaluate-scope.sh fe6048b5eada5d86531e085acd0a9f46b73028d348349ab932e8c59f4e2ed66a 25253 100755' \
     'scope/v1/generate-gate-evidence.py 087fd3d31ef3096a216ce11ea7a5da2dbf9c0eb7b0cb46ac9d495fdff53e39c4 36067 100755' \
-    'scope/v1/read-shadow-evidence.py 7fb87280d0fdb80745323d64b428ac9a66ec71de75e619e549cf07940bf3fbe6 96327 100644' \
+    'scope/v1/read-shadow-evidence.py 2e9965352343ea3c435025feaddd09ca6bdda55dbe51c89f2c68f21b5beb585e 99658 100644' \
     'scope/v1/scope-gates.jq 302e882b4b351186987e8b5f3e13d1725d0e2e9f7a996a4033ea893bd0a87487 57306 100644' \
     'scope/v1/scope-policy.json 5c6db4debedfcd7117735bd1d4bf907293f73972ec8909c4eab9f25cf6417fe5 1181 100644' \
     'scope/v1/validate-scope.sh 99c0abae1bdcc3809dfac535a8b24137842abaec2418b90566b6ac8ff213b406 3194 100755' \
     'scope/v1/workflow-scope.jq 2d1df5f99b7019c4c41aece4f9fb89b00785ca47f9f8a713b2f43b212481366a 9728 100644' \
     'scripts/core-contract.sh b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 9176 100755' \
     'shadow/v1/_cancel_release.c 00ef369edbed569d50471b97f64aef57591b7afb8d9f25c286bffa5725faf015 55056 100644' \
-    'shadow/v1/_consumer.py d60fd8fab1096bc1ad474e6cf13de2d7a82ef67b90bafcef5330748d2cbcf124 251200 100644' \
+    'shadow/v1/_consumer.py bc0769f319b463fe9d5f83dad1aa33f9a3bc0acde6f3193275766275d0c46582 251290 100644' \
     'shadow/v1/build-cancel-release.sh be1ad0afd99f72ea73fe52cca63c03381793710c587a82b57b9a38ed87c896d4 6169 100755' \
     'shadow/v1/enforced-reproduction.py 82d59c84fb26de8975d058f6cbe66832dce134c663e113c8874c83ee06796ebd 134481 100755' \
     'shadow/v1/incident-record.jq 9ea6e1ec6556f54887ea6937533157856271aab68c74bda6d18dae1354d2687c 3695 100644' \

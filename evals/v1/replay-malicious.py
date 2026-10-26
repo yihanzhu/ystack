@@ -727,6 +727,8 @@ class _SeedAssembly:
         self._released_holds = []
         self.occurrences, self.bindings, self.closed_stages = {}, {}, set()
         self.gate_session, self.coverage_required = None, None
+        self._gate_owner = None
+        self.gate_close_attempted, self.gate_close_returned = False, False
         self.incident, self.identifiers, self.locators = None, {}, {}
         c._capture_work_values(self.work, "C1-seed")
         _seed_require(type(case_work) is dict and any(case_work is value for value in window_work.get("cases", {}).values()))
@@ -1174,13 +1176,35 @@ class _SeedAssembly:
                           and len(os.fsencode(value)) <= 4096)
         return values
 
-    def _local(self, owner, anchor, capture_P, phase, carriers):
+    def _consumer_snapshot(self, owner, anchor, capture_P, phase):
+        _seed_require(type(capture_P) is owner._HeldCaptureCopy and capture_P.anchor is anchor
+            and not capture_P.closed and type(capture_P.consumer_snapshot) is bytes)
         held = capture_P.members["consumer-observations.json"]
         raw = held.read(owner.DOCUMENT_LIMIT, "E_STORE", self.work)
         document = owner._json(raw, owner.DOCUMENT_LIMIT, "E_STORE")
-        _seed_require(document["identity_context"] == anchor.identity_context
-            and document["storage_reads"] == anchor.private_observations.get("storage_reads", [])
-            and document["commands"] == anchor.private_observations["commands"])
+        equal = raw == capture_P.consumer_snapshot
+        self._wrapper_processed("consumer-snapshot-compare", len(raw) + len(capture_P.consumer_snapshot))
+        _seed_require(equal and document["identity_context"] == anchor.identity_context)
+        captured_storage = document["storage_reads"]
+        current_storage = anchor.private_observations.get("storage_reads", [])
+        _seed_require(type(captured_storage) is list and captured_storage == current_storage[:len(captured_storage)])
+        if phase in {"kill", "coverage"}:
+            reader = getattr(anchor, "scope_runtime_owner", None)
+            module = self._gate_type(reader, "scope/v1/read-shadow-evidence.py", "_Reader")
+            _seed_require(reader.anchor is anchor)
+            if phase == "kill":_seed_require(reader is self.generator.reader)
+            else:
+                remote = reader.store_session
+                _seed_require(type(remote) is module._GateReaderSession and remote.is_inner
+                    and remote.kill_request_raw == self.gate_session.kill_request_raw
+                    and remote.gate_call_ref == self.gate_session.gate_call_ref)
+            module._scope_runtime_prefix_values(document["commands"]["runtime_values"],
+                anchor.private_observations["commands"]["runtime_values"])
+        else:_seed_require(document["commands"] == anchor.private_observations["commands"])
+        return document
+
+    def _local(self, owner, anchor, capture_P, phase, carriers):
+        document = self._consumer_snapshot(owner, anchor, capture_P, phase)
         source_rows = anchor.private_observations["local_runtime"]
         caller = self.bindings[phase]["caller_raw"]
         rows = [{key: row[key] for key in ("slot", "index", "ordinal", "locator", "file", "size_bytes", "sha256", "errno")}
@@ -1285,6 +1309,10 @@ class _SeedAssembly:
 
     def gate_start(self, generator):
         _seed_require("write" in self.occurrences and self.gate_session is None)
+        self._bind_gate(generator)
+
+    def _bind_gate(self, generator):
+        _seed_require(self.gate_session is None)
         module = self._gate_type(generator, "scope/v1/generate-gate-evidence.py", "_Generator")
         session = generator.session
         _seed_require(type(session) is module._GateStoreSession and session.generator is generator
@@ -1295,15 +1323,26 @@ class _SeedAssembly:
             and session.binding == self._digest(request_raw))
         generator.check()
         self.gate_session, self.generator = session, generator
+        self._gate_owner = generator
+
+    def _gate_request(self):
+        module = self._gate_type(self.generator, "scope/v1/generate-gate-evidence.py", "_Generator")
+        original = module.generation_request(self.original_raw[3])
+        _seed_require(original == self.generator.request and original["id"] == self.identifiers["gate"]
+            and self.gate_session.binding == self._digest(self.original_raw[3]))
+        return original
 
     def _reader_observations(self, reader, generator=False):
         module = self._gate_type(reader, "scope/v1/read-shadow-evidence.py", "_Reader")
         reader.recheck()
         anchor = reader.anchor
         _seed_require(anchor is not None)
+        _seed_require(getattr(anchor, "scope_runtime_owner", None) is reader)
         observations = anchor.private_observations
         _seed_require("entropy" in observations and "commands" in observations
             and "runtime_values" in observations["commands"] and observations["storage_reads"])
+        module._scope_runtime_prefix_values(observations["commands"]["runtime_values"],
+            observations["commands"]["runtime_values"])
         storage = [row for acquired in observations["storage_reads"] for row in acquired["entries"]]
         owners = ("scope/v1/generate-gate-evidence.py", "scope/v1/read-shadow-evidence.py") if generator else ("scope/v1/read-shadow-evidence.py",)
         _seed_require(all(path in module.c._clock_observations for path in owners))
@@ -1358,11 +1397,13 @@ class _SeedAssembly:
                 and session.coverage_request_raw is None and "coverage" not in self.occurrences
                 and "coverage" not in self.scope_local["entropy"])
         else:
-            _seed_require(session.coverage_request_raw is not None and "coverage" in self.occurrences)
+            _seed_require(session.coverage_request_raw is not None and "coverage" in self.occurrences
+                and "coverage" in self.scope_local["entropy"])
         self.coverage_required = coverage
         contexts = {"generator": self._reader_observations(generator.reader, True),
                     "scope_reader": self.scope_local}
-        self.occurrences["gate"] = {"role": "gate", "binding": {"request_id": session.call_id,
+        original = self._gate_request()
+        self.occurrences["gate"] = {"role": "gate", "binding": {"request_id": original["id"],
             "request_sha256": session.binding}, "raw": contexts}
         self.locators["gate"] = {"request": str(generator.paths[0]), "scope": scoped.held.path}
         self._transfer()
@@ -1381,11 +1422,39 @@ class _SeedAssembly:
         for role in ("reproduction", "write"):
             _seed_require(self.bindings[role]["caller_raw"] == self.original_raw[1 if role == "reproduction" else 2])
         rows = [self.occurrences[role] for role in roles]
-        raw = _case_v2_values(self.incident, self.identifiers, self.locators, rows)
-        _case_v2_validate(raw, self.incident, self.identifiers, self.locators, rows)
+        self.work["wrapper_incomplete"] = True
+        raw = _case_v2_values(self.incident, self.identifiers, self.locators, rows, assembly=self)
+        _case_v2_validate(raw, self.incident, self.identifiers, self.locators, rows, assembly=self)
+        self.work["wrapper_incomplete"] = False
         self._write_document(raw)
         self.raw = raw
         self._transfer()
+        return raw
+
+    def _wrapper_processed(self, site, amount):
+        _seed_require(type(amount) is int and amount >= 0)
+        self.work["read_bytes"] += amount
+        self.c._capture_account(self.work, "M", "read_bytes", amount)
+        self.work.setdefault("wrapper_steps", []).append({"site": site, "input_bytes": amount})
+        self.c._capture_copy_room(self.work, 0, False, read_only=True)
+
+    def _wrapper_encode(self, value):
+        before = self.work["read_bytes"]
+        raw, failure = None, None
+        try:raw = self.c._private_capture_observations(value, self.work, self.work)
+        except BaseException as error:failure = error
+        finally:
+            processed = self.work["read_bytes"] - before
+            try:
+                self.c._capture_account(self.work, "M", "read_bytes", processed)
+            except BaseException as error:failure = _seed_first(failure, error)
+        if failure is not None:
+            self._failed(failure, "case-wrapper-encode")
+            raise self.failure
+        self.c._capture_account(self.work, "M", "logical_bytes", len(raw))
+        self.c._capture_account(self.work, "M", "occurrences", 1)
+        self.work.setdefault("wrapper_steps", []).append({"site": "encode", "output_bytes": len(raw),
+            "processing_bytes": processed})
         return raw
 
     def _write_document(self, raw):
@@ -1456,12 +1525,34 @@ class _SeedAssembly:
         _seed_require(self.raw is not None and self.closed and self.failure is None)
         _seed_require(set(self.bindings) == set(self.occurrences) - {"gate"}
             and set(self.bindings) == self.closed_stages)
-        _seed_require(self.gate_session.closed and self.gate_session.owner_confirmed
-            and self.gate_session.phase == "FINAL_OWNER")
-        _seed_require(not self.generator.active and not self.scope_reader.owned
-            and not self.scope_reader.commands_open)
+        self._closed_gate()
         _seed_require(not self.c._capture_work_incomplete(self.work))
         return self.raw
+
+    def _closed_gate(self):
+        _seed_require(self.failure is None and not self.c._capture_work_incomplete(self.work)
+            and self.gate_close_returned and self.gate_session.closed and self.gate_session.owner_confirmed
+            and self.gate_session.phase == "COMPLETE" and not self.gate_session.remote)
+        _seed_require(not self.generator.active and not self.generator.held
+            and not self.generator.reader.owned and not self.scope_reader.owned
+            and not self.scope_reader.commands_open)
+
+    def close_gate(self):
+        module = self._gate_type(self.generator, "scope/v1/generate-gate-evidence.py", "_Generator")
+        _seed_require(self.generator is self._gate_owner and self.generator.session is self.gate_session
+            and self.gate_session.generator is self.generator and self.generator.reader is self.gate_session.reader
+            and not self.gate_close_attempted and self.generator.active)
+        self.gate_close_attempted = True
+        primary = sys.exc_info()[1]
+        if primary is not None:self.failure = _seed_first(self.failure, primary)
+        try:
+            module._Generator.close(self.generator)
+            self.gate_close_returned = True
+            if primary is not None:self._failed(primary, "case-gate-primary")
+            self._transfer()
+        except BaseException as error:
+            self._failed(error, "case-gate-close")
+            raise self.failure
 
     def _namespace_check(self):
         self._root_check()
@@ -1506,7 +1597,7 @@ _CASE_ROLES = ("reproduction.prepare", "reproduction.inspect", "reproduction", "
 _LOCAL_GROUPS = {"entropy", "clocks", "storage", "commands", "runtime"}
 
 
-def _case_v2_values(incident, attempt_ids, locators, occurrences):
+def _case_v2_values(incident, attempt_ids, locators, occurrences, *, assembly=None):
     _seed_require(type(incident) is dict and set(incident) == {"observed_at"}
         and type(incident["observed_at"]) is str and 0 < len(incident["observed_at"]) <= 128)
     _seed_require(type(attempt_ids) is dict and set(attempt_ids) == {"reproduction", "write", "gate"}
@@ -1574,12 +1665,22 @@ def _case_v2_values(incident, attempt_ids, locators, occurrences):
     _seed_require(host is not None and getattr(host.__spec__, "origin", None) == str(source)
         and getattr(host.__loader__, "module", None) is host
         and getattr(host.__loader__, "loaded", None) is not None)
-    _seed_require(host._capture_size(value, 1024 * 1024 - 1) + 1 <= 1024 * 1024)
+    measured = host._capture_size(value, 1024 * 1024 - 1) + 1
+    _seed_require(measured <= 1024 * 1024)
+    if assembly is not None:
+        _seed_require(type(assembly) is _SeedAssembly)
+        assembly._wrapper_processed("shape", measured)
+        assembly._wrapper_processed("size", measured)
+        return assembly._wrapper_encode(value)
     return host.canonical(value)
 
 
-def _case_v2_validate(raw, incident, attempt_ids, locators, occurrences):
+def _case_v2_validate(raw, incident, attempt_ids, locators, occurrences, *, assembly=None):
     _seed_require(type(raw) is bytes and len(raw) <= 1024 * 1024)
-    expected = _case_v2_values(incident, attempt_ids, locators, occurrences)
-    _seed_require(raw == expected)
-    return json.loads(raw)
+    expected = _case_v2_values(incident, attempt_ids, locators, occurrences, assembly=assembly)
+    equal = raw == expected
+    if assembly is not None:assembly._wrapper_processed("compare", len(raw) + len(expected))
+    _seed_require(equal)
+    value = json.loads(raw)
+    if assembly is not None:assembly._wrapper_processed("parse", len(raw))
+    return value

@@ -658,6 +658,11 @@ fixture.raw16_scope_P_ownership(root)
 fixture.raw16_C1_copy(root)
 fixture.raw16_C1_deletions(root)
 fixture.raw16_C1_T_windows(root)
+fixture.raw16_C1_scope_runtime_values(root)
+fixture.raw16_C1_scope_runtime_deletion(root)
+fixture.raw16_C1_revision_wrapper(root)
+fixture.raw16_C1_gate_revision_controls(root)
+fixture.raw16_C1_revision_deletions(root)
 PY_HP_HANDOFF
 /usr/bin/python3 -I -S -B - "$root" <<'PY_D_SOURCE_ACQUISITION'
 import importlib.util,sys

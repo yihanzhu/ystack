@@ -38,6 +38,35 @@ def same(left, right):
     return c.canonical(left) == c.canonical(right)
 
 
+_SCOPE_RUNTIME_SITES = ("scope.soabi", "scope.python-version", "scope.unicode-version")
+
+
+def _scope_runtime_value_values(row, site, ordinal):
+    require(site in _SCOPE_RUNTIME_SITES and type(ordinal) is int and ordinal >= 0)
+    require(type(row) is dict and set(row) == {"site", "ordinal", "value"}
+            and row["site"] == site and type(row["ordinal"]) is int and row["ordinal"] == ordinal)
+    value = row["value"]
+    require((site == "scope.soabi" and value is None) or
+            (type(value) is str and 0 < len(value.encode("utf-8")) <= 128
+             and all(0x20 <= ord(char) <= 0x7e for char in value)))
+    return value
+
+
+def _scope_runtime_equal_values(expected, row, site, ordinal):
+    return expected == _scope_runtime_value_values(row, site, ordinal)
+
+
+def _scope_runtime_prefix_values(rows, observed):
+    require(type(rows) is list and type(observed) is list and len(rows) <= len(observed) <= 4096)
+    ordinals = {site: 0 for site in _SCOPE_RUNTIME_SITES}
+    for row, original in zip(rows, observed):
+        require(type(original) is dict and original.get("site") in ordinals and row == original)
+        site = original["site"]
+        _scope_runtime_value_values(row, site, ordinals[site])
+        ordinals[site] += 1
+    return rows
+
+
 def ref(raw):
     document = parse(raw)
     return {"schema_version": document["schema_version"], "kind": document["kind"],
@@ -230,6 +259,7 @@ class _Reader:
         self.modules = None
         self.coverage_configuration = None
         self.authentication_revision = None
+        self._runtime_ordinals = {site: 0 for site in _SCOPE_RUNTIME_SITES}
         try:
             require(PACKAGE.resolve() == PACKAGE and sys.version_info >= (3, 11), "E_RUNTIME")
             for path in (scope_path, set_path, bundle_root, git_root, output.parent):
@@ -430,6 +460,9 @@ class _Reader:
                                        self.darwin if sys.platform == "darwin" else None)
             self.owned.append(self.anchor)
             try:
+                self.anchor.private_observations["entropy"] = {}
+                self.anchor.private_observations["commands"] = {"runtime_values": []}
+                self.anchor.scope_runtime_owner = self
                 require(self.capture_completion_owner is not None, "E_STORE")
                 self.capture_completion_owner.authenticate(self.anchor)
                 self.anchor.capture_completion_owner = self.capture_completion_owner
@@ -440,6 +473,34 @@ class _Reader:
                 if getattr(error, "_scope_signal_cancel", False):
                     raise
         return self.anchor
+
+    def _runtime_equal(self, site, expected, value):
+        result = None
+        anchor = self.anchor_for()
+        try:
+            ordinal = self._runtime_ordinals[site]
+            self._runtime_ordinals[site] = ordinal + 1
+            row = {"site": site, "ordinal": ordinal, "value": value}
+            result = _scope_runtime_equal_values(expected, row, site, ordinal)
+            rows = anchor.private_observations["commands"]["runtime_values"]
+            require(len(rows) < 4096, "E_LIMIT")
+            rows.append(row)
+            for field in ("files", "read_bytes", "write_bytes", "physical_bytes", "export_read_bytes",
+                          "export_write_bytes", "export_physical_bytes", "export_files"):
+                anchor.recording_work.setdefault(field, 0)
+            anchor.recording_work.setdefault("calls", {})
+            c._capture_observe(anchor.recording_work, "M", "scope-runtime-value", row)
+        except Exception as error:
+            anchor.private_observations["unusable"] = True
+            anchor.recording_work["scope_runtime_incomplete"] = True
+            cancellation = error if getattr(error, "_scope_signal_cancel", False) else None
+            try:c._capture_observation_error(anchor.recording_work, "M", "scope-runtime-value", error)
+            except Exception as observed:
+                anchor.recording_work["scope_runtime_incomplete"] = True
+                if cancellation is None and getattr(observed, "_scope_signal_cancel", False):cancellation = observed
+            if cancellation is not None:raise cancellation
+            if result is None:result = expected == value
+        return result
 
     def _recheck_source_copies(self, parent):
         for copied in self.source_copies:
@@ -787,7 +848,7 @@ class _Reader:
                 and all(c._sha(native[key]) for key in hashes)
                 and type(native["binary_size"]) is int and 0 < native["binary_size"] <= c.EXECUTABLE_LIMIT
                 and native["loader_mode"] == "rtld-now-local.v1" and type(native["python_abi"]) is str
-                and native["python_abi"] == sysconfig.get_config_var("SOABI")
+                and self._runtime_equal("scope.soabi", native["python_abi"], sysconfig.get_config_var("SOABI"))
                 and 1 <= len(native["python_abi"]) <= 128
                 and all(0x20 <= ord(char) <= 0x7e for char in native["python_abi"])
                 and native["python_sha256"] == body["python_sha256"]
@@ -927,9 +988,9 @@ class _Reader:
         require(producer["source_sha256"] == source.sha256
                 and producer["protocol_sha256"] == self.package_sources["adapters/local-git-materializer/v1/protocol.jq"].sha256
                 and producer["jq"]["version"] == "jq-1.6"
-                and producer["python"]["version"] == sys.version.splitlines()[0]
+                and self._runtime_equal("scope.python-version", producer["python"]["version"], sys.version.splitlines()[0])
                 and producer["git"]["version"].startswith("git version ")
-                and producer["unicode_version"] == unicodedata.unidata_version)
+                and self._runtime_equal("scope.unicode-version", producer["unicode_version"], unicodedata.unidata_version))
         core = producer["core"]
         base = {"adapters/local-git-materializer/v1/protocol.jq", "scripts/core-contract.sh", "core/v2/generation-registry.json"}
         generation = str(self.modules.parent.relative_to(PACKAGE))

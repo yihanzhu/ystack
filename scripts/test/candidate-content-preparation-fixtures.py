@@ -4261,7 +4261,7 @@ def raw16_noexport_projection_values(root: Path) -> None:
         "full_recording_costs_and_qualification": "NOT_PROVEN"}, sort_keys=True))
 
 
-def raw16_C1_case_values(replay, host):
+def raw16_C1_case_values(replay, host, assembly=None):
     import copy
     ids = {role: 'ordinary.' + role for role in ('reproduction', 'write', 'gate')}
     raw_requests = {role: host.canonical({'original': role}) for role in ids}
@@ -4305,8 +4305,16 @@ def raw16_C1_case_values(replay, host):
                 'clocks': {'wall': [], 'monotonic': []}}}
         rows.append({'role': role, 'binding': binding, 'raw': raw})
     locators = {role: {'request': '/ordinary/' + role} for role in replay._CASE_ROLES}
-    canonical = replay._case_v2_values(incident, ids, locators, rows)
-    assert replay._case_v2_validate(canonical, incident, ids, locators, rows)['body']['occurrences'] == rows
+    if assembly is None:
+        canonical = replay._case_v2_values(incident, ids, locators, rows)
+        assert replay._case_v2_validate(canonical, incident, ids, locators, rows)['body']['occurrences'] == rows
+    else:
+        assembly.incident=incident;assembly.identifiers=ids;assembly.locators=locators
+        assembly.occurrences={row['role']:row for row in rows};assembly.coverage_required=True
+        assembly.original_raw=(b'composition incident',raw_requests['reproduction'],raw_requests['write'],raw_requests['gate'])
+        assembly.bindings={role:{'caller_raw':raw_requests[role]} for role in ('reproduction','write')}
+        canonical=assembly.document()
+        assert assembly.raw==canonical and assembly.files['raw-observations.json']['size_bytes']==len(canonical)
     assert rows[2]['raw']['capture']['guest'] != rows[5]['raw']['capture']['guest']
     assert rows[6]['raw']['generator']['clocks'] != rows[6]['raw']['scope_reader']['clocks']
     negatives = []
@@ -4649,3 +4657,434 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def raw16_C1_scope_runtime_values(root: Path, mutation=False) -> None:
+    import ast, copy, inspect, textwrap, types
+    module = load_component(root/"scope/v1/read-shadow-evidence.py")
+    if mutation:
+        source = textwrap.dedent(inspect.getsource(module._scope_runtime_value_values))
+        assert source.count('type(row["ordinal"]) is int') == 1
+        source = source.replace('type(row["ordinal"]) is int', 'isinstance(row["ordinal"], int)')
+        changed = {};exec(compile(source, '<scope-ordinal-rule-deletion>', 'exec'), module.__dict__, changed)
+        module._scope_runtime_value_values = changed['_scope_runtime_value_values']
+    tree = ast.parse((root/"scope/v1/read-shadow-evidence.py").read_text())
+    owner = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "_Reader")
+    constructor = next(n for n in owner.body if isinstance(n, ast.FunctionDef) and n.name == "__init__")
+    prologue = []
+    for statement in constructor.body:
+        if isinstance(statement, ast.Try):break
+        prologue.append(statement)
+    def reader():
+        value = module._Reader.__new__(module._Reader)
+        local = dict(self=value, scope_path=Path('/fixture/scope'), set_path=Path('/fixture/set'),
+            bundle_root=Path('/fixture/bundle'), git_root=Path('/fixture/git'), output=Path('/fixture/private/result'),
+            store_session=None, deadline=None, document_paths=None)
+        exec(compile(ast.Module(body=prologue, type_ignores=[]), '<original-Reader-initialization>', 'exec'), module.__dict__, local)
+        value.capture_completion_owner = None
+        value.darwin = module.c._DarwinUUIDResolver() if sys.platform == 'darwin' else None
+        return value
+    calls = []
+    class Versions:
+        def get_config_var(self, name):
+            assert name == 'SOABI';calls.append(name);return self.value
+    versions = Versions();versions.value = 'fixture.abi'
+    module.sysconfig = versions
+    module.sys = types.SimpleNamespace(version='fixture Python', executable='/fixture/python', platform=sys.platform)
+    module.unicodedata = types.SimpleNamespace(unidata_version='fixture.unicode')
+    first, second = reader(), reader()
+    anchors = [module.c.Anchor({}, b'{}\n', [], {}, ('', []), ('', []), None) for _ in range(2)]
+    pending = iter(anchors);original_load = module.c.load_anchor
+    module.c.load_anchor = lambda *args:next(pending)
+    try:
+        for item in (first, second):item.anchor_for()
+    finally:module.c.load_anchor = original_load
+    # Completion-owner admission is deliberately unavailable in this scalar fixture.
+    assert all(item.private_observations['unusable'] for item in anchors)
+    def block(name, marker):
+        method = next(n for n in owner.body if isinstance(n, ast.FunctionDef) and n.name == name)
+        return next(n for n in ast.walk(method) if isinstance(n, ast.Expr) and isinstance(n.value, ast.Call)
+            and isinstance(n.value.func, ast.Name) and n.value.func.id == 'require'
+            and marker in ast.get_source_segment((root/'scope/v1/read-shadow-evidence.py').read_text(), n))
+    abi = block('provenance', 'scope.soabi')
+    language = block('preparation', 'scope.python-version')
+    native = {key:'a'*64 for key in ('source_sha256','build_script_sha256','build_record_sha256',
+        'binary_locator_sha256','binary_sha256','python_locator_sha256','python_sha256','dependency_record_sha256')}
+    native.update(context_version=2,binary_size=1,python_abi='fixture.abi',loader_mode='rtld-now-local.v1')
+    native['python_locator_sha256'] = module.c.digest(b'/fixture/python')
+    producer = dict(source_sha256='a'*64,protocol_sha256='b'*64,jq={'version':'jq-1.6'},
+        python={'version':'fixture Python'},git={'version':'git version fixture'},unicode_version='fixture.unicode')
+    def execute(statement, item, native_value=native, producer_value=producer):
+        item.package_sources = {'adapters/local-git-materializer/v1/protocol.jq':types.SimpleNamespace(sha256='b'*64)}
+        local = dict(self=item, native=native_value, body={'python_sha256':'a'*64},
+            producer=producer_value, source=types.SimpleNamespace(sha256='a'*64),
+            hashes=set(native)-{'context_version','binary_size','python_abi','loader_mode'})
+        environment = dict(module.__dict__, **local)
+        exec(compile(ast.Module(body=[statement],type_ignores=[]),'<original-scope-runtime-check>', 'exec'),environment,environment)
+    execute(abi,first);execute(language,first)
+    observed = first.anchor.private_observations['commands']['runtime_values']
+    assert not first.anchor.recording_work.get('scope_runtime_incomplete')
+    assert first.anchor.recording_work['accounting']['M']['occurrences']==3
+    assert [row['site'] for row in observed] == list(module._SCOPE_RUNTIME_SITES)
+    assert calls == ['SOABI'] and all(row['ordinal']==0 for row in observed)
+    snapshot = copy.deepcopy(observed)
+    bad = copy.deepcopy(producer);bad['git']['version'] = 'wrong prefix'
+    try:execute(language,first,producer_value=bad)
+    except module.c.Refusal:pass
+    else:raise AssertionError('original Git prefix failure lost')
+    assert observed[-1] == dict(site='scope.python-version',ordinal=1,value='fixture Python')
+    before = len(observed);bad = copy.deepcopy(producer);bad['jq']['version'] = 'wrong'
+    try:execute(language,first,producer_value=bad)
+    except module.c.Refusal:pass
+    else:raise AssertionError('original early rejection lost')
+    assert len(observed)==before
+    wrong = dict(native,context_version=True)
+    try:execute(abi,first,native_value=wrong)
+    except module.c.Refusal:pass
+    else:raise AssertionError('original before-ABI rejection lost')
+    assert calls == ['SOABI']
+    versions.value = None
+    try:execute(abi,first)
+    except module.c.Refusal:pass
+    else:raise AssertionError('None ABI admitted')
+    assert observed[-1] == dict(site='scope.soabi',ordinal=1,value=None)
+    module._scope_runtime_prefix_values(snapshot,observed)
+    assert not second.anchor.private_observations['entropy']
+    second._runtime_equal('scope.python-version','other','other')
+    rejected = []
+    for label in ('cross-context','order','ordinal-bool','gap','extra','value'):
+        changed = copy.deepcopy(snapshot)
+        if label=='cross-context':target=second.anchor.private_observations['commands']['runtime_values']
+        else:target=observed
+        if label=='order':changed.reverse()
+        elif label=='ordinal-bool':changed[0]['ordinal']=False
+        elif label=='gap':changed[0]['ordinal']=1
+        elif label=='extra':changed[0]['extra']=0
+        elif label=='value':changed[0]['value']='foreign'
+        try:module._scope_runtime_prefix_values(changed,target)
+        except module.c.Refusal:rejected.append(label)
+        else:raise AssertionError('scope row accepted '+label)
+    class Broken(list):
+        def append(self,item):raise MemoryError('ordinary scope recording failure')
+    second.anchor.private_observations['commands']['runtime_values']=Broken()
+    assert second._runtime_equal('scope.unicode-version','same','same') is True
+    assert second.anchor.recording_work['scope_runtime_incomplete']
+    main = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'main')
+    cancel = next(n for n in main.body if isinstance(n, ast.FunctionDef) and n.name == 'cancel')
+    handlers = {};exec(compile(ast.Module(body=[cancel],type_ignores=[]),'<actual-scope-handler>','exec'),handlers)
+    cancellations = []
+    def marked():
+        try:handlers['cancel'](15,None)
+        except InterruptedError as error:cancellations.append(error);raise
+    original_error = module.c._capture_observation_error
+    class Cancelled(list):
+        def append(self,item):marked()
+    try:
+        second.anchor.private_observations['commands']['runtime_values']=Cancelled()
+        module.c._capture_observation_error=lambda *args:marked()
+        try:second._runtime_equal('scope.soabi','same','same')
+        except InterruptedError as error:assert error is cancellations[0] and len(cancellations)==2
+        else:raise AssertionError('first scope recording cancellation lost')
+        second.anchor.private_observations['commands']['runtime_values']=Broken()
+        try:second._runtime_equal('scope.soabi','same','same')
+        except InterruptedError as error:assert error is cancellations[2] and len(cancellations)==3
+        else:raise AssertionError('later scope recording cancellation lost')
+    finally:module.c._capture_observation_error=original_error
+    print(json.dumps({'C1_scope_runtime_actual_original_check_blocks':True,'SOABI_actual_calls':calls,
+        'snapshot':snapshot,'later_actual_rows':observed,'negatives':rejected,
+        'no_coverage_entropy_container':first.anchor.private_observations['entropy'],
+        'M_actual':[item.recording_work.get('accounting') for item in anchors],
+        'real_handler_cancel_priority':len(cancellations),
+        'limits':'scalar original blocks and producer only; synthetic version/source inputs; admission unavailable, full Reader/native/gate qualification NOTRUN'},sort_keys=True))
+
+
+def raw16_C1_scope_runtime_deletion(root: Path) -> None:
+    try:raw16_C1_scope_runtime_values(root, mutation=True)
+    except AssertionError as error:assert str(error)=='scope row accepted ordinal-bool'
+    else:raise AssertionError('scope ordinal deletion not detected')
+    print(json.dumps({'scope_ordinal_bool_rule_deletion_detected':True}))
+
+
+def raw16_C1_revision_wrapper(root: Path, mutation=False) -> None:
+    body = (root/'scripts/test/evals-malicious.test.sh').read_text().split("<<'PY_RUNTIME_CONSUMER'\n", 1)[1].split('\nPY_RUNTIME_CONSUMER', 1)[0]
+    prefix = body.split('        native.recheck();native.close();native=None\n', 1)[0]
+    footer = body[body.rfind('finally:\n    if copied_inventory'):]
+    prefix = prefix.replace("        store=base/'store';", "        seed=base/'pending-S';seed.mkdir(mode=0o700)\n        store=base/'store';", 1)
+    prefix = prefix.replace("anchor=c.Anchor(config,config_raw,[installed_hold],{},('',[]),('',[]),None)", "anchor=c.Anchor(config,config_raw,[installed_hold],{},('',[]),('',[]),c._DarwinUUIDResolver() if sys.platform=='darwin' else None)")
+    prefix = prefix.replace("c._store_rule(uid,gid,0o700,True),'E_STORE')", "c._store_rule(uid,gid,0o700,True,anchor.resolver),'E_STORE')")
+    extra = '''        import inspect
+        replay=load('C1_revision_replay',root/'evals/v1/replay-malicious.py')
+        c._acl_state=original_acl
+        seed_parent=c._open_held(str(seed),True,c._store_rule(uid,gid,0o700,True,anchor.resolver),'E_STORE')
+        assembly=replay._SeedAssembly(seed_parent,anchor,'malicious.checked-file-bytes',anchor.recording_work,copied_inventory.case_work)
+        actual_processed=assembly._wrapper_processed
+        encoder=c.json.JSONEncoder;loads=replay.json.loads
+        caught=None;fault=MemoryError('bounded wrapper '+case);attempts=[];armed=[True]
+        def process(site,amount):
+            attempts.append({'site':site,'input_bytes':amount})
+            if wrapper_mutation and site=='compare':return
+            if case==site and armed[0]:armed[0]=False;raise fault
+            return actual_processed(site,amount)
+        class Partial(encoder):
+            def iterencode(self,value,*args,**kwargs):
+                iterator=super().iterencode(value,*args,**kwargs)
+                for index,piece in enumerate(iterator):
+                    yield piece
+                    if case=='partial-encode' and armed[0] and index==4:
+                        armed[0]=False;raise fault
+        def parsing(*args,**kwargs):
+            if case=='parse' and armed[0] and inspect.currentframe().f_back.f_code is replay._case_v2_validate.__code__:
+                armed[0]=False;attempts.append({'site':'parse-attempt','input_bytes':len(args[0])});raise fault
+            return loads(*args,**kwargs)
+        assembly._wrapper_processed=process
+        assembly.work['wrapper_incomplete']=True
+        c.json.JSONEncoder=Partial;replay.json.loads=parsing
+        try:
+            try:result=values(replay,h,assembly)
+            except BaseException as error:
+                caught=error;assembly._failed(error,'ordinary-fixed-wrapper-caller')
+        finally:c.json.JSONEncoder=encoder;replay.json.loads=loads
+        if case=='normal':
+            assert caught is None
+            steps=assembly.work['wrapper_steps'];assert [row['site'] for row in steps]==['shape','size','encode','shape','size','encode','compare','parse'], 'wrapper compare accounting omitted'
+            assert assembly.work['accounting']['M']['occurrences']>=2
+            assert assembly.work['accounting']['M']['logical_bytes']>=2*result['bytes']
+            assembly.work['wrapper_incomplete']=False
+            assembly._transfer();before=anchor.recording_work['read_bytes'];assembly._transfer()
+            assert anchor.recording_work['read_bytes']==before
+        else:
+            assert caught is fault and assembly.failure is fault
+            assert assembly.work['wrapper_incomplete'] and not (seed/'raw-observations.json').exists()
+            if case=='partial-encode':assert assembly.work['read_bytes']>0
+        try:assembly.close(caught)
+        except BaseException as error:assert caught is None or error is caught
+        seed_parent.close()
+        print(json.dumps({'C1_wrapper_case':case,'attempts':attempts,'completed_steps':assembly.work.get('wrapper_steps',[]),
+            'actual_read_bytes':assembly.work['read_bytes'],'M':assembly.work.get('accounting',{}).get('M'),
+            'failure':None if caught is None else type(caught).__name__,'incomplete':assembly.work.get('wrapper_incomplete'),
+            'qualification':'NOT_ACCEPTED; actual S/ledger owner with composition input, not full case/native/seed'},sort_keys=True))
+'''
+    for case in ('normal','shape','size','partial-encode','compare','parse'):
+        namespace = {'case':case,'values':raw16_C1_case_values,'wrapper_mutation':mutation}
+        argv=sys.argv;sys.argv=['C1-wrapper-fixture',str(root)]
+        try:exec(compile(prefix+extra+footer,'<actual-C1-wrapper>','exec'),namespace)
+        finally:sys.argv=argv
+
+
+def raw16_C1_gate_revision(root: Path, case='normal', mutation=False) -> None:
+    body = (root/'scripts/test/evals-malicious.test.sh').read_text().split("<<'PY_RUNTIME_CONSUMER'\n", 1)[1].split('\nPY_RUNTIME_CONSUMER', 1)[0]
+    prefix = body.split('        native.recheck();native.close();native=None\n', 1)[0]
+    footer = body[body.rfind('finally:\n    if copied_inventory'):]
+    setup = '''        seed=base/'pending-S';seed.mkdir(mode=0o700)
+        originals_dir=base/'original-inputs';originals_dir.mkdir(mode=0o700)
+        terminal_dir=base/'terminal';terminal_dir.mkdir(mode=0o700)
+        snapshot_dir=base/'scope-P';snapshot_dir.mkdir(mode=0o700)
+        original_values=[{'schema_version':1,'kind':kind,'id':identity,'body':value} for kind,identity,value in (
+            ('shadow_incident_record','incident.fixture',{'observed_at':'2026-10-26T00:00:00Z'}),
+            ('shadow_enforced_request','reproduction.fixture',{}),('shadow_write_request','write.fixture',{}),
+            ('scope_gate_generation_request','generation.fixture',{'scope_basis':{'body':{'workflow_id':'workflow.other','task_class':'task.other'}},'risk_claim':{}}))]
+        original_paths=[]
+        for index,value in enumerate(original_values):
+            path=originals_dir/str(index);path.write_bytes(h.canonical(value));path.chmod(0o400);original_paths.append(path)
+        store=base/'store';'''
+    prefix = prefix.replace("        store=base/'store';", setup, 1)
+    prefix = prefix.replace("anchor=c.Anchor(config,config_raw,[installed_hold],{},('',[]),('',[]),None)", "anchor=c.Anchor(config,config_raw,[installed_hold],{},('',[]),('',[]),c._DarwinUUIDResolver() if sys.platform=='darwin' else None)")
+    prefix = prefix.replace("c._store_rule(uid,gid,0o700,True),'E_STORE')", "c._store_rule(uid,gid,0o700,True,anchor.resolver),'E_STORE')")
+    extra = '''        import ast,socket,time,types
+        replay=load('C1_gate_revision_replay',root/'evals/v1/replay-malicious.py')
+        g=load('C1_revision_generator',root/'scope/v1/generate-gate-evidence.py')
+        g.c=c;g.r.c=c
+        c._acl_state=original_acl
+        seed_parent=c._open_held(str(seed),True,c._store_rule(uid,gid,0o700,True,anchor.resolver),'E_STORE')
+        assembly=replay._SeedAssembly(seed_parent,anchor,'malicious.unread-forge-text',anchor.recording_work,copied_inventory.case_work)
+        original_holds=[c._hold_bytes(str(path),c.DOCUMENT_LIMIT) for path in original_paths]
+        assembly.original_inputs(*original_holds)
+        def init_prefix(module,cls,instance,arguments):
+            tree=ast.parse((root/('scope/v1/generate-gate-evidence.py' if cls=='_Generator' else 'scope/v1/read-shadow-evidence.py')).read_text())
+            node=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name==cls)
+            init=next(n for n in node.body if isinstance(n,ast.FunctionDef) and n.name=='__init__')
+            statements=[]
+            for item in init.body:
+                if isinstance(item,ast.Try if cls=='_Reader' else ast.For):break
+                statements.append(item)
+            environment=dict(module.__dict__,self=instance,**arguments)
+            exec(compile(ast.Module(body=statements,type_ignores=[]),'<original-owner-initialization>','exec'),environment,environment)
+        generator=g._Generator.__new__(g._Generator)
+        init_prefix(g,'_Generator',generator,{'arguments':['generate']+[str(path) for path in original_paths]+[str(base/'a'),str(base/'b'),str(base/'c')]})
+        generator.request=g.generation_request(original_holds[3].raw)
+        session=g._GateStoreSession(generator.request['id'],c.digest(original_holds[3].raw),time.monotonic()+30)
+        generator.session=session;session.generator=generator
+        reader=g.r._Reader.__new__(g.r._Reader)
+        init_prefix(g.r,'_Reader',reader,dict(scope_path=original_paths[3],set_path=original_paths[3],bundle_root=store,git_root=store,
+            output=terminal_dir/'result',store_session=session,deadline=None,document_paths=None))
+        reader.scope_body=generator.request['body']['scope_basis']['body'];reader.enforced=e
+        session.reader=reader;generator.reader=reader
+        assembly._bind_gate(generator)
+        reader.anchor=anchor;anchor.scope_runtime_owner=reader
+        anchor.private_observations['commands']={'runtime_values':[]}
+        anchor.private_observations['entropy']={}
+        for site,value in [('scope.soabi','fixture-soabi'),('scope.python-version','fixture-python'),('scope.unicode-version','fixture-unicode')]:
+            assert reader._runtime_equal(site,value,value)
+        snapshot_parent=c._open_held(str(snapshot_dir),True,c._store_rule(uid,gid,0o700,True,anchor.resolver),'E_STORE')
+        scope_P=native.copy_capture(snapshot_parent,request,'reproduction',anchor.recording_work)
+        frozen=scope_P.consumer_snapshot
+        assert reader._runtime_equal('scope.python-version','later-python','later-python')
+        actual_snapshot=assembly._consumer_snapshot(c,anchor,scope_P,'kill')
+        assert len(actual_snapshot['commands']['runtime_values'])==3
+        assert len(anchor.private_observations['commands']['runtime_values'])==4
+        scope_P.consumer_snapshot=frozen+b' '
+        try:assembly._consumer_snapshot(c,anchor,scope_P,'kill')
+        except ValueError:pass
+        else:raise AssertionError('changed P snapshot accepted')
+        scope_P.consumer_snapshot=frozen
+        scope_P.close();snapshot_parent.close()
+        if gate_mutation=='phase':
+            import inspect,textwrap
+            source=textwrap.dedent(inspect.getsource(replay._SeedAssembly._closed_gate))
+            assert source.count('self.gate_session.phase == "COMPLETE"')==1
+            source=source.replace('self.gate_session.phase == "COMPLETE"','self.gate_session.phase == "FINAL_OWNER"')
+            changed={};exec(compile(source,'<old-gate-phase-rule>','exec'),replay.__dict__,changed)
+            replay._SeedAssembly._closed_gate=changed['_closed_gate']
+        assert assembly._gate_request()['id']=='generation.fixture'
+        reader.owned.append(native);native=None
+        native_tree=ast.parse((root/'scope/v1/generate-gate-evidence.py').read_text())
+        gen_class=next(n for n in native_tree.body if isinstance(n,ast.ClassDef) and n.name=='_Generator')
+        kill=next(n for n in gen_class.body if isinstance(n,ast.FunctionDef) and n.name=='kill_source')
+        changed_id=next(n for n in kill.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Attribute) and t.attr=='call_id' for t in n.targets))
+        changed_request=kill.body[kill.body.index(changed_id)+1]
+        source_id='kill-register.'+'11'*32
+        source_raw=c.canonical({'schema_version':1,'kind':'kill_register_source_request','id':source_id,
+            'body':{'operation':'kill-register-read.v1','nonce':'11'*32}})
+        environment=dict(g.__dict__,session=session,call_id=source_id,raw=source_raw)
+        exec(compile(ast.Module(body=[changed_id,changed_request],type_ignores=[]),'<original-kill-id-assignment>','exec'),environment,environment)
+        assert session.call_id!='generation.fixture' and assembly._gate_request()['id']=='generation.fixture'
+        gate_fn=next(n for n in ast.parse((root/'evals/v1/replay-malicious.py').read_text()).body if isinstance(n,ast.ClassDef) and n.name=='_SeedAssembly')
+        gate=next(n for n in gate_fn.body if isinstance(n,ast.FunctionDef) and n.name=='gate')
+        binding=[n for n in gate.body if isinstance(n,ast.Assign) and
+            (any(isinstance(t,ast.Name) and t.id=='original' for t in n.targets) or
+             any(isinstance(t,ast.Subscript) and isinstance(t.value,ast.Attribute) and t.value.attr=='occurrences' for t in n.targets))]
+        if gate_mutation=='request-id':
+            class OldID(ast.NodeTransformer):
+                def visit_Subscript(self,node):
+                    if isinstance(node.value,ast.Name) and node.value.id=='original' and isinstance(node.slice,ast.Constant) and node.slice.value=='id':
+                        return ast.copy_location(ast.Attribute(value=ast.Name(id='session',ctx=ast.Load()),attr='call_id',ctx=ast.Load()),node)
+                    return self.generic_visit(node)
+            binding=[ast.fix_missing_locations(OldID().visit(node)) for node in binding]
+        environment=dict(replay.__dict__,self=assembly,session=session,contexts=object())
+        exec(compile(ast.Module(body=binding,type_ignores=[]),'<actual-gate-binding-assignment>','exec'),environment,environment)
+        assert assembly.occurrences['gate']['binding']=={'request_id':'generation.fixture','request_sha256':session.binding}, 'mutable kill id reused as generation id'
+        actual_request=generator.request
+        generator.request=dict(actual_request,id=session.call_id)
+        try:assembly._gate_request()
+        except ValueError:pass
+        else:raise AssertionError('cross gate id admitted')
+        generator.request=actual_request
+        original_binding=session.binding;session.binding='f'*64
+        try:assembly._gate_request()
+        except ValueError:pass
+        else:raise AssertionError('cross gate SHA admitted')
+        session.binding=original_binding
+        collecting=[]
+        reader.darwin=types.SimpleNamespace(kill_register_source=lambda raw:collecting.append(raw))
+        raw=b'synthetic collector boundary input'
+        begin=next(i for i,n in enumerate(kill.body) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Attribute) and t.attr=='phase' for t in n.targets))
+        end=next(i for i,n in enumerate(kill.body) if isinstance(n,ast.Assign) and isinstance(n.value,ast.Constant) and n.value.value=='K_DONE')
+        environment=dict(g.__dict__,session=session,reader=reader,raw=raw)
+        exec(compile(ast.Module(body=kill.body[begin:end+1],type_ignores=[]),'<original-returned-collector-transition>','exec'),environment,environment)
+        assert session.phase=='K_DONE' and not session.local and collecting==[raw]
+        second_native=c._HeldStoreRead(anchor,attempt);reader.owned.append(second_native)
+        session.start_scope();peer=c._GateWire(session.child_socket,session.deadline)
+        assert peer.receive()[0]=='INIT';peer.send('INIT_ACK',{});session.pump()
+        binding=c._gate_store_binding(second_native)
+        for phase,payload in [('ACQUIRE',{'acquisition':'inner.1','binding':binding}),
+            ('FINAL_OWNER',{'acquisitions':['inner.1']}),('RELEASE',{'acquisition':'inner.1'}),('CLOSED',{})]:
+            peer.send(phase,payload);session.pump();assert peer.receive()==(phase+'_ACK',{})
+        assert session.closed and session.phase=='FINAL_OWNER'
+        session.complete();assert session.phase=='COMPLETE'
+        closing_input=generator.hold(original_paths[3])
+        inner=g.r._Reader.__new__(g.r._Reader)
+        init_prefix(g.r,'_Reader',inner,dict(scope_path=original_paths[3],set_path=original_paths[3],bundle_root=store,git_root=store,
+            output=terminal_dir/'result',store_session=None,deadline=None,document_paths=None))
+        inner.scope={'id':'scope.fixture'};inner.darwin=anchor.resolver
+        inner.terminal(c.canonical({'synthetic_observation':True}));inner.close()
+        assembly.scope_reader=inner
+        target_fd=second_native.held[-1].fd if gate_case=='reader-failure' else closing_input.held.fd
+        original_close=os.close;transfer=assembly._transfer;close_count=[0]
+        closing_failure=OSError(5,'controlled original gate close');primary=None;caught=None
+        def closing(fd):
+            if fd==target_fd:
+                close_count[0]+=1
+                result=original_close(fd)
+                if gate_case in ('held-failure','reader-failure','prior-cancel'):raise closing_failure
+                return result
+            return original_close(fd)
+        if gate_case=='prior-failure':
+            primary=ValueError('earlier data failure');assembly._failed(primary,'fixture-earlier-failure')
+        if gate_case=='post-transfer':
+            closing_failure=MemoryError('actual close returned; transfer failed')
+            def broken_transfer():raise closing_failure
+            assembly._transfer=broken_transfer
+        os.close=closing
+        try:
+            try:
+                if gate_case=='prior-cancel':
+                    reader_tree=ast.parse((root/'scope/v1/read-shadow-evidence.py').read_text())
+                    main=next(n for n in reader_tree.body if isinstance(n,ast.FunctionDef) and n.name=='main')
+                    handler=next(n for n in main.body if isinstance(n,ast.FunctionDef) and n.name=='cancel')
+                    actual={};exec(compile(ast.Module(body=[handler],type_ignores=[]),'<original-scope-cancel>','exec'),actual)
+                    try:actual['cancel'](15,None)
+                    except InterruptedError as error:
+                        primary=error;assembly.close_gate()
+                else:assembly.close_gate()
+            except BaseException as error:caught=error
+        finally:os.close=original_close;assembly._transfer=transfer
+        assert close_count==[1] and assembly.gate_close_attempted
+        if gate_case=='normal':
+            assert caught is None and not generator.active and not reader.owned and not session.local
+            try:assembly._closed_gate()
+            except ValueError as error:raise AssertionError('actual COMPLETE condition refused') from error
+        else:
+            if gate_case in ('held-failure','reader-failure','post-transfer'):assert caught is closing_failure
+            if gate_case=='prior-cancel':assert caught is primary and assembly.failure is primary
+            if gate_case=='prior-failure':assert caught is None and assembly.failure is primary
+            try:assembly._closed_gate()
+            except ValueError:pass
+            else:raise AssertionError('failed original gate close accepted')
+        try:assembly.close_gate()
+        except ValueError:pass
+        else:raise AssertionError('original gate close repeated')
+        try:session.complete()
+        except c.Refusal:pass
+        else:raise AssertionError('complete accepted after original reader release')
+        try:assembly.close(caught)
+        except BaseException as error:assert caught is None or error is caught
+        seed_parent.close()
+        for item in original_holds:item.close()
+        print(json.dumps({'gate_case':gate_case,'gate_original_request_id_after_actual_assignment':'generation.fixture',
+            'mutable_kill_id':session.call_id,'original_wire_phase':session.phase,'original_Generator_close_returned':assembly.gate_close_returned,
+            'original_close_attempts':close_count,'caught':None if caught is None else type(caught).__name__,
+            'data_failure':None if assembly.failure is None else type(assembly.failure).__name__,
+            'P_snapshot_rows':3,'later_owner_rows':4,'changed_P_snapshot_refused':True,'pending_only':True,'limits':'original binding assignment and real local wire/complete/close; constructor prologues only; collector stub, no source/native qualification'},sort_keys=True))
+'''
+    namespace = {'gate_case':case,'gate_mutation':mutation};argv=sys.argv;sys.argv=['C1-gate-revision',str(root)]
+    try:exec(compile(prefix+extra+footer,'<actual-C1-gate-revision>','exec'),namespace)
+    finally:sys.argv=argv
+
+
+def raw16_C1_gate_revision_controls(root: Path) -> None:
+    for case in ('normal','held-failure','reader-failure','prior-cancel','prior-failure','post-transfer'):
+        raw16_C1_gate_revision(root,case)
+    try:raw16_C1_gate_revision(root,mutation='phase')
+    except AssertionError as error:assert str(error)=='actual COMPLETE condition refused'
+    else:raise AssertionError('old FINAL_OWNER rule not detected')
+    print(json.dumps({'old_gate_phase_rule_detected':True}))
+
+
+def raw16_C1_revision_deletions(root: Path) -> None:
+    try:raw16_C1_revision_wrapper(root,mutation=True)
+    except AssertionError as error:assert str(error)=='wrapper compare accounting omitted'
+    else:raise AssertionError('wrapper accounting deletion not detected')
+    try:raw16_C1_gate_revision(root,mutation='request-id')
+    except AssertionError as error:assert str(error)=='mutable kill id reused as generation id'
+    else:raise AssertionError('original request id deletion not detected')
+    print(json.dumps({'wrapper_compare_charge_deletion_detected':True,'mutable_gate_id_deletion_detected':True}))
