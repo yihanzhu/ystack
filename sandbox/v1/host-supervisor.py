@@ -465,6 +465,304 @@ def owner_mode_fd_ok(fd, principal_uid):
     return not stat.S_ISLNK(state.st_mode) and owner_mode_ok(state, principal_uid)
 
 
+class _RuntimeSourceHold:
+    def __init__(self, path, principal_uid, fds):
+        self.path, self.principal_uid, self.fds = path, principal_uid, fds
+        self.before = [os.fstat(fd) for fd in fds]
+        self.names = [None] + path.split("/")[-(len(fds) - 1):] if len(fds) > 1 else [None]
+        self.work = {"read_bytes": 0, "sha_bytes": 0, "equality_bytes": 0,
+                     "close_calls": 0, "storage": []}
+
+    def recheck(self):
+        require(bool(self.fds), "E_CAPTURE")
+        for index, fd in enumerate(self.fds):
+            before = self.before[index]
+            state = os.fstat(fd)
+            named = os.stat(self.names[index], dir_fd=self.fds[index - 1],
+                            follow_symlinks=False) if index else state
+            row = {"ordinal": len(self.work["storage"]), "component": index,
+                   "before": _runtime_stat_values(before), "after": _runtime_stat_values(state),
+                   "named": _runtime_stat_values(named)}
+            if sys.platform == "darwin":
+                access = darwin_acl_entries(fd)
+                row["acl"] = {"access": access, "default": None}
+                acl_ok = darwin_install_acl_ok(access, self.principal_uid)
+            else:
+                access = linux_read_acl_xattr(fd, "system.posix_acl_access")
+                default = linux_read_acl_xattr(fd, "system.posix_acl_default")
+                row["acl"] = {"access": None if access is None else access.hex(),
+                              "default": None if default is None else default.hex()}
+                acl_ok = linux_acl_ok(access) and linux_acl_ok(default)
+            self.work["storage"].append(row)
+            self.work["metadata_bytes"] = self.work.get("metadata_bytes", 0) + len(canonical(row))
+            require(_runtime_stat_values(state) == _runtime_stat_values(before)
+                    == _runtime_stat_values(named), "E_CAPTURE")
+            require(owner_mode_fd_ok(fd, self.principal_uid) and acl_ok, "E_CAPTURE")
+            require(_runtime_stat_values(os.fstat(fd)) == _runtime_stat_values(state), "E_CAPTURE")
+
+    def close(self):
+        held, self.fds = self.fds, []
+        failure = None
+        for fd in reversed(held):
+            error = None
+            try:
+                os.close(fd)
+            except OSError as caught:
+                error = caught
+                if failure is None:
+                    failure = caught
+            try:
+                self.work["close_calls"] += 1
+                if error is not None:
+                    self.work.setdefault("close_errors", []).append({"errno": error.errno})
+            except MemoryError as caught:
+                if failure is None:
+                    failure = caught
+        if failure is not None:
+            raise failure
+
+
+def _runtime_stat_values(value):
+    return {key: getattr(value, "st_" + key) for key in
+            ("dev", "ino", "mode", "nlink", "uid", "gid", "size", "mtime_ns", "ctime_ns")}
+
+
+def _retain_runtime_source(path, principal_uid, fds):
+    if _capture_process is None or "runtime_sources" not in _capture_process:
+        return False
+    target = None
+    try:
+        target = os.dup(fds[-1])
+        held = _RuntimeSourceHold(path, principal_uid, fds[:-1] + [target])
+        held.native_fd = fds[-1]
+        _capture_process["runtime_sources"].append(held)
+        return True
+    except (OSError, Refusal, MemoryError, ValueError):
+        _capture_process["complete"] = False
+        if target is not None:
+            try:os.close(target)
+            except OSError:pass
+        return False
+
+
+def _runtime_work(field, amount):
+    work = _capture_process.setdefault("runtime_work", {})
+    limits = {"logical_bytes": 4 << 30, "files": 64, "physical_bytes": 24 << 30,
+              "read_bytes": 104 << 30, "write_bytes": 20 << 30, "sha_bytes": 80 << 30,
+              "equality_bytes": 56 << 30, "copy_bytes": 20 << 30}
+    require(field in limits and type(amount) is int and amount >= 0, "E_CAPTURE")
+    require(work.get(field, 0) + amount <= limits[field], "E_CAPTURE")
+    work[field] = work.get(field, 0) + amount
+
+
+def _runtime_failure(error):
+    _capture_process["complete"] = False
+    try:
+        _capture_process.setdefault("runtime_work", {})["incomplete"] = True
+        row = {"category": type(error).__name__, "errno": getattr(error, "errno", None),
+               "code": getattr(error, "code", None)}
+        if "runtime_failure" not in _capture_process:
+            _capture_process["runtime_failure"] = row
+        else:
+            _capture_process.setdefault("runtime_secondary_errors", []).append(row)
+    except MemoryError:
+        pass
+
+
+class _RuntimeCaptureFile:
+    def __init__(self, directory, source, slot, index, uid, gid):
+        self.directory, self.source, self.uid, self.gid = directory, source, uid, gid
+        self.size, self.fd, self.failure = 0, None, None
+        self.slot, self.index = slot, index
+        ordinal = len(_capture_process.setdefault("runtime_inventory", []))
+        self.name = "runtime-" + str(ordinal).zfill(4) + "-" + slot + "-" + str(index).zfill(4) + ".bin"
+        self.row = {"slot": slot, "index": index, "ordinal": ordinal, "locator": source.path,
+                    "file": self.name, "size_bytes": 0, "sha256": None, "errno": None}
+        source.recheck()
+        require(_capture_process.get("runtime_work", {}).get("files", 0) < 64, "E_CAPTURE")
+        self.fd = os.open(self.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                          0o600, dir_fd=directory)
+        try:
+            _runtime_work("files", 1)
+            _capture_process["runtime_inventory"].append(self.row)
+        except BaseException as error:
+            closing, self.fd = self.fd, None
+            _runtime_failure(error)
+            try:os.close(closing)
+            except OSError as secondary:_runtime_failure(secondary)
+            raise
+
+    def feed(self, chunk):
+        if self.failure is not None:
+            return
+        try:
+            view = memoryview(chunk)
+            while view:
+                part = view[:65536]
+                work = _capture_process.get("runtime_work", {})
+                require(work.get("logical_bytes", 0) + len(part) <= 4 << 30
+                        and work.get("physical_bytes", 0) + len(part) <= 24 << 30
+                        and work.get("write_bytes", 0) + len(part) <= 20 << 30
+                        and work.get("copy_bytes", 0) + len(part) <= 20 << 30, "E_CAPTURE")
+                sent = os.write(self.fd, part)
+                require(type(sent) is int and 0 < sent <= len(part), "E_CAPTURE")
+                self.size += sent
+                self.row["size_bytes"] = self.size
+                for field in ("logical_bytes", "physical_bytes", "write_bytes", "copy_bytes"):
+                    _runtime_work(field, sent)
+                view = view[sent:]
+        except (OSError, Refusal, MemoryError, ValueError) as error:
+            self.failure = error
+            _runtime_failure(error)
+
+    def finish(self, native_error=None):
+        closing, self.fd = self.fd, None
+        try:
+            if native_error is not None:
+                if self.failure is None:self.failure = native_error
+                self.row["errno"] = getattr(native_error, "errno", None)
+            if self.failure is None:
+                os.fchown(closing, self.uid, self.gid)
+                os.fchmod(closing, 0o440)
+                os.fsync(closing)
+        except (OSError, MemoryError) as error:
+            if self.failure is None:self.failure = error
+        finally:
+            try:os.close(closing)
+            except OSError as error:
+                if self.failure is None:self.failure = error
+                try:self.row["close_errno"] = error.errno
+                except MemoryError:pass
+        if self.failure is not None:
+            _runtime_failure(self.failure)
+            return
+        target = None
+        try:
+            self.source.recheck()
+            target = os.open(self.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=self.directory)
+            before = os.fstat(target)
+            require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1
+                    and before.st_uid == self.uid and before.st_gid == self.gid
+                    and stat.S_IMODE(before.st_mode) == 0o440 and before.st_size == self.size,
+                    "E_CAPTURE")
+            check_acl_fd(target, self.uid)
+            source_hash, carrier_hash = hashlib.sha256(), hashlib.sha256()
+            offset = 0
+            while offset < self.size:
+                count = min(65536, self.size - offset)
+                work = _capture_process.get("runtime_work", {})
+                require(work.get("read_bytes", 0) + 2 * count <= 104 << 30
+                        and work.get("sha_bytes", 0) + 2 * count <= 80 << 30
+                        and work.get("equality_bytes", 0) + 2 * count <= 56 << 30, "E_CAPTURE")
+                original = os.pread(self.source.fds[-1], count, offset)
+                _runtime_work("read_bytes", len(original))
+                recorded = os.pread(target, count, offset)
+                _runtime_work("read_bytes", len(recorded))
+                source_hash.update(original);carrier_hash.update(recorded)
+                _runtime_work("sha_bytes", len(original) + len(recorded))
+                _runtime_work("equality_bytes", len(original) + len(recorded))
+                require(len(original) == len(recorded) == count and original == recorded, "E_CAPTURE")
+                offset += count
+            require(self.size == self.source.before[-1].st_size
+                    and source_hash.digest() == carrier_hash.digest(), "E_CAPTURE")
+            self.source.recheck()
+            require(_runtime_stat_values(before) == _runtime_stat_values(os.fstat(target))
+                    == _runtime_stat_values(os.stat(self.name, dir_fd=self.directory,
+                                                   follow_symlinks=False)), "E_CAPTURE")
+            self.row["sha256"] = carrier_hash.hexdigest()
+        except (OSError, Refusal, MemoryError, ValueError) as error:
+            self.failure = error
+            _runtime_failure(error)
+        finally:
+            if target is not None:
+                try:os.close(target)
+                except OSError as error:_runtime_failure(error)
+
+
+def _runtime_capture_start(slot, index, fd):
+    if _capture_process is None or _capture_process.get("runtime_directory") is None:
+        return None
+    try:
+        locators = _capture_process["runtime_locators"]
+        require(slot in locators and type(index) is int and index >= 0, "E_CAPTURE")
+        path = locators[slot][index] if slot == "dyld_cache_files" else locators[slot]
+        require(slot == "dyld_cache_files" or index == 0, "E_CAPTURE")
+        state = _runtime_stat_values(os.fstat(fd))
+        sources = [item for item in _capture_process["runtime_sources"]
+                   if item.path == path and item.fds and item.native_fd == fd
+                   and _runtime_stat_values(item.before[-1]) == state]
+        require(bool(sources), "E_CAPTURE")
+        return _RuntimeCaptureFile(_capture_process["runtime_directory"], sources[-1], slot,
+                                   index, _capture_process["runtime_uid"], _capture_process["runtime_gid"])
+    except (OSError, Refusal, MemoryError, ValueError, KeyError, IndexError) as error:
+        _runtime_failure(error)
+        return None
+
+
+def _runtime_remember_raw(slot, fd, raw):
+    if _capture_process is None or "runtime_sources" not in _capture_process:
+        return
+    try:
+        state = _runtime_stat_values(os.fstat(fd))
+        sources = [item for item in _capture_process["runtime_sources"]
+                   if item.fds and item.native_fd == fd and _runtime_stat_values(item.before[-1]) == state]
+        require(bool(sources), "E_CAPTURE")
+        source = sources[-1]
+        source.recheck()
+        _capture_process.setdefault("runtime_early", []).append((slot, source, raw))
+    except (OSError, Refusal, MemoryError, ValueError) as error:
+        _runtime_failure(error)
+
+
+def _runtime_capture_finish(capture, error):
+    if capture is None:
+        return
+    try:
+        capture.finish(error)
+    except (OSError, Refusal, MemoryError, ValueError, TypeError) as failure:
+        _runtime_failure(failure)
+
+
+def _runtime_capture_begin(store_fd, uid, gid, attempt_id):
+    try:
+        pending = (".capture-" + attempt_id + ".pending").encode()
+        work = _capture_process.setdefault("publication_work", {})
+        _capture_process["runtime_directory"] = None
+        _capture_process["runtime_uid"], _capture_process["runtime_gid"] = uid, gid
+        directory = mkdir_excl(store_fd, pending, uid, gid, capture_work=work)
+        try:
+            _capture_process["runtime_directory"] = directory
+        except BaseException:
+            os.close(directory)
+            raise
+        for slot, source, raw in _capture_process.get("runtime_early", []):
+            capture = _RuntimeCaptureFile(directory, source, slot, 0, uid, gid)
+            capture.feed(raw)
+            _runtime_capture_finish(capture, None)
+    except (OSError, Refusal, MemoryError, ValueError) as error:
+        _runtime_failure(error)
+
+
+def _close_runtime_sources():
+    if _capture_process is None:
+        return
+    directory = _capture_process.get("runtime_directory")
+    _capture_process["runtime_directory"] = None
+    if directory is not None:
+        try:os.close(directory)
+        except OSError as error:_runtime_failure(error)
+    sources = _capture_process.get("runtime_sources", [])
+    for source in reversed(sources):
+        try:source.close()
+        except (OSError, MemoryError) as error:
+            _capture_process["complete"] = False
+            try:
+                _capture_process.setdefault("runtime_close_errors", []).append({
+                    "category": type(error).__name__, "errno": getattr(error, "errno", None)})
+            except MemoryError:
+                pass
+
+
 def secure_walk(path, principal_uid, check_mode):
     """Ancestors already validated by secure_ancestor_fds; the target's own
     owner/mode is checked here only when check_mode. Closes ancestor fds,
@@ -474,8 +772,9 @@ def secure_walk(path, principal_uid, check_mode):
         for f in fds:
             os.close(f)
         refuse("E_CONFIG")
-    for f in fds[:-1]:
-        os.close(f)
+    if not _retain_runtime_source(path, principal_uid, fds):
+        for f in fds[:-1]:
+            os.close(f)
     return fds[-1]
 
 
@@ -647,8 +946,15 @@ def read_all(fd):
         chunk = os.read(fd, 1048576)
         if not chunk:
             break
+        if _capture_process is not None and _capture_process.get("runtime_active") is not None:
+            _capture_process["runtime_active"].feed(chunk)
         chunks.append(chunk)
-    return b"".join(chunks)
+    raw = b"".join(chunks)
+    if _capture_process is not None:
+        slot = _capture_process.get("runtime_early_roles", {}).get(fd)
+        if slot is not None:
+            _runtime_remember_raw(slot, fd, raw)
+    return raw
 
 
 def read_all_or_refuse(fd):
@@ -679,6 +985,8 @@ def sha256_fd(fd):
             chunk = os.read(fd, 1048576)
             if not chunk:
                 return
+            if _capture_process is not None and _capture_process.get("runtime_active") is not None:
+                _capture_process["runtime_active"].feed(chunk)
             yield chunk
     return _slot_sha_values(chunks())
 
@@ -1185,38 +1493,59 @@ def measure_identities(identity_fds, instruction_raw, host_config_raw, host_supe
     def read_slot(slot):
         if forced(slot):
             return None
+        capture = _runtime_capture_start(slot, 0, identity_fds[slot])
+        read_error = None
         try:
+            if capture is not None:_capture_process["runtime_active"] = capture
             raw = read_all(identity_fds[slot])
             observed(slot, 0)
             return raw
         except OSError as error:
+            read_error = error
             observed(slot, 0, error)
             return None
+        finally:
+            if _capture_process is not None:_capture_process["runtime_active"] = None
+            _runtime_capture_finish(capture, read_error)
 
     def hash_slot(slot):
         # Streamed (sha256_fd), never a full read: this slot's bytes are
         # never needed, only their digest.
         if forced(slot):
             return None
+        capture = _runtime_capture_start(slot, 0, identity_fds[slot])
+        read_error = None
         try:
+            if capture is not None:_capture_process["runtime_active"] = capture
             measured = sha256_fd(identity_fds[slot])
             observed(slot, 0)
             return measured
         except OSError as error:
+            read_error = error
             observed(slot, 0, error)
             return None
+        finally:
+            if _capture_process is not None:_capture_process["runtime_active"] = None
+            _runtime_capture_finish(capture, read_error)
 
     def hash_slot_list(slot):
         if forced(slot):
             return None
         measured = []
         for index, fd in enumerate(identity_fds[slot]):
+            capture = _runtime_capture_start(slot, index, fd)
+            read_error = None
             try:
+                if capture is not None:_capture_process["runtime_active"] = capture
                 measured.append(sha256_fd(fd))
                 observed(slot, index)
             except OSError as error:
+                read_error = error
                 observed(slot, index, error)
                 return None
+            finally:
+                if _capture_process is not None:_capture_process["runtime_active"] = None
+                _runtime_capture_finish(capture, read_error)
         return measured
 
     slot_digests = {slot: hash_slot(slot) for slot in
@@ -1728,6 +2057,8 @@ def write_receipt_file(store_fd, attempt_fd, uid, gid, receipt_bytes):
                 raw["guest"] = _capture_process["guest"]
             if "runtime_reads" in _capture_process:
                 raw["runtime"] = {"slots": _capture_process["runtime_reads"]}
+                if "runtime_inventory" in _capture_process:
+                    raw["runtime"]["files"] = _capture_process["runtime_inventory"]
             work = _capture_process.setdefault("publication_work", {})
             published = _write_capture_file(store_fd, uid, gid, _capture_process["attempt_id"],
                 _capture_process["request_raw"], raw, _capture_process["complete"] and _capture_clocks["complete"],
@@ -1972,11 +2303,19 @@ def _publish_capture(store_fd, uid, gid, attempt_id, request_raw, raw, complete,
     def created():
         work["directories"] = work.get("directories", 0) + 1
         _capture_note(work, "capture-directory-created", name=pending.decode())
-    directory = mkdir_excl(store_fd, pending, uid, gid, on_created=created, capture_work=work)
+    if _capture_process is not None and _capture_process.get("runtime_directory") is not None:
+        directory = _capture_process["runtime_directory"]
+        _capture_process["runtime_directory"] = None
+    else:
+        directory = mkdir_excl(store_fd, pending, uid, gid, on_created=created, capture_work=work)
     failure = None
     try:
         write_excl(directory, "capture.json", capture_raw, uid, gid, capture_work=work)
         expected = {"capture.json": len(capture_raw)}
+        if _capture_process is not None:
+            for item in _capture_process.get("runtime_inventory", []):
+                require(item["sha256"] is not None and item["errno"] is None, "E_CAPTURE")
+                expected[item["file"]] = item["size_bytes"]
         if export_raw is not None:
             _write_capture_export(directory, uid, gid, export_raw, export_sha, export_work, work)
             expected["sandbox-export.bin"] = len(export_raw)
@@ -3582,11 +3921,18 @@ def test_hook_swap_store_ancestor(target):
 
 
 def run_launch(argv):
+    try:
+        return _run_launch(argv)
+    finally:
+        _close_runtime_sources()
+
+
+def _run_launch(argv):
     global _capture_clocks, _capture_process, _driver_capture_dir
     _driver_capture_dir = None
     _capture_clocks = {"wall": [], "monotonic": [], "complete": True}
     _capture_process = {"rows": [], "ordinals": {}, "bytes": 0, "complete": True,
-                        "driver_rest": [], "signals": []}
+                        "driver_rest": [], "signals": [], "runtime_sources": []}
     # R10.1: the ACL walk is checked before anything else, usage included.
     # This process itself runs as the principal (directly under sudo, R13.3;
     # the same account under test, R15.1), so os.getuid() *is* the
@@ -3607,6 +3953,7 @@ def run_launch(argv):
             fixed_fds[path] = secure_walk(path, os.getuid(), check_mode=False)
     require(os.getuid() != 0 and argv == ["launch"], "E_USAGE")
     config, config_raw = load_config(fixed_fds[config_path])
+    _runtime_remember_raw("host_config", fixed_fds[config_path], config_raw)
     _capture_process["runtime_locators"] = config["identity_paths"] | {
         "runtime_vfkit": config["runtime"]["vfkit"], "runtime_driver": config["runtime"]["driver"]}
     principal_uid = config["principal_uid"]
@@ -3619,6 +3966,7 @@ def run_launch(argv):
     # close, never re-opened by path.
     host_supervisor_path = os.path.join(install_dir, "host-supervisor.py")
     host_supervisor_raw = read_all_or_refuse(fixed_fds[host_supervisor_path])
+    _runtime_remember_raw("host_supervisor_source", fixed_fds[host_supervisor_path], host_supervisor_raw)
     for fd in fixed_fds.values():
         os.close(fd)
     # The interpreter path is measured too (R2.3's host_supervisor slot),
@@ -3627,8 +3975,12 @@ def run_launch(argv):
     # both system and third-party interpreters); the walk requires an
     # already-physical path (same convention as install_directory's own
     # realpath), so it is resolved once, here, before validation.
-    python_raw = read_all_or_refuse(secure_walk(os.path.realpath(sys.executable), principal_uid,
-                                                 check_mode=True))
+    python_fd = secure_walk(os.path.realpath(sys.executable), principal_uid, check_mode=True)
+    try:
+        python_raw = read_all_or_refuse(python_fd)
+        _runtime_remember_raw("host_python", python_fd, python_raw)
+    finally:
+        os.close(python_fd)
     # Every identity_paths and control-related installed_files fd is kept
     # open (R2.3/R4.2 read their content below, through these same fds --
     # never a fresh open() of the path string); runtime.vfkit/driver are
@@ -3645,6 +3997,7 @@ def run_launch(argv):
                                                   check_mode=True)
     installed_fds = {name: secure_walk(path, principal_uid, check_mode=True)
                       for name, path in config["installed_files"].items()}
+    _capture_process["runtime_early_roles"] = {fd: "installed_" + name for name, fd in installed_fds.items()}
     accepted_set_sha256, accepted_environments = check_accepted_set(installed_fds.pop("accepted_set"))
     registry_environments = load_registry(installed_fds.pop("registry"))
     installed_digests = {}
@@ -3655,6 +4008,7 @@ def run_launch(argv):
         os.close(fd)
     for fd in installed_fds.values():
         os.close(fd)
+    _capture_process["runtime_early_roles"] = {}
     store_fd = check_store_root(config["store_root"], principal_uid, config["consumer_gid"])
     if os.environ.get("YSTACK_TEST_SWAP_STORE_ANCESTOR"):
         test_hook_swap_store_ancestor(config["store_root"])
@@ -3706,6 +4060,7 @@ def run_launch(argv):
     # E_STORE_WRITE/exit 70, never a bare traceback (R10.4).
     try:
         attempt_fd = create_attempt_dir(store_fd, principal_uid, config["consumer_gid"], attempt_id)
+        _runtime_capture_begin(store_fd, principal_uid, config["consumer_gid"], attempt_id)
         admitted_at = _wall('sandbox/v1/host-supervisor.py:2771:0')
         reason_ids, measured, verifier_raw = phase_b_reasons(
             config, request_body, package, identity_fds, installed_digests, registry_environments,

@@ -81,6 +81,194 @@ refuses('frame-over',bound+b'x')
 print(json.dumps({'ordinary_only':True,'real_parent_qualification':False,'v2_native_context_preserved':True,
     'v3_payloads_retained':True,'fd_once_release':True,'negative_cases':cases,'frame_bound':len(bound)},sort_keys=True))
 PY_PARENT_FRAME
+/usr/bin/python3 -I -S -B - "$root" <<'PY_RUNTIME_CHAIN'
+import importlib.util,json,os,sys,tempfile
+from pathlib import Path
+root=Path(sys.argv[1]);spec=importlib.util.spec_from_file_location('host_runtime_chain',root/'sandbox/v1/host-supervisor.py')
+h=importlib.util.module_from_spec(spec);sys.modules[spec.name]=h;spec.loader.exec_module(h)
+previous=os.environ.get('YSTACK_SANDBOX_TRUST_ROOT');results=[]
+try:
+    with tempfile.TemporaryDirectory(prefix='ystack-runtime-chain-') as temporary:
+        base=Path(temporary);base.chmod(0o700);os.environ['YSTACK_SANDBOX_TRUST_ROOT']=str(base)
+        for label in ('stable','content-drift','parent-name-drift','capture-dup-error'):
+            directory=base/label;directory.mkdir(mode=0o700);path=directory/'input';path.write_bytes(b'original actual read');path.chmod(0o400)
+            h._capture_process={'complete':True,'runtime_sources':[]};original_dup=h.os.dup
+            if label=='capture-dup-error':
+                def failed_dup(fd):raise OSError(24,'fixture capture dup failure')
+                h.os.dup=failed_dup
+            try:native=h.secure_walk(str(path),os.getuid(),True)
+            finally:h.os.dup=original_dup
+            assert h.read_all(native)==b'original actual read';os.close(native)
+            if label=='capture-dup-error':
+                assert h._capture_process['complete'] is False and not h._capture_process['runtime_sources']
+                results.append({'case':label,'native_bytes_preserved':True});continue
+            held=h._capture_process['runtime_sources'][0];assert len(held.fds)==3
+            original_fds=list(held.fds);assert h.read_all(held.fds[-1])==b'original actual read'
+            held.recheck()
+            if label=='content-drift':path.chmod(0o600);path.write_bytes(b'changed original bytes');path.chmod(0o400)
+            if label=='parent-name-drift':directory.rename(directory.with_name(label+'-moved'));directory.mkdir(mode=0o700)
+            if label!='stable':
+                try:held.recheck()
+                except h.Refusal:pass
+                else:raise AssertionError(label)
+            close_calls={fd:0 for fd in original_fds};original_close=h.os.close
+            def closing(fd):
+                if fd in close_calls:close_calls[fd]+=1
+                return original_close(fd)
+            try:h.os.close=closing;h._close_runtime_sources();h._close_runtime_sources()
+            finally:h.os.close=original_close
+            assert all(count==1 for count in close_calls.values()) and not held.fds
+            for fd in original_fds:
+                try:os.fstat(fd)
+                except OSError as error:assert error.errno==9
+                else:raise AssertionError('runtime ancestor leaked')
+            results.append({'case':label,'native_target_already_closed':True,'close_calls':close_calls,'work':held.work})
+        native_error=OSError(5,'original launch refusal');original_run=h._run_launch
+        held=h._RuntimeSourceHold(str(base),os.getuid(),[os.open(base,os.O_RDONLY|os.O_DIRECTORY)])
+        h._capture_process={'complete':True,'runtime_sources':[held]}
+        def failed_run(argv):raise native_error
+        try:
+            h._run_launch=failed_run
+            try:h.run_launch(['launch'])
+            except OSError as error:assert error is native_error
+            else:raise AssertionError('native error swallowed')
+        finally:h._run_launch=original_run
+        assert not held.fds and held.work['close_calls']==1
+finally:
+    if previous is None:os.environ.pop('YSTACK_SANDBOX_TRUST_ROOT',None)
+    else:os.environ['YSTACK_SANDBOX_TRUST_ROOT']=previous
+print(json.dumps({'ordinary_only':True,'native_qualification':False,'host_chain_cases':results,
+    'early_native_failure_cleanup':True},sort_keys=True))
+PY_RUNTIME_CHAIN
+/usr/bin/python3 -I -S -B - "$root" <<'PY_RUNTIME_HOST_CARRIER'
+import importlib.util,json,os,sys,tempfile
+from pathlib import Path
+root=Path(sys.argv[1]);spec=importlib.util.spec_from_file_location('host_runtime_carrier',root/'sandbox/v1/host-supervisor.py')
+h=importlib.util.module_from_spec(spec);sys.modules[spec.name]=h;spec.loader.exec_module(h)
+previous=os.environ.get('YSTACK_SANDBOX_TRUST_ROOT');results=[]
+roles=('guest_kernel','guest_init','guest_supervisor','image','toolchain','verifier',
+    'runtime_vfkit','runtime_driver','vm_service','guest_kernel_config')
+try:
+    for case in ('complete','zero-write','partial-error','source-read-error'):
+        with tempfile.TemporaryDirectory(prefix='ystack-host-carrier-') as temporary:
+            base=Path(temporary);base.chmod(0o700);os.environ['YSTACK_SANDBOX_TRUST_ROOT']=str(base)
+            inputs=base/'inputs';inputs.mkdir(mode=0o700);store=base/'store';store.mkdir(mode=0o750);store.chmod(0o750)
+            paths={};originals={}
+            for role in (*roles,'dyld0','dyld1'):
+                raw=(b'original:'+role.encode()+b'!')*(140000 if role=='guest_kernel' else 3)
+                path=inputs/role;path.write_bytes(raw);path.chmod(0o400);paths[role]=str(path);originals[str(path)]=raw
+            early_path=inputs/'host-python';early_path.write_bytes(b'early original Python bytes');early_path.chmod(0o400)
+            originals[str(early_path)]=b'early original Python bytes'
+            h._capture_process={'complete':True,'runtime_sources':[]}
+            early_fd=h.secure_walk(str(early_path),os.getuid(),True)
+            early_raw=h.read_all(early_fd);h._runtime_remember_raw('host_python',early_fd,early_raw);os.close(early_fd)
+            fds={role:h.secure_walk(paths[role],os.getuid(),True) for role in roles}
+            fds['dyld_cache_files']=[h.secure_walk(paths[role],os.getuid(),True) for role in ('dyld0','dyld1')]
+            all_fds=[fd for value in fds.values() for fd in (value if isinstance(value,list) else [value])]
+            capture=h._capture_process;h._capture_process=None
+            original_read=h.os.read;native_reads=[];source_read_calls=0
+            def reading(fd,count):
+                global source_read_calls
+                if fd==fds['guest_kernel']:
+                    source_read_calls+=1
+                    if case=='source-read-error' and source_read_calls==2:
+                        native_reads.append((fd,count,None));raise OSError(5,'fixture original source read error')
+                value=original_read(fd,count)
+                if fd in all_fds:native_reads.append((fd,count,len(value)))
+                return value
+            try:
+                h.os.read=reading
+                baseline=h.measure_identities(fds,b'instructions',b'config',b'host-source',b'python')
+            finally:h.os.read=original_read
+            baseline_reads=native_reads[:];native_reads.clear();source_read_calls=0
+            h._capture_process=capture
+            capture['runtime_locators']={role:paths[role] for role in roles}|{'dyld_cache_files':[paths['dyld0'],paths['dyld1']]}
+            store_fd=os.open(store,os.O_RDONLY|os.O_DIRECTORY);original_write=h.os.write;trace=[];calls=0
+            def writing(fd,value):
+                global calls
+                calls+=1;trace.append(len(value));assert len(value)<=65536
+                if case=='zero-write' and calls==1:return 0
+                if case=='partial-error':
+                    if calls==1:return original_write(fd,value[:7])
+                    if calls==2:raise OSError(28,'fixture write failure')
+                return original_write(fd,value)
+            try:
+                h.os.write=writing;h.os.read=reading
+                h._runtime_capture_begin(store_fd,os.getuid(),os.getgid(),'attempt.carrier')
+                assert capture.get('runtime_directory') is not None
+                measured=h.measure_identities(fds,b'instructions',b'config',b'host-source',b'python')
+            finally:h.os.write=original_write;h.os.read=original_read
+            assert measured==baseline and native_reads==baseline_reads
+            assert all(count==1048576 for _,count,_ in native_reads)
+            for fd in all_fds:os.close(fd)
+            inventory=capture['runtime_inventory'];work=capture['runtime_work'];validation=0
+            assert len(inventory)==13 and len({row['file'] for row in inventory})==13
+            for row in inventory:
+                raw=(store/'.capture-attempt.carrier.pending'/row['file']).read_bytes();validation+=len(raw)
+                if row['sha256'] is not None:
+                    assert raw==originals[row['locator']] and h.sha256_hex(raw)==row['sha256']
+                    assert (store/'.capture-attempt.carrier.pending'/row['file']).stat().st_mode&0o777==0o440
+            if case=='complete':
+                total=sum(map(len,originals.values()))
+                assert capture['complete'] and all(row['sha256'] is not None for row in inventory)
+                assert work=={'files':13,'logical_bytes':total,'physical_bytes':total,'write_bytes':total,
+                    'copy_bytes':total,'read_bytes':2*total,'sha_bytes':2*total,'equality_bytes':2*total}
+            else:
+                assert not capture['complete'] and work['incomplete']
+                if case=='source-read-error':
+                    assert inventory[1]['slot']=='guest_kernel' and inventory[1]['errno']==5
+                    assert inventory[1]['sha256'] is None and inventory[1]['size_bytes']==1048576
+                    assert measured[0]['guest_kernel']==('unobserved',None)
+                else:
+                    assert inventory[0]['sha256'] is None
+                    assert inventory[0]['size_bytes']==(0 if case=='zero-write' else 7)
+                assert work['physical_bytes']==sum(row['size_bytes'] for row in inventory)
+            h._close_runtime_sources();os.close(store_fd)
+            assert all(not item.fds for item in capture['runtime_sources'])
+            assert capture['runtime_directory'] is None
+            results.append({'case':case,'native_identity_equal':True,'native_read_trace':native_reads,'runtime_work':work,
+                'inventory':inventory,'original_fixture_bytes':sum(map(len,originals.values())),
+                'additional_fixture_validation_reads':validation,'original_write_calls':len(trace),
+                'maximum_capture_write_chunk':max(trace),'native_Q':'UNKNOWN/incomplete beyond this measurement fixture'})
+    with tempfile.TemporaryDirectory(prefix='ystack-runtime-count-failure-') as temporary:
+        base=Path(temporary);base.chmod(0o700);os.environ['YSTACK_SANDBOX_TRUST_ROOT']=str(base)
+        store=base/'store';store.mkdir(mode=0o750);store.chmod(0o750)
+        path=base/'original';path.write_bytes(b'original');path.chmod(0o400)
+        h._capture_process={'complete':True,'runtime_sources':[]}
+        native=h.secure_walk(str(path),os.getuid(),True);os.close(native)
+        store_fd=os.open(store,os.O_RDONLY|os.O_DIRECTORY)
+        h._runtime_capture_begin(store_fd,os.getuid(),os.getgid(),'attempt.counter')
+        source=h._capture_process['runtime_sources'][0];directory=h._capture_process['runtime_directory']
+        original_work,original_open,original_close=h._runtime_work,h.os.open,h.os.close
+        counter_error=MemoryError('fixture files counter');opened=[];closed=[]
+        def failing_work(field,amount):
+            if field=='files':raise counter_error
+            return original_work(field,amount)
+        def opening(name,flags,*args,**kwargs):
+            fd=original_open(name,flags,*args,**kwargs)
+            if type(name) is str and name.startswith('runtime-'):opened.append(fd)
+            return fd
+        def closing(fd):
+            if fd in opened:closed.append(fd)
+            return original_close(fd)
+        try:
+            h._runtime_work=failing_work;h.os.open=opening;h.os.close=closing
+            try:h._RuntimeCaptureFile(directory,source,'host_python',0,os.getuid(),os.getgid())
+            except MemoryError as error:assert error is counter_error
+            else:raise AssertionError('counter failure swallowed')
+        finally:h._runtime_work=original_work;h.os.open=original_open;h.os.close=original_close
+        assert len(opened)==1 and closed==opened
+        assert not h._capture_process['complete'] and h._capture_process['runtime_work']['incomplete']
+        partials=list((store/'.capture-attempt.counter.pending').iterdir())
+        assert len(partials)==1 and partials[0].stat().st_size==0
+        h._close_runtime_sources();os.close(store_fd)
+        results.append({'case':'files-counter-MemoryError','once_close':True,'retained_partial_files':1,
+            'runtime_work':'UNKNOWN/incomplete; allocation occurred before failed counter'})
+finally:
+    if previous is None:os.environ.pop('YSTACK_SANDBOX_TRUST_ROOT',None)
+    else:os.environ['YSTACK_SANDBOX_TRUST_ROOT']=previous
+print(json.dumps({'ordinary_only':True,'real_runtime_collection':False,'host_carrier_cases':results},sort_keys=True))
+PY_RUNTIME_HOST_CARRIER
 /usr/bin/python3 -I -S -B - "$root" <<'PY_RUNTIME_VALUES'
 import copy
 import importlib.util
