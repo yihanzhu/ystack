@@ -2741,12 +2741,14 @@ class _HeldCaptureCopy:
         _capture_work_values(self.leaf, "P-capture-holds")
         work.setdefault("P_hold_leaves", []).append(self.leaf)
 
-    def _failed(self, error, site):
+    def _failed(self, error, site, primary=None):
         self.anchor.private_observations["unusable"] = True
         try:_capture_observation_error(self.leaf, "M", site, error)
         except Exception as observed:
             self.leaf["accounting_incomplete"] = True
-            if getattr(observed, "_scope_signal_cancel", False) and not getattr(error, "_scope_signal_cancel", False):
+            if (getattr(observed, "_scope_signal_cancel", False)
+                    and not getattr(error, "_scope_signal_cancel", False)
+                    and not getattr(primary, "_scope_signal_cancel", False)):
                 raise
 
     def _transfer(self):
@@ -2765,7 +2767,7 @@ class _HeldCaptureCopy:
         except BaseException as error:
             try:held.close()
             except Exception as closing:
-                self._failed(closing, "P-hold-registration-close")
+                self._failed(closing, "P-hold-registration-close", error)
                 if getattr(closing, "_scope_signal_cancel", False) and not getattr(error, "_scope_signal_cancel", False):raise
             raise
 

@@ -2071,6 +2071,76 @@ def raw16_t_lifecycle(root: Path) -> None:
     print(json.dumps({'raw16_T_controls': completed, 'ordinary_synthetic_runtime_only': True,
         'actual_source_segments_not_full_native_route': True, 'receipts': receipts}, sort_keys=True))
 
+def raw16_hp_registration_primary(root: Path) -> None:
+    import ast
+    import tempfile
+    spec=importlib.util.spec_from_file_location('HP_registration_consumer',root/'shadow/v1/_consumer.py')
+    c=importlib.util.module_from_spec(spec);sys.modules[spec.name]=c;spec.loader.exec_module(c)
+    scope=ast.parse((root/'scope/v1/read-shadow-evidence.py').read_text())
+    main=next(node for node in scope.body if isinstance(node,ast.FunctionDef) and node.name=='main')
+    handler=next(node for node in main.body if isinstance(node,ast.FunctionDef) and node.name=='cancel')
+    callbacks={};exec(compile(ast.Module(body=[handler],type_ignores=[]),'<actual-scope-handler>', 'exec'),callbacks)
+    original_acl=c._acl_state
+    c._acl_state=lambda *_:([],None) if sys.platform=='darwin' else (None,None)
+    try:
+        for marked in (True,False):
+            with tempfile.TemporaryDirectory(prefix='ystack-P-register-') as temporary:
+                base=Path(temporary).resolve();base.chmod(0o700)
+                directory=base/'reproduction';directory.mkdir(mode=0o700)
+                member=directory/'capture.json';member.write_bytes(b'ordinary P copied bytes');member.chmod(0o400)
+                anchor=c.Anchor({},b'',[],{},('',[]),('',[]),None)
+                parent=c._open_held(str(base),True,c._store_rule(os.geteuid(),os.getegid(),0o700,True,None),'E_STORE')
+                work=anchor.recording_work
+                key=str(parent.before.st_dev)+':'+str(parent.before.st_ino)
+                case_work=c._capture_work_values(work,key)
+                copied=c._HeldCaptureCopy(anchor,work,case_work)
+                events=[];closed=[];observed=[];first=[]
+                def cancel():
+                    try:callbacks['cancel'](signal.SIGTERM,None)
+                    except InterruptedError as error:
+                        events.append(error)
+                        return error
+                class Reject(list):
+                    def append(self,held):
+                        error=cancel() if marked else MemoryError('ordinary first registration failure')
+                        first.append(error)
+                        raise error
+                copied.owned=Reject()
+                close,observe=os.close,c._capture_observe
+                def close_once(fd):
+                    close(fd);closed.append(fd)
+                    if len(closed)==1:raise OSError(errno.EBADF,'ordinary registration compensation close')
+                def observer(work,kind,site,value,*args,**kwargs):
+                    if site=='P-hold-registration-close':
+                        observed.append({'site':site,'errno':value['errno'],'category':value['category']})
+                        raise cancel()
+                    return observe(work,kind,site,value,*args,**kwargs)
+                caught=None
+                try:
+                    os.close=close_once;c._capture_observe=observer
+                    try:copied.acquire(parent,'reproduction',{'capture.json':member.stat()}, {})
+                    except BaseException as error:caught=error
+                    assert len(first)==1 and len(observed)==1 and observed[0]['errno']==errno.EBADF
+                    if marked:
+                        assert len(events)==2 and events[0] is not events[1] and caught is first[0]
+                    else:assert len(events)==1 and caught is events[0] and caught is not first[0]
+                    assert copied.closed and not copied.owned
+                    assert len(closed)==len(set(closed)) and closed
+                    for fd in closed:
+                        try:os.fstat(fd)
+                        except OSError as error:assert error.errno==errno.EBADF
+                        else:raise AssertionError('registration fd remained open')
+                    before=len(closed);copied.close();assert len(closed)==before
+                    print(json.dumps({'marked_registration_primary':marked,'actual_first_preserved':caught is first[0],
+                        'first_marked_preserved':caught is events[0],'distinct_cancel_objects':len(events),
+                        'closed_fd_count':len(closed),'once_close':True,'observer':observed,'actual_work':work,
+                        'ordinary_private_P_only':True,'qualification':False},sort_keys=True))
+                finally:
+                    os.close=close;c._capture_observe=observe
+                    copied.close();parent.close()
+    finally:c._acl_state=original_acl
+
+
 def raw16_hp_handoff(root: Path) -> None:
     import ast
     text = (root/'scripts/test/evals-malicious.test.sh').read_text()
