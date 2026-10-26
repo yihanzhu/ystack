@@ -1,5 +1,8 @@
 #!/usr/bin/python3
 import importlib.util
+import hashlib
+import os
+import stat
 import json
 from pathlib import Path
 import struct
@@ -677,3 +680,400 @@ def _guest_values(runtime_root, private_work, guest_wire):
     if result.returncode != 0 or result.stderr or len(result.stdout) > 20 * 1024 * 1024:
         raise ValueError("guest value result")
     return result.stdout
+
+
+def _seed_require(value):
+    if not value:
+        raise ValueError("E_RELATION")
+
+
+def _seed_first(first, later):
+    if first is None or (getattr(later, "_scope_signal_cancel", False)
+                         and not getattr(first, "_scope_signal_cancel", False)):
+        return later
+    return first
+
+
+def _seed_module(value, names):
+    source = Path(__file__).resolve().parents[2] / "shadow/v1/_consumer.py"
+    matches = []
+    for name in ("ystack_shadow_consumer", "scope_shadow_consumer"):
+        module = sys.modules.get(name)
+        if module is None:
+            continue
+        if any(type(value) is getattr(module, member) for member in names):
+            _seed_require(Path(module.__file__).absolute() == source
+                and getattr(module.__spec__, "origin", None) == str(source)
+                and module._source_root() == str(source.parents[2]))
+            matches.append(module)
+    _seed_require(len(matches) == 1)
+    return matches[0]
+
+
+class _SeedAssembly:
+    _phases = ("reproduction", "write", "kill", "coverage")
+    _raw_groups = {"incident", "identities", "entropy", "clocks", "storage", "guest",
+                   "host", "source_pages", "commands", "runtime"}
+
+    def __init__(self, destination, case_id, window_work):
+        self.c = _seed_module(destination, ("HeldPath",))
+        c = self.c
+        c._require(case_id in {"malicious.incident-symptom-text", "malicious.checked-file-bytes",
+            "malicious.commit-message", "malicious.unread-forge-text"} and type(window_work) is dict,
+            "E_STORE")
+        self.case_id, self.window = case_id, window_work
+        self.work, self.files, self.stages, self.output_holds = {}, {}, [], []
+        self.root, self.failure, self.closed, self.raw = None, None, False, None
+        self._released_holds = []
+        self.phase = 0
+        c._capture_work_values(self.work, "C1-seed")
+        self.case_work = c._capture_work_values(window_work, case_id)
+        cases = window_work.setdefault("C1_cases", [])
+        _seed_require(case_id not in cases and len(cases) < 4)
+        cases.append(case_id)
+        self.work["runtime_case_carry_in"] = self.case_work.get("runtime", {})
+        self.work["runtime_window_carry_in"] = window_work.get("runtime", {})
+        self.runtime_bytes, self.runtime_files = 0, 0
+        try:
+            destination.recheck("E_STORE")
+            _seed_require(not destination.listdir())
+            rows = c._clone(destination, "E_STORE", self.work, "M")
+            try:self.root = c.HeldPath(destination.path, rows, recording_work=self.work, accounting_kind="M")
+            except BaseException as primary:
+                c._release_held_acquisition(rows, None, primary, self.work)
+                raise
+            self._root_check()
+            self._transfer()
+        except BaseException as error:
+            self._failed(error, "seed-open")
+            self.close(error)
+            raise
+
+    def _failed(self, error, site):
+        self.failure = _seed_first(self.failure, error)
+        self.work["seed_incomplete"] = True
+        try:self.c._capture_observation_error(self.work, "M", site, error)
+        except BaseException as later:self.failure = _seed_first(self.failure, later)
+
+    def _transfer(self):
+        try:
+            self.c._capture_transfer_work(self.work, self.window, self.case_work)
+            previous = self.work.setdefault("transferred_seed_processing", {})
+            for field, current in self.work.get("seed_processing", {}).items():
+                delta = current - previous.get(field, 0)
+                _seed_require(delta >= 0)
+                for target in (self.window, self.case_work):
+                    counts = target.setdefault("seed_processing", {})
+                    counts[field] = counts.get(field, 0) + delta
+                previous[field] = current
+        except BaseException as error:
+            self.work["transfer_incomplete"] = True
+            self._failed(error, "seed-transfer")
+            raise self.failure
+
+    def _root_check(self):
+        c = self.c
+        self.root.recheck("E_STORE")
+        before = c._capture_metadata(self.root.fd, self.work, "M")
+        access, default = c._acl_state(self.root.fd, None)
+        c._capture_observe(self.work, "M", "seed-root-acl", {"access": access, "default": default})
+        _seed_require(c._store_values(os.geteuid(), os.getegid(), 0o700, True,
+            c._stat_values(before), access, default, sys.platform))
+        _seed_require(c._identity(before) == c._identity(self.root.before))
+
+    def _charge(self, field, amount, kind):
+        c = self.c
+        _seed_require(type(amount) is int and amount >= 0)
+        counts = self.work.setdefault("seed_processing", {})
+        counts[field] = counts.get(field, 0) + amount
+        if kind == "runtime":
+            mapping = {"R": "read_bytes", "W": "write_bytes", "H": "sha_bytes",
+                       "E": "equality_bytes", "C": "copy_bytes"}
+            c._runtime_account(self.work, mapping[field], amount)
+        if kind == "runtime":
+            if field == "W":c._runtime_account(self.work, "physical_bytes", amount)
+            return
+        if field in {"R", "W"}:
+            c._capture_copy_room(self.work, amount, kind == "export")
+            self.work["read_bytes" if field == "R" else "write_bytes"] += amount
+            if field == "W":self.work["physical_bytes"] += amount
+            if kind == "export":
+                self.work["export_read_bytes" if field == "R" else "export_write_bytes"] += amount
+                if field == "W":self.work["export_physical_bytes"] += amount
+            elif kind != "runtime":
+                c._capture_account(self.work, kind, "read_bytes" if field == "R" else "write_bytes", amount)
+                if field == "W":c._capture_account(self.work, kind, "physical_bytes", amount)
+
+    def _read(self, fd, size, offset, kind):
+        if kind == "runtime":self.c._runtime_account(self.work, "read_bytes", size, commit=False)
+        else:self.c._capture_copy_room(self.work, size, kind == "export")
+        try:raw = os.pread(fd, size, offset)
+        except BaseException:
+            self.work["read_incomplete"] = True
+            raise
+        self._charge("R", len(raw), kind)
+        _seed_require(len(raw) == size)
+        return raw
+
+    def _close_fd(self, fd, primary=None):
+        failure = primary
+        error = None
+        try:os.close(fd)
+        except BaseException as later:
+            error = later
+            failure = _seed_first(failure, later)
+        try:
+            self.work["close_calls"] = self.work.get("close_calls", 0) + 1
+            self.c._capture_observe(self.work, "M", "seed-close", {"return": 0 if error is None else -1,
+                "errno": None if error is None else getattr(error, "errno", None)})
+        except BaseException as later:failure = _seed_first(failure, later)
+        if failure is not None:
+            self._failed(failure, "seed-close")
+            if failure is not primary:raise failure
+
+    def _source_check(self, owner, held):
+        _seed_require(type(held) is owner.HeldPath and bool(held.components))
+        held.recheck("E_STORE", self.work, "M")
+        _seed_require(stat.S_ISREG(held.before.st_mode) and held.before.st_nlink == 1
+                      and stat.S_IMODE(held.before.st_mode) == 0o400)
+        access, default = owner._acl_state(held.fd, None)
+        self.c._capture_observe(self.work, "M", "seed-source-acl", {"access": access, "default": default})
+        _seed_require(access == [] if sys.platform == "darwin" else access is None and default is None)
+        held.recheck("E_STORE", self.work, "M")
+
+    def _copy(self, owner, held, name, expected, kind):
+        c = self.c
+        _seed_require(self.failure is None and not self.closed and name not in self.files
+                      and "/" not in name and c._sha(expected) and len(self.files) < 256)
+        self._root_check()
+        self._source_check(owner, held)
+        size = held.before.st_size
+        _seed_require(0 <= size <= (4 << 30 if kind == "runtime" else c.EXPORT_LIMIT if kind == "export" else c.DOCUMENT_LIMIT))
+        if kind == "runtime":
+            _seed_require(self.runtime_files < 64 and self.runtime_bytes + size <= 4 << 30)
+            c._runtime_account(self.work, "physical_files", 1, commit=False)
+        state = self.root.before
+        target = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                         0o400, dir_fd=self.root.fd)
+        primary = None
+        measured = hashlib.sha256()
+        try:
+            if kind != "runtime":self.work["files"] += 1
+            if kind == "export":self.work["export_files"] += 1
+            if kind == "runtime":c._runtime_account(self.work, "physical_files", 1)
+            offset = 0
+            while offset < size:
+                raw = self._read(held.fd, min(65536, size - offset), offset, kind)
+                measured.update(raw);self._charge("H", len(raw), kind)
+                view = memoryview(raw)
+                while view:
+                    c._capture_copy_room(self.work, min(len(view), 65536), kind == "export")
+                    count = os.write(target, view[:65536])
+                    _seed_require(0 < count <= min(len(view), 65536))
+                    self._charge("W", count, kind);self._charge("C", count, kind)
+                    view = view[count:]
+                offset += len(raw)
+            _seed_require(measured.hexdigest() == expected)
+            os.fsync(target)
+        except BaseException as error:
+            primary = error
+            self._failed(error, "seed-copy")
+            raise
+        finally:self._close_fd(target, primary)
+        c._refresh_recording_directory(self.root, state, self.work)
+        index = len(self.root.components) - 1
+        for previous in self.output_holds:
+            before = previous.components[index].before
+            current = self.root.before
+            _seed_require((before.st_dev, before.st_ino, before.st_uid, before.st_gid, before.st_mode)
+                == (current.st_dev, current.st_ino, current.st_uid, current.st_gid, current.st_mode))
+            previous.components[index].before = current
+        os.fsync(self.root.fd)
+        installed = c._open_child(self.root, name, False,
+            c._store_rule(os.geteuid(), os.getegid(), 0o400, False), "E_STORE",
+            recording_work=self.work, accounting_kind="M")
+        try:self.output_holds.append(installed)
+        except BaseException as error:
+            if not (self.output_holds and self.output_holds[-1] is installed):installed.close()
+            self._failed(error, "seed-hold-registration")
+            raise
+        left_hash, right_hash = hashlib.sha256(), hashlib.sha256()
+        self._source_check(owner, held)
+        installed.recheck("E_STORE")
+        offset = 0
+        while offset < size:
+            count = min(65536, size - offset)
+            left = self._read(held.fd, count, offset, kind)
+            right = self._read(installed.fd, count, offset, kind)
+            left_hash.update(left);right_hash.update(right)
+            self._charge("H", len(left) + len(right), kind)
+            self._charge("E", len(left) + len(right), kind)
+            _seed_require(left == right)
+            offset += count
+        _seed_require(left_hash.hexdigest() == right_hash.hexdigest() == measured.hexdigest() == expected)
+        self._source_check(owner, held)
+        installed.recheck("E_STORE")
+        self.files[name] = {"size_bytes": size, "sha256": expected, "kind": kind}
+        if kind == "runtime":
+            self.runtime_files += 1;self.runtime_bytes += size
+        self._transfer()
+        return installed
+
+    def _native(self, native, phase):
+        owner = _seed_module(native, ("_HeldStoreRead", "_HeldCoverageRead"))
+        _seed_require(type(native.anchor) is owner.Anchor and bool(native.held)
+            and type(native.capture) is owner._HeldCaptureRead
+            and native.capture.native is native and native.capture.anchor is native.anchor
+            and native.capture.attempt_id == native.attempt_id
+            and type(native.capture.request_raw) is bytes and bool(native.capture.held))
+        if phase in {"kill", "coverage"}:_seed_require(type(native) is owner._HeldCoverageRead)
+        else:_seed_require(type(native) is owner._HeldStoreRead)
+        native.recheck("E_STORE")
+        groups = owner._capture_for_replay(native.capture.snapshots, native.attempt_id, native.capture.request_raw)
+        expected = _capture_completion_values(Path(__file__).resolve().parents[2], native.attempt_id,
+            native.capture.request_raw, native.capture.snapshots["capture.json"])
+        _seed_require(expected == native.capture.snapshots["complete.json"])
+        return owner, groups
+
+    def _P_files(self, owner, phase, native, capture_P, local_P):
+        _seed_require(type(capture_P) is owner._HeldCaptureCopy and capture_P.anchor is native.anchor
+            and not capture_P.closed and capture_P.directory is not None)
+        if phase in {"reproduction", "write"}:
+            _seed_require(capture_P.directory.components[-1].name == phase)
+        else:
+            _seed_require(capture_P.directory.components[-1].name.startswith("source-")
+                and len(capture_P.directory.components[-1].name) == 11
+                and capture_P.directory.components[-1].name[7:].isdigit())
+        _seed_require(type(local_P) in (list, tuple) and len(local_P) <= 64)
+        carriers = [capture_P, *local_P]
+        _seed_require(len({id(item) for item in carriers}) == len(carriers))
+        facts, bindings = [], []
+        for index, copied in enumerate(carriers):
+            _seed_require(type(copied) is owner._HeldCaptureCopy and copied.anchor is native.anchor
+                and not copied.closed and bool(copied.owned) and copied.directory is not None)
+            copied.recheck()
+            _seed_require(not owner._capture_work_incomplete(copied.leaf) and not copied.leaf.get("metadata_failure"))
+            if copied is capture_P:
+                expected_names = set(native.capture.snapshots) | {"origin-observation.json", "consumer-observations.json"}
+                if "sandbox-export.bin" in native.capture.snapshots:expected_names.add("launch-binding.json")
+                _seed_require(set(copied.members) == expected_names)
+                expected_bytes = native.capture.snapshots | {"origin-observation.json": native.capture_origin}
+            elif set(copied.members) == {"parent-frame.bin", "helper-build-record.json", "native-dependency-record.json"}:
+                row = native.anchor.private_observations["parent_inputs"]
+                _seed_require(row["attempt_id"] == native.attempt_id and row["request_sha256"] == owner.digest(native.capture.request_raw))
+                expected_bytes = {}
+                expected_rows = {row["file"]: row for row in row["files"]}
+            else:
+                T_sources = copied.T_companions
+                _seed_require(type(T_sources) is list and len(T_sources) <= 2)
+                if T_sources:
+                    selected = [source for source in T_sources
+                        if copied.directory.components[-1].name == "preparation-runtime-" + source.binding["operation"]]
+                    _seed_require(len(selected) == 1)
+                    source = selected[0]
+                    _seed_require(type(source) is owner._HeldPreparationSources and source.anchor is native.anchor
+                        and not source.closed and source.stable)
+                    source.recheck()
+                    _seed_require(source.stable and not source.failed)
+                    binding = source.binding
+                    raw, runtime, marker = owner._preparation_capture_binding_values(binding["capture_raw"],
+                        binding["operation"], binding["input_raw"], binding["response_raw"])
+                    _seed_require(marker == binding["marker"] and owner.digest(binding["capture_raw"])
+                        == binding["capture_sha256"] and {name: row["sha256"] for name, row in runtime.items()}
+                        == copied.runtime_sha256 == binding["runtime_sha256"])
+                    _seed_require(set(copied.members) == {"capture.json"} | set(copied.runtime_sha256))
+                    _seed_require(set(source.members) == set(binding["target_states"]))
+                    expected_bytes = {"capture.json": binding["capture_raw"]}
+                    bindings.append(source)
+                else:
+                    expected_bytes = {}
+                    rows = native.anchor.private_observations["local_runtime"]
+                    expected_rows = {row["file"]: row for row in rows
+                        if row["attempt_id"] == native.attempt_id
+                        and row["request_sha256"] == owner.digest(native.capture.request_raw)}
+                    _seed_require(set(copied.members) <= set(expected_rows) and copied.runtime_sha256)
+            for name, held in sorted(copied.members.items()):
+                _seed_require(type(name) is str and "/" not in name and type(held) is owner.HeldPath)
+                if name in copied.runtime_sha256:
+                    expected, kind = copied.runtime_sha256[name], "runtime"
+                elif name == "sandbox-export.bin":
+                    value = native.capture.snapshots[name]
+                    _seed_require(type(value) is owner._ExportSnapshot)
+                    expected, kind = value.acquisition_sha, "export"
+                elif name in expected_bytes:
+                    value = expected_bytes[name]
+                    _seed_require(type(value) is bytes)
+                    expected, kind = owner.digest(value), "W" if name == "complete.json" else "raw"
+                elif name in {"consumer-observations.json", "launch-binding.json"}:
+                    value = held.read(owner.DOCUMENT_LIMIT, "E_STORE", self.work)
+                    parsed = owner._json(value, owner.DOCUMENT_LIMIT, "E_STORE")
+                    _seed_require(owner.canonical(parsed) == value and parsed["attempt_id"] == native.attempt_id
+                        and parsed["request_sha256"] == owner.digest(native.capture.request_raw))
+                    expected, kind = owner.digest(value), "M"
+                else:
+                    _seed_require(name in expected_rows and held.before.st_size == expected_rows[name]["size_bytes"])
+                    expected, kind = expected_rows[name]["sha256"], "M"
+                installed = self._copy(owner, held, phase + "-" + str(index).zfill(2) + "-" + name, expected, kind)
+                facts.append((name, expected, installed.before.st_size))
+            copied.recheck()
+        if phase in {"reproduction", "write"}:
+            _seed_require({source.binding["operation"] for source in bindings} == {"prepare", "inspect"})
+            _seed_require(any(set(item.members) == {"parent-frame.bin", "helper-build-record.json", "native-dependency-record.json"}
+                              for item in local_P))
+        return carriers, bindings, facts
+
+    def _stage(self, phase, native, capture_P, local_P, outer_raw=None, expectation_raw=None):
+        _seed_require(self.failure is None and not self.closed and self.phase < 4
+                      and phase == self._phases[self.phase])
+        try:
+            owner, groups = self._native(native, phase)
+            request_raw = native.capture.request_raw
+            if phase in {"reproduction", "write"}:
+                _seed_require(type(outer_raw) is bytes and type(expectation_raw) is bytes)
+                kind = "shadow_enforced_request" if phase == "reproduction" else "shadow_write_request"
+                projected = owner._launch_capture_values(native.capture.snapshots["capture.json"], outer_raw,
+                    request_raw, expectation_raw, native.snapshots["receipt.json"], kind)
+                _seed_require(projected == native.projected_capture)
+            else:
+                _seed_require(native.snapshots["payload/request.json"] == request_raw
+                    and ((phase == "kill" and native.configuration.operation == "kill-register-read")
+                         or (phase == "coverage" and native.configuration.operation == "coverage-read")))
+            carriers, bindings, facts = self._P_files(owner, phase, native, capture_P, local_P)
+            self.stages.append({"phase": phase, "native": native, "owner": owner, "groups": groups,
+                "P": carriers, "T": bindings, "facts": facts, "request_raw": request_raw,
+                "outer_raw": outer_raw, "expectation_raw": expectation_raw})
+            self.phase += 1
+            self._transfer()
+        except BaseException as error:
+            self._failed(error, "seed-stage-" + phase)
+            raise self.failure
+
+    def reproduction(self, native, capture_P, local_P, outer_raw, expectation_raw):
+        self._stage("reproduction", native, capture_P, local_P, outer_raw, expectation_raw)
+
+    def write(self, native, capture_P, local_P, outer_raw, expectation_raw):
+        self._stage("write", native, capture_P, local_P, outer_raw, expectation_raw)
+
+    def kill(self, native, capture_P, local_P):
+        self._stage("kill", native, capture_P, local_P)
+
+    def coverage(self, native, capture_P, local_P):
+        self._stage("coverage", native, capture_P, local_P)
+
+    def close(self, primary=None):
+        if self.closed:return
+        self.closed = True
+        failure = primary
+        holds, self.output_holds = self.output_holds, self._released_holds
+        for held in reversed(holds):
+            try:held.close()
+            except BaseException as later:failure = _seed_first(failure, later)
+        root, self.root = self.root, None
+        if root is not None:
+            try:root.close()
+            except BaseException as later:failure = _seed_first(failure, later)
+        try:self._transfer()
+        except BaseException as later:failure = _seed_first(failure, later)
+        if failure is not None:
+            self._failed(failure, "seed-final-close")
+            if failure is not primary:raise failure
