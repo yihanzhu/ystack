@@ -4072,6 +4072,56 @@ def raw16_sudo_companion(root: Path) -> None:
     finally:c._acl_state = acl
     print(json.dumps({'fixed_sudo_companion_controls': results}, sort_keys=True))
 
+def raw16_noexport_projection_values(root: Path) -> None:
+    owners = {}
+    paths = {"host": "sandbox/v1/host-supervisor.py", "consumer": "shadow/v1/_consumer.py",
+             "replay": "evals/v1/replay-malicious.py"}
+    for name, path in paths.items():
+        spec = importlib.util.spec_from_file_location("noexport_" + name, root / path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        owners[name] = module
+    host, consumer, replay = (owners[name] for name in ("host", "consumer", "replay"))
+    results = []
+    for operation, kind, wrapper in (
+        ("reproduction", "shadow_enforced_request", replay._reproduction_capture_values),
+        ("write", "shadow_write_request", replay._write_capture_values),
+    ):
+        attempt_id = "attempt.noexport." + operation
+        attempt = {"attempt_id": attempt_id, "attempt_number": 1}
+        body = {"attempt": attempt, "store_id": "store.ordinary",
+                "control": {"ordinary": "control"}, "subject": {"ordinary": "subject"}}
+        launch = host.canonical({"schema_version": 1, "kind": "sandbox_launch_request",
+                                 "id": attempt_id, "body": body})
+        bound = attempt | {"launch_request_sha256": host.sha256_hex(launch)}
+        outer = host.canonical({"schema_version": 1, "kind": kind, "id": attempt_id,
+                                "body": {"attempt_id": attempt_id}})
+        expectation = host.canonical({"schema_version": 1, "kind": "sandbox_receipt_expectation",
+                                      "id": attempt_id, "body": body | {"attempt": bound}})
+        receipt = host.canonical({"schema_version": 1, "kind": "sandbox_enforcement_receipt",
+            "id": "receipt." + host.sha256_hex(launch), "body": {"attempt": bound,
+            "control": body["control"], "subject": body["subject"],
+            "origin": {"store_id": body["store_id"]}}})
+        groups = {"host": {"process": [], "driver_rest": [], "signals": []},
+                  "clocks": {"wall": [], "monotonic": []}}
+        capture = host._capture_values(attempt_id, launch, groups, True)
+        assert consumer._capture_export_reference(groups) is None
+        assert consumer._capture_envelope_values(attempt_id, launch, groups) == capture
+        assert consumer._launch_capture_values(capture, outer, launch, expectation, receipt, kind) == groups
+        rebuilt, projected = wrapper(root, capture, groups, outer, launch, expectation, receipt)
+        assert rebuilt == capture
+        assert projected == groups
+        results.append({"operation": operation, "rebuilt_equals_capture": True,
+            "projected_equals_groups": True, "no_export_reference": True,
+            "input_bytes": {"capture": len(capture), "outer": len(outer), "launch": len(launch),
+                            "expectation": len(expectation), "receipt": len(receipt)},
+            "capture_sha256": host.sha256_hex(capture), "rebuilt_bytes": len(rebuilt),
+            "projected_canonical_bytes": len(host.canonical(projected))})
+    print(json.dumps({"noexport_value_positives": results,
+        "full_recording_costs_and_qualification": "NOT_PROVEN"}, sort_keys=True))
+
+
 def main() -> int:
     try:
         args = parser().parse_args()
