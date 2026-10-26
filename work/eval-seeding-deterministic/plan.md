@@ -2134,14 +2134,15 @@ gates (R9.6).
   M2–M4. About 25–45 lines cover predicates/error handling/pins, 170–290 cover
   launcher, direct-program and scope regressions, and 15–30 cover docs. Use readable
   complete tests; an overrun pauses for a separate size amendment, never test cuts.
-- PR 1b: `review_size: accepted-exception`, 28,000–42,000 changed lines for the
+- PR 1b: `review_size: accepted-exception`, 49,000–60,000 changed lines for the
   complete unmerged two-source concern, counting additions plus deletions.
   The refreshed dependency contributes 21,605 changed lines, including the complete
   scope-qualification suite. The retained relay contributes about 1,400 changed
-  lines. Budget 2,000–5,000 for shared owner extraction/capture, 700–1,500 for fixed
-  replay/inventory integration, 2,000–6,000 for complete new and retained regression
-  proof, and 300–1,000 for integration/pins/docs/manifest. Overlap is measured once,
-  never assumed to reduce the range. These are planning components, not quotas.
+  lines. The range covers complete owner acquisition/accounting, fixed seed
+  assembly, run/dashboard staging, full replay, all required regressions and
+  integration/pins/docs/manifest. It includes integration and review fixes within
+  the same concern. Measure overlap once; do not assume savings or treat estimates
+  as quotas.
   Record the gross retained diff, dependency/adoption delta, this concern's delta
   and the actual publication-base diff. Keep both ledgers when dependencies land;
   never subtract inherited work to claim a smaller completed concern. An overrun
@@ -2151,10 +2152,9 @@ gates (R9.6).
   operator-graded seed and its test. 150-450 of them are verbatim verdict bytes, which
   cannot leave the PR whose test checks their digests.
 - PR 3: `review_size: standard`, about 300-400 net added lines.
-- This plan-only amendment: `review_size: standard`, expected 40–90 changed
-  lines. One concern: separate inactive C construction from B/C acceptance.
-  The estimate covers the source-order clauses and current artifact/source
-  bindings. Preserve all implementation content, tests and acceptance gates.
+- This plan-only amendment: `review_size: standard`, expected 15–25 changed
+  lines. One concern: the complete PR 1b size estimate. Preserve all implementation
+  content, paths, source order, tests and acceptance gates.
 
 Each range waives only the soft line signal, never scope, tests, CI, review or human
 merge.
