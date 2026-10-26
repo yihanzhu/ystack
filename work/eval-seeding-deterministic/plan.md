@@ -1,5 +1,5 @@
 ---
-spec-blob: e6de25560af0e3e7ff6fdbf9f45cd5f91f875c47
+spec-blob: 367d3ab381e6e30085162597bf25de0dc5c88dfd
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-26
@@ -14,13 +14,17 @@ one complete two-source delivery. Source preparation does not accept a dependenc
 a real recording, native qualification or either seed batch.
 
 This plan binds accepted G2 spec blob
-`e6de25560af0e3e7ff6fdbf9f45cd5f91f875c47` at main
-`ea7a91c1a16128099c8b80a304b81f8909d61e1a`. RAW16 acquisition design
-locations bind `c1d9d23e42e6efe2d6da1aae3d23b34564b4080d`, whose base is
-`ae634c86701da04767c41a4d5f416f0c36517cf0`. Keep older clock/owner labels
-and adoption pins as their original anchors, not current resume identities.
-The frozen source `6f219579f72f73ddd3703f32b5f4a102ae8c175c` remains
-unaccepted context until fresh exact-source preflight. The operator has accepted
+`367d3ab381e6e30085162597bf25de0dc5c88dfd` at main
+`14d18fcd33e5c5af7306c6c0b8ead5e0f043d095`. RAW16 acquisition design
+locations retain historical source `c1d9d23e42e6efe2d6da1aae3d23b34564b4080d`
+and base `ae634c86701da04767c41a4d5f416f0c36517cf0`. T lifecycle sites bind
+`25af14412bbd6fc4b5c0b1ca03ba43e545ecb4bc`. Keep older clock/owner labels,
+adoption pins and frozen `6f219579f72f73ddd3703f32b5f4a102ae8c175c` as
+historical anchors, not current resume identities. Current source is paused at
+`29687ec75d573c53bf5c40523ca2b6dc2a302e11`, including preserved WIP.
+Its previous GO is retired; B, T and C remain unaccepted. That paused source still
+has the prior artifacts; normally merge the accepted plan main into the preserved
+carrier before fresh exact-source preflight. The operator has accepted
 the resource, fd3 v3 and retention contract; that decision grants no actual
 runtime collection/retention/window, unknown parent file, installation or
 activation. Independent plan acceptance and protected landing still precede code.
@@ -180,9 +184,9 @@ it adds no CLI option, environment selector or reusable test framework.
 
 The original artifact base is `091f22d6dc2bff038e60b1a10b12923093eda0fe`.
 The unique PR 1b carrier remains `codex/impl/eval-source-relay-replay`, worktree
-`/private/tmp/ystack-eval-source-relay-replay-20261023`, frozen clean by the
-manager at `6f219579f72f73ddd3703f32b5f4a102ae8c175c`. This plan does not
-accept that source or release its pause. Rebind its actual parent/base, remote/PR,
+`/private/tmp/ystack-eval-source-relay-replay-20261023`, recorded paused clean by the
+manager at `29687ec75d573c53bf5c40523ca2b6dc2a302e11`. Its preserved WIP is
+unaccepted. This plan does not accept that source or release its pause. Rebind its actual parent/base, remote/PR,
 clean state and complete artifact tuple before resume; do not infer them from an
 older checkpoint. B remains unaccepted and complete C remains required.
 
@@ -1050,7 +1054,7 @@ scope Reader/reader is scope/v1/read-shadow-evidence.py; host is
 sandbox/v1/host-supervisor.py. _NativeRelease belongs to enforced; Anchor and
 capture_parent_context belong to consumer.
 
-表中 H 是原 host-controlled capture，P 是既有 consumer private recorder，T 是 preparation 既有 scratch capture。H/P/T 是同一封闭 RAW16 carrier 合同的原有 owner 落点；不是三种可选 transport。每个生产者只写自己的原私有目录。只有 consumer 读已提交 H/T 并写 P。不得让 host 写 P，不增加目录型公共入口。
+表中 H 是原 host-controlled capture，P 是既有 consumer private recorder，T 是 preparation 在原已验证 scratch 父根下的固定私有录制命名空间。H/P/T 是同一封闭 RAW16 carrier 合同的原有 owner 落点；不是三种可选 transport。每个生产者只写自己的原私有目录。只有 consumer 读已提交 H/T 并写 P。不得让 host 写 P，不增加目录型公共入口。
 
 每个 row 都绑定 owner/site/原 acquisition 序号、固定 role/index、原 locator、原 request/attempt/operation、qualification 字节引用、原读取 errno 和完整 bytes。路径只能来自当前已校验的原 owner 配置或固定代码，不来自历史 capture。多次实际读取分别保留观察并计读取成本；不同字节必须保留独立 slot occurrence，不能用相同 role 合并。相同字节也不豁免实际物理副本计费。
 
@@ -1075,7 +1079,7 @@ capture_parent_context belong to consumer.
 
 coverage schema固定 default-branch-history/publisher-pull-requests/branch-rule-history；kill固定 repository-default-branch/first-parent-register-history/default-branch-ref-history/operator-merges。加config/accepted/package后，分别为8、9个package byte成员；host-config/supervisor/Python是上述独立角色。两套package角色与原owner精确schema一致，不按目录扫描。
 
-preparation raw bytes只在producer_identity/copy_dependencies原读取期间存在；在原函数处tee到已持有scratch_work下固定runtime文件，沿用T现有input/response/operation绑定。补其carrier inventory和seal，不让父consumer之后重开 /usr/bin/git。T现有仅capture.json，不是现成runtime接口；这是明确待实现改动。
+preparation raw bytes只在producer_identity/copy_dependencies原读取期间存在；在原函数处tee到原 args._boundaries["scratch"] held父根下的固定T runtime文件，沿用T现有input/response/operation绑定。T从首次创建即与native scratch_work分开；不先写child再迁移，不让父consumer之后重开 /usr/bin/git。旧child-local capture.json不作runtime接口或回退来源。具体接线按下述T顺序实施。
 
 **Parent fd3: two original records.**
 
@@ -1097,9 +1101,95 @@ capture_parent_context 的 _read_plain_fd(fd=3) 在解析前只读原schema2 JSO
 
 任一记录/资源/重检/close失败使录制不可用；native原退出、stdout零、receipt/payload及清理路径不改。所有pending、published、partial、旧失败留在实际位置，不删、不迁移、不重试。unknown费用不是零。completion不能修复缺bytes或失败检查。真实磁盘资源干扰仍需执行时资源授权，不能把控制流隔离说成物理无干扰。
 
-Preparation's fixed runtime inventory, input/response/operation binding and
-completion seal must be implemented inside its held scratch_work; capture.json
-alone is insufficient. No host or parent collects bytes for another owner.
+### T preparation lifecycle implementation order
+
+Use the spec's original held scratch-parent layout. These steps change only the
+existing preparation/consumer/enforced/writer owners and their already allowed
+tests. No new root, container, public parameter, inherited fd, loader, helper,
+source member or fee transport. Do not copy a C renderer or broaden a module-origin
+allowlist. The bound line numbers below are 25af design locations, not permission
+to edit unreviewed WIP or proof that its T implementation is complete.
+
+1. In `_consumer.py`, add the private fixed-name predicate used by its existing
+   callers. Preparation constructs the same prescribed names in its current value
+   owner. Define the reservation before any T create or native prepare/inspect
+   dispatch; never derive it from C or a discovered directory's contents. The exact
+   names are `raw16-t-v1-<op>-runtime-<role>-<index>.bin`,
+   `raw16-t-v1-<op>-capture.json`, and
+   `raw16-t-v1-<op>-complete-<sha256(C)>`. `op` is prepare/inspect, `role` is
+   python/jq/git, index is 00..63 in actual acquisition order, and the digest is
+   all 64 lowercase hex characters. This is the spec's closed grammar, not a
+   generic prefix exemption. Existing case/window slot limits stay aggregate.
+2. In preparation `parse_args/create_context` (2458–2498/2168–2203), retain the
+   original validated scratch-parent chain and its fd. Keep native child creation,
+   entropy, ctx.scratch.name, argv/env, candidate.git, sidecars and dependencies
+   unchanged. Tee original Python/Git/jq acquisitions from producer_identity and
+   copy_dependencies into exclusive flat T files through that parent fd. Maintain
+   full source holds and original native close order; new failure affects recording
+   eligibility only. Preserve the original C construction and its native-workspace
+   check; add the complete fixed runtime inventory to that same closed document.
+   SOURCE/script bytes stay in D's complete 84-member class. Prove actual script,
+   selector, registry, protocol and generation bytes against the held D snapshots
+   and original source/dependency identities. Keep every original read/hash,
+   snapshot write/read/hash, after_data recheck and SOURCE/runtime overlap in Q
+   and applicable existing ledgers. Never omit them or add a fourth T executable.
+3. In `_write_preparation_observations`, complete runtime/C writes, writer close,
+   source/carrier full readback, independent SHA/equality, chain/name/ACL checks,
+   original required syncs and the T-parent sync, all new recording holds' actual
+   successful closes and fallible accounting prerequisites before commit. Existing
+   suppressing HeldBoundary.close is not evidence that a new close succeeded.
+   Preserve first recording error plus later close/ledger errors with once-close;
+   do not retry an uncertain fd. Then use only the original native scratch-parent
+   fd for one exclusive 0700 mkdir of the complete-C SHA marker, including C's LF.
+   Do not add another parent fd, temporary witness, second document or post-commit
+   chmod/chown/close exemption. The borrowed fd keeps its original native lifetime.
+   Keep actual mkdir return/errno and either uncertain namespace outcome without
+   retry, rollback or inferring success from later presence. No crash durability
+   of the marker name is claimed and no original sync is removed.
+4. In `Anchor.retain_preparation` (1022–1087), acquire the fixed operation's flat
+   capture/runtime/marker from the genuine held parent; remove the old child-local
+   capture search as an acceptance route. Root enumeration remains at most 128
+   total entries, including native children and both operations' T names. Do not
+   give T a separate 128 or increase any file/metadata cap. Validate canonical full
+   C, actual caller operation/input_raw/response_raw, current runtime inventory,
+   unique matching empty stable marker, full bytes/hash/equality and final rechecks.
+   Empty-marker proof uses enumeration, not nlink alone. Other-operation names are
+   separately bound retained data or charged unusable occupancy, never this
+   operation's seed. Extra/wrong/old/partial/unknown entries cannot create success.
+   Only committed T may enter P. Any consumer acquire/release/close/ledger failure
+   still makes recording unusable even when a valid marker exists.
+5. At enforced reproduction's original calls and cleanup (2098–2106), keep the
+   prepare call, retention call, intermediate cleanup and inspect call in order.
+   Cleanup excludes only the predeclared exact T names; every other child follows
+   the same rmtree-versus-unlink branch, timing and propagated errors. Native
+   candidate-preparation children and all their contents are removed as before.
+   A broad prefix, C-supplied name or unknown child never becomes a preservation
+   whitelist. Retain T zero/partial/committed/failed occupancy in place regardless
+   of a P copy or recording failure. In writer (690–694), keep the original
+   preparation-scratch/inspection-scratch separation and retention call per actual
+   operation. No new cleanup or automatic adoption of old child-local T; a preserved
+   old attempt needs its separate disposition before this mechanism can reuse it.
+6. Exercise the actual production caller path in the existing
+   candidate-content-preparation, shadow-enforced and shadow-write test suites.
+   A small ordinary prepare→cleanup→inspect fixture must preserve both complete T
+   sets while removing native children at the original point; writer must preserve
+   its two separate roots. Use real fixture files and genuine holds, full three-role
+   acquisitions and original value functions; no hand-built slot map stands in for
+   the production tee. Assert native argv/env/name/entropy, result, output and
+   cleanup error behavior remain equal to the baseline. This is controlled proof,
+   not real-runtime qualification. Use the RT.T vectors below and the existing
+   private source-copy mutation route; no new test framework or entry point.
+
+All names, files, empty directories, hash/canonical work, sync/enumeration/close
+and failed/uncertain operations pay the unchanged original and RAW16 ledgers.
+Preserve all carry-in, partials and failures without reset or refund. No actual
+fit or complete M/Q proof follows from a location change. The original enforced
+finally and writer Workspace.close close holds only; the external caller's final
+disposition remains UNKNOWN. Real collection/retention/window still requires its
+existing operator authority and a known compatible caller lifecycle. A permanent
+root, new parent/interface/permission/budget, native-data retention exception,
+partial deletion/migration or uncommitted reader requires that specific decision.
+This plan grants none. No host or parent collects bytes for another owner.
 
 ### Private no-replace binding and platform proof
 
@@ -1704,6 +1794,7 @@ all old RAW/DER/ROUTE/LIM/CLO/I5/SURF/ARC and export/completion tests:
 | RT.work | Instrument every named R/W/H/E/C call and exact 26/5/20/14/5 schedule; Q retains every original call and no double charge of that same call. Missing Q/M/host costs are UNKNOWN, not zero or success. No hidden cost channel. |
 | RT.window | Case and four-case logical/physical/file/work caps independently at/over; zero-length files, old occupancy and overlapping source/raw/prep/JSON all count. Two small failed partials then a complete-role positive share one ledger. A full prior occupancy refuses more work without deleting it. |
 | RT.failure | Partial/zero/unknown writes, first failure followed by close/ledger failure, occupied names and exact errno. Retain all files and charges; no successful seal, repair, retry, phase/pair reset or deleted/temp/dedup exemption. |
+| RT.T | Paired ordinary prepare→native cleanup→inspect and writer two-root positives through actual owners; preserved zero/partial/committed/uncertain T and unchanged native rmtree/unlink/error timing. Fixed-name collision, broad-prefix nonmember, extra/wrong/nonempty/missing marker, full C/runtime mutation with actual inputs fixed, op swap, source/parent/name/ACL drift, every new write/readback/sync/close/ledger failure, and both uncertain mkdir namespaces reject recording. At/over 128 total root entries includes T; all other caps and carry-in still apply. Separately delete production tee, predeclared cleanup exclusion, marker construction, consumer validation or recording-failure propagation in the existing private source-copy mutation route: each paired assertion must fail. Original SOURCE bytes/identity and full Q/overlap checks remain. No fixture closes the external caller/genuine gate. |
 | RT.C | Fixed assembly, run and two disjoint dashboard pairs each use their complete scheduled flow; extra/repeated case follows M4/manifest refusal. No missing owner, empty dispatch or permanent rejection counts as delivery. Real parent hookup/full RAW16 remains blocked until its source gate. |
 
 RAW12 adds these finite vectors to the existing tests, with no new entry point:
@@ -2041,9 +2132,10 @@ gates (R9.6).
   operator-graded seed and its test. 150-450 of them are verbatim verdict bytes, which
   cannot leave the PR whose test checks their digests.
 - PR 3: `review_size: standard`, about 300-400 net added lines.
-- This plan-only amendment: `review_size: standard`, expected 220–360 changed
-  lines. One concern: RAW16 original acquisition, fixed carrier and fd3 contract,
-  complete finite retention/work accounting and its connected C proof.
+- This plan-only amendment: `review_size: standard`, expected 100–160 changed
+  lines. One concern: T's fixed scratch-parent retention, native cleanup boundary,
+  original caller/commit order and finite lifecycle proof. The estimate covers
+  those hooks, the current hash/source binding and the paired test additions.
   Preserve the full inherited plan and all its gates.
 
 Each range waives only the soft line signal, never scope, tests, CI, review or human

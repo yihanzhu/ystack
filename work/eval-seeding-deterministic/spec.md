@@ -637,7 +637,7 @@ scope Reader/reader is scope/v1/read-shadow-evidence.py; host is
 sandbox/v1/host-supervisor.py. _NativeRelease belongs to enforced; Anchor and
 capture_parent_context belong to consumer.
 
-表中 H 是原 host-controlled capture，P 是既有 consumer private recorder，T 是 preparation 既有 scratch capture。H/P/T 是同一封闭 RAW16 carrier 合同的原有 owner 落点；不是三种可选 transport。每个生产者只写自己的原私有目录。只有 consumer 读已提交 H/T 并写 P。不得让 host 写 P，不增加目录型公共入口。
+表中 H 是原 host-controlled capture，P 是既有 consumer private recorder，T 是 preparation 在原已验证 scratch 父根下的固定私有录制命名空间。H/P/T 是同一封闭 RAW16 carrier 合同的原有 owner 落点；不是三种可选 transport。每个生产者只写自己的原私有目录。只有 consumer 读已提交 H/T 并写 P。不得让 host 写 P，不增加目录型公共入口。
 
 每个 row 都绑定 owner/site/原 acquisition 序号、固定 role/index、原 locator、原 request/attempt/operation、qualification 字节引用、原读取 errno 和完整 bytes。路径只能来自当前已校验的原 owner 配置或固定代码，不来自历史 capture。多次实际读取分别保留观察并计读取成本；不同字节必须保留独立 slot occurrence，不能用相同 role 合并。相同字节也不豁免实际物理副本计费。
 
@@ -662,7 +662,7 @@ capture_parent_context belong to consumer.
 
 coverage schema固定 default-branch-history/publisher-pull-requests/branch-rule-history；kill固定 repository-default-branch/first-parent-register-history/default-branch-ref-history/operator-merges。加config/accepted/package后，分别为8、9个package byte成员；host-config/supervisor/Python是上述独立角色。两套package角色与原owner精确schema一致，不按目录扫描。
 
-preparation raw bytes只在producer_identity/copy_dependencies原读取期间存在；在原函数处tee到已持有scratch_work下固定runtime文件，沿用T现有input/response/operation绑定。补其carrier inventory和seal，不让父consumer之后重开 /usr/bin/git。T现有仅capture.json，不是现成runtime接口；这是明确待实现改动。
+preparation raw bytes只在producer_identity/copy_dependencies原读取期间存在；在原函数处tee到原 args._boundaries["scratch"] held父根下固定T runtime文件，沿用T现有input/response/operation绑定。新T首次写入即在下述保留位置，不在会被native清理的scratch_work内写后迁移。补其carrier inventory和seal，不让父consumer之后重开 /usr/bin/git。旧child-local capture.json不是现成runtime接口，也不是新T的回退来源。
 
 **Parent fd3: two original records.**
 
@@ -684,9 +684,105 @@ capture_parent_context 的 _read_plain_fd(fd=3) 在解析前只读原schema2 JSO
 
 任一记录/资源/重检/close失败使录制不可用；native原退出、stdout零、receipt/payload及清理路径不改。所有pending、published、partial、旧失败留在实际位置，不删、不迁移、不重试。unknown费用不是零。completion不能修复缺bytes或失败检查。真实磁盘资源干扰仍需执行时资源授权，不能把控制流隔离说成物理无干扰。
 
-Preparation's fixed runtime inventory, input/response/operation binding and
-completion seal must be implemented inside its held scratch_work; capture.json
-alone is insufficient. No host or parent collects bytes for another owner.
+**T preparation retention and native cleanup.**
+
+The fixed T inventory, capture and seal live directly under the original validated
+`--scratch` parent, using its existing `args._boundaries["scratch"]` held fd.
+There is no new root, container, public argument, inherited fd, loader or transport.
+The original native `scratch_work` remains the independently named
+`candidate-preparation-<original entropy>` child. Keep its original creation,
+`ctx.scratch.name`, entropy observations, argv/environment and native contents.
+The full C document still comes from the original preparation value owner. It binds
+that actual native workspace, actual operation/input/response and complete runtime
+inventory; no new renderer or synthetic workspace name replaces them.
+
+Before any T creation, both the original caller and preparation owner reserve this
+closed flat namespace by fixed code. `op` is only `prepare` or `inspect`; `role` is
+only `python`, `jq` or `git` from the T acquisition rows above; `index` is a
+zero-padded two-digit occurrence index 00..63 assigned by the original acquisition
+order. The aggregate RAW16 case/window slot limits still apply, not 64 per role or
+operation. Names are:
+
+- `raw16-t-v1-<op>-runtime-<role>-<index>.bin` for each actual T occurrence;
+- `raw16-t-v1-<op>-capture.json` for the complete canonical C bytes, including LF;
+- `raw16-t-v1-<op>-complete-<sha256(C)>` for one empty commit-marker directory.
+
+The marker's fixed domain prefix and full 64 lowercase hex digest are the seal.
+There is no second seal document or digest field selected from C. Runtime and C
+files are exclusive, non-symlink regular files finalized with the existing private
+recording rules. The marker uses one exclusive mkdir with the original private
+0700 directory mode. No suffix retry, replacement, repair, adoption of occupancy
+or post-commit chmod/chown is permitted. A reserved name occupied by a file, link,
+wrong-type directory, zero/partial data or an old marker remains in place and
+makes the affected recording unusable. Creating one operation never overwrites
+another. Existing root enumeration/file/metadata caps remain; no extra root-entry
+allowance is implied by the flat layout.
+
+Reservation is a name-ownership rule, not evidence of a valid capture. Neither
+caller cleanup nor consumer acquisition learns reserved names from C, a supplied
+locator or a directory's contents. Only the exact grammar above is reserved;
+matching a broad prefix does not exempt an unknown native child from cleanup.
+The consumer requires the exact current operation's inventory and one matching
+marker, with no extra member, wrong role/index, duplicate or prior failed attempt
+accepted as current. It validates the other operation's reserved entries only as
+separately bound retained data or charged unusable occupancy; they are not seed
+inputs for this operation. Unknown/extra entries cannot make recording usable.
+No T writer may create a name outside this closed namespace.
+
+At reproduction's existing prepare-to-inspect cleanup point, retain the explicitly
+reserved T names and apply the old rmtree-versus-unlink choice, timing and error
+propagation to every other child. In particular, remove the original native
+candidate-preparation child and its candidate.git, sidecars, dependency snapshots
+and all other native members as before. Do not spare native contents because a
+capture claims them. Inspection uses the same original scratch parent and native
+child-creation route. Writer prepare/inspect keep their original separate
+preparation-scratch/inspection-scratch parents. Neither caller moves T to P or
+deletes T after a successful copy. An old child-local T attempt is not converted
+or adopted by this layout; its preserved-attempt disposition remains separate.
+Do not reuse a preserved child-local T root through this mechanism without that
+disposition. This amendment grants no automatic cleanup of a preserved attempt.
+
+Before mkdir, finish all required source/carrier chain, name, owner/mode/ACL,
+content and independent SHA/equality checks, full runtime/C writes and readback,
+all original required syncs and the T parent sync, successful writer close,
+all newly acquired recording source/readback/directory hold closes and fallible
+accounting prerequisites. Preserve original native syncs; a new parent sync does
+not replace them. Borrow only the original scratch-parent fd for the mkdir. It
+remains open until its original native close point; do not claim it was closed,
+add another namespace-parent hold or exempt a new post-commit close failure.
+
+The consumer independently reacquires C and the marker through its genuine held
+scratch-parent chain. It checks strict canonical C, complete inventory and actual
+caller operation/input_raw/response_raw, then hashes all C bytes and checks the
+marker basename. The marker must be uniquely matching, empty and stable under the
+original type/owner/mode/ACL/name/fstat/nlink rules; nlink alone does not prove empty.
+Whole runtime bytes, SHA, equality and all final rechecks remain mandatory. Only
+committed T may be copied to P. Any observed acquisition, release, close or ledger
+failure makes recording unusable even if the marker exists.
+
+Mkdir failure, interruption or uncertain outcome retains the actual errno and
+namespace. Never retry, remove the marker or infer syscall success from later
+existence. Marker-name crash durability is not claimed; all required syncs remain.
+All T pending, committed, zero-byte, partial and failed entities stay at
+their original reserved names, with all old occupancy and work charged. No file,
+directory, enumeration, name/hash construction, sync, close or failed operation is
+free. The original scratch limit, all metadata/M/raw caps, six-layer physical and
+file limits, Q and cumulative R/W/H/E/C limits still apply together; no phase or
+operation resets them. Unknown work or cleanup evidence remains UNKNOWN and cannot
+seed. No additional fee channel or actual-fit claim is introduced.
+
+The bound lifecycle source is `25af14412bbd6fc4b5c0b1ca03ba43e545ecb4bc`, external
+unaccepted implementation context, not proof of this design. Its enforced finally
+and writer Workspace.close close holds; they do not delete this work root. The
+external caller's final disposition is still UNKNOWN. This contract does not
+promise a permanent root, authorize that caller's cleanup, or let deletion/migration
+stand in for retention. Real collection/retention/window use still needs its
+existing operator authority and a known compatible caller lifecycle. A new root,
+external parent/interface, permission or budget, retention of old native contents,
+or weaker deletion/completion standard requires that specific operator decision.
+This same-root namespace amendment itself follows independent G2, then a separate
+high-risk plan and the original source gate. No host or parent collects another
+owner's bytes.
 
 #### C. Complete derived-output ownership
 
@@ -999,6 +1095,7 @@ replace implementation.
 | 两records/v3 | 真正held原bytes与父原qualification关系；旧v2仍保native而RAW16拒绝；短header、长度边界/多一、尾随、缺/换record、cross-request、digest与schema冲突均拒绝；不调用collector找文件 |
 | 所有复制层 | carrier/P/S/I-run/I-dashboard实际存在并独立计；每个独立SHA与whole-byte compare保留；两边同时变成相同新bytes仍因原seal拒绝 |
 | 完整数字账 | 每步测R/W/H/E/C真实计数，核对新增26/5/20/14/5 schedule；Q按原owner单独核对，不用残余信用；完整origin/partial/carry-in/source/raw/prep overlap均入账 |
+| T生命周期 | 普通prepare→保留T/原native cleanup→inspect与writer两scratch路径均走生产owner；删除任一T保留/完整seal检查的配对mutation必须失败。固定名碰撞、零字节/partial、close/ledger/fsync失败、mkdir两种不确定namespace、错误/额外/非空marker、C/runtime一起改但实际输入不变、prepare/inspect交换、native未知child与同前缀非成员均拒绝录制且保留真实错误；原native child及成员仍在原时点按同rmtree/unlink分支清理，失败不被吞。新T保留集从首次创建前固定，不读C决定归属；外部caller未知disposition不作永久留存证明，全部旧费用/carry-in不退款 |
 | 全资源边界 | 每case 4GiB/64、六层24GiB/384；窗口16GiB/256、96GiB/1,536；两级全部新增累计cap及旧适用caps分别边界/多一；carry-in/失败共账，阶段/pair不重置；shared总数仍256；有界模拟大计数，不制造4GiB真实fixture |
 | 失败和重跑 | 两次小partial后完整成功仍共用总账；已满容量的后来操作拒绝且保留原文件；未知write结果或第二close/ledger故障记UNKNOWN，无成功seal；不删除以换容量 |
 | stage C | run和两disjoint dashboard pairs完成四case各一次，独立I和final checks；额外case/重复trial按原M4/manifest拒绝；C缺任一owner不能发完成结果 |
