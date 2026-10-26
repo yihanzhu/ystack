@@ -605,6 +605,14 @@ try:
 finally:c._acl_state=original_acl
 print(json.dumps({'ordinary_only':True,'real_native_qualification':False,'runtime_copy_cancel_cases':results},sort_keys=True))
 PY_RUNTIME_COPY_CANCEL
+/usr/bin/python3 -I -S -B - "$root" <<'PY_SUDO_P_COMPANION'
+import importlib.util,sys
+from pathlib import Path
+root=Path(sys.argv[1])
+spec=importlib.util.spec_from_file_location('raw16_sudo_companion_fixture',root/'scripts/test/candidate-content-preparation-fixtures.py')
+fixture=importlib.util.module_from_spec(spec);sys.modules[spec.name]=fixture;spec.loader.exec_module(fixture)
+fixture.raw16_sudo_companion(root)
+PY_SUDO_P_COMPANION
 /usr/bin/python3 -I -S -B - "$root" <<'PY_PARENT_P_CARRIER'
 import importlib.util,sys
 from pathlib import Path

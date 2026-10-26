@@ -2082,7 +2082,7 @@ def raw16_p_acquisitions(root: Path) -> None:
     c._acl_state = lambda *_: ([], None) if sys.platform == 'darwin' else (None, None)
     results = []
     try:
-        for scenario in ('stable', 'source-drift', 'P-drift', 'occupied-P', 'case-carry-over'):
+        for scenario in ('stable', 'source-drift', 'P-drift', 'occupied-P', 'case-carry-over', 'close-observer-memory'):
             with tempfile.TemporaryDirectory(prefix='ystack-raw16-P-') as temporary:
                 base = Path(temporary).resolve()
                 base.chmod(0o700)
@@ -2150,18 +2150,49 @@ def raw16_p_acquisitions(root: Path) -> None:
                     assert native.snapshot.read(len(raw), 'E_DEPENDENCY') == raw
                     row = anchor.private_observations['local_runtime'][0]
                     assert row['request_sha256'] == c.digest(request) and row['attempt_id'] == 'p.original.read.fixture'
-                    if scenario != 'stable':
+                    if scenario in ('source-drift', 'P-drift'):
                         changed = source if scenario == 'source-drift' else target
                         changed.chmod(0o600);changed.write_bytes(b'changed fixture bytes');changed.chmod(0o400)
-                    anchor.seal_local_runtime(holder._recording_parent())
-                    assert bool(anchor.private_observations.get('unusable')) == (scenario != 'stable')
+                    observe, receipt_owner = c._capture_observe, c._capture_accounting_receipt
+                    fired, tail_flags = [], []
+                    def close_observation(work, kind, site, value, *args, **kwargs):
+                        if scenario == 'close-observer-memory' and site == 'held-close' and not fired:
+                            fired.append(site)
+                            raise MemoryError('controlled real HeldPath.close observation failure')
+                        return observe(work, kind, site, value, *args, **kwargs)
+                    def actual_tail_receipt(current):
+                        if fired:
+                            tail_flags.append(current.private_observations.get('unusable', False))
+                        return receipt_owner(current)
+                    owner_work = {}
+                    c._capture_work_values(owner_work, 'completion-fixture')
+                    owner = types.SimpleNamespace(source=types.SimpleNamespace(recheck=lambda *_: None, close=lambda: None),
+                        source_closed=False, work=owner_work,
+                        transfer=lambda work, case: c._capture_transfer_work(owner_work, work, case))
+                    anchor.capture_completion_owner = owner
+                    try:
+                        c._capture_observe, c._capture_accounting_receipt = close_observation, actual_tail_receipt
+                        e._seal_capture_recording(anchor, holder._recording_parent())
+                    finally:
+                        c._capture_observe, c._capture_accounting_receipt = observe, receipt_owner
+                    if scenario == 'close-observer-memory':
+                        assert fired == ['held-close'] and tail_flags and all(tail_flags)
+                        assert anchor.recording_work['accounting_incomplete'] is True
+                    elif scenario == 'stable':
+                        assert not c._capture_work_incomplete(anchor.recording_work)
+                        assert all('final_failure' not in leaf for leaf in anchor.recording_work['local_runtime_leaves'])
+                    else:
+                        assert any('final_failure' in leaf for leaf in anchor.recording_work['local_runtime_leaves'])
+                    assert anchor.private_observations['recording_sealed'] is False
+                    assert anchor.private_observations['accounting']['complete'] is False
+                    assert native.snapshot.read(len(raw), 'E_DEPENDENCY') == raw
                     if scenario == 'stable':
                         assert sum(row['return'] for row in events) == 7*(len(raw)+sum(len(item.raw) for item in native_values.values()))
                     results.append({'case': scenario, 'actual_pread_trace': events,
                         'runtime_fees': anchor.recording_work['runtime'],
                         'actual_M_fees': anchor.recording_work.get('accounting'),
                         'native_snapshot_original_read_copy_version_qualification_Q': 'NOT_COMPLETE_OR_QUALIFIED',
-                        'validation_extra_reads': 2*len(raw), 'source_bytes': len(raw)})
+                        'validation_extra_reads': 3*len(raw), 'source_bytes': len(raw)})
                 finally:
                     os.pread = pread
                     holder.close();native.close()
@@ -2224,6 +2255,131 @@ def raw16_parent_carrier(root: Path) -> None:
                 finally:holder.close()
     finally:c._acl_state = acl
     print(json.dumps({'actual_v3_fd_receiver_to_private_P': output, 'real_parent_producer': False}, sort_keys=True))
+
+def raw16_sudo_companion(root: Path) -> None:
+    import tempfile
+    spec = importlib.util.spec_from_file_location('raw16_sudo_P_fixture', root/'shadow/v1/enforced-reproduction.py')
+    e = importlib.util.module_from_spec(spec);sys.modules[spec.name] = e;spec.loader.exec_module(e)
+    c = e.c
+    opened, read, pread, acl, observe = c._open_held, os.read, os.pread, c._acl_state, c._capture_observe
+    c._acl_state = lambda *_: ([], None) if sys.platform == 'darwin' else (None, None)
+    scope_spec = importlib.util.spec_from_file_location('raw16_sudo_cancel_source', root/'scope/v1/read-shadow-evidence.py')
+    scope = importlib.util.module_from_spec(scope_spec);sys.modules[scope_spec.name] = scope;scope_spec.loader.exec_module(scope)
+    cancel_code = next(value for value in scope.main.__code__.co_consts
+                       if isinstance(value, types.CodeType) and value.co_name == 'cancel')
+    cancel = types.FunctionType(cancel_code, {'InterruptedError': InterruptedError})
+    results = []
+    try:
+        for case in ('stable', 'inode-mismatch', 'source-drift', 'companion-close-observer', 'read-A-close-B'):
+            with tempfile.TemporaryDirectory(prefix='ystack-sudo-companion-') as temporary:
+                base = Path(temporary).resolve();base.chmod(0o700)
+                work, source, other = base/'work', base/'synthetic-executable', base/'different-inode'
+                work.mkdir(mode=0o700)
+                raw = b'synthetic sudo bytes never executed' * 2037
+                source.write_bytes(raw);source.chmod(0o400)
+                other.write_bytes(raw);other.chmod(0o400)
+                native = e.FixedSudo(os.open(source, os.O_RDONLY), source.stat())
+                before_native_sha = native.sha256
+                def native_fixture_recheck():
+                    assert c._identity(os.fstat(native.fd)) == c._identity(native.before)
+                native.recheck = native_fixture_recheck
+                holder = e.stable_directory(work)
+                anchor = c.Anchor({}, b'', [], {}, ('', []), ('', []), None)
+                requests, fired, cancellations, companion_fds, target_closes = [], [], [], set(), []
+                previous_signal, os_close = signal.getsignal(signal.SIGTERM), os.close
+                def handler(number, frame):
+                    try:cancel(number, frame)
+                    except InterruptedError as error:
+                        cancellations.append(error)
+                        raise
+                signal.signal(signal.SIGTERM, handler)
+                def closing(fd):
+                    if fd in companion_fds:
+                        target_closes.append(fd)
+                        os_close(fd)
+                        if case == 'read-A-close-B' and len(cancellations) == 1:
+                            os.kill(os.getpid(), signal.SIGTERM)
+                        return None
+                    return os_close(fd)
+                def fixed_open(path, directory, rule, code, *args, **kwargs):
+                    if path == '/usr/bin/sudo':
+                        requests.append(path)
+                        held = opened(str(other if case == 'inode-mismatch' else source), False,
+                            c._store_rule(os.geteuid(), os.getegid(), 0o400, False), code, *args, **kwargs)
+                        companion_fds.add(held.fd)
+                        return held
+                    return opened(path, directory, rule, code, *args, **kwargs)
+                def read_only(fd, count, *args):
+                    assert fd != native.fd, 'the original execution fd must not become a byte reader'
+                    return read(fd, count, *args)
+                def pread_only(fd, count, offset):
+                    assert fd != native.fd, 'the original execution fd must not become a byte reader'
+                    if case == 'read-A-close-B' and fd in companion_fds and not cancellations:
+                        os.kill(os.getpid(), signal.SIGTERM)
+                    return pread(fd, count, offset)
+                try:
+                    c._open_held, os.read, os.pread, os.close = fixed_open, read_only, pread_only, closing
+                    request = c.canonical({'kind': 'shadow_write_request', 'id': 'sudo.fixture'})
+                    if case == 'read-A-close-B':
+                        caught = None
+                        try:holder._retain_sudo(anchor, native, request)
+                        except InterruptedError as error:caught = error
+                        assert len(cancellations) == 2 and cancellations[0] is not cancellations[1]
+                        assert caught is cancellations[0] and all(error._scope_signal_cancel for error in cancellations)
+                        assert len(target_closes) == 1 and not anchor.runtime_companions
+                        assert os.fstat(native.fd) and native.sha256 == before_native_sha
+                        results.append({'case': case, 'first_cancel_same_object': True, 'different_real_handler_objects': True,
+                            'target_close_calls': len(target_closes), 'P_work': anchor.recording_work})
+                        continue
+                    holder._retain_sudo(anchor, native, request)
+                    assert requests == ['/usr/bin/sudo'] and native.sha256 == before_native_sha
+                    if case == 'inode-mismatch':
+                        assert not anchor.runtime_companions and not list(work.glob('runtime-*.bin'))
+                        assert not anchor.recording_work.get('runtime', {}).get('read_bytes', 0)
+                        assert anchor.private_observations.get('unusable') is True
+                        assert os.fstat(native.fd) and native.sha256 == before_native_sha
+                        results.append({'case': case, 'P_work': anchor.recording_work,
+                            'no_runtime_body_read_before_inode_rejection': True})
+                        continue
+                    companion = anchor.runtime_companions[0][0]
+                    if case == 'source-drift':
+                        source.chmod(0o600)
+                        with source.open('r+b') as stream:stream.write(b'!')
+                        source.chmod(0o400)
+                    if case == 'companion-close-observer':
+                        real_close = companion.close
+                        during = [False]
+                        def companion_close():
+                            during[0] = True
+                            try:real_close()
+                            finally:during[0] = False
+                        companion.close = companion_close
+                        def observer(work, kind, site, value, *args, **kwargs):
+                            if during[0] and site == 'held-close' and not fired:
+                                fired.append(site)
+                                raise MemoryError('controlled companion close observation failure')
+                            return observe(work, kind, site, value, *args, **kwargs)
+                        c._capture_observe = observer
+                    anchor.seal_local_runtime(holder._recording_parent())
+                    assert not anchor.runtime_companions and not companion.components
+                    assert bool(anchor.private_observations.get('unusable')) == (case != 'stable')
+                    if case == 'stable':
+                        row = anchor.private_observations['local_runtime'][0]
+                        assert row['slot'] == 'sudo' and row['sha256'] == c.digest(raw) != before_native_sha
+                        assert (work/row['file']).read_bytes() == raw
+                    if case != 'source-drift':assert native.sha256 == before_native_sha
+                    assert os.fstat(native.fd)
+                    if case == 'companion-close-observer':assert fired == ['held-close']
+                    results.append({'case': case, 'P_work': anchor.recording_work,
+                        'native_fd_still_open': True, 'actual_fixed_companion_path': requests,
+                        'native_root_uid_qualification_and_fixed_sudo_recheck_are_fixture_substitutions': True,
+                        'no_actual_system_sudo_read_or_execution': True})
+                finally:
+                    c._open_held, os.read, os.pread, c._capture_observe, os.close = opened, read, pread, observe, os_close
+                    signal.signal(signal.SIGTERM, previous_signal)
+                    anchor.close();holder.close();native.close()
+    finally:c._acl_state = acl
+    print(json.dumps({'fixed_sudo_companion_controls': results}, sort_keys=True))
 
 def main() -> int:
     try:

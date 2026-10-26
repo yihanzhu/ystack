@@ -389,6 +389,14 @@ class StableDirectory:
             if getattr(error, "_scope_signal_cancel", False):raise
             return None
 
+    def _retain_sudo(self, anchor, executable, caller_raw):
+        try:
+            anchor.retain_sudo_companion(self._recording_parent(), executable, caller_raw)
+        except (Refusal, c.Refusal, OSError, ValueError, MemoryError) as error:
+            anchor.private_observations["unusable"] = True
+            if getattr(error, "_scope_signal_cancel", False):
+                raise
+
     def _retain_parent_inputs(self, anchor, context, caller_raw):
         try:
             anchor.retain_parent_inputs(self._recording_parent(), context, caller_raw)
@@ -640,7 +648,10 @@ def _seal_capture_recording(anchor, parent, held_store=None):
                 c._capture_transfer_work(_CAPTURE_OWNER_WORK, anchor.recording_work, case_work)
             if held_store is not None and hasattr(held_store, "capture_work"):
                 c._capture_transfer_work(held_store.capture_work, anchor.recording_work, case_work)
-            c._capture_accounting_receipt(anchor)
+            accounting = c._capture_accounting_receipt(anchor)
+            if (c._capture_work_incomplete(anchor.recording_work)
+                    or accounting.get("complete") is not True):
+                anchor.private_observations["unusable"] = True
         except Exception as error:
             anchor.private_observations["unusable"] = True
             anchor.private_observations["completion_accounting_failure"] = {
@@ -2016,6 +2027,7 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
         bash = fixed_bash()
         work_hold._retain_runtime(anchor, "bash", bash.physical.held, bash.physical.raw, request_raw)
         sudo_file = fixed_sudo()
+        work_hold._retain_sudo(anchor, sudo_file, request_raw)
         helper_source = stable_file(SOURCE / "adapters/local-git-materializer/v1/object-closure.c")
         sources.append(helper_source)
         require(helper_source.sha256 == context["helper_source_sha256"], "E_DEPENDENCY")

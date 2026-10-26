@@ -122,6 +122,7 @@ class _Workspace:
             self.work_hold._retain_runtime(self.anchor, "bash", self.bash.physical.held, self.bash.physical.raw, self.request.raw)
             self.sudo = e.fixed_sudo()
             self.owned.append(self.sudo)
+            self.work_hold._retain_sudo(self.anchor, self.sudo, self.request.raw)
             self.git = self.hold(Path("/usr/bin/git").resolve(), c.EXECUTABLE_LIMIT, True)
             self.work_hold._retain_runtime(self.anchor, "git", self.git.held, self.git.raw, self.request.raw)
             self.git_named = e.stable_file(Path("/usr/bin/git"), allow_hardlinks=True)

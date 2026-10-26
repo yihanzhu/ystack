@@ -1344,6 +1344,7 @@ class Anchor:
     storage_entry_count: int = 0
     recording_work: dict = dataclasses.field(default_factory=dict)
     local_runtime_snapshots: list = dataclasses.field(default_factory=list)
+    runtime_companions: list = dataclasses.field(default_factory=list)
 
     def retain_preparation(self, parent, scratch_name, operation, input_raw, response_raw, caller_raw):
         _require(scratch_name in {"preparation-scratch", "inspection-scratch"}
@@ -1584,65 +1585,172 @@ class Anchor:
                 if getattr(error, "_scope_signal_cancel", False) and not getattr(failure, "_scope_signal_cancel", False):
                     raise
 
-    def seal_local_runtime(self, parent):
-        for snapshot, name, case_key in self.local_runtime_snapshots:
-            leaf, reader, failure = snapshot.work, None, None
+    def retain_sudo_companion(self, parent, executable, caller_raw):
+        work, original, case_work, failure, registered = {}, None, None, None, False
+        try:
+            _capture_work_values(work, "sudo-companion")
+            self.recording_work.setdefault("local_runtime_leaves", []).append(work)
+            caller = _json(caller_raw, DOCUMENT_LIMIT, "E_STORE")
+            _require(caller.get("kind") in {"shadow_enforced_request", "shadow_write_request"}
+                     and _id(caller.get("id")), "E_STORE")
+            executable.recheck()
+            before = _capture_metadata(executable.fd, work, "M")
+            _require(_identity(before) == _identity(executable.before), "E_STORE")
+            case_key = str(parent.before.st_dev) + ":" + str(parent.before.st_ino)
             case_work = _capture_work_values(self.recording_work, case_key)
-            leaf["runtime_case_carry_in"] = case_work.get("runtime", {})
-            leaf["runtime_window_carry_in"] = self.recording_work.get("runtime", {})
-            try:
-                _refresh_recording_directory(parent, parent.before, leaf)
-                reader = _open_child(parent, name, False,
-                    _store_rule(os.geteuid(), os.getegid(), 0o400, False, self.resolver), "E_STORE",
-                    recording_work=leaf, accounting_kind="M")
-                _require(reader.before.st_size == len(snapshot), "E_STORE")
-                left_hash, right_hash, offset = hashlib.sha256(), hashlib.sha256(), 0
-                _runtime_source_check(snapshot.owner, leaf, self.resolver)
-                while offset < len(snapshot):
-                    count = min(65536, len(snapshot) - offset)
-                    for field in ("read_bytes", "sha_bytes", "equality_bytes"):
-                        _require(leaf["runtime"].get(field, 0) + 2 * count <= _RUNTIME_FIELDS[field], "E_LIMIT")
-                    for field in ("read_bytes", "sha_bytes", "equality_bytes"):
-                        _runtime_account(leaf, field, 2 * count, commit=False)
-                    left = os.pread(snapshot.owner.fd, count, offset)
-                    _runtime_account(leaf, "read_bytes", len(left))
-                    right = os.pread(reader.fd, count, offset)
-                    _runtime_account(leaf, "read_bytes", len(right))
-                    left_hash.update(left);right_hash.update(right)
-                    _runtime_account(leaf, "sha_bytes", len(left) + len(right))
-                    _runtime_account(leaf, "equality_bytes", len(left) + len(right))
-                    _require(len(left) == len(right) == count and left == right, "E_STORE")
-                    offset += count
-                _require(left_hash.hexdigest() == right_hash.hexdigest() == snapshot.acquisition_sha, "E_STORE")
-                _runtime_source_check(snapshot.owner, leaf, self.resolver)
-                reader.recheck("E_STORE")
-            except BaseException as error:
-                failure = error
-                self.private_observations["unusable"] = True
-                leaf["final_failure"] = {"category": type(error).__name__,
-                    "errno": getattr(error, "os_errno", getattr(error, "errno", None))}
-                if getattr(error, "_scope_signal_cancel", False) or not isinstance(error,
-                        (Refusal, OSError, MemoryError, ValueError, TypeError)):
-                    raise
-            finally:
-                tail_failure = None
-                if reader is not None:
-                    try:reader.close()
-                    except (OSError, Refusal, MemoryError) as error:
-                        tail_failure = error
-                        self.private_observations["unusable"] = True
-                        leaf["final_close_incomplete"] = True
+            work["runtime_case_carry_in"] = case_work.get("runtime", {})
+            work["runtime_window_carry_in"] = self.recording_work.get("runtime", {})
+            original = _open_held("/usr/bin/sudo", False, _root_rule(self.resolver), "E_STORE",
+                                  recording_work=work, accounting_kind="M")
+            self.runtime_companions.append((original, work, case_key))
+            registered = True
+            _require(_identity(original.before) == _identity(before), "E_STORE")
+            _runtime_source_check(original, work, self.resolver)
+            snapshot = _RuntimeSnapshot(original, work)
+            parent.recheck("E_STORE")
+            parent_before = parent.before
+            ordinal = len(self.recording_work["local_runtime_leaves"]) - 1
+            _require(ordinal < 64, "E_LIMIT")
+            name = "runtime-" + str(ordinal).zfill(4) + "-sudo-0000.bin"
+            _copy_runtime_file(parent.fd, name, snapshot, work, self.resolver)
+            _refresh_recording_directory(parent, parent_before, work)
+            os.fsync(parent.fd)
+            _runtime_source_check(original, work, self.resolver)
+            executable.recheck()
+            _require(_identity(_capture_metadata(executable.fd, work, "M")) == _identity(before)
+                     == _identity(original.before), "E_STORE")
+            self.local_runtime_snapshots.append((snapshot, name, case_key))
+            self.private_observations.setdefault("local_runtime", []).append({"slot": "sudo", "index": 0,
+                "ordinal": ordinal, "locator": original.path, "file": name, "size_bytes": len(snapshot),
+                "sha256": snapshot.acquisition_sha, "errno": None, "request_sha256": digest(caller_raw),
+                "attempt_id": caller["id"]})
+            work["read_bytes"] += len(caller_raw)
+        except BaseException as error:
+            failure = error
+            self.private_observations["unusable"] = True
+            work["failure"] = {"category": type(error).__name__,
+                "errno": getattr(error, "os_errno", getattr(error, "errno", None))}
+            if registered:
+                self.close_runtime_companions(error)
+            if getattr(error, "_scope_signal_cancel", False) or not isinstance(error,
+                    (Refusal, OSError, ValueError, TypeError, MemoryError)):
+                raise
+        finally:
+            if original is not None and not registered:
+                try:original.close()
+                except OSError as error:
+                    self.private_observations["unusable"] = True
+                    work["companion_close_incomplete"] = True
+                    if getattr(error, "_scope_signal_cancel", False) and not getattr(failure, "_scope_signal_cancel", False):
+                        raise
+            if case_work is not None:
                 try:
-                    _capture_transfer_work(leaf, self.recording_work, case_work)
+                    _capture_transfer_work(work, self.recording_work, case_work)
                     _capture_accounting_receipt(self)
                 except Exception as error:
                     self.private_observations["unusable"] = True
-                    leaf["transfer_incomplete"] = True
-                    if tail_failure is None or (getattr(error, "_scope_signal_cancel", False)
-                            and not getattr(tail_failure, "_scope_signal_cancel", False)):
-                        tail_failure = error
-                if getattr(tail_failure, "_scope_signal_cancel", False) and not getattr(failure, "_scope_signal_cancel", False):
-                    raise tail_failure
+                    work["transfer_incomplete"] = True
+                    if getattr(error, "_scope_signal_cancel", False) and not getattr(failure, "_scope_signal_cancel", False):
+                        raise
+
+    def close_runtime_companions(self, primary=None):
+        owned, self.runtime_companions = self.runtime_companions, []
+        cancellation = None
+        for original, work, case_key in reversed(owned):
+            try:original.close()
+            except (OSError, Refusal, MemoryError) as error:
+                if getattr(error, "_scope_signal_cancel", False) and cancellation is None:
+                    cancellation = error
+                try:
+                    self.private_observations["unusable"] = True
+                    work["companion_close_incomplete"] = True
+                    _capture_observation_error(work, "M", "companion-close", error)
+                except (OSError, Refusal, MemoryError) as observed:
+                    if getattr(observed, "_scope_signal_cancel", False) and cancellation is None:
+                        cancellation = observed
+            finally:
+                try:
+                    if _capture_work_incomplete(work):
+                        self.private_observations["unusable"] = True
+                    case_work = _capture_work_values(self.recording_work, case_key)
+                    _capture_transfer_work(work, self.recording_work, case_work)
+                    _capture_accounting_receipt(self)
+                except Exception as error:
+                    self.private_observations["unusable"] = True
+                    work["transfer_incomplete"] = True
+                    if getattr(error, "_scope_signal_cancel", False) and cancellation is None:
+                        cancellation = error
+        if cancellation is not None and not getattr(primary, "_scope_signal_cancel", False):
+            raise cancellation
+
+    def seal_local_runtime(self, parent):
+        primary = None
+        try:
+            for snapshot, name, case_key in self.local_runtime_snapshots:
+                leaf, reader, failure = snapshot.work, None, None
+                case_work = _capture_work_values(self.recording_work, case_key)
+                leaf["runtime_case_carry_in"] = case_work.get("runtime", {})
+                leaf["runtime_window_carry_in"] = self.recording_work.get("runtime", {})
+                try:
+                    _refresh_recording_directory(parent, parent.before, leaf)
+                    reader = _open_child(parent, name, False,
+                        _store_rule(os.geteuid(), os.getegid(), 0o400, False, self.resolver), "E_STORE",
+                        recording_work=leaf, accounting_kind="M")
+                    _require(reader.before.st_size == len(snapshot), "E_STORE")
+                    left_hash, right_hash, offset = hashlib.sha256(), hashlib.sha256(), 0
+                    _runtime_source_check(snapshot.owner, leaf, self.resolver)
+                    while offset < len(snapshot):
+                        count = min(65536, len(snapshot) - offset)
+                        for field in ("read_bytes", "sha_bytes", "equality_bytes"):
+                            _require(leaf["runtime"].get(field, 0) + 2 * count <= _RUNTIME_FIELDS[field], "E_LIMIT")
+                        for field in ("read_bytes", "sha_bytes", "equality_bytes"):
+                            _runtime_account(leaf, field, 2 * count, commit=False)
+                        left = os.pread(snapshot.owner.fd, count, offset)
+                        _runtime_account(leaf, "read_bytes", len(left))
+                        right = os.pread(reader.fd, count, offset)
+                        _runtime_account(leaf, "read_bytes", len(right))
+                        left_hash.update(left);right_hash.update(right)
+                        _runtime_account(leaf, "sha_bytes", len(left) + len(right))
+                        _runtime_account(leaf, "equality_bytes", len(left) + len(right))
+                        _require(len(left) == len(right) == count and left == right, "E_STORE")
+                        offset += count
+                    _require(left_hash.hexdigest() == right_hash.hexdigest() == snapshot.acquisition_sha, "E_STORE")
+                    _runtime_source_check(snapshot.owner, leaf, self.resolver)
+                    reader.recheck("E_STORE")
+                except BaseException as error:
+                    failure = error
+                    self.private_observations["unusable"] = True
+                    leaf["final_failure"] = {"category": type(error).__name__,
+                        "errno": getattr(error, "os_errno", getattr(error, "errno", None))}
+                    if getattr(error, "_scope_signal_cancel", False) or not isinstance(error,
+                            (Refusal, OSError, MemoryError, ValueError, TypeError)):
+                        raise
+                finally:
+                    tail_failure = None
+                    if reader is not None:
+                        try:reader.close()
+                        except (OSError, Refusal, MemoryError) as error:
+                            tail_failure = error
+                            self.private_observations["unusable"] = True
+                            leaf["final_close_incomplete"] = True
+                    try:
+                        if _capture_work_incomplete(leaf):
+                            self.private_observations["unusable"] = True
+                        _capture_transfer_work(leaf, self.recording_work, case_work)
+                        _capture_accounting_receipt(self)
+                    except Exception as error:
+                        self.private_observations["unusable"] = True
+                        leaf["transfer_incomplete"] = True
+                        if tail_failure is None or (getattr(error, "_scope_signal_cancel", False)
+                                and not getattr(tail_failure, "_scope_signal_cancel", False)):
+                            tail_failure = error
+                    if getattr(tail_failure, "_scope_signal_cancel", False) and not getattr(failure, "_scope_signal_cancel", False):
+                        raise tail_failure
+        except BaseException as error:
+            primary = error
+            raise
+        finally:
+            self.close_runtime_companions(primary)
 
     def copy_runtime_slots(self, parent, slots, work):
         fixed = {key: self.config["identity_paths"][key] for key in
@@ -1803,6 +1911,7 @@ class Anchor:
             except OSError as exc:
                 if failure is None:
                     failure = exc
+        self.close_runtime_companions(failure)
         if failure is not None:
             raise failure
 
@@ -2282,6 +2391,10 @@ def _capture_named_metadata(name, parent_fd, work, kind):
         raise
     if work is not None:_capture_observe(work, kind, "stat-nofollow", {"parent_fd": parent_fd, "name": os.fsencode(name).hex(), "stat": _stat_values(value)})
     return value
+
+
+def _capture_work_incomplete(work):
+    return any(value for key, value in work.items() if key.endswith("incomplete"))
 
 
 def _capture_accounting_receipt(anchor):
