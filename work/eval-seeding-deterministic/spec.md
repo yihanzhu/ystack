@@ -1,7 +1,7 @@
 ---
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
-drafted: 2026-10-24
+drafted: 2026-10-26
 ---
 
 # Spec: seed the two declared eval families without model graders
@@ -233,6 +233,17 @@ seed requirement. It changes neither the native execution policy nor the meaning
 of an authenticated receipt. G2 accepts the design; a separate high-risk plan must
 land before this source preparation begins.
 
+RAW16 acquisition locations below bind immutable design source
+`c1d9d23e42e6efe2d6da1aae3d23b34564b4080d` and base
+`ae634c86701da04767c41a4d5f416f0c36517cf0`. They do not relabel the older
+clock/owner extraction sites. Frozen implementation
+`6f219579f72f73ddd3703f32b5f4a102ae8c175c` is external, unaccepted context;
+it supplies no implementation or proof acceptance. The operator-approved RAW16
+resource, fd3 and retention contract still requires G2 and a separately accepted
+high-risk plan-only change before inactive implementation. It grants no real
+collection, retention operation, resource window, installation, activation or
+unknown parent path authority.
+
 The source binding is child 9 at `22d25c96f28ed42da0a5722b6b5ea0e65946274c`.
 Its writer, reader and generator exist. Its 191 pure/static checks do not establish
 genuine old-origin/new-handoff, native qualification or G3. The manager must adopt
@@ -459,8 +470,11 @@ ACL, inventory, content, path-binding and before/after predicates. Offline
 recomputation proves consistency with retained observations, not that the current
 machine performed a new authenticated read.
 
-The real recorder retains values from the reads already performed. It does not
-re-read a path later to pretend it was the held read. Native attempts keep exactly
+The recorder retains the same bytes returned by original reads before those
+values are lost. The fixed sudo companion acquisition and parent fd3 framing
+below are the explicit RAW16 additions. Later held content checks verify the
+original bytes; they cannot replace an observation. Never reopen a historical
+locator to fabricate a held read. Native attempts keep exactly
 `{receipt.json,payload}`. Capture uses one separate, fixed directory under the
 same held `store_root`: `.capture-<attempt_id>.pending` during construction and
 `.capture-<attempt_id>` after its single directory rename. These names derive only
@@ -476,22 +490,30 @@ Inside the directory, `capture.json` keeps exactly the existing envelope:
 with only the host export reference using the intermediate form defined above.
 The request digest comes from held request bytes. Complete is true only after all
 required observations and native final checks finish. The envelope contains only
-the host, guest and source observations needed above, never secret bytes.
+the closed host, guest, source and RAW16 runtime inventory needed here, never secret bytes. Runtime inventory resides in its raw
+group, not a new envelope key.
 `sandbox-export.bin` is present if and only if the complete export-read row has
-its byte reference. Source-page captures never contain that file. Keep all whole
+its byte reference. Source-page captures never contain that export file; they
+must contain their complete fixed source-package runtime inventory. Keep all whole
 byte, size, digest, held-descriptor, regular-file, ACL and stability checks.
 
-Build and validate the entire bounded canonical envelope before any capture file
-write. Its 1 MiB bound includes the final LF. An overflow must not publish a
-binary beside a substituted empty raw group. Finish the existing native receipt,
-payload, stop/reap and work-root cleanup sequence unchanged. Then create the
-pending capture directory exclusively. Write its fixed files exclusively from
-already held bytes, with all existing fsync, readback, ownership and completion
-checks. Sync the pending directory and store root. Publish the complete directory
-with one same-filesystem atomic no-replace rename, then sync the published
-directory and store root. All required checks and syncs must succeed. A platform
-without this no-replace operation cannot produce a usable capture; a check-then-
-replacing rename is not a substitute. No helper binary or new native input is added.
+After original request/store/attempt validation and claim, the host exclusively
+creates the fixed pending directory before original runtime measurement. It tees
+the original runtime bytes into fixed role/index/operation files there while
+genuine holds still exist. Early runtime retention precedes envelope completion.
+It does not move native receipt, payload, stop/reap or work-root cleanup.
+Export retention keeps its original read and ordering.
+
+After native final checks and cleanup, build and validate the complete canonical
+capture envelope. Its 1 MiB limit includes the final LF and runtime inventory.
+Overflow preserves every early partial file and makes recording unusable; it
+cannot publish an empty substituted group. Write remaining fixed files
+exclusively from already held bytes, with all fsync, readback, ownership and
+completion checks. Sync the pending directory and store root. Publish the complete
+directory with one same-filesystem atomic no-replace rename, then sync the
+published directory and store root. All required checks and syncs must succeed.
+A platform without this operation cannot produce usable capture; a check-then-
+replacing rename is no substitute. No helper binary or native launch input is added.
 
 Directory presence alone is not proof that the post-rename syncs succeeded.
 After they succeed, the same host writes one fixed private completion record to
@@ -499,7 +521,8 @@ After they succeed, the same host writes one fixed private completion record to
 is at most 512 bytes and has exactly `schema_version:1`,
 `kind:"malicious_capture_commit"`, `id:attempt_id` and
 `body:{request_sha256,capture_sha256}`. The digests bind the original held request
-and exact capture.json bytes; that capture binds every export byte. This record
+and exact capture.json bytes; that capture binds every export and runtime byte.
+This record
 certifies the completed data publication checks, not native success. Create it
 exclusively, finalize its original owner/group and 0440 mode, fsync it, close its
 write descriptor successfully, and complete its held identity/content checks.
@@ -521,7 +544,9 @@ successful return from the final rename. This is not an atomic durability promis
 The host's native exit status, receipt and output-channel contracts stay unchanged.
 
 For a usable capture the exact published inventory is `{capture.json,complete.json}`
-plus `sandbox-export.bin` if and only if the matching reference exists. Pending
+plus exactly the fixed runtime files in its closed RAW16 inventory, and
+`sandbox-export.bin` if and only if its reference exists. A directory scan cannot
+extend the inventory. Pending
 names are never replay inputs. Any capture write, limit, ownership, readback, sync
 or pre-commit rename failure stops capture publication at its actual location.
 Retain all bytes and partial files there, including a published data directory
@@ -564,8 +589,10 @@ All pending, published, completion, failed-retained and private copies count tow
 the existing physical/file and cumulative write/read budgets. Rename does not copy
 bytes or erase a previous charge. Completion bytes, metadata and repeated checks
 pay the existing non-export and unified budgets; partial operations pay their
-actual work. Keep all existing binary passes, independent recomputation and caps,
-including 12 MiB exports, 1 MiB JSON and the four raw partitions. The 40 edit paths,
+actual work. Keep all existing binary passes and independent recomputation.
+D's RAW16 replacement
+caps apply together with every unchanged applicable cap, including 12 MiB exports,
+1 MiB JSON and the four raw partitions. The 40 edit paths,
 nine adoption-only paths and 84 source members do not change. No added helper,
 package, installation, authority or real recording is authorized by this layout.
 
@@ -595,6 +622,71 @@ spec covers source preparation only after the separate high-risk plan gate. It
 does not authorize installing the changed supervisor, reading a new real runtime
 slot, collecting runtime bytes or executing a trial.
 The relevant recording/resource/identity gates remain reserved.
+
+**RAW16 acquisition and the private carrier boundary.**
+
+H/T/P are fixed owners of one closed private boundary, never caller-selected
+transports. Derive names only from fixed role/index/operation. Retain real full
+ancestor and target holds from original acquisition; an integer is not a
+fabricated HeldPath. Record the original storage.entries observations and enforce
+their predicates. Bind the two launches and kill/coverage source roles to their
+own validated request, attempt, operation, qualification and completion.
+Source shorthand is fixed: enforced/writer/consumer are the corresponding
+shadow/v1 files; prep/preparation is preparation/v1/prepare-candidate.py;
+scope Reader/reader is scope/v1/read-shadow-evidence.py; host is
+sandbox/v1/host-supervisor.py. _NativeRelease belongs to enforced; Anchor and
+capture_parent_context belong to consumer.
+
+表中 H 是原 host-controlled capture，P 是既有 consumer private recorder，T 是 preparation 既有 scratch capture。H/P/T 是同一封闭 RAW16 carrier 合同的原有 owner 落点；不是三种可选 transport。每个生产者只写自己的原私有目录。只有 consumer 读已提交 H/T 并写 P。不得让 host 写 P，不增加目录型公共入口。
+
+每个 row 都绑定 owner/site/原 acquisition 序号、固定 role/index、原 locator、原 request/attempt/operation、qualification 字节引用、原读取 errno 和完整 bytes。路径只能来自当前已校验的原 owner 配置或固定代码，不来自历史 capture。多次实际读取分别保留观察并计读取成本；不同字节必须保留独立 slot occurrence，不能用相同 role 合并。相同字节也不豁免实际物理副本计费。
+
+| 类 | 固定 bytes 与设计源的真实读取位置 | 闭合设计 / 具体阻断 |
+| --- | --- | --- |
+| 1 Python | enforced:1940 StableFile；writer:83；scope Reader:256；preparation:2023 HeldBoundary；host:3630 原 read_all | 各原值在消失前 tee；consumer→P，prep→T，host→H。host 保留原 Python 完整链；它当前 read_all_or_refuse 只有 target，须补链和 finally。每个实际 interpreter 的 locator/hash/ABI 与原调用关系分别重算 |
+| 2 jq | consumer snapshot_dependency:754–800/snapshot_jq；writer:111；scope:289；prep copy_dependencies:839–853 | 原 original.read 的 bytes 进入 P/T；原 executable snapshot 另计物理、read/write/hash。平台 JQ_SHA256、size/version和每次原 recheck 不变 |
+| 3 Git | writer:117 的 held bytes；scope:292；prep producer_identity:2025 的原 HeldBoundary read | 各原值 tee P/T；重算 producer/command identity。只录字节，不由 coordinator 执行录制 Git |
+| 4 bash | enforced fixed_bash:931–944 的 StableFile；writer:113；scope:291 | 保留原逻辑别名链及物理 hold；在真实 StableFile.raw 尚在时写 P；不把 alias locator 当可重开历史路径 |
+| 5 sudo | enforced fixed_sudo:946–953/FixedSudo:425–443：O_EXEC或O_RDONLY，只有fstat身份；scope source_command另有真实 _hold_bytes | fixed_sudo 原调用点增加固定 /usr/bin/sudo 的只读完整链 companion；前后与原执行 fd dev/ino/type/uid/gid/mode/nlink/size/mtime/ctime及名字双核对，实际bytes→P。原 native sha仍是原metadata sha，不改成binary sha；新增 binary hash只供RAW16。O_EXEC不可读不伪装为read成功。新acquisition失败只使录制不可用 |
+| 6 C compiler | _NativeRelease:803–804 的 compiler StableFile | 原 raw→P；保留 build record 的 compiler_path/sha、argv/sysconfig关系。无需重新执行 compiler/version探针 |
+| 7 object-closure helper | enforced:1974、writer:107 的 DependencySnapshot.original/snapshot | 原 snapshot_dependency 原read→P；两个现有实体及全部原recheck都计账；绑定父context helper_path/size/sha和固定source，不以build digest代record |
+| 8 native-release binary | _NativeRelease:776–785 的 binary StableFile | 原raw→P；原build/size/Python ABI/loader关系不变；录制副本无执行权限，不重新加载它 |
+| 9 build/dependency records | native build record在_NativeRelease:776为真实StableFile；helper build和native dependency在capture_parent_context:694–731只有SHA | native build原raw→P。后两个records不能从当前fd3还原；下节规定唯一v3合同。真实父方生产调用源码缺失是明确阻断，不用测试ParentInputs补事实 |
+| 10 vfkit及runtime driver | host identity_fds:3642–3645；measure_identities:1220 | 原完整chain+measurement tee→H；依原host_runtime composite重算；driver源副本必须等于84集合成员 |
+| 11 vm_service与全部dyld | host config identity_paths；原同一measurement循环 | vm_service单值和每个dyld原顺序/index都→H；无截断、摘要替代或缺成员成功；完整集合及所有失败都计入64-slot/4GiB eligibility |
+| 12 guest kernel与kernel config | host identity_fds；measure_identities hash/read_slot | 同一read→H；kernel config原raw仍供原kernel_config_ok；新增录制不得改变原复用，不添加native第二次读取 |
+| 13 guest init/supervisor/image/toolchain | host identity_fds及原hash_slot | 原stream→H；逐项重算原identity，不改native映像/配置/启动 |
+| 14 verifier | host measure_identities read_slot；parent Anchor亦有真实verifier hold | host原read保留给原build_input_disk，tee→H；parent既有byte读取若参与qualification也记录其原值和全字节关系。不能用parent hold代替host读取事实 |
+| 15 host config及composite/source字节 | host fixed_fds config_raw/host_supervisor_raw、installed_fds；Anchor.config_raw/installed；package verification instructions原request字节 | 原raw→H/P，带原request、config、accepted-set/registry和instructions关系。D中的源码/政策仍留在84 source类并逐份计重叠；不是新增runtime可执行清单 |
+| 16 kill/coverage两个source packages | host _CoverageInstallation:3903–3971 有原raw和完整fd链；consumer _CoverageConfiguration:2088–2144有原HeldPath/raw | 每个原package的config、accepted、package及每个file row→对应H/P，绑定该source request的source_package_ref/source_accepted_set_ref和原identity。各package固定normalizer、collector；coverage另3schema，kill另4schema。不得新增collector或收集一次以补bytes |
+
+coverage schema固定 default-branch-history/publisher-pull-requests/branch-rule-history；kill固定 repository-default-branch/first-parent-register-history/default-branch-ref-history/operator-merges。加config/accepted/package后，分别为8、9个package byte成员；host-config/supervisor/Python是上述独立角色。两套package角色与原owner精确schema一致，不按目录扫描。
+
+preparation raw bytes只在producer_identity/copy_dependencies原读取期间存在；在原函数处tee到已持有scratch_work下固定runtime文件，沿用T现有input/response/operation绑定。补其carrier inventory和seal，不让父consumer之后重开 /usr/bin/git。T现有仅capture.json，不是现成runtime接口；这是明确待实现改动。
+
+**Parent fd3: two original records.**
+
+capture_parent_context 的 _read_plain_fd(fd=3) 在解析前只读原schema2 JSON。原raw中有helper_build_record_sha256和native_release.dependency_record_sha256，没有对应bytes或可用的原holds。只保留这份raw不会补齐record。_NativeRelease另开的build-record.json只解决native build，不解决这两个record。
+
+固定设计源中找到的原record持有者 ParentInputs 位于 scripts/test/shadow-enforced.test.sh:1011起的临时测试生成代码。它不属于真实parent生产实现。不得把它提升成生产资格证明，也不得以两个摘要去扫描文件、猜兄弟路径或重开历史locator。
+
+唯一接口为同一fd3的v3封闭frame，不加fd或selector：20字节header（8字节固定magic `YSRAW16\0`，随后三个网络字节序uint32长度），依次是原schema2 context JSON、helper build record原bytes、native runtime dependency record原bytes。Context仍≤16,384 B；每个record仍≤1,048,576 B、原canonical schema不变。frame上限2,113,556 B，准确为20+16,384+2×1,048,576；拒绝短读、尾随字节、重复record、长度/digest/qualification关系不符。
+
+原父方必须在它首次读取且真实持有这两个records时，把同一字节写入自己原有fd3 backing file。它先做原qualification，再检查前后真实chain/ACL/name/content并封口fd3；子方读同一fd3，不读取record locator。子方保留实际原frame和各payload，绑定frame/context SHA及后续request/attempt，再写P；不能只保留v3生成出来的一个摘要。原schema2可继续供原native路径，但不能产生完整RAW16 seed。
+
+这改变的是公有fd3 wire/limit，不是改变原record内容、资格标准或native verdict。新增payload按runtime计，原context/metadata仍按原M及所有适用raw账计；不借payload分类挪走旧M费用。原parent已需写fd3 backing file，此接口不增加parent目的目录，但增加其内容/容量及retention范围。
+
+**生产接线阻断精确为：固定设计源的产品入口链没有提供创建这份真实fd3的production调用源码。** 这是implementation-first硬依赖。G2和分开的独立高风险plan-only接受完成后，可在当前允许的_consumer.py实现封闭解帧及私有值构造，在现有测试写fixture；它们不能证明父方已调用。若完成该原调用者需要40 edit之外的harness文件，manager必须取得它的真实path/head及新allowlist决定。不能猜一个文件名，不能以测试函数当交付。真实parent接线、qualification和完整RAW16继续阻断；此缺源不阻止上述门后的有限inactive机制实施。
+
+新增carrier streaming每块≤64 KiB。原native read_all/sha256_fd的1 MiB读取、read/EOF/errno语义保持；tee只切分已返回的同一块。小文件原raw尚存时可延迟到原私有目录可用后写，保持该raw及真实holds；大文件从原measurement逐块写，不增加完整大文件buffer。非host各owner使用自己的原read结果，不能由host补采。
+
+源read前后、源与carrier内容复查前后均检查持有链、parent/name与fd身份、owner/mode/ACL及检查后的再fstat。新增完整源复查只影响recording，不覆盖native measured值。carrier排他创建；完整写、fsync、成功close writer、held readback、全字节比较和独立SHA均须成功。全体target在原native关闭点按原顺序关闭；新增ancestor/carrier holds在finally逆序逐个close，一次close失败仍关闭其余，不重试不确定fd。原native首错保持；recording首错和后续close/ledger错各保留，次错不能遮首错。
+
+任一记录/资源/重检/close失败使录制不可用；native原退出、stdout零、receipt/payload及清理路径不改。所有pending、published、partial、旧失败留在实际位置，不删、不迁移、不重试。unknown费用不是零。completion不能修复缺bytes或失败检查。真实磁盘资源干扰仍需执行时资源授权，不能把控制流隔离说成物理无干扰。
+
+Preparation's fixed runtime inventory, input/response/operation binding and
+completion seal must be implemented inside its held scratch_work; capture.json
+alone is insufficient. No host or parent collects bytes for another owner.
 
 #### C. Complete derived-output ownership
 
@@ -691,16 +783,92 @@ cannot select a replay command or change a policy. No generic runtime collector 
 added. New real collection, retention and storage of these bytes needs its reserved
 recording/resource authorization before it occurs.
 
-The new resource proposal is a 4 GiB aggregate byte ceiling for that qualified
-runtime class, streamed in at most 64 KiB chunks, with at most 64 byte slots.
-This is an explicit replay-storage ceiling, not a claim about actual Mac runtime
-sizes. It permits large immutable identities without loading them in memory; it
-bounds two retained copies to 8 GiB. Identity paths have an unbounded dyld list in
-the existing host config, so this is a new recording eligibility bound, not a
-retroactive native-config rule. All required dyld members must fit; truncation,
-hash-only substitution or omitting a member is forbidden. A real runtime that
-exceeds either ceiling needs a normal G2 resource amendment before seed recording.
-No actual runtime byte inventory or permission is inferred by this design.
+**RAW16 finite lifecycle and costs.**
+
+At the design source, evals-launcher.sh:309-328 stages review files only;
+evals-driver.sh:775-796 lacks the malicious branch; replay-malicious.py has no
+replay_case or production seed assembly. These are remaining C implementation of
+this same goal. Complete them in existing allowed files through the fixed flow
+below. Shared value adapters alone are not delivery.
+
+窗口固定为四个trial的一次录制/assembly、一次run replay、一次dashboard replay；dashboard的两个不相交pair合起来只重放这四case一次。case身份重复仍按M4拒绝。任何另一次run/dashboard/recording是新操作，必须先把旧留存带入资源预检，不能重置物理账。没有自动删除或无界重跑许可。
+
+对于一个实际qualified byte occurrence，固定实体层为 O原持有来源、H或T或local-P前段carrier、P最终private recorder、S私有seed、I-run、I-dashboard。local owner可少一层，但预算和证明不能预先借这个节省；实际没有写出的文件记0，不虚构一次写。所有native已生成dependency snapshots、同role重复capture和旧失败均列入O/额外carry-in，不能因为同SHA合并。
+
+C的seed assembly必须实现为replay-malicious.py内一个私有固定数据步骤，由现有测试/受授权录制调用者持有对象调用；只消费已提交完整H/T/P，不运行native、collector或新命令。它排他写固定S角色文件并逐项复制、比较、封口。没有新的public CLI、用户选路径/limit或通用API。C launcher在run/dashboard按manifest固定role持有S并排他创建I；driver只调用固定replay_case；coordinator只读I并重算原owners。两次replay各有独立I，不能共用或释放前次I省账。
+
+下表每个L是一份完整byte集合的长度。R为新增实际文件读取；W为写出；H为SHA输入处理；E为完整比较两端之和；C为拷贝所访问字节。相同loop可同时有R/H/E费用，不能只报R。旧native本来发生的Q另列，不改其次数。
+
+| 固定步骤，全部存在时的每集合调用日程 | R | W | H | E | C |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 原acquisition→carrier tee；之后同held源与carrier各读一次，流式全字节比较且两端独立hash | 2L | L | 2L | 2L | L |
+| consumer首次carrier acquisition/hash一次；独立origin SHA再读一次；carrier→P copy/hash一次；最终carrier与P各读一次、比较并各自hash | 5L | L | 5L | 2L | L |
+| P→S copy/hash一次；最终P/S各读一次、全字节比较及各自hash | 3L | L | 3L | 2L | L |
+| 每次replay：S→I copy一次；独立installed SHA一次；S/I完整比较各读一次；coordinator acquisition/SHA一次；独立identity owner读/hash一次；最终S/I各读一次、完整比较与各自fresh SHA | 8L | L | 5L | 4L | L |
+| 窗口总计（上行两次） | 26L | 5L | 20L | 14L | 5L |
+
+原acquisition和原native反复StableFile/DependencySnapshot/配置recheck等计入Q：逐site实际read/write/hash/equality/copy分别保留；原read以memory raw复用时不虚构I/O，但hash/equality仍收费。Q不是26L表内的匿名余量。原metadata/JSON处理继续付原W/M账；此合同不调整M阈值或替它造通过结论。
+
+S/I final检查既比较全bytes，也各自验证初次持有时的digest、parent/name/ACL；两边一起改成相同内容仍拒绝。原SHA与equality均保留；没有用“融合”删掉独立origin或identity SHA。
+
+**RAW16 resource contract.**
+
+Every configured dyld member must fit the closed inventory. Native configuration
+still has its existing unbounded list; these are recording eligibility limits,
+not a native-config restriction. Never truncate, omit or replace a member with
+its digest.
+
+RAW16合同明确替换原qualified aggregate 4GiB/64 slots和two-copy合计8GiB边界。新合同为每case完整qualified occurrence inventory≤4GiB/64，固定四case窗口合计≤16GiB/256；每case六层留存≤24GiB/384 physical files，全窗口≤96GiB/1,536。每case包含两launch、prepare/inspect、gate与两个source packages。这是operator直接接受的合同扩大，不能解释为原cap许可；它不授权实际资源使用。窗口固定为一次record/assembly、一次run和一次dashboard；所有case与窗口上限同时适用，helper、阶段和pair都不重置额度。
+
+不得为维持64把不同原读取bytes合并。完整16类展开若超过64或4GiB，该真实recording不合格，改变上限须正常G2资源修订；没有实际runtime inventory，不能断言原真实四trial fit。机制正例必须用完整role和真实调用的有界fixture成功，不得把恒拒绝当完成。完整实例化inventory是#558/真实录制门的一部分。
+
+| 项目 | 原cap | 合同cap（每case / 四case）与依据 |
+| --- | --- | --- |
+| qualified logical bytes / slots | 整个qualified class aggregate 4GiB / 64 | 替换为每case 4GiB/64；固定四case窗口合计16GiB/256。完整原读取occurrence重复计，不按digest去重 |
+| retained copies / physical bytes | 两份 / 8GiB | 最多六层 / 24GiB；共同96GiB。O+carrier+P+S+I-run+I-dashboard；额外O/carry-in/partial也必须挤在此总额内 |
+| 新增carrier/recorder/seed/replay runtime writes | 未单列 | 5L≤20GiB / 80GiB；每份五次有名写入；短写按实际写出计；失败重做不新增额度 |
+| 新增runtime文件读取 | 未单列 | 26L≤104GiB / 416GiB；上表全部有名遍历，含两个replay |
+| 新增runtime SHA处理 | 未单列 | 20L≤80GiB / 320GiB |
+| 新增runtime equality处理 | 未单列 | 14L≤56GiB / 224GiB；比较两端均计 |
+| 新增runtime copy处理 | 未单列 | 5L≤20GiB / 80GiB |
+| 新增总byte工作（R+W+H+E+C） | 未单列 | 70L≤280GiB / 1,120GiB；不是IO速度/时间保证 |
+| runtime物理文件 | 两份64-slot派生上界128；原无独立新carriercap | 六层最多384 / 1,536，含零字节和partial；每个S manifest仍受原1–256共享文件总上限；不是扩大seed manifest |
+| fd3 frame | 原context≤16,384B | v3≤2,113,556B；原context和每record JSON单项limit不变；每case实际frame次数计runtime与适用M/raw |
+| 64KiB、1MiB JSON、512B completion、四raw分区、raw/export/source/Git/prep等 | 原值 | 全部不变；新增metadata、重叠source/runtime以及T scratch都同时付其旧cap |
+
+26/5/20/14/5是R/W/H/E/C的**新增路径**闭合数，不是全native流程总成本。总实际receipt必须列Q+这些实际增量；Q包含原native所有已发生的重复操作及先有实体，缺Q就拒绝完成。它们没有给旧native额外额度：旧原生owner的time/source/scratch等限额不变。新数据路径每步在write/allocation前检查这些增量cap和所有旧适用cap。真实native继续发生的费用若因录制失败无法完整记录，则receipt标UNKNOWN，绝不seed；不为了完成账改变native分支。这个分账避免把旧native未有的runtime累计上限编造出来，也不隐藏它的实际消耗。
+
+存量P0/F0按实际文件逐项带入，无digest去重或“临时”豁免；每case的P0+本次实际增加≤24GiB，F0+本次≤384；全窗口所有存量及本次实际增加合计≤96GiB/1,536文件。case和窗口两级上限同时满足，阶段、pair和失败均不重置。原O及native dependency snapshot也在P0；若满L正例额外有这些实体，必须用实际O+5L验证，不能直接宣称6L必fit。两次小失败后成功的fixture必须在同一额内；两次完整满额失败后再成功未获额外容量。累计增量也包含所有失败，不能把fail的26L归零后再给success26L。达到cap只停止录制可用性，保留全部证据。
+
+这些数值是有限设计合同，不是实测资源或通过证明；不授权提高真实主机预算。它保留全byte/SHA/identity质量门，不保证所有原native输入都可录制。
+
+**Original native byte costs Q.**
+
+这些是固定设计源已有调用的计费规则。新26L表只覆盖新增retention路径。Q必须由下面的实际原调用次数乘原读取长度，累计到同一receipt；禁止一次原函数调用既不进Q又不进增量，或把同一次调用重复记两遍。实际Q必须来自完整运行证据；缺失时为UNKNOWN。
+
+| 原调用 / 源位置 | 每个实际调用的完整byte成本 |
+| --- | --- |
+| StableFile初次stable_file / enforced:447–459 | 原held.read的实际读取；构造后result.recheck再读同文件并比较两端；sha256属性每次访问另计完整raw SHA处理，不虚构磁盘read |
+| StableFile.recheck / enforced:340–359 | 实际再读L；equality两端2L；原metadata/ACL/name遍历单独计。recording_work启用时保留当前已有read_bytes/equality_bytes计费，不以新runtime账移走 |
+| snapshot_dependency / consumer:754–800 | original.read L、digest L、exclusive snapshot write L；实际short write/partial和snap物理副本计。每次DependencySnapshot.recheck另读snapshot L并hash L，original metadata recheck也保留 |
+| host read_all/sha256_fd / host:635–690、measure_identities | 原实际read L及原SHA L；小raw拼接/已有解析按原实际遍历；dyld首读失败按原停止顺序，不补造后续read |
+| host config/supervisor/Python及installed reads / host:3609–3657 | 每个原read及每个原digest；同一config在load_config等再次读取时重复计。新增retained chain不使原重复read消失 |
+| _CoverageInstallation.open/recheck / host:3949起 | open每次pread实际bytes；同路径再次open仍计；原host_raw/load_config双读照计；recheck的每个文件再读与原raw比较两端逐项计，保存列表中重复holds不能因files映射键相同忽略 |
+| _CoverageConfiguration / consumer:2088–2144 | 每条原HeldPath.read；原每个row digest；原source/installed equality两端；初始化hashes的每个再读/hash；每次recheck再次read/hash。重复校验不合并为一次 |
+| preparation producer_identity / preparation:2021–2035 | script/Python/Git每个read_limited与_producer_source_values的各SHA；prepare与inspect分别计；Git version返回仍走原commands/raw账 |
+| preparation copy_dependencies / preparation:789–857 | 每文件原read/hash、原snapshot write、measure_private_file read/hash、after_data read/hash；jq还包括原after equality两端与原重复sha256调用；全部先有snapshot进物理总量及原scratch账 |
+| preparation recheck_fixed_bytes / preparation:2255–2274 | 每个实际source/snapshot measure_fd分别完整read/hash，不能将prepare/inspect两套目录合并 |
+| scope _Reader/_HeldBytes / reader:256–302 | 每个实际hold/read与raw SHA访问；每次原recheck的完整read/equality；gate native package JSON里的hash值不能免掉原可用raw bytes |
+| fd3 / consumer:694–731 | 原context读取、原解析/canonical及前后身份检查全部保留；v3新增两payload的实际read/hash/copy另付runtime，frame头/refs/原context仍付原metadata及所有适用cap |
+
+任何原owner中的额外实际byte调用都按同类规则计Q，不能归到“元数据零字节”。这个规则不授权新增调用。完整production计数缺失或次错使计数不可靠时，Q=UNKNOWN，禁止seed。全M及Q为UNKNOWN时保持阻断，不得声称完整成本已通过。
+
+Host publication_work transport remains a hard dependency. A parent receipt
+cannot imply complete host cost. Unknown host-producer-work, M or Q prevents seed
+completion. The fixed runtime carrier and two-record fd3 frame are not cost-
+transport channels. A changed field or transport needs the applicable artifact
+gate. The existing M startup limit stays 32 KiB (32,768 bytes). An over-limit
+startup remains rejected. No M budget or acceptance standard changes.
 
 The complete export is a separate fixed raw-byte role, not a qualified runtime
 slot or repository source. The following explicitly replaces the old 16 MiB
@@ -763,8 +931,9 @@ All other source and ordinary trial-file limits stay at their existing owner
 limits. Source snapshots are each at most 16 MiB and their sum at most 32 MiB;
 source total is counted before any execution. Git/preparation retains 256 MiB
 storage and 384 MiB scratch; source pages retain 64 MiB per operation and all
-applicable non-export/raw/JSON limits. Runtime slots retain their 4 GiB/64-slot
-and two-copy limits. The complete input/output resource receipt includes these
+applicable non-export/raw/JSON limits. Runtime slots use the per-case and fixed
+four-case-window RAW16 limits and cumulative costs above. The complete input/output
+resource receipt includes these
 classes, every applicable total and the raw ledger above; overlapping charges
 remain visible. Reject before the next allocation/write exceeds an applicable
 limit. No sparse-file, compressed-size or excluded-sidecar shortcut. Existing
@@ -775,8 +944,9 @@ authorization; ordinary offline proof grants no native qualification.
 #### E. Proof and remaining gates
 
 The high-risk plan must pin the exact old and new owner boundaries, all 84 final
-source hashes, the untouched wrapper/core exports, and the complete unmerged #439
-diff. It must include both real callers of each extracted function, not just unit
+source hashes, unchanged wrapper/core exports except the specified public fd3
+v3 wire/limit, and the complete unmerged #439 diff. It must include both real callers
+of each extracted function, not just unit
 imports. Keep the old live acquisition behavior and closed rejection tests.
 
 Required finite mechanism cases are: four well-formed synthetic observation sets
@@ -812,9 +982,35 @@ export reference at another process site. Check stop/reap/read order. Compare th
 whole padded rebuild; deleting either full-source parse or guest recomputation,
 or mutating either production/offline call, must fail its narrow test. Require
 boundary/one-over proof for each new file/count/sub-total/unified/physical/read/
-write bound. Include two-copy lower-bound accounting and extra retained, archive,
+write bound. Include every RAW16 layer and extra retained, archive,
 log, overlapping and repeated-read charges. Tests call existing owners and entry
 points; this adds no diagnostics framework, prefix codec or general externalizer.
+
+RAW16 additionally requires the complete acquisition, carrier, assembly and
+replay proof below. Large-limit tests use bounded counters; no real 4 GiB fixture
+is required. A complete-role positive must succeed. Permanent rejection cannot
+replace implementation.
+
+| 必须证实 | 有界proof |
+| --- | --- |
+| 16类真实接线 | 用真实原owner函数的完整fixture；分别破坏production tee、consumer复制、C staging、offline identity调用，必须失败。测试自造slot map或ParentInputs不能证明真实parent生产接线 |
+| 原读取与hold | 每类在read前中后、copy、final seal、close插入parent/name/ACL/inode/content漂移；native原结论/错误/顺序保持；capture无效；无历史reopen或伪HeldPath |
+| sudo | 原O_EXEC不可读不冒充success；companion固定path/readability、双方同inode及前后名字/ACL都检查；既有metadata sha不变，binary sha独立；新增读失败不改native |
+| 两records/v3 | 真正held原bytes与父原qualification关系；旧v2仍保native而RAW16拒绝；短header、长度边界/多一、尾随、缺/换record、cross-request、digest与schema冲突均拒绝；不调用collector找文件 |
+| 所有复制层 | carrier/P/S/I-run/I-dashboard实际存在并独立计；每个独立SHA与whole-byte compare保留；两边同时变成相同新bytes仍因原seal拒绝 |
+| 完整数字账 | 每步测R/W/H/E/C真实计数，核对新增26/5/20/14/5 schedule；Q按原owner单独核对，不用残余信用；完整origin/partial/carry-in/source/raw/prep overlap均入账 |
+| 全资源边界 | 每case 4GiB/64、六层24GiB/384；窗口16GiB/256、96GiB/1,536；两级全部新增累计cap及旧适用caps分别边界/多一；carry-in/失败共账，阶段/pair不重置；shared总数仍256；有界模拟大计数，不制造4GiB真实fixture |
+| 失败和重跑 | 两次小partial后完整成功仍共用总账；已满容量的后来操作拒绝且保留原文件；未知write结果或第二close/ledger故障记UNKNOWN，无成功seal；不删除以换容量 |
+| stage C | run和两disjoint dashboard pairs完成四case各一次，独立I和final checks；额外case/重复trial按原M4/manifest拒绝；C缺任一owner不能发完成结果 |
+| scope/权限 | 全部repo inactive；slot never executes；stdout零；native attempt两成员不变；source captures不能夹export；无新helper/network/credential/install/activation/target |
+
+G2 and the separate high-risk plan permit only inactive mechanisms within the
+40 edit / 9 adoption-only / 84 source boundary. Actual parent path/head, original
+held record acquisition/qualification, fd3 publication and completion remain
+mandatory before real hookup, qualification or whole RAW16 acceptance. A producer
+outside 40 edit paths, a changed adoption-only file or a new source member needs
+an exact scope decision. No unknown parent filename is authorized. Fixtures
+cannot satisfy the production dependency.
 
 Retain all existing host-supervisor, guest-value, receipt, consumer, preparation,
 gate-generation, scope, eval, restoration and cancellation regressions. The shared
@@ -1130,8 +1326,8 @@ in CI; wiring the record report into anything but the relay; enablement.
 
 - **Risk is high.** Eval policy, seed and scope-gate change. An operator-merged
   plan-only PR precedes code.
-- **Size.** This spec amendment uses `review_size: standard` for the one fixed host-export
-  representation, complete byte comparison, resource accounting and proof.
+- **Size.** This spec amendment uses `review_size: standard` for the fixed RAW16 acquisition/carrier contract,
+  complete byte comparison, resource accounting and proof.
   The separate high-risk plan must set the whole PR 1b implementation range, including the preserved relay
   code, every owner extraction and all tests. It must count inherited code and
   failed/retained proof; no partial implementation is a finished PR. Do not trim
