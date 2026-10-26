@@ -138,7 +138,7 @@ shadow_source_rows() {
     'sandbox/v1/runtime-vfkit.py 50a400dd73e8fa8d46cf93e5f8824ac80d5921cc1bf69d522bf11d4330050a14 6764 100755' \
     'scope/v1/evaluate-scope.sh fe6048b5eada5d86531e085acd0a9f46b73028d348349ab932e8c59f4e2ed66a 25253 100755' \
     'scope/v1/generate-gate-evidence.py 087fd3d31ef3096a216ce11ea7a5da2dbf9c0eb7b0cb46ac9d495fdff53e39c4 36067 100755' \
-    'scope/v1/read-shadow-evidence.py 7fb87280d0fdb80745323d64b428ac9a66ec71de75e619e549cf07940bf3fbe6 96327 100755' \
+    'scope/v1/read-shadow-evidence.py 7fb87280d0fdb80745323d64b428ac9a66ec71de75e619e549cf07940bf3fbe6 96327 100644' \
     'scope/v1/scope-gates.jq 302e882b4b351186987e8b5f3e13d1725d0e2e9f7a996a4033ea893bd0a87487 57306 100644' \
     'scope/v1/scope-policy.json 5c6db4debedfcd7117735bd1d4bf907293f73972ec8909c4eab9f25cf6417fe5 1181 100644' \
     'scope/v1/validate-scope.sh 99c0abae1bdcc3809dfac535a8b24137842abaec2418b90566b6ac8ff213b406 3194 100755' \
