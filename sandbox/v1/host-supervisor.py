@@ -537,11 +537,11 @@ def _retain_runtime_source(path, principal_uid, fds):
         held.native_fd = fds[-1]
         _capture_process["runtime_sources"].append(held)
         return True
-    except (OSError, Refusal, MemoryError, ValueError):
-        _capture_process["complete"] = False
+    except (OSError, Refusal, MemoryError, ValueError) as error:
+        _runtime_failure(error)
         if target is not None:
             try:os.close(target)
-            except OSError:pass
+            except OSError as secondary:_runtime_failure(secondary)
         return False
 
 
@@ -556,8 +556,8 @@ def _runtime_work(field, amount):
 
 
 def _runtime_failure(error):
-    _capture_process["complete"] = False
     try:
+        _capture_process["complete"] = False
         _capture_process.setdefault("runtime_work", {})["incomplete"] = True
         row = {"category": type(error).__name__, "errno": getattr(error, "errno", None),
                "code": getattr(error, "code", None)}
@@ -957,10 +957,22 @@ def read_all(fd):
     return raw
 
 
+def _read_runtime_python(fd):
+    try:
+        raw = read_all_or_refuse(fd)
+        _runtime_remember_raw("host_python", fd, raw)
+        return raw
+    finally:
+        try:os.close(fd)
+        except OSError as error:_runtime_failure(error)
+
+
 def read_all_or_refuse(fd):
     try:
         return read_all(fd)
-    except OSError:
+    except OSError as error:
+        if _capture_process is not None:
+            _runtime_failure(error)
         refuse("E_CONFIG")
 
 
@@ -2225,7 +2237,12 @@ def _capture_file_shape(state, uid, gid, size):
 
 
 def _capture_directory_check(store, directory, name, expected, uid, gid, work):
-    require(1 <= len(expected) <= 3, "E_CAPTURE")
+    runtime = ({row["file"] for row in _capture_process.get("runtime_inventory", [])}
+               if _capture_process is not None else set())
+    ordinary = set(expected) - runtime
+    require(len(runtime) <= 64 and 1 <= len(expected) <= 3 + len(runtime)
+            and ordinary <= {"capture.json", "sandbox-export.bin", ".completion.pending", "complete.json"}
+            and not {".completion.pending", "complete.json"} <= ordinary, "E_CAPTURE")
     state, named = os.fstat(directory), os.stat(name, dir_fd=store, follow_symlinks=False)
     names = []
     with os.scandir(directory) as entries:
@@ -2326,6 +2343,9 @@ def _publish_capture(store_fd, uid, gid, attempt_id, request_raw, raw, complete,
         _capture_directory_check(store_fd, directory, published, expected, uid, gid, work)
         _capture_sync(directory, work, "published-directory-fsync")
         _capture_sync(store_fd, work, "published-store-fsync")
+        if _capture_process is not None and "runtime_sources" in _capture_process:
+            _close_runtime_sources()
+            require(_capture_process["complete"], "E_CAPTURE")
         completion = _capture_completion_values(attempt_id, request_raw, capture_raw)
         work["read_bytes"] = work.get("read_bytes", 0) + len(request_raw) + len(capture_raw) + 4 * len(completion)
         write_excl(directory, ".completion.pending", completion, uid, gid, capture_work=work)
@@ -3976,11 +3996,7 @@ def _run_launch(argv):
     # already-physical path (same convention as install_directory's own
     # realpath), so it is resolved once, here, before validation.
     python_fd = secure_walk(os.path.realpath(sys.executable), principal_uid, check_mode=True)
-    try:
-        python_raw = read_all_or_refuse(python_fd)
-        _runtime_remember_raw("host_python", python_fd, python_raw)
-    finally:
-        os.close(python_fd)
+    python_raw = _read_runtime_python(python_fd)
     # Every identity_paths and control-related installed_files fd is kept
     # open (R2.3/R4.2 read their content below, through these same fds --
     # never a fresh open() of the path string); runtime.vfkit/driver are

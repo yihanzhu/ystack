@@ -149,7 +149,7 @@ previous=os.environ.get('YSTACK_SANDBOX_TRUST_ROOT');results=[]
 roles=('guest_kernel','guest_init','guest_supervisor','image','toolchain','verifier',
     'runtime_vfkit','runtime_driver','vm_service','guest_kernel_config')
 try:
-    for case in ('complete','zero-write','partial-error','source-read-error'):
+    for case in ('complete','zero-write','partial-error','source-read-error','source-close-error'):
         with tempfile.TemporaryDirectory(prefix='ystack-host-carrier-') as temporary:
             base=Path(temporary);base.chmod(0o700);os.environ['YSTACK_SANDBOX_TRUST_ROOT']=str(base)
             inputs=base/'inputs';inputs.mkdir(mode=0o700);store=base/'store';store.mkdir(mode=0o750);store.chmod(0o750)
@@ -208,7 +208,7 @@ try:
                 if row['sha256'] is not None:
                     assert raw==originals[row['locator']] and h.sha256_hex(raw)==row['sha256']
                     assert (store/'.capture-attempt.carrier.pending'/row['file']).stat().st_mode&0o777==0o440
-            if case=='complete':
+            if case in ('complete','source-close-error'):
                 total=sum(map(len,originals.values()))
                 assert capture['complete'] and all(row['sha256'] is not None for row in inventory)
                 assert work=={'files':13,'logical_bytes':total,'physical_bytes':total,'write_bytes':total,
@@ -223,6 +223,29 @@ try:
                     assert inventory[0]['sha256'] is None
                     assert inventory[0]['size_bytes']==(0 if case=='zero-write' else 7)
                 assert work['physical_bytes']==sum(row['size_bytes'] for row in inventory)
+            if case in ('complete','source-close-error'):
+                closing_fds=[fd for item in capture['runtime_sources'] for fd in item.fds]
+                close_calls={fd:0 for fd in closing_fds};original_close=h.os.close
+                close_identities={fd:h._capture_identity(os.fstat(fd)) for fd in closing_fds}
+                failed_fd=closing_fds[0]
+                def closing(fd):
+                    source_fd=fd in close_identities and h._capture_identity(os.fstat(fd))==close_identities[fd]
+                    if source_fd:close_calls[fd]+=1
+                    result=original_close(fd)
+                    if case=='source-close-error' and source_fd and fd==failed_fd:raise OSError(5,'fixture source terminal close')
+                    return result
+                raw={'clocks':{'wall':[],'monotonic':[]},'runtime':{'slots':capture['runtime_reads'],'files':inventory}}
+                publication_work={}
+                try:
+                    h.os.close=closing
+                    published=h._write_capture_file(store_fd,os.getuid(),os.getgid(),'attempt.carrier',b'original request',raw,True,work=publication_work)
+                finally:h.os.close=original_close
+                assert all(count==1 for count in close_calls.values()), {'case':case,'close_calls':close_calls,'publication_work':publication_work}
+                final=store/'.capture-attempt.carrier'
+                assert final.is_dir() and (final/'capture.json').is_file()
+                assert published is (case=='complete')
+                assert (final/'complete.json').exists() is (case=='complete')
+                if case=='source-close-error':assert capture['runtime_close_errors'][0]['errno']==5
             h._close_runtime_sources();os.close(store_fd)
             assert all(not item.fds for item in capture['runtime_sources'])
             assert capture['runtime_directory'] is None
@@ -269,6 +292,95 @@ finally:
     else:os.environ['YSTACK_SANDBOX_TRUST_ROOT']=previous
 print(json.dumps({'ordinary_only':True,'real_runtime_collection':False,'host_carrier_cases':results},sort_keys=True))
 PY_RUNTIME_HOST_CARRIER
+/usr/bin/python3 -I -S -B - "$root" <<'PY_RUNTIME_HOLD_FAILURES'
+import importlib.util,json,os,sys,tempfile
+from pathlib import Path
+root=Path(sys.argv[1]);spec=importlib.util.spec_from_file_location('host_hold_failures',root/'sandbox/v1/host-supervisor.py')
+h=importlib.util.module_from_spec(spec);sys.modules[spec.name]=h;spec.loader.exec_module(h)
+previous=os.environ.get('YSTACK_SANDBOX_TRUST_ROOT');results=[]
+class FailedAppend(list):
+    def append(self,value):raise MemoryError('fixture source append')
+try:
+    for case in ('dup','fstat','append','fstat-close','append-close'):
+        with tempfile.TemporaryDirectory(prefix='ystack-runtime-hold-failure-') as temporary:
+            base=Path(temporary);base.chmod(0o700);path=base/'input';path.write_bytes(b'native unchanged');path.chmod(0o400)
+            os.environ['YSTACK_SANDBOX_TRUST_ROOT']=str(base)
+            h._capture_process={'complete':True,'runtime_sources':FailedAppend() if case.startswith('append') else []}
+            original_dup,original_stat,original_close=h.os.dup,h.os.fstat,h.os.close;duplicated=[];closed=[]
+            def duplicating(fd):
+                if case=='dup':raise OSError(24,'fixture original dup failure')
+                value=original_dup(fd);duplicated.append(value);return value
+            def stating(fd):
+                if case.startswith('fstat') and fd in duplicated:raise OSError(5,'fixture original hold fstat failure')
+                return original_stat(fd)
+            def closing(fd):
+                result=original_close(fd)
+                if fd in duplicated:
+                    closed.append(fd)
+                    if case.endswith('-close'):raise OSError(9,'fixture secondary compensation close')
+                return result
+            try:
+                h.os.dup=duplicating;h.os.fstat=stating;h.os.close=closing
+                native=h.secure_walk(str(path),os.getuid(),True)
+            finally:h.os.dup=original_dup;h.os.fstat=original_stat;h.os.close=original_close
+            assert h.read_all(native)==b'native unchanged';os.close(native)
+            assert closed==duplicated and not h._capture_process['complete']
+            first=h._capture_process['runtime_failure'];assert first['category']==('MemoryError' if case.startswith('append') else 'OSError')
+            assert first['errno']==(None if case.startswith('append') else 24 if case=='dup' else 5)
+            if case.endswith('-close'):assert h._capture_process['runtime_secondary_errors'][0]['errno']==9
+            results.append({'case':case,'first':first,'secondary':h._capture_process.get('runtime_secondary_errors',[]),
+                'compensation_once':closed==duplicated,'native_bytes_unchanged':True,'work':h._capture_process['runtime_work']})
+    for fail_close in (False,True):
+        with tempfile.TemporaryDirectory(prefix='ystack-runtime-python-close-') as temporary:
+            base=Path(temporary);base.chmod(0o700);path=base/'python';path.write_bytes(b'native Python bytes');path.chmod(0o400)
+            os.environ['YSTACK_SANDBOX_TRUST_ROOT']=str(base)
+            h._capture_process={'complete':True,'runtime_sources':[]};fd=h.secure_walk(str(path),os.getuid(),True)
+            original_close=h.os.close;closes=[]
+            def closing(actual):
+                result=original_close(actual)
+                if actual==fd:
+                    closes.append(actual)
+                    if fail_close:raise OSError(9,'fixture Python close without read failure')
+                return result
+            try:
+                h.os.close=closing
+                assert h._read_runtime_python(fd)==b'native Python bytes'
+            finally:h.os.close=original_close
+            assert closes==[fd] and h._capture_process['complete'] is (not fail_close)
+            if fail_close:assert h._capture_process['runtime_failure']['errno']==9
+            h._close_runtime_sources()
+            results.append({'case':'python-success-close-error' if fail_close else 'python-success-close',
+                'native_bytes_unchanged':True,'target_close_once':True})
+    with tempfile.TemporaryDirectory(prefix='ystack-runtime-python-first-') as temporary:
+        path=Path(temporary)/'python';path.write_bytes(b'ordinary bytes');fd=os.open(path,os.O_RDONLY)
+        h._capture_process={'complete':True,'runtime_sources':[]};first=[];closes=[]
+        original_read,original_close,original_refuse=h.os.read,h.os.close,h.refuse
+        def reading(actual,count):
+            if actual==fd:raise OSError(5,'fixture original Python read')
+            return original_read(actual,count)
+        def closing(actual):
+            result=original_close(actual)
+            if actual==fd:closes.append(actual);raise OSError(9,'fixture secondary Python close')
+            return result
+        def refusing(code):
+            try:original_refuse(code)
+            except h.Refusal as error:first.append(error);raise
+        try:
+            h.os.read=reading;h.os.close=closing;h.refuse=refusing
+            try:h._read_runtime_python(fd)
+            except h.Refusal as error:assert first and error is first[0] and error.code=='E_CONFIG'
+            else:raise AssertionError('Python native refusal lost')
+        finally:h.os.read=original_read;h.os.close=original_close;h.refuse=original_refuse
+        assert closes==[fd]
+        assert h._capture_process['runtime_failure']['errno']==5
+        assert h._capture_process['runtime_secondary_errors'][0]['errno']==9
+        results.append({'case':'python-read-and-close','same_native_refusal_object':True,'code':first[0].code,
+            'first':h._capture_process['runtime_failure'],'secondary':h._capture_process['runtime_secondary_errors']})
+finally:
+    if previous is None:os.environ.pop('YSTACK_SANDBOX_TRUST_ROOT',None)
+    else:os.environ['YSTACK_SANDBOX_TRUST_ROOT']=previous
+print(json.dumps({'ordinary_only':True,'no_signal_claim':True,'host_hold_failure_cases':results},sort_keys=True))
+PY_RUNTIME_HOLD_FAILURES
 /usr/bin/python3 -I -S -B - "$root" <<'PY_RUNTIME_VALUES'
 import copy
 import importlib.util
