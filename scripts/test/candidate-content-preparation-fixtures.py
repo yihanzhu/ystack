@@ -2071,6 +2071,85 @@ def raw16_t_lifecycle(root: Path) -> None:
     print(json.dumps({'raw16_T_controls': completed, 'ordinary_synthetic_runtime_only': True,
         'actual_source_segments_not_full_native_route': True, 'receipts': receipts}, sort_keys=True))
 
+def raw16_local_P_after_H_copy(root: Path) -> None:
+    text = (root/'scripts/test/evals-malicious.test.sh').read_text()
+    body = text.split("<<'PY_RUNTIME_CONSUMER'\n",1)[1].split('\nPY_RUNTIME_CONSUMER',1)[0]
+    prefix = body.split('        copied_inventory.close();copied_inventory.close()\n',1)[0]
+    footer = body[body.rfind('finally:\n    if copied_inventory'):]
+    setup = '''        holder=e.StableDirectory(parent)
+        local_source=c._open_held(str(source),False,c._store_rule(uid,gid,0o400,False),'E_STORE')
+        holder._retain_runtime(anchor,'python',local_source,source_raw,c.canonical({'kind':'shadow_write_request','id':'local.hcopy'}))
+        assert len(holder.runtime_copies)==1
+        local_P=holder.runtime_copies[0]
+'''
+    edge = "        copied_inventory=native.copy_capture(parent,request,'reproduction',anchor.recording_work)\n"
+    assert prefix.count(edge) == 1
+    prefix = prefix.replace(edge, setup + edge + '        holder._refresh_runtime_parents()\n')
+    checks = '''        anchor.seal_local_runtime(parent)
+        local_source.close()
+        local_name=next(iter(local_P.members))
+        if local_case=='P-drift':
+            target=private/local_name;target.chmod(0o600)
+            with target.open('r+b') as stream:stream.write(b'!')
+            target.chmod(0o400)
+        holder.close_runtime_copies()
+        assert local_P.closed and not holder.runtime_copies
+        assert bool(anchor.private_observations.get('unusable'))==(local_case=='P-drift'), 'local-P after Hcopy final availability'
+        print(json.dumps({'local_P_to_actual_Hcopy':local_case,'P_work':anchor.recording_work,
+            'additional_fixture_P_read_bytes':len(source_raw),'full_M_Q_host_cost':'UNKNOWN'}))
+'''
+    for case in ('stable','P-drift'):
+        namespace={'sys':sys,'local_case':case}
+        original=sys.argv;sys.argv=['local-P-Hcopy',str(root)]
+        try:exec(compile(prefix+checks+footer,'<actual-local-P-Hcopy>','exec'),namespace)
+        finally:
+            sys.argv=original
+            if namespace.get('local_source') is not None:namespace['local_source'].close()
+            if namespace.get('holder') is not None:namespace['holder'].close()
+
+
+def raw16_local_P_clone_allocation(root: Path) -> None:
+    import tempfile
+    spec=importlib.util.spec_from_file_location('local_P_clone_allocation',root/'shadow/v1/enforced-reproduction.py')
+    e=importlib.util.module_from_spec(spec);sys.modules[spec.name]=e;spec.loader.exec_module(e);c=e.c
+    original_acl, original_clone, original_init, original_close=c._acl_state,c._clone,c.HeldPath.__init__,os.close
+    c._acl_state=lambda *_:([],None) if sys.platform=='darwin' else (None,None)
+    cloned, closed, expected=[],[],MemoryError('controlled HeldPath construction after complete clone')
+    try:
+        with tempfile.TemporaryDirectory(prefix='ystack-P-clone-failure-') as temporary:
+            work=Path(temporary).resolve();work.chmod(0o700)
+            parent=c._open_held(str(work),True,c._store_rule(os.geteuid(),os.getegid(),0o700,True),'E_STORE')
+            anchor=c.Anchor({},b'',[],{},('',[]),('',[]),None)
+            copied=c._HeldCaptureCopy(anchor,anchor.recording_work,c._capture_work_values(anchor.recording_work,'clone-case'))
+            def clone(*args,**kwargs):
+                rows=original_clone(*args,**kwargs);cloned.extend(row.fd for row in rows);return rows
+            def initialize(self,*args,**kwargs):raise expected
+            def close(fd):
+                result=original_close(fd)
+                if fd in cloned:closed.append(fd)
+                return result
+            try:
+                c._clone,c.HeldPath.__init__,os.close=clone,initialize,close
+                caught=None
+                try:copied.acquire(parent,None,{}, {})
+                except MemoryError as error:caught=error
+                assert caught is expected
+                assert cloned and set(closed)==set(cloned) and len(closed)==len(cloned)
+                assert copied.closed and not copied.owned and copied.directory is None
+                copied.close();assert len(closed)==len(cloned)
+                for fd in cloned:
+                    try:os.fstat(fd)
+                    except OSError as error:assert error.errno==errno.EBADF
+                    else:raise AssertionError('P clone allocation leaked a live fd')
+                assert all(os.fstat(component.fd) for component in parent.components)
+                print(json.dumps({'P_clone_allocation_failure':True,'same_exception':True,
+                    'new_FD_onceclose':len(closed),'P_work':anchor.recording_work},sort_keys=True))
+            finally:
+                c._clone,c.HeldPath.__init__,os.close=original_clone,original_init,original_close
+                parent.close();anchor.close()
+    finally:c._acl_state=original_acl
+
+
 def raw16_local_P_handoff(root: Path) -> None:
     import ast
     import tempfile

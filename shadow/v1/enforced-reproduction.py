@@ -421,7 +421,10 @@ class StableDirectory:
             anchor.private_observations["unusable"] = True
             copied.close()
             raise
-        for previous in self.runtime_copies[:-1]:previous.refresh_local_parent(copied.directory)
+        self._refresh_runtime_parents()
+
+    def _refresh_runtime_parents(self):
+        for copied in self.runtime_copies:copied.refresh_local_parent(self.held)
 
     def close_runtime_copies(self):
         copies, self.runtime_copies = self.runtime_copies, []
@@ -2235,6 +2238,7 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
         if held_store.record_reproduction(request_raw, launch_raw, expectation_raw) is not None:
             try:
                 copied_capture = held_store.copy_capture(work_hold._recording_parent(), launch_raw, "reproduction", anchor.recording_work)
+                work_hold._refresh_runtime_parents()
             except (Refusal,c.Refusal, OSError, MemoryError) as error:
                 anchor.private_observations["unusable"] = True
                 if getattr(error, "_scope_signal_cancel", False):raise

@@ -640,6 +640,8 @@ fixture=importlib.util.module_from_spec(spec);sys.modules[spec.name]=fixture;spe
 fixture.raw16_hp_handoff(root)
 fixture.raw16_hp_registration_primary(root)
 fixture.raw16_local_P_handoff(root)
+fixture.raw16_local_P_after_H_copy(root)
+fixture.raw16_local_P_clone_allocation(root)
 PY_HP_HANDOFF
 /usr/bin/python3 -I -S -B - "$root" <<'PY_D_SOURCE_ACQUISITION'
 import importlib.util,sys

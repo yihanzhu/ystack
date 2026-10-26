@@ -656,6 +656,7 @@ def _verify_write(ws, incident, input_raw, record_raw, manifest_raw, evaluation_
     if held_store.record_write(ws.request.raw, launch_raw, expectation_raw) is not None:
         try:
             ws.copied_capture = held_store.copy_capture(ws.work_hold._recording_parent(), launch_raw, "write", ws.anchor.recording_work)
+            ws.work_hold._refresh_runtime_parents()
         except (e.Refusal,c.Refusal, OSError, MemoryError) as error:
             ws.anchor.private_observations["unusable"] = True
             if getattr(error, "_scope_signal_cancel", False):raise

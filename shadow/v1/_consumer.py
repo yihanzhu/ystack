@@ -2790,8 +2790,17 @@ class _HeldCaptureCopy:
         try:
             if launch is None:
                 self.local_parent = True
-                self.directory = HeldPath(parent.path, _clone(parent, "E_STORE", self.leaf, "M"),
-                    recording_work=self.leaf, accounting_kind="M")
+                rows = _clone(parent, "E_STORE", self.leaf, "M")
+                try:
+                    self.directory = HeldPath(parent.path, rows, recording_work=self.leaf, accounting_kind="M")
+                except BaseException as primary:
+                    while rows:
+                        component = rows.pop()
+                        try:_close_capture_copy(component.fd, self.leaf, self.leaf, "P-clone-allocation-close", primary)
+                        except BaseException as error:
+                            if getattr(error, "_scope_signal_cancel", False) and not getattr(primary, "_scope_signal_cancel", False):
+                                primary = error
+                    raise primary
             else:
                 self.directory = _open_child(parent, launch, True,
                     _store_rule(os.geteuid(), os.getegid(), 0o700, True, self.anchor.resolver), "E_STORE",
