@@ -244,6 +244,10 @@ class Context:
     boundaries: dict[str, HeldBoundary] = dataclasses.field(default_factory=dict)
     lock_fd: int = -1
     input_hashes: dict[str, str] = dataclasses.field(default_factory=dict)
+    recording_work: dict = dataclasses.field(default_factory=dict)
+    runtime_inventory: list = dataclasses.field(default_factory=list)
+    runtime_sources: dict = dataclasses.field(default_factory=dict)
+    recording_unusable: bool = False
 
     def remaining(self, child: bool = False) -> float:
         left = self.deadline - _clock_value('preparation/v1/prepare-candidate.py:207:0',time.monotonic(),'monotonic')
@@ -854,6 +858,7 @@ def copy_dependencies(ctx: Context) -> tuple[Path, Path]:
     if jq_version != "jq-1.6":
         raise Refusal("E_DEPENDENCY")
     ctx.identities["jq"] = {"executable_sha256": sha256(jq_data), "version": jq_version}
+    _retain_preparation_runtime(ctx, "jq", ctx.boundaries["jq"], jq_data, ctx.identities["jq"]["executable_sha256"])
     ctx.identities["dependency_hashes"] = dependencies
     ctx.identities["core"] = {"generation_id": generation,
                                "files": sorted(files, key=lambda item: item["path"].encode())}
@@ -2017,6 +2022,133 @@ def validate_relations(ctx: Context, input_value: dict[str, Any], response: dict
         raise Refusal("E_OBJECT") from exc
 
 
+def _preparation_capture_error(ctx, error, site):
+    ctx.recording_unusable = True
+    try:
+        ctx.recording_work["incomplete"] = True
+        row = {"site": site, "category": type(error).__name__, "errno": getattr(error, "errno", None),
+               "token": getattr(error, "token", None)}
+        if "failure" not in ctx.recording_work:ctx.recording_work["failure"] = row
+        else:ctx.recording_work.setdefault("secondary_errors", []).append(row)
+    except MemoryError:
+        pass
+
+
+def _preparation_capture_close(ctx, fd, site, failure=None):
+    closing_error = None
+    try:os.close(fd)
+    except (OSError, Refusal) as error:closing_error = error
+    try:
+        ctx.recording_work["close_calls"] = ctx.recording_work.get("close_calls", 0) + 1
+        row = {"site": site, "return": None, "errno": getattr(closing_error, "errno", None),
+               "category": None if closing_error is None else type(closing_error).__name__}
+        ctx.recording_work.setdefault("close_events", []).append(row)
+        ctx.recording_work["metadata_bytes"] = ctx.recording_work.get("metadata_bytes", 0) + len(canonical(row))
+    except (MemoryError, ValueError) as error:
+        _preparation_capture_error(ctx, error, site + ".observation")
+        if failure is None and closing_error is None:raise
+    if closing_error is not None:
+        _preparation_capture_error(ctx, closing_error, site)
+        cancel = isinstance(closing_error, Refusal) and closing_error.token in {"E_INTERRUPTED", "E_TIMEOUT"}
+        first_cancel = isinstance(failure, Refusal) and failure.token in {"E_INTERRUPTED", "E_TIMEOUT"}
+        if failure is None or cancel and not first_cancel:raise closing_error
+
+
+def _retain_preparation_runtime(ctx, role, boundary, raw, original_sha):
+    target, failure = None, None
+    try:
+        if (role not in {"preparation_source", "python", "git", "jq"} or type(raw) is not bytes
+                or not valid_sha(original_sha)):
+            raise Refusal("E_IDENTITY", 2)
+        runtime = ctx.recording_work.setdefault("runtime", {})
+        if len(ctx.runtime_inventory) >= 64 or sum(item["size_bytes"] for item in ctx.runtime_inventory) + len(raw) > 4 << 30:
+            raise Refusal("E_LIMIT")
+        boundary.recheck()
+        before = os.fstat(boundary.fd)
+        if not stat.S_ISREG(before.st_mode) or before.st_size != len(raw):
+            raise Refusal("E_IDENTITY", 2)
+        directory = ctx.boundaries["scratch_work"]
+        directory.recheck()
+        ordinal = len(ctx.runtime_inventory)
+        name = "runtime-" + str(ordinal).zfill(4) + "-" + role + "-0000.bin"
+        row = {"slot": role, "index": 0, "ordinal": ordinal, "locator": str(boundary.path),
+               "file": name, "size_bytes": 0, "sha256": original_sha, "errno": None}
+        target = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                         0o600, dir_fd=directory.fd)
+        runtime["files"] = runtime.get("files", 0) + 1
+        ctx.runtime_inventory.append(row)
+        ctx.runtime_sources[ordinal] = (boundary, _storage_stat_values(before))
+        view = memoryview(raw)
+        while view:
+            chunk = view[:65536]
+            if ctx.ledger.scratch_bytes + runtime.get("physical_bytes", 0) + len(chunk) > LIMITS["scratch_bytes"]:
+                raise Refusal("E_LIMIT")
+            sent = os.write(target, chunk)
+            if not 0 < sent <= len(chunk):raise Refusal("E_IO")
+            row["size_bytes"] += sent
+            for key in ("logical_bytes", "write_bytes", "physical_bytes", "copy_bytes"):
+                runtime[key] = runtime.get(key, 0) + sent
+            view = view[sent:]
+        os.fchmod(target, 0o400);os.fsync(target)
+        boundary.recheck();directory.recheck()
+    except (Refusal, OSError, MemoryError, ValueError) as error:
+        failure = error
+        _preparation_capture_error(ctx, error, "runtime-tee")
+        if isinstance(error, Refusal) and error.token in {"E_INTERRUPTED", "E_TIMEOUT"}:raise
+    finally:
+        if target is not None:
+            try:_preparation_capture_close(ctx, target, "runtime-writer-close", failure)
+            except (OSError, Refusal, MemoryError) as error:
+                if isinstance(error, Refusal) and error.token in {"E_INTERRUPTED", "E_TIMEOUT"}:
+                    if not (isinstance(failure, Refusal) and failure.token in {"E_INTERRUPTED", "E_TIMEOUT"}):raise
+
+
+def _check_preparation_runtime(ctx):
+    roles = [row["slot"] for row in ctx.runtime_inventory]
+    if len(roles) != 4 or set(roles) != {"preparation_source", "python", "git", "jq"}:
+        raise Refusal("E_INCOMPLETE")
+    directory = ctx.boundaries["scratch_work"]
+    runtime = ctx.recording_work["runtime"]
+    for row in ctx.runtime_inventory:
+        boundary, before = ctx.runtime_sources[row["ordinal"]]
+        boundary.recheck();directory.recheck()
+        if row["locator"] != str(boundary.path) or before != _storage_stat_values(os.fstat(boundary.fd)):
+            raise Refusal("E_IDENTITY", 2)
+        reader, failure = None, None
+        try:
+            reader = os.open(row["file"], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory.fd)
+            state = os.fstat(reader)
+            if (not stat.S_ISREG(state.st_mode) or state.st_uid != os.geteuid() or state.st_gid != os.getegid()
+                    or state.st_nlink != 1 or state.st_size != row["size_bytes"] or stat.S_IMODE(state.st_mode) != 0o400):
+                raise Refusal("E_IDENTITY", 2)
+            left_hash, right_hash, offset = hashlib.sha256(), hashlib.sha256(), 0
+            while offset < row["size_bytes"]:
+                count = min(65536, row["size_bytes"] - offset)
+                left = os.pread(boundary.fd, count, offset)
+                runtime["read_bytes"] = runtime.get("read_bytes", 0) + len(left)
+                right = os.pread(reader, count, offset)
+                runtime["read_bytes"] += len(right)
+                left_hash.update(left);right_hash.update(right)
+                for key in ("sha_bytes", "equality_bytes"):
+                    runtime[key] = runtime.get(key, 0) + len(left) + len(right)
+                if len(left) != len(right) or len(left) != count or left != right:raise Refusal("E_IDENTITY", 2)
+                offset += count
+            if left_hash.hexdigest() != right_hash.hexdigest() or right_hash.hexdigest() != row["sha256"]:
+                raise Refusal("E_IDENTITY", 2)
+            boundary.recheck();directory.recheck()
+            if (before != _storage_stat_values(os.fstat(boundary.fd))
+                    or _storage_stat_values(state) != _storage_stat_values(os.fstat(reader))
+                    or _storage_stat_values(state) != _storage_stat_values(os.stat(row["file"],
+                        dir_fd=directory.fd, follow_symlinks=False))):
+                raise Refusal("E_IDENTITY", 2)
+        except BaseException as error:
+            failure = error
+            raise
+        finally:
+            if reader is not None:_preparation_capture_close(ctx, reader, "runtime-readback-close", failure)
+    os.fsync(directory.fd)
+
+
 def producer_identity(ctx: Context) -> dict[str, Any]:
     script_data = read_limited(Path(__file__), LIMITS["dependency_bytes"],
                                source_fd=ctx.boundaries["component_source"].fd, deadline=ctx.deadline)
@@ -2026,6 +2158,10 @@ def producer_identity(ctx: Context) -> dict[str, Any]:
                             source_fd=ctx.boundaries["git"].fd, deadline=ctx.deadline,
                             single_link=False)
     measured = _producer_source_values(script_data, executable_data, git_data)
+    for role, key, raw, field in (("preparation_source", "component_source", script_data, "source_sha256"),
+                                ("python", "python", executable_data, "python_sha256"),
+                                ("git", "git", git_data, "git_sha256")):
+        _retain_preparation_runtime(ctx, role, ctx.boundaries[key], raw, measured[field])
     git_reply = run_child(ctx, [GIT, "--version"], output_limit=128, env=clean_git_env(ctx))
     python_version = sys.version.splitlines()[0]
     result = _producer_values(measured, git_reply, python_version, unicodedata.unidata_version, ctx.identities)
@@ -2501,11 +2637,29 @@ def _preparation_capture_values(raw, workspace, operation, input_sha256, respons
     if len(raw) > 1024*1024:
         raise Refusal("E_LIMIT")
     value = strict_json(raw,"E_INPUT")
-    if (type(value) is not dict or set(value) != {"operation","binding","entropy","clocks","storage","commands","complete"}
+    if (type(value) is not dict or set(value) != {"operation","binding","entropy","clocks","storage","commands","runtime","complete"}
             or value["complete"] is not True or value["operation"] != operation
             or value["binding"] != {"input_sha256":input_sha256,"response_sha256":response_sha256}
             or canonical(value) != raw):
         raise Refusal("E_INPUT")
+    runtime = value["runtime"]
+    if (type(runtime) is not dict or set(runtime) != {"files"} or type(runtime["files"]) is not list
+            or not 1 <= len(runtime["files"]) <= 64):
+        raise Refusal("E_INPUT")
+    if len(runtime["files"]) != 4 or {row.get("slot") for row in runtime["files"] if type(row) is dict} != {"preparation_source","python","git","jq"}:
+        raise Refusal("E_INPUT")
+    for ordinal, row in enumerate(runtime["files"]):
+        if (type(row) is not dict or set(row) != {"slot","index","ordinal","locator","file","size_bytes","sha256","errno"}
+                or row["ordinal"] != ordinal or type(row["ordinal"]) is not int
+                or row["slot"] not in {"preparation_source","python","git","jq"}
+                or type(row["index"]) is not int or row["index"] != 0
+                or row["file"] != "runtime-" + str(ordinal).zfill(4) + "-" + row["slot"] + "-0000.bin"
+                or not isinstance(row["locator"], str) or not row["locator"].startswith("/")
+                or type(row["size_bytes"]) is not int or not 0 <= row["size_bytes"] <= 4 << 30
+                or not valid_sha(row["sha256"]) or row["errno"] is not None):
+            raise Refusal("E_INPUT")
+    if sum(row["size_bytes"] for row in runtime["files"]) > 4 << 30:
+        raise Refusal("E_LIMIT")
     names = value["entropy"]
     if type(names) is not dict or set(names) != {"preparation_names"} or type(names["preparation_names"]) is not list or len(names["preparation_names"]) != 1:
         raise Refusal("E_INPUT")
@@ -2533,13 +2687,21 @@ def _preparation_capture_values(raw, workspace, operation, input_sha256, respons
 
 
 def _write_preparation_observations(ctx, complete):
-    work = {"read_bytes": 0, "write_bytes": 0, "physical_bytes": 0}
-    ctx.recording_work = work
+    work = ctx.recording_work
+    for field in ("read_bytes", "write_bytes", "physical_bytes"):
+        work.setdefault(field, 0)
+    try:
+        if complete and not ctx.recording_unusable:
+            _check_preparation_runtime(ctx)
+    except (OSError, Refusal, MemoryError, ValueError) as error:
+        _preparation_capture_error(ctx, error, "runtime-final-check")
+        if isinstance(error, Refusal) and error.token in {"E_INTERRUPTED", "E_TIMEOUT"}:raise
     value = {"operation":ctx.args.operation,"binding":{"input_sha256":ctx.input_hashes.get("input"),
         "response_sha256":ctx.input_hashes.get("response")},"entropy": {"preparation_names": _preparation_names},
         "clocks": _clock_observations, "storage": _preparation_observations["storage"],
         "commands": {"runtime_values": _preparation_observations["runtime_values"]},
-        "complete": complete and _clock_complete and _preparation_names_complete and _preparation_observations_complete
+        "runtime": {"files": ctx.runtime_inventory},
+        "complete": complete and not ctx.recording_unusable and _clock_complete and _preparation_names_complete and _preparation_observations_complete
                     and bool(_preparation_observations["runtime_values"])}
     encoded = bytearray()
     try:
@@ -2557,11 +2719,12 @@ def _write_preparation_observations(ctx, complete):
         if value["complete"]:
             _preparation_capture_values(raw,ctx.scratch.name,ctx.args.operation,
                 ctx.input_hashes["input"],ctx.input_hashes["response"])
-        if ctx.ledger.scratch_bytes + len(raw) > LIMITS["scratch_bytes"]:
+        if ctx.ledger.scratch_bytes + work.get("runtime", {}).get("physical_bytes", 0) + len(raw) > LIMITS["scratch_bytes"]:
             raise Refusal("E_LIMIT")
         directory = ctx.boundaries["scratch_work"].fd
         target = os.open("capture.json",os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                          0o600,dir_fd=directory)
+        failure = None
         try:
             view = memoryview(raw)
             while view:
@@ -2574,11 +2737,62 @@ def _write_preparation_observations(ctx, complete):
                 view = view[sent:]
             os.fchmod(target,0o400)
             os.fsync(target)
+        except BaseException as error:
+            failure = error
+            raise
         finally:
-            os.close(target)
+            _preparation_capture_close(ctx, target, "capture-writer-close", failure)
         os.fsync(directory)
-    except (Refusal, OSError, MemoryError, UnicodeError, ValueError):
-        ctx.recording_unusable = True
+        if not value["complete"] or ctx.recording_unusable:
+            return
+        expected_sha = sha256(raw)
+        work["read_bytes"] += len(raw)
+        reader, failure, parts = None, None, []
+        try:
+            reader = os.open("capture.json", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory)
+            before = os.fstat(reader)
+            if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size != len(raw)
+                    or before.st_uid != os.geteuid() or before.st_gid != os.getegid()
+                    or stat.S_IMODE(before.st_mode) != 0o400):
+                raise Refusal("E_IDENTITY", 2)
+            offset, measured = 0, hashlib.sha256()
+            while offset < len(raw):
+                count = min(65536, len(raw) - offset)
+                chunk = os.read(reader, count)
+                work["read_bytes"] += len(chunk)
+                parts.append(chunk)
+                measured.update(chunk)
+                work["read_bytes"] += len(chunk)
+                if len(chunk) != count or chunk != memoryview(raw)[offset:offset + count]:
+                    raise Refusal("E_IDENTITY", 2)
+                work["read_bytes"] += 2 * len(chunk)
+                offset += len(chunk)
+            if measured.hexdigest() != expected_sha:
+                raise Refusal("E_IDENTITY", 2)
+            if (_storage_stat_values(before) != _storage_stat_values(os.fstat(reader))
+                    or _storage_stat_values(before) != _storage_stat_values(os.stat("capture.json",dir_fd=directory,
+                                                                                    follow_symlinks=False))):
+                raise Refusal("E_IDENTITY", 2)
+        except BaseException as error:
+            failure = error
+            try:work["capture_readback_prefix"] = tuple(parts)
+            except MemoryError:pass
+            raise
+        finally:
+            if reader is not None:_preparation_capture_close(ctx, reader, "capture-readback-close", failure)
+        if ctx.recording_unusable:raise Refusal("E_INCOMPLETE")
+        ctx.boundaries["scratch_work"].recheck()
+        os.fsync(directory)
+        marker = ".runtime-complete-" + expected_sha
+        work["seal_hash_bytes"] = work.get("seal_hash_bytes", 0) + len(raw)
+        work["metadata_bytes"] = work.get("metadata_bytes", 0) + len(marker.encode("ascii"))
+        work["seal_mkdir_attempts"] = work.get("seal_mkdir_attempts", 0) + 1
+        os.mkdir(marker, 0o700, dir_fd=directory)
+        work["seal_created"] = True
+        work["directories"] = work.get("directories", 0) + 1
+    except (Refusal, OSError, MemoryError, UnicodeError, ValueError) as error:
+        _preparation_capture_error(ctx, error, "capture-publication")
+        if isinstance(error, Refusal) and error.token in {"E_INTERRUPTED", "E_TIMEOUT"}:raise
 
 
 def main(argv: list[str]) -> int:

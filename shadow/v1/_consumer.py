@@ -85,7 +85,7 @@ def canonical(value: object) -> bytes:
                       allow_nan=False).encode("utf-8") + b"\n"
 
 def digest(data: bytes) -> str:
-    if isinstance(data, _ExportSnapshot):
+    if isinstance(data, (_ExportSnapshot, _RuntimeSnapshot)):
         return data.sha256()
     return hashlib.sha256(data).hexdigest()
 
@@ -190,6 +190,190 @@ def _read_export_snapshot(item, code):
         raise Refusal(code) from None
     item.recheck(code)
     return _ExportSnapshot(chunks, item, measured.hexdigest())
+
+_RUNTIME_FIELDS = {"logical_bytes": 4 << 30, "files": 64, "physical_bytes": 24 << 30,
+    "physical_files": 384, "read_bytes": 104 << 30, "write_bytes": 20 << 30,
+    "sha_bytes": 80 << 30, "equality_bytes": 56 << 30, "copy_bytes": 20 << 30}
+_RUNTIME_ROLES = {"guest_kernel", "guest_init", "guest_supervisor", "image", "toolchain", "verifier",
+    "guest_kernel_config", "runtime_vfkit", "runtime_driver", "vm_service", "dyld_cache_files",
+    "host_config", "host_supervisor_source", "host_python", "preparation_source", "python", "git", "jq"}
+_RUNTIME_ROLES |= {"installed_" + name for name in ("accepted_set", "registry", "control_policy",
+    "control_decision", "control_policy_set", "evaluator_driver", "evaluator_program")}
+
+
+def _runtime_account(work, field, amount, *, window=False):
+    _require(field in _RUNTIME_FIELDS and type(amount) is int and amount >= 0, "E_LIMIT")
+    counts = work.setdefault("runtime", {})
+    limit = _RUNTIME_FIELDS[field] * (4 if window else 1)
+    current = counts.get(field, 0)
+    _require(type(current) is int and current >= 0 and current + amount <= limit, "E_LIMIT")
+    counts[field] = current + amount
+
+
+def _runtime_inventory_values(group):
+    _require(type(group) is dict and set(group) in ({"files"}, {"slots", "files"})
+             and type(group.get("files")) is list and 1 <= len(group["files"]) <= 64, "E_STORE")
+    names, total = set(), 0
+    for ordinal, row in enumerate(group["files"]):
+        _require(type(row) is dict and set(row) == {"slot", "index", "ordinal", "locator", "file",
+            "size_bytes", "sha256", "errno"} and type(row["slot"]) is str
+            and row["slot"] in _RUNTIME_ROLES and type(row["index"]) is int and 0 <= row["index"] < 64
+            and (row["slot"] == "dyld_cache_files" or row["index"] == 0)
+            and type(row["ordinal"]) is int and row["ordinal"] == ordinal
+            and _physical(row["locator"]) and "\0" not in row["locator"]
+            and not any(0xd800 <= ord(char) <= 0xdfff for char in row["locator"])
+            and len(os.fsencode(row["locator"])) <= 4096
+            and type(row["size_bytes"]) is int and 0 <= row["size_bytes"] <= 4 << 30
+            and _sha(row["sha256"]) and row["errno"] is None, "E_STORE")
+        _require(row["file"] == "runtime-" + str(ordinal).zfill(4) + "-" + row["slot"]
+                 + "-" + str(row["index"]).zfill(4) + ".bin" and row["file"] not in names, "E_STORE")
+        names.add(row["file"]);total += row["size_bytes"]
+        _require(total <= 4 << 30, "E_LIMIT")
+    return {row["file"]: row for row in group["files"]}
+
+
+def _runtime_config_binding(rows, config):
+    expected = dict(config["identity_paths"])
+    expected.update(runtime_vfkit=config["runtime"]["vfkit"], runtime_driver=config["runtime"]["driver"])
+    expected.update({"installed_" + key: value for key, value in config["installed_files"].items()})
+    expected.update(host_config=os.path.join(ANCHOR, "host-config.json"),
+                    host_supervisor_source=os.path.join(ANCHOR, "host-supervisor.py"))
+    for row in rows.values():
+        if row["slot"] not in expected:
+            continue
+        locator = expected[row["slot"]]
+        if row["slot"] == "dyld_cache_files":
+            _require(row["index"] < len(locator), "E_STORE")
+            locator = locator[row["index"]]
+        _require(row["locator"] == locator, "E_STORE")
+
+
+def _capture_runtime_files(groups):
+    runtime = groups.get("runtime")
+    return {} if runtime is None else _runtime_inventory_values(runtime)
+
+
+def _copy_runtime_file(directory, name, snapshot, work, resolver):
+    _require(isinstance(snapshot, _RuntimeSnapshot), "E_STORE")
+    writer = reader = None
+    failure = None
+    try:
+        _require(work.get("runtime", {}).get("physical_files", 0) < _RUNTIME_FIELDS["physical_files"], "E_LIMIT")
+        writer = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                         0o600, dir_fd=directory)
+        _runtime_account(work, "physical_files", 1)
+        for chunk in snapshot.chunks:
+            view = memoryview(chunk)
+            while view:
+                amount = min(len(view), 65536)
+                counts = work.get("runtime", {})
+                _require(all(counts.get(field, 0) + amount <= _RUNTIME_FIELDS[field]
+                             for field in ("write_bytes", "physical_bytes", "copy_bytes")), "E_LIMIT")
+                sent = os.write(writer, view[:amount])
+                _require(type(sent) is int and 0 < sent <= amount, "E_STORE")
+                for field in ("write_bytes", "physical_bytes", "copy_bytes"):
+                    _runtime_account(work, field, sent)
+                view = view[sent:]
+        os.fchmod(writer, 0o400);os.fsync(writer)
+        closing, writer = writer, None
+        _close_capture_copy(closing, work, work, name, None)
+        reader = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory)
+        before = _metadata(reader)
+        _require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1
+                 and before.st_uid == os.geteuid() and before.st_gid == os.getegid()
+                 and stat.S_IMODE(before.st_mode) == 0o400 and before.st_size == len(snapshot), "E_STORE")
+        access, default = _acl_state(reader, resolver)
+        _require(access == [] if sys.platform == "darwin" else access is None and default is None, "E_STORE")
+        left_hash, right_hash, offset = hashlib.sha256(), hashlib.sha256(), 0
+        snapshot.owner.recheck("E_STORE")
+        while offset < len(snapshot):
+            count = min(65536, len(snapshot) - offset)
+            counts = work.get("runtime", {})
+            _require(all(counts.get(field, 0) + 2 * count <= _RUNTIME_FIELDS[field]
+                         for field in ("read_bytes", "sha_bytes", "equality_bytes")), "E_LIMIT")
+            left = os.pread(snapshot.owner.fd, count, offset)
+            _runtime_account(work, "read_bytes", len(left))
+            right = os.pread(reader, count, offset)
+            _runtime_account(work, "read_bytes", len(right))
+            left_hash.update(left);right_hash.update(right)
+            _runtime_account(work, "sha_bytes", len(left) + len(right))
+            _runtime_account(work, "equality_bytes", len(left) + len(right))
+            _require(len(left) == len(right) == count and left == right, "E_STORE")
+            offset += count
+        _require(left_hash.hexdigest() == right_hash.hexdigest() == snapshot.acquisition_sha, "E_STORE")
+        snapshot.owner.recheck("E_STORE")
+        _require(_identity(before) == _identity(_metadata(reader))
+                 == _identity(_named_metadata(name, directory)), "E_STORE")
+    except BaseException as error:
+        failure = error
+        try:
+            work["runtime_incomplete"] = True
+            work.setdefault("runtime_copy_failure", {"category": type(error).__name__,
+                "errno": getattr(error, "os_errno", getattr(error, "errno", None))})
+        except MemoryError:
+            pass
+        raise
+    finally:
+        for fd in (reader, writer):
+            if fd is not None:
+                try:_close_capture_copy(fd, work, work, name, failure)
+                except BaseException as error:
+                    if failure is None:
+                        failure = error
+                    elif getattr(error, "_scope_signal_cancel", False) and not getattr(failure, "_scope_signal_cancel", False):
+                        failure = error
+        if failure is not None:
+            raise failure
+
+
+class _RuntimeSnapshot:
+    def __init__(self, owner, work):
+        self.owner, self.work, self.size = owner, work, owner.before.st_size
+        _require(0 <= self.size <= 4 << 30, "E_LIMIT")
+        _runtime_account(work, "logical_bytes", self.size)
+        _runtime_account(work, "files", 1)
+        _runtime_account(work, "physical_bytes", self.size)
+        _runtime_account(work, "physical_files", 1)
+        self.acquisition_sha = None
+        self.acquisition_sha = self.sha256()
+
+    def __len__(self):
+        return self.size
+
+    @property
+    def chunks(self):
+        self.owner.recheck("E_STORE")
+        measured, offset = hashlib.sha256(), 0
+        while offset < self.size:
+            count = min(65536, self.size - offset)
+            limits = self.work.get("runtime", {})
+            _require(limits.get("read_bytes", 0) + count <= _RUNTIME_FIELDS["read_bytes"]
+                     and limits.get("sha_bytes", 0) + count <= _RUNTIME_FIELDS["sha_bytes"], "E_LIMIT")
+            try:
+                chunk = os.pread(self.owner.fd, count, offset)
+            except OSError as error:
+                self.work["runtime_incomplete"] = True
+                if getattr(error, "_scope_signal_cancel", False):raise
+                raise Refusal("E_STORE", os_errno=error.errno) from None
+            _runtime_account(self.work, "read_bytes", len(chunk))
+            measured.update(chunk);_runtime_account(self.work, "sha_bytes", len(chunk))
+            _require(len(chunk) == count, "E_STORE")
+            offset += len(chunk)
+            yield chunk
+        self.owner.recheck("E_STORE")
+        self.last_digest = measured.hexdigest()
+        if self.acquisition_sha is not None:
+            _require(self.last_digest == self.acquisition_sha, "E_STORE")
+
+    def sha256(self):
+        for _chunk in self.chunks:
+            pass
+        return self.last_digest
+
+    def recheck(self, item, code):
+        _require(item is self.owner and item.before.st_size == self.size, code)
+        _require(self.sha256() == self.acquisition_sha, code)
+
 
 def _integer(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
@@ -1004,6 +1188,88 @@ def _parse_accepted(raw: bytes) -> tuple[str, list[dict]]:
                  and all(_id_list(value) for value in row["mechanisms"].values()), "E_INSTALL")
     return digest(raw), body["environments"]
 
+def _preparation_capture_binding_values(raw, operation, input_raw, response_raw):
+    _require(operation in {"prepare", "inspect"}, "E_STORE")
+    value = _json(raw, DOCUMENT_LIMIT, "E_STORE")
+    _require(set(value) == {"operation", "binding", "entropy", "clocks", "storage", "commands", "runtime", "complete"}
+             and value["complete"] is True and value["operation"] == operation
+             and value["binding"] == {"input_sha256": digest(input_raw), "response_sha256": digest(response_raw)}, "E_STORE")
+    runtime = _runtime_inventory_values(value["runtime"])
+    _require(len(runtime) == 4 and {row["slot"] for row in runtime.values()}
+             == {"preparation_source", "python", "git", "jq"}, "E_STORE")
+    return value, runtime, ".runtime-complete-" + digest(raw)
+
+
+def _preparation_seal_values(name, expected, before, after, named, uid, gid, access, default, platform, contents):
+    _require(name == expected and contents == [] and type(contents) is list
+             and _identity_values(before) == _identity_values(after) == _identity_values(named)
+             and before["nlink"] > 0
+             and _store_values(uid, gid, 0o700, True, before, access, default, platform), "E_STORE")
+    return True
+
+
+def _refresh_recording_directory(item, before, work):
+    current = _capture_metadata(item.fd, work, "M")
+    component = item.components[-1]
+    named = _capture_named_metadata(component.name, item.components[-2].fd, work, "M")
+    stable = lambda value: (value.st_dev, value.st_ino, value.st_uid, value.st_gid, value.st_mode)
+    _require(stable(current) == stable(before) and _identity(current) == _identity(named)
+             and _capture_rule(component.rule, item.fd, current, False, work, "M"), "E_STORE")
+    component.before = current
+    component.after, component.named_after = current, named
+
+
+def _copy_preparation_document(directory, raw, work, resolver):
+    _require(type(raw) is bytes and len(raw) <= DOCUMENT_LIMIT, "E_STORE")
+    target = reader = None
+    failure = None
+    try:
+        _capture_copy_room(work, len(raw), False, case=True)
+        target = os.open("capture.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                         0o600, dir_fd=directory)
+        work["files"] += 1
+        view = memoryview(raw)
+        while view:
+            chunk = view[:65536]
+            _capture_copy_room(work, len(chunk), False, case=True)
+            sent = os.write(target, chunk)
+            _require(type(sent) is int and 0 < sent <= len(chunk), "E_STORE")
+            for field in ("read_bytes", "write_bytes", "physical_bytes"):work[field] += sent
+            view = view[sent:]
+        os.fchmod(target, 0o400);os.fsync(target)
+        closing, target = target, None
+        _close_capture_copy(closing, work, work, "preparation-capture-writer", None)
+        reader = os.open("capture.json", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory)
+        before = _metadata(reader)
+        _require(stat.S_ISREG(before.st_mode) and before.st_uid == os.geteuid()
+                 and before.st_gid == os.getegid() and before.st_nlink == 1
+                 and stat.S_IMODE(before.st_mode) == 0o400 and before.st_size == len(raw), "E_STORE")
+        access, default = _acl_state(reader, resolver)
+        _require(access == [] if sys.platform == "darwin" else access is None and default is None, "E_STORE")
+        offset = 0
+        while offset < len(raw):
+            count = min(65536, len(raw) - offset)
+            _capture_copy_room(work, 3 * count, False, case=True, read_only=True)
+            chunk = os.pread(reader, count, offset)
+            work["read_bytes"] += 3 * len(chunk)
+            _require(len(chunk) == count and chunk == memoryview(raw)[offset:offset + count], "E_STORE")
+            offset += count
+        _require(_identity(before) == _identity(_metadata(reader))
+                 == _identity(_named_metadata("capture.json", directory)), "E_STORE")
+    except BaseException as error:
+        failure = error
+        work["preparation_document_incomplete"] = True
+        raise
+    finally:
+        for fd in (reader, target):
+            if fd is not None:
+                try:_close_capture_copy(fd, work, work, "preparation-document-close", failure)
+                except BaseException as error:
+                    if failure is None or getattr(error, "_scope_signal_cancel", False) and not getattr(failure, "_scope_signal_cancel", False):
+                        failure = error
+        if failure is not None:raise failure
+
+
 @dataclasses.dataclass
 class Anchor:
     config: dict
@@ -1018,73 +1284,116 @@ class Anchor:
     storage_entry_count: int = 0
     recording_work: dict = dataclasses.field(default_factory=dict)
 
-    def retain_preparation(self, parent, scratch_name, operation, input_raw, response_raw):
-        _require(scratch_name in {"preparation-scratch","inspection-scratch"}
-                 and operation in {"prepare","inspect"}, "E_STORE")
-        opened = []
-        failures = (Refusal,OSError,ValueError,TypeError,MemoryError,ImportError)
+    def retain_preparation(self, parent, scratch_name, operation, input_raw, response_raw, caller_raw):
+        _require(scratch_name in {"preparation-scratch", "inspection-scratch"}
+                 and operation in {"prepare", "inspect"}, "E_STORE")
+        opened, storage_rows, runtime_leaf = [], [], {}
+        _capture_work_values(runtime_leaf, "preparation:" + operation)
+        self.recording_work.setdefault("preparation_leaves", []).append(runtime_leaf)
+        failure, case_work = None, None
+        failures = (Refusal, OSError, ValueError, TypeError, MemoryError, ImportError)
         try:
+            caller = _json(caller_raw, DOCUMENT_LIMIT, "E_STORE")
+            _require(caller.get("kind") in {"shadow_enforced_request", "shadow_write_request"}
+                     and _id(caller.get("id")), "E_STORE")
             uid, gid = os.geteuid(), os.getegid()
-            root = _open_child(parent,scratch_name,True,_store_rule(uid,gid,0o700,True),"E_STORE")
+            case_key = str(parent.before.st_dev) + ":" + str(parent.before.st_ino)
+            case_work = _capture_work_values(self.recording_work, case_key)
+            parent.recheck("E_STORE")
+            parent_before = parent.before
+            destination_name = "preparation-runtime-" + operation
+            os.mkdir(destination_name, 0o700, dir_fd=parent.fd)
+            _refresh_recording_directory(parent, parent_before, runtime_leaf)
+            destination = _open_child(parent, destination_name, True,
+                _store_rule(uid, gid, 0o700, True, self.resolver), "E_STORE",
+                recording_work=runtime_leaf, accounting_kind="M")
+            opened.append(destination)
+            destination_before = destination.before
+            root = _open_child(parent, scratch_name, True, _store_rule(uid, gid, 0o700, True, self.resolver),
+                               "E_STORE", recording_work=runtime_leaf, accounting_kind="M")
             opened.append(root)
             names = root.listdir()
-            _require(len(names) <= 128,"E_STORE")
-            work = self.recording_work
-            case_key = str(parent.before.st_dev)+":"+str(parent.before.st_ino)
-            case_work = _capture_work_values(work,case_key)
+            _require(len(names) <= 128, "E_STORE")
             candidates = []
             for name in sorted(names):
-                _require(name.startswith("candidate-preparation-")
-                         and len(name[len("candidate-preparation-"):]) == 16
-                         and all(char in '0123456789abcdef' for char in name[len("candidate-preparation-"):]),"E_STORE")
-                directory = _open_child(root,name,True,_store_rule(uid,gid,0o700,True),"E_STORE")
+                _require(name.startswith("candidate-preparation-") and len(name[len("candidate-preparation-"):]) == 16
+                         and all(char in "0123456789abcdef" for char in name[len("candidate-preparation-"):]), "E_STORE")
+                directory = _open_child(root, name, True, _store_rule(uid, gid, 0o700, True, self.resolver),
+                                       "E_STORE", recording_work=runtime_leaf, accounting_kind="M")
                 opened.append(directory)
                 try:
-                    item = _open_child(directory,"capture.json",False,_store_rule(uid,gid,0o400,False),"E_STORE")
+                    item = _open_child(directory, "capture.json", False, _store_rule(uid, gid, 0o400, False, self.resolver),
+                                       "E_STORE", recording_work=runtime_leaf, accounting_kind="M")
                 except Refusal as error:
-                    if error.os_errno == errno.ENOENT:
-                        continue
+                    if error.os_errno == errno.ENOENT:continue
                     raise
                 opened.append(item)
-                length = item.before.st_size
-                _require(0 <= length <= DOCUMENT_LIMIT,"E_STORE")
-                item.recheck("E_STORE")
-                os.lseek(item.fd,0,os.SEEK_SET)
-                chunks, total = [], 0
-                def charge(amount):
-                    _capture_copy_room(work,amount,False,read_only=True)
-                    _capture_copy_room(case_work,amount,False,case=True,read_only=True)
-                    work["read_bytes"] += amount
-                    case_work["read_bytes"] += amount
-                while total < length:
-                    count = min(65536,length-total)
-                    _capture_copy_room(work,count,False,read_only=True)
-                    _capture_copy_room(case_work,count,False,case=True,read_only=True)
-                    chunk = os.read(item.fd,count)
-                    charge(len(chunk));_require(bool(chunk),"E_STORE")
-                    chunks.append(chunk);total += len(chunk)
-                charge(total)
-                raw = b"".join(chunks)
-                item.recheck("E_STORE")
-                charge(6*len(raw))
-                value = _json(raw,DOCUMENT_LIMIT,"E_STORE")
-                _require(set(value) == {"operation","binding","entropy","clocks","storage","commands","complete"}
-                         and value["complete"] is True and value["operation"] == operation
-                         and value["binding"] == {"input_sha256":digest(input_raw),"response_sha256":digest(response_raw)}
-                         and canonical(value) == raw,"E_STORE")
+                raw = item.read(DOCUMENT_LIMIT, "E_STORE", runtime_leaf)
+                _capture_copy_room(runtime_leaf, 7 * len(raw), False, case=True, read_only=True)
+                runtime_leaf["read_bytes"] += 7 * len(raw)
+                value, runtime_files, expected_seal = _preparation_capture_binding_values(raw, operation, input_raw, response_raw)
+                listed = set(directory.listdir())
+                runtime_leaf["read_bytes"] += len(raw)
+                _require({entry for entry in listed if entry.startswith(".runtime-complete")}
+                         == {expected_seal} and {entry for entry in listed if entry.startswith("runtime-")}
+                         == set(runtime_files), "E_STORE")
+                seal = _open_child(directory, expected_seal, True, _store_rule(uid, gid, 0o700, True, self.resolver),
+                                   "E_STORE", recording_work=runtime_leaf, accounting_kind="M")
+                opened.append(seal)
+                contents = seal.listdir()
+                seal.recheck("E_STORE")
+                last = seal.components[-1]
+                access, default = last.rule.observations[seal.fd]
+                _preparation_seal_values(last.name, expected_seal, _stat_values(last.before),
+                    _stat_values(last.after), _stat_values(last.named_after), uid, gid, access, default,
+                    sys.platform, contents)
+                _observation(directory, "preparation/" + operation, storage_rows=storage_rows)
+                _observation(item, "preparation/" + operation + "/capture.json", raw, storage_rows=storage_rows)
+                _observation(seal, "preparation/" + operation + "/" + expected_seal, storage_rows=storage_rows)
+                for filename in sorted(runtime_files):
+                    source = _open_child(directory, filename, False, _store_rule(uid, gid, 0o400, False, self.resolver),
+                                         "E_STORE", recording_work=runtime_leaf, accounting_kind="M")
+                    opened.append(source)
+                    snapshot = _RuntimeSnapshot(source, runtime_leaf)
+                    _require(len(snapshot) == runtime_files[filename]["size_bytes"]
+                             and snapshot.acquisition_sha == runtime_files[filename]["sha256"], "E_STORE")
+                    _observation(source, "preparation/" + operation + "/" + filename, snapshot, storage_rows=storage_rows)
+                    _require(snapshot.sha256() == runtime_files[filename]["sha256"], "E_STORE")
+                    _copy_runtime_file(destination.fd, filename, snapshot, runtime_leaf, self.resolver)
+                _copy_preparation_document(destination.fd, raw, runtime_leaf, self.resolver)
+                _refresh_recording_directory(destination, destination_before, runtime_leaf)
+                _require(set(destination.listdir()) == set(runtime_files) | {"capture.json"}, "E_STORE")
+                os.fsync(destination.fd);os.fsync(parent.fd)
+                item.recheck("E_STORE");seal.recheck("E_STORE");directory.recheck("E_STORE")
+                self.retain_storage_reads(caller["id"], opened, storage_rows)
                 candidates.append(value)
-            _require(len(candidates) == 1,"E_STORE")
+            _require(len(candidates) == 1, "E_STORE")
             root.recheck("E_STORE")
-            values = self.private_observations.setdefault("preparation",{})
-            _require(operation not in values,"E_STORE")
+            values = self.private_observations.setdefault("preparation", {})
+            _require(operation not in values, "E_STORE")
             values[operation] = candidates[0]
             return candidates[0]
-        except failures:
+        except BaseException as error:
+            failure = error
             self.private_observations["unusable"] = True
+            runtime_leaf["failure"] = {"category": type(error).__name__, "errno": getattr(error, "os_errno", getattr(error, "errno", None))}
+            if getattr(error, "_scope_signal_cancel", False) or not isinstance(error, failures):raise
             return None
         finally:
             try:_close_paths(opened)
-            except OSError:self.private_observations["unusable"] = True
+            except (OSError, Refusal, MemoryError) as error:
+                self.private_observations["unusable"] = True
+                runtime_leaf["release_failure"] = {"category": type(error).__name__, "errno": getattr(error, "errno", None)}
+                if getattr(error, "_scope_signal_cancel", False) and not getattr(failure, "_scope_signal_cancel", False):raise
+            finally:
+                if case_work is not None:
+                    try:
+                        _capture_transfer_work(runtime_leaf, self.recording_work, case_work)
+                        _capture_accounting_receipt(self)
+                    except Exception as error:
+                        self.private_observations["unusable"] = True
+                        runtime_leaf["transfer_incomplete"] = True
+                        if getattr(error, "_scope_signal_cancel", False) and not getattr(failure, "_scope_signal_cancel", False):raise
 
     def copy_runtime_slots(self, parent, slots, work):
         fixed = {key: self.config["identity_paths"][key] for key in
@@ -1395,7 +1704,7 @@ def _observation(item: HeldPath, relative: str, raw: bytes | None = None, *, sto
             "directory_names": item.directory_names, "read_error": None})
         if item.recording_work is not None:
             _capture_observe(item.recording_work, item.accounting_kind, "storage-row", storage_rows[-1])
-    acquired = isinstance(raw, _ExportSnapshot)
+    acquired = isinstance(raw, (_ExportSnapshot, _RuntimeSnapshot))
     if acquired:
         _require(raw.owner is item and len(raw) == item.before.st_size, "E_STORE")
     return _observation_values(relative, _stat_values(item.before), _stat_values(after), raw,
@@ -1430,10 +1739,14 @@ def _origin_values(files, storage_rows, identity_context, source_bytes, *,
     source_payload = "payload/request.json" in files
     capture_directory = ".capture-" + attempt_id
     if capture_files is not None:
-        _require(type(capture_files) is dict and set(capture_files) in (
-            {"capture.json", "complete.json"},
-            {"capture.json", "complete.json", "sandbox-export.bin"})
-            and type(capture_storage_rows) is list, "E_STORE")
+        _require(type(capture_files) is dict and {"capture.json", "complete.json"} <= set(capture_files)
+                 and type(capture_storage_rows) is list, "E_STORE")
+        capture_document = _json(capture_files["capture.json"], DOCUMENT_LIMIT, "E_STORE")
+        _require(type(capture_document.get("body")) is dict
+                 and type(capture_document["body"].get("raw")) is dict, "E_STORE")
+        runtime_files = _capture_runtime_files(capture_document["body"]["raw"])
+        _require(set(capture_files) in ({"capture.json", "complete.json"} | set(runtime_files),
+            {"capture.json", "complete.json", "sandbox-export.bin"} | set(runtime_files)), "E_STORE")
         if type(capture_files.get("sandbox-export.bin")) is tuple:
             capture_files = dict(capture_files)
             capture_files["sandbox-export.bin"] = _ExportSnapshot(capture_files["sandbox-export.bin"], None, None)
@@ -1564,6 +1877,13 @@ def _capture_for_replay(snapshots, attempt_id, request_raw):
     _require("capture.json" in snapshots, "E_STORE")
     groups = _capture_envelope(snapshots["capture.json"], attempt_id, digest(request_raw), seed=True)
     _capture_export_binding(groups, snapshots)
+    runtime = _capture_runtime_files(groups)
+    _require(set(snapshots) == {"capture.json", "complete.json"} | set(runtime)
+             | ({"sandbox-export.bin"} if _capture_export_reference(groups) is not None else set()), "E_STORE")
+    for name, row in runtime.items():
+        raw = snapshots[name]
+        measured = raw.acquisition_sha if isinstance(raw, _RuntimeSnapshot) else digest(raw)
+        _require(len(raw) == row["size_bytes"] and measured == row["sha256"], "E_STORE")
     return groups
 
 
@@ -1729,6 +2049,8 @@ def _capture_accounting_receipt(anchor):
     receipt["failures"] = work.get("leaf_failures", [])
     receipt["incomplete"] = {key: value for key, value in work.items()
         if (key.endswith("incomplete") or key in {"transfer_incomplete", "M_classification_incomplete"}) and value}
+    receipt["runtime"] = work.get("runtime", {})
+    receipt["runtime_Q"] = "UNKNOWN: complete original native operation counts are not available"
     receipt["host_publication_work"] = "UNKNOWN: private host work is not transported by the existing capture envelope"
     receipt["complete"] = False
     return receipt
@@ -1755,6 +2077,16 @@ def _capture_transfer_work(source, work, case_work):
         current, transferred = source.get(field, 0), source.get("transferred_" + field, 0)
         _require(type(current) is int and type(transferred) is int and current >= transferred >= 0, "E_LIMIT")
         deltas[field] = current - transferred
+    runtime_deltas = {}
+    for field, amount in source.get("runtime", {}).items():
+        _require(field in _RUNTIME_FIELDS and type(amount) is int and amount >= 0, "E_LIMIT")
+        prior = source.get("transferred_runtime", {}).get(field, 0)
+        _require(type(prior) is int and 0 <= prior <= amount, "E_LIMIT")
+        runtime_deltas[field] = amount - prior
+    for counter, window in ((work, True), (case_work, False)):
+        for field, amount in runtime_deltas.items():
+            _require(counter.get("runtime", {}).get(field, 0) + amount
+                     <= _RUNTIME_FIELDS[field] * (4 if window else 1), "E_LIMIT")
     category_deltas = []
     for kind, values in source.get("accounting", {}).items():
         previous = source.get("transferred_accounting", {}).get(kind, {})
@@ -1775,6 +2107,11 @@ def _capture_transfer_work(source, work, case_work):
                 work[field] = work.get(field, 0) + delta
                 case_work[field] = case_work.get(field, 0) + delta
             source["transferred_" + field] = source.get(field, 0)
+        for field, delta in runtime_deltas.items():
+            if delta:
+                _runtime_account(work, field, delta, window=True)
+                _runtime_account(case_work, field, delta)
+            source.setdefault("transferred_runtime", {})[field] = source["runtime"][field]
         for kind, field, delta in category_deltas:
             if delta:
                 _capture_account(work, kind, field, delta)
@@ -1886,25 +2223,40 @@ class _HeldCaptureRead:
                 recording_work=self.work, accounting_kind="M")
             self.held.append(directory)
             self.names = set(directory.listdir())
-            _require(self.names in ({"capture.json", "complete.json"},
-                {"capture.json", "complete.json", "sandbox-export.bin"})
+            _require({"capture.json", "complete.json"} <= self.names and len(self.names) <= 67
                 and (not source or "sandbox-export.bin" not in self.names), "E_STORE")
+            _require(all(name in {"capture.json", "complete.json", "sandbox-export.bin"}
+                         or name.startswith("runtime-") and name.endswith(".bin") and "/" not in name
+                         for name in self.names), "E_STORE")
+            runtime_files = {}
             _observation(directory, self.directory_name, storage_rows=self.storage_rows)
             for name in sorted(self.names):
                 item = _open_child(directory, name, False,
                     _store_rule(uid, gid, 0o440, False, self.anchor.resolver), "E_STORE",
                     recording_work=self.work, accounting_kind="M" if name == "complete.json" else "unresolved")
                 self.held.append(item)
-                maximum = EXPORT_LIMIT if name == "sandbox-export.bin" else 512 if name == "complete.json" else DOCUMENT_LIMIT
+                runtime_file = name in runtime_files
+                maximum = 4 << 30 if runtime_file else EXPORT_LIMIT if name == "sandbox-export.bin" else 512 if name == "complete.json" else DOCUMENT_LIMIT
                 _require(item.before.st_size <= maximum, "E_STORE")
                 self.work["input_kind"] = "W" if name == "complete.json" else "raw"
-                raw = (_read_export_snapshot(item, "E_STORE") if name == "sandbox-export.bin" else
+                raw = (_RuntimeSnapshot(item, self.work) if runtime_file else
+                       _read_export_snapshot(item, "E_STORE") if name == "sandbox-export.bin" else
                        item.read(maximum, "E_STORE", self.work))
                 self.snapshots[name] = raw
+                if name == "capture.json":
+                    groups = _capture_envelope(raw, self.attempt_id, digest(request_raw), seed=True)
+                    runtime_files = _capture_runtime_files(groups)
+                    _runtime_config_binding(runtime_files, self.anchor.config)
+                    expected_names = {"capture.json", "complete.json"} | set(runtime_files)
+                    if _capture_export_reference(groups) is not None:expected_names.add("sandbox-export.bin")
+                    _require(self.names == expected_names, "E_STORE")
+                if runtime_file:
+                    _require(len(raw) == runtime_files[name]["size_bytes"]
+                             and raw.acquisition_sha == runtime_files[name]["sha256"], "E_STORE")
                 if name == "complete.json":_capture_account(self.work, "W", "logical_bytes", len(raw))
                 elif name == "capture.json":_capture_account(self.work, "raw", "logical_bytes", len(raw))
                 _observation(item, self.directory_name + "/" + name, raw, storage_rows=self.storage_rows)
-                if not isinstance(raw, _ExportSnapshot):
+                if not isinstance(raw, (_ExportSnapshot, _RuntimeSnapshot)):
                     self.work["read_bytes"] += len(raw)
                     _capture_account(self.work, "W" if name == "complete.json" else "raw", "read_bytes", len(raw))
             groups = _capture_envelope(self.snapshots["capture.json"], self.attempt_id,
@@ -1944,7 +2296,7 @@ class _HeldCaptureRead:
                 _require(set(item.listdir()) == self.names, code)
             elif not metadata_only:
                 raw = self.snapshots[os.path.basename(item.path)]
-                if isinstance(raw, _ExportSnapshot):
+                if isinstance(raw, (_ExportSnapshot, _RuntimeSnapshot)):
                     raw.recheck(item, code)
                 else:
                     self.work["input_kind"] = "W" if os.path.basename(item.path) == "complete.json" else "raw"
@@ -2031,7 +2383,7 @@ class _HeldStoreRead:
                     {"host-config.json": self.anchor.config_raw}, capture_files=self.capture.snapshots,
                     capture_storage_rows=self.capture.storage_rows)
                 for name, raw in self.capture.snapshots.items():
-                    if name != "sandbox-export.bin":
+                    if name != "sandbox-export.bin" and not isinstance(raw, _RuntimeSnapshot):
                         self.capture.work["read_bytes"] += len(raw)
                         _capture_account(self.capture.work, "W" if name == "complete.json" else "raw", "read_bytes", len(raw))
                 self.capture.work["origin_incomplete"] = False
@@ -2236,6 +2588,11 @@ class _HeldStoreRead:
                     _close_capture_copy(target, work, case_work, name, file_failure)
             write("capture.json", (capture_snapshots["capture.json"],))
             write("complete.json", (capture_snapshots["complete.json"],))
+            for runtime_name in sorted(_capture_runtime_files(_capture_for_replay(
+                    capture_snapshots, self.attempt_id, request_raw))):
+                _copy_runtime_file(directory, runtime_name, capture_snapshots[runtime_name],
+                                   self.capture.work, self.anchor.resolver)
+            self.capture.transfer(work, case_work)
             if "sandbox-export.bin" in capture_snapshots:
                 write("sandbox-export.bin", capture_snapshots["sandbox-export.bin"].chunks, True)
             write("origin-observation.json", (self.capture_origin,))

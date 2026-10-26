@@ -381,6 +381,315 @@ finally:
     else:os.environ['YSTACK_SANDBOX_TRUST_ROOT']=previous
 print(json.dumps({'ordinary_only':True,'no_signal_claim':True,'host_hold_failure_cases':results},sort_keys=True))
 PY_RUNTIME_HOLD_FAILURES
+/usr/bin/python3 -I -S -B - "$root" <<'PY_RUNTIME_CONSUMER'
+import importlib.util,json,os,sys,tempfile,types
+from pathlib import Path
+root=Path(sys.argv[1])
+def load(name,path):
+    spec=importlib.util.spec_from_file_location(name,path);value=importlib.util.module_from_spec(spec)
+    sys.modules[name]=value;spec.loader.exec_module(value);return value
+h=load('runtime_copy_host',root/'sandbox/v1/host-supervisor.py')
+e=load('runtime_copy_enforced',root/'shadow/v1/enforced-reproduction.py');c=e.c
+previous=os.environ.get('YSTACK_SANDBOX_TRUST_ROOT');original_acl=c._acl_state;original_anchor=c.ANCHOR
+owner=installed_hold=native=parent=None
+try:
+    with tempfile.TemporaryDirectory(prefix='ystack-runtime-consumer-') as temporary:
+        base=Path(temporary).resolve();base.chmod(0o700);os.environ['YSTACK_SANDBOX_TRUST_ROOT']=str(base)
+        store=base/'store';store.mkdir(mode=0o750);store.chmod(0o750)
+        private=base/'private';private.mkdir(mode=0o700)
+        negatives=base/'negatives';negatives.mkdir(mode=0o700)
+        install=base/'installed';install.mkdir(mode=0o700)
+        installed=install/'host-supervisor.py';installed_raw=(root/'sandbox/v1/host-supervisor.py').read_bytes()
+        installed.write_bytes(installed_raw);installed.chmod(0o400)
+        source=base/'kernel';source_raw=b'ordinary immutable runtime bytes'*4097;source.write_bytes(source_raw);source.chmod(0o400)
+        uid,gid=os.getuid(),os.getgid();attempt='attempt.runtime';request=b'ordinary original request'
+        h._capture_process={'complete':True,'runtime_sources':[],'runtime_locators':{'guest_kernel':str(source)}}
+        source_fd=h.secure_walk(str(source),uid,True);store_fd=os.open(store,os.O_RDONLY|os.O_DIRECTORY)
+        h._runtime_capture_begin(store_fd,uid,gid,attempt)
+        capture=h._runtime_capture_start('guest_kernel',0,source_fd);assert capture is not None
+        try:
+            h._capture_process['runtime_active']=capture
+            native_digest=h.sha256_fd(source_fd)
+        finally:h._capture_process['runtime_active']=None
+        h._runtime_capture_finish(capture,None);os.close(source_fd)
+        assert native_digest==h.sha256_hex(source_raw)
+        groups={'runtime':{'files':h._capture_process['runtime_inventory']}}
+        assert h._write_capture_file(store_fd,uid,gid,attempt,request,groups,True)
+        h._close_runtime_sources();os.close(store_fd)
+        attempt_dir=store/attempt;attempt_dir.mkdir(mode=0o750);attempt_dir.chmod(0o750)
+        payload=attempt_dir/'payload';payload.mkdir(mode=0o750);payload.chmod(0o750)
+        originals={'receipt.json':h.canonical({'body':{'attempt':{'attempt_id':attempt,'launch_request_sha256':h.sha256_hex(request)}}}),
+            'payload/stdout':b'','payload/stderr':b'','payload/evidence-manifest.json':h.empty_evidence_manifest()[0]}
+        for name,raw in originals.items():path=attempt_dir/name;path.write_bytes(raw);path.chmod(0o440)
+        config={'principal_uid':uid,'consumer_gid':gid,'store_id':'store.runtime','environment_id':'environment.runtime',
+            'store_root':str(store),'work_root':str(base/'work'),'runtime':{'driver':'/fixture/driver','vfkit':'/fixture/vfkit'},
+            'installed_files':{key:'/fixture/installed/'+key for key in c.INSTALLED_SOURCES},
+            'identity_paths':{key:['/fixture/dyld'] if key=='dyld_cache_files' else '/fixture/identity/'+key for key in c.IDENTITY_KEYS}}
+        config["identity_paths"]["guest_kernel"] = str(source)
+        config_raw=c.canonical({'schema_version':1,'kind':'sandbox_host_config','id':'host.runtime','body':config})
+        c._acl_state=lambda *_:([],None) if sys.platform=='darwin' else (None,None)
+        c.ANCHOR=str(install)
+        owner=e._load_capture_completion_owner();assert owner is not None
+        installed_hold=c._open_held(str(installed),False,lambda *_:True,'E_STORE')
+        anchor=c.Anchor(config,config_raw,[installed_hold],{},('',[]),('',[]),None)
+        anchor.identity_context={'uid':uid,'euid':os.geteuid(),'gid':gid,'egid':os.getegid(),'groups':os.getgroups(),
+            'platform':sys.platform,'uuid_replies':None,'group_replies':None}
+        anchor.capture_completion_owner=owner
+        native=c._HeldStoreRead(anchor,attempt);assert native.snapshots==originals
+        native.capture=c._HeldCaptureRead(native,request)
+        runtime_files=c._capture_runtime_files(groups);name=next(iter(runtime_files))
+        snapshot=native.capture.snapshots[name];assert isinstance(snapshot,c._RuntimeSnapshot)
+        assert snapshot.acquisition_sha==native_digest and len(snapshot)==len(source_raw)
+        assert not hasattr(snapshot,'raw') and not hasattr(snapshot,'buffer')
+        native.capture_origin=c._origin_values(native.snapshots,native.storage_rows,
+            {'attempt_id':attempt,'platform':sys.platform},{'host-config.json':config_raw},
+            capture_files=native.capture.snapshots,capture_storage_rows=native.capture.storage_rows)
+        parent=c._open_held(str(private),True,c._store_rule(uid,gid,0o700,True),'E_STORE')
+        native.copy_capture(parent,request,'reproduction',anchor.recording_work)
+        copied=private/'reproduction'/name
+        assert copied.read_bytes()==source_raw and copied.stat().st_mode&0o777==0o400
+        before_final=dict(native.capture.work['runtime'])
+        assert before_final['read_bytes']==before_final['sha_bytes']==5*len(source_raw)
+        assert before_final['equality_bytes']==2*len(source_raw)
+        assert before_final['write_bytes']==before_final['copy_bytes']==len(source_raw)
+        assert before_final['physical_bytes']==2*len(source_raw) and before_final['physical_files']==2
+        native.recheck();native.close();native=None
+        assert anchor.recording_work['runtime']['read_bytes']==6*len(source_raw)
+        assert anchor.recording_work['runtime']['sha_bytes']==6*len(source_raw)
+        case_work=next(value for key,value in anchor.recording_work['cases'].items() if value.get('runtime'))
+        assert case_work['runtime']==anchor.recording_work['runtime']
+        receipt=c._capture_accounting_receipt(anchor)
+        assert receipt['complete'] is False and receipt['runtime_Q'].startswith('UNKNOWN')
+        import copy
+        template={path.name:path.read_bytes() for path in (store/('.capture-'+attempt)).iterdir()}
+        negative_results=[]
+        for label in ('missing-file','extra-file','bad-sha','bad-index','bad-ordinal','bad-size','over-size',
+                'unknown-role','wrong-name','cross-locator','cross-request','duplicate','noncanonical','mode','parent-symlink','final-drift'):
+            negative_store=negatives/label;negative_store.mkdir(mode=0o750);negative_store.chmod(0o750)
+            a=negative_store/attempt;a.mkdir(mode=0o750);a.chmod(0o750);pl=a/'payload';pl.mkdir(mode=0o750);pl.chmod(0o750)
+            for filename,raw in originals.items():path=a/filename;path.write_bytes(raw);path.chmod(0o440)
+            captured=negative_store/('.capture-'+attempt)
+            if label=='parent-symlink':
+                real=negative_store/'actual-capture';real.mkdir(mode=0o750);real.chmod(0o750);captured.symlink_to(real,target_is_directory=True)
+            else:captured.mkdir(mode=0o750);captured.chmod(0o750)
+            changed=copy.deepcopy(groups);row=changed['runtime']['files'][0]
+            if label=='bad-sha':row['sha256']='f'*64
+            if label=='bad-index':row['index']=True
+            if label=='bad-ordinal':row['ordinal']=1
+            if label=='bad-size':row['size_bytes']=True
+            if label=='over-size':row['size_bytes']=(4<<30)+1
+            if label=='unknown-role':row['slot']='unlisted'
+            if label=='wrong-name':row['file']='runtime-0000-vm_service-0000.bin'
+            if label=='cross-locator':row['locator']='/fixture/other-kernel'
+            if label=='duplicate':changed['runtime']['files'].append(dict(row))
+            capture_raw=h._capture_values(attempt,request,changed,True)
+            if label=='cross-request':
+                document=json.loads(capture_raw);document['body']['request_sha256']='f'*64;capture_raw=h.canonical(document)
+            if label=='noncanonical':capture_raw+=b' '
+            copied_files=dict(template);copied_files['capture.json']=capture_raw
+            copied_files['complete.json']=h._capture_completion_values(attempt,request,capture_raw)
+            if label=='missing-file':copied_files.pop(name)
+            if label=='extra-file':copied_files['runtime-0001-guest_kernel-0000.bin']=b'extra'
+            for filename,raw in copied_files.items():path=captured/filename;path.write_bytes(raw);path.chmod(0o440)
+            if label=='mode':(captured/name).chmod(0o600)
+            negative_config=config|{'store_root':str(negative_store)}
+            negative_config_raw=c.canonical({'schema_version':1,'kind':'sandbox_host_config','id':'host.runtime','body':negative_config})
+            negative_anchor=c.Anchor(negative_config,negative_config_raw,[installed_hold],{},('',[]),('',[]),None)
+            negative_anchor.capture_completion_owner=owner
+            current=c._HeldStoreRead(negative_anchor,attempt);before_native=dict(current.snapshots)
+            refused=False
+            try:
+                if label=='final-drift':
+                    current.capture=c._HeldCaptureRead(current,request)
+                    path=captured/name;path.chmod(0o600)
+                    with path.open('r+b') as stream:stream.seek(-1,os.SEEK_END);stream.write(b'!')
+                    path.chmod(0o440)
+                    try:current.capture.recheck()
+                    except c.Refusal:refused=True
+                else:
+                    try:current.capture=c._HeldCaptureRead(current,request)
+                    except c.Refusal:refused=True
+                assert refused,label
+                current.recheck();assert current.snapshots==before_native==originals
+            finally:current.close()
+            negative_results.append({'case':label,'refused':True,'native_bytes_unchanged':True,
+                'fixture_copy_bytes':sum(map(len,copied_files.values()))+sum(map(len,originals.values()))})
+
+        print(json.dumps({'ordinary_private_boundary_only':True,'real_parent_or_native_qualification':False,
+            'ACL_and_principal_fixture_substitutions':True,'actual_runtime_transfer':anchor.recording_work['runtime'],
+            'before_extra_H_completion_read':before_final,'extra_final_H_read_and_sha_bytes':len(source_raw),
+            'fixture_installed_copy_bytes':len(installed_raw),'additional_fixture_runtime_validation_read':len(source_raw),
+            'completion_owner_work':owner.work,'host_work':h._capture_process['runtime_work'],
+            'negative_cases':negative_results,'additional_fixture_template_reads':sum(map(len,template.values())),
+            'full_M_Q_host_cost':'UNKNOWN; not a whole recording ledger'},sort_keys=True))
+finally:
+    if native is not None:native.close()
+    if parent is not None:parent.close()
+    if owner is not None:
+        e._close_capture_completion_owner(owner)
+        if sys.modules.get(owner.name) is owner.module:del sys.modules[owner.name]
+    if installed_hold is not None:installed_hold.close()
+    c._acl_state=original_acl;c.ANCHOR=original_anchor
+    if previous is None:os.environ.pop('YSTACK_SANDBOX_TRUST_ROOT',None)
+    else:os.environ['YSTACK_SANDBOX_TRUST_ROOT']=previous
+PY_RUNTIME_CONSUMER
+/usr/bin/python3 -I -S -B - "$root" <<'PY_RUNTIME_COPY_CANCEL'
+import fcntl,importlib.util,json,os,signal,sys,tempfile,types,errno
+from pathlib import Path
+root=Path(sys.argv[1]);spec=importlib.util.spec_from_file_location('runtime_copy_scope',root/'scope/v1/read-shadow-evidence.py')
+r=importlib.util.module_from_spec(spec);sys.modules[spec.name]=r;spec.loader.exec_module(r);c=r.c
+code=next(item for item in r.main.__code__.co_consts if isinstance(item,types.CodeType) and item.co_name=='cancel')
+cancel=types.FunctionType(code,{'InterruptedError':InterruptedError});original_acl=c._acl_state;results=[]
+c._acl_state=lambda *_:([],None) if sys.platform=='darwin' else (None,None)
+try:
+    for case in ('positive','read-A-close-B','metadata-A-close-B','close-B-only','ordinary-EINTR-close-error'):
+        with tempfile.TemporaryDirectory(prefix='ystack-runtime-copy-cancel-') as temporary:
+            base=Path(temporary).resolve();base.chmod(0o700);source=base/'input';source.write_bytes(b'ordinary runtime copy'*4000);source.chmod(0o400)
+            destination=base/'private';destination.mkdir(mode=0o700)
+            work={};c._capture_work_values(work,'runtime.cancel')
+            held=c._open_held(str(source),False,c._store_rule(os.getuid(),os.getgid(),0o400,False),'E_STORE',
+                recording_work=work,accounting_kind='M')
+            snapshot=c._RuntimeSnapshot(held,work);directory=os.open(destination,os.O_RDONLY|os.O_DIRECTORY)
+            previous=signal.getsignal(signal.SIGTERM);events=[];writer_closes=[];writer_fds=set();triggered=False
+            original_read,original_close,original_open,original_named=c.os.pread,c.os.close,c.os.open,c._named_metadata
+            def handler(number,frame):
+                try:cancel(number,frame)
+                except InterruptedError as error:events.append(error);raise
+            def interrupt():os.kill(os.getpid(),signal.SIGTERM)
+            def reading(fd,count,offset):
+                global triggered
+                if fd==held.fd and not triggered:
+                    if case=='read-A-close-B':triggered=True;interrupt()
+                    if case=='ordinary-EINTR-close-error':triggered=True;raise InterruptedError(errno.EINTR,'ordinary unmarked EINTR')
+                return original_read(fd,count,offset)
+            def named(name,parent):
+                global triggered
+                if case=='metadata-A-close-B' and not triggered:triggered=True;interrupt()
+                return original_named(name,parent)
+            def opening(name,flags,*args,**kwargs):
+                fd=original_open(name,flags,*args,**kwargs)
+                if name=='runtime-0000-guest_kernel-0000.bin' and flags&os.O_ACCMODE==os.O_WRONLY:writer_fds.add(fd)
+                return fd
+            def closing(fd):
+                writer=fd in writer_fds and fcntl.fcntl(fd,fcntl.F_GETFL)&os.O_ACCMODE==os.O_WRONLY
+                result=original_close(fd)
+                if writer:
+                    writer_closes.append(fd)
+                    if case in ('read-A-close-B','metadata-A-close-B','close-B-only'):interrupt()
+                    if case=='ordinary-EINTR-close-error':raise OSError(9,'ordinary secondary close')
+                return result
+            caught=None
+            try:
+                signal.signal(signal.SIGTERM,handler);c.os.pread=reading;c.os.close=closing;c.os.open=opening;c._named_metadata=named
+                try:c._copy_runtime_file(directory,'runtime-0000-guest_kernel-0000.bin',snapshot,work,None)
+                except BaseException as error:caught=error
+            finally:
+                signal.signal(signal.SIGTERM,previous);c.os.pread=original_read;c.os.close=original_close;c.os.open=original_open;c._named_metadata=original_named
+                os.close(directory);held.close()
+            assert len(writer_closes)==1 and all(type(error) is InterruptedError and error._scope_signal_cancel for error in events)
+            if case=='positive':
+                assert caught is None and not events
+                assert (destination/'runtime-0000-guest_kernel-0000.bin').read_bytes()==b'ordinary runtime copy'*4000
+                assert work['runtime']['read_bytes']==work['runtime']['sha_bytes']==4*len(snapshot)
+                assert work['close_calls']>=2
+            elif case=='ordinary-EINTR-close-error':
+                assert type(caught) is c.Refusal and caught.code=='E_STORE' and caught.os_errno==errno.EINTR and not events
+                assert work['close_failures'][0]['errno']==9
+            else:
+                assert caught is events[0]
+                assert len(events)==(1 if case=='close-B-only' else 2)
+                if len(events)==2:assert events[0] is not events[1]
+            results.append({'case':case,'same_first_cancel_object':caught is events[0] if events else None,
+                'real_handler_events':len(events),'writer_close_once':True,'work':work,
+                'retained_partial_bytes':(destination/'runtime-0000-guest_kernel-0000.bin').stat().st_size})
+finally:c._acl_state=original_acl
+print(json.dumps({'ordinary_only':True,'real_native_qualification':False,'runtime_copy_cancel_cases':results},sort_keys=True))
+PY_RUNTIME_COPY_CANCEL
+/usr/bin/python3 -I -S -B - "$root" <<'PY_PREPARATION_RUNTIME'
+import importlib.util,json,os,sys,tempfile,types,dataclasses
+from pathlib import Path
+root=Path(sys.argv[1])
+def load(name,path):
+    spec=importlib.util.spec_from_file_location(name,path);value=importlib.util.module_from_spec(spec)
+    sys.modules[name]=value;spec.loader.exec_module(value);return value
+p=load('T_runtime_producer',root/'preparation/v1/prepare-candidate.py')
+e=load('T_runtime_parent',root/'shadow/v1/enforced-reproduction.py');c=e.c
+replay=load('T_runtime_offline',root/'evals/v1/replay-malicious.py')
+original_acl=c._acl_state;c._acl_state=lambda *_:([],None) if sys.platform=='darwin' else (None,None)
+ctx=holder=None
+try:
+    with tempfile.TemporaryDirectory(prefix='ystack-T-runtime-') as temporary:
+        work=Path(temporary).resolve();work.chmod(0o700)
+        scratch=work/'preparation-scratch';scratch.mkdir(mode=0o700)
+        fixtures=work/'fixture-runtime';fixtures.mkdir(mode=0o700)
+        paths={};raw_values={}
+        for role in ('python','git','jq'):
+            path=fixtures/role;raw=(b'nonexecutable synthetic '+role.encode()+b' runtime bytes')*2000
+            path.write_bytes(raw);path.chmod(0o400);paths[role]=path;raw_values[role]=raw
+        raw_values['preparation_source']=(root/'preparation/v1/prepare-candidate.py').read_bytes()
+        deadline=p.time.monotonic()+60
+        boundaries={'scratch':p.hold_boundary(scratch,'directory',deadline,private_leaf=True),
+            'component_source':p.hold_boundary(root/'preparation/v1/prepare-candidate.py','file',deadline)}
+        boundaries.update({role:p.hold_boundary(path,'file',deadline) for role,path in paths.items()})
+        args=types.SimpleNamespace(operation='prepare',scratch=str(scratch),jq=str(paths['jq']),_boundaries=boundaries)
+        ctx=p.create_context(args,deadline)
+        input_raw,response_raw=b'ordinary original input bytes',b'ordinary original response bytes'
+        ctx.input_hashes={'input':p.sha256(input_raw),'response':p.sha256(response_raw)}
+        commands=[];original_child,original_git,original_python=p.run_child,p.GIT,sys.executable
+        def child(context,argv,**kwargs):
+            commands.append(argv)
+            assert argv[-1]=='--version'
+            if argv[0]==str(paths['git']):return b'git version synthetic fixture\n'
+            assert argv[0]==str(ctx.deps_root/'tools/jq')
+            return b'jq-1.6\n'
+        try:
+            p.run_child=child;p.GIT=str(paths['git']);sys.executable=str(paths['python'])
+            p.copy_dependencies(ctx)
+            producer=p.producer_identity(ctx)
+        finally:p.run_child=original_child;p.GIT=original_git;sys.executable=original_python
+        assert len(commands)==2 and len(ctx.runtime_inventory)==4
+        assert producer['python']['executable_sha256']==p.sha256(raw_values['python'])
+        assert producer['git']['executable_sha256']==p.sha256(raw_values['git'])
+        p._write_preparation_observations(ctx,True)
+        raw=(ctx.scratch/'capture.json').read_bytes();value=p._preparation_capture_values(raw,ctx.scratch.name,'prepare',
+            p.sha256(input_raw),p.sha256(response_raw))
+        marker='.runtime-complete-'+p.sha256(raw)
+        assert not ctx.recording_unusable and ctx.recording_work['seal_created']
+        assert (ctx.scratch/marker).is_dir() and list((ctx.scratch/marker).iterdir())==[]
+        assert os.fstat(ctx.boundaries['scratch_work'].fd)
+        total=sum(map(len,raw_values.values()))
+        assert ctx.recording_work['runtime']=={'files':4,'logical_bytes':total,'write_bytes':total,
+            'physical_bytes':total,'copy_bytes':total,'read_bytes':2*total,'sha_bytes':2*total,'equality_bytes':2*total}
+        assert ctx.recording_work['close_calls']==10
+        holder=e.stable_directory(work)
+        anchor=c.Anchor({},b'',[],{},('',[]),('',[]),None)
+        caller=c.canonical({'schema_version':1,'kind':'shadow_enforced_request','id':'attempt.T.fixture',
+            'body':{'attempt_id':'attempt.T.fixture'}})
+        retained=holder._retain_preparation(anchor,'preparation-scratch','prepare',input_raw,response_raw,caller)
+        assert retained==value and not anchor.private_observations.get('unusable',False)
+        assert replay._preparation_capture_values(root,raw,ctx.scratch.name,'prepare',input_raw,response_raw)==value
+        assert replay._preparation_consumer_values(root,raw,'prepare',input_raw,response_raw)[0]==value
+        destination=work/'preparation-runtime-prepare'
+        assert {path.name for path in destination.iterdir()}=={'capture.json'}|{row['file'] for row in ctx.runtime_inventory}
+        assert (destination/'capture.json').read_bytes()==raw
+        for row in ctx.runtime_inventory:
+            assert (ctx.scratch/row['file']).read_bytes()==raw_values[row['slot']]
+            assert (destination/row['file']).read_bytes()==raw_values[row['slot']]
+        assert anchor.recording_work['runtime']['read_bytes']==anchor.recording_work['runtime']['sha_bytes']==5*total
+        assert anchor.recording_work['runtime']['equality_bytes']==2*total
+        assert anchor.recording_work['runtime']['physical_bytes']==2*total
+        print(json.dumps({'ordinary_only':True,'full_native_prepare_route':False,
+            'runtime_paths':'TMP python/git/jq synthetic; SOURCE preparation.py and pinned dependency SOURCE only',
+            'version_commands_are_fixture_substitutions':True,'commands':commands,
+            'T_work':ctx.recording_work,'P_work':anchor.recording_work,'native_source_scratch_ledger':dataclasses.asdict(ctx.ledger),
+            'marker':marker,'borrowed_native_scratch_fd_still_open':True,
+            'additional_fixture_validation_reads':len(raw)+4*total,
+            'full_Q_M_host_parent_qualification':'UNKNOWN'},sort_keys=True))
+finally:
+    if ctx is not None:ctx.close_boundaries()
+    if holder is not None:holder.close()
+    c._acl_state=original_acl
+PY_PREPARATION_RUNTIME
 /usr/bin/python3 -I -S -B - "$root" <<'PY_RUNTIME_VALUES'
 import copy
 import importlib.util

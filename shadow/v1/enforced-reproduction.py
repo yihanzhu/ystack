@@ -381,11 +381,12 @@ class StableDirectory:
         leaf.before = current
         return self.held
 
-    def _retain_preparation(self, anchor, scratch_name, operation, input_raw, response_raw):
+    def _retain_preparation(self, anchor, scratch_name, operation, input_raw, response_raw, caller_raw):
         try:
-            return anchor.retain_preparation(self._recording_parent(),scratch_name,operation,input_raw,response_raw)
-        except (Refusal,c.Refusal,OSError,MemoryError):
+            return anchor.retain_preparation(self._recording_parent(),scratch_name,operation,input_raw,response_raw,caller_raw)
+        except (Refusal,c.Refusal,OSError,MemoryError) as error:
             anchor.private_observations["unusable"] = True
+            if getattr(error, "_scope_signal_cancel", False):raise
             return None
 
     def recheck(self, code: str = "E_WORKSPACE") -> None:
@@ -2095,7 +2096,7 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
             "--scratch", str(prep_scratch), "--jq", jq.snapshot.path]
         execute("candidate-preparation", prepare + ["prepare", *common], preparation_source,
                 timeout=300, env=env, deadline=deadline)
-        work_hold._retain_preparation(anchor,"preparation-scratch","prepare",input_raw,response_raw)
+        work_hold._retain_preparation(anchor,"preparation-scratch","prepare",input_raw,response_raw,request_raw)
         for child in prep_scratch.iterdir():
             if child.is_dir() and not child.is_symlink():
                 shutil.rmtree(child)
@@ -2103,7 +2104,7 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
                 child.unlink()
         execute("candidate-inspection", prepare + ["inspect", *common], preparation_source,
                 timeout=300, env=env, deadline=deadline)
-        work_hold._retain_preparation(anchor,"preparation-scratch","inspect",input_raw,response_raw)
+        work_hold._retain_preparation(anchor,"preparation-scratch","inspect",input_raw,response_raw,request_raw)
         record_raw = read_regular(prep / "record.json", 64 * 1024)
         manifest_raw = read_regular(prep / "manifest.json", 2 * OUTPUT_LIMIT)
         manifest = parse(manifest_raw, 2 * OUTPUT_LIMIT)

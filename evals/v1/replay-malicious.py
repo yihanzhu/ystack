@@ -33,6 +33,26 @@ def _native_runtime_values(runtime_root, values, locators):
     return owner._native_runtime_values(values, locators)
 
 
+def _preparation_consumer_values(runtime_root, raw, operation, input_raw, response_raw):
+    spec = importlib.util.spec_from_file_location(
+        "malicious_preparation_consumer_values", Path(runtime_root)/"shadow/v1/_consumer.py")
+    owner = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = owner
+    spec.loader.exec_module(owner)
+    return owner._preparation_capture_binding_values(raw, operation, input_raw, response_raw)
+
+
+def _preparation_seal_values(runtime_root, name, expected, before, after, named, uid, gid,
+                             access, default, platform, contents):
+    spec = importlib.util.spec_from_file_location(
+        "malicious_preparation_seal_values", Path(runtime_root)/"shadow/v1/_consumer.py")
+    owner = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = owner
+    spec.loader.exec_module(owner)
+    return owner._preparation_seal_values(name, expected, before, after, named, uid, gid,
+                                           access, default, platform, contents)
+
+
 def _preparation_capture_values(runtime_root, raw, workspace, operation, input_raw, response_raw):
     spec = importlib.util.spec_from_file_location(
         "malicious_preparation_capture_values",Path(runtime_root)/"preparation/v1/prepare-candidate.py")

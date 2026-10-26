@@ -691,7 +691,7 @@ def _materialize(ws):
         ws.execute("candidate-" + ("preparation" if operation == "prepare" else "inspection"),
             [sys.executable, "-I", "-S", "-B", str(preparation), operation, *common,
              "--scratch", str(work / scratch)], preparation, timeout=300)
-        ws.work_hold._retain_preparation(ws.anchor,scratch,operation,input_raw,response_raw)
+        ws.work_hold._retain_preparation(ws.anchor,scratch,operation,input_raw,response_raw,ws.request.raw)
     prep_raw = ws.hold(prep / "record.json", 64 * 1024).raw
     manifest_raw = ws.hold(prep / "manifest.json", 2 * e.OUTPUT_LIMIT).raw
     instruction = e.make_instruction(incident)
