@@ -642,6 +642,7 @@ fixture.raw16_hp_registration_primary(root)
 fixture.raw16_local_P_handoff(root)
 fixture.raw16_local_P_after_H_copy(root)
 fixture.raw16_local_P_clone_allocation(root)
+fixture.raw16_preparation_P_handoff(root)
 PY_HP_HANDOFF
 /usr/bin/python3 -I -S -B - "$root" <<'PY_D_SOURCE_ACQUISITION'
 import importlib.util,sys

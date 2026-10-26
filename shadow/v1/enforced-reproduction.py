@@ -384,7 +384,9 @@ class StableDirectory:
 
     def _retain_preparation(self, anchor, scratch_name, operation, input_raw, response_raw, caller_raw):
         try:
-            return anchor.retain_preparation(self._recording_parent(),scratch_name,operation,input_raw,response_raw,caller_raw)
+            copied = anchor.retain_preparation(self._recording_parent(),scratch_name,operation,input_raw,response_raw,caller_raw)
+            self._own_runtime(anchor, copied)
+            return copied
         except (Refusal,c.Refusal,OSError,MemoryError) as error:
             anchor.private_observations["unusable"] = True
             if getattr(error, "_scope_signal_cancel", False):raise
@@ -424,7 +426,7 @@ class StableDirectory:
         self._refresh_runtime_parents()
 
     def _refresh_runtime_parents(self):
-        for copied in self.runtime_copies:copied.refresh_local_parent(self.held)
+        for copied in self.runtime_copies:copied.refresh_recorder_parent(self.held)
 
     def close_runtime_copies(self):
         copies, self.runtime_copies = self.runtime_copies, []

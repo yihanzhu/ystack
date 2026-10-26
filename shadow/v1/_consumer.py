@@ -1330,6 +1330,7 @@ def _copy_preparation_document(directory, raw, work, resolver, *, name="capture.
                     if failure is None or getattr(error, "_scope_signal_cancel", False) and not getattr(failure, "_scope_signal_cancel", False):
                         failure = error
         if failure is not None:raise failure
+    return before
 
 
 @dataclasses.dataclass
@@ -1354,7 +1355,8 @@ class Anchor:
         opened, storage_rows, runtime_leaf = [], [], {}
         _capture_work_values(runtime_leaf, "preparation:" + operation)
         self.recording_work.setdefault("preparation_leaves", []).append(runtime_leaf)
-        failure, case_work = None, None
+        failure, case_work, copied = None, None, None
+        file_states, runtime_hashes = {}, {}
         failures = (Refusal, OSError, ValueError, TypeError, MemoryError, ImportError)
         try:
             caller = _json(caller_raw, DOCUMENT_LIMIT, "E_STORE")
@@ -1424,9 +1426,11 @@ class Anchor:
                                  snapshot, storage_rows=storage_rows)
                     _require(snapshot.sha256() == runtime_files[filename]["sha256"], "E_STORE")
                     if selected_operation == operation:
-                        _copy_runtime_file(destination.fd, filename, snapshot, runtime_leaf, self.resolver)
+                        file_states[filename], runtime_hashes[filename] = _copy_runtime_file(
+                            destination.fd, filename, snapshot, runtime_leaf, self.resolver)
                 if selected_operation == operation:
-                    _copy_preparation_document(destination.fd, raw, runtime_leaf, self.resolver)
+                    file_states["capture.json"] = _copy_preparation_document(
+                        destination.fd, raw, runtime_leaf, self.resolver)
                     _refresh_recording_directory(destination, destination_before, runtime_leaf)
                     _require(set(destination.listdir()) == set(runtime_files) | {"capture.json"}, "E_STORE")
                     os.fsync(destination.fd);os.fsync(parent.fd)
@@ -1438,7 +1442,8 @@ class Anchor:
             values = self.private_observations.setdefault("preparation", {})
             _require(operation not in values, "E_STORE")
             values[operation] = candidates[0]
-            return candidates[0]
+            copied = _HeldCaptureCopy(self, self.recording_work, case_work)
+            copied.acquire(parent, destination_name, file_states, runtime_hashes)
         except BaseException as error:
             failure = error
             self.private_observations["unusable"] = True
@@ -1471,9 +1476,19 @@ class Anchor:
                 if tail_failure is None or (getattr(error, "_scope_signal_cancel", False)
                         and not getattr(tail_failure, "_scope_signal_cancel", False)):
                     tail_failure = error
+            if failure is not None or tail_failure is not None or _capture_work_incomplete(runtime_leaf):
+                self.private_observations["unusable"] = True
+                if copied is not None:
+                    try:copied.close()
+                    except BaseException as error:
+                        if tail_failure is None or (getattr(error, "_scope_signal_cancel", False)
+                                and not getattr(tail_failure, "_scope_signal_cancel", False)):
+                            tail_failure = error
+                    copied = None
             if (getattr(tail_failure, "_scope_signal_cancel", False)
                     and not getattr(failure, "_scope_signal_cancel", False)):
                 raise tail_failure
+        return copied
 
     def retain_parent_inputs(self, parent, context, caller_raw):
         work, case_work, failure = {}, None, None
@@ -2753,6 +2768,7 @@ class _HeldCaptureCopy:
         self.leaf, self.members, self.runtime_sha256 = {}, {}, {}
         self.directory, self.closed, self.owned = None, False, []
         self.local_parent = False
+        self.recorder_parent_path, self.recorder_parent_index = None, None
         _capture_work_values(self.leaf, "P-capture-holds")
         work.setdefault("P_hold_leaves", []).append(self.leaf)
 
@@ -2788,6 +2804,8 @@ class _HeldCaptureCopy:
 
     def acquire(self, parent, launch, file_states, runtime_hashes):
         try:
+            self.recorder_parent_path = parent.path
+            self.recorder_parent_index = len(parent.components) - 1
             if launch is None:
                 self.local_parent = True
                 rows = _clone(parent, "E_STORE", self.leaf, "M")
@@ -2820,10 +2838,10 @@ class _HeldCaptureCopy:
             self.close()
             raise
 
-    def refresh_local_parent(self, parent):
-        _require(self.local_parent and not self.closed and parent.path == self.directory.path, "E_STORE")
+    def refresh_recorder_parent(self, parent):
+        _require(not self.closed and parent.path == self.recorder_parent_path, "E_STORE")
         current = parent.before
-        index = len(self.directory.components) - 1
+        index = self.recorder_parent_index
         for item in self.owned:
             before = item.components[index].before
             _require((before.st_dev, before.st_ino, before.st_uid, before.st_gid, before.st_mode)

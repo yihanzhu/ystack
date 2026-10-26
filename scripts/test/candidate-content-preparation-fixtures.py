@@ -2071,6 +2071,107 @@ def raw16_t_lifecycle(root: Path) -> None:
     print(json.dumps({'raw16_T_controls': completed, 'ordinary_synthetic_runtime_only': True,
         'actual_source_segments_not_full_native_route': True, 'receipts': receipts}, sort_keys=True))
 
+def raw16_preparation_P_handoff(root: Path) -> None:
+    body=(root/'scripts/test/evals-malicious.test.sh').read_text().split("<<'PY_RUNTIME_CONSUMER'\n",1)[1].split('\nPY_RUNTIME_CONSUMER',1)[0]
+    prefix=body.split('        copied_inventory.close();copied_inventory.close()\n',1)[0]
+    footer=body[body.rfind('finally:\n    if copied_inventory'):]
+    before="        parent=c._open_held(str(private),True,c._store_rule(uid,gid,0o700,True),'E_STORE')\n"
+    prefix=prefix.replace(before,"        scratch=private/'preparation-scratch';scratch.mkdir(mode=0o700)\n"+before)
+    edge="        copied_inventory=native.copy_capture(parent,request,'reproduction',anchor.recording_work)\n"
+    head,tail=prefix.split(edge,1)
+    setup='''        import errno,ast
+        holder=e.StableDirectory(parent)
+        input_raw,response_raw=b'synthetic T input',b'synthetic T response'
+        caller=c.canonical({'kind':'shadow_write_request','id':'t.p.fixture'})
+        def create_T(operation):
+            rows=[]
+            for ordinal,role in enumerate(('python','git','jq')):
+                filename='raw16-t-v1-'+operation+'-runtime-'+role+'-'+str(ordinal).zfill(2)+'.bin'
+                payload=(b'synthetic T bytes never executed '+role.encode())*101
+                path=scratch/filename;path.write_bytes(payload);path.chmod(0o400)
+                rows.append({'slot':role,'index':0,'ordinal':ordinal,'locator':str(path),'file':filename,
+                    'size_bytes':len(payload),'sha256':c.digest(payload),'errno':None})
+            value={'operation':operation,'binding':{'input_sha256':c.digest(input_raw),'response_sha256':c.digest(response_raw)},
+                'entropy':[],'clocks':[],'storage':[],'commands':[],'runtime':{'files':rows},'complete':True}
+            raw=c.canonical(value);path=scratch/('raw16-t-v1-'+operation+'-capture.json')
+            path.write_bytes(raw);path.chmod(0o400)
+            (scratch/('raw16-t-v1-'+operation+'-complete-'+c.digest(raw))).mkdir(mode=0o700)
+            return value
+        expected=create_T('prepare')
+        actual_close,actual_transfer,actual_acquire=c._close_paths,c._capture_transfer_work,c._HeldCaptureCopy.acquire
+        acquired=[];fired=[];cancellations=[]
+        syntax=ast.parse((root/'scope/v1/read-shadow-evidence.py').read_text())
+        main=next(node for node in syntax.body if isinstance(node,ast.FunctionDef) and node.name=='main')
+        handler=next(node for node in main.body if isinstance(node,ast.FunctionDef) and node.name=='cancel')
+        namespace={};exec(compile(ast.Module(body=[handler],type_ignores=[]),'<actual-cancel>','exec'),namespace)
+        def acquire(self,*args,**kwargs):
+            result=actual_acquire(self,*args,**kwargs);acquired.append(self);return result
+        def close(items):
+            is_T=any(item.path.endswith('/preparation-runtime-prepare') for item in items)
+            result=actual_close(items)
+            if is_T and T_case in ('T-close-failure','T-close-cancel') and not fired:
+                fired.append('T-close')
+                if T_case=='T-close-cancel':
+                    try:namespace['cancel'](15,None)
+                    except InterruptedError as error:cancellations.append(error);raise
+                raise OSError(errno.EIO,'controlled original T final close')
+            return result
+        def transfer(leaf,*args,**kwargs):
+            if T_case=='T-transfer-failure' and leaf in anchor.recording_work.get('preparation_leaves',[]) and not fired:
+                fired.append('T-transfer');raise MemoryError('controlled original T final transfer')
+            return actual_transfer(leaf,*args,**kwargs)
+        c._close_paths,c._capture_transfer_work,c._HeldCaptureCopy.acquire=close,transfer,acquire
+        caught=None;returned=None
+        try:
+            try:returned=holder._retain_preparation(anchor,'preparation-scratch','prepare',input_raw,response_raw,caller)
+            except InterruptedError as error:caught=error
+        finally:c._close_paths,c._capture_transfer_work,c._HeldCaptureCopy.acquire=actual_close,actual_transfer,actual_acquire
+'''
+    failed='''        assert len(acquired)==1 and acquired[0].closed and not acquired[0].owned, 'T-P failed tail owner must close'
+        assert returned is None and not holder.runtime_copies and anchor.private_observations.get('unusable') is True
+        if T_case=='T-close-cancel':assert len(cancellations)==1 and caught is cancellations[0]
+        else:assert caught is None
+        print(json.dumps({'T_to_P_original_finally_failure':T_case,'P_work':anchor.recording_work,
+            'T_input':'synthetic canonical consumer input, not actual producer/qualification'}))
+'''
+    success='''        assert acquired and holder.runtime_copies, ('T-P acquisition', [leaf.get('failure') for leaf in anchor.recording_work.get('preparation_leaves',[])])
+        assert returned is acquired[0] and returned is holder.runtime_copies[0] and not returned.closed
+        assert anchor.private_observations['preparation']['prepare']==expected
+        assert set(returned.members)=={'capture.json'}|set(returned.runtime_sha256)
+        assert len(returned.runtime_sha256)==3
+        create_T('inspect')
+        inspected=holder._retain_preparation(anchor,'preparation-scratch','inspect',input_raw,response_raw,caller)
+        assert inspected is holder.runtime_copies[1] and not inspected.closed
+'''
+    final='''        if T_case=='P-target-drift':
+            target=Path(next(item.path for name,item in returned.members.items() if name!='capture.json'))
+            target.chmod(0o600)
+            with target.open('r+b') as stream:stream.write(b'!')
+            target.chmod(0o400)
+        if T_case=='parent-mode':private.chmod(0o750)
+        if T_case=='parent-inode':
+            private.rename(base/'original-private');private.mkdir(mode=0o700)
+        for item in holder.runtime_copies:item.recheck()
+        assert bool(anchor.private_observations.get('unusable'))==(T_case!='stable'), 'T-P final held check'
+        e._seal_capture_recording(anchor,parent,None,copied_inventory,holder)
+        assert not holder.runtime_copies and returned.closed and inspected.closed
+        assert anchor.private_observations.get('recording_sealed') is not True
+        print(json.dumps({'actual_prepare_inspect_Hcopy_seal':T_case,'P_work':anchor.recording_work,
+            'P_hold_leaves':[returned.leaf,inspected.leaf],
+            'T_input':'synthetic canonical consumer input, not actual producer/qualification',
+            'extra_fixture_runtime_P_reads':len(source_raw),'qualification':'BLOCKED original UNKNOWN/T/M gates'}))
+'''
+    for case in ('stable','P-target-drift','parent-mode','parent-inode','T-close-failure','T-transfer-failure','T-close-cancel'):
+        script=head+setup
+        if case.startswith('T-'):script+=failed
+        else:script+=success+edge+'        holder._refresh_runtime_parents()\n'+tail+final
+        namespace={'T_case':case};argv=sys.argv;sys.argv=['T-P-fixture',str(root)]
+        try:exec(compile(script+footer,'<actual-preparation-P-handoff>','exec'),namespace)
+        finally:
+            sys.argv=argv
+            if namespace.get('holder') is not None:namespace['holder'].close()
+
+
 def raw16_local_P_after_H_copy(root: Path) -> None:
     text = (root/'scripts/test/evals-malicious.test.sh').read_text()
     body = text.split("<<'PY_RUNTIME_CONSUMER'\n",1)[1].split('\nPY_RUNTIME_CONSUMER',1)[0]
