@@ -656,6 +656,8 @@ fixture.raw16_T_transition_refusals(root)
 fixture.raw16_noexport_projection_values(root)
 fixture.raw16_scope_P_ownership(root)
 fixture.raw16_C1_copy(root)
+fixture.raw16_C1_deletions(root)
+fixture.raw16_C1_T_windows(root)
 PY_HP_HANDOFF
 /usr/bin/python3 -I -S -B - "$root" <<'PY_D_SOURCE_ACQUISITION'
 import importlib.util,sys

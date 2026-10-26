@@ -4275,6 +4275,7 @@ def raw16_C1_case_values(replay, host):
             'storage': {'entries': [], 'identity_context': {'platform': sys.platform}},
             'commands': {'runtime_values': []}, 'runtime': {'files': []}}
         if '.' in role:
+            local['storage'] = []
             launch, operation = role.split('.')
             binding = {'attempt_id': ids[launch], 'outer_request_sha256': hashes[launch],
                 'input_sha256': host.sha256_hex(b'input' + role.encode()),
@@ -4340,7 +4341,7 @@ def raw16_C1_case_values(replay, host):
         'valid_absence_branch': 'NOTRUN here; no missing-capture inference'}
 
 
-def raw16_C1_copy(root: Path) -> None:
+def raw16_C1_copy(root: Path, selected_cases=None, mutation=None) -> None:
     body = (root/'scripts/test/evals-malicious.test.sh').read_text().split("<<'PY_RUNTIME_CONSUMER'\n", 1)[1].split('\nPY_RUNTIME_CONSUMER', 1)[0]
     prefix = body.split('        native.recheck();native.close();native=None\n', 1)[0]
     footer = body[body.rfind('finally:\n    if copied_inventory'):]
@@ -4349,14 +4350,24 @@ def raw16_C1_copy(root: Path) -> None:
         "anchor=c.Anchor(config,config_raw,[installed_hold],{},('',[]),('',[]),c._DarwinUUIDResolver() if sys.platform=='darwin' else None)")
     prefix = prefix.replace("c._store_rule(uid,gid,0o700,True),'E_STORE')", "c._store_rule(uid,gid,0o700,True,anchor.resolver),'E_STORE')")
     cases = ('stable', 'initial-sha', 'tail', 'hash-allocation', 'write-limit', 'physical-limit',
-             'partial-budget', 'register-memory', 'register-A-close-B', 'ordinary-A-close-B', 'registered-cancel')
+             'partial-budget', 'register-memory', 'register-A-close-B', 'ordinary-A-close-B', 'registered-cancel',
+             'S-extra', 'S-close-A-B', 'write-accounting', 'export', 'S-document', 'both-changed')
+    if selected_cases is not None:cases = selected_cases
     extra = '''        import ast,inspect,struct
         replay=load('C1_actual_replay',root/'evals/v1/replay-malicious.py')
+        if C1_mutation is not None:
+            import textwrap
+            method,old=(' _copy_file','_seed_require(installed.before.st_size == size)') if C1_mutation=='S-size' else (' _namespace_check','_seed_require(set(self.root.listdir()) == names)')
+            method=method.strip();source=textwrap.dedent(inspect.getsource(getattr(replay._SeedAssembly,method)))
+            assert source.count(old)==1;source=source.replace(old,'pass')
+            changed={};exec(compile(source,'<C1-narrow-rule-deletion>','exec'),replay.__dict__,changed)
+            setattr(replay._SeedAssembly,method,changed[method])
         c._acl_state=original_acl
         seed_parent=c._open_held(str(seed),True,c._store_rule(uid,gid,0o700,True,anchor.resolver),'E_STORE')
         assembly=replay._SeedAssembly(seed_parent,anchor,'malicious.incident-symptom-text',anchor.recording_work,copied_inventory.case_work)
         original_open,original_write,original_close=os.open,os.write,os.close
         original_hash,original_held_close,original_child=replay.hashlib.sha256,c.HeldPath.close,c._open_child
+        original_runtime,original_recheck=c._runtime_account,c.HeldPath.recheck
         fds,writes,closes,cancels,writer_live=[],[],{},[],set()
         main=next(n for n in ast.parse((root/'scope/v1/read-shadow-evidence.py').read_text()).body if isinstance(n,ast.FunctionDef) and n.name=='main')
         cancel=next(n for n in main.body if isinstance(n,ast.FunctionDef) and n.name=='cancel')
@@ -4380,11 +4391,23 @@ def raw16_C1_copy(root: Path) -> None:
             if C1_case=='hash-allocation' and inspect.currentframe().f_back.f_code is replay._SeedAssembly._copy_file.__code__:
                 raise MemoryError('controlled pre-open hash allocation')
             return original_hash(*args,**kwargs)
+        source_member=copied_inventory.members[name]
         def child(parent,name,*args,**kwargs):
             if C1_case=='tail' and parent is assembly.root and name=='runtime-copy.bin':
+                os.chmod(name,0o600,dir_fd=parent.fd,follow_symlinks=False)
                 fd=original_open(name,os.O_WRONLY|os.O_APPEND,dir_fd=parent.fd)
                 try:assert original_write(fd,b'tail')==4
-                finally:original_close(fd)
+                finally:
+                    original_close(fd)
+                    os.chmod(name,0o400,dir_fd=parent.fd,follow_symlinks=False)
+            if C1_case=='both-changed' and parent is assembly.root and name=='runtime-copy.bin':
+                for directory,filename in ((parent.fd,name),(copied_inventory.directory.fd,source_member.components[-1].name)):
+                    os.chmod(filename,0o600,dir_fd=directory,follow_symlinks=False)
+                    fd=original_open(filename,os.O_WRONLY,dir_fd=directory)
+                    try:assert original_write(fd,b'X')==1
+                    finally:
+                        original_close(fd)
+                        os.chmod(filename,0o400,dir_fd=directory,follow_symlinks=False)
             return original_child(parent,name,*args,**kwargs)
         class Registration(list):
             def append(self,item):
@@ -4396,6 +4419,11 @@ def raw16_C1_copy(root: Path) -> None:
             result=original_held_close(item)
             if item.path==str(seed/'runtime-copy.bin') and C1_case in ('register-A-close-B','ordinary-A-close-B'):marked()
             return result
+        def runtime_account(work,field,amount,*,window=False,commit=True):
+            if C1_case=='write-accounting' and work is assembly.work and field=='write_bytes' and commit:
+                raise MemoryError('actual written accounting')
+            return original_runtime(work,field,amount,window=window,commit=commit)
+        c._runtime_account=runtime_account
         if C1_case.startswith('register') or C1_case=='ordinary-A-close-B':assembly.output_holds=Registration()
         if C1_case in ('write-limit','partial-budget'):
             assembly.case_work['runtime']['write_bytes']=c._RUNTIME_FIELDS['write_bytes']-(65536 if C1_case=='partial-budget' else 0)
@@ -4403,18 +4431,26 @@ def raw16_C1_copy(root: Path) -> None:
         os.open,os.write,os.close,replay.hashlib.sha256,c.HeldPath.close,c._open_child=opening,writing,closing,hashing,held_close,child
         caught=None
         try:
-            try:assembly._copy(anchor,copied_inventory.members[name],'runtime-copy.bin',('f'*64 if C1_case=='initial-sha' else native_digest),'runtime')
+            try:assembly._copy(anchor,copied_inventory.members[name],('exports/reproduction.bin' if C1_case=='export' else 'runtime-copy.bin'),('f'*64 if C1_case=='initial-sha' else native_digest),('export' if C1_case=='export' else 'runtime'))
             except BaseException as error:caught=error
         finally:os.open,os.write,os.close,replay.hashlib.sha256,c.HeldPath.close,c._open_child=original_open,original_write,original_close,original_hash,original_held_close,original_child
-        if C1_case=='stable':
+        c._runtime_account=original_runtime
+        if C1_case=='export':
+            assert caught is None and assembly.exports is not None
+            assert (seed/'exports/reproduction.bin').read_bytes()==source_raw
+            case_values=None
+        elif C1_case in ('stable','S-extra','S-close-A-B','S-document'):
             assert caught is None, (type(caught).__name__, str(caught), getattr(caught,'code',None))
             assert assembly.work['runtime']['read_bytes']==assembly.work['runtime']['sha_bytes']==3*len(source_raw)
             assert assembly.work['runtime']['write_bytes']==assembly.work['runtime']['copy_bytes']==len(source_raw)
             assert assembly.work['runtime']['equality_bytes']==2*len(source_raw)
             assert (seed/'runtime-copy.bin').read_bytes()==source_raw
-            case_values=raw16_C1_case_values(replay,h)
+            case_values=raw16_C1_case_values(replay,h) if C1_case=='stable' else None
         else:
             assert caught is not None and assembly.failure is not None,C1_case
+            if C1_case=='write-accounting':
+                assert writes==[65536] and assembly.work['observed_write_failures'][0]['return']==65536
+                assert assembly.work['write_accounting_incomplete'] and (seed/'runtime-copy.bin').stat().st_size==65536
             if C1_case=='hash-allocation':assert not fds and not (seed/'runtime-copy.bin').exists()
             if C1_case in ('write-limit','physical-limit'):assert not writes and (seed/'runtime-copy.bin').stat().st_size==0
             if C1_case=='partial-budget':
@@ -4422,8 +4458,29 @@ def raw16_C1_copy(root: Path) -> None:
                 assert assembly.work['runtime']['write_bytes']==assembly.work['runtime']['physical_bytes']==65536
             if C1_case in ('register-A-close-B','ordinary-A-close-B','registered-cancel'):assert caught is cancels[0]
             case_values=None
+        if C1_case=='S-document':
+            document=b'{"physical_document_control":1}\\n'
+            assembly._write_document(document)
+            assert (seed/'raw-observations.json').read_bytes()==document
+        if C1_case=='S-extra':
+            before=assembly.root.before;(seed/'undeclared.bin').write_bytes(b'unknown');assembly._refresh_S(before)
+        if C1_case=='S-close-A-B':
+            def rechecking(item,*args,**kwargs):
+                if item.path==str(seed/'runtime-copy.bin'):marked()
+                return original_recheck(item,*args,**kwargs)
+            def closing_held(item):
+                result=original_held_close(item)
+                if item.path==str(seed/'runtime-copy.bin'):marked()
+                return result
+            c.HeldPath.recheck,c.HeldPath.close=rechecking,closing_held
+        closing_error=None
         try:assembly.close(caught)
-        except BaseException as error:assert caught is None or error is caught
+        except BaseException as error:
+            closing_error=error
+            assert caught is None or error is caught
+        finally:c.HeldPath.recheck,c.HeldPath.close=original_recheck,original_held_close
+        if C1_case=='S-extra':assert closing_error is not None and assembly.failure is not None,'S-namespace-deletion'
+        if C1_case=='S-close-A-B':assert len(cancels)==2 and closing_error is cancels[0]
         assert assembly.closed and assembly.root is None and not assembly.output_holds
         assert all(closes.get(fd)==1 for fd in fds), (C1_case,fds,closes)
         seed_parent.close()
@@ -4436,10 +4493,143 @@ def raw16_C1_copy(root: Path) -> None:
             'no_native_qualification_or_final_seed':True},sort_keys=True))
 '''
     for case in cases:
-        namespace = {'C1_case': case, 'raw16_C1_case_values': raw16_C1_case_values}
+        namespace = {'C1_case': case, 'C1_mutation': mutation, 'raw16_C1_case_values': raw16_C1_case_values}
         argv = sys.argv;sys.argv = ['C1-copy-fixture', str(root)]
         try:exec(compile(prefix + extra + footer, '<actual-held-C1-copy>', 'exec'), namespace)
         finally:sys.argv = argv
+
+
+def raw16_C1_deletions(root: Path) -> None:
+    for case, mutation, marker in (('tail', 'S-size', 'tail'),
+                                   ('S-extra', 'S-namespace', 'S-namespace-deletion')):
+        try:raw16_C1_copy(root, (case,), mutation)
+        except AssertionError as error:assert str(error) == marker
+        else:raise AssertionError('C1 deletion was not detected: ' + mutation)
+    print(json.dumps({'C1_narrow_deletions_detected': ['S-size', 'S-namespace']}))
+
+
+def _synthetic_C1_T(c, scratch, operation, input_raw, response_raw):
+    rows = []
+    for ordinal, role in enumerate(('python', 'git', 'jq')):
+        name = 'raw16-t-v1-' + operation + '-runtime-' + role + '-' + str(ordinal).zfill(2) + '.bin'
+        raw = (b'C1 synthetic never executed ' + role.encode()) * 31
+        path = scratch/name;path.write_bytes(raw);path.chmod(0o400)
+        rows.append({'slot': role, 'index': 0, 'ordinal': ordinal, 'locator': str(path),
+            'file': name, 'size_bytes': len(raw), 'sha256': c.digest(raw), 'errno': None})
+    value = {'operation': operation, 'binding': {'input_sha256': c.digest(input_raw),
+        'response_sha256': c.digest(response_raw)},
+        'entropy': {'preparation_names': [[{'entropy': '01'*8, 'errno': None}]]},
+        'clocks': {'wall': [], 'monotonic': []}, 'storage': [],
+        'commands': {'runtime_values': [{'git_version': b'git version fixture\n'.hex(),
+            'python_version': '3.11.fixture', 'unicode_version': '14.0.0'}]},
+        'runtime': {'files': rows}, 'complete': True}
+    raw = c.canonical(value)
+    path = scratch/('raw16-t-v1-' + operation + '-capture.json');path.write_bytes(raw);path.chmod(0o400)
+    (scratch/('raw16-t-v1-' + operation + '-complete-' + c.digest(raw))).mkdir(mode=0o700)
+    return value
+
+
+def raw16_C1_T_windows(root: Path) -> None:
+    body = (root/'scripts/test/evals-malicious.test.sh').read_text().split("<<'PY_RUNTIME_CONSUMER'\n", 1)[1].split('\nPY_RUNTIME_CONSUMER', 1)[0]
+    prefix = body.split("        copied_inventory=native.copy_capture(parent,request,'reproduction',anchor.recording_work)\n", 1)[0]
+    footer = body[body.rfind('finally:\n    if copied_inventory'):]
+    prefix = prefix.replace("        store=base/'store';", "        seed=base/'pending-S';seed.mkdir(mode=0o700)\n        writer_private=base/'writer-private';writer_private.mkdir(mode=0o700)\n        parent_context,parent_values=make_parent(c,base/'parent.frame')\n        store=base/'store';", 1)
+    prefix = prefix.replace("        install=base/'installed';", "        for directory in (private,writer_private):\n            for item in ('preparation-scratch','inspection-scratch'):(directory/item).mkdir(mode=0o700)\n        install=base/'installed';", 1)
+    original = "uid,gid=os.getuid(),os.getgid();attempt='attempt.runtime';request=b'ordinary original request'"
+    replacement = """uid,gid=os.getuid(),os.getgid();attempt='attempt.runtime'
+        launch_body={'attempt':{'attempt_id':attempt,'attempt_number':1},'store_id':'store.runtime','control':{},'subject':{}}
+        request=h.canonical({'schema_version':1,'kind':'sandbox_launch_request','id':attempt,'body':launch_body})
+        bound=launch_body['attempt']|{'launch_request_sha256':h.sha256_hex(request)}
+        outer=h.canonical({'schema_version':1,'kind':'shadow_enforced_request','id':attempt,'body':{'attempt_id':attempt}})
+        expectation=h.canonical({'schema_version':1,'kind':'sandbox_receipt_expectation','id':attempt,'body':launch_body|{'attempt':bound}})
+        receipt=h.canonical({'schema_version':1,'kind':'sandbox_enforcement_receipt','id':'receipt.'+h.sha256_hex(request),
+            'body':{'attempt':bound,'control':{},'subject':{},'origin':{'store_id':'store.runtime'}}})"""
+    assert original in prefix;prefix = prefix.replace(original, replacement)
+    old_receipt = "h.canonical({'body':{'attempt':{'attempt_id':attempt,'launch_request_sha256':h.sha256_hex(request)}}})"
+    assert old_receipt in prefix;prefix = prefix.replace(old_receipt, 'receipt')
+    prefix = prefix.replace("groups={'runtime':{'files':h._capture_process['runtime_inventory']}}", "groups={'runtime':{'files':h._capture_process['runtime_inventory']},'host':{'process':[],'driver_rest':[],'signals':[]},'clocks':{'wall':[],'monotonic':[]}}")
+    prefix = prefix.replace("anchor=c.Anchor(config,config_raw,[installed_hold],{},('',[]),('',[]),None)", "anchor=c.Anchor(config,config_raw,[installed_hold],{},('',[]),('',[]),c._DarwinUUIDResolver() if sys.platform=='darwin' else None)")
+    prefix = prefix.replace("c._store_rule(uid,gid,0o700,True),'E_STORE')", "c._store_rule(uid,gid,0o700,True,anchor.resolver),'E_STORE')")
+    extra = '''        import shutil
+        replay=load('C1_T_replay',root/'evals/v1/replay-malicious.py')
+        c._acl_state=original_acl
+        seed_parent=c._open_held(str(seed),True,c._store_rule(uid,gid,0o700,True,anchor.resolver),'E_STORE')
+        key=str(parent.before.st_dev)+':'+str(parent.before.st_ino)
+        case_work=c._capture_work_values(anchor.recording_work,key)
+        assembly=replay._SeedAssembly(seed_parent,anchor,'malicious.checked-file-bytes',anchor.recording_work,case_work)
+        holder=e.StableDirectory(parent)
+        input_raw,response_raw=b'ordinary C1 materialization input',b'ordinary C1 materialization response'
+        prep=private/'preparation-scratch'
+        make_T(c,prep,'prepare',input_raw,response_raw)
+        (prep/'candidate-preparation-0101010101010101').mkdir(mode=0o700)
+        prepared=holder._retain_preparation(anchor,'preparation-scratch','prepare',input_raw,response_raw,outer)
+        assert prepared is not None
+        early=prepared.T_companions[0]
+        assembly.reproduction_prepare(prepared,early,outer,input_raw,response_raw)
+        assert len(assembly.occurrences)==1 and not early.closed
+        holder._T_cleanup_begin(anchor,'preparation-scratch')
+        child=prep/'candidate-preparation-0101010101010101';shutil.rmtree(child)
+        holder._T_cleanup_removed(anchor,child.name);holder._T_cleanup_done(anchor)
+        make_T(c,prep,'inspect',input_raw,response_raw)
+        holder._T_inspection_returned(anchor)
+        inspected=holder._retain_preparation(anchor,'preparation-scratch','inspect',input_raw,response_raw,outer)
+        assert inspected is not None and early.closed and early.close_complete
+        current=next(item for item in inspected.T_companions if item.binding['operation']=='inspect')
+        assembly.reproduction_inspect(inspected,current,outer,input_raw,response_raw)
+        try:assembly.reproduction_prepare(prepared,early,outer,input_raw,response_raw)
+        except ValueError:pass
+        else:raise AssertionError('duplicate/closed prepare admitted')
+        record={'values':{'platform':sys.platform,'architecture':'fixture','python_implementation':'cpython',
+            'python_version':'fixture3.11','soabi':'fixture','ext_suffix':'.so',
+            'configuration':{name:None for name in e._NATIVE_CONFIGURATION_KEYS}},
+            'locators':{name:'/fixture/'+name for name in ('compiler','include','config_include','source','binary')}}
+        e._native_runtime_values(record['values'],record['locators'])
+        anchor.private_observations['commands']={'runtime_values':[record]}
+        anchor.retain_entropy('reproduction',bytes(32))
+        parent_P=holder._retain_parent_inputs(anchor,parent_context,outer)
+        runtime_source=c._open_held(str(source),False,c._store_rule(uid,gid,0o400,False,anchor.resolver),'E_STORE')
+        holder._retain_runtime(anchor,'python',runtime_source,source_raw,outer)
+        local=next((item for item in holder.runtime_copies if item.runtime_sha256 and all(name.endswith('-python-0000.bin') for name in item.runtime_sha256)),None)
+        assert parent_P is not None and local is not None
+        native.record_reproduction(outer,request,expectation)
+        transition=holder._begin_T_parent(anchor,parent)
+        copied_inventory=native.copy_capture(parent,request,'reproduction',anchor.recording_work)
+        holder._refresh_runtime_parents();holder._finish_T_parent(anchor,parent,transition,{'reproduction'})
+        assembly.reproduction(native,copied_inventory,list(holder.runtime_copies),outer,expectation)
+        assert 'reproduction' in assembly.occurrences
+        writer_anchor=c.Anchor(config,config_raw,[],{},('',[]),('',[]),anchor.resolver,recording_work=anchor.recording_work)
+        writer_parent=c._open_held(str(writer_private),True,c._store_rule(uid,gid,0o700,True,anchor.resolver),'E_STORE')
+        writer_holder=e.StableDirectory(writer_parent)
+        writer_outer=c.canonical({'schema_version':1,'kind':'shadow_write_request','id':'attempt.write','body':{'attempt_id':'attempt.write'}})
+        for operation,scratch in (('prepare','preparation-scratch'),('inspect','inspection-scratch')):
+            make_T(c,writer_private/scratch,operation,input_raw,response_raw)
+            retained=writer_holder._retain_preparation(writer_anchor,scratch,operation,input_raw,response_raw,writer_outer)
+            assert retained is not None
+            T=next(item for item in retained.T_companions if item.binding['operation']==operation)
+            method=assembly.write_prepare if operation=='prepare' else assembly.write_inspect
+            method(retained,T,writer_outer,input_raw,response_raw)
+        assert set(assembly.occurrences)==set(replay._CASE_ROLES[:5])
+        assert len(assembly.case_sources)==2 and assembly.case_sources[0] is case_work
+        assert all(any(source is item for item in anchor.recording_work['cases'].values()) for source in assembly.case_sources)
+        assert assembly.raw is None and anchor.private_observations.get('accounting',{}).get('complete') is False
+        assembly.close();seed_parent.close()
+        writer_holder.close();holder.close();runtime_source.close()
+        assert all(item.closed for item in assembly.bindings['reproduction.prepare']['T'])
+        print(json.dumps({'four_actual_T_early_consumptions':True,'actual_original_enforced_cleanup_inspect_transition':True,
+            'prepare_closed_before_later_launch_consumption':early.closed,'pending_S_only':True,
+            'actual_reproduction_held_stage':True,'S_work':assembly.work,
+            'qualification':'NOT_ACCEPTED; synthetic runtime/version inputs and parent semantics UNKNOWN; no actual native release'},sort_keys=True))
+'''
+    namespace = {'make_T': _synthetic_C1_T, 'make_parent': _synthetic_parent_P_context}
+    argv = sys.argv;sys.argv = ['C1-T-fixture', str(root)]
+    try:exec(compile(prefix + extra + footer, '<actual-C1-T-windows>', 'exec'), namespace)
+    finally:
+        sys.argv = argv
+        for name in ('assembly', 'writer_holder', 'holder', 'seed_parent'):
+            value = namespace.get(name)
+            if value is not None:
+                try:value.close()
+                except Exception:pass
 
 
 def main() -> int:
