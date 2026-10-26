@@ -294,15 +294,130 @@ entropy or OS observations to a genuine launch.
 
 #### B. Closed raw inputs
 
-The case contains `raw-observations.json`, with exactly `schema_version:1`,
-`kind:"malicious_raw_observations"` and `body`. Body has exactly `incident`,
-`identities`, `entropy`, `clocks`, `storage`, `guest`, `host`, `source_pages`,
-`commands` and `runtime`. The table paths are relative to body. Each record is
-canonical JSON. Unknown keys,
-duplicate keys, wrong types, missing observations, unexplained sequence gaps and
-unused observations reject the case. A field below is an external primitive
-observation, not a precomputed verdict. All ids, refs, hashes, reason sets, report
-rows and derived state remain outputs of C.
+The case contains canonical `raw-observations.json`, with exactly
+`schema_version:2`, `kind:"malicious_raw_observations"` and `body`. Body has
+exactly `incident`, `identities` and `occurrences`. Incident retains its shape
+below. Identities has exactly `attempt_ids` and `locators`; attempt_ids retains
+its three original roles. Locators is keyed by the occurrence roles below, with
+the original fixed locator names and string shapes inside each role.
+
+Occurrences is an array in this exact order. Each entry has exactly `role`,
+`binding` and `raw`. The fixed roles separate observations; they are not a
+registry, dispatch selector or new production request field.
+
+| Position / role | Original caller and exact raw containers |
+| --- | --- |
+| 1 `reproduction.prepare` | Reproduction's candidate-preparation call; raw has exactly `preparation` |
+| 2 `reproduction.inspect` | Its candidate-inspection call after original native cleanup; raw has exactly `preparation` |
+| 3 `reproduction` | Original reproduction caller and its one sandbox launch; raw has exactly `local` and `capture` |
+| 4 `write.prepare` | Writer's candidate-preparation call; raw has exactly `preparation` |
+| 5 `write.inspect` | Writer's candidate-inspection call in its separate scratch; raw has exactly `preparation` |
+| 6 `write` | Original writer and its one verification launch; raw has exactly `local` and `capture` |
+| 7 `gate` | Original generator with its local reader, and the separate scope reader reached by evaluate-scope; raw has exactly `generator` and `scope_reader` |
+| 8 `kill` | That gate's one kill-register source call; raw has exactly `local` and `capture` |
+| 9 `coverage` | That gate's coverage source call on the original coverage branch; raw has exactly `local` and `capture` |
+
+`preparation` contains exactly the original T groups `entropy`, `clocks`,
+`storage`, `commands` and `runtime`. Launch `local` and each gate container contain
+these same five group names from their own original caller. Source `local`
+contains exactly `clocks`, `storage`, `commands` and `runtime`; kill/coverage
+entropy belongs to gate `generator` and `scope_reader` respectively, where the
+real reads occur. Keep the two gate readers and their consumer observations
+separate; the existing gate session relation binds the scope reader to this
+generator request, scope inputs and qualified store session. Its observations
+cannot be supplied by the generator or by a different read session. `capture` contains
+the corresponding original H raw groups: launch host/guest/clocks/runtime, or
+source source_pages/clocks/runtime. Each H group is present exactly when required
+by that original owner's reached path; no other group is admitted there.
+
+Every inner observation retains its original shape. Host process rows still have
+six keys; guest setup is still one closed object per launch. H capture and T
+runtime file inventories keep their existing RAW16 shapes and file names. The
+field paths in the following table are logical paths within the applicable raw
+container, except case-level incident/identities. The ten logical groups remain
+incident, identities, entropy, clocks, storage, guest, host, source_pages, commands
+and runtime. This layout preserves every applicable group and every original
+value; it does not permit nine empty copies, omitted groups or placeholder facts.
+The original H/T/P files, complete bytes and seals remain separate mandatory
+inputs. Their presence never substitutes for the complete case raw document.
+
+Bindings have these exact keys. Digests are lower-case SHA-256 of the exact
+held bytes, without rewriting or canonicalizing them. They are checked relationship
+metadata, not primitive
+observations or supplied verdicts. Ids retain their original owner grammars.
+
+| Role | Exact binding keys and derivation |
+| --- | --- |
+| `reproduction`, `write` | `attempt_id`, `outer_request_sha256`, `request_sha256`, `operation`. Operation is `launch`; the outer kind is respectively `shadow_enforced_request` or `shadow_write_request`. Request is that caller's sandbox launch request. |
+| The four preparation roles | `attempt_id`, `outer_request_sha256`, `input_sha256`, `response_sha256`, `operation`. Operation is respectively `prepare` or `inspect`. Outer request and attempt come from that reproduction/writer caller; input/response are its exact materialization bytes. |
+| `gate` | `request_id`, `request_sha256`. Both come from the original `scope_gate_generation_request`. |
+| `kill`, `coverage` | `gate_request_sha256`, `attempt_id`, `request_sha256`, `operation`. Gate digest binds the same gate entry; request/id bind that original source request. Operation is respectively `kill-register-read` or `coverage-read`, retaining its existing versioned request-body value. |
+
+The fixed caller establishes the expected role before reading its entry. Validate
+all original outer/request/attempt/receipt/expectation, qualification and completion
+relations. Launch bindings apply to every captured group, even when export was
+not reached. Retain the existing control/subject/store checks. Preparation also
+uses its original T input/response/operation binding, parent caller binding,
+retained native cleanup/inspection transition and terminal seals. Source bindings
+also check the original gate request refs, source operation, package/accepted-set,
+expectation, receipt, attempt, capture and completion. A role label, digest pair,
+matching export launch or copied completion cannot establish these relationships.
+No binding is reconstructed from the candidate binding that it is checking.
+
+Wire order above fixes serialization, not a new native execution order. The
+coordinator follows the original calls: each prepare precedes its inspect and
+launch; gate setup precedes kill, and its original scope branch controls coverage;
+gate final origins/manifest/completion follow those calls. Local observations
+span their original caller before and after its nested calls. Site labels and
+within-owner sequences retain that ordering. Never concatenate two controllers,
+renumber their calls, overwrite equal roles or deduplicate observations by SHA.
+Each launch starts its own host driver-call sequence at zero, has its own REST
+mapping, and uses only its own guest launch PID and subsequent wait/control rows.
+Clock site ordinals and runtime occurrences stay local to their original owner;
+all original aggregate limits still apply across the case.
+
+A complete case has all eight mandatory entries once. Coverage is the sole
+optional entry: omit it and its locator entry only when the independently
+recomputed original gate branch has no coverage call. Its entropy, pages, runtime
+files, request, capture and outputs must then also be absent. Do not use null,
+an empty coverage entry, a new absence flag or a caller assertion as proof.
+Duplicate, reordered, unknown, missing required or unused entries reject. A
+failure before a required operation does not create a shorter complete case.
+Within a reached occurrence, retain actual original errors and unreachable sites;
+recompute that reachability with the same owner. An empty array is valid only
+when it is the actual permitted value, never a replacement for missing capture.
+Unknown parent input or an incomplete owner keeps complete assembly blocked.
+
+Assembly obtains each raw container from its genuine held H/T/P owner. Replay
+projects one occurrence at a time back to that same owner; it never passes the
+combined case shape to a native entry point. Rebuild and compare the original
+capture, completion and T documents independently. Launch capture projection
+changes only the already defined intermediate export reference; its original
+bytes and all other observations remain unchanged. Recompute every C output for
+both launches, all four preparation operations, the gate and each reached source.
+Use the original paths/roles to distinguish equal-named outputs. Expected outputs
+remain final comparison inputs, never constructor inputs.
+
+The v2 envelope is only the private case representation. Native, H/T/P and
+completion schemas remain unchanged. Ambiguous v1 case documents are rejected;
+there is no guessed conversion, migration or new loader. Keep all original
+single-owner tests and raw evidence. Case tests use separately bound complete
+occurrences, preserving their original assertions and negative cases. Synthetic
+fixtures remain mechanism proof only. They do not manufacture a real recording.
+
+All existing per-field, owner, document, case and four-case limits apply to the
+actual encoded v2 document and its full inventories together. The wrappers and
+bindings add real metadata cost; count it in the existing applicable M/raw/JSON
+budgets and full work ledgers. No cap is multiplied by the number of containers.
+Keep the existing RAW16 byte/file/copy and shared-file limits. Do not move fields
+to role files, drop observations or compress tests to fit. No real inventory-fit,
+M/Q/host-cost, B/C, native, seed or G3 acceptance follows from this representation.
+
+Unknown keys, duplicate keys, wrong types, missing observations, unexplained
+sequence gaps and unused observations reject the case. Apart from the checked
+binding metadata, the fields below are external primitive observations, not
+precomputed verdicts. All output ids, refs, hashes, reason sets, report rows and
+derived state are independently recomputed by C.
 
 | Field path | Raw source and exact content | Bound and use |
 | --- | --- | --- |
@@ -430,8 +545,8 @@ a host receipt supplies the guest owner's inputs. Stop confirmation and reap
 still precede the original export read. Live read, observer and cleanup order,
 all failure branches and ordinary outputs remain unchanged.
 
-All driver calls, including `argv`, have contiguous zero-based indices in the
-order selected by the shared host controller. REST rows refer to those indices;
+Within each launch occurrence, all driver calls, including `argv`, have
+contiguous zero-based indices in the order selected by that shared host controller. REST rows refer to those indices;
 only non-REST calls may explain gaps between REST rows. The first `argv`
 construction has no REST record. Each
 reached `state` or `stop` REST call consumes exactly one matching record; a call
@@ -786,7 +901,8 @@ owner's bytes.
 
 #### C. Complete derived-output ownership
 
-The output inventory is closed by these rows. Each owner reconstructs the entire
+The output inventory is closed by these rows, instantiated separately for each
+applicable fixed occurrence in B. Each owner reconstructs the entire
 canonical document or raw byte file, including every envelope key, id, reference,
 digest and unused-looking field. Comparison is whole-byte equality. It does not
 project selected fields or compare a trial to the control. The recorder checks
@@ -1099,6 +1215,7 @@ replace implementation.
 | 全资源边界 | 每case 4GiB/64、六层24GiB/384；窗口16GiB/256、96GiB/1,536；两级全部新增累计cap及旧适用caps分别边界/多一；carry-in/失败共账，阶段/pair不重置；shared总数仍256；有界模拟大计数，不制造4GiB真实fixture |
 | 失败和重跑 | 两次小partial后完整成功仍共用总账；已满容量的后来操作拒绝且保留原文件；未知write结果或第二close/ledger故障记UNKNOWN，无成功seal；不删除以换容量 |
 | stage C | run和两disjoint dashboard pairs完成四case各一次，独立I和final checks；额外case/重复trial按原M4/manifest拒绝；C缺任一owner不能发完成结果 |
+| Case raw multiplicity | Two independently bound launches with different setup/PID/REST/clock values and four prepare/inspect occurrences round-trip through their original owners. Swap each role/request/attempt/operation, concatenate or renumber streams, omit/duplicate/reorder an entry, change only a non-export observation, or claim coverage absence on the reached branch: each refuses. Test the actual no-coverage branch separately. Rebuild all original envelopes and C outputs; deleting either assembly or replay projection must fail its paired assertion. All old per-owner tests and full-case limits remain. |
 | scope/权限 | 全部repo inactive；slot never executes；stdout零；native attempt两成员不变；source captures不能夹export；无新helper/network/credential/install/activation/target |
 
 G2 and the separate high-risk plan permit only inactive mechanisms within the
