@@ -1,5 +1,5 @@
 ---
-spec-blob: 367d3ab381e6e30085162597bf25de0dc5c88dfd
+spec-blob: aa63e28140e35cbccae8e45ee95d9cc9d92e4080
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-26
@@ -14,14 +14,15 @@ one complete two-source delivery. Source preparation does not accept a dependenc
 a real recording, native qualification or either seed batch.
 
 This plan binds accepted G2 spec blob
-`367d3ab381e6e30085162597bf25de0dc5c88dfd` at main
-`14d18fcd33e5c5af7306c6c0b8ead5e0f043d095`. RAW16 acquisition design
+`aa63e28140e35cbccae8e45ee95d9cc9d92e4080` at main
+`daea049d9c141c6ffc363829693c1d6be48e90e9`. RAW16 acquisition design
 locations retain historical source `c1d9d23e42e6efe2d6da1aae3d23b34564b4080d`
 and base `ae634c86701da04767c41a4d5f416f0c36517cf0`. T lifecycle sites bind
 `25af14412bbd6fc4b5c0b1ca03ba43e545ecb4bc`. Keep older clock/owner labels,
 adoption pins and frozen `6f219579f72f73ddd3703f32b5f4a102ae8c175c` as
-historical anchors, not current resume identities. Current source is paused at
-`29687ec75d573c53bf5c40523ca2b6dc2a302e11`, including preserved WIP.
+historical anchors, not current resume identities. The prior paused source
+`29687ec75d573c53bf5c40523ca2b6dc2a302e11` is also historical. Current source is
+paused clean at `2dd51dcd819b252cee6501c799b5f3fd9018c9ae`, including preserved WIP.
 Its previous GO is retired; B, T and C remain unaccepted. That paused source still
 has the prior artifacts; normally merge the accepted plan main into the preserved
 carrier before fresh exact-source preflight. The operator has accepted
@@ -185,7 +186,7 @@ it adds no CLI option, environment selector or reusable test framework.
 The original artifact base is `091f22d6dc2bff038e60b1a10b12923093eda0fe`.
 The unique PR 1b carrier remains `codex/impl/eval-source-relay-replay`, worktree
 `/private/tmp/ystack-eval-source-relay-replay-20261023`, recorded paused clean by the
-manager at `29687ec75d573c53bf5c40523ca2b6dc2a302e11`. Its preserved WIP is
+manager at `2dd51dcd819b252cee6501c799b5f3fd9018c9ae`. Its preserved WIP is
 unaccepted. This plan does not accept that source or release its pause. Rebind its actual parent/base, remote/PR,
 clean state and complete artifact tuple before resume; do not infer them from an
 older checkpoint. B remains unaccepted and complete C remains required.
@@ -917,13 +918,30 @@ accounting. At the c1d9 design source, shared value owners exist but
 evals-launcher.sh:309-328 stages review files only; evals-driver.sh:775-796 lacks
 the malicious arm, and replay-malicious.py has neither production seed assembly
 nor replay_case. They are required C work, not an existing API to reuse.
-C then completes fixed private seed assembly, malicious dispatch/coordinator,
+C completes fixed private seed assembly, malicious dispatch/coordinator,
 run/dashboard staging, both sources, closure pins, regressions and restoration.
-Missing parent production source blocks its real hookup and full RAW16
-qualification, not the defined receiver/carrier/C mechanism after plan acceptance.
-No checkpoint may disguise missing whole B accounting as completed B. These
-are clean commits on the same carrier, not partial implementation PRs or G3.
-A checkpoint cannot claim complete source receipt while any required file is absent.
+Its inactive source work may precede B acceptance through frozen real interfaces.
+First independently accept and land this separate high-risk plan, normally merge
+that accepted main into the same carrier, and obtain fresh exact-source preflight,
+an exact claim and the manager's explicit resume GO before source work.
+Bind each C consumer to its actual owner, fields, types, bounds, caller and return
+values at a frozen checkpoint. Within the existing scope, scope P and SOURCE/D
+interfaces may be completed first, then frozen and independently preflighted
+before the C code that depends on them. Other C code with fully mapped real
+interfaces need not wait for B acceptance. Unknown fields, missing owners or
+dependencies on an unapproved T protocol keep the affected code blocked; never
+invent an interface or use fixtures to supply a missing production dependency.
+
+B's complete terminal, resource and cost proof, and all other original B proof,
+remain hard gates for C acceptance, seeding, final G3 and implementation merge.
+No runnable or full-CI milestone, or proof already due, is deferred. The changed
+order accepts no part of B and grants no T terminal flag, file or exit-code
+protocol, wider scope, budget or permission. Missing parent production source
+still blocks its real hookup and full RAW16 qualification, not the defined
+receiver/carrier/C mechanism after the source gates above. No checkpoint may
+disguise missing whole B accounting as completed B. These are clean commits on
+the same carrier, not partial implementation PRs or G3. A checkpoint cannot
+claim complete source receipt while any required file is absent.
 
 ### Raw observations and capture wiring
 
@@ -1679,7 +1697,8 @@ R4A.C permits; each trial's own full argv/hash still equals its recorded bytes.
 
 ### Eval integration and pins
 
-After the mapped B owners, implement the remaining C path in this order:
+For each C segment, first freeze and preflight its real interfaces under the
+source gates above, then implement the remaining path in this order:
 
 1. In replay-malicious.py add one private fixed seed-assembly step. Receive only
    complete, genuinely held H/T/P inventories from the existing authorized caller;
@@ -2132,11 +2151,10 @@ gates (R9.6).
   operator-graded seed and its test. 150-450 of them are verbatim verdict bytes, which
   cannot leave the PR whose test checks their digests.
 - PR 3: `review_size: standard`, about 300-400 net added lines.
-- This plan-only amendment: `review_size: standard`, expected 100–160 changed
-  lines. One concern: T's fixed scratch-parent retention, native cleanup boundary,
-  original caller/commit order and finite lifecycle proof. The estimate covers
-  those hooks, the current hash/source binding and the paired test additions.
-  Preserve the full inherited plan and all its gates.
+- This plan-only amendment: `review_size: standard`, expected 40–90 changed
+  lines. One concern: separate inactive C construction from B/C acceptance.
+  The estimate covers the source-order clauses and current artifact/source
+  bindings. Preserve all implementation content, tests and acceptance gates.
 
 Each range waives only the soft line signal, never scope, tests, CI, review or human
 merge.
