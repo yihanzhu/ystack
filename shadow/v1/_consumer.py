@@ -793,15 +793,15 @@ def _parent_context_values(raw, frame_raw, records):
              and native["loader_mode"] == "rtld-now-local.v1", "E_PARENT_CONTEXT")
     if records:
         helper, dependency = records
-        _json(helper, DOCUMENT_LIMIT, "E_PARENT_CONTEXT")
-        doc = _json(dependency, DOCUMENT_LIMIT, "E_PARENT_CONTEXT")
+        for record in records:
+            _require(0 < len(record) <= DOCUMENT_LIMIT, "E_PARENT_CONTEXT")
+            try:
+                parsed = json.loads(record, object_pairs_hook=_unique_object)
+                _require(canonical(parsed) == record, "E_PARENT_CONTEXT")
+            except (UnicodeDecodeError, UnicodeEncodeError, ValueError, TypeError, RecursionError):
+                raise Refusal("E_PARENT_CONTEXT") from None
         _require(digest(helper) == body["helper_build_record_sha256"]
                  and digest(dependency) == native["dependency_record_sha256"], "E_PARENT_CONTEXT")
-        _require(set(doc) == {"schema_version", "kind", "id", "body"}
-                 and type(doc["schema_version"]) is int and doc["schema_version"] == 1
-                 and doc["kind"] == "shadow_runtime_dependency_record"
-                 and doc["id"] == "shadow.runtime-dependency"
-                 and isinstance(doc["body"], dict), "E_PARENT_CONTEXT")
     return _ParentContext(body, raw, frame_raw, records)
 
 @dataclasses.dataclass

@@ -36,6 +36,15 @@ def refuses(label,raw):
 value=read(frame());assert dict(value)==body and value.context_raw==context
 assert value.frame_raw==frame() and value.runtime_records==(helper,dependency)
 legacy=read(context);assert dict(legacy)==body and legacy.runtime_records==() and legacy.frame_raw==context
+for helper_value,dependency_value in [({'different':'helper shape'},['opaque','dependency']),
+        (['helper',1],{'different':'dependency shape'})]:
+    helper_raw,dependency_raw=c.canonical(helper_value),c.canonical(dependency_value)
+    changed_body=body|{'helper_build_record_sha256':c.digest(helper_raw),
+        'native_release':native|{'dependency_record_sha256':c.digest(dependency_raw)}}
+    changed_context=c.canonical({'schema_version':2,'kind':'shadow_consumer_parent_context','id':'shadow.parent','body':changed_body})
+    kept=read(frame(context=changed_context,helper=helper_raw,dependency=dependency_raw))
+    assert kept.runtime_records==(helper_raw,dependency_raw) and dict(kept)==changed_body
+
 for label,raw in [('short-header',c.PARENT_FRAME_MAGIC),('short-context',frame()[:21]),
     ('short-record',frame()[:-1]),('extra-tail',frame()+b'x'),('swapped',frame(helper=dependency,dependency=helper)),
     ('duplicate',frame(dependency=helper)),('zero-context',c.PARENT_FRAME_MAGIC+struct.pack('!III',0,1,1)+b'{}'),
