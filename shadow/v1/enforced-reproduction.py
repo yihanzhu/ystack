@@ -367,6 +367,7 @@ class StableFile:
 class StableDirectory:
     held: c.HeldPath
     runtime_copies: list = dataclasses.field(default_factory=list)
+    T_native_context: dict | None = None
 
     @staticmethod
     def _leaf_identity(value):
@@ -382,39 +383,255 @@ class StableDirectory:
         leaf.before = current
         return self.held
 
-    def _retain_preparation(self, anchor, scratch_name, operation, input_raw, response_raw, caller_raw):
+    def _begin_T_parent(self, anchor, parent):
+        sources = []
+        for carrier in self.runtime_copies:
+            for index, source in enumerate(carrier.T_companions):
+                source.recheck()
+                require(not source.closed and source.stable and not c._capture_work_incomplete(source.leaf), "E_STORE")
+                sources.append((carrier, index, source))
+        if not sources:return None
+        leaf = sources[0][2].leaf
+        before = c._capture_metadata(parent.fd, leaf, "M")
+        require(c._identity(before) == c._identity(parent.before), "E_STORE")
+        names = parent.listdir()
+        c._capture_observe(leaf, "M", "T-workparent-before", {"stat": c._stat_values(before), "namespace": sorted(names)})
+        sources[0][2]._transfer()
+        require(not c._capture_work_incomplete(leaf), "E_STORE")
+        for _, _, source in sources:source.stable = False
+        return {"before": before, "names": set(names), "sources": sources}
+
+    def _T_parent_receipt(self, parent, before, before_names, created, leaf):
+        current = c._capture_metadata(parent.fd, leaf, "M")
+        named = c._capture_named_metadata(parent.components[-1].name, parent.components[-2].fd, leaf, "M")
+        stable = lambda value: (value.st_dev, value.st_ino, value.st_uid, value.st_gid, value.st_mode)
+        names = parent.listdir()
+        require(stable(before) == stable(current) and c._identity(current) == c._identity(named)
+                == c._identity(parent.before) and not set(before_names) & set(created)
+                and set(names) == set(before_names) | set(created), "E_STORE")
+        parent.recheck("E_STORE", leaf, "M")
+        receipt = {"before": c._stat_values(before), "after": c._stat_values(current),
+            "before_namespace": sorted(before_names), "after_namespace": sorted(names), "created": sorted(created)}
+        c._capture_observe(leaf, "M", "T-workparent-after", receipt)
+        return receipt
+
+    def _finish_T_parent(self, anchor, parent, transition, created):
+        if transition is None:return
+        pending = []
         try:
-            copied = anchor.retain_preparation(self._recording_parent(),scratch_name,operation,input_raw,response_raw,caller_raw)
+            leaf = transition["sources"][0][2].leaf
+            receipt = self._T_parent_receipt(parent, transition["before"], transition["names"], created, leaf)
+            for carrier, index, source in transition["sources"]:
+                require(carrier.T_companions[index] is source, "E_STORE")
+                fresh = source.continue_parent_chain(parent, receipt)
+                try:pending.append((carrier, index, source, fresh))
+                except BaseException:
+                    fresh.close()
+                    raise
+            for carrier, index, source, fresh in pending:
+                carrier.T_history.append(source)
+                carrier.T_companions[index] = fresh
+            for _, _, source, _ in pending:
+                source.close()
+                require(source.close_complete, "E_STORE")
+        except BaseException as failure:
+            anchor.private_observations["unusable"] = True
+            for _, _, _, fresh in reversed(pending):
+                if fresh.closed:continue
+                try:fresh.close()
+                except BaseException as closing:
+                    if getattr(closing, "_scope_signal_cancel", False) and not getattr(failure, "_scope_signal_cancel", False):
+                        failure = closing
+            for _, _, source in transition["sources"]:
+                if source.closed:continue
+                try:source.close()
+                except BaseException as closing:
+                    if getattr(closing, "_scope_signal_cancel", False) and not getattr(failure, "_scope_signal_cancel", False):
+                        failure = closing
+            raise failure
+
+    def _discard_runtime(self, anchor, copied, primary):
+        if copied is None:return
+        if copied in self.runtime_copies:self.runtime_copies.remove(copied)
+        try:copied.close()
+        except Exception as closing:
+            copied._failed(closing, "P-caller-discard", primary)
+            if getattr(closing, "_scope_signal_cancel", False) and not getattr(primary, "_scope_signal_cancel", False):raise
+
+
+    def _T_cleanup_begin(self, anchor, scratch_name):
+        try:
+            require(self.T_native_context is None, "E_STORE")
+            sources = [(carrier, index, source) for carrier in self.runtime_copies
+                for index, source in enumerate(carrier.T_companions)
+                if source.directory is not None and source.directory.path == self.held.path + "/" + scratch_name]
+            if not sources:
+                anchor.private_observations["unusable"] = True
+                return
+            for _, _, source in sources:
+                source.recheck()
+                require(source.stable and not source.closed and not c._capture_work_incomplete(source.leaf), "E_STORE")
+            source = sources[0][2]
+            self.held.recheck("E_STORE", source.leaf, "M")
+            root = source.directory
+            names = root.listdir()
+            require(set(names) == set(source.binding["namespace"]) and len(names) <= 128, "E_STORE")
+            self.T_native_context = {"scratch": scratch_name, "sources": sources, "root": root,
+                "root_before": root.before, "parent_before": self.held.before, "parent_names": set(self.held.listdir()),
+                "before_names": set(names), "removed": [], "cleaned": False, "returned": False, "failed": False}
+            c._capture_observe(source.leaf, "M", "T-native-cleanup-before", {"root": c._stat_values(root.before),
+                "parent": c._stat_values(self.held.before), "namespace": sorted(names),
+                "parent_namespace": sorted(self.T_native_context["parent_names"])})
+            source._transfer()
+            require(not c._capture_work_incomplete(source.leaf), "E_STORE")
+            for _, _, old in sources:old.stable = False
+        except (Refusal, c.Refusal, OSError, ValueError, MemoryError) as error:
+            anchor.private_observations["unusable"] = True
+            if self.T_native_context is not None:self.T_native_context["failed"] = True
+            if getattr(error, "_scope_signal_cancel", False):raise
+
+    def _T_cleanup_removed(self, anchor, name):
+        context = self.T_native_context
+        if context is None or context["failed"]:return
+        try:
+            require(not context["cleaned"] and name in context["before_names"]
+                    and not c._preparation_reserved_name(name) and name not in context["removed"], "E_STORE")
+            context["removed"].append(name)
+            c._capture_observe(context["sources"][0][2].leaf, "M", "T-native-cleanup-returned", {"name": name, "caller_returned": True})
+        except (Refusal, c.Refusal, OSError, ValueError, MemoryError) as error:
+            context["failed"] = True
+            anchor.private_observations["unusable"] = True
+            if getattr(error, "_scope_signal_cancel", False):raise
+
+    def _T_native_observation(self, context):
+        source = context["sources"][0][2]
+        self.held.recheck("E_STORE", source.leaf, "M")
+        require(c._identity(self.held.before) == c._identity(context["parent_before"]), "E_STORE")
+        root = context["root"]
+        current = c._capture_metadata(root.fd, source.leaf, "M")
+        named = c._capture_named_metadata(root.components[-1].name, root.components[-2].fd, source.leaf, "M")
+        before = context["root_before"]
+        stable = lambda value: (value.st_dev, value.st_ino, value.st_uid, value.st_gid, value.st_mode)
+        require(stable(before) == stable(current) and c._identity(current) == c._identity(named)
+                and c._capture_rule(root.components[-1].rule, root.fd, current, False, source.leaf, "M"), "E_STORE")
+        names = root.listdir()
+        require(len(names) <= 128 and c._identity(c._capture_metadata(root.fd, source.leaf, "M"))
+                == c._identity(current) and set(self.held.listdir()) == context["parent_names"], "E_STORE")
+        for _, _, old in context["sources"]:
+            for name, held in old.members.items():old._bound_target(held, old.binding["target_states"][name])
+        return current, set(names)
+
+    def _T_cleanup_done(self, anchor):
+        context = self.T_native_context
+        if context is None or context["failed"]:return
+        try:
+            current, names = self._T_native_observation(context)
+            reserved = {name for name in context["before_names"] if c._preparation_reserved_name(name)}
+            require(set(context["removed"]) == context["before_names"] - reserved
+                    and len(context["removed"]) == len(set(context["removed"])) and names == reserved, "E_STORE")
+            context["cleaned_names"], context["cleaned"] = names, True
+            source = context["sources"][0][2]
+            c._capture_observe(source.leaf, "M", "T-native-cleanup-after", {"before": c._stat_values(context["root_before"]),
+                "after": c._stat_values(current), "removed": context["removed"], "namespace": sorted(names)})
+            source._transfer()
+            require(not c._capture_work_incomplete(source.leaf), "E_STORE")
+        except (Refusal, c.Refusal, OSError, ValueError, MemoryError) as error:
+            context["failed"] = True
+            anchor.private_observations["unusable"] = True
+            if getattr(error, "_scope_signal_cancel", False):raise
+
+    def _T_inspection_returned(self, anchor):
+        context = self.T_native_context
+        if context is None or context["failed"]:return
+        try:
+            require(context["cleaned"] and not context["returned"], "E_STORE")
+            current, names = self._T_native_observation(context)
+            require(context["cleaned_names"] <= names, "E_STORE")
+            context["after_root"], context["after_names"], context["returned"] = current, names, True
+            source = context["sources"][0][2]
+            c._capture_observe(source.leaf, "M", "T-native-inspection-returned", {"before_namespace": sorted(context["cleaned_names"]),
+                "after_namespace": sorted(names), "root": c._stat_values(current), "caller_returned": True})
+            source._transfer()
+            require(not c._capture_work_incomplete(source.leaf), "E_STORE")
+        except (Refusal, c.Refusal, OSError, ValueError, MemoryError) as error:
+            context["failed"] = True
+            anchor.private_observations["unusable"] = True
+            if getattr(error, "_scope_signal_cancel", False):raise
+
+    def _finish_T_native(self, anchor, parent, copied, context):
+        require(not context["failed"] and context["cleaned"] and context["returned"] and copied is not None, "E_STORE")
+        leaf = context["sources"][0][2].leaf
+        self._T_parent_receipt(parent, context["parent_before"], context["parent_names"], {"preparation-runtime-inspect"}, leaf)
+        for carrier, index, old in context["sources"]:
+            replacements = [source for source in copied.T_companions if source.previous_source is old]
+            require(len(replacements) == 1 and not replacements[0].closed and replacements[0].stable
+                    and carrier.T_companions[index] is old, "E_STORE")
+        for carrier, _, old in context["sources"]:
+            carrier.T_history.append(old)
+            old.close()
+            require(old.close_complete, "E_STORE")
+            carrier.T_companions.remove(old)
+        self.T_native_context = None
+
+
+    def _retain_preparation(self, anchor, scratch_name, operation, input_raw, response_raw, caller_raw):
+        copied = None
+        try:
+            parent = self._recording_parent()
+            native = self.T_native_context
+            transition = None if native is not None else self._begin_T_parent(anchor, parent)
+            copied = anchor.retain_preparation(parent,scratch_name,operation,input_raw,response_raw,caller_raw, _T_transition=native)
             self._own_runtime(anchor, copied)
+            if copied is not None:
+                if native is not None:self._finish_T_native(anchor, parent, copied, native)
+                else:self._finish_T_parent(anchor, parent, transition, {"preparation-runtime-" + operation})
             return copied
         except (Refusal,c.Refusal,OSError,MemoryError) as error:
             anchor.private_observations["unusable"] = True
+            self._discard_runtime(anchor, copied, error)
             if getattr(error, "_scope_signal_cancel", False):raise
             return None
 
     def _retain_sudo(self, anchor, executable, caller_raw):
+        copied = None
         try:
-            self._own_runtime(anchor, anchor.retain_sudo_companion(self._recording_parent(), executable, caller_raw))
+            parent = self._recording_parent()
+            transition = self._begin_T_parent(anchor, parent)
+            copied = anchor.retain_sudo_companion(parent, executable, caller_raw)
+            self._own_runtime(anchor, copied)
+            if copied is not None:self._finish_T_parent(anchor, parent, transition, set(copied.members))
         except (Refusal, c.Refusal, OSError, ValueError, MemoryError) as error:
             anchor.private_observations["unusable"] = True
+            self._discard_runtime(anchor, copied, error)
             if getattr(error, "_scope_signal_cancel", False):
                 raise
 
     def _retain_parent_inputs(self, anchor, context, caller_raw):
+        copied = None
         try:
-            copied = anchor.retain_parent_inputs(self._recording_parent(), context, caller_raw)
+            parent = self._recording_parent()
+            transition = self._begin_T_parent(anchor, parent)
+            copied = anchor.retain_parent_inputs(parent, context, caller_raw)
             self._own_runtime(anchor, copied)
+            if copied is not None:self._finish_T_parent(anchor, parent, transition, set(copied.members))
             return copied
         except (Refusal, c.Refusal, OSError, ValueError, MemoryError) as error:
             anchor.private_observations["unusable"] = True
+            self._discard_runtime(anchor, copied, error)
             if getattr(error, "_scope_signal_cancel", False):
                 raise
 
     def _retain_runtime(self, anchor, role, original, raw, caller_raw):
+        copied = None
         try:
-            self._own_runtime(anchor, anchor.retain_runtime_acquisition(self._recording_parent(), role, original, raw, caller_raw))
+            parent = self._recording_parent()
+            transition = self._begin_T_parent(anchor, parent)
+            copied = anchor.retain_runtime_acquisition(parent, role, original, raw, caller_raw)
+            self._own_runtime(anchor, copied)
+            if copied is not None:self._finish_T_parent(anchor, parent, transition, set(copied.members))
         except (Refusal, c.Refusal, OSError, ValueError, MemoryError) as error:
             anchor.private_observations["unusable"] = True
+            self._discard_runtime(anchor, copied, error)
             if getattr(error, "_scope_signal_cancel", False):
                 raise
 
@@ -2177,6 +2394,7 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
         execute("candidate-preparation", prepare + ["prepare", *common], preparation_source,
                 timeout=300, env=env, deadline=deadline)
         work_hold._retain_preparation(anchor,"preparation-scratch","prepare",input_raw,response_raw,request_raw)
+        work_hold._T_cleanup_begin(anchor,"preparation-scratch")
         for child in prep_scratch.iterdir():
             if reserved_preparation_name(child.name):
                 continue
@@ -2184,8 +2402,11 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
                 shutil.rmtree(child)
             else:
                 child.unlink()
+            work_hold._T_cleanup_removed(anchor,child.name)
+        work_hold._T_cleanup_done(anchor)
         execute("candidate-inspection", prepare + ["inspect", *common], preparation_source,
                 timeout=300, env=env, deadline=deadline)
+        work_hold._T_inspection_returned(anchor)
         work_hold._retain_preparation(anchor,"preparation-scratch","inspect",input_raw,response_raw,request_raw)
         record_raw = read_regular(prep / "record.json", 64 * 1024)
         manifest_raw = read_regular(prep / "manifest.json", 2 * OUTPUT_LIMIT)
@@ -2241,8 +2462,11 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
                 "E_RELATION")
         if held_store.record_reproduction(request_raw, launch_raw, expectation_raw) is not None:
             try:
-                copied_capture = held_store.copy_capture(work_hold._recording_parent(), launch_raw, "reproduction", anchor.recording_work)
+                capture_parent = work_hold._recording_parent()
+                T_transition = work_hold._begin_T_parent(anchor, capture_parent)
+                copied_capture = held_store.copy_capture(capture_parent, launch_raw, "reproduction", anchor.recording_work)
                 work_hold._refresh_runtime_parents()
+                work_hold._finish_T_parent(anchor, capture_parent, T_transition, {"reproduction"})
             except (Refusal,c.Refusal, OSError, MemoryError) as error:
                 anchor.private_observations["unusable"] = True
                 if getattr(error, "_scope_signal_cancel", False):raise

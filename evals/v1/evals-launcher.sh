@@ -145,15 +145,15 @@ shadow_source_rows() {
     'scope/v1/workflow-scope.jq 2d1df5f99b7019c4c41aece4f9fb89b00785ca47f9f8a713b2f43b212481366a 9728 100644' \
     'scripts/core-contract.sh b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 9176 100755' \
     'shadow/v1/_cancel_release.c 00ef369edbed569d50471b97f64aef57591b7afb8d9f25c286bffa5725faf015 55056 100644' \
-    'shadow/v1/_consumer.py 5bcc65fb290f88dec887842bb8ae42d53d4999da82382557ce9760f2a517dc1c 244670 100644' \
+    'shadow/v1/_consumer.py d60fd8fab1096bc1ad474e6cf13de2d7a82ef67b90bafcef5330748d2cbcf124 251200 100644' \
     'shadow/v1/build-cancel-release.sh be1ad0afd99f72ea73fe52cca63c03381793710c587a82b57b9a38ed87c896d4 6169 100755' \
-    'shadow/v1/enforced-reproduction.py e6ae3737054236d3609392474c74fbb0367279230d44a47e255327c1e0aae95c 121120 100755' \
+    'shadow/v1/enforced-reproduction.py 82d59c84fb26de8975d058f6cbe66832dce134c663e113c8874c83ee06796ebd 134481 100755' \
     'shadow/v1/incident-record.jq 9ea6e1ec6556f54887ea6937533157856271aab68c74bda6d18dae1354d2687c 3695 100644' \
     'shadow/v1/qualified-identity.jq 33267bca348ad2b4923a5858b4788a6ca6adf1a1e9f471ee4450d7fe06387071 5343 100644' \
     'shadow/v1/shadow-environments.json 655771163e18384904eeaf2b7f22e3999957a037dce845b7fa6fdff2196ac4c7 1471 100644' \
     'shadow/v1/validate-incident.sh c9f907bfd73307c977c4191d65f6783a3bf969c3bb0be988f14aa9cb66ebe262 4870 100755' \
     'shadow/v1/write-materialization-input.jq 467a8f2901f053ff059302974ad80c5aaf1c805c6302e2333e1af0524fb3c510 4907 100644' \
-    'shadow/v1/write-shadow.py 99e17e7d871b274f53e4d2ae8e432a7d856e47490f198f7ceec9d58c88815f95 66369 100755' \
+    'shadow/v1/write-shadow.py c9e1921bd0c00c1b69f877c507c479327c90066152e0a354e552f4629bfaa223 66590 100755' \
     'telemetry/v1/trace-ledger.jq 5436deb48eca6d988a24bbce07855628edd3bc60386d9993a1169d6d373a4212 5849 100644' \
     'telemetry/v1/validate-trace-ledger.sh fc4b7cdd36b5d48675ed1d851c7b2d4fe59d0c431a31f3c361d6196f8900e208 8095 100755' \
     'verifiers/file-digest/v1/verifier.c fcf244b70dc6bcbfd1e6983e6c23d5f38a60654aa074adb472b0e749184dcfeb 28827 100644'

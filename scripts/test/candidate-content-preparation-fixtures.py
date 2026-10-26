@@ -1797,11 +1797,12 @@ def raw16_t_lifecycle(root: Path) -> None:
         try:
             exec(compile(segment, str(root / 'shadow/v1/enforced-reproduction.py') + ':actual-T-sequence', 'exec'), env)
             assert calls == ['candidate-preparation', 'candidate-inspection']
-            assert set(anchor.private_observations['preparation']) == {'prepare', 'inspect'}
-            assert not anchor.private_observations.get('unusable', False)
+            assert set(anchor.private_observations['preparation']) == {'prepare'}
+            assert anchor.private_observations.get('unusable') is True
+            assert not any(source.stable and not source.closed for carrier in holder.runtime_copies for source in carrier.T_companions)
             assert not native_paths[0].exists() and native_paths[1].is_dir()
             assert len(list((work/'preparation-scratch').glob('raw16-t-v1-*'))) == 10
-            completed.append('actual prepare-retain-nativecleanup-inspect-retain sequence')
+            completed.append('native cleanup unchanged; tainted T recording refused')
         finally:
             holder.close()
         writer_source = (root / 'shadow/v1/write-shadow.py').read_text()
@@ -3153,6 +3154,160 @@ def _synthetic_parent_P_context(c, path):
         'parent-frame.bin':frame,'helper-build-record.json':helper,'native-dependency-record.json':dependency}
 
 
+def raw16_T_enforced_chain(root: Path) -> None:
+    body=(root/'scripts/test/evals-malicious.test.sh').read_text().split("<<'PY_RUNTIME_CONSUMER'\n",1)[1].split('\nPY_RUNTIME_CONSUMER',1)[0]
+    prefix=body.split('        copied_inventory.close();copied_inventory.close()\n',1)[0]
+    footer=body[body.rfind('finally:\n    if copied_inventory'):]
+    before="        parent=c._open_held(str(private),True,c._store_rule(uid,gid,0o700,True),'E_STORE')\n"
+    prefix=prefix.replace(before,"        (private/'preparation-scratch').mkdir(mode=0o700)\n"+before)
+    edge="        copied_inventory=native.copy_capture(parent,request,'reproduction',anchor.recording_work)\n"
+    head,tail=prefix.split(edge,1)
+    setup='''        import textwrap,shutil
+        holder=e.StableDirectory(parent)
+        input_raw,response_raw=b'synthetic enforced input',b'synthetic enforced response'
+        caller=c.canonical({'kind':'shadow_enforced_request','id':'t.enforced.chain'})
+        calls=[];snapshots=[];old=[]
+        snapshot_init=c._RuntimeSnapshot.__init__;retain=holder._retain_preparation
+        def snapshot(self,*args,**kwargs):snapshots.append(args[0].path);return snapshot_init(self,*args,**kwargs)
+        def retaining(*args,**kwargs):
+            result=retain(*args,**kwargs)
+            assert result is not None, ('actual enforced T retention',anchor.private_observations.get('unusable'),
+                [leaf.get('failure') for leaf in anchor.recording_work.get('preparation_leaves',[])])
+            if args[2]=='prepare':
+                T=result.T_companions[0];old.append((T,T.binding['root_before'],dict(T.binding['target_states'])))
+            else:
+                assert len(result.T_companions)==2 and holder.T_native_context is None
+                assert old[0][0].closed and old[0][0].close_complete
+                assert any(T.previous_source is old[0][0] for T in result.T_companions)
+            return result
+        def execute(role,argv,component,**options):
+            operation=argv[5]
+            assert role=='candidate-'+('preparation' if operation=='prepare' else 'inspection')
+            assert options=={'timeout':300,'env':{'fixture':'unchanged'},'deadline':123}
+            assert argv[argv.index('--input-sha256')+1]==c.digest(input_raw)
+            scratch=Path(argv[argv.index('--scratch')+1])
+            if operation=='inspect':assert not (scratch/'candidate-preparation-0000000000000001').exists()
+            make_T(c,scratch,operation,input_raw,response_raw)
+            (scratch/('candidate-preparation-'+('0000000000000001' if operation=='prepare' else '0000000000000002'))).mkdir(mode=0o700)
+            calls.append(operation)
+        source_text=(root/'shadow/v1/enforced-reproduction.py').read_text()
+        begin=source_text.index('        prep = work / "preparation-parent/preparation";')
+        end=source_text.index('        record_raw = read_regular(',begin)
+        segment=textwrap.dedent(source_text[begin:end])
+        holder._retain_preparation=retaining;c._RuntimeSnapshot.__init__=snapshot
+        env={'work':private,'SOURCE':root,'sys':sys,'sha':e.sha,'mapped':{'materialization_input':private/'input'},
+            'response_path':private/'response','candidate':private/'candidate',
+            'jq':types.SimpleNamespace(snapshot=types.SimpleNamespace(path=str(private/'synthetic-jq'))),
+            'execute':execute,'env':{'fixture':'unchanged'},'deadline':123,'work_hold':holder,'anchor':anchor,
+            'input_raw':input_raw,'response_raw':response_raw,'request_raw':caller,'shutil':shutil,'c':c}
+        exec(compile(segment,'<actual-enforced-T-sequence>','exec'),env)
+        assert calls==['prepare','inspect'] and len(snapshots)==9
+        assert not anchor.private_observations.get('unusable'), 'enforced T original inspect full acquisition must succeed'
+        assert old[0][0].binding['root_before']==old[0][1] and old[0][0].binding['target_states']==old[0][2]
+        current=[T for carrier in holder.runtime_copies for T in carrier.T_companions]
+        assert len(current)==2 and all(T.stable and not T.closed for T in current)
+        assert all(T.binding['root_before']!=old[0][1] for T in current)
+        T_transition=holder._begin_T_parent(anchor,parent)
+'''
+    checks='''        holder._refresh_runtime_parents()
+        holder._finish_T_parent(anchor,parent,T_transition,{'reproduction'})
+        current=[T for carrier in holder.runtime_copies for T in carrier.T_companions]
+        assert len(current)==2 and all(T.stable and not T.closed for T in current)
+        assert not anchor.private_observations.get('unusable'), 'enforced current T after Hcopy must remain valid'
+        c._RuntimeSnapshot.__init__=snapshot_init
+        e._seal_capture_recording(anchor,parent,None,copied_inventory,holder)
+        assert all(T.closed for T in current) and not holder.runtime_copies
+        assert anchor.private_observations.get('recording_sealed') is not True
+        print(json.dumps({'actual_enforced_prepare_cleanup_inspect_Hcopy_T_chain':True,'original_T_snapshots':len(snapshots),
+            'actual_cleanup_removed_old_native_directory':True,'old_T_before_binding_preserved':True,
+            'work':anchor.recording_work,'native_execute_is_synthetic_T_construction':calls,
+            'qualification':'NOT_ACCEPTED / original T outcome M Q host parent debt'}))
+'''
+    namespace={'make_T':_synthetic_T_live_files};argv=sys.argv;sys.argv=['enforced-T-chain',str(root)]
+    try:exec(compile(head+setup+edge+tail+checks+footer,'<actual-enforced-T-chain>','exec'),namespace)
+    finally:
+        sys.argv=argv
+        if namespace.get('snapshot_init') is not None:namespace['c']._RuntimeSnapshot.__init__=namespace['snapshot_init']
+        if namespace.get('holder') is not None:namespace['holder'].close()
+
+
+def raw16_T_writer_chain(root: Path) -> None:
+    import textwrap
+    body=(root/'scripts/test/evals-malicious.test.sh').read_text().split("<<'PY_RUNTIME_CONSUMER'\n",1)[1].split('\nPY_RUNTIME_CONSUMER',1)[0]
+    prefix=body.split('        copied_inventory.close();copied_inventory.close()\n',1)[0]
+    footer=body[body.rfind('finally:\n    if copied_inventory'):]
+    before="        parent=c._open_held(str(private),True,c._store_rule(uid,gid,0o700,True),'E_STORE')\n"
+    prefix=prefix.replace(before,"        (private/'preparation-scratch').mkdir(mode=0o700);(private/'inspection-scratch').mkdir(mode=0o700)\n"+before)
+    edge="        copied_inventory=native.copy_capture(parent,request,'reproduction',anchor.recording_work)\n"
+    head,tail=prefix.split(edge,1)
+    setup='''        import textwrap
+        holder=e.StableDirectory(parent)
+        input_raw,response_raw=b'synthetic writer input',b'synthetic writer response'
+        caller=c.canonical({'kind':'shadow_write_request','id':'t.writer.chain'})
+        renewed=[];snapshot_calls=[];native_calls=[]
+        source_continue=c._HeldPreparationSources.continue_parent_chain
+        snapshot_init=c._RuntimeSnapshot.__init__
+        def continuation(self,*args,**kwargs):
+            read,pread=os.read,os.pread
+            def no_bytepass(*_args,**_kwargs):raise AssertionError('metadata continuation added a content read')
+            try:
+                os.read=os.pread=no_bytepass
+                result=source_continue(self,*args,**kwargs)
+            finally:os.read,os.pread=read,pread
+            renewed.append((self,result))
+            return result
+        def snapshot(self,*args,**kwargs):
+            snapshot_calls.append(args[0].path);return snapshot_init(self,*args,**kwargs)
+        def execute(role,argv,component,**options):
+            operation=argv[5]
+            assert role=='candidate-'+('preparation' if operation=='prepare' else 'inspection')
+            assert argv[:5]==[sys.executable,'-I','-S','-B',str(root/'preparation/v1/prepare-candidate.py')]
+            assert options=={'timeout':300}
+            scratch=Path(argv[argv.index('--scratch')+1])
+            assert scratch==private/('preparation-scratch' if operation=='prepare' else 'inspection-scratch')
+            make_T(c,scratch,operation,input_raw,response_raw);native_calls.append(operation)
+        ws=types.SimpleNamespace(execute=execute,work_hold=holder,anchor=anchor,request=types.SimpleNamespace(raw=caller))
+        writer=(root/'shadow/v1/write-shadow.py').read_text()
+        begin=writer.index('    for operation, scratch in (("prepare", "preparation-scratch"),')
+        end=writer.index('    prep_raw = ws.hold(',begin)
+        segment=textwrap.dedent(writer[begin:end])
+        c._HeldPreparationSources.continue_parent_chain,c._RuntimeSnapshot.__init__=continuation,snapshot
+        exec(compile(segment,'<actual-writer-T-caller>','exec'),{'ws':ws,'work':private,'sys':sys,
+            'preparation':root/'preparation/v1/prepare-candidate.py','common':[],'input_raw':input_raw,'response_raw':response_raw})
+        assert native_calls==['prepare','inspect'] and len(snapshot_calls)==6 and len(renewed)==1
+        assert not anchor.private_observations.get('unusable'), 'writer T metadata continuation must succeed'
+        old_states=[(old,old.binding['root_before'],dict(old.binding['target_states'])) for old,fresh in renewed]
+        assert all(old.closed and old.close_complete and not fresh.closed and fresh.stable for old,fresh in renewed)
+        T_transition=holder._begin_T_parent(anchor,parent)
+'''
+    checks='''        holder._refresh_runtime_parents()
+        holder._finish_T_parent(anchor,parent,T_transition,{'reproduction'})
+        assert len(renewed)==3 and len(snapshot_calls)==6
+        current=[source for carrier in holder.runtime_copies for source in carrier.T_companions]
+        assert len(current)==2 and all(not source.closed and source.stable for source in current)
+        assert {source.binding['operation'] for source in current}=={'prepare','inspect'}
+        assert not anchor.private_observations.get('unusable'), 'writer T after H copy must remain current'
+        for old,before,targets in old_states:
+            assert old.binding['root_before']==before and old.binding['target_states']==targets
+        c._HeldPreparationSources.continue_parent_chain,c._RuntimeSnapshot.__init__=source_continue,snapshot_init
+        e._seal_capture_recording(anchor,parent,None,copied_inventory,holder)
+        assert all(source.closed for source in current) and not holder.runtime_copies
+        assert anchor.private_observations.get('recording_sealed') is not True
+        print(json.dumps({'actual_writer_prepare_inspect_Hcopy_T_chain':True,'metadata_renewals':len(renewed),
+            'original_T_runtime_snapshots':len(snapshot_calls),'no_python_content_reads_during_metadata_renewal':True,
+            'work':anchor.recording_work,'native_calls_are_synthetic_T_construction':native_calls,
+            'qualification':'NOT_ACCEPTED / original T outcome and M/Q/host/parent debt remain'}))
+'''
+    namespace={'make_T':_synthetic_T_live_files};argv=sys.argv;sys.argv=['writer-T-chain',str(root)]
+    try:exec(compile(head+setup+edge+tail+checks+footer,'<actual-writer-T-chain>','exec'),namespace)
+    finally:
+        sys.argv=argv
+        if namespace.get('c') is not None and namespace.get('source_continue') is not None:
+            namespace['c']._HeldPreparationSources.continue_parent_chain=namespace['source_continue']
+            namespace['c']._RuntimeSnapshot.__init__=namespace['snapshot_init']
+        if namespace.get('holder') is not None:namespace['holder'].close()
+
+
 def _synthetic_T_live_files(c, scratch, operation, input_raw, response_raw):
     rows=[];files={}
     for ordinal,role in enumerate(('python','git','jq')):
@@ -3167,6 +3322,134 @@ def _synthetic_T_live_files(c, scratch, operation, input_raw, response_raw):
     path=scratch/name;path.write_bytes(raw);path.chmod(0o400);files[name]=raw
     marker='raw16-t-v1-'+operation+'-complete-'+c.digest(raw);(scratch/marker).mkdir(mode=0o700)
     return value,files,marker
+
+
+def raw16_T_transition_refusals(root: Path) -> None:
+    import tempfile
+    spec=importlib.util.spec_from_file_location('T_transition_refusals',root/'shadow/v1/enforced-reproduction.py')
+    e=importlib.util.module_from_spec(spec);sys.modules[spec.name]=e;spec.loader.exec_module(e);c=e.c
+    acl=c._acl_state;c._acl_state=lambda *_:([],None) if sys.platform=='darwin' else (None,None)
+    results=[]
+    try:
+        for case in ('namespace-extra','target-drift'):
+            with tempfile.TemporaryDirectory(prefix='ystack-T-transition-refusal-') as temporary:
+                base=Path(temporary).resolve();base.chmod(0o700);work=base/'work';work.mkdir(mode=0o700)
+                scratch=work/'preparation-scratch';scratch.mkdir(mode=0o700)
+                input_raw,response_raw=b'synthetic input',b'synthetic response'
+                value,files,marker=_synthetic_T_live_files(c,scratch,'prepare',input_raw,response_raw)
+                holder=e.stable_directory(work);anchor=c.Anchor({},b'',[],{},('',[]),('',[]),None)
+                init=c._HeldPreparationSources.__init__;constructed=[]
+                def initialize(self,*args,**kwargs):init(self,*args,**kwargs);constructed.append(self)
+                c._HeldPreparationSources.__init__=initialize
+                try:
+                    copied=holder._retain_preparation(anchor,'preparation-scratch','prepare',input_raw,response_raw,
+                        c.canonical({'kind':'shadow_write_request','id':'t.refusal.fixture'}))
+                    assert copied is not None and not anchor.private_observations.get('unusable')
+                    old=constructed[0];before=old.binding['root_before'];states=dict(old.binding['target_states'])
+                    parent=holder._recording_parent();transition=holder._begin_T_parent(anchor,parent)
+                    parent_before=parent.before
+                    os.mkdir('reproduction',0o700,dir_fd=parent.fd)
+                    if case=='namespace-extra':os.mkdir('preparation-runtime-inspect',0o700,dir_fd=parent.fd)
+                    c._refresh_recording_directory(parent,parent_before,old.leaf)
+                    validation = {"read_bytes": 0, "sha_bytes": 0, "equality_bytes": 0}
+                    if case=='target-drift':
+                        name='raw16-t-v1-prepare-runtime-python-00.bin'
+                        target=scratch/name;target.chmod(0o600);target.chmod(0o400)
+                        require_before=old.binding['target_states'][name]
+                        assert c._identity(target.stat())!=c._identity(require_before)
+                        assert c._identity(os.fstat(old.directory.fd))==c._identity(old.binding['root_before'])
+                        current=os.pread(old.members[name].fd,len(files[name]),0)
+                        assert current==files[name] and c.digest(current)==c.digest(files[name])
+                        validation={"read_bytes": len(current), "sha_bytes": 2*len(current), "equality_bytes": 2*len(current)}
+                    caught=None
+                    try:holder._finish_T_parent(anchor,parent,transition,{'reproduction'})
+                    except (e.Refusal,c.Refusal) as error:caught=error
+                    assert caught is not None, 'T transition must reject unproved namespace or old target drift'
+                    assert anchor.private_observations.get('unusable') is True
+                    assert all(source.closed and not source.owned for source in constructed)
+                    assert old.binding['root_before']==before and old.binding['target_states']==states
+                    assert all(os.fstat(item.fd) for item in holder.held.components)
+                    results.append({'case':case,'work':anchor.recording_work,'old_before_preserved':True,
+                        'all_private_T_acquisitions_released':len(constructed),'extra_fixture_validation':validation,
+                        'same_runtime_bytes_and_SHA':case=='target-drift','grammar_valid_extra_other_stage_name':case=='namespace-extra',
+                        'source_operation':'synthetic fixed H directory creation, consumer transition owner only',
+                        'qualification':'NOT_ACCEPTED'})
+                finally:c._HeldPreparationSources.__init__=init;holder.close();anchor.close()
+    finally:c._acl_state=acl
+    print(json.dumps({'actual_T_transition_refusals':results},sort_keys=True))
+
+
+def raw16_open_child_pending(root: Path) -> None:
+    import ast
+    import inspect
+    import tempfile
+    spec=importlib.util.spec_from_file_location('open_child_pending',root/'shadow/v1/enforced-reproduction.py')
+    e=importlib.util.module_from_spec(spec);sys.modules[spec.name]=e;spec.loader.exec_module(e);c=e.c
+    acl=c._acl_state;c._acl_state=lambda *_:([],None) if sys.platform=='darwin' else (None,None)
+    syntax=ast.parse((root/'scope/v1/read-shadow-evidence.py').read_text())
+    main=next(node for node in syntax.body if isinstance(node,ast.FunctionDef) and node.name=='main')
+    handler=next(node for node in main.body if isinstance(node,ast.FunctionDef) and node.name=='cancel')
+    callbacks={};exec(compile(ast.Module(body=[handler],type_ignores=[]),'<actual-cancel>','exec'),callbacks)
+    results=[]
+    try:
+        for recorded in (False,True):
+            for case in ('stable','leaf-fstat','leaf-component','leaf-registered-cancel'):
+                with tempfile.TemporaryDirectory(prefix='ystack-open-child-pending-') as temporary:
+                    base=Path(temporary).resolve();base.chmod(0o700);target=base/'fixed-leaf';target.write_bytes(b'synthetic');target.chmod(0o400)
+                    parent=c._open_held(str(base),True,c._store_rule(os.geteuid(),os.getegid(),0o700,True),'E_STORE')
+                    opened,duplicate,metadata,component,closing=os.open,os.dup,c._metadata,c.HeldComponent,os.close
+                    new,leaf_fds,attempts,events=[],[],[],[];primary=MemoryError('controlled child component allocation')
+                    work={} if recorded else None
+                    if work is not None:c._capture_work_values(work,'child-acquisition')
+                    def opening(path,*args,**kwargs):
+                        fd=opened(path,*args,**kwargs)
+                        if path=='fixed-leaf':new.append(fd);leaf_fds.append(fd)
+                        return fd
+                    def duplicating(fd):
+                        value=duplicate(fd);new.append(value);return value
+                    def state(fd):
+                        if case=='leaf-fstat' and fd in leaf_fds:raise OSError(errno.EIO,'controlled acquired leaf fstat failure')
+                        return metadata(fd)
+                    def constructing(*args,**kwargs):
+                        if case=='leaf-component' and args[0] in leaf_fds:raise primary
+                        return component(*args,**kwargs)
+                    def close(fd):
+                        if fd in new:attempts.append(fd)
+                        return closing(fd)
+                    lines,start=inspect.getsourcelines(c._open_child)
+                    location=start+next(index for index,line in enumerate(lines) if line.startswith('        pending = None'))
+                    previous_trace=sys.gettrace()
+                    def trace(frame,event,arg):
+                        if frame.f_code is not c._open_child.__code__:return None
+                        if event=='line' and frame.f_lineno==location:
+                            assert frame.f_locals['rows'][-1].fd==frame.f_locals['pending']==leaf_fds[0]
+                            sys.settrace(previous_trace)
+                            try:callbacks['cancel'](15,None)
+                            except InterruptedError as error:events.append(error);raise
+                        return trace
+                    held=caught=None
+                    try:
+                        os.open,os.dup,c._metadata,c.HeldComponent,os.close=opening,duplicating,state,constructing,close
+                        if case=='leaf-registered-cancel':sys.settrace(trace)
+                        try:held=c._open_child(parent,'fixed-leaf',False,c._store_rule(os.geteuid(),os.getegid(),0o400,False),'E_STORE',recording_work=work,accounting_kind='M' if recorded else None)
+                        except BaseException as error:caught=error
+                        if case=='stable':assert caught is None;held.close()
+                        elif case=='leaf-fstat':assert isinstance(caught,c.Refusal) and caught.os_errno==errno.EIO
+                        elif case=='leaf-component':assert caught is primary
+                        else:assert len(events)==1 and caught is events[0]
+                        assert len(leaf_fds)==1 and set(attempts)==set(new) and len(attempts)==len(new), 'all open_child acquisitions must close once'
+                        assert all(os.fstat(item.fd) for item in parent.components)
+                        for fd in new:
+                            try:os.fstat(fd)
+                            except OSError as error:assert error.errno==errno.EBADF
+                            else:raise AssertionError('open_child left an acquired FD live')
+                        results.append({'recorded':recorded,'case':case,'actual_acquired_FDs_closed_once':len(attempts),
+                            'work':work,'no_recording_owner_cost':'UNKNOWN' if not recorded else None})
+                    finally:
+                        sys.settrace(previous_trace)
+                        os.open,os.dup,c._metadata,c.HeldComponent,os.close=opened,duplicate,metadata,component,closing;parent.close()
+    finally:c._acl_state=acl
+    print(json.dumps({'actual_open_child_pending_acquisition':results},sort_keys=True))
 
 
 def raw16_adopt_registered_cancel(root: Path) -> None:

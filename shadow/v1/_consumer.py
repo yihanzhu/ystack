@@ -692,6 +692,24 @@ def _close_paths(items: list[HeldPath]) -> None:
     if failure is not None:
         raise failure
 
+def _release_held_acquisition(rows, pending, failure, work):
+    if pending is not None and not (rows and rows[-1].fd == pending):
+        try:
+            if work is None:os.close(pending)
+            else:_close_capture_copy(pending, work, work, "held-pending-close", failure)
+        except BaseException as closing:
+            if getattr(closing, "_scope_signal_cancel", False) and not getattr(failure, "_scope_signal_cancel", False):
+                failure = closing
+    if work is None:_close_components(rows, failure)
+    while rows:
+        row = rows.pop()
+        try:_close_capture_copy(row.fd, work, work, "held-rows-close", failure)
+        except BaseException as closing:
+            if getattr(closing, "_scope_signal_cancel", False) and not getattr(failure, "_scope_signal_cancel", False):
+                failure = closing
+    raise failure
+
+
 def _clone(parent: HeldPath, code: str, recording_work=None, accounting_kind=None) -> list[HeldComponent]:
     rows, pending = [], None
     try:
@@ -706,23 +724,7 @@ def _clone(parent: HeldPath, code: str, recording_work=None, accounting_kind=Non
         return rows
     except BaseException as exc:
         try:
-            if pending is not None and not (rows and rows[-1].fd == pending):
-                try:
-                    if recording_work is None:os.close(pending)
-                    else:_close_capture_copy(pending, recording_work, recording_work, "clone-pending-close", exc)
-                except BaseException as closing:
-                    if getattr(closing, "_scope_signal_cancel", False) and not getattr(exc, "_scope_signal_cancel", False):
-                        exc = closing
-            if recording_work is None:
-                _close_components(rows, exc)
-            else:
-                while rows:
-                    row = rows.pop()
-                    try:_close_capture_copy(row.fd, recording_work, recording_work, "clone-rows-close", exc)
-                    except BaseException as closing:
-                        if getattr(closing, "_scope_signal_cancel", False) and not getattr(exc, "_scope_signal_cancel", False):
-                            exc = closing
-                raise exc
+            _release_held_acquisition(rows, pending, exc, recording_work)
         except Refusal:
             raise
         except OSError as error:
@@ -774,13 +776,18 @@ def _open_held(path: str, directory: bool, rule: Rule, code: str,
 def _open_child(parent: HeldPath, name: str, directory: bool, rule: Rule, code: str, *, recording_work=None, accounting_kind=None) -> HeldPath:
     _require(isinstance(name, str) and name and "/" not in name and name not in (".", ".."), code)
     rows = _clone(parent, code, recording_work, accounting_kind)
+    pending = None
     try:
         flags = os.O_RDONLY | os.O_NOFOLLOW | (os.O_DIRECTORY if directory else 0)
         if not directory and hasattr(os, "O_NONBLOCK"):
             flags |= os.O_NONBLOCK
-        fd = os.open(name, flags, dir_fd=rows[-1].fd)
+        pending = os.open(name, flags, dir_fd=rows[-1].fd)
+        fd = pending
+        if recording_work is not None:
+            _capture_observe(recording_work, accounting_kind, "open-child", {"name": name, "fd": fd, "flags": flags})
         state = _metadata(fd)
         rows.append(HeldComponent(fd, name, state, rule, False))
+        pending = None
         if recording_work is not None:_capture_observe(recording_work, accounting_kind, "fstat", {"fd": fd, "stat": _stat_values(state)})
         _require(_capture_rule(rule, fd, state, False, recording_work, accounting_kind), code)
         _require((directory and stat.S_ISDIR(state.st_mode)) or
@@ -790,7 +797,7 @@ def _open_child(parent: HeldPath, name: str, directory: bool, rule: Rule, code: 
         return result
     except BaseException as exc:
         try:
-            _close_components(rows, exc)
+            _release_held_acquisition(rows, pending, exc, recording_work)
         except Refusal:
             raise
         except (OSError, ValueError) as error:
@@ -1368,7 +1375,7 @@ class Anchor:
     local_runtime_snapshots: list = dataclasses.field(default_factory=list)
     runtime_companions: list = dataclasses.field(default_factory=list)
 
-    def retain_preparation(self, parent, scratch_name, operation, input_raw, response_raw, caller_raw):
+    def retain_preparation(self, parent, scratch_name, operation, input_raw, response_raw, caller_raw, *, _T_transition=None):
         _require(scratch_name in {"preparation-scratch", "inspection-scratch"}
                  and operation in {"prepare", "inspect"}, "E_STORE")
         opened, storage_rows, runtime_leaf = [], [], {}
@@ -1387,6 +1394,10 @@ class Anchor:
             case_work = _capture_work_values(self.recording_work, case_key)
             parent.recheck("E_STORE")
             parent_before = parent.before
+            if _T_transition is not None:
+                _require(operation == "inspect" and scratch_name == _T_transition["scratch"] and not _T_transition["failed"]
+                         and _T_transition["cleaned"] and _T_transition["returned"]
+                         and _identity(parent_before) == _identity(_T_transition["parent_before"]), "E_STORE")
             destination_name = "preparation-runtime-" + operation
             os.mkdir(destination_name, 0o700, dir_fd=parent.fd)
             _refresh_recording_directory(parent, parent_before, runtime_leaf)
@@ -1400,6 +1411,9 @@ class Anchor:
             opened.append(root)
             names = root.listdir()
             _require(len(names) <= 128, "E_STORE")
+            if _T_transition is not None:
+                _require(root.path == _T_transition["root"].path and _identity(root.before) == _identity(_T_transition["after_root"])
+                         and set(names) == _T_transition["after_names"], "E_STORE")
             reserved = {name for name in names if _preparation_reserved_name(name)}
             for name in set(names) - reserved:
                 _require(name.startswith("candidate-preparation-") and len(name[len("candidate-preparation-"):]) == 16
@@ -1460,12 +1474,20 @@ class Anchor:
                     os.fsync(destination.fd);os.fsync(parent.fd)
                     candidates.append(value)
                 item.recheck("E_STORE");seal.recheck("E_STORE")
-                T_source = _HeldPreparationSources(self, self.recording_work, case_work, {
-                    "operation": selected_operation, "input_raw": input_raw, "response_raw": response_raw,
+                binding = {"operation": selected_operation, "input_raw": input_raw, "response_raw": response_raw,
                     "capture_raw": raw, "capture_sha256": expected_seal[-64:], "marker": expected_seal,
                     "root_before": root.before, "namespace": tuple(names),
                     "target_states": {name: source.before for name, source in verified_sources.items()},
-                    "runtime_sha256": verified_hashes})
+                    "runtime_sha256": verified_hashes}
+                previous = None
+                if _T_transition is not None:
+                    matching = [old for _, _, old in _T_transition["sources"] if old.binding["operation"] == selected_operation]
+                    _require(len(matching) <= 1, "E_STORE")
+                    if matching:
+                        previous = matching[0]
+                        previous.verify_previous(root, verified_sources, binding)
+                T_source = _HeldPreparationSources(self, self.recording_work, case_work, binding)
+                T_source.previous_source = previous
                 T_companions.append(T_source)
                 T_source.acquire_sources(root, verified_sources)
             _observation(root, "preparation/" + operation, storage_rows=storage_rows)
@@ -2822,7 +2844,8 @@ class _HeldCaptureCopy:
         self.leaf, self.members, self.runtime_sha256 = {}, {}, {}
         self.directory, self.closed, self.owned = None, False, []
         self.local_parent = False
-        self.T_companions = []
+        self.T_companions, self.T_history = [], []
+        self._released_owned, self._released_T = [], []
         self.recorder_parent_path, self.recorder_parent_index = None, None
         _capture_work_values(self.leaf, "P-capture-holds")
         work.setdefault("P_hold_leaves", []).append(self.leaf)
@@ -2926,14 +2949,20 @@ class _HeldCaptureCopy:
     def close(self):
         if self.closed:return
         primary, cancellation = sys.exc_info()[1], None
-        held, self.owned = self.owned, []
+        held, sources = self.owned, self.T_companions
+        self.owned, self.T_companions = self._released_owned, self._released_T
         self.closed = True
         self.directory = None
-        sources, self.T_companions = self.T_companions, []
         for source in reversed(sources):
+            if source.closed:continue
             try:
                 try:source.recheck()
                 finally:source.close()
+            except BaseException as error:
+                if getattr(error, "_scope_signal_cancel", False) and cancellation is None:cancellation = error
+        for source in reversed(self.T_history):
+            if source.closed:continue
+            try:source.close()
             except BaseException as error:
                 if getattr(error, "_scope_signal_cancel", False) and cancellation is None:cancellation = error
         for item in reversed(held):
@@ -2954,15 +2983,92 @@ class _HeldPreparationSources(_HeldCaptureCopy):
         self.anchor, self.work, self.case_work = anchor, work, case_work
         self.leaf, self.members, self.runtime_sha256 = {}, {}, {}
         self.directory, self.closed, self.owned = None, False, []
-        self.local_parent, self.T_companions = False, []
+        self.local_parent = False
+        self.T_companions, self.T_history = [], []
+        self._released_owned, self._released_T = [], []
         self.recorder_parent_path, self.recorder_parent_index = None, None
-        self.binding, self.stable = binding, False
+        self.binding, self.stable, self.failed, self.close_complete = binding, False, False, False
+        self.previous_source = None
         _capture_work_values(self.leaf, "T-source-holds")
         work.setdefault("T_hold_leaves", []).append(self.leaf)
 
     def _failed(self, error, site, primary=None):
-        self.stable = False
+        self.stable, self.failed = False, True
         return super()._failed(error, site, primary)
+
+    def close(self):
+        super().close()
+        self.close_complete = self.closed and not self.failed and not _capture_work_incomplete(self.leaf)
+
+    def _bound_target(self, item, expected):
+        _require(not self.closed and bool(item.components), "E_STORE")
+        component = item.components[-1]
+        current = _capture_metadata(component.fd, self.leaf, "M")
+        named = _capture_named_metadata(component.name, item.components[-2].fd, self.leaf, "M")
+        _require(_identity(current) == _identity(named) == _identity(expected)
+                 and _capture_rule(component.rule, component.fd, current, False, self.leaf, "M")
+                 and _identity(_capture_metadata(component.fd, self.leaf, "M")) == _identity(expected), "E_STORE")
+
+    def verify_previous(self, root, sources, binding):
+        _require(not self.closed and self.directory is not None, "E_STORE")
+        amount = 2 * sum(len(binding[key]) for key in ("capture_raw", "input_raw", "response_raw"))
+        _capture_copy_room(self.leaf, amount, False, case=True, read_only=True)
+        self.leaf["read_bytes"] += amount
+        _capture_account(self.leaf, "raw", "read_bytes", amount)
+        _require(binding["operation"] == self.binding["operation"]
+                 and binding["capture_raw"] == self.binding["capture_raw"]
+                 and binding["capture_sha256"] == self.binding["capture_sha256"]
+                 and binding["input_raw"] == self.binding["input_raw"]
+                 and binding["response_raw"] == self.binding["response_raw"]
+                 and binding["runtime_sha256"] == self.binding["runtime_sha256"]
+                 and set(sources) == set(self.members), "E_STORE")
+        before, current = self.binding["root_before"], root.before
+        _require((before.st_dev, before.st_ino, before.st_uid, before.st_gid, before.st_mode)
+                 == (current.st_dev, current.st_ino, current.st_uid, current.st_gid, current.st_mode), "E_STORE")
+        for name, old in self.members.items():
+            expected = self.binding["target_states"][name]
+            self._bound_target(old, expected)
+            _require(_identity(sources[name].before) == _identity(expected), "E_STORE")
+        self._transfer()
+        _require(not _capture_work_incomplete(self.leaf), "E_STORE")
+
+    def continue_parent_chain(self, parent, transition):
+        _require(not self.closed and self.directory is not None, "E_STORE")
+        fresh = _HeldPreparationSources(self.anchor, self.work, self.case_work, self.binding)
+        fresh.previous_source = self
+        try:
+            old_root = self.directory
+            _require(old_root.path == parent.path + "/" + old_root.components[-1].name, "E_STORE")
+            self._bound_target(old_root, self.binding["root_before"])
+            fresh.directory = _open_child(parent, old_root.components[-1].name, True,
+                _store_rule(os.geteuid(), os.getegid(), 0o700, True, self.anchor.resolver), "E_STORE",
+                recording_work=fresh.leaf, accounting_kind="M")
+            fresh._adopt(fresh.directory)
+            _require(_identity(fresh.directory.before) == _identity(self.binding["root_before"]), "E_STORE")
+            names = fresh.directory.listdir()
+            _require(set(names) == set(self.binding["namespace"]), "E_STORE")
+            _capture_observe(fresh.leaf, "M", "T-parent-chain-transition", {"transition": transition,
+                "root_stat": _stat_values(fresh.directory.before), "namespace": sorted(names)})
+            for name, old in self.members.items():
+                expected = self.binding["target_states"][name]
+                self._bound_target(old, expected)
+                held = _open_child(fresh.directory, name, stat.S_ISDIR(expected.st_mode),
+                    _store_rule(os.geteuid(), os.getegid(), 0o700 if stat.S_ISDIR(expected.st_mode) else 0o400,
+                        stat.S_ISDIR(expected.st_mode), self.anchor.resolver), "E_STORE",
+                    recording_work=fresh.leaf, accounting_kind="M")
+                fresh._adopt(held)
+                fresh.members[name] = held
+                _require(_identity(held.before) == _identity(expected), "E_STORE")
+                self._bound_target(old, expected)
+            fresh.runtime_sha256 = self.binding["runtime_sha256"]
+            fresh.recheck()
+            fresh._transfer()
+            _require(not fresh.failed and not _capture_work_incomplete(fresh.leaf), "E_STORE")
+            fresh.stable = True
+            return fresh
+        except BaseException:
+            fresh.close()
+            raise
 
     def acquire_sources(self, root, sources):
         try:
