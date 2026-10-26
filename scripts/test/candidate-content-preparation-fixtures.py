@@ -1775,7 +1775,7 @@ def raw16_t_lifecycle(root: Path) -> None:
                 assert len(list(scratch.glob('raw16-t-v1-prepare-*'))) == 5
                 assert not (scratch / 'raw16-t-v1-prepare-runtime-unknown-00.bin').exists()
             ctx, native = produce(scratch, operation)
-            assert ctx.recording_work.get('seal_created') is True and not ctx.recording_unusable
+            assert ctx.recording_work.get('seal_returned', [False])[0] is True and not ctx.recording_unusable
             native_paths.append(native)
             calls.append(role)
         unknown = work / 'preparation-scratch/raw16-t-v1-prepare-runtime-unknown-00.bin'
@@ -1820,7 +1820,7 @@ def raw16_t_lifecycle(root: Path) -> None:
             scratch = Path(argv[argv.index('--scratch') + 1])
             assert scratch == work / ('preparation-scratch' if operation == 'prepare' else 'inspection-scratch')
             ctx, _native = produce(scratch, operation)
-            assert ctx.recording_work.get('seal_created') is True
+            assert ctx.recording_work.get('seal_returned', [False])[0] is True
             writer_calls.append((role, str(scratch)))
         ws = types.SimpleNamespace(execute=writer_execute, work_hold=holder, anchor=anchor,
                                    request=types.SimpleNamespace(raw=caller_raw))
@@ -1887,7 +1887,7 @@ def raw16_t_lifecycle(root: Path) -> None:
             capture = scratch / 'raw16-t-v1-prepare-capture.json'
             markers = list(scratch.glob('raw16-t-v1-prepare-complete-*'))
             if scenario in ('occupied-runtime', 'mkdir-failed', 'mkdir-uncertain'):
-                assert ctx.recording_unusable and not ctx.recording_work.get('seal_created', False)
+                assert ctx.recording_unusable and not ctx.recording_work.get('seal_returned', [False])[0]
                 if scenario == 'mkdir-uncertain':
                     assert len(markers) == 1
                     # An observed failed commit is never offered to the reader as a qualified success.
@@ -1925,7 +1925,7 @@ def raw16_t_lifecycle(root: Path) -> None:
             completed.append('root total entries ' + str(count))
         for scenario in ('runtime-write', 'runtime-fsync', 'runtime-close', 'runtime-readback',
                          'capture-write-zero', 'capture-fsync', 'capture-close', 'capture-readback',
-                         'capture-readback-close', 'parent-sync', 'ledger-before-marker'):
+                         'capture-readback-close', 'parent-sync', 'ledger-before-marker', 'ledger-return-cell'):
             work = base / scenario
             work.mkdir(mode=0o700)
             scratch = work / 'preparation-scratch'
@@ -1984,10 +1984,10 @@ def raw16_t_lifecycle(root: Path) -> None:
                             raise OSError(errno.EIO, 'controlled close result failure')
                         return None
                     return saved['close'](fd)
-                if scenario == 'ledger-before-marker':
+                if scenario in ('ledger-before-marker', 'ledger-return-cell'):
                     class FailLedger(dict):
                         def __setitem__(self, key, value):
-                            if key == 'seal_mkdir_attempts':
+                            if key == ('seal_returned' if scenario == 'ledger-return-cell' else 'seal_mkdir_attempts'):
                                 fired.append(('ledger', key))
                                 raise MemoryError('controlled precommit observation failure')
                             return super().__setitem__(key, value)
@@ -2070,6 +2070,160 @@ def raw16_t_lifecycle(root: Path) -> None:
     c._acl_state = original_acl
     print(json.dumps({'raw16_T_controls': completed, 'ordinary_synthetic_runtime_only': True,
         'actual_source_segments_not_full_native_route': True, 'receipts': receipts}, sort_keys=True))
+
+def raw16_p_acquisitions(root: Path) -> None:
+    import tempfile
+    spec = importlib.util.spec_from_file_location('raw16_P_actual_reader', root/'shadow/v1/enforced-reproduction.py')
+    e = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = e
+    spec.loader.exec_module(e)
+    c = e.c
+    acl = c._acl_state
+    c._acl_state = lambda *_: ([], None) if sys.platform == 'darwin' else (None, None)
+    results = []
+    try:
+        for scenario in ('stable', 'source-drift', 'P-drift', 'occupied-P', 'case-carry-over'):
+            with tempfile.TemporaryDirectory(prefix='ystack-raw16-P-') as temporary:
+                base = Path(temporary).resolve()
+                base.chmod(0o700)
+                work, dependencies, source = base/'work', base/'dependencies', base/'synthetic-helper'
+                work.mkdir(mode=0o700);dependencies.mkdir(mode=0o700)
+                raw = b'synthetic never executed helper acquisition' * 1751
+                source.write_bytes(raw);source.chmod(0o400)
+                aux = base/'native-fixture-values'
+                aux.mkdir(mode=0o700)
+                aux_paths = {}
+                for role in ('compiler', 'native_release', 'native_build_record'):
+                    path = aux/role
+                    path.write_bytes(b'never executed original native owner ' + role.encode())
+                    path.chmod(0o400)
+                    aux_paths[role] = path
+                native_values = {role: e.stable_file(path) for role, path in aux_paths.items()}
+                native = c.snapshot_dependency(str(source), c.digest(raw), len(raw), str(dependencies/'helper'), 'object-closure')
+                holder = e.stable_directory(work)
+                anchor = c.Anchor({}, b'', [], {}, ('', []), ('', []), None)
+                request = c.canonical({'kind': 'shadow_enforced_request', 'id': 'p.original.read.fixture'})
+                pread, events = os.pread, []
+                def observed_read(fd, size, offset):
+                    value = pread(fd, size, offset)
+                    events.append({'fd': fd, 'count': size, 'offset': offset, 'return': len(value)})
+                    return value
+                try:
+                    assert native.acquisition_raw == raw
+                    if scenario == 'occupied-P':
+                        (work/'runtime-0000-object_closure-0000.bin').write_bytes(b'preserved occupancy')
+                    if scenario == 'case-carry-over':
+                        key = str(holder.held.before.st_dev) + ':' + str(holder.held.before.st_ino)
+                        carry = c._capture_work_values(anchor.recording_work, key)
+                        carry['runtime'] = {'read_bytes': c._RUNTIME_FIELDS['read_bytes']-len(raw)+1}
+                    os.pread = observed_read
+                    holder._retain_runtime(anchor, 'object_closure', native.original, native.acquisition_raw, request)
+                    native.acquisition_raw = None
+                    target = work/'runtime-0000-object_closure-0000.bin'
+                    if scenario == 'case-carry-over':
+                        assert anchor.private_observations.get('unusable') is True and not events and not target.exists()
+                        results.append({'case': scenario, 'actual_new_runtime_reads': 0, 'actual_native_acquisition_bytes': len(raw),
+                            'carry_counter_is_synthetic_boundary_input_not_actual_104GiB_work': True,
+                            'work': anchor.recording_work})
+                        continue
+                    if scenario == 'occupied-P':
+                        assert anchor.private_observations.get('unusable') is True
+                        assert target.read_bytes() == b'preserved occupancy'
+                        results.append({'case': scenario, 'actual_pread_trace': events,
+                            'work': anchor.recording_work, 'preserved_occupied_bytes': 19})
+                        continue
+                    assert not anchor.private_observations.get('unusable', False)
+                    previous_active = e.CancellationSignals.active
+                    raw_owner = object.__new__(e._NativeRelease)
+                    raw_owner.compiler = native_values['compiler']
+                    raw_owner.binary = native_values['native_release']
+                    raw_owner.record = native_values['native_build_record']
+                    raw_owner.runtime_values = {'fixture_only': 'no native loader or compiler was executed'}
+                    e.CancellationSignals.active = types.SimpleNamespace(native=raw_owner)
+                    try:
+                        e._retain_native_runtime(anchor, holder, request)
+                    finally:
+                        e.CancellationSignals.active = previous_active
+                    assert {row['slot'] for row in anchor.private_observations['local_runtime']} == {
+                        'object_closure', 'compiler', 'native_release', 'native_build_record'}
+                    assert target.read_bytes() == raw and target.stat().st_mode & 0o777 == 0o400
+                    assert native.snapshot.read(len(raw), 'E_DEPENDENCY') == raw
+                    row = anchor.private_observations['local_runtime'][0]
+                    assert row['request_sha256'] == c.digest(request) and row['attempt_id'] == 'p.original.read.fixture'
+                    if scenario != 'stable':
+                        changed = source if scenario == 'source-drift' else target
+                        changed.chmod(0o600);changed.write_bytes(b'changed fixture bytes');changed.chmod(0o400)
+                    anchor.seal_local_runtime(holder._recording_parent())
+                    assert bool(anchor.private_observations.get('unusable')) == (scenario != 'stable')
+                    if scenario == 'stable':
+                        assert sum(row['return'] for row in events) == 7*(len(raw)+sum(len(item.raw) for item in native_values.values()))
+                    results.append({'case': scenario, 'actual_pread_trace': events,
+                        'runtime_fees': anchor.recording_work['runtime'],
+                        'actual_M_fees': anchor.recording_work.get('accounting'),
+                        'native_snapshot_original_read_copy_version_qualification_Q': 'NOT_COMPLETE_OR_QUALIFIED',
+                        'validation_extra_reads': 2*len(raw), 'source_bytes': len(raw)})
+                finally:
+                    os.pread = pread
+                    holder.close();native.close()
+                    for item in native_values.values():item.close()
+    finally:
+        c._acl_state = acl
+    print(json.dumps({'P_original_snapshot_to_recorder': results, 'ordinary_synthetic_runtime_only': True}, sort_keys=True))
+
+def raw16_parent_carrier(root: Path) -> None:
+    import struct
+    import tempfile
+    spec = importlib.util.spec_from_file_location('raw16_parent_P_owner', root/'shadow/v1/enforced-reproduction.py')
+    e = importlib.util.module_from_spec(spec);sys.modules[spec.name] = e;spec.loader.exec_module(e)
+    c = e.c
+    acl = c._acl_state
+    c._acl_state = lambda *_: ([], None) if sys.platform == 'darwin' else (None, None)
+    output = []
+    try:
+        for case in ('complete', 'record-at-limit', 'legacy', 'frame-drift', 'occupied-P'):
+            helper = c.canonical('h' * (c.DOCUMENT_LIMIT-3)) if case == 'record-at-limit' else c.canonical(['fixture helper record'])
+            dependency = c.canonical('d' * (c.DOCUMENT_LIMIT-3)) if case == 'record-at-limit' else c.canonical({'opaque fixture': True})
+            native = {key: 'a'*64 for key in ('source_sha256', 'build_script_sha256', 'build_record_sha256',
+                'binary_sha256', 'python_sha256', 'dependency_record_sha256')}
+            native.update(binary_path='/fixture/native', binary_size=1, python_path='/fixture/python',
+                python_abi='fixture-abi', loader_mode='rtld-now-local.v1', dependency_record_sha256=c.digest(dependency))
+            body = {'helper_source_sha256': c.HELPER_SOURCE_SHA256, 'helper_build_record_sha256': c.digest(helper),
+                'helper_executable_sha256': 'b'*64, 'helper_executable_size': 1, 'helper_path': '/fixture/helper',
+                'native_release': native}
+            context_raw = c.canonical({'schema_version': 2, 'kind': 'shadow_consumer_parent_context',
+                                      'id': 'shadow.parent', 'body': body})
+            frame = c.PARENT_FRAME_MAGIC + struct.pack('!III', len(context_raw), len(helper), len(dependency)) + context_raw+helper+dependency
+            with tempfile.TemporaryDirectory(prefix='ystack-parent-P-') as temporary:
+                base = Path(temporary).resolve();base.chmod(0o700)
+                path, work = base/'synthetic-inherited-file', base/'work'
+                path.write_bytes(context_raw if case == 'legacy' else frame);path.chmod(0o400)
+                work.mkdir(mode=0o700)
+                context = c.capture_parent_context(os.open(path, os.O_RDONLY))
+                assert dict(context) == body
+                if case == 'frame-drift':context.frame_raw = frame[:-1]+b'!'
+                holder = e.stable_directory(work)
+                anchor = c.Anchor({}, b'', [], {}, ('', []), ('', []), None)
+                request = c.canonical({'kind': 'shadow_write_request', 'id': 'parent.fixture'})
+                if case == 'occupied-P':(work/'parent-frame.bin').write_bytes(b'preserved partial')
+                try:
+                    holder._retain_parent_inputs(anchor, context, request)
+                    assert dict(context) == body
+                    if case in ('complete', 'record-at-limit'):
+                        assert not anchor.private_observations.get('unusable', False)
+                        assert (work/'parent-frame.bin').read_bytes() == frame
+                        assert (work/'helper-build-record.json').read_bytes() == helper
+                        assert (work/'native-dependency-record.json').read_bytes() == dependency
+                        assert all((work/name).stat().st_mode & 0o777 == 0o400 for name in
+                            ('parent-frame.bin', 'helper-build-record.json', 'native-dependency-record.json'))
+                        assert anchor.private_observations['parent_inputs']['parent_producer_and_record_semantics'] == 'UNKNOWN'
+                    else:
+                        assert anchor.private_observations.get('unusable') is True
+                    output.append({'case': case, 'frame_bytes': len(frame), 'record_bytes': [len(helper), len(dependency)],
+                        'P_work': anchor.recording_work, 'actual_parent_and_record_semantics': 'UNKNOWN',
+                        'validation_extra_read_bytes': len(frame)+len(helper)+len(dependency) if case in ('complete','record-at-limit') else 0})
+                finally:holder.close()
+    finally:c._acl_state = acl
+    print(json.dumps({'actual_v3_fd_receiver_to_private_P': output, 'real_parent_producer': False}, sort_keys=True))
 
 def main() -> int:
     try:

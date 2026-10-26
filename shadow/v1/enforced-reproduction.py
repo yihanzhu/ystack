@@ -389,6 +389,14 @@ class StableDirectory:
             if getattr(error, "_scope_signal_cancel", False):raise
             return None
 
+    def _retain_parent_inputs(self, anchor, context, caller_raw):
+        try:
+            anchor.retain_parent_inputs(self._recording_parent(), context, caller_raw)
+        except (Refusal, c.Refusal, OSError, ValueError, MemoryError) as error:
+            anchor.private_observations["unusable"] = True
+            if getattr(error, "_scope_signal_cancel", False):
+                raise
+
     def _retain_runtime(self, anchor, role, original, raw, caller_raw):
         try:
             anchor.retain_runtime_acquisition(self._recording_parent(), role, original, raw, caller_raw)
@@ -602,6 +610,7 @@ def _seal_capture_recording(anchor, parent, held_store=None):
     owner = getattr(anchor, "capture_completion_owner", _CAPTURE_OWNER)
     cancellation = None
     try:
+        anchor.seal_local_runtime(parent)
         require(owner is not None and not getattr(owner, "source_closed", False), "E_STORE")
         owner.source.recheck("E_STORE")
     except Exception as error:
@@ -772,11 +781,15 @@ def _native_runtime_values(values, locators):
     return _native_argv_values(values["platform"], **locators)
 
 
-def _retain_native_runtime(anchor):
+def _retain_native_runtime(anchor, parent=None, caller_raw=None):
     active = CancellationSignals.active
     native = active.native if active is not None else None
     if isinstance(native, _NativeRelease) and hasattr(native, "runtime_values"):
         anchor.private_observations.setdefault("commands", {})["runtime_values"] = [native.runtime_values]
+        if parent is not None:
+            for role, value in (("compiler", native.compiler), ("native_release", native.binary),
+                                ("native_build_record", native.record)):
+                parent._retain_runtime(anchor, role, value.held, value.raw, caller_raw)
     else:
         anchor.private_observations["unusable"] = True
 
@@ -1970,7 +1983,8 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
         group_reader = _DarwinGroupReader(resolver) if resolver is not None else None
         anchor = c.load_anchor(resolver, group_reader)
         _bind_capture_completion_owner(anchor)
-        _retain_native_runtime(anchor)
+        _retain_native_runtime(anchor, work_hold, request_raw)
+        work_hold._retain_parent_inputs(anchor, context, request_raw)
         exclusions = [SOURCE, request_path, Path(c.ANCHOR).parent, Path(anchor.config["store_root"]),
                       Path(anchor.config["work_root"]), *paths.values()]
         exclusions.extend(Path(value) for value in anchor.config["installed_files"].values())

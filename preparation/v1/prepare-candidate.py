@@ -2891,10 +2891,12 @@ def _write_preparation_observations(ctx, complete):
         marker = "raw16-t-v1-" + ctx.args.operation + "-complete-" + expected_sha
         work["seal_hash_bytes"] = work.get("seal_hash_bytes", 0) + len(raw)
         work["metadata_bytes"] = work.get("metadata_bytes", 0) + len(marker.encode("ascii"))
+        # The preallocated cell avoids fallible bookkeeping after the commit syscall.
+        returned = [False]
+        work["seal_returned"] = returned
         work["seal_mkdir_attempts"] = work.get("seal_mkdir_attempts", 0) + 1
         os.mkdir(marker, 0o700, dir_fd=directory)
-        work["seal_created"] = True
-        work["directories"] = work.get("directories", 0) + 1
+        returned[0] = True
     except (Refusal, OSError, MemoryError, UnicodeError, ValueError) as error:
         _preparation_capture_error(ctx, error, "capture-publication")
         if isinstance(error, Refusal) and error.token in {"E_INTERRUPTED", "E_TIMEOUT"}:raise

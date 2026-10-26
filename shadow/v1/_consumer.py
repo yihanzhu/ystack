@@ -202,7 +202,7 @@ _RUNTIME_ROLES |= {"installed_" + name for name in ("accepted_set", "registry", 
     "control_decision", "control_policy_set", "evaluator_driver", "evaluator_program")}
 
 
-def _runtime_account(work, field, amount, *, window=False):
+def _runtime_account(work, field, amount, *, window=False, commit=True):
     _require(field in _RUNTIME_FIELDS and type(amount) is int and amount >= 0, "E_LIMIT")
     counts = work.setdefault("runtime", {})
     limit = _RUNTIME_FIELDS[field] * (4 if window else 1)
@@ -212,8 +212,10 @@ def _runtime_account(work, field, amount, *, window=False):
         if key in work:
             carry = work[key].get(field, 0)
             _require(type(carry) is int and carry >= 0
-                     and carry + current + amount <= _RUNTIME_FIELDS[field] * multiplier, "E_LIMIT")
-    counts[field] = current + amount
+                     and carry + current - work.get("transferred_runtime", {}).get(field, 0) + amount
+                     <= _RUNTIME_FIELDS[field] * multiplier, "E_LIMIT")
+    if commit:
+        counts[field] = current + amount
 
 
 def _runtime_inventory_values(group, preparation_operation=None):
@@ -270,6 +272,7 @@ def _copy_runtime_file(directory, name, snapshot, work, resolver):
     failure = None
     try:
         _require(work.get("runtime", {}).get("physical_files", 0) < _RUNTIME_FIELDS["physical_files"], "E_LIMIT")
+        _runtime_account(work, "physical_files", 1, commit=False)
         writer = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                          0o600, dir_fd=directory)
         _runtime_account(work, "physical_files", 1)
@@ -280,6 +283,8 @@ def _copy_runtime_file(directory, name, snapshot, work, resolver):
                 counts = work.get("runtime", {})
                 _require(all(counts.get(field, 0) + amount <= _RUNTIME_FIELDS[field]
                              for field in ("write_bytes", "physical_bytes", "copy_bytes")), "E_LIMIT")
+                for field in ("write_bytes", "physical_bytes", "copy_bytes"):
+                    _runtime_account(work, field, amount, commit=False)
                 sent = os.write(writer, view[:amount])
                 _require(type(sent) is int and 0 < sent <= amount, "E_STORE")
                 for field in ("write_bytes", "physical_bytes", "copy_bytes"):
@@ -302,6 +307,8 @@ def _copy_runtime_file(directory, name, snapshot, work, resolver):
             counts = work.get("runtime", {})
             _require(all(counts.get(field, 0) + 2 * count <= _RUNTIME_FIELDS[field]
                          for field in ("read_bytes", "sha_bytes", "equality_bytes")), "E_LIMIT")
+            for field in ("read_bytes", "sha_bytes", "equality_bytes"):
+                _runtime_account(work, field, 2 * count, commit=False)
             left = os.pread(snapshot.owner.fd, count, offset)
             _runtime_account(work, "read_bytes", len(left))
             right = os.pread(reader, count, offset)
@@ -337,6 +344,19 @@ def _copy_runtime_file(directory, name, snapshot, work, resolver):
             raise failure
 
 
+def _runtime_source_check(item, work, resolver):
+    item.recheck("E_STORE", work, "M")
+    for component in item.components:
+        before = _capture_metadata(component.fd, work, "M")
+        access, default = _acl_state(component.fd, resolver)
+        _capture_observe(work, "M", "runtime-source-acl", {"fd": component.fd,
+            "access": access, "default": default})
+        _require((access == [] if sys.platform == "darwin" else access is None and default is None), "E_STORE")
+        after = _capture_metadata(component.fd, work, "M")
+        _require(_identity(before) == _identity(after) == _identity(component.before), "E_STORE")
+    item.recheck("E_STORE", work, "M")
+
+
 class _RuntimeSnapshot:
     def __init__(self, owner, work):
         self.owner, self.work, self.size = owner, work, owner.before.st_size
@@ -360,6 +380,8 @@ class _RuntimeSnapshot:
             limits = self.work.get("runtime", {})
             _require(limits.get("read_bytes", 0) + count <= _RUNTIME_FIELDS["read_bytes"]
                      and limits.get("sha_bytes", 0) + count <= _RUNTIME_FIELDS["sha_bytes"], "E_LIMIT")
+            for field in ("read_bytes", "sha_bytes"):
+                _runtime_account(self.work, field, count, commit=False)
             try:
                 chunk = os.pread(self.owner.fd, count, offset)
             except OSError as error:
@@ -1249,13 +1271,15 @@ def _refresh_recording_directory(item, before, work):
     component.after, component.named_after = current, named
 
 
-def _copy_preparation_document(directory, raw, work, resolver):
-    _require(type(raw) is bytes and len(raw) <= DOCUMENT_LIMIT, "E_STORE")
+def _copy_preparation_document(directory, raw, work, resolver, *, name="capture.json"):
+    limits = {"capture.json": DOCUMENT_LIMIT, "parent-frame.bin": PARENT_FRAME_LIMIT,
+              "helper-build-record.json": DOCUMENT_LIMIT, "native-dependency-record.json": DOCUMENT_LIMIT}
+    _require(name in limits and type(raw) is bytes and len(raw) <= limits[name], "E_STORE")
     target = reader = None
     failure = None
     try:
         _capture_copy_room(work, len(raw), False, case=True)
-        target = os.open("capture.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        target = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                          0o600, dir_fd=directory)
         work["files"] += 1
         view = memoryview(raw)
@@ -1269,23 +1293,29 @@ def _copy_preparation_document(directory, raw, work, resolver):
         os.fchmod(target, 0o400);os.fsync(target)
         closing, target = target, None
         _close_capture_copy(closing, work, work, "preparation-capture-writer", None)
-        reader = os.open("capture.json", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory)
+        reader = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory)
         before = _metadata(reader)
         _require(stat.S_ISREG(before.st_mode) and before.st_uid == os.geteuid()
                  and before.st_gid == os.getegid() and before.st_nlink == 1
                  and stat.S_IMODE(before.st_mode) == 0o400 and before.st_size == len(raw), "E_STORE")
         access, default = _acl_state(reader, resolver)
         _require(access == [] if sys.platform == "darwin" else access is None and default is None, "E_STORE")
+        _capture_copy_room(work, len(raw), False, case=True, read_only=True)
+        expected_sha = digest(raw)
+        work["read_bytes"] += len(raw)
+        measured = hashlib.sha256()
         offset = 0
         while offset < len(raw):
             count = min(65536, len(raw) - offset)
-            _capture_copy_room(work, 3 * count, False, case=True, read_only=True)
+            _capture_copy_room(work, 4 * count, False, case=True, read_only=True)
             chunk = os.pread(reader, count, offset)
-            work["read_bytes"] += 3 * len(chunk)
+            work["read_bytes"] += 4 * len(chunk)
+            measured.update(chunk)
             _require(len(chunk) == count and chunk == memoryview(raw)[offset:offset + count], "E_STORE")
             offset += count
+        _require(measured.hexdigest() == expected_sha, "E_STORE")
         _require(_identity(before) == _identity(_metadata(reader))
-                 == _identity(_named_metadata("capture.json", directory)), "E_STORE")
+                 == _identity(_named_metadata(name, directory)), "E_STORE")
     except BaseException as error:
         failure = error
         work["preparation_document_incomplete"] = True
@@ -1313,6 +1343,7 @@ class Anchor:
     private_observations: dict = dataclasses.field(default_factory=dict)
     storage_entry_count: int = 0
     recording_work: dict = dataclasses.field(default_factory=dict)
+    local_runtime_snapshots: list = dataclasses.field(default_factory=list)
 
     def retain_preparation(self, parent, scratch_name, operation, input_raw, response_raw, caller_raw):
         _require(scratch_name in {"preparation-scratch", "inspection-scratch"}
@@ -1441,6 +1472,55 @@ class Anchor:
                     and not getattr(failure, "_scope_signal_cancel", False)):
                 raise tail_failure
 
+    def retain_parent_inputs(self, parent, context, caller_raw):
+        work, case_work, failure = {}, None, None
+        try:
+            _capture_work_values(work, "parent-inputs")
+            self.recording_work.setdefault("parent_input_leaves", []).append(work)
+            _require(isinstance(context, _ParentContext) and len(context.runtime_records) == 2, "E_STORE")
+            caller = _json(caller_raw, DOCUMENT_LIMIT, "E_STORE")
+            _require(caller.get("kind") in {"shadow_enforced_request", "shadow_write_request"}
+                     and _id(caller.get("id")), "E_STORE")
+            case_key = str(parent.before.st_dev) + ":" + str(parent.before.st_ino)
+            case_work = _capture_work_values(self.recording_work, case_key)
+            work["parent_reparse_processing"] = "UNKNOWN: full existing frame/JSON owner processing not transferred"
+            raw, records = _parent_frame_values(context.frame_raw)
+            _require(raw == context.context_raw and records == context.runtime_records, "E_STORE")
+            rebuilt = _parent_context_values(raw, context.frame_raw, records)
+            _require(dict(rebuilt) == dict(context), "E_STORE")
+            _require("parent_inputs" not in self.private_observations, "E_STORE")
+            parent.recheck("E_STORE")
+            before = parent.before
+            values = (("parent-frame.bin", context.frame_raw), ("helper-build-record.json", records[0]),
+                      ("native-dependency-record.json", records[1]))
+            for name, value in values:
+                _copy_preparation_document(parent.fd, value, work, self.resolver, name=name)
+            _refresh_recording_directory(parent, before, work)
+            os.fsync(parent.fd)
+            self.private_observations["parent_inputs"] = {"request_sha256": digest(caller_raw),
+                "attempt_id": caller["id"], "files": [{"file": name, "size_bytes": len(value),
+                    "sha256": digest(value)} for name, value in values],
+                "parent_producer_and_record_semantics": "UNKNOWN"}
+            work["read_bytes"] += len(caller_raw) + sum(len(value) for _, value in values)
+        except BaseException as error:
+            failure = error
+            self.private_observations["unusable"] = True
+            work["failure"] = {"category": type(error).__name__,
+                "errno": getattr(error, "os_errno", getattr(error, "errno", None))}
+            if getattr(error, "_scope_signal_cancel", False) or not isinstance(error,
+                    (Refusal, OSError, ValueError, TypeError, MemoryError)):
+                raise
+        finally:
+            try:
+                if case_work is not None:
+                    _capture_transfer_work(work, self.recording_work, case_work)
+                    _capture_accounting_receipt(self)
+            except Exception as error:
+                self.private_observations["unusable"] = True
+                work["transfer_incomplete"] = True
+                if getattr(error, "_scope_signal_cancel", False) and not getattr(failure, "_scope_signal_cancel", False):
+                    raise
+
     def retain_runtime_acquisition(self, parent, role, original, raw, caller_raw):
         leaf, case_work, failure = {}, None, None
         try:
@@ -1462,6 +1542,7 @@ class Anchor:
             _runtime_account(leaf, "read_bytes", len(raw))
             _runtime_account(leaf, "sha_bytes", len(raw))
             expected = digest(raw)
+            _runtime_source_check(original, leaf, self.resolver)
             snapshot = _RuntimeSnapshot(original, leaf)
             _require(snapshot.acquisition_sha == expected, "E_STORE")
             offset = 0
@@ -1477,7 +1558,8 @@ class Anchor:
             _copy_runtime_file(parent.fd, name, snapshot, leaf, self.resolver)
             _refresh_recording_directory(parent, before, leaf)
             os.fsync(parent.fd)
-            original.recheck("E_STORE")
+            _runtime_source_check(original, leaf, self.resolver)
+            self.local_runtime_snapshots.append((snapshot, name, case_key))
             values.append({"slot": role, "index": 0, "ordinal": ordinal, "locator": original.path,
                 "file": name, "size_bytes": len(raw), "sha256": expected, "errno": None,
                 "request_sha256": digest(caller_raw), "attempt_id": caller["id"]})
@@ -1501,6 +1583,66 @@ class Anchor:
                 leaf["transfer_incomplete"] = True
                 if getattr(error, "_scope_signal_cancel", False) and not getattr(failure, "_scope_signal_cancel", False):
                     raise
+
+    def seal_local_runtime(self, parent):
+        for snapshot, name, case_key in self.local_runtime_snapshots:
+            leaf, reader, failure = snapshot.work, None, None
+            case_work = _capture_work_values(self.recording_work, case_key)
+            leaf["runtime_case_carry_in"] = case_work.get("runtime", {})
+            leaf["runtime_window_carry_in"] = self.recording_work.get("runtime", {})
+            try:
+                _refresh_recording_directory(parent, parent.before, leaf)
+                reader = _open_child(parent, name, False,
+                    _store_rule(os.geteuid(), os.getegid(), 0o400, False, self.resolver), "E_STORE",
+                    recording_work=leaf, accounting_kind="M")
+                _require(reader.before.st_size == len(snapshot), "E_STORE")
+                left_hash, right_hash, offset = hashlib.sha256(), hashlib.sha256(), 0
+                _runtime_source_check(snapshot.owner, leaf, self.resolver)
+                while offset < len(snapshot):
+                    count = min(65536, len(snapshot) - offset)
+                    for field in ("read_bytes", "sha_bytes", "equality_bytes"):
+                        _require(leaf["runtime"].get(field, 0) + 2 * count <= _RUNTIME_FIELDS[field], "E_LIMIT")
+                    for field in ("read_bytes", "sha_bytes", "equality_bytes"):
+                        _runtime_account(leaf, field, 2 * count, commit=False)
+                    left = os.pread(snapshot.owner.fd, count, offset)
+                    _runtime_account(leaf, "read_bytes", len(left))
+                    right = os.pread(reader.fd, count, offset)
+                    _runtime_account(leaf, "read_bytes", len(right))
+                    left_hash.update(left);right_hash.update(right)
+                    _runtime_account(leaf, "sha_bytes", len(left) + len(right))
+                    _runtime_account(leaf, "equality_bytes", len(left) + len(right))
+                    _require(len(left) == len(right) == count and left == right, "E_STORE")
+                    offset += count
+                _require(left_hash.hexdigest() == right_hash.hexdigest() == snapshot.acquisition_sha, "E_STORE")
+                _runtime_source_check(snapshot.owner, leaf, self.resolver)
+                reader.recheck("E_STORE")
+            except BaseException as error:
+                failure = error
+                self.private_observations["unusable"] = True
+                leaf["final_failure"] = {"category": type(error).__name__,
+                    "errno": getattr(error, "os_errno", getattr(error, "errno", None))}
+                if getattr(error, "_scope_signal_cancel", False) or not isinstance(error,
+                        (Refusal, OSError, MemoryError, ValueError, TypeError)):
+                    raise
+            finally:
+                tail_failure = None
+                if reader is not None:
+                    try:reader.close()
+                    except (OSError, Refusal, MemoryError) as error:
+                        tail_failure = error
+                        self.private_observations["unusable"] = True
+                        leaf["final_close_incomplete"] = True
+                try:
+                    _capture_transfer_work(leaf, self.recording_work, case_work)
+                    _capture_accounting_receipt(self)
+                except Exception as error:
+                    self.private_observations["unusable"] = True
+                    leaf["transfer_incomplete"] = True
+                    if tail_failure is None or (getattr(error, "_scope_signal_cancel", False)
+                            and not getattr(tail_failure, "_scope_signal_cancel", False)):
+                        tail_failure = error
+                if getattr(tail_failure, "_scope_signal_cancel", False) and not getattr(failure, "_scope_signal_cancel", False):
+                    raise tail_failure
 
     def copy_runtime_slots(self, parent, slots, work):
         fixed = {key: self.config["identity_paths"][key] for key in

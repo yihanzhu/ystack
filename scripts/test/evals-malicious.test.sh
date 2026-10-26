@@ -605,6 +605,22 @@ try:
 finally:c._acl_state=original_acl
 print(json.dumps({'ordinary_only':True,'real_native_qualification':False,'runtime_copy_cancel_cases':results},sort_keys=True))
 PY_RUNTIME_COPY_CANCEL
+/usr/bin/python3 -I -S -B - "$root" <<'PY_PARENT_P_CARRIER'
+import importlib.util,sys
+from pathlib import Path
+root=Path(sys.argv[1])
+spec=importlib.util.spec_from_file_location('raw16_parent_carrier_fixture',root/'scripts/test/candidate-content-preparation-fixtures.py')
+fixture=importlib.util.module_from_spec(spec);sys.modules[spec.name]=fixture;spec.loader.exec_module(fixture)
+fixture.raw16_parent_carrier(root)
+PY_PARENT_P_CARRIER
+/usr/bin/python3 -I -S -B - "$root" <<'PY_P_RAW16_ACQUISITIONS'
+import importlib.util,sys
+from pathlib import Path
+root=Path(sys.argv[1])
+spec=importlib.util.spec_from_file_location('raw16_P_reader_fixture',root/'scripts/test/candidate-content-preparation-fixtures.py')
+fixture=importlib.util.module_from_spec(spec);sys.modules[spec.name]=fixture;spec.loader.exec_module(fixture)
+fixture.raw16_p_acquisitions(root)
+PY_P_RAW16_ACQUISITIONS
 /usr/bin/python3 -I -S -B - "$root" <<'PY_PREPARATION_RUNTIME'
 import importlib.util,json,os,sys,tempfile,types,dataclasses
 from pathlib import Path
@@ -655,7 +671,7 @@ try:
         raw=capture.read_bytes();value=p._preparation_capture_values(raw,ctx.scratch.name,'prepare',
             p.sha256(input_raw),p.sha256(response_raw))
         marker='raw16-t-v1-prepare-complete-'+p.sha256(raw)
-        assert not ctx.recording_unusable and ctx.recording_work['seal_created']
+        assert not ctx.recording_unusable and ctx.recording_work['seal_returned'][0]
         assert (scratch/marker).is_dir() and list((scratch/marker).iterdir())==[]
         assert os.fstat(ctx.boundaries['scratch'].fd)
         total=sum(map(len,raw_values.values()))
