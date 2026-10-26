@@ -2071,6 +2071,116 @@ def raw16_t_lifecycle(root: Path) -> None:
     print(json.dumps({'raw16_T_controls': completed, 'ordinary_synthetic_runtime_only': True,
         'actual_source_segments_not_full_native_route': True, 'receipts': receipts}, sort_keys=True))
 
+def raw16_local_P_handoff(root: Path) -> None:
+    import ast
+    import tempfile
+    spec = importlib.util.spec_from_file_location('raw16_local_P_fixture', root/'shadow/v1/enforced-reproduction.py')
+    e = importlib.util.module_from_spec(spec);sys.modules[spec.name] = e;spec.loader.exec_module(e)
+    c = e.c
+    original_acl, original_open, original_observe, original_close = c._acl_state, c._open_held, c._capture_observe, os.close
+    c._acl_state = lambda *_: ([], None) if sys.platform == 'darwin' else (None, None)
+    syntax = ast.parse((root/'scope/v1/read-shadow-evidence.py').read_text())
+    main = next(node for node in syntax.body if isinstance(node, ast.FunctionDef) and node.name == 'main')
+    cancel = next(node for node in main.body if isinstance(node, ast.FunctionDef) and node.name == 'cancel')
+    callbacks = {};exec(compile(ast.Module(body=[cancel],type_ignores=[]),'<actual-scope-cancel>','exec'),callbacks)
+    output = []
+    try:
+        for case in ('runtime', 'sudo', 'two-runtime', 'P-drift', 'parent-mode', 'parent-inode', 'close-observer', 'close-error', 'close-cancel', 'registration'):
+            with tempfile.TemporaryDirectory(prefix='ystack-local-P-') as temporary:
+                base = Path(temporary).resolve();base.chmod(0o700)
+                source, work = base/'synthetic-runtime', base/'private-recorder'
+                work.mkdir(mode=0o700)
+                raw = b'TMP synthetic runtime never executed\n' * 2049
+                source.write_bytes(raw);source.chmod(0o400)
+                holder = e.stable_directory(work)
+                anchor = c.Anchor({}, b'', [], {}, ('', []), ('', []), None)
+                original = original_open(str(source), False, c._store_rule(os.geteuid(),os.getegid(),0o400,False), 'E_STORE')
+                native = e.FixedSudo(os.open(source, os.O_RDONLY), source.stat())
+                native.recheck = lambda: c._require(c._identity(os.fstat(native.fd)) == c._identity(native.before), 'E_STORE')
+                requests, closed, events, fired = [], [], [], []
+                def fixed_open(path, directory, rule, code, *args, **kwargs):
+                    if path == '/usr/bin/sudo':
+                        requests.append(path)
+                        return original_open(str(source), False, c._store_rule(os.geteuid(),os.getegid(),0o400,False), code, *args, **kwargs)
+                    return original_open(path, directory, rule, code, *args, **kwargs)
+                request = c.canonical({'kind':'shadow_write_request','id':'local.p.fixture'})
+                watched = set()
+                def observe(leaf, kind, site, value, *args, **kwargs):
+                    if case == 'close-observer' and site == 'held-close' and not fired:
+                        fired.append(site);raise MemoryError('controlled local P close observation')
+                    return original_observe(leaf,kind,site,value,*args,**kwargs)
+                def closing(fd):
+                    result = original_close(fd)
+                    if fd in watched:
+                        closed.append(fd)
+                        if case == 'close-error' and not fired:
+                            fired.append('close');raise OSError(errno.EIO,'controlled actual P close')
+                        if case == 'close-cancel' and not events:
+                            try:callbacks['cancel'](signal.SIGTERM,None)
+                            except InterruptedError as error:events.append(error);raise
+                    return result
+                class Reject(list):
+                    def append(self, value):
+                        rejected.append(value)
+                        raise MemoryError('controlled local P caller registration')
+                rejected = []
+                try:
+                    c._open_held = fixed_open
+                    if case == 'registration':holder.runtime_copies = Reject()
+                    if case == 'sudo':holder._retain_sudo(anchor,native,request)
+                    else:holder._retain_runtime(anchor,'python',original,raw,request)
+                    if case == 'registration':
+                        assert len(rejected) == 1 and rejected[0].closed and not rejected[0].owned
+                        assert anchor.private_observations.get('unusable') is True
+                        output.append({'case':case,'P_work':anchor.recording_work});continue
+                    assert len(holder.runtime_copies) == 1
+                    copied = holder.runtime_copies[0]
+                    assert copied.local_parent and not copied.closed and len(copied.members) == 1
+                    name, held = next(iter(copied.members.items()))
+                    assert held.fd != original.fd and held.before.st_ino != original.before.st_ino
+                    assert copied.runtime_sha256[name] == c.digest(raw)
+                    if case == 'two-runtime':
+                        holder._retain_runtime(anchor,'jq',original,raw,request)
+                        assert len(holder.runtime_copies) == 2
+                    watched = {row.fd for owner in holder.runtime_copies for item in owner.owned for row in item.components}
+                    if case in ('parent-mode', 'parent-inode'):
+                        if case == 'parent-mode':work.chmod(0o750)
+                        else:
+                            work.rename(base/'original-recorder');work.mkdir(mode=0o700)
+                        holder._retain_runtime(anchor,'jq',original,raw,request)
+                        assert len(holder.runtime_copies) == 1 and anchor.private_observations.get('unusable') is True
+                    if case == 'P-drift':
+                        target = work/name;target.chmod(0o600)
+                        with target.open('r+b') as stream:stream.write(b'!')
+                        target.chmod(0o400)
+                    elif case not in ('parent-mode', 'parent-inode'):
+                        anchor.seal_local_runtime(holder._recording_parent())
+                        original.close()
+                        assert os.pread(held.fd,len(raw),0) == raw
+                    c._capture_observe, os.close = observe, closing
+                    caught = None
+                    try:holder.close_runtime_copies()
+                    except InterruptedError as error:caught = error
+                    assert not holder.runtime_copies and copied.closed and not copied.owned
+                    assert len(closed) == len(watched) and set(closed) == watched
+                    holder.close_runtime_copies();assert len(closed) == len(watched)
+                    for fd in watched:
+                        try:os.fstat(fd)
+                        except OSError as error:assert error.errno == errno.EBADF
+                        else:raise AssertionError('local P fd leaked')
+                    if case == 'close-cancel':assert len(events) == 1 and caught is events[0]
+                    else:assert caught is None
+                    assert bool(anchor.private_observations.get('unusable')) == (case in ('P-drift','parent-mode','parent-inode','close-observer','close-error','close-cancel'))
+                    if case == 'sudo':assert requests == ['/usr/bin/sudo'] and os.fstat(native.fd)
+                    output.append({'case':case,'P_work':anchor.recording_work,'P_leaf':copied.leaf,
+                        'closed_once':len(closed),'extra_fixture_validation_read_bytes':0 if case in ('P-drift','parent-mode','parent-inode') else len(raw),
+                        'system_runtime_read':False,'ACL_and_native_sudo_qualification':'fixture doubles'})
+                finally:
+                    c._open_held, c._capture_observe, os.close = original_open, original_observe, original_close
+                    holder.close();original.close();anchor.close();native.close()
+    finally:c._acl_state = original_acl
+    print(json.dumps({'actual_StableDirectory_local_P':output},sort_keys=True))
+
 def raw16_hp_registration_primary(root: Path) -> None:
     import ast
     import tempfile

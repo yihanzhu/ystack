@@ -639,6 +639,7 @@ spec=importlib.util.spec_from_file_location('HP_fixture',root/'scripts/test/cand
 fixture=importlib.util.module_from_spec(spec);sys.modules[spec.name]=fixture;spec.loader.exec_module(fixture)
 fixture.raw16_hp_handoff(root)
 fixture.raw16_hp_registration_primary(root)
+fixture.raw16_local_P_handoff(root)
 PY_HP_HANDOFF
 /usr/bin/python3 -I -S -B - "$root" <<'PY_D_SOURCE_ACQUISITION'
 import importlib.util,sys

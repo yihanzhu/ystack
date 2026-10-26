@@ -366,6 +366,7 @@ class StableFile:
 @dataclasses.dataclass
 class StableDirectory:
     held: c.HeldPath
+    runtime_copies: list = dataclasses.field(default_factory=list)
 
     @staticmethod
     def _leaf_identity(value):
@@ -391,7 +392,7 @@ class StableDirectory:
 
     def _retain_sudo(self, anchor, executable, caller_raw):
         try:
-            anchor.retain_sudo_companion(self._recording_parent(), executable, caller_raw)
+            self._own_runtime(anchor, anchor.retain_sudo_companion(self._recording_parent(), executable, caller_raw))
         except (Refusal, c.Refusal, OSError, ValueError, MemoryError) as error:
             anchor.private_observations["unusable"] = True
             if getattr(error, "_scope_signal_cancel", False):
@@ -407,11 +408,31 @@ class StableDirectory:
 
     def _retain_runtime(self, anchor, role, original, raw, caller_raw):
         try:
-            anchor.retain_runtime_acquisition(self._recording_parent(), role, original, raw, caller_raw)
+            self._own_runtime(anchor, anchor.retain_runtime_acquisition(self._recording_parent(), role, original, raw, caller_raw))
         except (Refusal, c.Refusal, OSError, ValueError, MemoryError) as error:
             anchor.private_observations["unusable"] = True
             if getattr(error, "_scope_signal_cancel", False):
                 raise
+
+    def _own_runtime(self, anchor, copied):
+        if copied is None:return
+        try:self.runtime_copies.append(copied)
+        except BaseException:
+            anchor.private_observations["unusable"] = True
+            copied.close()
+            raise
+        for previous in self.runtime_copies[:-1]:previous.refresh_local_parent(copied.directory)
+
+    def close_runtime_copies(self):
+        copies, self.runtime_copies = self.runtime_copies, []
+        primary, cancellation = sys.exc_info()[1], None
+        for copied in reversed(copies):
+            try:
+                try:copied.recheck()
+                finally:copied.close()
+            except Exception as error:
+                if getattr(error, "_scope_signal_cancel", False) and cancellation is None:cancellation = error
+        if cancellation is not None and not getattr(primary, "_scope_signal_cancel", False):raise cancellation
 
     def recheck(self, code: str = "E_WORKSPACE") -> None:
         for index, component in enumerate(self.held.components):
@@ -427,7 +448,14 @@ class StableDirectory:
                         and c._identity(named) == c._identity(component.before), code)
 
     def close(self) -> None:
-        self.held.close()
+        cancellation = None
+        try:self.close_runtime_copies()
+        except Exception as error:cancellation = error
+        try:self.held.close()
+        except BaseException:
+            if getattr(cancellation, "_scope_signal_cancel", False):raise cancellation
+            raise
+        if cancellation is not None:raise cancellation
 
 
 @dataclasses.dataclass
@@ -614,7 +642,7 @@ def _close_capture_completion_owner(owner):
                 raise
 
 
-def _seal_capture_recording(anchor, parent, held_store=None, copied_capture=None):
+def _seal_capture_recording(anchor, parent, held_store=None, copied_capture=None, local_parent=None):
     owner = getattr(anchor, "capture_completion_owner", _CAPTURE_OWNER)
     cancellation = None
     try:
@@ -622,6 +650,7 @@ def _seal_capture_recording(anchor, parent, held_store=None, copied_capture=None
             copied_capture.recheck()
             copied_capture.close()
         anchor.seal_local_runtime(parent)
+        if local_parent is not None:local_parent.close_runtime_copies()
         require(owner is not None and not getattr(owner, "source_closed", False), "E_STORE")
         owner.source.recheck("E_STORE")
     except Exception as error:
@@ -2316,7 +2345,7 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
         for item in inputs: item.recheck()
         held_store.recheck()
         return seal(output, output_hold, files, incident, "enforced-reproduction.v1",
-                    _capture=(anchor, work_hold.held, held_store, copied_capture))
+                    _capture=(anchor, work_hold.held, held_store, copied_capture, work_hold))
     finally:
         try:
             close_all([*reversed(inputs), *reversed(sources), python_file, sudo_file, bash,

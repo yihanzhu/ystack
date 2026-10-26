@@ -1525,7 +1525,7 @@ class Anchor:
                     raise
 
     def retain_runtime_acquisition(self, parent, role, original, raw, caller_raw):
-        leaf, case_work, failure = {}, None, None
+        leaf, case_work, failure, copied = {}, None, None, None
         try:
             _capture_work_values(leaf, "local-runtime")
             self.recording_work.setdefault("local_runtime_leaves", []).append(leaf)
@@ -1577,7 +1577,7 @@ class Anchor:
             parent.recheck("E_STORE")
             before = parent.before
             name = "runtime-" + str(ordinal).zfill(4) + "-" + role + "-0000.bin"
-            _copy_runtime_file(parent.fd, name, snapshot, leaf, self.resolver)
+            copied_state, copied_sha = _copy_runtime_file(parent.fd, name, snapshot, leaf, self.resolver)
             _refresh_recording_directory(parent, before, leaf)
             os.fsync(parent.fd)
             _runtime_source_check(original, leaf, self.resolver)
@@ -1587,9 +1587,14 @@ class Anchor:
                 "request_sha256": digest(caller_raw), "attempt_id": caller["id"]})
             _runtime_account(leaf, "read_bytes", len(caller_raw))
             _runtime_account(leaf, "sha_bytes", len(caller_raw))
+            copied = _HeldCaptureCopy(self, self.recording_work, case_work)
+            copied.acquire(parent, None, {name: copied_state}, {name: copied_sha})
         except BaseException as error:
             failure = error
             self.private_observations["unusable"] = True
+            if copied is not None:
+                copied.close()
+                copied = None
             leaf["failure"] = {"category": type(error).__name__,
                 "errno": getattr(error, "os_errno", getattr(error, "errno", None))}
             if getattr(error, "_scope_signal_cancel", False) or not isinstance(error,
@@ -1604,10 +1609,12 @@ class Anchor:
                 self.private_observations["unusable"] = True
                 leaf["transfer_incomplete"] = True
                 if getattr(error, "_scope_signal_cancel", False) and not getattr(failure, "_scope_signal_cancel", False):
+                    if copied is not None:copied.close()
                     raise
+        return copied
 
     def retain_sudo_companion(self, parent, executable, caller_raw):
-        work, original, case_work, failure, registered = {}, None, None, None, False
+        work, original, case_work, failure, registered, copied = {}, None, None, None, False, None
         try:
             _capture_work_values(work, "sudo-companion")
             self.recording_work.setdefault("local_runtime_leaves", []).append(work)
@@ -1633,7 +1640,7 @@ class Anchor:
             ordinal = len(self.recording_work["local_runtime_leaves"]) - 1
             _require(ordinal < 64, "E_LIMIT")
             name = "runtime-" + str(ordinal).zfill(4) + "-sudo-0000.bin"
-            _copy_runtime_file(parent.fd, name, snapshot, work, self.resolver)
+            copied_state, copied_sha = _copy_runtime_file(parent.fd, name, snapshot, work, self.resolver)
             _refresh_recording_directory(parent, parent_before, work)
             os.fsync(parent.fd)
             _runtime_source_check(original, work, self.resolver)
@@ -1646,9 +1653,14 @@ class Anchor:
                 "sha256": snapshot.acquisition_sha, "errno": None, "request_sha256": digest(caller_raw),
                 "attempt_id": caller["id"]})
             work["read_bytes"] += len(caller_raw)
+            copied = _HeldCaptureCopy(self, self.recording_work, case_work)
+            copied.acquire(parent, None, {name: copied_state}, {name: copied_sha})
         except BaseException as error:
             failure = error
             self.private_observations["unusable"] = True
+            if copied is not None:
+                copied.close()
+                copied = None
             work["failure"] = {"category": type(error).__name__,
                 "errno": getattr(error, "os_errno", getattr(error, "errno", None))}
             if registered:
@@ -1672,7 +1684,9 @@ class Anchor:
                     self.private_observations["unusable"] = True
                     work["transfer_incomplete"] = True
                     if getattr(error, "_scope_signal_cancel", False) and not getattr(failure, "_scope_signal_cancel", False):
+                        if copied is not None:copied.close()
                         raise
+        return copied
 
     def close_runtime_companions(self, primary=None):
         owned, self.runtime_companions = self.runtime_companions, []
@@ -2738,6 +2752,7 @@ class _HeldCaptureCopy:
         self.anchor, self.work, self.case_work = anchor, work, case_work
         self.leaf, self.members, self.runtime_sha256 = {}, {}, {}
         self.directory, self.closed, self.owned = None, False, []
+        self.local_parent = False
         _capture_work_values(self.leaf, "P-capture-holds")
         work.setdefault("P_hold_leaves", []).append(self.leaf)
 
@@ -2773,9 +2788,14 @@ class _HeldCaptureCopy:
 
     def acquire(self, parent, launch, file_states, runtime_hashes):
         try:
-            self.directory = _open_child(parent, launch, True,
-                _store_rule(os.geteuid(), os.getegid(), 0o700, True, self.anchor.resolver), "E_STORE",
-                recording_work=self.leaf, accounting_kind="M")
+            if launch is None:
+                self.local_parent = True
+                self.directory = HeldPath(parent.path, _clone(parent, "E_STORE", self.leaf, "M"),
+                    recording_work=self.leaf, accounting_kind="M")
+            else:
+                self.directory = _open_child(parent, launch, True,
+                    _store_rule(os.geteuid(), os.getegid(), 0o700, True, self.anchor.resolver), "E_STORE",
+                    recording_work=self.leaf, accounting_kind="M")
             self._adopt(self.directory)
             for name, expected in file_states.items():
                 held = _open_child(self.directory, name, False,
@@ -2790,6 +2810,16 @@ class _HeldCaptureCopy:
         except BaseException:
             self.close()
             raise
+
+    def refresh_local_parent(self, parent):
+        _require(self.local_parent and not self.closed and parent.path == self.directory.path, "E_STORE")
+        current = parent.before
+        index = len(self.directory.components) - 1
+        for item in self.owned:
+            before = item.components[index].before
+            _require((before.st_dev, before.st_ino, before.st_uid, before.st_gid, before.st_mode)
+                     == (current.st_dev, current.st_ino, current.st_uid, current.st_gid, current.st_mode), "E_STORE")
+            item.components[index].before = current
 
     def recheck(self):
         if self.closed:return
