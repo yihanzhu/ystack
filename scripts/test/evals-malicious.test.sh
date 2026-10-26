@@ -2383,6 +2383,89 @@ with tempfile.TemporaryDirectory(prefix='ystack-private-accounting-') as tempora
             'no_native_or_source_qualification':True},sort_keys=True))
     finally:c.ANCHOR=original_anchor;installed_hold.close();e._close_capture_completion_owner(owner)
 PY_CAPTURE_ACCOUNTING
+/usr/bin/python3 -I -S -B - "$root" <<'PY_CAPTURE_CANCEL_TAIL'
+import importlib.util,json,os,signal,sys,tempfile,types
+from pathlib import Path
+root=Path(sys.argv[1])
+spec=importlib.util.spec_from_file_location('wm_tail_reader',root/'scope/v1/read-shadow-evidence.py')
+r=importlib.util.module_from_spec(spec);sys.modules[spec.name]=r;spec.loader.exec_module(r);c=r.c
+cancel_code=next(code for code in r.main.__code__.co_consts if isinstance(code,types.CodeType) and code.co_name=='cancel')
+cancel=types.FunctionType(cancel_code,{'InterruptedError':InterruptedError})
+failures=[]
+for label,first,tail in [('close-A-transfer-B',True,'transfer'),('close-A-receipt-B',True,'receipt'),
+        ('transfer-B-only',False,'transfer'),('receipt-B-only',False,'receipt'),('native-and-tail-ordinary',False,'ordinary')]:
+    with tempfile.TemporaryDirectory(prefix='ystack-wm-tail-') as temporary:
+        events=[];close_calls={};held=[];fees={};c._capture_work_values(fees,'leaf')
+        for index in range(2):
+            path=Path(temporary)/str(index);path.write_bytes(b'actual held bytes');path.chmod(0o400)
+            fd=os.open(path,os.O_RDONLY);close_calls[fd]=0
+            item=c.HeldPath(str(path),[c.HeldComponent(fd,None,os.fstat(fd),lambda *_:True,False)])
+            assert item.read(64,'E_STORE',fees)==b'actual held bytes';held.append(item)
+        anchor=types.SimpleNamespace(recording_work={},private_observations={})
+        local=c._capture_work_values(anchor.recording_work,'case')
+        capture=object.__new__(c._HeldCaptureRead);capture.held=held;capture.work=fees;capture.anchor=anchor
+        capture.attempt_id='attempt.tail';capture.transferred=0;capture.transfer_target=(anchor.recording_work,local)
+        original_close=c.HeldPath.close;original_os_close=c.os.close
+        original_transfer=c._capture_transfer_work;original_receipt=c._capture_accounting_receipt
+        previous=signal.getsignal(signal.SIGTERM);state={'close':0,'transfer':0,'receipt':0}
+        native_error=OSError(5,'ordinary native-close failure');tail_error=OSError(9,'ordinary tail failure')
+        def handler(number,frame):
+            try:cancel(number,frame)
+            except InterruptedError as error:events.append(error);raise
+        def interrupt():os.kill(os.getpid(),signal.SIGTERM)
+        def closing_fd(fd):
+            if fd in close_calls:close_calls[fd]+=1
+            return original_os_close(fd)
+        def closing(item):
+            result=original_close(item);state['close']+=1
+            if state['close']==1:
+                if first:interrupt()
+                if tail=='ordinary':raise native_error
+            return result
+        def transferring(source,work,case):
+            result=original_transfer(source,work,case);state['transfer']+=1
+            if tail=='transfer':interrupt()
+            if tail=='ordinary':raise tail_error
+            return result
+        def receipt(actual_anchor):
+            result=original_receipt(actual_anchor);state['receipt']+=1
+            if tail=='receipt':interrupt()
+            return result
+        caught=None
+        try:
+            signal.signal(signal.SIGTERM,handler);c.HeldPath.close=closing;c.os.close=closing_fd
+            c._capture_transfer_work=transferring;c._capture_accounting_receipt=receipt
+            try:capture.close()
+            except BaseException as error:caught=error
+        finally:
+            signal.signal(signal.SIGTERM,previous);c.HeldPath.close=original_close;c.os.close=original_os_close
+            c._capture_transfer_work=original_transfer;c._capture_accounting_receipt=original_receipt
+        assert fees['close_tail_incomplete']
+        secondary=fees['close_tail_failure']
+        assert secondary['stage']==('receipt' if tail=='receipt' else 'transfer')
+        assert secondary['marked_cancel'] is (tail!='ordinary')
+        assert secondary['category']==('OSError' if tail=='ordinary' else 'InterruptedError')
+        assert secondary['primary_category']==('InterruptedError' if first else 'OSError' if tail=='ordinary' else None)
+        if tail=='ordinary':assert secondary['errno']==9 and secondary['primary_errno']==5
+        expected=native_error if tail=='ordinary' else events[0]
+        same=caught is expected
+        assert len(events)==(0 if tail=='ordinary' else 2 if first else 1)
+        assert all(type(error) is InterruptedError and error._scope_signal_cancel for error in events)
+        if first:assert events[0] is not events[1]
+        assert state['close']==2 and state['transfer']==1 and all(count==1 for count in close_calls.values())
+        assert capture.held==[] and all(item.components==[] for item in held)
+        for fd in close_calls:
+            try:os.fstat(fd)
+            except OSError as error:assert error.errno==9
+            else:raise AssertionError('descriptor not closed')
+        assert anchor.recording_work['read_bytes']==fees['read_bytes']==fees['transferred_read_bytes']
+        print(json.dumps({'case':label,'same_first_object':same,'distinct_real_handler_objects':first,
+            'event_count':len(events),'caught_category':type(caught).__name__,'fd_close_counts':close_calls,
+            'actual_calls':state,'source_work':fees,'operation_work':anchor.recording_work,
+            'private_observations':anchor.private_observations},sort_keys=True))
+        if not same:failures.append(label)
+assert not failures,failures
+PY_CAPTURE_CANCEL_TAIL
 /usr/bin/python3 -I -S -B - "$root" <<'PY_SOURCE_CANCEL'
 import importlib.util
 import json

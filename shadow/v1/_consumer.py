@@ -1913,9 +1913,15 @@ class _HeldCaptureRead:
 
     def close(self):
         held, self.held = self.held, []
+        failure = None
         try:
             _close_paths(held)
+        except BaseException as error:
+            failure = error
+            raise
         finally:
+            cancellation = failure if getattr(failure, "_scope_signal_cancel", False) else None
+            stage = "binding"
             try:
                 target = getattr(self, "transfer_target", None)
                 if target is None:
@@ -1924,12 +1930,25 @@ class _HeldCaptureRead:
                     work["accounting_incomplete"] = True
                 else:
                     work, case_work = target
+                stage = "transfer"
                 self.transferred += _capture_transfer_work(self.work, work, case_work)
+                stage = "receipt"
                 _capture_accounting_receipt(self.anchor)
             except Exception as error:
-                self.anchor.private_observations["unusable"] = True
-                if getattr(error, "_scope_signal_cancel", False):
-                    raise
+                if getattr(error, "_scope_signal_cancel", False) and cancellation is None:
+                    cancellation = error
+                try:
+                    self.anchor.private_observations["unusable"] = True
+                    self.work["close_tail_incomplete"] = True
+                    self.work.setdefault("close_tail_failure", {"stage": stage, "category": type(error).__name__,
+                        "errno": getattr(error, "errno", None), "marked_cancel": bool(getattr(error, "_scope_signal_cancel", False)),
+                        "primary_category": None if failure is None else type(failure).__name__,
+                        "primary_errno": getattr(failure, "errno", None)})
+                except Exception as observed:
+                    if getattr(observed, "_scope_signal_cancel", False) and cancellation is None:
+                        cancellation = observed
+                if cancellation is not None and cancellation is not failure:
+                    raise cancellation
 
 
 class _HeldStoreRead:
