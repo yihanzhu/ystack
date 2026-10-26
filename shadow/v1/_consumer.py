@@ -1491,7 +1491,8 @@ class Anchor:
         return copied
 
     def retain_parent_inputs(self, parent, context, caller_raw):
-        work, case_work, failure = {}, None, None
+        work, case_work, failure, copied = {}, None, None, None
+        file_states = {}
         try:
             _capture_work_values(work, "parent-inputs")
             self.recording_work.setdefault("parent_input_leaves", []).append(work)
@@ -1512,7 +1513,7 @@ class Anchor:
             values = (("parent-frame.bin", context.frame_raw), ("helper-build-record.json", records[0]),
                       ("native-dependency-record.json", records[1]))
             for name, value in values:
-                _copy_preparation_document(parent.fd, value, work, self.resolver, name=name)
+                file_states[name] = _copy_preparation_document(parent.fd, value, work, self.resolver, name=name)
             _refresh_recording_directory(parent, before, work)
             os.fsync(parent.fd)
             self.private_observations["parent_inputs"] = {"request_sha256": digest(caller_raw),
@@ -1520,6 +1521,8 @@ class Anchor:
                     "sha256": digest(value)} for name, value in values],
                 "parent_producer_and_record_semantics": "UNKNOWN"}
             work["read_bytes"] += len(caller_raw) + sum(len(value) for _, value in values)
+            copied = _HeldCaptureCopy(self, self.recording_work, case_work)
+            copied.acquire(parent, None, file_states, {})
         except BaseException as error:
             failure = error
             self.private_observations["unusable"] = True
@@ -1529,6 +1532,7 @@ class Anchor:
                     (Refusal, OSError, ValueError, TypeError, MemoryError)):
                 raise
         finally:
+            tail_failure = None
             try:
                 if case_work is not None:
                     _capture_transfer_work(work, self.recording_work, case_work)
@@ -1536,8 +1540,19 @@ class Anchor:
             except Exception as error:
                 self.private_observations["unusable"] = True
                 work["transfer_incomplete"] = True
-                if getattr(error, "_scope_signal_cancel", False) and not getattr(failure, "_scope_signal_cancel", False):
-                    raise
+                tail_failure = error
+            if failure is not None or tail_failure is not None or _capture_work_incomplete(work):
+                self.private_observations["unusable"] = True
+                if copied is not None:
+                    try:copied.close()
+                    except BaseException as error:
+                        if tail_failure is None or (getattr(error, "_scope_signal_cancel", False)
+                                and not getattr(tail_failure, "_scope_signal_cancel", False)):
+                            tail_failure = error
+                    copied = None
+            if getattr(tail_failure, "_scope_signal_cancel", False) and not getattr(failure, "_scope_signal_cancel", False):
+                raise tail_failure
+        return copied
 
     def retain_runtime_acquisition(self, parent, role, original, raw, caller_raw):
         leaf, case_work, failure, copied = {}, None, None, None

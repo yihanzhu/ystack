@@ -145,9 +145,9 @@ shadow_source_rows() {
     'scope/v1/workflow-scope.jq 2d1df5f99b7019c4c41aece4f9fb89b00785ca47f9f8a713b2f43b212481366a 9728 100644' \
     'scripts/core-contract.sh b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 9176 100755' \
     'shadow/v1/_cancel_release.c 00ef369edbed569d50471b97f64aef57591b7afb8d9f25c286bffa5725faf015 55056 100644' \
-    'shadow/v1/_consumer.py 3a824d4157d2bebdf3f4c6d312726ca196eac19d197644c07c1823cd4669191f 239229 100644' \
+    'shadow/v1/_consumer.py 6c0420b582d8df541a3a0019c67ed8bbb970c7584821f45ba74ea3ee512d63f1 240089 100644' \
     'shadow/v1/build-cancel-release.sh be1ad0afd99f72ea73fe52cca63c03381793710c587a82b57b9a38ed87c896d4 6169 100755' \
-    'shadow/v1/enforced-reproduction.py ad5d2f81e336f9e2a752f15d59af3dd24ffdb9004ca73f4e9811efc0ab44bfb2 121039 100755' \
+    'shadow/v1/enforced-reproduction.py e6ae3737054236d3609392474c74fbb0367279230d44a47e255327c1e0aae95c 121120 100755' \
     'shadow/v1/incident-record.jq 9ea6e1ec6556f54887ea6937533157856271aab68c74bda6d18dae1354d2687c 3695 100644' \
     'shadow/v1/qualified-identity.jq 33267bca348ad2b4923a5858b4788a6ca6adf1a1e9f471ee4450d7fe06387071 5343 100644' \
     'shadow/v1/shadow-environments.json 655771163e18384904eeaf2b7f22e3999957a037dce845b7fa6fdff2196ac4c7 1471 100644' \

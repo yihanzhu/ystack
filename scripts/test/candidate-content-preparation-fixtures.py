@@ -3136,6 +3136,128 @@ def raw16_p_acquisitions(root: Path) -> None:
         c._acl_state = acl
     print(json.dumps({'P_original_snapshot_to_recorder': results, 'ordinary_synthetic_runtime_only': True}, sort_keys=True))
 
+def _synthetic_parent_P_context(c, path):
+    import struct
+    helper=c.canonical(['synthetic helper metadata'])
+    dependency=c.canonical({'synthetic dependency metadata':True})
+    native={key:'a'*64 for key in ('source_sha256','build_script_sha256','build_record_sha256',
+        'binary_sha256','python_sha256','dependency_record_sha256')}
+    native.update(binary_path='/fixture/native',binary_size=1,python_path='/fixture/python',
+        python_abi='fixture-abi',loader_mode='rtld-now-local.v1',dependency_record_sha256=c.digest(dependency))
+    body={'helper_source_sha256':c.HELPER_SOURCE_SHA256,'helper_build_record_sha256':c.digest(helper),
+        'helper_executable_sha256':'b'*64,'helper_executable_size':1,'helper_path':'/fixture/helper','native_release':native}
+    raw=c.canonical({'schema_version':2,'kind':'shadow_consumer_parent_context','id':'shadow.parent','body':body})
+    frame=c.PARENT_FRAME_MAGIC+struct.pack('!III',len(raw),len(helper),len(dependency))+raw+helper+dependency
+    path.write_bytes(frame);path.chmod(0o400)
+    return c.capture_parent_context(os.open(path,os.O_RDONLY)),{
+        'parent-frame.bin':frame,'helper-build-record.json':helper,'native-dependency-record.json':dependency}
+
+
+def raw16_parent_P_handoff(root: Path) -> None:
+    import ast
+    import tempfile
+    spec=importlib.util.spec_from_file_location('parent_P_handoff',root/'shadow/v1/enforced-reproduction.py')
+    e=importlib.util.module_from_spec(spec);sys.modules[spec.name]=e;spec.loader.exec_module(e);c=e.c
+    acl=c._acl_state;c._acl_state=lambda *_:([],None) if sys.platform=='darwin' else (None,None)
+    syntax=ast.parse((root/'scope/v1/read-shadow-evidence.py').read_text())
+    main=next(node for node in syntax.body if isinstance(node,ast.FunctionDef) and node.name=='main')
+    handler=next(node for node in main.body if isinstance(node,ast.FunctionDef) and node.name=='cancel')
+    callbacks={};exec(compile(ast.Module(body=[handler],type_ignores=[]),'<actual-cancel>','exec'),callbacks)
+    results=[]
+    try:
+        for case in ('stable','runtime-append','target-drift','parent-mode','parent-inode','transfer-failure','transfer-cancel','close-observer'):
+            with tempfile.TemporaryDirectory(prefix='ystack-parent-P-holds-') as temporary:
+                base=Path(temporary).resolve();base.chmod(0o700);work=base/'work';work.mkdir(mode=0o700)
+                source=base/'synthetic-runtime';raw=b'never executed runtime';source.write_bytes(raw);source.chmod(0o400)
+                context,values=_synthetic_parent_P_context(c,base/'synthetic-frame')
+                holder=e.stable_directory(work);anchor=c.Anchor({},b'',[],{},('',[]),('',[]),None)
+                request=c.canonical({'kind':'shadow_write_request','id':'parent.held.fixture'})
+                transfer,acquire,observe=c._capture_transfer_work,c._HeldCaptureCopy.acquire,c._capture_observe
+                acquired,fired,cancellations=[],[],[]
+                def acquiring(self,*args,**kwargs):
+                    value=acquire(self,*args,**kwargs);acquired.append(self);return value
+                def transferring(leaf,*args,**kwargs):
+                    if case.startswith('transfer-') and anchor.recording_work.get('parent_input_leaves') and leaf is anchor.recording_work['parent_input_leaves'][-1] and not fired:
+                        fired.append(case)
+                        if case=='transfer-cancel':
+                            try:callbacks['cancel'](15,None)
+                            except InterruptedError as error:cancellations.append(error);raise
+                        raise MemoryError('controlled parent original final transfer')
+                    return transfer(leaf,*args,**kwargs)
+                def observing(leaf,kind,site,value,*args,**kwargs):
+                    if case=='close-observer' and site=='held-close' and not fired:
+                        fired.append(site);raise MemoryError('controlled metadata P close observer')
+                    return observe(leaf,kind,site,value,*args,**kwargs)
+                runtime_source=None;caught=None
+                try:
+                    c._capture_transfer_work,c._HeldCaptureCopy.acquire=transferring,acquiring
+                    try:copied=holder._retain_parent_inputs(anchor,context,request)
+                    except InterruptedError as error:copied=None;caught=error
+                    finally:c._capture_transfer_work,c._HeldCaptureCopy.acquire=transfer,acquire
+                    assert len(acquired)==1
+                    owner=acquired[0]
+                    if case.startswith('transfer-'):
+                        assert copied is None and owner.closed and not owner.owned and not holder.runtime_copies, 'parent-P failed tail must close owner'
+                        if case=='transfer-cancel':assert len(cancellations)==1 and caught is cancellations[0]
+                        results.append({'case':case,'P_work':anchor.recording_work});continue
+                    assert copied is owner is holder.runtime_copies[0] and not copied.closed
+                    assert copied.runtime_sha256=={} and set(copied.members)==set(values)
+                    assert not anchor.recording_work['parent_input_leaves'][0].get('runtime')
+                    assert anchor.private_observations['parent_inputs']['parent_producer_and_record_semantics']=='UNKNOWN'
+                    extra=0
+                    for name,item in copied.members.items():
+                        assert os.pread(item.fd,len(values[name]),0)==values[name];extra+=len(values[name])
+                    if case=='runtime-append':
+                        runtime_source=c._open_held(str(source),False,c._store_rule(os.geteuid(),os.getegid(),0o400,False),'E_STORE')
+                        holder._retain_runtime(anchor,'python',runtime_source,raw,request)
+                        anchor.seal_local_runtime(holder._recording_parent());runtime_source.close()
+                    if case=='target-drift':
+                        target=work/'helper-build-record.json';target.chmod(0o600)
+                        with target.open('r+b') as stream:stream.write(b'!')
+                        target.chmod(0o400)
+                    if case=='parent-mode':work.chmod(0o750)
+                    if case=='parent-inode':work.rename(base/'original-work');work.mkdir(mode=0o700)
+                    c._capture_observe=observing
+                    holder.close_runtime_copies();holder.close_runtime_copies()
+                    assert copied.closed and not holder.runtime_copies
+                    assert bool(anchor.private_observations.get('unusable'))==(case in ('target-drift','parent-mode','parent-inode','close-observer'))
+                    results.append({'case':case,'P_work':anchor.recording_work,'P_leaf':copied.leaf,
+                        'extra_fixture_P_read_bytes':extra,'real_parent_or_record_semantics':'UNKNOWN'})
+                finally:
+                    c._capture_transfer_work,c._HeldCaptureCopy.acquire,c._capture_observe=transfer,acquire,observe
+                    holder.close();anchor.close()
+                    if runtime_source is not None:runtime_source.close()
+    finally:c._acl_state=acl
+    print(json.dumps({'actual_parent_metadata_P_handoff':results},sort_keys=True))
+
+
+def raw16_parent_P_Hcopy(root: Path) -> None:
+    body=(root/'scripts/test/evals-malicious.test.sh').read_text().split("<<'PY_RUNTIME_CONSUMER'\n",1)[1].split('\nPY_RUNTIME_CONSUMER',1)[0]
+    prefix=body.split('        copied_inventory.close();copied_inventory.close()\n',1)[0]
+    footer=body[body.rfind('finally:\n    if copied_inventory'):]
+    line="        source=base/'kernel';source_raw=b'ordinary immutable runtime bytes'*4097;source.write_bytes(source_raw);source.chmod(0o400)\n"
+    assert prefix.count(line)==1;prefix=prefix.replace(line,line+"        context,metadata=make_context(c,base/'synthetic-parent-frame')\n")
+    edge="        copied_inventory=native.copy_capture(parent,request,'reproduction',anchor.recording_work)\n"
+    setup="""        holder=e.StableDirectory(parent)
+        result=holder._retain_parent_inputs(anchor,context,c.canonical({'kind':'shadow_write_request','id':'parent.hcopy.fixture'}))
+        assert result is holder.runtime_copies[0] and result.runtime_sha256=={}
+"""
+    prefix=prefix.replace(edge,setup+edge+'        holder._refresh_runtime_parents()\n')
+    checks="""        result.recheck()
+        assert not anchor.private_observations.get('unusable'), 'parent-P after Hcopy must stay valid'
+        e._seal_capture_recording(anchor,parent,None,copied_inventory,holder)
+        assert result.closed and not holder.runtime_copies
+        assert anchor.private_observations.get('recording_sealed') is not True
+        print(json.dumps({'actual_parent_P_Hcopy_seal':True,'P_work':anchor.recording_work,
+            'runtime_metadata_not_conflated':result.runtime_sha256=={},'real_parent_semantics':'UNKNOWN'}))
+"""
+    namespace={'make_context':_synthetic_parent_P_context};argv=sys.argv;sys.argv=['parent-P-Hcopy',str(root)]
+    try:exec(compile(prefix+checks+footer,'<actual-parent-P-Hcopy>','exec'),namespace)
+    finally:
+        sys.argv=argv
+        if namespace.get('holder') is not None:namespace['holder'].close()
+
+
 def raw16_parent_carrier(root: Path) -> None:
     import struct
     import tempfile

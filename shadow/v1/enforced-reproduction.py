@@ -402,7 +402,9 @@ class StableDirectory:
 
     def _retain_parent_inputs(self, anchor, context, caller_raw):
         try:
-            anchor.retain_parent_inputs(self._recording_parent(), context, caller_raw)
+            copied = anchor.retain_parent_inputs(self._recording_parent(), context, caller_raw)
+            self._own_runtime(anchor, copied)
+            return copied
         except (Refusal, c.Refusal, OSError, ValueError, MemoryError) as error:
             anchor.private_observations["unusable"] = True
             if getattr(error, "_scope_signal_cancel", False):
