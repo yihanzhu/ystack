@@ -79,15 +79,45 @@ for field,value in [('response_status',500),('page_index',1),('output_cursor','l
     records=framed(pages);capture=n.document(records[0][1]);capture['pages'][0][field]=value;records[0]=(b'capture.json',n.canonical(capture));reject(n._KillNormalizer.captured,records,request)
 spec=importlib.util.spec_from_file_location('gate_generator',root/'scope/v1/generate-gate-evidence.py')
 g=importlib.util.module_from_spec(spec);sys.modules[spec.name]=g;spec.loader.exec_module(g)
+def verifier_observation_value_controls():
+    c=g.c
+    def original_inline(environment_id,registry,accepted,target_repository_id,verifier_sha):
+        return c.canonical({"schema_version":1,"kind":"sandbox_verifier_observation",
+            "id":"sandbox.observation.verifier","body":{
+                "environment_id":environment_id,"environment_entry_sha256":c.digest(c.canonical(registry[0])),
+                "accepted_set_sha256":accepted[0],"target_repository_id":target_repository_id,"verifier_sha256":verifier_sha}})
+    for entry in (dict(environment_id='environment.control',target_repository_id='repository.control',identities={'verifier':['a'*64]}),
+                  dict(target_repository_id='repository.\u00e9',environment_id='environment.control',identities={'verifier':['b'*64]})):
+        args=('environment.control',entry,'c'*64,'repository.control','d'*64)
+        actual=c._verifier_observation_values(*args)
+        check(actual==original_inline(args[0],[entry],(args[2],[]),args[3],args[4]))
+        check(c._json(actual,c.DOCUMENT_LIMIT,'E_STORE')['body']['environment_entry_sha256']==c.digest(c.canonical(entry)))
+    args=('environment.control',{'invalid':float('nan')},'c'*64,'repository.control','d'*64)
+    errors=[]
+    for fn in (lambda:c._verifier_observation_values(*args),lambda:original_inline(args[0],[args[1]],(args[2],[]),args[3],args[4])):
+        try:fn()
+        except ValueError as error:errors.append((type(error),error.args))
+        else:raise AssertionError('noncanonical inline input accepted')
+    check(len(errors)==2 and errors[0]==errors[1])
+verifier_observation_value_controls()
 def source_configuration_input_controls():
-    import os,tempfile,types
+    import os,tempfile,types,traceback
     c=g.c
     original_anchor,original_rule=c.ANCHOR,c._root_rule
     counts=[]
+    global source_configuration_P_work
+    source_configuration_P_work=[]
+    fixture_resolver=c._DarwinUUIDResolver() if sys.platform=='darwin' else None
     def document(kind,body):return n.canonical(env(kind,'source.control',body))
-    for mode,fault in [('coverage-read','ok'),('kill-register-read','ok'),('coverage-read','source-bytes'),('coverage-read','bad-config'),('coverage-read','publish-memory'),('coverage-read','publish-signal'),('coverage-read','publish-keyboard'),('coverage-read','report-memory'),('coverage-read','map-build'),('coverage-read','report-signal'),('coverage-read','report-keyboard'),('coverage-read','close-error'),('coverage-read','cancel-close-error')]:
+    for mode,fault in [('coverage-read','ok'),('kill-register-read','ok'),('coverage-read','source-bytes'),('coverage-read','bad-config'),('coverage-read','publish-memory'),('coverage-read','publish-signal'),('coverage-read','publish-keyboard'),('coverage-read','report-memory'),('coverage-read','map-build'),('coverage-read','report-signal'),('coverage-read','report-keyboard'),('coverage-read','close-error'),('coverage-read','cancel-close-error'),('coverage-read','p-copy'),('coverage-read','p-mismatch'),('coverage-read','p-register'),('coverage-read','p-close'),('coverage-read','package-memory'),('coverage-read','package-signal'),('coverage-read','p-close-signal'),('coverage-read','p-close-keyboard'),('coverage-read','p-observer-ordinary'),('coverage-read','p-observer-marked'),('coverage-read','p-helper-partial'),('coverage-read','p-reader-register-close-keyboard')]:
         with tempfile.TemporaryDirectory(prefix='source-config-owner-') as tmp:
-            directory=pathlib.Path(tmp).resolve();prefix='coverage-source' if mode=='coverage-read' else 'kill-register-source'
+            directory=pathlib.Path(tmp).resolve()
+            if fault.startswith('p-'):
+                os.chown(directory,-1,os.getegid());(directory/'P').mkdir(mode=0o700);os.chown(directory/'P',-1,os.getegid())
+                prerequisite=[(str(item),item.stat()) for item in (directory,directory/'P')]
+                check(all(state.st_uid==os.geteuid() and state.st_gid==os.getegid() and g.stat.S_IMODE(state.st_mode)==0o700 for _path,state in prerequisite))
+                source_configuration_P_work.append(('fixture-prerequisite',[(name,dict(uid=state.st_uid,gid=state.st_gid,mode=oct(g.stat.S_IMODE(state.st_mode)))) for name,state in prerequisite]))
+            prefix='coverage-source' if mode=='coverage-read' else 'kill-register-source'
             operation=n.OPERATION if mode=='coverage-read' else n.KILL_OPERATION
             families=n.FAMILIES if mode=='coverage-read' else n.KILL_FAMILIES
             normalizer=(root/'sandbox/v1/coverage-source.py').read_bytes()
@@ -115,7 +145,7 @@ def source_configuration_input_controls():
                 path=directory/name;path.write_bytes(raw);path.chmod(0o500 if name=='collector.py' else 0o400)
             rule=lambda *_args:True
             c.ANCHOR=str(directory);c._root_rule=lambda _resolver:rule
-            anchor=types.SimpleNamespace(config_raw=values['host-config.json'],config=dict(store_id='store.control',principal_uid=os.geteuid(),consumer_gid=os.getegid()),resolver=None,held=[])
+            anchor=c.Anchor(config_raw=values['host-config.json'],config=dict(store_id='store.control',principal_uid=os.geteuid(),consumer_gid=os.getegid()),resolver=fixture_resolver,held=[],installed={},registry=('',[]),accepted=('',[]))
             opened=[];reads=[];native_read=c.HeldPath.read
             def observed_read(item,*args,**kwargs):
                 raw=native_read(item,*args,**kwargs);reads.append((item,raw));tracked.update(component.fd for component in item.components);return raw
@@ -126,7 +156,7 @@ def source_configuration_input_controls():
                 native_close(fd)
                 if fd in tracked:closed[fd]=closed.get(fd,0)+1
             failure=MemoryError('source input map publication')
-            if fault in ('publish-signal','cancel-close-error'):failure=InterruptedError('source input map publication');failure._scope_signal_cancel=True
+            if fault in ('publish-signal','cancel-close-error','package-signal'):failure=InterruptedError('source input map publication');failure._scope_signal_cancel=True
             if fault=='publish-keyboard':failure=KeyboardInterrupt('source input map publication')
             reporting=InterruptedError('source input report signal') if fault=='report-signal' else KeyboardInterrupt('source input report keyboard')
             if fault=='report-signal':reporting._scope_signal_cancel=True
@@ -135,11 +165,12 @@ def source_configuration_input_controls():
                     if fault=='map-build' and name=='config_raw' and 'hashes' in object.__getattribute__(self,'__dict__'):raise failure
                     return object.__getattribute__(self,name)
                 def __setattr__(self,name,value):
+                    if name=='source_package_document' and fault in ('package-memory','package-signal'):raise failure
                     if name=='source_inputs' and (fault.startswith(('publish-','report-')) or fault=='cancel-close-error'):raise failure
                     if name=='source_inputs_error' and fault=='report-memory':raise MemoryError('source input error report')
                     if name=='source_inputs_error' and fault in ('report-signal','report-keyboard'):raise reporting
                     object.__setattr__(self,name,value)
-            configuration=None;all_components=[];caught=None
+            configuration=None;all_components=[];caught=None;observed_errors=[];helper_deltas=[]
             try:
                 for name,directory_flag in [(None,True),('host-config.json',False),('host-supervisor.py',False)]:
                     item=c._open_held(str(directory if name is None else directory/name),directory_flag,rule,'E_CONFIG');anchor.held.append(item)
@@ -149,18 +180,18 @@ def source_configuration_input_controls():
                 def cancelled_close(items):original_close(items);raise closing
                 if fault=='cancel-close-error':c._close_paths=cancelled_close
                 try:
-                    try:configuration=Configuration(anchor,mode)
+                    try:configuration=(c._CoverageConfiguration if fault.startswith('p-') else Configuration)(anchor,mode)
                     except BaseException as error:caught=error
                 finally:c._close_paths=original_close
                 if fault in ('source-bytes','bad-config'):
                     check(caught is not None and configuration is None)
-                elif fault in ('publish-signal','publish-keyboard','report-signal','report-keyboard','cancel-close-error'):
+                elif fault in ('publish-signal','publish-keyboard','report-signal','report-keyboard','cancel-close-error','package-signal'):
                     check(caught is (reporting if fault.startswith('report-') else failure) and configuration is None)
                     if fault=='cancel-close-error':check(caught.__cause__ is closing)
                 else:
                     check(caught is None and configuration is not None)
                     all_components=[component for held in configuration.held for component in held.components]
-                    if fault in ('publish-memory','report-memory','map-build'):
+                    if fault in ('publish-memory','report-memory','map-build','package-memory'):
                         check(configuration.source_inputs is None and configuration.source_inputs_unusable)
                         check(configuration.source_inputs_error is (None if fault=='report-memory' else failure))
                     else:
@@ -172,6 +203,113 @@ def source_configuration_input_controls():
                             check(held in anchor.held or held in configuration.held)
                             if key!='host':check(any(item is held and seen is raw for item,seen in reads))
                         check(configuration.source_inputs['host'][0] is anchor.config_raw)
+                    if fault.startswith('p-'):
+                        parent=c._open_held(str(directory/'P'),True,c._store_rule(os.geteuid(),os.getegid(),0o700,True,fixture_resolver),"E_STORE")
+                        tracked.update(component.fd for component in parent.components)
+                        source=c._HeldCoverageRead.__new__(c._HeldCoverageRead)
+                        source.anchor=anchor;source.configuration=configuration;source.held=[configuration.held[0]]
+                        source.capture=types.SimpleNamespace(request_raw=b'{}\n');source.snapshots={'payload/request.json':b'{}\n'}
+                        c._capture_work_values(anchor.recording_work,'control')
+                        copied=None;original_acquire=c._HeldSourceConfigurationCopy._adopt;close_copy=c._close_capture_copy
+                        publication=MemoryError('physical P registration')
+                        if fault=='p-mismatch':
+                            raw,held=configuration.source_inputs['normalizer'];configuration.source_inputs['normalizer']=(raw[:-1]+b' ',held)
+                        # The original _adopt method owns compensation. Fault its actual owned.append seam.
+                        class FailedOwned(list):
+                            def append(self,held):
+                                if held.path.endswith('source-host.json'):raise publication
+                                super().append(held)
+                        def observed_adopt(value,held):
+                            tracked.update(component.fd for component in held.components)
+                            return original_acquire(value,held)
+                        c._HeldSourceConfigurationCopy._adopt=observed_adopt
+                        original_init=c._HeldSourceConfigurationCopy.__init__
+                        def init_failed(value,*args):original_init(value,*args);value.owned=FailedOwned(value.owned)
+                        if fault=='p-register':c._HeldSourceConfigurationCopy.__init__=init_failed
+                        directory_error=OSError(5,'physical P directory close after actual close')
+                        owned_error=InterruptedError('physical P held-close signal') if fault=='p-close-signal' else KeyboardInterrupt('physical P held-close keyboard')
+                        if fault=='p-close-signal':owned_error._scope_signal_cancel=True
+                        injected=[]
+                        def directory_close(fd,work,case,site,primary):
+                            if site=='source-configuration-directory':tracked.add(fd)
+                            close_copy(fd,work,case,site,primary)
+                            if site=='source-configuration-directory' and fault=='p-close':raise directory_error
+                            if site=='source-configuration-held-close' and fault in ('p-close-signal','p-close-keyboard','p-reader-register-close-keyboard') and not injected:
+                                injected.append(fd);raise owned_error
+                        if fault in ('p-close','p-close-signal','p-close-keyboard','p-reader-register-close-keyboard'):c._close_capture_copy=directory_close
+                        helper_original=c._copy_preparation_document;observe_original=c._capture_observe
+                        helper_deltas=[];helper_error=OSError(5,'helper failed after actual physical copy')
+                        observer_error=MemoryError('close observer failed after actual observation')
+                        if fault=='p-observer-marked':observer_error=InterruptedError('close observer marked cancellation');observer_error._scope_signal_cancel=True
+                        observer_seen=[]
+                        def observe_failure(work,kind,site,value,case_work=None):
+                            observe_original(work,kind,site,value,case_work)
+                            if site=='close' and value.get('site')=='preparation-capture-writer' and not observer_seen:
+                                observer_seen.append(value);raise observer_error
+                        if fault in ('p-observer-ordinary','p-observer-marked'):c._capture_observe=observe_failure
+                        def measured_helper(directory_fd,raw,work,resolver,*,name='capture.json'):
+                            prior=work['read_bytes'];classified=work.get('accounting',{}).get('M',{}).get('read_bytes',0)
+                            try:
+                                result=helper_original(directory_fd,raw,work,resolver,name=name)
+                                if fault=='p-helper-partial':raise helper_error
+                                return result
+                            finally:helper_deltas.append((work['read_bytes']-prior,work.get('accounting',{}).get('M',{}).get('read_bytes',0)-classified))
+                        c._copy_preparation_document=measured_helper
+                        registration=MemoryError('Reader source_copies append')
+                        class FailedReaderCopies(list):
+                            def append(self,value):raise registration
+                        reader_registration=fault=='p-reader-register-close-keyboard'
+                        try:
+                            if reader_registration:
+                                reader=g.r._Reader.__new__(g.r._Reader);reader.source_copies=FailedReaderCopies();reader.anchor=anchor;reader.owned=[configuration,source]
+                                anchor.scope_runtime_owner=reader
+                                actual=reader._retain_source_configuration(source,parent,0)
+                                check(actual is owned_error)
+                                observed_errors.append((type(actual).__name__,getattr(actual,'errno',None),traceback.format_exception(type(actual),actual,actual.__traceback__)))
+                                check(not reader.source_copies and all(count==1 for count in closed.values()))
+                            else:
+                                try:copied=anchor.retain_source_configuration(parent,source,0)
+                                except BaseException as error:
+                                    observed_errors.append((type(error).__name__,getattr(error,"errno",None),traceback.format_exception(type(error),error,error.__traceback__)))
+                                    check(fault!='p-copy')
+                                    if fault=='p-register':check(error is publication)
+                                    if fault=='p-close':check(error is directory_error)
+                                    if fault in ('p-observer-ordinary','p-observer-marked'):check(error is observer_error)
+                                    if fault=='p-helper-partial':check(error is helper_error)
+                                else:
+                                    check(fault in ('p-copy','p-close-signal','p-close-keyboard') and copied is not None)
+                                    check(copied.source_configuration is configuration and copied.source_configuration_source is source)
+                                    check(copied.source_configuration_request_raw is source.capture.request_raw and copied.source_configuration_operation==mode)
+                                    keys={'host':'source-host.json','config':'source-config.json','accepted':'source-accepted.json','package':'source-package.json','supervisor':'source-supervisor.py','normalizer':'source-normalizer.py'}
+                                    check(set(copied.members)==set(keys.values()))
+                                    for key,name in keys.items():
+                                        raw,original=configuration.source_inputs[key];held=copied.members[name]
+                                        check((held.before.st_dev,held.before.st_ino)!=(original.before.st_dev,original.before.st_ino))
+                                        check(held.read(c.EXECUTABLE_LIMIT,'E_STORE')==raw and copied.source_configuration_hashes[key]==n.digest(raw))
+                                    tracked.update(component.fd for held in copied.owned for component in held.components)
+                                    reader=g.r._Reader.__new__(g.r._Reader);reader.source_copies=[]
+                                    reader._own_source_copy(copied,parent)
+                                    reader._recheck_source_copies(parent)
+                                    try:reader._close_source_copies()
+                                    except BaseException as error:
+                                        observed_errors.append((type(error).__name__,getattr(error,'errno',None),traceback.format_exception(type(error),error,error.__traceback__)))
+                                        check(fault in ('p-close-signal','p-close-keyboard') and error is owned_error)
+                                    else:check(fault=='p-copy')
+                                    reader._close_source_copies()
+                                    check(copied.closed and not copied.owned and not reader.source_copies)
+                            if fault=='p-copy':
+                                check(anchor.recording_work['read_bytes']==anchor.recording_work['accounting']['M']['read_bytes'])
+                                leaf=anchor.recording_work['source_configuration_leaves'][0]
+                                close_rows=[row for row in leaf['accounting_rows'] if row['site']=='close' and row['value'].get('site') in ('preparation-capture-writer','preparation-document-close')]
+                                check(len(close_rows)==12 and len(helper_deltas)==6 and all(0<=classified<=total for total,classified in helper_deltas))
+                            if fault in ('p-observer-ordinary','p-observer-marked','p-helper-partial'):
+                                check(c._capture_work_incomplete(anchor.recording_work['source_configuration_leaves'][0]))
+                            parent.recheck('E_STORE');configuration.recheck()
+                        finally:
+                            c._HeldSourceConfigurationCopy.__init__=original_init;c._HeldSourceConfigurationCopy._adopt=original_acquire;c._close_capture_copy=close_copy
+                            c._copy_preparation_document=helper_original;c._capture_observe=observe_original
+                            if copied is not None:copied.close()
+                            parent.close()
                     before=len(reads);configuration.recheck();check(len(reads)==before+len(configuration.held))
                     if fault=='close-error':
                         original_close=c._close_paths;closing=OSError(5,'original configuration close')
@@ -188,10 +326,20 @@ def source_configuration_input_controls():
                 check(all(not item.components for item,_raw in reads if item not in anchor.held))
                 counts.append((mode,fault,len(reads),sum(len(raw) for _item,raw in reads)))
             finally:
+                primary=sys.exc_info()[1]
                 c.HeldPath.read=native_read
-                if configuration is not None:configuration.close()
-                try:c._close_paths(anchor.held)
-                finally:c.os.close=native_close;c.ANCHOR=original_anchor;c._root_rule=original_rule
+                try:
+                    if configuration is not None:configuration.close()
+                    c._close_paths(anchor.held)
+                finally:
+                    secondary=sys.exc_info()[1]
+                    c.os.close=native_close;c.ANCHOR=original_anchor;c._root_rule=original_rule
+                    source_configuration_P_work.append(dict(case=fault,work=anchor.recording_work,
+                        observed_reads=len(reads),observed_read_bytes=sum(len(raw) for _held,raw in reads),
+                        tracked=sorted(tracked),closed=closed,errors=observed_errors,helper_deltas=helper_deltas,
+                        primary=None if primary is None else traceback.format_exception(type(primary),primary,primary.__traceback__),
+                        secondary=None if secondary is None or secondary is primary else traceback.format_exception(type(secondary),secondary,secondary.__traceback__),
+                        full_fees='UNKNOWN'))
                 check(set(closed)==tracked and all(count==1 for count in closed.values()))
     print('SOURCE_CONFIGURATION_CONTROLS',counts,'full_cost_UNKNOWN root_ACL_native_NOTRUN')
 source_configuration_input_controls()

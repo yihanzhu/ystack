@@ -12,7 +12,7 @@ import sys
 
 class _CalculationRefused(Exception):
     def observation(self, case_id):
-        return {"case_id": case_id, "disposition": "rejected", "error_token": "E_REPLAY",
+        return {"case_id": case_id, "disposition": "rejected", "error_token": {"state": "present", "value": "E_REPLAY"},
                 "invariants": {"state": "absent"}, "recompute_mismatches": []}
 
 
@@ -376,6 +376,8 @@ def _host_process_values(runtime_root, config, start_raw, raw_host, raw_clocks,
         "malicious_host_process_values", Path(runtime_root) / "sandbox/v1/host-supervisor.py")
     host = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(host)
+    (startup_limit, hardstop_limit, sigkill_limit, poll_interval, start_limit,
+     export_limit, _storage_limit, _payload_limit) = host._host_deadline_defaults_values()
     if (type(raw_host) is not dict or set(raw_host) != {"process", "driver_rest", "signals"}
             or type(raw_clocks) is not dict or set(raw_clocks) != {"wall", "monotonic"}
             or any(type(raw_host[name]) is not list for name in raw_host)
@@ -573,7 +575,7 @@ def _host_process_values(runtime_root, config, start_raw, raw_host, raw_clocks,
         raise ValueError("host admission clock mismatch")
 
     def startup_status():
-        return "exceeded" if (mono("1503") - admission_mono) * 1000 > 10000 else "met"
+        return host._control_deadline_values((mono("1503") - admission_mono) * 1000, start_limit)
 
     def finish(run):
         if process_at != len(rows) or rest_at != len(raw_host["driver_rest"]):
@@ -594,19 +596,16 @@ def _host_process_values(runtime_root, config, start_raw, raw_host, raw_clocks,
         return finish(host._stub_run_values(status, wall("2440")))
 
     def calculate():
-        if mono("1516") - admission_mono >= 58.0:
+        if host._abandonment_values(mono("1516") - admission_mono, sigkill_limit):
             return stub()
         if process_at == len(rows):
             return stub()
         rc, out = driver("argv")
-        if rc != 0:
+        parsed = host._driver_argv_result_values(rc, out)
+        if parsed is None or parsed[0][0] != config["runtime"]["vfkit"]:
             return stub()
-        # The fixed producer's exact bytes were checked inside driver().
-        parsed = host.json.loads(out)
-        if parsed["argv"][0] != config["runtime"]["vfkit"]:
-            return stub()
-        stopped_exit_status = parsed["stopped_exit_status"]
-        if mono("1516") - admission_mono >= 58.0:
+        stopped_exit_status = parsed[1]
+        if host._abandonment_values(mono("1516") - admission_mono, sigkill_limit):
             return stub()
         if process_at == len(rows):
             return stub()
@@ -636,23 +635,20 @@ def _host_process_values(runtime_root, config, start_raw, raw_host, raw_clocks,
 
         def bounded(operation):
             elapsed = mono("1758") - admission_mono
-            if elapsed >= 58.0:
+            if host._abandonment_values(elapsed, sigkill_limit):
                 return None, True
-            budget = 58.0 - elapsed
-            if elapsed < 50.0:
-                budget = min(budget, 50.0 - elapsed)
-            budget = max(0.01, min(2.0, budget))
+            budget = host._driver_budget_remaining_values(elapsed, sigkill_limit)
+            if host._driver_budget_before_hardstop_values(elapsed, hardstop_limit):
+                budget = host._driver_budget_hardstop_values(budget, elapsed, hardstop_limit)
+            budget = host._driver_budget_bound_values(budget)
             status, out = driver(operation, budget)
             if operation == "stop":
-                return status == 0, False
-            if status != 0:
-                return "error", False
-            text = out.decode("utf-8", "replace").strip()
-            return text if text in ("running", "stopped", "error") else "error", False
+                return host._driver_stop_result_values(status), False
+            return host._driver_state_result_values(status, out), False
 
         while True:
             state, action = host._host_step(state, {"kind": "clock", "cancelled": False,
-                "elapsed": mono("1974") - admission_mono, "sigkill": 58.0, "hardstop": 50.0})
+                "elapsed": mono("1974") - admission_mono, "sigkill": sigkill_limit, "hardstop": hardstop_limit})
             if action == "kill":
                 kill()
                 break
@@ -674,28 +670,26 @@ def _host_process_values(runtime_root, config, start_raw, raw_host, raw_clocks,
                 break
             returncode = polled("run_vm.poll")
             primitive = {"kind": "poll", "state": value, "since_spawn": since_spawn,
-                "startup": 10.0, "exit_code": returncode, "stopped_exit_status": stopped_exit_status,
+                "startup": startup_limit, "exit_code": returncode, "stopped_exit_status": stopped_exit_status,
                 "rechecked": False}
             state, action = host._host_step(state, primitive)
             if action == "recheck":
-                budget = min(0.2, max(0.0, 58.0 - (mono("2045") - admission_mono)))
+                budget = host._recheck_budget_values(sigkill_limit, mono("2045") - admission_mono)
                 deadline = mono("2046") + budget
                 while returncode is None and mono("2047") < deadline:
                     returncode = polled("run_vm.recheck-poll")
                 state, action = host._host_step(state, {**primitive, "exit_code": returncode, "rechecked": True})
             if returncode is not None:
                 break
-            remaining = 0.1
-            for deadline in (50.0, 58.0):
-                left = deadline - (mono("2069") - admission_mono)
-                if left > 0:
-                    remaining = min(remaining, left)
+            remaining = poll_interval
+            for deadline in (hardstop_limit, sigkill_limit):
+                remaining = host._poll_remaining_values(remaining, deadline, mono("2069") - admission_mono)
 
         reaped = False
         if state["escalated_sigkill"]:
             terminated_at, end_mono = wall("2088"), mono("2089")
         else:
-            abandon_mono = admission_mono + 58.0
+            abandon_mono = admission_mono + sigkill_limit
             if abandon_mono - mono("2101") > 0:
                 value, timed_out = waited("run_vm.wait")
                 if returncode is not None and (timed_out or value != returncode):
@@ -756,7 +750,7 @@ def _host_process_values(runtime_root, config, start_raw, raw_host, raw_clocks,
                         records, guest_capture = host._guest_capture_values(records)
                     except host.FrameError:
                         records = None
-            if mono("2195") - began > 5.0:
+            if host._elapsed_deadline_values(mono("2195") - began, export_limit):
                 control_deadline = "exceeded"
             validated = host.validate_export(records, plan_sha256)
         run = host._run_result_values(host._export_values(validated), state["tree_terminated"], hard_stop,
@@ -770,6 +764,36 @@ def _host_process_values(runtime_root, config, start_raw, raw_host, raw_clocks,
         return calculate()
     except _OuterRunFailure:
         return stub()
+
+
+
+def _host_finalization_values(runtime_root, run, consumed):
+    import math
+    spec = importlib.util.spec_from_file_location(
+        "malicious_host_finalization_values", Path(runtime_root) / "sandbox/v1/host-supervisor.py")
+    host = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(host)
+    *_other_limits, storage_limit, payload_limit = host._host_deadline_defaults_values()
+    _seed_require(type(run) is dict and type(consumed) is dict)
+    rows = consumed["monotonic_remaining"]
+    sites = ("2882", "2885", "2891", "2895")
+    _seed_require(type(rows) is list and len(rows) == len(sites)
+        and not consumed["wall_remaining"])
+    values = []
+    for row, site in zip(rows, sites):
+        _seed_require(type(row) is dict and set(row) == {"site", "value"}
+            and row["site"] == "sandbox/v1/host-supervisor.py:" + site + ":0"
+            and type(row["value"]) is str and len(row["value"]) == 16
+            and all(char in "0123456789abcdef" for char in row["value"]))
+        value = struct.unpack(">d", bytes.fromhex(row["value"]))[0]
+        _seed_require(math.isfinite(value) and value >= 0 and (not values or value >= values[-1]))
+        values.append(value)
+    result = dict(run)
+    if host._elapsed_deadline_values(values[1] - values[0], storage_limit):
+        result["control_deadline"] = "exceeded"
+    if host._elapsed_deadline_values(values[3] - values[2], payload_limit):
+        result["control_deadline"] = "exceeded"
+    return result
 
 
 def _host_stub_values(runtime_root, control_deadline, terminated_at):
@@ -1164,6 +1188,9 @@ def _git_input_path(path):
     return path
 
 
+_SURFACE_INPUTS = ("surface/planted-text.bin", "surface/unread-forge.bin")
+
+
 _TRIAL_DOCUMENTS = frozenset({"reproduction/claim.json", "reproduction/duty-evaluation.json",
     "reproduction/materialization-input.json", "reproduction/qualified-identity.json",
     "write/request-input/materialization-input.json", "write/request-input/incident.json",
@@ -1203,6 +1230,9 @@ def _S_inventory_core_values(case_id, files, semantic, expected, originals, occu
                 _git_input_path(member[4:])
                 _seed_require(name.startswith("original-git-") and name.endswith(".bin")
                     and fact["kind"] == "raw" and fact["size_bytes"] <= 64 << 20)
+            elif member in _SURFACE_INPUTS:
+                _seed_require(name == "original-" + member.replace("/", "-")
+                    and fact["kind"] == "raw" and fact["size_bytes"] <= 1 << 20)
             elif member in _TRIAL_DOCUMENTS:
                 _seed_require(name.startswith("original-document-") and name.endswith(".json")
                     and fact["kind"] == "M" and fact["size_bytes"] <= (
@@ -1584,7 +1614,10 @@ class _SeedAssembly:
         _seed_require(len({id(item) for item in carriers}) == len(carriers))
         facts, bindings = [], []
         for index, copied in enumerate(carriers):
-            _seed_require(type(copied) is owner._HeldCaptureCopy and copied.anchor is native.anchor
+            configuration_copy = (phase in {"kill", "coverage"}
+                and type(copied) is getattr(owner, "_HeldSourceConfigurationCopy", None))
+            _seed_require((type(copied) is owner._HeldCaptureCopy or configuration_copy)
+                and copied.anchor is native.anchor
                 and not copied.closed and bool(copied.owned) and copied.directory is not None)
             self._include_case(copied)
             copied.recheck()
@@ -1595,6 +1628,28 @@ class _SeedAssembly:
                 if "sandbox-export.bin" in native.capture.snapshots:expected_names.add("launch-binding.json")
                 _seed_require(set(copied.members) == expected_names)
                 expected_bytes = native.capture.snapshots | {"origin-observation.json": native.capture_origin}
+            elif configuration_copy:
+                cfg = native.configuration
+                _seed_require(copied.source_configuration is cfg
+                    and copied.source_configuration_source is native
+                    and copied.source_configuration_request_raw == native.capture.request_raw
+                    and copied.source_configuration_operation == cfg.operation
+                    and not cfg.source_inputs_unusable)
+                configuration_members = copied.source_configuration_members
+                _seed_require(set(configuration_members) == {"host", "config", "accepted", "package", "supervisor", "normalizer"}
+                    and len({row["member"] for row in configuration_members.values()}) == 6
+                    and set(copied.members) == {row["member"] for row in configuration_members.values()}
+                    and not copied.runtime_sha256)
+                expected_bytes = {row["member"]: cfg.source_inputs[key][0]
+                    for key, row in configuration_members.items()}
+                for key, row in configuration_members.items():
+                    original = cfg.source_inputs[key][1]
+                    original.recheck("E_STORE", self.work, "M")
+                    _seed_require(owner._identity(copied.members[row["member"]].before) == owner._identity(row["stat"])
+                        and (copied.members[row["member"]].before.st_dev, copied.members[row["member"]].before.st_ino)
+                            != (original.before.st_dev, original.before.st_ino)
+                        and row["sha256"] == self._digest(expected_bytes[row["member"]], "M"))
+                semantic_role = "capture"
             elif set(copied.members) == {"parent-frame.bin", "helper-build-record.json", "native-dependency-record.json"}:
                 semantic_role = "parent-input"
                 row = native.anchor.private_observations["parent_inputs"]
@@ -1626,7 +1681,7 @@ class _SeedAssembly:
                 elif name in expected_bytes:
                     value = expected_bytes[name]
                     _seed_require(type(value) is bytes)
-                    expected, kind = owner.digest(value), "W" if name == "complete.json" else "raw"
+                    expected, kind = owner.digest(value), "M" if configuration_copy else "W" if name == "complete.json" else "raw"
                 elif name in {"consumer-observations.json", "launch-binding.json"}:
                     value = held.read(owner.DOCUMENT_LIMIT, "E_STORE", self.work)
                     parsed = owner._json(value, owner.DOCUMENT_LIMIT, "E_STORE")
@@ -1637,8 +1692,10 @@ class _SeedAssembly:
                     _seed_require(name in expected_rows and held.before.st_size == expected_rows[name]["size_bytes"])
                     expected, kind = expected_rows[name]["sha256"], "M"
                 output = "exports/" + phase + ".bin" if kind == "export" else phase + "-" + str(index).zfill(2) + "-" + name
+                member = ("configuration/" + next(key for key, row in configuration_members.items()
+                    if row["member"] == name)) if configuration_copy else copied.directory.components[-1].name + "/" + name
                 installed = self._semantic_copy(native.anchor, held, output, expected, kind,
-                    phase, semantic_role, copied.directory.components[-1].name + "/" + name)
+                    phase, semantic_role, member)
                 facts.append((name, expected, installed.before.st_size))
             copied.recheck()
         if phase in {"reproduction", "write"}:
@@ -1901,6 +1958,26 @@ class _SeedAssembly:
             self._transfer()
         except BaseException as error:
             self._failed(error, "seed-original-git-inputs")
+            raise self.failure
+
+    def surface_inputs(self, anchor, planted_text, unread_forge):
+        try:
+            owner = _seed_module(anchor, ("Anchor",))
+            _seed_require(self.incident is not None and self.failure is None and not self.closed
+                and not any(row["member"] in _SURFACE_INPUTS for row in self.semantic.values()))
+            for member, item in zip(_SURFACE_INPUTS, (planted_text, unread_forge)):
+                _seed_require(type(item) is owner._HeldBytes and type(item.raw) is bytes
+                    and len(item.raw) <= owner.DOCUMENT_LIMIT and type(item.held) is owner.HeldPath)
+                if member == _SURFACE_INPUTS[0]:_seed_require(item.raw)
+                item.recheck("E_STORE")
+                expected, name = self._digest(item.raw, "raw"), "original-" + member.replace("/", "-")
+                self.semantic_expected[name] = ("case", "original-input", member, len(item.raw), expected, "raw")
+                self._copy(anchor, item.held, name, expected, "raw", source_mode=0o400)
+                self._semantic_record("case", "original-input", member, name)
+                item.recheck("E_STORE")
+            self._transfer()
+        except BaseException as error:
+            self._failed(error, "seed-surface-inputs")
             raise self.failure
 
     def trial_documents(self, anchor, entries):
@@ -2536,7 +2613,7 @@ class _SeedAssembly:
             _seed_require(binding["inventory_core"] == core and binding["sha256"] == self._digest(encoded))
             entries = {row["file"]: row for row in core["entries"]}
             original_members = {row["member"] for row in core["entries"] if row["role"] == "original-input"}
-            required_inputs = set(self.original_bindings) | (_TRIAL_DOCUMENTS - {"gate/basis.json", "gate/claim.json"})
+            required_inputs = set(self.original_bindings) | set(_SURFACE_INPUTS) | (_TRIAL_DOCUMENTS - {"gate/basis.json", "gate/claim.json"})
             _seed_require(required_inputs <= original_members
                 and any(member.startswith("git/objects/") for member in original_members)
                 and {"git/HEAD", "git/config"} <= original_members)
@@ -3103,9 +3180,174 @@ class _ReplayCase:
         self.work["seed_processing"]["E"] = self.work["seed_processing"].get("E", 0) + len(encoded) * 2
         _seed_require(rebuilt == core)
         original_members = {row["member"] for row in semantic.values() if row["role"] == "original-input"}
-        _seed_require(set(names) | (_TRIAL_DOCUMENTS - {"gate/basis.json", "gate/claim.json"}) <= original_members
+        _seed_require(set(names) | set(_SURFACE_INPUTS) | (_TRIAL_DOCUMENTS - {"gate/basis.json", "gate/claim.json"}) <= original_members
             and {"git/HEAD", "git/config"} <= original_members
             and any(member.startswith("git/objects/") for member in original_members))
+
+    def _materializer_preparation_body(self, runtime_root, phase, source_git, private_work,
+                                      input_raw, source_repository_id, deadline):
+        import argparse
+
+        runtime_root, private_work = Path(runtime_root), Path(private_work)
+        _seed_require(phase in {"reproduction", "write"} and phase not in self.calculated
+            and type(source_git) is self.c.HeldPath and type(input_raw) is bytes
+            and type(deadline) in (float, int)
+            and (phase == "reproduction" or "reproduction" in self.calculated))
+        _seed_require(runtime_root.is_absolute() and runtime_root.resolve() == runtime_root
+            and private_work.is_absolute() and private_work.resolve() == private_work)
+        jq = runtime_root / "bin/jq"
+        _seed_require(jq.is_file() and not jq.is_symlink() and os.access(jq, os.X_OK))
+        spec = importlib.util.spec_from_file_location(
+            "malicious_materializer_preparation", runtime_root / "preparation/v1/prepare-candidate.py")
+        p = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = p
+        spec.loader.exec_module(p)
+        self.work["offline_materializer_work_unknown"] = True
+        self.work["accounting_incomplete"] = True
+        self.inputs.git_repository(source_git)
+        scratch, output, candidate = (private_work / name for name in ("scratch", "output", "materialized"))
+        materializer_scratch = private_work / "materializer-scratch"
+        for directory in (scratch, output, candidate, materializer_scratch):
+            self.c._capture_copy_room(self.work, 0, False, case=True)
+            self.c._capture_copy_budget_room(self.work, 0, False, files=1)
+            self.c._require(self.work["files"] < 256, "E_LIMIT")
+            directory.mkdir(mode=0o700)
+            self.work["files"] += 1
+            self.c._capture_account(self.work, "M", "files", 1)
+        args = argparse.Namespace(operation="prepare", jq=str(jq), candidate_repository=str(candidate / "repository.git"),
+            output=str(output), input=str(private_work / "input.json"), response=str(private_work / "response.json"),
+            input_sha256=p.sha256(input_raw), response_sha256=None)
+        ctx = p.Context(args=args, repo_root=runtime_root, scratch=scratch,
+            copied_repo=candidate / "repository.git", sidecars=scratch / "sidecars", deps_root=scratch / "dependencies",
+            ledger=p.Ledger(), deadline=deadline)
+        _seed_require(source_repository_id == self.original["incident.json"]["body"]["target_repository_id"])
+        primary = None
+        try:
+            for key, path, kind in (("scratch_work", scratch, "directory"), ("scratch", scratch, "directory"),
+                                    ("output", output, "directory"), ("jq", jq, "file")):
+                pending = p.hold_boundary(path, kind, deadline, private_leaf=kind == "directory")
+                try:ctx.boundaries[key] = pending
+                except BaseException as error:
+                    if not any(item is pending for item in ctx.boundaries.values()):
+                        try:pending.close()
+                        except BaseException as later:error = _seed_first(error, later)
+                    raise error
+            p.write_exclusive(Path(args.input), input_raw, 0o400)
+            input_doc = p.strict_json(input_raw)
+            helper = private_work / "object-closure"
+            _seed_require(not os.path.lexists(helper))
+            p.run_child(ctx, ["/usr/bin/cc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-O2",
+                str(runtime_root / "adapters/local-git-materializer/v1/object-closure.c"), "-o", str(helper)],
+                output_limit=p.LIMITS["invocation_diagnostic_bytes"], env=p.clean_git_env(ctx))
+            source_git.recheck("E_STORE", self.work, "M")
+            response_raw = p.run_child(ctx, ["/bin/bash", "-p",
+                str(runtime_root / "adapters/local-git-materializer/v1/materialize.sh"), "materialize", args.input,
+                source_repository_id, source_git.path, str(candidate), str(materializer_scratch),
+                str(helper), str(jq)], output_limit=p.LIMITS["response_bytes"], env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
+            source_git.recheck("E_STORE", self.work, "M")
+            args.response_sha256 = p.sha256(response_raw)
+            p.write_exclusive(Path(args.response), response_raw, 0o400)
+            pending = p.hold_boundary(Path(args.candidate_repository), "directory", deadline, private_leaf=True)
+            try:ctx.boundaries["candidate_repository"] = pending
+            except BaseException as error:
+                if not any(item is pending for item in ctx.boundaries.values()):
+                    try:pending.close()
+                    except BaseException as later:error = _seed_first(error, later)
+                raise error
+            jq_copy, protocol = p.copy_dependencies(ctx)
+            input_doc, response, details = p.validate_documents(ctx, input_raw, response_raw, jq_copy, protocol)
+            p.initialize_storage_identity(ctx, details)
+            ctx.source_facts, ctx.source_observation = p.enumerate_storage(ctx)
+            receipt, directories, files = p.validate_relations(ctx, input_doc, response, details)
+            inventory = p.export_candidate(ctx, output / "candidate", directories, files)
+            inventory = p.measure_candidate(ctx, output / "candidate", inventory)
+            source_files = {}
+            for relative, fact in ctx.source_facts.items():
+                fd = p.open_relative_file(ctx.boundaries["candidate_repository"].fd, relative)
+                try:
+                    source_files[relative] = p.read_limited(Path(args.candidate_repository) / relative,
+                        fact.size, source_fd=fd, deadline=deadline)
+                finally:
+                    os.close(fd)
+            p.recheck_source(ctx)
+            outputs = []
+            for operation in ("prepare", "inspect"):
+                role = phase + "." + operation
+                capture_raw = self.inputs.bytes(role, "preparation", "capture.json", self.c.DOCUMENT_LIMIT)
+                captured, runtime_rows, _marker = _preparation_consumer_values(
+                    runtime_root, capture_raw, operation, input_raw, response_raw)
+                workspace = _preparation_workspace_values(runtime_root, captured["entropy"]["preparation_names"][0])
+                _seed_require(_preparation_capture_values(runtime_root, capture_raw, workspace,
+                    operation, input_raw, response_raw) == captured
+                    and {key: captured[key] for key in _LOCAL_GROUPS}
+                        == self.occurrences[role]["raw"]["preparation"])
+                runtime_values = _preparation_runtime_values(runtime_root, captured["commands"]["runtime_values"][0])
+                runtime_sources = {row["slot"]: self.inputs.bytes(role, "preparation", name,
+                    p.LIMITS["dependency_bytes"]) for name, row in runtime_rows.items()}
+                _seed_require(set(runtime_sources) == {"python", "git", "jq"}
+                    and p.sha256(runtime_sources["jq"]) == ctx.identities["jq"]["executable_sha256"])
+                source_values = {"component": (runtime_root / "preparation/v1/prepare-candidate.py").read_bytes(),
+                                 "python": runtime_sources["python"], "git": runtime_sources["git"]}
+                scans = _preparation_storage_values(runtime_root, captured["storage"], source_files, ctx.algorithm)
+                _seed_require(scans and all(scan == scans[0] for scan in scans))
+                manifest_raw, record_raw, complete_raw = _preparation_values(runtime_root, inventory,
+                    source_values, runtime_values, ctx.identities, args.input_sha256, args.response_sha256,
+                    response, details, receipt, scans[0])
+                outputs.append((manifest_raw, record_raw, complete_raw))
+            _seed_require(outputs[0] == outputs[1])
+            p.recheck_source(ctx)
+            return {"input_raw": input_raw, "response_raw": response_raw,
+                "manifest_raw": outputs[0][0], "record_raw": outputs[0][1], "completion_raw": outputs[0][2],
+                "candidate_repository": Path(args.candidate_repository), "candidate_root": output / "candidate",
+                "candidate_commit_id": receipt["candidate"]["commit_id"],
+                "candidate_tree_id": receipt["candidate"]["tree_id"], "inventory": inventory}
+        except BaseException as error:
+            primary = error
+            raise
+        finally:
+            failure = primary
+            try:
+                self.work.setdefault("offline_preparation_ledgers", []).append(dict(vars(ctx.ledger)))
+                self.work["offline_preparation_processing_unknown"] = True
+            except BaseException as error:failure = _seed_first(failure, error)
+            for boundary in reversed(list(ctx.boundaries.values())):
+                try:
+                    boundary.recheck()
+                except BaseException as error:
+                    failure = _seed_first(failure, error)
+                while boundary.descriptors:
+                    fd = boundary.descriptors.pop()
+                    try:self.c._close_capture_copy(fd, self.work, self.work, "offline-preparation-boundary", failure)
+                    except BaseException as error:failure = _seed_first(failure, error)
+            if failure is not None and failure is not primary:
+                raise failure
+
+    def check_surface(self, case, checked_file_raw, commit_message_raw):
+        _seed_require(type(case) is dict and case["case_id"] == self.manifest["case_id"]
+            and case["family_id"] == "malicious-instructions"
+            and case["case_id"] == "malicious." + case["surface"]
+            and type(checked_file_raw) is bytes and type(commit_message_raw) is bytes)
+        planted = self.inputs.bytes("case", "original-input", _SURFACE_INPUTS[0], self.c.DOCUMENT_LIMIT)
+        forge = self.inputs.bytes("case", "original-input", _SURFACE_INPUTS[1], self.c.DOCUMENT_LIMIT)
+        _seed_require(planted)
+        measured = hashlib.sha256(planted).hexdigest();self.inputs._account("H", len(planted), "raw")
+        _seed_require(case["planted_text_sha256"] == measured)
+        symptom = self.original["incident.json"]["body"]["observed_symptom"]
+        _seed_require(type(symptom) is str)
+        symptom_raw = symptom.encode("utf-8");self.inputs._account("C", len(symptom_raw), "raw")
+        surfaces = {"incident-symptom-text": symptom_raw, "checked-file-bytes": checked_file_raw,
+            "commit-message": commit_message_raw, "unread-forge-text": forge}
+        _seed_require(case["surface"] in surfaces)
+        for name, raw in surfaces.items():
+            self.work["surface_scan_unknown"] = True
+            count = raw.count(planted)
+            self.inputs._account("R", len(raw) + len(planted), "raw")
+            self.work["surface_scan_unknown"] = False
+            _seed_require(count == (1 if name == case["surface"] else 0))
+            if name == case["surface"] and name != "unread-forge-text":
+                self.work["seed_processing"]["E"] = self.work["seed_processing"].get("E", 0) + 2 * len(planted)
+                _seed_require(raw.endswith(planted))
+        self.surface = case["surface"]
 
     def guest(self, runtime_root, private_work, phase, plan_raw):
         _seed_require(phase in {"reproduction", "write"} and phase not in self.calculated)
@@ -3117,8 +3359,38 @@ class _ReplayCase:
         self.work["accounting_incomplete"] = True
         frame = _guest_values(runtime_root, private_work, wire)
         self.inputs._account("R", len(frame), "raw")
-        self.calculated[phase] = {"guest_frame": frame}
-        return frame
+        spec = importlib.util.spec_from_file_location(
+            "malicious_guest_export_values", Path(runtime_root) / "sandbox/v1/host-supervisor.py")
+        owner = importlib.util.module_from_spec(spec);spec.loader.exec_module(owner)
+        self.work["guest_frame_parse_unknown"] = True
+        records = owner.frame_read(frame)
+        self.inputs._account("R", len(frame), "raw")
+        self.inputs._account("H", len(frame) - 44, "raw")
+        self.work["guest_frame_parse_unknown"] = False
+        _seed_require(all(name != b"control-observation.json" for name, _raw in records))
+        observation_raw = self.inputs.encode(guest)
+        _seed_require(len(observation_raw) <= 4 * self.c.DOCUMENT_LIMIT)
+        records.append((b"control-observation.json", observation_raw))
+        self.work["guest_export_encode_unknown"] = True
+        rebuilt = owner.frame_write(records)
+        self.inputs._account("C", len(rebuilt), "raw")
+        self.inputs._account("H", len(rebuilt) - 44, "raw")
+        _seed_require(len(rebuilt) <= self.c.EXPORT_LIMIT)
+        padding_size = self.c.EXPORT_LIMIT - len(rebuilt)
+        self.c._capture_copy_room(self.work, self.c.EXPORT_LIMIT + padding_size, True, read_only=True)
+        padding = b"\0" * padding_size
+        self.inputs._account("C", len(padding), "export")
+        exported = rebuilt + padding
+        self.inputs._account("C", len(exported), "export")
+        self.work["guest_export_encode_unknown"] = False
+        expected = self.inputs.bytes(phase, "capture", phase + "/sandbox-export.bin", self.c.EXPORT_LIMIT)
+        left = hashlib.sha256(exported).hexdigest();self.inputs._account("H", len(exported), "export")
+        right = hashlib.sha256(expected).hexdigest();self.inputs._account("H", len(expected), "export")
+        self.work["seed_processing"]["E"] = self.work["seed_processing"].get("E", 0) + len(exported) + len(expected)
+        if exported != expected or left != right:
+            self.mismatches.append("exports/" + phase + ".bin")
+        self.calculated[phase] = {"guest_frame": frame, "export": exported}
+        return exported
 
     def trial(self, phase):
         _seed_require(phase in {"reproduction", "write", "gate"})
@@ -3154,6 +3426,157 @@ class _ReplayCase:
                     self.work["seed_processing"]["E"] = self.work["seed_processing"].get("E", 0) + len(actual) + len(rebuilt)
                     _seed_require(actual == rebuilt)
                 result[name] = rebuilt
+        return result
+
+    def local_context(self, phase):
+        _seed_require(phase in {"reproduction", "write"})
+        group = self.occurrences[phase]["raw"]["capture"]["runtime"]
+        rows = self.c._runtime_inventory_values(group)
+        by_slot = {}
+        for name, row in rows.items():
+            if row["index"] != 0:continue
+            _seed_require(row["slot"] not in by_slot)
+            by_slot[row["slot"]] = name
+        def raw(slot, maximum):
+            _seed_require(slot in by_slot)
+            return self.inputs.bytes(phase, "capture", phase + "/" + by_slot[slot], maximum)
+        config_raw = raw("host_config", self.c.DOCUMENT_LIMIT)
+        self.work["local_context_parse_unknown"] = True
+        config = self.c._parse_config(config_raw);self.inputs._account("R", len(config_raw), "M")
+        self.c._runtime_account(self.work, "read_bytes", len(config_raw))
+        self.c._runtime_config_binding(rows, config)
+        installed = {key: raw("installed_" + key, self.c.EXECUTABLE_LIMIT)
+            for key in config["installed_files"]}
+        registry = self.c._parse_registry(installed["registry"])
+        self.inputs._account("R", len(installed["registry"]), "M")
+        self.inputs._account("H", len(installed["registry"]), "M")
+        self.c._runtime_account(self.work, "read_bytes", len(installed["registry"]))
+        self.c._runtime_account(self.work, "sha_bytes", len(installed["registry"]))
+        accepted = self.c._parse_accepted(installed["accepted_set"])
+        self.inputs._account("R", len(installed["accepted_set"]), "M")
+        self.inputs._account("H", len(installed["accepted_set"]), "M")
+        self.c._runtime_account(self.work, "read_bytes", len(installed["accepted_set"]))
+        self.c._runtime_account(self.work, "sha_bytes", len(installed["accepted_set"]))
+        self.work["local_context_parse_unknown"] = False
+        selected_registry = [row for row in registry[1] if row["environment_id"] == config["environment_id"]]
+        selected_accepted = [row for row in accepted[1] if row["environment_id"] == config["environment_id"]]
+        _seed_require(len(selected_registry) == len(selected_accepted) == 1
+            and selected_registry[0]["target_repository_id"] == self.original["incident.json"]["body"]["target_repository_id"])
+        verifier_raw = raw("verifier", self.c.EXECUTABLE_LIMIT)
+        verifier_sha = hashlib.sha256(verifier_raw).hexdigest();self.inputs._account("H", len(verifier_raw), "runtime")
+        _seed_require(verifier_sha in selected_accepted[0]["identities"]["verifier"])
+        return {"config": config, "config_raw": config_raw, "registry": registry, "accepted": accepted,
+            "registry_entry": selected_registry[0], "accepted_entry": selected_accepted[0],
+            "installed": installed, "verifier_raw": verifier_raw, "verifier_sha256": verifier_sha,
+            "python_raw": raw("host_python", self.c.EXECUTABLE_LIMIT),
+            "supervisor_raw": raw("host_supervisor_source", self.c.EXECUTABLE_LIMIT),
+            "launch_context": {"environment_id": config["environment_id"], "store_id": config["store_id"],
+                "registry": registry[1]}}
+
+    def host(self, runtime_root, phase, request_raw, instruction_raw, plan_raw):
+        _seed_require(phase in {"reproduction", "write"} and "export" in self.calculated.get(phase, {})
+            and type(request_raw) is bytes and type(instruction_raw) is bytes and type(plan_raw) is bytes)
+        groups = self.occurrences[phase]["raw"]["capture"]
+        rows = self.c._runtime_inventory_values(groups["runtime"])
+        values = {}
+        for name, row in rows.items():
+            key = (row["slot"], row["index"])
+            _seed_require(key not in values)
+            values[key] = self.inputs.semantic(phase, "capture", phase + "/" + name)
+        def bounded_bytes(value):
+            if type(value) is bytes:return value
+            _seed_require(type(value) is tuple and all(type(chunk) is bytes for chunk in value))
+            size = sum(map(len, value))
+            self.c._runtime_account(self.work, "copy_bytes", size, commit=False)
+            raw = b"".join(value);self.inputs._account("C", len(raw), "runtime")
+            return raw
+        required = {"guest_kernel", "guest_init", "guest_supervisor", "image", "toolchain", "verifier",
+            "runtime_vfkit", "runtime_driver", "vm_service", "guest_kernel_config"}
+        _seed_require(all((slot, 0) in values for slot in required)
+            and all((slot, 0) in values for slot in ("host_config", "host_supervisor_source", "host_python")))
+        config_raw = bounded_bytes(values[("host_config", 0)])
+        supervisor_raw = bounded_bytes(values[("host_supervisor_source", 0)])
+        python_raw = bounded_bytes(values[("host_python", 0)])
+        slots = {slot: values[(slot, 0)] for slot in required}
+        slots["verifier"] = bounded_bytes(slots["verifier"])
+        slots["guest_kernel_config"] = bounded_bytes(slots["guest_kernel_config"])
+        dyld = sorted((index, value) for (slot, index), value in values.items() if slot == "dyld_cache_files")
+        _seed_require([index for index, _value in dyld] == list(range(len(dyld))))
+        slots["dyld_cache_files"] = [value for _index, value in dyld]
+        self.work["host_identity_processing_unknown"] = True
+        self.work["accounting_incomplete"] = True
+        measured, kernel_config_raw, verifier_raw = _identity_values(runtime_root, slots, instruction_raw,
+            config_raw, supervisor_raw, python_raw, groups["runtime"]["slots"])
+        config = self.c._parse_config(config_raw)
+        self.inputs._account("R", len(config_raw), "M")
+        request = self.c._json(request_raw, self.c.DOCUMENT_LIMIT, "E_STORE")
+        self.inputs._account("R", len(request_raw), "M")
+        attempt = request["body"]["attempt"]["attempt_id"]
+        _seed_require(attempt == self.occurrences[phase]["binding"]["attempt_id"])
+        spec = importlib.util.spec_from_file_location(
+            "malicious_host_launch_values", Path(runtime_root) / "sandbox/v1/host-supervisor.py")
+        owner = importlib.util.module_from_spec(spec);spec.loader.exec_module(owner)
+        directory = os.path.join(config["work_root"], attempt)
+        start_raw = owner._runtime_start_values(config, os.path.join(directory, "export.img"),
+            os.path.join(directory, "input.img"), os.path.join(directory, "rest.sock"))
+        self.inputs._account("C", len(start_raw), "M")
+        admitted = [row for row in groups["clocks"]["monotonic"]
+            if row["site"] == "sandbox/v1/host-supervisor.py:2794:0"]
+        _seed_require(len(admitted) == 1)
+        admission_mono = struct.unpack(">d", bytes.fromhex(admitted[0]["value"]))[0]
+        plan_sha = hashlib.sha256(plan_raw).hexdigest();self.inputs._account("H", len(plan_raw), "M")
+        run, consumed = _host_process_values(runtime_root, config, start_raw, groups["host"],
+            groups["clocks"], admission_mono, self.calculated[phase]["export"], plan_sha)
+        run = _host_finalization_values(runtime_root, run, consumed)
+        self.calculated[phase].update(host_run=run, host_consumed=consumed, config=config,
+            config_raw=config_raw, measured=measured, verifier_raw=verifier_raw,
+            kernel_config_raw=kernel_config_raw, start_raw=start_raw)
+        return run
+
+    def source(self, runtime_root, phase, request_raw):
+        import math
+        _seed_require(phase in {"kill", "coverage"} and phase in self.occurrences
+            and phase not in self.calculated and type(request_raw) is bytes)
+        occurrence = self.occurrences[phase]
+        measured = hashlib.sha256(request_raw).hexdigest();self.inputs._account("H", len(request_raw), "M")
+        _seed_require(occurrence["binding"]["request_sha256"] == measured)
+        names = ("host", "config", "accepted", "package", "supervisor", "normalizer")
+        configuration = {key: self.inputs.bytes(phase, "capture", "configuration/" + key,
+            self.c.DOCUMENT_LIMIT) for key in names}
+        groups = occurrence["raw"]["capture"]
+        metadata, pages = [], []
+        _seed_require(set(groups["source_pages"]) == {phase})
+        rows = groups["source_pages"][phase]
+        _seed_require(type(rows) is list and 1 <= len(rows) <= 128)
+        for row in rows:
+            _seed_require(type(row) is dict and set(row) == {"family", "page_index", "response_status",
+                "input_cursor", "output_cursor", "body_hex"}
+                and type(row["body_hex"]) is str and len(row["body_hex"]) <= 2 * self.c.DOCUMENT_LIMIT
+                and len(row["body_hex"]) % 2 == 0
+                and all(char in "0123456789abcdef" for char in row["body_hex"]))
+            raw = bytes.fromhex(row["body_hex"]);self.inputs._account("C", len(raw), "raw")
+            pages.append(raw);metadata.append({key: value for key, value in row.items() if key != "body_hex"})
+        _seed_require(sum(map(len, pages)) <= 64 * self.c.DOCUMENT_LIMIT)
+        capture = self.inputs.encode({"pages": metadata})
+        records = [(b"capture.json", capture), *[(('raw/%04d' % index).encode(), raw)
+            for index, raw in enumerate(pages)]]
+        walls = groups["clocks"]["wall"]
+        _seed_require(type(walls) is list and len(walls) == 2)
+        times = []
+        for row, site in zip(walls, ("3230", "3242")):
+            _seed_require(row["site"] == "sandbox/v1/host-supervisor.py:" + site + ":0")
+            value = struct.unpack(">d", bytes.fromhex(row["value"]))[0]
+            _seed_require(math.isfinite(value) and (not times or times[-1] <= value));times.append(value)
+        self.work["source_value_processing_unknown"] = True
+        self.work["accounting_incomplete"] = True
+        manifest, rebuilt_pages, observation, receipt = _source_values(runtime_root, request_raw,
+            configuration, records, {"operation": "kill-register-read" if phase == "kill" else "coverage-read",
+                "started_wall": times[0], "completed_wall": times[1]})
+        result = {"receipt.json": receipt, "payload/request.json": request_raw,
+            "payload/raw-manifest.json": manifest, "payload/observation.json": observation,
+            **{"payload/raw/%04d" % index: raw for index, raw in enumerate(rebuilt_pages)}}
+        for key in names:self.inputs.semantic(phase, "capture", "configuration/" + key)
+        self.calculated[phase] = {"files": result}
         return result
 
     def capture(self, runtime_root, phase, request_raw, expectation_raw, receipt_raw):
@@ -3224,6 +3647,45 @@ class _ReplayCase:
         if raw != expected or measured != original:self.mismatches.append(name)
         self.compared.add(name)
         held.recheck("E_STORE", self.work, "M")
+
+
+
+def _invariant_values(scope, evaluation, duty, risk, kill, write_record, write_request,
+                      command_recipe, surface, source_tree_ids):
+    _seed_require(type(scope) is dict and type(evaluation) is dict
+        and evaluation["body"]["scope_ref"]["id"] == scope["id"]
+        and surface in {"incident-symptom-text", "checked-file-bytes", "commit-message", "unread-forge-text"}
+        and type(command_recipe) is dict and set(command_recipe) == {"reproduction", "write", "generator", "scope_reader"}
+        and all(type(rows) is list for rows in command_recipe.values()))
+    gates = {name: {"verdict": document["body"]["verdict"], "reason_ids": document["body"]["reason_ids"]}
+        for name, document in (("duty", duty), ("risk", risk), ("kill", kill))}
+    body, write = evaluation["body"], write_record["body"]["write"]
+    _seed_require(body["authority"] == "none" and body["enabled"] is False
+        and write["scope_id"] == write_request["body"]["scope_id"] == scope["id"])
+    proposal = body["proposal"]
+    _seed_require(type(proposal) is dict and proposal["state"] in {"absent", "present"})
+    projected_proposal = {"state": proposal["state"]}
+    if proposal["state"] == "present":
+        _seed_require(set(proposal) == {"state", "document"})
+        projected_proposal["enablement"] = proposal["document"]["body"]["enablement"]
+    else:_seed_require(set(proposal) == {"state"})
+    publisher = write["publisher_request"]["body"]
+    result = {"scope": {"scope_id": scope["id"], "outcome": body["outcome"], "reason_ids": body["reason_ids"]},
+        "gates": gates,
+        "kill_and_enablement": {"kill": gates["kill"], "authority": body["authority"],
+            "enabled": body["enabled"], "proposal": projected_proposal},
+        "publisher_admission": {"state": write["admission"]["state"], "effect": write["admission"]["effect"]},
+        "permitted_effects": {"scope_id": write["scope_id"], "allowed_paths": write_request["body"]["allowed_paths"],
+            "branch": publisher["branch"], "target_repository_id": publisher["target_repository_id"],
+            "pull_request_fields": sorted(publisher), "commands": command_recipe, "producer_invocations": 0},
+        "written_paths": sorted(row["path"] for row in write["write_set"])}
+    if surface in {"incident-symptom-text", "unread-forge-text"}:
+        _seed_require(type(source_tree_ids) is dict and set(source_tree_ids) == {"reproduction", "write"}
+            and all(type(value) is str and len(value) in {40, 64}
+                and all(char in "0123456789abcdef" for char in value) for value in source_tree_ids.values()))
+        result["source_tree_ids"] = source_tree_ids
+    else:_seed_require(source_tree_ids is None)
+    return result
 
 
 def _case_v2_content(incident, attempt_ids, locators, occurrences):

@@ -7192,6 +7192,9 @@ def raw16_C3_driver_input_owners(root: Path, evidence=None) -> None:
       for label,raw in zip(('seed-0.json','result-0.json','seed-1.json','result-1.json'),raws):(scratch/'inputs'/label).write_bytes(raw);(scratch/'inputs'/label).chmod(0o400)
       manifest=b'{bad json\n' if malformed else canonical([dict(seed_sha256=expected[0],result_sha256=expected[1]),dict(seed_sha256=expected[2],result_sha256=expected[3])])
       (scratch/'inputs/manifest.json').write_bytes(manifest);(scratch/'inputs/manifest.json').chmod(0o400)
+     if name=='positive-run':
+      window=canonical({'cases':{},'carry_in':{}})
+      (root/'window.json').write_bytes(window);(root/'window.json').chmod(0o400)
      return root,scratch,raws,expected,manifest
     scenarios=[('positive-run','run',False),('positive-dashboard','dashboard',False),('START-sha','run',False),('START-fullbytes','run',False),('registration-failure','run',False),('source-close-ordinary','run',False),('source-close-marked','run',False),('source-close-keyboard','run',False),('manifest-parse-failure','dashboard',True),('helper-unknown-refusal','run',False)]
     fixtures={name:prepare(name,mode,malformed) for name,mode,malformed in scenarios}
@@ -7268,10 +7271,17 @@ def raw16_C3_driver_input_owners(root: Path, evidence=None) -> None:
         p=phases[-1];p['parse_read_delta']=custody.work['read_bytes']-p['read'];p['parse_R_delta']=custody.work['seed_processing']['R']-p['R'];p['parse_M_delta']=custody.work['accounting']['M']['read_bytes']-p['M']
        return encode_original(self,value)
       ns['json'].loads=measured_json;ns['C2Channel'].encode=measured_encode
-      try:path,seals=build_input(custody,destination,str(scratch),mode,raws,expected)
+      window_source=None
+      if mode=='run':
+       held=custody.adopt(c._open_child(custody.root,'window.json',False,
+        c._store_rule(os.geteuid(),os.getegid(),0o400,False,custody.resolver),'E_STALE',
+        recording_work=custody.work,accounting_kind='M'))
+       window_raw=held.read(ns['_C2_LIMIT'],'E_STALE',custody.work)
+       window_source=(held,window_raw,sha(window_raw))
+      try:path,seals=build_input(custody,destination,str(scratch),mode,raws,expected,window_source)
       finally:ns['json'].loads=json_original;ns['C2Channel'].encode=encode_original
       check(path==destination.path+('/seed.json' if mode=='run' else ''),'wrong fixed path')
-      check(len(seals)==(1 if mode=='run' else 5),'wrong original output count')
+      check(len(seals)==(2 if mode=='run' else 5),'wrong original output count')
       for held,raw,digest in seals:
        check(type(held) is c.HeldPath and held.components,'fake holder type')
        check(stat.S_IMODE(os.fstat(held.fd).st_mode)==0o400,'wrong installed mode')
@@ -7280,7 +7290,7 @@ def raw16_C3_driver_input_owners(root: Path, evidence=None) -> None:
       check_input(custody,seals);custody.recheck();root_live(custody,entry)
       if mode=='dashboard':
        check(len(phases)==1 and all(phases[0][k]==phases[0]['size'] for k in ('parse_read_delta','parse_R_delta','parse_M_delta')),'actual parse fee not exact')
-      entry['parse_phases']=phases;entry['installed']=[dict(path=h.path,sha256=digest,size=len(raw)) for h,raw,digest in seals]
+      entry['descriptor_copy']='mechanism-only; incomplete synthetic descriptor is not full manifest authority' if mode=='run' else 'not requested';entry['parse_phases']=phases;entry['installed']=[dict(path=h.path,sha256=digest,size=len(raw)) for h,raw,digest in seals]
       if mode=='run':
        old_H=custody.work['seed_processing']['H'];wrong=b'x'*len(seals[0][1])
        expect_failure(lambda:check_input(custody,[(seals[0][0],wrong,seals[0][2])]),code='E_STALE')
@@ -7400,3 +7410,128 @@ def raw16_C3_export_stage(root: Path, deletion=False, evidence=None) -> None:
     for row,detail in zip(results,details):row['case_work']=detail['work']
     _C3_work_evidence(results,evidence,'export-window')
     print(json.dumps({'C3_fixed_export_stage':results},sort_keys=True))
+
+
+def raw16_C3_payload_result_body(root: Path) -> list[dict]:
+    import ast
+    import copy
+
+    spec = importlib.util.spec_from_file_location(
+        'C3_payload_result_actual_enforced', root / 'shadow/v1/enforced-reproduction.py')
+    owner = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = owner
+    spec.loader.exec_module(owner)
+    replay_source = (root / 'evals/v1/replay-malicious.py').read_text()
+    reproduction = next(node for node in ast.parse(replay_source).body
+                        if isinstance(node, ast.FunctionDef) and node.name == '_reproduction_values')
+    payload_index = next(index for index, node in enumerate(reproduction.body)
+                         if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)
+                         and isinstance(node.value.func, ast.Attribute)
+                         and isinstance(node.value.func.value, ast.Name)
+                         and node.value.func.value.id == 'owner' and node.value.func.attr == 'payload_result')
+    payload_call = reproduction.body[payload_index]
+    assert isinstance(payload_call.targets[0], ast.Tuple)
+    assert [node.id for node in payload_call.targets[0].elts] == ['result_raw', 'result']
+    byte_check, outcome, initialize_output = reproduction.body[payload_index + 1:payload_index + 4]
+    assert isinstance(byte_check, ast.Expr) and isinstance(byte_check.value, ast.Call)
+    assert isinstance(byte_check.value.func, ast.Attribute) and byte_check.value.func.attr == 'require'
+    assert isinstance(outcome, ast.Assign) and outcome.targets[0].id == 'outcome'
+    assert isinstance(initialize_output, ast.Assign) and initialize_output.targets[0].id == 'output'
+    record_call = next(node for node in reproduction.body
+                       if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)
+                       and isinstance(node.value.func, ast.Attribute)
+                       and isinstance(node.value.func.value, ast.Name)
+                       and node.value.func.value.id == 'owner'
+                       and node.value.func.attr == '_reproduction_record_values')
+    assert isinstance(record_call.value.args[9], ast.Name) and record_call.value.args[9].id == 'result'
+    selected = ast.Module(body=[payload_call, byte_check, outcome, initialize_output, record_call],
+                          type_ignores=[])
+    binding = compile(selected, '<actual-reproduction-payload-to-record-binding>', 'exec')
+    raw_file = b'finite ordinary checked file bytes\n'
+    digest = owner.sha(raw_file)
+    revision = {'hash_algorithm': 'sha1', 'commit_id': '1' * 40}
+    incident = {'schema_version': 1, 'kind': 'shadow_incident_record', 'id': 'incident.payload-control',
+        'body': {'observed_at': '2026-10-27T00:00:00Z', 'target_repository_id': 'repo.payload-control',
+                 'git_revision_ref': revision,
+                 'failing_check': {'kind': 'file-digest', 'path': 'checked.txt', 'expected_sha256': digest}}}
+    instruction = owner.make_instruction(incident)
+    body = {'check': {'path': 'checked.txt', 'expected_sha256': digest},
+            'instruction_sha256': owner.sha(instruction),
+            'observed': {'sha256': digest, 'size_bytes': len(raw_file)},
+            'outcome': 'match', 'reason_id': 'file.match'}
+    envelope = {'schema_version': 1, 'kind': 'file_digest_verifier_payload',
+                'id': 'file-digest-payload', 'body': body}
+    preparation = {'entries': [{'path': 'checked.txt', 'sha256': digest, 'size_bytes': len(raw_file)}]}
+
+    def document(kind):
+        return owner.canonical({'schema_version': 1, 'kind': kind, 'id': 'synthetic.' + kind, 'body': {}})
+
+    identity = {'body': {'ordinary': 'identity-value-domain'}}
+    evaluation = {'body': {'verdict': 'satisfied', 'reason_ids': ['synthetic.reason']}}
+    materializer_receipt = {'source': {'repository_id': 'repo.payload-control',
+        'hash_algorithm': 'sha1', 'commit_id': '1' * 40, 'tree_id': '2' * 40},
+        'candidate': {'commit_id': '1' * 40, 'parent_commit_id': '1' * 40, 'tree_id': '2' * 40},
+        'changed_paths': {'count': 0}}
+    response = {'stage_result': {'schema_version': 2, 'kind': 'stage_result', 'id': 'stage.payload-control',
+        'body': {'outcome': {'family': 'change', 'value': 'no-change'}}},
+        'payloads': [{'data': owner.canonical(materializer_receipt).decode()}]}
+    materialized = {'response_raw': owner.canonical(response),
+        'evaluation_raw': owner.canonical(evaluation), 'qualified_identity_raw': owner.canonical(identity)}
+    assert owner.require_no_change(materialized['response_raw'], incident) == materializer_receipt
+    results = []
+    for label in ('envelope', 'flat-body', 'manifest-row-digest', 'receipt-manifest-digest', 'preparation-observed'):
+        payload_raw = owner.canonical(body if label == 'flat-body' else envelope)
+        manifest = {'schema_version': 1, 'kind': 'sandbox_evidence_manifest', 'id': 'evidence-manifest',
+            'body': {'files': [{'name_hex': b'file-digest-result.json'.hex(),
+                              'size_bytes': len(payload_raw), 'sha256': owner.sha(payload_raw)}]}}
+        if label == 'manifest-row-digest':
+            manifest['body']['files'][0]['sha256'] = owner.sha(b'different payload bytes')
+        manifest_raw = owner.canonical(manifest)
+        sandbox_receipt = {'body': {'lifecycle': {'admission': 'admitted', 'runtime': 'completed',
+            'control_deadline': 'met'}, 'teardown': {'state': 'confirmed'},
+            'payload': {'exit_state': 'exited', 'exit_code': 0, 'stdout_sha256': owner.sha(b''),
+                'stderr_sha256': owner.sha(b''), 'evidence_manifest_sha256': owner.sha(manifest_raw)}}}
+        if label == 'receipt-manifest-digest':
+            sandbox_receipt['body']['payload']['evidence_manifest_sha256'] = owner.sha(b'different manifest')
+        sandbox_receipt.update(schema_version=1, kind='sandbox_receipt', id='receipt.payload-control')
+        current_preparation = copy.deepcopy(preparation)
+        if label == 'preparation-observed':
+            current_preparation['entries'][0]['sha256'] = owner.sha(b'different prepared content')
+        files = {'incident.json': owner.canonical(incident), 'claim.json': document('environment_claim'),
+            'registry.json': document('environment_registry'), 'payload-stdout.txt': b'', 'payload-stderr.txt': b'',
+            'file-digest-result.json': payload_raw, 'evidence-manifest.json': manifest_raw,
+            'preparation-manifest.json': owner.canonical(current_preparation),
+            'sandbox-receipt.json': owner.canonical(sandbox_receipt),
+            'sandbox-request.json': document('sandbox_launch_request'),
+            'sandbox-expectation.json': document('sandbox_receipt_expectation'),
+            'sandbox-check.json': document('sandbox_check'), 'origin-observation.json': document('origin'),
+            'trace-ledger.json': document('telemetry_trace_ledger')}
+        namespace = {'owner': owner, 'files': files, 'materialized': materialized, 'incident': incident,
+            'identity': identity, 'evaluation': evaluation, 'receipt': materializer_receipt,
+            'instruction': instruction, 'context': {'store_id': 'synthetic.store'},
+            'provenance': document('shadow_consumer_provenance')}
+        caught = None
+        try:
+            exec(binding, namespace)
+        except owner.Refusal as error:
+            caught = error
+        if label == 'envelope':
+            assert caught is None, repr(caught)
+            assert namespace['result_raw'] == payload_raw
+            assert namespace['result'] == envelope['body'] and 'body' not in namespace['result']
+            assert namespace['outcome'] == 'no-change'
+            record = owner.parse(namespace['output']['shadow-record.json'])
+            assert record['body']['check']['execution']['value'] == {
+                'tool_id': 'tool.verifier', 'observed_sha256': digest, 'matches_expected': True}
+            assert record['body']['sandbox']['payload_ref']['sha256'] == owner.sha(payload_raw)
+        else:
+            assert caught is not None and caught.code == 'E_RELATION', (label, repr(caught))
+            assert 'result' not in namespace, 'invalid payload passed the original result owner'
+            assert 'output' not in namespace, 'record construction ran after a rejected payload'
+        results.append({'case': label, 'rejected': caught is not None,
+            'input_payload_bytes': len(payload_raw), 'input_payload_sha256': owner.sha(payload_raw),
+            'qualification': 'finite-payload-and-original-call-binding-only'})
+    print(json.dumps({'C3_payload_result_body': results,
+        'source_reproduction_function_sha256': owner.sha(ast.get_source_segment(replay_source, reproduction).encode()),
+        'full_reproduction_input_chain': 'NOTRUN', 'native': 'NOTRUN'}, sort_keys=True))
+    return results

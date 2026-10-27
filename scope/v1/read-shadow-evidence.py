@@ -528,7 +528,21 @@ class _Reader:
                 self.source_copies.pop()
             try:copied.close()
             except BaseException as closing:
-                if getattr(closing, "_scope_signal_cancel", False) and not getattr(primary, "_scope_signal_cancel", False):
+                if isinstance(copied, c._HeldSourceConfigurationCopy):
+                    primary_marked = isinstance(primary, KeyboardInterrupt) or getattr(primary, "_scope_signal_cancel", False)
+                    closing_marked = isinstance(closing, KeyboardInterrupt) or getattr(closing, "_scope_signal_cancel", False)
+                    cancellation = primary if primary_marked else closing if closing_marked else None
+                    try:copied._failed(primary, "scope-source-configuration-registration", primary)
+                    except BaseException as observed:
+                        if cancellation is None and (isinstance(observed, KeyboardInterrupt) or getattr(observed, "_scope_signal_cancel", False)):cancellation = observed
+                    try:copied._failed(closing, "scope-source-configuration-registration-close", primary)
+                    except BaseException as observed:
+                        if cancellation is None and (isinstance(observed, KeyboardInterrupt) or getattr(observed, "_scope_signal_cancel", False)):cancellation = observed
+                    try:copied._transfer()
+                    except BaseException as observed:
+                        if cancellation is None and (isinstance(observed, KeyboardInterrupt) or getattr(observed, "_scope_signal_cancel", False)):cancellation = observed
+                    if cancellation is not None and cancellation is not primary:raise cancellation
+                elif getattr(closing, "_scope_signal_cancel", False) and not getattr(primary, "_scope_signal_cancel", False):
                     raise
             raise
 
@@ -536,18 +550,27 @@ class _Reader:
         copies, self.source_copies = self.source_copies, []
         primary = sys.exc_info()[1] if primary is None else primary
         cancellation = None
+        configuration_cancellation = False
         for copied in reversed(copies):
             try:
                 try:copied.recheck()
                 finally:copied.close()
-            except Exception as error:
+            except BaseException as error:
+                if isinstance(copied, c._HeldSourceConfigurationCopy):
+                    if cancellation is None and (isinstance(error, KeyboardInterrupt) or getattr(error, "_scope_signal_cancel", False)):
+                        cancellation, configuration_cancellation = error, True
+                elif not isinstance(error, Exception):raise
                 try:copied._failed(error, "scope-P-final-close", primary)
-                except Exception as observed:
-                    if getattr(observed, "_scope_signal_cancel", False) and cancellation is None:
+                except BaseException as observed:
+                    if not isinstance(copied, c._HeldSourceConfigurationCopy) and not isinstance(observed, Exception):raise
+                    if cancellation is None and (getattr(observed, "_scope_signal_cancel", False)
+                            or isinstance(copied, c._HeldSourceConfigurationCopy) and isinstance(observed, KeyboardInterrupt)):
                         cancellation = observed
+                        configuration_cancellation = isinstance(copied, c._HeldSourceConfigurationCopy)
                 if getattr(error, "_scope_signal_cancel", False) and cancellation is None:
                     cancellation = error
-        if cancellation is not None and not getattr(primary, "_scope_signal_cancel", False):
+        if cancellation is not None and not getattr(primary, "_scope_signal_cancel", False) and not (
+                configuration_cancellation and isinstance(primary, KeyboardInterrupt)):
             raise cancellation
 
     def retain_source_runtime(self, request_raw, sudo=None):
@@ -609,9 +632,32 @@ class _Reader:
         if cancellation is not None:
             raise cancellation
 
+    def _retain_source_configuration(self, source, parent, ordinal):
+        try:
+            require(source.anchor is self.anchor and source.anchor.scope_runtime_owner is self
+                    and any(item is source for item in self.owned)
+                    and any(item is source.configuration for item in self.owned), "E_STORE")
+            copied = source.anchor.retain_source_configuration(parent, source, ordinal)
+            self._own_source_copy(copied, parent)
+            return None
+        except BaseException as error:
+            cancellation = error if isinstance(error, KeyboardInterrupt) or getattr(error, "_scope_signal_cancel", False) else None
+            try:
+                source.anchor.private_observations["unusable"] = True
+                c._capture_observation_error(source.anchor.recording_work, "M", "scope-source-configuration", error)
+            except BaseException as observed:
+                if cancellation is None and (isinstance(observed, KeyboardInterrupt) or getattr(observed, "_scope_signal_cancel", False)):
+                    cancellation = observed
+            try:self._close_source_copies(cancellation)
+            except BaseException as closing:
+                if cancellation is None and (isinstance(closing, KeyboardInterrupt) or getattr(closing, "_scope_signal_cancel", False)):
+                    cancellation = closing
+            return cancellation
+
     def retain_source_capture(self, source):
         parent = None
         cancellation = None
+        configuration_cancel = None
         retention_failed = False
         try:
             require(len(self.source_capture_work) < 4096, "E_LIMIT")
@@ -630,6 +676,8 @@ class _Reader:
             self._recheck_source_copies(parent)
             copied = source.copy_source_capture(parent, ordinal, source.anchor.recording_work)
             self._own_source_copy(copied, parent)
+            configuration_cancel = self._retain_source_configuration(source, parent, ordinal)
+            cancellation = configuration_cancel
         except Exception as error:
             retention_failed = True
             source.anchor.private_observations["unusable"] = True
@@ -640,14 +688,22 @@ class _Reader:
                 cancellation = error
         finally:
             if parent is not None:
-                try:
-                    parent.close()
-                except OSError as error:
-                    retention_failed = True
-                    source.anchor.private_observations["unusable"] = True
-                    source.anchor.private_observations["source_copy_close_errno"] = error.errno
-                    if getattr(error, "_scope_signal_cancel", False) and cancellation is None:
-                        cancellation = error
+                if configuration_cancel is not None:
+                    try:parent.close()
+                    except BaseException as error:
+                        try:c._capture_observation_error(source.anchor.recording_work, "M", "scope-source-configuration-parent-close", error)
+                        except BaseException:pass
+                        try:configuration_cancel.__cause__ = error
+                        except BaseException:pass
+                else:
+                    try:
+                        parent.close()
+                    except OSError as error:
+                        retention_failed = True
+                        source.anchor.private_observations["unusable"] = True
+                        source.anchor.private_observations["source_copy_close_errno"] = error.errno
+                        if getattr(error, "_scope_signal_cancel", False) and cancellation is None:
+                            cancellation = error
         if retention_failed:
             try:self._close_source_copies(cancellation)
             except Exception as error:

@@ -1152,7 +1152,7 @@ def c2_driver_input_check(custody, seals):
         c2_require(c2_driver_input_sha(custody, observed) == expected, "E_STALE")
         installed.recheck("E_STALE", custody.work, "M")
 
-def c2_driver_input(custody, destination, scratch, mode, original_inputs, expected):
+def c2_driver_input(custody, destination, scratch, mode, original_inputs, expected, window_source=None):
     sources, pending, failure, seals = [], None, None, []
     copies = C2Copies(custody)
     names = ["input.json"] if mode == "run" else ["manifest.json", "seed-0.json", "result-0.json", "seed-1.json", "result-1.json"]
@@ -1203,7 +1203,16 @@ def c2_driver_input(custody, destination, scratch, mode, original_inputs, expect
                 c2_require(raw == original_inputs[slot] and measured == expected[slot], "E_RELATION")
             installed = copies.copy(source, destination, "seed.json" if mode == "run" else name, size, measured, "M")
             seals.append((installed, raw, measured))
-        c2_require(custody.namespace(destination) == frozenset(["seed.json"] if mode == "run" else names), "E_RELATION")
+        expected_names = set(["seed.json"] if mode == "run" else names)
+        if window_source is not None:
+            held, raw, measured = window_source
+            c2_require(type(held) is c.HeldPath and type(raw) is bytes and held.components
+                and held.before.st_size == len(raw) and c2_driver_input_sha(custody, raw) == measured, "E_RELATION")
+            held.recheck("E_STALE", custody.work, "M")
+            installed = copies.copy(held, destination, "window.json", len(raw), measured, "M")
+            seals.append((installed, raw, measured));expected_names.add("window.json")
+            held.recheck("E_STALE", custody.work, "M")
+        c2_require(custody.namespace(destination) == frozenset(expected_names), "E_RELATION")
         copies.final_checks()
         c2_driver_input_check(custody, seals)
     except BaseException as error:failure = error
@@ -1312,7 +1321,8 @@ def c2_lifecycle(launcher, arguments):
         built = helpers.build(arguments)
         c2_require(built["status"] == 0 and not built["stdout"] and not built["stderr"], "E_RUNTIME")
         c2_require(custody.namespace(installed) == frozenset(start["case_ids"]) | {"driver-input"}, "E_RELATION")
-        driver_input, driver_seals = c2_driver_input(custody, driver_inputs, scratch, mode, original_inputs, expected)
+        driver_input, driver_seals = c2_driver_input(custody, driver_inputs, scratch, mode, original_inputs, expected,
+            (_window, _window_raw, window_sha))
         try:sources.materialize()
         except BaseException as error:
             source_errors.append(error)
@@ -2276,10 +2286,15 @@ record_closure=$("$runtime/bin/jq" -R -s -c '
   split("\n") | map(select(length > 0) | split(" ") | {path:.[0],sha256:.[1]})
 ' <<< "$record_files") || emit_error E_RUNTIME
 
+shadow_closure=$(shadow_source_rows | "$runtime/bin/jq" -R -s -c '
+  split("\n") | map(select(length > 0) | split(" ") | {path:.[0],sha256:.[1]})
+') || emit_error E_RUNTIME
+
 "$runtime/bin/jq" -S -c -n \
   --arg bootstrap_sha "$bootstrap_sha" --arg launcher_sha "$launcher_sha" \
   --arg driver_sha "$driver_sha" --arg program_sha "$program_sha" \
   --arg catalog_sha "$catalog_sha" --argjson record_closure "$record_closure" \
+  --argjson shadow_closure "$shadow_closure" \
   --arg jq_sha "$jq_sha" --arg bash_sha "$bash_sha" \
   --arg host_os "$host_os" --arg host_arch "$host_arch" \
   --arg jq_arch "$jq_arch" --arg execution_mode "$execution_mode" '
@@ -2336,6 +2351,7 @@ record_closure=$("$runtime/bin/jq" -R -s -c '
         {path:"control/v1/validate.sh",sha256:"cf173ad0eaa08244bf636e3937845e894b21f14291fc5e66753e8673bdd2bd2a"}
       ],
       record_closure:$record_closure,
+      shadow_closure:$shadow_closure,
       bootstrap_ref:ref("evals-framework-bootstrap.v1";"text/x-shellscript";$bootstrap_sha),
       launcher_ref:ref("evals-framework-launcher.v1";"text/x-shellscript";$launcher_sha),
       driver_ref:ref("evals-framework-driver.v1";"text/x-shellscript";$driver_sha),

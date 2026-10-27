@@ -99,7 +99,8 @@ def seed_sources:
   ["adapter-tests.contract.v1","adapters.provider-normalizers.v1",
    "control.duty-separation.v1","control.risk-gates.v1","control.sandbox-policy.v1",
    "core.stage-run.v2","orchestrator.reconciliation-plan.v1",
-   "orchestrator.state-scanner.v1","reviews.independent-verdicts.v1"];
+   "orchestrator.state-scanner.v1","reviews.independent-verdicts.v1",
+   "shadow.malicious-instructions.v1"];
 def trial_policy_shape:
   (exact_fields(["kind"];[]) and .kind == "single") or
   (exact_fields(["kind","minimum_trials"];[]) and .kind == "multi" and
@@ -119,7 +120,8 @@ def family_ids:
 def active_seed_sources:
   ["adapters.provider-normalizers.v1","control.duty-separation.v1","control.risk-gates.v1",
    "control.sandbox-policy.v1","core.stage-run.v2","orchestrator.reconciliation-plan.v1",
-   "orchestrator.state-scanner.v1","reviews.independent-verdicts.v1"];
+   "orchestrator.state-scanner.v1","reviews.independent-verdicts.v1",
+   "shadow.malicious-instructions.v1"];
 
 def flow_metric_ids:
   ["accepted-plan-to-merge-time","dora-instability","dora-throughput","escaped-defects",
@@ -238,7 +240,7 @@ def dashboard_shape($catalog; $catalog_sha; $evaluator_sha; $results; $result_sh
       ["families_declared","families_seeded","families_total","families_with_results",
        "sources_with_results"];[]) and .families_total == 9 and
     .families_seeded + .families_declared == 9 and
-    (.sources_with_results | enum_set_ok(1;8;active_seed_sources))) and
+    (.sources_with_results | enum_set_ok(1;9;active_seed_sources))) and
    (.quality | all(.[]; int_ok and . >= 0)) and
    (.recovery | all(.[]; int_ok and . >= 0)) and
    (.telemetry | keys == telemetry_metric_ids and

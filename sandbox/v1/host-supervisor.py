@@ -2513,6 +2513,54 @@ GUEST_PLAN_LIMITS = {
 }
 
 
+_HOST_DEADLINE_DEFAULTS_MS = ("10000", "50000", "58000", "100", "10000", "5000", "5000", "5000")
+
+
+def _deadline_seconds_values(value):
+    return int(value) / 1000.0
+
+
+def _host_deadline_defaults_values():
+    return tuple(_deadline_seconds_values(value) for value in _HOST_DEADLINE_DEFAULTS_MS)
+
+
+def _control_deadline_values(elapsed_ms, start_limit):
+    return "exceeded" if elapsed_ms > start_limit * 1000 else "met"
+
+
+def _abandonment_values(elapsed, sigkill_limit):
+    return elapsed >= sigkill_limit
+
+
+def _elapsed_deadline_values(elapsed, limit):
+    return elapsed > limit
+
+
+def _driver_budget_remaining_values(elapsed, sigkill_limit):
+    return sigkill_limit - elapsed
+
+
+def _driver_budget_before_hardstop_values(elapsed, hardstop_limit):
+    return elapsed < hardstop_limit
+
+
+def _driver_budget_hardstop_values(budget, elapsed, hardstop_limit):
+    return min(budget, hardstop_limit - elapsed)
+
+
+def _driver_budget_bound_values(budget):
+    return max(0.01, min(2.0, budget))
+
+
+def _recheck_budget_values(sigkill_limit, elapsed):
+    return min(0.2, max(0.0, sigkill_limit - elapsed))
+
+
+def _poll_remaining_values(remaining, deadline, elapsed):
+    left = deadline - elapsed
+    return min(remaining, left) if left > 0 else remaining
+
+
 def startup_deadline_s():
     # R5.4: bounded readiness grace after Popen before an "error" (REST
     # endpoint unavailable) driver_state is treated as a genuine failure
@@ -2521,21 +2569,21 @@ def startup_deadline_s():
     # timed-out "state" poll (a loaded CI runner, contended for CPU) must
     # not by itself already exhaust the grace period before the runtime
     # has had a real chance to create its endpoint.
-    return int(os.environ.get("YSTACK_TEST_STARTUP_MS", "10000")) / 1000.0
+    return _deadline_seconds_values(os.environ.get("YSTACK_TEST_STARTUP_MS", _HOST_DEADLINE_DEFAULTS_MS[0]))
 
 
 def hardstop_deadline_s():
     # Test-only: real deadlines are 50,000/58,000 ms; lowered here so the
     # suite stays fast, never mocked -- the same clock logic runs either way.
-    return int(os.environ.get("YSTACK_TEST_HARDSTOP_MS", "50000")) / 1000.0
+    return _deadline_seconds_values(os.environ.get("YSTACK_TEST_HARDSTOP_MS", _HOST_DEADLINE_DEFAULTS_MS[1]))
 
 
 def sigkill_deadline_s():
-    return int(os.environ.get("YSTACK_TEST_SIGKILL_MS", "58000")) / 1000.0
+    return _deadline_seconds_values(os.environ.get("YSTACK_TEST_SIGKILL_MS", _HOST_DEADLINE_DEFAULTS_MS[2]))
 
 
 def poll_interval_s():
-    return int(os.environ.get("YSTACK_TEST_POLL_INTERVAL_MS", "100")) / 1000.0
+    return _deadline_seconds_values(os.environ.get("YSTACK_TEST_POLL_INTERVAL_MS", _HOST_DEADLINE_DEFAULTS_MS[3]))
 
 
 # R9.4's four control_deadline windows -- each a real 10s/5s bound, test-
@@ -2543,7 +2591,7 @@ def poll_interval_s():
 # injection hook (YSTACK_TEST_SLOW_<STAGE>_MS, at each stage's own call
 # site) can trip "exceeded" fast and deterministically.
 def runtime_start_deadline_s():
-    return int(os.environ.get("YSTACK_TEST_RUNTIME_START_LIMIT_MS", "10000")) / 1000.0
+    return _deadline_seconds_values(os.environ.get("YSTACK_TEST_RUNTIME_START_LIMIT_MS", _HOST_DEADLINE_DEFAULTS_MS[4]))
 
 
 def control_deadline_for_elapsed(admission_mono):
@@ -2554,7 +2602,7 @@ def control_deadline_for_elapsed(admission_mono):
     never silently dropped just because the runtime never actually
     started."""
     elapsed_ms = (_monotonic('sandbox/v1/host-supervisor.py:1503:0') - admission_mono) * 1000
-    return "exceeded" if elapsed_ms > runtime_start_deadline_s() * 1000 else "met"
+    return _control_deadline_values(elapsed_ms, runtime_start_deadline_s())
 
 
 def abandonment_deadline_passed(admission_mono):
@@ -2566,19 +2614,20 @@ def abandonment_deadline_passed(admission_mono):
     only for the poll loop to kill it immediately, an avoidable
     unconfirmed teardown past the deadline. Once past, the attempt
     finalizes not-started the same way a pending cancellation does."""
-    return _monotonic('sandbox/v1/host-supervisor.py:1516:0') - admission_mono >= sigkill_deadline_s()
+    return _abandonment_values(
+        _monotonic('sandbox/v1/host-supervisor.py:1516:0') - admission_mono, sigkill_deadline_s())
 
 
 def export_read_deadline_s():
-    return int(os.environ.get("YSTACK_TEST_EXPORT_READ_LIMIT_MS", "5000")) / 1000.0
+    return _deadline_seconds_values(os.environ.get("YSTACK_TEST_EXPORT_READ_LIMIT_MS", _HOST_DEADLINE_DEFAULTS_MS[5]))
 
 
 def storage_removal_deadline_s():
-    return int(os.environ.get("YSTACK_TEST_STORAGE_REMOVAL_LIMIT_MS", "5000")) / 1000.0
+    return _deadline_seconds_values(os.environ.get("YSTACK_TEST_STORAGE_REMOVAL_LIMIT_MS", _HOST_DEADLINE_DEFAULTS_MS[6]))
 
 
 def payload_write_deadline_s():
-    return int(os.environ.get("YSTACK_TEST_PAYLOAD_WRITE_LIMIT_MS", "5000")) / 1000.0
+    return _deadline_seconds_values(os.environ.get("YSTACK_TEST_PAYLOAD_WRITE_LIMIT_MS", _HOST_DEADLINE_DEFAULTS_MS[7]))
 
 
 def test_slow(env_name):
@@ -2851,8 +2900,7 @@ def _run_driver_process(driver_path, args, timeout_s, capture_fd):
     return _driver_output_values(proc.returncode, chunks, incomplete, overflow)
 
 
-def driver_argv(driver_path, start_path):
-    rc, out = run_driver(driver_path, ["argv", start_path])
+def _driver_argv_result_values(rc, out):
     if rc != 0:
         return None
     try:
@@ -2868,13 +2916,26 @@ def driver_argv(driver_path, start_path):
     return doc["argv"], doc["stopped_exit_status"]
 
 
-def driver_state(driver_path, socket_path, timeout_s=2.0):
-    rc, out = run_driver(driver_path, ["state", socket_path], timeout_s=timeout_s)
-    test_self_signal("YSTACK_TEST_SELF_SIGNAL_AFTER_DRIVER_STATE")  # test-only
+def driver_argv(driver_path, start_path):
+    rc, out = run_driver(driver_path, ["argv", start_path])
+    return _driver_argv_result_values(rc, out)
+
+
+def _driver_state_result_values(rc, out):
     if rc != 0:
         return "error"
     text = out.decode("utf-8", "replace").strip()
     return text if text in ("running", "stopped", "error") else "error"
+
+
+def driver_state(driver_path, socket_path, timeout_s=2.0):
+    rc, out = run_driver(driver_path, ["state", socket_path], timeout_s=timeout_s)
+    test_self_signal("YSTACK_TEST_SELF_SIGNAL_AFTER_DRIVER_STATE")  # test-only
+    return _driver_state_result_values(rc, out)
+
+
+def _driver_stop_result_values(rc):
+    return rc == 0
 
 
 def driver_stop(driver_path, socket_path, timeout_s=2.0):
@@ -2883,7 +2944,7 @@ def driver_stop(driver_path, socket_path, timeout_s=2.0):
     # rejected/failed stop (endpoint not up yet) from one the runtime
     # actually honored, and retry only the former.
     rc, _ = run_driver(driver_path, ["stop", socket_path], timeout_s=timeout_s)
-    return rc == 0
+    return _driver_stop_result_values(rc)
 
 
 def bounded_driver_call(fn, admission_mono, signal_seen, result):
@@ -2908,12 +2969,12 @@ def bounded_driver_call(fn, admission_mono, signal_seen, result):
     because SIGKILL's own deadline had already passed -- the caller
     escalates exactly as it does for the top-of-loop check."""
     elapsed = _monotonic('sandbox/v1/host-supervisor.py:1758:0') - admission_mono
-    if elapsed >= sigkill_deadline_s():
+    if _abandonment_values(elapsed, sigkill_deadline_s()):
         return None, True
-    call_budget = sigkill_deadline_s() - elapsed
-    if elapsed < hardstop_deadline_s():
-        call_budget = min(call_budget, hardstop_deadline_s() - elapsed)
-    call_budget = max(0.01, min(2.0, call_budget))
+    call_budget = _driver_budget_remaining_values(elapsed, sigkill_deadline_s())
+    if _driver_budget_before_hardstop_values(elapsed, hardstop_deadline_s()):
+        call_budget = _driver_budget_hardstop_values(call_budget, elapsed, hardstop_deadline_s())
+    call_budget = _driver_budget_bound_values(call_budget)
     value = fn(call_budget)
     if signal_seen[0]:
         result["cancelled"] = True
@@ -3086,6 +3147,14 @@ def _run_result_values(export, tree_terminated, hard_stop, cancelled, driver_rep
     }
 
 
+def _runtime_start_values(config, export_path, input_path, socket_path):
+    start_body = {"command_line": GUEST_COMMAND_LINE, "cpu_count": 1,
+                  "export_disk": export_path, "initramfs": config["identity_paths"]["image"],
+                  "input_disk": input_path, "kernel": config["identity_paths"]["guest_kernel"],
+                  "memory_bytes": GUEST_MEMORY_BYTES, "rest_socket": socket_path}
+    return canonical({"body": start_body, "kind": "sandbox_runtime_start", "schema_version": 1})
+
+
 def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_raw, verifier_raw,
            candidates, plan_sha256, admission_mono, signal_seen):
     """R5-R9's real launch: disks, start.json + driver argv, spawn, poll/
@@ -3116,11 +3185,7 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
     export_path = os.path.join(attempt_dir, "export.img")
     socket_path = os.path.join(attempt_dir, "rest.sock")
     start_path = os.path.join(attempt_dir, "start.json")
-    start_body = {"command_line": GUEST_COMMAND_LINE, "cpu_count": 1,
-                  "export_disk": export_path, "initramfs": config["identity_paths"]["image"],
-                  "input_disk": input_path, "kernel": config["identity_paths"]["guest_kernel"],
-                  "memory_bytes": GUEST_MEMORY_BYTES, "rest_socket": socket_path}
-    start_bytes = canonical({"body": start_body, "kind": "sandbox_runtime_start", "schema_version": 1})
+    start_bytes = _runtime_start_values(config, export_path, input_path, socket_path)
 
     result = {"runtime": "error", "tree_terminated": False, "cancelled": False,
               "hard_stop": False, "control_deadline": "met", "export": None,
@@ -3329,7 +3394,7 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
             # clean exit whose endpoint happened to vanish first is never
             # misclassified just because our own proc.poll() call landed
             # a moment too early.
-            recheck_budget = min(0.2, max(0.0, sigkill_deadline_s() - (_monotonic('sandbox/v1/host-supervisor.py:2045:0') - admission_mono)))
+            recheck_budget = _recheck_budget_values(sigkill_deadline_s(), _monotonic('sandbox/v1/host-supervisor.py:2045:0') - admission_mono)
             recheck_deadline = _monotonic('sandbox/v1/host-supervisor.py:2046:0') + recheck_budget
             while exit_code is None and _monotonic('sandbox/v1/host-supervisor.py:2047:0') < recheck_deadline:
                 time.sleep(0.01)
@@ -3349,9 +3414,8 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
         # poll_interval_s(), so a slow poll can't also oversleep past one.
         remaining = poll_interval_s()
         for deadline_s in (hardstop_deadline_s(), sigkill_deadline_s()):
-            left = deadline_s - (_monotonic('sandbox/v1/host-supervisor.py:2069:0') - admission_mono)
-            if left > 0:
-                remaining = min(remaining, left)
+            remaining = _poll_remaining_values(remaining, deadline_s,
+                _monotonic('sandbox/v1/host-supervisor.py:2069:0') - admission_mono)
         if remaining > 0:
             time.sleep(remaining)
 
@@ -3492,7 +3556,7 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
             if isinstance(exc, OSError):
                 _record_process("run_vm.export-read", error=exc.errno)
             export_records = None
-        if (_monotonic('sandbox/v1/host-supervisor.py:2195:0') - export_read_began) > export_read_deadline_s():
+        if _elapsed_deadline_values((_monotonic('sandbox/v1/host-supervisor.py:2195:0') - export_read_began), export_read_deadline_s()):
             result["control_deadline"] = "exceeded"
         validated = validate_export(export_records, plan_sha256)
     export = _export_values(validated)
@@ -4176,7 +4240,7 @@ def _run_launch(argv):
                     # (or its own cleanup) that alone already overran
                     # the startup budget.
                     run_result = stub_run_result(control_deadline_for_elapsed(admission_mono))
-                    if created[0] and (_monotonic('sandbox/v1/host-supervisor.py:2866:0') - storage_removal_began) > storage_removal_deadline_s():
+                    if created[0] and _elapsed_deadline_values((_monotonic('sandbox/v1/host-supervisor.py:2866:0') - storage_removal_began), storage_removal_deadline_s()):
                         run_result["control_deadline"] = "exceeded"
                 else:
                     manifest = parse_manifest(package["manifest.json"])
@@ -4195,7 +4259,7 @@ def _run_launch(argv):
                     storage_removal_began = _monotonic('sandbox/v1/host-supervisor.py:2882:0')
                     test_slow("YSTACK_TEST_SLOW_STORAGE_REMOVAL_MS")
                     storage_destroyed = remove_frozen(config["work_root"], attempt_id, candidate_names)
-                    if (_monotonic('sandbox/v1/host-supervisor.py:2885:0') - storage_removal_began) > storage_removal_deadline_s():
+                    if _elapsed_deadline_values((_monotonic('sandbox/v1/host-supervisor.py:2885:0') - storage_removal_began), storage_removal_deadline_s()):
                         run_result["control_deadline"] = "exceeded"
                 test_slow("YSTACK_TEST_SLOW_FINALIZE_MS")
                 test_self_signal("YSTACK_TEST_SELF_SIGNAL_AT_FINALIZE")
@@ -4205,7 +4269,7 @@ def _run_launch(argv):
                 test_slow("YSTACK_TEST_SLOW_PAYLOAD_WRITE_MS")
                 write_payload(attempt_fd, principal_uid, config["consumer_gid"], payload,
                               run_result["evidence_payload"])
-                if (_monotonic('sandbox/v1/host-supervisor.py:2895:0') - payload_write_began) > payload_write_deadline_s():
+                if _elapsed_deadline_values((_monotonic('sandbox/v1/host-supervisor.py:2895:0') - payload_write_began), payload_write_deadline_s()):
                     run_result["control_deadline"] = "exceeded"
                 # The lifecycle (control_deadline included) is only
                 # finalized here, after payload writing -- never before.

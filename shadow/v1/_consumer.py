@@ -1301,7 +1301,10 @@ def _refresh_recording_directory(item, before, work):
 
 def _copy_preparation_document(directory, raw, work, resolver, *, name="capture.json"):
     limits = {"capture.json": DOCUMENT_LIMIT, "parent-frame.bin": PARENT_FRAME_LIMIT,
-              "helper-build-record.json": DOCUMENT_LIMIT, "native-dependency-record.json": DOCUMENT_LIMIT}
+              "helper-build-record.json": DOCUMENT_LIMIT, "native-dependency-record.json": DOCUMENT_LIMIT,
+              "source-host.json": DOCUMENT_LIMIT, "source-config.json": DOCUMENT_LIMIT,
+              "source-accepted.json": DOCUMENT_LIMIT, "source-package.json": DOCUMENT_LIMIT,
+              "source-supervisor.py": EXECUTABLE_LIMIT, "source-normalizer.py": EXECUTABLE_LIMIT}
     _require(name in limits and type(raw) is bytes and len(raw) <= limits[name], "E_STORE")
     target = reader = None
     failure = None
@@ -1613,6 +1616,135 @@ class Anchor:
                     copied = None
             if getattr(tail_failure, "_scope_signal_cancel", False) and not getattr(failure, "_scope_signal_cancel", False):
                 raise tail_failure
+        return copied
+
+    def retain_source_configuration(self, parent, source, ordinal):
+        leaf, copied, directory, failure, case_work = {}, None, None, None, None
+        def failed(error, site):
+            nonlocal failure
+            marked = lambda value: isinstance(value, KeyboardInterrupt) or getattr(value, "_scope_signal_cancel", False)
+            if failure is None or marked(error) and not marked(failure):failure = error
+            try:_capture_observation_error(leaf, "M", site, error)
+            except BaseException as observed:
+                if marked(observed) and not marked(failure):failure = observed
+                try:leaf["accounting_incomplete"] = True
+                except BaseException as later:
+                    if marked(later) and not marked(failure):failure = later
+        try:
+            _capture_work_values(leaf, "source-configuration")
+            self.recording_work.setdefault("source_configuration_leaves", []).append(leaf)
+            _require(type(source) is _HeldCoverageRead and source.anchor is self
+                     and type(source.configuration) is _CoverageConfiguration
+                     and source.configuration.anchor is self and bool(source.held)
+                     and type(ordinal) is int and 0 <= ordinal < 4096, "E_STORE")
+            cfg = source.configuration
+            _require(not cfg.source_inputs_unusable and type(cfg.source_inputs) is dict
+                     and set(cfg.source_inputs) == {"host", "config", "accepted", "package", "supervisor", "normalizer"}
+                     and type(cfg.source_package_document) is dict and bool(cfg.held), "E_STORE")
+            request_raw = source.capture.request_raw
+            _require(type(request_raw) is bytes and request_raw == source.snapshots["payload/request.json"], "E_STORE")
+            case_state = parent.components[-2].before if parent.components[-1].name.startswith("gate-") else parent.before
+            case_key = str(case_state.st_dev) + ":" + str(case_state.st_ino)
+            case_work = _capture_work_values(self.recording_work, case_key)
+            leaf["input_kind"] = "M"
+            leaf["metadata_kind"] = "M"
+            leaf["_capture_copy_budget"] = _capture_copy_budget_values(leaf,
+                ((self.recording_work, False), (case_work, True)))
+            prefix = "coverage-source" if cfg.operation == "coverage-read" else "kill-register-source"
+            _require(cfg.operation in {"coverage-read", "kill-register-read"}, "E_STORE")
+            paths = {"host": ANCHOR + "/host-config.json", "config": ANCHOR + "/" + prefix + "-config.json",
+                     "accepted": ANCHOR + "/" + prefix + "-accepted-identities.json",
+                     "package": cfg.config["source_package_path"], "supervisor": ANCHOR + "/host-supervisor.py",
+                     "normalizer": ANCHOR + "/coverage-source.py"}
+            names = {"host": "source-host.json", "config": "source-config.json", "accepted": "source-accepted.json",
+                     "package": "source-package.json", "supervisor": "source-supervisor.py", "normalizer": "source-normalizer.py"}
+            parent.recheck("E_STORE", leaf, "M")
+            before = parent.before
+            launch = "source-configuration-%04d" % ordinal
+            os.mkdir(launch, 0o700, dir_fd=parent.fd)
+            _refresh_recording_directory(parent, before, leaf)
+            directory = os.open(launch, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent.fd)
+            initial = _capture_metadata(directory, leaf, "M")
+            states, source_hashes = {}, {}
+            for key in ("host", "config", "accepted", "package", "supervisor", "normalizer"):
+                raw, original = cfg.source_inputs[key]
+                limit = EXECUTABLE_LIMIT if key in {"supervisor", "normalizer"} else DOCUMENT_LIMIT
+                _require(type(raw) is bytes and isinstance(original, HeldPath) and bool(original.components)
+                         and original.path == paths[key] and original.before.st_size == len(raw)
+                         and any(item is original for item in (self.held if key in {"host", "supervisor"} else cfg.held)), "E_STORE")
+                if key == "host":_require(raw is self.config_raw, "E_STORE")
+                elif key == "config":_require(raw is cfg.config_raw, "E_STORE")
+                elif key == "accepted":_require(raw is cfg.accepted_raw, "E_STORE")
+                elif key == "package":_require(raw is cfg.package_raw, "E_STORE")
+                leaf["source_configuration_processing_incomplete"] = True
+                observed = original.read(limit, "E_STORE", leaf)
+                _capture_copy_room(leaf, len(observed) * 2 + len(raw), False, case=True, read_only=True)
+                equal = observed == raw
+                leaf["read_bytes"] += len(observed) + len(raw)
+                _capture_account(leaf, "M", "read_bytes", len(observed) + len(raw))
+                _require(equal, "E_STORE")
+                source_hashes[key] = digest(observed)
+                leaf["read_bytes"] += len(observed)
+                _capture_account(leaf, "M", "read_bytes", len(observed))
+                _capture_copy_budget_room(leaf, 0, False, files=1)
+                counters = {field: leaf[field] for field in ("read_bytes", "write_bytes", "physical_bytes", "files")}
+                classified_read = leaf.get("accounting", {}).get("M", {}).get("read_bytes", 0)
+                try:states[names[key]] = _copy_preparation_document(directory, raw, leaf, self.resolver, name=names[key])
+                except BaseException as error:failed(error, "source-configuration-file")
+                finally:
+                    for field, prior in counters.items():
+                        try:
+                            amount = leaf[field] - prior
+                            if field == "read_bytes":
+                                classified = leaf.get("accounting", {}).get("M", {}).get("read_bytes", 0) - classified_read
+                                _require(0 <= classified <= amount, "E_LIMIT")
+                                amount -= classified
+                            _capture_account(leaf, "M", field, amount)
+                        except BaseException as error:failed(error, "source-configuration-file-accounting")
+                if failure is not None:raise failure
+                leaf["source_configuration_processing_incomplete"] = False
+                original.recheck("E_STORE", leaf, "M")
+            _require(set(os.listdir(directory)) == set(names.values()), "E_STORE")
+            os.fsync(directory);os.fsync(parent.fd)
+            final = _capture_metadata(directory, leaf, "M")
+            named = _capture_named_metadata(launch, parent.fd, leaf, "M")
+            stable = lambda value: (value.st_dev, value.st_ino, value.st_uid, value.st_gid, value.st_mode)
+            _require(stable(initial) == stable(final) and _identity(final) == _identity(named), "E_STORE")
+            _capture_transfer_work(leaf, self.recording_work, case_work)
+            copied = _HeldSourceConfigurationCopy(self, self.recording_work, case_work)
+            copied.leaf["_capture_copy_budget"] = _capture_copy_budget_values(copied.leaf,
+                ((self.recording_work, False), (case_work, True)))
+            copied.acquire(parent, launch, states, {})
+            copied.source_configuration_hashes = source_hashes
+            copied.source_configuration_members = {key: {"member": names[key], "sha256": source_hashes[key],
+                "stat": states[names[key]]} for key in names}
+            copied.source_configuration = cfg
+            copied.source_configuration_source = source
+            copied.source_configuration_request_raw = request_raw
+            copied.source_configuration_operation = cfg.operation
+            copied.source_configuration_ordinal = ordinal
+        except BaseException as error:
+            failed(error, "source-configuration-copy")
+        finally:
+            if directory is not None:
+                try:_close_capture_copy(directory, leaf, leaf, "source-configuration-directory", failure)
+                except BaseException as error:failed(error, "source-configuration-directory-close")
+            try:
+                if case_work is not None:
+                    _capture_transfer_work(leaf, self.recording_work, case_work)
+                    _capture_accounting_receipt(self)
+                else:leaf["transfer_incomplete"] = True
+            except BaseException as error:
+                failed(error, "source-configuration-transfer")
+                try:leaf["transfer_incomplete"] = True
+                except BaseException as observed:failed(observed, "source-configuration-transfer-report")
+            try:_require(copied is not None and not _capture_work_incomplete(leaf), "E_STORE")
+            except BaseException as error:failed(error, "source-configuration-final")
+            if failure is not None and copied is not None:
+                try:copied.close()
+                except BaseException as error:failed(error, "source-configuration-owner-close")
+                copied = None
+        if failure is not None:raise failure
         return copied
 
     def retain_runtime_acquisition(self, parent, role, original, raw, caller_raw):
@@ -2154,6 +2286,15 @@ def load_anchor(resolver: _DarwinUUIDResolver | None = None,
             raise exc from close_exc
         raise
 
+def _verifier_observation_values(environment_id, registry_entry, accepted_set_sha, target_repository_id, verifier_sha):
+    return canonical({"schema_version": 1, "kind": "sandbox_verifier_observation",
+                      "id": "sandbox.observation.verifier", "body": {
+                          "environment_id": environment_id,
+                          "environment_entry_sha256": digest(canonical(registry_entry)),
+                          "accepted_set_sha256": accepted_set_sha,
+                          "target_repository_id": target_repository_id,
+                          "verifier_sha256": verifier_sha}})
+
 def verifier_observation(anchor: Anchor, environment_id: str, target_repository_id: str) -> bytes:
     anchor.recheck("E_RELATION")
     _require(anchor.config["environment_id"] == environment_id, "E_RELATION")
@@ -2167,13 +2308,8 @@ def verifier_observation(anchor: Anchor, environment_id: str, target_repository_
     verifier_sha = digest(verifier_raw)
     _require(verifier_sha in accepted[0]["identities"]["verifier"], "E_RELATION")
     anchor.recheck("E_RELATION")
-    return canonical({"schema_version": 1, "kind": "sandbox_verifier_observation",
-                      "id": "sandbox.observation.verifier", "body": {
-                          "environment_id": environment_id,
-                          "environment_entry_sha256": digest(canonical(registry[0])),
-                          "accepted_set_sha256": anchor.accepted[0],
-                          "target_repository_id": target_repository_id,
-                          "verifier_sha256": verifier_sha}})
+    return _verifier_observation_values(environment_id, registry[0], anchor.accepted[0],
+                                        target_repository_id, verifier_sha)
 
 def _observation(item: HeldPath, relative: str, raw: bytes | None = None, *, storage_rows=None) -> dict:
     after = _capture_metadata(item.fd, item.recording_work, item.accounting_kind)
@@ -3030,6 +3166,44 @@ class _HeldCaptureCopy:
         if cancellation is not None and not getattr(primary, "_scope_signal_cancel", False):raise cancellation
 
 
+class _HeldSourceConfigurationCopy(_HeldCaptureCopy):
+    @staticmethod
+    def _first(first, later):
+        marked = lambda value: isinstance(value, KeyboardInterrupt) or getattr(value, "_scope_signal_cancel", False)
+        return later if first is None or marked(later) and not marked(first) else first
+
+    def _close_configuration_held(self, held, failure):
+        while held.components:
+            component = held.components.pop()
+            try:_close_capture_copy(component.fd, self.leaf, self.leaf, "source-configuration-held-close", None)
+            except BaseException as error:
+                failure = self._first(failure, error)
+                try:
+                    self.leaf["source_configuration_close_incomplete"] = True
+                    self._failed(error, "source-configuration-held-close", failure)
+                except BaseException as observed:failure = self._first(failure, observed)
+        return failure
+
+    def _adopt(self, held):
+        try:self.owned.append(held)
+        except BaseException as error:
+            if not (self.owned and self.owned[-1] is held):
+                error = self._close_configuration_held(held, error)
+            raise error
+
+    def close(self):
+        if self.closed:return
+        primary = sys.exc_info()[1]
+        failure = primary
+        held, self.owned = self.owned, self._released_owned
+        self.closed, self.directory = True, None
+        while held:
+            failure = self._close_configuration_held(held.pop(), failure)
+        try:self._transfer()
+        except BaseException as error:failure = self._first(failure, error)
+        if failure is not None and failure is not primary:raise failure
+
+
 class _HeldPreparationSources(_HeldCaptureCopy):
     def __init__(self, anchor, work, case_work, binding):
         self.anchor, self.work, self.case_work = anchor, work, case_work
@@ -3549,6 +3723,7 @@ def read_store_attempt(anchor: Anchor, attempt_id: str, *,
                 raise
 
 class _CoverageConfiguration:
+    source_package_document = None
     source_inputs = None
     source_inputs_error = None
 
@@ -3614,6 +3789,7 @@ class _CoverageConfiguration:
             self.hashes = {item.path: digest(item.read(EXECUTABLE_LIMIT, "E_INSTALL")) for item in self.held}
             self.recheck()
             try:
+                self.source_package_document = package
                 self.source_inputs = {
                     "host": (anchor.config_raw, next(item for item in anchor.held
                              if item.path == ANCHOR + "/host-config.json")),
