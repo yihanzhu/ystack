@@ -680,11 +680,389 @@ class _Owned(list):
 class _GateReaderSession:
     is_inner = True
 
+    p_enabled = False
+    p_unusable = True
+    p_reader = None
+    p_cancel = None
+    _p_unusable_side = {"state": "unusable"}
+
+    def _p_failed(self, error, site):
+        cancellation = self.p_cancel
+        if cancellation is None and (isinstance(error, KeyboardInterrupt) or getattr(error, "_scope_signal_cancel", False)):
+            cancellation = error
+        try:
+            self.p_cancel = cancellation
+            self.p_unusable = True
+            self.p_errors.append((site, error))
+            work = self.p_work
+            c._capture_observation_error(work, "M", site, error)
+            reader = self.p_reader
+            if reader is not None and reader.anchor is not None:
+                reader.anchor.private_observations["unusable"] = True
+        except BaseException as reporting:
+            if cancellation is None and (isinstance(reporting, KeyboardInterrupt) or getattr(reporting, "_scope_signal_cancel", False)):
+                cancellation = reporting
+            try:self.p_cancel = cancellation
+            except BaseException:
+                if cancellation is not None:raise cancellation
+
+    def _p_raise_cancel(self):
+        if self.p_cancel is not None:
+            raise self.p_cancel
+
+    def bind_reader(self, reader, paths):
+        if not self.p_enabled:return
+        try:
+            require(type(reader) is _Reader and reader.store_session is self and self.p_reader is None
+                and len(paths) == 5 and all(isinstance(path, Path) for path in paths), "E_STORE")
+            scope, shadow_set, bundle, git, output = paths
+            scratch = output.parent.parent
+            prefix = "ystack-scope-evaluate."
+            name = scratch.name
+            require(scope == scratch / "scope.json" and shadow_set == scratch / "shadow-set.json"
+                and output == scratch / "observation/result.json"
+                and reader.scratch == scratch and reader.captures == scratch / "reader-captures"
+                and reader.runtime == scratch / "reader-runtime" and reader.git_root == git
+                and reader.bundle_root.path == str(bundle) and scratch.is_absolute()
+                and name.startswith(prefix) and len(name) == len(prefix) + 6
+                and all(char in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" for char in name[len(prefix):]), "E_STORE")
+            self.p_reader = reader
+            self.p_paths = tuple(paths)
+            self.p_scratch = scratch
+            reader.replay_output_work["C1_live_P"] = self.p_work
+        except BaseException as error:self._p_failed(error, "C1-reader-binding")
+        self._p_raise_cancel()
+
+    def _p_register(self, held, copied):
+        require(type(held) is c.HeldPath and bool(held.components), "E_STORE")
+        previous = [row for row in self.p_registry if row["held"] is held]
+        if previous:
+            require(len(previous) == 1 and previous[0]["copied"] is copied, "E_STORE")
+            return previous[0]
+        require(len(self.p_registry) < 4096, "E_LIMIT")
+        row = {"serial": len(self.p_registry), "held": held, "copied": copied,
+            "closed": False, "sent": False, "settled": False, "projection": None}
+        self.p_registry.append(row)
+        return row
+
+    def register_copy(self, copied):
+        if not self.p_enabled:return
+        try:
+            require(self.p_reader is not None and copied.anchor is self.p_reader.anchor
+                and any(item is copied for item in self.p_reader.source_copies) and not copied.closed, "E_STORE")
+            if copied.consumer_snapshot is not None:
+                require("consumer-observations.json" in copied.members, "E_STORE")
+                names = ["consumer-observations.json"]
+            elif getattr(copied, "anchor_input_reader", None) is self.p_reader:
+                names = [value["member"] for value in copied.anchor_input_members.values()]
+            elif hasattr(copied, "source_configuration_members"):
+                names = [value["member"] for value in copied.source_configuration_members.values()]
+            else:names = list(copied.runtime_sha256)
+            require(names and len(set(names)) == len(names), "E_STORE")
+            for name in copied.members:
+                if name in names:self._p_register(copied.members[name], copied)
+            require(all(name in copied.members for name in names), "E_STORE")
+        except BaseException as error:self._p_failed(error, "C1-P-registration")
+        self._p_raise_cancel()
+
+    def register_history(self, value):
+        if not self.p_enabled:return
+        try:
+            store, files, retained, storage_rows = value
+            reader = self.p_reader
+            require(reader is not None and store.anchor is reader.anchor
+                and store.storage_rows is storage_rows and set(files) == set(retained), "E_STORE")
+            acquisitions = [item for item in reader.anchor.private_observations["storage_reads"]
+                if item["entries"] and all(row["role"] == "store" for row in item["entries"])]
+            ordinals = [index for index, item in enumerate(acquisitions) if item["entries"] is storage_rows]
+            require(len(ordinals) == 1, "E_STORE")
+            for name, path in retained.items():
+                holders = [item for item in reader.owned if type(item) is c._HeldBytes
+                    and item.held.path == str(path) and item.raw == files[name]]
+                require(len(holders) == 1, "E_STORE")
+                row = self._p_register(holders[0].held, None)
+                binding = ("history", ordinals[0], name)
+                require(row["projection"] is None or row["projection"] == binding, "E_STORE")
+                row["projection"] = binding
+                row["raw"] = files[name]
+        except BaseException as error:self._p_failed(error, "C1-history-registration")
+        self._p_raise_cancel()
+
+    def note_closed(self, item):
+        if not self.p_enabled:return
+        try:
+            if isinstance(item, c._HeldCaptureCopy):
+                matches = [row for row in self.p_registry if row["copied"] is item]
+                require(item.closed and not item.owned, "E_STORE")
+            elif type(item) is c._HeldBytes:
+                matches = [row for row in self.p_registry if row["held"] is item.held]
+            else:return
+            for row in matches:
+                require(not row["held"].components, "E_STORE")
+                row["closed"] = True
+        except BaseException as error:self._p_failed(error, "C1-P-close-result")
+
+    def _p_projection(self, row):
+        reader, copied, held = self.p_reader, row["copied"], row["held"]
+        if copied is None:
+            require(row["projection"] is not None, "E_STORE")
+            return row["projection"]
+        names = [name for name, item in copied.members.items() if item is held]
+        require(len(names) == 1 and not copied.closed and copied.anchor is reader.anchor, "E_STORE")
+        name = names[0]
+        if getattr(copied, "anchor_input_reader", None) is reader:
+            keys = [key for key, value in copied.anchor_input_members.items() if value["member"] == name]
+            require(len(keys) == 1, "E_STORE")
+            raw, original = reader.replay_outputs["anchor"][0][1][keys[0]]
+            value = copied.anchor_input_members[keys[0]]
+            require(value["raw"] is raw and value["original"] is original, "E_STORE")
+            return "anchor", 0, name
+        if hasattr(copied, "source_configuration_source"):
+            source = copied.source_configuration_source
+            require(source.anchor is reader.anchor and copied.source_configuration is source.configuration
+                and copied.source_configuration_request_raw == source.capture.request_raw, "E_STORE")
+            keys = [key for key, value in copied.source_configuration_members.items() if value["member"] == name]
+            require(len(keys) == 1, "E_STORE")
+            return "source-configuration", copied.source_configuration_ordinal, name
+        if hasattr(copied, "scope_source"):
+            require(type(copied.scope_source) is c._HeldCoverageRead and copied.scope_source.anchor is reader.anchor
+                and copied.directory.components[-1].name == "source-%04d" % copied.scope_source_ordinal, "E_STORE")
+            return "source", copied.scope_source_ordinal, name
+        require(name in copied.runtime_sha256, "E_STORE")
+        rows = [value for value in reader.anchor.private_observations["local_runtime"]
+            if value["file"] == name and value["size_bytes"] == held.before.st_size
+            and value["sha256"] == copied.runtime_sha256[name]]
+        require(len(rows) == 1 and rows[0]["errno"] is None, "E_STORE")
+        return "runtime", rows[0]["ordinal"], name
+
+    def _p_chain(self, held, stop=None):
+        scratch = self.p_scratch
+        # Full HeldPath chains begin at '/', including the actual TMPDIR component.
+        index = len(scratch.parent.parts) - 1
+        require(len(held.components) > index and held.components[index].name == scratch.parent.name, "E_STORE")
+        require(held.components[index + 1].name == scratch.name, "E_STORE")
+        return [{"name": "/" if part.name is None else part.name,
+            "identity": list(c._identity(part.before))} for part in held.components]
+
+    def _p_transfer(self):
+        reader = self.p_reader
+        require(reader is not None and reader.anchor is not None, "E_STORE")
+        if not hasattr(self, "p_case_work"):
+            cases = [row["copied"].case_work for row in self.p_registry if row["copied"] is not None]
+            require(cases, "E_STORE")
+            self.p_case_work = cases[0]
+            self.p_work["_capture_copy_budget"] = c._capture_copy_budget_values(self.p_work,
+                ((reader.anchor.recording_work, False), (self.p_case_work, True)))
+            self.p_work["runtime_case_carry_in"] = self.p_case_work.get("runtime", {})
+            self.p_work["runtime_window_carry_in"] = reader.anchor.recording_work.get("runtime", {})
+        c._capture_transfer_work(self.p_work, reader.anchor.recording_work, self.p_case_work)
+        transferred = self.p_work.setdefault("transferred_seed_processing", {})
+        for field, count in self.p_work.get("seed_processing", {}).items():
+            delta = count - transferred.get(field, 0)
+            require(delta >= 0, "E_STORE")
+            for target in (reader.anchor.recording_work, self.p_case_work):
+                processing = target.setdefault("seed_processing", {})
+                processing[field] = processing.get(field, 0) + delta
+            transferred[field] = count
+
+    def _p_expected(self, row, family, name):
+        copied = row["copied"]
+        if copied is not None and name in copied.runtime_sha256:
+            return None, copied.runtime_sha256[name]
+        if family == "history":raw = row["raw"]
+        elif family == "anchor":
+            values = [value for value in copied.anchor_input_members.values() if value["member"] == name]
+            require(len(values) == 1, "E_STORE")
+            raw = values[0]["raw"]
+        elif family == "source-configuration":
+            keys = [key for key, value in copied.source_configuration_members.items() if value["member"] == name]
+            require(len(keys) == 1, "E_STORE")
+            raw = copied.source_configuration.source_inputs[keys[0]][0]
+        else:
+            require(family == "source", "E_STORE")
+            source = copied.scope_source
+            if name in {"capture.json", "complete.json"}:raw = source.capture.snapshots[name]
+            elif name == "origin-observation.json":raw = source.capture_origin
+            else:
+                require(name == "consumer-observations.json", "E_STORE")
+                raw = copied.consumer_snapshot
+        require(type(raw) is bytes, "E_STORE")
+        c._capture_copy_room(self.p_work, len(raw), False, read_only=True)
+        self.p_work["hash_attempt_unknown"] = True
+        expected = c.digest(raw)
+        self.p_work["read_bytes"] += len(raw)
+        c._capture_account(self.p_work, "M", "read_bytes", len(raw))
+        processing = self.p_work.setdefault("seed_processing", {})
+        processing["H"] = processing.get("H", 0) + len(raw)
+        self.p_work["hash_attempt_unknown"] = False
+        return raw, expected
+
+    def _p_member_sha(self, held, runtime, expected_raw):
+        measured, offset = hashlib.sha256(), 0
+        size = held.before.st_size
+        while offset < size:
+            count = min(65536, size - offset)
+            if runtime:
+                c._runtime_account(self.p_work, "read_bytes", count, commit=False)
+                c._runtime_account(self.p_work, "sha_bytes", count, commit=False)
+            else:c._capture_copy_room(self.p_work, count, False, read_only=True)
+            self.p_work["member_read_incomplete"] = True
+            raw = os.pread(held.fd, count, offset)
+            if runtime:c._runtime_account(self.p_work, "read_bytes", len(raw))
+            else:
+                self.p_work["read_bytes"] += len(raw)
+                c._capture_account(self.p_work, "M", "read_bytes", len(raw))
+            require(len(raw) == count, "E_STORE")
+            measured.update(raw)
+            if runtime:c._runtime_account(self.p_work, "sha_bytes", len(raw))
+            else:
+                processing = self.p_work.setdefault("seed_processing", {})
+                processing["H"] = processing.get("H", 0) + len(raw)
+                require(expected_raw is not None and len(expected_raw) == size, "E_STORE")
+                same_bytes = raw == expected_raw[offset:offset + count]
+                processing["E"] = processing.get("E", 0) + 2 * len(raw)
+                require(same_bytes, "E_STORE")
+            offset += len(raw)
+            self.p_work["member_read_incomplete"] = False
+        return measured.hexdigest()
+
+    def _p_batch(self, phase):
+        value = self._p_unusable_side
+        try:
+            require(not self.p_unusable and self.p_reader is not None and phase not in self.p_batches, "E_STORE")
+            reader = self.p_reader
+            require(reader.commands_open and not reader.replay_output_unusable and reader.anchor is not None, "E_STORE")
+            reader.recheck()
+            values = reader.replay_outputs["anchor"]
+            require(values and all(key is reader.anchor.config_raw for key, _ in values), "E_STORE")
+            inputs = values[0][1]
+            live_anchor = [copy for copy in reader.source_copies if getattr(copy, "anchor_input_reader", None) is reader]
+            if not live_anchor:
+                require(reader.retain_anchor_inputs(inputs) is not None, "E_STORE")
+            self._p_transfer()
+            members, root_chain = [], None
+            for row in self.p_registry:
+                if row["closed"]:
+                    require(row["sent"], "E_STORE")
+                    continue
+                held, copied = row["held"], row["copied"]
+                require(held.components and (copied is None or not copied.closed), "E_STORE")
+                if copied is not None:copied.recheck()
+                held.recheck("E_STORE", self.p_work, "M")
+                family, ordinal, name = self._p_projection(row)
+                binding = (family, ordinal, name)
+                require(row["projection"] is None or row["projection"] == binding, "E_STORE")
+                row["projection"] = binding
+                path = Path(held.path)
+                require(path.is_relative_to(reader.captures), "E_STORE")
+                chain = self._p_chain(held)
+                root_index = len(self.p_scratch.parent.parts) - 1
+                current_root = chain[root_index:root_index + 2]
+                require(root_chain is None or root_chain == current_root, "E_STORE")
+                root_chain = current_root
+                expected_raw, expected_sha = self._p_expected(row, family, name)
+                sha = self._p_member_sha(held, name in copied.runtime_sha256 if copied is not None else False, expected_raw)
+                require(sha == expected_sha, "E_STORE")
+                held.recheck("E_STORE", self.p_work, "M")
+                members.append({"serial": row["serial"], "family": family, "ordinal": ordinal,
+                    "name": name, "relative": path.relative_to(self.p_scratch).as_posix(), "chain": chain,
+                    "size_bytes": held.before.st_size, "sha256": sha})
+            require(root_chain is not None and members, "E_STORE")
+            value = c._c1_p_batch_values(self.p_scratch.name, root_chain, members, self.p_work)
+            reader.recheck()
+            self._p_transfer()
+        except BaseException as error:
+            value = self._p_unusable_side
+            self._p_failed(error, "C1-live-P-batch-" + phase)
+        self._p_raise_cancel()
+        return value
+
+    def _p_attach(self, phase, body, side):
+        try:
+            body["p_handoff"] = side
+            value = body
+            raw = c._c1_p_side_raw({"version": 1, "call_id": self.wire.call_id,
+                "nonce": self.wire.nonce, "sequence": self.wire.sent + 1, "phase": phase,
+                "binding": self.wire.binding, "body": value}, self.p_work)
+            require(len(raw) <= c.DOCUMENT_LIMIT and self.wire.sent_bytes + len(raw) <= 64 * c.DOCUMENT_LIMIT, "E_LIMIT")
+            return value
+        except BaseException as error:self._p_failed(error, "C1-frame-preflight-" + phase)
+        self._p_raise_cancel()
+        try:body["p_handoff"] = self._p_unusable_side
+        except BaseException as error:self._p_failed(error, "C1-unusable-frame-" + phase)
+        self._p_raise_cancel()
+        return body
+
+    def _p_send_batch(self, phase, body):
+        side = self._p_batch(phase)
+        body = self._p_attach(phase, body, side)
+        try:
+            raw = c._c1_p_side_raw(body["p_handoff"], self.p_work)
+            self._p_transfer()
+            self.p_batches[phase] = (raw, [row["serial"] for row in body["p_handoff"].get("members", [])],
+                body["p_handoff"].get("state"))
+            if body["p_handoff"].get("state") == "ready":
+                for serial in self.p_batches[phase][1]:self.p_registry[serial]["sent"] = True
+        except BaseException as error:
+            self._p_failed(error, "C1-batch-binding-" + phase)
+            try:body["p_handoff"] = self._p_unusable_side
+            except BaseException as reporting:self._p_failed(reporting, "C1-unusable-binding-" + phase)
+        self._p_raise_cancel()
+        self.wire.exchange(phase, body)
+
+    def _p_settlement(self, phase):
+        value = self._p_unusable_side
+        try:
+            batch_phase = "C_REQUEST" if phase == "C_RELEASED" else "FINAL_OWNER"
+            require(not self.p_unusable and batch_phase in self.p_batches, "E_STORE")
+            raw, serials, state = self.p_batches[batch_phase]
+            require(state == "ready", "E_STORE")
+            closed = [row["serial"] for row in self.p_registry
+                if row["sent"] and row["closed"] and not row["settled"]]
+            reader = self.p_reader
+            for row in self.p_registry:
+                require(row["closed"] or bool(row["held"].components), "E_STORE")
+            require(not reader.replay_output_unusable
+                and not reader.anchor.private_observations.get("unusable", False), "E_STORE")
+            self._p_transfer()
+            receipt = c._capture_accounting_receipt(reader.anchor)
+            value = c._c1_p_settlement_values(raw, closed, receipt, self.p_work)
+            value = self._p_attach(phase, {}, value)["p_handoff"]
+            self._p_transfer()
+            for serial in closed:self.p_registry[serial]["settled"] = True
+        except BaseException as error:
+            value = self._p_unusable_side
+            self._p_failed(error, "C1-settlement-" + phase)
+        self._p_raise_cancel()
+        return value
+
+
     def __init__(self):
         import socket
         require(stat.S_ISSOCK(os.fstat(6).st_mode), "E_RUNTIME")
         self.wire = c._GateWire(socket.socket(fileno=os.dup(6)), DEADLINE)
         phase, body = self.wire.receive()
+        if type(body) is dict and "p_handoff" in body:
+            side = body.pop("p_handoff")
+            try:
+                self.p_enabled = True
+                self.p_cancel = None
+                self.p_work, self.p_errors, self.p_registry, self.p_batches = {}, [], [], {}
+                c._capture_work_values(self.p_work, "C1-child-live-P")
+                self.wire.recording_work = self.p_work
+                require(type(side) is dict and set(side) == {"version"} and type(side["version"]) is int and side["version"] == 1, "E_STORE")
+                self.p_unusable = False
+            except BaseException as error:
+                try:self._p_failed(error, "C1-INIT-side")
+                except BaseException as cancellation:
+                    try:self.wire.sock.close()
+                    except BaseException as closing:raise cancellation from closing
+                    raise
+            if self.p_cancel is not None:
+                cancellation = self.p_cancel
+                try:self.wire.sock.close()
+                except BaseException as closing:raise cancellation from closing
+                raise cancellation
         require(phase == "INIT" and set(body) == {"deadline", "gate_call_ref", "initial_origin_refs", "kill_request"}, "E_RUNTIME")
         require(type(body["deadline"]) in {int, float} and c._clock_value('scope/v1/read-shadow-evidence.py:74:0',time.monotonic(),'monotonic') < body["deadline"] <= DEADLINE, "E_RUNTIME")
         self.deadline = body["deadline"]
@@ -715,22 +1093,28 @@ class _GateReaderSession:
         return sorted(rows.values(), key=c.canonical)
 
     def request(self, request_raw, expectation):
-        self.wire.exchange("C_REQUEST", {"request": parse(request_raw), "expectation": expectation,
-            "acquisitions": sorted(self.acquisitions.values())})
+        body = {"request": parse(request_raw), "expectation": expectation,
+            "acquisitions": sorted(self.acquisitions.values())}
+        if self.p_enabled:self._p_send_batch("C_REQUEST", body)
+        else:self.wire.exchange("C_REQUEST", body)
 
     def released(self):
         require(not self.acquisitions, "E_RUNTIME")
-        self.wire.exchange("C_RELEASED", {})
+        body = {"p_handoff": self._p_settlement("C_RELEASED")} if self.p_enabled else {}
+        self.wire.exchange("C_RELEASED", body)
 
     def source_done(self):
         self.wire.exchange("C_DONE", {"acquisitions": sorted(self.acquisitions.values())})
 
     def final(self):
-        self.wire.exchange("FINAL_OWNER", {"acquisitions": sorted(self.acquisitions.values())})
+        body = {"acquisitions": sorted(self.acquisitions.values())}
+        if self.p_enabled:self._p_send_batch("FINAL_OWNER", body)
+        else:self.wire.exchange("FINAL_OWNER", body)
 
     def close(self):
         require(not self.acquisitions, "E_RUNTIME")
-        self.wire.exchange("CLOSED", {})
+        body = {"p_handoff": self._p_settlement("CLOSED")} if self.p_enabled else {}
+        self.wire.exchange("CLOSED", body)
         self.wire.sock.close()
 
 
@@ -1033,6 +1417,8 @@ class _Reader:
                 elif getattr(closing, "_scope_signal_cancel", False) and not getattr(primary, "_scope_signal_cancel", False):
                     raise
             raise
+        if type(getattr(self, "store_session", None)) is _GateReaderSession and self.store_session.p_enabled:
+            self.store_session.register_copy(copied)
 
     def _close_source_copies(self, primary=None, preserve_cancellation=False):
         copies, self.source_copies = self.source_copies, []
@@ -1048,7 +1434,9 @@ class _Reader:
                     try:copied._failed(error, "scope-P-final-recheck", primary)
                     except BaseException as observed:
                         if first is None and (isinstance(observed, KeyboardInterrupt) or getattr(observed, "_scope_signal_cancel", False)):first = observed
-                try:copied.close()
+                try:
+                    copied.close()
+                    if type(getattr(self, "store_session", None)) is _GateReaderSession and self.store_session.p_enabled:self.store_session.note_closed(copied)
                 except BaseException as error:
                     if first is None and (isinstance(error, KeyboardInterrupt) or getattr(error, "_scope_signal_cancel", False)):first = error
                     try:copied._failed(error, "scope-P-final-close", primary)
@@ -1059,7 +1447,9 @@ class _Reader:
         for copied in reversed(copies):
             try:
                 try:copied.recheck()
-                finally:copied.close()
+                finally:
+                    copied.close()
+                    if type(getattr(self, "store_session", None)) is _GateReaderSession and self.store_session.p_enabled:self.store_session.note_closed(copied)
             except BaseException as error:
                 if preserve_cancellation or isinstance(copied, c._HeldSourceConfigurationCopy):
                     if cancellation is None and (isinstance(error, KeyboardInterrupt) or getattr(error, "_scope_signal_cancel", False)):
@@ -1342,12 +1732,23 @@ class _Reader:
         for item in reversed(owned):
             try:
                 item.close()
+                if type(getattr(self, "store_session", None)) is _GateReaderSession and self.store_session.p_enabled:self.store_session.note_closed(item)
                 self.owned.remove(item)
             except BaseException as exc:
                 if first is None:
                     first = exc
         if self.capture_completion_owner is not None:
-            self.enforced._close_capture_completion_owner(self.capture_completion_owner)
+            try:self.enforced._close_capture_completion_owner(self.capture_completion_owner)
+            except BaseException as closing:
+                if type(getattr(self, "store_session", None)) is _GateReaderSession and self.store_session.p_enabled and self.store_session.p_cancel is not None:
+                    cancellation = first if isinstance(first, KeyboardInterrupt) or getattr(first, "_scope_signal_cancel", False) else self.store_session.p_cancel
+                    raise cancellation from closing
+                raise
+        if type(getattr(self, "store_session", None)) is _GateReaderSession and self.store_session.p_enabled:
+            cancellation = self.store_session.p_cancel
+            if cancellation is not None and not (isinstance(first, KeyboardInterrupt) or getattr(first, "_scope_signal_cancel", False)):
+                if first is not None:raise cancellation from first
+                raise cancellation
         if first is not None:
             raise first
 
@@ -1378,6 +1779,8 @@ class _Reader:
         try:
             require(group in {"bundles", "git", "stores", "anchor"} and type(key) is bytes)
             self.replay_outputs[group].append((key, value))
+            if group == "stores" and type(getattr(self, "store_session", None)) is _GateReaderSession and self.store_session.p_enabled:
+                self.store_session.register_history(value)
             if self.anchor is not None:
                 self.anchor.recording_work["replay_output_work"] = self.replay_output_work
             c._capture_observe(self.replay_output_work, "M", "scope-replay-output", {
@@ -2130,6 +2533,7 @@ def main(arguments):
         if private:
             gate_session = _GateReaderSession()
         reader = _Reader(*paths, store_session=gate_session, deadline=gate_session.deadline if gate_session else None)
+        if gate_session is not None:gate_session.bind_reader(reader, paths)
         raw = reader.evaluate()
         require(len(raw) <= c.DOCUMENT_LIMIT, "E_LIMIT")
         reader.recheck()

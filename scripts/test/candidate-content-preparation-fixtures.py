@@ -8341,3 +8341,125 @@ def _C1_scope_reader_live_values(assembly, reader):
         if isinstance(assembly.failure, KeyboardInterrupt) or getattr(assembly.failure, '_scope_signal_cancel', False):
             raise assembly.failure
     return raw
+
+
+def raw16_C1_p_handoff_codec(root: Path, evidence=None) -> dict:
+    import copy
+    import tempfile
+    spec = importlib.util.spec_from_file_location('C1_p_codec_consumer', root / 'shadow/v1/_consumer.py')
+    c = importlib.util.module_from_spec(spec);sys.modules[spec.name] = c;spec.loader.exec_module(c)
+    work = c._c3_fresh_work(1)
+    base = Path(tempfile.mkdtemp(prefix='ystack-C1-p-codec-')).resolve()
+    os.chown(base, os.geteuid(), os.getegid())
+    scratch = base / 'ystack-scope-evaluate.A0b1C2';scratch.mkdir(mode=0o700)
+    captures = scratch / 'reader-captures';captures.mkdir(mode=0o700)
+    files = []
+    for serial in range(2):
+        slot = captures / ('gate-%04d' % serial);slot.mkdir(mode=0o700)
+        path = slot / 'value.json';path.write_bytes(c.canonical({'ordinary_codec_member': serial}));path.chmod(0o400)
+        for item in (slot, path):os.chown(item, os.geteuid(), os.getegid())
+        files.append(path)
+    for item in (scratch, captures):os.chown(item, os.geteuid(), os.getegid())
+    resolver = c._DarwinUUIDResolver() if sys.platform == 'darwin' else None
+    held, members, root_chain, closed, rejected = [], [], None, [], []
+    failure = None
+    def reject(label, check, value):
+        try:check(value, work)
+        except c.Refusal:rejected.append(label)
+        else:raise AssertionError('C1 codec accepted ' + label)
+    try:
+        for serial, path in enumerate(files):
+            item = c._open_held(str(path), False,
+                c._store_rule(os.geteuid(), os.getegid(), 0o400, False, resolver), 'E_STORE',
+                recording_work=work, accounting_kind='M')
+            held.append((serial, item))
+            item.recheck('E_STORE', work, 'M')
+            chain = [{'name': component.name if component.name is not None else '/',
+                'identity': list(c._identity(component.before))} for component in item.components]
+            at_base = next(index for index, row in enumerate(chain) if row['name'] == base.name)
+            at_scratch = at_base + 1
+            assert chain[at_scratch]['name'] == scratch.name
+            if root_chain is None:root_chain = chain[at_base:at_scratch + 1]
+            else:assert root_chain == chain[at_base:at_scratch + 1]
+            raw = item.read(c.DOCUMENT_LIMIT, 'E_STORE')
+            work['read_bytes'] += len(raw);c._capture_account(work, 'M', 'read_bytes', len(raw))
+            members.append({'serial': serial, 'family': 'anchor', 'ordinal': serial,
+                'name': path.name, 'relative': str(path.relative_to(scratch)),
+                'chain': chain[at_scratch:], 'size_bytes': len(raw), 'sha256': c.digest(raw)})
+        batch = c._c1_p_batch_values(scratch.name, root_chain, members, work)
+        assert c._c1_p_batch_check(batch, work) is batch
+        batch_raw = c._c1_p_side_raw(batch, work)
+        assert batch_raw == c.canonical(batch) and json.loads(batch_raw) == batch
+        assert c._c1_p_side_raw({'state': 'unusable'}, work) == c.canonical({'state': 'unusable'})
+        assert c._c1_p_batch_check({'state': 'unusable'}, work) == {'state': 'unusable'}
+        for label, mutate in (
+            ('batch-extra-key', lambda value: value.update(extra=True)),
+            ('batch-state-type', lambda value: value.update(state=True)),
+            ('scratch-parent', lambda value: value.update(scratch_name='../' + scratch.name)),
+            ('scratch-wrong-suffix', lambda value: value.update(scratch_name='ystack-scope-evaluate.00000_')),
+            ('root-empty', lambda value: value.update(root_chain=[])),
+            ('root-name-slash', lambda value: value['root_chain'][0].update(name='a/b')),
+            ('root-identity-bool', lambda value: value['root_chain'][0]['identity'].__setitem__(0, True)),
+            ('root-extra-key', lambda value: value['root_chain'][0].update(extra=0)),
+            ('members-type', lambda value: value.update(members={})),
+            ('member-extra-key', lambda value: value['members'][0].update(extra=0)),
+            ('member-family', lambda value: value['members'][0].update(family='qualified-runtime')),
+            ('member-serial-bool', lambda value: value['members'][0].update(serial=False)),
+            ('member-ordinal-bool', lambda value: value['members'][0].update(ordinal=False)),
+            ('member-size-bool', lambda value: value['members'][0].update(size_bytes=True)),
+            ('member-serial-order', lambda value: value['members'].reverse()),
+            ('member-serial-duplicate', lambda value: value['members'][1].update(serial=0)),
+            ('member-relative-duplicate', lambda value: value['members'][1].update(relative=value['members'][0]['relative'])),
+            ('member-wrong-namespace', lambda value: value['members'][0].update(relative='other/gate-0000/value.json')),
+            ('member-absolute', lambda value: value['members'][0].update(relative='/reader-captures/gate-0000/value.json')),
+            ('member-dotdot', lambda value: value['members'][0].update(relative='reader-captures/gate-0000/../value.json')),
+            ('member-name-binding', lambda value: value['members'][0].update(name='other.json')),
+            ('member-chain-empty', lambda value: value['members'][0].update(chain=[])),
+            ('member-sha-type', lambda value: value['members'][0].update(sha256=True)),
+        ):
+            value = copy.deepcopy(batch);mutate(value);reject(label, c._c1_p_batch_check, value)
+        reject('unusable-extra-key', c._c1_p_batch_check, {'state': 'unusable', 'members': []})
+        while held:
+            serial, item = held.pop(0)
+            item.recheck('E_STORE', work, 'M');item.close();closed.append(serial)
+        assert closed == [0, 1] and work['held_close_calls'] > len(closed)
+        accounting = copy.deepcopy(c._capture_accounting_values(work, {}))
+        assert accounting['complete'] is False and 'unclassified_recorded_read_bytes' in accounting
+        settlement = c._c1_p_settlement_values(batch_raw, closed, accounting, work)
+        assert c._c1_p_settlement_check(settlement, work) is settlement
+        assert settlement['batch_sha256'] == c.digest(batch_raw)
+        assert c._c1_p_settlement_check({'state': 'unusable'}, work) == {'state': 'unusable'}
+        for label, mutate in (
+            ('settlement-extra-key', lambda value: value.update(extra=0)),
+            ('settlement-batch-sha', lambda value: value.update(batch_sha256='not-sha')),
+            ('settlement-closed-bool', lambda value: value.update(closed=[False, 1])),
+            ('settlement-closed-duplicate', lambda value: value.update(closed=[0, 0])),
+            ('settlement-closed-order', lambda value: value.update(closed=[1, 0])),
+            ('receipt-placeholder-unknown', lambda value: value.update(accounting={'state': 'unknown'})),
+            ('receipt-placeholder-not-applicable', lambda value: value.update(accounting={'state': 'not-applicable'})),
+            ('receipt-extra-key', lambda value: value['accounting'].update(extra=0)),
+            ('receipt-missing-original-key', lambda value: value['accounting'].pop('unclassified_recorded_read_bytes')),
+            ('receipt-complete-true', lambda value: value['accounting'].update(complete=True)),
+            ('receipt-runtime-type', lambda value: value['accounting'].update(runtime=[])),
+            ('receipt-observations-type', lambda value: value['accounting'].update(observations={})),
+            ('receipt-transferred-bool', lambda value: value['accounting']['transferred_totals'].update(read_bytes=True)),
+            ('receipt-Q-invented', lambda value: value['accounting'].update(runtime_Q=0)),
+        ):
+            value = copy.deepcopy(settlement);mutate(value);reject(label, c._c1_p_settlement_check, value)
+        reject('settlement-unusable-extra', c._c1_p_settlement_check, {'state': 'unusable', 'closed': []})
+        return {'positive_checks': 9, 'rejected': rejected, 'members': len(members),
+            'actual_closed': closed, 'retained_root': str(base), 'cost': 'UNKNOWN',
+            'qualification': 'codec-only; live-parent/child and native NOTRUN'}
+    except BaseException as error:
+        failure = error
+        raise
+    finally:
+        while held:
+            _serial, item = held.pop(0)
+            try:item.close()
+            except BaseException as later:failure = c._c3_first(failure, later)
+        if evidence is not None:
+            try:
+                with (Path(evidence) / 'C1-p-codec-work.json').open('x') as stream:json.dump(work, stream, sort_keys=True)
+            except BaseException as later:failure = c._c3_first(failure, later)
+        if failure is not None and sys.exc_info()[1] is not failure:raise failure

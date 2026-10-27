@@ -203,6 +203,31 @@ class _GateStoreSession:
         self.wire = self.child_socket = None
         self.closed = self.initialized = self.owner_confirmed = False
         self.remote_serial = 0
+        self.p_handoff_errors = []
+
+    def _p_handoff_side(self, phase, value):
+        handoff = getattr(self, "p_handoff", None)
+        if handoff is None:
+            return
+        try:
+            if phase in {"C_REQUEST", "FINAL_OWNER"}:
+                handoff.stage(value, phase)
+            elif phase in {"C_RELEASED", "CLOSED"}:
+                handoff.settle(value, phase)
+            else:
+                require(phase == "COMPLETE", "E_RUNTIME")
+                handoff.complete()
+        except BaseException as error:
+            try:
+                handoff.fail(error, phase)
+            except BaseException as later:
+                self.p_handoff_errors.append((phase, error, later))
+                handoff.unusable = True
+                if not (isinstance(error, KeyboardInterrupt) or getattr(error, "_scope_signal_cancel", False)):
+                    if isinstance(later, KeyboardInterrupt) or getattr(later, "_scope_signal_cancel", False):
+                        raise
+            if isinstance(error, KeyboardInterrupt) or getattr(error, "_scope_signal_cancel", False):
+                raise error
 
     def remember(self, binding):
         key = (binding["store_id"], binding["attempt_id"])
@@ -266,11 +291,17 @@ class _GateStoreSession:
         require(self.phase == "K_DONE" and self.local and not self.remote, "E_RUNTIME")
         parent, self.child_socket = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
         self.wire = c._GateWire(parent, self.deadline - 10, self.call_id, os.urandom(32).hex(), self.binding)
-        self.wire.send("INIT", {"deadline": self.deadline, "gate_call_ref": self.gate_call_ref,
-            "initial_origin_refs": self.origins(), "kill_request": parse(self.kill_request_raw)})
+        body = {"deadline": self.deadline, "gate_call_ref": self.gate_call_ref,
+            "initial_origin_refs": self.origins(), "kill_request": parse(self.kill_request_raw)}
+        if getattr(self, "p_handoff", None) is not None:
+            body["p_handoff"] = {"version": 1}
+        self.wire.send("INIT", body)
 
     def pump(self):
         phase, body = self.wire.receive()
+        side = None
+        if getattr(self, "p_handoff", None) is not None and phase in {"C_REQUEST", "C_RELEASED", "FINAL_OWNER", "CLOSED"}:
+            side = body.pop("p_handoff", None)
         if phase == "INIT_ACK":
             require(self.phase == "K_DONE" and body == {} and not self.initialized, "E_RUNTIME")
             self.initialized = True
@@ -314,10 +345,12 @@ class _GateStoreSession:
             self.generator.put("coverage-expectation", self.coverage_expectation_raw)
             self.coverage_configuration = self.reader.coverage_configuration
             self.reader.recheck()
+            self._p_handoff_side(phase, side)
             self.release_local()
         elif phase == "C_RELEASED":
             require(self.phase == "C_REQUEST" and body == {} and not self.local and not self.remote, "E_RUNTIME")
             self.phase = "C_DONE"
+            self._p_handoff_side(phase, side)
         elif phase == "C_DONE":
             require(self.phase == "C_DONE" and set(body) == {"acquisitions"}
                     and body["acquisitions"] == sorted(self.remote) and self.remote, "E_RUNTIME")
@@ -342,10 +375,12 @@ class _GateStoreSession:
             self.reader.recheck()
             self.final_origins = self.origins()
             self.owner_confirmed = True
+            self._p_handoff_side(phase, side)
         elif phase == "CLOSED":
             require(self.phase == "FINAL_OWNER" and self.owner_confirmed and not self.remote and body == {}, "E_RUNTIME")
             self.reader.recheck()
             self.closed = True
+            self._p_handoff_side(phase, side)
         else:
             require(False, "E_RUNTIME")
         self.wire.send(phase + "_ACK", {})
@@ -354,6 +389,7 @@ class _GateStoreSession:
         require(self.closed and self.phase == "FINAL_OWNER" and not self.remote and self.local, "E_RUNTIME")
         self.reader.recheck()
         require(self.final_origins == self.origins(), "E_STALE")
+        self._p_handoff_side("COMPLETE", None)
         self.phase = "COMPLETE"
 
     def close(self):

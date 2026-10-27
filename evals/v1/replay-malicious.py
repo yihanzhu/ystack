@@ -2591,6 +2591,10 @@ class _SeedAssembly:
         generator.check()
         self.gate_session, self.generator = session, generator
         self._gate_owner = generator
+        session.p_handoff = self.c._C1PHandoffParent(generator.reader.anchor, self.root,
+            self.work, self.case_work, request_raw, session, self.files, self.output_holds,
+            self.window, self.case_sources,
+            tuple(self.bindings[phase]["native"].attempt_id for phase in ("reproduction", "write")))
 
     def _gate_request(self):
         module = self._gate_type(self.generator, "scope/v1/generate-gate-evidence.py", "_Generator")

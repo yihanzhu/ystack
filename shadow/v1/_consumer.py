@@ -1373,7 +1373,7 @@ def _refresh_recording_directory(item, before, work):
     component.after, component.named_after = current, named
 
 
-def _copy_preparation_document(directory, raw, work, resolver, *, name="capture.json"):
+def _copy_preparation_document(directory, raw, work, resolver, *, name="capture.json", _c1_serial=None):
     limits = {"capture.json": DOCUMENT_LIMIT, "parent-frame.bin": PARENT_FRAME_LIMIT,
               "helper-build-record.json": DOCUMENT_LIMIT, "native-dependency-record.json": DOCUMENT_LIMIT,
               "source-host.json": DOCUMENT_LIMIT, "source-config.json": DOCUMENT_LIMIT,
@@ -1382,6 +1382,10 @@ def _copy_preparation_document(directory, raw, work, resolver, *, name="capture.
     limits.update({"reader-anchor-" + key + ".bin": EXECUTABLE_LIMIT
         for key in {"host", "verifier", "supervisor"} | {"installed-" + role for role in INSTALLED_SOURCES}})
     limits["reader-anchor-host.bin"] = DOCUMENT_LIMIT
+    if _c1_serial is not None:
+        _require(type(_c1_serial) is int and 0 <= _c1_serial < 4096
+            and name == "gate-scope-reader-p-%04d.bin" % _c1_serial, "E_STORE")
+        limits[name] = EXECUTABLE_LIMIT
     _require(name in limits and type(raw) is bytes and len(raw) <= limits[name], "E_STORE")
     target = reader = None
     failure = None
@@ -5781,6 +5785,7 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
         previous = signal.pthread_sigmask(signal.SIG_BLOCK,
                                           {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
         child = None
+        handoff = None
         selector = selectors.DefaultSelector()
         cancelled = [False]
         old_handlers = {}
@@ -5793,6 +5798,12 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
             _require(not cancelled[0], "E_RUNTIME")
             gate = (getattr(self, "_gate_session", None)
                     if argv == getattr(self, "_gate_invocation", None) else None)
+            handoff = getattr(gate, "p_handoff", None) if gate is not None else None
+            if handoff is not None:
+                try:handoff.bind_spawn(argv, env, None)
+                except BaseException as error:
+                    handoff.fail(error, "before-spawn")
+                    if isinstance(error, KeyboardInterrupt) or getattr(error, "_scope_signal_cancel", False):raise
             saved_fd = None
             if gate is not None:
                 try:
@@ -5810,6 +5821,11 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
                     else:
                         os.dup2(saved_fd, 6)
                         os.close(saved_fd)
+            if handoff is not None:
+                try:handoff.bind_spawn(argv, env, child)
+                except BaseException as error:
+                    handoff.fail(error, "spawn")
+                    if isinstance(error, KeyboardInterrupt) or getattr(error, "_scope_signal_cancel", False):raise
             if gate is not None:
                 gate.child_socket.close()
                 selector.register(gate.wire.sock, selectors.EVENT_READ)
@@ -5914,18 +5930,27 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
                     raise exc from cause
             raise
         finally:
-            signal.pthread_sigmask(signal.SIG_BLOCK,
-                                    {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
+            native_primary = sys.exc_info()[1]
             try:
-                selector.close()
-                if child is not None:
-                    for stream in (child.stdin, child.stdout, child.stderr):
-                        if stream is not None and not stream.closed:
-                            stream.close()
-                for number, handler in old_handlers.items():
-                    signal.signal(number, handler)
+                signal.pthread_sigmask(signal.SIG_BLOCK,
+                                        {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
+                try:
+                    selector.close()
+                    if child is not None:
+                        for stream in (child.stdin, child.stdout, child.stderr):
+                            if stream is not None and not stream.closed:
+                                stream.close()
+                    for number, handler in old_handlers.items():
+                        signal.signal(number, handler)
+                finally:
+                    signal.pthread_sigmask(signal.SIG_SETMASK, previous)
             finally:
-                signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+                if handoff is not None:
+                    try:handoff.close()
+                    except BaseException as error:
+                        handoff.fail(error, "foreground-close")
+                        first = _c3_first(native_primary, error)
+                        if isinstance(first, KeyboardInterrupt) or getattr(first, "_scope_signal_cancel", False):raise first
 
 
 
@@ -6301,6 +6326,447 @@ WRITE_TEXTS = {
     "output_contract": b"Add only the listed evidence files; preserve all existing target files.\n",
     "policy": b"Routine candidate-only evidence preparation. Network and publication are denied.\n",
 }
+
+
+def _c1_p_chain_values(rows):
+    _require(type(rows) is list and 0 < len(rows) <= 4096, "E_STORE")
+    for row in rows:
+        _require(type(row) is dict and set(row) == {"name", "identity"}, "E_STORE")
+        name, identity = row["name"], row["identity"]
+        _require(type(name) is str and name and "\x00" not in name
+            and (name == "/" or "/" not in name and name not in {".", ".."}), "E_STORE")
+        _require(type(identity) in {list, tuple} and len(identity) == 10
+            and all(type(value) is int for value in identity), "E_STORE")
+    return rows
+
+
+def _c1_p_batch_check(value, work):
+    _require(type(value) is dict, "E_STORE")
+    if value == {"state": "unusable"}:return value
+    _require(set(value) == {"state", "scratch_name", "root_chain", "members"}
+        and value["state"] == "ready", "E_STORE")
+    name = value["scratch_name"]
+    prefix = "ystack-scope-evaluate."
+    _require(type(name) is str and name.startswith(prefix) and len(name) == len(prefix) + 6
+        and all(char in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+            for char in name[len(prefix):]), "E_STORE")
+    _c1_p_chain_values(value["root_chain"])
+    members = value["members"]
+    _require(type(members) is list and len(members) <= 4096, "E_LIMIT")
+    previous, names = -1, set()
+    for row in members:
+        _require(type(row) is dict and set(row) == {"serial", "family", "ordinal", "name",
+            "relative", "chain", "size_bytes", "sha256"}, "E_STORE")
+        _require(type(row["serial"]) is int and previous < row["serial"] < 4096
+            and type(row["ordinal"]) is int and 0 <= row["ordinal"] < 4096
+            and row["family"] in {"anchor", "runtime", "source", "source-configuration", "history"}
+            and type(row["name"]) is str and row["name"] and "/" not in row["name"]
+            and row["name"] not in {".", ".."} and "\x00" not in row["name"], "E_STORE")
+        previous = row["serial"]
+        relative = row["relative"]
+        _require(type(relative) is str and "\x00" not in relative, "E_STORE")
+        parts = relative.split("/")
+        _require(len(parts) >= 3 and parts[0] == "reader-captures"
+            and len(parts[1]) == 9 and parts[1].startswith("gate-")
+            and parts[1][5:].isascii() and parts[1][5:].isdigit()
+            and int(parts[1][5:]) < 4096
+            and all(part and part not in {".", ".."} for part in parts), "E_STORE")
+        _require(relative not in names and parts[-1] == row["name"], "E_STORE")
+        names.add(relative)
+        _c1_p_chain_values(row["chain"])
+        _require(type(row["size_bytes"]) is int and 0 <= row["size_bytes"] <= 4 << 30
+            and _sha(row["sha256"]), "E_STORE")
+    return value
+
+
+def _c1_p_batch_values(scratch_name, root_chain, members, work):
+    return _c1_p_batch_check({"state": "ready", "scratch_name": scratch_name,
+        "root_chain": root_chain, "members": members}, work)
+
+
+def _c1_p_settlement_check(value, work):
+    _require(type(value) is dict, "E_STORE")
+    if value == {"state": "unusable"}:return value
+    _require(set(value) == {"state", "batch_sha256", "closed", "accounting"}
+        and value["state"] == "complete" and _sha(value["batch_sha256"]), "E_STORE")
+    closed = value["closed"]
+    _require(type(closed) is list and len(closed) <= 4096
+        and all(type(serial) is int and 0 <= serial < 4096 for serial in closed)
+        and closed == sorted(set(closed)), "E_STORE")
+    _require(type(value["accounting"]) is dict and "state" not in value["accounting"], "E_STORE")
+    _c3_owner_receipt_values("raw", value["accounting"])
+    return value
+
+
+def _c1_p_side_raw(value, work):
+    before = work["read_bytes"]
+    classified = work.get("accounting", {}).get("M", {}).get("read_bytes", 0)
+    try:return _private_capture_observations(value, work, work)
+    except BaseException:
+        work["accounting_incomplete"] = True
+        raise
+    finally:
+        added = work["read_bytes"] - before
+        already = work.get("accounting", {}).get("M", {}).get("read_bytes", 0) - classified
+        _require(added >= already >= 0, "E_LIMIT")
+        _capture_account(work, "M", "read_bytes", added - already)
+
+
+def _c1_p_settlement_values(batch_raw, closed, accounting, work):
+    _require(type(batch_raw) is bytes and len(batch_raw) <= DOCUMENT_LIMIT, "E_STORE")
+    _capture_copy_room(work, len(batch_raw), False, read_only=True)
+    measured = digest(batch_raw)
+    work["read_bytes"] += len(batch_raw)
+    _capture_account(work, "M", "read_bytes", len(batch_raw))
+    return _c1_p_settlement_check({"state": "complete", "batch_sha256": measured,
+        "closed": closed, "accounting": accounting}, work)
+
+
+def _c1_p_close(held, work, primary=None):
+    if not held.components:return primary
+    try:held.recheck("E_STORE", work, "M")
+    except BaseException as error:
+        primary = _c3_first(primary, error)
+        _capture_observation_error(work, "M", "C1-P-final-recheck", error)
+    while held.components:
+        component = held.components.pop()
+        try:_close_capture_copy(component.fd, work, work, "C1-P-close", primary)
+        except BaseException as error:
+            primary = _c3_first(primary, error)
+            try:_capture_observation_error(work, "M", "C1-P-close", error)
+            except BaseException as later:primary = _c3_first(primary, later)
+    return primary
+
+
+class _C1PHandoffParent:
+    def __init__(self, anchor, root, work, case_work, request_raw, session, files, output_holds, window_work, case_sources, current_attempts):
+        _require(type(anchor) is Anchor and type(root) is HeldPath and root.components
+            and type(request_raw) is bytes and session.reader.anchor is anchor
+            and session.generator.session is session and type(window_work) is dict
+            and type(case_sources) is list and any(case_work is item for item in case_sources)
+            and type(current_attempts) is tuple and len(current_attempts) == 2
+            and all(_id(value) for value in current_attempts)
+            and type(files) is dict and type(output_holds) is list, "E_STORE")
+        self.anchor, self.root, self.work, self.case_work = anchor, root, work, case_work
+        self.request_raw, self.session = request_raw, session
+        self.window_work, self.case_sources = window_work, case_sources
+        self.current_attempts = current_attempts
+        self.files, self.output_holds = files, output_holds
+        self.unusable, self.errors = False, []
+        self.runtime, self.child, self.argv = None, None, None
+        self.initial_names, self.scratch_name = None, None
+        self.records, self.batches, self.settlements = {}, {}, {}
+        self.closed_serials, self.receipts = set(), []
+        self._budget()
+        _capture_copy_room(work, len(request_raw), False, read_only=True)
+        expected = digest(request_raw)
+        work["read_bytes"] += len(request_raw)
+        _capture_account(work, "M", "read_bytes", len(request_raw))
+        _require(session.binding == expected, "E_STORE")
+
+    def _budget(self):
+        _require(not self.work.get("transfer_incomplete", False), "E_LIMIT")
+        fields = ("read_bytes", "write_bytes", "physical_bytes", "files", "export_read_bytes",
+            "export_write_bytes", "export_physical_bytes", "export_files")
+        scopes = []
+        for owner, case in ((self.case_work, True), (self.window_work, False)):
+            projected = {}
+            for field in fields:
+                current, prior = self.work[field], self.work.get("transferred_" + field, 0)
+                _require(type(current) is int and type(prior) is int and current >= prior >= 0
+                    and type(owner.get(field)) is int and owner[field] >= 0, "E_LIMIT")
+                projected[field] = owner[field] + current - prior
+            scopes.append((projected, case))
+        self.work["_capture_copy_budget"] = _capture_copy_budget_values(self.work, tuple(scopes))
+        runtime = {}
+        seen = []
+        for owner in self.case_sources:
+            if any(owner is previous for previous in seen):continue
+            seen.append(owner)
+            for field, amount in owner.get("runtime", {}).items():
+                _require(field in _RUNTIME_FIELDS and type(amount) is int and amount >= 0, "E_LIMIT")
+                runtime[field] = runtime.get(field, 0) + amount
+        self.work["runtime_case_carry_in"] = runtime
+        self.work["runtime_window_carry_in"] = self.window_work.get("runtime", {})
+
+    def fail(self, error, phase):
+        self.unusable = True
+        first = None
+        try:self.errors.append((phase, error))
+        except BaseException as later:first = _c3_first(error, later)
+        try:_capture_observation_error(self.work, "M", "C1-P-" + phase, error)
+        except BaseException as later:first = _c3_first(first or error, later)
+        if first is not None and (isinstance(first, KeyboardInterrupt)
+                or getattr(first, "_scope_signal_cancel", False)):raise first
+
+    def bind_spawn(self, argv, env, child):
+        _require(type(argv) is list and argv[:4] == ["/bin/bash", "-p",
+            os.path.join(_source_root(), "scope/v1/evaluate-scope.sh"), "evaluate"]
+            and len(argv) == 13 and type(env) is dict, "E_STORE")
+        generator, reader = self.session.generator, self.session.reader
+        names = ("scope", "shadow-set", "dashboard", "risk", "kill", "duty", "marker")
+        expected = [str(generator.outputs[name]) for name in names]
+        expected.extend((str(generator.paths[4]), str(generator.paths[5])))
+        _require(argv[4:] == expected and env.get("TMPDIR") == str(reader.runtime)
+            and reader.anchor is self.anchor and self.session.wire is not None
+            and self.session.wire.binding == self.session.binding, "E_STORE")
+        if child is None:
+            _require(self.runtime is None and self.argv is None, "E_STORE")
+            self.argv = tuple(argv)
+            held = _open_held(env["TMPDIR"], True,
+                _store_rule(os.geteuid(), os.getegid(), 0o700, True, self.anchor.resolver),
+                "E_STORE", recording_work=self.work, accounting_kind="M")
+            try:
+                self.runtime = held
+                self.initial_names = set(held.listdir())
+                held.recheck("E_STORE")
+            except BaseException:
+                error = sys.exc_info()[1]
+                self.runtime = None
+                failure = _c1_p_close(held, self.work, error)
+                raise failure
+        else:
+            _require(type(child) is subprocess.Popen and self.child is None
+                and tuple(argv) == self.argv and child.args == argv
+                and type(child.pid) is int and child.pid > 0 and child.returncode is None, "E_STORE")
+            self.child = child
+            _capture_observe(self.work, "M", "C1-P-spawn", {"pid": child.pid, "argv": argv})
+
+    def _chain(self, held, expected):
+        actual = [{"name": component.name or "/", "identity": list(_identity(component.before))}
+            for component in held.components]
+        _c1_p_chain_values(expected)
+        _require(actual == [{"name": row["name"], "identity": list(row["identity"])} for row in expected], "E_STORE")
+        _capture_observe(self.work, "M", "C1-P-chain", {"actual": actual, "expected": expected})
+
+    def _scratch(self, batch):
+        _require(self.child is not None and self.child.returncode is None
+            and self.runtime is not None and self.runtime.components, "E_STORE")
+        name = batch["scratch_name"]
+        if self.scratch_name is None:
+            current = set(self.runtime.listdir())
+            _require(current == self.initial_names | {name} and name not in self.initial_names, "E_STORE")
+            _refresh_recording_directory(self.runtime, self.runtime.before, self.work)
+            self.scratch_name = name
+        _require(name == self.scratch_name, "E_STORE")
+        self.runtime.recheck("E_STORE")
+        scratch = _open_child(self.runtime, name, True,
+            _store_rule(os.geteuid(), os.getegid(), 0o700, True, self.anchor.resolver),
+            "E_STORE", recording_work=self.work, accounting_kind="M")
+        try:
+            chain = batch["root_chain"]
+            _require(len(chain) == 2, "E_STORE")
+            _require([{ "name": component.name or "/", "identity": list(_identity(component.before))}
+                for component in scratch.components[-2:]] ==
+                [{"name": row["name"], "identity": list(row["identity"])} for row in chain], "E_STORE")
+            return scratch
+        except BaseException as error:
+            raise _c1_p_close(scratch, self.work, error)
+
+    def _member(self, scratch, row):
+        held, primary = None, None
+        parts = row["relative"].split("/")
+        try:
+            parent = scratch
+            for index, name in enumerate(parts):
+                directory = index < len(parts) - 1
+                opened = _open_child(parent, name, directory,
+                    _store_rule(os.geteuid(), os.getegid(), 0o700 if directory else 0o400,
+                        directory, self.anchor.resolver), "E_STORE", recording_work=self.work, accounting_kind="M")
+                previous, held = held, opened
+                if previous is not None:
+                    primary = _c1_p_close(previous, self.work)
+                    if primary is not None:raise primary
+                parent = held
+            self._chain(held, row["chain"])
+            _require(held.before.st_size == row["size_bytes"], "E_STORE")
+            return held
+        except BaseException as error:
+            if held is not None:error = _c1_p_close(held, self.work, error)
+            raise error
+
+    def _refresh_S(self, before):
+        _refresh_recording_directory(self.root, before, self.work)
+        index = len(self.root.components) - 1
+        for held in self.output_holds:
+            if len(held.components) <= index:continue
+            component = held.components[index]
+            if component.before.st_dev == before.st_dev and component.before.st_ino == before.st_ino:
+                _require(_identity(component.before) == _identity(before), "E_STORE")
+                component.before = self.root.before
+
+    def _read_M(self, held, limit):
+        _require(held.before.st_size <= limit, "E_LIMIT")
+        previous = self.work.get("input_kind")
+        self.work["input_kind"] = "M"
+        try:return held.read(limit, "E_STORE", self.work)
+        finally:
+            if previous is None:self.work.pop("input_kind", None)
+            else:self.work["input_kind"] = previous
+
+    def _stage_member(self, source, row, kind):
+        serial = row["serial"]
+        name = "gate-scope-reader-p-%04d.bin" % serial
+        _require(name not in self.files and len(self.files) < 256, "E_LIMIT")
+        self.root.recheck("E_STORE")
+        before, target = self.root.before, None
+        if kind == "runtime":
+            snapshot = _RuntimeSnapshot(source, self.work)
+            _require(snapshot.acquisition_sha == row["sha256"], "E_STORE")
+            state, expected = _copy_runtime_file(self.root.fd, name, snapshot, self.work, self.anchor.resolver)
+        else:
+            raw = self._read_M(source, EXECUTABLE_LIMIT)
+            _capture_copy_room(self.work, len(raw), False, read_only=True)
+            expected = digest(raw)
+            self.work["read_bytes"] += len(raw)
+            _capture_account(self.work, "M", "read_bytes", len(raw))
+            _require(expected == row["sha256"], "E_STORE")
+            read_before = self.work["read_bytes"]
+            classified = self.work.get("accounting", {}).get("M", {}).get("read_bytes", 0)
+            try:state = _copy_preparation_document(self.root.fd, raw, self.work,
+                self.anchor.resolver, name=name, _c1_serial=serial)
+            finally:
+                delta = self.work["read_bytes"] - read_before
+                charged = self.work.get("accounting", {}).get("M", {}).get("read_bytes", 0) - classified
+                _require(delta >= charged >= 0, "E_LIMIT")
+                _capture_account(self.work, "M", "read_bytes", delta - charged)
+        self._refresh_S(before)
+        target = _open_child(self.root, name, False,
+            _store_rule(os.geteuid(), os.getegid(), 0o400, False, self.anchor.resolver),
+            "E_STORE", recording_work=self.work, accounting_kind="M")
+        try:
+            _require(_identity(target.before) == _identity(state), "E_STORE")
+            self.output_holds.append(target)
+        except BaseException as error:
+            if not (self.output_holds and self.output_holds[-1] is target):error = _c1_p_close(target, self.work, error)
+            raise error
+        source.recheck("E_STORE")
+        self.files[name] = {"size_bytes": row["size_bytes"], "sha256": expected, "kind": kind}
+        return {"row": row, "name": name, "target": target, "kind": kind}
+
+    def stage(self, value, phase):
+        _require(phase in {"C_REQUEST", "FINAL_OWNER"} and phase not in self.batches, "E_STORE")
+        self._budget()
+        batch = _c1_p_batch_check(value, self.work)
+        if batch["state"] == "unusable":
+            self.unusable = True
+            return
+        raw = _c1_p_side_raw(batch, self.work)
+        self.batches[phase] = raw
+        scratch, primary = None, None
+        try:
+            scratch = self._scratch(batch)
+            _require([row["serial"] for row in batch["members"] if row["serial"] not in self.records]
+                == list(range(len(self.records), len(self.records) +
+                    sum(row["serial"] not in self.records for row in batch["members"]))), "E_STORE")
+            for row in batch["members"]:
+                self._budget()
+                source = None
+                try:
+                    _require(row["serial"] not in self.closed_serials, "E_STORE")
+                    source = self._member(scratch, row)
+                    if row["serial"] in self.records:
+                        old = self.records[row["serial"]]
+                        _require(old["row"] == row, "E_STORE")
+                        self._compare(source, old["target"], row, old["kind"])
+                    else:
+                        kind = self._member_kind(row, batch)
+                        self.records[row["serial"]] = self._stage_member(source, row, kind)
+                except BaseException as error:primary = _c3_first(primary, error)
+                finally:
+                    if source is not None:primary = _c1_p_close(source, self.work, primary)
+                if primary is not None:raise primary
+        except BaseException as error:
+            primary = _c3_first(primary, error)
+            self.fail(error, phase)
+        finally:
+            if scratch is not None:primary = _c1_p_close(scratch, self.work, primary)
+            if phase == "FINAL_OWNER":
+                runtime, self.runtime = self.runtime, None
+                if runtime is not None:primary = _c1_p_close(runtime, self.work, primary)
+        if primary is not None:raise primary
+
+    def _member_kind(self, row, batch):
+        family, name = row["family"], row["name"]
+        if family == "runtime":
+            self.work["C1_runtime_inventory_carrier_unknown"] = True
+            raise Refusal("E_STORE")
+        if family == "anchor":
+            names = {"reader-anchor-" + key + ".bin" for key in
+                {"host", "verifier", "supervisor"} | {"installed-" + role for role in INSTALLED_SOURCES}}
+            _require(row["ordinal"] == 0 and name in names and "/reader-anchor/" in row["relative"], "E_STORE")
+        elif family == "source":
+            _require(name == "consumer-observations.json"
+                and "/source-%04d/" % row["ordinal"] in row["relative"], "E_STORE")
+        elif family == "source-configuration":
+            _require(name in {"source-host.json", "source-config.json", "source-accepted.json",
+                "source-package.json", "source-supervisor.py", "source-normalizer.py"}, "E_STORE")
+        else:
+            _require(family == "history" and name in set(SHADOW_EVIDENCE_NAMES)
+                | {"bundle.json", "publisher-body.txt", "scope-policy.json"}, "E_STORE")
+        return "M"
+
+    def _compare(self, source, target, row, kind):
+        _require(source.before.st_size == target.before.st_size == row["size_bytes"], "E_STORE")
+        left, right, offset = hashlib.sha256(), hashlib.sha256(), 0
+        while offset < row["size_bytes"]:
+            count = min(65536, row["size_bytes"] - offset)
+            if kind == "runtime":
+                for field in ("read_bytes", "sha_bytes", "equality_bytes"):
+                    _runtime_account(self.work, field, 2 * count, commit=False)
+            else:_capture_copy_room(self.work, 6 * count, False, read_only=True)
+            a = os.pread(source.fd, count, offset)
+            if kind == "runtime":_runtime_account(self.work, "read_bytes", len(a))
+            else:self.work["read_bytes"] += len(a)
+            b = os.pread(target.fd, count, offset)
+            if kind == "runtime":_runtime_account(self.work, "read_bytes", len(b))
+            else:self.work["read_bytes"] += len(b)
+            left.update(a);right.update(b)
+            if kind == "runtime":
+                for field in ("sha_bytes", "equality_bytes"):_runtime_account(self.work, field, len(a) + len(b))
+            else:
+                amount = 2 * (len(a) + len(b))
+                self.work["read_bytes"] += amount
+                _capture_account(self.work, "M", "read_bytes", len(a) + len(b) + amount)
+            _require(len(a) == len(b) == count and a == b, "E_STORE")
+            offset += count
+        _require(left.hexdigest() == right.hexdigest() == row["sha256"], "E_STORE")
+        source.recheck("E_STORE");target.recheck("E_STORE")
+
+    def settle(self, value, phase):
+        expected = {"C_RELEASED": "C_REQUEST", "CLOSED": "FINAL_OWNER"}
+        _require(phase in expected and phase not in self.settlements, "E_STORE")
+        value = _c1_p_settlement_check(value, self.work)
+        if value["state"] == "unusable":
+            self.unusable = True
+            return
+        batch_phase = expected[phase]
+        _require(batch_phase in self.batches, "E_STORE")
+        raw = self.batches[batch_phase]
+        _capture_copy_room(self.work, len(raw), False, read_only=True)
+        measured = digest(raw)
+        self.work["read_bytes"] += len(raw)
+        _capture_account(self.work, "M", "read_bytes", len(raw))
+        _require(value["batch_sha256"] == measured and not self.closed_serials.intersection(value["closed"])
+            and set(value["closed"]) <= set(self.records), "E_STORE")
+        self.closed_serials.update(value["closed"])
+        self.receipts.append(value["accounting"])
+        self.settlements[phase] = value
+
+    def complete(self):
+        _require(not self.unusable and not getattr(self.session, "p_handoff_errors", [])
+            and "FINAL_OWNER" in self.batches and "CLOSED" in self.settlements
+            and ("C_REQUEST" not in self.batches or "C_RELEASED" in self.settlements)
+            and set(self.records) == self.closed_serials, "E_STORE")
+        for record in self.records.values():record["target"].recheck("E_STORE")
+
+    def close(self):
+        runtime, self.runtime = self.runtime, None
+        if runtime is not None:
+            failure = _c1_p_close(runtime, self.work)
+            if failure is not None:
+                self.fail(failure, "parent-root-close")
+                raise failure
 
 
 class _GateWire:
