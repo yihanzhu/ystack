@@ -1,5 +1,5 @@
 ---
-spec-blob: e0966a09eace0cd337c9498fcecd1d60265bb92a
+spec-blob: 7daf35706536e9ae73c88af704a6912e597a7a54
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-26
@@ -14,8 +14,10 @@ one complete two-source delivery. Source preparation does not accept a dependenc
 a real recording, native qualification or either seed batch.
 
 This plan binds accepted G2 spec blob
-`e0966a09eace0cd337c9498fcecd1d60265bb92a` at main
-`4697aae94a819fc64c95edc62b70d487195b571d`. RAW16 acquisition design
+`7daf35706536e9ae73c88af704a6912e597a7a54` at main
+`4480601c448fb72921beeb1294fe5e5136b9b4a4` (PR #743).
+The separate high-risk plan-only gate must pass before dependent code.
+RAW16 acquisition design
 locations retain historical source `c1d9d23e42e6efe2d6da1aae3d23b34564b4080d`
 and base `ae634c86701da04767c41a4d5f416f0c36517cf0`. T lifecycle sites bind
 `25af14412bbd6fc4b5c0b1ca03ba43e545ecb4bc`. Keep older clock/owner labels,
@@ -1024,7 +1026,7 @@ container or original interface keeps its dependent assembly step blocked.
 | RAW09 | each launch capture's guest.setup | Its own setup reads/returns → same enforcement rows; raw failure cannot become a hard flag |
 | RAW10 | each launch capture's guest.control and launch | Its own launch at historical :1404/:1419 → own positive PID and waited==child; consume all closed tags in original order |
 | RAW11 | each launch capture's guest.counters | Its own counter/statvfs/evidence bytes → report/frame, rounding, reached flags and sizes |
-| RAW12 | each launch capture's host.process | Own six-key process/pipe/export rows → stop, EOF, reap, frame/tail, timeout and cleanup; export binding does not stand in for the other rows |
+| RAW12 | each launch capture's host.process | Own six-key process/pipe/export/cleanup rows → stop, EOF, reap, frame/tail, timeout and cleanup; fixed listdir sites retain complete ordered name hex lists in return, not RAW07 or bytes; consume every original site/ordinal/cleanup level independently for each launch; export binding does not stand in for the other rows |
 | RAW13 | each launch capture's host.driver_rest | Own zero-based host call indices and matching REST rows → driver argv/state/stop; no cross-launch mapping or socket offline |
 | RAW14 | each source capture's source_pages.kill/coverage | Original family/page/cursor order → raw manifest, normalization, register and receipt |
 | RAW15 | each applicable container's commands.runtime_values | Original qualified version/ABI/config facts → concrete argv/component identity; no copied component output |
@@ -1344,6 +1346,7 @@ unchanged. Rebind final line/blob/hash receipts.
 | Existing site | Required change within its existing owner |
 | --- | --- |
 | host `_record_process:52`, `run_vm:2568–2582`, `_capture_values:1547`, `_write_capture_file:1575` | Only `run_vm.export-read.bytes` gains the host-only `{role:"sandbox-export-capture-bytes",size_bytes,sha256}` reference, with no launch. Retain the same original whole `fh.read()` value before it is lost. Write the fixed file inside the separate capture directory from those bytes with exclusive creation/fsync/readback and the publication/completion sequence above; never reopen export.img later. Keep native read, observer, stop/reap, error and cleanup order. A capture write/limit failure makes capture unusable, preserving native results and teardown. |
+| host `remove_only:1840` (three original directory calls), `remove_frozen:1887`, `_record_process:52`; source `d4fc4664f996051f6a2601597e7cb04efbc116f4` | Tee each original listdir return/error into the spec's fixed-site return variant. H validation → consumer projection → fixed replay host owner retain the whole ordered name list, original site/ordinal/cleanup level and launch. Consume every name through the same cleanup value owner; never migrate to RAW07 or dispatch syscalls offline. Keep original deletion authority, stat/error/close semantics and capture-only failure rules. |
 | consumer `_attempt_names:968`, `_capture_envelope:972`, `_capture_for_replay:995`, `_origin_values`, `read_store_attempt:1033`, `_HeldStoreRead.recheck:1006` | Keep the native inventory separate; share the exact completed capture inventory and completion/reference/attempt/request binding inside the private recorder. Acquire the binary through the existing held-file/ACL path, with its fixed 12 MiB ceiling. Include it in every origin, full-byte recheck and capture copy. A changed file or unmatched reference refuses; no absent-field fallback. |
 | consumer `read_coverage_attempt` and derived held readers; scope reader/generator store acquisition and final checks | Keep source-page captures export-free, with their full package runtime bytes; native attempts stay unchanged. Apply the two separate inventories and completion binding on every initial, recursive, release/reacquisition and completion check. Count every actual reread, including earlier attempts and overlapping holds; no cached hash replaces a required check. |
 | launcher `snapshot_file:21`, `stage_expected:56`, `snapshot_input:270`, shared-file staging | Select only `exports/reproduction.bin` or `exports/write.bin` below the validated trial directory from the fixed launch role. Stream at most 64 KiB per chunk; keep held source/installed file, modes, parents, exclusive create and completion seals. No caller path/limit, codec or general externalizer. Charge repeated references even when one equal snapshot is physically reused. |
@@ -2122,6 +2125,7 @@ RAW12 adds these finite vectors to the existing tests, with no new entry point:
 
 | IDs / vectors | Same owner and existing test site |
 | --- | --- |
+| CLEAN.names | In existing host cleanup/native and offline paired controls, cover all three remove_only calls and the extra attempt listdir, original ordinals/levels and both launches. Preserve complete ordered raw-byte names, including non-UTF-8 names and unknown survivors; native never deletes survivors. Missing/extra/reordered/wrong-site/wrong-type/incomplete lists refuse. Empty success has null errno/bytes/timeout; failed listdir preserves its actual return/errno, never empty success; unreached has no row. Preserve original stat arbitrary-OSError and close-error precedence. Check bounds and one-over refusal at their actual guard owners; end-to-end complete-name positives satisfy the tighter 1 MiB H ceiling. Never require success at a larger inner bound while satisfying a smaller outer bound. Verify and reuse existing bound evidence only when its guard source, dependencies and applicable input branch are unchanged; retain all required proof without repeating every old cap matrix. The new name-list variant still proves complete bytes, fixed type/site, actual errors/order, actual guards and paired production recording/shared-owner/offline consumption. Over-limit or encoding/recording/retention/accounting failure makes capture ineligible with unchanged native result/call order. Delete each production recording/shared-owner call and offline consumption separately in the existing source-copy mutation route: its paired assertion must fail. Old capture absence is not backfilled, and receipts cannot supply storage_destroyed. | sandbox-launcher + evals-malicious existing host/capture and paired owner controls |
 | EXP.complete-two | `evals-malicious.test.sh` existing capture-held-values group (64 source:550–644), extended with the two actual 12 MiB files and the ledger above; `_capture_values`, actual held store reader, fixed launcher staging and `_host_result_values`/guest rebuild all consume the whole files. Check complete=true, exact role/use counts and all byte/file/read/write counters. |
 | EXP.tail, last-byte, digest, end-length, magic, truncated, empty, short, errno | `sandbox-launcher.test.sh` existing frame and export-stop groups plus evals-malicious host-result values; original `frame_read` and real run_vm read/error branch retain their exact rejection, native result and cleanup. Last-byte changes only byte 12,582,911; compare all original bytes. |
 | EXP.missing, duplicate, unused, cross-launch, cross-attempt, cross-request, wrong-site, inline, extra-key | capture-held-values group and shadow-enforced/write store tests; actual `_capture_envelope`, separate native/capture inventories and witness binding, fixed role selection and coordinator all refuse the independently malformed relation. Source-page capture reader also rejects an export binary; its fixed package runtime bytes remain required. |
