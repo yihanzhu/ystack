@@ -729,11 +729,11 @@ def _S_inventory_core_values(case_id, files, semantic, expected, originals, occu
             and type(fact["size_bytes"]) is int and 0 <= fact["size_bytes"] <= 4 << 30
             and type(fact["sha256"]) is str and len(fact["sha256"]) == 64
             and all(char in "0123456789abcdef" for char in fact["sha256"]))
-        _seed_require(type(row) is dict and set(row) == {"occurrence", "role", "member", "file", "size_bytes", "sha256"}
+        _seed_require(type(row) is dict and set(row) == {"occurrence", "role", "member", "file", "size_bytes", "sha256", "kind"}
             and row["file"] == name and type(row["size_bytes"]) is int
             and row["size_bytes"] == fact["size_bytes"] and row["sha256"] == fact["sha256"]
-            and type(source) is tuple and len(source) == 5 and type(source[3]) is int
-            and source == (row["occurrence"], row["role"], row["member"], row["size_bytes"], row["sha256"]))
+            and row["kind"] == fact["kind"] and type(source) is tuple and len(source) == 6 and type(source[3]) is int
+            and source == (row["occurrence"], row["role"], row["member"], row["size_bytes"], row["sha256"], row["kind"]))
         occurrence, role, member = source[:3]
         _seed_require(type(member) is str and 0 < len(member) <= 4096 and "\0" not in member)
         if role == "original-input":_seed_require(occurrence == "case" and name == member and name in names)
@@ -801,6 +801,9 @@ class _SeedAssembly:
         self.work["runtime_window_carry_in"] = window_work.setdefault("runtime", {})
         self.runtime_bytes, self.runtime_files, self.source_occurrences = 0, 0, set()
         try:
+            bindings = self.window.setdefault("C2_case_bindings", {})
+            _seed_require(case_id not in bindings and len(bindings) < 4)
+            bindings[case_id] = (self.case_work, self.case_sources)
             destination.recheck("E_STORE")
             _seed_require(not destination.listdir())
             rows = c._clone(destination, "E_STORE", self.work, "M")
@@ -1372,7 +1375,7 @@ class _SeedAssembly:
                 owner = _seed_module(item, ("_HeldBytes",))
                 expected = self._digest(item.raw)
                 _seed_require(id(item.held) not in self.source_occurrences)
-                self.semantic_expected[name] = ("case", "original-input", name, len(item.raw), expected)
+                self.semantic_expected[name] = ("case", "original-input", name, len(item.raw), expected, "M")
                 self._copy_file(owner, self.anchor, item.held, name, expected, "M",
                     source_mode=stat.S_IMODE(item.held.before.st_mode))
                 self.source_occurrences.add(id(item.held))
@@ -1390,16 +1393,16 @@ class _SeedAssembly:
     def _semantic_record(self, occurrence, role, member, name):
         _seed_require(name in self.files and name not in self.semantic
             and self.semantic_expected[name] == (occurrence, role, member,
-                self.files[name]["size_bytes"], self.files[name]["sha256"]))
+                self.files[name]["size_bytes"], self.files[name]["sha256"], self.files[name]["kind"]))
         row = {"occurrence": occurrence, "role": role, "member": member,
-            "file": name, "size_bytes": self.files[name]["size_bytes"], "sha256": self.files[name]["sha256"]}
+            "file": name, "size_bytes": self.files[name]["size_bytes"], "sha256": self.files[name]["sha256"], "kind": self.files[name]["kind"]}
         self.c._capture_observe(self.work, "M", "seed-semantic-member", row)
         self.semantic[name] = row
 
     def _semantic_copy(self, anchor, held, name, expected, kind, occurrence, role, member):
         try:
             _seed_require(name not in self.semantic_expected)
-            self.semantic_expected[name] = (occurrence, role, member, held.before.st_size, expected)
+            self.semantic_expected[name] = (occurrence, role, member, held.before.st_size, expected, kind)
             result = self._copy(anchor, held, name, expected, kind)
             self._semantic_record(occurrence, role, member, name)
             self._transfer()
@@ -1617,7 +1620,7 @@ class _SeedAssembly:
         _seed_require(measured.hexdigest() == expected)
         held.recheck("E_STORE")
         self.files["raw-observations.json"] = {"size_bytes": len(raw), "sha256": expected, "kind": "raw"}
-        self.semantic_expected["raw-observations.json"] = ("case", "raw-observations", "raw-observations.json", len(raw), expected)
+        self.semantic_expected["raw-observations.json"] = ("case", "raw-observations", "raw-observations.json", len(raw), expected, "raw")
         self._semantic_record("case", "raw-observations", "raw-observations.json", "raw-observations.json")
 
     def closed_occurrence(self, role):

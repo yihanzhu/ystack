@@ -5090,7 +5090,7 @@ def raw16_C1_revision_deletions(root: Path) -> None:
     print(json.dumps({'wrapper_compare_charge_deletion_detected':True,'mutable_gate_id_deletion_detected':True}))
 
 
-def raw16_C2_inventory_inputs(root: Path, selected=None, mutation=False) -> None:
+def raw16_C2_inventory_inputs(root: Path, selected=None, mutation=False, window=False) -> None:
     body=(root/'scripts/test/evals-malicious.test.sh').read_text().split("<<'PY_RUNTIME_CONSUMER'\n",1)[1].split('\nPY_RUNTIME_CONSUMER',1)[0]
     prefix=body.split('        native.recheck();native.close();native=None\n',1)[0]
     footer=body[body.rfind('finally:\n    if copied_inventory'):]
@@ -5118,14 +5118,26 @@ def raw16_C2_inventory_inputs(root: Path, selected=None, mutation=False) -> None
             source=source.replace(call,'None')
             changed={};exec(compile(source,'<remove-original-input-copy>','exec'),replay.__dict__,changed)
             replay._SeedAssembly.original_inputs=changed['original_inputs']
-        if C2_mutation=='source-seal':
+        if C2_mutation in {'source-seal','kind-seal'}:
             source=textwrap.dedent(inspect.getsource(replay._S_inventory_core_values))
-            check='source == (row["occurrence"], row["role"], row["member"], row["size_bytes"], row["sha256"])'
-            assert source.count(check)==1;source=source.replace(check,'True')
+            check='source == (row["occurrence"], row["role"], row["member"], row["size_bytes"], row["sha256"], row["kind"])'
+            assert source.count(check)==1
+            replacement='True' if C2_mutation=='source-seal' else 'source[:5] == (row["occurrence"], row["role"], row["member"], row["size_bytes"], row["sha256"])'
+            source=source.replace(check,replacement)
             changed={};exec(compile(source,'<remove-semantic-source-seal>','exec'),replay.__dict__,changed)
             replay._S_inventory_core_values=changed['_S_inventory_core_values']
-        seed_parent=c._open_held(str(seed),True,c._store_rule(uid,gid,0o700,True,anchor.resolver),'E_STORE')
+        window_custody=window_caller=None
+        if C2_window:
+            window_held=c._open_held(str(seed),True,c._store_rule(uid,gid,0o700,True,anchor.resolver),'E_STORE')
+            window_caller=C2_caller_class(root,window_held,anchor.recording_work,copied_inventory.case_work)
+            window_caller.work['runtime_case_carry_in']=copied_inventory.case_work.setdefault('runtime',{})
+            window_caller.work['runtime_window_carry_in']=anchor.recording_work.setdefault('runtime',{})
+            window_custody=window_caller.fixed['C2Root'](window_held,window_caller.work,anchor.resolver)
+            S_destinations,window_operations=window_custody.layout()
+            seed_parent=S_destinations['malicious.checked-file-bytes'];seed=Path(seed_parent.path)
+        else:seed_parent=c._open_held(str(seed),True,c._store_rule(uid,gid,0o700,True,anchor.resolver),'E_STORE')
         assembly=replay._SeedAssembly(seed_parent,anchor,'malicious.checked-file-bytes',anchor.recording_work,copied_inventory.case_work)
+        if C2_window:window_custody.release_destination(seed_parent);seed_parent=None
         inputs_held=[c._hold_bytes(str(path),c.DOCUMENT_LIMIT) for path in input_paths]
         fault=MemoryError('controlled semantic registration');caught=None;close_attempts=[];cancellations=[]
         observe=c._capture_observe;closing=os.close;opening=os.open;writer=[None];armed=[True]
@@ -5173,7 +5185,7 @@ def raw16_C2_inventory_inputs(root: Path, selected=None, mutation=False) -> None
             finally:os.close=closing
             if C2_case=='register-cancel-close':assert close_attempts==[target] and assembly.failure is caught
             for item in inputs_held:item.close()
-            seed_parent.close()
+            if seed_parent is not None:seed_parent.close()
             print(json.dumps({'C2_case':C2_case,'failure':type(caught).__name__,'partial_files':list(assembly.files),
                 'writer_close_attempts':close_attempts,'same_first_cancel':bool(cancellations) and caught is cancellations[0],'work':assembly.work,'full_seed':False},sort_keys=True))
         else:
@@ -5268,7 +5280,7 @@ def raw16_C2_inventory_inputs(root: Path, selected=None, mutation=False) -> None
                 assert caught is None and len(result['inventory_core']['entries'])==5
                 assert c.digest(c.canonical(result['inventory_core']))==result['sha256']
                 failures=[]
-                labels=('both-sha',) if C2_mutation=='source-seal' else ('missing','unused','member','role','size-bool','both-size','both-sha','original-kind','cross-binding','cap')
+                labels=('both-sha',) if C2_mutation=='source-seal' else ('both-kind',) if C2_mutation=='kind-seal' else ('missing','unused','member','role','size-bool','both-size','both-sha','both-kind','original-kind','cross-binding','cap')
                 for label in labels:
                     files,semantic,expected,originals,occurrences=copy.deepcopy((assembly.files,assembly.semantic,assembly.semantic_expected,assembly.original_bindings,assembly.occurrences))
                     if label=='missing':semantic.pop('incident.json')
@@ -5278,6 +5290,7 @@ def raw16_C2_inventory_inputs(root: Path, selected=None, mutation=False) -> None
                     elif label=='size-bool':semantic['incident.json']['size_bytes']=True
                     elif label=='both-size':files['incident.json']['size_bytes']+=1;semantic['incident.json']['size_bytes']+=1
                     elif label=='both-sha':files['reproduction-runtime.bin']['sha256']='f'*64;semantic['reproduction-runtime.bin']['sha256']='f'*64
+                    elif label=='both-kind':files['reproduction-runtime.bin']['kind']='M';semantic['reproduction-runtime.bin']['kind']='M'
                     elif label=='original-kind':originals['incident.json']['kind']='shadow_write_request'
                     elif label=='cross-binding':occurrences['reproduction']['binding']['outer_request_sha256']='f'*64
                     else:
@@ -5288,6 +5301,30 @@ def raw16_C2_inventory_inputs(root: Path, selected=None, mutation=False) -> None
                 try:assembly.closed_inventory_core()
                 except ValueError:pass
                 else:raise AssertionError('partial data accepted as closed qualified case')
+                if C2_window:
+                    try:
+                        operation=window_custody.mkdir(window_operations,'0')
+                        installed=window_custody.mkdir(operation,'I')
+                        target=window_custody.mkdir(installed,assembly.case_id)
+                        parent=next(item for item in window_custody.owned if item.components and item.path==str(seed.parent))
+                        current=window_custody.adopt(c._open_child(parent,'S',True,c._store_rule(uid,gid,0o700,True,anchor.resolver),'E_STORE',recording_work=window_caller.work,accounting_kind='M'))
+                        before_scope=window_caller.fixed['c2_counters'](anchor.recording_work)
+                        total=window_caller.fixed['c2_fresh_work']('C2-case-total-fixture')
+                        leaf=window_caller.fixed['c2_fresh_work']('C2-case-copy-fixture')
+                        window_caller.work['C2_case_totals']={assembly.case_id:total}
+                        window_caller.work['C2_case_leaves']={assembly.case_id:leaf}
+                        copied=window_caller.fixed['C2Copies'](window_custody,leaf,total,before_scope['window'],before_scope['cases'][assembly.case_id])
+                        for entry in result['inventory_core']['entries']:
+                            source=window_custody.adopt(c._open_child(current,entry['file'],False,c._store_rule(uid,gid,0o400,False,anchor.resolver),'E_STORE',recording_work=window_caller.work,accounting_kind='M'))
+                            copied.copy(source,target,entry['file'],entry['size_bytes'],entry['sha256'],entry['kind'])
+                        copied.final_checks();copied.transfer_cases()
+                        window_caller.transfer()
+                    finally:
+                        window_custody.close();copied.transfer_cases();window_caller.transfer()
+                    assert not window_caller.held.components and len(copied.pairs)==5
+                    print(json.dumps({'C2_original_C1_caller_window':True,'full_seed':False,'no_window_descriptor_fabricated':True,
+                        'original_S_closed_before_reacquisition':assembly.root is None,'actual_S_to_I_files':len(copied.pairs),
+                        'work':window_caller.fixed['c2_counters'](window_caller.work)},sort_keys=True))
                 print(json.dumps({'C2_case':C2_case,'entries':result['inventory_core']['entries'],'binding_negatives':failures,
                     'post_close_no_root':True,'actual_four_input_copies':True,'actual_one_P_runtime_copy':True,
                     'composition_occurrence_only':True,'full_seed':False,'work':assembly.work},sort_keys=True))
@@ -5301,10 +5338,10 @@ def raw16_C2_inventory_inputs(root: Path, selected=None, mutation=False) -> None
                     'leaf_before':{key:value for key,value in baseline.items() if key!='accounting_rows'},
                     'target_new_rows':[target.get('accounting_rows',[])[len(prior.get('accounting_rows',[])):] for target,prior in zip((original_window,original_case),target_before)],
                     'transfer_entries':transfer_entries,'same_first_cancel':bool(cancellations) and caught is cancellations[0],'full_seed':False},sort_keys=True))
-            seed_parent.close()
+            if seed_parent is not None:seed_parent.close()
 '''
     for case in (selected or ('normal','source-drift','registration','copy-close','register-cancel-close','encode','parse','compare','cancel-transfer','partial-transfer')):
-        namespace={'C2_case':case,'C2_mutation':mutation};argv=sys.argv;sys.argv=['C2-inventory-fixture',str(root)]
+        namespace={'C2_case':case,'C2_mutation':mutation,'C2_window':window,'C2_caller_class':_C2FixtureCaller};argv=sys.argv;sys.argv=['C2-inventory-fixture',str(root)]
         try:exec(compile(prefix+extra+footer,'<actual-C2-inventory>','exec'),namespace)
         except BaseException:
             if mutation and 'assembly' in namespace:
@@ -5314,8 +5351,691 @@ def raw16_C2_inventory_inputs(root: Path, selected=None, mutation=False) -> None
 
 
 def raw16_C2_inventory_deletion(root: Path) -> None:
-    for mutation,marker in (('copy','four original input copies failed'),('source-seal','semantic inventory admitted both-sha')):
+    for mutation,marker in (('copy','four original input copies failed'),('source-seal','semantic inventory admitted both-sha'),('kind-seal','semantic inventory admitted both-kind')):
         try:raw16_C2_inventory_inputs(root,('normal',),mutation=mutation)
         except AssertionError as error:assert str(error)==marker
         else:raise AssertionError('C2 deletion not detected: '+mutation)
-    print(json.dumps({'C2_actual_original_copy_deletion_detected':True,'C2_initial_source_seal_deletion_detected':True}))
+    print(json.dumps({'C2_actual_original_copy_deletion_detected':True,'C2_initial_source_seal_deletion_detected':True,'C2_initial_kind_seal_deletion_detected':True}))
+
+
+class _C2FixtureCaller:
+    """Fixed ordinary caller; the root and its original ledger remain live here."""
+    def __init__(self, root: Path, held, window_work, case_work):
+        import shlex
+        owner = sys.modules[type(held).__module__]
+        assert type(held) is owner.HeldPath
+        assert Path(owner.__file__) == root/'shadow/v1/_consumer.py'
+        launcher = (root/'evals/v1/evals-launcher.sh').read_text()
+        literal = shlex.split(launcher.split('c2_program=', 1)[1].split('\nc2_fd9=', 1)[0])[0]
+        self.fixed = {'__name__': '_C2_fixture_fixed_launcher', '__file__': str(root/'evals/v1/evals-launcher.sh'), 'c': owner}
+        exec(compile(literal, self.fixed['__file__']+':fixed-C2', 'exec'), self.fixed)
+        self.owner, self.root, self.held = owner, root, held
+        self.window_work, self.case_work = window_work, case_work
+        self.bindings = window_work.setdefault('C2_case_bindings',{})
+        self.common_case = owner._capture_work_values(window_work,'C2/session')
+        self.caller_state, self.child_state = {}, {}
+        self.work = self.fixed['c2_fresh_work']('C2-caller')
+        self.ordinal, self.head, self.window_sha = 0, None, None
+        self.pending, self.failed = False, False
+        self.receipts = []
+        self.child_work = None
+        self.reconstructed = []
+    def transfer(self):
+        self._settle_scoped(self.fixed['c2_counters'](self.work),self.caller_state)
+    def observe(self, site, value):
+        self.owner._capture_observe(self.work,'M',site,value)
+    def _transfer_view(self, value, state, key, target):
+        if key not in state:state[key]=self.fixed['c2_fresh_work']('C2-transfer-'+key)
+        leaf=state[key]
+        for field in self.fixed['_C2_SCALARS']:
+            amount=value[field]
+            assert type(amount) is int and amount>=leaf[field]
+            leaf[field]=amount
+        for name in ('runtime','accounting','seed_processing'):leaf[name]=value[name]
+        for flag in value['incomplete']:leaf[flag]=True
+        self.owner._capture_transfer_work(leaf,self.window_work,target)
+        previous=leaf.setdefault('transferred_seed_processing',{})
+        for field,amount in leaf['seed_processing'].items():
+            prior=previous.get(field,0);assert type(amount) is int and 0<=prior<=amount
+            for counter in (self.window_work,target):
+                values=counter.setdefault('seed_processing',{});values[field]=values.get(field,0)+amount-prior
+            previous[field]=amount
+        if value['unknown']:
+            for counter in (self.window_work,target):
+                counter['C2_work_unknown']=value['unknown'];counter['C2_accounting_incomplete']=True
+    def _settle_scoped(self, value, state):
+        assert set(value)=={'window','cases'} and set(value['cases'])<=set(self.bindings)
+        for identity,view in value['cases'].items():
+            primary,rows=self.bindings[identity]
+            assert any(primary is row for row in rows)
+            assert any(primary is row for row in self.window_work['cases'].values())
+            self._transfer_view(view,state,identity,primary)
+        if value['cases']:case_sum=self.fixed['c2_sum_views'](list(value['cases'].values()))
+        else:case_sum=self.fixed['c2_counter_values'](self.fixed['c2_fresh_work']('C2-new-empty-case-delta'))
+        common=self.fixed['c2_view_delta'](value['window'],case_sum)
+        self._transfer_view(common,state,'session',self.common_case)
+        if 'source' in value['window']:
+            self.window_work.setdefault('C2_source_counter_cutoffs',[]).append(value['window']['source'])
+            self.common_case.setdefault('C2_source_counter_cutoffs',[]).append(value['window']['source'])
+    def settle_child(self, value):
+        self._settle_scoped(value,self.child_state)
+    def reconstruct_tail(self, end, done):
+        values=done[4:-1]
+        assert len(values)==50 and all(value==0 for value in values[11:20]) and all(value==0 for value in values[-6:])
+        tail=self.fixed['c2_fresh_work']('C2-terminal')
+        cursor=iter(values)
+        for field in self.fixed['_C2_SCALARS']:tail[field]=next(cursor)
+        for field in self.owner._RUNTIME_FIELDS:tail['runtime'][field]=next(cursor)
+        for kind in self.fixed['_C2_CLASSES']:
+            for field in self.fixed['_C2_ACCOUNT_FIELDS']:tail['accounting'][kind][field]=next(cursor)
+        tail['accounting']['M']['logical_bytes']+=512;tail['accounting']['M']['occurrences']+=1
+        tail['write_bytes']+=512;tail['accounting']['M']['write_bytes']+=512
+        tail['seed_processing']['W']=tail['seed_processing']['C']=values[1]+512
+        ordinal=end['child_delta']['window']['observation_calls']+values[10]
+        for index,site in enumerate(('C2.stdout','C2.stderr','C2.control'),1):
+            row={'owner':'C2-terminal','ordinal':ordinal+index,'kind':'M','site':'close',
+                'value':{'site':site,'return':0,'errno':None}}
+            raw=self.fixed['C2Channel'](None,self.work).encode(row)
+            size=len(raw)
+            tail['read_bytes']+=3*size-2;tail['accounting']['M']['read_bytes']+=3*size-2
+            tail['accounting']['M']['logical_bytes']+=size;tail['accounting']['M']['occurrences']+=1
+            tail['close_calls']+=1;tail['observation_calls']+=1
+            self.reconstructed.append({'basis':'fixed END/DONE/EOF/wait=0 schedule','row':row,'raw':raw})
+        return tail
+    def _receive_charge(self, raw):
+        self.work['read_bytes'] += len(raw)
+        self.owner._capture_account(self.work, 'M', 'read_bytes', len(raw))
+        self.work['seed_processing']['R'] += len(raw)
+    def _parse(self, raw, kind):
+        self.work['C2_parse_unknown'] = True
+        value = json.loads(raw)
+        self._receive_charge(raw)
+        self.work['C2_parse_unknown'] = False
+        channel = self.fixed['C2Channel'](None, self.work)
+        rebuilt = channel.encode(value)
+        equal = raw == rebuilt
+        self._receive_charge(raw);self._receive_charge(rebuilt)
+        assert equal
+        return self.fixed['c2_message'](value, kind)
+    def bind_window(self, custody, descriptor):
+        assert custody.root is self.held and not self.pending and self.head is None
+        self.window_sha = self.fixed['c2_write_document'](custody, self.held, 'window.json', descriptor)
+        self.head = self.window_sha
+        self.transfer()
+    def invoke(self, arguments, case_ids, reservation):
+        import fcntl, socket
+        assert not self.pending and not self.failed and self.head is not None
+        mode, parent, paths = self.fixed['c2_cli'](arguments)
+        assert parent == self.held.path and self.ordinal < 4
+        self.held.recheck('E_STALE', self.work, 'M')
+        self.transfer()
+        before = self.fixed['c2_counters'](self.window_work)
+        assert set(case_ids)<=set(before['cases'])
+        self.child_state={}
+        caller_before = self.fixed['c2_counters'](self.work)
+        hashes = []
+        resolver = self.owner._DarwinUUIDResolver() if sys.platform == 'darwin' else None
+        custody = self.fixed['C2Root'](self.owner.HeldPath(self.held.path,
+            self.owner._clone(self.held, 'E_STALE', self.work, 'M'), recording_work=self.work, accounting_kind='M'), self.work, resolver)
+        for path in paths:
+            _value, _raw, digest, _item = self.fixed['c2_document'](custody, custody.root, Path(path).name)
+            hashes.append(digest)
+        custody.close()
+        start = {'kind':'START','version':1,'ordinal':self.ordinal,'window_sha256':self.window_sha,
+            'predecessor_sha256':self.head,'mode':mode,'case_ids':list(case_ids),
+            'seed_sha256s':hashes if mode=='run' else hashes[::2],
+            'result_sha256s':[] if mode=='run' else hashes[1::2],
+            'root_identity':list(self.owner._identity(self.held.before)), 'before':before, 'tail_reservation':reservation}
+        self.fixed['c2_message'](start, 'START')
+        self.fixed['c2_reserve'](before,reservation)
+        owned, sockets, child, first = [], [], None, None
+        pending,pending_pair=None,None
+        caller_socket=child_socket=None
+        stdout, stderr, control = [], [], []
+        received = [];phase = 'READY';remaining = 4;pieces = [];end = done = candidate = None
+        self.last_attempt={'stdout':stdout,'stderr':stderr,'control':control,'messages':received,'end':None,'done':None,'wait':None}
+        self.pending = True
+        def close_fd(fd, site):
+            owned.remove(fd)
+            self.owner._close_capture_copy(fd, self.work, self.work, site, first)
+        try:
+            caller_socket, child_socket = socket.socketpair();sockets.extend((caller_socket, child_socket))
+            pending=fcntl.fcntl(child_socket.fileno(),fcntl.F_DUPFD_CLOEXEC,11)
+            owned.append(pending);prepared_control=pending;pending=None
+            pending=fcntl.fcntl(self.held.fd,fcntl.F_DUPFD_CLOEXEC,11)
+            owned.append(pending);prepared_root=pending;pending=None
+            pending=os.open('/dev/null',os.O_RDONLY)
+            owned.append(pending);null=pending;pending=None
+            pending_pair=os.pipe()
+            for fd in pending_pair:owned.append(fd)
+            out_r,out_w=pending_pair;pending_pair=None
+            pending_pair=os.pipe()
+            for fd in pending_pair:owned.append(fd)
+            err_r,err_w=pending_pair;pending_pair=None
+            known = {item.fd for item in self.held.components} | set(owned) | {caller_socket.fileno(), child_socket.fileno()}
+            actions = [(os.POSIX_SPAWN_DUP2,null,0),(os.POSIX_SPAWN_DUP2,out_w,1),(os.POSIX_SPAWN_DUP2,err_w,2),
+                (os.POSIX_SPAWN_DUP2,prepared_control,9),(os.POSIX_SPAWN_DUP2,prepared_root,10)]
+            actions.extend((os.POSIX_SPAWN_CLOSE,fd) for fd in sorted(known) if fd not in {0,1,2,9,10})
+            argv = ['/bin/bash',str(self.root/'evals/v1/run-evals.sh'),*arguments]
+            child = os.posix_spawn('/bin/bash',argv,{'LC_ALL':'C','PATH':'/usr/bin:/bin','TMPDIR':os.environ['TMPDIR']},file_actions=actions)
+            self.observe('C2.caller-spawn',{'pid':child,'actions':actions})
+            child_socket.close();sockets.remove(child_socket)
+            self.observe('C2.caller-child-socket-close',{'return':0})
+            for fd in (prepared_control,prepared_root,null,out_w,err_w):close_fd(fd,'C2.caller-prepared-close')
+            channel = self.fixed['C2Channel'](caller_socket.fileno(),self.work)
+            start_raw,_sent = channel.send(start)
+            with selectors.DefaultSelector() as selected:
+                selected.register(caller_socket,selectors.EVENT_READ,'control')
+                selected.register(out_r,selectors.EVENT_READ,'stdout');selected.register(err_r,selectors.EVENT_READ,'stderr')
+                lengths = {'stdout':0,'stderr':0,'control':0}
+                while selected.get_map():
+                    for key,_events in selected.select():
+                        stream = key.data
+                        amount = min(CHUNK,remaining) if stream=='control' else min(CHUNK,1048577-lengths[stream])
+                        assert amount > 0
+                        self.owner._capture_copy_room(self.work,amount,False,read_only=True)
+                        raw = os.read(key.fd,amount)
+                        self._receive_charge(raw);lengths[stream] += len(raw)
+                        if not raw:
+                            selected.unregister(key.fileobj)
+                            if stream=='control':assert phase=='EOF'
+                            continue
+                        if stream!='control':
+                            assert lengths[stream]<=1048576
+                            (stdout if stream=='stdout' else stderr).append(raw)
+                            continue
+                        control.append(raw);pieces.append(raw);remaining -= len(raw)
+                        if remaining:continue
+                        value_raw = b''.join(pieces);self._receive_charge(value_raw);pieces=[]
+                        if phase in {'READY','END'}:
+                            size = struct.unpack('>I',value_raw)[0]
+                            assert 0<size<=1048576
+                            remaining=size;phase+='-body';continue
+                        if phase=='READY-body':
+                            ready=self._parse(value_raw,'READY');received.append(('READY',value_raw))
+                            assert ready['ordinal']==self.ordinal and ready['start_sha256']==hashlib.sha256(start_raw).hexdigest()
+                            assert ready['leaf_pid']==child and ready['leaf_ppid']==os.getpid()
+                            assert ready['input_sha256s']==hashes and ready['observed_predecessor_sha256']==self.head
+                            self.held.recheck('E_STALE',self.work,'M')
+                            self.settle_child(ready['acquisition_delta'])
+                            self.transfer()
+                            self.fixed['c2_reserve'](self.fixed['c2_counters'](self.window_work),reservation)
+                            go={'kind':'GO','version':1,'ordinal':self.ordinal,'start_sha256':hashlib.sha256(start_raw).hexdigest(),
+                                'ready_sha256':hashlib.sha256(value_raw).hexdigest(),'caller_delta':self.fixed['c2_delta'](self.fixed['c2_counters'](self.work),caller_before),
+                                'tail_reservation':reservation}
+                            channel.send(go)
+                            phase='END';remaining=4
+                        elif phase=='END-body':
+                            end=self._parse(value_raw,'END');received.append(('END',value_raw));self.last_attempt['end']=end
+                            assert end['ordinal']==self.ordinal and end['start_sha256']==hashlib.sha256(start_raw).hexdigest()
+                            phase='DONE';remaining=512
+                        elif phase=='DONE':
+                            done=struct.unpack('>8s53Q80s',value_raw);self.last_attempt['done']=done
+                            assert done[0]==b'YC2DONE1' and done[1]==self.ordinal and done[-1]==bytes(80)
+                            assert done[2]==len(received[-1][1]) and done[3]==done[2]+4
+                            phase='EOF';remaining=1
+                        else:raise AssertionError('C2 trailing control bytes')
+            waited,status=os.waitpid(child,0)
+            self.observe('C2.caller-wait',{'pid':waited,'status':status});self.last_attempt['wait']=status
+            assert waited==child;child=None
+            output,error=b''.join(stdout),b''.join(stderr)
+            self._receive_charge(output);self._receive_charge(error)
+            assert status==0 and end is not None and done is not None and phase=='EOF'
+            assert (end['outcome']=='refused')==(end['result_sha256'] is None)
+            assert end['outcome']!='completed' or not error and hashlib.sha256(output).hexdigest()==end['result_sha256']
+            receipt={'end':end,'done':done,'stdout':output,'stderr':error,'control':control,'wait':status}
+            self.receipts.append(receipt)
+            self.settle_child(end['child_delta'])
+            tail=self.reconstruct_tail(end,done)
+            combined_raw=self.fixed['C2Channel'](None,self.work).encode(end['child_delta'])
+            self.work['C2_merge_parse_incomplete']=True
+            combined=json.loads(combined_raw);self._receive_charge(combined_raw)
+            self.work['C2_merge_parse_incomplete']=False
+            for field in self.fixed['_C2_SCALARS']:combined['window'][field]+=tail[field]
+            for kind in self.fixed['_C2_CLASSES']:
+                for field in self.fixed['_C2_ACCOUNT_FIELDS']:combined['window']['accounting'][kind][field]+=tail['accounting'][kind][field]
+            for field,amount in tail['seed_processing'].items():combined['window']['seed_processing'][field]+=amount
+            self.settle_child(combined)
+            candidate=receipt
+        except BaseException as error:
+            first=error;self.failed=True
+        finally:
+            if child is not None:
+                try:
+                    os.kill(child,signal.SIGTERM)
+                    waited,status=os.waitpid(child,0)
+                    self.observe('C2.caller-failed-wait',{'pid':waited,'status':status})
+                except BaseException as error:first=self.fixed['c2_first'](first,error)
+            for fd in ((pending,) if pending is not None else ())+(pending_pair or ()):
+                if fd not in owned:
+                    try:self.owner._close_capture_copy(fd,self.work,self.work,'C2.caller-pending-close',first)
+                    except BaseException as error:first=self.fixed['c2_first'](first,error)
+            for fd in reversed(owned[:]):
+                try:close_fd(fd,'C2.caller-tail-close')
+                except BaseException as error:first=self.fixed['c2_first'](first,error)
+            for value in (child_socket,caller_socket):
+                if value is None or value._closed:continue
+                try:
+                    value.close();self.observe('C2.caller-control-close',{'return':0})
+                except BaseException as error:first=self.fixed['c2_first'](first,error)
+            try:self.transfer()
+            except BaseException as error:first=self.fixed['c2_first'](first,error)
+            if first is not None:raise first
+        assert candidate is not None
+        self.held.recheck('E_STALE',self.work,'M')
+        self.transfer()
+        end=candidate['end']
+        assert end['outcome']=='completed' and not end['errors'] and not end['unknown']
+        assert not self.owner._capture_work_incomplete(self.window_work)
+        self.head=end['receipt_sha256'];self.ordinal+=1;self.pending=False
+        return candidate
+
+
+def raw16_C2_lifecycle_core(root: Path, selected=None, mutation=None) -> None:
+    import ast, copy, inspect, shlex, socket, tempfile, textwrap
+    consumer_path=root/'shadow/v1/_consumer.py'
+    spec=importlib.util.spec_from_file_location('_raw16_C2_core_consumer',consumer_path)
+    consumer=importlib.util.module_from_spec(spec);sys.modules[spec.name]=consumer;spec.loader.exec_module(consumer)
+    launcher=(root/'evals/v1/evals-launcher.sh').read_text()
+    literal=shlex.split(launcher.split('c2_program=',1)[1].split('\nc2_fd9=',1)[0])[0]
+    fixed={'__name__':'_raw16_C2_core','c':consumer};exec(compile(literal,str(root/'evals/v1/evals-launcher.sh')+':C2','exec'),fixed)
+    if mutation=='length':
+        tree=ast.parse(literal)
+        cls=next(node for node in tree.body if isinstance(node,ast.ClassDef) and node.name=='C2Copies')
+        method=next(node for node in cls.body if isinstance(node,ast.FunctionDef) and node.name=='copy')
+        source=textwrap.dedent(ast.get_source_segment(literal,method))
+        guard='c2_require(installed.before.st_size == size, "E_STALE")'
+        assert source.count(guard)==1;source=source.replace(guard,'None')
+        changed={};exec(compile(source,'<C2-installed-length-deletion>','exec'),fixed,changed)
+        fixed['C2Copies'].copy=changed['copy']
+    cases=selected or ('normal','extra-name','target-drift','same-bytes-drift','tail-before-acquire','close-observer','ordinary-eintr')
+    for label in cases:
+        with tempfile.TemporaryDirectory(prefix='raw16-C2-held.') as temp:
+            base=Path(temp);window=base/'window';window.mkdir(mode=0o700)
+            raw=b'synthetic-runtime\0'*8192;source_path=base/'source';source_path.write_bytes(raw);source_path.chmod(0o400)
+            resolver=consumer._DarwinUUIDResolver() if sys.platform=='darwin' else None
+            work=fixed['c2_fresh_work']('C2-core-fixture')
+            held=consumer._open_held(str(window),True,consumer._store_rule(os.geteuid(),os.getegid(),0o700,True,resolver),'E_STORE',recording_work=work,accounting_kind='M')
+            custody=fixed['C2Root'](held,work,resolver)
+            source=consumer._open_held(str(source_path),False,consumer._store_rule(os.geteuid(),os.getegid(),0o400,False,resolver),'E_STORE',recording_work=work,accounting_kind='M')
+            copied=None;error=None;closed=[];original_close=os.close;original_open=consumer._open_child;original_observe=consumer._capture_observe
+            copy=fixed['C2Copies'](custody)
+            def target_open(parent,name,directory,*args,**kwargs):
+                if label=='tail-before-acquire' and name=='runtime.bin' and not directory:
+                    path=Path(parent.path)/name;path.chmod(0o600)
+                    with path.open('ab') as output:assert output.write(b'TAIL')==4
+                    path.chmod(0o400)
+                return original_open(parent,name,directory,*args,**kwargs)
+            try:
+                destinations,operations=custody.layout()
+                assert set(destinations)==fixed['_C2_CASES'] and all(not custody.namespace(row) for row in destinations.values())
+                operation=custody.mkdir(operations,'0');installed=custody.mkdir(operation,'I')
+                case=custody.mkdir(installed,'malicious.checked-file-bytes')
+                consumer._open_child=target_open
+                if label=='ordinary-eintr':
+                    def read_error(*_args):raise InterruptedError(errno.EINTR,'controlled ordinary byte read failure')
+                    original_pread=os.pread;os.pread=read_error
+                try:copied=copy.copy(source,case,'runtime.bin',len(raw),hashlib.sha256(raw).hexdigest(),'runtime')
+                finally:
+                    consumer._open_child=original_open
+                    if label=='ordinary-eintr':os.pread=original_pread
+                if label=='tail-before-acquire':raise AssertionError('C2 copy accepted installed tail')
+                if label=='extra-name':os.mkdir('1',mode=0o700,dir_fd=operations.fd)
+                if label in {'target-drift','same-bytes-drift'}:
+                    Path(copied.path).chmod(0o600)
+                    if label=='same-bytes-drift':
+                        for path in (Path(source.path),Path(copied.path)):
+                            path.chmod(0o600)
+                            with path.open('r+b') as output:assert output.write(b'changed')==7
+                            path.chmod(0o400)
+                    else:Path(copied.path).chmod(0o400)
+                copy.final_checks()
+                if label not in {'normal','close-observer'}:raise AssertionError('C2 held identity drift admitted')
+                if label=='normal':
+                    amount=len(raw);counts=work['runtime']
+                    assert (counts['read_bytes'],counts['write_bytes'],counts['sha_bytes'],counts['equality_bytes'],counts['copy_bytes'])==(6*amount,amount,3*amount,4*amount,amount)
+                    # Coordinator acquisition/origin add the remaining two reads/hashes later; they were not executed here.
+                    assert counts['physical_files']==1 and counts['physical_bytes']==amount
+                if label=='close-observer':
+                    def failing_observer(counter,kind,site,*args,**kwargs):
+                        if site=='held-close':raise MemoryError('controlled final close accounting')
+                        return original_observe(counter,kind,site,*args,**kwargs)
+                    consumer._capture_observe=failing_observer
+            except BaseException as caught:
+                error=caught
+            finally:
+                watched={component.fd for item in custody.owned for component in item.components}
+                def close_fd(fd):
+                    if fd in watched:closed.append(fd)
+                    return original_close(fd)
+                os.close=close_fd
+                try:
+                    try:custody.close(error)
+                    except BaseException as closing:error=fixed['c2_first'](error,closing)
+                finally:
+                    os.close=original_close;consumer._capture_observe=original_observe;consumer._open_child=original_open
+                    source.close()
+            assert len(closed)==len(set(closed))==len(watched)
+            if label=='normal':assert error is None
+            elif label=='close-observer':assert error is not None and consumer._capture_work_incomplete(work)
+            elif label=='ordinary-eintr':assert isinstance(error,InterruptedError) and not fixed['c2_cancelled'](error)
+            else:assert error is not None and not isinstance(error,AssertionError)
+            print(json.dumps({'case':label,'error':None if error is None else {'category':type(error).__name__,'errno':getattr(error,'errno',None)},
+                'once_closed':len(closed),'read_bytes':work['read_bytes'],'metadata':work['accounting']['M'],
+                'runtime':work['runtime'],'seed_processing':work['seed_processing'],
+                'incomplete':{key:value for key,value in work.items() if key.endswith('incomplete') and value}},sort_keys=True))
+    if mutation is not None:return
+    # Fixed codec operates on actual socket bytes. No driver or expected result is substituted.
+    work=fixed['c2_fresh_work']('C2-codec-fixture')
+    left,right=socket.socketpair()
+    try:
+        message={'kind':'GO','version':1,'ordinal':0,'start_sha256':'a'*64,'ready_sha256':'b'*64,
+            'caller_delta':fixed['c2_counters'](work),'tail_reservation':fixed['c2_counters'](work)}
+        sender=fixed['C2Channel'](left.fileno(),work)
+        sent,count=sender.send(message)
+        received,actual=fixed['C2Channel'](right.fileno(),work).receive('GO')
+        assert received==message and actual==sent and count==len(sent)+4
+        failures=[]
+        for field,value in (('version',True),('ordinal',-1),('kind','END')):
+            damaged=dict(message);damaged[field]=value
+            try:fixed['c2_message'](damaged,'GO')
+            except fixed['C2Refusal']:failures.append(field)
+            else:raise AssertionError('C2 closed codec accepted '+field)
+        for size in (0,1048577):
+            assert os.write(left.fileno(),struct.pack('>I',size))==4
+            original_read=os.read;calls=[]
+            def traced_read(fd,amount):
+                raw=original_read(fd,amount)
+                if fd==right.fileno():calls.append((amount,len(raw)))
+                return raw
+            os.read=traced_read
+            try:
+                try:fixed['C2Channel'](right.fileno(),work).receive('GO')
+                except fixed['C2Refusal'] as error:assert error.code=='E_LIMIT'
+                else:raise AssertionError('C2 frame limit bypassed')
+            finally:os.read=original_read
+            assert calls==[(4,4)]
+            failures.append('length-'+str(size))
+        print(json.dumps({'case':'codec','failures':failures,'work':fixed['c2_counters'](work)},sort_keys=True))
+    finally:left.close();right.close()
+    cap=256<<20
+    values=[]
+    for amount in (cap-5,3,3,0):
+        counter=fixed['c2_counters'](fixed['c2_fresh_work']('C2-bounded-counter-only'))
+        counter['window']['write_bytes']=amount;counter['window']['accounting']['M']['write_bytes']=amount
+        counter['window']['seed_processing']['W']=counter['window']['seed_processing']['C']=amount;values.append(counter)
+    admitted=fixed['c2_combine'](values[0],values[1],values[3])
+    fixed['c2_reserve'](admitted,values[3])
+    assert admitted['window']['write_bytes']==cap-2
+    try:fixed['c2_reserve'](fixed['c2_combine'](*values[:3]),values[3])
+    except consumer.Refusal as error:assert error.code=='E_LIMIT'
+    else:raise AssertionError('C2 combined carry-in/admission exceeded original write cap')
+    print(json.dumps({'case':'bounded-carry-in','admitted':cap-2,'refused':cap+1,'actual_large_bytes_written':0}))
+    # One descriptor must refuse before platform queries, source acquisition or scratch creation.
+    left,right=socket.socketpair();out_r,out_w=os.pipe();err_r,err_w=os.pipe();null=os.open('/dev/null',os.O_RDONLY)
+    descriptors=(left.fileno(),right.fileno(),out_r,out_w,err_r,err_w,null)
+    actions=[(os.POSIX_SPAWN_DUP2,null,0),(os.POSIX_SPAWN_DUP2,out_w,1),(os.POSIX_SPAWN_DUP2,err_w,2),
+        (os.POSIX_SPAWN_DUP2,right.fileno(),9),(os.POSIX_SPAWN_DUP2,null,10),(os.POSIX_SPAWN_CLOSE,10)]
+    actions.extend((os.POSIX_SPAWN_CLOSE,fd) for fd in sorted(set(descriptors)) if fd not in {0,1,2,9,10})
+    pid=os.posix_spawn('/bin/bash',['/bin/bash',str(root/'evals/v1/run-evals.sh'),'run'],
+        {'LC_ALL':'C','PATH':'/usr/bin:/bin','TMPDIR':os.environ['TMPDIR']},file_actions=actions)
+    right.close();os.close(out_w);os.close(err_w);os.close(null)
+    try:
+        output,error=os.read(out_r,1048576),os.read(err_r,1048576)
+        waited,status=os.waitpid(pid,0)
+        assert waited==pid and status==256 and output==b'' and error==b'E_RUNTIME\n'
+        assert left.recv(1)==b''
+        print(json.dumps({'case':'one-FD-bootstrap-refusal','pid':pid,'wait':status,'stdout_bytes':len(output),'stderr_hex':error.hex(),'actions':actions},sort_keys=True))
+    finally:left.close();os.close(out_r);os.close(err_r)
+
+
+def raw16_C2_source_tail(root: Path, mutation=False) -> None:
+    import shlex, tempfile
+    launcher=(root/'evals/v1/evals-launcher.sh').read_text()
+    literal=shlex.split(launcher.split('c2_program=',1)[1].split('\nc2_fd9=',1)[0])[0]
+    fixed={'__name__':'_raw16_C2_source_tail'};exec(compile(literal,str(root/'evals/v1/evals-launcher.sh')+':C2','exec'),fixed)
+    if mutation:
+        target='work[target] += delta'
+        assert literal.count(target)==1
+        altered=literal.replace(target,'None')
+        fixed={'__name__':'_raw16_C2_source_tail_deleted'};exec(compile(altered,'<C2-D-transfer-deletion>','exec'),fixed)
+    handlers={number:signal.getsignal(number) for number in (signal.SIGINT,signal.SIGTERM,signal.SIGHUP)}
+    sources=None;first=None
+    try:
+        with tempfile.TemporaryDirectory(prefix='raw16-C2-source-tail.') as area:
+            sources=fixed['C2Sources'](str(root/'evals/v1/evals-launcher.sh'),area+'/runtime')
+            consumer=sources.load_consumer();work=fixed['c2_fresh_work']('C2-source-tail-fixture')
+            sources.reconcile(work)
+            before=dict(fixed['c2_counters'](work)['window']['source']);before_scalar=work['close_calls']
+            try:os.kill(os.getpid(),signal.SIGTERM)
+            except InterruptedError as error:first=error
+            else:raise AssertionError('original D handler did not cancel')
+            assert first._D_source_cancel and first._scope_signal_cancel
+            original_close=os.close;watched={row['fd'] for row in sources.namespace['owned']};closed=[];fault=[]
+            def close_fd(fd):
+                if fd in watched:
+                    closed.append(fd)
+                    original_close(fd)
+                    if not fault:
+                        fault.append(fd);raise OSError(errno.EIO,'controlled D secondary close error')
+                    return
+                return original_close(fd)
+            os.close=close_fd
+            try:
+                try:sources.close(first)
+                except BaseException as error:assert error is first
+                else:raise AssertionError('D primary cancellation lost')
+            finally:os.close=original_close
+            sources.reconcile(work)
+            final=fixed['c2_counters'](work)
+            assert final['window']['source']['close_calls']-before['close_calls']==len(watched)
+            assert work['close_calls']-before_scalar==len(watched)
+            assert len(closed)==len(set(closed))==len(watched)
+            assert work['read_bytes']==sources.work['read_bytes'] and work['seed_processing']['H']==sources.work['sha_bytes']
+            assert any(row[0]=='close' and row[-2:]==[-1,errno.EIO] for row in sources.work['rows'])
+            assert any(row.get('site')=='close' and row.get('errno')==errno.EIO for row in final['window']['source']['failures'] if type(row) is dict)
+            # The exact source cutoff is what END projects; another original window/case receives its delta once.
+            window,case=fixed['c2_fresh_work']('C2-window-fixture'),fixed['c2_fresh_work']('C2-case-fixture')
+            caller_path=Path(area)/'caller';caller_path.mkdir(mode=0o700)
+            resolver=consumer._DarwinUUIDResolver() if sys.platform=='darwin' else None
+            caller_held=consumer._open_held(str(caller_path),True,consumer._store_rule(os.geteuid(),os.getegid(),0o700,True,resolver),'E_STORE')
+            caller=_C2FixtureCaller(root,caller_held,window,case)
+            try:
+                caller.settle_child(final)
+                for field in fixed['_C2_SCALARS']:assert window[field]==caller.common_case.get(field,0)==work[field]
+                previous=window['read_bytes'];caller.settle_child(final);assert window['read_bytes']==previous
+                assert window['C2_source_counter_cutoffs'][-1]['close_calls']==sources.work['close_calls']
+                assert any(row.get('errno')==errno.EIO for row in window['C2_source_counter_cutoffs'][-1]['failures'] if type(row) is dict)
+            finally:
+                original_observe=consumer._capture_observe;second=[];holder_closed=[]
+                holder_fds={component.fd for component in caller_held.components}
+                caller_held.recording_work=caller.work;caller_held.accounting_kind='M'
+                def observing(counter,kind,site,*args,**kwargs):
+                    if site=='held-close' and not second:
+                        try:os.kill(os.getpid(),signal.SIGTERM)
+                        except InterruptedError as later:
+                            second.append(later);raise
+                    return original_observe(counter,kind,site,*args,**kwargs)
+                def close_holder(fd):
+                    if fd in holder_fds:holder_closed.append(fd)
+                    return original_close(fd)
+                consumer._capture_observe=observing;os.close=close_holder
+                try:
+                    try:caller_held.close()
+                    except BaseException as later:
+                        assert second and later is second[0] and later is not first
+                        assert later._D_source_cancel and later._scope_signal_cancel
+                        assert fixed['c2_first'](first,later) is first
+                    else:raise AssertionError('second real consumer close cancellation not observed')
+                    assert len(holder_closed)==len(set(holder_closed))==len(holder_fds)
+                finally:consumer._capture_observe=original_observe;os.close=original_close
+                caller.transfer()
+            print(json.dumps({'case':'D-real-signal-tail','first_same_object':True,'consumer_later_cancel_preserved_first':True,'once_closed':len(closed),
+                'before_close_calls':before['close_calls'],'after_close_calls':final['window']['source']['close_calls'],
+                'source':final['window']['source'],'window_read_bytes':window['read_bytes'],'case_read_bytes':caller.common_case['read_bytes'],
+                'source_unknown':work['source_processing_unknown'],'setup_runtime_collection':False},sort_keys=True))
+    finally:
+        if sources is not None and not sources.closed:
+            try:sources.close(first)
+            except BaseException:pass
+        for number,handler in handlers.items():signal.signal(number,handler)
+
+
+def raw16_C2_terminal(root: Path, short=False, mutation=False) -> None:
+    import shlex,socket
+    launcher=(root/'evals/v1/evals-launcher.sh').read_text()
+    literal=shlex.split(launcher.split('c2_program=',1)[1].split('\nc2_fd9=',1)[0])[0]
+    if mutation:
+        guard='if result != 512:os._exit(1)'
+        assert literal.count(guard)==1;literal=literal.replace(guard,'if False:os._exit(1)')
+    # This is a terminal-only real child, not START/READY/GO, driver success, or a valid session.
+    suffix='''
+import importlib.util
+spec=importlib.util.spec_from_file_location("_C2_terminal_consumer",sys.argv[1])
+c=importlib.util.module_from_spec(spec);sys.modules[spec.name]=c;spec.loader.exec_module(c)
+work=c2_fresh_work("C2-terminal")
+os.close(0)
+'''
+    if short:
+        suffix+='''original=os.write
+def short_write(fd,raw):
+    if fd==9:return original(fd,memoryview(raw)[:511])
+    return original(fd,raw)
+os.write=short_write
+'''
+    suffix+='c2_terminal(work,0,0,0,c2_vector(work))\n'
+    code='__name__="_C2_terminal_only"\n'+literal+suffix
+    left,right=socket.socketpair();out_r,out_w=os.pipe();err_r,err_w=os.pipe();null=os.open('/dev/null',os.O_RDONLY)
+    descriptors=(left.fileno(),right.fileno(),out_r,out_w,err_r,err_w,null)
+    actions=[(os.POSIX_SPAWN_DUP2,null,0),(os.POSIX_SPAWN_DUP2,out_w,1),(os.POSIX_SPAWN_DUP2,err_w,2),(os.POSIX_SPAWN_DUP2,right.fileno(),9)]
+    actions.extend((os.POSIX_SPAWN_CLOSE,fd) for fd in sorted(set(descriptors)) if fd not in {0,1,2,9})
+    pid=os.posix_spawn('/usr/bin/python3',['/usr/bin/python3','-I','-S','-B','-c',code,str(root/'shadow/v1/_consumer.py')],
+        {'LC_ALL':'C','PATH':'/usr/bin:/bin','TMPDIR':os.environ['TMPDIR']},file_actions=actions)
+    right.close();os.close(out_w);os.close(err_w);os.close(null)
+    try:
+        chunks=[]
+        while True:
+            raw=left.recv(513)
+            if not raw:break
+            chunks.append(raw)
+        observed=b''.join(chunks);output,error=os.read(out_r,1024),os.read(err_r,1024)
+        waited,status=os.waitpid(pid,0)
+        assert waited==pid and not output and not error
+        if short:assert status==256 and len(observed)==511
+        else:
+            assert status==0 and len(observed)==512
+            parsed=struct.unpack('>8s53Q80s',observed)
+            assert parsed[0]==b'YC2DONE1' and parsed[1:54]==(0,)*53 and parsed[54]==bytes(80)
+        print(json.dumps({'case':'terminal-short' if short else 'terminal-only','wait':status,'actual_control_bytes':len(observed),
+            'stdout_bytes':len(output),'stderr_bytes':len(error),'full_session':False,'short_fault_shim':short,'actions':actions},sort_keys=True))
+    finally:left.close();os.close(out_r);os.close(err_r)
+
+
+def raw16_C2_lifecycle_deletion(root: Path) -> None:
+    try:raw16_C2_lifecycle_core(root,('tail-before-acquire',),mutation='length')
+    except AssertionError as error:
+        frame=error.__traceback__
+        while frame.tb_next is not None:frame=frame.tb_next
+        assert frame.tb_frame.f_code.co_name=='raw16_C2_lifecycle_core'
+        actual=frame.tb_frame.f_locals
+        assert isinstance(actual.get('error'),AssertionError) and str(actual['error'])=='C2 copy accepted installed tail'
+    else:raise AssertionError('C2 installed-length deletion undetected')
+    try:raw16_C2_source_tail(root,mutation=True)
+    except AssertionError as error:
+        frame=error.__traceback__
+        while frame.tb_next is not None:frame=frame.tb_next
+        actual=frame.tb_frame.f_locals
+        assert frame.tb_frame.f_code.co_name=='raw16_C2_source_tail'
+        assert actual['work']['close_calls']==actual['before_scalar']==0 and len(actual['closed'])==len(actual['watched'])>0
+    else:raise AssertionError('C2 D-transfer deletion undetected')
+    try:raw16_C2_terminal(root,short=True,mutation=True)
+    except AssertionError as error:
+        frame=error.__traceback__
+        while frame.tb_next is not None:frame=frame.tb_next
+        actual=frame.tb_frame.f_locals
+        assert frame.tb_frame.f_code.co_name=='raw16_C2_terminal'
+        assert actual['status']==0 and len(actual['observed'])==511
+    else:raise AssertionError('C2 short-DONE deletion undetected')
+    print(json.dumps({'C2_installed_length_deletion_detected':True,'C2_D_actual_tail_transfer_deletion_detected':True,
+        'C2_short_DONE_retry_gate_deletion_detected':True}))
+
+
+def raw16_C2_scoped_runtime(root: Path) -> None:
+    import copy,shlex,tempfile
+    spec=importlib.util.spec_from_file_location('_C2_scoped_consumer',root/'shadow/v1/_consumer.py')
+    c=importlib.util.module_from_spec(spec);sys.modules[spec.name]=c;spec.loader.exec_module(c)
+    launcher=(root/'evals/v1/evals-launcher.sh').read_text();literal=shlex.split(launcher.split('c2_program=',1)[1].split('\nc2_fd9=',1)[0])[0]
+    fixed={'__name__':'_C2_scoped_runtime','c':c};exec(compile(literal,'<fixed-C2-scoped>','exec'),fixed)
+    first,second=sorted(fixed['_C2_CASES'])[:2]
+    # Counter-only occupancy vectors exercise original caps without claiming large bytes were produced.
+    model=fixed['c2_fresh_work']('C2-bounded-model')
+    a=c._capture_work_values(model,'a');b=c._capture_work_values(model,'b');shared=c._capture_work_values(model,'shared')
+    a['runtime']={'write_bytes':3};b['runtime']={'write_bytes':2};shared['runtime']={'write_bytes':7}
+    model['runtime']['write_bytes']=12
+    model['C2_case_bindings']={first:(a,[a,shared,shared]),second:(b,[b,shared])}
+    views=fixed['c2_counters'](model)
+    assert views['window']['runtime']['write_bytes']==12
+    assert views['cases'][first]['runtime']['write_bytes']==10 and views['cases'][second]['runtime']['write_bytes']==9
+    limit=c._RUNTIME_FIELDS['write_bytes']
+    before=copy.deepcopy(views);before['cases'][first]['runtime']['write_bytes']=limit-1
+    reserve={'window':fixed['c2_counter_values'](fixed['c2_fresh_work']('C2-reservation')),'cases':{identity:fixed['c2_counter_values'](fixed['c2_fresh_work']('C2-case-reservation')) for identity in views['cases']}}
+    reserve['window']['runtime']['write_bytes']=2;reserve['cases'][first]['runtime']['write_bytes']=2
+    try:fixed['c2_reserve'](before,reserve)
+    except fixed['C2Refusal'] as error:assert error.code=='E_LIMIT'
+    else:raise AssertionError('over case/below window accepted')
+    before['cases'][first]['runtime']['write_bytes']=limit-2;fixed['c2_reserve'](before,reserve)
+    for variant in ('missing','foreign'):
+        damaged=copy.deepcopy(reserve)
+        if variant=='missing':damaged['cases'].pop(first)
+        else:damaged['cases']['foreign.case']=damaged['cases'].pop(first)
+        try:fixed['c2_reserve'](before,damaged)
+        except fixed['C2Refusal']:pass
+        else:raise AssertionError('invalid case reservation accepted')
+    # Real small writes are separate per-case leaves under the same retained root/window.
+    with tempfile.TemporaryDirectory(prefix='C2-scoped-held.') as area:
+        base=Path(area);window_path=base/'window';window_path.mkdir(mode=0o700)
+        source_path=base/'source';source_path.write_bytes(b'abc');source_path.chmod(0o400)
+        resolver=c._DarwinUUIDResolver() if sys.platform=='darwin' else None
+        child=fixed['c2_fresh_work']('C2-terminal');original=fixed['c2_fresh_work']('C2-original-window')
+        p=c._capture_work_values(original,'actual-a');q=c._capture_work_values(original,'actual-b')
+        original['C2_case_bindings']={first:(p,[p]),second:(q,[q])}
+        held=c._open_held(str(window_path),True,c._store_rule(os.geteuid(),os.getegid(),0o700,True,resolver),'E_STORE')
+        custody=fixed['C2Root'](held,child,resolver)
+        src=c._open_held(str(source_path),False,c._store_rule(os.geteuid(),os.getegid(),0o400,False,resolver),'E_STORE')
+        caller=_C2FixtureCaller(root,held,original,p)
+        totals={identity:fixed['c2_fresh_work']('C2-total-'+identity) for identity in (first,second)}
+        child['C2_case_totals']=totals;child['C2_case_leaves']={}
+        copies=[]
+        before=fixed['c2_counters'](original)
+        try:
+            _destinations,operations=custody.layout()
+            operation=custody.mkdir(operations,'0');installed=custody.mkdir(operation,'I')
+            # READY is an actual zero-copy acquisition cutoff of these newly declared case leaves.
+            caller.settle_child(fixed['c2_counters'](child))
+            for identity in (first,second):
+                target=custody.mkdir(installed,identity)
+                leaf=fixed['c2_fresh_work']('C2-I-'+identity);child['C2_case_leaves'][identity]=leaf
+                current=fixed['C2Copies'](custody,leaf,totals[identity],before['window'],before['cases'][identity])
+                current.copy(src,target,'runtime.bin',3,hashlib.sha256(b'abc').hexdigest(),'runtime')
+                if identity==second:assert leaf['runtime_window_carry_in']['write_bytes']==3
+                current.transfer_cases();copies.append(current)
+            assert child['runtime']['write_bytes']==6 and all(row.work['runtime']['write_bytes']==3 for row in copies)
+            for current in copies:current.final_checks();current.transfer_cases()
+            custody.close()
+            for current in copies:current.transfer_cases()
+            end=fixed['c2_counters'](child)
+            caller.settle_child(end)
+            assert original['runtime']['write_bytes']==6 and p['runtime']['write_bytes']==q['runtime']['write_bytes']==3
+            old=original['read_bytes'];caller.settle_child(end);assert original['read_bytes']==old
+            wrong=copy.deepcopy(end);wrong['cases']['foreign.case']=wrong['cases'].pop(first)
+            try:caller.settle_child(wrong)
+            except AssertionError:pass
+            else:raise AssertionError('foreign case transfer admitted')
+            assert original['read_bytes']==old
+            print(json.dumps({'case':'scoped-real-copy','actual_runtime_written':6,'case_write_bytes':[p['runtime']['write_bytes'],q['runtime']['write_bytes']],
+                'window_write_bytes':original['runtime']['write_bytes'],'common_runtime_write_bytes':caller.common_case.get('runtime',{}).get('write_bytes',0),
+                'READY_END_monotonic_once':True,'window_case_shared_view':[12,10,9], 'counter_only_case_cap':limit,
+                'counter_only_large_bytes_executed':0,'missing_foreign_rejected':True},sort_keys=True))
+        finally:
+            if not custody.closed:custody.close()
+            src.close()

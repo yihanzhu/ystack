@@ -4,6 +4,1155 @@ set -uo pipefail
 export LC_ALL=C
 umask 077
 
+# work/eval-seeding-deterministic/spec.md: fixed C2 descriptor custody.
+c2_program='import ast
+import errno
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import selectors
+import signal
+import socket
+import stat
+import struct
+import sys
+import tempfile
+
+_C2_KINDS = {
+    "START": {"kind", "version", "window_sha256", "ordinal", "predecessor_sha256", "mode", "seed_sha256s", "result_sha256s", "case_ids", "root_identity", "before", "tail_reservation"},
+    "READY": {"kind", "version", "ordinal", "start_sha256", "input_sha256s", "observed_predecessor_sha256", "acquisition_delta", "leaf_pid", "leaf_ppid"},
+    "GO": {"kind", "version", "ordinal", "start_sha256", "ready_sha256", "caller_delta", "tail_reservation"},
+    "END": {"kind", "version", "ordinal", "start_sha256", "receipt_sha256", "result_sha256", "outcome", "child_delta", "retained", "errors", "unknown"},
+}
+_C2_CASES = {"malicious.incident-symptom-text", "malicious.checked-file-bytes", "malicious.commit-message", "malicious.unread-forge-text"}
+_C2_SCALARS = ("read_bytes", "write_bytes", "physical_bytes", "files", "export_read_bytes", "export_write_bytes", "export_physical_bytes", "export_files", "close_calls", "held_close_calls", "observation_calls")
+_C2_ACCOUNT_FIELDS = ("logical_bytes", "read_bytes", "write_bytes", "physical_bytes", "files", "occurrences")
+_C2_CLASSES = ("L", "W", "M", "raw", "unresolved")
+_C2_LIMIT = 1048576
+_C2_HELPERS_SHA256 = "2f733daf391f09627929859b2ac37fd7d158e664b6bb1d7f1a32a2507a12501e"
+
+class C2Refusal(Exception):
+    def __init__(self, code):
+        super().__init__(code)
+        self.code = code
+
+def c2_cancelled(error):
+    return isinstance(error, KeyboardInterrupt) or getattr(error, "_scope_signal_cancel", False) or getattr(error, "_D_source_cancel", False)
+
+def c2_first(first, later):
+    return later if first is None or c2_cancelled(later) and not c2_cancelled(first) else first
+
+def c2_require(value, code="E_RELATION"):
+    if not value:raise C2Refusal(code)
+
+def c2_sha(value, work=None):
+    if work is not None:work["seed_processing"]["H"] += len(value)
+    return hashlib.sha256(value).hexdigest()
+
+def c2_canonical(value):
+    return (json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False) + "\n").encode()
+
+def c2_message(value, kind):
+    c2_require(type(value) is dict and set(value) == _C2_KINDS[kind]
+        and value["kind"] == kind and type(value["version"]) is int and value["version"] == 1)
+    c2_require(type(value["ordinal"]) is int and 0 <= value["ordinal"] < 4)
+    if kind == "START":
+        c2_require(value["mode"] in {"run", "dashboard"} and type(value["case_ids"]) is list
+            and 1 <= len(value["case_ids"]) <= 4 and len(set(value["case_ids"])) == len(value["case_ids"])
+            and set(value["case_ids"]) <= _C2_CASES)
+        c2_require(type(value["seed_sha256s"]) is list and type(value["result_sha256s"]) is list
+            and len(value["seed_sha256s"]) == (1 if value["mode"] == "run" else 2)
+            and len(value["result_sha256s"]) == (0 if value["mode"] == "run" else 2))
+    if kind == "READY":
+        c2_require(all(type(value[key]) is int and value[key] > 0 for key in ("leaf_pid", "leaf_ppid")))
+    if kind == "END":
+        c2_require(value["outcome"] in {"completed", "refused"}
+            and (value["result_sha256"] is None) == (value["outcome"] == "refused")
+            and all(type(value[key]) is list for key in ("retained", "errors", "unknown")))
+    for key in ("window_sha256", "predecessor_sha256", "start_sha256", "ready_sha256", "receipt_sha256", "observed_predecessor_sha256", "result_sha256"):
+        if key not in value or value[key] is None:continue
+        item = value[key]
+        c2_require(type(item) is str and len(item) == 64 and all(char in "0123456789abcdef" for char in item))
+    return value
+
+def c2_wire_room(work, amount, field):
+    c2_require(type(amount) is int and amount >= 0 and field in {"R", "W"}, "E_LIMIT")
+    candidate = dict(work)
+    key = "read_bytes" if field == "R" else "write_bytes"
+    candidate[key] += amount
+    c._capture_copy_room(candidate, 0, False)
+
+class C2Channel:
+    def __init__(self, fd, work):
+        self.fd, self.owner, self.work = fd, c, work
+        self.received, self.sent = [], []
+        self.read_bytes, self.write_bytes = 0, 0
+        self.read_fragments = []
+    def charge(self, field, amount):
+        c2_require(type(amount) is int and amount >= 0)
+        key = "read_bytes" if field == "R" else "write_bytes"
+        self.work[key] += amount
+        self.owner._capture_account(self.work, "M", key, amount)
+        counts = self.work.setdefault("seed_processing", {})
+        counts[field] = counts.get(field, 0) + amount
+        if field == "W":counts["C"] = counts.get("C", 0) + amount
+    def read_exact(self, count):
+        chunks, remaining = [], count
+        while remaining:
+            amount = min(65536, remaining)
+            c2_wire_room(self.work, amount, "R")
+            try:raw = os.read(self.fd, amount)
+            except BaseException as error:
+                self.work["C2_read_incomplete"] = True
+                self.owner._capture_observation_error(self.work, "M", "C2.control.read", error)
+                raise
+            self.read_fragments.append(raw)
+            self.read_bytes += len(raw)
+            try:self.charge("R", len(raw))
+            except BaseException:
+                self.work["C2_read_incomplete"] = True
+                raise
+            c2_require(raw, "E_RUNTIME")
+            chunks.append(raw);remaining -= len(raw)
+        c2_wire_room(self.work, count, "R")
+        try:result = b"".join(chunks)
+        except BaseException:
+            self.work["C2_join_incomplete"] = True
+            raise
+        self.work["read_bytes"] += len(result)
+        self.owner._capture_account(self.work, "M", "read_bytes", len(result))
+        return result
+    def receive(self, kind):
+        header = self.read_exact(4)
+        size = struct.unpack(">I", header)[0]
+        c2_require(0 < size <= _C2_LIMIT, "E_LIMIT")
+        raw = self.read_exact(size)
+        c2_wire_room(self.work, len(raw), "R")
+        self.work["C2_parse_unknown"] = True
+        try:value = json.loads(raw)
+        except BaseException:
+            self.work["C2_parse_incomplete"] = True
+            raise
+        self.work["C2_parse_unknown"] = False
+        self.owner._capture_account(self.work, "M", "read_bytes", len(raw))
+        self.work["read_bytes"] += len(raw)
+        rebuilt = self.encode(value)
+        c2_wire_room(self.work, 2 * len(raw), "R")
+        equal = rebuilt == raw
+        c2_require(equal, "E_CANONICAL")
+        self.owner._capture_account(self.work, "M", "read_bytes", 2 * len(raw))
+        self.work["read_bytes"] += 2 * len(raw)
+        c2_message(value, kind)
+        self.received.append((kind, raw))
+        return value, raw
+    def encode(self, value):
+        before = self.work["read_bytes"]
+        first = None
+        try:
+            raw = self.owner._private_capture_observations(value, self.work, self.work)
+            self.owner._capture_account(self.work, "M", "logical_bytes", len(raw))
+            self.owner._capture_account(self.work, "M", "occurrences", 1)
+            return raw
+        except BaseException as error:
+            first = error;self.work["C2_encode_incomplete"] = True
+            raise
+        finally:
+            try:self.owner._capture_account(self.work, "M", "read_bytes", self.work["read_bytes"] - before)
+            except BaseException as error:
+                self.work["C2_encode_accounting_incomplete"] = True
+                raise c2_first(first, error)
+    def send(self, value):
+        c2_message(value, value["kind"])
+        raw = self.encode(value)
+        c2_require(0 < len(raw) <= _C2_LIMIT, "E_LIMIT")
+        header = struct.pack(">I", len(raw))
+        self.owner._capture_account(self.work, "M", "logical_bytes", 4)
+        self.owner._capture_account(self.work, "M", "occurrences", 1)
+        count = 0
+        for item in (header, raw):
+            view = memoryview(item)
+            while view:
+                c2_wire_room(self.work, min(65536, len(view)), "W")
+                amount = os.write(self.fd, view[:65536])
+                c2_require(0 < amount <= min(65536, len(view)), "E_RUNTIME")
+                self.charge("W", amount);self.write_bytes += amount;count += amount
+                view = view[amount:]
+        self.sent.append((value["kind"], raw, count))
+        return raw, count
+
+def c2_fresh_work(identity):
+    owner = c
+    work = {"accounting_owner": identity}
+    owner._capture_work_values(work, identity)
+    for key in _C2_SCALARS:work.setdefault(key, 0)
+    work["runtime"] = {key: 0 for key in owner._RUNTIME_FIELDS}
+    work["accounting"] = {kind: {key: 0 for key in _C2_ACCOUNT_FIELDS} for kind in _C2_CLASSES}
+    work["seed_processing"] = {key: 0 for key in ("R", "W", "H", "E", "C")}
+    return work
+
+def c2_counter_values(work):
+    owner = c
+    def scalar(values, key):
+        value = values.get(key, "UNKNOWN")
+        c2_require(value == "UNKNOWN" or type(value) is int and 0 <= value < 1 << 64, "E_LIMIT")
+        return value
+    result = {key: scalar(work, key) for key in _C2_SCALARS}
+    result["runtime"] = {key: scalar(work.get("runtime", {}), key) for key in owner._RUNTIME_FIELDS}
+    result["accounting"] = {kind: {key: scalar(work.get("accounting", {}).get(kind, {}), key) for key in _C2_ACCOUNT_FIELDS} for kind in _C2_CLASSES}
+    result["seed_processing"] = {key: scalar(work.get("seed_processing", {}), key) for key in ("R", "W", "H", "E", "C")}
+    result["incomplete"] = sorted(key for key, value in work.items() if key.endswith("incomplete") and value)
+    source = work.get("source_work")
+    if source is not None:
+        result["source"] = {key: value for key, value in source.items() if type(value) is int}
+        result["source"]["failures"] = list(source["failures"])
+        result["source"]["failures"].extend({"site": "close", "row": index, "return": row[-2], "errno": row[-1]}
+            for index, row in enumerate(source["rows"]) if row[0] == "close" and row[-2] != 0)
+        result["source"]["registry_buffer_processing"] = work.get("source_processing_unknown", "UNKNOWN")
+        result["source"]["data_and_close_complete"] = source["data_and_close_complete"]
+    result["unknown"] = {key: value for key, value in work.items() if key.endswith("_unknown") and value}
+    return result
+
+class C2Sources:
+    def __init__(self, launcher, target):
+        import re, shlex
+        self.namespace, self.failure, self.closed = None, None, False
+        self.launcher = launcher
+        with open(launcher, "rb") as source:
+            before = os.fstat(source.fileno())
+            c2_require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1
+                and before.st_uid in {0, os.geteuid()} and not before.st_mode & 0o022
+                and before.st_size <= _C2_LIMIT, "E_STALE")
+            raw = source.read(_C2_LIMIT + 1)
+            after = os.fstat(source.fileno())
+            c2_require(len(raw) == before.st_size, "E_STALE")
+        self.launcher_raw = raw
+        text = raw.decode("utf-8")
+        self.helpers = text[text.index("\nemit_error() {"):text.index("\n# Fixed public entry;")]
+        c2_require(c2_sha(self.helpers.encode()) == _C2_HELPERS_SHA256, "E_STALE")
+        body = text.split("<<'"'"'PY_SHADOW_SOURCE'"'"'\n", 1)[1].split("\nPY_SHADOW_SOURCE", 1)[0]
+        c2_require(c2_sha(body.encode()) == "7ffa1e52245e132723fe0c00b1fe16a6b5119448ca45c5119877d342de40e789", "E_STALE")
+        table_body = text.split("\nshadow_source_rows() {\n", 1)[1].split("\n}\n", 1)[0]
+        table_body = table_body.split(r"/usr/bin/printf '"'"'%s\n'"'"'", 1)[1]
+        generation = re.findall(r"^generation=(g-[0-9a-f]{64})$", text, re.M)
+        c2_require(len(generation) == 1, "E_STALE")
+        entries = shlex.split(table_body.replace("\\\n", ""))
+        table = "\n".join(entry.replace("${record_generation}", generation[0]) for entry in entries) + "\n"
+        tree = ast.parse(body)
+        definitions = []
+        for node in tree.body:
+            if isinstance(node, ast.For):break
+            if isinstance(node, ast.Assign) and any(isinstance(item, ast.Tuple) for item in node.targets):
+                if ast.get_source_segment(body, node).startswith("source_root, target_root, table ="):continue
+            definitions.append(node)
+        namespace = {"__name__": "_ystack_fixed_D84_owner", "source_root": str(Path(launcher).parents[2]),
+            "target_root": target, "table": table}
+        exec(compile(ast.Module(body=definitions, type_ignores=[]), str(launcher) + ":D84", "exec"), namespace)
+        self.namespace = namespace
+        original_main = next(node for node in tree.body if isinstance(node, ast.Try))
+        self.root_guard = compile(ast.Module(body=[original_main.body[0]], type_ignores=[]), str(launcher) + ":D84-root", "exec")
+        self.validate_root(target)
+        c2_require(namespace["identity"](before) == namespace["identity"](after), "E_STALE")
+        def interrupted(number, frame):
+            try:namespace["interrupt"](number, frame)
+            except InterruptedError as error:
+                error._scope_signal_cancel = True
+                raise
+        self.interrupted = interrupted
+        for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):signal.signal(number, interrupted)
+        namespace["work"]["launcher_definition_bytes"] = len(raw)
+        namespace["work"]["read_bytes"] += len(raw)
+        namespace["work"]["launcher_definition_hash_bytes"] = len(body.encode()) + len(self.helpers.encode())
+        namespace["work"]["sha_bytes"] += namespace["work"]["launcher_definition_hash_bytes"]
+        try:
+            self.rows = namespace["parse_table"]()
+            namespace["source_inputs"](self.rows)
+        except BaseException as error:
+            self.failure = error
+            self.close(error)
+            raise
+    def validate_root(self, target):
+        self.namespace["target_root"] = target
+        exec(self.root_guard, self.namespace)
+    @property
+    def work(self):return self.namespace["work"]
+    def load_consumer(self):
+        global c
+        name = "shadow/v1/_consumer.py"
+        row = self.namespace["sources"][name]
+        expected, size, _mode = self.rows[name]
+        self.namespace["check"](row)
+        os.lseek(row["fd"], 0, os.SEEK_SET)
+        chunks, remaining = [], size
+        while remaining:
+            item = self.namespace["read_chunk"](row, min(65536, remaining))
+            c2_require(item, "E_STALE");chunks.append(item);remaining -= len(item)
+        raw = b"".join(chunks)
+        self.work["read_bytes"] += len(raw)
+        self.work["sha_bytes"] += len(raw)
+        c2_require(c2_sha(raw) == expected, "E_STALE")
+        self.namespace["check"](row)
+        path = self.namespace["source_root"] + "/" + name
+        spec = importlib.util.spec_from_file_location("_ystack_C2_consumer", path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        try:exec(compile(raw, path, "exec"), module.__dict__)
+        except BaseException:
+            del sys.modules[spec.name];raise
+        self.namespace["check"](row)
+        c = module
+        return module
+    def reconcile(self, work):
+        previous = self.__dict__.setdefault("transferred", {})
+        work["source_work"] = self.work
+        fields = (("read_bytes", "read_bytes"), ("write_bytes", "write_bytes"),
+            ("physical_bytes", "physical_bytes"), ("created_files", "files"), ("close_calls", "close_calls"))
+        try:
+            for source, target in fields:
+                amount, prior = self.work[source], previous.get(source, 0)
+                c2_require(type(amount) is int and amount >= prior, "E_LIMIT")
+                delta = amount - prior
+                work[target] += delta
+                if target in {"read_bytes", "write_bytes", "physical_bytes", "files"}:c._capture_account(work, "L", target, delta)
+                previous[source] = amount
+            for source, target in (("sha_bytes", "H"), ("equality_bytes", "E"), ("copy_bytes", "C")):
+                amount, prior = self.work[source], previous.get(source, 0)
+                c2_require(type(amount) is int and amount >= prior, "E_LIMIT")
+                work["seed_processing"][target] += amount - prior
+                previous[source] = amount
+            work["source_processing_unknown"] = "UNKNOWN: original D registry buffer/metadata processing is not completely measured"
+        except BaseException:
+            work["source_transfer_incomplete"] = True
+            raise
+    def materialize(self):
+        self.namespace["directory"](self.namespace["target_root"], True)
+        self.namespace["copy_inputs"](self.rows)
+        self.namespace["final_checks"](self.rows)
+        self.materialized = True
+    def recheck(self):self.namespace["final_checks"](self.rows)
+    def close(self, primary=None):
+        c2_require(not self.closed, "E_STALE")
+        self.closed = True
+        first = self.namespace["first_error"]
+        failure = first(self.failure, primary) if primary is not None else self.failure
+        for row in reversed(self.namespace["owned"]):
+            try:self.namespace["close_one"](row, failure)
+            except BaseException as error:
+                self.namespace["remember"]("close", error)
+                failure = c2_first(failure, error)
+        self.failure = failure
+        self.work["data_and_close_complete"] = failure is None and not self.work.get("accounting_incomplete", False)
+        if failure is not None:raise failure
+
+class C2Helpers:
+    def __init__(self, sources, scratch, work, unused):
+        self.sources, self.scratch, self.work = sources, scratch, work
+        self.unused = tuple(unused)
+        self.results = []
+    def build(self, arguments):return self._invoke("evals_c2_build", arguments)
+    def run_and_check(self, arguments):return self._invoke("evals_c2_run_and_check", arguments)
+    def _invoke(self, function, arguments):
+        c2_require(function in {"evals_c2_build", "evals_c2_run_and_check"})
+        self.work["helper_internal_work_unknown"] = "UNKNOWN: original shell build/driver/check work has no complete measured transfer"
+        functions = self.sources.helpers
+        command = "set -uo pipefail\nexport LC_ALL=C\numask 077\n" + functions + "\n" + function + " \"$@\"\n"
+        # These are fixed source bytes, not serialized shell locals or a function supplied by the caller.
+        size = len(command.encode())
+        self.work["read_bytes"] += size
+        c._capture_account(self.work, "M", "read_bytes", size)
+        c._capture_account(self.work, "M", "logical_bytes", size)
+        descriptors, child, first = [], None, None
+        pending, pending_pair = None, None
+        chunks = {"stdout": [], "stderr": []}
+        lengths = {"stdout": 0, "stderr": 0}
+        try:
+            pending = os.open("/dev/null", os.O_RDONLY)
+            descriptors.append(pending);null = pending;pending = None
+            pending_pair = os.pipe()
+            for fd in pending_pair:descriptors.append(fd)
+            output_r, output_w = pending_pair;pending_pair = None
+            pending_pair = os.pipe()
+            for fd in pending_pair:descriptors.append(fd)
+            error_r, error_w = pending_pair;pending_pair = None
+            actions = [(os.POSIX_SPAWN_DUP2, null, 0), (os.POSIX_SPAWN_DUP2, output_w, 1),
+                (os.POSIX_SPAWN_DUP2, error_w, 2)]
+            actions += [(os.POSIX_SPAWN_CLOSE, fd) for fd in sorted(set((9, 10, *descriptors, *self.unused, *(row["fd"] for row in self.sources.namespace["owned"] if not row["closed"])))) if fd not in {0, 1, 2}]
+            argv = ["/bin/bash", "-c", command, "ystack-fixed-C2-helper", self.sources.launcher, self.scratch, *arguments]
+            child = os.posix_spawn("/bin/bash", argv, {"LC_ALL": "C", "PATH": "/usr/bin:/bin", "TMPDIR": self.scratch + "/work"}, file_actions=actions)
+            c._capture_observe(self.work, "M", "C2.helper-spawn", {"pid": child, "function": function, "actions": actions})
+            for fd in (null, output_w, error_w):
+                descriptors.remove(fd)
+                c._close_capture_copy(fd, self.work, self.work, "C2.helper-parent-end", None)
+            with selectors.DefaultSelector() as selected:
+                selected.register(output_r, selectors.EVENT_READ, "stdout")
+                selected.register(error_r, selectors.EVENT_READ, "stderr")
+                while selected.get_map():
+                    for key, _events in selected.select():
+                        name = key.data
+                        amount = min(65536, _C2_LIMIT + 1 - lengths[name])
+                        c2_require(amount > 0, "E_LIMIT")
+                        c._capture_copy_room(self.work, amount, False, read_only=True)
+                        raw = os.read(key.fd, amount)
+                        self.work["read_bytes"] += len(raw)
+                        c._capture_account(self.work, "M", "read_bytes", len(raw))
+                        chunks[name].append(raw);lengths[name] += len(raw)
+                        c2_require(lengths[name] <= _C2_LIMIT, "E_LIMIT")
+                        if not raw:selected.unregister(key.fd)
+            waited, status = os.waitpid(child, 0)
+            c._capture_observe(self.work, "M", "C2.helper-wait", {"pid": waited, "status": status})
+            c2_require(waited == child, "E_RUNTIME")
+            child = None
+            result = {"function": function, "status": status, "pid": waited}
+            for name in ("stdout", "stderr"):
+                result[name] = b"".join(chunks[name])
+                self.work["read_bytes"] += lengths[name]
+                c._capture_account(self.work, "M", "read_bytes", lengths[name])
+            self.results.append(result)
+            return result
+        except BaseException as error:
+            first = error
+            self.work["C2_helper_incomplete"] = True
+            self.work["C2_helper_partial"] = chunks
+        finally:
+            if child is not None:
+                try:
+                    os.kill(child, signal.SIGTERM)
+                    waited, status = os.waitpid(child, 0)
+                    c._capture_observe(self.work, "M", "C2.helper-failed-wait", {"pid": waited, "status": status})
+                except BaseException as error:
+                    first = c2_first(first, error)
+                    self.work["C2_helper_wait_incomplete"] = True
+            for fd in ((pending,) if pending is not None else ()) + (pending_pair or ()):
+                if fd not in descriptors:
+                    try:c._close_capture_copy(fd, self.work, self.work, "C2.helper-pending-close", first)
+                    except BaseException as error:first = c2_first(first, error)
+            for fd in reversed(descriptors):
+                try:c._close_capture_copy(fd, self.work, self.work, "C2.helper-pipe-close", first)
+                except BaseException as error:
+                    first = c2_first(first, error)
+            if first is not None:raise first
+
+class C2Root:
+    def __init__(self, held, work, resolver):
+        c2_require(type(held) is c.HeldPath and held.components)
+        held.recheck("E_STALE", work, "M")
+        held.recording_work, held.accounting_kind = work, "M"
+        self.root, self.work, self.resolver = held, work, resolver
+        self.owned, self.failure, self.closed = [held], None, False
+        self.created = []
+        self.initial = c._identity(held.before)
+    def observe(self, site, value):
+        c._capture_observe(self.work, "M", site, value)
+    def fail(self, error):
+        self.failure = c2_first(self.failure, error)
+        self.work["C2_root_incomplete"] = True
+        try:c._capture_observation_error(self.work, "M", "C2.root", error)
+        except BaseException as observed:self.failure = c2_first(self.failure, observed)
+    def adopt(self, held):
+        try:self.owned.append(held)
+        except BaseException as error:
+            self.fail(error)
+            if not any(row is held for row in self.owned):
+                try:held.close()
+                except BaseException as closing:self.fail(closing)
+            raise self.failure
+        return held
+    def recheck(self):
+        c2_require(not self.closed and self.failure is None, "E_STALE")
+        for held in self.owned:
+            if held.components:held.recheck("E_STALE", self.work, "M")
+    def names(self, parent):
+        names, size, iterator, failure = [], 0, None, None
+        try:
+            iterator = os.scandir(parent.fd)
+            for entry in iterator:
+                c2_require(len(names) < 1024, "E_LIMIT")
+                encoded = os.fsencode(entry.name)
+                size += len(encoded)
+                c2_require(size <= 65536, "E_LIMIT")
+                names.append(entry.name)
+        except BaseException as error:failure = error
+        finally:
+            if iterator is not None:
+                try:
+                    self.work["close_calls"] += 1
+                    iterator.close()
+                    self.observe("C2.namespace-close", {"return": 0})
+                except BaseException as error:failure = c2_first(failure, error)
+            if failure is not None:
+                self.fail(failure)
+                raise self.failure
+        self.observe("C2.namespace", {"fd": parent.fd, "names": [os.fsencode(name).hex() for name in names]})
+        c2_require(len(names) == len(set(names)), "E_STALE")
+        return frozenset(names)
+    def namespace(self, parent):
+        parent.recheck("E_STALE", self.work, "M")
+        return self.names(parent)
+    def created_parent(self, parent, before, names, name):
+        current = c._capture_metadata(parent.fd, self.work, "M")
+        old = c._identity(before)
+        actual = c._identity(current)
+        c2_require(actual[:6] == old[:6], "E_STALE")
+        c2_require(c._capture_rule(parent.components[-1].rule, parent.fd, current, False, self.work, "M"), "E_STALE")
+        after = self.names(parent)
+        self.observe("C2.created-namespace", {"fd": parent.fd, "name": os.fsencode(name).hex()})
+        c2_require(after == names | {name} and name not in names, "E_STALE")
+        # Only this successful exclusive creation may update its exact parent component.
+        for held in self.owned:
+            for component in held.components:
+                if c._identity(component.before) == old:
+                    observed = c._capture_metadata(component.fd, self.work, "M")
+                    c2_require(c._identity(observed) == actual, "E_STALE")
+                    component.before = observed
+        parent.recheck("E_STALE", self.work, "M")
+    def mkdir(self, parent, name):
+        c2_require(type(name) is str and name not in {"", ".", ".."} and "/" not in name)
+        self.recheck();names = self.namespace(parent);before = parent.before
+        try:
+            os.mkdir(name, 0o700, dir_fd=parent.fd)
+            self.created.append((parent.path, name))
+            c._capture_account(self.work, "M", "files", 1)
+            self.work["files"] += 1
+            self.observe("C2.mkdir", {"fd": parent.fd, "name": name, "return": 0})
+            self.created_parent(parent, before, names, name)
+            return self.adopt(c._open_child(parent, name, True,
+                c._store_rule(os.geteuid(), os.getegid(), 0o700, True, self.resolver), "E_STALE",
+                recording_work=self.work, accounting_kind="M"))
+        except BaseException as error:
+            self.fail(error);raise self.failure
+    def layout(self):
+        c2_require(not self.namespace(self.root), "E_STALE")
+        cases = self.mkdir(self.root, "cases")
+        result = {}
+        for identity in sorted(_C2_CASES):
+            case = self.mkdir(cases, identity)
+            result[identity] = self.mkdir(case, "S")
+        operations = self.mkdir(self.root, "operations")
+        self.recheck()
+        self.destinations = result
+        return result, operations
+    def release_destination(self, held):
+        c2_require(any(value is held for value in self.destinations.values()) and held.components, "E_STALE")
+        c2_require(not self.namespace(held), "E_STALE")
+        # The original assembly has cloned the empty S chain before its first write.
+        try:held.close()
+        except BaseException as error:
+            self.fail(error);raise self.failure
+        for index, value in enumerate(self.owned):
+            if value is held:
+                self.owned.pop(index)
+                break
+    def bind_descriptor(self, descriptor_fd, start_identity):
+        self.recheck()
+        observed = c._capture_metadata(descriptor_fd, self.work, "M")
+        c2_require(c._identity(observed) == c._identity(self.root.before), "E_STALE")
+        c2_require(type(start_identity) is list and tuple(start_identity) == self.initial, "E_STALE")
+    def close(self, primary=None):
+        c2_require(not self.closed, "E_STALE")
+        self.closed = True
+        if primary is not None:self.fail(primary)
+        while self.owned:
+            held = self.owned.pop()
+            try:
+                if held.components:held.close()
+            except BaseException as error:self.fail(error)
+        if self.failure is not None:raise self.failure
+        c2_require(not c._capture_work_incomplete(self.work), "E_LIMIT")
+
+class C2Copies:
+    def __init__(self, custody, work=None, total=None, window_before=None, case_before=None):
+        self.custody, self.work = custody, custody.work if work is None else work
+        self.total, self.window_before, self.case_before = total, window_before, case_before
+        self.pairs, self.case_copies = [], []
+    def runtime(self, field, amount, commit=True):
+        if self.total is not None:
+            self.work["runtime_case_carry_in"] = {key: self.case_before["runtime"][key] + self.total["runtime"][key] for key in c._RUNTIME_FIELDS}
+            self.work["runtime_window_carry_in"] = {key: self.window_before["runtime"][key] + self.custody.work["runtime"][key] for key in c._RUNTIME_FIELDS}
+        c._runtime_account(self.work, field, amount, commit=commit)
+    def transfer_cases(self):
+        for copies in self.case_copies:copies.transfer_cases()
+        if self.total is not None:
+            try:
+                c._capture_transfer_work(self.work, self.custody.work, self.total)
+                previous = self.work.setdefault("transferred_seed_processing", {})
+                for field, amount in self.work["seed_processing"].items():
+                    prior = previous.get(field, 0)
+                    c2_require(type(amount) is int and 0 <= prior <= amount, "E_LIMIT")
+                    for target in (self.custody.work, self.total):
+                        target["seed_processing"][field] += amount - prior
+                    previous[field] = amount
+            except BaseException:
+                self.custody.work["C2_case_transfer_incomplete"] = True
+                raise
+    def room(self, field, amount, kind):
+        if kind == "runtime":
+            mapping = {"R": "read_bytes", "W": "write_bytes", "H": "sha_bytes", "E": "equality_bytes", "C": "copy_bytes"}
+            self.runtime(mapping[field], amount, False)
+            if field == "W":self.runtime("physical_bytes", amount, False)
+        elif field in {"R", "W"}:c._capture_copy_room(self.work, amount, kind == "export", read_only=field == "R")
+    def charge(self, field, amount, kind):
+        self.work["seed_processing"][field] += amount
+        if kind == "runtime":
+            mapping = {"R": "read_bytes", "W": "write_bytes", "H": "sha_bytes", "E": "equality_bytes", "C": "copy_bytes"}
+            self.runtime(mapping[field], amount)
+            if field == "W":self.runtime("physical_bytes", amount)
+        elif field in {"R", "W"}:
+            key = "read_bytes" if field == "R" else "write_bytes"
+            self.work[key] += amount
+            if kind == "export":
+                self.work["export_" + key] += amount
+                if field == "W":self.work["export_physical_bytes"] += amount
+            else:c._capture_account(self.work, "raw" if kind == "recorded" else kind, key, amount)
+            if field == "W":
+                self.work["physical_bytes"] += amount
+                if kind != "export":c._capture_account(self.work, "raw" if kind == "recorded" else kind, "physical_bytes", amount)
+    def copy(self, source, parent, name, size, expected, kind):
+        c2_require(kind in {"runtime", "recorded", "export", "raw", "M", "W"})
+        c2_require(type(source) is c.HeldPath and source.components and type(size) is int and 0 <= size <= 4 << 30)
+        source.recheck("E_STALE", self.work, "M")
+        c2_require(source.before.st_size == size, "E_STALE")
+        names = self.custody.namespace(parent);before = parent.before
+        writer, first = None, None
+        installed_hash = hashlib.sha256()
+        try:
+            if kind == "runtime":self.runtime("physical_files", 1, False)
+            else:c._capture_copy_room(self.work, 0, True)
+            writer = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400, dir_fd=parent.fd)
+            if kind == "runtime":self.runtime("physical_files", 1)
+            else:
+                self.work["files"] += 1
+                if kind == "export":self.work["export_files"] += 1
+                else:c._capture_account(self.work, "raw" if kind == "recorded" else kind, "files", 1)
+            self.custody.observe("C2.copy-create", {"fd": writer, "parent_fd": parent.fd, "name": name})
+            self.custody.created_parent(parent, before, names, name)
+            offset = 0
+            while offset < size:
+                amount = min(65536, size - offset)
+                self.room("R", amount, kind)
+                raw = os.pread(source.fd, amount, offset)
+                self.charge("R", len(raw), kind)
+                c2_require(len(raw) == amount, "E_STALE")
+                written = 0
+                while written < len(raw):
+                    self.room("W", len(raw) - written, kind)
+                    self.room("C", len(raw) - written, kind)
+                    sent = os.write(writer, memoryview(raw)[written:])
+                    c2_require(type(sent) is int and 0 < sent <= len(raw) - written, "E_RUNTIME")
+                    self.charge("W", sent, kind);self.charge("C", sent, kind)
+                    written += sent
+                offset += len(raw)
+            os.fsync(writer)
+            self.custody.observe("C2.copy-fsync", {"fd": writer, "return": 0})
+            closing, writer = writer, None
+            c._close_capture_copy(closing, self.work, self.work, "C2.copy-writer", None)
+            installed = self.custody.adopt(c._open_child(parent, name, False,
+                c._store_rule(os.geteuid(), os.getegid(), 0o400, False, self.custody.resolver), "E_STALE",
+                recording_work=self.work, accounting_kind="M"))
+            c2_require(installed.before.st_size == size, "E_STALE")
+            offset = 0
+            while offset < size:
+                amount = min(65536, size - offset)
+                self.room("R", amount, kind);self.room("H", amount, kind)
+                raw = os.pread(installed.fd, amount, offset)
+                self.charge("R", len(raw), kind)
+                installed_hash.update(raw);self.charge("H", len(raw), kind)
+                c2_require(len(raw) == amount, "E_STALE")
+                offset += amount
+            c2_require(installed_hash.hexdigest() == expected, "E_STALE")
+            offset = 0
+            while offset < size:
+                amount = min(65536, size - offset)
+                self.room("R", 2 * amount, kind)
+                left, right = os.pread(source.fd, amount, offset), os.pread(installed.fd, amount, offset)
+                self.charge("R", len(left) + len(right), kind)
+                self.room("E", len(left) + len(right), kind)
+                equal = left == right
+                self.charge("E", len(left) + len(right), kind)
+                c2_require(len(left) == len(right) == amount and equal, "E_STALE")
+                offset += amount
+            source.recheck("E_STALE", self.work, "M");installed.recheck("E_STALE", self.work, "M")
+            self.pairs.append((source, installed, size, expected, kind))
+            return installed
+        except BaseException as error:
+            first = error
+            self.custody.fail(error)
+        finally:
+            if writer is not None:
+                closing, writer = writer, None
+                try:c._close_capture_copy(closing, self.work, self.work, "C2.copy-failed-writer", first)
+                except BaseException as error:self.custody.fail(error)
+            if first is not None:raise self.custody.failure
+    def final_checks(self):
+        for copies in self.case_copies:copies.final_checks()
+        self.custody.recheck()
+        for source, installed, size, expected, kind in self.pairs:
+            source.recheck("E_STALE", self.work, "M");installed.recheck("E_STALE", self.work, "M")
+            c2_require(source.before.st_size == installed.before.st_size == size, "E_STALE")
+            left_hash, right_hash, offset = hashlib.sha256(), hashlib.sha256(), 0
+            while offset < size:
+                amount = min(65536, size - offset)
+                self.room("R", 2 * amount, kind)
+                left, right = os.pread(source.fd, amount, offset), os.pread(installed.fd, amount, offset)
+                self.charge("R", len(left) + len(right), kind)
+                self.room("H", len(left) + len(right), kind);self.room("E", len(left) + len(right), kind)
+                left_hash.update(left);right_hash.update(right)
+                self.charge("H", len(left) + len(right), kind)
+                equal = left == right
+                self.charge("E", len(left) + len(right), kind)
+                c2_require(len(left) == len(right) == amount and equal, "E_STALE")
+                offset += amount
+            c2_require(left_hash.hexdigest() == right_hash.hexdigest() == expected, "E_STALE")
+            source.recheck("E_STALE", self.work, "M");installed.recheck("E_STALE", self.work, "M")
+
+def c2_terminal(work, ordinal, end_size, end_written, values):
+    owner = c
+    c2_require(type(values) is tuple and len(values) == 50
+        and all(type(value) is int and 0 <= value < 1 << 64 for value in values), "E_LIMIT")
+    c2_require(not owner._capture_work_incomplete(work)
+        and all(value == 0 for value in values[11:20]) and all(value == 0 for value in values[-6:]))
+    done = struct.pack(">8s53Q80x", b"YC2DONE1", ordinal, end_size, end_written, *values)
+    owner._capture_account(work, "M", "logical_bytes", 512)
+    owner._capture_account(work, "M", "occurrences", 1)
+    c2_wire_room(work, 512, "W")
+    try:result = os.write(9, done)
+    except BaseException:os._exit(1)
+    if result > 0:
+        work["write_bytes"] += result
+        owner._capture_account(work, "M", "write_bytes", result)
+        processing = work.setdefault("seed_processing", {})
+        processing["W"] = processing.get("W", 0) + result
+        processing["C"] = processing.get("C", 0) + result
+    if result != 512:os._exit(1)
+    failure = None
+    for fd, site in ((1, "C2.stdout"), (2, "C2.stderr"), (9, "C2.control")):
+        try:owner._close_capture_copy(fd, work, work, site, None)
+        except BaseException as error:failure = c2_first(failure, error)
+    os._exit(1 if failure is not None or owner._capture_work_incomplete(work) else 0)
+
+def c2_vector(work):
+    result = tuple(work[key] for key in _C2_SCALARS)
+    result += tuple(work["runtime"][key] for key in c._RUNTIME_FIELDS)
+    result += tuple(work["accounting"][kind][key] for kind in _C2_CLASSES for key in _C2_ACCOUNT_FIELDS)
+    c2_require(len(result) == 50 and all(type(value) is int and 0 <= value < 1 << 64 for value in result), "E_LIMIT")
+    return result
+
+def c2_sum_views(values):
+    c2_require(values and all(type(value) is dict for value in values), "E_LIMIT")
+    def add(items):
+        return sum(items) if all(type(item) is int and 0 <= item < 1 << 64 for item in items) else "UNKNOWN"
+    result = {key: add([value[key] for value in values]) for key in _C2_SCALARS}
+    result["runtime"] = {key: add([value["runtime"][key] for value in values]) for key in c._RUNTIME_FIELDS}
+    result["accounting"] = {kind: {key: add([value["accounting"][kind][key] for value in values])
+        for key in _C2_ACCOUNT_FIELDS} for kind in _C2_CLASSES}
+    result["seed_processing"] = {key: add([value["seed_processing"][key] for value in values]) for key in ("R", "W", "H", "E", "C")}
+    result["incomplete"] = [item for value in values for item in value["incomplete"]]
+    result["unknown"] = {str(index): value["unknown"] for index, value in enumerate(values) if value["unknown"]}
+    return result
+
+def c2_case_values(rows):
+    distinct = []
+    for row in rows:
+        c2_require(type(row) is dict, "E_LIMIT")
+        if not any(row is original for original in distinct):distinct.append(row)
+    values = []
+    for row in distinct:
+        # These are real initialized recording owners. Use the original counter defaults only.
+        c2_require(all(key in row for key in ("read_bytes", "write_bytes", "physical_bytes", "files", "export_read_bytes", "export_write_bytes", "export_physical_bytes", "export_files")), "E_LIMIT")
+        view = c2_counter_values(row)
+        for key in _C2_SCALARS:
+            if key not in row:view[key] = 0
+        view["runtime"] = {key: row.get("runtime", {}).get(key, 0) for key in c._RUNTIME_FIELDS}
+        view["accounting"] = {kind: {key: row.get("accounting", {}).get(kind, {}).get(key, 0) for key in _C2_ACCOUNT_FIELDS} for kind in _C2_CLASSES}
+        view["seed_processing"] = {key: row.get("seed_processing", {}).get(key, 0) for key in ("R", "W", "H", "E", "C")}
+        values.append(view)
+    return c2_sum_views(values)
+
+def c2_counters(work):
+    cases = {}
+    bindings = work.get("C2_case_bindings", {})
+    for identity, binding in bindings.items():
+        c2_require(identity in _C2_CASES and type(binding) is tuple and len(binding) == 2, "E_RELATION")
+        primary, rows = binding
+        c2_require(type(rows) is list and any(primary is row for row in rows)
+            and all(any(row is owner for owner in work.get("cases", {}).values()) for row in rows), "E_RELATION")
+        cases[identity] = c2_case_values(rows)
+    for identity, leaf in work.get("C2_case_totals", {}).items():
+        c2_require(identity in _C2_CASES and identity not in cases, "E_RELATION")
+        cases[identity] = c2_counter_values(work.get("C2_case_leaves", {}).get(identity, leaf))
+    return {"window": c2_counter_values(work), "cases": cases}
+
+def c2_view_delta(current, prior):
+    result = {key: current[key] - prior[key] for key in _C2_SCALARS}
+    result["runtime"] = {key: current["runtime"][key] - prior["runtime"][key] for key in c._RUNTIME_FIELDS}
+    result["accounting"] = {kind: {key: current["accounting"][kind][key] - prior["accounting"][kind][key]
+        for key in _C2_ACCOUNT_FIELDS} for kind in _C2_CLASSES}
+    result["seed_processing"] = {key: current["seed_processing"][key] - prior["seed_processing"][key] for key in ("R", "W", "H", "E", "C")}
+    result["incomplete"], result["unknown"] = current["incomplete"], current["unknown"]
+    return result
+
+def c2_delta(current, prior):
+    c2_require(set(current) == set(prior) == {"window", "cases"} and set(current["cases"]) == set(prior["cases"]), "E_RELATION")
+    return {"window": c2_view_delta(current["window"], prior["window"]),
+        "cases": {identity: c2_view_delta(current["cases"][identity], prior["cases"][identity]) for identity in current["cases"]}}
+
+def c2_combine(before, *deltas):
+    inputs = (before, *deltas)
+    c2_require(all(set(value) == {"window", "cases"} and type(value["cases"]) is dict
+        and set(value["cases"]) <= set(before["cases"]) <= _C2_CASES for value in inputs), "E_RELATION")
+    return {"window": c2_sum_views([value["window"] for value in inputs]),
+        "cases": {identity: c2_sum_views([value["cases"][identity] for value in inputs if identity in value["cases"]]) for identity in before["cases"]}}
+
+def c2_reserve_view(before, reservation, window):
+    c2_require(type(before) is dict and type(reservation) is dict, "E_LIMIT")
+    def complete(value):
+        if type(value) is dict:return all(complete(item) for item in value.values())
+        return type(value) is int and 0 <= value < 1 << 64
+    c2_require(not before["incomplete"] and not before["unknown"] and not reservation["incomplete"] and not reservation["unknown"], "E_LIMIT")
+    for value in (before, reservation):
+        c2_require(all(type(value[key]) is int and 0 <= value[key] < 1 << 64 for key in _C2_SCALARS), "E_LIMIT")
+        c2_require(set(value["runtime"]) == set(c._RUNTIME_FIELDS) and set(value["accounting"]) == set(_C2_CLASSES), "E_LIMIT")
+        c2_require(all(set(value["accounting"][kind]) == set(_C2_ACCOUNT_FIELDS) for kind in _C2_CLASSES), "E_LIMIT")
+        c2_require(complete(value["runtime"]) and complete(value["accounting"]) and complete(value["seed_processing"]), "E_LIMIT")
+    candidate = {key: before[key] + reservation[key] for key in _C2_SCALARS}
+    c._capture_copy_room(candidate, 0, False, case=not window)
+    c2_require(candidate["files"] <= 256 and candidate["export_files"] <= (64 if window else 16), "E_LIMIT")
+    for key, maximum in c._RUNTIME_FIELDS.items():
+        c2_require(before["runtime"][key] + reservation["runtime"][key] <= (4 if window else 1) * maximum, "E_LIMIT")
+    c2_require(all(before["accounting"]["unresolved"][key] == reservation["accounting"]["unresolved"][key] == 0 for key in _C2_ACCOUNT_FIELDS), "E_LIMIT")
+    return candidate
+
+def c2_reserve(before, reservation):
+    c2_require(set(before) == set(reservation) == {"window", "cases"}
+        and set(reservation["cases"]) <= set(before["cases"]) <= _C2_CASES, "E_RELATION")
+    result = c2_reserve_view(before["window"], reservation["window"], True)
+    for identity in before["cases"]:
+        c2_require(identity in reservation["cases"], "E_RELATION")
+        c2_reserve_view(before["cases"][identity], reservation["cases"][identity], False)
+    return result
+
+def c2_cli(arguments):
+    c2_require(type(arguments) is list and arguments, "E_USAGE")
+    mode = arguments[0]
+    if mode == "run":
+        c2_require(len(arguments) == 3, "E_USAGE")
+        paths, observed = [arguments[1]], arguments[2]
+    else:
+        c2_require(mode == "dashboard" and len(arguments) == 6, "E_USAGE")
+        paths, observed = arguments[2:], arguments[1]
+    import re
+    c2_require(re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", observed) is not None, "E_USAGE")
+    c2_require(all(os.path.isabs(path) and os.path.normpath(path) == path for path in paths), "E_RELATION")
+    parent = os.path.dirname(paths[0])
+    c2_require(all(os.path.dirname(path) == parent for path in paths), "E_RELATION")
+    if mode == "run":c2_require(os.path.basename(paths[0]) in {"seed-a.json", "seed-b.json"}, "E_RELATION")
+    else:c2_require([os.path.basename(path) for path in paths] == ["seed-a.json", "run-a.json", "seed-b.json", "run-b.json"], "E_RELATION")
+    return mode, parent, paths
+
+def c2_document(custody, parent, name, maximum=_C2_LIMIT):
+    held = custody.adopt(c._open_child(parent, name, False,
+        c._store_rule(os.geteuid(), os.getegid(), 0o400, False, custody.resolver), "E_RELATION",
+        recording_work=custody.work, accounting_kind="M"))
+    raw = held.read(maximum, "E_RELATION", custody.work)
+    value = c._json(raw, maximum, "E_RELATION")
+    custody.work["read_bytes"] += len(raw)
+    c._capture_account(custody.work, "M", "read_bytes", len(raw))
+    rebuilt = C2Channel(9, custody.work).encode(value)
+    equal = rebuilt == raw
+    custody.work["read_bytes"] += 2 * len(raw)
+    c._capture_account(custody.work, "M", "read_bytes", 2 * len(raw))
+    c2_require(equal, "E_CANONICAL")
+    custody.work["seed_processing"]["H"] += len(raw)
+    measured = c2_sha(raw)
+    return value, raw, measured, held
+
+def c2_write_document(custody, parent, name, value):
+    channel = C2Channel(9, custody.work)
+    raw = channel.encode(value)
+    c2_require(len(raw) <= _C2_LIMIT, "E_LIMIT")
+    before = parent.before;names = custody.namespace(parent)
+    writer, first = None, None
+    try:
+        c._capture_copy_room(custody.work, 0, True)
+        writer = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400, dir_fd=parent.fd)
+        custody.work["files"] += 1;c._capture_account(custody.work, "M", "files", 1)
+        custody.created_parent(parent, before, names, name)
+        offset = 0
+        while offset < len(raw):
+            amount = min(65536, len(raw) - offset)
+            c._capture_copy_room(custody.work, amount, False)
+            sent = os.write(writer, memoryview(raw)[offset:offset+amount])
+            c2_require(type(sent) is int and 0 < sent <= amount, "E_RUNTIME")
+            custody.work["write_bytes"] += sent;custody.work["physical_bytes"] += sent
+            custody.work["seed_processing"]["W"] += sent;custody.work["seed_processing"]["C"] += sent
+            c._capture_account(custody.work, "M", "write_bytes", sent);c._capture_account(custody.work, "M", "physical_bytes", sent)
+            offset += sent
+        os.fsync(writer);custody.observe("C2.receipt-fsync", {"fd": writer, "return": 0})
+        closing, writer = writer, None
+        c._close_capture_copy(closing, custody.work, custody.work, "C2.receipt-writer", None)
+        _value, observed, measured, held = c2_document(custody, parent, name)
+        c2_require(observed == raw, "E_STALE")
+        custody.work["read_bytes"] += 2 * len(raw)
+        c._capture_account(custody.work, "M", "read_bytes", 2 * len(raw))
+        held.recheck("E_STALE", custody.work, "M")
+        return measured
+    except BaseException as error:
+        first = error;custody.fail(error)
+    finally:
+        if writer is not None:
+            closing, writer = writer, None
+            try:c._close_capture_copy(closing, custody.work, custody.work, "C2.receipt-failed-writer", first)
+            except BaseException as error:custody.fail(error)
+        if first is not None:raise custody.failure
+
+def c2_seed_ids(value):
+    c2_require(type(value) is dict and type(value.get("schema_version")) is int and value["schema_version"] == 1
+        and value.get("kind") == "eval_seed_set" and type(value.get("body")) is dict, "E_SHAPE")
+    body = value["body"]
+    c2_require(body.get("seed_source") == "shadow.malicious-instructions.v1" and type(body.get("cases")) is list
+        and 1 <= len(body["cases"]) <= 4, "E_SHAPE")
+    identities = [row["case_id"] for row in body["cases"] if type(row) is dict and "case_id" in row]
+    c2_require(len(identities) == len(body["cases"]) and all(type(identity) is str and identity in _C2_CASES for identity in identities)
+        and len(set(identities)) == len(identities), "E_SHAPE")
+    return set(identities)
+
+def c2_stage(custody, descriptor, case_ids, destination, admitted_scope):
+    c2_require(type(descriptor) is dict and set(descriptor) == {"cases", "carry_in"}
+        and type(descriptor["cases"]) is dict and set(descriptor["cases"]) == _C2_CASES, "E_SHAPE")
+    cases = custody.adopt(c._open_child(custody.root, "cases", True,
+        c._store_rule(os.geteuid(), os.getegid(), 0o700, True, custody.resolver), "E_STALE",
+        recording_work=custody.work, accounting_kind="M"))
+    copies = C2Copies(custody)
+    for identity in case_ids:
+        binding = descriptor["cases"][identity]
+        c2_require(type(binding) is dict and set(binding) == {"inventory_core", "sha256"}, "E_SHAPE")
+        core = binding["inventory_core"]
+        c2_require(type(core) is dict and set(core) == {"case_id", "entries", "originals", "occurrences"}
+            and core["case_id"] == identity and type(core["entries"]) is list and 1 <= len(core["entries"]) <= 256, "E_SHAPE")
+        raw = C2Channel(9, custody.work).encode(core)
+        custody.work["seed_processing"]["H"] += len(raw)
+        c2_require(c2_sha(raw) == binding["sha256"], "E_RELATION")
+        case = custody.adopt(c._open_child(cases, identity, True,
+            c._store_rule(os.geteuid(), os.getegid(), 0o700, True, custody.resolver), "E_STALE",
+            recording_work=custody.work, accounting_kind="M"))
+        source = custody.adopt(c._open_child(case, "S", True,
+            c._store_rule(os.geteuid(), os.getegid(), 0o700, True, custody.resolver), "E_STALE",
+            recording_work=custody.work, accounting_kind="M"))
+        c2_require(identity in admitted_scope["cases"], "E_RELATION")
+        total = custody.work["C2_case_totals"][identity]
+        leaf = c2_fresh_work("C2-I-" + identity)
+        custody.work.setdefault("C2_case_leaves", {})[identity] = leaf
+        current = C2Copies(custody, leaf, total, admitted_scope["window"], admitted_scope["cases"][identity])
+        copies.case_copies.append(current)
+        target = custody.mkdir(destination, identity)
+        entries, roles = {}, set()
+        for entry in core["entries"]:
+            c2_require(type(entry) is dict and set(entry) == {"occurrence", "role", "member", "file", "size_bytes", "sha256", "kind"}, "E_SHAPE")
+            name = entry["file"]
+            c2_require(type(name) is str and "/" not in name and name not in {"", ".", ".."} and name not in entries, "E_SHAPE")
+            role = (entry["occurrence"], entry["role"], entry["member"])
+            c2_require(role not in roles, "E_SHAPE");roles.add(role);entries[name] = entry
+        c2_require(custody.namespace(source) == frozenset(entries), "E_RELATION")
+        for name, entry in entries.items():
+            c2_require(entry["kind"] in {"runtime", "recorded", "export", "raw", "M", "W"}, "E_SHAPE")
+            held = custody.adopt(c._open_child(source, name, False,
+                c._store_rule(os.geteuid(), os.getegid(), 0o400, False, custody.resolver), "E_STALE",
+                recording_work=custody.work, accounting_kind="M"))
+            current.copy(held, target, name, entry["size_bytes"], entry["sha256"], entry["kind"])
+        current.transfer_cases()
+    return copies
+
+def c2_lifecycle(launcher, arguments):
+    sources = custody = copies = helpers = None
+    work = None;failure = None;errors = [];receipt_sha = None;result = None;operation = None;scratch = None;admitted = False
+    source_errors = []
+    try:
+        mode, root_path, paths = c2_cli(arguments)
+        try:
+            sources = C2Sources(launcher, root_path + "/operations/pending/runtime")
+            sources.load_consumer()
+        except BaseException as error:
+            source_errors.append(error)
+            raise
+        work = c2_fresh_work("C2-terminal")
+        sources.reconcile(work)
+        c._close_capture_copy(0, work, work, "C2.stdin", None)
+        resolver = c._DarwinUUIDResolver() if sys.platform == "darwin" else None
+        sources.namespace["directory"](root_path)
+        root = c._open_held(root_path, True, c._store_rule(os.geteuid(), os.getegid(), 0o700, True, resolver), "E_STALE",
+            recording_work=work, accounting_kind="M")
+        custody = C2Root(root, work, resolver)
+        channel = C2Channel(9, work)
+        start, start_raw = channel.receive("START")
+        c2_require(start["mode"] == mode, "E_RELATION")
+        c2_reserve(start["before"], start["tail_reservation"])
+        c2_require(set(start["case_ids"]) <= set(start["before"]["cases"]), "E_RELATION")
+        work["C2_case_totals"] = {identity: c2_fresh_work("C2-I-" + identity) for identity in start["case_ids"]}
+        custody.bind_descriptor(10, start["root_identity"])
+        descriptor, _window_raw, window_sha, _window = c2_document(custody, root, "window.json")
+        c2_require(window_sha == start["window_sha256"], "E_RELATION")
+        hashes, seed_cases = [], []
+        for index, path in enumerate(paths):
+            input_value, _raw, digest, _held = c2_document(custody, root, os.path.basename(path))
+            hashes.append(digest)
+            if mode == "run" or index % 2 == 0:seed_cases.append(c2_seed_ids(input_value))
+        actual_cases = set().union(*seed_cases)
+        c2_require(actual_cases == set(start["case_ids"]) and sum(len(value) for value in seed_cases) == len(actual_cases), "E_RELATION")
+        if mode == "dashboard":c2_require(actual_cases == _C2_CASES, "E_RELATION")
+        expected = start["seed_sha256s"] if mode == "run" else [start["seed_sha256s"][0], start["result_sha256s"][0], start["seed_sha256s"][1], start["result_sha256s"][1]]
+        c2_require(hashes == expected, "E_RELATION")
+        ordinal = start["ordinal"]
+        c2_require(ordinal in {0, 1, 2} and (mode == "dashboard") == (ordinal == 2), "E_RELATION")
+        if mode == "run":c2_require(os.path.basename(paths[0]) == ("seed-a.json" if ordinal == 0 else "seed-b.json"), "E_RELATION")
+        seen = set(actual_cases)
+        operations = custody.adopt(c._open_child(root, "operations", True,
+            c._store_rule(os.geteuid(), os.getegid(), 0o700, True, resolver), "E_STALE", recording_work=work, accounting_kind="M"))
+        if ordinal == 0:c2_require(start["predecessor_sha256"] == window_sha, "E_RELATION")
+        else:
+            previous = custody.adopt(c._open_child(operations, str(ordinal - 1), True,
+                c._store_rule(os.geteuid(), os.getegid(), 0o700, True, resolver), "E_STALE", recording_work=work, accounting_kind="M"))
+            prefix, _raw, previous_sha, _held = c2_document(custody, previous, "receipt.json")
+            c2_require(previous_sha == start["predecessor_sha256"] and prefix["ordinal"] == ordinal - 1, "E_RELATION")
+            prior_cases = set(prefix["seen_case_ids"])
+            c2_require(prior_cases <= _C2_CASES and len(prior_cases) == len(prefix["seen_case_ids"]), "E_RELATION")
+            if mode == "run":c2_require(not prior_cases & actual_cases and prior_cases | actual_cases == _C2_CASES, "E_RELATION")
+            else:c2_require(prior_cases == actual_cases == _C2_CASES, "E_RELATION")
+            seen |= prior_cases
+        ready = {"kind": "READY", "version": 1, "ordinal": ordinal, "start_sha256": c2_sha(start_raw, work),
+            "input_sha256s": hashes, "observed_predecessor_sha256": start["predecessor_sha256"],
+            "acquisition_delta": c2_counters(work), "leaf_pid": os.getpid(), "leaf_ppid": os.getppid()}
+        ready_raw, _written = channel.send(ready)
+        go, _go_raw = channel.receive("GO")
+        c2_require(go["ordinal"] == ordinal and go["start_sha256"] == c2_sha(start_raw, work)
+            and go["ready_sha256"] == c2_sha(ready_raw, work) and go["tail_reservation"] == start["tail_reservation"], "E_RELATION")
+        admitted_scope = c2_combine(start["before"], ready["acquisition_delta"], go["caller_delta"])
+        c2_reserve(admitted_scope, go["tail_reservation"])
+        custody.recheck()
+        admitted = True
+        operation = custody.mkdir(operations, str(ordinal))
+        installed = custody.mkdir(operation, "I")
+        copies = c2_stage(custody, descriptor, start["case_ids"], installed, admitted_scope)
+        scratch = tempfile.mkdtemp(prefix="ystack-evals.")
+        work["files"] += 1;c._capture_account(work, "M", "files", 1)
+        c._capture_observe(work, "M", "C2.scratch-create", {"path": scratch})
+        unused = [row["fd"] for row in sources.namespace["owned"] if not row["closed"]]
+        unused += [item.fd for held in custody.owned for item in held.components]
+        try:sources.validate_root(scratch + "/runtime")
+        except BaseException as error:
+            source_errors.append(error)
+            raise
+        helpers = C2Helpers(sources, scratch, work, unused)
+        built = helpers.build(arguments)
+        c2_require(built["status"] == 0 and not built["stdout"] and not built["stderr"], "E_RUNTIME")
+        try:sources.materialize()
+        except BaseException as error:
+            source_errors.append(error)
+            raise
+        completed = helpers.run_and_check(arguments)
+        if completed["status"] != 0:
+            c2_require(not completed["stdout"], "E_RUNTIME")
+            token = completed["stderr"].rstrip(b"\n").decode("ascii")
+            c2_require(token in {"E_RUNTIME", "E_LIMIT", "E_PARSE", "E_CANONICAL", "E_SHAPE", "E_RELATION", "E_STALE"}, "E_RUNTIME")
+            raise C2Refusal(token)
+        c2_require(not completed["stderr"], "E_RUNTIME")
+        result = completed["stdout"]
+        prefix = {"ordinal": ordinal, "mode": mode, "case_ids": sorted(actual_cases), "seen_case_ids": sorted(seen),
+            "input_sha256s": hashes, "start_sha256": c2_sha(start_raw, work), "predecessor_sha256": start["predecessor_sha256"],
+            "cutoff": c2_counters(work), "source_cutoff": sources.work}
+        receipt_sha = c2_write_document(custody, operation, "receipt.json", prefix)
+    except BaseException as error:
+        failure = error
+        errors.append({"site": "C2.lifecycle", "category": type(error).__name__, "errno": getattr(error, "errno", None)})
+    finally:
+        if copies is not None:
+            try:copies.final_checks()
+            except BaseException as error:
+                failure = c2_first(failure, error)
+        if sources is not None and getattr(sources, "materialized", False):
+            try:sources.recheck()
+            except BaseException as error:
+                source_errors.append(error)
+                failure = c2_first(failure, error)
+        for owner in (custody, sources):
+            if owner is not None:
+                try:owner.close(failure)
+                except BaseException as error:
+                    if owner is sources:source_errors.append(error)
+                    failure = c2_first(failure, error)
+                    errors.append({"site": "C2.close", "category": type(error).__name__, "errno": getattr(error, "errno", None)})
+        if work is not None:
+            try:c._close_capture_copy(10, work, work, "C2.root-descriptor", failure)
+            except BaseException as error:
+                failure = c2_first(failure, error)
+        if copies is not None:
+            try:copies.transfer_cases()
+            except BaseException as error:
+                failure = c2_first(failure, error)
+                errors.append({"site": "C2.case-transfer", "category": type(error).__name__, "errno": getattr(error, "errno", None)})
+        if sources is not None and work is not None:
+            try:sources.reconcile(work)
+            except BaseException as error:
+                failure = c2_first(failure, error)
+                errors.append({"site": "C2.source-transfer", "category": type(error).__name__, "errno": getattr(error, "errno", None)})
+        if scratch is not None:
+            import shutil
+            try:
+                shutil.rmtree(scratch)
+                c._capture_observe(work, "M", "C2.scratch-cleanup", {"path": scratch, "return": 0})
+            except BaseException as error:
+                failure = c2_first(failure, error)
+                work["C2_cleanup_incomplete"] = True
+    if work is None or "start" not in locals() or not admitted:
+        token = b"E_STALE\n" if any(error is failure for error in source_errors) and not c2_cancelled(failure) else b"E_RUNTIME\n"
+        os.write(2, token);os._exit(1)
+    if failure is not None:
+        result = None
+        token = ("E_STALE" if any(error is failure for error in source_errors) and not c2_cancelled(failure)
+            else failure.code if isinstance(failure, (C2Refusal, c.Refusal)) and failure.code in {"E_RUNTIME", "E_LIMIT", "E_PARSE", "E_CANONICAL", "E_SHAPE", "E_RELATION", "E_STALE"} else "E_RUNTIME")
+        raw = (token + "\n").encode("ascii")
+        c._capture_copy_room(work, len(raw), False)
+        count = os.write(2, raw)
+        work["write_bytes"] += count;c._capture_account(work, "M", "write_bytes", count)
+        work["seed_processing"]["W"] += count;work["seed_processing"]["C"] += count
+        c2_require(count == len(raw), "E_RUNTIME")
+    elif result is not None:
+        offset = 0
+        while offset < len(result):
+            amount = min(65536, len(result)-offset)
+            c._capture_copy_room(work, amount, False)
+            count = os.write(1, memoryview(result)[offset:offset+amount])
+            c2_require(0 < count <= amount, "E_RUNTIME")
+            work["write_bytes"] += count;c._capture_account(work, "M", "write_bytes", count)
+            work["seed_processing"]["W"] += count;work["seed_processing"]["C"] += count;offset += count
+    end_start_sha = c2_sha(start_raw, work)
+    end_result_sha = None if result is None else c2_sha(result, work)
+    terminal_before = c2_vector(work)
+    end = {"kind": "END", "version": 1, "ordinal": start["ordinal"], "start_sha256": end_start_sha,
+        "receipt_sha256": receipt_sha, "result_sha256": end_result_sha,
+        "outcome": "refused" if failure is not None else "completed", "child_delta": c2_counters(work),
+        "retained": [] if operation is None else [operation.path], "errors": errors,
+        "unknown": [{"site": key, "value": value} for key, value in work.items() if key.endswith("_unknown") and value]}
+    terminal_channel = C2Channel(9, work)
+    end_raw, end_written = terminal_channel.send(end)
+    terminal_after = c2_vector(work)
+    delta = tuple(after - before for before, after in zip(terminal_before, terminal_after))
+    c2_terminal(work, start["ordinal"], len(end_raw), end_written, delta)
+
+if __name__ == "__main__":
+    c2_lifecycle(sys.argv[1], sys.argv[2:])
+'
+c2_fd9=false
+c2_fd10=false
+[ ! -e /dev/fd/9 ] || c2_fd9=true
+[ ! -e /dev/fd/10 ] || c2_fd10=true
+if [ "$c2_fd9" = true ] || [ "$c2_fd10" = true ]; then
+  if [ "$c2_fd9" != true ] || [ "$c2_fd10" != true ]; then
+    printf '%s\n' E_RUNTIME >&2
+    exit 1
+  fi
+  exec /usr/bin/python3 -I -S -B -c "$c2_program" "${BASH_SOURCE[0]}" "$@"
+fi
+
 emit_error() {
   case "${1:-}" in
     E_USAGE|E_RUNTIME|E_LIMIT|E_PARSE|E_CANONICAL|E_SHAPE|E_RELATION|E_STALE)
@@ -120,7 +1269,7 @@ shadow_source_rows() {
     'enforcement/v1/accepted-identities.json c75dcd8d9268cb42677f5aa526fd374c3e45f2ba0fe678f47562ae49ad6851a0 174 100644' \
     'enforcement/v1/check-sandbox-receipt.sh 7db3412a4e740f79bde6af24891837fd5daa27d0811ff970b2f58534fcd59b97 10816 100755' \
     'enforcement/v1/sandbox-receipt.jq 43ab3a97b90444be17958112b7ff63966d1052981313c81bcb463618adae8619 30838 100644' \
-    'evals/v1/replay-malicious.py c689a693b32349c44c38255dfbe6f49786d755d122652bd39781a991487188bc 105894 100644' \
+    'evals/v1/replay-malicious.py a207a96aca40d7ced966c22173f7c640ece9101c5e48ed5c7b177e6c7285f4ea 106236 100644' \
     'maintenance/v1/bands.jq 594994c057a1130da6727f5f825d2fed3ff01de4a9fafe3a722d9e964f05c8e4 10714 100644' \
     'maintenance/v1/incident-to-eval.jq 2229722267c3e9544d9cf53bd37d6d798f27adebad4a7439294989d0194ad92a 7237 100644' \
     'maintenance/v1/incident-to-eval.sh e000f961d7851c48b650ca36ed0c60fd2bc97ffc32442214b3f8937efc97f967 7449 100755' \
@@ -579,6 +1728,8 @@ PY_SHADOW_SOURCE
   [ "$status" -eq 0 ]
 }
 
+
+evals_initialize() {
 # run SEED-SET.json OBSERVED_AT
 # dashboard OBSERVED_AT SEED-SET.json RUN-RESULT.json [SEED-SET.json RUN-RESULT.json]...
 mode=${1:-}
@@ -601,7 +1752,7 @@ esac
 [[ "$observed_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] ||
   emit_error E_USAGE
 
-self=${BASH_SOURCE[0]}
+self=$evals_self
 case "$self" in /*) ;; *) self="$(pwd -P)/$self" ;; esac
 [ -f "$self" ] && [ ! -L "$self" ] || emit_error E_RUNTIME
 source_dir=$(CDPATH='' cd -P -- "${self%/*}" 2>/dev/null && pwd -P) ||
@@ -649,13 +1800,33 @@ for candidate in "${TMPDIR:-/tmp}/ystack-portable-core-jq16/$jq_asset" "/usr/bin
 done
 [ -n "$jq_source" ] || emit_error E_RUNTIME
 
-scratch=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-evals.XXXXXX" 2>/dev/null) ||
-  emit_error E_RUNTIME
-scratch=$(CDPATH='' cd -P -- "$scratch" 2>/dev/null && pwd -P) || emit_error E_RUNTIME
-cleanup() { /bin/rm -rf -- "$scratch" >/dev/null 2>&1 || :; }
-signal_exit() { trap - EXIT HUP INT TERM; cleanup; exit 1; }
-trap cleanup EXIT
-trap signal_exit HUP INT TERM
+generation=g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43
+program_sha=18bfacfaabbb87fc6bb3e4be8d182cc81a9d526caa4db8e17c51d583b52e1009
+review_approval_sha=none
+catalog_sha=0239138447a8f9fd420cb3c5da31660d8f75c85099d80d89a040dce2878a4cac
+driver_sha=c5fe4b2c71189a6079b7f76a19f998f7e96659cdf9f3152e8e35e0b049c00a4d
+}
+
+evals_record_context() {
+record_generation=$("$runtime/bin/jq" -er '
+  if type == "array" and length == 2 and .[1] == .[-1] and all(.[];
+    type == "object" and keys == ["authorization_comment_id","concern","generation_id",
+      "parent_generation_id","semantic_identity"] and
+    (.authorization_comment_id | type == "number" and . == floor and . > 0) and
+    (.concern | type == "string" and length > 0) and
+    .semantic_identity == "core.contracts.v2" and
+    (.generation_id | type == "string" and test("\\Ag-[0-9a-f]{64}\\z")) and
+    (.parent_generation_id | type == "string" and test("\\Ag-[0-9a-f]{64}\\z"))) and
+    .[1].parent_generation_id == .[0].generation_id
+  then .[1].generation_id else error("E_STALE") end
+' "$runtime/core/v2/generation-registry.json" 2>/dev/null) || emit_error E_STALE
+record_schema="core/v2/generations/$record_generation/modules/schema.jq"
+record_files="$record_schema 8d1d02d36ac7ada778f05248f9413062b3fc251499914c15d79f003bbd009ade
+evals/v1/framework.jq d164a102919f42ef002e93c8b515b58028604819e6c09b87c6e4afadb0bbcce4
+evals/v1/run.sh 51770c5597d55bf05020502796810637bfbe697038a541ea6124530c0fffe55c"
+}
+
+evals_build() {
 runtime="$scratch/runtime"
 /bin/mkdir -m 0700 "$runtime" "$runtime/bin" "$runtime/core" "$runtime/core/v2" \
   "$runtime/core/v2/generations" "$runtime/scripts" "$runtime/orchestrator" \
@@ -666,15 +1837,10 @@ runtime="$scratch/runtime"
   "$runtime/adapters/gitlab-forge" "$runtime/adapters/gitlab-forge/v1" \
   "$runtime/adapters/codex-cli-producer" "$runtime/adapters/codex-cli-producer/v1" "$scratch/work" ||
   emit_error E_RUNTIME
-generation=g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43
 generation_runtime="$runtime/core/v2/generations/$generation"
 /bin/mkdir -m 0700 "$generation_runtime" "$generation_runtime/modules" ||
   emit_error E_RUNTIME
 
-program_sha=18bfacfaabbb87fc6bb3e4be8d182cc81a9d526caa4db8e17c51d583b52e1009
-review_approval_sha=none
-catalog_sha=0239138447a8f9fd420cb3c5da31660d8f75c85099d80d89a040dce2878a4cac
-driver_sha=c5fe4b2c71189a6079b7f76a19f998f7e96659cdf9f3152e8e35e0b049c00a4d
 snapshot_file "$source_dir/run-evals.sh" "$runtime/bootstrap.sh" 1048576 0400 ||
   emit_error E_RUNTIME
 bootstrap_sha=$(sha256_path "$runtime/bootstrap.sh") || emit_error E_RUNTIME
@@ -757,22 +1923,7 @@ for member in \
 done
 snapshot_expected "$jq_sha" "$jq_source" "$runtime/bin/jq" 0500 || emit_error E_RUNTIME
 bash_sha=$(sha256_path /bin/bash) || emit_error E_RUNTIME
-record_generation=$("$runtime/bin/jq" -er '
-  if type == "array" and length == 2 and .[1] == .[-1] and all(.[];
-    type == "object" and keys == ["authorization_comment_id","concern","generation_id",
-      "parent_generation_id","semantic_identity"] and
-    (.authorization_comment_id | type == "number" and . == floor and . > 0) and
-    (.concern | type == "string" and length > 0) and
-    .semantic_identity == "core.contracts.v2" and
-    (.generation_id | type == "string" and test("\\Ag-[0-9a-f]{64}\\z")) and
-    (.parent_generation_id | type == "string" and test("\\Ag-[0-9a-f]{64}\\z"))) and
-    .[1].parent_generation_id == .[0].generation_id
-  then .[1].generation_id else error("E_STALE") end
-' "$runtime/core/v2/generation-registry.json" 2>/dev/null) || emit_error E_STALE
-record_schema="core/v2/generations/$record_generation/modules/schema.jq"
-record_files="$record_schema 8d1d02d36ac7ada778f05248f9413062b3fc251499914c15d79f003bbd009ade
-evals/v1/framework.jq d164a102919f42ef002e93c8b515b58028604819e6c09b87c6e4afadb0bbcce4
-evals/v1/run.sh 51770c5597d55bf05020502796810637bfbe697038a541ea6124530c0fffe55c"
+evals_record_context
 while read -r path digest; do
   stage_expected "$digest" "$repo/$path" "$runtime/$path" 0400 E_STALE
 done <<< "$record_files"
@@ -823,7 +1974,7 @@ fi
 for review_seed in "${review_seed_inputs[@]}"; do
   review_source=$("$runtime/bin/jq" -r '.body.seed_source // empty' "$review_seed" 2>/dev/null) || continue
   if [ "$review_source" = shadow.malicious-instructions.v1 ]; then
-    snapshot_shadow_sources || emit_error E_STALE
+    [ "$evals_c2_custody" = true ] || emit_error E_RUNTIME
   fi
   [ "$review_source" = reviews.independent-verdicts.v1 ] || continue
   "$runtime/bin/jq" -e '
@@ -928,6 +2079,28 @@ evaluator_sha=$(sha256_path "$runtime/evaluator.json") || emit_error E_RUNTIME
     [{path:$path,sha256:"8d1d02d36ac7ada778f05248f9413062b3fc251499914c15d79f003bbd009ade"}]
 ' "$runtime/evaluator.json" >/dev/null 2>&1 || emit_error E_STALE
 
+}
+
+evals_run_context() {
+runtime="$scratch/runtime"
+generation_runtime="$runtime/core/v2/generations/$generation"
+bootstrap_sha=$(sha256_path "$runtime/bootstrap.sh") || emit_error E_RUNTIME
+launcher_sha=$(sha256_path "$runtime/launcher.sh") || emit_error E_RUNTIME
+bash_sha=$(sha256_path /bin/bash) || emit_error E_RUNTIME
+evals_record_context
+if [ "$mode" = run ]; then
+  driver_input="$scratch/input.json"
+  input_document="$scratch/input.json"
+else
+  pair_count=$(( ${#pair_files[@]} / 2 ))
+  driver_input="$scratch/inputs"
+  input_document="$scratch/inputs/manifest.json"
+fi
+seed_sha=$(sha256_path "$input_document") || emit_error E_RUNTIME
+evaluator_sha=$(sha256_path "$runtime/evaluator.json") || emit_error E_RUNTIME
+}
+
+evals_run_and_check() {
 output="$scratch/output.json"
 error="$scratch/error"
 /usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin TMPDIR="$scratch/work" \
@@ -1077,5 +2250,39 @@ if [ "$review_approval_sha" != none ]; then
     emit_error E_STALE
 fi
 /bin/cat "$output" || emit_error E_RUNTIME
+}
+
+evals_c2_build() {
+  evals_self=$1
+  scratch=$2
+  shift 2
+  evals_c2_custody=true
+  evals_initialize "$@"
+  evals_build
+}
+
+evals_c2_run_and_check() {
+  evals_self=$1
+  scratch=$2
+  shift 2
+  evals_c2_custody=true
+  evals_initialize "$@"
+  evals_run_context
+  evals_run_and_check
+}
+
+# Fixed public entry; private functions above are not selected by argv or environment.
+evals_self=${BASH_SOURCE[0]}
+evals_c2_custody=false
+evals_initialize "$@"
+scratch=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-evals.XXXXXX" 2>/dev/null) ||
+  emit_error E_RUNTIME
+scratch=$(CDPATH='' cd -P -- "$scratch" 2>/dev/null && pwd -P) || emit_error E_RUNTIME
+cleanup() { /bin/rm -rf -- "$scratch" >/dev/null 2>&1 || :; }
+signal_exit() { trap - EXIT HUP INT TERM; cleanup; exit 1; }
+trap cleanup EXIT
+trap signal_exit HUP INT TERM
+evals_build
+evals_run_and_check
 trap - EXIT HUP INT TERM
 cleanup

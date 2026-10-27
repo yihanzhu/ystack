@@ -664,7 +664,14 @@ fixture.raw16_C1_revision_wrapper(root)
 fixture.raw16_C1_gate_revision_controls(root)
 fixture.raw16_C1_revision_deletions(root)
 fixture.raw16_C2_inventory_inputs(root)
+fixture.raw16_C2_inventory_inputs(root, ("normal",), window=True)
 fixture.raw16_C2_inventory_deletion(root)
+fixture.raw16_C2_lifecycle_core(root)
+fixture.raw16_C2_source_tail(root)
+fixture.raw16_C2_terminal(root)
+fixture.raw16_C2_terminal(root, short=True)
+fixture.raw16_C2_lifecycle_deletion(root)
+fixture.raw16_C2_scoped_runtime(root)
 PY_HP_HANDOFF
 /usr/bin/python3 -I -S -B - "$root" <<'PY_D_SOURCE_ACQUISITION'
 import importlib.util,sys

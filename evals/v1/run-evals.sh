@@ -7,5 +7,5 @@ case "$entrypoint" in
 esac
 launcher="${entrypoint%/*}/evals-launcher.sh"
 requested_tmp=${TMPDIR:-/tmp}
-/usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin TMPDIR="$requested_tmp" \
+exec /usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin TMPDIR="$requested_tmp" \
   /bin/bash "$launcher" "$@"
