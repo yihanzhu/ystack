@@ -214,6 +214,10 @@ def _runtime_account(work, field, amount, *, window=False, commit=True):
             _require(type(carry) is int and carry >= 0
                      and carry + current - work.get("transferred_runtime", {}).get(field, 0) + amount
                      <= _RUNTIME_FIELDS[field] * multiplier, "E_LIMIT")
+    if "_c3_grant_binding" in work:
+        increment = _c3_vector_values((0,) * 55)
+        increment["runtime"][field] = amount
+        _c3_binding_room(work, increment)
     if commit:
         counts[field] = current + amount
 
@@ -642,6 +646,29 @@ class HeldPath:
         return b"".join(chunks)
 
     def close(self) -> None:
+        if self.recording_work is not None:
+            failure = None
+            while self.components:
+                component = self.components.pop()
+                close_error = None
+                try:os.close(component.fd)
+                except BaseException as error:
+                    close_error = error
+                    failure = _c3_first(failure, error)
+                    if not isinstance(error, OSError):
+                        try:self.recording_work["held_close_incomplete"] = True
+                        except BaseException as later:failure = _c3_first(failure, later)
+                try:
+                    self.recording_work["held_close_calls"] = self.recording_work.get("held_close_calls", 0) + 1
+                    _capture_observe(self.recording_work, "M", "held-close", {
+                        "return": 0 if close_error is None else -1,
+                        "errno": getattr(close_error, "errno", None)})
+                except BaseException as error:
+                    failure = _c3_first(failure, error)
+                    try:self.recording_work["accounting_incomplete"] = True
+                    except BaseException as later:failure = _c3_first(failure, later)
+            if failure is not None:raise failure
+            return
         failure = None
         for component in reversed(self.components):
             close_error = None
@@ -954,6 +981,8 @@ def _store_rule(uid: int, gid: int, mode: int, directory: bool,
         check.observations[fd] = (access, default)
         return _store_values(uid, gid, mode, directory, _stat_values(state), access, default, sys.platform)
     check.observations = {}
+    try:check._storage_ancestor_rule = True
+    except MemoryError:pass
     return check
 
 def _read_parent_fd(fd: int) -> bytes:
@@ -2208,7 +2237,7 @@ class Anchor:
         acquired = []
         for item in held:
             components = []
-            for component in item.components:
+            for component_index, component in enumerate(item.components):
                 row = {"name": None if component.name is None else os.fsencode(component.name).hex(),
                        "before": _stat_values(component.before),
                        "after": None if component.after is None else _stat_values(component.after),
@@ -2216,6 +2245,12 @@ class Anchor:
                 observed_acl = getattr(component.rule, "observations", {}).get(component.fd)
                 if observed_acl is not None:
                     row.update(access_acl=observed_acl[0], default_acl=observed_acl[1])
+                elif (failure is None and component_index < len(item.components) - 1
+                        and getattr(component.rule, "_storage_ancestor_rule", False)
+                        and any(code is getattr(component.rule, "__code__", None)
+                                for code in _store_rule.__code__.co_consts)):
+                    row.update(access_acl={"state": "not-observed-by-ancestor-rule"},
+                               default_acl={"state": "not-observed-by-ancestor-rule"})
                 components.append(row)
             acquired.append({"path": os.fsencode(item.path).hex(), "components": components})
         self.private_observations.setdefault("storage_reads", []).append(
@@ -2387,8 +2422,21 @@ def verifier_observation(anchor: Anchor, environment_id: str, target_repository_
     _require(verifier_sha in accepted[0]["identities"]["verifier"], "E_RELATION")
     anchor.recheck("E_RELATION")
     environment_entry_sha = _verifier_registry_entry_sha(registry[0])
-    return _verifier_observation_values(environment_id, environment_entry_sha, anchor.accepted[0],
+    raw = _verifier_observation_values(environment_id, environment_entry_sha, anchor.accepted[0],
                                         target_repository_id, verifier_sha)
+    if getattr(anchor, "scope_runtime_owner", None) is not None:
+        first = None
+        try:anchor.scope_verifier_input = (verifier_raw, verifier)
+        except BaseException as error:
+            if isinstance(error, KeyboardInterrupt) or getattr(error, "_scope_signal_cancel", False):first = error
+            try:
+                anchor.private_observations["unusable"] = True
+                _capture_observation_error(anchor.recording_work, "M", "scope-verifier-input", error)
+            except BaseException as observed:
+                if first is None and (isinstance(observed, KeyboardInterrupt) or getattr(observed, "_scope_signal_cancel", False)):
+                    first = observed
+            if first is not None:raise first
+    return raw
 
 def _sudo_storage_row_values(name, component, directory_names=None):
     acl = getattr(component.rule, "observations", {}).get(component.fd)
@@ -2422,6 +2470,41 @@ def _sudo_storage_projection_values(storage_reads, attempt_id):
             "directory_names": None, "read_error": None})
     _require(value["entries"] == [output[-1]], "E_STORE")
     return output
+
+
+def _store_ancestor_storage_values(acquisition):
+    _require(type(acquisition) is dict and set(acquisition) == {"attempt_id", "entries", "held", "error"}
+        and acquisition["error"] is None and type(acquisition["held"]) is list
+        and 1 <= len(acquisition["held"]) <= 256, "E_STORE")
+    result = []
+    for wrapper in acquisition["held"]:
+        _require(type(wrapper) is dict and set(wrapper) == {"path", "components"}
+            and type(wrapper["components"]) is list and 2 <= len(wrapper["components"]) <= 256, "E_STORE")
+        path = b"/"
+        for index, component in enumerate(wrapper["components"]):
+            _require(type(component) is dict and set(component) == {"name", "before", "after", "named_after",
+                "access_acl", "default_acl"}, "E_STORE")
+            name = component["name"]
+            if index == 0:_require(name is None, "E_STORE")
+            else:
+                _require(type(name) is str and len(name) % 2 == 0 and 0 < len(name) <= 8192
+                    and all(char in "0123456789abcdef" for char in name), "E_STORE")
+                raw_name = bytes.fromhex(name)
+                _require(raw_name not in {b".", b".."} and b"/" not in raw_name and b"\0" not in raw_name, "E_STORE")
+                path = path.rstrip(b"/") + b"/" + raw_name
+            _require(_identity_values(component["before"]) == _identity_values(component["after"])
+                == _identity_values(component["named_after"]), "E_STORE")
+            sentinel = {"state": "not-observed-by-ancestor-rule"}
+            unobserved = component["access_acl"] == sentinel or component["default_acl"] == sentinel
+            _require(not unobserved or index < len(wrapper["components"]) - 1
+                and component["access_acl"] == component["default_acl"] == sentinel, "E_STORE")
+            if index < len(wrapper["components"]) - 1:
+                result.append({"role": "store", "name": path.hex(), "before": component["before"],
+                    "after": component["after"], "named_after": component["named_after"],
+                    "access_acl": component["access_acl"], "default_acl": component["default_acl"],
+                    "directory_names": None, "read_error": None})
+        _require(path.hex() == wrapper["path"], "E_STORE")
+    return result
 
 
 def _sudo_storage_stat_values(storage_rows, platform):
@@ -2687,6 +2770,937 @@ def _capture_envelope_values(attempt_id, launch_raw, groups):
         "body": {"request_sha256": digest(launch_raw), "raw": groups, "complete": True}})
 
 
+_C3_SCALARS = ("read_bytes", "write_bytes", "physical_bytes", "files", "export_read_bytes",
+    "export_write_bytes", "export_physical_bytes", "export_files", "close_calls", "held_close_calls",
+    "observation_calls")
+_C3_CLASSES = ("L", "W", "M", "raw", "unresolved")
+_C3_CLASS_FIELDS = ("logical_bytes", "read_bytes", "write_bytes", "physical_bytes", "files", "occurrences")
+_C3_PROCESSING = ("R", "W", "H", "E", "C")
+_C3_CASES = ("malicious.incident-symptom-text", "malicious.checked-file-bytes",
+    "malicious.commit-message", "malicious.unread-forge-text")
+_C3_U64 = 1 << 64
+
+
+def _c3_values_vector(values):
+    _require(type(values) is dict and set(values) == set(_C3_SCALARS)
+        | {"runtime", "accounting", "seed_processing"}, "E_LIMIT")
+    _require(type(values["runtime"]) is dict and set(values["runtime"]) == set(_RUNTIME_FIELDS)
+        and type(values["accounting"]) is dict and set(values["accounting"]) == set(_C3_CLASSES)
+        and type(values["seed_processing"]) is dict
+        and set(values["seed_processing"]) == set(_C3_PROCESSING), "E_LIMIT")
+    vector = [values[key] for key in _C3_SCALARS]
+    vector.extend(values["runtime"][key] for key in _RUNTIME_FIELDS)
+    for kind in _C3_CLASSES:
+        category = values["accounting"][kind]
+        _require(type(category) is dict and set(category) == set(_C3_CLASS_FIELDS), "E_LIMIT")
+        vector.extend(category[key] for key in _C3_CLASS_FIELDS)
+    vector.extend(values["seed_processing"][key] for key in _C3_PROCESSING)
+    _require(len(vector) == 55 and all(type(value) is int and 0 <= value < _C3_U64
+                                      for value in vector), "E_LIMIT")
+    return tuple(vector)
+
+
+def _c3_vector_values(vector):
+    _require(type(vector) in (tuple, list) and len(vector) == 55
+        and all(type(value) is int and 0 <= value < _C3_U64 for value in vector), "E_LIMIT")
+    return dict(zip(_C3_SCALARS, vector[:11])) | {
+        "runtime": dict(zip(_RUNTIME_FIELDS, vector[11:20])),
+        "accounting": {kind: dict(zip(_C3_CLASS_FIELDS, vector[20 + index * 6:26 + index * 6]))
+                       for index, kind in enumerate(_C3_CLASSES)},
+        "seed_processing": dict(zip(_C3_PROCESSING, vector[50:55]))}
+
+
+def _c3_work_values(work):
+    values = {key: work.get(key) for key in _C3_SCALARS}
+    values.update(runtime=work.get("runtime"), accounting=work.get("accounting"),
+                  seed_processing=work.get("seed_processing"))
+    return _c3_vector_values(_c3_values_vector(values))
+
+
+def _c3_fresh_work(actor):
+    _require(type(actor) is int and 0 <= actor <= 4, "E_RELATION")
+    work = _c3_vector_values((0,) * 55)
+    work["calls"] = {}
+    work["accounting_owner"] = "C3-driver" if actor == 0 else "C3-case-" + str(actor - 1)
+    return work
+
+
+def _c3_values_delta(current, before):
+    left, right = _c3_values_vector(current), _c3_values_vector(before)
+    _require(all(value >= prior for value, prior in zip(left, right)), "E_LIMIT")
+    return _c3_vector_values(tuple(value - prior for value, prior in zip(left, right)))
+
+
+def _c3_values_sum(values):
+    total = [0] * 55
+    for value in values:
+        vector = _c3_values_vector(value)
+        total = [left + right for left, right in zip(total, vector)]
+        _require(all(value < _C3_U64 for value in total), "E_LIMIT")
+    return _c3_vector_values(total)
+
+
+def _c3_values_room(values, *, window):
+    _c3_values_vector(values)
+    _require(type(window) is bool, "E_LIMIT")
+    _capture_copy_room(values, 0, False, case=not window)
+    _require(values["files"] <= 256 and values["export_files"] <= (64 if window else 16), "E_LIMIT")
+    for field, limit in _RUNTIME_FIELDS.items():
+        _require(values["runtime"][field] <= limit * (4 if window else 1), "E_LIMIT")
+    _require(not any(values["accounting"]["unresolved"].values()), "E_LIMIT")
+
+
+def _c3_work_grant_room(work, grant):
+    actual, reserved = _c3_values_vector(_c3_work_values(work)), _c3_values_vector(grant)
+    _require(all(value <= limit for value, limit in zip(actual, reserved)), "E_LIMIT")
+
+
+def _c3_done_values(raw, ordinal, actor, end_length):
+    _require(type(raw) is bytes and len(raw) == 512, "E_RELATION")
+    magic, operation, sender, size, written, *rest = struct.unpack(">8s59Q32s", raw)
+    _require(magic == b"YC3DONE1" and operation == ordinal and sender == actor
+        and size == end_length and written == 4 + end_length and rest[-1] == bytes(32), "E_RELATION")
+    return _c3_vector_values(tuple(rest[:-1]))
+
+
+def _c3_done_bytes(ordinal, actor, end_length, end_written, tail):
+    _require(type(ordinal) is int and 0 <= ordinal < 3
+        and type(actor) is int and 0 <= actor <= 4
+        and type(end_length) is int and 0 < end_length <= DOCUMENT_LIMIT
+        and type(end_written) is int and end_written == 4 + end_length, "E_RELATION")
+    return struct.pack(">8s59Q32s", b"YC3DONE1", ordinal, actor, end_length, end_written,
+                       *_c3_values_vector(tail), bytes(32))
+
+
+def _c3_close_tail_values(actor, observation_ordinal):
+    _require(type(actor) is int and 0 <= actor <= 4
+        and type(observation_ordinal) is int and 0 <= observation_ordinal < _C3_U64 - 2, "E_LIMIT")
+    work = _c3_fresh_work(actor)
+    work["observation_calls"] = observation_ordinal
+    owner = work["accounting_owner"]
+    prefix = "C3-driver" if actor == 0 else "C3-case"
+    rows = []
+    for index, stream in enumerate(("stderr", "stdout"), 1):
+        row = {"owner": owner, "ordinal": observation_ordinal + index, "kind": "M", "site": "close",
+               "value": {"site": prefix + "." + stream, "return": 0, "errno": None}}
+        encoded = canonical(row)
+        size = len(encoded)
+        work["read_bytes"] += 3 * size - 2
+        work["close_calls"] += 1
+        work["observation_calls"] += 1
+        work["accounting"]["M"]["read_bytes"] += 3 * size - 2
+        work["accounting"]["M"]["logical_bytes"] += size
+        work["accounting"]["M"]["occurrences"] += 1
+        rows.append(row)
+    work["observation_calls"] -= observation_ordinal
+    return _c3_work_values(work), rows
+
+
+def _c3_first(first, later):
+    cancelled = lambda error: isinstance(error, KeyboardInterrupt) or getattr(error, "_scope_signal_cancel", False)
+    return later if first is None or cancelled(later) and not cancelled(first) else first
+
+
+def _c3_encode_values(value, work):
+    before = work["read_bytes"]
+    first, raw = None, None
+    work["C3_encoding_incomplete"] = True
+    work["_c3_encoding_processing"] = True
+    try:
+        raw = _private_capture_observations(value, work, work)
+    except BaseException as error:
+        first = error
+    try:
+        _capture_account(work, "M", "read_bytes", work["read_bytes"] - before)
+        work["seed_processing"]["R"] += work["read_bytes"] - before
+        if raw is not None:
+            _capture_account(work, "M", "logical_bytes", len(raw))
+            _capture_account(work, "M", "occurrences", 1)
+    except BaseException as error:
+        first = _c3_first(first, error)
+    work.pop("_c3_encoding_processing", None)
+    if first is not None:
+        raise first
+    del work["C3_encoding_incomplete"]
+    return raw
+
+
+def _c3_json_values(raw, work):
+    _require(type(raw) is bytes and 0 < len(raw) <= DOCUMENT_LIMIT, "E_LIMIT")
+    _capture_copy_room(work, len(raw), False, read_only=True, case=True)
+    work["C3_parse_incomplete"] = True
+    work["read_bytes"] += len(raw)
+    _capture_account(work, "M", "read_bytes", len(raw))
+    work["seed_processing"]["R"] += len(raw)
+    value = _json(raw, DOCUMENT_LIMIT, "E_PARSE")
+    rebuilt = _c3_encode_values(value, work)
+    work["seed_processing"]["E"] += len(raw)
+    _require(rebuilt == raw, "E_CANONICAL")
+    del work["C3_parse_incomplete"]
+    return value
+
+
+def _c3_source_closure_values(launcher_raw):
+    import re
+    import shlex
+    _require(type(launcher_raw) is bytes and len(launcher_raw) <= DOCUMENT_LIMIT, "E_STALE")
+    text = launcher_raw.decode("utf-8")
+    generation = re.findall(r"^generation=(g-[0-9a-f]{64})$", text, re.M)
+    marker = "\nshadow_source_rows() {\n"
+    _require(len(generation) == 1 and text.count(marker) == 1, "E_STALE")
+    body = text.split(marker, 1)[1].split("\n}\n", 1)[0]
+    marker = "/usr/bin/printf '%s\\n'"
+    _require(body.count(marker) == 1, "E_STALE")
+    entries = shlex.split(body.split(marker, 1)[1].replace("\\\n", ""))
+    _require(len(entries) == 84 and len(set(entries)) == 84, "E_STALE")
+    table = ("\n".join(entry.replace("${record_generation}", generation[0]) for entry in entries) + "\n").encode()
+    return table
+
+
+def _c3_hex_digest(value):
+    return type(value) is str and len(value) == 64 and all(char in "0123456789abcdef" for char in value)
+
+
+def _c3_input_bindings_values(value, actor):
+    _require(type(value) is dict and type(actor) is int and 0 <= actor <= 4, "E_RELATION")
+    if actor:
+        keys = {"slot", "case_id", "case_document_sha256", "manifest_sha256", "core_sha256", "window_sha256"}
+        _require(set(value) == keys and type(value["slot"]) is int and value["slot"] == actor - 1
+            and value["case_id"] == _C3_CASES[actor - 1]
+            and all(_c3_hex_digest(value[key]) for key in keys - {"slot", "case_id"}), "E_RELATION")
+    else:
+        _require(set(value) == {"seed_sha256s", "result_sha256s", "evaluator_sha256",
+            "source_closure_sha256", "cases", "work_identity"}
+            and type(value["cases"]) is list and 1 <= len(value["cases"]) <= 4
+            and all(_c3_hex_digest(value[key]) for key in ("evaluator_sha256", "source_closure_sha256")), "E_RELATION")
+        for key in ("seed_sha256s", "result_sha256s"):
+            _require(type(value[key]) is list and len(value[key]) <= 2
+                and all(_c3_hex_digest(item) for item in value[key]), "E_RELATION")
+        slots = []
+        for row in value["cases"]:
+            _require(type(row) is dict and set(row) == {"slot", "case_id", "manifest_size", "manifest_sha256", "core_sha256"}
+                and type(row["slot"]) is int and 0 <= row["slot"] < 4
+                and row["case_id"] == _C3_CASES[row["slot"]]
+                and type(row["manifest_size"]) is int and 0 < row["manifest_size"] <= DOCUMENT_LIMIT
+                and _c3_hex_digest(row["manifest_sha256"]) and _c3_hex_digest(row["core_sha256"]), "E_RELATION")
+            slots.append(row["slot"])
+        _require(len(set(slots)) == len(slots), "E_RELATION")
+        _identity_values(value["work_identity"])
+    return value
+
+
+_C3_RECEIPT_SLOTS = ("raw", "export", "source", "preparation", "Q")
+_C3_LEDGER_KEYS = {"values", "calls", "observations", "owner_receipts", "retained", "errors", "unknown"}
+
+
+def _c3_owner_receipt_values(slot, value, *, complete=False):
+    _require(slot in _C3_RECEIPT_SLOTS and type(value) is dict, "E_RELATION")
+    if set(value) == {"state"}:
+        _require(value["state"] in {"not-applicable", "unknown"}
+            and (not complete or value["state"] == "not-applicable"), "E_LIMIT")
+        return value
+    if slot == "export":
+        _require(set(value) <= {"consumer.completion-reread", "consumer.held-acquisition",
+            "consumer.independent-sha", "consumer.whole-equality"}, "E_RELATION")
+        total = 0
+        for counter in value.values():
+            _require(type(counter) is dict and set(counter) == {"calls", "read_bytes"}
+                and all(type(number) is int and 0 <= number < _C3_U64 for number in counter.values()), "E_LIMIT")
+            total += counter["read_bytes"]
+        _require(total <= 1536 * DOCUMENT_LIMIT, "E_LIMIT")
+    elif slot == "source":
+        numbers = {"read_bytes", "write_bytes", "sha_bytes", "equality_bytes", "copy_bytes", "physical_bytes",
+            "logical_bytes", "logical_occurrences", "reused_files", "created_files", "prior_physical_bytes",
+            "close_calls", "observation_bytes", "table_bytes", "snapshot_metadata_bytes"}
+        optional = {"launcher_definition_bytes", "launcher_definition_hash_bytes", "accounting_incomplete",
+            "registry_buffer_processing"}
+        _require(numbers | {"rows", "snapshots", "failures", "data_and_close_complete"} <= set(value)
+            and set(value) <= numbers | optional | {"rows", "snapshots", "failures", "data_and_close_complete"}
+            and all(type(value[key]) is int and 0 <= value[key] < _C3_U64 for key in numbers)
+            and type(value["rows"]) is list and len(value["rows"]) <= 65536
+            and type(value["snapshots"]) is list and len(value["snapshots"]) <= 256
+            and type(value["failures"]) is list and len(value["failures"]) <= 4096
+            and type(value["data_and_close_complete"]) is bool, "E_RELATION")
+        sites = {"acl_free", "acl_get_fd_np", "close", "fchmod", "fstat", "fsync", "fsync-directory",
+            "getxattr", "listdir", "mkdir", "named-stat", "open", "read", "scan-stat", "write"}
+        for row in value["rows"]:
+            _require(type(row) is list and row and row[0] in sites and len(row) <= 8, "E_RELATION")
+            for field in row[1:]:
+                _require(field is None or type(field) in (int, bool, str, list, tuple), "E_RELATION")
+                if type(field) in (list, tuple):
+                    _require(len(field) <= 65536 and all(type(item) in (int, str) for item in field), "E_RELATION")
+                elif type(field) is str:_require(len(field) <= 8192, "E_LIMIT")
+        for row in value["snapshots"]:
+            _require(type(row) is dict and set(row) in (
+                {"path", "size_bytes", "source_sha256", "source_identity", "snapshot_identity", "reused"},
+                {"path", "size_bytes", "source_sha256", "source_identity", "snapshot_identity", "reused",
+                 "final_source_sha256", "snapshot_sha256"})
+                and type(row["path"]) is str and 0 < len(row["path"]) <= 4096
+                and type(row["size_bytes"]) is int and 0 <= row["size_bytes"] <= DOCUMENT_LIMIT
+                and type(row["reused"]) is bool and _c3_hex_digest(row["source_sha256"]), "E_RELATION")
+            for name in ("source_identity", "snapshot_identity"):
+                _require(type(row[name]) in (tuple, list) and len(row[name]) == 10
+                    and all(type(number) is int for number in row[name]), "E_RELATION")
+            for name in ("final_source_sha256", "snapshot_sha256"):
+                if name in row:_require(_c3_hex_digest(row[name]) and row[name] == row["source_sha256"], "E_RELATION")
+        if complete:
+            _require(value["data_and_close_complete"] and not value["failures"]
+                and not value.get("accounting_incomplete", False)
+                and value.get("registry_buffer_processing") != "UNKNOWN", "E_LIMIT")
+    else:
+        keys = {"transferred_totals", "classes", "unclassified_recorded_read_bytes", "cases", "observations",
+            "failures", "incomplete", "runtime", "runtime_Q", "host_publication_work", "complete"}
+        _require(set(value) == keys and type(value["transferred_totals"]) is dict
+            and set(value["transferred_totals"]) == set(_C3_SCALARS)
+            and all(type(number) is int and 0 <= number < _C3_U64 for number in value["transferred_totals"].values())
+            and type(value["classes"]) is dict and set(value["classes"]) <= set(_C3_CLASSES)
+            and type(value["runtime"]) is dict and set(value["runtime"]) <= set(_RUNTIME_FIELDS)
+            and type(value["cases"]) is dict and len(value["cases"]) <= 256
+            and type(value["observations"]) is list and len(value["observations"]) <= 65536
+            and type(value["failures"]) is list and len(value["failures"]) <= 4096
+            and type(value["incomplete"]) is dict and type(value["complete"]) is bool, "E_RELATION")
+        for counter in value["classes"].values():
+            _require(type(counter) is dict and set(counter) <= set(_C3_CLASS_FIELDS)
+                and all(type(number) is int and 0 <= number < _C3_U64 for number in counter.values()), "E_LIMIT")
+        _require(all(type(number) is int and 0 <= number < _C3_U64 for number in value["runtime"].values()), "E_LIMIT")
+        if complete:
+            _require(value["complete"] and not value["incomplete"] and not value["failures"]
+                and value["unclassified_recorded_read_bytes"] == 0
+                and value["runtime_Q"] != "UNKNOWN" and value["host_publication_work"] != "UNKNOWN", "E_LIMIT")
+    return value
+
+
+_C3_OBSERVATION_KEYS = {
+    'C2.control.read': (('category', 'errno', 'return'),),
+    'C2.root': (('category', 'errno', 'return'),),
+    'C2.scratch-cleanup': (('path', 'return'),),
+    'C2.scratch-create': (('path',),),
+    'C3.driver-failed-wait': (('pid', 'status'),),
+    'C3.driver-spawn': (('actions', 'pid'),),
+    'C3.driver-wait': (('pid', 'status'),),
+    'T-native-cleanup-after': (('after', 'before', 'namespace', 'removed'),),
+    'T-native-cleanup-before': (('namespace', 'parent', 'parent_namespace', 'root'),),
+    'T-native-cleanup-returned': (('caller_returned', 'name'),),
+    'T-native-inspection-returned': (('after_namespace', 'before_namespace', 'caller_returned', 'root'),),
+    'T-parent-chain-transition': (('namespace', 'root_stat', 'transition'),),
+    'T-workparent-before': (('namespace', 'stat'),),
+    'acl': (('access', 'default'),),
+    'capture-storage-retention': (('category', 'errno', 'return'),),
+    'close': (('errno', 'return', 'site'),),
+    'companion-close': (('category', 'errno', 'return'),),
+    'completion-secondary': (('category', 'errno', 'return'),),
+    'dup': (('fd', 'source_fd'),),
+    'fstat': (('fd', 'stat'),),
+    'fstat-error': (('category', 'errno', 'return'),),
+    'held-close': (('errno', 'return'),),
+    'listdir': (('fd', 'names'),),
+    'offline-child-pipe': (('fds', 'role', 'stream'),),
+    'offline-child-read': (('return', 'role', 'stream'),),
+    'offline-child-spawn': (('argv', 'environment_keys', 'pid', 'role'),),
+    'offline-child-stop': (('pid', 'return', 'role', 'signal'),),
+    'offline-child-wait': (('pid', 'return', 'role'),),
+    'offline-child-write': (('return', 'role'),),
+    'open-child': (('fd', 'flags', 'name'),),
+    'replay-I': (('category', 'errno', 'return'),),
+    'replay-I-member': (('file', 'kind', 'member', 'occurrence', 'role', 'sha256', 'size_bytes'),),
+    'replay-derived-create': (('name', 'return'),),
+    'replay-derived-partial': (('name', 'written_bytes'),),
+    'replay-derived-write': (('name', 'return', 'written_bytes'),),
+    'replay-git-close': (('errno', 'return'),),
+    'replay-git-directory': (('path', 'return'),),
+    'runtime-source-acl': (('access', 'default', 'fd'),),
+    'scope-anchor-parent-close': (('category', 'errno', 'return'),),
+    'scope-native-sudo-close': (('category', 'errno', 'return'),),
+    'scope-replay-output': (('group', 'ordinal', 'record_bytes'),),
+    'scope-runtime-value': (('category', 'errno', 'return'),),
+    'scope-source-configuration': (('category', 'errno', 'return'),),
+    'scope-source-configuration-parent-close': (('category', 'errno', 'return'),),
+    'scope-sudo-dup': (('category', 'errno', 'return'), ('return', 'source_fd')),
+    'scope-verifier-input': (('category', 'errno', 'return'),),
+    'seed-bundle-namespace': (('names',),),
+    'seed-close': (('errno', 'return'),),
+    'seed-export-directory': (('errno', 'return'),),
+    'seed-root-acl': (('access', 'default'),),
+    'seed-semantic-member': (('file', 'kind', 'member', 'occurrence', 'role', 'sha256', 'size_bytes'),),
+    'seed-source-acl': (('access', 'default'),),
+    'source-storage-retention': (('category', 'errno', 'return'),),
+    'stat-nofollow': (('name', 'parent_fd', 'stat'),),
+    'stat-nofollow-error': (('category', 'errno', 'return'),),
+    'sudo-storage-retention': (('category', 'errno', 'return'),),
+}
+_C3_CLOSE_SITES = ('C2.clone-root-pending', 'C2.copy-failed-writer', 'C2.copy-writer', 'C2.driver-input-source-close', 'C2.receipt-failed-writer', 'C2.receipt-writer', 'C2.root-descriptor', 'C2.stdin', 'C3.driver-parent-end', 'C3.driver-pending-close', 'C3.driver-pipe-close', 'held-pending-close', 'held-rows-close', 'offline-preparation-boundary', 'preparation-capture-writer', 'preparation-document-close', 'qualified-runtime', 'replay-derived-write', 'scope-sudo-dup-compensation', 'source-configuration-directory', 'source-configuration-held-close', 'sudo-storage-P-close', 'sudo-storage-original-close')
+
+
+def _c3_ledger_values(work, owner_receipts, retained, errors, unknown):
+    values = _c3_work_values(work)
+    _require(type(work.get("calls")) is dict and type(work.get("accounting_rows", [])) is list
+        and type(owner_receipts) is dict and set(owner_receipts) == set(_C3_RECEIPT_SLOTS)
+        and type(retained) is list and len(retained) <= 256
+        and type(errors) is list and len(errors) <= 4096
+        and type(unknown) is list and len(unknown) <= 4096, "E_LIMIT")
+    for name, amount in work["calls"].items():
+        _require(name in {"consumer-json-buffer", "capture.json", "complete.json", "consumer.json", "binding.json",
+            "sandbox-export.bin"} and type(amount) is int and 0 <= amount < _C3_U64, "E_RELATION")
+    rows = work.get("accounting_rows", [])
+    _require(len(rows) <= 65536, "E_LIMIT")
+    for row in rows:
+        _require(type(row) is dict and set(row) == {"owner", "ordinal", "kind", "site", "value"}
+            and type(row["owner"]) is str and 0 < len(row["owner"]) <= 256
+            and type(row["ordinal"]) is int and 0 < row["ordinal"] < _C3_U64
+            and row["kind"] in _C3_CLASSES and type(row["site"]) is str
+            and 0 < len(row["site"]) <= 256 and type(row["value"]) is dict, "E_RELATION")
+        _require(row["site"] in _C3_OBSERVATION_KEYS
+            and tuple(sorted(row["value"])) in _C3_OBSERVATION_KEYS[row["site"]], "E_RELATION")
+        if row["site"] == "fstat":_identity_values(row["value"]["stat"])
+        elif row["site"] == "stat-nofollow":_identity_values(row["value"]["stat"])
+        elif row["site"] == "close":
+            site = row["value"]["site"]
+            _require(site in _C3_CLOSE_SITES or site in {"C3-driver.stderr", "C3-driver.stdout",
+                "C3-case.stderr", "C3-case.stdout"} or type(site) is str and site.startswith("offline-child/"), "E_RELATION")
+    for row in retained:
+        _require(type(row) is dict and set(row) == {"root", "member", "creation_ordinal", "kind",
+            "initial_identity", "last_identity", "size_bytes", "state"}
+            and row["root"] in {"I", "privatework", "runtime"}
+            and type(row["member"]) is str and len(row["member"]) <= 8192
+            and len(row["member"]) % 2 == 0 and all(char in "0123456789abcdef" for char in row["member"])
+            and type(row["creation_ordinal"]) is int and 0 <= row["creation_ordinal"] < _C3_U64
+            and row["kind"] in {"L", "W", "M", "raw", "unresolved", "runtime", "export", "recorded"}
+            and type(row["size_bytes"]) is int and 0 <= row["size_bytes"] < _C3_U64
+            and row["state"] in {"present", "removed", "unknown"}, "E_RELATION")
+        for name in ("initial_identity", "last_identity"):
+            if row[name] is not None:_identity_values(row[name])
+    for row in errors:
+        _require(type(row) is dict and set(row) == {"owner", "site", "ordinal", "category", "errno", "cancelled"}
+            and all(type(row[key]) is str and 0 < len(row[key]) <= 256 for key in ("owner", "site", "category"))
+            and type(row["ordinal"]) is int and 0 <= row["ordinal"] < _C3_U64
+            and (row["errno"] is None or type(row["errno"]) is int and 0 < row["errno"] < 4096)
+            and type(row["cancelled"]) is bool, "E_RELATION")
+    _require(all(type(value) is str and 0 < len(value) <= 256 for value in unknown), "E_RELATION")
+    for name in _C3_RECEIPT_SLOTS:
+        value = owner_receipts[name]
+        _c3_owner_receipt_values(name, value)
+    return {"values": values, "calls": dict(work["calls"]), "observations": list(rows),
+        "owner_receipts": dict(owner_receipts), "retained": list(retained), "errors": list(errors), "unknown": list(unknown)}
+
+
+def _c3_ledger_check(value):
+    _require(type(value) is dict and set(value) == _C3_LEDGER_KEYS, "E_RELATION")
+    work = dict(value["values"])
+    work.update(calls=value["calls"], accounting_rows=value["observations"])
+    _c3_ledger_values(work, value["owner_receipts"], value["retained"], value["errors"], value["unknown"])
+    return value
+
+
+def _c3_ledger_complete(value):
+    _c3_ledger_check(value)
+    _require(not value["errors"] and not value["unknown"]
+        and all(row["state"] != "unknown" for row in value["retained"]), "E_LIMIT")
+    for name, receipt in value["owner_receipts"].items():
+        _c3_owner_receipt_values(name, receipt, complete=True)
+    _require(not any(value["values"]["accounting"]["unresolved"].values()), "E_LIMIT")
+    return value
+
+
+def _c3_budget_values(raw, actor, ordinal, mode, window_sha256, input_bindings, work):
+    budget = _c3_json_values(raw, work)
+    _require(type(budget) is dict and set(budget) == {"version", "window_sha256", "ordinal", "mode",
+        "start_sha256", "ready_sha256", "go_sha256", "predecessor_sha256", "root_identity",
+        "input_bindings", "sequence", "cutoff", "reserved_parent", "grants"}
+        and type(budget["version"]) is int and budget["version"] == 1
+        and type(ordinal) is int and 0 <= ordinal < 3 and budget["ordinal"] == ordinal
+        and type(budget["ordinal"]) is int and mode in {"run", "dashboard"} and budget["mode"] == mode
+        and budget["window_sha256"] == window_sha256
+        and all(_c3_hex_digest(budget[key]) for key in ("window_sha256", "start_sha256", "ready_sha256",
+            "go_sha256", "predecessor_sha256")), "E_RELATION")
+    _identity_values(budget["root_identity"])
+    _c3_input_bindings_values(budget["input_bindings"], 0)
+    sequence = budget["sequence"]
+    _require(type(sequence) is list and 1 <= len(sequence) <= 4, "E_RELATION")
+    actors, scopes = [0], ["common"]
+    for index, row in enumerate(sequence):
+        _require(type(row) is dict and set(row) == {"slot", "case_id", "pair"}
+            and type(row["slot"]) is int and 0 <= row["slot"] < 4
+            and row["case_id"] == _C3_CASES[row["slot"]]
+            and (row["pair"] is None if mode == "run" else type(row["pair"]) is int and row["pair"] in {0, 1})
+            and (mode == "run" or index == 0 or sequence[index - 1]["pair"] <= row["pair"]), "E_RELATION")
+        actors.append(row["slot"] + 1);scopes.append(row["case_id"])
+    _require(len(set(actors)) == len(actors)
+        and [row["case_id"] for row in budget["input_bindings"]["cases"]] == scopes[1:]
+        and len(budget["input_bindings"]["seed_sha256s"]) == (1 if mode == "run" else 2)
+        and len(budget["input_bindings"]["result_sha256s"]) == (0 if mode == "run" else 2), "E_RELATION")
+    _require(type(actor) is int and actor in actors, "E_RELATION")
+    _c3_input_bindings_values(input_bindings, actor)
+    if actor:
+        row = budget["input_bindings"]["cases"][actors.index(actor) - 1]
+        _require(all(input_bindings[key] == row[key] for key in ("slot", "case_id", "manifest_sha256", "core_sha256"))
+            and input_bindings["window_sha256"] == window_sha256, "E_RELATION")
+    else:_require(input_bindings == budget["input_bindings"], "E_RELATION")
+    _require(type(budget["reserved_parent"]) is dict and set(budget["reserved_parent"]) == set(scopes)
+        and type(budget["grants"]) is list and len(budget["grants"]) == len(actors), "E_RELATION")
+    for scope in scopes:_c3_values_vector(budget["reserved_parent"][scope])
+    for grant, expected in zip(budget["grants"], actors):
+        expected_scopes = scopes if expected == 0 else [_C3_CASES[expected - 1]]
+        _require(type(grant) is dict and set(grant) == {"actor", "scopes", "bootstrap", "body", "terminal"}
+            and type(grant["actor"]) is int and grant["actor"] == expected and grant["scopes"] == expected_scopes, "E_RELATION")
+        for phase in ("bootstrap", "body", "terminal"):
+            _require(type(grant[phase]) is dict and set(grant[phase]) == set(expected_scopes), "E_RELATION")
+            for scope in expected_scopes:_c3_values_vector(grant[phase][scope])
+    cutoff = budget["cutoff"]
+    _require(type(cutoff) is dict and set(cutoff) == {"window", "common", "cases"}
+        and type(cutoff["cases"]) is dict and set(cutoff["cases"]) <= set(_C3_CASES)
+        and set(scopes[1:]) <= set(cutoff["cases"]), "E_RELATION")
+    _c3_values_vector(cutoff["window"])
+    _c3_ledger_complete(cutoff["common"])
+    for ledger in cutoff["cases"].values():_c3_ledger_complete(ledger)
+    added = []
+    for scope in scopes:
+        portions = [budget["reserved_parent"][scope]]
+        portions.extend(grant[phase][scope] for grant in budget["grants"] if scope in grant["scopes"]
+                        for phase in ("bootstrap", "body", "terminal"))
+        addition = _c3_values_sum(portions)
+        prior = cutoff["common"]["values"] if scope == "common" else cutoff["cases"][scope]["values"]
+        _c3_values_room(_c3_values_sum([prior, addition]), window=False)
+        added.append(addition)
+    _c3_values_room(_c3_values_sum([cutoff["window"], *added]), window=True)
+    return budget
+
+
+def _c3_grant_room(budget, actor, scope, phase, current_named, increment_named):
+    _require(type(actor) is int and 0 <= actor <= 4 and phase in {"bootstrap", "body", "terminal"}, "E_LIMIT")
+    grants = [row for row in budget["grants"] if row["actor"] == actor]
+    _require(len(grants) == 1 and scope in grants[0]["scopes"], "E_RELATION")
+    grant = grants[0]
+    phases = ("bootstrap",) if phase == "bootstrap" else ("bootstrap", "body") if phase == "body" else ("bootstrap", "body", "terminal")
+    available = _c3_values_sum([grant[key][scope] for key in phases])
+    actual = _c3_values_sum([current_named, increment_named])
+    _require(all(value <= limit for value, limit in zip(_c3_values_vector(actual), _c3_values_vector(available))), "E_LIMIT")
+    _c3_values_room(actual, window=False)
+    return actual
+
+
+def _c3_binding_room(work, increment):
+    binding = work.get("_c3_grant_binding")
+    if binding is None:return
+    _require(type(binding) is tuple and len(binding) == 4, "E_LIMIT")
+    budget, actor, scope, phase = binding
+    _c3_grant_room(budget, actor, scope, phase, _c3_work_values(work), increment)
+
+
+def _c3_encoding_room(work, amount, logical, before_read):
+    if "_c3_grant_binding" not in work:return
+    increment = _c3_vector_values((0,) * 55)
+    increment["read_bytes"] = amount
+    kind = work.get("_c3_encoding_kind", "M")
+    _require(kind in _C3_CLASSES, "E_LIMIT")
+    increment["accounting"][kind].update(read_bytes=work["read_bytes"] - before_read + amount,
+        logical_bytes=logical, occurrences=1)
+    if work.get("_c3_encoding_processing", False):
+        increment["seed_processing"]["R"] = work["read_bytes"] - before_read + amount
+    _c3_binding_room(work, increment)
+
+
+def _c3_bind_work(work, budget, actor, scope, phase):
+    _require(type(actor) is int and 0 <= actor <= 4 and phase in {"bootstrap", "body", "terminal"}, "E_RELATION")
+    grants = [grant for grant in budget["grants"] if grant["actor"] == actor]
+    _require(len(grants) == 1 and scope in grants[0]["scopes"], "E_RELATION")
+    cutoff = budget["cutoff"]
+    prior = cutoff["common"]["values"] if scope == "common" else cutoff["cases"][scope]["values"]
+    _c3_grant_room(budget, actor, scope, phase, _c3_work_values(work), _c3_vector_values((0,) * 55))
+    work["_c3_grant_binding"] = (budget, actor, scope, phase)
+    work["_capture_copy_budget"] = _capture_copy_budget_values(work, ((prior, True), (cutoff["window"], False)))
+    work["runtime_case_carry_in"] = prior["runtime"]
+    work["runtime_window_carry_in"] = cutoff["window"]["runtime"]
+
+
+def _c3_processing(work, field, amount):
+    _require(field in _C3_PROCESSING and type(amount) is int and amount >= 0, "E_LIMIT")
+    work["seed_processing"][field] += amount
+    if field == "R":
+        work["read_bytes"] += amount
+        _capture_account(work, "M", "read_bytes", amount)
+    elif field == "W":
+        work["write_bytes"] += amount
+        _capture_account(work, "M", "write_bytes", amount)
+
+
+def _c3_end_values(raw, budget, actor, pid, ppid, input_bindings, data, work):
+    value = _c3_json_values(raw, work)
+    _require(type(value) is dict and set(value) == {"version", "window_sha256", "ordinal", "actor",
+        "budget_sha256", "leaf_pid", "leaf_ppid", "input_bindings", "data", "own", "children", "outcome"}
+        and type(value["version"]) is int and value["version"] == 1
+        and type(value["ordinal"]) is int and value["ordinal"] == budget["ordinal"]
+        and type(value["actor"]) is int and value["actor"] == actor
+        and value["window_sha256"] == budget["window_sha256"]
+        and value["budget_sha256"] == work["_c3_budget_sha"]
+        and type(pid) is int and pid > 0 and type(ppid) is int and ppid > 0
+        and type(value["leaf_pid"]) is int and value["leaf_pid"] == pid
+        and type(value["leaf_ppid"]) is int and value["leaf_ppid"] == ppid
+        and value["outcome"] in {"completed", "refused"}, "E_RELATION")
+    _c3_input_bindings_values(value["input_bindings"], actor)
+    _require(value["input_bindings"] == input_bindings
+        and type(value["data"]) is dict and set(value["data"]) == {"size_bytes", "sha256"}
+        and type(value["data"]["size_bytes"]) is int and 0 < value["data"]["size_bytes"] <= DOCUMENT_LIMIT
+        and _c3_hex_digest(value["data"]["sha256"]), "E_RELATION")
+    if data is not None:
+        _require(type(data) is bytes and len(data) == value["data"]["size_bytes"], "E_RELATION")
+        measured = digest(data)
+        _c3_processing(work, "H", len(data))
+        _require(measured == value["data"]["sha256"], "E_RELATION")
+    grants = [grant for grant in budget["grants"] if grant["actor"] == actor]
+    _require(len(grants) == 1 and type(value["own"]) is dict
+        and set(value["own"]) == set(grants[0]["scopes"])
+        and type(value["children"]) is list and (not value["children"] if actor else
+            len(value["children"]) == len(budget["sequence"])), "E_RELATION")
+    for scope, ledger in value["own"].items():
+        _c3_ledger_complete(ledger)
+        _c3_grant_room(budget, actor, scope, "body", ledger["values"], _c3_vector_values((0,) * 55))
+    _require(value["outcome"] == "completed", "E_LIMIT")
+    for child, sequence in zip(value["children"], budget["sequence"]):
+        _require(type(child) is dict and set(child) == {"actor", "pid", "wait_status", "end_hex", "done_hex"}
+            and type(child["actor"]) is int and child["actor"] == sequence["slot"] + 1
+            and type(child["pid"]) is int and child["pid"] > 0
+            and type(child["wait_status"]) is int and child["wait_status"] == 0
+            and type(child["end_hex"]) is str and len(child["end_hex"]) <= 2 * DOCUMENT_LIMIT
+            and len(child["end_hex"]) % 2 == 0
+            and all(char in "0123456789abcdef" for char in child["end_hex"])
+            and type(child["done_hex"]) is str and len(child["done_hex"]) == 1024
+            and all(char in "0123456789abcdef" for char in child["done_hex"]), "E_RELATION")
+    return value
+
+
+def _c3_receive_values(stdout_wire, stderr, wait_status, pid, ppid, budget, actor, input_bindings, receiver_work):
+    _require(type(stdout_wire) is bytes and len(stdout_wire) <= DOCUMENT_LIMIT
+        and stderr == b"" and type(wait_status) is int and wait_status == 0, "E_RELATION")
+    _capture_copy_room(receiver_work, len(stdout_wire), False, read_only=True, case=True)
+    receiver_work["C3_wire_incomplete"] = True
+    _c3_processing(receiver_work, "R", len(stdout_wire))
+    _require(len(stdout_wire) >= 8 + 512, "E_RELATION")
+    size = struct.unpack_from(">I", stdout_wire, 0)[0]
+    _require(0 < size <= DOCUMENT_LIMIT and 4 + size + 4 + 512 <= len(stdout_wire), "E_RELATION")
+    end_size = struct.unpack_from(">I", stdout_wire, 4 + size)[0]
+    offset = 8 + size
+    _require(0 < end_size <= DOCUMENT_LIMIT and offset + end_size + 512 == len(stdout_wire), "E_RELATION")
+    data, end_raw, done = stdout_wire[4:4 + size], stdout_wire[offset:offset + end_size], stdout_wire[-512:]
+    _c3_processing(receiver_work, "C", size + end_size + 512)
+    end = _c3_end_values(end_raw, budget, actor, pid, ppid, input_bindings, data, receiver_work)
+    measured_end = digest(end_raw)
+    _c3_processing(receiver_work, "H", len(end_raw))
+    tail = _c3_done_values(done, budget["ordinal"], actor, len(end_raw))
+    terminal_scope = "common" if actor == 0 else _C3_CASES[actor - 1]
+    expected_tail = _c3_fresh_work(actor)
+    encoding_read = 3 * len(end_raw) - 2
+    expected_tail["read_bytes"] = encoding_read
+    expected_tail["write_bytes"] = 4 + len(end_raw)
+    expected_tail["accounting"]["M"].update(read_bytes=encoding_read,
+        write_bytes=4 + len(end_raw), logical_bytes=4 + len(end_raw), occurrences=2)
+    expected_tail["seed_processing"].update(R=encoding_read, W=4 + len(end_raw), C=4 + len(end_raw))
+    _require(_c3_values_vector(tail) == _c3_values_vector(_c3_work_values(expected_tail)), "E_RELATION")
+    close_start = end["own"][terminal_scope]["values"]["observation_calls"] + tail["observation_calls"]
+    close_values, close_rows = _c3_close_tail_values(actor, close_start)
+    done_cost = _c3_fresh_work(actor)
+    done_cost["write_bytes"] = 512
+    done_cost["accounting"]["M"].update(logical_bytes=512, write_bytes=512, occurrences=1)
+    done_cost["seed_processing"].update(W=512, C=512)
+    terminal = _c3_values_sum([tail, _c3_work_values(done_cost), close_values])
+    _c3_grant_room(budget, actor, terminal_scope, "terminal",
+        end["own"][terminal_scope]["values"], terminal)
+    settlement = {scope: ledger for scope, ledger in end["own"].items()}
+    ledger = dict(settlement[terminal_scope])
+    ledger["values"] = _c3_values_sum([ledger["values"], terminal])
+    ledger["observations"] = list(ledger["observations"]) + close_rows
+    ledger["calls"] = dict(ledger["calls"])
+    ledger["calls"]["consumer-json-buffer"] = ledger["calls"].get("consumer-json-buffer", 0) + 3
+    settlement[terminal_scope] = ledger
+    receiver_work.setdefault("C3_received", []).append({"actor": actor, "pid": pid,
+        "end_sha256": measured_end, "end_raw": end_raw, "done_raw": done})
+    del receiver_work["C3_wire_incomplete"]
+    return data, end, done, settlement
+
+
+def _c3_emit(data, end_document, work, budget, actor):
+    _require(type(data) is bytes and 0 < len(data) <= DOCUMENT_LIMIT
+        and type(end_document) is dict and type(work.get("_c3_scopes")) is dict
+        and type(work.get("_c3_open_regular")) is list and not work["_c3_open_regular"]
+        and type(work.get("_c3_owned_children")) is list and not work["_c3_owned_children"], "E_LIMIT")
+    scopes = work["_c3_scopes"]
+    terminal_scope = "common" if actor == 0 else _C3_CASES[actor - 1]
+    _require(scopes[terminal_scope] is work and set(scopes) == set(end_document["own"]), "E_RELATION")
+    for scope, leaf in scopes.items():
+        _require(not _capture_work_incomplete(leaf)
+            and not any(value for key, value in leaf.items() if key.endswith("_unknown")), "E_LIMIT")
+        _c3_ledger_complete(end_document["own"][scope])
+    def write_frame(raw):
+        _require(type(raw) is bytes and 0 < len(raw) <= DOCUMENT_LIMIT, "E_LIMIT")
+        header = struct.pack(">I", len(raw))
+        _capture_account(work, "M", "logical_bytes", 4)
+        _capture_account(work, "M", "occurrences", 1)
+        for part in (header, raw):
+            offset = 0
+            while offset < len(part):
+                size = min(65536, len(part) - offset)
+                increment = _c3_fresh_work(actor)
+                increment["write_bytes"] = size
+                increment["accounting"]["M"]["write_bytes"] = size
+                increment["seed_processing"].update(W=size, C=size)
+                _c3_grant_room(budget, actor, terminal_scope, "terminal", _c3_work_values(work),
+                               _c3_work_values(increment))
+                _capture_copy_budget_room(work, size, False)
+                work["C3_pipe_write_incomplete"] = True
+                count = os.write(1, memoryview(part)[offset:offset + size])
+                if type(count) is int and count > 0:
+                    _c3_processing(work, "W", count)
+                    _c3_processing(work, "C", count)
+                    offset += count
+                _require(type(count) is int and 0 < count <= size, "E_RUNTIME")
+                del work["C3_pipe_write_incomplete"]
+        return 4 + len(raw)
+    data_sha = digest(data)
+    _c3_processing(work, "H", len(data))
+    written_data = write_frame(data)
+    own = {}
+    for scope, leaf in scopes.items():
+        prior = end_document["own"][scope]
+        own[scope] = _c3_ledger_values(leaf, prior["owner_receipts"], prior["retained"],
+                                     prior["errors"], prior["unknown"])
+        _c3_ledger_complete(own[scope])
+    document = dict(end_document)
+    document.update(version=1, ordinal=budget["ordinal"], actor=actor,
+        window_sha256=budget["window_sha256"], budget_sha256=work["_c3_budget_sha"],
+        leaf_pid=os.getpid(), leaf_ppid=os.getppid(), data={"size_bytes": len(data), "sha256": data_sha}, own=own)
+    cutoff = _c3_work_values(work)
+    end_raw = _c3_encode_values(document, work)
+    _require(written_data + 4 + len(end_raw) + 512 <= DOCUMENT_LIMIT, "E_LIMIT")
+    end_written = write_frame(end_raw)
+    tail = _c3_values_delta(_c3_work_values(work), cutoff)
+    _require(not _capture_work_incomplete(work), "E_LIMIT")
+    close_values, _rows = _c3_close_tail_values(actor, work["observation_calls"])
+    future = _c3_fresh_work(actor)
+    future["write_bytes"] = 512
+    future["accounting"]["M"].update(logical_bytes=512, write_bytes=512, occurrences=1)
+    future["seed_processing"].update(W=512, C=512)
+    _c3_grant_room(budget, actor, terminal_scope, "terminal", _c3_work_values(work),
+        _c3_values_sum([_c3_work_values(future), close_values]))
+    done = _c3_done_bytes(budget["ordinal"], actor, len(end_raw), end_written, tail)
+    _capture_account(work, "M", "logical_bytes", 512)
+    _capture_account(work, "M", "occurrences", 1)
+    count = os.write(1, done)
+    if type(count) is int and count > 0:
+        _c3_processing(work, "W", count)
+        _c3_processing(work, "C", count)
+    _require(type(count) is int and count == 512, "E_RUNTIME")
+    first = None
+    prefix = "C3-driver" if actor == 0 else "C3-case"
+    for fd, stream in ((2, "stderr"), (1, "stdout")):
+        try:_close_capture_copy(fd, work, work, prefix + "." + stream, first)
+        except BaseException as error:first = _c3_first(first, error)
+    if first is not None:
+        raise first
+    _require(not _capture_work_incomplete(work), "E_LIMIT")
+    os._exit(0)
+
+
+def _c3_tool_failure(work, role, error):
+    work["offline_child_incomplete"] = True
+    work.setdefault("C3_tool_errors", []).append({"owner": work["accounting_owner"],
+        "site": role, "ordinal": len(work.get("C3_tool_errors", [])), "category": type(error).__name__,
+        "errno": getattr(error, "errno", None),
+        "cancelled": isinstance(error, KeyboardInterrupt) or getattr(error, "_scope_signal_cancel", False)})
+
+
+def _c3_run_tool(source_root, work, role, argv, *, stdin=b"", timeout=120,
+                 output_limit=1048576, env):
+    from pathlib import Path
+    def _seed_require(value):
+        _require(value, "E_RELATION")
+    import selectors
+    import signal
+    import time
+    roles = {"incident-validation", "materializer-input-validation",
+        "qualified-identity-validation", "materializer-response-validation",
+        "sandbox-receipt-check", "trace-validation", "write-seed-conversion",
+        "write-materialization-input", "sandbox-bound-evaluation",
+        "gate-duty-evaluation", "gate-risk-evaluation", "gate-kill-evaluation",
+        "source-git-inventory", "source-git-commit", "source-git-blob", "candidate-git-inventory", "candidate-git-commit", "candidate-git-blob",
+        "evals-build-values", "evals-check-values", "evals-platform", "evals-driver"}
+    source = Path(source_root)
+    _seed_require(role in roles and type(argv) is list and argv
+        and all(type(value) is str and value for value in argv)
+        and type(stdin) is bytes and type(timeout) in {int, float} and 0 < timeout <= 120
+        and type(output_limit) is int and 0 < output_limit <= (16 if role.endswith("git-inventory") else 8) * 1048576)
+    if argv[0] == "/bin/bash":
+        if role == "evals-driver":
+            _seed_require(len(argv) == 9 and argv[1] == str(source / "driver.sh"))
+        else:
+            _seed_require(len(argv) >= 3 and argv[1] == "-p"
+                and Path(argv[2]).resolve().is_relative_to(source))
+    elif argv[0] == "/usr/bin/uname":
+        _seed_require(role == "evals-platform" and argv in (["/usr/bin/uname", "-s"], ["/usr/bin/uname", "-m"]))
+    elif argv[0] == "/usr/bin/git":
+        _seed_require(role in {"source-git-inventory", "source-git-commit", "source-git-blob", "candidate-git-inventory", "candidate-git-commit", "candidate-git-blob"}
+            and len(argv) >= 5 and argv[1] == "--no-replace-objects" and argv[2].startswith("--git-dir="))
+        arguments = argv[3:]
+        _seed_require((len(arguments) == 6 and arguments[:5] == ["ls-tree", "-r", "-t", "-z", "--full-tree"]
+            and c._writer_oid(arguments[5])) or (len(arguments) == 3 and arguments[0] == "cat-file"
+            and arguments[1] in {"commit", "blob"} and c._writer_oid(arguments[2])))
+    else:
+        _seed_require(argv[0] == str(source / "bin/jq"))
+    c = sys.modules[__name__]
+    incoming = outgoing = diagnostic = None
+    selector = child = None
+    closed = [False, False, False, False, False, False]
+    primary, result = None, None
+    communication_finished = False
+    work["offline_child_internal_unknown"] = True
+    work["accounting_incomplete"] = True
+
+    def close_fd(fd):
+        if incoming is not None and fd == incoming[0]:slot = 0
+        elif incoming is not None and fd == incoming[1]:slot = 1
+        elif outgoing is not None and fd == outgoing[0]:slot = 2
+        elif outgoing is not None and fd == outgoing[1]:slot = 3
+        elif diagnostic is not None and fd == diagnostic[0]:slot = 4
+        elif diagnostic is not None and fd == diagnostic[1]:slot = 5
+        else:raise ValueError("E_RELATION")
+        if closed[slot]:return
+        closed[slot] = True
+        c._close_capture_copy(fd, work, work, "offline-child/" + role, primary)
+
+    def room(amount, reading):
+        c._capture_copy_room(work, amount, False, case=True, read_only=reading)
+        c._capture_copy_budget_room(work, amount, False, read_only=reading)
+
+    def quantum(maximum, reading):
+        size = maximum
+        while True:
+            try:room(size, reading)
+            except c.Refusal as error:
+                if getattr(error, "code", None) != "E_LIMIT" or size <= 1:raise
+                size //= 2
+            else:return size
+
+    def charge(operation, count):
+        failure = None
+        field = "write_bytes" if operation == "W" else "read_bytes"
+        try:work[field] += count
+        except BaseException as error:failure = _c3_first(failure, error)
+        try:
+            counts = work.setdefault("seed_processing", {})
+            counts[operation] = counts.get(operation, 0) + count
+        except BaseException as error:failure = _c3_first(failure, error)
+        try:c._capture_account(work, "M", field, count)
+        except BaseException as error:failure = _c3_first(failure, error)
+        if failure is not None:
+            work["offline_child_accounting_incomplete"] = True
+            raise failure
+
+    try:
+        room(0, True)
+        incoming = os.pipe()
+        c._capture_observe(work, "M", "offline-child-pipe", {"role": role, "stream": "stdin", "fds": incoming})
+        outgoing = os.pipe()
+        c._capture_observe(work, "M", "offline-child-pipe", {"role": role, "stream": "stdout", "fds": outgoing})
+        diagnostic = os.pipe()
+        c._capture_observe(work, "M", "offline-child-pipe", {"role": role, "stream": "stderr", "fds": diagnostic})
+        child = subprocess.Popen(argv, stdin=incoming[0], stdout=outgoing[1],
+            stderr=diagnostic[1], env=env, close_fds=True, start_new_session=True)
+        c._capture_observe(work, "M", "offline-child-spawn", {"role": role, "pid": child.pid, "argv": argv, "environment_keys": sorted(env)})
+        for fd in (incoming[0], outgoing[1], diagnostic[1]):close_fd(fd)
+        selector = selectors.DefaultSelector()
+        for fd in (incoming[1], outgoing[0], diagnostic[0]):os.set_blocking(fd, False)
+        streams = {outgoing[0]: bytearray(), diagnostic[0]: bytearray()}
+        limits = {outgoing[0]: output_limit, diagnostic[0]: 65536}
+        for fd in streams:selector.register(fd, selectors.EVENT_READ)
+        offset = 0
+        if stdin:selector.register(incoming[1], selectors.EVENT_WRITE)
+        else:close_fd(incoming[1])
+        deadline = time.monotonic() + timeout
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            _seed_require(remaining > 0)
+            for key, _event in selector.select(min(remaining, 0.25)):
+                fd = key.fd
+                if fd == incoming[1]:
+                    size = quantum(min(65536, len(stdin) - offset), False)
+                    work["offline_child_write_incomplete"] = True
+                    work["write_calls"] = work.get("write_calls", 0) + 1
+                    try:count = os.write(fd, memoryview(stdin)[offset:offset + size])
+                    except BlockingIOError:
+                        work["offline_child_write_incomplete"] = False
+                        continue
+                    if count > 0:
+                        offset += count
+                        charge("W", count)
+                    c._capture_observe(work, "M", "offline-child-write", {"role": role, "return": count})
+                    _seed_require(0 < count <= size)
+                    work["offline_child_write_incomplete"] = False
+                    if offset == len(stdin):
+                        selector.unregister(fd);close_fd(fd)
+                else:
+                    size = quantum(min(65536, limits[fd] - len(streams[fd]) + 1), True)
+                    work["read_calls"] = work.get("read_calls", 0) + 1
+                    work["offline_child_read_incomplete"] = True
+                    try:raw = os.read(fd, size)
+                    except BlockingIOError:
+                        work["offline_child_read_incomplete"] = False
+                        continue
+                    charge("R", len(raw))
+                    c._capture_observe(work, "M", "offline-child-read", {"role": role,
+                        "stream": "stdout" if fd == outgoing[0] else "stderr", "return": len(raw)})
+                    work["offline_child_read_incomplete"] = False
+                    if not raw:
+                        selector.unregister(fd);close_fd(fd)
+                    else:
+                        _seed_require(len(streams[fd]) + len(raw) <= limits[fd])
+                        room(len(raw), True)
+                        work["offline_child_buffer_incomplete"] = True
+                        streams[fd].extend(raw)
+                        charge("C", len(raw))
+                        work["offline_child_buffer_incomplete"] = False
+        remaining = deadline - time.monotonic()
+        _seed_require(remaining > 0)
+        status = child.wait(timeout=remaining)
+        communication_finished = True
+        c._capture_observe(work, "M", "offline-child-wait", {"role": role, "pid": child.pid, "return": status})
+        room(len(streams[outgoing[0]]), True)
+        output = bytes(streams[outgoing[0]])
+        error_output = bytes(streams[diagnostic[0]])
+        charge("C", len(output) + len(error_output))
+        result = {"stdout": output, "stderr": error_output, "status": status, "pid": child.pid}
+    except BaseException as error:
+        primary = error
+        _c3_tool_failure(work, role, error)
+    finally:
+        if child is not None and not communication_finished:
+            for signum, boundary in ((signal.SIGTERM, 5), (signal.SIGKILL, 5)):
+                try:
+                    try:os.killpg(child.pid, signum)
+                    except ProcessLookupError:pass
+                    status = child.wait(timeout=boundary)
+                    communication_finished = True
+                    c._capture_observe(work, "M", "offline-child-stop", {
+                        "role": role, "pid": child.pid, "signal": signum, "return": status})
+                    break
+                except subprocess.TimeoutExpired:continue
+                except BaseException as error:
+                    primary = _c3_first(primary, error)
+                    if communication_finished:break
+            if not communication_finished:
+                try:work["offline_child_exit_unknown"] = True
+                except BaseException as error:primary = _c3_first(primary, error)
+        if selector is not None:
+            try:selector.close()
+            except BaseException as error:primary = _c3_first(primary, error)
+        for pair in (incoming, outgoing, diagnostic):
+            if pair is not None:
+                for fd in pair:
+                    try:close_fd(fd)
+                    except BaseException as error:primary = _c3_first(primary, error)
+        if primary is not None:
+            _c3_tool_failure(work, role, primary)
+            raise primary
+    return result
+
+
 def _capture_work_values(work, case_key):
     fields = ("files","read_bytes","write_bytes","physical_bytes","export_read_bytes",
               "export_write_bytes","export_physical_bytes","export_files")
@@ -2779,7 +3793,9 @@ def _capture_observe(work, kind, site, value, case_work=None):
     before = work["read_bytes"]
     try:
         case_work = work if case_work is None else case_work
-        encoded = _private_capture_observations(row, work, case_work)
+        if "_c3_grant_binding" in work:work["_c3_encoding_kind"] = kind
+        try:encoded = _private_capture_observations(row, work, case_work)
+        finally:work.pop("_c3_encoding_kind", None)
         _capture_account(work, kind, "read_bytes", work["read_bytes"] - before)
         _capture_account(work, kind, "logical_bytes", len(encoded))
         _capture_account(work, kind, "occurrences", 1)
@@ -2843,6 +3859,10 @@ def _capture_work_incomplete(work):
 def _capture_accounting_receipt(anchor):
     work = anchor.recording_work
     receipt = anchor.private_observations.setdefault("accounting", {})
+    return _capture_accounting_values(work, receipt)
+
+
+def _capture_accounting_values(work, receipt):
     receipt["transferred_totals"] = {field: work.get(field, 0) for field in
         ("read_bytes", "write_bytes", "physical_bytes", "files", "export_read_bytes",
          "export_write_bytes", "export_physical_bytes", "export_files", "close_calls", "held_close_calls", "observation_calls")}
@@ -2985,6 +4005,7 @@ def _close_capture_copy(fd, work, case_work, site, failure):
 def _private_capture_observations(value, work, case_work):
     encoded = bytearray()
     reserved = 0
+    before_read = work["read_bytes"]
     encoder = json.JSONEncoder(ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
     for piece in encoder.iterencode(value):
         _require(len(piece) <= DOCUMENT_LIMIT, "E_LIMIT")
@@ -2998,6 +4019,7 @@ def _private_capture_observations(value, work, case_work):
             _require(counter["read_bytes"] + reserved + size * 3 + 1 <= limit * DOCUMENT_LIMIT
                      and counter["read_bytes"] - counter["export_read_bytes"] + reserved
                      + size * 3 + 1 <= nonexport * DOCUMENT_LIMIT, "E_LIMIT")
+        _c3_encoding_room(work, reserved + size * 3 + 1, len(encoded) + size + 1, before_read)
         raw = piece.encode("utf-8")
         encoded.extend(raw)
         for counts in ((work,) if work is case_work else (work, case_work)):
@@ -3085,6 +4107,17 @@ class _HeldCaptureRead:
             _capture_account(self.work, "W", "read_bytes", len(expected) + len(self.snapshots["complete.json"]))
             _require(expected == self.snapshots["complete.json"], "E_STORE")
             self.recheck(metadata_only=True)
+            try:
+                self.anchor.retain_storage(self.attempt_id, self.storage_rows, None, self.held)
+            except BaseException as error:
+                first = error if isinstance(error, KeyboardInterrupt) or getattr(error, "_scope_signal_cancel", False) else None
+                try:
+                    self.anchor.private_observations["unusable"] = True
+                    _capture_observation_error(self.work, "M", "capture-storage-retention", error)
+                except BaseException as later:
+                    if isinstance(later, KeyboardInterrupt) or getattr(later, "_scope_signal_cancel", False):
+                        first = _c3_first(first, later)
+                if first is not None:raise first
         except BaseException as error:
             self.work["failure"] = {"category": type(error).__name__,
                 "errno": getattr(error, "os_errno", getattr(error, "errno", None))}
@@ -3177,8 +4210,8 @@ class _HeldCaptureCopy:
         except Exception as observed:
             self.leaf["accounting_incomplete"] = True
             if (getattr(observed, "_scope_signal_cancel", False)
-                    and not getattr(error, "_scope_signal_cancel", False)
-                    and not getattr(primary, "_scope_signal_cancel", False)):
+                    and not (isinstance(error, KeyboardInterrupt) or getattr(error, "_scope_signal_cancel", False))
+                    and not (isinstance(primary, KeyboardInterrupt) or getattr(primary, "_scope_signal_cancel", False))):
                 raise
 
     def _transfer(self):
@@ -3280,23 +4313,29 @@ class _HeldCaptureCopy:
                 try:source.recheck()
                 finally:source.close()
             except BaseException as error:
-                if getattr(error, "_scope_signal_cancel", False) and cancellation is None:cancellation = error
+                if isinstance(error, KeyboardInterrupt) or getattr(error, "_scope_signal_cancel", False):
+                    cancellation = _c3_first(cancellation, error)
         for source in reversed(self.T_history):
             if source.closed:continue
             try:source.close()
             except BaseException as error:
-                if getattr(error, "_scope_signal_cancel", False) and cancellation is None:cancellation = error
-        for item in reversed(held):
+                if isinstance(error, KeyboardInterrupt) or getattr(error, "_scope_signal_cancel", False):
+                    cancellation = _c3_first(cancellation, error)
+        while held:
+            item = held.pop()
             try:item.close()
-            except Exception as error:
-                if getattr(error, "_scope_signal_cancel", False) and cancellation is None:cancellation = error
-                try:self._failed(error, "P-held-close")
-                except Exception as observed:
-                    if getattr(observed, "_scope_signal_cancel", False) and cancellation is None:cancellation = observed
+            except BaseException as error:
+                if isinstance(error, KeyboardInterrupt) or getattr(error, "_scope_signal_cancel", False):
+                    cancellation = _c3_first(cancellation, error)
+                try:self._failed(error, "P-held-close", _c3_first(primary, cancellation) if cancellation is not None else primary)
+                except BaseException as observed:
+                    if isinstance(observed, KeyboardInterrupt) or getattr(observed, "_scope_signal_cancel", False):
+                        cancellation = _c3_first(cancellation, observed)
         try:self._transfer()
-        except Exception as error:
-            if getattr(error, "_scope_signal_cancel", False) and cancellation is None:cancellation = error
-        if cancellation is not None and not getattr(primary, "_scope_signal_cancel", False):raise cancellation
+        except BaseException as error:
+            if isinstance(error, KeyboardInterrupt) or getattr(error, "_scope_signal_cancel", False):
+                cancellation = _c3_first(cancellation, error)
+        if cancellation is not None and _c3_first(primary, cancellation) is cancellation:raise cancellation
 
 
 class _HeldSourceConfigurationCopy(_HeldCaptureCopy):
@@ -4045,6 +5084,7 @@ def read_coverage_attempt(anchor, configuration, request_raw, *, _owner=None):
     _require(_owner is None or isinstance(_owner, _HeldCoverageRead), "E_STORE")
     uid, gid = anchor.config["principal_uid"], anchor.config["consumer_gid"]
     opened, snapshots, storage_rows = [], {}, []
+    failure = None
     try:
         configuration.recheck("E_STORE")
         store = _open_held(anchor.config["store_root"], True, _store_rule(uid, gid, 0o750, True, anchor.resolver), "E_STORE")
@@ -4098,8 +5138,30 @@ def read_coverage_attempt(anchor, configuration, request_raw, *, _owner=None):
             _owner.held, opened = opened, []
             _owner.storage_rows = storage_rows
         return snapshots, origin
+    except BaseException as error:
+        failure = error
+        raise
     finally:
-        _close_paths(opened)
+        retention_cancel = None
+        try:
+            anchor.retain_storage(attempt_id, storage_rows, failure,
+                opened if opened else _owner.held if _owner is not None else ())
+        except BaseException as error:
+            if isinstance(error, KeyboardInterrupt) or getattr(error, "_scope_signal_cancel", False):
+                retention_cancel = error
+            try:
+                anchor.private_observations["unusable"] = True
+                _capture_observation_error(anchor.recording_work, "M", "source-storage-retention", error)
+            except BaseException as observed:
+                if isinstance(observed, KeyboardInterrupt) or getattr(observed, "_scope_signal_cancel", False):
+                    retention_cancel = _c3_first(retention_cancel, observed)
+        closing_error = None
+        try:_close_paths(opened)
+        except BaseException as error:closing_error = error
+        if retention_cancel is not None:
+            first = _c3_first(failure, retention_cancel)
+            if first is not failure:raise first
+        if closing_error is not None:raise closing_error
 
 
 def _closed_scope_child(argv: list[str], env: dict[str, str], owner) -> None:

@@ -4,6 +4,792 @@ set -uo pipefail
 export LC_ALL=C
 umask 077
 
+case "${1:-}:${3:-}" in
+  run:/*/operations/[0-2]/I/driver-input/seed.json|dashboard:/*/operations/[0-2]/I/driver-input)
+    exec /usr/bin/python3 -I -S -B -c 'GENERATION = '"'"'g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43'"'"'
+PROGRAM_SHA = '"'"'18bfacfaabbb87fc6bb3e4be8d182cc81a9d526caa4db8e17c51d583b52e1009'"'"'
+CATALOG_SHA = '"'"'0239138447a8f9fd420cb3c5da31660d8f75c85099d80d89a040dce2878a4cac'"'"'
+TOOL_SHA = '"'"'b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9'"'"'
+SCANNER_SHA = '"'"'556a365b92a76c7a46c56b25c61a291f5ab3dcad8168fb77f15c15b3f3477ca5'"'"'
+PLANNER_SHA = '"'"'03904cef1e06acf207ee7a6cf8666f7dd7a6360acd95bb1e8ce34bd6409ddbe4'"'"'
+SANDBOX_SHA = '"'"'8c4b50e6ce324bbf8c3b14972356b153a40ab26c0dbcf54687e37d1133e8a3bb'"'"'
+RISK_SHA = '"'"'0df2094a1a86901d5db8bd463cdeb295f455585b345096719bdc6dcd0b8852e8'"'"'
+DUTY_SHA = '"'"'146e73dc880d363e889f32140ac375997fb709e3101de32b8d9603f1f38ca0fa'"'"'
+NORMALIZER_SHAS = '"'"'{"codex-cli-producer":"dc2fff5f40517b3dc7a633f90483c661b9a4b2e7e4f1f40d9aa7c8edcf268f25","codex-native-reviewer":"7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603","github-actions-ci":"690d9a8c35dc49f61a533d1ce1a9041e34895e5d337eb454bafa3a2e4d878df7","github-forge":"b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be","gitlab-forge":"ff2ec298eef102f94f28995f5306adeba8e078d19e4c22860c3b167cd9b7c37a"}'"'"'
+FIXED_PINS = [('"'"'program.jq'"'"', '"'"'18bfacfaabbb87fc6bb3e4be8d182cc81a9d526caa4db8e17c51d583b52e1009'"'"'),
+ ('"'"'catalog.json'"'"', '"'"'0239138447a8f9fd420cb3c5da31660d8f75c85099d80d89a040dce2878a4cac'"'"'),
+ ('"'"'core/v2/generation-registry.json'"'"', '"'"'3950ce43c3073b97759db23fb7e4ce533cbc1d8a8fe4917db6ee1ee0a8e78f94'"'"'),
+ ('"'"'core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/contracts.jq'"'"',
+  '"'"'65eb40b9afb9b4f1d809ed66d0f2ca625f656c34e856cedcde9cbbde857f0f0a'"'"'),
+ ('"'"'core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/core-ingress.sh'"'"',
+  '"'"'dfdd273ea98f8737188a2a347151b3ffc0e631e222abfaac55391d58dd2618e8'"'"'),
+ ('"'"'core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/modules/profile_graph.jq'"'"',
+  '"'"'c00f9cfbe88df5cb1dbcfbead61288ff7d68684d43d095e74f26e7820f0d7207'"'"'),
+ ('"'"'core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/modules/result_facts.jq'"'"',
+  '"'"'8e49c2c091f1bbe525f7499e3fca072f6916a14d5bb34adbf121439e8ca2d281'"'"'),
+ ('"'"'core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/modules/result_truth.jq'"'"',
+  '"'"'ed4a9946a95ad0c701f74d6bd64c3b45264126927c2a53511d31c52241c7fd46'"'"'),
+ ('"'"'core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/modules/schema.jq'"'"',
+  '"'"'8d1d02d36ac7ada778f05248f9413062b3fc251499914c15d79f003bbd009ade'"'"'),
+ ('"'"'core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/modules/stage_request.jq'"'"',
+  '"'"'6572a6ecbac332dc9c4a8ef35acd1feebdc2e8aab04941fc0b756f3a5cbcf29e'"'"'),
+ ('"'"'scripts/core-contract.sh'"'"', '"'"'b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9'"'"'),
+ ('"'"'orchestrator/v1/scan-state.sh'"'"', '"'"'556a365b92a76c7a46c56b25c61a291f5ab3dcad8168fb77f15c15b3f3477ca5'"'"'),
+ ('"'"'orchestrator/v1/reconciliation-plan.jq'"'"',
+  '"'"'03904cef1e06acf207ee7a6cf8666f7dd7a6360acd95bb1e8ce34bd6409ddbe4'"'"'),
+ ('"'"'control/v1/evaluate-sandbox.sh'"'"', '"'"'8c4b50e6ce324bbf8c3b14972356b153a40ab26c0dbcf54687e37d1133e8a3bb'"'"'),
+ ('"'"'control/v1/evaluate-risk-gates.sh'"'"', '"'"'0df2094a1a86901d5db8bd463cdeb295f455585b345096719bdc6dcd0b8852e8'"'"'),
+ ('"'"'control/v1/risk-gates-policy.json'"'"', '"'"'3d8f0802777b4d7a63ded72643aca5cc8afd7613b76b5463291ca0ea63607a7e'"'"'),
+ ('"'"'control/v1/risk-gates-decision.json'"'"', '"'"'8e13f844fad5280aedc21a7d4c9b4bcf43f8eb0b0dd41a32a5989ce1473e28d5'"'"'),
+ ('"'"'control/v1/risk-gates.jq'"'"', '"'"'d00fccd8e31b770c6df01fba17e3cc315d58edfbbf0a8055d66d537dc6ad21ff'"'"'),
+ ('"'"'control/v1/duty-separation-policy.json'"'"',
+  '"'"'b2663c0c0ae3d1d2e95b2e5d5ade7e00b2893f242a1143e90fad74659f6a41f9'"'"'),
+ ('"'"'control/v1/duty-separation-decision.json'"'"',
+  '"'"'4c2297341d1d389f21ace62b58b83e27a6ed248f9bf13a10fa385c4f8474af99'"'"'),
+ ('"'"'control/v1/duty-separation.jq'"'"', '"'"'b4e480748dd4fb7dec769b25f0f7649b0e5dc31f9de438bba690e9eab6ac236c'"'"'),
+ ('"'"'control/v1/evaluate-duty.sh'"'"', '"'"'146e73dc880d363e889f32140ac375997fb709e3101de32b8d9603f1f38ca0fa'"'"'),
+ ('"'"'adapters/codex-cli-producer/v1/normalize.jq'"'"',
+  '"'"'dc2fff5f40517b3dc7a633f90483c661b9a4b2e7e4f1f40d9aa7c8edcf268f25'"'"'),
+ ('"'"'adapters/gitlab-forge/v1/normalize.jq'"'"',
+  '"'"'ff2ec298eef102f94f28995f5306adeba8e078d19e4c22860c3b167cd9b7c37a'"'"'),
+ ('"'"'adapters/codex-native-reviewer/v1/normalize.jq'"'"',
+  '"'"'7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603'"'"'),
+ ('"'"'adapters/github-actions-ci/v1/normalize.jq'"'"',
+  '"'"'690d9a8c35dc49f61a533d1ce1a9041e34895e5d337eb454bafa3a2e4d878df7'"'"'),
+ ('"'"'adapters/github-forge/v1/normalize.jq'"'"',
+  '"'"'b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be'"'"'),
+ ('"'"'control/v1/policy-set.jq'"'"', '"'"'2be97550574ee4522fc0bd14780c92dee3c1b455f2c04b7763b0e437665a8d58'"'"'),
+ ('"'"'control/v1/sandbox-decision.json'"'"', '"'"'c3e89800147d55f7c726ec66c82031915a4220d3eb7867e143f60d7026223bbd'"'"'),
+ ('"'"'control/v1/sandbox-policy.json'"'"', '"'"'4afb62e44fd3ad055d157ee23bfcf2917811b9ec05e4923eaa989d95d53c0a5e'"'"'),
+ ('"'"'control/v1/sandbox.jq'"'"', '"'"'83b08ff4817157bbda76aa3c85142cb9f297a0dc8cdb760f7c8eeebf6bbc0ef3'"'"'),
+ ('"'"'control/v1/validate.sh'"'"', '"'"'cf173ad0eaa08244bf636e3937845e894b21f14291fc5e66753e8673bdd2bd2a'"'"'),
+ ('"'"'orchestrator/v1/state-scanner-driver.sh'"'"',
+  '"'"'5972a0a6ab7858815963717995d3d09561e76e2b7412ad1887252d83ad0db19b'"'"'),
+ ('"'"'orchestrator/v1/state-scanner-launcher.sh'"'"',
+  '"'"'9bff3ce5669477ff6c3043115fd6ea01da486facd5f5f4f7ec2066efb70001cb'"'"'),
+ ('"'"'orchestrator/v1/state-scanner.jq'"'"', '"'"'722afbf8a20ecf6f1d61b045186dc97b22fea1457f167ec87ac5b31b317e34ae'"'"'),
+ ('"'"'evals/v1/framework.jq'"'"', '"'"'d164a102919f42ef002e93c8b515b58028604819e6c09b87c6e4afadb0bbcce4'"'"'),
+ ('"'"'evals/v1/run.sh'"'"', '"'"'51770c5597d55bf05020502796810637bfbe697038a541ea6124530c0fffe55c'"'"')]
+RECORD_GENERATION_QUERY = ('"'"'\n'"'"'
+ '"'"'    if type == "array" and length >= 1 and all(.[];\n'"'"'
+ '"'"'      .semantic_identity == "core.contracts.v2" and\n'"'"'
+ '"'"'      (.generation_id | type == "string" and test("\\\\Ag-[0-9a-f]{64}\\\\z")))\n'"'"'
+ '"'"'    then .[-1].generation_id else error("E_STALE") end\n'"'"'
+ '"'"'  '"'"')
+REPLAY_SHA_QUERY = ('"'"'\n'"'"'
+ '"'"'    [.body.shadow_closure[] | select(.path == "evals/v1/replay-malicious.py")] as $rows |\n'"'"'
+ '"'"'    if ($rows | length) == 1 and\n'"'"'
+ '"'"'       ($rows[0].sha256 | type == "string" and test("\\\\A[0-9a-f]{64}\\\\z"))\n'"'"'
+ '"'"'    then $rows[0].sha256 else error("E_RUNTIME") end\n'"'"'
+ '"'"'  '"'"')
+import errno
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import re
+import selectors
+import signal
+import stat
+import sys
+
+class DriverError(Exception):
+    def __init__(self, code):
+        super().__init__(code)
+        self.code = code
+
+def require(condition, code="E_RUNTIME"):
+    if not condition:raise DriverError(code)
+
+def cancelled(error):
+    return isinstance(error, KeyboardInterrupt) or getattr(error, "_D_source_cancel", False) or getattr(error, "_scope_signal_cancel", False)
+
+def first(primary, later):
+    return later if primary is None or cancelled(later) and not cancelled(primary) else primary
+
+def bootstrap_read(path, limit):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    chunks, failure = [], None
+    try:
+        before = os.fstat(fd)
+        require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and 0 <= before.st_size <= limit)
+        size = 0
+        while size < before.st_size:
+            chunk = os.read(fd, min(65536, before.st_size - size))
+            require(chunk)
+            bootstrap.append(("read", len(chunk)))
+            chunks.append(chunk);size += len(chunk)
+        require(os.fstat(fd) == before and os.stat(path, follow_symlinks=False) == before)
+        raw = b"".join(chunks)
+        bootstrap.append(("copy", len(raw)))
+    except BaseException as error:
+        failure = error
+    finally:
+        try:os.close(fd);bootstrap.append(("close", str(path)))
+        except BaseException as error:failure = first(failure, error)
+    if failure is not None:raise failure
+    return raw
+
+bootstrap = []
+owner = None
+try:
+    require(len(sys.argv) == 8, "E_USAGE")
+    mode, runtime_text, input_text, evaluator_text, evaluator_sha, seed_sha, observed_at = sys.argv[1:]
+    require(mode in {"run", "dashboard"} and re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", observed_at), "E_USAGE")
+    runtime, input_path, evaluator = Path(runtime_text), Path(input_text), Path(evaluator_text)
+    require(runtime.is_absolute() and str(runtime.resolve()) == runtime_text
+        and not runtime.is_symlink() and runtime.is_dir()
+        and Path(sys.argv[0]).absolute() == runtime / "driver.sh"
+        and evaluator == runtime / "evaluator.json")
+    suffix = "/driver-input/seed.json" if mode == "run" else "/driver-input"
+    require(input_text.endswith(suffix))
+    iroot = Path(input_text[:-len(suffix)])
+    require(iroot.is_absolute() and iroot.name == "I" and iroot.parent.name in {"0", "1", "2"}
+        and iroot.parent.parent.name == "operations" and str(iroot.resolve()) == str(iroot))
+    replay_root = iroot / "driver-input/replay-work"
+    require(replay_root.is_dir() and not replay_root.is_symlink())
+    for name in os.listdir("/dev/fd"):
+        if name.isdecimal() and int(name) > 2:
+            fd = int(name)
+            try:os.close(fd);bootstrap.append(("entry-close", fd, 0, None))
+            except OSError as error:
+                bootstrap.append(("entry-close", fd, None, error.errno))
+                if error.errno != errno.EBADF:raise
+    evaluator_raw = bootstrap_read(evaluator, 1048576)
+    measured = hashlib.sha256(evaluator_raw).hexdigest();bootstrap.append(("hash", len(evaluator_raw)))
+    require(measured == evaluator_sha, "E_STALE")
+    evaluator_doc = json.loads(evaluator_raw)
+    source_rows = evaluator_doc["body"]["shadow_closure"]
+    consumer_rows = [row for row in source_rows if row["path"] == "shadow/v1/_consumer.py"]
+    require(len(consumer_rows) == 1, "E_STALE")
+    consumer_path = runtime / "shadow/v1/_consumer.py"
+    consumer_raw = bootstrap_read(consumer_path, 1048576)
+    measured = hashlib.sha256(consumer_raw).hexdigest();bootstrap.append(("hash", len(consumer_raw)))
+    require(measured == consumer_rows[0]["sha256"], "E_STALE")
+    spec = importlib.util.spec_from_file_location("ystack_shadow_consumer", consumer_path)
+    require(spec is not None and spec.loader is not None)
+    c = importlib.util.module_from_spec(spec);sys.modules[spec.name] = c;exec(compile(consumer_raw, str(consumer_path), "exec"), c.__dict__)
+    require(c._source_root() == str(runtime))
+
+    class Driver:
+        def __init__(self):
+            self.common = c._c3_fresh_work(0)
+            self.scopes = {"common": self.common}
+            self.scope = "common"
+            self.budget = None
+            self.holds, self.fds, self.children, self.entities = [], set(), [], []
+            self.written, self.directories, self.sealed_inputs = {}, {}, {}
+            self.errors, self.unknown = [], []
+            self.common["_c3_scopes"] = self.scopes
+            self.common["input_kind"] = "M"
+            self.resolver = c._DarwinUUIDResolver() if sys.platform == "darwin" else None
+            self.sequence, self.used, self.active_children = [], set(), []
+            for event in bootstrap:
+                if event[0] == "read":self.read_charge(event[1])
+                elif event[0] == "copy":self.processing("C", event[1])
+                elif event[0] == "hash":self.processing("H", event[1])
+                elif event[0] == "close":
+                    self.common["close_calls"] += 1
+                    c._capture_observe(self.common, "M", "C3-driver.bootstrap-close", {"path": event[1], "return": 0, "errno": None})
+                else:
+                    self.common["close_calls"] += 1
+                    c._capture_observe(self.common, "M", "C3-driver.entry-close",
+                        {"fd": event[1], "return": event[2], "errno": event[3]})
+            self.common["C3_bootstrap_import_incomplete"] = True
+        @property
+        def work(self):return self.scopes[self.scope]
+        def room(self, increments):
+            if self.budget is None:
+                c._capture_copy_room(self.work, 0, False, case=True)
+                return
+            delta = c._c3_fresh_work(0)
+            for path, amount in increments:
+                target = delta
+                for key in path[:-1]:target = target[key]
+                target[path[-1]] += amount
+            c._c3_grant_room(self.budget, 0, self.scope, "body", c._c3_work_values(self.work), c._c3_work_values(delta))
+        def processing(self, kind, amount):
+            self.work["seed_processing"][kind] += amount
+        def read_charge(self, amount):
+            self.work["read_bytes"] += amount
+            c._capture_account(self.work, "M", "read_bytes", amount)
+            self.processing("R", amount)
+        def own_fd(self, fd):
+            try:self.fds.add(fd)
+            except BaseException as error:
+                self.fds.discard(fd)
+                try:
+                    later = c._close_capture_copy(fd, self.work, self.work, "C3-driver.fd-adopt", None)
+                    if later is not None:error = first(error, later)
+                except BaseException as later:error = first(error, later)
+                raise error
+            return fd
+        def own_pipe(self, pair):
+            try:
+                for fd in pair:
+                    self.fds.add(fd)
+                return pair
+            except BaseException as error:
+                for fd in pair:
+                    self.fds.discard(fd)
+                    try:
+                        later = c._close_capture_copy(fd, self.work, self.work, "C3-driver.pipe-adopt", None)
+                        if later is not None:error = first(error, later)
+                    except BaseException as later:error = first(error, later)
+                raise error
+        def close(self, fd, site):
+            self.fds.discard(fd)
+            failure = c._close_capture_copy(fd, self.work, self.work, site, None)
+            if failure is not None:raise failure
+        def adopt(self, held):
+            try:self.holds.append((held, self.scope))
+            except BaseException as error:
+                if not any(item is held for item, _scope in self.holds):
+                    try:held.close()
+                    except BaseException as later:error = first(error, later)
+                raise error
+            return held
+        def held(self, path, directory=False, mode=0o400):
+            held = c._open_held(str(path), directory,
+                c._store_rule(os.geteuid(), os.getegid(), mode, directory, self.resolver),
+                "E_STORE", recording_work=self.work, accounting_kind="M")
+            return self.adopt(held)
+        def read(self, path, limit=1048576, mode=0o400):
+            held = self.held(path, mode=mode)
+            failure, raw = None, None
+            try:
+                self.entity(path, held.before)
+                self.room([(("read_bytes",), held.before.st_size), (("accounting", "M", "read_bytes"), held.before.st_size),
+                    (("seed_processing", "R"), held.before.st_size)])
+                raw = held.read(limit, "E_STORE", self.work)
+                self.processing("R", len(raw))
+                held.recheck("E_STORE", self.work, "M")
+                if path != replay_root and replay_root not in path.parents:
+                    state = c._stat_values(held.before)
+                    if path in self.sealed_inputs:
+                        old, identity = self.sealed_inputs[path]
+                        code = "E_STALE" if runtime in path.parents else "E_RELATION"
+                        require(identity == state, code);self.equal(old, raw, code)
+                    else:self.sealed_inputs[path] = (raw, state)
+            except BaseException as error:failure = error
+            finally:
+                try:self.release(held)
+                except BaseException as error:failure = first(failure, error)
+            if failure is not None:raise failure
+            return raw
+        def sha(self, raw):
+            self.room([(("seed_processing", "H"), len(raw))])
+            value = c.digest(raw);self.processing("H", len(raw));return value
+        def equal(self, left, right, code):
+            self.room([(("seed_processing", "E"), len(left) + len(right))])
+            self.processing("E", len(left) + len(right));require(left == right, code)
+        def encode(self, value):
+            return c._c3_encode_values(value, self.work)
+        def parse(self, raw):return c._c3_json_values(raw, self.work)
+        def seed_document(self, raw):
+            self.room([(("read_bytes",), len(raw)), (("accounting", "M", "read_bytes"), len(raw)),
+                (("seed_processing", "R"), len(raw))])
+            self.work["C3_seed_parse_incomplete"] = True
+            self.read_charge(len(raw))
+            value = c._json(raw, c.DOCUMENT_LIMIT, "E_PARSE")
+            del self.work["C3_seed_parse_incomplete"]
+            return value
+        def entity(self, path, state):
+            for root_name, root_path in (("privatework", replay_root), ("I", iroot), ("runtime", runtime)):
+                if path == root_path or root_path in path.parents:break
+            else:raise DriverError("E_RUNTIME")
+            for _scope, existing_path, existing in self.entities:
+                if existing_path == path:
+                    require(existing["initial_identity"]["dev"] == state.st_dev
+                        and existing["initial_identity"]["ino"] == state.st_ino, "E_RELATION")
+                    return existing
+            row = {"root": root_name, "member": os.fsencode("" if path == root_path else str(path.relative_to(root_path))).hex(),
+                "creation_ordinal": len(self.entities), "kind": "M",
+                "initial_identity": c._stat_values(state), "last_identity": c._stat_values(state),
+                "size_bytes": state.st_size, "state": "present"}
+            self.entities.append((self.scope, path, row));return row
+        def observed_identity(self, path, state):
+            for _scope, existing, row in self.entities:
+                if existing == path:
+                    row["last_identity"] = c._stat_values(state);row["size_bytes"] = state.st_size
+        def parent(self, path):
+            require(path in self.directories)
+            held = self.directories[path]
+            held.recheck("E_STORE", self.work, "M")
+            return held
+        def refresh(self, parent, before, names, added):
+            require(set(parent.listdir()) == names | {added})
+            c._refresh_recording_directory(parent, before, self.work)
+            self.observed_identity(Path(parent.path), parent.before)
+            index = len(parent.components) - 1
+            for held, _scope in self.holds:
+                if held is parent or len(held.components) <= index:continue
+                if os.path.commonpath((held.path, parent.path)) == parent.path:
+                    component = held.components[index]
+                    require(c._identity(component.before) == c._identity(before))
+                    component.before = parent.before
+        def create_parent(self, parent_path, name, directory):
+            parent = self.parent(parent_path)
+            names = set(parent.listdir());require(name not in names and len(names) < 256, "E_LIMIT")
+            self.room([(("files",), 1), (("accounting", "M", "files"), 1)])
+            before = parent.before
+            if directory:
+                os.mkdir(name, 0o700, dir_fd=parent.fd);fd = None
+            else:
+                fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent.fd)
+                self.own_fd(fd)
+            self.work["files"] += 1;c._capture_account(self.work, "M", "files", 1)
+            self.refresh(parent, before, names, name)
+            os.fsync(parent.fd)
+            return parent_path / name, fd
+        def mkdir(self, parent, name):
+            path, _fd = self.create_parent(parent, name, True)
+            held = self.held(path, True, 0o700);require(not held.listdir())
+            self.directories[path] = held;self.entity(path, held.before)
+            return path
+        def write(self, path, raw):
+            require(type(raw) is bytes and len(raw) <= 1048576, "E_LIMIT")
+            path, fd = self.create_parent(path.parent, path.name, False)
+            row = self.entity(path, os.fstat(fd))
+            failure = None
+            try:
+                offset = 0
+                while offset < len(raw):
+                    amount = min(65536, len(raw) - offset)
+                    self.room([(("write_bytes",), amount), (("physical_bytes",), amount), (("read_bytes",), amount),
+                        (("accounting", "M", "read_bytes"), amount),
+                        (("accounting", "M", "write_bytes"), amount), (("accounting", "M", "physical_bytes"), amount),
+                        (("seed_processing", "W"), amount), (("seed_processing", "C"), amount)])
+                    c._capture_copy_room(self.work, amount, False, case=True)
+                    count = os.write(fd, memoryview(raw)[offset:offset + amount])
+                    if count > 0:
+                        self.work["write_bytes"] += count;self.work["physical_bytes"] += count;self.work["read_bytes"] += count
+                        self.processing("W", count);self.processing("C", count)
+                        c._capture_account(self.work, "M", "write_bytes", count)
+                        c._capture_account(self.work, "M", "physical_bytes", count)
+                        c._capture_account(self.work, "M", "read_bytes", count)
+                    require(count > 0);offset += count
+                os.fsync(fd)
+                state = os.fstat(fd);self.observed_identity(path, state)
+                row["last_identity"] = c._stat_values(state);row["size_bytes"] = offset
+            except BaseException as error:failure = error
+            finally:
+                try:self.close(fd, "C3-driver.value-write")
+                except BaseException as error:failure = first(failure, error)
+            if failure is not None:row["state"] = "unknown";raise failure
+            actual = self.read(path, mode=0o600)
+            require(len(actual) == len(raw))
+            require(self.sha(actual) == self.sha(raw))
+            self.equal(actual, raw, "E_RELATION")
+            self.written[path] = (self.scope, raw, row["last_identity"])
+            return path
+        def run(self, argv, env=None):
+            null = self.own_fd(os.open("/dev/null", os.O_RDONLY))
+            out_read, out_write = self.own_pipe(os.pipe())
+            err_read, err_write = self.own_pipe(os.pipe())
+            actions = [(os.POSIX_SPAWN_DUP2, null, 0), (os.POSIX_SPAWN_DUP2, out_write, 1), (os.POSIX_SPAWN_DUP2, err_write, 2)]
+            unused = set(self.fds)
+            unused.update(component.fd for held, _scope in self.holds for component in held.components)
+            unused.update((9, 10))
+            actual_open = set()
+            for fd in unused:
+                try:os.fstat(fd);actual_open.add(fd)
+                except OSError as error:
+                    if error.errno != errno.EBADF:raise
+            actions.extend((os.POSIX_SPAWN_CLOSE, fd) for fd in sorted(actual_open | {9, 10}) if fd > 2)
+            pid = None;failure = None;stdout = bytearray();stderr = bytearray();status = None
+            selector = selectors.SelectSelector()
+            try:
+                pid = os.posix_spawn(argv[0], argv, env if env is not None else {"LC_ALL": "C", "PATH": "/usr/bin:/bin", "TMPDIR": os.environ["TMPDIR"]}, file_actions=actions)
+                self.active_children.append(pid)
+                self.work.setdefault("C3_spawns", []).append({"pid": pid, "argv": argv, "actions": actions})
+                c._capture_observe(self.work, "M", "C3-driver.spawn", {"pid": pid, "argv": argv, "actions": actions})
+                for fd, site in ((null, "C3-driver.child-stdin"), (out_write, "C3-driver.child-stdout-write"), (err_write, "C3-driver.child-stderr-write")):
+                    self.close(fd, site)
+                selector.register(out_read, selectors.EVENT_READ, stdout)
+                selector.register(err_read, selectors.EVENT_READ, stderr)
+                while selector.get_map():
+                    for key, _events in selector.select():
+                        self.room([(("read_bytes",), 65536), (("accounting", "M", "read_bytes"), 65536), (("seed_processing", "R"), 65536)])
+                        raw = os.read(key.fd, 65536)
+                        self.read_charge(len(raw))
+                        if not raw:
+                            selector.unregister(key.fd);self.close(key.fd, "C3-driver.child-read")
+                        else:
+                            require(len(key.data) + len(raw) <= 1048576, "E_LIMIT")
+                            key.data.extend(raw);self.processing("C", len(raw))
+                waited, status = os.waitpid(pid, 0);require(waited == pid)
+                self.work.setdefault("C3_waits", []).append({"pid": pid, "status": status})
+                c._capture_observe(self.work, "M", "C3-driver.wait", {"pid": pid, "status": status})
+                self.active_children.remove(pid);pid = None
+                out, err = bytes(stdout), bytes(stderr)
+                self.processing("C", len(out) + len(err))
+                return waited, status, out, err
+            except BaseException as error:failure = error
+            finally:
+                try:selector.close()
+                except BaseException as error:failure = first(failure, error)
+                for fd, site in ((null, "C3-driver.child-stdin-final"), (out_read, "C3-driver.child-out-final"),
+                    (out_write, "C3-driver.child-out-write-final"), (err_read, "C3-driver.child-err-final"), (err_write, "C3-driver.child-err-write-final")):
+                    if fd in self.fds:
+                        try:self.close(fd, site)
+                        except BaseException as error:failure = first(failure, error)
+                if pid is not None:
+                    try:os.kill(pid, signal.SIGTERM)
+                    except ProcessLookupError:pass
+                    except BaseException as error:failure = first(failure, error)
+                    try:
+                        waited, status = os.waitpid(pid, 0)
+                        self.work.setdefault("C3_waits", []).append({"pid": waited, "status": status})
+                        c._capture_observe(self.work, "M", "C3-driver.wait", {"pid": waited, "status": status})
+                        self.active_children.remove(pid)
+                    except BaseException as error:failure = first(failure, error)
+                if failure is not None:
+                    self.work["C3_partial_stdout"] = bytes(stdout);self.work["C3_partial_stderr"] = bytes(stderr)
+                    self.processing("C", len(stdout) + len(stderr))
+            raise failure
+        def jq(self, arguments, code="E_RUNTIME"):
+            _pid, status, out, err = self.run([str(runtime / "bin/jq"), *arguments])
+            require(os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0, code)
+            return out
+        def check(self, operation, observation, candidate, token):
+            raw = self.program(operation, observation, candidate, token)
+            require(raw == b"true\n", token)
+        def single(self, path):
+            self.jq(["-e", "-n", "--slurpfile", "roots", str(path), "($roots | length) == 1"], "E_PARSE")
+        def verify(self, digest, path, mode=0o400):
+            try:require(self.sha(self.read(path, mode=mode)) == digest, "E_STALE")
+            except BaseException as error:
+                if cancelled(error) or getattr(error, "code", None) == "E_LIMIT":raise
+                raise DriverError("E_STALE") from error
+        def verify_runtime(self):
+            for relative, expected in FIXED_PINS:self.verify(expected, runtime / relative)
+            record_generation = self.jq(["-er", RECORD_GENERATION_QUERY, str(runtime / "core/v2/generation-registry.json")], "E_STALE").decode().rstrip("\n")
+            path = "core/v2/generations/" + record_generation + "/modules/schema.jq"
+            self.jq(["-e", "--arg", "path", path, "[.body.core_closure[] | select(.path == $path)] == [{path:$path,sha256:\"8d1d02d36ac7ada778f05248f9413062b3fc251499914c15d79f003bbd009ade\"}]", str(evaluator)], "E_STALE")
+            self.verify("8d1d02d36ac7ada778f05248f9413062b3fc251499914c15d79f003bbd009ade", runtime / path)
+            self.verify(self.evaluator_sha, evaluator)
+            self.verify(self.seed_sha, self.input_document)
+        def verify_review_files(self):
+            raw = self.read(runtime / "review-files.tsv")
+            for row in raw.decode().splitlines():
+                digest, path = row.split("\t", 1)
+                try:self.verify(digest, runtime / path)
+                except BaseException as error:
+                    if cancelled(error):raise
+                    raise DriverError("E_RELATION") from error
+        def program(self, operation, observation, candidate, code="E_RUNTIME"):
+            args = ["-S", "-c", "-n", "-L", str(runtime / "core/v2/generations" / GENERATION / "modules"),
+                "--arg", "evals_operation", operation]
+            values = [("program_sha256", PROGRAM_SHA), ("driver_sha256", self.driver_sha), ("catalog_sha256", CATALOG_SHA),
+                ("evaluator_sha256", self.evaluator_sha), ("seed_set_sha256", self.seed_sha), ("tool_sha256", TOOL_SHA),
+                ("scanner_sha256", SCANNER_SHA), ("planner_sha256", PLANNER_SHA), ("sandbox_sha256", SANDBOX_SHA)]
+            for name, value in values:args.extend(("--arg", name, value))
+            args.extend(("--argjson", "normalizer_shas", NORMALIZER_SHAS))
+            for name, value in (("risk_gates_sha256", RISK_SHA), ("duty_sha256", DUTY_SHA), ("observed_at", self.observed_at)):
+                args.extend(("--arg", name, value))
+            for name, path in (("catalog_docs", runtime / "catalog.json"), ("seed_set_docs", self.seed_docs),
+                ("observation_docs", observation), ("evaluator_docs", evaluator), ("candidate_docs", candidate), ("result_docs", self.result_docs)):
+                args.extend(("--slurpfile", name, str(path)))
+            args.extend(("--argjson", "result_shas", self.result_shas, "-f", str(runtime / "program.jq")))
+            return self.jq(args, code)
+        def original_inputs(self):
+            self.evaluator_sha, self.seed_sha, self.observed_at = evaluator_sha, seed_sha, observed_at
+            self.input_document = input_path if mode == "run" else input_path / "manifest.json"
+            self.driver_sha = self.sha(self.read(runtime / "driver.sh"))
+            self.verify(consumer_rows[0]["sha256"], consumer_path)
+            self.verify_runtime()
+            jq_hold = self.held(runtime / "bin/jq", mode=0o500)
+            require(os.access(runtime / "bin/jq", os.X_OK))
+            self.release(jq_hold)
+            require(self.jq(["--version"]) == b"jq-1.6\n")
+            root = self.held(replay_root, True, 0o700);require(not root.listdir())
+            self.directories[replay_root] = root
+            self.work_identity = c._stat_values(root.before)
+            self.entity(replay_root, root.before)
+        def bindings(self):
+            window_raw = self.read(iroot / "driver-input/window.json")
+            self.window_sha = self.sha(window_raw)
+            launcher_raw = self.read(runtime / "launcher.sh")
+            table = c._c3_source_closure_values(launcher_raw)
+            closure_sha = self.sha(table)
+            for row in table.decode().splitlines():
+                relative, expected, length, source_mode = row.split()
+                require(length.isdecimal() and source_mode in {"100644", "100755"}, "E_STALE")
+                self.verify(expected, runtime / relative)
+            seeds, results, case_rows = [], [], []
+            pairs = [(None, input_path, None)] if mode == "run" else [(index, input_path / ("seed-%d.json" % index), input_path / ("result-%d.json" % index)) for index in range(2)]
+            for pair, seed, result in pairs:
+                seed_raw = self.read(seed);seeds.append(self.sha(seed_raw));document = self.seed_document(seed_raw)
+                if result is not None:results.append(self.sha(self.read(result)))
+                for case in document["body"]["cases"]:
+                    case_id = case["case_id"];require(case_id in c._C3_CASES)
+                    slot = c._C3_CASES.index(case_id)
+                    require(slot not in self.used);self.used.add(slot)
+                    manifest_raw = self.encode(case["manifest"]["content"])
+                    core_raw = self.encode(case["manifest"]["content"]["inventory_core"])
+                    manifest_sha = self.sha(manifest_raw)
+                    require(manifest_sha == case["manifest"]["sha256"], "E_RELATION")
+                    case_rows.append({"slot": slot, "case_id": case_id, "manifest_size": len(manifest_raw),
+                        "manifest_sha256": manifest_sha, "core_sha256": self.sha(core_raw)})
+                    self.sequence.append({"slot": slot, "case_id": case_id, "pair": pair})
+                    leaf = c._c3_fresh_work(0);leaf["input_kind"] = "M";self.scopes[case_id] = leaf
+            bindings = {"seed_sha256s": seeds, "result_sha256s": results, "evaluator_sha256": self.sha(self.read(evaluator)),
+                "source_closure_sha256": closure_sha, "cases": case_rows, "work_identity": self.work_identity}
+            budget_raw = self.read(iroot / "driver-input/replay-budget.json")
+            budget_sha = self.sha(budget_raw)
+            self.budget = c._c3_budget_values(budget_raw, 0, int(iroot.parent.name), mode, self.window_sha, bindings, self.common)
+            require(self.budget["sequence"] == self.sequence, "E_RELATION")
+            self.common["_c3_budget_sha"] = budget_sha;self.common["_c3_input_bindings"] = bindings
+            for scope, work in self.scopes.items():
+                c._c3_grant_room(self.budget, 0, scope, "bootstrap", c._c3_work_values(work), c._c3_work_values(c._c3_fresh_work(0)))
+            for scope, work in self.scopes.items():work["_c3_grant_binding"] = (self.budget, 0, scope, "body")
+            self.used.clear()
+        def append(self, path, raw):
+            _owner_scope, old, identity = self.written[path]
+            fd = self.own_fd(os.open(path, os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW))
+            row = self.entity(path, os.fstat(fd));require(c._stat_values(os.fstat(fd)) == identity)
+            failure = None
+            try:
+                offset = 0
+                while offset < len(raw):
+                    size = min(65536, len(raw) - offset)
+                    self.room([(("write_bytes",), size), (("physical_bytes",), size), (("read_bytes",), size),
+                        (("accounting", "M", "read_bytes"), size),
+                        (("accounting", "M", "write_bytes"), size), (("accounting", "M", "physical_bytes"), size),
+                        (("seed_processing", "W"), size), (("seed_processing", "C"), size)])
+                    c._capture_copy_room(self.work, size, False, case=True)
+                    count = os.write(fd, memoryview(raw)[offset:offset + size])
+                    if count > 0:
+                        self.work["write_bytes"] += count;self.work["physical_bytes"] += count;self.work["read_bytes"] += count
+                        c._capture_account(self.work, "M", "write_bytes", count)
+                        c._capture_account(self.work, "M", "physical_bytes", count)
+                        c._capture_account(self.work, "M", "read_bytes", count)
+                        self.processing("W", count);self.processing("C", count)
+                    require(count > 0);offset += count
+                os.fsync(fd);state = os.fstat(fd);self.observed_identity(path, state)
+                row["last_identity"] = c._stat_values(state);row["size_bytes"] = len(old) + offset
+            except BaseException as error:failure = error
+            finally:
+                try:self.close(fd, "C3-driver.value-append")
+                except BaseException as error:failure = first(failure, error)
+            if failure is not None:row["state"] = "unknown";raise failure
+            actual = self.read(path, mode=0o600)
+            joined = old + raw;self.processing("C", len(joined))
+            require(self.sha(actual) == self.sha(joined));self.equal(actual, joined, "E_RELATION")
+            self.written[path] = (self.scope, joined, row["last_identity"])
+        def produce_result(self, seed_path, work_path):
+            self.input_document, self.seed_docs = seed_path, seed_path
+            self.check("validate-seed-set", work_path / "empty-observations.json", work_path / "empty-candidate.json", "E_SHAPE")
+            seed_source = self.jq(["-r", ".body.seed_source // empty", str(seed_path)]).decode().rstrip("\n")
+            require(seed_source == "shadow.malicious-instructions.v1")
+            count = self.jq(["-r", ".body.cases | length", str(seed_path)]).decode().rstrip("\n")
+            require(re.fullmatch(r"[1-9][0-9]?", count) and int(count) <= 64, "E_SHAPE")
+            observations = self.write(work_path / "observations.json", b"[")
+            replay = runtime / "evals/v1/replay-malicious.py"
+            replay_sha = self.jq(["-er", REPLAY_SHA_QUERY, str(evaluator)]).decode().rstrip("\n")
+            self.verify(replay_sha, replay)
+            for index in range(int(count)):
+                case_id = self.jq(["-r", ".body.cases[%d].case_id" % index, str(seed_path)]).decode().rstrip("\n")
+                require(case_id in c._C3_CASES)
+                slot = c._C3_CASES.index(case_id);require(slot not in self.used)
+                wanted = self.sequence[len(self.children)]
+                require(wanted["slot"] == slot and wanted["case_id"] == case_id)
+                self.scope = case_id
+                case_doc = replay_root / ("malicious-case-%d.json" % slot)
+                case_raw = self.jq(["-S", "-c", ".body.cases[%d]" % index, str(seed_path)])
+                self.write(case_doc, case_raw)
+                case_work = self.mkdir(replay_root, "malicious-work-%d" % slot)
+                out_path = self.write(replay_root / ("malicious-%d.out" % slot), b"")
+                err_path = self.write(replay_root / ("malicious-%d.err" % slot), b"")
+                canonical_path = self.write(replay_root / ("malicious-%d.canonical" % slot), b"")
+                case = self.parse(case_raw)
+                manifest_raw = self.encode(case["manifest"]["content"])
+                core_raw = self.encode(case["manifest"]["content"]["inventory_core"])
+                child_bindings = {"slot": slot, "case_id": case_id, "case_document_sha256": self.sha(case_raw),
+                    "manifest_sha256": self.sha(manifest_raw), "core_sha256": self.sha(core_raw), "window_sha256": self.window_sha}
+                require(not self.directories[case_work].listdir())
+                self.release(self.directories.pop(case_work))
+                self.scope = "common"
+                try:
+                    pid, status, wire, error = self.run(["/usr/bin/python3", "-I", "-S", "-B", str(replay), str(runtime),
+                        str(iroot), str(case_doc), str(case_work)], {"LC_ALL": "C", "PATH": "/usr/bin:/bin", "TMPDIR": str(case_work)})
+                except BaseException as failure:
+                    self.scope = case_id
+                    for target, key in ((out_path, "C3_partial_stdout"), (err_path, "C3_partial_stderr")):
+                        if key in self.common:
+                            try:self.append(target, self.common[key])
+                            except BaseException as later:failure = first(failure, later)
+                    raise failure
+                self.scope = case_id
+                self.append(out_path, wire);self.append(err_path, error)
+                self.scope = "common"
+                data, end, done, settlement = c._c3_receive_values(wire, error, status, pid, os.getpid(),
+                    self.budget, slot + 1, child_bindings, self.common)
+                received = self.common["C3_received"][-1]
+                end_raw = received["end_raw"]
+                self.room([(("seed_processing", "C"), 2 * (len(end_raw) + len(done)))])
+                self.processing("C", 2 * (len(end_raw) + len(done)))
+                self.children.append({"actor": slot + 1, "pid": pid, "wait_status": status,
+                    "end_hex": end_raw.hex(), "done_hex": done.hex()})
+                self.used.add(slot)
+                self.common.setdefault("C3_child_settlements", []).append(settlement)
+                self.scope = case_id
+                self.verify(replay_sha, replay)
+                self.append(canonical_path, data)
+                self.single(canonical_path)
+                final_case = self.held(case_work, True, 0o700)
+                initial_rows = [row for _scope, path, row in self.entities if path == case_work]
+                require(len(initial_rows) == 1)
+                initial_identity, current_identity = initial_rows[0]["initial_identity"], c._stat_values(final_case.before)
+                require(all(initial_identity[key] == current_identity[key] for key in ("dev", "ino", "mode", "uid", "gid")), "E_RELATION")
+                self.observed_identity(case_work, final_case.before);self.release(final_case)
+                canonical = self.jq(["-S", "-c", ".", str(canonical_path)])
+                self.equal(data, canonical, "E_RUNTIME")
+                self.jq(["-e", "--arg", "case_id", case_id, ".case_id == $case_id", str(canonical_path)])
+                self.scope = "common"
+                if index:self.append(observations, b",")
+                self.append(observations, data.rstrip(b"\n"))
+            self.scope = "common";self.append(observations, b"]\n")
+            result = self.write(work_path / "run-result.json", self.program("build-run-result", observations, work_path / "empty-candidate.json"))
+            self.check("validate-run-result", observations, result, "E_RUNTIME")
+            return result
+        def empties(self, work_path):
+            self.write(work_path / "empty-observations.json", b"[]\n")
+            self.write(work_path / "empty-candidate.json", b"{}\n")
+        def business(self):
+            self.scope = "common"
+            self.seed_docs = self.input_document;self.result_docs = self.input_document;self.result_shas = "[]"
+            self.empties(replay_root)
+            self.single(self.input_document)
+            self.seed_docs = replay_root / "empty-observations.json";self.result_docs = self.seed_docs
+            self.check("validate-catalog", replay_root / "empty-observations.json", replay_root / "empty-candidate.json", "E_STALE")
+            if mode == "run":
+                result = self.produce_result(input_path, replay_root)
+                self.verify_runtime();self.verify_review_files()
+                return self.read(result, mode=0o600)
+            manifest_path = input_path / "manifest.json"
+            self.single(manifest_path)
+            pair_count = self.jq(["-r", "if type == \"array\" then length else empty end", str(manifest_path)]).decode().rstrip("\n")
+            require(re.fullmatch(r"([1-9]|1[0-6])", pair_count), "E_SHAPE")
+            require(int(pair_count) == 2, "E_SHAPE")
+            seeds_path = self.write(replay_root / "seeds.jsonl", b"")
+            results_path = self.write(replay_root / "results.jsonl", b"")
+            for pair in range(int(pair_count)):
+                seed_path, result_path = input_path / ("seed-%d.json" % pair), input_path / ("result-%d.json" % pair)
+                seed_raw, result_raw = self.read(seed_path), self.read(result_path)
+                wanted_seed = self.jq(["-r", ".[%d].seed_sha256" % pair, str(manifest_path)]).decode().rstrip("\n")
+                wanted_result = self.jq(["-r", ".[%d].result_sha256" % pair, str(manifest_path)]).decode().rstrip("\n")
+                require(self.sha(seed_raw) == wanted_seed and self.sha(result_raw) == wanted_result, "E_RELATION")
+                self.single(seed_path);self.single(result_path)
+                canonical = self.jq(["-S", "-c", ".", str(result_path)], "E_CANONICAL")
+                self.write(replay_root / ("pair-%d-canonical.json" % pair), canonical)
+                self.equal(result_raw, canonical, "E_CANONICAL")
+                pair_time = self.jq(["-r", ".body.observed_at", str(result_path)]).decode().rstrip("\n")
+                require(re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", pair_time), "E_SHAPE")
+                work_path = self.mkdir(replay_root, "pair-%d" % pair);self.empties(work_path)
+                self.seed_sha, self.observed_at = self.sha(seed_raw), pair_time
+                result = self.produce_result(seed_path, work_path)
+                self.equal(self.read(result, mode=0o600), result_raw, "E_RELATION")
+                self.input_document = manifest_path;self.seed_sha, self.observed_at = seed_sha, observed_at
+                self.append(seeds_path, self.jq(["-S", "-c", ".", str(seed_path)]))
+                self.append(results_path, self.jq(["-S", "-c", ".", str(result_path)]))
+            self.seed_docs, self.result_docs = seeds_path, results_path
+            self.result_shas = self.jq(["-c", "map(.result_sha256)", str(manifest_path)]).decode().rstrip("\n")
+            self.jq(["-e", "-n", "--argjson", "shas", self.result_shas, "$shas | length == (unique | length)"])
+            distinct = self.jq(["-s", "[.[].body.cases[] | [.family_id,.case_id]] | length == (unique | length)", str(results_path)])
+            require(distinct == b"true\n", "E_SHAPE")
+            dashboard = self.write(replay_root / "dashboard.json", self.program("build-dashboard", replay_root / "empty-observations.json", replay_root / "empty-candidate.json"))
+            self.check("validate-dashboard", replay_root / "empty-observations.json", dashboard, "E_RUNTIME")
+            self.verify_runtime();self.verify_review_files()
+            return self.read(dashboard, mode=0o600)
+        def release(self, held):
+            matches = [index for index, (item, _scope) in enumerate(self.holds) if item is held]
+            require(len(matches) == 1)
+            _item, scope = self.holds.pop(matches[0]);previous = self.scope;self.scope = scope
+            try:
+                require(held.recording_work is self.work)
+                held.close()
+            finally:self.scope = previous
+        def final_files(self):
+            self.scope = "common"
+            self.verify_runtime();self.verify_review_files()
+            for path, (scope, raw, identity) in self.written.items():
+                self.scope = scope
+                actual = self.read(path, mode=0o600)
+                require(c._stat_values(os.stat(path, follow_symlinks=False)) == identity, "E_RELATION")
+                require(self.sha(actual) == self.sha(raw), "E_RELATION");self.equal(actual, raw, "E_RELATION")
+            for path, (raw, identity) in list(self.sealed_inputs.items()):
+                self.scope = "common"
+                actual = self.read(path)
+                require(c._stat_values(os.stat(path, follow_symlinks=False)) == identity, "E_STALE" if runtime in path.parents else "E_RELATION")
+                require(self.sha(actual) == self.sha(raw), "E_RELATION");self.equal(actual, raw, "E_RELATION")
+            for held, scope in self.holds:
+                self.scope = scope;held.recheck("E_STORE", self.work, "M")
+            self.scope = "common"
+        def finish(self, data):
+            require(len(self.children) == len(self.sequence) and self.used == {row["slot"] for row in self.sequence})
+            self.final_files()
+            while self.holds:self.release(self.holds[-1][0])
+            for fd in sorted(self.fds):self.close(fd, "C3-driver.final-unused")
+            self.close(0, "C3-driver.stdin")
+            self.common["_c3_open_regular"] = [held.path for held, _scope in self.holds] + list(self.fds)
+            self.common["_c3_owned_children"] = self.active_children
+            require(not self.common["_c3_open_regular"] and not self.active_children)
+            own = {}
+            for scope, work in self.scopes.items():
+                receipts = {name: {"state": "not-applicable"} for name in ("raw", "export", "source", "preparation", "Q")}
+                if work.get("C3_spawns"):
+                    receipts["Q"] = {"state": "unknown"}
+                unknown = list(self.unknown) if scope == "common" else []
+                unknown.extend(key for key, value in work.items() if key.endswith("incomplete") and value)
+                own[scope] = c._c3_ledger_values(work, receipts,
+                    [row for owner_scope, _path, row in self.entities if owner_scope == scope],
+                    [row for row in self.errors if row["owner"] == work["accounting_owner"]], unknown)
+            end = {"version": 1, "window_sha256": self.window_sha, "ordinal": self.budget["ordinal"], "actor": 0,
+                "budget_sha256": self.common["_c3_budget_sha"], "leaf_pid": os.getpid(), "leaf_ppid": os.getppid(),
+                "input_bindings": self.common["_c3_input_bindings"], "data": {"size_bytes": len(data), "sha256": self.sha(data)},
+                "own": own, "children": self.children, "outcome": "completed"}
+            c._c3_emit(data, end, self.common, self.budget, 0)
+        def error_row(self, error, site):
+            self.errors.append({"owner": "C3-driver", "site": site, "ordinal": len(self.errors),
+                "category": type(error).__name__, "errno": getattr(error, "errno", None), "cancelled": bool(cancelled(error))})
+        def failed(self, primary):
+            failure = primary
+            try:self.error_row(primary, "C3-driver.body")
+            except BaseException as later:failure = first(failure, later)
+            while self.holds:
+                try:self.release(self.holds[-1][0])
+                except BaseException as error:
+                    try:self.error_row(error, "C3-driver.failed-held-close")
+                    except BaseException as later:error = first(error, later)
+                    failure = first(failure, error)
+            for fd in sorted(self.fds):
+                try:self.close(fd, "C3-driver.failed-unused")
+                except BaseException as error:
+                    try:self.error_row(error, "C3-driver.failed-fd-close")
+                    except BaseException as later:error = first(error, later)
+                    failure = first(failure, error)
+            return failure
+    owner = Driver()
+    def interrupt(number, _frame):
+        error = InterruptedError("driver cancelled")
+        error._D_source_cancel = True
+        error._scope_signal_cancel = True
+        raise error
+    for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):signal.signal(number, interrupt)
+    owner.original_inputs();owner.bindings();owner.finish(owner.business())
+except BaseException as error:
+    if owner is not None:error = owner.failed(error)
+    code = getattr(error, "code", "E_RUNTIME")
+    if code not in {"E_USAGE", "E_RUNTIME", "E_LIMIT", "E_PARSE", "E_CANONICAL", "E_SHAPE", "E_RELATION", "E_STALE"}:code = "E_RUNTIME"
+    try:os.write(2, (code + "\n").encode("ascii"))
+    finally:os._exit(1)
+' "$0" "$@"
+    ;;
+esac
+
 emit_error() {
   case "${1:-}" in
     E_USAGE|E_RUNTIME|E_LIMIT|E_PARSE|E_CANONICAL|E_SHAPE|E_RELATION|E_STALE)

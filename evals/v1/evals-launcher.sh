@@ -425,18 +425,251 @@ class C2Helpers:
         self.sources, self.scratch, self.work = sources, scratch, work
         self.unused = tuple(unused)
         self.results = []
-    def build(self, arguments):return self._invoke("evals_c2_build", arguments)
-    def run_and_check(self, arguments, driver_input):return self._invoke("evals_c2_run_and_check", arguments, driver_input)
-    def _invoke(self, function, arguments, driver_input=None):
-        c2_require(function in {"evals_c2_build", "evals_c2_run_and_check"})
-        self.work["helper_internal_work_unknown"] = "UNKNOWN: original shell build/driver/check work has no complete measured transfer"
-        functions = self.sources.helpers
-        command = "set -uo pipefail\nexport LC_ALL=C\numask 077\n" + functions + "\n" + function + " \"$@\"\n"
-        # These are fixed source bytes, not serialized shell locals or a function supplied by the caller.
-        size = len(command.encode())
-        self.work["read_bytes"] += size
-        c._capture_account(self.work, "M", "read_bytes", size)
-        c._capture_account(self.work, "M", "logical_bytes", size)
+        self.build_custody = None
+    def close(self, primary=None):
+        if self.build_custody is not None:self.build_custody.close(primary)
+    def _tool(self, role, argv, *, stdin=b"", output_limit=1048576):
+        c2_nonruntime_room(self.work, 0, False)
+        result = c._c3_run_tool(self.scratch + "/runtime", self.work, role, argv, stdin=stdin,
+            output_limit=output_limit, timeout=120, env={"LC_ALL": "C", "PATH": "/usr/bin:/bin"})
+        self.results.append(result)
+        return result
+    def _checked(self, role, argv, *, stdin=b"", output_limit=1048576, error="E_RUNTIME"):
+        result = self._tool(role, argv, stdin=stdin, output_limit=output_limit)
+        c2_require(result["status"] == 0 and not result["stderr"], error)
+        return result["stdout"]
+    def _original_filter(self, start, end):
+        text = self.sources.helpers
+        self.work["C3_source_recipe_processing_unknown"] = "UNKNOWN: fixed source recipe search processing is not fully observed"
+        c2_require(text.count(start) == 1, "E_STALE")
+        tail = text.split(start, 1)[1]
+        c2_require(end in tail, "E_STALE")
+        value = tail.split(end, 1)[0]
+        raw = value.encode()
+        c2_nonruntime_room(self.work, len(raw), False, read_only=True)
+        self.work["read_bytes"] += len(raw)
+        c._capture_account(self.work, "M", "read_bytes", len(raw))
+        self.work["seed_processing"]["R"] += len(raw)
+        return value
+    def _literal(self, name):
+        import re
+        rows = re.findall("^" + re.escape(name) + "=([a-zA-Z0-9_.-]+)$", self.sources.helpers, re.M)
+        c2_require(len(rows) == 1, "E_STALE")
+        return rows[0]
+    def _expand(self, value, local=None):
+        import re
+        values = dict(self.context)
+        if local:values.update(local)
+        def replace(match):
+            name = match.group(1) or match.group(2)
+            c2_require(name in values, "E_STALE")
+            return values[name]
+        result = re.sub(r"\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}|\$([a-zA-Z_][a-zA-Z0-9_]*)", replace, value)
+        c2_require("$" not in result and "`" not in result, "E_STALE")
+        return result
+    def _directory(self, path):
+        root = self.build_custody
+        path = str(Path(path))
+        c2_require(path == self.scratch or path.startswith(self.scratch + "/"), "E_RELATION")
+        if path in self.directories:return self.directories[path]
+        parent = self._directory(str(Path(path).parent))
+        held = root.mkdir(parent, Path(path).name)
+        self.directories[path] = held
+        return held
+    def _source_rule(self):
+        leaf = c._installed_rule(os.geteuid(), self.build_custody.resolver)
+        def check(fd, state, ancestor):
+            return True if ancestor else leaf(fd, state, False)
+        check.observations = leaf.observations
+        return check
+    def _snapshot(self, source, destination, expected=None, maximum=1048576, mode=0o400):
+        c2_require(destination.startswith(self.scratch + "/"), "E_RELATION")
+        held = c._open_held(source, False, self._source_rule(),
+            "E_STALE", recording_work=self.work, accounting_kind="M")
+        try:
+            c2_require(stat.S_ISREG(held.before.st_mode) and held.before.st_nlink == 1
+                and held.before.st_size <= maximum, "E_LIMIT")
+            raw = c2_driver_input_read(self.build_custody, held)
+            measured = c2_driver_input_sha(self.build_custody, raw)
+            c2_require(expected is None or measured == expected, "E_STALE")
+            parent = self._directory(str(Path(destination).parent))
+            if mode == 0o400:
+                output = C2Copies(self.build_custody).copy(held, parent, Path(destination).name,
+                    len(raw), measured, "M")
+            else:
+                installed_sha, output = c2_write_bytes(self.build_custody, parent, Path(destination).name, raw, mode=mode)
+                c2_require(installed_sha == measured, "E_STALE")
+            held.recheck("E_STALE", self.work, "M")
+            self.build_seals.append((output, raw, measured))
+            return measured
+        finally:held.close()
+    def _snapshots(self):
+        import shlex
+        body = self.sources.helpers.split("\nevals_build() {\n", 1)[1].split(
+            '"'"'snapshot_expected "$jq_sha"'"'"', 1)[0].replace("\\\n", "")
+        lines = body.splitlines()
+        index = 0
+        while index < len(lines):
+            line = lines[index].strip();index += 1
+            if line.startswith("for member in "):
+                c2_require(line.endswith("; do"), "E_STALE")
+                members = shlex.split(line[len("for member in "):-len("; do")])
+                loop = []
+                while index < len(lines) and lines[index].strip() != "done":
+                    loop.append(lines[index].strip());index += 1
+                c2_require(index < len(lines), "E_STALE");index += 1
+                calls = [item for item in loop if item.startswith("snapshot_expected ")]
+                c2_require(len(calls) == 1, "E_STALE")
+                tokens = shlex.split(calls[0].split(" ||", 1)[0])
+                for member in members:
+                    fields = member.split()
+                    c2_require(len(fields) == 2, "E_STALE")
+                    values = [self._expand(item, {"name": fields[0], "digest": fields[1]}) for item in tokens[1:]]
+                    c2_require(len(values) == 4 and values[3] == "0400", "E_STALE")
+                    self._snapshot(values[1], values[2], values[0])
+            elif line.startswith("/bin/mkdir -m 0700 "):
+                tokens = shlex.split(line.split(" ||", 1)[0])
+                for item in tokens[3:]:self._directory(self._expand(item))
+            elif line.startswith("snapshot_file ") or line.startswith("snapshot_expected "):
+                tokens = shlex.split(line.split(" ||", 1)[0]);values = [self._expand(item) for item in tokens[1:]]
+                if tokens[0] == "snapshot_file":
+                    c2_require(len(values) == 4 and values[2:] == ["1048576", "0400"], "E_STALE")
+                    measured = self._snapshot(values[0], values[1])
+                    if values[1].endswith("/bootstrap.sh"):self.context["bootstrap_sha"] = measured
+                    elif values[1].endswith("/launcher.sh"):self.context["launcher_sha"] = measured
+                else:
+                    c2_require(len(values) == 4 and values[3] == "0400", "E_STALE")
+                    self._snapshot(values[1], values[2], values[0])
+    def build(self, arguments):
+        mode, _root, paths = c2_cli(arguments)
+        self.context = {"scratch": self.scratch, "runtime": self.scratch + "/runtime",
+            "source_dir": str(Path(self.sources.launcher).parent), "self": self.sources.launcher,
+            "repo": str(Path(self.sources.launcher).parents[2])}
+        for name in ("generation", "program_sha", "driver_sha", "catalog_sha", "review_approval_sha"):
+            self.context[name] = self._literal(name)
+        self.context["generation_runtime"] = self.context["runtime"] + "/core/v2/generations/" + self.context["generation"]
+        resolver = c._DarwinUUIDResolver() if sys.platform == "darwin" else None
+        held = c._open_held(self.scratch, True, c._store_rule(os.geteuid(), os.getegid(), 0o700, True, resolver),
+            "E_STALE", recording_work=self.work, accounting_kind="M")
+        self.build_custody = C2Root(held, self.work, resolver)
+        self.directories = {self.scratch: held}
+        self.build_seals = []
+        system = self._checked("evals-platform", ["/usr/bin/uname", "-s"]).strip().decode("ascii")
+        machine = self._checked("evals-platform", ["/usr/bin/uname", "-m"]).strip().decode("ascii")
+        platform = {("Linux", "x86_64"): ("linux", "x86_64", "native", "jq-linux64"),
+            ("Darwin", "x86_64"): ("darwin", "x86_64", "native", "jq-osx-amd64"),
+            ("Darwin", "arm64"): ("darwin", "arm64", "rosetta", "jq-osx-amd64")}.get((system, machine))
+        c2_require(platform is not None, "E_RUNTIME")
+        host_os, host_arch, execution_mode, asset = platform
+        self.context.update(host_os=host_os, host_arch=host_arch, execution_mode=execution_mode,
+            jq_arch="x86_64", jq_sha=c.JQ_SHA256[host_os])
+        jq_source = None
+        for candidate in (os.path.join(os.environ.get("TMPDIR", "/tmp"), "ystack-portable-core-jq16", asset), "/usr/bin/jq"):
+            try:
+                item = c._open_held(candidate, False, self._source_rule(), "E_RUNTIME",
+                    recording_work=self.work, accounting_kind="M")
+            except (OSError, c.Refusal):continue
+            try:
+                raw = item.read(c.EXECUTABLE_LIMIT, "E_RUNTIME", self.work)
+                measured = c2_driver_input_sha(self.build_custody, raw)
+                if measured == self.context["jq_sha"]:jq_source = candidate
+            finally:item.close()
+            if jq_source is not None:break
+        c2_require(jq_source is not None, "E_RUNTIME")
+        self._snapshots()
+        self._snapshot(jq_source, self.context["runtime"] + "/bin/jq", self.context["jq_sha"], c.EXECUTABLE_LIMIT, 0o500)
+        self.work["helper_internal_work_unknown"] = "UNKNOWN: original tool/compiler/Q work remains incomplete"
+        return self._build_values(arguments, mode, paths)
+
+    def _build_values(self, arguments, mode, paths):
+        runtime = self.context["runtime"]
+        jq = runtime + "/bin/jq"
+        source = c._open_held("/bin/bash", False, self._source_rule(),
+            "E_RUNTIME", recording_work=self.work, accounting_kind="M")
+        try:
+            raw = source.read(c.EXECUTABLE_LIMIT, "E_RUNTIME", self.work)
+            self.context["bash_sha"] = c2_driver_input_sha(self.build_custody, raw)
+        finally:source.close()
+        quote = chr(39)
+        registry_filter = self._original_filter('"'"'record_generation=$("$runtime/bin/jq" -er '"'"' + quote + "\n",
+            "\n" + quote + '"'"' "$runtime/core/v2/generation-registry.json"'"'"')
+        record_generation = self._checked("evals-build-values", [jq, "-er", registry_filter,
+            runtime + "/core/v2/generation-registry.json"], error="E_STALE").rstrip(b"\n").decode("ascii")
+        self.context["record_generation"] = record_generation
+        self.context["record_schema"] = "core/v2/generations/" + record_generation + "/modules/schema.jq"
+        record_files = self._expand(self._original_filter('"'"'record_files="'"'"', '"'"'"\n}'"'"'))
+        for line in record_files.splitlines():
+            path, expected = line.split()
+            self._snapshot(self.context["repo"] + "/" + path, runtime + "/" + path, expected)
+        c2_require(self.context["review_approval_sha"] == "none", "E_RELATION")
+        runtime_held = self.directories[runtime]
+        c2_write_bytes(self.build_custody, runtime_held, "review-files.tsv", b"")
+        if mode == "run":
+            self._snapshot(paths[0], self.scratch + "/input.json")
+            self.input_document = self.scratch + "/input.json"
+            self.driver_input = self.input_document
+            seeds = [self.input_document]
+        else:
+            inputs = self._directory(self.scratch + "/inputs")
+            manifest_entries, seeds = [], []
+            for pair in range(2):
+                seed = self.scratch + "/inputs/seed-" + str(pair) + ".json"
+                result = self.scratch + "/inputs/result-" + str(pair) + ".json"
+                seed_sha = self._snapshot(paths[2 * pair], seed)
+                result_sha = self._snapshot(paths[2 * pair + 1], result)
+                seeds.append(seed)
+                manifest_entries.append({"result_sha256": result_sha, "seed_sha256": seed_sha})
+            raw = C2Channel(9, self.work).encode(manifest_entries)
+            manifest = self._checked("evals-build-values", [jq, "-S", "-c", "."], stdin=raw)
+            c2_write_bytes(self.build_custody, inputs, "manifest.json", manifest)
+            self.driver_input = self.scratch + "/inputs"
+            self.input_document = self.driver_input + "/manifest.json"
+        self.context["seed_sha"] = self._hash_path(self.input_document)
+        for seed in seeds:
+            result = self._tool("evals-build-values", [jq, "-r", ".body.seed_source // empty", seed])
+            if result["status"] != 0:continue
+            source = result["stdout"].rstrip(b"\n")
+            c2_require(source != b"reviews.independent-verdicts.v1", "E_RELATION")
+        record_filter = self._original_filter('"'"'record_closure=$("$runtime/bin/jq" -R -s -c '"'"' + quote + "\n",
+            "\n" + quote + '"'"' <<< "$record_files")'"'"')
+        record_closure = self._checked("evals-build-values", [jq, "-R", "-s", "-c", record_filter],
+            stdin=(record_files + "\n").encode()).rstrip(b"\n").decode()
+        closure_filter = self._original_filter('"'"'shadow_closure=$(shadow_source_rows | "$runtime/bin/jq" -R -s -c '"'"' + quote + "\n",
+            "\n" + quote + '"'"')'"'"')
+        table = self.sources.namespace["table"].encode()
+        shadow_closure = self._checked("evals-build-values", [jq, "-R", "-s", "-c", closure_filter],
+            stdin=table).rstrip(b"\n").decode()
+        evaluator_filter = self._original_filter('"'"'--arg execution_mode "$execution_mode" '"'"' + quote + "\n",
+            "\n" + quote + '"'"' > "$runtime/evaluator.json"'"'"')
+        argv = [jq, "-S", "-c", "-n"]
+        for name in ("bootstrap_sha", "launcher_sha", "driver_sha", "program_sha", "catalog_sha"):
+            argv += ["--arg", name, self.context[name]]
+        argv += ["--argjson", "record_closure", record_closure, "--argjson", "shadow_closure", shadow_closure]
+        for name in ("jq_sha", "bash_sha", "host_os", "host_arch", "jq_arch", "execution_mode"):
+            argv += ["--arg", name, self.context[name]]
+        argv.append(evaluator_filter)
+        evaluator_raw = self._checked("evals-build-values", argv)
+        evaluator_sha, evaluator_held = c2_write_bytes(self.build_custody, runtime_held,
+            "evaluator.json", evaluator_raw)
+        self.build_seals.append((evaluator_held, evaluator_raw, evaluator_sha))
+        self.context["evaluator_sha"] = evaluator_sha
+        schema_filter = self._original_filter('"'"'"$runtime/bin/jq" -e --arg path "$record_schema" '"'"' + quote + "\n",
+            "\n" + quote + '"'"' "$runtime/evaluator.json"'"'"')
+        self._checked("evals-build-values", [jq, "-e", "--arg", "path", self.context["record_schema"],
+            schema_filter, runtime + "/evaluator.json"], error="E_STALE")
+        return {"status": 0, "stdout": b"", "stderr": b""}
+    def _hash_path(self, path):
+        held = c._open_held(path, False, self._source_rule(),
+            "E_STALE", recording_work=self.work, accounting_kind="M")
+        try:
+            raw = held.read(c.EXECUTABLE_LIMIT, "E_STALE", self.work)
+            return c2_driver_input_sha(self.build_custody, raw)
+        finally:held.close()
+    def run_and_check(self, arguments, driver_input):
+        return self._run_fixed(arguments, driver_input)
+
+    def _driver(self, argv, environment):
+        c2_require(type(argv) is list and len(argv) == 9 and argv[:2] == ["/bin/bash", self.scratch + "/runtime/driver.sh"], "E_RELATION")
         descriptors, child, first = [], None, None
         pending, pending_pair = None, None
         chunks = {"stdout": [], "stderr": []}
@@ -452,40 +685,33 @@ class C2Helpers:
             error_r, error_w = pending_pair;pending_pair = None
             actions = [(os.POSIX_SPAWN_DUP2, null, 0), (os.POSIX_SPAWN_DUP2, output_w, 1),
                 (os.POSIX_SPAWN_DUP2, error_w, 2)]
-            actions += [(os.POSIX_SPAWN_CLOSE, fd) for fd in sorted(set((9, 10, *descriptors, *self.unused, *(row["fd"] for row in self.sources.namespace["owned"] if not row["closed"])))) if fd not in {0, 1, 2}]
-            helper_arguments = [self.sources.launcher, self.scratch]
-            if function == "evals_c2_run_and_check":
-                c2_require(type(driver_input) is str and os.path.isabs(driver_input), "E_RELATION")
-                helper_arguments.append(driver_input)
-            else:c2_require(driver_input is None, "E_RELATION")
-            argv = ["/bin/bash", "-c", command, "ystack-fixed-C2-helper", *helper_arguments, *arguments]
-            environment = {"LC_ALL": "C", "PATH": "/usr/bin:/bin"}
-            if "TMPDIR" in os.environ:environment["TMPDIR"] = os.environ["TMPDIR"]
+            actions += [(os.POSIX_SPAWN_CLOSE, fd) for fd in sorted(set((9, 10, *descriptors, *self.unused, *(row["fd"] for row in self.sources.namespace["owned"] if not row["closed"]), *(component.fd for held in self.build_custody.owned for component in held.components)))) if fd not in {0, 1, 2}]
             child = os.posix_spawn("/bin/bash", argv, environment, file_actions=actions)
-            c._capture_observe(self.work, "M", "C2.helper-spawn", {"pid": child, "function": function, "actions": actions})
+            c._capture_observe(self.work, "M", "C3.driver-spawn", {"pid": child, "actions": actions})
             for fd in (null, output_w, error_w):
                 descriptors.remove(fd)
-                c._close_capture_copy(fd, self.work, self.work, "C2.helper-parent-end", None)
+                c._close_capture_copy(fd, self.work, self.work, "C3.driver-parent-end", None)
             with selectors.DefaultSelector() as selected:
                 selected.register(output_r, selectors.EVENT_READ, "stdout")
                 selected.register(error_r, selectors.EVENT_READ, "stderr")
                 while selected.get_map():
                     for key, _events in selected.select():
                         name = key.data
-                        amount = min(65536, _C2_LIMIT + 1 - lengths[name])
+                        limit = _C2_LIMIT if name == "stdout" else 65536
+                        amount = min(65536, limit + 1 - lengths[name])
                         c2_require(amount > 0, "E_LIMIT")
                         c2_wire_room(self.work, amount, "R")
                         raw = os.read(key.fd, amount)
                         self.work["read_bytes"] += len(raw)
                         c._capture_account(self.work, "M", "read_bytes", len(raw))
                         chunks[name].append(raw);lengths[name] += len(raw)
-                        c2_require(lengths[name] <= _C2_LIMIT, "E_LIMIT")
+                        c2_require(lengths[name] <= limit, "E_LIMIT")
                         if not raw:selected.unregister(key.fd)
             waited, status = os.waitpid(child, 0)
-            c._capture_observe(self.work, "M", "C2.helper-wait", {"pid": waited, "status": status})
+            c._capture_observe(self.work, "M", "C3.driver-wait", {"pid": waited, "status": status})
             c2_require(waited == child, "E_RUNTIME")
             child = None
-            result = {"function": function, "status": status, "pid": waited}
+            result = {"status": status, "pid": waited}
             for name in ("stdout", "stderr"):
                 result[name] = b"".join(chunks[name])
                 self.work["read_bytes"] += lengths[name]
@@ -494,23 +720,23 @@ class C2Helpers:
             return result
         except BaseException as error:
             first = error
-            self.work["C2_helper_incomplete"] = True
-            self.work["C2_helper_partial"] = chunks
+            self.work["C3_driver_incomplete"] = True
+            self.work["C3_driver_partial"] = chunks
         finally:
             if child is not None:
                 try:
                     os.kill(child, signal.SIGTERM)
                     waited, status = os.waitpid(child, 0)
-                    c._capture_observe(self.work, "M", "C2.helper-failed-wait", {"pid": waited, "status": status})
+                    c._capture_observe(self.work, "M", "C3.driver-failed-wait", {"pid": waited, "status": status})
                 except BaseException as error:
                     first = c2_first(first, error)
-                    self.work["C2_helper_wait_incomplete"] = True
+                    self.work["C3_driver_wait_incomplete"] = True
             for fd in ((pending,) if pending is not None else ()) + (pending_pair or ()):
                 if fd not in descriptors:
-                    try:c._close_capture_copy(fd, self.work, self.work, "C2.helper-pending-close", first)
+                    try:c._close_capture_copy(fd, self.work, self.work, "C3.driver-pending-close", first)
                     except BaseException as error:first = c2_first(first, error)
             for fd in reversed(descriptors):
-                try:c._close_capture_copy(fd, self.work, self.work, "C2.helper-pipe-close", first)
+                try:c._close_capture_copy(fd, self.work, self.work, "C3.driver-pipe-close", first)
                 except BaseException as error:
                     first = c2_first(first, error)
             if first is not None:raise first
@@ -1015,12 +1241,17 @@ def c2_document(custody, parent, name, maximum=_C2_LIMIT):
 def c2_write_document(custody, parent, name, value):
     channel = C2Channel(9, custody.work)
     raw = channel.encode(value)
-    c2_require(len(raw) <= _C2_LIMIT, "E_LIMIT")
+    return c2_write_bytes(custody, parent, name, raw, document=True)[0]
+
+
+def c2_write_bytes(custody, parent, name, raw, *, document=False, mode=0o400):
+    c2_require(type(raw) is bytes and len(raw) <= 16 * _C2_LIMIT
+        and mode in {0o400, 0o500} and (not document or mode == 0o400), "E_LIMIT")
     before = parent.before;names = custody.namespace(parent)
     writer, first = None, None
     try:
         c2_nonruntime_room(custody.work, 0, False, files=1)
-        writer = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400, dir_fd=parent.fd)
+        writer = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode, dir_fd=parent.fd)
         custody.work["files"] += 1;c._capture_account(custody.work, "M", "files", 1)
         custody.created_parent(parent, before, names, name)
         offset = 0
@@ -1028,21 +1259,32 @@ def c2_write_document(custody, parent, name, value):
             amount = min(65536, len(raw) - offset)
             c2_nonruntime_room(custody.work, amount, False, writing=True)
             sent = os.write(writer, memoryview(raw)[offset:offset+amount])
-            c2_require(type(sent) is int and 0 < sent <= amount, "E_RUNTIME")
-            custody.work["write_bytes"] += sent;custody.work["physical_bytes"] += sent
+            if type(sent) is int and sent > 0:
+                custody.work["write_bytes"] += sent;custody.work["physical_bytes"] += sent
             custody.work["seed_processing"]["W"] += sent;custody.work["seed_processing"]["C"] += sent
             c._capture_account(custody.work, "M", "write_bytes", sent);c._capture_account(custody.work, "M", "physical_bytes", sent)
+            c2_require(type(sent) is int and 0 < sent <= amount, "E_RUNTIME")
             offset += sent
         os.fsync(writer);custody.observe("C2.receipt-fsync", {"fd": writer, "return": 0})
         closing, writer = writer, None
         c._close_capture_copy(closing, custody.work, custody.work, "C2.receipt-writer", None)
-        _value, observed, measured, held = c2_document(custody, parent, name)
+        if document:
+            _value, observed, measured, held = c2_document(custody, parent, name)
+        else:
+            held = custody.adopt(c._open_child(parent, name, False,
+                c._store_rule(os.geteuid(), os.getegid(), mode, False, custody.resolver), "E_STALE",
+                recording_work=custody.work, accounting_kind="M"))
+            c2_nonruntime_room(custody.work, len(raw), False, read_only=True)
+            observed = held.read(len(raw), "E_STALE", custody.work)
+            c._capture_account(custody.work, "M", "read_bytes", len(observed))
+            custody.work["seed_processing"]["R"] += len(observed)
+            measured = c2_driver_input_sha(custody, observed)
         equal = observed == raw
         custody.work["read_bytes"] += len(observed) + len(raw)
         c._capture_account(custody.work, "M", "read_bytes", len(observed) + len(raw))
         c2_require(equal, "E_STALE")
         held.recheck("E_STALE", custody.work, "M")
-        return measured
+        return measured, held
     except BaseException as error:
         first = error;custody.fail(error)
     finally:
@@ -1359,7 +1601,7 @@ def c2_lifecycle(launcher, arguments):
             except BaseException as error:
                 source_errors.append(error)
                 failure = c2_first(failure, error)
-        for owner in (custody, sources):
+        for owner in (helpers, custody, sources):
             if owner is not None:
                 try:owner.close(failure)
                 except BaseException as error:

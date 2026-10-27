@@ -1442,5 +1442,58 @@ for fault in ('fsync','run','close','deadline','cancel','preserved'):
             marker=output/'completion/COMPLETE.json'
             check(marker.read_bytes()==b'preserved\n' if fault=='preserved' else not marker.exists())
         finally:g._Generator=original_generator;g.os.fsync=fsync
+# BEGIN fixed scope shared value controls (finite extraction; no Reader/native run).
+def scope_shared_value_controls(r):
+    import os,stat
+    observed = 0
+    def equal(left, right):
+        nonlocal observed
+        assert left == right
+        observed += 1
+    body = {key: key for key in ("attempt_id", "nonce", "coverage_base", "evaluated_revision",
+        "stage_request_ref", "resolved_profile_ref", "stage_result_ref", "source_package_ref", "source_accepted_set_ref")}
+    equal(r._coverage_expectation_fields_values(body), {key: body[key] for key in
+        ("attempt_id", "nonce", "coverage_base", "evaluated_revision", "stage_request_ref", "resolved_profile_ref",
+         "stage_result_ref", "source_package_ref", "source_accepted_set_ref")})
+    fields = ["attempt", "nonce", "repository", {"commit_id": "base"}, {"commit_id": "current"},
+        {"scope": {"id": "scope.test"}}, [], [], {}, {}, {}, [], [], [], [], "0" * 64, {}, {}]
+    native = dict(zip(("attempt_id", "nonce", "repository_id", "coverage_base", "evaluated_revision",
+        "documents", "qualifying_shadow_record_refs", "current_shadow_record_refs", "resolved_profile_ref",
+        "stage_request_ref", "stage_result_ref", "materialization_refs", "publisher_request_refs", "post_check_refs",
+        "qualifying_receipt_refs", "git_observation_sha256", "source_package_ref", "source_accepted_set_ref"), fields))
+    native["coverage_rule_version"] = "scope-coverage.v1"
+    equal(r.c.canonical(r._coverage_request_body_values(*fields)), r.c.canonical(native))
+    arguments = ["-S", "-c", "--arg", "phase", "stage-request", "--rawfile", "contract", "/unopened/contract",
+        "--rawfile", "patch", "/unopened/patch", "--slurpfile", "metadata", "/unopened/metadata"]
+    descriptors = [{"position": position, "type": "historical-path" if position in {7, 10, 13} else "fixed",
+        "role": {7: "contract", 10: "patch", 13: "builder-metadata"}.get(position, "filter-argument"),
+        **({"value": value} if position not in {7, 10, 13} else {})} for position, value in enumerate(arguments)]
+    recipe = r._scope_command_recipe_values("scope-fixed-json-check", "1" * 64, "2" * 64, "stage-request", descriptors)
+    equal(recipe, {"role": "scope-fixed-json-check", "executable_sha256": "1" * 64,
+        "component_sha256": "2" * 64, "operation": "stage-request", "arguments": descriptors})
+    equal([row["position"] for row in recipe["arguments"] if row["type"] == "historical-path"], [7, 10, 13])
+    malformed = copy.deepcopy(descriptors);malformed[7]["value"] = "/must-not-be-an-input"
+    try:r._scope_command_recipe_values("scope-fixed-json-check", "1" * 64, "2" * 64, "stage-request", malformed)
+    except r.c.Refusal:observed += 1
+    else:raise AssertionError("recipe accepted historical value")
+    sentinel = {"state": "not-observed-by-ancestor-rule"}
+    state = dict(dev=1,ino=2,mode=stat.S_IFDIR | 0o755,uid=0,gid=0,nlink=2,size=0,mtime_ns=1,ctime_ns=1)
+    rows = [dict(role="store",name=os.fsencode(name).hex(),before=dict(state,ino=index+2),
+        after=dict(state,ino=index+2),named_after=dict(state,ino=index+2),access_acl=dict(sentinel),
+        default_acl=dict(sentinel),directory_names=None,read_error=None) for index,name in enumerate(("/", "/unopened"))]
+    equal(r._scope_store_ancestor_values(rows, "/unopened/store"), [list(r.c._identity_values(row["before"])) for row in rows])
+    for changed in (list(reversed(rows)), rows[:-1]):
+        try:r._scope_store_ancestor_values(changed, "/unopened/store")
+        except r.c.Refusal:observed += 1
+        else:raise AssertionError("accepted wrong ancestor chain")
+    partial = copy.deepcopy(rows);partial[0]["default_acl"] = None
+    try:r._scope_store_ancestor_values(partial, "/unopened/store")
+    except r.c.Refusal:observed += 1
+    else:raise AssertionError("accepted unpaired ancestor sentinel")
+    equal(r._coverage_head_values(b"ref: refs/heads/main\n"), "main")
+    equal(r._coverage_changes_values({}, {"readme": ("100644", "blob", "1" * 40)}), (["readme"], []))
+    return observed
+checks += scope_shared_value_controls(g.r)
+# END fixed scope shared value controls.
 print(f'PASS {checks} pure parser / projection / Git-history / closed argv / socket lifecycle controls; no source/native execution')
 PY

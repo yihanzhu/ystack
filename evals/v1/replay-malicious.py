@@ -3881,186 +3881,14 @@ class _ReplayCase:
 
     def _run_offline(self, role, argv, *, stdin=b"", timeout=120,
                      output_limit=1048576, env):
-        import selectors
-        import signal
-        import time
-        roles = {"incident-validation", "materializer-input-validation",
-            "qualified-identity-validation", "materializer-response-validation",
-            "sandbox-receipt-check", "trace-validation", "write-seed-conversion",
-            "write-materialization-input", "sandbox-bound-evaluation",
-            "gate-duty-evaluation", "gate-risk-evaluation", "gate-kill-evaluation",
-            "source-git-inventory", "source-git-commit", "source-git-blob", "candidate-git-inventory", "candidate-git-commit", "candidate-git-blob"}
-        source = Path(__file__).resolve().parents[2]
-        _seed_require(role in roles and type(argv) is list and argv
-            and all(type(value) is str and value for value in argv)
-            and type(stdin) is bytes and type(timeout) in {int, float} and 0 < timeout <= 120
-            and type(output_limit) is int and 0 < output_limit <= (16 if role.endswith("git-inventory") else 8) * 1048576)
-        if argv[0] == "/bin/bash":
-            _seed_require(len(argv) >= 3 and argv[1] == "-p"
-                and Path(argv[2]).resolve().is_relative_to(source))
-        elif argv[0] == "/usr/bin/git":
-            _seed_require(role in {"source-git-inventory", "source-git-commit", "source-git-blob", "candidate-git-inventory", "candidate-git-commit", "candidate-git-blob"}
-                and len(argv) >= 5 and argv[1] == "--no-replace-objects" and argv[2].startswith("--git-dir="))
-            arguments = argv[3:]
-            _seed_require((len(arguments) == 6 and arguments[:5] == ["ls-tree", "-r", "-t", "-z", "--full-tree"]
-                and self.c._writer_oid(arguments[5])) or (len(arguments) == 3 and arguments[0] == "cat-file"
-                and arguments[1] in {"commit", "blob"} and self.c._writer_oid(arguments[2])))
-        else:
-            _seed_require(argv[0] == str(source / "bin/jq"))
-        c, work = self.c, self.work
-        incoming = outgoing = diagnostic = None
-        selector = child = None
-        closed = [False, False, False, False, False, False]
-        primary, result = None, None
-        communication_finished = False
-        work["offline_child_internal_unknown"] = True
-        work["accounting_incomplete"] = True
-
-        def close_fd(fd):
-            if incoming is not None and fd == incoming[0]:slot = 0
-            elif incoming is not None and fd == incoming[1]:slot = 1
-            elif outgoing is not None and fd == outgoing[0]:slot = 2
-            elif outgoing is not None and fd == outgoing[1]:slot = 3
-            elif diagnostic is not None and fd == diagnostic[0]:slot = 4
-            elif diagnostic is not None and fd == diagnostic[1]:slot = 5
-            else:raise ValueError("E_RELATION")
-            if closed[slot]:return
-            closed[slot] = True
-            c._close_capture_copy(fd, work, work, "offline-child/" + role, primary)
-
-        def room(amount, reading):
-            c._capture_copy_room(work, amount, False, case=True, read_only=reading)
-            c._capture_copy_budget_room(work, amount, False, read_only=reading)
-
-        def quantum(maximum, reading):
-            size = maximum
-            while True:
-                try:room(size, reading)
-                except c.Refusal as error:
-                    if getattr(error, "code", None) != "E_LIMIT" or size <= 1:raise
-                    size //= 2
-                else:return size
-
-        def charge(operation, count):
-            failure = None
-            field = "write_bytes" if operation == "W" else "read_bytes"
-            try:work[field] += count
-            except BaseException as error:failure = self._replay_io_first(failure, error)
-            try:
-                counts = work.setdefault("seed_processing", {})
-                counts[operation] = counts.get(operation, 0) + count
-            except BaseException as error:failure = self._replay_io_first(failure, error)
-            try:c._capture_account(work, "M", field, count)
-            except BaseException as error:failure = self._replay_io_first(failure, error)
-            if failure is not None:
-                work["offline_child_accounting_incomplete"] = True
-                raise failure
-
         try:
-            room(0, True)
-            incoming = os.pipe()
-            c._capture_observe(work, "M", "offline-child-pipe", {"role": role, "stream": "stdin", "fds": incoming})
-            outgoing = os.pipe()
-            c._capture_observe(work, "M", "offline-child-pipe", {"role": role, "stream": "stdout", "fds": outgoing})
-            diagnostic = os.pipe()
-            c._capture_observe(work, "M", "offline-child-pipe", {"role": role, "stream": "stderr", "fds": diagnostic})
-            child = subprocess.Popen(argv, stdin=incoming[0], stdout=outgoing[1],
-                stderr=diagnostic[1], env=env, close_fds=True, start_new_session=True)
-            c._capture_observe(work, "M", "offline-child-spawn", {"role": role, "pid": child.pid, "argv": argv, "environment_keys": sorted(env)})
-            for fd in (incoming[0], outgoing[1], diagnostic[1]):close_fd(fd)
-            selector = selectors.DefaultSelector()
-            for fd in (incoming[1], outgoing[0], diagnostic[0]):os.set_blocking(fd, False)
-            streams = {outgoing[0]: bytearray(), diagnostic[0]: bytearray()}
-            limits = {outgoing[0]: output_limit, diagnostic[0]: 65536}
-            for fd in streams:selector.register(fd, selectors.EVENT_READ)
-            offset = 0
-            if stdin:selector.register(incoming[1], selectors.EVENT_WRITE)
-            else:close_fd(incoming[1])
-            deadline = time.monotonic() + timeout
-            while selector.get_map():
-                remaining = deadline - time.monotonic()
-                _seed_require(remaining > 0)
-                for key, _event in selector.select(min(remaining, 0.25)):
-                    fd = key.fd
-                    if fd == incoming[1]:
-                        size = quantum(min(65536, len(stdin) - offset), False)
-                        work["offline_child_write_incomplete"] = True
-                        work["write_calls"] = work.get("write_calls", 0) + 1
-                        try:count = os.write(fd, memoryview(stdin)[offset:offset + size])
-                        except BlockingIOError:
-                            work["offline_child_write_incomplete"] = False
-                            continue
-                        if count > 0:
-                            offset += count
-                            charge("W", count)
-                        c._capture_observe(work, "M", "offline-child-write", {"role": role, "return": count})
-                        _seed_require(0 < count <= size)
-                        work["offline_child_write_incomplete"] = False
-                        if offset == len(stdin):
-                            selector.unregister(fd);close_fd(fd)
-                    else:
-                        size = quantum(min(65536, limits[fd] - len(streams[fd]) + 1), True)
-                        work["read_calls"] = work.get("read_calls", 0) + 1
-                        work["offline_child_read_incomplete"] = True
-                        try:raw = os.read(fd, size)
-                        except BlockingIOError:
-                            work["offline_child_read_incomplete"] = False
-                            continue
-                        charge("R", len(raw))
-                        c._capture_observe(work, "M", "offline-child-read", {"role": role,
-                            "stream": "stdout" if fd == outgoing[0] else "stderr", "return": len(raw)})
-                        work["offline_child_read_incomplete"] = False
-                        if not raw:
-                            selector.unregister(fd);close_fd(fd)
-                        else:
-                            _seed_require(len(streams[fd]) + len(raw) <= limits[fd])
-                            room(len(raw), True)
-                            work["offline_child_buffer_incomplete"] = True
-                            streams[fd].extend(raw)
-                            charge("C", len(raw))
-                            work["offline_child_buffer_incomplete"] = False
-            remaining = deadline - time.monotonic()
-            _seed_require(remaining > 0)
-            status = child.wait(timeout=remaining)
-            communication_finished = True
-            c._capture_observe(work, "M", "offline-child-wait", {"role": role, "pid": child.pid, "return": status})
-            _seed_require(status == 0 and not streams[diagnostic[0]])
-            room(len(streams[outgoing[0]]), True)
-            result = bytes(streams[outgoing[0]])
-            charge("C", len(result))
+            result = self.c._c3_run_tool(str(Path(__file__).resolve().parents[2]), self.work,
+                role, argv, stdin=stdin, timeout=timeout, output_limit=output_limit, env=env)
+            _seed_require(result["status"] == 0 and not result["stderr"])
+            return result["stdout"]
         except BaseException as error:
-            primary = error
             self.inputs._failed(error)
-        finally:
-            if child is not None and not communication_finished:
-                for signum, boundary in ((signal.SIGTERM, 5), (signal.SIGKILL, 5)):
-                    try:
-                        try:os.killpg(child.pid, signum)
-                        except ProcessLookupError:pass
-                        status = child.wait(timeout=boundary)
-                        communication_finished = True
-                        c._capture_observe(work, "M", "offline-child-stop", {
-                            "role": role, "pid": child.pid, "signal": signum, "return": status})
-                        break
-                    except subprocess.TimeoutExpired:continue
-                    except BaseException as error:
-                        primary = self._replay_io_first(primary, error)
-                        if communication_finished:break
-                if not communication_finished:
-                    try:work["offline_child_exit_unknown"] = True
-                    except BaseException as error:primary = self._replay_io_first(primary, error)
-            if selector is not None:
-                try:selector.close()
-                except BaseException as error:primary = self._replay_io_first(primary, error)
-            for pair in (incoming, outgoing, diagnostic):
-                if pair is not None:
-                    for fd in pair:
-                        try:close_fd(fd)
-                        except BaseException as error:primary = self._replay_io_first(primary, error)
-            if primary is not None:
-                self.inputs._failed(primary)
-                raise primary
-        return result
+            raise
 
     def consumer_commands(self, runtime_root, phase, input_raw, response_raw,
                           sudo_stat_values, candidate_commit_id=None, write_set=None):
@@ -5828,8 +5656,11 @@ def _private_cli(argv):
         and case_path.name.endswith(suffix))
     index = case_path.name[len(prefix):-len(suffix)]
     _seed_require(index in {"0", "1", "2", "3"} and private_work.name == "malicious-work-" + index)
-    for left, right in ((private_work, input_root), (private_work, runtime_root),
-                        (input_root, runtime_root)):
+    replay_work = input_root / "driver-input/replay-work"
+    _seed_require(private_work.parent == replay_work and case_path.parent == replay_work)
+    for left, right in ((private_work, input_root / ("malicious." + (
+            "incident-symptom-text", "checked-file-bytes", "commit-message", "unread-forge-text")[int(index)])),
+            (private_work, runtime_root), (input_root, runtime_root)):
         _seed_require(os.path.commonpath((str(left), str(right))) not in {str(left), str(right)})
 
     source = runtime_root / "shadow/v1/_consumer.py"
@@ -5848,7 +5679,7 @@ def _private_cli(argv):
         and getattr(c.__spec__, "origin", None) == str(source)
         and c._source_root() == str(runtime_root))
     resolver = c._DarwinUUIDResolver() if sys.platform == "darwin" else None
-    work = {}
+    work = c._c3_fresh_work(int(index) + 1)
     c._capture_work_values(work, "private-cli-bootstrap")
     work["input_kind"] = "M"
     work["cli_fd_closure"] = fd_closure
@@ -5920,6 +5751,30 @@ def _private_cli(argv):
         core_raw = c.canonical(manifest["inventory_core"])
         _seed_require(window["cases"][case["case_id"]] == {
             "inventory_core": manifest["inventory_core"], "sha256": hashlib.sha256(core_raw).hexdigest()})
+        budget_held = c._open_held(str(input_root / "driver-input/replay-budget.json"), False,
+            c._store_rule(os.geteuid(), os.getegid(), 0o400, False, resolver), "E_STORE",
+            recording_work=work, accounting_kind="M")
+        try:owned.append(budget_held)
+        except BaseException as error:
+            if not any(item is budget_held for item in owned):
+                try:budget_held.close()
+                except BaseException as later:error = _seed_first(error, later)
+            raise error
+        budget_raw = budget_held.read(c.DOCUMENT_LIMIT, "E_STORE", work)
+        actual_bindings = {"slot": int(index), "case_id": case["case_id"],
+            "case_document_sha256": c.digest(case_raw), "manifest_sha256": c.digest(manifest_raw),
+            "core_sha256": c.digest(core_raw), "window_sha256": c.digest(window_raw)}
+        work["seed_processing"]["H"] += len(case_raw) + len(manifest_raw) + len(core_raw) + len(window_raw)
+        budget_sha = c.digest(budget_raw)
+        work["seed_processing"]["H"] += len(budget_raw)
+        ordinal = int(input_root.parts[-2])
+        budget = c._c3_budget_values(budget_raw, int(index) + 1, ordinal,
+            "dashboard" if ordinal == 2 else "run", actual_bindings["window_sha256"], actual_bindings, work)
+        c._c3_bind_work(work, budget, int(index) + 1, case["case_id"], "bootstrap")
+        work["_c3_budget_sha"], work["_c3_input_bindings"] = budget_sha, actual_bindings
+        work["_c3_scopes"] = {case["case_id"]: work}
+        work["_c3_open_regular"], work["_c3_owned_children"] = owned, []
+        c._c3_bind_work(work, budget, int(index) + 1, case["case_id"], "body")
         pending_work = c._open_held(str(private_work), True,
             c._store_rule(os.geteuid(), os.getegid(), 0o700, True, resolver), "E_STORE",
             recording_work=work, accounting_kind="M")
@@ -5944,14 +5799,21 @@ def _private_cli(argv):
             except BaseException as error:failure = _seed_first(failure, error)
     if failure is not None:
         raise failure
-    return c.canonical(observation)
+    output = c._c3_encode_values(observation, work)
+    raw_receipt = c._capture_accounting_values(work, {})
+    receipts = {"raw": raw_receipt, "export": dict(c._export_work),
+        "source": {"state": "unknown"}, "preparation": {"state": "unknown"}, "Q": {"state": "unknown"}}
+    unknown = [key for key, value in work.items() if (key.endswith("_unknown") or key.endswith("incomplete")) and value]
+    own = c._c3_ledger_values(work, receipts, work.get("C3_retained", []),
+        work.get("C3_tool_errors", []), unknown)
+    end_document = {"input_bindings": actual_bindings, "own": {case["case_id"]: own},
+        "children": [], "outcome": "completed"}
+    c._c3_emit(output, end_document, work, budget, int(index) + 1)
 
 
 if __name__ == "__main__":
     try:
-        output = _private_cli(sys.argv[1:])
-        sys.stdout.buffer.write(output)
-        sys.stdout.buffer.flush()
+        _private_cli(sys.argv[1:])
     except BaseException:
         sys.stderr.write("E_RUNTIME\n")
         raise SystemExit(1)
