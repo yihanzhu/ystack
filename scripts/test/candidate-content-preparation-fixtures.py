@@ -6461,3 +6461,126 @@ def raw16_C2_numeric_budget(root: Path, legacy_path=None) -> None:
         assert work_meta['read_bytes']>before
     print(json.dumps({'C2_budget':'chunk-failure-cancel-metadata','unbound_legacy_compared':legacy_path is not None,
         'partial_encoding':work,'same_cancel_object':True,'cancel_work':work_cancel,'metadata_work':work_meta,'invalid_budgets_refused':4},sort_keys=True))
+
+
+def raw16_C2_residual_custody(root: Path, original=None) -> None:
+    import ast,shlex,tempfile
+    spec=importlib.util.spec_from_file_location('_C2_residual_consumer',root/'shadow/v1/_consumer.py')
+    c=importlib.util.module_from_spec(spec);sys.modules[spec.name]=c;spec.loader.exec_module(c)
+    source=(Path(original) if original else root/'evals/v1/evals-launcher.sh').read_text()
+    literal=shlex.split(source.split('c2_program=',1)[1].split('\nc2_fd9=',1)[0])[0]
+    fixed={'__name__':'_C2_residual_fixed','c':c};exec(compile(literal,'<actual-C2-residual>','exec'),fixed)
+    body=source.split("<<'PY_SHADOW_SOURCE'\n",1)[1].split('\nPY_SHADOW_SOURCE',1)[0]
+    handlers={};node=next(node for node in ast.parse(body).body if isinstance(node,ast.FunctionDef) and node.name=='interrupt')
+    exec(compile(ast.Module(body=[node],type_ignores=[]),'<original-D-handler>','exec'),handlers)
+    adapter=next(node for node in ast.walk(ast.parse(literal)) if isinstance(node,ast.FunctionDef) and node.name=='interrupted')
+    adapted={'namespace':handlers};exec(compile(ast.Module(body=[adapter],type_ignores=[]),'<actual-C2-signal-adapter>','exec'),adapted)
+    def cancellation():
+        try:adapted['interrupted'](signal.SIGTERM,None)
+        except InterruptedError as error:return error
+    resolver=c._DarwinUUIDResolver() if sys.platform=='darwin' else None
+    for label in ('allocation','initial-owned','internal-recheck','first-marked','later-marked'):
+        with tempfile.TemporaryDirectory(prefix='C2-root-pending.') as area:
+            work=fixed['c2_fresh_work']('C2-root-pending')
+            parent=c._open_held(area,True,c._store_rule(os.geteuid(),os.getegid(),0o700,True,resolver),'E_STALE',recording_work=work,accounting_kind='M')
+            Root=fixed['C2Root'];primary=cancellation() if label=='first-marked' else MemoryError('controlled '+label)
+            secondary=cancellation() if label in ('first-marked','later-marked') else OSError(5,'secondary pending close')
+            duplicate=os.dup;closing=os.close;checking=c.HeldPath.recheck;watched=[];closed=[];compensated=[];caught=None
+            class AllocatingRoot(Root):
+                def __new__(cls,*args,**kwargs):raise primary
+            class InitializingRoot(Root):
+                def __setattr__(self,key,value):
+                    if key=='owned':raise primary
+                    return super().__setattr__(key,value)
+            if label=='initial-owned':fixed['C2Root']=InitializingRoot
+            elif label!='internal-recheck':fixed['C2Root']=AllocatingRoot
+            def dup(fd):
+                result=duplicate(fd);watched.append(result);return result
+            def close(fd):
+                result=closing(fd)
+                if fd in watched:
+                    closed.append(fd)
+                    if len(closed)==1 and label!='internal-recheck':raise secondary
+                return result
+            def check(self,*args,**kwargs):
+                if self is not parent:raise primary
+                return checking(self,*args,**kwargs)
+            os.dup=dup;os.close=close
+            if label=='internal-recheck':c.HeldPath.recheck=check
+            try:
+                try:fixed['c2_clone_root'](parent,work,resolver)
+                except BaseException as error:caught=error
+            finally:
+                os.dup=duplicate;os.close=closing;c.HeldPath.recheck=checking;fixed['C2Root']=Root
+                # Test compensation is separate from the observed production close attempts.
+                for fd in watched:
+                    if fd not in closed:closing(fd);compensated.append(fd)
+                parent.recheck('E_STALE',work,'M');parent.close()
+            print(json.dumps({'C2_residual':'pending-root','case':label,'clone_FDs':len(watched),'owner_close_attempts':closed,
+                'fixture_compensation':compensated,'same_first_or_first_marked':caught is (secondary if label=='later-marked' else primary),'work':work},sort_keys=True))
+            assert sorted(closed)==sorted(watched),'pre-handoff Root allocation leaked clone FDs'
+            assert caught is (secondary if label=='later-marked' else primary),'pending Root replaced first cancellation'
+
+
+def raw16_C2_tail_reserve(root: Path, original=None) -> None:
+    import shlex,copy
+    spec=importlib.util.spec_from_file_location('_C2_tail_consumer',root/'shadow/v1/_consumer.py')
+    c=importlib.util.module_from_spec(spec);sys.modules[spec.name]=c;spec.loader.exec_module(c)
+    source=(Path(original) if original else root/'evals/v1/evals-launcher.sh').read_text()
+    literal=shlex.split(source.split('c2_program=',1)[1].split('\nc2_fd9=',1)[0])[0]
+    fixed={'__name__':'_C2_tail_fixed','c':c};exec(compile(literal,'<actual-C2-tail>','exec'),fixed)
+    fresh=fixed['c2_fresh_work'];view=fixed['c2_counter_values']
+    def prepare(field,amount,spare=0,short=0):
+        work=fresh('C2-tail-unit');before={'window':view(fresh('C2-tail-window')),'common':view(fresh('C2-tail-common')),'cases':{}}
+        reserve={'window':view(fresh('C2-reserve-window')),'common':view(fresh('C2-reserve-common')),'cases':{}}
+        for scope,multiplier in (('window',4),('common',1)):
+            limit=(128 if field=='read_bytes' else 64)*multiplier*c.DOCUMENT_LIMIT
+            before[scope][field]=limit-amount-spare+short;reserve[scope][field]=amount
+        work['C2_admitted_before']=before;work['C2_tail_reservation']=reserve
+        return work
+    for field,axis in (('read_bytes','R'),('write_bytes','W')):
+        for spare in (0,10):
+            work=prepare(field,8,spare)
+            if spare==0:
+                try:fixed['c2_wire_room'](work,1,axis)
+                except (c.Refusal,fixed['C2Refusal']):pass
+                else:raise AssertionError('replay consumed tail reservation')
+            # Binding made before the tail deliberately has less room than the tail itself.
+            fixed['c2_nonruntime_room'](work,0,False)
+            work['C2_tail_start']=fixed['c2_counters'](work)
+            read_fd,write_fd=os.pipe();calls=[];offset=0
+            if axis=='R':assert os.write(write_fd,b'abcdefgh')==8
+            try:
+                for amount in (2,3,3):
+                    fixed['c2_wire_room'](work,amount,axis)
+                    if axis=='R':actual=os.read(read_fd,amount);count=len(actual)
+                    else:count=os.write(write_fd,b'abcdefgh'[offset:offset+amount])
+                    assert count==amount;calls.append(count);offset+=count
+                    fixed['C2Channel'](None,work).charge(axis,count)
+                try:fixed['c2_wire_room'](work,1,axis)
+                except (c.Refusal,fixed['C2Refusal']):pass
+                else:raise AssertionError('tail spent more than its reservation')
+                if axis=='W':assert os.read(read_fd,8)==b'abcdefgh'
+                assert work[field]==8 and work['physical_bytes']==0
+                assert work['C2_tail_reservation']['common'][field]==8
+            finally:os.close(read_fd);os.close(write_fd)
+            print(json.dumps({'C2_residual':'tail-consumption','axis':axis,'spare':spare,'actual_calls':calls,
+                'fixture_other_pipe_bytes':8,'pre_tail_no_credit':spare==0,'excess_refused':True,'work':work},sort_keys=True))
+        work=prepare(field,8,short=1);work['C2_tail_start']=fixed['c2_counters'](work)
+        try:fixed['c2_wire_room'](work,1,axis)
+        except (c.Refusal,fixed['C2Refusal']):pass
+        else:raise AssertionError('insufficient reserved tail admitted')
+        assert work[field]==0
+    probe=fresh('C2-tail-metadata');value={'observed':'finite metadata'}
+    row={'owner':'C2-tail-unit','ordinal':1,'kind':'M','site':'tail-metadata','value':value}
+    expected=c._private_capture_observations(row,probe,probe);amount=probe['read_bytes']
+    work=prepare('read_bytes',amount);fixed['c2_nonruntime_room'](work,0,False)
+    work['C2_tail_start']=fixed['c2_counters'](work);fixed['c2_nonruntime_room'](work,0,False)
+    c._capture_observe(work,'M','tail-metadata',value)
+    assert work['read_bytes']==amount and c.canonical(work['accounting_rows'][0])==expected
+    try:c._capture_observe(work,'M','one-extra-row',value)
+    except c.Refusal as error:assert error.code=='E_LIMIT'
+    else:raise AssertionError('inner metadata encoder spent beyond tail reserve')
+    assert work['read_bytes']==amount and work['accounting_incomplete']
+    print(json.dumps({'C2_residual':'tail-metadata','actual_owner_read_bytes':amount,'fixture_probe_read_bytes':probe['read_bytes'],
+        'inner_chunk_refusal':True,'original_reserved_unchanged':True,'work':work},sort_keys=True))

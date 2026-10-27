@@ -79,18 +79,32 @@ def c2_message(value, kind):
 
 def c2_wire_room(work, amount, field):
     c2_require(type(amount) is int and amount >= 0 and field in {"R", "W"}, "E_LIMIT")
+    c2_nonruntime_room(work, amount, False, read_only=field == "R", writing=field == "W", physical=False)
     candidate = dict(work)
     key = "read_bytes" if field == "R" else "write_bytes"
     candidate[key] += amount
     c._capture_copy_room(candidate, 0, False)
-    c2_nonruntime_room(work, amount, False, read_only=field == "R", writing=field == "W")
 
 def c2_nonruntime_room(work, amount, exported, *, read_only=False, writing=False, files=0,
-                       case_before=None, total=None, window_work=None, window_before=None):
+                       case_before=None, total=None, window_work=None, window_before=None, physical=True):
     fields = ("read_bytes", "write_bytes", "physical_bytes", "files", "export_read_bytes",
               "export_write_bytes", "export_physical_bytes", "export_files")
     admitted = (window_work or work).get("C2_admitted_before")
     reservation = (window_work or work).get("C2_tail_reservation")
+    tail_start = (window_work or work).get("C2_tail_start")
+    c2_require(tail_start is None or case_before is None, "E_LIMIT")
+    planned = {key: 0 for key in fields}
+    planned["files"] = files
+    if exported:planned["export_files"] = files
+    if read_only:
+        planned["read_bytes"] = amount
+        if exported:planned["export_read_bytes"] = amount
+    elif writing:
+        planned["write_bytes"] = amount
+        if physical:planned["physical_bytes"] = amount
+        if exported:
+            planned["export_write_bytes"] = amount
+            if physical:planned["export_physical_bytes"] = amount
     scopes = []
     if admitted is not None:
         scopes.append((admitted["window"], window_work or work, False, reservation["window"]))
@@ -100,39 +114,48 @@ def c2_nonruntime_room(work, amount, exported, *, read_only=False, writing=False
         scopes.append((case_before, total, True, work.get("C2_case_reservation")))
     elif admitted is not None:
         scopes.append((admitted["common"], c2_counters(work)["common"], True, reservation["common"]))
-    bindings = []
+    bindings, tail_rooms = [], []
     for before, current, per_case, reserved in scopes:
         is_common = admitted is not None and case_before is None and per_case
-        tail_start = (window_work or work).get("C2_tail_start")
-        if reserved is not None and tail_start is not None:
-            baseline = tail_start["common" if is_common else "window"]
-            reserved = {key: max(0, reserved[key] - max(0, current.get(key, 0) - baseline[key])) for key in fields}
         c2_require(not (before or {}).get("unknown") and not current.get("unknown"), "E_LIMIT")
         candidate = {key: (before[key] if before else 0) + current.get(key, 0)
             + ((work.get(key, 0) - work.get("transferred_" + key, 0)) if current is not work and not is_common else 0)
-            + (reserved[key] if reserved else 0) for key in fields}
+            for key in fields}
         if not per_case:
             for leaf in (window_work or work).get("C2_case_leaves", {}).values():
                 if leaf is work:continue
                 for key in fields:
                     current_value, prior_value = leaf.get(key), leaf.get("transferred_" + key, 0)
                     c2_require(type(current_value) is int and type(prior_value) is int and 0 <= prior_value <= current_value, "E_LIMIT")
-                    amount_pending = current_value - prior_value
-                    candidate[key] += amount_pending
-        bindings.append((dict(candidate), per_case))
-        candidate["files"] += files
-        if exported:candidate["export_files"] += files
-        if read_only:
-            candidate["read_bytes"] += amount
-            if exported:candidate["export_read_bytes"] += amount
-        elif writing:
-            candidate["write_bytes"] += amount;candidate["physical_bytes"] += amount
-            if exported:
-                candidate["export_write_bytes"] += amount;candidate["export_physical_bytes"] += amount
-        c._capture_copy_room(candidate, 0, exported, case=per_case)
-        c2_require(candidate["files"] <= 256 and candidate["export_files"] <= (16 if per_case else 64), "E_LIMIT")
+                    candidate[key] += current_value - prior_value
+        if tail_start is not None:
+            c2_require(reserved is not None, "E_LIMIT")
+            baseline = tail_start["common" if is_common else "window"]
+            remaining = {}
+            for key in fields:
+                value, initial, limit = current.get(key), baseline.get(key), reserved.get(key)
+                c2_require(all(type(item) is int and item >= 0 for item in (value, initial, limit))
+                    and 0 <= value - initial <= limit, "E_LIMIT")
+                remaining[key] = limit - (value - initial)
+                c2_require(planned[key] <= remaining[key], "E_LIMIT")
+            byte_fields = fields[:3] + fields[4:7]
+            room = tuple(remaining[key] for key in byte_fields)
+            room += tuple(remaining[key] - remaining["export_" + key] for key in fields[:3])
+            room += (remaining["files"], remaining["export_files"])
+            c2_require(all(value >= 0 for value in room), "E_LIMIT")
+            tail_rooms.append(room)
+            occupancy = {key: candidate[key] + remaining[key] for key in fields}
+            bindings.append((dict(candidate), per_case))
+        else:
+            candidate = {key: candidate[key] + (reserved[key] if reserved else 0) for key in fields}
+            bindings.append((dict(candidate), per_case))
+            occupancy = {key: candidate[key] + planned[key] for key in fields}
+        c._capture_copy_room(occupancy, 0, exported, case=per_case)
+        c2_require(occupancy["files"] <= 256 and occupancy["export_files"] <= (16 if per_case else 64), "E_LIMIT")
     if len(bindings) == 2:
-        work["_capture_copy_budget"] = c._capture_copy_budget_values(work, tuple(bindings))
+        baseline, room = c._capture_copy_budget_values(work, tuple(bindings))
+        for remaining in tail_rooms:room = tuple(min(limit, unused) for limit, unused in zip(room, remaining))
+        work["_capture_copy_budget"] = baseline, room
         c._capture_copy_budget_room(work, 0, exported, files=files)
     else:c2_require("_capture_copy_budget" not in work, "E_LIMIT")
 
@@ -629,15 +652,21 @@ class C2Root:
 
 def c2_clone_root(held, work, resolver):
     rows = c._clone(held, "E_STALE", work, "M")
+    cloned = None
     try:
         cloned = c.HeldPath(held.path, rows, recording_work=work, accounting_kind="M")
+        return C2Root(cloned, work, resolver)
     except BaseException as error:
         first = error
-        for row in reversed(rows):
-            try:c._close_capture_copy(row.fd, work, work, "C2.clone-root-pending", first)
-            except BaseException as closing:first = c2_first(first, closing)
+        if cloned is not None:
+            if cloned.components:
+                try:cloned.close()
+                except BaseException as closing:first = c2_first(first, closing)
+        else:
+            for row in reversed(rows):
+                try:c._close_capture_copy(row.fd, work, work, "C2.clone-root-pending", first)
+                except BaseException as closing:first = c2_first(first, closing)
         raise first
-    return C2Root(cloned, work, resolver)
 
 class C2Copies:
     def __init__(self, custody, work=None, total=None, window_before=None, case_before=None):

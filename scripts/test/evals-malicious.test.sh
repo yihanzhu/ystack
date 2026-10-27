@@ -677,6 +677,8 @@ fixture.raw16_C2_failure_accounting(root)
 fixture.raw16_C2_refused_END_transfer(root)
 fixture.raw16_C2_six_fix_deletions(root)
 fixture.raw16_C2_numeric_budget(root)
+fixture.raw16_C2_residual_custody(root)
+fixture.raw16_C2_tail_reserve(root)
 PY_HP_HANDOFF
 /usr/bin/python3 -I -S -B - "$root" <<'PY_D_SOURCE_ACQUISITION'
 import importlib.util,sys
