@@ -449,6 +449,23 @@ derived state are independently recomputed by C.
 | `commands.runtime_values` | Git version reply; Python version/ABI/sysconfig values and Unicode version from the qualified recording runtime. OS wait status and errno are retained separately by fixed component role. | Existing native build-record configuration keys only; version strings at most 128 bytes. At most 4096 commands. Recompute argv from the recipe and historical locators; hash source/executable bytes. Normal component stdout, stderr, exit classification, argv_sha256 and command list are not claimed inputs: rerun or recompute their actual owner. |
 | `runtime.slots` | Read-only qualified byte inputs enumerated in D, plus original locator and read errno when the genuine owner could not read a slot. | Byte streams only, never executed by replay. Recompute individual and composite hashes. A receipt identity digest is not a substitute for its bytes. |
 
+RAW07 的 `access_acl` 和 `default_acl` 各只增加一个成对类型值：
+`{"state":"not-observed-by-ancestor-rule"}`。entry 仍恰九键，role、stat、
+ACL/name/entry 上限不变。仅同一已绑定真实 `storage_reads.held` 链中，原
+`_store_rule` 的 `ancestor=True` 路径未读取 ACL、且两原键均缺失时，才可
+生成这一对值。它表示原未观察，不表示 ACL 通过。leaf、需要 ACL 的 sudo
+installed-rule、未知 rule、只缺一键、原失败或删掉已有观察均不得使用。
+leaf 原 Linux null、Darwin [] 等真实观察保留，不转换成该类型。
+
+按原 held/path/components 顺序重建全部 ancestor 的绝对 raw name hex 和
+父子关系，绑定原 occurrence/acquisition。不得从单个绝对路径猜 ancestor。
+保留全部 components 及 before/after/named_after 的原完整 identity 比较；
+缺 identity 仍按原失败处理。带此类型的 ancestor 只走原 identity/chain/
+binding 谓词，不运行未发生的 ACL 谓词，也不给 leaf 增加豁免。绝对 ancestor
+rows 在对应 held-chain 消费中全部用完。origin 仍只取原完整相对 store 子集，
+保留原九键、真实 ACL、目录内容和 full-byte/inode 谓词。两集合不得混入、
+删减或留下 unused row。此类型不改变 origin bytes，不新增采集或 role。
+
 Clock sites are bound to the source head above. A site id is the relative path,
 original line and zero-based call ordinal on that line. `w` means `time.time`;
 `m` means `time.monotonic`. Multiple occurrences retain separate ordinals. These
@@ -1058,7 +1075,7 @@ S/I final检查既比较全bytes，也各自验证初次持有时的digest、par
 
 四-case 窗口的原 caller 是唯一资源 owner。它在原 seed/shared/launcher 数据边中使用一个固定、单次私有会话：控制连接 FD 9 和原已持有窗口目录 FD 10。该边只传递最新内存账头的准入与本次离线操作的实际增量；磁盘 descriptor/receipt 不能任命 owner 或自行选择最新头。完整资源证据由 prefix 文件、真实终态和仍存活 caller 的实际尾账共同组成。
 
-原公开 run/dashboard 参数、seed bytes、result bytes、trace.cost absent 及原 stdout/stderr 错误语义不增加字段或参数。没有新环境变量、命令、public API、provider、任意路径参数、通用 RPC、加载器或长期服务。只有此固定 caller↔launcher 边允许 FD 9/10 及有限窗口 artifact 交接；原 T、native、source、guest、host 和 replay coordinator 的无 transport/新 inherited fd 禁项不变。原 fd3 carrier 不变。FD 10 仅代表原已授权窗口根，不授予其父目录或其它路径能力，不得取得或转送缺失 host-publication-work。
+原公开 run/dashboard 参数、seed bytes、result bytes、trace.cost absent 及原 stdout/stderr 错误语义不增加字段或参数。没有新环境变量、命令、public API、provider、任意路径参数、通用 RPC、加载器或长期服务。只有此固定 caller↔launcher 边允许 FD 9/10 及有限窗口 artifact 交接；下述 C3 两条已有 stdout 内部边仅使用固定 framing，不新增 FD 或通用 transport。原 T、native、source、guest、host 和 replay coordinator 的其他 transport/新 inherited fd 禁项不变。原 fd3 carrier 不变。FD 10 仅代表原已授权窗口根，不授予其父目录或其它路径能力，不得取得或转送缺失 host-publication-work。
 
 **真实 caller、窗口根及责任**
 
@@ -1169,6 +1186,260 @@ DONE 恰 512 bytes：前 8 bytes 为 ASCII `YC2DONE1`；随后 ordinal、END JSO
 真正完整的本窗口资源 receipt 是此时仍存活 caller 的原内存账和实际终态证据，不是磁盘上那份 prefix receipt。此为明确合同定义，不能用两个含糊的 complete 字段混同。若 caller 还要编码、保存或发送这一活账，它必须继续存活、先预留并记录那些实际费用；保存出的文件仍只证明其写入前截点。下一次 START 的 before 带入这些已发生费用。不得重写 prefix 形成无限“给账单记账”的文件循环。
 
 caller 崩溃、丢失活头、控制连接丢失、子进程非零/信号、末次 close 失败，均使该槽未接受且费用 UNKNOWN。所有文件及已知费用保留，不自动恢复旧头、不从零重开、不仅凭磁盘 receipt 宣告完成。普通正向路径在 caller 持续存活、费用可知且限额满足时可以完成；这里没有把所有输入恒拒绝当机制。
+
+**C3 固定预算、stdout 回账及留存。**
+
+原 caller C 仍是唯一连续窗口权威。原 launcher Python P 接受真实 GO 后，
+只用一个固定预算文件向原 malicious driver D 和其固定 C3 children 分配额度。
+D/C3 用各自原 stdout pipe 返回 `DATA → END → DONE → EOF`，各自真实 wait
+闭合。没有新 FD、环境变量、公开参数、service、任选路径或生产 caller。
+原 driver 七 argv、C3 四 operands、用户 seed/result/error bytes 和
+trace.cost absent 保持。普通 non-malicious 路线不变。
+
+DATA 解帧后必须恰为原 LF canonical observation/result bytes。原 JSON shape、
+hash、whole-byte equality、program_check、pair result comparison、source/input
+final checks 全部作用于这些 bytes，不能用 envelope 检查代替。直接调用
+driver/C3 不能凭磁盘预算取得窗口权限或发布资格。
+
+原 C2Helpers.build/run_and_check 两个固定业务调用图保留；有限 orchestration
+同位移入 P 的固定方法，使计费和资源 owner 留在 P。复用同 owner 的原构造/
+校验，不改业务算法、工具、编译器、验证命令的 argv/env/顺序。不得另起无法
+交账的 shell helper owner。工具及 C helper 尚无真实来源的应计工作仍 UNKNOWN，
+不能因迁移变成零。普通 fixture 只证明实际执行的局部机制。
+
+D 在原脚本的受控 malicious 分支，以 shell builtin 在外部查询前进入固定
+Python 生命周期，沿用原 literal/exec 方式。无 heredoc、command substitution
+程序载体或新脚本。P 从原受检 source，以原 argv/env 和显式 CLOSE 9/10 及
+其余不用 FD 的 posix_spawn 启动并真实 wait D。D 逐个保存和 wait 原 C3 PID。
+C3 独立获取并验证 I。入口不用 FD 的关闭和全部实际 spawn/pipe/读写/错误费用
+均进入各自原账，不用进程退出代替已核关闭。
+
+**固定布局与真实 custody**
+
+唯一新增文件为 `operations/<ordinal>/I/driver-input/replay-budget.json`；
+同级新增 `replay-work` 目录。ordinal 是原 operation 0/1/2。不新增 tail/
+prefix 文件、socket、协议 FD 或任选文件入口。预算不进入 casejson、window.json、
+case S/I semantic manifest 或 privatework。
+
+P 在 GO 后完成原 staging、固定 helper build 和实际归集，再建立完整初始
+namespace。预算文件排他创建为 0400、原 uid/gid、nlink=1。write/partial/
+fsync/close/readback/hash/name/ACL 按原实际值计。P 保留所有 driver 输入的
+真实 holder；合法初始布局完成后才封初始 seal，不事后刷新父 stat 接受漂移。
+replay-work 排他创建为原规则的 0700 空目录，原 malicious `$work` 固定落于此。
+它保留在原 operation custody，不属于 immutable case S/I semantic inventory。
+I 顶层仍仅固定 case 目录和 driver-input；只有 driver-input 初始闭集增加这
+两个成员。原 case I、预算及其他 driver 输入保持 immutable seals。
+
+D 在原调用前真实排他 mkdir 每个 case_work，完整 held/empty 检查后传 C3。
+privatework 的原空目录规则保留。原 work/input 非包含规则仅收窄到精确布局：
+privatework 必须为 `I/driver-input/replay-work/malicious-work-<slot>`，
+casejson 为同一 replay-work 下该 slot 的原固定名字。两者从 replay-work 直下的
+全 operation slot 派生，不从 dashboard 当前 pair-$j 的局部 `$work` 派生；
+原 pair 结果路径仍按原流程保留。二者仍与 `I/<case_id>`
+内容树及 runtime 树实际分离；不一般允许 work 位于任意 I 内路径。
+
+固定 slot 为 0=malicious.incident-symptom-text，1=malicious.checked-file-bytes，
+2=malicious.commit-message，3=malicious.unread-forge-text。slot 只命名本地实体。
+run 按原 seed 顺序；dashboard 按 pair 0 再 pair 1 的原 seed 顺序。两个 disjoint
+pairs 各 case 只执行一次。case_doc/privatework/原 out、err、canonical、run-result
+等使用全 operation slot；第二 pair 不复用局部 i=0 的文件或额度。run/dashboard
+仍是不同 operation/I/inode。
+
+P 保留 replay-work 的原 holder/identity；D/C3 从固定映射独立获取 full chain。
+workspace 的每次合法内容变更须由实际执行创建/写入的固定 owner 记录并按原
+受控 mutation、完整 namespace 和初始 inode identity 核验。P 在 exact wait 后
+核完整实际创建清单、身份、最终 namespace/bytes、失败及留存；不能任意刷新 stat。
+END retained 仅是应核清单，不能替代真实 holds/identity/费用。custody 断开或
+无法重建清单即 UNKNOWN/refuse，不扩大扫描或删除范围。ephemeral cleanup
+仅触及原独立 scratch/runtime 根，不含或 rename replay-work。所有 partial、zero、
+错误文件及原必留物在成功/失败后均保留；原临时实体已删除也不抵销历史费用。
+
+预算文件只表示明确截点，不含自己将来编码/写入/hash/close 的费用。P 先保留
+这段有限额度，实际发生后记入活账。文件无 self hash；P 保存完整 bytes/digest/
+holder，child END 绑定该 SHA。授权只来自 P 的真实 GO、实际 spawn 和结果核验。
+
+**预算的唯一闭合 schema**
+
+预算为 LF-terminated canonical JSON，总长最多原 1 MiB，且服从更紧 M/raw/
+文档/member/copy/file 限额。拒绝 duplicate/unknown keys、非规范 bytes、bool
+冒 integer、负数和溢出。它不携带新 cap；所有 cap 来自已绑定 source 常量。
+
+| 顶层键 | 精确类型和绑定 |
+| --- | --- |
+| version | integer 1 |
+| window_sha256 | 原 immutable window 完整 bytes 的 64 lower-hex SHA |
+| ordinal, mode | 原 operation integer 0/1/2；mode 仅 run/dashboard |
+| start_sha256, ready_sha256, go_sha256 | P 实际原 canonical 消息 bytes 的 64 lower-hex SHA，不是自报授权 |
+| predecessor_sha256, root_identity | 同原 START 和 P 活头；root_identity 沿用原初始根身份 schema |
+| input_bindings | 恰 `{seed_sha256s,result_sha256s,evaluator_sha256,source_closure_sha256,cases,work_identity}`。前两数组沿用原 run/dashboard 个数；两 digest 来自实际已检 evaluator/source inventory。cases 按 sequence，每项恰 `{slot,case_id,manifest_size,manifest_sha256,core_sha256}`，size 为实际非负整数，SHA 为 64 lower-hex。work_identity 为真实初始空 replay-work 的原九项 stat。无任意路径 |
+| sequence | 1–4 个恰 `{slot,case_id,pair}`，等于原输入顺序；slot 唯一且匹配固定 case；run pair=null，dashboard pair=0/1 |
+| cutoff | 恰 `{window,common,cases}` 的完整原账视图，定义如下；包括实际留存、错误和 UNKNOWN |
+| reserved_parent | 原 C2 tail 及 P 尚需 helper/验证/接收/close/carrier 工作的 reservation，使用下述同一原账类别及 scope |
+| grants | 恰一个 D grant 和 sequence 中每个 C3 grant，按该顺序；不得有其他 actor |
+
+grant 恰 `{actor,scopes,bootstrap,body,terminal}`。actor integer 0 是 D；slot+1
+是该 C3。scopes 是固定 actor 的 scope 列表：D 仅 common 及本 sequence 的 case，
+C3 仅自己的 case。bootstrap/body/terminal 各是以这些 scope 为键的有限数字向量，
+沿用下面 V55 原字段；它们是 reservation，绝非 observed counters。reserved_parent
+也按同一 scope/向量表示。C3 独立 I 获取/hash/full-copy 不能以 P staging 数字
+冒充已完成工作。wire 不含 object id、exception、callback、函数名、命令、路径
+selector 或可选策略。scope 为 common 或固定 case_id；不存在另一个自由命名空间。
+
+P 的唯一固定分配函数只用本次已验证 inventory/长度、原有限 site/loop 和原 cap。
+先要求 cutoff、旧 reservation 和来源完整且无 UNKNOWN/未结失败槽，再逐项检查：
+`cutoff + reserved_parent + Σ grants <= 每项原 window/common/case 适用 cap`。
+同 case 的 D 工作和 C3 grant 合核 case cap；所有 case 加 common 核 window cap。
+runtime、export/nonexport、M/raw/source/preparation/Q、physical/files 和对象帽分别核。
+不同投影不能交换成一个总 byte 数；对象最大值不赠预算。需求构造由同位固定
+source 绑定并独审，只返回合法有限 grants 或拒绝，不把预计值写成 actual。
+不要求全最坏分支同时塞进较紧 cap。每实际动作先查自己 grant 剩余，超出即
+拒绝并保留实际失败。不在 operation 内重新分配已结束 child 的未用 grant。
+只有最终完整结算后才能释放未用 reservation；已发生工作永不退款。不能完整
+结算的 actor 保持占用/UNKNOWN，operation 不推进，不自动重试。
+
+**原账的完整视图与一次结算键**
+
+V55 是下列固定顺序的 55 个原数字，成功值均为 0..2^64−1 的 integer。
+缺键或零不能代 UNKNOWN。named 编码与向量必须逐项等价：11 标量保留原字段名，
+runtime、accounting、seed_processing 保留原分组和下列全部字段，不另造总额。
+
+| 顺序 | 字段 |
+| --- | --- |
+| 1–11 | read_bytes, write_bytes, physical_bytes, files, export_read_bytes, export_write_bytes, export_physical_bytes, export_files, close_calls, held_close_calls, observation_calls |
+| 12–20，runtime | logical_bytes, files, physical_bytes, physical_files, read_bytes, write_bytes, sha_bytes, equality_bytes, copy_bytes |
+| 21–50，accounting | L/W/M/raw/unresolved，依次各 logical_bytes/read_bytes/write_bytes/physical_bytes/files/occurrences |
+| 51–55，seed_processing | R/W/H/E/C |
+
+每实际 scope ledger 恰 `{values,calls,observations,owner_receipts,retained,errors,unknown}`。
+common 及各固定 case 保存各自 ledger；window 数字是这些 disjoint scope 的实际
+增量投影，不再复制 observation/receipt 当第二份工作。cutoff.cases 按固定 case_id
+映射；cutoff.window 为同一 named V55 数字视图，cutoff.common 为 common ledger。
+runtime/accounting/scalar 原有重叠，不把它们再次相加。原必要物理副本仍分别计。
+
+| ledger 键 | 必须保存的原事实及类型 |
+| --- | --- |
+| values | 完整 named V55，不省略已发生类别 |
+| calls | 原 owner 真实 calls 类别及非负整数，只准本次受检 source 原实际固定 call-site 表；从原计费点机械列明并绑定 source，不接 sender 新造名称，不用于 dispatch |
+| observations | 原五键 `{owner,ordinal,kind,site,value}` 及原先后顺序；value 按原 owner/site 闭合 schema。原 4096 close/failure、65536 storage 等各自帽和外层文档帽不变；不同 owner 不拼接重编号 |
+| owner_receipts | 固定 raw/export/source/preparation/Q 五 named slots；各为该原 owner 完整已接受 receipt/counter/observation shape，或恰 `{state:"not-applicable"}`、`{state:"unknown"}`。前者仅原调用图允许且真实未调用，不能表示零工作；已发生但缺费用/形状只能 unknown。保留原 raw bytes/typed tuples/全部字段，由同 owner 固定 codec 验证，不能 opaque hash/任意 JSON 化，不另定义 native Q/source/preparation 标准 |
+| retained | 实际创建/取得的有限清单，每项恰 `{root,member,creation_ordinal,kind,initial_identity,last_identity,size_bytes,state}`。root 仅 actor 已授权 I/privatework/runtime 固定根；member 是原实际创建清单的相对 raw name hex，不授权 open/delete。identity 是原九项 stat，未取得则原 typed missing；不能伪 stat。creation_ordinal 和 size_bytes 是实际非负整数；kind 沿原实体类别，state 仅 present/removed/unknown。removed 不退款；相同 bytes/SHA 不合并实体；多 holds/acquire/close 分别计 |
+| errors | 原序数组，每项恰 `{owner,site,ordinal,category,errno,cancelled}`，沿原 site/category/errno；cancelled 仅投影实际 KeyboardInterrupt/原 marker。保首错和后续错，不序列化异常对象/id |
+| unknown | 原 source 固定未完成标记的有序列表；可作为失败证据保存，不可完成 admission/settlement/qualification |
+
+cutoff 带入历史 O/P/S/native snapshots、旧 I/失败物及实际 overlaps。新 leaf 从零
+初始化只表示自己的新 delta，不重置父账。原进程内 id(work) 只作原校验，不上
+wire。跨进程结算键仅是本 P 活 operation、actor、scope、预算 digest 和该次真实
+spawn。P 保存 consumed 集及原 counter/row watermarks，每键导入一次。D 的 own
+不含 C3 body；D 只列完整 child refs 和自身 read/hash/wait 等工作。P 导入 D own
+加每个 C3 各一次，不再导入 D 聚合视图。
+
+D 的共享 DATA/END codec、pipe 和终段工作固定归 common；C3 对应工作固定归
+其唯一 case。END 截点后不得切换 scope。接收方仅按 actor 将 T 及两条重建
+close rows 投影到该唯一 scope，并核该 actor terminal grant 和原 scope/window
+限额。D 对各 case 的其他原工作仍按实际 scope 保留，不借 common 藏入 case 工作。
+
+**既有 stdout pipe 的固定 wire**
+
+仅本 P 启动的 malicious D 及 D 本次 C3 使用本 wire。成功顺序恰为
+`DATA frame → END frame → DONE(512 bytes) → EOF`。DATA 和 END 各用一个
+4-byte unsigned big-endian 长度加该段 bytes；没有 kind dispatch、额外消息、
+补发、重连或并发会话。有限接收状态决定下一段，按原最多 64 KiB bounded read
+接收，不按不可信长度先分配。整条 stdout 含两 header、DATA、END、DONE 合计
+最多原 1 MiB，并服从 DATA 原对象和更紧 M/nonexport/raw 帽，不是每帧各 1 MiB。
+stderr 仍为原受限错误通道/bytes，成功必须为空。extra byte、重复/短帧、错序、
+提前 EOF 均拒绝。所有编码/读写/拼接/hash/equality/retained 实际费用照计。
+DATA 先暂存，END/DONE/EOF/exact wait 和原检查全部成功前不发布正常观察或结果。
+失败 partial stdout/stderr/prefix、实体及已发生费用保留，不能按缺帧记零。
+
+END 为 LF canonical JSON，恰有下表字段。bool/整数、SHA、规范编码、未知/缺键
+与原文档帽按上文严格检查。所有 input digest 必须由本 emitter 独立实际取得。
+
+| END 键 | 精确内容 |
+| --- | --- |
+| version, window_sha256, ordinal, actor, budget_sha256 | version=1；其余匹配 P 原实际 window/operation/grant/完整预算 bytes |
+| leaf_pid, leaf_ppid | emitter 原进程 API 的真实正整数。P 对 D 核实际 spawn/wait PID、PPID=P；D 对 C3 同样核 PID、PPID=D。磁盘 PID/自报值单独不授权 |
+| input_bindings | D 使用预算同名闭合 shape，但由原实际输入/校验产生。C3 恰 `{slot,case_id,case_document_sha256,manifest_sha256,core_sha256,window_sha256}`，由独立 I 获取/重算，不仅回显预算 |
+| data | 恰 `{size_bytes,sha256}`，绑定已实际写出的完整 DATA bytes |
+| own | 以 actor 固定 scope 为键的上述完整 ledger 截点，不含 END 编码/发送或未来尾段 |
+| children | C3 必为空；D 按 sequence 列每个 C3，恰 `{actor,pid,wait_status,end_hex,done_hex}`；后两项为接收的完整 END/DONE bytes 的 lower-hex 唯一表示，供 P 独立验证。每 child 一次。原 D observation/output 校验照做，DATA 已由原 pipeline 消费 |
+| outcome | completed/refused。只有 completed、own/children 完整无 UNKNOWN、原正常 DATA 检查通过才进入成功尾段。合法 replay 的原 rejected observation 可是完整 DATA，不混同计费失败 |
+
+完整 child bytes 的嵌套仍计总帽/M 帽；不够即 refuse，不提高 cap、不删 observations、
+不只留 child hash、不拆成无限帧。真实完整 four-case fit 必须另证，小 fixture 不替代。
+
+**全部 regular files 在 END 前完成**
+
+END 前 emitter 已完成原业务输出/校验、独立 I/source final checks、全部 regular-file
+full readback/hash/name/ACL、file/root/临时 FD 的实际 close、owned children 的真实
+wait/pipe close、原失败 scratch 处置和留存登记。DATA 实际成功/partial bytes 已入账。
+此时仅留 stdout=1、stderr=2；stdin=0、9/10 及其他不用 FD 的真实关闭均已入 own。
+未核 FD、残余 child、close/observation 失败或 UNKNOWN 禁止成功 END/DONE。
+P 自己独立 S/I/root holders 仍按原 C2 顺序真实 recheck/close，不能由 child 代替。
+绝无 regular-file 尾账例外，不能由 exit/source 推导普通文件/native 操作成功。
+
+END 的完整不可变值只含截点前已取得数值/rows。编码新费用只进真实 emitter 活账，
+不反写 END，不为自包含 hash 重复生成 END。DATA digest 在截点前实际计算并计费；
+接收方实际 hash END，emitter 无需 hash 自己 END。END 编码/发送完成后取真实活账
+减 END 截点的 V55 差量 T，只含这一段已发生工作，不含 DONE/未来 close。
+此区间禁止文件/runtime slot/export/source/preparation/Q/child/外部命令操作；
+相关集合为空，unresolved、实际 errors/UNKNOWN 均零/空。只用固定 encoder，除原
+consumer-json-buffer 计数外，不增无法由 source/END bytes 重建的变动 call/row。
+尾区序列或 byte 遍历改变须重审固定成本表，不藏在 helper 名字内。
+
+**唯一 pipe-only DONE 和两次 close**
+
+| DONE byte 布局 | 精确值 |
+| --- | --- |
+| 0..7 | ASCII `YC3DONE1` |
+| 随后四个 big-endian u64 | ordinal、actor、END JSON byte length、END frame 实际成功写出总 bytes |
+| 随后 55 个 big-endian u64 | 上述固定 V55 顺序的实际 T |
+| 最后 32 bytes | 全零 |
+
+总长恰 512。END_frame_written 必须等于 4+END_length；负 delta、溢出、未映射
+类别或 extra byte 均拒绝。不含路径、FD、指令、一般返回数据或未来 complete 标记。
+完整尾段先占 reservation，再严格按如下日程：
+
+| 顺序 | 原实际费用与成功条件 |
+| --- | --- |
+| 一次 struct.pack | 仅一份 DONE bytes；M logical_bytes +512、occurrences +1。不 slice/第二份 bytes/hash/equality；编码不伪造 physical/R/H/E |
+| 一次 os.write(1,done) | 返回 512 才继续。正短写/0/异常失败，不补写 DONE 或重发 END。实际正返回计原 W/C、scalar/M write；pipe 不计 physical file/files。Python 调用次数不冒称底层恰一次 syscall |
+| 两次原 close | 依序 `_close_capture_copy(2,work,work,stderr_site,None)`、`_close_capture_copy(1,work,work,stdout_site,None)`。D site 固定 `C3-driver.stderr/stdout`；C3 固定 `C3-case.stderr/stdout`。两次真实 close 及完整原 observation 成功、无 incomplete/UNKNOWN 才 `_exit(0)`。无 atexit/callback/文件 I/O/hash/subprocess/再编码 END |
+
+accounting_owner 固定 D=`C3-driver`，C3=`C3-case-<slot>`。END observation_calls
+加 T 给出两 row 起始 ordinal。每 row 仍为原五键，site=close、kind=M，
+value={site:对应固定 site,return:0,errno:null}。接收方重建完整 rows，不只补 close 数。
+每 canonical row 含 LF 长 n，原 encoder 实际 read_bytes=3n−2、M logical=n、
+M occurrences=1，close_calls/observation_calls 各+1、consumer-json-buffer call +1。
+接收方重建/校验/保存这些 bytes 另计。仅固定 source、完整 wire、EOF、exact wait
+共同支持该 pipe 尾账；单项不够，重建值明确标记，不能冒称已现场传回 raw。
+
+沿用原 CPython os.write/EINTR 零传输边界：未传 byte、无正常返回的 Python signal
+handler、无额外应计 byte 工作的内部 retry 不伪造第二次 W/C。正短写立即失败；
+取消必须抛出，保首取消，不能吞掉继续。无新 syscall shim/native adapter/probe。
+runtime 不能证明该来源时保持 UNKNOWN，禁止完成。
+
+**真实接收、回 P 一次及失败**
+
+D 保存每 C3 实际 spawn PID 和有限 owned pipe 清单，同时 bounded drain stdout/
+stderr，逐个真实 wait，避免 pipe 缓冲互等。不新增 timeout 放宽原限制。完整
+DATA/END/DONE、空 stderr、EOF、exact child 正常 exit 0、原 source/input 检查
+共同成功后才接受其账，并交 DATA 给原 observation 校验。P 对 D 同样直接核验。
+P 还独立解析全部 C3 END/DONE，核预算、actor/case/顺序、D 实际 spawn/wait、
+独立 source/input digests、无缺/重复/unused child，并重算两级尾账。D 不是新权威。
+
+结算恰为 P 自有实际 delta + D own/T/尾账 + 每 C3 own/T/尾账。D 读取/验证/
+hash/拼接 child receipts 和 P 再读/解码/验证分别计，不能抵销；C3 body 只导入一次。
+读预算前的 bootstrap 先有有限 reservation，实际 source load/FD close/输入读取等
+进入 actor own，预算验证后核总额，不重置 leaf 抹掉前缀。P 完成原独立程序/
+result/pair/source、S/I final checks 及自身关闭后，将结算真账交原 C2 END/DONE。
+C 最后仍核 P 真实 EOF/wait 及自己接收/关闭尾账，终态前不发布原 DATA/public result。
+原 result/error precedence、signals、首错与后续错全部保留。
+
+END 前失败保存已知原前缀、stderr、partial stdout、实体及 errors/unknown，不给
+新 reservation 或重试；缺 END/DONE 不等于零成本。END/DONE/最后 pipe close 或
+observation 失败，保 partial wire 和接收方实际 read/wait/close 已知部分，未交尾账
+UNKNOWN。不从 EOF、文件、reservation、非零 exit 推具体 errno/成功次数，不退款
+或推进窗口。最后失败无可传通道时不能伪造成已接收错误 row。UNKNOWN 永不 PASS。
 
 **RAW16 resource contract.**
 
@@ -1364,6 +1635,9 @@ replace implementation.
 | stage C | run和两disjoint dashboard pairs完成四case各一次，独立I和final checks；额外case/重复trial按原M4/manifest拒绝；C缺任一owner不能发完成结果 |
 | C2 会话/留存 | 原普通 caller 经过真实 run-evals CLI 的完整 bounded 正例；同一四-case账贯穿run及两个dashboard pairs。旧磁盘头/新START、READY后活头改变、无GO/重复GO、单FD/无FD malicious旁路、错误root/parent/name/ACL、I/partial/旧O导致超限均拒绝。正常non-malicious路线及原参数/env/result/error/取消语义保留；不清理retained区来fit |
 | C2 尾账/进程 | 一次DONE write=512及三次原close observation完整计费；正短写/0/EINTR条件不成立、END完整但DONE缺失、DONE完整但非零/signal、child正常但caller close失败、reservation不足均保留已知前缀和UNKNOWN。核实际spawn PID/PPID、DUP2/CLOSE清单、辅助child无9/10继承、精确wait、原rows与固定重建费用。删除任一准入/关闭/尾账检查的配对mutation必须失败；此wait不证明native终态 |
+| C3 预算/真实回账 | 冻结同一 source 的真实 P→D→C3 小正例；同 operation 多 case 及 dashboard 两 pair 不复用 grant/slot/work。无/旧/错 budget、重复 actor/消息、cross-case grant、UNKNOWN、额度耗尽/累计超限均拒绝。核 P 自有+D own+每 C3 实际 delta/retained/T/两 close rows 各一次，D 终段归 common、C3 归固定 case；bootstrap 不抹零。缺 close/EOF/exact wait、partial/短 END/DONE、首 KeyboardInterrupt 后 marked 次错、尾 close/observation 失败均保留已知与 UNKNOWN。删除预算 guard、实际结算、原 source-fullcheck 的配对 control 必须失败。保存原 invocation、前后 source、完整 stdout/stderr/frames、PID/wait、费用/留存/首错次错/pins；所有 regular-file 检查/close 在 END 前真实完成 |
+| C3 嵌套上限 | 在实际 guard owner 分层做原界内/一多；完整端到端核真实嵌套 child END、整 stdout 1 MiB 和更紧 M/raw/window 帽。不删 full observations/child bytes 制造 fit，不要求较大内限同时满足较小外限。仅核验复用 byte/source/dependency/适用分支未变的旧 guard 证据，不新增诊断矩阵；保全部原所需证明 |
+| RAW07 ancestor 类型 | 真实未采 ACL 的 ancestor 与真实 leaf null/[] 正例；leaf/未知 rule/只缺一键/删除已观测 ACL 的伪 sentinel、混入 origin、缺 identity/unused ancestor 均拒绝。完整 chain/name 顺序和原 origin bytes 保持；删除固定 projection/消费检查的 paired control 必须失败 |
 | Case raw multiplicity | Two independently bound launches with different setup/PID/REST/clock values and four prepare/inspect occurrences round-trip through their original owners. Swap each role/request/attempt/operation, concatenate or renumber streams, omit/duplicate/reorder an entry, change only a non-export observation, or claim coverage absence on the reached branch: each refuses. Test the actual no-coverage branch separately. Rebuild all original envelopes and C outputs; deleting either assembly or replay projection must fail its paired assertion. All old per-owner tests and full-case limits remain. |
 | scope/权限 | 全部repo inactive；slot never executes；stdout零；native attempt两成员不变；source captures不能夹export；无新helper/network/credential/install/activation/target |
 
