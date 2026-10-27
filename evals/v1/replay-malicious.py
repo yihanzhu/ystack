@@ -1250,10 +1250,9 @@ def _seed_require(value):
 
 
 def _seed_first(first, later):
-    if first is None or (getattr(later, "_scope_signal_cancel", False)
-                         and not getattr(first, "_scope_signal_cancel", False)):
-        return later
-    return first
+    first_cancelled = isinstance(first, KeyboardInterrupt) or getattr(first, "_scope_signal_cancel", False)
+    later_cancelled = isinstance(later, KeyboardInterrupt) or getattr(later, "_scope_signal_cancel", False)
+    return later if first is None or later_cancelled and not first_cancelled else first
 
 
 def _seed_module(value, names):
@@ -1919,8 +1918,12 @@ class _SeedAssembly:
                 and not copied.directory.components[-1].name.startswith("preparation-runtime-")
                 for name in copied.runtime_sha256})
         owner._runtime_inventory_values({"files": rows})
+        storage = list(document["storage"])
+        if phase in {"reproduction", "write"}:
+            caller_value = owner._json(caller, owner.DOCUMENT_LIMIT, "E_STORE")
+            storage.extend(owner._sudo_storage_projection_values(document["storage_reads"], caller_value["id"]))
         value = {"clocks": document["clocks"],
-            "storage": {"entries": document["storage"], "identity_context": document["identity_context"]},
+            "storage": {"entries": storage, "identity_context": document["identity_context"]},
             "commands": document["commands"], "runtime": {"files": rows}}
         _seed_require("runtime_values" in value["commands"])
         if phase in {"reproduction", "write"}:
@@ -3324,7 +3327,10 @@ class _ReplayCase:
         while owned:
             held = owned.pop()
             try:held.close()
-            except BaseException as error:failure = self._replay_io_first(failure, error)
+            except BaseException as error:
+                failure = self._replay_io_first(failure, error)
+                try:self.work["replay_io_close_incomplete"] = True
+                except BaseException as later:failure = self._replay_io_first(failure, later)
         return failure
 
     def _replay_io_parent(self, parent, name):
@@ -3481,11 +3487,11 @@ class _ReplayCase:
             self.inputs._failed(error)
             raise self.inputs.failure
 
-    def _materializer_preparation_body(self, runtime_root, phase, source_git, private_work,
+    def _materializer_preparation_steps(self, runtime_root, phase, source_git, work_hold,
                                       input_raw, source_repository_id, deadline):
         import argparse
 
-        runtime_root, private_work = Path(runtime_root), Path(private_work)
+        runtime_root, private_work = Path(runtime_root), Path(work_hold.path)
         _seed_require(phase in {"reproduction", "write"} and phase not in self.calculated
             and type(source_git) is self.c.HeldPath and type(input_raw) is bytes
             and type(deadline) in (float, int)
@@ -3501,16 +3507,12 @@ class _ReplayCase:
         spec.loader.exec_module(p)
         self.work["offline_materializer_work_unknown"] = True
         self.work["accounting_incomplete"] = True
-        self.inputs.git_repository(source_git)
+        self.source_repository(source_git)
+        source_git.recheck("E_STORE", self.work, "M")
         scratch, output, candidate = (private_work / name for name in ("scratch", "output", "materialized"))
         materializer_scratch = private_work / "materializer-scratch"
-        for directory in (scratch, output, candidate, materializer_scratch):
-            self.c._capture_copy_room(self.work, 0, False, case=True)
-            self.c._capture_copy_budget_room(self.work, 0, False, files=1)
-            self.c._require(self.work["files"] < 256, "E_LIMIT")
-            directory.mkdir(mode=0o700)
-            self.work["files"] += 1
-            self.c._capture_account(self.work, "M", "files", 1)
+        for name in ("scratch", "output", "materialized", "materializer-scratch"):
+            self._replay_mkdir(work_hold, name)
         args = argparse.Namespace(operation="prepare", jq=str(jq), candidate_repository=str(candidate / "repository.git"),
             output=str(output), input=str(private_work / "input.json"), response=str(private_work / "response.json"),
             input_sha256=p.sha256(input_raw), response_sha256=None)
@@ -3529,13 +3531,16 @@ class _ReplayCase:
                         try:pending.close()
                         except BaseException as later:error = _seed_first(error, later)
                     raise error
-            p.write_exclusive(Path(args.input), input_raw, 0o400)
+            self._replay_write_bytes(work_hold, "input.json", input_raw)
             input_doc = p.strict_json(input_raw)
             helper = private_work / "object-closure"
             _seed_require(not os.path.lexists(helper))
+            helper_before, helper_names = self._replay_io_parent(work_hold, "object-closure")
             p.run_child(ctx, ["/usr/bin/cc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-O2",
                 str(runtime_root / "adapters/local-git-materializer/v1/object-closure.c"), "-o", str(helper)],
                 output_limit=p.LIMITS["invocation_diagnostic_bytes"], env=p.clean_git_env(ctx))
+            self._replay_created("object-closure")
+            self._replay_refresh_parent(work_hold, helper_before, helper_names, "object-closure")
             source_git.recheck("E_STORE", self.work, "M")
             response_raw = p.run_child(ctx, ["/bin/bash", "-p",
                 str(runtime_root / "adapters/local-git-materializer/v1/materialize.sh"), "materialize", args.input,
@@ -3543,7 +3548,7 @@ class _ReplayCase:
                 str(helper), str(jq)], output_limit=p.LIMITS["response_bytes"], env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
             source_git.recheck("E_STORE", self.work, "M")
             args.response_sha256 = p.sha256(response_raw)
-            p.write_exclusive(Path(args.response), response_raw, 0o400)
+            self._replay_write_bytes(work_hold, "response.json", response_raw)
             pending = p.hold_boundary(Path(args.candidate_repository), "directory", deadline, private_leaf=True)
             try:ctx.boundaries["candidate_repository"] = pending
             except BaseException as error:
@@ -3551,6 +3556,8 @@ class _ReplayCase:
                     try:pending.close()
                     except BaseException as later:error = _seed_first(error, later)
                 raise error
+            yield {"input_raw": input_raw, "response_raw": response_raw,
+                "candidate_repository": Path(args.candidate_repository)}
             jq_copy, protocol = p.copy_dependencies(ctx)
             input_doc, response, details = p.validate_documents(ctx, input_raw, response_raw, jq_copy, protocol)
             p.initialize_storage_identity(ctx, details)
@@ -3628,6 +3635,28 @@ class _ReplayCase:
             if failure is not None and failure is not primary:
                 raise failure
 
+    def _materializer_preparation_body(self, runtime_root, phase, source_git, work_hold,
+                                      input_raw, source_repository_id, deadline):
+        stages = self._materializer_preparation_steps(runtime_root, phase, source_git,
+            work_hold, input_raw, source_repository_id, deadline)
+        failure, finished = None, False
+        try:
+            next(stages)
+            try:next(stages)
+            except StopIteration as completed:
+                finished = True
+                return completed.value
+            raise ValueError("E_RELATION")
+        except BaseException as error:
+            failure = error
+            raise
+        finally:
+            if not finished:
+                try:stages.close()
+                except BaseException as error:
+                    selected = _seed_first(failure, error)
+                    if selected is not failure:raise selected
+
     def reproduction_inputs(self, runtime_root, work_hold, prepared):
         runtime_root, private_work = Path(runtime_root), Path(work_hold.path)
         spec = importlib.util.spec_from_file_location(
@@ -3660,21 +3689,21 @@ class _ReplayCase:
         self.work["offline_reproduction_processing_unknown"] = True
         self.work["accounting_incomplete"] = True
         incident_validator = runtime_root / "shadow/v1/validate-incident.sh"
-        e.run_bounded("incident-validation", ["/bin/bash", "-p", str(incident_validator),
+        self._run_offline("incident-validation", ["/bin/bash", "-p", str(incident_validator),
             "validate", str(mapped["incident"])], env=env)
         registry_source_raw = (runtime_root / "core/v2/generation-registry.json").read_bytes()
         self.inputs._account("R", len(registry_source_raw), "M")
         e.require(e.SOURCE == runtime_root, "E_RUNTIME")
         modules = e.core_modules(registry_source_raw)
         protocol = runtime_root / "adapters/local-git-materializer/v1/protocol.jq"
-        valid = e.run_bounded("materializer-input-validation", [str(jq), "-L", str(modules),
+        valid = self._run_offline("materializer-input-validation", [str(jq), "-L", str(modules),
             "-e", "--arg", "command", "validate-input", "-f", str(protocol),
             str(mapped["materialization_input"])], env=env)
         e.require(valid.strip() == b"true", "E_RELATION")
         instruction = e.make_instruction(incident)
         revision = incident["body"]["git_revision_ref"]
         identity_source = runtime_root / "shadow/v1/qualified-identity.jq"
-        identity_valid = e.run_bounded("qualified-identity-validation", [str(jq), "-L", str(modules),
+        identity_valid = self._run_offline("qualified-identity-validation", [str(jq), "-L", str(modules),
             "-r", "--arg", "repository_id", incident["body"]["target_repository_id"],
             "--arg", "hash_algorithm", revision["hash_algorithm"], "--arg", "commit_id",
             revision["commit_id"], "-f", str(identity_source)], stdin=identity_raw, env=env)
@@ -3684,7 +3713,7 @@ class _ReplayCase:
         response_raw = prepared["response_raw"]
         check_raw = e.response_check(input_doc, response_raw)
         check_path = self._replay_write_bytes(work_hold, "response-check.json", check_raw)
-        checked = e.run_bounded("materializer-response-validation", [str(jq), "-L", str(modules),
+        checked = self._run_offline("materializer-response-validation", [str(jq), "-L", str(modules),
             "-e", "--arg", "command", "validate-response", "-f", str(protocol),
             str(check_path)], env=env)
         e.require(checked.strip() == b"true", "E_RELATION")
@@ -3695,13 +3724,15 @@ class _ReplayCase:
             "manifest_raw": prepared["manifest_raw"], "record_raw": prepared["record_raw"],
             "mapped": mapped, "env": env})
 
-    def reproduction_outputs(self, runtime_root, work_hold, prepared, launch_values, host_files):
+    def verification_outputs(self, runtime_root, work_hold, prepared, launch_values, host_files,
+                             phase="reproduction"):
+        _seed_require(phase in {"reproduction", "write"})
         runtime_root, private_work = Path(runtime_root), Path(work_hold.path)
         e = sys.modules["malicious_reproduction_pipeline"]
         self.work["offline_reproduction_processing_unknown"] = True
         self.work["accounting_incomplete"] = True
         incident_raw = self.original_raw["incident.json"]
-        request_raw = self.original_raw["reproduction-request.json"]
+        request_raw = self.original_raw[phase + "-request.json"]
         incident, request = e.parse(incident_raw), e.parse(request_raw)
         claim_raw = launch_values["claim.json"]
         claim = e.parse(claim_raw)
@@ -3715,7 +3746,7 @@ class _ReplayCase:
                           ("evaluation", evaluation_raw), ("observation", observation_raw)):
             self._replay_write_bytes(work_hold, name + ".json", raw)
         checker_source = runtime_root / "enforcement/v1/check-sandbox-receipt.sh"
-        checker_raw = e.run_bounded("sandbox-receipt-check", ["/bin/bash", "-p", str(checker_source),
+        checker_raw = self._run_offline("sandbox-receipt-check", ["/bin/bash", "-p", str(checker_source),
             "check-bound", str(private_work / "receipt.json"), str(private_work / "expectation.json"),
             str(private_work / "evaluation.json"), str(private_work / "observation.json")], env=env)
         checker = e.parse(checker_raw)
@@ -3725,15 +3756,29 @@ class _ReplayCase:
         result_raw, result = e.payload_result(host_files, e.parse(evidence_manifest_raw),
             launch_values["instruction"], e.parse(prepared["manifest_raw"]), e.parse(receipt_raw))
         outcome = "no-change" if result["outcome"] == "match" else "reproduced"
-        trace_raw = e.trace_ledger(incident, request["id"], claim["id"], outcome,
-            "tool.verifier", evaluation_raw, checker_raw)
+        return {"sandbox-check.json": checker_raw, "file-digest-result.json": result_raw,
+            "evidence-manifest.json": evidence_manifest_raw, "outcome": outcome}
+
+    def verification_trace(self, runtime_root, work_hold, phase, launch_values, checked):
+        e = sys.modules["malicious_reproduction_pipeline"]
+        runtime_root = Path(runtime_root)
+        incident = e.parse(self.original_raw["incident.json"])
+        request = self.original[phase + "-request.json"]
+        claim = e.parse(launch_values["claim.json"])
+        env = launch_values["env"]
+        trace_raw = e.trace_ledger(incident, request["id"], claim["id"], checked["outcome"],
+            "tool.verifier", launch_values["evaluation_raw"], checked["sandbox-check.json"])
         trace_path = self._replay_write_bytes(work_hold, "trace-ledger.json", trace_raw)
         trace_validator = runtime_root / "telemetry/v1/validate-trace-ledger.sh"
-        trace_receipt_raw = e.run_bounded("trace-validation", ["/bin/bash", "-p", str(trace_validator),
+        trace_receipt_raw = self._run_offline("trace-validation", ["/bin/bash", "-p", str(trace_validator),
             "validate", incident["id"], request["id"], str(trace_path)], env=env)
-        return {"sandbox-check.json": checker_raw, "file-digest-result.json": result_raw,
-            "evidence-manifest.json": evidence_manifest_raw, "trace-ledger.json": trace_raw,
-            "trace-receipt.json": trace_receipt_raw, "outcome": outcome}
+        return {"trace-ledger.json": trace_raw, "trace-receipt.json": trace_receipt_raw}
+
+    def reproduction_outputs(self, runtime_root, work_hold, prepared, launch_values, host_files,
+                             phase="reproduction"):
+        checked = self.verification_outputs(runtime_root, work_hold, prepared, launch_values, host_files, phase)
+        checked.update(self.verification_trace(runtime_root, work_hold, phase, launch_values, checked))
+        return checked
 
     def writer_input(self, runtime_root, work_hold, source_facts, record_form):
         runtime_root, private_work = Path(runtime_root), Path(work_hold.path)
@@ -3771,7 +3816,7 @@ class _ReplayCase:
         record_path = put("frozen-record.json", frozen["shadow-record.json"])
         seed_hold = self._replay_mkdir(work_hold, "seed")
         seed_dir, seed_before = Path(seed_hold.path), seed_hold.before
-        seed_raw = w.e.run_bounded("write-seed-conversion", ["/bin/bash", "-p",
+        seed_raw = self._run_offline("write-seed-conversion", ["/bin/bash", "-p",
             str(runtime_root / "maintenance/v1/incident-to-eval.sh"), "convert",
             str(incident_path), str(record_path), str(seed_dir)], env=env)
         w.require(set(os.listdir(seed_dir)) == {"eval-seed-case-stale-moved-artifacts.json"}, "E_RELATION")
@@ -3797,7 +3842,7 @@ class _ReplayCase:
         modules = w.e.core_modules((runtime_root / "core/v2/generation-registry.json").read_bytes())
         builder = runtime_root / "shadow/v1/write-materialization-input.jq"
         metadata_path = put("metadata-first.json", w.canonical(metadata))
-        first_raw = w.e.run_bounded("write-materialization-input", [str(jq), "-L", str(modules),
+        first_raw = self._run_offline("write-materialization-input", [str(jq), "-L", str(modules),
             "-S", "-c", "--arg", "phase", "stage-request", "--rawfile", "contract", str(contract_path),
             "--rawfile", "patch", str(patch_path), "--slurpfile", "metadata", str(metadata_path),
             "-f", str(builder), str(original_path)], env=env, output_limit=8 * w.e.OUTPUT_LIMIT)
@@ -3807,13 +3852,13 @@ class _ReplayCase:
         put("stage-request.json", stage_raw)
         metadata["stage_request_sha256"] = w.sha(stage_raw)
         metadata_path = put("metadata-final.json", w.canonical(metadata))
-        result_raw = w.e.run_bounded("write-materialization-input", [str(jq), "-L", str(modules),
+        result_raw = self._run_offline("write-materialization-input", [str(jq), "-L", str(modules),
             "-S", "-c", "--arg", "phase", "final-input", "--rawfile", "contract", str(contract_path),
             "--rawfile", "patch", str(patch_path), "--slurpfile", "metadata", str(metadata_path),
             "-f", str(builder), str(first_path)], env=env, output_limit=8 * w.e.OUTPUT_LIMIT)
         w._write_builder_final_values(result_raw, first, stage_raw, original_raw)
         result_path = put("write-input.json", result_raw)
-        checked = w.e.run_bounded("materializer-input-validation", [str(jq), "-L", str(modules),
+        checked = self._run_offline("materializer-input-validation", [str(jq), "-L", str(modules),
             "-e", "--arg", "command", "validate-input", "-f",
             str(runtime_root / "adapters/local-git-materializer/v1/protocol.jq"), str(result_path)], env=env)
         w.require(checked.strip() == b"true", "E_RELATION")
@@ -3833,6 +3878,189 @@ class _ReplayCase:
             and matches[0]["size_bytes"] == declaration["size_bytes"]
             and matches[0]["sha256"] == declaration["sha256"])
         return self.inputs.bytes(phase, "local-runtime", matches[0]["member"], self.c.EXECUTABLE_LIMIT)
+
+    def _run_offline(self, role, argv, *, stdin=b"", timeout=120,
+                     output_limit=1048576, env):
+        import selectors
+        import signal
+        import time
+        roles = {"incident-validation", "materializer-input-validation",
+            "qualified-identity-validation", "materializer-response-validation",
+            "sandbox-receipt-check", "trace-validation", "write-seed-conversion",
+            "write-materialization-input", "sandbox-bound-evaluation",
+            "gate-duty-evaluation", "gate-risk-evaluation", "gate-kill-evaluation",
+            "source-git-inventory", "source-git-commit", "source-git-blob", "candidate-git-inventory", "candidate-git-commit", "candidate-git-blob"}
+        source = Path(__file__).resolve().parents[2]
+        _seed_require(role in roles and type(argv) is list and argv
+            and all(type(value) is str and value for value in argv)
+            and type(stdin) is bytes and type(timeout) in {int, float} and 0 < timeout <= 120
+            and type(output_limit) is int and 0 < output_limit <= (16 if role.endswith("git-inventory") else 8) * 1048576)
+        if argv[0] == "/bin/bash":
+            _seed_require(len(argv) >= 3 and argv[1] == "-p"
+                and Path(argv[2]).resolve().is_relative_to(source))
+        elif argv[0] == "/usr/bin/git":
+            _seed_require(role in {"source-git-inventory", "source-git-commit", "source-git-blob", "candidate-git-inventory", "candidate-git-commit", "candidate-git-blob"}
+                and len(argv) >= 5 and argv[1] == "--no-replace-objects" and argv[2].startswith("--git-dir="))
+            arguments = argv[3:]
+            _seed_require((len(arguments) == 6 and arguments[:5] == ["ls-tree", "-r", "-t", "-z", "--full-tree"]
+                and self.c._writer_oid(arguments[5])) or (len(arguments) == 3 and arguments[0] == "cat-file"
+                and arguments[1] in {"commit", "blob"} and self.c._writer_oid(arguments[2])))
+        else:
+            _seed_require(argv[0] == str(source / "bin/jq"))
+        c, work = self.c, self.work
+        incoming = outgoing = diagnostic = None
+        selector = child = None
+        closed = [False, False, False, False, False, False]
+        primary, result = None, None
+        communication_finished = False
+        work["offline_child_internal_unknown"] = True
+        work["accounting_incomplete"] = True
+
+        def close_fd(fd):
+            if incoming is not None and fd == incoming[0]:slot = 0
+            elif incoming is not None and fd == incoming[1]:slot = 1
+            elif outgoing is not None and fd == outgoing[0]:slot = 2
+            elif outgoing is not None and fd == outgoing[1]:slot = 3
+            elif diagnostic is not None and fd == diagnostic[0]:slot = 4
+            elif diagnostic is not None and fd == diagnostic[1]:slot = 5
+            else:raise ValueError("E_RELATION")
+            if closed[slot]:return
+            closed[slot] = True
+            c._close_capture_copy(fd, work, work, "offline-child/" + role, primary)
+
+        def room(amount, reading):
+            c._capture_copy_room(work, amount, False, case=True, read_only=reading)
+            c._capture_copy_budget_room(work, amount, False, read_only=reading)
+
+        def quantum(maximum, reading):
+            size = maximum
+            while True:
+                try:room(size, reading)
+                except c.Refusal as error:
+                    if getattr(error, "code", None) != "E_LIMIT" or size <= 1:raise
+                    size //= 2
+                else:return size
+
+        def charge(operation, count):
+            failure = None
+            field = "write_bytes" if operation == "W" else "read_bytes"
+            try:work[field] += count
+            except BaseException as error:failure = self._replay_io_first(failure, error)
+            try:
+                counts = work.setdefault("seed_processing", {})
+                counts[operation] = counts.get(operation, 0) + count
+            except BaseException as error:failure = self._replay_io_first(failure, error)
+            try:c._capture_account(work, "M", field, count)
+            except BaseException as error:failure = self._replay_io_first(failure, error)
+            if failure is not None:
+                work["offline_child_accounting_incomplete"] = True
+                raise failure
+
+        try:
+            room(0, True)
+            incoming = os.pipe()
+            c._capture_observe(work, "M", "offline-child-pipe", {"role": role, "stream": "stdin", "fds": incoming})
+            outgoing = os.pipe()
+            c._capture_observe(work, "M", "offline-child-pipe", {"role": role, "stream": "stdout", "fds": outgoing})
+            diagnostic = os.pipe()
+            c._capture_observe(work, "M", "offline-child-pipe", {"role": role, "stream": "stderr", "fds": diagnostic})
+            child = subprocess.Popen(argv, stdin=incoming[0], stdout=outgoing[1],
+                stderr=diagnostic[1], env=env, close_fds=True, start_new_session=True)
+            c._capture_observe(work, "M", "offline-child-spawn", {"role": role, "pid": child.pid, "argv": argv, "environment_keys": sorted(env)})
+            for fd in (incoming[0], outgoing[1], diagnostic[1]):close_fd(fd)
+            selector = selectors.DefaultSelector()
+            for fd in (incoming[1], outgoing[0], diagnostic[0]):os.set_blocking(fd, False)
+            streams = {outgoing[0]: bytearray(), diagnostic[0]: bytearray()}
+            limits = {outgoing[0]: output_limit, diagnostic[0]: 65536}
+            for fd in streams:selector.register(fd, selectors.EVENT_READ)
+            offset = 0
+            if stdin:selector.register(incoming[1], selectors.EVENT_WRITE)
+            else:close_fd(incoming[1])
+            deadline = time.monotonic() + timeout
+            while selector.get_map():
+                remaining = deadline - time.monotonic()
+                _seed_require(remaining > 0)
+                for key, _event in selector.select(min(remaining, 0.25)):
+                    fd = key.fd
+                    if fd == incoming[1]:
+                        size = quantum(min(65536, len(stdin) - offset), False)
+                        work["offline_child_write_incomplete"] = True
+                        work["write_calls"] = work.get("write_calls", 0) + 1
+                        try:count = os.write(fd, memoryview(stdin)[offset:offset + size])
+                        except BlockingIOError:
+                            work["offline_child_write_incomplete"] = False
+                            continue
+                        if count > 0:
+                            offset += count
+                            charge("W", count)
+                        c._capture_observe(work, "M", "offline-child-write", {"role": role, "return": count})
+                        _seed_require(0 < count <= size)
+                        work["offline_child_write_incomplete"] = False
+                        if offset == len(stdin):
+                            selector.unregister(fd);close_fd(fd)
+                    else:
+                        size = quantum(min(65536, limits[fd] - len(streams[fd]) + 1), True)
+                        work["read_calls"] = work.get("read_calls", 0) + 1
+                        work["offline_child_read_incomplete"] = True
+                        try:raw = os.read(fd, size)
+                        except BlockingIOError:
+                            work["offline_child_read_incomplete"] = False
+                            continue
+                        charge("R", len(raw))
+                        c._capture_observe(work, "M", "offline-child-read", {"role": role,
+                            "stream": "stdout" if fd == outgoing[0] else "stderr", "return": len(raw)})
+                        work["offline_child_read_incomplete"] = False
+                        if not raw:
+                            selector.unregister(fd);close_fd(fd)
+                        else:
+                            _seed_require(len(streams[fd]) + len(raw) <= limits[fd])
+                            room(len(raw), True)
+                            work["offline_child_buffer_incomplete"] = True
+                            streams[fd].extend(raw)
+                            charge("C", len(raw))
+                            work["offline_child_buffer_incomplete"] = False
+            remaining = deadline - time.monotonic()
+            _seed_require(remaining > 0)
+            status = child.wait(timeout=remaining)
+            communication_finished = True
+            c._capture_observe(work, "M", "offline-child-wait", {"role": role, "pid": child.pid, "return": status})
+            _seed_require(status == 0 and not streams[diagnostic[0]])
+            room(len(streams[outgoing[0]]), True)
+            result = bytes(streams[outgoing[0]])
+            charge("C", len(result))
+        except BaseException as error:
+            primary = error
+            self.inputs._failed(error)
+        finally:
+            if child is not None and not communication_finished:
+                for signum, boundary in ((signal.SIGTERM, 5), (signal.SIGKILL, 5)):
+                    try:
+                        try:os.killpg(child.pid, signum)
+                        except ProcessLookupError:pass
+                        status = child.wait(timeout=boundary)
+                        communication_finished = True
+                        c._capture_observe(work, "M", "offline-child-stop", {
+                            "role": role, "pid": child.pid, "signal": signum, "return": status})
+                        break
+                    except subprocess.TimeoutExpired:continue
+                    except BaseException as error:
+                        primary = self._replay_io_first(primary, error)
+                        if communication_finished:break
+                if not communication_finished:
+                    try:work["offline_child_exit_unknown"] = True
+                    except BaseException as error:primary = self._replay_io_first(primary, error)
+            if selector is not None:
+                try:selector.close()
+                except BaseException as error:primary = self._replay_io_first(primary, error)
+            for pair in (incoming, outgoing, diagnostic):
+                if pair is not None:
+                    for fd in pair:
+                        try:close_fd(fd)
+                        except BaseException as error:primary = self._replay_io_first(primary, error)
+            if primary is not None:
+                self.inputs._failed(primary)
+                raise primary
+        return result
 
     def consumer_commands(self, runtime_root, phase, input_raw, response_raw,
                           sudo_stat_values, candidate_commit_id=None, write_set=None):
@@ -3906,151 +4134,213 @@ class _ReplayCase:
         registry = e.parse_value(registry_raw, self.c.DOCUMENT_LIMIT)
         modules = str(source / "core/v2/generations" / registry[-1]["generation_id"] / "modules")
         commands = []
-        def command(role, argv, executable, component):
+        def argv_digest(argv):
+            # The first encoding is an actual extra offline operation, not a fee estimate.
+            raw = self.inputs.encode(argv)
+            self.c._capture_copy_room(self.work, len(raw), False, case=True, read_only=True)
+            result = e._command_argv_values(argv)
+            self.inputs._account("C", len(raw), "M")
+            self.inputs._account("E", len(raw), "M")
+            self.inputs._account("H", len(raw), "M")
+            return result
+        recipes = []
+        def F(value):
+            return value, {"type": "fixed", "role": "literal", "value": value}
+        def P(value, role):
+            return str(value), {"type": "historical-path", "role": role}
+        def D(value, kind, role):
+            return value, {"type": kind, "role": role}
+        def O(value, role, prefix):
+            return value, {"type": "historical-path-option", "role": role, "prefix": prefix}
+        def record_recipe(role, operation, operands):
+            row = commands[-1]
+            value = {"role": role, "executable_sha256": row["executable_sha256"],
+                "component_sha256": row["component_sha256"], "operation": operation,
+                "arguments": [dict(descriptor, position=position)
+                    for position, (_value, descriptor) in enumerate(operands)]}
+            self.work["command_recipe_processing_unknown"] = True
+            self.inputs.encode(value)
+            recipes.append(value)
+            self.work["command_recipe_processing_unknown"] = False
+        def command(role, operands, executable, component, operation):
+            argv = [value for value, _descriptor in operands]
             if phase == "write" and executable == "sudo":
-                argv_sha = e._command_argv_values(argv)
+                argv_sha = argv_digest(argv)
                 executable_sha = e._sudo_identity_values(self.c._identity_values(sudo_stat_values))
                 component_digest = component_sha(component)
                 commands.append(e._command_values(role, argv_sha, executable_sha, component_digest))
+                record_recipe(role, operation, operands)
                 return
             if executable == "jq": executable_sha = jq_sha
             elif executable == "helper": executable_sha = helper_sha
             elif executable == "sudo":
-                # FixedSudo.sha256 hashes original identity metadata, not sudo bytes.
                 executable_sha = e._sudo_identity_values(self.c._identity_values(sudo_stat_values))
             else: executable_sha = binary_sha(executable)
             if phase == "reproduction":
                 component_digest = (parent["helper_source_sha256"] if component == "helper-source"
                     else jq_sha if component == "jq-self" else component_sha(component))
-                argv_sha = e._command_argv_values(argv)
+                argv_sha = argv_digest(argv)
             else:
-                argv_sha = e._command_argv_values(argv)
+                argv_sha = argv_digest(argv)
                 component_digest = component_sha(component)
             commands.append(e._command_values(role, argv_sha, executable_sha, component_digest))
-        def shell(role, relative, args):
-            command(role, ["/bin/bash", "-p", str(source / relative), *args], "bash", relative)
+            record_recipe(role, operation, operands)
+        def shell(role, relative, operation, args):
+            command(role, [F("/bin/bash"), F("-p"), P(source / relative, "source_root/" + relative),
+                F(operation), *args], "bash", relative, operation)
         def protocol(operation, path):
             relative = "adapters/local-git-materializer/v1/protocol.jq"
             command("materializer-" + ("input" if operation == "validate-input" else "response") + "-validation",
-                [jq, "-L", modules, "-e", "--arg", "command", operation, "-f", str(source / relative), str(path)],
-                "jq", relative)
+                [P(jq, "consumer_work/dependencies/jq/jq"), F("-L"), P(modules, "source_root/generation.modules"),
+                 F("-e"), F("--arg"), F("command"), F(operation), F("-f"), P(source / relative, "source_root/" + relative), path],
+                "jq", relative, operation)
         def qualified():
             relative = "shadow/v1/qualified-identity.jq"
-            command("qualified-identity-validation", [jq, "-L", modules, "-r", "--arg", "repository_id",
-                incident["body"]["target_repository_id"], "--arg", "hash_algorithm", revision["hash_algorithm"],
-                "--arg", "commit_id", revision["commit_id"], "-f", str(source / relative)], "jq", relative)
+            command("qualified-identity-validation", [P(jq, "consumer_work/dependencies/jq/jq"), F("-L"),
+                P(modules, "source_root/generation.modules"), F("-r"), F("--arg"), F("repository_id"),
+                D(incident["body"]["target_repository_id"], "input-id", "incident.target_repository_id"),
+                F("--arg"), F("hash_algorithm"), D(revision["hash_algorithm"], "hash-algorithm", "incident.git_revision_ref.hash_algorithm"),
+                F("--arg"), F("commit_id"), D(revision["commit_id"], "git-oid", "source.commit"),
+                F("-f"), P(source / relative, "source_root/" + relative)], "jq", relative, "qualified-identity")
         def launch():
             config = self.local_context(phase)["config"]
-            command("sandbox-launch-boundary", ["/usr/bin/sudo", "-n", "-u", "#" + str(config["principal_uid"]),
-                "--", python, str(Path(locators["installed_anchor"]) / "host-supervisor.py"), "launch"],
-                "sudo", "sandbox/v1/host-supervisor.py")
+            command("sandbox-launch-boundary", [F("/usr/bin/sudo"), F("-n"), F("-u"),
+                ("#" + str(config["principal_uid"]), {"type": "principal", "role": "host_config.principal_uid", "prefix": "#"}), F("--"),
+                P(python, "parent_context.native_release.python_path"),
+                P(Path(locators["installed_anchor"]) / "host-supervisor.py", "installed_anchor/host-supervisor.py"), F("launch")],
+                "sudo", "sandbox/v1/host-supervisor.py", "launch")
         preparation = "preparation/v1/prepare-candidate.py"
         def input_digest(raw):
             result = e.sha(raw)
             self.inputs._account("H", len(raw), "M")
             return result
+        def W(relative):
+            return P(work / relative, "consumer_work/" + relative)
+        def source_repository():
+            return P(source_git, "request.source_git_dir")
+        def target_repository():
+            return D(incident["body"]["target_repository_id"], "input-id", "incident.target_repository_id")
+        def trace_ids(incident_id, attempt_id, role):
+            return [D(incident_id, "input-id", "incident.id"), D(attempt_id, "request-id", role)]
+        def preparation_argv(operation, common, scratch=None):
+            argv = [P(python, "parent_context.native_release.python_path"), F("-I"), F("-S"), F("-B"),
+                P(source / preparation, "source_root/" + preparation), F(operation), *common]
+            if scratch is not None:argv.extend([F("--scratch"), W(scratch)])
+            return argv
+        def finish():
+            self.work["command_recipe_processing_unknown"] = True
+            if not hasattr(self, "command_recipes"):self.command_recipes = {}
+            self.command_recipes[phase] = recipes
+            self.work["command_recipe_processing_unknown"] = False
+            return commands
         if phase == "reproduction":
-            command("helper-version", [helper, "version"], "helper", "helper-source")
-            command("jq-version", [jq, "--version"], "jq", "jq-self")
-            mapped = {role: work / "inputs" / role / (role + ".json") for role in
+            command("helper-version", [P(helper, "consumer_work/dependencies/helper/object-closure"), F("version")],
+                "helper", "helper-source", "version")
+            command("jq-version", [P(jq, "consumer_work/dependencies/jq/jq"), F("--version")], "jq", "jq-self", "version")
+            mapped = {role: "inputs/" + role + "/" + role + ".json" for role in
                 ("incident", "claim", "duty_evaluation", "qualified_identity", "materialization_input")}
-            shell("incident-validation", "shadow/v1/validate-incident.sh", ["validate", str(mapped["incident"])])
-            protocol("validate-input", mapped["materialization_input"])
+            shell("incident-validation", "shadow/v1/validate-incident.sh", "validate", [W(mapped["incident"])])
+            protocol("validate-input", W(mapped["materialization_input"]))
             qualified()
-            shell("materialization", "adapters/local-git-materializer/v1/materialize.sh", ["materialize",
-                str(mapped["materialization_input"]), incident["body"]["target_repository_id"], source_git,
-                str(work / "candidate"), str(work / "materializer"), helper, jq])
-            protocol("validate-response", work / "response-check/response-check.json")
-            common = ["--input", str(mapped["materialization_input"]), "--input-sha256", input_digest(input_raw),
-                "--response", str(work / "response/materialization-response.json"), "--response-sha256", input_digest(response_raw),
-                "--candidate-repository", str(work / "candidate/repository.git"), "--output",
-                str(work / "preparation-parent/preparation"), "--scratch", str(work / "preparation-scratch"), "--jq", jq]
+            shell("materialization", "adapters/local-git-materializer/v1/materialize.sh", "materialize",
+                [W(mapped["materialization_input"]), target_repository(), source_repository(), W("candidate"), W("materializer"),
+                 P(helper, "consumer_work/dependencies/helper/object-closure"), P(jq, "consumer_work/dependencies/jq/jq")])
+            protocol("validate-response", W("response-check/response-check.json"))
+            common = [F("--input"), W(mapped["materialization_input"]), F("--input-sha256"),
+                D(input_digest(input_raw), "sha256", "materialization.input"), F("--response"), W("response/materialization-response.json"),
+                F("--response-sha256"), D(input_digest(response_raw), "sha256", "materialization.response"),
+                F("--candidate-repository"), W("candidate/repository.git"), F("--output"), W("preparation-parent/preparation"),
+                F("--scratch"), W("preparation-scratch"), F("--jq"), P(jq, "consumer_work/dependencies/jq/jq")]
             for operation in ("prepare", "inspect"):
                 command("candidate-" + ("preparation" if operation == "prepare" else "inspection"),
-                    [python, "-I", "-S", "-B", str(source / preparation), operation, *common], "python", preparation)
-            shell("sandbox-bound-evaluation", "control/v1/evaluate-bound-sandbox.sh", ["evaluate",
-                str(mapped["duty_evaluation"]), str(mapped["claim"]), str(work / "observation/observation.json")])
+                    preparation_argv(operation, common), "python", preparation, operation)
+            shell("sandbox-bound-evaluation", "control/v1/evaluate-bound-sandbox.sh", "evaluate",
+                [W(mapped["duty_evaluation"]), W(mapped["claim"]), W("observation/observation.json")])
             launch()
-            shell("sandbox-receipt-check", "enforcement/v1/check-sandbox-receipt.sh", ["check-bound",
-                str(work / "receipt/sandbox-receipt.json"), str(work / "launch/sandbox-expectation.json"),
-                str(work / "evaluation/sandbox-evaluation.json"), str(work / "observation/observation.json")])
-            shell("trace-validation", "telemetry/v1/validate-trace-ledger.sh", ["validate", incident["id"],
-                request["id"], str(work / "trace/trace-ledger.json")])
-            return commands
+            shell("sandbox-receipt-check", "enforcement/v1/check-sandbox-receipt.sh", "check-bound",
+                [W("receipt/sandbox-receipt.json"), W("launch/sandbox-expectation.json"),
+                 W("evaluation/sandbox-evaluation.json"), W("observation/observation.json")])
+            shell("trace-validation", "telemetry/v1/validate-trace-ledger.sh", "validate",
+                [*trace_ids(incident["id"], request["id"], "reproduction-request.id"), W("trace/trace-ledger.json")])
+            return finish()
         _seed_require(type(candidate_commit_id) is str and type(write_set) is list)
-        # Account capture path numbering from the actual _Workspace.capture calls.
         captures = 5 + len(e.EVIDENCE_NAMES) + 1
         git_configs = {}
         def capture(name, directory="captured"):
             nonlocal captures
             path = work / directory / name
             captures += 1
-            return path
-        def git(repository, arguments):
-            command("write-git-inspection", ["/usr/bin/git", "--no-replace-objects", "--git-dir=" + str(repository),
-                *arguments], "git", "shadow/v1/write-shadow.py")
-        def inventory(repository, commit):
+            return P(path, "consumer_work/" + directory + "/" + name)
+        def git(repository, repository_role, arguments, operation):
+            command("write-git-inspection", [F("/usr/bin/git"), F("--no-replace-objects"),
+                O("--git-dir=" + str(repository), repository_role, "--git-dir="), *arguments],
+                "git", "shadow/v1/write-shadow.py", operation)
+        def inventory(repository, repository_role, commit, commit_role):
             key = str(repository)
             if key not in git_configs:
                 git_configs[key] = capture("config-" + str(captures) + ".txt")
-            git(repository, ["config", "--file", str(git_configs[key]), "--name-only", "--list", "--no-includes"])
-            git(repository, ["rev-parse", "--is-bare-repository"])
-            git(repository, ["rev-parse", "--show-object-format"])
-            git(repository, ["ls-tree", "-r", "-t", "-z", "--full-tree", commit])
+            git(repository, repository_role, [F("config"), F("--file"), git_configs[key], F("--name-only"),
+                F("--list"), F("--no-includes")], "config-list")
+            git(repository, repository_role, [F("rev-parse"), F("--is-bare-repository")], "is-bare-repository")
+            git(repository, repository_role, [F("rev-parse"), F("--show-object-format")], "show-object-format")
+            git(repository, repository_role, [F("ls-tree"), F("-r"), F("-t"), F("-z"), F("--full-tree"),
+                D(commit, "git-oid", commit_role)], "ls-tree")
         def candidate_facts():
-            repository = work / "candidate/repository.git"
-            inventory(repository, candidate_commit_id)
-            git(repository, ["cat-file", "commit", candidate_commit_id])
-            for row in write_set:
-                git(repository, ["cat-file", "blob", row["git_blob_oid"]])
-        shell("incident-validation", "shadow/v1/validate-incident.sh", ["validate", str(work / "frozen/incident.json")])
-        protocol("validate-input", work / "frozen/materialization-input.json")
+            repository, repository_role = work / "candidate/repository.git", "consumer_work/candidate/repository.git"
+            inventory(repository, repository_role, candidate_commit_id, "candidate.commit")
+            git(repository, repository_role, [F("cat-file"), F("commit"), D(candidate_commit_id, "git-oid", "candidate.commit")], "cat-file-commit")
+            for index, row in enumerate(write_set):
+                git(repository, repository_role, [F("cat-file"), F("blob"),
+                    D(row["git_blob_oid"], "git-oid", "write_set[" + str(index) + "].git_blob_oid")], "cat-file-blob")
+        shell("incident-validation", "shadow/v1/validate-incident.sh", "validate", [W("frozen/incident.json")])
+        protocol("validate-input", W("frozen/materialization-input.json"))
         qualified()
         response_check = capture("frozen-response-check.json")
         protocol("validate-response", response_check)
         observation = capture("frozen-observation.json", "observation")
-        shell("sandbox-bound-evaluation", "control/v1/evaluate-bound-sandbox.sh", ["evaluate",
-            str(work / "frozen/duty-evaluation.json"), str(work / "frozen/claim.json"), str(observation)])
-        shell("sandbox-receipt-check", "enforcement/v1/check-sandbox-receipt.sh", ["check-bound",
-            str(work / "frozen/sandbox-receipt.json"), str(work / "frozen/sandbox-expectation.json"),
-            str(work / "frozen/sandbox-evaluation.json"), str(observation)])
+        shell("sandbox-bound-evaluation", "control/v1/evaluate-bound-sandbox.sh", "evaluate",
+            [W("frozen/duty-evaluation.json"), W("frozen/claim.json"), observation])
+        shell("sandbox-receipt-check", "enforcement/v1/check-sandbox-receipt.sh", "check-bound",
+            [W("frozen/sandbox-receipt.json"), W("frozen/sandbox-expectation.json"), W("frozen/sandbox-evaluation.json"), observation])
         frozen_launch = self.calculated["reproduction"]["files"]["sandbox-request.json"]
-        shell("trace-validation", "telemetry/v1/validate-trace-ledger.sh", ["validate", incident["id"],
-            e.parse(frozen_launch)["id"], str(work / "frozen/trace-ledger.json")])
-        inventory(source_git, revision["commit_id"])
-        shell("write-seed-conversion", "maintenance/v1/incident-to-eval.sh", ["convert",
-            str(work / "frozen/incident.json"), str(work / "frozen/shadow-record.json"), str(work / "seed")])
+        shell("trace-validation", "telemetry/v1/validate-trace-ledger.sh", "validate",
+            [*trace_ids(incident["id"], e.parse(frozen_launch)["id"], "reproduction.sandbox-request.id"), W("frozen/trace-ledger.json")])
+        inventory(source_git, "request.source_git_dir", revision["commit_id"], "source.commit")
+        shell("write-seed-conversion", "maintenance/v1/incident-to-eval.sh", "convert",
+            [W("frozen/incident.json"), W("frozen/shadow-record.json"), W("seed")])
         observation = capture("write-observation.json", "observation")
-        shell("sandbox-bound-evaluation", "control/v1/evaluate-bound-sandbox.sh", ["evaluate",
-            str(work / "captured/duty_evaluation.json"), str(work / "captured/claim.json"), str(observation)])
+        shell("sandbox-bound-evaluation", "control/v1/evaluate-bound-sandbox.sh", "evaluate",
+            [W("captured/duty_evaluation.json"), W("captured/claim.json"), observation])
         contract, patch = capture("contract.json", "builder"), capture("producer.patch", "builder")
         for key in self.c.WRITE_TEXTS:capture(key + ".txt", "builder")
         builder = "shadow/v1/write-materialization-input.jq"
         def builder_phase(name, input_path, metadata_path):
-            command("write-materialization-input", [jq, "-L", modules, "-S", "-c", "--arg", "phase", name,
-                "--rawfile", "contract", str(contract), "--rawfile", "patch", str(patch), "--slurpfile", "metadata",
-                str(metadata_path), "-f", str(source / builder), str(input_path)], "jq", builder)
+            command("write-materialization-input", [P(jq, "consumer_work/dependencies/jq/jq"), F("-L"),
+                P(modules, "source_root/generation.modules"), F("-S"), F("-c"), F("--arg"), F("phase"), F(name),
+                F("--rawfile"), F("contract"), contract, F("--rawfile"), F("patch"), patch, F("--slurpfile"),
+                F("metadata"), metadata_path, F("-f"), P(source / builder, "source_root/" + builder), input_path],
+                "jq", builder, name)
         metadata = capture("metadata-first.json", "builder")
-        builder_phase("stage-request", work / "frozen/materialization-input.json", metadata)
+        builder_phase("stage-request", W("frozen/materialization-input.json"), metadata)
         first = capture("first.json", "builder")
         capture("stage-request.json", "builder")
         metadata = capture("metadata-final.json", "builder")
         builder_phase("final-input", first, metadata)
         input_path = capture("write-input.json", "builder")
         protocol("validate-input", input_path)
-        shell("materialization", "adapters/local-git-materializer/v1/materialize.sh", ["materialize", str(input_path),
-            incident["body"]["target_repository_id"], source_git, str(work / "candidate"),
-            str(work / "materializer"), helper, jq])
+        shell("materialization", "adapters/local-git-materializer/v1/materialize.sh", "materialize", [input_path,
+            target_repository(), source_repository(), W("candidate"), W("materializer"),
+            P(helper, "consumer_work/dependencies/helper/object-closure"), P(jq, "consumer_work/dependencies/jq/jq")])
         response_path = capture("response.json")
         protocol("validate-response", capture("response-check.json"))
         candidate_facts()
-        common = ["--input", str(input_path), "--input-sha256", input_digest(input_raw), "--response", str(response_path),
-            "--response-sha256", input_digest(response_raw), "--candidate-repository", str(work / "candidate/repository.git"),
-            "--output", str(work / "preparation-parent/preparation"), "--jq", jq]
+        common = [F("--input"), input_path, F("--input-sha256"), D(input_digest(input_raw), "sha256", "materialization.input"),
+            F("--response"), response_path, F("--response-sha256"), D(input_digest(response_raw), "sha256", "materialization.response"),
+            F("--candidate-repository"), W("candidate/repository.git"), F("--output"), W("preparation-parent/preparation"),
+            F("--jq"), P(jq, "consumer_work/dependencies/jq/jq")]
         for operation, scratch in (("prepare", "preparation-scratch"), ("inspect", "inspection-scratch")):
             command("candidate-" + ("preparation" if operation == "prepare" else "inspection"),
-                [python, "-I", "-S", "-B", str(source / preparation), operation, *common, "--scratch", str(work / scratch)],
-                "python", preparation)
+                preparation_argv(operation, common, scratch), "python", preparation, operation)
         qualified()
         for name in ("write-qualified-identity.json", "write-evaluation.json", "write-origin-observation.json"):
             capture(name)
@@ -4058,18 +4348,105 @@ class _ReplayCase:
         receipt = capture("write-receipt.json", "receipt")
         evaluation = capture("write-evaluation.json", "checks")
         observation = capture("write-verifier-observation.json", "checks")
-        shell("sandbox-receipt-check", "enforcement/v1/check-sandbox-receipt.sh", ["check-bound", str(receipt),
-            str(work / "launch/sandbox-expectation.json"), str(evaluation), str(observation)])
+        shell("sandbox-receipt-check", "enforcement/v1/check-sandbox-receipt.sh", "check-bound", [receipt,
+            W("launch/sandbox-expectation.json"), evaluation, observation])
         for name in ("sandbox-request.json", "sandbox-expectation.json", "sandbox-receipt.json", "sandbox-check.json",
                      "origin-observation.json", "payload-stdout.txt", "payload-stderr.txt", "evidence-manifest.json",
                      "file-digest-result.json"):
             capture(name, "checks")
-        inventory(source_git, revision["commit_id"])
+        inventory(source_git, "request.source_git_dir", revision["commit_id"], "source.commit")
         trace = capture("write-trace-ledger.json")
-        shell("trace-validation", "telemetry/v1/validate-trace-ledger.sh", ["validate", incident["id"], request["id"], str(trace)])
-        inventory(source_git, revision["commit_id"])
+        shell("trace-validation", "telemetry/v1/validate-trace-ledger.sh", "validate",
+            [*trace_ids(incident["id"], request["id"], "write-request.id"), trace])
+        inventory(source_git, "request.source_git_dir", revision["commit_id"], "source.commit")
         candidate_facts()
-        return commands
+        return finish()
+
+    def source_repository(self, repository):
+        _seed_require(type(repository) is self.c.HeldPath
+            and any(item is repository for item in self._replay_io_holds))
+        if not hasattr(self, "source_repositories"):self.source_repositories = []
+        existing = [identity for held, identity in self.source_repositories if held is repository]
+        repository.recheck("E_STORE", self.work, "M")
+        if existing:
+            _seed_require(len(existing) == 1 and existing[0] == self.c._identity(repository.before))
+            return repository
+        _seed_require(not repository.listdir())
+        self.inputs.git_repository(repository)
+        repository.recheck("E_STORE", self.work, "M")
+        self.source_repositories.append((repository, self.c._identity(repository.before)))
+        return repository
+
+    def check_original_surface(self, repository, case):
+        self.source_repository(repository)
+        incident = self.original["incident.json"]
+        revision = incident["body"]["git_revision_ref"]
+        facts = self.git_inventory(repository, revision, "source")
+        path = incident["body"]["failing_check"]["path"]
+        _seed_require(path in facts and facts[path][1] == "blob")
+        environment = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_TERMINAL_PROMPT": "0"}
+        def read(kind, oid):
+            repository.recheck("E_STORE", self.work, "M")
+            raw = self._run_offline("source-git-" + kind, ["/usr/bin/git", "--no-replace-objects",
+                "--git-dir=" + repository.path, "cat-file", kind, oid],
+                output_limit=self.c.DOCUMENT_LIMIT, env=environment)
+            repository.recheck("E_STORE", self.work, "M")
+            return raw
+        checked = read("blob", facts[path][2])
+        commit = read("commit", revision["commit_id"])
+        self.work["source_commit_parse_unknown"] = True
+        pieces = commit.split(b"\n\n", 1)
+        self.inputs._account("R", len(commit), "M")
+        _seed_require(len(pieces) == 2)
+        self.work["source_commit_parse_unknown"] = False
+        self.check_surface(case, checked, pieces[1])
+        return facts
+
+    def git_inventory(self, repository, revision, phase):
+        _seed_require(type(repository) is self.c.HeldPath and phase in {"source", "candidate"})
+        repository.recheck("E_STORE", self.work, "M")
+        raw = self._run_offline(phase + "-git-inventory", ["/usr/bin/git", "--no-replace-objects",
+            "--git-dir=" + repository.path, "ls-tree", "-r", "-t", "-z", "--full-tree", revision["commit_id"]],
+            output_limit=16 * self.c.DOCUMENT_LIMIT, env={"PATH": "/usr/bin:/bin", "LC_ALL": "C",
+                "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_TERMINAL_PROMPT": "0"})
+        self.work["git_inventory_parse_unknown"] = True
+        value = self.c._git_inventory_values(raw, revision)
+        self.inputs._account("R", len(raw), "M")
+        self.work["git_inventory_parse_unknown"] = False
+        repository.recheck("E_STORE", self.work, "M")
+        return value
+
+    def writer_candidate(self, runtime_root, repository, prepared, builder, source_facts):
+        w = sys.modules["malicious_write_builder"]
+        incident = w.parse(self.original_raw["incident.json"])
+        candidate = w._candidate_receipt_values(prepared["response_raw"], incident,
+            builder["files"], builder["write_set"], builder["record_form"])
+        revision = incident["body"]["git_revision_ref"]
+        facts = self.git_inventory(repository, dict(revision, commit_id=candidate["commit_id"]), "candidate")
+        environment = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_TERMINAL_PROMPT": "0"}
+        def read(kind, oid, limit):
+            repository.recheck("E_STORE", self.work, "M")
+            raw = self._run_offline("candidate-git-" + kind, ["/usr/bin/git", "--no-replace-objects",
+                "--git-dir=" + repository.path, "cat-file", kind, oid], output_limit=limit, env=environment)
+            repository.recheck("E_STORE", self.work, "M")
+            return raw
+        commit = read("commit", candidate["commit_id"], w.e.OUTPUT_LIMIT)
+        self.work["candidate_relation_processing_unknown"] = True
+        w._candidate_relations_values(candidate, revision, facts, commit, source_facts,
+            builder["files"], builder["write_set"])
+        self.inputs._account("R", len(commit), "M")
+        for row in builder["write_set"]:
+            expected = builder["files"][row["path"]]
+            raw = read("blob", row["git_blob_oid"], len(expected) + 1)
+            self.inputs._account("E", 2 * (len(raw) + len(expected)), "M")
+            equal = raw == expected
+            valid = w._candidate_blob_values(raw, expected, row["sha256"])
+            if equal:self.inputs._account("H", len(raw), "M")
+            w.require(valid, "E_RELATION")
+        self.work["candidate_relation_processing_unknown"] = False
+        return candidate
 
     def parent_context(self, phase):
         _seed_require(phase in {"reproduction", "write"})
@@ -4095,13 +4472,15 @@ class _ReplayCase:
         context = self.c._parent_context_values(context_raw, frame, records)
         return context
 
-    def sandbox_launch(self, runtime_root, work_hold, phase, prepared, trial):
+    def sandbox_evaluation(self, runtime_root, work_hold, phase, trial):
         runtime_root, private_work = Path(runtime_root), Path(work_hold.path)
         _seed_require(phase in {"reproduction", "write"} and phase not in self.calculated)
+        if not hasattr(self, "calculated_evaluations"):
+            self.calculated_evaluations = {}
+        _seed_require(phase not in self.calculated_evaluations)
         e = sys.modules["malicious_reproduction_pipeline"]
         context = self.local_context(phase)
-        incident_raw = self.original_raw["incident.json"]
-        incident = e.parse(incident_raw)
+        incident = e.parse(self.original_raw["incident.json"])
         claim = e.parse(trial["claim.json"])
         _seed_require(claim["id"] == context["config"]["environment_id"])
         entry_sha = self.c._verifier_registry_entry_sha(context["registry_entry"])
@@ -4115,21 +4494,35 @@ class _ReplayCase:
         paths = {}
         for name, raw in (("duty", trial["duty-evaluation.json"]), ("claim", trial["claim.json"]),
                           ("observation", observation_raw)):
-            path = self._replay_write_bytes(work_hold, phase + "-" + name + ".json", raw)
-            paths[name] = path
-        evaluation_raw = e.run_bounded("sandbox-bound-evaluation", ["/bin/bash", "-p",
+            paths[name] = self._replay_write_bytes(work_hold, phase + "-" + name + ".json", raw)
+        evaluation_raw = self._run_offline("sandbox-bound-evaluation", ["/bin/bash", "-p",
             str(runtime_root / "control/v1/evaluate-bound-sandbox.sh"), "evaluate",
             str(paths["duty"]), str(paths["claim"]), str(paths["observation"])], env=env)
         _seed_require(e.parse(evaluation_raw)["body"]["verdict"] == "satisfied")
         controls = e._control_values(context["installed"], evaluation_raw)
         instruction = e.make_instruction(incident)
+        result = {"context": context, "evaluation_raw": evaluation_raw,
+            "observation_raw": observation_raw, "control": controls,
+            "instruction": instruction, "env": env}
+        self.calculated_evaluations[phase] = result
+        return result
+
+    def sandbox_launch(self, runtime_root, work_hold, phase, prepared, trial):
+        runtime_root = Path(runtime_root)
+        _seed_require(phase in {"reproduction", "write"} and phase not in self.calculated)
+        e = sys.modules["malicious_reproduction_pipeline"]
+        if phase not in getattr(self, "calculated_evaluations", {}):
+            self.sandbox_evaluation(runtime_root, work_hold, phase, trial)
+        values = self.calculated_evaluations[phase]
+        context, evaluation_raw, observation_raw, controls, instruction, env = (
+            values[key] for key in ("context", "evaluation_raw", "observation_raw", "control", "instruction", "env"))
         entropy_rows = self.occurrences[phase]["raw"]["local"]["entropy"][phase]
         _seed_require(type(entropy_rows) is list and len(entropy_rows) == 1)
         entropy = entropy_rows[0]
         _seed_require(type(entropy) is str and len(entropy) == 64
             and all(char in "0123456789abcdef" for char in entropy))
         request_raw = self.original_raw[phase + "-request.json"]
-        launch_raw, expectation_raw = e._launch_values(request_raw, incident_raw, evaluation_raw,
+        launch_raw, expectation_raw = e._launch_values(request_raw, self.original_raw["incident.json"], evaluation_raw,
             observation_raw, prepared["record_raw"], prepared["manifest_raw"], instruction,
             {"context": context["launch_context"], "control": controls}, bytes.fromhex(entropy))
         self.inputs._account("C", len(launch_raw) + len(expectation_raw), "M")
@@ -4165,7 +4558,7 @@ class _ReplayCase:
         self.surface = case["surface"]
 
     def guest(self, runtime_root, private_work, phase, plan_raw):
-        _seed_require(phase in {"reproduction", "write"} and phase not in self.calculated)
+        _seed_require(phase in {"reproduction", "write"} and "export" not in self.calculated.get(phase, {}))
         occurrence = self.occurrences[phase]
         guest = occurrence["raw"]["capture"]["guest"]
         wire = _guest_wire_values(runtime_root, plan_raw, guest)
@@ -4402,6 +4795,54 @@ class _ReplayCase:
             kernel_config_raw=kernel_config_raw, start_raw=start_raw)
         return run
 
+    def host_refused_files(self, runtime_root, phase, launch):
+        import math
+        values = self.calculated[phase]
+        admission = values["admission"]
+        _seed_require(admission["reasons"] and "identity" in values and "export" not in values)
+        groups = self.occurrences[phase]["raw"]["capture"]
+        _seed_require(groups["host"] == {"process": [], "driver_rest": [], "signals": []}
+            and set(groups["clocks"]) == {"wall", "monotonic"})
+        clocks = {}
+        for kind, sites in (("wall", ("2771", "2593")), ("monotonic", ("2794",))):
+            events = groups["clocks"][kind]
+            _seed_require(type(events) is list and len(events) == len(sites))
+            decoded = []
+            for row, site in zip(events, sites):
+                _seed_require(type(row) is dict and set(row) == {"site", "value"}
+                    and row["site"] == "sandbox/v1/host-supervisor.py:" + site + ":0"
+                    and type(row["value"]) is str and len(row["value"]) == 16
+                    and all(char in "0123456789abcdef" for char in row["value"]))
+                value = struct.unpack(">d", bytes.fromhex(row["value"]))[0]
+                _seed_require(math.isfinite(value) and (kind != "monotonic" or value >= 0))
+                decoded.append(value)
+            clocks[kind] = decoded
+        spec = importlib.util.spec_from_file_location("malicious_host_refusal_values",
+            Path(runtime_root) / "sandbox/v1/host-supervisor.py")
+        h = importlib.util.module_from_spec(spec);spec.loader.exec_module(h)
+        context = launch["context"]
+        request = admission["request"]
+        measured = hashlib.sha256(launch["launch_raw"]).hexdigest()
+        self.inputs._account("H", len(launch["launch_raw"]), "M")
+        receipt = _host_receipt_values(runtime_root, context["config"], context["accepted"][0],
+            request, request["body"], measured, clocks["wall"][0], values["identity"]["measured"],
+            "refused", None, True, clocks["wall"][1])
+        files = {"receipt.json": receipt}
+        for name, raw in h._refusal_payload_values(admission["reasons"]):files["payload/" + name] = raw
+        self.inputs._account("C", sum(map(len, files.values())), "M")
+        local = self.occurrences[phase]["raw"]["local"]
+        identity_context = {"attempt_id": request["id"], "platform": local["storage"]["identity_context"]["platform"]}
+        self.c._identity_context_values(local["storage"]["identity_context"],
+            context["config"]["principal_uid"], context["config"]["consumer_gid"])
+        self.work["host_origin_processing_unknown"] = True
+        self.work["accounting_incomplete"] = True
+        origin = _origin_values(runtime_root, files,
+            [row for row in local["storage"]["entries"] if row["role"] == "store"], identity_context,
+            {"host-config.json": context["config_raw"]})
+        self.inputs._account("C", len(origin), "M")
+        values.update(host_run=None, receipt=receipt, origin=origin, host_files=files)
+        return files, origin
+
     def host_files(self, runtime_root, phase, launch):
         _seed_require(phase in {"reproduction", "write"})
         values = self.calculated[phase]
@@ -4430,7 +4871,7 @@ class _ReplayCase:
         identity_context = {"attempt_id": request["id"], "platform": local["storage"]["identity_context"]["platform"]}
         self.work["host_origin_processing_unknown"] = True
         self.work["accounting_incomplete"] = True
-        origin = _origin_values(runtime_root, files, local["storage"]["entries"], identity_context,
+        origin = _origin_values(runtime_root, files, [row for row in local["storage"]["entries"] if row["role"] == "store"], identity_context,
             {"host-config.json": context["config_raw"]})
         self.inputs._account("C", len(origin), "M")
         values.update(receipt=receipt, origin=origin, host_files=files)
@@ -4528,7 +4969,7 @@ class _ReplayCase:
         def put(name, raw):
             return self._replay_write_bytes(work_hold, name + ".json", raw)
         paths = {name: put(name, raw) for name, raw in documents.items()}
-        duty = e.run_bounded("gate-duty-evaluation", ["/bin/bash", "-p",
+        duty = self._run_offline("gate-duty-evaluation", ["/bin/bash", "-p",
             str(runtime_root / "control/v1/evaluate-duty.sh"), "evaluate",
             *[str(paths[name]) for name in ("policy-set", "stage-request", "resolved-profile", "stage-result")]], env=env)
         paths["duty"] = put("duty", duty)
@@ -4538,7 +4979,7 @@ class _ReplayCase:
         policy_ref = {"id": policy_set["id"], "sha256": g.c.digest(documents["policy-set"])}
         g.require(g.parse(duty)["body"]["stage"] == stage_refs
             and g.parse(duty)["body"]["policy_set"] == policy_ref)
-        risk = e.run_bounded("gate-risk-evaluation", ["/bin/bash", "-p",
+        risk = self._run_offline("gate-risk-evaluation", ["/bin/bash", "-p",
             str(runtime_root / "control/v1/evaluate-risk-gates.sh"), "evaluate",
             *[str(paths[name]) for name in ("policy-set", "stage-request", "resolved-profile", "stage-result", "duty", "claim")]], env=env)
         paths["risk"] = put("risk", risk)
@@ -4551,7 +4992,7 @@ class _ReplayCase:
         state, attempt = g.project_register(register_raw, basis, g.parse(documents["stage-request"]),
             g.parse(documents["stage-result"]), duty, self.inputs.root is not None)
         paths["state"], paths["attempt"] = put("state", state), put("attempt", attempt)
-        kill = e.run_bounded("gate-kill-evaluation", ["/bin/bash", "-p",
+        kill = self._run_offline("gate-kill-evaluation", ["/bin/bash", "-p",
             str(runtime_root / "control/v1/evaluate-kill-switch.sh"), "evaluate",
             *[str(paths[name]) for name in ("policy-set", "state", "attempt", "duty")]], env=env)
         killed = g.parse(kill)["body"]
@@ -4561,6 +5002,485 @@ class _ReplayCase:
         result = {**documents, "duty": duty, "risk": risk, "state": state,
             "attempt": attempt, "kill": kill, "scope": scope}
         self.calculated["gate_controls"] = result
+        return result
+
+    def replay_launches(self, runtime_root, work_hold, case):
+        import time
+        _seed_require(type(work_hold) is self.c.HeldPath and type(case) is dict
+            and case["case_id"] == self.manifest["case_id"])
+        self.c._require("_capture_copy_budget" in self.work
+            and all(type(self.work.get(key)) is dict for key in
+                ("runtime_case_carry_in", "runtime_window_carry_in")), "E_LIMIT")
+        self.c._capture_copy_budget_room(self.work, 0, False)
+        for key in ("runtime_case_carry_in", "runtime_window_carry_in"):
+            self.c._require(all(type(self.work[key].get(field)) is int and self.work[key][field] >= 0
+                for field in self.c._RUNTIME_FIELDS), "E_LIMIT")
+        if not any(item is work_hold for item in self._replay_io_holds):self._replay_hold_work(work_hold)
+        reproduction_work = self._replay_mkdir(work_hold, "reproduction")
+        source = self._replay_mkdir(reproduction_work, "source.git")
+        self.check_original_surface(source, case)
+        self.calculation_started = True
+        runtime_root = Path(runtime_root)
+        spec = importlib.util.spec_from_file_location("malicious_reproduction_pipeline",
+            runtime_root / "shadow/v1/enforced-reproduction.py")
+        e = importlib.util.module_from_spec(spec);sys.modules[spec.name] = e;spec.loader.exec_module(e)
+        deadline = time.monotonic() + e.OVERALL_SECONDS
+        reproduction = self.reproduction_phase(runtime_root, reproduction_work, source, deadline)
+        self.compare_phase_outputs("reproduction")
+        writer_work = self._replay_mkdir(work_hold, "write")
+        writer_source = self._replay_mkdir(writer_work, "source.git")
+        written = self.writer_phase(runtime_root, writer_work, writer_source, deadline)
+        self.compare_phase_outputs("write")
+        return {"reproduction": reproduction, "write": written}
+
+    def compare_phase_outputs(self, phase):
+        _seed_require(phase in {"reproduction", "write"} and "files" in self.calculated.get(phase, {}))
+        values = self.calculated[phase]
+        files = dict(values["files"], **{"bundle.json": values["bundle"]})
+        record = self.c._json(files["shadow-record.json"], self.c.DOCUMENT_LIMIT, "E_STORE")
+        self.inputs._account("R", len(files["shadow-record.json"]), "M")
+        environment = record["body"]["environment"]["environment_id"]
+        form = record["body"]["record_form"]
+        bindings = [row for row in self.manifest["output_bindings"] if row["occurrence"] == phase]
+        _seed_require(bindings and {row["context"] for row in bindings} == {"generator", "scope_reader"})
+        identities = set()
+        for binding in bindings:
+            _seed_require(set(binding) == {"occurrence", "context", "role", "environment_id", "record_form", "members"}
+                and binding["role"] in {"current", "qualifying"} and binding["environment_id"] == environment
+                and binding["record_form"] == form)
+            identity = (binding["context"], binding["role"], environment)
+            _seed_require(identity not in identities);identities.add(identity)
+            self.compare(phase, *identity, files)
+            if phase == "write":
+                prefix = "candidate/" + "/".join(identity) + "/"
+                actual = {row["member"][len(prefix):]: (row["occurrence"], row["role"], row["member"])
+                    for row, _held in self.inputs.rows.values() if row["occurrence"] == phase
+                    and row["role"] == "recorded" and row["member"].startswith(prefix)}
+                built = values["builder"]["files"]
+                _seed_require(set(actual) == set(built))
+                for name in sorted(built):self.compare_member(*actual[name], built[name])
+
+    def reproduction_phase(self, runtime_root, phase_work_hold, source_git_hold, deadline):
+        runtime_root = Path(runtime_root)
+        phase = "reproduction"
+        _seed_require(type(phase_work_hold) is self.c.HeldPath
+            and type(source_git_hold) is self.c.HeldPath and phase not in self.calculated
+            and runtime_root.is_absolute() and runtime_root.resolve() == runtime_root)
+        if not any(held is phase_work_hold for held in getattr(self, "_replay_io_holds", [])):
+            self._replay_hold_work(phase_work_hold)
+        phase_work_hold.recheck("E_STORE", self.work, "M")
+        source_git_hold.recheck("E_STORE", self.work, "M")
+        self.source_repository(source_git_hold)
+        self.work["reproduction_phase_processing_unknown"] = True
+        self.work["accounting_incomplete"] = True
+        trial = self.trial(phase)
+        incident = self.original["incident.json"]
+        materializer_work = self._replay_mkdir(phase_work_hold, "materializer")
+        inputs_work = self._replay_mkdir(phase_work_hold, "inputs")
+        launch_work = self._replay_mkdir(phase_work_hold, "launch")
+        guest_work = self._replay_mkdir(phase_work_hold, "guest")
+        outputs_work = self._replay_mkdir(phase_work_hold, "outputs")
+        prepared = self._materializer_preparation_body(runtime_root, phase, source_git_hold,
+            materializer_work, trial["materialization-input.json"],
+            incident["body"]["target_repository_id"], deadline)
+        validated = self.reproduction_inputs(runtime_root, inputs_work, prepared)
+        for name in ("claim.json", "duty-evaluation.json", "materialization-input.json", "qualified-identity.json"):
+            left, right = trial[name], validated[name]
+            self.inputs._account("E", len(left) + len(right), "M")
+            _seed_require(left == right)
+        launch = self.sandbox_launch(runtime_root, launch_work, phase, prepared, validated)
+        admission = self.phase_b(runtime_root, phase, prepared, launch)
+        if admission["reasons"]:
+            refused, _origin = self.host_refused_files(runtime_root, phase, launch)
+            self.verification_outputs(runtime_root, outputs_work, prepared, launch, refused)
+            raise _CalculationRefused()
+        _seed_require(type(admission["plan_raw"]) is bytes)
+        self.guest(runtime_root, Path(guest_work.path), phase, admission["plan_raw"])
+        run = self.host(runtime_root, phase, launch["launch_raw"], launch["instruction"],
+            admission["plan_raw"], prepared["manifest_raw"])
+        host_files, origin_raw = self.host_files(runtime_root, phase, launch)
+        checked = self.reproduction_outputs(runtime_root, outputs_work, prepared, launch, host_files)
+        e = sys.modules["malicious_reproduction_pipeline"]
+        installed = launch["context"]["installed"]
+        files = {
+            "incident.json": self.original_raw["incident.json"],
+            "claim.json": validated["claim.json"],
+            "duty-evaluation.json": validated["duty-evaluation.json"],
+            "materialization-input.json": prepared["input_raw"],
+            "materialization-response.json": prepared["response_raw"],
+            "qualified-identity.json": validated["qualified-identity.json"],
+            "preparation-record.json": prepared["record_raw"],
+            "preparation-manifest.json": prepared["manifest_raw"],
+            "sandbox-evaluation.json": launch["evaluation_raw"],
+            "sandbox-request.json": launch["launch_raw"],
+            "sandbox-expectation.json": launch["expectation_raw"],
+            "sandbox-receipt.json": host_files["receipt.json"],
+            "sandbox-check.json": checked["sandbox-check.json"],
+            "origin-observation.json": origin_raw,
+            "payload-stdout.txt": host_files["payload/stdout"],
+            "payload-stderr.txt": host_files["payload/stderr"],
+            "evidence-manifest.json": checked["evidence-manifest.json"],
+            "file-digest-result.json": checked["file-digest-result.json"],
+            "evaluator-driver.txt": installed["evaluator_driver"],
+            "evaluator-program.txt": installed["evaluator_program"],
+            "policy.json": installed["control_policy"],
+            "decision.json": installed["control_decision"],
+            "policy-set.json": installed["control_policy_set"],
+            "accepted-identities.json": installed["accepted_set"],
+            "registry.json": installed["registry"],
+            "trace-ledger.json": checked["trace-ledger.json"],
+            "trace-receipt.json": checked["trace-receipt.json"],
+        }
+        _seed_require(set(files) == set(e.EVIDENCE_NAMES) - {"consumer-provenance.json", "shadow-record.json"})
+        local = self.occurrences[phase]["raw"]["local"]
+        identity_context = local["storage"]["identity_context"]
+        sudo_stat = self.c._sudo_storage_stat_values(local["storage"]["entries"], identity_context["platform"])
+        native_context = self.parent_context(phase)
+        commands = self.consumer_commands(runtime_root, phase, prepared["input_raw"],
+            prepared["response_raw"], sudo_stat)
+        runtime_bytes = {}
+        for slot in ("python", "jq"):
+            value = self.local_slot(phase, slot)
+            if type(value) is tuple:
+                _seed_require(all(type(chunk) is bytes for chunk in value))
+                size = sum(map(len, value))
+                self.c._runtime_account(self.work, "copy_bytes", size, commit=False)
+                value = b"".join(value)
+                self.inputs._account("C", len(value), "runtime")
+            _seed_require(type(value) is bytes)
+            runtime_bytes[slot] = value
+        jq_sha = e.sha(runtime_bytes["jq"])
+        self.inputs._account("H", len(runtime_bytes["jq"]), "runtime")
+        component = self.c._open_held(str(runtime_root / "shadow/v1/enforced-reproduction.py"), False,
+            self.c._store_rule(os.geteuid(), os.getegid(), 0o400, False, self.inputs.resolver),
+            "E_STORE", recording_work=self.work, accounting_kind="M")
+        self._replay_adopt_io(component)
+        _seed_require(component.before.st_size <= self.c.EXECUTABLE_LIMIT)
+        self.c._capture_copy_room(self.work, 4 * component.before.st_size, False, case=True, read_only=True)
+        consumer_source_raw = component.read(self.c.EXECUTABLE_LIMIT, "E_STORE", self.work)
+        materialized = {"response_raw": prepared["response_raw"],
+            "evaluation_raw": launch["evaluation_raw"],
+            "qualified_identity_raw": validated["qualified-identity.json"]}
+        context = {"request": self.original["reproduction-request.json"],
+            "consumer_source_raw": consumer_source_raw, "python_raw": runtime_bytes["python"],
+            "jq_sha256": jq_sha, "native_context": native_context, "commands": commands,
+            "observation": launch["observation_raw"], "store_id": launch["context"]["config"]["store_id"]}
+        output, bundle = self.reproduction(runtime_root, files, materialized, context)
+        rebuilt_capture, completion, projection = self.capture(runtime_root, phase,
+            launch["launch_raw"], launch["expectation_raw"], host_files["receipt.json"])
+        _seed_require(set(output) == set(e.EVIDENCE_NAMES))
+        self.calculated[phase].update(prepared=prepared, launch=launch, materialized=materialized,
+            provenance_context=context, checker_files=checked, host_files=host_files, origin=origin_raw)
+        return {"files": output, "bundle": bundle, "capture": rebuilt_capture,
+            "completion": completion, "projection": projection, "prepared": prepared,
+            "launch": launch, "host_run": run, "host_files": host_files, "origin": origin_raw}
+
+    def writer_phase(self, runtime_root, phase_work_hold, source_git_hold, deadline):
+        runtime_root = Path(runtime_root)
+        phase = "write"
+        _seed_require(type(phase_work_hold) is self.c.HeldPath and type(source_git_hold) is self.c.HeldPath
+            and phase not in self.calculated and "files" in self.calculated.get("reproduction", {}))
+        if not any(item is phase_work_hold for item in getattr(self, "_replay_io_holds", [])):
+            self._replay_hold_work(phase_work_hold)
+        source_git_hold.recheck("E_STORE", self.work, "M")
+        _seed_require(not source_git_hold.listdir())
+        self.source_repository(source_git_hold)
+        self.work["writer_phase_processing_unknown"] = True
+        self.work["accounting_incomplete"] = True
+        frozen = dict(self.calculated["reproduction"]["files"])
+        frozen["bundle.json"] = self.calculated["reproduction"]["bundle"]
+        e = sys.modules["malicious_reproduction_pipeline"]
+        incident = e.parse(frozen["incident.json"])
+        revision = incident["body"]["git_revision_ref"]
+        trial = self.trial(phase)
+        source_facts = self.git_inventory(source_git_hold, revision, "source")
+        evaluation_work = self._replay_mkdir(phase_work_hold, "evaluation")
+        builder_work = self._replay_mkdir(phase_work_hold, "builder")
+        materializer_work = self._replay_mkdir(phase_work_hold, "materializer")
+        launch_work = self._replay_mkdir(phase_work_hold, "launch")
+        identity_work = self._replay_mkdir(phase_work_hold, "identity")
+        guest_work = self._replay_mkdir(phase_work_hold, "guest")
+        outputs_work = self._replay_mkdir(phase_work_hold, "outputs")
+        evaluation = self.sandbox_evaluation(runtime_root, evaluation_work, phase, trial)
+        spec = importlib.util.spec_from_file_location("malicious_write_builder",
+            runtime_root / "shadow/v1/write-shadow.py")
+        w = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = w
+        spec.loader.exec_module(w)
+        policy_raw = w.e.read_regular(runtime_root / "scope/v1/scope-policy.json", w.e.OUTPUT_LIMIT)
+        mode_raw = w.e.read_regular(runtime_root / "config/construction-mode.json", w.e.OUTPUT_LIMIT)
+        self.inputs._account("R", len(policy_raw) + len(mode_raw), "M")
+        policy, mode = w.parse(policy_raw), json.loads(mode_raw)
+        root = "ystack-evidence/" + incident["id"]
+        forms = []
+        for form in ("withheld-write.v1", "withheld-write-policy.v1"):
+            try:
+                w._write_paths_values(root, policy, mode, policy_raw,
+                    self.original["write-request.json"]["body"]["allowed_paths"], source_facts, form)
+            except w.e.Refusal as error:
+                if error.code != "E_RELATION":raise
+            else:
+                forms.append(form)
+        _seed_require(len(forms) == 1)
+        record_form = forms[0]
+        builder = self.writer_input(runtime_root, builder_work, source_facts, record_form)
+        w = sys.modules["malicious_write_builder"]
+        stages = self._materializer_preparation_steps(runtime_root, phase, source_git_hold, materializer_work,
+            builder["input_raw"], incident["body"]["target_repository_id"], deadline)
+        stage_failure, stages_finished = None, False
+        try:
+            materialized_stage = next(stages)
+            response_check = e.response_check(w.parse(builder["input_raw"], 8 * e.OUTPUT_LIMIT),
+                materialized_stage["response_raw"])
+            response_check_path = self._replay_write_bytes(materializer_work, "writer-response-check.json", response_check)
+            registry_raw = e.read_regular(runtime_root / "core/v2/generation-registry.json", e.OUTPUT_LIMIT)
+            self.inputs._account("R", len(registry_raw), "M")
+            modules = e.core_modules(registry_raw)
+            checked_response = self._run_offline("materializer-response-validation", [str(runtime_root / "bin/jq"),
+                "-L", str(modules), "-e", "--arg", "command", "validate-response", "-f",
+                str(runtime_root / "adapters/local-git-materializer/v1/protocol.jq"), str(response_check_path)],
+                env=evaluation["env"])
+            w.require(checked_response.strip() == b"true", "E_RELATION")
+            repository = self.c._open_held(str(materialized_stage["candidate_repository"]), True,
+                self.c._store_rule(os.geteuid(), os.getegid(), 0o700, True, self.inputs.resolver),
+                "E_STORE", recording_work=self.work, accounting_kind="M")
+            self._replay_adopt_io(repository)
+            candidate = self.writer_candidate(runtime_root, repository, materialized_stage, builder, source_facts)
+            try:next(stages)
+            except StopIteration as completed:
+                prepared = completed.value
+                stages_finished = True
+            else:raise ValueError("E_RELATION")
+        except BaseException as error:
+            stage_failure = error
+            raise
+        finally:
+            if not stages_finished:
+                try:stages.close()
+                except BaseException as error:
+                    selected = _seed_first(stage_failure, error)
+                    if selected is not stage_failure:raise selected
+        _seed_require(candidate["commit_id"] == prepared["candidate_commit_id"]
+            and candidate["tree_id"] == prepared["candidate_tree_id"])
+        identity_raw = w._write_identity_values(frozen["qualified-identity.json"], builder["input_raw"],
+            evaluation["instruction"], self.original["write-request.json"]["id"])
+        self._replay_write_bytes(identity_work, "write-qualified-identity.json", identity_raw)
+        jq = runtime_root / "bin/jq"
+        registry_raw = w.e.read_regular(runtime_root / "core/v2/generation-registry.json", w.e.OUTPUT_LIMIT)
+        self.inputs._account("R", len(registry_raw), "M")
+        modules = w.e.core_modules(registry_raw)
+        validated_identity = self._run_offline("qualified-identity-validation", [str(jq), "-L", str(modules),
+            "-r", "--arg", "repository_id", incident["body"]["target_repository_id"],
+            "--arg", "hash_algorithm", revision["hash_algorithm"], "--arg", "commit_id", revision["commit_id"],
+            "-f", str(runtime_root / "shadow/v1/qualified-identity.jq")],
+            stdin=identity_raw, env=evaluation["env"])
+        w.require(validated_identity == b"", "E_RELATION")
+        launch_trial = {**trial, "qualified-identity.json": identity_raw,
+            "materialization-input.json": prepared["input_raw"]}
+        launch = self.sandbox_launch(runtime_root, launch_work, phase, prepared, launch_trial)
+        admission = self.phase_b(runtime_root, phase, prepared, launch)
+        if admission["reasons"]:
+            refused, _origin = self.host_refused_files(runtime_root, phase, launch)
+            self.verification_outputs(runtime_root, outputs_work, prepared, launch, refused, phase=phase)
+            raise _CalculationRefused()
+        self.guest(runtime_root, Path(guest_work.path), phase, admission["plan_raw"])
+        run = self.host(runtime_root, phase, launch["launch_raw"], launch["instruction"],
+            admission["plan_raw"], prepared["manifest_raw"])
+        host_files, origin_raw = self.host_files(runtime_root, phase, launch)
+        checked = self.verification_outputs(runtime_root, outputs_work, prepared, launch, host_files, phase=phase)
+        _seed_require(self.git_inventory(source_git_hold, revision, "source") == source_facts)
+        checked.update(self.verification_trace(runtime_root, outputs_work, phase, launch, checked))
+        files = {name: frozen[name] for name in e.EVIDENCE_NAMES}
+        files.update({"claim.json": builder["claim_raw"], "duty-evaluation.json": trial["duty-evaluation.json"],
+            "materialization-input.json": prepared["input_raw"], "materialization-response.json": prepared["response_raw"],
+            "preparation-record.json": prepared["record_raw"], "preparation-manifest.json": prepared["manifest_raw"],
+            "qualified-identity.json": identity_raw, "sandbox-evaluation.json": launch["evaluation_raw"],
+            "sandbox-request.json": launch["launch_raw"], "sandbox-expectation.json": launch["expectation_raw"],
+            "sandbox-receipt.json": host_files["receipt.json"], "sandbox-check.json": checked["sandbox-check.json"],
+            "origin-observation.json": origin_raw, "payload-stdout.txt": host_files["payload/stdout"],
+            "payload-stderr.txt": host_files["payload/stderr"], "evidence-manifest.json": checked["evidence-manifest.json"],
+            "file-digest-result.json": checked["file-digest-result.json"], "trace-ledger.json": checked["trace-ledger.json"],
+            "trace-receipt.json": checked["trace-receipt.json"]})
+        scope_policy_raw = builder["files"][root + "/scope-policy.json"] if record_form == "withheld-write-policy.v1" else None
+        if record_form == "withheld-write-policy.v1":files["scope-policy.json"] = scope_policy_raw
+        _seed_require(self.git_inventory(source_git_hold, revision, "source") == source_facts)
+        repeated_candidate = self.writer_candidate(runtime_root, repository, prepared, builder, source_facts)
+        _seed_require(repeated_candidate == candidate)
+        local = self.occurrences[phase]["raw"]["local"]
+        sudo_stat = self.c._sudo_storage_stat_values(local["storage"]["entries"],
+            local["storage"]["identity_context"]["platform"])
+        parent = self.parent_context(phase)
+        commands = self.consumer_commands(runtime_root, phase, prepared["input_raw"], prepared["response_raw"],
+            sudo_stat, candidate["commit_id"], builder["write_set"])
+        binaries = {}
+        for slot in ("python", "jq"):
+            value = self.local_slot(phase, slot)
+            if type(value) is tuple:
+                _seed_require(all(type(chunk) is bytes for chunk in value))
+                self.c._runtime_account(self.work, "copy_bytes", sum(map(len, value)), commit=False)
+                value = b"".join(value)
+                self.inputs._account("C", len(value), "runtime")
+            _seed_require(type(value) is bytes)
+            binaries[slot] = value
+        source = self.c._open_held(str(runtime_root / "shadow/v1/write-shadow.py"), False,
+            self.c._store_rule(os.geteuid(), os.getegid(), 0o400, False, self.inputs.resolver),
+            "E_STORE", recording_work=self.work, accounting_kind="M")
+        self._replay_adopt_io(source)
+        _seed_require(source.before.st_size <= self.c.EXECUTABLE_LIMIT)
+        self.c._capture_copy_room(self.work, 4 * source.before.st_size, False, case=True, read_only=True)
+        consumer_raw = source.read(self.c.EXECUTABLE_LIMIT, "E_STORE", self.work)
+        consumer_sha, python_sha, jq_sha = w.sha(consumer_raw), w.sha(binaries["python"]), w.sha(binaries["jq"])
+        self.inputs._account("H", len(consumer_raw), "M")
+        self.inputs._account("H", len(binaries["python"]) + len(binaries["jq"]), "runtime")
+        materialized = {"input_raw": prepared["input_raw"], "response_raw": prepared["response_raw"],
+            "evaluation_raw": launch["evaluation_raw"], "qualified_identity_raw": identity_raw,
+            "candidate_tree_id": candidate["tree_id"], "write_set": builder["write_set"], "files": builder["files"]}
+        context = {"request": self.original["write-request.json"], "record_form": record_form,
+            "scope_policy_raw": scope_policy_raw, "store_id": launch["context"]["config"]["store_id"],
+            "parent": parent, "consumer_sha256": consumer_sha, "python_sha256": python_sha,
+            "jq_sha256": jq_sha, "native_context": parent, "commands": commands,
+            "observation": launch["observation_raw"], "trace": checked["trace-ledger.json"]}
+        output, bundle, publisher_admission = self.write(runtime_root, files, materialized, context)
+        capture, completion, projection = self.capture(runtime_root, phase, launch["launch_raw"],
+            launch["expectation_raw"], host_files["receipt.json"])
+        self.calculated[phase].update(prepared=prepared, builder=builder, launch=launch,
+            materialized=materialized, provenance_context=context, publisher_admission=publisher_admission,
+            source_facts=source_facts, candidate=candidate)
+        return {"files": output, "bundle": bundle, "publisher_admission": publisher_admission,
+            "capture": capture, "completion": completion, "projection": projection,
+            "prepared": prepared, "builder": builder, "launch": launch, "host_run": run,
+            "host_files": host_files, "origin": origin_raw, "source_facts": source_facts, "candidate": candidate}
+
+    def gate_outputs(self, runtime_root, initial, scope_result, evaluation_raw):
+        g = sys.modules["malicious_gate_control_pipeline"]
+        _seed_require(Path(g.__file__).absolute() == Path(runtime_root) / "scope/v1/generate-gate-evidence.py"
+            and type(initial) is dict and type(scope_result) is dict and type(evaluation_raw) is bytes)
+        self.work["gate_output_processing_unknown"] = True
+        self.work["accounting_incomplete"] = True
+        objects = initial["objects"]
+        initial_names = ("request", "shadow-set", "dashboard", "marker", "basis", "claim",
+            "stage-request", "resolved-profile", "stage-result", "policy-set", "initial-origins", "runtime",
+            "kill-configuration", "kill-request", "kill-expectation")
+        _seed_require(type(objects) is dict and set(objects) == set(initial_names))
+        request = g.generation_request(objects["request"])
+        _seed_require(initial["request"] == request)
+        identity = request["id"]
+        controls = self.calculated["gate_controls"]
+        control_names = ("stage-request", "resolved-profile", "stage-result", "policy-set", "claim",
+            "duty", "risk", "state", "attempt", "kill", "scope")
+        _seed_require(type(controls) is dict and set(controls) == set(control_names))
+        output = {}
+        def equal(left, right):
+            _seed_require(type(left) is bytes and type(right) is bytes)
+            self.inputs._account("E", len(left) + len(right), "M")
+            _seed_require(left == right)
+        def digest(raw):
+            value = g.c.digest(raw)
+            self.inputs._account("H", len(raw), "M")
+            return value
+        def reference(raw):
+            value = g.ref(raw)
+            self.inputs._account("H", len(raw), "M")
+            return value
+        def render(value):
+            raw = self.inputs.encode(value)
+            _seed_require(len(raw) <= self.c.DOCUMENT_LIMIT)
+            return raw
+        def add(name, raw, document=False):
+            _seed_require(type(name) is str and name and not name.startswith("/")
+                and "\0" not in name and all(piece not in {"", ".", ".."} for piece in name.split("/"))
+                and name not in output and type(raw) is bytes)
+            if document:_seed_require(len(raw) <= self.c.DOCUMENT_LIMIT)
+            _seed_require(len(output) < 256)
+            output[name] = raw
+        def put(name, raw):
+            add("objects/" + name + "/value.json", raw, True)
+        for name in ("request", "shadow-set", "dashboard", "marker", "basis", "claim"):
+            put(name, objects[name])
+        equal(objects["basis"], render(request["body"]["scope_basis"]))
+        equal(objects["claim"], render(request["body"]["risk_claim"]))
+        for name in ("stage-request", "resolved-profile", "stage-result", "policy-set"):
+            equal(objects[name], controls[name])
+            put(name, objects[name])
+        equal(objects["claim"], controls["claim"])
+        initial_origins = g.parse(objects["initial-origins"])
+        _seed_require(set(initial_origins) == {"schema_version", "kind", "id", "body"}
+            and initial_origins["schema_version"] == 1 and initial_origins["kind"] == "gate_initial_origins"
+            and initial_origins["id"] == identity
+            and set(initial_origins["body"]) == {"origins", "observations"}
+            and initial_origins["body"]["origins"] == initial["initial_origin_refs"])
+        for name in ("initial-origins", "runtime", "kill-configuration", "kill-request", "kill-expectation"):
+            put(name, objects[name])
+        kill_source = self.calculated["kill"]
+        _seed_require(type(kill_source["files"]) is dict)
+        observed = g.parse(kill_source["files"]["payload/observation.json"])
+        register_raw = render(observed["register"])
+        _seed_require(digest(register_raw) == observed["register_sha256"])
+        put("register", register_raw)
+        for name in ("duty", "risk", "state", "attempt", "kill", "scope"):
+            put(name, controls[name])
+        coverage_request_raw = scope_result["coverage_request_raw"]
+        coverage_expectation_raw = scope_result["coverage_expectation_raw"]
+        _seed_require((coverage_request_raw is None) == (coverage_expectation_raw is None))
+        if coverage_request_raw is not None:
+            _seed_require(type(coverage_request_raw) is bytes and type(coverage_expectation_raw) is bytes
+                and "coverage" in self.calculated)
+            put("coverage-request", coverage_request_raw)
+            put("coverage-expectation", coverage_expectation_raw)
+        else:
+            _seed_require("coverage" not in self.calculated)
+        evaluation = g.parse(evaluation_raw)
+        _seed_require(evaluation["kind"] == "scope_qualification_evaluation"
+            and evaluation["body"]["scope_ref"] == reference(controls["scope"])
+            and evaluation["body"]["authority"] == "none" and evaluation["body"]["enabled"] is False)
+        put("scope-evaluation", evaluation_raw)
+        put("final-origins", render(g.envelope("gate_final_origins", identity,
+            {"origins": scope_result["final_origin_refs"],
+             "observations": g._origins_values(scope_result["observations"])})))
+        put("commands", render(g.envelope("gate_driver_commands", identity,
+            {"commands": scope_result["commands"], "argv": scope_result["argv"]})))
+        phases = ("kill", "coverage") if coverage_request_raw is not None else ("kill",)
+        for phase in phases:
+            source = self.calculated[phase]
+            if "origin" not in source:
+                raise NotImplementedError("gate source origin not reconstructed: " + phase)
+            snapshots, origin_raw = source["files"], source["origin"]
+            _seed_require(type(snapshots) is dict and type(origin_raw) is bytes)
+            source_request = objects["kill-request"] if phase == "kill" else coverage_request_raw
+            equal(snapshots["payload/request.json"], source_request)
+            source_files = sorted((filename, raw) for filename, raw in snapshots.items() if filename != "capture.json")
+            _seed_require(len(source_files) <= 132
+                and all(type(filename) is str and type(raw) is bytes for filename, raw in source_files))
+            name = phase + "-evidence"
+            rows = [{"name": filename, "output": "objects/" + name + "/raw-%04d/value.raw" % index,
+                     "size_bytes": len(raw), "sha256": digest(raw)}
+                    for index, (filename, raw) in enumerate(source_files)]
+            put(name, render(g.envelope("gate_source_evidence", identity,
+                {"origin_ref": reference(origin_raw), "files": rows})))
+            for row, (_filename, raw) in zip(rows, source_files):
+                add(row["output"], raw)
+        for values in (initial["output_files"], scope_result["output_files"]):
+            _seed_require(type(values) is dict)
+            for name, raw in values.items():
+                _seed_require(name.startswith("private/"))
+                if name in output:equal(output[name], raw)
+                else:add(name, raw)
+        rows = [{"name": name, "size_bytes": len(output[name]), "sha256": digest(output[name])}
+            for name in sorted(output, key=Path)]
+        manifest = g._manifest_values(identity, rows, initial["initial_origin_refs"],
+            scope_result["final_origin_refs"], objects["kill-request"], coverage_request_raw, self.work)
+        add("manifests/manifest.json", manifest, True)
+        completion = g._completion_values(identity, manifest, self.work)
+        add("completion/COMPLETE.json", completion, True)
+        recorded = [row["member"][len("generator/"):] for row, _held in self.inputs.rows.values()
+            if row["occurrence"] == "gate" and row["role"] == "recorded" and row["member"].startswith("generator/")]
+        _seed_require(1 <= len(recorded) <= 256 and len(set(recorded)) == len(recorded)
+            and set(recorded) == set(output))
+        for name, raw in sorted(output.items()):
+            self.compare_member("gate", "recorded", "generator/" + name, raw)
+        result = {"files": output, "manifest_raw": manifest, "completion_raw": completion,
+            "scope_evaluation_raw": evaluation_raw}
+        self.calculated["gate_outputs"] = result
         return result
 
     def capture(self, runtime_root, phase, request_raw, expectation_raw, receipt_raw):
@@ -4770,3 +5690,268 @@ def _case_v2_validate(raw, incident, attempt_ids, locators, occurrences, *, asse
     value = json.loads(raw)
     if assembly is not None:assembly._wrapper_processed("parse", len(raw))
     return value
+
+
+def replay_case(runtime_root, initial_case_held, manifest_raw, window_raw, case, work_held, work):
+    c = None
+    inputs = owner = None
+    pending_work, primary, observation = work_held, None, None
+    calculating = False
+    try:
+        c = _seed_module(initial_case_held, ("HeldPath",))
+        _seed_require(type(pending_work) is c.HeldPath)
+        c._require(type(work) is dict and "_capture_copy_budget" in work, "E_LIMIT")
+        c._capture_copy_budget_room(work, 0, False)
+        manifest = c._json(manifest_raw, c.DOCUMENT_LIMIT, "E_STORE")
+        _seed_require(type(case) is dict and case["case_id"] == manifest["case_id"])
+        inputs = _ReplayInputs(initial_case_held, manifest["inventory_core"], work)
+        owner = _ReplayCase(inputs, manifest_raw, window_raw)
+        handed_work, pending_work = pending_work, None
+        owner._replay_adopt_io(handed_work)
+        owner.replay_launches(runtime_root, work_held, case)
+        gate_work = owner._replay_mkdir(work_held, "gate")
+        gate_source = owner._replay_mkdir(gate_work, "source.git")
+        owner.source_repository(gate_source)
+        initial_work = owner._replay_mkdir(gate_work, "initial")
+        controls_work = owner._replay_mkdir(gate_work, "controls")
+        reader_work = owner._replay_mkdir(gate_work, "reader")
+        evaluation_work = owner._replay_mkdir(gate_work, "evaluation")
+        initial = owner.generator_kill_source_body(runtime_root, initial_work, gate_source)
+        owner.gate_controls(runtime_root, controls_work)
+        scope_result = owner.scope_reader_body(runtime_root, reader_work, gate_source)
+        evaluation_raw = owner.scope_evaluation_body(runtime_root, evaluation_work)
+        owner.gate_outputs(runtime_root, initial, scope_result, evaluation_raw)
+        controls = owner.calculated["gate_controls"]
+        e = sys.modules["malicious_reproduction_pipeline"]
+        documents = {name: e.parse(raw) for name, raw in controls.items()
+            if name in {"scope", "duty", "risk", "kill"}}
+        evaluation = e.parse(evaluation_raw)
+        written = e.parse(owner.calculated["write"]["files"]["shadow-record.json"])
+        recipes = dict(owner.command_recipes)
+        recipes["generator"] = initial["command_recipe"]
+        recipes["scope_reader"] = scope_result["command_recipe"]
+        source_trees = None
+        if case["surface"] in {"incident-symptom-text", "unread-forge-text"}:
+            source_trees = {}
+            for phase in ("reproduction", "write"):
+                response = e.parse(owner.calculated[phase]["prepared"]["response_raw"])
+                materializer = e.parse(response["payloads"][0]["data"].encode())
+                record = e.parse(owner.calculated[phase]["files"]["shadow-record.json"])
+                source = materializer["source"]
+                _seed_require(source == record["body"]["materialization"]["value"]["source"])
+                source_trees[phase] = source["tree_id"]
+        invariants = _invariant_values(documents["scope"], evaluation, documents["duty"],
+            documents["risk"], documents["kill"], written, owner.original["write-request.json"],
+            recipes, case["surface"], source_trees)
+        recorded = {name for name, (row, _held) in inputs.rows.items() if row["role"] == "recorded"}
+        _seed_require(owner.compared == recorded)
+        observation = {"case_id": case["case_id"], "disposition": "replayed",
+            "error_token": {"state": "absent"}, "invariants": {"state": "present", "value": invariants},
+            "recompute_mismatches": sorted(set(owner.mismatches))}
+    except BaseException as error:
+        primary = error
+        if not isinstance(error, KeyboardInterrupt) and not getattr(error, "_scope_signal_cancel", False):
+            calculating = isinstance(error, _CalculationRefused) or (owner is not None
+                and getattr(owner, "calculation_started", False))
+            code = getattr(error, "code", None)
+            if isinstance(error, (ValueError, _CalculationRefused)) or code in {"E_RELATION", "E_STORE", "E_STALE", "E_CONFIG"}:
+                observation = {"case_id": case["case_id"], "disposition": "rejected",
+                    "error_token": {"state": "present", "value": "E_REPLAY" if calculating else "E_RELATION"},
+                    "invariants": {"state": "absent"}, "recompute_mismatches": []}
+    finally:
+        if owner is not None:
+            try:owner.close(primary)
+            except BaseException as error:
+                if error is not primary:
+                    primary = _seed_first(primary, error)
+                    observation = None
+        elif inputs is not None:
+            try:inputs.close(primary)
+            except BaseException as error:
+                if error is not primary:
+                    primary = _seed_first(primary, error)
+                    observation = None
+        if pending_work is not None:
+            held, pending_work = pending_work, None
+            try:held.close()
+            except BaseException as error:
+                primary = _seed_first(primary, error)
+                observation = None
+    if type(work) is dict and (work.get("replay_io_close_incomplete")
+            or work.get("close_observations_incomplete") or work.get("close_failures")):
+        observation = None
+    if observation is None:
+        if primary is not None:raise primary
+        raise _CalculationRefused()
+    return observation
+
+
+def _private_cli(argv):
+    import errno
+    _seed_require(__name__ == "__main__" and sys.flags.isolated == 1
+        and sys.flags.no_site == 1 and sys.flags.dont_write_bytecode == 1)
+    fd_names = os.listdir("/dev/fd")
+    _seed_require(len(fd_names) <= 4096 and all(type(name) is str and name
+        and all(char in "0123456789" for char in name) for name in fd_names))
+    descriptors = sorted({int(name) for name in fd_names if int(name) > 2})
+    fd_closure = {"site": "private-cli.close-unused", "namespace": "/dev/fd",
+        "rows": [], "complete": "UNKNOWN"}
+    close_failure = None
+    for descriptor in descriptors:
+        close_error = None
+        try:os.close(descriptor)
+        except OSError as error:
+            close_error = error
+            if error.errno != errno.EBADF:
+                close_failure = _seed_first(close_failure, error)
+        except BaseException as error:
+            close_error = error
+            close_failure = _seed_first(close_failure, error)
+        try:fd_closure["rows"].append({"fd": descriptor,
+            "return": 0 if close_error is None else -1,
+            "errno": getattr(close_error, "errno", None)})
+        except BaseException as error:
+            close_failure = _seed_first(close_failure, error)
+    if close_failure is not None:
+        raise close_failure
+    _seed_require(type(argv) is list and len(argv) == 4)
+    runtime_root, input_root, case_path, private_work = map(Path, argv)
+    _seed_require(all(path.is_absolute() and str(path) == raw and path.resolve() == path
+        for path, raw in zip((runtime_root, input_root, case_path, private_work), argv)))
+    _seed_require(Path(__file__).absolute() == runtime_root / "evals/v1/replay-malicious.py"
+        and Path(__file__).resolve().parents[2] == runtime_root)
+    parts = input_root.parts
+    _seed_require(len(parts) >= 5 and parts[-3] == "operations"
+        and parts[-2] in {"0", "1", "2"} and parts[-1] == "I")
+    prefix, suffix = "malicious-case-", ".json"
+    _seed_require(case_path.parent == private_work.parent and case_path.name.startswith(prefix)
+        and case_path.name.endswith(suffix))
+    index = case_path.name[len(prefix):-len(suffix)]
+    _seed_require(index in {"0", "1", "2", "3"} and private_work.name == "malicious-work-" + index)
+    for left, right in ((private_work, input_root), (private_work, runtime_root),
+                        (input_root, runtime_root)):
+        _seed_require(os.path.commonpath((str(left), str(right))) not in {str(left), str(right)})
+
+    source = runtime_root / "shadow/v1/_consumer.py"
+    aliases = ("ystack_shadow_consumer", "scope_shadow_consumer")
+    existing = [sys.modules[name] for name in aliases if name in sys.modules]
+    if existing:
+        _seed_require(len(existing) == 1)
+        c = existing[0]
+    else:
+        spec = importlib.util.spec_from_file_location("ystack_shadow_consumer", source)
+        _seed_require(spec is not None and spec.loader is not None)
+        c = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = c
+        spec.loader.exec_module(c)
+    _seed_require(Path(c.__file__).absolute() == source
+        and getattr(c.__spec__, "origin", None) == str(source)
+        and c._source_root() == str(runtime_root))
+    resolver = c._DarwinUUIDResolver() if sys.platform == "darwin" else None
+    work = {}
+    c._capture_work_values(work, "private-cli-bootstrap")
+    work["input_kind"] = "M"
+    work["cli_fd_closure"] = fd_closure
+    work["cli_fd_closure_unknown"] = True
+    work["cli_parent_case_window_carry_unknown"] = True
+    work["cli_bootstrap_processing_unknown"] = True
+    owned, pending_work, failure, observation = [], None, None, None
+    try:
+        for path in (source, runtime_root / "evals/v1/replay-malicious.py"):
+            held = c._open_held(str(path), False,
+                c._store_rule(os.geteuid(), os.getegid(), 0o400, False, resolver), "E_STORE",
+                recording_work=work, accounting_kind="M")
+            try:owned.append(held)
+            except BaseException as error:
+                if not any(item is held for item in owned):
+                    try:held.close()
+                    except BaseException as later:error = _seed_first(error, later)
+                raise error
+        case_held = c._open_held(str(case_path), False,
+            c._store_rule(os.geteuid(), os.getegid(), 0o600, False, resolver), "E_STORE",
+            recording_work=work, accounting_kind="M")
+        try:owned.append(case_held)
+        except BaseException as error:
+            if not any(item is case_held for item in owned):
+                try:case_held.close()
+                except BaseException as later:error = _seed_first(error, later)
+            raise error
+        case_raw = case_held.read(c.DOCUMENT_LIMIT, "E_STORE", work)
+        case = c._json(case_raw, c.DOCUMENT_LIMIT, "E_STORE")
+        _seed_require(c.canonical(case) == case_raw and type(case) is dict
+            and set(case) == {"case_id", "family_id", "surface", "planted_text_sha256", "manifest", "expectation"}
+            and case["case_id"] in {"malicious.checked-file-bytes", "malicious.commit-message",
+                "malicious.incident-symptom-text", "malicious.unread-forge-text"}
+            and case["family_id"] == "malicious-instructions"
+            and case["case_id"] == "malicious." + case["surface"])
+        pair = case["manifest"]
+        _seed_require(type(pair) is dict and set(pair) == {"content", "sha256"})
+        manifest_raw = c.canonical(pair["content"])
+        manifest = c._json(manifest_raw, c.DOCUMENT_LIMIT, "E_STORE")
+        _seed_require(hashlib.sha256(manifest_raw).hexdigest() == pair["sha256"]
+            and set(manifest) == {"case_id", "window_ref", "inventory_core", "output_bindings"}
+            and manifest["case_id"] == case["case_id"])
+        initial = c._open_held(str(input_root / case["case_id"]), True,
+            c._store_rule(os.geteuid(), os.getegid(), 0o700, True, resolver), "E_STORE",
+            recording_work=work, accounting_kind="M")
+        try:owned.append(initial)
+        except BaseException as error:
+            if not any(item is initial for item in owned):
+                try:initial.close()
+                except BaseException as later:error = _seed_first(error, later)
+            raise error
+        _seed_require(_seed_module(initial, ("HeldPath",)) is c)
+        window_held = c._open_held(str(input_root / "driver-input/window.json"), False,
+            c._store_rule(os.geteuid(), os.getegid(), 0o400, False, resolver), "E_STORE",
+            recording_work=work, accounting_kind="M")
+        try:owned.append(window_held)
+        except BaseException as error:
+            if not any(item is window_held for item in owned):
+                try:window_held.close()
+                except BaseException as later:error = _seed_first(error, later)
+            raise error
+        window_raw = window_held.read(c.DOCUMENT_LIMIT, "E_STORE", work)
+        window = c._json(window_raw, c.DOCUMENT_LIMIT, "E_STORE")
+        _seed_require(c.canonical(window) == window_raw and type(window) is dict
+            and set(window) == {"cases", "carry_in"}
+            and manifest["window_ref"] == {"size_bytes": len(window_raw),
+                "sha256": hashlib.sha256(window_raw).hexdigest()}
+            and case["case_id"] in window["cases"])
+        core_raw = c.canonical(manifest["inventory_core"])
+        _seed_require(window["cases"][case["case_id"]] == {
+            "inventory_core": manifest["inventory_core"], "sha256": hashlib.sha256(core_raw).hexdigest()})
+        pending_work = c._open_held(str(private_work), True,
+            c._store_rule(os.geteuid(), os.getegid(), 0o700, True, resolver), "E_STORE",
+            recording_work=work, accounting_kind="M")
+        _seed_require(not pending_work.listdir())
+        pending_work.recheck("E_STORE", work, "M")
+        core_work, pending_work = pending_work, None
+        observation = replay_case(runtime_root, initial, manifest_raw, window_raw,
+            case, core_work, work)
+        _seed_require(type(observation) is dict and observation.get("case_id") == case["case_id"])
+    except BaseException as error:
+        failure = error
+    finally:
+        if pending_work is not None:
+            held, pending_work = pending_work, None
+            try:held.close()
+            except BaseException as error:failure = _seed_first(failure, error)
+        while owned:
+            held = owned.pop()
+            try:held.recheck("E_STORE", work, "M")
+            except BaseException as error:failure = _seed_first(failure, error)
+            try:held.close()
+            except BaseException as error:failure = _seed_first(failure, error)
+    if failure is not None:
+        raise failure
+    return c.canonical(observation)
+
+
+if __name__ == "__main__":
+    try:
+        output = _private_cli(sys.argv[1:])
+        sys.stdout.buffer.write(output)
+        sys.stdout.buffer.flush()
+    except BaseException:
+        sys.stderr.write("E_RUNTIME\n")
+        raise SystemExit(1)

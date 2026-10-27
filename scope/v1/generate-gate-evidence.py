@@ -119,12 +119,26 @@ def _origins_values(observations):
     return [rows[key] for key in sorted(rows)]
 
 
-def _manifest_values(identity, rows, initial_origins, final_origins, kill_request_raw, coverage_request_raw):
-    manifest = c.canonical(envelope("scope_gate_generation_manifest", identity,
+def _manifest_values(identity, rows, initial_origins, final_origins, kill_request_raw, coverage_request_raw, work=None):
+    if work is not None:
+        work["gate_manifest_parse_unknown"] = True
+        work["gate_manifest_parse_attempt_bytes"] = len(kill_request_raw) + (len(coverage_request_raw) if coverage_request_raw is not None else 0)
+    value = envelope("scope_gate_generation_manifest", identity,
         {"activation_state": "inactive", "authority": "none", "enabled": False, "files": rows,
          "initial_origin_refs": initial_origins, "final_origin_refs": final_origins,
          "source_initial_origin_refs": {"kill": parse(kill_request_raw)["body"]["initial_origin_refs"],
-             "coverage": parse(coverage_request_raw)["body"]["initial_origin_refs"] if coverage_request_raw else []}}))
+             "coverage": parse(coverage_request_raw)["body"]["initial_origin_refs"] if coverage_request_raw else []}})
+    if work is None:
+        manifest = c.canonical(value)
+    else:
+        parsed_bytes = len(kill_request_raw) + (len(coverage_request_raw) if coverage_request_raw is not None else 0)
+        work["read_bytes"] += parsed_bytes
+        work.setdefault("seed_processing", {})["R"] = work.get("seed_processing", {}).get("R", 0) + parsed_bytes
+        c._capture_account(work, "M", "read_bytes", parsed_bytes)
+        work["gate_manifest_parse_unknown"] = False
+        work["gate_manifest_encode_unknown"] = True
+        manifest = c._private_capture_observations(value, work, work)
+        work["gate_manifest_encode_unknown"] = False
     require(len(manifest) <= c.DOCUMENT_LIMIT, "E_LIMIT")
     return manifest
 

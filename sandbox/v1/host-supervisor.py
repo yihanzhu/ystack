@@ -4044,6 +4044,12 @@ def identities_for_receipt(measured):
     return result
 
 
+def _refusal_payload_values(reason_ids):
+    empty_manifest, _ = empty_evidence_manifest()
+    return [("stdout", b""), ("stderr", b""), ("evidence-manifest.json", empty_manifest),
+            ("refusal.json", canonical({"reason_ids": reason_ids}))]
+
+
 def build_receipt(config, accepted_set_sha256, request_doc, request_body, launch_request_sha256,
                    admitted_at, identities, admission, run, storage_destroyed=True):
     terminated_at = _wall('sandbox/v1/host-supervisor.py:2593:0') if run is None else run["terminated_at"]
@@ -4292,9 +4298,7 @@ def _run_launch(argv):
         if reason_ids:
             # R9.3: no-launch receipt -- refused, runtime "completed" (nothing
             # ran, so nothing errored), payload/refusal.json alongside it.
-            empty_manifest, _ = empty_evidence_manifest()
-            payload = [("stdout", b""), ("stderr", b""), ("evidence-manifest.json", empty_manifest),
-                       ("refusal.json", canonical({"reason_ids": reason_ids}))]
+            payload = _refusal_payload_values(reason_ids)
             write_payload(attempt_fd, principal_uid, config["consumer_gid"], payload)
             receipt_bytes = build_receipt(config, accepted_set_sha256, request_doc, request_body,
                                            launch_request_sha256, admitted_at, identities, "refused", None)

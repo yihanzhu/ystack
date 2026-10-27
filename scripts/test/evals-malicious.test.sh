@@ -4173,3 +4173,14 @@ try:f.raw16_C3_accounted_io(root,deletion=True)
 except AssertionError as error:assert str(error)=='M pre-admission allowed a target open'
 else:raise AssertionError('M admission deletion undetected')
 PY_C3_IO_ADMISSION_DELETION
+
+/usr/bin/python3 -I -S -B - "$root" <<'PY_C3_FIRST_CANCEL_DELETION'
+import importlib.util,sys
+from pathlib import Path
+root=Path(sys.argv[1])
+spec=importlib.util.spec_from_file_location('C3_cancel_deleted',root/'scripts/test/candidate-content-preparation-fixtures.py')
+f=importlib.util.module_from_spec(spec);sys.modules[spec.name]=f;spec.loader.exec_module(f)
+try:f.raw16_C3_accounted_io(root,cancel_deletion=True)
+except AssertionError as error:assert str(error)=='first KeyboardInterrupt replaced by observer cancellation'
+else:raise AssertionError('first cancellation deletion undetected')
+PY_C3_FIRST_CANCEL_DELETION

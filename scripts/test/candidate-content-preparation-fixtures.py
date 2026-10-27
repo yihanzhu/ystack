@@ -7639,7 +7639,7 @@ def raw16_C3_cleanup_decoder(root: Path) -> dict:
     return {'cases': results, 'retained_fixture_root': str(workspace), 'native_qualification': 'NOTRUN'}
 
 
-def raw16_C3_accounted_io(root: Path, evidence=None, deletion=False) -> dict:
+def raw16_C3_accounted_io(root: Path, evidence=None, deletion=False, cancel_deletion=False) -> dict:
     import tempfile
     import sys
     import importlib.util
@@ -7659,8 +7659,19 @@ def raw16_C3_accounted_io(root: Path, evidence=None, deletion=False) -> dict:
         namespace = dict(vars(replay))
         exec(compile(text.replace(guard, '', 1), '<actual-first-M-admission-deleted>', 'exec'), namespace)
         replay._ReplayCase._replay_write_bytes = namespace['_replay_write_bytes']
+    if cancel_deletion:
+        import ast
+        text = (root / 'evals/v1/replay-malicious.py').read_text()
+        function = next(node for node in ast.parse(text).body if isinstance(node, ast.FunctionDef) and node.name == '_seed_first')
+        source = ast.get_source_segment(text, function)
+        guard = 'isinstance(first, KeyboardInterrupt) or '
+        assert source.count(guard) == 1
+        namespace = dict(vars(replay))
+        exec(compile(source.replace(guard, '', 1), '<actual-first-KB-rule-deleted>', 'exec'), namespace)
+        replay._seed_first = namespace['_seed_first']
     results = []
-    labels = ('case-room',) if deletion else ('normal', 'case-room', 'partial-account', 'first-cancel')
+    labels = (('keyboard-observer-cancel',) if cancel_deletion else ('case-room',) if deletion else
+        ('normal', 'case-room', 'partial-account', 'first-cancel', 'keyboard-observer-cancel'))
     for label in labels:
         work = owner = inputs = source_hold = None
         error = None
@@ -7688,8 +7699,11 @@ def raw16_C3_accounted_io(root: Path, evidence=None, deletion=False) -> dict:
             owner._replay_hold_work(parent)
             opened, written, closed = os.open, os.write, os.close
             account = c._capture_account
+            observe_error = c._capture_observation_error
             target = [];writes = [];closes = []
             fault = MemoryError('actual write followed by accounting failure')
+            keyboard = KeyboardInterrupt('first actual write accounting cancellation')
+            observer_events = []
             cancelled = InterruptedError('actual owned close cancelled');cancelled._scope_signal_cancel = True
             def opening(name, flags, *args, **kwargs):
                 fd = opened(name, flags, *args, **kwargs)
@@ -7706,12 +7720,18 @@ def raw16_C3_accounted_io(root: Path, evidence=None, deletion=False) -> dict:
                     if label == 'first-cancel':raise cancelled
                 return result
             def accounting(values, kind, field, amount):
-                if label == 'partial-account' and values is work and field == 'write_bytes' and target:
-                    raise fault
+                if label in {'partial-account', 'keyboard-observer-cancel'} and values is work and field == 'write_bytes' and target:
+                    raise keyboard if label == 'keyboard-observer-cancel' else fault
                 return account(values, kind, field, amount)
+            def observation_error(values, kind, site, error, *args, **kwargs):
+                if label == 'keyboard-observer-cancel' and values is work and error is keyboard:
+                    observer_events.append(cancelled)
+                    raise cancelled
+                return observe_error(values, kind, site, error, *args, **kwargs)
             before = {key: work[key] for key in ('read_bytes', 'write_bytes', 'physical_bytes', 'files')}
             if label == 'case-room':work['write_bytes'] = 64 * c.DOCUMENT_LIMIT - 1
             os.open, os.write, os.close, c._capture_account = opening, writing, closing, accounting
+            c._capture_observation_error = observation_error
             error = None
             try:
                 if label == 'normal':
@@ -7721,6 +7741,7 @@ def raw16_C3_accounted_io(root: Path, evidence=None, deletion=False) -> dict:
             except BaseException as caught:error = caught
             finally:
                 os.open, os.write, os.close, c._capture_account = opened, written, closed, account
+                c._capture_observation_error = observe_error
             if label == 'normal':
                 assert error is None and (destination / 'value.json').read_bytes() == b'abcd'
                 assert sum(writes) == 4 and work['write_bytes'] - before['write_bytes'] == 4
@@ -7733,6 +7754,11 @@ def raw16_C3_accounted_io(root: Path, evidence=None, deletion=False) -> dict:
                 assert (destination / 'value.json').read_bytes() == b'ab'
                 assert work['write_bytes'] - before['write_bytes'] == work['physical_bytes'] - before['physical_bytes'] == 2
                 assert work['write_accounting_incomplete']
+            elif label == 'keyboard-observer-cancel':
+                assert error is keyboard and inputs.failure is keyboard and observer_events, 'first KeyboardInterrupt replaced by observer cancellation'
+                assert all(event is cancelled for event in observer_events)
+                assert len(closes) == 1 and writes == [4] and work['write_accounting_incomplete']
+                assert work['write_bytes'] - before['write_bytes'] == work['physical_bytes'] - before['physical_bytes'] == 4
             else:
                 assert error is cancelled and len(closes) == 1 and sum(writes) == 4
             results.append({'case': label, 'rejected': error is not None, 'actual_write_counts': writes,

@@ -4632,6 +4632,23 @@ GIT_CONFIG_KEYS = {"core.repositoryformatversion", "core.filemode", "core.bare",
                    "core.logallrefupdates", "core.ignorecase", "core.precomposeunicode",
                    "extensions.objectformat"}
 
+def _git_inventory_values(raw, revision):
+    _require(not raw or raw.endswith(b"\0"), "E_RELATION")
+    facts = {}
+    try:
+        for line in raw.split(b"\0")[:-1]:
+            header, name = line.split(b"\t", 1)
+            mode, kind, oid = header.decode("ascii").split(" ")
+            path = name.decode("utf-8")
+            _require(path not in facts and _writer_oid(oid)
+                     and len(oid) == (40 if revision["hash_algorithm"] == "sha1" else 64),
+                     "E_RELATION")
+            facts[path] = (mode, kind, oid)
+    except (UnicodeError, ValueError):
+        raise Refusal("E_RELATION") from None
+    return facts
+
+
 class _ReadOnlyGit:
     """Held bare object database with only the child-5 inspection commands."""
     def __init__(self, repository: str, ledger) -> None:
@@ -4708,20 +4725,7 @@ class _ReadOnlyGit:
         self.shape(revision["hash_algorithm"])
         raw = self.read(["ls-tree", "-r", "-t", "-z", "--full-tree", revision["commit_id"]],
                         16 * DOCUMENT_LIMIT)
-        _require(not raw or raw.endswith(b"\0"), "E_RELATION")
-        facts = {}
-        try:
-            for line in raw.split(b"\0")[:-1]:
-                header, name = line.split(b"\t", 1)
-                mode, kind, oid = header.decode("ascii").split(" ")
-                path = name.decode("utf-8")
-                _require(path not in facts and _writer_oid(oid)
-                         and len(oid) == (40 if revision["hash_algorithm"] == "sha1" else 64),
-                         "E_RELATION")
-                facts[path] = (mode, kind, oid)
-        except (UnicodeError, ValueError):
-            raise Refusal("E_RELATION") from None
-        return facts
+        return _git_inventory_values(raw, revision)
 
     def close(self) -> None:
         owned, self.held = self.held, []

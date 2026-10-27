@@ -410,7 +410,7 @@ def _authenticated_frozen(ws, files, incident):
     return fresh_origin
 
 
-def _record_relations(files, incident, result, fresh_origin, anchor, write=None):
+def _record_relations_prefix_values(files, incident, result, write=None):
     record = parse(files["shadow-record.json"])
     require(set(record) == {"schema_version", "kind", "id", "body"}
         and type(record["schema_version"]) is int and record["schema_version"] == 1
@@ -478,18 +478,40 @@ def _record_relations(files, incident, result, fresh_origin, anchor, write=None)
     require(files["trace-ledger.json"] == e.trace_ledger(incident, parse(files["sandbox-request.json"])["id"],
         parse(files["claim.json"])["id"], outcome, "tool.verifier", files["sandbox-evaluation.json"], files["sandbox-check.json"]), "E_RELATION")
     origin = parse(files["origin-observation.json"])
-    require(origin["kind"] == "shadow_origin_observation" and origin["body"]["result"] == "authenticated"
-            and origin["body"]["store_id"] == anchor.config["store_id"]
-            and origin["id"] == origin["body"]["attempt_id"] == parse(files["sandbox-request.json"])["id"], "E_RELATION")
+    return body, origin
+
+
+def _record_origin_prefix_matches_values(origin):
+    return origin["kind"] == "shadow_origin_observation" and origin["body"]["result"] == "authenticated"
+
+
+def _record_origin_tail_matches_values(origin, files):
+    return origin["id"] == origin["body"]["attempt_id"] == parse(files["sandbox-request.json"])["id"]
+
+
+def _record_relations_reference_values(files, body):
     for key, name in (("consumer_provenance_ref", "consumer-provenance.json"),):
         require(body[key] == e.document_ref(files[name]), "E_RELATION")
     content_refs = {"incident_ref": "incident.json", "qualified_identity_ref": "qualified-identity.json", "trace_ledger_ref": "trace-ledger.json"}
     require(all(body[key]["sha256"] == sha(files[name]) for key, name in content_refs.items()), "E_RELATION")
     sandbox = body["sandbox"]
-    require(sandbox["state"] == "satisfied" and sandbox["reason_id"] == "shadow.sandbox-satisfied"
-            and sandbox["origin"] == {"state": "authenticated", "store_id": anchor.config["store_id"],
-                "method": "controlled-storage.v1", "observation_sha256": sha(files["origin-observation.json"])}
-            and parse(fresh_origin)["body"]["attempt_id"] == parse(files["sandbox-request.json"])["id"], "E_RELATION")
+    return sandbox
+
+
+def _record_sandbox_prefix_matches_values(sandbox):
+    return sandbox["state"] == "satisfied" and sandbox["reason_id"] == "shadow.sandbox-satisfied"
+
+
+def _record_origin_binding_values(store_id, origin_raw):
+    return {"state": "authenticated", "store_id": store_id,
+            "method": "controlled-storage.v1", "observation_sha256": sha(origin_raw)}
+
+
+def _record_fresh_origin_matches_values(fresh_origin, files):
+    return parse(fresh_origin)["body"]["attempt_id"] == parse(files["sandbox-request.json"])["id"]
+
+
+def _record_relations_payload_values(files, body, sandbox):
     for key, name in (("launch_request_ref", "sandbox-request.json"), ("expectation_ref", "sandbox-expectation.json"),
                       ("receipt_ref", "sandbox-receipt.json"), ("check_ref", "sandbox-check.json")):
         require(sandbox[key] == e.document_ref(files[name]), "E_RELATION")
@@ -497,6 +519,30 @@ def _record_relations(files, incident, result, fresh_origin, anchor, write=None)
             and body["environment"]["claim_ref"]["sha256"] == sha(files["claim.json"])
             and body["environment"]["registry_ref"]["sha256"] == sha(files["registry.json"])
             and body["environment"]["evaluation"]["value"]["evaluation_ref"]["sha256"] == sha(files["sandbox-evaluation.json"]), "E_RELATION")
+
+
+
+def _record_relations_values(files, incident, result, fresh_origin, store_id, write=None):
+    body, origin = _record_relations_prefix_values(files, incident, result, write)
+    require(_record_origin_prefix_matches_values(origin) and origin["body"]["store_id"] == store_id
+            and _record_origin_tail_matches_values(origin, files), "E_RELATION")
+    sandbox = _record_relations_reference_values(files, body)
+    require(_record_sandbox_prefix_matches_values(sandbox)
+            and sandbox["origin"] == _record_origin_binding_values(store_id, files["origin-observation.json"])
+            and _record_fresh_origin_matches_values(fresh_origin, files), "E_RELATION")
+    _record_relations_payload_values(files, body, sandbox)
+    return body
+
+
+def _record_relations(files, incident, result, fresh_origin, anchor, write=None):
+    body, origin = _record_relations_prefix_values(files, incident, result, write)
+    require(_record_origin_prefix_matches_values(origin) and origin["body"]["store_id"] == anchor.config["store_id"]
+            and _record_origin_tail_matches_values(origin, files), "E_RELATION")
+    sandbox = _record_relations_reference_values(files, body)
+    require(_record_sandbox_prefix_matches_values(sandbox)
+            and sandbox["origin"] == _record_origin_binding_values(anchor.config["store_id"], files["origin-observation.json"])
+            and _record_fresh_origin_matches_values(fresh_origin, files), "E_RELATION")
+    _record_relations_payload_values(files, body, sandbox)
 
 
 def _git_inventory(ws, repository, revision):
@@ -605,16 +651,17 @@ def _build_input(ws, original_raw, paths, patch, claim_raw):
     return result_raw, result_path
 
 
-def _candidate_facts(ws, response_raw, incident, source_facts, files, expected):
+def _candidate_receipt_values(response_raw, incident, files, expected, record_form):
     receipt = parse(parse(response_raw)["payloads"][0]["data"].encode())
     revision = incident["body"]["git_revision_ref"]
-    require(expected == c.evidence_patch(files, revision["hash_algorithm"], ws.record_form)[1], "E_RELATION")
+    require(expected == c.evidence_patch(files, revision["hash_algorithm"], record_form)[1], "E_RELATION")
     candidate = receipt["candidate"]
-    require(candidate["parent_commit_id"] == revision["commit_id"] and receipt["changed_paths"]["count"] == (33 if ws.record_form == "withheld-write-policy.v1" else 32), "E_RELATION")
-    repository = ws.work / "candidate/repository.git"
-    candidate_revision = dict(revision, commit_id=candidate["commit_id"])
-    facts = _git_inventory(ws, repository, candidate_revision)
-    commit = ws.git_read(repository, ["cat-file", "commit", candidate["commit_id"]], e.OUTPUT_LIMIT)
+    require(candidate["parent_commit_id"] == revision["commit_id"]
+        and receipt["changed_paths"]["count"] == (33 if record_form == "withheld-write-policy.v1" else 32), "E_RELATION")
+    return candidate
+
+
+def _candidate_relations_values(candidate, revision, facts, commit, source_facts, files, expected):
     headers = commit.split(b"\n\n", 1)[0].splitlines()
     require([line[7:].decode() for line in headers if line.startswith(b"parent ")] == [revision["commit_id"]]
             and [line[5:].decode() for line in headers if line.startswith(b"tree ")] == [candidate["tree_id"]], "E_RELATION")
@@ -624,10 +671,25 @@ def _candidate_facts(ws, response_raw, incident, source_facts, files, expected):
         for path, value in source_facts.items()), "E_RELATION")
     additions = {path: value for path, value in facts.items() if path not in source_facts and value[1] != "tree"}
     require(additions == {row["path"]: ("100644", "blob", row["git_blob_oid"]) for row in expected}, "E_RELATION")
-    require({path for path in facts if path not in source_facts and facts[path][1] == "tree"} == expected_directories - set(source_facts), "E_RELATION")
+    require({path for path in facts if path not in source_facts and facts[path][1] == "tree"}
+        == expected_directories - set(source_facts), "E_RELATION")
+
+
+def _candidate_blob_values(raw, expected_raw, expected_sha):
+    return raw == expected_raw and sha(raw) == expected_sha
+
+
+def _candidate_facts(ws, response_raw, incident, source_facts, files, expected):
+    candidate = _candidate_receipt_values(response_raw, incident, files, expected, ws.record_form)
+    revision = incident["body"]["git_revision_ref"]
+    repository = ws.work / "candidate/repository.git"
+    candidate_revision = dict(revision, commit_id=candidate["commit_id"])
+    facts = _git_inventory(ws, repository, candidate_revision)
+    commit = ws.git_read(repository, ["cat-file", "commit", candidate["commit_id"]], e.OUTPUT_LIMIT)
+    _candidate_relations_values(candidate, revision, facts, commit, source_facts, files, expected)
     for row in expected:
         raw = ws.git_read(repository, ["cat-file", "blob", row["git_blob_oid"]], len(files[row["path"]]) + 1)
-        require(raw == files[row["path"]] and sha(raw) == row["sha256"], "E_RELATION")
+        require(_candidate_blob_values(raw, files[row["path"]], row["sha256"]), "E_RELATION")
     return candidate
 
 
