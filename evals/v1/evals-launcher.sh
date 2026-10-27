@@ -1586,7 +1586,7 @@ def c2_case_values(rows):
         values.append(view)
     return c2_sum_views(values)
 
-def c2_counters(work, *, ledger=False):
+def c2_counters(work, *, ledger=False, codec_work=None):
     cases = {}
     bindings = work.get("C2_case_bindings", {})
     for identity, binding in bindings.items():
@@ -1621,7 +1621,7 @@ def c2_counters(work, *, ledger=False):
             for owner in owners:
                 c2_require(type(owner) is dict, "E_RELATION")
                 if not any(owner is previous for previous in distinct):distinct.append(owner)
-            snapshots = [c._c3_scope_ledger_values(owner) for owner in distinct]
+            snapshots = [c._c3_scope_ledger_values(owner, work if codec_work is None else codec_work) for owner in distinct]
             return dict(view, ledgers=snapshots)
         for identity in cases:
             if identity in bindings:owners = list(bindings[identity][1])

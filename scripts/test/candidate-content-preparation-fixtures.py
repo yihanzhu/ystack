@@ -5523,7 +5523,7 @@ class _C2FixtureCaller:
         mode, parent, paths = self.fixed['c2_cli'](arguments)
         assert parent == self.held.path and self.ordinal < 4
         self.transfer()
-        before = self.fixed['c2_counters'](self.window_work, ledger=True)
+        before = self.fixed['c2_counters'](self.window_work, ledger=True, codec_work=self.work)
         budget_before={key:dict(before[key]) for key in ('window','common')}
         previous=self.caller_state.get('session',{})
         for scope in budget_before.values():
@@ -6877,6 +6877,8 @@ def raw16_C3_gate_outputs(root: Path, evidence=None) -> None:
             manifest=module._manifest_values(identity,rows,[],{},c.canonical({'body':{'initial_origin_refs':[]}}),None)
             raw.update({names[2]:manifest,names[3]:module._completion_values(identity,manifest)})
             for name,value in raw.items():(output/name).write_bytes(value);(output/name).chmod(0o400)
+            for path in (base, *base.rglob('*')):
+                os.chown(path, os.getuid(), os.getgid())
             resolver=c._DarwinUUIDResolver() if sys.platform=='darwin' else None
             generator=module._Generator.__new__(module._Generator)
             generator.output=output;generator.active=True;generator.deadline=time.monotonic()+60
@@ -6886,12 +6888,14 @@ def raw16_C3_gate_outputs(root: Path, evidence=None) -> None:
             window['cases']={'malicious.unread-forge-text':case};anchor.recording_work=window
             reader=module.r._Reader.__new__(module.r._Reader)
             reader.owned=[];reader.inputs=[];reader.anchor=anchor;reader.darwin=resolver
-            generator.reader=reader;generator.session=types.SimpleNamespace(phase='COMPLETE')
+            reader.commands_open=True;reader.source_copies=[]
+            generator.reader=reader;generator.session=types.SimpleNamespace(phase='FINAL_OWNER')
             owned=[]
             for name,value in raw.items():
                 held=c._hold_bytes(str(output/name),c.DOCUMENT_LIMIT);owned.append(held)
+                assert type(held) is c._HeldBytes and held.raw == value and held.raw is not value
                 if name==names[1]:reader.owned.append(held)
-                else:generator.output_holds[name]=held;generator.held.append(held)
+                elif name != names[3]:generator.output_holds[name]=held;generator.held.append(held)
             if label=='missing-output':reader.owned=[]
             if label=='unusable':generator.capture_output_unusable=True
             parent=c._open_held(str(destination),True,c._store_rule(os.getuid(),os.getgid(),0o700,True,resolver),'E_STORE')
@@ -6900,11 +6904,17 @@ def raw16_C3_gate_outputs(root: Path, evidence=None) -> None:
             assembly.identifiers['gate']=identity;assembly.occurrences['gate']={}
             caught=None
             try:
-                try:assembly.gate_outputs()
+                try:
+                    assembly.gate_output_members()
+                    generator.session.phase='COMPLETE'
+                    generator.output_holds[names[3]]=owned[-1]
+                    assembly.gate_outputs()
                 except BaseException as error:caught=error
                 if label=='normal':
                     assert caught is None and set(assembly.derived_outputs['gate-output'])==set(raw)
                     assert len(assembly.files)==len(raw)
+                    assert assembly.gate_manifest_pending is generator.output_holds['manifests/manifest.json'].raw
+                    assert assembly.gate_manifest_pending == manifest and assembly.gate_manifest_pending is not manifest
                     assert all((destination/assembly.derived_outputs['gate-output'][name]).read_bytes()==value for name,value in raw.items())
                 else:assert caught is not None and assembly.failure is caught
                 results.append({'case':label,'rejected':caught is not None,'files':len(assembly.files),
@@ -6916,7 +6926,8 @@ def raw16_C3_gate_outputs(root: Path, evidence=None) -> None:
                 for item in owned:item.close()
                 parent.close()
     _C3_work_evidence(results,evidence,'gate')
-    print(json.dumps({'C3_actual_gate_output_copy':results},sort_keys=True))
+    print(json.dumps({'C3_actual_gate_output_copy':[{key:value for key,value in row.items() if key != 'work'} for row in results]},sort_keys=True))
+    raw16_C3_gate_phase_seam(root,evidence)
 
 
 def raw16_C3_I_inputs(root: Path, evidence=None) -> None:
@@ -7800,3 +7811,332 @@ def raw16_C3_accounted_io(root: Path, evidence=None, deletion=False, cancel_dele
                 with path.open("x") as stream:json.dump(work, stream, sort_keys=True)
             if failure is not None and failure is not primary:raise failure
     return {'controls': results, 'native_qualification': 'NOTRUN'}
+
+
+def raw16_C3_runtime_digest_and_held_close(root: Path, evidence=None) -> dict:
+    import ast
+    import collections
+    import tempfile
+    spec = importlib.util.spec_from_file_location('C3_stream_enforced', root / 'shadow/v1/enforced-reproduction.py')
+    e = importlib.util.module_from_spec(spec);sys.modules[spec.name] = e;spec.loader.exec_module(e)
+    c = e.c
+    spec = importlib.util.spec_from_file_location('C3_stream_replay', root / 'evals/v1/replay-malicious.py')
+    replay = importlib.util.module_from_spec(spec);sys.modules[spec.name] = replay;spec.loader.exec_module(replay)
+    source = ast.parse((root / 'shadow/v1/_consumer.py').read_text())
+    digest_node = next(node for node in source.body if isinstance(node, ast.FunctionDef) and node.name == 'digest')
+    assert not any(isinstance(node, ast.Attribute) and node.attr == 'join' for node in ast.walk(digest_node))
+    base = Path(tempfile.mkdtemp(prefix='ystack-C3-stream-close-')).resolve()
+    os.chown(base, -1, os.getegid())
+    resolver = c._DarwinUUIDResolver() if sys.platform == 'darwin' else None
+    raw = b'A' * 65536 + b'B' * 17
+    metrics = []
+    def save(label, value):
+        parent = Path(evidence) if evidence is not None else base
+        with (parent / ('runtime-stream-' + label + '.json')).open('x') as stream:
+            json.dump(value, stream, sort_keys=True)
+    for label in ('normal', 'second-update-keyboard'):
+        folder = base / label;folder.mkdir(mode=0o700);os.chown(folder, -1, os.getegid())
+        path = folder / 'runtime.bin';path.write_bytes(raw);path.chmod(0o400);os.chown(path, -1, os.getegid())
+        initial = inputs = None;primary = None
+        work = c._c3_fresh_work(1)
+        original_sha, original_error = c.hashlib.sha256, c._capture_observation_error
+        try:
+            initial = c._open_held(str(folder), True,
+                c._store_rule(os.geteuid(), os.getegid(), 0o700, True, resolver), 'E_STORE')
+            row = {'occurrence': 'reproduction', 'role': 'local-runtime', 'member': 'runtime/runtime.bin',
+                'file': 'runtime.bin', 'kind': 'runtime', 'size_bytes': len(raw), 'sha256': c.digest(raw)}
+            core = {'case_id': 'malicious.checked-file-bytes', 'entries': [row], 'originals': {}, 'occurrences': []}
+            inputs = replay._ReplayInputs(initial, core, work)
+            chunks = inputs.semantic('reproduction', 'local-runtime', 'runtime/runtime.bin')
+            assert type(chunks) is tuple and tuple(map(len, chunks)) == (65536, 17)
+            assert chunks[0] == raw[:65536] and chunks[1] == raw[65536:]
+            before = c._c3_values_vector(c._c3_work_values(work))
+            native_calls = []
+            def native_hash(data=b''):
+                native_calls.append(len(data))
+                return original_sha(data)
+            c.hashlib.sha256 = native_hash
+            expected = e.sha(raw)
+            c.hashlib.sha256 = original_sha
+            assert expected == original_sha(raw).hexdigest() and native_calls == [len(raw)]
+            assert c._c3_values_vector(c._c3_work_values(work)) == before
+            baseline_h, baseline_runtime_h = work['seed_processing']['H'], work['runtime']['sha_bytes']
+            updates, constructors, observer_errors = [], [], []
+            keyboard = KeyboardInterrupt('second real digest update cancelled')
+            marked = InterruptedError('later digest failure observer cancelled');marked._scope_signal_cancel = True
+            class HashUpdates:
+                def __init__(self):self.real = original_sha()
+                def update(self, chunk):
+                    assert len(chunk) <= 65536, 'runtime digest formed a whole binary buffer'
+                    updates.append(len(chunk))
+                    if label == 'second-update-keyboard' and len(updates) == 2:raise keyboard
+                    return self.real.update(chunk)
+                def hexdigest(self):return self.real.hexdigest()
+            def stream_hash(data=b''):
+                constructors.append(len(data))
+                assert data == b'', 'runtime digest hashed a joined binary'
+                return HashUpdates()
+            def observation_error(values, kind, site, error):
+                result = original_error(values, kind, site, error)
+                if values is work and error is keyboard:
+                    observer_errors.append(marked)
+                    raise marked
+                return result
+            c.hashlib.sha256 = stream_hash
+            c._capture_observation_error = observation_error
+            error = None
+            try:measured = c.digest(chunks, runtime_work=work)
+            except BaseException as caught:
+                error = caught
+                inputs._failed(caught)
+            finally:
+                c.hashlib.sha256, c._capture_observation_error = original_sha, original_error
+            assert constructors == [0] and updates == [65536, 17]
+            if label == 'normal':
+                assert error is None and measured == expected and 'runtime_digest_incomplete' not in work
+                assert work['seed_processing']['H'] - baseline_h == len(raw)
+                assert work['runtime']['sha_bytes'] - baseline_runtime_h == len(raw)
+            else:
+                assert error is keyboard and inputs.failure is keyboard and observer_errors == [marked]
+                assert work['runtime_digest_incomplete']
+                assert work['seed_processing']['H'] - baseline_h == 65536
+                assert work['runtime']['sha_bytes'] - baseline_runtime_h == 65536
+                primary = keyboard
+            metrics.append({'case': label, 'bytes': len(raw), 'chunks': len(chunks), 'update_sizes': updates,
+                'runtime_H': work['runtime']['sha_bytes'] - baseline_runtime_h,
+                'seed_H': work['seed_processing']['H'] - baseline_h, 'first_keyboard_preserved': error is keyboard})
+        finally:
+            c.hashlib.sha256, c._capture_observation_error = original_sha, original_error
+            if inputs is not None:inputs.close(primary)
+            if initial is not None:initial.close()
+            save(label, work)
+    for label in ('recording-keyboard-marked', 'native-none', 'native-none-keyboard'):
+        folder = base / label;folder.mkdir(mode=0o700);os.chown(folder, -1, os.getegid())
+        path = folder / 'value.json';path.write_bytes(b'{}\n');path.chmod(0o400);os.chown(path, -1, os.getegid())
+        work = c._c3_fresh_work(1) if label == 'recording-keyboard-marked' else None
+        held = c._open_held(str(path), False,
+            c._store_rule(os.geteuid(), os.getegid(), 0o400, False, resolver), 'E_STORE',
+            recording_work=work, accounting_kind='M' if work is not None else None)
+        order = [item.fd for item in reversed(held.components)]
+        assert len(order) > 1 and len(order) == len(set(order))
+        original_close, original_observe = os.close, c._capture_observe
+        closes, observed = [], []
+        keyboard = KeyboardInterrupt('first actual held FD close cancelled')
+        marked = InterruptedError('later held-close observation cancelled');marked._scope_signal_cancel = True
+        def closing(fd):
+            result = original_close(fd)
+            if fd in order:
+                closes.append(fd)
+                if label != 'native-none' and fd == order[0]:raise keyboard
+            return result
+        def observing(values, kind, site, value, *args, **kwargs):
+            result = original_observe(values, kind, site, value, *args, **kwargs)
+            if site == 'held-close':
+                observed.append(value)
+                if label == 'recording-keyboard-marked' and len(observed) == 1:raise marked
+            return result
+        before_close = work['held_close_calls'] if work is not None else None
+        os.close, c._capture_observe = closing, observing
+        error = None
+        try:held.close()
+        except BaseException as caught:error = caught
+        finally:os.close, c._capture_observe = original_close, original_observe
+        try:
+            if label == 'recording-keyboard-marked':
+                assert error is keyboard and closes == order and held.components == []
+                assert collections.Counter(closes) == collections.Counter(order)
+                assert len(observed) == len(order) and work['held_close_calls'] - before_close == len(order)
+                assert work['held_close_incomplete'] and work['accounting_incomplete']
+            elif label == 'native-none':
+                assert error is None and closes == order and not observed and held.components == []
+            else:
+                assert error is keyboard and closes == order[:1] and not observed
+                assert [item.fd for item in reversed(held.components)] == order
+            for fd in closes:
+                try:os.fstat(fd)
+                except OSError as caught:assert caught.errno == errno.EBADF
+                else:raise AssertionError('actual held fd remained open')
+            metrics.append({'case': label, 'owned_fds': len(order), 'actual_close_attempts': len(closes),
+                'observations': len(observed), 'first_keyboard_preserved': error is keyboard})
+        finally:
+            # Native None cancellation leaves the original component list; avoid retrying its closed FD.
+            held.components.clear()
+            for fd in order:
+                if fd not in closes:original_close(fd)
+            save(label, work if work is not None else {'native_recording': None, 'close_order': closes})
+    return {'controls': metrics, 'retained_root': str(base), 'cost': 'UNKNOWN', 'native_qualification': 'NOTRUN'}
+
+
+def raw16_C3_gate_phase_seam(root: Path, evidence=None) -> None:
+    import ast
+    import tempfile
+    spec = importlib.util.spec_from_file_location('C3_phase_generator', root/'scope/v1/generate-gate-evidence.py')
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    c = module.c
+    results = []
+    # These controlled phase implementations test only the public sequencing seam.
+    # They do not implement or qualify the native value-generation phase.
+    for label in ('normal', 'values-ordinary', 'values-keyboard', 'tail-ordinary'):
+        with tempfile.TemporaryDirectory(prefix='ystack-C3-phase-seam-') as temporary:
+            output = Path(temporary).resolve()
+            (output/'manifests').mkdir(mode=0o700)
+            (output/'completion').mkdir(mode=0o700)
+            raw = module._manifest_values('generation.phase-fixture', [], [], {},
+                c.canonical({'body': {'initial_origin_refs': []}}), None)
+            generator = object.__new__(module._Generator)
+            generator.output = output
+            for path in (output, *output.rglob('*')):
+                os.chown(path, os.getuid(), os.getgid())
+            generator.reader = types.SimpleNamespace(darwin=c._DarwinUUIDResolver() if sys.platform=='darwin' else None)
+            generator.held = []
+            generator._init_output_capture()
+            events = []
+            value_error = KeyboardInterrupt('original values cancellation') if label == 'values-keyboard' else OSError(5, 'original values failure')
+            tail_error = OSError(5, 'original tail failure')
+            caught = None
+            try:
+                path = output/'manifests/manifest.json'
+                written = module.r.write_exclusive(path, raw, resolver=generator.reader.darwin)
+                owner = generator.hold_written(path, raw, written)
+                assert type(owner) is c._HeldBytes
+                assert owner.raw == raw and owner.raw is not raw
+                assert c._identity(owner.held.before) == written
+                assert generator.output_holds['manifests/manifest.json'] is owner
+                def values():
+                    events.append('values')
+                    if label.startswith('values-'): raise value_error
+                    return owner
+                def complete(actual):
+                    events.append('complete')
+                    assert actual is owner and any(item is actual for item in generator.held)
+                    actual.recheck('E_STORE')
+                    if label == 'tail-ordinary': raise tail_error
+                generator._run_values = values
+                generator._run_complete = complete
+                try:
+                    result = module._Generator.run(generator)
+                    assert result is None
+                except BaseException as error:
+                    caught = error
+                if label.startswith('values-'):
+                    assert caught is value_error and events == ['values']
+                    assert not (output/'completion/COMPLETE.json').exists()
+                elif label == 'tail-ordinary':
+                    assert caught is tail_error and events == ['values', 'complete']
+                else:
+                    assert caught is None and events == ['values', 'complete']
+                if label == 'normal':
+                    stop = OSError(5, 'stop after actual manifest-owner guard')
+                    reached = []
+                    def stop_at_complete():
+                        reached.append('complete')
+                        raise stop
+                    generator.session = types.SimpleNamespace(phase='FINAL_OWNER', complete=stop_at_complete)
+                    try:module._Generator._run_complete(generator, owner)
+                    except BaseException as error:assert error is stop
+                    else:raise AssertionError('actual tail did not reach stop sentinel')
+                    assert reached == ['complete'] and owner.raw is not raw
+                    other_path = output/'completion/wrong-manifest.json'
+                    other_written = module.r.write_exclusive(other_path, raw, resolver=generator.reader.darwin)
+                    other = generator.hold_written(other_path, raw, other_written)
+                    for invalid in (object(), other):
+                        try:module._Generator._run_complete(generator, invalid)
+                        except BaseException as error:
+                            assert error is not stop and str(error) == 'E_RUNTIME'
+                        else:raise AssertionError('wrong actual owner/path passed guard')
+                        assert reached == ['complete']
+                results.append({'case': label, 'events': events,
+                    'actual_complete_guard_stop': label == 'normal',
+                    'independent_actual_HeldBytes_readback': owner.raw is not raw,
+                    'caught': None if caught is None else type(caught).__name__,
+                    'first_error_identity_preserved': caught is (value_error if label.startswith('values-') else tail_error) if caught is not None else None,
+                    'scope': 'public run seam and actual manifest write/hold/readback only; native phases NOTRUN',
+                    'work': generator.capture_output_work, 'full_fees': 'UNKNOWN'})
+            finally:
+                # Manifest owner remains in the original native held list.
+                for held in reversed(generator.held): held.close()
+                generator.held = []
+    tree = ast.parse((root/'scope/v1/generate-gate-evidence.py').read_text())
+    cls = next(node for node in tree.body if isinstance(node,ast.ClassDef) and node.name == '_Generator')
+    complete = next(node for node in cls.body if isinstance(node,ast.FunctionDef) and node.name == '_run_complete')
+    calls = [(node.lineno, ast.unparse(node.func)) for node in ast.walk(complete) if isinstance(node,ast.Call)]
+    def line(name):
+        matches = [number for number, actual in calls if actual == name]
+        assert len(matches) == 1
+        return matches[0]
+    assert line('require') < line('self.session.complete') < line('self.reader.seal_source_captures') < line('_completion_values') < line('r.write_exclusive') < line('self._capture_completion')
+    _C3_work_evidence(results,evidence,'gate-phase')
+    print(json.dumps({'C3_public_run_phase_seam':results,'native_complete_body':'AST order only; NOTRUN'},sort_keys=True))
+
+
+def raw16_C3_ledger_and_retained(root: Path, evidence=None) -> None:
+    import tempfile
+    spec = importlib.util.spec_from_file_location('C3_ledger_replay', root/'evals/v1/replay-malicious.py')
+    replay = importlib.util.module_from_spec(spec);sys.modules[spec.name] = replay;spec.loader.exec_module(replay)
+    spec = importlib.util.spec_from_file_location('ystack_shadow_consumer', root/'shadow/v1/_consumer.py')
+    c = importlib.util.module_from_spec(spec);sys.modules[spec.name] = c;spec.loader.exec_module(c)
+    work = c._c3_fresh_work(1);c._capture_work_values(work, 'C3-ledger-control')
+    actual = c._capture_accounting_values(work, {})
+    rejected = []
+    for field in ('runtime_Q', 'host_publication_work'):
+        for value in (None, {}, 0):
+            changed = dict(actual);changed[field] = value;changed['complete'] = True
+            try:c._c3_owner_receipt_values('Q', changed, complete=True)
+            except c.Refusal:rejected.append(field + ':' + repr(value))
+            else:raise AssertionError('untyped original Q accepted')
+    try:c._c3_owner_receipt_values('raw', dict(actual, complete=True), complete=True)
+    except c.Refusal:rejected.append('false-complete')
+    else:raise AssertionError('sender complete accepted')
+    c._c3_owner_receipt_values('Q', actual)
+    spec = importlib.util.spec_from_file_location('C3_original_preparation_ledger', root/'preparation/v1/prepare-candidate.py')
+    preparation = importlib.util.module_from_spec(spec);sys.modules[spec.name] = preparation;spec.loader.exec_module(preparation)
+    original_preparation = preparation.Ledger()
+    original_preparation.charge('scratch_bytes', 7, preparation.LIMITS['storage_bytes'])
+    original_preparation.release('scratch_bytes', 3)
+    gauges = dict(vars(original_preparation))
+    assert c._c3_owner_receipt_values('preparation', gauges) is gauges and gauges['scratch_bytes'] == 4
+    for changed in (dict(gauges, scratch_bytes=True), dict(gauges, extra=0)):
+        try:c._c3_owner_receipt_values('preparation', changed)
+        except c.Refusal:rejected.append('preparation-closed-original-shape')
+        else:raise AssertionError('invalid preparation gauge accepted')
+    current = c._c3_fresh_work(1)
+    body = c._c3_fresh_work(1);terminal = c._c3_fresh_work(1)
+    terminal['write_bytes'] = 64
+    budget = {'grants':[{'actor':1, 'scopes':['case'], 'bootstrap':{'case':c._c3_work_values(current)},
+        'body':{'case':c._c3_work_values(body)}, 'terminal':{'case':c._c3_work_values(terminal)}}]}
+    increment = c._c3_fresh_work(1);increment['write_bytes'] = 1
+    current, increment = c._c3_work_values(current), c._c3_work_values(increment)
+    print(json.dumps({'C3_actual_receipt_mutations':rejected, 'original_preparation_gauges':gauges},sort_keys=True),flush=True)
+    try:c._c3_grant_room(budget, 1, 'case', 'body', current, increment)
+    except c.Refusal:rejected.append('body-cannot-borrow-terminal')
+    else:raise AssertionError('body borrowed terminal')
+    c._c3_grant_room(budget, 1, 'case', 'terminal', current, increment)
+    print(json.dumps({'C3_body_refused_terminal_credit':True,'same_terminal_increment_admitted':True}),flush=True)
+    base = Path(tempfile.mkdtemp(prefix='ystack-C3-retained-')).resolve()
+    for name in ('I', 'work'):(base/name).mkdir(mode=0o700)
+    for path in (base, *base.rglob('*')):os.chown(path, os.getuid(), os.getgid())
+    resolver = c._DarwinUUIDResolver() if sys.platform == 'darwin' else None
+    held = [c._open_held(str(base/name), True, c._store_rule(os.getuid(), os.getgid(), 0o700, True, resolver), 'E_STORE')
+        for name in ('I','work')]
+    inputs = object.__new__(replay._ReplayInputs)
+    inputs.c, inputs.root, inputs.resolver, inputs.work, inputs.failure = c, held[0], resolver, work, None
+    owner = object.__new__(replay._ReplayCase);owner.c, owner.inputs, owner.work = c, inputs, work
+    owner._replay_io_holds = []
+    try:
+        parent = owner._replay_hold_work(held[1])
+        directory = owner._replay_mkdir(parent, 'actual')
+        path = owner._replay_write_bytes(directory, 'value', b'actual retained bytes\n')
+        assert path.read_bytes() == b'actual retained bytes\n'
+        assert owner._replay_close_io() is None
+        rows = work['C3_retained']
+        assert len(rows) == 3 and all(row['state'] == 'present' and row['last_identity'] is not None for row in rows)
+        assert next(row for row in rows if bytes.fromhex(row['member']) == b'actual/value')['size_bytes'] == 22
+    finally:
+        failure = owner._replay_close_io(sys.exc_info()[1])
+        held[0].close()
+        if failure is not None and failure is not sys.exc_info()[1]:raise failure
+    _C3_work_evidence([{'work':work, 'retained_root':str(base)}], evidence, 'ledger-retained')
+    print(json.dumps({'C3_ledger_rejects':rejected, 'actual_retained':work['C3_retained'],
+        'full_emit':'NOTRUN', 'complete_qualification':'UNKNOWN'}, sort_keys=True))

@@ -1495,5 +1495,116 @@ def scope_shared_value_controls(r):
     return observed
 checks += scope_shared_value_controls(g.r)
 # END fixed scope shared value controls.
+def scope_early_handoff_owner_controls():
+    # TMP mechanisms only. No builder, native authentication, or full gate caller.
+    import os, tempfile, traceback
+    c = g.c
+    spec = importlib.util.spec_from_file_location('scope_early_handoff_replay', root/'evals/v1/replay-malicious.py')
+    replay = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = replay
+    spec.loader.exec_module(replay)
+    global scope_early_handoff_work
+    scope_early_handoff_work = []
+    resolver = c._DarwinUUIDResolver() if sys.platform == 'darwin' else None
+    base = pathlib.Path(tempfile.mkdtemp(prefix='scope-early-handoff-')).resolve()
+    base.chmod(0o700)
+    os.chown(base, -1, os.getegid())
+    raw = b'same synthetic input; never executed\n'
+    directories = [base/name for name in ('P-one','P-two','S')]
+    # Complete all fixture namespace mutations before taking any full-chain hold.
+    for directory in directories:
+        directory.mkdir(mode=0o700)
+        os.chown(directory, -1, os.getegid())
+        path = directory/'member'
+        path.write_bytes(raw)
+        path.chmod(0o400)
+        os.chown(path, -1, os.getegid())
+    readers, parents, copies, targets = [], [], [], []
+    assembly = object.__new__(replay._SeedAssembly)
+    assembly.c = c
+    assembly.work = {}
+    c._capture_work_values(assembly.work, 'early-handoff-mechanism')
+    assembly._scope_P_stages = []
+    primary = None
+    try:
+        for directory in directories[:2]:
+            reader = object.__new__(g.r._Reader)
+            reader.anchor = c.Anchor({}, b'', [], {}, ('', []), ('', []), resolver)
+            reader.anchor.scope_runtime_owner = reader
+            reader.owned = []
+            reader.inputs = []
+            reader.source_copies = []
+            readers.append(reader)
+            parent = c._open_held(str(directory), True,
+                c._store_rule(os.geteuid(),os.getegid(),0o700,True,resolver), 'E_STORE')
+            parents.append(parent)
+            work = reader.anchor.recording_work
+            case = c._capture_work_values(work, 'TMP-independent-P')
+            copied = c._HeldCaptureCopy(reader.anchor, work, case)
+            copies.append(copied)
+            copied.acquire(parent, None, {'member': (directory/'member').stat()}, {})
+            reader._own_source_copy(copied,parent)
+        target = c._open_held(str(directories[2]/'member'),False,
+            c._store_rule(os.geteuid(),os.getegid(),0o400,False,resolver),'E_STORE')
+        targets.append(target)
+        first, second = [copy.members['member'] for copy in copies]
+        check(c._identity(first.before) != c._identity(second.before))
+        check(c._identity(first.before) != c._identity(target.before))
+        expected = hashlib.sha256(raw).hexdigest()
+        # Run the original actual-byte/full-chain checker for both independent Readers.
+        assembly._scope_check_P_S(readers[0], first, target, expected, 'M')
+        assembly._scope_check_P_S(readers[1], second, target, expected, 'M')
+        # A saved binding is keyed by Reader and exact P object, never just equal SHA.
+        binding = dict(reader=readers[0],context='generator',member='generator/member',
+            source=first,copied=copies[0],name='member',expected=expected,kind='M',
+            identity=c._identity(first.before),target=target,key='existing-real-S')
+        assembly._scope_P_stages.append(binding)
+        check(assembly._scope_stage_P(readers[0],copies[0],'member',raw,expected,'M',
+            'generator','generator/member') == 'existing-real-S')
+        try:
+            assembly._scope_stage_P(readers[0],copies[1],'member',raw,expected,'M',
+                'generator','generator/member')
+        except ValueError: pass
+        else: raise AssertionError('equal bytes admitted another Reader P into the saved binding')
+        # Same native close point: no deferred close, no reopening P after release.
+        readers[0].release_stores()
+        check(copies[0].closed and not copies[0].owned and not readers[0].source_copies)
+        check(not first.components)
+        check(bool(second.components) and not copies[1].closed)
+        second.recheck('E_STORE')
+        target.recheck('E_STORE')
+        # A P closed before its first handoff must fail before any late read/copy.
+        readers[1].release_stores()
+        check(copies[1].closed and not second.components)
+        try:
+            assembly._scope_stage_P(readers[1],copies[1],'member',raw,expected,'M',
+                'scope_reader','scope_reader/member')
+        except ValueError: pass
+        else: raise AssertionError('closed P acquired a new S binding')
+        target.recheck('E_STORE')
+        check(target.read(c.DOCUMENT_LIMIT,'E_STORE') == raw)
+    except BaseException as error:
+        primary = error
+        raise
+    finally:
+        later = []
+        for reader in readers:
+            try: reader._close_source_copies()
+            except BaseException as error: later.append(error)
+        for held in reversed(targets + parents):
+            try: held.close()
+            except BaseException as error: later.append(error)
+        for reader in readers:
+            try: reader.anchor.close()
+            except BaseException as error: later.append(error)
+        scope_early_handoff_work.append(dict(work=assembly.work,
+            reader_work=[reader.anchor.recording_work for reader in readers],
+            primary=None if primary is None else traceback.format_exception(type(primary),primary,primary.__traceback__),
+            secondary=[traceback.format_exception(type(error),error,error.__traceback__) for error in later],
+            retained_root=str(base), full_fees='UNKNOWN', qualification='NOTRUN full caller; TMP physical P/S mechanisms only'))
+        if primary is None and later: raise later[0]
+
+scope_early_handoff_owner_controls()
+
 print(f'PASS {checks} pure parser / projection / Git-history / closed argv / socket lifecycle controls; no source/native execution')
 PY

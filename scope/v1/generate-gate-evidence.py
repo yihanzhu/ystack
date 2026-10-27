@@ -558,6 +558,8 @@ class _Generator:
             raise cancellation
         return not self.capture_output_unusable
 
+
+
     def _capture_completion(self, path, raw, written):
         cancellation = getattr(self, "capture_output_cancel", None)
         pending = None
@@ -729,6 +731,10 @@ class _Generator:
         return register_raw
 
     def run(self):
+        manifest_owner = self._run_values()
+        self._run_complete(manifest_owner)
+
+    def _run_values(self):
         self.inputs()
         register_raw = self.kill_source()
         self.put("register", register_raw)
@@ -787,10 +793,17 @@ class _Generator:
         manifest = _manifest_values(self.request["id"], rows, self.session.initial_origin_refs,
             self.session.final_origins, self.session.kill_request_raw, self.session.coverage_request_raw)
         written = r.write_exclusive(self.output / "manifests/manifest.json", manifest, resolver=self.reader.darwin)
-        self.hold_written(self.output / "manifests/manifest.json", manifest, written)
+        manifest_owner = self.hold_written(self.output / "manifests/manifest.json", manifest, written)
         self.check()
         self.sync_directories()
         self.check()
+        return manifest_owner
+
+    def _run_complete(self, manifest_owner):
+        require(type(manifest_owner) is c._HeldBytes and any(item is manifest_owner for item in self.held)
+            and manifest_owner.held.path == str(self.output / "manifests/manifest.json")
+            and self.session.phase == "FINAL_OWNER", "E_RUNTIME")
+        manifest = manifest_owner.raw
         self.session.complete()
         self.reader.seal_source_captures()
         completion = _completion_values(self.request["id"], manifest)

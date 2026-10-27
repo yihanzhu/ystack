@@ -4098,6 +4098,7 @@ root=Path(sys.argv[1])
 spec=importlib.util.spec_from_file_location('C3_gate_output_fixture',root/'scripts/test/candidate-content-preparation-fixtures.py')
 fixture=importlib.util.module_from_spec(spec);sys.modules[spec.name]=fixture;spec.loader.exec_module(fixture)
 fixture.raw16_C3_gate_outputs(root)
+fixture.raw16_C3_ledger_and_retained(root)
 fixture.raw16_C3_bundle_outputs(root,candidate=True)
 PY_C3_GATE_OUTPUTS
 
@@ -4184,3 +4185,12 @@ try:f.raw16_C3_accounted_io(root,cancel_deletion=True)
 except AssertionError as error:assert str(error)=='first KeyboardInterrupt replaced by observer cancellation'
 else:raise AssertionError('first cancellation deletion undetected')
 PY_C3_FIRST_CANCEL_DELETION
+
+/usr/bin/python3 -I -S -B - "$root" <<'PY_C3_RUNTIME_STREAM_CLOSE'
+import importlib.util,json,sys
+from pathlib import Path
+root=Path(sys.argv[1])
+spec=importlib.util.spec_from_file_location('C3_stream_close_fixtures',root/'scripts/test/candidate-content-preparation-fixtures.py')
+f=importlib.util.module_from_spec(spec);sys.modules[spec.name]=f;spec.loader.exec_module(f)
+print(json.dumps({'C3_runtime_stream_close':f.raw16_C3_runtime_digest_and_held_close(root)},sort_keys=True))
+PY_C3_RUNTIME_STREAM_CLOSE

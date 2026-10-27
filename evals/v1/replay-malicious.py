@@ -2379,57 +2379,144 @@ class _SeedAssembly:
             self._failed(error, "seed-candidate-outputs")
             raise self.failure
 
-    def gate_outputs(self):
+    def _gate_recorded_member(self, reader, held, expected, kind, copied=None, name=None):
+        module = self._gate_type(reader, "scope/v1/read-shadow-evidence.py", "_Reader")
+        owner = module.c
+        generator = self.generator
+        path = Path(held.path)
+        _seed_require(generator is self._gate_owner and generator.active and reader.commands_open
+            and path.is_relative_to(generator.output) and path != generator.output
+            and type(held) is owner.HeldPath and held.components and kind in {"runtime", "M"})
+        member = "generator/" + path.relative_to(generator.output).as_posix()
+        registry = self.__dict__.setdefault("gate_recorded_members", {})
+        if copied is not None:
+            _seed_require(not copied.closed and copied.anchor is reader.anchor and copied.members.get(name) is held)
+            copied.recheck()
+            _seed_require(not owner._capture_work_incomplete(copied.leaf)
+                and not reader.anchor.private_observations.get("unusable", False))
+        if kind == "runtime":
+            _seed_require(copied is not None and name in copied.runtime_sha256
+                and copied.runtime_sha256[name] == expected)
+            declarations = [row for row in reader.anchor.private_observations["local_runtime"]
+                if row["file"] == name and row["sha256"] == expected and row["size_bytes"] == held.before.st_size]
+            source = getattr(copied, "scope_source", None)
+            if source is not None:
+                document = owner._json(source.capture.snapshots["capture.json"], owner.DOCUMENT_LIMIT, "E_STORE")
+                declarations.extend(row for filename, row in owner._capture_runtime_files(document["body"]["raw"]).items()
+                    if filename == name and row["sha256"] == expected and row["size_bytes"] == held.before.st_size)
+            _seed_require(len(declarations) == 1)
+        self._source_check(owner, held, reader.anchor, 0o400)
+        identities = tuple(owner._identity(component.before) for component in held.components)
+        if member in registry:
+            previous = registry[member]
+            _seed_require(previous["reader"] is reader and previous["held"] is held
+                and previous["copied"] is copied and previous["expected"] == expected
+                and previous["kind"] == kind and previous["identities"][-1] == identities[-1])
+            target = previous["target"]
+            self._scope_check_P_S(reader, held, target, expected, kind)
+            return previous["file"]
+        existing = [row for row in self.__dict__.get("_scope_P_stages", [])
+            if row["reader"] is reader and row["source"] is held and row["copied"] is copied]
+        _seed_require(len(existing) <= 1)
+        first = existing[0]["target"] if existing else None
+        if first is None and copied is not None:
+            prior = self._scope_existing_S(reader, copied, name, "generator")
+            if prior is not None:first = prior[2]
+        physical = "gate-output-%03d" % len(registry)
+        _seed_require(physical not in self.semantic_expected and len(registry) < 256)
+        self.semantic_expected[physical] = ("gate", "recorded", member, held.before.st_size, expected, kind)
+        if first is None:
+            _seed_require(id(held) not in self.source_occurrences)
+            target = self._copy(reader.anchor, held, physical, expected, kind, source_mode=0o400)
+        else:
+            self._scope_check_P_S(reader, held, first, expected, kind)
+            target = self._copy(self.anchor, first, physical, expected, kind, source_mode=0o400)
+        self._semantic_record("gate", "recorded", member, physical)
+        registry[member] = {"reader": reader, "held": held, "copied": copied, "expected": expected,
+            "kind": kind, "identities": identities, "file": physical, "target": target}
+        self._source_check(owner, held, reader.anchor, 0o400)
+        if copied is not None:copied.recheck()
+        self._transfer()
+        return physical
+
+    def _gate_private_output_members(self, reader):
+        module = self._gate_type(reader, "scope/v1/read-shadow-evidence.py", "_Reader")
+        for copied in reader.source_copies:
+            _seed_require(not copied.closed and copied.anchor is reader.anchor)
+            for name, held in sorted(copied.members.items()):
+                if not Path(held.path).is_relative_to(self.generator.output):continue
+                if name in copied.runtime_sha256:expected, kind = copied.runtime_sha256[name], "runtime"
+                else:
+                    _seed_require(held.before.st_size <= module.c.DOCUMENT_LIMIT)
+                    raw = held.read(module.c.DOCUMENT_LIMIT, "E_STORE", self.work)
+                    expected, kind = self._digest(raw, "M"), "M"
+                self._gate_recorded_member(reader, held, expected, kind, copied, name)
+
+    def gate_output_members(self):
         try:
             generator = self.generator
             module = self._gate_type(generator, "scope/v1/generate-gate-evidence.py", "_Generator")
             _seed_require(generator is self._gate_owner and generator.active
-                and generator.session is self.gate_session and self.gate_session.phase == "COMPLETE"
-                and not generator.capture_output_unusable and type(generator.output_holds) is dict
-                and "gate" in self.occurrences and "gate-output" not in self.derived_outputs)
-            generator.reader.anchor.recheck("E_STORE")
+                and generator.session is self.gate_session and self.gate_session.phase == "FINAL_OWNER"
+                and not generator.capture_output_unusable and "gate" in self.occurrences
+                and not hasattr(self, "gate_manifest_pending"))
+            self._gate_private_output_members(generator.reader)
             holders = dict(generator.output_holds)
             for item in generator.reader.owned:
                 if type(item) is not module.c._HeldBytes:continue
                 path = Path(item.held.path)
-                if generator.output not in path.parents:continue
+                if not path.is_relative_to(generator.output):continue
                 name = path.relative_to(generator.output).as_posix()
-                if name in holders:
-                    previous = holders[name]
-                    _seed_require(previous.raw == item.raw
-                        and module.c._identity(previous.held.before) == module.c._identity(item.held.before))
+                if name in holders:_seed_require(holders[name] is item or holders[name].held is item.held)
                 else:holders[name] = item
-            manifest_name, complete_name = "manifests/manifest.json", "completion/COMPLETE.json"
-            _seed_require(manifest_name in holders and complete_name in holders)
-            manifest_raw, complete_raw = holders[manifest_name].raw, holders[complete_name].raw
+            manifest_name = "manifests/manifest.json"
+            _seed_require(manifest_name in holders)
+            manifest_raw = holders[manifest_name].raw
             manifest = self._wrapper_parse(manifest_raw, "gate-output-manifest")
             rows = manifest["body"]["files"]
-            _seed_require(type(rows) is list and all(type(row) is dict
-                and set(row) == {"name", "size_bytes", "sha256"} for row in rows)
-                and len({row["name"] for row in rows}) == len(rows)
-                and set(holders) == {row["name"] for row in rows} | {manifest_name, complete_name})
+            _seed_require(type(rows) is list and all(type(row) is dict and set(row) == {"name", "size_bytes", "sha256"}
+                for row in rows) and len({row["name"] for row in rows}) == len(rows))
+            for name, item in sorted(holders.items()):
+                _seed_require(type(item) is module.c._HeldBytes and item.held.components)
+                self._gate_recorded_member(generator.reader, item.held, self._digest(item.raw, "M"), "M")
+            registry = self.gate_recorded_members
+            _seed_require(set(registry) == {"generator/" + row["name"] for row in rows}
+                | {"generator/" + manifest_name})
+            for row in rows:
+                actual = registry["generator/" + row["name"]]
+                fact = self.files[actual["file"]]
+                _seed_require(fact["size_bytes"] == row["size_bytes"] and fact["sha256"] == row["sha256"])
+                actual["target"].recheck("E_STORE", self.work, "M")
+            self.gate_manifest_pending = manifest_raw
+            self.output_relations.append(("gate-pending", generator, manifest_raw))
+            self._transfer()
+        except BaseException as error:
+            self._failed(error, "seed-gate-output-members")
+            raise self.failure
+
+    def gate_outputs(self):
+        try:
+            generator = self.generator
+            module = self._gate_type(generator, "scope/v1/generate-gate-evidence.py", "_Generator")
+            _seed_require(generator is self._gate_owner and generator.active and generator.session is self.gate_session
+                and self.gate_session.phase == "COMPLETE" and not generator.capture_output_unusable
+                and "gate-output" not in self.derived_outputs and hasattr(self, "gate_manifest_pending"))
+            manifest_raw = self.gate_manifest_pending
+            held = generator.output_holds["manifests/manifest.json"]
+            complete = generator.output_holds["completion/COMPLETE.json"]
+            _seed_require(held.raw is manifest_raw and type(complete) is module.c._HeldBytes and complete.held.components)
             rebuilt = module._completion_values(self.identifiers["gate"], manifest_raw, self.work)
-            self._charge("E", len(rebuilt) + len(complete_raw), "M")
-            self._wrapper_processed("gate-output-completion-compare", len(rebuilt) + len(complete_raw))
-            _seed_require(rebuilt == complete_raw)
-            indexed = {row["name"]: row for row in rows}
-            installed = {}
-            for index, name in enumerate(sorted(holders)):
-                item = holders[name]
-                _seed_require(type(item) is module.c._HeldBytes and item.raw is not None
-                    and item.held.components and item.held.path == str(generator.output / name))
-                item.recheck("E_STORE")
-                expected = self._digest(item.raw, "recorded")
-                if name in indexed:
-                    _seed_require(indexed[name]["size_bytes"] == len(item.raw)
-                        and indexed[name]["sha256"] == expected)
-                destination = "gate-output-%03d" % index
-                self._semantic_copy(generator.reader.anchor, item.held, destination, expected,
-                    "recorded", "gate", "recorded", "generator/" + name, source_mode=0o400)
-                installed[name] = destination
+            self._charge("E", len(rebuilt) + len(complete.raw), "M")
+            self._wrapper_processed("gate-output-completion-compare", len(rebuilt) + len(complete.raw))
+            _seed_require(rebuilt == complete.raw)
+            self._gate_recorded_member(generator.reader, complete.held, self._digest(complete.raw, "M"), "M")
+            installed = {member[len("generator/"):]: value["file"] for member, value in self.gate_recorded_members.items()}
+            _seed_require(set(installed) == {row["name"] for row in self._wrapper_parse(manifest_raw,
+                "gate-output-final-manifest")["body"]["files"]} | {"manifests/manifest.json", "completion/COMPLETE.json"})
+            for value in self.gate_recorded_members.values():value["target"].recheck("E_STORE", self.work, "M")
             generator.reader.anchor.recheck("E_STORE")
             self.derived_outputs["gate-output"] = installed
-            self.output_relations.append(("gate", generator, manifest_raw, complete_raw))
+            self.output_relations.append(("gate", generator, manifest_raw, complete.raw))
             self._transfer()
         except BaseException as error:
             self._failed(error, "seed-gate-outputs")
@@ -2478,6 +2565,7 @@ class _SeedAssembly:
                 and reader.store_session.kill_request_raw == self.gate_session.kill_request_raw
                 and reader.store_session.gate_call_ref == self.gate_session.gate_call_ref)
         self._scope_reader_inputs(reader, generator)
+        self._gate_private_output_members(reader)
         self._transfer()
 
     def _reader_observations(self, reader, generator=False):
@@ -2487,6 +2575,7 @@ class _SeedAssembly:
         _seed_require(anchor is not None)
         _seed_require(getattr(anchor, "scope_runtime_owner", None) is reader)
         self._scope_reader_inputs(reader, generator)
+        self._gate_private_output_members(reader)
         observations = anchor.private_observations
         _seed_require("entropy" in observations and "commands" in observations
             and "runtime_values" in observations["commands"] and observations["storage_reads"])
@@ -3550,6 +3639,8 @@ class _ReplayCase:
 
     def _replay_hold_work(self, parent):
         c = self.c
+        if not hasattr(self, "_replay_private_root"):
+            self._replay_private_root = parent.path
         _seed_require(type(parent) is c.HeldPath and len(parent.components) >= 2
             and self.inputs.failure is None)
         self._replay_adopt_io(parent)
@@ -3563,6 +3654,8 @@ class _ReplayCase:
         return parent
 
     def _replay_adopt_io(self, held):
+        if not hasattr(self, "_replay_private_root"):
+            self._replay_private_root = held.path
         # This method takes ownership at entry, including registration failure.
         if not hasattr(self, "_replay_io_holds"):
             try:self._replay_io_holds = []
@@ -3578,14 +3671,49 @@ class _ReplayCase:
             raise error
         return held
 
+    def _replay_retained(self, path, state=None, *, size=None, uncertain=False):
+        root = self._replay_private_root
+        relative = os.path.relpath(str(path), root)
+        _seed_require(relative != ".." and not relative.startswith("../")
+            and (size is None or type(size) is int and size >= 0))
+        member = os.fsencode(relative).hex()
+        rows = self.work.setdefault("C3_retained", [])
+        matching = [row for row in rows if row["root"] == "privatework" and row["member"] == member]
+        _seed_require(len(matching) <= 1)
+        if matching:
+            row = matching[0]
+        else:
+            _seed_require(len(rows) < 256)
+            row = {"root": "privatework", "member": member, "creation_ordinal": len(rows) + 1,
+                "kind": "M", "initial_identity": None, "last_identity": None,
+                "size_bytes": 0 if size is None else size, "state": "unknown"}
+            rows.append(row)
+        if size is not None:row["size_bytes"] = size
+        if state is not None:
+            identity = self.c._stat_values(state)
+            if row["initial_identity"] is None:row["initial_identity"] = identity
+            row["last_identity"] = identity
+        row["state"] = "unknown" if uncertain or state is None else "present"
+        return row
+
     def _replay_close_io(self, primary=None):
         failure = primary
         owned = getattr(self, "_replay_io_holds", [])
         while owned:
             held = owned.pop()
+            try:
+                held.recheck("E_STORE", self.work, "M")
+                self._replay_retained(held.path, held.before,
+                    size=held.before.st_size if stat.S_ISREG(held.before.st_mode) else 0)
+            except BaseException as error:
+                failure = self._replay_io_first(failure, error)
+                try:self._replay_retained(held.path, uncertain=True)
+                except BaseException as later:failure = self._replay_io_first(failure, later)
             try:held.close()
             except BaseException as error:
                 failure = self._replay_io_first(failure, error)
+                try:self._replay_retained(held.path, uncertain=True)
+                except BaseException as later:failure = self._replay_io_first(failure, later)
                 try:self.work["replay_io_close_incomplete"] = True
                 except BaseException as later:failure = self._replay_io_first(failure, later)
         return failure
@@ -3628,6 +3756,7 @@ class _ReplayCase:
         try:
             os.mkdir(name, 0o700, dir_fd=parent.fd)
             self._replay_created(name)
+            self._replay_retained(Path(parent.path) / name)
             self._replay_refresh_parent(parent, before, names, name)
             os.fsync(parent.fd)
             held = self.c._open_child(parent, name, True,
@@ -3636,6 +3765,7 @@ class _ReplayCase:
             self._replay_adopt_io(held)
             _seed_require(not held.listdir())
             held.recheck("E_STORE", self.work, "M")
+            self._replay_retained(held.path, held.before)
             self.work["replay_create_unknown"] = False
             return held
         except BaseException as error:
@@ -3672,6 +3802,7 @@ class _ReplayCase:
             target = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                 0o400, dir_fd=parent.fd)
             self._replay_created(name)
+            self._replay_retained(Path(parent.path) / name)
             while written < len(raw):
                 chunk = memoryview(raw)[written:written + 65536]
                 self.c._capture_copy_room(self.work, len(chunk), False, case=True)
@@ -3680,14 +3811,18 @@ class _ReplayCase:
                 if type(count) is int and count > 0:
                     written += count
                     self._replay_written(count)
+                    self._replay_retained(Path(parent.path) / name, size=written)
                 self.c._capture_observe(self.work, "M", "replay-derived-write", {
                     "name": name, "return": count, "written_bytes": written})
                 _seed_require(type(count) is int and 0 < count <= len(chunk))
             state = self.c._capture_metadata(target, self.work, "M")
             _seed_require(state.st_size == len(raw) and state.st_nlink == 1)
+            self._replay_retained(Path(parent.path) / name, state, size=written)
             os.fsync(target)
         except BaseException as error:
             failure = error
+            try:self._replay_retained(Path(parent.path) / name, size=written, uncertain=True)
+            except BaseException as later:failure = self._replay_io_first(failure, later)
             try:
                 self.work["replay_write_incomplete"] = True
                 self.c._capture_observe(self.work, "M", "replay-derived-partial", {
@@ -6347,6 +6482,12 @@ class _ReplayCase:
             while chunk:
                 if offset == len(current):current, offset = next(incoming), 0
                 count = min(len(chunk), len(current) - offset)
+                increment = self.c._c3_vector_values((0,) * 55)
+                increment["seed_processing"]["E"] = 2 * count
+                if kind == "runtime":
+                    self.c._runtime_account(self.work, "equality_bytes", 2 * count, commit=False)
+                    increment["runtime"]["equality_bytes"] = 2 * count
+                self.c._c3_binding_room(self.work, increment)
                 part = chunk[:count] == current[offset:offset + count]
                 self.inputs._account("E", 2 * count, "M")
                 if kind == "runtime":self.c._runtime_account(self.work, "equality_bytes", 2 * count)
@@ -6357,9 +6498,14 @@ class _ReplayCase:
         return equal
 
     def _scope_data_sha(self, value, kind="M"):
+        self._scope_data_size(value)
+        if kind == "runtime":return self.c.digest(value, runtime_work=self.work)
         measured = hashlib.sha256()
         self.work["scope_stream_hash_incomplete"] = True
         for chunk in self._scope_data_chunks(value):
+            increment = self.c._c3_vector_values((0,) * 55)
+            increment["seed_processing"]["H"] = len(chunk)
+            self.c._c3_binding_room(self.work, increment)
             measured.update(chunk);self.inputs._account("H", len(chunk), kind)
         self.work["scope_stream_hash_incomplete"] = False
         return measured.hexdigest()
@@ -7034,6 +7180,8 @@ def replay_case(runtime_root, initial_case_held, manifest_raw, window_raw, case,
         _seed_require(type(case) is dict and case["case_id"] == manifest["case_id"])
         inputs = _ReplayInputs(initial_case_held, manifest["inventory_core"], work)
         owner = _ReplayCase(inputs, manifest_raw, window_raw)
+        owner._replay_private_root = pending_work.path
+        owner._replay_retained(pending_work.path, pending_work.before)
         handed_work, pending_work = pending_work, None
         owner._replay_adopt_io(handed_work)
         owner.replay_launches(runtime_root, work_held, case)
@@ -7300,12 +7448,14 @@ def _private_cli(argv):
     if failure is not None:
         raise failure
     output = c._c3_encode_values(observation, work)
-    raw_receipt = c._capture_accounting_values(work, {})
-    receipts = {"raw": raw_receipt, "export": dict(c._export_work),
-        "source": {"state": "unknown"}, "preparation": {"state": "unknown"}, "Q": {"state": "unknown"}}
-    unknown = [key for key, value in work.items() if (key.endswith("_unknown") or key.endswith("incomplete")) and value]
-    own = c._c3_ledger_values(work, receipts, work.get("C3_retained", []),
-        work.get("C3_tool_errors", []), unknown)
+    work["C3_export_work"] = c._export_work
+    if "source_work" not in work:
+        work["cli_source_receipt_missing_unknown"] = True
+    if len(work.get("offline_preparation_ledgers", [])) > 1:
+        work["cli_multiple_preparation_owners_slot_unknown"] = True
+    elif not work.get("offline_preparation_ledgers"):
+        work["cli_preparation_receipt_missing_unknown"] = True
+    own = c._c3_scope_ledger_values(work)
     end_document = {"input_bindings": actual_bindings, "own": {case["case_id"]: own},
         "children": [], "outcome": "completed"}
     c._c3_emit(output, end_document, work, budget, int(index) + 1)

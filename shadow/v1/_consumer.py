@@ -110,6 +110,7 @@ def digest(data: bytes, *, runtime_work=None) -> str:
             if "_c3_grant_binding" in runtime_work:
                 increment = _c3_vector_values((0,) * 55)
                 increment["seed_processing"]["H"] = amount
+                increment["runtime"]["sha_bytes"] = amount
                 _c3_binding_room(runtime_work, increment)
         measured.update(chunk)
         if runtime_work is not None:
@@ -3176,6 +3177,10 @@ def _c3_owner_receipt_values(slot, value, *, complete=False):
                 and all(type(number) is int and 0 <= number < _C3_U64 for number in counter.values()), "E_LIMIT")
             total += counter["read_bytes"]
         _require(total <= 1536 * DOCUMENT_LIMIT, "E_LIMIT")
+    elif slot == "preparation":
+        _require(set(value) == {"input_bytes", "object_bytes", "scratch_bytes", "bundle_bytes",
+            "child_output_bytes", "diagnostic_bytes", "high_water_chunk"}
+            and all(type(number) is int and 0 <= number < _C3_U64 for number in value.values()), "E_RELATION")
     elif slot == "source":
         numbers = {"read_bytes", "write_bytes", "sha_bytes", "equality_bytes", "copy_bytes", "physical_bytes",
             "logical_bytes", "logical_occurrences", "reused_files", "created_files", "prior_physical_bytes",
@@ -3232,11 +3237,11 @@ def _c3_owner_receipt_values(slot, value, *, complete=False):
             _require(type(counter) is dict and set(counter) <= set(_C3_CLASS_FIELDS)
                 and all(type(number) is int and 0 <= number < _C3_U64 for number in counter.values()), "E_LIMIT")
         _require(all(type(number) is int and 0 <= number < _C3_U64 for number in value["runtime"].values()), "E_LIMIT")
+        _require(value["runtime_Q"] == "UNKNOWN: complete original native operation counts are not available"
+            and value["host_publication_work"] == "UNKNOWN: private host work is not transported by the existing capture envelope"
+            and value["complete"] is False, "E_RELATION")
         if complete:
-            _require(value["complete"] and not value["incomplete"] and not value["failures"]
-                and value["unclassified_recorded_read_bytes"] == 0
-                and type(value["runtime_Q"]) is not str
-                and type(value["host_publication_work"]) is not str, "E_LIMIT")
+            _require(value["complete"], "E_LIMIT")
     return value
 
 
@@ -3377,18 +3382,28 @@ def _c3_accounting_receipt_values(work, depth=0):
     return receipt
 
 
-def _c3_scope_ledger_values(work):
+def _c3_scope_ledger_values(work, codec_work=None):
     _require(type(work) is dict, "E_RELATION")
     receipts = work.get("C3_owner_receipts")
     if receipts is None:
         receipts = {name: {"state": "unknown"} for name in _C3_RECEIPT_SLOTS}
         receipts["raw"] = _c3_accounting_receipt_values(work)
+        receipts["Q"] = receipts["raw"]
         if "source_work" in work:receipts["source"] = work["source_work"]
         if "C3_export_work" in work:receipts["export"] = work["C3_export_work"]
+        if "offline_preparation_ledgers" in work:
+            originals = work["offline_preparation_ledgers"]
+            _require(type(originals) is list and len(originals) <= 256, "E_LIMIT")
+            for original in originals:_c3_owner_receipt_values("preparation", original)
+            if len(originals) == 1:receipts["preparation"] = originals[0]
     unknown = [key for key, value in work.items()
         if (key.endswith("_unknown") or key.endswith("incomplete")) and value]
-    return _c3_ledger_values(work, receipts, work.get("C3_retained", []),
+    value = _c3_ledger_values(work, receipts, work.get("C3_retained", []),
         work.get("C3_tool_errors", []), unknown)
+    charged = work if codec_work is None else codec_work
+    _require(type(charged) is dict, "E_LIMIT")
+    raw = _c3_encode_values(value, charged)
+    return _c3_ledger_check(_c3_json_values(raw, charged))
 
 
 def _c3_ledger_check(value):
