@@ -717,8 +717,9 @@ pay the existing non-export and unified budgets; partial operations pay their
 actual work. Keep all existing binary passes and independent recomputation.
 D's RAW16 replacement
 caps apply together with every unchanged applicable cap, including 12 MiB exports,
-1 MiB JSON and the four raw partitions. The 40 edit paths,
-nine adoption-only paths and 84 source members do not change. No added helper,
+1 MiB JSON and the four raw partitions. The original 40 edit paths gain only
+the C2 bootstrap exception in R9.3; the nine adoption-only paths and 84 source
+members do not change. No added helper,
 package, installation, authority or real recording is authorized by this layout.
 
 Existing capture-held-values, sandbox-launcher, shadow-enforced/write and source
@@ -1033,6 +1034,122 @@ C的seed assembly必须实现为replay-malicious.py内一个私有固定数据�
 
 S/I final检查既比较全bytes，也各自验证初次持有时的digest、parent/name/ACL；两边一起改成相同内容仍拒绝。原SHA与equality均保留；没有用“融合”删掉独立origin或identity SHA。
 
+**C2 固定窗口会话、留存与共同账。**
+
+四-case 窗口的原 caller 是唯一资源 owner。它在原 seed/shared/launcher 数据边中使用一个固定、单次私有会话：控制连接 FD 9 和原已持有窗口目录 FD 10。该边只传递最新内存账头的准入与本次离线操作的实际增量；磁盘 descriptor/receipt 不能任命 owner 或自行选择最新头。完整资源证据由 prefix 文件、真实终态和仍存活 caller 的实际尾账共同组成。
+
+原公开 run/dashboard 参数、seed bytes、result bytes、trace.cost absent 及原 stdout/stderr 错误语义不增加字段或参数。没有新环境变量、命令、public API、provider、任意路径参数、通用 RPC、加载器或长期服务。只有此固定 caller↔launcher 边允许 FD 9/10 及有限窗口 artifact 交接；原 T、native、source、guest、host 和 replay coordinator 的无 transport/新 inherited fd 禁项不变。原 fd3 carrier 不变。FD 10 仅代表原已授权窗口根，不授予其父目录或其它路径能力，不得取得或转送缺失 host-publication-work。
+
+**真实 caller、窗口根及责任**
+
+当前源码没有已连续驱动完整 recording/run/dashboard 的生产 caller。不得在本工作中制造一个生产 caller，再宣称它原已存在。
+
+普通机制的确定入口是既有 candidate-content-preparation-fixtures.py 中 `raw16_C1_copy` 和 `raw16_C1_T_windows` 所持有的 fixture parent、`seed_parent`、`anchor.recording_work` 与真实 `case_work`。这些调用点已经创建并持有 `pending-S`。完整 C2 fixture 在同一原测试文件中扩展这个实际调用路径，调用原 run-evals.sh；不能用绕过 CLI 的 receipt 字典代替。普通 fixture 可扩展到固定四 case，但只证明未激活机制。
+
+窗口根取该 caller 已持有的 `seed_parent`。创建窗口前它必须是原规则下的空目录，完整 held chain、uid/gid/mode/ACL 均通过。caller 在该根内排他建立 `cases/<固定 case_id>/S`、`operations` 和 `window.json`。各 C1 assembly 的 destination 是对应空 S 子目录，保留原 empty-directory 检查；不能让 assembly 把 operations 当作 S 文件。既存 S 不搬迁、清理或重用来伪造此布局。
+
+原 CLI 的 seed 参数指向同一根下固定 `seed-a.json`、`seed-b.json`；两个原 run result 存为 `run-a.json`、`run-b.json`，dashboard 仍接原两对参数。seed/result bytes 不改，文件写出和保留照计。child 从这些原参数的固定父目录取得完整名字链并按原 held 规则打开，要求与 FD 10、START 初始身份和全部同根参数相等。不得仅凭 FD fstat 省略父目录/name/ACL，也不得增加 START 任意 root_path。共享引用只在该固定 descriptor/manifest 映射下解析到根内固定 S 成员；不是任意相对路径读取。
+
+caller 保留窗口根的原 holder、初次 seal 和唯一权威内存状态，直到本窗口的最后接收/关闭完成。每次 child 得到这个根的一个明确复制的目录 FD 10；不得从 seed 中找另一任意根。child 检查实际 fstat、原完整 chain/name/ACL 及 START 中的初始身份；所有成员仍需原 held child 规则及 final recheck。目录 FD 不是绕过 name/ACL 或双端 final seal 的理由。
+
+operations 只容纳该窗口有限的独占操作槽。每槽中 `I/<case_id>` 是本次独立副本；run 与 dashboard 使用不同槽和不同 inode。全部 I、零字节文件、partial、错误记录和原 scratch 中原本就要求留存的失败物保留在 caller custody 下。原 launcher ephemeral scratch 仍是另一根；其 cleanup 不能触达窗口根或为其退款。不得用 rename、硬链接、相同 SHA 或复用 fd 抵销实体数和实际字节。
+
+真实受授权 recording 将来若要使用此边，必须已经持有同样合格且获授权的原输出根及完整账。该机制不创建生产 caller，不取得真实主机目录权限，不运行 native。没有真实 caller 映射只阻断真实执行资格；不阻断普通机制实现和正例。任何新路径权限仍回该权限门。
+
+**immutable 数据与唯一权威状态**
+
+使用 immutable window descriptor、完整 case S 语义 manifest 和原 shared files。descriptor 固定四个 case_id、raw 与 S inventory 的完整 size/hash/role 绑定和初次 carry-in；inventory core 不包含 window_ref，避免 digest 环。每 case manifest 单向引用 descriptor。全部仍受原 1–256 shared-file、文档、raw、M 和其它重叠上限。
+
+完整 S manifest 必须从 C1 实际文件生成。`self.files.kind` 不是语义 role；原 snapshot 名、occurrence、原 input/output 名、固定 S 名、size/SHA 必须一一对应。所有九 occurrence、gate 两 context、全部适用 13 output families 和完整 raw 保留。重复、缺失、unused、交叉绑定均拒绝。
+
+权威状态由 caller 在内存持有，包含：固定窗口身份、连续操作序号、最后已接受操作的 receipt 内容 hash、完整 case/window 账、全部留存实体、未知/失败状态及尚未消耗的步骤。**账头标识不声称是包括其自身 hash 费用在内的整个活账的递归 hash。** 内容 hash 只绑定已完成的磁盘前缀；最新尾账由活 owner 持有。
+
+初次 carry-in 只能来自原已发生 owner 账与留存事实。旧 O、native snapshots、carrier/P/S、旧 I/失败物和实际 overlap 均带入；不按 digest 去重。缺失 host-publication-work、Q、M 或原 close/finally 仍 UNKNOWN。禁止读取新 runtime、扫描主机、转送缺失 host 账或默认零来补齐。
+
+一次 run 的 disjoint seed 集合恰覆盖固定四 case；dashboard 的原两个 disjoint pairs 合起来只重放这四 case 一次。每次真实 CLI invocation 都有自己独占槽和一次实际增量，但整个窗口账不断开；不是每 pair 新窗口。失败不自动获得重试许可或额度。
+
+**写前会话与原调用点**
+
+caller 创建一对仅供本次 child 使用的本机私有双向连接。FD 9 是 child 端，FD 10 是原 held 根的一个复制。caller 保留自己的控制端和原 root holder；关闭自己不用的 child 端和为 child 准备的临时复制，并保留实际取得/关闭记录。不能让 subprocess 默认继承一组不列账的描述符。
+
+`evals/v1/run-evals.sh` 仅在原末条 `/usr/bin/env -i ...` 命令前增加 `exec `，其它 bytes 不变。以原 blob `3786b77484b811a8dababfcfe788b20360a411f3` 为准，这是 5 bytes 的唯一内容增量；原公开参数、env 白名单、TMPDIR 和 result/error 通道不变。它只消除保留协议 FD 的祖先 shell，不授权其它 bootstrap 改动。该路径属于 R9.3 明列的额外一个 edit 路径；9 adoption-only 与 SOURCE 84 不增，wrapper 仍由原 evaluator.bootstrap 独立量测与绑定，不加入 D。
+
+唯一成功进程图固定为：
+
+| 对象/步骤 | 实际进程与 FD 责任 |
+| --- | --- |
+| caller C | 在既有普通测试 caller 中用 os.posix_spawn 创建一个可 wait 的直接 child P，记录系统返回的 PID/进程句柄。传递且只传递指定 stdin/stdout/stderr、9、10。不建立第二 keeper。fork/spawn 暂存副本的实际取得/关闭全部列入 caller 启动账。 |
+| bootstrap P | 执行原 `/bin/bash evals/v1/run-evals.sh ...`。新增显式 exec 把 P 替换为原 env；不能另 fork 一个 env 并保留外层 shell。 |
+| env→launcher | 正常 env 的命令执行替换同一 P 为 `/bin/bash evals-launcher.sh ...`。不单凭这种预期接受：READY 必须提供实际 leaf PID/PPID，caller 要求 leaf PID 恰等于它创建并 wait 的 P，PPID 恰等于 C。若实现多出 wrapper/中间 child，实际 PID 关系不符，即无 GO。PID 只是本次真实连接和直接 wait 关系的核验，不单独授权。 |
+| launcher P→Python P | launcher 在任何 command substitution、外部查询、scratch 创建前，以 builtin `exec /usr/bin/python3 -I -S -B -c` 加本文件内固定字面程序进入 malicious Python 生命周期。原 D Python command-substitution 不作会话 owner。该分支用 shell builtin 选择；原 non-malicious 路线不变。不使用 heredoc、command substitution 或第二脚本文件来传程序，因此不新增这类临时 FD。原 stdin 的显式关闭和其它原启动费用在 READY 前记录。 |
+| Python P 的有限 children | 只启动原 driver/coordinator/jq/cc 等原动作。9/10 预先设为不跨 exec，并在每次 spawn 的关闭清单中；不把 raw fork 后的临时 FD 副本当作免费或已经显式 close。固定使用 os.posix_spawn 的 file_actions：在执行目标前显式 CLOSE 9、10，以及该次 spawn 清单中其它不用的协议/输入端。继承、DUP2 和 CLOSE 的有限清单及实际 spawn/wait 结果在 END 前记录；不以 CLOEXEC 自动释放代替这两次 CLOSE。任一 file_action 失败不得取得该动作的成功结果。无 child 可保有控制连接或窗口根能力。 |
+| Python P 终态 | P 负责 FD 10 及其它文件/输入副本，在 END 前全部核关闭。DONE 后仅剩 stdout、stderr、FD 9 三个协议拥有的 FD；各显式关闭并完成原观察，再 `_exit(0)`。caller wait 的正是 P，不是它的祖先 shell。 |
+
+初次 spawn 的 file_actions 固定为：把 caller 专门准备且互不覆盖的控制 child 端复制到 9，把原 root 的专用复制复制到 10，再 CLOSE 这些准备端的原编号、caller 控制端的 child 副本和其它不准传入的已知 FD。caller 的 FD 清单来自自己实际持有的对象，不扫描系统猜测。不得覆盖原未归本操作所有的 descriptor。初次 child 中 9/10 是仅有的协议能力；caller 的对应准备端在 spawn 返回后由 caller 显式关闭并观察。每条 DUP2/继承/CLOSE 均在原 metadata observation 中按清单和真实 spawn 结果列明；不将它们记作新 physical file。系统若不能给出该固定 file_action 的成功/失败语义，仍 UNKNOWN，不放宽到静默 fork/closefrom。普通成功路径只依赖这个已定义的固定 POSIX spawn 行为，不需要新增 keeper 或通用 spawn 服务。
+
+caller wait 的 P 已由 spawn 返回。READY 验证同一 P 后，后继 leaf 不得再 fork 成另一个终端 owner。对 Python P 启动的每个有限辅助 child，P 保存实际 PID，核真实 wait 与原结果；spawn close-action 失败或 exec 失败是失败路径，不能获得成功返回再推断关闭。各子步骤结果仍须原独立验证。launcher shell 仅用 builtin 进入显式 exec，不增加程序传输 FD。原 shell/env/Python 的既有启动内部资源仍计原 M/Q 与启动账；本图只消除并核实新增协议 FD 的副本，不宣称覆盖原 runtime 内部未知账。
+
+READY 的闭集包含 `leaf_pid, leaf_ppid` 两项，均为这个 Python 进程通过原进程 API 实际取得的正整数。其获取、编码与验证发生在 GO 前，记原 metadata 账。START/READY/GO 的内容绑定及 caller 原持有的 subprocess 句柄共同建立这条关系；一个磁盘 PID、消息自报 PID 或 exit=0 单项都不够。
+
+跨 exec 保留同一进程的 9/10 是能力交接，不是再创建一份 FD；实际 dup/spawn 取得的副本则分别计取得与关闭调用。FD 副本不伪造第二份文件物理 bytes，却不能因此免掉 metadata/观察费用。任何 helper、stdin 脚本载体、异常分支遗留的额外 FD，都必须在 END 前有真实关闭证据。任何 exec 失败、非零退出或 signal 都不能取得 DONE 成功证据；不得将失败路径的系统清理记成已核显式 close。
+
+仅两个专用 FD 都存在时选择固定 malicious 会话分支；只有一个 FD 则拒绝。FD 的存在只负责路由，不能当作授权或资格。无 FD 的普通 non-malicious 调用保留原 launcher 路线；该原路线若读到 malicious source，必须拒绝，不能经新增 dispatch 绕过会话获得成功 replay。不能依据未验证 JSON 的子串授权或把所有普通调用改到 Python。实际 helper 只来自原受检 source，所有加载及启动费用在 END 前完成并入账，不从 trial slots 或任意模块加载。
+
+FD 9/10 不传给 native、guest、host 或 source；本进程图的正常退出只证明此 eval launcher 链，完全不能证明原 C1/native 的 finally、Signals、host work 或 recording terminal。
+
+会话只有 `START → READY → GO → END → DONE → EOF/exit` 这一个成功顺序。每种消息恰一次，禁止额外消息、重排、重复、重连、请求任意动作或远端地址。接收端分段读取，不分配超界声明长度。JSON 消息采用原 canonical 编码及原单文档上限；每帧最多原 1 MiB，不提供新的容量。header 为固定 4-byte unsigned big-endian 长度。完整帧和编码处理同时计入 M、metadata/raw 及全部适用账；不得靠多帧分片绕过原对象上限。
+
+闭集消息字段如下；每个消息含 `kind`，其余字段不得省略或增加。账的值只投影原现存 counter 类别、实际错误和 UNKNOWN，不接收命令或路径。
+
+| 消息 | 方向和字段 |
+| --- | --- |
+| START | caller→child：`version=1, window_sha256, ordinal, predecessor_sha256, mode, seed_sha256s, result_sha256s, case_ids, root_identity, before, tail_reservation`。mode 仅 run/dashboard；结果 SHA 数组 run 为空、dashboard 恰两项。root_identity 为原 held root 的初次身份值，不可由磁盘任命。 |
+| READY | child→caller：`version=1, ordinal, start_sha256, input_sha256s, observed_predecessor_sha256, acquisition_delta, leaf_pid, leaf_ppid`。child 已核原输入、完整根身份和前驱；尚未创建 I 或执行 replay。 |
+| GO | caller→child：`version=1, ordinal, start_sha256, ready_sha256, caller_delta, tail_reservation`。仅仍持有同一内存权威头的 caller 可发；该 caller 核 READY 后核余额，按实际已发生费用更新后发。 |
+| END | child→caller：`version=1, ordinal, start_sha256, receipt_sha256, result_sha256, outcome, child_delta, retained, errors, unknown`。只报告至 END 编码前已经实际发生的事实；不含未来的 complete=true。outcome 仅 completed/refused；失败时 result_sha256 为 null，禁止误作正常结果。 |
+| DONE | child→caller：固定二进制终段，见下节。不是 JSON 的另一个 complete 字段。 |
+
+`before/caller_delta/acquisition_delta/child_delta` 的数字域仅为原 `_capture_transfer_work` 的 11 个标量、原 `_RUNTIME_FIELDS` 九个字段、原 `_capture_account` 的五类×六字段及已接受 raw/export/source/preparation/seed-processing/Q 账；不允许用一个总数吞掉重叠项。缺少某已发生类别必须 UNKNOWN，不以省略或 0 代表。此边不增加或改变原 counter 的意义。错误保留原 site/category/errno 与先后顺序；不用 Python object id 或 exception 对象充当 wire 身份。真实 transfer 的每项只交接一次。
+
+START/GO 必须来自这个 child 实际持有的连接。child 从磁盘读取的前驱必须与 START 的内存来源一致；caller 在 READY 后再次确认自己尚未推进。GO 绑定 START 和 READY 的确切内容，且只使用一次。此前任何新分支、未结束槽、余额未知或身份变化都拒绝。磁盘全包回滚不能改变这条活连接上传来的预期头；若实际链缺该头则拒绝。
+
+预检查不能等待 GO 才计费。caller 在启动前为有限 bootstrap/准入/尾段保留原额度；READY 报实际 acquisition 增量。GO 前没有 I 写入，只有已预留且实际计费的输入/身份检查。caller 在 GO 中交回自己已发生的准入费用。GO 和后续双方尾段的尚未发生部分仍作为 reservation 占住余额，不能把预留冒充实际值，也不能给 replay 使用。每步真正发生后记实际值；不足、未知或超预留立即失败并保留账。释放未发生的预留不退款任何已发生工作。
+
+GO 后 child 才独占创建本次操作槽和 I，运行原固定 driver 与全部原独立复核。原 input pins、D、S/I initial/final hashes、full-byte equality、parent/name/ACL、两个 dashboard pairs 与原结果 canonical comparison 全部保留。原 result/trace.cost absent 不变。缺失整体资格的普通机制不能获得 seed qualification。
+
+**有限收尾与真正的最后 owner**
+
+磁盘 `receipt.json` 记录一个明确截点，绝不声称包含其自身未来写入或关闭。child 写完、fsync、完整 readback/hash 后关闭该 receipt，保留所有实际费用和错误。随后完成原 driver、原输出复核、全部 S/I/root 子持有的 final checks/close、以及本次原 cleanup 的实际结果。任何 close 或次错都保留，不以原吞错 cleanup 视作成功。
+
+成功路径按下列有限顺序执行。磁盘 receipt 可以较早截断；它不能代替后面的实际交回。
+
+1. child 按原字节输出正常 result，核实际 write 返回，完成它全部文件/held root 操作并关闭 FD 10。正常结果先由 caller 捕获；caller 不在子进程终态前发布成功。失败仍用原错误通道，保留第一错与后续错。
+2. child 编码并发送 END，收集 END 编码/发送的实际费用。END 只能覆盖编码前截点。caller 流式接收原 stdout/stderr 和控制帧，避免 pipe 缓冲互等；不能靠无限缓冲或新超时绕过原限额。
+3. child 用一次固定 `struct.pack` 构造 512-byte DONE；不切片、不复制成第二个 bytes、不做 hash 或 equality。其原 M logical_bytes 增加 512，M occurrences 增加 1；这是一个新增编码表示，不是 `_capture_observe` 调用。它没有读取原文件、runtime slot 或 raw observation，所以不虚构 R/H/E；不为单纯分配内存增加 retained physical file。原 source/interpreter 内部执行不是新的 native Q 观测。若实际实现为了构造/检查这个 buffer 增加一次 byte 遍历或副本，必须实际计费并改变下面固定表后再审，不能隐藏在 struct.pack 名字里。
+4. DONE 只调用一次原 `os.write(9, done)`，参数恰为这一份 512-byte buffer。仅返回 512 可继续。正短写、0、异常均拒绝，**不补写、不补发第二条消息**。成功的 W=512、C=512，进入原 seed_processing W/C、原 non-export/raw 累计 W 及 M write_bytes；FD 通道不产生 retained file，physical_bytes/files 不增加。发送本身不调用 `_capture_observe`，故 observation_calls 不增加，不能因为 os.write 就硬添 observation。然后依次调用原 `_close_capture_copy(fd, work, work, site, None)` 关闭 fd 1、2、9；这个固定 child work 用原 `_capture_work_values` 初始化 read/export/calls 等字段，独立从零开始；不得用缺 read_bytes 的空字典跳过原 observation，也不得在 DONE 前重置累计值。case/window 额度已在 GO 前为全部尾段保留，收齐后只转移一次；每次成功 close_calls 增加 1，并完整执行一次原 M close observation 的 canonical 编码与记录。三次 observation 都完成后才允许 `_exit(0)`；不存在 DONE 后重新编码 END、写文件、hash、callback、默认 Python atexit 或额外 subprocess。
+
+   一次计费调用边界是一次 Python os.write API 调用及其返回，不是宣称恰一个内核调度/系统调用尝试。保留现有 CPython 的 EINTR 语义；不引入 libc loader、native adapter 或 C helper。CPython 若在未传输 byte 的 EINTR 上内部重试，且没有运行返回正常的 Python signal handler、buffer 复制、观察/记录或其它应计 byte 工作，只有零 byte 的重试，不产生第二个原 `_capture_observe` 或额外 W/C。该等价性来自这条明确的零 byte 边界，不从最终长度猜测。返回正短写即有实际 byte，直接拒绝；不会进入同等性假设。成功路径只使用原 os.write，不安装发送 shim 或返回正常的 Python signal callback。该固定 Python 边界只保留原取消语义：取消 handler 必须抛出并使操作失败，不能吞掉取消后悄悄继续。其它信号保持原默认终止/忽略行为；默认忽略不产生一个 Python 观察行。实际安装其它 callback 或运行它的分支不属于这个固定成功尾段。任何支持 runtime 若不能证明其隐式 retry 满足上述零 byte/无额外用户工作条件，该尾段费用为 UNKNOWN；不能凭一个 Python 调用记录伪造底层次数，也不新增一个应计系统调用次数模型。
+
+5. caller 同时要求 END/DONE 完整且闭合、原结果 bytes/SHA/错误关系正确、控制通道 EOF、精确已启动 child 的 wait 结果为正常 0；不能把 EOF、DONE 或 result 任一单项当作关闭成功。最后关闭自己的通道/结果读端与本次复制 holds，按真实返回记录费用和次错，结算 reservation。双方最后消息的实际 R/W、编码字节和 caller 解析/hash/比较逐项照计；并非免费 control-plane。
+6. caller 将 receipt 前缀、实际 child 增量、可从完整终段与受控退出核实的固定尾操作、自己真实接收/验证/close 费用合入同一活账。没有 UNKNOWN 且所有原 cap 满足，才推进内存权威头和相应步骤状态。caller 最后根 holder 的 recheck/close 若属于窗口结束，也须先真实完成并入账，再返回最终活账；返回后的已关闭 root 不会作为下一操作的权限来源。
+
+DONE 恰 512 bytes：前 8 bytes 为 ASCII `YC2DONE1`；随后 ordinal、END JSON 字节数、END 帧实际成功写出总字节数各为 unsigned big-endian u64；随后 50 个 u64 为下述固定向量；最后 80 bytes 必须全零。向量顺序为 `_capture_transfer_work` 原 11 个标量的源码次序、`_RUNTIME_FIELDS` 原九个字段的源码次序、类别 L/W/M/raw/unresolved 依次各含 logical_bytes/read_bytes/write_bytes/physical_bytes/files/occurrences。向量只含 END 编码与发送前后尚未交出的实际差量，不含 DONE 自身或未来关闭。该尾段没有 runtime slot、export、source、Q 或实体创建；相关项必须为零，unresolved 非零拒绝。数字溢出拒绝。没有可变字典或补发列表。控制消息实际字节的 read/write 计数可由接收长度与成功 child 终态核实；普通文件或 native 操作不能使用这个推导。DONE 自身的完整成功尾账固定如下。本次 child 的独立 work 从零开始，accounting_owner 固定为 `C2-terminal`；不借用 native owner 身份。END 中 child_delta 的 observation_calls 加 DONE 中该计数的真实差量，给出三条 close observation 之前的 ordinal；固定 site 依次为 `C2.stdout`、`C2.stderr`、`C2.control`。每条 row 仍是原 `_capture_observe` 的 owner/ordinal/kind/site/value 形状，kind=M、site=close、value={site:对应固定 site, return:0, errno:null}。不能把这些实际 rows 删掉。
+
+| 成功尾动作 | 真实工作与原账 |
+| --- | --- |
+| 一次 DONE 编码 | 512-byte 新表示；M logical_bytes +512、occurrences +1。一次固定打包，不另有原 raw 文件读取、hash、比较或 retained file。 |
+| 一次 os.write 返回512 | seed_processing W/C 各+512；scalar write_bytes、M write_bytes 各+512；原所有适用 non-export/raw 写入额度同时检查。不新增 observation_calls。 |
+| 三次显式 close及原 observation | close_calls +3、observation_calls +3、M occurrences +3、calls.consumer-json-buffer +3。设第 i 条真实 canonical row（含换行）长为 n_i，则原 `_private_capture_observations` 对该 row 的实际 read_bytes 为 3n_i−2；scalar/M read_bytes 加其和，M logical_bytes 加 Σn_i。原 accounting_rows 按顺序保留三条。不是零-cost close。 |
+| 退出前 | 仅检查原 close/observation 均已成功并调用 `_exit(0)`。没有最后 JSON、文件或消息。任一 observation 编码/配额/MemoryError、首错/次错或 close 失败均禁止0；未交回部分 UNKNOWN。 |
+
+`3n_i−2` 直接来自原编码步骤：UTF-8 pieces 合计 n_i−1，bytearray→bytes 处理 n_i−1，再加换行处理 n_i。不为没调用的函数收费；已调用的三次编码也不能因不再发消息而丢掉。receiver 可以从原 counter、固定 site、三次成功返回条件及 exact wait 重建三条实际 row 的唯一 bytes和上述费用；它的重建、核验、保存与自身关闭仍另外计自己的实际账，不与发送方费用合并。
+
+全部原件共同保留：原 END/DONE bytes、原 result/error bytes、caller 对实际 spawn/PID/wait/EOF 的原记录、双方前缀 receipts、counter/rows 截点和源 pins，以及 caller 实际尾账与重建的三条 row。重建项明确标为基于固定成功日程的重建，不能冒称现场传回的 raw；源码/精确 wait/原协议 bytes 是其可独审依据。caller 在完整复原并保存可交接证据前不退出或丢掉活账。导出证据的实际新增工作继续计入它的活账；prefix 与后续增量共同证明全账。只有 self-reported PASS 或单份磁盘 prefix 不构成完成证据。
+
+真正完整的本窗口资源 receipt 是此时仍存活 caller 的原内存账和实际终态证据，不是磁盘上那份 prefix receipt。此为明确合同定义，不能用两个含糊的 complete 字段混同。若 caller 还要编码、保存或发送这一活账，它必须继续存活、先预留并记录那些实际费用；保存出的文件仍只证明其写入前截点。下一次 START 的 before 带入这些已发生费用。不得重写 prefix 形成无限“给账单记账”的文件循环。
+
+caller 崩溃、丢失活头、控制连接丢失、子进程非零/信号、末次 close 失败，均使该槽未接受且费用 UNKNOWN。所有文件及已知费用保留，不自动恢复旧头、不从零重开、不仅凭磁盘 receipt 宣告完成。普通正向路径在 caller 持续存活、费用可知且限额满足时可以完成；这里没有把所有输入恒拒绝当机制。
+
 **RAW16 resource contract.**
 
 Every configured dyld member must fit the closed inventory. Native configuration
@@ -1167,7 +1284,7 @@ authorization; ordinary offline proof grants no native qualification.
 
 The high-risk plan must pin the exact old and new owner boundaries, all 84 final
 source hashes, unchanged wrapper/core exports except the specified public fd3
-v3 wire/limit, and the complete unmerged #439 diff. It must include both real callers
+v3 wire/limit and C2 bootstrap exec, and the complete unmerged #439 diff. It must include both real callers
 of each extracted function, not just unit
 imports. Keep the old live acquisition behavior and closed rejection tests.
 
@@ -1225,11 +1342,14 @@ replace implementation.
 | 全资源边界 | 每case 4GiB/64、六层24GiB/384；窗口16GiB/256、96GiB/1,536；两级全部新增累计cap及旧适用caps分别边界/多一；carry-in/失败共账，阶段/pair不重置；shared总数仍256；有界模拟大计数，不制造4GiB真实fixture |
 | 失败和重跑 | 两次小partial后完整成功仍共用总账；已满容量的后来操作拒绝且保留原文件；未知write结果或第二close/ledger故障记UNKNOWN，无成功seal；不删除以换容量 |
 | stage C | run和两disjoint dashboard pairs完成四case各一次，独立I和final checks；额外case/重复trial按原M4/manifest拒绝；C缺任一owner不能发完成结果 |
+| C2 会话/留存 | 原普通 caller 经过真实 run-evals CLI 的完整 bounded 正例；同一四-case账贯穿run及两个dashboard pairs。旧磁盘头/新START、READY后活头改变、无GO/重复GO、单FD/无FD malicious旁路、错误root/parent/name/ACL、I/partial/旧O导致超限均拒绝。正常non-malicious路线及原参数/env/result/error/取消语义保留；不清理retained区来fit |
+| C2 尾账/进程 | 一次DONE write=512及三次原close observation完整计费；正短写/0/EINTR条件不成立、END完整但DONE缺失、DONE完整但非零/signal、child正常但caller close失败、reservation不足均保留已知前缀和UNKNOWN。核实际spawn PID/PPID、DUP2/CLOSE清单、辅助child无9/10继承、精确wait、原rows与固定重建费用。删除任一准入/关闭/尾账检查的配对mutation必须失败；此wait不证明native终态 |
 | Case raw multiplicity | Two independently bound launches with different setup/PID/REST/clock values and four prepare/inspect occurrences round-trip through their original owners. Swap each role/request/attempt/operation, concatenate or renumber streams, omit/duplicate/reorder an entry, change only a non-export observation, or claim coverage absence on the reached branch: each refuses. Test the actual no-coverage branch separately. Rebuild all original envelopes and C outputs; deleting either assembly or replay projection must fail its paired assertion. All old per-owner tests and full-case limits remain. |
 | scope/权限 | 全部repo inactive；slot never executes；stdout零；native attempt两成员不变；source captures不能夹export；无新helper/network/credential/install/activation/target |
 
 G2 and the separate high-risk plan permit only inactive mechanisms within the
-40 edit / 9 adoption-only / 84 source boundary. C source work may precede B
+original 40 edit paths plus the sole C2 bootstrap edit in R9.3, with 9
+adoption-only paths and 84 source members unchanged. C source work may precede B
 acceptance only through frozen, precisely mapped real B interfaces. Before C
 code, independently accept and land a separate high-risk plan amendment, merge
 that accepted main normally into the same source carrier, and obtain fresh
@@ -1501,7 +1621,11 @@ to evade the source cap. Executable and policy files always belong to the closur
    `scripts/test/candidate-content-preparation.test.sh`,
    `scripts/test/candidate-content-preparation-fixtures.py`,
    `scripts/test/file-digest-verifier.test.sh`, `ci/required-files.txt`.
-   The latter adds only new restore-critical R4A paths. No workflow, installed
+   The latter adds only new restore-critical R4A paths. For the fixed C2 session,
+   PR 1b additionally permits `evals/v1/run-evals.sh` only to add `exec ` before
+   its final `/usr/bin/env -i ...` command. All other bytes of that file remain
+   unchanged. This is the original 40 edit paths plus this one exact path;
+   nine adoption-only paths and SOURCE 84 remain unchanged. No workflow, installed
    configuration, profile or runtime selection changes. Existing immutable pins
    outside these paths that would need change stop implementation for a bounded
    artifact correction; they may not be silently bypassed.
@@ -1534,11 +1658,14 @@ to evade the source cap. Executable and policy files always belong to the closur
    - **PR 3.** (a) The catalog digest at the same three literals. (b) Then the driver
      digest at `evals-launcher.sh:150`.
    Not moved, so not allowed: the `framework.jq` pin at `run.sh:54` (unchanged file),
-   seed-set digests (computed at run time, never pinned), the launcher's own digest
-   and `run-evals.sh` (pinned nowhere), and the tool digest pins in
+   seed-set digests (computed at run time, never pinned), the launcher's own digest,
+   and the tool digest pins in
    `evals-framework.test.sh:190`, `:225`, `:294` (`scripts/core-contract.sh`,
-   unchanged). No other test pins any of these digests. A digest literal found
-   anywhere else that a PR's change moves stops that PR and returns to the plan.
+   unchanged). The C2 bootstrap exec changes `run-evals.sh` only as allowed in
+   R9.3. Its existing runtime snapshot/SHA and evaluator.bootstrap content binding
+   must use the exact changed bytes; it remains outside SOURCE 84 and gains no
+   new closure member. No other test pins any of these digests. A digest literal
+   found anywhere else that a PR's change moves stops that PR and returns to the plan.
 5. **Proof.** All tests run offline with no model, credential, provider or target.
    `scripts/test/run-all.sh` finds new tests by name (`:66-69`), so each PR records a
    green dispatched `ci` on its exact head. In the existing tests of R9.2, only the
