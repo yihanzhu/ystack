@@ -197,15 +197,27 @@ unaccepted. This plan does not accept that source or release its pause. Rebind i
 clean state and complete artifact tuple before resume; do not infer them from an
 older checkpoint. B remains unaccepted and complete C remains required.
 
-Before dependent C2 code, close C1-ORDINARY-CHAIN-UNEXPLAINED-FAIL through fresh
-independent source review, or record an explicit applicable-authority disposition.
-The 018 reader-failure chain stopped with E_STALE before the intended close fault.
-Its held-component cause is UNKNOWN. Preserve that raw failure and the 019 traced
-pass; neither a later untraced pass nor four limited SOURCE_CLOSED code findings
-supplies its missing cause. Identify the actual component/change and prove the
-normal refusal or repair with the original guard intact. This plan grants no
-observer execution, source acceptance or C2 implementation GO. Keep older failed,
-UNKNOWN and NOTRUN evidence and all native/B/host/parent/M/Q/full-C/G3 gates.
+C1-ORDINARY-CHAIN-UNEXPLAINED-FAIL remains REVISE/UNKNOWN. The 018 reader-failure
+chain stopped with E_STALE before the intended close fault; its held-component
+cause remains unknown. It blocks the related C1/C acceptance, seeding, G3 and
+implementation merge. Preserve that raw failure and the 019 traced pass; neither
+a later untraced pass nor four limited SOURCE_CLOSED findings supplies its cause.
+Close it through evidence for the actual component/change and normal refusal or
+repair, with the original guard intact.
+
+Inactive C2 mechanisms may use precisely mapped real interfaces of the bound,
+unaccepted f2abe2b source without consuming that unknown fact. First accept and
+land this separate high-risk plan, normally merge its main into the same carrier,
+and obtain fresh independent real-interface preflight, the original exact claim
+and the manager's explicit resume GO. Unknown fields, missing owners, uncertain
+holder/lifecycle semantics or actual code defects still block their affected
+segment; fixtures, providers and constants cannot fill those gaps. This plan
+accepts no source and grants no observer execution or current C2 implementation GO.
+
+Keep every older failed, UNKNOWN and NOTRUN record and all native/B/host/parent/
+M/Q/full-C/G3 gates. No due test, runnable milestone or full-CI checkpoint is
+waived or deferred. Preserve red results and require the new code's ordinary
+positive, negative and mutation controls; do not weaken guards or hide failures.
 
 Preserve historical `cd5c4e8f92ac766f60ca2df8b8fb839ac6d863d9`, parent
 `10be18bddd73ffbc02ac8e52dc5ffd40059c4b73`, the earlier 64dda8e/f55240e
