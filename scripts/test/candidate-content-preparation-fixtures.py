@@ -7535,3 +7535,105 @@ def raw16_C3_payload_result_body(root: Path) -> list[dict]:
         'source_reproduction_function_sha256': owner.sha(ast.get_source_segment(replay_source, reproduction).encode()),
         'full_reproduction_input_chain': 'NOTRUN', 'native': 'NOTRUN'}, sort_keys=True))
     return results
+
+
+def raw16_C3_write_builder_values(root: Path) -> dict:
+    import importlib.util
+    import sys
+    spec = importlib.util.spec_from_file_location('C3_write_builder_owner', root / 'shadow/v1/write-shadow.py')
+    owner = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = owner
+    spec.loader.exec_module(owner)
+    canonical, parse, sha = owner.canonical, owner.parse, owner.sha
+    claim_raw = canonical({'id': 'environment.builder'})
+    request = {'id': 'write.builder'}
+    events = []
+    def observed_sha(raw):
+        events.append(('sha', raw))
+        return sha(raw)
+    def observed_parse(raw, *args):
+        events.append(('parse', raw))
+        return parse(raw, *args)
+    owner.sha, owner.parse = observed_sha, observed_parse
+    try:
+        metadata = owner._write_builder_metadata_values(b'contract', b'patch', ['evidence/a'],
+            request, claim_raw, 'withheld-write.v1')
+        assert events == [('sha', b'contract'), ('sha', b'patch'), ('sha', b'write.builder'),
+            ('parse', claim_raw), ('sha', claim_raw)]
+        assert metadata == {'contract': sha(b'contract'), 'patch': sha(b'patch'),
+            'allowed_paths': ['evidence/a'], 'attempt_id': request['id'],
+            'suffix': sha(request['id'].encode())[:32], 'environment_id': 'environment.builder',
+            'claim_sha256': sha(claim_raw), 'record_form': 'withheld-write.v1'}
+    finally:
+        owner.sha, owner.parse = sha, parse
+    original = {'profile': {'id': 'p'}, 'resolved_profile': {'id': 'r'}, 'manifests': []}
+    original_raw = canonical(original)
+    first = {'original': original, 'stage_request': {'id': 'stage.builder'}}
+    assert owner._write_builder_first_values(canonical(first), original_raw) == first
+    stage_raw = canonical(first['stage_request'])
+    final = dict(original, stage_request={'content': first['stage_request'], 'sha256': sha(stage_raw)})
+    assert owner._write_builder_final_values(canonical(final), first, stage_raw, original_raw) == final
+    rejected = []
+    for label in ('original', 'stage-digest', 'profile', 'resolved_profile', 'manifests'):
+        changed = json.loads(canonical(final))
+        try:
+            if label == 'original':
+                owner._write_builder_first_values(canonical(first), original_raw + b' ')
+            else:
+                if label == 'stage-digest':changed['stage_request']['sha256'] = '0' * 64
+                else:changed[label] = {'changed': True}
+                owner._write_builder_final_values(canonical(changed), first, stage_raw, original_raw)
+        except owner.e.Refusal as error:
+            assert error.code == 'E_RELATION'
+            rejected.append(label)
+        else:raise AssertionError('write builder relationship accepted: ' + label)
+    return {'normal': True, 'metadata_operation_order': True, 'rejected': rejected,
+        'jq_builder_execution': 'NOTRUN', 'qualification': 'NOTACCEPTED'}
+
+
+def raw16_C3_cleanup_decoder(root: Path) -> dict:
+    import copy
+    import tempfile
+    import sys
+    import importlib.util
+    host_spec = importlib.util.spec_from_file_location('C3_cleanup_recording_host', root / 'sandbox/v1/host-supervisor.py')
+    host = importlib.util.module_from_spec(host_spec);host_spec.loader.exec_module(host)
+    replay_spec = importlib.util.spec_from_file_location('C3_cleanup_replay', root / 'evals/v1/replay-malicious.py')
+    replay = importlib.util.module_from_spec(replay_spec);sys.modules[replay_spec.name] = replay
+    replay_spec.loader.exec_module(replay)
+    workspace = Path(tempfile.mkdtemp(prefix='ystack-c3-cleanup-'))
+    results = []
+    for label in ('empty', 'candidate-survivor', 'attempt-missing'):
+        work = workspace / label;work.mkdir(mode=0o700)
+        if label != 'attempt-missing':
+            attempt = work / 'attempt.cleanup';attempt.mkdir(mode=0o700)
+            frozen = attempt / 'frozen';frozen.mkdir(mode=0o700)
+            candidate = frozen / 'candidate';candidate.mkdir(mode=0o700)
+            for name in host.LAUNCH_FIXED_NAMES:(attempt / name).write_bytes(b'launch')
+            for name in host.FROZEN_FIXED_NAMES:(frozen / name).write_bytes(b'frozen')
+            (candidate / '00000').write_bytes(b'candidate')
+            if label == 'candidate-survivor':
+                survivor = b'unknown-\xff' if sys.platform.startswith('linux') else 'unknown-é'.encode()
+                fd = os.open(os.fsencode(candidate) + b'/' + survivor, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o400)
+                os.close(fd)
+        capture = {'rows': [], 'ordinals': {}, 'bytes': 0, 'complete': True}
+        host._capture_process = capture
+        try:native = host.remove_frozen(str(work), 'attempt.cleanup', ['00000'])
+        finally:host._capture_process = None
+        assert capture['complete']
+        calculated = replay._host_cleanup_values(root, capture['rows'], ['00000'])
+        assert calculated is native and native is (label != 'candidate-survivor')
+        rejected = []
+        mutations = ('missing', 'extra', 'ordinal', 'wrong-site', 'wrong-type')
+        for mutation in mutations:
+            rows = copy.deepcopy(capture['rows'])
+            if mutation == 'missing':rows.pop()
+            elif mutation == 'extra':rows.append(copy.deepcopy(rows[-1]))
+            elif mutation == 'ordinal':rows[0]['ordinal'] += 1
+            elif mutation == 'wrong-site':rows[0]['site'] = 'remove_frozen.foreign.open'
+            else:rows[0]['return'] = True
+            try:replay._host_cleanup_values(root, rows, ['00000'])
+            except (ValueError, replay._CalculationRefused):rejected.append(mutation)
+            else:raise AssertionError('cleanup mutation accepted: ' + mutation)
+        results.append({'label': label, 'native_result': native, 'rows': capture['rows'], 'rejected': rejected})
+    return {'cases': results, 'retained_fixture_root': str(workspace), 'native_qualification': 'NOTRUN'}

@@ -4135,3 +4135,21 @@ spec=importlib.util.spec_from_file_location('C3_payload_fixtures',root/'scripts/
 f=importlib.util.module_from_spec(spec);sys.modules[spec.name]=f;spec.loader.exec_module(f)
 print(json.dumps({'C3_payload_result_body':f.raw16_C3_payload_result_body(root)},sort_keys=True))
 PY_C3_PAYLOAD_RESULT
+
+/usr/bin/python3 -I -S -B - "$root" <<'PY_C3_WRITE_BUILDER'
+import importlib.util,json,sys
+from pathlib import Path
+root=Path(sys.argv[1])
+spec=importlib.util.spec_from_file_location('C3_builder_fixtures',root/'scripts/test/candidate-content-preparation-fixtures.py')
+f=importlib.util.module_from_spec(spec);sys.modules[spec.name]=f;spec.loader.exec_module(f)
+print(json.dumps({'C3_write_builder_values':f.raw16_C3_write_builder_values(root)},sort_keys=True))
+PY_C3_WRITE_BUILDER
+
+/usr/bin/python3 -I -S -B - "$root" <<'PY_C3_CLEANUP_DECODER'
+import importlib.util,json,sys
+from pathlib import Path
+root=Path(sys.argv[1])
+spec=importlib.util.spec_from_file_location('C3_cleanup_fixtures',root/'scripts/test/candidate-content-preparation-fixtures.py')
+f=importlib.util.module_from_spec(spec);sys.modules[spec.name]=f;spec.loader.exec_module(f)
+print(json.dumps({'C3_cleanup_decoder':f.raw16_C3_cleanup_decoder(root)},sort_keys=True))
+PY_C3_CLEANUP_DECODER

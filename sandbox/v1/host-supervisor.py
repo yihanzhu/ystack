@@ -1827,17 +1827,126 @@ def freeze_by_copy(config, attempt_id, uid, gid, package, created):
     return candidate_names
 
 
-def remove_only(dir_fd, created_names):
+def _cleanup_names_values(name_hex):
+    require(type(name_hex) is list, "E_RELATION")
+    seen = set()
+    for value in name_hex:
+        require(type(value) is str and len(value) % 2 == 0 and bool(value)
+                and all(char in "0123456789abcdef" for char in value), "E_RELATION")
+        raw = bytes.fromhex(value)
+        require(raw not in (b".", b"..") and b"/" not in raw and b"\0" not in raw
+                and raw not in seen, "E_RELATION")
+        seen.add(raw)
+    return not name_hex
+
+
+def _cleanup_record(site, result=None, error=None):
+    try:
+        _record_process(site, result=result, error=error)
+    except Exception:
+        if _capture_process is not None:
+            _capture_process["complete"] = False
+
+
+def _cleanup_stat_values(result):
+    return result is None
+
+
+def _cleanup_error_values(error_number):
+    require(error_number is None or is_int(error_number), "E_RELATION")
+    return "missing" if error_number == errno.ENOENT else "error"
+
+
+def _cleanup_record_error(site, error):
+    try:
+        category = _cleanup_error_values(error.errno)
+        if isinstance(error, FileNotFoundError) != (category == "missing"):
+            if _capture_process is not None:
+                _capture_process["complete"] = False
+    except Exception:
+        if _capture_process is not None:
+            _capture_process["complete"] = False
+    _cleanup_record(site, error=error.errno)
+
+
+def _cleanup_open(name, flags, site, dir_fd=None):
+    try:
+        if dir_fd is None:
+            result = os.open(name, flags)
+        else:
+            result = os.open(name, flags, dir_fd=dir_fd)
+    except OSError as error:
+        _cleanup_record_error(site, error)
+        raise
+    _cleanup_record(site, result=result)
+    return result
+
+
+def _cleanup_close(fd, site):
+    try:
+        os.close(fd)
+    except OSError as error:
+        _cleanup_record_error(site, error)
+        raise
+    _cleanup_record(site, result=0)
+
+
+def _cleanup_unlink(name, dir_fd, site):
+    try:
+        os.unlink(name, dir_fd=dir_fd)
+    except OSError as error:
+        _cleanup_record_error(site, error)
+        raise
+    _cleanup_record(site, result=0)
+
+
+def _cleanup_rmdir(name, dir_fd, site):
+    try:
+        os.rmdir(name, dir_fd=dir_fd)
+    except OSError as error:
+        _cleanup_record_error(site, error)
+        raise
+    _cleanup_record(site, result=0)
+
+
+def _cleanup_stat(name, dir_fd, site):
+    try:
+        result = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+    except OSError as error:
+        _cleanup_record_error(site, error)
+        raise
+    _cleanup_record(site, result=0)
+    return result
+
+
+def _cleanup_listdir(dir_fd, site):
+    try:
+        names = os.listdir(dir_fd)
+    except OSError as error:
+        _cleanup_record_error(site, error)
+        raise
+    empty = not names
+    try:
+        name_hex = [os.fsencode(name).hex() for name in names]
+        empty = _cleanup_names_values(name_hex)
+        _record_process(site, result=name_hex)
+    except Exception:
+        if _capture_process is not None:
+            _capture_process["complete"] = False
+    return empty
+
+
+def remove_only(dir_fd, created_names, _capture_site="remove_only.attempt.listdir"):
     """Unlinks exactly the names this attempt is known to have created,
     never anything a directory listing happens to find (R9.3's security
     boundary): an unexpected survivor is left in place, reported by the
     caller re-checking the directory."""
     for name in created_names:
         try:
-            os.unlink(name, dir_fd=dir_fd)
+            _cleanup_unlink(name, dir_fd, _capture_site.removesuffix("listdir") + "unlink")
         except FileNotFoundError:
             pass
-    return not os.listdir(dir_fd)
+    return _cleanup_listdir(dir_fd, _capture_site)
 
 
 def remove_frozen(work_root, attempt_id, candidate_names):
@@ -1853,52 +1962,55 @@ def remove_frozen(work_root, attempt_id, candidate_names):
     # entirely is skipped, never a listing of arbitrary contents.
     work_fd = None
     try:
-        work_fd = os.open(work_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        work_fd = _cleanup_open(work_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                "remove_frozen.work.open")
         try:
-            attempt_fd = os.open(attempt_id, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=work_fd)
+            attempt_fd = _cleanup_open(attempt_id, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                       "remove_frozen.attempt.open", dir_fd=work_fd)
         except FileNotFoundError:
             return True
         try:
             try:
-                frozen_fd = os.open("frozen", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=attempt_fd)
+                frozen_fd = _cleanup_open("frozen", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                          "remove_frozen.frozen.open", dir_fd=attempt_fd)
             except FileNotFoundError:
                 frozen_fd = None
             if frozen_fd is not None:
                 try:
                     try:
-                        candidate_fd = os.open("candidate", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                                                dir_fd=frozen_fd)
+                        candidate_fd = _cleanup_open("candidate", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                                     "remove_frozen.candidate.open", dir_fd=frozen_fd)
                     except FileNotFoundError:
                         candidate_fd = None
                     if candidate_fd is not None:
                         try:
-                            if not remove_only(candidate_fd, candidate_names):
+                            if not remove_only(candidate_fd, candidate_names, "remove_only.candidate.listdir"):
                                 return False
                         finally:
-                            os.close(candidate_fd)
-                        os.rmdir("candidate", dir_fd=frozen_fd)
-                    if not remove_only(frozen_fd, FROZEN_FIXED_NAMES):
+                            _cleanup_close(candidate_fd, "remove_frozen.candidate.close")
+                        _cleanup_rmdir("candidate", frozen_fd, "remove_frozen.candidate.rmdir")
+                    if not remove_only(frozen_fd, FROZEN_FIXED_NAMES, "remove_only.frozen.listdir"):
                         return False
                 finally:
-                    os.close(frozen_fd)
-                os.rmdir("frozen", dir_fd=attempt_fd)
-            if not remove_only(attempt_fd, LAUNCH_FIXED_NAMES):
+                    _cleanup_close(frozen_fd, "remove_frozen.frozen.close")
+                _cleanup_rmdir("frozen", attempt_fd, "remove_frozen.frozen.rmdir")
+            if not remove_only(attempt_fd, LAUNCH_FIXED_NAMES, "remove_only.attempt.listdir"):
                 return False
-            if os.listdir(attempt_fd):
+            if not _cleanup_listdir(attempt_fd, "remove_frozen.attempt.listdir"):
                 return False
         finally:
-            os.close(attempt_fd)
-        os.rmdir(attempt_id, dir_fd=work_fd)
+            _cleanup_close(attempt_fd, "remove_frozen.attempt.close")
+        _cleanup_rmdir(attempt_id, work_fd, "remove_frozen.attempt.rmdir")
         try:
-            os.stat(attempt_id, dir_fd=work_fd, follow_symlinks=False)
+            _cleanup_stat(attempt_id, work_fd, "remove_frozen.attempt.stat")
         except OSError:
-            return True
-        return False
+            return _cleanup_stat_values(None)
+        return _cleanup_stat_values(0)
     except OSError:
         return False
     finally:
         if work_fd is not None:
-            os.close(work_fd)
+            _cleanup_close(work_fd, "remove_frozen.work.close")
 
 
 # --- R10.2 store writer: O_CREAT|O_EXCL relative to a directory fd, fsync,

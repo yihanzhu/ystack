@@ -4436,4 +4436,206 @@ pass 'accepted_check and measure close every descriptor they open, on success an
 
 unset YSTACK_FAKE_SCENARIO
 
+"$python" - "$supervisor_src" <<'PY_CLEANUP_NAMES'
+import ast
+import errno
+import json
+import os
+import sys
+import types
+from pathlib import Path
+
+
+def load(path):
+    tree = ast.parse(Path(path).read_bytes())
+    names = {'remove_only', 'remove_frozen', '_cleanup_names_values', '_cleanup_listdir',
+             '_record_process', '_cleanup_record', '_cleanup_stat_values', '_cleanup_open',
+             '_cleanup_close', '_cleanup_unlink', '_cleanup_rmdir', '_cleanup_stat',
+             '_cleanup_error_values', '_cleanup_record_error', 'is_int', 'canonical', 'require', 'refuse', 'Refusal'}
+    selected = [node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.ClassDef))
+                and node.name in names]
+    ns = {'os': os, 'json': json, 'errno': errno, '_capture_process': None,
+          'FROZEN_FIXED_NAMES': ('manifest.json',), 'LAUNCH_FIXED_NAMES': ('start.json',)}
+    exec(compile(ast.Module(body=selected, type_ignores=[]), str(path), 'exec'), ns)
+    return ns
+
+
+class Disk:
+    O_RDONLY, O_DIRECTORY, O_NOFOLLOW = 0, 0, 0
+    fsencode = staticmethod(os.fsencode)
+    def __init__(self, rows=None, fail=None):
+        self.environ = {}
+        self.trace, self.count = [], {}
+        self.rows = rows or {}
+        self.fail = fail
+    def call(self, key, result=None):
+        self.trace.append(key)
+        self.count[key] = self.count.get(key, 0) + 1
+        if type(self.fail) is dict and (key, self.count[key]) in self.fail:
+            raise self.fail[(key, self.count[key])]
+        if self.fail == (key, self.count[key]):
+            raise OSError(errno.EIO, 'marked')
+        return result
+    def open(self, name, flags, dir_fd=None):
+        return self.call(('open', dir_fd, name), {'work': 1, 'attempt': 2, 'frozen': 3, 'candidate': 4}[name])
+    def close(self, fd):
+        return self.call(('close', fd))
+    def unlink(self, name, dir_fd):
+        return self.call(('unlink', dir_fd, name))
+    def rmdir(self, name, dir_fd):
+        return self.call(('rmdir', dir_fd, name))
+    def listdir(self, fd):
+        key = ('listdir', fd)
+        number = self.count.get(key, 0) + 1
+        level = {1: 'work', 2: 'attempt', 3: 'frozen', 4: 'candidate'}.get(fd, fd)
+        return self.call(key, list(self.rows.get((level, number), self.rows.get(level, []))))
+    def stat(self, name, dir_fd, follow_symlinks):
+        self.call(('stat', dir_fd, name))
+        raise OSError(errno.EACCES, 'original arbitrary OSError')
+
+
+def ledger():
+    return {'rows': [], 'bytes': 0, 'ordinals': {}, 'complete': True}
+
+
+def invoke(ns, disk, capture=True):
+    ns['os'] = disk
+    ns['_capture_process'] = ledger() if capture else None
+    try:
+        result = ('return', ns['remove_frozen']('work', 'attempt', ['00000']))
+    except OSError as error:
+        result = ('error', error.errno)
+    return result, disk.trace, ns['_capture_process']
+
+
+def run(after, before=None):
+    sites = ['remove_only.candidate.listdir', 'remove_only.frozen.listdir',
+             'remove_only.attempt.listdir', 'remove_frozen.attempt.listdir']
+    checks = 0
+    result, trace, capture = invoke(after, Disk())
+    assert result == ('return', True)
+    name_rows = [row for row in capture['rows'] if row['site'].endswith('.listdir')]
+    assert [row['site'] for row in name_rows] == sites
+    assert all(row == dict(site=site, ordinal=0, **{'return': [], 'errno': None,
+        'bytes': None, 'timeout': None}) for row, site in zip(name_rows, sites))
+    assert [row['site'] for row in capture['rows']] == [
+        'remove_frozen.work.open', 'remove_frozen.attempt.open', 'remove_frozen.frozen.open',
+        'remove_frozen.candidate.open', 'remove_only.candidate.unlink', sites[0],
+        'remove_frozen.candidate.close', 'remove_frozen.candidate.rmdir',
+        'remove_only.frozen.unlink', sites[1], 'remove_frozen.frozen.close',
+        'remove_frozen.frozen.rmdir', 'remove_only.attempt.unlink', sites[2], sites[3],
+        'remove_frozen.attempt.close', 'remove_frozen.attempt.rmdir',
+        'remove_frozen.attempt.stat', 'remove_frozen.work.close']
+    assert all(type(row['return']) is int for row in capture['rows']
+        if not row['site'].endswith('.listdir') and not row['site'].endswith('.stat'))
+    assert capture['rows'][-2]['return'] is None and capture['rows'][-2]['errno'] == errno.EACCES
+    checks += 1
+    original_trace = trace
+    occurrence_counts, failures = {}, [None]
+    for key in original_trace:
+        occurrence_counts[key] = occurrence_counts.get(key, 0) + 1
+        failures.append((key, occurrence_counts[key]))
+    for rows in ({'candidate': ['z', '\udcff', 'a']}, {'frozen': ['unknown']},
+                 {'attempt': ['survivor']}, {('attempt', 2): ['late']}, {}):
+        for failure in failures:
+            result, trace, capture = invoke(after, Disk(rows, failure))
+            if before is not None:
+                old_result, old_trace, _ = invoke(before, Disk(rows, failure), False)
+                assert (result, trace) == (old_result, old_trace), (rows, failure, result, old_result)
+            for row in capture['rows']:
+                assert row['bytes'] is None and row['timeout'] is None
+                if row['errno'] is not None:
+                    expected_errno = (errno.EACCES if row['site'] == 'remove_frozen.attempt.stat'
+                        and failure != (('stat', 1, 'attempt'), 1) else errno.EIO)
+                    assert row['return'] is None and row['errno'] == expected_errno, (rows, failure, row)
+            if rows == {'candidate': ['z', '\udcff', 'a']} and failure is None:
+                assert next(row for row in capture['rows'] if row['site'] == sites[0])['return'] == ['7a', 'ff', '61']
+                assert result == ('return', False)
+                assert ('unlink', 4, 'z') not in trace
+            checks += 1
+    for key in [('open', 1, 'attempt'), ('open', 2, 'frozen'), ('open', 3, 'candidate'),
+                ('unlink', 4, '00000'), ('unlink', 3, 'manifest.json'), ('unlink', 2, 'start.json')]:
+        faults = {(key, 1): FileNotFoundError(errno.ENOENT, 'missing')}
+        result, trace, capture = invoke(after, Disk(fail=faults))
+        if before is not None:
+            old_result, old_trace, _ = invoke(before, Disk(fail=faults), False)
+            assert (result, trace) == (old_result, old_trace)
+        assert capture['complete']
+        checks += 1
+    for faults in ({(('stat', 1, 'attempt'), 1): OSError(None, 'no errno')},
+                   {(('open', 1, 'attempt'), 1): FileNotFoundError(errno.EIO, 'class mismatch')},
+                   {(('listdir', 4), 1): OSError(errno.EIO, 'first'),
+                    (('close', 4), 1): OSError(errno.EBADF, 'close'),
+                    (('close', 1), 1): OSError(errno.EPERM, 'outer close')}):
+        result, trace, capture = invoke(after, Disk(fail=faults))
+        if before is not None:
+            old_result, old_trace, _ = invoke(before, Disk(fail=faults), False)
+            assert (result, trace) == (old_result, old_trace)
+        if any(isinstance(error, FileNotFoundError) and error.errno != errno.ENOENT for error in faults.values()):
+            assert not capture['complete']
+        checks += 1
+    calls = []
+    assert after['_cleanup_error_values'](errno.ENOENT) == 'missing'
+    assert after['_cleanup_error_values'](errno.EIO) == 'error'
+    assert after['_cleanup_error_values'](None) == 'error'
+    assert after['_cleanup_stat_values'](None) is True
+    assert after['_cleanup_stat_values'](0) is False
+    owner = after['_cleanup_names_values']
+    def measured(values):
+        calls.append(list(values))
+        return owner(values)
+    after['_cleanup_names_values'] = measured
+    invoke(after, Disk())
+    assert calls == [[], [], [], []]
+    after['_cleanup_names_values'] = owner
+    checks += 1
+    for name in ('_cleanup_names_values', '_record_process'):
+        original = after[name]
+        def broken(*args, **kwargs):
+            raise MemoryError('recording-only marked')
+        after[name] = broken
+        result, trace, capture = invoke(after, Disk())
+        assert result == ('return', True) and trace == original_trace and not capture['complete']
+        after[name] = original
+        checks += 1
+    for value in (None, '61', [1], [''], ['6A'], ['0'], ['00'], ['2f'], ['2e'], ['2e2e'], ['61', '61']):
+        try: owner(value)
+        except after['Refusal']: pass
+        else: raise AssertionError(value)
+        checks += 1
+    assert owner(['ff', '61']) is False and owner([]) is True
+    checks += 1
+    after['os'] = Disk()
+    after['_capture_process'] = ledger()
+    for _ in range(2):
+        assert after['_cleanup_listdir']('candidate', sites[0]) is True
+    assert [row['ordinal'] for row in after['_capture_process']['rows']] == [0, 1]
+    checks += 1
+    for initial_count in (4095, 4096):
+        after['_capture_process'] = ledger()
+        after['_capture_process']['rows'] = [None] * initial_count
+        after['_cleanup_listdir']('candidate', sites[0])
+        assert len(after['_capture_process']['rows']) == min(4096, initial_count + 1)
+        assert after['_capture_process']['complete'] == (initial_count == 4095)
+        checks += 1
+    row = dict(site=sites[0], ordinal=0, **{'return': ['61'], 'errno': None, 'bytes': None, 'timeout': None})
+    size = len(after['canonical'](row))
+    for room in (size, size - 1):
+        after['_capture_process'] = ledger()
+        after['_capture_process']['bytes'] = 4 * 1024 * 1024 - room
+        after['os'] = Disk({'candidate': ['a']})
+        assert after['_cleanup_listdir']('candidate', sites[0]) is False
+        assert len(after['_capture_process']['rows']) == (1 if room == size else 0)
+        assert after['_capture_process']['complete'] == (room == size)
+        checks += 1
+    return checks
+
+
+if __name__ == '__main__':
+    before = load(sys.argv[2]) if len(sys.argv) == 3 else None
+    print(json.dumps({'cleanup_names_checks': run(load(sys.argv[1]), before),
+                      'native': 'NOTRUN', 'qualification': 'NOT_PROVED'}))
+PY_CLEANUP_NAMES
+pass 'cleanup retains complete ordered raw names at its four original levels; shared empty checks preserve original authority, errors, close order and capture-only failure'
+
 /usr/bin/printf 'total assertions: %s\n' "$passes" >&2

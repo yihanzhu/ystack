@@ -2286,11 +2286,14 @@ def load_anchor(resolver: _DarwinUUIDResolver | None = None,
             raise exc from close_exc
         raise
 
-def _verifier_observation_values(environment_id, registry_entry, accepted_set_sha, target_repository_id, verifier_sha):
+def _verifier_registry_entry_sha(registry_entry):
+    return digest(canonical(registry_entry))
+
+def _verifier_observation_values(environment_id, environment_entry_sha, accepted_set_sha, target_repository_id, verifier_sha):
     return canonical({"schema_version": 1, "kind": "sandbox_verifier_observation",
                       "id": "sandbox.observation.verifier", "body": {
                           "environment_id": environment_id,
-                          "environment_entry_sha256": digest(canonical(registry_entry)),
+                          "environment_entry_sha256": environment_entry_sha,
                           "accepted_set_sha256": accepted_set_sha,
                           "target_repository_id": target_repository_id,
                           "verifier_sha256": verifier_sha}})
@@ -2308,7 +2311,8 @@ def verifier_observation(anchor: Anchor, environment_id: str, target_repository_
     verifier_sha = digest(verifier_raw)
     _require(verifier_sha in accepted[0]["identities"]["verifier"], "E_RELATION")
     anchor.recheck("E_RELATION")
-    return _verifier_observation_values(environment_id, registry[0], anchor.accepted[0],
+    environment_entry_sha = _verifier_registry_entry_sha(registry[0])
+    return _verifier_observation_values(environment_id, environment_entry_sha, anchor.accepted[0],
                                         target_repository_id, verifier_sha)
 
 def _observation(item: HeldPath, relative: str, raw: bytes | None = None, *, storage_rows=None) -> dict:

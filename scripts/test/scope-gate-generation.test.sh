@@ -80,26 +80,79 @@ for field,value in [('response_status',500),('page_index',1),('output_cursor','l
 spec=importlib.util.spec_from_file_location('gate_generator',root/'scope/v1/generate-gate-evidence.py')
 g=importlib.util.module_from_spec(spec);sys.modules[spec.name]=g;spec.loader.exec_module(g)
 def verifier_observation_value_controls():
+    import ast
     c=g.c
     def original_inline(environment_id,registry,accepted,target_repository_id,verifier_sha):
         return c.canonical({"schema_version":1,"kind":"sandbox_verifier_observation",
             "id":"sandbox.observation.verifier","body":{
                 "environment_id":environment_id,"environment_entry_sha256":c.digest(c.canonical(registry[0])),
                 "accepted_set_sha256":accepted[0],"target_repository_id":target_repository_id,"verifier_sha256":verifier_sha}})
+    def shared_values(environment_id,registry,accepted,target_repository_id,verifier_sha):
+        entry_sha=c._verifier_registry_entry_sha(registry[0])
+        return c._verifier_observation_values(environment_id,entry_sha,accepted[0],target_repository_id,verifier_sha)
     for entry in (dict(environment_id='environment.control',target_repository_id='repository.control',identities={'verifier':['a'*64]}),
-                  dict(target_repository_id='repository.\u00e9',environment_id='environment.control',identities={'verifier':['b'*64]})):
-        args=('environment.control',entry,'c'*64,'repository.control','d'*64)
-        actual=c._verifier_observation_values(*args)
-        check(actual==original_inline(args[0],[entry],(args[2],[]),args[3],args[4]))
+                  dict(target_repository_id='repository.é',environment_id='environment.control',identities={'verifier':['b'*64]})):
+        args=('environment.control',[entry],('c'*64,[]),'repository.control','d'*64)
+        actual=shared_values(*args)
+        check(actual==original_inline(*args))
         check(c._json(actual,c.DOCUMENT_LIMIT,'E_STORE')['body']['environment_entry_sha256']==c.digest(c.canonical(entry)))
-    args=('environment.control',{'invalid':float('nan')},'c'*64,'repository.control','d'*64)
+    args=('environment.control',[{'invalid':float('nan')}],('c'*64,[]),'repository.control','d'*64)
     errors=[]
-    for fn in (lambda:c._verifier_observation_values(*args),lambda:original_inline(args[0],[args[1]],(args[2],[]),args[3],args[4])):
-        try:fn()
+    for fn in (shared_values,original_inline):
+        try:fn(*args)
         except ValueError as error:errors.append((type(error),error.args))
         else:raise AssertionError('noncanonical inline input accepted')
     check(len(errors)==2 and errors[0]==errors[1])
+    tree=ast.parse((root/'shadow/v1/_consumer.py').read_bytes())
+    native=next(node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=='verifier_observation')
+    tail=copy.deepcopy(native.body[-2:])
+    check(isinstance(tail[0],ast.Assign) and isinstance(tail[1],ast.Return))
+    check(ast.unparse(tail[0].value)=='_verifier_registry_entry_sha(registry[0])')
+    check(ast.unparse(tail[1].value)=='_verifier_observation_values(environment_id, environment_entry_sha, anchor.accepted[0], target_repository_id, verifier_sha)')
+    class AcceptedArgument(ast.NodeTransformer):
+        def visit_Attribute(self,node):
+            if isinstance(node.value,ast.Name) and node.value.id=='anchor' and node.attr=='accepted':
+                return ast.copy_location(ast.Name(id='accepted',ctx=ast.Load()),node)
+            raise AssertionError('unexpected native tail attribute')
+    tail=[AcceptedArgument().visit(node) for node in tail]
+    signature=ast.parse('def actual_tail(environment_id,registry,accepted,target_repository_id,verifier_sha): pass').body[0]
+    signature.body=tail
+    namespace=dict(c.__dict__)
+    exec(compile(ast.fix_missing_locations(ast.Module(body=[signature],type_ignores=[])),'<actual-verifier-value-tail>','exec'),namespace)
+    original_canonical,original_digest=c.canonical,c.digest
+    class Marked(KeyboardInterrupt):
+        _scope_signal_cancel=True
+    for site in (None,'registry-canonical','registry-hash','accepted-getter','final-canonical'):
+        for marked in ((False,) if site is None else (False,True)):
+            failure=Marked(site) if marked else OSError(5,site)
+            outcomes=[]
+            for fn in (original_inline,namespace['actual_tail']):
+                trace=[];entry={'environment_id':'environment.control'}
+                def step(name):
+                    trace.append(name)
+                    if name==site:raise failure
+                def canonical(value):
+                    step('registry-canonical' if value is entry else 'final-canonical')
+                    return original_canonical(value)
+                def digest(value):
+                    step('registry-hash')
+                    return original_digest(value)
+                class Accepted(list):
+                    def __getitem__(self,index):
+                        check(index==0);step('accepted-getter')
+                        return super().__getitem__(index)
+                c.canonical,c.digest=canonical,digest
+                try:
+                    result=fn('environment.control',[entry],Accepted(['c'*64,[]]),'repository.control','d'*64)
+                except BaseException as error:
+                    check(error is failure);result=error
+                finally:c.canonical,c.digest=original_canonical,original_digest
+                outcomes.append((trace,result))
+            check(outcomes[0]==outcomes[1])
+            expected=['registry-canonical','registry-hash','accepted-getter','final-canonical']
+            check(outcomes[0][0]==(expected if site is None else expected[:expected.index(site)+1]))
 verifier_observation_value_controls()
+
 def source_configuration_input_controls():
     import os,tempfile,types,traceback
     c=g.c

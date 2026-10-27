@@ -578,8 +578,12 @@ def _host_process_values(runtime_root, config, start_raw, raw_host, raw_clocks,
         return host._control_deadline_values((mono("1503") - admission_mono) * 1000, start_limit)
 
     def finish(run):
-        if process_at != len(rows) or rest_at != len(raw_host["driver_rest"]):
-            raise ValueError("unused host process observations")
+        if rest_at != len(raw_host["driver_rest"]):
+            raise ValueError("unused host driver observations")
+        cleanup_rows = rows[process_at:]
+        if not cleanup_rows or any(not row["site"].startswith(("remove_only.", "remove_frozen."))
+                                   for row in cleanup_rows):
+            raise ValueError("host cleanup observations missing or misplaced")
         if clock_at["wall"] != len(raw_clocks["wall"]):
             raise ValueError("unused host wall observations")
         suffix = raw_clocks["monotonic"][clock_at["monotonic"]:]
@@ -589,7 +593,8 @@ def _host_process_values(runtime_root, config, start_raw, raw_host, raw_clocks,
             raise ValueError("host finalization clock suffix")
         return run, {"process": process_at, "driver_rest": rest_at, "driver_calls": driver_call,
             "clocks": dict(clock_at), "clock_ordinals": clock_ordinals,
-            "admitted_at": admitted_at, "monotonic_remaining": suffix, "wall_remaining": []}
+            "admitted_at": admitted_at, "cleanup_rows": cleanup_rows,
+            "monotonic_remaining": suffix, "wall_remaining": []}
 
     def stub():
         status = startup_status()
@@ -765,6 +770,92 @@ def _host_process_values(runtime_root, config, start_raw, raw_host, raw_clocks,
     except _OuterRunFailure:
         return stub()
 
+
+
+def _host_cleanup_values(runtime_root, rows, candidate_names):
+    import errno
+    spec = importlib.util.spec_from_file_location(
+        "malicious_host_cleanup_values", Path(runtime_root) / "sandbox/v1/host-supervisor.py")
+    host = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(host)
+    _seed_require(type(rows) is list and 0 < len(rows) <= 4096
+        and type(candidate_names) is list
+        and candidate_names == ["%05d" % index for index in range(len(candidate_names))])
+    at, ordinals = 0, {}
+    class Failure(OSError):
+        def __init__(self, error_number):
+            self.errno = error_number
+            self.missing = host._cleanup_error_values(error_number) == "missing"
+    def take(site, operation):
+        nonlocal at
+        _seed_require(at < len(rows))
+        row = rows[at]
+        _seed_require(type(row) is dict and set(row) == {"site", "ordinal", "return", "errno", "bytes", "timeout"}
+            and row["site"] == site and type(row["ordinal"]) is int
+            and row["ordinal"] == ordinals.get(site, 0)
+            and row["bytes"] is None and row["timeout"] is None)
+        ordinals[site] = row["ordinal"] + 1
+        at += 1
+        result, error_number = row["return"], row["errno"]
+        _seed_require(error_number is None or type(error_number) is int)
+        if result is None:
+            raise Failure(error_number)
+        _seed_require(error_number is None)
+        if operation == "open":
+            _seed_require(type(result) is int and result >= 0)
+        elif operation == "listdir":
+            return host._cleanup_names_values(result)
+        else:_seed_require(type(result) is int and result == 0)
+        return result
+    def opened(level):return take("remove_frozen." + level + ".open", "open")
+    def closed(level):return take("remove_frozen." + level + ".close", "close")
+    def removed(level):return take("remove_frozen." + level + ".rmdir", "rmdir")
+    def remove_only(level, names):
+        for _name in names:
+            try:take("remove_only." + level + ".unlink", "unlink")
+            except Failure as error:
+                if not error.missing:raise
+        return take("remove_only." + level + ".listdir", "listdir")
+    def calculate():
+        work = None
+        try:
+            work = opened("work")
+            try:attempt = opened("attempt")
+            except Failure as error:
+                if error.missing:return True
+                raise
+            try:
+                try:frozen = opened("frozen")
+                except Failure as error:
+                    if not error.missing:raise
+                    frozen = None
+                if frozen is not None:
+                    try:
+                        try:candidate = opened("candidate")
+                        except Failure as error:
+                            if not error.missing:raise
+                            candidate = None
+                        if candidate is not None:
+                            try:
+                                if not remove_only("candidate", candidate_names):return False
+                            finally:closed("candidate")
+                            removed("candidate")
+                        if not remove_only("frozen", host.FROZEN_FIXED_NAMES):return False
+                    finally:closed("frozen")
+                    removed("frozen")
+                if not remove_only("attempt", host.LAUNCH_FIXED_NAMES):return False
+                if not take("remove_frozen.attempt.listdir", "listdir"):return False
+            finally:closed("attempt")
+            removed("attempt")
+            try:take("remove_frozen.attempt.stat", "stat")
+            except Failure:return host._cleanup_stat_values(None)
+            return host._cleanup_stat_values(0)
+        except Failure:return False
+        finally:
+            if work is not None:closed("work")
+    result = calculate()
+    _seed_require(at == len(rows))
+    return result
 
 
 def _host_finalization_values(runtime_root, run, consumed):
@@ -3321,6 +3412,222 @@ class _ReplayCase:
                     except BaseException as error:failure = _seed_first(failure, error)
             if failure is not None and failure is not primary:
                 raise failure
+
+    def reproduction_inputs(self, runtime_root, private_work, prepared):
+        runtime_root, private_work = Path(runtime_root), Path(private_work)
+        spec = importlib.util.spec_from_file_location(
+            "malicious_reproduction_pipeline", runtime_root / "shadow/v1/enforced-reproduction.py")
+        e = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = e
+        spec.loader.exec_module(e)
+        trial = self.trial("reproduction")
+        incident_raw = self.original_raw["incident.json"]
+        request_raw = self.original_raw["reproduction-request.json"]
+        incident = e.parse(incident_raw)
+        claim_raw = trial["claim.json"]
+        claim = e.parse(claim_raw)
+        duty_raw = trial["duty-evaluation.json"]
+        identity_raw = trial["qualified-identity.json"]
+        input_raw = trial["materialization-input.json"]
+        input_doc = e.parse(input_raw, 8 * e.OUTPUT_LIMIT)
+        e.require(input_raw == prepared["input_raw"], "E_RELATION")
+        jq = runtime_root / "bin/jq"
+        e.require(jq.is_file() and not jq.is_symlink() and os.access(jq, os.X_OK), "E_DEPENDENCY")
+        scratch = private_work / "runtime"
+        self.c._capture_copy_budget_room(self.work, 0, False, files=1)
+        scratch.mkdir(mode=0o700)
+        self.work["files"] += 1
+        self.c._capture_account(self.work, "M", "files", 1)
+        env = e.clean_env(jq, scratch)
+        mapped = {}
+        for name, raw in (("incident", incident_raw), ("claim", claim_raw),
+                          ("duty_evaluation", duty_raw), ("qualified_identity", identity_raw),
+                          ("materialization_input", input_raw)):
+            path = private_work / (name + ".json")
+            e.write_exclusive(path, raw)
+            mapped[name] = path
+        self.work["offline_reproduction_processing_unknown"] = True
+        self.work["accounting_incomplete"] = True
+        incident_validator = runtime_root / "shadow/v1/validate-incident.sh"
+        e.run_bounded("incident-validation", ["/bin/bash", "-p", str(incident_validator),
+            "validate", str(mapped["incident"])], env=env)
+        registry_source_raw = (runtime_root / "core/v2/generation-registry.json").read_bytes()
+        self.inputs._account("R", len(registry_source_raw), "M")
+        e.require(e.SOURCE == runtime_root, "E_RUNTIME")
+        modules = e.core_modules(registry_source_raw)
+        protocol = runtime_root / "adapters/local-git-materializer/v1/protocol.jq"
+        valid = e.run_bounded("materializer-input-validation", [str(jq), "-L", str(modules),
+            "-e", "--arg", "command", "validate-input", "-f", str(protocol),
+            str(mapped["materialization_input"])], env=env)
+        e.require(valid.strip() == b"true", "E_RELATION")
+        instruction = e.make_instruction(incident)
+        revision = incident["body"]["git_revision_ref"]
+        identity_source = runtime_root / "shadow/v1/qualified-identity.jq"
+        identity_valid = e.run_bounded("qualified-identity-validation", [str(jq), "-L", str(modules),
+            "-r", "--arg", "repository_id", incident["body"]["target_repository_id"],
+            "--arg", "hash_algorithm", revision["hash_algorithm"], "--arg", "commit_id",
+            revision["commit_id"], "-f", str(identity_source)], stdin=identity_raw, env=env)
+        e.require(identity_valid == b"", "E_RELATION")
+        identity = e.parse(identity_raw)
+        e.validate_input_relations(input_doc, incident, claim, identity, instruction)
+        response_raw = prepared["response_raw"]
+        check_raw = e.response_check(input_doc, response_raw)
+        check_path = private_work / "response-check.json"
+        e.write_exclusive(check_path, check_raw)
+        checked = e.run_bounded("materializer-response-validation", [str(jq), "-L", str(modules),
+            "-e", "--arg", "command", "validate-response", "-f", str(protocol),
+            str(check_path)], env=env)
+        e.require(checked.strip() == b"true", "E_RELATION")
+        materializer_receipt = e.require_no_change(response_raw, incident)
+        return dict(trial, **{"incident.json": incident_raw,
+            "request_raw": request_raw, "instruction": instruction,
+            "response_raw": response_raw, "materializer_receipt": materializer_receipt,
+            "manifest_raw": prepared["manifest_raw"], "record_raw": prepared["record_raw"],
+            "mapped": mapped, "env": env})
+
+    def reproduction_outputs(self, runtime_root, private_work, prepared, launch_values, host_files):
+        runtime_root, private_work = Path(runtime_root), Path(private_work)
+        e = sys.modules["malicious_reproduction_pipeline"]
+        self.work["offline_reproduction_processing_unknown"] = True
+        self.work["accounting_incomplete"] = True
+        incident_raw = self.original_raw["incident.json"]
+        request_raw = self.original_raw["reproduction-request.json"]
+        incident, request = e.parse(incident_raw), e.parse(request_raw)
+        claim_raw = launch_values["claim.json"]
+        claim = e.parse(claim_raw)
+        evaluation_raw = launch_values["evaluation_raw"]
+        observation_raw = launch_values["observation_raw"]
+        launch_raw = launch_values["launch_raw"]
+        expectation_raw = launch_values["expectation_raw"]
+        receipt_raw = host_files["receipt.json"]
+        env = launch_values["env"]
+        for name, raw in (("receipt", receipt_raw), ("expectation", expectation_raw),
+                          ("evaluation", evaluation_raw), ("observation", observation_raw)):
+            e.write_exclusive(private_work / (name + ".json"), raw)
+        checker_source = runtime_root / "enforcement/v1/check-sandbox-receipt.sh"
+        checker_raw = e.run_bounded("sandbox-receipt-check", ["/bin/bash", "-p", str(checker_source),
+            "check-bound", str(private_work / "receipt.json"), str(private_work / "expectation.json"),
+            str(private_work / "evaluation.json"), str(private_work / "observation.json")], env=env)
+        checker = e.parse(checker_raw)
+        e.require(checker["body"]["check_verdict"] == "valid"
+            and checker["body"]["enforcement_verdict"] == "satisfied", "E_RELATION")
+        evidence_manifest_raw = host_files["payload/evidence-manifest.json"]
+        result_raw, result = e.payload_result(host_files, e.parse(evidence_manifest_raw),
+            launch_values["instruction"], e.parse(prepared["manifest_raw"]), e.parse(receipt_raw))
+        outcome = "no-change" if result["outcome"] == "match" else "reproduced"
+        trace_raw = e.trace_ledger(incident, request["id"], claim["id"], outcome,
+            "tool.verifier", evaluation_raw, checker_raw)
+        trace_path = private_work / "trace-ledger.json"
+        e.write_exclusive(trace_path, trace_raw)
+        trace_validator = runtime_root / "telemetry/v1/validate-trace-ledger.sh"
+        trace_receipt_raw = e.run_bounded("trace-validation", ["/bin/bash", "-p", str(trace_validator),
+            "validate", incident["id"], request["id"], str(trace_path)], env=env)
+        return {"sandbox-check.json": checker_raw, "file-digest-result.json": result_raw,
+            "evidence-manifest.json": evidence_manifest_raw, "trace-ledger.json": trace_raw,
+            "trace-receipt.json": trace_receipt_raw, "outcome": outcome}
+
+    def writer_input(self, runtime_root, private_work, source_facts, record_form):
+        runtime_root, private_work = Path(runtime_root), Path(private_work)
+        _seed_require(record_form in {"withheld-write.v1", "withheld-write-policy.v1"}
+            and "files" in self.calculated.get("reproduction", {}) and type(source_facts) is dict)
+        spec = importlib.util.spec_from_file_location(
+            "malicious_write_builder", runtime_root / "shadow/v1/write-shadow.py")
+        w = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = w
+        spec.loader.exec_module(w)
+        self.work["offline_writer_builder_processing_unknown"] = True
+        self.work["accounting_incomplete"] = True
+        jq = runtime_root / "bin/jq"
+        _seed_require(jq.is_file() and not jq.is_symlink() and os.access(jq, os.X_OK))
+        frozen = dict(self.calculated["reproduction"]["files"])
+        frozen["bundle.json"] = self.calculated["reproduction"]["bundle"]
+        incident = w.parse(frozen["incident.json"])
+        incident_id = incident["id"]
+        w.require(isinstance(incident_id, str)
+            and all(char in "abcdefghijklmnopqrstuvwxyz0123456789._-" for char in incident_id), "E_RELATION")
+        root = "ystack-evidence/" + incident_id
+        policy_raw = (runtime_root / "scope/v1/scope-policy.json").read_bytes()
+        self.inputs._account("R", len(policy_raw), "M")
+        policy = w.parse(policy_raw)
+        mode_raw = (runtime_root / "config/construction-mode.json").read_bytes()
+        self.inputs._account("R", len(mode_raw), "M")
+        mode = json.loads(mode_raw)
+        paths = w._write_paths_values(root, policy, mode, policy_raw,
+            self.original["write-request.json"]["body"]["allowed_paths"], source_facts, record_form)
+        runtime = private_work / "runtime"
+        self.c._capture_copy_budget_room(self.work, 0, False, files=1)
+        runtime.mkdir(mode=0o700)
+        self.work["files"] += 1
+        self.c._capture_account(self.work, "M", "files", 1)
+        env = w.e.clean_env(jq, runtime)
+        def put(name, raw):
+            path = private_work / name
+            self.c._capture_copy_room(self.work, len(raw), True, case=True)
+            self.c._capture_copy_budget_room(self.work, len(raw), True, files=1)
+            self.work["offline_writer_write_unknown"] = True
+            w.e.write_exclusive(path, raw)
+            self.work["write_bytes"] += len(raw)
+            self.work["physical_bytes"] += len(raw)
+            self.work["files"] += 1
+            self.work["close_calls"] = self.work.get("close_calls", 0) + 1
+            self.c._capture_account(self.work, "M", "write_bytes", len(raw))
+            self.c._capture_account(self.work, "M", "physical_bytes", len(raw))
+            self.c._capture_account(self.work, "M", "files", 1)
+            self.work.setdefault("seed_processing", {})["W"] = self.work.get("seed_processing", {}).get("W", 0) + len(raw)
+            self.work["offline_writer_write_unknown"] = False
+            return path
+        incident_path = put("frozen-incident.json", frozen["incident.json"])
+        record_path = put("frozen-record.json", frozen["shadow-record.json"])
+        seed_dir = private_work / "seed"
+        seed_raw = w.e.run_bounded("write-seed-conversion", ["/bin/bash", "-p",
+            str(runtime_root / "maintenance/v1/incident-to-eval.sh"), "convert",
+            str(incident_path), str(record_path), str(seed_dir)], env=env)
+        w.require(set(os.listdir(seed_dir)) == {"eval-seed-case-stale-moved-artifacts.json"}, "E_RELATION")
+        installed = (seed_dir / "eval-seed-case-stale-moved-artifacts.json").read_bytes()
+        self.inputs._account("R", len(installed), "M")
+        self.inputs._account("E", len(installed) + len(seed_raw), "M")
+        w.require(installed == seed_raw, "E_RELATION")
+        files, patch, facts = w._write_files_values(root, frozen, seed_raw, policy_raw,
+            incident["body"]["git_revision_ref"]["hash_algorithm"], record_form)
+        trial = self.trial("write")
+        claim_raw = trial["claim.json"]
+        claim, original_claim = w.parse(claim_raw), w.parse(frozen["claim.json"])
+        w.require(claim["id"] == original_claim["id"]
+            and claim["body"]["policy_set_ref"] == original_claim["body"]["policy_set_ref"], "E_RELATION")
+        contract = self.c.write_contract(paths, record_form)
+        contract_path, patch_path = put("contract.json", contract), put("producer.patch", patch)
+        metadata = {key: w.sha(value) for key, value in self.c.WRITE_TEXTS.items()}
+        for key, raw in self.c.WRITE_TEXTS.items():put(key + ".txt", raw)
+        metadata.update(w._write_builder_metadata_values(contract, patch, paths,
+            self.original["write-request.json"], claim_raw, record_form))
+        metadata["incident_id"] = w.parse(frozen["incident.json"])["id"]
+        original_raw = frozen["materialization-input.json"]
+        original_path = put("original-input.json", original_raw)
+        modules = w.e.core_modules((runtime_root / "core/v2/generation-registry.json").read_bytes())
+        builder = runtime_root / "shadow/v1/write-materialization-input.jq"
+        metadata_path = put("metadata-first.json", w.canonical(metadata))
+        first_raw = w.e.run_bounded("write-materialization-input", [str(jq), "-L", str(modules),
+            "-S", "-c", "--arg", "phase", "stage-request", "--rawfile", "contract", str(contract_path),
+            "--rawfile", "patch", str(patch_path), "--slurpfile", "metadata", str(metadata_path),
+            "-f", str(builder), str(original_path)], env=env, output_limit=8 * w.e.OUTPUT_LIMIT)
+        first = w._write_builder_first_values(first_raw, original_raw)
+        first_path = put("first.json", first_raw)
+        stage_raw = w.canonical(first["stage_request"])
+        put("stage-request.json", stage_raw)
+        metadata["stage_request_sha256"] = w.sha(stage_raw)
+        metadata_path = put("metadata-final.json", w.canonical(metadata))
+        result_raw = w.e.run_bounded("write-materialization-input", [str(jq), "-L", str(modules),
+            "-S", "-c", "--arg", "phase", "final-input", "--rawfile", "contract", str(contract_path),
+            "--rawfile", "patch", str(patch_path), "--slurpfile", "metadata", str(metadata_path),
+            "-f", str(builder), str(first_path)], env=env, output_limit=8 * w.e.OUTPUT_LIMIT)
+        w._write_builder_final_values(result_raw, first, stage_raw, original_raw)
+        result_path = put("write-input.json", result_raw)
+        checked = w.e.run_bounded("materializer-input-validation", [str(jq), "-L", str(modules),
+            "-e", "--arg", "command", "validate-input", "-f",
+            str(runtime_root / "adapters/local-git-materializer/v1/protocol.jq"), str(result_path)], env=env)
+        w.require(checked.strip() == b"true", "E_RELATION")
+        return {"input_raw": result_raw, "files": files, "write_set": facts,
+            "paths": paths, "claim_raw": claim_raw, "record_form": record_form}
 
     def check_surface(self, case, checked_file_raw, commit_message_raw):
         _seed_require(type(case) is dict and case["case_id"] == self.manifest["case_id"]

@@ -507,36 +507,72 @@ def _git_inventory(ws, repository, revision):
         raise e.Refusal(exc.code) from exc
 
 
-def _write_files(ws, frozen, incident, source_facts):
-    incident_id = incident["id"]
-    require(isinstance(incident_id, str) and all(char in "abcdefghijklmnopqrstuvwxyz0123456789._-" for char in incident_id), "E_RELATION")
-    root = "ystack-evidence/" + incident_id
-    policy = parse(ws.components[SOURCE / "scope/v1/scope-policy.json"].raw)
-    mode = json.loads(ws.components[SOURCE / "config/construction-mode.json"].raw)
+def _write_paths_values(root, policy, mode, policy_raw, allowed_paths, source_facts, record_form):
     names = [*NAMES, "eval-seed.json", "README.md"]
-    if ws.record_form == "withheld-write-policy.v1":
-        c.scope_policy_ref(ws.components[SOURCE / "scope/v1/scope-policy.json"].raw)
+    if record_form == "withheld-write-policy.v1":
+        c.scope_policy_ref(policy_raw)
         names.append("scope-policy.json")
     paths = sorted(root + "/" + name for name in names)
-    require(ws.request_doc["body"]["allowed_paths"] == paths
+    require(allowed_paths == paths
             and all(c.write_path_ok(path, policy, mode) for path in paths), "E_RELATION")
     require(not any(path.lower() == root.lower() or path.lower().startswith(root.lower() + "/")
                     for path in source_facts), "E_RELATION")
     require(all(path.lower() != "ystack-evidence" or
                 (path == "ystack-evidence" and source_facts[path][:2] == ("040000", "tree"))
                 for path in source_facts), "E_RELATION")
-    seed_raw = ws.component("write-seed-conversion", "maintenance/v1/incident-to-eval.sh",
-        ["convert", str(ws.work / "frozen/incident.json"), str(ws.work / "frozen/shadow-record.json"), str(ws.work / "seed")])
-    require(set(os.listdir(ws.work / "seed")) == {"eval-seed-case-stale-moved-artifacts.json"}, "E_RELATION")
-    require(ws.hold(ws.work / "seed/eval-seed-case-stale-moved-artifacts.json", e.OUTPUT_LIMIT).raw == seed_raw, "E_RELATION")
+    return paths
+
+
+def _write_files_values(root, frozen, seed_raw, policy_raw, algorithm, record_form):
     parse(seed_raw)
     files = {root + "/" + name: raw for name, raw in frozen.items()}
     files[root + "/eval-seed.json"] = seed_raw
     files[root + "/README.md"] = b"Shadow evidence. Publication is withheld.\n"
-    if ws.record_form == "withheld-write-policy.v1":
-        files[root + "/scope-policy.json"] = ws.components[SOURCE / "scope/v1/scope-policy.json"].raw
-    patch, facts = c.evidence_patch(files, incident["body"]["git_revision_ref"]["hash_algorithm"], ws.record_form)
+    if record_form == "withheld-write-policy.v1":
+        files[root + "/scope-policy.json"] = policy_raw
+    patch, facts = c.evidence_patch(files, algorithm, record_form)
+    return files, patch, facts
+
+
+
+def _write_files(ws, frozen, incident, source_facts):
+    incident_id = incident["id"]
+    require(isinstance(incident_id, str) and all(char in "abcdefghijklmnopqrstuvwxyz0123456789._-" for char in incident_id), "E_RELATION")
+    root = "ystack-evidence/" + incident_id
+    policy = parse(ws.components[SOURCE / "scope/v1/scope-policy.json"].raw)
+    mode = json.loads(ws.components[SOURCE / "config/construction-mode.json"].raw)
+    paths = _write_paths_values(root, policy, mode,
+        ws.components[SOURCE / "scope/v1/scope-policy.json"].raw,
+        ws.request_doc["body"]["allowed_paths"], source_facts, ws.record_form)
+    seed_raw = ws.component("write-seed-conversion", "maintenance/v1/incident-to-eval.sh",
+        ["convert", str(ws.work / "frozen/incident.json"), str(ws.work / "frozen/shadow-record.json"), str(ws.work / "seed")])
+    require(set(os.listdir(ws.work / "seed")) == {"eval-seed-case-stale-moved-artifacts.json"}, "E_RELATION")
+    require(ws.hold(ws.work / "seed/eval-seed-case-stale-moved-artifacts.json", e.OUTPUT_LIMIT).raw == seed_raw, "E_RELATION")
+    files, patch, facts = _write_files_values(root, frozen, seed_raw,
+        ws.components[SOURCE / "scope/v1/scope-policy.json"].raw,
+        incident["body"]["git_revision_ref"]["hash_algorithm"], ws.record_form)
     return files, paths, patch, facts
+
+
+def _write_builder_metadata_values(contract, patch, paths, request, claim_raw, record_form):
+    return {"contract": sha(contract), "patch": sha(patch), "allowed_paths": paths,
+        "attempt_id": request["id"], "suffix": sha(request["id"].encode())[:32],
+        "environment_id": parse(claim_raw)["id"], "claim_sha256": sha(claim_raw),
+        "record_form": record_form}
+
+
+def _write_builder_first_values(first_raw, original_raw):
+    first = parse(first_raw, 8 * e.OUTPUT_LIMIT)
+    require(canonical(first["original"]) == original_raw, "E_RELATION")
+    return first
+
+
+def _write_builder_final_values(result_raw, first, stage_raw, original_raw):
+    result = parse(result_raw, 8 * e.OUTPUT_LIMIT)
+    require(result["stage_request"] == {"content": first["stage_request"], "sha256": sha(stage_raw)}, "E_RELATION")
+    for key in ("profile", "resolved_profile", "manifests"):
+        require(result[key] == parse(original_raw, 8 * e.OUTPUT_LIMIT)[key], "E_RELATION")
+    return result
 
 
 def _build_input(ws, original_raw, paths, patch, claim_raw):
@@ -547,10 +583,9 @@ def _build_input(ws, original_raw, paths, patch, claim_raw):
     metadata = {key: sha(value) for key, value in c.WRITE_TEXTS.items()}
     for key, raw in c.WRITE_TEXTS.items():
         ws.capture(key + ".txt", raw, "builder")
-    metadata.update({"contract": sha(contract), "patch": sha(patch), "allowed_paths": paths,
-        "attempt_id": ws.request_doc["id"], "suffix": sha(ws.request_doc["id"].encode())[:32],
-        "environment_id": parse(claim_raw)["id"], "claim_sha256": sha(claim_raw),
-        "record_form": ws.record_form, "incident_id": parse((ws.work / "frozen/incident.json").read_bytes())["id"]})
+    metadata.update(_write_builder_metadata_values(contract, patch, paths,
+        ws.request_doc, claim_raw, ws.record_form))
+    metadata["incident_id"] = parse((ws.work / "frozen/incident.json").read_bytes())["id"]
     def phase(name, input_path, metadata_path):
         return ws.execute("write-materialization-input", [ws.jq.snapshot.path, "-L", str(ws.modules),
             "-S", "-c", "--arg", "phase", name, "--rawfile", "contract", str(contract_path),
@@ -558,18 +593,14 @@ def _build_input(ws, original_raw, paths, patch, claim_raw):
             "-f", str(builder), str(input_path)], builder, output_limit=8 * e.OUTPUT_LIMIT)
     metadata_path = ws.capture("metadata-first.json", canonical(metadata), "builder")
     first_raw = phase("stage-request", ws.work / "frozen/materialization-input.json", metadata_path)
-    first = parse(first_raw, 8 * e.OUTPUT_LIMIT)
-    require(canonical(first["original"]) == original_raw, "E_RELATION")
+    first = _write_builder_first_values(first_raw, original_raw)
     first_path = ws.capture("first.json", first_raw, "builder")
     stage_raw = canonical(first["stage_request"])
     ws.capture("stage-request.json", stage_raw, "builder")
     metadata["stage_request_sha256"] = sha(stage_raw)
     second_metadata = ws.capture("metadata-final.json", canonical(metadata), "builder")
     result_raw = phase("final-input", first_path, second_metadata)
-    result = parse(result_raw, 8 * e.OUTPUT_LIMIT)
-    require(result["stage_request"] == {"content": first["stage_request"], "sha256": sha(stage_raw)}, "E_RELATION")
-    for key in ("profile", "resolved_profile", "manifests"):
-        require(result[key] == parse(original_raw, 8 * e.OUTPUT_LIMIT)[key], "E_RELATION")
+    _write_builder_final_values(result_raw, first, stage_raw, original_raw)
     result_path = ws.capture("write-input.json", result_raw, "builder")
     ws.protocol("validate-input", result_path)
     return result_raw, result_path
