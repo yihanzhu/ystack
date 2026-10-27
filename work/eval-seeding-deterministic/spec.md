@@ -443,7 +443,7 @@ derived state are independently recomputed by C.
 | `guest.control` | Ordered primitive results of the existing controller: monotonic timespec, poll return/revents/errno, waitpid pid/status/errno, cgroup.events bytes, exec-channel bytes/EOF/errno, kill return/errno and fanotify event fields/reply return. | Closed operation tags are `now,launch,poll,wait,population,exec-read,kill,fan-read,fan-reply`; no function names or arbitrary calls. At most 4096 records, each at most 8192 bytes (including the existing 4096-byte fanotify read). Expected next operation and all decisions come from the shared existing controller expressions; wrong order or extra results reject. No recorded tree_terminated/verifier_started/deadline verdict is an input. |
 | `guest.control` launch record | At the sole `launch_and_control` launch site (`supervisor.c:1404`; real clone at `:1419` in the bound source), retain the real `ops->launch` return from `production_launch` / `ys_clone3_into_cgroup`. | Exactly `{tag:"launch",pid,errno}`; pid is a signed 32-bit integer, errno is null for a nonnegative return or a positive signed-32-bit errno captured immediately on clone failure. Exactly one record after the initial successful clock/deadline construction; zero only when that construction fails. Nonpositive return follows the existing failure branch. No PID is inferred from a later wait. |
 | `guest.counters` | Exact cpu.stat, memory.peak, memory.events, pids.peak, pids.events bytes or read errno; output file stat tuples; output/scratch statvfs; raw evidence directory names and file bytes. | Counter reads preserve the existing 64/256-byte bounds; evidence count at most 10000 and payload total at most 10 MiB. The value owner computes rounded CPU, reached flags, observations, sizes, names, report and frame. A guest report is not a raw input. |
-| `host.process` | Ordered real driver exit code/stdout/stderr, Popen error or pid, poll/wait result or timeout/error, killpg result, signal numbers, drain-thread start/join observations, export read/error and cleanup syscall return/errno. | Only the fixed launch/state/stop/poll/wait/kill/drain/export/cleanup sites of `run_vm` and finalization; at most 4096 records, diagnostics capped by the existing 64 KiB bound. The shared owner derives stop acceptance, runtime_error, confirmed termination, teardown, deadline and limit rows. The complete export read uses the fixed `sandbox-export-bytes` role below. Compare it with the rebuilt guest frame including its zero tail; it cannot replace guest recomputation. |
+| `host.process` | Ordered real driver exit code/stdout/stderr, Popen error or pid, poll/wait result or timeout/error, killpg result, signal numbers, drain-thread start/join observations, export read/error and cleanup syscall return/errno, including the fixed listdir name-list return below. | Only the fixed launch/state/stop/poll/wait/kill/drain/export/cleanup sites of `run_vm` and finalization; at most 4096 records, diagnostics capped by the existing 64 KiB bound. The shared owner derives stop acceptance, runtime_error, confirmed termination, teardown, deadline and limit rows. The complete export read uses the fixed `sandbox-export-bytes` role below. Compare it with the rebuilt guest frame including its zero tail; it cannot replace guest recomputation. |
 | `host.driver_rest` | The fixed driver's `rest` return primitives at `runtime-vfkit.py:89–99`: response status and raw body bytes, or the caught transport exception category/errno and its phase. | Ordered `{call,operation,reply,error}` records, at most 4096 per host run and charged to its 4 MiB control budget. Operation is only `state` or `stop`. Reply is null or exactly `{status,body_hex}`, status integer 100–999, body at most 65537 bytes. Error is null or exactly `{phase,category,errno}`; phase is `request`, `getresponse` or `read`; category is `OSError` or `HTTPException`; errno is null or a signed-32-bit integer. Exactly one of reply/error is non-null. No recorded running/stopped/error classification is an input. |
 | `source_pages.kill` and `.coverage` | Captured remote response bytes plus `{family,page_index,response_status,input_cursor,output_cursor}` from the real fixed collector boundary. | Existing families and order; 128 pages per operation, 1 MiB per page, 64 MiB total per operation. Rebuild raw_size, raw_sha256, request_sha256, raw manifest, normalized observation and receipt. No credentials or authorization headers are retained. |
 | `commands.runtime_values` | Git version reply; Python version/ABI/sysconfig values and Unicode version from the qualified recording runtime. OS wait status and errno are retained separately by fixed component role. | Existing native build-record configuration keys only; version strings at most 128 bytes. At most 4096 commands. Recompute argv from the recipe and historical locators; hash source/executable bytes. Normal component stdout, stderr, exit classification, argv_sha256 and command list are not claimed inputs: rerun or recompute their actual owner. |
@@ -472,9 +472,29 @@ pid/fd-role, its fstat tuple, and response-write counts/errno. The owner compute
 allow/deny and first-inode history. No supplied fan decision is accepted.
 Host process rows have exactly `site`, `ordinal`, `return`, `errno`, `bytes` and
 `timeout`; unused fields are null. Return types are fixed per site: pid for spawn,
-integer/null for poll/wait, integer for driver/kill/cleanup/read/close, boolean for
-thread/select observations. Non-export bytes remain limited to checked driver
-replies and pipe reads, in their existing inline representation; they must equal
+integer/null for poll/wait, integer for driver/kill/cleanup/read/close except the
+fixed listdir success variant below, boolean for thread/select observations.
+Only the original host cleanup listdir sites (`remove_only:1840`, its three
+actual directory calls, and `remove_frozen:1887` in source
+`d4fc4664f996051f6a2601597e7cb04efbc116f4`) return the complete ordered list of
+`os.fsencode(name).hex()` values on success, with `errno`, `bytes` and `timeout`
+null. Preserve every name's bytes and original list order. Failure retains the
+original return/errno failure shape, never an empty-list substitute; an unreached
+site has no row. Bind every actual call to its fixed source site, ordinal and
+original cleanup level in each launch. The same owner consumes all these names
+in the original order to derive empty/nonempty and cleanup state; missing, extra,
+reordered, wrong-site, wrong-type or incomplete observations reject. The names
+are not deletion authority: native cleanup deletes only its original created
+names; offline consumption never dispatches a syscall from a site or path.
+Keep 4096 process rows, the 4 MiB host control and 1 MiB H envelope ceilings,
+and all case/window, M/Q and full-copy charges. Do not split a list into fake
+syscall rows, truncate, compress, hash or replace it with count/empty state.
+Encoding, capture, retention, accounting or overflow failure only makes recording
+ineligible; preserve original native calls, errors and close precedence. Do not
+rewrite or backfill older captures or infer storage_destroyed from a receipt.
+All other site types and the original final stat's arbitrary-OSError branch stay
+unchanged. Non-export bytes remain limited to checked driver replies and pipe
+reads, in their existing inline representation; they must equal
 the shared driver owner's reconstructed output. Only `run_vm.export-read`, the original D `fh.read()` at
 `host-supervisor.py:2190–2192`, uses this closed variant in final recorder RAW12 `bytes`:
 `{role:"sandbox-export-bytes",launch,size_bytes,sha256}`. Launch is exactly
