@@ -5190,23 +5190,80 @@ def raw16_C2_inventory_inputs(root: Path, selected=None, mutation=False) -> None
             assembly.close()
             assert assembly.root is None and not assembly.output_holds
             loads=replay.json.loads;processed=assembly._wrapper_processed;encoder=c.json.JSONEncoder
+            transfer=c._capture_transfer_work;account=c._capture_account
+            baseline={key:copy.deepcopy(value) for key,value in assembly.work.items() if key in ('read_bytes','seed_processing','accounting','accounting_rows')}
+            original_window=assembly.window;original_case=assembly.case_work
+            target_before=[copy.deepcopy({key:value for key,value in target.items() if key in ('read_bytes','seed_processing','accounting','accounting_rows')}) for target in (original_window,original_case)]
+            transfer_entries=[]
+            def transferring(source,window,case):
+                if source is assembly.work:
+                    transfer_entries.append({'read_bytes':source['read_bytes'],'watermark':source.get('transferred_read_bytes',0)})
+                    if C2_case=='cancel-transfer':
+                        try:actual_handler['cancel'](15,None)
+                        except InterruptedError as error:cancellations.append(error);raise
+                return transfer(source,window,case)
+            secondary=OSError(5,'controlled partial category transfer')
+            def accounted(target,kind,field,amount):
+                if C2_case=='partial-transfer' and target is original_case and kind=='M' and field=='read_bytes' and amount:
+                    raise secondary
+                return account(target,kind,field,amount)
             def parsed(raw,*args,**kwargs):
                 if inspect.currentframe().f_back.f_code is replay._SeedAssembly._closed_inventory_core_data.__code__:
-                    if C2_case=='parse':raise fault
+                    if C2_case in ('parse','partial-transfer'):raise fault
                     value=loads(raw,*args,**kwargs)
                     if C2_case=='compare':value['case_id']='changed'
                     return value
                 return loads(raw,*args,**kwargs)
+            cancel_armed=[True]
             class Partial(encoder):
                 def iterencode(self,value,*args,**kwargs):
                     for index,piece in enumerate(super().iterencode(value,*args,**kwargs)):
                         yield piece
                         if C2_case=='encode' and index==4:raise fault
+                        if C2_case=='cancel-transfer' and index==4 and cancel_armed[0]:
+                            cancel_armed[0]=False
+                            try:actual_handler['cancel'](15,None)
+                            except InterruptedError as error:cancellations.append(error);raise
             replay.json.loads=parsed;c.json.JSONEncoder=Partial
+            c._capture_transfer_work=transferring;c._capture_account=accounted
             try:
                 try:result=assembly._closed_inventory_core_data()
                 except BaseException as error:caught=error
-            finally:replay.json.loads=loads;c.json.JSONEncoder=encoder
+            finally:
+                replay.json.loads=loads;c.json.JSONEncoder=encoder
+                c._capture_transfer_work=transfer;c._capture_account=account
+            if C2_case in ('normal','encode','parse','compare'):
+                for target,target_previous in zip((original_window,original_case),target_before):
+                    assert target['read_bytes']-target_previous['read_bytes']==assembly.work['read_bytes']-baseline['read_bytes'], 'postclose delta absent from original target'
+                    for key,value in assembly.work.get('seed_processing',{}).items():
+                        assert target.get('seed_processing',{}).get(key,0)-target_previous.get('seed_processing',{}).get(key,0)==value-baseline.get('seed_processing',{}).get(key,0)
+                    for kind,values in assembly.work.get('accounting',{}).items():
+                        for key,value in values.items():
+                            assert target.get('accounting',{}).get(kind,{}).get(key,0)-target_previous.get('accounting',{}).get(kind,{}).get(key,0)==value-baseline.get('accounting',{}).get(kind,{}).get(key,0)
+                    assert target.get('accounting_rows',[])[len(target_previous.get('accounting_rows',[])):]==assembly.work.get('accounting_rows',[])[len(baseline.get('accounting_rows',[])):]
+                    if C2_case!='normal':
+                        assert target['inventory_incomplete'] and target['seed_incomplete']
+                        assert any(row['field']=='metadata_failure' for row in target['leaf_failures'])
+                    if C2_case=='parse':assert target['inventory_parse_incomplete']
+                assert assembly.work['transferred_read_bytes']==assembly.work['read_bytes']
+                transferred=copy.deepcopy([(target.get('read_bytes'),target.get('seed_processing'),target.get('accounting'),len(target.get('accounting_rows',[]))) for target in (original_window,original_case)])
+                if C2_case=='normal':assembly._transfer()
+                else:assembly.close()
+                assert transferred==[(target.get('read_bytes'),target.get('seed_processing'),target.get('accounting'),len(target.get('accounting_rows',[]))) for target in (original_window,original_case)]
+            if C2_case in ('cancel-transfer','partial-transfer'):
+                assert len(transfer_entries)==1 and assembly.work['transfer_incomplete']
+                assert all(target['transfer_incomplete'] for target in (original_window,original_case))
+                if C2_case=='cancel-transfer':
+                    assert len(cancellations)==2 and cancellations[0] is not cancellations[1]
+                    assert caught is cancellations[0] and assembly.failure is caught
+                    assert all(target['read_bytes']==target_previous['read_bytes'] for target,target_previous in zip((original_window,original_case),target_before))
+                    assert assembly.work['transferred_read_bytes']==baseline['read_bytes']
+                else:
+                    assert caught is fault and assembly.failure is fault
+                    entry=transfer_entries[0]
+                    assert all(target['read_bytes']-target_previous['read_bytes']==entry['read_bytes']-entry['watermark'] for target,target_previous in zip((original_window,original_case),target_before))
+                    assert assembly.work['transferred_read_bytes']==entry['read_bytes']<assembly.work['read_bytes']
+                    assert any(row['site']=='seed-transfer' and row['value'].get('errno')==5 for row in assembly.work['accounting_rows'])
             if C2_case=='normal':
                 assert caught is None and len(result['inventory_core']['entries'])==5
                 assert c.digest(c.canonical(result['inventory_core']))==result['sha256']
@@ -5236,12 +5293,17 @@ def raw16_C2_inventory_inputs(root: Path, selected=None, mutation=False) -> None
                     'composition_occurrence_only':True,'full_seed':False,'work':assembly.work},sort_keys=True))
             else:
                 assert caught is not None and assembly.failure is caught and assembly.work['inventory_incomplete']
-                if C2_case in ('encode','parse'):assert caught is fault
+                if C2_case in ('encode','parse','partial-transfer'):assert caught is fault
                 if C2_case=='parse':assert assembly.work['inventory_parse_attempt_bytes']>0 and assembly.work['inventory_parse_unknown']
-                print(json.dumps({'C2_case':C2_case,'failure':type(caught).__name__,'incomplete':True,'work':assembly.work,'full_seed':False},sort_keys=True))
+                print(json.dumps({'C2_case':C2_case,'failure':type(caught).__name__,'incomplete':True,'work':assembly.work,
+                    'original_targets':[{key:target[key] for key in ('read_bytes','write_bytes','physical_bytes','files','seed_processing','accounting','leaf_failures','transfer_incomplete','inventory_incomplete','seed_incomplete','inventory_parse_incomplete') if key in target} for target in (original_window,original_case)],
+                    'target_before':[{key:value for key,value in row.items() if key!='accounting_rows'} for row in target_before],
+                    'leaf_before':{key:value for key,value in baseline.items() if key!='accounting_rows'},
+                    'target_new_rows':[target.get('accounting_rows',[])[len(prior.get('accounting_rows',[])):] for target,prior in zip((original_window,original_case),target_before)],
+                    'transfer_entries':transfer_entries,'same_first_cancel':bool(cancellations) and caught is cancellations[0],'full_seed':False},sort_keys=True))
             seed_parent.close()
 '''
-    for case in (selected or ('normal','source-drift','registration','copy-close','register-cancel-close','encode','parse','compare')):
+    for case in (selected or ('normal','source-drift','registration','copy-close','register-cancel-close','encode','parse','compare','cancel-transfer','partial-transfer')):
         namespace={'C2_case':case,'C2_mutation':mutation};argv=sys.argv;sys.argv=['C2-inventory-fixture',str(root)]
         try:exec(compile(prefix+extra+footer,'<actual-C2-inventory>','exec'),namespace)
         except BaseException:

@@ -1666,6 +1666,16 @@ class _SeedAssembly:
             return {"inventory_core": decoded, "sha256": measured}
         except BaseException as error:
             self._failed(error, "seed-inventory-core")
+            try:
+                if self.work.get("inventory_parse_unknown", False):self.work["inventory_parse_incomplete"] = True
+            except BaseException as later:self._failed(later, "seed-inventory-unknown")
+            if not self.work.get("transfer_incomplete", False):
+                try:self._transfer()
+                except BaseException as later:self.failure = _seed_first(self.failure, later)
+            if self.work.get("transfer_incomplete", False):
+                for counter in (self.window, self.case_work):
+                    try:counter["transfer_incomplete"] = True
+                    except BaseException as later:self._failed(later, "seed-inventory-transfer-state")
             raise self.failure
 
     def _closed_gate(self):
