@@ -1055,7 +1055,7 @@ below. Shared value adapters alone are not delivery.
 
 对于一个实际qualified byte occurrence，固定实体层为 O原持有来源、H或T或local-P前段carrier、P最终private recorder、S私有seed、I-run、I-dashboard。local owner可少一层，但预算和证明不能预先借这个节省；实际没有写出的文件记0，不虚构一次写。所有native已生成dependency snapshots、同role重复capture和旧失败均列入O/额外carry-in，不能因为同SHA合并。
 
-C的seed assembly必须实现为replay-malicious.py内一个私有固定数据步骤，由现有测试/受授权录制调用者持有对象调用；只消费已提交完整H/T/P，不运行native、collector或新命令。它排他写固定S角色文件并逐项复制、比较、封口。没有新的public CLI、用户选路径/limit或通用API。C launcher在run/dashboard按manifest固定role持有S并排他创建I；driver只调用固定replay_case；coordinator只读I并重算原owners。两次replay各有独立I，不能共用或释放前次I省账。
+C的seed assembly必须实现为replay-malicious.py内一个私有固定数据步骤，由现有测试/受授权录制调用者持有对象调用；只消费已提交完整H/T/P，不运行native、collector或新命令。下述C1固定FD6边仅允许在真实P仍live时，先把已完整写入并通过原检查的P成员独立staging到pending S；它不把尚未seal/close的整体P冒称完整。原完整H/T/P、全部P/S检查、实际关闭结算及所有费用闭合前，S不能完成或成为可用seed。它排他写固定S角色文件并逐项复制、比较、封口。没有新的public CLI、用户选路径/limit或通用API。C launcher在run/dashboard按manifest固定role持有S并排他创建I；driver只调用固定replay_case；coordinator只读I并重算原owners。两次replay各有独立I，不能共用或释放前次I省账。
 
 下表每个L是一份完整byte集合的长度。R为新增实际文件读取；W为写出；H为SHA输入处理；E为完整比较两端之和；C为拷贝所访问字节。相同loop可同时有R/H/E费用，不能只报R。旧native本来发生的Q另列，不改其次数。
 
@@ -1071,11 +1071,87 @@ C的seed assembly必须实现为replay-malicious.py内一个私有固定数据�
 
 S/I final检查既比较全bytes，也各自验证初次持有时的digest、parent/name/ACL；两边一起改成相同内容仍拒绝。原SHA与equality均保留；没有用“融合”删掉独立origin或identity SHA。
 
+**C1 固定 FD6 活 P 交接。**
+
+本节落实 operator 已批准的唯一 source transport/read scope 例外：原真实 inner Reader 在适用 P 首次原关闭前，经既有 FD6 把固定录制清单交给同次 parent Session。parent 独立读验该活 P，并写入自己原有 S。此范围批准仅供 inactive 仓库机制；不代表已经实现、可成功运行或已接受完整来源证明。FD3 的两个原 records 例外不扩展到 FD6；FD6 仅依本节获得此固定边。
+
+本节设计源为冻结 head `ff9c26b3a1314f13efc0d97690ccf8b9fbe17bdf`。下表及正文的 ff9 行号均绑定该 head，不借后续 WIP 补事实。
+
+**真实 owner 与根**
+
+| 位置（均为 ff9） | 事实及最小接点 |
+| --- | --- |
+| `scope/v1/generate-gate-evidence.py:773–775` | 原 Session.start_scope 后，经 parent Reader.darwin.gate_scope 启动同一次 scope 调用。 |
+| `shadow/v1/_consumer.py:5760–5768,5794–5815` | 固定九个 path 实参；原环境进入真实 Popen；原 FD6 仅传给该调用，parent 保留原 process/wait/cancel owner。 |
+| `scope/v1/read-shadow-evidence.py:914–921` | parent Reader.environment 的 TMPDIR 精确等于其原 runtime。 |
+| `scope/v1/evaluate-scope.sh:48–50,235–251` | 脚本在该 TMPDIR 下 mktemp；创建 reader-captures/runtime；将同一 scratch 的 scope/set/output 和原 bundle/git 传入真实 Reader。此脚本不改。 |
+| `scope/v1/read-shadow-evidence.py:743–784,2132` | 真正 child Reader 在 main 构造；scratch=output.parent.parent；P 位于其原 reader-captures 内。 |
+| `evals/v1/replay-malicious.py:2581–2593,3151–3290` | 原 Assembly 已绑定 generator/session/request/S。已有同进程 P→S 实质检查可提取固定值/数据持有边；不能把它伪装成跨进程对象。 |
+
+parent 在原固定调用处绑定真实 Session、原 request bytes、call_id/nonce/binding、原 gate invocation、实际传入环境的 TMPDIR、实际 Popen 对象、既有 case/window 账和既有 S holder。该 context 只能由这些现有实际 owner 直接建立。不得从磁盘声明任命 owner，不导入测试 Assembly，不存任意 callback。Session 只调用 consumer 固定私有检查/复制原语；S holder 与预算 context 留在 parent。
+
+child 的来源只能是 main 当次真实五个 path 参数及该 Reader 已注册的真实 holders。固定验证 scope/set/output 分别位于同一 scratch 的 `scope.json`、`shadow-set.json`、`observation/result.json`；bundle/git 必须对应原 gate_scope 的两个输入。scratch 必须是 parent 原 TMPDIR 的直接子目录，名字严格属于原 mktemp 的 `ystack-scope-evaluate.` 加六个 ASCII 字母或数字的单一组件。不能选择其它兄弟、父根、历史 locator 或输入 bundle/Git 为 P 根。
+
+parent 不把 child 发送的路径当 authority。它从自己的原 TMPDIR 重建唯一候选路径，再独立 held 打开完整链，检查物理目录、name/fd/identity、owner/mode/原 ACL 规则和检查后 fstat。child 原 argv→scratch→P 的关系必须由受绑定源码的实际 producer 建立，且与同次 FD6 nonce、固定命令、实际存活子进程和 parent 根相符。名字匹配、同 UID、可见性、nonce 或一张远端 map 单独都不够。原 parent runtime 的真实来源/完整 held 检查未建立，或只能靠任意刷新 stat 掩盖漂移时，停止此次录制。不得声称现有源码已完成这些新绑定。
+
+**固定消息与持有边界**
+
+复用原七键 GateWire envelope、version 1、序号及 ACK。只在已绑定 recording context 的调用内启用。非录制调用保持原 body/行为。无新 phase、请求次数、重试、分片或 FD 传递。
+
+| 原 phase | 新增唯一 `p_handoff` 成员 | 时机 |
+| --- | --- | --- |
+| INIT | `{version:1}` | parent 原 INIT；只开启本次固定接线，不传 S 路径/权限。 |
+| C_REQUEST | 下述 batch | child 原 request 处；parent 完成该 batch 的 P/S 检查后，仍按原顺序执行本 phase 的 native 工作和原 ACK。必须在 parent 原 release_local、child 原 release_stores 前。 |
+| C_RELEASED | 下述 settlement | 原 release_stores 已实际返回；该次 close 记录不授权再读 P。 |
+| FINAL_OWNER | 下述 batch | 原 final 请求/ACK 内，早于 READY、SEAL 和 terminal 的首次 P seal/close。 |
+| CLOSED | 下述 settlement | 原 Reader.close 已实际返回；随后仍原 ACK/socket close。 |
+
+ACQUIRE/RELEASE/C_DONE 的闭集不变。全部 ACK 仍 `{}`。native request/expectation/acquisition 验证、coverage 原 release/reacquisition、READY/SEAL/COMMIT、native 读取/关闭/错误顺序均不变。新增 staging 位于原 ACK 前的录制工作区，不把 child 暂停到新阶段，也不延长 deadline 或另保一份 holder 来越过原 close。覆盖分支未到达时不伪造 C_REQUEST/C_RELEASED。中途失败的原 close 仍执行，但不产生可用 seed。
+
+**闭合数据域。** 每个 batch 只允许以下两种对象：
+
+- `{state:"unusable"}`：缺原件、内部录制失败或无法在原帽内完整编码。详细实际错误仍保留在原本地账；不填假清单。
+- `{state:"ready", scratch_name, root_chain, members}`：phase 本身决定 coverage/final 批次；不得另传命令、目标根、S 文件名或 selector。
+
+`root_chain` 是 child 已实际检查的 parent runtime 到 scratch 的逐组件 `{name, identity}` 有序列表。name 是单一原文件名；identity 精确复用 consumer `_identity` 的十整数元组顺序。parent 自己独立取得同一身份并保留其完整原 stat/ACL 记录。wire 身份值不替代实际检查。parent 每次固定根核验不得借目录合法变化而刷新未知漂移。
+
+`members` 是完整有序列表，每项严格为 `{serial, family, ordinal, name, relative, chain, size_bytes, sha256}`。serial 为本 Reader 首次注册时从 0 连续分配的私有实体号；同一持有实体在两批出现时保持号和完整绑定。不同真实 acquisitions 即使 SHA 相同也保持不同号及全部费用。ordinal 保持原 owner 原序号。name 为该 owner 原成员名。relative 只从真实 holder.path 相对该 scratch 计算；必须在 `reader-captures` 下，使用原 `gate-NNNN` 槽及原固定子目录。拒绝绝对路径、空组件、点、点点、NUL、符号链接及未列实体。chain 使用同一逐组件身份型，完整覆盖至 regular-file leaf。size 为实际非负整数，sha 为原完整内容的 64 位小写十六进制摘要。
+
+family 仅为 `anchor|runtime|source|source-configuration|history`，对应 ff9 `_scope_reader_inputs` 的五个实际分支。anchor/name、runtime slot/index/ordinal、source request/attempt/原 source ordinal、configuration 的原 fixed package 成员、history 的原 storage-read acquisition/name，须从各原完整 P 文件和原已有关系独立重算。name/relative 不是开放读接口。parent 由这些固定关系生成原 semantic S member，不接受 sender 指定类别来改变费用或资格。原完整 runtime inventory、source/配置 raw、history 认证与完整 coverage 关系均保留；仅摘要或另一 Reader 的同名内容无效。
+
+settlement 仅允许 `{state:"unusable"}` 或 `{state:"complete", batch_sha256, closed, accounting}`。batch_sha256 绑定该 child 已发送的完整 canonical batch bytes：C_RELEASED 对应 C_REQUEST，CLOSED 对应 FINAL_OWNER；closed 为该批实际首次关闭成功的实体 serial 有序列表，仍活的历史文档不冒称关闭。accounting 是该真实 owner 此刻已有的完整固定 capture-accounting receipt 原值，保留其 observations、实际失败和所有原键；无通用额外键。前批仍活实体可在末批重检，后续真实 close 只归账一次。parent 必须结合实际批次与原生命周期检查每个实体的关闭状态；清单声称 closed 不是已持有证明。没有实际 close/费用原件，或完整 receipt 放不下，则 unusable。该结算不宣称更后面的 socket、native tail、父方费用已完成；这些仍须各真实 owner 原账闭合。缺项是 UNKNOWN，不能从退出 0 或源码推成零。
+
+此字段布局只用于本节固定交接，不是通用 API。分开的高风险 plan 必须绑定上述固定映射及现有 accounting 类型，禁止自由 metadata、未知 family、任意 dispatch 或额外消息。若原 closed receipt 实际不能表达必要记录，必须指出差异并重新评审；不能静默扩展本 envelope。
+
+**独立读取、失败与容量**
+
+child 从真实活 holders 形成 batch，先做原要求的完整检查。parent 在 child 原 ACK 等待内，从自己独立取得的上述 P held 链全量读取，按原 S 排他写、fsync/实际 writer close、held readback、全 bytes 比较、独立 SHA、name/ACL/再次 fstat 完成 staging。parent 先完成自己新增 P read handles 的检查与关闭，再发原 ACK。child 收到 ACK 后按原流程重检并关闭；实际后验失败使整次录制不合格。不得以 wire 摘要替代 bytes，不把 parent 的新句柄称作 child 的原句柄，也不晚开已经关闭的 P。
+
+每批必须完整覆盖本时点所有尚需独立 staging 的适用原 P；已完成且真正独立 S 仍持有的旧实体按原规则复核，不重新读取已关闭 P。若有 P 在这两个原时点之前因失败路径关闭，原失败/partial 原地保留，该次不能成为完整 caller 证明。本合同不改变原 native close 来补救。不因复制已完成就提前释放 child 原 hold。
+
+录制 side member 的构造、解析、根校验、复制、账或完整性错误只使录制 unusable。实现须隔离 side data 与原 native body 验证；原控制工作、ACK 及原 close 路径继续。原 native 错误保持原身份和优先级；录制首错、后错、partial、取消和关闭错分别保留。若原 socket 自身短写/EOF/取消/超时，沿原 native transport 错误处理，不能伪造 ACK 或成功；不得承诺这种错误与新增资源开销物理无关。
+
+GateWire 完整 canonical frame 仍 ≤1 MiB，每方向累计仍 ≤64 MiB。原小框也占额度。新 body 在发送前检查总帧及累计帽；完整 batch/settlement 不合适则走最小 unusable，同样计费；连该帧也无法发送时按原错误结束，不加额度。无分片、隐式第二轮或外部清单文件。所有列表另受原 4096 acquisition/原文件数等更紧适用帽约束，不能用 frame 容量放宽其原限制。
+
+新增 side bytes 会增加真实 FD6 IO、编解码和时间。原 native 业务顺序不变，不代表 wire bytes 或 kernel 读写次数不变。新增工作不能藏进旧 Q 或计零。物理 partial frame、同 pipe 阻塞、无法保存完整错误及 deadline 干扰仍是未证明残余；后续门若不能闭合这些要求，就仍不得执行。
+
+全部新增 read/write/hash/equality/copy、metadata 编解码、frame、hold、zero/partial、保留重叠、关闭和错误记录照付原 M/Q/raw/runtime/file/case/window 账，仍先检查实际分配/写入帽。运行期仍须闭合真实 Q；新读不冒作原 native read，也不能借相同 SHA 抵费。现 M 超帽事实不变。新增数据不改变固定九 occurrence、RAW16 角色、窗口次数或原 qualified slot 限额。
+
+P 留在原位置，S 留在 parent 原受控留存根。失败不删、不迁、不重试旧 native artifacts；原 ephemeral cleanup 范围不扩展。若原清理会使必要留存无法保全，必须拒绝完整证明并显式报告，不在此包暗改 cleanup。
+
+**范围、证明和后续门**
+
+本节接线仅可修改六个原 allowed paths：`scope/v1/read-shadow-evidence.py`、`scope/v1/generate-gate-evidence.py`、`shadow/v1/_consumer.py`、`evals/v1/replay-malicious.py`、`scripts/test/candidate-content-preparation-fixtures.py`、`scripts/test/evals-malicious.test.sh`。前三者接真实 owner/wire/固定原语；replay 接原 S 与真实账；两测试路径验证实际父子和拒绝分支。`evaluate-scope.sh` 原 blob `605370780345539c5ed7b9debbd04f5327610128` 不改；不改九个 adoption-only 路径、bootstrap 或 84 closure 成员集合，不增加其它文件入口。若这六个文件不能完成原根绑定，依赖交接保持不合格，不默认增加 allowlist。
+
+后续精确 GO 内的普通自有 fixture 必须走真实 spawn/FD6/Reader 与两个原关闭边界，并验证 S 全 bytes、错误回原流程、根/对端拒绝、partial/EOF/cancel、原帽和实际账。已有同进程 fixture 或静态 helper 不替代它。不要求当前运行、不承诺 full native 可成功。真实 reachability、容量、费用、retention/noninterference 目前均未完成证明。
+
+本节 G2 保护合并后，仍须独立作者的 high-risk plan、独立接受及保护合并，再重绑原保留 attempt 并取得经理 fresh exact source GO，才可写接线代码及执行普通自有 fixture。不得把批准本节当作现在执行新交接、实际 source/native、VM/window、LOCAL7/D、网络、安装或生产的权限。原 claim、attempt、旧失败和 UNKNOWN 全保；CPUwall NONE、native BLOCKED、production EMPTY、automation PAUSED 不变。其它已授权普通实现不因本节未证明而全部停止。
+
 **C2 固定窗口会话、留存与共同账。**
 
 四-case 窗口的原 caller 是唯一资源 owner。它在原 seed/shared/launcher 数据边中使用一个固定、单次私有会话：控制连接 FD 9 和原已持有窗口目录 FD 10。该边只传递最新内存账头的准入与本次离线操作的实际增量；磁盘 descriptor/receipt 不能任命 owner 或自行选择最新头。完整资源证据由 prefix 文件、真实终态和仍存活 caller 的实际尾账共同组成。
 
-原公开 run/dashboard 参数、seed bytes、result bytes、trace.cost absent 及原 stdout/stderr 错误语义不增加字段或参数。没有新环境变量、命令、public API、provider、任意路径参数、通用 RPC、加载器或长期服务。只有此固定 caller↔launcher 边允许 FD 9/10 及有限窗口 artifact 交接；下述 C3 两条已有 stdout 内部边仅使用固定 framing，不新增 FD 或通用 transport。原 T、native、source、guest、host 和 replay coordinator 的其他 transport/新 inherited fd 禁项不变。原 fd3 carrier 不变。FD 10 仅代表原已授权窗口根，不授予其父目录或其它路径能力，不得取得或转送缺失 host-publication-work。
+原公开 run/dashboard 参数、seed bytes、result bytes、trace.cost absent 及原 stdout/stderr 错误语义不增加字段或参数。没有新环境变量、命令、public API、provider、任意路径参数、通用 RPC、加载器或长期服务。只有此固定 caller↔launcher 边允许 FD 9/10 及有限窗口 artifact 交接；下述 C3 两条已有 stdout 内部边仅使用固定 framing，不新增 FD 或通用 transport。除上文C1固定FD6活P交接外，原 T、native、source、guest、host 和 replay coordinator 的其他 transport/新 inherited fd 禁项不变。原 fd3 carrier 不变。FD 10 仅代表原已授权窗口根，不授予其父目录或其它路径能力，不得取得或转送缺失 host-publication-work。
 
 **真实 caller、窗口根及责任**
 
@@ -1633,6 +1709,7 @@ replace implementation.
 | 全资源边界 | 每case 4GiB/64、六层24GiB/384；窗口16GiB/256、96GiB/1,536；两级全部新增累计cap及旧适用caps分别边界/多一；carry-in/失败共账，阶段/pair不重置；shared总数仍256；有界模拟大计数，不制造4GiB真实fixture |
 | 失败和重跑 | 两次小partial后完整成功仍共用总账；已满容量的后来操作拒绝且保留原文件；未知write结果或第二close/ledger故障记UNKNOWN，无成功seal；不删除以换容量 |
 | stage C | run和两disjoint dashboard pairs完成四case各一次，独立I和final checks；额外case/重复trial按原M4/manifest拒绝；C缺任一owner不能发完成结果 |
+| C1 FD6 活 P | 按上文C1合同，真实原spawn/FD6/inner Reader走coverage release前和final seal前两处交接；独立S全bytes与原关闭结算均核验。根/对端/phase错、缺P、partial/EOF/cancel、原帽及实际账失败均保留原控制/错误流程并拒录制。同进程helper不替代完整caller；不新增运行窗口或诊断矩阵 |
 | C2 会话/留存 | 原普通 caller 经过真实 run-evals CLI 的完整 bounded 正例；同一四-case账贯穿run及两个dashboard pairs。旧磁盘头/新START、READY后活头改变、无GO/重复GO、单FD/无FD malicious旁路、错误root/parent/name/ACL、I/partial/旧O导致超限均拒绝。正常non-malicious路线及原参数/env/result/error/取消语义保留；不清理retained区来fit |
 | C2 尾账/进程 | 一次DONE write=512及三次原close observation完整计费；正短写/0/EINTR条件不成立、END完整但DONE缺失、DONE完整但非零/signal、child正常但caller close失败、reservation不足均保留已知前缀和UNKNOWN。核实际spawn PID/PPID、DUP2/CLOSE清单、辅助child无9/10继承、精确wait、原rows与固定重建费用。删除任一准入/关闭/尾账检查的配对mutation必须失败；此wait不证明native终态 |
 | C3 预算/真实回账 | 冻结同一 source 的真实 P→D→C3 小正例；同 operation 多 case 及 dashboard 两 pair 不复用 grant/slot/work。无/旧/错 budget、重复 actor/消息、cross-case grant、UNKNOWN、额度耗尽/累计超限均拒绝。核 P 自有+D own+每 C3 实际 delta/retained/T/两 close rows 各一次，D 终段归 common、C3 归固定 case；bootstrap 不抹零。缺 close/EOF/exact wait、partial/短 END/DONE、首 KeyboardInterrupt 后 marked 次错、尾 close/observation 失败均保留已知与 UNKNOWN。删除预算 guard、实际结算、原 source-fullcheck 的配对 control 必须失败。保存原 invocation、前后 source、完整 stdout/stderr/frames、PID/wait、费用/留存/首错次错/pins；所有 regular-file 检查/close 在 END 前真实完成 |
