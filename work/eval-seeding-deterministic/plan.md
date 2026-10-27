@@ -1,5 +1,5 @@
 ---
-spec-blob: 0f4b97321f6b8e03ba5abe587a16f500097748a6
+spec-blob: e0966a09eace0cd337c9498fcecd1d60265bb92a
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-26
@@ -14,18 +14,22 @@ one complete two-source delivery. Source preparation does not accept a dependenc
 a real recording, native qualification or either seed batch.
 
 This plan binds accepted G2 spec blob
-`0f4b97321f6b8e03ba5abe587a16f500097748a6` at main
-`fa4151d44b16fd2cc6a37ff8357e9c8604019995`. RAW16 acquisition design
+`e0966a09eace0cd337c9498fcecd1d60265bb92a` at main
+`4697aae94a819fc64c95edc62b70d487195b571d`. RAW16 acquisition design
 locations retain historical source `c1d9d23e42e6efe2d6da1aae3d23b34564b4080d`
 and base `ae634c86701da04767c41a4d5f416f0c36517cf0`. T lifecycle sites bind
 `25af14412bbd6fc4b5c0b1ca03ba43e545ecb4bc`. Keep older clock/owner labels,
 adoption pins and frozen `6f219579f72f73ddd3703f32b5f4a102ae8c175c` as
 historical anchors, not current resume identities. Earlier paused sources
 `29687ec75d573c53bf5c40523ca2b6dc2a302e11` and
-`2dd51dcd819b252cee6501c799b5f3fd9018c9ae` are also historical. Current source is
-paused clean at `40022eb3b86c72b3d4d19b6e76cf21c68a41b371`, including preserved WIP.
-Its replay D pin is stale; syntax checks are not semantic or source acceptance.
-Its previous GO is paused; B, T and C remain unaccepted. That paused source still
+`2dd51dcd819b252cee6501c799b5f3fd9018c9ae` and
+`40022eb3b86c72b3d4d19b6e76cf21c68a41b371` are also historical. Current source is
+paused clean at `f2abe2b02963542fe6505bbc028a423842040880`, parent
+`c4a725382426be9fde80d1c0d769427d5584a55c`, tree
+`74701966839d17e1ef1b49ec20f283c9b70ea9b3`, base
+`06c1cfd32fe2ce91e8eb63f0e36f86a52acbd507`. Its D pins are source-bound;
+static pin agreement is not acquisition or semantic acceptance. Its previous GO
+is paused; B, T and complete C remain unaccepted. That paused source still
 has the prior artifacts; normally merge the accepted plan main into the preserved
 carrier before fresh exact-source preflight. The operator has accepted
 the resource, fd3 v3 and retention contract; that decision grants no actual
@@ -188,10 +192,20 @@ it adds no CLI option, environment selector or reusable test framework.
 The original artifact base is `091f22d6dc2bff038e60b1a10b12923093eda0fe`.
 The unique PR 1b carrier remains `codex/impl/eval-source-relay-replay`, worktree
 `/private/tmp/ystack-eval-source-relay-replay-20261023`, recorded paused clean by the
-manager at `2dd51dcd819b252cee6501c799b5f3fd9018c9ae`. Its preserved WIP is
+manager at `f2abe2b02963542fe6505bbc028a423842040880`. Its preserved source is
 unaccepted. This plan does not accept that source or release its pause. Rebind its actual parent/base, remote/PR,
 clean state and complete artifact tuple before resume; do not infer them from an
 older checkpoint. B remains unaccepted and complete C remains required.
+
+Before dependent C2 code, close C1-ORDINARY-CHAIN-UNEXPLAINED-FAIL through fresh
+independent source review, or record an explicit applicable-authority disposition.
+The 018 reader-failure chain stopped with E_STALE before the intended close fault.
+Its held-component cause is UNKNOWN. Preserve that raw failure and the 019 traced
+pass; neither a later untraced pass nor four limited SOURCE_CLOSED code findings
+supplies its missing cause. Identify the actual component/change and prove the
+normal refusal or repair with the original guard intact. This plan grants no
+observer execution, source acceptance or C2 implementation GO. Keep older failed,
+UNKNOWN and NOTRUN evidence and all native/B/host/parent/M/Q/full-C/G3 gates.
 
 Preserve historical `cd5c4e8f92ac766f60ca2df8b8fb839ac6d863d9`, parent
 `10be18bddd73ffbc02ac8e52dc5ffd40059c4b73`, the earlier 64dda8e/f55240e
@@ -671,14 +685,18 @@ remains part of review even when that base already contains dependency bytes.
 - `scripts/test/candidate-content-preparation-fixtures.py`
 - `scripts/test/file-digest-verifier.test.sh`
 - `ci/required-files.txt`
+- `evals/v1/run-evals.sh` — only the R9.3 five-byte `exec ` addition
 
-No extra product or test file is permitted. New source files are only the coordinator,
+These are the original 40 edit paths plus that one bootstrap dependency. The nine
+adoption-only paths and SOURCE 84 are unchanged. No extra product or test file is
+permitted. New source files are only the coordinator,
 two guest value files and `scripts/test/evals-malicious.test.sh`. Add those four
 restore-critical paths to `ci/required-files.txt`. No runtime config, accepted set,
 SDK, installation, generation, qualification or workflow change is allowed.
 The sole public protocol change is the accepted same-fd3 v3 frame below, within
-allowed receiver paths. No wrapper or unknown parent source is added to the edit
-list; a real producer outside it remains blocked pending its exact scope gate.
+allowed receiver paths. The sole bootstrap edit is the fixed C2 exec in R9.3;
+no unknown parent source is added. A real producer outside the list remains
+blocked pending its exact scope gate.
 
 ### S1–S10 and invariant mapping
 
@@ -959,7 +977,8 @@ across their original owners, not copied into nine empty or partial objects.
 The table paths below are logical paths inside the spec's fixed containers.
 No new implicit environment input is allowed.
 
-At frozen source 40022eb3b86c72b3d4d19b6e76cf21c68a41b371, use these actual
+The following historical line anchors bind source
+`40022eb3b86c72b3d4d19b6e76cf21c68a41b371`; rebind by the named actual
 caller edges to select observations before checking candidate role labels:
 
 | Fixed occurrence / container | Existing caller and binding owner |
@@ -1306,8 +1325,9 @@ consumer updates also bind cd5c4e8 host write_receipt_file/_write_capture_file/
 _write_capture_export and consumer _origin_values/read_store_attempt/
 _HeldStoreRead/read_coverage_attempt. Rebind final locations by function and hash;
 no old line number or source checkpoint is a current resume tuple.
-Use only the existing 40 edit paths; all nine adoption-only paths and the exact
-84-member source closure remain unchanged. Rebind final line/blob/hash receipts.
+Use only the original 40 edit paths plus the sole C2 bootstrap exec in R9.3;
+all nine adoption-only paths and the exact 84-member source closure remain
+unchanged. Rebind final line/blob/hash receipts.
 
 | Existing site | Required change within its existing owner |
 | --- | --- |
@@ -1614,7 +1634,8 @@ acceptance of that recording ledger. Preflight includes all previous retained
 files; no deletion, truncation or rename refunds a charge. Test every added W/M
 charge at its applicable old cap and one step over, including two failed attempts
 retained before a later ordinary positive. Keep failed raw records even if a
-second close/sync/observation fails. No production persistence interface is added.
+second close/sync/observation fails. Only the fixed C2 window session below adds
+the accepted private handoff; no production persistence interface is added.
 
 ### RAW16 fixed assembly and resource ledger
 
@@ -1624,12 +1645,11 @@ second close/sync/observation fails. No production persistence interface is adde
 
 C的seed assembly必须实现为replay-malicious.py内一个私有固定数据步骤，由现有测试/受授权录制调用者持有对象调用；只消费已提交完整H/T/P，不运行native、collector或新命令。它排他写固定S角色文件并逐项复制、比较、封口。没有新的public CLI、用户选路径/limit或通用API。C launcher在run/dashboard按manifest固定role持有S并排他创建I；driver只调用固定replay_case；coordinator只读I并重算原owners。两次replay各有独立I，不能共用或释放前次I省账。
 
-Continue the preserved private `_SeedAssembly` in replay-malicious.py:713–1079;
-its pending-S copies and four acquisition methods are unaccepted WIP, not a
-complete case serializer. Complete the fixed v2 assembly in that boundary, not
-a second implementation. Its draft four-stage interface is not an accepted
-nine-occurrence lifecycle. Process each occurrence in its original live owner
-window. In particular, process prepare T before the original close or inspection
+Continue the preserved private `_SeedAssembly` in replay-malicious.py:713–1592
+at f2abe2b. Its nine-occurrence methods, case v2 serializer and close guards are
+source mechanisms, not accepted complete C1 or a semantic S manifest. Extend that
+same boundary; do not build a second implementation. Process each occurrence in
+its original live owner window. In particular, process prepare T before the original close or inspection
 replacement; never read closed T_history after launch. Do not require all four T,
 both launches and both sources to be live together, or extend a native hold.
 Complete that occurrence's P/S copy, independent fresh hashes, whole-byte equality
@@ -1644,9 +1664,9 @@ uncertain original termination/ledger facts cannot be replaced by a new flag.
 A later stage cannot reopen a historical P/T path or use a saved digest instead
 of a full check that was due while it was held. Carry real gate facts through its
 existing session; an unavailable holder or field blocks the dependent step.
-Use only this fixed private data path; no general append/callback/provider,
-production caller, public API, collector, loader, transport or terminal protocol
-is introduced.
+Use only this fixed private data path. The C2 caller/launcher session below is
+the sole added private handoff. No general append/callback/provider, production
+caller, public API, collector, loader or native terminal protocol is introduced.
 
 下表每个L是一份完整byte集合的长度。R为新增实际文件读取；W为写出；H为SHA输入处理；E为完整比较两端之和；C为拷贝所访问字节。相同loop可同时有R/H/E费用，不能只报R。旧native本来发生的Q另列，不改其次数。
 
@@ -1794,11 +1814,13 @@ source gates above, then implement the remaining path in this order:
    independent hashes and full equality. Validate actual encoded case size and
    full inventories before successful finalization. Keep all original seals,
    close/tail accounting and failures; retain partial output on every failure.
-2. In evals-launcher.sh stage each case's S into distinct I-run and I-dashboard,
-   using fixed role/size and held source/installed paths. Apply the exact RAW16
-   schedule above through final seals. Four cases run once each; two disjoint dashboard
-   pairs replay those same four once each. Do not share or discard I between
-   modes, cases or reruns to fit physical or work budgets.
+2. Implement the fixed C2 window session below in the existing assembly/caller,
+   launcher and driver paths. Bind the semantic S manifest and original live
+   ledger before I writes. Stage distinct retained I-run/I-dashboard, keep the
+   complete driver and independent result checks inside the S/I lifetime, and
+   settle actual tail costs with the still-live caller. Four cases run once each;
+   the two disjoint dashboard pairs replay them once each. Do not share or discard
+   I, reset a pair ledger or skip final seals to fit.
 3. In evals-driver.sh add the malicious arm to the existing fixed dispatch.
    Invoke only pinned replay_case. Validate case v2, then independently bind and
    project each occurrence into its original owner in the original call order.
@@ -1809,8 +1831,9 @@ source gates above, then implement the remaining path in this order:
    Never execute slots or pass the combined wrapper into native code.
 4. Update eval/scope shapes and pins in their existing files, then the complete
    test/doc/restore paths already allowed. Recompute the full 84-member receipt.
-   No parent file outside 40 edit, no edit to 9 adoption-only paths and no new
-   closure member is approved. The actual parent source/qualification/fd3 gate
+   Only the original 40 edit paths and sole bootstrap exec are editable; no
+   unknown parent file, edit to 9 adoption-only paths or new closure member is
+   approved. The actual parent source/qualification/fd3 gate
    remains open even if the receiver fixture and C mechanism pass.
 
 Preserve the already implemented review arm and its none approval pin. Add the
@@ -1866,6 +1889,162 @@ inactive source mechanisms and all pending real seed gates. Restore manifest add
 only the four new paths above. No shipped seed, fake scope, approval or catalog
 status changes in PR 1b.
 
+### C2 fixed window session and implementation map
+
+The accepted spec's “C2 固定窗口会话、留存与共同账” is the sole message,
+field, ordering and tail-vector schema. Implement that one route. Keep the
+original result bytes and trace.cost absent. No new CLI option, environment
+input, loader, provider, native caller or host-work transport is permitted.
+
+| Boundary at frozen f2abe2b | Existing values and required implementation |
+| --- | --- |
+| Assembly input, replay:715–756,1284–1300 | Actual destination HeldPath, Anchor, case_id, window/case objects and original held inputs. Keep object provenance in process; never serialize id(work) or exception objects as identity. |
+| S files, replay:878–964,1023–1147,1226–1270 | files currently contains name/size/SHA/kind. Record semantic role and occurrence at each existing copy call from the original snapshot/member/input/output name. kind is an accounting category, not a role. |
+| Case/close, replay:1411–1592 | document writes raw-observations.json; closed_pending returns raw bytes only, after close guards. Use the caller-held assembly and sealed inventory for manifest construction. Do not treat that return as a seed, live S fd or qualification. |
+| Caller, preparation fixtures:4352,4540 | Extend raw16_C1_copy/raw16_C1_T_windows in the same file. They hold seed_parent, anchor.recording_work and actual case_work/case_sources. Keep the root and live window owner beyond assembly close. No production caller is asserted. |
+| Launcher, :21–70,163–580,652–658,785–845 | Existing copy/reuse helpers and D command-substitution close too early for C2. Add only the fixed malicious Python lifecycle in this same file. Ordinary review staging and its limits stay intact. |
+| Driver/result, driver:296–364,770–815; launcher:933–1081 | Preserve produce_result, each dashboard pair replay, byte comparison, program_check, canonical output, pin/input checks and original error precedence. Python P owns S/I across all these calls and their actual outcomes. |
+
+**Assembly to immutable manifests.** At each original copy, retain a fixed
+semantic association before the original holder closes. Map recorded NNN names
+from that stage's actual sorted snapshot inventory; map P members from _P_files,
+preparation members from the actual launch/operation, and export roles from the
+two fixed launch names. At original_inputs, copy the actual held incident,
+reproduction request, write request and gate request to fixed incident.json,
+reproduction-request.json, write-request.json and gate-request.json respectively,
+through the same bounded exclusive writer and checks. Bind each semantic input
+to its original document kind/id, actual bytes and existing occurrence relation;
+these are fixed implementation names, not new public schema or inputs.
+Bind complete.json and every original input/output, raw wrapper and runtime slot
+by the accepted case/occurrence/role plus actual S name/size/SHA. Keep all nine
+applicable occurrences, both gate contexts, all ten groups and 13 output families.
+No NNN name, kind, expected output or copied hash can invent a missing relation.
+
+Build this index while its inputs are live; seal the inventory after the existing
+S final checks/close and successful closed_pending guards. Validate a bijection
+between semantic entries, actual files and all required original owner roles.
+Reject missing, duplicate, unused or cross-bound entries. The case manifest then
+references the immutable window descriptor as specified, without a digest cycle.
+Reuse the accepted content-pair/shared shapes in evals.jq and scope-gates.jq;
+charge the entire encoded manifest/descriptor and wrapper, including repeated
+bindings, to their original overlapping limits. Keep the 1–256 shared-file bound.
+Do not reopen P/T or alter their original close order to recover this index.
+
+**Root and initial authority.** The existing fixture caller starts with its
+empty seed_parent after its original held-chain/owner/mode/ACL checks. Create the spec's fixed cases/S and operations
+layout exclusively; pass each empty S child to its existing assembly. Hold the
+original root identity and full name/ACL chain until the last handoff. Existing
+closed S is acquired afresh from its fixed mapping with original seals; never
+read an fd from closed assembly.root or move old S to fabricate an empty root.
+The original seed-a/b and run-a/b CLI files bind that same root. Check every
+actual argument's full parent chain against FD 10 and the initial root seal.
+
+Keep the one live authority in the existing caller. Continue its actual
+anchor.recording_work and each case_sources without resetting either. Initialize
+only new leaves through _capture_work_values; transfer their actual increments
+and retained entities once, with explicit watermarks. Convert only the
+spec's existing counters/errors/UNKNOWN to the fixed codec; preserve original
+raw/export/source/preparation/Q/seed_processing distinctions and all overlaps.
+Record old O, native snapshots, carrier/P/S, earlier I, zero and partial files
+individually. Missing host/M/Q/terminal evidence stays UNKNOWN; no default zero,
+filesystem scan or new runtime acquisition fills it. A bounded ordinary fixture
+may prove its own actual local ledger without claiming whole-native qualification.
+
+**Process and admission.** Implement the spec's private codec in the existing
+launcher literal Python and its fixed caller in the existing fixture file. The
+caller creates the one control connection, prepares disjoint FD copies and uses
+os.posix_spawn for its direct child P. Keep a finite owned-FD list; use the exact
+DUP2/CLOSE actions and record actual spawn, closes and costs. Add only `exec `
+to the original final env command in run-evals.sh. Assert the other 291 bytes
+match original blob 3786b77484b811a8dababfcfe788b20360a411f3.
+
+Before launcher external commands, substitutions or scratch allocation, shell
+builtins distinguish both FDs, one FD and neither. Both enter the file's fixed
+literal Python via explicit exec; one refuses. Neither preserves the original
+non-malicious path, whose validated malicious-source arm must refuse. Do not
+select authority by a JSON substring. Require the spec's actual leaf PID/PPID
+relation to the caller's spawned/waited P before GO. Keep the same P through the
+terminal owner; no shell-tail optimization, extra keeper or heredoc is assumed.
+
+Move the existing malicious D acquisition, input snapshots, fixed tool/source
+pins, evaluator construction, original driver launch and independent validations
+under this Python lifecycle. Reuse their original checks and source inventories;
+do not make the old D child the window owner. Load only pinned source before END.
+Each finite original helper uses the specified posix_spawn CLOSE actions for
+9/10 and unused ends; record each PID, wait and actual result. CLOEXEC alone is
+not evidence for these closes. No helper inherits the root/control capabilities.
+
+Reserve finite bootstrap/admission and terminal work before spawn. Charge READY's
+actual acquisition and the caller's GO costs before allowing any I write. Bind
+START/READY/GO to the continuously held head and original input hashes; recheck
+that head after READY. A rolled-back disk prefix never selects the live head.
+No GO, unknown balance, changed identity, sequence error or pending failed slot
+permits a new operation. Reservations occupy balance but are not actual work;
+settle each actual increment once and never refund incurred costs on refusal.
+
+**I through final checks.** After GO, create a fresh operation slot and each
+I/case exclusively below the held window root. Keep it outside ephemeral scratch
+and in caller custody on all exits. Stage S with full parent/name/ACL/size/seal
+checks, 64 KiB bounded reads and the original short-write accounting. Preserve
+independent installed SHA, first S/I full equality, and later two fresh hashes,
+full equality and both initial identity seals. Never use stage_expected's equal
+hash reuse for I or raise its ordinary review 16 MiB limit globally.
+
+Invoke the original fixed driver with its existing arguments/environment and
+controlled input/output paths. Its malicious arm calls only pinned replay_case
+with the validated staged manifest, original private runtime and private work.
+C3 still independently acquires/hashes I, recomputes runtime identity/origin and
+all applicable owner outputs. Those future calls cannot be prepaid as observed
+C2 work. Maintain the exact RAW16 per-replay schedule and all old M/raw/Q limits.
+The original two run seed sets are disjoint and together cover four fixed cases;
+the dashboard's two pairs replay those four once. Each real invocation has a
+separate slot and actual increment under the same live ledger. No pair resets it.
+
+Keep all original launcher program_check calls after driver completion, each
+pair's exact supplied-result comparison, canonical output and source/input final
+checks. Then perform final S/I checks and once-close every hold, keeping first
+and later errors. Cleanup is confined to ephemeral scratch and records its actual
+result; it cannot delete retained I/partials or swallow a close failure. Preserve
+original source E_STALE versus input E_RELATION precedence, signals and cancellation.
+Output bytes may be captured before termination; the caller publishes success
+only after the spec's complete terminal proof. Native terminal facts remain due.
+
+**Prefix, terminal costs and next head.** Write the bounded receipt prefix with
+exclusive create, fsync, full readback/hash and close, accounting every operation.
+Its cutoff cannot include future costs or confer authority. After all driver,
+result checks, S/I/root closes and cleanup, prepare END from actual child work.
+Use the original _capture_work_values initialization with C2-terminal ownership;
+do not reset before DONE or omit read_bytes. Preserve spec-defined fixed counter
+order and range checks directly against the original _capture_transfer_work,
+_RUNTIME_FIELDS and _capture_account definitions, not a copied new cost model.
+
+Use the spec's one struct.pack and one os.write for DONE. Return 512 alone permits
+the fixed three _close_capture_copy calls and then _exit(0). Only their specified
+original observation encoding/recording may follow DONE; no short-write loop,
+extra message, other encoding/hash, callback, atexit or subprocess is allowed.
+Charge the fixed encoding/write and each actual original close observation as
+the spec states; os.write does not itself imply _capture_observe. Preserve the
+strict implicit-EINTR conditions; unmeasured extra work remains UNKNOWN without
+a new syscall shim. Reserve the full tail, including the original canonical row
+processing, before work. Reconstruct the three rows only from exact source,
+END/DONE counters and the successful fixed terminal schedule, explicitly labelled
+reconstructed. Retain the original counter cutoff and all protocol bytes.
+
+The caller requires END, DONE, EOF and its exact P wait=0 together, then closes
+its own endpoints/copies and records actual costs/errors. Only after successful
+reconstruction and actual settlement may it advance the head. Keep prefix,
+result/error bytes, spawn/FD/EOF/wait evidence, source pins, reconstructed rows
+and live caller tail together. Evidence export costs accrue to that still-live
+owner; the next START carries them. No recursive receipt rewrite claims a file
+contains its own future close. Refusal keeps known prefixes, retained entities,
+first/later errors and UNKNOWN; it grants no retry, new window or budget.
+
+Rebind bootstrap independently through evaluator.bootstrap; it is not a D member.
+Prove the five-byte delta and recompute its measured digest before the original
+program→driver→launcher pin order. Preserve all SOURCE 84/9 adoption checks.
+The session wait proves only the eval chain; it does not close native finally,
+parent producer, host-publication work, qualification, capacity or genuine gates.
+
 ### Finite regression matrix
 
 Every new row must run through the same production value owner and its offline
@@ -1910,6 +2089,11 @@ all old RAW/DER/ROUTE/LIM/CLO/I5/SURF/ARC and export/completion tests:
 | RT.failure | Partial/zero/unknown writes, first failure followed by close/ledger failure, occupied names and exact errno. Retain all files and charges; no successful seal, repair, retry, phase/pair reset or deleted/temp/dedup exemption. |
 | RT.T | Paired ordinary prepare→native cleanup→inspect and writer two-root positives through actual owners; preserved zero/partial/committed/uncertain T and unchanged native rmtree/unlink/error timing. Fixed-name collision, broad-prefix nonmember, extra/wrong/nonempty/missing marker, full C/runtime mutation with actual inputs fixed, op swap, source/parent/name/ACL drift, every new write/readback/sync/close/ledger failure, and both uncertain mkdir namespaces reject recording. At/over 128 total root entries includes T; all other caps and carry-in still apply. Separately delete production tee, predeclared cleanup exclusion, marker construction, consumer validation or recording-failure propagation in the existing private source-copy mutation route: each paired assertion must fail. Original SOURCE bytes/identity and full Q/overlap checks remain. No fixture closes the external caller/genuine gate. |
 | RT.C | Fixed assembly, run and two disjoint dashboard pairs each use their complete scheduled flow; extra/repeated case follows M4/manifest refusal. No missing owner, empty dispatch or permanent rejection counts as delivery. Real parent hookup/full RAW16 remains blocked until its source gate. |
+| C2.manifest | Actual assembly→closed S→manifest: preserve original names and every role; cross-case/occurrence/output swap, missing/extra/unused file, kind-as-role, raw/manifest confusion, complete.json omission and encoded cap/one-over refuse. A normal bounded fixture traverses the real CLI, not a receipt dictionary. |
+| C2.authority | One four-case ledger through both run inputs and the two dashboard pairs; old O, two small failed partials, zero files and distinct I remain charged. Disk rollback/new START, changed live head after READY, missing/duplicate/reordered messages, missing GO, single FD, wrong root/name/ACL and no-FD malicious bypass refuse before I. |
+| C2.lifetime | Check original driver and every independent program/pair/canonical/pin validation while S/I holds live; each initial/final hash, whole equality and identity deletion has a paired failure. Equal mutation of both copies still refuses. Wrong helper FD inheritance, extra wrapper PID, file_action failure, exec error, signal, retained cleanup or once-close failure cannot succeed. |
+| C2.tail | Positive exact 512 DONE plus all three original close rows and caller settlement; short/zero write, invalid implicit-EINTR conditions, missing END/DONE/EOF, nonzero/signal wait, false PID relation, caller close error, unknown work and insufficient reservation refuse. Independently recalculate actual vector/rows/costs and delete each admission/close/tail check in the existing private mutation route; each paired assertion fails. |
+| C2.compatibility | Exact original public argv/env/result/error/canonical semantics, trace.cost absent and non-malicious routes pass their existing full suites. Bootstrap differs only by exec; evaluator bootstrap hash changes and tamper rejects. Helpers remain fixed-source, SOURCE 84 and nine adopted files unchanged. No ordinary fixture claims native/qualified seed success. |
 | CASE.layout | Complete v2 case with two independently bound launches, four preparation entries, both gate contexts and each reached source. Different setup/PID/REST/clocks survive assembly and original-owner projection. Reject duplicate/missing/extra/reordered entries, wrong containers, default empty groups, ambiguous v1 and omitted non-export observations. |
 | CASE.lifecycle | Process complete occurrences through their actual sequential live windows; prepare T completes P/S checks before original close/inspection replacement. A positive must not require simultaneous live holders or extended holds. Reject closed T_history/reopened P, skipped independent hash/equality/final identity, early case finalization, original terminal/close/tail failure and S-close failure. Preserve native order/outcome, first and later errors, partial S and all costs; existing B gates still block acceptance. |
 | CASE.binding | Swap each role/request/attempt/operation, T input/response, gate context/session or source package while keeping companion facts valid. Reject concatenated/renumbered controller streams and cross-launch PID/REST use, including no-export paths. Private versioned operation aliases refuse; original kill request and coverage receipt retain their versioned checks; adding operation to a coverage request refuses its original closed schema. |
@@ -2037,7 +2221,8 @@ shadow-enforced, shadow-write, scope-gate-generation, candidate-content-preparat
 file-digest-verifier, scope-qualification, shadow-self-host-evidence,
 maintenance-loop and portable-core-schema. Compile/run the existing guest harness
 through its normal sandbox-guest test; no separate native product invocation.
-No selector, test truncation, bootstrap edit or watchdog bypass is introduced.
+No selector, test truncation or watchdog bypass is introduced. The only bootstrap
+edit is R9.3's five-byte C2 exec; include it in shell syntax/lint and compatibility proof.
 
 Run only ordinary supported fixture tests in the current local environment.
 The full scope/root/native/#558 LOCAL7 or D windows and local run-all remain
@@ -2204,8 +2389,9 @@ Allowed paths: `evals/v1/eval-catalog.json`, `evals/v1/seed-set-malicious.json`,
 
 ## What does not change
 
-`evals/v1/framework.jq`, `evals/v1/run.sh` (its pin `run.sh:54`), `run-evals.sh`,
-the seven existing seed sets, every other catalog field and family, and every path
+`evals/v1/framework.jq`, `evals/v1/run.sh` (its pin `run.sh:54`), and
+`run-evals.sh` outside its sole five-byte C2 exec addition, the seven existing seed
+sets, every other catalog field and family, and every path
 outside each PR's list stay byte-identical. No test outside the lists changes: the
 six family suites' closure-count and tamper checks (`evals-adapters.test.sh:114`,
 `evals-approvals.test.sh:98`, `evals-boundaries.test.sh:97`, `evals-duty.test.sh:97`,
@@ -2258,10 +2444,9 @@ gates (R9.6).
   operator-graded seed and its test. 150-450 of them are verbatim verdict bytes, which
   cannot leave the PR whose test checks their digests.
 - PR 3: `review_size: standard`, about 300-400 net added lines.
-- This plan-only amendment: `review_size: standard`, expected 180–280 changed
-  lines. One concern: fixed case raw multiplicity and its existing owner
-  integration. Preserve all implementation content, paths, source order, tests
-  and acceptance gates; PR 1b retains its complete-concern range above.
+- This plan-only amendment: `review_size: standard`. One concern: the accepted
+  fixed C2 window session, its manifest, retention, exact bootstrap dependency and
+  complete proof. PR 1b retains its complete-concern range above.
 
 Each range waives only the soft line signal, never scope, tests, CI, review or human
 merge.
