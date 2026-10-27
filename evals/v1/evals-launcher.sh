@@ -426,8 +426,8 @@ class C2Helpers:
         self.unused = tuple(unused)
         self.results = []
     def build(self, arguments):return self._invoke("evals_c2_build", arguments)
-    def run_and_check(self, arguments):return self._invoke("evals_c2_run_and_check", arguments)
-    def _invoke(self, function, arguments):
+    def run_and_check(self, arguments, driver_input):return self._invoke("evals_c2_run_and_check", arguments, driver_input)
+    def _invoke(self, function, arguments, driver_input=None):
         c2_require(function in {"evals_c2_build", "evals_c2_run_and_check"})
         self.work["helper_internal_work_unknown"] = "UNKNOWN: original shell build/driver/check work has no complete measured transfer"
         functions = self.sources.helpers
@@ -453,7 +453,12 @@ class C2Helpers:
             actions = [(os.POSIX_SPAWN_DUP2, null, 0), (os.POSIX_SPAWN_DUP2, output_w, 1),
                 (os.POSIX_SPAWN_DUP2, error_w, 2)]
             actions += [(os.POSIX_SPAWN_CLOSE, fd) for fd in sorted(set((9, 10, *descriptors, *self.unused, *(row["fd"] for row in self.sources.namespace["owned"] if not row["closed"])))) if fd not in {0, 1, 2}]
-            argv = ["/bin/bash", "-c", command, "ystack-fixed-C2-helper", self.sources.launcher, self.scratch, *arguments]
+            helper_arguments = [self.sources.launcher, self.scratch]
+            if function == "evals_c2_run_and_check":
+                c2_require(type(driver_input) is str and os.path.isabs(driver_input), "E_RELATION")
+                helper_arguments.append(driver_input)
+            else:c2_require(driver_input is None, "E_RELATION")
+            argv = ["/bin/bash", "-c", command, "ystack-fixed-C2-helper", *helper_arguments, *arguments]
             environment = {"LC_ALL": "C", "PATH": "/usr/bin:/bin"}
             if "TMPDIR" in os.environ:environment["TMPDIR"] = os.environ["TMPDIR"]
             child = os.posix_spawn("/bin/bash", argv, environment, file_actions=actions)
@@ -1107,13 +1112,108 @@ def c2_stage(custody, descriptor, case_ids, destination, admitted_scope, copies=
         current.transfer_cases()
     return copies
 
+def c2_driver_input_read(custody, held):
+    before = custody.work["read_bytes"]
+    try:return held.read(_C2_LIMIT, "E_STALE", custody.work)
+    finally:custody.work["seed_processing"]["R"] += custody.work["read_bytes"] - before
+
+def c2_driver_input_sha(custody, raw):
+    try:measured = c2_sha(raw)
+    except BaseException as error:
+        try:custody.work["driver_input_hash_unknown"] = "UNKNOWN: driver input hash attempt incomplete"
+        except BaseException as observed:raise c2_first(error, observed)
+        raise
+    custody.work["seed_processing"]["H"] += len(raw)
+    return measured
+
+def c2_driver_input_check(custody, seals):
+    for installed, raw, expected in seals:
+        c2_nonruntime_room(custody.work, 2 * len(raw), False, read_only=True)
+        observed = c2_driver_input_read(custody, installed)
+        c2_nonruntime_room(custody.work, len(observed) + len(raw), False, read_only=True)
+        custody.work["read_bytes"] += len(observed) + len(raw)
+        c._capture_account(custody.work, "M", "read_bytes", len(observed) + len(raw))
+        custody.work["seed_processing"]["R"] += len(observed) + len(raw)
+        custody.work["seed_processing"]["E"] += len(observed) + len(raw)
+        c2_require(observed == raw, "E_STALE")
+        c2_require(c2_driver_input_sha(custody, observed) == expected, "E_STALE")
+        installed.recheck("E_STALE", custody.work, "M")
+
+def c2_driver_input(custody, destination, scratch, mode, original_inputs, expected):
+    sources, pending, failure, seals = [], None, None, []
+    copies = C2Copies(custody)
+    names = ["input.json"] if mode == "run" else ["manifest.json", "seed-0.json", "result-0.json", "seed-1.json", "result-1.json"]
+    source_root = scratch if mode == "run" else scratch + "/inputs"
+    try:
+        c2_require(not custody.namespace(destination), "E_STALE")
+        for index, name in enumerate(names):
+            c2_nonruntime_room(custody.work, 0, False)
+            pending = c._open_held(source_root + "/" + name, False,
+                c._store_rule(os.geteuid(), os.getegid(), 0o400, False, custody.resolver), "E_STALE",
+                recording_work=custody.work, accounting_kind="M")
+            sources.append(pending);source, pending = pending, None
+            size = source.before.st_size
+            c2_require(0 <= size <= _C2_LIMIT, "E_LIMIT")
+            c2_nonruntime_room(custody.work, 2 * size, False, read_only=True)
+            raw = c2_driver_input_read(custody, source)
+            measured = c2_driver_input_sha(custody, raw)
+            if mode == "dashboard" and index == 0:
+                c2_nonruntime_room(custody.work, len(raw), False, read_only=True)
+                try:manifest = json.loads(raw, object_pairs_hook=c._unique_object)
+                except BaseException as error:
+                    try:custody.work["driver_input_parse_unknown"] = "UNKNOWN: driver input parse attempt incomplete"
+                    except BaseException as observed:raise c2_first(error, observed)
+                    if c2_cancelled(error):raise
+                    if isinstance(error, (UnicodeDecodeError, UnicodeEncodeError, ValueError, TypeError, RecursionError)):
+                        raise C2Refusal("E_RELATION") from None
+                    raise
+                custody.work["read_bytes"] += len(raw)
+                c._capture_account(custody.work, "M", "read_bytes", len(raw))
+                custody.work["seed_processing"]["R"] += len(raw)
+                rebuilt = C2Channel(9, custody.work).encode(manifest)
+                c2_nonruntime_room(custody.work, len(rebuilt) + len(raw), False, read_only=True)
+                custody.work["read_bytes"] += len(rebuilt) + len(raw)
+                c._capture_account(custody.work, "M", "read_bytes", len(rebuilt) + len(raw))
+                custody.work["seed_processing"]["R"] += len(rebuilt) + len(raw)
+                custody.work["seed_processing"]["E"] += len(rebuilt) + len(raw)
+                c2_require(rebuilt == raw and type(manifest) is list and len(manifest) == 2, "E_RELATION")
+                for pair, row in enumerate(manifest):
+                    c2_require(type(row) is dict and set(row) == {"seed_sha256", "result_sha256"}
+                        and row["seed_sha256"] == expected[2 * pair] and row["result_sha256"] == expected[2 * pair + 1], "E_RELATION")
+            else:
+                slot = index if mode == "run" else index - 1
+                c2_nonruntime_room(custody.work, len(raw) + len(original_inputs[slot]), False, read_only=True)
+                custody.work["read_bytes"] += len(raw) + len(original_inputs[slot])
+                c._capture_account(custody.work, "M", "read_bytes", len(raw) + len(original_inputs[slot]))
+                custody.work["seed_processing"]["R"] += len(raw) + len(original_inputs[slot])
+                custody.work["seed_processing"]["E"] += len(raw) + len(original_inputs[slot])
+                c2_require(raw == original_inputs[slot] and measured == expected[slot], "E_RELATION")
+            installed = copies.copy(source, destination, "seed.json" if mode == "run" else name, size, measured, "M")
+            seals.append((installed, raw, measured))
+        c2_require(custody.namespace(destination) == frozenset(["seed.json"] if mode == "run" else names), "E_RELATION")
+        copies.final_checks()
+        c2_driver_input_check(custody, seals)
+    except BaseException as error:failure = error
+    finally:
+        while pending is not None or sources:
+            source, pending = (pending, None) if pending is not None else (sources.pop(), None)
+            while source.components:
+                component = source.components.pop()
+                try:c._close_capture_copy(component.fd, custody.work, custody.work, "C2.driver-input-source-close", failure)
+                except BaseException as error:
+                    failure = c2_first(failure, error)
+                    try:custody.work["driver_input_close_unknown"] = "UNKNOWN: driver input source close accounting incomplete"
+                    except BaseException as observed:failure = c2_first(failure, observed)
+        if failure is not None:raise failure
+    return destination.path + "/seed.json" if mode == "run" else destination.path, seals
+
 def c2_scratch_parent(root_path, work=None):
     return os.path.join(tempfile.gettempdir(), "ystack-C2-ephemeral-" + c2_sha(os.fsencode(root_path), work))
 
 def c2_lifecycle(launcher, arguments):
     sources = custody = copies = helpers = root = None
     work = None;failure = None;errors = [];receipt_sha = None;result = None;operation = None;scratch = None;admitted = False
-    source_errors = []
+    source_errors = [];driver_seals = None
     try:
         mode, root_path, paths = c2_cli(arguments)
         try:
@@ -1139,10 +1239,10 @@ def c2_lifecycle(launcher, arguments):
         custody.bind_descriptor(10, start["root_identity"])
         descriptor, _window_raw, window_sha, _window = c2_document(custody, root, "window.json")
         c2_require(window_sha == start["window_sha256"], "E_RELATION")
-        hashes, seed_cases = [], []
+        hashes, seed_cases, original_inputs = [], [], []
         for index, path in enumerate(paths):
             input_value, _raw, digest, _held = c2_document(custody, root, os.path.basename(path))
-            hashes.append(digest)
+            hashes.append(digest);original_inputs.append(_raw)
             if mode == "run" or index % 2 == 0:seed_cases.append(c2_seed_ids(input_value))
         actual_cases = set().union(*seed_cases)
         c2_require(actual_cases == set(start["case_ids"]) and sum(len(value) for value in seed_cases) == len(actual_cases), "E_RELATION")
@@ -1181,6 +1281,7 @@ def c2_lifecycle(launcher, arguments):
         admitted = True
         operation = custody.mkdir(operations, str(ordinal))
         installed = custody.mkdir(operation, "I")
+        driver_inputs = custody.mkdir(installed, "driver-input")
         copies = C2Copies(custody)
         c2_stage(custody, descriptor, start["case_ids"], installed, admitted_scope, copies)
         scratch_parent = c2_scratch_parent(root_path, work)
@@ -1197,11 +1298,14 @@ def c2_lifecycle(launcher, arguments):
         helpers = C2Helpers(sources, scratch, work, unused)
         built = helpers.build(arguments)
         c2_require(built["status"] == 0 and not built["stdout"] and not built["stderr"], "E_RUNTIME")
+        c2_require(custody.namespace(installed) == frozenset(start["case_ids"]) | {"driver-input"}, "E_RELATION")
+        driver_input, driver_seals = c2_driver_input(custody, driver_inputs, scratch, mode, original_inputs, expected)
         try:sources.materialize()
         except BaseException as error:
             source_errors.append(error)
             raise
-        completed = helpers.run_and_check(arguments)
+        helpers.unused = tuple(unused + [item.fd for held in custody.owned for item in held.components])
+        completed = helpers.run_and_check(arguments, driver_input)
         if completed["status"] != 0:
             c2_require(not completed["stdout"], "E_RUNTIME")
             token = completed["stderr"].rstrip(b"\n").decode("ascii")
@@ -1219,6 +1323,9 @@ def c2_lifecycle(launcher, arguments):
     finally:
         if custody is None and root is not None and root.components:
             try:root.close()
+            except BaseException as error:failure = c2_first(failure, error)
+        if driver_seals is not None:
+            try:c2_driver_input_check(custody, driver_seals)
             except BaseException as error:failure = c2_first(failure, error)
         if copies is not None:
             try:copies.final_checks()
@@ -2253,6 +2360,10 @@ else
   driver_input="$scratch/inputs"
   input_document="$scratch/inputs/manifest.json"
 fi
+if [ "$evals_c2_custody" = true ]; then
+  driver_input=$evals_c2_driver_input
+  if [ "$mode" = run ]; then input_document=$driver_input; else input_document="$driver_input/manifest.json"; fi
+fi
 seed_sha=$(sha256_path "$input_document") || emit_error E_RUNTIME
 evaluator_sha=$(sha256_path "$runtime/evaluator.json") || emit_error E_RUNTIME
 }
@@ -2307,20 +2418,20 @@ program_check() {
 }
 if [ "$mode" = run ]; then
   program_check validate-run-result "$runtime/evaluator.json" "$evaluator_sha" "$seed_sha" \
-    "$scratch/input.json" "$scratch/work/observations.json" "$output" \
+    "$driver_input" "$scratch/work/observations.json" "$output" \
     "$scratch/work/observations.json" '[]' || emit_error E_RUNTIME
 else
   # Every pair is re-validated against the driver's replay, then the dashboard itself.
   j=0
   while [ "$j" -lt "$pair_count" ]; do
-    check_observed_at=$("$runtime/bin/jq" -r '.body.observed_at' "$scratch/inputs/result-$j.json") ||
+    check_observed_at=$("$runtime/bin/jq" -r '.body.observed_at' "$driver_input/result-$j.json") ||
       emit_error E_RUNTIME
     # The driver replayed this seed set into pair-$j; re-validate the supplied
     # result against that fresh observation set and this runtime's evaluator.
     [ -f "$scratch/work/pair-$j/observations.json" ] || emit_error E_RUNTIME
     program_check validate-run-result "$runtime/evaluator.json" "$evaluator_sha" \
-      "$(sha256_path "$scratch/inputs/seed-$j.json")" "$scratch/inputs/seed-$j.json" \
-      "$scratch/work/pair-$j/observations.json" "$scratch/inputs/result-$j.json" \
+      "$(sha256_path "$driver_input/seed-$j.json")" "$driver_input/seed-$j.json" \
+      "$scratch/work/pair-$j/observations.json" "$driver_input/result-$j.json" \
       "$scratch/work/pair-$j/observations.json" '[]' || emit_error E_RELATION
     j=$((j + 1))
   done
@@ -2328,7 +2439,7 @@ else
   program_check validate-dashboard "$runtime/evaluator.json" "$evaluator_sha" "$seed_sha" \
     "$scratch/work/seeds.jsonl" "$scratch/work/pair-0/observations.json" "$output" \
     "$scratch/work/results.jsonl" \
-    "$("$runtime/bin/jq" -c 'map(.result_sha256)' "$scratch/inputs/manifest.json")" ||
+    "$("$runtime/bin/jq" -c 'map(.result_sha256)' "$driver_input/manifest.json")" ||
     emit_error E_RUNTIME
 fi
 "$runtime/bin/jq" -S -c . "$output" > "$scratch/output.canonical" 2>/dev/null ||
@@ -2421,7 +2532,8 @@ evals_c2_build() {
 evals_c2_run_and_check() {
   evals_self=$1
   scratch=$2
-  shift 2
+  evals_c2_driver_input=$3
+  shift 3
   evals_c2_custody=true
   evals_initialize "$@"
   evals_run_context

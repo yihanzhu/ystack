@@ -3,6 +3,84 @@ set -euo pipefail
 export LC_ALL=C
 umask 077
 root=$(CDPATH='' cd -P -- "${BASH_SOURCE[0]%/*}/../.." && pwd -P)
+/usr/bin/python3 -I -S -B - "$root" <<'PY_WRITE_IDENTITY_VALUES'
+import ast
+import importlib.util
+from pathlib import Path
+import sys
+import types
+root = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location('write_identity_consumer', root / 'shadow/v1/_consumer.py')
+c = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = c
+spec.loader.exec_module(c)
+source = (root / 'shadow/v1/enforced-reproduction.py').read_text()
+names = {'Refusal', 'require', 'canonical', 'sha', 'parse', 'pair_ref'}
+selected = [n for n in ast.parse(source).body if isinstance(n, (ast.FunctionDef, ast.ClassDef)) and n.name in names]
+assert {n.name for n in selected} == names
+enforced = {'c': c, 'OUTPUT_LIMIT': 1024 * 1024}
+exec(compile(ast.Module(body=selected, type_ignores=[]), '<actual-enforced-values>', 'exec'), enforced)
+e = types.SimpleNamespace(pair_ref=enforced['pair_ref'], OUTPUT_LIMIT=enforced['OUTPUT_LIMIT'])
+source = (root / 'shadow/v1/write-shadow.py').read_text()
+owner = next(n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef) and n.name == '_write_identity_values')
+values = {name: enforced[name] for name in ('canonical', 'sha', 'parse')}
+values['e'] = e
+exec(compile(ast.Module(body=[owner], type_ignores=[]), '<actual-write-identity-values>', 'exec'), values)
+canonical, sha = values['canonical'], values['sha']
+identity_raw = canonical({'id': 'synthetic-old-identity', 'body': {
+    'verification_instructions_ref': {'sha256': sha(b'old')}, 'preserved': ['synthetic']}})
+stage = {'schema_version': 1, 'kind': 'stage_request', 'id': 'synthetic-stage', 'body': {}}
+input_raw = canonical({'stage_request': {'content': stage, 'sha256': sha(canonical(stage))}})
+args = [identity_raw, input_raw, b'synthetic-instruction', 'synthetic-request']
+result = values['_write_identity_values'](*args)
+doc = c._json(result, 1024 * 1024, 'E_SHAPE')
+assert doc['id'] == 'identity.shadow-write.' + sha(args[3].encode())[:32]
+assert doc['body']['stage_request_ref'] == e.pair_ref(c._json(input_raw, 1024 * 1024, 'E_SHAPE')['stage_request'])
+assert doc['body']['verification_instructions_ref']['sha256'] == sha(args[2])
+assert doc['body']['preserved'] == ['synthetic']
+assert args[0] == identity_raw
+for index in (2, 3):
+    changed = list(args)
+    changed[index] += b'changed' if index == 2 else 'changed'
+    assert values['_write_identity_values'](*changed) != result
+class MarkedFailure(Exception):
+    pass
+real = {name: enforced[name] for name in ('canonical', 'sha', 'parse')}
+marks = []
+fail_at = None
+def marked(name):
+    def call(*args, **kwargs):
+        marks.append(name)
+        if len(marks) == fail_at:
+            raise MarkedFailure(name)
+        return real[name](*args, **kwargs)
+    return call
+for name in real:
+    enforced[name] = values[name] = marked(name)
+assert values['_write_identity_values'](*args) == result
+assert marks == ['parse', 'sha', 'parse', 'canonical', 'sha', 'sha', 'canonical']
+for fail_at in range(1, 8):
+    marks.clear()
+    try:
+        values['_write_identity_values'](*args)
+    except MarkedFailure:
+        pass
+    else:
+        raise AssertionError('missing marked identity failure')
+    assert len(marks) == fail_at
+fail_at = None
+changed = list(args)
+changed[1] = canonical({'stage_request': {'content': stage, 'sha256': sha(b'wrong')}})
+marks.clear()
+try:
+    values['_write_identity_values'](*changed)
+except enforced['Refusal'] as error:
+    assert error.code == 'E_RELATION'
+else:
+    raise AssertionError('invalid stage pair accepted')
+assert marks == ['parse', 'sha', 'parse', 'canonical', 'sha']
+print('ordinary synthetic write identity bytes/order/failures: PASS; no native qualification')
+PY_WRITE_IDENTITY_VALUES
 /usr/bin/python3 -I -S -B - "$root" <<'PY_RAW16_T_LIFECYCLE'
 import importlib.util,sys
 from pathlib import Path

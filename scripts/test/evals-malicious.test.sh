@@ -4054,3 +4054,56 @@ with tempfile.TemporaryDirectory() as area:
     else:raise AssertionError('admission paths control missing')
 print('ok synthetic writer caller/offline full provenance, admission, outer record and bundle; native Git/authority route not claimed')
 PY_WRITER_VALUES
+
+/usr/bin/python3 -I -S -B - "$root" <<'PY_C3_READER_RETENTION'
+import importlib.util,sys
+from pathlib import Path
+root=Path(sys.argv[1])
+spec=importlib.util.spec_from_file_location('C3_reader_retention_fixture',root/'scripts/test/candidate-content-preparation-fixtures.py')
+fixture=importlib.util.module_from_spec(spec);sys.modules[spec.name]=fixture;spec.loader.exec_module(fixture)
+fixture.raw16_C3_reader_retention(root)
+PY_C3_READER_RETENTION
+
+/usr/bin/python3 -I -S -B - "$root" <<'PY_C3_VALUE_FILE'
+import importlib.util,sys
+from pathlib import Path
+root=Path(sys.argv[1])
+spec=importlib.util.spec_from_file_location('C3_value_file_fixture',root/'scripts/test/candidate-content-preparation-fixtures.py')
+fixture=importlib.util.module_from_spec(spec);sys.modules[spec.name]=fixture;spec.loader.exec_module(fixture)
+fixture.raw16_C3_value_file(root)
+try:fixture.raw16_C3_value_file(root,deletion=True)
+except AssertionError as error:assert str(error)=='appended S tail accepted'
+else:raise AssertionError('value-file length deletion undetected')
+PY_C3_VALUE_FILE
+
+/usr/bin/python3 -I -S -B - "$root" <<'PY_C3_BUNDLE_OUTPUTS'
+import importlib.util,sys
+from pathlib import Path
+root=Path(sys.argv[1])
+spec=importlib.util.spec_from_file_location('C3_bundle_fixture',root/'scripts/test/candidate-content-preparation-fixtures.py')
+fixture=importlib.util.module_from_spec(spec);sys.modules[spec.name]=fixture;spec.loader.exec_module(fixture)
+fixture.raw16_C3_bundle_outputs(root)
+PY_C3_BUNDLE_OUTPUTS
+
+/usr/bin/python3 -I -S -B - "$root" <<'PY_C3_GATE_OUTPUTS'
+import importlib.util,sys
+from pathlib import Path
+root=Path(sys.argv[1])
+spec=importlib.util.spec_from_file_location('C3_gate_output_fixture',root/'scripts/test/candidate-content-preparation-fixtures.py')
+fixture=importlib.util.module_from_spec(spec);sys.modules[spec.name]=fixture;spec.loader.exec_module(fixture)
+fixture.raw16_C3_gate_outputs(root)
+fixture.raw16_C3_bundle_outputs(root,candidate=True)
+PY_C3_GATE_OUTPUTS
+
+
+/usr/bin/python3 -I -S -B - "$root" <<'PY_C3_INPUTS'
+import importlib.util,sys
+from pathlib import Path
+root=Path(sys.argv[1])
+spec=importlib.util.spec_from_file_location('C3_input_fixture',root/'scripts/test/candidate-content-preparation-fixtures.py')
+fixture=importlib.util.module_from_spec(spec);sys.modules[spec.name]=fixture;spec.loader.exec_module(fixture)
+fixture.raw16_C3_I_inputs(root)
+fixture.raw16_C3_git_inputs(root)
+fixture.raw16_C3_trial_documents(root)
+fixture.raw16_C3_driver_input_owners(root)
+PY_C3_INPUTS

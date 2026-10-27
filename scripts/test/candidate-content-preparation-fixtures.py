@@ -6584,3 +6584,744 @@ def raw16_C2_tail_reserve(root: Path, original=None) -> None:
     assert work['read_bytes']==amount and work['accounting_incomplete']
     print(json.dumps({'C2_residual':'tail-metadata','actual_owner_read_bytes':amount,'fixture_probe_read_bytes':probe['read_bytes'],
         'inner_chunk_refusal':True,'original_reserved_unchanged':True,'work':work},sort_keys=True))
+
+
+
+def _C3_work_evidence(results, directory, label):
+    for index,row in enumerate(results):
+        work=row["work"]
+        counters={key:work.get(key) for key in ("read_bytes","write_bytes","physical_bytes","files",
+            "export_read_bytes","export_write_bytes","export_physical_bytes","export_files",
+            "runtime","seed_processing","accounting","accounting_incomplete","transfer_incomplete","close_calls")}
+        detail={"status":"NOT_SAVED; ordinary mechanism evidence only"}
+        if directory is not None:
+            raw=(json.dumps(work,sort_keys=True)+"\n").encode()
+            path=directory/(label+"-%02d.json" % index)
+            with path.open("xb") as stream:stream.write(raw)
+            detail={"path":str(path),"bytes":len(raw),"sha256":hashlib.sha256(raw).hexdigest()}
+        row["work"]={"actual_counters":counters,"complete_work":detail}
+
+
+def raw16_C3_reader_retention(root: Path, evidence=None) -> None:
+    spec = importlib.util.spec_from_file_location("C3_reader_retention", root / "scope/v1/read-shadow-evidence.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    results = []
+    class AppendFailure(list):
+        def __init__(self, error):
+            super().__init__();self.error = error
+        def append(self, value):raise self.error
+    for label in ("multiplicity", "ordinary-index", "marked-index", "ledger"):
+        reader = module._Reader.__new__(module._Reader)
+        reader.anchor = types.SimpleNamespace(recording_work={}, private_observations={})
+        reader._initialize_replay_outputs()
+        first, second = object(), object()
+        raw = b"same authenticated document\n"
+        error = MemoryError("controlled new index allocation")
+        if label == "marked-index":
+            error = InterruptedError("controlled actual scope handler")
+            import ast
+            tree = ast.parse((root / "scope/v1/read-shadow-evidence.py").read_text())
+            main = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "main")
+            handler = next(node for node in main.body if isinstance(node, ast.FunctionDef) and node.name == "cancel")
+            namespace = {}
+            exec(compile(ast.Module(body=[handler], type_ignores=[]), "<original-scope-handler>", "exec"), namespace)
+            try:namespace["cancel"](15, None)
+            except InterruptedError as caught:error = caught
+        if label in {"ordinary-index", "marked-index"}:reader.replay_outputs["bundles"] = AppendFailure(error)
+        observe = module.c._capture_observe
+        if label == "ledger":
+            def failed(*args, **kwargs):raise error
+            module.c._capture_observe = failed
+        caught = None
+        try:
+            try:
+                reader._retain_replay_output("bundles", raw, (first, "current", "environment.one"))
+                if label == "multiplicity":
+                    reader._retain_replay_output("bundles", raw, (second, "qualifying", "environment.two"))
+            except BaseException as actual:caught = actual
+        finally:module.c._capture_observe = observe
+        if label == "multiplicity":
+            assert caught is None and len(reader.replay_outputs["bundles"]) == 2
+            assert reader.replay_outputs["bundles"][0][1][0] is first
+            assert reader.replay_outputs["bundles"][1][1][0] is second
+            assert not reader.replay_output_unusable
+        else:
+            assert reader.replay_output_unusable and reader.anchor.private_observations["unusable"]
+            assert reader.replay_output_errors[0]["error"] is error
+            assert (caught is error) if label == "marked-index" else caught is None
+        results.append({"case": label, "observations": len(reader.replay_outputs["bundles"]),
+            "unusable": reader.replay_output_unusable, "work": reader.replay_output_work})
+    _C3_work_evidence(results,evidence,"reader")
+    print(json.dumps({"C3_actual_reader_retention": results, "qualification": "NOT_PROVED"}, sort_keys=True))
+
+
+def raw16_C3_value_file(root: Path, deletion=False, evidence=None) -> None:
+    import tempfile
+    spec = importlib.util.spec_from_file_location('scope_shadow_consumer', root/'shadow/v1/_consumer.py')
+    c = importlib.util.module_from_spec(spec);sys.modules[spec.name] = c;spec.loader.exec_module(c)
+    spec = importlib.util.spec_from_file_location('C3_value_file_replay', root/'evals/v1/replay-malicious.py')
+    replay = importlib.util.module_from_spec(spec);sys.modules[spec.name] = replay;spec.loader.exec_module(replay)
+    if deletion:
+        import inspect,textwrap
+        source = textwrap.dedent(inspect.getsource(replay._SeedAssembly._write_value_file))
+        guard = '_seed_require(held.before.st_size == len(raw))'
+        assert source.count(guard) == 1
+        source = source.replace(guard, 'pass')
+        changed = {};exec(compile(source, '<remove-value-file-length>', 'exec'), replay.__dict__, changed)
+        replay._SeedAssembly._write_value_file = changed['_write_value_file']
+    results = []
+    for label in ('normal', 'tail', 'writer-close'):
+        with tempfile.TemporaryDirectory(prefix='ystack-C3-value-') as temporary:
+            base = Path(temporary).resolve();destination = base/'S';destination.mkdir(mode=0o700)
+            resolver = c._DarwinUUIDResolver() if sys.platform == 'darwin' else None
+            held = c._open_held(str(destination), True, c._store_rule(os.getuid(),os.getgid(),0o700,True,resolver), 'E_STORE')
+            anchor = c.Anchor.__new__(c.Anchor);anchor.resolver = resolver
+            window, case = {}, {};c._capture_work_values(window, 'C3-window');c._capture_work_values(case, 'C3-case')
+            case_id = 'malicious.checked-file-bytes';window['cases'] = {case_id:case}
+            anchor.recording_work = window;anchor.private_observations = {}
+            assembly = replay._SeedAssembly(held, anchor, case_id, window, case)
+            raw = b'actual authenticated Git blob bytes\n' * 16
+            opening, closing, syncing = c._open_child, os.close, os.fsync
+            writer, attempted = [None], []
+            fault = OSError(5,'controlled new S writer close')
+            def sync(fd):
+                syncing(fd)
+                if fd != assembly.root.fd:writer[0] = fd
+            def close(fd):
+                if label == 'writer-close' and fd == writer[0] and not attempted:
+                    attempted.append(fd);closing(fd);raise fault
+                return closing(fd)
+            def child(parent, name, *args, **kwargs):
+                if label == 'tail' and name == 'candidate-000':
+                    os.chmod(name,0o600,dir_fd=parent.fd,follow_symlinks=False)
+                    fd = os.open(name, os.O_WRONLY|os.O_APPEND|os.O_NOFOLLOW, dir_fd=parent.fd)
+                    try:assert os.write(fd,b'tail') == 4
+                    finally:os.close(fd)
+                    os.chmod(name,0o400,dir_fd=parent.fd,follow_symlinks=False)
+                return opening(parent,name,*args,**kwargs)
+            c._open_child,os.close,os.fsync = child,close,sync
+            caught = None
+            try:
+                try:assembly._write_value_file(raw, 'candidate-000', 'write','recorded',
+                    'candidate/README.md', 'recorded', 8*c.DOCUMENT_LIMIT)
+                except BaseException as error:caught = error
+            finally:c._open_child,os.close,os.fsync = opening,closing,syncing
+            try:
+                if label == 'normal':
+                    assert caught is None and (destination/'candidate-000').read_bytes() == raw
+                    assert assembly.files['candidate-000']['sha256'] == c.digest(raw)
+                    assert assembly.semantic['candidate-000']['member'] == 'candidate/README.md'
+                elif label == 'tail':
+                    assert caught is not None, 'appended S tail accepted'
+                    assert (destination/'candidate-000').stat().st_size == len(raw)+4
+                    assert 'candidate-000' not in assembly.files
+                else:
+                    assert caught is fault and attempted == [writer[0]]
+                    assert assembly.failure is fault and 'candidate-000' not in assembly.files
+                results.append({'case':label,'rejected':caught is not None,'work':assembly.work,
+                    'observed_partial_size':(destination/'candidate-000').stat().st_size})
+            finally:
+                primary = sys.exc_info()[1] or caught
+                try:assembly.close(primary)
+                except BaseException as error:assert error is primary
+                held.close()
+    _C3_work_evidence(results,evidence,'value')
+    print(json.dumps({'C3_actual_value_file':results,'qualification':'NOT_PROVED'},sort_keys=True))
+
+
+def raw16_C3_bundle_outputs(root: Path, candidate=False, selected=None, evidence=None) -> None:
+    import tempfile
+    spec=importlib.util.spec_from_file_location('C3_bundle_reader',root/'scope/v1/read-shadow-evidence.py')
+    module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
+    c=module.c
+    spec=importlib.util.spec_from_file_location('C3_bundle_replay',root/'evals/v1/replay-malicious.py')
+    replay=importlib.util.module_from_spec(spec);sys.modules[spec.name]=replay;spec.loader.exec_module(replay)
+    results=[]
+    for label in (selected or (('normal','wrong-row-sha') if candidate else ('normal','source-mode-drift','unusable','duplicate-binding','unknown-role','default-repeat','repeat-observation','repeat-target-identity','repeat-source-swap'))):
+        phase='write' if candidate else 'reproduction'
+        form='withheld-write.v1' if candidate else 'enforced-reproduction.v1'
+        with tempfile.TemporaryDirectory(prefix='ystack-C3-bundle-') as temporary:
+            base=Path(temporary).resolve();source=base/'published';source.mkdir(mode=0o700)
+            destination=base/'S';destination.mkdir(mode=0o700)
+            incident=c.canonical({'schema_version':1,'kind':'shadow_incident_record','id':'incident.fixture',
+                'body':{'git_revision_ref':{'hash_algorithm':'sha1','commit_id':'a'*40}}})
+            request=c.canonical({'schema_version':1,'kind':'sandbox_launch_request','id':'launch.fixture','body':{}})
+            files={name:(c.canonical({'synthetic':name}) if name.endswith('.json') else b'synthetic output\n')
+                for name in c.SHADOW_EVIDENCE_NAMES}
+            files.update({'incident.json':incident,'sandbox-request.json':request,
+                'shadow-record.json':c.canonical({'schema_version':1,'kind':'shadow_reproduction_record',
+                    'id':'incident.fixture','body':{'record_form':form}})})
+            if candidate:
+                files['publisher-body.txt']=b'withheld synthetic publication\n'
+                candidate_files={'evidence/README.md':b'actual original Git README bytes\n',
+                    'evidence/eval-seed.json':c.canonical({'actual_original_git_seed':1})}
+                candidate_rows=[{'path':name,'mode':'100644','sha256':c.digest(raw),'git_blob_oid':'a'*40,'add_only':True}
+                    for name,raw in sorted(candidate_files.items())]
+                files['shadow-record.json']=c.canonical({'schema_version':1,'kind':'shadow_reproduction_record',
+                    'id':'incident.fixture','body':{'record_form':form,'write':{'write_set':candidate_rows}}})
+            files['bundle.json']=c.canonical({'schema_version':1,'kind':'shadow_consumer_bundle',
+                'id':'bundle.'+c.digest(incident)[:32],'body':{'activation_state':'inactive',
+                    'record_form':form,'incident_sha256':c.digest(incident),
+                    'target_revision':json.loads(incident)['body']['git_revision_ref'],
+                    'files':[{'name':name,'size_bytes':len(raw),'sha256':c.digest(raw)} for name,raw in sorted(files.items())]}})
+            for name,raw in files.items():(source/name).write_bytes(raw);(source/name).chmod(0o400)
+            if label=='repeat-source-swap':
+                alternate=base/'other-published';alternate.mkdir(mode=0o700)
+                for name,raw in files.items():(alternate/name).write_bytes(raw);(alternate/name).chmod(0o400)
+            resolver=c._DarwinUUIDResolver() if sys.platform=='darwin' else None
+            parent=c._open_held(str(base),True,c._store_rule(os.getuid(),os.getgid(),0o700,True,resolver),'E_STORE')
+            bundle=c._HeldBundle(parent,'published',form)
+            seed=c._open_child(parent,'S',True,c._store_rule(os.getuid(),os.getgid(),0o700,True,resolver),'E_STORE')
+            anchor=c.Anchor.__new__(c.Anchor);anchor.resolver=resolver;anchor.held=[]
+            window,case={},{};c._capture_work_values(window,'C3-window');c._capture_work_values(case,'C3-case')
+            window['cases']={'malicious.checked-file-bytes':case};anchor.recording_work=window;anchor.private_observations={}
+            reader=module._Reader.__new__(module._Reader);reader.anchor=anchor;reader.commands_open=True
+            reader.owned=[bundle];reader.inputs=[];reader._initialize_replay_outputs()
+            reader._retain_replay_output('bundles',files['shadow-record.json'],(bundle,'current','environment.one'))
+            reader._retain_replay_output('bundles',files['shadow-record.json'],(bundle,'qualifying','environment.one'))
+            assembly=replay._SeedAssembly(seed,anchor,'malicious.checked-file-bytes',window,case)
+            assembly.bindings[phase]={'request_raw':request};assembly.original_raw=(incident,)
+            assembly.generator=types.SimpleNamespace(reader=reader)
+            if label=='source-mode-drift':(source/'incident.json').chmod(0o600)
+            if label=='unusable':reader.replay_output_state[0]=True
+            if label=='unknown-role':reader.replay_outputs['bundles'][0]=(files['shadow-record.json'],(bundle,'invented','environment.one'))
+            caught=None
+            try:
+                try:
+                    assembly.bundle_outputs(phase,reader)
+                    if label=='duplicate-binding':assembly.bundle_outputs(phase,reader)
+                    if label in {'repeat-observation','repeat-target-identity','repeat-source-swap'}:
+                        if label=='repeat-target-identity':
+                            (source/'incident.json').chmod(0o600);(source/'incident.json').chmod(0o400)
+                        repeated=c._HeldBundle(parent,'other-published' if label=='repeat-source-swap' else 'published',form)
+                        reader.owned.append(repeated)
+                        reader._retain_replay_output('bundles',files['shadow-record.json'],(repeated,'current','environment.one'))
+                        before_copy=(assembly.work['physical_bytes'],assembly.work['files'])
+                        assembly.bundle_outputs(phase,reader)
+                        assert (assembly.work['physical_bytes'],assembly.work['files'])==before_copy
+                    if label=='default-repeat':
+                        source_leaf=next(item for item in bundle.held if item.path==str(source/'incident.json'))
+                        assembly._copy(anchor,source_leaf,'default-repeat.bin',c.digest(incident),'recorded',source_mode=0o400)
+                    if candidate:
+                        git=c._ReadOnlyGit.__new__(c._ReadOnlyGit);git.held=[];git.ledger=reader;reader.git=git
+                        rows=[dict(row) for row in candidate_rows]
+                        if label=='wrong-row-sha':rows[0]['sha256']='f'*64
+                        reader._retain_replay_output('git',files['shadow-record.json'],(candidate_files,rows,git,bundle.files))
+                        assembly.candidate_outputs(reader)
+                except BaseException as error:caught=error
+                if label in {'normal','repeat-observation'}:
+                    assert caught is None and len(assembly.files)==2*len(files)+(4 if candidate else 0)
+                    assert len(assembly.output_relations)==(3 if label=='repeat-observation' else 2) and assembly.output_relations[0][3:5]!=assembly.output_relations[1][3:5]
+                    assert all((destination/assembly.derived_outputs[phase]['bundle/generator/'+role+'/environment.one/'+name]).read_bytes()==raw
+                        for role in ('current','qualifying') for name,raw in files.items())
+                else:assert caught is not None and assembly.failure is caught
+                results.append({'case':label,'rejected':caught is not None,'output_files':len(assembly.files),
+                    'actual_relations':len(assembly.output_relations),'work':assembly.work,
+                    'native_authentication':'NOT_PROVED synthetic typed bundle/anchor; actual held/read/copy checks only'})
+            finally:
+                primary=sys.exc_info()[1] or caught
+                try:assembly.close(primary)
+                except BaseException as error:assert error is primary
+                for owned_bundle in reader.owned:owned_bundle.close()
+                seed.close();parent.close()
+    _C3_work_evidence(results,evidence,'candidate' if candidate else 'bundle')
+    print(json.dumps({'C3_actual_bundle_outputs':results},sort_keys=True))
+
+
+def raw16_C3_gate_outputs(root: Path, evidence=None) -> None:
+    import tempfile
+    spec=importlib.util.spec_from_file_location('C3_output_generator',root/'scope/v1/generate-gate-evidence.py')
+    module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
+    c=module.c
+    spec=importlib.util.spec_from_file_location('C3_gate_output_replay',root/'evals/v1/replay-malicious.py')
+    replay=importlib.util.module_from_spec(spec);sys.modules[spec.name]=replay;spec.loader.exec_module(replay)
+    results=[]
+    for label in ('normal','missing-output','wrong-size','unusable'):
+        with tempfile.TemporaryDirectory(prefix='ystack-C3-gate-output-') as temporary:
+            base=Path(temporary).resolve();output=base/'gate';output.mkdir(mode=0o700)
+            destination=base/'S';destination.mkdir(mode=0o700)
+            names=('objects/request/value.json','private/reader-captures/captured.json','manifests/manifest.json','completion/COMPLETE.json')
+            for name in names:(output/name).parent.mkdir(mode=0o700,parents=True,exist_ok=True)
+            raw={names[0]:c.canonical({'actual_synthetic_request':1}),names[1]:b'original reader capture\n'}
+            rows=[{'name':name,'size_bytes':len(value),'sha256':c.digest(value)} for name,value in sorted(raw.items())]
+            if label=='wrong-size':rows[0]['size_bytes']+=1
+            identity='generation.fixture'
+            manifest=module._manifest_values(identity,rows,[],{},c.canonical({'body':{'initial_origin_refs':[]}}),None)
+            raw.update({names[2]:manifest,names[3]:module._completion_values(identity,manifest)})
+            for name,value in raw.items():(output/name).write_bytes(value);(output/name).chmod(0o400)
+            resolver=c._DarwinUUIDResolver() if sys.platform=='darwin' else None
+            generator=module._Generator.__new__(module._Generator)
+            generator.output=output;generator.active=True;generator.deadline=time.monotonic()+60
+            generator.held=[];generator._init_output_capture()
+            anchor=c.Anchor.__new__(c.Anchor);anchor.resolver=resolver;anchor.held=[];anchor.private_observations={}
+            window,case={},{};c._capture_work_values(window,'C3-window');c._capture_work_values(case,'C3-case')
+            window['cases']={'malicious.unread-forge-text':case};anchor.recording_work=window
+            reader=module.r._Reader.__new__(module.r._Reader)
+            reader.owned=[];reader.inputs=[];reader.anchor=anchor;reader.darwin=resolver
+            generator.reader=reader;generator.session=types.SimpleNamespace(phase='COMPLETE')
+            owned=[]
+            for name,value in raw.items():
+                held=c._hold_bytes(str(output/name),c.DOCUMENT_LIMIT);owned.append(held)
+                if name==names[1]:reader.owned.append(held)
+                else:generator.output_holds[name]=held;generator.held.append(held)
+            if label=='missing-output':reader.owned=[]
+            if label=='unusable':generator.capture_output_unusable=True
+            parent=c._open_held(str(destination),True,c._store_rule(os.getuid(),os.getgid(),0o700,True,resolver),'E_STORE')
+            assembly=replay._SeedAssembly(parent,anchor,'malicious.unread-forge-text',window,case)
+            assembly.generator=assembly._gate_owner=generator;assembly.gate_session=generator.session
+            assembly.identifiers['gate']=identity;assembly.occurrences['gate']={}
+            caught=None
+            try:
+                try:assembly.gate_outputs()
+                except BaseException as error:caught=error
+                if label=='normal':
+                    assert caught is None and set(assembly.derived_outputs['gate-output'])==set(raw)
+                    assert len(assembly.files)==len(raw)
+                    assert all((destination/assembly.derived_outputs['gate-output'][name]).read_bytes()==value for name,value in raw.items())
+                else:assert caught is not None and assembly.failure is caught
+                results.append({'case':label,'rejected':caught is not None,'files':len(assembly.files),
+                    'work':assembly.work,'scope':'partial actual held-output mechanism only; not complete 13 families or native'})
+            finally:
+                primary=sys.exc_info()[1] or caught
+                try:assembly.close(primary)
+                except BaseException as error:assert error is primary
+                for item in owned:item.close()
+                parent.close()
+    _C3_work_evidence(results,evidence,'gate')
+    print(json.dumps({'C3_actual_gate_output_copy':results},sort_keys=True))
+
+
+def raw16_C3_I_inputs(root: Path, evidence=None) -> None:
+    import tempfile
+    spec=importlib.util.spec_from_file_location('ystack_shadow_consumer',root/'shadow/v1/_consumer.py')
+    c=importlib.util.module_from_spec(spec);sys.modules[spec.name]=c;spec.loader.exec_module(c)
+    spec=importlib.util.spec_from_file_location('C3_I_replay',root/'evals/v1/replay-malicious.py')
+    replay=importlib.util.module_from_spec(spec);sys.modules[spec.name]=replay;spec.loader.exec_module(replay)
+    results=[]
+    class Unregistered(list):
+        def append(self,value):raise allocation
+    for label in ('normal','wrong-sha','extra-file','owner-register','owner-register-cancel'):
+        with tempfile.TemporaryDirectory(prefix='ystack-C3-I-') as temporary:
+            base=Path(temporary).resolve();case=base/'malicious.checked-file-bytes';case.mkdir(mode=0o700)
+            data={'incident.json':b'{"primitive":"synthetic"}\n','slot.bin':b'qualified synthetic input\n'*4097}
+            rows=[]
+            for name,raw in data.items():
+                (case/name).write_bytes(raw);(case/name).chmod(0o400)
+                rows.append({'occurrence':'case' if name=='incident.json' else 'reproduction',
+                    'role':'original-input' if name=='incident.json' else 'capture',
+                    'member':name if name=='incident.json' else 'reproduction/runtime-0000-guest_kernel-0000.bin',
+                    'file':name,'size_bytes':len(raw),'sha256':c.digest(raw),'kind':'raw' if name=='incident.json' else 'runtime'})
+            if label=='wrong-sha':rows[1]['sha256']='f'*64
+            if label=='extra-file':(case/'extra').write_bytes(b'extra');(case/'extra').chmod(0o400)
+            core={'case_id':case.name,'entries':rows,'originals':{},'occurrences':[]}
+            resolver=c._DarwinUUIDResolver() if sys.platform=='darwin' else None
+            parent=c._open_held(str(case),True,c._store_rule(os.getuid(),os.getgid(),0o700,True,resolver),'E_STORE')
+            work={};c._capture_work_values(work,'C3-I-control')
+            clone,opened,closing=c._clone,c._open_child,os.close
+            tracked=set();attempts={};allocation=MemoryError('controlled C3 owner append');cancelled=[]
+            def cloned(*args,**kwargs):
+                components=clone(*args,**kwargs);tracked.update(item.fd for item in components);return components
+            def child(*args,**kwargs):
+                item=opened(*args,**kwargs);tracked.update(component.fd for component in item.components);return item
+            def close(fd):
+                if fd in tracked:
+                    attempts[fd]=attempts.get(fd,0)+1
+                    closing(fd)
+                    if label=='owner-register-cancel' and not cancelled:
+                        import ast
+                        tree=ast.parse((root/'scope/v1/read-shadow-evidence.py').read_text())
+                        main=next(item for item in tree.body if isinstance(item,ast.FunctionDef) and item.name=='main')
+                        handler=next(item for item in main.body if isinstance(item,ast.FunctionDef) and item.name=='cancel')
+                        namespace={};exec(compile(ast.Module(body=[handler],type_ignores=[]),'<actual-scope-cancel>','exec'),namespace)
+                        try:namespace['cancel'](15,None)
+                        except InterruptedError as error:cancelled.append(error);raise
+                    return
+                return closing(fd)
+            original_setattr=replay._ReplayInputs.__setattr__
+            def assigned(self,name,value):
+                if name=='owned' and label.startswith('owner-register'):value=Unregistered()
+                return original_setattr(self,name,value)
+            replay._ReplayInputs.__setattr__=assigned
+            c._clone,c._open_child,os.close=cloned,child,close
+            acquired=None;caught=None
+            try:
+                try:
+                    acquired=replay._ReplayInputs(parent,core,work)
+                    assert acquired.bytes('case','original-input','incident.json',c.DOCUMENT_LIMIT)==data['incident.json']
+                    value=acquired.semantic('reproduction','capture','reproduction/runtime-0000-guest_kernel-0000.bin')
+                    assert type(value) is tuple and b''.join(value)==data['slot.bin']
+                except BaseException as error:caught=error
+                if label=='normal':assert caught is None
+                elif label=='owner-register':assert caught is allocation
+                elif label=='owner-register-cancel':assert caught is cancelled[0]
+                else:assert caught is not None
+            finally:
+                primary=sys.exc_info()[1] or caught
+                if acquired is not None:
+                    try:acquired.close(primary)
+                    except BaseException as error:assert error is primary
+                c._clone,c._open_child,os.close=clone,opened,closing
+                replay._ReplayInputs.__setattr__=original_setattr
+                assert set(attempts)==tracked and all(count==1 for count in attempts.values())
+                parent.recheck('E_STORE');parent.close()
+            results.append({'case':label,'rejected':caught is not None,'all_owned_FDs_closed_once':True,
+                'real_first_cancel_preserved':bool(cancelled) and caught is cancelled[0],
+                'work':work,'full_seed':False,'partial_inventory_only':True})
+    _C3_work_evidence(results,evidence,'I')
+    print(json.dumps({'C3_independent_I_input_owner':results},sort_keys=True))
+
+
+
+def raw16_C3_git_inputs(root: Path, evidence=None) -> None:
+    import tempfile
+    spec=importlib.util.spec_from_file_location('scope_shadow_consumer',root/'shadow/v1/_consumer.py')
+    c=importlib.util.module_from_spec(spec);sys.modules[spec.name]=c;spec.loader.exec_module(c)
+    spec=importlib.util.spec_from_file_location('C3_git_replay',root/'evals/v1/replay-malicious.py')
+    replay=importlib.util.module_from_spec(spec);sys.modules[spec.name]=replay;spec.loader.exec_module(replay)
+    results=[]
+    for label in ('normal','wrong-sha','duplicate-path','unsafe-path','target-drift'):
+        with tempfile.TemporaryDirectory(prefix='ystack-C3-git-') as temporary:
+            base=Path(temporary).resolve()
+            for name in ('source','S','rebuilt','tools'):(base/name).mkdir(mode=0o700)
+            source=base/'source'
+            tree=write_loose(source,'sha1','tree',b'')
+            commit_body=('tree '+tree+'\nauthor Fixture <fixture@example.invalid> 0 +0000\ncommitter Fixture <fixture@example.invalid> 0 +0000\n\nsynthetic\n').encode()
+            commit=write_loose(source,'sha1','commit',commit_body)
+            write_bytes(source/'HEAD', (commit+'\n').encode())
+            write_bytes(source/'config',b'[core]\nrepositoryformatversion = 0\nbare = true\n')
+            names=('incident.json','reproduction-request.json','write-request.json','gate-request.json')
+            kinds=('shadow_incident_record','shadow_enforced_request','shadow_write_request','scope_gate_generation_request')
+            original=[]
+            for index,(name,kind) in enumerate(zip(names,kinds)):
+                raw=c.canonical({'kind':kind,'id':'ordinary.'+str(index),'body':{'observed_at':'2026-10-27T00:00:00Z'}})
+                write_bytes(base/'tools'/name,raw)
+            for path in base.rglob('*'):
+                if path.is_file():path.chmod(0o400)
+            resolver=c._DarwinUUIDResolver() if sys.platform=='darwin' else None
+            rule=c._store_rule(os.getuid(),os.getgid(),0o400,False,resolver)
+            sources=[]
+            for path in sorted(source.rglob('*')):
+                if path.is_file():
+                    held=c._open_held(str(path),False,rule,'E_STORE');sources.append(held)
+            for name in names:
+                held=c._open_held(str(base/'tools'/name),False,rule,'E_STORE')
+                original.append(c._HeldBytes(held,(base/'tools'/name).read_bytes()))
+            parent=c._open_held(str(base/'S'),True,c._store_rule(os.getuid(),os.getgid(),0o700,True,resolver),'E_STORE')
+            target=c._open_held(str(base/'rebuilt'),True,c._store_rule(os.getuid(),os.getgid(),0o700,True,resolver),'E_STORE')
+            anchor=c.Anchor.__new__(c.Anchor);anchor.resolver=resolver;anchor.private_observations={}
+            window,case={},{};c._capture_work_values(window,'C3-window');c._capture_work_values(case,'C3-case')
+            case_id='malicious.checked-file-bytes';window['cases']={case_id:case};anchor.recording_work=window
+            assembly=replay._SeedAssembly(parent,anchor,case_id,window,case)
+            entries=tuple({'path':str(Path(held.path).relative_to(source)),'sha256':c.digest(Path(held.path).read_bytes()),'held':held} for held in sources)
+            if label=='wrong-sha':entries=({**entries[0],'sha256':'f'*64},)+entries[1:]
+            if label=='duplicate-path':entries=entries+(entries[0],)
+            if label=='unsafe-path':entries=({**entries[0],'path':'objects/info/alternates'},)+entries[1:]
+            if label=='target-drift':
+                os.chmod(sources[0].path,0o600)
+            caught=None;incoming=None;work={}
+            try:
+                try:
+                    assembly.original_inputs(*original)
+                    assembly.original_git_inputs(anchor,entries)
+                    assembly.close()
+                    core=assembly._closed_inventory_core_data()['inventory_core']
+                    current=c._open_held(str(base/'S'),True,c._store_rule(os.getuid(),os.getgid(),0o700,True,resolver),'E_STORE')
+                    try:incoming=replay._ReplayInputs(current,core,work)
+                    finally:current.close()
+                    actual=incoming.git_repository(target)
+                    assert set(actual)=={entry['path'] for entry in entries}
+                    for path in actual:assert (base/'rebuilt'/path).read_bytes()==(source/path).read_bytes()
+                    if label=='normal':
+                        command=['/usr/bin/cc','-std=c11','-Wall','-Wextra','-Werror','-O2',str(root/'adapters/local-git-materializer/v1/object-closure.c'),'-o',str(base/'tools'/'object-closure')]
+                        compiled=subprocess.run(command,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env={'PATH':'/usr/bin:/bin','LC_ALL':'C','TMPDIR':str(base/'tools')})
+                        assert compiled.returncode==0,compiled.stderr
+                        closure=base/'tools'/'closure'
+                        command=[str(base/'tools'/'object-closure'),'walk',str(base/'rebuilt'),'sha1',commit,str(closure)]
+                        walked=subprocess.run(command,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env={'PATH':'/usr/bin:/bin','LC_ALL':'C','GIT_CONFIG_NOSYSTEM':'1','GIT_CONFIG_GLOBAL':'/dev/null'})
+                        assert walked.returncode==0,walked.stderr
+                        assert commit.encode() in closure.read_bytes() and tree.encode() in closure.read_bytes()
+                        work['offline_compile_and_closure_work_unknown']=True
+                except BaseException as error:caught=error
+                if label=='normal':assert caught is None,repr(caught)
+                else:assert caught is not None,label
+            finally:
+                primary=sys.exc_info()[1] or caught
+                if incoming is not None:incoming.close(primary)
+                assembly.close(primary)
+                for held in sources:held.close()
+                for item in original:item.close()
+                target.close();parent.close()
+            results.append({'case':label,'rejected':caught is not None,'error':None if caught is None else repr(caught),
+                'files':len(assembly.files),'work':assembly.work,'I_and_rebuild_work':work,'full_seed':False,
+                'original_materializer_jq16':'NOTRUN: local fixed jq1.6 absent','source_caller_qualification':'UNKNOWN'})
+    details=[{'work':row['I_and_rebuild_work']} for row in results]
+    _C3_work_evidence(details,evidence,'git-I')
+    for row,detail in zip(results,details):row['I_and_rebuild_work']=detail['work']
+    _C3_work_evidence(results,evidence,'git')
+    print(json.dumps({'C3_actual_explicit_git_inputs':results},sort_keys=True))
+
+
+
+def raw16_C3_trial_documents(root: Path, evidence=None) -> None:
+    import tempfile
+    spec=importlib.util.spec_from_file_location('scope_shadow_consumer',root/'shadow/v1/_consumer.py')
+    c=importlib.util.module_from_spec(spec);sys.modules[spec.name]=c;spec.loader.exec_module(c)
+    spec=importlib.util.spec_from_file_location('C3_trial_replay',root/'evals/v1/replay-malicious.py')
+    replay=importlib.util.module_from_spec(spec);sys.modules[spec.name]=replay;spec.loader.exec_module(replay)
+    spec=importlib.util.spec_from_file_location('C3_trial_original_enforced',root/'shadow/v1/enforced-reproduction.py')
+    e=importlib.util.module_from_spec(spec);sys.modules[spec.name]=e;spec.loader.exec_module(e);c=e.c
+    results=[]
+    for label in ('normal','InputSnapshot','duplicate','wrong-mode','qualified-not-input','wrong-request-source','gate-cross-binding'):
+        with tempfile.TemporaryDirectory(prefix='ystack-C3-documents-') as temporary:
+            base=Path(temporary).resolve()
+            for name in ('inputs','S'):(base/name).mkdir(mode=0o700)
+            names=('incident.json','reproduction-request.json','write-request.json','gate-request.json')
+            kinds=('shadow_incident_record','shadow_enforced_request','shadow_write_request','scope_gate_generation_request')
+            gate_body={'scope_basis':{'basis':'actual request input'},'risk_claim':{'risk':'actual request input'}}
+            documents={'reproduction/claim.json':c.canonical({'id':'claim.repro'}),
+                'reproduction/duty-evaluation.json':c.canonical({'id':'duty.repro'}),
+                'reproduction/qualified-identity.json':c.canonical({'id':'identity.original'}),
+                'reproduction/materialization-input.json':c.canonical({'padding':'x'*(c.DOCUMENT_LIMIT+1)}),
+                'gate/shadow-set.json':c.canonical({'actual':'shadow-set'}),
+                'gate/dashboard.json':c.canonical({'actual':'dashboard'}),
+                'gate/marker.json':c.canonical({'actual':'marker'}),
+                'gate/basis.json':c.canonical(gate_body['scope_basis']),
+                'gate/claim.json':c.canonical(gate_body['risk_claim'])}
+            if label=='gate-cross-binding':documents['gate/basis.json']=c.canonical({'basis':'different input'})
+            request_body={name.split('/',1)[1][:-5].replace('-','_'):str(base/'inputs'/str(index+4)) for index,name in enumerate(documents) if name.startswith('reproduction/')}
+            originals={name:c.canonical({'kind':kind,'id':'ordinary.'+str(index),'body':gate_body if index==3 else request_body if index==1 else {'observed_at':'2026-10-27T00:00:00Z'}}) for index,(name,kind) in enumerate(zip(names,kinds))}
+            all_raw=list(originals.values())+list(documents.values())
+            for index,raw in enumerate(all_raw):
+                path=base/'inputs'/str(index);path.write_bytes(raw);path.chmod(0o400)
+                if label=='InputSnapshot' and index>=4:
+                    target=base/'inputs'/('snapshot-'+str(index));target.write_bytes(raw);target.chmod(0o400)
+            resolver=c._DarwinUUIDResolver() if sys.platform=='darwin' else None
+            rule=c._store_rule(os.getuid(),os.getgid(),0o400,False,resolver)
+            items=[c._HeldBytes(c._open_held(str(base/'inputs'/str(index)),False,rule,'E_STORE'),raw) for index,raw in enumerate(all_raw)]
+            if label=='InputSnapshot':
+                items[4:]=[e.InputSnapshot(item.held,base/'inputs'/('snapshot-'+str(index)),item.raw) for index,item in enumerate(items[4:],4)]
+            parent=c._open_held(str(base/'S'),True,c._store_rule(os.getuid(),os.getgid(),0o700,True,resolver),'E_STORE')
+            anchor=c.Anchor.__new__(c.Anchor);anchor.resolver=resolver;anchor.private_observations={}
+            window,case={},{};c._capture_work_values(window,'C3-window');c._capture_work_values(case,'C3-case')
+            case_id='malicious.checked-file-bytes';window['cases']={case_id:case};anchor.recording_work=window
+            assembly=replay._SeedAssembly(parent,anchor,case_id,window,case)
+            entries=tuple({'member':name,'source':item} for name,item in zip(documents,items[4:]))
+            if label=='duplicate':entries=entries+(entries[0],)
+            if label=='wrong-mode':os.chmod(items[4].held.path,0o600)
+            if label=='qualified-not-input':entries=({'member':'write/qualified-identity.json','source':items[4]},)
+            if label=='wrong-request-source':entries=({'member':entries[0]['member'],'source':items[5]},)+entries[1:]
+            incoming=None;work={};caught=None
+            try:
+                try:
+                    assembly.original_inputs(*items[:4]);assembly.trial_documents(anchor,entries);assembly.close()
+                    core=assembly._closed_inventory_core_data()['inventory_core']
+                    current=c._open_held(str(base/'S'),True,c._store_rule(os.getuid(),os.getgid(),0o700,True,resolver),'E_STORE')
+                    try:incoming=replay._ReplayInputs(current,core,work)
+                    finally:current.close()
+                    values=replay._ReplayCase.__new__(replay._ReplayCase)
+                    values.inputs=incoming;values.c=c;values.work=work;values.original={'gate-request.json':json.loads(originals['gate-request.json'])}
+                    actual=values.trial('reproduction')
+                    assert len(actual['materialization-input.json'])>c.DOCUMENT_LIMIT
+                    for name,raw in actual.items():assert raw==documents['reproduction/'+name]
+                    gate=values.trial('gate')
+                    assert gate['basis.json']==c.canonical(gate_body['scope_basis'])
+                except BaseException as error:caught=error
+                if label in ('normal','InputSnapshot'):assert caught is None,repr(caught)
+                else:assert caught is not None,label
+            finally:
+                primary=sys.exc_info()[1] or caught
+                if incoming is not None:incoming.close(primary)
+                assembly.close(primary)
+                for item in items:item.close()
+                parent.close()
+            results.append({'case':label,'rejected':caught is not None,'error':None if caught is None else repr(caught),
+                'work':assembly.work,'I_work':work,'full_seed':False,'original_schema_and_qualification':'NOT_PROVEN; private held copy/consumer only'})
+    details=[{'work':row['I_work']} for row in results];_C3_work_evidence(details,evidence,'trial-I')
+    for row,detail in zip(results,details):row['I_work']=detail['work']
+    _C3_work_evidence(results,evidence,'trial')
+    print(json.dumps({'C3_actual_trial_documents':results},sort_keys=True))
+
+
+
+def raw16_C3_driver_input_owners(root: Path, evidence=None) -> None:
+    from pathlib import Path
+    import ast,contextlib,datetime,hashlib,importlib.util,json,os,shlex,stat,sys,traceback,tempfile
+    repo=root;attempt="C3-driver-input"
+    launcher=(repo/'evals/v1/evals-launcher.sh').read_bytes()
+    consumer_path=repo/'shadow/v1/_consumer.py';consumer_raw=consumer_path.read_bytes()
+    program=shlex.split(launcher.decode()[launcher.decode().index("c2_program='"):launcher.decode().index('\nc2_fd9=false')],posix=True)[0].split('=',1)[1]
+    ast.parse(program)
+    spec=importlib.util.spec_from_file_location('actual_C2_input_consumer',consumer_path)
+    c=importlib.util.module_from_spec(spec);sys.modules[spec.name]=c;spec.loader.exec_module(c)
+    ns={'__name__':'bounded_actual_C2_symbols','c':c};exec(compile(program,str(repo/'evals/v1/evals-launcher.sh')+':c2_program','exec'),ns)
+    C2Root=ns['C2Root'];fresh=ns['c2_fresh_work'];sha=ns['c2_sha'];canonical=ns['c2_canonical'];check_input=ns['c2_driver_input_check'];build_input=ns['c2_driver_input']
+    root_area=Path(tempfile.mkdtemp(prefix='ystack-driver-input-'+attempt+'-',dir=tempfile.gettempdir())).resolve();os.chown(root_area,-1,os.getegid())
+    results=[]
+    def check(value,label):
+     if not value:raise AssertionError(label)
+    def fds():
+     result=set()
+     for name in os.listdir('/dev/fd'):
+      if name.isdigit():
+       try:os.fstat(int(name));result.add(int(name))
+       except OSError:pass
+     return result
+    def owned_fds(custody):return {row.fd for held in custody.owned for row in held.components}
+    def error_value(error):return None if error is None else dict(category=type(error).__name__,errno=getattr(error,'errno',None),code=getattr(error,'code',None),message=str(error))
+    def prepare(name,mode='run',malformed=False):
+     base=root_area/name;base.mkdir(mode=0o700);scratch=base/'scratch';scratch.mkdir(mode=0o700);root=base/'root';root.mkdir(mode=0o700)
+     manifest=None
+     raws=[canonical(dict(schema_version=1,kind='synthetic_input',id='seed.'+str(index),body=dict(value=index))) for index in range(1 if mode=='run' else 4)]
+     expected=[sha(raw) for raw in raws]
+     if mode=='run':(scratch/'input.json').write_bytes(raws[0]);(scratch/'input.json').chmod(0o400)
+     else:
+      (scratch/'inputs').mkdir(mode=0o700)
+      for label,raw in zip(('seed-0.json','result-0.json','seed-1.json','result-1.json'),raws):(scratch/'inputs'/label).write_bytes(raw);(scratch/'inputs'/label).chmod(0o400)
+      manifest=b'{bad json\n' if malformed else canonical([dict(seed_sha256=expected[0],result_sha256=expected[1]),dict(seed_sha256=expected[2],result_sha256=expected[3])])
+      (scratch/'inputs/manifest.json').write_bytes(manifest);(scratch/'inputs/manifest.json').chmod(0o400)
+     return root,scratch,raws,expected,manifest
+    scenarios=[('positive-run','run',False),('positive-dashboard','dashboard',False),('START-sha','run',False),('START-fullbytes','run',False),('registration-failure','run',False),('source-close-ordinary','run',False),('source-close-marked','run',False),('source-close-keyboard','run',False),('manifest-parse-failure','dashboard',True),('helper-unknown-refusal','run',False)]
+    fixtures={name:prepare(name,mode,malformed) for name,mode,malformed in scenarios}
+    @contextlib.contextmanager
+    def setup(name,mode='run',malformed=False):
+     root,scratch,raws,expected,_manifest=fixtures[name]
+     work=fresh('bounded-driver-input-'+name)
+     # Empty actual unit-scope counter owners declare no prior helper/native work.
+     before=ns['c2_counters'](fresh('bounded-empty-before'))
+     reservation=ns['c2_counters'](fresh('bounded-zero-tail'))
+     ns['c2_reserve'](before,reservation)
+     work['C2_admitted_before']=before;work['C2_tail_reservation']=reservation
+     resolver=c._DarwinUUIDResolver() if sys.platform=='darwin' else None
+     start_fds=fds();held=None;custody=None;entry=dict(name=name,mode=mode,started_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),input_origin='synthetic static files; original builder/helper not executed')
+     try:
+      held=c._open_held(str(root),True,c._store_rule(os.geteuid(),os.getegid(),0o700,True,resolver),'E_STALE',recording_work=work,accounting_kind='M')
+      custody=C2Root(held,work,resolver);operations=custody.mkdir(held,'operations');operation=custody.mkdir(operations,'0');installed=custody.mkdir(operation,'I');destination=custody.mkdir(installed,'driver-input')
+      entry['synthetic_root']=str(root_area);entry['root_fd']=held.fd;entry['root_identity']=list(c._identity(held.before));entry['expected']=expected
+      yield custody,destination,scratch,raws,expected,entry
+      entry['passed']=True
+     except BaseException as error:
+      entry['passed']=False;entry['test_error']=error_value(error);entry['traceback']=traceback.format_exc()
+      drift=[];tb=error.__traceback__
+      while tb is not None:
+       frame=tb.tb_frame
+       if frame.f_code.co_name=='recheck' and frame.f_code.co_filename==str(consumer_path):
+        values=frame.f_locals;row={}
+        for key in ('current','expected','named','index','path'):
+         if key in values:
+          value=values[key]
+          row[key]=list(value) if isinstance(value,(tuple,os.stat_result)) else value
+        component=values.get('component')
+        if component is not None:row['component']={'name':component.name,'before':list(component.before)}
+        drift.append(row)
+       tb=tb.tb_next
+      entry['actual_traceback_locals']=drift
+      raise
+     finally:
+      if custody is not None:
+       try:custody.close()
+       except BaseException as error:entry['cleanup_error']=error_value(error)
+       entry['closed']=custody.closed;entry['remaining_owned']=len(custody.owned)
+      elif held is not None:
+       try:held.close()
+       except BaseException as error:entry['cleanup_error']=error_value(error)
+      entry['fd_set_restored']=fds()==start_fds
+      entry['work']=work
+      entry['completed_utc']=datetime.datetime.now(datetime.timezone.utc).isoformat()
+      if evidence is not None:
+       target=evidence/(attempt+'-'+name+'.json')
+       with target.open('x') as stream:stream.write(json.dumps(entry,sort_keys=True,indent=2)+'\n')
+      results.append(dict(name=name,passed=entry.get('passed',False),fd_set_restored=entry['fd_set_restored']))
+      check(entry['fd_set_restored'],'unit leaked actual descriptors')
+    def expect_failure(fn,code=None,same=None):
+     try:fn()
+     except BaseException as error:
+      if code is not None:check(getattr(error,'code',None)==code,'wrong refusal '+str(error))
+      if same is not None:check(error is same,'lost exact original exception')
+      return error
+     raise AssertionError('negative input unexpectedly accepted')
+    def root_live(custody,entry):
+     check(not custody.closed and bool(custody.root.components),'root was closed by input boundary')
+     check(c._identity(os.fstat(custody.root.fd))==c._identity(custody.root.before) and c._identity(custody.root.before)[:6]==custody.initial[:6],'root descriptor identity moved')
+     entry['root_still_live']=True
+    for mode in ('run','dashboard'):
+     with setup('positive-'+mode,mode) as (custody,destination,scratch,raws,expected,entry):
+      initial=fds();json_original=ns['json'].loads;encode_original=ns['C2Channel'].encode;phases=[]
+      def measured_json(raw,*args,**kwargs):
+       result=json_original(raw,*args,**kwargs)
+       if mode=='dashboard' and raw==fixtures['positive-dashboard'][4]:phases.append(dict(read=custody.work['read_bytes'],R=custody.work['seed_processing']['R'],M=custody.work['accounting']['M']['read_bytes'],size=len(raw)))
+       return result
+      def measured_encode(self,value):
+       if phases and 'parse_read_delta' not in phases[-1]:
+        p=phases[-1];p['parse_read_delta']=custody.work['read_bytes']-p['read'];p['parse_R_delta']=custody.work['seed_processing']['R']-p['R'];p['parse_M_delta']=custody.work['accounting']['M']['read_bytes']-p['M']
+       return encode_original(self,value)
+      ns['json'].loads=measured_json;ns['C2Channel'].encode=measured_encode
+      try:path,seals=build_input(custody,destination,str(scratch),mode,raws,expected)
+      finally:ns['json'].loads=json_original;ns['C2Channel'].encode=encode_original
+      check(path==destination.path+('/seed.json' if mode=='run' else ''),'wrong fixed path')
+      check(len(seals)==(1 if mode=='run' else 5),'wrong original output count')
+      for held,raw,digest in seals:
+       check(type(held) is c.HeldPath and held.components,'fake holder type')
+       check(stat.S_IMODE(os.fstat(held.fd).st_mode)==0o400,'wrong installed mode')
+       check(Path(held.path).read_bytes()==raw and sha(raw)==digest,'actual bytes/hash differ')
+      check(fds()-initial<=owned_fds(custody),'scratch source descriptors left live')
+      check_input(custody,seals);custody.recheck();root_live(custody,entry)
+      if mode=='dashboard':
+       check(len(phases)==1 and all(phases[0][k]==phases[0]['size'] for k in ('parse_read_delta','parse_R_delta','parse_M_delta')),'actual parse fee not exact')
+      entry['parse_phases']=phases;entry['installed']=[dict(path=h.path,sha256=digest,size=len(raw)) for h,raw,digest in seals]
+      if mode=='run':
+       old_H=custody.work['seed_processing']['H'];wrong=b'x'*len(seals[0][1])
+       expect_failure(lambda:check_input(custody,[(seals[0][0],wrong,seals[0][2])]),code='E_STALE')
+       check(custody.work['seed_processing']['H']==old_H,'equal-false reported unexecuted hash')
+       entry['wrong_bytes_rejected_without_hash']=True;root_live(custody,entry)
+    for variant in ('START-sha','START-fullbytes'):
+     with setup(variant) as (custody,destination,scratch,raws,expected,entry):
+      initial=fds();args_raw=list(raws);args_sha=list(expected)
+      if variant=='START-sha':args_sha[0]='0'*64
+      else:args_raw[0]=b'x'*len(args_raw[0])
+      error=expect_failure(lambda:build_input(custody,destination,str(scratch),'run',args_raw,args_sha),code='E_RELATION')
+      check(not os.listdir(destination.fd),'mismatched START produced installed file');check(fds()==initial,'mismatch leaked source fd')
+      custody.recheck();root_live(custody,entry);entry['refusal']=error_value(error)
+    with setup('registration-failure') as (custody,destination,scratch,raws,expected,entry):
+     sentinel=MemoryError('actual holder ownership registration injection')
+     class FailingOwned(list):
+      def append(self,value):
+       if value.path==destination.path+'/seed.json':raise sentinel
+       return super().append(value)
+     custody.owned=FailingOwned(custody.owned);initial=fds()
+     error=expect_failure(lambda:build_input(custody,destination,str(scratch),'run',raws,expected),same=sentinel)
+     check(fds()==initial,'registration failure leaked acquired fd');root_live(custody,entry)
+     check((Path(destination.path)/'seed.json').read_bytes()==raws[0],'failed physical file lost')
+     entry['refusal']=error_value(error);entry['retained_failed_file']=True
+    for variant,sentinel in [('ordinary',OSError(5,'actual source close failure injection')),('marked',InterruptedError(4,'actual source close marked injection')),('keyboard',KeyboardInterrupt('actual source close keyboard injection'))]:
+     if variant=='marked':sentinel._scope_signal_cancel=True
+     with setup('source-close-'+variant) as (custody,destination,scratch,raws,expected,entry):
+      initial=fds();original_helper=c._close_capture_copy;original_close=c.os.close;active=[None];fired=[]
+      def measured_helper(fd,work,case_work,site,failure):
+       previous=active[0];active[0]=fd if site=='C2.driver-input-source-close' else None
+       try:return original_helper(fd,work,case_work,site,failure)
+       finally:active[0]=previous
+      def failed_close(fd):
+       original_close(fd)
+       if active[0]==fd and not fired:fired.append(fd);raise sentinel
+      c._close_capture_copy=measured_helper;c.os.close=failed_close
+      try:error=expect_failure(lambda:build_input(custody,destination,str(scratch),'run',raws,expected),same=sentinel)
+      finally:c._close_capture_copy=original_helper;c.os.close=original_close
+      check(fired and fds()-initial<=owned_fds(custody),'source close failed to drain real source chains')
+      root_live(custody,entry);entry['refusal']=error_value(error);entry['injected_fd']=fired[0]
+      check(custody.work.get('driver_input_close_unknown'),'close failure not UNKNOWN')
+    with setup('manifest-parse-failure','dashboard',malformed=True) as (custody,destination,scratch,raws,expected,entry):
+     initial=fds();error=expect_failure(lambda:build_input(custody,destination,str(scratch),'dashboard',raws,expected),code='E_RELATION')
+     check(custody.work.get('driver_input_parse_unknown'),'failed actual parse not UNKNOWN')
+     check(not os.listdir(destination.fd) and fds()==initial,'parse failure leaked source/installed fd')
+     root_live(custody,entry);entry['refusal']=error_value(error)
+    with setup('helper-unknown-refusal') as (custody,destination,scratch,raws,expected,entry):
+     custody.work['helper_internal_work_unknown']='UNKNOWN: real original helper has no complete measured transfer'
+     initial=fds();error=expect_failure(lambda:build_input(custody,destination,str(scratch),'run',raws,expected),code='E_LIMIT')
+     check(not os.listdir(destination.fd) and fds()==initial,'UNKNOWN budget path performed copy')
+     root_live(custody,entry);entry['refusal']=error_value(error)
+    summary=dict(attempt=attempt,launcher_sha256=hashlib.sha256(launcher).hexdigest(),consumer_sha256=hashlib.sha256(consumer_raw).hexdigest(),results=results,complete=True,helper_builder_native_runtime='NOTRUN',cost='UNKNOWN')
+    if evidence is not None:
+     with (evidence/(attempt+'-summary.json')).open('x') as stream:stream.write(json.dumps(summary,indent=2)+'\n')
+    print(json.dumps(dict(actual_controls=len(results),all_passed=all(row['passed'] and row['fd_set_restored'] for row in results),summary=attempt+'-summary.json',helper_native='NOTRUN'),sort_keys=True))

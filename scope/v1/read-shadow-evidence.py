@@ -242,6 +242,11 @@ class _GateReaderSession:
 
 
 class _Reader:
+    @property
+    def replay_output_unusable(self):
+        try:return self.replay_output_state[0]
+        except AttributeError:return True
+
     def __init__(self, scope_path, set_path, bundle_root, git_root, output, *, store_session=None, deadline=None, document_paths=None):
         self.document_paths = document_paths or {}
         self.store_session = store_session
@@ -325,6 +330,7 @@ class _Reader:
             self.owned.append(self.git)
             self.git.shape(self.scope_body["qualified_identity"]["target_revision"]["hash_algorithm"])
             self.recheck()
+            self._initialize_replay_outputs()
         except BaseException:
             self.close()
             raise
@@ -726,6 +732,42 @@ class _Reader:
         if first is not None:
             raise first
 
+    def _replay_output_failure(self, error, site):
+        try:
+            self.replay_output_state[0] = True
+            if getattr(self, "anchor", None) is not None:
+                self.anchor.private_observations["unusable"] = True
+            self.replay_output_errors.append({"site": site, "error": error,
+                "category": type(error).__name__, "errno": getattr(error, "errno", None)})
+        except (MemoryError, AttributeError):
+            pass
+        if isinstance(error, (KeyboardInterrupt, SystemExit)) or getattr(error, "_scope_signal_cancel", False):
+            raise error
+
+    def _initialize_replay_outputs(self):
+        try:
+            self.replay_output_state = [True]
+            self.replay_output_errors = []
+            self.replay_outputs = {"bundles": [], "git": [], "stores": []}
+            self.replay_output_work = {}
+            c._capture_work_values(self.replay_output_work, "scope-replay-outputs")
+            self.replay_output_work["accounting_incomplete"] = True
+            self.replay_output_state[0] = False
+        except Exception as error:
+            self._replay_output_failure(error, "reader-output-initialize")
+
+    def _retain_replay_output(self, group, key, value):
+        try:
+            require(group in {"bundles", "git", "stores"} and type(key) is bytes)
+            self.replay_outputs[group].append((key, value))
+            if self.anchor is not None:
+                self.anchor.recording_work["replay_output_work"] = self.replay_output_work
+            c._capture_observe(self.replay_output_work, "M", "scope-replay-output", {
+                "group": group, "ordinal": len(self.replay_outputs[group]) - 1,
+                "record_bytes": len(key)})
+        except BaseException as error:
+            self._replay_output_failure(error, "reader-output-" + group)
+
     def fixed_bundle(self, held):
         facts = self._authenticate(held.files)
         held.recheck()
@@ -813,7 +855,10 @@ class _Reader:
         self.git_relations(files, material_input, incident, body)
         store.recheck()
         anchor.recheck("E_STALE")
-        return _bundle_facts_values(files, checked, store.observation, body)
+        facts = _bundle_facts_values(files, checked, store.observation, body)
+        try:self._retain_replay_output("stores", files["shadow-record.json"], (store, files))
+        except BaseException as error:self._replay_output_failure(error, "reader-store-retention")
+        return facts
 
     def origin(self, document, snapshots, attempt_id, anchor):
         return _origin_projection_values(document, snapshots, attempt_id, anchor.config)
@@ -1077,6 +1122,8 @@ class _Reader:
                     "request_sha256": c.digest(c.canonical(publisher)), "write_set_sha256": c.digest(c.canonical(rows))})
                 and same(write["post_write_verification"], {"target_revision": incident["body"]["git_revision_ref"],
                     "candidate_tree_id": tree, "write_set": rows}))
+        try:self._retain_replay_output("git", files["shadow-record.json"], (frozen_files, rows, self.git, files))
+        except BaseException as error:self._replay_output_failure(error, "reader-git-retention")
 
     def allowed(self, path):
         import fnmatch
@@ -1409,6 +1456,8 @@ class _Reader:
                             self.authentication_revision = revision
                             row["facts"] = self.fixed_bundle(held)
                             row["authentication"] = {"state": "authenticated"}
+                            try:self._retain_replay_output("bundles", raw, (held, role, environment))
+                            except BaseException as error:self._replay_output_failure(error, "reader-bundle-retention")
                 output_rows.append(row)
         require(named <= allowed_directories)
         for _role, refs, _revision, output_rows in groups:

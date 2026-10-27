@@ -44,14 +44,30 @@ self="$self_dir/${self##*/}"
   emit_error E_RUNTIME
 [ -d "$runtime" ] && [ ! -L "$runtime" ] || emit_error E_RUNTIME
 runtime_parent=${runtime%/*}
+malicious_input_root=''
 case "$mode:$input" in
   run:"$runtime_parent"/input.json) input_document=$input ;;
   dashboard:"$runtime_parent"/inputs)
     [ -d "$input" ] && [ ! -L "$input" ] || emit_error E_RUNTIME
     input_document="$input/manifest.json"
     ;;
+  run:/*/operations/[0-2]/I/driver-input/seed.json)
+    malicious_input_root=${input%/driver-input/seed.json}
+    input_document=$input
+    ;;
+  dashboard:/*/operations/[0-2]/I/driver-input)
+    malicious_input_root=${input%/driver-input}
+    input_document="$input/manifest.json"
+    ;;
   *) emit_error E_RUNTIME ;;
 esac
+if [ -n "$malicious_input_root" ]; then
+  [ -d "$malicious_input_root" ] && [ ! -L "$malicious_input_root" ] &&
+    [ -d "$malicious_input_root/driver-input" ] && [ ! -L "$malicious_input_root/driver-input" ] &&
+    [ "$(CDPATH='' cd -P -- "$malicious_input_root/driver-input" 2>/dev/null && pwd -P)" = "$malicious_input_root/driver-input" ] ||
+    emit_error E_RUNTIME
+fi
+readonly malicious_input_root
 case "$evaluator" in "$runtime"/evaluator.json) ;; *) emit_error E_RUNTIME ;; esac
 
 generation=g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43
@@ -773,6 +789,11 @@ produce_result() {
         "$work/empty-candidate.json" 2>/dev/null)" = true ] || emit_error E_SHAPE
 
   seed_source=$("$jq_bin" -r '.body.seed_source // empty' "$input") || emit_error E_RUNTIME
+  if [ -n "$malicious_input_root" ]; then
+    [ "$seed_source" = shadow.malicious-instructions.v1 ] || emit_error E_RUNTIME
+  elif [ "$seed_source" = shadow.malicious-instructions.v1 ]; then
+    emit_error E_RUNTIME
+  fi
   case "$seed_source" in
     adapters.provider-normalizers.v1|control.duty-separation.v1) ;;
     control.risk-gates.v1|control.sandbox-policy.v1) ;;

@@ -676,6 +676,15 @@ def _verify_write(ws, incident, input_raw, record_raw, manifest_raw, evaluation_
     return files
 
 
+def _write_identity_values(identity_raw: bytes, input_raw: bytes, instruction_raw: bytes,
+        request_id: str) -> bytes:
+    identity = parse(identity_raw)
+    identity["id"] = "identity.shadow-write." + sha(request_id.encode())[:32]
+    identity["body"]["stage_request_ref"] = e.pair_ref(parse(input_raw, 8 * e.OUTPUT_LIMIT)["stage_request"])
+    identity["body"]["verification_instructions_ref"]["sha256"] = sha(instruction_raw)
+    return canonical(identity)
+
+
 def _materialize(ws):
     work, output = ws.work, ws.output
     frozen, incident, _receipt = _inventory(ws)
@@ -713,11 +722,8 @@ def _materialize(ws):
     prep_raw = ws.hold(prep / "record.json", 64 * 1024).raw
     manifest_raw = ws.hold(prep / "manifest.json", 2 * e.OUTPUT_LIMIT).raw
     instruction = e.make_instruction(incident)
-    identity = parse(frozen["qualified-identity.json"])
-    identity["id"] = "identity.shadow-write." + sha(ws.request_doc["id"].encode())[:32]
-    identity["body"]["stage_request_ref"] = e.pair_ref(parse(input_raw, 8 * e.OUTPUT_LIMIT)["stage_request"])
-    identity["body"]["verification_instructions_ref"]["sha256"] = sha(instruction)
-    identity_raw = canonical(identity)
+    identity_raw = _write_identity_values(frozen["qualified-identity.json"], input_raw,
+        instruction, ws.request_doc["id"])
     _identity_check(ws, identity_raw, incident)
     ws.capture("write-qualified-identity.json", identity_raw)
     ws.capture("write-evaluation.json", evaluation_raw)

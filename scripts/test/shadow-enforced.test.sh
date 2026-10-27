@@ -4,6 +4,199 @@ export LC_ALL=C
 umask 077
 
 root=$(CDPATH='' cd -P -- "${BASH_SOURCE[0]%/*}/../.." && pwd -P)
+/usr/bin/python3 -I -S -B - "$root" <<'PY_REPRODUCTION_VALUES'
+import ast
+import copy
+import dataclasses
+import importlib.util
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location('reproduction_values_consumer', root / 'shadow/v1/_consumer.py')
+c = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = c
+spec.loader.exec_module(c)
+source = (root / 'shadow/v1/enforced-reproduction.py').read_text()
+names = {'Refusal', 'canonical', 'sha', 'parse', 'document_ref',
+         '_native_provenance_values', '_reproduction_provenance_values', '_reproduction_record_values', '_reproduction_bundle_values', 'StableFile'}
+selected = [node for node in ast.parse(source).body
+            if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in names]
+assert {node.name for node in selected} == names
+values = {'c': c, 'OUTPUT_LIMIT': 1024 * 1024, 'dataclasses': dataclasses, '__name__': __name__}
+import __future__
+exec(compile(ast.Module(body=selected, type_ignores=[]), '<actual-reproduction-values>', 'exec',
+             flags=__future__.annotations.compiler_flag), values)
+canonical, sha = values['canonical'], values['sha']
+def doc(kind, body=None):
+    return canonical({'schema_version': 1, 'kind': kind, 'id': 'synthetic-' + kind, 'body': body or {}})
+context = {name: sha(name.encode()) for name in
+           ('helper_source_sha256', 'helper_build_record_sha256', 'helper_executable_sha256')}
+context['native_release'] = {name: 'synthetic-' + name for name in
+    ('source_sha256', 'build_script_sha256', 'build_record_sha256', 'binary_path', 'binary_sha256',
+     'python_path', 'python_sha256', 'python_abi', 'dependency_record_sha256', 'loader_mode')}
+context['native_release']['binary_size'] = 17
+provenance_args = ['synthetic-request', b'instruction\n', doc('observation'), context,
+                   b'consumer', b'python', sha(b'jq'), [{'role': 'synthetic-command'}]]
+provenance = values['_reproduction_provenance_values'](*provenance_args)
+p = c._json(provenance, 1024 * 1024, 'E_SHAPE')
+assert p['body']['instruction_sha256'] == sha(provenance_args[1])
+assert p['body']['native_release'] == values['_native_provenance_values'](context)
+incident = {'id': 'synthetic-incident', 'body': {'observed_at': 'synthetic-time',
+    'target_repository_id': 'synthetic-repository', 'git_revision_ref': {'id': 'synthetic-revision'},
+    'failing_check': {'kind': 'file-digest'}}}
+identity = {'body': {'synthetic': 'identity'}}
+evaluation = {'body': {'verdict': 'allowed', 'reason_ids': ['synthetic-reason']}}
+response = canonical({'stage_result': {'schema_version': 2, 'kind': 'stage_result',
+    'id': 'synthetic-stage', 'body': {'outcome': {'value': 'prepared'}}}})
+args = [incident, canonical(incident), doc('claim'), identity, canonical(identity), evaluation,
+        canonical(evaluation), response, {'source': {'synthetic': 'source'}, 'candidate': {'synthetic': 'candidate'}},
+        {'observed': {'sha256': sha(b'observed')}, 'outcome': 'match'}, doc('result'), 'no-change',
+        doc('registry'), 'synthetic-store', doc('launch'), doc('expectation'), doc('receipt'),
+        doc('checker'), doc('origin'), provenance, doc('trace')]
+record = values['_reproduction_record_values'](*args)
+r = c._json(record, 1024 * 1024, 'E_SHAPE')['body']
+assert r['sandbox']['launch_request_ref'] == values['document_ref'](args[14])
+assert r['consumer_provenance_ref'] == values['document_ref'](provenance)
+assert r['materialization']['value']['stage_result_ref']['sha256'] == sha(canonical(c._json(response, 1024 * 1024, 'E_SHAPE')['stage_result']))
+assert r['reason_id'] == 'check.passed-at-revision'
+changed = copy.deepcopy(args)
+changed[9]['outcome'] = 'different'
+changed[11] = 'reproduced'
+r2 = c._json(values['_reproduction_record_values'](*changed), 1024 * 1024, 'E_SHAPE')['body']
+assert r2['reason_id'] == 'check.failed-at-revision'
+assert r2['check']['execution']['value']['matches_expected'] is False
+for index in (1, 2, 6):
+    changed = copy.deepcopy(provenance_args)
+    changed[index] = (b'changed\n' if index == 1 else doc('changed') if index == 2 else sha(b'changed'))
+    assert values['_reproduction_provenance_values'](*changed) != provenance
+for index in (1, 4, 6, 10, 12, 14, 15, 16, 17, 18, 20):
+    changed = copy.deepcopy(args)
+    changed[index] = doc('changed')
+    assert values['_reproduction_record_values'](*changed) != record
+for index in (2, 7, 14, 15, 16, 17, 19):
+    changed = copy.deepcopy(args)
+    changed[index] = b'{}'
+    try:
+        values['_reproduction_record_values'](*changed)
+    except (values['Refusal'], KeyError):
+        pass
+    else:
+        raise AssertionError(('malformed document accepted', index))
+changed = copy.deepcopy(provenance_args)
+del changed[3]['native_release']['binary_path']
+try:
+    values['_reproduction_provenance_values'](*changed)
+except KeyError:
+    pass
+else:
+    raise AssertionError('missing native value accepted')
+
+marked = []
+real_sha = values['sha']
+def marked_sha(raw):
+    marked.append(raw)
+    return real_sha(raw)
+values['sha'] = marked_sha
+assert values['StableFile'](None, b'consumer').sha256 == sha(b'consumer')
+assert marked == [b'consumer']
+jq_snapshot = c.DependencySnapshot(None, None, provenance_args[6], 2)
+assert jq_snapshot.sha256 == provenance_args[6]
+assert marked == [b'consumer']
+marked.clear()
+assert values['_reproduction_provenance_values'](*provenance_args) == provenance
+expected_marks = [provenance_args[1], provenance_args[2], *provenance_args[4:6],
+                  context['native_release']['binary_path'].encode(),
+                  context['native_release']['python_path'].encode()]
+assert marked == expected_marks
+for mutation, expected, error_type in (
+    ('instruction', [], UnicodeDecodeError),
+    ('observation', [provenance_args[1]], values['Refusal']),
+    ('helper', expected_marks[:2], KeyError),
+):
+    changed = copy.deepcopy(provenance_args)
+    if mutation == 'instruction':
+        changed[1] = b'\xff'
+    elif mutation == 'observation':
+        changed[2] = b'{}'
+    else:
+        del changed[3]['helper_source_sha256']
+    marked.clear()
+    try:
+        values['_reproduction_provenance_values'](*changed)
+    except error_type:
+        pass
+    else:
+        raise AssertionError(('missing early failure', mutation))
+    assert marked == expected
+class MarkedFailure(Exception):
+    pass
+for failing_raw in provenance_args[4:6]:
+    marked.clear()
+    def failing_sha(raw):
+        marked.append(raw)
+        if raw == failing_raw:
+            raise MarkedFailure(raw)
+        return real_sha(raw)
+    values['sha'] = failing_sha
+    try:
+        values['_reproduction_provenance_values'](*provenance_args)
+    except MarkedFailure as error:
+        assert error.args == (failing_raw,)
+    else:
+        raise AssertionError('missing marked hash failure')
+    assert marked == expected_marks[:expected_marks.index(failing_raw) + 1]
+values['sha'] = real_sha
+
+bundle_files = {'z.json': b'last', 'incident.json': canonical(incident), 'a.bin': b'first'}
+bundle = values['_reproduction_bundle_values'](bundle_files, incident, 'enforced-reproduction.v1')
+bundle_doc = c._json(bundle, 1024 * 1024, 'E_SHAPE')
+assert bundle_doc['id'] == 'bundle.' + sha(bundle_files['incident.json'])[:32]
+assert bundle_doc['body']['files'] == [
+    {'name': name, 'size_bytes': len(bundle_files[name]), 'sha256': sha(bundle_files[name])}
+    for name in sorted(bundle_files)]
+assert bundle_doc['body']['target_revision'] == incident['body']['git_revision_ref']
+assert bundle_doc['body']['record_form'] == 'enforced-reproduction.v1'
+assert values['_reproduction_bundle_values'](dict(reversed(list(bundle_files.items()))),
+    incident, 'enforced-reproduction.v1') == bundle
+for name in bundle_files:
+    changed = dict(bundle_files)
+    changed[name] += b'changed'
+    assert values['_reproduction_bundle_values'](changed, incident, 'enforced-reproduction.v1') != bundle
+bundle_marks = []
+def bundle_sha(raw):
+    bundle_marks.append(raw)
+    return real_sha(raw)
+values['sha'] = bundle_sha
+assert values['_reproduction_bundle_values'](bundle_files, incident, 'enforced-reproduction.v1') == bundle
+expected_bundle_marks = [bundle_files[name] for name in sorted(bundle_files)] + [bundle_files['incident.json']] * 2
+assert bundle_marks == expected_bundle_marks
+for failing_raw in (bundle_files['a.bin'], bundle_files['z.json']):
+    bundle_marks.clear()
+    def failed_bundle_sha(raw):
+        bundle_marks.append(raw)
+        if raw == failing_raw:
+            raise MarkedFailure(raw)
+        return real_sha(raw)
+    values['sha'] = failed_bundle_sha
+    try:
+        values['_reproduction_bundle_values'](bundle_files, incident, 'enforced-reproduction.v1')
+    except MarkedFailure as error:
+        assert error.args == (failing_raw,)
+    else:
+        raise AssertionError('missing bundle hash failure')
+    assert bundle_marks == expected_bundle_marks[:expected_bundle_marks.index(failing_raw) + 1]
+values['sha'] = bundle_sha
+bundle_marks.clear()
+try:
+    values['_reproduction_bundle_values'](bundle_files, {'body': {}}, 'enforced-reproduction.v1')
+except KeyError as error:
+    assert error.args == ('git_revision_ref',)
+else:
+    raise AssertionError('missing revision accepted')
+assert bundle_marks == expected_bundle_marks
+values['sha'] = real_sha
+print('ordinary synthetic reproduction values, hash order and bundle: PASS; no native/runtime qualification')
+PY_REPRODUCTION_VALUES
 /usr/bin/python3 -I -S -B - "$root" <<'PY_RAW16_T_LIFECYCLE'
 import importlib.util,sys
 from pathlib import Path

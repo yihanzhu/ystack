@@ -84,6 +84,444 @@ def gate_reject(fn,*args):
     try:fn(*args)
     except (g.c.Refusal,KeyError,TypeError,ValueError,OSError):checks+=1
     else:raise AssertionError('accepted invalid gate contract')
+# Kill request body controls use synthetic in-memory documents only.
+def kill_body_controls():
+    def document(kind,identity):
+        return g.c.canonical(dict(schema_version=1,kind=kind,id=identity,body={}))
+    basis=dict(body=dict(target_repository_id='repo.target',qualified_identity=dict(target_revision=dict(commit_id='a'*40))))
+    config=dict(control_repository=dict(repository_id='repo.control'),default_branch=dict(name='main'),bootstrap=dict(revision=1))
+    bundle_a=document('shadow_bundle','bundle.a');bundle_b=document('shadow_bundle','bundle.b')
+    role_files=dict(current={'second':{'bundle.json':bundle_b},'first':{'bundle.json':bundle_a},'duplicate':{'bundle.json':bundle_b}})
+    initial=[dict(id='origin.control')];git_raw=b'[core]\nrepositoryformatversion = 0\n'
+    package_raw=document('coverage_package','package.control');accepted_raw=document('accepted_identities','accepted.control')
+    nonce='c'*64;call_id='kill-register.'+nonce
+    args=(basis,config,call_id,nonce,role_files,initial,git_raw,package_raw,accepted_raw)
+    result=g._kill_request_body_values(*args)
+    check(g.c.digest(g.c.canonical(result))=='e2ba6405b9af5e5ec8fcace38e8f72894a822aa31447c07e31f0f89189820ecf')
+    check(result['control_repository'] is config['control_repository'] and result['initial_origin_refs'] is initial)
+    check(len(result['bundle_refs'])==2 and [row['id'] for row in result['bundle_refs']]==['bundle.a','bundle.b'])
+    original_ref=g.ref;original_digest=g.c.digest;events=[]
+    marked=InterruptedError('kill body marked source ref');marked._scope_signal_cancel=True
+    inject=False
+    def measured_ref(raw):
+        events.append(('ref',raw))
+        if inject and raw==package_raw:raise marked
+        return original_ref(raw)
+    def measured_digest(raw):
+        events.append(('digest',raw));return original_digest(raw)
+    g.ref=measured_ref;g.c.digest=measured_digest
+    try:
+        check(g._kill_request_body_values(*args)==result)
+        check([raw for site,raw in events if site=='ref']==[bundle_b,bundle_b,bundle_a,bundle_a,bundle_b,bundle_b,package_raw,accepted_raw])
+        digests=[raw for site,raw in events if site=='digest']
+        check(digests[:6]==[bundle_b,bundle_b,bundle_a,bundle_a,bundle_b,bundle_b])
+        check(digests[6]==git_raw and digests[-2:]==[package_raw,accepted_raw])
+        events.clear();bad_config=dict(config);del bad_config['default_branch']
+        try:g._kill_request_body_values(basis,bad_config,call_id,nonce,{'current':{'bad':{'bundle.json':b'invalid'}}},initial,git_raw,package_raw,accepted_raw)
+        except KeyError as error:check(error.args==('default_branch',) and not events)
+        else:raise AssertionError('kill body accepted missing config')
+        events.clear()
+        gate_reject(g._kill_request_body_values,basis,config,call_id,nonce,{'current':{'bad':{'bundle.json':b'invalid'}}},initial,git_raw,b'invalid',accepted_raw)
+        check(events==[('ref',b'invalid')])
+        events.clear();inject=True
+        try:g._kill_request_body_values(*args)
+        except BaseException as error:check(error is marked)
+        else:raise AssertionError('kill body swallowed marked source ref error')
+        check(events[-1]==('ref',package_raw) and ('digest',git_raw) in events)
+        check(not any(raw==accepted_raw for _site,raw in events))
+    finally:g.ref=original_ref;g.c.digest=original_digest
+kill_body_controls()
+# End kill request body controls.
+# Failure marker controls avoid any instance dictionary acquisition.
+def capture_marker_fault_controls():
+    import tempfile,types
+    dictionary_error=MemoryError('instance dictionary materialization')
+    class DictionaryFaultGenerator(g._Generator):
+        dictionary_reads=0
+        def __getattribute__(self,name):
+            if name=='__dict__':
+                self.dictionary_reads+=1;raise dictionary_error
+            return super().__getattribute__(name)
+    def fresh(output):
+        value=DictionaryFaultGenerator.__new__(DictionaryFaultGenerator)
+        try:value.__dict__
+        except MemoryError as error:check(error is dictionary_error)
+        else:raise AssertionError('dictionary materialization fault inactive')
+        value.dictionary_reads=0
+        value.output=output;value.reader=value.session=None;value.held=[];value.outputs={};value._init_output_capture()
+        return value
+    def same_error(fn,error):
+        try:fn()
+        except BaseException as actual:check(actual is error)
+        else:raise AssertionError('lost first marked capture error')
+    with tempfile.TemporaryDirectory() as tmp:
+        generator=fresh(pathlib.Path(tmp).resolve());failure=OSError(5,'original output registration')
+        class FailedMap(dict):
+            def __setitem__(self,key,value):raise failure
+        generator.output_holds=FailedMap();(generator.output/'objects/control').mkdir(parents=True)
+        check(generator.put('control',b'{}\n')==generator.path('control'))
+        check(generator.capture_output_unusable and generator.capture_output_error is failure)
+        check(generator.dictionary_reads==0 and generator.path('control').read_bytes()==b'{}\n')
+        generator.close();check(not generator.held and generator.dictionary_reads==0)
+    for marker_error in (MemoryError('marker deletion'),KeyboardInterrupt('marker deletion cancellation')):
+        generator=DictionaryFaultGenerator.__new__(DictionaryFaultGenerator);generator._init_output_capture()
+        def failed_delete(*args):raise marker_error
+        g.object=types.SimpleNamespace(__delattr__=failed_delete,__setattr__=object.__setattr__)
+        failure=OSError(5,'original capture error')
+        try:
+            cancellation=generator._output_capture_failed('marker-entry',failure)
+            check(cancellation is (marker_error if isinstance(marker_error,KeyboardInterrupt) else None))
+            check(generator.capture_output_unusable and generator.capture_output_error is failure)
+            check(generator.capture_output_errors[-1]['error'] is marker_error)
+        finally:del g.object
+    for cancellation in (None,KeyboardInterrupt('first component cancellation'),InterruptedError('first component signal')):
+        if isinstance(cancellation,InterruptedError):cancellation._scope_signal_cancel=True
+        with tempfile.TemporaryDirectory() as tmp:
+            generator=fresh(pathlib.Path(tmp).resolve())
+            path=generator.output/'completion/COMPLETE.json';path.parent.mkdir();raw=b'{}\n'
+            written=g.r.write_exclusive(path,raw);generator._capture_completion(path,raw,written)
+            owner=generator.capture_output_owned;fds=[row.fd for row in owner.held.components];attempts=[]
+            first=OSError(5,'first component ordinary error');later=InterruptedError('later component signal');later._scope_signal_cancel=True
+            original_close=g.c.os.close
+            def failed_close(fd):
+                if fd in fds:
+                    attempts.append(fd);original_close(fd)
+                    if len(attempts)==1:raise first
+                    if len(attempts)==2 and cancellation is not None:raise cancellation
+                    if len(attempts)==3 and cancellation is not None:raise later
+                    return
+                return original_close(fd)
+            g.c.os.close=failed_close
+            try:
+                if cancellation is None:generator.close()
+                else:same_error(generator.close,cancellation)
+                check(generator.capture_output_unusable and generator.capture_output_error is first)
+                check(not owner.held.components and attempts==list(reversed(fds)))
+                check(generator.dictionary_reads==0 and generator.capture_output_work['held_close_calls']==len(fds))
+                if cancellation is not None:
+                    check(generator.capture_output_cancel is cancellation)
+                    check(any(row['error'] is later for row in generator.capture_output_errors))
+                    same_error(generator.close,cancellation)
+                else:generator.close()
+                check(len(attempts)==len(fds) and generator.dictionary_reads==0)
+            finally:g.c.os.close=original_close
+capture_marker_fault_controls()
+# End failure marker controls.
+# Capture state fault controls use only synthetic files and actual source owners.
+def capture_state_fault_controls():
+    import tempfile,os
+    class StateFaultGenerator(g._Generator):
+        blocked=()
+        fault=None
+        release_only=False
+        def __setattr__(self,name,value):
+            if name in self.blocked and (not self.release_only or value is None):raise self.fault
+            super().__setattr__(name,value)
+    def fresh(output):
+        value=StateFaultGenerator.__new__(StateFaultGenerator)
+        value.output=output;value.reader=value.session=None;value.held=[];value.outputs={}
+        return value
+    def same_error(fn,error):
+        try:fn()
+        except BaseException as actual:check(actual is error)
+        else:raise AssertionError('lost original capture cancellation')
+    bootstrap=('output_holds','capture_output_work','capture_output_error','capture_output_cancel',
+        'capture_output_error_category','capture_output_error_errno','capture_output_errors',
+        'capture_output_owned','capture_output_pending','capture_output_unusable')
+    for field in bootstrap:
+        with tempfile.TemporaryDirectory() as tmp:
+            generator=fresh(pathlib.Path(tmp).resolve());generator.blocked=(field,)
+            generator.fault=MemoryError('capture bootstrap '+field)
+            generator._init_output_capture()
+            check(generator.capture_output_unusable and 'capture_output_unusable' not in generator.__dict__)
+            (generator.output/'objects/control').mkdir(parents=True)
+            check(generator.put('control',b'{}\n')==generator.path('control'))
+            check(generator.path('control').read_bytes()==b'{}\n' and len(generator.held)==1)
+            generator.close();check(not generator.held)
+    for cancellation in (KeyboardInterrupt('bootstrap cancellation'),InterruptedError('bootstrap signal')):
+        if isinstance(cancellation,InterruptedError):cancellation._scope_signal_cancel=True
+        generator=StateFaultGenerator.__new__(StateFaultGenerator)
+        generator.blocked=('output_holds','capture_output_cancel','capture_output_reporting_error')
+        generator.fault=cancellation
+        same_error(generator._init_output_capture,cancellation)
+        check(generator.capture_output_unusable)
+    class FailedRows:
+        def append(self,row):raise MemoryError('capture error append')
+    for blocked in ('capture_output_error','capture_output_reporting_error'):
+        generator=StateFaultGenerator.__new__(StateFaultGenerator);generator._init_output_capture()
+        generator.blocked=(blocked,);generator.fault=MemoryError('capture reporting setattr')
+        if blocked=='capture_output_reporting_error':generator.capture_output_errors=FailedRows()
+        original=OSError(5,'actual capture failure')
+        check(generator._output_capture_failed('synthetic-report',original) is None)
+        check(generator.capture_output_unusable)
+        if blocked=='capture_output_error':check(generator.capture_output_errors[0]['error'] is original)
+        else:check(generator.capture_output_error is original and generator.capture_output_work['accounting_incomplete'])
+    for field,release_only in (('capture_output_pending',False),('capture_output_owned',False),('capture_output_pending',True)):
+        with tempfile.TemporaryDirectory() as tmp:
+            generator=fresh(pathlib.Path(tmp).resolve());generator._init_output_capture()
+            path=generator.output/'completion/COMPLETE.json';path.parent.mkdir();raw=b'{}\n'
+            written=g.r.write_exclusive(path,raw);acquired=[];closed=[];fds=set()
+            original_open=g.c._open_held;original_close=g.c.os.close
+            def measured_open(*args,**kwargs):
+                held=original_open(*args,**kwargs)
+                if args[0]==str(path):acquired.append(held);fds.update(row.fd for row in held.components)
+                return held
+            def measured_close(fd):
+                if fd in fds:closed.append(fd)
+                return original_close(fd)
+            generator.blocked=(field,);generator.fault=MemoryError('capture ownership setattr');generator.release_only=release_only
+            g.c._open_held=measured_open;g.c.os.close=measured_close
+            try:
+                generator._capture_completion(path,raw,written)
+                check(generator.capture_output_unusable and generator.capture_output_error is generator.fault)
+                check(acquired and not acquired[0].components and len(closed)==len(fds) and set(closed)==fds)
+                check(path.read_bytes()==raw)
+                generator.close();generator.close();check(len(closed)==len(fds))
+            finally:g.c._open_held=original_open;g.c.os.close=original_close
+    for cancel in (None,KeyboardInterrupt('component close cancellation'),InterruptedError('component close signal')):
+        if isinstance(cancel,InterruptedError):cancel._scope_signal_cancel=True
+        with tempfile.TemporaryDirectory() as tmp:
+            generator=fresh(pathlib.Path(tmp).resolve());generator._init_output_capture()
+            path=generator.output/'completion/COMPLETE.json';path.parent.mkdir();raw=b'{}\n'
+            written=g.r.write_exclusive(path,raw);generator._capture_completion(path,raw,written)
+            owner=generator.capture_output_owned;fds=[row.fd for row in owner.held.components];attempts=[]
+            generator.capture_output_errors=FailedRows()
+            generator.blocked=('capture_output_reporting_error','capture_output_owned','capture_output_pending','capture_output_cancel')
+            generator.fault=MemoryError('capture secondary reporting setattr')
+            first=OSError(5,'actual first component close failure');later=OSError(9,'actual later component close failure')
+            original_close=g.c.os.close
+            def failed_close(fd):
+                if fd in fds:
+                    attempts.append(fd);original_close(fd)
+                    if len(attempts)==1:raise first
+                    if len(attempts)==2 and cancel is not None:raise cancel
+                    if len(attempts)==3:raise later
+                    return
+                return original_close(fd)
+            g.c.os.close=failed_close
+            try:
+                if cancel is None:generator.close()
+                else:same_error(generator.close,cancel)
+                check(generator.capture_output_unusable and not owner.held.components)
+                check(attempts==list(reversed(fds)) and generator.capture_output_work['held_close_calls']==len(fds))
+                check(generator.capture_output_work['cost_unknown'] and generator.capture_output_work['accounting_incomplete'])
+                generator.close();check(len(attempts)==len(fds))
+            finally:g.c.os.close=original_close
+capture_state_fault_controls()
+# End capture state fault controls.
+# Output hold controls use only synthetic files and the original write/hold owners.
+def output_hold_controls():
+    import tempfile,os,types
+    def fresh(output):
+        generator=g._Generator.__new__(g._Generator)
+        generator.output=output;generator.reader=generator.session=None
+        generator.held=[];generator.outputs={};generator._init_output_capture()
+        return generator
+    def same_error(fn,error):
+        try:fn()
+        except BaseException as actual:check(actual is error)
+        else:raise AssertionError('expected original exception')
+    def completed(generator):
+        path=generator.output/'completion/COMPLETE.json';path.parent.mkdir(exist_ok=True)
+        raw=b'{"synthetic":true}\n';written=g.r.write_exclusive(path,raw)
+        generator._capture_completion(path,raw,written)
+        return path,raw
+    class FailedOutputMap(dict):
+        def __setitem__(self,key,value):raise map_failure
+    for allocation_error in (MemoryError('capture allocation'),KeyboardInterrupt('capture allocation cancel')):
+        generator=g._Generator.__new__(g._Generator)
+        def allocation_failure(*args,**kwargs):raise allocation_error
+        g.dict=allocation_failure
+        try:
+            if isinstance(allocation_error,KeyboardInterrupt):
+                same_error(generator._init_output_capture,allocation_error)
+            else:generator._init_output_capture()
+            check(generator.capture_output_unusable and generator.capture_output_error is allocation_error)
+        finally:del g.dict
+    with tempfile.TemporaryDirectory() as tmp:
+        generator=fresh(pathlib.Path(tmp).resolve())
+        generator.reader=types.SimpleNamespace(darwin=None,anchor=types.SimpleNamespace(recording_work={},private_observations={}),close=lambda:None)
+        (generator.output/'completion').mkdir()
+        paths=('objects/control/value.json','objects/kill-evidence/raw-0000/value.raw','manifests/manifest.json')
+        for relative in paths:(generator.output/relative).parent.mkdir(parents=True,exist_ok=True)
+        try:
+            check(generator.put('control',b'{}\n')==generator.output/paths[0])
+            for relative in paths[1:]:
+                path=generator.output/relative;raw=b'{"synthetic":true}\n'
+                written=g.r.write_exclusive(path,raw)
+                held=generator.hold_written(path,raw,written)
+                check(generator.output_holds[relative] is held)
+                check(held.raw==raw and g.c._identity(held.held.before)==written)
+            path,raw=completed(generator)
+            complete_hold=generator.output_holds['completion/COMPLETE.json']
+            check(generator.capture_output_owned is complete_hold and complete_hold not in generator.held)
+            check(isinstance(complete_hold,g.c._HeldBytes) and complete_hold.raw==raw)
+            check(generator.capture_output_pending is None and not generator.capture_output_unusable)
+            check(generator.capture_output_work['read_bytes']>0 and generator.capture_output_work['cost_unknown'])
+            check(generator.capture_output_work['accounting_incomplete'])
+            check(generator.reader.anchor.recording_work['gate_output_work']==[generator.capture_output_work])
+            check(generator.reader.anchor.recording_work['gate_output_work'][0] is generator.capture_output_work)
+            for held in generator.output_holds.values():held.recheck()
+        finally:generator.close()
+        check(not generator.held and generator.capture_output_owned is None)
+        generator.close()
+    marked=InterruptedError('map signal');marked._scope_signal_cancel=True
+    for map_failure in (OSError(5,'map failed'),MemoryError('map failed'),KeyboardInterrupt('map cancelled'),marked):
+        with tempfile.TemporaryDirectory() as tmp:
+            generator=fresh(pathlib.Path(tmp).resolve());generator.output_holds=FailedOutputMap()
+            (generator.output/'objects/control').mkdir(parents=True)
+            if isinstance(map_failure,KeyboardInterrupt) or map_failure is marked:same_error(lambda:generator.put('control',b'{}\n'),map_failure)
+            else:check(generator.put('control',b'{}\n')==generator.path('control'))
+            check(generator.path('control').read_bytes()==b'{}\n')
+            check(generator.capture_output_unusable and generator.capture_output_error is map_failure)
+            check(generator.capture_output_errors[0]['category']==type(map_failure).__name__)
+            check(generator.capture_output_errors[0]['errno']==getattr(map_failure,'errno',None))
+            check(len(generator.held)==1)
+            held=generator.held[0];fd=held.held.fd
+            check(os.fstat(fd).st_ino==held.held.before.st_ino)
+            close_type=type(held.held);original_close=close_type.close;closed=[]
+            def counted_close(self):
+                if self is held.held:closed.append(id(self))
+                return original_close(self)
+            close_type.close=counted_close
+            try:
+                if isinstance(map_failure,KeyboardInterrupt) or map_failure is marked:same_error(generator.close,map_failure);same_error(generator.close,map_failure)
+                else:generator.close();generator.close()
+            finally:close_type.close=original_close
+            check(closed==[id(held.held)])
+            try:os.fstat(fd)
+            except OSError:check(True)
+            else:raise AssertionError('map failure leaked descriptor')
+    for mismatch in ('bytes','identity','native-hold','native-write'):
+        with tempfile.TemporaryDirectory() as tmp:
+            generator=fresh(pathlib.Path(tmp).resolve())
+            path=generator.output/'value.raw';raw=b'synthetic\n';written=g.r.write_exclusive(path,raw)
+            try:
+                if mismatch in ('bytes','identity'):
+                    gate_reject(generator.hold_written,path,b'wrong\n' if mismatch=='bytes' else raw,() if mismatch=='identity' else written)
+                elif mismatch=='native-hold':
+                    native_error=OSError('original hold failure')
+                    def native_hold(path):raise native_error
+                    generator.hold=native_hold
+                    same_error(lambda:generator.hold_written(path,raw,written),native_error)
+                else:
+                    path=generator.path('control');path.parent.mkdir(parents=True);g.r.write_exclusive(path,raw)
+                    gate_reject(generator.put,'control',raw)
+                check(not generator.capture_output_unusable and not generator.output_holds)
+            finally:generator.close()
+    for fault in ('read','map','identity'):
+        with tempfile.TemporaryDirectory() as tmp:
+            generator=fresh(pathlib.Path(tmp).resolve())
+            path=generator.output/'completion/COMPLETE.json';path.parent.mkdir(exist_ok=True);raw=b'{}\n'
+            written=g.r.write_exclusive(path,raw);acquired=[];closed=[];acquired_fds=set()
+            original_read=g.c.HeldPath.read;original_close=g.c.os.close
+            capture_error=OSError(5,'complete read failure')
+            def failed_read(self,*args,**kwargs):
+                if self.path==str(path):
+                    acquired.append(self);acquired_fds.update(row.fd for row in self.components)
+                    if fault=='read':raise capture_error
+                return original_read(self,*args,**kwargs)
+            def counted_close(fd):
+                if fd in acquired_fds:closed.append(fd)
+                return original_close(fd)
+            if fault=='map':map_failure=MemoryError('complete map failure');generator.output_holds=FailedOutputMap()
+            g.c.HeldPath.read=failed_read;g.c.os.close=counted_close
+            try:
+                generator._capture_completion(path,raw,() if fault=='identity' else written)
+                check(generator.capture_output_unusable and path.read_bytes()==raw)
+                check(generator.capture_output_owned is None and generator.capture_output_pending is None)
+                check(not generator.held and len(closed)==len(acquired_fds) and set(closed)==acquired_fds)
+                if fault=='read':check(generator.capture_output_error is capture_error)
+                generator.close();check(len(closed)==len(acquired_fds))
+            finally:g.c.HeldPath.read=original_read;g.c.os.close=original_close
+    for native_fault,capture_fault in ((None,OSError('capture close')),(OSError('native close'),OSError('capture close')),
+            (OSError('native close'),KeyboardInterrupt('capture close cancel')),
+            (KeyboardInterrupt('native close cancel'),KeyboardInterrupt('capture close cancel'))):
+        with tempfile.TemporaryDirectory() as tmp:
+            generator=fresh(pathlib.Path(tmp).resolve())
+            (generator.output/'completion').mkdir()
+            native_path=generator.output/'native.raw';written=g.r.write_exclusive(native_path,b'original\n')
+            path,raw=completed(generator)
+            complete_hold=generator.capture_output_owned;closed=[];original_close=g.c.HeldPath.close
+            original_os_close=g.c.os.close;capture_fds={row.fd for row in complete_hold.held.components}
+            native_hold=generator.hold(native_path)
+            def failed_capture_close(fd):
+                if fd in capture_fds:
+                    if 'capture' not in closed:closed.append('capture')
+                    original_os_close(fd);raise capture_fault
+                return original_os_close(fd)
+            def failed_close(self):
+                if self is native_hold.held:
+                    closed.append('native');original_close(self)
+                    if native_fault is not None:raise native_fault
+                    return
+                return original_close(self)
+            g.c.HeldPath.close=failed_close;g.c.os.close=failed_capture_close
+            try:
+                expected=native_fault
+                if isinstance(capture_fault,KeyboardInterrupt) and not isinstance(native_fault,KeyboardInterrupt):expected=capture_fault
+                if expected is None:generator.close()
+                else:same_error(generator.close,expected)
+                check(closed==['native','capture'])
+                check(generator.capture_output_unusable and generator.capture_output_error is capture_fault)
+                if isinstance(expected,KeyboardInterrupt):same_error(generator.close,expected)
+                else:generator.close()
+                check(closed==['native','capture'])
+            finally:g.c.HeldPath.close=original_close;g.c.os.close=original_os_close
+    for fault in ('pending-cancel','final-recheck'):
+        with tempfile.TemporaryDirectory() as tmp:
+            generator=fresh(pathlib.Path(tmp).resolve());path=generator.output/'completion/COMPLETE.json'
+            path.parent.mkdir();raw=b'{}\n';written=g.r.write_exclusive(path,raw)
+            first=InterruptedError('pending capture signal') if fault=='pending-cancel' else OSError('final capture recheck')
+            if fault=='pending-cancel':first._scope_signal_cancel=True
+            secondary=OSError('secondary capture close');closed=[];capture_fds=set()
+            original_read=g.c.HeldPath.read;original_close=g.c.os.close
+            def failed_read(self,*args,**kwargs):
+                if self.path==str(path):
+                    capture_fds.update(row.fd for row in self.components);raise first
+                return original_read(self,*args,**kwargs)
+            def failed_close(fd):
+                if fd in capture_fds:
+                    closed.append(fd);original_close(fd);raise secondary
+                return original_close(fd)
+            try:
+                if fault=='final-recheck':generator._capture_completion(path,raw,written)
+                g.c.HeldPath.read=failed_read;g.c.os.close=failed_close
+                if fault=='pending-cancel':same_error(lambda:generator._capture_completion(path,raw,written),first)
+                else:generator.close()
+                check(generator.capture_output_unusable and generator.capture_output_error is first)
+                check(generator.capture_output_errors[-1]['error'] is secondary)
+                check(len(closed)==len(capture_fds) and generator.capture_output_owned is None and generator.capture_output_pending is None)
+                if fault=='pending-cancel':same_error(generator.close,first)
+                else:generator.close()
+                check(len(closed)==len(capture_fds) and path.read_bytes()==raw)
+            finally:g.c.HeldPath.read=original_read;g.c.os.close=original_close
+    with tempfile.TemporaryDirectory() as tmp:
+        generator=fresh(pathlib.Path(tmp).resolve());path,raw=completed(generator)
+        owned=generator.capture_output_owned;fds=[row.fd for row in owned.held.components]
+        original_os_close=g.c.os.close;attempts=[];first=KeyboardInterrupt('component close cancel')
+        second=InterruptedError('later component close signal');second._scope_signal_cancel=True
+        third=OSError(5,'later ordinary component close')
+        def interrupted_close(fd):
+            if fd in fds:
+                attempts.append(fd);original_os_close(fd)
+                if len(attempts)==1:raise first
+                if len(attempts)==2:raise second
+                if len(attempts)==3:raise third
+                return
+            return original_os_close(fd)
+        g.c.os.close=interrupted_close
+        try:
+            same_error(generator.close,first)
+            check(attempts==list(reversed(fds)) and not owned.held.components)
+            check(generator.capture_output_error is first and generator.capture_output_cancel is first)
+            check(any(row['error'] is second for row in generator.capture_output_errors))
+            check(any(row['error'] is third and row['errno']==5 for row in generator.capture_output_errors))
+            check(generator.capture_output_work['held_close_calls']==len(fds))
+            same_error(generator.close,first);check(len(attempts)==len(fds))
+        finally:g.c.os.close=original_os_close
+output_hold_controls()
+# End output hold controls.
 basis=env('workflow_scope','scope.test',dict(target_repository_id='repo.target',workflow_id='workflow.test'))
 claim=env('risk_claim','claim.test',{})
 request_doc=env('scope_gate_generation_request','generation.test',dict(scope_basis=basis,risk_claim=claim))
@@ -262,7 +700,7 @@ for conflict in (None,'stage_request','resolved_profile','stage_result','policy_
         def measured_pair(pair):pair_calls.append(copy.deepcopy(pair));return real_pair_ref(pair)
         enforced.pair_ref=measured_pair
         reader=InputReader();reader.enforced=enforced
-        generator=g._Generator.__new__(g._Generator);generator.reader=reader;generator.output=output;generator.held=[];generator.outputs={}
+        generator=g._Generator.__new__(g._Generator);generator.reader=reader;generator.output=output;generator.held=[];generator.outputs={};generator._init_output_capture()
         generator.basis=env('workflow_scope','scope.multi',dict(qualified_identity=dict(stage_request_ref=g.ref(n.canonical(request_doc)),resolved_profile_ref=g.ref(n.canonical(profile_doc)))))
         generator.session=g._GateStoreSession('generation.multi','b'*64,time.monotonic()+10);generator.session.reader=reader
         try:

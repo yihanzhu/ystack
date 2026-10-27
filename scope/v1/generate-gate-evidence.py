@@ -86,6 +86,20 @@ def _normalizer():
     return module
 
 
+def _kill_request_body_values(basis, config, call_id, nonce, role_files, initial_origin_refs,
+        git_config_raw, package_raw, accepted_raw):
+    body = {"operation": "kill-register-read.v1", "version": 1, "call_id": call_id, "nonce": nonce,
+        "target_repository_id": basis["body"]["target_repository_id"],
+        **{key: config[key] for key in ("control_repository", "default_branch", "bootstrap")},
+        "bundle_refs": sorted({c.canonical(ref(files["bundle.json"])): ref(files["bundle.json"])
+            for files in role_files["current"].values()}.values(), key=c.canonical),
+        "initial_origin_refs": initial_origin_refs,
+        "git_observation_sha256": c.digest(c.canonical({"revision": basis["body"]["qualified_identity"]["target_revision"],
+            "config_sha256": c.digest(git_config_raw)})),
+        "source_package_ref": ref(package_raw), "source_accepted_set_ref": ref(accepted_raw)}
+    return body
+
+
 def _scope_values(basis, duty, risk, kill):
     scope = json.loads(c.canonical(basis))
     scope["body"]["gate_evidence_refs"] = {"duty_separation_evaluation_ref": ref(duty),
@@ -296,10 +310,13 @@ class _GateStoreSession:
 
 
 class _Generator:
+    capture_output_unusable = True
+
     def __init__(self, arguments):
         require(len(arguments) == 8 and arguments[0] == "generate", "E_USAGE")
         self.deadline = ENTRY_DEADLINE
         self.held, self.outputs = [], {}
+        self._init_output_capture()
         self.reader = self.session = None
         self.active = True
         self.created = False
@@ -389,7 +406,185 @@ class _Generator:
     def hold_written(self, path, raw, written):
         held = self.hold(path)
         require(held.raw == raw and c._identity(held.held.before) == written, "E_STALE")
+        self._record_output_hold(path, held)
         return held
+
+    def _init_output_capture(self):
+        try:
+            self.output_holds = self.capture_output_work = None
+            self.capture_output_error = self.capture_output_cancel = None
+            self.capture_output_error_category = self.capture_output_error_errno = None
+            self.capture_output_errors = None
+            self.capture_output_owned = self.capture_output_pending = None
+            self.output_holds = dict()
+            self.capture_output_errors = list()
+            self.capture_output_work = dict(cost_unknown=True, accounting_incomplete=True)
+            c._capture_work_values(self.capture_output_work, "gate-output")
+            self.capture_output_unusable = False
+        except BaseException as error:
+            cancellation = self._output_capture_failed("initialize", error)
+            if cancellation is not None:
+                raise cancellation
+
+    def _output_capture_failed(self, site, error):
+        cancellation = getattr(self, "capture_output_cancel", None)
+        if cancellation is None and (getattr(error, "_scope_signal_cancel", False) or isinstance(error, KeyboardInterrupt)):
+            cancellation = error
+        marking_error = restoring_error = None
+        try:
+            # Direct deletion avoids materializing the instance dictionary.
+            object.__delattr__(self, "capture_output_unusable")
+        except AttributeError:
+            pass
+        except BaseException as marking:
+            marking_error = marking
+            if cancellation is None and (getattr(marking, "_scope_signal_cancel", False) or isinstance(marking, KeyboardInterrupt)):
+                cancellation = marking
+            try:
+                object.__setattr__(self, "capture_output_unusable", True)
+            except BaseException as restoring:
+                restoring_error = restoring
+                if cancellation is None and (getattr(restoring, "_scope_signal_cancel", False) or isinstance(restoring, KeyboardInterrupt)):
+                    cancellation = restoring
+        try:
+            self.capture_output_errors.append({"site": site, "error": error,
+                "category": type(error).__name__, "errno": getattr(error, "errno", None)})
+            for failure in (marking_error, restoring_error):
+                if failure is not None:
+                    self.capture_output_errors.append({"site": "failure-marker", "error": failure,
+                        "category": type(failure).__name__, "errno": getattr(failure, "errno", None)})
+        except BaseException as secondary:
+            if cancellation is None and (getattr(secondary, "_scope_signal_cancel", False) or isinstance(secondary, KeyboardInterrupt)):
+                cancellation = secondary
+            try:
+                self.capture_output_reporting_error = secondary
+            except BaseException as reporting:
+                if cancellation is None and (getattr(reporting, "_scope_signal_cancel", False) or isinstance(reporting, KeyboardInterrupt)):
+                    cancellation = reporting
+        try:
+            if getattr(self, "capture_output_error", None) is None:
+                self.capture_output_error = error
+                self.capture_output_error_category = type(error).__name__
+                self.capture_output_error_errno = getattr(error, "errno", None)
+            if cancellation is not None:
+                self.capture_output_cancel = cancellation
+        except BaseException as secondary:
+            if cancellation is None and (getattr(secondary, "_scope_signal_cancel", False) or isinstance(secondary, KeyboardInterrupt)):
+                cancellation = secondary
+            try:
+                self.capture_output_reporting_error = secondary
+            except BaseException as reporting:
+                if cancellation is None and (getattr(reporting, "_scope_signal_cancel", False) or isinstance(reporting, KeyboardInterrupt)):
+                    cancellation = reporting
+        anchor = getattr(getattr(self, "reader", None), "anchor", None)
+        if anchor is not None:
+            try:
+                anchor.private_observations["unusable"] = True
+            except BaseException as secondary:
+                if cancellation is None and (getattr(secondary, "_scope_signal_cancel", False) or isinstance(secondary, KeyboardInterrupt)):
+                    cancellation = secondary
+                try:
+                    self.capture_output_reporting_error = secondary
+                except BaseException as reporting:
+                    if cancellation is None and (getattr(reporting, "_scope_signal_cancel", False) or isinstance(reporting, KeyboardInterrupt)):
+                        cancellation = reporting
+        return cancellation
+
+    def _link_output_capture_work(self):
+        anchor = getattr(getattr(self, "reader", None), "anchor", None)
+        if anchor is not None and getattr(self, "capture_output_work", None) is not None:
+            leaves = anchor.recording_work.setdefault("gate_output_work", [])
+            if not any(leaf is self.capture_output_work for leaf in leaves):
+                leaves.append(self.capture_output_work)
+            anchor.recording_work["accounting_incomplete"] = True
+
+    def _record_output_hold(self, path, held):
+        cancellation = getattr(self, "capture_output_cancel", None)
+        if not self.capture_output_unusable:
+            try:
+                self._link_output_capture_work()
+                self.output_holds[path.relative_to(self.output).as_posix()] = held
+            except BaseException as error:
+                observed = self._output_capture_failed("register", error)
+                cancellation = cancellation if cancellation is not None else observed
+        if cancellation is not None:
+            raise cancellation
+        return not self.capture_output_unusable
+
+    def _capture_completion(self, path, raw, written):
+        cancellation = getattr(self, "capture_output_cancel", None)
+        pending = None
+        if not self.capture_output_unusable:
+            try:
+                self._link_output_capture_work()
+                pending = c._open_held(str(path), False,
+                    lambda _fd, _state, _ancestor: True, "E_RELATION",
+                    recording_work=self.capture_output_work, accounting_kind="M")
+                self.capture_output_pending = pending
+                held = c._HeldBytes(pending, pending.read(c.DOCUMENT_LIMIT, "E_RELATION", self.capture_output_work))
+                require(held.raw == raw and c._identity(pending.before) == written, "E_STALE")
+                if self._record_output_hold(path, held):
+                    self.capture_output_owned = held
+                    self.capture_output_pending = None
+                    pending = None
+            except BaseException as error:
+                observed = self._output_capture_failed("complete", error)
+                cancellation = cancellation if cancellation is not None else observed
+        if pending is not None:
+            observed = self._close_output_path(pending, "pending-close")
+            cancellation = cancellation if cancellation is not None else observed
+            try:
+                self.capture_output_pending = None
+            except BaseException as error:
+                observed = self._output_capture_failed("pending-release", error)
+                cancellation = cancellation if cancellation is not None else observed
+        if cancellation is not None:
+            raise cancellation
+
+    def _close_output_path(self, held, site):
+        # Pop-before-close preserves single ownership when cancellation interrupts cleanup.
+        cancellation = getattr(self, "capture_output_cancel", None)
+        while held.components:
+            component = held.components.pop()
+            try:
+                os.close(component.fd)
+            except BaseException as error:
+                observed = self._output_capture_failed(site, error)
+                cancellation = cancellation if cancellation is not None else observed
+            finally:
+                try:
+                    self.capture_output_work["held_close_calls"] = self.capture_output_work.get("held_close_calls", 0) + 1
+                except BaseException as error:
+                    observed = self._output_capture_failed("close-ledger", error)
+                    cancellation = cancellation if cancellation is not None else observed
+        return cancellation
+
+    def _close_output_capture(self):
+        cancellation = getattr(self, "capture_output_cancel", None)
+        owned = getattr(self, "capture_output_owned", None)
+        pending = getattr(self, "capture_output_pending", None)
+        try:
+            self.capture_output_owned = self.capture_output_pending = None
+        except BaseException as error:
+            observed = self._output_capture_failed("owner-release", error)
+            cancellation = cancellation if cancellation is not None else observed
+        if owned is not None and owned.held.components:
+            try:
+                require(owned.held.read(len(owned.raw), "E_STALE", self.capture_output_work) == owned.raw, "E_STALE")
+            except BaseException as error:
+                observed = self._output_capture_failed("complete-recheck", error)
+                cancellation = cancellation if cancellation is not None else observed
+            observed = self._close_output_path(owned.held, "complete-close")
+            cancellation = cancellation if cancellation is not None else observed
+        if pending is not None and (owned is None or pending is not owned.held):
+            observed = self._close_output_path(pending, "pending-close")
+            cancellation = cancellation if cancellation is not None else observed
+        try:
+            self._link_output_capture_work()
+        except BaseException as error:
+            observed = self._output_capture_failed("ledger", error)
+            cancellation = cancellation if cancellation is not None else observed
+        return cancellation
 
     def check(self):
         require(self.active and c._clock_value('scope/v1/generate-gate-evidence.py:359:0',time.monotonic(),'monotonic') < self.deadline, "E_RUNTIME")
@@ -454,15 +649,8 @@ class _Generator:
         call_id = "kill-register." + nonce
         config = configuration.config
         require(config["control_repository"]["repository_id"] != self.basis["body"]["target_repository_id"])
-        body = {"operation": "kill-register-read.v1", "version": 1, "call_id": call_id, "nonce": nonce,
-            "target_repository_id": self.basis["body"]["target_repository_id"],
-            **{key: config[key] for key in ("control_repository", "default_branch", "bootstrap")},
-            "bundle_refs": sorted({c.canonical(ref(files["bundle.json"])): ref(files["bundle.json"])
-                for files in session.role_files["current"].values()}.values(), key=c.canonical),
-            "initial_origin_refs": session.initial_origin_refs,
-            "git_observation_sha256": c.digest(c.canonical({"revision": self.basis["body"]["qualified_identity"]["target_revision"],
-                "config_sha256": c.digest(reader.git.config)})),
-            "source_package_ref": ref(configuration.package_raw), "source_accepted_set_ref": ref(configuration.accepted_raw)}
+        body = _kill_request_body_values(self.basis, config, call_id, nonce, session.role_files,
+            session.initial_origin_refs, reader.git.config, configuration.package_raw, configuration.accepted_raw)
         mapping = {"basis_ref": "basis", "claim_ref": "claim", "stage_request_ref": "stage-request", "resolved_profile_ref": "resolved-profile",
             "stage_result_ref": "stage-result", "policy_set_ref": "policy-set", "shadow_set_ref": "shadow-set", "dashboard_ref": "dashboard",
             "marker_ref": "marker", "runtime_ref": "runtime"}
@@ -558,7 +746,9 @@ class _Generator:
         self.check()
         self.session.complete()
         self.reader.seal_source_captures()
-        r.write_exclusive(self.output / "completion/COMPLETE.json", _completion_values(self.request["id"], manifest), resolver=self.reader.darwin)
+        completion = _completion_values(self.request["id"], manifest)
+        written = r.write_exclusive(self.output / "completion/COMPLETE.json", completion, resolver=self.reader.darwin)
+        self._capture_completion(self.output / "completion/COMPLETE.json", completion, written)
 
     def sync_directories(self):
         # Child directory links must be durable before COMPLETE can name the package.
@@ -576,23 +766,39 @@ class _Generator:
                 os.close(fd)
 
     def close(self):
-        self.active = False
-        failure = None
-        if getattr(self, "reader", None) is not None:
-            try:
-                self.reader.close()
-            except BaseException as exc:
-                failure = exc
-        if getattr(self, "session", None) is not None:
-            self.session.close()
-        for held in reversed(getattr(self, "held", [])):
-            try:
-                held.close()
-            except BaseException as exc:
-                failure = failure or exc
-        self.held = []
-        if failure is not None:
-            raise failure
+        primary = sys.exc_info()[1]
+        prior_cancel = getattr(self, "capture_output_cancel", None)
+        try:
+            self.active = False
+            failure = None
+            if getattr(self, "reader", None) is not None:
+                try:
+                    self.reader.close()
+                except BaseException as exc:
+                    failure = exc
+            if getattr(self, "session", None) is not None:
+                self.session.close()
+            for held in reversed(getattr(self, "held", [])):
+                try:
+                    held.close()
+                except BaseException as exc:
+                    failure = failure or exc
+            self.held = []
+            if failure is not None:
+                raise failure
+        finally:
+            native = sys.exc_info()[1]
+            for error in (primary, prior_cancel, native):
+                if error is not None and (getattr(error, "_scope_signal_cancel", False) or isinstance(error, KeyboardInterrupt)):
+                    try:
+                        self.capture_output_cancel = error
+                    except BaseException as reporting:
+                        self._output_capture_failed("cancel-report", reporting)
+                    break
+            cancellation = self._close_output_capture()
+            for error in (primary, prior_cancel, native, cancellation):
+                if error is not None and (getattr(error, "_scope_signal_cancel", False) or isinstance(error, KeyboardInterrupt)):
+                    raise error
 
 
 def main(arguments):

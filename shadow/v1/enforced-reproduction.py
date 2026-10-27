@@ -1007,6 +1007,82 @@ def _native_provenance_values(context: dict) -> dict:
         "loader_mode": native["loader_mode"]}
 
 
+def _reproduction_provenance_values(request_id: str, instruction: bytes, observation_raw: bytes,
+        context: dict, consumer_source_raw: bytes, python_raw: bytes, jq_sha256: str,
+        commands: list) -> bytes:
+    return canonical({"schema_version": 1, "kind": "shadow_consumer_provenance",
+        "id": request_id, "body": {"activation_state": "inactive", "authority": "none",
+        "instruction_utf8": instruction.decode(), "instruction_sha256": sha(instruction),
+        "observation": parse(observation_raw), "observation_sha256": sha(observation_raw),
+        "helper_source_sha256": context["helper_source_sha256"],
+        "helper_build_record_sha256": context["helper_build_record_sha256"],
+        "helper_executable_sha256": context["helper_executable_sha256"],
+        "consumer_source_sha256": sha(consumer_source_raw),
+        "python_sha256": sha(python_raw),
+        "jq_sha256": jq_sha256, "native_release": _native_provenance_values(context),
+        "commands": commands}})
+
+
+def _reproduction_record_values(incident: dict, incident_raw: bytes, claim_raw: bytes,
+        identity: dict, identity_raw: bytes, evaluation: dict, evaluation_raw: bytes,
+        response_raw: bytes, materializer_receipt: dict, result: dict, result_raw: bytes,
+        outcome: str, registry_raw: bytes, store_id: str, launch_raw: bytes,
+        expectation_raw: bytes, receipt_raw: bytes, checker_raw: bytes, origin_raw: bytes,
+        provenance: bytes, trace_raw: bytes) -> bytes:
+    identity_ref = {"content_id": "shadow-qualified-identity",
+        "media_type": "application/vnd.ystack.qualified-identity+json", "sha256": sha(identity_raw)}
+    evaluation_section = {"state": "present", "value": {
+        "verdict": evaluation["body"]["verdict"], "reason_ids": evaluation["body"]["reason_ids"],
+        "evaluation_ref": {"content_id": "shadow-sandbox-evaluation",
+            "media_type": "application/vnd.ystack.control-evaluation+json",
+            "sha256": sha(evaluation_raw)}}}
+    stage_result = parse(response_raw)["stage_result"]
+    materialization = {"state": "present", "value": {
+        "adapter_id": "adapter.local-git-materializer.v1",
+        "outcome": stage_result["body"]["outcome"]["value"],
+        "source": materializer_receipt["source"], "candidate": materializer_receipt["candidate"],
+        "stage_result_ref": {"schema_version": 2, "kind": "stage_result",
+            "id": stage_result["id"], "sha256": sha(canonical(stage_result))}}}
+    execution = {"state": "present", "value": {"tool_id": "tool.verifier",
+        "observed_sha256": result["observed"]["sha256"],
+        "matches_expected": result["outcome"] == "match"}}
+    return canonical({"schema_version": 1, "kind": "shadow_reproduction_record",
+        "id": incident["id"], "body": {"record_form": "enforced-reproduction.v1",
+        "activation_state": "inactive", "authority": "none", "deploy_authority": "none",
+        "effects": ["caller-disposable-candidate-repository"],
+        "evaluation_mode": "observation-only", "shadow": True,
+        "qualification": {"state": "unavailable", "reason_id": "shadow.unqualified"},
+        "outcome": outcome, "reason_id": ("check.passed-at-revision" if outcome == "no-change"
+                                             else "check.failed-at-revision"),
+        "observed_at": incident["body"]["observed_at"],
+        "target_repository_id": incident["body"]["target_repository_id"],
+        "git_revision_ref": incident["body"]["git_revision_ref"],
+        "qualified_identity": identity["body"], "qualified_identity_ref": identity_ref,
+        "incident_ref": {"content_id": "shadow-incident-record",
+            "media_type": "application/vnd.ystack.shadow-incident-record+json",
+            "sha256": sha(incident_raw)},
+        "environment": {"environment_id": parse(claim_raw)["id"],
+            "claim_ref": {"content_id": "shadow-environment-claim",
+                "media_type": "application/vnd.ystack.control-execution-environment-claim+json",
+                "sha256": sha(claim_raw)},
+            "registry_ref": {"content_id": "shadow-environment-registry",
+                "media_type": "application/vnd.ystack.shadow-environment-registry+json",
+                "sha256": sha(registry_raw)}, "evaluation": evaluation_section},
+        "materialization": materialization,
+        "check": {"failing_check": incident["body"]["failing_check"], "execution": execution},
+        "sandbox": {"state": "satisfied", "reason_id": "shadow.sandbox-satisfied",
+            "launch_request_ref": document_ref(launch_raw), "expectation_ref": document_ref(expectation_raw),
+            "receipt_ref": document_ref(receipt_raw), "check_ref": document_ref(checker_raw),
+            "origin": {"state": "authenticated", "store_id": store_id,
+                "method": "controlled-storage.v1", "observation_sha256": sha(origin_raw)},
+            "payload_ref": {"content_id": "file-digest-result", "media_type": "application/json",
+                            "sha256": sha(result_raw)}}, "producer_invocations": 0,
+        "consumer_provenance_ref": document_ref(provenance),
+        "trace_ledger_ref": {"content_id": "shadow-trace-ledger",
+            "media_type": "application/vnd.ystack.telemetry-trace-ledger+json",
+            "sha256": sha(trace_raw)}}})
+
+
 _NATIVE_CONFIGURATION_KEYS = ("CONFIG_ARGS", "Py_GIL_DISABLED", "Py_DEBUG", "Py_ENABLE_JIT",
     "HAVE_PTHREAD_SIGMASK", "HAVE_BROKEN_PTHREAD_SIGMASK", "HAVE_SIGACTION")
 
@@ -2183,17 +2259,21 @@ def trace_ledger(incident: dict, attempt_id: str, environment_id: str, outcome: 
                  "final_digest": events[-1]["record_digest"]}}})
 
 
-def seal(output: Path, held_output: StableDirectory, files: dict[str, bytes],
-         incident: dict, record_form: str, *, _capture=None) -> bytes:
-    require(set(files) == set(EVIDENCE_NAMES), "E_RELATION")
-    directory = held_output.held.fd
+def _reproduction_bundle_values(files: dict[str, bytes], incident: dict, record_form: str) -> bytes:
     rows = [{"name": name, "size_bytes": len(files[name]), "sha256": sha(files[name])}
             for name in sorted(files)]
-    bundle = canonical({"schema_version": 1, "kind": "shadow_consumer_bundle",
+    return canonical({"schema_version": 1, "kind": "shadow_consumer_bundle",
         "id": "bundle." + sha(files["incident.json"])[:32], "body": {
             "activation_state": "inactive", "record_form": record_form,
             "incident_sha256": sha(files["incident.json"]),
             "target_revision": incident["body"]["git_revision_ref"], "files": rows}})
+
+
+def seal(output: Path, held_output: StableDirectory, files: dict[str, bytes],
+         incident: dict, record_form: str, *, _capture=None) -> bytes:
+    require(set(files) == set(EVIDENCE_NAMES), "E_RELATION")
+    directory = held_output.held.fd
+    bundle = _reproduction_bundle_values(files, incident, record_form)
     for name in sorted(files):
         CancellationSignals.checkpoint()
         held_output.recheck("E_RELATION")
@@ -2488,69 +2568,12 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
                          if CancellationSignals.active is not None else None)
         require(isinstance(active_native, _NativeRelease), "E_RUNTIME")
         active_native.recheck()
-        provenance = canonical({"schema_version": 1, "kind": "shadow_consumer_provenance",
-            "id": request["id"], "body": {"activation_state": "inactive", "authority": "none",
-            "instruction_utf8": instruction.decode(), "instruction_sha256": sha(instruction),
-            "observation": parse(observation_raw), "observation_sha256": sha(observation_raw),
-            "helper_source_sha256": context["helper_source_sha256"],
-            "helper_build_record_sha256": context["helper_build_record_sha256"],
-            "helper_executable_sha256": context["helper_executable_sha256"],
-            "consumer_source_sha256": component_files[Path(__file__)].sha256,
-            "python_sha256": python_file.sha256,
-            "jq_sha256": jq.sha256, "native_release": active_native.provenance(context),
-            "commands": commands}})
-        identity_ref = {"content_id": "shadow-qualified-identity",
-            "media_type": "application/vnd.ystack.qualified-identity+json", "sha256": sha(identity_raw)}
-        evaluation_section = {"state": "present", "value": {
-            "verdict": evaluation["body"]["verdict"], "reason_ids": evaluation["body"]["reason_ids"],
-            "evaluation_ref": {"content_id": "shadow-sandbox-evaluation",
-                "media_type": "application/vnd.ystack.control-evaluation+json",
-                "sha256": sha(evaluation_raw)}}}
-        stage_result = parse(response_raw)["stage_result"]
-        materialization = {"state": "present", "value": {
-            "adapter_id": "adapter.local-git-materializer.v1",
-            "outcome": stage_result["body"]["outcome"]["value"],
-            "source": materializer_receipt["source"], "candidate": materializer_receipt["candidate"],
-            "stage_result_ref": {"schema_version": 2, "kind": "stage_result",
-                "id": stage_result["id"], "sha256": sha(canonical(stage_result))}}}
-        execution = {"state": "present", "value": {"tool_id": "tool.verifier",
-            "observed_sha256": result["observed"]["sha256"],
-            "matches_expected": result["outcome"] == "match"}}
-        record = canonical({"schema_version": 1, "kind": "shadow_reproduction_record",
-            "id": incident["id"], "body": {"record_form": "enforced-reproduction.v1",
-            "activation_state": "inactive", "authority": "none", "deploy_authority": "none",
-            "effects": ["caller-disposable-candidate-repository"],
-            "evaluation_mode": "observation-only", "shadow": True,
-            "qualification": {"state": "unavailable", "reason_id": "shadow.unqualified"},
-            "outcome": outcome, "reason_id": ("check.passed-at-revision" if outcome == "no-change"
-                                                 else "check.failed-at-revision"),
-            "observed_at": incident["body"]["observed_at"],
-            "target_repository_id": incident["body"]["target_repository_id"],
-            "git_revision_ref": incident["body"]["git_revision_ref"],
-            "qualified_identity": identity["body"], "qualified_identity_ref": identity_ref,
-            "incident_ref": {"content_id": "shadow-incident-record",
-                "media_type": "application/vnd.ystack.shadow-incident-record+json",
-                "sha256": sha(incident_raw)},
-            "environment": {"environment_id": parse(claim_raw)["id"],
-                "claim_ref": {"content_id": "shadow-environment-claim",
-                    "media_type": "application/vnd.ystack.control-execution-environment-claim+json",
-                    "sha256": sha(claim_raw)},
-                "registry_ref": {"content_id": "shadow-environment-registry",
-                    "media_type": "application/vnd.ystack.shadow-environment-registry+json",
-                    "sha256": sha(anchor.installed["registry"][0])}, "evaluation": evaluation_section},
-            "materialization": materialization,
-            "check": {"failing_check": incident["body"]["failing_check"], "execution": execution},
-            "sandbox": {"state": "satisfied", "reason_id": "shadow.sandbox-satisfied",
-                "launch_request_ref": document_ref(launch_raw), "expectation_ref": document_ref(expectation_raw),
-                "receipt_ref": document_ref(receipt_raw), "check_ref": document_ref(checker_raw),
-                "origin": {"state": "authenticated", "store_id": anchor.config["store_id"],
-                    "method": "controlled-storage.v1", "observation_sha256": sha(origin_raw)},
-                "payload_ref": {"content_id": "file-digest-result", "media_type": "application/json",
-                                "sha256": sha(result_raw)}}, "producer_invocations": 0,
-            "consumer_provenance_ref": document_ref(provenance),
-            "trace_ledger_ref": {"content_id": "shadow-trace-ledger",
-                "media_type": "application/vnd.ystack.telemetry-trace-ledger+json",
-                "sha256": sha(trace_raw)}}})
+        provenance = _reproduction_provenance_values(request["id"], instruction, observation_raw,
+            context, component_files[Path(__file__)].raw, python_file.raw, jq.sha256, commands)
+        record = _reproduction_record_values(incident, incident_raw, claim_raw, identity,
+            identity_raw, evaluation, evaluation_raw, response_raw, materializer_receipt,
+            result, result_raw, outcome, anchor.installed["registry"][0], anchor.config["store_id"],
+            launch_raw, expectation_raw, receipt_raw, checker_raw, origin_raw, provenance, trace_raw)
         files = {"incident.json": incident_raw, "claim.json": claim_raw,
             "duty-evaluation.json": duty_raw, "materialization-input.json": input_raw,
             "materialization-response.json": response_raw, "qualified-identity.json": identity_raw,
