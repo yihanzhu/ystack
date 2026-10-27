@@ -628,12 +628,12 @@ def _host_process_values(runtime_root, config, start_raw, raw_host, raw_clocks,
         state = host._host_state()
         returncode = None
         stop_issued = hard_stop = False
-    
+
         def kill():
             nonlocal state
             plain("run_vm.kill", error=True)
             state, _ = host._host_step(state, {"kind": "killed"})
-    
+
         def bounded(operation):
             elapsed = mono("1758") - admission_mono
             if elapsed >= 58.0:
@@ -649,7 +649,7 @@ def _host_process_values(runtime_root, config, start_raw, raw_host, raw_clocks,
                 return "error", False
             text = out.decode("utf-8", "replace").strip()
             return text if text in ("running", "stopped", "error") else "error", False
-    
+
         while True:
             state, action = host._host_step(state, {"kind": "clock", "cancelled": False,
                 "elapsed": mono("1974") - admission_mono, "sigkill": 58.0, "hardstop": 50.0})
@@ -690,7 +690,7 @@ def _host_process_values(runtime_root, config, start_raw, raw_host, raw_clocks,
                 left = deadline - (mono("2069") - admission_mono)
                 if left > 0:
                     remaining = min(remaining, left)
-    
+
         reaped = False
         if state["escalated_sigkill"]:
             terminated_at, end_mono = wall("2088"), mono("2089")
