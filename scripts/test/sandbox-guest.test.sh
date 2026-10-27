@@ -68,8 +68,9 @@ hf="$tmp/build-fault/harness"
 h="$h1"
 "$h" observation-values || fail 'shared guest observation values'
 pass 'shared guest counters, geometry and controller preserve matching wait, zero, wrong pid and EINTR'
-"$h" observation-capture > "$tmp/observation.json" || fail 'bounded private guest observations'
-"$python" - "$tmp/observation.json" <<'PY_CAPTURE'
+"$h" observation-capture "$tmp/observation.frame" > "$tmp/observation.json" || fail 'bounded private guest observations'
+"$python" - "$tmp/observation.json" "$tmp/observation.frame" "$root/sandbox/v1/host-supervisor.py" <<'PY_CAPTURE'
+import importlib.util
 import json
 import pathlib
 import sys
@@ -84,8 +85,31 @@ assert [row['tag'] for row in value['control']] == [
 assert value['control'][2]['revents'] == [{'revents': 1, 'role': 'exec'}]
 assert value['counters']['stdout']['stat']['size'] == 2
 assert value['setup']['output']['stat']['f_bfree'] == 9
+spec = importlib.util.spec_from_file_location('guest_capture_host', sys.argv[3])
+host = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(host)
+records = host.frame_read(pathlib.Path(sys.argv[2]).read_bytes())
+assert dict(records)[b'control-observation.json'] == raw
+native_records, guest = host._guest_capture_values(records)
+assert guest == value
+native = host.validate_export(native_records, '0' * 64)
+assert native is not None
+assert host._guest_capture_values(native_records) == (native_records, None)
+for invalid in (raw[:-1], raw + b'\n'):
+    changed = [(name, invalid if name == b'control-observation.json' else content)
+               for name, content in records]
+    remaining, unavailable = host._guest_capture_values(changed)
+    assert unavailable is None and remaining == native_records
+    assert host.validate_export(remaining, '0' * 64) == native
 PY_CAPTURE
 pass 'shared guest values build the same report through complete frames with and without capture; canonical raw failures, duplicates, exact 4MiB and frame capacity stay bounded'
+/usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 -DYSTACK_SUPERVISOR_TEST -I"$guest_dir" \
+  "$harness_src" "$guest_dir/common.c" "$guest_dir/observation-values.c" -o "$tmp/capture-failure-harness"
+"$tmp/capture-failure-harness" observation-capture > "$tmp/capture-failure.json" ||
+  fail 'capture allocation/format failures must preserve the native report'
+cmp -s "$tmp/capture-failure.json" "$tmp/observation.json" ||
+  fail 'disabled failure hooks changed the ordinary capture bytes'
+pass 'the actual C producer and frame writer pass the strict host capture reader; capture failures leave the native report unchanged'
 /bin/mkdir -m 700 "$tmp/capture-inventory"
 /usr/bin/printf '{}' > "$tmp/capture-inventory/result.json"
 check_capture_inventory() {

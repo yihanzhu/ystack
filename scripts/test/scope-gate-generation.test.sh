@@ -79,6 +79,122 @@ for field,value in [('response_status',500),('page_index',1),('output_cursor','l
     records=framed(pages);capture=n.document(records[0][1]);capture['pages'][0][field]=value;records[0]=(b'capture.json',n.canonical(capture));reject(n._KillNormalizer.captured,records,request)
 spec=importlib.util.spec_from_file_location('gate_generator',root/'scope/v1/generate-gate-evidence.py')
 g=importlib.util.module_from_spec(spec);sys.modules[spec.name]=g;spec.loader.exec_module(g)
+def source_configuration_input_controls():
+    import os,tempfile,types
+    c=g.c
+    original_anchor,original_rule=c.ANCHOR,c._root_rule
+    counts=[]
+    def document(kind,body):return n.canonical(env(kind,'source.control',body))
+    for mode,fault in [('coverage-read','ok'),('kill-register-read','ok'),('coverage-read','source-bytes'),('coverage-read','bad-config'),('coverage-read','publish-memory'),('coverage-read','publish-signal'),('coverage-read','publish-keyboard'),('coverage-read','report-memory'),('coverage-read','map-build'),('coverage-read','report-signal'),('coverage-read','report-keyboard'),('coverage-read','close-error'),('coverage-read','cancel-close-error')]:
+        with tempfile.TemporaryDirectory(prefix='source-config-owner-') as tmp:
+            directory=pathlib.Path(tmp).resolve();prefix='coverage-source' if mode=='coverage-read' else 'kill-register-source'
+            operation=n.OPERATION if mode=='coverage-read' else n.KILL_OPERATION
+            families=n.FAMILIES if mode=='coverage-read' else n.KILL_FAMILIES
+            normalizer=(root/'sandbox/v1/coverage-source.py').read_bytes()
+            supervisor=(root/'sandbox/v1/host-supervisor.py').read_bytes()
+            values={'host-config.json':n.canonical(dict(store_id='store.control',principal_uid=os.geteuid(),consumer_gid=os.getegid())),
+                    'host-supervisor.py':supervisor,'coverage-source.py':normalizer,'collector.py':b'#!/usr/bin/env python3\n'}
+            coverage_fields=[['branch_snapshots','commits','default_branch','repository','schema_version'],['pull_requests','schema_version'],['baseline','current','events','schema_version']]
+            kill_fields=[['after','before','default_branch','end_sequence','repository','schema_version','start_sequence'],['commits','schema_version'],['events','schema_version'],['merges','schema_version']]
+            fields=coverage_fields if mode=='coverage-read' else kill_fields
+            rows=[dict(role='normalizer',path=str(directory/'coverage-source.py'),sha256=n.digest(normalizer)),dict(role='collector',path=str(directory/'collector.py'),sha256=n.digest(values['collector.py']))]
+            for family,keys in zip(families,fields):
+                name='schema-'+family+'.json';raw=n.canonical(dict(schema_version=1,family=family,operation=operation,page_fields=keys));values[name]=raw
+                rows.append(dict(role='schema.'+family,path=str(directory/name),sha256=n.digest(raw)))
+            package=document('coverage_source_package' if mode=='coverage-read' else 'kill_register_source_package',dict(operation=operation,files=sorted(rows,key=lambda row:row['role'])))
+            values['package.json']=package
+            accepted=document('coverage_source_accepted_identity_set' if mode=='coverage-read' else 'kill_register_source_accepted_identity_set',dict(activation_state='inactive',identities=[dict(source_id='source.control',operation=operation,proof_state='qualified',host_supervisor_sha256=n.digest(supervisor),source_package_sha256=n.digest(package),collector_sha256=n.digest(values['collector.py']),normalizer_sha256=n.digest(normalizer))]))
+            config=dict(source_id='source.control',operation=operation,queries=n.QUERIES if mode=='coverage-read' else n.KILL_QUERIES,source_package_path=str(directory/'package.json'),source_package_sha256=n.digest(package),collector_path=str(directory/'collector.py'),collector_sha256=n.digest(values['collector.py']),accepted_set_path=str(directory/(prefix+'-accepted-identities.json')),accepted_set_sha256=n.digest(accepted),store_id='store.control',principal_uid=os.geteuid(),consumer_gid=os.getegid())
+            if mode=='coverage-read':config.update(coverage_rule_version=n.RULE_VERSION,publisher_identity_ref=owner)
+            else:config.update(control_repository=body['control_repository'],default_branch=body['default_branch'],bootstrap=boot)
+            if fault=='bad-config':config['source_package_sha256']='0'*64
+            values[prefix+'-config.json']=document('coverage_source_config' if mode=='coverage-read' else 'kill_register_source_config',config)
+            values[prefix+'-accepted-identities.json']=accepted
+            if fault=='source-bytes':values['coverage-source.py']+=b'\n'
+            for name,raw in values.items():
+                path=directory/name;path.write_bytes(raw);path.chmod(0o500 if name=='collector.py' else 0o400)
+            rule=lambda *_args:True
+            c.ANCHOR=str(directory);c._root_rule=lambda _resolver:rule
+            anchor=types.SimpleNamespace(config_raw=values['host-config.json'],config=dict(store_id='store.control',principal_uid=os.geteuid(),consumer_gid=os.getegid()),resolver=None,held=[])
+            opened=[];reads=[];native_read=c.HeldPath.read
+            def observed_read(item,*args,**kwargs):
+                raw=native_read(item,*args,**kwargs);reads.append((item,raw));tracked.update(component.fd for component in item.components);return raw
+            anchor.recheck=lambda code='E_STALE':[item.recheck(code) for item in anchor.held]
+            tracked=set();closed={}
+            native_close=c.os.close
+            def observed_close(fd):
+                native_close(fd)
+                if fd in tracked:closed[fd]=closed.get(fd,0)+1
+            failure=MemoryError('source input map publication')
+            if fault in ('publish-signal','cancel-close-error'):failure=InterruptedError('source input map publication');failure._scope_signal_cancel=True
+            if fault=='publish-keyboard':failure=KeyboardInterrupt('source input map publication')
+            reporting=InterruptedError('source input report signal') if fault=='report-signal' else KeyboardInterrupt('source input report keyboard')
+            if fault=='report-signal':reporting._scope_signal_cancel=True
+            class Configuration(c._CoverageConfiguration):
+                def __getattribute__(self,name):
+                    if fault=='map-build' and name=='config_raw' and 'hashes' in object.__getattribute__(self,'__dict__'):raise failure
+                    return object.__getattribute__(self,name)
+                def __setattr__(self,name,value):
+                    if name=='source_inputs' and (fault.startswith(('publish-','report-')) or fault=='cancel-close-error'):raise failure
+                    if name=='source_inputs_error' and fault=='report-memory':raise MemoryError('source input error report')
+                    if name=='source_inputs_error' and fault in ('report-signal','report-keyboard'):raise reporting
+                    object.__setattr__(self,name,value)
+            configuration=None;all_components=[];caught=None
+            try:
+                for name,directory_flag in [(None,True),('host-config.json',False),('host-supervisor.py',False)]:
+                    item=c._open_held(str(directory if name is None else directory/name),directory_flag,rule,'E_CONFIG');anchor.held.append(item)
+                tracked.update(component.fd for item in anchor.held for component in item.components)
+                c.HeldPath.read=observed_read;c.os.close=observed_close
+                original_close=c._close_paths;closing=OSError(5,'original cleanup after new capture cancel')
+                def cancelled_close(items):original_close(items);raise closing
+                if fault=='cancel-close-error':c._close_paths=cancelled_close
+                try:
+                    try:configuration=Configuration(anchor,mode)
+                    except BaseException as error:caught=error
+                finally:c._close_paths=original_close
+                if fault in ('source-bytes','bad-config'):
+                    check(caught is not None and configuration is None)
+                elif fault in ('publish-signal','publish-keyboard','report-signal','report-keyboard','cancel-close-error'):
+                    check(caught is (reporting if fault.startswith('report-') else failure) and configuration is None)
+                    if fault=='cancel-close-error':check(caught.__cause__ is closing)
+                else:
+                    check(caught is None and configuration is not None)
+                    all_components=[component for held in configuration.held for component in held.components]
+                    if fault in ('publish-memory','report-memory','map-build'):
+                        check(configuration.source_inputs is None and configuration.source_inputs_unusable)
+                        check(configuration.source_inputs_error is (None if fault=='report-memory' else failure))
+                    else:
+                        check(not configuration.source_inputs_unusable and set(configuration.source_inputs)=={'host','config','accepted','package','supervisor','normalizer'})
+                        expected={'host':'host-config.json','config':prefix+'-config.json','accepted':prefix+'-accepted-identities.json','package':'package.json','supervisor':'host-supervisor.py','normalizer':'coverage-source.py'}
+                        for key,name in expected.items():
+                            raw,held=configuration.source_inputs[key]
+                            check(raw==values[name] and held.path==str(directory/name) and bool(held.components))
+                            check(held in anchor.held or held in configuration.held)
+                            if key!='host':check(any(item is held and seen is raw for item,seen in reads))
+                        check(configuration.source_inputs['host'][0] is anchor.config_raw)
+                    before=len(reads);configuration.recheck();check(len(reads)==before+len(configuration.held))
+                    if fault=='close-error':
+                        original_close=c._close_paths;closing=OSError(5,'original configuration close')
+                        def close_error(items):original_close(items);raise closing
+                        c._close_paths=close_error
+                        try:
+                            try:configuration.close()
+                            except OSError as error:check(error is closing)
+                            else:raise AssertionError('original close error swallowed')
+                        finally:c._close_paths=original_close
+                    else:configuration.close()
+                    check(not configuration.held and all(not item.components for item,_raw in reads if item not in anchor.held))
+                    configuration.close()
+                check(all(not item.components for item,_raw in reads if item not in anchor.held))
+                counts.append((mode,fault,len(reads),sum(len(raw) for _item,raw in reads)))
+            finally:
+                c.HeldPath.read=native_read
+                if configuration is not None:configuration.close()
+                try:c._close_paths(anchor.held)
+                finally:c.os.close=native_close;c.ANCHOR=original_anchor;c._root_rule=original_rule
+                check(set(closed)==tracked and all(count==1 for count in closed.values()))
+    print('SOURCE_CONFIGURATION_CONTROLS',counts,'full_cost_UNKNOWN root_ACL_native_NOTRUN')
+source_configuration_input_controls()
 def gate_reject(fn,*args):
     global checks
     try:fn(*args)

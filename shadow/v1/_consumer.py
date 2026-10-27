@@ -3549,12 +3549,20 @@ def read_store_attempt(anchor: Anchor, attempt_id: str, *,
                 raise
 
 class _CoverageConfiguration:
+    source_inputs = None
+    source_inputs_error = None
+
+    @property
+    def source_inputs_unusable(self):
+        return self.source_inputs is None
+
     def __init__(self, anchor, operation="coverage-read"):
         _require(operation in {"coverage-read", "kill-register-read"}, "E_CONFIG")
         self.operation = operation
         prefix = "coverage-source" if operation == "coverage-read" else "kill-register-source"
         import importlib.util
         self.anchor, self.held = anchor, []
+        source_input_cancel = None
         try:
             root = next(item for item in anchor.held if item.path == ANCHOR)
             rule = _root_rule(anchor.resolver)
@@ -3605,7 +3613,36 @@ class _CoverageConfiguration:
             self.identity = n.source_identity(self.config, self.accepted_raw, digest(supervisor_raw), digest(normalizer_raw))
             self.hashes = {item.path: digest(item.read(EXECUTABLE_LIMIT, "E_INSTALL")) for item in self.held}
             self.recheck()
-        except BaseException:
+            try:
+                self.source_inputs = {
+                    "host": (anchor.config_raw, next(item for item in anchor.held
+                             if item.path == ANCHOR + "/host-config.json")),
+                    "config": (self.config_raw, self.held[0]),
+                    "accepted": (self.accepted_raw, self.held[1]),
+                    "package": (self.package_raw, package_file),
+                    "supervisor": (supervisor_raw, supervisor),
+                    "normalizer": (normalizer_raw, normalizer),
+                }
+            except BaseException as error:
+                try:
+                    self.source_inputs_error = error
+                except BaseException as reporting_error:
+                    if (isinstance(reporting_error, KeyboardInterrupt)
+                            or getattr(reporting_error, "_scope_signal_cancel", False)):
+                        if not (isinstance(error, KeyboardInterrupt)
+                                or getattr(error, "_scope_signal_cancel", False)):
+                            source_input_cancel = reporting_error
+                            raise
+                if isinstance(error, KeyboardInterrupt) or getattr(error, "_scope_signal_cancel", False):
+                    source_input_cancel = error
+                    raise
+        except BaseException as error:
+            if error is source_input_cancel:
+                try:
+                    self.close()
+                except BaseException as cleanup_error:
+                    raise error from cleanup_error
+                raise
             self.close()
             raise
 

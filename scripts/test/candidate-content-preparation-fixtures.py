@@ -6739,7 +6739,7 @@ def raw16_C3_bundle_outputs(root: Path, candidate=False, selected=None, evidence
     spec=importlib.util.spec_from_file_location('C3_bundle_replay',root/'evals/v1/replay-malicious.py')
     replay=importlib.util.module_from_spec(spec);sys.modules[spec.name]=replay;spec.loader.exec_module(replay)
     results=[]
-    for label in (selected or (('normal','wrong-row-sha') if candidate else ('normal','source-mode-drift','unusable','duplicate-binding','unknown-role','default-repeat','repeat-observation','repeat-target-identity','repeat-source-swap'))):
+    for label in (selected or (('normal','wrong-row-sha','repeat-candidate-observation') if candidate else ('normal','source-mode-drift','unusable','duplicate-binding','unknown-role','default-repeat','repeat-observation','repeat-target-identity','repeat-source-swap'))):
         phase='write' if candidate else 'reproduction'
         form='withheld-write.v1' if candidate else 'enforced-reproduction.v1'
         with tempfile.TemporaryDirectory(prefix='ystack-C3-bundle-') as temporary:
@@ -6810,8 +6810,14 @@ def raw16_C3_bundle_outputs(root: Path, candidate=False, selected=None, evidence
                         if label=='wrong-row-sha':rows[0]['sha256']='f'*64
                         reader._retain_replay_output('git',files['shadow-record.json'],(candidate_files,rows,git,bundle.files))
                         assembly.candidate_outputs(reader)
+                        if label=='repeat-candidate-observation':
+                            before_copy=(assembly.work['physical_bytes'],assembly.work['files'])
+                            reader._retain_replay_output('git',files['shadow-record.json'],
+                                (dict(candidate_files),[dict(row) for row in rows],git,bundle.files))
+                            assembly.candidate_outputs(reader)
+                            assert (assembly.work['physical_bytes'],assembly.work['files'])==before_copy
                 except BaseException as error:caught=error
-                if label in {'normal','repeat-observation'}:
+                if label in {'normal','repeat-observation','repeat-candidate-observation'}:
                     assert caught is None and len(assembly.files)==2*len(files)+(4 if candidate else 0)
                     assert len(assembly.output_relations)==(3 if label=='repeat-observation' else 2) and assembly.output_relations[0][3:5]!=assembly.output_relations[1][3:5]
                     assert all((destination/assembly.derived_outputs[phase]['bundle/generator/'+role+'/environment.one/'+name]).read_bytes()==raw
@@ -6981,7 +6987,7 @@ def raw16_C3_git_inputs(root: Path, evidence=None) -> None:
     spec=importlib.util.spec_from_file_location('C3_git_replay',root/'evals/v1/replay-malicious.py')
     replay=importlib.util.module_from_spec(spec);sys.modules[spec.name]=replay;spec.loader.exec_module(replay)
     results=[]
-    for label in ('normal','wrong-sha','duplicate-path','unsafe-path','target-drift'):
+    for label in ('normal','wrong-sha','duplicate-path','unsafe-path','target-drift','files-full'):
         with tempfile.TemporaryDirectory(prefix='ystack-C3-git-') as temporary:
             base=Path(temporary).resolve()
             for name in ('source','S','rebuilt','tools'):(base/name).mkdir(mode=0o700)
@@ -7030,6 +7036,7 @@ def raw16_C3_git_inputs(root: Path, evidence=None) -> None:
                     current=c._open_held(str(base/'S'),True,c._store_rule(os.getuid(),os.getgid(),0o700,True,resolver),'E_STORE')
                     try:incoming=replay._ReplayInputs(current,core,work)
                     finally:current.close()
+                    if label=='files-full':work['files']=256
                     actual=incoming.git_repository(target)
                     assert set(actual)=={entry['path'] for entry in entries}
                     for path in actual:assert (base/'rebuilt'/path).read_bytes()==(source/path).read_bytes()
@@ -7045,7 +7052,11 @@ def raw16_C3_git_inputs(root: Path, evidence=None) -> None:
                         work['offline_compile_and_closure_work_unknown']=True
                 except BaseException as error:caught=error
                 if label=='normal':assert caught is None,repr(caught)
-                else:assert caught is not None,label
+                else:
+                    assert caught is not None,label
+                    if label=='files-full':
+                        assert isinstance(caught,c.Refusal) and caught.code=='E_LIMIT'
+                        assert not list((base/'rebuilt').iterdir())
             finally:
                 primary=sys.exc_info()[1] or caught
                 if incoming is not None:incoming.close(primary)
@@ -7325,3 +7336,67 @@ def raw16_C3_driver_input_owners(root: Path, evidence=None) -> None:
     if evidence is not None:
      with (evidence/(attempt+'-summary.json')).open('x') as stream:stream.write(json.dumps(summary,indent=2)+'\n')
     print(json.dumps(dict(actual_controls=len(results),all_passed=all(row['passed'] and row['fd_set_restored'] for row in results),summary=attempt+'-summary.json',helper_native='NOTRUN'),sort_keys=True))
+
+
+
+def raw16_C3_export_stage(root: Path, deletion=False, evidence=None) -> None:
+    import shlex,tempfile
+    spec=importlib.util.spec_from_file_location('C3_export_consumer',root/'shadow/v1/_consumer.py')
+    c=importlib.util.module_from_spec(spec);sys.modules[spec.name]=c;spec.loader.exec_module(c)
+    source=(root/'evals/v1/evals-launcher.sh').read_text()
+    literal=shlex.split(source.split('c2_program=',1)[1].split('\nc2_fd9=',1)[0])[0]
+    if deletion:
+        begin=literal.index('            c2_require(type(name) is str and name not in')
+        end=literal.index('\n            role = ',begin)
+        literal=literal[:begin]+'            c2_require(type(name) is str and name not in {"", ".", ".."} and name not in entries, "E_SHAPE")'+literal[end:]
+    fixed={'__name__':'C3_export_fixed','c':c};exec(compile(literal,'<actual-C3-export-stage>','exec'),fixed)
+    results=[]
+    for label in (('third-export',) if deletion else ('normal','third-export','extra-file','cross-occurrence')):
+        with tempfile.TemporaryDirectory(prefix='ystack-C3-export-') as temporary:
+            base=Path(temporary).resolve();window=base/'window';window.mkdir(mode=0o700)
+            cases=window/'cases';cases.mkdir(mode=0o700);identity='malicious.checked-file-bytes'
+            casepath=cases/identity;casepath.mkdir(mode=0o700);S=casepath/'S';S.mkdir(mode=0o700)
+            exports=S/'exports';exports.mkdir(mode=0o700);destination=window/'I';destination.mkdir(mode=0o700)
+            data={'reproduction.bin':b'bounded synthetic reproduction export','write.bin':b'bounded synthetic write export'}
+            if label=='third-export':data={'kill.bin':b'not one of the two fixed export roles'}
+            entries=[]
+            for name,raw in data.items():
+                (exports/name).write_bytes(raw);(exports/name).chmod(0o400)
+                phase=name[:-4]
+                entries.append({'occurrence':phase,'role':'capture','member':'launch-0001/sandbox-export.bin',
+                    'file':'exports/'+name,'size_bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest(),'kind':'export'})
+            if label=='extra-file':(exports/'extra').write_bytes(b'extra');(exports/'extra').chmod(0o400)
+            if label=='cross-occurrence':entries[0]['occurrence']='write'
+            work=fixed['c2_fresh_work']('C3-export-stage')
+            resolver=c._DarwinUUIDResolver() if sys.platform=='darwin' else None
+            held=c._open_held(str(window),True,c._store_rule(os.getuid(),os.getgid(),0o700,True,resolver),'E_STALE',recording_work=work,accounting_kind='M')
+            custody=fixed['C2Root'](held,work,resolver)
+            target=custody.adopt(c._open_child(held,'I',True,c._store_rule(os.getuid(),os.getgid(),0o700,True,resolver),'E_STALE',recording_work=work,accounting_kind='M'))
+            total=fixed['c2_fresh_work']('C3-export-case');work['C2_case_totals']={identity:total}
+            before={'window':fixed['c2_counter_values'](fixed['c2_fresh_work']('C3-export-before')),
+                'cases':{identity:fixed['c2_counter_values'](fixed['c2_fresh_work']('C3-export-case-before'))}}
+            core={'case_id':identity,'entries':entries,'originals':{},'occurrences':{}}
+            raw=fixed['C2Channel'](None,work).encode(core)
+            descriptor={'carry_in':{},'cases':{key:({'inventory_core':core,'sha256':hashlib.sha256(raw).hexdigest()} if key==identity else None) for key in fixed['_C2_CASES']}}
+            copies=fixed['C2Copies'](custody);caught=None
+            try:
+                try:
+                    fixed['c2_stage'](custody,descriptor,[identity],target,before,copies)
+                    copies.final_checks();copies.transfer_cases()
+                except BaseException as error:caught=error
+                if label=='normal':
+                    assert caught is None,repr(caught)
+                    for name,value in data.items():assert (destination/identity/'exports'/name).read_bytes()==value
+                    assert work['export_write_bytes']==total['export_write_bytes']==sum(map(len,data.values()))
+                elif label=='third-export':assert caught is not None,'unexpected export pathname accepted'
+                else:assert caught is not None,label
+            finally:
+                primary=sys.exc_info()[1] or caught
+                copies.transfer_cases()
+                custody.close(primary)
+            results.append({'case':label,'rejected':caught is not None,'work':work,'case_work':total,
+                'full_seed':False,'source_data':'synthetic bytes, no original binary export/native qualification'})
+    details=[{'work':row['case_work']} for row in results];_C3_work_evidence(details,evidence,'export-case')
+    for row,detail in zip(results,details):row['case_work']=detail['work']
+    _C3_work_evidence(results,evidence,'export-window')
+    print(json.dumps({'C3_fixed_export_stage':results},sort_keys=True))

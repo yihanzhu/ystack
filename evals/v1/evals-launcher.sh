@@ -1098,17 +1098,30 @@ def c2_stage(custody, descriptor, case_ids, destination, admitted_scope, copies=
         entries, roles = {}, set()
         for entry in core["entries"]:
             c2_require(type(entry) is dict and set(entry) == {"occurrence", "role", "member", "file", "size_bytes", "sha256", "kind"}, "E_SHAPE")
+            c2_require(all(type(entry[key]) is str for key in ("occurrence", "role", "member", "kind")), "E_SHAPE")
             name = entry["file"]
-            c2_require(type(name) is str and "/" not in name and name not in {"", ".", ".."} and name not in entries, "E_SHAPE")
+            c2_require(type(name) is str and name not in {"", ".", ".."} and name not in entries
+                and ("/" not in name or name in {"exports/reproduction.bin", "exports/write.bin"}
+                    and entry["kind"] == "export" and entry["occurrence"] == name[8:-4]
+                    and entry["role"] == "capture" and entry["member"].endswith("/sandbox-export.bin")), "E_SHAPE")
             role = (entry["occurrence"], entry["role"], entry["member"])
             c2_require(role not in roles, "E_SHAPE");roles.add(role);entries[name] = entry
-        c2_require(custody.namespace(source) == frozenset(entries), "E_RELATION")
+        export_names = {name.split("/", 1)[1] for name in entries if name.startswith("exports/")}
+        c2_require(custody.namespace(source) == frozenset(name.split("/", 1)[0] for name in entries), "E_RELATION")
+        source_exports = target_exports = None
+        if export_names:
+            source_exports = custody.adopt(c._open_child(source, "exports", True,
+                c._store_rule(os.geteuid(), os.getegid(), 0o700, True, custody.resolver), "E_STALE",
+                recording_work=custody.work, accounting_kind="M"))
+            c2_require(custody.namespace(source_exports) == frozenset(export_names), "E_RELATION")
+            target_exports = custody.mkdir(target, "exports")
         for name, entry in entries.items():
             c2_require(entry["kind"] in {"runtime", "recorded", "export", "raw", "M", "W"}, "E_SHAPE")
-            held = custody.adopt(c._open_child(source, name, False,
+            parent, output, basename = (source_exports, target_exports, name.split("/", 1)[1]) if name.startswith("exports/") else (source, target, name)
+            held = custody.adopt(c._open_child(parent, basename, False,
                 c._store_rule(os.geteuid(), os.getegid(), 0o400, False, custody.resolver), "E_STALE",
                 recording_work=custody.work, accounting_kind="M"))
-            current.copy(held, target, name, entry["size_bytes"], entry["sha256"], entry["kind"])
+            current.copy(held, output, basename, entry["size_bytes"], entry["sha256"], entry["kind"])
         current.transfer_cases()
     return copies
 

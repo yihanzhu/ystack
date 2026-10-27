@@ -4046,6 +4046,12 @@ with tempfile.TemporaryDirectory() as area:
     offline,marker,admission=replay._writer_values(root,frozen,files,vars(materialized),context)
     assert offline==actual_files and marker==writer._bundle_values(actual_files,incident,'withheld-write.v1')
     assert admission==write['admission']
+    case_values=replay._ReplayCase.__new__(replay._ReplayCase)
+    case_values.calculated={'reproduction':{'files':{name:raw for name,raw in frozen.items() if name!='bundle.json'},
+        'bundle':frozen['bundle.json']},'write':{'receipt':files['sandbox-receipt.json']}}
+    linked,linked_marker,linked_admission=case_values.write(root,files,vars(materialized),context)
+    assert (linked,linked_marker,linked_admission)==(offline,marker,admission)
+    assert case_values.calculated['write']['admission']==write['admission']
     damaged=dict(context);damaged['request']={'id':request['id'],'body':dict(request['body'],allowed_paths=[])}
     try:replay._writer_values(root,frozen,files,vars(materialized),damaged)
     except writer.c.Refusal:pass
@@ -4107,3 +4113,16 @@ fixture.raw16_C3_git_inputs(root)
 fixture.raw16_C3_trial_documents(root)
 fixture.raw16_C3_driver_input_owners(root)
 PY_C3_INPUTS
+
+
+/usr/bin/python3 -I -S -B - "$root" <<'PY_C3_EXPORT_STAGE'
+import importlib.util,sys
+from pathlib import Path
+root=Path(sys.argv[1])
+spec=importlib.util.spec_from_file_location('C3_export_stage_fixture',root/'scripts/test/candidate-content-preparation-fixtures.py')
+fixture=importlib.util.module_from_spec(spec);sys.modules[spec.name]=fixture;spec.loader.exec_module(fixture)
+fixture.raw16_C3_export_stage(root)
+try:fixture.raw16_C3_export_stage(root,deletion=True)
+except AssertionError as error:assert str(error)=='unexpected export pathname accepted'
+else:raise AssertionError('fixed export pathname deletion undetected')
+PY_C3_EXPORT_STAGE

@@ -129,9 +129,42 @@ def _manifest_values(identity, rows, initial_origins, final_origins, kill_reques
     return manifest
 
 
-def _completion_values(identity, manifest):
-    return c.canonical(envelope("scope_gate_generation_complete", identity,
-        {"manifest_sha256": c.digest(manifest), "activation_state": "inactive", "authority": "none", "enabled": False}))
+def _completion_values(identity, manifest, work=None):
+    renderer, constructor = c.canonical, envelope
+    if work is not None:work["completion_hash_unknown"] = True
+    value = constructor("scope_gate_generation_complete", identity,
+        {"manifest_sha256": c.digest(manifest), "activation_state": "inactive", "authority": "none", "enabled": False})
+    if work is None:return renderer(value)
+    work.setdefault("seed_processing", {})["H"] = work.get("seed_processing", {}).get("H", 0) + len(manifest)
+    work["completion_hash_unknown"] = False
+    work["completion_encode_unknown"] = True
+    before, failure, raw = work["read_bytes"], None, None
+    try:raw = c._private_capture_observations(value, work, work)
+    except BaseException as error:failure = error
+    finally:
+        processed = work["read_bytes"] - before
+        try:
+            work["seed_processing"]["C"] = work["seed_processing"].get("C", 0) + processed
+            c._capture_account(work, "M", "read_bytes", processed)
+        except BaseException as error:
+            if failure is None:failure = error
+            else:
+                previous = failure
+                first_cancel = getattr(failure, "_scope_signal_cancel", False) or isinstance(failure, KeyboardInterrupt)
+                next_cancel = getattr(error, "_scope_signal_cancel", False) or isinstance(error, KeyboardInterrupt)
+                if next_cancel and not first_cancel:failure = error
+                try:c._capture_observation_error(work, "M", "completion-secondary", error)
+                except BaseException as reporting:
+                    first_cancel = getattr(failure, "_scope_signal_cancel", False) or isinstance(failure, KeyboardInterrupt)
+                    next_cancel = getattr(reporting, "_scope_signal_cancel", False) or isinstance(reporting, KeyboardInterrupt)
+                    if next_cancel and not first_cancel:failure = reporting
+                if failure is not error:failure.__cause__ = error
+                elif previous is not error:failure.__cause__ = previous
+    if failure is not None:raise failure
+    c._capture_account(work, "M", "logical_bytes", len(raw))
+    c._capture_account(work, "M", "occurrences", 1)
+    work["completion_encode_unknown"] = False
+    return raw
 
 
 def _stable_binding(binding):

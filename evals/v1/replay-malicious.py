@@ -224,10 +224,14 @@ def _reproduction_values(runtime_root, files, materialized, context):
     incident = owner.parse(files["incident.json"])
     identity = owner.parse(materialized["qualified_identity_raw"])
     evaluation = owner.parse(materialized["evaluation_raw"])
-    result = owner.parse(files["file-digest-result.json"])
-    outcome = "no-change" if result["outcome"] == "match" else "reproduced"
     receipt = owner.require_no_change(materialized["response_raw"], incident)
     instruction = owner.make_instruction(incident)
+    result_raw, result = owner.payload_result({"payload/stdout": files["payload-stdout.txt"],
+        "payload/stderr": files["payload-stderr.txt"], "payload/evidence/0000": files["file-digest-result.json"]},
+        owner.parse(files["evidence-manifest.json"]), instruction,
+        owner.parse(files["preparation-manifest.json"]), owner.parse(files["sandbox-receipt.json"]))
+    owner.require(result_raw == files["file-digest-result.json"], "E_RELATION")
+    outcome = "no-change" if result["outcome"] == "match" else "reproduced"
     output = dict(files)
     provenance = owner._reproduction_provenance_values(context["request"]["id"], instruction,
         context["observation"], context["native_context"], context["consumer_source_raw"],
@@ -361,6 +365,411 @@ def _host_result_values(runtime_root, steps, export_raw, plan_sha256, control_de
         owner._export_values(validated), state["tree_terminated"], state["hard_stop"], state["cancelled"],
         state["driver_reported_error"], control_deadline, admission_mono, end_mono,
         terminated_at, state["stop_issued"])
+
+
+def _host_process_values(runtime_root, config, start_raw, raw_host, raw_clocks,
+                         admission_mono, export_raw, plan_sha256):
+    import math
+    import struct
+
+    spec = importlib.util.spec_from_file_location(
+        "malicious_host_process_values", Path(runtime_root) / "sandbox/v1/host-supervisor.py")
+    host = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(host)
+    if (type(raw_host) is not dict or set(raw_host) != {"process", "driver_rest", "signals"}
+            or type(raw_clocks) is not dict or set(raw_clocks) != {"wall", "monotonic"}
+            or any(type(raw_host[name]) is not list for name in raw_host)
+            or any(type(raw_clocks[name]) is not list for name in raw_clocks)
+            or type(admission_mono) not in (int, float) or not math.isfinite(admission_mono)
+            or type(plan_sha256) is not str or len(plan_sha256) != 64
+            or any(c not in "0123456789abcdef" for c in plan_sha256)):
+        raise ValueError("host process inputs")
+    if raw_host["signals"]:
+        raise ValueError("host signal interleave unavailable: source records signums without position")
+    rows = raw_host["process"]
+    ordinals = {}
+    for row in rows:
+        if (type(row) is not dict or set(row) != {"site", "ordinal", "return", "errno", "bytes", "timeout"}
+                or type(row["site"]) is not str or type(row["ordinal"]) is not int
+                or row["ordinal"] != ordinals.get(row["site"], 0)):
+            raise ValueError("host process ordinal")
+        ordinals[row["site"]] = row["ordinal"] + 1
+    clock_values = {}
+    for kind, events in raw_clocks.items():
+        values = []
+        for event in events:
+            if (type(event) is not dict or set(event) != {"site", "value"}
+                    or type(event["site"]) is not str or type(event["value"]) is not str
+                    or len(event["value"]) != 16
+                    or any(c not in "0123456789abcdef" for c in event["value"])):
+                raise ValueError("host clock row")
+            value = struct.unpack(">d", bytes.fromhex(event["value"]))[0]
+            if not math.isfinite(value) or kind == "monotonic" and (value < 0 or values and value < values[-1]):
+                raise ValueError("host clock value")
+            values.append(value)
+        clock_values[kind] = values
+    process_at = rest_at = driver_call = 0
+    clock_at = {"wall": 0, "monotonic": 0}
+    clock_ordinals = {"wall": {}, "monotonic": {}}
+
+    def clock(kind, site):
+        index = clock_at[kind]
+        if index >= len(raw_clocks[kind]) or raw_clocks[kind][index]["site"] != site:
+            raise ValueError("host clock order: " + site)
+        clock_at[kind] += 1
+        clock_ordinals[kind][site] = clock_ordinals[kind].get(site, 0) + 1
+        return clock_values[kind][index]
+
+    def mono(site):
+        return clock("monotonic", "sandbox/v1/host-supervisor.py:" + site + ":0")
+
+    def wall(site):
+        return clock("wall", "sandbox/v1/host-supervisor.py:" + site + ":0")
+
+    class _OuterRunFailure(Exception):
+        pass
+
+    def take(site):
+        nonlocal process_at
+        if process_at >= len(rows) or rows[process_at]["site"] != site:
+            next_mono = clock_at["monotonic"]
+            if (process_at == len(rows) and site in {
+                    "run_driver.close-devnull", "run_vm.close-read", "run_vm.close-log"}
+                    and next_mono < len(raw_clocks["monotonic"])
+                    and raw_clocks["monotonic"][next_mono]["site"] == "sandbox/v1/host-supervisor.py:1503:0"):
+                raise _OuterRunFailure()
+            raise ValueError("host process order: " + site)
+        row = rows[process_at]
+        process_at += 1
+        if (row["errno"] is not None and type(row["errno"]) is not int
+                or row["timeout"] is not None and type(row["timeout"]) is not bool):
+            raise ValueError("host process result")
+        return row
+
+    def plain(site, success=0, error=False):
+        row = take(site)
+        if row["bytes"] is not None or row["timeout"] is not None:
+            raise ValueError("host plain result")
+        if row["return"] != success or type(row["return"]) is not type(success) or row["errno"] is not None:
+            if not error or row["return"] is not None or type(row["errno"]) is not int:
+                raise ValueError("host plain result")
+        return row
+
+    def polled(site):
+        row = take(site)
+        if (row["errno"] is not None or row["bytes"] is not None or row["timeout"] is not None
+                or row["return"] is not None and type(row["return"]) is not int):
+            raise ValueError("host poll")
+        return row["return"]
+
+    def waited(site):
+        row = take(site)
+        if (row["errno"] is not None or row["bytes"] is not None
+                or type(row["timeout"]) is not bool
+                or row["timeout"] and row["return"] is not None
+                or not row["timeout"] and type(row["return"]) is not int):
+            raise ValueError("host wait")
+        return row["return"], row["timeout"]
+
+    argv_values, rest_values = _runtime_values(runtime_root, start_raw,
+        host.canonical({"body": config}), raw_host["driver_rest"])
+
+    def driver(operation, budget=2.0):
+        nonlocal driver_call, rest_at
+        call = driver_call
+        driver_call += 1
+        if operation == "argv":
+            expected = argv_values
+        else:
+            if (rest_at >= len(raw_host["driver_rest"])
+                    or raw_host["driver_rest"][rest_at]["call"] != call
+                    or raw_host["driver_rest"][rest_at]["operation"] != operation):
+                raise ValueError("host driver REST order")
+            expected = rest_values[rest_at]
+            rest_at += 1
+        row = plain("run_driver.open", error=True)
+        if row["errno"] is not None:
+            return None, b""
+        row = take("run_driver.spawn")
+        if (row["bytes"] is not None or row["timeout"] is not None
+                or not (type(row["return"]) is int and row["return"] > 0 and row["errno"] is None
+                        or row["return"] is None and type(row["errno"]) is int)):
+            raise ValueError("host driver spawn")
+        plain("run_driver.close-devnull")
+        if row["errno"] is not None:
+            return None, b""
+        deadline = mono("1636") + budget
+        chunks, total, incomplete, overflow = [], 0, False, False
+        while True:
+            if deadline - mono("1653") <= 0:
+                incomplete = True
+                break
+            row = take("run_driver.select")
+            if row["bytes"] is not None:
+                raise ValueError("host driver select")
+            if row["errno"] is not None:
+                if row["return"] is not None or row["timeout"] is not None:
+                    raise ValueError("host driver select error")
+                incomplete = True
+                break
+            if type(row["return"]) is not bool or row["timeout"] is not (not row["return"]):
+                raise ValueError("host driver select result")
+            if not row["return"]:
+                incomplete = True
+                break
+            row = take("run_driver.read")
+            if row["errno"] is not None:
+                if row["return"] is not None or row["bytes"] is not None or row["timeout"] is not None:
+                    raise ValueError("host driver read error")
+                incomplete = True
+                break
+            if (type(row["bytes"]) is not str or len(row["bytes"]) % 2
+                    or any(c not in "0123456789abcdef" for c in row["bytes"])
+                    or type(row["return"]) is not int or not 0 <= row["return"] <= 65536
+                    or len(row["bytes"]) != row["return"] * 2 or row["timeout"] is not None):
+                raise ValueError("host driver read")
+            chunk = bytes.fromhex(row["bytes"])
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > 65536:
+                overflow = True
+                break
+        plain("run_driver.close", error=True)
+        returncode = None
+
+        def kill_group():
+            nonlocal returncode
+            plain("run_driver.group-kill", error=True)
+            value, timed_out = waited("run_driver.group-reap")
+            if returncode is not None and (timed_out or value != returncode):
+                raise ValueError("host driver returncode changed after poll")
+            if not timed_out:
+                returncode = value
+
+        if incomplete:
+            kill_group()
+        else:
+            returncode = polled("run_driver.poll")
+            if returncode is None:
+                max(0.0, deadline - mono("1686"))
+                returncode, timed_out = waited("run_driver.wait")
+                if timed_out:
+                    plain("run_driver.kill", error=True)
+                    returncode, timed_out = waited("run_driver.reap")
+                    if timed_out:
+                        return None, b""
+            if overflow:
+                kill_group()
+        status, out = host._driver_output_values(returncode, chunks, incomplete, overflow)
+        if not incomplete and not overflow and status == 0:
+            if status != expected[0] or out != expected[1]:
+                raise ValueError("fixed driver output mismatch")
+        return status, out
+
+    admitted_at = wall("2771")
+    if mono("2794") != admission_mono:
+        raise ValueError("host admission clock mismatch")
+
+    def startup_status():
+        return "exceeded" if (mono("1503") - admission_mono) * 1000 > 10000 else "met"
+
+    def finish(run):
+        if process_at != len(rows) or rest_at != len(raw_host["driver_rest"]):
+            raise ValueError("unused host process observations")
+        if clock_at["wall"] != len(raw_clocks["wall"]):
+            raise ValueError("unused host wall observations")
+        suffix = raw_clocks["monotonic"][clock_at["monotonic"]:]
+        required_suffix = ["sandbox/v1/host-supervisor.py:" + site + ":0"
+                           for site in ("2882", "2885", "2891", "2895")]
+        if [row["site"] for row in suffix] != required_suffix:
+            raise ValueError("host finalization clock suffix")
+        return run, {"process": process_at, "driver_rest": rest_at, "driver_calls": driver_call,
+            "clocks": dict(clock_at), "clock_ordinals": clock_ordinals,
+            "admitted_at": admitted_at, "monotonic_remaining": suffix, "wall_remaining": []}
+
+    def stub():
+        status = startup_status()
+        return finish(host._stub_run_values(status, wall("2440")))
+
+    def calculate():
+        if mono("1516") - admission_mono >= 58.0:
+            return stub()
+        if process_at == len(rows):
+            return stub()
+        rc, out = driver("argv")
+        if rc != 0:
+            return stub()
+        # The fixed producer's exact bytes were checked inside driver().
+        parsed = host.json.loads(out)
+        if parsed["argv"][0] != config["runtime"]["vfkit"]:
+            return stub()
+        stopped_exit_status = parsed["stopped_exit_status"]
+        if mono("1516") - admission_mono >= 58.0:
+            return stub()
+        if process_at == len(rows):
+            return stub()
+        row = take("run_vm.spawn")
+        if row["bytes"] is not None or row["timeout"] is not None:
+            raise ValueError("host VM spawn")
+        if row["return"] is None:
+            return stub()
+        if type(row["return"]) is not int or row["return"] <= 0 or row["errno"] is not None:
+            raise ValueError("host VM pid")
+        row = take("run_vm.drain-start")
+        if type(row["return"]) is not bool or row["bytes"] is not None or row["timeout"] is not None:
+            raise ValueError("host drain start")
+        drain_started = row["return"]
+        if drain_started and row["errno"] is not None:
+            raise ValueError("host drain start success")
+        control_deadline = startup_status()
+        spawn_mono = mono("1945")
+        state = host._host_state()
+        returncode = None
+        stop_issued = hard_stop = False
+    
+        def kill():
+            nonlocal state
+            plain("run_vm.kill", error=True)
+            state, _ = host._host_step(state, {"kind": "killed"})
+    
+        def bounded(operation):
+            elapsed = mono("1758") - admission_mono
+            if elapsed >= 58.0:
+                return None, True
+            budget = 58.0 - elapsed
+            if elapsed < 50.0:
+                budget = min(budget, 50.0 - elapsed)
+            budget = max(0.01, min(2.0, budget))
+            status, out = driver(operation, budget)
+            if operation == "stop":
+                return status == 0, False
+            if status != 0:
+                return "error", False
+            text = out.decode("utf-8", "replace").strip()
+            return text if text in ("running", "stopped", "error") else "error", False
+    
+        while True:
+            state, action = host._host_step(state, {"kind": "clock", "cancelled": False,
+                "elapsed": mono("1974") - admission_mono, "sigkill": 58.0, "hardstop": 50.0})
+            if action == "kill":
+                kill()
+                break
+            if state["stop_requested"] and not state["stop_accepted"]:
+                accepted, overdue = bounded("stop")
+                if overdue:
+                    kill()
+                    break
+                state, _ = host._host_step(state, {"kind": "stop", "accepted": accepted})
+                if state["stop_accepted"]:
+                    stop_issued, hard_stop = state["stop_issued"], state["hard_stop"]
+            since_spawn = mono("2011") - spawn_mono
+            value, overdue = bounded("state")
+            if overdue:
+                kill()
+                break
+            state, action = host._host_step(state, {"kind": "state", "value": value})
+            if action == "confirmed":
+                break
+            returncode = polled("run_vm.poll")
+            primitive = {"kind": "poll", "state": value, "since_spawn": since_spawn,
+                "startup": 10.0, "exit_code": returncode, "stopped_exit_status": stopped_exit_status,
+                "rechecked": False}
+            state, action = host._host_step(state, primitive)
+            if action == "recheck":
+                budget = min(0.2, max(0.0, 58.0 - (mono("2045") - admission_mono)))
+                deadline = mono("2046") + budget
+                while returncode is None and mono("2047") < deadline:
+                    returncode = polled("run_vm.recheck-poll")
+                state, action = host._host_step(state, {**primitive, "exit_code": returncode, "rechecked": True})
+            if returncode is not None:
+                break
+            remaining = 0.1
+            for deadline in (50.0, 58.0):
+                left = deadline - (mono("2069") - admission_mono)
+                if left > 0:
+                    remaining = min(remaining, left)
+    
+        reaped = False
+        if state["escalated_sigkill"]:
+            terminated_at, end_mono = wall("2088"), mono("2089")
+        else:
+            abandon_mono = admission_mono + 58.0
+            if abandon_mono - mono("2101") > 0:
+                value, timed_out = waited("run_vm.wait")
+                if returncode is not None and (timed_out or value != returncode):
+                    raise ValueError("host VM returncode changed after poll")
+                if not timed_out:
+                    returncode = value
+                    reaped = True
+                else:
+                    plain("run_vm.reap-kill", error=True)
+                    if abandon_mono - mono("2111") > 0:
+                        returncode, timed_out = waited("run_vm.reap")
+                        reaped = not timed_out
+            else:
+                plain("run_vm.expired-kill", error=True)
+            terminated_at, end_mono = wall("2125"), mono("2132")
+        if drain_started:
+            plain("run_vm.drain-join", True)
+            row = take("run_vm.drain-alive")
+            if type(row["return"]) is not bool or any(row[k] is not None for k in ("errno", "bytes", "timeout")):
+                raise ValueError("host drain alive")
+            if row["return"]:
+                plain("run_vm.drain-stop-join", True)
+            row = take("run_vm.drain-final-alive")
+            if type(row["return"]) is not bool or any(row[k] is not None for k in ("errno", "bytes", "timeout")):
+                raise ValueError("host drain final alive")
+            drain_alive = row["return"]
+        else:
+            drain_alive = False
+        if not drain_alive:
+            plain("run_vm.close-read")
+            plain("run_vm.close-log")
+        state, _ = host._host_step(state, {"kind": "reap", "reaped": reaped,
+            "returncode": returncode, "stopped_exit_status": stopped_exit_status})
+        guest_capture, validated = None, None
+        if state["tree_terminated"]:
+            began = mono("2187")
+            row = take("run_vm.export-read")
+            if row["errno"] is not None:
+                if row["return"] is not None or row["bytes"] is not None or row["timeout"] is not None:
+                    raise ValueError("host export error")
+                records = None
+            else:
+                if (type(export_raw) is not bytes or row["timeout"] is not None
+                        or type(row["return"]) is not int or row["return"] != len(export_raw)
+                        or row["bytes"] != {"role": "sandbox-export-capture-bytes",
+                            "size_bytes": len(export_raw), "sha256": host.sha256_hex(export_raw)}):
+                    raise ValueError("host export bytes")
+                if process_at < len(rows) and rows[process_at]["site"] == "run_vm.export-read":
+                    # A close failure follows the successful read record before frame parsing.
+                    closing = take("run_vm.export-read")
+                    if (closing["return"] is not None or type(closing["errno"]) is not int
+                            or closing["bytes"] is not None or closing["timeout"] is not None):
+                        raise ValueError("host export close error")
+                    records = None
+                else:
+                    try:
+                        records = host.frame_read(export_raw)
+                        records, guest_capture = host._guest_capture_values(records)
+                    except host.FrameError:
+                        records = None
+            if mono("2195") - began > 5.0:
+                control_deadline = "exceeded"
+            validated = host.validate_export(records, plan_sha256)
+        run = host._run_result_values(host._export_values(validated), state["tree_terminated"], hard_stop,
+            False, state["driver_reported_error"], control_deadline, admission_mono, end_mono,
+            terminated_at, stop_issued)
+        run, consumed = finish(run)
+        consumed["guest_capture"] = guest_capture
+        return run, consumed
+
+    try:
+        return calculate()
+    except _OuterRunFailure:
+        return stub()
 
 
 def _host_stub_values(runtime_root, control_deadline, terminated_at):
@@ -848,7 +1257,7 @@ class _SeedAssembly:
         self.original_values = {}
         self.derived_outputs, self.output_relations, self.recorded_sources = {}, [], {}
         self.recorded_raw, self.output_positions, self.recorded_aliases = {}, {}, []
-        self.output_forms, self.output_write_sets = {}, {}
+        self.output_forms, self.output_write_sets, self.candidate_sources = {}, {}, {}
         self.root, self.failure, self.closed, self.raw = None, None, False, None
         self.exports = None
         self._released_holds = []
@@ -1604,7 +2013,7 @@ class _SeedAssembly:
         for bundle, role, environment in matching:
             self._bundle_namespace(bundle)
             files = bundle.files
-            record = module.c._json(files["shadow-record.json"], module.c.DOCUMENT_LIMIT, "E_STORE")
+            record = self._wrapper_parse(files["shadow-record.json"], "bundle-record")
             expected_form = "enforced-reproduction.v1" if phase == "reproduction" else record["body"]["record_form"]
             _seed_require(record["body"]["record_form"] == expected_form
                 and expected_form in ({"enforced-reproduction.v1"} if phase == "reproduction"
@@ -1719,11 +2128,36 @@ class _SeedAssembly:
                     for row in rows:
                         raw = files[row["path"]]
                         _seed_require(row["mode"] == "100644" and row["add_only"] is True
-                            and self._digest(raw, "recorded") == row["sha256"] and prefix + row["path"] not in indexed)
-                        name = "write-candidate-%03d" % len(indexed)
-                        self._write_value_file(raw, name, "write", "recorded", prefix + row["path"],
-                            "recorded", 8 * self.c.DOCUMENT_LIMIT)
-                        indexed[prefix + row["path"]] = name
+                            and self._digest(raw, "recorded") == row["sha256"])
+                        member = prefix + row["path"]
+                        identities = tuple((held.path, tuple((part.name, module.c._identity(part.before))
+                            for part in held.components)) for held in git.held)
+                        if member in indexed:
+                            old_reader, old_git, old_record, old_rows, old_raw, old_identities = self.candidate_sources[member]
+                            self._charge("E", len(old_record) + len(record_raw) + len(old_rows)
+                                + len(actual_rows) + len(old_raw) + len(raw), "recorded")
+                            _seed_require(old_reader is reader and old_git is git and old_identities == identities
+                                and old_record == record_raw and old_rows == actual_rows and old_raw == raw)
+                            target = next(held for held in self.output_holds
+                                if held.path == self.root.path + "/" + indexed[member])
+                            target.recheck("E_STORE", self.work, "M")
+                            _seed_require(target.before.st_size == len(raw))
+                            measured, offset = hashlib.sha256(), 0
+                            while offset < len(raw):
+                                count = min(65536, len(raw) - offset)
+                                observed = self._read(target.fd, count, offset, "recorded")
+                                measured.update(observed);self._charge("H", len(observed), "recorded")
+                                self._charge("E", len(observed) + count, "recorded")
+                                _seed_require(observed == raw[offset:offset + count])
+                                offset += count
+                            _seed_require(measured.hexdigest() == row["sha256"])
+                            target.recheck("E_STORE", self.work, "M")
+                        else:
+                            name = "write-candidate-%03d" % len(indexed)
+                            self._write_value_file(raw, name, "write", "recorded", member,
+                                "recorded", 8 * self.c.DOCUMENT_LIMIT)
+                            indexed[member] = name
+                            self.candidate_sources[member] = (reader, git, record_raw, actual_rows, raw, identities)
                 for held in git.held:held.recheck("E_STORE", self.work, "M")
                 reader.anchor.recheck("E_STORE")
             self._transfer()
@@ -1754,13 +2188,16 @@ class _SeedAssembly:
             manifest_name, complete_name = "manifests/manifest.json", "completion/COMPLETE.json"
             _seed_require(manifest_name in holders and complete_name in holders)
             manifest_raw, complete_raw = holders[manifest_name].raw, holders[complete_name].raw
-            manifest = module.parse(manifest_raw)
+            manifest = self._wrapper_parse(manifest_raw, "gate-output-manifest")
             rows = manifest["body"]["files"]
             _seed_require(type(rows) is list and all(type(row) is dict
                 and set(row) == {"name", "size_bytes", "sha256"} for row in rows)
                 and len({row["name"] for row in rows}) == len(rows)
-                and set(holders) == {row["name"] for row in rows} | {manifest_name, complete_name}
-                and module._completion_values(self.identifiers["gate"], manifest_raw) == complete_raw)
+                and set(holders) == {row["name"] for row in rows} | {manifest_name, complete_name})
+            rebuilt = module._completion_values(self.identifiers["gate"], manifest_raw, self.work)
+            self._charge("E", len(rebuilt) + len(complete_raw), "M")
+            self._wrapper_processed("gate-output-completion-compare", len(rebuilt) + len(complete_raw))
+            _seed_require(rebuilt == complete_raw)
             indexed = {row["name"]: row for row in rows}
             installed = {}
             for index, name in enumerate(sorted(holders)):
@@ -1923,6 +2360,20 @@ class _SeedAssembly:
         self.work.setdefault("wrapper_steps", []).append({"site": site, "input_bytes": amount})
         self.c._capture_copy_room(self.work, 0, False, read_only=True)
 
+    def _wrapper_parse(self, raw, site):
+        self.c._require(type(raw) is bytes and len(raw) <= self.c.DOCUMENT_LIMIT, "E_STORE")
+        self.work["wrapper_parse_attempt_bytes"] = len(raw)
+        self.work["wrapper_parse_unknown"] = True
+        value = json.loads(raw, object_pairs_hook=self.c._unique_object)
+        self._charge("R", len(raw), "M")
+        self.work["wrapper_parse_unknown"] = False
+        self.c._require(type(value) is dict, "E_STORE")
+        encoded = self._wrapper_encode(value)
+        self._charge("E", len(encoded) + len(raw), "M")
+        self._wrapper_processed(site + "-compare", len(encoded) + len(raw))
+        self.c._require(encoded == raw, "E_STORE")
+        return value
+
     def _wrapper_encode(self, value):
         before = self.work["read_bytes"]
         raw, failure = None, None
@@ -1931,6 +2382,7 @@ class _SeedAssembly:
         finally:
             processed = self.work["read_bytes"] - before
             try:
+                self._charge("C", processed, "M")
                 self.c._capture_account(self.work, "M", "read_bytes", processed)
             except BaseException as error:failure = _seed_first(failure, error)
         if failure is not None:
@@ -2441,9 +2893,18 @@ class _ReplayInputs:
                 _seed_require((old.st_dev, old.st_ino, old.st_uid, old.st_gid, old.st_mode)
                     == (current.st_dev, current.st_ino, current.st_uid, current.st_gid, current.st_mode))
                 held.components[index].before = current
+        def create_room():
+            c._capture_copy_room(self.work, 0, False)
+            c._capture_copy_budget_room(self.work, 0, False, files=1)
+            c._require(self.work["files"] < 256, "E_LIMIT")
+        def created():
+            self.work["files"] += 1
+            c._capture_account(self.work, "raw", "files", 1)
         try:
             before = destination.before
+            create_room()
             os.mkdir("refs", 0o700, dir_fd=destination.fd)
+            created()
             c._capture_observe(self.work, "M", "replay-git-directory", {"path": "refs", "return": 0})
             refreshed(destination, before)
             directories["refs"] = adopt(c._open_child(destination, "refs", True,
@@ -2459,7 +2920,9 @@ class _ReplayInputs:
                     if next_prefix not in directories:
                         parent.recheck("E_STORE", self.work, "M")
                         before = parent.before
+                        create_room()
                         os.mkdir(part, 0o700, dir_fd=parent.fd)
+                        created()
                         c._capture_observe(self.work, "M", "replay-git-directory", {"path": next_prefix, "return": 0})
                         refreshed(parent, before)
                         directories[next_prefix] = adopt(c._open_child(parent, part, True,
@@ -2472,9 +2935,10 @@ class _ReplayInputs:
                 raw = self.files[name]
                 _seed_require(type(raw) is bytes)
                 try:
+                    create_room()
                     target = os.open(parts[-1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                         0o400, dir_fd=parent.fd)
-                    self.work["files"] += 1
+                    created()
                     offset = 0
                     while offset < len(raw):
                         c._capture_copy_room(self.work, min(65536, len(raw) - offset), False)
@@ -2490,11 +2954,23 @@ class _ReplayInputs:
                     os.fsync(target)
                 except BaseException as error:
                     failure = error
+                    self._failed(error)
                     raise
                 finally:
                     if target is not None:
+                        close_error = None
                         try:os.close(target)
                         except BaseException as error:
+                            close_error = error
+                            self._failed(error)
+                            failure = _seed_first(failure, error)
+                        try:
+                            self.work["close_calls"] = self.work.get("close_calls", 0) + 1
+                            c._capture_observe(self.work, "M", "replay-git-close", {
+                                "return": 0 if close_error is None else -1,
+                                "errno": None if close_error is None else getattr(close_error, "errno", None)})
+                        except BaseException as error:
+                            self.work["accounting_incomplete"] = True
                             self._failed(error)
                             failure = _seed_first(failure, error)
                         if failure is not None:raise failure
@@ -2695,7 +3171,7 @@ class _ReplayCase:
         self.inputs._account("E", len(capture) + len(rebuilt), "M")
         completion = _capture_completion_values(runtime_root, occurrence["binding"]["attempt_id"], request_raw, rebuilt)
         self.inputs._account("C", len(completion), "W")
-        self.calculated[phase].update(capture=rebuilt, completion=completion, projection=projected)
+        self.calculated[phase].update(capture=rebuilt, completion=completion, projection=projected, receipt=receipt_raw)
         return rebuilt, completion, projected
 
     def compare(self, occurrence, context, role, environment, files):
@@ -2730,9 +3206,9 @@ class _ReplayCase:
         frozen = dict(self.calculated["reproduction"]["files"])
         frozen["bundle.json"] = self.calculated["reproduction"]["bundle"]
         _seed_require(files["sandbox-receipt.json"] == self.calculated["write"]["receipt"])
-        result, bundle = _writer_values(runtime_root, frozen, files, materialized, context)
-        self.calculated["write"].update(files=result, bundle=bundle)
-        return result, bundle
+        result, bundle, admission = _writer_values(runtime_root, frozen, files, materialized, context)
+        self.calculated["write"].update(files=result, bundle=bundle, admission=admission)
+        return result, bundle, admission
 
     def compare_member(self, occurrence, role, member, raw):
         _seed_require(type(raw) is bytes)

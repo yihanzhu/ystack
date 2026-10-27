@@ -664,9 +664,9 @@ char *ys_capture_document(const struct ys_control_capture *setup,
     struct json_writer writer = {0};
     if (setup->incomplete || control->incomplete || counters->incomplete ||
         setup->length + control->length + counters->length > 4U * 1024U * 1024U -
-            (sizeof "{\"control\":[],\"counters\":{},\"setup\":{}}" - 1U))
+            (sizeof "{\"control\":[],\"counters\":{},\"setup\":{}}\n" - 1U))
         return NULL;
-    if (!json_appendf(&writer, "{\"control\":[%s],\"counters\":{%s},\"setup\":{%s}}",
+    if (!json_appendf(&writer, "{\"control\":[%s],\"counters\":{%s},\"setup\":{%s}}\n",
         control->bytes ? control->bytes : "", counters->bytes ? counters->bytes : "",
         setup->bytes ? setup->bytes : "")) { free(writer.buf); return NULL; }
     *length = writer.len;

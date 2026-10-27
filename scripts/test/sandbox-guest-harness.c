@@ -594,13 +594,14 @@ static int cmd_inventory_capture(int argc, char **argv)
     result = ys_evidence_inventory_observed(dirfd, &names, &count,
                                              ys_capture_evidence_entry, &observation);
     json = ys_capture_document(&setup, &control, &counters, &length);
-    if (json != NULL) { puts(json); free(json); }
+    if (json != NULL) { if (fwrite(json, 1U, length, stdout) != length) return 1; free(json); }
     for (i = 0; i < count; i++) free(names[i]);
     free(names); free(counters.bytes);
     return result == YS_PLAN_OK && json != NULL ? 0 : 1;
 }
 
-static int capture_report_frame(const char *capture, size_t capture_length, unsigned char digest[32])
+static int capture_report_frame(const char *capture, size_t capture_length, unsigned char digest[32],
+                                const char *path)
 {
     struct ys_setup_observations raw = {0};
     struct ys_setup_flags flags;
@@ -608,7 +609,7 @@ static int capture_report_frame(const char *capture, size_t capture_length, unsi
     struct report_state report = {0};
     struct ys_frame_writer writer;
     struct ys_frame_reader reader;
-    FILE *file = tmpfile();
+    FILE *file = path == NULL ? tmpfile() : fopen(path, "w+b");
     char plan_hash[65], *json;
     size_t length, index = 0;
     int fd, result = 0;
@@ -655,7 +656,7 @@ done:
     fclose(file); return result;
 }
 
-static int cmd_observation_capture(void)
+static int cmd_observation_capture(int argc, char **argv)
 {
     struct ys_control_capture setup = {0}, control = {0}, counters = {0};
     struct ys_controller_event event;
@@ -666,7 +667,7 @@ static int cmd_observation_capture(void)
     struct ys_fan_stat fan;
     char *json, *large;
     unsigned char with_capture[32], without_capture[32];
-    size_t length, overhead = sizeof "{\"control\":[],\"counters\":{},\"setup\":{}}" - 1U;
+    size_t length, overhead = sizeof "{\"control\":[],\"counters\":{},\"setup\":{}}\n" - 1U;
     memset(&sv, 0, sizeof sv); memset(&st, 0, sizeof st);
     sv.f_blocks = 10; sv.f_bfree = 9; sv.f_frsize = 4096; sv.f_files = 3;
     st.st_mode = S_IFREG | 0600; st.st_size = 2; st.st_nlink = 1;
@@ -689,12 +690,14 @@ static int cmd_observation_capture(void)
     if (json == NULL || errno != EBUSY || strstr(json, "\"role\":\"exec\"") == NULL ||
         strstr(json, "\"errno\":5,\"return\":-1,\"tag\":\"fan-reply\"") == NULL ||
         strstr(json, "\"setup\":{\"a_read\"") == NULL || strlen(json) != length) return 1;
-    if (!capture_report_frame(json, length, with_capture)) return 1;
-    puts(json); free(json);
+    if (length == 0U || json[length - 1U] != '\n' || json[length] != '\0' ||
+        !capture_report_frame(json, length, with_capture, argc == 3 ? argv[2] : NULL)) return 1;
+    if (fwrite(json, 1U, length, stdout) != length) return 1;
+    free(json);
     ys_capture_io(&setup, "a_read", 0, 0, "", 0);
     json = ys_capture_document(&setup, &control, &counters, &length);
     if (!setup.incomplete || json != NULL ||
-        !capture_report_frame(NULL, 0U, without_capture) ||
+        !capture_report_frame(NULL, 0U, without_capture, NULL) ||
         memcmp(with_capture, without_capture, sizeof with_capture) != 0) return 1;
     free(setup.bytes); free(control.bytes); free(counters.bytes);
     memset(&setup, 0, sizeof setup); memset(&control, 0, sizeof control); memset(&counters, 0, sizeof counters);
@@ -705,16 +708,39 @@ static int cmd_observation_capture(void)
     memset(large + 11U, 'a', length - 12U); large[length - 1U] = '\"'; large[length] = '\0';
     ys_capture_raw(&setup, large, length);
     json = ys_capture_document(&setup, &control, &counters, &length);
-    if (json == NULL || length != 4U * 1024U * 1024U) return 1;
+    if (json == NULL || length != 4U * 1024U * 1024U || json[length - 1U] != '\n' ||
+        json[length] != '\0' || strlen(json) != length) return 1;
     free(json);
     memset(&frame, 0, sizeof frame); frame.offset = 123;
     if (!ys_capture_fits(&frame, (off_t)(123U + length + 77U), length) ||
         ys_capture_fits(&frame, (off_t)(123U + length + 76U), length)) return 1;
+    memmove(setup.bytes + setup.length, setup.bytes + setup.length - 1U, 2U);
+    setup.bytes[setup.length - 1U] = 'a'; setup.length++;
+    if (ys_capture_document(&setup, &control, &counters, &length) != NULL) return 1;
+    setup.length--; setup.bytes[setup.length - 1U] = '\"'; setup.bytes[setup.length] = '\0';
     ys_capture_io(&counters, "extra", 0, 0, "", 0);
     if (ys_capture_document(&setup, &control, &counters, &length) != NULL ||
-        !capture_report_frame(NULL, 0U, without_capture) ||
+        !capture_report_frame(NULL, 0U, without_capture, NULL) ||
         memcmp(with_capture, without_capture, sizeof with_capture) != 0) return 1;
     free(large); free(setup.bytes); free(counters.bytes);
+#ifdef YSTACK_SUPERVISOR_TEST
+    {
+        extern size_t ys_test_report_cap_limit;
+        extern int ys_test_format_failure;
+        memset(&setup, 0, sizeof setup); memset(&counters, 0, sizeof counters);
+        length = 17U;
+        ys_test_report_cap_limit = 1U;
+        json = ys_capture_document(&setup, &control, &counters, &length);
+        ys_test_report_cap_limit = 0U;
+        if (json != NULL || length != 17U) return 1;
+        ys_test_format_failure = 1;
+        json = ys_capture_document(&setup, &control, &counters, &length);
+        ys_test_format_failure = 0;
+        if (json != NULL || length != 17U ||
+            !capture_report_frame(NULL, 0U, without_capture, NULL) ||
+            memcmp(with_capture, without_capture, sizeof with_capture) != 0) return 1;
+    }
+#endif
     memset(&control, 0, sizeof control);
     large = calloc(4096U, 1);
     if (large == NULL) return 1;
@@ -750,7 +776,8 @@ int main(int argc, char **argv)
     if (strcmp(argv[1], "exec-report") == 0) return cmd_exec_report(argc, argv);
     if (strcmp(argv[1], "verify") == 0) return cmd_verify_report(argc, argv);
     if (strcmp(argv[1], "observation-values") == 0 && argc == 2) return cmd_observation_values();
-    if (strcmp(argv[1], "observation-capture") == 0 && argc == 2) return cmd_observation_capture();
+    if (strcmp(argv[1], "observation-capture") == 0 && (argc == 2 || argc == 3))
+        return cmd_observation_capture(argc, argv);
     if (strcmp(argv[1], "inventory-capture") == 0) return cmd_inventory_capture(argc, argv);
     usage();
     return 2;
