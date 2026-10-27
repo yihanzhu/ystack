@@ -4638,4 +4638,169 @@ if __name__ == '__main__':
 PY_CLEANUP_NAMES
 pass 'cleanup retains complete ordered raw names at its four original levels; shared empty checks preserve original authority, errors, close order and capture-only failure'
 
+"$python" - "$supervisor_src" <<'PY_PHASE_B_VALUES'
+import ast
+import copy
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+FUNCTIONS = {'phase_b_reasons', '_phase_b_package_values', '_phase_b_identity_values',
+    'environment_unlisted', 'control_mismatch', 'evaluation_satisfied', 'parse_record',
+    'parse_manifest', 'parse_incident', 'record_manifest_reasons', 'subject_mismatch',
+    'candidate_reasons', 'manifest_entries_ok', 'phase_b_json_ok', 'bounded_json_nesting',
+    'canonical', 'sha256_hex', 'is_int', 'require', 'refuse', 'Refusal', 'entry_for',
+    'kernel_config_ok', 'kernel_config_values', '_measured_identity_values'}
+CONSTANTS = {'REQUEST_JSON_DEPTH', 'INCIDENT_BODY_KEYS', 'INCIDENT_ENVELOPE_KEYS',
+    'MANIFEST_ENTRY_MODES', 'CANDIDATE_EXPORT_BYTES', 'KERNEL_REQUIRED_OPTIONS',
+    'KERNEL_HZ_OPTIONS', 'KERNEL_CONFIG_DEVICES'}
+
+
+ORIGINAL_PHASE_B = 'def phase_b_reasons(config, request_body, package, identity_fds, installed_digests,\n                     registry_environments, accepted_environments, host_config_raw,\n                     host_supervisor_raw, python_raw):\n    """Every R4.2 reason, sorted and unique, plus the measured identities\n    dict for the receipt and the raw verifier bytes measure_identities\n    already read (findings-477-r8.md finding 3 -- the caller\'s own single\n    use of them, never a second read through that fd). Collects every\n    applicable reason (not just the first), matching the receipt\'s own\n    sorted-unique reason_ids."""\n    test_slow("YSTACK_TEST_SLOW_PHASE_B_MS")\n    subject, control = request_body["subject"], request_body["control"]\n    reasons = set()\n    if environment_unlisted(config, registry_environments, accepted_environments, subject):\n        reasons.add("launch.environment-unlisted")\n    if control_mismatch(control, installed_digests, package["evaluation.json"]):\n        reasons.add("launch.control-mismatch")\n    if not evaluation_satisfied(package["evaluation.json"], control):\n        reasons.add("launch.evaluation-not-satisfied")\n    record = parse_record(package["record.json"])\n    manifest = parse_manifest(package["manifest.json"])\n    incident_body = parse_incident(package["incident.json"])\n    reasons |= record_manifest_reasons(package["record.json"], record,\n                                        package["manifest.json"], manifest, subject)\n    if subject_mismatch(record, package["incident.json"], incident_body, subject):\n        reasons.add("launch.subject-mismatch")\n    reasons |= candidate_reasons(manifest, package["candidate"])\n    instruction_raw = package["instruction"]\n    if sha256_hex(instruction_raw) != request_body["instruction_sha256"]:\n        reasons.add("launch.instruction-mismatch")\n    measured, kernel_config_raw, verifier_raw = measure_identities(\n        identity_fds, instruction_raw, host_config_raw, host_supervisor_raw, python_raw)\n    if any(state == "unobserved" for state, _ in measured.values()):\n        reasons.add("launch.identity-missing")\n    if kernel_config_raw is not None and not kernel_config_ok(kernel_config_raw):\n        reasons.add("launch.kernel-config")\n    accepted_entry = entry_for(accepted_environments, subject["environment_id"])\n    if accepted_entry is not None:\n        accepted_identities = accepted_entry["identities"]\n        if any(state == "observed" and digest not in accepted_identities[slot]\n               for slot, (state, digest) in measured.items() if slot != "verification_instructions"):\n            reasons.add("launch.identity-unaccepted")\n        if measured["verification_instructions"][1] not in accepted_identities["verification_instructions"]:\n            reasons.add("launch.instruction-unaccepted")\n    return sorted(reasons), measured, verifier_raw\n'
+
+
+def load(path, inline=False):
+    tree = ast.parse(Path(path).read_bytes())
+    selected = []
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in FUNCTIONS:
+            selected.append(node)
+        elif isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id in CONSTANTS for t in node.targets):
+            selected.append(node)
+    if inline:
+        selected = [node for node in selected if not isinstance(node, ast.FunctionDef) or node.name != 'phase_b_reasons']
+        selected += ast.parse(ORIGINAL_PHASE_B).body
+    ns = {'json': json, 'hashlib': hashlib}
+    exec(compile(ast.Module(body=selected, type_ignores=[]), str(path), 'exec'), ns)
+    return ns
+
+
+def fixture(ns, change):
+    enc, sha = ns['canonical'], ns['sha256_hex']
+    config = {'environment_id': 'environment.fixture'}
+    registry = [{'environment_id': config['environment_id'], 'target_repository_id': 'repository.fixture'}]
+    installed = {key: sha(key.encode()) for key in ('control_policy', 'control_decision',
+        'control_policy_set', 'evaluator_driver', 'evaluator_program')}
+    control = {key.removeprefix('control_') + '_sha256': value for key, value in installed.items()}
+    evaluation = enc({'schema_version': 1, 'kind': 'sandbox_policy_evaluation', 'body': {
+        'verdict': 'satisfied', 'policy_set': {'sha256': control['policy_set_sha256']},
+        'policy_ref': {'sha256': control['policy_sha256']}, 'decision_ref': {'sha256': control['decision_sha256']}}})
+    control['sandbox_evaluation_sha256'] = sha(evaluation)
+    source = {'repository_id': 'repository.fixture', 'hash_algorithm': 'sha1', 'commit_id': '1' * 40, 'tree_id': '2' * 40}
+    candidate = {'commit_id': '1' * 40, 'tree_id': '2' * 40}
+    manifest = enc({'entries': []})
+    record = enc({'source': source, 'candidate': candidate, 'manifest_sha256': sha(manifest)})
+    incident = {key: None for key in ns['INCIDENT_BODY_KEYS']}
+    incident.update(target_repository_id='repository.fixture', git_revision_ref={key: source[key]
+        for key in ('repository_id', 'hash_algorithm', 'commit_id')})
+    incident = enc({'schema_version': 1, 'kind': 'shadow_incident_record', 'id': 'incident.fixture', 'body': incident})
+    instruction = b'ordinary finite instruction\n'
+    package = {'evaluation.json': evaluation, 'record.json': record, 'manifest.json': manifest,
+        'incident.json': incident, 'candidate': [], 'instruction': instruction}
+    subject = {'environment_id': config['environment_id'], 'environment_entry_sha256': sha(enc(registry[0])),
+        'target_repository_id': 'repository.fixture', 'source': source,
+        'candidate': candidate | {'preparation_record_sha256': sha(record), 'manifest_sha256': sha(manifest)},
+        'incident_sha256': sha(incident)}
+    body = {'subject': subject, 'control': control, 'instruction_sha256': sha(instruction)}
+    kernel = ('\n'.join(key + '=y' for key in ns['KERNEL_REQUIRED_OPTIONS']) + '\nCONFIG_HZ_250=y\n').encode()
+    digests = {key: sha(key.encode()) for key in ('guest_kernel', 'guest_init', 'guest_supervisor',
+        'image', 'toolchain', 'runtime_vfkit', 'runtime_driver', 'vm_service')}
+    digests['dyld_cache_files'] = []
+    measured, _, verifier = ns['_measured_identity_values'](digests, b'ordinary verifier', kernel,
+        instruction, b'ordinary config', b'ordinary source', b'ordinary python')
+    accepted = [{'environment_id': config['environment_id'], 'identities': {
+        slot: [value] for slot, (_state, value) in measured.items()}}]
+    if change == 'environment': config['environment_id'] = 'other'
+    if change == 'control': installed['control_policy'] = '0' * 64
+    if change == 'evaluation': package['evaluation.json'] = b'null\n'
+    if change == 'record': package['record.json'] = b'not json'
+    if change == 'manifest': package['manifest.json'] = b'{}'
+    if change == 'incident': package['incident.json'] = b'{}\n'
+    if change == 'candidate': package['candidate'] = [b'unlisted']
+    if change == 'instruction': body['instruction_sha256'] = '0' * 64
+    if change == 'identity': measured['guest_kernel'] = ('unobserved', None)
+    if change == 'kernel': kernel = b'CONFIG_PCI=n\n'
+    if change == 'accepted': accepted[0]['identities']['guest_kernel'] = []
+    if change == 'instruction-accepted': accepted[0]['identities']['verification_instructions'] = []
+    if change == 'no-accepted': accepted = []
+    return config, body, package, installed, registry, accepted, measured, kernel, verifier
+
+
+class Marked(Exception): pass
+
+
+def execute(ns, change, failure=None):
+    config, body, package, installed, registry, accepted, measured, kernel, verifier = fixture(ns, change)
+    trace = []
+    def event(value):
+        trace.append(value)
+        if failure == len(trace): raise Marked(value)
+    class Tracked(dict):
+        def __getitem__(self, key):
+            event(('getitem', self.label, key)); return super().__getitem__(key)
+        def get(self, key, default=None):
+            event(('get', self.label, key)); return super().get(key, default)
+        def values(self):
+            event(('values', self.label)); return super().values()
+        def items(self):
+            event(('items', self.label)); return super().items()
+    def tracked(value, label):
+        result = Tracked(value); result.label = label; return result
+    body['subject'] = tracked(body['subject'], 'subject')
+    body['control'] = tracked(body['control'], 'control')
+    if accepted:
+        accepted[0]['identities'] = tracked(accepted[0]['identities'], 'accepted-identities')
+        accepted[0] = tracked(accepted[0], 'accepted-entry')
+    originals = {}
+    helper_names = ('environment_unlisted', 'control_mismatch', 'evaluation_satisfied', 'parse_record',
+        'parse_manifest', 'parse_incident', 'record_manifest_reasons', 'subject_mismatch',
+        'candidate_reasons', 'sha256_hex', 'kernel_config_ok', 'entry_for')
+    for name in helper_names:
+        original = ns[name]; originals[name] = original
+        def wrapped(*args, _name=name, _original=original, **kwargs):
+            event(('helper', _name)); return _original(*args, **kwargs)
+        ns[name] = wrapped
+    def measure(*args):
+        event(('measure_identities', args))
+        return tracked(measured, 'measured'), kernel, verifier
+    ns['measure_identities'] = measure
+    ns['test_slow'] = lambda key: event(('test_slow', key))
+    try:
+        result = ns['phase_b_reasons'](tracked(config, 'config'), tracked(body, 'body'),
+            tracked(package, 'package'), 'ordinary-not-fds', tracked(installed, 'installed'), registry,
+            accepted, b'ordinary config', b'ordinary source', b'ordinary python')
+        result = ('return', result)
+    except Exception as error:
+        result = ('error', type(error).__name__, error.args)
+    finally:
+        ns.update(originals)
+    return result, trace
+
+
+def run(after, before):
+    checks = 0
+    changes = (None, 'environment', 'control', 'evaluation', 'record', 'manifest', 'incident',
+        'candidate', 'instruction', 'identity', 'kernel', 'accepted', 'instruction-accepted', 'no-accepted')
+    for change in changes:
+        expected, events = execute(before, change)
+        assert execute(after, change) == (expected, events), change
+        if change is None:
+            assert expected[0] == 'return' and expected[1][0] == []
+        else:
+            assert expected[0] == 'return' and expected[1][0], change
+        checks += 1
+    _, events = execute(before, None)
+    for failure in range(1, len(events) + 1):
+        assert execute(after, None, failure) == execute(before, None, failure), failure
+        checks += 1
+    return checks
+
+
+if __name__ == '__main__':
+    print(json.dumps({'phase_b_checks': run(load(sys.argv[1]), load(sys.argv[2]) if len(sys.argv) > 2 else load(sys.argv[1], inline=True)),
+        'measurement_syscalls': 'NOTRUN', 'qualification': 'NOT_PROVED'}))
+PY_PHASE_B_VALUES
+pass 'phase B shares original package and measured identity reasons across the unchanged measurement boundary, preserving getters, hashes, parses, errors and order'
+
 /usr/bin/printf 'total assertions: %s\n' "$passes" >&2

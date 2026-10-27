@@ -1710,6 +1710,16 @@ def phase_b_reasons(config, request_body, package, identity_fds, installed_diges
     applicable reason (not just the first), matching the receipt's own
     sorted-unique reason_ids."""
     test_slow("YSTACK_TEST_SLOW_PHASE_B_MS")
+    reasons, subject, instruction_raw = _phase_b_package_values(config, request_body, package,
+        installed_digests, registry_environments, accepted_environments)
+    measured, kernel_config_raw, verifier_raw = measure_identities(
+        identity_fds, instruction_raw, host_config_raw, host_supervisor_raw, python_raw)
+    reasons = _phase_b_identity_values(reasons, subject, accepted_environments, measured, kernel_config_raw)
+    return reasons, measured, verifier_raw
+
+
+def _phase_b_package_values(config, request_body, package, installed_digests,
+                            registry_environments, accepted_environments):
     subject, control = request_body["subject"], request_body["control"]
     reasons = set()
     if environment_unlisted(config, registry_environments, accepted_environments, subject):
@@ -1729,8 +1739,10 @@ def phase_b_reasons(config, request_body, package, identity_fds, installed_diges
     instruction_raw = package["instruction"]
     if sha256_hex(instruction_raw) != request_body["instruction_sha256"]:
         reasons.add("launch.instruction-mismatch")
-    measured, kernel_config_raw, verifier_raw = measure_identities(
-        identity_fds, instruction_raw, host_config_raw, host_supervisor_raw, python_raw)
+    return reasons, subject, instruction_raw
+
+
+def _phase_b_identity_values(reasons, subject, accepted_environments, measured, kernel_config_raw):
     if any(state == "unobserved" for state, _ in measured.values()):
         reasons.add("launch.identity-missing")
     if kernel_config_raw is not None and not kernel_config_ok(kernel_config_raw):
@@ -1743,7 +1755,7 @@ def phase_b_reasons(config, request_body, package, identity_fds, installed_diges
             reasons.add("launch.identity-unaccepted")
         if measured["verification_instructions"][1] not in accepted_identities["verification_instructions"]:
             reasons.add("launch.instruction-unaccepted")
-    return sorted(reasons), measured, verifier_raw
+    return sorted(reasons)
 
 
 # --- R5.1 freeze by copy: package bytes copied into supervisor-owned files

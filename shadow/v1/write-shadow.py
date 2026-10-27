@@ -88,8 +88,8 @@ class _Workspace:
             self.python = self.hold(Path(sys.executable), c.EXECUTABLE_LIMIT)
             self.consumer = self.hold(SOURCE / "shadow/v1/_consumer.py", c.EXECUTABLE_LIMIT)
             def command(role, argv, executable_sha256, component_sha256):
-                self.commands.append({"role": role, "argv_sha256": sha(canonical(argv)),
-                    "executable_sha256": executable_sha256, "component_sha256": component_sha256})
+                self.commands.append(e._command_values(role, e._command_argv_values(argv),
+                    executable_sha256, component_sha256))
             self.resolver = (e._DarwinUUIDResolver(self.python, self.consumer, self.deadline, command)
                              if sys.platform == "darwin" else None)
             group = e._DarwinGroupReader(self.resolver) if self.resolver is not None else None
@@ -209,9 +209,8 @@ class _Workspace:
             executable_sha = self.python.sha256
         else:
             raise e.Refusal("E_RELATION")
-        self.commands.append({"role": role, "argv_sha256": sha(canonical(argv)),
-            "executable_sha256": executable_sha,
-            "component_sha256": self.components[component].sha256})
+        self.commands.append(e._command_values(role, e._command_argv_values(argv),
+            executable_sha, self.components[component].sha256))
         result = e.run_bounded(role, argv, env=self.env, deadline=self.deadline, **options)
         self.recheck()
         return result
@@ -666,9 +665,8 @@ def _verify_write(ws, incident, input_raw, record_raw, manifest_raw, evaluation_
         supervisor.recheck("E_RELATION")
         argv = ["/usr/bin/sudo", "-n", "-u", f"#{ws.anchor.config['principal_uid']}", "--",
             sys.executable, str(Path(c.ANCHOR) / "host-supervisor.py"), "launch"]
-        ws.commands.append({"role": "sandbox-launch-boundary", "argv_sha256": sha(canonical(argv)),
-            "executable_sha256": sudo.sha256,
-            "component_sha256": sha(supervisor.read(c.EXECUTABLE_LIMIT, "E_RELATION"))})
+        ws.commands.append(e._command_values("sandbox-launch-boundary", e._command_argv_values(argv),
+            sudo.sha256, sha(supervisor.read(c.EXECUTABLE_LIMIT, "E_RELATION"))))
         require(e._launch(ws.anchor, frame, ws.deadline) == 0, "E_RUNTIME")
         sudo.recheck()
         supervisor.recheck("E_RELATION")

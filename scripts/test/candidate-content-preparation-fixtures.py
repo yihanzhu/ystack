@@ -7637,3 +7637,120 @@ def raw16_C3_cleanup_decoder(root: Path) -> dict:
             else:raise AssertionError('cleanup mutation accepted: ' + mutation)
         results.append({'label': label, 'native_result': native, 'rows': capture['rows'], 'rejected': rejected})
     return {'cases': results, 'retained_fixture_root': str(workspace), 'native_qualification': 'NOTRUN'}
+
+
+def raw16_C3_accounted_io(root: Path, evidence=None, deletion=False) -> dict:
+    import tempfile
+    import sys
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('ystack_shadow_consumer', root / 'shadow/v1/_consumer.py')
+    c = importlib.util.module_from_spec(spec);sys.modules[spec.name] = c;spec.loader.exec_module(c)
+    spec = importlib.util.spec_from_file_location('C3_io_replay', root / 'evals/v1/replay-malicious.py')
+    replay = importlib.util.module_from_spec(spec);sys.modules[spec.name] = replay;spec.loader.exec_module(replay)
+    if deletion:
+        import ast,textwrap
+        source_text = (root / 'evals/v1/replay-malicious.py').read_text()
+        tree = ast.parse(source_text)
+        cls = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == '_ReplayCase')
+        function = next(node for node in cls.body if isinstance(node, ast.FunctionDef) and node.name == '_replay_write_bytes')
+        text = textwrap.dedent(ast.get_source_segment(source_text, function))
+        guard = '    self.c._capture_copy_room(self.work, len(raw), False, case=True)\n'
+        assert text.count(guard) == 1
+        namespace = dict(vars(replay))
+        exec(compile(text.replace(guard, '', 1), '<actual-first-M-admission-deleted>', 'exec'), namespace)
+        replay._ReplayCase._replay_write_bytes = namespace['_replay_write_bytes']
+    results = []
+    labels = ('case-room',) if deletion else ('normal', 'case-room', 'partial-account', 'first-cancel')
+    for label in labels:
+        work = owner = inputs = source_hold = None
+        error = None
+        try:
+            base = Path(tempfile.mkdtemp(prefix='ystack-C3-accounted-io-')).resolve()
+            source, destination = base / 'I', base / 'work'
+            source.mkdir(mode=0o700);destination.mkdir(mode=0o700)
+            os.chown(source, os.getuid(), os.getgid());os.chown(destination, os.getuid(), os.getgid())
+            raw = b'{"synthetic":"original"}\n'
+            (source / 'incident.json').write_bytes(raw);(source / 'incident.json').chmod(0o400)
+            os.chown(source / 'incident.json', os.getuid(), os.getgid())
+            row = {'occurrence': 'case', 'role': 'original-input', 'member': 'incident.json',
+                'file': 'incident.json', 'size_bytes': len(raw), 'sha256': c.digest(raw), 'kind': 'raw'}
+            core = {'case_id': 'malicious.checked-file-bytes', 'entries': [row], 'originals': {}, 'occurrences': []}
+            resolver = c._DarwinUUIDResolver() if sys.platform == 'darwin' else None
+            source_hold = c._open_held(str(source), True,
+                c._store_rule(os.getuid(), os.getgid(), 0o700, True, resolver), 'E_STORE')
+            work = {};c._capture_work_values(work, 'C3-IO-ordinary')
+            inputs = replay._ReplayInputs(source_hold, core, work)
+            owner = object.__new__(replay._ReplayCase)
+            owner.inputs, owner.c, owner.work, owner._replay_io_holds = inputs, c, work, []
+            parent = c._open_held(str(destination), True,
+                c._store_rule(os.getuid(), os.getgid(), 0o700, True, resolver), 'E_STORE',
+                recording_work=work, accounting_kind='M')
+            owner._replay_hold_work(parent)
+            opened, written, closed = os.open, os.write, os.close
+            account = c._capture_account
+            target = [];writes = [];closes = []
+            fault = MemoryError('actual write followed by accounting failure')
+            cancelled = InterruptedError('actual owned close cancelled');cancelled._scope_signal_cancel = True
+            def opening(name, flags, *args, **kwargs):
+                fd = opened(name, flags, *args, **kwargs)
+                if name == 'value.json' and flags & os.O_WRONLY:target.append(fd)
+                return fd
+            def writing(fd, value):
+                count = written(fd, value[:2] if label == 'partial-account' else value)
+                if fd in target:writes.append(count)
+                return count
+            def closing(fd):
+                result = closed(fd)
+                if fd in target:
+                    closes.append(fd)
+                    if label == 'first-cancel':raise cancelled
+                return result
+            def accounting(values, kind, field, amount):
+                if label == 'partial-account' and values is work and field == 'write_bytes' and target:
+                    raise fault
+                return account(values, kind, field, amount)
+            before = {key: work[key] for key in ('read_bytes', 'write_bytes', 'physical_bytes', 'files')}
+            if label == 'case-room':work['write_bytes'] = 64 * c.DOCUMENT_LIMIT - 1
+            os.open, os.write, os.close, c._capture_account = opening, writing, closing, accounting
+            error = None
+            try:
+                if label == 'normal':
+                    seed = owner._replay_mkdir(parent, 'seed')
+                    assert seed.listdir() == []
+                owner._replay_write_bytes(parent, 'value.json', b'abcd')
+            except BaseException as caught:error = caught
+            finally:
+                os.open, os.write, os.close, c._capture_account = opened, written, closed, account
+            if label == 'normal':
+                assert error is None and (destination / 'value.json').read_bytes() == b'abcd'
+                assert sum(writes) == 4 and work['write_bytes'] - before['write_bytes'] == 4
+                assert work['physical_bytes'] - before['physical_bytes'] == 4
+                assert len(closes) == 1
+            elif label == 'case-room':
+                assert error is not None and not target and not writes and not (destination / 'value.json').exists(), 'M pre-admission allowed a target open'
+            elif label == 'partial-account':
+                assert error is fault and writes == [2] and len(closes) == 1
+                assert (destination / 'value.json').read_bytes() == b'ab'
+                assert work['write_bytes'] - before['write_bytes'] == work['physical_bytes'] - before['physical_bytes'] == 2
+                assert work['write_accounting_incomplete']
+            else:
+                assert error is cancelled and len(closes) == 1 and sum(writes) == 4
+            results.append({'case': label, 'rejected': error is not None, 'actual_write_counts': writes,
+                'writer_close_attempts': len(closes), 'retained_root': str(base),
+                'known': {key: work[key] for key in ('read_bytes', 'write_bytes', 'physical_bytes', 'files')},
+                'simulated_case_carry': label == 'case-room', 'full_case_constructor': 'NOTRUN'})
+        finally:
+            primary = sys.exc_info()[1] or error
+            failure = primary
+            if owner is not None:failure = owner._replay_close_io(failure)
+            if inputs is not None:
+                try:inputs.close(failure)
+                except BaseException as later:failure = replay._ReplayCase._replay_io_first(failure, later)
+            if source_hold is not None:
+                try:source_hold.close()
+                except BaseException as later:failure = replay._ReplayCase._replay_io_first(failure, later)
+            if evidence is not None and work is not None:
+                path = Path(evidence) / ("accounted-io-" + label + ".json")
+                with path.open("x") as stream:json.dump(work, stream, sort_keys=True)
+            if failure is not None and failure is not primary:raise failure
+    return {'controls': results, 'native_qualification': 'NOTRUN'}

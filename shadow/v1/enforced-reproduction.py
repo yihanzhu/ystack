@@ -708,7 +708,7 @@ class FixedSudo:
 
     @property
     def sha256(self) -> str:
-        return sha(canonical(list(c._identity(self.before))))
+        return _sudo_identity_values(c._identity(self.before))
 
     def recheck(self, code: str = "E_DEPENDENCY") -> None:
         current, named = os.fstat(self.fd), os.lstat("/usr/bin/sudo")
@@ -989,6 +989,19 @@ class _DarwinGroupReader(c._DarwinGroupReader):
             return self.resolver.owner.contains(gid, CancellationSignals.active)
         except c.Refusal as exc:
             raise Refusal(exc.code) from exc
+
+
+def _command_argv_values(argv):
+    return sha(canonical(argv))
+
+
+def _command_values(role, argv_sha256, executable_sha256, component_sha256):
+    return {"role": role, "argv_sha256": argv_sha256,
+        "executable_sha256": executable_sha256, "component_sha256": component_sha256}
+
+
+def _sudo_identity_values(identity):
+    return sha(canonical(list(identity)))
 
 
 def _native_provenance_values(context: dict) -> dict:
@@ -2323,8 +2336,8 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
         commands: list[dict] = []
         def record_command(role: str, argv: list[str], executable_sha256: str,
                            component_sha256: str) -> None:
-            commands.append({"role": role, "argv_sha256": sha(canonical(argv)),
-                "executable_sha256": executable_sha256, "component_sha256": component_sha256})
+            commands.append(_command_values(role, _command_argv_values(argv),
+                executable_sha256, component_sha256))
         resolver = (_DarwinUUIDResolver(python_file, consumer_source, deadline, record_command)
                     if sys.platform == "darwin" else None)
         group_reader = _DarwinGroupReader(resolver) if resolver is not None else None

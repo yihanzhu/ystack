@@ -153,6 +153,217 @@ def verifier_observation_value_controls():
             check(outcomes[0][0]==(expected if site is None else expected[:expected.index(site)+1]))
 verifier_observation_value_controls()
 
+def sudo_storage_value_controls():
+    import os,stat,tempfile
+    c=g.c
+    values=[]
+    global sudo_storage_control_work
+    sudo_storage_control_work=[]
+    for index,name in enumerate(('/', '/usr', '/usr/bin', '/usr/bin/sudo')):
+        state=dict(dev=1,ino=index+1,mode=(stat.S_IFREG|0o4755) if index==3 else (stat.S_IFDIR|0o755),
+            uid=0,gid=0,nlink=1,size=123 if index==3 else 0,mtime_ns=10,ctime_ns=20)
+        values.append(dict(role='sudo',name=os.fsencode(name).hex(),before=state,after=dict(state),
+            named_after=dict(state),access_acl=[],default_acl=None,directory_names=None,read_error=None))
+    components=[]
+    for index,(name,row) in enumerate(zip((None,'usr','bin','sudo'),values)):
+        components.append(dict(name=None if name is None else os.fsencode(name).hex(),
+            **{key:row[key] for key in ('before','after','named_after','access_acl','default_acl')}))
+    acquired=dict(attempt_id='sudo.control',entries=[values[-1]],
+        held=[dict(path=os.fsencode('/usr/bin/sudo').hex(),components=components)],error=None)
+    projected=c._sudo_storage_projection_values([acquired],'sudo.control')
+    check(projected==values)
+    original=c._sudo_storage_stat_values(projected,'darwin')
+    check(original==values[-1]['before'])
+    check(c.digest(c.canonical(list(c._identity_values(original)))) != c.digest(b'sudo binary bytes'))
+    for fault in ('after','named','uid','acl','duplicate','path','error','leaf'):
+        changed=copy.deepcopy(acquired)
+        if fault=='after':changed['held'][0]['components'][-1]['after']['ino']+=1
+        elif fault=='named':changed['held'][0]['components'][-1]['named_after']=None
+        elif fault=='uid':changed['held'][0]['components'][0]['before']['uid']=1
+        elif fault=='acl':changed['held'][0]['components'][0]['access_acl']=[(1,1000,4)]
+        elif fault=='path':changed['held'][0]['path']=os.fsencode('/private/copied-sudo').hex()
+        elif fault=='error':changed['error']={'category':'OSError','errno':5,'code':None}
+        elif fault=='leaf':changed['entries'][0]['before']['size']+=1
+        candidates=[changed,changed] if fault=='duplicate' else [changed]
+        try:
+            rows=c._sudo_storage_projection_values(candidates,'sudo.control')
+            c._sudo_storage_stat_values(rows,'darwin')
+        except (c.Refusal,TypeError):check(True)
+        else:raise AssertionError('bad sudo source relation accepted: '+fault)
+    class Marked(KeyboardInterrupt):
+        _scope_signal_cancel=True
+    class AppendFailure(list):
+        def append(self,value):raise injected
+    for fault in ('ok','memory','marked','cap','observe','cancel-close'):
+        with tempfile.TemporaryDirectory(prefix='sudo-storage-') as temporary:
+            target=pathlib.Path(temporary)/'source';target.write_bytes(b'synthetic sudo companion')
+            work={};c._capture_work_values(work,'sudo-storage-control')
+            resolver=c._DarwinUUIDResolver() if sys.platform=='darwin' else None
+            def rule(fd,state,ancestor):
+                rule.observations[fd]=c._acl_state(fd,resolver)
+                return True
+            rule.observations={}
+            held=c._open_held(str(target),False,rule,'E_STORE')
+            anchor=c.Anchor.__new__(c.Anchor)
+            anchor.recording_work={};c._capture_work_values(anchor.recording_work,'sudo-storage-window')
+            anchor.private_observations={'unusable':False};anchor.storage_entry_count=0;anchor.runtime_companions=[]
+            injected=Marked('retention') if fault in ('marked','cancel-close') else MemoryError('retention')
+            if fault in ('memory','marked','cancel-close'):anchor.private_observations['storage_reads']=AppendFailure()
+            if fault=='cap':anchor.storage_entry_count=65536
+            metadata,named,observe=c._metadata,c._named_metadata,c._capture_observe
+            descriptors=[component.fd for component in held.components];closed=[];secondary=Marked('close-secondary')
+            os_close=c.os.close
+            def no_metadata(*args):raise AssertionError('retention added a metadata read')
+            def observed(*args,**kwargs):
+                if fault=='observe' and args[2]=='sudo-storage-retention':raise MemoryError('observe')
+                return observe(*args,**kwargs)
+            def close(fd):
+                os_close(fd);closed.append(fd)
+                if fault=='cancel-close' and len(closed)==1:raise secondary
+            c._metadata,c._named_metadata,c._capture_observe=no_metadata,no_metadata,observed
+            primary=None
+            try:
+                result=anchor._retain_sudo_storage(held,'sudo.control',work,None)
+                if fault in ('marked','cancel-close'):
+                    check(result is injected)
+                    c.os.close=close
+                    anchor._cancel_sudo_storage(result,None,held,work)
+                    check(not held.components and len(closed)==len(descriptors) and len(set(closed))==len(descriptors))
+                else:
+                    check(result is None)
+                    check(all(os.fstat(fd).st_ino>0 for fd in descriptors))
+                if fault=='ok':
+                    check(not anchor.private_observations['unusable'])
+                    entry=anchor.private_observations['storage_reads'][0]
+                    check(entry['attempt_id']=='sudo.control' and entry['held'][0]['path']==os.fsencode(str(target)).hex())
+                    check(entry['entries'][0]['before']==c._stat_values(held.before))
+                else:check(anchor.private_observations['unusable'] and work.get('sudo_storage_incomplete'))
+            except BaseException as error:primary=error;raise
+            finally:
+                c._metadata,c._named_metadata,c._capture_observe,c.os.close=metadata,named,observe,os_close
+                try:
+                    if held.components:held.close()
+                except BaseException as closing:
+                    if primary is None:raise
+                sudo_storage_control_work.append({'fault':fault,'work':work,'recording_work':anchor.recording_work,
+                    'storage':anchor.private_observations,'actual_closed_fds':closed,'source_qualification':'SYNTHETIC_TMP_ONLY'})
+sudo_storage_value_controls()
+
+def scope_reader_observation_value_controls():
+    spec=importlib.util.spec_from_file_location('scope_observation_value_controls',root/'scope/v1/read-shadow-evidence.py')
+    r=importlib.util.module_from_spec(spec);sys.modules[spec.name]=r;spec.loader.exec_module(r)
+    def original_inline(scope_id,scope_ref,shadow_set_ref,rows,git,commands,workflow,coverage):
+        result={'schema_version':1,'kind':'scope_shadow_evidence_observation','id':scope_id,
+            'body':{'scope_ref':scope_ref,'shadow_set_ref':shadow_set_ref,'rows':rows,
+                'git':git,'commands':commands,**({'coverage':coverage} if workflow else {})}}
+        return r.c.canonical(result)
+    scope_ref={'schema_version':1,'kind':'workflow_scope','id':'scope.control','sha256':'a'*64}
+    set_ref={'schema_version':1,'kind':'shadow_evidence_set','id':'set.control','sha256':'b'*64}
+    git={'repository_kind':'bare','hash_algorithm':'sha1','config_sha256':'c'*64}
+    rows=[{'record_ref':{'sha256':'d'*64}}];commands=[{'role':'control'}]
+    for workflow,coverage in ((False,None),(True,{'state':'stale'}),(True,{'state':'authenticated','request_ref':scope_ref})):
+        args=('scope.control',scope_ref,set_ref,rows,git,commands,workflow,coverage)
+        raw=r._scope_reader_observation_values(*args)
+        check(raw==original_inline(*args))
+        value=r.parse(raw)
+        check(('coverage' in value['body'])==workflow)
+        if workflow:check(value['body']['coverage']==coverage)
+    original=r.c.canonical
+    class Marked(KeyboardInterrupt):
+        _scope_signal_cancel=True
+    for failure in (OSError(5,'canonical-control'),Marked('canonical-control')):
+        seen=[]
+        for fn in (original_inline,r._scope_reader_observation_values):
+            def canonical(value):seen.append(value);raise failure
+            r.c.canonical=canonical
+            try:fn('scope.control',scope_ref,set_ref,rows,git,commands,False,None)
+            except BaseException as error:check(error is failure)
+            else:raise AssertionError('canonical failure swallowed')
+            finally:r.c.canonical=original
+        check(len(seen)==2 and seen[0]==seen[1])
+scope_reader_observation_value_controls()
+
+def reader_authentication_value_controls():
+    spec=importlib.util.spec_from_file_location('reader_authentication_controls',root/'scope/v1/read-shadow-evidence.py')
+    r=importlib.util.module_from_spec(spec);sys.modules[spec.name]=r;spec.loader.exec_module(r)
+    def documents_inline(files):
+        incident,record=r.parse(files['incident.json']),r.parse(files['shadow-record.json'])
+        body,revision=record['body'],incident['body']['git_revision_ref']
+        return incident,body,revision
+    def environment_inline(rows,body):
+        return [row for row in rows if row['environment_id']==body['environment']['environment_id']]
+    def receipt_inline(files,accepted):
+        receipt=r.parse(files['sandbox-receipt.json'])
+        for slot,value in receipt['body']['identities'].items():
+            r.require(set(value)=={'state','sha256'} and value['state']=='observed'
+                and value['sha256'] in accepted[0]['identities'][slot])
+        r.require(set(receipt['body']['identities'])==r.c.IDENTITY_SLOTS)
+        return receipt
+    revision={'commit_id':'a'*40,'hash_algorithm':'sha1'}
+    incident={'body':{'git_revision_ref':revision}}
+    body={'environment':{'environment_id':'environment.control'}}
+    files={'incident.json':r.c.canonical(incident),'shadow-record.json':r.c.canonical({'body':body})}
+    identities={slot:{'state':'observed','sha256':'b'*64} for slot in sorted(r.c.IDENTITY_SLOTS)}
+    receipt_files={'sandbox-receipt.json':r.c.canonical({'body':{'identities':identities}})}
+    accepted=[{'identities':{slot:['b'*64] for slot in sorted(r.c.IDENTITY_SLOTS)}}]
+    rows=[{'environment_id':'environment.other'},{'environment_id':'environment.control'}]
+    def compare(left,right,args):
+        outcomes=[]
+        for fn in (left,right):
+            try:outcomes.append(('value',fn(*args)))
+            except Exception as error:outcomes.append(('error',type(error),error.args))
+        check(outcomes[0]==outcomes[1])
+    for changed in ({}, {'incident.json':b'{invalid'}, {'shadow-record.json':b'{invalid'},
+                    {'incident.json':b'{}'}, {'shadow-record.json':b'{}'}):
+        compare(documents_inline,r._authentication_documents_values,(dict(files,**changed),))
+    for given_rows,given_body in ((rows,body),([],{}),([{}],body),(rows,{})):
+        compare(environment_inline,r._authentication_environment_values,(given_rows,given_body))
+    compare(receipt_inline,r._authentication_receipt_values,(receipt_files,accepted))
+    for fault in ('malformed','missing','state','hash','extra-slot','missing-slot','accepted-slot'):
+        documents=copy.deepcopy(receipt_files);selection=copy.deepcopy(accepted)
+        value=copy.deepcopy(identities);slot=next(iter(value))
+        if fault=='malformed':documents['sandbox-receipt.json']=b'{invalid'
+        elif fault=='missing':documents['sandbox-receipt.json']=b'{}'
+        else:
+            if fault=='state':value[slot]['state']='unknown'
+            elif fault=='hash':value[slot]['sha256']='c'*64
+            elif fault=='extra-slot':value['extra']={'state':'observed','sha256':'b'*64}
+            elif fault=='missing-slot':del value[slot]
+            elif fault=='accepted-slot':del selection[0]['identities'][slot]
+            documents['sandbox-receipt.json']=r.c.canonical({'body':{'identities':value}})
+        compare(receipt_inline,r._authentication_receipt_values,(documents,selection))
+    original_parse=r.parse
+    class Marked(KeyboardInterrupt):
+        _scope_signal_cancel=True
+    for ordinal in (1,2):
+        for marked in (False,True):
+            failure=Marked(ordinal) if marked else OSError(5,'parse-control')
+            observed=[]
+            for fn in (documents_inline,r._authentication_documents_values):
+                trace=[]
+                def parse(raw):
+                    trace.append(raw)
+                    if len(trace)==ordinal:raise failure
+                    return original_parse(raw)
+                r.parse=parse
+                try:fn(files)
+                except BaseException as error:check(error is failure)
+                else:raise AssertionError('parse failure swallowed')
+                finally:r.parse=original_parse
+                observed.append(trace)
+            check(observed[0]==observed[1]==[files['incident.json'],files['shadow-record.json']][:ordinal])
+    for owner,inline,args in ((r._authentication_environment_values,environment_inline,(rows,body)),
+                              (r._authentication_receipt_values,receipt_inline,(receipt_files,accepted))):
+        failure=Marked('actual-value-getter')
+        class GetFailure(dict):
+            def __getitem__(self,key):raise failure
+        fault_args=([GetFailure(rows[0])],body) if owner is r._authentication_environment_values else (receipt_files,[GetFailure(accepted[0])])
+        for fn in (inline,owner):
+            try:fn(*fault_args)
+            except BaseException as error:check(error is failure)
+            else:raise AssertionError('getter cancellation swallowed')
+reader_authentication_value_controls()
+
 def source_configuration_input_controls():
     import os,tempfile,types,traceback
     c=g.c

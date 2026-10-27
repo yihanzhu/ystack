@@ -780,6 +780,59 @@ while [ "$i" -lt "$case_count" ]; do
 done
 }
 
+replay_malicious_cases() {
+  local replay="$runtime/evals/v1/replay-malicious.py" replay_sha
+  local case_doc case_work replay_out replay_err replay_canonical replay_status observation
+  [ -n "$malicious_input_root" ] &&
+    [ "$seed_source" = shadow.malicious-instructions.v1 ] || emit_error E_RUNTIME
+  replay_sha=$("$jq_bin" -er '
+    [.body.shadow_closure[] | select(.path == "evals/v1/replay-malicious.py")] as $rows |
+    if ($rows | length) == 1 and
+       ($rows[0].sha256 | type == "string" and test("\\A[0-9a-f]{64}\\z"))
+    then $rows[0].sha256 else error("E_RUNTIME") end
+  ' "$program_evaluator" 2>/dev/null) || emit_error E_RUNTIME
+  verify_hash "$replay_sha" "$replay" || emit_error E_STALE
+  i=0
+  while [ "$i" -lt "$case_count" ]; do
+    case_id=$("$jq_bin" -r ".body.cases[$i].case_id" "$input" 2>/dev/null) || emit_error E_RUNTIME
+    case "$case_id" in
+      malicious.checked-file-bytes|malicious.commit-message) ;;
+      malicious.incident-symptom-text|malicious.unread-forge-text) ;;
+      *) emit_error E_RUNTIME ;;
+    esac
+    case_doc="$work/malicious-case-$i.json"
+    case_work="$work/malicious-work-$i"
+    replay_out="$work/malicious-$i.out"
+    replay_err="$work/malicious-$i.err"
+    replay_canonical="$work/malicious-$i.canonical"
+    (
+      set -o noclobber
+      "$jq_bin" -S -c ".body.cases[$i]" "$input" >"$case_doc"
+    ) 2>/dev/null || emit_error E_RUNTIME
+    /bin/mkdir -m 0700 "$case_work" 2>/dev/null || emit_error E_RUNTIME
+    (
+      set -o noclobber
+      : >"$replay_out" && : >"$replay_err" && : >"$replay_canonical"
+    ) 2>/dev/null || emit_error E_RUNTIME
+    replay_status=0
+    /usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin TMPDIR="$case_work" \
+      /usr/bin/python3 -I -S -B "$replay" "$runtime" "$malicious_input_root" \
+      "$case_doc" "$case_work" \
+      </dev/null 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- 10>&- \
+      >"$replay_out" 2>"$replay_err" || replay_status=$?
+    [ "$replay_status" -eq 0 ] && [ ! -s "$replay_err" ] || emit_error E_RUNTIME
+    verify_hash "$replay_sha" "$replay" || emit_error E_STALE
+    single_root "$replay_out" || emit_error E_RUNTIME
+    "$jq_bin" -S -c . "$replay_out" >"$replay_canonical" 2>/dev/null || emit_error E_RUNTIME
+    /usr/bin/cmp -s "$replay_out" "$replay_canonical" || emit_error E_RUNTIME
+    "$jq_bin" -e --arg case_id "$case_id" '.case_id == $case_id' "$replay_out" \
+      >/dev/null 2>&1 || emit_error E_RUNTIME
+    observation=$(/bin/cat "$replay_out" 2>/dev/null) || emit_error E_RUNTIME
+    record_observation "$observation"
+    i=$((i + 1))
+  done
+}
+
 # One run over the seed set named by $input, into $work/run-result.json. Run mode
 # calls it once; dashboard mode calls it once per supplied pair to reproduce
 # the supplied result.
@@ -798,6 +851,7 @@ produce_result() {
     adapters.provider-normalizers.v1|control.duty-separation.v1) ;;
     control.risk-gates.v1|control.sandbox-policy.v1) ;;
     core.stage-run.v2|reviews.independent-verdicts.v1) ;;
+    shadow.malicious-instructions.v1) ;;
     orchestrator.reconciliation-plan.v1|orchestrator.state-scanner.v1) ;;
     *) emit_error E_SHAPE ;;
   esac
@@ -807,6 +861,7 @@ produce_result() {
   /usr/bin/printf '[' > "$observations" || emit_error E_RUNTIME
 
   case "$seed_source" in
+    shadow.malicious-instructions.v1) replay_malicious_cases ;;
     reviews.independent-verdicts.v1) replay_review_cases ;;
     core.stage-run.v2) replay_stage_run_cases ;;
     orchestrator.state-scanner.v1) replay_scanner_cases ;;

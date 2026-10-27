@@ -73,6 +73,113 @@ def ref(raw):
             "id": document["id"], "sha256": c.digest(raw)}
 
 
+def _scope_reader_observation_values(scope_id, scope_ref, shadow_set_ref, sorted_rows,
+                                     git_values, commands, workflow, coverage_result):
+    result = {"schema_version": 1, "kind": "scope_shadow_evidence_observation", "id": scope_id,
+        "body": {"scope_ref": scope_ref, "shadow_set_ref": shadow_set_ref,
+            "rows": sorted_rows, "git": git_values, "commands": commands,
+            **({"coverage": coverage_result} if workflow else {})}}
+    return c.canonical(result)
+
+
+def _authentication_installed_names_values():
+    return {"accepted-identities.json": "accepted_set", "registry.json": "registry",
+        "evaluator-driver.txt": "evaluator_driver", "evaluator-program.txt": "evaluator_program",
+        "policy.json": "control_policy", "decision.json": "control_decision", "policy-set.json": "control_policy_set"}
+
+
+def _authentication_store_names_values():
+    return {"receipt.json": "sandbox-receipt.json", "payload/stdout": "payload-stdout.txt",
+        "payload/stderr": "payload-stderr.txt", "payload/evidence-manifest.json": "evidence-manifest.json",
+        "payload/evidence/0000": "file-digest-result.json"}
+
+
+def _authentication_registry_matches_values(registry, body):
+    return (registry["proof_state"] == "native-qualified"
+            and registry["target_repository_id"] == body["target_repository_id"])
+
+
+def _provenance_document_values(files, attempt):
+    document = parse(files["consumer-provenance.json"])
+    keys = {"activation_state", "authority", "instruction_utf8", "instruction_sha256",
+        "observation", "observation_sha256", "native_release", "commands", "helper_source_sha256",
+        "helper_build_record_sha256", "helper_executable_sha256", "consumer_source_sha256", "python_sha256", "jq_sha256"}
+    require(set(document) == {"schema_version", "kind", "id", "body"}
+            and type(document["schema_version"]) is int and document["schema_version"] == 1
+            and document["kind"] == "shadow_consumer_provenance" and document["id"] == attempt
+            and type(document["body"]) is dict and set(document["body"]) == keys)
+    body = document["body"]
+    return keys, body
+
+
+def _provenance_content_matches_values(body, instruction, observation):
+    return (body["activation_state"] == "inactive" and body["authority"] == "none"
+            and type(body["instruction_utf8"]) is str and body["instruction_utf8"].encode() == instruction
+            and body["instruction_sha256"] == c.digest(instruction)
+            and same(body["observation"], parse(observation)) and body["observation_sha256"] == c.digest(observation))
+
+
+def _provenance_native_shape_matches_values(native):
+    hashes = {"source_sha256", "build_script_sha256", "build_record_sha256", "binary_locator_sha256",
+              "binary_sha256", "python_locator_sha256", "python_sha256", "dependency_record_sha256"}
+    return (type(native) is dict and set(native) == hashes | {"context_version", "binary_size", "python_abi", "loader_mode"}
+            and type(native["context_version"]) is int and native["context_version"] == 2
+            and all(c._sha(native[key]) for key in hashes)
+            and type(native["binary_size"]) is int and 0 < native["binary_size"] <= c.EXECUTABLE_LIMIT
+            and native["loader_mode"] == "rtld-now-local.v1" and type(native["python_abi"]) is str)
+
+
+def _provenance_native_identity_matches_values(native, body):
+    return (1 <= len(native["python_abi"]) <= 128
+                and all(0x20 <= ord(char) <= 0x7e for char in native["python_abi"])
+                and native["python_sha256"] == body["python_sha256"])
+
+
+def _provenance_roles_values():
+    return {
+        "incident-validation": "shadow/v1/validate-incident.sh", "materialization": "adapters/local-git-materializer/v1/materialize.sh",
+        "sandbox-bound-evaluation": "control/v1/evaluate-bound-sandbox.sh",
+        "sandbox-receipt-check": "enforcement/v1/check-sandbox-receipt.sh",
+        "trace-validation": "telemetry/v1/validate-trace-ledger.sh",
+        "write-seed-conversion": "maintenance/v1/incident-to-eval.sh",
+        "write-materialization-input": "shadow/v1/write-materialization-input.jq",
+        "write-git-inspection": "shadow/v1/write-shadow.py",
+        "materializer-input-validation": "adapters/local-git-materializer/v1/protocol.jq",
+        "materializer-response-validation": "adapters/local-git-materializer/v1/protocol.jq",
+        "qualified-identity-validation": "shadow/v1/qualified-identity.jq",
+        "candidate-preparation": "preparation/v1/prepare-candidate.py", "candidate-inspection": "preparation/v1/prepare-candidate.py"}
+
+
+def _provenance_commands_values(body, fixed):
+    commands = body["commands"]
+    require(type(commands) is list and 1 <= len(commands) <= 4096)
+    for row in commands:
+        require(type(row) is dict and set(row) == {"role", "argv_sha256", "executable_sha256", "component_sha256"}
+                and type(row["role"]) is str and row["role"] in fixed
+                and all(c._sha(row[key]) for key in ("argv_sha256", "executable_sha256", "component_sha256"))
+                and (row["executable_sha256"], row["component_sha256"]) == fixed[row["role"]])
+    return commands
+
+
+def _authentication_documents_values(files):
+    incident, record = parse(files["incident.json"]), parse(files["shadow-record.json"])
+    body, revision = record["body"], incident["body"]["git_revision_ref"]
+    return incident, body, revision
+
+
+def _authentication_environment_values(rows, body):
+    return [row for row in rows if row["environment_id"] == body["environment"]["environment_id"]]
+
+
+def _authentication_receipt_values(files, accepted):
+    receipt = parse(files["sandbox-receipt.json"])
+    for slot, value in receipt["body"]["identities"].items():
+        require(set(value) == {"state", "sha256"} and value["state"] == "observed"
+                and value["sha256"] in accepted[0]["identities"][slot])
+    require(set(receipt["body"]["identities"]) == c.IDENTITY_SLOTS)
+    return receipt
+
+
 def _origin_projection_values(document, snapshots, attempt_id, config):
     require(set(document) == {"schema_version", "kind", "id", "body"}
             and type(document["schema_version"]) is int and document["schema_version"] == 1
@@ -831,27 +938,19 @@ class _Reader:
 
     def _authenticate(self, files):
         anchor = self.anchor_for()
-        fixed = {"accepted-identities.json": "accepted_set", "registry.json": "registry",
-            "evaluator-driver.txt": "evaluator_driver", "evaluator-program.txt": "evaluator_program",
-            "policy.json": "control_policy", "decision.json": "control_decision", "policy-set.json": "control_policy_set"}
+        fixed = _authentication_installed_names_values()
         require(all(files[name] == anchor.installed[role][0] for name, role in fixed.items()))
-        incident, record = parse(files["incident.json"]), parse(files["shadow-record.json"])
-        body, revision = record["body"], incident["body"]["git_revision_ref"]
+        incident, body, revision = _authentication_documents_values(files)
         require(same(revision, self.authentication_revision or self.scope_body["qualified_identity"]["target_revision"])
                 and body["target_repository_id"] == self.scope_body["target_repository_id"])
-        selected = [row for row in anchor.registry[1] if row["environment_id"] == body["environment"]["environment_id"]]
-        accepted = [row for row in anchor.accepted[1] if row["environment_id"] == body["environment"]["environment_id"]]
+        selected = _authentication_environment_values(anchor.registry[1], body)
+        accepted = _authentication_environment_values(anchor.accepted[1], body)
         require(len(selected) == len(accepted) == 1)
         registry = selected[0]
-        require(registry["proof_state"] == "native-qualified"
-                and registry["target_repository_id"] == body["target_repository_id"]
+        require(_authentication_registry_matches_values(registry, body)
                 and registry["source_root_commit"] == (self.scope_body["coverage"]["coverage_base"]["commit_id"]
                     if "coverage" in self.scope_body else revision["commit_id"]))
-        receipt = parse(files["sandbox-receipt.json"])
-        for slot, value in receipt["body"]["identities"].items():
-            require(set(value) == {"state", "sha256"} and value["state"] == "observed"
-                    and value["sha256"] in accepted[0]["identities"][slot])
-        require(set(receipt["body"]["identities"]) == c.IDENTITY_SLOTS)
+        receipt = _authentication_receipt_values(files, accepted)
         observation = c.verifier_observation(anchor, body["environment"]["environment_id"], body["target_repository_id"])
         observer_path = self.capture("verifier-" + str(len(self.inputs)) + ".json", observation)
         provenance = parse(files["consumer-provenance.json"])
@@ -887,9 +986,7 @@ class _Reader:
             instruction, self.enforced.control(anchor, evaluation))
         store = c._HeldStoreRead(anchor, launch["id"])
         self.owned.append(store)
-        mapping = {"receipt.json": "sandbox-receipt.json", "payload/stdout": "payload-stdout.txt",
-            "payload/stderr": "payload-stderr.txt", "payload/evidence-manifest.json": "evidence-manifest.json",
-            "payload/evidence/0000": "file-digest-result.json"}
+        mapping = _authentication_store_names_values()
         require(set(store.snapshots) - {"capture.json", "sandbox-export.bin"} == set(mapping)
                 and all(store.snapshots[key] == files[name] for key, name in mapping.items()))
         self.origin(parse(files["origin-observation.json"]), store.snapshots, launch["id"], anchor)
@@ -923,53 +1020,23 @@ class _Reader:
         return _record_refs_values(files, body, attempt, anchor.config)
 
     def provenance(self, files, instruction, observation, attempt, write):
-        document = parse(files["consumer-provenance.json"])
-        keys = {"activation_state", "authority", "instruction_utf8", "instruction_sha256",
-            "observation", "observation_sha256", "native_release", "commands", "helper_source_sha256",
-            "helper_build_record_sha256", "helper_executable_sha256", "consumer_source_sha256", "python_sha256", "jq_sha256"}
-        require(set(document) == {"schema_version", "kind", "id", "body"}
-                and type(document["schema_version"]) is int and document["schema_version"] == 1
-                and document["kind"] == "shadow_consumer_provenance" and document["id"] == attempt
-                and type(document["body"]) is dict and set(document["body"]) == keys)
-        body = document["body"]
+        keys, body = _provenance_document_values(files, attempt)
         source = "shadow/v1/write-shadow.py" if write else "shadow/v1/enforced-reproduction.py"
-        require(body["activation_state"] == "inactive" and body["authority"] == "none"
-                and type(body["instruction_utf8"]) is str and body["instruction_utf8"].encode() == instruction
-                and body["instruction_sha256"] == c.digest(instruction)
-                and same(body["observation"], parse(observation)) and body["observation_sha256"] == c.digest(observation)
+        require(_provenance_content_matches_values(body, instruction, observation)
                 and body["consumer_source_sha256"] == self.package_sources[source].sha256
                 and body["python_sha256"] == self.python.sha256 and body["jq_sha256"] == self.jq.sha256
                 and body["helper_source_sha256"] == c.HELPER_SOURCE_SHA256
                 and all(c._sha(body[key]) for key in keys if key.endswith("sha256")))
         native = body["native_release"]
-        hashes = {"source_sha256", "build_script_sha256", "build_record_sha256", "binary_locator_sha256",
-                  "binary_sha256", "python_locator_sha256", "python_sha256", "dependency_record_sha256"}
-        require(type(native) is dict and set(native) == hashes | {"context_version", "binary_size", "python_abi", "loader_mode"}
-                and type(native["context_version"]) is int and native["context_version"] == 2
-                and all(c._sha(native[key]) for key in hashes)
-                and type(native["binary_size"]) is int and 0 < native["binary_size"] <= c.EXECUTABLE_LIMIT
-                and native["loader_mode"] == "rtld-now-local.v1" and type(native["python_abi"]) is str
+        require(_provenance_native_shape_matches_values(native)
                 and self._runtime_equal("scope.soabi", native["python_abi"], sysconfig.get_config_var("SOABI"))
-                and 1 <= len(native["python_abi"]) <= 128
-                and all(0x20 <= ord(char) <= 0x7e for char in native["python_abi"])
-                and native["python_sha256"] == body["python_sha256"]
+                and _provenance_native_identity_matches_values(native, body)
                 and native["python_locator_sha256"] == c.digest(sys.executable.encode()))
         for key, relative in (("source_sha256", "shadow/v1/_cancel_release.c"),
                               ("build_script_sha256", "shadow/v1/build-cancel-release.sh")):
             held = self.hold(PACKAGE / relative, c.EXECUTABLE_LIMIT)
             require(native[key] == held.sha256)
-        roles = {
-            "incident-validation": "shadow/v1/validate-incident.sh", "materialization": "adapters/local-git-materializer/v1/materialize.sh",
-            "sandbox-bound-evaluation": "control/v1/evaluate-bound-sandbox.sh",
-            "sandbox-receipt-check": "enforcement/v1/check-sandbox-receipt.sh",
-            "trace-validation": "telemetry/v1/validate-trace-ledger.sh",
-            "write-seed-conversion": "maintenance/v1/incident-to-eval.sh",
-            "write-materialization-input": "shadow/v1/write-materialization-input.jq",
-            "write-git-inspection": "shadow/v1/write-shadow.py",
-            "materializer-input-validation": "adapters/local-git-materializer/v1/protocol.jq",
-            "materializer-response-validation": "adapters/local-git-materializer/v1/protocol.jq",
-            "qualified-identity-validation": "shadow/v1/qualified-identity.jq",
-            "candidate-preparation": "preparation/v1/prepare-candidate.py", "candidate-inspection": "preparation/v1/prepare-candidate.py"}
+        roles = _provenance_roles_values()
         fixed = {"helper-version": (body["helper_executable_sha256"], body["helper_source_sha256"]),
             "jq-version": (self.jq.sha256, self.jq.sha256),
             "darwin-acl-uuid-resolution": (self.python.sha256, self.consumer.sha256),
@@ -985,13 +1052,7 @@ class _Reader:
                 self.jq.sha256 if role in {"write-materialization-input", "materializer-input-validation",
                     "materializer-response-validation", "qualified-identity-validation"} else self.bash.sha256)
             fixed[role] = (executable, component.sha256)
-        commands = body["commands"]
-        require(type(commands) is list and 1 <= len(commands) <= 4096)
-        for row in commands:
-            require(type(row) is dict and set(row) == {"role", "argv_sha256", "executable_sha256", "component_sha256"}
-                    and type(row["role"]) is str and row["role"] in fixed
-                    and all(c._sha(row[key]) for key in ("argv_sha256", "executable_sha256", "component_sha256"))
-                    and (row["executable_sha256"], row["component_sha256"]) == fixed[row["role"]])
+        _provenance_commands_values(body, fixed)
 
     def commit(self, oid):
         raw = self.git.read(["cat-file", "commit", oid], c.DOCUMENT_LIMIT)
@@ -1541,13 +1602,10 @@ class _Reader:
                     raise
                 coverage_result = {"state": "stale"}
         self.recheck()
-        result = {"schema_version": 1, "kind": "scope_shadow_evidence_observation", "id": self.scope["id"],
-            "body": {"scope_ref": ref(self.scope_raw), "shadow_set_ref": ref(self.set_raw),
-                "rows": sorted(rows, key=lambda row: row["record_ref"]["sha256"]),
-                "git": {"repository_kind": "bare", "hash_algorithm": identity["target_revision"]["hash_algorithm"],
-                    "config_sha256": c.digest(self.git.config)}, "commands": self.commands,
-                **({"coverage": coverage_result} if workflow else {})}}
-        return c.canonical(result)
+        return _scope_reader_observation_values(self.scope["id"], ref(self.scope_raw), ref(self.set_raw),
+            sorted(rows, key=lambda row: row["record_ref"]["sha256"]),
+            {"repository_kind": "bare", "hash_algorithm": identity["target_revision"]["hash_algorithm"],
+                "config_sha256": c.digest(self.git.config)}, self.commands, workflow, coverage_result)
 
 
 class _ControlFIFO:

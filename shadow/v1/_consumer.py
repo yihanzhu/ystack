@@ -1836,8 +1836,64 @@ class Anchor:
                     raise
         return copied
 
+    def _sudo_storage_failure(self, work, error, primary=None):
+        cancellation = primary if isinstance(primary, KeyboardInterrupt) or getattr(primary, "_scope_signal_cancel", False) else None
+        if cancellation is None and (isinstance(error, KeyboardInterrupt) or getattr(error, "_scope_signal_cancel", False)):
+            cancellation = error
+        for action in (0, 1, 2):
+            try:
+                if action == 0:self.private_observations["unusable"] = True
+                elif action == 1:work["sudo_storage_incomplete"] = True
+                else:_capture_observation_error(work, "M", "sudo-storage-retention", error)
+            except BaseException as observed:
+                if cancellation is None and (isinstance(observed, KeyboardInterrupt) or getattr(observed, "_scope_signal_cancel", False)):
+                    cancellation = observed
+        return cancellation
+
+    def _retain_sudo_storage(self, original, attempt_id, work, failure):
+        try:
+            rows = [_sudo_storage_row_values(original.path, original.components[-1], original.directory_names)]
+            previous = len(self.private_observations.get("storage_reads", []))
+            self.retain_storage(attempt_id, rows, failure, (original,))
+            retained = self.private_observations.get("storage_reads", [])
+            _require(len(retained) == previous + 1, "E_LIMIT")
+            _capture_observe(work, "M", "sudo-storage-retention", retained[-1])
+        except BaseException as error:
+            return self._sudo_storage_failure(work, error, failure)
+        return None
+
+    def _cancel_sudo_storage(self, primary, copied, unregistered, work):
+        if copied is not None:
+            while copied.owned:
+                held = copied.owned.pop()
+                while held.components:
+                    component = held.components.pop()
+                    try:_close_capture_copy(component.fd, copied.leaf, copied.leaf, "sudo-storage-P-close", primary)
+                    except BaseException as closing:self._sudo_storage_failure(copied.leaf, closing, primary)
+            try:copied.closed, copied.directory = True, None
+            except BaseException as closing:self._sudo_storage_failure(copied.leaf, closing, primary)
+            try:copied._transfer()
+            except BaseException as closing:self._sudo_storage_failure(copied.leaf, closing, primary)
+        if unregistered is not None:
+            while unregistered.components:
+                component = unregistered.components.pop()
+                try:_close_capture_copy(component.fd, work, work, "sudo-storage-original-close", primary)
+                except BaseException as closing:self._sudo_storage_failure(work, closing, primary)
+        while self.runtime_companions:
+            held, leaf, case_key = self.runtime_companions.pop()
+            while held.components:
+                component = held.components.pop()
+                try:_close_capture_copy(component.fd, leaf, leaf, "sudo-storage-original-close", primary)
+                except BaseException as closing:self._sudo_storage_failure(leaf, closing, primary)
+            try:
+                case_work = _capture_work_values(self.recording_work, case_key)
+                _capture_transfer_work(leaf, self.recording_work, case_work)
+                _capture_accounting_receipt(self)
+            except BaseException as closing:self._sudo_storage_failure(leaf, closing, primary)
+
     def retain_sudo_companion(self, parent, executable, caller_raw):
         work, original, case_work, failure, registered, copied = {}, None, None, None, False, None
+        sudo_capture_cancel = None
         try:
             _capture_work_values(work, "sudo-companion")
             self.recording_work.setdefault("local_runtime_leaves", []).append(work)
@@ -1878,8 +1934,21 @@ class Anchor:
             work["read_bytes"] += len(caller_raw)
             copied = _HeldCaptureCopy(self, self.recording_work, case_work)
             copied.acquire(parent, None, {name: copied_state}, {name: copied_sha})
+            sudo_capture_cancel = self._retain_sudo_storage(original, caller["id"], work, None)
+            if sudo_capture_cancel is not None:
+                raise sudo_capture_cancel
         except BaseException as error:
             failure = error
+            if original is not None and sudo_capture_cancel is None:
+                sudo_capture_cancel = self._retain_sudo_storage(original,
+                    caller["id"] if "caller" in locals() else None, work, error)
+            if sudo_capture_cancel is not None:
+                first = (error if isinstance(error, KeyboardInterrupt) or getattr(error, "_scope_signal_cancel", False)
+                         else sudo_capture_cancel)
+                self._cancel_sudo_storage(first, copied, original if not registered else None, work)
+                copied, original = None, None
+                sudo_capture_cancel = first
+                raise first
             self.private_observations["unusable"] = True
             if copied is not None:
                 copied.close()
@@ -1892,23 +1961,29 @@ class Anchor:
                     (Refusal, OSError, ValueError, TypeError, MemoryError)):
                 raise
         finally:
-            if original is not None and not registered:
-                try:original.close()
-                except OSError as error:
-                    self.private_observations["unusable"] = True
-                    work["companion_close_incomplete"] = True
-                    if getattr(error, "_scope_signal_cancel", False) and not getattr(failure, "_scope_signal_cancel", False):
-                        raise
-            if case_work is not None:
-                try:
-                    _capture_transfer_work(work, self.recording_work, case_work)
-                    _capture_accounting_receipt(self)
-                except Exception as error:
-                    self.private_observations["unusable"] = True
-                    work["transfer_incomplete"] = True
-                    if getattr(error, "_scope_signal_cancel", False) and not getattr(failure, "_scope_signal_cancel", False):
-                        if copied is not None:copied.close()
-                        raise
+            try:
+                if original is not None and not registered:
+                    try:original.close()
+                    except OSError as error:
+                        self.private_observations["unusable"] = True
+                        work["companion_close_incomplete"] = True
+                        if getattr(error, "_scope_signal_cancel", False) and not getattr(failure, "_scope_signal_cancel", False):
+                            raise
+                if case_work is not None:
+                    try:
+                        _capture_transfer_work(work, self.recording_work, case_work)
+                        _capture_accounting_receipt(self)
+                    except Exception as error:
+                        self.private_observations["unusable"] = True
+                        work["transfer_incomplete"] = True
+                        if getattr(error, "_scope_signal_cancel", False) and not getattr(failure, "_scope_signal_cancel", False):
+                            if copied is not None:copied.close()
+                            raise
+            except BaseException as closing:
+                if sudo_capture_cancel is None:
+                    raise
+                self._sudo_storage_failure(work, closing, sudo_capture_cancel)
+                raise sudo_capture_cancel from closing
         return copied
 
     def close_runtime_companions(self, primary=None):
@@ -2314,6 +2389,60 @@ def verifier_observation(anchor: Anchor, environment_id: str, target_repository_
     environment_entry_sha = _verifier_registry_entry_sha(registry[0])
     return _verifier_observation_values(environment_id, environment_entry_sha, anchor.accepted[0],
                                         target_repository_id, verifier_sha)
+
+def _sudo_storage_row_values(name, component, directory_names=None):
+    acl = getattr(component.rule, "observations", {}).get(component.fd)
+    return {"role": "sudo", "name": os.fsencode(name).hex(),
+        "before": _stat_values(component.before),
+        "after": None if component.after is None else _stat_values(component.after),
+        "named_after": None if component.named_after is None else _stat_values(component.named_after),
+        "access_acl": None if acl is None else acl[0],
+        "default_acl": None if acl is None else acl[1],
+        "directory_names": directory_names, "read_error": None}
+
+
+def _sudo_storage_projection_values(storage_reads, attempt_id):
+    _require(_id(attempt_id) and type(storage_reads) is list and len(storage_reads) <= 65536, "E_STORE")
+    selected = [value for value in storage_reads if value["attempt_id"] == attempt_id
+        and any(row.get("role") == "sudo" for row in value["entries"])]
+    _require(len(selected) == 1, "E_STORE")
+    value = selected[0]
+    _require(value["error"] is None and len(value["held"]) == 1
+             and value["held"][0]["path"] == os.fsencode("/usr/bin/sudo").hex(), "E_STORE")
+    chain = value["held"][0]["components"]
+    names = (None, "usr", "bin", "sudo")
+    _require(len(chain) == len(names), "E_STORE")
+    output = []
+    for component, name, path in zip(chain, names, ("/", "/usr", "/usr/bin", "/usr/bin/sudo")):
+        _require(component["name"] == (None if name is None else os.fsencode(name).hex())
+                 and {"access_acl", "default_acl"} <= set(component), "E_STORE")
+        output.append({"role": "sudo", "name": os.fsencode(path).hex(),
+            "before": component["before"], "after": component["after"], "named_after": component["named_after"],
+            "access_acl": component["access_acl"], "default_acl": component["default_acl"],
+            "directory_names": None, "read_error": None})
+    _require(value["entries"] == [output[-1]], "E_STORE")
+    return output
+
+
+def _sudo_storage_stat_values(storage_rows, platform):
+    _require(platform in {"darwin", "linux"} and type(storage_rows) is list and len(storage_rows) <= 65536, "E_STORE")
+    rows = [row for row in storage_rows if row.get("role") == "sudo"]
+    names = ("/", "/usr", "/usr/bin", "/usr/bin/sudo")
+    _require(len(rows) == len(names), "E_STORE")
+    for index, (row, name) in enumerate(zip(rows, names)):
+        _require(set(row) == {"role", "name", "before", "after", "named_after", "access_acl", "default_acl",
+                             "directory_names", "read_error"}
+                 and row["name"] == os.fsencode(name).hex() and row["read_error"] is None
+                 and row["directory_names"] is None, "E_STORE")
+        before = row["before"]
+        _require(_identity_values(before) == _identity_values(row["after"]) == _identity_values(row["named_after"])
+                 and before["uid"] == 0 and not before["mode"] & (stat.S_IWGRP | stat.S_IWOTH)
+                 and (stat.S_ISREG(before["mode"]) if index == 3 else stat.S_ISDIR(before["mode"]))
+                 and _installed_acl_values(platform, row["access_acl"], row["default_acl"], (0,))
+                 and (row["access_acl"] == [] if platform == "darwin" else
+                      row["access_acl"] is None and row["default_acl"] is None), "E_STORE")
+    return rows[-1]["before"]
+
 
 def _observation(item: HeldPath, relative: str, raw: bytes | None = None, *, storage_rows=None) -> dict:
     after = _capture_metadata(item.fd, item.recording_work, item.accounting_kind)
