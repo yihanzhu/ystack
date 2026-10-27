@@ -1,5 +1,5 @@
 ---
-spec-blob: 27977a7f7419dca95febd5d4bfaeab4f594cc07b
+spec-blob: 635b157347e5449c3372158aaeed6ad1909ea79d
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-26
@@ -14,8 +14,8 @@ one complete two-source delivery. Source preparation does not accept a dependenc
 a real recording, native qualification or either seed batch.
 
 This plan binds accepted G2 spec blob
-`27977a7f7419dca95febd5d4bfaeab4f594cc07b` at main
-`5d5725e25f5c159a07c3ceb56a424c934df56a28` (PR #748).
+`635b157347e5449c3372158aaeed6ad1909ea79d` at main
+`a0d24ba62d4d590f792fa3812db56ab6793fefe8` (PR #750).
 The separate high-risk plan-only gate must pass before dependent code.
 RAW16 acquisition design
 locations retain historical source `c1d9d23e42e6efe2d6da1aae3d23b34564b4080d`
@@ -27,16 +27,18 @@ historical anchors, not current resume identities. Earlier paused sources
 `2dd51dcd819b252cee6501c799b5f3fd9018c9ae` and
 `40022eb3b86c72b3d4d19b6e76cf21c68a41b371` and
 `f2abe2b02963542fe6505bbc028a423842040880` and the prior budget pause
-`48cd106a2f364fcab012779e5e651769784c3a09` are historical. Current source is
-paused clean at `ff9c26b3a1314f13efc0d97690ccf8b9fbe17bdf`, parent
-`8be0e2ff9aa73ce96a8d3d390da0ea6f8d7e3285`, tree
-`8af4e9ae13f9e45130f45c5151eb1f64a1a7b765`, base
-`06c096e7b8cb676b16e328054525743aca018864`, on the preserved branch
-`codex/impl/eval-source-relay-replay`. Its D pins are source-bound;
+`48cd106a2f364fcab012779e5e651769784c3a09` and the prior C1 pause
+`ff9c26b3a1314f13efc0d97690ccf8b9fbe17bdf` are historical. Current source is
+paused clean at `5ceb67c9e33bb52f359514d8e785a26e77ecf491`, parent
+`74eda0621c59ac2c5597e20a7b7c3096cde6d3bd`, tree
+`7ac8e52d904e634f0672cdfae542d6f630024ac6`, base
+`e87b3e99f017ece88e3f26918da92ad10f059c3e`, on the preserved branch
+`codex/impl/eval-source-relay-replay`. Its D pins must bind resumed source bytes;
 static pin agreement is not acquisition or semantic acceptance. B, T and complete
-C remain unaccepted. The real inner Reader is a child process; its FD6 live-P
-handoff is not implemented or tested. Existing partial mechanisms and finite
-checks do not accept the full caller, complete accounting or native qualification. After this separate plan-only gate lands, normally
+C remain unaccepted. Preserve the partial C1 implementation and finish the
+same-acquisition invoice edge below within the original complete C1 obligations.
+No partial wiring or finite check accepts the full caller, complete accounting
+or native qualification. After this separate plan-only gate lands, normally
 merge accepted main into this same attempt, rebind the exact artifact/source tuple
 and obtain fresh independent source review and manager GO. No old GO resumes it.
 The operator has accepted
@@ -1804,6 +1806,77 @@ They are implementation anchors, not proof that the new edge already exists.
 | 7 parent independent P/S — consumer held/copy owners; replay:3253–3290 | Parent derives the sole scratch root from its bound runtime/TMPDIR and validates the actual child argv relation, fixed single-component scratch name and full root/leaf chains. Open only spec relative P members under reader-captures. Independently read all bytes, rebuild family relations and original semantic S roles, and reuse the original exclusive copy/fsync/close/readback/full-compare/independent-SHA/final name/ACL checks. Keep child and parent acquisitions distinct. Do not substitute wire SHA, another Reader, a closed path or an arbitrary S destination. |
 | 8 close, fees and finalization — original Reader close/capture-accounting owners; parent Session/Assembly | C_RELEASED binds the exact C_REQUEST batch bytes; CLOSED binds FINAL_OWNER. Project the original `_capture_accounting_receipt` value and actual per-entity close results without dropping observations/errors or adding receipt keys. Maintain local per-batch/serial watermarks to apply each real close and actual delta once; these are fixed in-memory state, not new wire fields. Earlier independently staged S stays held, while later checks never reopen closed P. Only complete original P facts, all actual settlements, retained S checks and the original final ledger/close conditions permit S completion. |
 
+**Independent runtime invoice wiring.** The general table above retains its
+ff9 design anchors. This paragraph binds the actual partial caller sites at
+`5ceb67c9e33bb52f359514d8e785a26e77ecf491`. The accepted spec's ten-key invoice
+and original 74eda owner definitions are the sole types; no implementation
+convenience may widen them. Keep the existing five side-message phases and all
+other family, consumer-observations and accounting shapes unchanged.
+
+1. In `shadow/v1/_consumer.py` Anchor.retain_runtime_acquisition:1831–1895,
+   keep the original row object produced at :1889–1891. Immediately after the
+   original successful `copied.acquire`, retain its fixed association with that
+   snapshot, original HeldPath, copied object and copied.members[file]. Apply the
+   same relation to the original same-shape sudo companion acquisition. Preserve
+   O→P checks, original raw caller digest/id and actual success/failure/close
+   positions. A failed acquire publishes no valid association. Do not extend O
+   lifetime, remeasure runtime, create a sidecar or change the original row keys.
+2. In `scope/v1/read-shadow-evidence.py`, use the actual register_copy:748–764,
+   `_p_projection`:805–836 and `_p_batch`:929–978. Replace the runtime branch's
+   file/size/SHA search with the producer's actual same-acquisition association.
+   Check the real Reader/Anchor/copied/member identity and original snapshot/row
+   relation. Project only the ten spec values into required runtime_invoice for
+   family=runtime. Keep it stable with serial/ordinal/chain across both batches;
+   do not serialize Python objects or treat equal hashes as common ownership.
+   Source-family continues to use its own original capture and never supplies
+   this independent P's invoice.
+3. In consumer `_c1_p_batch_check/_values`:6343–6384, implement exactly the
+   spec's runtime-only ninth member key. Require its closed ten-key object;
+   forbid it for all other families. Reuse original runtime inventory and
+   `_sha/_id` rules, the Anchor slot whitelist/index 0 and errno None. Check
+   member name/ordinal/size/SHA equality and original ordered inventory rules.
+   Do not alter batch/settlement top-level shapes or hide values in name/chain,
+   consumer-observations, accounting or untyped metadata.
+4. In `_C1PHandoffParent.stage`:6647–6687 and `_member_kind`:6689–6707, replace
+   the independent runtime refusal only with the complete accepted checks.
+   Bind request_sha256/attempt_id to the actual Session's original kill/coverage
+   caller bytes, not a digest reconstructed from different JSON formatting.
+   Verify slot/locator against the original fixed owner/configuration/acquisition
+   relation. Assemble the complete ordered eight-key inventory from distinct
+   original acquisitions retained across batches; preserve original ordinal
+   coverage and source-subset rules. A repeated same-serial row must agree in
+   full, while another acquisition cannot borrow it. Old closed P is not reopened.
+   Invoice locator remains semantic data, never a path to open original O.
+5. Keep `_member`, `_stage_member`:6607–6645, `_compare`:6709 onward and their
+   original held/whole-byte/copy/S checks in the actual path. Parent independently
+   reads that live P and checks its initial/final identity, name/ACL, size/SHA
+   and S equality before accepting the semantic runtime relation. Carry the
+   validated association through original S/manifest ingestion and actual
+   settlement; do not accept a new field alone as completion or runtime
+   qualification. Preserve all existing scope/request/origin checks and the
+   outstanding complete C1 work.
+
+Charge invoice projection, retention, encoding/parsing, comparisons and added
+frame bytes to original M and every applicable actual ledger. Keep bin bytes
+in their original runtime class; do not hide metadata there or reset/refund
+fees across a repeated row or phase. Missing/invalid/ambiguous association,
+wrong shape/type/errno/request/inventory or cap exhaustion follows the existing
+recording-unusable and original native-error/close paths. Keep actual partials,
+first/later errors and UNKNOWN. All original caps, roles, roots, FD/message counts,
+namespace and native behavior remain; no new read/collection or execution window.
+
+For necessary proof, extend the same two C1 test files and existing paired
+controls after fresh exact GO. Include an actual successful original acquire →
+Reader projection → runtime codec → parent independent P/S path with the complete
+ten-key relation. Reject missing/extra/null invoice, wrong key/type/errno,
+member or request mismatch, reordered/gapped inventory, changed same-serial
+invoice, same-SHA borrowing from another acquisition and invoice on another family.
+Keep source-family's own capture case. Removing the producer association or
+parent invoice check must fail the existing paired assertion. Retain original
+whole-byte/source/scope/close checks, tighter-cap proof and complete actual fees;
+reuse unchanged source-bound guards rather than add a new matrix. These results
+prove only their actual ordinary fixture path, never full native/SOURCE/seed.
+
 **Root and holder checks.** Derive child scratch only from its actual output
 argument; verify the other four original arguments and original parent inputs as
 the spec requires. Parent opens from its own bound TMPDIR, not a sender-selected
@@ -2310,7 +2383,7 @@ all old RAW/DER/ROUTE/LIM/CLO/I5/SURF/ARC and export/completion tests:
 | RT.failure | Partial/zero/unknown writes, first failure followed by close/ledger failure, occupied names and exact errno. Retain all files and charges; no successful seal, repair, retry, phase/pair reset or deleted/temp/dedup exemption. |
 | RT.T | Paired ordinary prepare→native cleanup→inspect and writer two-root positives through actual owners; preserved zero/partial/committed/uncertain T and unchanged native rmtree/unlink/error timing. Fixed-name collision, broad-prefix nonmember, extra/wrong/nonempty/missing marker, full C/runtime mutation with actual inputs fixed, op swap, source/parent/name/ACL drift, every new write/readback/sync/close/ledger failure, and both uncertain mkdir namespaces reject recording. At/over 128 total root entries includes T; all other caps and carry-in still apply. Separately delete production tee, predeclared cleanup exclusion, marker construction, consumer validation or recording-failure propagation in the existing private source-copy mutation route: each paired assertion must fail. Original SOURCE bytes/identity and full Q/overlap checks remain. No fixture closes the external caller/genuine gate. |
 | RT.C | Fixed assembly, run and two disjoint dashboard pairs each use their complete scheduled flow; extra/repeated case follows M4/manifest refusal. No missing owner, empty dispatch or permanent rejection counts as delivery. Real parent hookup/full RAW16 remains blocked until its source gate. |
-| C1.FD6 | Execute the fixed C1 bounded proof above through actual parent spawn/FD6/main Reader and both original close boundaries. Verify full P/S bytes, root/peer/phase linkage, ordinary-error native continuation, actual settlement, partial/EOF/cancel, complete fees and all unchanged caps. Paired source/wire/read/full-check/settlement mutations must fail. No fixture or source pass claims native/whole-SOURCE qualification. |
+| C1.FD6 | Execute the fixed C1 bounded proof above through actual parent spawn/FD6/main Reader and both original close boundaries. Verify full P/S bytes, root/peer/phase linkage, ordinary-error native continuation, actual settlement, partial/EOF/cancel, complete fees and all unchanged caps. Include the same-acquisition runtime_invoice positive/refusals and paired producer/consumer checks specified above. Paired source/wire/read/full-check/settlement mutations must fail. No fixture or source pass claims native/whole-SOURCE qualification. |
 | C2.manifest | Actual assembly→closed S→manifest: preserve original names and every role; cross-case/occurrence/output swap, missing/extra/unused file, kind-as-role, raw/manifest confusion, complete.json omission and encoded cap/one-over refuse. A normal bounded fixture traverses the real CLI, not a receipt dictionary. |
 | C2.authority | One four-case ledger through both run inputs and the two dashboard pairs; old O, two small failed partials, zero files and distinct I remain charged. Disk rollback/new START, changed live head after READY, missing/duplicate/reordered messages, missing GO, single FD, wrong root/name/ACL and no-FD malicious bypass refuse before I. |
 | C2.lifetime | Check original driver and every independent program/pair/canonical/pin validation while S/I holds live; each initial/final hash, whole equality and identity deletion has a paired failure. Equal mutation of both copies still refuses. Wrong helper FD inheritance, extra wrapper PID, file_action failure, exec error, signal, retained cleanup or once-close failure cannot succeed. |
@@ -2677,9 +2750,9 @@ gates (R9.6).
   cannot leave the PR whose test checks their digests.
 - PR 3: `review_size: standard`, about 300-400 net added lines.
 - This plan-only amendment: `review_size: standard`. One concern: the accepted
-  fixed C1 FD6 live-P handoff, its original-owner wiring, independent P/S checks,
-  actual close/cost settlement and bounded proof. PR 1b retains its
-  complete-concern range above.
+  same-acquisition C1 runtime invoice, its fixed producer/Reader/parent checks
+  and necessary bounded proof. All other C1 work and PR 1b's complete-concern
+  range remain unchanged.
 
 Each range waives only the soft line signal, never scope, tests, CI, review or human
 merge.
