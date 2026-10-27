@@ -207,7 +207,7 @@ def _writer_values(runtime_root, frozen, files, materialized, context):
 
 
 
-def _reproduction_values(runtime_root, files, materialized, context):
+def _reproduction_values(runtime_root, files, materialized, context, *, runtime_work=None):
     if (type(materialized) is not dict or set(materialized) != {
             "response_raw", "evaluation_raw", "qualified_identity_raw"}
             or type(context) is not dict or set(context) != {
@@ -235,7 +235,7 @@ def _reproduction_values(runtime_root, files, materialized, context):
     output = dict(files)
     provenance = owner._reproduction_provenance_values(context["request"]["id"], instruction,
         context["observation"], context["native_context"], context["consumer_source_raw"],
-        context["python_raw"], context["jq_sha256"], context["commands"])
+        context["python_raw"], context["jq_sha256"], context["commands"], runtime_work=runtime_work)
     output["consumer-provenance.json"] = provenance
     output["shadow-record.json"] = owner._reproduction_record_values(incident, files["incident.json"],
         files["claim.json"], identity, materialized["qualified_identity_raw"], evaluation,
@@ -1291,6 +1291,39 @@ _TRIAL_DOCUMENTS = frozenset({"reproduction/claim.json", "reproduction/duty-eval
     "gate/shadow-set.json", "gate/dashboard.json", "gate/marker.json"})
 
 
+def _gate_input_member_values(role, member, kind, size):
+    import re
+    pieces = member.split("/")
+    _seed_require(pieces[0] in {"generator", "scope_reader"})
+    if role == "local-runtime":
+        _seed_require(len(pieces) == 2 and kind == "runtime" and re.fullmatch(
+            r"runtime-[0-9]{4}-(python|jq|bash|git|sudo)-0000\.bin", pieces[1]) is not None)
+        return
+    _seed_require(role == "capture" and kind == "M")
+    installed = {"accepted_set", "control_decision", "control_policy", "control_policy_set",
+        "evaluator_driver", "evaluator_program", "registry"}
+    anchor = {"host", "verifier", "supervisor"} | {"installed-" + name for name in installed}
+    if len(pieces) == 3 and pieces[1] == "anchor":
+        _seed_require(pieces[2] in anchor and size <= (1 << 20 if pieces[2] == "host" else 16 << 20));return
+    if len(pieces) == 3 and re.fullmatch(r"source-000[0-2]", pieces[1]):
+        _seed_require(pieces[2] == "consumer-observations.json" and size <= 1 << 20);return
+    if len(pieces) == 3 and re.fullmatch(r"source-configuration-000[0-2]", pieces[1]):
+        _seed_require(pieces[2] in {"host", "config", "accepted", "package", "supervisor", "normalizer"}
+            and size <= (16 << 20 if pieces[2] in {"supervisor", "normalizer"} else 1 << 20));return
+    history = {"accepted-identities.json", "claim.json", "consumer-provenance.json", "decision.json",
+        "duty-evaluation.json", "evaluator-driver.txt", "evaluator-program.txt", "evidence-manifest.json",
+        "file-digest-result.json", "incident.json", "materialization-input.json", "materialization-response.json",
+        "origin-observation.json", "payload-stderr.txt", "payload-stdout.txt", "policy-set.json", "policy.json",
+        "preparation-manifest.json", "preparation-record.json", "qualified-identity.json", "registry.json",
+        "sandbox-check.json", "sandbox-evaluation.json", "sandbox-expectation.json", "sandbox-receipt.json",
+        "sandbox-request.json", "shadow-record.json", "trace-ledger.json", "trace-receipt.json", "bundle.json",
+        "publisher-body.txt", "scope-policy.json"}
+    _seed_require(len(pieces) == 4 and pieces[1] == "history" and re.fullmatch(r"[0-9]{4}", pieces[2])
+        and int(pieces[2]) < 4096 and pieces[3] in history
+        and size <= (8 << 20 if pieces[3] == "materialization-input.json" else
+            2 << 20 if pieces[3] == "preparation-manifest.json" else 1 << 20))
+
+
 def _S_inventory_core_values(case_id, files, semantic, expected, originals, occurrences):
     _seed_require(case_id in {"malicious.incident-symptom-text", "malicious.checked-file-bytes",
         "malicious.commit-message", "malicious.unread-forge-text"})
@@ -1335,7 +1368,9 @@ def _S_inventory_core_values(case_id, files, semantic, expected, originals, occu
         elif role == "preparation":_seed_require(occurrence in {"reproduction.prepare", "reproduction.inspect", "write.prepare", "write.inspect"} and occurrence in occurrences)
         else:_seed_require(role in {"recorded", "capture", "local-runtime", "parent-input"}
             and occurrence in {"reproduction", "write", "kill", "coverage", "gate"} and occurrence in occurrences
-            and (occurrence != "gate" or role == "recorded"))
+            and (occurrence != "gate" or role in {"recorded", "capture", "local-runtime"}))
+        if occurrence == "gate" and role != "recorded":
+            _gate_input_member_values(role, member, fact["kind"], fact["size_bytes"])
         identity = (occurrence, role, member)
         _seed_require(identity not in identities);identities.add(identity)
         entries.append(dict(row))
@@ -1917,7 +1952,11 @@ class _SeedAssembly:
             == {name for copied in carriers if copied is not capture_P
                 and not copied.directory.components[-1].name.startswith("preparation-runtime-")
                 for name in copied.runtime_sha256})
-        owner._runtime_inventory_values({"files": rows})
+        if phase in {"kill", "coverage"}:
+            complete = [{key: row[key] for key in ("slot", "index", "ordinal", "locator", "file", "size_bytes", "sha256", "errno")}
+                for row in source_rows]
+            owner._source_local_runtime_values({"files": rows}, {"files": complete})
+        else:owner._runtime_inventory_values({"files": rows})
         storage = list(document["storage"])
         if phase in {"reproduction", "write"}:
             caller_value = owner._json(caller, owner.DOCUMENT_LIMIT, "E_STORE")
@@ -2429,18 +2468,31 @@ class _SeedAssembly:
             and self.gate_session.binding == self._digest(self.original_raw[3]))
         return original
 
+    def scope_reader_inputs(self, reader, *, generator=False):
+        _seed_require(type(generator) is bool and self.gate_session is not None)
+        module = self._gate_type(reader, "scope/v1/read-shadow-evidence.py", "_Reader")
+        _seed_require(reader.commands_open and reader.store_session is not None)
+        if generator:_seed_require(reader is self.generator.reader)
+        else:
+            _seed_require(reader is not self.generator.reader and reader.store_session.is_inner
+                and reader.store_session.kill_request_raw == self.gate_session.kill_request_raw
+                and reader.store_session.gate_call_ref == self.gate_session.gate_call_ref)
+        self._scope_reader_inputs(reader, generator)
+        self._transfer()
+
     def _reader_observations(self, reader, generator=False):
         module = self._gate_type(reader, "scope/v1/read-shadow-evidence.py", "_Reader")
         reader.recheck()
         anchor = reader.anchor
         _seed_require(anchor is not None)
         _seed_require(getattr(anchor, "scope_runtime_owner", None) is reader)
+        self._scope_reader_inputs(reader, generator)
         observations = anchor.private_observations
         _seed_require("entropy" in observations and "commands" in observations
             and "runtime_values" in observations["commands"] and observations["storage_reads"])
         module._scope_runtime_prefix_values(observations["commands"]["runtime_values"],
             observations["commands"]["runtime_values"])
-        storage = [row for acquired in observations["storage_reads"] for row in acquired["entries"]]
+        storage = module.c._gate_storage_rows_values(observations["storage_reads"])
         owners = ("scope/v1/generate-gate-evidence.py", "scope/v1/read-shadow-evidence.py") if generator else ("scope/v1/read-shadow-evidence.py",)
         _seed_require(all(path in module.c._clock_observations for path in owners))
         clocks = {path: module.c._clock_observations[path] for path in owners}
@@ -2474,6 +2526,7 @@ class _SeedAssembly:
         _seed_require(self.gate_session is not None and "gate" not in self.occurrences
             and hasattr(self, "scope_local"))
         session, generator = self.gate_session, self.generator
+        module = self._gate_type(generator, "scope/v1/generate-gate-evidence.py", "_Generator")
         generator.check()
         scoped = next(item for item in generator.held if getattr(item, "held", None) is not None
             and item.held.path == str(generator.outputs["scope"]))
@@ -2505,6 +2558,26 @@ class _SeedAssembly:
         self.locators["gate"] = {"scope": scoped.held.path, "source_root": str(module.PACKAGE),
             **{name: str(path) for name, path in zip(
                 ("request", "shadow_set", "dashboard", "marker", "bundle_root", "git_root", "output"), generator.paths)}}
+        for context, actual_reader in (("generator", generator.reader), ("scope_reader", self.scope_reader)):
+            actual_module = self._gate_type(actual_reader, "scope/v1/read-shadow-evidence.py", "_Reader")
+            actual_paths = {
+                "scratch": actual_reader.scratch, "runtime": actual_reader.runtime,
+                "captures": actual_reader.captures, "output": actual_reader.output,
+                "git_root": actual_reader.git_root, "git_config": actual_reader.git.config_path,
+                "package": actual_module.PACKAGE,
+                "python": actual_reader.python.held.path, "jq": actual_reader.jq.held.path,
+                "bash": actual_reader.bash.held.path, "git": actual_reader.git_binary.held.path,
+            }
+            for label, raw in (("scope_input", actual_reader.scope_raw), ("set_input", actual_reader.set_raw)):
+                matching = [item.held.path for item in actual_reader.owned
+                    if type(item) is actual_module.c._HeldBytes and item.raw is raw and item.held.components]
+                _seed_require(len(matching) == 1)
+                actual_paths[label] = matching[0]
+            for key, path in actual_paths.items():
+                value = str(path)
+                _seed_require(value.startswith("/") and "\0" not in value and len(os.fsencode(value)) <= 4096)
+                self.locators["gate"][context + "." + key] = value
+
         self._transfer()
 
     def document(self):
@@ -2863,6 +2936,190 @@ class _SeedAssembly:
         if failure is not None:
             self.failure = _seed_first(self.failure, failure)
             if self.failure is not primary:raise self.failure
+
+    def _scope_check_P_S(self, reader, source, target, expected, kind):
+        owner = self._gate_type(reader, "scope/v1/read-shadow-evidence.py", "_Reader").c
+        self._source_check(owner, source, reader.anchor, 0o400)
+        target.recheck("E_STORE", self.work, "M")
+        _seed_require(source.before.st_size == target.before.st_size)
+        left, right = hashlib.sha256(), hashlib.sha256()
+        offset = 0
+        while offset < source.before.st_size:
+            count = min(65536, source.before.st_size - offset)
+            a, b = self._read(source.fd, count, offset, kind), self._read(target.fd, count, offset, kind)
+            left.update(a);right.update(b)
+            self._charge("H", len(a) + len(b), kind);self._charge("E", len(a) + len(b), kind)
+            _seed_require(a == b);offset += count
+        _seed_require(left.hexdigest() == right.hexdigest() == expected)
+        self._source_check(owner, source, reader.anchor, 0o400)
+        target.recheck("E_STORE", self.work, "M")
+
+    def _scope_existing_S(self, reader, copied, name, context):
+        # Reuse is determined by the actual P object and original phase binding.
+        phases = ("kill",) if context == "generator" else ("coverage",)
+        for phase in phases:
+            if phase not in self.bindings:continue
+            binding = self.bindings[phase]
+            carriers = binding["P"]
+            if not any(item is copied for item in carriers):continue
+            _seed_require(copied.anchor is reader.anchor and name in copied.members)
+            configuration = getattr(copied, "source_configuration_members", None)
+            if configuration is not None:
+                keys = [key for key, row in configuration.items() if row["member"] == name]
+                _seed_require(len(keys) == 1);role, member = "capture", "configuration/" + keys[0]
+            elif name in copied.runtime_sha256:
+                role, member = ("capture" if copied is carriers[0] else "local-runtime"), copied.directory.components[-1].name + "/" + name
+            else:role, member = "capture", copied.directory.components[-1].name + "/" + name
+            matches = [(key, row) for key, row in self.semantic.items()
+                if (row["occurrence"], row["role"], row["member"]) == (phase, role, member)]
+            _seed_require(len(matches) == 1)
+            key, row = matches[0]
+            held = [item for item in self.output_holds if item.path == self.root.path + "/" + key]
+            _seed_require(len(held) == 1)
+            return key, row, held[0]
+        return None
+
+    def _scope_reader_inputs(self, reader, generator=False):
+        module = self._gate_type(reader, "scope/v1/read-shadow-evidence.py", "_Reader")
+        context = "generator" if generator else "scope_reader"
+        _seed_require(reader.commands_open and reader.anchor is not None
+            and reader.anchor.scope_runtime_owner is reader and not reader.replay_output_unusable)
+        reader.recheck()
+        anchor = reader.anchor
+        # Fixed Anchor data from the actual verifier/provenance pass.
+        captured = reader.replay_outputs["anchor"]
+        _seed_require(captured)
+        raw_key, inputs = captured[0]
+        _seed_require(raw_key is anchor.config_raw)
+        for key, values in captured:
+            _seed_require(key is anchor.config_raw and set(values) == set(inputs))
+            for name in inputs:
+                _seed_require(values[name][1] is inputs[name][1] and values[name][0] == inputs[name][0])
+        anchor_stages = [row for row in self.__dict__.get("_scope_P_stages", [])
+            if row["reader"] is reader and row["context"] == context and row["member"].startswith(context + "/anchor/")]
+        candidates = []
+        for row in anchor_stages:
+            if not any(row["copied"] is item for item in candidates):candidates.append(row["copied"])
+        _seed_require(len(candidates) <= 1)
+        copied = candidates[0] if candidates else reader.retain_anchor_inputs(inputs)
+        _seed_require(copied is not None and copied.anchor_input_reader is reader)
+        if not copied.closed:copied.recheck()
+        for key, row in sorted(copied.anchor_input_members.items()):
+            _seed_require(row["raw"] is inputs[key][0] and row["original"] is inputs[key][1])
+            self._scope_stage_P(reader, copied, row["member"], row["raw"], row["sha256"], "M", context, context + "/anchor/" + key)
+        # Each native acquisition retains its original global ordinal. No SHA dedup.
+        runtime = anchor.private_observations["local_runtime"]
+        complete = {"files": [{key: row[key] for key in ("slot", "index", "ordinal", "locator", "file", "size_bytes", "sha256", "errno")} for row in runtime]}
+        module.c._runtime_inventory_values(complete)
+        for row in runtime:
+            candidates = [copy for copy in reader.source_copies if not copy.closed and row["file"] in copy.runtime_sha256]
+            for staged in self.__dict__.get("_scope_P_stages", []):
+                if staged["reader"] is reader and staged["context"] == context and staged["name"] == row["file"]:
+                    if not any(staged["copied"] is item for item in candidates):candidates.append(staged["copied"])
+            _seed_require(len(candidates) == 1)
+            copy = candidates[0]
+            _seed_require(copy.anchor is anchor and row["file"] in copy.members
+                and copy.runtime_sha256[row["file"]] == row["sha256"] and copy.members[row["file"]].before.st_size == row["size_bytes"])
+            if not copy.closed:copy.recheck()
+            self._scope_stage_P(reader, copy, row["file"], None, row["sha256"], "runtime", context, context + "/" + row["file"])
+            if not copy.closed:copy.recheck()
+        # Exact source object/ordinal links are saved at the original successful P registration.
+        source_copies = [copy for copy in reader.source_copies if getattr(copy, "scope_source", None) is not None]
+        for row in self.__dict__.get("_scope_P_stages", []):
+            item = row["copied"]
+            if row["reader"] is reader and getattr(item, "scope_source", None) is not None:
+                if not any(item is original for original in source_copies):source_copies.append(item)
+        source_copies.sort(key=lambda copy: copy.scope_source_ordinal)
+        _seed_require([copy.scope_source_ordinal for copy in source_copies] == list(range(reader.source_capture_ordinal)))
+        for copy in source_copies:
+            source, ordinal = copy.scope_source, copy.scope_source_ordinal
+            _seed_require(copy.anchor is source.anchor is anchor and type(source) is module.c._HeldCoverageRead
+                and copy.directory.components[-1].name == "source-%04d" % ordinal)
+            raw = copy.consumer_snapshot
+            document = module.parse(raw)
+            _seed_require(document["attempt_id"] == source.attempt_id
+                and document["request_sha256"] == self._digest(source.capture.request_raw, "M"))
+            if not copy.closed:copy.recheck()
+            self._scope_stage_P(reader, copy, "consumer-observations.json", raw, self._digest(raw, "M"), "M", context,
+                context + "/source-%04d/consumer-observations.json" % ordinal)
+            configurations = [item for item in reader.source_copies if getattr(item, "source_configuration_source", None) is source
+                and item.source_configuration_ordinal == ordinal and not item.closed]
+            for staged in self.__dict__.get("_scope_P_stages", []):
+                item = staged["copied"]
+                if staged["reader"] is reader and getattr(item, "source_configuration_source", None) is source and item.source_configuration_ordinal == ordinal:
+                    if not any(item is original for original in configurations):configurations.append(item)
+            _seed_require(len(configurations) == 1);configuration = configurations[0]
+            _seed_require(configuration.source_configuration is source.configuration
+                and configuration.source_configuration_request_raw == source.capture.request_raw)
+            for key, row in sorted(configuration.source_configuration_members.items()):
+                raw, original = source.configuration.source_inputs[key]
+                if not configuration.closed:original.recheck("E_STORE", self.work, "M")
+                expected = self._digest(raw, "M")
+                _seed_require(expected == row["sha256"])
+                self._scope_stage_P(reader, configuration, row["member"], raw, expected, "M", context,
+                    context + "/source-configuration-%04d/" % ordinal + key)
+            if not configuration.closed:configuration.recheck()
+            if not copy.closed:copy.recheck()
+        # The original native P captures contain historical inputs. Distinct
+        # store acquisitions use distinct labels and S files, even for equal bytes.
+        current_attempts = {self.bindings[phase]["native"].attempt_id for phase in ("reproduction", "write")}
+        acquisitions = [value for value in anchor.private_observations["storage_reads"]
+            if value["entries"] and all(row["role"] == "store" for row in value["entries"])]
+        for record_raw, (store, files, retained, storage_rows) in reader.replay_outputs["stores"]:
+            request = module.parse(files["sandbox-request.json"])
+            if request["id"] in current_attempts:continue
+            ordinals = [index for index, value in enumerate(acquisitions) if value["entries"] is storage_rows]
+            _seed_require(len(ordinals) == 1);ordinal = ordinals[0]
+            _seed_require(record_raw is files["shadow-record.json"] and set(retained) == set(files)
+                and store.snapshots == {key: files[name] for key, name in module._authentication_store_names_values().items()})
+            for name, path in retained.items():
+                holders = [item for item in reader.owned if type(item) is module.c._HeldBytes and item.held.path == str(path)]
+                _seed_require(len(holders) == 1 and holders[0].raw == files[name])
+                holder = holders[0];holder.recheck("E_STORE")
+                expected = self._digest(files[name], "M")
+                self._scope_stage_P(reader, None, name, (files[name], holder.held), expected, "M", context,
+                    context + "/history/%04d/" % ordinal + name)
+        reader.recheck()
+
+    def _scope_stage_P(self, reader, copied, name, raw, expected, kind, context, member):
+        owner = self._gate_type(reader, "scope/v1/read-shadow-evidence.py", "_Reader").c
+        source = copied.members[name] if copied is not None else raw[1]
+        stages = self.__dict__.setdefault("_scope_P_stages", [])
+        previous = [row for row in stages if row["reader"] is reader
+            and row["context"] == context and row["member"] == member]
+        _seed_require(len(previous) <= 1)
+        if previous:
+            row = previous[0]
+            _seed_require(row["source"] is source and row["copied"] is copied and row["name"] == name
+                and row["expected"] == expected and row["kind"] == kind
+                and row["identity"] == owner._identity(source.before))
+            target = row["target"]
+            if source.components:self._scope_check_P_S(reader, source, target, expected, kind)
+            else:
+                _seed_require(copied is not None and copied.closed and not copied.owned
+                    and not owner._capture_work_incomplete(copied.leaf)
+                    and not reader.anchor.private_observations.get("unusable", False))
+                target.recheck("E_STORE", self.work, "M")
+            return row["key"]
+        _seed_require(source.components and (copied is None or not copied.closed))
+        existing = self._scope_existing_S(reader, copied, name, context) if copied is not None else None
+        if existing is not None:
+            key, row, held = existing
+            _seed_require(row["kind"] == kind and row["size_bytes"] == source.before.st_size and row["sha256"] == expected)
+            self._scope_check_P_S(reader, source, held, expected, kind)
+            stages.append({"reader": reader, "context": context, "member": member,
+                "source": source, "copied": copied, "name": name, "expected": expected, "kind": kind,
+                "identity": owner._identity(source.before), "target": held, "key": key})
+            return key
+        target = "gate-" + context + "-" + member.replace("/", "--")
+        _seed_require(len(os.fsencode(target)) <= 255)
+        self._semantic_copy(reader.anchor, source, target, expected, kind, "gate", "capture" if kind != "runtime" else "local-runtime", member)
+        held = [item for item in self.output_holds if item.path == self.root.path + "/" + target]
+        _seed_require(len(held) == 1)
+        stages.append({"reader": reader, "context": context, "member": member,
+            "source": source, "copied": copied, "name": name, "expected": expected, "kind": kind,
+            "identity": owner._identity(source.before), "target": held[0], "key": target})
+        return target
 
 
 
@@ -3877,7 +4134,14 @@ class _ReplayCase:
         _seed_require(len(matches) == 1 and matches[0]["kind"] == "runtime"
             and matches[0]["size_bytes"] == declaration["size_bytes"]
             and matches[0]["sha256"] == declaration["sha256"])
-        return self.inputs.bytes(phase, "local-runtime", matches[0]["member"], self.c.EXECUTABLE_LIMIT)
+        value = self.inputs.semantic(phase, "local-runtime", matches[0]["member"])
+        _seed_require(type(value) in (bytes, tuple))
+        if type(value) is tuple:
+            _seed_require(all(type(chunk) is bytes and len(chunk) <= 65536 for chunk in value))
+            size = sum(map(len, value))
+        else:size = len(value)
+        _seed_require(size == declaration["size_bytes"] and size <= self.c.EXECUTABLE_LIMIT)
+        return value
 
     def _run_offline(self, role, argv, *, stdin=b"", timeout=120,
                      output_limit=1048576, env):
@@ -3913,21 +4177,9 @@ class _ReplayCase:
         binaries, components = {}, {}
         for slot in ("object_closure", "jq", "python", "bash", "git") if phase == "write" else (
                 "object_closure", "jq", "python", "bash"):
-            raw = self.local_slot(phase, slot)
-            if type(raw) is tuple:
-                _seed_require(all(type(chunk) is bytes for chunk in raw))
-                size = sum(map(len, raw))
-                self.c._runtime_account(self.work, "copy_bytes", size, commit=False)
-                raw = b"".join(raw)
-                self.inputs._account("C", len(raw), "runtime")
-            _seed_require(type(raw) is bytes)
-            binaries[slot] = raw
+            binaries[slot] = self.local_slot(phase, slot)
         def binary_sha(slot):
-            raw = binaries[slot]
-            self.c._runtime_account(self.work, "sha_bytes", len(raw), commit=False)
-            value = e.sha(raw)
-            self.inputs._account("H", len(raw), "runtime")
-            return value
+            return e._runtime_sha_values(binaries[slot], self.work)
         # DependencySnapshot.sha256 is a stored field; do not hash it per command.
         helper_sha, jq_sha = binary_sha("object_closure"), binary_sha("jq")
         _seed_require(helper_sha == parent["helper_executable_sha256"])
@@ -3936,17 +4188,11 @@ class _ReplayCase:
                 rows = self.c._runtime_inventory_values(self.occurrences[phase]["raw"]["capture"]["runtime"])
                 names = [name for name, row in rows.items() if row["slot"] == "host_supervisor_source" and row["index"] == 0]
                 _seed_require(len(names) == 1)
-                raw = self.inputs.bytes(phase, "capture", phase + "/" + names[0], self.c.EXECUTABLE_LIMIT)
-                if type(raw) is tuple:
-                    _seed_require(all(type(chunk) is bytes for chunk in raw))
-                    size = sum(map(len, raw))
-                    self.c._runtime_account(self.work, "copy_bytes", size, commit=False)
-                    raw = b"".join(raw)
-                    self.inputs._account("C", len(raw), "runtime")
-                _seed_require(type(raw) is bytes)
-                value = e.sha(raw)
-                self.inputs._account("H", len(raw), "runtime")
-                return value
+                raw = self.inputs.semantic(phase, "capture", phase + "/" + names[0])
+                _seed_require(type(raw) in (bytes, tuple))
+                size = sum(map(len, raw)) if type(raw) is tuple else len(raw)
+                _seed_require(size <= self.c.EXECUTABLE_LIMIT)
+                return e._runtime_sha_values(raw, self.work)
             if relative not in components:
                 path = Path(runtime_root) / relative
                 raw = e.read_regular(path, self.c.EXECUTABLE_LIMIT, "E_RELATION")
@@ -4966,19 +5212,8 @@ class _ReplayCase:
         native_context = self.parent_context(phase)
         commands = self.consumer_commands(runtime_root, phase, prepared["input_raw"],
             prepared["response_raw"], sudo_stat)
-        runtime_bytes = {}
-        for slot in ("python", "jq"):
-            value = self.local_slot(phase, slot)
-            if type(value) is tuple:
-                _seed_require(all(type(chunk) is bytes for chunk in value))
-                size = sum(map(len, value))
-                self.c._runtime_account(self.work, "copy_bytes", size, commit=False)
-                value = b"".join(value)
-                self.inputs._account("C", len(value), "runtime")
-            _seed_require(type(value) is bytes)
-            runtime_bytes[slot] = value
-        jq_sha = e.sha(runtime_bytes["jq"])
-        self.inputs._account("H", len(runtime_bytes["jq"]), "runtime")
+        runtime_bytes = {slot: self.local_slot(phase, slot) for slot in ("python", "jq")}
+        jq_sha = e._runtime_sha_values(runtime_bytes["jq"], self.work)
         component = self.c._open_held(str(runtime_root / "shadow/v1/enforced-reproduction.py"), False,
             self.c._store_rule(os.geteuid(), os.getegid(), 0o400, False, self.inputs.resolver),
             "E_STORE", recording_work=self.work, accounting_kind="M")
@@ -5140,16 +5375,7 @@ class _ReplayCase:
         parent = self.parent_context(phase)
         commands = self.consumer_commands(runtime_root, phase, prepared["input_raw"], prepared["response_raw"],
             sudo_stat, candidate["commit_id"], builder["write_set"])
-        binaries = {}
-        for slot in ("python", "jq"):
-            value = self.local_slot(phase, slot)
-            if type(value) is tuple:
-                _seed_require(all(type(chunk) is bytes for chunk in value))
-                self.c._runtime_account(self.work, "copy_bytes", sum(map(len, value)), commit=False)
-                value = b"".join(value)
-                self.inputs._account("C", len(value), "runtime")
-            _seed_require(type(value) is bytes)
-            binaries[slot] = value
+        binaries = {slot: self.local_slot(phase, slot) for slot in ("python", "jq")}
         source = self.c._open_held(str(runtime_root / "shadow/v1/write-shadow.py"), False,
             self.c._store_rule(os.geteuid(), os.getegid(), 0o400, False, self.inputs.resolver),
             "E_STORE", recording_work=self.work, accounting_kind="M")
@@ -5157,9 +5383,10 @@ class _ReplayCase:
         _seed_require(source.before.st_size <= self.c.EXECUTABLE_LIMIT)
         self.c._capture_copy_room(self.work, 4 * source.before.st_size, False, case=True, read_only=True)
         consumer_raw = source.read(self.c.EXECUTABLE_LIMIT, "E_STORE", self.work)
-        consumer_sha, python_sha, jq_sha = w.sha(consumer_raw), w.sha(binaries["python"]), w.sha(binaries["jq"])
+        consumer_sha = w.sha(consumer_raw)
+        python_sha = e._runtime_sha_values(binaries["python"], self.work)
+        jq_sha = e._runtime_sha_values(binaries["jq"], self.work)
         self.inputs._account("H", len(consumer_raw), "M")
-        self.inputs._account("H", len(binaries["python"]) + len(binaries["jq"]), "runtime")
         materialized = {"input_raw": prepared["input_raw"], "response_raw": prepared["response_raw"],
             "evaluation_raw": launch["evaluation_raw"], "qualified_identity_raw": identity_raw,
             "candidate_tree_id": candidate["tree_id"], "write_set": builder["write_set"], "files": builder["files"]}
@@ -5199,13 +5426,9 @@ class _ReplayCase:
         _seed_require(type(controls) is dict and set(controls) == set(control_names))
         output = {}
         def equal(left, right):
-            _seed_require(type(left) is bytes and type(right) is bytes)
-            self.inputs._account("E", len(left) + len(right), "M")
-            _seed_require(left == right)
+            _seed_require(self._scope_data_equal(left, right))
         def digest(raw):
-            value = g.c.digest(raw)
-            self.inputs._account("H", len(raw), "M")
-            return value
+            return self._scope_data_sha(raw, "runtime" if type(raw) is tuple else "M")
         def reference(raw):
             value = g.ref(raw)
             self.inputs._account("H", len(raw), "M")
@@ -5217,8 +5440,8 @@ class _ReplayCase:
         def add(name, raw, document=False):
             _seed_require(type(name) is str and name and not name.startswith("/")
                 and "\0" not in name and all(piece not in {"", ".", ".."} for piece in name.split("/"))
-                and name not in output and type(raw) is bytes)
-            if document:_seed_require(len(raw) <= self.c.DOCUMENT_LIMIT)
+                and name not in output and type(raw) in {bytes, tuple})
+            if document:_seed_require(type(raw) is bytes and len(raw) <= self.c.DOCUMENT_LIMIT)
             _seed_require(len(output) < 256)
             output[name] = raw
         def put(name, raw):
@@ -5293,7 +5516,7 @@ class _ReplayCase:
                 _seed_require(name.startswith("private/"))
                 if name in output:equal(output[name], raw)
                 else:add(name, raw)
-        rows = [{"name": name, "size_bytes": len(output[name]), "sha256": digest(output[name])}
+        rows = [{"name": name, "size_bytes": self._scope_data_size(output[name]), "sha256": digest(output[name])}
             for name in sorted(output, key=Path)]
         manifest = g._manifest_values(identity, rows, initial["initial_origin_refs"],
             scope_result["final_origin_refs"], objects["kill-request"], coverage_request_raw, self.work)
@@ -5305,7 +5528,7 @@ class _ReplayCase:
         _seed_require(1 <= len(recorded) <= 256 and len(set(recorded)) == len(recorded)
             and set(recorded) == set(output))
         for name, raw in sorted(output.items()):
-            self.compare_member("gate", "recorded", "generator/" + name, raw)
+            self._scope_compare_output_member("generator/" + name, raw)
         result = {"files": output, "manifest_raw": manifest, "completion_raw": completion,
             "scope_evaluation_raw": evaluation_raw}
         self.calculated["gate_outputs"] = result
@@ -5351,7 +5574,7 @@ class _ReplayCase:
         _seed_require("reproduction" in self.calculated and "files" not in self.calculated["reproduction"])
         _seed_require(files["incident.json"] == self.original_raw["incident.json"]
             and files["sandbox-receipt.json"] == self.calculated["reproduction"]["receipt"])
-        result, bundle = _reproduction_values(runtime_root, files, materialized, context)
+        result, bundle = _reproduction_values(runtime_root, files, materialized, context, runtime_work=self.work)
         self.calculated["reproduction"].update(files=result, bundle=bundle)
         return result, bundle
 
@@ -5385,6 +5608,1283 @@ class _ReplayCase:
         try:self.inputs.close(failure)
         except BaseException as error:failure = self._replay_io_first(failure, error)
         if failure is not None:raise failure
+
+    def _scope_acquisition_origin_body(self, context, snapshots, attempt_id):
+        _seed_require(context in {"generator", "scope_reader"})
+        state = self.calculated["scope_contexts"][context]
+        r = state["modules"]["reader"];c = r.c
+        ctx = state["context"]
+        original_context = self.occurrences["gate"]["raw"][context]
+        _seed_require(state["cursor"] < len(state["groups"]))
+        group = state["groups"][state["cursor"]];state["cursor"] += 1
+        r.require(not group["capture"] and group["attempt_id"] == attempt_id)
+        ancestors = r._scope_storage_chains_values(group["ancestors"], group["rows"], ctx["config"]["store_root"])
+        origin = c._origin_values(snapshots, group["rows"], {"attempt_id": attempt_id,
+            "platform": original_context["storage"]["identity_context"]["platform"]}, {"host-config.json": ctx["config_raw"]})
+        key = (ctx["config"]["store_id"], attempt_id)
+        binding = c._gate_store_binding_values(ctx["config"]["store_id"], attempt_id, origin, snapshots, ancestors)
+        stable = {name: value for name, value in binding.items() if name != "origin_ref"}
+        r.require(key not in state["bindings"] or r.same(state["bindings"][key], stable))
+        state["bindings"][key] = stable
+        state["fresh"][key] = (origin, snapshots, binding)
+        state["last_source_group"] = group
+        return origin
+
+    def _scope_append_command_body(self, context, role, argv, executable, component, operation, annotations):
+        state = self.calculated["scope_contexts"][context]
+        r = state["modules"]["reader"];e = sys.modules["malicious_reproduction_pipeline"]
+        concrete = {"role": role, "argv": argv, "executable_sha256": executable, "component_sha256": component}
+        state["argv"].append(concrete)
+        encoded = self.inputs.encode(argv)
+        sha = e._command_argv_values(argv)
+        self.inputs._account("C", len(encoded), "M");self.inputs._account("E", len(encoded), "M");self.inputs._account("H", len(encoded), "M")
+        state["commands"].append(e._command_values(role, sha, executable, component))
+        recipe = r._scope_command_recipe_values(role, executable, component, operation, annotations)
+        self.inputs.encode(recipe);state["command_recipe"].append(recipe)
+        return concrete
+
+    def _scope_authenticate_body(self, runtime_root, work_hold, source_git_hold, context, scope_raw, current_only):
+        import fnmatch
+        runtime_root = Path(runtime_root)
+        _seed_require(context in {"generator", "scope_reader"} and type(scope_raw) is bytes
+            and type(source_git_hold) is self.c.HeldPath and type(work_hold) is self.c.HeldPath)
+        modules = {}
+        for label, relative in (("reader", "scope/v1/read-shadow-evidence.py"),
+                                ("generator", "scope/v1/generate-gate-evidence.py"),
+                                ("writer", "shadow/v1/write-shadow.py")):
+            spec = importlib.util.spec_from_file_location("malicious_scope_" + label, runtime_root / relative)
+            value = importlib.util.module_from_spec(spec);sys.modules[spec.name] = value;spec.loader.exec_module(value)
+            _seed_require(Path(value.__file__).absolute() == runtime_root / relative)
+            modules[label] = value
+        r, g, w = modules["reader"], modules["generator"], modules["writer"]
+        c, e = r.c, w.e
+        self.work["scope_relation_processing_unknown"] = True
+        self.work["accounting_incomplete"] = True
+        scope, trial = r.parse(scope_raw), self.trial("gate")
+        s, shadow_set = scope["body"], r.parse(trial["shadow-set.json"])
+        workflow = s["workflow_id"] == "workflow.shadow-evidence-commit"
+        r.require(workflow == (s["task_class"] == "task.commit-shadow-evidence"))
+        r.require(bool(s.get("coverage")) == workflow)
+        original_context = self.occurrences["gate"]["raw"][context]
+        locators = self.locators["gate"]
+        paths = {key: Path(locators[context + "." + key]) for key in
+            ("scratch", "runtime", "captures", "output", "git_root", "git_config", "package", "python", "jq", "bash", "git")}
+        _seed_require(all(path.is_absolute() for path in paths.values()))
+        # These are historical paths only. None is reopened by replay.
+        source_git_hold.recheck("E_STORE", self.work, "M")
+        state = self.calculated.setdefault("scope_contexts", {}).get(context)
+        if state is None:
+            raw_rows = original_context["storage"]["entries"]
+            groups, prefix, current = [], [], None
+            for index, row in enumerate(raw_rows):
+                if row["role"] != "store":continue
+                name = os.fsdecode(bytes.fromhex(row["name"]))
+                if name.startswith("/"):
+                    if current is not None:
+                        current["end"] = index;groups.append(current);current = None
+                    prefix.append(row)
+                elif name == "." or name.startswith(".capture-") and "/" not in name:
+                    if current is not None:current["end"] = index;groups.append(current)
+                    current = {"ancestors": prefix, "rows": [row], "capture": name != "."};prefix = []
+                else:
+                    _seed_require(current is not None);current["rows"].append(row)
+            if current is not None:current["end"] = len(raw_rows);groups.append(current)
+            _seed_require(not prefix)
+            for group in groups:
+                _seed_require(len(group["rows"]) >= (1 if group["capture"] else 3))
+                group["attempt_id"] = (os.fsdecode(bytes.fromhex(group["rows"][0]["name"]))[len(".capture-"):]
+                    if group["capture"] else os.fsdecode(bytes.fromhex(group["rows"][1]["name"])))
+                _seed_require(c._id(group["attempt_id"]))
+            def anchor_bytes(name, limit):
+                return self.inputs.bytes("gate", "capture", context + "/anchor/" + name, limit)
+            config_raw = anchor_bytes("host", c.DOCUMENT_LIMIT)
+            config = c._parse_config(config_raw);self.inputs._account("R", len(config_raw), "M")
+            installed = {key: anchor_bytes("installed-" + key, c.EXECUTABLE_LIMIT) for key in c.INSTALLED_SOURCES}
+            for key, relative in c.INSTALLED_SOURCES.items():
+                actual = e.read_regular(runtime_root / relative, c.EXECUTABLE_LIMIT, "E_INSTALL")
+                self.inputs._account("R", len(actual), "M")
+                r.require(self._scope_data_equal(actual, installed[key]), "E_INSTALL")
+            registry = c._parse_registry(installed["registry"])
+            accepted = c._parse_accepted(installed["accepted_set"])
+            for key in ("registry", "accepted_set"):
+                self.inputs._account("R", len(installed[key]), "M");self.inputs._account("H", len(installed[key]), "M")
+            verifier_raw = anchor_bytes("verifier", c.EXECUTABLE_LIMIT)
+            verifier_sha = c.digest(verifier_raw);self.inputs._account("H", len(verifier_raw), "M")
+            context_values = {"config": config, "config_raw": config_raw, "registry": registry, "accepted": accepted,
+                "installed": installed, "verifier_raw": verifier_raw, "verifier_sha256": verifier_sha,
+                "supervisor_raw": anchor_bytes("supervisor", c.EXECUTABLE_LIMIT)}
+            state = {"groups": groups, "cursor": 0, "captures": 1, "commands": [], "runtime_ordinals": {},
+                "fresh": {}, "bindings": {}, "context": context_values, "modules": modules, "paths": paths,
+                "argv": [], "command_recipe": [], "output_files": {}, "runtime_values_consumed": []}
+            self.calculated["scope_contexts"][context] = state
+        else:
+            r.require(state["paths"] == paths)
+        ctx = state["context"]
+        round_number = state.get("round_number", 0)
+        state["round_number"] = round_number + 1
+        r.require(round_number < (4 if context == "generator" else 2), "E_STORE")
+        actual_runtime_phase = "kill" if context == "generator" else "gate"
+        def slot(name):
+            rows = c._runtime_inventory_values(original_context["runtime"])
+            matching = [row for row in rows.values() if row["slot"] == name and row["index"] == 0]
+            _seed_require(matching)
+            first = matching[0];raw = self._scope_runtime_value_body(context, first)
+            sha = self._scope_data_sha(raw, "runtime")
+            _seed_require(self._scope_data_size(raw) == first["size_bytes"] and sha == first["sha256"] and first["locator"] == str(paths[name]))
+            for row in matching[1:]:
+                repeated = self._scope_runtime_value_body(context, row)
+                measured = self._scope_data_sha(repeated, "runtime")
+                _seed_require(row["locator"] == first["locator"] and self._scope_data_size(repeated) == row["size_bytes"]
+                    and measured == row["sha256"] and self._scope_data_equal(raw, repeated, "runtime"))
+            return raw, sha
+        binaries = {key: slot(key)[1] for key in ("python", "jq", "bash", "git")}
+        state["binaries"] = binaries
+        generator_root = Path(self.locators["gate"]["scope"]).parents[2]
+        if paths["captures"].is_relative_to(generator_root):
+            for key, raw in (("host", ctx["config_raw"]), ("verifier", ctx["verifier_raw"]),
+                             ("supervisor", ctx["supervisor_raw"]),
+                             *(("installed-" + key, value) for key, value in ctx["installed"].items())):
+                name = paths["captures"] / "gate-4095" / "reader-anchor" / ("reader-anchor-" + key + ".bin")
+                state["output_files"][name.relative_to(generator_root).as_posix()] = raw
+            for row in c._runtime_inventory_values(original_context["runtime"]).values():
+                raw = self._scope_runtime_value_body(context, row)
+                sha = self._scope_data_sha(raw, "runtime")
+                _seed_require(self._scope_data_size(raw) == row["size_bytes"] and sha == row["sha256"])
+                state["output_files"][(paths["captures"] / row["file"]).relative_to(generator_root).as_posix()] = raw
+        def source(relative):
+            raw = e.read_regular(runtime_root / relative, c.EXECUTABLE_LIMIT, "E_RELATION")
+            self.inputs._account("R", len(raw), "M")
+            sha = c.digest(raw);self.inputs._account("H", len(raw), "M")
+            return raw, sha
+        def runtime_equal(site, expected):
+            ordinal = state["runtime_ordinals"].get(site, 0)
+            rows = [row for row in original_context["commands"]["runtime_values"] if row["site"] == site]
+            _seed_require(ordinal < len(rows));state["runtime_ordinals"][site] = ordinal + 1
+            index = len(state["runtime_values_consumed"])
+            _seed_require(index < len(original_context["commands"]["runtime_values"])
+                and original_context["commands"]["runtime_values"][index] == rows[ordinal])
+            result = r._scope_runtime_equal_values(expected, rows[ordinal], site, ordinal)
+            state["runtime_values_consumed"].append(rows[ordinal])
+            return result
+        def command(role, argv, executable, component, operation, annotations):
+            return self._scope_append_command_body(context, role, argv, executable, component, operation, annotations)
+        env = e.clean_env(runtime_root / "bin/jq", Path(work_hold.path))
+        generation = e.core_modules(source("core/v2/generation-registry.json")[0])
+        historical_modules = paths["package"] / generation.relative_to(runtime_root)
+        def capture(name, raw):
+            ordinal = state["captures"];state["captures"] += 1
+            old = paths["captures"] / ("gate-%04d" % ordinal) / name
+            new = self._replay_write_bytes(work_hold, "scope-%s-%04d-%s" % (context, ordinal, name), raw)
+            generator_root = Path(self.locators["gate"]["scope"]).parents[2]
+            if old.is_relative_to(generator_root):
+                member = old.relative_to(generator_root).as_posix()
+                _seed_require(member not in state["output_files"]);state["output_files"][member] = raw
+            return old, new
+        def shell(role, relative, arguments, historical_arguments, stdin=b"", limit=c.DOCUMENT_LIMIT):
+            sha = source(relative)[1]
+            old_argv = ["/bin/bash", "-p", str(paths["package"] / relative), *map(str, historical_arguments)]
+            kinds = {"control/v1/evaluate-bound-sandbox.sh": (("fixed", "operation"), ("historical-path", "duty"), ("historical-path", "claim"), ("historical-path", "verifier-observation")),
+                "shadow/v1/validate-incident.sh": (("fixed", "operation"), ("historical-path", "incident")),
+                "enforcement/v1/check-sandbox-receipt.sh": (("fixed", "operation"), ("historical-path", "receipt"), ("historical-path", "expectation"), ("historical-path", "evaluation"), ("historical-path", "verifier-observation")),
+                "telemetry/v1/validate-trace-ledger.sh": (("fixed", "operation"), ("content", "incident-id"), ("content", "attempt-id"), ("historical-path", "trace-ledger")),
+                "maintenance/v1/incident-to-eval.sh": (("fixed", "operation"), ("historical-path", "incident"), ("historical-path", "record"), ("historical-path", "seed-directory"))}[relative]
+            _seed_require(len(kinds) == len(historical_arguments))
+            annotations = [{"position": 0, "type": "fixed", "role": "shell", "value": "/bin/bash"},
+                {"position": 1, "type": "fixed", "role": "shell-mode", "value": "-p"},
+                {"position": 2, "type": "historical-path", "role": "component:" + relative}]
+            for index, ((kind, meaning), value) in enumerate(zip(kinds, historical_arguments), 3):
+                annotations.append({"position": index, "type": kind, "role": meaning, **({"value": str(value)} if kind == "fixed" else {})})
+            command("scope-fixed-check", old_argv, binaries["bash"], sha, str(historical_arguments[0]), annotations)
+            return self._run_offline(role, ["/bin/bash", "-p", str(runtime_root / relative), *map(str, arguments)],
+                stdin=stdin, output_limit=limit, env=env)
+        def jq(role, relative, arguments, raw, historical_arguments=None):
+            sha = source(relative)[1]
+            old_arguments = arguments if historical_arguments is None else historical_arguments
+            old_argv = [str(paths["jq"]), "-L", str(historical_modules), *map(str, old_arguments), "-f", str(paths["package"] / relative)]
+            annotations = [{"position": 0, "type": "historical-path", "role": "jq"},
+                {"position": 1, "type": "fixed", "role": "modules-flag", "value": "-L"},
+                {"position": 2, "type": "historical-path", "role": "core-modules"}]
+            variable = ({3: ("content", "repository-id"), 6: ("content", "hash-algorithm"), 9: ("content", "commit-id")}
+                if relative == "shadow/v1/qualified-identity.jq" else
+                {7: ("historical-path", "contract"), 10: ("historical-path", "patch"), 13: ("historical-path", "builder-metadata")}
+                if relative == "shadow/v1/write-materialization-input.jq" else {})
+            for index, value in enumerate(old_arguments):
+                kind, meaning = variable.get(index, ("fixed", "filter-argument"))
+                annotations.append({"position": index + 3, "type": kind, "role": meaning, **({"value": str(value)} if kind == "fixed" else {})})
+            annotations.extend(({"position": len(old_argv) - 2, "type": "fixed", "role": "filter-flag", "value": "-f"},
+                {"position": len(old_argv) - 1, "type": "historical-path", "role": "component:" + relative}))
+            command("scope-fixed-json-check", old_argv, binaries["jq"], sha, role, annotations)
+            return self._run_offline(role, [str(runtime_root / "bin/jq"), "-L", str(generation), *map(str, arguments),
+                "-f", str(runtime_root / relative)], stdin=raw, output_limit=8 * c.DOCUMENT_LIMIT, env=env)
+        def git(arguments, limit):
+            return self._scope_git_body(runtime_root, work_hold, source_git_hold, context, arguments, limit)
+        def shape(algorithm):
+            r.require(algorithm in {"sha1", "sha256"})
+            keys = git(["config", "--file", str(paths["git_config"]), "--name-only", "--list", "--no-includes"], c.DOCUMENT_LIMIT)
+            try:r.require(set(keys.decode("utf-8").splitlines()) <= c.GIT_CONFIG_KEYS)
+            except UnicodeError:raise c.Refusal("E_RELATION") from None
+            r.require(git(["rev-parse", "--is-bare-repository"], 16) == b"true\n"
+                and git(["rev-parse", "--show-object-format"], 16) == (algorithm + "\n").encode())
+        def inventory(revision):
+            shape(revision["hash_algorithm"])
+            raw = git(["ls-tree", "-r", "-t", "-z", "--full-tree", revision["commit_id"]], 16 * c.DOCUMENT_LIMIT)
+            value = c._git_inventory_values(raw, revision);self.inputs._account("R", len(raw), "M")
+            return value
+        def commit(oid):
+            raw = git(["cat-file", "commit", oid], c.DOCUMENT_LIMIT)
+            headers = raw.split(b"\n\n", 1)[0].splitlines()
+            trees = [row[5:].decode("ascii") for row in headers if row.startswith(b"tree ")]
+            parents = [row[7:].decode("ascii") for row in headers if row.startswith(b"parent ")]
+            r.require(len(trees) == 1 and c._writer_oid(trees[0]) and all(c._writer_oid(value) for value in parents))
+            return trees[0], parents
+        if not state["commands"]:
+            config_raw = self.inputs.bytes("case", "original-input", "git/config", c.DOCUMENT_LIMIT)
+            state["config_copy"] = self._replay_write_bytes(work_hold, "scope-" + context + "-config-copy.txt", config_raw)
+            generator_root = Path(self.locators["gate"]["scope"]).parents[2]
+            if paths["git_config"].is_relative_to(generator_root):
+                state["output_files"][paths["git_config"].relative_to(generator_root).as_posix()] = config_raw
+            shape(s["qualified_identity"]["target_revision"]["hash_algorithm"])
+            if context == "generator":
+                r.require(jq("gate-basis-validation", "scope/v1/workflow-scope.jq",
+                    ["-r", "--arg", "gate_basis", "basis"], scope_raw) == b"", "E_SHAPE")
+        def fresh(snapshots, attempt_id):
+            return self._scope_acquisition_origin_body(context, snapshots, attempt_id)
+        def preparation(files, receipt, response):
+            prep, producer = r._preparation_document_values(files, receipt, response)
+            for key in ("python", "git", "jq"):
+                identity = producer[key]
+                r.require(r._preparation_binary_prefix_matches_values(identity)
+                    and identity["executable_sha256"] == binaries[key] and r._preparation_binary_suffix_matches_values(identity))
+            r.require(producer["source_sha256"] == source("preparation/v1/prepare-candidate.py")[1]
+                and producer["protocol_sha256"] == source("adapters/local-git-materializer/v1/protocol.jq")[1]
+                and producer["jq"]["version"] == "jq-1.6"
+                and runtime_equal("scope.python-version", producer["python"]["version"])
+                and producer["git"]["version"].startswith("git version ")
+                and runtime_equal("scope.unicode-version", producer["unicode_version"]))
+            names = {"adapters/local-git-materializer/v1/protocol.jq", "scripts/core-contract.sh", "core/v2/generation-registry.json"}
+            root = str(generation.parent.relative_to(runtime_root))
+            names.update(root + "/" + suffix for suffix in ("core-ingress.sh", "contracts.jq", "modules/schema.jq",
+                "modules/profile_graph.jq", "modules/stage_request.jq", "modules/result_facts.jq", "modules/result_truth.jq"))
+            r._preparation_core_values(producer["core"], generation.parent.name,
+                [{"path": name, "sha256": source(name)[1]} for name in sorted(names)])
+        def provenance(files, instruction, observation, attempt, write):
+            keys, body = r._provenance_document_values(files, attempt)
+            r.require(r._provenance_content_matches_values(body, instruction, observation)
+                and body["consumer_source_sha256"] == source("shadow/v1/write-shadow.py" if write else "shadow/v1/enforced-reproduction.py")[1]
+                and body["python_sha256"] == binaries["python"] and body["jq_sha256"] == binaries["jq"]
+                and body["helper_source_sha256"] == c.HELPER_SOURCE_SHA256
+                and all(c._sha(body[key]) for key in keys if key.endswith("sha256")))
+            native = body["native_release"]
+            r.require(r._provenance_native_shape_matches_values(native)
+                and runtime_equal("scope.soabi", native["python_abi"])
+                and r._provenance_native_identity_matches_values(native, body)
+                and native["python_locator_sha256"] == c.digest(str(paths["python"]).encode()))
+            for key, name in (("source_sha256", "shadow/v1/_cancel_release.c"),
+                              ("build_script_sha256", "shadow/v1/build-cancel-release.sh")):
+                r.require(native[key] == source(name)[1])
+            fixed = {"helper-version": (body["helper_executable_sha256"], body["helper_source_sha256"]),
+                "jq-version": (binaries["jq"], binaries["jq"]),
+                "darwin-acl-uuid-resolution": (binaries["python"], source("shadow/v1/_consumer.py")[1]),
+                "darwin-group-membership": (binaries["python"], source("shadow/v1/_consumer.py")[1])}
+            # Reader.provenance calls FixedSudo: metadata SHA, independently from the source-command sudo byte SHA.
+            sudo_stat = c._sudo_storage_stat_values(original_context["storage"]["entries"],
+                original_context["storage"]["identity_context"]["platform"])
+            fixed["sandbox-launch-boundary"] = (e._sudo_identity_values(c._identity_values(sudo_stat)),
+                c.digest(ctx["supervisor_raw"]))
+            for role, relative in r._provenance_roles_values().items():
+                executable = binaries["git"] if role == "write-git-inspection" else binaries["python"] if role.startswith("candidate-") else (
+                    binaries["jq"] if role in {"write-materialization-input", "materializer-input-validation",
+                        "materializer-response-validation", "qualified-identity-validation"} else binaries["bash"])
+                fixed[role] = (executable, source(relative)[1])
+            r._provenance_commands_values(body, fixed)
+        def git_relations(files, material, incident, body):
+            revision = incident["body"]["git_revision_ref"]
+            source_facts = inventory(revision)
+            source_tree, _ = commit(revision["commit_id"])
+            response = r.parse(files["materialization-response.json"])
+            receipt = r.parse(response["payloads"][0]["data"].encode())
+            candidate = receipt["candidate"]
+            r._candidate_header_values(receipt["source"], body, revision, source_tree, candidate)
+            candidate_tree, parents = commit(candidate["commit_id"])
+            r.require(candidate_tree == candidate["tree_id"])
+            facts = inventory(dict(revision, commit_id=candidate["commit_id"]))
+            manifest = r.parse(files["preparation-manifest.json"])
+            entries = r._candidate_manifest_header_values(manifest)
+            manifest_facts = {};file_count = total_bytes = 0
+            for row in entries:
+                value = r._candidate_manifest_row_values(row, manifest_facts, facts)
+                if value[1] == "blob":
+                    r.require(set(row) == {"path", "kind", "git_mode", "mode", "blob_oid", "size_bytes", "sha256"})
+                    file_count += 1
+                    r.require(type(row["size_bytes"]) is int and row["size_bytes"] >= 0);total_bytes += row["size_bytes"]
+                    r.require(r._candidate_manifest_file_matches_values(row, value))
+                    raw = git(["cat-file", "blob", value[2]], min(16 * c.DOCUMENT_LIMIT, row["size_bytes"] + 1))
+                    r._candidate_manifest_blob_values(raw, row)
+            r._candidate_manifest_totals_values(manifest_facts, facts, manifest, entries, file_count, total_bytes)
+            preparation(files, receipt, response)
+            if body["record_form"] == "enforced-reproduction.v1":
+                e.require_no_change(files["materialization-response.json"], incident)
+                r.require(facts == source_facts and candidate["commit_id"] == revision["commit_id"])
+                return
+            r.require(parents == [revision["commit_id"]])
+            # The write relation value owner must be extracted at the existing Reader.write_relations sites;
+            # it consumes these actual Git inventories and independently read blob bytes, not a success flag.
+            write, prefix, paths_to_write, rows, policy_form = r._scope_write_header_values(files, incident, body, scope)
+            frozen_bytes = {}
+            for row in rows:
+                r._scope_write_row_values(row, facts)
+                limit = 8 * c.DOCUMENT_LIMIT if row["path"].endswith("materialization-input.json") else 2 * c.DOCUMENT_LIMIT
+                raw = git(["cat-file", "blob", row["git_blob_oid"]], limit + 1)
+                r.require(len(raw) <= limit and c.digest(raw) == row["sha256"])
+                frozen_bytes[row["path"]] = raw
+            patch = r._scope_write_copied_values(frozen_bytes, incident, body, rows, paths_to_write, facts, source_facts)
+            policy_raw = files["scope-policy.json"] if policy_form else source("scope/v1/scope-policy.json")[0]
+            policy = r._scope_write_policy_values(policy_raw, policy_form, frozen_bytes, prefix)
+            # Evaluate bundle-ref at its original point inside the native split; do not hoist it into native inputs.
+            frozen = r._scope_write_frozen_values(source("config/construction-mode.json")[0], policy, s, paths_to_write,
+                frozen_bytes, prefix, incident, body, files)
+            r.require(r.same(write["bundle_ref"], w._bundle_ref(frozen["bundle.json"]))
+                and r._scope_write_frozen_tail_matches_values(frozen_bytes, frozen))
+            authenticate(frozen, revision)
+            slot_number = state.get("runtime_slot", 0);state["runtime_slot"] = slot_number + 1
+            old_seed = paths["runtime"] / ("gate-%04d" % slot_number)
+            actual_seed = self._replay_mkdir(work_hold, "seed-%s-%04d" % (context, slot_number))
+            old_incident, seed_incident = capture("seed-incident-" + str(state["captures"]) + ".json", frozen["incident.json"])
+            old_record, seed_record = capture("seed-record-" + str(state["captures"]) + ".json", frozen["shadow-record.json"])
+            seed = shell("write-seed-conversion", "maintenance/v1/incident-to-eval.sh",
+                ["convert", seed_incident, seed_record, actual_seed.path], ["convert", old_incident, old_record, old_seed])
+            r.require(seed == frozen_bytes[prefix + "eval-seed.json"])
+            seed_doc = r.parse(seed)
+            family = seed_doc["body"]["family_id"]
+            r.require(type(family) is str and family and all(char in "abcdefghijklmnopqrstuvwxyz0123456789-" for char in family))
+            generator_root = Path(self.locators["gate"]["scope"]).parents[2]
+            if old_seed.is_relative_to(generator_root):
+                state["output_files"][(old_seed / ("eval-seed-case-" + family + ".json")).relative_to(generator_root).as_posix()] = seed
+            contract = c.write_contract(paths_to_write, body["record_form"])
+            old_contract, contract_path = capture("contract-" + str(state["captures"]) + ".json", contract)
+            old_patch, patch_path = capture("patch-" + str(state["captures"]) + ".txt", patch)
+            metadata = {key: c.digest(raw) for key, raw in c.WRITE_TEXTS.items()}
+            attempt = r.parse(files["sandbox-request.json"])["id"]
+            metadata.update({"contract": c.digest(contract), "patch": c.digest(patch), "allowed_paths": paths_to_write,
+                "attempt_id": attempt, "suffix": c.digest(attempt.encode())[:32], "environment_id": r.parse(files["claim.json"])["id"],
+                "claim_sha256": c.digest(files["claim.json"]), "record_form": body["record_form"], "incident_id": r.parse(frozen["incident.json"])["id"]})
+            old_meta, meta = capture("metadata-" + str(state["captures"]) + ".json", c.canonical(metadata))
+            first = jq("write-materialization-input", "shadow/v1/write-materialization-input.jq",
+                ["-S", "-c", "--arg", "phase", "stage-request", "--rawfile", "contract", contract_path,
+                 "--rawfile", "patch", patch_path, "--slurpfile", "metadata", meta], frozen["materialization-input.json"],
+                ["-S", "-c", "--arg", "phase", "stage-request", "--rawfile", "contract", old_contract,
+                 "--rawfile", "patch", old_patch, "--slurpfile", "metadata", old_meta])
+            # Offline child file arguments use actual private paths; historical paths above are only for recipe.
+            first_doc = r.parse(first);r.require(c.canonical(first_doc["original"]) == frozen["materialization-input.json"])
+            metadata["stage_request_sha256"] = c.digest(c.canonical(first_doc["stage_request"]))
+            old_meta, meta = capture("metadata-" + str(state["captures"]) + ".json", c.canonical(metadata))
+            final = jq("write-materialization-input", "shadow/v1/write-materialization-input.jq",
+                ["-S", "-c", "--arg", "phase", "final-input", "--rawfile", "contract", contract_path,
+                 "--rawfile", "patch", patch_path, "--slurpfile", "metadata", meta], first,
+                ["-S", "-c", "--arg", "phase", "final-input", "--rawfile", "contract", old_contract,
+                 "--rawfile", "patch", old_patch, "--slurpfile", "metadata", old_meta])
+            r.require(final == files["materialization-input.json"])
+            publisher, publisher_body = w._publisher(incident, candidate_tree)
+            r._scope_write_publication_values(write, files, publisher, publisher_body, incident, candidate_tree, rows)
+        def authenticate(files, revision):
+            r.require(all(files[name] == ctx["installed"][role] for name, role in r._authentication_installed_names_values().items()))
+            incident, body, actual_revision = r._authentication_documents_values(files)
+            r.require(r.same(actual_revision, revision or s["qualified_identity"]["target_revision"])
+                and body["target_repository_id"] == s["target_repository_id"])
+            selected = r._authentication_environment_values(ctx["registry"][1], body)
+            accepted = r._authentication_environment_values(ctx["accepted"][1], body)
+            r.require(len(selected) == len(accepted) == 1);registry = selected[0]
+            r.require(r._authentication_registry_matches_values(registry, body)
+                and registry["source_root_commit"] == (s["coverage"]["coverage_base"]["commit_id"] if "coverage" in s else actual_revision["commit_id"]))
+            receipt = r._authentication_receipt_values(files, accepted)
+            r.require(ctx["config"]["environment_id"] == body["environment"]["environment_id"]
+                and registry["target_repository_id"] == body["target_repository_id"]
+                and ctx["verifier_sha256"] in accepted[0]["identities"]["verifier"], "E_RELATION")
+            entry_sha = c._verifier_registry_entry_sha(registry)
+            observation = c._verifier_observation_values(body["environment"]["environment_id"], entry_sha,
+                ctx["accepted"][0], body["target_repository_id"], ctx["verifier_sha256"])
+            old_observer, observer = capture("verifier-" + str(state["captures"]) + ".json", observation)
+            provenance_doc = r.parse(files["consumer-provenance.json"])
+            r.require(r.same(provenance_doc["body"]["observation"], r.parse(observation))
+                and provenance_doc["body"]["observation_sha256"] == c.digest(observation))
+            retained = {name: capture(str(state["captures"]) + "-" + name, files[name]) for name in sorted(files)}
+            actual_args = ["evaluate", retained["duty-evaluation.json"][1], retained["claim.json"][1], observer]
+            old_args = ["evaluate", retained["duty-evaluation.json"][0], retained["claim.json"][0], old_observer]
+            evaluation = shell("sandbox-bound-evaluation", "control/v1/evaluate-bound-sandbox.sh", actual_args, old_args)
+            r.require(evaluation == files["sandbox-evaluation.json"] and r.parse(evaluation)["body"]["verdict"] == "satisfied")
+            shell("incident-validation", "shadow/v1/validate-incident.sh", ["validate", retained["incident.json"][1]], ["validate", retained["incident.json"][0]])
+            material, identity = r.parse(files["materialization-input.json"]), r.parse(files["qualified-identity.json"])
+            instruction = e.make_instruction(incident)
+            if body["record_form"] == "enforced-reproduction.v1":
+                e.validate_input_relations(material, incident, r.parse(files["claim.json"]), identity, instruction)
+            else:
+                r.require(r.same(identity["body"]["stage_request_ref"], e.pair_ref(material["stage_request"]))
+                    and r.same(identity["body"]["resolved_profile_ref"], e.pair_ref(material["resolved_profile"]))
+                    and identity["body"]["verification_instructions_ref"]["sha256"] == c.digest(instruction))
+            r.require(jq("qualified-identity-validation", "shadow/v1/qualified-identity.jq", ["-r", "--arg", "repository_id", body["target_repository_id"],
+                "--arg", "hash_algorithm", actual_revision["hash_algorithm"], "--arg", "commit_id", actual_revision["commit_id"]], files["qualified-identity.json"]) == b"")
+            jq("materializer-input-validation", "adapters/local-git-materializer/v1/protocol.jq", ["-e", "--arg", "command", "validate-input"], files["materialization-input.json"])
+            response = r.parse(files["materialization-response.json"])
+            jq("materializer-response-validation", "adapters/local-git-materializer/v1/protocol.jq", ["-e", "--arg", "command", "validate-response"], e.response_check(material, files["materialization-response.json"]))
+            prep, manifest = r.parse(files["preparation-record.json"]), r.parse(files["preparation-manifest.json"])
+            launch = r._launch_expectation_values(files, ctx["config"], registry, body, prep, instruction, e._control_values(ctx["installed"], evaluation))
+            mapping = r._authentication_store_names_values()
+            snapshots = {key: files[name] for key, name in mapping.items()}
+            # Each byte is a recomputed launch output, independently held/copied at the original I input boundary.
+            r.require(set(snapshots) == set(mapping))
+            origin = fresh(snapshots, launch["id"])
+            r._origin_projection_values(r.parse(files["origin-observation.json"]), snapshots, launch["id"], ctx["config"])
+            r._origin_projection_values(r.parse(origin), snapshots, launch["id"], ctx["config"])
+            names = ("sandbox-receipt.json", "sandbox-expectation.json", "sandbox-evaluation.json")
+            checked = shell("sandbox-receipt-check", "enforcement/v1/check-sandbox-receipt.sh",
+                ["check-bound", *[retained[name][1] for name in names], observer], ["check-bound", *[retained[name][0] for name in names], old_observer])
+            r.require(checked == files["sandbox-check.json"] and r.parse(checked)["body"]["check_verdict"] == "valid"
+                and r.parse(checked)["body"]["enforcement_verdict"] == "satisfied")
+            result_raw, result = e.payload_result(snapshots, r.parse(files["evidence-manifest.json"]), instruction, manifest, receipt)
+            r.require(result_raw == files["file-digest-result.json"])
+            write = body.get("write")
+            w._record_relations_values(files, incident, result, origin, ctx["config"]["store_id"], write)
+            r._record_refs_values(files, body, launch["id"], ctx["config"])
+            trace = shell("trace-validation", "telemetry/v1/validate-trace-ledger.sh", ["validate", incident["id"], launch["id"], retained["trace-ledger.json"][1]],
+                ["validate", incident["id"], launch["id"], retained["trace-ledger.json"][0]])
+            r.require(trace == files["trace-receipt.json"])
+            provenance(files, instruction, observation, launch["id"], write is not None)
+            git_relations(files, material, incident, body)
+            source_git_hold.recheck("E_STORE", self.work, "M")
+            return r._bundle_facts_values(files, checked, origin, body)
+        if context == "scope_reader" and round_number == 1:
+            self._scope_source_origin_body(context, "coverage")
+        # Native _HeldBundle.files insertion order is sorted fixed member names.
+        rebuilt = {}
+        for phase in ("reproduction", "write"):
+            calculated = self.calculated[phase]
+            rebuilt[phase] = dict(sorted({**calculated["files"], "bundle.json": calculated["bundle"]}.items()))
+        r.require(set(shadow_set) == {"schema_version", "kind", "id", "body"}
+            and type(shadow_set["schema_version"]) is int and shadow_set["schema_version"] == 1
+            and shadow_set["kind"] == "shadow_evidence_set" and c._id(shadow_set["id"])
+            and type(shadow_set["body"]) is dict and set(shadow_set["body"]) == {"records"})
+        records = shadow_set["body"]["records"]
+        r.require(type(records) is list and 1 <= len(records) <= 16)
+        identity = s["qualified_identity"]
+        groups = [("current", s["shadow_evidence_refs"], identity["target_revision"], [])]
+        if s.get("coverage") is not None:
+            groups.insert(0, ("qualifying", s["coverage"]["qualifying_shadow_record_refs"], s["coverage"]["coverage_base"], []))
+        roles = {"current": {}, "qualifying": {}}
+        digests = set()
+        base_keys = {"activation_state", "authority", "check", "deploy_authority", "effects", "environment",
+            "evaluation_mode", "git_revision_ref", "incident_ref", "materialization", "observed_at", "outcome",
+            "qualification", "qualified_identity", "qualified_identity_ref", "reason_id", "shadow",
+            "target_repository_id", "trace_ledger_ref"}
+        for record in records:
+            raw = c.canonical(record);sha = c.digest(raw)
+            r.require(sha not in digests);digests.add(sha)
+            r.require(type(record) is dict and set(record) == {"schema_version", "kind", "id", "body"}
+                and type(record["schema_version"]) is int and record["schema_version"] == 1
+                and record["kind"] == "shadow_reproduction_record" and c._id(record["id"]) and type(record["body"]) is dict)
+            body = record["body"];form = body.get("record_form", "legacy")
+            r.require(form in {"legacy", "enforced-reproduction.v1", "withheld-write.v1", "withheld-write-policy.v1"})
+            additions = set() if form == "legacy" else {"record_form", "sandbox", "producer_invocations", "consumer_provenance_ref"}
+            if form in {"withheld-write.v1", "withheld-write-policy.v1"}:additions.add("write")
+            if form == "withheld-write-policy.v1":additions.add("scope_policy_ref")
+            r.require(set(body) == base_keys | additions)
+            for role, references, revision, output in groups:
+                claimed = any(reference["id"] == record["id"] and reference["sha256"] == sha for reference in references)
+                same_identity = r.same(body["qualified_identity"], identity) if role == "current" else all(
+                    r.same(body["qualified_identity"][key], identity[key]) for key in
+                    ("model_request", "adapter_config_refs", "prompt_refs", "skill_refs", "verification_instructions_ref"))
+                match = body["target_repository_id"] == s["target_repository_id"] and r.same(body["git_revision_ref"], revision) and same_identity
+                eligible = claimed and match and form != "legacy"
+                environment = body["environment"]["environment_id"]
+                row = {"record_ref": r.ref(raw), "record_form": form, "claimed": claimed, "eligible": eligible,
+                    "environment_id": environment, "authentication": {"state": "missing"}, "facts": {}}
+                if eligible and (not current_only or role == "current"):
+                    r.require(environment not in roles[role] and environment in s["required_shadow_environments"]
+                        and (form not in {"withheld-write.v1", "withheld-write-policy.v1"} or workflow))
+                    candidates = [files for files in rebuilt.values() if files["shadow-record.json"] == raw]
+                    r.require(len(candidates) <= 1)
+                    files = candidates[0] if candidates else self._scope_history_files_body(context, raw)
+                    r.require(body["materialization"]["value"]["outcome"] == ("no-change" if form == "enforced-reproduction.v1" else "changed"))
+                    roles[role][environment] = files
+                    row["facts"] = authenticate(files, revision)
+                    row["authentication"] = {"state": "authenticated"}
+                output.append(row)
+        for _role, references, _revision, output in groups:
+            for reference in references:
+                r.require(sum(reference["id"] == row["record_ref"]["id"] and reference["sha256"] == row["record_ref"]["sha256"] for row in output) == 1)
+        if context == "generator" and round_number == 1:
+            self._scope_source_origin_body(context, "kill")
+        elif context == "generator" and round_number == 3:
+            self._scope_source_origin_body(context, "kill")
+            self._scope_source_origin_body(context, "coverage")
+        elif context == "scope_reader" and round_number == 0:
+            self._scope_source_origin_body(context, "kill")
+        current = next(values for name, _refs, _revision, values in groups if name == "current")
+        qualifying = next((values for name, _refs, _revision, values in groups if name == "qualifying"), [])
+        return {"rows": current, "qualifying_rows": qualifying, "role_files": roles,
+            "fresh": dict(state["fresh"]), "commands": list(state["commands"]), "context": ctx}
+
+    def _scope_capture_private_body(self, context, phase):
+        import ast, math, struct
+        state = self.calculated["scope_contexts"][context]
+        r = state["modules"]["reader"];c = r.c
+        root = Path(state["modules"]["reader"].PACKAGE)
+        source = self.calculated[phase]["files"];request_raw = source["payload/request.json"]
+        request = r.parse(request_raw);attempt = request["id"]
+        source_group = state["last_source_group"]
+        original = self.occurrences["gate"]["raw"][context]
+        r.require(state["cursor"] < len(state["groups"]), "E_STORE")
+        group = state["groups"][state["cursor"]]
+        r.require(group["capture"] and group["attempt_id"] == attempt, "E_STORE")
+        capture_ancestors = r._scope_storage_chains_values(group["ancestors"], group["rows"], state["context"]["config"]["store_root"], True)
+        r.require(capture_ancestors and capture_ancestors[-1] == list(c._identity_values(source_group["rows"][0]["before"])), "E_STORE")
+        state["cursor"] += 1
+        ordinal = state.get("source_capture_ordinal", 0)
+        r.require(ordinal < 4096, "E_LIMIT");state["source_capture_ordinal"] = ordinal + 1
+        reused = context == "generator" and ordinal == 0 and phase == "kill" or context == "scope_reader" and ordinal == 1 and phase == "coverage"
+        primitive_raw = self.inputs.bytes(phase if reused else "gate", "capture",
+            ("source-%04d/consumer-observations.json" % ordinal) if reused else context + "/source-%04d/consumer-observations.json" % ordinal, c.DOCUMENT_LIMIT)
+        primitive = r.parse(primitive_raw, c.DOCUMENT_LIMIT)
+        r.require(type(primitive) is dict and set(primitive) == {"attempt_id", "request_sha256", "storage", "storage_reads",
+            "identity_context", "commands", "preparation", "entropy", "clocks"}
+            and primitive["attempt_id"] == attempt and type(primitive["storage_reads"]) is list, "E_STORE")
+        request_sha = c.digest(request_raw);self.inputs._account("H", len(request_raw), "M")
+        r.require(primitive["request_sha256"] == request_sha and primitive["storage"] == source_group["rows"]
+            and primitive["identity_context"] == original["storage"]["identity_context"], "E_STORE")
+        projected = c._gate_storage_rows_values(primitive["storage_reads"])
+        r.require(projected == original["storage"]["entries"][:group["end"]], "E_STORE")
+        r.require(type(primitive["commands"]) is dict and set(primitive["commands"]) == {"runtime_values"}, "E_STORE")
+        r._scope_runtime_prefix_values(primitive["commands"]["runtime_values"], original["commands"]["runtime_values"])
+        r.require(primitive["commands"]["runtime_values"] == state["runtime_values_consumed"]
+            and primitive["preparation"] == {}, "E_STORE")
+        if context == "generator":entropy = {"kill": self.occurrences["gate"]["raw"][context]["entropy"]["kill"]}
+        elif phase == "coverage" or state["round_number"] > 1:
+            entropy = {"coverage": self.occurrences["gate"]["raw"][context]["entropy"]["coverage"]}
+        else:entropy = {}
+        r.require(primitive["entropy"] == entropy, "E_STORE")
+        # Only primitive, source-bound clock observations are inputs. No clock value
+        # selects code, a command, an owner or a filesystem path.
+        owners = ("scope/v1/read-shadow-evidence.py", "scope/v1/generate-gate-evidence.py", "shadow/v1/_consumer.py")
+        if "clock_sites" not in state:
+            sites = {}
+            for owner in owners:
+                raw = (root / owner).read_bytes();self.inputs._account("R", len(raw), "M")
+                tree = ast.parse(raw)
+                sites[owner] = {node.args[0].value for node in ast.walk(tree) if isinstance(node, ast.Call)
+                    and isinstance(node.func, (ast.Name, ast.Attribute))
+                    and (node.func.id if isinstance(node.func, ast.Name) else node.func.attr) == "_clock_value"
+                    and node.args and isinstance(node.args[0], ast.Constant) and type(node.args[0].value) is str}
+            state["clock_sites"] = sites
+        clocks = primitive["clocks"]
+        r.require(type(clocks) is dict and set(clocks) <= set(owners), "E_STORE")
+        for owner, kinds in clocks.items():
+            r.require(type(kinds) is dict and set(kinds) == {"wall", "monotonic"}, "E_STORE")
+            for kind, rows in kinds.items():
+                r.require(type(rows) is list and len(rows) <= 4096, "E_STORE")
+                for row in rows:
+                    r.require(type(row) is dict and set(row) == {"site", "value"}
+                        and row["site"] in state["clock_sites"][owner] and type(row["value"]) is str
+                        and len(row["value"]) == 16 and all(char in "0123456789abcdef" for char in row["value"]), "E_STORE")
+                    r.require(math.isfinite(struct.unpack(">d", bytes.fromhex(row["value"]))[0]), "E_STORE")
+                if owner in original["clocks"]:r.require(rows == original["clocks"][owner][kind][:len(rows)], "E_STORE")
+        rebuilt_primitive = self.inputs.encode({"attempt_id": attempt, "request_sha256": request_sha,
+            "storage": source_group["rows"], "storage_reads": primitive["storage_reads"],
+            "identity_context": original["storage"]["identity_context"],
+            "commands": {"runtime_values": list(state["runtime_values_consumed"])}, "preparation": {},
+            "entropy": entropy, "clocks": clocks})
+        self.inputs._account("E", len(rebuilt_primitive) + len(primitive_raw), "M")
+        r.require(rebuilt_primitive == primitive_raw, "E_STORE")
+        groups = self.occurrences[phase]["raw"]["capture"]
+        capture_raw = c._capture_envelope_values(attempt, request_raw, groups)
+        spec = importlib.util.spec_from_file_location("malicious_scope_capture_completion", root / "sandbox/v1/host-supervisor.py")
+        h = importlib.util.module_from_spec(spec);sys.modules[spec.name] = h;spec.loader.exec_module(h)
+        complete = h._capture_completion_values(attempt, request_raw, capture_raw)
+        captures = {"capture.json": capture_raw, "complete.json": complete}
+        for row in c._runtime_inventory_values(groups["runtime"]).values():
+            members = [value for value, _held in self.inputs.rows.values() if value["occurrence"] == phase
+                and value["role"] == "capture" and value["member"].rsplit("/", 1)[-1] == row["file"]]
+            r.require(len(members) == 1, "E_STORE")
+            raw = self.inputs.semantic(phase, "capture", members[0]["member"])
+            sha = self._scope_data_sha(raw, "runtime")
+            r.require(self._scope_data_size(raw) == row["size_bytes"] and sha == row["sha256"], "E_STORE")
+            captures[row["file"]] = raw
+        origin = c._origin_values(source, source_group["rows"], {"attempt_id": attempt,
+            "platform": original["storage"]["identity_context"]["platform"]}, {"host-config.json": state["context"]["config_raw"]},
+            capture_files=captures, capture_storage_rows=group["rows"], work=self.work)
+        generator_root = Path(self.locators["gate"]["scope"]).parents[2]
+        parent = state["paths"]["captures"] / ("gate-%04d" % (4095 - ordinal))
+        if parent.is_relative_to(generator_root):
+            prefix = parent / ("source-%04d" % ordinal)
+            for name, raw in {**captures, "origin-observation.json": origin, "consumer-observations.json": rebuilt_primitive}.items():
+                member = (prefix / name).relative_to(generator_root).as_posix()
+                r.require(member not in state["output_files"], "E_STORE");state["output_files"][member] = raw
+            names = {"host": "source-host.json", "config": "source-config.json", "accepted": "source-accepted.json",
+                "package": "source-package.json", "supervisor": "source-supervisor.py", "normalizer": "source-normalizer.py"}
+            configuration = self._scope_configuration_inputs_body(context, ordinal, phase)
+            for name, member in names.items():
+                raw = configuration[name]
+                state["output_files"][(parent / ("source-configuration-%04d" % ordinal) / member).relative_to(generator_root).as_posix()] = raw
+        return origin
+
+    def _scope_configuration_body(self, runtime_root, context, ordinal, phase):
+        _seed_require(context in {"generator", "scope_reader"} and phase in {"kill", "coverage"}
+            and type(ordinal) is int and 0 <= ordinal < 4096)
+        state = self.calculated["scope_contexts"][context];r = state["modules"]["reader"];c = r.c
+        g = state["modules"]["generator"]
+        values = self._scope_configuration_inputs_body(context, ordinal, phase)
+        n = g._normalizer();n = n._KillNormalizer if phase == "kill" else n
+        config = n.source_config(values["config"], state["context"]["config"])["body"]
+        n.package(values["package"], config)
+        n.accepted(values["accepted"], config, self._scope_data_sha(values["supervisor"]),
+            self._scope_data_sha(values["package"]), config["collector_sha256"], self._scope_data_sha(values["normalizer"]))
+        actual_normalizer = (Path(runtime_root) / "sandbox/v1/coverage-source.py").read_bytes()
+        self.inputs._account("R", len(actual_normalizer), "M")
+        r.require(self._scope_data_equal(values["host"], state["context"]["config_raw"])
+            and self._scope_data_equal(values["supervisor"], state["context"]["supervisor_raw"])
+            and self._scope_data_equal(values["normalizer"], actual_normalizer), "E_STORE")
+        phase_values = {key: self.inputs.bytes(phase, "capture", "configuration/" + key,
+            c.EXECUTABLE_LIMIT if key in {"supervisor", "normalizer"} else c.DOCUMENT_LIMIT) for key in values}
+        r.require(all(self._scope_data_equal(values[key], phase_values[key]) for key in values), "E_STORE")
+        return values, config, n
+
+    def _scope_configuration_inputs_body(self, context, ordinal, phase):
+        state = self.calculated["scope_contexts"][context];c = state["modules"]["reader"].c
+        reused = context == "generator" and ordinal == 0 and phase == "kill" or context == "scope_reader" and ordinal == 1 and phase == "coverage"
+        occurrence = phase if reused else "gate"
+        prefix = "configuration/" if reused else context + "/source-configuration-%04d/" % ordinal
+        return {key: self.inputs.bytes(occurrence, "capture", prefix + key,
+            c.EXECUTABLE_LIMIT if key in {"supervisor", "normalizer"} else c.DOCUMENT_LIMIT)
+            for key in ("host", "config", "accepted", "package", "supervisor", "normalizer")}
+
+    def _scope_coverage_request_body(self, runtime_root, work_hold, source_git_hold, context, scope_raw, role_files):
+        state = self.calculated["scope_contexts"][context]
+        r, g = state["modules"]["reader"], state["modules"]["generator"];c = r.c
+        scope = r.parse(scope_raw);s = scope["body"]
+        controls, initial = self.calculated["gate_controls"], self.calculated["generator_kill"]
+        qualifying, current = role_files["qualifying"], role_files["current"]
+        required = s["required_shadow_environments"]
+        configuration, config, n = self._scope_configuration_body(runtime_root, context, 1 if context == "scope_reader" else 2, "coverage")
+        def coverage_identity(files):
+            record = r.parse(files["shadow-record.json"])["body"];q = record["qualified_identity"]
+            profile = r.parse(files["materialization-input.json"])["resolved_profile"]["content"]["body"]
+            environment = record["environment"]["environment_id"]
+            selected = [row for row in state["context"]["registry"][1] if row["environment_id"] == environment]
+            r.require(len(selected) == 1)
+            return r._coverage_identity_values(scope["id"], s["workflow_id"], s["task_class"],
+                {key: q[key] for key in ("model_request", "adapter_config_refs", "prompt_refs", "skill_refs", "verification_instructions_ref")},
+                {key: profile[key] for key in ("profile_ref", "profile_source", "selection_ref", "bindings")},
+                environment, selected[0], r.ref(files["policy-set.json"]), c.digest(files["policy.json"]),
+                c.digest(files["scope-policy.json"]), s["coverage"]["coverage_base"])
+        policy_raw = sys.modules["malicious_reproduction_pipeline"].read_regular(runtime_root / "scope/v1/scope-policy.json", c.DOCUMENT_LIMIT, "E_RELATION")
+        self.inputs._account("R", len(policy_raw), "M")
+        for environment in required:
+            before, after = qualifying[environment], current[environment]
+            a, b = r.parse(before["shadow-record.json"])["body"], r.parse(after["shadow-record.json"])["body"]
+            r.require(a["record_form"] == b["record_form"] == "withheld-write-policy.v1")
+            c.check_scope_policy_ref(a["scope_policy_ref"], before["scope-policy.json"])
+            c.check_scope_policy_ref(b["scope_policy_ref"], after["scope-policy.json"])
+            r.require(before["scope-policy.json"] == after["scope-policy.json"] == policy_raw)
+            r.require(r.same(coverage_identity(before), coverage_identity(after)))
+        trial = self.trial("gate")
+        raw_documents = {"scope": scope_raw, "shadow-set": trial["shadow-set.json"], "dashboard": trial["dashboard.json"],
+            "risk": controls["risk"], "kill": controls["kill"], "duty": controls["duty"], "marker": trial["marker.json"]}
+        documents = {name: r.ref(raw_documents[name]) for name in n.DOCUMENT_NAMES}
+        risk, duty = (r.parse(raw_documents[name]) for name in ("risk", "duty"))
+        identity = s["qualified_identity"]
+        r.require(r.same(risk["body"]["stage"]["request_ref"], identity["stage_request_ref"])
+            and r.same(duty["body"]["stage"]["request_ref"], identity["stage_request_ref"])
+            and r.same(risk["body"]["stage"]["resolved_profile_ref"], identity["resolved_profile_ref"])
+            and r.same(duty["body"]["stage"]["resolved_profile_ref"], identity["resolved_profile_ref"])
+            and r.same(risk["body"]["stage"]["result_ref"], duty["body"]["stage"]["result_ref"]))
+        r.require(all(r.same(r.ref(c.canonical(r.parse(files["materialization-response.json"])["stage_result"])),
+            duty["body"]["stage"]["result_ref"]) for files in current.values()))
+        entropy = self.occurrences["gate"]["raw"]["scope_reader"]["entropy"]["coverage"]
+        r.require(type(entropy) is list and len(entropy) == 1 and len(bytes.fromhex(entropy[0])) == 32)
+        nonce = entropy[0];attempt = "coverage." + nonce
+        # These are fixed bounded actual Git operations. No forge/native source invocation occurs.
+        e = sys.modules["malicious_reproduction_pipeline"]
+        env = e.clean_env(runtime_root / "bin/jq", Path(work_hold.path))
+        def commit(oid):
+            raw = self._scope_git_body(runtime_root, work_hold, source_git_hold, context, ["cat-file", "commit", oid], c.DOCUMENT_LIMIT)
+            headers = raw.split(b"\n\n", 1)[0].splitlines()
+            trees = [row[5:].decode("ascii") for row in headers if row.startswith(b"tree ")]
+            parents = [row[7:].decode("ascii") for row in headers if row.startswith(b"parent ")]
+            r.require(len(trees) == 1 and c._writer_oid(trees[0]) and all(c._writer_oid(value) for value in parents))
+            return trees[0], parents
+        def hashes(name):
+            return [{"environment_id": environment, "sha256": c.digest(c.canonical(r.parse(files["shadow-record.json"])["body"]["write"][name]))}
+                for environment, files in sorted(current.items())]
+        git_config = self.inputs.bytes("case", "original-input", "git/config", c.DOCUMENT_LIMIT)
+        base = s["coverage"]["coverage_base"];revision = identity["target_revision"]
+        git_observation = r._coverage_git_values(base, revision, commit(base["commit_id"])[0],
+            commit(revision["commit_id"])[0], c.digest(git_config))
+        body = r._coverage_request_body_values(attempt, nonce, s["target_repository_id"], base, revision,
+            documents, sorted(s["coverage"]["qualifying_shadow_record_refs"], key=c.canonical),
+            sorted(s["shadow_evidence_refs"], key=c.canonical), identity["resolved_profile_ref"], identity["stage_request_ref"],
+            duty["body"]["stage"]["result_ref"], [{"environment_id": environment, "sha256": c.digest(files["materialization-response.json"])}
+                for environment, files in sorted(current.items())], hashes("publisher_request"), hashes("post_write_verification"),
+            sorted([r.ref(files["sandbox-receipt.json"]) for files in qualifying.values()], key=c.canonical),
+            c.digest(c.canonical(git_observation)), n.doc_ref(configuration["package"]), n.doc_ref(configuration["accepted"]))
+        body.update(initial_origin_refs=sorted([r.ref(origin) for origin, _snapshots, _binding in state["fresh"].values()], key=c.canonical),
+            gate_call_ref=r.ref(initial["request_raw"]))
+        coverage_raw = c.canonical(g.envelope("coverage_source_request", attempt, body));n.request(coverage_raw)
+        return {"request_raw": coverage_raw, "body": body, "documents": documents,
+            "configuration": configuration, "config": config, "normalizer": n}
+
+    def _scope_data_chunks(self, value):
+        self._scope_data_size(value)
+        if type(value) is tuple:
+            for chunk in value:
+                if chunk:yield memoryview(chunk)
+        else:
+            for start in range(0, len(value), 65536):yield memoryview(value)[start:start + 65536]
+
+    def _scope_data_equal(self, left, right, kind="M"):
+        if self._scope_data_size(left) != self._scope_data_size(right):return False
+        self.work["scope_stream_equality_incomplete"] = True
+        incoming = iter(self._scope_data_chunks(right));current = memoryview(b"");offset = 0
+        equal = True
+        for chunk in self._scope_data_chunks(left):
+            while chunk:
+                if offset == len(current):current, offset = next(incoming), 0
+                count = min(len(chunk), len(current) - offset)
+                part = chunk[:count] == current[offset:offset + count]
+                self.inputs._account("E", 2 * count, "M")
+                if kind == "runtime":self.c._runtime_account(self.work, "equality_bytes", 2 * count)
+                equal = part and equal
+                chunk, offset = chunk[count:], offset + count
+        _seed_require(offset == len(current) and next(incoming, None) is None)
+        self.work["scope_stream_equality_incomplete"] = False
+        return equal
+
+    def _scope_data_sha(self, value, kind="M"):
+        measured = hashlib.sha256()
+        self.work["scope_stream_hash_incomplete"] = True
+        for chunk in self._scope_data_chunks(value):
+            measured.update(chunk);self.inputs._account("H", len(chunk), kind)
+        self.work["scope_stream_hash_incomplete"] = False
+        return measured.hexdigest()
+
+    def _scope_data_size(self, value):
+        if type(value) is bytes:return len(value)
+        _seed_require(type(value) is tuple and all(type(chunk) is bytes and len(chunk) <= 65536 for chunk in value))
+        size = sum(map(len, value));_seed_require(size <= 4 << 30)
+        return size
+
+    def _scope_gate_commands_body(self, runtime_root):
+        state = self.calculated["scope_contexts"]["generator"]
+        r = state["modules"]["reader"];c = r.c
+        r.require(not state.get("gate_drivers_recorded", False))
+        root = Path(self.locators["gate"]["scope"]).parents[2]
+        package = state["paths"]["package"]
+        constructors = (("control/v1/evaluate-duty.sh", ("policy-set", "stage-request", "resolved-profile", "stage-result")),
+            ("control/v1/evaluate-risk-gates.sh", ("policy-set", "stage-request", "resolved-profile", "stage-result", "duty", "claim")),
+            ("control/v1/evaluate-kill-switch.sh", ("policy-set", "state", "attempt", "duty")))
+        for relative, names in constructors:
+            raw = (Path(runtime_root) / relative).read_bytes();self.inputs._account("R", len(raw), "M")
+            sha = self._scope_data_sha(raw)
+            argv = ["/bin/bash", "-p", str(package / relative), "evaluate",
+                *[str(root / "objects" / name / "value.json") for name in names]]
+            annotations = [{"position": 0, "type": "fixed", "role": "shell", "value": "/bin/bash"},
+                {"position": 1, "type": "fixed", "role": "shell-mode", "value": "-p"},
+                {"position": 2, "type": "historical-path", "role": "component:" + relative},
+                {"position": 3, "type": "fixed", "role": "operation", "value": "evaluate"},
+                *[{"position": index, "type": "historical-path", "role": "objects/" + name} for index, name in enumerate(names, 4)]]
+            self._scope_append_command_body("generator", "scope-fixed-check", argv, state["binaries"]["bash"], sha, "evaluate", annotations)
+        relative = "scope/v1/evaluate-scope.sh"
+        raw = (Path(runtime_root) / relative).read_bytes();self.inputs._account("R", len(raw), "M")
+        sha = self._scope_data_sha(raw)
+        names = ("scope", "shadow-set", "dashboard", "risk", "kill", "duty", "marker")
+        argv = ["/bin/bash", "-p", str(package / relative), "evaluate",
+            *[str(root / "objects" / name / "value.json") for name in names],
+            self.locators["gate"]["bundle_root"], self.locators["gate"]["git_root"]]
+        annotations = [{"position": 0, "type": "fixed", "role": "shell", "value": "/bin/bash"},
+            {"position": 1, "type": "fixed", "role": "shell-mode", "value": "-p"},
+            {"position": 2, "type": "historical-path", "role": "component:" + relative},
+            {"position": 3, "type": "fixed", "role": "operation", "value": "evaluate"},
+            *[{"position": index, "type": "historical-path", "role": "objects/" + name} for index, name in enumerate(names, 4)],
+            {"position": 11, "type": "historical-path", "role": "gate.bundle_root"},
+            {"position": 12, "type": "historical-path", "role": "gate.git_root"}]
+        self._scope_append_command_body("generator", "gate-scope-driver", argv, state["binaries"]["bash"], sha, "evaluate", annotations)
+        state["gate_drivers_recorded"] = True
+
+    def _scope_git_body(self, runtime_root, work_hold, source_git_hold, context, arguments, limit):
+        state = self.calculated["scope_contexts"][context]
+        r = state["modules"]["reader"]
+        e = sys.modules["malicious_reproduction_pipeline"]
+        argv = ["/usr/bin/git", "--no-replace-objects", "--git-dir=" + str(state["paths"]["git_root"]), *arguments]
+        annotations = [{"position": 0, "type": "fixed", "role": "git", "value": "/usr/bin/git"},
+            {"position": 1, "type": "fixed", "role": "no-replace", "value": "--no-replace-objects"},
+            {"position": 2, "type": "historical-path", "role": "git-dir-operand"}]
+        r.require(arguments[0] in {"cat-file", "ls-tree", "config", "rev-parse"})
+        for index, value in enumerate(arguments):
+            content = arguments[0] == "cat-file" and index == 2 or arguments[0] == "ls-tree" and index == 5
+            path = arguments[0] == "config" and index == 2
+            annotations.append({"position": index + 3, "type": "historical-path" if path else "content" if content else "fixed",
+                "role": "config-copy" if path else "object-id" if content else "git-argument",
+                **({"value": value} if not content and not path else {})})
+        raw = (Path(runtime_root) / "shadow/v1/_consumer.py").read_bytes();self.inputs._account("R", len(raw), "M")
+        self._scope_append_command_body(context, "scope-git-inspection", argv, state["binaries"]["git"],
+            self._scope_data_sha(raw), arguments[0], annotations)
+        actual = list(arguments)
+        if arguments[0] == "config":actual[2] = str(state["config_copy"]);role = "scope-git-config"
+        elif arguments[0] == "rev-parse":role = "scope-git-format"
+        else:role = "source-git-commit" if arguments[0] == "cat-file" and arguments[1] == "commit" else "source-git-blob" if arguments[0] == "cat-file" else "source-git-inventory"
+        result = self._run_offline(role, ["/usr/bin/git", "--no-replace-objects", "--git-dir=" + source_git_hold.path, *actual],
+            output_limit=limit, env=e.clean_env(Path(runtime_root) / "bin/jq", Path(work_hold.path)))
+        source_git_hold.recheck("E_STORE", self.work, "M")
+        return result
+
+    def _scope_history_files_body(self, context, record_raw):
+        state = self.calculated["scope_contexts"][context];r = state["modules"]["reader"];c = r.c
+        record = r.parse(record_raw);form = record["body"]["record_form"]
+        r.require(form in {"enforced-reproduction.v1", "withheld-write.v1", "withheld-write-policy.v1"})
+        names = set(c.SHADOW_EVIDENCE_NAMES) | {"bundle.json"}
+        if form in {"withheld-write.v1", "withheld-write-policy.v1"}:names.add("publisher-body.txt")
+        if form == "withheld-write-policy.v1":names.add("scope-policy.json")
+        ordinal = state["cursor"]
+        prefix = context + "/history/%04d/" % ordinal
+        selected = [row for row, _held in self.inputs.rows.values() if row["occurrence"] == "gate"
+            and row["role"] == "capture" and row["member"].startswith(prefix)]
+        r.require({row["member"][len(prefix):] for row in selected} == names)
+        files, total = {}, 0
+        for name in sorted(names):
+            maximum = 8 * c.DOCUMENT_LIMIT if name == "materialization-input.json" else 2 * c.DOCUMENT_LIMIT if name == "preparation-manifest.json" else c.DOCUMENT_LIMIT
+            raw = self.inputs.bytes("gate", "capture", prefix + name, maximum)
+            total += len(raw);r.require(total <= 48 * c.DOCUMENT_LIMIT, "E_LIMIT")
+            if name.endswith(".json"):r.parse(raw, maximum)
+            files[name] = raw
+        incident, marker = r.parse(files["incident.json"]), r.parse(files["bundle.json"])
+        expected = c._bundle_marker_values(files, incident, form, names)
+        r.require(r.same(marker, expected) and self._scope_data_equal(files["shadow-record.json"], record_raw))
+        if form == "withheld-write-policy.v1":c.check_scope_policy_ref(record["body"]["scope_policy_ref"], files["scope-policy.json"])
+        else:r.require("scope_policy_ref" not in record["body"])
+        return files
+
+    def _scope_inventory_body(self, runtime_root, work_hold, source_git_hold, context, revision):
+        state = self.calculated["scope_contexts"][context];r = state["modules"]["reader"]
+        r.require(revision["hash_algorithm"] in {"sha1", "sha256"})
+        keys = self._scope_git_body(runtime_root, work_hold, source_git_hold, context,
+            ["config", "--file", str(state["paths"]["git_config"]), "--name-only", "--list", "--no-includes"], r.c.DOCUMENT_LIMIT)
+        try:r.require(set(keys.decode("utf-8").splitlines()) <= r.c.GIT_CONFIG_KEYS)
+        except UnicodeError:raise r.c.Refusal("E_RELATION") from None
+        r.require(self._scope_git_body(runtime_root, work_hold, source_git_hold, context,
+            ["rev-parse", "--is-bare-repository"], 16) == b"true\n" and
+            self._scope_git_body(runtime_root, work_hold, source_git_hold, context,
+            ["rev-parse", "--show-object-format"], 16) == (revision["hash_algorithm"] + "\n").encode())
+        raw = self._scope_git_body(runtime_root, work_hold, source_git_hold, context,
+            ["ls-tree", "-r", "-t", "-z", "--full-tree", revision["commit_id"]], 16 * r.c.DOCUMENT_LIMIT)
+        result = r.c._git_inventory_values(raw, revision);self.inputs._account("R", len(raw), "M")
+        return result
+
+    def _scope_runtime_value_body(self, context, row):
+        _seed_require(context in {"generator", "scope_reader"})
+        if context == "generator" and row["ordinal"] < 5:phase = "kill"
+        elif context == "scope_reader" and row["ordinal"] >= 4:phase = "coverage"
+        else:phase = "gate"
+        if phase != "gate":
+            owner = self.calculated["scope_contexts"][context]["modules"]["reader"].c
+            source_group = self.occurrences[phase]["raw"]["local"]["runtime"]
+            complete = self.occurrences["gate"]["raw"][context]["runtime"]
+            owner._source_local_runtime_values(source_group, complete)
+            original = source_group["files"]
+            _seed_require(sum(value == row for value in original) == 1
+                and self.occurrences[phase]["binding"]["gate_request_sha256"] == self.occurrences["gate"]["binding"]["request_sha256"])
+            members = [value for value, _held in self.inputs.rows.values() if value["occurrence"] == phase
+                and value["role"] == "local-runtime" and value["member"].rsplit("/", 1)[-1] == row["file"]]
+        else:
+            members = [value for value, _held in self.inputs.rows.values() if value["occurrence"] == "gate"
+                and value["role"] == "local-runtime" and value["member"] == context + "/" + row["file"]]
+        _seed_require(len(members) == 1 and members[0]["kind"] == "runtime"
+            and members[0]["size_bytes"] == row["size_bytes"] and members[0]["sha256"] == row["sha256"])
+        return self.inputs.semantic(phase, "local-runtime", members[0]["member"])
+
+    def _scope_source_command_body(self, runtime_root, context, phase, request_raw):
+        _seed_require(context in {"generator", "scope_reader"} and phase in {"kill", "coverage"}
+            and (phase == "kill") == (context == "generator"))
+        state = self.calculated["scope_contexts"][context]
+        r = state["modules"]["reader"];c = r.c
+        e = sys.modules["malicious_reproduction_pipeline"]
+        rows = c._runtime_inventory_values(self.occurrences["gate"]["raw"][context]["runtime"])
+        sudo = [row for row in rows.values() if row["slot"] == "sudo" and row["index"] == 0]
+        r.require(len(sudo) == 1);sudo = sudo[0]
+        raw = self._scope_runtime_value_body(context, sudo)
+        sudo_sha = self._scope_data_sha(raw, "runtime")
+        r.require(sudo["locator"] == "/usr/bin/sudo" and sudo["size_bytes"] == self._scope_data_size(raw) and sudo["sha256"] == sudo_sha)
+        supervisor_path = str(Path(self.locators[phase]["installed_anchor"]) / "host-supervisor.py")
+        supervisor = state["context"]["supervisor_raw"]
+        supervisor_sha = c.digest(supervisor);self.inputs._account("H", len(supervisor), "M")
+        operation = "kill-register-read" if phase == "kill" else "coverage-read"
+        argv = c._source_read_argv_values(state["context"]["config"]["principal_uid"],
+            str(state["paths"]["python"]), supervisor_path, operation)
+        encoded = self.inputs.encode(argv)
+        argv_sha = e._command_argv_values(argv)
+        self.inputs._account("C", len(encoded), "M");self.inputs._account("E", len(encoded), "M");self.inputs._account("H", len(encoded), "M")
+        role = "kill-register-source-boundary" if phase == "kill" else "coverage-source-boundary"
+        row = e._command_values(role, argv_sha, sudo_sha, supervisor_sha)
+        fields = r._scope_source_command_fields_values(request_raw, state["binaries"]["python"])
+        self.inputs._account("H", len(request_raw), "M")
+        row.update(fields)
+        concrete = {"role": role, "argv": argv, "executable_sha256": sudo_sha, "component_sha256": supervisor_sha}
+        concrete.update(r._scope_source_command_fields_values(request_raw, state["binaries"]["python"]))
+        self.inputs._account("H", len(request_raw), "M")
+        annotations = []
+        for position, value in enumerate(argv):
+            kind, meaning = {3: ("content", "host_config.principal_uid"),
+                5: ("historical-path", "python"), 9: ("historical-path", "installed_anchor/host-supervisor.py")}.get(position, ("fixed", "source-argument"))
+            annotations.append({"position": position, "type": kind, "role": meaning,
+                **({"value": value} if kind == "fixed" else {})})
+        recipe = r._scope_command_recipe_values(role, sudo_sha, supervisor_sha, operation, annotations)
+        self.inputs.encode(recipe)
+        state["commands"].append(row);state["argv"].append(concrete);state["command_recipe"].append(recipe)
+        return argv
+
+    def _scope_source_origin_body(self, context, phase):
+        _seed_require(context in {"generator", "scope_reader"} and phase in {"kill", "coverage"})
+        state = self.calculated["scope_contexts"][context];r = state["modules"]["reader"]
+        files = self.calculated[phase]["files"]
+        request = r.parse(files["payload/request.json"])
+        origin = self._scope_acquisition_origin_body(context, files, request["id"])
+        host = self.inputs.bytes(phase, "capture", "configuration/host", r.c.DOCUMENT_LIMIT)
+        r.require(host == state["context"]["config_raw"])
+        self.calculated[phase]["origin"] = origin
+        self._scope_capture_private_body(context, phase)
+        return origin
+
+    def generator_kill_source_body(self, runtime_root, work_hold, source_git_hold):
+        runtime_root = Path(runtime_root)
+        _seed_require("kill" not in self.calculated and "generator_kill" not in self.calculated)
+        spec = importlib.util.spec_from_file_location("malicious_gate_request_values", runtime_root / "scope/v1/generate-gate-evidence.py")
+        g = importlib.util.module_from_spec(spec);sys.modules[spec.name] = g;spec.loader.exec_module(g)
+        c, r = g.c, g.r
+        request = g.generation_request(self.original_raw["gate-request.json"])
+        basis, claim = request["body"]["scope_basis"], request["body"]["risk_claim"]
+        basis_raw = c.canonical(basis)
+        before = self._scope_authenticate_body(runtime_root, work_hold, source_git_hold, "generator", basis_raw, True)
+        required = set(basis["body"]["required_shadow_environments"])
+        r.require(set(before["role_files"]["current"]) == required
+            and all(row["authentication"]["state"] == "authenticated" for row in before["rows"] if row["claimed"]))
+        initial = sorted([r.ref(origin) for origin, _snapshots, _binding in before["fresh"].values()], key=c.canonical)
+        observations = g._origins_values([(origin, snapshots) for origin, snapshots, _binding in before["fresh"].values()])
+        trial, current = self.trial("gate"), before["role_files"]["current"]
+        e = sys.modules["malicious_reproduction_pipeline"]
+        tuples = []
+        for files in current.values():
+            material = r.parse(files["materialization-input.json"]);atomic = []
+            for name in ("stage_request", "resolved_profile"):
+                pair = material[name];reference = e.pair_ref(pair);raw = c.canonical(pair["content"])
+                r.require(reference == r.ref(raw));atomic.append(raw)
+            atomic.extend((c.canonical(r.parse(files["materialization-response.json"])["stage_result"]), files["policy-set.json"]))
+            tuples.append(atomic)
+        r.require(tuples and all(row == tuples[0] for row in tuples))
+        r.require(r.ref(tuples[0][0]) == basis["body"]["qualified_identity"]["stage_request_ref"]
+            and r.ref(tuples[0][1]) == basis["body"]["qualified_identity"]["resolved_profile_ref"])
+        configuration, config, n = self._scope_configuration_body(runtime_root, "generator", 0, "kill")
+        entropy = self.occurrences["gate"]["raw"]["generator"]["entropy"]["kill"]
+        r.require(type(entropy) is list and len(entropy) == 1 and len(bytes.fromhex(entropy[0])) == 32)
+        nonce = entropy[0];call_id = "kill-register." + nonce
+        r.require(config["control_repository"]["repository_id"] != basis["body"]["target_repository_id"])
+        # runtime is built from actual retained executable bytes and actual fixed SOURCE inventory.
+        # The source-native same-owner runtime constructor and closed package list are supplied in the companion hunk.
+        runtime_rows = c._runtime_inventory_values(self.occurrences["kill"]["raw"]["local"]["runtime"])
+        executables = []
+        for slot in ("python", "bash", "git", "jq"):
+            rows = [row for row in runtime_rows.values() if row["slot"] == slot and row["index"] == 0]
+            r.require(len(rows) == 1);row = rows[0]
+            matching = [value for value, _held in self.inputs.rows.values() if value["occurrence"] == "kill"
+                and value["role"] == "local-runtime" and value["member"].rsplit("/", 1)[-1] == row["file"]]
+            r.require(len(matching) == 1)
+            raw = self.inputs.semantic("kill", "local-runtime", matching[0]["member"])
+            sha = self._scope_data_sha(raw, "runtime")
+            r.require(self._scope_data_size(raw) == row["size_bytes"] and sha == row["sha256"])
+            executables.append({"path": row["locator"], "size_bytes": self._scope_data_size(raw), "sha256": sha})
+        package_names = set(r._reader_base_package_names_values()) | set(r._reader_fixed_package_names_values())
+        modules_path = e.core_modules(e.read_regular(runtime_root / "core/v2/generation-registry.json", c.DOCUMENT_LIMIT, "E_RELATION"))
+        package_names.update(str(path.relative_to(runtime_root)) for path in sorted(modules_path.glob("*.jq")))
+        package_names.update(str(path.relative_to(runtime_root)) for path in (modules_path.parent / "core-ingress.sh", modules_path.parent / "contracts.jq"))
+        for folder in ("control/v1", "scope/v1"):
+            package_names.update(str(path.relative_to(runtime_root)) for path in sorted((runtime_root / folder).iterdir())
+                if path.is_file() and path.suffix in {".sh", ".jq", ".json", ".py"})
+        package_names.update(("scope/v1/workflow-scope.jq", "scope/v1/generate-gate-evidence.py", "scope/v1/evaluate-scope.sh",
+            "scope/v1/scope-gates.jq", "sandbox/v1/coverage-source.py", "sandbox/v1/host-supervisor.py"))
+        if not (runtime_root / "config/construction-mode.json").exists():package_names.remove("config/construction-mode.json")
+        package_files = []
+        for name in sorted(package_names):
+            raw = e.read_regular(runtime_root / name, c.EXECUTABLE_LIMIT, "E_RELATION")
+            self.inputs._account("R", len(raw), "M")
+            sha = c.digest(raw);self.inputs._account("H", len(raw), "M")
+            package_files.append({"path": name, "sha256": sha})
+        runtime = r._generator_runtime_values(request["id"], executables, package_files)
+        initial_raw = c.canonical(g.envelope("gate_initial_origins", request["id"], {"origins": initial, "observations": observations}))
+        source_config = self.inputs.bytes("case", "original-input", "git/config", c.DOCUMENT_LIMIT)
+        body = g._kill_request_body_values(basis, config, call_id, nonce, before["role_files"], initial,
+            source_config, configuration["package"], configuration["accepted"])
+        values = dict(zip(("stage-request", "resolved-profile", "stage-result", "policy-set"), tuples[0]))
+        values.update(basis=basis_raw, claim=c.canonical(claim), **{"shadow-set": trial["shadow-set.json"],
+            "dashboard": trial["dashboard.json"], "marker": trial["marker.json"], "runtime": runtime})
+        mapping = {"basis_ref": "basis", "claim_ref": "claim", "stage_request_ref": "stage-request", "resolved_profile_ref": "resolved-profile",
+            "stage_result_ref": "stage-result", "policy_set_ref": "policy-set", "shadow_set_ref": "shadow-set", "dashboard_ref": "dashboard",
+            "marker_ref": "marker", "runtime_ref": "runtime"}
+        body.update({key: g.ref(values[name]) for key, name in mapping.items()})
+        raw = c.canonical(g.envelope("kill_register_source_request", call_id, body));n.request(raw)
+        expectation = c.canonical(g.envelope("kill_register_source_expectation", call_id, body | {"request_sha256": c.digest(raw)}))
+        self._scope_source_command_body(runtime_root, "generator", "kill", raw)
+        source = self.source(runtime_root, "kill", raw)
+        after = self._scope_authenticate_body(runtime_root, work_hold, source_git_hold, "generator", basis_raw, True)
+        observed = r.parse(source["payload/observation.json"])
+        r.require(observed["bootstrap"] == config["bootstrap"] and observed["repository"] == config["control_repository"]
+            and observed["default_branch"] == config["default_branch"])
+        register_raw = c.canonical(observed["register"])
+        r.require(c.digest(register_raw) == observed["register_sha256"])
+        result = {"request_raw": raw, "expectation_raw": expectation, "runtime": runtime,
+            "initial_origin_refs": initial, "observations": [(origin, snapshots) for origin, snapshots, _binding in before["fresh"].values()],
+            "initial_observations": observations, "initial_origins_raw": initial_raw,
+            "configuration_raw": c.canonical(g.envelope("gate_source_configuration", call_id,
+                {"config": r.parse(configuration["config"]), "package": r.parse(configuration["package"]), "accepted": r.parse(configuration["accepted"])})),
+            "configuration": configuration, "register_raw": register_raw, "values": values,
+            "role_files": after["role_files"], "fresh": after["fresh"]}
+        result["command_recipe"] = self.calculated["scope_contexts"]["generator"]["command_recipe"]
+        result["request"] = request
+        result["objects"] = {**values, "request": self.original_raw["gate-request.json"],
+            "initial-origins": initial_raw, "kill-configuration": result["configuration_raw"],
+            "kill-request": raw, "kill-expectation": expectation}
+        result["output_files"] = dict(self.calculated["scope_contexts"]["generator"]["output_files"])
+        self.calculated["generator_kill"] = result
+        return result
+
+    def scope_evaluation_body(self, runtime_root, work_hold):
+        runtime_root = Path(runtime_root)
+        _seed_require("scope_reader" in self.calculated and "gate_controls" in self.calculated)
+        spec = importlib.util.spec_from_file_location("malicious_scope_evaluation_values", runtime_root / "scope/v1/read-shadow-evidence.py")
+        r = importlib.util.module_from_spec(spec);sys.modules[spec.name] = r;spec.loader.exec_module(r)
+        e = sys.modules["malicious_reproduction_pipeline"]
+        c, controls, measured = r.c, self.calculated["gate_controls"], self.calculated["scope_reader"]
+        trial = self.trial("gate")
+        policy_raw = e.read_regular(runtime_root / "scope/v1/scope-policy.json", c.DOCUMENT_LIMIT, "E_RELATION")
+        self.inputs._account("R", len(policy_raw), "M")
+        documents = {"policy": policy_raw, "scope": controls["scope"], "shadow_set": trial["shadow-set.json"],
+            "dashboard": trial["dashboard.json"], "risk": controls["risk"], "kill": controls["kill"], "duty": controls["duty"],
+            "marker": trial["marker.json"], "measured": measured["observation_raw"]}
+        self.work["scope_final_child_work_unknown"] = True
+        self.work["accounting_incomplete"] = True
+        paths = {name: self._replay_write_bytes(work_hold, "scope-final-" + name + ".json", raw) for name, raw in documents.items()}
+        jq = runtime_root / "bin/jq"
+        env = e.clean_env(jq, Path(work_hold.path))
+        # Original workflow-scope shape/relation guard precedes policy and final jq.
+        shape = self._run_offline("scope-workflow-validation", [str(jq), "-r", "-f", str(runtime_root / "scope/v1/workflow-scope.jq"),
+            str(paths["scope"])], env=env)
+        r.require(shape == b"")
+        driver_raw = e.read_regular(runtime_root / "scope/v1/evaluate-scope.sh", c.EXECUTABLE_LIMIT, "E_RELATION")
+        self.inputs._account("R", len(driver_raw), "M")
+        policy_guard = self._run_offline("scope-policy-validation", [str(jq), "-e", r._scope_evaluation_policy_guard_values(driver_raw),
+            str(paths["policy"])], env=env)
+        r.require(policy_guard.strip() == b"true")
+        # Absence is a fact of the complete I SOURCE namespace, never a missing derived scope field.
+        marker_path = runtime_root / "config/construction-mode.json"
+        if marker_path.exists():
+            marker_raw = e.read_regular(marker_path, c.DOCUMENT_LIMIT, "E_RELATION")
+            self.inputs._account("R", len(marker_raw), "M")
+            committed_marker = self._run_offline("scope-canonicalize", [str(jq), "-S", "-c", ".", str(marker_path)], env=env)
+            mode_repo_state = "matched" if committed_marker == documents["marker"] else "differs"
+        else:
+            # Requires complete SOURCE namespace binding from the original I acquisition;
+            # this branch must refuse if that absence fact was not transported/proved.
+            raise c.Refusal("E_RELATION")  # No complete original SOURCE absence witness is currently available.
+        set_doc = r.parse(documents["shadow_set"])
+        records = set_doc["body"]["records"] if type(set_doc.get("body")) is dict and type(set_doc["body"].get("records")) is list else []
+        if len(records) > 16:records = []
+        record_shas = [c.digest(c.canonical(record)) for record in records]
+        dashboard = r.parse(documents["dashboard"])
+        dash_body = dashboard.get("body")
+        evaluator = dash_body.get("evaluator") if type(dash_body) is dict else None
+        content = evaluator.get("content") if type(evaluator) is dict else None
+        evaluator_sha = c.digest(c.canonical(content)) if type(content) is dict else ""
+        argv = [str(jq), "-S", "-c", "-n", "-f", str(runtime_root / "scope/v1/scope-gates.jq")]
+        for name in ("policy", "scope", "shadow_set", "dashboard", "risk", "kill", "duty", "marker", "measured"):
+            argv.extend(("--slurpfile", name, str(paths[name])))
+        argv.extend(("--argjson", "record_shas", c.canonical(record_shas).decode(), "--arg", "mode_repo_state", mode_repo_state))
+        for name in ("policy", "scope", "shadow_set", "dashboard"):
+            argv.extend(("--arg", name + "_sha", c.digest(documents[name])))
+        argv.extend(("--arg", "dashboard_evaluator_sha", evaluator_sha))
+        for name in ("risk", "kill", "duty", "marker"):
+            argv.extend(("--arg", name + "_sha", c.digest(documents[name])))
+        raw = self._run_offline("scope-final-values", argv, env=env)
+        r.parse(raw)
+        # Original shell canonical and final result shape guard also run over the actual new raw.
+        result_path = self._replay_write_bytes(work_hold, "scope-final-result.json", raw)
+        guard = self._run_offline("scope-output-validation", [str(jq), "-e", "--arg", "scope_id", r.parse(controls["scope"])["id"],
+            "--arg", "scope_sha", c.digest(controls["scope"]), r._scope_evaluation_output_guard_values(driver_raw), str(result_path)], env=env)
+        r.require(guard.strip() == b"true")
+        self.calculated["scope_evaluation"] = raw
+        return raw
+
+    def scope_reader_body(self, runtime_root, work_hold, source_git_hold):
+        runtime_root = Path(runtime_root)
+        _seed_require("generator_kill" in self.calculated and "gate_controls" in self.calculated)
+        spec = importlib.util.spec_from_file_location("malicious_scope_request_values", runtime_root / "scope/v1/generate-gate-evidence.py")
+        g = importlib.util.module_from_spec(spec);sys.modules[spec.name] = g;spec.loader.exec_module(g)
+        r, c = g.r, g.c
+        controls, initial = self.calculated["gate_controls"], self.calculated["generator_kill"]
+        self._scope_gate_commands_body(runtime_root)
+        scope_raw = controls["scope"];scope = r.parse(scope_raw);s = scope["body"]
+        workflow = s["workflow_id"] == "workflow.shadow-evidence-commit"
+        r.require(workflow == (s["task_class"] == "task.commit-shadow-evidence")
+            and workflow == ("coverage" in s))
+        result = self._scope_authenticate_body(runtime_root, work_hold, source_git_hold, "scope_reader", scope_raw, False)
+        coverage_raw = expectation_raw = coverage_result = None
+        if workflow:
+            qualifying, current = result["role_files"]["qualifying"], result["role_files"]["current"]
+            required = s["required_shadow_environments"]
+            if not (set(qualifying) == set(current) == set(required)
+                    and all(row["authentication"]["state"] == "authenticated"
+                        for rows in (result["qualifying_rows"], result["rows"]) for row in rows if row["claimed"])):
+                # Original source_coverage's actual prerequisite refusal, not a missing-field default.
+                coverage_result = {"state": "stale"}
+                r.require("coverage" not in self.occurrences
+                    and "coverage" not in self.occurrences["gate"]["raw"]["scope_reader"]["entropy"])
+            else:
+                prepared = self._scope_coverage_request_body(runtime_root, work_hold, source_git_hold,
+                    "scope_reader", scope_raw, result["role_files"])
+                coverage_raw, body, documents = prepared["request_raw"], prepared["body"], prepared["documents"]
+                attempt = body["attempt_id"]
+                config, n = prepared["config"], prepared["normalizer"]
+                identity = s["qualified_identity"]
+                base, revision = s["coverage"]["coverage_base"], identity["target_revision"]
+                e = sys.modules["malicious_reproduction_pipeline"]
+                env = e.clean_env(runtime_root / "bin/jq", Path(work_hold.path))
+                def commit(oid):
+                    raw = self._scope_git_body(runtime_root, work_hold, source_git_hold, "scope_reader", ["cat-file", "commit", oid], c.DOCUMENT_LIMIT)
+                    headers = raw.split(b"\n\n", 1)[0].splitlines()
+                    trees = [row[5:].decode("ascii") for row in headers if row.startswith(b"tree ")]
+                    parents = [row[7:].decode("ascii") for row in headers if row.startswith(b"parent ")]
+                    r.require(len(trees) == 1 and c._writer_oid(trees[0]) and all(c._writer_oid(value) for value in parents))
+                    return trees[0], parents
+                expectation = r._coverage_expectation_fields_values(body)
+                expectation.update(initial_origin_refs=body["initial_origin_refs"], gate_call_ref=body["gate_call_ref"])
+                expectation.update(request_sha256=c.digest(coverage_raw), scope_ref=documents["scope"])
+                expectation_raw = c.canonical(g.envelope("coverage_source_expectation", attempt, expectation))
+                generator_check = self._scope_authenticate_body(runtime_root, work_hold, source_git_hold, "generator", scope_raw, False)
+                wanted = self._scope_coverage_request_body(runtime_root, work_hold, source_git_hold,
+                    "generator", scope_raw, generator_check["role_files"])
+                r.require(self._scope_data_equal(wanted["request_raw"], coverage_raw), "E_RELATION")
+                wanted_fields = {key: wanted["body"][key] for key in ("attempt_id", "nonce", "coverage_base", "evaluated_revision",
+                    "stage_request_ref", "resolved_profile_ref", "stage_result_ref", "source_package_ref", "source_accepted_set_ref",
+                    "initial_origin_refs", "gate_call_ref")}
+                wanted_fields.update(request_sha256=self._scope_data_sha(coverage_raw), scope_ref=wanted["documents"]["scope"])
+                r.require(r.same(expectation, wanted_fields), "E_RELATION")
+                self._scope_source_command_body(runtime_root, "scope_reader", "coverage", coverage_raw)
+                source_files = self.source(runtime_root, "coverage", coverage_raw)
+                result = self._scope_authenticate_body(runtime_root, work_hold, source_git_hold, "scope_reader", scope_raw, False)
+                observed, receipt = r.parse(source_files["payload/observation.json"]), r.parse(source_files["receipt.json"])
+                head = self.inputs.bytes("case", "original-input", "git/HEAD", c.DOCUMENT_LIMIT)
+                branch = r._coverage_head_values(head)
+                r.require(branch == observed["default_branch"]["name"])
+                semantic_members = {row["member"] for row, _held in self.inputs.rows.values()
+                    if row["occurrence"] == "case" and row["role"] == "original-input"}
+                named = "git/refs/heads/" + branch
+                if named in semantic_members:
+                    r.require(self.inputs.bytes("case", "original-input", named, c.DOCUMENT_LIMIT) == (revision["commit_id"] + "\n").encode())
+                else:
+                    packed = self.inputs.bytes("case", "original-input", "git/packed-refs", c.DOCUMENT_LIMIT)
+                    r._coverage_packed_ref_values(packed, revision["commit_id"], branch)
+                commits = [];oid = revision["commit_id"]
+                while True:
+                    r.require(len(commits) < 4096 and oid not in {row["commit_id"] for row in commits})
+                    tree, parents = commit(oid)
+                    commits.append({"commit_id": oid, "tree_id": tree, "parent_commit_id": None if oid == base["commit_id"] else (parents[0] if parents else None)})
+                    if oid == base["commit_id"]:break
+                    r.require(parents);oid = parents[0]
+                commits.reverse();r._coverage_interval_rows_values(observed, commits, revision, base)
+                pulls = observed["publisher_pull_requests"];used = set()
+                previous = self._scope_inventory_body(runtime_root, work_hold, source_git_hold, "scope_reader", base)
+                retained = list(qualifying.values()) + list(current.values())
+                for row in commits[1:]:
+                    facts = self._scope_inventory_body(runtime_root, work_hold, source_git_hold, "scope_reader", dict(revision, commit_id=row["commit_id"]))
+                    changed, evidence = r._coverage_changes_values(previous, facts)
+                    if evidence:
+                        pull = r._coverage_pull_values(pulls, row["commit_id"])
+                        r.require(pull["publisher_identity_ref"] == config["publisher_identity_ref"]
+                            and r._coverage_pull_scope_matches_values(pull, scope["id"], evidence))
+                        matching = []
+                        for files in retained:
+                            record_body = r.parse(files["shadow-record.json"])["body"]
+                            publisher = record_body["write"]["publisher_request"];p = publisher["body"]
+                            if (r._coverage_publisher_prefix_matches_values(publisher, p, pull, revision)
+                                    and p["candidate_tree_id"] == commit(pull["head_commit_id"])[0]
+                                    and r._coverage_write_paths_values(record_body) == evidence):matching.append(files)
+                        r.require(len(matching) == 1)
+                        head_tree, head_parents = commit(pull["head_commit_id"])
+                        r.require(head_parents == [pull["base_commit_id"]])
+                        head_facts = self._scope_inventory_body(runtime_root, work_hold, source_git_hold, "scope_reader", dict(revision, commit_id=pull["head_commit_id"]))
+                        base_facts = self._scope_inventory_body(runtime_root, work_hold, source_git_hold, "scope_reader", dict(revision, commit_id=pull["base_commit_id"]))
+                        r._coverage_head_changes_values(base_facts, head_facts, evidence, facts)
+                        for item in r.parse(matching[0]["shadow-record.json"])["body"]["write"]["write_set"]:
+                            raw = self._scope_git_body(runtime_root, work_hold, source_git_hold, "scope_reader",
+                                ["cat-file", "blob", facts[item["path"]][2]], 8 * c.DOCUMENT_LIMIT)
+                            r._coverage_blob_values(facts, item, raw)
+                        used.add(pull["node_id"])
+                    previous = facts
+                interval = r._coverage_interval_result_values(used, pulls, observed["first_parent_commits"])
+                r.require(all(n.age_ok(r.parse(files["sandbox-receipt.json"])["body"]["timing"]["terminated_at"], receipt["body"]["completed_at"])
+                    for files in qualifying.values()))
+                r.require(n.utc(observed["branch_snapshots"]["current"]["observed_at"]) <= n.utc(receipt["body"]["completed_at"]))
+                source_git_hold.recheck("E_STORE", self.work, "M")
+                self._scope_source_origin_body("scope_reader", "kill")
+                # C_DONE: generator reauthenticates both groups, kill and coverage source, then becomes FINAL_OWNER.
+                generator_check = self._scope_authenticate_body(runtime_root, work_hold, source_git_hold, "generator", scope_raw, False)
+                coverage_result = {"state": "authenticated", "request_ref": r.ref(coverage_raw), "receipt_ref": r.ref(source_files["receipt.json"]),
+                    "origin_ref": r.ref(self.calculated["coverage"]["origin"]), "observation_sha256": c.digest(source_files["payload/observation.json"]),
+                    "interval": interval, "coverage_base": body["coverage_base"], "evaluated_revision": body["evaluated_revision"],
+                    "current_binding_sha256": c.digest(c.canonical(body)), "qualifying_rows": result["qualifying_rows"]}
+        else:
+            # K_DONE is rebuilt by the actual kill request->source completion sequence, not by a missing field.
+            r.require("kill" in self.calculated and self.calculated["kill"]["files"]["payload/request.json"] == initial["request_raw"]
+                and "coverage" not in self.occurrences and "coverage" not in self.occurrences["gate"]["raw"]["scope_reader"]["entropy"]
+                and "coverage" not in self.occurrences["gate"]["raw"]["generator"]["entropy"])
+        source_git_hold.recheck("E_STORE", self.work, "M")
+        for context in ("generator", "scope_reader"):
+            state = self.calculated["scope_contexts"][context]
+            original = self.occurrences["gate"]["raw"][context]
+            r.require(state["cursor"] == len(state["groups"])
+                and state["runtime_values_consumed"] == original["commands"]["runtime_values"]
+                and state["source_capture_ordinal"] == (3 if workflow else 1), "E_STORE")
+        r.require(self.calculated["scope_contexts"]["generator"]["round_number"] == (4 if workflow else 2)
+            and self.calculated["scope_contexts"]["scope_reader"]["round_number"] == (2 if workflow else 1), "E_STORE")
+        git_config = self.inputs.bytes("case", "original-input", "git/config", c.DOCUMENT_LIMIT)
+        observation = r._scope_reader_observation_values(scope["id"], r.ref(scope_raw), r.ref(self.trial("gate")["shadow-set.json"]),
+            sorted(result["rows"], key=lambda row: row["record_ref"]["sha256"]),
+            {"repository_kind": "bare", "hash_algorithm": s["qualified_identity"]["target_revision"]["hash_algorithm"],
+                "config_sha256": c.digest(git_config)}, self.calculated["scope_contexts"]["scope_reader"]["commands"], workflow, coverage_result)
+        local = self.calculated["scope_contexts"]["generator"]["bindings"]
+        remote = self.calculated["scope_contexts"]["scope_reader"]["bindings"]
+        r.require(set(local) == set(remote) and all(r.same(local[key], remote[key]) for key in local), "E_RELATION")
+        final_fresh = self.calculated["scope_contexts"]["generator"]["fresh"]
+        final_origins = sorted([r.ref(origin) for origin, _snapshots, _binding in final_fresh.values()], key=c.canonical)
+        value = {**result, "observation_raw": observation, "coverage_request_raw": coverage_raw,
+            "coverage_expectation_raw": expectation_raw, "coverage_result": coverage_result,
+            "final_origin_refs": final_origins,
+            "observations": [(origin, snapshots) for origin, snapshots, _binding in final_fresh.values()],
+            "commands": self.calculated["scope_contexts"]["generator"]["commands"],
+            "argv": self.calculated["scope_contexts"]["generator"]["argv"],
+            "output_files": dict(self.calculated["scope_contexts"]["generator"]["output_files"]),
+            "command_recipe": self.calculated["scope_contexts"]["scope_reader"]["command_recipe"]}
+        self.calculated["scope_reader"] = value
+        return value
+
+    def _scope_compare_output_member(self, member, value):
+        matches = [(name, row, held) for name, (row, held) in self.inputs.rows.items()
+            if (row["occurrence"], row["role"], row["member"]) == ("gate", "recorded", member)]
+        _seed_require(len(matches) == 1)
+        name, row, held = matches[0]
+        _seed_require(name not in self.compared and row["kind"] in {"recorded", "raw", "M", "W", "runtime"})
+        held.recheck("E_STORE", self.work, "M")
+        original = self.inputs.semantic("gate", "recorded", member)
+        kind = "runtime" if row["kind"] == "runtime" else "M"
+        measured = self._scope_data_sha(value, kind)
+        expected = self._scope_data_sha(original, kind)
+        equal = self._scope_data_equal(value, original, kind)
+        if not equal or measured != expected:self.mismatches.append(name)
+        self.compared.add(name)
+        held.recheck("E_STORE", self.work, "M")
 
 
 

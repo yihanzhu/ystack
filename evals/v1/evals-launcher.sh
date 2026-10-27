@@ -741,6 +741,464 @@ class C2Helpers:
                     first = c2_first(first, error)
             if first is not None:raise first
 
+    def _prepare_budget(self, custody, destination, descriptor, start, start_raw,
+                        ready_raw, go_raw, window_sha, root_identity, original_inputs):
+        c2_require("budget" not in self.__dict__, "E_RELATION")
+        mode = start["mode"]
+        sequences, case_rows, inventories = [], [], {}
+        seeds = original_inputs if mode == "run" else original_inputs[::2]
+        for pair, seed_raw in enumerate(seeds):
+            seed = c._c3_json_values(seed_raw, self.work)
+            for case in seed["body"]["cases"]:
+                identity = case["case_id"]
+                c2_require(identity in c._C3_CASES and identity not in inventories, "E_RELATION")
+                slot = c._C3_CASES.index(identity)
+                manifest = case["manifest"]["content"]
+                manifest_raw = c._c3_encode_values(manifest, self.work)
+                core = manifest["inventory_core"]
+                core_raw = c._c3_encode_values(core, self.work)
+                manifest_sha = c2_driver_input_sha(custody, manifest_raw)
+                core_sha = c2_driver_input_sha(custody, core_raw)
+                c2_require(manifest_sha == case["manifest"]["sha256"]
+                    and core == descriptor["cases"][identity]["inventory_core"]
+                    and core_sha == descriptor["cases"][identity]["sha256"], "E_RELATION")
+                sequences.append({"slot": slot, "case_id": identity, "pair": None if mode == "run" else pair})
+                case_rows.append({"slot": slot, "case_id": identity, "manifest_size": len(manifest_raw),
+                    "manifest_sha256": manifest_sha, "core_sha256": core_sha})
+                inventories[identity] = core["entries"]
+        c2_require([row["case_id"] for row in sequences] == [row["case_id"] for row in case_rows]
+            and set(inventories) == set(start["case_ids"]), "E_RELATION")
+        replay_root = custody.mkdir(destination, "replay-work")
+        c2_require(not custody.namespace(replay_root), "E_RELATION")
+        launcher_raw = self.sources.launcher_raw
+        table = c._c3_source_closure_values(launcher_raw)
+        c2_nonruntime_room(self.work, len(table), False, read_only=True)
+        c._c3_processing(self.work, "R", len(table))
+        for line in table.decode().splitlines():
+            path, digest, length, mode_bits = line.split()
+            c2_require(path in self.sources.rows and self.sources.rows[path]
+                == (digest, int(length), int(mode_bits, 8) & 0o777), "E_STALE")
+        bindings = {"seed_sha256s": list(start["seed_sha256s"]),
+            "result_sha256s": list(start["result_sha256s"]),
+            "evaluator_sha256": self.context["evaluator_sha"],
+            "source_closure_sha256": c2_driver_input_sha(custody, table),
+            "cases": case_rows, "work_identity": c._stat_values(replay_root.before)}
+        c._c3_input_bindings_values(bindings, 0)
+        current = c2_combine(self.work["C2_admitted_before"], c2_counters(self.work, ledger=True))
+        cutoff = {"window": c2_named_values(current["window"]),
+            "common": c2_cutoff_ledger(current["common"]),
+            "cases": {identity: c2_cutoff_ledger(view) for identity, view in current["cases"].items()}}
+        c._c3_ledger_complete(cutoff["common"])
+        for ledger in cutoff["cases"].values():c._c3_ledger_complete(ledger)
+        source_bytes = sum(row[1] for row in self.sources.rows.values())
+        source_files = len(self.sources.rows)
+        scopes = ["common", *[row["case_id"] for row in sequences]]
+        zero = lambda: c._c3_vector_values((0,) * 55)
+        grants = []
+        common_bootstrap = c2_replay_demand([], source_bytes, source_files,
+            sum(len(raw) for raw in original_inputs), "bootstrap")
+        common_body = c2_replay_demand([], source_bytes, source_files,
+            sum(row["manifest_size"] for row in case_rows), "body")
+        common_terminal = c2_replay_demand([], 0, len(sequences),
+            sum(row["manifest_size"] for row in case_rows), "terminal")
+        driver = {"actor": 0, "scopes": scopes,
+            "bootstrap": {scope: zero() for scope in scopes},
+            "body": {scope: zero() for scope in scopes},
+            "terminal": {scope: zero() for scope in scopes}}
+        driver["bootstrap"]["common"] = common_bootstrap
+        driver["body"]["common"] = common_body
+        driver["terminal"]["common"] = common_terminal
+        grants.append(driver)
+        for row in case_rows:
+            identity = row["case_id"]
+            entries = inventories[identity]
+            driver["body"][identity] = c2_replay_demand([], 0, len(entries), row["manifest_size"], "body")
+            grants.append({"actor": row["slot"] + 1, "scopes": [identity],
+                "bootstrap": {identity: c2_replay_demand([], source_bytes, source_files,
+                    row["manifest_size"], "bootstrap")},
+                "body": {identity: c2_replay_demand(entries, 0, source_files,
+                    row["manifest_size"], "body")},
+                "terminal": {identity: c2_replay_demand([], 0, len(entries),
+                    row["manifest_size"], "terminal")}})
+        reserved = {scope: c2_named_values(self.work["C2_tail_reservation"]["common"]
+            if scope == "common" else self.work["C2_tail_reservation"]["cases"][scope]) for scope in scopes}
+        # The finite bound includes the exact source-shaped cutoff and every fixed numeric/key slot.
+        cutoff_bytes = c._c3_encode_values(cutoff, self.work)
+        carrier_bound = len(cutoff_bytes) + len(table) + 4096 + 16384 * len(grants)
+        parent_need = c2_replay_demand([], 0, source_files + len(case_rows), carrier_bound, "body")
+        reserved["common"] = c._c3_values_sum([reserved["common"], parent_need])
+        budget = {"version": 1, "window_sha256": window_sha, "ordinal": start["ordinal"], "mode": mode,
+            "start_sha256": c2_sha(start_raw, self.work), "ready_sha256": c2_sha(ready_raw, self.work),
+            "go_sha256": c2_sha(go_raw, self.work), "predecessor_sha256": start["predecessor_sha256"],
+            "root_identity": root_identity, "input_bindings": bindings, "sequence": sequences,
+            "cutoff": cutoff, "reserved_parent": reserved, "grants": grants}
+        raw = c._c3_encode_values(budget, self.work)
+        c2_require(len(raw) <= carrier_bound, "E_LIMIT")
+        c._c3_budget_values(raw, 0, start["ordinal"], mode, window_sha, bindings, self.work)
+        digest, held = c2_write_bytes(custody, destination, "replay-budget.json", raw)
+        self.budget, self.budget_sha, self.budget_hold, self.budget_raw = budget, digest, held, raw
+        return held, raw, digest
+
+    def _program_check(self, operation, evaluator, evaluator_sha, seed_sha, seeds,
+                       observations, candidate, results, result_shas, observed_at,
+                       error="E_RUNTIME"):
+        import shlex
+        recipe = self._original_filter('"'"'program_check() {\n  [ "$('"'"',
+            '"'"' 2>/dev/null)" = true ]\n}'"'"')
+        positional = dict(zip(("$" + str(index) for index in range(1, 10)),
+            (operation, evaluator, evaluator_sha, seed_sha, seeds, observations,
+             candidate, results, result_shas)))
+        argv = []
+        for token in shlex.split(recipe.replace("\\\n", "")):
+            argv.append(positional[token] if token in positional else
+                self._expand(token, {"check_observed_at": observed_at}))
+        c2_require(argv and argv[0] == self.context["runtime"] + "/bin/jq"
+            and argv[-2:] == ["-f", self.context["runtime"] + "/program.jq"], "E_STALE")
+        result = self._tool("evals-check-values", argv)
+        c2_require(result["status"] == 0 and result["stdout"].rstrip(b"\n") == b"true", error)
+        return result
+
+    def _verify_nested_receipts(self, driver_end, driver_pid, replay_root):
+        mode = self.budget["mode"]
+        root = Path(replay_root)
+        inputs = root.parent
+        c2_require(root.name == "replay-work" and inputs.name == "driver-input"
+            and inputs.parent.name == "I", "E_RELATION")
+        def read(path, mode=0o400):
+            held = self.build_custody.adopt(c._open_held(str(path), False,
+                c._store_rule(os.geteuid(), os.getegid(), mode, False, self.build_custody.resolver),
+                "E_RELATION", recording_work=self.work, accounting_kind="M"))
+            raw = c2_driver_input_read(self.build_custody, held)
+            held.recheck("E_RELATION", self.work, "M")
+            return raw
+        def same(left, right):
+            size = len(left) + len(right)
+            c2_nonruntime_room(self.work, size, False, read_only=True)
+            c._c3_processing(self.work, "R", size)
+            c._c3_processing(self.work, "E", size)
+            c2_require(left == right, "E_RELATION")
+        def parse(raw):
+            c2_nonruntime_room(self.work, len(raw), False, read_only=True)
+            c._c3_processing(self.work, "R", len(raw))
+            return c._json(raw, _C2_LIMIT, "E_PARSE")
+        pairs = [(None, inputs / "seed.json")] if mode == "run" else [
+            (0, inputs / "seed-0.json"), (1, inputs / "seed-1.json")]
+        sequence, cases, pair_data = [], [], {pair: [] for pair, _path in pairs}
+        for pair, seed in pairs:
+            seed_value = parse(read(seed))
+            for item in seed_value["body"]["cases"]:
+                case_id = item["case_id"]
+                c2_require(case_id in c._C3_CASES, "E_RELATION")
+                slot = c._C3_CASES.index(case_id)
+                sequence.append({"slot": slot, "case_id": case_id, "pair": pair})
+                cases.append(item)
+        c2_require(sequence == self.budget["sequence"]
+            and len({row["slot"] for row in sequence}) == len(sequence)
+            and len(driver_end["children"]) == len(sequence), "E_RELATION")
+        observations = driver_end["own"]["common"]["observations"]
+        packets, used_spawns, used_waits = [], set(), set()
+        for selected, case, child in zip(sequence, cases, driver_end["children"]):
+            slot, case_id = selected["slot"], selected["case_id"]
+            actor, pid, status = slot + 1, child["pid"], child["wait_status"]
+            c2_require(child["actor"] == actor and type(pid) is int and pid > 0
+                and type(status) is int and status == 0, "E_RELATION")
+            document = root / ("malicious-case-%d.json" % slot)
+            private = root / ("malicious-work-%d" % slot)
+            argv = ["/usr/bin/python3", "-I", "-S", "-B",
+                self.context["runtime"] + "/evals/v1/replay-malicious.py", self.context["runtime"],
+                str(inputs.parent), str(document), str(private)]
+            matching = [(index, row) for index, row in enumerate(observations)
+                if row["site"] == "C3-driver.spawn" and row["value"]["argv"] == argv]
+            c2_require(len(matching) == 1 and matching[0][0] not in used_spawns, "E_RELATION")
+            spawn_index, spawn = matching[0]
+            c2_require(spawn["owner"] == "C3-driver" and spawn["value"]["pid"] == pid, "E_RELATION")
+            waits = [(index, row) for index, row in enumerate(observations)
+                if index > spawn_index and row["site"] == "C3-driver.wait"
+                and row["value"]["pid"] == pid]
+            c2_require(waits and waits[0][0] not in used_waits, "E_RELATION")
+            wait_index, waited = waits[0]
+            c2_require(waited["owner"] == "C3-driver" and waited["value"]["status"] == status
+                and not any(row["site"] == "C3-driver.spawn" and row["value"]["pid"] == pid
+                    for row in observations[spawn_index + 1:wait_index]), "E_RELATION")
+            used_spawns.add(spawn_index);used_waits.add(wait_index)
+            case_raw = read(document, 0o600)
+            generated = c._c3_encode_values(case, self.work)
+            same(case_raw, generated)
+            manifest_raw = c._c3_encode_values(case["manifest"]["content"], self.work)
+            core_raw = c._c3_encode_values(case["manifest"]["content"]["inventory_core"], self.work)
+            bindings = {"slot": slot, "case_id": case_id,
+                "case_document_sha256": c2_driver_input_sha(self.build_custody, case_raw),
+                "manifest_sha256": c2_driver_input_sha(self.build_custody, manifest_raw),
+                "core_sha256": c2_driver_input_sha(self.build_custody, core_raw),
+                "window_sha256": self.budget["window_sha256"]}
+            c2_require(bindings["manifest_sha256"] == case["manifest"]["sha256"], "E_RELATION")
+            budget_case = self.budget["input_bindings"]["cases"][len(packets)]
+            c2_require(budget_case == {key: value for key, value in bindings.items()
+                if key in {"slot", "case_id", "manifest_sha256", "core_sha256"}} | {
+                    "manifest_size": len(manifest_raw)}, "E_RELATION")
+            wire = read(root / ("malicious-%d.out" % slot), 0o600)
+            stderr = read(root / ("malicious-%d.err" % slot), 0o600)
+            data, end, done, settlement = c._c3_receive_values(wire, stderr, status, pid,
+                driver_pid, self.budget, actor, bindings, self.work)
+            received = self.work["C3_received"][-1]
+            c2_require(received["actor"] == actor and received["pid"] == pid, "E_RELATION")
+            c2_nonruntime_room(self.work, len(child["end_hex"]) // 2 + 512, False, read_only=True)
+            recorded_end, recorded_done = bytes.fromhex(child["end_hex"]), bytes.fromhex(child["done_hex"])
+            c._c3_processing(self.work, "C", len(recorded_end) + len(recorded_done))
+            same(received["end_raw"], recorded_end);same(done, recorded_done)
+            same(read(root / ("malicious-%d.canonical" % slot), 0o600), data)
+            value = c._c3_json_values(data, self.work)
+            c2_require(type(value) is dict and value["case_id"] == case_id, "E_RELATION")
+            pair_data[selected["pair"]].append(value)
+            packets.append({"actor": actor, "pid": pid, "settlement": settlement,
+                "end_raw": received["end_raw"], "done_raw": done, "end": end})
+        for pair, values in pair_data.items():
+            path = root / "observations.json" if pair is None else root / ("pair-%d" % pair) / "observations.json"
+            same(read(path, 0o600), c._c3_encode_values(values, self.work))
+        c2_require(len(used_spawns) == len(used_waits) == len(sequence), "E_RELATION")
+        return packets
+
+    def _settle_actor_once(self, actor, pid, scopes, operation_key):
+        c2_require(type(actor) is int and 0 <= actor <= 4 and type(pid) is int and pid > 0
+            and type(scopes) is dict and operation_key == self.work["C3_operation_key"], "E_RELATION")
+        grants = [row for row in self.budget["grants"] if row["actor"] == actor]
+        c2_require(len(grants) == 1 and set(scopes) == set(grants[0]["scopes"]), "E_RELATION")
+        registry = self.work.setdefault("C3_actor_imports", {})
+        aggregates = self.work.setdefault("C3_case_work", {})
+        for scope in grants[0]["scopes"]:
+            ledger = c._c3_ledger_complete(scopes[scope])
+            key = (operation_key, actor, pid, scope)
+            c2_require(key not in registry, "E_RELATION")
+            entry = {"state": "pending", "ledger": ledger, "seed_watermarks": {}, "call_watermarks": {}}
+            registry[key] = entry
+            if scope == "common":
+                aggregate = self.work.setdefault("C3_common_work", c2_fresh_work("C3-import-common"))
+            else:
+                c2_require(scope in self.work["C2_case_totals"], "E_RELATION")
+                if scope not in aggregates:aggregates[scope] = c2_fresh_work("C3-import-" + scope)
+                aggregate = aggregates[scope]
+            c2_require(type(aggregate) is dict and aggregate is not self.work, "E_RELATION")
+            source = dict(ledger["values"])
+            source.update(calls=ledger["calls"], accounting_rows=ledger["observations"])
+            entry["source"] = source
+            try:
+                c._c3_values_room(c._c3_values_sum([c._c3_work_values(self.work), ledger["values"]]), window=True)
+                c._c3_values_room(c._c3_values_sum([c._c3_work_values(aggregate), ledger["values"]]), window=False)
+                if scope != "common":
+                    c._c3_values_room(c._c3_values_sum([c._c3_work_values(self.work["C2_case_totals"][scope]),
+                        ledger["values"]]), window=False)
+                c._capture_transfer_work(source, self.work, aggregate)
+                for group, watermark_name in (("seed_processing", "seed_watermarks"), ("calls", "call_watermarks")):
+                    for name, amount in source[group].items():
+                        c2_require(type(amount) is int and 0 <= amount < 1 << 64, "E_LIMIT")
+                        marks = entry[watermark_name].setdefault(name, [0, 0])
+                        for index, target in enumerate((self.work, aggregate)):
+                            c2_require(0 <= marks[index] <= amount, "E_LIMIT")
+                            previous = target[group].get(name, 0)
+                            delta = amount - marks[index]
+                            c2_require(type(previous) is int and previous + delta < 1 << 64, "E_LIMIT")
+                            target[group][name] = previous + delta
+                            marks[index] = amount
+                if scope != "common":
+                    target = self.work["C2_case_totals"][scope]
+                    c2_require(target is not self.work and target is not aggregate, "E_RELATION")
+                    marks = self.work.setdefault("C3_case_mirror_watermarks", {}).setdefault(scope, {})
+                    values = c._c3_work_values(aggregate)
+                    c._c3_values_room(c._c3_values_sum([c._c3_work_values(target),
+                        c._c3_values_delta(values, marks["values"] if "values" in marks else
+                            c._c3_work_values(c2_fresh_work("C3-new-mirror")))]), window=False)
+                    scalar_marks = marks.setdefault("scalars", {})
+                    for field in _C2_SCALARS:
+                        previous, amount = scalar_marks.get(field, 0), aggregate[field]
+                        c2_require(type(previous) is int and 0 <= previous <= amount, "E_LIMIT")
+                        target[field] += amount - previous;scalar_marks[field] = amount
+                    for group in ("runtime", "seed_processing", "calls"):
+                        group_marks = marks.setdefault(group, {})
+                        for field, amount in aggregate[group].items():
+                            previous = group_marks.get(field, 0)
+                            c2_require(type(previous) is int and 0 <= previous <= amount, "E_LIMIT")
+                            if group == "runtime":c._runtime_account(target, field, amount - previous)
+                            else:target[group][field] = target[group].get(field, 0) + amount - previous
+                            group_marks[field] = amount
+                    class_marks = marks.setdefault("accounting", {})
+                    for kind, fields in aggregate["accounting"].items():
+                        previous_fields = class_marks.setdefault(kind, {})
+                        for field, amount in fields.items():
+                            previous = previous_fields.get(field, 0)
+                            c2_require(type(previous) is int and 0 <= previous <= amount, "E_LIMIT")
+                            c._capture_account(target, kind, field, amount - previous)
+                            previous_fields[field] = amount
+                    marks["values"] = c._c3_values_sum([values])
+                self.work.setdefault("C3_scope_ledgers", []).append({"operation": operation_key,
+                    "actor": actor, "pid": pid, "scope": scope, "ledger": ledger})
+                c2_nonruntime_room(self.work, 0, False)
+                entry["state"] = "complete"
+            except BaseException:
+                entry["state"] = "unknown"
+                self.work["C3_actor_import_incomplete"] = True
+                aggregate["C3_actor_import_incomplete"] = True
+                if scope != "common":self.work["C2_case_totals"][scope]["C3_actor_import_incomplete"] = True
+                raise
+        return registry
+
+    def _run_fixed(self, arguments, driver_input):
+        import re
+        import shlex
+        c2_require(not self.__dict__.get("run_fixed_started", False), "E_RELATION")
+        self.run_fixed_started = True
+        mode, _root, _paths = c2_cli(arguments)
+        runtime = Path(self.context["runtime"])
+        input_path = Path(driver_input)
+        inputs = input_path.parent if mode == "run" else input_path
+        replay_root = inputs / "replay-work"
+        input_document = input_path if mode == "run" else input_path / "manifest.json"
+        c2_require(inputs.name == "driver-input" and inputs.parent.name == "I"
+            and inputs.parent.parent.parent.name == "operations"
+            and inputs.parent.parent.name == str(self.budget["ordinal"])
+            and self.budget["mode"] == mode, "E_RELATION")
+        observed_at = arguments[2] if mode == "run" else arguments[1]
+        def read(path, mode=0o400):
+            held = self.build_custody.adopt(c._open_held(str(path), False,
+                c._store_rule(os.geteuid(), os.getegid(), mode, False, self.build_custody.resolver),
+                "E_RELATION", recording_work=self.work, accounting_kind="M"))
+            raw = c2_driver_input_read(self.build_custody, held)
+            held.recheck("E_RELATION", self.work, "M")
+            return raw
+        def same(left, right, token):
+            size = len(left) + len(right)
+            c2_nonruntime_room(self.work, size, False, read_only=True)
+            c._c3_processing(self.work, "R", size);c._c3_processing(self.work, "E", size)
+            c2_require(left == right, token)
+        def write(path, raw):
+            _sha, held = c2_write_bytes(self.build_custody, self._directory(str(path.parent)), path.name, raw)
+            return held
+        self.sources.recheck();self.sources.reconcile(self.work)
+        fresh_input = read(input_document)
+        same(fresh_input, read(Path(self.input_document)), "E_RELATION")
+        seed_sha = c2_driver_input_sha(self.build_custody, fresh_input)
+        c2_require(seed_sha == self.context["seed_sha"], "E_RELATION")
+        evaluator_path = runtime / "evaluator.json"
+        evaluator_sha = self._hash_path(str(evaluator_path))
+        c2_require(evaluator_sha == self.context["evaluator_sha"], "E_STALE")
+        budget_raw = read(inputs / "replay-budget.json")
+        c2_require(c2_driver_input_sha(self.build_custody, budget_raw) == self.budget_sha, "E_RELATION")
+        budget_value = c._c3_budget_values(budget_raw, 0, self.budget["ordinal"], mode,
+            self.budget["window_sha256"], self.budget["input_bindings"], self.work)
+        c2_require(budget_value == self.budget, "E_RELATION")
+        window_raw = read(inputs / "window.json")
+        c2_require(c2_driver_input_sha(self.build_custody, window_raw) == self.budget["window_sha256"], "E_RELATION")
+        probe = c._open_held(str(replay_root), True,
+            c._store_rule(os.geteuid(), os.getegid(), 0o700, True, self.build_custody.resolver),
+            "E_RELATION", recording_work=self.work, accounting_kind="M")
+        first = None
+        try:
+            c2_require(not probe.listdir()
+                and c._stat_values(probe.before) == self.budget["input_bindings"]["work_identity"], "E_RELATION")
+            probe.recheck("E_RELATION", self.work, "M")
+        except BaseException as error:first = error
+        finally:
+            try:probe.close()
+            except BaseException as error:
+                self.work["C3_work_probe_close_incomplete"] = True
+                first = c2_first(first, error)
+        if first is not None:raise first
+        self._directory(self.scratch + "/work")
+        argv = ["/bin/bash", str(runtime / "driver.sh"), mode, str(runtime), str(input_path),
+            str(evaluator_path), evaluator_sha, seed_sha, observed_at]
+        self.sources.recheck();self.sources.reconcile(self.work)
+        result = self._driver(argv, {"LC_ALL": "C", "PATH": "/usr/bin:/bin", "TMPDIR": self.scratch + "/work"})
+        c2_require(type(result["status"]) is int and type(result["pid"]) is int and result["pid"] > 0, "E_RUNTIME")
+        if result["status"] != 0:
+            c2_require(not result["stdout"], "E_RUNTIME")
+            token = result["stderr"].rstrip(b"\n")
+            allowed = {b"E_RUNTIME", b"E_LIMIT", b"E_PARSE", b"E_CANONICAL", b"E_SHAPE", b"E_RELATION", b"E_STALE"}
+            raise C2Refusal(token.decode("ascii") if token in allowed else "E_RUNTIME")
+        c2_require(not result["stderr"], "E_RUNTIME")
+        self.work["_c3_budget_sha"] = self.budget_sha
+        self.work["C3_settlement_incomplete"] = True
+        data, driver_end, driver_done, driver_settlement = c._c3_receive_values(
+            result["stdout"], result["stderr"], result["status"], result["pid"], os.getpid(),
+            self.budget, 0, self.budget["input_bindings"], self.work)
+        driver_received = self.work["C3_received"][-1]
+        self.work.setdefault("C3_pending_packets", []).append({"actor": 0, "pid": result["pid"],
+            "end_raw": driver_received["end_raw"], "done_raw": driver_done, "settlement": driver_settlement})
+        nested = self._verify_nested_receipts(driver_end, result["pid"], replay_root)
+        self.work["C3_pending_packets"].extend(nested)
+        operation_key = (self.budget["window_sha256"], self.budget["ordinal"], self.budget_sha, result["pid"])
+        c2_require("C3_operation_key" not in self.work, "E_RELATION")
+        self.work["C3_operation_key"] = operation_key
+        first, output = None, Path(self.scratch) / "output.json"
+        try:
+            write(output, data)
+            if mode == "run":
+                self._program_check("validate-run-result", str(evaluator_path), evaluator_sha, seed_sha,
+                    str(input_path), str(replay_root / "observations.json"), str(output),
+                    str(replay_root / "observations.json"), "[]", observed_at)
+            else:
+                for pair in range(2):
+                    seed, supplied = inputs / ("seed-%d.json" % pair), inputs / ("result-%d.json" % pair)
+                    pair_time = self._checked("evals-check-values", [str(runtime / "bin/jq"), "-r",
+                        ".body.observed_at", str(supplied)]).rstrip(b"\n").decode("ascii")
+                    observations = replay_root / ("pair-%d" % pair) / "observations.json"
+                    read(observations, 0o600)
+                    self._program_check("validate-run-result", str(evaluator_path), evaluator_sha,
+                        self._hash_path(str(seed)), str(seed), str(observations), str(supplied),
+                        str(observations), "[]", pair_time, "E_RELATION")
+                    same(read(replay_root / ("pair-%d" % pair) / "run-result.json", 0o600), read(supplied), "E_RELATION")
+                result_shas = self._checked("evals-check-values", [str(runtime / "bin/jq"), "-c",
+                    "map(.result_sha256)", str(inputs / "manifest.json")]).rstrip(b"\n").decode("ascii")
+                self._program_check("validate-dashboard", str(evaluator_path), evaluator_sha, seed_sha,
+                    str(replay_root / "seeds.jsonl"), str(replay_root / "pair-0/observations.json"), str(output),
+                    str(replay_root / "results.jsonl"), result_shas, observed_at)
+            canonical = self._checked("evals-check-values", [str(runtime / "bin/jq"), "-S", "-c", ".", str(output)], error="E_CANONICAL")
+            write(Path(self.scratch) / "output.canonical", canonical)
+            same(data, canonical, "E_CANONICAL")
+            pin_source = self._original_filter('"'"'/usr/bin/cmp -s "$output" "$scratch/output.canonical" || emit_error E_CANONICAL\n'"'"',
+                '"'"'\nwhile read -r path digest; do\n'"'"').replace("\\\n", "")
+            pattern = r'"'"'\[\s*"\$\(sha256_path\s+("[^"\n]+"|/bin/bash)\)"\s*=\s*("[^"\n]+"|[0-9a-f]{64})\s*\]'"'"'
+            pins = re.findall(pattern, pin_source)
+            c2_require(pins and len(pins) == pin_source.count("sha256_path"), "E_STALE")
+            local = {"input_document": str(input_document), "seed_sha": seed_sha, "evaluator_sha": evaluator_sha}
+            for path, expected in pins:
+                path = self._expand(shlex.split(path)[0], local)
+                expected = self._expand(shlex.split(expected)[0], local)
+                try:c2_require(self._hash_path(path) == expected, "E_RUNTIME")
+                except BaseException as error:
+                    if c2_cancelled(error) or getattr(error, "code", None) == "E_LIMIT":raise
+                    raise C2Refusal("E_RUNTIME") from error
+            record_files = self._expand(self._original_filter('"'"'record_files="'"'"', '"'"'"\n}'"'"'))
+            for line in record_files.splitlines():
+                path, expected = line.split()
+                c2_require(self._hash_path(str(runtime / path)) == expected, "E_STALE")
+            review = read(runtime / "review-files.tsv")
+            for line in review.decode().splitlines():
+                expected, path = line.split("\t", 1)
+                c2_require(self._hash_path(str(runtime / path)) == expected, "E_RELATION")
+            if self.context["review_approval_sha"] != "none":
+                c2_require(self._hash_path(str(runtime / "evals/v1/seeds/reviewer-severity/approval.json"))
+                    == self.context["review_approval_sha"], "E_STALE")
+            self.sources.recheck();self.sources.reconcile(self.work)
+            same(read(input_document), fresh_input, "E_RELATION")
+            same(read(inputs / "replay-budget.json"), budget_raw, "E_RELATION")
+            same(read(inputs / "window.json"), window_raw, "E_RELATION")
+            self.build_custody.recheck()
+        except BaseException as error:
+            first = error
+        finally:
+            for actor, pid, settlement in [(0, result["pid"], driver_settlement),
+                    *[(packet["actor"], packet["pid"], packet["settlement"]) for packet in nested]]:
+                try:self._settle_actor_once(actor, pid, settlement, operation_key)
+                except BaseException as error:
+                    first = c2_first(first, error)
+                    self.work["C3_settlement_incomplete"] = True
+                    break
+            else:
+                del self.work["C3_settlement_incomplete"]
+        if first is not None:raise first
+        self.work["C3_run_validated"] = True
+        return {"status": result["status"], "pid": result["pid"], "stdout": data, "stderr": result["stderr"]}
+
+
 class C2Root:
     def __init__(self, held, work, resolver):
         self.root, self.work, self.resolver = held, work, resolver
@@ -1104,6 +1562,10 @@ def c2_sum_views(values):
     result["seed_processing"] = {key: add([value["seed_processing"][key] for value in values]) for key in ("R", "W", "H", "E", "C")}
     result["incomplete"] = [item for value in values for item in value["incomplete"]]
     result["unknown"] = {str(index): value["unknown"] for index, value in enumerate(values) if value["unknown"]}
+    if any("ledgers" in value for value in values):
+        c2_require(all("ledgers" in value for value in values), "E_RELATION")
+        result["ledgers"] = [ledger for value in values for ledger in value["ledgers"]]
+        for ledger in result["ledgers"]:c._c3_ledger_check(ledger)
     return result
 
 def c2_case_values(rows):
@@ -1124,7 +1586,7 @@ def c2_case_values(rows):
         values.append(view)
     return c2_sum_views(values)
 
-def c2_counters(work):
+def c2_counters(work, *, ledger=False):
     cases = {}
     bindings = work.get("C2_case_bindings", {})
     for identity, binding in bindings.items():
@@ -1136,6 +1598,10 @@ def c2_counters(work):
     for identity, leaf in work.get("C2_case_totals", {}).items():
         c2_require(identity in _C2_CASES and identity not in cases, "E_RELATION")
         cases[identity] = c2_counter_values(work.get("C2_case_leaves", {}).get(identity, leaf))
+    for identity, leaf in work.get("C3_case_work", {}).items():
+        c2_require(identity in cases and (identity in work.get("C2_case_leaves", {})
+            or identity in work.get("C2_case_bindings", {})), "E_RELATION")
+        cases[identity] = c2_sum_views([cases[identity], c2_counter_values(leaf)])
     window = c2_counter_values(work)
     if "C2_common_case" in work:
         common = c2_counter_values(work["C2_common_case"])
@@ -1149,6 +1615,31 @@ def c2_counters(work):
         # Only these disjoint new leaves were actually transferred into this work owner.
         transferred = [c2_counter_values(total) for total in work.get("C2_case_totals", {}).values()]
         common = c2_view_delta(window, c2_sum_views(transferred)) if transferred else window
+    if ledger:
+        def record(owners, view):
+            distinct = []
+            for owner in owners:
+                c2_require(type(owner) is dict, "E_RELATION")
+                if not any(owner is previous for previous in distinct):distinct.append(owner)
+            snapshots = [c._c3_scope_ledger_values(owner) for owner in distinct]
+            return dict(view, ledgers=snapshots)
+        for identity in cases:
+            if identity in bindings:owners = list(bindings[identity][1])
+            else:owners = [work.get("C2_case_leaves", {}).get(identity, work["C2_case_totals"][identity])]
+            if identity in work.get("C3_case_work", {}):owners.append(work["C3_case_work"][identity])
+            cases[identity] = record(owners, cases[identity])
+        if "C2_common_case" in work:
+            common = record([work["C2_common_case"]], common)
+        else:
+            projected = dict(work)
+            projected.update({key: common[key] for key in _C2_SCALARS})
+            for group in ("runtime", "accounting", "seed_processing"):projected[group] = common[group]
+            injected = [row for owner in work.get("C2_case_totals", {}).values()
+                for row in owner.get("accounting_rows", [])]
+            projected["accounting_rows"] = [row for row in work.get("accounting_rows", [])
+                if not any(row is transferred for transferred in injected)]
+            projected["cases"] = {}
+            common = record([projected], common)
     return {"window": window, "cases": cases, "common": common}
 
 def c2_view_delta(current, prior):
@@ -1158,6 +1649,12 @@ def c2_view_delta(current, prior):
         for key in _C2_ACCOUNT_FIELDS} for kind in _C2_CLASSES}
     result["seed_processing"] = {key: current["seed_processing"][key] - prior["seed_processing"][key] for key in ("R", "W", "H", "E", "C")}
     result["incomplete"], result["unknown"] = current["incomplete"], current["unknown"]
+    if "ledgers" in current or "ledgers" in prior:
+        c2_require("ledgers" in current and "ledgers" in prior
+            and len(current["ledgers"]) >= len(prior["ledgers"]), "E_RELATION")
+        result["ledgers"] = [c._c3_ledger_delta(row, prior["ledgers"][index])
+            if index < len(prior["ledgers"]) else c._c3_ledger_check(row)
+            for index, row in enumerate(current["ledgers"])]
     return result
 
 def c2_delta(current, prior):
@@ -1173,6 +1670,92 @@ def c2_combine(before, *deltas):
     return {"window": c2_sum_views([value["window"] for value in inputs]),
         "common": c2_sum_views([value["common"] for value in inputs]),
         "cases": {identity: c2_sum_views([value["cases"][identity] for value in inputs if identity in value["cases"]]) for identity in before["cases"]}}
+
+
+def c2_named_values(view):
+    return c._c3_vector_values(c._c3_values_vector({key: view[key] for key in c._C3_SCALARS}
+        | {group: view[group] for group in ("runtime", "accounting", "seed_processing")}))
+
+def c2_cutoff_ledger(view):
+    c2_require("ledgers" in view and type(view["ledgers"]) is list and view["ledgers"], "E_LIMIT")
+    ledgers = [c._c3_ledger_check(row) for row in view["ledgers"]]
+    work = c2_named_values(view)
+    calls = {}
+    for ledger in ledgers:
+        for name, amount in ledger["calls"].items():calls[name] = calls.get(name, 0) + amount
+    work.update(calls=calls, accounting_rows=[row for ledger in ledgers for row in ledger["observations"]])
+    receipts = {}
+    for slot in c._C3_RECEIPT_SLOTS:
+        originals = [ledger["owner_receipts"][slot] for ledger in ledgers]
+        if len(originals) == 1:receipts[slot] = originals[0]
+        elif all(value == {"state": "not-applicable"} for value in originals):
+            receipts[slot] = {"state": "not-applicable"}
+        else:receipts[slot] = {"state": "unknown"}
+    unknown = [value for ledger in ledgers for value in ledger["unknown"]]
+    unknown.extend("C2-multiple-original-" + slot + "-receipts" for slot in c._C3_RECEIPT_SLOTS
+        if len(ledgers) > 1 and receipts[slot] == {"state": "unknown"})
+    return c._c3_ledger_values(work, receipts,
+        [row for ledger in ledgers for row in ledger["retained"]],
+        [row for ledger in ledgers for row in ledger["errors"]], unknown)
+
+def c2_replay_demand(entries, source_bytes, source_files, document_bytes, phase):
+    c2_require(type(entries) is list and len(entries) <= 256
+        and all(type(value) is int and value >= 0 for value in (source_bytes, source_files, document_bytes))
+        and phase in {"bootstrap", "body", "terminal"}, "E_LIMIT")
+    result = c._c3_vector_values((0,) * 55)
+    def add(kind, size, count, passes, *, logical=0):
+        c2_require(kind in {"L", "W", "M", "raw", "export", "runtime"}
+            and type(size) is int and size >= 0 and type(count) is int and count >= 0, "E_LIMIT")
+        for field, multiplier in zip(("R", "W", "H", "E", "C"), passes):
+            amount = multiplier * size
+            result["seed_processing"][field] += amount
+            if kind == "runtime":
+                target = {"R": "read_bytes", "W": "write_bytes", "H": "sha_bytes", "E": "equality_bytes", "C": "copy_bytes"}[field]
+                result["runtime"][target] += amount
+            elif field in {"R", "W"}:
+                target = "read_bytes" if field == "R" else "write_bytes"
+                result[target] += amount
+                if kind == "export":result["export_" + target] += amount
+                else:result["accounting"][kind][target] += amount
+        physical = passes[1] * size
+        if kind == "runtime":
+            result["runtime"]["physical_bytes"] += physical
+            result["runtime"]["physical_files"] += count if passes[1] else 0
+            result["runtime"]["logical_bytes"] += logical
+            result["runtime"]["files"] += count if logical else 0
+        else:
+            result["physical_bytes"] += physical;result["files"] += count if passes[1] else 0
+            if kind == "export":
+                result["export_physical_bytes"] += physical;result["export_files"] += count if passes[1] else 0
+            else:
+                result["accounting"][kind]["physical_bytes"] += physical
+                result["accounting"][kind]["files"] += count if passes[1] else 0
+                result["accounting"][kind]["logical_bytes"] += logical
+                result["accounting"][kind]["occurrences"] += count
+    if phase == "bootstrap":
+        add("L", source_bytes, source_files, (4, 0, 2, 2, 0), logical=source_bytes)
+        add("M", document_bytes, 1, (8, 0, 3, 2, 1), logical=document_bytes)
+    elif phase == "body":
+        for entry in entries:
+            c2_require(type(entry) is dict and entry["kind"] in {"runtime", "recorded", "export", "raw", "M", "W"}
+                and type(entry["size_bytes"]) is int and 0 <= entry["size_bytes"] <= 4 << 30, "E_RELATION")
+            add("raw" if entry["kind"] == "recorded" else entry["kind"], entry["size_bytes"], 1,
+                (8, 1, 5, 4, 1), logical=entry["size_bytes"])
+        add("L", source_bytes, source_files, (2, 0, 2, 2, 0))
+        add("M", document_bytes, 4, (8, 2, 4, 4, 2), logical=2 * document_bytes)
+    else:
+        # Fixed framing and the two original pipe-close rows use the same codec as actual emission.
+        close, _rows = c._c3_close_tail_values(0, 0)
+        result = c._c3_values_sum([result, close])
+        add("M", document_bytes + 512 + 8, 3, (4, 1, 1, 1, 1), logical=document_bytes + 520)
+    metadata = (source_files + len(entries) + 4) * 1024
+    add("M", metadata, source_files + len(entries) + 4, (3, 0, 0, 0, 0), logical=metadata)
+    result["close_calls"] += 4 * (source_files + len(entries) + 4)
+    result["held_close_calls"] += 4 * (source_files + len(entries) + 4)
+    result["observation_calls"] += 8 * (source_files + len(entries) + 4)
+    c._c3_values_vector(result)
+    return result
+
 
 def c2_reserve_view(before, reservation, window):
     c2_require(type(before) is dict and type(reservation) is dict, "E_LIMIT")
@@ -1532,7 +2115,7 @@ def c2_lifecycle(launcher, arguments):
             seen |= prior_cases
         ready = {"kind": "READY", "version": 1, "ordinal": ordinal, "start_sha256": c2_sha(start_raw, work),
             "input_sha256s": hashes, "observed_predecessor_sha256": start["predecessor_sha256"],
-            "acquisition_delta": c2_counters(work), "leaf_pid": os.getpid(), "leaf_ppid": os.getppid()}
+            "acquisition_delta": c2_counters(work, ledger=True), "leaf_pid": os.getpid(), "leaf_ppid": os.getppid()}
         ready_raw, _written = channel.send(ready)
         go, _go_raw = channel.receive("GO")
         c2_require(go["ordinal"] == ordinal and go["start_sha256"] == c2_sha(start_raw, work)
@@ -1569,6 +2152,9 @@ def c2_lifecycle(launcher, arguments):
         except BaseException as error:
             source_errors.append(error)
             raise
+        budget_seal = helpers._prepare_budget(custody, driver_inputs, descriptor, start,
+            start_raw, ready_raw, _go_raw, window_sha, start["root_identity"], original_inputs)
+        driver_seals.append(budget_seal)
         helpers.unused = tuple(unused + [item.fd for held in custody.owned for item in held.components])
         completed = helpers.run_and_check(arguments, driver_input)
         if completed["status"] != 0:
@@ -1580,7 +2166,7 @@ def c2_lifecycle(launcher, arguments):
         result = completed["stdout"]
         prefix = {"ordinal": ordinal, "mode": mode, "case_ids": sorted(actual_cases), "seen_case_ids": sorted(seen),
             "input_sha256s": hashes, "start_sha256": c2_sha(start_raw, work), "predecessor_sha256": start["predecessor_sha256"],
-            "cutoff": c2_counters(work), "source_cutoff": sources.work}
+            "cutoff": c2_counters(work, ledger=True), "source_cutoff": sources.work}
         receipt_sha = c2_write_document(custody, operation, "receipt.json", prefix)
     except BaseException as error:
         failure = error
@@ -1658,7 +2244,7 @@ def c2_lifecycle(launcher, arguments):
     terminal_before = c2_vector(work)
     end = {"kind": "END", "version": 1, "ordinal": start["ordinal"], "start_sha256": end_start_sha,
         "receipt_sha256": receipt_sha, "result_sha256": end_result_sha,
-        "outcome": "refused" if failure is not None else "completed", "child_delta": c2_counters(work),
+        "outcome": "refused" if failure is not None else "completed", "child_delta": c2_counters(work, ledger=True),
         "retained": [] if operation is None else [operation.path], "errors": errors,
         "unknown": [{"site": key, "value": value} for key, value in work.items() if key.endswith("_unknown") and value]}
     terminal_channel = C2Channel(9, work)

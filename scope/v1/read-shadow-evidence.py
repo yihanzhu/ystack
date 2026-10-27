@@ -1233,6 +1233,8 @@ class _Reader:
             self._recheck_source_copies(parent)
             copied = source.copy_source_capture(parent, ordinal, source.anchor.recording_work)
             self._own_source_copy(copied, parent)
+            copied.scope_source = source
+            copied.scope_source_ordinal = ordinal
             configuration_cancel = self._retain_source_configuration(source, parent, ordinal)
             cancellation = configuration_cancel
         except Exception as error:
@@ -1346,16 +1348,15 @@ class _Reader:
             raise first
 
     def _replay_output_failure(self, error, site):
+        first = error if isinstance(error, (KeyboardInterrupt, SystemExit)) or getattr(error, "_scope_signal_cancel", False) else None
         try:
             self.replay_output_state[0] = True
-            if getattr(self, "anchor", None) is not None:
-                self.anchor.private_observations["unusable"] = True
+            if getattr(self, "anchor", None) is not None:self.anchor.private_observations["unusable"] = True
             self.replay_output_errors.append({"site": site, "error": error,
                 "category": type(error).__name__, "errno": getattr(error, "errno", None)})
-        except (MemoryError, AttributeError):
-            pass
-        if isinstance(error, (KeyboardInterrupt, SystemExit)) or getattr(error, "_scope_signal_cancel", False):
-            raise error
+        except BaseException as reporting:
+            if first is None and (isinstance(reporting, (KeyboardInterrupt, SystemExit)) or getattr(reporting, "_scope_signal_cancel", False)):first = reporting
+        if first is not None:raise first
 
     def _initialize_replay_outputs(self):
         try:
@@ -1459,7 +1460,7 @@ class _Reader:
         store.recheck()
         anchor.recheck("E_STALE")
         facts = _bundle_facts_values(files, checked, store.observation, body)
-        try:self._retain_replay_output("stores", files["shadow-record.json"], (store, files))
+        try:self._retain_replay_output("stores", files["shadow-record.json"], (store, files, retained, store.storage_rows))
         except BaseException as error:self._replay_output_failure(error, "reader-store-retention")
         return facts
 

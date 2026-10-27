@@ -265,6 +265,11 @@ def sha(raw: bytes) -> str:
     return c.digest(raw)
 
 
+def _runtime_sha_values(raw, runtime_work=None):
+    if runtime_work is None:return sha(raw)
+    return c.digest(raw, runtime_work=runtime_work)
+
+
 def parse(raw: bytes, limit: int = OUTPUT_LIMIT, code: str = "E_SHAPE") -> dict:
     try:
         return c._json(raw, limit, code)
@@ -1022,7 +1027,7 @@ def _native_provenance_values(context: dict) -> dict:
 
 def _reproduction_provenance_values(request_id: str, instruction: bytes, observation_raw: bytes,
         context: dict, consumer_source_raw: bytes, python_raw: bytes, jq_sha256: str,
-        commands: list) -> bytes:
+        commands: list, *, runtime_work=None) -> bytes:
     return canonical({"schema_version": 1, "kind": "shadow_consumer_provenance",
         "id": request_id, "body": {"activation_state": "inactive", "authority": "none",
         "instruction_utf8": instruction.decode(), "instruction_sha256": sha(instruction),
@@ -1031,7 +1036,7 @@ def _reproduction_provenance_values(request_id: str, instruction: bytes, observa
         "helper_build_record_sha256": context["helper_build_record_sha256"],
         "helper_executable_sha256": context["helper_executable_sha256"],
         "consumer_source_sha256": sha(consumer_source_raw),
-        "python_sha256": sha(python_raw),
+        "python_sha256": _runtime_sha_values(python_raw, runtime_work),
         "jq_sha256": jq_sha256, "native_release": _native_provenance_values(context),
         "commands": commands}})
 

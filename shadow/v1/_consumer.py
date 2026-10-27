@@ -84,10 +84,40 @@ def canonical(value: object) -> bytes:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
                       allow_nan=False).encode("utf-8") + b"\n"
 
-def digest(data: bytes) -> str:
-    if isinstance(data, (_ExportSnapshot, _RuntimeSnapshot)):
-        return data.sha256()
-    return hashlib.sha256(data).hexdigest()
+def digest(data: bytes, *, runtime_work=None) -> str:
+    if runtime_work is None and type(data) is not tuple:
+        if isinstance(data, (_ExportSnapshot, _RuntimeSnapshot)):
+            return data.sha256()
+        return hashlib.sha256(data).hexdigest()
+    _require(type(data) in (bytes, tuple) and (type(data) is bytes or runtime_work is not None), "E_STORE")
+    if runtime_work is not None:
+        _require(type(runtime_work) is dict and not runtime_work.get("runtime_digest_incomplete", False)
+            and type(runtime_work.get("seed_processing")) is dict
+            and type(runtime_work["seed_processing"].get("H")) is int
+            and runtime_work["seed_processing"]["H"] >= 0
+            and type(runtime_work.get("runtime")) is dict
+            and type(runtime_work["runtime"].get("sha_bytes")) is int, "E_LIMIT")
+        runtime_work["runtime_digest_incomplete"] = True
+    measured = hashlib.sha256()
+    chunks = (memoryview(data)[offset:offset + 65536] for offset in range(0, len(data), 65536)) if type(data) is bytes else data
+    for chunk in chunks:
+        _require((type(chunk) is bytes if type(data) is tuple else type(chunk) is memoryview)
+            and len(chunk) <= 65536, "E_STORE")
+        amount = len(chunk)
+        if runtime_work is not None:
+            _runtime_account(runtime_work, "sha_bytes", amount, commit=False)
+            _require(runtime_work["seed_processing"]["H"] + amount < 1 << 64, "E_LIMIT")
+            if "_c3_grant_binding" in runtime_work:
+                increment = _c3_vector_values((0,) * 55)
+                increment["seed_processing"]["H"] = amount
+                _c3_binding_room(runtime_work, increment)
+        measured.update(chunk)
+        if runtime_work is not None:
+            runtime_work["seed_processing"]["H"] += amount
+            _runtime_account(runtime_work, "sha_bytes", amount)
+    value = measured.hexdigest()
+    if runtime_work is not None:del runtime_work["runtime_digest_incomplete"]
+    return value
 
 
 _export_work = {}
@@ -222,11 +252,14 @@ def _runtime_account(work, field, amount, *, window=False, commit=True):
         counts[field] = current + amount
 
 
-def _runtime_inventory_values(group, preparation_operation=None):
+def _runtime_inventory_values(group, preparation_operation=None, *, _ordinal_base=0):
     _require(type(group) is dict and set(group) in ({"files"}, {"slots", "files"})
              and type(group.get("files")) is list and 1 <= len(group["files"]) <= 64, "E_STORE")
+    _require(type(_ordinal_base) is int and 0 <= _ordinal_base < 64
+        and (preparation_operation is None or _ordinal_base == 0)
+        and _ordinal_base + len(group["files"]) <= 64, "E_STORE")
     names, total = set(), 0
-    for ordinal, row in enumerate(group["files"]):
+    for ordinal, row in enumerate(group["files"], _ordinal_base):
         _require(type(row) is dict and set(row) == {"slot", "index", "ordinal", "locator", "file",
             "size_bytes", "sha256", "errno"} and type(row["slot"]) is str
             and row["slot"] in _RUNTIME_ROLES and type(row["index"]) is int and 0 <= row["index"] < 64
@@ -247,6 +280,17 @@ def _runtime_inventory_values(group, preparation_operation=None):
         names.add(row["file"]);total += row["size_bytes"]
         _require(total <= 4 << 30, "E_LIMIT")
     return {row["file"]: row for row in group["files"]}
+
+
+def _source_local_runtime_values(group, complete_group):
+    _runtime_inventory_values(complete_group)
+    _require(type(group) is dict and set(group) == {"files"} and type(group["files"]) is list
+        and group["files"] and type(group["files"][0]) is dict
+        and type(group["files"][0].get("ordinal")) is int, "E_STORE")
+    first = group["files"][0]["ordinal"]
+    _require(0 <= first < len(complete_group["files"])
+        and group["files"] == complete_group["files"][first:first + len(group["files"])], "E_STORE")
+    return _runtime_inventory_values(group, _ordinal_base=first)
 
 
 def _runtime_config_binding(rows, config):
@@ -1334,6 +1378,9 @@ def _copy_preparation_document(directory, raw, work, resolver, *, name="capture.
               "source-host.json": DOCUMENT_LIMIT, "source-config.json": DOCUMENT_LIMIT,
               "source-accepted.json": DOCUMENT_LIMIT, "source-package.json": DOCUMENT_LIMIT,
               "source-supervisor.py": EXECUTABLE_LIMIT, "source-normalizer.py": EXECUTABLE_LIMIT}
+    limits.update({"reader-anchor-" + key + ".bin": EXECUTABLE_LIMIT
+        for key in {"host", "verifier", "supervisor"} | {"installed-" + role for role in INSTALLED_SOURCES}})
+    limits["reader-anchor-host.bin"] = DOCUMENT_LIMIT
     _require(name in limits and type(raw) is bytes and len(raw) <= limits[name], "E_STORE")
     target = reader = None
     failure = None
@@ -2283,6 +2330,112 @@ class Anchor:
         if failure is not None:
             raise failure
 
+    def retain_scope_anchor_inputs(self, parent, reader, values):
+        leaf, copied, directory, first, case_work = {}, None, None, None, None
+        def failed(error, site):
+            nonlocal first
+            marked = isinstance(error, KeyboardInterrupt) or getattr(error, "_scope_signal_cancel", False)
+            if first is None or marked and not (isinstance(first, KeyboardInterrupt) or getattr(first, "_scope_signal_cancel", False)):first = error
+            try:_capture_observation_error(leaf, "M", site, error)
+            except BaseException as observed:
+                if not (isinstance(first, KeyboardInterrupt) or getattr(first, "_scope_signal_cancel", False)) and (isinstance(observed, KeyboardInterrupt) or getattr(observed, "_scope_signal_cancel", False)):first = observed
+                try:leaf["accounting_incomplete"] = True
+                except BaseException as reporting:
+                    if not (isinstance(first, KeyboardInterrupt) or getattr(first, "_scope_signal_cancel", False)) and (isinstance(reporting, KeyboardInterrupt) or getattr(reporting, "_scope_signal_cancel", False)):first = reporting
+        try:
+            _capture_work_values(leaf, "scope-anchor-inputs")
+            leaf["scope_anchor_copy_incomplete"] = True
+            self.recording_work.setdefault("scope_anchor_input_leaves", []).append(leaf)
+            _require(self.scope_runtime_owner is reader and reader.anchor is self and reader.commands_open
+                and isinstance(parent, HeldPath) and type(values) is dict, "E_STORE")
+            expected = {"host", "verifier", "supervisor"} | {"installed-" + role for role in INSTALLED_SOURCES}
+            _require(set(values) == expected, "E_STORE")
+            case_key = str(parent.components[-2].before.st_dev) + ":" + str(parent.components[-2].before.st_ino)
+            case_work = _capture_work_values(self.recording_work, case_key)
+            leaf["input_kind"] = leaf["metadata_kind"] = "M"
+            leaf["_capture_copy_budget"] = _capture_copy_budget_values(leaf,
+                ((self.recording_work, False), (case_work, True)))
+            parent.recheck("E_STORE", leaf, "M")
+            before = parent.before
+            _capture_copy_room(leaf, 0, False, case=True, files=1)
+            os.mkdir("reader-anchor", 0o700, dir_fd=parent.fd)
+            leaf["files"] += 1
+            _capture_account(leaf, "M", "files", 1)
+            _refresh_recording_directory(parent, before, leaf)
+            directory = os.open("reader-anchor", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent.fd)
+            initial = _capture_metadata(directory, leaf, "M")
+            states, members = {}, {}
+            for key in sorted(expected):
+                raw, original = values[key]
+                _require(type(raw) is bytes and isinstance(original, HeldPath) and original.components
+                    and any(item is original for item in self.held) and original.before.st_size == len(raw), "E_STORE")
+                if key == "host":
+                    _require(raw is self.config_raw and original.path == ANCHOR + "/host-config.json", "E_STORE")
+                elif key == "verifier":
+                    _require(self.scope_verifier_input[0] is raw and self.scope_verifier_input[1] is original
+                        and original.path == self.config["identity_paths"]["verifier"], "E_STORE")
+                elif key == "supervisor":_require(original.path == ANCHOR + "/host-supervisor.py", "E_STORE")
+                else:
+                    role = key[len("installed-"):]
+                    _require(raw is self.installed[role][0] and original.path == self.config["installed_files"][role], "E_STORE")
+                name = "reader-anchor-" + key + ".bin"
+                original.recheck("E_STORE", leaf, "M")
+                observed = original.read(len(raw), "E_STORE", leaf)
+                _capture_copy_room(leaf, len(observed) * 2 + len(raw), False, case=True, read_only=True)
+                equal = observed == raw
+                leaf["read_bytes"] += len(observed) + len(raw)
+                _capture_account(leaf, "M", "read_bytes", len(observed) + len(raw))
+                _require(equal, "E_STORE")
+                source_sha = digest(observed)
+                leaf["read_bytes"] += len(observed)
+                _capture_account(leaf, "M", "read_bytes", len(observed))
+                before = {field: leaf[field] for field in ("read_bytes", "write_bytes", "physical_bytes", "files")}
+                before_m = leaf.get("accounting", {}).get("M", {}).get("read_bytes", 0)
+                try:states[name] = _copy_preparation_document(directory, raw, leaf, self.resolver, name=name)
+                except BaseException as error:failed(error, "scope-anchor-file")
+                finally:
+                    for field, prior in before.items():
+                        try:
+                            delta = leaf[field] - prior
+                            if field == "read_bytes":
+                                classified = leaf.get("accounting", {}).get("M", {}).get("read_bytes", 0) - before_m
+                                _require(0 <= classified <= delta, "E_STORE")
+                                delta -= classified
+                            _capture_account(leaf, "M", field, delta)
+                        except BaseException as error:failed(error, "scope-anchor-file-accounting")
+                if first is not None:raise first
+                original.recheck("E_STORE", leaf, "M")
+                members[key] = {"member": name, "raw": raw, "original": original, "sha256": source_sha}
+            os.fsync(directory);os.fsync(parent.fd)
+            final = _capture_metadata(directory, leaf, "M")
+            named = _capture_named_metadata("reader-anchor", parent.fd, leaf, "M")
+            stable = lambda value: (value.st_dev, value.st_ino, value.st_uid, value.st_gid, value.st_mode)
+            _require(stable(initial) == stable(final) and _identity(final) == _identity(named), "E_STORE")
+            copied = _HeldCaptureCopy(self, self.recording_work, case_work)
+            copied.leaf["_capture_copy_budget"] = _capture_copy_budget_values(copied.leaf,
+                ((self.recording_work, False), (case_work, True)))
+            copied.acquire(parent, "reader-anchor", states, {})
+            copied.anchor_input_members = members
+            copied.anchor_input_reader = reader
+        except BaseException as error:failed(error, "scope-anchor-input-copy")
+        finally:
+            if directory is not None:
+                try:_close_capture_copy(directory, leaf, leaf, "scope-anchor-directory", first)
+                except BaseException as error:failed(error, "scope-anchor-directory-close")
+            try:
+                if first is None:leaf.pop("scope_anchor_copy_incomplete", None)
+                if case_work is None:leaf["transfer_incomplete"] = True
+                else:_capture_transfer_work(leaf, self.recording_work, case_work)
+            except BaseException as error:failed(error, "scope-anchor-transfer")
+            if first is not None and copied is not None:
+                try:copied.close()
+                except BaseException as error:failed(error, "scope-anchor-copy-close")
+                copied = None
+        if first is not None:raise first
+        _require(copied is not None, "E_STORE")
+        return copied
+
+
 def _principal_identity_values(principal_uid, real_uid, effective_uid):
     return principal_uid > 0 and principal_uid not in (real_uid, effective_uid)
 
@@ -2547,19 +2700,34 @@ def _observation(item: HeldPath, relative: str, raw: bytes | None = None, *, sto
                                acquisition=acquired)
 
 
-def _observation_values(relative, before, after, raw=None, *, acquisition=False):
+
+def _origin_data_size_values(raw):
+    if type(raw) is bytes or isinstance(raw, (_RuntimeSnapshot, _ExportSnapshot)):return len(raw)
+    _require(type(raw) is tuple and all(type(chunk) is bytes and len(chunk) <= 65536 for chunk in raw), "E_STORE")
+    size = sum(map(len, raw));_require(size <= 4 << 30, "E_STORE")
+    return size
+
+
+def _origin_data_sha_values(raw, work=None):
+    if type(raw) is bytes or isinstance(raw, (_RuntimeSnapshot, _ExportSnapshot)):return digest(raw)
+    _origin_data_size_values(raw)
+    return digest(raw, runtime_work=work)
+
+
+def _observation_values(relative, before, after, raw=None, *, acquisition=False, work=None):
     row = {"name": relative, "device": before["dev"], "inode": before["ino"],
            "mode": stat.S_IMODE(before["mode"]), "uid": before["uid"], "gid": before["gid"],
            "kind": "directory" if stat.S_ISDIR(before["mode"]) else "file",
            "metadata_before": list(_identity_values(before)),
            "metadata_after": list(_identity_values(after))}
     if raw is not None:
-        row.update({"size": len(raw), "sha256": raw.acquisition_sha if acquisition else digest(raw)})
+        row.update({"size": _origin_data_size_values(raw),
+            "sha256": raw.acquisition_sha if acquisition else _origin_data_sha_values(raw, work)})
     return row
 
 
 def _origin_values(files, storage_rows, identity_context, source_bytes, *,
-                   capture_files=None, capture_storage_rows=None):
+                   capture_files=None, capture_storage_rows=None, work=None):
     _require(type(identity_context) is dict and set(identity_context) == {"attempt_id", "platform"}
              and type(identity_context["platform"]) is str
              and identity_context["platform"] in {"linux", "darwin"}, "E_STORE")
@@ -2605,7 +2773,7 @@ def _origin_values(files, storage_rows, identity_context, source_bytes, *,
         _require(_store_values(config["principal_uid"], config["consumer_gid"], 0o440 if file else 0o750,
             not file, before, row["access_acl"], row["default_acl"], platform), "E_STORE")
         if file:
-            _require(before["nlink"] == 1 and before["size"] == len(files[name]), "E_STORE")
+            _require(before["nlink"] == 1 and before["size"] == _origin_data_size_values(files[name]), "E_STORE")
         listed = row["directory_names"]
         if listed is not None:
             _require(type(listed) is list and len(listed) <= 65536, "E_STORE")
@@ -2623,7 +2791,7 @@ def _origin_values(files, storage_rows, identity_context, source_bytes, *,
                 _require(listed_names == {key.split("/")[2] for key in files if key.startswith("payload/raw/")}, "E_STORE")
             elif name == ".":
                 _require(attempt_id in listed_names, "E_STORE")
-        observations.append(_observation_values(name, before, row["after"], files[name] if file else None))
+        observations.append(_observation_values(name, before, row["after"], files[name] if file else None, work=work))
     directories = {".", attempt_id, "payload"} | ({"payload/raw"} if source_payload else
         {"payload/evidence"} if any(name.startswith("payload/evidence/") for name in files) else set())
     if capture_files is not None:
@@ -3046,7 +3214,8 @@ def _c3_owner_receipt_values(slot, value, *, complete=False):
         if complete:
             _require(value["data_and_close_complete"] and not value["failures"]
                 and not value.get("accounting_incomplete", False)
-                and value.get("registry_buffer_processing") != "UNKNOWN", "E_LIMIT")
+                and type(value.get("registry_buffer_processing")) is int
+                and 0 <= value["registry_buffer_processing"] < _C3_U64, "E_LIMIT")
     else:
         keys = {"transferred_totals", "classes", "unclassified_recorded_read_bytes", "cases", "observations",
             "failures", "incomplete", "runtime", "runtime_Q", "host_publication_work", "complete"}
@@ -3066,11 +3235,23 @@ def _c3_owner_receipt_values(slot, value, *, complete=False):
         if complete:
             _require(value["complete"] and not value["incomplete"] and not value["failures"]
                 and value["unclassified_recorded_read_bytes"] == 0
-                and value["runtime_Q"] != "UNKNOWN" and value["host_publication_work"] != "UNKNOWN", "E_LIMIT")
+                and type(value["runtime_Q"]) is not str
+                and type(value["host_publication_work"]) is not str, "E_LIMIT")
     return value
 
 
 _C3_OBSERVATION_KEYS = {
+    "C2.namespace-close": (("return",),),
+    "C2.namespace": (("fd", "names"),),
+    "C2.created-namespace": (("fd", "name"),),
+    "C2.mkdir": (("fd", "name", "return"),),
+    "C2.copy-create": (("fd", "name", "parent_fd"),),
+    "C2.copy-fsync": (("fd", "return"),),
+    "C2.receipt-fsync": (("fd", "return"),),
+    "C3-driver.spawn": (("actions", "argv", "pid"),),
+    "C3-driver.wait": (("pid", "status"),),
+    "C3-driver.bootstrap-close": (("errno", "path", "return"),),
+    "C3-driver.entry-close": (("errno", "fd", "return"),),
     'C2.control.read': (('category', 'errno', 'return'),),
     'C2.root': (('category', 'errno', 'return'),),
     'C2.scratch-cleanup': (('path', 'return'),),
@@ -3140,7 +3321,7 @@ def _c3_ledger_values(work, owner_receipts, retained, errors, unknown):
         and type(unknown) is list and len(unknown) <= 4096, "E_LIMIT")
     for name, amount in work["calls"].items():
         _require(name in {"consumer-json-buffer", "capture.json", "complete.json", "consumer.json", "binding.json",
-            "sandbox-export.bin"} and type(amount) is int and 0 <= amount < _C3_U64, "E_RELATION")
+            "sandbox-export.bin", "origin-observation.json", "launch-binding.json", "consumer-observations.json"} and type(amount) is int and 0 <= amount < _C3_U64, "E_RELATION")
     rows = work.get("accounting_rows", [])
     _require(len(rows) <= 65536, "E_LIMIT")
     for row in rows:
@@ -3183,12 +3364,57 @@ def _c3_ledger_values(work, owner_receipts, retained, errors, unknown):
         "owner_receipts": dict(owner_receipts), "retained": list(retained), "errors": list(errors), "unknown": list(unknown)}
 
 
+
+
+def _c3_accounting_receipt_values(work, depth=0):
+    _require(type(work) is dict and type(depth) is int and 0 <= depth <= 4, "E_LIMIT")
+    receipt = _capture_accounting_values(work, {})
+    cases = receipt["cases"]
+    _require(type(cases) is dict and len(cases) <= 256
+        and all(type(name) is str and 0 < len(name) <= 256 for name in cases), "E_RELATION")
+    receipt["cases"] = {name: _c3_accounting_receipt_values(owner, depth + 1)
+        for name, owner in cases.items()}
+    return receipt
+
+
+def _c3_scope_ledger_values(work):
+    _require(type(work) is dict, "E_RELATION")
+    receipts = work.get("C3_owner_receipts")
+    if receipts is None:
+        receipts = {name: {"state": "unknown"} for name in _C3_RECEIPT_SLOTS}
+        receipts["raw"] = _c3_accounting_receipt_values(work)
+        if "source_work" in work:receipts["source"] = work["source_work"]
+        if "C3_export_work" in work:receipts["export"] = work["C3_export_work"]
+    unknown = [key for key, value in work.items()
+        if (key.endswith("_unknown") or key.endswith("incomplete")) and value]
+    return _c3_ledger_values(work, receipts, work.get("C3_retained", []),
+        work.get("C3_tool_errors", []), unknown)
+
+
 def _c3_ledger_check(value):
     _require(type(value) is dict and set(value) == _C3_LEDGER_KEYS, "E_RELATION")
     work = dict(value["values"])
     work.update(calls=value["calls"], accounting_rows=value["observations"])
     _c3_ledger_values(work, value["owner_receipts"], value["retained"], value["errors"], value["unknown"])
     return value
+
+
+
+def _c3_ledger_delta(current, prior):
+    _c3_ledger_check(current);_c3_ledger_check(prior)
+    _require(current["observations"][:len(prior["observations"])] == prior["observations"]
+        and current["errors"][:len(prior["errors"])] == prior["errors"], "E_RELATION")
+    calls = {}
+    for name, amount in current["calls"].items():
+        previous = prior["calls"].get(name, 0)
+        _require(type(previous) is int and 0 <= previous <= amount, "E_LIMIT")
+        calls[name] = amount - previous
+    _require(set(prior["calls"]) <= set(current["calls"]), "E_RELATION")
+    value = dict(current)
+    value.update(values=_c3_values_delta(current["values"], prior["values"]), calls=calls,
+        observations=current["observations"][len(prior["observations"]):],
+        errors=current["errors"][len(prior["errors"]):])
+    return _c3_ledger_check(value)
 
 
 def _c3_ledger_complete(value):
@@ -3429,11 +3655,16 @@ def _c3_emit(data, end_document, work, budget, actor):
         _require(not _capture_work_incomplete(leaf)
             and not any(value for key, value in leaf.items() if key.endswith("_unknown")), "E_LIMIT")
         _c3_ledger_complete(end_document["own"][scope])
-    def write_frame(raw):
+    def write_frame(raw, phase):
         _require(type(raw) is bytes and 0 < len(raw) <= DOCUMENT_LIMIT, "E_LIMIT")
+        header_cost = _c3_fresh_work(actor)
+        header_cost["accounting"]["M"].update(logical_bytes=4, occurrences=1)
+        _c3_grant_room(budget, actor, terminal_scope, phase, _c3_work_values(work), _c3_work_values(header_cost))
+        work["C3_header_pack_incomplete"] = True
         header = struct.pack(">I", len(raw))
         _capture_account(work, "M", "logical_bytes", 4)
         _capture_account(work, "M", "occurrences", 1)
+        del work["C3_header_pack_incomplete"]
         for part in (header, raw):
             offset = 0
             while offset < len(part):
@@ -3442,7 +3673,7 @@ def _c3_emit(data, end_document, work, budget, actor):
                 increment["write_bytes"] = size
                 increment["accounting"]["M"]["write_bytes"] = size
                 increment["seed_processing"].update(W=size, C=size)
-                _c3_grant_room(budget, actor, terminal_scope, "terminal", _c3_work_values(work),
+                _c3_grant_room(budget, actor, terminal_scope, phase, _c3_work_values(work),
                                _c3_work_values(increment))
                 _capture_copy_budget_room(work, size, False)
                 work["C3_pipe_write_incomplete"] = True
@@ -3454,9 +3685,12 @@ def _c3_emit(data, end_document, work, budget, actor):
                 _require(type(count) is int and 0 < count <= size, "E_RUNTIME")
                 del work["C3_pipe_write_incomplete"]
         return 4 + len(raw)
+    data_hash_cost = _c3_fresh_work(actor)
+    data_hash_cost["seed_processing"]["H"] = len(data)
+    _c3_grant_room(budget, actor, terminal_scope, "body", _c3_work_values(work), _c3_work_values(data_hash_cost))
     data_sha = digest(data)
     _c3_processing(work, "H", len(data))
-    written_data = write_frame(data)
+    written_data = write_frame(data, "body")
     own = {}
     for scope, leaf in scopes.items():
         prior = end_document["own"][scope]
@@ -3467,10 +3701,11 @@ def _c3_emit(data, end_document, work, budget, actor):
     document.update(version=1, ordinal=budget["ordinal"], actor=actor,
         window_sha256=budget["window_sha256"], budget_sha256=work["_c3_budget_sha"],
         leaf_pid=os.getpid(), leaf_ppid=os.getppid(), data={"size_bytes": len(data), "sha256": data_sha}, own=own)
+    _c3_bind_work(work, budget, actor, terminal_scope, "terminal")
     cutoff = _c3_work_values(work)
     end_raw = _c3_encode_values(document, work)
     _require(written_data + 4 + len(end_raw) + 512 <= DOCUMENT_LIMIT, "E_LIMIT")
-    end_written = write_frame(end_raw)
+    end_written = write_frame(end_raw, "terminal")
     tail = _c3_values_delta(_c3_work_values(work), cutoff)
     _require(not _capture_work_incomplete(work), "E_LIMIT")
     close_values, _rows = _c3_close_tail_values(actor, work["observation_calls"])
@@ -3499,17 +3734,29 @@ def _c3_emit(data, end_document, work, budget, actor):
     os._exit(0)
 
 
-def _c3_tool_failure(work, role, error):
-    work["offline_child_incomplete"] = True
-    work.setdefault("C3_tool_errors", []).append({"owner": work["accounting_owner"],
-        "site": role, "ordinal": len(work.get("C3_tool_errors", [])), "category": type(error).__name__,
-        "errno": getattr(error, "errno", None),
-        "cancelled": isinstance(error, KeyboardInterrupt) or getattr(error, "_scope_signal_cancel", False)})
+def _c3_tool_failure(work, role, error, site=None):
+    first = error
+    try:
+        work["offline_child_incomplete"] = True
+        rows = work.setdefault("C3_tool_errors", [])
+        _require(len(rows) < 4096, "E_LIMIT")
+        rows.append({"owner": work["accounting_owner"], "site": role if site is None else site,
+            "ordinal": len(rows), "category": type(error).__name__, "errno": getattr(error, "errno", None),
+            "cancelled": isinstance(error, KeyboardInterrupt) or getattr(error, "_scope_signal_cancel", False)})
+    except BaseException as observed:
+        first = _c3_first(first, observed)
+        try:
+            work["C3_error_reporting_incomplete"] = True
+            failures = work.setdefault("C3_error_reporting_failures", [])
+            if len(failures) < 4096:failures.append((error, observed))
+        except BaseException as later:first = _c3_first(first, later)
+    return first
 
 
 def _c3_run_tool(source_root, work, role, argv, *, stdin=b"", timeout=120,
                  output_limit=1048576, env):
     from pathlib import Path
+    c = sys.modules[__name__]
     def _seed_require(value):
         _require(value, "E_RELATION")
     import selectors
@@ -3544,7 +3791,6 @@ def _c3_run_tool(source_root, work, role, argv, *, stdin=b"", timeout=120,
             and arguments[1] in {"commit", "blob"} and c._writer_oid(arguments[2])))
     else:
         _seed_require(argv[0] == str(source / "bin/jq"))
-    c = sys.modules[__name__]
     incoming = outgoing = diagnostic = None
     selector = child = None
     closed = [False, False, False, False, False, False]
@@ -3667,8 +3913,7 @@ def _c3_run_tool(source_root, work, role, argv, *, stdin=b"", timeout=120,
         charge("C", len(output) + len(error_output))
         result = {"stdout": output, "stderr": error_output, "status": status, "pid": child.pid}
     except BaseException as error:
-        primary = error
-        _c3_tool_failure(work, role, error)
+        primary = _c3_tool_failure(work, role, error)
     finally:
         if child is not None and not communication_finished:
             for signum, boundary in ((signal.SIGTERM, 5), (signal.SIGKILL, 5)):
@@ -3680,23 +3925,33 @@ def _c3_run_tool(source_root, work, role, argv, *, stdin=b"", timeout=120,
                     c._capture_observe(work, "M", "offline-child-stop", {
                         "role": role, "pid": child.pid, "signal": signum, "return": status})
                     break
-                except subprocess.TimeoutExpired:continue
+                except subprocess.TimeoutExpired as error:
+                    error = _c3_tool_failure(work, role, error, "offline-child-wait-timeout")
+                    primary = _c3_first(primary, error)
+                    continue
                 except BaseException as error:
+                    error = _c3_tool_failure(work, role, error, "offline-child-stop")
                     primary = _c3_first(primary, error)
                     if communication_finished:break
             if not communication_finished:
                 try:work["offline_child_exit_unknown"] = True
-                except BaseException as error:primary = _c3_first(primary, error)
+                except BaseException as error:
+                    error = _c3_tool_failure(work, role, error, "offline-child-exit-unknown")
+                    primary = _c3_first(primary, error)
         if selector is not None:
             try:selector.close()
-            except BaseException as error:primary = _c3_first(primary, error)
+            except BaseException as error:
+                error = _c3_tool_failure(work, role, error, "offline-child-selector-close")
+                primary = _c3_first(primary, error)
         for pair in (incoming, outgoing, diagnostic):
             if pair is not None:
                 for fd in pair:
                     try:close_fd(fd)
-                    except BaseException as error:primary = _c3_first(primary, error)
+                    except BaseException as error:
+                        if not isinstance(error, OSError):
+                            error = _c3_tool_failure(work, role, error, "offline-child-fd-close")
+                        primary = _c3_first(primary, error)
         if primary is not None:
-            _c3_tool_failure(work, role, primary)
             raise primary
     return result
 
@@ -5285,6 +5540,11 @@ def _group_reply_values(gid, output):
     return output == canonical([gid])
 
 
+def _source_read_argv_values(principal_uid, python_path, supervisor_path, operation):
+    return ["/usr/bin/sudo", "-n", "-u", "#" + str(principal_uid), "--",
+        python_path, "-I", "-S", "-B", supervisor_path, operation]
+
+
 class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
     def raw_uuid_replies(self):
         return self.uuid_replies
@@ -5401,8 +5661,8 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
             _require(sudo.held.path == "/usr/bin/sudo", "E_DEPENDENCY")
             supervisor = next(item for item in anchor.held if item.path == ANCHOR + "/host-supervisor.py")
             supervisor_sha = digest(supervisor.read(EXECUTABLE_LIMIT, "E_DEPENDENCY"))
-            argv = ["/usr/bin/sudo", "-n", "-u", "#" + str(anchor.config["principal_uid"]), "--",
-                    self.python.held.path, "-I", "-S", "-B", supervisor.path, operation]
+            argv = _source_read_argv_values(anchor.config["principal_uid"],
+                self.python.held.path, supervisor.path, operation)
             self.recheck()
             sudo.recheck("E_DEPENDENCY")
             configuration.recheck()
@@ -5627,6 +5887,15 @@ SHADOW_EVIDENCE_NAMES = (
     "shadow-record.json", "trace-ledger.json", "trace-receipt.json",
 )
 
+def _bundle_marker_values(files, incident, form, names):
+    return {"schema_version": 1, "kind": "shadow_consumer_bundle",
+        "id": "bundle." + digest(files["incident.json"])[:32], "body": {
+            "activation_state": "inactive", "record_form": form,
+            "incident_sha256": digest(files["incident.json"]),
+            "target_revision": incident["body"]["git_revision_ref"],
+            "files": [{"name": filename, "size_bytes": len(files[filename]),
+                       "sha256": digest(files[filename])} for filename in sorted(names - {"bundle.json"})]}}
+
 class _HeldBundle:
     def __init__(self, parent: HeldPath, name: str, form: str) -> None:
         _require(form in {"enforced-reproduction.v1", "withheld-write.v1", "withheld-write-policy.v1"}, "E_RELATION")
@@ -5657,14 +5926,7 @@ class _HeldBundle:
                 self.files[filename] = raw
             incident = _json(self.files["incident.json"], DOCUMENT_LIMIT, "E_RELATION")
             marker = _json(self.files["bundle.json"], DOCUMENT_LIMIT, "E_RELATION")
-            expected = {"schema_version": 1, "kind": "shadow_consumer_bundle",
-                "id": "bundle." + digest(self.files["incident.json"])[:32], "body": {
-                    "activation_state": "inactive", "record_form": form,
-                    "incident_sha256": digest(self.files["incident.json"]),
-                    "target_revision": incident["body"]["git_revision_ref"],
-                    "files": [{"name": filename, "size_bytes": len(self.files[filename]),
-                               "sha256": digest(self.files[filename])}
-                              for filename in sorted(self.names - {"bundle.json"})]}}
+            expected = _bundle_marker_values(self.files, incident, form, self.names)
             _require(canonical(marker) == canonical(expected), "E_RELATION")
             record = _json(self.files["shadow-record.json"], DOCUMENT_LIMIT, "E_RELATION")
             _require(record["body"]["record_form"] == form, "E_RELATION")
@@ -6046,20 +6308,51 @@ class _GateWire:
         return result
 
 
-def _gate_store_binding(item):
-    _require(isinstance(item, _HeldStoreRead), "E_STORE")
-    item.recheck()
-    origin = _json(item.observation, DOCUMENT_LIMIT, "E_STORE")
+def _gate_binding_entries_values(origin):
     entries = []
     for row in origin["body"]["entries"]:
         row = dict(row)
         if row["name"] == ".":
-            # A sibling changes only root bookkeeping between separate acquisitions.
             row["metadata_before"] = row["metadata_before"][:6]
             row["metadata_after"] = row["metadata_after"][:6]
         entries.append(row)
-    return {"store_id": item.anchor.config["store_id"], "attempt_id": item.attempt_id,
-        "ancestors": [list(_identity(component.before)) for component in item.held[0].components[:-1]],
-        "entries": entries, "snapshots": [{"name": name, "size": len(raw), "sha256": digest(raw)}
-            for name, raw in sorted(item.snapshots.items())],
-        "origin_ref": {"schema_version": 1, "kind": origin["kind"], "id": origin["id"], "sha256": digest(item.observation)}}
+    return entries
+
+
+def _gate_storage_rows_values(storage_reads):
+    output = []
+    for acquired in storage_reads:
+        rows = acquired["entries"]
+        if rows and all(row["role"] == "store" for row in rows):
+            output.extend(_store_ancestor_storage_values(acquired))
+            first = os.fsdecode(bytes.fromhex(rows[0]["name"]))
+            _require(first == "." or first == ".capture-" + acquired["attempt_id"], "E_STORE")
+        if rows and all(row["role"] == "sudo" for row in rows):
+            output.extend(_sudo_storage_projection_values([acquired], acquired["attempt_id"]))
+        else:output.extend(rows)
+    _require(len(output) <= 65536, "E_LIMIT")
+    return output
+
+
+def _gate_store_binding_fields_values(store_id, attempt_id, ancestors, entries, snapshots, origin_ref):
+    return {"store_id": store_id, "attempt_id": attempt_id, "ancestors": ancestors,
+        "entries": entries, "snapshots": snapshots, "origin_ref": origin_ref}
+
+
+def _gate_store_binding_values(store_id, attempt_id, origin_raw, snapshots, ancestor_identities):
+    origin = _json(origin_raw, DOCUMENT_LIMIT, "E_STORE")
+    entries = _gate_binding_entries_values(origin)
+    return _gate_store_binding_fields_values(store_id, attempt_id, ancestor_identities, entries,
+        [{"name": name, "size": len(raw), "sha256": digest(raw)} for name, raw in sorted(snapshots.items())],
+        {"schema_version": 1, "kind": origin["kind"], "id": origin["id"], "sha256": digest(origin_raw)})
+
+
+def _gate_store_binding(item):
+    _require(isinstance(item, _HeldStoreRead), "E_STORE")
+    item.recheck()
+    origin = _json(item.observation, DOCUMENT_LIMIT, "E_STORE")
+    entries = _gate_binding_entries_values(origin)
+    return _gate_store_binding_fields_values(item.anchor.config["store_id"], item.attempt_id,
+        [list(_identity(component.before)) for component in item.held[0].components[:-1]], entries,
+        [{"name": name, "size": len(raw), "sha256": digest(raw)} for name, raw in sorted(item.snapshots.items())],
+        {"schema_version": 1, "kind": origin["kind"], "id": origin["id"], "sha256": digest(item.observation)})

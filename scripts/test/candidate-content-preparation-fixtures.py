@@ -5428,6 +5428,26 @@ class _C2FixtureCaller:
             leaf[field]=amount
         for name in ('runtime','accounting','seed_processing'):leaf[name]=value[name]
         for flag in value['incomplete']:leaf[flag]=True
+        if 'ledgers' in value:
+            ledgers=value['ledgers']
+            assert type(ledgers) is list
+            for ledger in ledgers:self.owner._c3_ledger_check(ledger)
+            if ledgers:
+                named=self.owner._c3_values_sum([row['values'] for row in ledgers])
+                assert all(named[field]==value[field] for field in self.fixed['_C2_SCALARS'])
+                assert all(named[group]==value[group] for group in ('runtime','accounting','seed_processing'))
+            leaf['accounting_rows']=[row for ledger in ledgers for row in ledger['observations']]
+            leaf['calls']={}
+            for ledger in ledgers:
+                for name,amount in ledger['calls'].items():leaf['calls'][name]=leaf['calls'].get(name,0)+amount
+            previous=leaf.setdefault('C2_transferred_ledger_calls',{})
+            for name,amount in leaf['calls'].items():
+                prior=previous.get(name,0);assert type(prior) is int and 0<=prior<=amount
+                for counter in (self.window_work,target):
+                    counts=counter.setdefault('calls',{});counts[name]=counts.get(name,0)+amount-prior
+                previous[name]=amount
+            for counter in (self.window_work,target):
+                counter.setdefault('C2_scope_ledger_cutoffs',{})[key]=ledgers
         self.owner._capture_transfer_work(leaf,self.window_work,target)
         previous=leaf.setdefault('transferred_seed_processing',{})
         for field,amount in leaf['seed_processing'].items():
@@ -5503,7 +5523,7 @@ class _C2FixtureCaller:
         mode, parent, paths = self.fixed['c2_cli'](arguments)
         assert parent == self.held.path and self.ordinal < 4
         self.transfer()
-        before = self.fixed['c2_counters'](self.window_work)
+        before = self.fixed['c2_counters'](self.window_work, ledger=True)
         budget_before={key:dict(before[key]) for key in ('window','common')}
         previous=self.caller_state.get('session',{})
         for scope in budget_before.values():
@@ -5518,7 +5538,7 @@ class _C2FixtureCaller:
         self.held.recheck('E_STALE', self.work, 'M')
         assert set(case_ids)<=set(before['cases'])
         self.child_state={}
-        caller_before = self.fixed['c2_counters'](self.work)
+        caller_before = self.fixed['c2_counters'](self.work, ledger=True)
         hashes = []
         resolver = self.owner._DarwinUUIDResolver() if sys.platform == 'darwin' else None
         custody = self.fixed['c2_clone_root'](self.held, self.work, resolver)
@@ -5612,7 +5632,7 @@ class _C2FixtureCaller:
                             self.transfer()
                             self.fixed['c2_reserve'](self.fixed['c2_counters'](self.window_work),reservation)
                             go={'kind':'GO','version':1,'ordinal':self.ordinal,'start_sha256':self.fixed['c2_sha'](start_raw,self.work),
-                                'ready_sha256':self.fixed['c2_sha'](value_raw,self.work),'caller_delta':self.fixed['c2_delta'](self.fixed['c2_counters'](self.work),caller_before),
+                                'ready_sha256':self.fixed['c2_sha'](value_raw,self.work),'caller_delta':self.fixed['c2_delta'](self.fixed['c2_counters'](self.work, ledger=True),caller_before),
                                 'tail_reservation':reservation}
                             channel.send(go)
                             phase='END';remaining=4
