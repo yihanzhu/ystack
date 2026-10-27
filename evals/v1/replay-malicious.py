@@ -710,6 +710,65 @@ def _seed_module(value, names):
     return matches[0]
 
 
+def _S_inventory_core_values(case_id, files, semantic, expected, originals, occurrences):
+    _seed_require(case_id in {"malicious.incident-symptom-text", "malicious.checked-file-bytes",
+        "malicious.commit-message", "malicious.unread-forge-text"})
+    _seed_require(all(type(value) is dict for value in (files, semantic, expected, originals, occurrences))
+        and 1 <= len(files) <= 256 and set(files) == set(semantic) == set(expected))
+    names = ("incident.json", "reproduction-request.json", "write-request.json", "gate-request.json")
+    kinds = ("shadow_incident_record", "shadow_enforced_request", "shadow_write_request", "scope_gate_generation_request")
+    _seed_require(set(originals) == set(names) and set(names) <= set(files)
+        and set(occurrences) <= set(_CASE_ROLES))
+    entries, identities = [], set()
+    for name in sorted(files):
+        fact, row, source = files[name], semantic[name], expected[name]
+        _seed_require(type(name) is str and 0 < len(name) <= 4096
+            and all(part not in {"", ".", ".."} for part in name.split("/")))
+        _seed_require(type(fact) is dict and set(fact) == {"size_bytes", "sha256", "kind"}
+            and fact["kind"] in {"recorded", "runtime", "export", "raw", "M", "W"}
+            and type(fact["size_bytes"]) is int and 0 <= fact["size_bytes"] <= 4 << 30
+            and type(fact["sha256"]) is str and len(fact["sha256"]) == 64
+            and all(char in "0123456789abcdef" for char in fact["sha256"]))
+        _seed_require(type(row) is dict and set(row) == {"occurrence", "role", "member", "file", "size_bytes", "sha256"}
+            and row["file"] == name and type(row["size_bytes"]) is int
+            and row["size_bytes"] == fact["size_bytes"] and row["sha256"] == fact["sha256"]
+            and type(source) is tuple and len(source) == 5 and type(source[3]) is int
+            and source == (row["occurrence"], row["role"], row["member"], row["size_bytes"], row["sha256"]))
+        occurrence, role, member = source[:3]
+        _seed_require(type(member) is str and 0 < len(member) <= 4096 and "\0" not in member)
+        if role == "original-input":_seed_require(occurrence == "case" and name == member and name in names)
+        elif role == "raw-observations":_seed_require(occurrence == "case" and name == member == "raw-observations.json")
+        elif role == "preparation":_seed_require(occurrence in {"reproduction.prepare", "reproduction.inspect", "write.prepare", "write.inspect"} and occurrence in occurrences)
+        else:_seed_require(role in {"recorded", "capture", "local-runtime", "parent-input"}
+            and occurrence in {"reproduction", "write", "kill", "coverage"} and occurrence in occurrences)
+        identity = (occurrence, role, member)
+        _seed_require(identity not in identities);identities.add(identity)
+        entries.append(dict(row))
+    for name, kind in zip(names, kinds):
+        original = originals[name]
+        _seed_require(type(original) is dict and set(original) == {"kind", "id", "size_bytes", "sha256"}
+            and original["kind"] == kind and type(original["id"]) is str and original["id"]
+            and original["size_bytes"] == files[name]["size_bytes"] and original["sha256"] == files[name]["sha256"]
+            and semantic[name]["role"] == "original-input")
+    bindings = []
+    for role in _CASE_ROLES:
+        if role not in occurrences:continue
+        occurrence = occurrences[role]
+        _seed_require(type(occurrence) is dict and set(occurrence) == {"role", "binding", "raw"}
+            and occurrence["role"] == role and type(occurrence["binding"]) is dict)
+        binding = occurrence["binding"]
+        if role in {"gate", "kill", "coverage"}:
+            key = "request_sha256" if role == "gate" else "gate_request_sha256"
+            _seed_require(binding[key] == originals["gate-request.json"]["sha256"])
+        else:
+            launch = role.split(".")[0]
+            original = originals[launch + "-request.json"]
+            _seed_require(binding["outer_request_sha256"] == original["sha256"] and binding["attempt_id"] == original["id"])
+        bindings.append({"role": role, "binding": dict(binding)})
+    return {"case_id": case_id, "entries": entries, "originals": {name: dict(originals[name]) for name in names},
+        "occurrences": bindings}
+
+
 class _SeedAssembly:
 
     def __init__(self, destination, anchor, case_id, window_work, case_work):
@@ -722,6 +781,7 @@ class _SeedAssembly:
             "E_STORE")
         self.case_id, self.window = case_id, window_work
         self.work, self.files, self.stages, self.output_holds = {}, {}, [], []
+        self.semantic, self.semantic_expected, self.original_bindings = {}, {}, {}
         self.root, self.failure, self.closed, self.raw = None, None, False, None
         self.exports = None
         self._released_holds = []
@@ -875,13 +935,14 @@ class _SeedAssembly:
             self._failed(error, "seed-copy-final")
             raise self.failure
 
-    def _copy_file(self, owner, anchor, held, name, expected, kind):
+    def _copy_file(self, owner, anchor, held, name, expected, kind, *, source_mode=None):
         c = self.c
         _seed_require(self.failure is None and not self.closed and name not in self.files
                       and ("/" not in name or kind == "export" and name in {"exports/reproduction.bin", "exports/write.bin"})
                       and c._sha(expected) and len(self.files) < 256)
+        source_mode = (0o440 if kind == "recorded" else 0o400) if source_mode is None else source_mode
         self._root_check()
-        self._source_check(owner, held, anchor, 0o440 if kind == "recorded" else 0o400)
+        self._source_check(owner, held, anchor, source_mode)
         size = held.before.st_size
         _seed_require(0 <= size <= (4 << 30 if kind == "runtime" else c.EXPORT_LIMIT if kind == "export" else 64 * c.DOCUMENT_LIMIT if kind == "recorded" else c.DOCUMENT_LIMIT))
         if kind == "runtime":
@@ -939,7 +1000,7 @@ class _SeedAssembly:
         self._adopt_output(installed)
         _seed_require(installed.before.st_size == size)
         left_hash, right_hash = hashlib.sha256(), hashlib.sha256()
-        self._source_check(owner, held, anchor, 0o440 if kind == "recorded" else 0o400)
+        self._source_check(owner, held, anchor, source_mode)
         installed.recheck("E_STORE")
         offset = 0
         while offset < size:
@@ -955,7 +1016,7 @@ class _SeedAssembly:
             _seed_require(left == right)
             offset += count
         _seed_require(left_hash.hexdigest() == right_hash.hexdigest() == measured.hexdigest() == expected)
-        self._source_check(owner, held, anchor, 0o440 if kind == "recorded" else 0o400)
+        self._source_check(owner, held, anchor, source_mode)
         installed.recheck("E_STORE")
         self.files[name] = {"size_bytes": size, "sha256": expected, "kind": kind}
         if kind == "runtime":
@@ -1041,11 +1102,13 @@ class _SeedAssembly:
             copied.recheck()
             _seed_require(not owner._capture_work_incomplete(copied.leaf) and not copied.leaf.get("metadata_failure"))
             if copied is capture_P:
+                semantic_role = "capture"
                 expected_names = set(native.capture.snapshots) | {"origin-observation.json", "consumer-observations.json"}
                 if "sandbox-export.bin" in native.capture.snapshots:expected_names.add("launch-binding.json")
                 _seed_require(set(copied.members) == expected_names)
                 expected_bytes = native.capture.snapshots | {"origin-observation.json": native.capture_origin}
             elif set(copied.members) == {"parent-frame.bin", "helper-build-record.json", "native-dependency-record.json"}:
+                semantic_role = "parent-input"
                 row = native.anchor.private_observations["parent_inputs"]
                 _seed_require(row["attempt_id"] == self.c._json(self.bindings[phase]["caller_raw"], self.c.DOCUMENT_LIMIT, "E_STORE")["id"] and row["request_sha256"] == owner.digest(self.bindings[phase]["caller_raw"]))
                 expected_bytes = {}
@@ -1056,6 +1119,7 @@ class _SeedAssembly:
                 _seed_require(previous["P"][0] is copied)
                 continue
             else:
+                semantic_role = "local-runtime"
                 expected_bytes = {}
                 rows = native.anchor.private_observations["local_runtime"]
                 caller = self.bindings[phase]["caller_raw"]
@@ -1085,7 +1149,8 @@ class _SeedAssembly:
                     _seed_require(name in expected_rows and held.before.st_size == expected_rows[name]["size_bytes"])
                     expected, kind = expected_rows[name]["sha256"], "M"
                 output = "exports/" + phase + ".bin" if kind == "export" else phase + "-" + str(index).zfill(2) + "-" + name
-                installed = self._copy(native.anchor, held, output, expected, kind)
+                installed = self._semantic_copy(native.anchor, held, output, expected, kind,
+                    phase, semantic_role, copied.directory.components[-1].name + "/" + name)
                 facts.append((name, expected, installed.before.st_size))
             copied.recheck()
         if phase in {"reproduction", "write"}:
@@ -1120,8 +1185,8 @@ class _SeedAssembly:
                 expected_path = os.path.join(native.anchor.config["store_root"], native.attempt_id, name)
                 matches = [item for item in native.held if item.path == expected_path]
                 _seed_require(len(matches) == 1)
-                self._copy(native.anchor, matches[0], phase + "-recorded-" + str(index).zfill(3) + ".bin",
-                    self._digest(raw), "recorded")
+                self._semantic_copy(native.anchor, matches[0], phase + "-recorded-" + str(index).zfill(3) + ".bin",
+                    self._digest(raw), "recorded", phase, "recorded", name)
             self.bindings[phase] = {"caller_raw": outer_raw if outer_raw is not None else request_raw}
             carriers, bindings, facts = self._P_files(owner, phase, native, capture_P, local_P)
             self.stages.append({"phase": phase, "native": native, "owner": owner, "groups": groups,
@@ -1252,7 +1317,8 @@ class _SeedAssembly:
                 and not owner._capture_work_incomplete(copied.leaf))
             for name, held in sorted(copied.members.items()):
                 expected = binding["capture_sha256"] if name == "capture.json" else runtime[name]["sha256"]
-                self._copy(source.anchor, held, role + "-" + name, expected, "raw" if name == "capture.json" else "runtime")
+                self._semantic_copy(source.anchor, held, role + "-" + name, expected,
+                    "raw" if name == "capture.json" else "runtime", role, "preparation", name)
             source.recheck();copied.recheck()
             _seed_require(source.stable and not source.failed)
             self.occurrences[role] = {"role": role,
@@ -1283,21 +1349,64 @@ class _SeedAssembly:
 
     def original_inputs(self, incident, reproduction_request, write_request, gate_request):
         _seed_require(not self.closed and self.incident is None)
+        items = (incident, reproduction_request, write_request, gate_request)
         values = []
-        for item in (incident, reproduction_request, write_request, gate_request):
-            owner = _seed_module(item, ("_HeldBytes",))
-            _seed_require(type(item.held) is owner.HeldPath and type(item.raw) is bytes)
-            item.recheck("E_STORE")
-            _seed_require(owner.digest(item.raw) == item.sha256)
-            values.append(owner._json(item.raw, owner.DOCUMENT_LIMIT, "E_STORE"))
-        _seed_require(values[0]["kind"] == "shadow_incident_record"
-            and values[1]["kind"] == "shadow_enforced_request"
-            and values[2]["kind"] == "shadow_write_request"
-            and values[3]["kind"] == "scope_gate_generation_request")
-        self.incident = {"observed_at": values[0]["body"]["observed_at"]}
-        self.original_raw = tuple(item.raw for item in (incident, reproduction_request, write_request, gate_request))
-        self.identifiers = {role: values[index]["id"] for role, index in (("reproduction", 1), ("write", 2), ("gate", 3))}
-        self._charge("H", sum(len(raw) for raw in self.original_raw), "M")
+        try:
+            for item in items:
+                owner = _seed_module(item, ("_HeldBytes",))
+                _seed_require(type(item.held) is owner.HeldPath and type(item.raw) is bytes)
+                item.recheck("E_STORE")
+                self._charge("R", len(item.raw), "M");self._charge("E", 2 * len(item.raw), "M")
+                measured, original = owner.digest(item.raw), item.sha256
+                self._charge("H", 2 * len(item.raw), "M")
+                _seed_require(measured == original)
+                self.work["original_parse_attempt_bytes"] = len(item.raw)
+                self.work["original_parse_unknown"] = True
+                values.append(owner._json(item.raw, owner.DOCUMENT_LIMIT, "E_STORE"))
+                self._wrapper_processed("original-input-parse", len(item.raw))
+                self.work["original_parse_unknown"] = False
+            names = ("incident.json", "reproduction-request.json", "write-request.json", "gate-request.json")
+            kinds = ("shadow_incident_record", "shadow_enforced_request", "shadow_write_request", "scope_gate_generation_request")
+            for item, value, name, kind in zip(items, values, names, kinds):
+                _seed_require(value["kind"] == kind and self.c._id(value["id"]))
+                owner = _seed_module(item, ("_HeldBytes",))
+                expected = self._digest(item.raw)
+                _seed_require(id(item.held) not in self.source_occurrences)
+                self.semantic_expected[name] = ("case", "original-input", name, len(item.raw), expected)
+                self._copy_file(owner, self.anchor, item.held, name, expected, "M",
+                    source_mode=stat.S_IMODE(item.held.before.st_mode))
+                self.source_occurrences.add(id(item.held))
+                self.original_bindings[name] = {"kind": kind, "id": value["id"],
+                    "size_bytes": len(item.raw), "sha256": expected}
+                self._semantic_record("case", "original-input", name, name)
+            self.incident = {"observed_at": values[0]["body"]["observed_at"]}
+            self.original_raw = tuple(item.raw for item in items)
+            self.identifiers = {role: values[index]["id"] for role, index in (("reproduction", 1), ("write", 2), ("gate", 3))}
+            self._transfer()
+        except BaseException as error:
+            self._failed(error, "seed-original-inputs")
+            raise self.failure
+
+    def _semantic_record(self, occurrence, role, member, name):
+        _seed_require(name in self.files and name not in self.semantic
+            and self.semantic_expected[name] == (occurrence, role, member,
+                self.files[name]["size_bytes"], self.files[name]["sha256"]))
+        row = {"occurrence": occurrence, "role": role, "member": member,
+            "file": name, "size_bytes": self.files[name]["size_bytes"], "sha256": self.files[name]["sha256"]}
+        self.c._capture_observe(self.work, "M", "seed-semantic-member", row)
+        self.semantic[name] = row
+
+    def _semantic_copy(self, anchor, held, name, expected, kind, occurrence, role, member):
+        try:
+            _seed_require(name not in self.semantic_expected)
+            self.semantic_expected[name] = (occurrence, role, member, held.before.st_size, expected)
+            result = self._copy(anchor, held, name, expected, kind)
+            self._semantic_record(occurrence, role, member, name)
+            self._transfer()
+            return result
+        except BaseException as error:
+            self._failed(error, "seed-semantic-copy")
+            raise self.failure
 
     def _gate_type(self, value, relative, name):
         module = sys.modules.get(type(value).__module__)
@@ -1508,6 +1617,8 @@ class _SeedAssembly:
         _seed_require(measured.hexdigest() == expected)
         held.recheck("E_STORE")
         self.files["raw-observations.json"] = {"size_bytes": len(raw), "sha256": expected, "kind": "raw"}
+        self.semantic_expected["raw-observations.json"] = ("case", "raw-observations", "raw-observations.json", len(raw), expected)
+        self._semantic_record("case", "raw-observations", "raw-observations.json", "raw-observations.json")
 
     def closed_occurrence(self, role):
         _seed_require(role in self.bindings and role not in self.closed_stages)
@@ -1528,6 +1639,34 @@ class _SeedAssembly:
         self._closed_gate()
         _seed_require(not self.c._capture_work_incomplete(self.work))
         return self.raw
+
+    def closed_inventory_core(self):
+        self.closed_pending()
+        return self._closed_inventory_core_data()
+
+    def _closed_inventory_core_data(self):
+        _seed_require(self.closed and self.root is None and not self.output_holds and self.failure is None)
+        try:
+            self.work["inventory_incomplete"] = True
+            core = _S_inventory_core_values(self.case_id, self.files, self.semantic,
+                self.semantic_expected, self.original_bindings, self.occurrences)
+            raw = self._wrapper_encode(core)
+            self._wrapper_processed("inventory-shape", len(raw))
+            measured = self._digest(raw)
+            self.work["inventory_parse_attempt_bytes"] = len(raw)
+            self.work["inventory_parse_unknown"] = True
+            decoded = json.loads(raw)
+            self._wrapper_processed("inventory-parse", len(raw))
+            self.work["inventory_parse_unknown"] = False
+            equal = decoded == core
+            self._wrapper_processed("inventory-compare", 2 * len(raw))
+            _seed_require(equal)
+            self.work["inventory_incomplete"] = False
+            self._transfer()
+            return {"inventory_core": decoded, "sha256": measured}
+        except BaseException as error:
+            self._failed(error, "seed-inventory-core")
+            raise self.failure
 
     def _closed_gate(self):
         _seed_require(self.failure is None and not self.c._capture_work_incomplete(self.work)

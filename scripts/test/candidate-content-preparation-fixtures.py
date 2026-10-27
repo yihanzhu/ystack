@@ -5088,3 +5088,172 @@ def raw16_C1_revision_deletions(root: Path) -> None:
     except AssertionError as error:assert str(error)=='mutable kill id reused as generation id'
     else:raise AssertionError('original request id deletion not detected')
     print(json.dumps({'wrapper_compare_charge_deletion_detected':True,'mutable_gate_id_deletion_detected':True}))
+
+
+def raw16_C2_inventory_inputs(root: Path, selected=None, mutation=False) -> None:
+    body=(root/'scripts/test/evals-malicious.test.sh').read_text().split("<<'PY_RUNTIME_CONSUMER'\n",1)[1].split('\nPY_RUNTIME_CONSUMER',1)[0]
+    prefix=body.split('        native.recheck();native.close();native=None\n',1)[0]
+    footer=body[body.rfind('finally:\n    if copied_inventory'):]
+    setup="""        seed=base/'pending-S';seed.mkdir(mode=0o700)
+        inputs=base/'original-inputs';inputs.mkdir(mode=0o700)
+        input_values=[{'schema_version':1,'kind':kind,'id':identity,'body':value} for kind,identity,value in (
+            ('shadow_incident_record','incident.fixture',{'observed_at':'2026-10-26T00:00:00Z'}),
+            ('shadow_enforced_request','reproduction.fixture',{}),('shadow_write_request','write.fixture',{}),
+            ('scope_gate_generation_request','generation.fixture',{}))]
+        input_paths=[]
+        for index,value in enumerate(input_values):
+            path=inputs/str(index);path.write_bytes(h.canonical(value));path.chmod(0o400 if index%2==0 else 0o644);input_paths.append(path)
+        store=base/'store';"""
+    prefix=prefix.replace("        store=base/'store';",setup,1)
+    prefix=prefix.replace("anchor=c.Anchor(config,config_raw,[installed_hold],{},('',[]),('',[]),None)","anchor=c.Anchor(config,config_raw,[installed_hold],{},('',[]),('',[]),c._DarwinUUIDResolver() if sys.platform=='darwin' else None)")
+    prefix=prefix.replace("c._store_rule(uid,gid,0o700,True),'E_STORE')","c._store_rule(uid,gid,0o700,True,anchor.resolver),'E_STORE')")
+    extra='''        import ast,copy,inspect,textwrap
+        replay=load('C2_inventory_replay',root/'evals/v1/replay-malicious.py');c._acl_state=original_acl
+        if C2_mutation=='copy':
+            source=textwrap.dedent(inspect.getsource(replay._SeedAssembly.original_inputs))
+            calls=[node for node in ast.walk(ast.parse(source)) if isinstance(node,ast.Call)
+                and isinstance(node.func,ast.Attribute) and node.func.attr=='_copy_file']
+            assert len(calls)==1;call=ast.get_source_segment(source,calls[0])
+            assert source.count(call)==1
+            source=source.replace(call,'None')
+            changed={};exec(compile(source,'<remove-original-input-copy>','exec'),replay.__dict__,changed)
+            replay._SeedAssembly.original_inputs=changed['original_inputs']
+        if C2_mutation=='source-seal':
+            source=textwrap.dedent(inspect.getsource(replay._S_inventory_core_values))
+            check='source == (row["occurrence"], row["role"], row["member"], row["size_bytes"], row["sha256"])'
+            assert source.count(check)==1;source=source.replace(check,'True')
+            changed={};exec(compile(source,'<remove-semantic-source-seal>','exec'),replay.__dict__,changed)
+            replay._S_inventory_core_values=changed['_S_inventory_core_values']
+        seed_parent=c._open_held(str(seed),True,c._store_rule(uid,gid,0o700,True,anchor.resolver),'E_STORE')
+        assembly=replay._SeedAssembly(seed_parent,anchor,'malicious.checked-file-bytes',anchor.recording_work,copied_inventory.case_work)
+        inputs_held=[c._hold_bytes(str(path),c.DOCUMENT_LIMIT) for path in input_paths]
+        fault=MemoryError('controlled semantic registration');caught=None;close_attempts=[];cancellations=[]
+        observe=c._capture_observe;closing=os.close;opening=os.open;writer=[None];armed=[True]
+        def opened(*args,**kwargs):
+            fd=opening(*args,**kwargs)
+            if args[0]=='incident.json' and kwargs.get('dir_fd')==assembly.root.fd:writer[0]=fd
+            return fd
+        def close(fd):
+            if C2_case=='copy-close' and fd==writer[0] and armed[0]:
+                armed[0]=False;close_attempts.append(fd);closing(fd);raise OSError(5,'controlled input writer close')
+            return closing(fd)
+        scope_tree=ast.parse((root/'scope/v1/read-shadow-evidence.py').read_text())
+        main=next(n for n in scope_tree.body if isinstance(n,ast.FunctionDef) and n.name=='main')
+        handler=next(n for n in main.body if isinstance(n,ast.FunctionDef) and n.name=='cancel')
+        actual_handler={};exec(compile(ast.Module(body=[handler],type_ignores=[]),'<original-scope-cancel>','exec'),actual_handler)
+        def observed(work,kind,site,value):
+            if C2_case=='register-cancel-close' and site=='seed-semantic-member':
+                try:actual_handler['cancel'](15,None)
+                except InterruptedError as error:cancellations.append(error);raise
+            if C2_case=='registration' and site=='seed-semantic-member':raise fault
+            return observe(work,kind,site,value)
+        if C2_case=='source-drift':input_paths[2].chmod(0o600)
+        c._capture_observe=observed;os.open=opened;os.close=close
+        try:
+            try:assembly.original_inputs(*inputs_held)
+            except BaseException as error:caught=error
+        finally:c._capture_observe=observe;os.open=opening;os.close=closing
+        names=('incident.json','reproduction-request.json','write-request.json','gate-request.json')
+        if C2_case in ('source-drift','registration','copy-close','register-cancel-close'):
+            assert caught is not None and assembly.failure is caught
+            if C2_case=='registration':assert caught is fault and (seed/'incident.json').exists() and not assembly.semantic
+            if C2_case=='copy-close':assert isinstance(caught,OSError) and close_attempts==[writer[0]] and not assembly.semantic
+            if C2_case=='source-drift':assert isinstance(caught,c.Refusal) and not assembly.files
+            if C2_case=='register-cancel-close':
+                assert caught is cancellations[0] and len(cancellations)==1
+                target=assembly.output_holds[0].fd;once=[False]
+                def close_after_cancel(fd):
+                    if fd==target and not once[0]:
+                        once[0]=True;close_attempts.append(fd);closing(fd);raise OSError(5,'secondary after real cancellation')
+                    return closing(fd)
+                os.close=close_after_cancel
+            try:
+                try:assembly.close(caught)
+                except BaseException as error:assert error is caught
+            finally:os.close=closing
+            if C2_case=='register-cancel-close':assert close_attempts==[target] and assembly.failure is caught
+            for item in inputs_held:item.close()
+            seed_parent.close()
+            print(json.dumps({'C2_case':C2_case,'failure':type(caught).__name__,'partial_files':list(assembly.files),
+                'writer_close_attempts':close_attempts,'same_first_cancel':bool(cancellations) and caught is cancellations[0],'work':assembly.work,'full_seed':False},sort_keys=True))
+        else:
+            assert caught is None, 'four original input copies failed'
+            assert set(assembly.files)==set(names) and set(assembly.semantic)==set(names)
+            for name,item in zip(names,inputs_held):assert (seed/name).read_bytes()==item.raw
+            binding={'attempt_id':input_values[1]['id'],'outer_request_sha256':c.digest(inputs_held[1].raw)}
+            assembly.occurrences['reproduction']={'role':'reproduction','binding':binding,'raw':{}}
+            runtime_name=next(iter(copied_inventory.runtime_sha256))
+            member=copied_inventory.members[runtime_name]
+            assembly._semantic_copy(anchor,member,'reproduction-runtime.bin',native_digest,'runtime',
+                'reproduction','capture',copied_inventory.directory.components[-1].name+'/'+runtime_name)
+            for item in inputs_held:item.close()
+            assembly.close()
+            assert assembly.root is None and not assembly.output_holds
+            loads=replay.json.loads;processed=assembly._wrapper_processed;encoder=c.json.JSONEncoder
+            def parsed(raw,*args,**kwargs):
+                if inspect.currentframe().f_back.f_code is replay._SeedAssembly._closed_inventory_core_data.__code__:
+                    if C2_case=='parse':raise fault
+                    value=loads(raw,*args,**kwargs)
+                    if C2_case=='compare':value['case_id']='changed'
+                    return value
+                return loads(raw,*args,**kwargs)
+            class Partial(encoder):
+                def iterencode(self,value,*args,**kwargs):
+                    for index,piece in enumerate(super().iterencode(value,*args,**kwargs)):
+                        yield piece
+                        if C2_case=='encode' and index==4:raise fault
+            replay.json.loads=parsed;c.json.JSONEncoder=Partial
+            try:
+                try:result=assembly._closed_inventory_core_data()
+                except BaseException as error:caught=error
+            finally:replay.json.loads=loads;c.json.JSONEncoder=encoder
+            if C2_case=='normal':
+                assert caught is None and len(result['inventory_core']['entries'])==5
+                assert c.digest(c.canonical(result['inventory_core']))==result['sha256']
+                failures=[]
+                labels=('both-sha',) if C2_mutation=='source-seal' else ('missing','unused','member','role','size-bool','both-size','both-sha','original-kind','cross-binding','cap')
+                for label in labels:
+                    files,semantic,expected,originals,occurrences=copy.deepcopy((assembly.files,assembly.semantic,assembly.semantic_expected,assembly.original_bindings,assembly.occurrences))
+                    if label=='missing':semantic.pop('incident.json')
+                    elif label=='unused':files['unused.bin']=dict(files['incident.json'])
+                    elif label=='member':semantic['incident.json']['member']='gate-request.json'
+                    elif label=='role':semantic['incident.json']['role']=files['incident.json']['kind']
+                    elif label=='size-bool':semantic['incident.json']['size_bytes']=True
+                    elif label=='both-size':files['incident.json']['size_bytes']+=1;semantic['incident.json']['size_bytes']+=1
+                    elif label=='both-sha':files['reproduction-runtime.bin']['sha256']='f'*64;semantic['reproduction-runtime.bin']['sha256']='f'*64
+                    elif label=='original-kind':originals['incident.json']['kind']='shadow_write_request'
+                    elif label=='cross-binding':occurrences['reproduction']['binding']['outer_request_sha256']='f'*64
+                    else:
+                        for index in range(257):files['extra'+str(index)]=dict(files['incident.json'])
+                    try:replay._S_inventory_core_values(assembly.case_id,files,semantic,expected,originals,occurrences)
+                    except (ValueError,TypeError,KeyError):failures.append(label)
+                    else:raise AssertionError('semantic inventory admitted '+label)
+                try:assembly.closed_inventory_core()
+                except ValueError:pass
+                else:raise AssertionError('partial data accepted as closed qualified case')
+                print(json.dumps({'C2_case':C2_case,'entries':result['inventory_core']['entries'],'binding_negatives':failures,
+                    'post_close_no_root':True,'actual_four_input_copies':True,'actual_one_P_runtime_copy':True,
+                    'composition_occurrence_only':True,'full_seed':False,'work':assembly.work},sort_keys=True))
+            else:
+                assert caught is not None and assembly.failure is caught and assembly.work['inventory_incomplete']
+                if C2_case in ('encode','parse'):assert caught is fault
+                if C2_case=='parse':assert assembly.work['inventory_parse_attempt_bytes']>0 and assembly.work['inventory_parse_unknown']
+                print(json.dumps({'C2_case':C2_case,'failure':type(caught).__name__,'incomplete':True,'work':assembly.work,'full_seed':False},sort_keys=True))
+            seed_parent.close()
+'''
+    for case in (selected or ('normal','source-drift','registration','copy-close','register-cancel-close','encode','parse','compare')):
+        namespace={'C2_case':case,'C2_mutation':mutation};argv=sys.argv;sys.argv=['C2-inventory-fixture',str(root)]
+        try:exec(compile(prefix+extra+footer,'<actual-C2-inventory>','exec'),namespace)
+        except BaseException:
+            if mutation and 'assembly' in namespace:
+                print(json.dumps({'C2_mutation':mutation,'actual_work':namespace['assembly'].work,'full_seed':False},sort_keys=True))
+            raise
+        finally:sys.argv=argv
+
+
+def raw16_C2_inventory_deletion(root: Path) -> None:
+    for mutation,marker in (('copy','four original input copies failed'),('source-seal','semantic inventory admitted both-sha')):
+        try:raw16_C2_inventory_inputs(root,('normal',),mutation=mutation)
+        except AssertionError as error:assert str(error)==marker
+        else:raise AssertionError('C2 deletion not detected: '+mutation)
+    print(json.dumps({'C2_actual_original_copy_deletion_detected':True,'C2_initial_source_seal_deletion_detected':True}))
