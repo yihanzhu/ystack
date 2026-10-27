@@ -31,7 +31,7 @@ _C2_SCALARS = ("read_bytes", "write_bytes", "physical_bytes", "files", "export_r
 _C2_ACCOUNT_FIELDS = ("logical_bytes", "read_bytes", "write_bytes", "physical_bytes", "files", "occurrences")
 _C2_CLASSES = ("L", "W", "M", "raw", "unresolved")
 _C2_LIMIT = 1048576
-_C2_HELPERS_SHA256 = "347c4015bc3fd3e22630b529c3c313b448fde4d584bad1c9489e8505d60f26ae"
+_C2_HELPERS_SHA256 = "8f072c9626de95e3ad21dd626417fb71252b2e703e8ef388dc23b85f77ccc2cb"
 
 class C2Refusal(Exception):
     def __init__(self, code):
@@ -2384,7 +2384,7 @@ shadow_source_rows() {
     'enforcement/v1/accepted-identities.json c75dcd8d9268cb42677f5aa526fd374c3e45f2ba0fe678f47562ae49ad6851a0 174 100644' \
     'enforcement/v1/check-sandbox-receipt.sh 7db3412a4e740f79bde6af24891837fd5daa27d0811ff970b2f58534fcd59b97 10816 100755' \
     'enforcement/v1/sandbox-receipt.jq 43ab3a97b90444be17958112b7ff63966d1052981313c81bcb463618adae8619 30838 100644' \
-    'evals/v1/replay-malicious.py a207a96aca40d7ced966c22173f7c640ece9101c5e48ed5c7b177e6c7285f4ea 106236 100644' \
+    'evals/v1/replay-malicious.py 6b0b42516f164a1aef47973aa72fbfa2a31c083630844ca771df1888271424a4 493549 100644' \
     'maintenance/v1/bands.jq 594994c057a1130da6727f5f825d2fed3ff01de4a9fafe3a722d9e964f05c8e4 10714 100644' \
     'maintenance/v1/incident-to-eval.jq 2229722267c3e9544d9cf53bd37d6d798f27adebad4a7439294989d0194ad92a 7237 100644' \
     'maintenance/v1/incident-to-eval.sh e000f961d7851c48b650ca36ed0c60fd2bc97ffc32442214b3f8937efc97f967 7449 100755' \
@@ -2394,30 +2394,30 @@ shadow_source_rows() {
     'sandbox/v1/guest/common.c 731db0f01a72c0e319a36ee668cff16d30e298b4a8a75b2a1a0317c8b738f732 44272 100644' \
     'sandbox/v1/guest/common.h ef192e3fd3f5ae99f8e49b4bfbe58e6b0df6316d77c1690231b4138f4504cdd1 11926 100644' \
     'sandbox/v1/guest/init.c f2de00c7af19291d31160c5d22427c6e5b90f2c5e9702736fa82e6d13533acd3 5039 100644' \
-    'sandbox/v1/guest/observation-values.c c93bf7ebc56b4c3ebb309f5314efed32f34799e8018a55b4163cdcabc08e6110 55289 100644' \
+    'sandbox/v1/guest/observation-values.c 21f6df504844b0eac300e52d47991a506e07b594a7ef507c41461e8c75e00bb9 55293 100644' \
     'sandbox/v1/guest/observation-values.h 8253a4e121c374792f86f2cbbdc8e65a39abbb10be2055f8db81b9966779ad96 8028 100644' \
     'sandbox/v1/guest/probe.c ab17cae1f35aa09889c63bcf3758f63c15bdb84bd6be895b685a4317c3199d71 255622 100644' \
     'sandbox/v1/guest/supervisor.c 905b2d57ba21c4a9b5622158135c547578bc7571d8b5ef43d5598e37a6688437 103685 100644' \
-    'sandbox/v1/host-supervisor.py 64639f621192705eb8e4e3a39ea17993d4b65563c4c5712991c954f0242f9afe 225420 100755' \
+    'sandbox/v1/host-supervisor.py a1cdb3115e223f59a408394a78b7a3ba7573133e8ad04cd26c2634686cdcc649 232166 100755' \
     'sandbox/v1/runtime-vfkit.py 50a400dd73e8fa8d46cf93e5f8824ac80d5921cc1bf69d522bf11d4330050a14 6764 100755' \
     'scope/v1/evaluate-scope.sh fe6048b5eada5d86531e085acd0a9f46b73028d348349ab932e8c59f4e2ed66a 25253 100755' \
-    'scope/v1/generate-gate-evidence.py 087fd3d31ef3096a216ce11ea7a5da2dbf9c0eb7b0cb46ac9d495fdff53e39c4 36067 100755' \
-    'scope/v1/read-shadow-evidence.py 2e9965352343ea3c435025feaddd09ca6bdda55dbe51c89f2c68f21b5beb585e 99658 100644' \
-    'scope/v1/scope-gates.jq 302e882b4b351186987e8b5f3e13d1725d0e2e9f7a996a4033ea893bd0a87487 57306 100644' \
+    'scope/v1/generate-gate-evidence.py fc91923d18171ef53ba632b8a5ed95007962c184ec9a79a0eb3773bafec47ab2 51272 100755' \
+    'scope/v1/read-shadow-evidence.py ffca7e9653ab9f643c01041b3681b8afb4a44bf5c020d6c8e8018de3dedcf940 129307 100644' \
+    'scope/v1/scope-gates.jq 8f0b7cb6f42bc514f466fda710a1bf6fcfa0afe0abbc02d75e77e419a2ff9ed8 57384 100644' \
     'scope/v1/scope-policy.json 5c6db4debedfcd7117735bd1d4bf907293f73972ec8909c4eab9f25cf6417fe5 1181 100644' \
     'scope/v1/validate-scope.sh 99c0abae1bdcc3809dfac535a8b24137842abaec2418b90566b6ac8ff213b406 3194 100755' \
     'scope/v1/workflow-scope.jq 2d1df5f99b7019c4c41aece4f9fb89b00785ca47f9f8a713b2f43b212481366a 9728 100644' \
     'scripts/core-contract.sh b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 9176 100755' \
     'shadow/v1/_cancel_release.c 00ef369edbed569d50471b97f64aef57591b7afb8d9f25c286bffa5725faf015 55056 100644' \
-    'shadow/v1/_consumer.py b50bc79fd449e66aad07fa1a878ccca9fdd3de2485f7e701a0de3cce7f642b11 254682 100644' \
+    'shadow/v1/_consumer.py 5836ca04062544614a84be5b3d13a66546281afc9697cdb412e0c9c7328dd02c 358237 100644' \
     'shadow/v1/build-cancel-release.sh be1ad0afd99f72ea73fe52cca63c03381793710c587a82b57b9a38ed87c896d4 6169 100755' \
-    'shadow/v1/enforced-reproduction.py 82d59c84fb26de8975d058f6cbe66832dce134c663e113c8874c83ee06796ebd 134481 100755' \
+    'shadow/v1/enforced-reproduction.py b1d80c8aac16630e2e8d28303169bd8bb06d475dc6645b0d41ebed5aa942e511 136145 100755' \
     'shadow/v1/incident-record.jq 9ea6e1ec6556f54887ea6937533157856271aab68c74bda6d18dae1354d2687c 3695 100644' \
     'shadow/v1/qualified-identity.jq 33267bca348ad2b4923a5858b4788a6ca6adf1a1e9f471ee4450d7fe06387071 5343 100644' \
     'shadow/v1/shadow-environments.json 655771163e18384904eeaf2b7f22e3999957a037dce845b7fa6fdff2196ac4c7 1471 100644' \
     'shadow/v1/validate-incident.sh c9f907bfd73307c977c4191d65f6783a3bf969c3bb0be988f14aa9cb66ebe262 4870 100755' \
     'shadow/v1/write-materialization-input.jq 467a8f2901f053ff059302974ad80c5aaf1c805c6302e2333e1af0524fb3c510 4907 100644' \
-    'shadow/v1/write-shadow.py c9e1921bd0c00c1b69f877c507c479327c90066152e0a354e552f4629bfaa223 66590 100755' \
+    'shadow/v1/write-shadow.py a49396dc5bf2e636ce560c1da820e07d1c239fe855edac9197327fd724cfef02 70043 100755' \
     'telemetry/v1/trace-ledger.jq 5436deb48eca6d988a24bbce07855628edd3bc60386d9993a1169d6d373a4212 5849 100644' \
     'telemetry/v1/validate-trace-ledger.sh fc4b7cdd36b5d48675ed1d851c7b2d4fe59d0c431a31f3c361d6196f8900e208 8095 100755' \
     'verifiers/file-digest/v1/verifier.c fcf244b70dc6bcbfd1e6983e6c23d5f38a60654aa074adb472b0e749184dcfeb 28827 100644'
@@ -2916,10 +2916,10 @@ done
 [ -n "$jq_source" ] || emit_error E_RUNTIME
 
 generation=g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43
-program_sha=18bfacfaabbb87fc6bb3e4be8d182cc81a9d526caa4db8e17c51d583b52e1009
+program_sha=aac4cfee19dc1ff8d83242ddb107448c56f7396a6b7e4a8877a2a876477ce0a4
 review_approval_sha=none
 catalog_sha=0239138447a8f9fd420cb3c5da31660d8f75c85099d80d89a040dce2878a4cac
-driver_sha=c5fe4b2c71189a6079b7f76a19f998f7e96659cdf9f3152e8e35e0b049c00a4d
+driver_sha=c4235f14daafc44002ad880b8712c259f888eed87ecb4e3ce8786f965d77d164
 }
 
 evals_record_context() {

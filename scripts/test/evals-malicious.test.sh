@@ -4099,6 +4099,7 @@ spec=importlib.util.spec_from_file_location('C3_gate_output_fixture',root/'scrip
 fixture=importlib.util.module_from_spec(spec);sys.modules[spec.name]=fixture;spec.loader.exec_module(fixture)
 fixture.raw16_C3_gate_outputs(root)
 fixture.raw16_C3_ledger_and_retained(root)
+fixture.raw16_C3_run_gate_capture_refusal(root)
 fixture.raw16_C3_bundle_outputs(root,candidate=True)
 PY_C3_GATE_OUTPUTS
 

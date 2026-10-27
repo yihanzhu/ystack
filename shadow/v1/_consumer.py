@@ -3165,8 +3165,7 @@ _C3_LEDGER_KEYS = {"values", "calls", "observations", "owner_receipts", "retaine
 def _c3_owner_receipt_values(slot, value, *, complete=False):
     _require(slot in _C3_RECEIPT_SLOTS and type(value) is dict, "E_RELATION")
     if set(value) == {"state"}:
-        _require(value["state"] in {"not-applicable", "unknown"}
-            and (not complete or value["state"] == "not-applicable"), "E_LIMIT")
+        _require(value["state"] in {"not-applicable", "unknown"} and not complete, "E_LIMIT")
         return value
     if slot == "export":
         _require(set(value) <= {"consumer.completion-reread", "consumer.held-acquisition",
@@ -3380,6 +3379,46 @@ def _c3_accounting_receipt_values(work, depth=0):
     receipt["cases"] = {name: _c3_accounting_receipt_values(owner, depth + 1)
         for name, owner in cases.items()}
     return receipt
+
+
+def _c3_retain_entity(work, root, member, kind, state=None, *, size=None, uncertain=False):
+    _require(type(work) is dict and root in {"I", "privatework", "runtime"}
+        and type(member) is bytes and len(member) <= 4096 and not member.startswith(b"/")
+        and b".." not in member.split(b"/") and b"\0" not in member
+        and kind in {"L", "W", "M", "raw", "unresolved", "runtime", "export", "recorded"}
+        and (size is None or type(size) is int and size >= 0) and type(uncertain) is bool, "E_RELATION")
+    rows = work.setdefault("C3_retained", [])
+    processing = work.get("seed_processing")
+    known_copy = type(processing) is dict and type(processing.get("C")) is int and processing["C"] >= 0
+    if "_c3_grant_binding" in work:
+        _require(known_copy, "E_LIMIT")
+        increment = _c3_vector_values((0,) * 55)
+        increment["seed_processing"]["C"] = 2 * len(member)
+        _c3_binding_room(work, increment)
+    work["C3_retained_projection_unknown"] = True
+    encoded = member.hex()
+    if known_copy:_c3_processing(work, "C", len(encoded))
+    else:work["C3_retained_copy_processing_unknown"] = True
+    matching = [row for row in rows if row["root"] == root and row["member"] == encoded]
+    _require(len(matching) <= 1, "E_RELATION")
+    if matching:
+        row = matching[0]
+        _require(row["kind"] == kind, "E_RELATION")
+    else:
+        _require(len(rows) < 256, "E_LIMIT")
+        row = {"root": root, "member": encoded, "creation_ordinal": len(rows) + 1,
+            "kind": kind, "initial_identity": None, "last_identity": None,
+            "size_bytes": 0 if size is None else size, "state": "unknown"}
+        rows.append(row)
+    if size is not None:row["size_bytes"] = size
+    if state is not None:
+        identity = _stat_values(state)
+        if row["initial_identity"] is None:row["initial_identity"] = identity
+        else:
+            _require(all(identity[key] == row["initial_identity"][key] for key in ("dev", "ino")), "E_STALE")
+        row["last_identity"] = identity
+    row["state"] = "unknown" if uncertain or state is None else "present"
+    return row
 
 
 def _c3_scope_ledger_values(work, codec_work=None):

@@ -236,7 +236,13 @@ class _GateStoreSession:
         return self.origins()
 
     def release_local(self):
+        self._release_local_close_phase()
+        self._release_local_check_phase()
+
+    def _release_local_close_phase(self):
         self.reader.release_stores()
+
+    def _release_local_check_phase(self):
         require(not self.local, "E_RUNTIME")
 
     def authenticate_core(self, current_only=False):
@@ -736,6 +742,9 @@ class _Generator:
 
     def _run_values(self):
         self.inputs()
+        return self._run_after_inputs()
+
+    def _run_after_inputs(self):
         register_raw = self.kill_source()
         self.put("register", register_raw)
         duty = self.driver("control/v1/evaluate-duty.sh", ["policy-set", "stage-request", "resolved-profile", "stage-result"])

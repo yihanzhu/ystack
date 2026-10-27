@@ -6856,7 +6856,7 @@ def raw16_C3_bundle_outputs(root: Path, candidate=False, selected=None, evidence
     print(json.dumps({'C3_actual_bundle_outputs':results},sort_keys=True))
 
 
-def raw16_C3_gate_outputs(root: Path, evidence=None) -> None:
+def raw16_C3_gate_outputs(root: Path, evidence=None, selected=None) -> None:
     import tempfile
     spec=importlib.util.spec_from_file_location('C3_output_generator',root/'scope/v1/generate-gate-evidence.py')
     module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
@@ -6864,7 +6864,7 @@ def raw16_C3_gate_outputs(root: Path, evidence=None) -> None:
     spec=importlib.util.spec_from_file_location('C3_gate_output_replay',root/'evals/v1/replay-malicious.py')
     replay=importlib.util.module_from_spec(spec);sys.modules[spec.name]=replay;spec.loader.exec_module(replay)
     results=[]
-    for label in ('normal','missing-output','wrong-size','unusable'):
+    for label in (selected or ('normal','missing-output','wrong-size','unusable','duplicate-live','duplicate-inode','duplicate-content','cross-reader')):
         with tempfile.TemporaryDirectory(prefix='ystack-C3-gate-output-') as temporary:
             base=Path(temporary).resolve();output=base/'gate';output.mkdir(mode=0o700)
             destination=base/'S';destination.mkdir(mode=0o700)
@@ -6889,6 +6889,7 @@ def raw16_C3_gate_outputs(root: Path, evidence=None) -> None:
             reader=module.r._Reader.__new__(module.r._Reader)
             reader.owned=[];reader.inputs=[];reader.anchor=anchor;reader.darwin=resolver
             reader.commands_open=True;reader.source_copies=[]
+            reader._initialize_replay_outputs()
             generator.reader=reader;generator.session=types.SimpleNamespace(phase='FINAL_OWNER')
             owned=[]
             for name,value in raw.items():
@@ -6896,6 +6897,28 @@ def raw16_C3_gate_outputs(root: Path, evidence=None) -> None:
                 assert type(held) is c._HeldBytes and held.raw == value and held.raw is not value
                 if name==names[1]:reader.owned.append(held)
                 elif name != names[3]:generator.output_holds[name]=held;generator.held.append(held)
+            independent = None
+            if label in ('duplicate-live','duplicate-inode','duplicate-content','cross-reader'):
+                if label=='duplicate-inode':
+                    replacement=output/'objects/request/replacement'
+                    replacement.write_bytes(raw[names[0]]);replacement.chmod(0o400)
+                    os.chown(replacement,os.getuid(),os.getgid())
+                    os.replace(replacement,output/names[0])
+                if label=='duplicate-content':
+                    path=output/names[0];path.chmod(0o600)
+                    path.write_bytes(b'changed raw source bytes\n');path.chmod(0o400)
+                if label=='cross-reader':
+                    foreign=module.r._Reader.__new__(module.r._Reader)
+                    foreign.owned=[];foreign.anchor=anchor;foreign._initialize_replay_outputs()
+                    independent=foreign.hold(output/names[0],c.DOCUMENT_LIMIT)
+                    reader.owned.append(independent)
+                else:independent=reader.hold(output/names[0],c.DOCUMENT_LIMIT)
+                owned.append(independent)
+                assert independent is not generator.output_holds[names[0]]
+                assert independent.held is not generator.output_holds[names[0]].held
+                if label=='duplicate-live':
+                    assert c._identity(independent.held.before)==c._identity(generator.output_holds[names[0]].held.before)
+                    assert independent.raw==generator.output_holds[names[0]].raw
             if label=='missing-output':reader.owned=[]
             if label=='unusable':generator.capture_output_unusable=True
             parent=c._open_held(str(destination),True,c._store_rule(os.getuid(),os.getgid(),0o700,True,resolver),'E_STORE')
@@ -6907,10 +6930,10 @@ def raw16_C3_gate_outputs(root: Path, evidence=None) -> None:
                 try:
                     assembly.gate_output_members()
                     generator.session.phase='COMPLETE'
-                    generator.output_holds[names[3]]=owned[-1]
+                    generator.output_holds[names[3]]=next(item for item in owned if item.held.path==str(output/names[3]))
                     assembly.gate_outputs()
                 except BaseException as error:caught=error
-                if label=='normal':
+                if label in ('normal','duplicate-live'):
                     assert caught is None and set(assembly.derived_outputs['gate-output'])==set(raw)
                     assert len(assembly.files)==len(raw)
                     assert assembly.gate_manifest_pending is generator.output_holds['manifests/manifest.json'].raw
@@ -6918,6 +6941,8 @@ def raw16_C3_gate_outputs(root: Path, evidence=None) -> None:
                     assert all((destination/assembly.derived_outputs['gate-output'][name]).read_bytes()==value for name,value in raw.items())
                 else:assert caught is not None and assembly.failure is caught
                 results.append({'case':label,'rejected':caught is not None,'files':len(assembly.files),
+                    'independent_Reader_hold':independent is not None,
+                    'seed_equality_bytes':assembly.work.get('seed_processing',{}).get('E'),
                     'work':assembly.work,'scope':'partial actual held-output mechanism only; not complete 13 families or native'})
             finally:
                 primary=sys.exc_info()[1] or caught
@@ -6927,7 +6952,7 @@ def raw16_C3_gate_outputs(root: Path, evidence=None) -> None:
                 parent.close()
     _C3_work_evidence(results,evidence,'gate')
     print(json.dumps({'C3_actual_gate_output_copy':[{key:value for key,value in row.items() if key != 'work'} for row in results]},sort_keys=True))
-    raw16_C3_gate_phase_seam(root,evidence)
+    if selected is None:raw16_C3_gate_phase_seam(root,evidence)
 
 
 def raw16_C3_I_inputs(root: Path, evidence=None) -> None:
@@ -7011,14 +7036,14 @@ def raw16_C3_I_inputs(root: Path, evidence=None) -> None:
 
 
 
-def raw16_C3_git_inputs(root: Path, evidence=None) -> None:
+def raw16_C3_git_inputs(root: Path, evidence=None, selected=None) -> None:
     import tempfile
     spec=importlib.util.spec_from_file_location('scope_shadow_consumer',root/'shadow/v1/_consumer.py')
     c=importlib.util.module_from_spec(spec);sys.modules[spec.name]=c;spec.loader.exec_module(c)
     spec=importlib.util.spec_from_file_location('C3_git_replay',root/'evals/v1/replay-malicious.py')
     replay=importlib.util.module_from_spec(spec);sys.modules[spec.name]=replay;spec.loader.exec_module(replay)
     results=[]
-    for label in ('normal','wrong-sha','duplicate-path','unsafe-path','target-drift','files-full'):
+    for label in (selected or ('normal','wrong-sha','duplicate-path','unsafe-path','target-drift','files-full')):
         with tempfile.TemporaryDirectory(prefix='ystack-C3-git-') as temporary:
             base=Path(temporary).resolve()
             for name in ('source','S','rebuilt','tools'):(base/name).mkdir(mode=0o700)
@@ -7034,7 +7059,8 @@ def raw16_C3_git_inputs(root: Path, evidence=None) -> None:
             for index,(name,kind) in enumerate(zip(names,kinds)):
                 raw=c.canonical({'kind':kind,'id':'ordinary.'+str(index),'body':{'observed_at':'2026-10-27T00:00:00Z'}})
                 write_bytes(base/'tools'/name,raw)
-            for path in base.rglob('*'):
+            for path in (base, *base.rglob('*')):
+                os.chown(path, os.getuid(), os.getgid())
                 if path.is_file():path.chmod(0o400)
             resolver=c._DarwinUUIDResolver() if sys.platform=='darwin' else None
             rule=c._store_rule(os.getuid(),os.getgid(),0o400,False,resolver)
@@ -7067,8 +7093,12 @@ def raw16_C3_git_inputs(root: Path, evidence=None) -> None:
                     current=c._open_held(str(base/'S'),True,c._store_rule(os.getuid(),os.getgid(),0o700,True,resolver),'E_STORE')
                     try:incoming=replay._ReplayInputs(current,core,work)
                     finally:current.close()
+                    incoming._replay_private_root = target.path
                     if label=='files-full':work['files']=256
                     actual=incoming.git_repository(target)
+                    retained = work['C3_retained']
+                    assert {bytes.fromhex(row['member']).decode() for row in retained if row['root']=='privatework' and row['size_bytes']} == set(actual)
+                    assert any(row['root']=='I' and row['member']==b'.'.hex() for row in retained)
                     assert set(actual)=={entry['path'] for entry in entries}
                     for path in actual:assert (base/'rebuilt'/path).read_bytes()==(source/path).read_bytes()
                     if label=='normal':
@@ -7967,6 +7997,24 @@ def raw16_C3_runtime_digest_and_held_close(root: Path, evidence=None) -> dict:
     return {'controls': metrics, 'retained_root': str(base), 'cost': 'UNKNOWN', 'native_qualification': 'NOTRUN'}
 
 
+def _C1_run_bound_generator(assembly, generator):
+    module = assembly._gate_type(generator, "scope/v1/generate-gate-evidence.py", "_Generator")
+    try:
+        module._Generator.inputs(generator)
+        try:assembly.gate_start(generator)
+        except BaseException as error:
+            assembly._failed(error, 'seed-gate-bind')
+            if isinstance(assembly.failure, KeyboardInterrupt) or getattr(assembly.failure, '_scope_signal_cancel', False):
+                raise assembly.failure
+            manifest_owner = module._Generator._run_after_inputs(generator)
+            module._Generator._run_complete(generator, manifest_owner)
+            return None
+        return assembly.run_gate()
+    finally:
+        if getattr(assembly, '_gate_owner', None) is not generator or not assembly.gate_close_attempted:
+            module._Generator.close(generator)
+
+
 def raw16_C3_gate_phase_seam(root: Path, evidence=None) -> None:
     import ast
     import tempfile
@@ -8071,10 +8119,7 @@ def raw16_C3_gate_phase_seam(root: Path, evidence=None) -> None:
     print(json.dumps({'C3_public_run_phase_seam':results,'native_complete_body':'AST order only; NOTRUN'},sort_keys=True))
 
 
-def raw16_C3_ledger_and_retained(root: Path, evidence=None) -> None:
-    import tempfile
-    spec = importlib.util.spec_from_file_location('C3_ledger_replay', root/'evals/v1/replay-malicious.py')
-    replay = importlib.util.module_from_spec(spec);sys.modules[spec.name] = replay;spec.loader.exec_module(replay)
+def raw16_C3_receipt_guards(root: Path):
     spec = importlib.util.spec_from_file_location('ystack_shadow_consumer', root/'shadow/v1/_consumer.py')
     c = importlib.util.module_from_spec(spec);sys.modules[spec.name] = c;spec.loader.exec_module(c)
     work = c._c3_fresh_work(1);c._capture_work_values(work, 'C3-ledger-control')
@@ -8101,6 +8146,26 @@ def raw16_C3_ledger_and_retained(root: Path, evidence=None) -> None:
         try:c._c3_owner_receipt_values('preparation', changed)
         except c.Refusal:rejected.append('preparation-closed-original-shape')
         else:raise AssertionError('invalid preparation gauge accepted')
+    for complete in (False, True):
+        for value in (None, {}, 0):
+            changed = dict(actual, runtime_Q=value, host_publication_work=value, complete=complete)
+            try:c._c3_owner_receipt_values('Q', changed, complete=complete)
+            except c.Refusal:rejected.append('both-Q-host:' + repr(value) + ':complete=' + str(complete))
+            else:raise AssertionError('simultaneously untyped Q and host accepted')
+    try:c._c3_owner_receipt_values('Q', {'state':'not-applicable'}, complete=True)
+    except c.Refusal:rejected.append('sender-not-applicable-without-owner-callgraph')
+    else:raise AssertionError('sender-only applicability accepted')
+    print(json.dumps({'C3_original_receipt_guards':rejected,'original_preparation_gauges':gauges},sort_keys=True),flush=True)
+    return rejected
+
+
+def raw16_C3_ledger_and_retained(root: Path, evidence=None) -> None:
+    import tempfile
+    rejected = raw16_C3_receipt_guards(root)
+    spec = importlib.util.spec_from_file_location('C3_ledger_replay', root/'evals/v1/replay-malicious.py')
+    replay = importlib.util.module_from_spec(spec);sys.modules[spec.name] = replay;spec.loader.exec_module(replay)
+    c = sys.modules['ystack_shadow_consumer']
+    work = c._c3_fresh_work(1);c._capture_work_values(work, 'C3-ledger-control')
     current = c._c3_fresh_work(1)
     body = c._c3_fresh_work(1);terminal = c._c3_fresh_work(1)
     terminal['write_bytes'] = 64
@@ -8108,7 +8173,7 @@ def raw16_C3_ledger_and_retained(root: Path, evidence=None) -> None:
         'body':{'case':c._c3_work_values(body)}, 'terminal':{'case':c._c3_work_values(terminal)}}]}
     increment = c._c3_fresh_work(1);increment['write_bytes'] = 1
     current, increment = c._c3_work_values(current), c._c3_work_values(increment)
-    print(json.dumps({'C3_actual_receipt_mutations':rejected, 'original_preparation_gauges':gauges},sort_keys=True),flush=True)
+    print(json.dumps({'C3_receipt_cases_completed':len(rejected)},sort_keys=True),flush=True)
     try:c._c3_grant_room(budget, 1, 'case', 'body', current, increment)
     except c.Refusal:rejected.append('body-cannot-borrow-terminal')
     else:raise AssertionError('body borrowed terminal')
@@ -8125,13 +8190,16 @@ def raw16_C3_ledger_and_retained(root: Path, evidence=None) -> None:
     owner = object.__new__(replay._ReplayCase);owner.c, owner.inputs, owner.work = c, inputs, work
     owner._replay_io_holds = []
     try:
+        initial_root = c._stat_values(held[1].before)
         parent = owner._replay_hold_work(held[1])
+        assert work['C3_retained'][0]['initial_identity'] == initial_root
         directory = owner._replay_mkdir(parent, 'actual')
         path = owner._replay_write_bytes(directory, 'value', b'actual retained bytes\n')
         assert path.read_bytes() == b'actual retained bytes\n'
         assert owner._replay_close_io() is None
         rows = work['C3_retained']
         assert len(rows) == 3 and all(row['state'] == 'present' and row['last_identity'] is not None for row in rows)
+        assert rows[0]['initial_identity'] == initial_root and rows[0]['member'] == b'.'.hex()
         assert next(row for row in rows if bytes.fromhex(row['member']) == b'actual/value')['size_bytes'] == 22
     finally:
         failure = owner._replay_close_io(sys.exc_info()[1])
@@ -8140,3 +8208,136 @@ def raw16_C3_ledger_and_retained(root: Path, evidence=None) -> None:
     _C3_work_evidence([{'work':work, 'retained_root':str(base)}], evidence, 'ledger-retained')
     print(json.dumps({'C3_ledger_rejects':rejected, 'actual_retained':work['C3_retained'],
         'full_emit':'NOTRUN', 'complete_qualification':'UNKNOWN'}, sort_keys=True))
+
+
+def raw16_C3_run_gate_capture_refusal(root: Path, evidence=None) -> None:
+    import tempfile
+    import traceback
+    def load(name,path):
+        spec=importlib.util.spec_from_file_location(name,root/path)
+        value=importlib.util.module_from_spec(spec);sys.modules[name]=value;spec.loader.exec_module(value)
+        return value
+    g=load('C3_run_gate_failure_generator','scope/v1/generate-gate-evidence.py')
+    replay=load('C3_run_gate_failure_replay','evals/v1/replay-malicious.py')
+    c=g.c
+    results=[]
+    for secondary_close in (False,True):
+        with tempfile.TemporaryDirectory(prefix='ystack-C3-run-gate-refusal-') as temporary:
+            output=Path(temporary).resolve()
+            (output/'manifests').mkdir(mode=0o700)
+            (output/'completion').mkdir(mode=0o700)
+            generator=object.__new__(g._Generator)
+            generator.output=output;generator.active=True;generator.held=[];generator._init_output_capture()
+            generator.request={'id':'generation.failure-fixture'}
+            reader=object.__new__(g.r._Reader)
+            reader.owned=[];reader.inputs=[];reader.source_copies=[];reader.anchor=None
+            reader.capture_completion_owner=None
+            generator.reader=reader
+            session=g._GateStoreSession(generator.request['id'],'a'*64,time.monotonic()+30)
+            session.generator=generator;session.reader=reader;session.phase='FINAL_OWNER'
+            generator.session=session
+            manifest=g._manifest_values(generator.request['id'],[],[],{},c.canonical({'body':{'initial_origin_refs':[]}}),None)
+            for actual_path in (output, *output.rglob('*')):os.chown(actual_path,os.getuid(),os.getgid())
+            reader.darwin=c._DarwinUUIDResolver() if sys.platform=='darwin' else None
+            path=output/'manifests/manifest.json'
+            written=g.r.write_exclusive(path,manifest,resolver=reader.darwin)
+            owner=generator.hold_written(path,manifest,written)
+            assert type(owner) is c._HeldBytes and owner.raw==manifest and owner.raw is not manifest
+            assembly=object.__new__(replay._SeedAssembly)
+            assembly.c=c;assembly.generator=assembly._gate_owner=generator;assembly.gate_session=session
+            assembly.occurrences={};assembly.failure=None
+            assembly.gate_close_attempted=False;assembly.gate_close_returned=False
+            assembly.work={};assembly.window={};assembly.case_work={}
+            c._capture_work_values(assembly.work,'run-gate-refusal')
+            c._capture_work_values(assembly.window,'run-gate-window')
+            c._capture_work_values(assembly.case_work,'run-gate-case')
+            # No scope_local is installed: the original gate() must really reject.
+            assert not hasattr(assembly,'scope_local')
+            stop=OSError(5,'native session.complete stop sentinel')
+            closing=OSError(5,'secondary after actual held leaf FD close')
+            events=[];close_errors=[]
+            def controlled_values(actual):
+                assert actual is generator and session.phase=='FINAL_OWNER'
+                events.append('controlled-values')
+                return owner
+            def stop_complete():
+                events.append('session.complete')
+                assert assembly.failure is not None and not isinstance(assembly.failure,KeyboardInterrupt)
+                assert not getattr(assembly.failure,'_scope_signal_cancel',False)
+                assert assembly.work['seed_incomplete'] is True
+                raise stop
+            session.complete=stop_complete
+            native_values=g._Generator._run_after_inputs
+            native_close=g._Generator.close
+            native_fd_close=c.os.close
+            target_fd=owner.held.fd
+            fd_attempts=[]
+            def close_generator(actual):
+                assert actual is generator
+                events.append('Generator.close')
+                return native_close(actual)
+            def close_fd(fd):
+                if fd==target_fd:fd_attempts.append(fd)
+                result=native_fd_close(fd)
+                if secondary_close and fd==target_fd and not close_errors:
+                    close_errors.append(closing)
+                    raise closing
+                return result
+            g._Generator._run_after_inputs=controlled_values
+            g._Generator.close=close_generator
+            c.os.close=close_fd
+            caught=None
+            try:
+                try:assembly.run_gate()
+                except BaseException as error:caught=error
+                assert caught is stop, ('native tail error replaced',type(caught).__name__)
+                assert events==['controlled-values','session.complete','Generator.close']
+                assert assembly.gate_close_attempted and not generator.active and not generator.held
+                assert not owner.held.components and fd_attempts==[target_fd]
+                assert not (output/'completion/COMPLETE.json').exists()
+                if secondary_close:
+                    assert close_errors==[closing] and not assembly.gate_close_returned
+                else:
+                    assert not close_errors and assembly.gate_close_returned
+                assert assembly.failure is not None and assembly.work['seed_incomplete']
+                results.append({'case':'native-tail-plus-close-error' if secondary_close else 'native-tail',
+                    'events':events,'same_native_stop_object':caught is stop,
+                    'native_Generator_close_calls':events.count('Generator.close'),
+                    'actual_leaf_close_attempts':len(fd_attempts),
+                    'capture_failure':type(assembly.failure).__name__,
+                    'stop':traceback.format_exception(type(stop),stop,stop.__traceback__),
+                    'secondary':[traceback.format_exception(type(error),error,error.__traceback__) for error in close_errors],
+                    'work':assembly.work,'capture_work':generator.capture_output_work,
+                    'full_close_fees':'UNKNOWN','qualification':'controlled pre-values seam; gate actual refusal; no successful native/session peer qualification'})
+            finally:
+                g._Generator._run_after_inputs=native_values
+                g._Generator.close=native_close
+                c.os.close=native_fd_close
+                # Only unfinished resources remain cleanup responsibility.
+                if generator.active or generator.held:native_close(generator)
+    _C3_work_evidence(results,evidence,'run-gate-refusal')
+    print(json.dumps({'C3_actual_capture_refusal_native_tail':results},sort_keys=True))
+
+
+def _C1_scope_reader_live_values(assembly, reader):
+    """Fixed live-inner subsection; requires actual same-process owners."""
+    module = assembly._gate_type(reader, 'scope/v1/read-shadow-evidence.py', '_Reader')
+    module.require(type(reader.store_session) is module._GateReaderSession
+        and reader.store_session.is_inner and reader.commands_open, 'E_RUNTIME')
+    module.require(reader is not assembly.generator.reader, 'E_RUNTIME')
+    context = reader._evaluate_authentication_phase()
+    _reader, rows, qualifying_rows, role_files, workflow, identity = context
+    coverage_result = None
+    if workflow:
+        # The actual inner session exists. Original evaluate's coverage handler
+        # propagates every error in this branch; it never applies standalone stale fallback.
+        coverage_result = assembly.source_coverage(reader, role_files['qualifying'],
+            role_files['current'], [qualifying_rows, rows])
+    raw = reader._evaluate_observation_phase(context, coverage_result)
+    try:
+        assembly.scope_reader_observations(reader)
+    except BaseException as error:
+        assembly._failed(error, 'seed-live-inner-observations')
+        if isinstance(assembly.failure, KeyboardInterrupt) or getattr(assembly.failure, '_scope_signal_cancel', False):
+            raise assembly.failure
+    return raw

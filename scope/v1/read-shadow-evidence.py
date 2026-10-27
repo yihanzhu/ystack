@@ -822,6 +822,10 @@ class _Reader:
     def hold(self, path, limit, hardlinks=False):
         item = c._hold_bytes(str(path), limit, hardlinks=hardlinks)
         self.owned.append(item)
+        try:
+            outputs = getattr(self, "replay_outputs", None)
+            if outputs is not None:outputs["holds"].append((self, item))
+        except BaseException as error:self._replay_output_failure(error, "reader-held-output")
         return item
 
     def directory(self, path):
@@ -1362,7 +1366,7 @@ class _Reader:
         try:
             self.replay_output_state = [True]
             self.replay_output_errors = []
-            self.replay_outputs = {"bundles": [], "git": [], "stores": [], "anchor": []}
+            self.replay_outputs = {"bundles": [], "git": [], "stores": [], "anchor": [], "holds": []}
             self.replay_output_work = {}
             c._capture_work_values(self.replay_output_work, "scope-replay-outputs")
             self.replay_output_work["accounting_incomplete"] = True
@@ -1767,16 +1771,22 @@ class _Reader:
         retained()
 
     def source_coverage(self, qualifying, current, row_groups):
+        context, result = self._source_coverage_request_phase(qualifying, current, row_groups)
+        if context is None:
+            return result
+        return self._source_coverage_release_phase(context)
+
+    def _source_coverage_request_phase(self, qualifying, current, row_groups):
         missing = {"state": "stale"}
         required = self.scope_body["required_shadow_environments"]
         if not (set(qualifying) == set(current) == set(required)
                 and all(row["authentication"]["state"] == "authenticated" for rows in row_groups for row in rows if row["claimed"])):
-            return missing
+            return None, missing
         anchor = self.anchor_for()
         configuration = c.load_coverage_configuration(anchor)
         if configuration is None:
             require(self.store_session is None, "E_RELATION")
-            return missing
+            return None, missing
         self.coverage_configuration = configuration
         self.owned.append(configuration)
         n = configuration.normalizer
@@ -1829,7 +1839,7 @@ class _Reader:
         n.request(request_raw)
         self.retain_source_runtime(request_raw)
         if getattr(self, "_coverage_prepare_only", False):
-            return request_raw
+            return None, request_raw
         expectation = _coverage_expectation_fields_values(body)
         if self.store_session is not None:
             expectation.update(initial_origin_refs=body["initial_origin_refs"], gate_call_ref=body["gate_call_ref"])
@@ -1850,6 +1860,11 @@ class _Reader:
         self.recheck()
         if self.store_session is not None and self.store_session.is_inner:
             self.store_session.request(request_raw, expectation)
+        return (self, qualifying, current, row_groups, anchor, configuration, n, identity, body, request_raw), None
+
+    def _source_coverage_release_phase(self, context):
+        require(type(context) is tuple and len(context) == 10 and context[0] is self, "E_RELATION")
+        (_reader, qualifying, current, row_groups, anchor, configuration, n, identity, body, request_raw) = context
         self.release_stores()
         if self.store_session is not None and self.store_session.is_inner:
             self.store_session.released()
@@ -1877,6 +1892,7 @@ class _Reader:
             "origin_ref": ref(source.observation), "observation_sha256": c.digest(source.snapshots["payload/observation.json"]),
             "interval": interval, "coverage_base": body["coverage_base"], "evaluated_revision": body["evaluated_revision"],
             "current_binding_sha256": c.digest(c.canonical(body)), "qualifying_rows": row_groups[0]}
+
 
     def authenticate_bundles(self, current_only=False):
         document = self.shadow_set
@@ -1963,10 +1979,8 @@ class _Reader:
         return rows, qualifying_rows, role_files
 
     def evaluate(self):
-        rows, qualifying_rows, role_files = self.authenticate_bundles()
-        workflow = self.scope_body["workflow_id"] == "workflow.shadow-evidence-commit"
-        identity = self.scope_body["qualified_identity"]
-        self.authenticate_gate_kill()
+        context = self._evaluate_authentication_phase()
+        _reader, rows, qualifying_rows, role_files, workflow, identity = context
         coverage_result = None
         if workflow:
             try:
@@ -1979,11 +1993,24 @@ class _Reader:
                 if isinstance(error, (KeyboardInterrupt, SystemExit, InterruptedError)):
                     raise
                 coverage_result = {"state": "stale"}
+        return self._evaluate_observation_phase(context, coverage_result)
+
+    def _evaluate_authentication_phase(self):
+        rows, qualifying_rows, role_files = self.authenticate_bundles()
+        workflow = self.scope_body["workflow_id"] == "workflow.shadow-evidence-commit"
+        identity = self.scope_body["qualified_identity"]
+        self.authenticate_gate_kill()
+        return (self, rows, qualifying_rows, role_files, workflow, identity)
+
+    def _evaluate_observation_phase(self, context, coverage_result):
+        require(type(context) is tuple and len(context) == 6 and context[0] is self, "E_RELATION")
+        (_reader, rows, qualifying_rows, role_files, workflow, identity) = context
         self.recheck()
         return _scope_reader_observation_values(self.scope["id"], ref(self.scope_raw), ref(self.set_raw),
             sorted(rows, key=lambda row: row["record_ref"]["sha256"]),
             {"repository_kind": "bare", "hash_algorithm": identity["target_revision"]["hash_algorithm"],
                 "config_sha256": c.digest(self.git.config)}, self.commands, workflow, coverage_result)
+
 
 
 class _ControlFIFO:

@@ -2452,6 +2452,32 @@ class _SeedAssembly:
                     expected, kind = self._digest(raw, "M"), "M"
                 self._gate_recorded_member(reader, held, expected, kind, copied, name)
 
+    def run_gate(self):
+        generator = self.generator
+        module = self._gate_type(generator, "scope/v1/generate-gate-evidence.py", "_Generator")
+        _seed_require(generator is self._gate_owner and generator.session is self.gate_session)
+        try:
+            manifest_owner = module._Generator._run_after_inputs(generator)
+            try:
+                self.gate()
+                self.gate_output_members()
+            except BaseException as error:
+                self._failed(error, "seed-gate-before-complete")
+                if isinstance(self.failure, KeyboardInterrupt) or getattr(self.failure, "_scope_signal_cancel", False):
+                    raise self.failure
+            module._Generator._run_complete(generator, manifest_owner)
+            try:self.gate_outputs()
+            except BaseException as error:
+                self._failed(error, "seed-gate-after-complete")
+                if isinstance(self.failure, KeyboardInterrupt) or getattr(self.failure, "_scope_signal_cancel", False):
+                    raise self.failure
+        finally:
+            try:self.close_gate()
+            except BaseException as error:
+                if not self.gate_close_returned or isinstance(error, KeyboardInterrupt) or getattr(error, "_scope_signal_cancel", False):
+                    raise
+                self._failed(error, "seed-gate-close-recording")
+
     def gate_output_members(self):
         try:
             generator = self.generator
@@ -2467,7 +2493,25 @@ class _SeedAssembly:
                 path = Path(item.held.path)
                 if not path.is_relative_to(generator.output):continue
                 name = path.relative_to(generator.output).as_posix()
-                if name in holders:_seed_require(holders[name] is item or holders[name].held is item.held)
+                if name in holders:
+                    previous = holders[name]
+                    if previous is not item and previous.held is not item.held:
+                        _seed_require(type(previous) is module.c._HeldBytes
+                            and previous.held.path == item.held.path
+                            and any(reader is generator.reader and held is item
+                                for reader, held in generator.reader.replay_outputs["holds"]))
+                        self._source_check(module.c, previous.held, generator.reader.anchor, 0o400)
+                        self._source_check(module.c, item.held, generator.reader.anchor, 0o400)
+                        left = tuple((part.name, module.c._identity(part.before)) for part in previous.held.components)
+                        right = tuple((part.name, module.c._identity(part.before)) for part in item.held.components)
+                        left_raw, right_raw = self._wrapper_encode(left), self._wrapper_encode(right)
+                        self.work["gate_duplicate_hold_compare_incomplete"] = True
+                        equal = left == right and previous.raw == item.raw
+                        self._charge("E", len(left_raw) + len(right_raw) + len(previous.raw) + len(item.raw), "M")
+                        _seed_require(equal)
+                        self._source_check(module.c, previous.held, generator.reader.anchor, 0o400)
+                        self._source_check(module.c, item.held, generator.reader.anchor, 0o400)
+                        self.work["gate_duplicate_hold_compare_incomplete"] = False
                 else:holders[name] = item
             manifest_name = "manifests/manifest.json"
             _seed_require(manifest_name in holders)
@@ -2567,6 +2611,32 @@ class _SeedAssembly:
         self._scope_reader_inputs(reader, generator)
         self._gate_private_output_members(reader)
         self._transfer()
+
+    def source_coverage(self, reader, qualifying, current, row_groups):
+        module = self._gate_type(reader, "scope/v1/read-shadow-evidence.py", "_Reader")
+        _seed_require(reader is not self.generator.reader and reader.commands_open
+            and type(reader.store_session) is module._GateReaderSession and reader.store_session.is_inner)
+        context, result = reader._source_coverage_request_phase(qualifying, current, row_groups)
+        if context is None:return result
+        try:self.scope_reader_inputs(reader, generator=False)
+        except BaseException as error:
+            self._failed(error, "seed-scope-before-release")
+            if isinstance(self.failure, KeyboardInterrupt) or getattr(self.failure, "_scope_signal_cancel", False):
+                raise self.failure
+        return reader._source_coverage_release_phase(context)
+
+    def release_gate_local(self):
+        generator = self.generator
+        module = self._gate_type(generator, "scope/v1/generate-gate-evidence.py", "_Generator")
+        _seed_require(type(generator.session) is module._GateStoreSession
+            and generator.session is self.gate_session and generator.reader.commands_open)
+        try:self.scope_reader_inputs(generator.reader, generator=True)
+        except BaseException as error:
+            self._failed(error, "seed-generator-before-release")
+            if isinstance(self.failure, KeyboardInterrupt) or getattr(self.failure, "_scope_signal_cancel", False):
+                raise self.failure
+        generator.session._release_local_close_phase()
+        generator.session._release_local_check_phase()
 
     def _reader_observations(self, reader, generator=False):
         module = self._gate_type(reader, "scope/v1/read-shadow-evidence.py", "_Reader")
@@ -2979,14 +3049,24 @@ class _SeedAssembly:
             and not self.gate_close_attempted and self.generator.active)
         self.gate_close_attempted = True
         primary = sys.exc_info()[1]
-        if primary is not None:self.failure = _seed_first(self.failure, primary)
-        try:
-            module._Generator.close(self.generator)
-            self.gate_close_returned = True
-            if primary is not None:self._failed(primary, "case-gate-primary")
-            self._transfer()
+        if primary is not None:self._failed(primary, "case-gate-primary")
+        try:module._Generator.close(self.generator)
         except BaseException as error:
             self._failed(error, "case-gate-close")
+            native = _seed_first(primary, error)
+            if isinstance(self.failure, KeyboardInterrupt) or getattr(self.failure, "_scope_signal_cancel", False):
+                native = _seed_first(self.failure, native)
+            raise native
+        self.gate_close_returned = True
+        try:self._transfer()
+        except BaseException as error:
+            self._failed(error, "case-gate-close-transfer")
+            failure = _seed_first(primary, error)
+            if isinstance(self.failure, KeyboardInterrupt) or getattr(self.failure, "_scope_signal_cancel", False):
+                failure = _seed_first(self.failure, failure)
+            raise failure
+        if self.failure is not primary and (isinstance(self.failure, KeyboardInterrupt)
+                or getattr(self.failure, "_scope_signal_cancel", False)):
             raise self.failure
 
     def _namespace_check(self):
@@ -3232,6 +3312,7 @@ class _ReplayInputs:
                 self.c._release_held_acquisition(components, None, primary, work)
                 raise
             self._adopt(self.root)
+            self.c._c3_retain_entity(work, "I", b".", "M", self.root.before, size=0)
             expected, exports, identities = set(), set(), set()
             git_bytes = 0
             for row in core["entries"]:
@@ -3260,6 +3341,7 @@ class _ReplayInputs:
                             self.c._store_rule(os.geteuid(), os.getegid(), 0o700, True, self.resolver), "E_STORE",
                             recording_work=work, accounting_kind="M"))
                         self.exports = directory
+                        self.c._c3_retain_entity(work, "I", b"exports", "M", directory.before, size=0)
                     else:directory = self.exports
                     exports.add(name.rsplit("/", 1)[1]);expected.add("exports")
                 else:
@@ -3268,6 +3350,8 @@ class _ReplayInputs:
                 held = self._adopt(self.c._open_child(directory, name.rsplit("/", 1)[-1], False,
                     self.c._store_rule(os.geteuid(), os.getegid(), 0o400, False, self.resolver), "E_STORE",
                     recording_work=work, accounting_kind="M"))
+                self.c._c3_retain_entity(work, "I", os.fsencode(name), kind,
+                    held.before, size=held.before.st_size, uncertain=True)
                 _seed_require(held.before.st_size == row["size_bytes"])
                 trial_document = row["role"] == "original-input" and row["member"] in _TRIAL_DOCUMENTS
                 limit = 4 << 30 if kind == "runtime" else self.c.EXPORT_LIMIT if kind == "export" else (
@@ -3295,6 +3379,7 @@ class _ReplayInputs:
                 _seed_require(measured.hexdigest() == row["sha256"])
                 self.measurements[name] = (held.before.st_size, measured.hexdigest())
                 held.recheck("E_STORE", work, "M")
+                self.c._c3_retain_entity(work, "I", os.fsencode(name), kind, held.before, size=held.before.st_size)
                 if kind in {"runtime", "export"}:value = tuple(chunks)
                 else:
                     self.c._capture_copy_room(work, held.before.st_size, False, read_only=True)
@@ -3406,6 +3491,8 @@ class _ReplayInputs:
                     try:held.close()
                     except BaseException as later:error = _seed_first(error, later)
                 raise error
+            if held.path != destination.path:
+                retained(held.path, held.before, size=held.before.st_size if stat.S_ISREG(held.before.st_mode) else 0)
             return held
         def refreshed(parent, before):
             c._refresh_recording_directory(parent, before, self.work)
@@ -3420,14 +3507,28 @@ class _ReplayInputs:
             c._capture_copy_room(self.work, 0, False)
             c._capture_copy_budget_room(self.work, 0, False, files=1)
             c._require(self.work["files"] < 256, "E_LIMIT")
-        def created():
+        def retained(path, state=None, *, size=None, uncertain=False):
+            base = getattr(self, "_replay_private_root", None)
+            if base is None:
+                self.work["git_retained_root_unknown"] = True
+                return
+            return c._c3_retain_entity(self.work, "privatework", os.fsencode(os.path.relpath(path, base)),
+                "raw", state, size=size, uncertain=uncertain)
+        def created(path):
+            failure = None
             self.work["files"] += 1
-            c._capture_account(self.work, "raw", "files", 1)
+            try:c._capture_account(self.work, "raw", "files", 1)
+            except BaseException as error:failure = error
+            try:retained(path, size=0)
+            except BaseException as error:
+                self.work["C3_retained_incomplete"] = True
+                failure = _seed_first(failure, error)
+            if failure is not None:raise failure
         try:
             before = destination.before
             create_room()
             os.mkdir("refs", 0o700, dir_fd=destination.fd)
-            created()
+            created(os.path.join(destination.path, "refs"))
             c._capture_observe(self.work, "M", "replay-git-directory", {"path": "refs", "return": 0})
             refreshed(destination, before)
             directories["refs"] = adopt(c._open_child(destination, "refs", True,
@@ -3445,7 +3546,7 @@ class _ReplayInputs:
                         before = parent.before
                         create_room()
                         os.mkdir(part, 0o700, dir_fd=parent.fd)
-                        created()
+                        created(os.path.join(parent.path, part))
                         c._capture_observe(self.work, "M", "replay-git-directory", {"path": next_prefix, "return": 0})
                         refreshed(parent, before)
                         directories[next_prefix] = adopt(c._open_child(parent, part, True,
@@ -3461,7 +3562,7 @@ class _ReplayInputs:
                     create_room()
                     target = os.open(parts[-1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                         0o400, dir_fd=parent.fd)
-                    created()
+                    created(os.path.join(parent.path, parts[-1]))
                     offset = 0
                     while offset < len(raw):
                         c._capture_copy_room(self.work, min(65536, len(raw) - offset), False)
@@ -3474,6 +3575,7 @@ class _ReplayInputs:
                         c._capture_account(self.work, "raw", "write_bytes", count)
                         c._capture_account(self.work, "raw", "physical_bytes", count)
                         offset += count
+                        retained(os.path.join(parent.path, parts[-1]), size=offset)
                     os.fsync(target)
                 except BaseException as error:
                     failure = error
@@ -3540,8 +3642,13 @@ class _ReplayInputs:
         finally:
             while owned:
                 held = owned.pop()
-                try:held.recheck("E_STORE", self.work, "M")
-                except BaseException as error:primary = _seed_first(primary, error);self._failed(error)
+                try:
+                    held.recheck("E_STORE", self.work, "M")
+                    retained(held.path, held.before, size=held.before.st_size if stat.S_ISREG(held.before.st_mode) else 0)
+                except BaseException as error:
+                    primary = _seed_first(primary, error);self._failed(error)
+                    try:retained(held.path, uncertain=True)
+                    except BaseException as later:primary = _seed_first(primary, later);self._failed(later)
                 try:held.close()
                 except BaseException as error:primary = _seed_first(primary, error);self._failed(error)
             if primary is not None:raise self.failure
@@ -3551,10 +3658,25 @@ class _ReplayInputs:
         failure = primary
         while self.owned:
             held = self.owned.pop()
-            try:held.recheck("E_STORE", self.work, "M")
-            except BaseException as error:failure = _seed_first(failure, error)
+            member, rows = None, None
+            try:
+                member = os.fsencode(os.path.relpath(held.path, self.root.path))
+                rows = [row for row in self.work.get("C3_retained", [])
+                    if row["root"] == "I" and row["member"] == member.hex()]
+                held.recheck("E_STORE", self.work, "M")
+                if rows:self.c._c3_retain_entity(self.work, "I", member, rows[0]["kind"], held.before,
+                    size=held.before.st_size if stat.S_ISREG(held.before.st_mode) else 0)
+            except BaseException as error:
+                failure = _seed_first(failure, error)
+                try:
+                    if rows:self.c._c3_retain_entity(self.work, "I", member, rows[0]["kind"], uncertain=True)
+                except BaseException as later:failure = _seed_first(failure, later)
             try:held.close()
-            except BaseException as error:failure = _seed_first(failure, error)
+            except BaseException as error:
+                failure = _seed_first(failure, error)
+                try:
+                    if rows:self.c._c3_retain_entity(self.work, "I", member, rows[0]["kind"], uncertain=True)
+                except BaseException as later:failure = _seed_first(failure, later)
         self.root = None
         if failure is not None:
             self._failed(failure)
@@ -3639,8 +3761,6 @@ class _ReplayCase:
 
     def _replay_hold_work(self, parent):
         c = self.c
-        if not hasattr(self, "_replay_private_root"):
-            self._replay_private_root = parent.path
         _seed_require(type(parent) is c.HeldPath and len(parent.components) >= 2
             and self.inputs.failure is None)
         self._replay_adopt_io(parent)
@@ -3654,8 +3774,6 @@ class _ReplayCase:
         return parent
 
     def _replay_adopt_io(self, held):
-        if not hasattr(self, "_replay_private_root"):
-            self._replay_private_root = held.path
         # This method takes ownership at entry, including registration failure.
         if not hasattr(self, "_replay_io_holds"):
             try:self._replay_io_holds = []
@@ -3663,7 +3781,12 @@ class _ReplayCase:
                 try:held.close()
                 except BaseException as later:error = self._replay_io_first(error, later)
                 raise error
-        try:self._replay_io_holds.append(held)
+        try:
+            self._replay_io_holds.append(held)
+            if not hasattr(self, "_replay_private_root"):
+                self._replay_private_root = held.path
+                self.inputs._replay_private_root = held.path
+                self._replay_retained(held.path, held.before, size=0)
         except BaseException as error:
             if not any(item is held for item in self._replay_io_holds):
                 try:held.close()
@@ -3672,29 +3795,9 @@ class _ReplayCase:
         return held
 
     def _replay_retained(self, path, state=None, *, size=None, uncertain=False):
-        root = self._replay_private_root
-        relative = os.path.relpath(str(path), root)
-        _seed_require(relative != ".." and not relative.startswith("../")
-            and (size is None or type(size) is int and size >= 0))
-        member = os.fsencode(relative).hex()
-        rows = self.work.setdefault("C3_retained", [])
-        matching = [row for row in rows if row["root"] == "privatework" and row["member"] == member]
-        _seed_require(len(matching) <= 1)
-        if matching:
-            row = matching[0]
-        else:
-            _seed_require(len(rows) < 256)
-            row = {"root": "privatework", "member": member, "creation_ordinal": len(rows) + 1,
-                "kind": "M", "initial_identity": None, "last_identity": None,
-                "size_bytes": 0 if size is None else size, "state": "unknown"}
-            rows.append(row)
-        if size is not None:row["size_bytes"] = size
-        if state is not None:
-            identity = self.c._stat_values(state)
-            if row["initial_identity"] is None:row["initial_identity"] = identity
-            row["last_identity"] = identity
-        row["state"] = "unknown" if uncertain or state is None else "present"
-        return row
+        relative = os.path.relpath(str(path), self._replay_private_root)
+        return self.c._c3_retain_entity(self.work, "privatework", os.fsencode(relative), "M",
+            state, size=size, uncertain=uncertain)
 
     def _replay_close_io(self, primary=None):
         failure = primary
@@ -7180,8 +7283,6 @@ def replay_case(runtime_root, initial_case_held, manifest_raw, window_raw, case,
         _seed_require(type(case) is dict and case["case_id"] == manifest["case_id"])
         inputs = _ReplayInputs(initial_case_held, manifest["inventory_core"], work)
         owner = _ReplayCase(inputs, manifest_raw, window_raw)
-        owner._replay_private_root = pending_work.path
-        owner._replay_retained(pending_work.path, pending_work.before)
         handed_work, pending_work = pending_work, None
         owner._replay_adopt_io(handed_work)
         owner.replay_launches(runtime_root, work_held, case)
