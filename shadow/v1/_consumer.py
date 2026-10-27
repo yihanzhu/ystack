@@ -2426,7 +2426,55 @@ def _capture_work_values(work, case_key):
     return work.setdefault("cases",{}).setdefault(case_key,{key:0 for key in fields})
 
 
+def _capture_copy_budget_values(work, scopes):
+    fields = ("read_bytes", "write_bytes", "physical_bytes", "files", "export_read_bytes",
+              "export_write_bytes", "export_physical_bytes", "export_files")
+    _require(type(scopes) is tuple and len(scopes) == 2, "E_LIMIT")
+    rooms = []
+    for counter, case in scopes:
+        _require(type(counter) is dict and type(case) is bool
+                 and all(type(counter.get(key)) is int and counter[key] >= 0 for key in fields), "E_LIMIT")
+        limits = (512, 256, 256, 384, 192, 192) if case else (2048, 1024, 1024, 1536, 768, 768)
+        nonexport = (128, 64, 64) if case else (512, 256, 256)
+        byte_fields = fields[:3] + fields[4:7]
+        row = tuple(limit * DOCUMENT_LIMIT - counter[key] for key, limit in zip(byte_fields, limits))
+        row += tuple(limit * DOCUMENT_LIMIT - (counter[key] - counter["export_" + key])
+                     for key, limit in zip(fields[:3], nonexport))
+        row += (256 - counter["files"], (16 if case else 64) - counter["export_files"])
+        _require(all(type(value) is int and value >= 0 for value in row)
+                 and all(counter[key] >= counter["export_" + key] for key in fields[:3]), "E_LIMIT")
+        rooms.append(row)
+    baseline = tuple(work[key] for key in fields)
+    _require(all(type(value) is int and value >= 0 for value in baseline), "E_LIMIT")
+    return baseline, tuple(min(left, right) for left, right in zip(*rooms))
+
+
+def _capture_copy_budget_room(work, amount, exported, *, read_only=False, files=0):
+    if "_capture_copy_budget" not in work:
+        return
+    fields = ("read_bytes", "write_bytes", "physical_bytes", "files", "export_read_bytes",
+              "export_write_bytes", "export_physical_bytes", "export_files")
+    budget = work["_capture_copy_budget"]
+    _require(type(budget) is tuple and len(budget) == 2 and all(type(row) is tuple for row in budget)
+             and len(budget[0]) == 8 and len(budget[1]) == 11
+             and all(type(value) is int and value >= 0 for row in budget for value in row)
+             and type(amount) is int and amount >= 0 and type(files) is int and files >= 0, "E_LIMIT")
+    current = tuple(work.get(key) for key in fields)
+    _require(all(type(value) is int and value >= before for value, before in zip(current, budget[0])), "E_LIMIT")
+    delta = {key: value - before for key, value, before in zip(fields, current, budget[0])}
+    byte_fields = fields[:3] + fields[4:7]
+    increments = tuple(amount if (index < 3 or exported) and (not read_only or index in (0, 3)) else 0
+                       for index in range(6))
+    used = tuple(delta[key] + increment for key, increment in zip(byte_fields, increments))
+    used += tuple(delta[key] - delta["export_" + key]
+                  + (amount if not exported and (not read_only or index == 0) else 0)
+                  for index, key in enumerate(fields[:3]))
+    used += (delta["files"] + files, delta["export_files"] + (files if exported else 0))
+    _require(all(0 <= value <= room for value, room in zip(used, budget[1])), "E_LIMIT")
+
+
 def _capture_copy_room(work, amount, exported, *, case=False, read_only=False):
+    _capture_copy_budget_room(work, amount, exported, read_only=read_only)
     fields = ("read_bytes", "write_bytes", "physical_bytes",
               "export_read_bytes", "export_write_bytes", "export_physical_bytes")
     _require(all(type(work[key]) is int and work[key] >= 0 for key in fields), "E_LIMIT")
@@ -2674,6 +2722,9 @@ def _private_capture_observations(value, work, case_work):
         size = sum(1 if ord(char) < 128 else 2 if ord(char) < 2048 else
                    3 if ord(char) < 65536 else 4 for char in piece)
         _require(len(encoded) + size + 1 <= DOCUMENT_LIMIT, "E_LIMIT")
+        _capture_copy_budget_room(work, reserved + size * 3 + 1, False, read_only=True)
+        if case_work is not work:
+            _capture_copy_budget_room(case_work, reserved + size * 3 + 1, False, read_only=True)
         for counter, limit, nonexport in ((work, 2048, 512), (case_work, 512, 128)):
             _require(counter["read_bytes"] + reserved + size * 3 + 1 <= limit * DOCUMENT_LIMIT
                      and counter["read_bytes"] - counter["export_read_bytes"] + reserved

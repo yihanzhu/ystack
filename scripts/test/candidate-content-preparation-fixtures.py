@@ -5095,6 +5095,10 @@ def raw16_C2_inventory_inputs(root: Path, selected=None, mutation=False, window=
     prefix=body.split('        native.recheck();native.close();native=None\n',1)[0]
     footer=body[body.rfind('finally:\n    if copied_inventory'):]
     setup="""        seed=base/'pending-S';seed.mkdir(mode=0o700)
+        if C2_window:
+            import hashlib,tempfile
+            ephemeral=Path(tempfile.gettempdir())/('ystack-C2-ephemeral-'+hashlib.sha256(os.fsencode(str(seed))).hexdigest())
+            ephemeral.mkdir(mode=0o700)
         inputs=base/'original-inputs';inputs.mkdir(mode=0o700)
         input_values=[{'schema_version':1,'kind':kind,'id':identity,'body':value} for kind,identity,value in (
             ('shadow_incident_record','incident.fixture',{'observed_at':'2026-10-26T00:00:00Z'}),
@@ -5130,6 +5134,9 @@ def raw16_C2_inventory_inputs(root: Path, selected=None, mutation=False, window=
         if C2_window:
             window_held=c._open_held(str(seed),True,c._store_rule(uid,gid,0o700,True,anchor.resolver),'E_STORE')
             window_caller=C2_caller_class(root,window_held,anchor.recording_work,copied_inventory.case_work)
+            window_caller.work['files']+=1;c._capture_account(window_caller.work,'M','files',1)
+            window_caller.work['seed_processing']['H']+=len(os.fsencode(str(base/'pending-S')))
+            window_caller.observe('C2.ephemeral-parent-created-before-holds',{'path':str(ephemeral),'return':0})
             window_caller.work['runtime_case_carry_in']=copied_inventory.case_work.setdefault('runtime',{})
             window_caller.work['runtime_window_carry_in']=anchor.recording_work.setdefault('runtime',{})
             window_custody=window_caller.fixed['C2Root'](window_held,window_caller.work,anchor.resolver)
@@ -5341,13 +5348,26 @@ def raw16_C2_inventory_inputs(root: Path, selected=None, mutation=False, window=
             if seed_parent is not None:seed_parent.close()
 '''
     for case in (selected or ('normal','source-drift','registration','copy-close','register-cancel-close','encode','parse','compare','cancel-transfer','partial-transfer')):
-        namespace={'C2_case':case,'C2_mutation':mutation,'C2_window':window,'C2_caller_class':_C2FixtureCaller};argv=sys.argv;sys.argv=['C2-inventory-fixture',str(root)]
+        namespace={'C2_case':case,'C2_mutation':mutation,'C2_window':window,'C2_caller_class':_C2FixtureCaller};argv=sys.argv;sys.argv=['C2-inventory-fixture',str(root)];primary=None
         try:exec(compile(prefix+extra+footer,'<actual-C2-inventory>','exec'),namespace)
-        except BaseException:
+        except BaseException as error:
+            primary=error
             if mutation and 'assembly' in namespace:
                 print(json.dumps({'C2_mutation':mutation,'actual_work':namespace['assembly'].work,'full_seed':False},sort_keys=True))
             raise
-        finally:sys.argv=argv
+        finally:
+            sys.argv=argv
+            ephemeral=namespace.get('ephemeral')
+            if ephemeral is not None:
+                try:
+                    ephemeral.rmdir()
+                    caller=namespace.get('window_caller')
+                    if caller is not None:
+                        caller.observe('C2.ephemeral-parent-remove-after-holds',{'path':str(ephemeral),'return':0})
+                        caller.transfer()
+                except BaseException as closing:
+                    if primary is None or getattr(closing,'_scope_signal_cancel',False) and not getattr(primary,'_scope_signal_cancel',False):raise
+                    namespace.setdefault('C2_ephemeral_close_errors',[]).append(closing)
 
 
 def raw16_C2_inventory_deletion(root: Path) -> None:
@@ -5372,7 +5392,11 @@ class _C2FixtureCaller:
         self.owner, self.root, self.held = owner, root, held
         self.window_work, self.case_work = window_work, case_work
         self.bindings = window_work.setdefault('C2_case_bindings',{})
+        new_common='C2/session' not in window_work.get('cases',{})
         self.common_case = owner._capture_work_values(window_work,'C2/session')
+        if new_common:
+            for key,value in self.fixed['c2_fresh_work']('C2/session').items():self.common_case.setdefault(key,value)
+        window_work['C2_common_case']=self.common_case
         self.caller_state, self.child_state = {}, {}
         self.work = self.fixed['c2_fresh_work']('C2-caller')
         self.ordinal, self.head, self.window_sha = 0, None, None
@@ -5382,6 +5406,17 @@ class _C2FixtureCaller:
         self.reconstructed = []
     def transfer(self):
         self._settle_scoped(self.fixed['c2_counters'](self.work),self.caller_state)
+        assert not self.work.get('C2_calls_transfer_incomplete')
+        previous=self.work.setdefault('C2_transferred_calls',{})
+        try:
+            for name,amount in self.work.get('calls',{}).items():
+                prior=previous.get(name,0);assert type(amount) is int and 0<=prior<=amount
+                for target in (self.window_work,self.common_case):
+                    counts=target.setdefault('calls',{});counts[name]=counts.get(name,0)+amount-prior
+                previous[name]=amount
+        except BaseException:
+            for target in (self.work,self.window_work,self.common_case):target['C2_calls_transfer_incomplete']=True
+            raise
     def observe(self, site, value):
         self.owner._capture_observe(self.work,'M',site,value)
     def _transfer_view(self, value, state, key, target):
@@ -5404,16 +5439,14 @@ class _C2FixtureCaller:
             for counter in (self.window_work,target):
                 counter['C2_work_unknown']=value['unknown'];counter['C2_accounting_incomplete']=True
     def _settle_scoped(self, value, state):
-        assert set(value)=={'window','cases'} and set(value['cases'])<=set(self.bindings)
+        assert set(value)=={'window','cases','common'} and set(value['cases'])<=set(self.bindings)
+        self.window_work['C2_observed_child_window']=value['window']
         for identity,view in value['cases'].items():
             primary,rows=self.bindings[identity]
             assert any(primary is row for row in rows)
             assert any(primary is row for row in self.window_work['cases'].values())
             self._transfer_view(view,state,identity,primary)
-        if value['cases']:case_sum=self.fixed['c2_sum_views'](list(value['cases'].values()))
-        else:case_sum=self.fixed['c2_counter_values'](self.fixed['c2_fresh_work']('C2-new-empty-case-delta'))
-        common=self.fixed['c2_view_delta'](value['window'],case_sum)
-        self._transfer_view(common,state,'session',self.common_case)
+        self._transfer_view(value['common'],state,'session',self.common_case)
         if 'source' in value['window']:
             self.window_work.setdefault('C2_source_counter_cutoffs',[]).append(value['window']['source'])
             self.common_case.setdefault('C2_source_counter_cutoffs',[]).append(value['window']['source'])
@@ -5423,6 +5456,8 @@ class _C2FixtureCaller:
         values=done[4:-1]
         assert len(values)==50 and all(value==0 for value in values[11:20]) and all(value==0 for value in values[-6:])
         tail=self.fixed['c2_fresh_work']('C2-terminal')
+        for target in (self.window_work,self.common_case):
+            counts=target.setdefault('calls',{});counts['consumer-json-buffer']=counts.get('consumer-json-buffer',0)+3
         cursor=iter(values)
         for field in self.fixed['_C2_SCALARS']:tail[field]=next(cursor)
         for field in self.owner._RUNTIME_FIELDS:tail['runtime'][field]=next(cursor)
@@ -5467,20 +5502,36 @@ class _C2FixtureCaller:
         assert not self.pending and not self.failed and self.head is not None
         mode, parent, paths = self.fixed['c2_cli'](arguments)
         assert parent == self.held.path and self.ordinal < 4
-        self.held.recheck('E_STALE', self.work, 'M')
         self.transfer()
         before = self.fixed['c2_counters'](self.window_work)
+        budget_before={key:dict(before[key]) for key in ('window','common')}
+        previous=self.caller_state.get('session',{})
+        for scope in budget_before.values():
+            for field in ('read_bytes','write_bytes','physical_bytes','files','export_read_bytes','export_write_bytes','export_physical_bytes','export_files'):
+                prior=previous.get('transferred_'+field,0)
+                assert type(scope[field]) is int and type(prior) is int and 0<=prior<=scope[field]
+                scope[field]-=prior
+        budget_before['cases']=before['cases']
+        self.work['C2_admitted_before']=budget_before
+        self.work['C2_tail_reservation']=reservation
+        self.fixed['c2_nonruntime_room'](self.work,0,False)
+        self.held.recheck('E_STALE', self.work, 'M')
         assert set(case_ids)<=set(before['cases'])
         self.child_state={}
         caller_before = self.fixed['c2_counters'](self.work)
         hashes = []
         resolver = self.owner._DarwinUUIDResolver() if sys.platform == 'darwin' else None
-        custody = self.fixed['C2Root'](self.owner.HeldPath(self.held.path,
-            self.owner._clone(self.held, 'E_STALE', self.work, 'M'), recording_work=self.work, accounting_kind='M'), self.work, resolver)
-        for path in paths:
-            _value, _raw, digest, _item = self.fixed['c2_document'](custody, custody.root, Path(path).name)
-            hashes.append(digest)
-        custody.close()
+        custody = self.fixed['c2_clone_root'](self.held, self.work, resolver)
+        input_failure=None
+        try:
+            for path in paths:
+                _value, _raw, digest, _item = self.fixed['c2_document'](custody, custody.root, Path(path).name)
+                hashes.append(digest)
+        except BaseException as error:input_failure=error
+        finally:
+            try:custody.close(input_failure)
+            except BaseException as error:input_failure=self.fixed['c2_first'](input_failure,error)
+        if input_failure is not None:raise input_failure
         start = {'kind':'START','version':1,'ordinal':self.ordinal,'window_sha256':self.window_sha,
             'predecessor_sha256':self.head,'mode':mode,'case_ids':list(case_ids),
             'seed_sha256s':hashes if mode=='run' else hashes[::2],
@@ -5553,21 +5604,22 @@ class _C2FixtureCaller:
                             remaining=size;phase+='-body';continue
                         if phase=='READY-body':
                             ready=self._parse(value_raw,'READY');received.append(('READY',value_raw))
-                            assert ready['ordinal']==self.ordinal and ready['start_sha256']==hashlib.sha256(start_raw).hexdigest()
+                            assert ready['ordinal']==self.ordinal and ready['start_sha256']==self.fixed['c2_sha'](start_raw,self.work)
                             assert ready['leaf_pid']==child and ready['leaf_ppid']==os.getpid()
                             assert ready['input_sha256s']==hashes and ready['observed_predecessor_sha256']==self.head
                             self.held.recheck('E_STALE',self.work,'M')
                             self.settle_child(ready['acquisition_delta'])
                             self.transfer()
                             self.fixed['c2_reserve'](self.fixed['c2_counters'](self.window_work),reservation)
-                            go={'kind':'GO','version':1,'ordinal':self.ordinal,'start_sha256':hashlib.sha256(start_raw).hexdigest(),
-                                'ready_sha256':hashlib.sha256(value_raw).hexdigest(),'caller_delta':self.fixed['c2_delta'](self.fixed['c2_counters'](self.work),caller_before),
+                            go={'kind':'GO','version':1,'ordinal':self.ordinal,'start_sha256':self.fixed['c2_sha'](start_raw,self.work),
+                                'ready_sha256':self.fixed['c2_sha'](value_raw,self.work),'caller_delta':self.fixed['c2_delta'](self.fixed['c2_counters'](self.work),caller_before),
                                 'tail_reservation':reservation}
                             channel.send(go)
                             phase='END';remaining=4
                         elif phase=='END-body':
                             end=self._parse(value_raw,'END');received.append(('END',value_raw));self.last_attempt['end']=end
-                            assert end['ordinal']==self.ordinal and end['start_sha256']==hashlib.sha256(start_raw).hexdigest()
+                            assert end['ordinal']==self.ordinal and end['start_sha256']==self.fixed['c2_sha'](start_raw,self.work)
+                            self.settle_child(end['child_delta'])
                             phase='DONE';remaining=512
                         elif phase=='DONE':
                             done=struct.unpack('>8s53Q80s',value_raw);self.last_attempt['done']=done
@@ -5575,35 +5627,43 @@ class _C2FixtureCaller:
                             assert done[2]==len(received[-1][1]) and done[3]==done[2]+4
                             phase='EOF';remaining=1
                         else:raise AssertionError('C2 trailing control bytes')
-            waited,status=os.waitpid(child,0)
-            self.observe('C2.caller-wait',{'pid':waited,'status':status});self.last_attempt['wait']=status
-            assert waited==child;child=None
+            waited,status=os.waitpid(child,0);expected_child=child;child=None
+            self.last_attempt['wait']=status
+            self.observe('C2.caller-wait',{'pid':waited,'status':status})
+            assert waited==expected_child
             output,error=b''.join(stdout),b''.join(stderr)
             self._receive_charge(output);self._receive_charge(error)
             assert status==0 and end is not None and done is not None and phase=='EOF'
             assert (end['outcome']=='refused')==(end['result_sha256'] is None)
-            assert end['outcome']!='completed' or not error and hashlib.sha256(output).hexdigest()==end['result_sha256']
+            assert end['outcome']!='completed' or not error and self.fixed['c2_sha'](output,self.work)==end['result_sha256']
             receipt={'end':end,'done':done,'stdout':output,'stderr':error,'control':control,'wait':status}
             self.receipts.append(receipt)
-            self.settle_child(end['child_delta'])
             tail=self.reconstruct_tail(end,done)
             combined_raw=self.fixed['C2Channel'](None,self.work).encode(end['child_delta'])
             self.work['C2_merge_parse_incomplete']=True
             combined=json.loads(combined_raw);self._receive_charge(combined_raw)
             self.work['C2_merge_parse_incomplete']=False
-            for field in self.fixed['_C2_SCALARS']:combined['window'][field]+=tail[field]
+            for field in self.fixed['_C2_SCALARS']:
+                combined['window'][field]+=tail[field];combined['common'][field]+=tail[field]
             for kind in self.fixed['_C2_CLASSES']:
-                for field in self.fixed['_C2_ACCOUNT_FIELDS']:combined['window']['accounting'][kind][field]+=tail['accounting'][kind][field]
-            for field,amount in tail['seed_processing'].items():combined['window']['seed_processing'][field]+=amount
+                for field in self.fixed['_C2_ACCOUNT_FIELDS']:
+                    combined['window']['accounting'][kind][field]+=tail['accounting'][kind][field]
+                    combined['common']['accounting'][kind][field]+=tail['accounting'][kind][field]
+            for field,amount in tail['seed_processing'].items():
+                combined['window']['seed_processing'][field]+=amount;combined['common']['seed_processing'][field]+=amount
             self.settle_child(combined)
             candidate=receipt
         except BaseException as error:
             first=error;self.failed=True
+            for target in (self.window_work,self.common_case):
+                target['C2_child_tail_unknown']=True
+                target['C2_accounting_incomplete']=True
         finally:
             if child is not None:
                 try:
                     os.kill(child,signal.SIGTERM)
-                    waited,status=os.waitpid(child,0)
+                    waited,status=os.waitpid(child,0);child=None
+                    self.last_attempt['wait']=status
                     self.observe('C2.caller-failed-wait',{'pid':waited,'status':status})
                 except BaseException as error:first=self.fixed['c2_first'](first,error)
             for fd in ((pending,) if pending is not None else ())+(pending_pair or ()):
@@ -5969,6 +6029,7 @@ def raw16_C2_scoped_runtime(root: Path) -> None:
     first,second=sorted(fixed['_C2_CASES'])[:2]
     # Counter-only occupancy vectors exercise original caps without claiming large bytes were produced.
     model=fixed['c2_fresh_work']('C2-bounded-model')
+    model['C2_common_case']=fixed['c2_fresh_work']('C2-new-unacted-model-common')
     a=c._capture_work_values(model,'a');b=c._capture_work_values(model,'b');shared=c._capture_work_values(model,'shared')
     a['runtime']={'write_bytes':3};b['runtime']={'write_bytes':2};shared['runtime']={'write_bytes':7}
     model['runtime']['write_bytes']=12
@@ -5978,7 +6039,7 @@ def raw16_C2_scoped_runtime(root: Path) -> None:
     assert views['cases'][first]['runtime']['write_bytes']==10 and views['cases'][second]['runtime']['write_bytes']==9
     limit=c._RUNTIME_FIELDS['write_bytes']
     before=copy.deepcopy(views);before['cases'][first]['runtime']['write_bytes']=limit-1
-    reserve={'window':fixed['c2_counter_values'](fixed['c2_fresh_work']('C2-reservation')),'cases':{identity:fixed['c2_counter_values'](fixed['c2_fresh_work']('C2-case-reservation')) for identity in views['cases']}}
+    reserve={'window':fixed['c2_counter_values'](fixed['c2_fresh_work']('C2-reservation')),'common':fixed['c2_counter_values'](fixed['c2_fresh_work']('C2-common-reservation')),'cases':{identity:fixed['c2_counter_values'](fixed['c2_fresh_work']('C2-case-reservation')) for identity in views['cases']}}
     reserve['window']['runtime']['write_bytes']=2;reserve['cases'][first]['runtime']['write_bytes']=2
     try:fixed['c2_reserve'](before,reserve)
     except fixed['C2Refusal'] as error:assert error.code=='E_LIMIT'
@@ -6039,3 +6100,364 @@ def raw16_C2_scoped_runtime(root: Path) -> None:
         finally:
             if not custody.closed:custody.close()
             src.close()
+
+
+def raw16_C2_six_fixes(root: Path, original=None) -> None:
+    import shlex, types, tempfile
+    spec=importlib.util.spec_from_file_location('_C2_six_consumer',root/'shadow/v1/_consumer.py')
+    owner=importlib.util.module_from_spec(spec);sys.modules[spec.name]=owner;spec.loader.exec_module(owner)
+    text=(Path(original) if original else root/'evals/v1/evals-launcher.sh').read_text()
+    literal=shlex.split(text.split('c2_program=',1)[1].split('\nc2_fd9=',1)[0])[0]
+    fixed={'__name__':'_C2_six_fixed','c':owner};exec(compile(literal,'<actual-fixed-C2>','exec'),fixed)
+    resolver=owner._DarwinUUIDResolver() if sys.platform=='darwin' else None
+    # The helper is stopped at its real spawn boundary. No shell, runtime or jq is executed.
+    work=fixed['c2_fresh_work']('C2-six-env');spawn=os.posix_spawn;seen=[]
+    sentinel=OSError(5,'controlled before helper execution')
+    def intercept(path,argv,env,**kwargs):seen.append(dict(env));raise sentinel
+    os.posix_spawn=intercept
+    try:
+        sources=types.SimpleNamespace(helpers='',launcher=str(root/'evals/v1/evals-launcher.sh'),namespace={'owned':[]})
+        helper=fixed['C2Helpers'](sources,'/synthetic/scratch',work,())
+        try:helper.build([])
+        except BaseException as error:assert error is sentinel
+        else:raise AssertionError('helper unexpectedly executed')
+    finally:os.posix_spawn=spawn
+    assert seen[0].get('TMPDIR')==os.environ.get('TMPDIR'), 'helper original TMPDIR lost'
+    print(json.dumps({'C2_fix':'helper-env','spawn_intercepted':True,'runtime_executed':False,'work':work},sort_keys=True))
+    with tempfile.TemporaryDirectory(prefix='C2-six-fixed.') as area:
+        base=Path(area);window=base/'window';ephemeral=base/'ephemeral';window.mkdir(mode=0o700);ephemeral.mkdir(mode=0o700)
+        source_path=base/'source';source_path.write_bytes(b'abcdef');source_path.chmod(0o400)
+        def acquire(work):return owner._open_held(str(window),True,owner._store_rule(os.geteuid(),os.getegid(),0o700,True,resolver),'E_STALE',recording_work=work,accounting_kind='M')
+        work=fixed['c2_fresh_work']('C2-six-root');held=acquire(work)
+        child=Path(tempfile.mkdtemp(dir=ephemeral));child.rmdir();held.recheck('E_STALE',work,'M')
+        # An unrelated creation in the held ancestor remains forbidden.
+        unexpected=base/'unexpected';unexpected.mkdir()
+        try:held.recheck('E_STALE',work,'M')
+        except owner.Refusal as error:assert error.code=='E_STALE'
+        else:raise AssertionError('external ancestor drift accepted')
+        held.close();unexpected.rmdir()
+        print(json.dumps({'C2_fix':'scratch-parent','stable_child_create_delete':True,'external_drift_refused':True,'work':work},sort_keys=True))
+        work=fixed['c2_fresh_work']('C2-six-root-failure');held=acquire(work);watched=[row.fd for row in held.components]
+        original_check=owner.HeldPath.recheck;original_close=os.close;closed=[];fault=MemoryError('controlled root admission')
+        def reject(self,*args,**kwargs):
+            if self is held:raise fault
+            return original_check(self,*args,**kwargs)
+        def closing(fd):
+            if fd in watched:closed.append(fd)
+            return original_close(fd)
+        owner.HeldPath.recheck=reject;os.close=closing
+        try:
+            try:fixed['C2Root'](held,work,resolver)
+            except BaseException as error:assert error is fault
+            else:raise AssertionError('root fault accepted')
+        finally:owner.HeldPath.recheck=original_check;os.close=original_close
+        assert sorted(closed)==sorted(watched),'root constructor leaked held chain'
+        print(json.dumps({'C2_fix':'root-failure','onceclose':len(closed),'same_primary':True,'work':work},sort_keys=True))
+        work=fixed['c2_fresh_work']('C2-six-copy');custody=fixed['C2Root'](acquire(work),work,resolver)
+        source=owner._open_held(str(source_path),False,owner._store_rule(os.geteuid(),os.getegid(),0o400,False,resolver),'E_STALE',recording_work=work,accounting_kind='M')
+        try:
+            target=custody.mkdir(custody.root,'target')
+            copies=fixed['C2Copies'](custody)
+            installed=copies.copy(source,target,'bytes',6,hashlib.sha256(b'abcdef').hexdigest(),'runtime')
+            baseline=work['runtime']['read_bytes'];pread=os.pread;calls=[];fault=OSError(5,'second paired read failed')
+            def paired(fd,count,offset):
+                calls.append((fd,count,offset))
+                if len(calls)==2:raise fault
+                return pread(fd,count,offset)
+            os.pread=paired
+            try:
+                try:copies.final_checks()
+                except BaseException as error:assert error is fault
+                else:raise AssertionError('paired read error swallowed')
+            finally:os.pread=pread
+            assert work['runtime']['read_bytes']-baseline==6,'first successful pread lost'
+            print(json.dumps({'C2_fix':'paired-read','actual_first_read_bytes':6,'second_failed':True,'work':work},sort_keys=True))
+        finally:source.close();custody.close()
+    # A real stage fails after its first physical copy. The pre-registered owner still transfers that delta.
+    with tempfile.TemporaryDirectory(prefix='C2-six-stage.') as area:
+        base=Path(area);window=base/'window';window.mkdir(mode=0o700)
+        cases=window/'cases';cases.mkdir(mode=0o700);identity=sorted(fixed['_C2_CASES'])[0]
+        casepath=cases/identity;casepath.mkdir(mode=0o700);sourcepath=casepath/'S';sourcepath.mkdir(mode=0o700)
+        (sourcepath/'one').write_bytes(b'123');(sourcepath/'one').chmod(0o400)
+        targetpath=window/'I';targetpath.mkdir(mode=0o700)
+        work=fixed['c2_fresh_work']('C2-six-stage');held=owner._open_held(str(window),True,owner._store_rule(os.geteuid(),os.getegid(),0o700,True,resolver),'E_STALE',recording_work=work,accounting_kind='M')
+        custody=fixed['C2Root'](held,work,resolver)
+        target=custody.adopt(owner._open_child(held,'I',True,owner._store_rule(os.geteuid(),os.getegid(),0o700,True,resolver),'E_STALE',recording_work=work,accounting_kind='M'))
+        total=fixed['c2_fresh_work']('C2-six-total');work['C2_case_totals']={identity:total}
+        before={'window':fixed['c2_counter_values'](fixed['c2_fresh_work']('C2-stage-before')), 'cases':{identity:fixed['c2_counter_values'](fixed['c2_fresh_work']('C2-case-before'))}}
+        core={'case_id':identity,'entries':[{'occurrence':'reproduction','role':'runtime','member':'one','file':'one','size_bytes':3,'sha256':hashlib.sha256(b'123').hexdigest(),'kind':'runtime'}],'originals':{},'occurrences':{}}
+        raw=fixed['C2Channel'](None,work).encode(core)
+        descriptor={'carry_in':{},'cases':{key:({'inventory_core':core,'sha256':hashlib.sha256(raw).hexdigest()} if key==identity else None) for key in fixed['_C2_CASES']}}
+        copies=fixed['C2Copies'](custody);copy_method=fixed['C2Copies'].copy;fault=OSError(5,'after real staged copy')
+        def stop_after(self,*args):
+            result=copy_method(self,*args)
+            raise fault
+        fixed['C2Copies'].copy=stop_after
+        caught=None
+        try:
+            try:fixed['c2_stage'](custody,descriptor,[identity],target,before,copies)
+            except BaseException as error:caught=error
+            assert caught is fault
+        finally:
+            fixed['C2Copies'].copy=copy_method
+            copies.transfer_cases()
+            try:custody.close(caught)
+            except BaseException as error:assert error is caught
+        assert work['runtime']['write_bytes']==total['runtime']['write_bytes']==3
+        assert work['runtime']['read_bytes']==total['runtime']['read_bytes']>0
+        print(json.dumps({'C2_fix':'failed-stage-delta','same_primary':caught is fault,'window':work,'case':total},sort_keys=True))
+    window_work=fixed['c2_fresh_work']('C2-six-window');case=fixed['c2_fresh_work']('C2-six-case');leaf=fixed['c2_fresh_work']('C2-six-leaf')
+    before_window=fixed['c2_counter_values'](fixed['c2_fresh_work']('C2-before-window'))
+    before_case=fixed['c2_counter_values'](fixed['c2_fresh_work']('C2-before-case'))
+    before_case['read_bytes']=128*owner.DOCUMENT_LIMIT
+    custody=types.SimpleNamespace(work=window_work)
+    copies=fixed['C2Copies'](custody,leaf,case,before_window,before_case)
+    try:copies.room('R',1,'raw')
+    except owner.Refusal as error:assert error.code=='E_LIMIT'
+    else:raise AssertionError('case carry-in cap bypassed')
+    assert leaf['read_bytes']==0
+    leaf['read_bytes']=7;leaf['write_bytes']=3;leaf['physical_bytes']=3
+    copies.transfer_cases();copies.transfer_cases()
+    assert window_work['read_bytes']==case['read_bytes']==7 and window_work['write_bytes']==case['write_bytes']==3
+    print(json.dumps({'C2_fix':'carry-and-transfer','nearcase_refused_before_read':True,'repeat_delta_zero':True,'window':window_work,'case':case},sort_keys=True))
+
+
+def raw16_C2_failure_accounting(root: Path, original=None) -> None:
+    import ast,shlex,socket,copy,tempfile
+    spec=importlib.util.spec_from_file_location('_C2_failure_consumer',root/'shadow/v1/_consumer.py')
+    owner=importlib.util.module_from_spec(spec);sys.modules[spec.name]=owner;spec.loader.exec_module(owner)
+    source=(Path(original) if original else root/'evals/v1/evals-launcher.sh').read_text();literal=shlex.split(source.split('c2_program=',1)[1].split('\nc2_fd9=',1)[0])[0]
+    fixed={'__name__':'_C2_failure_fixed','c':owner};exec(compile(literal,'<actual-C2-fixed>','exec'),fixed)
+    fresh=fixed['c2_fresh_work'];view=fixed['c2_counter_values']
+    work=fresh('C2-common-nearcap');before={'window':view(fresh('C2-old-window')),'cases':{},'common':view(fresh('C2-old-common'))}
+    reservation={'window':view(fresh('C2-reserved-window')),'cases':{},'common':view(fresh('C2-reserved-common'))}
+    before['common']['read_bytes']=128*owner.DOCUMENT_LIMIT-1;reservation['common']['read_bytes']=1
+    work['C2_admitted_before']=before;work['C2_tail_reservation']=reservation
+    try:fixed['c2_wire_room'](work,1,'R')
+    except owner.Refusal as error:assert error.code=='E_LIMIT'
+    else:raise AssertionError('common carry plus reservation ignored')
+    assert work['read_bytes']==0
+    pending_window=fresh('C2-pending-window');pending_leaf=fresh('C2-pending-leaf');pending_case=fresh('C2-pending-case')
+    pending_before={'window':view(fresh('C2-pending-before')),'cases':{},'common':view(fresh('C2-pending-common'))}
+    pending_before['window']['read_bytes']=512*owner.DOCUMENT_LIMIT-4
+    pending_window['C2_admitted_before']=pending_before
+    pending_window['C2_tail_reservation']={'window':view(fresh('C2-pending-window-reserve')),'cases':{},'common':view(fresh('C2-pending-common-reserve'))}
+    pending_leaf['read_bytes']=4
+    pending_window['C2_case_leaves']={'malicious.checked-file-bytes':pending_leaf}
+    pending_window['C2_case_totals']={'malicious.checked-file-bytes':pending_case}
+    try:fixed['c2_wire_room'](pending_window,1,'R')
+    except owner.Refusal as error:assert error.code=='E_LIMIT'
+    else:raise AssertionError('pending case delta omitted from window admission')
+    owner._capture_transfer_work(pending_leaf,pending_window,pending_case)
+    fixed['c2_wire_room'](pending_window,0,'R')
+    assert pending_window['read_bytes']==pending_case['read_bytes']==4
+    window=fresh('C2-partial-window')
+    class FailWrite(dict):
+        def __setitem__(self,key,value):
+            if key=='write_bytes':raise MemoryError('controlled case target write counter')
+            return super().__setitem__(key,value)
+    total=FailWrite(fresh('C2-partial-case'));leaf=fresh('C2-partial-leaf')
+    window['C2_case_totals']={'malicious.checked-file-bytes':total}
+    leaf['read_bytes']=7;leaf['write_bytes']=3;leaf['physical_bytes']=3
+    copies=fixed['C2Copies'](type('Custody',(),{'work':window})(),leaf,total,view(fresh('C2-old-window')),view(fresh('C2-old-case')))
+    try:copies.transfer_cases()
+    except MemoryError:pass
+    else:raise AssertionError('partial transfer fault missed')
+    assert window['read_bytes']==total['read_bytes']==7 and leaf['transferred_read_bytes']==7
+    assert window['write_bytes']==3 and total['write_bytes']==0 and leaf['write_bytes']==3
+    cutoff=fixed['c2_counters'](window)
+    assert cutoff['common']['unknown']['C2_common_transfer_unknown']
+    assert cutoff['common']['read_bytes']==cutoff['common']['write_bytes']==0
+    try:copies.transfer_cases()
+    except fixed['C2Refusal']:pass
+    else:raise AssertionError('partial transfer retried')
+    assert window['read_bytes']==7 and window['write_bytes']==3
+    print(json.dumps({'C2_fix':'common-and-partial-transfer','common_before_plus_tail_refused':True,'same_actual_delta_retained':True,'no_retry':True,'window':window,'case':total,'leaf':leaf,'cutoff':cutoff},sort_keys=True))
+    work=fresh('C2-canonical-failure');left,right=socket.socketpair()
+    try:
+        message={'kind':'GO','version':1,'ordinal':0,'start_sha256':'a'*64,'ready_sha256':'b'*64,
+            'caller_delta':fixed['c2_counters'](fresh('C2-delta')),'tail_reservation':fixed['c2_counters'](fresh('C2-reservation'))}
+        raw=json.dumps(message,sort_keys=True).encode()+b'\n';left.sendall(struct.pack('>I',len(raw))+raw)
+        try:fixed['C2Channel'](right.fileno(),work).receive('GO')
+        except fixed['C2Refusal'] as error:assert error.code=='E_CANONICAL'
+        else:raise AssertionError('noncanonical frame accepted')
+        assert work['read_bytes']>=4+4*len(raw),'failed canonical comparison lost known processing'
+        print(json.dumps({'C2_fix':'canonical-failure','actual_compare_charged':True,'work':work},sort_keys=True))
+    finally:left.close();right.close()
+    body=source.split("<<'PY_SHADOW_SOURCE'\n",1)[1].split('\nPY_SHADOW_SOURCE',1)[0]
+    interrupt=next(node for node in ast.parse(body).body if isinstance(node,ast.FunctionDef) and node.name=='interrupt')
+    handler={};exec(compile(ast.Module(body=[interrupt],type_ignores=[]),'<original-D-interrupt>','exec'),handler)
+    def cancelled():
+        try:handler['interrupt'](signal.SIGTERM,None)
+        except InterruptedError as error:return error
+    resolver=owner._DarwinUUIDResolver() if sys.platform=='darwin' else None
+    for first_marked in (False,True):
+        with tempfile.TemporaryDirectory(prefix='C2-root-primary.') as area:
+            work=fresh('C2-root-primary');held=owner._open_held(area,True,owner._store_rule(os.geteuid(),os.getegid(),0o700,True,resolver),'E_STALE',recording_work=work,accounting_kind='M')
+            watched=[row.fd for row in held.components];closed=[];primary=cancelled() if first_marked else MemoryError('ordinary root admission')
+            secondary=OSError(5,'secondary actual close') if first_marked else cancelled()
+            checking=owner.HeldPath.recheck;closing=os.close
+            def failcheck(self,*args,**kwargs):
+                if self is held:raise primary
+                return checking(self,*args,**kwargs)
+            def failclose(fd):
+                result=closing(fd)
+                if fd in watched:
+                    closed.append(fd)
+                    if len(closed)==1:raise secondary
+                return result
+            owner.HeldPath.recheck=failcheck;os.close=failclose
+            try:
+                try:fixed['C2Root'](held,work,resolver)
+                except BaseException as error:assert error is (primary if first_marked else secondary)
+                else:raise AssertionError('root admission fault disappeared')
+            finally:owner.HeldPath.recheck=checking;os.close=closing
+            assert sorted(closed)==sorted(watched)
+            print(json.dumps({'C2_fix':'root-cancel-onceclose','first_marked':first_marked,'same_primary_or_first_marked':True,'onceclose':len(closed),'work':work},sort_keys=True))
+
+
+def raw16_C2_refused_END_transfer(root: Path) -> None:
+    import tempfile
+    spec=importlib.util.spec_from_file_location('_C2_END_consumer',root/'shadow/v1/_consumer.py')
+    owner=importlib.util.module_from_spec(spec);sys.modules[spec.name]=owner;spec.loader.exec_module(owner)
+    resolver=owner._DarwinUUIDResolver() if sys.platform=='darwin' else None
+    with tempfile.TemporaryDirectory(prefix='C2-END-failure.') as area:
+        base=Path(area);window=base/'window';window.mkdir(mode=0o700)
+        (window/'seed-a.json').write_bytes(b'{}\n');(window/'seed-a.json').chmod(0o400)
+        work={};owner._capture_work_values(work,'END-case')
+        for key,value in {'runtime':{field:0 for field in owner._RUNTIME_FIELDS},'close_calls':0,'held_close_calls':0,'observation_calls':0,'seed_processing':{field:0 for field in ('R','W','H','E','C')},'accounting':{kind:{field:0 for field in ('read_bytes','write_bytes','logical_bytes','physical_bytes','files','occurrences')} for kind in ('L','W','M','raw','unresolved')}}.items():work[key]=value
+        case=work['cases']['END-case']
+        held=owner._open_held(str(window),True,owner._store_rule(os.geteuid(),os.getegid(),0o700,True,resolver),'E_STALE')
+        caller=_C2FixtureCaller(root,held,work,case);fixed=caller.fixed;identity=sorted(fixed['_C2_CASES'])[0]
+        work['C2_case_bindings'][identity]=(case,[case]);caller.window_sha=caller.head='a'*64
+        reservation={'window':fixed['c2_counter_values'](fixed['c2_fresh_work']('END-window-reservation')),
+            'common':fixed['c2_counter_values'](fixed['c2_fresh_work']('END-common-reservation')),
+            'cases':{identity:fixed['c2_counter_values'](fixed['c2_fresh_work']('END-case-reservation'))}}
+        # Failure-only protocol peer. It reports its real codec work, then exits nonzero without DONE.
+        # It never invokes a driver, returns successful replay data or claims a qualified seed.
+        child_code=r'''import importlib.util,sys,os,shlex
+from pathlib import Path
+root=Path(sys.argv[1]);spec=importlib.util.spec_from_file_location('ENDpeerconsumer',root/'shadow/v1/_consumer.py');c=importlib.util.module_from_spec(spec);sys.modules[spec.name]=c;spec.loader.exec_module(c)
+s=(root/'evals/v1/evals-launcher.sh').read_text();literal=shlex.split(s.split('c2_program=',1)[1].split('\nc2_fd9=',1)[0])[0];ns={'__name__':'ENDpeer','c':c};exec(compile(literal,'<actual-fixed-codec>','exec'),ns)
+w=ns['c2_fresh_work']('END-failure-peer');ch=ns['C2Channel'](9,w);start,raw=ch.receive('START')
+ready={'kind':'READY','version':1,'ordinal':start['ordinal'],'start_sha256':ns['c2_sha'](raw,w),'input_sha256s':start['seed_sha256s'],'observed_predecessor_sha256':start['predecessor_sha256'],'acquisition_delta':ns['c2_counters'](w),'leaf_pid':os.getpid(),'leaf_ppid':os.getppid()}
+ch.send(ready);ch.receive('GO')
+end={'kind':'END','version':1,'ordinal':start['ordinal'],'start_sha256':ns['c2_sha'](raw,w),'receipt_sha256':None,'result_sha256':None,'outcome':'refused','child_delta':ns['c2_counters'](w),'retained':[],'errors':[{'category':'controlled-refusal'}],'unknown':['missing-DONE-tail']}
+ch.send(end);os.close(9);os.close(10);os._exit(3)
+'''
+        spawn=os.posix_spawn
+        def refused_peer(path,argv,env,**kwargs):
+            return spawn('/usr/bin/python3',['/usr/bin/python3','-I','-S','-B','-c',child_code,str(root)],env,**kwargs)
+        before=work['read_bytes'];os.posix_spawn=refused_peer;caught=None
+        try:
+            try:caller.invoke(['run',str(window/'seed-a.json'),'2026-10-27T00:00:00Z'],[identity],reservation)
+            except BaseException as error:caught=error
+        finally:os.posix_spawn=spawn;held.close()
+        if not hasattr(caller,'last_attempt'):raise caught
+        end=caller.last_attempt['end']
+        assert caught is not None and end is not None,'refusal peer did not reach actual END'
+        assert caller.child_state['session']['read_bytes']==end['child_delta']['common']['read_bytes']>0
+        assert work['read_bytes']>before and caller.common_case['read_bytes']>=end['child_delta']['common']['read_bytes']
+        assert work['C2_child_tail_unknown'] and caller.common_case['C2_child_tail_unknown']
+        assert caller.last_attempt['wait']==3<<8
+        assert caller.ordinal==0 and caller.head=='a'*64
+        assert caller.work['seed_processing']['H']>0
+        print(json.dumps({'C2_fix':'refused-END-transfer','actual_END_seen':True,'wait':caller.last_attempt['wait'],'no_DONE':caller.last_attempt['done'] is None,
+            'no_driver_executed':True,'no_success_result':True,'unadvanced':True,'window':work,'common':caller.common_case,'child_END':end,'caller':caller.work},sort_keys=True))
+
+
+def raw16_C2_six_fix_deletions(root: Path) -> None:
+    import tempfile
+    original=(root/'evals/v1/evals-launcher.sh').read_text()
+    cases=(('common', '        scopes.append((admitted["common"], c2_counters(work)["common"], True, reservation["common"]))',
+        '        pass', raw16_C2_failure_accounting, 'common carry plus reservation ignored'),
+        ('first-read', '                self.charge("R", len(left), kind)', '                pass', raw16_C2_six_fixes, 'first successful pread lost'))
+    for label,check,replacement,run,expected in cases:
+        count=1 if label=='common' else 2
+        assert original.count(check)==count
+        with tempfile.TemporaryDirectory(prefix='C2-six-source-deletion.') as area:
+            path=Path(area)/'launcher.sh';path.write_text(original.replace(check,replacement))
+            try:run(root,path)
+            except AssertionError as error:assert str(error)==expected
+            else:raise AssertionError('six-fix deletion not detected: '+label)
+        print(json.dumps({'C2_fix_deletion':label,'matched_assertion':expected,'detected':True}))
+
+
+def raw16_C2_numeric_budget(root: Path, legacy_path=None) -> None:
+    import shlex,tempfile,copy,ast
+    spec=importlib.util.spec_from_file_location('_C2_budget_consumer',root/'shadow/v1/_consumer.py')
+    c=importlib.util.module_from_spec(spec);sys.modules[spec.name]=c;spec.loader.exec_module(c)
+    source=(root/'evals/v1/evals-launcher.sh').read_text();literal=shlex.split(source.split('c2_program=',1)[1].split('\nc2_fd9=',1)[0])[0]
+    fixed={'__name__':'_C2_budget_fixed','c':c};exec(compile(literal,'<C2-fixed-budget>','exec'),fixed)
+    fresh=fixed['c2_fresh_work'];value={'message':'ordinary small \u00e9 document'}
+    unbound=fresh('C2-legacy');raw=c._private_capture_observations(value,unbound,unbound)
+    if legacy_path is not None:
+        spec=importlib.util.spec_from_file_location('_C2_budget_original',legacy_path)
+        old=importlib.util.module_from_spec(spec);sys.modules[spec.name]=old;spec.loader.exec_module(old)
+        original=fresh('C2-legacy');prior=old._private_capture_observations(value,original,original)
+        assert prior==raw and original==unbound,'unbound original encoder semantics changed'
+        old_window,old_case=fresh('C2-old-window'),fresh('C2-old-case')
+        new_window,new_case=fresh('C2-old-window'),fresh('C2-old-case')
+        assert old._private_capture_observations(value,old_window,old_case)==c._private_capture_observations(value,new_window,new_case)
+        assert old_window==new_window and old_case==new_case
+        for exported in (False,True):
+            for read_only in (False,True):
+                old._capture_copy_room(original,17,exported,read_only=read_only)
+                c._capture_copy_room(unbound,17,exported,read_only=read_only)
+    measured=unbound['read_bytes']
+    for common_limited in (False,True):
+        work=fresh('C2-bound');window=fresh('C2-window-carry');common=fresh('C2-common-carry')
+        maximum=(128 if common_limited else 512)*c.DOCUMENT_LIMIT
+        selected=common if common_limited else window
+        # Numeric occupancy only. No large payload is allocated or claimed as produced.
+        selected['read_bytes']=maximum-measured-1
+        work['_capture_copy_budget']=c._capture_copy_budget_values(work,((window,False),(common,True)))
+        encoded=c._private_capture_observations(value,work,work)
+        assert encoded==raw and work['read_bytes']==measured
+        try:c._capture_copy_room(work,2,False,read_only=True)
+        except c.Refusal as error:assert error.code=='E_LIMIT'
+        else:raise AssertionError('bound scope allowed exhausted room')
+        print(json.dumps({'C2_budget':'near-common' if common_limited else 'near-window','small_document_passed':True,'actual_processing_bytes':measured,'work':work},sort_keys=True))
+    work=fresh('C2-partial-encoding');window=fresh('C2-window');common=fresh('C2-common')
+    common['read_bytes']=128*c.DOCUMENT_LIMIT-8
+    work['_capture_copy_budget']=c._capture_copy_budget_values(work,((window,False),(common,True)))
+    try:c._capture_observe(work,'M','bounded-row',value)
+    except c.Refusal as error:assert error.code=='E_LIMIT'
+    else:raise AssertionError('bound encoder chunk bypassed carry')
+    assert work['read_bytes']==1 and work['accounting_incomplete']
+    for invalid in (None,((0,)*8,('UNKNOWN',)*11),((-1,)*8,(1,)*11),((1,)*8,(100,)*11)):
+        bad=fresh('C2-invalid-budget');bad['_capture_copy_budget']=invalid
+        try:c._capture_copy_room(bad,0,False)
+        except c.Refusal:pass
+        else:raise AssertionError('unknown or negative budget became credit')
+        assert bad['read_bytes']==0
+    body=source.split("<<'PY_SHADOW_SOURCE'\n",1)[1].split('\nPY_SHADOW_SOURCE',1)[0]
+    handler={};node=next(node for node in ast.parse(body).body if isinstance(node,ast.FunctionDef) and node.name=='interrupt')
+    exec(compile(ast.Module(body=[node],type_ignores=[]),'<original-D-interrupt>','exec'),handler)
+    work_cancel=fresh('C2-encoding-cancel');work_cancel['_capture_copy_budget']=c._capture_copy_budget_values(work_cancel,((fresh('C2-w'),False),(fresh('C2-c'),True)))
+    iterator=json.JSONEncoder.iterencode;events=[]
+    def cancel_after_first(self,*args,**kwargs):
+        for piece in iterator(self,*args,**kwargs):
+            yield piece
+            try:handler['interrupt'](signal.SIGTERM,None)
+            except InterruptedError as error:events.append(error);raise
+    json.JSONEncoder.iterencode=cancel_after_first
+    try:
+        try:c._capture_observe(work_cancel,'M','cancel-row',value)
+        except BaseException as error:assert error is events[0]
+        else:raise AssertionError('encoding cancellation lost')
+    finally:json.JSONEncoder.iterencode=iterator
+    assert work_cancel['read_bytes']==1 and work_cancel['accounting_incomplete']
+    with tempfile.TemporaryDirectory(prefix='C2-budget-metadata.') as area:
+        work_meta=fresh('C2-held-metadata');resolver=c._DarwinUUIDResolver() if sys.platform=='darwin' else None
+        held=c._open_held(area,True,c._store_rule(os.geteuid(),os.getegid(),0o700,True,resolver),'E_STALE',recording_work=work_meta,accounting_kind='M')
+        window=fresh('C2-window');common=fresh('C2-common');common['read_bytes']=128*c.DOCUMENT_LIMIT-8
+        work_meta['_capture_copy_budget']=c._capture_copy_budget_values(work_meta,((window,False),(common,True)))
+        before=work_meta['read_bytes'];caught=None
+        try:held.recheck('E_STALE',work_meta,'M')
+        except c.Refusal as error:caught=error
+        finally:held.close()
+        assert caught is not None and work_meta['accounting_incomplete'] and not held.components
+        assert work_meta['read_bytes']>before
+    print(json.dumps({'C2_budget':'chunk-failure-cancel-metadata','unbound_legacy_compared':legacy_path is not None,
+        'partial_encoding':work,'same_cancel_object':True,'cancel_work':work_cancel,'metadata_work':work_meta,'invalid_budgets_refused':4},sort_keys=True))

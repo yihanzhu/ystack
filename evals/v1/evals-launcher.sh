@@ -31,7 +31,7 @@ _C2_SCALARS = ("read_bytes", "write_bytes", "physical_bytes", "files", "export_r
 _C2_ACCOUNT_FIELDS = ("logical_bytes", "read_bytes", "write_bytes", "physical_bytes", "files", "occurrences")
 _C2_CLASSES = ("L", "W", "M", "raw", "unresolved")
 _C2_LIMIT = 1048576
-_C2_HELPERS_SHA256 = "2f733daf391f09627929859b2ac37fd7d158e664b6bb1d7f1a32a2507a12501e"
+_C2_HELPERS_SHA256 = "347c4015bc3fd3e22630b529c3c313b448fde4d584bad1c9489e8505d60f26ae"
 
 class C2Refusal(Exception):
     def __init__(self, code):
@@ -83,6 +83,58 @@ def c2_wire_room(work, amount, field):
     key = "read_bytes" if field == "R" else "write_bytes"
     candidate[key] += amount
     c._capture_copy_room(candidate, 0, False)
+    c2_nonruntime_room(work, amount, False, read_only=field == "R", writing=field == "W")
+
+def c2_nonruntime_room(work, amount, exported, *, read_only=False, writing=False, files=0,
+                       case_before=None, total=None, window_work=None, window_before=None):
+    fields = ("read_bytes", "write_bytes", "physical_bytes", "files", "export_read_bytes",
+              "export_write_bytes", "export_physical_bytes", "export_files")
+    admitted = (window_work or work).get("C2_admitted_before")
+    reservation = (window_work or work).get("C2_tail_reservation")
+    scopes = []
+    if admitted is not None:
+        scopes.append((admitted["window"], window_work or work, False, reservation["window"]))
+    elif window_before is not None:scopes.append((window_before, window_work, False, None))
+    else:scopes.append((None, work, False, None))
+    if case_before is not None:
+        scopes.append((case_before, total, True, work.get("C2_case_reservation")))
+    elif admitted is not None:
+        scopes.append((admitted["common"], c2_counters(work)["common"], True, reservation["common"]))
+    bindings = []
+    for before, current, per_case, reserved in scopes:
+        is_common = admitted is not None and case_before is None and per_case
+        tail_start = (window_work or work).get("C2_tail_start")
+        if reserved is not None and tail_start is not None:
+            baseline = tail_start["common" if is_common else "window"]
+            reserved = {key: max(0, reserved[key] - max(0, current.get(key, 0) - baseline[key])) for key in fields}
+        c2_require(not (before or {}).get("unknown") and not current.get("unknown"), "E_LIMIT")
+        candidate = {key: (before[key] if before else 0) + current.get(key, 0)
+            + ((work.get(key, 0) - work.get("transferred_" + key, 0)) if current is not work and not is_common else 0)
+            + (reserved[key] if reserved else 0) for key in fields}
+        if not per_case:
+            for leaf in (window_work or work).get("C2_case_leaves", {}).values():
+                if leaf is work:continue
+                for key in fields:
+                    current_value, prior_value = leaf.get(key), leaf.get("transferred_" + key, 0)
+                    c2_require(type(current_value) is int and type(prior_value) is int and 0 <= prior_value <= current_value, "E_LIMIT")
+                    amount_pending = current_value - prior_value
+                    candidate[key] += amount_pending
+        bindings.append((dict(candidate), per_case))
+        candidate["files"] += files
+        if exported:candidate["export_files"] += files
+        if read_only:
+            candidate["read_bytes"] += amount
+            if exported:candidate["export_read_bytes"] += amount
+        elif writing:
+            candidate["write_bytes"] += amount;candidate["physical_bytes"] += amount
+            if exported:
+                candidate["export_write_bytes"] += amount;candidate["export_physical_bytes"] += amount
+        c._capture_copy_room(candidate, 0, exported, case=per_case)
+        c2_require(candidate["files"] <= 256 and candidate["export_files"] <= (16 if per_case else 64), "E_LIMIT")
+    if len(bindings) == 2:
+        work["_capture_copy_budget"] = c._capture_copy_budget_values(work, tuple(bindings))
+        c._capture_copy_budget_room(work, 0, exported, files=files)
+    else:c2_require("_capture_copy_budget" not in work, "E_LIMIT")
 
 class C2Channel:
     def __init__(self, fd, work):
@@ -141,9 +193,9 @@ class C2Channel:
         rebuilt = self.encode(value)
         c2_wire_room(self.work, 2 * len(raw), "R")
         equal = rebuilt == raw
-        c2_require(equal, "E_CANONICAL")
         self.owner._capture_account(self.work, "M", "read_bytes", 2 * len(raw))
         self.work["read_bytes"] += 2 * len(raw)
+        c2_require(equal, "E_CANONICAL")
         c2_message(value, kind)
         self.received.append((kind, raw))
         return value, raw
@@ -379,7 +431,9 @@ class C2Helpers:
                 (os.POSIX_SPAWN_DUP2, error_w, 2)]
             actions += [(os.POSIX_SPAWN_CLOSE, fd) for fd in sorted(set((9, 10, *descriptors, *self.unused, *(row["fd"] for row in self.sources.namespace["owned"] if not row["closed"])))) if fd not in {0, 1, 2}]
             argv = ["/bin/bash", "-c", command, "ystack-fixed-C2-helper", self.sources.launcher, self.scratch, *arguments]
-            child = os.posix_spawn("/bin/bash", argv, {"LC_ALL": "C", "PATH": "/usr/bin:/bin", "TMPDIR": self.scratch + "/work"}, file_actions=actions)
+            environment = {"LC_ALL": "C", "PATH": "/usr/bin:/bin"}
+            if "TMPDIR" in os.environ:environment["TMPDIR"] = os.environ["TMPDIR"]
+            child = os.posix_spawn("/bin/bash", argv, environment, file_actions=actions)
             c._capture_observe(self.work, "M", "C2.helper-spawn", {"pid": child, "function": function, "actions": actions})
             for fd in (null, output_w, error_w):
                 descriptors.remove(fd)
@@ -392,7 +446,7 @@ class C2Helpers:
                         name = key.data
                         amount = min(65536, _C2_LIMIT + 1 - lengths[name])
                         c2_require(amount > 0, "E_LIMIT")
-                        c._capture_copy_room(self.work, amount, False, read_only=True)
+                        c2_wire_room(self.work, amount, "R")
                         raw = os.read(key.fd, amount)
                         self.work["read_bytes"] += len(raw)
                         c._capture_account(self.work, "M", "read_bytes", len(raw))
@@ -435,14 +489,24 @@ class C2Helpers:
 
 class C2Root:
     def __init__(self, held, work, resolver):
-        c2_require(type(held) is c.HeldPath and held.components)
-        held.recheck("E_STALE", work, "M")
-        held.recording_work, held.accounting_kind = work, "M"
         self.root, self.work, self.resolver = held, work, resolver
-        self.owned, self.failure, self.closed = [held], None, False
+        self.owned, self.failure, self.closed = [], None, False
         self.created = []
-        self.initial = c._identity(held.before)
+        try:
+            c2_require(type(held) is c.HeldPath and held.components)
+            held.recording_work, held.accounting_kind = work, "M"
+            held.recheck("E_STALE", work, "M")
+            self.initial = c._identity(held.before)
+            self.owned.append(held)
+        except BaseException as error:
+            self.fail(error)
+            if not any(row is held for row in self.owned):
+                try:held.close()
+                except BaseException as closing:self.fail(closing)
+            else:self.close(self.failure)
+            raise self.failure
     def observe(self, site, value):
+        c2_nonruntime_room(self.work, 0, False)
         c._capture_observe(self.work, "M", site, value)
     def fail(self, error):
         self.failure = c2_first(self.failure, error)
@@ -459,6 +523,7 @@ class C2Root:
             raise self.failure
         return held
     def recheck(self):
+        c2_nonruntime_room(self.work, 0, False)
         c2_require(not self.closed and self.failure is None, "E_STALE")
         for held in self.owned:
             if held.components:held.recheck("E_STALE", self.work, "M")
@@ -487,6 +552,7 @@ class C2Root:
         c2_require(len(names) == len(set(names)), "E_STALE")
         return frozenset(names)
     def namespace(self, parent):
+        c2_nonruntime_room(self.work, 0, False)
         parent.recheck("E_STALE", self.work, "M")
         return self.names(parent)
     def created_parent(self, parent, before, names, name):
@@ -510,6 +576,7 @@ class C2Root:
         c2_require(type(name) is str and name not in {"", ".", ".."} and "/" not in name)
         self.recheck();names = self.namespace(parent);before = parent.before
         try:
+            c2_nonruntime_room(self.work, 0, False, files=1)
             os.mkdir(name, 0o700, dir_fd=parent.fd)
             self.created.append((parent.path, name))
             c._capture_account(self.work, "M", "files", 1)
@@ -560,6 +627,18 @@ class C2Root:
         if self.failure is not None:raise self.failure
         c2_require(not c._capture_work_incomplete(self.work), "E_LIMIT")
 
+def c2_clone_root(held, work, resolver):
+    rows = c._clone(held, "E_STALE", work, "M")
+    try:
+        cloned = c.HeldPath(held.path, rows, recording_work=work, accounting_kind="M")
+    except BaseException as error:
+        first = error
+        for row in reversed(rows):
+            try:c._close_capture_copy(row.fd, work, work, "C2.clone-root-pending", first)
+            except BaseException as closing:first = c2_first(first, closing)
+        raise first
+    return C2Root(cloned, work, resolver)
+
 class C2Copies:
     def __init__(self, custody, work=None, total=None, window_before=None, case_before=None):
         self.custody, self.work = custody, custody.work if work is None else work
@@ -573,7 +652,9 @@ class C2Copies:
     def transfer_cases(self):
         for copies in self.case_copies:copies.transfer_cases()
         if self.total is not None:
+            c2_require(not getattr(self, "transfer_failed", False), "E_LIMIT")
             try:
+                common_before_transfer = c2_counters(self.custody.work)["common"]
                 c._capture_transfer_work(self.work, self.custody.work, self.total)
                 previous = self.work.setdefault("transferred_seed_processing", {})
                 for field, amount in self.work["seed_processing"].items():
@@ -582,7 +663,11 @@ class C2Copies:
                     for target in (self.custody.work, self.total):
                         target["seed_processing"][field] += amount - prior
                     previous[field] = amount
+                c2_nonruntime_room(self.custody.work, 0, False)
             except BaseException:
+                self.transfer_failed = True
+                if "common_before_transfer" in locals():self.custody.work["C2_common_cutoff"] = common_before_transfer
+                self.custody.work["C2_common_transfer_unknown"] = True
                 self.custody.work["C2_case_transfer_incomplete"] = True
                 raise
     def room(self, field, amount, kind):
@@ -590,7 +675,9 @@ class C2Copies:
             mapping = {"R": "read_bytes", "W": "write_bytes", "H": "sha_bytes", "E": "equality_bytes", "C": "copy_bytes"}
             self.runtime(mapping[field], amount, False)
             if field == "W":self.runtime("physical_bytes", amount, False)
-        elif field in {"R", "W"}:c._capture_copy_room(self.work, amount, kind == "export", read_only=field == "R")
+        elif field in {"R", "W"}:
+            c2_nonruntime_room(self.work, amount, kind == "export", read_only=field == "R", writing=field == "W",
+                case_before=self.case_before, total=self.total, window_work=self.custody.work, window_before=self.window_before)
     def charge(self, field, amount, kind):
         self.work["seed_processing"][field] += amount
         if kind == "runtime":
@@ -608,6 +695,8 @@ class C2Copies:
                 self.work["physical_bytes"] += amount
                 if kind != "export":c._capture_account(self.work, "raw" if kind == "recorded" else kind, "physical_bytes", amount)
     def copy(self, source, parent, name, size, expected, kind):
+        c2_nonruntime_room(self.work, 0, False, case_before=self.case_before, total=self.total,
+            window_work=self.custody.work, window_before=self.window_before)
         c2_require(kind in {"runtime", "recorded", "export", "raw", "M", "W"})
         c2_require(type(source) is c.HeldPath and source.components and type(size) is int and 0 <= size <= 4 << 30)
         source.recheck("E_STALE", self.work, "M")
@@ -617,7 +706,8 @@ class C2Copies:
         installed_hash = hashlib.sha256()
         try:
             if kind == "runtime":self.runtime("physical_files", 1, False)
-            else:c._capture_copy_room(self.work, 0, True)
+            else:c2_nonruntime_room(self.work, 0, kind == "export", files=1,
+                case_before=self.case_before, total=self.total, window_work=self.custody.work, window_before=self.window_before)
             writer = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400, dir_fd=parent.fd)
             if kind == "runtime":self.runtime("physical_files", 1)
             else:
@@ -626,6 +716,8 @@ class C2Copies:
                 else:c._capture_account(self.work, "raw" if kind == "recorded" else kind, "files", 1)
             self.custody.observe("C2.copy-create", {"fd": writer, "parent_fd": parent.fd, "name": name})
             self.custody.created_parent(parent, before, names, name)
+            c2_nonruntime_room(self.work, 0, False, case_before=self.case_before, total=self.total,
+                window_work=self.custody.work, window_before=self.window_before)
             offset = 0
             while offset < size:
                 amount = min(65536, size - offset)
@@ -664,8 +756,10 @@ class C2Copies:
             while offset < size:
                 amount = min(65536, size - offset)
                 self.room("R", 2 * amount, kind)
-                left, right = os.pread(source.fd, amount, offset), os.pread(installed.fd, amount, offset)
-                self.charge("R", len(left) + len(right), kind)
+                left = os.pread(source.fd, amount, offset)
+                self.charge("R", len(left), kind)
+                right = os.pread(installed.fd, amount, offset)
+                self.charge("R", len(right), kind)
                 self.room("E", len(left) + len(right), kind)
                 equal = left == right
                 self.charge("E", len(left) + len(right), kind)
@@ -693,11 +787,13 @@ class C2Copies:
             while offset < size:
                 amount = min(65536, size - offset)
                 self.room("R", 2 * amount, kind)
-                left, right = os.pread(source.fd, amount, offset), os.pread(installed.fd, amount, offset)
-                self.charge("R", len(left) + len(right), kind)
+                left = os.pread(source.fd, amount, offset)
+                self.charge("R", len(left), kind)
+                right = os.pread(installed.fd, amount, offset)
+                self.charge("R", len(right), kind)
                 self.room("H", len(left) + len(right), kind);self.room("E", len(left) + len(right), kind)
-                left_hash.update(left);right_hash.update(right)
-                self.charge("H", len(left) + len(right), kind)
+                left_hash.update(left);self.charge("H", len(left), kind)
+                right_hash.update(right);self.charge("H", len(right), kind)
                 equal = left == right
                 self.charge("E", len(left) + len(right), kind)
                 c2_require(len(left) == len(right) == amount and equal, "E_STALE")
@@ -780,7 +876,20 @@ def c2_counters(work):
     for identity, leaf in work.get("C2_case_totals", {}).items():
         c2_require(identity in _C2_CASES and identity not in cases, "E_RELATION")
         cases[identity] = c2_counter_values(work.get("C2_case_leaves", {}).get(identity, leaf))
-    return {"window": c2_counter_values(work), "cases": cases}
+    window = c2_counter_values(work)
+    if "C2_common_case" in work:
+        common = c2_counter_values(work["C2_common_case"])
+    elif work.get("C2_case_bindings"):
+        common = c2_counter_values({"C2_common_missing_unknown": True, "C2_common_missing_incomplete": True})
+    elif work.get("C2_common_transfer_unknown"):
+        common = dict(work["C2_common_cutoff"])
+        common["unknown"] = dict(common["unknown"], C2_common_transfer_unknown=True)
+        common["incomplete"] = list(common["incomplete"]) + ["C2_case_transfer_incomplete"]
+    else:
+        # Only these disjoint new leaves were actually transferred into this work owner.
+        transferred = [c2_counter_values(total) for total in work.get("C2_case_totals", {}).values()]
+        common = c2_view_delta(window, c2_sum_views(transferred)) if transferred else window
+    return {"window": window, "cases": cases, "common": common}
 
 def c2_view_delta(current, prior):
     result = {key: current[key] - prior[key] for key in _C2_SCALARS}
@@ -792,15 +901,17 @@ def c2_view_delta(current, prior):
     return result
 
 def c2_delta(current, prior):
-    c2_require(set(current) == set(prior) == {"window", "cases"} and set(current["cases"]) == set(prior["cases"]), "E_RELATION")
+    c2_require(set(current) == set(prior) == {"window", "cases", "common"} and set(current["cases"]) == set(prior["cases"]), "E_RELATION")
     return {"window": c2_view_delta(current["window"], prior["window"]),
+        "common": c2_view_delta(current["common"], prior["common"]),
         "cases": {identity: c2_view_delta(current["cases"][identity], prior["cases"][identity]) for identity in current["cases"]}}
 
 def c2_combine(before, *deltas):
     inputs = (before, *deltas)
-    c2_require(all(set(value) == {"window", "cases"} and type(value["cases"]) is dict
+    c2_require(all(set(value) == {"window", "cases", "common"} and type(value["cases"]) is dict
         and set(value["cases"]) <= set(before["cases"]) <= _C2_CASES for value in inputs), "E_RELATION")
     return {"window": c2_sum_views([value["window"] for value in inputs]),
+        "common": c2_sum_views([value["common"] for value in inputs]),
         "cases": {identity: c2_sum_views([value["cases"][identity] for value in inputs if identity in value["cases"]]) for identity in before["cases"]}}
 
 def c2_reserve_view(before, reservation, window):
@@ -823,9 +934,10 @@ def c2_reserve_view(before, reservation, window):
     return candidate
 
 def c2_reserve(before, reservation):
-    c2_require(set(before) == set(reservation) == {"window", "cases"}
+    c2_require(set(before) == set(reservation) == {"window", "cases", "common"}
         and set(reservation["cases"]) <= set(before["cases"]) <= _C2_CASES, "E_RELATION")
     result = c2_reserve_view(before["window"], reservation["window"], True)
+    c2_reserve_view(before["common"], reservation["common"], False)
     for identity in before["cases"]:
         c2_require(identity in reservation["cases"], "E_RELATION")
         c2_reserve_view(before["cases"][identity], reservation["cases"][identity], False)
@@ -873,14 +985,14 @@ def c2_write_document(custody, parent, name, value):
     before = parent.before;names = custody.namespace(parent)
     writer, first = None, None
     try:
-        c._capture_copy_room(custody.work, 0, True)
+        c2_nonruntime_room(custody.work, 0, False, files=1)
         writer = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400, dir_fd=parent.fd)
         custody.work["files"] += 1;c._capture_account(custody.work, "M", "files", 1)
         custody.created_parent(parent, before, names, name)
         offset = 0
         while offset < len(raw):
             amount = min(65536, len(raw) - offset)
-            c._capture_copy_room(custody.work, amount, False)
+            c2_nonruntime_room(custody.work, amount, False, writing=True)
             sent = os.write(writer, memoryview(raw)[offset:offset+amount])
             c2_require(type(sent) is int and 0 < sent <= amount, "E_RUNTIME")
             custody.work["write_bytes"] += sent;custody.work["physical_bytes"] += sent
@@ -891,9 +1003,10 @@ def c2_write_document(custody, parent, name, value):
         closing, writer = writer, None
         c._close_capture_copy(closing, custody.work, custody.work, "C2.receipt-writer", None)
         _value, observed, measured, held = c2_document(custody, parent, name)
-        c2_require(observed == raw, "E_STALE")
-        custody.work["read_bytes"] += 2 * len(raw)
-        c._capture_account(custody.work, "M", "read_bytes", 2 * len(raw))
+        equal = observed == raw
+        custody.work["read_bytes"] += len(observed) + len(raw)
+        c._capture_account(custody.work, "M", "read_bytes", len(observed) + len(raw))
+        c2_require(equal, "E_STALE")
         held.recheck("E_STALE", custody.work, "M")
         return measured
     except BaseException as error:
@@ -916,13 +1029,13 @@ def c2_seed_ids(value):
         and len(set(identities)) == len(identities), "E_SHAPE")
     return set(identities)
 
-def c2_stage(custody, descriptor, case_ids, destination, admitted_scope):
+def c2_stage(custody, descriptor, case_ids, destination, admitted_scope, copies=None):
     c2_require(type(descriptor) is dict and set(descriptor) == {"cases", "carry_in"}
         and type(descriptor["cases"]) is dict and set(descriptor["cases"]) == _C2_CASES, "E_SHAPE")
     cases = custody.adopt(c._open_child(custody.root, "cases", True,
         c._store_rule(os.geteuid(), os.getegid(), 0o700, True, custody.resolver), "E_STALE",
         recording_work=custody.work, accounting_kind="M"))
-    copies = C2Copies(custody)
+    if copies is None:copies = C2Copies(custody)
     for identity in case_ids:
         binding = descriptor["cases"][identity]
         c2_require(type(binding) is dict and set(binding) == {"inventory_core", "sha256"}, "E_SHAPE")
@@ -941,8 +1054,11 @@ def c2_stage(custody, descriptor, case_ids, destination, admitted_scope):
         c2_require(identity in admitted_scope["cases"], "E_RELATION")
         total = custody.work["C2_case_totals"][identity]
         leaf = c2_fresh_work("C2-I-" + identity)
+        if "C2_tail_reservation" in custody.work:
+            leaf["C2_case_reservation"] = custody.work["C2_tail_reservation"]["cases"][identity]
         custody.work.setdefault("C2_case_leaves", {})[identity] = leaf
-        current = C2Copies(custody, leaf, total, admitted_scope["window"], admitted_scope["cases"][identity])
+        current = C2Copies(custody, leaf, total,
+            custody.work.get("C2_admitted_before", admitted_scope)["window"], admitted_scope["cases"][identity])
         copies.case_copies.append(current)
         target = custody.mkdir(destination, identity)
         entries, roles = {}, set()
@@ -962,8 +1078,11 @@ def c2_stage(custody, descriptor, case_ids, destination, admitted_scope):
         current.transfer_cases()
     return copies
 
+def c2_scratch_parent(root_path, work=None):
+    return os.path.join(tempfile.gettempdir(), "ystack-C2-ephemeral-" + c2_sha(os.fsencode(root_path), work))
+
 def c2_lifecycle(launcher, arguments):
-    sources = custody = copies = helpers = None
+    sources = custody = copies = helpers = root = None
     work = None;failure = None;errors = [];receipt_sha = None;result = None;operation = None;scratch = None;admitted = False
     source_errors = []
     try:
@@ -1027,12 +1146,17 @@ def c2_lifecycle(launcher, arguments):
             and go["ready_sha256"] == c2_sha(ready_raw, work) and go["tail_reservation"] == start["tail_reservation"], "E_RELATION")
         admitted_scope = c2_combine(start["before"], ready["acquisition_delta"], go["caller_delta"])
         c2_reserve(admitted_scope, go["tail_reservation"])
+        work["C2_admitted_before"] = c2_combine(start["before"], go["caller_delta"])
+        work["C2_tail_reservation"] = go["tail_reservation"]
         custody.recheck()
         admitted = True
         operation = custody.mkdir(operations, str(ordinal))
         installed = custody.mkdir(operation, "I")
-        copies = c2_stage(custody, descriptor, start["case_ids"], installed, admitted_scope)
-        scratch = tempfile.mkdtemp(prefix="ystack-evals.")
+        copies = C2Copies(custody)
+        c2_stage(custody, descriptor, start["case_ids"], installed, admitted_scope, copies)
+        scratch_parent = c2_scratch_parent(root_path, work)
+        c2_nonruntime_room(work, 0, False, files=1)
+        scratch = tempfile.mkdtemp(prefix="operation-" + str(ordinal) + "-", dir=scratch_parent)
         work["files"] += 1;c._capture_account(work, "M", "files", 1)
         c._capture_observe(work, "M", "C2.scratch-create", {"path": scratch})
         unused = [row["fd"] for row in sources.namespace["owned"] if not row["closed"]]
@@ -1064,6 +1188,9 @@ def c2_lifecycle(launcher, arguments):
         failure = error
         errors.append({"site": "C2.lifecycle", "category": type(error).__name__, "errno": getattr(error, "errno", None)})
     finally:
+        if custody is None and root is not None and root.components:
+            try:root.close()
+            except BaseException as error:failure = c2_first(failure, error)
         if copies is not None:
             try:copies.final_checks()
             except BaseException as error:
@@ -1105,12 +1232,13 @@ def c2_lifecycle(launcher, arguments):
     if work is None or "start" not in locals() or not admitted:
         token = b"E_STALE\n" if any(error is failure for error in source_errors) and not c2_cancelled(failure) else b"E_RUNTIME\n"
         os.write(2, token);os._exit(1)
+    work["C2_tail_start"] = c2_counters(work)
     if failure is not None:
         result = None
         token = ("E_STALE" if any(error is failure for error in source_errors) and not c2_cancelled(failure)
             else failure.code if isinstance(failure, (C2Refusal, c.Refusal)) and failure.code in {"E_RUNTIME", "E_LIMIT", "E_PARSE", "E_CANONICAL", "E_SHAPE", "E_RELATION", "E_STALE"} else "E_RUNTIME")
         raw = (token + "\n").encode("ascii")
-        c._capture_copy_room(work, len(raw), False)
+        c2_wire_room(work, len(raw), "W")
         count = os.write(2, raw)
         work["write_bytes"] += count;c._capture_account(work, "M", "write_bytes", count)
         work["seed_processing"]["W"] += count;work["seed_processing"]["C"] += count
@@ -1119,7 +1247,7 @@ def c2_lifecycle(launcher, arguments):
         offset = 0
         while offset < len(result):
             amount = min(65536, len(result)-offset)
-            c._capture_copy_room(work, amount, False)
+            c2_wire_room(work, amount, "W")
             count = os.write(1, memoryview(result)[offset:offset+amount])
             c2_require(0 < count <= amount, "E_RUNTIME")
             work["write_bytes"] += count;c._capture_account(work, "M", "write_bytes", count)
@@ -1294,7 +1422,7 @@ shadow_source_rows() {
     'scope/v1/workflow-scope.jq 2d1df5f99b7019c4c41aece4f9fb89b00785ca47f9f8a713b2f43b212481366a 9728 100644' \
     'scripts/core-contract.sh b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 9176 100755' \
     'shadow/v1/_cancel_release.c 00ef369edbed569d50471b97f64aef57591b7afb8d9f25c286bffa5725faf015 55056 100644' \
-    'shadow/v1/_consumer.py bc0769f319b463fe9d5f83dad1aa33f9a3bc0acde6f3193275766275d0c46582 251290 100644' \
+    'shadow/v1/_consumer.py b50bc79fd449e66aad07fa1a878ccca9fdd3de2485f7e701a0de3cce7f642b11 254682 100644' \
     'shadow/v1/build-cancel-release.sh be1ad0afd99f72ea73fe52cca63c03381793710c587a82b57b9a38ed87c896d4 6169 100755' \
     'shadow/v1/enforced-reproduction.py 82d59c84fb26de8975d058f6cbe66832dce134c663e113c8874c83ee06796ebd 134481 100755' \
     'shadow/v1/incident-record.jq 9ea6e1ec6556f54887ea6937533157856271aab68c74bda6d18dae1354d2687c 3695 100644' \
