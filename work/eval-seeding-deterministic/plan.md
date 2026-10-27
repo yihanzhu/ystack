@@ -1,5 +1,5 @@
 ---
-spec-blob: 7daf35706536e9ae73c88af704a6912e597a7a54
+spec-blob: 7df51a030741ba610336d221d995e282c8ea689e
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-26
@@ -14,8 +14,8 @@ one complete two-source delivery. Source preparation does not accept a dependenc
 a real recording, native qualification or either seed batch.
 
 This plan binds accepted G2 spec blob
-`7daf35706536e9ae73c88af704a6912e597a7a54` at main
-`4480601c448fb72921beeb1294fe5e5136b9b4a4` (PR #743).
+`7df51a030741ba610336d221d995e282c8ea689e` at main
+`3c59d28f7324da164cd27ff460334f80cfcaf136` (PR #745).
 The separate high-risk plan-only gate must pass before dependent code.
 RAW16 acquisition design
 locations retain historical source `c1d9d23e42e6efe2d6da1aae3d23b34564b4080d`
@@ -25,15 +25,19 @@ adoption pins and frozen `6f219579f72f73ddd3703f32b5f4a102ae8c175c` as
 historical anchors, not current resume identities. Earlier paused sources
 `29687ec75d573c53bf5c40523ca2b6dc2a302e11` and
 `2dd51dcd819b252cee6501c799b5f3fd9018c9ae` and
-`40022eb3b86c72b3d4d19b6e76cf21c68a41b371` are also historical. Current source is
-paused clean at `f2abe2b02963542fe6505bbc028a423842040880`, parent
-`c4a725382426be9fde80d1c0d769427d5584a55c`, tree
-`74701966839d17e1ef1b49ec20f283c9b70ea9b3`, base
-`06c1cfd32fe2ce91e8eb63f0e36f86a52acbd507`. Its D pins are source-bound;
-static pin agreement is not acquisition or semantic acceptance. Its previous GO
-is paused; B, T and complete C remain unaccepted. That paused source still
-has the prior artifacts; normally merge the accepted plan main into the preserved
-carrier before fresh exact-source preflight. The operator has accepted
+`40022eb3b86c72b3d4d19b6e76cf21c68a41b371` and
+`f2abe2b02963542fe6505bbc028a423842040880` are also historical. Current source is
+paused clean at `48cd106a2f364fcab012779e5e651769784c3a09`, parent
+`b8f3b9e064feb82590ff4d3b9bb99cc0f9f1d063`, tree
+`3a5e08f512a65a45cc1ce2a686c8e3e1a8656143`, base
+`389fdced92622b48b07a0e1f5f08b143011fc8b9`, on the preserved branch
+`codex/impl/eval-source-relay-replay`. Its D pins are source-bound;
+static pin agreement is not acquisition or semantic acceptance. B, T and complete
+C remain unaccepted. Scope source edits are not fully applied; the new budget
+implementation is not written. After this separate plan-only gate lands, normally
+merge accepted main into this same attempt, rebind the exact artifact/source tuple
+and obtain fresh independent source review and manager GO. No old GO resumes it.
+The operator has accepted
 the resource, fd3 v3 and retention contract; that decision grants no actual
 runtime collection/retention/window, unknown parent file, installation or
 activation. Independent plan acceptance and protected landing still precede code.
@@ -2060,7 +2064,99 @@ program→driver→launcher pin order. Preserve all SOURCE 84/9 adoption checks.
 The session wait proves only the eval chain; it does not close native finally,
 parent producer, host-publication work, qualification, capacity or genuine gates.
 
+### C3 fixed budget and actual return wiring
+
+Implement the accepted spec's C3 contract in the existing launcher, driver,
+coordinator and consumer owners. The spec is the sole wire/type/cap definition;
+do not create a second protocol, generic ledger service or public option.
+Keep the original 40 edit paths plus the sole C2 bootstrap exec, nine adoption-only
+paths, exact SOURCE 84, runtime roles and current 20-path source boundary. The
+manager's fresh GO must bind each actual edited path and author; this plan does
+not widen an existing narrower source assignment. No product control runs while
+the preserved attempt is paused or before that exact-source GO.
+
+| Order / existing owner | Implementation and exact source of values |
+| --- | --- |
+| 1 consumer accounting | Use `_capture_work_values`, `_capture_copy_budget_values/_room`, `_runtime_account`, `_capture_account/_observe/_transfer_work` and `_close_capture_copy` as the original accounting owners. Add one fixed private codec for the spec's named V55, scope ledger, errors/UNKNOWN and retained entities. Map every scalar/runtime/accounting/seed_processing field to these actual counters; mechanically enumerate source-bound original calls/sites. Keep original typed raw/export/source/preparation/Q receipts, not hashes or a permissive JSON payload. Check closed keys, bool versus integer, u64 range, canonical bytes, fixed scopes/actors and applicable original limits before allocation/work. Never serialize id(work), exception objects or callbacks. |
+| 2 P helpers and custody | Move only the finite `C2Helpers.build/run_and_check` orchestration into P's fixed methods. Reuse original business constructors, tools, compiler/verifier argv/env/order and validation positions. Keep its actual file/pipe/spawn/wait/close work in P. Do not replace original algorithms or put an unaccounted shell owner between P and D. Tool/C helper/Q work without actual source remains UNKNOWN. |
+| 3 P initial layout | After real GO and original staging/helper build, exclusively create the spec's replay-work and replay-budget.json below the same I/driver-input. Use the original empty/held/mode/uid/gid/ACL/nlink checks, complete initial namespace and true initial seal before launch. Keep budget and original inputs immutable and genuinely held; do not refresh parent stat to accept drift. Keep replay-work outside immutable case semantic inventories and ephemeral cleanup. |
+| 4 P budget and spawn | Build the complete cutoff from the live P/caller ledger and actual carry-in. Bind real START/READY/GO, predecessor/root, exact evaluator/source/seed/result/case bytes and empty-work identity. Use one fixed inventory/site-bound allocator for disjoint bootstrap/body/terminal grants plus reserved_parent; enforce every original case/window and overlapping projection, not one interchangeable byte allowance. Reserve budget-file creation/readback/hash/close costs, then charge their actual values to P after the cutoff. No reallocation in this operation, reset, refund or admission from the file alone. P posix_spawn/waits the original D with its seven argv/env and explicit unused-FD CLOSE list. |
+| 5 D malicious lifecycle | In the original driver script, enter fixed literal Python with shell builtin exec before external queries, only on the already controlled malicious branch. No heredoc/program file/command-substitution carrier. Preserve produce_result, seed order, both dashboard pairs, canonical output and every original result/observation/source check. Use global fixed case slot directly below replay-work for case_doc/privatework; never derive them from pair-$j local work. Retain original pair-result paths. Actual exclusive mkdir/held-empty checks precede each original four-operand C3 call; no new argument or inherited protocol FD. |
+| 6 C3 input and values | `_private_cli` admits only the spec's precise replay-work layout while preserving separation from case I/runtime; do not generally allow work under I. `_ReplayInputs` independently acquires/seals/hashes the complete I and exact source. `replay_case` consumes the original typed recipe and all actual owner fields. Close remaining scope/source-origin/private closed sets through their real owners; no recorded output, expected bytes, fixture or copied digest fills an input. |
+| 7 D/C3 return | Add the spec's fixed DATA/END/DONE codec on each original stdout pipe. DATA remains the exact original bytes and goes through the original downstream validators after the complete terminal proof. Before END, finish every regular-file/root/temporary-FD check/readback/hash/close, owned child wait/pipe close and original cleanup/retained registration. No regular-file tail exception. Only stdout/stderr remain. Fixed actor selects D common or the C3 case for shared codec/terminal work; no post-END scope switch. |
+| 8 D receive and P settle | D stores actual C3 PID/wait and complete END/DONE in sequence while independently checking DATA. P checks D directly and independently validates all embedded C3 receipts, input/source/budget bindings and tails. Charge actual repeated reads/parse/hash/equality to their respective owners. P imports own actual delta, D own/T/two-close rows and each C3 own/T/two-close rows exactly once using active operation/actor/scope/budget/spawn keys and counter/row watermarks; never import D's C3 aggregate a second time. |
+
+Use the spec's closed budget, grant, cutoff and ledger shapes without field
+aliases. The fixed mappings cover common and case scopes, all V55 values/calls/
+observations, five original receipt slots, retained identities and first/later
+errors. Actual bootstrap work before reading the budget remains in that actor's
+own delta. Only a new leaf starts at zero; old window/native/source/host/tool
+facts do not. Missing work or an incomplete source-shaped receipt is UNKNOWN,
+not a not-applicable owner or zero. Scope grants and reserved_parent occupy
+balance until complete settlement. Each action checks all its applicable rooms
+before work; refusal still keeps actual partial costs and occupancy.
+
+P retains replay-work's initial holder and identity. D/C3 record each original
+controlled creation/write/removal and its actual names/inodes/bytes/fees. At exact
+wait P checks the full created inventory, final namespace/identities/bytes and
+retained/failed entities from that fixed source-bound action list. END retained
+is only the list to verify, not authority or a replacement for real custody.
+Keep partial/zero/error files in operation custody on all exits; do not move them
+into scratch, delete them to fit, or merge equal-byte entities. Removed original
+temporaries retain their historical charges. Lost custody or an unreconstructable
+list is UNKNOWN/refusal, without a broader filesystem scan.
+
+Use the exact spec DATA/END lengths, whole-wire 1 MiB cap, bounded reads, closed
+END and YC3DONE1/u64 V55 layout. Preserve original smaller M/raw/object limits.
+Compute DATA digest before the END cutoff; encode END once and retain actual
+post-cutoff T, not a prediction. Require the fixed pipe-only tail, one DONE pack,
+one write returning 512 and the two original close observations before exit 0.
+Reconstruct complete close rows with their actual ordinal/source-bound encoder
+fees, not just close counts. D common/C3 case terminal grants and original
+scope/window caps include T, DONE and both rows. Receiver reconstruction/validation
+has its own actual charges. Keep strict CPython EINTR assumptions; unsupported
+or unmeasured behavior stays UNKNOWN, without a syscall shim or new probe.
+
+Drain stdout/stderr together and exact-wait each owned child. Partial wire,
+nonempty stderr, missing/extra/reordered frames, missing close/EOF, nonzero/signal,
+first KeyboardInterrupt or later marked error must retain original result/error
+precedence, partial bytes, known costs and retained entities. An unreturned final
+tail remains UNKNOWN; no fabricated received error row, retry or refund. Only
+after its original independent result/pair/source and S/I/root final checks and
+closes may P send settled actual work through the unchanged C2 END/DONE. Original
+caller C still performs its own final receive/wait/close and advances the live
+head only after complete actual settlement. No user success before termination.
+
+**Original unobserved ancestor ACLs.** In consumer retain_storage/projectors and
+the fixed coordinator RAW07 validator, preserve original held/path/components
+order and full parent/name/identity relationships. Emit the spec's paired typed
+sentinel only when the actual bound `_store_rule(ancestor=True)` skipped ACLs
+and both original keys are absent. Never add a native ACL read, infer the rule
+from a single path, replace observed leaf null/[] or waive sudo/leaf ACL checks.
+Consume every absolute ancestor in its held chain. Build origin only from its
+original complete relative store subset and actual ACL/byte/inode facts; no mixed
+or unused rows, missing identities or changed origin bytes.
+
+**Scope and no-coverage routing.** Keep the actual _Reader/_HeldCoverageRead
+session and original closed request schemas. On the original no-coverage branch,
+take session.kill_request from the successful actual `_HeldCoverageRead`
+consumption for that Reader's own four runtime O→P→S inputs. Do not invent a
+kind, add a query, use another Reader's copy or fabricate an acquisition. Preserve
+each caller's original source-package/operation/origin/private roles and branch
+absence rules. Each typed recipe argument still comes from its real constructor
+and raw input; missing dependent facts block their own path.
+
 ### Finite regression matrix
+
+Freeze one coherent new source head before the new finite C3 controls. Preserve
+actual invocation/argv/env, before/after source bytes, full stdout/stderr/private
+frames, owned PID/wait, actual fees/retained entities, first/later errors and pins.
+Run necessary controls once on that head; source changes or failures justify the
+affected rerun. Verify exact byte/dependency/branch binding before reusing old
+proof. Do not borrow or reset the original seven-window/LOCAL7/D opportunities.
+All original G3/integration, required full-CI milestones, SOURCE/native/finally/
+host/M/Q/tool qualification and genuine four-case/seed proof remain due. This
+plan grants no real execution GO.
 
 Every new row must run through the same production value owner and its offline
 caller. Baseline succeeds as an ordinary data construction or preserves the current
@@ -2107,6 +2203,13 @@ all old RAW/DER/ROUTE/LIM/CLO/I5/SURF/ARC and export/completion tests:
 | C2.manifest | Actual assembly→closed S→manifest: preserve original names and every role; cross-case/occurrence/output swap, missing/extra/unused file, kind-as-role, raw/manifest confusion, complete.json omission and encoded cap/one-over refuse. A normal bounded fixture traverses the real CLI, not a receipt dictionary. |
 | C2.authority | One four-case ledger through both run inputs and the two dashboard pairs; old O, two small failed partials, zero files and distinct I remain charged. Disk rollback/new START, changed live head after READY, missing/duplicate/reordered messages, missing GO, single FD, wrong root/name/ACL and no-FD malicious bypass refuse before I. |
 | C2.lifetime | Check original driver and every independent program/pair/canonical/pin validation while S/I holds live; each initial/final hash, whole equality and identity deletion has a paired failure. Equal mutation of both copies still refuses. Wrong helper FD inheritance, extra wrapper PID, file_action failure, exec error, signal, retained cleanup or once-close failure cannot succeed. |
+| C3.budget | Existing candidate-content-preparation-fixtures CLI caller and evals-malicious/framework controls: true P→D→C3 bounded success, multi-case and both dashboard pairs share actual operation accounting without slot/grant reuse. Missing/stale/mismatched budget, repeated actor, cross-case grant, missing current GO, UNKNOWN, bootstrap overrun and cumulative exhaustion refuse. One-time import preserves every scalar/runtime/class/seed-processing overlap and full owner receipt. |
+| C3.terminal | Existing evals-malicious/framework controls: full original DATA/END/YC3DONE1/512, empty stderr, EOF and exact PID/wait together; regular-file/root/owned-child checks and close are actual before END. Partial DATA/END/DONE, positive short/zero write, signal, missing EOF/wait, first KeyboardInterrupt followed by marked secondary error, final close/observation/settlement failure retain prefixes/entities/costs and UNKNOWN. Preserve both original early cleanup-failure controls and original precedence. D tail is common, C3 tail its case; wrong scope/insufficient terminal grant refuses. |
+| C3.custody | Existing preparation fixtures and evals-malicious: true initial empty replay-work/budget seals, operation-global slots across pairs, exclusive case work, independent I and immutable input seals. Unknown namespace/inode/parent drift, lost custody or retained deletion refuses. Actual legal mutations remain verifiable without refreshing drift away; partial/zero/error files stay retained and charged. |
+| C3.routes | Existing private source-copy mutation route: separately delete/mutate P budget guard, disjoint grant/current-GO binding, original source/full-I checks, actual child import/settlement, fixed END/DONE/close verification and production/offline consumer calls. Each paired control fails with valid companion calls intact. A fixture receipt cannot replace execution. |
+| RAW07.ancestor | Existing evals-malicious, candidate-content-preparation and scope owner tests: real unobserved ancestor pair and real leaf null/[] positives. Leaf/sudo/unknown-rule/one-missing/deleted-observation sentinel, missing identity, reordered/unused ancestor or mixed origin subset refuses. Original origin bytes/native predicates remain. Separately deleting projector/consumer calls fails its pair. |
+| C3.scope | Existing evals-malicious/scope-gate-generation controls: original no-coverage Reader consumes actual held session.kill_request for its own four runtime O→P→S inputs; reached coverage is checked separately. Cross-session/copy, added query/kind, missing role/origin/private input or recorded/expected recipe substitution refuses through the real fixed owner. |
+| C3.fit | Original guard owners prove bounds/one-over in layers; end-to-end checks tighter whole stdout/M/raw/window limits and complete child END/observations. Complete actual four-case fit stays separate from the small mechanism positive. Reuse old evidence only after checking unchanged bytes/dependencies/pins/branch; keep required proof without blindly reopening all cap matrices. |
 | C2.tail | Positive exact 512 DONE plus all three original close rows and caller settlement; short/zero write, invalid implicit-EINTR conditions, missing END/DONE/EOF, nonzero/signal wait, false PID relation, caller close error, unknown work and insufficient reservation refuse. Independently recalculate actual vector/rows/costs and delete each admission/close/tail check in the existing private mutation route; each paired assertion fails. |
 | C2.compatibility | Exact original public argv/env/result/error/canonical semantics, trace.cost absent and non-malicious routes pass their existing full suites. Bootstrap differs only by exec; evaluator bootstrap hash changes and tamper rejects. Helpers remain fixed-source, SOURCE 84 and nine adopted files unchanged. No ordinary fixture claims native/qualified seed success. |
 | CASE.layout | Complete v2 case with two independently bound launches, four preparation entries, both gate contexts and each reached source. Different setup/PID/REST/clocks survive assembly and original-owner projection. Reject duplicate/missing/extra/reordered entries, wrong containers, default empty groups, ambiguous v1 and omitted non-export observations. |
@@ -2461,8 +2564,8 @@ gates (R9.6).
   cannot leave the PR whose test checks their digests.
 - PR 3: `review_size: standard`, about 300-400 net added lines.
 - This plan-only amendment: `review_size: standard`. One concern: the accepted
-  fixed C2 window session, its manifest, retention, exact bootstrap dependency and
-  complete proof. PR 1b retains its complete-concern range above.
+  fixed C3 budget, actual return/retention and ancestor type, with their complete
+  owner wiring and proof. PR 1b retains its complete-concern range above.
 
 Each range waives only the soft line signal, never scope, tests, CI, review or human
 merge.
