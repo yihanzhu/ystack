@@ -1744,11 +1744,13 @@ class _SeedAssembly:
         for index, copied in enumerate(carriers):
             configuration_copy = (phase in {"kill", "coverage"}
                 and type(copied) is getattr(owner, "_HeldSourceConfigurationCopy", None))
+            retained_runtime = (self._gate_closed_coverage_runtime(copied, native)
+                if phase == "coverage" and copied.closed else None)
             _seed_require((type(copied) is owner._HeldCaptureCopy or configuration_copy)
                 and copied.anchor is native.anchor
-                and not copied.closed and bool(copied.owned) and copied.directory is not None)
+                and (retained_runtime is not None or not copied.closed and bool(copied.owned) and copied.directory is not None))
             self._include_case(copied)
-            copied.recheck()
+            if retained_runtime is None:copied.recheck()
             _seed_require(not owner._capture_work_incomplete(copied.leaf) and not copied.leaf.get("metadata_failure"))
             if copied is capture_P:
                 semantic_role = "capture"
@@ -1784,7 +1786,7 @@ class _SeedAssembly:
                 _seed_require(row["attempt_id"] == self.c._json(self.bindings[phase]["caller_raw"], self.c.DOCUMENT_LIMIT, "E_STORE")["id"] and row["request_sha256"] == owner.digest(self.bindings[phase]["caller_raw"]))
                 expected_bytes = {}
                 expected_rows = {row["file"]: row for row in row["files"]}
-            elif copied.directory.components[-1].name in {"preparation-runtime-prepare", "preparation-runtime-inspect"}:
+            elif retained_runtime is None and copied.directory.components[-1].name in {"preparation-runtime-prepare", "preparation-runtime-inspect"}:
                 operation = copied.directory.components[-1].name.rsplit("-", 1)[1]
                 previous = self.bindings[phase + "." + operation]
                 _seed_require(previous["P"][0] is copied)
@@ -1800,6 +1802,11 @@ class _SeedAssembly:
                 _seed_require(set(copied.members) <= set(expected_rows) and copied.runtime_sha256)
             for name, held in sorted(copied.members.items()):
                 _seed_require(type(name) is str and "/" not in name and type(held) is owner.HeldPath)
+                source_anchor = native.anchor
+                if retained_runtime is not None:
+                    _seed_require(name == retained_runtime["invoice"]["file"] and held is retained_runtime["source"])
+                    held = retained_runtime.get("recorded_target", retained_runtime["target"])
+                    source_anchor = self.anchor
                 if name in copied.runtime_sha256:
                     expected, kind = copied.runtime_sha256[name], "runtime"
                 elif name == "sandbox-export.bin":
@@ -1820,12 +1827,14 @@ class _SeedAssembly:
                     _seed_require(name in expected_rows and held.before.st_size == expected_rows[name]["size_bytes"])
                     expected, kind = expected_rows[name]["sha256"], "M"
                 output = "exports/" + phase + ".bin" if kind == "export" else phase + "-" + str(index).zfill(2) + "-" + name
+                directory_name = (Path(retained_runtime["directory"]).name if retained_runtime is not None
+                    else copied.directory.components[-1].name)
                 member = ("configuration/" + next(key for key, row in configuration_members.items()
-                    if row["member"] == name)) if configuration_copy else copied.directory.components[-1].name + "/" + name
-                installed = self._semantic_copy(native.anchor, held, output, expected, kind,
+                    if row["member"] == name)) if configuration_copy else directory_name + "/" + name
+                installed = self._semantic_copy(source_anchor, held, output, expected, kind,
                     phase, semantic_role, member)
                 facts.append((name, expected, installed.before.st_size))
-            copied.recheck()
+            if retained_runtime is None:copied.recheck()
         if phase in {"reproduction", "write"}:
             _seed_require(all(phase + "." + operation in self.bindings for operation in ("prepare", "inspect")))
             _seed_require(any(set(item.members) == {"parent-frame.bin", "helper-build-record.json", "native-dependency-record.json"}
@@ -1948,10 +1957,15 @@ class _SeedAssembly:
         caller = self.bindings[phase]["caller_raw"]
         rows = [{key: row[key] for key in ("slot", "index", "ordinal", "locator", "file", "size_bytes", "sha256", "errno")}
             for row in source_rows if row["request_sha256"] == owner.digest(caller)]
-        _seed_require(rows and {row["file"] for row in rows}
-            == {name for copied in carriers if copied is not capture_P
-                and not copied.directory.components[-1].name.startswith("preparation-runtime-")
-                for name in copied.runtime_sha256})
+        runtime_names = set()
+        for copied in carriers:
+            if copied is capture_P:continue
+            if copied.directory is None:
+                _seed_require(phase == "coverage")
+                self._gate_closed_coverage_runtime(copied, self.bindings[phase]["native"])
+            elif copied.directory.components[-1].name.startswith("preparation-runtime-"):continue
+            runtime_names.update(copied.runtime_sha256)
+        _seed_require(rows and {row["file"] for row in rows} == runtime_names)
         if phase in {"kill", "coverage"}:
             complete = [{key: row[key] for key in ("slot", "index", "ordinal", "locator", "file", "size_bytes", "sha256", "errno")}
                 for row in source_rows]
@@ -2466,12 +2480,16 @@ class _SeedAssembly:
                 native = self.gate_session.kill_source
                 capture_P, local_P = self._gate_kill_carriers()
                 self.kill(native, capture_P, local_P)
+                self.scope_reader_inputs(generator.reader, generator=True)
             except BaseException as error:
                 self._failed(error, "seed-gate-K_DONE")
                 if isinstance(self.failure, KeyboardInterrupt) or getattr(self.failure, "_scope_signal_cancel", False):
                     raise self.failure
             manifest_owner = module._Generator._run_after_kill(generator, register_raw)
             try:
+                if self.gate_session.coverage_source is not None:
+                    self._gate_generator_runtime_inputs()
+                    self._gate_coverage_occurrence()
                 self.gate()
                 self.gate_output_members()
             except BaseException as error:
@@ -2527,6 +2545,103 @@ class _SeedAssembly:
         _seed_require(invoice_rows and len(selected) == len(invoice_rows)
             and all(any(row is actual for actual in selected) for row in invoice_rows))
         return captures[0], local
+
+    def _gate_generator_runtime_inputs(self):
+        reader = self.generator.reader
+        context = self.gate_session.p_handoff
+        _seed_require(type(context) is self.c._C1PHandoffParent and context.session is self.gate_session
+            and context.root is self.root and context.work is self.work
+            and not context.unusable and context.generator_runtime_stages)
+        stages = self.__dict__.setdefault("_scope_P_stages", [])
+        for recorded in context.generator_runtime_stages:
+            source, copied, target = recorded["source"], recorded["copied"], recorded["target"]
+            _seed_require(recorded["reader"] is reader and copied.anchor is reader.anchor
+                and copied.scope_runtime_acquisition is recorded["association"]
+                and recorded["association"][0] is recorded["invoice"]
+                and recorded["association"][3] is source and copied.closed and not copied.owned
+                and not source.components and not self.c._capture_work_incomplete(copied.leaf)
+                and not reader.anchor.private_observations.get("unusable", False))
+            name, invoice = recorded["name"], recorded["invoice"]
+            context._equal_M(self.c._c1_p_side_raw(recorded["invoice"], self.work), recorded["invoice_raw"])
+            _seed_require(any(item is target for item in self.output_holds) and self.files[name] == {
+                "size_bytes": recorded["size_bytes"], "sha256": recorded["sha256"], "kind": "runtime"})
+            target.recheck("E_STORE", self.work, "M")
+            member = "generator/" + invoice["file"]
+            _seed_require(name not in self.semantic_expected and id(source) not in self.source_occurrences
+                and not any(item["reader"] is reader and item["member"] == member for item in stages))
+            self.semantic_expected[name] = ("gate", "local-runtime", member,
+                recorded["size_bytes"], recorded["sha256"], "runtime")
+            self._semantic_record("gate", "local-runtime", member, name)
+            self.source_occurrences.add(id(source))
+            self._gate_recorded_retained_runtime(recorded)
+            stages.append({"reader": reader, "context": "generator", "member": member,
+                "source": source, "copied": copied, "name": invoice["file"],
+                "expected": recorded["sha256"], "kind": "runtime", "identity": recorded["identity"],
+                "size_bytes": recorded["size_bytes"], "target": target, "key": name,
+                "parent_runtime_stage": recorded})
+        self._transfer()
+
+    def _gate_recorded_retained_runtime(self, recorded):
+        path = Path(recorded["source"].path)
+        if not path.is_relative_to(self.generator.output):return
+        member = "generator/" + path.relative_to(self.generator.output).as_posix()
+        registry = self.__dict__.setdefault("gate_recorded_members", {})
+        _seed_require(member not in registry and recorded["reader"] is self.generator.reader
+            and recorded["target"].components and recorded["copied"].closed)
+        name = "gate-output-%03d" % len(registry)
+        _seed_require(name not in self.semantic_expected and len(registry) < 256)
+        self.semantic_expected[name] = ("gate", "recorded", member,
+            recorded["size_bytes"], recorded["sha256"], "runtime")
+        target = self._copy(self.anchor, recorded["target"], name, recorded["sha256"],
+            "runtime", source_mode=0o400)
+        self._semantic_record("gate", "recorded", member, name)
+        registry[member] = {"reader": recorded["reader"], "held": recorded["source"],
+            "copied": recorded["copied"], "expected": recorded["sha256"], "kind": "runtime",
+            "identities": recorded["identity"], "file": name, "target": target}
+        recorded["recorded_target"], recorded["recorded_name"] = target, name
+        self._transfer()
+
+    def _gate_closed_coverage_runtime(self, copied, native):
+        context = self.gate_session.p_handoff
+        _seed_require(type(context) is self.c._C1PHandoffParent and not context.unusable
+            and context.session is self.gate_session and context.root is self.root
+            and native is self.gate_session.coverage_source and copied.closed and not copied.owned
+            and copied.directory is None and copied.anchor is self.generator.reader.anchor
+            and not self.c._capture_work_incomplete(copied.leaf))
+        matches = [row for row in context.generator_runtime_stages if row["copied"] is copied]
+        _seed_require(len(matches) == 1)
+        row = matches[0]
+        context._equal_M(self.c._c1_p_side_raw(row["invoice"], self.work), row["invoice_raw"])
+        _seed_require(row["reader"] is self.generator.reader and copied.scope_runtime_acquisition is row["association"]
+            and row["association"][0] is row["invoice"] and row["association"][3] is row["source"]
+            and not row["source"].components and copied.members.get(row["invoice"]["file"]) is row["source"])
+        staged = [item for item in self.__dict__.get("_scope_P_stages", [])
+            if item.get("parent_runtime_stage") is row and item["copied"] is copied]
+        _seed_require(len(staged) == 1 and staged[0]["identity"] == row["identity"]
+            and staged[0]["target"] is row["target"] and row["name"] in self.semantic)
+        caller = self._wrapper_parse(native.capture.request_raw, "coverage-closed-runtime-caller")
+        _seed_require(row["invoice"]["request_sha256"] == self._digest(native.capture.request_raw, "M")
+            and row["invoice"]["attempt_id"] == caller["id"]
+            and any(value is row["invoice"] for value in copied.anchor.private_observations["local_runtime"]))
+        row["target"].recheck("E_STORE", self.work, "M")
+        _seed_require(row["target"].before.st_size == row["size_bytes"]
+            and self.files[row["name"]] == {"size_bytes": row["size_bytes"], "sha256": row["sha256"], "kind": "runtime"})
+        return row
+
+    def _gate_coverage_occurrence(self):
+        reader, native = self.generator.reader, self.gate_session.coverage_source
+        _seed_require(self.gate_session.phase == "FINAL_OWNER" and self.gate_session.owner_confirmed
+            and native is not None and reader.commands_open and "coverage" not in self.occurrences)
+        captures = [item for item in reader.source_copies
+            if getattr(item, "scope_source", None) is native and not item.closed]
+        configurations = [item for item in reader.source_copies
+            if getattr(item, "source_configuration_source", None) is native and not item.closed]
+        _seed_require(len(captures) == len(configurations) == 1)
+        runtime = []
+        for row in self.gate_session.p_handoff.generator_runtime_stages:
+            self._gate_closed_coverage_runtime(row["copied"], native)
+            runtime.append(row["copied"])
+        self.coverage(native, captures[0], [configurations[0], *runtime])
 
     def gate_output_members(self):
         try:
@@ -3217,7 +3332,7 @@ class _SeedAssembly:
 
     def _scope_existing_S(self, reader, copied, name, context):
         # Reuse is determined by the actual P object and original phase binding.
-        phases = ("kill",) if context == "generator" else ("coverage",)
+        phases = ("kill", "coverage") if context == "generator" else ("coverage",)
         for phase in phases:
             if phase not in self.bindings:continue
             binding = self.bindings[phase]
@@ -3280,7 +3395,13 @@ class _SeedAssembly:
             _seed_require(len(candidates) == 1)
             copy = candidates[0]
             _seed_require(copy.anchor is anchor and row["file"] in copy.members
-                and copy.runtime_sha256[row["file"]] == row["sha256"] and copy.members[row["file"]].before.st_size == row["size_bytes"])
+                and copy.runtime_sha256[row["file"]] == row["sha256"])
+            if copy.members[row["file"]].components:
+                _seed_require(copy.members[row["file"]].before.st_size == row["size_bytes"])
+            else:
+                retained = [item for item in self.__dict__.get("_scope_P_stages", [])
+                    if item["reader"] is reader and item["copied"] is copy and item["name"] == row["file"]]
+                _seed_require(len(retained) == 1 and retained[0]["size_bytes"] == row["size_bytes"])
             if not copy.closed:copy.recheck()
             self._scope_stage_P(reader, copy, row["file"], None, row["sha256"], "runtime", context, context + "/" + row["file"])
             if not copy.closed:copy.recheck()
@@ -3352,10 +3473,11 @@ class _SeedAssembly:
         if previous:
             row = previous[0]
             _seed_require(row["source"] is source and row["copied"] is copied and row["name"] == name
-                and row["expected"] == expected and row["kind"] == kind
-                and row["identity"] == owner._identity(source.before))
+                and row["expected"] == expected and row["kind"] == kind)
             target = row["target"]
-            if source.components:self._scope_check_P_S(reader, source, target, expected, kind)
+            if source.components:
+                _seed_require(row["identity"] == owner._identity(source.before))
+                self._scope_check_P_S(reader, source, target, expected, kind)
             else:
                 _seed_require(copied is not None and copied.closed and not copied.owned
                     and not owner._capture_work_incomplete(copied.leaf)
@@ -3364,22 +3486,21 @@ class _SeedAssembly:
             return row["key"]
         _seed_require(source.components and (copied is None or not copied.closed))
         existing = self._scope_existing_S(reader, copied, name, context) if copied is not None else None
+        copy_source, copy_anchor = source, reader.anchor
         if existing is not None:
             key, row, held = existing
             _seed_require(row["kind"] == kind and row["size_bytes"] == source.before.st_size and row["sha256"] == expected)
             self._scope_check_P_S(reader, source, held, expected, kind)
-            stages.append({"reader": reader, "context": context, "member": member,
-                "source": source, "copied": copied, "name": name, "expected": expected, "kind": kind,
-                "identity": owner._identity(source.before), "target": held, "key": key})
-            return key
+            copy_source, copy_anchor = held, self.anchor
         target = "gate-" + context + "-" + member.replace("/", "--")
         _seed_require(len(os.fsencode(target)) <= 255)
-        self._semantic_copy(reader.anchor, source, target, expected, kind, "gate", "capture" if kind != "runtime" else "local-runtime", member)
+        self._semantic_copy(copy_anchor, copy_source, target, expected, kind, "gate", "capture" if kind != "runtime" else "local-runtime", member)
         held = [item for item in self.output_holds if item.path == self.root.path + "/" + target]
         _seed_require(len(held) == 1)
         stages.append({"reader": reader, "context": context, "member": member,
             "source": source, "copied": copied, "name": name, "expected": expected, "kind": kind,
-            "identity": owner._identity(source.before), "target": held[0], "key": target})
+            "identity": owner._identity(source.before), "size_bytes": source.before.st_size,
+            "target": held[0], "key": target})
         return target
 
 

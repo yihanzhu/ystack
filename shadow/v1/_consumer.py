@@ -6555,6 +6555,7 @@ class _C1PHandoffParent:
         self.source_documents = {}
         self.closed_serials, self.receipts = set(), []
         self.runtime_invoices, self.runtime_serials = {}, {}
+        self.generator_runtime_stages = []
         self.failure = None
         self.child_work = {}
         _capture_work_values(self.child_work, "C1-inner-Reader")
@@ -6771,17 +6772,100 @@ class _C1PHandoffParent:
             _require(type(configuration.source_inputs) is dict and names[name] in configuration.source_inputs, "E_STORE")
             self._equal_M(raw, configuration.source_inputs[names[name]][0])
 
+    def _runtime_target(self, source, name, expected):
+        _require(name not in self.files and len(self.files) < 256, "E_LIMIT")
+        self.root.recheck("E_STORE")
+        before = self.root.before
+        snapshot = _RuntimeSnapshot(source, self.work, _c1_retained_P=True)
+        _require(snapshot.acquisition_sha == expected, "E_STORE")
+        state, measured = _copy_runtime_file(self.root.fd, name, snapshot, self.work, self.anchor.resolver)
+        self._refresh_S(before)
+        target = _open_child(self.root, name, False,
+            _store_rule(os.geteuid(), os.getegid(), 0o400, False, self.anchor.resolver),
+            "E_STORE", recording_work=self.work, accounting_kind="M")
+        try:
+            _require(_identity(target.before) == _identity(state), "E_STORE")
+            self.output_holds.append(target)
+        except BaseException as error:
+            if not (self.output_holds and self.output_holds[-1] is target):error = _c1_p_close(target, self.work, error)
+            raise error
+        source.recheck("E_STORE")
+        self.files[name] = {"size_bytes": source.before.st_size, "sha256": measured, "kind": "runtime"}
+        return target, measured
+
+    def _stage_generator_coverage_runtime(self):
+        reader, caller = self.session.reader, self.session.coverage_request_raw
+        _require(self.session.phase == "C_REQUEST" and reader.commands_open
+            and reader.anchor is self.anchor and self.anchor.scope_runtime_owner is reader
+            and type(caller) is bytes and not self.generator_runtime_stages, "E_STORE")
+        _capture_copy_room(self.work, 2 * len(caller), False, read_only=True)
+        caller_sha = digest(caller)
+        self.work["read_bytes"] += len(caller)
+        _capture_account(self.work, "M", "read_bytes", len(caller))
+        request = _json(caller, DOCUMENT_LIMIT, "E_STORE")
+        self.work["read_bytes"] += len(caller)
+        _capture_account(self.work, "M", "read_bytes", len(caller))
+        processing = self.work.setdefault("seed_processing", {})
+        processing["H"] = processing.get("H", 0) + len(caller)
+        processing["R"] = processing.get("R", 0) + len(caller)
+        fields = ("slot", "index", "ordinal", "locator", "file", "size_bytes", "sha256", "errno")
+        _runtime_inventory_values({"files": [{key: row[key] for key in fields}
+            for row in self.anchor.private_observations["local_runtime"]]})
+        wanted = [row for row in self.anchor.private_observations["local_runtime"]
+            if row["request_sha256"] == caller_sha and row["attempt_id"] == request["id"]]
+        selected = []
+        for copied in reader.source_copies:
+            association = getattr(copied, "scope_runtime_acquisition", None)
+            if association is None:continue
+            _require(type(association) is tuple and len(association) == 4, "E_STORE")
+            row, snapshot, original, source = association
+            if not any(row is item for item in wanted):continue
+            _require(type(copied) is _HeldCaptureCopy and copied.work is self.window_work
+                and any(copied.case_work is value for value in self.window_work.get("cases", {}).values()), "E_STORE")
+            if not any(copied.case_work is value for value in self.case_sources):self.case_sources.append(copied.case_work)
+            self._budget()
+            _require(type(copied) is _HeldCaptureCopy and copied.anchor is self.anchor
+                and not copied.closed and copied.directory is not None and copied.owned
+                and type(snapshot) is _RuntimeSnapshot and snapshot.owner is original
+                and type(original) is HeldPath and original.components
+                and copied.members.get(row["file"]) is source and source.components
+                and not any(row is previous for previous in selected), "E_STORE")
+            copied.recheck()
+            _c1_p_runtime_invoice_values(row, {"name": row["file"], "ordinal": row["ordinal"],
+                "size_bytes": row["size_bytes"], "sha256": row["sha256"]})
+            _require(not _capture_work_incomplete(copied.leaf)
+                and copied.runtime_sha256 == {row["file"]: row["sha256"]}
+                and source.before.st_size == row["size_bytes"] and row["locator"] == original.path
+                and snapshot.acquisition_sha == row["sha256"], "E_STORE")
+            invoice_raw = _c1_p_side_raw(row, self.work)
+            name = "gate-generator-precoverage-runtime-%04d.bin" % row["ordinal"]
+            initial = _identity(source.before)
+            directory = copied.directory.path
+            target, measured = self._runtime_target(source, name, row["sha256"])
+            self._compare(source, target, row, "runtime")
+            copied.recheck()
+            self.generator_runtime_stages.append({"reader": reader, "copied": copied,
+                "association": association, "invoice": row, "invoice_raw": invoice_raw,
+                "source": source, "identity": initial,
+                "directory": directory, "target": target, "initial_S_identity": _identity(target.before), "name": name,
+                "size_bytes": row["size_bytes"], "sha256": measured})
+            selected.append(row)
+        _require(wanted and len(selected) == len(wanted)
+            and all(any(row is actual for actual in selected) for row in wanted), "E_STORE")
+
     def _stage_member(self, source, row, kind):
         serial = row["serial"]
         name = "gate-scope-reader-p-%04d.bin" % serial
         _require(name not in self.files and len(self.files) < 256, "E_LIMIT")
-        self.root.recheck("E_STORE")
-        before, target = self.root.before, None
         if kind == "runtime":
-            snapshot = _RuntimeSnapshot(source, self.work, _c1_retained_P=True)
-            _require(snapshot.acquisition_sha == row["sha256"], "E_STORE")
-            state, expected = _copy_runtime_file(self.root.fd, name, snapshot, self.work, self.anchor.resolver)
+            target, expected = self._runtime_target(source, name, row["sha256"])
+            row_raw = _c1_p_side_raw(row, self.work)
+            return {"row": row, "row_raw": row_raw, "name": name, "target": target,
+                "initial_identity": _identity(target.before), "kind": kind,
+                "semantic": _c1_p_semantic_values(row)}
         else:
+            self.root.recheck("E_STORE")
+            before, target = self.root.before, None
             raw = self._read_M(source, EXECUTABLE_LIMIT)
             self._validate_M(row, raw)
             _capture_copy_room(self.work, len(raw), False, read_only=True)
@@ -6882,6 +6966,7 @@ class _C1PHandoffParent:
             self.unusable = True
             return
         self._budget()
+        if phase == "C_REQUEST":self._stage_generator_coverage_runtime()
         batch = _c1_p_batch_check(value, self.work)
         if batch["state"] == "unusable":
             self.unusable = True
@@ -7133,6 +7218,13 @@ class _C1PHandoffParent:
             and "FINAL_OWNER" in self.batches and "CLOSED" in self.settlements
             and ("C_REQUEST" not in self.batches or "C_RELEASED" in self.settlements)
             and set(self.records) == self.closed_serials, "E_STORE")
+        for record in self.generator_runtime_stages:
+            copied, target = record["copied"], record["target"]
+            _require(copied.closed and not copied.owned and not record["source"].components
+                and not _capture_work_incomplete(copied.leaf)
+                and _identity(target.before) == record["initial_S_identity"], "E_STORE")
+            self._equal_M(_c1_p_side_raw(record["invoice"], self.work), record["invoice_raw"])
+            target.recheck("E_STORE", self.work, "M")
         for record in self.records.values():
             if record.get("excluded_current", False):continue
             target = record["target"]

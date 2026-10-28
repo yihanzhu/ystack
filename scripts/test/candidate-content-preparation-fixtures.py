@@ -8256,10 +8256,24 @@ def raw16_C3_run_gate_capture_refusal(root: Path, evidence=None) -> None:
             stop=OSError(5,'native session.complete stop sentinel')
             closing=OSError(5,'secondary after actual held leaf FD close')
             events=[];close_errors=[]
-            def controlled_values(actual):
-                assert actual is generator and session.phase=='FINAL_OWNER'
+            def controlled_request(actual):
+                assert actual is generator
+                events.append('request')
+                return (reader, session, {}, b'ordinary controlled request')
+            def controlled_release():
+                events.append('release')
+            def controlled_result(actual, context):
+                assert actual is generator and context[0] is reader and context[1] is session
+                events.append('result')
+                session.phase='K_DONE'
+                return b'ordinary controlled register'
+            def controlled_values(actual, register_raw):
+                assert actual is generator and session.phase=='K_DONE'
+                assert register_raw==b'ordinary controlled register'
                 events.append('controlled-values')
+                session.phase='FINAL_OWNER'
                 return owner
+            assembly.release_gate_local=controlled_release
             def stop_complete():
                 events.append('session.complete')
                 assert assembly.failure is not None and not isinstance(assembly.failure,KeyboardInterrupt)
@@ -8267,7 +8281,9 @@ def raw16_C3_run_gate_capture_refusal(root: Path, evidence=None) -> None:
                 assert assembly.work['seed_incomplete'] is True
                 raise stop
             session.complete=stop_complete
-            native_values=g._Generator._run_after_inputs
+            native_request=g._Generator._kill_source_request_phase
+            native_result=g._Generator._kill_source_result_phase
+            native_values=g._Generator._run_after_kill
             native_close=g._Generator.close
             native_fd_close=c.os.close
             target_fd=owner.held.fd
@@ -8283,7 +8299,9 @@ def raw16_C3_run_gate_capture_refusal(root: Path, evidence=None) -> None:
                     close_errors.append(closing)
                     raise closing
                 return result
-            g._Generator._run_after_inputs=controlled_values
+            g._Generator._kill_source_request_phase=controlled_request
+            g._Generator._kill_source_result_phase=controlled_result
+            g._Generator._run_after_kill=controlled_values
             g._Generator.close=close_generator
             c.os.close=close_fd
             caught=None
@@ -8291,7 +8309,7 @@ def raw16_C3_run_gate_capture_refusal(root: Path, evidence=None) -> None:
                 try:assembly.run_gate()
                 except BaseException as error:caught=error
                 assert caught is stop, ('native tail error replaced',type(caught).__name__)
-                assert events==['controlled-values','session.complete','Generator.close']
+                assert events==['request','release','result','controlled-values','session.complete','Generator.close']
                 assert assembly.gate_close_attempted and not generator.active and not generator.held
                 assert not owner.held.components and fd_attempts==[target_fd]
                 assert not (output/'completion/COMPLETE.json').exists()
@@ -8310,7 +8328,9 @@ def raw16_C3_run_gate_capture_refusal(root: Path, evidence=None) -> None:
                     'work':assembly.work,'capture_work':generator.capture_output_work,
                     'full_close_fees':'UNKNOWN','qualification':'controlled pre-values seam; gate actual refusal; no successful native/session peer qualification'})
             finally:
-                g._Generator._run_after_inputs=native_values
+                g._Generator._kill_source_request_phase=native_request
+                g._Generator._kill_source_result_phase=native_result
+                g._Generator._run_after_kill=native_values
                 g._Generator.close=native_close
                 c.os.close=native_fd_close
                 # Only unfinished resources remain cleanup responsibility.
@@ -9019,3 +9039,126 @@ def raw16_C1_wire_recording_isolation(root: Path, evidence=None) -> dict:
                         'receiver_errors': getattr(receiver, 'recording_errors', []),
                         'caught': caught, 'cost': 'UNKNOWN'}, stream, sort_keys=True, default=error_value)
     return {'controls': results, 'cost': 'UNKNOWN', 'qualification': 'mechanism-only; actual-parent/main/FD6/native NOTRUN'}
+
+
+def raw16_C1_generator_coverage_runtime(root: Path, evidence=None) -> dict:
+    import tempfile
+    import traceback
+    spec = importlib.util.spec_from_file_location('C1_precoverage_generator', root/'scope/v1/generate-gate-evidence.py')
+    g = importlib.util.module_from_spec(spec);sys.modules[spec.name] = g;spec.loader.exec_module(g)
+    c, r = g.c, g.r
+    resolver = c._DarwinUUIDResolver() if sys.platform == 'darwin' else None
+    base = Path(tempfile.mkdtemp(prefix='ystack-C1-precoverage-')).resolve()
+    os.chown(base, os.geteuid(), os.getegid())
+    raw = b'ordinary never-executed coverage runtime\n' * 1800
+    results = []
+    for label in ('original-acquisition', 'equal-foreign-row', 'changed-locator'):
+        folder = base/label;folder.mkdir(mode=0o700);os.chown(folder, os.geteuid(), os.getegid())
+        for name in ('original', 'P', 'S'):
+            path = folder/name;path.mkdir(mode=0o700);os.chown(path, os.geteuid(), os.getegid())
+        original = folder/'original/python';original.write_bytes(raw);original.chmod(0o400)
+        os.chown(original, os.geteuid(), os.getegid())
+        work = {}
+        c._capture_work_values(work, 'C1-precoverage-parent')
+        anchor = c.Anchor({}, b'', [], {}, ('', []), ('', []), None)
+        anchor.resolver = resolver
+        window = anchor.recording_work
+        c._capture_work_values(window, 'C1-precoverage-window')
+        case = c._capture_work_values(window, 'C1-precoverage-case')
+        reader = object.__new__(r._Reader)
+        reader.anchor = anchor;reader.commands_open = True;reader.source_copies = []
+        anchor.scope_runtime_owner = reader
+        caller = c.canonical({'schema_version': 1, 'kind': 'coverage_source_request',
+            'id': 'coverage.precoverage.' + label, 'body': {}})
+        request = c.canonical({'schema_version': 1, 'kind': 'scope_gate_generation_request',
+            'id': 'generation.precoverage.' + label, 'body': {}})
+        session = g._GateStoreSession('generation.precoverage.' + label, c.digest(request), time.monotonic()+30)
+        session.reader = reader;session.phase = 'C_REQUEST';session.coverage_request_raw = caller
+        session.generator = object.__new__(g._Generator)
+        reader.store_session = session
+        P = S = held = parent = copied = None
+        primary = caught = None;cleanup = []
+        try:
+            held = c._open_held(str(original), False,
+                c._store_rule(os.geteuid(), os.getegid(), 0o400, False, resolver), 'E_STORE')
+            P = c._open_held(str(folder/'P'), True,
+                c._store_rule(os.geteuid(), os.getegid(), 0o700, True, resolver), 'E_STORE')
+            copied = anchor.retain_runtime_acquisition(P, 'python', held, raw, caller)
+            assert type(copied) is c._HeldCaptureCopy
+            reader.source_copies.append(copied)
+            association = copied.scope_runtime_acquisition
+            invoice = association[0]
+            if label == 'equal-foreign-row':
+                copied.scope_runtime_acquisition = (dict(invoice), *association[1:])
+            elif label == 'changed-locator':invoice['locator'] = str(folder/'original/unrelated')
+            S = c._open_held(str(folder/'S'), True,
+                c._store_rule(os.geteuid(), os.getegid(), 0o700, True, resolver), 'E_STORE',
+                recording_work=work, accounting_kind='M')
+            parent = c._C1PHandoffParent(anchor, S, work, case, request, session, {}, [], window, [case], {})
+            caught = None
+            try:parent._stage_generator_coverage_runtime()
+            except BaseException as error:caught = error
+            if label != 'original-acquisition':
+                assert type(caught) is c.Refusal and str(caught) == 'E_STORE'
+                assert not parent.generator_runtime_stages and not parent.files
+                assert work.get('runtime', {}).get('write_bytes', 0) == 0
+                results.append({'case': label, 'rejected_before_S_write': True})
+                continue
+            if caught is not None:raise caught
+            assert len(parent.generator_runtime_stages) == 1
+            recorded = parent.generator_runtime_stages[0]
+            target = recorded['target'];source = association[3]
+            assert recorded['reader'] is reader and recorded['copied'] is copied
+            assert recorded['association'] is association and recorded['invoice'] is invoice
+            assert recorded['invoice_raw'] == c.canonical(invoice)
+            assert recorded['source'] is source and recorded['size_bytes'] == len(raw)
+            assert recorded['sha256'] == c.digest(raw) and recorded['identity'] == c._identity(source.before)
+            assert c._identity(target.before) == recorded['initial_S_identity']
+            assert (source.before.st_dev, source.before.st_ino) != (target.before.st_dev, target.before.st_ino)
+            assert work['runtime']['write_bytes'] == len(raw) and work['runtime']['read_bytes'] >= 3*len(raw)
+            assert work['runtime']['equality_bytes'] >= 2*len(raw)
+            copied.close()
+            assert copied.closed and not copied.owned and not source.components
+            target.recheck('E_STORE', work, 'M')
+            observed = []
+            for offset in range(0, len(raw), 65536):
+                chunk = os.pread(target.fd, min(65536, len(raw)-offset), offset)
+                c._runtime_account(work, 'read_bytes', len(chunk))
+                c._runtime_account(work, 'equality_bytes', len(chunk)*2)
+                assert chunk == raw[offset:offset+len(chunk)]
+                observed.append(len(chunk))
+            assert sum(observed) == len(raw)
+            results.append({'case': label, 'live_P_to_independent_S': True,
+                'P_closed_before_S_consumption': True, 'readback_chunks': observed,
+                'runtime_write_bytes': work['runtime']['write_bytes'],
+                'runtime_read_bytes': work['runtime']['read_bytes'],
+                'runtime_equality_bytes': work['runtime']['equality_bytes']})
+        except BaseException as error:
+            primary = error
+            raise
+        finally:
+            if copied is not None:
+                try:copied.close()
+                except BaseException as error:cleanup.append(error)
+            for item in reversed(parent.output_holds if parent is not None else []):
+                error = c._c1_p_close(item, work, primary)
+                if error is not None and error is not primary:cleanup.append(error)
+            for item in (S, P, held):
+                if item is not None:
+                    error = c._c1_p_close(item, work, primary)
+                    if error is not None and error is not primary:cleanup.append(error)
+            try:anchor.close()
+            except BaseException as error:cleanup.append(error)
+            if evidence is not None:
+                def error_value(error):
+                    if isinstance(error, BaseException):return {'category': type(error).__name__,
+                        'text': str(error), 'traceback': traceback.format_exception(type(error), error, error.__traceback__)}
+                    raise TypeError(type(error).__name__)
+                with (Path(evidence)/('C1-precoverage-' + label + '.json')).open('x') as stream:
+                    json.dump({'work': work, 'original_work': anchor.recording_work, 'cleanup': cleanup,
+                        'primary': primary, 'observed_error': caught,
+                        'runtime': 'synthetic never executed', 'cost': 'UNKNOWN'},
+                        stream, sort_keys=True, default=error_value)
+            if primary is None and cleanup:raise cleanup[0]
+    return {'controls': results, 'retained_root': str(base), 'cost': 'UNKNOWN',
+        'qualification': 'direct P/S owner only; actual C_REQUEST/C_DONE/main/FD6/native NOTRUN'}
