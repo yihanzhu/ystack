@@ -8552,7 +8552,13 @@ def raw16_C1_p_cancel_drain(root: Path, evidence=None) -> dict:
                 if fd not in closes:original_close(fd)
             if evidence is not None:
                 with (Path(evidence) / ('C1-drain-' + label + '.json')).open('x') as stream:
-                    json.dump(work, stream, sort_keys=True)
+                    def error_value(error):
+                        if isinstance(error, BaseException):
+                            import traceback
+                            return {'category': type(error).__name__, 'text': str(error),
+                                'traceback': traceback.format_exception(type(error), error, error.__traceback__)}
+                        raise TypeError(type(error).__name__)
+                    json.dump(work, stream, sort_keys=True, default=error_value)
         assert result is first and reports and close_observed == [later_marked]
         assert closes == order and collections.Counter(closes) == collections.Counter(order)
         assert held.components == []
