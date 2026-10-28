@@ -2593,8 +2593,7 @@ class _SeedAssembly:
         self._gate_owner = generator
         session.p_handoff = self.c._C1PHandoffParent(generator.reader.anchor, self.root,
             self.work, self.case_work, request_raw, session, self.files, self.output_holds,
-            self.window, self.case_sources,
-            tuple(self.bindings[phase]["native"].attempt_id for phase in ("reproduction", "write")))
+            self.window, self.case_sources, self.bindings)
 
     def _gate_request(self):
         module = self._gate_type(self.generator, "scope/v1/generate-gate-evidence.py", "_Generator")
@@ -2685,7 +2684,41 @@ class _SeedAssembly:
         self.scope_raw, self.scope_reader = reader.scope_raw, reader
         self._transfer()
 
+    def _remote_scope_inputs(self):
+        context = getattr(self.gate_session, "p_handoff", None)
+        _seed_require(type(context) is self.c._C1PHandoffParent and context.session is self.gate_session
+            and context.root is self.root and context.work is self.work and context.case_work is self.case_work
+            and context.files is self.files and context.output_holds is self.output_holds
+            and context.request_raw is self.original_raw[3] and self.gate_session.closed)
+        value, locators = context.scope_values()
+        for serial, record in context.records.items():
+            if record.get("excluded_current", False):continue
+            name, row, target = record["name"], record["row"], record["target"]
+            _seed_require(target.components and target in self.output_holds
+                and self.files[name]["size_bytes"] == row["size_bytes"]
+                and self.files[name]["sha256"] == row["sha256"]
+                and self.c._identity(target.before) == record["initial_identity"])
+            role, member = record["semantic"]
+            _gate_input_member_values(role, member, record["kind"], row["size_bytes"])
+            expected = ("gate", role, member, row["size_bytes"], row["sha256"], record["kind"])
+            if name in self.semantic_expected:
+                _seed_require(self.semantic_expected[name] == expected and name in self.semantic)
+            else:
+                _seed_require(name not in self.semantic)
+                self.semantic_expected[name] = expected
+                self._semantic_record("gate", role, member, name)
+                if record["kind"] == "runtime":
+                    self.runtime_files += 1;self.runtime_bytes += row["size_bytes"]
+                    _seed_require(self.runtime_files <= 64 and self.runtime_bytes <= 4 << 30)
+        scoped = [item for item in self.generator.held if getattr(item, "held", None) is not None
+            and item.held.path == str(self.generator.outputs["scope"])]
+        _seed_require(len(scoped) == 1)
+        self.scope_raw, self.scope_local = scoped[0].raw, value
+        self.remote_scope_locators = locators
+        self._transfer()
+
     def gate(self):
+        if not hasattr(self, "scope_local"):self._remote_scope_inputs()
         _seed_require(self.gate_session is not None and "gate" not in self.occurrences
             and hasattr(self, "scope_local"))
         session, generator = self.gate_session, self.generator
@@ -2721,7 +2754,12 @@ class _SeedAssembly:
         self.locators["gate"] = {"scope": scoped.held.path, "source_root": str(module.PACKAGE),
             **{name: str(path) for name, path in zip(
                 ("request", "shadow_set", "dashboard", "marker", "bundle_root", "git_root", "output"), generator.paths)}}
-        for context, actual_reader in (("generator", generator.reader), ("scope_reader", self.scope_reader)):
+        readers = [("generator", generator.reader)]
+        if hasattr(self, "scope_reader"):readers.append(("scope_reader", self.scope_reader))
+        else:
+            _seed_require(hasattr(self, "remote_scope_locators"))
+            self.locators["gate"].update({"scope_reader." + key: value for key, value in self.remote_scope_locators.items()})
+        for context, actual_reader in readers:
             actual_module = self._gate_type(actual_reader, "scope/v1/read-shadow-evidence.py", "_Reader")
             actual_paths = {
                 "scratch": actual_reader.scratch, "runtime": actual_reader.runtime,

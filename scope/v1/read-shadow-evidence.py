@@ -760,7 +760,14 @@ class _GateReaderSession:
             else:names = list(copied.runtime_sha256)
             require(names and len(set(names)) == len(names), "E_STORE")
             for name in copied.members:
-                if name in names:self._p_register(copied.members[name], copied)
+                if name in names:
+                    row = self._p_register(copied.members[name], copied)
+                    if copied.consumer_snapshot is None and not hasattr(copied, "anchor_input_members") and not hasattr(copied, "source_configuration_members"):
+                        association = copied.scope_runtime_acquisition
+                        require(type(association) is tuple and len(association) == 4
+                            and association[3] is row["held"], "E_STORE")
+                        require("runtime_association" not in row or row["runtime_association"] is association, "E_STORE")
+                        row["runtime_association"] = association
             require(all(name in copied.members for name in names), "E_STORE")
         except BaseException as error:self._p_failed(error, "C1-P-registration")
         self._p_raise_cancel()
@@ -794,6 +801,7 @@ class _GateReaderSession:
             if isinstance(item, c._HeldCaptureCopy):
                 matches = [row for row in self.p_registry if row["copied"] is item]
                 require(item.closed and not item.owned, "E_STORE")
+                self._p_copy_data_good(item)
             elif type(item) is c._HeldBytes:
                 matches = [row for row in self.p_registry if row["held"] is item.held]
             else:return
@@ -828,12 +836,73 @@ class _GateReaderSession:
             require(type(copied.scope_source) is c._HeldCoverageRead and copied.scope_source.anchor is reader.anchor
                 and copied.directory.components[-1].name == "source-%04d" % copied.scope_source_ordinal, "E_STORE")
             return "source", copied.scope_source_ordinal, name
-        require(name in copied.runtime_sha256, "E_STORE")
-        rows = [value for value in reader.anchor.private_observations["local_runtime"]
-            if value["file"] == name and value["size_bytes"] == held.before.st_size
-            and value["sha256"] == copied.runtime_sha256[name]]
-        require(len(rows) == 1 and rows[0]["errno"] is None, "E_STORE")
-        return "runtime", rows[0]["ordinal"], name
+        invoice = self._p_runtime_invoice(row)
+        return "runtime", invoice["ordinal"], name
+
+    def _p_runtime_invoice(self, row):
+        reader, copied, held = self.p_reader, row["copied"], row["held"]
+        require(type(reader) is _Reader and reader.store_session is self
+            and reader.anchor is not None and reader.anchor.scope_runtime_owner is reader
+            and copied.anchor is reader.anchor and not copied.closed
+            and any(item is copied for item in reader.source_copies), "E_STORE")
+        association = copied.scope_runtime_acquisition
+        require(association is row["runtime_association"] and type(association) is tuple and len(association) == 4, "E_STORE")
+        original_row, snapshot, original, member = association
+        keys = ("slot", "index", "ordinal", "locator", "file", "size_bytes", "sha256", "errno", "request_sha256", "attempt_id")
+        require(type(original_row) is dict and set(original_row) == set(keys)
+            and type(snapshot) is c._RuntimeSnapshot and type(original) is c.HeldPath
+            and snapshot.owner is original and member is held
+            and copied.members.get(original_row["file"]) is member, "E_STORE")
+        rows = reader.anchor.private_observations["local_runtime"]
+        require(sum(item is original_row for item in rows) == 1, "E_STORE")
+        complete = {"files": [{key: item[key] for key in keys[:8]} for item in rows]}
+        c._runtime_inventory_values(complete)
+        require(sum(item is snapshot and name == original_row["file"]
+            for item, name, _case in reader.anchor.local_runtime_snapshots) == 1
+            and snapshot.size == held.before.st_size == original_row["size_bytes"]
+            and snapshot.acquisition_sha == copied.runtime_sha256[original_row["file"]] == original_row["sha256"]
+            and original.path == original_row["locator"]
+            and original_row["slot"] in {"python", "git", "jq", "bash", "sudo", "compiler", "object_closure", "native_release", "native_build_record"}
+            and type(original_row["index"]) is int and original_row["index"] == 0
+            and original_row["errno"] is None, "E_STORE")
+        # The original INIT ref and the original coverage request bytes bind callers.
+        callers = [(self.gate_call_ref["id"], self.gate_call_ref["sha256"])]
+        if hasattr(self, "p_coverage_caller"):callers.append(self.p_coverage_caller)
+        require((original_row["attempt_id"], original_row["request_sha256"]) in callers, "E_STORE")
+        invoice = {key: original_row[key] for key in keys}
+        raw = c._c1_p_side_raw(invoice, self.p_work)
+        if "runtime_invoice_raw" in row:
+            previous = row["runtime_invoice_raw"]
+            processed = len(previous) + len(raw)
+            c._capture_copy_room(self.p_work, processed, False, read_only=True)
+            equal = previous == raw
+            self.p_work["read_bytes"] += processed
+            c._capture_account(self.p_work, "M", "read_bytes", processed)
+            counts = self.p_work.setdefault("seed_processing", {})
+            counts["E"] = counts.get("E", 0) + processed
+            require(equal, "E_STORE")
+        else:row["runtime_invoice_raw"] = raw
+        row["runtime_invoice"] = invoice
+        return invoice
+
+    def _p_copy_data_good(self, copied):
+        leaf = copied.leaf
+        require(not any(leaf.get(key) for key in ("metadata_failure", "failure", "read_error", "copy_failure",
+            "close_failures", "close_observations_incomplete", "source_configuration_close_incomplete", "transfer_incomplete")), "E_STORE")
+
+    def _p_data_good(self):
+        reader = self.p_reader
+        require(not self.p_unusable and not reader.replay_output_unusable, "E_STORE")
+        for row in self.p_registry:
+            if row["copied"] is not None:self._p_copy_data_good(row["copied"])
+        observations, work = reader.anchor.private_observations, reader.anchor.recording_work
+        if observations.get("unusable", False):
+            incomplete = {key for key, value in work.items() if value and key.endswith("incomplete")}
+            require(incomplete and incomplete <= {"accounting_incomplete", "runtime_accounting_incomplete", "M_classification_incomplete"}
+                and not work.get("metadata_failure") and not work.get("leaf_failures")
+                and not work.get("close_failures")
+                and not any(observations.get(key) for key in ("source_copy_failure", "source_seal_failure",
+                    "source_copy_close_errno", "source_seal_close_errno")), "E_STORE")
 
     def _p_chain(self, held, stop=None):
         scratch = self.p_scratch
@@ -851,6 +920,7 @@ class _GateReaderSession:
             cases = [row["copied"].case_work for row in self.p_registry if row["copied"] is not None]
             require(cases, "E_STORE")
             self.p_case_work = cases[0]
+            require(any(self.p_case_work is case for case in reader.anchor.recording_work.get("cases", {}).values()), "E_STORE")
             self.p_work["_capture_copy_budget"] = c._capture_copy_budget_values(self.p_work,
                 ((reader.anchor.recording_work, False), (self.p_case_work, True)))
             self.p_work["runtime_case_carry_in"] = self.p_case_work.get("runtime", {})
@@ -933,6 +1003,7 @@ class _GateReaderSession:
             reader = self.p_reader
             require(reader.commands_open and not reader.replay_output_unusable and reader.anchor is not None, "E_STORE")
             reader.recheck()
+            self._p_data_good()
             values = reader.replay_outputs["anchor"]
             require(values and all(key is reader.anchor.config_raw for key, _ in values), "E_STORE")
             inputs = values[0][1]
@@ -947,7 +1018,9 @@ class _GateReaderSession:
                     continue
                 held, copied = row["held"], row["copied"]
                 require(held.components and (copied is None or not copied.closed), "E_STORE")
-                if copied is not None:copied.recheck()
+                if copied is not None:
+                    copied.recheck()
+                    self._p_copy_data_good(copied)
                 held.recheck("E_STORE", self.p_work, "M")
                 family, ordinal, name = self._p_projection(row)
                 binding = (family, ordinal, name)
@@ -964,9 +1037,11 @@ class _GateReaderSession:
                 sha = self._p_member_sha(held, name in copied.runtime_sha256 if copied is not None else False, expected_raw)
                 require(sha == expected_sha, "E_STORE")
                 held.recheck("E_STORE", self.p_work, "M")
-                members.append({"serial": row["serial"], "family": family, "ordinal": ordinal,
+                member = {"serial": row["serial"], "family": family, "ordinal": ordinal,
                     "name": name, "relative": path.relative_to(self.p_scratch).as_posix(), "chain": chain,
-                    "size_bytes": held.before.st_size, "sha256": sha})
+                    "size_bytes": held.before.st_size, "sha256": sha}
+                if family == "runtime":member["runtime_invoice"] = row["runtime_invoice"]
+                members.append(member)
             require(root_chain is not None and members, "E_STORE")
             value = c._c1_p_batch_values(self.p_scratch.name, root_chain, members, self.p_work)
             reader.recheck()
@@ -1008,7 +1083,23 @@ class _GateReaderSession:
             try:body["p_handoff"] = self._p_unusable_side
             except BaseException as reporting:self._p_failed(reporting, "C1-unusable-binding-" + phase)
         self._p_raise_cancel()
-        self.wire.exchange(phase, body)
+        self._p_exchange(phase, body)
+
+    def _p_exchange(self, phase, body):
+        try:return self.wire.exchange(phase, body)
+        finally:
+            native = sys.exc_info()[1]
+            try:self._p_transfer()
+            except BaseException as error:
+                try:self._p_failed(error, "C1-wire-work-" + phase)
+                except BaseException as reporting:
+                    if isinstance(native, KeyboardInterrupt) or getattr(native, "_scope_signal_cancel", False):
+                        raise native from reporting
+                    raise
+            cancellation = self.p_cancel
+            if cancellation is not None and not (isinstance(native, KeyboardInterrupt) or getattr(native, "_scope_signal_cancel", False)):
+                if native is not None:raise cancellation from native
+                raise cancellation
 
     def _p_settlement(self, phase):
         value = self._p_unusable_side
@@ -1022,8 +1113,7 @@ class _GateReaderSession:
             reader = self.p_reader
             for row in self.p_registry:
                 require(row["closed"] or bool(row["held"].components), "E_STORE")
-            require(not reader.replay_output_unusable
-                and not reader.anchor.private_observations.get("unusable", False), "E_STORE")
+            self._p_data_good()
             self._p_transfer()
             receipt = c._capture_accounting_receipt(reader.anchor)
             value = c._c1_p_settlement_values(raw, closed, receipt, self.p_work)
@@ -1095,13 +1185,30 @@ class _GateReaderSession:
     def request(self, request_raw, expectation):
         body = {"request": parse(request_raw), "expectation": expectation,
             "acquisitions": sorted(self.acquisitions.values())}
-        if self.p_enabled:self._p_send_batch("C_REQUEST", body)
+        if self.p_enabled:
+            try:
+                self._p_transfer()
+                c._capture_copy_room(self.p_work, len(request_raw), False, read_only=True)
+                self.p_work["caller_hash_incomplete"] = True
+                caller_sha = c.digest(request_raw)
+                self.p_work["read_bytes"] += len(request_raw)
+                c._capture_account(self.p_work, "M", "read_bytes", len(request_raw))
+                counts = self.p_work.setdefault("seed_processing", {})
+                counts["H"] = counts.get("H", 0) + len(request_raw)
+                require(caller_sha == expectation["request_sha256"], "E_STORE")
+                self.p_coverage_caller = (body["request"]["id"], caller_sha)
+                self.p_work["caller_hash_incomplete"] = False
+            except BaseException as error:self._p_failed(error, "C1-coverage-caller")
+            self._p_raise_cancel()
+            self._p_send_batch("C_REQUEST", body)
         else:self.wire.exchange("C_REQUEST", body)
 
     def released(self):
         require(not self.acquisitions, "E_RUNTIME")
-        body = {"p_handoff": self._p_settlement("C_RELEASED")} if self.p_enabled else {}
-        self.wire.exchange("C_RELEASED", body)
+        if self.p_enabled:
+            body = {"p_handoff": self._p_settlement("C_RELEASED")}
+            self._p_exchange("C_RELEASED", body)
+        else:self.wire.exchange("C_RELEASED", {})
 
     def source_done(self):
         self.wire.exchange("C_DONE", {"acquisitions": sorted(self.acquisitions.values())})
@@ -1113,8 +1220,10 @@ class _GateReaderSession:
 
     def close(self):
         require(not self.acquisitions, "E_RUNTIME")
-        body = {"p_handoff": self._p_settlement("CLOSED")} if self.p_enabled else {}
-        self.wire.exchange("CLOSED", body)
+        if self.p_enabled:
+            body = {"p_handoff": self._p_settlement("CLOSED")}
+            self._p_exchange("CLOSED", body)
+        else:self.wire.exchange("CLOSED", {})
         self.wire.sock.close()
 
 
@@ -1421,6 +1530,8 @@ class _Reader:
             self.store_session.register_copy(copied)
 
     def _close_source_copies(self, primary=None, preserve_cancellation=False):
+        if type(getattr(self, "store_session", None)) is _GateReaderSession and self.store_session.p_enabled:
+            preserve_cancellation = True
         copies, self.source_copies = self.source_copies, []
         primary = sys.exc_info()[1] if primary is None else primary
         cancellation = None
@@ -1436,7 +1547,9 @@ class _Reader:
                         if first is None and (isinstance(observed, KeyboardInterrupt) or getattr(observed, "_scope_signal_cancel", False)):first = observed
                 try:
                     copied.close()
-                    if type(getattr(self, "store_session", None)) is _GateReaderSession and self.store_session.p_enabled:self.store_session.note_closed(copied)
+                    if type(getattr(self, "store_session", None)) is _GateReaderSession and self.store_session.p_enabled:
+                        self.store_session.note_closed(copied)
+                        if first is None and self.store_session.p_cancel is not None:first = self.store_session.p_cancel
                 except BaseException as error:
                     if first is None and (isinstance(error, KeyboardInterrupt) or getattr(error, "_scope_signal_cancel", False)):first = error
                     try:copied._failed(error, "scope-P-final-close", primary)
@@ -1497,7 +1610,9 @@ class _Reader:
         try:
             c._capture_work_values(work, "scope-runtime-parent")
             anchor.recording_work.setdefault("scope_runtime_parent_work", []).append(work)
-            parent = c._open_held(str(self.captures), True,
+            destination = (self.captures / "gate-4095" if type(self.store_session) is _GateReaderSession
+                and self.store_session.p_enabled else self.captures)
+            parent = c._open_held(str(destination), True,
                 c._store_rule(os.geteuid(), os.getegid(), 0o700, True, self.darwin), "E_STORE",
                 recording_work=work, accounting_kind="M")
             key = str(parent.before.st_dev) + ":" + str(parent.before.st_ino)
@@ -1732,17 +1847,30 @@ class _Reader:
         for item in reversed(owned):
             try:
                 item.close()
-                if type(getattr(self, "store_session", None)) is _GateReaderSession and self.store_session.p_enabled:self.store_session.note_closed(item)
+                if type(getattr(self, "store_session", None)) is _GateReaderSession and self.store_session.p_enabled:
+                    self.store_session.note_closed(item)
+                    cancellation = self.store_session.p_cancel
+                    if cancellation is not None and not (isinstance(first, KeyboardInterrupt) or getattr(first, "_scope_signal_cancel", False)):
+                        if first is not None:self.store_session._p_failed(first, "C1-close-before-cancel")
+                        first = cancellation
                 self.owned.remove(item)
             except BaseException as exc:
-                if first is None:
+                recording = type(getattr(self, "store_session", None)) is _GateReaderSession and self.store_session.p_enabled
+                if first is None or recording and (isinstance(exc, KeyboardInterrupt) or getattr(exc, "_scope_signal_cancel", False)) and not (
+                        isinstance(first, KeyboardInterrupt) or getattr(first, "_scope_signal_cancel", False)):
+                    if recording and first is not None:self.store_session._p_failed(first, "C1-close-before-cancel")
                     first = exc
+                elif recording:self.store_session._p_failed(exc, "C1-owned-close-secondary")
+            if type(getattr(self, "store_session", None)) is _GateReaderSession and self.store_session.p_enabled:
+                cancellation = self.store_session.p_cancel
+                if cancellation is not None and not (isinstance(first, KeyboardInterrupt) or getattr(first, "_scope_signal_cancel", False)):
+                    first = cancellation
         if self.capture_completion_owner is not None:
             try:self.enforced._close_capture_completion_owner(self.capture_completion_owner)
             except BaseException as closing:
-                if type(getattr(self, "store_session", None)) is _GateReaderSession and self.store_session.p_enabled and self.store_session.p_cancel is not None:
+                if type(getattr(self, "store_session", None)) is _GateReaderSession and self.store_session.p_enabled:
                     cancellation = first if isinstance(first, KeyboardInterrupt) or getattr(first, "_scope_signal_cancel", False) else self.store_session.p_cancel
-                    raise cancellation from closing
+                    if cancellation is not None:raise cancellation from closing
                 raise
         if type(getattr(self, "store_session", None)) is _GateReaderSession and self.store_session.p_enabled:
             cancellation = self.store_session.p_cancel

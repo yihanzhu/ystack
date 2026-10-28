@@ -387,6 +387,8 @@ def _copy_runtime_file(directory, name, snapshot, work, resolver):
                 except BaseException as error:
                     if failure is None:
                         failure = error
+                    elif getattr(snapshot, "_c1_retained_P", False):
+                        failure = _c1_p_report(work, "C1-runtime-copy-close", error, _c3_first(failure, error))
                     elif getattr(error, "_scope_signal_cancel", False) and not getattr(failure, "_scope_signal_cancel", False):
                         failure = error
         if failure is not None:
@@ -409,13 +411,15 @@ def _runtime_source_check(item, work, resolver):
 
 
 class _RuntimeSnapshot:
-    def __init__(self, owner, work):
+    def __init__(self, owner, work, *, _c1_retained_P=False):
         self.owner, self.work, self.size = owner, work, owner.before.st_size
-        _require(0 <= self.size <= 4 << 30, "E_LIMIT")
-        _runtime_account(work, "logical_bytes", self.size)
-        _runtime_account(work, "files", 1)
-        _runtime_account(work, "physical_bytes", self.size)
-        _runtime_account(work, "physical_files", 1)
+        _require(type(_c1_retained_P) is bool and 0 <= self.size <= 4 << 30, "E_LIMIT")
+        if _c1_retained_P:self._c1_retained_P = True
+        if not _c1_retained_P:
+            _runtime_account(work, "logical_bytes", self.size)
+            _runtime_account(work, "files", 1)
+            _runtime_account(work, "physical_bytes", self.size)
+            _runtime_account(work, "physical_files", 1)
         self.acquisition_sha = None
         self.acquisition_sha = self.sha256()
 
@@ -1383,6 +1387,8 @@ def _copy_preparation_document(directory, raw, work, resolver, *, name="capture.
         for key in {"host", "verifier", "supervisor"} | {"installed-" + role for role in INSTALLED_SOURCES}})
     limits["reader-anchor-host.bin"] = DOCUMENT_LIMIT
     if _c1_serial is not None:
+        _capture_copy_budget_room(work, 0, False, files=1)
+        _require(work["files"] < 256, "E_LIMIT")
         _require(type(_c1_serial) is int and 0 <= _c1_serial < 4096
             and name == "gate-scope-reader-p-%04d.bin" % _c1_serial, "E_STORE")
         limits[name] = EXECUTABLE_LIMIT
@@ -1437,7 +1443,9 @@ def _copy_preparation_document(directory, raw, work, resolver, *, name="capture.
             if fd is not None:
                 try:_close_capture_copy(fd, work, work, "preparation-document-close", failure)
                 except BaseException as error:
-                    if failure is None or getattr(error, "_scope_signal_cancel", False) and not getattr(failure, "_scope_signal_cancel", False):
+                    if _c1_serial is not None:
+                        failure = _c1_p_report(work, "C1-metadata-copy-close", error, _c3_first(failure, error))
+                    elif failure is None or getattr(error, "_scope_signal_cancel", False) and not getattr(failure, "_scope_signal_cancel", False):
                         failure = error
         if failure is not None:raise failure
     return before
@@ -1886,13 +1894,15 @@ class Anchor:
             os.fsync(parent.fd)
             _runtime_source_check(original, leaf, self.resolver)
             self.local_runtime_snapshots.append((snapshot, name, case_key))
-            values.append({"slot": role, "index": 0, "ordinal": ordinal, "locator": original.path,
+            row = {"slot": role, "index": 0, "ordinal": ordinal, "locator": original.path,
                 "file": name, "size_bytes": len(raw), "sha256": expected, "errno": None,
-                "request_sha256": digest(caller_raw), "attempt_id": caller["id"]})
+                "request_sha256": digest(caller_raw), "attempt_id": caller["id"]}
+            values.append(row)
             _runtime_account(leaf, "read_bytes", len(caller_raw))
             _runtime_account(leaf, "sha_bytes", len(caller_raw))
             copied = _HeldCaptureCopy(self, self.recording_work, case_work)
             copied.acquire(parent, None, {name: copied_state}, {name: copied_sha})
+            copied.scope_runtime_acquisition = (row, snapshot, original, copied.members[name])
         except BaseException as error:
             failure = error
             self.private_observations["unusable"] = True
@@ -2008,13 +2018,15 @@ class Anchor:
             _require(_identity(_capture_metadata(executable.fd, work, "M")) == _identity(before)
                      == _identity(original.before), "E_STORE")
             self.local_runtime_snapshots.append((snapshot, name, case_key))
-            self.private_observations.setdefault("local_runtime", []).append({"slot": "sudo", "index": 0,
+            row = {"slot": "sudo", "index": 0,
                 "ordinal": ordinal, "locator": original.path, "file": name, "size_bytes": len(snapshot),
                 "sha256": snapshot.acquisition_sha, "errno": None, "request_sha256": digest(caller_raw),
-                "attempt_id": caller["id"]})
+                "attempt_id": caller["id"]}
+            self.private_observations.setdefault("local_runtime", []).append(row)
             work["read_bytes"] += len(caller_raw)
             copied = _HeldCaptureCopy(self, self.recording_work, case_work)
             copied.acquire(parent, None, {name: copied_state}, {name: copied_sha})
+            copied.scope_runtime_acquisition = (row, snapshot, original, copied.members[name])
             sudo_capture_cancel = self._retain_sudo_storage(original, caller["id"], work, None)
             if sudo_capture_cancel is not None:
                 raise sudo_capture_cancel
@@ -3317,7 +3329,16 @@ _C3_OBSERVATION_KEYS = {
     'stat-nofollow-error': (('category', 'errno', 'return'),),
     'sudo-storage-retention': (('category', 'errno', 'return'),),
 }
-_C3_CLOSE_SITES = ('C2.clone-root-pending', 'C2.copy-failed-writer', 'C2.copy-writer', 'C2.driver-input-source-close', 'C2.receipt-failed-writer', 'C2.receipt-writer', 'C2.root-descriptor', 'C2.stdin', 'C3.driver-parent-end', 'C3.driver-pending-close', 'C3.driver-pipe-close', 'held-pending-close', 'held-rows-close', 'offline-preparation-boundary', 'preparation-capture-writer', 'preparation-document-close', 'qualified-runtime', 'replay-derived-write', 'scope-sudo-dup-compensation', 'source-configuration-directory', 'source-configuration-held-close', 'sudo-storage-P-close', 'sudo-storage-original-close')
+_C3_OBSERVATION_KEYS.update({
+    "C1-P-spawn": (("pid", "argv"),),
+    "C1-P-chain": (("actual", "expected"),),
+})
+for _c1_site in ("C1-P-final-recheck", "C1-P-close", "C1-side-encoding-account", "C1-wire-side",
+        "C1-runtime-copy-close", "C1-metadata-copy-close", "C1-P-foreground-report",
+        "C1-P-before-spawn", "C1-P-spawn", "C1-P-foreground-close", "C1-P-parent-root-close",
+        "C1-P-C_REQUEST", "C1-P-C_RELEASED", "C1-P-FINAL_OWNER", "C1-P-CLOSED", "C1-P-COMPLETE"):
+    _C3_OBSERVATION_KEYS[_c1_site] = _C3_OBSERVATION_KEYS.get(_c1_site, ()) + (("return", "errno", "category"),)
+_C3_CLOSE_SITES = ('C2.clone-root-pending', 'C2.copy-failed-writer', 'C2.copy-writer', 'C2.driver-input-source-close', 'C2.receipt-failed-writer', 'C2.receipt-writer', 'C2.root-descriptor', 'C2.stdin', 'C3.driver-parent-end', 'C3.driver-pending-close', 'C3.driver-pipe-close', 'held-pending-close', 'held-rows-close', 'offline-preparation-boundary', 'preparation-capture-writer', 'preparation-document-close', 'qualified-runtime', 'replay-derived-write', 'scope-sudo-dup-compensation', 'source-configuration-directory', 'source-configuration-held-close', 'sudo-storage-P-close', 'sudo-storage-original-close') + ("C1-P-close",)
 
 
 def _c3_ledger_values(work, owner_receipts, retained, errors, unknown):
@@ -5945,11 +5966,15 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
                 finally:
                     signal.pthread_sigmask(signal.SIG_SETMASK, previous)
             finally:
+                native_primary = _c3_first(native_primary, sys.exc_info()[1])
                 if handoff is not None:
                     try:handoff.close()
                     except BaseException as error:
-                        handoff.fail(error, "foreground-close")
                         first = _c3_first(native_primary, error)
+                        try:handoff.fail(error, "foreground-close")
+                        except BaseException as later:
+                            first = _c3_first(first, later)
+                            first = _c1_p_report(handoff.work, "C1-P-foreground-report", later, first)
                         if isinstance(first, KeyboardInterrupt) or getattr(first, "_scope_signal_cancel", False):raise first
 
 
@@ -6340,6 +6365,22 @@ def _c1_p_chain_values(rows):
     return rows
 
 
+def _c1_p_runtime_invoice_values(invoice, member):
+    fields = ("slot", "index", "ordinal", "locator", "file", "size_bytes", "sha256", "errno")
+    _require(type(invoice) is dict and set(invoice) == set(fields) | {"request_sha256", "attempt_id"}
+        and invoice["slot"] in {"python", "git", "jq", "bash", "sudo", "compiler",
+            "object_closure", "native_release", "native_build_record"}
+        and type(invoice["index"]) is int and invoice["index"] == 0
+        and type(invoice["ordinal"]) is int and 0 <= invoice["ordinal"] < 64
+        and invoice["errno"] is None and _sha(invoice["request_sha256"])
+        and _id(invoice["attempt_id"]), "E_STORE")
+    _runtime_inventory_values({"files": [{key: invoice[key] for key in fields}]},
+        _ordinal_base=invoice["ordinal"])
+    _require(all(invoice[key] == member[other] for key, other in
+        (("file", "name"), ("ordinal", "ordinal"), ("size_bytes", "size_bytes"), ("sha256", "sha256"))), "E_STORE")
+    return invoice
+
+
 def _c1_p_batch_check(value, work):
     _require(type(value) is dict, "E_STORE")
     if value == {"state": "unusable"}:return value
@@ -6355,13 +6396,16 @@ def _c1_p_batch_check(value, work):
     _require(type(members) is list and len(members) <= 4096, "E_LIMIT")
     previous, names = -1, set()
     for row in members:
-        _require(type(row) is dict and set(row) == {"serial", "family", "ordinal", "name",
-            "relative", "chain", "size_bytes", "sha256"}, "E_STORE")
+        _require(type(row) is dict, "E_STORE")
+        keys = {"serial", "family", "ordinal", "name", "relative", "chain", "size_bytes", "sha256"}
+        if row.get("family") == "runtime":keys.add("runtime_invoice")
+        _require(set(row) == keys, "E_STORE")
         _require(type(row["serial"]) is int and previous < row["serial"] < 4096
             and type(row["ordinal"]) is int and 0 <= row["ordinal"] < 4096
             and row["family"] in {"anchor", "runtime", "source", "source-configuration", "history"}
             and type(row["name"]) is str and row["name"] and "/" not in row["name"]
             and row["name"] not in {".", ".."} and "\x00" not in row["name"], "E_STORE")
+        if row["family"] == "runtime":_c1_p_runtime_invoice_values(row["runtime_invoice"], row)
         previous = row["serial"]
         relative = row["relative"]
         _require(type(relative) is str and "\x00" not in relative, "E_STORE")
@@ -6384,6 +6428,35 @@ def _c1_p_batch_values(scratch_name, root_chain, members, work):
         "root_chain": root_chain, "members": members}, work)
 
 
+def _c1_p_semantic_values(row):
+    family, ordinal, name, size = (row[key] for key in ("family", "ordinal", "name", "size_bytes"))
+    if family == "runtime":
+        _c1_p_runtime_invoice_values(row["runtime_invoice"], row)
+        return "local-runtime", "scope_reader/" + name
+    if family == "anchor":
+        keys = {"host", "verifier", "supervisor"} | {"installed-" + role for role in INSTALLED_SOURCES}
+        match = [key for key in keys if name == "reader-anchor-" + key + ".bin"]
+        _require(ordinal == 0 and len(match) == 1 and size <=
+            (DOCUMENT_LIMIT if match[0] == "host" else EXECUTABLE_LIMIT), "E_STORE")
+        member = "anchor/" + match[0]
+    elif family == "source":
+        _require(0 <= ordinal < 3 and name == "consumer-observations.json" and size <= DOCUMENT_LIMIT, "E_STORE")
+        member = "source-%04d/" % ordinal + name
+    elif family == "source-configuration":
+        names = {"source-host.json": "host", "source-config.json": "config", "source-accepted.json": "accepted",
+            "source-package.json": "package", "source-supervisor.py": "supervisor", "source-normalizer.py": "normalizer"}
+        _require(0 <= ordinal < 3 and name in names and size <=
+            (EXECUTABLE_LIMIT if names[name] in {"supervisor", "normalizer"} else DOCUMENT_LIMIT), "E_STORE")
+        member = "source-configuration-%04d/" % ordinal + names[name]
+    else:
+        _require(family == "history" and name in set(SHADOW_EVIDENCE_NAMES)
+            | {"bundle.json", "publisher-body.txt", "scope-policy.json"}
+            and size <= (8 * DOCUMENT_LIMIT if name == "materialization-input.json" else
+                2 * DOCUMENT_LIMIT if name == "preparation-manifest.json" else DOCUMENT_LIMIT), "E_STORE")
+        member = "history/%04d/" % ordinal + name
+    return "capture", "scope_reader/" + member
+
+
 def _c1_p_settlement_check(value, work):
     _require(type(value) is dict, "E_STORE")
     if value == {"state": "unusable"}:return value
@@ -6401,15 +6474,22 @@ def _c1_p_settlement_check(value, work):
 def _c1_p_side_raw(value, work):
     before = work["read_bytes"]
     classified = work.get("accounting", {}).get("M", {}).get("read_bytes", 0)
+    primary = None
     try:return _private_capture_observations(value, work, work)
-    except BaseException:
-        work["accounting_incomplete"] = True
-        raise
+    except BaseException as error:
+        primary = error
+        try:work["accounting_incomplete"] = True
+        except BaseException as later:primary = _c3_first(primary, later)
+        raise primary
     finally:
-        added = work["read_bytes"] - before
-        already = work.get("accounting", {}).get("M", {}).get("read_bytes", 0) - classified
-        _require(added >= already >= 0, "E_LIMIT")
-        _capture_account(work, "M", "read_bytes", added - already)
+        try:
+            added = work["read_bytes"] - before
+            already = work.get("accounting", {}).get("M", {}).get("read_bytes", 0) - classified
+            _require(added >= already >= 0, "E_LIMIT")
+            _capture_account(work, "M", "read_bytes", added - already)
+        except BaseException as error:
+            first = _c1_p_report(work, "C1-side-encoding-account", error, _c3_first(primary, error))
+            raise first
 
 
 def _c1_p_settlement_values(batch_raw, closed, accounting, work):
@@ -6422,41 +6502,64 @@ def _c1_p_settlement_values(batch_raw, closed, accounting, work):
         "closed": closed, "accounting": accounting}, work)
 
 
+def _c1_p_report(work, site, error, primary):
+    primary = _c3_first(primary, error)
+    try:
+        work.setdefault("C1_p_errors", []).append((site, error))
+    except BaseException as later:
+        primary = _c3_first(primary, later)
+        try:work["C1_error_retention_incomplete"] = True
+        except BaseException as last:primary = _c3_first(primary, last)
+    try:_capture_observation_error(work, "M", site, error)
+    except BaseException as later:
+        primary = _c3_first(primary, later)
+        try:
+            work.setdefault("C1_p_errors", []).append((site + "-report", later))
+            work["C1_error_retention_incomplete"] = True
+        except BaseException as last:primary = _c3_first(primary, last)
+    return primary
+
+
 def _c1_p_close(held, work, primary=None):
     if not held.components:return primary
     try:held.recheck("E_STORE", work, "M")
     except BaseException as error:
-        primary = _c3_first(primary, error)
-        _capture_observation_error(work, "M", "C1-P-final-recheck", error)
+        primary = _c1_p_report(work, "C1-P-final-recheck", error, primary)
     while held.components:
         component = held.components.pop()
         try:_close_capture_copy(component.fd, work, work, "C1-P-close", primary)
         except BaseException as error:
-            primary = _c3_first(primary, error)
-            try:_capture_observation_error(work, "M", "C1-P-close", error)
-            except BaseException as later:primary = _c3_first(primary, later)
+            primary = _c1_p_report(work, "C1-P-close", error, primary)
     return primary
 
 
 class _C1PHandoffParent:
-    def __init__(self, anchor, root, work, case_work, request_raw, session, files, output_holds, window_work, case_sources, current_attempts):
-        _require(type(anchor) is Anchor and type(root) is HeldPath and root.components
+    def __init__(self, anchor, root, work, case_work, request_raw, session, files, output_holds, window_work, case_sources, current_bindings):
+        _require((anchor is None or type(anchor) is Anchor) and type(root) is HeldPath and root.components
             and type(request_raw) is bytes and session.reader.anchor is anchor
             and session.generator.session is session and type(window_work) is dict
             and type(case_sources) is list and any(case_work is item for item in case_sources)
-            and type(current_attempts) is tuple and len(current_attempts) == 2
-            and all(_id(value) for value in current_attempts)
+            and type(current_bindings) is dict
             and type(files) is dict and type(output_holds) is list, "E_STORE")
         self.anchor, self.root, self.work, self.case_work = anchor, root, work, case_work
         self.request_raw, self.session = request_raw, session
         self.window_work, self.case_sources = window_work, case_sources
-        self.current_attempts = current_attempts
+        self.current_bindings = current_bindings
         self.files, self.output_holds = files, output_holds
         self.unusable, self.errors = False, []
         self.runtime, self.child, self.argv = None, None, None
         self.initial_names, self.scratch_name = None, None
         self.records, self.batches, self.settlements = {}, {}, {}
+        self.batch_serials = {}
+        self.history_groups = {}
+        self.source_documents = {}
         self.closed_serials, self.receipts = set(), []
+        self.runtime_invoices, self.runtime_serials = {}, {}
+        self.failure = None
+        self.child_work = {}
+        _capture_work_values(self.child_work, "C1-inner-Reader")
+        self.child_work["C1_child_calls_unknown"] = True
+        self.child_work["C1_child_seed_processing_unknown"] = True
         self._budget()
         _capture_copy_room(work, len(request_raw), False, read_only=True)
         expected = digest(request_raw)
@@ -6490,20 +6593,23 @@ class _C1PHandoffParent:
         self.work["runtime_window_carry_in"] = self.window_work.get("runtime", {})
 
     def fail(self, error, phase):
-        self.unusable = True
-        first = None
+        first = _c3_first(self.failure, error)
+        try:self.failure, self.unusable = first, True
+        except BaseException as later:first = _c3_first(first, later)
         try:self.errors.append((phase, error))
-        except BaseException as later:first = _c3_first(error, later)
-        try:_capture_observation_error(self.work, "M", "C1-P-" + phase, error)
-        except BaseException as later:first = _c3_first(first or error, later)
-        if first is not None and (isinstance(first, KeyboardInterrupt)
-                or getattr(first, "_scope_signal_cancel", False)):raise first
+        except BaseException as later:first = _c3_first(first, later)
+        first = _c1_p_report(self.work, "C1-P-" + phase, error, first)
+        try:self.failure = first
+        except BaseException as later:first = _c3_first(first, later)
+        if isinstance(first, KeyboardInterrupt) or getattr(first, "_scope_signal_cancel", False):raise first
 
     def bind_spawn(self, argv, env, child):
         _require(type(argv) is list and argv[:4] == ["/bin/bash", "-p",
             os.path.join(_source_root(), "scope/v1/evaluate-scope.sh"), "evaluate"]
             and len(argv) == 13 and type(env) is dict, "E_STORE")
         generator, reader = self.session.generator, self.session.reader
+        _require(type(reader.anchor) is Anchor and (self.anchor is None or self.anchor is reader.anchor), "E_STORE")
+        if self.anchor is None:self.anchor = reader.anchor
         names = ("scope", "shadow-set", "dashboard", "risk", "kill", "duty", "marker")
         expected = [str(generator.outputs[name]) for name in names]
         expected.extend((str(generator.paths[4]), str(generator.paths[5])))
@@ -6604,6 +6710,67 @@ class _C1PHandoffParent:
             if previous is None:self.work.pop("input_kind", None)
             else:self.work["input_kind"] = previous
 
+    def _equal_M(self, left, right):
+        _require(type(left) is bytes and type(right) is bytes, "E_STORE")
+        _capture_copy_room(self.work, len(left) + len(right), False, read_only=True)
+        equal = left == right
+        amount = len(left) + len(right)
+        self.work["read_bytes"] += amount
+        _capture_account(self.work, "M", "read_bytes", amount)
+        counts = self.work.setdefault("seed_processing", {})
+        counts["E"] = counts.get("E", 0) + amount
+        _require(equal, "E_STORE")
+
+    def _caller(self, sha, attempt):
+        matches = []
+        for phase, raw, configuration in (("kill", self.session.kill_request_raw, self.session.kill_configuration),
+                ("coverage", self.session.coverage_request_raw, self.session.coverage_configuration)):
+            if type(raw) is not bytes:continue
+            _capture_copy_room(self.work, 2 * len(raw), False, read_only=True)
+            measured = digest(raw)
+            self.work["read_bytes"] += len(raw)
+            _capture_account(self.work, "M", "read_bytes", len(raw))
+            document = _json(raw, DOCUMENT_LIMIT, "E_STORE")
+            self.work["read_bytes"] += len(raw)
+            _capture_account(self.work, "M", "read_bytes", len(raw))
+            processing = self.work.setdefault("seed_processing", {})
+            processing["H"] = processing.get("H", 0) + len(raw)
+            processing["R"] = processing.get("R", 0) + len(raw)
+            if measured == sha and document["id"] == attempt:matches.append((phase, raw, configuration))
+        _require(len(matches) == 1, "E_STORE")
+        return matches[0]
+
+    def _validate_M(self, row, raw):
+        family, name = row["family"], row["name"]
+        if family == "anchor":
+            key = name[len("reader-anchor-"):-len(".bin")]
+            captured = self.session.reader.replay_outputs["anchor"]
+            _require(captured, "E_STORE")
+            expected = captured[0][1][key][0]
+            self._equal_M(raw, expected)
+        elif family == "source":
+            _capture_copy_room(self.work, len(raw), False, read_only=True)
+            value = _json(raw, DOCUMENT_LIMIT, "E_STORE")
+            self.work["read_bytes"] += len(raw)
+            _capture_account(self.work, "M", "read_bytes", len(raw))
+            _require(set(value) == {"attempt_id", "request_sha256", "storage", "storage_reads", "identity_context",
+                "commands", "preparation", "entropy", "clocks"}
+                and value["identity_context"] == self.anchor.identity_context, "E_STORE")
+            phase, caller, configuration = self._caller(value["request_sha256"], value["attempt_id"])
+            _require(configuration is not None and type(value["storage"]) is list
+                and type(value["storage_reads"]) is list and type(value["commands"]) is dict
+                and type(value["entropy"]) is dict and type(value["clocks"]) is dict, "E_STORE")
+            if row["ordinal"] in self.source_documents:
+                self._equal_M(raw, self.source_documents[row["ordinal"]][0])
+            else:self.source_documents[row["ordinal"]] = (raw, value, phase, configuration)
+        elif family == "source-configuration":
+            names = {"source-host.json": "host", "source-config.json": "config", "source-accepted.json": "accepted",
+                "source-package.json": "package", "source-supervisor.py": "supervisor", "source-normalizer.py": "normalizer"}
+            _require(row["ordinal"] in self.source_documents, "E_STORE")
+            configuration = self.source_documents[row["ordinal"]][3]
+            _require(type(configuration.source_inputs) is dict and names[name] in configuration.source_inputs, "E_STORE")
+            self._equal_M(raw, configuration.source_inputs[names[name]][0])
+
     def _stage_member(self, source, row, kind):
         serial = row["serial"]
         name = "gate-scope-reader-p-%04d.bin" % serial
@@ -6611,11 +6778,12 @@ class _C1PHandoffParent:
         self.root.recheck("E_STORE")
         before, target = self.root.before, None
         if kind == "runtime":
-            snapshot = _RuntimeSnapshot(source, self.work)
+            snapshot = _RuntimeSnapshot(source, self.work, _c1_retained_P=True)
             _require(snapshot.acquisition_sha == row["sha256"], "E_STORE")
             state, expected = _copy_runtime_file(self.root.fd, name, snapshot, self.work, self.anchor.resolver)
         else:
             raw = self._read_M(source, EXECUTABLE_LIMIT)
+            self._validate_M(row, raw)
             _capture_copy_room(self.work, len(raw), False, read_only=True)
             expected = digest(raw)
             self.work["read_bytes"] += len(raw)
@@ -6642,7 +6810,71 @@ class _C1PHandoffParent:
             raise error
         source.recheck("E_STORE")
         self.files[name] = {"size_bytes": row["size_bytes"], "sha256": expected, "kind": kind}
-        return {"row": row, "name": name, "target": target, "kind": kind}
+        row_raw = _c1_p_side_raw(row, self.work)
+        return {"row": row, "row_raw": row_raw, "name": name, "target": target,
+            "initial_identity": _identity(target.before), "kind": kind,
+            "semantic": _c1_p_semantic_values(row)}
+
+    def _history(self, scratch, batch):
+        groups = {}
+        for row in batch["members"]:
+            if row["family"] == "history":groups.setdefault(row["ordinal"], []).append(row)
+        for ordinal, rows in groups.items():
+            if ordinal in self.history_groups:continue
+            names = [row["name"] for row in rows]
+            _require(len(set(names)) == len(names) and {"sandbox-request.json", "shadow-record.json", "bundle.json"} <= set(names), "E_STORE")
+            values = {}
+            for row in rows:
+                _c1_p_semantic_values(row)
+                held, first = None, None
+                try:
+                    held = self._member(scratch, row)
+                    raw = self._read_M(held, EXECUTABLE_LIMIT)
+                    _capture_copy_room(self.work, len(raw), False, read_only=True)
+                    measured = digest(raw)
+                    self.work["read_bytes"] += len(raw)
+                    _capture_account(self.work, "M", "read_bytes", len(raw))
+                    _require(measured == row["sha256"], "E_STORE")
+                    values[row["name"]] = raw
+                except BaseException as error:first = error
+                finally:
+                    if held is not None:first = _c1_p_close(held, self.work, first)
+                if first is not None:raise first
+            _capture_copy_room(self.work, sum(len(values[name]) for name in
+                ("sandbox-request.json", "shadow-record.json", "bundle.json")), False, read_only=True)
+            request = _json(values["sandbox-request.json"], DOCUMENT_LIMIT, "E_STORE")
+            record = _json(values["shadow-record.json"], DOCUMENT_LIMIT, "E_STORE")
+            marker = _json(values["bundle.json"], DOCUMENT_LIMIT, "E_STORE")
+            processed = sum(len(values[name]) for name in ("sandbox-request.json", "shadow-record.json", "bundle.json"))
+            self.work["read_bytes"] += processed
+            _capture_account(self.work, "M", "read_bytes", processed)
+            body = record["body"]
+            environment = body["environment"]["environment_id"]
+            candidates = []
+            for role, files in self.session.role_files.items():
+                if environment not in files:continue
+                original = files[environment]
+                amount = len(original["shadow-record.json"]) + len(values["shadow-record.json"])
+                _capture_copy_room(self.work, amount, False, read_only=True)
+                equal = original["shadow-record.json"] == values["shadow-record.json"]
+                self.work["read_bytes"] += amount
+                _capture_account(self.work, "M", "read_bytes", amount)
+                if equal:candidates.append((role, original))
+            _require(candidates and marker["body"]["record_form"] == body["record_form"], "E_STORE")
+            for role, original in candidates:
+                _require(set(original) == set(values), "E_STORE")
+                for name in values:
+                    _capture_copy_room(self.work, len(values[name]) + len(original[name]), False, read_only=True)
+                    equal = values[name] == original[name]
+                    amount = len(values[name]) + len(original[name])
+                    self.work["read_bytes"] += amount
+                    _capture_account(self.work, "M", "read_bytes", amount)
+                    _require(equal, "E_STORE")
+            current = tuple(value["native"].attempt_id for key, value in self.current_bindings.items()
+                if key in {"reproduction", "write"})
+            _require(len(current) == 2 and all(_id(value) for value in current), "E_STORE")
+            self.history_groups[ordinal] = {"excluded_current": request["id"] in current,
+                "roles": [(role, environment) for role, _files in candidates]}
 
     def stage(self, value, phase):
         _require(phase in {"C_REQUEST", "FINAL_OWNER"} and phase not in self.batches, "E_STORE")
@@ -6653,9 +6885,11 @@ class _C1PHandoffParent:
             return
         raw = _c1_p_side_raw(batch, self.work)
         self.batches[phase] = raw
+        self.batch_serials[phase] = tuple(row["serial"] for row in batch["members"])
         scratch, primary = None, None
         try:
             scratch = self._scratch(batch)
+            self._history(scratch, batch)
             _require([row["serial"] for row in batch["members"] if row["serial"] not in self.records]
                 == list(range(len(self.records), len(self.records) +
                     sum(row["serial"] not in self.records for row in batch["members"]))), "E_STORE")
@@ -6667,8 +6901,19 @@ class _C1PHandoffParent:
                     source = self._member(scratch, row)
                     if row["serial"] in self.records:
                         old = self.records[row["serial"]]
-                        _require(old["row"] == row, "E_STORE")
-                        self._compare(source, old["target"], row, old["kind"])
+                        current_raw = _c1_p_side_raw(row, self.work)
+                        _capture_copy_room(self.work, len(current_raw) + len(old["row_raw"]), False, read_only=True)
+                        equal = current_raw == old["row_raw"]
+                        self.work["read_bytes"] += len(current_raw) + len(old["row_raw"])
+                        _capture_account(self.work, "M", "read_bytes", len(current_raw) + len(old["row_raw"]))
+                        _require(equal, "E_STORE")
+                        if old.get("excluded_current", False):
+                            self._check_original(source, row)
+                        else:self._compare(source, old["target"], row, old["kind"])
+                    elif row["family"] == "history" and self.history_groups[row["ordinal"]]["excluded_current"]:
+                        self._check_original(source, row)
+                        self.records[row["serial"]] = {"row": row, "row_raw": _c1_p_side_raw(row, self.work),
+                            "excluded_current": True, "target": None}
                     else:
                         kind = self._member_kind(row, batch)
                         self.records[row["serial"]] = self._stage_member(source, row, kind)
@@ -6688,9 +6933,25 @@ class _C1PHandoffParent:
 
     def _member_kind(self, row, batch):
         family, name = row["family"], row["name"]
+        _c1_p_semantic_values(row)
         if family == "runtime":
-            self.work["C1_runtime_inventory_carrier_unknown"] = True
-            raise Refusal("E_STORE")
+            invoice = _c1_p_runtime_invoice_values(row["runtime_invoice"], row)
+            reader = self.session.reader
+            expected = {"python": reader.python.held.path, "jq": reader.jq.held.path,
+                "bash": reader.bash.held.path, "git": reader.git_binary.held.path, "sudo": "/usr/bin/sudo"}
+            _require(invoice["slot"] in expected and invoice["locator"] == expected[invoice["slot"]], "E_STORE")
+            self._caller(invoice["request_sha256"], invoice["attempt_id"])
+            ordinal = invoice["ordinal"]
+            if ordinal in self.runtime_invoices:
+                _require(self.runtime_invoices[ordinal] == invoice and self.runtime_serials[ordinal] == row["serial"], "E_STORE")
+            else:
+                _require(ordinal == len(self.runtime_invoices), "E_STORE")
+                self.runtime_invoices[ordinal] = dict(invoice)
+                self.runtime_serials[ordinal] = row["serial"]
+            fields = ("slot", "index", "ordinal", "locator", "file", "size_bytes", "sha256", "errno")
+            _runtime_inventory_values({"files": [{key: value[key] for key in fields}
+                for value in self.runtime_invoices.values()]})
+            return "runtime"
         if family == "anchor":
             names = {"reader-anchor-" + key + ".bin" for key in
                 {"host", "verifier", "supervisor"} | {"installed-" + role for role in INSTALLED_SOURCES}}
@@ -6705,6 +6966,14 @@ class _C1PHandoffParent:
             _require(family == "history" and name in set(SHADOW_EVIDENCE_NAMES)
                 | {"bundle.json", "publisher-body.txt", "scope-policy.json"}, "E_STORE")
         return "M"
+
+    def _check_original(self, source, row):
+        raw = self._read_M(source, EXECUTABLE_LIMIT)
+        _capture_copy_room(self.work, len(raw), False, read_only=True)
+        actual = digest(raw)
+        self.work["read_bytes"] += len(raw)
+        _capture_account(self.work, "M", "read_bytes", len(raw))
+        _require(len(raw) == row["size_bytes"] and actual == row["sha256"], "E_STORE")
 
     def _compare(self, source, target, row, kind):
         _require(source.before.st_size == target.before.st_size == row["size_bytes"], "E_STORE")
@@ -6733,6 +7002,41 @@ class _C1PHandoffParent:
         _require(left.hexdigest() == right.hexdigest() == row["sha256"], "E_STORE")
         source.recheck("E_STORE");target.recheck("E_STORE")
 
+    def _apply_receipt(self, receipt):
+        _c3_owner_receipt_values("raw", receipt)
+        source = self.child_work
+        totals = receipt["transferred_totals"]
+        for field, amount in totals.items():
+            _require(type(amount) is int and amount >= source.get(field, 0), "E_STORE")
+        for field, amount in receipt["runtime"].items():
+            _require(amount >= source.get("runtime", {}).get(field, 0), "E_STORE")
+        for kind, fields in source.get("accounting", {}).items():
+            _require(kind in receipt["classes"] and all(receipt["classes"][kind].get(field, -1) >= amount
+                for field, amount in fields.items()), "E_STORE")
+        for name, values in (("accounting_rows", receipt["observations"]), ("leaf_failures", receipt["failures"])):
+            previous = source.get(name, [])
+            old_raw = _c1_p_side_raw(previous, self.work)
+            new_raw = _c1_p_side_raw(values[:len(previous)], self.work)
+            _capture_copy_room(self.work, len(old_raw) + len(new_raw), False, read_only=True)
+            equal = old_raw == new_raw
+            self.work["read_bytes"] += len(old_raw) + len(new_raw)
+            _capture_account(self.work, "M", "read_bytes", len(old_raw) + len(new_raw))
+            _require(equal, "E_STORE")
+        source.update(totals)
+        source["runtime"] = receipt["runtime"]
+        source["accounting"] = receipt["classes"]
+        source["accounting_rows"] = receipt["observations"]
+        source["leaf_failures"] = receipt["failures"]
+        for key, value in receipt["incomplete"].items():
+            _require(type(key) is str and key.endswith("incomplete") and type(value) is bool, "E_STORE")
+            if value:source[key] = True
+        try:_capture_transfer_work(source, self.window_work, self.case_work)
+        except BaseException:
+            source["transfer_incomplete"] = True
+            self.unusable = True
+            raise
+        self.work["C1_child_tail_accounting_unknown"] = True
+
     def settle(self, value, phase):
         expected = {"C_RELEASED": "C_REQUEST", "CLOSED": "FINAL_OWNER"}
         _require(phase in expected and phase not in self.settlements, "E_STORE")
@@ -6748,17 +7052,87 @@ class _C1PHandoffParent:
         self.work["read_bytes"] += len(raw)
         _capture_account(self.work, "M", "read_bytes", len(raw))
         _require(value["batch_sha256"] == measured and not self.closed_serials.intersection(value["closed"])
-            and set(value["closed"]) <= set(self.records), "E_STORE")
+            and set(value["closed"]) <= set(self.batch_serials[batch_phase]), "E_STORE")
+        self._apply_receipt(value["accounting"])
         self.closed_serials.update(value["closed"])
         self.receipts.append(value["accounting"])
         self.settlements[phase] = value
 
+    def scope_values(self):
+        _require(not self.unusable and self.session.closed
+            and "FINAL_OWNER" in self.batches and "CLOSED" in self.settlements
+            and self.source_documents, "E_STORE")
+        covered = self.session.coverage_request_raw is not None
+        expected = [0, 1, 2] if covered else [0]
+        _require(sorted(self.source_documents) == expected, "E_STORE")
+        latest = self.source_documents[expected[-1]]
+        _require(latest[2] == "kill" and (not covered or self.source_documents[1][2] == "coverage"), "E_STORE")
+        reader = self.session.reader
+        module = sys.modules.get(type(reader).__module__)
+        _require(module is not None and getattr(module, "_Reader", None) is type(reader)
+            and os.path.abspath(module.__file__) == os.path.join(_source_root(), "scope/v1/read-shadow-evidence.py"), "E_STORE")
+        previous = None
+        for ordinal in expected:
+            raw, document, _phase, _configuration = self.source_documents[ordinal]
+            records = [record for record in self.records.values() if record["row"]["family"] == "source"
+                and record["row"]["ordinal"] == ordinal]
+            _require(len(records) == 1 and records[0]["row"]["name"] == "consumer-observations.json", "E_STORE")
+            record = records[0]
+            target = record["target"]
+            _require(_identity(target.before) == record["initial_identity"], "E_STORE")
+            self._equal_M(self._read_M(target, DOCUMENT_LIMIT), raw)
+            if previous is not None:
+                prefix = document["storage_reads"][:len(previous["storage_reads"])]
+                self._equal_M(_c1_p_side_raw(prefix, self.work),
+                    _c1_p_side_raw(previous["storage_reads"], self.work))
+                module._scope_runtime_prefix_values(previous["commands"]["runtime_values"],
+                    document["commands"]["runtime_values"])
+            previous = document
+        document = latest[1]
+        module._scope_runtime_prefix_values(document["commands"]["runtime_values"], document["commands"]["runtime_values"])
+        _require("scope/v1/read-shadow-evidence.py" in document["clocks"]
+            and set(document["entropy"]) == ({"kill", "coverage"} if covered else {"kill"}), "E_STORE")
+        fields = ("slot", "index", "ordinal", "locator", "file", "size_bytes", "sha256", "errno")
+        runtime = {"files": [{key: row[key] for key in fields} for row in self.runtime_invoices.values()]}
+        _runtime_inventory_values(runtime)
+        value = {"entropy": document["entropy"], "commands": document["commands"],
+            "storage": {"entries": _gate_storage_rows_values(document["storage_reads"]),
+                "identity_context": document["identity_context"]},
+            "clocks": {"scope/v1/read-shadow-evidence.py": document["clocks"]["scope/v1/read-shadow-evidence.py"]},
+            "runtime": runtime}
+        raw = _c1_p_side_raw(value, self.work)
+        _capture_copy_room(self.work, len(raw), False, read_only=True)
+        result = _json(raw, DOCUMENT_LIMIT, "E_STORE")
+        self.work["read_bytes"] += len(raw)
+        _capture_account(self.work, "M", "read_bytes", len(raw))
+        root = os.path.join(str(reader.runtime), self.scratch_name)
+        config_relative = os.path.relpath(reader.git.config_path, str(reader.captures))
+        _require(config_relative.startswith("gate-0000/config-") and config_relative.endswith(".txt")
+            and "/../" not in config_relative, "E_STORE")
+        tools = {}
+        for invoice in self.runtime_invoices.values():
+            slot = invoice["slot"]
+            if slot in {"python", "jq", "bash", "git"}:
+                _require(slot not in tools or tools[slot] == invoice["locator"], "E_STORE")
+                tools[slot] = invoice["locator"]
+        _require(set(tools) == {"python", "jq", "bash", "git"}, "E_STORE")
+        locators = {"scratch": root, "runtime": root + "/reader-runtime", "captures": root + "/reader-captures",
+            "output": root + "/observation/result.json", "scope_input": root + "/scope.json",
+            "set_input": root + "/shadow-set.json", "git_root": self.argv[-1],
+            "git_config": root + "/reader-captures/" + config_relative, "package": _source_root(), **tools}
+        return result, locators
+
     def complete(self):
         _require(not self.unusable and not getattr(self.session, "p_handoff_errors", [])
+            and getattr(self.session, "p_handoff_error_unknown", None) is None
             and "FINAL_OWNER" in self.batches and "CLOSED" in self.settlements
             and ("C_REQUEST" not in self.batches or "C_RELEASED" in self.settlements)
             and set(self.records) == self.closed_serials, "E_STORE")
-        for record in self.records.values():record["target"].recheck("E_STORE")
+        for record in self.records.values():
+            if record.get("excluded_current", False):continue
+            target = record["target"]
+            _require(_identity(target.before) == record["initial_identity"], "E_STORE")
+            target.recheck("E_STORE")
 
     def close(self):
         runtime, self.runtime = self.runtime, None
@@ -6767,6 +7141,20 @@ class _C1PHandoffParent:
             if failure is not None:
                 self.fail(failure, "parent-root-close")
                 raise failure
+
+
+def _c1_p_wire_charge(work, field, amount):
+    _require(field in {"R", "W", "C"} and type(amount) is int and amount >= 0, "E_LIMIT")
+    counts = work.setdefault("seed_processing", {})
+    counts[field] = counts.get(field, 0) + amount
+    if field == "W":
+        work["write_bytes"] += amount
+        work["physical_bytes"] += amount
+        _capture_account(work, "M", "write_bytes", amount)
+        _capture_account(work, "M", "physical_bytes", amount)
+    else:
+        work["read_bytes"] += amount
+        _capture_account(work, "M", "read_bytes", amount)
 
 
 class _GateWire:
@@ -6782,29 +7170,76 @@ class _GateWire:
         import struct
         _require(type(phase) is str and type(body) is dict, "E_RUNTIME")
         self.sent += 1
-        raw = canonical({"version": 1, "call_id": self.call_id, "nonce": self.nonce,
-            "sequence": self.sent, "phase": phase, "binding": self.binding, "body": body})
+        value = {"version": 1, "call_id": self.call_id, "nonce": self.nonce,
+            "sequence": self.sent, "phase": phase, "binding": self.binding, "body": body}
+        work = getattr(self, "recording_work", None)
+        if work is None:raw = canonical(value)
+        else:
+            try:
+                raw = _c1_p_side_raw(value, work)
+                _require(len(raw) <= DOCUMENT_LIMIT and self.sent_bytes + len(raw) <= 64 * DOCUMENT_LIMIT, "E_LIMIT")
+            except BaseException as error:
+                first = _c1_p_report(work, "C1-wire-side", error, error)
+                if isinstance(first, KeyboardInterrupt) or getattr(first, "_scope_signal_cancel", False):raise first
+                _require("p_handoff" in body and phase in {"INIT", "C_REQUEST", "C_RELEASED", "FINAL_OWNER", "CLOSED"}, "E_RUNTIME")
+                work["C1_wire_side_incomplete"] = True
+                reduced = {key: item for key, item in body.items() if key != "p_handoff"}
+                if phase != "INIT":reduced["p_handoff"] = {"state": "unusable"}
+                value["body"] = reduced
+                raw = _c1_p_side_raw(value, work)
         _require(len(raw) <= DOCUMENT_LIMIT and _clock_value('shadow/v1/_consumer.py:1930:0',time.monotonic(),'monotonic') < self.deadline, "E_RUNTIME")
         self.sent_bytes += len(raw)
         _require(self.sent_bytes <= 64 * DOCUMENT_LIMIT, "E_LIMIT")
         self.sock.settimeout(max(0.001, self.deadline - _clock_value('shadow/v1/_consumer.py:1933:0',time.monotonic(),'monotonic')))
-        self.sock.sendall(struct.pack("!I", len(raw)) + raw)
+        if work is None:
+            self.sock.sendall(struct.pack("!I", len(raw)) + raw)
+            return
+        _capture_copy_room(work, 4 + len(raw), False, read_only=True)
+        frame = struct.pack("!I", len(raw)) + raw
+        _c1_p_wire_charge(work, "C", len(frame))
+        offset = 0
+        try:
+            while offset < len(frame):
+                amount = min(65536, len(frame) - offset)
+                _capture_copy_room(work, amount, False)
+                sent = self.sock.send(memoryview(frame)[offset:offset + amount])
+                _require(type(sent) is int and 0 < sent <= amount, "E_RUNTIME")
+                _c1_p_wire_charge(work, "W", sent)
+                offset += sent
+        except BaseException:
+            work["C1_wire_write_incomplete"] = True
+            raise
 
     def receive(self):
         import struct
+        work = getattr(self, "recording_work", None)
         while len(self.buffer) < 4 or len(self.buffer) < 4 + struct.unpack("!I", self.buffer[:4])[0]:
             _require(_clock_value('shadow/v1/_consumer.py:1939:0',time.monotonic(),'monotonic') < self.deadline, "E_RUNTIME")
             self.sock.settimeout(max(0.001, self.deadline - _clock_value('shadow/v1/_consumer.py:1940:0',time.monotonic(),'monotonic')))
-            chunk = self.sock.recv(65536)
+            if work is not None:_capture_copy_room(work, 2 * 65536, False, read_only=True)
+            try:chunk = self.sock.recv(65536)
+            except BaseException:
+                if work is not None:work["C1_wire_read_incomplete"] = True
+                raise
+            if work is not None:_c1_p_wire_charge(work, "R", len(chunk))
             _require(bool(chunk), "E_RUNTIME")
             self.buffer.extend(chunk)
+            if work is not None:_c1_p_wire_charge(work, "C", len(chunk))
             if len(self.buffer) >= 4:
                 _require(0 < struct.unpack("!I", self.buffer[:4])[0] <= DOCUMENT_LIMIT, "E_LIMIT")
         size = struct.unpack("!I", self.buffer[:4])[0]
+        if work is not None:_capture_copy_room(work, 2 * size, False, read_only=True)
         raw = bytes(self.buffer[4:4 + size]); del self.buffer[:4 + size]
+        if work is not None:_c1_p_wire_charge(work, "C", 2 * len(raw))
         self.received_bytes += len(raw)
         _require(self.received_bytes <= 64 * DOCUMENT_LIMIT, "E_LIMIT")
+        if work is not None:
+            _capture_copy_room(work, len(raw), False, read_only=True)
+            work["C1_wire_parse_incomplete"] = True
         row = _json(raw, DOCUMENT_LIMIT, "E_RUNTIME")
+        if work is not None:
+            _c1_p_wire_charge(work, "R", len(raw))
+            work["C1_wire_parse_incomplete"] = False
         _require(set(row) == {"version", "call_id", "nonce", "sequence", "phase", "binding", "body"}
                  and type(row["version"]) is int and row["version"] == 1
                  and type(row["sequence"]) is int and row["sequence"] == self.received + 1

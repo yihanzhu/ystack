@@ -8356,7 +8356,7 @@ def raw16_C1_p_handoff_codec(root: Path, evidence=None) -> dict:
     files = []
     for serial in range(2):
         slot = captures / ('gate-%04d' % serial);slot.mkdir(mode=0o700)
-        path = slot / 'value.json';path.write_bytes(c.canonical({'ordinary_codec_member': serial}));path.chmod(0o400)
+        path = slot / ('value.json' if serial == 0 else 'runtime-0001-python-0000.bin');path.write_bytes(c.canonical({'ordinary_codec_member': serial}));path.chmod(0o400)
         for item in (slot, path):os.chown(item, os.geteuid(), os.getegid())
         files.append(path)
     for item in (scratch, captures):os.chown(item, os.geteuid(), os.getegid())
@@ -8386,6 +8386,13 @@ def raw16_C1_p_handoff_codec(root: Path, evidence=None) -> dict:
             members.append({'serial': serial, 'family': 'anchor', 'ordinal': serial,
                 'name': path.name, 'relative': str(path.relative_to(scratch)),
                 'chain': chain[at_scratch:], 'size_bytes': len(raw), 'sha256': c.digest(raw)})
+        caller_raw = c.canonical({'id': 'ordinary.codec.request', 'body': {'fixture': True}})
+        runtime = members[1]
+        runtime['family'] = 'runtime'
+        runtime['runtime_invoice'] = {'slot': 'python', 'index': 0, 'ordinal': runtime['ordinal'],
+            'locator': str(files[1]), 'file': runtime['name'], 'size_bytes': runtime['size_bytes'],
+            'sha256': runtime['sha256'], 'errno': None, 'request_sha256': c.digest(caller_raw),
+            'attempt_id': 'ordinary.codec.request'}
         batch = c._c1_p_batch_values(scratch.name, root_chain, members, work)
         assert c._c1_p_batch_check(batch, work) is batch
         batch_raw = c._c1_p_side_raw(batch, work)
@@ -8416,6 +8423,24 @@ def raw16_C1_p_handoff_codec(root: Path, evidence=None) -> dict:
             ('member-name-binding', lambda value: value['members'][0].update(name='other.json')),
             ('member-chain-empty', lambda value: value['members'][0].update(chain=[])),
             ('member-sha-type', lambda value: value['members'][0].update(sha256=True)),
+            ('nonruntime-invoice', lambda value: value['members'][0].update(runtime_invoice=copy.deepcopy(runtime['runtime_invoice']))),
+            ('runtime-invoice-missing', lambda value: value['members'][1].pop('runtime_invoice')),
+            ('runtime-invoice-null', lambda value: value['members'][1].update(runtime_invoice=None)),
+            ('runtime-invoice-extra', lambda value: value['members'][1]['runtime_invoice'].update(extra=0)),
+            ('runtime-invoice-slot', lambda value: value['members'][1]['runtime_invoice'].update(slot='dyld_cache_files')),
+            ('runtime-invoice-index-bool', lambda value: value['members'][1]['runtime_invoice'].update(index=False)),
+            ('runtime-invoice-index-one', lambda value: value['members'][1]['runtime_invoice'].update(index=1)),
+            ('runtime-invoice-ordinal-bool', lambda value: value['members'][1]['runtime_invoice'].update(ordinal=True)),
+            ('runtime-invoice-ordinal-cross', lambda value: value['members'][1]['runtime_invoice'].update(ordinal=0)),
+            ('runtime-invoice-errno', lambda value: value['members'][1]['runtime_invoice'].update(errno=errno.EIO)),
+            ('runtime-invoice-file-cross', lambda value: value['members'][1]['runtime_invoice'].update(file='runtime-0000-python-0000.bin')),
+            ('runtime-invoice-size-cross', lambda value: value['members'][1]['runtime_invoice'].update(size_bytes=0)),
+            ('runtime-invoice-sha-cross', lambda value: value['members'][1]['runtime_invoice'].update(sha256='0' * 64)),
+            ('runtime-invoice-locator-relative', lambda value: value['members'][1]['runtime_invoice'].update(locator='relative')),
+            ('runtime-invoice-locator-NUL', lambda value: value['members'][1]['runtime_invoice'].update(locator='/ordinary\0invalid')),
+            ('runtime-invoice-locator-surrogate', lambda value: value['members'][1]['runtime_invoice'].update(locator='/ordinary\ud800')),
+            ('runtime-invoice-request-type', lambda value: value['members'][1]['runtime_invoice'].update(request_sha256=True)),
+            ('runtime-invoice-attempt-type', lambda value: value['members'][1]['runtime_invoice'].update(attempt_id=True)),
         ):
             value = copy.deepcopy(batch);mutate(value);reject(label, c._c1_p_batch_check, value)
         reject('unusable-extra-key', c._c1_p_batch_check, {'state': 'unusable', 'members': []})
@@ -8463,3 +8488,263 @@ def raw16_C1_p_handoff_codec(root: Path, evidence=None) -> dict:
                 with (Path(evidence) / 'C1-p-codec-work.json').open('x') as stream:json.dump(work, stream, sort_keys=True)
             except BaseException as later:failure = c._c3_first(failure, later)
         if failure is not None and sys.exc_info()[1] is not failure:raise failure
+
+
+def raw16_C1_p_cancel_drain(root: Path, evidence=None) -> dict:
+    import collections
+    import tempfile
+    spec = importlib.util.spec_from_file_location('C1_p_drain_consumer', root / 'shadow/v1/_consumer.py')
+    c = importlib.util.module_from_spec(spec);sys.modules[spec.name] = c;spec.loader.exec_module(c)
+    base = Path(tempfile.mkdtemp(prefix='ystack-C1-p-drain-')).resolve()
+    os.chown(base, os.geteuid(), os.getegid())
+    resolver = c._DarwinUUIDResolver() if sys.platform == 'darwin' else None
+    results = []
+    for label in ('report-keyboard-first', 'recheck-marked-first'):
+        path = base / label;path.write_bytes(b'ordinary owned close control\n');path.chmod(0o400)
+        os.chown(path, os.geteuid(), os.getegid())
+        work = c._c3_fresh_work(1)
+        held = c._open_held(str(path), False,
+            c._store_rule(os.geteuid(), os.getegid(), 0o400, False, resolver), 'E_STORE',
+            recording_work=work, accounting_kind='M')
+        order = [component.fd for component in reversed(held.components)]
+        target = held.fd
+        assert len(order) > 1 and len(order) == len(set(order))
+        keyboard = KeyboardInterrupt('C1 report keyboard')
+        marked = InterruptedError('C1 original recheck cancellation');marked._scope_signal_cancel = True
+        later_marked = InterruptedError('C1 later close observation');later_marked._scope_signal_cancel = True
+        first = keyboard if label == 'report-keyboard-first' else marked
+        original_stat, original_close = os.fstat, os.close
+        original_report, original_observe = c._capture_observation_error, c._capture_observe
+        stat_failed, close_observed, closes, reports = [], [], [], []
+        def failing_stat(fd):
+            if fd == target and not stat_failed:
+                stat_failed.append(fd)
+                if label == 'recheck-marked-first':raise marked
+                raise OSError(errno.EIO, 'ordinary recheck failure')
+            return original_stat(fd)
+        def closing(fd):
+            result = original_close(fd)
+            if fd in order:closes.append(fd)
+            return result
+        def reporting(values, kind, site, error):
+            result = original_report(values, kind, site, error)
+            if values is work and site == 'C1-P-final-recheck':
+                reports.append(error)
+                raise keyboard
+            return result
+        def observing(values, kind, site, value, *args, **kwargs):
+            result = original_observe(values, kind, site, value, *args, **kwargs)
+            if values is work and site == 'close' and value['site'] == 'C1-P-close' and not close_observed:
+                close_observed.append(later_marked)
+                raise later_marked
+            return result
+        result = None
+        try:
+            os.fstat, os.close = failing_stat, closing
+            c._capture_observation_error, c._capture_observe = reporting, observing
+            result = c._c1_p_close(held, work)
+        finally:
+            os.fstat, os.close = original_stat, original_close
+            c._capture_observation_error, c._capture_observe = original_report, original_observe
+            # The actual wrapper closes before recording; never retry those FDs.
+            held.components.clear()
+            for fd in order:
+                if fd not in closes:original_close(fd)
+            if evidence is not None:
+                with (Path(evidence) / ('C1-drain-' + label + '.json')).open('x') as stream:
+                    json.dump(work, stream, sort_keys=True)
+        assert result is first and reports and close_observed == [later_marked]
+        assert closes == order and collections.Counter(closes) == collections.Counter(order)
+        assert held.components == []
+        for fd in closes:
+            try:os.fstat(fd)
+            except OSError as error:assert error.errno == errno.EBADF
+            else:raise AssertionError('C1 actual owned FD remained open')
+        results.append({'case': label, 'owned_fds': len(order), 'actual_close_calls': len(closes),
+            'first_cancel_preserved': result is first, 'later_marked_observed': True})
+    return {'controls': results, 'retained_root': str(base), 'cost': 'UNKNOWN', 'native_qualification': 'NOTRUN'}
+
+
+def raw16_C1_runtime_invoice_owners(root: Path, evidence=None) -> dict:
+    import collections
+    import tempfile
+    import traceback
+    spec = importlib.util.spec_from_file_location('C1_invoice_generator', root/'scope/v1/generate-gate-evidence.py')
+    g = importlib.util.module_from_spec(spec);sys.modules[spec.name] = g;spec.loader.exec_module(g)
+    scope, c = g.r, g.c
+    base = Path(tempfile.mkdtemp(prefix='ystack-C1-invoice-owner-')).resolve()
+    runtime, originals, destination = (base/name for name in ('runtime', 'originals', 'S'))
+    scratch = runtime/'ystack-scope-evaluate.aB0123'
+    captures = scratch/'reader-captures'
+    P = captures/'gate-0000'
+    for path in (base, runtime, originals, destination, scratch, captures, P):
+        if path != base:path.mkdir(mode=0o700)
+        path.chmod(0o700);os.chown(path, os.geteuid(), os.getegid())
+    raw = b'TMP synthetic binary never executed\n' * 257
+    for role in ('python', 'bash', 'jq', 'git'):
+        path = originals/role;path.write_bytes(raw);path.chmod(0o400)
+        os.chown(path, os.geteuid(), os.getegid())
+    assert all(stat.S_IMODE(path.stat().st_mode) == 0o700 and path.stat().st_gid == os.getegid()
+        for path in (base, runtime, originals, destination, scratch, captures, P))
+    resolver = c._DarwinUUIDResolver() if sys.platform == 'darwin' else None
+    child_anchor = c.Anchor({}, b'', [], {}, ('', []), ('', []), resolver)
+    parent_anchor = c.Anchor({}, b'', [], {}, ('', []), ('', []), resolver)
+    child = object.__new__(scope._Reader)
+    parent_reader = object.__new__(scope._Reader)
+    child_session = object.__new__(scope._GateReaderSession)
+    child_session.p_enabled = True;child_session.p_unusable = False;child_session.p_cancel = None
+    child_session.p_reader = child;child_session.p_scratch = scratch
+    child_session.p_work = {};child_session.p_errors = [];child_session.p_registry = [];child_session.p_batches = {}
+    c._capture_work_values(child_session.p_work, 'C1-invoice-child')
+    caller = c.canonical({'schema_version': 1, 'kind': 'kill_register_source_request',
+        'id': 'kill-register.invoice-control', 'body': {}})
+    child_session.gate_call_ref = scope.ref(caller);child_session.kill_request_raw = caller
+    generation = c.canonical({'schema_version': 1, 'kind': 'scope_gate_generation_request',
+        'id': 'generation.invoice-control', 'body': {}})
+    generator = object.__new__(g._Generator)
+    session = g._GateStoreSession('generation.invoice-control', c.digest(generation), time.monotonic()+30)
+    generator.session = session;generator.reader = parent_reader;session.generator = generator;session.reader = parent_reader
+    session.kill_request_raw = caller
+    for reader, anchor, owner_session in ((child, child_anchor, child_session), (parent_reader, parent_anchor, session)):
+        reader.anchor = anchor;anchor.scope_runtime_owner = reader
+        reader.owned = [];reader.inputs = [];reader.source_copies = []
+        reader.store_session = owner_session;reader.commands_open = True;reader.capture_completion_owner = None
+        reader.captures = captures;reader._initialize_replay_outputs()
+    work, window = {}, parent_anchor.recording_work
+    c._capture_work_values(work, 'C1-invoice-parent')
+    case = c._capture_work_values(window, 'C1-invoice-actual-case')
+    parent, root_hold, P_hold, scratch_hold = None, None, None, None
+    copies, read_holds, rows, results, cleanup = [], [], [], [], []
+    primary, fd_counts = None, collections.Counter()
+    known_fds = set()
+    original_close = os.close
+    def error_value(value):
+        if not isinstance(value, BaseException):raise TypeError(type(value).__name__)
+        return {'category': type(value).__name__, 'errno': getattr(value, 'errno', None),
+            'traceback': traceback.format_exception(type(value), value, value.__traceback__)}
+    def reject(label, operation):
+        try:operation()
+        except (c.Refusal, KeyError, ValueError) as error:
+            results.append({'case': label, 'rejected': True, 'error': error_value(error)})
+        else:raise AssertionError('accepted '+label)
+    def close_fd(fd):
+        value = original_close(fd)
+        if fd in known_fds:fd_counts[fd] += 1
+        return value
+    try:
+        for reader in (child, parent_reader):
+            for role, attribute in (('python', 'python'), ('bash', 'bash'), ('jq', 'jq'), ('git', 'git_binary')):
+                setattr(reader, attribute, reader.hold(originals/role, c.EXECUTABLE_LIMIT))
+        P_hold = c._open_held(str(P), True, c._store_rule(os.geteuid(), os.getegid(), 0o700, True, resolver), 'E_STORE')
+        for role in ('python', 'bash'):
+            item = getattr(child, role)
+            copied = child_anchor.retain_runtime_acquisition(P_hold, role, item.held, item.raw, caller)
+            assert type(copied) is c._HeldCaptureCopy
+            copies.append(copied);child._own_source_copy(copied, P_hold)
+        assert len(child_session.p_registry) == 2 and not child_session.p_unusable
+        child_session._p_transfer()
+        first, second = child_session.p_registry
+        assert first['runtime_association'] is copies[0].scope_runtime_acquisition
+        assert second['runtime_association'] is copies[1].scope_runtime_acquisition
+        assert first['runtime_association'][0] is not second['runtime_association'][0]
+        assert first['runtime_association'][1].acquisition_sha == second['runtime_association'][1].acquisition_sha
+        for entry in child_session.p_registry:
+            family, ordinal, name = child_session._p_projection(entry)
+            held, copied = entry['held'], entry['copied']
+            invoice = entry['runtime_invoice']
+            assert family == 'runtime' and invoice is not entry['runtime_association'][0]
+            assert set(invoice) == {'slot', 'index', 'ordinal', 'locator', 'file', 'size_bytes',
+                'sha256', 'errno', 'request_sha256', 'attempt_id'}
+            rows.append({'serial': entry['serial'], 'family': family, 'ordinal': ordinal, 'name': name,
+                'relative': Path(held.path).relative_to(scratch).as_posix(), 'chain': child_session._p_chain(held),
+                'size_bytes': held.before.st_size, 'sha256': copied.runtime_sha256[name], 'runtime_invoice': invoice})
+        root_index = len(runtime.parts)-1
+        batch = c._c1_p_batch_values(scratch.name, rows[0]['chain'][root_index:root_index+2], rows, child_session.p_work)
+        assert c._c1_p_batch_check(batch, child_session.p_work) is batch
+        saved = first['copied'].scope_runtime_acquisition
+        for label, foreign in (('equal-sha-other-acquisition', second['runtime_association']),
+                ('fresh-equal-original-row', (dict(saved[0]), *saved[1:])),
+                ('other-P-member', (*saved[:3], second['held']))):
+            try:
+                first['copied'].scope_runtime_acquisition = foreign
+                reject(label, lambda: child_session._p_projection(first))
+            finally:first['copied'].scope_runtime_acquisition = saved
+        assert child_session._p_projection(first) == ('runtime', rows[0]['ordinal'], rows[0]['name'])
+        root_hold = c._open_held(str(destination), True,
+            c._store_rule(os.geteuid(), os.getegid(), 0o700, True, resolver), 'E_STORE', recording_work=work, accounting_kind='M')
+        parent = c._C1PHandoffParent(parent_anchor, root_hold, work, case, generation, session,
+            {}, [], window, [case], {})
+        scratch_hold = c._open_held(str(scratch), True,
+            c._store_rule(os.geteuid(), os.getegid(), 0o700, True, resolver), 'E_STORE', recording_work=work, accounting_kind='M')
+        for row in rows:
+            kind = parent._member_kind(row, batch)
+            assert kind == 'runtime'
+            held = parent._member(scratch_hold, row);read_holds.append(held)
+            record = parent._stage_member(held, row, kind)
+            parent.records[row['serial']] = record
+            target = record['target']
+            assert (held.before.st_dev, held.before.st_ino) != (target.before.st_dev, target.before.st_ino)
+            assert record['initial_identity'] == c._identity(target.before)
+            assert parent.files[record['name']]['sha256'] == row['sha256']
+            parent._compare(held, target, row, kind)
+            target.recheck('E_STORE', work, 'M')
+            assert c._identity(os.fstat(target.fd)) == record['initial_identity']
+        for label, change in (
+                ('invoice-member-name', lambda row: row['runtime_invoice'].update(file=rows[1]['name'])),
+                ('invoice-member-size', lambda row: row.update(size_bytes=row['size_bytes']+1)),
+                ('invoice-request', lambda row: row['runtime_invoice'].update(request_sha256='f'*64, attempt_id='kill-register.other')),
+                ('invoice-locator', lambda row: row['runtime_invoice'].update(locator=parent_reader.bash.held.path))):
+            altered = copy.deepcopy(rows[0]);change(altered)
+            reject(label, lambda: parent._member_kind(altered, batch))
+        altered = copy.deepcopy(rows[0]);altered['serial'] = 2
+        reject('same-invoice-different-serial', lambda: parent._member_kind(altered, batch))
+        altered = copy.deepcopy(rows[0]);altered['sha256'] = 'f'*64
+        reject('equal-P-S-wrong-initial-digest', lambda: parent._compare(read_holds[0], parent.records[0]['target'], altered, 'runtime'))
+        assert work['runtime']['read_bytes'] > len(raw) and work['runtime']['write_bytes'] == 2*len(raw)
+        assert work['runtime']['equality_bytes'] >= 4*len(raw)
+        assert work['accounting']['M']['read_bytes'] > 0 and child_session.p_work['accounting']['M']['read_bytes'] > 0
+        results.append({'case': 'actual-two-acquisitions-P-S', 'independent_inodes': True,
+            'initial_digest_and_final_identity': True, 'files': copy.deepcopy(parent.files)})
+        drift = parent.records[0]['target']
+        os.chmod(drift.path, 0o600)
+        reject('S-final-identity-drift', lambda: parent._compare(read_holds[0], drift, rows[0], 'runtime'))
+    except BaseException as error:
+        primary = error
+        raise
+    finally:
+        all_holds = [held for copied in copies for held in copied.owned]
+        all_holds += [item.held for reader in (child, parent_reader) for item in reader.owned if type(item) is c._HeldBytes]
+        all_holds += read_holds + (parent.output_holds if parent is not None else [])
+        all_holds += [held for held in (P_hold, scratch_hold, root_hold) if held is not None]
+        known_fds.update(component.fd for held in all_holds for component in held.components)
+        os.close = close_fd
+        try:
+            for held in reversed(read_holds + (parent.output_holds if parent is not None else [])):
+                error = c._c1_p_close(held, work)
+                if error is not None:cleanup.append(error)
+            for reader in (child, parent_reader):
+                try:reader.close()
+                except BaseException as error:cleanup.append(error)
+            for held in (scratch_hold, P_hold, root_hold):
+                if held is not None:
+                    error = c._c1_p_close(held, work)
+                    if error is not None:cleanup.append(error)
+            for anchor in (child_anchor, parent_anchor):
+                try:anchor.close()
+                except BaseException as error:cleanup.append(error)
+        finally:
+            os.close = original_close
+            detail = {'scope': 'direct actual owner mechanisms; full root/spawn/FD6/main NOTRUN',
+                'retained_root': str(base), 'controls': results, 'parent_work': work,
+                'child_side_work': child_session.p_work, 'child_original_work': child_anchor.recording_work,
+                'primary': None if primary is None else error_value(primary),
+                'cleanup': [error_value(error) for error in cleanup],
+                'owned_fd_counts': dict(fd_counts), 'full_fees': 'UNKNOWN',
+                'qualification': 'NOT_ACCEPTED; synthetic TMP bytes, never executed; M lower bound must retain any FAIL'}
+            if evidence is not None:
+                with (Path(evidence)/'C1-runtime-invoice-owners.json').open('x') as stream:
+                    json.dump(detail, stream, sort_keys=True, default=error_value)
+            if primary is None:
+                assert set(fd_counts) == known_fds and all(count == 1 for count in fd_counts.values())
+                assert all(not held.components for held in all_holds)
+    return detail

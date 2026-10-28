@@ -203,14 +203,16 @@ class _GateStoreSession:
         self.wire = self.child_socket = None
         self.closed = self.initialized = self.owner_confirmed = False
         self.remote_serial = 0
-        self.p_handoff_errors = []
 
     def _p_handoff_side(self, phase, value):
         handoff = getattr(self, "p_handoff", None)
         if handoff is None:
             return
         try:
-            if phase in {"C_REQUEST", "FINAL_OWNER"}:
+            if phase == "INIT":
+                self.wire.recording_work = handoff.work
+                value["p_handoff"] = {"version": 1}
+            elif phase in {"C_REQUEST", "FINAL_OWNER"}:
                 handoff.stage(value, phase)
             elif phase in {"C_RELEASED", "CLOSED"}:
                 handoff.settle(value, phase)
@@ -218,16 +220,28 @@ class _GateStoreSession:
                 require(phase == "COMPLETE", "E_RUNTIME")
                 handoff.complete()
         except BaseException as error:
+            first = error
             try:
                 handoff.fail(error, phase)
             except BaseException as later:
-                self.p_handoff_errors.append((phase, error, later))
-                handoff.unusable = True
-                if not (isinstance(error, KeyboardInterrupt) or getattr(error, "_scope_signal_cancel", False)):
-                    if isinstance(later, KeyboardInterrupt) or getattr(later, "_scope_signal_cancel", False):
-                        raise
-            if isinstance(error, KeyboardInterrupt) or getattr(error, "_scope_signal_cancel", False):
-                raise error
+                first = c._c3_first(first, later)
+                try:
+                    errors = getattr(self, "p_handoff_errors", None)
+                    if errors is None:
+                        errors = []
+                        self.p_handoff_errors = errors
+                    errors.append((phase, error, later))
+                except BaseException as reported:
+                    first = c._c3_first(first, reported)
+                    try:self.p_handoff_error_unknown = (getattr(self, "p_handoff_error_unknown", None), error, later, reported)
+                    except BaseException as last:first = c._c3_first(first, last)
+                try:handoff.unusable = True
+                except BaseException as reported:
+                    first = c._c3_first(first, reported)
+                    try:self.p_handoff_error_unknown = (getattr(self, "p_handoff_error_unknown", None), error, later, reported)
+                    except BaseException as last:first = c._c3_first(first, last)
+            if isinstance(first, KeyboardInterrupt) or getattr(first, "_scope_signal_cancel", False):
+                raise first
 
     def remember(self, binding):
         key = (binding["store_id"], binding["attempt_id"])
@@ -293,8 +307,7 @@ class _GateStoreSession:
         self.wire = c._GateWire(parent, self.deadline - 10, self.call_id, os.urandom(32).hex(), self.binding)
         body = {"deadline": self.deadline, "gate_call_ref": self.gate_call_ref,
             "initial_origin_refs": self.origins(), "kill_request": parse(self.kill_request_raw)}
-        if getattr(self, "p_handoff", None) is not None:
-            body["p_handoff"] = {"version": 1}
+        self._p_handoff_side("INIT", body)
         self.wire.send("INIT", body)
 
     def pump(self):
