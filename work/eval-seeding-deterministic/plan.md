@@ -1,5 +1,5 @@
 ---
-spec-blob: d4b45a565cfb789d9fdb2f9d5d67cceaeb51b289
+spec-blob: 1de1da9dc364e3b585fee638c1b88f9bbdc5ef3b
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-26
@@ -14,8 +14,8 @@ one complete two-source delivery. Source preparation does not accept a dependenc
 a real recording, native qualification or either seed batch.
 
 This plan binds accepted G2 spec blob
-`d4b45a565cfb789d9fdb2f9d5d67cceaeb51b289` at main
-`554a9b025f8e8e368fd73b812f3220571a226f1b` (PR #758).
+`1de1da9dc364e3b585fee638c1b88f9bbdc5ef3b` at main
+`6e155ee8d0757835ed1118d3c8b6de6be35f0aae` (PR #761).
 The separate high-risk plan-only gate must pass before dependent code.
 RAW16 acquisition design
 locations retain historical source `c1d9d23e42e6efe2d6da1aae3d23b34564b4080d`
@@ -31,11 +31,13 @@ historical anchors, not current resume identities. Earlier paused sources
 `ff9c26b3a1314f13efc0d97690ccf8b9fbe17bdf` and invoice source
 `5ceb67c9e33bb52f359514d8e785a26e77ecf491` and
 `60254f85f1c2db82c569688e989d15136ec9fc58` are historical. The current paused
-source is `53bed46d5eb694bfd05578f5ac1841b9443749c6`, parent
-`1c06296daecd57bfc92fcd18d56c888263aefcb5`, with last merged main
-`69857cc790c3096394cb0bb1822b6fc5b9ea6adb`, on the existing branch
-`codex/impl/eval-source-relay-replay`. Recheck its clean worktree, local/remote
-head, absent PR and existing #439 claim before an ordinary merge of accepted main
+source is `daf2dbcfbb62ede2c6d68c84745f8711a0ef1de3`, parent
+`216ab1868cce561ea56df870d7438e5022d206a7`, with last merged main
+`b69b0f780ded1f91cadce327c62e077d81549b8d`, on the existing branch
+`codex/impl/eval-source-relay-replay`. Its expected remote head remains
+`53bed46d5eb694bfd05578f5ac1841b9443749c6`; preserve this recorded unpushed delta.
+Recheck its clean worktree, exact local/remote heads, absent PR and existing #439
+claim before an ordinary merge of accepted main
 on that same branch. A prior clean record does not prove current state. Rebind
 artifacts, source, complete recipes and resources; obtain fresh independent review
 and manager GO before the bounded edits or ordinary fixtures/CI below. This plan
@@ -729,16 +731,24 @@ blocked pending its exact scope gate.
 This amendment changes only these existing test contacts. It keeps the product
 sources, the six C1 functional paths and three product pin paths unchanged.
 Design locations bind `53bed46d5eb694bfd05578f5ac1841b9443749c6`; rebind exact
-source/recipe bytes after the plan lands and main merges. Do not extend a selector
-or add a loader, observer, test framework, scenario or diagnostic path.
+source/recipe bytes after the plan lands and main merges. The sudo receiver repair
+binds the paused source above. Do not extend a selector or add a loader, observer,
+test framework or diagnostic path. The only added negative controls are the two
+fixed receiver-prerequisite checks below; they add no matrix or execution target.
+Remaining edits are only in `scope-qualification.test.sh` (the sudo receiver,
+coverage constructor and necessary direct caller-line binding) and
+`shadow-enforced.test.sh` (the fixed helper selection). Keep the paused bytes of
+the other three test files and all product sources/pins unchanged.
 
 | File | Fixed contact and order of work |
 | --- | --- |
 | `scripts/test/scope-qualification.test.sh` | `PY_STALE_PREPARE`, then its directly bound source SHA and line assertions: inspect the whole generation recipe; bind its three actual sources; check every fixed transformation before changing the private copies. Recompute the complete source-to-copy line maps and prove the inverse against the bound originals. Update only the corresponding source hash/line assertions in the existing owned/stale controls and dashboard caller binding. |
 | `scripts/test/scope-qualification.test.sh` | `PY_SAME_CALL_OWNED_CONTROLS:sudo_provenance_controls`: keep the original `provenance/recheck/close`, `FixedSudo/fixed_sudo` and actual FD seam. Extract their fixed current dependencies and initialize the receiver state described below before running the original twelve cases. |
+| `scripts/test/scope-qualification.test.sh` | In the top-level `PY_COVERAGE_PURE` manual `_Reader` construction, set only the original `source_copies=[]` and `capture_completion_owner=None` before acquiring any held object. Retain the existing `store_session=None`, all 141 original checks, real owned/Git/child/FD objects, command ledger and `finally: reader.close()`. Preserve first-error/cancellation behavior; do not clear owned, swallow errors, skip close, fake completion/enforced state or change production close. |
 | `scripts/test/evals-framework.test.sh` | `review_fixture` and its fixed `review_substitute` calls: verify the four driver catalog positions (`CATALOG_SHA`, `FIXED_PINS`, `verify_runtime`, `run_program`) and the one launcher position. Bind those exact replacements, then the original approval replacements, then measure the private driver and bind that digest in the private launcher. Keep strict counts and exact private diffs; do not compute an expected replacement count from the input. |
 | `scripts/test/scope-gate-generation.test.sh` | `verifier_observation_value_controls`: extract the unique `environment_entry_sha = _verifier_registry_entry_sha(registry[0])`, the unique `raw = _verifier_observation_values(environment_id, environment_entry_sha, anchor.accepted[0], target_repository_id, verifier_sha)`, and the final `return raw`, in that order. Check complete arguments, targets and data flow. Apply only the existing `anchor.accepted` seam. Keep the intervening production recording branch in place and outside this existing value-only comparison. |
 | `scripts/test/candidate-content-preparation-fixtures.py` | `raw16_preparation_P_handoff`: wire the two existing transitions described below in its seven original cases. Check the inspect result before indexing, while retaining the actual failed retention and its errors. |
+| `scripts/test/shadow-enforced.test.sh` | In the first `PY_REPRODUCTION_VALUES`, add only the real `_runtime_sha_values` to the original ten-name AST selection. Require exactly one definition of each of `Refusal`, `canonical`, `sha`, `parse`, `document_ref`, `_native_provenance_values`, `_runtime_sha_values`, `_reproduction_provenance_values`, `_reproduction_record_values`, `_reproduction_bundle_values`, `StableFile`. Keep the existing namespace and all 32 original assertions; the helper uses its existing `sha/c`, so retain the exact `marked_sha`/bundle order, early-failure prefixes and error payloads. Do not alter expected marks, omit the Python hash, catch NameError as success or use a recursive loader. |
 
 The stale recipe's design source SHA-256s are:
 
@@ -753,6 +763,10 @@ blob `605370780345539c5ed7b9debbd04f5327610128`. Preserve all four literal obser
 bodies and their existing fixed hashes, nine copies/logs/bindings/line maps, complete
 inverse transforms, source/copy identity checks, errors, returns, closes and caps.
 A new SHA alone is not proof that the generated copies still implement the recipe.
+The coverage constructor and sudo edits move the dashboard caller's line. Rebind
+only its already allowed direct line literal to the exact final call location.
+Keep all nine source-copy bytes/maps, four literal bodies, product source hashes
+and the two existing native bindings unchanged; do not reuse a guessed line value.
 
 For sudo, retain the fixed AST selection of `require/parse/same`. Add the six
 `_provenance_*_values` helpers actually called by `provenance`,
@@ -766,12 +780,50 @@ consumer module and fixed standard-library dependencies already used by this tes
 Initialize the actual constructor prerequisites: empty `source_copies`, no store
 session or completion owner, runtime ordinals from the fixed sites, and the
 original replay-output initializer. Supply the existing ordinary anchor's runtime
-observation/work containers and actual fixture bytes/held identities for its
-config, verifier and installed-input fields. Do not substitute constant equality,
-empty close handlers, fabricated original recordings or accepted completion.
-Preserve recording errors and all twelve original sudo results, including content
-versus identity digest, drift, factory/close failure and fallback flags. Retain
-registration, reverse close and the original exception object checks.
+observation/work containers. Back its config, verifier and installed inputs with
+real ordinary files inside the existing private fixture area. Prepare all backing
+files and directories before opening/freezing their held objects and parent identity;
+creating a later fixture must not invalidate an already held parent. Only when
+this real backing needs the fixed path adaptation, save and bind this test's
+independently loaded consumer namespace `ANCHOR` to that existing fixture directory.
+Restore the original value in `finally`, even if holder cleanup fails. Do not write
+the installed anchor or change production roots or another path seam. Read and hold
+each actual file and bind its path, raw bytes and components to that same backing.
+Derive `scope_verifier_input` from the actual verifier read and that same held object.
+An unrelated sudo
+leaf's stat, a declared path without backing or truthy placeholder components cannot
+supply this relationship. Keep prerequisite handles under fixture cleanup, separate
+from the original sudo owned list; close every acquired handle on success, failure
+and cancellation. Preserve the existing sudo FD/OS seam and original methods.
+
+For `no-change`, `withheld-write`, `drift`, `close-failure` and `fallback`, check the
+actual recording tail immediately after `provenance`, before the later expected
+drift/close fault. Require `replay_output_state == [False]`, no replay output errors
+and no unexpected anchor `unusable`. Require exactly one actual `anchor` output,
+keyed by the complete config bytes. Its exact `host`, `verifier`, `supervisor` and
+`installed-fixture` raw/object map must match the bytes read for this fixture and
+the same held objects used by the original producer; keep the original supervisor
+seam and compare its returned bytes/object too. Compare all bytes and object identity,
+not labels or digests alone. These positive predicates apply at that tail boundary;
+they do not require `unusable=False` after a later intentional drift/close fault.
+Never fill `replay_outputs` or clear failure state to satisfy an assertion.
+Retain the expected early rejection in the other seven cases;
+they need their original error/identity/close checks, not a positive anchor output.
+
+Use two independent small negative controls at this same receiver contact. Each
+starts from fresh, complete real prerequisites and the original output initializer;
+then remove only its config holder membership, or invalidate only the verifier's
+components. Do not combine faults or clear an earlier failure to create the baseline.
+Each must reach the original catch and `_replay_output_failure`, expose its actual error and
+failed state/unusable marker, and leave no accepted anchor output. An absent or
+wrong prerequisite must fail the positive predicate even when no exception escapes
+`provenance`. Restore each mutation before closing the actual holders in `finally`.
+Keep errors visible; do not change production catch semantics or inject an expected
+output. These controls prove the existing input guard; they do not claim native P
+qualification. Preserve all twelve original sudo results, including content versus
+identity digest, drift, factory/close failure and fallback flags, registration,
+reverse close and original exception objects. Do not substitute constant equality,
+empty close handlers, fabricated originals or accepted completion.
 
 For T handoff, call `_T_cleanup_begin(anchor, 'preparation-scratch')` before the
 inspect phase, record any actual removal, then `_T_cleanup_done(anchor)` before
@@ -787,25 +839,28 @@ receipt or success flags directly. Preserve `stable`, `P-target-drift`,
 `parent-mode`, `parent-inode`, `T-close-failure`, `T-transfer-failure` and
 `T-close-cancel`, their full bytes/fees and same-object cancellation assertions.
 
-Before execution, statically compare all five contacts with their bound originals:
+Before execution, statically compare all seven contacts with their bound originals:
 only the listed bindings and prerequisites may differ. Check the full generated
 recipes, all AST selections and complete private-copy differences. Preserve every
 trial/grade/label/approval/tamper/repeat/dashboard control; preserve the verifier's
 inline byte comparison, non-ASCII/NaN cases, four-stage order, ordinary faults and
 marked cancellation identity. Missing, duplicate or out-of-range transforms,
 wrong source/copy/line, absent dependencies or removed guards must still fail.
-Use the existing negative cases and rejection checks; add no diagnostic matrix.
+Use the existing negative cases and the two fixed receiver checks above; add no diagnostic matrix.
 Verify every other path is unchanged and measure the complete retained gross diff
 against the existing range without resetting old costs or deleting tests.
 
 After separate plan acceptance and protected merge, fresh exact source/recipe/
-resource review and manager GO precede implementation and any test execution.
-Run `bash -n` on the three changed shell tests and parse the changed Python fixture
+resource review and manager CODE-only GO precede the two-file repair. Test execution
+requires its separate fresh review and GO; neither the old GO nor a CODE-only GO
+supplies it. Preserve the recorded source REVISE and all prior CI failures, skips,
+unreached checks, rounds, costs and UNKNOWN until their own fresh proof passes.
+Run `bash -n` on the four changed shell tests and parse the changed Python fixture
 without importing it. Use existing pinned tools only. For execution, the existing
 CI environment must run complete `evals-framework.test.sh`,
-`scope-gate-generation.test.sh`, `candidate-content-preparation.test.sh` and
-`scope-qualification.test.sh` under `scripts/test/`, then satisfy the existing
-full matrix on the final combined head. Bind each full command, head and raw exit
+`scope-gate-generation.test.sh`, `candidate-content-preparation.test.sh`,
+`scope-qualification.test.sh` and `shadow-enforced.test.sh` under `scripts/test/`
+through the existing full matrix on the final combined head. Bind each full command, head and raw exit
 output; previously unreached suites remain unproved until they complete. Existing
 bounded local ordinary fixtures require their own fresh resource GO. This adds no
 local full-scope, LOCAL7/D, native or real-target window, network, install or
@@ -2880,7 +2935,7 @@ gates (R9.6).
   cannot leave the PR whose test checks their digests.
 - PR 3: `review_size: standard`, about 300-400 net added lines.
 - This plan-only amendment: `review_size: standard`. One concern: the accepted
-  four-test source and lifecycle compatibility. All runtime-invoice obligations
+  five-test source and lifecycle compatibility. All runtime-invoice obligations
   and PR 1b's complete-concern range remain unchanged.
 
 Each range waives only the soft line signal, never scope, tests, CI, review or human
@@ -2891,8 +2946,10 @@ merge.
 - **Test binding can hide a missing check.** The riskiest compatibility step is
   extracting current private dependencies and entering the real T transitions.
   Updating hashes/counts alone or filling successful state would hide failures.
-  Use the bound original methods and full inverse/control comparisons above;
-  reject broader loaders, constant stubs and product changes for fixture fit.
+  Use the bound original methods and full inverse/control comparisons above.
+  A caught recording error must fail a positive receiver control; real file backing
+  and complete raw/object checks prevent apparently successful fake prerequisites.
+  Reject broader loaders, constant stubs and product changes for fixture fit.
 - **Candidate ownership and fit.** The riskiest step is binding original Git bytes
   to the outer authentication while preserving native failure and close order.
   Capturing the full fixed set avoids borrowing ambiguous nested or parent bytes.
