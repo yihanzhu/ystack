@@ -9638,12 +9638,47 @@ def raw16_C1_history_recorded_alias(root: Path, deletion=False, evidence=None) -
                     'scope':'typed Reader owner with real held P/history S/recorded S only; outer acquisition/native caller NOTRUN',
                     'full_fees':'UNKNOWN'})
             finally:
-                primary=sys.exc_info()[1] or caught
-                try:assembly.close(primary)
-                except BaseException as error:assert error is primary
-                for item in reversed(reader.owned):
-                    if type(item) is c._HeldBytes:item.close()
-                parent.close()
+                test_error=sys.exc_info()[1]
+                close_primary=assembly.failure or caught or test_error
+                byte_owners=[item for item in reversed(reader.owned) if type(item) is c._HeldBytes]
+                held_owners=[*assembly.output_holds,assembly.root,*(item.held for item in byte_owners),parent]
+                held_owners=[item for item in held_owners if item is not None]
+                original_fds={part.fd for item in held_owners for part in item.components}
+                cleanup_errors=[];close_attempts=[]
+                native_close=c.HeldPath.close
+                def observe_close(item):
+                    close_attempts.append(id(item))
+                    try:return native_close(item)
+                    except BaseException as error:
+                        cleanup_errors.append(('held-close',error))
+                        raise
+                c.HeldPath.close=observe_close
+                try:
+                    try:assembly.close(close_primary)
+                    except BaseException as error:
+                        if error is not close_primary:cleanup_errors.append(('assembly-close',error))
+                    for item in byte_owners:
+                        try:item.close()
+                        except BaseException as error:
+                            if not any(previous is error for _site,previous in cleanup_errors):
+                                cleanup_errors.append(('reader-close',error))
+                    try:parent.close()
+                    except BaseException as error:
+                        if not any(previous is error for _site,previous in cleanup_errors):
+                            cleanup_errors.append(('parent-close',error))
+                finally:c.HeldPath.close=native_close
+                if len(byte_owners)!=3 or not assembly.closed or assembly.root is not None or assembly.output_holds:
+                    cleanup_errors.append(('owner-state',RuntimeError('history alias owner cleanup incomplete')))
+                for item in held_owners:
+                    if id(item) not in close_attempts or item.components:
+                        cleanup_errors.append(('held-state',RuntimeError('history alias held owner not fully closed')))
+                for fd in original_fds:
+                    try:os.fstat(fd)
+                    except OSError as error:
+                        if error.errno!=errno.EBADF:cleanup_errors.append(('closed-fd',error))
+                    else:cleanup_errors.append(('open-fd',RuntimeError('history alias FD remained open')))
+                if cleanup_errors:
+                    raise RuntimeError('history alias cleanup failed',cleanup_errors) from (test_error or close_primary)
     _C3_work_evidence(results,evidence,'history-recorded-alias')
     return {'controls':results,'native_qualification':'BLOCKED','complete_caller':'NOTRUN'}
 
