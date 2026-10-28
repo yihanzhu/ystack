@@ -2457,7 +2457,20 @@ class _SeedAssembly:
         module = self._gate_type(generator, "scope/v1/generate-gate-evidence.py", "_Generator")
         _seed_require(generator is self._gate_owner and generator.session is self.gate_session)
         try:
-            manifest_owner = module._Generator._run_after_inputs(generator)
+            context = module._Generator._kill_source_request_phase(generator)
+            self.release_gate_local()
+            register_raw = module._Generator._kill_source_result_phase(generator, context)
+            try:
+                _seed_require(self.gate_session.phase == "K_DONE"
+                    and self.gate_session.coverage_request_raw is None)
+                native = self.gate_session.kill_source
+                capture_P, local_P = self._gate_kill_carriers()
+                self.kill(native, capture_P, local_P)
+            except BaseException as error:
+                self._failed(error, "seed-gate-K_DONE")
+                if isinstance(self.failure, KeyboardInterrupt) or getattr(self.failure, "_scope_signal_cancel", False):
+                    raise self.failure
+            manifest_owner = module._Generator._run_after_kill(generator, register_raw)
             try:
                 self.gate()
                 self.gate_output_members()
@@ -2477,6 +2490,43 @@ class _SeedAssembly:
                 if not self.gate_close_returned or isinstance(error, KeyboardInterrupt) or getattr(error, "_scope_signal_cancel", False):
                     raise
                 self._failed(error, "seed-gate-close-recording")
+
+    def _gate_kill_carriers(self):
+        reader, native = self.generator.reader, self.gate_session.kill_source
+        module = self._gate_type(reader, "scope/v1/read-shadow-evidence.py", "_Reader")
+        owner = module.c
+        _seed_require(self.gate_session.phase == "K_DONE" and reader.commands_open
+            and type(native) is owner._HeldCoverageRead and native.anchor is reader.anchor
+            and reader.anchor.scope_runtime_owner is reader)
+        request_raw = self.gate_session.kill_request_raw
+        _seed_require(type(request_raw) is bytes and native.capture.request_raw == request_raw)
+        request = self._wrapper_parse(request_raw, "gate-source-caller")
+        request_sha = self._digest(request_raw, "M")
+        captures = [item for item in reader.source_copies
+            if getattr(item, "scope_source", None) is native and not item.closed]
+        configurations = [item for item in reader.source_copies
+            if getattr(item, "source_configuration_source", None) is native and not item.closed]
+        _seed_require(len(captures) == len(configurations) == 1)
+        local = [configurations[0]]
+        invoice_rows = [row for row in reader.anchor.private_observations["local_runtime"]
+            if row["request_sha256"] == request_sha and row["attempt_id"] == request["id"]]
+        selected = []
+        for copied in reader.source_copies:
+            association = getattr(copied, "scope_runtime_acquisition", None)
+            if association is None:continue
+            _seed_require(type(association) is tuple and len(association) == 4)
+            row, snapshot, original, member = association
+            if not any(row is wanted for wanted in invoice_rows):continue
+            _seed_require(not copied.closed and copied.anchor is reader.anchor
+                and type(snapshot) is owner._RuntimeSnapshot and snapshot.owner is original
+                and type(original) is owner.HeldPath and original.components
+                and copied.members.get(row["file"]) is member and member.components
+                and not any(row is previous for previous in selected))
+            selected.append(row)
+            local.append(copied)
+        _seed_require(invoice_rows and len(selected) == len(invoice_rows)
+            and all(any(row is actual for actual in selected) for row in invoice_rows))
+        return captures[0], local
 
     def gate_output_members(self):
         try:

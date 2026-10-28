@@ -735,6 +735,11 @@ class _Generator:
             for item, _key, _binding in self.session.local.values()])
 
     def kill_source(self):
+        context = self._kill_source_request_phase()
+        context[1].release_local()
+        return self._kill_source_result_phase(context)
+
+    def _kill_source_request_phase(self):
         reader, session = self.reader, self.session
         configuration = c.load_coverage_configuration(reader.anchor_for(), "kill-register-read")
         require(configuration is not None, "E_CONFIG")
@@ -772,7 +777,10 @@ class _Generator:
             reader.hold(self.outputs[name], c.DOCUMENT_LIMIT)
         self.check()
         session.phase = "K_REQUEST"
-        session.release_local()
+        return reader, session, config, raw
+
+    def _kill_source_result_phase(self, context):
+        reader, session, config, raw = context
         require(not session.local and not session.remote, "E_RUNTIME")
         reader.darwin.kill_register_source(raw)
         session.phase = "K_DONE"
@@ -795,6 +803,9 @@ class _Generator:
 
     def _run_after_inputs(self):
         register_raw = self.kill_source()
+        return self._run_after_kill(register_raw)
+
+    def _run_after_kill(self, register_raw):
         self.put("register", register_raw)
         duty = self.driver("control/v1/evaluate-duty.sh", ["policy-set", "stage-request", "resolved-profile", "stage-result"])
         self.put("duty", duty)
