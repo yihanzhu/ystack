@@ -37,7 +37,7 @@ Do not change the normalizer, its test, any profile, workflow, core schema, acce
 artifact or existing manifest entry. No generated fixture tree or shared provider,
 executor, transport registry or credential framework is needed.
 
-review_size: accepted-exception — implementation: 1500–2400 net added lines for this one collector concern.
+review_size: accepted-exception — implementation: 2400–2600 net added lines for this one collector concern.
 The estimate covers three small product modules, the scripted-wire and real-worker
 regressions, one test wrapper and the contract guide. Bounds, failure controls and
 readable ownership code justify the exception. Do not compress code or trim tests
