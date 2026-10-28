@@ -1176,7 +1176,7 @@ PY_MAC_TRANSITION
 python3 -I -S -B - "$root" "$tmp/stale-observation" <<'PY_STALE_PREPARE'
 import difflib,hashlib,json,pathlib,shlex
 root=pathlib.Path(__import__('sys').argv[1]);area=pathlib.Path(__import__('sys').argv[2])
-expected={'scope/v1/evaluate-scope.sh': 'f120e877973aa0b66d7ce3de2f6b9cc46b6a9b073e89c606fd99fd23fc84356a', 'scope/v1/read-shadow-evidence.py': 'ef89c5b775a397dc4d1c2b25d961b2872436bc9c105a1984f10524e2a64c2614', 'shadow/v1/_consumer.py': 'd35cb669a1521fb007c7814c49ca05054ef13d973067de8d0719073525971597'}
+expected={'scope/v1/evaluate-scope.sh': 'fe6048b5eada5d86531e085acd0a9f46b73028d348349ab932e8c59f4e2ed66a', 'scope/v1/read-shadow-evidence.py': '201791d1783d4130ec947bc60ed61cd5cec9d45da98eae033d1b859b9761e404', 'shadow/v1/_consumer.py': 'dd8ef865177d4b2714117cb1631bb24d896215be56475544321b2959c024ccee'}
 for path,digest in expected.items():
     assert hashlib.sha256((root/path).read_bytes()).hexdigest()==digest
 observer_source = r"""import hashlib,json,os,runpy,stat,sys,time,types
@@ -1756,6 +1756,7 @@ for index,case in enumerate(cases+['evaluation-reasons']):
         "m=runpy.run_path("+repr(str(observer))+")\n"+
         "m['observe'](pathlib.Path("+repr(str(reader))+"),"+repr(str(log))+","+repr(case)+
         ",'reader', ["+repr(str(reader))+ "]+sys.argv[1:],"+str(index)+")\n")
+    assert front.count('source_path=${BASH_SOURCE[0]}')==front.count('umask 077\n')==1
     copy=front.replace('source_path=${BASH_SOURCE[0]}','source_path='+shlex.quote(str(root/'scope/v1/evaluate-scope.sh')))
     launch='"$python_bin" -I -S -B "$reader" read'
     assert copy.count(launch)==1 and copy.count('trap cleanup EXIT')==1
@@ -2353,12 +2354,29 @@ def sudo_provenance_controls():
     enforced=(root/'shadow/v1/enforced-reproduction.py').read_text()
     spec=importlib.util.spec_from_file_location('sudo_contract_owned_consumer',root/'shadow/v1/_consumer.py')
     c=importlib.util.module_from_spec(spec);sys.modules[spec.name]=c;spec.loader.exec_module(c)
-    tree=ast.parse(reader);klass=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='_Reader')
-    methods=[n for n in klass.body if isinstance(n,ast.FunctionDef) and n.name in ('provenance','recheck','close')]
-    helpers=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in ('require','parse','same')]
-    contract=ast.parse(enforced);fixed=next(n for n in contract.body if isinstance(n,ast.ClassDef) and n.name=='FixedSudo')
-    factory=next(n for n in contract.body if isinstance(n,ast.FunctionDef) and n.name=='fixed_sudo')
-    actual=ast.Module(body=helpers+[ast.ClassDef(name='ActualReader',bases=[],keywords=[],body=methods,decorator_list=[])],type_ignores=[])
+    assert hashlib.sha256(reader.encode()).hexdigest()=='201791d1783d4130ec947bc60ed61cd5cec9d45da98eae033d1b859b9761e404'
+    tree=ast.parse(reader);classes=[n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='_Reader']
+    assert len(classes)==1;klass=classes[0]
+    method_names=('provenance','recheck','close','anchor_for','_runtime_equal','_close_source_copies',
+        '_initialize_replay_outputs','_retain_replay_output','_replay_output_failure')
+    helper_names=('require','parse','same','_provenance_document_values','_provenance_content_matches_values',
+        '_provenance_native_shape_matches_values','_provenance_native_identity_matches_values',
+        '_provenance_roles_values','_provenance_commands_values','_scope_runtime_value_values','_scope_runtime_equal_values')
+    def unique(nodes,name,kind):
+        selected=[n for n in nodes if isinstance(n,kind) and n.name==name]
+        assert len(selected)==1,(name,len(selected))
+        return selected[0]
+    methods=[unique(klass.body,name,ast.FunctionDef) for name in method_names]
+    helpers=[unique(tree.body,name,ast.FunctionDef) for name in helper_names]
+    sessions=unique(tree.body,'_GateReaderSession',ast.ClassDef)
+    sites=[n for n in tree.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='_SCOPE_RUNTIME_SITES' for t in n.targets)]
+    assert len(sites)==1
+    source_bindings={n.name:hashlib.sha256(ast.get_source_segment(reader,n).encode()).hexdigest()
+        for n in helpers+methods+[sessions]}
+    source_bindings['_SCOPE_RUNTIME_SITES']=hashlib.sha256(ast.get_source_segment(reader,sites[0]).encode()).hexdigest()
+    contract=ast.parse(enforced);fixed=unique(contract.body,'FixedSudo',ast.ClassDef)
+    factory=unique(contract.body,'fixed_sudo',ast.FunctionDef)
+    actual=ast.Module(body=sites+helpers+[sessions,ast.ClassDef(name='ActualReader',bases=[],keywords=[],body=methods,decorator_list=[])],type_ignores=[])
     actual=ast.fix_missing_locations(actual)
     namespace={'c':c,'Path':pathlib.Path,'PACKAGE':root,'sys':sys,'sysconfig':sysconfig}
     exec(compile(actual,'actual-reader-provenance-owned','exec'),namespace)
@@ -2394,11 +2412,24 @@ def sudo_provenance_controls():
         domain['__name__']='sudo_contract_owned_definitions'
         exec(compile(ast.Module(body=[fixed,factory],type_ignores=[]),'actual-fixed-sudo-owned','exec'),domain)
         obj=ActualReader.__new__(ActualReader);obj.owned=[];obj.inputs=[];obj.anchor=None
+        obj.source_copies=[];obj.store_session=None;obj.capture_completion_owner=None
+        obj._runtime_ordinals={site:0 for site in namespace['_SCOPE_RUNTIME_SITES']}
+        obj._initialize_replay_outputs()
         digest='1'*64;held=types.SimpleNamespace(sha256=digest)
         obj.package_sources={p:held for p in ('shadow/v1/write-shadow.py','shadow/v1/enforced-reproduction.py')}
         obj.python=obj.jq=obj.bash=obj.git_binary=obj.consumer=held
         supervisor=types.SimpleNamespace(path=c.ANCHOR+'/host-supervisor.py',read=lambda limit,code:b'original supervisor')
-        obj.anchor=types.SimpleNamespace(held=[supervisor],recheck=lambda code:None)
+        config_raw=c.canonical({'fixture':'ordinary sudo host config'})
+        verifier_raw=c.canonical({'fixture':'ordinary sudo verifier'})
+        installed_raw=c.canonical({'fixture':'ordinary sudo installed input'})
+        config_held=types.SimpleNamespace(path=c.ANCHOR+'/host-config.json',components=[os.stat(leaf)],raw=config_raw)
+        verifier_held=types.SimpleNamespace(path=c.ANCHOR+'/sudo-fixture-verifier.json',components=[os.stat(leaf)],raw=verifier_raw)
+        installed_held=types.SimpleNamespace(path=c.ANCHOR+'/sudo-fixture-installed.json',components=[os.stat(leaf)],raw=installed_raw)
+        obj.anchor=types.SimpleNamespace(held=[supervisor,config_held,verifier_held,installed_held],recheck=lambda code:None,
+            private_observations={'entropy':{},'commands':{'runtime_values':[]}},recording_work={},
+            config_raw=config_raw,config={'identity_paths':{'verifier':verifier_held.path},
+                'installed_files':{'fixture':installed_held.path}},scope_verifier_input=(verifier_raw,verifier_held),
+            installed={'fixture':(installed_raw,c.digest(installed_raw))})
         def hold(path,limit,**options):
             assert str(path)!='/usr/bin/sudo';return held
         obj.hold=hold
@@ -2446,7 +2477,8 @@ def sudo_provenance_controls():
             'original_exception':type(error).__name__ if error else None,'stale':stale,'close_exception':type(close_error).__name__ if close_error else None,
             'owned_registration_and_reverse_close':True,'descriptor_closed':len(closed),'transport':'ordinary real FD; fixed root metadata and O_EXEC availability OS seams'})
     reports.append({'sudo_provenance_controls':rows,'actual_reader_sha256':hashlib.sha256(reader.encode()).hexdigest(),
-        'actual_factory_sha256':hashlib.sha256(ast.get_source_segment(enforced,factory).encode()).hexdigest()})
+        'actual_factory_sha256':hashlib.sha256(ast.get_source_segment(enforced,factory).encode()).hexdigest(),
+        'actual_dependency_sha256':source_bindings})
 sudo_provenance_controls()
 
 
@@ -2919,7 +2951,7 @@ evaluation_reasons() {
 }
 dashboard_shape_evaluation() {
   local scope_dashboard_line=${BASH_LINENO[0]}
-  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 10225 ]; then scope_dashboard_inflight=true; fi
+  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 10258 ]; then scope_dashboard_inflight=true; fi
   evaluation_document "$@"
   scope_dashboard_inflight=false
 }
@@ -3413,7 +3445,7 @@ old=old.replace("return (frame.f_code.co_filename in source_codes and\n         
 assert hashlib.sha256(old.encode()).hexdigest()=='0c2b1c8c8cb9c662c55e17e134f408693ab4ead8f27357ad6cb2b7bcc0b820eb'
 root=Path(sys.argv[2]).resolve()
 consumer=(root/'shadow/v1/_consumer.py').read_bytes()
-assert hashlib.sha256(consumer).hexdigest()=='d35cb669a1521fb007c7814c49ca05054ef13d973067de8d0719073525971597'
+assert hashlib.sha256(consumer).hexdigest()=='dd8ef865177d4b2714117cb1631bb24d896215be56475544321b2959c024ccee'
 old_wrapper=wrapper.replace("try:\n    for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):\n        signal.signal(number, cancel)\n    signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})\n    sys.settrace(dispatch)\n    exec(compiled_code, {'__name__': '__main__'})\n","for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):\n    signal.signal(number, cancel)\nsignal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})\nsys.settrace(dispatch)\ntry:\n    exec(compiled_code, {'__name__': '__main__'})\n",1)
 old_wrapper=old_wrapper.replace('import dis, json, os, signal, sys, time, types','import json, os, signal, sys, time',1)
 old_wrapper=old_wrapper.replace('    bound_cache.clear()\n','')

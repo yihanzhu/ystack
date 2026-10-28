@@ -104,9 +104,19 @@ def verifier_observation_value_controls():
         else:raise AssertionError('noncanonical inline input accepted')
     check(len(errors)==2 and errors[0]==errors[1])
     tree=ast.parse((root/'shadow/v1/_consumer.py').read_bytes())
-    native=next(node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=='verifier_observation')
-    tail=copy.deepcopy(native.body[-2:])
-    check(isinstance(tail[0],ast.Assign) and isinstance(tail[1],ast.Return))
+    natives=[node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=='verifier_observation']
+    check(len(natives)==1);native=natives[0]
+    entry=[node for node in native.body if isinstance(node,ast.Assign)
+        and len(node.targets)==1 and isinstance(node.targets[0],ast.Name) and node.targets[0].id=='environment_entry_sha']
+    raw=[node for node in native.body if isinstance(node,ast.Assign)
+        and len(node.targets)==1 and isinstance(node.targets[0],ast.Name) and node.targets[0].id=='raw']
+    returned=[node for node in native.body if isinstance(node,ast.Return)
+        and isinstance(node.value,ast.Name) and node.value.id=='raw']
+    check(len(entry)==len(raw)==len(returned)==1)
+    check(native.body.index(entry[0])<native.body.index(raw[0])<native.body.index(returned[0]))
+    check(native.body[-1] is returned[0])
+    tail=copy.deepcopy([entry[0],raw[0],returned[0]])
+    check(isinstance(tail[0],ast.Assign) and isinstance(tail[1],ast.Assign) and isinstance(tail[2],ast.Return))
     check(ast.unparse(tail[0].value)=='_verifier_registry_entry_sha(registry[0])')
     check(ast.unparse(tail[1].value)=='_verifier_observation_values(environment_id, environment_entry_sha, anchor.accepted[0], target_repository_id, verifier_sha)')
     class AcceptedArgument(ast.NodeTransformer):

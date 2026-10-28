@@ -561,7 +561,7 @@ review_fixture() {
   local catalog_sha approval_sha private_driver_sha
   catalog_sha=$(sha_file "$repo/evals/v1/eval-catalog.json"); approval_sha=$(sha_file "$dir/approval.json")
   review_substitute "$repo/evals/v1/evals-driver.sh" "$repo/evals/v1/evals-driver.sh" \
-    0239138447a8f9fd420cb3c5da31660d8f75c85099d80d89a040dce2878a4cac "$catalog_sha" 2
+    0239138447a8f9fd420cb3c5da31660d8f75c85099d80d89a040dce2878a4cac "$catalog_sha" 4
   review_substitute "$repo/evals/v1/evals-launcher.sh" "$repo/evals/v1/evals-launcher.sh" \
     0239138447a8f9fd420cb3c5da31660d8f75c85099d80d89a040dce2878a4cac "$catalog_sha" 1
   if [ "$name" != none ]; then

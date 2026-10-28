@@ -2140,8 +2140,13 @@ def raw16_preparation_P_handoff(root: Path) -> None:
         assert anchor.private_observations['preparation']['prepare']==expected
         assert set(returned.members)=={'capture.json'}|set(returned.runtime_sha256)
         assert len(returned.runtime_sha256)==3
+        holder._T_cleanup_begin(anchor,'preparation-scratch')
+        holder._T_cleanup_done(anchor)
         create_T('inspect')
+        holder._T_inspection_returned(anchor)
         inspected=holder._retain_preparation(anchor,'preparation-scratch','inspect',input_raw,response_raw,caller)
+        assert inspected is not None, ('T-P inspect retention', [leaf.get('failure') for leaf in anchor.recording_work.get('preparation_leaves',[])])
+        assert len(holder.runtime_copies)==2, 'T-P prepare and inspect must retain two actual runtime copies'
         assert inspected is holder.runtime_copies[1] and not inspected.closed
 '''
     final='''        if T_case=='P-target-drift':
@@ -2165,7 +2170,7 @@ def raw16_preparation_P_handoff(root: Path) -> None:
     for case in ('stable','P-target-drift','parent-mode','parent-inode','T-close-failure','T-transfer-failure','T-close-cancel'):
         script=head+setup
         if case.startswith('T-'):script+=failed
-        else:script+=success+edge+'        holder._refresh_runtime_parents()\n'+tail+final
+        else:script+=success+'        T_parent_transition=holder._begin_T_parent(anchor,parent)\n'+edge+'        holder._refresh_runtime_parents()\n        holder._finish_T_parent(anchor,parent,T_parent_transition,{\'reproduction\'})\n'+tail+final
         namespace={'T_case':case};argv=sys.argv;sys.argv=['T-P-fixture',str(root)]
         try:exec(compile(script+footer,'<actual-preparation-P-handoff>','exec'),namespace)
         finally:
