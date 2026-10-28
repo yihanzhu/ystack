@@ -1,5 +1,5 @@
 ---
-spec-blob: 75040ca07d3009284f5f83f98aa570310373e866
+spec-blob: 19c0f6b6d2531b78a8ce355fb144ce9cd06c2630
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-26
@@ -14,8 +14,8 @@ one complete two-source delivery. Source preparation does not accept a dependenc
 a real recording, native qualification or either seed batch.
 
 This plan binds accepted G2 spec blob
-`75040ca07d3009284f5f83f98aa570310373e866` at main
-`f17d540c136a6d632d0ac3460075427c4ff40b3e` (PR #763).
+`19c0f6b6d2531b78a8ce355fb144ce9cd06c2630` at main
+`fa9e1987743889cc7c011400019ed7a4610fa6fb` (PR #765).
 The separate high-risk plan-only gate must pass before dependent code.
 RAW16 acquisition design
 locations retain historical source `c1d9d23e42e6efe2d6da1aae3d23b34564b4080d`
@@ -31,11 +31,12 @@ historical anchors, not current resume identities. Earlier paused sources
 `ff9c26b3a1314f13efc0d97690ccf8b9fbe17bdf` and invoice source
 `5ceb67c9e33bb52f359514d8e785a26e77ecf491` and
 `60254f85f1c2db82c569688e989d15136ec9fc58` are historical. The current paused
-source is `e32059d8b84b71130674f88cfb20eff6b20f37c7`, parent
-`c3b257fc8ee8352678851e2564aa43978ee8e40a`, with last merged main
-`ac4acbbeb08a4e9962147e9bff24543be3d96c8d`, on the existing branch
-`codex/impl/eval-source-relay-replay`. Its expected remote head remains
-`53bed46d5eb694bfd05578f5ac1841b9443749c6`; preserve this recorded unpushed delta.
+source is `5084dfed3d6500d1b63a0331b0c149cfd0922bd3`, parent
+`777bfb23ea932839e3c215e89a0a2fbf0e53990e`, tree
+`4c61db225f0e56e39b462bcb25ca90ea73f25d7e`, with last merged main
+`a93313055d873b398c29fee5cfad8601c6703fcb`, on the existing branch
+`codex/impl/eval-source-relay-replay`. Its expected remote head is that same
+`5084dfed3d6500d1b63a0331b0c149cfd0922bd3`.
 Recheck its clean worktree, exact local/remote heads, absent PR and existing #439
 claim before an ordinary merge of accepted main
 on that same branch. A prior clean record does not prove current state. Rebind
@@ -714,13 +715,16 @@ remains part of review even when that base already contains dependency bytes.
 - `scripts/test/file-digest-verifier.test.sh`
 - `ci/required-files.txt`
 - `evals/v1/run-evals.sh` — only the R9.3 five-byte `exec ` addition
+- `sandbox/v1/qualify.py` — only the R9.2 aggregate namespace and necessary private checks
 
-These are the original 40 edit paths plus that one bootstrap dependency. The nine
-adoption-only paths and SOURCE 84 are unchanged. No extra product or test file is
-permitted. New source files are only the coordinator,
+These 42 paths are the original 40, the one C2 bootstrap dependency and the sole
+auxiliary qualifier compatibility path. The original 20-path subset, six C1
+functional paths, three pin paths, nine adoption-only paths and SOURCE 84 are
+unchanged. No other product or test file is permitted. New source files are only the coordinator,
 two guest value files and `scripts/test/evals-malicious.test.sh`. Add those four
 restore-critical paths to `ci/required-files.txt`. No runtime config, accepted set,
-SDK, installation, generation, qualification or workflow change is allowed.
+SDK, installation, generation, qualification-standard or workflow change is allowed.
+Only the accepted aggregate namespace compatibility below changes qualifier code.
 The sole public protocol change is the accepted same-fd3 v3 frame below, within
 allowed receiver paths. The sole bootstrap edit is the fixed C2 exec in R9.3;
 no unknown parent source is added. A real producer outside the list remains
@@ -728,17 +732,15 @@ blocked pending its exact scope gate.
 
 ### Existing regression compatibility (R9.2)
 
-This amendment changes only these existing test contacts. It keeps the product
-sources, the six C1 functional paths and three product pin paths unchanged.
-Design locations bind `53bed46d5eb694bfd05578f5ac1841b9443749c6`; rebind exact
-source/recipe bytes after the plan lands and main merges. The sudo receiver repair
-binds the paused source above. Do not extend a selector or add a loader, observer,
-test framework or diagnostic path. The only added negative controls are the two
-fixed receiver-prerequisite checks below; they add no matrix or execution target.
-Remaining edits are only in `scope-qualification.test.sh`: the sudo identity
-helper, the specified close-failure postcondition and necessary direct caller-line
-binding. Keep the paused bytes of the other four test files, all other scope
-contacts, product sources/pins and accepted artifacts unchanged.
+This repair binds the paused source above and changes only the six files in the
+current repair table below. The six C1 functional paths, three pin paths, SOURCE
+84, nine adoption-only paths and original 20-path source subset stay unchanged.
+The sole additional production edit is qualify.py's accepted aggregate namespace
+compatibility boundary; qualification standards and output schema stay frozen.
+Rebind exact source/recipe bytes after this plan lands and main merges. Add no
+selector, recursive loader, observer, framework, workflow or diagnostic matrix.
+The earlier repaired contacts below remain frozen except the exact current
+contacts listed later. Retain all their controls and failure evidence.
 
 | File | Fixed contact and order of work |
 | --- | --- |
@@ -763,7 +765,7 @@ blob `605370780345539c5ed7b9debbd04f5327610128`. Preserve all four literal obser
 bodies and their existing fixed hashes, nine copies/logs/bindings/line maps, complete
 inverse transforms, source/copy identity checks, errors, returns, closes and caps.
 A new SHA alone is not proof that the generated copies still implement the recipe.
-The sudo edits can move the dashboard caller's line. Rebind
+The fixed-marker/environment edits can move the dashboard caller's line. Rebind
 only its already allowed direct line literal to the exact final call location.
 Keep all nine source-copy bytes/maps, four literal bodies, product source hashes
 and the two existing native bindings unchanged; do not reuse a guessed line value.
@@ -867,33 +869,307 @@ receipt or success flags directly. Preserve `stable`, `P-target-drift`,
 `parent-mode`, `parent-inode`, `T-close-failure`, `T-transfer-failure` and
 `T-close-cancel`, their full bytes/fees and same-object cancellation assertions.
 
-Before execution, statically compare all seven contacts with their bound originals:
-only the listed bindings and prerequisites may differ. Check the full generated
-recipes, all AST selections and complete private-copy differences. Preserve every
-trial/grade/label/approval/tamper/repeat/dashboard control; preserve the verifier's
-inline byte comparison, non-ASCII/NaN cases, four-stage order, ordinary faults and
-marked cancellation identity. Missing, duplicate or out-of-range transforms,
-wrong source/copy/line, absent dependencies or removed guards must still fail.
-Use the existing negative cases and the two fixed receiver checks above; add no diagnostic matrix.
-Verify every other path is unchanged and measure the complete retained gross diff
-against the existing range without resetting old costs or deleting tests.
+#### Current six-file repair
 
-After separate plan acceptance and protected merge, fresh exact source/recipe/
-resource review and manager CODE-only GO precede the one-file repair. Test execution
-requires its separate fresh review and GO; neither the old GO nor a CODE-only GO
-supplies it. Preserve the recorded source REVISE and all prior CI failures, skips,
-unreached checks, rounds, costs and UNKNOWN until their own fresh proof passes.
-Run `bash -n` on the four changed shell tests and parse the changed Python fixture
-without importing it. Use existing pinned tools only. For execution, the existing
-CI environment must run complete `evals-framework.test.sh`,
-`scope-gate-generation.test.sh`, `candidate-content-preparation.test.sh`,
-`scope-qualification.test.sh` and `shadow-enforced.test.sh` under `scripts/test/`
-through the existing full matrix on the final combined head. Bind each full command, head and raw exit
-output; previously unreached suites remain unproved until they complete. Existing
-bounded local ordinary fixtures require their own fresh resource GO. This adds no
-local full-scope, LOCAL7/D, native or real-target window, network, install or
-activation. Preserve old failures, skips, UNKNOWN and all final native/seed gates;
-quick CI and ordinary fixtures cannot satisfy them. A wider fix returns to G2.
+| File | Remaining contact |
+| --- | --- |
+| `scripts/test/candidate-content-preparation-fixtures.py` | One private `_source_configuration_fixture`; the original nine `raw16_scope_P_ownership` cases. |
+| `scripts/test/evals-malicious.test.sh` | Only `PY_CAPTURE_VALUES` source acquisition/reacquisition/seal and `PY_SOURCE_CANCEL` configuration prerequisites. |
+| `scripts/test/scope-qualification.test.sh` | Only `PY_FIXED_MARKER`, the generated `FixedEnvironment` in `first_git_reference_driver`, and the existing direct dashboard caller-line binding. |
+| `scripts/test/shadow-enforced.test.sh` | The shared orchestration fixture's Anchor, dependency snapshot and controlled store receivers. |
+| `sandbox/v1/qualify.py` | Only aggregate's store namespace classification and its necessary private checks. |
+| `scripts/test/sandbox-launcher.test.sh` | The existing aggregate fixture and finite companion-namespace regressions. |
+
+The preceding seven repaired contacts are retained requirements, not additional
+edits in this repair. Keep the accepted sudo receiver, its real backing and both
+negative controls, all twelve original cases and its exact close-failure rule.
+Keep the 141 coverage controls, 32 reproduction-value assertions, preparation T
+transitions and other repaired test bytes. Product sources and pins remain frozen
+except the separate qualifier compatibility boundary below. This does not add a
+seventh C1 functional path, a SOURCE member or an adoption-only path.
+
+#### One ordinary source-configuration preparation
+
+Put the private context manager `_source_configuration_fixture` in the existing
+candidate fixture file. Its fixed inputs are the caller's already loaded consumer
+namespace, that original case's private directory, its actual request bytes and
+the existing coverage-read or kill-register-read operation. Derive the repository
+from that consumer's fixed source root. Use it only from the three contacts named
+above. The shell heredocs use their existing fixture-module loading mechanism.
+Do not execute `source_configuration_input_controls` or copy its fault loop.
+Do not accept a callback, arbitrary file map, selector, provider or target.
+
+Before entering the acquisition phase, the caller prepares every native/input,
+capture destination, runtime and final-owner directory used by that case. The
+helper then writes its ordinary configuration backing in a separate fixed child
+of the same private area. Finish every file and directory before opening any
+holder or freezing parent metadata. Use the original request bytes and operation, fixed operation schemas and
+ordinary fixture identities from the existing configuration preparation. The
+caller writes its original host-config bytes to the helper's fixed
+source-configuration/host-config.json under that case directory before entry;
+this is the same host/store configuration the source will use. The helper reads
+that one fixed input, not an arbitrary file map. Build the remaining documents
+there without changing the original request or its normalization test boundary. Copy the complete bound
+coverage-source and host-supervisor bytes; keep the collector inert and unexecuted.
+Build the actual package, source config and accepted-identity document with their
+real byte digests. Their fixture identities grant no native or source qualification.
+
+Save only this independent consumer namespace's `ANCHOR` and `_root_rule`.
+Bind them to the private backing and its ordinary fixture file rule. Construct a
+real `c.Anchor`, acquire its root/config/supervisor with the original held-file
+methods, then call the actual `c._CoverageConfiguration(anchor, operation)`.
+Yield that anchor and configuration; the callers keep their original source and
+fault-injection logic. Keep the original constructor, recheck, close, identity,
+hashes and source-input publication. Do not fill `source_inputs` by hand.
+For each of `host/config/accepted/package/supervisor/normalizer`, compare its
+complete bytes, actual path, same held-object identity and nonempty components
+with the acquisition that supplied it. Require real membership in anchor.held or
+configuration.held. Keep the original normalization/collector test seams only at
+their existing boundaries; they cannot replace these real configuration inputs,
+recheck or ownership. Restore any temporary normalizer seam before configuration
+cleanup. A successful ordinary fixture is still not a complete collector route.
+
+Set `reader.anchor is anchor` and `anchor.scope_runtime_owner is reader`.
+Set `reader.owned` to the same actual owned list used by the caller. Register the
+configuration there once, before the original source registration or retain call.
+Register each actual source once in that same list; a second capture of the same
+source does not add a duplicate owner. Do not run an additional retain operation
+while establishing this membership. The helper owns partial-construction cleanup;
+after registration, the Reader owns configuration close. Do not close the same
+configuration through both paths. The helper closes the anchor after the Reader
+and restores both private constants in an outer `finally`, including cleanup
+failure. Preserve the first failure and marked cancellation; retain secondary
+cleanup failures rather than clearing unusable state or retrying uncertain FDs.
+
+In `raw16_scope_P_ownership`, prepare the configuration and actual owner relation
+before enabling the existing registration-fault hooks. Keep the first
+`retain_source_runtime` at its original position and all four registration-fault
+cases at the first runtime P acquisition. Keep all nine original cases and their
+same cancellation objects. In the non-registration cases, set source.configuration
+to the real configuration. Give source.held its own actual acquisition, separate
+from the original native holder whose fd the test requires to stay live. Give
+the existing manually constructed capture its actual request bytes and complete
+original close state; no parent object substitutes for an acquired child.
+Register that source without duplicating its original capture calls. Close the
+source/capture through the original methods, then prove the independent native
+fd is still live before its original explicit close.
+
+After the two original retain_source_capture calls, require exactly eight P
+objects: four runtime copies, capture ordinal 0, its configuration ordinal 0,
+capture ordinal 1, its configuration ordinal 1. Compare the four original capture
+members and all six configuration members against their actual source raw/object
+maps, ordinals and owners. Verify each copy's open state and recheck before the
+existing drift/close/seal action. Assert the existing once-close properties after
+that action. Change six to eight only with this complete proof. Charge both
+configuration copies, their reads, metadata, errors, overlap and closing; equal
+bytes do not remove an acquisition or charge.
+
+In `PY_CAPTURE_VALUES`, retain both real _HeldCoverageRead constructions and the
+two original owned.append calls, their acquired attempt IDs and exact four-member
+source-copy bytes. Use one real configuration baseline for the case and bind each
+new source to it. Preserve the existing normalization/installation doubles and
+their declared limitations. Keep failed publication unusable; do not make its
+missing completion pass. Prepare the final-owner supervisor backing before any
+holder is frozen. Load the final owner from that same backing and keep the host
+and supervisor holders used by configuration live through authenticate and seal.
+Replace the old destructive `source_anchor.held = [installed_hold]` assignment
+with the complete same-acquisition held set. Do not overwrite or discard the six
+configuration inputs. Restore the final-owner module's private ANCHOR in finally.
+Require actual positive tail transfer and recording_sealed only at the existing
+successful seal boundary. Preserve both reacquisitions, native receipt/payload
+bytes, original source-close behavior and the failed-sync branch.
+
+In `PY_SOURCE_CANCEL`, prepare and register the real configuration before enabling
+any of its original open/read/write/metadata/named/close/signal hooks. Keep all 27
+labels, exact fault sites and first-error/marked cancellation checks. The sole
+owned-list expectation change is the actual configuration baseline plus the
+original source registration increment, in that order and by object identity,
+with no extra owner. The seal branch has no source increment. Keep construction
+and read faults at their original source operation, not at fixture setup.
+Retain the actual source-capture request and close state. Separate prerequisite
+FD accounting from the original fault-window opens; prove both sets close once,
+without removing any original leak or close assertion. Restore fault hooks before
+the prerequisite teardown. Preserve seal refusal and transferred-work checks.
+For both heredocs, account the added configuration contribution by actual members,
+copies and work records before adjusting only the affected literal totals.
+
+#### Fixed marker and environment extraction
+
+In `PY_FIXED_MARKER`, select the unique original `_scope_write_frozen_values`
+from the complete bound Reader source. Verify the actual package lookup that
+produces marker_raw and the unique write_relations call passing it to that helper.
+Bind the full source and helper bytes. Extract only the original marker-size
+require and its immediately following JSON-decoding try/except, in their original
+order; the boundary ends before the first write-path validation require.
+At the bound source these are lines 515–520, not the first three statements of
+write_relations. Check the AST shapes, argument data flow and exact boundaries.
+Keep the original c/require/json dependencies, c._unique_object/c.canonical,
+DOCUMENT_LIMIT and Refusal behavior. The existing extracted function returns the
+marker defined by that original prefix. Do not copy a parser, load the write
+pipeline or invent policy/held/write inputs. Preserve pretty/canonical
+equivalence, all three path cases, all ten illegal E_RELATION cases and the
+separate evidence parser's rejection of pretty bytes.
+
+In `first_git_reference_driver`, add only `store_session=None` to its generated
+FixedEnvironment before calling the actual environment method. Keep all fourteen
+returned keys and every original argv/value/metadata/child wait/pipe/cleanup and
+first-error control. Rebind that exact generated phase literal and verify its
+source-to-generated-line relation. This generator is outside PY_STALE_PREPARE.
+Keep its four observer literal bodies, nine source copies and complete inverse
+maps unchanged. Rebind only the existing direct dashboard caller's final actual
+line after all scope-test edits. Keep both old native bindings and their unproved
+status; no genuine/native invocation is part of this repair.
+
+#### Shared orchestration fixture
+
+Keep the original `load_anchor` injection text, event checks and the shared flow
+that shadow-write copies. Edit only shadow-enforced.test.sh. Use a small local
+subclass of the actual c.Anchor with real constructor state and ordinary backing.
+It inherits retain_runtime_acquisition, retain_parent_inputs,
+retain_sudo_companion, retain_preparation and seal_local_runtime unchanged.
+Keep its existing fixture admission/host boundary and event observations; their
+recheck/close wrappers must perform real held-object rechecks and closes.
+Prepare backing first, then acquire held config/supervisor/installed objects and
+record actual uid/gid and identity context. Do not use a declared unbacked path,
+empty retention method, forced success or an unrelated owner.
+
+Replace the incomplete Snap with the actual DependencySnapshot acquisitions at
+the existing dependency-copy seam. Use the real snapshot_dependency/snapshot_jq
+methods on the original inert helper/jq files; observe their existing recheck and
+close calls without replacing them. Preserve same-acquisition original,
+acquisition_raw, snapshot, digest and actual ownership. Keep helper/probe/child
+execution at the original mock boundaries; never execute the inert files.
+
+At the existing read_store_attempt seam, accept its real keyword-only _owner.
+Create the existing receipt/payload/evidence backing before held acquisition.
+Read those files through actual held objects, build storage rows from those
+reads, and transfer them to that same _HeldStoreRead owner. Return its exact
+snapshot bytes and actual origin computed from those observations. Preserve
+real store-owner recheck and close/capture methods. The fixture's original
+receipt/checker boundary remains a simulation; no fabricated H capture or
+completion owner may turn it into authenticated P evidence. Missing recording
+prerequisites and the original plain parent context must retain their actual
+unusable/error result. Do not convert the plain context to a qualified parent,
+clear errors, omit recording calls or synthesize a success output.
+Close all newly owned ordinary holders on every path with first-error and
+cancellation behavior intact. Preserve the original host/process/native-launch
+seams, all thirteen flow controls, twenty-nine bundle files, order, changed-response
+refusal and events. Do not edit the shadow-write copier or its writer-only cases.
+
+#### Aggregate namespace compatibility
+
+Use one private classifier in qualify.py, called only by aggregate for each
+configuration's existing store check. It receives the already validated config,
+that store's original named receipt-attempt set, and a separate companion-eligible
+set derived from successfully revalidated batch/case/attempt relationships.
+Keep the original receipt set and its missing/duplicate/rerun checks. Add companion
+eligibility only for a case in a first received batch whose batch bindings and
+verify_case have both passed against prepare's request and that configuration.
+Never derive an eligible name from an entry prefix, a claimed case field, another
+store or an unverified cached record.
+
+For each eligible attempt, generate exactly `.capture-` + attempt_id + `.pending`
+and `.capture-` + attempt_id. The latter is the published name; no third suffix
+is accepted. Require the bound principal UID to equal the actual UID. Require the configured path to remain physical and absolute. Hold its path
+components using directory-fd relative O_DIRECTORY|O_NOFOLLOW opens, retaining
+named/held identity checks through the store check. Apply the existing host
+store_root_state_ok mechanism to the final held store fd, as check_store_root
+does. Keep original ancestor constraints and root empty ACL/nonlink/uid/gid/mode
+rules; do not follow a symlink through an intermediate component. Take the
+complete fd-based directory inventory. Every entry must be an original named
+receipt or one exact eligible companion; unknown entries retain
+qualification.batch-rerun. Both companion names present for one attempt also
+refuse as batch-rerun. A companion never counts as a receipt.
+
+For each present companion, compare no-follow named metadata, an open relative to
+that held root using O_DIRECTORY|O_NOFOLLOW, and fstat identity. Reuse
+store_root_state_ok for directory type, principal UID, consumer GID, mode 0750
+and empty ACL. Use the host's full capture-identity tuple for before/after checks.
+Keep the opened directory through the check; recheck named identity, held identity
+and metadata before closing. Recheck the complete root inventory, its named/held
+identity and original root metadata after all entries. Reuse host metadata/ACL
+primitives; add no source module or public API. Metadata/open/recheck/close failure
+makes aggregate incomplete with its existing binding-mismatch reason. Preserve
+the first failure; cancellation propagates after cleanup. Close each acquired fd
+once in reverse order, including partial acquisition and failure paths. A close
+error cannot result in a successful classification; do not retry an uncertain fd.
+
+A correctly bound 0750 pending directory can be a partial publication. A pending
+directory left at mkdir's 0700 after failed chown/chmod is refused. Published
+without complete.json, or while .completion.pending exists, can also be partial:
+host renames the directory before publishing completion. This classifier checks
+the namespace and directory custody, not inner capture payload/completion validity.
+It does not open payloads or infer capture validity from a marker, empty directory
+or published name. Preserve any partial contents as evidence. Unknown or malformed
+top-level names, wrong store/type/owner/permissions, symlinks, unstable identity and
+dual-name conflicts refuse. Do not ignore dot/prefix entries, move/delete captures
+or relax host retention. Complete still means only receipt-batch coverage.
+Keep qualification(), not-qualified, cpu-wall-unbounded, record schema, CLI and
+all receipt/checker/domain/tamper rules unchanged.
+
+Keep all twenty-nine aggregate assertions over the original three batches and
+fourteen cases, including exact API/CLI dry-run equality, missing/duplicate/rerun
+and unnamed-receipt rejection. Add finite checks at this same fixture for valid
+pending, published without completion, completion-pending and completed-name
+presence; each must leave qualification unchanged. Exercise the private classifier
+with ordinary private roots and the exact validated attempt/config inputs from
+this fixture. Cover unbound/lookalike names, cross-store attempts, both names,
+0700/wrong metadata, file/symlink type and named/held replacement. Use deterministic
+existing test seams for recheck, close failure and cancellation. Preserve the
+original captured stores and bytes; use separate ordinary backing for injected
+namespace defects. These checks authenticate no capture and add no execution
+target. Removing the classifier integration must fail the original complete
+aggregate with retained companions; removing an exact-name, owner, no-follow or
+recheck guard must fail its corresponding bounded negative control.
+
+Record all actual additional inventory, metadata/ACL, opens, reads, rechecks,
+copies, overlapping holds and closes in the existing test evidence/resource
+review. The classifier adds no payload read and no generic accounting framework.
+Unknown cost remains UNKNOWN. Existing caps and execution budgets do not increase;
+capacity, real caller, native and final seed proof remain separate gates.
+
+
+Before execution, statically compare the six-file diff against the paused
+originals and the complete accepted contact list. Check full generated recipes,
+unique AST selections and private-copy differences. Preserve every original
+trial/grade/label/approval/tamper/repeat/dashboard control, byte comparison,
+non-ASCII/NaN case, stage order, ordinary fault and marked cancellation identity.
+Only the specified actual configuration contributions and owned-list baseline,
+fixed source bindings and qualifier boundary may change their corresponding
+expectations. All other assertions and original source/copy maps remain intact.
+Verify every other implementation path is unchanged. Measure the retained gross
+and publication-base diffs separately against the unchanged range; do not reset
+old costs, omit failed attempts, delete tests or assume capacity.
+
+After independent plan acceptance and protected merge, merge that accepted main
+normally into the preserved source branch. Recheck exact local/remote/head/base,
+artifacts, clean state, PR-absent state and the existing claim. A fresh independent
+limited CODE-scope check and manager GO precede edits. Use three non-overlapping
+assignments: configuration/AST contacts in the three A files; shared orchestration
+in the one B file; qualifier and sandbox aggregate tests in the two C files.
+All implementers use the same previously selected coder model. One author commits
+the combined result only after the manager confirms every writer has stopped.
+No author changes accepted artifacts, other products/pins or another assignment.
+
+During CODE-only work, use only text/hash/AST checks and bash -n for the four
+changed shell tests. Parse both changed Python files without importing or
+executing them. Freeze the one combined code commit and clean worktree. Then
+obtain fresh independent review of the full source, complete existing CI recipe
+and actual resource/accounting scope. Resolve Important findings before execution;
+CODE-only GO, old CI GO and old windows cannot supply the execution decision.
+
+Following that distinct GO, normally push the exact combined source, verify the
+remote head, and dispatch the existing ci.yml full six-shard, 79-suite matrix
+once on that head. This naturally covers all target suites; add no selector,
+workflow interface or extra full-matrix run per target. Preserve complete raw
+job outputs, exact source/recipe/resource binding, exit states, first faults,
+skips and unreached suites. Quick artifact CI does not prove these tests.
+The local pinned jq is absent: do not install, download, substitute it or run a
+local run-all/ordinary fixture as part of this repair. No LOCAL7/D, native, seed,
+real-target, credential, new network, install, activation or window is granted.
+Keep all earlier failures, REVISE findings, rounds, UNKNOWN and final native/seed
+requirements; only their own fresh evidence can close them. A wider fix, moved
+product pin or out-of-list path returns to the affected artifact gate.
 
 ### S1–S10 and invariant mapping
 
@@ -1522,7 +1798,8 @@ consumer updates also bind cd5c4e8 host write_receipt_file/_write_capture_file/
 _write_capture_export and consumer _origin_values/read_store_attempt/
 _HeldStoreRead/read_coverage_attempt. Rebind final locations by function and hash;
 no old line number or source checkpoint is a current resume tuple.
-Use only the original 40 edit paths plus the sole C2 bootstrap exec in R9.3;
+Use only the original 40 edit paths, sole C2 bootstrap exec and the separate
+R9.2 qualifier compatibility exception;
 all nine adoption-only paths and the exact 84-member source closure remain
 unchanged. Rebind final line/blob/hash receipts.
 
@@ -2246,9 +2523,10 @@ source gates above, then implement the remaining path in this order:
    Never execute slots or pass the combined wrapper into native code.
 4. Update eval/scope shapes and pins in their existing files, then the complete
    test/doc/restore paths already allowed. Recompute the full 84-member receipt.
-   Only the original 40 edit paths and sole bootstrap exec are editable; no
-   unknown parent file, edit to 9 adoption-only paths or new closure member is
-   approved. The actual parent source/qualification/fd3 gate
+   Only the original 40 edit paths, sole bootstrap exec and separate R9.2
+   qualifier compatibility exception are editable. All nine adoption-only paths
+   and their bytes remain unchanged. No unknown parent file or new closure member
+   is approved. The actual parent source/qualification/fd3 gate
    remains open even if the receiver fixture and C mechanism pass.
 
 Preserve the already implemented review arm and its none approval pin. Add the
@@ -2465,8 +2743,9 @@ parent producer, host-publication work, qualification, capacity or genuine gates
 Implement the accepted spec's C3 contract in the existing launcher, driver,
 coordinator and consumer owners. The spec is the sole wire/type/cap definition;
 do not create a second protocol, generic ledger service or public option.
-Keep the original 40 edit paths plus the sole C2 bootstrap exec, nine adoption-only
-paths, exact SOURCE 84, runtime roles and current 20-path source boundary. The
+Keep the original 40 edit paths plus the sole C2 bootstrap exec and separate R9.2
+qualifier exception. Preserve all nine adoption-only paths and their bytes
+unchanged, exact SOURCE 84, runtime roles and original 20-path subset. The
 manager's fresh GO must bind each actual edited path and author; this plan does
 not widen an existing narrower source assignment. No product control runs while
 the preserved attempt is paused or before that exact-source GO.
