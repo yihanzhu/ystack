@@ -2065,3 +2065,13 @@ and its negative controls. Run that fixture only on its authorized disposable
 host. Its simulated VM facts still do not prove native qualification. Pure and
 static checks do not close the outstanding foundation, source, integration or G3
 proof requirements.
+## Inactive GitHub change-request collector
+
+`adapters/github-forge/v1/collect.py` implements bounded anonymous GitHub.com GETs.
+It returns an adapter-owned collection record with observed IDs and file facts.
+Missing App identity, full patch evidence and atomicity remain unavailable.
+A private owned worker bounds blocking DNS/TLS and requires real direct wait.
+The default local materializer remains selected. No live use is authorized.
+See the [collector guide](github-change-request-collector.md) for the contract,
+restoration paths, bounds and hermetic proof. The separate strict normalizer stays
+unchanged and rejects this collection envelope.

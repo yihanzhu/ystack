@@ -1,5 +1,5 @@
 ---
-spec-blob: 635b157347e5449c3372158aaeed6ad1909ea79d
+spec-blob: 5f05ca1505b1bb96c32bc8a2bcd7148f60a98692
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-26
@@ -14,8 +14,8 @@ one complete two-source delivery. Source preparation does not accept a dependenc
 a real recording, native qualification or either seed batch.
 
 This plan binds accepted G2 spec blob
-`635b157347e5449c3372158aaeed6ad1909ea79d` at main
-`a0d24ba62d4d590f792fa3812db56ab6793fefe8` (PR #750).
+`5f05ca1505b1bb96c32bc8a2bcd7148f60a98692` at main
+`8c572e06a89981610d253a73559ebe953836120c` (PR #756).
 The separate high-risk plan-only gate must pass before dependent code.
 RAW16 acquisition design
 locations retain historical source `c1d9d23e42e6efe2d6da1aae3d23b34564b4080d`
@@ -28,22 +28,29 @@ historical anchors, not current resume identities. Earlier paused sources
 `40022eb3b86c72b3d4d19b6e76cf21c68a41b371` and
 `f2abe2b02963542fe6505bbc028a423842040880` and the prior budget pause
 `48cd106a2f364fcab012779e5e651769784c3a09` and the prior C1 pause
-`ff9c26b3a1314f13efc0d97690ccf8b9fbe17bdf` are historical. Current source is
-paused clean at `5ceb67c9e33bb52f359514d8e785a26e77ecf491`, parent
-`74eda0621c59ac2c5597e20a7b7c3096cde6d3bd`, tree
-`7ac8e52d904e634f0672cdfae542d6f630024ac6`, base
-`e87b3e99f017ece88e3f26918da92ad10f059c3e`, on the preserved branch
-`codex/impl/eval-source-relay-replay`. Its D pins must bind resumed source bytes;
-static pin agreement is not acquisition or semantic acceptance. B, T and complete
-C remain unaccepted. Preserve the partial C1 implementation and finish the
-same-acquisition invoice edge below within the original complete C1 obligations.
-No partial wiring or finite check accepts the full caller, complete accounting
-or native qualification. After this separate plan-only gate lands, normally
-merge accepted main into this same attempt, rebind the exact artifact/source tuple
-and obtain fresh independent source review and manager GO. No old GO resumes it.
+`ff9c26b3a1314f13efc0d97690ccf8b9fbe17bdf` and invoice source
+`5ceb67c9e33bb52f359514d8e785a26e77ecf491` are historical. Preserve source
+`60254f85f1c2db82c569688e989d15136ec9fc58`, with parents
+`3fbae93f0e61692b564ddd9cef7a9aa2ee54dd46` then
+`c871a8883d9a8ea98c0178eeefda4384418910ae`, on the existing branch
+`codex/impl/eval-source-relay-replay`. Its physical carrier requires a separate
+operator disposition. A saved OID or earlier clean record does not prove a
+complete current worktree. This plan grants no restoration or source GO.
+Any separately approved restoration may only restore missing bytes from that
+exact OID, preserving existing bytes, index and refs. Verify the complete clean
+carrier anew before an ordinary merge of accepted main on that same branch.
+Then rebind the exact artifacts, source, local/remote head, PR state and base;
+obtain fresh independent source review and manager GO before code or fixtures.
+Do not recreate the attempt, reset, rebase, clean or reuse an old GO.
+The source's partial close change has only AST evidence and stale pins. Its D
+pins must bind resumed source bytes; neither static agreement nor a completed
+plan accepts the full caller, accounting or native qualification. B, T and
+complete C remain unaccepted. Preserve the invoice obligations and complete
+the candidate, bundle, remote close and full-manifest work below.
 The operator has accepted
 the resource, fd3 v3 and retention contract, and the distinct fixed C1 FD6
-live-P handoff in accepted G2. These decisions grant no actual runtime
+live-P handoff and fixed candidate originals in accepted G2. These decisions
+grant no actual runtime
 collection/retention/window, unknown parent file, installation or activation.
 Independent plan acceptance and protected landing still precede code.
 
@@ -1877,6 +1884,33 @@ whole-byte/source/scope/close checks, tighter-cap proof and complete actual fees
 reuse unchanged source-bound guards rather than add a new matrix. These results
 prove only their actual ordinary fixture path, never full native/SOURCE/seed.
 
+**Candidate originals and remote completion.** These sites bind preserved Git
+object `60254f85f1c2db82c569688e989d15136ec9fc58`, not a verified physical
+worktree or accepted implementation. The spec's “History 固定原件与 candidate
+扩展” is the exact name, form, size and owner contract. Keep the fixed 32 names;
+only policy form adds `candidate-scope-policy.json`. Use the existing six
+functional paths. No new family, wire field, root, FD, argv, provider or callback
+is needed or allowed.
+
+| Order / actual caller and callee | Required change |
+| --- | --- |
+| 1 same outer acquisition — Reader `_authenticate`:1925–2000 → `git_relations`:2065–2097 → `write_relations`:2122–2149 | Carry the actual outer write store/storage_rows association through these private calls. Retain the original files/record, Git owner, ordered rows and the same frozen_files bytes returned by the original cat-file reads. Preserve all original digest, patch, policy, nested authentication, converter, input and publisher checks. Only the successful outer authentication may make this association eligible. Never select the nested reproduction store, find another acquisition by SHA, rerun Git/O reads or reconstruct expected bytes. |
+| 2 original bytes into P — Reader `capture`:1342–1366; `_retain_replay_output`:1906–1918; `register_history`:775–796 | After the required original checks, use the existing exclusive capture/held-readback owner to retain every fixed candidate member under the original scratch. Register those actual holders with the outer store's original acquisition ordinal and actual continuous serials. Keep bundle and candidate groups separate and complete. A recording-side write/hold/registration failure retains partials and marks recording unusable through the existing error owners; it cannot change the native return, first-error priority or close path. |
+| 3 original two handoffs — Reader `_p_batch`:999–1053, coverage request/release:2310–2425, `main`:2644–2688 | Include each complete eligible candidate group with its same-ordinal bundle in the original reached batch before its original close. Keep C_REQUEST before release_local/release_stores and FINAL_OWNER before READY/SEAL/terminal/Reader.close. Parent closes added P read handles before ACK; child rechecks and closes at the original positions. A missing, partial or already-closed member makes recording unusable. Do not extend a hold, split a group, invent coverage or add a request. |
+| 4 independent parent relation — consumer `_c1_p_semantic_values`:6431–6457; `_C1PHandoffParent._history`:6905–6964 | Accept only the spec's exact base bundle and candidate name sets and per-form limits. Read their complete live P bytes through the existing bound root/member owners. Compare the original bundle subset with the actual Session role/environment files. Derive the fixed incident/path/form/target/candidate relations from that same group's original documents; check every write-set and preparation-manifest row, and compute blob oid, size and SHA from each complete candidate P. Reuse the original fixed value checks without another Git command or O read. Labels, equal SHA or a sender map cannot authorize a relation. |
+| 5 complete S retention — consumer `stage`:6966–7023 and existing `_stage_member`/`_compare` | Replace the current-attempt no-target branch with actual checked S retention for all required originals. Retain the validated serial/ordinal, record, actual role/environment, write-set and held S relation. Reproduction groups contain no candidate members; each write group contains exactly the applicable fixed set. Repeated same-serial entries must match in full; distinct acquisitions remain distinct. Preserve original P/S whole-byte, independent SHA, initial/final identity, name/ACL and checked-close requirements. |
+| 6 recorded outputs — replay `_bundle_outputs`:2242–2307, `candidate_outputs`:2352–2420, `_remote_scope_inputs`:2878–2910, `closed_manifest_data`:3158–3269 | Extract only the existing fixed value checks needed to consume the validated remote originals. Keep actual in-process Reader/Git checks in their original path; the remote path uses its real Session/handoff/serial/held-S relation, never a proxy Reader. Consume current and qualifying relations without the excluded_current skip. Current binds the original incident and both launch requests; qualifying stays historical input when it is not a current recorded output. Populate the original output_forms/write_sets/derived-output maps from those real bytes. Use the existing recorded-output staging/check owners for any required separate S copies, preserve their physical-file/semantic-entry bijection and charge each copy. Keep generator and scope_reader contexts complete and independently byte-compared; no context, input bundle or expected output fills a missing original. |
+| 7 actual close and finalization — consumer `settle`:7131–7151, `complete`:7217–7236; replay `_closed_gate`:3271–3291 and `close_gate`:3293–3318 | Preserve the partial remote branch, then bind acceptance to the same real handoff's exact batches, per-serial first-close results, complete original receipts and still-held S checks. Do not accept completion_checked alone. Keep original native return, Session phase/owner/remote-empty checks, Generator.close return, parent Reader close and complete accounting requirements. No child scope_reader object is available in this path; parent Reader is not its substitute. C_RELEASED/CLOSED cover only their actual moment, never later socket/native finally, process return or parent tail costs. Missing tail facts remain UNKNOWN and block completion. |
+
+All candidate P files, separate S copies and duplicate bytes pay the original
+physical/file and R/W/H/E/C/M/Q/recorded-overlap ledgers at their actual owners.
+Keep the original candidate per-file/group limits and every tighter combined cap;
+check room before allocation/write/encoding. Do not classify metadata as runtime,
+refund equal bytes, reset old M overrun or infer fit from a small fixture. Preserve
+unusable side-data isolation, marked cancellation, first and later errors, actual
+close results and every unknown cost. The original control and ACK sequence still
+runs unless its own transport fails; never manufacture a successful ACK.
+
 **Root and holder checks.** Derive child scratch only from its actual output
 argument; verify the other four original arguments and original parent inputs as
 the spec requires. Parent opens from its own bound TMPDIR, not a sender-selected
@@ -1926,34 +1960,46 @@ cannot satisfy the original requirements, reject complete proof.
 `605370780345539c5ed7b9debbd04f5327610128`, nine adoption-only paths and bootstrap
 unchanged. The original 84-member set remains exact. Changed allowed source bytes
 still require the pre-existing mechanical pin refresh in the original 20-path
-scope, in the original source/program→driver→launcher order. These pin changes
-are not new C1 functional paths and never reuse old pins. The manager’s fresh GO
+scope, in the original source/program→driver→launcher order. Refresh the original
+`evals/v1/evals.jq`, `evals/v1/evals-driver.sh` and `evals/v1/evals-launcher.sh`
+pin sites in that order after the changed source bytes are fixed. Check the full
+existing closure/overlap chain; do not add a member or skip a moved digest. These
+pin changes are not new C1 functional paths and never reuse old pins. The manager’s fresh GO
 must bind the actual path subset; this plan adds no source member or permission.
 
-**Necessary bounded proof.** Extend only the two listed test files and reuse the
-existing source-bound controls. After plan landing and fresh exact source GO,
-run the ordinary owned fixture through the actual original parent spawn, FD6 and
-main-constructed Reader, with source-bound child P and parent S. Exercise both
-coverage release and final seal; also keep the original no-coverage branch.
-A same-process helper, injected batch or fake peer cannot prove this path.
-A blocked native prerequisite must remain an honestly blocked native result;
-ordinary fixture wiring/byte evidence cannot be relabelled full qualification.
+**Necessary bounded proof.** Extend only the two listed test files. Reuse their
+source-bound C1 controls and `evals-malicious.test.sh:658–671` at 60254f8; preserve
+the codec, cancellation, runtime-invoice and wire-error controls. After plan
+landing and fresh exact source GO, run the ordinary owned fixture through the
+actual parent spawn, FD6, main-constructed Reader, original cat-file reads, same
+outer acquisition, live child P and independent parent S. Prove the complete
+two-context manifest for both write forms and current/qualifying bindings.
+Exercise coverage release and final seal, plus the original no-coverage branch.
+A same-process helper, typed fixture, injected batch, fake peer or
+`_C1_run_bound_generator` alone cannot prove this complete caller. A blocked native
+prerequisite stays blocked; ordinary fixture evidence is not full qualification.
+Run the existing complete `bash scripts/test/evals-malicious.test.sh` and
+`bash scripts/test/candidate-content-preparation.test.sh` only after fresh GO.
 
 Use that actual path to prove complete fixed members, independent whole-byte
 S checks and real close/receipt linkage. In the same bounded controls, reject
 wrong root/argv/child/nonce/request, cross-phase or changed serial/member binding,
-missing/extra/unused member, independent chain/name/ACL/inode/content drift,
-equal mutation of P and S after their original seals, and lost retained custody.
-Cover ordinary side construction/parse/copy/close/accounting failure plus
+missing/duplicate/extra/unused or wrong-form member, wrong ordinal/owner,
+parent/nested/other-context borrowing, independent chain/name/ACL/inode/content
+drift, early P close, equal mutation of P and S after their original seals and
+lost retained custody. Cover ordinary side capture/construction/parse/copy/close/accounting failure plus
 physical partial/EOF/cancel/timeout, keeping original native result/error/close
-order and actual charges. Check each actual cap at its owner boundary and one
-over; the end-to-end positive must fit the tighter combined caps. Do not require
+order, first/secondary errors and actual charges. Check each per-member/group
+and aggregate cap at its owner boundary and one over; the end-to-end positive
+must fit the tighter combined caps. Do not require
 a larger inner maximum to fit a smaller outer frame or drop data to fit.
 Reuse unchanged source/dependency/branch-bound old guards instead of a new matrix.
 
 For new source→wire, parent independent read/copy, full-check and settlement
 connections, remove each required call/check in the existing paired mutation
 route and require its bounded assertion to fail with the companion route intact.
+This includes the same-acquisition association, P registration, parent full-byte
+and oid checks, recorded-output mapping and close/receipt check.
 Keep exact invocation, pre/post source bytes, raw streams/frames, actual Popen/wait,
 P/S held evidence, ledgers and first/later errors. These controls add no real
 native/source run, VM/window or LOCAL7/D opportunity. Existing 007 limited checks,
@@ -2750,15 +2796,21 @@ gates (R9.6).
   cannot leave the PR whose test checks their digests.
 - PR 3: `review_size: standard`, about 300-400 net added lines.
 - This plan-only amendment: `review_size: standard`. One concern: the accepted
-  same-acquisition C1 runtime invoice, its fixed producer/Reader/parent checks
-  and necessary bounded proof. All other C1 work and PR 1b's complete-concern
-  range remain unchanged.
+  fixed candidate originals, their same-acquisition P/S path, remote completion
+  and full-manifest proof. The runtime-invoice obligations and PR 1b's
+  complete-concern range remain unchanged.
 
 Each range waives only the soft line signal, never scope, tests, CI, review or human
 merge.
 
 ## Risks
 
+- **Candidate ownership and fit.** The riskiest step is binding original Git bytes
+  to the outer authentication while preserving native failure and close order.
+  Capturing the full fixed set avoids borrowing ambiguous nested or parent bytes.
+  It adds real duplicate storage and work. Keeping only two new names lacks a
+  complete original-acquisition proof. The original caps remain; a complete
+  caller that cannot fit stays unusable.
 - **Declared catalog.** Private pinned fixture trees must exercise the full review
   relay, not only jq grading. They do not establish genuine operator approval or
   seeding. The final real malicious seed still needs its native success and recording gates.
