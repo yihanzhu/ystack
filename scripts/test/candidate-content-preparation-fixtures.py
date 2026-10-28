@@ -8515,7 +8515,7 @@ def raw16_C1_p_cancel_drain(root: Path, evidence=None) -> dict:
         first = keyboard if label == 'report-keyboard-first' else marked
         original_stat, original_close = os.fstat, os.close
         original_report, original_observe = c._capture_observation_error, c._capture_observe
-        stat_failed, close_observed, closes, reports = [], [], [], []
+        stat_failed, close_observed, closes, reports, attempted, close_errors = [], [], [], [], [], []
         def failing_stat(fd):
             if fd == target and not stat_failed:
                 stat_failed.append(fd)
@@ -8523,7 +8523,11 @@ def raw16_C1_p_cancel_drain(root: Path, evidence=None) -> dict:
                 raise OSError(errno.EIO, 'ordinary recheck failure')
             return original_stat(fd)
         def closing(fd):
-            result = original_close(fd)
+            if fd in order:attempted.append(fd)
+            try:result = original_close(fd)
+            except BaseException as error:
+                close_errors.append(error)
+                raise
             if fd in order:closes.append(fd)
             return result
         def reporting(values, kind, site, error):
@@ -8546,10 +8550,11 @@ def raw16_C1_p_cancel_drain(root: Path, evidence=None) -> dict:
         finally:
             os.fstat, os.close = original_stat, original_close
             c._capture_observation_error, c._capture_observe = original_report, original_observe
-            # The actual wrapper closes before recording; never retry those FDs.
             held.components.clear()
             for fd in order:
-                if fd not in closes:original_close(fd)
+                if fd not in attempted:
+                    try:closing(fd)
+                    except BaseException:pass
             if evidence is not None:
                 with (Path(evidence) / ('C1-drain-' + label + '.json')).open('x') as stream:
                     def error_value(error):
@@ -8559,6 +8564,10 @@ def raw16_C1_p_cancel_drain(root: Path, evidence=None) -> dict:
                                 'traceback': traceback.format_exception(type(error), error, error.__traceback__)}
                         raise TypeError(type(error).__name__)
                     json.dump(work, stream, sort_keys=True, default=error_value)
+                with (Path(evidence) / ('C1-drain-close-' + label + '.json')).open('x') as stream:
+                    json.dump({'attempted': attempted, 'succeeded': closes, 'errors': close_errors,
+                        'uncertain_close': bool(close_errors)}, stream, sort_keys=True, default=error_value)
+        assert not close_errors and attempted == order
         assert result is first and reports and close_observed == [later_marked]
         assert closes == order and collections.Counter(closes) == collections.Counter(order)
         assert held.components == []
