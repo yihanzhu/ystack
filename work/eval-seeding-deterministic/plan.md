@@ -1,5 +1,5 @@
 ---
-spec-blob: 1de1da9dc364e3b585fee638c1b88f9bbdc5ef3b
+spec-blob: 75040ca07d3009284f5f83f98aa570310373e866
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-26
@@ -14,8 +14,8 @@ one complete two-source delivery. Source preparation does not accept a dependenc
 a real recording, native qualification or either seed batch.
 
 This plan binds accepted G2 spec blob
-`1de1da9dc364e3b585fee638c1b88f9bbdc5ef3b` at main
-`6e155ee8d0757835ed1118d3c8b6de6be35f0aae` (PR #761).
+`75040ca07d3009284f5f83f98aa570310373e866` at main
+`f17d540c136a6d632d0ac3460075427c4ff40b3e` (PR #763).
 The separate high-risk plan-only gate must pass before dependent code.
 RAW16 acquisition design
 locations retain historical source `c1d9d23e42e6efe2d6da1aae3d23b34564b4080d`
@@ -31,9 +31,9 @@ historical anchors, not current resume identities. Earlier paused sources
 `ff9c26b3a1314f13efc0d97690ccf8b9fbe17bdf` and invoice source
 `5ceb67c9e33bb52f359514d8e785a26e77ecf491` and
 `60254f85f1c2db82c569688e989d15136ec9fc58` are historical. The current paused
-source is `daf2dbcfbb62ede2c6d68c84745f8711a0ef1de3`, parent
-`216ab1868cce561ea56df870d7438e5022d206a7`, with last merged main
-`b69b0f780ded1f91cadce327c62e077d81549b8d`, on the existing branch
+source is `e32059d8b84b71130674f88cfb20eff6b20f37c7`, parent
+`c3b257fc8ee8352678851e2564aa43978ee8e40a`, with last merged main
+`ac4acbbeb08a4e9962147e9bff24543be3d96c8d`, on the existing branch
 `codex/impl/eval-source-relay-replay`. Its expected remote head remains
 `53bed46d5eb694bfd05578f5ac1841b9443749c6`; preserve this recorded unpushed delta.
 Recheck its clean worktree, exact local/remote heads, absent PR and existing #439
@@ -735,10 +735,10 @@ source/recipe bytes after the plan lands and main merges. The sudo receiver repa
 binds the paused source above. Do not extend a selector or add a loader, observer,
 test framework or diagnostic path. The only added negative controls are the two
 fixed receiver-prerequisite checks below; they add no matrix or execution target.
-Remaining edits are only in `scope-qualification.test.sh` (the sudo receiver,
-coverage constructor and necessary direct caller-line binding) and
-`shadow-enforced.test.sh` (the fixed helper selection). Keep the paused bytes of
-the other three test files and all product sources/pins unchanged.
+Remaining edits are only in `scope-qualification.test.sh`: the sudo identity
+helper, the specified close-failure postcondition and necessary direct caller-line
+binding. Keep the paused bytes of the other four test files, all other scope
+contacts, product sources/pins and accepted artifacts unchanged.
 
 | File | Fixed contact and order of work |
 | --- | --- |
@@ -763,7 +763,7 @@ blob `605370780345539c5ed7b9debbd04f5327610128`. Preserve all four literal obser
 bodies and their existing fixed hashes, nine copies/logs/bindings/line maps, complete
 inverse transforms, source/copy identity checks, errors, returns, closes and caps.
 A new SHA alone is not proof that the generated copies still implement the recipe.
-The coverage constructor and sudo edits move the dashboard caller's line. Rebind
+The sudo edits can move the dashboard caller's line. Rebind
 only its already allowed direct line literal to the exact final call location.
 Keep all nine source-copy bytes/maps, four literal bodies, product source hashes
 and the two existing native bindings unchanged; do not reuse a guessed line value.
@@ -777,6 +777,13 @@ do not instantiate that session. Select the original Reader methods `anchor_for`
 `_retain_replay_output` and `_replay_output_failure` alongside the original three.
 Verify each definition is unique and bind its complete source bytes. Use the same
 consumer module and fixed standard-library dependencies already used by this test.
+The separate FixedSudo/factory AST domain must also contain the real
+`_sudo_identity_values` from the same bound `enforced-reproduction.py`. Select exactly
+one each of `FixedSudo`, `fixed_sudo` and `_sudo_identity_values`, and compile these
+original definitions into that same existing domain. Its existing `sha/canonical`
+provide the helper's complete dependency chain. Bind the complete helper bytes;
+do not use a hand-written identity expression, constant, recursive loader or
+whole-module execution. Reader-namespace definitions cannot supply this domain.
 Initialize the actual constructor prerequisites: empty `source_copies`, no store
 session or completion owner, runtime ordinals from the fixed sites, and the
 original replay-output initializer. Supply the existing ordinary anchor's runtime
@@ -825,6 +832,27 @@ identity digest, drift, factory/close failure and fallback flags, registration,
 reverse close and original exception objects. Do not substitute constant equality,
 empty close handlers, fabricated originals or accepted completion.
 
+Only the original `close-failure` case uses the accepted retained-owner postcondition.
+Capture the real `os.fstat` function independently of the metadata seam. Observe the
+actual FixedSudo returned by the existing factory seam. Immediately before its
+original close, record that same registered object and its original fd; require
+that the object is the actual domain's FixedSudo and is the sole registered owner.
+Keep the seam's real `os.close`, closed-list append and same-marker raise in order.
+After the close exception, require that `owned` contains exactly that same object,
+its fd still equals the recorded value, and the original close error is the marker.
+Use the captured real fstat on that fd immediately, before any potentially reusing
+open, including the row's `leaf.read_bytes`, the next case or new private holders.
+Require an actual `OSError` with `errno.EBADF`; a successful stat or another error
+fails the control. Do not substitute metadata, infer EBADF from the closed list or
+make any retry. Preserve `closed==fds`, no duplicate close, original body-error/
+identity/flags checks and the existing close-attempted/finally cleanup boundary.
+The other eleven original cases and both prerequisite negatives still require
+`owned==[]`. Do not clear/drop/rewrite the retained owner or fd, modify production
+close/remove/catch, or close it again during cleanup. This result follows only from
+this explicit post-close marker seam; it does not classify arbitrary real close
+errors as closed FDs. Keep prerequisite holders in their separate cleanup and
+preserve first-error/cancellation rules and private-constant restoration.
+
 For T handoff, call `_T_cleanup_begin(anchor, 'preparation-scratch')` before the
 inspect phase, record any actual removal, then `_T_cleanup_done(anchor)` before
 `create_T('inspect')`; call `_T_inspection_returned(anchor)` immediately after it.
@@ -851,7 +879,7 @@ Verify every other path is unchanged and measure the complete retained gross dif
 against the existing range without resetting old costs or deleting tests.
 
 After separate plan acceptance and protected merge, fresh exact source/recipe/
-resource review and manager CODE-only GO precede the two-file repair. Test execution
+resource review and manager CODE-only GO precede the one-file repair. Test execution
 requires its separate fresh review and GO; neither the old GO nor a CODE-only GO
 supplies it. Preserve the recorded source REVISE and all prior CI failures, skips,
 unreached checks, rounds, costs and UNKNOWN until their own fresh proof passes.
