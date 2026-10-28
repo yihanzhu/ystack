@@ -1906,3 +1906,14 @@ qualification remains blocked. No publisher implementation ships here.
 fixture by inserting writer controls into a temporary script copy. It also runs the
 complete original regression. Only fixture identity/origin and supervisor launch are
 simulated; converter, builder, materializer, preparation, verifier and checker are real.
+
+## Inactive GitHub change-request collector
+
+`adapters/github-forge/v1/collect.py` implements bounded anonymous GitHub.com GETs.
+It returns an adapter-owned collection record with observed IDs and file facts.
+Missing App identity, full patch evidence and atomicity remain unavailable.
+A private owned worker bounds blocking DNS/TLS and requires real direct wait.
+The default local materializer remains selected. No live use is authorized.
+See the [collector guide](github-change-request-collector.md) for the contract,
+restoration paths, bounds and hermetic proof. The separate strict normalizer stays
+unchanged and rejects this collection envelope.
