@@ -1998,7 +1998,7 @@ to evade the source cap. Executable and policy files always belong to the closur
 
      | 测试路径与接点 | 修改范围与保留要求 |
      | --- | --- |
-     | `scripts/test/scope-qualification.test.sh`：`PY_STALE_PREPARE` 及同文件直接绑定它的 source SHA/行号断言；`PY_SAME_CALL_OWNED_CONTROLS:sudo_provenance_controls` | 前者仅修正原三个 source 的固定绑定及私有 copy 的必要兼容。保留原 observer、四个固定 body、精确替换次数、完整行号映射与逆变换、原异常/返回/关闭、所有 owner/身份/拒绝控制、费用与 cap。后者仅把原 `provenance/recheck/close` 的必需固定私有依赖和实际接收者状态接全；仍调用同一受绑定源码的原检查，不用常量、空实现或伪原件代替依赖。仅当真实普通 fixture backing 确需路径适配时，可在该测试独立加载的 consumer namespace 内将 `ANCHOR` 绑定到原 private fixture 目录，并须在 `finally` 恢复原常量；不改真实安装路径或生产 root，不开放其它路径 seam。保留原真实 FD、既有 OS transport seam、sudo 身份与内容摘要区别、登记/逆序关闭及每个原故障断言。 |
+     | `scripts/test/scope-qualification.test.sh`：`PY_STALE_PREPARE` 及同文件直接绑定它的 source SHA/行号断言；`PY_SAME_CALL_OWNED_CONTROLS:sudo_provenance_controls` | 前者仅修正原三个 source 的固定绑定及私有 copy 的必要兼容。保留原 observer、四个固定 body、精确替换次数、完整行号映射与逆变换、原异常/返回/关闭、所有 owner/身份/拒绝控制、费用与 cap。后者仅把原 `provenance/recheck/close` 的必需固定私有依赖和实际接收者状态接全；仍调用同一受绑定源码的原检查，不用常量、空实现或伪原件代替依赖。仅当真实普通 fixture backing 确需路径适配时，可在该测试独立加载的 consumer namespace 内将 `ANCHOR` 绑定到原 private fixture 目录，并须在 `finally` 恢复原常量；不改真实安装路径或生产 root，不开放其它路径 seam。保留原真实 FD、既有 OS transport seam、sudo 身份与内容摘要区别及登记/逆序关闭。十二 case 中仅 `close-failure` 的 owner 后置条件作此精确修正：关闭前记录同次 factory 返回且已实际登记的 `FixedSudo` 对象与原 fd；原 seam 仍先真实 `os.close`、记录 closed，再抛同一 marker。异常后 `owned` 恰含该同一对象，其 fd 仍等于同次记录值；在任何可能复用该 fd 数字的新 open 前，用未替换的真实 `os.fstat` 核 `errno.EBADF`。保留原 body error/身份、`closed==fds`、无重复关闭、marker 对象和 flags 断言；其它十一 case 仍须 `owned==[]`。本特例只适用于此明确先关闭后抛 marker 的 fixture，不将真实 close 异常泛化为 FD 必已关闭；不得 drop/清空失败 owner、修改生产 close 或重试该 FD/不确定的关闭。其余原故障断言判定不变。 |
      | `scripts/test/scope-qualification.test.sh`：顶层 `PY_COVERAGE_PURE` 的手工 `_Reader` 构造 | 仅在获取任何真实 held 对象前补齐原构造器默认值 `source_copies=[]`、`capture_completion_owner=None`；保留已有 `store_session=None`，不伪造 enforced/completion 或其它生产状态。保留原全部 141 项检查、真实 owned/Git/child/FD、命令 ledger、原 `finally` 的实际 `close` 及首错/取消规则。不得在关闭前清空 owned、吞异常、跳过 finally、伪造 completion 或放宽生产 `close` 对缺属性的处理；只补最后报错属性不算完成。 |
      | `scripts/test/evals-framework.test.sh`：`review_fixture` 的私有 copy/pin 替换接点及 `review_substitute` 的对应固定调用 | 逐位置确认原 catalog pin 的完整闭集，再改其严格替换绑定。设计源 driver 有四处（Python `CATALOG_SHA`、`FIXED_PINS`，shell `verify_runtime`、`run_program`），launcher 有一处；不把计数改成任意匹配或跳过断言。只改变私有 fixture 副本中原允许的 catalog/approval/driver pin；保留精确差异、program/closure 与重新量测的 driver 绑定，以及全部 trial、human grade、label、approval、tamper、repeat 和 dashboard 正反例。 |
      | `scripts/test/scope-gate-generation.test.sh`：`verifier_observation_value_controls` | 只修原实际值段的 AST 提取和固定依赖接线。按唯一赋值、完整参数、调用顺序及最终 `return raw` 绑定当前 producer，不再假定末两句形状。保留原 inline 对照、完整 bytes、非 ASCII/NaN、四阶段顺序、普通错误、marked cancellation 和同一异常对象断言；不得删除或搬动产品的 recording 分支，不能用手写值副本或 skip 代替提取。 |
@@ -2009,7 +2009,7 @@ to evade the source cap. Executable and policy files always belong to the closur
      文件现算 expected 来自认。私有 fixture 产物仍按原规则真实量测和逐项绑定。
      单换 SHA 或替换计数不构成兼容证明。须核完整生成 recipe、实际依赖及原所有拒绝
      控制；变换缺失/重复/越界、错误 source/copy/行号、漏依赖或 guard 被删除均须拒绝。
-     除表内固定绑定与先决适配外，其它源码、observer/诊断语义、场景和断言判定不变；
+     除表内固定绑定、先决适配及 `close-failure` 唯一 owner 后置条件特例外，其它源码、observer/诊断语义、场景和断言判定不变；
      新问题逐项判断，不能自动纳入本条。需要更宽修改就停止并返回 artifact gate。
      `evaluate-scope.sh` 保持 blob `605370780345539c5ed7b9debbd04f5327610128`，不得回退产品
      来满足旧测试。原 40/20 路径集合、九个 adoption-only 文件、SOURCE 84、协议、角色、
