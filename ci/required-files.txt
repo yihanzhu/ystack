@@ -607,3 +607,9 @@ scripts/test/fixtures/shadow-archive-control/v1/risk-gates-policy.json
 scripts/test/fixtures/shadow-archive-control/v1/sandbox-decision.json
 scripts/test/fixtures/shadow-archive-control/v1/sandbox-policy.json
 scripts/test/fixtures/shadow-archive-control/v1/provenance.json
+adapters/github-forge/v1/collect.py
+adapters/github-forge/v1/_collector_http.py
+adapters/github-forge/v1/_collector_model.py
+scripts/test/github-change-request-collector.test.sh
+scripts/test/fixtures/github-change-request-collector/v1/test_collector.py
+docs/github-change-request-collector.md
