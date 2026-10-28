@@ -1991,17 +1991,19 @@ to evade the source cap. Executable and policy files always belong to the closur
      恢复 baseline outcome/reasons。测试判断输出语义，不能误要求进程非零。
      保留原 shape、父块类型、输入 tamper 和完成前重查负例；新增提取不能用 jq
      异常替代原拒绝。两个 fixture 的其他既有断言保持。
-   - **既有测试的固定源与生命周期绑定兼容。** 仅允许修订下表四个已有测试文件的指定接点。
+   - **既有测试的固定源与生命周期绑定兼容。** 仅允许修订下表五个已有测试文件的指定接点。
      位置绑定设计源 `53bed46d5eb694bfd05578f5ac1841b9443749c6`；后续实现须绑定实际
      已接受 source 与完整 recipe bytes。此条不扩大 C1 的六个功能路径或三个 pin 路径，
      不改产品行为，不开放整个测试文件或其它测试。
 
      | 测试路径与接点 | 修改范围与保留要求 |
      | --- | --- |
-     | `scripts/test/scope-qualification.test.sh`：`PY_STALE_PREPARE` 及同文件直接绑定它的 source SHA/行号断言；`PY_SAME_CALL_OWNED_CONTROLS:sudo_provenance_controls` | 前者仅修正原三个 source 的固定绑定及私有 copy 的必要兼容。保留原 observer、四个固定 body、精确替换次数、完整行号映射与逆变换、原异常/返回/关闭、所有 owner/身份/拒绝控制、费用与 cap。后者仅把原 `provenance/recheck/close` 的必需固定私有依赖和实际接收者状态接全；仍调用同一受绑定源码的原检查，不用常量、空实现或伪原件代替依赖。保留原真实 FD、既有 OS transport seam、sudo 身份与内容摘要区别、登记/逆序关闭及每个原故障断言。 |
+     | `scripts/test/scope-qualification.test.sh`：`PY_STALE_PREPARE` 及同文件直接绑定它的 source SHA/行号断言；`PY_SAME_CALL_OWNED_CONTROLS:sudo_provenance_controls` | 前者仅修正原三个 source 的固定绑定及私有 copy 的必要兼容。保留原 observer、四个固定 body、精确替换次数、完整行号映射与逆变换、原异常/返回/关闭、所有 owner/身份/拒绝控制、费用与 cap。后者仅把原 `provenance/recheck/close` 的必需固定私有依赖和实际接收者状态接全；仍调用同一受绑定源码的原检查，不用常量、空实现或伪原件代替依赖。仅当真实普通 fixture backing 确需路径适配时，可在该测试独立加载的 consumer namespace 内将 `ANCHOR` 绑定到原 private fixture 目录，并须在 `finally` 恢复原常量；不改真实安装路径或生产 root，不开放其它路径 seam。保留原真实 FD、既有 OS transport seam、sudo 身份与内容摘要区别、登记/逆序关闭及每个原故障断言。 |
+     | `scripts/test/scope-qualification.test.sh`：顶层 `PY_COVERAGE_PURE` 的手工 `_Reader` 构造 | 仅在获取任何真实 held 对象前补齐原构造器默认值 `source_copies=[]`、`capture_completion_owner=None`；保留已有 `store_session=None`，不伪造 enforced/completion 或其它生产状态。保留原全部 141 项检查、真实 owned/Git/child/FD、命令 ledger、原 `finally` 的实际 `close` 及首错/取消规则。不得在关闭前清空 owned、吞异常、跳过 finally、伪造 completion 或放宽生产 `close` 对缺属性的处理；只补最后报错属性不算完成。 |
      | `scripts/test/evals-framework.test.sh`：`review_fixture` 的私有 copy/pin 替换接点及 `review_substitute` 的对应固定调用 | 逐位置确认原 catalog pin 的完整闭集，再改其严格替换绑定。设计源 driver 有四处（Python `CATALOG_SHA`、`FIXED_PINS`，shell `verify_runtime`、`run_program`），launcher 有一处；不把计数改成任意匹配或跳过断言。只改变私有 fixture 副本中原允许的 catalog/approval/driver pin；保留精确差异、program/closure 与重新量测的 driver 绑定，以及全部 trial、human grade、label、approval、tamper、repeat 和 dashboard 正反例。 |
      | `scripts/test/scope-gate-generation.test.sh`：`verifier_observation_value_controls` | 只修原实际值段的 AST 提取和固定依赖接线。按唯一赋值、完整参数、调用顺序及最终 `return raw` 绑定当前 producer，不再假定末两句形状。保留原 inline 对照、完整 bytes、非 ASCII/NaN、四阶段顺序、普通错误、marked cancellation 和同一异常对象断言；不得删除或搬动产品的 recording 分支，不能用手写值副本或 skip 代替提取。 |
      | `scripts/test/candidate-content-preparation-fixtures.py`：`raw16_preparation_P_handoff` | 只补该既有七 case 的两处实际生命周期接线：在同 scratch 的 inspect 生成前后，按原时点调用 `_T_cleanup_begin/_T_cleanup_done/_T_inspection_returned`；在原 H-copy 前后调用 `_begin_T_parent/_finish_T_parent`，后者只接受实际新增的 `reproduction`。仅刷新 stat 不替代原 transition。读取第二副本前先核实际 inspect 返回值、数量和对象身份，保留原 failure，不以索引保护跳过。保留七个正反例、失败/取消/关闭/费用断言及生产 `T_source.recheck`；不直接填 holder、回写 receipt 或强行接受失败 retention。 |
+     | `scripts/test/shadow-enforced.test.sh`：首个 `PY_REPRODUCTION_VALUES` | 仅在原固定 AST 提取集合中补入真实 `_runtime_sha_values`；完整闭集为 `Refusal`、`canonical`、`sha`、`parse`、`document_ref`、`_native_provenance_values`、`_runtime_sha_values`、`_reproduction_provenance_values`、`_reproduction_record_values`、`_reproduction_bundle_values`、`StableFile`，每个定义恰一次。新增 helper 只使用原 namespace 已有的 `sha/c`；不做递归或任意依赖 loader，不改产品或注入替代实现。保留原 32 个断言、provenance/record/bundle 值与 bytes 比较、单字段变异、缺字段和畸形拒绝、StableFile/DependencySnapshot 区别、`marked_sha` 与 bundle hash 的精确顺序、早失败前缀和故障 payload；不改 expected marks、跳过异常或删除 Python hash。该块以外的原控制和取消/关闭语义保持不变。 |
 
      原 source 的 expected digest 必须来自独立审过的固定 bytes；不得在测试中从被测
      文件现算 expected 来自认。私有 fixture 产物仍按原规则真实量测和逐项绑定。
