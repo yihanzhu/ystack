@@ -8516,6 +8516,7 @@ def raw16_C1_p_cancel_drain(root: Path, evidence=None) -> dict:
         original_stat, original_close = os.fstat, os.close
         original_report, original_observe = c._capture_observation_error, c._capture_observe
         stat_failed, close_observed, closes, reports, attempted, close_errors = [], [], [], [], [], []
+        cleanup_attempted, cleanup_succeeded, cleanup_errors = [], [], []
         def failing_stat(fd):
             if fd == target and not stat_failed:
                 stat_failed.append(fd)
@@ -8550,11 +8551,14 @@ def raw16_C1_p_cancel_drain(root: Path, evidence=None) -> dict:
         finally:
             os.fstat, os.close = original_stat, original_close
             c._capture_observation_error, c._capture_observe = original_report, original_observe
+            product_remaining = [component.fd for component in held.components]
             held.components.clear()
             for fd in order:
                 if fd not in attempted:
-                    try:closing(fd)
-                    except BaseException:pass
+                    cleanup_attempted.append(fd)
+                    try:original_close(fd)
+                    except BaseException as error:cleanup_errors.append(error)
+                    else:cleanup_succeeded.append(fd)
             if evidence is not None:
                 with (Path(evidence) / ('C1-drain-' + label + '.json')).open('x') as stream:
                     def error_value(error):
@@ -8566,8 +8570,11 @@ def raw16_C1_p_cancel_drain(root: Path, evidence=None) -> dict:
                     json.dump(work, stream, sort_keys=True, default=error_value)
                 with (Path(evidence) / ('C1-drain-close-' + label + '.json')).open('x') as stream:
                     json.dump({'attempted': attempted, 'succeeded': closes, 'errors': close_errors,
-                        'uncertain_close': bool(close_errors)}, stream, sort_keys=True, default=error_value)
+                        'product_remaining': product_remaining, 'cleanup_attempted': cleanup_attempted,
+                        'cleanup_succeeded': cleanup_succeeded, 'cleanup_errors': cleanup_errors,
+                        'uncertain_close': bool(close_errors or cleanup_errors)}, stream, sort_keys=True, default=error_value)
         assert not close_errors and attempted == order
+        assert not product_remaining and not cleanup_attempted and not cleanup_errors
         assert result is first and reports and close_observed == [later_marked]
         assert closes == order and collections.Counter(closes) == collections.Counter(order)
         assert held.components == []
@@ -8956,7 +8963,7 @@ def raw16_C1_wire_recording_isolation(root: Path, evidence=None) -> dict:
             elif label == 'socket-timeout':
                 try:receiver.receive()
                 except BaseException as error:caught = error
-                assert rx.receive_errors and caught is rx.receive_errors[0] and isinstance(caught, TimeoutError)
+                assert rx.receive_errors and caught is rx.receive_errors[0] and type(caught) is socket.timeout
             else:
                 if label == 'socket-partial-marked':tx.cancel = native_cancel
                 try:sender.send(phase, body)
