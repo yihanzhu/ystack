@@ -755,8 +755,8 @@ actual work. Keep all existing binary passes and independent recomputation.
 D's RAW16 replacement
 caps apply together with every unchanged applicable cap, including 12 MiB exports,
 1 MiB JSON and the four raw partitions. The original 40 edit paths gain only
-the C2 bootstrap exception in R9.3; the nine adoption-only paths and 84 source
-members do not change. No added helper,
+the C2 bootstrap and auxiliary qualify namespace exceptions in R9.3; the original
+20-path subset, nine adoption-only paths and 84 source members do not change. No added helper,
 package, installation, authority or real recording is authorized by this layout.
 
 Existing capture-held-values, sandbox-launcher, shadow-enforced/write and source
@@ -1763,8 +1763,8 @@ replace implementation.
 | scope/权限 | 全部repo inactive；slot never executes；stdout零；native attempt两成员不变；source captures不能夹export；无新helper/network/credential/install/activation/target |
 
 G2 and the separate high-risk plan permit only inactive mechanisms within the
-original 40 edit paths plus the sole C2 bootstrap edit in R9.3, with 9
-adoption-only paths and 84 source members unchanged. C source work may precede B
+original 40 edit paths plus the exact C2 bootstrap and auxiliary qualify edits in
+R9.3, with the original 20-path subset, 9 adoption-only paths and 84 source members unchanged. C source work may precede B
 acceptance only through frozen, precisely mapped real B interfaces. Before C
 code, independently accept and land a separate high-risk plan amendment, merge
 that accepted main normally into the same source carrier, and obtain fresh
@@ -1991,10 +1991,12 @@ to evade the source cap. Executable and policy files always belong to the closur
      恢复 baseline outcome/reasons。测试判断输出语义，不能误要求进程非零。
      保留原 shape、父块类型、输入 tamper 和完成前重查负例；新增提取不能用 jq
      异常替代原拒绝。两个 fixture 的其他既有断言保持。
-   - **既有测试的固定源与生命周期绑定兼容。** 仅允许修订下表五个已有测试文件的指定接点。
-     位置绑定设计源 `53bed46d5eb694bfd05578f5ac1841b9443749c6`；后续实现须绑定实际
+   - **既有测试的固定源与生命周期绑定兼容。** 仅允许修订下表六个已有测试文件的指定接点。
+     `raw16_scope_P_ownership`、共享 orchestration flow 及两个 `evals-malicious` 接点绑定
+     设计源 `5084dfed3d6500d1b63a0331b0c149cfd0922bd3`；其余接点保留设计源
+     `53bed46d5eb694bfd05578f5ac1841b9443749c6`。后续实现须绑定实际
      已接受 source 与完整 recipe bytes。此条不扩大 C1 的六个功能路径或三个 pin 路径，
-     不改产品行为，不开放整个测试文件或其它测试。
+     本测试表不改产品行为，不开放整个测试文件或其它测试；唯一辅助生产兼容接点另列于下文。
 
      | 测试路径与接点 | 修改范围与保留要求 |
      | --- | --- |
@@ -2004,19 +2006,68 @@ to evade the source cap. Executable and policy files always belong to the closur
      | `scripts/test/scope-gate-generation.test.sh`：`verifier_observation_value_controls` | 只修原实际值段的 AST 提取和固定依赖接线。按唯一赋值、完整参数、调用顺序及最终 `return raw` 绑定当前 producer，不再假定末两句形状。保留原 inline 对照、完整 bytes、非 ASCII/NaN、四阶段顺序、普通错误、marked cancellation 和同一异常对象断言；不得删除或搬动产品的 recording 分支，不能用手写值副本或 skip 代替提取。 |
      | `scripts/test/candidate-content-preparation-fixtures.py`：`raw16_preparation_P_handoff` | 只补该既有七 case 的两处实际生命周期接线：在同 scratch 的 inspect 生成前后，按原时点调用 `_T_cleanup_begin/_T_cleanup_done/_T_inspection_returned`；在原 H-copy 前后调用 `_begin_T_parent/_finish_T_parent`，后者只接受实际新增的 `reproduction`。仅刷新 stat 不替代原 transition。读取第二副本前先核实际 inspect 返回值、数量和对象身份，保留原 failure，不以索引保护跳过。保留七个正反例、失败/取消/关闭/费用断言及生产 `T_source.recheck`；不直接填 holder、回写 receipt 或强行接受失败 retention。 |
      | `scripts/test/shadow-enforced.test.sh`：首个 `PY_REPRODUCTION_VALUES` | 仅在原固定 AST 提取集合中补入真实 `_runtime_sha_values`；完整闭集为 `Refusal`、`canonical`、`sha`、`parse`、`document_ref`、`_native_provenance_values`、`_runtime_sha_values`、`_reproduction_provenance_values`、`_reproduction_record_values`、`_reproduction_bundle_values`、`StableFile`，每个定义恰一次。新增 helper 只使用原 namespace 已有的 `sha/c`；不做递归或任意依赖 loader，不改产品或注入替代实现。保留原 32 个断言、provenance/record/bundle 值与 bytes 比较、单字段变异、缺字段和畸形拒绝、StableFile/DependencySnapshot 区别、`marked_sha` 与 bundle hash 的精确顺序、早失败前缀和故障 payload；不改 expected marks、跳过异常或删除 Python hash。该块以外的原控制和取消/关闭语义保持不变。 |
+     | `scripts/test/candidate-content-preparation-fixtures.py`：`raw16_scope_P_ownership` | 接全同一 Reader/Anchor 的 `scope_runtime_owner`、真实 `_CoverageConfiguration`、source/configuration 实际登记与 capture 关闭状态。配置的 `host/config/accepted/package/supervisor/normalizer` 六成员须来自同次实际 backing 的完整 raw、路径和 held，满足原类型、membership、对象身份及再读检查。登记 source 须独立取得并拥有真实 acquisition，不能借用随后仍须存活的原 native holder；capture 的 request_raw、held 和一次关闭也须完整。仅在实际证明 `4 runtime + 2 capture + 2 configuration = 8` 个 P、两个 capture 各四成员及两个 configuration 各六成员的完整 bytes/归属/ordinal/费用后，才把原 6 改为 8；不得仅改计数、伪造副本或清 unusable。保留原九 case，四个 registration fault 仍在首次 runtime 登记处触发；保留 release/seal/close、native-live、drift、同一取消对象、全部 P once-close 和首错规则。 |
+     | `scripts/test/shadow-enforced.test.sh`：原共享 orchestration flow（设计源 3891–4098） | 接全真实固定 `Anchor.retain_runtime_acquisition/retain_parent_inputs/retain_sudo_companion/retain_preparation/seal_local_runtime` 及原 receiver 必需状态；不以空方法、常量成功或吞 AttributeError 替代。原 Snap 的 `original/acquisition_raw` 须来自同次普通 fixture 的真实 holder 与完整 bytes；原 store seam 接收同次 `_owner` 并建立真实 held/snapshots/recheck/close 及 reproduction/capture 关系，不能只忽略参数或假造 owner。保留原 host/process/native launch 模拟边界、13 个控制、29 个 evidence 文件、实际调用顺序、changed-response 拒绝和 finally。真实保留方法的拒绝、unusable、失败/取消及全费用照常保留；原普通 unqualified context 不成为合格 P/完成/seed 证明。仅修共享原 fixture，`shadow-write.test.sh` 的原复制/变换器和 writer 专有插入保持不变。 |
+     | `scripts/test/evals-malicious.test.sh`：`PY_CAPTURE_VALUES` 内 source 的成功 reacquisition/seal 分支 | 在第一次真实 `_Owned.append` 前建立同一 Reader/Anchor 的 owner、真实 configuration 与其登记；两次 source acquisition 仍绑定该同 case 的实际 configuration，其 capture/held/完整 raw 各由本次真实取得，不借别的 source acquisition 或 case。保留原 failed_sync 两分支、native receipt/payload、两次 reacquisition、完整四成员 capture、同 case 账、真实最终 owner/seal、全部 tail transfer 和关闭。新增 configuration P 的成员/数量/费用须逐项实测并列入原精确计数；不改成功 seal 判定或用清失败状态恢复它。 |
+     | `scripts/test/evals-malicious.test.sh`：`PY_SOURCE_CANCEL` 的原共享 receiver | 接全原 positive 所需同一 owner、真实 configuration/source 登记、实际 capture/held 和关闭先决，再沿用原 27 个 label 及各原故障注入位置。保留 positive 的无意外 unusable、真实完整 bytes、同一 reader/generator cancellation 对象、首错/次错、FD once-close/无泄漏、全部账与原负例判定。仅原 `owned` 后置条件改为同一 Reader 已实际登记的 configuration baseline 加原 case 的 source 登记增量；须核同一对象、原顺序且无额外 owner，seal 分支的 source 增量仍为空。不另造假 owner 来维持旧 list，不把预期失败改为必须成功。精确计数只按真实新增 configuration P 的实际贡献分项调整，不跳过 source copy、伪造输出或清 unusable。 |
+
+     三个 source configuration 接点如确需共享准备，只允许在
+     `scripts/test/candidate-content-preparation-fixtures.py` 内新增一个私有
+     `_source_configuration_fixture` 准备边界，供 `raw16_scope_P_ownership` 与上述两个
+     `evals-malicious` heredoc 使用。输入只来自该原 caller 的独立 consumer namespace、
+     同 case 原私有目录、原 request bytes 和既有 coverage/kill operation；不接任意 selector、
+     callback 或其它目标。先完成全部 backing，再取得实际 Anchor/configuration/held 并绑定
+     同一 Reader；不得把其它 case/acquisition 的对象冒充本次原件，重复复制照实计费。
+     原故障注入与关闭责任仍在原 caller。使用原真实构造与持有机制；现有 `source_configuration_input_controls` 仅作准备范例，
+     不复制/执行其整个控制循环，不用属性拼装或递归 loader 代替配置。若普通 backing 确需
+     范例的 `ANCHOR/_root_rule` fixture seam，仅限该独立测试 consumer namespace 和原私有
+     backing，须在 `finally` 恢复原值；实际 held 身份、raw/membership、再读及关闭不能模拟。
+     不改生产 root、真实安装或权限，不新增测试文件、场景矩阵或公开 helper；单独 high-risk
+     plan 须明确这一次准备与三个原 caller 的所有权/失败边界。
 
      原 source 的 expected digest 必须来自独立审过的固定 bytes；不得在测试中从被测
      文件现算 expected 来自认。私有 fixture 产物仍按原规则真实量测和逐项绑定。
      单换 SHA 或替换计数不构成兼容证明。须核完整生成 recipe、实际依赖及原所有拒绝
      控制；变换缺失/重复/越界、错误 source/copy/行号、漏依赖或 guard 被删除均须拒绝。
-     除表内固定绑定、先决适配及 `close-failure` 唯一 owner 后置条件特例外，其它源码、observer/诊断语义、场景和断言判定不变；
+     除表内固定绑定、先决适配、真实新增 configuration P 的分项精确计数、`close-failure` 及
+     `PY_SOURCE_CANCEL` 的上述两个精确 owner 后置条件特例外，其它源码、observer/诊断语义、
+     场景和断言判定不变；
      新问题逐项判断，不能自动纳入本条。需要更宽修改就停止并返回 artifact gate。
      `evaluate-scope.sh` 保持 blob `605370780345539c5ed7b9debbd04f5327610128`，不得回退产品
-     来满足旧测试。原 40/20 路径集合、九个 adoption-only 文件、SOURCE 84、协议、角色、
-     九 occurrence、全部费用/cap/窗口预算及原验收保持。不得修改旧执行包或重置失败和 UNKNOWN。
+     来满足旧测试。原 40 路径集合仅有 R9.3 明列的 C2 bootstrap 与 qualify 辅助兼容例外；
+     原 20-path 子范围、C1 六功能路径/三 pin 的职责、九个 adoption-only 文件、SOURCE 84、
+     协议、角色、九 occurrence、全部费用/cap/窗口预算及原验收保持。不得修改旧执行包或重置失败和 UNKNOWN。
      G2 与分开的 high-risk plan 接受后，仍须 fresh exact source/recipe/resource review 和
      manager GO 才可改这些指定接点或执行普通 fixture/CI；旧 GO 不复用。此条不授权新的
      full-scope、LOCAL7/D、native、真实 target、网络、安装或激活，也不将普通 fixture 当 seed。
+   - **唯一辅助生产兼容：aggregate 的 capture namespace。** 仅允许
+     `sandbox/v1/qualify.py` 的 `aggregate` store namespace 分类及必要私有检查，
+     与 `scripts/test/sandbox-launcher.test.sh` 原三批、十四 case 的 aggregate 回归及
+     必要原 fixture 准备。此项绑定设计源 `5084dfed3d6500d1b63a0331b0c149cfd0922bd3`，
+     是已接受同 store capture 与原 receipt/batch 完整性语义的集成，不开放其它产品接点。
+     完整 store inventory 仍须检查。伴随名只能从同配置、同 store、已验证的
+     batch/case/attempt 关系精确导出为 `.capture-<attempt_id>.pending` 或
+     `.capture-<attempt_id>`；不能从未验证的缓存声明、自由 selector 或任意路径推导。
+     保留原路径、principal/group、权限/ACL、非 symlink 和前后稳定性检查。
+     pending 中的 partial、published 中缺 `complete.json` 或仍留 `.completion.pending`，
+     只要满足该精确归属与实际 namespace 检查，仍是保留中的 companion，不是额外 receipt，
+     也不证明 capture 完成。published 名或存在完成文件本身同样不授完成/资格。
+     无 companion 的原合法 receipt 仍按原规则处理。发布结果不确定时，只能按实际取得且
+     前后稳定的同一目录身份和精确名称分类；无法证明归属/身份、检查失败或两名称同时存在
+     均拒绝，不猜测 rename 成败。未知、畸形、unbound、错 store、错误类型/symlink/身份及
+     冲突名称不能获得豁免；原未命名 receipt 和 rerun 拒绝保持。不得用 prefix/dot-directory
+     通用忽略、删除或搬走 capture 制造 clean store，也不改 host 的录制/发布/留存行为。
+     `complete` 仍只表示原 receipt/batch 的覆盖、绑定与唯一性完整；不证明 capture 完成、
+     workload satisfied、native qualified 或 seed。原 receipt/payload、case、accepted-set、
+     slots/config/domain、独立 checker 和真实重分类继续复核；`qualification()`、原输出
+     schema、`not-qualified`、`qualification.cpu-wall-unbounded` 与全部资格标准不变。
+     保留原 29 条 aggregate 断言、三批/十四 case、API/CLI/dry-run 的完整 bytes 相等及
+     缺批、重复、rerun、未命名 receipt、错 store、binding/checker/domain/tamper 的全部负例。
+     只增加该精确边界必要的可达正反对照：合法 pending/partial、published/缺完成标记，
+     与各仅有一项归属、名称、类型、身份、冲突或未命名 receipt 缺陷的拒绝。不能弱化原
+     `complete=True`、skip 负例或新建场景矩阵/框架。单独 high-risk plan 须闭合安全分类
+     算法、实际检查/读取/重查/关闭成本、取消与首错归属，并复核实际 pin；其它 pin 移动
+     则返回 gate。未知费用/容量不算 fit，原 cap/预算与 fresh source/recipe/resource GO 保持。
    - PR 2 and PR 3 each change the shipped seeded and declared counts, asserted in
      `scripts/test/evals-framework.test.sh:83-84` (and its pass message at `:90`) and
      `scripts/test/evals-dashboard.test.sh:71`: 8 and 1 after the first seed PR, 9
@@ -2065,8 +2116,13 @@ to evade the source cap. Executable and policy files always belong to the closur
    The latter adds only new restore-critical R4A paths. For the fixed C2 session,
    PR 1b additionally permits `evals/v1/run-evals.sh` only to add `exec ` before
    its final `/usr/bin/env -i ...` command. All other bytes of that file remain
-   unchanged. This is the original 40 edit paths plus this one exact path;
-   nine adoption-only paths and SOURCE 84 remain unchanged. No workflow, installed
+   unchanged. PR 1b also permits `sandbox/v1/qualify.py` only for the auxiliary
+   aggregate store namespace compatibility boundary in R9.2. Its existing regression
+   path `scripts/test/sandbox-launcher.test.sh` is already listed above. The final
+   edit set is exactly 42 paths: the original 40, C2 bootstrap, and qualify.
+   The original 20-path subset, six C1 functional paths and three pin responsibilities,
+   nine adoption-only paths and SOURCE 84 remain unchanged; qualify joins none of them.
+   No workflow, installed
    configuration, profile or runtime selection changes. Existing immutable pins
    outside these paths that would need change stop implementation for a bounded
    artifact correction; they may not be silently bypassed.
