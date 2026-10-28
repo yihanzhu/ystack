@@ -1944,6 +1944,7 @@ class _Reader:
         try:
             self.replay_output_state = [True]
             self.replay_output_errors = []
+            self.replay_nested_reproductions = []
             self.replay_outputs = {"bundles": [], "git": [], "stores": [], "anchor": [], "holds": []}
             self.replay_output_work = {}
             c._capture_work_values(self.replay_output_work, "scope-replay-outputs")
@@ -1966,12 +1967,18 @@ class _Reader:
         except BaseException as error:
             self._replay_output_failure(error, "reader-output-" + group)
 
-    def fixed_bundle(self, held):
-        facts = self._authenticate(held.files)
+    def fixed_bundle(self, held, *, role, environment):
+        bundle_owner = None
+        try:
+            require(type(held) is c._HeldBundle and any(item is held for item in self.owned)
+                and role in {"current", "qualifying"} and c._id(environment), "E_STORE")
+            bundle_owner = (held, role, environment)
+        except BaseException as error:self._replay_output_failure(error, "reader-bundle-caller")
+        facts = self._authenticate(held.files, bundle_owner=bundle_owner)
         held.recheck()
         return facts
 
-    def _authenticate(self, files):
+    def _authenticate(self, files, *, bundle_owner=None):
         anchor = self.anchor_for()
         fixed = _authentication_installed_names_values()
         require(all(files[name] == anchor.installed[role][0] for name, role in fixed.items()))
@@ -2040,7 +2047,7 @@ class _Reader:
             ["validate", incident["id"], launch["id"], retained["trace-ledger.json"]])
         require(trace_receipt == files["trace-receipt.json"])
         self.provenance(files, instruction, observation, launch["id"], write is not None)
-        git_output = self.git_relations(files, material_input, incident, body)
+        git_output = self.git_relations(files, material_input, incident, body, bundle_owner=bundle_owner)
         store.recheck()
         anchor.recheck("E_STALE")
         facts = _bundle_facts_values(files, checked, store.observation, body)
@@ -2056,6 +2063,14 @@ class _Reader:
                 candidate_paths = {name: self.capture(name, raw, candidate=True) for name, raw in candidate_files.items()}
                 candidate = (candidate_files, candidate_paths, git_output)
                 store.scope_candidate_acquisition = (self, files, retained, store.storage_rows, candidate)
+                if bundle_owner is not None:
+                    require(not self.replay_output_unusable, "E_STORE")
+                    associated = [entry for entry in self.replay_nested_reproductions
+                        if entry[0] is files and entry[1] is bundle_owner and entry[3] is frozen_files
+                        and entry[4] is rows and entry[5] is git]
+                    require(len(associated) == 1, "E_STORE")
+                    store.scope_reproduction_acquisition = (self, store, files, retained,
+                        store.storage_rows, git_output, associated[0])
                 self._retain_replay_output("git", files["shadow-record.json"], git_output)
             self._retain_replay_output("stores", files["shadow-record.json"],
                 (store, files, retained, store.storage_rows), candidate=candidate)
@@ -2125,7 +2140,7 @@ class _Reader:
         require(len(trees) == 1 and c._writer_oid(trees[0]) and all(c._writer_oid(parent) for parent in parents))
         return trees[0], parents
 
-    def git_relations(self, files, material_input, incident, body):
+    def git_relations(self, files, material_input, incident, body, *, bundle_owner=None):
         revision = incident["body"]["git_revision_ref"]
         source_facts = self.git.inventory(revision)
         source_tree, _parents = self.commit(revision["commit_id"])
@@ -2157,7 +2172,8 @@ class _Reader:
             require(facts == source_facts and candidate["commit_id"] == revision["commit_id"])
             return
         require(parents == [revision["commit_id"]])
-        return self.write_relations(files, material_input, incident, body, facts, source_facts, candidate_tree)
+        return self.write_relations(files, material_input, incident, body, facts, source_facts, candidate_tree,
+            bundle_owner=bundle_owner)
 
     def preparation(self, files, receipt, response):
         prep, producer = _preparation_document_values(files, receipt, response)
@@ -2182,7 +2198,7 @@ class _Reader:
         require(type(core) is dict and set(core) == {"generation_id", "files"}
                 and core["generation_id"] == self.modules.parent.name and same(core["files"], expected_files))
 
-    def write_relations(self, files, material_input, incident, body, facts, source_facts, tree):
+    def write_relations(self, files, material_input, incident, body, facts, source_facts, tree, *, bundle_owner=None):
         write, prefix, paths, rows, policy_form = _scope_write_header_values(files, incident, body, self.scope)
         frozen_files = {}
         for row in rows:
@@ -2198,7 +2214,18 @@ class _Reader:
         frozen = _scope_write_frozen_values(marker_raw, policy, self.scope_body, paths, frozen_files, prefix, incident, body, files)
         require(same(write["bundle_ref"], self.writer._bundle_ref(frozen["bundle.json"]))
                 and _scope_write_frozen_tail_matches_values(frozen_files, frozen))
+        nested_start = None
+        try:nested_start = len(self.replay_outputs["stores"])
+        except BaseException as error:self._replay_output_failure(error, "reader-nested-start")
         self._authenticate(frozen)
+        nested = None
+        try:
+            require(nested_start is not None, "E_STORE")
+            added = self.replay_outputs["stores"][nested_start:]
+            require(len(added) == 1 and added[0][0] is frozen["shadow-record.json"]
+                and added[0][1][1] is frozen, "E_STORE")
+            nested = added[0]
+        except BaseException as error:self._replay_output_failure(error, "reader-nested-acquisition")
         seed_dir = self.fresh_runtime_directory("seed-" + str(len(self.inputs)))
         seed_incident = self.capture("seed-incident-" + str(len(self.inputs)) + ".json", frozen["incident.json"])
         seed_record = self.capture("seed-record-" + str(len(self.inputs)) + ".json", frozen["shadow-record.json"])
@@ -2208,6 +2235,17 @@ class _Reader:
                 == files["materialization-input.json"])
         publisher, publisher_body = self.writer._publisher(incident, tree)
         _scope_write_publication_values(write, files, publisher, publisher_body, incident, tree, rows)
+        try:
+            require(nested is not None, "E_STORE")
+            if bundle_owner is not None:
+                owner, role, environment = bundle_owner
+                require(type(owner) is c._HeldBundle and owner.files is files
+                    and any(item is owner for item in self.owned)
+                    and role in {"current", "qualifying"} and environment == body["environment"]["environment_id"], "E_STORE")
+                self.replay_nested_reproductions.append((files, bundle_owner, nested, frozen_files, rows, self.git))
+                c._capture_observe(self.replay_output_work, "M", "scope-nested-reproduction", {
+                    "role": role, "environment_id": environment, "store_position": nested_start})
+        except BaseException as error:self._replay_output_failure(error, "reader-nested-retention")
         return frozen_files, rows, self.git, files
 
     def allowed(self, path):
@@ -2558,7 +2596,7 @@ class _Reader:
                         role_files[role][environment] = held.files
                         if os.path.lexists(c.ANCHOR):
                             self.authentication_revision = revision
-                            row["facts"] = self.fixed_bundle(held)
+                            row["facts"] = self.fixed_bundle(held, role=role, environment=environment)
                             row["authentication"] = {"state": "authenticated"}
                             try:self._retain_replay_output("bundles", raw, (held, role, environment))
                             except BaseException as error:self._replay_output_failure(error, "reader-bundle-retention")

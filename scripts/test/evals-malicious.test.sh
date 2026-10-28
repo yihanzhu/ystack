@@ -4111,6 +4111,7 @@ fixture.raw16_C3_gate_outputs(root)
 fixture.raw16_C3_ledger_and_retained(root)
 fixture.raw16_C3_run_gate_capture_refusal(root)
 fixture.raw16_C3_bundle_outputs(root,candidate=True)
+fixture.raw16_C3_bundle_outputs(root,candidate=True,policy=True)
 PY_C3_GATE_OUTPUTS
 
 

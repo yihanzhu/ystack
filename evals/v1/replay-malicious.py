@@ -2296,6 +2296,86 @@ class _SeedAssembly:
         self.output_positions[(phase, reader)] = len(observations)
         self._transfer()
 
+    def _nested_reproduction_outputs(self, reader):
+        module = self._gate_type(reader, "scope/v1/read-shadow-evidence.py", "_Reader")
+        generator_module = self._gate_type(self.generator, "scope/v1/generate-gate-evidence.py", "_Generator")
+        _seed_require(self.generator is self._gate_owner and self.generator.reader is reader
+            and self.generator.active and type(reader.store_session) is generator_module._GateStoreSession
+            and reader.store_session is self.gate_session and reader.commands_open
+            and not reader.replay_output_unusable and not self.closed and self.failure is None)
+        matches = []
+        for outer_raw, outer in reader.replay_outputs["stores"]:
+            store, files, retained, storage_rows = outer
+            association = getattr(store, "scope_reproduction_acquisition", None)
+            if association is None:continue
+            actual_reader, original_store, original_files, original_paths, original_rows, git_output, saved = association
+            _seed_require(actual_reader is reader and original_store is store and original_files is files
+                and original_paths is retained and original_rows is storage_rows
+                and store.storage_rows is storage_rows and store.anchor is reader.anchor
+                and type(store) is module.c._HeldStoreRead and any(item is store for item in reader.owned)
+                and outer_raw is files["shadow-record.json"])
+            frozen_files, write_rows, git, git_files = git_output
+            caller_files, bundle_owner, nested, saved_frozen, saved_rows, saved_git = saved
+            bundle, role, environment = bundle_owner
+            _seed_require(caller_files is files and saved_frozen is frozen_files and saved_rows is write_rows
+                and saved_git is git is reader.git and git.ledger is reader and git_files is files
+                and type(bundle) is module.c._HeldBundle and bundle.files is files
+                and any(item is bundle for item in reader.owned)
+                and any(value is saved for value in reader.replay_nested_reproductions)
+                and any(value is git_output and key is outer_raw for key, value in reader.replay_outputs["git"])
+                and any(value is nested for value in reader.replay_outputs["stores"]))
+            nested_raw, nested_acquisition = nested
+            nested_store, nested_files, nested_paths, nested_rows = nested_acquisition
+            _seed_require(type(nested_store) is module.c._HeldStoreRead and nested_store.anchor is reader.anchor
+                and nested_store.storage_rows is nested_rows and any(item is nested_store for item in reader.owned)
+                and nested_raw is nested_files["shadow-record.json"] and set(nested_files) == set(nested_paths))
+            original = self.bindings["reproduction"]
+            _seed_require(files["incident.json"] == nested_files["incident.json"] == self.original_raw[0]
+                and files["sandbox-request.json"] == self.bindings["write"]["request_raw"]
+                and nested_files["sandbox-request.json"] == original["request_raw"])
+            record = self._wrapper_parse(nested_raw, "nested-output-record")
+            outer_record = self._wrapper_parse(outer_raw, "nested-output-caller")
+            _seed_require(role in {"current", "qualifying"}
+                and environment == record["body"]["environment"]["environment_id"]
+                == outer_record["body"]["environment"]["environment_id"]
+                and record["body"]["record_form"] == "enforced-reproduction.v1")
+            acquisitions = [item for item in reader.anchor.private_observations["storage_reads"]
+                if item["entries"] and all(row["role"] == "store" for row in item["entries"])]
+            ordinals = [index for index, item in enumerate(acquisitions) if item["entries"] is nested_rows]
+            _seed_require(len(ordinals) == 1 and any(item["entries"] is storage_rows for item in acquisitions))
+            _seed_require(store.held and nested_store.held and bundle.held)
+            matches.append((association, nested_files, nested_paths, role, environment, ordinals[0]))
+        _seed_require(matches)
+        indexed = self.derived_outputs.setdefault("reproduction", {})
+        for association, files, retained, role, environment, ordinal in matches:
+            names, _binding = self._bundle_output_values("reproduction", "generator", role, environment, files)
+            prefix = "bundle/generator/" + role + "/" + environment + "/"
+            for name in sorted(names):
+                holders = [item for item in reader.owned if type(item) is module.c._HeldBytes
+                    and item.held.path == str(retained[name])]
+                _seed_require(len(holders) == 1 and any(path is retained[name] and raw is files[name]
+                    for path, raw in reader.inputs))
+                source, raw = holders[0].held, files[name]
+                self._charge("E", len(holders[0].raw) + len(raw), "recorded")
+                _seed_require(holders[0].raw == raw and source.components)
+                expected = self._digest(raw, "recorded")
+                member = prefix + name
+                if member in indexed:
+                    self._verify_recorded_observation(reader.anchor, source, indexed[member],
+                        ("reproduction", "recorded", member), raw, expected)
+                else:
+                    destination = "reproduction-nested-%03d-" % len(indexed) + name
+                    self._semantic_copy(reader.anchor, source, destination, expected, "recorded",
+                        "reproduction", "recorded", member, source_mode=0o400, recorded_output=True)
+                    self.recorded_raw[("reproduction", "recorded", member)] = raw
+                    indexed[member] = destination
+            self.c._capture_observe(self.work, "M", "seed-nested-reproduction-output", {
+                "ordinal": ordinal, "role": role, "environment_id": environment, "members": len(names)})
+            self.output_relations.append(("reproduction", reader, "generator", role, environment,
+                (association[1], association)))
+            _seed_require(association[1].held and association[6][2][1][0].held)
+        self._transfer()
+
     def _bundle_output_values(self, phase, context, role, environment, files):
         _seed_require(phase in {"reproduction", "write"} and context in {"generator", "scope_reader"}
             and role in {"current", "qualifying"} and self.c._id(environment)
@@ -2903,8 +2983,8 @@ class _SeedAssembly:
         _seed_require(type(generator.session) is module._GateStoreSession
             and generator.session is self.gate_session and generator.reader.commands_open)
         try:
-            for phase in ("reproduction", "write"):
-                self.bundle_outputs(phase, generator.reader)
+            self._nested_reproduction_outputs(generator.reader)
+            self.bundle_outputs("write", generator.reader)
             self.candidate_outputs(generator.reader)
             self.scope_reader_inputs(generator.reader, generator=True)
         except BaseException as error:
@@ -3313,9 +3393,18 @@ class _SeedAssembly:
                         and source["current_output"] and (role, environment) in source["roles"])
                 else:
                     self._gate_type(owner, "scope/v1/read-shadow-evidence.py", "_Reader")
-                    _seed_require(any(bundle is source and (found_role, found_environment) == (role, environment)
-                        and raw == source.files["shadow-record.json"]
-                        for raw, (bundle, found_role, found_environment) in owner.replay_outputs["bundles"]))
+                    if type(source) is tuple:
+                        outer, association = source
+                        _seed_require(phase == "reproduction" and context == "generator"
+                            and owner is self.generator.reader and association is outer.scope_reproduction_acquisition
+                            and association[0] is owner and association[1] is outer
+                            and association[6][1][1:] == (role, environment)
+                            and any(value is association[6] for value in owner.replay_nested_reproductions)
+                            and any(value is association[6][2] for value in owner.replay_outputs["stores"]))
+                    else:
+                        _seed_require(any(bundle is source and (found_role, found_environment) == (role, environment)
+                            and raw == source.files["shadow-record.json"]
+                            for raw, (bundle, found_role, found_environment) in owner.replay_outputs["bundles"]))
             for phase in ("reproduction", "write"):
                 _seed_require({identity[1] for identity in self.output_forms if identity[0] == phase}
                     == {"generator", "scope_reader"})

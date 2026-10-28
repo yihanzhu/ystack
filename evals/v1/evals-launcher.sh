@@ -2384,7 +2384,7 @@ shadow_source_rows() {
     'enforcement/v1/accepted-identities.json c75dcd8d9268cb42677f5aa526fd374c3e45f2ba0fe678f47562ae49ad6851a0 174 100644' \
     'enforcement/v1/check-sandbox-receipt.sh 7db3412a4e740f79bde6af24891837fd5daa27d0811ff970b2f58534fcd59b97 10816 100755' \
     'enforcement/v1/sandbox-receipt.jq 43ab3a97b90444be17958112b7ff63966d1052981313c81bcb463618adae8619 30838 100644' \
-    'evals/v1/replay-malicious.py 589614b11c626fd61f3462a93cfad30a354e323b4396174cf2f1d5b7d013c662 520339 100644' \
+    'evals/v1/replay-malicious.py 326b5a283029cde9168f87db84b56ea46d85f18e090860896eb2c4fb31efb0c1 527373 100644' \
     'maintenance/v1/bands.jq 594994c057a1130da6727f5f825d2fed3ff01de4a9fafe3a722d9e964f05c8e4 10714 100644' \
     'maintenance/v1/incident-to-eval.jq 2229722267c3e9544d9cf53bd37d6d798f27adebad4a7439294989d0194ad92a 7237 100644' \
     'maintenance/v1/incident-to-eval.sh e000f961d7851c48b650ca36ed0c60fd2bc97ffc32442214b3f8937efc97f967 7449 100755' \
@@ -2402,7 +2402,7 @@ shadow_source_rows() {
     'sandbox/v1/runtime-vfkit.py 50a400dd73e8fa8d46cf93e5f8824ac80d5921cc1bf69d522bf11d4330050a14 6764 100755' \
     'scope/v1/evaluate-scope.sh fe6048b5eada5d86531e085acd0a9f46b73028d348349ab932e8c59f4e2ed66a 25253 100755' \
     'scope/v1/generate-gate-evidence.py 5444903bd219915137370970d60a15143b4e2210fd19706848b5bf8ac68e0864 54055 100755' \
-    'scope/v1/read-shadow-evidence.py e4b633b9c0935272fd5193bc25d6ec4fba8763e689d04869e3ac1cf729b76295 165325 100644' \
+    'scope/v1/read-shadow-evidence.py 201791d1783d4130ec947bc60ed61cd5cec9d45da98eae033d1b859b9761e404 168018 100644' \
     'scope/v1/scope-gates.jq 8f0b7cb6f42bc514f466fda710a1bf6fcfa0afe0abbc02d75e77e419a2ff9ed8 57384 100644' \
     'scope/v1/scope-policy.json 5c6db4debedfcd7117735bd1d4bf907293f73972ec8909c4eab9f25cf6417fe5 1181 100644' \
     'scope/v1/validate-scope.sh 99c0abae1bdcc3809dfac535a8b24137842abaec2418b90566b6ac8ff213b406 3194 100755' \
@@ -2916,10 +2916,10 @@ done
 [ -n "$jq_source" ] || emit_error E_RUNTIME
 
 generation=g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43
-program_sha=cdb8365296530b9d6832de176913bd0bb73259f45c6524a4a61845b86cf5730e
+program_sha=4a9edd5321dc2b4074d84c174573bc660f97a80ca3d401206f2051ef21297254
 review_approval_sha=none
 catalog_sha=0239138447a8f9fd420cb3c5da31660d8f75c85099d80d89a040dce2878a4cac
-driver_sha=d05c14ba062d799505c1ded6cd65bd7c4524cd83a8314176a5478d610471879e
+driver_sha=7c6ad3afd8475afd0b6f0da047c8ebf6d3a8837a175edece3013e73c7f1a8c3c
 }
 
 evals_record_context() {

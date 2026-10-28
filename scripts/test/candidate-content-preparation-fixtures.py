@@ -6751,7 +6751,7 @@ def raw16_C3_value_file(root: Path, deletion=False, evidence=None) -> None:
     print(json.dumps({'C3_actual_value_file':results,'qualification':'NOT_PROVED'},sort_keys=True))
 
 
-def raw16_C3_bundle_outputs(root: Path, candidate=False, selected=None, evidence=None) -> None:
+def raw16_C3_bundle_outputs(root: Path, candidate=False, selected=None, evidence=None, policy=False) -> None:
     import tempfile
     spec=importlib.util.spec_from_file_location('C3_bundle_reader',root/'scope/v1/read-shadow-evidence.py')
     module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
@@ -6761,7 +6761,8 @@ def raw16_C3_bundle_outputs(root: Path, candidate=False, selected=None, evidence
     results=[]
     for label in (selected or (('normal','wrong-row-sha','repeat-candidate-observation') if candidate else ('normal','source-mode-drift','unusable','duplicate-binding','unknown-role','replay-extra-key','replay-missing-key','default-repeat','repeat-observation','repeat-target-identity','repeat-source-swap'))):
         phase='write' if candidate else 'reproduction'
-        form='withheld-write.v1' if candidate else 'enforced-reproduction.v1'
+        assert not policy or candidate
+        form=('withheld-write-policy.v1' if policy else 'withheld-write.v1') if candidate else 'enforced-reproduction.v1'
         with tempfile.TemporaryDirectory(prefix='ystack-C3-bundle-') as temporary:
             base=Path(temporary).resolve();source=base/'published';source.mkdir(mode=0o700)
             destination=base/'S';destination.mkdir(mode=0o700)
@@ -6775,12 +6776,27 @@ def raw16_C3_bundle_outputs(root: Path, candidate=False, selected=None, evidence
                     'id':'incident.fixture','body':{'record_form':form}})})
             if candidate:
                 files['publisher-body.txt']=b'withheld synthetic publication\n'
-                candidate_files={'evidence/README.md':b'actual original Git README bytes\n',
-                    'evidence/eval-seed.json':c.canonical({'actual_original_git_seed':1})}
-                candidate_rows=[{'path':name,'mode':'100644','sha256':c.digest(raw),'git_blob_oid':'a'*40,'add_only':True}
+                originals={name:files[name] for name in c.SHADOW_EVIDENCE_NAMES}
+                originals['shadow-record.json']=c.canonical({'schema_version':1,'kind':'shadow_reproduction_record',
+                    'id':'incident.fixture','body':{'record_form':'enforced-reproduction.v1'}})
+                originals['bundle.json']=c.canonical(c._bundle_marker_values(originals,json.loads(incident),
+                    'enforced-reproduction.v1',set(c.SHADOW_EVIDENCE_NAMES)|{'bundle.json'}))
+                originals['eval-seed.json']=c.canonical({'actual_original_git_seed':1})
+                originals['README.md']=b'Shadow evidence. Publication is withheld.\n'
+                if policy:
+                    files['scope-policy.json']=c.canonical({'synthetic_scope_policy':1})
+                    originals['scope-policy.json']=files['scope-policy.json']
+                assert set(originals)==set(c.SHADOW_EVIDENCE_NAMES)|{'bundle.json','eval-seed.json','README.md'}|({'scope-policy.json'} if policy else set())
+                assert len(originals)==(33 if policy else 32) and 'publisher-body.txt' not in originals
+                candidate_prefix='ystack-evidence/incident.fixture/'
+                candidate_files={candidate_prefix+name:raw for name,raw in originals.items()}
+                candidate_rows=[{'path':name,'mode':'100644','sha256':c.digest(raw),
+                    'git_blob_oid':hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest(),'add_only':True}
                     for name,raw in sorted(candidate_files.items())]
+                record_body={'record_form':form,'write':{'write_set':candidate_rows}}
+                if policy:record_body['scope_policy_ref']=c.scope_policy_ref(files['scope-policy.json'])
                 files['shadow-record.json']=c.canonical({'schema_version':1,'kind':'shadow_reproduction_record',
-                    'id':'incident.fixture','body':{'record_form':form,'write':{'write_set':candidate_rows}}})
+                    'id':'incident.fixture','body':record_body})
             files['bundle.json']=c.canonical({'schema_version':1,'kind':'shadow_consumer_bundle',
                 'id':'bundle.'+c.digest(incident)[:32],'body':{'activation_state':'inactive',
                     'record_form':form,'incident_sha256':c.digest(incident),
@@ -6809,10 +6825,15 @@ def raw16_C3_bundle_outputs(root: Path, candidate=False, selected=None, evidence
             if label=='unknown-role':reader.replay_outputs['bundles'][0]=(files['shadow-record.json'],(bundle,'invented','environment.one'))
             if label=='replay-extra-key':reader.replay_outputs['foreign']=[]
             if label=='replay-missing-key':reader.replay_outputs.pop('holds')
-            caught=None
+            caught=None;bundle_staged=False;candidate_entered=False
             try:
                 try:
                     assembly.bundle_outputs(phase,reader)
+                    bundle_staged=True
+                    if candidate:
+                        assert len(assembly.files)==2*len(files)
+                        assert all(assembly.output_write_sets[('write','generator',role,'environment.one')]
+                            ==tuple(row['path'] for row in candidate_rows) for role in ('current','qualifying'))
                     if label=='duplicate-binding':assembly.bundle_outputs(phase,reader)
                     if label in {'repeat-observation','repeat-target-identity','repeat-source-swap'}:
                         if label=='repeat-target-identity':
@@ -6829,8 +6850,12 @@ def raw16_C3_bundle_outputs(root: Path, candidate=False, selected=None, evidence
                     if candidate:
                         git=c._ReadOnlyGit.__new__(c._ReadOnlyGit);git.held=[];git.ledger=reader;reader.git=git
                         rows=[dict(row) for row in candidate_rows]
-                        if label=='wrong-row-sha':rows[0]['sha256']='f'*64
+                        if label=='wrong-row-sha':
+                            rows[0]['sha256']='f'*64
+                            assert rows[0]['sha256']!=c.digest(candidate_files[rows[0]['path']])
+                            assert dict(rows[0],sha256=candidate_rows[0]['sha256'])==candidate_rows[0] and rows[1:]==candidate_rows[1:]
                         reader._retain_replay_output('git',files['shadow-record.json'],(candidate_files,rows,git,bundle.files))
+                        candidate_entered=True
                         assembly.candidate_outputs(reader)
                         if label=='repeat-candidate-observation':
                             before_copy=(assembly.work['physical_bytes'],assembly.work['files'])
@@ -6840,12 +6865,20 @@ def raw16_C3_bundle_outputs(root: Path, candidate=False, selected=None, evidence
                             assert (assembly.work['physical_bytes'],assembly.work['files'])==before_copy
                 except BaseException as error:caught=error
                 if label in {'normal','repeat-observation','repeat-candidate-observation'}:
-                    assert caught is None and len(assembly.files)==2*len(files)+(4 if candidate else 0)
+                    assert caught is None and len(assembly.files)==2*len(files)+(2*len(candidate_files) if candidate else 0)
                     assert len(assembly.output_relations)==(3 if label=='repeat-observation' else 2) and assembly.output_relations[0][3:5]!=assembly.output_relations[1][3:5]
                     assert all((destination/assembly.derived_outputs[phase]['bundle/generator/'+role+'/environment.one/'+name]).read_bytes()==raw
                         for role in ('current','qualifying') for name,raw in files.items())
+                    if candidate:
+                        assert all((destination/assembly.derived_outputs['candidate']['candidate/generator/'+role+'/environment.one/'+name]).read_bytes()==raw
+                            for role in ('current','qualifying') for name,raw in candidate_files.items())
                 else:assert caught is not None and assembly.failure is caught
-                results.append({'case':label,'rejected':caught is not None,'output_files':len(assembly.files),
+                if label=='wrong-row-sha':
+                    assert bundle_staged and candidate_entered and assembly.work['candidate_record_parse_unknown'] is False
+                    frames=[];tb=caught.__traceback__
+                    while tb is not None:frames.append(tb.tb_frame.f_code.co_name);tb=tb.tb_next
+                    assert 'candidate_outputs' in frames and '_bundle_output_values' not in frames
+                results.append({'case':label,'record_form':form,'rejected':caught is not None,'output_files':len(assembly.files),
                     'actual_relations':len(assembly.output_relations),'work':assembly.work,
                     'native_authentication':'NOT_PROVED synthetic typed bundle/anchor; actual held/read/copy checks only'})
             finally:
