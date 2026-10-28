@@ -186,7 +186,7 @@ def expected_shadow_closure:
     {"path":"scope/v1/workflow-scope.jq","sha256":"2d1df5f99b7019c4c41aece4f9fb89b00785ca47f9f8a713b2f43b212481366a"},
     {"path":"scripts/core-contract.sh","sha256":"b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9"},
     {"path":"shadow/v1/_cancel_release.c","sha256":"00ef369edbed569d50471b97f64aef57591b7afb8d9f25c286bffa5725faf015"},
-    {"path":"shadow/v1/_consumer.py","sha256":"1ab7fd21292e3f91ca0fa0c6fa9f6cdd0cfc14e90279916709eb181e38be38fe"},
+    {"path":"shadow/v1/_consumer.py","sha256":"a3482af21fcb3ce5c87e5de26f963be402b236c8fe87a6dd20407022890901c8"},
     {"path":"shadow/v1/build-cancel-release.sh","sha256":"be1ad0afd99f72ea73fe52cca63c03381793710c587a82b57b9a38ed87c896d4"},
     {"path":"shadow/v1/enforced-reproduction.py","sha256":"b1d80c8aac16630e2e8d28303169bd8bb06d475dc6645b0d41ebed5aa942e511"},
     {"path":"shadow/v1/incident-record.jq","sha256":"9ea6e1ec6556f54887ea6937533157856271aab68c74bda6d18dae1354d2687c"},

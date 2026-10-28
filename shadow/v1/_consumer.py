@@ -6836,7 +6836,9 @@ class _C1PHandoffParent:
             _require(not _capture_work_incomplete(copied.leaf)
                 and copied.runtime_sha256 == {row["file"]: row["sha256"]}
                 and source.before.st_size == row["size_bytes"] and row["locator"] == original.path
-                and snapshot.acquisition_sha == row["sha256"], "E_STORE")
+                and snapshot.acquisition_sha == row["sha256"]
+                and sum(item is snapshot and name == row["file"]
+                    for item, name, _case in self.anchor.local_runtime_snapshots) == 1, "E_STORE")
             invoice_raw = _c1_p_side_raw(row, self.work)
             name = "gate-generator-precoverage-runtime-%04d.bin" % row["ordinal"]
             initial = _identity(source.before)

@@ -9052,7 +9052,7 @@ def raw16_C1_generator_coverage_runtime(root: Path, evidence=None) -> dict:
     os.chown(base, os.geteuid(), os.getegid())
     raw = b'ordinary never-executed coverage runtime\n' * 1800
     results = []
-    for label in ('original-acquisition', 'equal-foreign-row', 'changed-locator'):
+    for label in ('original-acquisition', 'equal-foreign-row', 'equal-foreign-snapshot', 'changed-locator'):
         folder = base/label;folder.mkdir(mode=0o700);os.chown(folder, os.geteuid(), os.getegid())
         for name in ('original', 'P', 'S'):
             path = folder/name;path.mkdir(mode=0o700);os.chown(path, os.geteuid(), os.getegid())
@@ -9085,11 +9085,15 @@ def raw16_C1_generator_coverage_runtime(root: Path, evidence=None) -> dict:
                 c._store_rule(os.geteuid(), os.getegid(), 0o700, True, resolver), 'E_STORE')
             copied = anchor.retain_runtime_acquisition(P, 'python', held, raw, caller)
             assert type(copied) is c._HeldCaptureCopy
-            reader.source_copies.append(copied)
+            reader._own_source_copy(copied, P)
             association = copied.scope_runtime_acquisition
             invoice = association[0]
             if label == 'equal-foreign-row':
                 copied.scope_runtime_acquisition = (dict(invoice), *association[1:])
+            elif label == 'equal-foreign-snapshot':
+                other = anchor.retain_runtime_acquisition(P, 'python', held, raw, caller)
+                reader._own_source_copy(other, P)
+                copied.scope_runtime_acquisition = (invoice, other.scope_runtime_acquisition[1], held, association[3])
             elif label == 'changed-locator':invoice['locator'] = str(folder/'original/unrelated')
             S = c._open_held(str(folder/'S'), True,
                 c._store_rule(os.geteuid(), os.getegid(), 0o700, True, resolver), 'E_STORE',
@@ -9137,8 +9141,8 @@ def raw16_C1_generator_coverage_runtime(root: Path, evidence=None) -> dict:
             primary = error
             raise
         finally:
-            if copied is not None:
-                try:copied.close()
+            for owned_copy in reversed(reader.source_copies):
+                try:owned_copy.close()
                 except BaseException as error:cleanup.append(error)
             for item in reversed(parent.output_holds if parent is not None else []):
                 error = c._c1_p_close(item, work, primary)
