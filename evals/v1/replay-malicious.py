@@ -1941,6 +1941,32 @@ class _SeedAssembly:
             module = self._gate_type(reader, "scope/v1/read-shadow-evidence.py", "_Reader")
             _seed_require(reader.anchor is anchor)
             if phase == "kill":_seed_require(reader is self.generator.reader)
+            elif reader is self.generator.reader:
+                generator_module = self._gate_type(self.generator, "scope/v1/generate-gate-evidence.py", "_Generator")
+                session, native = reader.store_session, self.bindings[phase]["native"]
+                _seed_require(type(session) is generator_module._GateStoreSession and session is self.gate_session
+                    and session.reader is reader and session.generator is self.generator
+                    and self.generator.session is session and reader.commands_open
+                    and session.phase == "FINAL_OWNER" and session.owner_confirmed
+                    and type(native) is owner._HeldCoverageRead and session.coverage_source is native
+                    and native.anchor is anchor and native.held
+                    and type(native.configuration) is owner._CoverageConfiguration
+                    and session.coverage_configuration is native.configuration
+                    and type(native.capture) is owner._HeldCaptureRead and native.capture.native is native
+                    and native.capture.anchor is anchor and native.capture.held
+                    and capture_P.scope_source is native
+                    and any(item is native for item in reader.owned)
+                    and any(item is capture_P for item in reader.source_copies))
+                context = session.p_handoff
+                _seed_require(type(context) is owner._C1PHandoffParent and context.session is session
+                    and context.anchor is anchor and context.root is self.root and context.work is self.work
+                    and context.case_work is self.case_work and context.window_work is self.window
+                    and not context.unusable and native.configuration.operation == "coverage-read"
+                    and type(session.coverage_request_raw) is bytes)
+                context._equal_M(session.coverage_request_raw, native.capture.request_raw)
+                context._equal_M(native.snapshots["payload/request.json"], native.capture.request_raw)
+                _seed_require(document["attempt_id"] == native.attempt_id
+                    and document["request_sha256"] == self._digest(native.capture.request_raw, "M"))
             else:
                 remote = reader.store_session
                 _seed_require(type(remote) is module._GateReaderSession and remote.is_inner

@@ -9075,6 +9075,7 @@ def raw16_C1_generator_coverage_runtime(root: Path, evidence=None) -> dict:
         session = g._GateStoreSession('generation.precoverage.' + label, c.digest(request), time.monotonic()+30)
         session.reader = reader;session.phase = 'C_REQUEST';session.coverage_request_raw = caller
         session.generator = object.__new__(g._Generator)
+        session.generator.session = session;session.generator.reader = reader
         reader.store_session = session
         P = S = held = parent = copied = None
         primary = caught = None;cleanup = []
@@ -9166,3 +9167,132 @@ def raw16_C1_generator_coverage_runtime(root: Path, evidence=None) -> dict:
             if primary is None and cleanup:raise cleanup[0]
     return {'controls': results, 'retained_root': str(base), 'cost': 'UNKNOWN',
         'qualification': 'direct P/S owner only; actual C_REQUEST/C_DONE/main/FD6/native NOTRUN'}
+
+
+def raw16_C1_parent_coverage_snapshot(root: Path, evidence=None) -> dict:
+    import tempfile
+    import traceback
+    def load(name, path):
+        spec = importlib.util.spec_from_file_location(name, root/path)
+        module = importlib.util.module_from_spec(spec);sys.modules[name] = module;spec.loader.exec_module(module)
+        return module
+    g = load('C1_parent_snapshot_generator', 'scope/v1/generate-gate-evidence.py')
+    replay = load('C1_parent_snapshot_replay', 'evals/v1/replay-malicious.py')
+    c, r = g.c, g.r
+    resolver = c._DarwinUUIDResolver() if sys.platform == 'darwin' else None
+    base = Path(tempfile.mkdtemp(prefix='ystack-C1-parent-snapshot-')).resolve()
+    for path in (base, base/'source', base/'P', base/'S'):
+        if path != base:path.mkdir(mode=0o700)
+        os.chown(path, os.geteuid(), os.getegid())
+    request = c.canonical({'schema_version': 1, 'kind': 'coverage_source_request',
+        'id': 'coverage.parent-snapshot', 'body': {}})
+    generation = c.canonical({'schema_version': 1, 'kind': 'scope_gate_generation_request',
+        'id': 'generation.parent-snapshot', 'body': {}})
+    source_bytes = {'request.json': request, 'capture-data.bin': b'ordinary source owner fixture; never executed\n'}
+    for name, raw in source_bytes.items():
+        g.r.write_exclusive(base/'source'/name, raw, resolver=resolver)
+    anchor = c.Anchor({}, b'', [], {}, ('', []), ('', []), resolver)
+    anchor.identity_context = {'platform': sys.platform}
+    runtime_row = {'site': 'scope.python-version', 'ordinal': 0, 'value': sys.version.splitlines()[0]}
+    anchor.private_observations['commands'] = {'runtime_values': [runtime_row]}
+    anchor.private_observations['storage_reads'] = []
+    work = {};c._capture_work_values(work, 'C1-parent-snapshot')
+    window = anchor.recording_work;c._capture_work_values(window, 'C1-parent-snapshot-window')
+    case = c._capture_work_values(window, 'C1-parent-snapshot-case')
+    reader = object.__new__(r._Reader)
+    reader.anchor = anchor;reader.commands_open = True;reader.source_copies = [];reader.owned = []
+    anchor.scope_runtime_owner = reader
+    generator = object.__new__(g._Generator)
+    session = g._GateStoreSession('generation.parent-snapshot', c.digest(generation), time.monotonic()+30)
+    generator.session = session;generator.reader = reader;session.generator = generator;session.reader = reader
+    reader.store_session = session;session.phase = 'FINAL_OWNER';session.owner_confirmed = True
+    session.coverage_request_raw = request
+    assembly = object.__new__(replay._SeedAssembly)
+    assembly.c = c;assembly.work = work;assembly.window = window;assembly.case_work = case
+    assembly.generator = generator;assembly.gate_session = session
+    assembly.failure = None
+    owned = [];copied = None;primary = None;cleanup = [];results = []
+    try:
+        for name in source_bytes:
+            held = c._open_held(str(base/'source'/name), False,
+                c._store_rule(os.geteuid(), os.getegid(), 0o400, False, resolver), 'E_STORE',
+                recording_work=work, accounting_kind='M')
+            owned.append(held)
+        native = object.__new__(c._HeldCoverageRead)
+        native.anchor = anchor;native.attempt_id = 'coverage.parent-snapshot';native.held = [owned[0]]
+        native.snapshots = {'payload/request.json': owned[0].read(c.DOCUMENT_LIMIT, 'E_STORE', work)}
+        configuration = object.__new__(c._CoverageConfiguration)
+        configuration.operation = 'coverage-read'
+        native.configuration = session.coverage_configuration = configuration
+        capture = object.__new__(c._HeldCaptureRead)
+        capture.native = native;capture.anchor = anchor;capture.request_raw = request;capture.held = [owned[1]]
+        native.capture = capture;session.coverage_source = native;reader.owned.append(native)
+        document = {'attempt_id': native.attempt_id, 'request_sha256': c.digest(request),
+            'identity_context': anchor.identity_context, 'storage_reads': [], 'storage': [],
+            'commands': anchor.private_observations['commands'], 'preparation': {}, 'entropy': {}, 'clocks': {}}
+        raw = c._private_capture_observations(document, work, case)
+        written = g.r.write_exclusive(base/'P/consumer-observations.json', raw, resolver=resolver)
+        P = c._open_held(str(base/'P'), True,
+            c._store_rule(os.geteuid(), os.getegid(), 0o700, True, resolver), 'E_STORE',
+            recording_work=work, accounting_kind='M');owned.append(P)
+        state = c._capture_named_metadata('consumer-observations.json', P.fd, work, 'M')
+        assert c._identity(state) == written
+        copied = c._HeldCaptureCopy(anchor, window, case)
+        copied.acquire(P, None, {'consumer-observations.json': state}, {})
+        copied.consumer_snapshot = raw;copied.scope_source = native;reader.source_copies.append(copied)
+        S = c._open_held(str(base/'S'), True,
+            c._store_rule(os.geteuid(), os.getegid(), 0o700, True, resolver), 'E_STORE',
+            recording_work=work, accounting_kind='M');owned.append(S);assembly.root = S
+        context = c._C1PHandoffParent(anchor, S, work, case, generation, session, {}, [], window, [case], {})
+        session.p_handoff = context
+        assembly.bindings = {'coverage': {'native': native, 'caller_raw': request}}
+        actual = assembly._consumer_snapshot(c, anchor, copied, 'coverage')
+        assert actual == document and type(reader.store_session) is g._GateStoreSession
+        results.append({'case': 'real-parent-owner-branch', 'parent_not_inner': True, 'consumer_snapshot_returned': True})
+        for label in ('wrong-Reader', 'wrong-session', 'wrong-source', 'cross-request'):
+            old_reader, old_session = anchor.scope_runtime_owner, reader.store_session
+            old_source, old_request = session.coverage_source, session.coverage_request_raw
+            caught = None
+            try:
+                if label == 'wrong-Reader':
+                    other = object.__new__(r._Reader);other.anchor = anchor;other.store_session = session
+                    anchor.scope_runtime_owner = other
+                elif label == 'wrong-session':
+                    reader.store_session = g._GateStoreSession('generation.other', 'f'*64, session.deadline)
+                elif label == 'wrong-source':session.coverage_source = object.__new__(c._HeldCoverageRead)
+                else:session.coverage_request_raw = c.canonical({'schema_version': 1,
+                    'kind': 'coverage_source_request', 'id': 'coverage.other', 'body': {}})
+                try:assembly._consumer_snapshot(c, anchor, copied, 'coverage')
+                except BaseException as error:caught = error
+                if label == 'cross-request':assert type(caught) is c.Refusal and str(caught) == 'E_STORE'
+                else:assert type(caught) is ValueError and str(caught) == 'E_RELATION'
+                results.append({'case': label, 'rejected': True, 'error': caught})
+            finally:
+                anchor.scope_runtime_owner = old_reader;reader.store_session = old_session
+                session.coverage_source = old_source;session.coverage_request_raw = old_request
+        assert assembly._consumer_snapshot(c, anchor, copied, 'coverage') == document
+    except BaseException as error:
+        primary = error
+        raise
+    finally:
+        if copied is not None:
+            try:copied.close()
+            except BaseException as error:cleanup.append(error)
+        for held in reversed(owned):
+            error = c._c1_p_close(held, work, primary)
+            if error is not None and error is not primary:cleanup.append(error)
+        try:anchor.close()
+        except BaseException as error:cleanup.append(error)
+        def error_value(error):
+            if isinstance(error, BaseException):return {'category': type(error).__name__, 'text': str(error),
+                'traceback': traceback.format_exception(type(error), error, error.__traceback__)}
+            raise TypeError(type(error).__name__)
+        if evidence is not None:
+            with (Path(evidence)/'C1-parent-coverage-snapshot.json').open('x') as stream:
+                json.dump({'controls': results, 'work': work, 'original_work': window, 'primary': primary,
+                    'cleanup': cleanup, 'cost': 'UNKNOWN', 'fixture_setup_logical_bytes': sum(map(len, source_bytes.values())),
+                    'qualification': 'actual parent consumer_snapshot only; typed source/capture fixtures with real held files; native source authentication/spawn/FD6 NOTRUN'},
+                    stream, sort_keys=True, default=error_value)
+        if primary is None and cleanup:raise cleanup[0]
+    return {'controls': [{'case': row['case'], 'rejected': row.get('rejected', False)} for row in results],
+        'retained_root': str(base), 'cost': 'UNKNOWN', 'qualification': 'parent consumer_snapshot owner branch only; native/caller NOTRUN'}

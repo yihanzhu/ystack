@@ -31,7 +31,7 @@ _C2_SCALARS = ("read_bytes", "write_bytes", "physical_bytes", "files", "export_r
 _C2_ACCOUNT_FIELDS = ("logical_bytes", "read_bytes", "write_bytes", "physical_bytes", "files", "occurrences")
 _C2_CLASSES = ("L", "W", "M", "raw", "unresolved")
 _C2_LIMIT = 1048576
-_C2_HELPERS_SHA256 = "9cfc58b7f359b884ecd3413644cd927e5d64471ee6a9857663700602262ffd0d"
+_C2_HELPERS_SHA256 = "a2c74b2b394495e98e0ff627434d21bed10a105a12f9943f706d77e5055b2d33"
 
 class C2Refusal(Exception):
     def __init__(self, code):
@@ -2384,7 +2384,7 @@ shadow_source_rows() {
     'enforcement/v1/accepted-identities.json c75dcd8d9268cb42677f5aa526fd374c3e45f2ba0fe678f47562ae49ad6851a0 174 100644' \
     'enforcement/v1/check-sandbox-receipt.sh 7db3412a4e740f79bde6af24891837fd5daa27d0811ff970b2f58534fcd59b97 10816 100755' \
     'enforcement/v1/sandbox-receipt.jq 43ab3a97b90444be17958112b7ff63966d1052981313c81bcb463618adae8619 30838 100644' \
-    'evals/v1/replay-malicious.py 8e778e4cd7de1ee4aa60ede48afb601b69a8204ef64bc99dc3fda3569450dd20 508051 100644' \
+    'evals/v1/replay-malicious.py c0d364f3a042a93cc6abd77d5c7ce67565f89836b1436f1ff3df50ad870e55b8 510290 100644' \
     'maintenance/v1/bands.jq 594994c057a1130da6727f5f825d2fed3ff01de4a9fafe3a722d9e964f05c8e4 10714 100644' \
     'maintenance/v1/incident-to-eval.jq 2229722267c3e9544d9cf53bd37d6d798f27adebad4a7439294989d0194ad92a 7237 100644' \
     'maintenance/v1/incident-to-eval.sh e000f961d7851c48b650ca36ed0c60fd2bc97ffc32442214b3f8937efc97f967 7449 100755' \
@@ -2916,10 +2916,10 @@ done
 [ -n "$jq_source" ] || emit_error E_RUNTIME
 
 generation=g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43
-program_sha=e90a331f09b5bef007839a713cb2cd953d4de9f80e67968bc93a9bc6d3a86006
+program_sha=0ec78dd3f683d2ad3970130b9e6ca4e3749f0f301343e7bd4328a8af0db36c8b
 review_approval_sha=none
 catalog_sha=0239138447a8f9fd420cb3c5da31660d8f75c85099d80d89a040dce2878a4cac
-driver_sha=49d1e3660a1a5980efd7734d09ca92b04f7ec8a467594d2ac8503fc3a37c9145
+driver_sha=6d66a3de89101f898e3e59bad3fe89a075b30158e03bc8dac9ffb44a921b7e66
 }
 
 evals_record_context() {
