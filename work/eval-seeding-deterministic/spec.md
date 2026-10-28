@@ -1075,7 +1075,7 @@ S/I final检查既比较全bytes，也各自验证初次持有时的digest、par
 
 本节落实 operator 已批准的唯一 source transport/read scope 例外：原真实 inner Reader 在适用 P 首次原关闭前，经既有 FD6 把固定录制清单交给同次 parent Session。parent 独立读验该活 P，并写入自己原有 S。此范围批准仅供 inactive 仓库机制；不代表已经实现、可成功运行或已接受完整来源证明。FD3 的两个原 records 例外不扩展到 FD6；FD6 仅依本节获得此固定边。
 
-本节设计源为冻结 head `ff9c26b3a1314f13efc0d97690ccf8b9fbe17bdf`。下表及正文的 ff9 行号均绑定该 head，不借后续 WIP 补事实。
+本节设计源为冻结 head `ff9c26b3a1314f13efc0d97690ccf8b9fbe17bdf`。下表及正文的 ff9 行号均绑定该 head，不借后续 WIP 补事实。下述 candidate history 固定 32 名原 Git 输出成员（仅 policy form 为 33 名）的 transport/read scope 扩展已获 operator 授权，见[固定范围决定](https://github.com/yihanzhu/ystack/issues/439#issuecomment-6468884618)。该授权保留本节全部边界与未证明项，仍须 G2 和分开的 high-risk plan；不代表 source 或执行 GO。
 
 **真实 owner 与根**
 
@@ -1117,7 +1117,39 @@ ACQUIRE/RELEASE/C_DONE 的闭集不变。全部 ACK 仍 `{}`。native request/ex
 
 `members` 是完整有序列表。非 runtime family 每项严格为 `{serial, family, ordinal, name, relative, chain, size_bytes, sha256}`，禁止 `runtime_invoice`。独立 local-runtime 分支的 `family=runtime` 每项严格为这八键加必需的 `runtime_invoice`；不接受省略、null 或其它字段。serial 为本 Reader 首次注册时从 0 连续分配的私有实体号；同一持有实体在两批出现时保持号和完整绑定。不同真实 acquisitions 即使 SHA 相同也保持不同号及全部费用。ordinal 保持原 owner 原序号。name 为该 owner 原成员名。relative 只从真实 holder.path 相对该 scratch 计算；必须在 `reader-captures` 下，使用原 `gate-NNNN` 槽及原固定子目录。拒绝绝对路径、空组件、点、点点、NUL、符号链接及未列实体。chain 使用同一逐组件身份型，完整覆盖至 regular-file leaf。size 为实际非负整数，sha 为原完整内容的 64 位小写十六进制摘要。
 
-family 仅为 `anchor|runtime|source|source-configuration|history`，对应 ff9 `_scope_reader_inputs` 的五个实际分支。anchor/name、source request/attempt/原 source ordinal、configuration 的原 fixed package 成员、history 的原 storage-read acquisition/name，须从各原完整 P 文件和原已有关系独立重算。独立 runtime 的原记录元数据只取下述同 acquisition 的 runtime_invoice；parent 仍以该 P 完整 bytes、原身份和请求关系独立核验，不能借另一 acquisition 的 invoice。name/relative 不是开放读接口。parent 由这些固定关系生成原 semantic S member，不接受 sender 指定类别来改变费用或资格。原完整 runtime inventory、source/配置 raw、history 认证与完整 coverage 关系均保留；仅摘要或另一 Reader 的同名内容无效。
+family 仅为 `anchor|runtime|source|source-configuration|history`。anchor/name、source request/attempt/原 source ordinal、configuration 的原 fixed package 成员，以及下述 history 固定成员，须从各原完整 P 文件和原 owner 关系独立重算。独立 runtime 的原记录元数据只取下述同 acquisition 的 runtime_invoice；parent 仍以该 P 完整 bytes、原身份和请求关系独立核验，不能借另一 acquisition 的 invoice。name/relative 不是开放读接口。parent 由这些固定关系生成原 semantic S member，不接受 sender 指定类别来改变费用或资格。原完整 runtime inventory、source/配置 raw、history 认证与完整 coverage 关系均保留；仅摘要或另一 Reader 的同名内容无效。
+
+**History 固定原件与 candidate 扩展。** 下列原件关系绑定冻结 `ecbd00679cbc3e6480d5240d9e65453206d31030`，不证明其实现已通过。原 bundle 仍取 `Reader._authenticate` 的同一次 `store/files/retained/storage_rows`。其 names 为该 source 的 `SHADOW_EVIDENCE_NAMES` 原 29 名加 `bundle.json`；write form 加 `publisher-body.txt`，policy write form 再加 `scope-policy.json`。原每名上限仍为 materialization-input 8 MiB、preparation-manifest 2 MiB、其它 1 MiB，更紧原检查保持。
+
+candidate 只取同一 `Reader.write_relations` 原 `cat-file blob` 已读取的完整 `frozen_files`。普通 write form 新增 P 的固定 leaf 闭集恰为以下 32 名：
+
+```text
+candidate-README.md  candidate-accepted-identities.json  candidate-bundle.json
+candidate-claim.json  candidate-consumer-provenance.json  candidate-decision.json
+candidate-duty-evaluation.json  candidate-eval-seed.json  candidate-evaluator-driver.txt
+candidate-evaluator-program.txt  candidate-evidence-manifest.json  candidate-file-digest-result.json
+candidate-incident.json  candidate-materialization-input.json  candidate-materialization-response.json
+candidate-origin-observation.json  candidate-payload-stderr.txt  candidate-payload-stdout.txt
+candidate-policy-set.json  candidate-policy.json  candidate-preparation-manifest.json
+candidate-preparation-record.json  candidate-qualified-identity.json  candidate-registry.json
+candidate-sandbox-check.json  candidate-sandbox-evaluation.json  candidate-sandbox-expectation.json
+candidate-sandbox-receipt.json  candidate-sandbox-request.json  candidate-shadow-record.json
+candidate-trace-ledger.json  candidate-trace-receipt.json
+```
+
+仅 `withheld-write-policy.v1` 再加第 33 名 `candidate-scope-policy.json`。移除各固定 leaf 的字面 `candidate-` 后，必须恰好等于原 write-set 的 `ystack-evidence/<同一 incident.id>/<原名>` 闭集及顺序；不接受其它 path/name、前缀匹配或目录扫描。`candidate-materialization-input.json` ≤8 MiB，其余每名 ≤2 MiB；同组原完整 bytes 总量仍 ≤48 MiB。原 schema 和所有更紧帽仍适用。
+
+| 原件到 S | 必须成立的实际关联 |
+| --- | --- |
+| 原 Git bytes→P | 原 digest、Git oid/mode、ordered write-set、patch、policy、frozen reproduction 认证、converter、materialization-input 和 publisher 检查全部成功后，保留该次 Reader/Anchor、外层 write `store/storage_rows`、write record 原 bytes、原 Git owner、rows 与 frozen_files 的固定关联。使用原 capture owner 在本 scratch 的 `reader-captures/gate-NNNN` 排他写出固定名，并完成原写后持有、全 bytes、独立 SHA、身份和 ACL 检查。只复制这次已读 raw；不新增 Git/O 读取、重算 expected 或伪造 storage-read 行。 |
+| P→原 history batch | family 仍为 history；ordinal 是该外层 write 认证原 storage-read acquisition 的原序号。每个新 P 按真实登记次序取原连续 serial。只有原关联成立且 P 完整、仍活时，才进入相应原 C_REQUEST 或 FINAL_OWNER。原 coverage/final 顺序、hold、逐 serial 首次 close、batch SHA 及 receipt 规则全保；失败或关闭过早就拒绝完整录制，不延长 hold、重开 P 或增加请求。 |
+| 原 batch→parent S | parent 独立全读 P，核对同 ordinal 的完整 bundle 与 candidate 闭集。bundle 部分仍与同 Session 的原 role/environment files 全 bytes 比较。candidate 部分从独立读取的同组 incident、shadow-record、materialization-response 和 preparation-manifest 重建固定 path/record-form/target/candidate 关系。逐条核 write-set 的 path/mode/sha256/git_blob_oid 与原 manifest 条目；按原 hash_algorithm 从完整 P bytes 独立重算 Git blob oid、size/SHA，并复用原完整关系检查，不新增 Git 命令或 O 读取。child label、同 SHA 或一张 sender map 不授予读取或角色资格；必要原关系无法独立核对则拒绝。只经原独立 P→S 检查，生成固定私有 member `scope_reader/history/<四位原 ordinal>/<固定 leaf>`。保持实际 serial/ordinal、原 record、原 role/environment、write-set 与 held S 的完整关联。 |
+
+嵌套 frozen reproduction 的旧 bundle P、parent 的同名 bytes 或另一 acquisition/context 的相同 SHA，不代替本外层 candidate 原件。不同 acquisition/新 P 实体分别留存和计费。原件不可缺行、互借、去重或与 bundle 名混用；重复、额外、unused 或错误 owner/ordinal/context 均拒绝。current 绑定原 incident 和 reproduction/write 两条实际 launch request；qualifying 保留历史认证关系，不冒称当前 trial 重算输出或新增 occurrence。
+
+进入原 manifest 时，bundle 映射为 `bundle/scope_reader/<原 role>/<environment>/<原名>`；candidate 映射为 `candidate/scope_reader/<原 role>/<environment>/ystack-evidence/<incident.id>/<原名>`。generator 与 scope_reader 两 context 各自保有全部适用原件，并分别按 R4A.C 全 bytes 重算比较。不能用另一个 context、Git 输入、bundle、patch 或 expected 补缺；不构造 remote Reader proxy 或以 parent Reader 冒 child。此处只补原 recorded-output 关联，不增加 family、wire key、raw 容器、角色或 occurrence。
+
+新增 P/S 实体与重复 bytes、全部 read/write/hash/equality/copy、metadata/frame、hold/close、partial/errors 和保留重叠，照付原实际 owner 与全部适用账。先检查原分配/写入帽；原 4096、frame/direction、M/Q/raw/runtime/file/case/window 和更紧聚合帽不变。不得退款、藏作原 Q 或省去独立检查来 fit。容量、完整物理费用及非干扰仍需实证；未知保留 UNKNOWN。原 CLOSED 只结算其真实时点，不证明 socket/native finally、parent 尾账或真实进程成功。
 
 **独立 runtime invoice。** `runtime_invoice` 精确为 `{slot,index,ordinal,locator,file,size_bytes,sha256,errno,request_sha256,attempt_id}`。这是原八键 runtime inventory 加原 request_sha256/attempt_id，共十键；不是新测量结果或自由 metadata。其来源绑定设计源 `74eda0621c59ac2c5597e20a7b7c3096cde6d3bd` 的 `shadow/v1/_consumer.py:1827–1891`（Anchor.retain_runtime_acquisition）及 :2007–2013 的同形 sudo 行。
 
@@ -1153,7 +1185,9 @@ P 留在原位置，S 留在 parent 原受控留存根。失败不删、不迁�
 
 本节接线仅可修改六个原 allowed paths：`scope/v1/read-shadow-evidence.py`、`scope/v1/generate-gate-evidence.py`、`shadow/v1/_consumer.py`、`evals/v1/replay-malicious.py`、`scripts/test/candidate-content-preparation-fixtures.py`、`scripts/test/evals-malicious.test.sh`。前三者接真实 owner/wire/固定原语；replay 接原 S 与真实账；两测试路径验证实际父子和拒绝分支。`evaluate-scope.sh` 原 blob `605370780345539c5ed7b9debbd04f5327610128` 不改；不改九个 adoption-only 路径、bootstrap 或 84 closure 成员集合，不增加其它文件入口。若这六个文件不能完成原根绑定，依赖交接保持不合格，不默认增加 allowlist。
 
-后续精确 GO 内的普通自有 fixture 必须走真实 spawn/FD6/Reader 与两个原关闭边界，并验证 S 全 bytes、错误回原流程、根/对端拒绝、partial/EOF/cancel、原帽和实际账。已有同进程 fixture 或静态 helper 不替代它。不要求当前运行、不承诺 full native 可成功。真实 reachability、容量、费用、retention/noninterference 目前均未完成证明。
+后续精确 GO 内的普通自有 fixture 必须走真实 spawn/FD6/Reader 与两个原关闭边界，并验证 S 全 bytes、错误回原流程、根/对端拒绝、partial/EOF/cancel、原帽和实际账。candidate 正例须从该 child 原 cat-file 读取，经实际关联、P 和独立 S，进入完整双 context manifest；覆盖普通及 policy write form、current/qualifying 原关系和原 no-coverage 分支。不得让 fixture 直接填 batch、原件或 receipt 替代实际调用。
+
+在这两个原测试文件的既有配对控制中，拒绝 duplicate/缺失/额外 name、错 ordinal/owner、借 parent 或另一 context bytes、改写同 serial、提前关闭 P、P/S 同时改字节、原上限/更紧聚合上限超一，以及 capture/staging/close/accounting 失败。保持 native 原结果、首错/后错、关闭顺序、partial 和实际账。分别删除原 bytes 关联、P 登记、独立全读/比较、recorded-output 映射或 close/receipt 检查，须使对应已有配对控制失败。已有同进程 fixture 或静态 helper 不替代完整 caller；不增加诊断矩阵或执行窗口。普通 fixture 只证明未激活机制；不承诺 full native、qualified seed 或真实费用已通过。真实 reachability、容量、费用、retention/noninterference 仍须完整证据。
 
 本节 G2 保护合并后，仍须独立作者的 high-risk plan、独立接受及保护合并，再重绑原保留 attempt 并取得经理 fresh exact source GO，才可写接线代码及执行普通自有 fixture。不得把批准本节当作现在执行新交接、实际 source/native、VM/window、LOCAL7/D、网络、安装或生产的权限。原 claim、attempt、旧失败和 UNKNOWN 全保；CPUwall NONE、native BLOCKED、production EMPTY、automation PAUSED 不变。其它已授权普通实现不因本节未证明而全部停止。
 
