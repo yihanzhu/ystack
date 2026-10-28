@@ -1001,7 +1001,7 @@ produces marker_raw and the unique write_relations call passing it to that helpe
 Bind the full source and helper bytes. Extract only the original marker-size
 require and its immediately following JSON-decoding try/except, in their original
 order; the boundary ends before the first write-path validation require.
-At the bound source these are lines 515–520, not the first three statements of
+At the bound source these are lines 514–520, not the first three statements of
 write_relations. Check the AST shapes, argument data flow and exact boundaries.
 Keep the original c/require/json dependencies, c._unique_object/c.canonical,
 DOCUMENT_LIMIT and Refusal behavior. The existing extracted function returns the
@@ -1033,12 +1033,21 @@ Prepare backing first, then acquire held config/supervisor/installed objects and
 record actual uid/gid and identity context. Do not use a declared unbacked path,
 empty retention method, forced success or an unrelated owner.
 
-Replace the incomplete Snap with the actual DependencySnapshot acquisitions at
-the existing dependency-copy seam. Use the real snapshot_dependency/snapshot_jq
-methods on the original inert helper/jq files; observe their existing recheck and
-close calls without replacing them. Preserve same-acquisition original,
-acquisition_raw, snapshot, digest and actual ownership. Keep helper/probe/child
-execution at the original mock boundaries; never execute the inert files.
+Replace the incomplete Snap with actual DependencySnapshot acquisitions at the
+existing dependency-copy seams. Save the real c.snapshot_dependency function
+before installing either mock. The helper snapshot_dependency mock delegates to
+that saved function with its original path, fixed expected digest/size, private
+directory and name. At the existing snapshot_jq mock boundary, call the same saved
+function on the actual original inert jq path, with SHA-256 of the independently
+fixed literal b'jq', size 2, the original private directory and name 'jq'. Do not
+call the release-pinned snapshot_jq wrapper or recurse through an installed mock.
+Both calls must return the actual DependencySnapshot from the real acquisition
+and copy, with complete original/acquisition_raw, held source and snapshot,
+digest, recheck and close behavior. Observe the existing recheck/close events
+without replacing their work. Keep probe/helper/child execution at the original
+mock boundaries; never execute inert files, change JQ_SHA256, install/download jq
+or write a fake snapshot/copy. Preserve all thirteen flow controls, twenty-nine
+files and original case timing.
 
 At the existing read_store_attempt seam, accept its real keyword-only _owner.
 Create the existing receipt/payload/evidence backing before held acquisition.
