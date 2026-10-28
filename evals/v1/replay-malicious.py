@@ -1318,10 +1318,15 @@ def _gate_input_member_values(role, member, kind, size):
         "sandbox-check.json", "sandbox-evaluation.json", "sandbox-expectation.json", "sandbox-receipt.json",
         "sandbox-request.json", "shadow-record.json", "trace-ledger.json", "trace-receipt.json", "bundle.json",
         "publisher-body.txt", "scope-policy.json"}
+    candidate = {"candidate-" + name for name in history - {"publisher-body.txt"}}
+    candidate |= {"candidate-README.md", "candidate-eval-seed.json"}
     _seed_require(len(pieces) == 4 and pieces[1] == "history" and re.fullmatch(r"[0-9]{4}", pieces[2])
-        and int(pieces[2]) < 4096 and pieces[3] in history
-        and size <= (8 << 20 if pieces[3] == "materialization-input.json" else
-            2 << 20 if pieces[3] == "preparation-manifest.json" else 1 << 20))
+        and int(pieces[2]) < 4096 and pieces[3] in history | candidate)
+    name = pieces[3]
+    maximum = ((8 << 20 if name == "candidate-materialization-input.json" else 2 << 20)
+        if name in candidate else (8 << 20 if name == "materialization-input.json" else
+            2 << 20 if name == "preparation-manifest.json" else 1 << 20))
+    _seed_require(size <= maximum)
 
 
 def _S_inventory_core_values(case_id, files, semantic, expected, originals, occurrences):
@@ -2215,7 +2220,8 @@ class _SeedAssembly:
             _seed_require(name not in self.semantic_expected)
             self.semantic_expected[name] = (occurrence, role, member, held.before.st_size, expected, kind)
             if recorded_output:
-                _seed_require(kind == role == "recorded" and occurrence in {"reproduction", "write"} and member.startswith("bundle/"))
+                _seed_require(kind == role == "recorded" and occurrence in {"reproduction", "write"}
+                    and member.startswith(("bundle/", "candidate/")))
                 semantic = (occurrence, role, member)
                 _seed_require(semantic not in self.recorded_sources and
                     (id(held) not in self.source_occurrences or any(previous[0] is anchor and previous[1] is held
@@ -2245,7 +2251,7 @@ class _SeedAssembly:
         module = self._gate_type(reader, "scope/v1/read-shadow-evidence.py", "_Reader")
         _seed_require(reader.commands_open and reader.anchor is not None
             and not getattr(reader, "replay_output_unusable", True)
-            and type(reader.replay_outputs) is dict and set(reader.replay_outputs) == {"bundles", "git", "stores"})
+            and type(reader.replay_outputs) is dict and set(reader.replay_outputs) == {"bundles", "git", "stores", "anchor", "holds"})
         if reader is getattr(getattr(self, "generator", None), "reader", None):context = "generator"
         else:
             _seed_require(reader is getattr(self, "scope_reader", None))
@@ -2267,23 +2273,7 @@ class _SeedAssembly:
         for bundle, role, environment in matching:
             self._bundle_namespace(bundle)
             files = bundle.files
-            record = self._wrapper_parse(files["shadow-record.json"], "bundle-record")
-            expected_form = "enforced-reproduction.v1" if phase == "reproduction" else record["body"]["record_form"]
-            _seed_require(record["body"]["record_form"] == expected_form
-                and expected_form in ({"enforced-reproduction.v1"} if phase == "reproduction"
-                    else {"withheld-write.v1", "withheld-write-policy.v1"}))
-            names = set(module.c.SHADOW_EVIDENCE_NAMES) | {"bundle.json"}
-            if phase == "write":names.add("publisher-body.txt")
-            if expected_form == "withheld-write-policy.v1":names.add("scope-policy.json")
-            _seed_require(set(files) == names)
-            binding = (phase, context, role, environment)
-            _seed_require(binding not in self.output_forms or self.output_forms[binding] == expected_form)
-            self.output_forms[binding] = expected_form
-            if phase == "write":
-                paths = tuple(row["path"] for row in record["body"]["write"]["write_set"])
-                _seed_require(len(set(paths)) == len(paths)
-                    and (binding not in self.output_write_sets or self.output_write_sets[binding] == paths))
-                self.output_write_sets[binding] = paths
+            names, binding = self._bundle_output_values(phase, context, role, environment, files)
             prefix = "bundle/" + context + "/" + role + "/" + environment + "/"
             for name in sorted(names):
                 leaves = [item for item in bundle.held if item.components and item.path == bundle.held[0].path + "/" + name]
@@ -2304,6 +2294,94 @@ class _SeedAssembly:
             self._bundle_namespace(bundle)
         reader.anchor.recheck("E_STORE")
         self.output_positions[(phase, reader)] = len(observations)
+        self._transfer()
+
+    def _bundle_output_values(self, phase, context, role, environment, files):
+        _seed_require(phase in {"reproduction", "write"} and context in {"generator", "scope_reader"}
+            and role in {"current", "qualifying"} and self.c._id(environment)
+            and files["incident.json"] == self.original_raw[0]
+            and files["sandbox-request.json"] == self.bindings[phase]["request_raw"])
+        record = self._wrapper_parse(files["shadow-record.json"], "bundle-record")
+        form = record["body"]["record_form"]
+        _seed_require(form in ({"enforced-reproduction.v1"} if phase == "reproduction"
+            else {"withheld-write.v1", "withheld-write-policy.v1"}))
+        names, candidate_names = self.c._c1_history_names_values(form)
+        _seed_require(set(files) == names)
+        identity = (phase, context, role, environment)
+        _seed_require(identity not in self.output_forms or self.output_forms[identity] == form)
+        self.output_forms[identity] = form
+        if phase == "write":
+            incident = self._wrapper_parse(files["incident.json"], "output-incident")
+            prefix = "ystack-evidence/" + incident["id"] + "/"
+            paths = tuple(row["path"] for row in record["body"]["write"]["write_set"])
+            _seed_require(paths == tuple(prefix + name[len("candidate-"):] for name in sorted(candidate_names))
+                and (identity not in self.output_write_sets or self.output_write_sets[identity] == paths))
+            self.output_write_sets[identity] = paths
+        return names, identity
+
+    def _remote_scope_outputs(self, context):
+        _seed_require(context is self._gate_remote_context and context.session is self.gate_session
+            and context.root is self.root and context.output_holds is self.output_holds
+            and not context.unusable and self.gate_session.closed
+            and "FINAL_OWNER" in context.batches and "CLOSED" in context.settlements
+            and ("C_REQUEST" not in context.batches or "C_RELEASED" in context.settlements)
+            and set(context.records) == context.closed_serials and context.receipts)
+        for ordinal, group in sorted(context.history_groups.items()):
+            if not group["current_output"]:continue
+            values = group["values"]
+            phases = [phase for phase in ("reproduction", "write")
+                if values["incident.json"] == self.original_raw[0]
+                and values["sandbox-request.json"] == self.bindings[phase]["request_raw"]]
+            _seed_require(len(phases) == 1)
+            phase = phases[0]
+            by_name = {row["name"]: context.records[row["serial"]] for row in group["rows"]}
+            _seed_require(set(by_name) == group["bundle_names"] | group["candidate_names"])
+            for name, record in by_name.items():
+                row, target = record["row"], record["target"]
+                _seed_require(row["ordinal"] == ordinal and row["family"] == "history"
+                    and target in self.output_holds and target.components
+                    and record["semantic"] == ("capture", "scope_reader/history/%04d/" % ordinal + name)
+                    and self.c._identity(target.before) == record["initial_identity"])
+                target.recheck("E_STORE", self.work, "M")
+                observed = self._read(target.fd, row["size_bytes"], 0, "M")
+                self._charge("E", len(observed) + len(values[name]), "M")
+                _seed_require(len(observed) == row["size_bytes"] and observed == values[name]
+                    and self._digest(observed, "M") == row["sha256"])
+            bundle = {name: values[name] for name in group["bundle_names"]}
+            for role, environment in group["roles"]:
+                names, identity = self._bundle_output_values(phase, "scope_reader", role, environment, bundle)
+                for name in sorted(names | group["candidate_names"]):
+                    candidate = name in group["candidate_names"]
+                    original = group["facts"]["prefix"] + name[len("candidate-"):] if candidate else name
+                    member = ("candidate/" if candidate else "bundle/") + "scope_reader/" + role + "/" + environment + "/" + original
+                    indexed = self.derived_outputs.setdefault("candidate" if candidate else phase, {})
+                    record = by_name[name]
+                    target, raw, expected = record["target"], values[name], record["row"]["sha256"]
+                    if member in indexed:
+                        semantic = (phase, "recorded", member)
+                        previous_anchor, previous_source = self.recorded_sources[semantic]
+                        previous = [saved for saved in context.records.values() if saved["target"] is previous_source]
+                        _seed_require(previous_anchor is context.anchor and len(previous) == 1
+                            and previous[0]["row"]["name"] == name)
+                        previous_group = context.history_groups[previous[0]["row"]["ordinal"]]
+                        _seed_require(previous_group["current_output"] and (role, environment) in previous_group["roles"]
+                            and previous_group["values"]["incident.json"] == self.original_raw[0]
+                            and previous_group["values"]["sandbox-request.json"] == self.bindings[phase]["request_raw"])
+                        staged = [held for held in self.output_holds if held.path == self.root.path + "/" + indexed[member]]
+                        _seed_require(len(staged) == 1 and self.files[indexed[member]]["sha256"] == expected)
+                        context._compare(target, staged[0], record["row"], "M")
+                        self._charge("E", len(self.recorded_raw[semantic]) + len(raw), "recorded")
+                        _seed_require(self.recorded_raw[semantic] == raw)
+                        self.source_occurrences.add(id(target))
+                        if not any(anchor is context.anchor and held is target for anchor, held in self.recorded_aliases):
+                            self.recorded_aliases.append((context.anchor, target))
+                    else:
+                        destination = phase + "-remote-%03d.bin" % len(self.files)
+                        self._semantic_copy(context.anchor, target, destination, expected, "recorded",
+                            phase, "recorded", member, source_mode=0o400, recorded_output=True)
+                        self.recorded_raw[(phase, "recorded", member)] = raw
+                        indexed[member] = destination
+                self.output_relations.append((phase, context, "scope_reader", role, environment, group))
         self._transfer()
 
     def _verify_recorded_observation(self, anchor, source, name, semantic, raw, expected):
@@ -2824,7 +2902,11 @@ class _SeedAssembly:
         module = self._gate_type(generator, "scope/v1/generate-gate-evidence.py", "_Generator")
         _seed_require(type(generator.session) is module._GateStoreSession
             and generator.session is self.gate_session and generator.reader.commands_open)
-        try:self.scope_reader_inputs(generator.reader, generator=True)
+        try:
+            for phase in ("reproduction", "write"):
+                self.bundle_outputs(phase, generator.reader)
+            self.candidate_outputs(generator.reader)
+            self.scope_reader_inputs(generator.reader, generator=True)
         except BaseException as error:
             self._failed(error, "seed-generator-before-release")
             if isinstance(self.failure, KeyboardInterrupt) or getattr(self.failure, "_scope_signal_cancel", False):
@@ -2883,7 +2965,6 @@ class _SeedAssembly:
             and context.request_raw is self.original_raw[3] and self.gate_session.closed)
         value, locators = context.scope_values()
         for serial, record in context.records.items():
-            if record.get("excluded_current", False):continue
             name, row, target = record["name"], record["row"], record["target"]
             _seed_require(target.components and target in self.output_holds
                 and self.files[name]["size_bytes"] == row["size_bytes"]
@@ -2907,6 +2988,7 @@ class _SeedAssembly:
         self.scope_raw, self.scope_local = scoped[0].raw, value
         self.remote_scope_locators = locators
         self._gate_remote_context = context
+        self._remote_scope_outputs(context)
         self._transfer()
 
     def gate(self):
@@ -3220,12 +3302,20 @@ class _SeedAssembly:
                         expected_outputs.add(physical)
                 bindings.append({"occurrence": phase, "context": context, "role": role,
                     "environment_id": environment, "record_form": form, "members": members})
-            readers = {relation[1] for relation in self.output_relations if relation[0] in {"reproduction", "write"}}
-            for reader in readers:
-                for record_raw, (bundle, role, environment) in reader.replay_outputs["bundles"]:
-                    _seed_require(any(relation[1] is reader and relation[-1] is bundle
-                        and relation[3:5] == (role, environment) for relation in self.output_relations
-                        if relation[0] in {"reproduction", "write"}))
+            for relation in self.output_relations:
+                if relation[0] not in {"reproduction", "write"}:continue
+                phase, owner, context, role, environment, source = relation
+                identity = (phase, context, role, environment)
+                _seed_require(identity in self.output_forms)
+                if context == "scope_reader" and owner is getattr(self, "_gate_remote_context", None):
+                    _seed_require(owner.completion_checked and not owner.unusable
+                        and any(source is group for group in owner.history_groups.values())
+                        and source["current_output"] and (role, environment) in source["roles"])
+                else:
+                    self._gate_type(owner, "scope/v1/read-shadow-evidence.py", "_Reader")
+                    _seed_require(any(bundle is source and (found_role, found_environment) == (role, environment)
+                        and raw == source.files["shadow-record.json"]
+                        for raw, (bundle, found_role, found_environment) in owner.replay_outputs["bundles"]))
             for phase in ("reproduction", "write"):
                 _seed_require({identity[1] for identity in self.output_forms if identity[0] == phase}
                     == {"generator", "scope_reader"})
@@ -3285,6 +3375,11 @@ class _SeedAssembly:
                 and context.window_work is self.window and context.files is self.files
                 and context.runtime is None
                 and context.completion_checked and not context.unusable
+                and "FINAL_OWNER" in context.batches and "CLOSED" in context.settlements
+                and ("C_REQUEST" not in context.batches or "C_RELEASED" in context.settlements)
+                and set(context.records) == context.closed_serials and context.receipts
+                and all(record["target"] in context.output_holds
+                    and record["row"]["serial"] == serial for serial, record in context.records.items())
                 and hasattr(self, "remote_scope_locators") and hasattr(self, "scope_local")
                 and (context.output_holds is self.output_holds or (self.closed
                     and self.output_holds is self._released_holds
@@ -3485,22 +3580,34 @@ class _SeedAssembly:
             if not copy.closed:copy.recheck()
         # The original native P captures contain historical inputs. Distinct
         # store acquisitions use distinct labels and S files, even for equal bytes.
-        current_attempts = {self.bindings[phase]["native"].attempt_id for phase in ("reproduction", "write")}
         acquisitions = [value for value in anchor.private_observations["storage_reads"]
             if value["entries"] and all(row["role"] == "store" for row in value["entries"])]
         for record_raw, (store, files, retained, storage_rows) in reader.replay_outputs["stores"]:
             request = module.parse(files["sandbox-request.json"])
-            if request["id"] in current_attempts:continue
             ordinals = [index for index, value in enumerate(acquisitions) if value["entries"] is storage_rows]
             _seed_require(len(ordinals) == 1);ordinal = ordinals[0]
             _seed_require(record_raw is files["shadow-record.json"] and set(retained) == set(files)
                 and store.snapshots == {key: files[name] for key, name in module._authentication_store_names_values().items()})
-            for name, path in retained.items():
+            originals, paths = dict(files), dict(retained)
+            candidate = getattr(store, "scope_candidate_acquisition", None)
+            if candidate is not None:
+                original_reader, original_files, original_paths, original_rows, association = candidate
+                _seed_require(original_reader is reader and original_files is files
+                    and original_paths is retained and original_rows is storage_rows)
+                candidate_files, candidate_paths, git_output = association
+                frozen, rows, git, outer_files = git_output
+                _seed_require(git is reader.git and git.ledger is reader and outer_files is files
+                    and any(key is record_raw and value is git_output for key, value in reader.replay_outputs["git"]))
+                self.c._c1_history_candidate_values(files, candidate_files, self.work)
+                originals.update(candidate_files);paths.update(candidate_paths)
+            else:
+                _seed_require(module.parse(files["shadow-record.json"])["body"]["record_form"] == "enforced-reproduction.v1")
+            for name, path in paths.items():
                 holders = [item for item in reader.owned if type(item) is module.c._HeldBytes and item.held.path == str(path)]
-                _seed_require(len(holders) == 1 and holders[0].raw == files[name])
+                _seed_require(len(holders) == 1 and holders[0].raw == originals[name])
                 holder = holders[0];holder.recheck("E_STORE")
-                expected = self._digest(files[name], "M")
-                self._scope_stage_P(reader, None, name, (files[name], holder.held), expected, "M", context,
+                expected = self._digest(originals[name], "M")
+                self._scope_stage_P(reader, None, name, (originals[name], holder.held), expected, "M", context,
                     context + "/history/%04d/" % ordinal + name)
         reader.recheck()
 
@@ -6437,7 +6544,9 @@ class _ReplayCase:
                 frozen_bytes, prefix, incident, body, files)
             r.require(r.same(write["bundle_ref"], w._bundle_ref(frozen["bundle.json"]))
                 and r._scope_write_frozen_tail_matches_values(frozen_bytes, frozen))
-            authenticate(frozen, revision)
+            nested = self._scope_history_files_body(context, frozen["shadow-record.json"])
+            r.require(set(nested) == set(frozen) and all(self._scope_data_equal(nested[name], frozen[name]) for name in frozen))
+            authenticate(nested, revision)
             slot_number = state.get("runtime_slot", 0);state["runtime_slot"] = slot_number + 1
             old_seed = paths["runtime"] / ("gate-%04d" % slot_number)
             actual_seed = self._replay_mkdir(work_hold, "seed-%s-%04d" % (context, slot_number))
@@ -6478,6 +6587,7 @@ class _ReplayCase:
             r.require(final == files["materialization-input.json"])
             publisher, publisher_body = w._publisher(incident, candidate_tree)
             r._scope_write_publication_values(write, files, publisher, publisher_body, incident, candidate_tree, rows)
+            return frozen_bytes
         def authenticate(files, revision):
             r.require(all(files[name] == ctx["installed"][role] for name, role in r._authentication_installed_names_values().items()))
             incident, body, actual_revision = r._authentication_documents_values(files)
@@ -6499,7 +6609,7 @@ class _ReplayCase:
             provenance_doc = r.parse(files["consumer-provenance.json"])
             r.require(r.same(provenance_doc["body"]["observation"], r.parse(observation))
                 and provenance_doc["body"]["observation_sha256"] == c.digest(observation))
-            retained = {name: capture(str(state["captures"]) + "-" + name, files[name]) for name in sorted(files)}
+            retained = {name: capture(str(state["captures"]) + "-" + name, files[name]) for name in files}
             actual_args = ["evaluate", retained["duty-evaluation.json"][1], retained["claim.json"][1], observer]
             old_args = ["evaluate", retained["duty-evaluation.json"][0], retained["claim.json"][0], old_observer]
             evaluation = shell("sandbox-bound-evaluation", "control/v1/evaluate-bound-sandbox.sh", actual_args, old_args)
@@ -6541,9 +6651,15 @@ class _ReplayCase:
                 ["validate", incident["id"], launch["id"], retained["trace-ledger.json"][0]])
             r.require(trace == files["trace-receipt.json"])
             provenance(files, instruction, observation, launch["id"], write is not None)
-            git_relations(files, material, incident, body)
+            candidate_files = git_relations(files, material, incident, body)
             source_git_hold.recheck("E_STORE", self.work, "M")
-            return r._bundle_facts_values(files, checked, origin, body)
+            facts = r._bundle_facts_values(files, checked, origin, body)
+            if candidate_files is not None:
+                _bundle_names, names = c._c1_history_names_values(body["record_form"])
+                prefix = "ystack-evidence/" + incident["id"] + "/"
+                r.require(set(candidate_files) == {prefix + name[len("candidate-"):] for name in names})
+                for name in sorted(names):capture(name, candidate_files[prefix + name[len("candidate-"):]])
+            return facts
         if context == "scope_reader" and round_number == 1:
             self._scope_source_origin_body(context, "coverage")
         # Native _HeldBundle.files insertion order is sorted fixed member names.
@@ -6594,7 +6710,10 @@ class _ReplayCase:
                         and (form not in {"withheld-write.v1", "withheld-write-policy.v1"} or workflow))
                     candidates = [files for files in rebuilt.values() if files["shadow-record.json"] == raw]
                     r.require(len(candidates) <= 1)
-                    files = candidates[0] if candidates else self._scope_history_files_body(context, raw)
+                    files = self._scope_history_files_body(context, raw)
+                    if candidates:
+                        r.require(set(candidates[0]) == set(files) and all(
+                            self._scope_data_equal(files[name], candidates[0][name]) for name in files))
                     r.require(body["materialization"]["value"]["outcome"] == ("no-change" if form == "enforced-reproduction.v1" else "changed"))
                     roles[role][environment] = files
                     row["facts"] = authenticate(files, revision)
@@ -6941,21 +7060,24 @@ class _ReplayCase:
         state = self.calculated["scope_contexts"][context];r = state["modules"]["reader"];c = r.c
         record = r.parse(record_raw);form = record["body"]["record_form"]
         r.require(form in {"enforced-reproduction.v1", "withheld-write.v1", "withheld-write-policy.v1"})
-        names = set(c.SHADOW_EVIDENCE_NAMES) | {"bundle.json"}
-        if form in {"withheld-write.v1", "withheld-write-policy.v1"}:names.add("publisher-body.txt")
-        if form == "withheld-write-policy.v1":names.add("scope-policy.json")
+        names, candidate_names = c._c1_history_names_values(form)
         ordinal = state["cursor"]
         prefix = context + "/history/%04d/" % ordinal
         selected = [row for row, _held in self.inputs.rows.values() if row["occurrence"] == "gate"
             and row["role"] == "capture" and row["member"].startswith(prefix)]
-        r.require({row["member"][len(prefix):] for row in selected} == names)
-        files, total = {}, 0
-        for name in sorted(names):
-            maximum = 8 * c.DOCUMENT_LIMIT if name == "materialization-input.json" else 2 * c.DOCUMENT_LIMIT if name == "preparation-manifest.json" else c.DOCUMENT_LIMIT
+        r.require(len(selected) == len(names | candidate_names)
+            and {row["member"][len(prefix):] for row in selected} == names | candidate_names)
+        ordered_names = [row["member"][len(prefix):] for row in selected]
+        values, total = {}, 0
+        for name in ordered_names:
+            maximum = c._c1_history_member_limit(name)
             raw = self.inputs.bytes("gate", "capture", prefix + name, maximum)
             total += len(raw);r.require(total <= 48 * c.DOCUMENT_LIMIT, "E_LIMIT")
             if name.endswith(".json"):r.parse(raw, maximum)
-            files[name] = raw
+            values[name] = raw
+        files = {name: values[name] for name in ordered_names if name in names}
+        candidate = {name: values[name] for name in ordered_names if name in candidate_names}
+        c._c1_history_candidate_values(files, candidate, self.work)
         incident, marker = r.parse(files["incident.json"]), r.parse(files["bundle.json"])
         expected = c._bundle_marker_values(files, incident, form, names)
         r.require(r.same(marker, expected) and self._scope_data_equal(files["shadow-record.json"], record_raw))

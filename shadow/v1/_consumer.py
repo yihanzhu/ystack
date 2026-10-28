@@ -1377,7 +1377,7 @@ def _refresh_recording_directory(item, before, work):
     component.after, component.named_after = current, named
 
 
-def _copy_preparation_document(directory, raw, work, resolver, *, name="capture.json", _c1_serial=None):
+def _copy_preparation_document(directory, raw, work, resolver, *, name="capture.json", _c1_serial=None, _c1_candidate=False):
     limits = {"capture.json": DOCUMENT_LIMIT, "parent-frame.bin": PARENT_FRAME_LIMIT,
               "helper-build-record.json": DOCUMENT_LIMIT, "native-dependency-record.json": DOCUMENT_LIMIT,
               "source-host.json": DOCUMENT_LIMIT, "source-config.json": DOCUMENT_LIMIT,
@@ -1392,6 +1392,11 @@ def _copy_preparation_document(directory, raw, work, resolver, *, name="capture.
         _require(type(_c1_serial) is int and 0 <= _c1_serial < 4096
             and name == "gate-scope-reader-p-%04d.bin" % _c1_serial, "E_STORE")
         limits[name] = EXECUTABLE_LIMIT
+    if _c1_candidate:
+        _require(_c1_serial is None and name in _c1_history_names_values("withheld-write-policy.v1")[1], "E_STORE")
+        _capture_copy_budget_room(work, 0, False, files=1)
+        _require(work["files"] < 256, "E_LIMIT")
+        limits[name] = _c1_history_member_limit(name)
     _require(name in limits and type(raw) is bytes and len(raw) <= limits[name], "E_STORE")
     target = reader = None
     failure = None
@@ -5991,6 +5996,137 @@ SHADOW_EVIDENCE_NAMES = (
     "shadow-record.json", "trace-ledger.json", "trace-receipt.json",
 )
 
+def _c1_history_names_values(form):
+    _require(form in {"enforced-reproduction.v1", "withheld-write.v1", "withheld-write-policy.v1"}, "E_STORE")
+    bundle = set(SHADOW_EVIDENCE_NAMES) | {"bundle.json"}
+    candidate = set()
+    if form != "enforced-reproduction.v1":
+        bundle.add("publisher-body.txt")
+        candidate = {"candidate-" + name for name in SHADOW_EVIDENCE_NAMES + ("bundle.json", "eval-seed.json", "README.md")}
+    if form == "withheld-write-policy.v1":
+        bundle.add("scope-policy.json")
+        candidate.add("candidate-scope-policy.json")
+    return bundle, candidate
+
+
+def _c1_history_member_limit(name):
+    bundle, candidate = _c1_history_names_values("withheld-write-policy.v1")
+    _require(name in bundle | candidate, "E_STORE")
+    if name.startswith("candidate-"):
+        return (8 if name == "candidate-materialization-input.json" else 2) * DOCUMENT_LIMIT
+    return (8 if name == "materialization-input.json" else 2 if name == "preparation-manifest.json" else 1) * DOCUMENT_LIMIT
+
+
+def _c1_history_candidate_values(files, candidate, work):
+    parsed = {}
+    for name in ("incident.json", "shadow-record.json", "sandbox-request.json", "bundle.json",
+                 "materialization-response.json", "preparation-manifest.json"):
+        raw = files[name]
+        _capture_copy_room(work, len(raw), False, read_only=True)
+        parsed[name] = _json(raw, _c1_history_member_limit(name), "E_STORE")
+        work["read_bytes"] += len(raw)
+        _capture_account(work, "M", "read_bytes", len(raw))
+        counts = work.setdefault("seed_processing", {})
+        counts["R"] = counts.get("R", 0) + len(raw)
+    incident, record = parsed["incident.json"], parsed["shadow-record.json"]
+    body, request = record["body"], parsed["sandbox-request.json"]
+    form = body["record_form"]
+    bundle_names, candidate_names = _c1_history_names_values(form)
+    _require(set(files) == bundle_names and set(candidate) == candidate_names
+        and body["git_revision_ref"] == incident["body"]["git_revision_ref"]
+        and body["target_repository_id"] == incident["body"]["target_repository_id"], "E_STORE")
+    amount = 2 * len(files["incident.json"]) + sum(len(files[name]) for name in bundle_names - {"bundle.json"})
+    _capture_copy_room(work, amount, False, read_only=True)
+    marker = _bundle_marker_values(files, incident, form, bundle_names)
+    work["read_bytes"] += amount;_capture_account(work, "M", "read_bytes", amount)
+    counts["H"] = counts.get("H", 0) + amount
+    left, right = _c1_p_side_raw(parsed["bundle.json"], work), _c1_p_side_raw(marker, work)
+    _capture_copy_room(work, len(left) + len(right), False, read_only=True)
+    equal = left == right
+    work["read_bytes"] += len(left) + len(right)
+    _capture_account(work, "M", "read_bytes", len(left) + len(right))
+    counts["E"] = counts.get("E", 0) + len(left) + len(right)
+    _require(equal, "E_STORE")
+    prefix = "ystack-evidence/" + incident["id"] + "/"
+    paths = tuple(prefix + name[len("candidate-"):] for name in sorted(candidate_names))
+    if not candidate_names:
+        return {"form": form, "paths": (), "prefix": prefix,
+            "incident": incident, "record": record, "request": request}
+    rows = body["write"]["write_set"]
+    _require(type(rows) is list and tuple(row["path"] for row in rows) == paths
+        and sum(map(len, candidate.values())) <= 48 * DOCUMENT_LIMIT, "E_STORE")
+    manifest = parsed["preparation-manifest.json"]
+    _require(set(manifest) == {"schema_version", "kind", "hash_algorithm", "entries", "file_count",
+        "directory_count", "total_file_bytes"} and type(manifest["schema_version"]) is int
+        and manifest["schema_version"] == 1 and manifest["kind"] == "candidate_content_manifest"
+        and manifest["hash_algorithm"] == "sha256" and type(manifest["entries"]) is list
+        and len(manifest["entries"]) <= 10000, "E_STORE")
+    indexed, total, count = {}, 0, 0
+    for row in manifest["entries"]:
+        _require(type(row) is dict and type(row.get("path")) is str and row["path"] not in indexed, "E_STORE")
+        indexed[row["path"]] = row
+        if row.get("kind") == "directory":
+            _require(set(row) == {"path", "kind", "git_mode", "mode"}
+                and row["git_mode"] == "040000" and row["mode"] == "0500", "E_STORE")
+        else:
+            _require(set(row) == {"path", "kind", "git_mode", "mode", "blob_oid", "size_bytes", "sha256"}
+                and row["kind"] == "file" and row["git_mode"] in {"100644", "100755"}
+                and row["mode"] == ("0400" if row["git_mode"] == "100644" else "0500")
+                and type(row["size_bytes"]) is int and row["size_bytes"] >= 0
+                and _sha(row["sha256"]) and _writer_oid(row["blob_oid"]), "E_STORE")
+            total += row["size_bytes"];count += 1
+    _require(all(type(manifest[key]) is int for key in ("file_count", "directory_count", "total_file_bytes"))
+        and manifest["file_count"] == count and manifest["directory_count"] == len(indexed) - count
+        and manifest["total_file_bytes"] == total, "E_STORE")
+    raw = parsed["materialization-response.json"]["payloads"][0]["data"].encode()
+    _capture_copy_room(work, len(raw), False, read_only=True)
+    receipt = _json(raw, DOCUMENT_LIMIT, "E_STORE")
+    work["read_bytes"] += len(raw);_capture_account(work, "M", "read_bytes", len(raw))
+    counts["R"] = counts.get("R", 0) + len(raw)
+    revision = incident["body"]["git_revision_ref"]
+    source, target = receipt["source"], receipt["candidate"]
+    algorithm = revision["hash_algorithm"]
+    _require(algorithm in {"sha1", "sha256"}
+        and source["repository_id"] == body["target_repository_id"]
+        and source["commit_id"] == revision["commit_id"] and source["hash_algorithm"] == algorithm
+        and target["hash_algorithm"] == algorithm and target["repository_kind"] == "bare"
+        and target["parent_commit_id"] == revision["commit_id"] and _writer_oid(target["commit_id"])
+        and target["tree_id"] == body["write"]["post_write_verification"]["candidate_tree_id"]
+        and body["write"]["post_write_verification"]["target_revision"] == revision
+        and body["write"]["post_write_verification"]["write_set"] == rows, "E_STORE")
+    for row, path in zip(rows, paths):
+        name = "candidate-" + path[len(prefix):]
+        raw = candidate[name]
+        _require(type(raw) is bytes and len(raw) <= _c1_history_member_limit(name)
+            and set(row) == {"path", "mode", "sha256", "git_blob_oid", "add_only"}
+            and row["mode"] == "100644" and row["add_only"] is True, "E_STORE")
+        header = b"blob " + str(len(raw)).encode() + b"\0"
+        hashed, copied = 2 * len(raw) + len(header), len(raw) + len(header)
+        amount = hashed + copied
+        _capture_copy_room(work, amount, False, read_only=True)
+        measured = digest(raw)
+        oid = hashlib.new(algorithm, header + raw).hexdigest()
+        work["read_bytes"] += amount;_capture_account(work, "M", "read_bytes", amount)
+        counts["H"] = counts.get("H", 0) + hashed
+        counts["C"] = counts.get("C", 0) + copied
+        entry = indexed.get(path)
+        _require(row["sha256"] == measured and row["git_blob_oid"] == oid and entry is not None
+            and entry["kind"] == "file" and entry["git_mode"] == "100644" and entry["mode"] == "0400"
+            and entry["size_bytes"] == len(raw) and entry["sha256"] == measured and entry["blob_oid"] == oid, "E_STORE")
+    equalities = [(candidate["candidate-incident.json"], files["incident.json"]),
+        (candidate["candidate-README.md"], b"Shadow evidence. Publication is withheld.\n")]
+    if form == "withheld-write-policy.v1":
+        equalities.append((candidate["candidate-scope-policy.json"], files["scope-policy.json"]))
+    amount = sum(len(left) + len(right) for left, right in equalities)
+    _capture_copy_room(work, amount, False, read_only=True)
+    checks = [left == right for left, right in equalities]
+    work["read_bytes"] += amount;_capture_account(work, "M", "read_bytes", amount)
+    counts["E"] = counts.get("E", 0) + amount
+    _require(all(checks), "E_STORE")
+    return {"form": form, "paths": paths, "prefix": prefix,
+        "incident": incident, "record": record, "request": request}
+
+
 def _bundle_marker_values(files, incident, form, names):
     return {"schema_version": 1, "kind": "shadow_consumer_bundle",
         "id": "bundle." + digest(files["incident.json"])[:32], "body": {
@@ -6415,7 +6551,13 @@ def _c1_p_batch_check(value, work):
             and parts[1][5:].isascii() and parts[1][5:].isdigit()
             and int(parts[1][5:]) < 4096
             and all(part and part not in {".", ".."} for part in parts), "E_STORE")
-        _require(relative not in names and parts[-1] == row["name"], "E_STORE")
+        leaf = row["name"]
+        if row["family"] == "history":
+            _c1_history_member_limit(leaf)
+            _require(len(parts) == 3, "E_STORE")
+            if not leaf.startswith("candidate-"):
+                leaf = str(int(parts[1][5:])) + "-" + leaf
+        _require(relative not in names and parts[-1] == leaf, "E_STORE")
         names.add(relative)
         _c1_p_chain_values(row["chain"])
         _require(type(row["size_bytes"]) is int and 0 <= row["size_bytes"] <= 4 << 30
@@ -6449,10 +6591,7 @@ def _c1_p_semantic_values(row):
             (EXECUTABLE_LIMIT if names[name] in {"supervisor", "normalizer"} else DOCUMENT_LIMIT), "E_STORE")
         member = "source-configuration-%04d/" % ordinal + names[name]
     else:
-        _require(family == "history" and name in set(SHADOW_EVIDENCE_NAMES)
-            | {"bundle.json", "publisher-body.txt", "scope-policy.json"}
-            and size <= (8 * DOCUMENT_LIMIT if name == "materialization-input.json" else
-                2 * DOCUMENT_LIMIT if name == "preparation-manifest.json" else DOCUMENT_LIMIT), "E_STORE")
+        _require(family == "history" and size <= _c1_history_member_limit(name), "E_STORE")
         member = "history/%04d/" % ordinal + name
     return "capture", "scope_reader/" + member
 
@@ -6907,7 +7046,10 @@ class _C1PHandoffParent:
         for row in batch["members"]:
             if row["family"] == "history":groups.setdefault(row["ordinal"], []).append(row)
         for ordinal, rows in groups.items():
-            if ordinal in self.history_groups:continue
+            if ordinal in self.history_groups:
+                prior = self.history_groups[ordinal]
+                self._equal_M(_c1_p_side_raw(rows, self.work), prior["rows_raw"])
+                continue
             names = [row["name"] for row in rows]
             _require(len(set(names)) == len(names) and {"sandbox-request.json", "shadow-record.json", "bundle.json"} <= set(names), "E_STORE")
             values = {}
@@ -6921,7 +7063,7 @@ class _C1PHandoffParent:
                     measured = digest(raw)
                     self.work["read_bytes"] += len(raw)
                     _capture_account(self.work, "M", "read_bytes", len(raw))
-                    _require(measured == row["sha256"], "E_STORE")
+                    _require(len(raw) == row["size_bytes"] and measured == row["sha256"], "E_STORE")
                     values[row["name"]] = raw
                 except BaseException as error:first = error
                 finally:
@@ -6948,9 +7090,14 @@ class _C1PHandoffParent:
                 _capture_account(self.work, "M", "read_bytes", amount)
                 if equal:candidates.append((role, original))
             _require(candidates and marker["body"]["record_form"] == body["record_form"], "E_STORE")
+            bundle_names, candidate_names = _c1_history_names_values(body["record_form"])
+            _require(set(values) == bundle_names | candidate_names, "E_STORE")
+            bundle = {name: values[name] for name in bundle_names}
+            candidate_values = {name: values[name] for name in candidate_names}
+            facts = _c1_history_candidate_values(bundle, candidate_values, self.work)
             for role, original in candidates:
-                _require(set(original) == set(values), "E_STORE")
-                for name in values:
+                _require(set(original) == bundle_names, "E_STORE")
+                for name in bundle_names:
                     _capture_copy_room(self.work, len(values[name]) + len(original[name]), False, read_only=True)
                     equal = values[name] == original[name]
                     amount = len(values[name]) + len(original[name])
@@ -6960,8 +7107,11 @@ class _C1PHandoffParent:
             current = tuple(value["native"].attempt_id for key, value in self.current_bindings.items()
                 if key in {"reproduction", "write"})
             _require(len(current) == 2 and all(_id(value) for value in current), "E_STORE")
-            self.history_groups[ordinal] = {"excluded_current": request["id"] in current,
-                "roles": [(role, environment) for role, _files in candidates]}
+            self.history_groups[ordinal] = {"current_output": request["id"] in current,
+                "roles": [(role, environment) for role, _files in candidates],
+                "facts": facts, "values": values, "rows": tuple(rows),
+                "rows_raw": _c1_p_side_raw(rows, self.work),
+                "bundle_names": bundle_names, "candidate_names": candidate_names}
 
     def stage(self, value, phase):
         _require(phase in {"C_REQUEST", "FINAL_OWNER"} and phase not in self.batches, "E_STORE")
@@ -6998,13 +7148,7 @@ class _C1PHandoffParent:
                         self.work["read_bytes"] += len(current_raw) + len(old["row_raw"])
                         _capture_account(self.work, "M", "read_bytes", len(current_raw) + len(old["row_raw"]))
                         _require(equal, "E_STORE")
-                        if old.get("excluded_current", False):
-                            self._check_original(source, row)
-                        else:self._compare(source, old["target"], row, old["kind"])
-                    elif row["family"] == "history" and self.history_groups[row["ordinal"]]["excluded_current"]:
-                        self._check_original(source, row)
-                        self.records[row["serial"]] = {"row": row, "row_raw": _c1_p_side_raw(row, self.work),
-                            "excluded_current": True, "target": None}
+                        self._compare(source, old["target"], row, old["kind"])
                     else:
                         kind = self._member_kind(row, batch)
                         self.records[row["serial"]] = self._stage_member(source, row, kind)
@@ -7054,8 +7198,7 @@ class _C1PHandoffParent:
             _require(name in {"source-host.json", "source-config.json", "source-accepted.json",
                 "source-package.json", "source-supervisor.py", "source-normalizer.py"}, "E_STORE")
         else:
-            _require(family == "history" and name in set(SHADOW_EVIDENCE_NAMES)
-                | {"bundle.json", "publisher-body.txt", "scope-policy.json"}, "E_STORE")
+            _require(family == "history" and row["size_bytes"] <= _c1_history_member_limit(name), "E_STORE")
         return "M"
 
     def _check_original(self, source, row):
@@ -7229,7 +7372,6 @@ class _C1PHandoffParent:
             self._equal_M(_c1_p_side_raw(record["invoice"], self.work), record["invoice_raw"])
             target.recheck("E_STORE", self.work, "M")
         for record in self.records.values():
-            if record.get("excluded_current", False):continue
             target = record["target"]
             _require(_identity(target.before) == record["initial_identity"], "E_STORE")
             target.recheck("E_STORE")

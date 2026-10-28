@@ -2384,7 +2384,7 @@ shadow_source_rows() {
     'enforcement/v1/accepted-identities.json c75dcd8d9268cb42677f5aa526fd374c3e45f2ba0fe678f47562ae49ad6851a0 174 100644' \
     'enforcement/v1/check-sandbox-receipt.sh 7db3412a4e740f79bde6af24891837fd5daa27d0811ff970b2f58534fcd59b97 10816 100755' \
     'enforcement/v1/sandbox-receipt.jq 43ab3a97b90444be17958112b7ff63966d1052981313c81bcb463618adae8619 30838 100644' \
-    'evals/v1/replay-malicious.py c0d364f3a042a93cc6abd77d5c7ce67565f89836b1436f1ff3df50ad870e55b8 510290 100644' \
+    'evals/v1/replay-malicious.py 589614b11c626fd61f3462a93cfad30a354e323b4396174cf2f1d5b7d013c662 520339 100644' \
     'maintenance/v1/bands.jq 594994c057a1130da6727f5f825d2fed3ff01de4a9fafe3a722d9e964f05c8e4 10714 100644' \
     'maintenance/v1/incident-to-eval.jq 2229722267c3e9544d9cf53bd37d6d798f27adebad4a7439294989d0194ad92a 7237 100644' \
     'maintenance/v1/incident-to-eval.sh e000f961d7851c48b650ca36ed0c60fd2bc97ffc32442214b3f8937efc97f967 7449 100755' \
@@ -2402,14 +2402,14 @@ shadow_source_rows() {
     'sandbox/v1/runtime-vfkit.py 50a400dd73e8fa8d46cf93e5f8824ac80d5921cc1bf69d522bf11d4330050a14 6764 100755' \
     'scope/v1/evaluate-scope.sh fe6048b5eada5d86531e085acd0a9f46b73028d348349ab932e8c59f4e2ed66a 25253 100755' \
     'scope/v1/generate-gate-evidence.py 5444903bd219915137370970d60a15143b4e2210fd19706848b5bf8ac68e0864 54055 100755' \
-    'scope/v1/read-shadow-evidence.py bf3d5f5aa4e0d99bd4c7838580dd8066b37f06caa5d32e51a8fb922740cc28b4 161192 100644' \
+    'scope/v1/read-shadow-evidence.py e4b633b9c0935272fd5193bc25d6ec4fba8763e689d04869e3ac1cf729b76295 165325 100644' \
     'scope/v1/scope-gates.jq 8f0b7cb6f42bc514f466fda710a1bf6fcfa0afe0abbc02d75e77e419a2ff9ed8 57384 100644' \
     'scope/v1/scope-policy.json 5c6db4debedfcd7117735bd1d4bf907293f73972ec8909c4eab9f25cf6417fe5 1181 100644' \
     'scope/v1/validate-scope.sh 99c0abae1bdcc3809dfac535a8b24137842abaec2418b90566b6ac8ff213b406 3194 100755' \
     'scope/v1/workflow-scope.jq 2d1df5f99b7019c4c41aece4f9fb89b00785ca47f9f8a713b2f43b212481366a 9728 100644' \
     'scripts/core-contract.sh b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 9176 100755' \
     'shadow/v1/_cancel_release.c 00ef369edbed569d50471b97f64aef57591b7afb8d9f25c286bffa5725faf015 55056 100644' \
-    'shadow/v1/_consumer.py a3482af21fcb3ce5c87e5de26f963be402b236c8fe87a6dd20407022890901c8 418779 100644' \
+    'shadow/v1/_consumer.py dd8ef865177d4b2714117cb1631bb24d896215be56475544321b2959c024ccee 427686 100644' \
     'shadow/v1/build-cancel-release.sh be1ad0afd99f72ea73fe52cca63c03381793710c587a82b57b9a38ed87c896d4 6169 100755' \
     'shadow/v1/enforced-reproduction.py b1d80c8aac16630e2e8d28303169bd8bb06d475dc6645b0d41ebed5aa942e511 136145 100755' \
     'shadow/v1/incident-record.jq 9ea6e1ec6556f54887ea6937533157856271aab68c74bda6d18dae1354d2687c 3695 100644' \
@@ -2916,10 +2916,10 @@ done
 [ -n "$jq_source" ] || emit_error E_RUNTIME
 
 generation=g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43
-program_sha=0ec78dd3f683d2ad3970130b9e6ca4e3749f0f301343e7bd4328a8af0db36c8b
+program_sha=cdb8365296530b9d6832de176913bd0bb73259f45c6524a4a61845b86cf5730e
 review_approval_sha=none
 catalog_sha=0239138447a8f9fd420cb3c5da31660d8f75c85099d80d89a040dce2878a4cac
-driver_sha=6d66a3de89101f898e3e59bad3fe89a075b30158e03bc8dac9ffb44a921b7e66
+driver_sha=d05c14ba062d799505c1ded6cd65bd7c4524cd83a8314176a5478d610471879e
 }
 
 evals_record_context() {

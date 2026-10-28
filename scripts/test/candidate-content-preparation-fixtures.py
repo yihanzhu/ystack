@@ -6759,7 +6759,7 @@ def raw16_C3_bundle_outputs(root: Path, candidate=False, selected=None, evidence
     spec=importlib.util.spec_from_file_location('C3_bundle_replay',root/'evals/v1/replay-malicious.py')
     replay=importlib.util.module_from_spec(spec);sys.modules[spec.name]=replay;spec.loader.exec_module(replay)
     results=[]
-    for label in (selected or (('normal','wrong-row-sha','repeat-candidate-observation') if candidate else ('normal','source-mode-drift','unusable','duplicate-binding','unknown-role','default-repeat','repeat-observation','repeat-target-identity','repeat-source-swap'))):
+    for label in (selected or (('normal','wrong-row-sha','repeat-candidate-observation') if candidate else ('normal','source-mode-drift','unusable','duplicate-binding','unknown-role','replay-extra-key','replay-missing-key','default-repeat','repeat-observation','repeat-target-identity','repeat-source-swap'))):
         phase='write' if candidate else 'reproduction'
         form='withheld-write.v1' if candidate else 'enforced-reproduction.v1'
         with tempfile.TemporaryDirectory(prefix='ystack-C3-bundle-') as temporary:
@@ -6807,6 +6807,8 @@ def raw16_C3_bundle_outputs(root: Path, candidate=False, selected=None, evidence
             if label=='source-mode-drift':(source/'incident.json').chmod(0o600)
             if label=='unusable':reader.replay_output_state[0]=True
             if label=='unknown-role':reader.replay_outputs['bundles'][0]=(files['shadow-record.json'],(bundle,'invented','environment.one'))
+            if label=='replay-extra-key':reader.replay_outputs['foreign']=[]
+            if label=='replay-missing-key':reader.replay_outputs.pop('holds')
             caught=None
             try:
                 try:
@@ -9296,3 +9298,194 @@ def raw16_C1_parent_coverage_snapshot(root: Path, evidence=None) -> dict:
         if primary is None and cleanup:raise cleanup[0]
     return {'controls': [{'case': row['case'], 'rejected': row.get('rejected', False)} for row in results],
         'retained_root': str(base), 'cost': 'UNKNOWN', 'qualification': 'parent consumer_snapshot owner branch only; native/caller NOTRUN'}
+
+
+def raw16_C1_history_name_routes(root: Path, deletion=None) -> dict:
+    import copy
+    import tempfile
+    import shutil
+    if deletion is not None:
+        with tempfile.TemporaryDirectory(prefix='ystack-C1-history-deleted-') as temporary:
+            copied = Path(temporary)/'source'
+            shutil.copytree(root, copied, ignore=shutil.ignore_patterns('.git', '__pycache__'))
+            path = copied/'shadow/v1/_consumer.py'
+            source = path.read_text()
+            old = '            _c1_history_member_limit(leaf)'
+            assert source.count(old) == 1, 'history name deletion anchor moved'
+            path.write_text(source.replace(old, '            pass', 1))
+            return raw16_C1_history_name_routes(copied)
+    def load(name, relative):
+        spec = importlib.util.spec_from_file_location(name, root/relative)
+        module = importlib.util.module_from_spec(spec);sys.modules[name] = module;spec.loader.exec_module(module)
+        return module
+    c = load('C1_history_name_consumer', 'shadow/v1/_consumer.py')
+    replay = load('C1_history_name_replay', 'evals/v1/replay-malicious.py')
+    work = c._c3_fresh_work(1)
+    chain = [{'name': 'ystack-scope-evaluate.A0b1C2', 'identity': [1]*10}]
+    batch = {'state': 'ready', 'scratch_name': chain[0]['name'], 'root_chain': chain, 'members': []}
+    rejected, accepted = [], []
+    def rejects(label, function, value):
+        try:function(value)
+        except (c.Refusal, replay._CalculationRefused, ValueError):rejected.append(label)
+        else:raise AssertionError('history route accepted ' + label)
+    expected_base = set(c.SHADOW_EVIDENCE_NAMES)
+    assert len(expected_base) == 29
+    for form, bundle_count, candidate_count in (
+        ('enforced-reproduction.v1', 30, 0), ('withheld-write.v1', 31, 32),
+        ('withheld-write-policy.v1', 32, 33)):
+        bundle, candidate = c._c1_history_names_values(form)
+        expected_bundle = expected_base | {'bundle.json'}
+        expected_candidate = set()
+        if candidate_count:
+            expected_bundle.add('publisher-body.txt')
+            expected_candidate = {'candidate-' + name for name in expected_base | {'bundle.json', 'eval-seed.json', 'README.md'}}
+        if form == 'withheld-write-policy.v1':
+            expected_bundle.add('scope-policy.json');expected_candidate.add('candidate-scope-policy.json')
+        assert bundle == expected_bundle and candidate == expected_candidate
+        assert (len(bundle), len(candidate)) == (bundle_count, candidate_count)
+        assert 'candidate-publisher-body.txt' not in candidate
+        for serial, name in enumerate(sorted(bundle | candidate)):
+            # The actual capture prefix is Reader.inputs N. Neither owner ordinal nor serial supplies it.
+            leaf = name if name.startswith('candidate-') else '17-' + name
+            row = {'serial': serial, 'family': 'history', 'ordinal': 2, 'name': name,
+                'relative': 'reader-captures/gate-0017/' + leaf, 'chain': chain,
+                'size_bytes': 1, 'sha256': 'a'*64}
+            value = dict(batch, members=[row])
+            assert c._c1_p_batch_check(value, work) is value
+            role, member = c._c1_p_semantic_values(row)
+            assert (role, member) == ('capture', 'scope_reader/history/0002/' + name)
+            for context in ('generator', 'scope_reader'):
+                replay._gate_input_member_values(role, context + '/history/0002/' + name, 'M', 1)
+            limit = c._c1_history_member_limit(name)
+            over = dict(row, size_bytes=limit + 1)
+            rejects('semantic-limit-' + name, c._c1_p_semantic_values, over)
+            for context in ('generator', 'scope_reader'):
+                rejects(context + '-limit-' + name,
+                    lambda size, context=context, name=name: replay._gate_input_member_values(
+                        'capture', context + '/history/0002/' + name, 'M', size), limit + 1)
+            for bad_leaf in (('0017-' + name, '2-' + name, str(serial) + '-' + name, name)
+                    if not name.startswith('candidate-') else ('17-' + name,)):
+                if bad_leaf == leaf:continue
+                wrong = copy.deepcopy(value);wrong['members'][0]['relative'] = 'reader-captures/gate-0017/' + bad_leaf
+                rejects('leaf-' + bad_leaf, lambda changed: c._c1_p_batch_check(changed, work), wrong)
+            accepted.append((form, name))
+    for name in ('candidate-publisher-body.txt', 'candidate-foreign.json', 'foreign.json'):
+        row = {'serial': 0, 'family': 'history', 'ordinal': 2, 'name': name,
+            'relative': 'reader-captures/gate-0017/' + (name if name.startswith('candidate-') else '17-' + name),
+            'chain': chain, 'size_bytes': 1, 'sha256': 'a'*64}
+        rejects('unknown-' + name, lambda value: c._c1_p_batch_check(value, work), dict(batch, members=[row]))
+        rejects('semantic-' + name, c._c1_p_semantic_values, row)
+        for context in ('generator', 'scope_reader'):
+            rejects(context + '-unknown-' + name, lambda value, context=context:
+                replay._gate_input_member_values('capture', context + '/history/0002/' + value, 'M', 1), name)
+    return {'accepted_name_routes': len(accepted), 'rejected': rejected,
+        'qualification': 'fixed value routes only; actual caller/native NOTRUN', 'cost': 'UNKNOWN'}
+
+
+def raw16_C1_history_name_deletion(root: Path) -> None:
+    try:raw16_C1_history_name_routes(root, deletion='member-name-check')
+    except AssertionError as error:
+        assert str(error) == 'history route accepted unknown-candidate-publisher-body.txt'
+    else:raise AssertionError('history production name-check deletion undetected')
+
+
+def raw16_C1_history_candidate_values(root: Path, deletion=False) -> dict:
+    import copy
+    import shutil
+    import tempfile
+    if deletion:
+        with tempfile.TemporaryDirectory(prefix='ystack-C1-history-oid-deleted-') as temporary:
+            copied = Path(temporary)/'source'
+            shutil.copytree(root, copied, ignore=shutil.ignore_patterns('.git', '__pycache__'))
+            path = copied/'shadow/v1/_consumer.py';source = path.read_text()
+            old = 'row["sha256"] == measured and row["git_blob_oid"] == oid and entry is not None'
+            assert source.count(old) == 1, 'history oid deletion anchor moved'
+            path.write_text(source.replace(old, 'row["sha256"] == measured and entry is not None', 1))
+            return raw16_C1_history_candidate_values(copied)
+    spec = importlib.util.spec_from_file_location('C1_history_values_consumer', root/'shadow/v1/_consumer.py')
+    c = importlib.util.module_from_spec(spec);sys.modules[spec.name] = c;spec.loader.exec_module(c)
+    rejected, positives = [], []
+    for form in ('withheld-write.v1', 'withheld-write-policy.v1'):
+        for algorithm in ('sha1', 'sha256'):
+            bundle_names, candidate_names = c._c1_history_names_values(form)
+            revision = {'hash_algorithm': algorithm, 'commit_id': 'a'*(40 if algorithm == 'sha1' else 64)}
+            incident = {'schema_version': 1, 'kind': 'shadow_incident_record', 'id': 'incident.history',
+                'body': {'git_revision_ref': revision, 'target_repository_id': 'repository.history'}}
+            files = {name: c.canonical({'ordinary_history': name}) for name in bundle_names}
+            files['incident.json'] = c.canonical(incident)
+            files['sandbox-request.json'] = c.canonical({'id': 'launch.history', 'body': {}})
+            candidate = {name: c.canonical({'ordinary_candidate': name}) for name in candidate_names}
+            candidate['candidate-incident.json'] = files['incident.json']
+            candidate['candidate-README.md'] = b'Shadow evidence. Publication is withheld.\n'
+            if form == 'withheld-write-policy.v1':candidate['candidate-scope-policy.json'] = files['scope-policy.json']
+            prefix = 'ystack-evidence/' + incident['id'] + '/'
+            rows, entries = [], []
+            for name, raw in sorted(candidate.items()):
+                path = prefix + name[len('candidate-'):]
+                oid = hashlib.new(algorithm, b'blob ' + str(len(raw)).encode() + b'\0' + raw).hexdigest()
+                rows.append({'path': path, 'mode': '100644', 'sha256': c.digest(raw), 'git_blob_oid': oid, 'add_only': True})
+                entries.append({'path': path, 'kind': 'file', 'git_mode': '100644', 'mode': '0400',
+                    'blob_oid': oid, 'size_bytes': len(raw), 'sha256': c.digest(raw)})
+            manifest = {'schema_version': 1, 'kind': 'candidate_content_manifest', 'hash_algorithm': 'sha256',
+                'entries': entries, 'file_count': len(entries), 'directory_count': 0,
+                'total_file_bytes': sum(map(len, candidate.values()))}
+            files['preparation-manifest.json'] = c.canonical(manifest)
+            files['materialization-response.json'] = c.canonical({'payloads': [{'data': c.canonical({
+                'source': {'repository_id': 'repository.history', 'commit_id': revision['commit_id'], 'hash_algorithm': algorithm},
+                'candidate': {'hash_algorithm': algorithm, 'repository_kind': 'bare', 'parent_commit_id': revision['commit_id'],
+                    'commit_id': 'b'*len(revision['commit_id']), 'tree_id': 'c'*len(revision['commit_id'])}}).decode()}]})
+            record = {'body': {'record_form': form, 'git_revision_ref': revision, 'target_repository_id': 'repository.history',
+                'write': {'write_set': rows, 'post_write_verification': {'write_set': copy.deepcopy(rows),
+                    'target_revision': revision, 'candidate_tree_id': 'c'*len(revision['commit_id'])}}}}
+            def encode(actual_files, actual_record, actual_manifest):
+                actual_files['shadow-record.json'] = c.canonical(actual_record)
+                actual_files['preparation-manifest.json'] = c.canonical(actual_manifest)
+                actual_files['bundle.json'] = c.canonical(c._bundle_marker_values(actual_files, incident, form, bundle_names))
+            encode(files, record, manifest)
+            work = c._c3_fresh_work(1)
+            facts = c._c1_history_candidate_values(files, candidate, work)
+            assert facts['paths'] == tuple(row['path'] for row in rows) and facts['form'] == form
+            assert work['read_bytes'] > sum(map(len, candidate.values()))
+            assert work['seed_processing']['H'] > 2*sum(map(len, candidate.values()))
+            positives.append((form, algorithm, len(candidate)))
+            for label in ('missing-candidate', 'extra-candidate', 'candidate-byte', 'row-oid', 'row-sha',
+                    'row-order', 'row-add-only', 'manifest-size', 'manifest-oid', 'manifest-missing',
+                    'manifest-duplicate', 'manifest-total', 'target', 'record-revision', 'record-repository'):
+                actual_files, actual_candidate = copy.deepcopy(files), dict(candidate)
+                actual_record, actual_manifest = copy.deepcopy(record), copy.deepcopy(manifest)
+                selected = sorted(candidate)[0]
+                if label == 'missing-candidate':actual_candidate.pop(selected)
+                elif label == 'extra-candidate':actual_candidate['candidate-publisher-body.txt'] = b'foreign'
+                elif label == 'candidate-byte':
+                    raw = actual_candidate[selected];actual_candidate[selected] = bytes([raw[0] ^ 1]) + raw[1:]
+                elif label in {'row-oid', 'row-sha', 'row-order', 'row-add-only'}:
+                    changed = actual_record['body']['write']['write_set']
+                    if label == 'row-oid':changed[0]['git_blob_oid'] = 'f'*len(revision['commit_id'])
+                    elif label == 'row-sha':changed[0]['sha256'] = 'f'*64
+                    elif label == 'row-order':changed.reverse()
+                    else:changed[0]['add_only'] = False
+                    actual_record['body']['write']['post_write_verification']['write_set'] = copy.deepcopy(changed)
+                elif label == 'manifest-size':actual_manifest['entries'][0]['size_bytes'] += 1;actual_manifest['total_file_bytes'] += 1
+                elif label == 'manifest-oid':actual_manifest['entries'][0]['blob_oid'] = 'f'*len(revision['commit_id'])
+                elif label == 'manifest-missing':
+                    removed = actual_manifest['entries'].pop(0);actual_manifest['file_count'] -= 1
+                    actual_manifest['total_file_bytes'] -= removed['size_bytes']
+                elif label == 'manifest-duplicate':
+                    actual_manifest['entries'].append(copy.deepcopy(actual_manifest['entries'][0]))
+                elif label == 'manifest-total':actual_manifest['total_file_bytes'] += 1
+                elif label == 'target':actual_record['body']['write']['post_write_verification']['candidate_tree_id'] = 'f'*len(revision['commit_id'])
+                elif label == 'record-revision':actual_record['body']['git_revision_ref'] = dict(revision, commit_id='f'*len(revision['commit_id']))
+                else:actual_record['body']['target_repository_id'] = 'repository.foreign'
+                encode(actual_files, actual_record, actual_manifest)
+                try:c._c1_history_candidate_values(actual_files, actual_candidate, c._c3_fresh_work(1))
+                except c.Refusal:rejected.append((form, algorithm, label))
+                else:raise AssertionError('history candidate accepted ' + label)
+    return {'positive_value_checks': positives, 'rejected': rejected,
+        'qualification': 'synthetic full 32/33-member value relation only; original cat-file/parent caller/S NOTRUN',
+        'full_fees': 'UNKNOWN', 'native_qualification': 'BLOCKED'}
+
+
+def raw16_C1_history_candidate_deletion(root: Path) -> None:
+    try:raw16_C1_history_candidate_values(root, deletion=True)
+    except AssertionError as error:assert str(error) == 'history candidate accepted row-oid'
+    else:raise AssertionError('history production oid-check deletion undetected')

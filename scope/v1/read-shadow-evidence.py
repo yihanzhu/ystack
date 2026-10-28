@@ -772,7 +772,7 @@ class _GateReaderSession:
         except BaseException as error:self._p_failed(error, "C1-P-registration")
         self._p_raise_cancel()
 
-    def register_history(self, value):
+    def register_history(self, value, candidate=None):
         if not self.p_enabled:return
         try:
             store, files, retained, storage_rows = value
@@ -783,15 +783,27 @@ class _GateReaderSession:
                 if item["entries"] and all(row["role"] == "store" for row in item["entries"])]
             ordinals = [index for index, item in enumerate(acquisitions) if item["entries"] is storage_rows]
             require(len(ordinals) == 1, "E_STORE")
-            for name, path in retained.items():
+            originals, paths = dict(files), dict(retained)
+            if candidate is not None:
+                candidate_files, candidate_paths, git_output = candidate
+                frozen, rows, git, original = git_output
+                require(original is files and git is reader.git and git.ledger is reader
+                    and set(frozen) == {row["path"] for row in rows}, "E_STORE")
+                _bundle_names, names = c._c1_history_names_values(parse(files["shadow-record.json"])["body"]["record_form"])
+                prefix = "ystack-evidence/" + parse(files["incident.json"])["id"] + "/"
+                require(set(candidate_files) == set(candidate_paths) == names
+                    and all(candidate_files[name] is frozen[prefix + name[len("candidate-"):]] for name in names), "E_STORE")
+                originals.update(candidate_files)
+                paths.update(candidate_paths)
+            for name, path in paths.items():
                 holders = [item for item in reader.owned if type(item) is c._HeldBytes
-                    and item.held.path == str(path) and item.raw == files[name]]
+                    and item.held.path == str(path) and item.raw == originals[name]]
                 require(len(holders) == 1, "E_STORE")
                 row = self._p_register(holders[0].held, None)
                 binding = ("history", ordinals[0], name)
                 require(row["projection"] is None or row["projection"] == binding, "E_STORE")
                 row["projection"] = binding
-                row["raw"] = files[name]
+                row["raw"] = originals[name]
         except BaseException as error:self._p_failed(error, "C1-history-registration")
         self._p_raise_cancel()
 
@@ -1339,14 +1351,40 @@ class _Reader:
         self.recheck()
         return module
 
-    def capture(self, name, raw):
+    def capture(self, name, raw, *, candidate=False):
         require("/" not in name and name not in {"", ".", ".."})
         if self.store_session is not None:
             require(len(self.inputs) < 4096, "E_LIMIT")
             path = self.captures / f"gate-{len(self.inputs):04d}" / name
         else:
             path = self.captures / name
-        if self.store_session is not None:
+        if candidate:
+            work = self.replay_output_work
+            require(self.anchor is not None and name in c._c1_history_names_values("withheld-write-policy.v1")[1], "E_STORE")
+            parent, failure = None, None
+            before = {key: work[key] for key in ("read_bytes", "write_bytes", "physical_bytes", "files")}
+            classified = dict(work.get("accounting", {}).get("M", {}))
+            try:
+                parent = c._open_held(str(path.parent), True,
+                    c._store_rule(os.geteuid(), os.getegid(), 0o700, True, self.darwin),
+                    "E_STORE", recording_work=work, accounting_kind="M")
+                state = c._copy_preparation_document(parent.fd, raw, work, self.darwin,
+                    name=name, _c1_candidate=True)
+                written = c._identity(state)
+                c._refresh_recording_directory(parent, parent.before, work)
+            except BaseException as error:
+                failure = error
+            finally:
+                if parent is not None:failure = c._c1_p_close(parent, work, failure)
+                for key, previous in before.items():
+                    try:
+                        delta = work[key] - previous
+                        already = work.get("accounting", {}).get("M", {}).get(key, 0) - classified.get(key, 0)
+                        require(delta >= already >= 0, "E_LIMIT")
+                        c._capture_account(work, "M", key, delta - already)
+                    except BaseException as error:failure = c._c3_first(failure, error)
+            if failure is not None:raise failure
+        elif self.store_session is not None:
             written = write_exclusive(path, raw, resolver=self.darwin)
         else:
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400)
@@ -1359,9 +1397,20 @@ class _Reader:
             finally:
                 os.fsync(fd)
                 os.close(fd)
-        if self.store_session is not None:
+        if self.store_session is not None or candidate:
+            if candidate:
+                c._capture_copy_room(work, 4 * len(raw), False, read_only=True)
+                work["candidate_hold_unknown"] = True
             held = self.hold(path, max(c.DOCUMENT_LIMIT, len(raw)))
-            require(held.raw == raw and c._identity(held.held.before) == written, "E_STALE")
+            equal = held.raw == raw
+            if candidate:
+                work["read_bytes"] += 4 * len(raw)
+                c._capture_account(work, "M", "read_bytes", 4 * len(raw))
+                counts = work.setdefault("seed_processing", {})
+                for key, amount in (("R", len(raw)), ("H", len(raw)), ("E", 2 * len(raw))):
+                    counts[key] = counts.get(key, 0) + amount
+                work["candidate_hold_unknown"] = False
+            require(equal and c._identity(held.held.before) == written, "E_STALE")
         self.inputs.append((path, raw))
         return path
 
@@ -1903,12 +1952,12 @@ class _Reader:
         except Exception as error:
             self._replay_output_failure(error, "reader-output-initialize")
 
-    def _retain_replay_output(self, group, key, value):
+    def _retain_replay_output(self, group, key, value, *, candidate=None):
         try:
             require(group in {"bundles", "git", "stores", "anchor"} and type(key) is bytes)
             self.replay_outputs[group].append((key, value))
             if group == "stores" and type(getattr(self, "store_session", None)) is _GateReaderSession and self.store_session.p_enabled:
-                self.store_session.register_history(value)
+                self.store_session.register_history(value, candidate)
             if self.anchor is not None:
                 self.anchor.recording_work["replay_output_work"] = self.replay_output_work
             c._capture_observe(self.replay_output_work, "M", "scope-replay-output", {
@@ -1991,11 +2040,25 @@ class _Reader:
             ["validate", incident["id"], launch["id"], retained["trace-ledger.json"]])
         require(trace_receipt == files["trace-receipt.json"])
         self.provenance(files, instruction, observation, launch["id"], write is not None)
-        self.git_relations(files, material_input, incident, body)
+        git_output = self.git_relations(files, material_input, incident, body)
         store.recheck()
         anchor.recheck("E_STALE")
         facts = _bundle_facts_values(files, checked, store.observation, body)
-        try:self._retain_replay_output("stores", files["shadow-record.json"], (store, files, retained, store.storage_rows))
+        try:
+            candidate = None
+            if git_output is not None:
+                frozen_files, rows, git, original = git_output
+                require(original is files and git is self.git and git.ledger is self, "E_STORE")
+                _bundle_names, names = c._c1_history_names_values(body["record_form"])
+                prefix = "ystack-evidence/" + incident["id"] + "/"
+                require(set(frozen_files) == {prefix + name[len("candidate-"):] for name in names}, "E_STORE")
+                candidate_files = {name: frozen_files[prefix + name[len("candidate-"):]] for name in sorted(names)}
+                candidate_paths = {name: self.capture(name, raw, candidate=True) for name, raw in candidate_files.items()}
+                candidate = (candidate_files, candidate_paths, git_output)
+                store.scope_candidate_acquisition = (self, files, retained, store.storage_rows, candidate)
+                self._retain_replay_output("git", files["shadow-record.json"], git_output)
+            self._retain_replay_output("stores", files["shadow-record.json"],
+                (store, files, retained, store.storage_rows), candidate=candidate)
         except BaseException as error:self._replay_output_failure(error, "reader-store-retention")
         return facts
 
@@ -2094,7 +2157,7 @@ class _Reader:
             require(facts == source_facts and candidate["commit_id"] == revision["commit_id"])
             return
         require(parents == [revision["commit_id"]])
-        self.write_relations(files, material_input, incident, body, facts, source_facts, candidate_tree)
+        return self.write_relations(files, material_input, incident, body, facts, source_facts, candidate_tree)
 
     def preparation(self, files, receipt, response):
         prep, producer = _preparation_document_values(files, receipt, response)
@@ -2145,8 +2208,7 @@ class _Reader:
                 == files["materialization-input.json"])
         publisher, publisher_body = self.writer._publisher(incident, tree)
         _scope_write_publication_values(write, files, publisher, publisher_body, incident, tree, rows)
-        try:self._retain_replay_output("git", files["shadow-record.json"], (frozen_files, rows, self.git, files))
-        except BaseException as error:self._replay_output_failure(error, "reader-git-retention")
+        return frozen_files, rows, self.git, files
 
     def allowed(self, path):
         import fnmatch
