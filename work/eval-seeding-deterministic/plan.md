@@ -1,5 +1,5 @@
 ---
-spec-blob: 5f05ca1505b1bb96c32bc8a2bcd7148f60a98692
+spec-blob: d4b45a565cfb789d9fdb2f9d5d67cceaeb51b289
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-26
@@ -14,8 +14,8 @@ one complete two-source delivery. Source preparation does not accept a dependenc
 a real recording, native qualification or either seed batch.
 
 This plan binds accepted G2 spec blob
-`5f05ca1505b1bb96c32bc8a2bcd7148f60a98692` at main
-`8c572e06a89981610d253a73559ebe953836120c` (PR #756).
+`d4b45a565cfb789d9fdb2f9d5d67cceaeb51b289` at main
+`554a9b025f8e8e368fd73b812f3220571a226f1b` (PR #758).
 The separate high-risk plan-only gate must pass before dependent code.
 RAW16 acquisition design
 locations retain historical source `c1d9d23e42e6efe2d6da1aae3d23b34564b4080d`
@@ -29,24 +29,20 @@ historical anchors, not current resume identities. Earlier paused sources
 `f2abe2b02963542fe6505bbc028a423842040880` and the prior budget pause
 `48cd106a2f364fcab012779e5e651769784c3a09` and the prior C1 pause
 `ff9c26b3a1314f13efc0d97690ccf8b9fbe17bdf` and invoice source
-`5ceb67c9e33bb52f359514d8e785a26e77ecf491` are historical. Preserve source
-`60254f85f1c2db82c569688e989d15136ec9fc58`, with parents
-`3fbae93f0e61692b564ddd9cef7a9aa2ee54dd46` then
-`c871a8883d9a8ea98c0178eeefda4384418910ae`, on the existing branch
-`codex/impl/eval-source-relay-replay`. Its physical carrier requires a separate
-operator disposition. A saved OID or earlier clean record does not prove a
-complete current worktree. This plan grants no restoration or source GO.
-Any separately approved restoration may only restore missing bytes from that
-exact OID, preserving existing bytes, index and refs. Verify the complete clean
-carrier anew before an ordinary merge of accepted main on that same branch.
-Then rebind the exact artifacts, source, local/remote head, PR state and base;
-obtain fresh independent source review and manager GO before code or fixtures.
-Do not recreate the attempt, reset, rebase, clean or reuse an old GO.
-The source's partial close change has only AST evidence and stale pins. Its D
-pins must bind resumed source bytes; neither static agreement nor a completed
-plan accepts the full caller, accounting or native qualification. B, T and
-complete C remain unaccepted. Preserve the invoice obligations and complete
-the candidate, bundle, remote close and full-manifest work below.
+`5ceb67c9e33bb52f359514d8e785a26e77ecf491` and
+`60254f85f1c2db82c569688e989d15136ec9fc58` are historical. The current paused
+source is `53bed46d5eb694bfd05578f5ac1841b9443749c6`, parent
+`1c06296daecd57bfc92fcd18d56c888263aefcb5`, with last merged main
+`69857cc790c3096394cb0bb1822b6fc5b9ea6adb`, on the existing branch
+`codex/impl/eval-source-relay-replay`. Recheck its clean worktree, local/remote
+head, absent PR and existing #439 claim before an ordinary merge of accepted main
+on that same branch. A prior clean record does not prove current state. Rebind
+artifacts, source, complete recipes and resources; obtain fresh independent review
+and manager GO before the bounded edits or ordinary fixtures/CI below. This plan
+grants no restoration or execution. Do not recreate the attempt, reset, rebase,
+clean or reuse an old GO. Prior preparation checkpoints do not accept G3, the
+full caller, accounting or native qualification. Preserve all prior failed
+runs, unresolved proof and invoice obligations; the full requirements below remain.
 The operator has accepted
 the resource, fd3 v3 and retention contract, and the distinct fixed C1 FD6
 live-P handoff and fixed candidate originals in accepted G2. These decisions
@@ -727,6 +723,94 @@ The sole public protocol change is the accepted same-fd3 v3 frame below, within
 allowed receiver paths. The sole bootstrap edit is the fixed C2 exec in R9.3;
 no unknown parent source is added. A real producer outside the list remains
 blocked pending its exact scope gate.
+
+### Existing regression compatibility (R9.2)
+
+This amendment changes only these existing test contacts. It keeps the product
+sources, the six C1 functional paths and three product pin paths unchanged.
+Design locations bind `53bed46d5eb694bfd05578f5ac1841b9443749c6`; rebind exact
+source/recipe bytes after the plan lands and main merges. Do not extend a selector
+or add a loader, observer, test framework, scenario or diagnostic path.
+
+| File | Fixed contact and order of work |
+| --- | --- |
+| `scripts/test/scope-qualification.test.sh` | `PY_STALE_PREPARE`, then its directly bound source SHA and line assertions: inspect the whole generation recipe; bind its three actual sources; check every fixed transformation before changing the private copies. Recompute the complete source-to-copy line maps and prove the inverse against the bound originals. Update only the corresponding source hash/line assertions in the existing owned/stale controls and dashboard caller binding. |
+| `scripts/test/scope-qualification.test.sh` | `PY_SAME_CALL_OWNED_CONTROLS:sudo_provenance_controls`: keep the original `provenance/recheck/close`, `FixedSudo/fixed_sudo` and actual FD seam. Extract their fixed current dependencies and initialize the receiver state described below before running the original twelve cases. |
+| `scripts/test/evals-framework.test.sh` | `review_fixture` and its fixed `review_substitute` calls: verify the four driver catalog positions (`CATALOG_SHA`, `FIXED_PINS`, `verify_runtime`, `run_program`) and the one launcher position. Bind those exact replacements, then the original approval replacements, then measure the private driver and bind that digest in the private launcher. Keep strict counts and exact private diffs; do not compute an expected replacement count from the input. |
+| `scripts/test/scope-gate-generation.test.sh` | `verifier_observation_value_controls`: extract the unique `environment_entry_sha = _verifier_registry_entry_sha(registry[0])`, the unique `raw = _verifier_observation_values(environment_id, environment_entry_sha, anchor.accepted[0], target_repository_id, verifier_sha)`, and the final `return raw`, in that order. Check complete arguments, targets and data flow. Apply only the existing `anchor.accepted` seam. Keep the intervening production recording branch in place and outside this existing value-only comparison. |
+| `scripts/test/candidate-content-preparation-fixtures.py` | `raw16_preparation_P_handoff`: wire the two existing transitions described below in its seven original cases. Check the inspect result before indexing, while retaining the actual failed retention and its errors. |
+
+The stale recipe's design source SHA-256s are:
+
+- `scope/v1/evaluate-scope.sh`: `fe6048b5eada5d86531e085acd0a9f46b73028d348349ab932e8c59f4e2ed66a`.
+- `scope/v1/read-shadow-evidence.py`: `201791d1783d4130ec947bc60ed61cd5cec9d45da98eae033d1b859b9761e404`.
+- `shadow/v1/_consumer.py`: `dd8ef865177d4b2714117cb1631bb24d896215be56475544321b2959c024ccee`.
+
+Confirm these against independently reviewed source bytes before fixing expected
+literals. A later source change needs fresh binding review; runtime hashing of the
+file under test cannot supply its own expected value. Keep `evaluate-scope.sh` at
+blob `605370780345539c5ed7b9debbd04f5327610128`. Preserve all four literal observer
+bodies and their existing fixed hashes, nine copies/logs/bindings/line maps, complete
+inverse transforms, source/copy identity checks, errors, returns, closes and caps.
+A new SHA alone is not proof that the generated copies still implement the recipe.
+
+For sudo, retain the fixed AST selection of `require/parse/same`. Add the six
+`_provenance_*_values` helpers actually called by `provenance`,
+`_SCOPE_RUNTIME_SITES`, `_scope_runtime_value_values`, `_scope_runtime_equal_values`,
+and the actual `_GateReaderSession` definition for the existing type checks;
+do not instantiate that session. Select the original Reader methods `anchor_for`,
+`_runtime_equal`, `_close_source_copies`, `_initialize_replay_outputs`,
+`_retain_replay_output` and `_replay_output_failure` alongside the original three.
+Verify each definition is unique and bind its complete source bytes. Use the same
+consumer module and fixed standard-library dependencies already used by this test.
+Initialize the actual constructor prerequisites: empty `source_copies`, no store
+session or completion owner, runtime ordinals from the fixed sites, and the
+original replay-output initializer. Supply the existing ordinary anchor's runtime
+observation/work containers and actual fixture bytes/held identities for its
+config, verifier and installed-input fields. Do not substitute constant equality,
+empty close handlers, fabricated original recordings or accepted completion.
+Preserve recording errors and all twelve original sudo results, including content
+versus identity digest, drift, factory/close failure and fallback flags. Retain
+registration, reverse close and the original exception object checks.
+
+For T handoff, call `_T_cleanup_begin(anchor, 'preparation-scratch')` before the
+inspect phase, record any actual removal, then `_T_cleanup_done(anchor)` before
+`create_T('inspect')`; call `_T_inspection_returned(anchor)` immediately after it.
+This fixture removes no reserved entries; do not invent a removed set. In the existing success branch, call the original `_retain_preparation` and
+require a non-None result, two actual runtime copies and the original second-copy
+identity/open-state assertions.
+For the existing H-copy, save `_begin_T_parent(anchor, parent)`, perform the
+original `native.copy_capture(..., 'reproduction', ...)`, refresh the existing
+runtime parents, then call `_finish_T_parent` with that saved transition and only
+`{'reproduction'}`. Keep the original seal and close tail. Do not write holder,
+receipt or success flags directly. Preserve `stable`, `P-target-drift`,
+`parent-mode`, `parent-inode`, `T-close-failure`, `T-transfer-failure` and
+`T-close-cancel`, their full bytes/fees and same-object cancellation assertions.
+
+Before execution, statically compare all five contacts with their bound originals:
+only the listed bindings and prerequisites may differ. Check the full generated
+recipes, all AST selections and complete private-copy differences. Preserve every
+trial/grade/label/approval/tamper/repeat/dashboard control; preserve the verifier's
+inline byte comparison, non-ASCII/NaN cases, four-stage order, ordinary faults and
+marked cancellation identity. Missing, duplicate or out-of-range transforms,
+wrong source/copy/line, absent dependencies or removed guards must still fail.
+Use the existing negative cases and rejection checks; add no diagnostic matrix.
+Verify every other path is unchanged and measure the complete retained gross diff
+against the existing range without resetting old costs or deleting tests.
+
+After separate plan acceptance and protected merge, fresh exact source/recipe/
+resource review and manager GO precede implementation and any test execution.
+Run `bash -n` on the three changed shell tests and parse the changed Python fixture
+without importing it. Use existing pinned tools only. For execution, the existing
+CI environment must run complete `evals-framework.test.sh`,
+`scope-gate-generation.test.sh`, `candidate-content-preparation.test.sh` and
+`scope-qualification.test.sh` under `scripts/test/`, then satisfy the existing
+full matrix on the final combined head. Bind each full command, head and raw exit
+output; previously unreached suites remain unproved until they complete. Existing
+bounded local ordinary fixtures require their own fresh resource GO. This adds no
+local full-scope, LOCAL7/D, native or real-target window, network, install or
+activation. Preserve old failures, skips, UNKNOWN and all final native/seed gates;
+quick CI and ordinary fixtures cannot satisfy them. A wider fix returns to G2.
 
 ### S1–S10 and invariant mapping
 
@@ -2796,15 +2880,19 @@ gates (R9.6).
   cannot leave the PR whose test checks their digests.
 - PR 3: `review_size: standard`, about 300-400 net added lines.
 - This plan-only amendment: `review_size: standard`. One concern: the accepted
-  fixed candidate originals, their same-acquisition P/S path, remote completion
-  and full-manifest proof. The runtime-invoice obligations and PR 1b's
-  complete-concern range remain unchanged.
+  four-test source and lifecycle compatibility. All runtime-invoice obligations
+  and PR 1b's complete-concern range remain unchanged.
 
 Each range waives only the soft line signal, never scope, tests, CI, review or human
 merge.
 
 ## Risks
 
+- **Test binding can hide a missing check.** The riskiest compatibility step is
+  extracting current private dependencies and entering the real T transitions.
+  Updating hashes/counts alone or filling successful state would hide failures.
+  Use the bound original methods and full inverse/control comparisons above;
+  reject broader loaders, constant stubs and product changes for fixture fit.
 - **Candidate ownership and fit.** The riskiest step is binding original Git bytes
   to the outer authentication while preserving native failure and close order.
   Capturing the full fixed set avoids borrowing ambiguous nested or parent bytes.
