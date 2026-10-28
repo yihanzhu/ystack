@@ -2,6 +2,13 @@
 import sys
 import os
 
+
+def network_audit(event, _args):
+    if event in ('socket.__new__', 'socket.getaddrinfo'):
+        raise RuntimeError('fixture-network-denied')
+
+
+sys.addaudithook(network_audit)
 _INITIAL_ENV = dict(os.environ)
 import importlib.util
 
@@ -180,6 +187,36 @@ class MappingAndWire(unittest.TestCase):
         result, _ = self.assert_result(sequence(value), 'collected', req=req)
         self.assertIn(m.PREFIX + 'canonical-head-unavailable',
                       m.missing_requirements(result['target']['value'], result['files']['value']))
+
+    def test_ascii_identity_through_owner(self):
+        req = request()
+        req['owner'] = 'K'
+        for name, outcome in [('k/SAMPLE', 'collected'), ('K/sample', 'refused'), ('Ｋ/sample', 'refused')]:
+            value = pr()
+            value['base']['repo']['full_name'] = name
+            owner = c._Owner()
+            with patch.object(h, 'native_connection', Script(sequence(value))):
+                result = owner.run(req, time.monotonic() + 3)
+            self.assertEqual(result['outcome'], outcome)
+            self.assertEqual(owner.phase, 'reaped')
+            self.assertEqual(owner.frames.ordinal, 3 if outcome == 'collected' else 1)
+
+    def test_nested_identity_types_and_absence(self):
+        for side in ('base', 'head'):
+            for nested in (False, True):
+                for value in ([], 'invalid', 9, False, None, 'missing'):
+                    item = pr()
+                    container = item[side] if nested else item
+                    key = 'repo' if nested else side
+                    if value == 'missing':
+                        del container[key]
+                    else:
+                        container[key] = value
+                    absent = value is None or value == 'missing'
+                    with self.subTest(side=side, nested=nested, value=value):
+                        result, script = self.assert_result([wire(item)], 'unavailable' if absent else 'refused',
+                                                            'identity-unavailable' if absent else 'invalid-provider-data')
+                        self.assertEqual(len(script.connections), 1)
 
     def test_missing_optional(self):
         value = pr()
@@ -423,6 +460,61 @@ class NativeConstructor(unittest.TestCase):
         self.assertEqual(raised.exception.reason, m.PREFIX + 'request-timeout')
         self.assertEqual(closed, [True])
 
+    def test_tls_construction_failures(self):
+        import ssl
+        for stage, certificate, close_error in [('wrap', True, False), ('wrap', False, False),
+                                                 ('handshake', True, False), ('handshake', False, False),
+                                                 ('handshake', True, True)]:
+            calls = []
+            secret = 'TLS_SENTINEL_PROVIDER_TEXT'
+            def reject():
+                if certificate:
+                    raise ssl.SSLCertVerificationError(1, secret)
+                raise ssl.SSLError(1, secret)
+            class Sock:
+                def __init__(self, name):
+                    self.name = name
+                def settimeout(self, seconds):
+                    self.timeout = seconds
+                def connect(self, address):
+                    calls.append(('connect', self.name, address))
+                def do_handshake(self):
+                    calls.append(('handshake', self.name))
+                    reject()
+                def close(self):
+                    calls.append(('close', self.name))
+                    if close_error:
+                        raise OSError(secret)
+            raw, wrapped = Sock('raw'), Sock('wrapped')
+            class Context:
+                def __init__(self, *_):
+                    pass
+                def load_default_certs(self, *_):
+                    pass
+                def get_ca_certs(self):
+                    return [1]
+                def wrap_socket(self, owned, **options):
+                    self.owned = owned
+                    calls.append(('wrap', options['server_hostname']))
+                    if stage == 'wrap':
+                        reject()
+                    return wrapped
+            addresses = [(socket.AF_INET, socket.SOCK_STREAM, 6, '', (ip, 443))
+                         for ip in ('140.82.112.5', '140.82.112.6')]
+            with patch.object(ssl, 'SSLContext', Context), patch.object(socket, 'getaddrinfo', return_value=addresses) as lookup, \
+                    patch.object(socket, 'socket', return_value=raw) as constructor:
+                result = h.collect(request(), lambda _: time.monotonic() + 5, lambda _: None, lambda: False)
+            with self.subTest(stage=stage, certificate=certificate, close_error=close_error):
+                self.assertEqual(result['reason_id'], m.PREFIX + ('tls-verification-failed' if certificate else 'network-failed'))
+                self.assertEqual(result['counters']['requests_started'], 1)
+                self.assertEqual(result['counters']['responses_read'], 0)
+                self.assertEqual(lookup.call_count, 1)
+                self.assertEqual(constructor.call_count, 1)
+                self.assertEqual([call for call in calls if call[0] == 'connect'], [('connect', 'raw', addresses[0][4])])
+                self.assertEqual([call for call in calls if call[0] == 'close'], [('close', 'raw' if stage == 'wrap' else 'wrapped')])
+                self.assertEqual(result['cleanup_errors'], ['close-failed'] if close_error else [])
+                self.assertNotIn(secret.encode(), m.encode(result))
+
     def test_forbidden_addresses(self):
         import ssl
         class Context:
@@ -483,6 +575,8 @@ class OwnedWorker(unittest.TestCase):
         self.assertLess(elapsed, 8)
         self.assertEqual(result['reason_id'], m.PREFIX + 'request-timeout')
         self.assertEqual(owner.phase, 'reaped')
+        self.assertEqual(result['counters']['requests_started'], 1)
+        self.assertEqual(result['counters']['responses_read'], 0)
         self.assertEqual(os.WTERMSIG(owner.status), signal.SIGKILL)
 
     def test_actual_thirty_second_attempt_stall(self):
@@ -533,6 +627,8 @@ class OwnedWorker(unittest.TestCase):
                     result = owner.run(request(), time.monotonic() + 4)
                 self.assertEqual(result['reason_id'], m.PREFIX + 'cancelled', checkpoint)
                 self.assertEqual(owner.phase, 'reaped')
+                self.assertEqual(result['counters']['requests_started'], 2 if checkpoint == 'page-transition' else 1)
+                self.assertEqual(result['counters']['responses_read'], 1 if checkpoint == 'page-transition' else 0)
             finally:
                 signal.signal(signal.SIGTERM, previous)
                 c._CANCELLED = False
@@ -635,13 +731,18 @@ class EntryControls(unittest.TestCase):
         environment.update({key: 'COLLECTOR_SENTINEL_NEVER_READ' for key in
                             ['GH_TOKEN', 'GITHUB_TOKEN', 'HTTPS_PROXY', 'SSL_CERT_FILE',
                              'SSL_CERT_DIR', 'SSLKEYLOGFILE', 'OPENSSL_CONF', 'HOME', 'PYTHONPATH']})
+        denial = ('import sys\n'
+                  'def deny_network(event,args):\n'
+                  '    if event in ("socket.__new__","socket.getaddrinfo"):\n'
+                  '        raise RuntimeError("fixture-network-denied")\n'
+                  'sys.addaudithook(deny_network)\n')
         with tempfile.TemporaryDirectory(prefix='collector-startup-config-') as owned:
             config = os.path.join(owned, 'COLLECTOR_SENTINEL_OPENSSL_CONF')
             with open(config, 'w', encoding='ascii') as stream:
                 stream.write('openssl_conf = fixture_init\n[fixture_init]\n')
             environment['OPENSSL_CONF'] = config
             environment['SSLKEYLOGFILE'] = os.path.join(owned, 'COLLECTOR_SENTINEL_KEYLOG')
-            return subprocess.run([sys.executable, *flags, '-c', code], input=data,
+            return subprocess.run([sys.executable, *flags, '-c', denial + code], input=data,
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                   env=environment, timeout=timeout, check=False)
 
@@ -649,6 +750,114 @@ class EntryControls(unittest.TestCase):
         return ('import sys,os,importlib.util; '
                 f's=importlib.util.spec_from_file_location("entry",{ENTRY!r}); '
                 'e=importlib.util.module_from_spec(s); s.loader.exec_module(e); ')
+
+    def test_final_clock_controls_exit_and_window(self):
+        for start, end in [('2020-03-01T00:00:00Z', '2020-02-28T00:00:00Z'),
+                           ('2020-01-01T00:00:00Z', '2020-01-15T00:00:00Z')]:
+            control = (f"times=iter({[start, '2020-03-01T00:00:00Z', end]!r})\n"
+                       "e.model.utc_now=lambda: next(times) if os.getpid()==parent else '2020-03-01T00:00:00Z'")
+            result = self.child(self.public_code(control), m.encode(request()))
+            self.assertEqual(result.returncode, 65, result.stderr)
+            self.assertFalse(result.stderr)
+            value = json.loads(result.stdout)
+            self.assertEqual(value['outcome'], 'refused')
+            self.assertEqual(value['reason_id'], m.PREFIX + 'clock-invalid')
+            self.assertEqual(value['evidence']['worker_retirement'], 'reaped')
+            self.assertEqual(value['evidence']['requests_started'], 3)
+            self.assertEqual(value['target']['state'], 'unavailable')
+
+    def test_negative_final_elapsed_is_not_success(self):
+        control = """
+run=e._Owner.run
+def rollback_after_wait(owner,request,deadline):
+    result=run(owner,request,deadline)
+    rolled=e.time.monotonic()-60
+    e.time.monotonic=lambda: rolled
+    return result
+e._Owner.run=rollback_after_wait
+"""
+        result = self.child(self.public_code(control), m.encode(request()))
+        self.assertEqual(result.returncode, 65, result.stderr)
+        self.assertFalse(result.stderr)
+        value = json.loads(result.stdout)
+        self.assertEqual(value['reason_id'], m.PREFIX + 'clock-invalid')
+        self.assertEqual(value['evidence']['worker_retirement'], 'reaped')
+
+    def test_malformed_final_frames_through_public_main(self):
+        payloads = []
+        for reason in ({}, [], None, 1):
+            value = m.worker_result('refused', 'invalid-http')
+            value['reason_id'] = reason
+            payloads.append(value)
+        payloads += [[], {}, dict(m.worker_result('refused', 'invalid-http'), counters=[])]
+        for payload in payloads:
+            data = m.encode(payload)
+            control = f"""
+import signal
+def forged(request,events,admission,deadline,mask):
+    signal.pthread_sigmask(signal.SIG_SETMASK,mask)
+    e._close_except({{events,admission}})
+    os.write(events,b'B\\x01')
+    reply=os.read(admission,9)
+    assert len(reply)==9 and reply[0]==1
+    data={data!r}
+    os.write(events,b'R'+len(data).to_bytes(8,'big')+data)
+    os.close(events)
+    os.close(admission)
+    os._exit(0)
+e._worker=forged
+"""
+            result = self.child(self.public_code(control), m.encode(request()))
+            self.assertEqual(result.returncode, 65, result.stderr)
+            self.assertFalse(result.stderr)
+            value = json.loads(result.stdout)
+            self.assertEqual(value['reason_id'], m.PREFIX + 'ipc-invalid')
+            self.assertEqual(value['evidence']['worker_retirement'], 'reaped')
+            self.assertEqual(value['evidence']['requests_started'], 1)
+
+    def test_default_factory_is_denied_before_network(self):
+        code = self.load() + """
+import socket,ssl
+class Context:
+    def __init__(self,*args): pass
+    def load_default_certs(self,*args): pass
+    def get_ca_certs(self): return [1]
+ssl.SSLContext=Context
+for operation in (lambda: e.http.native_connection(e.time.monotonic()+5), lambda: socket.socket()):
+    try:
+        operation()
+    except RuntimeError as error:
+        assert str(error)=='fixture-network-denied'
+    else:
+        raise AssertionError('network guard did not stop operation')
+print('default-factory-DNS-and-socket-denied')
+"""
+        result = self.child(code)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, b'default-factory-DNS-and-socket-denied\n')
+        self.assertFalse(result.stderr)
+
+    def test_primary_interpreter_network_denial(self):
+        for operation in (lambda: _REAL_RESOLVER('api.github.com', 443), lambda: _REAL_SOCKET()):
+            with self.assertRaisesRegex(RuntimeError, '^fixture-network-denied$'):
+                operation()
+
+    def test_post_collection_cancellation_keeps_counts(self):
+        control = """
+run=e._Owner.run
+def cancel_after_wait(owner,request,deadline):
+    result=run(owner,request,deadline)
+    e._CANCELLED=True
+    return result
+e._Owner.run=cancel_after_wait
+"""
+        result = self.child(self.public_code(control), m.encode(request()))
+        self.assertEqual(result.returncode, 65, result.stderr)
+        value = json.loads(result.stdout)
+        self.assertEqual(value['reason_id'], m.PREFIX + 'cancelled')
+        self.assertEqual(value['evidence']['requests_started'], 3)
+        self.assertEqual(value['evidence']['responses_read'], 3)
+        self.assertEqual(value['evidence']['worker_retirement'], 'reaped')
 
     def test_public_invalid_and_app_bound(self):
         for data, reason in [(b'{}', 'invalid-input'), (b'x' * 16385, 'invalid-input'),
@@ -672,8 +881,8 @@ class EntryControls(unittest.TestCase):
             self.assertEqual(result.returncode, 65)
             self.assertEqual(json.loads(result.stdout)['reason_id'], m.PREFIX + 'unsupported-runtime')
 
-    def test_startup_order_and_real_public_io(self):
-        code = f'''
+    def public_code(self, before_main=''):
+        return f'''
 import sys,os,importlib.util
 seen=[]
 def audit(event,args):
@@ -704,9 +913,12 @@ def factory(deadline):
     return Connection(responses.pop(0))
 parent=os.getpid()
 e.http.native_connection=factory
+{before_main}
 sys.exit(e.main())
 '''
-        result = self.child(code, m.encode(request()))
+
+    def test_startup_order_and_real_public_io(self):
+        result = self.child(self.public_code(), m.encode(request()))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(result.stderr)
         value = json.loads(result.stdout)

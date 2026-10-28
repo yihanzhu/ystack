@@ -192,8 +192,15 @@ def target(value, request, end):
     try:
         base = value['base']
         head = value['head']
-        if head.get('repo') is None or base.get('repo') is None:
-            fail('identity-unavailable', 'unavailable')
+        for side in (base, head):
+            if side is None:
+                fail('identity-unavailable', 'unavailable')
+            if type(side) is not dict:
+                fail('invalid-provider-data')
+            if side.get('repo') is None:
+                fail('identity-unavailable', 'unavailable')
+            if type(side['repo']) is not dict:
+                fail('invalid-provider-data')
         projection = {
             'change_request_id': provider_id(value['id']),
             'number': provider_id(value['number']),
@@ -203,11 +210,11 @@ def target(value, request, end):
             'head_sha': head['sha'], 'base_sha': base['sha'],
             'state': value['state'],
         }
-    except (KeyError, AttributeError):
+    except KeyError:
         fail('identity-unavailable', 'unavailable')
     except TypeError:
         fail('invalid-provider-data')
-    if not (type(projection['repository_full_name']) is str
+    if not (matches(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/[A-Za-z0-9][A-Za-z0-9._-]{0,99}', projection['repository_full_name'])
             and matches(r'[0-9a-f]{40}', projection['head_sha'])
             and matches(r'[0-9a-f]{40}', projection['base_sha'])
             and projection['state'] in ('open', 'closed')):
@@ -305,7 +312,7 @@ def validate_worker(value, request=None):
     if not exact(value, ['outcome', 'reason_id', 'target', 'files', 'counters', 'cleanup_errors']):
         fail('ipc-invalid')
     outcome = value['outcome']
-    if type(outcome) is not str or value['reason_id'] not in {PREFIX + r for r in OUTCOMES.get(outcome, set())}:
+    if type(outcome) is not str or type(value['reason_id']) is not str or value['reason_id'] not in {PREFIX + r for r in OUTCOMES.get(outcome, set())}:
         fail('ipc-invalid')
     counters = value['counters']
     if not exact(counters, ['requests_started', 'responses_read', 'body_bytes', 'pages']):
@@ -389,8 +396,10 @@ def validate_worker(value, request=None):
 
 
 def record(request, started, ended, elapsed, result, retirement, cleanup):
-    if ended < started or elapsed < 0:
-        result = worker_result('refused', 'clock-invalid')
+    if (ended < started or elapsed < 0
+            or result['outcome'] == 'collected' and result['target']['value']['updated_at'] > ended):
+        result = worker_result('refused', 'clock-invalid', counters=result['counters'],
+                               cleanup=result['cleanup_errors'])
     collected = result['outcome'] == 'collected'
     mapped = result['target']['value'] if collected else None
     files = result['files']['value'] if collected else None

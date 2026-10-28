@@ -127,6 +127,9 @@ Evidence records local requests started, fully read responses, body bytes, pages
 bounded enumeration, count comparison, bracket comparison and worker retirement.
 `count-matched` proves equality only. File-set completeness remains unknown.
 A started request does not prove that GitHub received it.
+If a worker fails before its result arrives, the parent retains admitted starts and
+completed-response events. Other counters contain only bytes/pages reported to the
+parent; zero does not establish that no unreported worker activity occurred.
 
 The normalizer remains unavailable with no snapshot. Its ordered missing
 requirements are App identity, canonical head mapping, reported file count, usable

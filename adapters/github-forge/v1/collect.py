@@ -146,6 +146,7 @@ class _Frames:
         self.request = request
         self.buffer = bytearray()
         self.ordinal = 0
+        self.completed = 0
         self.active = None
         self.result = None
         self.request_deadline = None
@@ -174,6 +175,7 @@ class _Frames:
                 else:
                     if ordinal != self.active:
                         model.fail('ipc-invalid')
+                    self.completed += 1
                     self.active = self.request_deadline = None
             elif tag == ord('R'):
                 if len(self.buffer) < 9:
@@ -346,7 +348,10 @@ class _Owner:
             if first is None:
                 first = model.Failure('refused', 'worker-ownership-lost')
         if first is not None:
-            return model.worker_result(first.outcome, first.reason.removeprefix('github.collect.'))
+            counters = {'requests_started': self.frames.ordinal, 'responses_read': self.frames.completed,
+                        'body_bytes': 0, 'pages': 0}
+            return model.worker_result(first.outcome, first.reason.removeprefix('github.collect.'),
+                                       counters=counters)
         return model.worker_result('refused', 'worker-failed')
 
 
@@ -393,20 +398,22 @@ def main():
             model.fail('credential-binding-unavailable', 'unavailable')
         result = owner.run(request, deadline)
         if owner.cleanup and result['outcome'] == 'collected':
-            result = model.worker_result('refused', 'close-failed')
+            result = model.worker_result('refused', 'close-failed', counters=result['counters'],
+                                         cleanup=result['cleanup_errors'])
     except model.Failure as error:
         result = model.worker_result(error.outcome, error.reason.removeprefix('github.collect.'))
     except (OSError, ValueError):
         result = model.worker_result('refused', 'output-failed')
     try:
         if _CANCELLED and result['outcome'] == 'collected':
-            result = model.worker_result('unavailable', 'cancelled')
+            result = model.worker_result('unavailable', 'cancelled', counters=result['counters'],
+                                         cleanup=result['cleanup_errors'])
         output = model.record(request, started, model.utc_now(), time.monotonic() - started_mono,
                               result, owner.phase, owner.cleanup)
         payload = model.encode(output) + b'\n'
-        _write(1, payload, deadline if result['outcome'] == 'collected' else deadline + 2,
-               cancellation=result['outcome'] == 'collected')
-        status = 0 if result['outcome'] == 'collected' else 65
+        collected = output['outcome'] == 'collected'
+        _write(1, payload, deadline if collected else deadline + 2, cancellation=collected)
+        status = 0 if collected else 65
     except (model.Failure, OSError, ValueError):
         status = 65
     finally:
