@@ -18,10 +18,11 @@ sys.modules[spec.name] = c
 spec.loader.exec_module(c)
 source = (root / 'shadow/v1/enforced-reproduction.py').read_text()
 names = {'Refusal', 'canonical', 'sha', 'parse', 'document_ref',
-         '_native_provenance_values', '_reproduction_provenance_values', '_reproduction_record_values', '_reproduction_bundle_values', 'StableFile'}
+         '_native_provenance_values', '_runtime_sha_values', '_reproduction_provenance_values', '_reproduction_record_values', '_reproduction_bundle_values', 'StableFile'}
 selected = [node for node in ast.parse(source).body
             if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in names]
 assert {node.name for node in selected} == names
+assert len(selected) == len(names) == 11
 values = {'c': c, 'OUTPUT_LIMIT': 1024 * 1024, 'dataclasses': dataclasses, '__name__': __name__}
 import __future__
 exec(compile(ast.Module(body=selected, type_ignores=[]), '<actual-reproduction-values>', 'exec',

@@ -211,6 +211,7 @@ with tempfile.TemporaryDirectory(prefix='coverage-git-') as area:
         'publisher_pull_requests':[pull]}
     reader=reader_module._Reader.__new__(reader_module._Reader)
     reader.store_session=None
+    reader.source_copies=[];reader.capture_completion_owner=None
     reader.owned=[];reader.inputs=[];reader.commands=[];reader.commands_open=True;reader.anchor=None
     reader.deadline=time.monotonic()+120;reader.scratch=area;reader.captures=area/'captures';reader.captures.mkdir()
     reader.runtime=area/'runtime';reader.runtime.mkdir();reader.no_hooks=reader.runtime/'no-hooks';reader.no_hooks.mkdir()
@@ -2381,101 +2382,168 @@ def sudo_provenance_controls():
     namespace={'c':c,'Path':pathlib.Path,'PACKAGE':root,'sys':sys,'sysconfig':sysconfig}
     exec(compile(actual,'actual-reader-provenance-owned','exec'),namespace)
     ActualReader=namespace['ActualReader'];rows=[];leaf=area/'sudo-owned-leaf';leaf.write_bytes(b'ordinary fixed executable data')
-    for case in ('no-change','withheld-write','content-digest','wrong-digest','wrong-component','nonroot','writable','nlink','drift','factory-failure','close-failure','fallback'):
-        calls=[];fds=[];closed=[];states=[];marker=OSError('fixed owned sudo operation failure')
-        def metadata(fd):
-            value=os.fstat(fd)
-            values={key:getattr(value,key) for key in ('st_dev','st_ino','st_mode','st_uid','st_gid','st_nlink','st_size','st_mtime_ns','st_ctime_ns')}
-            values.update(st_uid=0,st_mode=stat.S_IFREG|0o555,st_nlink=1)
-            if case=='nonroot':values['st_uid']=os.getuid() or 1
-            if case=='writable':values['st_mode']|=0o022
-            if case=='nlink':values['st_nlink']=2
-            return types.SimpleNamespace(**values)
-        def opened(path,flags):
-            assert path=='/usr/bin/sudo';calls.append(['open',path,flags])
-            fd=os.open(leaf,os.O_RDONLY|os.O_NOFOLLOW);fds.append(fd);states.append(metadata(fd));return fd
-        def inspected(fd):
-            if case=='factory-failure':raise marker
-            return metadata(fd)
-        def named(path):
-            assert path=='/usr/bin/sudo';value=metadata(fds[-1])
-            if case=='drift' and len(calls)>1:value.st_ino+=1
-            return value
-        def closed_fd(fd):
-            os.close(fd);closed.append(fd)
-            if case=='close-failure':raise marker
-        operating=types.SimpleNamespace(open=opened,fstat=inspected,lstat=named,close=closed_fd,
-            O_RDONLY=os.O_RDONLY,O_NOFOLLOW=os.O_NOFOLLOW,stat_result=os.stat_result)
-        if case!='fallback':operating.O_EXEC=1<<29
-        domain={'dataclasses':dataclasses,'os':operating,'stat':stat,'c':c,'sha':c.digest,'canonical':c.canonical,'require':namespace['require']}
-        sys.modules['sudo_contract_owned_definitions']=types.ModuleType('sudo_contract_owned_definitions')
-        domain['__name__']='sudo_contract_owned_definitions'
-        exec(compile(ast.Module(body=[fixed,factory],type_ignores=[]),'actual-fixed-sudo-owned','exec'),domain)
-        obj=ActualReader.__new__(ActualReader);obj.owned=[];obj.inputs=[];obj.anchor=None
-        obj.source_copies=[];obj.store_session=None;obj.capture_completion_owner=None
-        obj._runtime_ordinals={site:0 for site in namespace['_SCOPE_RUNTIME_SITES']}
-        obj._initialize_replay_outputs()
-        digest='1'*64;held=types.SimpleNamespace(sha256=digest)
-        obj.package_sources={p:held for p in ('shadow/v1/write-shadow.py','shadow/v1/enforced-reproduction.py')}
-        obj.python=obj.jq=obj.bash=obj.git_binary=obj.consumer=held
-        supervisor=types.SimpleNamespace(path=c.ANCHOR+'/host-supervisor.py',read=lambda limit,code:b'original supervisor')
-        config_raw=c.canonical({'fixture':'ordinary sudo host config'})
-        verifier_raw=c.canonical({'fixture':'ordinary sudo verifier'})
-        installed_raw=c.canonical({'fixture':'ordinary sudo installed input'})
-        config_held=types.SimpleNamespace(path=c.ANCHOR+'/host-config.json',components=[os.stat(leaf)],raw=config_raw)
-        verifier_held=types.SimpleNamespace(path=c.ANCHOR+'/sudo-fixture-verifier.json',components=[os.stat(leaf)],raw=verifier_raw)
-        installed_held=types.SimpleNamespace(path=c.ANCHOR+'/sudo-fixture-installed.json',components=[os.stat(leaf)],raw=installed_raw)
-        obj.anchor=types.SimpleNamespace(held=[supervisor,config_held,verifier_held,installed_held],recheck=lambda code:None,
-            private_observations={'entropy':{},'commands':{'runtime_values':[]}},recording_work={},
-            config_raw=config_raw,config={'identity_paths':{'verifier':verifier_held.path},
-                'installed_files':{'fixture':installed_held.path}},scope_verifier_input=(verifier_raw,verifier_held),
-            installed={'fixture':(installed_raw,c.digest(installed_raw))})
-        def hold(path,limit,**options):
-            assert str(path)!='/usr/bin/sudo';return held
-        obj.hold=hold
-        def acquire():
-            result=domain['fixed_sudo']();calls.append(['factory-return']);assert obj.owned==[];return result
-        obj.enforced=types.SimpleNamespace(fixed_sudo=acquire)
-        native={k:digest for k in ('source_sha256','build_script_sha256','build_record_sha256','binary_locator_sha256','binary_sha256','python_locator_sha256','python_sha256','dependency_record_sha256')}
-        native.update(context_version=2,binary_size=1,python_abi=sysconfig.get_config_var('SOABI'),loader_mode='rtld-now-local.v1',python_locator_sha256=c.digest(sys.executable.encode()))
-        instruction=b'fixed ordinary instruction';observation=c.canonical({'fixed':'observation'})
-        # The OS metadata transport adapts root ownership only; real data and descriptor lifecycle remain ordinary.
-        fd=os.open(leaf,os.O_RDONLY);state=metadata(fd);os.close(fd)
-        identity=c.digest(c.canonical(list(c._identity(state))))
-        expected=identity
-        if case=='content-digest':expected=c.digest(leaf.read_bytes())
-        if case=='wrong-digest':expected='2'*64
-        component=c.digest(b'original supervisor') if case!='wrong-component' else '3'*64
-        body={'activation_state':'inactive','authority':'none','instruction_utf8':instruction.decode(),'instruction_sha256':c.digest(instruction),
-            'observation':json.loads(observation),'observation_sha256':c.digest(observation),'native_release':native,
-            'commands':[{'role':'sandbox-launch-boundary','argv_sha256':digest,'executable_sha256':expected,'component_sha256':component}],
-            'helper_source_sha256':c.HELPER_SOURCE_SHA256,'helper_build_record_sha256':digest,'helper_executable_sha256':digest,
-            'consumer_source_sha256':digest,'python_sha256':digest,'jq_sha256':digest}
-        files={'consumer-provenance.json':c.canonical({'schema_version':1,'kind':'shadow_consumer_provenance','id':'owned-attempt','body':body})}
-        error=None;stale=None;close_error=None
-        try:
-            obj.provenance(files,instruction,observation,'owned-attempt',case=='withheld-write')
-            assert len(obj.owned)==1 and obj.owned[0].sha256==identity and identity!=c.digest(leaf.read_bytes())
-            if case=='drift':
-                calls.append(['drift'])
-                try:obj.recheck()
-                except c.Refusal as exc:stale=exc.code;assert stale=='E_STALE'
-                else:raise AssertionError('missing stale refusal')
-            else:obj.recheck()
-        except BaseException as exc:error=exc
-        finally:
-            try:obj.close()
-            except BaseException as exc:close_error=exc
-        if case in ('content-digest','wrong-digest','wrong-component','nonroot','writable','nlink'):
-            assert isinstance(error,c.Refusal) and error.code in ('E_RELATION','E_DEPENDENCY')
-        elif case=='factory-failure':assert error is marker
-        else:assert error is None
-        assert closed==fds and len(set(closed))==len(closed) and obj.owned==[]
-        assert (close_error is marker) if case=='close-failure' else close_error is None
-        flags=calls[0][2];assert flags==os.O_NOFOLLOW|(os.O_RDONLY if case=='fallback' else operating.O_EXEC)
-        rows.append({'case':case,'identity_sha256':identity,'content_sha256':c.digest(leaf.read_bytes()),'calls':calls,
-            'original_exception':type(error).__name__ if error else None,'stale':stale,'close_exception':type(close_error).__name__ if close_error else None,
-            'owned_registration_and_reverse_close':True,'descriptor_closed':len(closed),'transport':'ordinary real FD; fixed root metadata and O_EXEC availability OS seams'})
+    backing=(area/'sudo-anchor').resolve();backing.mkdir()
+    fixture_documents=(('host-config.json',c.canonical({'fixture':'ordinary sudo host config'})),
+        ('sudo-fixture-verifier.json',c.canonical({'fixture':'ordinary sudo verifier'})),
+        ('sudo-fixture-installed.json',c.canonical({'fixture':'ordinary sudo installed input'})))
+    for name,raw in fixture_documents:(backing/name).write_bytes(raw)
+    def assert_anchor_output(obj,config_raw,expected):
+        assert obj.replay_output_state==[False] and obj.replay_output_errors==[]
+        assert not obj.anchor.private_observations.get('unusable',False)
+        outputs=obj.replay_outputs['anchor'];assert len(outputs)==1
+        key,values=outputs[0];assert key==config_raw and set(values)==set(expected)
+        for role,(raw,held) in expected.items():
+            assert type(values[role]) is tuple and len(values[role])==2
+            assert values[role][0]==raw and values[role][1] is held
+    original_anchor=c.ANCHOR
+    try:
+        for case in ('no-change','withheld-write','content-digest','wrong-digest','wrong-component','nonroot','writable','nlink','drift','factory-failure','close-failure','fallback','missing-config-holder','empty-verifier-components'):
+            c.ANCHOR=str(backing)
+            fixture_holders=[];fixture_raw=[];obj=None;close_attempted=False
+            original_members=None;original_components=None;pending_source=None
+            try:
+                for name,expected_raw in fixture_documents:
+                    pending_source=c._open_held(str(backing/name),False,lambda _fd,_state,_ancestor:True,'E_STORE')
+                    source=pending_source;fixture_holders.append(source);pending_source=None
+                    raw=source.read(c.DOCUMENT_LIMIT,'E_STALE');assert raw==expected_raw
+                    assert source.path==str(backing/name) and source.components
+                    fixture_raw.append(raw)
+                calls=[];fds=[];closed=[];states=[];marker=OSError('fixed owned sudo operation failure')
+                def metadata(fd):
+                    value=os.fstat(fd)
+                    values={key:getattr(value,key) for key in ('st_dev','st_ino','st_mode','st_uid','st_gid','st_nlink','st_size','st_mtime_ns','st_ctime_ns')}
+                    values.update(st_uid=0,st_mode=stat.S_IFREG|0o555,st_nlink=1)
+                    if case=='nonroot':values['st_uid']=os.getuid() or 1
+                    if case=='writable':values['st_mode']|=0o022
+                    if case=='nlink':values['st_nlink']=2
+                    return types.SimpleNamespace(**values)
+                def opened(path,flags):
+                    assert path=='/usr/bin/sudo';calls.append(['open',path,flags])
+                    fd=os.open(leaf,os.O_RDONLY|os.O_NOFOLLOW);fds.append(fd);states.append(metadata(fd));return fd
+                def inspected(fd):
+                    if case=='factory-failure':raise marker
+                    return metadata(fd)
+                def named(path):
+                    assert path=='/usr/bin/sudo';value=metadata(fds[-1])
+                    if case=='drift' and len(calls)>1:value.st_ino+=1
+                    return value
+                def closed_fd(fd):
+                    os.close(fd);closed.append(fd)
+                    if case=='close-failure':raise marker
+                operating=types.SimpleNamespace(open=opened,fstat=inspected,lstat=named,close=closed_fd,
+                    O_RDONLY=os.O_RDONLY,O_NOFOLLOW=os.O_NOFOLLOW,stat_result=os.stat_result)
+                if case!='fallback':operating.O_EXEC=1<<29
+                domain={'dataclasses':dataclasses,'os':operating,'stat':stat,'c':c,'sha':c.digest,'canonical':c.canonical,'require':namespace['require']}
+                sys.modules['sudo_contract_owned_definitions']=types.ModuleType('sudo_contract_owned_definitions')
+                domain['__name__']='sudo_contract_owned_definitions'
+                exec(compile(ast.Module(body=[fixed,factory],type_ignores=[]),'actual-fixed-sudo-owned','exec'),domain)
+                obj=ActualReader.__new__(ActualReader);obj.owned=[];obj.inputs=[];obj.anchor=None
+                obj.source_copies=[];obj.store_session=None;obj.capture_completion_owner=None
+                obj._runtime_ordinals={site:0 for site in namespace['_SCOPE_RUNTIME_SITES']}
+                obj._initialize_replay_outputs()
+                digest='1'*64;held=types.SimpleNamespace(sha256=digest)
+                obj.package_sources={p:held for p in ('shadow/v1/write-shadow.py','shadow/v1/enforced-reproduction.py')}
+                obj.python=obj.jq=obj.bash=obj.git_binary=obj.consumer=held
+                supervisor=types.SimpleNamespace(path=c.ANCHOR+'/host-supervisor.py',read=lambda limit,code:b'original supervisor')
+                config_held,verifier_held,installed_held=fixture_holders
+                config_raw,verifier_raw,installed_raw=fixture_raw
+                obj.anchor=types.SimpleNamespace(held=[supervisor,config_held,verifier_held,installed_held],recheck=lambda code:None,
+                    private_observations={'entropy':{},'commands':{'runtime_values':[]}},recording_work={},
+                    config_raw=config_raw,config={'identity_paths':{'verifier':verifier_held.path},
+                        'installed_files':{'fixture':installed_held.path}},scope_verifier_input=(verifier_raw,verifier_held),
+                    installed={'fixture':(installed_raw,c.digest(installed_raw))})
+                def hold(path,limit,**options):
+                    assert str(path)!='/usr/bin/sudo';return held
+                obj.hold=hold
+                def acquire():
+                    result=domain['fixed_sudo']();calls.append(['factory-return']);assert obj.owned==[];return result
+                obj.enforced=types.SimpleNamespace(fixed_sudo=acquire)
+                native={k:digest for k in ('source_sha256','build_script_sha256','build_record_sha256','binary_locator_sha256','binary_sha256','python_locator_sha256','python_sha256','dependency_record_sha256')}
+                native.update(context_version=2,binary_size=1,python_abi=sysconfig.get_config_var('SOABI'),loader_mode='rtld-now-local.v1',python_locator_sha256=c.digest(sys.executable.encode()))
+                instruction=b'fixed ordinary instruction';observation=c.canonical({'fixed':'observation'})
+                # The OS metadata transport adapts root ownership only; real data and descriptor lifecycle remain ordinary.
+                fd=os.open(leaf,os.O_RDONLY);state=metadata(fd);os.close(fd)
+                identity=c.digest(c.canonical(list(c._identity(state))))
+                expected=identity
+                if case=='content-digest':expected=c.digest(leaf.read_bytes())
+                if case=='wrong-digest':expected='2'*64
+                component=c.digest(b'original supervisor') if case!='wrong-component' else '3'*64
+                body={'activation_state':'inactive','authority':'none','instruction_utf8':instruction.decode(),'instruction_sha256':c.digest(instruction),
+                    'observation':json.loads(observation),'observation_sha256':c.digest(observation),'native_release':native,
+                    'commands':[{'role':'sandbox-launch-boundary','argv_sha256':digest,'executable_sha256':expected,'component_sha256':component}],
+                    'helper_source_sha256':c.HELPER_SOURCE_SHA256,'helper_build_record_sha256':digest,'helper_executable_sha256':digest,
+                    'consumer_source_sha256':digest,'python_sha256':digest,'jq_sha256':digest}
+                files={'consumer-provenance.json':c.canonical({'schema_version':1,'kind':'shadow_consumer_provenance','id':'owned-attempt','body':body})}
+                original_members=list(obj.anchor.held);original_components=verifier_held.components
+                if case=='missing-config-holder':obj.anchor.held.remove(config_held)
+                if case=='empty-verifier-components':verifier_held.components=[]
+                expected_anchor={'host':(config_raw,config_held),'verifier':(verifier_raw,verifier_held),
+                    'supervisor':(supervisor.read(c.EXECUTABLE_LIMIT,'E_STALE'),supervisor),
+                    'installed-fixture':(installed_raw,installed_held)}
+                error=None;stale=None;close_error=None
+                try:
+                    obj.provenance(files,instruction,observation,'owned-attempt',case=='withheld-write')
+                    if case in ('missing-config-holder','empty-verifier-components'):
+                        assert obj.replay_output_state==[True] and obj.anchor.private_observations.get('unusable') is True
+                        assert len(obj.replay_output_errors)==1 and obj.replay_output_errors[0]['site']=='reader-anchor-inputs'
+                        recorded_error=obj.replay_output_errors[0]['error']
+                        if case=='missing-config-holder':assert isinstance(recorded_error,StopIteration)
+                        else:assert isinstance(recorded_error,c.Refusal) and recorded_error.code=='E_STORE'
+                        assert obj.replay_outputs['anchor']==[]
+                        try:assert_anchor_output(obj,config_raw,expected_anchor)
+                        except AssertionError:pass
+                        else:raise AssertionError('missing receiver prerequisite passed the positive predicate')
+                    else:assert_anchor_output(obj,config_raw,expected_anchor)
+                    assert len(obj.owned)==1 and obj.owned[0].sha256==identity and identity!=c.digest(leaf.read_bytes())
+                    if case=='drift':
+                        calls.append(['drift'])
+                        try:obj.recheck()
+                        except c.Refusal as exc:stale=exc.code;assert stale=='E_STALE'
+                        else:raise AssertionError('missing stale refusal')
+                    else:obj.recheck()
+                except BaseException as exc:error=exc
+                finally:
+                    close_attempted=True
+                    try:obj.close()
+                    except BaseException as exc:close_error=exc
+                if case in ('content-digest','wrong-digest','wrong-component','nonroot','writable','nlink'):
+                    assert isinstance(error,c.Refusal) and error.code in ('E_RELATION','E_DEPENDENCY')
+                elif case=='factory-failure':assert error is marker
+                else:assert error is None
+                assert closed==fds and len(set(closed))==len(closed) and obj.owned==[]
+                assert (close_error is marker) if case=='close-failure' else close_error is None
+                flags=calls[0][2];assert flags==os.O_NOFOLLOW|(os.O_RDONLY if case=='fallback' else operating.O_EXEC)
+                rows.append({'case':case,'identity_sha256':identity,'content_sha256':c.digest(leaf.read_bytes()),'calls':calls,
+                    'original_exception':type(error).__name__ if error else None,'stale':stale,'close_exception':type(close_error).__name__ if close_error else None,
+                    'owned_registration_and_reverse_close':True,'descriptor_closed':len(closed),'transport':'ordinary real FD; fixed root metadata and O_EXEC availability OS seams'})
+            finally:
+                primary=sys.exc_info()[1];cleanup_error=None
+                try:
+                    try:
+                        if original_members is not None:obj.anchor.held[:]=original_members
+                    except BaseException as error:cleanup_error=error
+                    try:
+                        if original_components is not None:verifier_held.components=original_components
+                    except BaseException as error:
+                        if cleanup_error is None or ((isinstance(error,(KeyboardInterrupt,SystemExit)) or getattr(error,'_scope_signal_cancel',False)) and not (isinstance(cleanup_error,(KeyboardInterrupt,SystemExit)) or getattr(cleanup_error,'_scope_signal_cancel',False))):cleanup_error=error
+                    if obj is not None and not close_attempted:
+                        try:obj.close()
+                        except BaseException as error:
+                            if cleanup_error is None or ((isinstance(error,(KeyboardInterrupt,SystemExit)) or getattr(error,'_scope_signal_cancel',False)) and not (isinstance(cleanup_error,(KeyboardInterrupt,SystemExit)) or getattr(cleanup_error,'_scope_signal_cancel',False))):cleanup_error=error
+                    if pending_source is not None and not any(item is pending_source for item in fixture_holders):
+                        try:pending_source.close()
+                        except BaseException as error:
+                            if cleanup_error is None or ((isinstance(error,(KeyboardInterrupt,SystemExit)) or getattr(error,'_scope_signal_cancel',False)) and not (isinstance(cleanup_error,(KeyboardInterrupt,SystemExit)) or getattr(cleanup_error,'_scope_signal_cancel',False))):cleanup_error=error
+                    for source in reversed(fixture_holders):
+                        try:source.close()
+                        except BaseException as error:
+                            if cleanup_error is None or ((isinstance(error,(KeyboardInterrupt,SystemExit)) or getattr(error,'_scope_signal_cancel',False)) and not (isinstance(cleanup_error,(KeyboardInterrupt,SystemExit)) or getattr(cleanup_error,'_scope_signal_cancel',False))):cleanup_error=error
+                finally:c.ANCHOR=original_anchor
+                if cleanup_error is not None:
+                    if primary is not None and (isinstance(primary,(KeyboardInterrupt,SystemExit)) or getattr(primary,'_scope_signal_cancel',False)):
+                        raise primary from cleanup_error
+                    raise cleanup_error from primary
+    finally:c.ANCHOR=original_anchor
     reports.append({'sudo_provenance_controls':rows,'actual_reader_sha256':hashlib.sha256(reader.encode()).hexdigest(),
         'actual_factory_sha256':hashlib.sha256(ast.get_source_segment(enforced,factory).encode()).hexdigest(),
         'actual_dependency_sha256':source_bindings})
@@ -2951,7 +3019,7 @@ evaluation_reasons() {
 }
 dashboard_shape_evaluation() {
   local scope_dashboard_line=${BASH_LINENO[0]}
-  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 10258 ]; then scope_dashboard_inflight=true; fi
+  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 10326 ]; then scope_dashboard_inflight=true; fi
   evaluation_document "$@"
   scope_dashboard_inflight=false
 }
