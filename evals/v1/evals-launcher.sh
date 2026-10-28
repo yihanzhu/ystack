@@ -2384,7 +2384,7 @@ shadow_source_rows() {
     'enforcement/v1/accepted-identities.json c75dcd8d9268cb42677f5aa526fd374c3e45f2ba0fe678f47562ae49ad6851a0 174 100644' \
     'enforcement/v1/check-sandbox-receipt.sh 7db3412a4e740f79bde6af24891837fd5daa27d0811ff970b2f58534fcd59b97 10816 100755' \
     'enforcement/v1/sandbox-receipt.jq 43ab3a97b90444be17958112b7ff63966d1052981313c81bcb463618adae8619 30838 100644' \
-    'evals/v1/replay-malicious.py 326b5a283029cde9168f87db84b56ea46d85f18e090860896eb2c4fb31efb0c1 527373 100644' \
+    'evals/v1/replay-malicious.py 80b522d89887b94136d3706e4a0400c0eaa2343ebbedc3b5320aa3d59d2e01b5 531313 100644' \
     'maintenance/v1/bands.jq 594994c057a1130da6727f5f825d2fed3ff01de4a9fafe3a722d9e964f05c8e4 10714 100644' \
     'maintenance/v1/incident-to-eval.jq 2229722267c3e9544d9cf53bd37d6d798f27adebad4a7439294989d0194ad92a 7237 100644' \
     'maintenance/v1/incident-to-eval.sh e000f961d7851c48b650ca36ed0c60fd2bc97ffc32442214b3f8937efc97f967 7449 100755' \
@@ -2916,10 +2916,10 @@ done
 [ -n "$jq_source" ] || emit_error E_RUNTIME
 
 generation=g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43
-program_sha=4a9edd5321dc2b4074d84c174573bc660f97a80ca3d401206f2051ef21297254
+program_sha=346608784cda4e64ff96fdfd01adcd3f1f74da33a90875c9fa1ba5aeb9062c20
 review_approval_sha=none
 catalog_sha=0239138447a8f9fd420cb3c5da31660d8f75c85099d80d89a040dce2878a4cac
-driver_sha=7c6ad3afd8475afd0b6f0da047c8ebf6d3a8837a175edece3013e73c7f1a8c3c
+driver_sha=532cf45a7666b51500e274ad0ab8031a1ffb6cf4d02b69b01d7407814e544304
 }
 
 evals_record_context() {

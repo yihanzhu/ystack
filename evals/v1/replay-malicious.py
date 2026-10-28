@@ -2364,6 +2364,7 @@ class _SeedAssembly:
                     self._verify_recorded_observation(reader.anchor, source, indexed[member],
                         ("reproduction", "recorded", member), raw, expected)
                 else:
+                    self._scope_recorded_alias(reader, source, "generator/history/%04d/" % ordinal + name, expected)
                     destination = "reproduction-nested-%03d-" % len(indexed) + name
                     self._semantic_copy(reader.anchor, source, destination, expected, "recorded",
                         "reproduction", "recorded", member, source_mode=0o400, recorded_output=True)
@@ -2983,10 +2984,10 @@ class _SeedAssembly:
         _seed_require(type(generator.session) is module._GateStoreSession
             and generator.session is self.gate_session and generator.reader.commands_open)
         try:
+            self.scope_reader_inputs(generator.reader, generator=True)
             self._nested_reproduction_outputs(generator.reader)
             self.bundle_outputs("write", generator.reader)
             self.candidate_outputs(generator.reader)
-            self.scope_reader_inputs(generator.reader, generator=True)
         except BaseException as error:
             self._failed(error, "seed-generator-before-release")
             if isinstance(self.failure, KeyboardInterrupt) or getattr(self.failure, "_scope_signal_cancel", False):
@@ -3555,6 +3556,56 @@ class _SeedAssembly:
         self._source_check(owner, source, reader.anchor, 0o400)
         target.recheck("E_STORE", self.work, "M")
 
+    def _scope_recorded_alias(self, reader, source, member, expected):
+        owner = self._gate_type(reader, "scope/v1/read-shadow-evidence.py", "_Reader").c
+        pieces = member.split("/")
+        _seed_require(len(pieces) == 4 and pieces[:2] == ["generator", "history"]
+            and len(pieces[2]) == 4 and pieces[2].isascii() and pieces[2].isdigit()
+            and int(pieces[2]) < 4096 and pieces[3] in owner._c1_history_names_values("enforced-reproduction.v1")[0]
+            and type(source) is owner.HeldPath and source.components and id(source) in self.source_occurrences)
+        stages = [row for row in self.__dict__.get("_scope_P_stages", []) if row["reader"] is reader
+            and row["context"] == "generator" and row["member"] == member]
+        _seed_require(len(stages) == 1)
+        stage = stages[0]
+        _seed_require(stage["source"] is source and stage["copied"] is None
+            and stage["name"] == pieces[3] and stage["expected"] == expected and stage["kind"] == "M"
+            and stage["identity"] == owner._identity(source.before))
+        target, key = stage["target"], stage["key"]
+        _seed_require(target in self.output_holds and target.components
+            and target.path == self.root.path + "/" + key
+            and stage["size_bytes"] == source.before.st_size == target.before.st_size
+            and stage.get("target_identity") == owner._identity(target.before)
+            and (source.before.st_dev, source.before.st_ino) != (target.before.st_dev, target.before.st_ino)
+            and self.files[key] == {"size_bytes": stage["size_bytes"], "sha256": expected, "kind": "M"}
+            and self.semantic_expected[key] == ("gate", "capture", member, stage["size_bytes"], expected, "M")
+            and self.semantic[key] == {"occurrence": "gate", "role": "capture", "member": member,
+                "file": key, "size_bytes": stage["size_bytes"], "sha256": expected, "kind": "M"})
+        holders = [item for item in reader.owned if type(item) is owner._HeldBytes and item.held is source]
+        _seed_require(len(holders) == 1)
+        acquisitions = [item for item in reader.anchor.private_observations["storage_reads"]
+            if item["entries"] and all(row["role"] == "store" for row in item["entries"])]
+        matches = []
+        for record_raw, value in reader.replay_outputs["stores"]:
+            store, files, retained, rows = value
+            if pieces[3] not in retained:continue
+            if not any(path is retained[pieces[3]] and raw is files[pieces[3]] for path, raw in reader.inputs):continue
+            if str(retained[pieces[3]]) != source.path:continue
+            _seed_require(type(store) is owner._HeldStoreRead and store.anchor is reader.anchor
+                and store.storage_rows is rows and record_raw is files["shadow-record.json"])
+            ordinals = [index for index, row in enumerate(acquisitions) if row["entries"] is rows]
+            _seed_require(ordinals == [int(pieces[2])])
+            self._charge("E", len(holders[0].raw) + len(files[pieces[3]]), "M")
+            _seed_require(holders[0].raw == files[pieces[3]])
+            matches.append(value)
+        _seed_require(len(matches) == 1)
+        self._scope_check_P_S(reader, source, target, expected, "M")
+        _seed_require(stage["identity"] == owner._identity(source.before)
+            and stage["target_identity"] == owner._identity(target.before))
+        self.c._capture_observe(self.work, "M", "scope-history-recorded-alias", {
+            "member": member, "history_file": key, "ordinal": int(pieces[2])})
+        _seed_require(not any(anchor is reader.anchor and held is source for anchor, held in self.recorded_aliases))
+        self.recorded_aliases.append((reader.anchor, source))
+
     def _scope_existing_S(self, reader, copied, name, context):
         # Reuse is determined by the actual P object and original phase binding.
         phases = ("kill", "coverage") if context == "generator" else ("coverage",)
@@ -3737,7 +3788,7 @@ class _SeedAssembly:
         stages.append({"reader": reader, "context": context, "member": member,
             "source": source, "copied": copied, "name": name, "expected": expected, "kind": kind,
             "identity": owner._identity(source.before), "size_bytes": source.before.st_size,
-            "target": held[0], "key": target})
+            "target": held[0], "target_identity": owner._identity(held[0].before), "key": target})
         return target
 
 

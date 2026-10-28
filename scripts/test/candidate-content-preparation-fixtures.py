@@ -9522,3 +9522,133 @@ def raw16_C1_history_candidate_deletion(root: Path) -> None:
     try:raw16_C1_history_candidate_values(root, deletion=True)
     except AssertionError as error:assert str(error) == 'history candidate accepted row-oid'
     else:raise AssertionError('history production oid-check deletion undetected')
+
+
+def raw16_C1_history_recorded_alias(root: Path, deletion=False, evidence=None) -> dict:
+    import shutil
+    import tempfile
+    if deletion:
+        with tempfile.TemporaryDirectory(prefix='ystack-C1-history-alias-deleted-') as temporary:
+            copied = Path(temporary)/'source'
+            shutil.copytree(root, copied, ignore=shutil.ignore_patterns('.git', '__pycache__'))
+            path = copied/'evals/v1/replay-malicious.py';source = path.read_text()
+            old = '        self.recorded_aliases.append((reader.anchor, source))'
+            assert source.count(old) == 1, 'history alias deletion anchor moved'
+            path.write_text(source.replace(old, '        pass', 1))
+            return raw16_C1_history_recorded_alias(copied)
+    def load(name, relative):
+        spec = importlib.util.spec_from_file_location(name, root/relative)
+        module = importlib.util.module_from_spec(spec);sys.modules[name] = module;spec.loader.exec_module(module)
+        return module
+    reader_module = load('C1_history_alias_reader', 'scope/v1/read-shadow-evidence.py')
+    replay = load('C1_history_alias_replay', 'evals/v1/replay-malicious.py')
+    c = reader_module.c
+    results = []
+    for label in ('normal', 'same-sha-other-P', 'other-reader', 'other-acquisition', 'other-member', 'S-identity', 'S-byte'):
+        with tempfile.TemporaryDirectory(prefix='ystack-C1-history-alias-') as temporary:
+            base=Path(temporary).resolve();source_dir=base/'P';source_dir.mkdir(mode=0o700)
+            destination=base/'S';destination.mkdir(mode=0o700)
+            raw=b'original history P with complete independently copied bytes\n'*73
+            path=source_dir/'incident.json';path.write_bytes(raw);path.chmod(0o400)
+            other_path=source_dir/'same-sha.json';other_path.write_bytes(raw);other_path.chmod(0o400)
+            record_path=source_dir/'shadow-record.json';record_path.write_bytes(b'{}');record_path.chmod(0o400)
+            resolver=c._DarwinUUIDResolver() if sys.platform=='darwin' else None
+            anchor=c.Anchor.__new__(c.Anchor);anchor.resolver=resolver;anchor.held=[];anchor.private_observations={}
+            window,case={},{};c._capture_work_values(window,'history-alias-window');c._capture_work_values(case,'history-alias-case')
+            window['cases']={'malicious.checked-file-bytes':case};anchor.recording_work=window
+            reader=reader_module._Reader.__new__(reader_module._Reader)
+            reader.anchor=anchor;reader.owned=[];reader.inputs=[];reader.commands_open=True;reader._initialize_replay_outputs()
+            owner=reader.hold(path,c.DOCUMENT_LIMIT);other=reader.hold(other_path,c.DOCUMENT_LIMIT)
+            reader.inputs.append((path,owner.raw));reader.inputs.append((other_path,other.raw))
+            raw=owner.raw;source=owner.held;expected=c.digest(raw)
+            record=reader.hold(record_path,c.DOCUMENT_LIMIT);reader.inputs.append((record_path,record.raw))
+            files={'incident.json':raw,'shadow-record.json':record.raw}
+            retained={'incident.json':path,'shadow-record.json':record_path}
+            storage_rows=[{'role':'store'}]
+            store=c._HeldStoreRead.__new__(c._HeldStoreRead);store.anchor=anchor;store.storage_rows=storage_rows
+            reader.owned.append(store)
+            reader.replay_outputs['stores'].append((record.raw,(store,files,retained,storage_rows)))
+            anchor.private_observations['storage_reads']=[{'entries':storage_rows}]
+            parent=c._open_held(str(destination),True,c._store_rule(os.getuid(),os.getgid(),0o700,True,resolver),'E_STORE')
+            assembly=replay._SeedAssembly(parent,anchor,'malicious.checked-file-bytes',window,case)
+            member='generator/history/0000/incident.json'
+            history=assembly._scope_stage_P(reader,None,'incident.json',(raw,source),expected,'M','generator',member)
+            stage=assembly._scope_P_stages[0];first=stage['target']
+            assert source is stage['source'] and source.components and first in assembly.output_holds
+            assert id(source) in assembly.source_occurrences and not assembly.recorded_aliases
+            assert (destination/history).read_bytes()==raw and first.before.st_size==len(raw)
+            assert assembly.work['write_bytes']==assembly.work['physical_bytes']==len(raw)
+            assert assembly.work['files']==1
+            before={key:assembly.work[key] for key in ('read_bytes','write_bytes','physical_bytes','files')}
+            first_identity=c._identity(first.before);P_identity=c._identity(source.before)
+            attempted_reader,attempted_source,attempted_member=reader,source,member
+            if label=='same-sha-other-P':attempted_source=other.held
+            elif label=='other-reader':
+                attempted_reader=reader_module._Reader.__new__(reader_module._Reader);attempted_reader.anchor=anchor
+                attempted_reader._initialize_replay_outputs()
+                attempted_reader.owned=reader.owned;attempted_reader.inputs=reader.inputs
+                attempted_reader.replay_outputs=reader.replay_outputs;attempted_reader.commands_open=True
+            elif label=='other-acquisition':anchor.private_observations['storage_reads'][0]['entries']=list(storage_rows)
+            elif label=='other-member':attempted_member='generator/history/0000/claim.json'
+            elif label=='S-identity':
+                replacement=destination/'replacement';replacement.write_bytes(raw);replacement.chmod(0o400)
+                os.replace(replacement,destination/history)
+            elif label=='S-byte':
+                os.chmod(destination/history,0o600)
+                (destination/history).write_bytes(bytes([raw[0]^1])+raw[1:]);os.chmod(destination/history,0o400)
+            caught=None;alias_returned=False
+            try:
+                try:
+                    assembly._scope_recorded_alias(attempted_reader,attempted_source,attempted_member,expected)
+                    alias_returned=True
+                    assembly._semantic_copy(anchor,source,'recorded-second',expected,'recorded',
+                        'reproduction','recorded','bundle/generator/current/environment.one/incident.json',
+                        source_mode=0o400,recorded_output=True)
+                except BaseException as error:caught=error
+                if label=='normal':
+                    assert caught is None, 'same P history to recorded alias refused'
+                    second=next(item for item in assembly.output_holds if item.path==str(destination/'recorded-second'))
+                    assert first is not second and first.fd!=second.fd
+                    assert P_identity!=first_identity!=c._identity(second.before) and P_identity!=c._identity(second.before)
+                    assert (destination/history).read_bytes()==(destination/'recorded-second').read_bytes()==raw
+                    assembly._scope_check_P_S(reader,source,first,expected,'M')
+                    assembly._scope_check_P_S(reader,source,second,expected,'recorded')
+                    assert c._identity(source.before)==P_identity and c._identity(first.before)==first_identity
+                    assert assembly.work['write_bytes']-before['write_bytes']==len(raw)
+                    assert assembly.work['physical_bytes']-before['physical_bytes']==len(raw)
+                    assert assembly.work['files']-before['files']==1 and assembly.work['read_bytes']>before['read_bytes']
+                    assert assembly.work['accounting']['M']['physical_bytes']==len(raw)
+                    assert assembly.work['accounting']['raw']['physical_bytes']==len(raw)
+                    assert assembly.semantic[history]['member']==member
+                    assert assembly.semantic['recorded-second']['member']=='bundle/generator/current/environment.one/incident.json'
+                    assert id(source) in assembly.source_occurrences
+                    try:assembly._copy(anchor,source,'forbidden-third',expected,'M',source_mode=0o400)
+                    except (ValueError,replay._CalculationRefused) as error:caught=error
+                    else:raise AssertionError('history alias cleared global P dedup')
+                    assert 'forbidden-third' not in assembly.files and not (destination/'forbidden-third').exists()
+                else:
+                    assert caught is not None, 'history alias accepted '+label
+                    assert isinstance(caught,(c.Refusal,ValueError,replay._CalculationRefused)), type(caught).__name__
+                    assert not alias_returned, 'history alias silently accepted '+label
+                    assert not (destination/'recorded-second').exists() and 'recorded-second' not in assembly.files
+                    assert not any(item[0] is anchor and item[1] is attempted_source for item in assembly.recorded_aliases)
+                assert id(source) in assembly.source_occurrences
+                results.append({'case':label,'rejected':label!='normal','original_P_guard_preserved':True,
+                    'files':len(assembly.files),'work':assembly.work,
+                    'scope':'typed Reader owner with real held P/history S/recorded S only; outer acquisition/native caller NOTRUN',
+                    'full_fees':'UNKNOWN'})
+            finally:
+                primary=sys.exc_info()[1] or caught
+                try:assembly.close(primary)
+                except BaseException as error:assert error is primary
+                for item in reversed(reader.owned):
+                    if type(item) is c._HeldBytes:item.close()
+                parent.close()
+    _C3_work_evidence(results,evidence,'history-recorded-alias')
+    return {'controls':results,'native_qualification':'BLOCKED','complete_caller':'NOTRUN'}
+
+
+def raw16_C1_history_recorded_alias_deletion(root: Path) -> None:
+    try:raw16_C1_history_recorded_alias(root,deletion=True)
+    except AssertionError as error:assert str(error)=='same P history to recorded alias refused'
+    else:raise AssertionError('history production alias registration deletion undetected')
