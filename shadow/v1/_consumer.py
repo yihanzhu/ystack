@@ -6878,6 +6878,9 @@ class _C1PHandoffParent:
 
     def stage(self, value, phase):
         _require(phase in {"C_REQUEST", "FINAL_OWNER"} and phase not in self.batches, "E_STORE")
+        if self.unusable or getattr(self.session.wire, "recording_failed", False):
+            self.unusable = True
+            return
         self._budget()
         batch = _c1_p_batch_check(value, self.work)
         if batch["state"] == "unusable":
@@ -7054,6 +7057,7 @@ class _C1PHandoffParent:
         _require(value["batch_sha256"] == measured and not self.closed_serials.intersection(value["closed"])
             and set(value["closed"]) <= set(self.batch_serials[batch_phase]), "E_STORE")
         self._apply_receipt(value["accounting"])
+        if value["accounting"]["incomplete"].get("C1_wire_recording_incomplete", False):self.unusable = True
         self.closed_serials.update(value["closed"])
         self.receipts.append(value["accounting"])
         self.settlements[phase] = value
@@ -7123,7 +7127,8 @@ class _C1PHandoffParent:
         return result, locators
 
     def complete(self):
-        _require(not self.unusable and not getattr(self.session, "p_handoff_errors", [])
+        _require(not self.unusable and not getattr(self.session.wire, "recording_failed", False)
+            and not getattr(self.session, "p_handoff_errors", [])
             and getattr(self.session, "p_handoff_error_unknown", None) is None
             and "FINAL_OWNER" in self.batches and "CLOSED" in self.settlements
             and ("C_REQUEST" not in self.batches or "C_RELEASED" in self.settlements)
@@ -7159,6 +7164,10 @@ def _c1_p_wire_charge(work, field, amount):
 
 class _GateWire:
     """Bounded private frames on the generator's inherited socket, never a CLI input."""
+    recording_failed = False
+    recording_errors = ()
+    recording_cancel = None
+
     def __init__(self, sock, deadline, call_id=None, nonce=None, binding=None):
         self.sock, self.deadline = sock, deadline
         self.call_id, self.nonce, self.binding = call_id, nonce, binding
@@ -7166,80 +7175,130 @@ class _GateWire:
         self.sent_bytes = self.received_bytes = 0
         self.buffer = bytearray()
 
+    def _record_failure(self, error, site, primary=None):
+        first = _c3_first(self.recording_cancel, _c3_first(primary, error))
+        try:self.recording_failed = True
+        except BaseException as later:first = _c3_first(first, later)
+        try:self.recording_errors = self.recording_errors + ((site, error),)
+        except BaseException as later:
+            first = _c3_first(first, later)
+            try:self.recording_error_retention_incomplete = True
+            except BaseException as last:first = _c3_first(first, last)
+        try:
+            work = getattr(self, "recording_work", None)
+            if work is not None:
+                work["C1_wire_recording_incomplete"] = True
+                first = _c1_p_report(work, "C1-wire-" + site, error, first)
+        except BaseException as later:first = _c3_first(first, later)
+        if isinstance(first, KeyboardInterrupt) or getattr(first, "_scope_signal_cancel", False):
+            try:self.recording_cancel = first
+            except BaseException:pass
+            raise first
+
+    def _record_context(self):
+        if self.recording_failed:return None
+        try:return getattr(self, "recording_work", None)
+        except BaseException as error:
+            self._record_failure(error, "work")
+            return None
+
+    def _record_work(self):
+        return self._record_context()
+
+    def _record_room(self, amount, read_only=False):
+        work = self._record_work()
+        if work is None:return
+        try:_capture_copy_room(work, amount, False, read_only=read_only)
+        except BaseException as error:self._record_failure(error, "budget")
+
+    def _record_charge(self, field, amount):
+        work = self._record_work()
+        if work is None:return
+        try:_c1_p_wire_charge(work, field, amount)
+        except BaseException as error:self._record_failure(error, "charge-" + field)
+
+    def _progress(self, name, value):
+        try:setattr(self, name, value)
+        except BaseException as error:self._record_failure(error, "progress")
+
+    def _send_raw(self, phase, body):
+        value = {"version": 1, "call_id": self.call_id, "nonce": self.nonce,
+            "sequence": self.sent, "phase": phase, "binding": self.binding, "body": body}
+        work = self._record_work()
+        if work is not None:
+            try:
+                raw = _c1_p_side_raw(value, work)
+                _require(len(raw) <= DOCUMENT_LIMIT and self.sent_bytes + len(raw) <= 64 * DOCUMENT_LIMIT, "E_LIMIT")
+                return raw
+            except BaseException as error:self._record_failure(error, "encode")
+        if self.recording_failed and "p_handoff" in body:
+            value["body"] = {key: item for key, item in body.items() if key != "p_handoff"}
+        return canonical(value)
+
     def send(self, phase, body):
         import struct
         _require(type(phase) is str and type(body) is dict, "E_RUNTIME")
         self.sent += 1
-        value = {"version": 1, "call_id": self.call_id, "nonce": self.nonce,
-            "sequence": self.sent, "phase": phase, "binding": self.binding, "body": body}
-        work = getattr(self, "recording_work", None)
-        if work is None:raw = canonical(value)
-        else:
-            try:
-                raw = _c1_p_side_raw(value, work)
-                _require(len(raw) <= DOCUMENT_LIMIT and self.sent_bytes + len(raw) <= 64 * DOCUMENT_LIMIT, "E_LIMIT")
-            except BaseException as error:
-                first = _c1_p_report(work, "C1-wire-side", error, error)
-                if isinstance(first, KeyboardInterrupt) or getattr(first, "_scope_signal_cancel", False):raise first
-                _require("p_handoff" in body and phase in {"INIT", "C_REQUEST", "C_RELEASED", "FINAL_OWNER", "CLOSED"}, "E_RUNTIME")
-                work["C1_wire_side_incomplete"] = True
-                reduced = {key: item for key, item in body.items() if key != "p_handoff"}
-                if phase != "INIT":reduced["p_handoff"] = {"state": "unusable"}
-                value["body"] = reduced
-                raw = _c1_p_side_raw(value, work)
+        recording = self._record_context() is not None or self.recording_failed
+        raw = self._send_raw(phase, body)
         _require(len(raw) <= DOCUMENT_LIMIT and _clock_value('shadow/v1/_consumer.py:1930:0',time.monotonic(),'monotonic') < self.deadline, "E_RUNTIME")
-        self.sent_bytes += len(raw)
-        _require(self.sent_bytes <= 64 * DOCUMENT_LIMIT, "E_LIMIT")
+        _require(self.sent_bytes + len(raw) <= 64 * DOCUMENT_LIMIT, "E_LIMIT")
+        self._record_room(len(raw) + 4)
+        if self.recording_failed and "p_handoff" in body:
+            raw = self._send_raw(phase, body)
+            _require(len(raw) <= DOCUMENT_LIMIT and self.sent_bytes + len(raw) <= 64 * DOCUMENT_LIMIT, "E_LIMIT")
         self.sock.settimeout(max(0.001, self.deadline - _clock_value('shadow/v1/_consumer.py:1933:0',time.monotonic(),'monotonic')))
-        if work is None:
-            self.sock.sendall(struct.pack("!I", len(raw)) + raw)
-            return
-        _capture_copy_room(work, 4 + len(raw), False, read_only=True)
         frame = struct.pack("!I", len(raw)) + raw
-        _c1_p_wire_charge(work, "C", len(frame))
+        self._record_charge("C", len(frame))
+        if self.recording_failed and "p_handoff" in body:
+            raw = self._send_raw(phase, body)
+            _require(len(raw) <= DOCUMENT_LIMIT and self.sent_bytes + len(raw) <= 64 * DOCUMENT_LIMIT, "E_LIMIT")
+            frame = struct.pack("!I", len(raw)) + raw
+        self.sent_bytes += len(raw)
+        if not recording:
+            self.sock.sendall(frame)
+            return
         offset = 0
-        try:
-            while offset < len(frame):
-                amount = min(65536, len(frame) - offset)
-                _capture_copy_room(work, amount, False)
-                sent = self.sock.send(memoryview(frame)[offset:offset + amount])
-                _require(type(sent) is int and 0 < sent <= amount, "E_RUNTIME")
-                _c1_p_wire_charge(work, "W", sent)
-                offset += sent
-        except BaseException:
-            work["C1_wire_write_incomplete"] = True
-            raise
+        while offset < len(frame):
+            try:sent = self.sock.send(memoryview(frame)[offset:offset + 65536])
+            except BaseException as error:
+                self._record_failure(error, "socket-send", error)
+                raise
+            _require(type(sent) is int and 0 < sent <= min(65536, len(frame) - offset), "E_RUNTIME")
+            offset += sent
+            self._progress("last_send_progress", (self.sent, offset, len(frame)))
+            self._record_charge("W", sent)
 
     def receive(self):
         import struct
-        work = getattr(self, "recording_work", None)
         while len(self.buffer) < 4 or len(self.buffer) < 4 + struct.unpack("!I", self.buffer[:4])[0]:
             _require(_clock_value('shadow/v1/_consumer.py:1939:0',time.monotonic(),'monotonic') < self.deadline, "E_RUNTIME")
             self.sock.settimeout(max(0.001, self.deadline - _clock_value('shadow/v1/_consumer.py:1940:0',time.monotonic(),'monotonic')))
-            if work is not None:_capture_copy_room(work, 2 * 65536, False, read_only=True)
+            self._record_room(2 * 65536, read_only=True)
             try:chunk = self.sock.recv(65536)
-            except BaseException:
-                if work is not None:work["C1_wire_read_incomplete"] = True
+            except BaseException as error:
+                if self._record_context() is not None or self.recording_failed:self._record_failure(error, "socket-recv", error)
                 raise
-            if work is not None:_c1_p_wire_charge(work, "R", len(chunk))
             _require(bool(chunk), "E_RUNTIME")
             self.buffer.extend(chunk)
-            if work is not None:_c1_p_wire_charge(work, "C", len(chunk))
+            if self._record_context() is not None or self.recording_failed:
+                self._progress("last_receive_progress", (self.received + 1, len(chunk), len(self.buffer)))
+            self._record_charge("R", len(chunk))
+            self._record_charge("C", len(chunk))
             if len(self.buffer) >= 4:
                 _require(0 < struct.unpack("!I", self.buffer[:4])[0] <= DOCUMENT_LIMIT, "E_LIMIT")
         size = struct.unpack("!I", self.buffer[:4])[0]
-        if work is not None:_capture_copy_room(work, 2 * size, False, read_only=True)
+        self._record_room(2 * size, read_only=True)
         raw = bytes(self.buffer[4:4 + size]); del self.buffer[:4 + size]
-        if work is not None:_c1_p_wire_charge(work, "C", 2 * len(raw))
+        self._record_charge("C", 2 * len(raw))
         self.received_bytes += len(raw)
         _require(self.received_bytes <= 64 * DOCUMENT_LIMIT, "E_LIMIT")
-        if work is not None:
-            _capture_copy_room(work, len(raw), False, read_only=True)
-            work["C1_wire_parse_incomplete"] = True
-        row = _json(raw, DOCUMENT_LIMIT, "E_RUNTIME")
-        if work is not None:
-            _c1_p_wire_charge(work, "R", len(raw))
-            work["C1_wire_parse_incomplete"] = False
+        self._record_room(len(raw), read_only=True)
+        try:row = _json(raw, DOCUMENT_LIMIT, "E_RUNTIME")
+        except BaseException as error:
+            if self._record_context() is not None or self.recording_failed:self._record_failure(error, "native-parse", error)
+            raise
+        self._record_charge("R", len(raw))
         _require(set(row) == {"version", "call_id", "nonce", "sequence", "phase", "binding", "body"}
                  and type(row["version"]) is int and row["version"] == 1
                  and type(row["sequence"]) is int and row["sequence"] == self.received + 1

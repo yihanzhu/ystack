@@ -8567,6 +8567,7 @@ def raw16_C1_p_cancel_drain(root: Path, evidence=None) -> dict:
 
 def raw16_C1_runtime_invoice_owners(root: Path, evidence=None) -> dict:
     import collections
+    import copy
     import tempfile
     import traceback
     spec = importlib.util.spec_from_file_location('C1_invoice_generator', root/'scope/v1/generate-gate-evidence.py')
@@ -8708,6 +8709,14 @@ def raw16_C1_runtime_invoice_owners(root: Path, evidence=None) -> dict:
         drift = parent.records[0]['target']
         os.chmod(drift.path, 0o600)
         reject('S-final-identity-drift', lambda: parent._compare(read_holds[0], drift, rows[0], 'runtime'))
+        report_parent = c._C1PHandoffParent(parent_anchor, root_hold, work, case, generation, session,
+            {}, [], window, [case], {})
+        session.p_handoff = report_parent
+        results.append(_raw16_C1_foreground_finally_seam(c, report_parent))
+        session.p_handoff = parent
+        results.append({'case': 'actual-Generator-reporting-errors',
+            **_raw16_C1_generator_reporting_control(session)})
+
     except BaseException as error:
         primary = error
         raise
@@ -8748,3 +8757,243 @@ def raw16_C1_runtime_invoice_owners(root: Path, evidence=None) -> dict:
                 assert set(fd_counts) == known_fds and all(count == 1 for count in fd_counts.values())
                 assert all(not held.components for held in all_holds)
     return detail
+
+
+def _raw16_C1_generator_reporting_control(session, *, first_marked=False):
+    import sys
+    module = sys.modules[type(session).__module__]
+    assert type(session) is module._GateStoreSession
+    c = module.c
+    handoff = session.p_handoff
+    assert type(handoff) is c._C1PHandoffParent and handoff.session is session
+    assert not handoff.unusable and not getattr(session, 'p_handoff_errors', None)
+    cls = type(handoff)
+    original_stage, original_fail, original_setter = cls.stage, cls.fail, cls.__setattr__
+    first = InterruptedError('first Generator cancellation') if first_marked else KeyboardInterrupt('first Generator cancellation')
+    if first_marked:first._scope_signal_cancel = True
+    later = InterruptedError('later Generator fail report');later._scope_signal_cancel = True
+    append_error, setter_error = MemoryError('diagnostic append'), MemoryError('unusable diagnostic setter')
+    observed = []
+    class FailingAppend(list):
+        def append(self, value):
+            observed.append(value)
+            raise append_error
+    session.p_handoff_errors = FailingAppend()
+    def stage(this, value, phase):
+        if this is handoff:raise first
+        return original_stage(this, value, phase)
+    def fail(this, error, phase):
+        if this is not handoff:return original_fail(this, error, phase)
+        try:original_fail(this, error, phase)
+        except BaseException as error:
+            assert error is first
+        raise later
+    def setter(this, name, value):
+        if this is handoff and name == 'unusable':
+            original_setter(this, name, value)
+            raise setter_error
+        return original_setter(this, name, value)
+    caught = None
+    try:
+        cls.stage, cls.fail, cls.__setattr__ = stage, fail, setter
+        try:session._p_handoff_side('FINAL_OWNER', {'state': 'unusable'})
+        except BaseException as error:caught = error
+    finally:cls.stage, cls.fail, cls.__setattr__ = original_stage, original_fail, original_setter
+    assert caught is first and handoff.unusable and observed[0][1:] == (first, later)
+    unknown = session.p_handoff_error_unknown
+    assert unknown[1:] == (first, later, setter_error)
+    assert unknown[0][1:] == (first, later, append_error)
+    assert any(error is first for _phase, error in handoff.errors)
+    return {'first_cancel_preserved': True, 'append_and_setter_errors_retained': True,
+        'context_unusable': True, 'cost': 'UNKNOWN', 'native_qualification': 'NOTRUN'}
+
+
+
+def _raw16_C1_foreground_finally_seam(c, handoff) -> dict:
+    import ast
+    import copy
+    source = ast.parse(Path(c.__file__).read_text())
+    cls = next(node for node in source.body if isinstance(node, ast.ClassDef) and node.name == '_DarwinChildOwner')
+    method = next(node for node in cls.body if isinstance(node, ast.FunctionDef) and node.name == '_foreground')
+    original_try = next(node for node in reversed(method.body) if isinstance(node, ast.Try) and node.finalbody)
+    wrapper = ast.parse('def seam(native, handoff, selector, previous):\n child=None\n old_handlers={}\n try:\n  raise native\n finally:\n  pass\n')
+    wrapper.body[0].body[-1].finalbody = copy.deepcopy(original_try.finalbody)
+    ast.fix_missing_locations(wrapper)
+    namespace = dict(c._DarwinChildOwner._foreground.__globals__)
+    exec(compile(wrapper, '<actual-foreground-finally-seam>', 'exec'), namespace)
+    assert type(handoff) is c._C1PHandoffParent and not handoff.unusable
+    first = KeyboardInterrupt('original native cancellation at finally seam')
+    ordinary = OSError(errno.EIO, 'ordinary private handoff close failure')
+    later = InterruptedError('later foreground marked reporting failure');later._scope_signal_cancel = True
+    cls = type(handoff)
+    original_close, original_fail = cls.close, cls.fail
+    closes, reports = [], []
+    def close(this):
+        if this is not handoff:return original_close(this)
+        original_close(this)
+        closes.append(this)
+        raise ordinary
+    def fail(this, error, phase):
+        if this is not handoff or phase != 'foreground-close':return original_fail(this, error, phase)
+        reports.append((error, phase))
+        original_fail(this, error, phase)
+        raise later
+    selector = c.selectors.DefaultSelector()
+    previous = c.signal.pthread_sigmask(c.signal.SIG_BLOCK, set())
+    caught = None
+    try:
+        cls.close, cls.fail = close, fail
+        try:namespace['seam'](first, handoff, selector, previous)
+        except BaseException as error:caught = error
+    finally:
+        cls.close, cls.fail = original_close, original_fail
+        if selector.get_map() is not None:selector.close()
+        c.signal.pthread_sigmask(c.signal.SIG_SETMASK, previous)
+    assert caught is first and closes == [handoff] and reports == [(ordinary, 'foreground-close')]
+    assert any(error is later for _site, error in handoff.work['C1_p_errors'])
+    assert handoff.unusable and handoff.runtime is None
+    return {'case': 'actual-foreground-finally-AST-seam', 'first_native_cancel_preserved': True,
+        'later_marked_retained': True, 'actual_Popen_calls': 0, 'full_foreground_qualification': 'NOTRUN', 'cost': 'UNKNOWN'}
+
+
+def raw16_C1_wire_recording_isolation(root: Path, evidence=None) -> dict:
+    import socket
+    import traceback
+    spec = importlib.util.spec_from_file_location('C1_wire_control_consumer', root/'shadow/v1/_consumer.py')
+    c = importlib.util.module_from_spec(spec);sys.modules[spec.name] = c;spec.loader.exec_module(c)
+    results = []
+    class ActualSocket(socket.socket):
+        def __init__(self, owned):
+            super().__init__(fileno=owned.detach())
+            self.parts, self.receive_errors, self.cancel = [], [], None
+        def send(self, value, *args):
+            if self.cancel is not None and self.parts:raise self.cancel
+            count = super().send(value[:17], *args)
+            self.parts.append(bytes(value[:count]))
+            return count
+        def recv(self, amount, *args):
+            try:return super().recv(amount, *args)
+            except BaseException as error:
+                self.receive_errors.append(error)
+                raise
+    cases = ('side-codec', 'ACK-codec', 'ACQUIRE-send-budget', 'ACQUIRE-receive-budget',
+        'send-charge-after-progress', 'receive-charge-after-progress', 'first-private-cancel',
+        'socket-partial-marked', 'socket-EOF', 'socket-timeout')
+    for label in cases:
+        left, right = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        tx, rx = ActualSocket(left), ActualSocket(right)
+        deadline = time.monotonic() + (0.02 if label == 'socket-timeout' else 2)
+        sender = c._GateWire(tx, deadline, 'C1.codec.call', '1'*64, '2'*64)
+        receiver = c._GateWire(rx, deadline, 'C1.codec.call', '1'*64, '2'*64)
+        sender_work, receiver_work = c._c3_fresh_work(1), c._c3_fresh_work(1)
+        sender.recording_work, receiver.recording_work = sender_work, receiver_work
+        ordinary = c.Refusal('E_LIMIT')
+        first = KeyboardInterrupt('first private wire codec cancellation')
+        later = InterruptedError('later private wire reporting cancellation');later._scope_signal_cancel = True
+        native_cancel = InterruptedError('original socket send cancellation');native_cancel._scope_signal_cancel = True
+        original_side, original_room = c._c1_p_side_raw, c._capture_copy_room
+        original_charge, original_report = c._c1_p_wire_charge, c._capture_observation_error
+        faults, report_faults = [], []
+        def side(value, work):
+            if work is sender_work and label in {'side-codec', 'ACK-codec', 'first-private-cancel'} and not faults:
+                faults.append(label)
+                raise first if label == 'first-private-cancel' else ordinary
+            return original_side(value, work)
+        def room(work, *args, **kwargs):
+            target = sender_work if label == 'ACQUIRE-send-budget' else receiver_work
+            if work is target and label in {'ACQUIRE-send-budget', 'ACQUIRE-receive-budget'} and not faults:
+                faults.append(label)
+                raise ordinary
+            return original_room(work, *args, **kwargs)
+        def charge(work, field, amount):
+            result = original_charge(work, field, amount)
+            selected = ((label == 'send-charge-after-progress' and work is sender_work and field == 'W')
+                or (label == 'receive-charge-after-progress' and work is receiver_work and field == 'R'))
+            if selected and not faults:
+                faults.append((field, amount))
+                raise ordinary
+            return result
+        def report(work, kind, site, error):
+            result = original_report(work, kind, site, error)
+            if label == 'first-private-cancel' and work is sender_work and error is first:
+                report_faults.append(later)
+                raise later
+            return result
+        phase = 'INIT' if label in {'side-codec', 'first-private-cancel'} else 'INIT_ACK' if label == 'ACK-codec' else 'ACQUIRE'
+        native_body = ({'deadline': deadline, 'gate_call_ref': {'id': 'codec.call', 'sha256': '3'*64},
+            'initial_origin_refs': [], 'kill_request': {'id': 'ordinary.codec.request'}} if phase == 'INIT'
+            else {} if phase == 'INIT_ACK' else {'acquisition': 'inner.1', 'binding': {
+                'store_id': 'ordinary.codec.store', 'attempt_id': 'ordinary.codec.attempt',
+                'ancestors': [], 'entries': [], 'snapshots': [], 'origin_ref': {
+                    'schema_version': 1, 'kind': 'shadow_origin_observation',
+                    'id': 'ordinary.codec.origin', 'sha256': '4'*64}}})
+        body = dict(native_body)
+        if phase == 'INIT':body['p_handoff'] = {'version': 1}
+        caught = None
+        try:
+            c._c1_p_side_raw, c._capture_copy_room = side, room
+            c._c1_p_wire_charge, c._capture_observation_error = charge, report
+            if label == 'socket-EOF':
+                tx.close()
+                try:receiver.receive()
+                except BaseException as error:caught = error
+                assert isinstance(caught, c.Refusal) and str(caught) == 'E_RUNTIME'
+            elif label == 'socket-timeout':
+                try:receiver.receive()
+                except BaseException as error:caught = error
+                assert rx.receive_errors and caught is rx.receive_errors[0] and isinstance(caught, TimeoutError)
+            else:
+                if label == 'socket-partial-marked':tx.cancel = native_cancel
+                try:sender.send(phase, body)
+                except BaseException as error:caught = error
+                if label == 'first-private-cancel':
+                    assert caught is first and not tx.parts and report_faults == [later]
+                    assert sender.recording_failed and any(error is first for _site, error in sender.recording_errors)
+                elif label == 'socket-partial-marked':
+                    assert caught is native_cancel and len(tx.parts) == 1 and len(tx.parts[0]) == 17
+                    rx.settimeout(0.1)
+                    assert rx.recv(65536) == tx.parts[0]
+                else:
+                    assert caught is None
+                    got_phase, got_body = receiver.receive()
+                    assert (got_phase, got_body) == (phase, native_body)
+                    actual = b''.join(tx.parts)
+                    declared = struct.unpack('!I', actual[:4])[0]
+                    assert len(actual) == declared + 4 and not receiver.buffer
+                    row = json.loads(actual[4:])
+                    assert row['sequence'] == 1 and row['body'] == native_body
+                    assert sender.sent == receiver.received == 1
+                    failed = receiver if label in {'ACQUIRE-receive-budget', 'receive-charge-after-progress'} else sender
+                    assert failed.recording_failed and any(error is ordinary for _site, error in failed.recording_errors)
+                    if label == 'send-charge-after-progress':
+                        assert len(tx.parts) > 1 and faults == [('W', len(tx.parts[0]))]
+                        assert sender_work['seed_processing']['W'] == len(tx.parts[0]) == 17
+                        assert sender_work['write_bytes'] == sender_work['physical_bytes'] == 17
+                        assert sender.last_send_progress == (1, len(actual), len(actual))
+                    if label == 'receive-charge-after-progress':
+                        assert faults[0][0] == 'R' and receiver_work['seed_processing']['R'] == faults[0][1]
+                        assert receiver.last_receive_progress[0] == 1
+                    rx.setblocking(False)
+                    try:extra = rx.recv(65536)
+                    except BlockingIOError:extra = b''
+                    assert extra == b'', 'wire resent a physical frame or prefix'
+            results.append({'case': label, 'actual_send_bytes': sum(map(len, tx.parts)),
+                'actual_send_chunks': len(tx.parts), 'same_first_cancel': caught is first or caught is native_cancel,
+                'native_frame_count': receiver.received, 'qualification': 'wire-mechanism-only'})
+        finally:
+            c._c1_p_side_raw, c._capture_copy_room = original_side, original_room
+            c._c1_p_wire_charge, c._capture_observation_error = original_charge, original_report
+            tx.close();rx.close()
+            if evidence is not None:
+                def error_value(error):
+                    if isinstance(error, BaseException):
+                        return {'category': type(error).__name__, 'text': str(error),
+                            'traceback': traceback.format_exception(type(error), error, error.__traceback__)}
+                    raise TypeError(type(error).__name__)
+                with (Path(evidence)/('C1-wire-' + label + '.json')).open('x') as stream:
+                    json.dump({'case': label, 'sender_work': sender_work, 'receiver_work': receiver_work,
+                        'physical_hex': [part.hex() for part in tx.parts],
+                        'sender_errors': getattr(sender, 'recording_errors', []),
+                        'receiver_errors': getattr(receiver, 'recording_errors', []),
+                        'caught': caught, 'cost': 'UNKNOWN'}, stream, sort_keys=True, default=error_value)
+    return {'controls': results, 'cost': 'UNKNOWN', 'qualification': 'mechanism-only; actual-parent/main/FD6/native NOTRUN'}
