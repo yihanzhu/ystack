@@ -2350,7 +2350,8 @@ reports.append({'case':'actual-final-export-write-failure','actual_exit':rc,'act
     'original_saved142_ALRM_and_cleanup_decision_retained':True})
 
 def sudo_provenance_controls():
-    import dataclasses,importlib.util,sysconfig,types
+    import dataclasses,errno,importlib.util,sysconfig,types
+    real_fstat=os.fstat
     reader=(root/'scope/v1/read-shadow-evidence.py').read_text()
     enforced=(root/'shadow/v1/enforced-reproduction.py').read_text()
     spec=importlib.util.spec_from_file_location('sudo_contract_owned_consumer',root/'shadow/v1/_consumer.py')
@@ -2377,6 +2378,9 @@ def sudo_provenance_controls():
     source_bindings['_SCOPE_RUNTIME_SITES']=hashlib.sha256(ast.get_source_segment(reader,sites[0]).encode()).hexdigest()
     contract=ast.parse(enforced);fixed=unique(contract.body,'FixedSudo',ast.ClassDef)
     factory=unique(contract.body,'fixed_sudo',ast.FunctionDef)
+    sudo_identity=unique(contract.body,'_sudo_identity_values',ast.FunctionDef)
+    identity_source=ast.get_source_segment(enforced,sudo_identity)
+    assert hashlib.sha256(identity_source.encode()).hexdigest()=='0bb50cb875abaf30596f309962067066db05d07150774a465a3aacf7ff3bb6da'
     actual=ast.Module(body=sites+helpers+[sessions,ast.ClassDef(name='ActualReader',bases=[],keywords=[],body=methods,decorator_list=[])],type_ignores=[])
     actual=ast.fix_missing_locations(actual)
     namespace={'c':c,'Path':pathlib.Path,'PACKAGE':root,'sys':sys,'sysconfig':sysconfig}
@@ -2436,7 +2440,7 @@ def sudo_provenance_controls():
                 domain={'dataclasses':dataclasses,'os':operating,'stat':stat,'c':c,'sha':c.digest,'canonical':c.canonical,'require':namespace['require']}
                 sys.modules['sudo_contract_owned_definitions']=types.ModuleType('sudo_contract_owned_definitions')
                 domain['__name__']='sudo_contract_owned_definitions'
-                exec(compile(ast.Module(body=[fixed,factory],type_ignores=[]),'actual-fixed-sudo-owned','exec'),domain)
+                exec(compile(ast.Module(body=[sudo_identity,fixed,factory],type_ignores=[]),'actual-fixed-sudo-owned','exec'),domain)
                 obj=ActualReader.__new__(ActualReader);obj.owned=[];obj.inputs=[];obj.anchor=None
                 obj.source_copies=[];obj.store_session=None;obj.capture_completion_owner=None
                 obj._runtime_ordinals={site:0 for site in namespace['_SCOPE_RUNTIME_SITES']}
@@ -2455,8 +2459,10 @@ def sudo_provenance_controls():
                 def hold(path,limit,**options):
                     assert str(path)!='/usr/bin/sudo';return held
                 obj.hold=hold
+                factory_results=[]
                 def acquire():
-                    result=domain['fixed_sudo']();calls.append(['factory-return']);assert obj.owned==[];return result
+                    result=domain['fixed_sudo']();calls.append(['factory-return']);assert obj.owned==[]
+                    factory_results.append(result);return result
                 obj.enforced=types.SimpleNamespace(fixed_sudo=acquire)
                 native={k:digest for k in ('source_sha256','build_script_sha256','build_record_sha256','binary_locator_sha256','binary_sha256','python_locator_sha256','python_sha256','dependency_record_sha256')}
                 native.update(context_version=2,binary_size=1,python_abi=sysconfig.get_config_var('SOABI'),loader_mode='rtld-now-local.v1',python_locator_sha256=c.digest(sys.executable.encode()))
@@ -2503,14 +2509,26 @@ def sudo_provenance_controls():
                     else:obj.recheck()
                 except BaseException as exc:error=exc
                 finally:
+                    if case=='close-failure':
+                        assert len(factory_results)==1 and type(factory_results[0]) is domain['FixedSudo']
+                        assert len(obj.owned)==1 and obj.owned[0] is factory_results[0]
+                        closing_owner=obj.owned[0];closing_fd=closing_owner.fd
+                        assert fds==[closing_fd]
                     close_attempted=True
                     try:obj.close()
                     except BaseException as exc:close_error=exc
+                    if case=='close-failure':
+                        assert close_error is marker
+                        assert len(obj.owned)==1 and obj.owned[0] is closing_owner and closing_owner.fd==closing_fd
+                        try:real_fstat(closing_fd)
+                        except OSError as closed_error:assert closed_error.errno==errno.EBADF
+                        else:raise AssertionError('post-close marker seam left original sudo FD open')
                 if case in ('content-digest','wrong-digest','wrong-component','nonroot','writable','nlink'):
                     assert isinstance(error,c.Refusal) and error.code in ('E_RELATION','E_DEPENDENCY')
                 elif case=='factory-failure':assert error is marker
                 else:assert error is None
-                assert closed==fds and len(set(closed))==len(closed) and obj.owned==[]
+                assert closed==fds and len(set(closed))==len(closed)
+                if case!='close-failure':assert obj.owned==[]
                 assert (close_error is marker) if case=='close-failure' else close_error is None
                 flags=calls[0][2];assert flags==os.O_NOFOLLOW|(os.O_RDONLY if case=='fallback' else operating.O_EXEC)
                 rows.append({'case':case,'identity_sha256':identity,'content_sha256':c.digest(leaf.read_bytes()),'calls':calls,
@@ -2546,6 +2564,7 @@ def sudo_provenance_controls():
     finally:c.ANCHOR=original_anchor
     reports.append({'sudo_provenance_controls':rows,'actual_reader_sha256':hashlib.sha256(reader.encode()).hexdigest(),
         'actual_factory_sha256':hashlib.sha256(ast.get_source_segment(enforced,factory).encode()).hexdigest(),
+        'actual_sudo_identity_sha256':hashlib.sha256(identity_source.encode()).hexdigest(),
         'actual_dependency_sha256':source_bindings})
 sudo_provenance_controls()
 
@@ -3019,7 +3038,7 @@ evaluation_reasons() {
 }
 dashboard_shape_evaluation() {
   local scope_dashboard_line=${BASH_LINENO[0]}
-  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 10326 ]; then scope_dashboard_inflight=true; fi
+  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 10345 ]; then scope_dashboard_inflight=true; fi
   evaluation_document "$@"
   scope_dashboard_inflight=false
 }
