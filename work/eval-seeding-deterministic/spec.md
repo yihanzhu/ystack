@@ -1992,8 +1992,9 @@ to evade the source cap. Executable and policy files always belong to the closur
      保留原 shape、父块类型、输入 tamper 和完成前重查负例；新增提取不能用 jq
      异常替代原拒绝。两个 fixture 的其他既有断言保持。
    - **既有测试的固定源与生命周期绑定兼容。** 仅允许修订下表六个已有测试文件的指定接点。
-     `raw16_scope_P_ownership`、共享 orchestration flow 及两个 `evals-malicious` 接点绑定
-     设计源 `5084dfed3d6500d1b63a0331b0c149cfd0922bd3`；其余接点保留设计源
+     `raw16_scope_P_ownership`、共享 orchestration flow、两个 `evals-malicious` 接点，以及
+     下列 `PY_FIXED_MARKER` 和 `first_git_reference_driver` 接点绑定设计源
+     `5084dfed3d6500d1b63a0331b0c149cfd0922bd3`；其余接点保留设计源
      `53bed46d5eb694bfd05578f5ac1841b9443749c6`。后续实现须绑定实际
      已接受 source 与完整 recipe bytes。此条不扩大 C1 的六个功能路径或三个 pin 路径，
      本测试表不改产品行为，不开放整个测试文件或其它测试；唯一辅助生产兼容接点另列于下文。
@@ -2002,6 +2003,8 @@ to evade the source cap. Executable and policy files always belong to the closur
      | --- | --- |
      | `scripts/test/scope-qualification.test.sh`：`PY_STALE_PREPARE` 及同文件直接绑定它的 source SHA/行号断言；`PY_SAME_CALL_OWNED_CONTROLS:sudo_provenance_controls` | 前者仅修正原三个 source 的固定绑定及私有 copy 的必要兼容。保留原 observer、四个固定 body、精确替换次数、完整行号映射与逆变换、原异常/返回/关闭、所有 owner/身份/拒绝控制、费用与 cap。后者仅把原 `provenance/recheck/close` 的必需固定私有依赖和实际接收者状态接全；仍调用同一受绑定源码的原检查，不用常量、空实现或伪原件代替依赖。仅当真实普通 fixture backing 确需路径适配时，可在该测试独立加载的 consumer namespace 内将 `ANCHOR` 绑定到原 private fixture 目录，并须在 `finally` 恢复原常量；不改真实安装路径或生产 root，不开放其它路径 seam。保留原真实 FD、既有 OS transport seam、sudo 身份与内容摘要区别及登记/逆序关闭。十二 case 中仅 `close-failure` 的 owner 后置条件作此精确修正：关闭前记录同次 factory 返回且已实际登记的 `FixedSudo` 对象与原 fd；原 seam 仍先真实 `os.close`、记录 closed，再抛同一 marker。异常后 `owned` 恰含该同一对象，其 fd 仍等于同次记录值；在任何可能复用该 fd 数字的新 open 前，用未替换的真实 `os.fstat` 核 `errno.EBADF`。保留原 body error/身份、`closed==fds`、无重复关闭、marker 对象和 flags 断言；其它十一 case 仍须 `owned==[]`。本特例只适用于此明确先关闭后抛 marker 的 fixture，不将真实 close 异常泛化为 FD 必已关闭；不得 drop/清空失败 owner、修改生产 close 或重试该 FD/不确定的关闭。其余原故障断言判定不变。 |
      | `scripts/test/scope-qualification.test.sh`：顶层 `PY_COVERAGE_PURE` 的手工 `_Reader` 构造 | 仅在获取任何真实 held 对象前补齐原构造器默认值 `source_copies=[]`、`capture_completion_owner=None`；保留已有 `store_session=None`，不伪造 enforced/completion 或其它生产状态。保留原全部 141 项检查、真实 owned/Git/child/FD、命令 ledger、原 `finally` 的实际 `close` 及首错/取消规则。不得在关闭前清空 owned、吞异常、跳过 finally、伪造 completion 或放宽生产 `close` 对缺属性的处理；只补最后报错属性不算完成。 |
+     | `scripts/test/scope-qualification.test.sh`：`PY_FIXED_MARKER` | 绑定原 package 取得 marker_raw 与实际调用唯一 `_scope_write_frozen_values` 的关系；从该真实 helper 唯一提取原 marker 长度检查及 JSON 解析 try 前缀，在进入 write-path/frozen-bundle 校验前止步，并返回该前缀实际产生的 marker。核完整 source/helper bytes、定义唯一性、原调用及提取边界，不再从 write_relations 盲取连续三句。固定依赖仅为同一受绑定 namespace 的 `c/require/json` 及原 builtins，保留 `c._unique_object/c.canonical/c.DOCUMENT_LIMIT/c.Refusal`；不手写 parser、捕获 NameError 充当拒绝或补造完整 write receiver。保留 pretty/canonical marker 结果相等、三路径 write_path_ok 相等、原十项非法输入全部 E_RELATION（重复/嵌套重复 key、NaN/Infinity/溢出、非 dict、错误编码、超限/过深嵌套）及普通 evidence parser 拒绝 pretty bytes。 |
+     | `scripts/test/scope-qualification.test.sh`：`first_git_reference_driver` 生成的 `fixed_first_git_reference_phase` 内 `FixedEnvironment` | 仅在首次调用唯一提取的真实 Reader.environment 前，为原私有接收者补原无 gate 默认值 `store_session=None`。保留实际 runtime/no_hooks/jq.held.path、原完整 14-key environment、全部 value/argv/options、source binding、metadata、child/wait/group/pipe/cleanup 及首错控制。不造 deadline/session、手写环境 dict、加入 YSTACK_GATE_DEADLINE 或修改生产检查；普通 first_git_reference_controls 仍复用同一完整 phase，不开放 genuine/native 运行。 |
      | `scripts/test/evals-framework.test.sh`：`review_fixture` 的私有 copy/pin 替换接点及 `review_substitute` 的对应固定调用 | 逐位置确认原 catalog pin 的完整闭集，再改其严格替换绑定。设计源 driver 有四处（Python `CATALOG_SHA`、`FIXED_PINS`，shell `verify_runtime`、`run_program`），launcher 有一处；不把计数改成任意匹配或跳过断言。只改变私有 fixture 副本中原允许的 catalog/approval/driver pin；保留精确差异、program/closure 与重新量测的 driver 绑定，以及全部 trial、human grade、label、approval、tamper、repeat 和 dashboard 正反例。 |
      | `scripts/test/scope-gate-generation.test.sh`：`verifier_observation_value_controls` | 只修原实际值段的 AST 提取和固定依赖接线。按唯一赋值、完整参数、调用顺序及最终 `return raw` 绑定当前 producer，不再假定末两句形状。保留原 inline 对照、完整 bytes、非 ASCII/NaN、四阶段顺序、普通错误、marked cancellation 和同一异常对象断言；不得删除或搬动产品的 recording 分支，不能用手写值副本或 skip 代替提取。 |
      | `scripts/test/candidate-content-preparation-fixtures.py`：`raw16_preparation_P_handoff` | 只补该既有七 case 的两处实际生命周期接线：在同 scratch 的 inspect 生成前后，按原时点调用 `_T_cleanup_begin/_T_cleanup_done/_T_inspection_returned`；在原 H-copy 前后调用 `_begin_T_parent/_finish_T_parent`，后者只接受实际新增的 `reproduction`。仅刷新 stat 不替代原 transition。读取第二副本前先核实际 inspect 返回值、数量和对象身份，保留原 failure，不以索引保护跳过。保留七个正反例、失败/取消/关闭/费用断言及生产 `T_source.recheck`；不直接填 holder、回写 receipt 或强行接受失败 retention。 |
@@ -2031,7 +2034,11 @@ to evade the source cap. Executable and policy files always belong to the closur
      控制；变换缺失/重复/越界、错误 source/copy/行号、漏依赖或 guard 被删除均须拒绝。
      除表内固定绑定、先决适配、真实新增 configuration P 的分项精确计数、`close-failure` 及
      `PY_SOURCE_CANCEL` 的上述两个精确 owner 后置条件特例外，其它源码、observer/诊断语义、
-     场景和断言判定不变；
+     场景和断言判定不变。`PY_STALE_PREPARE` 原四个 observer literal、九份 source copy 的
+     maps/逆变换及两个 native 旧绑定保持原字节；上述 first-Git phase literal 仅准补该
+     receiver 默认值，不属于 PY_STALE_PREPARE 的修改。上述测试代码造成行号移动时，
+     仅可在既有直接 dashboard caller line-binding 接点机械重绑最终实际行号，并核完整
+     绑定与实际生成行关系；不借此改其它 source/copy/observer 或旧 native 绑定。
      新问题逐项判断，不能自动纳入本条。需要更宽修改就停止并返回 artifact gate。
      `evaluate-scope.sh` 保持 blob `605370780345539c5ed7b9debbd04f5327610128`，不得回退产品
      来满足旧测试。原 40 路径集合仅有 R9.3 明列的 C2 bootstrap 与 qualify 辅助兼容例外；
