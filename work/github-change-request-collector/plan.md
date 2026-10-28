@@ -51,12 +51,25 @@ cannot accept the plan, implementation or its own test result as qualification.
 
 ## 2. Runtime and entry
 
-Use the Python 3 standard library on POSIX Linux and macOS, with CPython 3.11 or
-newer. Record the actual interpreter version in proof. Unsupported runtimes fail
-before collection. No package download, SDK, shell command, CLI or helper is used
-by the product. The invocation is `python3 -I -B <collector-path>/collect.py`.
-Require isolated mode and disabled bytecode writes. Import only the two adjacent
-private modules from the collector's own directory, never a caller search path.
+Use the Python 3 standard library on POSIX Linux and macOS, with standalone CPython
+3.11 or newer. Record the actual interpreter version in proof. Unsupported runtimes
+fail before collection. No package download, SDK, shell command, CLI or helper is used
+by the product. The invocation is `python3 -I -S -B <collector-path>/collect.py`.
+Require isolated mode, disabled site initialization and disabled bytecode writes.
+Use the trusted interpreter and standard library directly; an embedded Python host
+or a runtime that initializes environment-sensitive crypto before entry is unsupported.
+
+The first entry statements use only `sys` and the standard `os`/`posix` bootstrap.
+Check the required flags and reject preloaded `site`, `sitecustomize`, `usercustomize`,
+`ssl`, `_ssl`, `hashlib` or `_hashlib` as unsupported-runtime before collection.
+Clear the parent environment without inspecting or logging values. This must precede
+every other standard-library, private-module and native-crypto import. Only then
+resolve and import the two adjacent private modules from the collector's own
+directory, never a caller search path. No module-level import may bypass this order.
+The model's input-validation and output paths do not load crypto. Import `hashlib`
+only inside the worker's patch-digest operation; import SSL only in the worker.
+The startup controls below must cover the actual interpreter and parent import path.
+Previously initialized native state cannot be repaired by clearing an environment.
 
 Read the spec's exact request object from stdin. There are no command-line mode
 switches, extra endpoints, token inputs or public test hooks. Reject extra keys,
@@ -92,9 +105,10 @@ Enumerate descriptor numbers through the platform's fixed `/proc/self/fd` on Lin
 or `/dev/fd` on macOS; do not read descriptor contents. Keep the enumeration
 descriptor open and exclude it during that pass, then close it explicitly.
 Unexpected close failures fail startup. Both sides close unused pipe endpoints.
-Clear the worker environment without inspecting values. Only then import the SSL
-backend and load the runtime's platform trust store. This prevents environment CA,
-key-log, proxy and OpenSSL configuration from affecting the native connection.
+The worker inherits the parent after the startup/import boundary in section 2.
+Clear its environment again without inspecting values, then import the SSL backend
+and load the runtime's platform trust store. Both crypto import paths must follow
+the parent cleanup; a cleared child environment alone is not proof of this order.
 
 The worker-to-parent protocol has only B (begin request), E (end request), and R
 (final result). B/E each carry one ordinal byte from 1 through 5. R carries an
@@ -175,8 +189,8 @@ once; a failed connect does not try another address. The TLS server name remains
 
 Use a fresh socket and TLS connection for each request. Use `SSLContext` with client
 mode, CERT_REQUIRED, hostname checking and minimum TLS 1.2. Load platform roots only
-after the worker environment is cleared. Missing roots or setup failure is a named
-unavailable outcome; never downgrade verification. Do not offer HTTP/2. All resolver,
+after the startup/import boundary and worker cleanup above. Missing roots or setup
+failure is a named unavailable outcome; never downgrade verification. Do not offer HTTP/2. All resolver,
 connect, handshake, send, read and close work shares the request's five-second
 absolute deadline, capped by the remaining attempt deadline.
 
@@ -308,12 +322,24 @@ tests. Keep request construction, wire parsing, collection, mapper, worker owner
 and public stdin/stdout handling on their production paths. No fixture can return
 a parsed result or inject an App identity, completeness bit or verdict.
 
-The wrapper runs isolated Python with socket creation and DNS denied by default.
+The wrapper runs Python with `-I -S -B`, with socket creation and DNS denied by default.
 It opens no real socket or credential. Native-constructor controls use in-memory
 resolver/socket/TLS stand-ins and assert real destination checks, SNI, trust setup,
 certificate flags and default backend selection. They do not claim a TLS handshake.
-Poison token, proxy, CA, key-log and configuration values with controlled sentinels.
-Require no secret discovery, configuration-file access or sentinel leakage.
+Set controlled token, proxy, CA, key-log and configuration sentinels before starting
+fresh test interpreters. Setting them after fixture imports does not cover startup.
+Use the existing fixture to observe the real bootstrap and parent model-loading
+path. Assert site hooks never run, parent cleanup precedes private/native imports,
+and patch hashing first loads `hashlib` in the cleaned worker. Include a fresh-process
+control that loads actual `hashlib`/`_hashlib` before entry under controlled config;
+the entry must refuse before creating a worker or connection. Test required-flag
+rejection in the private bootstrap check and refusal of a preloaded fixture-owned
+site hook. Do not enable installed site customization for a control.
+Keep socket/DNS denial active in these controls.
+An empty child environment or mock SSL arguments cannot replace these assertions.
+The deliberate preload control uses only fixture-owned configuration data.
+The admitted collector path must not open sentinel configuration files. Require no
+real configuration or credential discovery and no sentinel leakage in any control.
 
 Require a collected same-repository control and a fork control through the complete
 owner/worker path. Assert actual requests, independently known IDs and patch hashes,
@@ -343,10 +369,14 @@ controls cannot substitute for these actual owner timeout and retirement results
 At the implementation head, run the new suite and the unchanged
 `scripts/test/default-github-forge-adapter.test.sh`. Run required structure and lint
 checks, with shellcheck 0.11.0. The new wrapper is discovered by the existing
-`scripts/test/run-all.sh`; no workflow change is needed. The first runnable collector
-is a full-matrix milestone: record a successful manual CI dispatch at that exact
-head before G3, plus the required quick checks and relevant integration proof.
-Do not report skipped automatic tests as a full-suite pass.
+`scripts/test/run-all.sh`; no workflow change is needed. Require quick CI and all
+complete integration, identity, authorization and safety proof relevant to this
+collector, including the worker exception regressions. Follow
+`work/ci-minimum-roadmap/decision.md` for full-matrix dispatch: record it at the
+self-host completion covered by #264 and PR #373, and the candidate, materialization
+and delivery integration covered by #327's dependencies, before dependent work is
+accepted. This partial collector does not itself establish either named milestone.
+Do not report skipped automatic tests or quick CI as a full-suite pass.
 
 Append the three product modules, wrapper, fixture module and new guide to the
 restore manifest. Document the private worker boundary, public contract, unsupported
