@@ -2906,6 +2906,7 @@ class _SeedAssembly:
         _seed_require(len(scoped) == 1)
         self.scope_raw, self.scope_local = scoped[0].raw, value
         self.remote_scope_locators = locators
+        self._gate_remote_context = context
         self._transfer()
 
     def gate(self):
@@ -3272,8 +3273,22 @@ class _SeedAssembly:
             and self.gate_close_returned and self.gate_session.closed and self.gate_session.owner_confirmed
             and self.gate_session.phase == "COMPLETE" and not self.gate_session.remote)
         _seed_require(not self.generator.active and not self.generator.held
-            and not self.generator.reader.owned and not self.scope_reader.owned
-            and not self.scope_reader.commands_open)
+            and not self.generator.reader.owned)
+        if hasattr(self, "scope_reader"):
+            _seed_require(not self.scope_reader.owned and not self.scope_reader.commands_open)
+        else:
+            context = getattr(self.gate_session, "p_handoff", None)
+            _seed_require(type(context) is self.c._C1PHandoffParent
+                and context is self._gate_remote_context
+                and context.session is self.gate_session and context.anchor is self.generator.reader.anchor
+                and context.work is self.work and context.case_work is self.case_work
+                and context.window_work is self.window and context.files is self.files
+                and context.runtime is None
+                and context.completion_checked and not context.unusable
+                and hasattr(self, "remote_scope_locators") and hasattr(self, "scope_local")
+                and (context.output_holds is self.output_holds or (self.closed
+                    and self.output_holds is self._released_holds
+                    and all(not held.components for held in context.output_holds))))
 
     def close_gate(self):
         module = self._gate_type(self.generator, "scope/v1/generate-gate-evidence.py", "_Generator")

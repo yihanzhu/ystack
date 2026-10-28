@@ -6556,6 +6556,7 @@ class _C1PHandoffParent:
         self.closed_serials, self.receipts = set(), []
         self.runtime_invoices, self.runtime_serials = {}, {}
         self.generator_runtime_stages = []
+        self.completion_checked = False
         self.failure = None
         self.child_work = {}
         _capture_work_values(self.child_work, "C1-inner-Reader")
@@ -7232,6 +7233,7 @@ class _C1PHandoffParent:
             target = record["target"]
             _require(_identity(target.before) == record["initial_identity"], "E_STORE")
             target.recheck("E_STORE")
+        self.completion_checked = True
 
     def close(self):
         runtime, self.runtime = self.runtime, None
