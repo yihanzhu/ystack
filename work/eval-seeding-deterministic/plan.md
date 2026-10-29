@@ -1440,12 +1440,18 @@ some original bytes; these records are not raw-byte authentication or authority.
 **Original harness read and visible failure.** At its sole original failure-file
 read, use one builtin `IFS= read -r -d '' -n 128` into a bounded variable under the
 existing LC_ALL=C, with the original input redirection and captured read status.
-The empty delimiter crosses LF. A 128-byte limit or NUL delimiter completion is not
-complete evidence; only EOF with a complete first-line LF and a complete optional
-second-line LF may supply a record. A read error/partial/duplicate/extra line leaves
-metadata UNKNOWN. Preserve the original closed first-line code classification even
-when metadata is unusable. Use parameter expansion and fixed token checks, not a
-second read/here-string/process. Maximum valid representation is below 128 bytes.
+The empty delimiter crosses LF. Validate the captured string itself: below 128
+bytes, a complete first-line LF and at most one complete fixed second-line record
+ending in LF, with the exact grammar and field checks above. Keep the actual read
+status. Status 1 cannot distinguish EOF from a read error; a valid short captured
+record with that status may supply only the non-authoritative fixed fields. Status
+0 (limit/delimiter completion), any other status, a cap-length capture, missing LF,
+invalid fields, repeated records or extra content leaves metadata UNKNOWN. Whether
+the original file was fully read or no I/O error occurred remains UNKNOWN even when
+a record parses. Do not claim physical EOF, complete-file or raw-byte authentication.
+Preserve the original closed first-line code classification even when metadata is
+unusable. Use parameter expansion and fixed token checks, not a second read,
+here-string or process. Maximum valid representation is below 128 bytes.
 Retain the existing stage/exit/error output and original FAIL; append only validated
 fixed fields (or UNKNOWN) to ordinary CI stderr. No evaluator mock, new invocation,
 new source/read site or extra retained file. Keep both real records and every original
@@ -1470,12 +1476,15 @@ original final emit_error. Cover bare code, valid record, unknown/duplicate/trun
 extra-field records and disabled optional output there, with exact captured bytes;
 no new shell child or evaluator call. In that same child, exercise the actual
 harness parsing/output statements with fixed captured-string/read-status values:
-two complete lines, bare code, cap/NUL completion, partial LF and read failure.
-These pure controls do not prove an actual file read. Statically bind the original
-single read statement, -d/-n options, LC_ALL=C and sole redirection; the original
-pre/post failure call in the full recipe supplies the actual cross-newline read
-and CI output proof. If that branch is not reached, record the missing runtime
-proof instead of adding a stimulus/read/process or declaring it covered.
+status 1 with valid short two-line or bare-code text; status 0 with cap-length or
+short text; partial LF, repeated/extra fields; and other status values. Name and
+assert only those observed values, not simulated EOF or I/O-error categories.
+Valid short status-1 records remain useful; file completion/no-I/O-error remain
+UNKNOWN. These pure controls do not prove an actual file read. Statically bind the
+original single read, -d/-n options, LC_ALL=C and sole redirection. The original
+pre/post failure call supplies actual captured text, read status and CI output,
+never physical-EOF or error-free-read proof. If unreached, retain missing runtime
+proof without adding a stimulus/read/process or declaring it covered.
 
 Rebind complete stderr expectations only where these existing scope errors now gain
 the permitted record: original_context_controls, genuine_relation_controls,
