@@ -1116,22 +1116,34 @@ PY_REASON_PROGRAM
   fail 'record forms confused declaration and bound evaluator reasons'
 pass 'each record form accepts its evaluator reason and refuses the other evaluator reason'
 "$python_bin" -I -S -B - "$root" <<'PY_FIXED_MARKER'
-import ast,importlib.util,json,pathlib,sys,types
+import ast,hashlib,importlib.util,json,pathlib,sys,types
 root=pathlib.Path(sys.argv[1]);source=root/'scope/v1/read-shadow-evidence.py'
 spec=importlib.util.spec_from_file_location('scope_fixed_marker_subject',source)
 module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
-tree=ast.parse(source.read_bytes())
-method=next(node for node in ast.walk(tree) if isinstance(node,ast.FunctionDef) and node.name=='write_relations')
-start=next(index for index,node in enumerate(method.body) if isinstance(node,ast.Assign)
-    and any(isinstance(target,ast.Name) and target.id=='marker_raw' for target in node.targets))
-body=method.body[start:start+3]+[ast.Return(value=ast.Name(id='marker',ctx=ast.Load()))]
-function=ast.FunctionDef(name='fixed_marker',args=ast.arguments(posonlyargs=[],args=[ast.arg(arg='self')],
+reader_raw=source.read_bytes()
+assert hashlib.sha256(reader_raw).hexdigest()=='201791d1783d4130ec947bc60ed61cd5cec9d45da98eae033d1b859b9761e404'
+tree=ast.parse(reader_raw)
+methods=[node for node in ast.walk(tree) if isinstance(node,ast.FunctionDef) and node.name=='write_relations']
+helpers=[node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=='_scope_write_frozen_values']
+assert len(methods)==len(helpers)==1
+method,helper=methods[0],helpers[0]
+assert hashlib.sha256(ast.get_source_segment(reader_raw.decode(),helper).encode()).hexdigest()=='2aadf4a73a17974810f5604e394e00fba66f89454e2b2b351b31ee9370180736'
+lookups=[node for node in method.body if isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='marker_raw' for t in node.targets)]
+assert len(lookups)==1 and ast.dump(lookups[0].value)==ast.dump(ast.parse('self.package_sources["config/construction-mode.json"].raw',mode='eval').body)
+calls=[node for node in ast.walk(method) if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id=='_scope_write_frozen_values']
+assert len(calls)==1 and len(calls[0].args)==9 and isinstance(calls[0].args[0],ast.Name) and calls[0].args[0].id=='marker_raw'
+assert isinstance(helper.body[0],ast.Import) and [item.name for item in helper.body[0].names]==['fnmatch']
+assert ast.dump(helper.body[1])==ast.dump(ast.parse('require(len(marker_raw) <= 8 * c.DOCUMENT_LIMIT)').body[0])
+assert isinstance(helper.body[2],ast.Try) and len(helper.body[2].body)==3 and len(helper.body[2].handlers)==1
+assert isinstance(helper.body[2].body[0],ast.Assign) and helper.body[2].body[0].targets[0].id=='marker'
+assert isinstance(helper.body[3],ast.Expr) and any(isinstance(node,ast.Attribute) and node.attr=='write_path_ok' for node in ast.walk(helper.body[3]))
+body=helper.body[1:3]+[ast.Return(value=ast.Name(id='marker',ctx=ast.Load()))]
+function=ast.FunctionDef(name='fixed_marker',args=ast.arguments(posonlyargs=[],args=[ast.arg(arg='marker_raw')],
     kwonlyargs=[],kw_defaults=[],defaults=[]),body=body,decorator_list=[])
 namespace={'c':module.c,'require':module.require,'json':json}
 exec(compile(ast.fix_missing_locations(ast.Module(body=[function],type_ignores=[])),str(source),'exec'),namespace)
 def parse_fixed(raw):
-    return namespace['fixed_marker'](types.SimpleNamespace(package_sources={
-        'config/construction-mode.json':types.SimpleNamespace(raw=raw)}))
+    return namespace['fixed_marker'](raw)
 raw=(root/'config/construction-mode.json').read_bytes();canonical=module.c.canonical(json.loads(raw))
 assert raw!=canonical
 pretty=parse_fixed(raw);normalized=parse_fixed(canonical);assert pretty==normalized
@@ -3038,7 +3050,7 @@ evaluation_reasons() {
 }
 dashboard_shape_evaluation() {
   local scope_dashboard_line=${BASH_LINENO[0]}
-  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 10345 ]; then scope_dashboard_inflight=true; fi
+  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 10358 ]; then scope_dashboard_inflight=true; fi
   evaluation_document "$@"
   scope_dashboard_inflight=false
 }
@@ -7285,6 +7297,7 @@ def fixed_first_git_reference_phase():
         class FixedEnvironment:
             pass
         inputs = FixedEnvironment()
+        inputs.store_session = None
         inputs.runtime = runtime
         inputs.no_hooks = runtime / 'no-hooks'
         inputs.jq = FixedEnvironment()

@@ -4041,6 +4041,226 @@ for label, f, want in (
         ("receipt accepted-set digest", lambda b: b["cases"][0].update(accepted_set_sha256="0" * 64), "accepted-set-mismatch")):
     assert "qualification." + want in named([raws[0], edit(raws[1], f), raws[2]]), label
     assert agg([raws[0], edit(raws[1], f), raws[2]])["complete"] is False
+
+from unittest.mock import patch
+from types import SimpleNamespace
+st = q.prepare(qd, True)
+receipt_attempts = {n: {c["attempt_id"] for c in good["cases"] if c["config"] == n} for n in ("verifier", "probe")}
+aid = next(c["attempt_id"] for c in good["cases"] if c["id"] == "v-echo")
+other_aid = next(c["attempt_id"] for c in good["cases"] if c["config"] == "probe")
+pending, published = ".capture-" + aid + ".pending", ".capture-" + aid
+rerun, binding = {"qualification.batch-rerun"}, {"qualification.binding-mismatch"}
+with tempfile.TemporaryDirectory(dir=qd) as area:
+    original_roots = {n: st["cfgs"][n]["body"]["store_root"] for n in receipt_attempts}
+    for name, attempts in receipt_attempts.items():
+        root = area + "/copy-" + name
+        os.mkdir(root, 0o750); os.chmod(root, 0o750)
+        os.chown(root, st["cfgs"][name]["body"]["principal_uid"], st["cfgs"][name]["body"]["consumer_gid"])
+        for attempt in attempts:
+            shutil.copytree(original_roots[name] + "/" + attempt, root + "/" + attempt)
+        st["cfgs"][name]["body"]["store_root"] = root
+    with patch.object(q, "prepare", return_value=st):
+        assert agg(raws) == good
+        companion = st["cfgs"]["verifier"]["body"]["store_root"] + "/" + pending
+        os.mkdir(companion, 0o750); os.chmod(companion, 0o750)
+        os.chown(companion, st["cfgs"]["verifier"]["body"]["principal_uid"], st["cfgs"]["verifier"]["body"]["consumer_gid"])
+        assert agg(raws) == good, "bound pending is partial, never qualification"
+        target = os.path.dirname(companion) + "/" + published
+        os.rename(companion, target)
+        assert agg(raws) == good, "published without completion remains partial"
+        marker = target + "/.completion.pending"
+        with open(marker, "wb") as handle: handle.write(b"not authenticated capture data")
+        assert agg(raws) == good, "completion pending does not authenticate capture"
+        os.rename(marker, target + "/complete.json")
+        assert agg(raws) == good, "complete name does not authenticate capture"
+        ineligible = agg([edit(raws[0], lambda b: b.update(accepted_content_sha256="0" * 64))] + raws[1:])
+        assert "qualification.batch-rerun" in ineligible["reason_ids"], "invalid batch cannot authorize its companion"
+        ineligible = agg([edit(raws[0], lambda b: next(c for c in b["cases"] if c["id"] == "v-echo" and c["attempt_id"] == aid).update(launch_request_sha256="0" * 64))] + raws[1:])
+        assert "qualification.batch-rerun" in ineligible["reason_ids"], "failed verify_case cannot authorize its companion"
+    config = dict(st["cfgs"]["verifier"]["body"])
+    def backing(label, entry=pending, mode=0o750):
+        root = area + "/" + label
+        os.mkdir(root, 0o750); os.chmod(root, 0o750)
+        os.chown(root, config["principal_uid"], config["consumer_gid"])
+        cfg = dict(config, store_root=root)
+        if entry is not None:
+            os.mkdir(root + "/" + entry, mode); os.chmod(root + "/" + entry, mode)
+            os.chown(root + "/" + entry, config["principal_uid"], config["consumer_gid"])
+        return cfg
+    def classify(cfg): return q._aggregate_store_namespace(cfg, receipt_attempts["verifier"], {aid})
+    assert classify(backing("private-positive")) == set()
+    for label, entry in (("unbound", ".capture-attempt.unbound"), ("lookalike", published + ".other"),
+                         ("dot", ".other"), ("cross-store", ".capture-" + other_aid), ("unnamed-receipt", "attempt.unbound")):
+        assert classify(backing(label, entry)) == rerun, label
+    cfg = backing("dual")
+    os.mkdir(cfg["store_root"] + "/" + published, 0o750); os.chmod(cfg["store_root"] + "/" + published, 0o750)
+    os.chown(cfg["store_root"] + "/" + published, config["principal_uid"], config["consumer_gid"])
+    assert classify(cfg) == rerun
+    assert classify(backing("mkdir-partial", mode=0o700)) == binding
+    cfg = backing("root-mode"); os.chmod(cfg["store_root"], 0o700)
+    assert classify(cfg) == binding
+    cfg = backing("wrong-gid"); cfg["consumer_gid"] += 1
+    assert classify(cfg) == binding
+    cfg = backing("wrong-principal"); cfg["principal_uid"] += 1
+    assert classify(cfg) == binding
+    for label in ("file", "symlink"):
+        cfg = backing(label, None); entry = cfg["store_root"] + "/" + pending
+        if label == "file":
+            with open(entry, "wb") as handle: handle.write(b"not a directory")
+        else: os.symlink(area + "/private-positive/" + pending, entry)
+        assert classify(cfg) == binding, label
+    cfg = backing("intermediate-link")
+    os.symlink(cfg["store_root"], area + "/store-link")
+    assert classify(dict(cfg, store_root=area + "/store-link")) == binding
+    assert classify(dict(cfg, store_root="relative-store")) == binding
+    assert classify(dict(cfg, store_root=cfg["store_root"] + "/../intermediate-link")) == binding
+    for anchor in (area + "/absent-anchor", area + "/file/" + pending):
+        with patch.dict(os.environ, {"YSTACK_SANDBOX_TRUST_ROOT": anchor}): assert classify(cfg) == binding
+    os.mkdir(area + "/writable-anchor", 0o777); os.chmod(area + "/writable-anchor", 0o777)
+    with patch.dict(os.environ, {"YSTACK_SANDBOX_TRUST_ROOT": area + "/writable-anchor"}): assert classify(cfg) == binding
+    real_open, real_close, real_stat, real_fstat, real_listdir = os.open, os.close, os.stat, os.fstat, os.listdir
+    cfg = backing("wrong-owner")
+    def metadata(state):
+        fields = ("st_dev", "st_ino", "st_uid", "st_gid", "st_mode", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns")
+        return SimpleNamespace(**{k: getattr(state, k) + (1 if k == "st_uid" else 0) for k in fields})
+    companion_inode = os.stat(cfg["store_root"] + "/" + pending).st_ino
+    def owner_fstat(fd):
+        state = real_fstat(fd)
+        return metadata(state) if state.st_ino == companion_inode else state
+    def owner_stat(*args, **kwargs):
+        state = real_stat(*args, **kwargs)
+        return metadata(state) if state.st_ino == companion_inode else state
+    with patch.object(os, "stat", owner_stat), patch.object(os, "fstat", owner_fstat):
+        assert classify(cfg) == binding, "consistent wrong-owner metadata must fail the owner rule"
+    cfg = backing("acl")
+    inode = os.stat(cfg["store_root"] + "/" + pending).st_ino
+    if sys.platform == "darwin":
+        real_acl = q.hs.darwin_acl_entries
+        def acl(fd): return ["unexpected entry"] if real_fstat(fd).st_ino == inode else real_acl(fd)
+        with patch.object(q.hs, "darwin_acl_entries", acl): assert classify(cfg) == binding
+    else:
+        real_acl = q.hs.linux_read_acl_xattr
+        def acl(fd, name): return b"unexpected ACL" if real_fstat(fd).st_ino == inode else real_acl(fd, name)
+        with patch.object(q.hs, "linux_read_acl_xattr", acl): assert classify(cfg) == binding
+    cfg = backing("replacement")
+    def replace_open(name, flags, *args, **kwargs):
+        fd = real_open(name, flags, *args, **kwargs)
+        if name == pending:
+            rootfd = kwargs["dir_fd"]
+            os.rename(pending, "retained-old", src_dir_fd=rootfd, dst_dir_fd=rootfd)
+            os.mkdir(pending, 0o750, dir_fd=rootfd)
+        return fd
+    with patch.object(os, "open", replace_open): assert classify(cfg) == binding
+    cfg = backing("inventory-drift")
+    store_inode = os.stat(cfg["store_root"]).st_ino
+    listings = []
+    def drift_listdir(fd):
+        if isinstance(fd, int) and real_fstat(fd).st_ino == store_inode:
+            listings.append(fd)
+            if len(listings) == 2: os.mkdir("unexpected", 0o750, dir_fd=fd)
+        return real_listdir(fd)
+    with patch.object(os, "listdir", drift_listdir): assert classify(cfg) == binding
+    assert len(listings) == 2
+    cfg = backing("root-replacement")
+    store_inode = os.stat(cfg["store_root"]).st_ino
+    listings = []
+    def replace_root_listdir(fd):
+        result = real_listdir(fd)
+        if isinstance(fd, int) and real_fstat(fd).st_ino == store_inode:
+            listings.append(fd)
+            if len(listings) == 2:
+                os.rename(cfg["store_root"], cfg["store_root"] + "-retained")
+                os.mkdir(cfg["store_root"], 0o750); os.chmod(cfg["store_root"], 0o750)
+        return result
+    with patch.object(os, "listdir", replace_root_listdir): assert classify(cfg) == binding
+    assert len(listings) == 2
+    cfg = backing("metadata-drift")
+    inode = os.stat(cfg["store_root"] + "/" + pending).st_ino
+    real_shape = q.hs.store_root_state_ok
+    checks = []
+    def drift_shape(fd, uid, gid):
+        if real_fstat(fd).st_ino == inode:
+            checks.append(fd)
+            if len(checks) == 2: os.fchmod(fd, 0o700)
+        return real_shape(fd, uid, gid)
+    with patch.object(q.hs, "store_root_state_ok", drift_shape): assert classify(cfg) == binding
+    assert len(checks) == 2
+    class Cancel(BaseException): _scope_signal_cancel = True
+    for label, cancel_at in (("open-failure", "open"), ("close-failure", None),
+                             ("inventory-cancel", "inventory"), ("close-cancel", "close"),
+                             ("error-close-keyboard", "error-keyboard"), ("error-close-signal", "error-signal")):
+        cfg = backing(label); acquired, closed = [], []
+        marker = KeyboardInterrupt(label) if cancel_at == "error-keyboard" else OSError(label) if cancel_at == "error-signal" else Cancel(label)
+        if cancel_at == "error-signal": marker._scope_signal_cancel = True
+        primary_error = OSError("first inventory failure")
+        def tracked_open(name, flags, *args, **kwargs):
+            assert flags & os.O_NOFOLLOW and flags & os.O_DIRECTORY
+            if cancel_at == "open" and name == pending: raise OSError("partial acquisition failure")
+            fd = real_open(name, flags, *args, **kwargs); acquired.append(fd); return fd
+        def fault_close(fd):
+            closed.append(fd); real_close(fd)
+            if len(closed) == 1:
+                if cancel_at in ("close", "error-keyboard", "error-signal"): raise marker
+                raise OSError("secondary close failure" if cancel_at else "close failure")
+        def fault_listdir(fd): raise primary_error if cancel_at in ("error-keyboard", "error-signal") else marker
+        with patch.object(os, "open", tracked_open), patch.object(os, "close", fault_close):
+            if cancel_at in ("inventory", "error-keyboard", "error-signal"):
+                with patch.object(os, "listdir", fault_listdir):
+                    try: classify(cfg)
+                    except BaseException as error:
+                        assert error is marker
+                        if cancel_at != "inventory": assert error.__cause__ is primary_error
+                    else: raise AssertionError("lost inventory cancellation")
+            elif cancel_at == "close":
+                try: classify(cfg)
+                except Cancel as error: assert error is marker
+                else: raise AssertionError("lost close cancellation")
+            else: assert classify(cfg) == binding
+        assert closed == list(reversed(acquired)) and len(closed) == len(set(closed)), label
+    with open(q.__file__) as handle:
+        append_line = next(i for i, line in enumerate(handle, 1) if line.strip() == "fds.append(fd)")
+    for label in ("registration-memory", "registration-marked", "registration-memory-close-cancel"):
+        cfg = backing(label); acquired, closed, injected = [], [], []
+        registration = OSError(label) if label == "registration-marked" else MemoryError(label)
+        if label == "registration-marked": registration._scope_signal_cancel = True
+        closing_cancel = Cancel("close after registration failure")
+        def tracked_open(name, flags, *args, **kwargs):
+            fd = real_open(name, flags, *args, **kwargs); acquired.append(fd); return fd
+        def registration_trace(frame, event, arg):
+            if (event == "line" and frame.f_code.co_filename == q._aggregate_store_namespace.__code__.co_filename
+                    and frame.f_lineno == append_line and frame.f_locals.get("name") == pending):
+                injected.append(frame.f_locals["fd"])
+                raise registration
+            return registration_trace
+        def registration_close(fd):
+            closed.append(fd); real_close(fd)
+            if len(closed) == 1 and label == "registration-memory-close-cancel": raise closing_cancel
+        previous_trace = sys.gettrace()
+        with patch.object(os, "open", tracked_open), patch.object(os, "close", registration_close):
+            try:
+                sys.settrace(registration_trace)
+                try: result = classify(cfg)
+                except BaseException as error:
+                    expected = closing_cancel if label == "registration-memory-close-cancel" else registration
+                    assert error is expected and (label == "registration-marked" or error.__cause__ is registration)
+                else: assert label == "registration-memory" and result == binding
+            finally: sys.settrace(previous_trace)
+        assert injected == [acquired[-1]] and closed == list(reversed(acquired)) and len(closed) == len(set(closed)), label
+    for marker in (KeyboardInterrupt("second close"), Cancel("second close")):
+        cfg = backing("close-first-" + type(marker).__name__); acquired, closed = [], []
+        first_close = OSError("first close failure")
+        def tracked_open(name, flags, *args, **kwargs):
+            fd = real_open(name, flags, *args, **kwargs); acquired.append(fd); return fd
+        def two_close_failures(fd):
+            closed.append(fd); real_close(fd)
+            if len(closed) == 1: raise first_close
+            if len(closed) == 2: raise marker
+        with patch.object(os, "open", tracked_open), patch.object(os, "close", two_close_failures):
+            try: classify(cfg)
+            except BaseException as error: assert error is marker and error.__cause__ is first_close
+            else: raise AssertionError("lost second-close cancellation")
+        assert len(acquired) >= 2 and closed == list(reversed(acquired)) and len(closed) == len(set(closed))
+assert agg(raws) == good, "original captured stores and qualification remain unchanged"
 PY
 pass 'aggregate rebuilds each batch'"'"'s accepted set from batches.json and is complete only when every batch ran exactly once, every case id is covered exactly once and slots, configurations, domain evidence and case list agree: a missing, duplicated or rerun batch, a changed configuration, domain evidence, case list or case, a case in two batches or none, and an accepted set that differs from the rebuilt one or from its receipts each give their named reason, beside the unchanged complete aggregate (equal to the dry run and never qualified)'
 

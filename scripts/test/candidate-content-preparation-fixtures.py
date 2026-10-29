@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+import contextlib
 import dataclasses
 import errno
 import hashlib
@@ -4077,6 +4078,117 @@ def raw16_sudo_companion(root: Path) -> None:
     finally:c._acl_state = acl
     print(json.dumps({'fixed_sudo_companion_controls': results}, sort_keys=True))
 
+@contextlib.contextmanager
+def _source_configuration_fixture(c, directory: Path, request_raw: bytes, operation: str):
+    import ast
+    assert operation in {"coverage-read", "kill-register-read"} and type(request_raw) is bytes
+    root = Path(c._source_root())
+    backing = directory / "source-configuration"
+    host_raw = (backing / "host-config.json").read_bytes()
+    host_document = json.loads(host_raw)
+    host = host_document["body"] if host_document.get("kind") == "sandbox_host_config" else host_document
+    normalizer_raw = (root / "sandbox/v1/coverage-source.py").read_bytes()
+    supervisor_raw = (root / "sandbox/v1/host-supervisor.py").read_bytes()
+    constants = {node.targets[0].id: ast.literal_eval(node.value)
+        for node in ast.parse(normalizer_raw).body
+        if isinstance(node, ast.Assign) and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id in {"OPERATION", "KILL_OPERATION", "FAMILIES", "KILL_FAMILIES", "RULE_VERSION"}}
+    kill = operation == "kill-register-read"
+    prefix = "kill-register-source" if kill else "coverage-source"
+    wire_operation = constants["KILL_OPERATION" if kill else "OPERATION"]
+    families = constants["KILL_FAMILIES" if kill else "FAMILIES"]
+    fields = ([['after', 'before', 'default_branch', 'end_sequence', 'repository', 'schema_version', 'start_sequence'],
+               ['commits', 'schema_version'], ['events', 'schema_version'], ['merges', 'schema_version']]
+        if kill else [['branch_snapshots', 'commits', 'default_branch', 'repository', 'schema_version'],
+                      ['pull_requests', 'schema_version'], ['baseline', 'current', 'events', 'schema_version']])
+    def document(kind, body):
+        return c.canonical({"schema_version": 1, "kind": kind, "id": "source.fixture", "body": body})
+    values = {"host-config.json": host_raw, "host-supervisor.py": supervisor_raw,
+              "coverage-source.py": normalizer_raw, "collector.py": b"#!/usr/bin/env python3\n"}
+    rows = [{"role": "normalizer", "path": str(backing / "coverage-source.py"), "sha256": c.digest(normalizer_raw)},
+            {"role": "collector", "path": str(backing / "collector.py"), "sha256": c.digest(values["collector.py"])}]
+    for family, keys in zip(families, fields):
+        name = "schema-" + family + ".json"
+        values[name] = c.canonical({"schema_version": 1, "family": family,
+                                   "operation": wire_operation, "page_fields": keys})
+        rows.append({"role": "schema." + family, "path": str(backing / name), "sha256": c.digest(values[name])})
+    package = document("kill_register_source_package" if kill else "coverage_source_package",
+                       {"operation": wire_operation, "files": sorted(rows, key=lambda row: row["role"])})
+    accepted = document("kill_register_source_accepted_identity_set" if kill else "coverage_source_accepted_identity_set",
+        {"activation_state": "inactive", "identities": [{"source_id": "source.fixture", "operation": wire_operation,
+         "proof_state": "qualified", "host_supervisor_sha256": c.digest(supervisor_raw),
+         "source_package_sha256": c.digest(package), "collector_sha256": c.digest(values["collector.py"]),
+         "normalizer_sha256": c.digest(normalizer_raw)}]})
+    config = {"source_id": "source.fixture", "operation": wire_operation,
+        "queries": [{"family": family, "schema_version": 1} for family in families],
+        "source_package_path": str(backing / "package.json"), "source_package_sha256": c.digest(package),
+        "collector_path": str(backing / "collector.py"), "collector_sha256": c.digest(values["collector.py"]),
+        "accepted_set_path": str(backing / (prefix + "-accepted-identities.json")),
+        "accepted_set_sha256": c.digest(accepted),
+        **{name: host[name] for name in ("store_id", "principal_uid", "consumer_gid")}}
+    if kill:
+        body = json.loads(request_raw)["body"]
+        config.update({name: body[name] for name in ("control_repository", "default_branch", "bootstrap")})
+    else:
+        config.update(coverage_rule_version=constants["RULE_VERSION"], publisher_identity_ref={
+            "schema_version": 1, "kind": "publisher_identity", "id": "publisher.fixture", "sha256": c.digest(request_raw)})
+    values.update({"package.json": package, prefix + "-accepted-identities.json": accepted,
+        prefix + "-config.json": document("kill_register_source_config" if kill else "coverage_source_config", config)})
+    for name, raw in values.items():
+        if name != "host-config.json":
+            (backing / name).write_bytes(raw)
+            (backing / name).chmod(0o500 if name == "collector.py" else 0o400)
+    original_anchor, original_rule = c.ANCHOR, c._root_rule
+    anchor, configuration = None, None
+    try:
+        c.ANCHOR = str(backing)
+        c._root_rule = lambda _resolver: lambda _fd, _state, _ancestor: True
+        anchor = c.Anchor(host, host_raw, [], {}, ("", []), ("", []), None)
+        for path, is_directory in ((backing, True), (backing / "host-config.json", False),
+                                   (backing / "host-supervisor.py", False)):
+            held = c._open_held(str(path), is_directory, c._root_rule(None), "E_CONFIG")
+            try: anchor.held.append(held)
+            except BaseException:
+                held.close()
+                raise
+        configuration = c._CoverageConfiguration(anchor, operation)
+        names = {"host": "host-config.json", "config": prefix + "-config.json",
+                 "accepted": prefix + "-accepted-identities.json", "package": "package.json",
+                 "supervisor": "host-supervisor.py", "normalizer": "coverage-source.py"}
+        assert type(configuration) is c._CoverageConfiguration and not configuration.source_inputs_unusable
+        assert set(configuration.source_inputs) == set(names)
+        for role, name in names.items():
+            raw, held = configuration.source_inputs[role]
+            assert raw == values[name] and held.path == str(backing / name) and held.components
+            assert any(item is held for item in anchor.held + configuration.held)
+            assert held.read(len(raw), "E_STALE") == raw
+        assert configuration.source_inputs["host"][0] is anchor.config_raw
+        assert configuration.source_inputs["config"][0] is configuration.config_raw
+        assert configuration.source_inputs["accepted"][0] is configuration.accepted_raw
+        assert configuration.source_inputs["package"][0] is configuration.package_raw
+        yield anchor, configuration
+    finally:
+        primary, failures = sys.exc_info()[1], []
+        try:
+            owner = getattr(anchor, "scope_runtime_owner", None)
+            registered = owner is not None and any(item is configuration for item in getattr(owner, "owned", ()))
+            if configuration is not None and configuration.held and not registered:
+                try: configuration.close()
+                except BaseException as error: failures.append(error)
+            if anchor is not None:
+                try: anchor.close()
+                except BaseException as error: failures.append(error)
+        finally:
+            c.ANCHOR, c._root_rule = original_anchor, original_rule
+        if failures:
+            marked = lambda error: isinstance(error, KeyboardInterrupt) or getattr(error, "_scope_signal_cancel", False)
+            first = primary if primary is not None else failures[0]
+            if not marked(first):first = next((error for error in failures if marked(error)), first)
+            first._source_configuration_cleanup_failures = tuple(failures)
+            raise first from (failures[0] if first is primary else primary)
+
+
 def raw16_scope_P_ownership(root: Path) -> None:
     import ast
     import tempfile
@@ -4105,113 +4217,171 @@ def raw16_scope_P_ownership(root: Path) -> None:
             with tempfile.TemporaryDirectory(prefix="ystack-reader-owned-P-") as temporary:
                 base = Path(temporary).resolve();base.chmod(0o700)
                 captures = base / "captures";captures.mkdir(mode=0o700)
-                reader = object.__new__(scope._Reader)
-                reader.source_copies = [];reader.source_capture_work = [];reader.source_capture_ordinal = 0
-                reader.owned = [];reader.inputs = [];reader.captures = captures;reader.darwin = None
-                reader.store_session = None;reader.capture_completion_owner = None;reader.enforced = enforced
-                anchor = c.Anchor({}, b"", [], {}, ("", []), ("", []), None)
-                reader.anchor = anchor
+                request = c.canonical({"kind": "coverage_source_request", "id": "source.p.fixture"})
                 roles = (("python", "python"), ("jq", "jq"), ("bash", "bash"), ("git", "git_binary"))
                 for role, _attribute in roles:
                     path = base / role;path.write_bytes(b"synthetic never executed runtime " + role.encode());path.chmod(0o400)
-                for role, attribute in roles:
-                    setattr(reader, attribute, reader.hold(base / role, c.EXECUTABLE_LIMIT))
-                request = c.canonical({"kind": "coverage_source_request", "id": "source.p.fixture"})
-                acquired, cancels, closes, active_P = [], [], {}, []
-                acquire, observe, close_fd = c._HeldCaptureCopy.acquire, c._capture_observe, os.close
-                def marked():
-                    try:handler(15, None)
-                    except InterruptedError as error:cancels.append(error);raise
-                class Registration(list):
-                    def append(self, value):
-                        if case == "registered-cancel":
-                            super().append(value)
-                            marked()
-                        if case == "register-A-close-B":marked()
-                        if case.startswith("register-memory"):raise MemoryError("controlled Reader registration")
-                        super().append(value)
-                reader.source_copies = Registration()
-                def acquisition(current, *args):
-                    result = acquire(current, *args)
-                    acquired.append(result)
-                    for held in result.owned:
-                        for row in held.components:closes[row.fd] = 0
-                    actual_close = result.close
-                    def close_P():
-                        active_P.append({row.fd for held in result.owned for row in held.components})
-                        try:actual_close()
-                        finally:active_P.pop()
-                    result.close = close_P
-                    return result
-                def observation(work, kind, site, value, *args, **kwargs):
-                    result = observe(work, kind, site, value, *args, **kwargs)
-                    if case in {"register-A-close-B", "register-memory-close-B"} and site == "held-close" and acquired and work is acquired[0].leaf and len(cancels) < (2 if case == "register-A-close-B" else 1):marked()
-                    return result
-                def closing(fd):
-                    if active_P and fd in active_P[-1]:closes[fd] += 1
-                    return close_fd(fd)
-                c._HeldCaptureCopy.acquire, c._capture_observe, os.close = acquisition, observation, closing
-                caught = None
-                try:
-                    try:reader.retain_source_runtime(request)
-                    except InterruptedError as error:caught = error
-                    if case.startswith("register"):
-                        assert len(acquired) == 1 and acquired[0].closed and not reader.source_copies
-                        assert anchor.private_observations.get("unusable") is True
-                        assert closes and all(count == 1 for count in closes.values()), "registration P once close"
-                        if case == "register-memory":assert caught is None
-                        else:assert cancels and caught is cancels[0]
-                    else:
-                        assert len(reader.source_copies) == 4 and all(not item.closed for item in reader.source_copies), (case, anchor.private_observations.get("unusable"), [leaf.get("failure") for leaf in anchor.recording_work.get("local_runtime_leaves", [])], [leaf.get("metadata_failure") for leaf in anchor.recording_work.get("scope_runtime_parent_work", [])])
-                        native = c._open_held(str(base), True, lambda *_: True, "E_STORE")
-                        captured = host._capture_values("source.p.fixture", request, {"source_pages": {"coverage": []}}, True)
-                        source = object.__new__(c._HeldCoverageRead)
-                        source.anchor = anchor;source.attempt_id = "source.p.fixture";source.held = [native]
-                        source.snapshots = {"payload/request.json": request};source.observation = b"{}\n"
-                        source.capture_origin = b"{}\n";source.storage_rows = [];source.capture_work = {}
-                        source.capture = object.__new__(c._HeldCaptureRead)
-                        source.capture.snapshots = {"capture.json": captured,
-                            "complete.json": host._capture_completion_values(source.attempt_id, request, captured)}
-                        source.capture.work = {};c._capture_work_values(source.capture.work, "synthetic-source-H-input")
-                        source.capture.transferred = 0;source.capture.anchor = anchor
-                        anchor.identity_context = {}
-                        anchor.capture_completion_owner = types.SimpleNamespace(transfer=lambda *_: None)
-                        source.capture.completion_owner = anchor.capture_completion_owner
+                store = base / "native-store";store.mkdir(mode=0o700)
+                raw_directory = store / "source.p.fixture" / "payload" / "raw"
+                raw_directory.mkdir(parents=True, mode=0o700)
+                capture_directory = base / "capture-input";capture_directory.mkdir(mode=0o700)
+                captured = host._capture_values("source.p.fixture", request, {"source_pages": {"coverage": []}}, True)
+                capture_values = {"capture.json": captured,
+                    "complete.json": host._capture_completion_values("source.p.fixture", request, captured)}
+                for name, raw in capture_values.items():
+                    (capture_directory / name).write_bytes(raw);(capture_directory / name).chmod(0o400)
+                configuration_root = base / "source-configuration";configuration_root.mkdir(mode=0o700)
+                (configuration_root / "host-config.json").write_bytes(c.canonical({"store_id": "store.fixture",
+                    "principal_uid": os.geteuid(), "consumer_gid": os.getegid(), "store_root": str(store)}))
+                with _source_configuration_fixture(c, base, request, "coverage-read") as (anchor, configuration):
+                    reader=None;reader_close_attempted=False;native=None;native_close_attempted=False
+                    try:
+                        reader = object.__new__(scope._Reader)
+                        reader.source_copies = [];reader.source_capture_work = [];reader.source_capture_ordinal = 0
+                        reader.owned = [];reader.inputs = [];reader.captures = captures;reader.darwin = None
+                        reader.store_session = None;reader.capture_completion_owner = None;reader.enforced = enforced
+                        reader.anchor = anchor;anchor.scope_runtime_owner = reader
+                        reader.owned.append(configuration)
+                        for role, attribute in roles:
+                            setattr(reader, attribute, reader.hold(base / role, c.EXECUTABLE_LIMIT))
+                        acquired, cancels, closes, active_P = [], [], {}, []
+                        acquire, observe, close_fd = c._HeldCaptureCopy.acquire, c._capture_observe, os.close
+                        def marked():
+                            try:handler(15, None)
+                            except InterruptedError as error:cancels.append(error);raise
+                        class Registration(list):
+                            def append(self, value):
+                                if case == "registered-cancel":
+                                    super().append(value)
+                                    marked()
+                                if case == "register-A-close-B":marked()
+                                if case.startswith("register-memory"):raise MemoryError("controlled Reader registration")
+                                super().append(value)
+                        reader.source_copies = Registration()
+                        def acquisition(current, *args):
+                            result = acquire(current, *args)
+                            acquired.append(result)
+                            for held in result.owned:
+                                for row in held.components:closes[row.fd] = 0
+                            actual_close = result.close
+                            def close_P():
+                                active_P.append({row.fd for held in result.owned for row in held.components})
+                                try:actual_close()
+                                finally:active_P.pop()
+                            result.close = close_P
+                            return result
+                        def observation(work, kind, site, value, *args, **kwargs):
+                            result = observe(work, kind, site, value, *args, **kwargs)
+                            if case in {"register-A-close-B", "register-memory-close-B"} and site == "held-close" and acquired and work is acquired[0].leaf and len(cancels) < (2 if case == "register-A-close-B" else 1):marked()
+                            return result
+                        def closing(fd):
+                            if active_P and fd in active_P[-1]:closes[fd] += 1
+                            return close_fd(fd)
+                        c._HeldCaptureCopy.acquire, c._capture_observe, os.close = acquisition, observation, closing
+                        caught = None
                         try:
-                            reader.retain_source_capture(source)
-                            reader.retain_source_capture(source)
-                            assert len(reader.source_copies) == 6 and not anchor.private_observations.get("unusable")
-                            for copied in reader.source_copies:
-                                copied.recheck()
-                                assert not copied.leaf.get("metadata_failure") and not copied.closed
-                            assert set(reader.source_copies[4].members) == {"capture.json", "complete.json", "origin-observation.json", "consumer-observations.json"}
-                            if case == "target-drift":
-                                target = Path(next(iter(reader.source_copies[0].members.values())).path)
-                                target.chmod(0o600);target.write_bytes(b"drift");target.chmod(0o400)
-                            if case == "parent-mode":captures.chmod(0o750)
-                            expected = {row.fd for copied in reader.source_copies for held in copied.owned for row in held.components}
-                            os.close = closing
-                            if case == "seal":
-                                anchor.capture_completion_owner = None
-                                reader.seal_source_captures()
-                                assert anchor.private_observations.get("recording_sealed") is not True
-                            elif case == "release":reader.release_stores()
-                            elif case == "close":reader.close()
-                            else:reader._close_source_copies()
-                            assert not reader.source_copies and all(item.closed and not item.owned for item in acquired)
-                            assert all(closes.get(fd) == 1 for fd in expected), ("Reader P once close", case, [(fd, closes.get(fd)) for fd in expected if closes.get(fd) != 1])
-                            if case in {"target-drift", "parent-mode"}:assert anchor.private_observations.get("unusable") is True
-                            assert os.fstat(native.fd)
+                            try:reader.retain_source_runtime(request)
+                            except InterruptedError as error:caught = error
+                            if case.startswith("register"):
+                                assert len(acquired) == 1 and acquired[0].closed and not reader.source_copies
+                                assert anchor.private_observations.get("unusable") is True
+                                assert closes and all(count == 1 for count in closes.values()), "registration P once close"
+                                if case == "register-memory":assert caught is None
+                                else:assert cancels and caught is cancels[0]
+                            else:
+                                assert len(reader.source_copies) == 4 and all(not item.closed for item in reader.source_copies), (case, anchor.private_observations.get("unusable"), [leaf.get("failure") for leaf in anchor.recording_work.get("local_runtime_leaves", [])], [leaf.get("metadata_failure") for leaf in anchor.recording_work.get("scope_runtime_parent_work", [])])
+                                native = c._open_held(str(base), True, lambda *_: True, "E_STORE")
+                                source = object.__new__(c._HeldCoverageRead)
+                                source.anchor = anchor;source.configuration = configuration;source.attempt_id = "source.p.fixture"
+                                source.held = []
+                                reader.owned.append(source)
+                                source.held.append(c._open_held(str(raw_directory), True, lambda *_: True, "E_STORE"))
+                                source.snapshots = {"payload/request.json": request};source.observation = b"{}\n"
+                                source.capture_origin = b"{}\n";source.storage_rows = [];source.capture_work = {}
+                                source.capture = object.__new__(c._HeldCaptureRead)
+                                source.capture.snapshots = dict(capture_values)
+                                source.capture.request_raw = request;source.capture.attempt_id = source.attempt_id
+                                source.capture.held = []
+                                source.capture.names = set(capture_values)
+                                source.capture.work = {};c._capture_work_values(source.capture.work, "synthetic-source-H-input")
+                                source.capture_work = source.capture.work
+                                source.capture.transferred = 0;source.capture.anchor = anchor
+                                anchor.identity_context = {}
+                                anchor.capture_completion_owner = types.SimpleNamespace(transfer=lambda *_: None)
+                                source.capture.completion_owner = anchor.capture_completion_owner
+                                for name, raw in capture_values.items():
+                                    held = c._open_held(str(capture_directory / name), False, lambda *_: True, "E_STORE")
+                                    try:source.capture.held.append(held)
+                                    except BaseException:
+                                        held.close()
+                                        raise
+                                    source.capture.work["input_kind"] = "W" if name == "complete.json" else "raw"
+                                    observed = held.read(len(raw), "E_STALE", source.capture.work)
+                                    assert observed == raw
+                                    source.capture.snapshots[name] = observed
+                                try:
+                                    reader.retain_source_capture(source)
+                                    reader.retain_source_capture(source)
+                                    assert len(reader.source_copies) == 8 and not anchor.private_observations.get("unusable")
+                                    assert reader.owned.count(configuration) == reader.owned.count(source) == 1
+                                    for ordinal in (0, 1):
+                                        capture_copy, configuration_copy = reader.source_copies[4 + 2 * ordinal:6 + 2 * ordinal]
+                                        assert capture_copy.scope_source is source and capture_copy.scope_source_ordinal == ordinal
+                                        expected_capture = dict(capture_values, **{"origin-observation.json": source.capture_origin,
+                                            "consumer-observations.json": capture_copy.consumer_snapshot})
+                                        assert set(capture_copy.members) == set(expected_capture)
+                                        for name, raw in expected_capture.items():
+                                            assert capture_copy.members[name].read(len(raw), "E_STALE") == raw
+                                        assert configuration_copy.source_configuration is configuration
+                                        assert configuration_copy.source_configuration_source is source
+                                        assert configuration_copy.source_configuration_ordinal == ordinal
+                                        assert configuration_copy.source_configuration_request_raw is request
+                                        assert set(configuration_copy.source_configuration_members) == set(configuration.source_inputs)
+                                        for role, (raw, held) in configuration.source_inputs.items():
+                                            member = configuration_copy.source_configuration_members[role]["member"]
+                                            assert configuration_copy.members[member].read(len(raw), "E_STALE") == raw
+                                            assert held.read(len(raw), "E_STALE") == raw
+                                        assert configuration_copy.leaf["files"] == 6
+                                        assert configuration_copy.leaf["write_bytes"] == sum(len(raw) for raw, _held in configuration.source_inputs.values())
+                                    for copied in reader.source_copies:
+                                        copied.recheck()
+                                        assert not copied.leaf.get("metadata_failure") and not copied.closed
+                                    assert set(reader.source_copies[4].members) == {"capture.json", "complete.json", "origin-observation.json", "consumer-observations.json"}
+                                    if case == "target-drift":
+                                        target = Path(next(iter(reader.source_copies[0].members.values())).path)
+                                        target.chmod(0o600);target.write_bytes(b"drift");target.chmod(0o400)
+                                    if case == "parent-mode":captures.chmod(0o750)
+                                    expected = {row.fd for copied in reader.source_copies for held in copied.owned for row in held.components}
+                                    os.close = closing
+                                    if case == "seal":
+                                        anchor.capture_completion_owner = None
+                                        reader.seal_source_captures()
+                                        assert anchor.private_observations.get("recording_sealed") is not True
+                                    elif case == "release":reader.release_stores()
+                                    elif case == "close":reader.close()
+                                    else:reader._close_source_copies()
+                                    assert not reader.source_copies and all(item.closed and not item.owned for item in acquired)
+                                    assert all(closes.get(fd) == 1 for fd in expected), ("Reader P once close", case, [(fd, closes.get(fd)) for fd in expected if closes.get(fd) != 1])
+                                    if case in {"target-drift", "parent-mode"}:assert anchor.private_observations.get("unusable") is True
+                                    assert os.fstat(native.fd)
+                                finally:
+                                    os.close = close_fd
+                                    native_close_attempted=True
+                                    native.close()
+                            results.append({"case": case, "P_acquisitions": len(acquired),
+                                "all_P_closed": all(item.closed for item in acquired), "work": anchor.recording_work,
+                                "completion_transport_and_qualification": "UNKNOWN fixture H input; not native production",
+                                "all_runtime_inputs": "TMP synthetic; none executed"})
                         finally:
-                            os.close = close_fd
-                            native.close()
-                    results.append({"case": case, "P_acquisitions": len(acquired),
-                        "all_P_closed": all(item.closed for item in acquired), "work": anchor.recording_work,
-                        "completion_transport_and_qualification": "UNKNOWN fixture H input; not native production",
-                        "all_runtime_inputs": "TMP synthetic; none executed"})
-                finally:
-                    c._HeldCaptureCopy.acquire, c._capture_observe, os.close = acquire, observe, close_fd
-                    reader.close();anchor.close()
+                            c._HeldCaptureCopy.acquire, c._capture_observe, os.close = acquire, observe, close_fd
+                            if not reader_close_attempted:
+                                reader_close_attempted=True
+                                reader.close()
+                    finally:
+                        try:
+                            if reader is not None and not reader_close_attempted:reader.close()
+                        finally:
+                            if native is not None and not native_close_attempted:native.close()
     finally:c._acl_state = acl
     print(json.dumps({"scope_actual_runtime_and_source_P_ownership": results}, sort_keys=True))
 

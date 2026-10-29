@@ -3957,28 +3957,73 @@ installed={"control_policy":(policy,sha(policy)),"control_decision":(decision,sh
  "control_policy_set":(pset,sha(pset)),"evaluator_driver":(driver,sha(driver)),
  "evaluator_program":(program,sha(program)),"accepted_set":(accepted,sha(accepted)),
  "registry":(registry_raw,sha(registry_raw))}
-class Anchor:
- def __init__(self): self.private_observations={}; self.recording_work={}
- config={"environment_id":"env.fixture","store_id":"store.fixture","principal_uid":1234,
-  "store_root":str(base/"store"),"work_root":str(base/"host-work"),"installed_files":{},
-  "identity_paths":{"dyld_cache_files":[]}}
- registry=(sha(registry_raw),[entry]);installed=installed
- held=[types.SimpleNamespace(path=str(fake_anchor/"host-supervisor.py"),read=lambda maximum,code:b"host\n",
-  recheck=lambda code:None)]
- def recheck(self,*_args): events.append("anchor-recheck")
- def seal_recheck(self,*_args): events.append("anchor-seal-recheck")
- def close(self): events.append("anchor-close")
+identity_paths={name:str(fake_anchor/("identity-"+name)) for name in e.c.IDENTITY_KEYS if name!="dyld_cache_files"}
+identity_paths["dyld_cache_files"]=[str(fake_anchor/"identity-dyld-cache")]
+anchor_config={"environment_id":"env.fixture","store_id":"store.fixture","principal_uid":os.geteuid(),
+ "consumer_gid":os.getegid(),"store_root":str(base/"store"),"work_root":str(base/"host-work"),
+ "installed_files":{name:str(fake_anchor/(name+".bin")) for name in installed},
+ "identity_paths":identity_paths,"runtime":{"driver":identity_paths["host_runtime"],"vfkit":identity_paths["vm_service"]}}
+anchor_raw=e.canonical(doc("sandbox_host_config","host.fixture",anchor_config))
+anchor_backing={fake_anchor/"host-config.json":anchor_raw,fake_anchor/"host-supervisor.py":b"host\n"}
+anchor_backing.update({pathlib.Path(path):(name+"\n").encode() for name,path in identity_paths.items() if name!="dyld_cache_files"})
+anchor_backing[pathlib.Path(identity_paths["dyld_cache_files"][0])]=b"ordinary inert dyld cache\n"
+anchor_backing.update({pathlib.Path(anchor_config["installed_files"][name]):raw for name,(raw,_digest) in installed.items()})
+for path,raw in anchor_backing.items():write(path,raw)
+anchor_receivers={"resolver":None,"group_reader":None}
+class Anchor(e.c.Anchor):
+ def __init__(self):
+  resolver,group_reader=anchor_receivers["resolver"],anchor_receivers["group_reader"]
+  identity_context={"uid":os.getuid(),"euid":os.geteuid(),"gid":os.getgid(),"egid":os.getegid(),
+   "groups":os.getgroups(),"platform":sys.platform,
+   "uuid_replies":resolver.raw_uuid_replies() if resolver is not None else None,
+   "group_replies":group_reader.raw_group_replies() if group_reader is not None else None}
+  super().__init__(dict(anchor_config),anchor_raw,[],installed,(sha(registry_raw),[entry]),
+   (sha(accepted),[entry]),resolver,identity_context=identity_context)
+  try:
+   for path,raw in anchor_backing.items():
+    item=e.c._open_held(str(path),False,e.c._store_rule(os.geteuid(),os.getegid(),0o400,False,resolver),"E_STORE")
+    self.held.append(item)
+    e.require(item.read(len(raw),"E_STORE")==raw,"E_STORE")
+  except BaseException:
+   e.close_all(reversed(self.held))
+   raise
+ def recheck(self,*args):
+  super().recheck(*args);events.append("anchor-recheck")
+ def seal_recheck(self,*args):
+  super().seal_recheck(*args);events.append("anchor-seal-recheck")
+ def close(self):
+  companions=tuple(self.runtime_companions)
+  try:super().close()
+  finally:
+   try:e.close_all([*(item for item in reversed(self.held) if item.components),
+    *(item for item,_work,_case in reversed(companions) if item.components)])
+   finally:events.append("anchor-close")
+real_anchor_path=e.c.ANCHOR
+real_load_anchor=e.c.load_anchor
 e.c.ANCHOR=str(fake_anchor)
-class Snap:
- def __init__(self,path,digest_value): self.snapshot=types.SimpleNamespace(path=str(path));self.sha256=digest_value
- def recheck(self): events.append("dependency-recheck")
- def close(self): events.append("dependency-close")
 events=[]
-e.c.snapshot_dependency=lambda path,digest_value,size,private,name: Snap(helper,digest_value)
-e.c.snapshot_jq=lambda path,private: Snap(jq,sha(b"jq"))
+real_snapshot_dependency=e.c.snapshot_dependency
+real_snapshot_jq=e.c.snapshot_jq
+def observed_snapshot(value):
+ original_recheck,original_close=value.recheck,value.close
+ def recheck():
+  original_recheck();events.append("dependency-recheck")
+ def close():
+  try:original_close()
+  finally:events.append("dependency-close")
+ value.recheck,value.close=recheck,close
+ return value
+e.c.snapshot_dependency=lambda path,digest_value,size,private,name: observed_snapshot(
+ real_snapshot_dependency(path,digest_value,size,private,name))
+e.c.snapshot_jq=lambda path,private: observed_snapshot(real_snapshot_dependency(path,sha(b"jq"),2,private,"jq"))
 e.c.verify_helper_source=lambda: events.append("helper-source")
 e.c.probe_dependency=lambda snap,args,expected: events.append("probe:"+args[0])
 e.c.load_anchor=lambda _resolver=None,_group_reader=None: Anchor()
+anchor_factory=e.c.load_anchor
+def load_anchor(_resolver=None,_group_reader=None):
+ anchor_receivers["resolver"],anchor_receivers["group_reader"]=_resolver,_group_reader
+ return anchor_factory(_resolver,_group_reader)
+e.c.load_anchor=load_anchor
 e.c.verifier_observation=lambda anchor,environment,target:e.canonical(doc("sandbox_verifier_observation",
  "observation.flow",{"environment_id":environment,"environment_entry_sha256":sha(e.canonical(entry)),
  "target_repository_id":target,"accepted_set_sha256":sha(accepted),"verifier_sha256":"9"*64}))
@@ -4015,7 +4060,18 @@ origin=e.canonical(doc("shadow_origin_observation","attempt.flow",{"store_id":"s
  "attempt_id":"attempt.flow","entries":[],"result":"authenticated"}))
 snapshots={"receipt.json":e.canonical(receipt),"payload/stdout":b"","payload/stderr":b"",
  "payload/evidence-manifest.json":evidence_manifest,"payload/evidence/0000":result_raw}
-e.c.read_store_attempt=lambda anchor,attempt:(snapshots,origin)
+store_root=pathlib.Path(anchor_config["store_root"]);store_root.mkdir(mode=0o750)
+(base/"host-work").mkdir(mode=0o700)
+store_attempt=store_root/request["id"];store_attempt.mkdir(mode=0o750)
+(store_attempt/"payload").mkdir(mode=0o750)
+(store_attempt/"payload/evidence").mkdir(mode=0o750)
+for path in (store_root,store_attempt,store_attempt/"payload",store_attempt/"payload/evidence"):path.chmod(0o750)
+for name,raw in snapshots.items():write(store_attempt/name,raw,0o440)
+real_read_store_attempt=e.c.read_store_attempt
+def read_store_attempt(anchor,attempt,*,_owner=None):
+ e.require(isinstance(_owner,e.c._HeldStoreRead) and _owner.anchor is anchor and _owner.attempt_id==attempt,"E_STORE")
+ return real_read_store_attempt(anchor,attempt,_owner=_owner)
+e.c.read_store_attempt=read_store_attempt
 
 real_run=e.run_bounded
 def child(role,argv,**kwargs):
@@ -4066,7 +4122,14 @@ executable.close();native=e._NativeRelease(parent,admission)
 admission=e.dataclasses.replace(admission,native=native,module_origins=e._runtime_module_origins())
 try:
  with e.CancellationSignals(admission):bundle=e.reproduce(base/"request.json",work,output,parent)
-finally:native.close()
+finally:
+ try:native.close()
+ finally:
+  e.c.snapshot_dependency=real_snapshot_dependency
+  e.c.snapshot_jq=real_snapshot_jq
+  e.c.read_store_attempt=real_read_store_attempt
+  e.c.load_anchor=real_load_anchor
+  e.c.ANCHOR=real_anchor_path
 ok(len(launch_frames)==1 and launch_frames[0].startswith(b"YSFRAME1"),"one framed launch")
 ok(events.index("launch")>events.index("prepare"),"launch follows preparation")
 ok(events.index("launch")>events.index("evaluate"),

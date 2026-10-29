@@ -697,6 +697,115 @@ def record_doc(body):
     return hs.canonical({"body": body, "id": "sandbox.qualification-record", "kind": "sandbox_qualification_record", "schema_version": 1})
 
 
+def _aggregate_store_namespace(config, attempts, eligible):
+    """Check recorder directory custody (work/eval-seeding-deterministic/plan.md)."""
+    fds, chain, companions, reasons, failure = [], [], [], set(), None
+
+    def require(ok):
+        if not ok:
+            raise Invalid("store-namespace")
+
+    def opened(name, parent=None):
+        fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+        try:
+            fds.append(fd)
+        except BaseException as registration:
+            if fds and fds[-1] == fd:
+                fds.pop()
+            try:
+                os.close(fd)
+            except BaseException as closing:
+                if cancelled(closing) and not cancelled(registration):
+                    raise closing from registration
+            raise
+        return fd
+
+    def identity(fd, parent, name):
+        held = hs._capture_identity(os.fstat(fd))
+        require(held == hs._capture_identity(os.stat(name, dir_fd=parent, follow_symlinks=False)))
+        return held
+
+    def cancelled(error):
+        return isinstance(error, KeyboardInterrupt) or getattr(error, "_scope_signal_cancel", False)
+
+    try:
+        path, uid, gid = config["store_root"], config["principal_uid"], config["consumer_gid"]
+        require(uid == os.getuid() and isinstance(path, str) and path.startswith("/")
+                and os.path.normpath(path) == path and "//" not in path)
+        parts = path.split("/")[1:] if path != "/" else []
+        anchor, anchor_fd = os.environ.get("YSTACK_SANDBOX_TRUST_ROOT"), None
+        if anchor:
+            anchor_fd = opened(anchor)
+            anchor_state = os.fstat(anchor_fd)
+            require(anchor_state.st_uid == os.getuid() and not anchor_state.st_mode & (stat.S_IWGRP | stat.S_IWOTH))
+            anchor = os.path.normpath(anchor)
+        boundary = (len(anchor.split("/")) - 1 if anchor and
+                    (path == anchor or path.startswith(anchor + "/")) else 0)
+        root = opened("/")
+        chain.append((root, None, "/", identity(root, None, "/")))
+        for index in range(len(parts) + 1):
+            if index:
+                parent = root
+                root = opened(parts[index - 1], parent)
+                chain.append((root, parent, parts[index - 1], identity(root, parent, parts[index - 1])))
+            if index == boundary and boundary:
+                require(hs._capture_identity(os.fstat(root)) == hs._capture_identity(os.fstat(anchor_fd)))
+            if index >= boundary:
+                hs.check_acl_fd(root, uid)
+                if index < len(parts):
+                    require(hs.owner_mode_fd_ok(root, uid))
+        require(hs.store_root_state_ok(root, uid, gid) and eligible <= attempts)
+        inventory = set(os.listdir(root))
+        allowed = set(attempts)
+        for attempt in eligible:
+            require(hs.id_ok(attempt))
+            pending, published = ".capture-" + attempt + ".pending", ".capture-" + attempt
+            allowed.update((pending, published))
+            present = inventory & {pending, published}
+            if len(present) == 2:
+                reasons.add("qualification.batch-rerun")
+            for name in sorted(present):
+                before = hs._capture_identity(os.stat(name, dir_fd=root, follow_symlinks=False))
+                fd = opened(name, root)
+                require(before == identity(fd, root, name) and hs.store_root_state_ok(fd, uid, gid))
+                companions.append((fd, name, before))
+        if inventory - allowed:
+            reasons.add("qualification.batch-rerun")
+        for fd, name, before in companions:
+            require(hs.store_root_state_ok(fd, uid, gid) and identity(fd, root, name) == before)
+        require(set(os.listdir(root)) == inventory and hs.store_root_state_ok(root, uid, gid))
+        for index, (fd, parent, name, before) in enumerate(chain):
+            require(identity(fd, parent, name) == before)
+            if index >= boundary:
+                hs.check_acl_fd(fd, uid)
+                if index < len(parts):
+                    require(hs.owner_mode_fd_ok(fd, uid))
+        if anchor_fd is not None and boundary:
+            require(hs._capture_identity(os.fstat(anchor_fd)) == chain[boundary][3])
+    except BaseException as error:
+        failure = error
+    finally:
+        primary = failure
+        for fd in reversed(fds):
+            try:
+                os.close(fd)
+            except BaseException as error:
+                if primary is None:
+                    primary = error
+                if failure is None or cancelled(error) and not cancelled(failure):
+                    failure = error
+    if failure is not None:
+        if cancelled(failure):
+            if primary is not None and primary is not failure:
+                raise failure from primary
+            raise failure
+        elif isinstance(failure, (Invalid, hs.Refusal, OSError, ValueError, TypeError, KeyError, MemoryError)):
+            reasons.add("qualification.binding-mismatch")
+        else:
+            raise failure
+    return reasons
+
+
 def aggregate(dirpath, raws):
     """One sandbox_qualification_record, complete only if the batches cover the plan exactly once."""
     try:   # the very validation run and dry-run apply before launching: plan, configurations, fixtures, evidence, packages
@@ -736,6 +845,7 @@ def aggregate(dirpath, raws):
     ev = st["ev"]
     ev_sha = sha(hs.canonical(ev)) if ev is not None else None
     env_id, want_sha, seen, scripts = cfgs["probe"]["body"]["environment_id"], {}, set(), {}
+    batch_valid = {}
     scratch = tempfile.TemporaryDirectory()
     troot = os.path.realpath(scratch.name)
     if not plan.get("checker"):
@@ -743,18 +853,22 @@ def aggregate(dirpath, raws):
     for body in firsts:   # the batch record is untrusted: each binding it states is checked against batches.json and the disk
         k = body["k"]
         want = expected_identities(live, batch_digests(bplan, k))
+        batch_valid[k] = True
         if (body["configurations"] != live or body["environment_id"] != env_id or body["domain_evidence_sha256"] != ev_sha
                 or body["dry_run"] != ref["dry_run"] or body["case_list_sha256"] != plan_sha
                 or sorted(c["id"] for c in body["cases"]) != bplan["batches"][k]):
             reasons.add("qualification.binding-mismatch")
+            batch_valid[k] = False
         want_sha[k] = sha(accepted_doc(env_id, want))
         scripts[k] = private_checker(plan["checker"], accepted_doc(env_id, want), os.path.join(troot, str(k))) if plan.get("checker") else None
         if (body["accepted_identities"] != want or body["accepted_content_sha256"] != sha(hs.canonical(accepted_content(env_id, want)))
                 or body["accepted_set_sha256"] != want_sha[k]):
             reasons.add("qualification.accepted-set-mismatch")
+            batch_valid[k] = False
     if ref["domain_evidence_sha256"] != ev_sha:
         ev = None   # evidence that is not the evidence the batches ran with is not used
     cases, attempts = [], {"verifier": set(), "probe": set()}
+    eligible = {"verifier": set(), "probe": set()}
     for body in firsts:   # every case is rebuilt from the bound plan and verified stored evidence; the record's claims are only checked
         cached = {c.get("id"): c for c in body["cases"] if isinstance(c, dict)}
         for cid in bplan["batches"][body["k"]]:
@@ -762,6 +876,8 @@ def aggregate(dirpath, raws):
             attempts[decl["configuration"]].add(st["prepared"][cid][4]["attempt"]["attempt_id"])
             try:
                 cases.append(verify_case(st, decl, cached.get(cid), want_sha[body["k"]], ev, seen, scripts[body["k"]]))
+                if batch_valid[body["k"]]:
+                    eligible[decl["configuration"]].add(st["prepared"][cid][4]["attempt"]["attempt_id"])
             except (Invalid, KeyError, TypeError, ValueError, IndexError, AttributeError, OSError, hs.Refusal) as exc:
                 claim = cached.get(cid) if isinstance(cached.get(cid), dict) and "receipt_sha256" not in cached[cid] else {}
                 recorded = isinstance(claim.get("reason"), str)   # a launch that never produced a receipt: its recorded reason is kept (it can only invalidate)
@@ -770,8 +886,7 @@ def aggregate(dirpath, raws):
                               "reason": claim["reason"] if recorded else str(exc) or type(exc).__name__})
                 reasons.add("qualification.accepted-set-mismatch" if str(exc) == "accepted-set" else "qualification.binding-mismatch")
     for name in ("verifier", "probe"):   # each store against its own configuration's named attempts only
-        if set(os.listdir(cfgs[name]["body"]["store_root"])) - attempts[name]:
-            reasons.add("qualification.batch-rerun")   # a receipt no batch record names
+        reasons.update(_aggregate_store_namespace(cfgs[name]["body"], attempts[name], eligible[name]))
     order = [c["case_id"] for c in bplan["cases"]]
     cases.sort(key=lambda c: order.index(c["id"]))
     result = qualification(cases, ev_sha is not None)
