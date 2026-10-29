@@ -1,5 +1,5 @@
 ---
-spec-blob: 19c0f6b6d2531b78a8ce355fb144ce9cd06c2630
+spec-blob: ab5b6ddc830ae91506cac75ae9ea1ae1b25cf11c
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-26
@@ -14,8 +14,8 @@ one complete two-source delivery. Source preparation does not accept a dependenc
 a real recording, native qualification or either seed batch.
 
 This plan binds accepted G2 spec blob
-`19c0f6b6d2531b78a8ce355fb144ce9cd06c2630` at main
-`fa9e1987743889cc7c011400019ed7a4610fa6fb` (PR #765).
+`ab5b6ddc830ae91506cac75ae9ea1ae1b25cf11c` at main
+`a8d78dc19836d32e4b4bbf480e5d82b2659d44c4` (PR #767).
 The separate high-risk plan-only gate must pass before dependent code.
 RAW16 acquisition design
 locations retain historical source `c1d9d23e42e6efe2d6da1aae3d23b34564b4080d`
@@ -31,12 +31,12 @@ historical anchors, not current resume identities. Earlier paused sources
 `ff9c26b3a1314f13efc0d97690ccf8b9fbe17bdf` and invoice source
 `5ceb67c9e33bb52f359514d8e785a26e77ecf491` and
 `60254f85f1c2db82c569688e989d15136ec9fc58` are historical. The current paused
-source is `5084dfed3d6500d1b63a0331b0c149cfd0922bd3`, parent
-`777bfb23ea932839e3c215e89a0a2fbf0e53990e`, tree
-`4c61db225f0e56e39b462bcb25ca90ea73f25d7e`, with last merged main
-`a93313055d873b398c29fee5cfad8601c6703fcb`, on the existing branch
-`codex/impl/eval-source-relay-replay`. Its expected remote head is that same
-`5084dfed3d6500d1b63a0331b0c149cfd0922bd3`.
+source is `3c5467b72fa835ca507ba18195e60aad619fdb12`, parent
+`d5c3ab5d001ec117d3f6f85cd17520f6ba6f72af`, tree
+`0cdeef75438e5abd1869b8d1c1dc89bb08e6a86f`, with last merged main
+`511fbb5b0c16c48639ffc3852d74cdfa19716bb3`, on the existing branch
+`codex/impl/eval-source-relay-replay`. Record the actual remote head separately;
+the source advance must use the normal reviewed push sequence.
 Recheck its clean worktree, exact local/remote heads, absent PR and existing #439
 claim before an ordinary merge of accepted main
 on that same branch. A prior clean record does not prove current state. Rebind
@@ -720,7 +720,9 @@ remains part of review even when that base already contains dependency bytes.
 These 42 paths are the original 40, the one C2 bootstrap dependency and the sole
 auxiliary qualifier compatibility path. The original 20-path subset, six C1
 functional paths, three pin paths, nine adoption-only paths and SOURCE 84 are
-unchanged. No other product or test file is permitted. New source files are only the coordinator,
+unchanged. The fixed R9.2 recorder and foreground auxiliary contacts use already
+listed enforced/consumer and test paths; they add no path or adoption exception.
+No other product or test file is permitted. New source files are only the coordinator,
 two guest value files and `scripts/test/evals-malicious.test.sh`. Add those four
 restore-critical paths to `ci/required-files.txt`. No runtime config, accepted set,
 SDK, installation, generation, qualification-standard or workflow change is allowed.
@@ -732,11 +734,12 @@ blocked pending its exact scope gate.
 
 ### Existing regression compatibility (R9.2)
 
-This repair binds the paused source above and changes only the six files in the
-current repair table below. The six C1 functional paths, three pin paths, SOURCE
-84, nine adoption-only paths and original 20-path source subset stay unchanged.
-The sole additional production edit is qualify.py's accepted aggregate namespace
-compatibility boundary; qualification standards and output schema stay frozen.
+The compatibility requirements below remain accepted obligations. Current edits
+are only the fixed C1 root-fix contacts listed after them. The six C1 functional
+paths, three pin paths, SOURCE 84, nine adoption-only paths and original 20-path
+source subset stay unchanged. The auxiliary production boundaries are the accepted
+qualifier compatibility and the fixed recorder/foreground contacts; qualification
+standards and output schema stay frozen.
 Rebind exact source/recipe bytes after this plan lands and main merges. Add no
 selector, recursive loader, observer, framework, workflow or diagnostic matrix.
 The earlier repaired contacts below remain frozen except the exact current
@@ -767,8 +770,9 @@ inverse transforms, source/copy identity checks, errors, returns, closes and cap
 A new SHA alone is not proof that the generated copies still implement the recipe.
 The fixed-marker/environment edits can move the dashboard caller's line. Rebind
 only its already allowed direct line literal to the exact final call location.
-Keep all nine source-copy bytes/maps, four literal bodies, product source hashes
-and the two existing native bindings unchanged; do not reuse a guessed line value.
+Preserve the four literal bodies and both existing native bindings. Only the
+root-fix final binding pass may rebind the affected product hashes and nine copies
+/maps from actual bytes and complete inverse checks; never guess a line value.
 
 For sudo, retain the fixed AST selection of `require/parse/same`. Add the six
 `_provenance_*_values` helpers actually called by `provenance`,
@@ -885,7 +889,7 @@ edits in this repair. Keep the accepted sudo receiver, its real backing and both
 negative controls, all twelve original cases and its exact close-failure rule.
 Keep the 141 coverage controls, 32 reproduction-value assertions, preparation T
 transitions and other repaired test bytes. Product sources and pins remain frozen
-except the separate qualifier compatibility boundary below. This does not add a
+except the listed qualifier and C1 root-fix contacts/final bindings. This does not add a
 seventh C1 functional path, a SOURCE member or an adoption-only path.
 
 #### One ordinary source-configuration preparation
@@ -1016,7 +1020,8 @@ returned keys and every original argv/value/metadata/child wait/pipe/cleanup and
 first-error control. Rebind that exact generated phase literal and verify its
 source-to-generated-line relation. This generator is outside PY_STALE_PREPARE.
 Keep its four observer literal bodies, nine source copies and complete inverse
-maps unchanged. Rebind only the existing direct dashboard caller's final actual
+maps unchanged except the later root-fix mechanical binding pass. Rebind the
+existing direct dashboard caller's final actual
 line after all scope-test edits. Keep both old native bindings and their unproved
 status; no genuine/native invocation is part of this repair.
 
@@ -1138,31 +1143,31 @@ Unknown cost remains UNKNOWN. Existing caps and execution budgets do not increas
 capacity, real caller, native and final seed proof remain separate gates.
 
 
-Before execution, statically compare the six-file diff against the paused
+Before execution, statically compare the exact current contact diff against the paused
 originals and the complete accepted contact list. Check full generated recipes,
 unique AST selections and private-copy differences. Preserve every original
 trial/grade/label/approval/tamper/repeat/dashboard control, byte comparison,
 non-ASCII/NaN case, stage order, ordinary fault and marked cancellation identity.
 Only the specified actual configuration contributions and owned-list baseline,
 fixed source bindings and qualifier boundary may change their corresponding
-expectations. All other assertions and original source/copy maps remain intact.
+expectations. The root-fix section specifies its additional exact proof and
+mechanical bindings; all other assertions and source/copy rules remain intact.
 Verify every other implementation path is unchanged. Measure the retained gross
-and publication-base diffs separately against the unchanged range; do not reset
+and publication-base diffs separately under the review-size rule below; do not reset
 old costs, omit failed attempts, delete tests or assume capacity.
 
 After independent plan acceptance and protected merge, merge that accepted main
 normally into the preserved source branch. Recheck exact local/remote/head/base,
 artifacts, clean state, PR-absent state and the existing claim. A fresh independent
-limited CODE-scope check and manager GO precede edits. Use three non-overlapping
-assignments: configuration/AST contacts in the three A files; shared orchestration
-in the one B file; qualifier and sandbox aggregate tests in the two C files.
-All implementers use the same previously selected coder model. One author commits
-the combined result only after the manager confirms every writer has stopped.
-No author changes accepted artifacts, other products/pins or another assignment.
+limited CODE-scope check and manager GO precede edits. Use one executor of the
+previously selected coder model for the ordered A/B root-fix responsibilities
+below, then the final binding pass. Commit the combined result only after the
+manager confirms all edits are frozen. Do not change accepted artifacts or any
+product/test/pin outside these exact contacts.
 
-During CODE-only work, use only text/hash/AST checks and bash -n for the four
-changed shell tests. Parse both changed Python files without importing or
-executing them. Freeze the one combined code commit and clean worktree. Then
+During CODE-only work, use only text/hash/AST checks and bash -n for changed shell
+tests. Parse changed Python files without importing or executing them. Freeze the
+one combined code commit and clean worktree. Then
 obtain fresh independent review of the full source, complete existing CI recipe
 and actual resource/accounting scope. Resolve Important findings before execution;
 CODE-only GO, old CI GO and old windows cannot supply the execution decision.
@@ -1177,8 +1182,159 @@ The local pinned jq is absent: do not install, download, substitute it or run a
 local run-all/ordinary fixture as part of this repair. No LOCAL7/D, native, seed,
 real-target, credential, new network, install, activation or window is granted.
 Keep all earlier failures, REVISE findings, rounds, UNKNOWN and final native/seed
-requirements; only their own fresh evidence can close them. A wider fix, moved
-product pin or out-of-list path returns to the affected artifact gate.
+requirements; only their own fresh evidence can close them. A wider fix, any
+other moved pin or out-of-list path returns to the affected artifact gate.
+
+### C1 recorder and foreground root fixes (R9.2)
+
+Apply the accepted R9.2 guards and proof unchanged. Design-source locations bind
+`d5c3ab5d001ec117d3f6f85cd17520f6ba6f72af`; resume binds the clean tuple above.
+Use one executor of the selected coder model, A then B, followed by final bindings.
+The two responsibilities edit different consumer methods. Never overwrite the
+other's completed work with a stale whole-file copy.
+
+| Order | Fixed implementation contacts |
+| --- | --- |
+| A | enforced-reproduction reproduce setup, _retain_native_runtime, StableDirectory recorder/T/close and _seal_capture_recording; consumer Anchor.retain_preparation private dual-parent wiring; original shared flow in shadow-enforced and raw16_preparation_P_handoff/T failure boundary in candidate-content-preparation-fixtures. |
+| B | consumer _DarwinChildOwner._foreground; the two existing scope-qualification foreground groups; original shadow-self-host-evidence scope harness failure reporting only. |
+| Final | Freeze both product files; rebind allowed scope SHA/maps/caller/frame lines and the original evals.jq → evals-driver.sh → evals-launcher.sh source/closure pin chain. |
+
+All file paths are the existing R9.3 entries. Writer source and its test copier
+remain unchanged. The preceding compatibility repairs and A2 ledger corrections
+are retained work, not authorization to rework their other contacts.
+
+**A: prepare and hold one recorder.** In reproduce, move the existing initial
+native/runtime and parent-input retention after exclusions and all original work,
+dependency and input directory preparation, before the first snapshot.
+Inside _retain_native_runtime, initialize fixed work/recording before selecting
+native roles, including the ordinary unqualified branch. The writer already
+calls this function after work preparation. Keep work/runtime as HOME/TMPDIR.
+
+StableDirectory keeps one attempted/failed initialization state, the bound
+Anchor/request, held recorder, original native-work identity/namespace and one
+pending recording transition. Use existing mkdir, _open_child, _store_rule and
+metadata/ACL checks: exclusive empty 0700 recording, exact one-name addition,
+full physical/named/held relation and actual owner. Refresh only the verified
+setup mutation before any dependency/input/P seal. Partial failure stays failed;
+retain its evidence and close acquired holders once, without retry or fallback.
+
+Retain an initialization M leaf before mkdir. Before admitting the first P, fix
+the local recording case using the actual recorder-parent key used by the
+existing retention callees and transfer all pending initialization costs into it.
+Require that no earlier local-P case exists to reset or split. If initialization
+never obtains a valid recorder, transfer its failure leaf to the original work
+case and end local recording. Subsequent copies and final completion/store
+transfers use the same successful case; do not create another final-case allowance.
+
+**A: separate native and recorder transitions.** _recording_parent returns only
+that fixed held child. _begin_T_parent captures native-work and recorder metadata
+and namespaces even with no T companions. Validate original work unchanged and
+recorder additions exact for each original role/operation. The existing writer
+H-copy calls _refresh_runtime_parents before _finish_T_parent: defer refresh while
+the transition is pending. Finish first validates the two real parents, then
+refreshes P copies against recording. Apply this ordering to _own_runtime and
+all runtime/parent-input/sudo/preparation calls. No unknown mutation is refreshed.
+
+Add one private keyword-only _native_parent to Anchor.retain_preparation. Existing
+direct same-parent callers retain their behavior when it is absent. The bound
+StableDirectory supplies its original work holder; unequal parents must satisfy
+the actual owner and fixed direct-child relation. Read scratch/T sources there;
+create preparation-runtime copies and fsync/acquire P under recording.
+_T_transition parent_before/root/after_names always bind the native holder.
+
+For pure recording writes, recheck the same T originals before/after; do not
+continue their native chain with a recording-parent receipt. Preserve actual
+_T_cleanup_begin/removed/done and _T_inspection_returned. In _finish_T_native,
+check unchanged native-work namespace with no recorder-created names, separately
+check recording's preparation-runtime-inspect addition, then require the actual
+unique previous-source replacement before closing the old T. Preserve both writer
+scratch roots, same-root inspection and all existing full-byte/target checks.
+
+Use the bound recorder in _seal_capture_recording for local runtime seal and case
+accounting, including the unchanged writer caller. Keep native work separately
+for its validation. Recheck copies and originals, close copies first, then
+recording, then work, including partial paths. Preserve ordinary recording
+failure isolation, native results, first-error/cancellation priority and visible
+close/incomplete state; a close error cannot produce recording_sealed.
+
+Account actual directory retention, acquisition/dup, metadata/ACL/inventory,
+serialization, copies, full comparisons, overlap, refresh/seal and every close
+through existing M/operation work and delta transfers. The same case pays
+initialization and partial failures. Apply existing physical/file/cap checks;
+resource review must reject incomplete or over-limit accounting, not assume fit.
+
+**A: original proof.** Keep actual helper/jq DependencySnapshot paths, acquisitions
+and event wrappers in the original shared flow. At its existing recorder,
+prepare/inspect, H-copy and seal points recheck those same snapshots and inputs;
+recheck T originals once acquired. Check both parents, full bytes, original
+member/ordinal/owner/cost relations and once-close. Retain all thirteen controls,
+twenty-nine evidence files and seven preparation P cases. Add only their finite
+paired dependency leaf/ancestor drift, wrong recorder owner/name, native-scratch
+drift and initialization/partial/close/cancel failures. Deleting the isolated
+destination or a parent/identity guard must fail its matching control. The plain
+context remains unqualified; these mocks do not execute inert native files.
+
+**B: cleanup algorithm.** Leave admission and successful IO unchanged. Save the
+actual primary object. Compute cleanup_end once using the existing ten seconds
+and inherited self.deadline. Independently guard TERM, first conditional wait,
+KILL, second conditional wait/reap and group-gone probe. Save each non-lookup
+error and continue the next applicable step. Keep the original first-wait
+two-second maximum, second-wait remaining allowance, positive timeout floor and
+bounded probe/sleep rules. Already reaped children need no extra wait.
+
+Guard the original selector, each pipe, each handler restore, mask restore and
+handoff close separately in their existing order. Defer final return/raise until
+all applicable independent owned actions have been attempted. Keep the existing
+_c3_first/marked-cancellation priority and original primary identity. Build the
+later-error chain in actual occurrence order with identity deduplication and
+no cycles. Preserve failed versus completed closes; never retry an uncertain FD
+or return success after a real closing/restoration error.
+
+In the two original foreground groups, use the actual _DarwinChildOwner type
+with ledger=None for ungated calls. The fixed monotonic clock passes both startup
+checks, then triggers the intended post-takeover deadline/cancellation and one
+cleanup deadline. Supply transport TimeoutExpired, bounded sleep and signal-0
+probe semantics. Keep the ordinary real child, captured native wait and pipes;
+separate TERM/KILL attempts from probe observations.
+
+Retain all eight original cases and IO/refusal controls. Assert actual conditional
+waits with exact clock-derived arguments, stage order, original exception objects
+and cause chain. Rebind each existing absolute consumer traceback line to the
+unique final code object/frame/failing statement, with complete old/new mapping
+and wrong-code/frame/line rejection. Add finite single-fault finally controls for
+selector close, one owned pipe, one handler restore and mask restore. At the
+existing seam perform the actual close/restore where the scenario promises
+completion, then raise its fixed marker. Check later applicable attempts,
+once-close, original primary/cancellation, restoration, cause and total deadline.
+Use the original primary/cancel controls for priority; add no combination matrix.
+A deleted later action must fail. Pre-takeover fixture cleanup follows captured
+failure/state and cannot turn production failure into success.
+
+**Only the accepted failure facts.** At the original raw16_t_lifecycle writer
+two-roots compound assertion, report on failure its call count, two operation
+labels, unusable and existing preparation-leaf category/errno/incomplete/closed
+facts. Keep both operations and the assertion. At the original scope harness
+pre/post failure, report stage, exit and already-obtained bounded error code to
+test stderr; retain the same one invocation, full original output files and all
+original records/assertions. Missing internal facts remain UNKNOWN. No payload,
+exception repr, environment dump, new observer/Reader trace or speculative fix.
+Any newly located production contact outside this table returns to its gate.
+
+**Final bindings.** After A and B freeze production bytes, independently bind full
+source hashes. Rebuild nine maps using the unchanged recipe and prove each inverse
+byte-for-byte. Keep four observer literal hashes and both old native bindings.
+Mechanically bind the allowed dashboard caller and foreground frame lines.
+Keep evaluate-scope blob `605370780345539c5ed7b9debbd04f5327610128`.
+Update measured source/closure digests, then program, driver and launcher pins
+from actual bytes. All SOURCE84 members, nine adoption-only bytes, original
+twenty-path subset, six C1 functional paths and three pin responsibilities stay
+fixed; the auxiliary contacts add no path to the forty-two-path table.
+
+The CODE-only/static, combined clean commit, independent source/recipe/resource
+review and separate execution GO sequence above applies to this entire contact
+set. Its single existing six-shard/79-suite CI dispatch covers these carriers
+and all prior requirements. Keep all old failures, costs, skips and UNKNOWN;
+the two unlocated failures are not claimed fixed in advance.
 
 ### S1–S10 and invariant mapping
 
@@ -3230,8 +3386,8 @@ gates (R9.6).
   M2–M4. About 25–45 lines cover predicates/error handling/pins, 170–290 cover
   launcher, direct-program and scope regressions, and 15–30 cover docs. Use readable
   complete tests; an overrun pauses for a separate size amendment, never test cuts.
-- PR 1b: `review_size: accepted-exception`, 49,000–68,000 changed lines for the
-  complete unmerged two-source concern, counting additions plus deletions.
+- PR 1b: `review_size: accepted-exception`, 49,000–74,000 publication-base changed lines
+  for the complete unmerged two-source concern, counting additions plus deletions.
   The refreshed dependency contributes 21,605 changed lines, including the complete
   scope-qualification suite. The retained relay contributes about 1,400 changed
   lines. The range covers complete owner acquisition/accounting, fixed seed
@@ -3241,6 +3397,9 @@ gates (R9.6).
   as quotas. This includes original private-member retention and strict qualified
   runtime classification, independent S before P closes, actual ledger/grant/once
   settlement integration, CI controls and bounded fixes in the same concern.
+  The fixed recorder/foreground methods, finite original-fixture regressions and
+  nine-copy/pin rebinding allow an estimated 1,500–6,000 additional gross lines.
+  This is a review-size estimate, not a quota or execution-resource allowance.
   Record the gross retained diff, dependency/adoption delta, this concern's delta
   and the actual publication-base diff. Keep both ledgers when dependencies land;
   never subtract inherited work to claim a smaller completed concern. An overrun
@@ -3251,8 +3410,8 @@ gates (R9.6).
   cannot leave the PR whose test checks their digests.
 - PR 3: `review_size: standard`, about 300-400 net added lines.
 - This plan-only amendment: `review_size: standard`. One concern: the accepted
-  five-test source and lifecycle compatibility. All runtime-invoice obligations
-  and PR 1b's complete-concern range remain unchanged.
+  C1 recorder noninterference and owned foreground cleanup, with their fixed
+  regression bindings and bounded failure facts. Runtime-invoice obligations stay intact.
 
 Each range waives only the soft line signal, never scope, tests, CI, review or human
 merge.
