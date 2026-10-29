@@ -382,6 +382,7 @@ class StableDirectory:
     recording_case: object = None
     recording_transition: dict | None = None
     native_names: set | None = None
+    recording_physical_bytes: int = 0
 
     def _transfer_recording_work(self):
         if self.recording_anchor is not None and self.recording_case is not None:
@@ -399,25 +400,36 @@ class StableDirectory:
         c._capture_work_values(leaf, "recorder-initialization")
         anchor.recording_work.setdefault("recorder_initialization_leaves", []).append(leaf)
         try:
-            self.recheck("E_STORE")
+            for index, component in enumerate(self.held.components):
+                current = c._capture_metadata(component.fd, leaf, "M")
+                named = (current if component.name is None else c._capture_named_metadata(
+                    component.name, self.held.components[index - 1].fd, leaf, "M"))
+                identity = self._leaf_identity if index + 1 == len(self.held.components) else c._identity
+                require(identity(current) == identity(named) == identity(component.before), "E_STORE")
             before = c._capture_metadata(self.held.fd, leaf, "M")
             component = self.held.components[-1]
             named = c._capture_named_metadata(component.name, self.held.components[-2].fd, leaf, "M")
             require(self._leaf_identity(before) == self._leaf_identity(component.before)
                     and c._identity(before) == c._identity(named), "E_STORE")
             names = set(self.held.listdir())
-            require("recording" not in names and not self.runtime_copies, "E_STORE")
             c._capture_observe(leaf, "M", "recorder-setup", {"before": c._stat_values(before), "namespace": sorted(names)})
+            require("recording" not in names and not self.runtime_copies, "E_STORE")
             c._refresh_recording_directory(self.held, component.before, leaf)
+            require(anchor.recording_work.get("files", 0) < 256, "E_LIMIT")
+            c._capture_copy_room(leaf, 0, False, case=True)
             os.mkdir("recording", 0o700, dir_fd=self.held.fd)
+            leaf["files"] += 1
+            c._capture_account(leaf, "M", "files", 1)
+            leaf["recorder_physical_incomplete"] = True
             c._capture_observe(leaf, "M", "mkdir", {"name": "recording", "mode": 0o700})
             c._refresh_recording_directory(self.held, before, leaf)
-            require(set(self.held.listdir()) == names | {"recording"}, "E_STORE")
+            require(self._recording_names("recorder-setup-after") == names | {"recording"}, "E_STORE")
             self.recorder = c._open_child(self.held, "recording", True,
                 c._store_rule(os.geteuid(), os.getegid(), 0o700, True, anchor.resolver),
                 "E_STORE", recording_work=leaf, accounting_kind="M")
             require(not self.recorder.listdir(), "E_STORE")
-            self.recorder.recheck("E_STORE")
+            self.recorder.recheck("E_STORE", leaf, "M")
+            self._charge_recording_directory()
             self.native_names = names | {"recording"}
             key = str(self.recorder.before.st_dev) + ":" + str(self.recorder.before.st_ino)
             require(key not in anchor.recording_work.get("cases", {}), "E_STORE")
@@ -428,38 +440,84 @@ class StableDirectory:
         except BaseException as error:
             anchor.private_observations["unusable"] = True
             leaf["failure"] = {"category": type(error).__name__, "errno": getattr(error, "errno", None)}
-            if self.recorder is not None:
-                try:self.recorder.close()
+            recorder, self.recorder = self.recorder, None
+            if recorder is not None:
+                try:recorder.close()
                 except BaseException as closing:
                     leaf["close_incomplete"] = True
-                    if getattr(closing, "_scope_signal_cancel", False):error = closing
-            if self.recording_case is None:
-                key = str(self.held.before.st_dev) + ":" + str(self.held.before.st_ino)
-                self.recording_case = c._capture_work_values(anchor.recording_work, key)
-            try:self._transfer_recording_work()
+                    error = c._c3_first(error, closing)
+            try:
+                if self.recording_case is None:
+                    key = str(self.held.before.st_dev) + ":" + str(self.held.before.st_ino)
+                    self.recording_case = c._capture_work_values(anchor.recording_work, key)
+                self._transfer_recording_work()
             except BaseException as transfer:
-                leaf["transfer_incomplete"] = True
-                if getattr(transfer, "_scope_signal_cancel", False):error = transfer
+                error = c._c3_first(error, transfer)
+                try:
+                    leaf["transfer_incomplete"] = True
+                    anchor.recording_work["transfer_incomplete"] = True
+                    c._capture_observation_error(leaf, "M", "recorder-initialization-transfer", transfer)
+                except BaseException as reporting:error = c._c3_first(error, reporting)
             raise error
 
     @staticmethod
     def _leaf_identity(value):
         return value.st_dev, value.st_ino, value.st_uid, value.st_gid, value.st_mode & 0o170777
 
-    def _recording_parent(self):
+    def _charge_recording_directory(self):
+        leaf = self.recording_leaf
+        leaf["recorder_physical_incomplete"] = True
+        state = c._capture_metadata(self.recorder.fd, leaf, "M")
+        require(self._leaf_identity(state) == self._leaf_identity(self.recorder.before)
+                and type(state.st_size) is int and state.st_size >= 0, "E_STORE")
+        retained = max(self.recording_physical_bytes, state.st_size)
+        delta = retained - self.recording_physical_bytes
+        self.recording_physical_bytes = retained
+        leaf["physical_bytes"] += delta
+        c._capture_account(leaf, "M", "physical_bytes", delta)
+        c._capture_copy_room(leaf, 0, False, case=True)
+        named = c._capture_named_metadata("recording", self.held.fd, leaf, "M")
+        require(c._identity(state) == c._identity(named) == c._identity(self.recorder.before), "E_STORE")
+        leaf["recorder_physical_incomplete"] = False
+
+    def _recording_names(self, site):
+        leaf = self.recording_leaf
+        try:names = set(self.held.listdir())
+        except BaseException as error:
+            leaf["recorder_inventory_incomplete"] = True
+            try:c._capture_observation_error(leaf, "M", site, error)
+            except BaseException as observed:raise c._c3_first(error, observed)
+            raise
+        c._capture_observe(leaf, "M", site, {"namespace": sorted(names)})
+        return names
+
+    def _recording_parent(self, anchor=None, caller_raw=None):
+        if anchor is not None:
+            require(self.recording_anchor is anchor and self.recording_request == caller_raw, "E_STORE")
         require(self.recording_attempted and not self.recording_failed and self.recorder is not None, "E_STORE")
-        self.recheck("E_STORE")
         self.held.recheck("E_STORE", self.recording_leaf, "M")
-        require(set(self.held.listdir()) == self.native_names, "E_STORE")
-        self.recorder.recheck("E_STORE")
+        require(self._recording_names("recorder-native-parent") == self.native_names, "E_STORE")
+        self.recorder.recheck("E_STORE", self.recording_leaf, "M")
+        self._charge_recording_directory()
         self._transfer_recording_work()
         return self.recorder
 
-    def _begin_T_parent(self, anchor, parent):
+    def _begin_T_parent(self, anchor, parent, *, _native_transition=None):
         require(parent is self._recording_parent() and self.recording_transition is None, "E_STORE")
+        native_sources = ()
+        if _native_transition is not None:
+            require(_native_transition is self.T_native_context and _native_transition["cleaned"]
+                    and _native_transition["returned"] and not _native_transition["failed"], "E_STORE")
+            self._T_native_observation(_native_transition)
+            native_sources = tuple(source for _, _, source in _native_transition["sources"])
         sources = []
         for carrier in self.runtime_copies:
             for index, source in enumerate(carrier.T_companions):
+                if any(source is old for old in native_sources):
+                    require(not source.closed and not source.stable
+                            and any(owner is carrier and ordinal == index and old is source
+                                for owner, ordinal, old in _native_transition["sources"]), "E_STORE")
+                    continue
                 source.recheck()
                 require(not source.closed and source.stable and not c._capture_work_incomplete(source.leaf), "E_STORE")
                 sources.append((carrier, index, source))
@@ -476,6 +534,7 @@ class StableDirectory:
         transition = {"before": before, "names": names, "recorder_before": recorder_before,
             "recording_names": recording_names, "sources": sources}
         self.recording_transition = transition
+        self.recording_leaf["recorder_physical_incomplete"] = True
         return transition
 
     def _T_parent_receipt(self, parent, before, before_names, created, leaf):
@@ -639,10 +698,9 @@ class StableDirectory:
     def _retain_preparation(self, anchor, scratch_name, operation, input_raw, response_raw, caller_raw):
         copied = None
         try:
-            self._initialize_recording(anchor, caller_raw)
-            parent = self._recording_parent()
+            parent = self._recording_parent(anchor, caller_raw)
             native = self.T_native_context
-            transition = self._begin_T_parent(anchor, parent)
+            transition = self._begin_T_parent(anchor, parent, _native_transition=native)
             if native is not None:
                 native["recorder_before"], native["recording_names"] = transition["recorder_before"], transition["recording_names"]
             copied = anchor.retain_preparation(parent,scratch_name,operation,input_raw,response_raw,caller_raw,
@@ -661,8 +719,7 @@ class StableDirectory:
     def _retain_sudo(self, anchor, executable, caller_raw):
         copied = None
         try:
-            self._initialize_recording(anchor, caller_raw)
-            parent = self._recording_parent()
+            parent = self._recording_parent(anchor, caller_raw)
             transition = self._begin_T_parent(anchor, parent)
             copied = anchor.retain_sudo_companion(parent, executable, caller_raw)
             self._own_runtime(anchor, copied)
@@ -676,8 +733,7 @@ class StableDirectory:
     def _retain_parent_inputs(self, anchor, context, caller_raw):
         copied = None
         try:
-            self._initialize_recording(anchor, caller_raw)
-            parent = self._recording_parent()
+            parent = self._recording_parent(anchor, caller_raw)
             transition = self._begin_T_parent(anchor, parent)
             copied = anchor.retain_parent_inputs(parent, context, caller_raw)
             self._own_runtime(anchor, copied)
@@ -692,8 +748,7 @@ class StableDirectory:
     def _retain_runtime(self, anchor, role, original, raw, caller_raw):
         copied = None
         try:
-            self._initialize_recording(anchor, caller_raw)
-            parent = self._recording_parent()
+            parent = self._recording_parent(anchor, caller_raw)
             transition = self._begin_T_parent(anchor, parent)
             copied = anchor.retain_runtime_acquisition(parent, role, original, raw, caller_raw)
             self._own_runtime(anchor, copied)
@@ -721,12 +776,15 @@ class StableDirectory:
         copies, self.runtime_copies = self.runtime_copies, []
         primary, cancellation = sys.exc_info()[1], None
         for copied in reversed(copies):
-            try:
-                try:copied.recheck()
-                finally:copied.close()
-            except Exception as error:
-                if getattr(error, "_scope_signal_cancel", False) and cancellation is None:cancellation = error
-        if cancellation is not None and not getattr(primary, "_scope_signal_cancel", False):raise cancellation
+            failure = None
+            try:copied.recheck()
+            except BaseException as error:failure = error
+            try:copied.close()
+            except BaseException as error:failure = c._c3_first(failure, error)
+            if isinstance(failure, KeyboardInterrupt) or getattr(failure, "_scope_signal_cancel", False):
+                cancellation = c._c3_first(cancellation, failure)
+        if cancellation is not None and c._c3_first(primary, cancellation) is cancellation:
+            raise cancellation
 
     def recheck(self, code: str = "E_WORKSPACE") -> None:
         for index, component in enumerate(self.held.components):
@@ -743,21 +801,39 @@ class StableDirectory:
 
     def close(self) -> None:
         primary = None
-        try:self.close_runtime_copies()
-        except BaseException as error:primary = error
-        if self.recorder is not None:
-            recorder, self.recorder = self.recorder, None
-            try:recorder.close()
-            except BaseException as error:
+        def recording_failure(error, site):
+            nonlocal primary
+            cancelled = lambda value: isinstance(value, KeyboardInterrupt) or getattr(value, "_scope_signal_cancel", False)
+            if cancelled(error):primary = c._c3_first(primary, error)
+            try:
                 self.recording_failed = True
                 self.recording_anchor.private_observations["unusable"] = True
                 self.recording_anchor.private_observations["recording_sealed"] = False
-                primary = c._c3_first(primary, error)
+                self.recording_leaf["recorder_finalization_incomplete"] = True
+                if site == "recorder-close":self.recording_leaf["recorder_close_incomplete"] = True
+                if site == "recorder-close-transfer":
+                    self.recording_leaf["transfer_incomplete"] = True
+                    self.recording_anchor.recording_work["transfer_incomplete"] = True
+                c._capture_observation_error(self.recording_leaf, "M", site, error)
+            except BaseException as reporting:
+                if cancelled(reporting):primary = c._c3_first(primary, reporting)
+                try:self.recording_leaf["accounting_incomplete"] = True
+                except BaseException as incomplete:
+                    if cancelled(incomplete):primary = c._c3_first(primary, incomplete)
+        try:self.close_runtime_copies()
+        except BaseException as error:primary = error
+        if self.recorder is not None:
+            try:self._charge_recording_directory()
+            except BaseException as error:recording_failure(error, "recorder-final-meter")
+            recorder, self.recorder = self.recorder, None
+            try:recorder.close()
+            except BaseException as error:recording_failure(error, "recorder-close")
         try:self._transfer_recording_work()
-        except BaseException as error:primary = c._c3_first(primary, error)
+        except BaseException as error:recording_failure(error, "recorder-close-transfer")
         try:self.held.close()
         except BaseException as error:primary = c._c3_first(primary, error)
         if primary is not None:raise primary
+
 
 
 @dataclasses.dataclass

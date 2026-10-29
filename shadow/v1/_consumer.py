@@ -5826,6 +5826,19 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
         selector = selectors.DefaultSelector()
         cancelled = [False]
         old_handlers = {}
+        primary = None
+        cleanup_errors = []
+        result_value = None
+        def later(error):
+            cleanup_errors.append(error)
+        def cleanup_clock(site):
+            try:value = time.monotonic()
+            except BaseException as error:
+                later(error)
+                return None
+            try:_clock_value(site, value, 'monotonic')
+            except BaseException as error:later(error)
+            return value
         def observe_signal(_number, _frame):
             cancelled[0] = True
         try:
@@ -5924,74 +5937,101 @@ class _DarwinChildOwner(_DarwinUUIDResolver, _DarwinGroupReader):
                 _require(gate.wire.sock.recv(1) == b"", "E_RUNTIME")
             stdout, stderr = list(outputs.values())
             _require(not stderr, "E_RUNTIME")
-            return bytes(stdout)
+            result_value = bytes(stdout)
         except BaseException as exc:
-            cleanup_errors = []
+            primary = exc
             if child is not None:
-                cleanup_end = min(self.deadline, _clock_value('shadow/v1/_consumer.py:1493:0',time.monotonic(),'monotonic') + 10) if inherited else _clock_value('shadow/v1/_consumer.py:1493:1',time.monotonic(),'monotonic') + 10
+                cleanup_end = None
                 try:
+                    cleanup_started = cleanup_clock('shadow/v1/_consumer.py:1493:0' if inherited else 'shadow/v1/_consumer.py:1493:1')
+                    if cleanup_started is not None:
+                        cleanup_end = min(self.deadline, cleanup_started + 10) if inherited else cleanup_started + 10
+                except BaseException as error:
+                    later(error)
+                try:
+                    os.killpg(child.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                except BaseException as error:
+                    later(error)
+                if child.returncode is None:
                     try:
-                        os.killpg(child.pid, signal.SIGTERM)
-                    except ProcessLookupError:
+                        current = cleanup_clock('shadow/v1/_consumer.py:1501:0')
+                        if cleanup_end is None or current is None:child.poll()
+                        else:child.wait(timeout=max(0.001, min(2, cleanup_end - current)))
+                    except subprocess.TimeoutExpired:
                         pass
-                    if child.returncode is None:
-                        try:
-                            child.wait(timeout=max(0.001, min(2, cleanup_end - _clock_value('shadow/v1/_consumer.py:1501:0',time.monotonic(),'monotonic'))))
-                        except subprocess.TimeoutExpired:
-                            pass
+                    except BaseException as error:
+                        later(error)
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                except BaseException as error:
+                    later(error)
+                if child.returncode is None:
                     try:
-                        os.killpg(child.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                    if child.returncode is None:
-                        child.wait(timeout=max(0.001, cleanup_end - _clock_value('shadow/v1/_consumer.py:1509:0',time.monotonic(),'monotonic')))
+                        current = cleanup_clock('shadow/v1/_consumer.py:1509:0')
+                        if cleanup_end is None or current is None:child.poll()
+                        else:child.wait(timeout=max(0.001, cleanup_end - current))
+                    except BaseException as error:
+                        later(error)
+                try:
                     while True:
                         try:
                             os.killpg(child.pid, 0)
                         except ProcessLookupError:
                             break
-                        _require(_clock_value('shadow/v1/_consumer.py:1515:0',time.monotonic(),'monotonic') < cleanup_end, "E_RUNTIME")
-                        time.sleep(min(0.01, max(0, cleanup_end - _clock_value('shadow/v1/_consumer.py:1516:0',time.monotonic(),'monotonic'))))
-                except BaseException as cleanup_exc:
-                    cleanup_errors.append(cleanup_exc)
-            if cleanup_errors:
-                cause = None
-                retained = [exc]
-                for cleanup_exc in cleanup_errors:
-                    if any(cleanup_exc is prior for prior in retained):
-                        continue
-                    cleanup_exc.__cause__ = cause
-                    cause = cleanup_exc
-                    retained.append(cleanup_exc)
-                if cause is not None:
-                    raise exc from cause
-            raise
+                        current = cleanup_clock('shadow/v1/_consumer.py:1515:0')
+                        _require(cleanup_end is not None and current is not None and current < cleanup_end, "E_RUNTIME")
+                        current = cleanup_clock('shadow/v1/_consumer.py:1516:0')
+                        _require(current is not None, "E_RUNTIME")
+                        time.sleep(min(0.01, max(0, cleanup_end - current)))
+                except BaseException as error:
+                    later(error)
         finally:
-            native_primary = sys.exc_info()[1]
             try:
                 signal.pthread_sigmask(signal.SIG_BLOCK,
                                         {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
-                try:
-                    selector.close()
-                    if child is not None:
-                        for stream in (child.stdin, child.stdout, child.stderr):
-                            if stream is not None and not stream.closed:
-                                stream.close()
-                    for number, handler in old_handlers.items():
-                        signal.signal(number, handler)
-                finally:
-                    signal.pthread_sigmask(signal.SIG_SETMASK, previous)
-            finally:
-                native_primary = _c3_first(native_primary, sys.exc_info()[1])
-                if handoff is not None:
-                    try:handoff.close()
-                    except BaseException as error:
-                        first = _c3_first(native_primary, error)
-                        try:handoff.fail(error, "foreground-close")
-                        except BaseException as later:
-                            first = _c3_first(first, later)
-                            first = _c1_p_report(handoff.work, "C1-P-foreground-report", later, first)
-                        if isinstance(first, KeyboardInterrupt) or getattr(first, "_scope_signal_cancel", False):raise first
+            except BaseException as error:
+                later(error)
+            try:
+                selector.close()
+            except BaseException as error:
+                later(error)
+            if child is not None:
+                for stream in (child.stdin, child.stdout, child.stderr):
+                    if stream is not None and not stream.closed:
+                        try:stream.close()
+                        except BaseException as error:later(error)
+            for number, handler in old_handlers.items():
+                try:signal.signal(number, handler)
+                except BaseException as error:later(error)
+            try:signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+            except BaseException as error:later(error)
+            if handoff is not None:
+                try:handoff.close()
+                except BaseException as error:
+                    later(error)
+                    try:handoff.fail(error, "foreground-close")
+                    except BaseException as reporting:
+                        later(reporting)
+                        try:
+                            reported = _c1_p_report(handoff.work, "C1-P-foreground-report", reporting,
+                                _c3_first(primary, reporting))
+                            if reported is not primary and reported is not reporting:later(reported)
+                        except BaseException as observed:later(observed)
+        retained = []
+        for error in (primary, *cleanup_errors):
+            if error is not None and not any(error is old for old in retained):retained.append(error)
+        first = None
+        for error in retained:first = _c3_first(first, error)
+        if first is not None:
+            chain = [first] + [error for error in retained if error is not first]
+            for index, error in enumerate(chain):
+                error.__cause__ = chain[index + 1] if index + 1 < len(chain) else None
+            raise first
+        return result_value
 
 
 

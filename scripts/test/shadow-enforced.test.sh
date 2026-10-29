@@ -4009,7 +4009,24 @@ e.c.ANCHOR=str(fake_anchor)
 events=[]
 real_snapshot_dependency=e.c.snapshot_dependency
 real_snapshot_jq=e.c.snapshot_jq
+real_snapshot_input=e.snapshot_input
+real_recording_parent=e.StableDirectory._recording_parent
+flow_dependencies=[];flow_inputs=[];flow_recorder_checks=[]
+def snapshot_input(*args):
+ value=real_snapshot_input(*args);flow_inputs.append(value);return value
+def recording_parent(self,*args):
+ value=real_recording_parent(self,*args)
+ for dependency in flow_dependencies:dependency.recheck()
+ for item in flow_inputs:item.recheck()
+ for copied in self.runtime_copies:
+  for original in copied.T_companions:
+   if original.stable:original.recheck()
+ flow_recorder_checks.append((value.path,self.held.path))
+ return value
+e.snapshot_input=snapshot_input
+e.StableDirectory._recording_parent=recording_parent
 def observed_snapshot(value):
+ flow_dependencies.append(value)
  original_recheck,original_close=value.recheck,value.close
  def recheck():
   original_recheck();events.append("dependency-recheck")
@@ -4135,6 +4152,11 @@ finally:
   e.c.read_store_attempt=real_read_store_attempt
   e.c.load_anchor=real_load_anchor
   e.c.ANCHOR=real_anchor_path
+  e.snapshot_input=real_snapshot_input
+  e.StableDirectory._recording_parent=real_recording_parent
+assert len(flow_dependencies)==2 and len(flow_inputs)==5 and flow_recorder_checks
+assert all(recorder==native+'/recording' for recorder,native in flow_recorder_checks)
+assert [item.snapshot.path for item in flow_dependencies]==[str(work/'dependencies/helper/object-closure'),str(work/'dependencies/jq/jq')]
 ok(len(launch_frames)==1 and launch_frames[0].startswith(b"YSFRAME1"),"one framed launch")
 ok(events.index("launch")>events.index("prepare"),"launch follows preparation")
 ok(events.index("launch")>events.index("evaluate"),
@@ -4163,6 +4185,126 @@ try:e.require_no_change(e.canonical(changed),incident)
 except e.Refusal as exc:ok(exc.code=="E_RELATION","changed materialization response cannot launch")
 else:raise AssertionError("changed materialization accepted")
 parent_inputs.recheck();parent_inputs.close()
+recorder_controls=[]
+recorder_acl=e.c._acl_state
+e.c._acl_state=lambda *_:([],None) if sys.platform=='darwin' else (None,None)
+try:
+ for fault in ('stable','dependency-leaf','dependency-ancestor','recorder-owner','recorder-name','native-scratch','mkdir','partial','partial-write','close','cancel','occupied-recorder','init-transfer-cancels','init-case-cancels','init-transfer-keyboard'):
+  location=base/('recorder-'+fault);location.mkdir(mode=0o700)
+  for name in ('dependencies','inputs','preparation-scratch'):(location/name).mkdir(mode=0o700)
+  if fault=='occupied-recorder':(location/'recording').mkdir(mode=0o700)
+  holder=e.stable_directory(location);local_anchor=e.c.Anchor({},b'',[],{},('',[]),('',[]),None);request_raw=e.canonical(request)
+  mkdir,open_child=e.os.mkdir,e.c._open_child
+  work_values,transfer=e.c._capture_work_values,e.c._capture_transfer_work
+  later_cancel=KeyboardInterrupt('fixed later initialization cancellation')
+  def case_values(work,key):
+   if fault=='init-case-cancels' and work is local_anchor.recording_work:raise later_cancel
+   return work_values(work,key)
+  def transferring(leaf,*args,**kwargs):
+   if fault in ('init-transfer-cancels','init-transfer-keyboard') and leaf is holder.recording_leaf:raise later_cancel
+   return transfer(leaf,*args,**kwargs)
+  marker=KeyboardInterrupt('fixed recorder init cancel') if fault in ('cancel','init-transfer-cancels','init-case-cancels') else OSError(5,'fixed recorder action failure')
+  closed=[];snapshots=[];caught=None;initial_metadata=[];inventory_rows=[]
+  capture_metadata,capture_observe=e.c._capture_metadata,e.c._capture_observe
+  def metadata(fd,leaf,kind):
+   value=capture_metadata(fd,leaf,kind)
+   if leaf is holder.recording_leaf:initial_metadata.append(fd)
+   return value
+  def observe(leaf,kind,site,value,*args,**kwargs):
+   if leaf is holder.recording_leaf and site in ('recorder-setup-after','recorder-native-parent'):
+    inventory_rows.append((site,value['namespace']))
+   return capture_observe(leaf,kind,site,value,*args,**kwargs)
+  def create(name,*args,**kwargs):
+   if name=='recording' and fault in ('mkdir','cancel','init-transfer-cancels','init-case-cancels','init-transfer-keyboard'):raise marker
+   return mkdir(name,*args,**kwargs)
+  def acquire(parent,name,*args,**kwargs):
+   if name=='recording' and fault=='partial':raise marker
+   value=open_child(parent,name,*args,**kwargs)
+   if name=='recording' and fault=='close':
+    actual=value.close
+    def close():actual();closed.append(True);raise marker
+    value.close=close
+   return value
+  try:
+   e.os.mkdir,e.c._open_child=create,acquire
+   e.c._capture_work_values,e.c._capture_transfer_work=case_values,transferring
+   e.c._capture_metadata,e.c._capture_observe=metadata,observe
+   try:holder._initialize_recording(local_anchor,request_raw)
+   except BaseException as error:caught=error
+   finally:
+    e.os.mkdir,e.c._open_child=mkdir,open_child
+    e.c._capture_work_values,e.c._capture_transfer_work=work_values,transfer
+   if fault in ('mkdir','partial','cancel','occupied-recorder','init-transfer-cancels','init-case-cancels','init-transfer-keyboard'):
+    if fault=='occupied-recorder':
+     assert isinstance(caught,e.Refusal) and caught.code=='E_STORE'
+     assert len([row for row in holder.recording_leaf['accounting_rows'] if row['site']=='recorder-setup' and 'recording' in row['value']['namespace']])==1
+    else:assert caught is (later_cancel if fault=='init-transfer-keyboard' else marker)
+    assert holder.recording_failed and local_anchor.private_observations['unusable']
+    try:holder._initialize_recording(local_anchor,request_raw)
+    except e.Refusal:pass
+    else:raise AssertionError('failed initialization retried')
+    assert (location/'recording').exists()==(fault in ('partial','occupied-recorder'))
+   else:
+    assert initial_metadata[:len(holder.held.components)]==[item.fd for item in holder.held.components]
+    assert inventory_rows[0]==('recorder-setup-after',sorted(holder.native_names))
+    for name,original,raw in (('helper',helper,b'helper'),('jq',jq,b'jq')):
+     snapshot=real_snapshot_dependency(str(original),sha(raw),len(raw),str(location/'dependencies'/name),'object-closure' if name=='helper' else name)
+     snapshots.append(snapshot)
+    if fault=='dependency-leaf':
+     target=pathlib.Path(snapshots[0].snapshot.path);target.chmod(0o600);target.chmod(0o500)
+    if fault=='dependency-ancestor':(location/'dependencies/helper').chmod(0o750)
+    if fault=='recorder-owner':(location/'recording').chmod(0o750)
+    if fault=='recorder-name':
+     (location/'recording').rename(location/'displaced-recording');(location/'recording').mkdir(mode=0o700)
+    if fault=='native-scratch':(location/'unproved-scratch').mkdir(mode=0o700)
+    rejected=None
+    try:
+     parent=holder._recording_parent(local_anchor,request_raw)
+     for snapshot in snapshots:snapshot.recheck()
+     before=holder._begin_T_parent(local_anchor,parent)
+     if fault=='partial-write':
+      write=e.os.write
+      def partial_write(fd,raw):write(fd,raw[:1]);raise marker
+      e.os.write=partial_write
+     try:e.c._copy_preparation_document(parent.fd,b'paired recorder write\n',holder.recording_leaf,local_anchor.resolver)
+     finally:
+      if fault=='partial-write':e.os.write=write
+     e.c._refresh_recording_directory(parent,parent.before,holder.recording_leaf)
+     holder._finish_T_parent(local_anchor,parent,before,{'capture.json'})
+     for snapshot in snapshots:snapshot.recheck()
+    except (e.Refusal,e.c.Refusal,OSError) as error:rejected=error
+    assert (rejected is not None)==(fault not in ('stable','close'))
+    if fault=='partial-write':
+     assert rejected is marker and (location/'recording/capture.json').read_bytes()==b'p'
+     final_directory_size=e.os.fstat(holder.recorder.fd).st_size
+     original_case=holder.recording_case
+     assert holder.recording_leaf['recorder_physical_incomplete'] is True
+   assert holder.close() is None
+   if fault in ('close','recorder-owner','recorder-name','partial-write'):
+    assert local_anchor.private_observations['unusable'] is True
+    assert local_anchor.private_observations['recording_sealed'] is False
+    assert holder.recording_leaf['recorder_finalization_incomplete'] is True
+   if fault=='partial-write':
+    assert holder.recording_case is original_case
+    assert holder.recording_leaf['physical_bytes']>=final_directory_size
+    assert holder.recording_leaf['recorder_physical_incomplete'] is True
+    assert original_case['recorder_physical_incomplete'] is True
+    assert original_case['physical_bytes']>=final_directory_size
+    assert local_anchor.private_observations.get('recording_sealed') is False
+   holder.close()
+   assert closed==([True] if fault=='close' else [])
+   if fault=='close':assert local_anchor.private_observations['recording_sealed'] is False
+   recorder_controls.append({'fault':fault,'initialization_failed':holder.recording_failed,
+    'physical_bytes':holder.recording_leaf.get('physical_bytes'),'files':holder.recording_leaf.get('files'),
+    'accounting':local_anchor.recording_work,'once_close':len(closed)})
+  finally:
+   e.os.mkdir,e.c._open_child=mkdir,open_child
+   e.c._capture_work_values,e.c._capture_transfer_work=work_values,transfer
+   e.c._capture_metadata,e.c._capture_observe=capture_metadata,capture_observe
+   for snapshot in snapshots:snapshot.close()
+   holder.close();local_anchor.close()
+finally:e.c._acl_state=recorder_acl
+print(json.dumps({'fixed_recorder_noninterference_controls':recorder_controls},sort_keys=True))
 print("shadow-enforced-flow: %d checks passed"%checks)
 PY
 

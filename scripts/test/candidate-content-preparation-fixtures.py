@@ -1743,6 +1743,7 @@ def raw16_t_lifecycle(root: Path) -> None:
             holder = e.stable_directory(work)
             try:
                 anchor = anchor or c.Anchor({}, b'', [], {}, ('', []), ('', []), None)
+                holder._initialize_recording(anchor, caller_raw)
                 result = holder._retain_preparation(anchor, 'preparation-scratch', operation,
                                                      input_raw, response_raw, caller_raw)
                 receipts.append({'P_fees': {key: anchor.recording_work.get(key) for key in
@@ -1764,6 +1765,7 @@ def raw16_t_lifecycle(root: Path) -> None:
         (work / 'preparation-scratch').mkdir(mode=0o700)
         holder = e.stable_directory(work)
         anchor = c.Anchor({}, b'', [], {}, ('', []), ('', []), None)
+        holder._initialize_recording(anchor, caller_raw)
         calls, native_paths = [], []
         def execute(role, argv, component, **options):
             operation = argv[5]
@@ -1816,6 +1818,7 @@ def raw16_t_lifecycle(root: Path) -> None:
             (work / name).mkdir(mode=0o700)
         holder = e.stable_directory(work)
         anchor = c.Anchor({}, b'', [], {}, ('', []), ('', []), None)
+        holder._initialize_recording(anchor, caller_raw)
         writer_calls = []
         def writer_execute(role, argv, component, **options):
             operation = argv[5]
@@ -1830,6 +1833,13 @@ def raw16_t_lifecycle(root: Path) -> None:
             exec(compile(writer_segment, str(root / 'shadow/v1/write-shadow.py') + ':actual-T-two-roots', 'exec'),
                 {'ws': ws, 'work': work, 'sys': sys, 'preparation': root/'preparation/v1/prepare-candidate.py',
                  'common': [], 'input_raw': input_raw, 'response_raw': response_raw})
+            if len(writer_calls) != 2 or anchor.private_observations.get('unusable', False):
+                print(json.dumps({'writer_two_roots_failure': {'calls': len(writer_calls),
+                    'operations': [role for role, _scratch in writer_calls],
+                    'unusable': bool(anchor.private_observations.get('unusable', False)),
+                    'preparation': [{key: leaf.get(key, 'UNKNOWN') for key in
+                        ('failure', 'release_failure', 'transfer_incomplete', 'close_incomplete', 'held_close_incomplete', 'closed')}
+                        for leaf in anchor.recording_work.get('preparation_leaves', [])]} }), file=sys.stderr)
             assert len(writer_calls) == 2 and not anchor.private_observations.get('unusable', False)
             assert set(anchor.private_observations['preparation']) == {'prepare', 'inspect'}
             assert len(list((work/'preparation-scratch').glob('raw16-t-v1-prepare-*'))) == 5
@@ -2073,6 +2083,7 @@ def raw16_t_lifecycle(root: Path) -> None:
     print(json.dumps({'raw16_T_controls': completed, 'ordinary_synthetic_runtime_only': True,
         'actual_source_segments_not_full_native_route': True, 'receipts': receipts}, sort_keys=True))
 
+
 def raw16_preparation_P_handoff(root: Path) -> None:
     body=(root/'scripts/test/evals-malicious.test.sh').read_text().split("<<'PY_RUNTIME_CONSUMER'\n",1)[1].split('\nPY_RUNTIME_CONSUMER',1)[0]
     prefix=body.split('        copied_inventory.close();copied_inventory.close()\n',1)[0]
@@ -2085,6 +2096,7 @@ def raw16_preparation_P_handoff(root: Path) -> None:
         holder=e.StableDirectory(parent)
         input_raw,response_raw=b'synthetic T input',b'synthetic T response'
         caller=c.canonical({'kind':'shadow_write_request','id':'t.p.fixture'})
+        holder._initialize_recording(anchor,caller)
         def create_T(operation):
             rows=[]
             for ordinal,role in enumerate(('python','git','jq')):
@@ -2171,12 +2183,13 @@ def raw16_preparation_P_handoff(root: Path) -> None:
     for case in ('stable','P-target-drift','parent-mode','parent-inode','T-close-failure','T-transfer-failure','T-close-cancel'):
         script=head+setup
         if case.startswith('T-'):script+=failed
-        else:script+=success+'        T_parent_transition=holder._begin_T_parent(anchor,parent)\n'+edge+'        holder._refresh_runtime_parents()\n        holder._finish_T_parent(anchor,parent,T_parent_transition,{\'reproduction\'})\n'+tail+final
+        else:script+=success+'        T_parent_transition=holder._begin_T_parent(anchor,holder._recording_parent())\n'+edge.replace('copy_capture(parent,','copy_capture(holder._recording_parent(),')+'        holder._refresh_runtime_parents()\n        holder._finish_T_parent(anchor,holder._recording_parent(),T_parent_transition,{\'reproduction\'})\n'+tail+final
         namespace={'T_case':case};argv=sys.argv;sys.argv=['T-P-fixture',str(root)]
         try:exec(compile(script+footer,'<actual-preparation-P-handoff>','exec'),namespace)
         finally:
             sys.argv=argv
             if namespace.get('holder') is not None:namespace['holder'].close()
+
 
 
 def raw16_local_P_after_H_copy(root: Path) -> None:
@@ -2185,6 +2198,7 @@ def raw16_local_P_after_H_copy(root: Path) -> None:
     prefix = body.split('        copied_inventory.close();copied_inventory.close()\n',1)[0]
     footer = body[body.rfind('finally:\n    if copied_inventory'):]
     setup = '''        holder=e.StableDirectory(parent)
+        holder._initialize_recording(anchor,c.canonical({'kind':'shadow_write_request','id':'local.hcopy'}))
         local_source=c._open_held(str(source),False,c._store_rule(uid,gid,0o400,False),'E_STORE')
         holder._retain_runtime(anchor,'python',local_source,source_raw,c.canonical({'kind':'shadow_write_request','id':'local.hcopy'}))
         assert len(holder.runtime_copies)==1
@@ -2192,12 +2206,12 @@ def raw16_local_P_after_H_copy(root: Path) -> None:
 '''
     edge = "        copied_inventory=native.copy_capture(parent,request,'reproduction',anchor.recording_work)\n"
     assert prefix.count(edge) == 1
-    prefix = prefix.replace(edge, setup + edge + '        holder._refresh_runtime_parents()\n')
-    checks = '''        anchor.seal_local_runtime(parent)
+    prefix = prefix.replace(edge, setup + '        transition=holder._begin_T_parent(anchor,holder._recording_parent())\n' + edge.replace('copy_capture(parent,','copy_capture(holder._recording_parent(),') + '        holder._refresh_runtime_parents()\n        holder._finish_T_parent(anchor,holder._recording_parent(),transition,{\'reproduction\'})\n')
+    checks = '''        anchor.seal_local_runtime(holder._recording_parent())
         local_source.close()
         local_name=next(iter(local_P.members))
         if local_case=='P-drift':
-            target=private/local_name;target.chmod(0o600)
+            target=private/'recording'/local_name;target.chmod(0o600)
             with target.open('r+b') as stream:stream.write(b'!')
             target.chmod(0o400)
         holder.close_runtime_copies()
@@ -2214,6 +2228,7 @@ def raw16_local_P_after_H_copy(root: Path) -> None:
             sys.argv=original
             if namespace.get('local_source') is not None:namespace['local_source'].close()
             if namespace.get('holder') is not None:namespace['holder'].close()
+
 
 
 def raw16_local_P_clone_allocation(root: Path) -> None:
@@ -2272,7 +2287,7 @@ def raw16_local_P_handoff(root: Path) -> None:
     callbacks = {};exec(compile(ast.Module(body=[cancel],type_ignores=[]),'<actual-scope-cancel>','exec'),callbacks)
     output = []
     try:
-        for case in ('runtime', 'sudo', 'two-runtime', 'P-drift', 'parent-mode', 'parent-inode', 'close-observer', 'close-error', 'close-cancel', 'registration'):
+        for case in ('runtime', 'sudo', 'two-runtime', 'P-drift', 'parent-mode', 'parent-inode', 'close-observer', 'close-error', 'close-cancel', 'two-runtime-keyboard', 'registration'):
             with tempfile.TemporaryDirectory(prefix='ystack-local-P-') as temporary:
                 base = Path(temporary).resolve();base.chmod(0o700)
                 source, work = base/'synthetic-runtime', base/'private-recorder'
@@ -2291,6 +2306,7 @@ def raw16_local_P_handoff(root: Path) -> None:
                         return original_open(str(source), False, c._store_rule(os.geteuid(),os.getegid(),0o400,False), code, *args, **kwargs)
                     return original_open(path, directory, rule, code, *args, **kwargs)
                 request = c.canonical({'kind':'shadow_write_request','id':'local.p.fixture'})
+                holder._initialize_recording(anchor,request)
                 watched = set()
                 def observe(leaf, kind, site, value, *args, **kwargs):
                     if case == 'close-observer' and site == 'held-close' and not fired:
@@ -2302,6 +2318,8 @@ def raw16_local_P_handoff(root: Path) -> None:
                         closed.append(fd)
                         if case == 'close-error' and not fired:
                             fired.append('close');raise OSError(errno.EIO,'controlled actual P close')
+                        if case == 'two-runtime-keyboard' and not events:
+                            error=KeyboardInterrupt('controlled original P close cancellation');events.append(error);raise error
                         if case == 'close-cancel' and not events:
                             try:callbacks['cancel'](signal.SIGTERM,None)
                             except InterruptedError as error:events.append(error);raise
@@ -2326,9 +2344,10 @@ def raw16_local_P_handoff(root: Path) -> None:
                     name, held = next(iter(copied.members.items()))
                     assert held.fd != original.fd and held.before.st_ino != original.before.st_ino
                     assert copied.runtime_sha256[name] == c.digest(raw)
-                    if case == 'two-runtime':
+                    if case in ('two-runtime','two-runtime-keyboard'):
                         holder._retain_runtime(anchor,'jq',original,raw,request)
                         assert len(holder.runtime_copies) == 2
+                    close_owners=tuple(holder.runtime_copies)
                     watched = {row.fd for owner in holder.runtime_copies for item in owner.owned for row in item.components}
                     if case in ('parent-mode', 'parent-inode'):
                         if case == 'parent-mode':work.chmod(0o750)
@@ -2337,7 +2356,7 @@ def raw16_local_P_handoff(root: Path) -> None:
                         holder._retain_runtime(anchor,'jq',original,raw,request)
                         assert len(holder.runtime_copies) == 1 and anchor.private_observations.get('unusable') is True
                     if case == 'P-drift':
-                        target = work/name;target.chmod(0o600)
+                        target = work/'recording'/name;target.chmod(0o600)
                         with target.open('r+b') as stream:stream.write(b'!')
                         target.chmod(0o400)
                     elif case not in ('parent-mode', 'parent-inode'):
@@ -2347,17 +2366,18 @@ def raw16_local_P_handoff(root: Path) -> None:
                     c._capture_observe, os.close = observe, closing
                     caught = None
                     try:holder.close_runtime_copies()
-                    except InterruptedError as error:caught = error
+                    except (InterruptedError,KeyboardInterrupt) as error:caught = error
                     assert not holder.runtime_copies and copied.closed and not copied.owned
+                    assert all(owner.closed and not owner.owned for owner in close_owners)
                     assert len(closed) == len(watched) and set(closed) == watched
                     holder.close_runtime_copies();assert len(closed) == len(watched)
                     for fd in watched:
                         try:os.fstat(fd)
                         except OSError as error:assert error.errno == errno.EBADF
                         else:raise AssertionError('local P fd leaked')
-                    if case == 'close-cancel':assert len(events) == 1 and caught is events[0]
+                    if case in ('close-cancel','two-runtime-keyboard'):assert len(events) == 1 and caught is events[0]
                     else:assert caught is None
-                    assert bool(anchor.private_observations.get('unusable')) == (case in ('P-drift','parent-mode','parent-inode','close-observer','close-error','close-cancel'))
+                    assert bool(anchor.private_observations.get('unusable')) == (case in ('P-drift','parent-mode','parent-inode','close-observer','close-error','close-cancel','two-runtime-keyboard'))
                     if case == 'sudo':assert requests == ['/usr/bin/sudo'] and os.fstat(native.fd)
                     output.append({'case':case,'P_work':anchor.recording_work,'P_leaf':copied.leaf,
                         'closed_once':len(closed),'extra_fixture_validation_read_bytes':0 if case in ('P-drift','parent-mode','parent-inode') else len(raw),
@@ -2367,6 +2387,7 @@ def raw16_local_P_handoff(root: Path) -> None:
                     holder.close();original.close();anchor.close();native.close()
     finally:c._acl_state = original_acl
     print(json.dumps({'actual_StableDirectory_local_P':output},sort_keys=True))
+
 
 def raw16_hp_registration_primary(root: Path) -> None:
     import ast
@@ -3045,6 +3066,7 @@ def raw16_p_acquisitions(root: Path) -> None:
                 holder = e.stable_directory(work)
                 anchor = c.Anchor({}, b'', [], {}, ('', []), ('', []), None)
                 request = c.canonical({'kind': 'shadow_enforced_request', 'id': 'p.original.read.fixture'})
+                holder._initialize_recording(anchor,request)
                 pread, events = os.pread, []
                 def observed_read(fd, size, offset):
                     value = pread(fd, size, offset)
@@ -3053,15 +3075,15 @@ def raw16_p_acquisitions(root: Path) -> None:
                 try:
                     assert native.acquisition_raw == raw
                     if scenario == 'occupied-P':
-                        (work/'runtime-0000-object_closure-0000.bin').write_bytes(b'preserved occupancy')
+                        (work/'recording'/'runtime-0000-object_closure-0000.bin').write_bytes(b'preserved occupancy')
                     if scenario == 'case-carry-over':
-                        key = str(holder.held.before.st_dev) + ':' + str(holder.held.before.st_ino)
+                        key = str(holder.recorder.before.st_dev) + ':' + str(holder.recorder.before.st_ino)
                         carry = c._capture_work_values(anchor.recording_work, key)
                         carry['runtime'] = {'read_bytes': c._RUNTIME_FIELDS['read_bytes']-len(raw)+1}
                     os.pread = observed_read
                     holder._retain_runtime(anchor, 'object_closure', native.original, native.acquisition_raw, request)
                     native.acquisition_raw = None
-                    target = work/'runtime-0000-object_closure-0000.bin'
+                    target = work/'recording'/'runtime-0000-object_closure-0000.bin'
                     if scenario == 'case-carry-over':
                         assert anchor.private_observations.get('unusable') is True and not events and not target.exists()
                         results.append({'case': scenario, 'actual_new_runtime_reads': 0, 'actual_native_acquisition_bytes': len(raw),
@@ -3143,6 +3165,7 @@ def raw16_p_acquisitions(root: Path) -> None:
         c._acl_state = acl
     print(json.dumps({'P_original_snapshot_to_recorder': results, 'ordinary_synthetic_runtime_only': True}, sort_keys=True))
 
+
 def _synthetic_parent_P_context(c, path):
     import struct
     helper=c.canonical(['synthetic helper metadata'])
@@ -3172,6 +3195,7 @@ def raw16_T_enforced_chain(root: Path) -> None:
         holder=e.StableDirectory(parent)
         input_raw,response_raw=b'synthetic enforced input',b'synthetic enforced response'
         caller=c.canonical({'kind':'shadow_enforced_request','id':'t.enforced.chain'})
+        holder._initialize_recording(anchor,caller)
         calls=[];snapshots=[];old=[]
         snapshot_init=c._RuntimeSnapshot.__init__;retain=holder._retain_preparation
         def snapshot(self,*args,**kwargs):snapshots.append(args[0].path);return snapshot_init(self,*args,**kwargs)
@@ -3213,10 +3237,10 @@ def raw16_T_enforced_chain(root: Path) -> None:
         current=[T for carrier in holder.runtime_copies for T in carrier.T_companions]
         assert len(current)==2 and all(T.stable and not T.closed for T in current)
         assert all(T.binding['root_before']!=old[0][1] for T in current)
-        T_transition=holder._begin_T_parent(anchor,parent)
+        T_transition=holder._begin_T_parent(anchor,holder._recording_parent())
 '''
     checks='''        holder._refresh_runtime_parents()
-        holder._finish_T_parent(anchor,parent,T_transition,{'reproduction'})
+        holder._finish_T_parent(anchor,holder._recording_parent(),T_transition,{'reproduction'})
         current=[T for carrier in holder.runtime_copies for T in carrier.T_companions]
         assert len(current)==2 and all(T.stable and not T.closed for T in current)
         assert not anchor.private_observations.get('unusable'), 'enforced current T after Hcopy must remain valid'
@@ -3230,11 +3254,12 @@ def raw16_T_enforced_chain(root: Path) -> None:
             'qualification':'NOT_ACCEPTED / original T outcome M Q host parent debt'}))
 '''
     namespace={'make_T':_synthetic_T_live_files};argv=sys.argv;sys.argv=['enforced-T-chain',str(root)]
-    try:exec(compile(head+setup+edge+tail+checks+footer,'<actual-enforced-T-chain>','exec'),namespace)
+    try:exec(compile(head+setup+edge.replace('copy_capture(parent,','copy_capture(holder._recording_parent(),')+tail+checks+footer,'<actual-enforced-T-chain>','exec'),namespace)
     finally:
         sys.argv=argv
         if namespace.get('snapshot_init') is not None:namespace['c']._RuntimeSnapshot.__init__=namespace['snapshot_init']
         if namespace.get('holder') is not None:namespace['holder'].close()
+
 
 
 def raw16_T_writer_chain(root: Path) -> None:
@@ -3250,6 +3275,7 @@ def raw16_T_writer_chain(root: Path) -> None:
         holder=e.StableDirectory(parent)
         input_raw,response_raw=b'synthetic writer input',b'synthetic writer response'
         caller=c.canonical({'kind':'shadow_write_request','id':'t.writer.chain'})
+        holder._initialize_recording(anchor,caller)
         renewed=[];snapshot_calls=[];native_calls=[]
         source_continue=c._HeldPreparationSources.continue_parent_chain
         snapshot_init=c._RuntimeSnapshot.__init__
@@ -3280,17 +3306,21 @@ def raw16_T_writer_chain(root: Path) -> None:
         c._HeldPreparationSources.continue_parent_chain,c._RuntimeSnapshot.__init__=continuation,snapshot
         exec(compile(segment,'<actual-writer-T-caller>','exec'),{'ws':ws,'work':private,'sys':sys,
             'preparation':root/'preparation/v1/prepare-candidate.py','common':[],'input_raw':input_raw,'response_raw':response_raw})
-        assert native_calls==['prepare','inspect'] and len(snapshot_calls)==6 and len(renewed)==1
+        assert native_calls==['prepare','inspect'] and len(snapshot_calls)==6 and len(renewed)==0
         assert not anchor.private_observations.get('unusable'), 'writer T metadata continuation must succeed'
-        old_states=[(old,old.binding['root_before'],dict(old.binding['target_states'])) for old,fresh in renewed]
-        assert all(old.closed and old.close_complete and not fresh.closed and fresh.stable for old,fresh in renewed)
-        T_transition=holder._begin_T_parent(anchor,parent)
+        original_sources=[source for carrier in holder.runtime_copies for source in carrier.T_companions]
+        old_states=[(old,old.binding['root_before'],dict(old.binding['target_states'])) for old in original_sources]
+        for source in original_sources:source.recheck()
+        assert len(original_sources)==2 and all(not source.closed and source.stable for source in original_sources)
+        T_transition=holder._begin_T_parent(anchor,holder._recording_parent())
 '''
     checks='''        holder._refresh_runtime_parents()
-        holder._finish_T_parent(anchor,parent,T_transition,{'reproduction'})
-        assert len(renewed)==3 and len(snapshot_calls)==6
+        holder._finish_T_parent(anchor,holder._recording_parent(),T_transition,{'reproduction'})
+        assert len(renewed)==0 and len(snapshot_calls)==6
         current=[source for carrier in holder.runtime_copies for source in carrier.T_companions]
-        assert len(current)==2 and all(not source.closed and source.stable for source in current)
+        assert len(current)==2 and all(current[index] is source for index,source in enumerate(original_sources))
+        for source in current:source.recheck()
+        assert all(not source.closed and source.stable for source in current)
         assert {source.binding['operation'] for source in current}=={'prepare','inspect'}
         assert not anchor.private_observations.get('unusable'), 'writer T after H copy must remain current'
         for old,before,targets in old_states:
@@ -3305,13 +3335,14 @@ def raw16_T_writer_chain(root: Path) -> None:
             'qualification':'NOT_ACCEPTED / original T outcome and M/Q/host/parent debt remain'}))
 '''
     namespace={'make_T':_synthetic_T_live_files};argv=sys.argv;sys.argv=['writer-T-chain',str(root)]
-    try:exec(compile(head+setup+edge+tail+checks+footer,'<actual-writer-T-chain>','exec'),namespace)
+    try:exec(compile(head+setup+edge.replace('copy_capture(parent,','copy_capture(holder._recording_parent(),')+tail+checks+footer,'<actual-writer-T-chain>','exec'),namespace)
     finally:
         sys.argv=argv
         if namespace.get('c') is not None and namespace.get('source_continue') is not None:
             namespace['c']._HeldPreparationSources.continue_parent_chain=namespace['source_continue']
             namespace['c']._RuntimeSnapshot.__init__=namespace['snapshot_init']
         if namespace.get('holder') is not None:namespace['holder'].close()
+
 
 
 def _synthetic_T_live_files(c, scratch, operation, input_raw, response_raw):
@@ -3344,6 +3375,7 @@ def raw16_T_transition_refusals(root: Path) -> None:
                 input_raw,response_raw=b'synthetic input',b'synthetic response'
                 value,files,marker=_synthetic_T_live_files(c,scratch,'prepare',input_raw,response_raw)
                 holder=e.stable_directory(work);anchor=c.Anchor({},b'',[],{},('',[]),('',[]),None)
+                holder._initialize_recording(anchor,c.canonical({'kind':'shadow_write_request','id':'t.refusal.fixture'}))
                 init=c._HeldPreparationSources.__init__;constructed=[]
                 def initialize(self,*args,**kwargs):init(self,*args,**kwargs);constructed.append(self)
                 c._HeldPreparationSources.__init__=initialize
@@ -3383,6 +3415,7 @@ def raw16_T_transition_refusals(root: Path) -> None:
                 finally:c._HeldPreparationSources.__init__=init;holder.close();anchor.close()
     finally:c._acl_state=acl
     print(json.dumps({'actual_T_transition_refusals':results},sort_keys=True))
+
 
 
 def raw16_open_child_pending(root: Path) -> None:
@@ -3479,6 +3512,7 @@ def raw16_adopt_registered_cancel(root: Path) -> None:
                 _synthetic_T_live_files(c,scratch,'prepare',input_raw,response_raw)
                 holder=e.stable_directory(work);anchor=c.Anchor({},b'',[],{},('',[]),('',[]),None)
                 request=c.canonical({'kind':'shadow_write_request','id':'adopt.registered.fixture'})
+                holder._initialize_recording(anchor,request)
                 init,T_init,closing=c._HeldCaptureCopy.__init__,c._HeldPreparationSources.__init__,os.close
                 events,owners,close_methods,attempts=[],[],[],[];watched=set()
                 def cancel():
@@ -3525,6 +3559,7 @@ def raw16_adopt_registered_cancel(root: Path) -> None:
                     holder.close();anchor.close()
     finally:c._acl_state=acl
     print(json.dumps({'actual_adopt_registered_cancel':results},sort_keys=True))
+
 
 
 def raw16_clone_pending_allocation(root: Path) -> None:
@@ -3627,6 +3662,7 @@ def raw16_T_live_stable(root: Path) -> None:
                 value,files,marker=_synthetic_T_live_files(c,scratch,'prepare',input_raw,response_raw)
                 holder=e.stable_directory(work);anchor=c.Anchor({},b'',[],{},('',[]),('',[]),None)
                 request=c.canonical({'kind':'shadow_write_request','id':'t.live.fixture'})
+                holder._initialize_recording(anchor,request)
                 dup,init,source_init,transfer,close_paths,closing=os.dup,c.HeldPath.__init__,c._HeldPreparationSources.__init__,c._capture_transfer_work,c._close_paths,os.close
                 originals,closed,fired,events,sources,T_duplicates=[],[],[],[],[],[];watched=set()
                 class Reject(list):
@@ -3709,6 +3745,7 @@ def raw16_T_live_stable(root: Path) -> None:
     print(json.dumps({'actual_stable_T_companions':results},sort_keys=True))
 
 
+
 def raw16_P_handoff_accounting(root: Path) -> None:
     import ast
     import tempfile
@@ -3727,6 +3764,7 @@ def raw16_P_handoff_accounting(root: Path) -> None:
                 context,values=_synthetic_parent_P_context(c,base/'synthetic-frame')
                 holder=e.stable_directory(work);anchor=c.Anchor({},b'',[],{},('',[]),('',[]),None)
                 request=c.canonical({'kind':'shadow_write_request','id':'p.accounting.fixture'})
+                holder._initialize_recording(anchor,request)
                 transfer,receipt,adopt,closing=c._capture_transfer_work,c._capture_accounting_receipt,c._HeldCaptureCopy._adopt,os.close
                 owners,fired,cancellations,closed=[],[],[],[];watched=set();caught=None
                 def fault():
@@ -3752,16 +3790,16 @@ def raw16_P_handoff_accounting(root: Path) -> None:
                 try:
                     c._capture_transfer_work,c._capture_accounting_receipt,c._HeldCaptureCopy._adopt,os.close=transferring,receipting,adopting,close
                     if case=='nested-stable':
-                        c._capture_work_values(anchor.recording_work,'nested')
-                        os.mkdir('fixed-copy',0o700,dir_fd=holder.held.fd)
-                        c._refresh_recording_directory(holder.held,holder.held.before,anchor.recording_work)
-                        destination=c._open_child(holder.held,'fixed-copy',True,c._store_rule(os.geteuid(),os.getegid(),0o700,True),'E_STORE')
+                        recorder=holder._recording_parent()
+                        os.mkdir('fixed-copy',0o700,dir_fd=recorder.fd)
+                        c._refresh_recording_directory(recorder,recorder.before,anchor.recording_work)
+                        destination=c._open_child(recorder,'fixed-copy',True,c._store_rule(os.geteuid(),os.getegid(),0o700,True),'E_STORE')
                         try:
                             state=c._copy_preparation_document(destination.fd,b'synthetic document\n',anchor.recording_work,None)
                             c._refresh_recording_directory(destination,destination.before,anchor.recording_work)
                         finally:destination.close()
-                        copied=c._HeldCaptureCopy(anchor,anchor.recording_work,c._capture_work_values(anchor.recording_work,'nested'))
-                        copied.acquire(holder.held,'fixed-copy',{'capture.json':state},{})
+                        copied=c._HeldCaptureCopy(anchor,anchor.recording_work,holder.recording_case)
+                        copied.acquire(recorder,'fixed-copy',{'capture.json':state},{})
                         holder._own_runtime(anchor,copied)
                     else:
                         try:copied=holder._retain_parent_inputs(anchor,context,request)
@@ -3793,6 +3831,7 @@ def raw16_P_handoff_accounting(root: Path) -> None:
     print(json.dumps({'actual_P_hold_accounting_handoff':output},sort_keys=True))
 
 
+
 def raw16_parent_P_handoff(root: Path) -> None:
     import ast
     import tempfile
@@ -3812,6 +3851,7 @@ def raw16_parent_P_handoff(root: Path) -> None:
                 context,values=_synthetic_parent_P_context(c,base/'synthetic-frame')
                 holder=e.stable_directory(work);anchor=c.Anchor({},b'',[],{},('',[]),('',[]),None)
                 request=c.canonical({'kind':'shadow_write_request','id':'parent.held.fixture'})
+                holder._initialize_recording(anchor,request)
                 transfer,acquire,observe=c._capture_transfer_work,c._HeldCaptureCopy.acquire,c._capture_observe
                 acquired,fired,cancellations=[],[],[]
                 def acquiring(self,*args,**kwargs):
@@ -3852,7 +3892,7 @@ def raw16_parent_P_handoff(root: Path) -> None:
                         holder._retain_runtime(anchor,'python',runtime_source,raw,request)
                         anchor.seal_local_runtime(holder._recording_parent());runtime_source.close()
                     if case=='target-drift':
-                        target=work/'helper-build-record.json';target.chmod(0o600)
+                        target=work/'recording'/'helper-build-record.json';target.chmod(0o600)
                         with target.open('r+b') as stream:stream.write(b'!')
                         target.chmod(0o400)
                     if case=='parent-mode':work.chmod(0o750)
@@ -3871,6 +3911,7 @@ def raw16_parent_P_handoff(root: Path) -> None:
     print(json.dumps({'actual_parent_metadata_P_handoff':results},sort_keys=True))
 
 
+
 def raw16_parent_P_Hcopy(root: Path) -> None:
     body=(root/'scripts/test/evals-malicious.test.sh').read_text().split("<<'PY_RUNTIME_CONSUMER'\n",1)[1].split('\nPY_RUNTIME_CONSUMER',1)[0]
     prefix=body.split('        copied_inventory.close();copied_inventory.close()\n',1)[0]
@@ -3879,10 +3920,11 @@ def raw16_parent_P_Hcopy(root: Path) -> None:
     assert prefix.count(line)==1;prefix=prefix.replace(line,line+"        context,metadata=make_context(c,base/'synthetic-parent-frame')\n")
     edge="        copied_inventory=native.copy_capture(parent,request,'reproduction',anchor.recording_work)\n"
     setup="""        holder=e.StableDirectory(parent)
+        holder._initialize_recording(anchor,c.canonical({'kind':'shadow_write_request','id':'parent.hcopy.fixture'}))
         result=holder._retain_parent_inputs(anchor,context,c.canonical({'kind':'shadow_write_request','id':'parent.hcopy.fixture'}))
         assert result is holder.runtime_copies[0] and result.runtime_sha256=={}
 """
-    prefix=prefix.replace(edge,setup+edge+'        holder._refresh_runtime_parents()\n')
+    prefix=prefix.replace(edge,setup+'        transition=holder._begin_T_parent(anchor,holder._recording_parent())\n'+edge.replace('copy_capture(parent,','copy_capture(holder._recording_parent(),')+'        holder._refresh_runtime_parents()\n        holder._finish_T_parent(anchor,holder._recording_parent(),transition,{\'reproduction\'})\n')
     checks="""        result.recheck()
         assert not anchor.private_observations.get('unusable'), 'parent-P after Hcopy must stay valid'
         e._seal_capture_recording(anchor,parent,None,copied_inventory,holder)
@@ -3896,6 +3938,7 @@ def raw16_parent_P_Hcopy(root: Path) -> None:
     finally:
         sys.argv=argv
         if namespace.get('holder') is not None:namespace['holder'].close()
+
 
 
 def raw16_parent_carrier(root: Path) -> None:
@@ -3932,16 +3975,17 @@ def raw16_parent_carrier(root: Path) -> None:
                 holder = e.stable_directory(work)
                 anchor = c.Anchor({}, b'', [], {}, ('', []), ('', []), None)
                 request = c.canonical({'kind': 'shadow_write_request', 'id': 'parent.fixture'})
-                if case == 'occupied-P':(work/'parent-frame.bin').write_bytes(b'preserved partial')
+                holder._initialize_recording(anchor,request)
+                if case == 'occupied-P':(work/'recording'/'parent-frame.bin').write_bytes(b'preserved partial')
                 try:
                     holder._retain_parent_inputs(anchor, context, request)
                     assert dict(context) == body
                     if case in ('complete', 'record-at-limit'):
                         assert not anchor.private_observations.get('unusable', False)
-                        assert (work/'parent-frame.bin').read_bytes() == frame
-                        assert (work/'helper-build-record.json').read_bytes() == helper
-                        assert (work/'native-dependency-record.json').read_bytes() == dependency
-                        assert all((work/name).stat().st_mode & 0o777 == 0o400 for name in
+                        assert (work/'recording'/'parent-frame.bin').read_bytes() == frame
+                        assert (work/'recording'/'helper-build-record.json').read_bytes() == helper
+                        assert (work/'recording'/'native-dependency-record.json').read_bytes() == dependency
+                        assert all((work/'recording'/name).stat().st_mode & 0o777 == 0o400 for name in
                             ('parent-frame.bin', 'helper-build-record.json', 'native-dependency-record.json'))
                         assert anchor.private_observations['parent_inputs']['parent_producer_and_record_semantics'] == 'UNKNOWN'
                     else:
@@ -3952,6 +3996,7 @@ def raw16_parent_carrier(root: Path) -> None:
                 finally:holder.close()
     finally:c._acl_state = acl
     print(json.dumps({'actual_v3_fd_receiver_to_private_P': output, 'real_parent_producer': False}, sort_keys=True))
+
 
 def raw16_sudo_companion(root: Path) -> None:
     import tempfile
@@ -4014,9 +4059,10 @@ def raw16_sudo_companion(root: Path) -> None:
                     if case == 'read-A-close-B' and fd in companion_fds and not cancellations:
                         os.kill(os.getpid(), signal.SIGTERM)
                     return pread(fd, count, offset)
+                request = c.canonical({'kind': 'shadow_write_request', 'id': 'sudo.fixture'})
+                holder._initialize_recording(anchor,request)
                 try:
                     c._open_held, os.read, os.pread, os.close = fixed_open, read_only, pread_only, closing
-                    request = c.canonical({'kind': 'shadow_write_request', 'id': 'sudo.fixture'})
                     if case == 'read-A-close-B':
                         caught = None
                         try:holder._retain_sudo(anchor, native, request)
@@ -4063,7 +4109,7 @@ def raw16_sudo_companion(root: Path) -> None:
                     if case == 'stable':
                         row = anchor.private_observations['local_runtime'][0]
                         assert row['slot'] == 'sudo' and row['sha256'] == c.digest(raw) != before_native_sha
-                        assert (work/row['file']).read_bytes() == raw
+                        assert (work/'recording'/row['file']).read_bytes() == raw
                     if case != 'source-drift':assert native.sha256 == before_native_sha
                     assert os.fstat(native.fd)
                     if case == 'companion-close-observer':assert fired == ['held-close']
@@ -4077,6 +4123,7 @@ def raw16_sudo_companion(root: Path) -> None:
                     anchor.close();holder.close();native.close()
     finally:c._acl_state = acl
     print(json.dumps({'fixed_sudo_companion_controls': results}, sort_keys=True))
+
 
 @contextlib.contextmanager
 def _source_configuration_fixture(c, directory: Path, request_raw: bytes, operation: str):
@@ -4824,10 +4871,10 @@ def raw16_C1_T_windows(root: Path) -> None:
         replay=load('C1_T_replay',root/'evals/v1/replay-malicious.py')
         c._acl_state=original_acl
         seed_parent=c._open_held(str(seed),True,c._store_rule(uid,gid,0o700,True,anchor.resolver),'E_STORE')
-        key=str(parent.before.st_dev)+':'+str(parent.before.st_ino)
-        case_work=c._capture_work_values(anchor.recording_work,key)
-        assembly=replay._SeedAssembly(seed_parent,anchor,'malicious.checked-file-bytes',anchor.recording_work,case_work)
         holder=e.StableDirectory(parent)
+        holder._initialize_recording(anchor,outer)
+        case_work=holder.recording_case
+        assembly=replay._SeedAssembly(seed_parent,anchor,'malicious.checked-file-bytes',anchor.recording_work,case_work)
         input_raw,response_raw=b'ordinary C1 materialization input',b'ordinary C1 materialization response'
         prep=private/'preparation-scratch'
         make_T(c,prep,'prepare',input_raw,response_raw)
@@ -4862,15 +4909,16 @@ def raw16_C1_T_windows(root: Path) -> None:
         local=next((item for item in holder.runtime_copies if item.runtime_sha256 and all(name.endswith('-python-0000.bin') for name in item.runtime_sha256)),None)
         assert parent_P is not None and local is not None
         native.record_reproduction(outer,request,expectation)
-        transition=holder._begin_T_parent(anchor,parent)
-        copied_inventory=native.copy_capture(parent,request,'reproduction',anchor.recording_work)
-        holder._refresh_runtime_parents();holder._finish_T_parent(anchor,parent,transition,{'reproduction'})
+        transition=holder._begin_T_parent(anchor,holder._recording_parent())
+        copied_inventory=native.copy_capture(holder._recording_parent(),request,'reproduction',anchor.recording_work)
+        holder._refresh_runtime_parents();holder._finish_T_parent(anchor,holder._recording_parent(),transition,{'reproduction'})
         assembly.reproduction(native,copied_inventory,list(holder.runtime_copies),outer,expectation)
         assert 'reproduction' in assembly.occurrences
         writer_anchor=c.Anchor(config,config_raw,[],{},('',[]),('',[]),anchor.resolver,recording_work=anchor.recording_work)
         writer_parent=c._open_held(str(writer_private),True,c._store_rule(uid,gid,0o700,True,anchor.resolver),'E_STORE')
         writer_holder=e.StableDirectory(writer_parent)
         writer_outer=c.canonical({'schema_version':1,'kind':'shadow_write_request','id':'attempt.write','body':{'attempt_id':'attempt.write'}})
+        writer_holder._initialize_recording(writer_anchor,writer_outer)
         for operation,scratch in (('prepare','preparation-scratch'),('inspect','inspection-scratch')):
             make_T(c,writer_private/scratch,operation,input_raw,response_raw)
             retained=writer_holder._retain_preparation(writer_anchor,scratch,operation,input_raw,response_raw,writer_outer)
@@ -4900,6 +4948,7 @@ def raw16_C1_T_windows(root: Path) -> None:
             if value is not None:
                 try:value.close()
                 except Exception:pass
+
 
 
 def main() -> int:

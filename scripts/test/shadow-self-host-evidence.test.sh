@@ -2138,11 +2138,20 @@ for scope_case in pre post; do
          kill_switch_evaluation_ref:$kill_ref,duty_separation_evaluation_ref:$duty_ref},
        max_attempts:2}}' >"$scope_dir/scope-$scope_case.json"
 
-  if ! PATH="$run_path" "$evaluator" evaluate \
+  scope_status=0
+  PATH="$run_path" "$evaluator" evaluate \
       "$scope_dir/scope-$scope_case.json" "$scope_dir/shadow-set.json" "$tmp/dashboard.json" \
       "$scope_dir/risk-$scope_case.json" "$scope_dir/kill-$scope_case.json" "$scope_dir/duty-$scope_case.json" \
-      "$tmp/marker.json" "$legacy_bundle_root" "$legacy_source_git" >"$scope_dir/evaluation-$scope_case.json" 2>"$tmp/scope-$scope_case.err"; then
-    fail "scope harness ($scope_case): evaluate-scope.sh refused the two real shadow records ($(cat "$tmp/scope-$scope_case.err"))"
+      "$tmp/marker.json" "$legacy_bundle_root" "$legacy_source_git" >"$scope_dir/evaluation-$scope_case.json" 2>"$tmp/scope-$scope_case.err" || scope_status=$?
+  if [ "$scope_status" -ne 0 ]; then
+    scope_error=UNKNOWN
+    IFS= read -r -n 64 scope_error < "$tmp/scope-$scope_case.err" || :
+    case "$scope_error" in
+      E_USAGE|E_LIMIT|E_PARSE|E_CANONICAL|E_RELATION|E_STALE|E_RUNTIME) ;;
+      *) scope_error=UNKNOWN ;;
+    esac
+    printf 'scope harness stage=%s exit=%s error=%s\n' "$scope_case" "$scope_status" "$scope_error" >&2
+    fail "scope harness ($scope_case): evaluate-scope.sh refused the two real shadow records"
   fi
 # A seeded failing eval keeps inputs well-formed while yielding scope.eval-failing.
 # Require not-proposable and unavailable qualification; this declaration-only
@@ -2157,8 +2166,11 @@ for scope_case in pre post; do
     ($e[0].body.evidence.shadow_bundle_facts | length == 2 and
       all(.eligible == false and .authentication.state == "missing")) and
     $e[0].body.proposal.state == "absent"
-  ' >/dev/null 2>&1 ||
+  ' >/dev/null 2>&1 || {
+    scope_assert_status=$?
+    printf 'scope harness stage=%s exit=%s error=UNKNOWN\n' "$scope_case" "$scope_assert_status" >&2
     fail "scope harness ($scope_case): the evaluator did not report the exact not-proposable classification, with the specific eval-failing and authentic-receipt-missing refusal reasons and no live authority"
+  }
   pass "scope harness ($scope_case case's own identity, inactive compatibility only): the shipped evaluate-scope.sh accepts the two real unchanged shadow records and the nine-family dashboard under its complete shape and reference checks, with this case's own identity fully field-validated, and reports the exact not-proposable classification in its own vocabulary — refused for the specific eval-failing and authentic-receipt-missing reasons, distinct from scope.malformed — with qualification still unavailable and no live authority"
 done
 

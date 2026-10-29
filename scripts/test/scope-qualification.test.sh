@@ -1189,7 +1189,7 @@ PY_MAC_TRANSITION
 python3 -I -S -B - "$root" "$tmp/stale-observation" <<'PY_STALE_PREPARE'
 import difflib,hashlib,json,pathlib,shlex
 root=pathlib.Path(__import__('sys').argv[1]);area=pathlib.Path(__import__('sys').argv[2])
-expected={'scope/v1/evaluate-scope.sh': 'fe6048b5eada5d86531e085acd0a9f46b73028d348349ab932e8c59f4e2ed66a', 'scope/v1/read-shadow-evidence.py': '201791d1783d4130ec947bc60ed61cd5cec9d45da98eae033d1b859b9761e404', 'shadow/v1/_consumer.py': 'dd8ef865177d4b2714117cb1631bb24d896215be56475544321b2959c024ccee'}
+expected={'scope/v1/evaluate-scope.sh': 'fe6048b5eada5d86531e085acd0a9f46b73028d348349ab932e8c59f4e2ed66a', 'scope/v1/read-shadow-evidence.py': '201791d1783d4130ec947bc60ed61cd5cec9d45da98eae033d1b859b9761e404', 'shadow/v1/_consumer.py': '24846f4538c76e0d8b04d4d091f8b6e1f94e7355d55de44e0f9d09eed83e12fd'}
 for path,digest in expected.items():
     assert hashlib.sha256((root/path).read_bytes()).hexdigest()==digest
 observer_source = r"""import hashlib,json,os,runpy,stat,sys,time,types
@@ -3050,7 +3050,7 @@ evaluation_reasons() {
 }
 dashboard_shape_evaluation() {
   local scope_dashboard_line=${BASH_LINENO[0]}
-  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 10358 ]; then scope_dashboard_inflight=true; fi
+  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 10413 ]; then scope_dashboard_inflight=true; fi
   evaluation_document "$@"
   scope_dashboard_inflight=false
 }
@@ -3544,7 +3544,7 @@ old=old.replace("return (frame.f_code.co_filename in source_codes and\n         
 assert hashlib.sha256(old.encode()).hexdigest()=='0c2b1c8c8cb9c662c55e17e134f408693ab4ead8f27357ad6cb2b7bcc0b820eb'
 root=Path(sys.argv[2]).resolve()
 consumer=(root/'shadow/v1/_consumer.py').read_bytes()
-assert hashlib.sha256(consumer).hexdigest()=='dd8ef865177d4b2714117cb1631bb24d896215be56475544321b2959c024ccee'
+assert hashlib.sha256(consumer).hexdigest()=='24846f4538c76e0d8b04d4d091f8b6e1f94e7355d55de44e0f9d09eed83e12fd'
 old_wrapper=wrapper.replace("try:\n    for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):\n        signal.signal(number, cancel)\n    signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})\n    sys.settrace(dispatch)\n    exec(compiled_code, {'__name__': '__main__'})\n","for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):\n    signal.signal(number, cancel)\nsignal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})\nsys.settrace(dispatch)\ntry:\n    exec(compiled_code, {'__name__': '__main__'})\n",1)
 old_wrapper=old_wrapper.replace('import dis, json, os, signal, sys, time, types','import json, os, signal, sys, time',1)
 old_wrapper=old_wrapper.replace('    bound_cache.clear()\n','')
@@ -5751,64 +5751,110 @@ def owned_cleanup_controls(module):
     import json,signal,subprocess,types
     original=module._DarwinChildOwner._foreground
     rows=[]
-    for fault in ('normal','term','kill','both','lookup','wait','both-wait','duplicate'):
+    for fault in ('normal','term','kill','both','lookup','wait','both-wait','duplicate','selector-close','pipe-close','handler-restore','mask-restore','clock-record','clock-cancel','clock-read','wait-record','probe-record'):
         child=subprocess.Popen([sys.executable,'-I','-S','-B','-c','pass'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
         actual_wait=child.wait;calls=[];first=[];clock=[];masks=[];handlers=[]
         term_error=PermissionError(1,'controlled TERM failure')
         kill_error=term_error if fault=='duplicate' else PermissionError(13,'controlled KILL failure')
         wait_error=OSError(5,'controlled failure after actual wait')
+        finally_error=OSError(5,'controlled completed finally action')
+        clock_error=KeyboardInterrupt('fixed cleanup clock cancel') if fault=='clock-cancel' else MemoryError('fixed cleanup clock observation')
+        actual_poll=child.poll
+        def poll():
+            value=actual_poll();calls.append(['poll',value]);return value
+        child.poll=poll
+        clock_record=module._clock_value
+        def record_clock(site,value,kind):
+            if (fault in ('clock-record','clock-cancel') and ':1493:' in site
+                    or fault=='wait-record' and ':1501:' in site
+                    or fault=='probe-record' and ':1515:' in site):raise clock_error
+            return clock_record(site,value,kind)
+        pipe_closes=[]
+        for stream_name,stream in (('stdout',child.stdout),('stderr',child.stderr)):
+            actual_close=stream.close
+            def close(actual_close=actual_close,stream_name=stream_name):
+                actual_close();pipe_closes.append(stream_name)
+                if fault=='pipe-close' and stream_name=='stdout':raise finally_error
+            stream.close=close
         class Selector:
             def register(self,*args):calls.append(['register'])
             def get_map(self):return {1:True}
-            def close(self):calls.append(['selector-close'])
+            def close(self):
+                calls.append(['selector-close'])
+                if fault=='selector-close':raise finally_error
         def now():
             clock.append(True)
-            return 0 if len(clock)==1 else 31
+            if fault=='clock-read' and len(clock)==4:raise clock_error
+            return 0 if len(clock)<=2 else 31
         def require(*args):
             try:return module._require(*args)
             except BaseException as error:first.append(error);raise
         def kill(pid,number):
             calls.append(['signal',pid,int(number)])
-            if fault=='lookup':raise ProcessLookupError(3,'controlled already gone')
+            if number==0 and fault=='probe-record' and sum(row[0]=='signal' and row[2]==0 for row in calls)==1:return
+            if number==0 or fault=='lookup':raise ProcessLookupError(3,'controlled already gone')
             if number==signal.SIGTERM and fault in ('term','both','both-wait','duplicate'):raise term_error
             if number==signal.SIGKILL and fault in ('kill','both','both-wait','duplicate'):raise kill_error
         def wait(*args,**kwargs):
-            calls.append(['wait',kwargs]);result=actual_wait(*args,**kwargs)
+            calls.append(['wait',kwargs])
+            if fault=='both-wait' and sum(row[0]=='wait' for row in calls)==1:
+                raise subprocess.TimeoutExpired('fixed-owned-child',kwargs['timeout'])
+            result=actual_wait(*args,**kwargs)
             calls.append(['actual-wait-return',result])
             if fault in ('wait','both-wait'):raise wait_error
             return result
-        def handler(number,value):handlers.append([int(number),value]);return signal.SIG_DFL
-        def mask(how,values):masks.append([int(how),sorted(map(int,values))]);return set()
+        def handler(number,value):
+            handlers.append([int(number),value])
+            if fault=='handler-restore' and len(handlers)==4:raise finally_error
+            return signal.SIG_DFL
+        def mask(how,values):
+            masks.append([int(how),sorted(map(int,values))])
+            if fault=='mask-restore' and len(masks)==4:raise finally_error
+            return set()
         child.wait=wait
         scope=dict(original.__globals__)
-        scope.update(_closed_scope_child=lambda *args:None,_require=require,
-            subprocess=types.SimpleNamespace(Popen=lambda *args,**kwargs:child,PIPE=subprocess.PIPE),
-            selectors=types.SimpleNamespace(DefaultSelector=Selector,EVENT_READ=1,EVENT_WRITE=2),time=types.SimpleNamespace(monotonic=now),
+        scope.update(_closed_scope_child=lambda *args:None,_require=require,_clock_value=record_clock,
+            subprocess=types.SimpleNamespace(Popen=lambda *args,**kwargs:child,PIPE=subprocess.PIPE,TimeoutExpired=subprocess.TimeoutExpired),
+            selectors=types.SimpleNamespace(DefaultSelector=Selector,EVENT_READ=1,EVENT_WRITE=2),time=types.SimpleNamespace(monotonic=now,sleep=lambda value:calls.append(['sleep',value])),
             signal=types.SimpleNamespace(**{key:getattr(signal,key) for key in ('SIGINT','SIGTERM','SIGHUP','SIGKILL','SIG_BLOCK','SIG_SETMASK')},pthread_sigmask=mask,signal=handler),
             os=types.SimpleNamespace(set_blocking=os.set_blocking,killpg=kill))
         function=types.FunctionType(original.__code__,scope);error=None
-        try:function(object(),['owned-fixed-transport'],b'',4096,65536,30,{})
+        owner=module._DarwinChildOwner.__new__(module._DarwinChildOwner);owner.ledger=None
+        try:function(owner,['owned-fixed-transport'],b'',4096,65536,30,{})
         except BaseException as caught:error=caught
+        production_returncode=child.returncode
+        if child.returncode is None:
+            calls.append(['fixture-owned-fallback-wait',{'timeout':5}]);actual_wait(timeout=5)
         chain=[];node=error;seen=[]
         while node is not None and len(chain)<8 and not any(node is prior for prior in seen):
             seen.append(node);chain.append({'type':type(node).__name__,'identity':id(node),'errno':getattr(node,'errno',None)})
             node=node.__cause__
         record={'case':fault,'first_identity':id(first[0]) if first else None,'same_first':bool(first) and error is first[0],
             'cause_chain':chain,'acyclic':node is None,'calls':calls,'masks':masks,'handler_count':len(handlers),
-            'child_returncode':child.returncode,'pipes_closed':[stream.closed for stream in (child.stdin,child.stdout,child.stderr)],
+            'child_returncode':child.returncode,'production_returncode':production_returncode,'pipes_closed':[stream.closed for stream in (child.stdin,child.stdout,child.stderr)],
             'term_identity':id(term_error),'kill_identity':id(kill_error),'wait_identity':id(wait_error),
             'scope':'actual repaired foreground code; controlled fixed Popen/signal/clock/mask transports, real owned child and native wait; no kernel EPERM or group-gone claim'}
         print(json.dumps({'owned_cleanup_before_assert':record},sort_keys=True),flush=True)
-        assert first and error is first[0] and type(error) is module.Refusal and error.code=='E_RUNTIME'
-        assert node is None and [row[2] for row in calls if row[0]=='signal']==[int(signal.SIGTERM),int(signal.SIGKILL)]
-        assert [row[1] for row in calls if row[0]=='wait']==[{'timeout':10}]
+        assert first and type(first[0]) is module.Refusal and first[0].code=='E_RUNTIME'
+        assert error is (clock_error if fault=='clock-cancel' else first[0])
+        assert node is None and [row[2] for row in calls if row[0]=='signal']==[int(signal.SIGTERM),int(signal.SIGKILL)]+([0,0] if fault=='probe-record' else [0])
+        assert [row[1] for row in calls if row[0]=='wait']==([] if fault=='clock-read' else [{'timeout':2},{'timeout':10}] if fault=='both-wait' else [{'timeout':2}])
+        assert pipe_closes==['stdout','stderr']
+        polls=[row[1] for row in calls if row[0]=='poll']
+        if fault=='clock-read':
+            assert 1<=len(polls)<=2 and (len(polls)==1 or polls[0] is None)
+            assert calls.index(next(row for row in calls if row[0]=='poll'))>calls.index(['signal',child.pid,int(signal.SIGTERM)])
+        else:assert not polls and production_returncode==0
         assert child.returncode==0 and all(record['pipes_closed']) and calls.count(['selector-close'])==1
-        assert len(handlers)==6 and len(masks)==4 and calls.index(['selector-close'])>next(i for i,row in enumerate(calls) if row[0]=='wait')
+        assert len(handlers)==6 and len(masks)==4 and calls.index(['selector-close'])>next(i for i,row in enumerate(calls) if row[0] in ('wait','poll'))
         expected=[]
         if fault in ('term','both','both-wait','duplicate'):expected.append(term_error)
         if fault in ('kill','both','both-wait'):expected.append(kill_error)
         if fault in ('wait','both-wait'):expected.append(wait_error)
-        assert [item['identity'] for item in chain[1:]]==[id(item) for item in reversed(expected)]
+        if fault in ('selector-close','pipe-close','handler-restore','mask-restore'):expected.append(finally_error)
+        if fault in ('clock-record','clock-read','wait-record','probe-record'):expected.append(clock_error)
+        if fault=='clock-cancel':expected=[first[0]]
+        assert [item['identity'] for item in chain[1:]]==[id(item) for item in expected]
         rows.append(record)
     return rows
 
@@ -5966,7 +6012,7 @@ def foreground_state_controls(area):
             def close(self):calls.append(['selector-close'])
         def monotonic():
             clock_calls.append(True)
-            return 0 if len(clock_calls)==1 or io_case and len(selections)<(2 if fault in ('io-old-chunk','io-partial') else 1) else 31
+            return 0 if len(clock_calls)<=2 or io_case and len(selections)<(2 if fault in ('io-old-chunk','io-partial') else 1) else 31
         def read(fd,cap):
             calls.append(['read',fd,cap]);reads.append(fd)
             if fd==fds[0]:
@@ -5976,13 +6022,14 @@ def foreground_state_controls(area):
         def set_handler(number,handler):handlers.append(handler);return signal.SIG_DFL
         def kill(pid,number):
             calls.append(['killpg',pid,int(number)])
+            if number==0:raise ProcessLookupError(3,'fixed controlled group-gone probe')
             if (fault in ('term','io-term','snapshot-term') and number==signal.SIGTERM) or (fault in ('kill','io-kill') and number==signal.SIGKILL):raise sentinel
         def popen(arguments,**options):
             assert arguments is argv and options['start_new_session'] and options['close_fds'];calls.append(['Popen',list(arguments)]);return selected
         scope=dict(original.__globals__)
         scope.update(_closed_scope_child=lambda arguments,env,owner:None,
-            subprocess=types.SimpleNamespace(Popen=popen,PIPE=subprocess.PIPE),
-            selectors=types.SimpleNamespace(DefaultSelector=Selector,EVENT_READ=1,EVENT_WRITE=2),time=types.SimpleNamespace(monotonic=monotonic),
+            subprocess=types.SimpleNamespace(Popen=popen,PIPE=subprocess.PIPE,TimeoutExpired=subprocess.TimeoutExpired),
+            selectors=types.SimpleNamespace(DefaultSelector=Selector,EVENT_READ=1,EVENT_WRITE=2),time=types.SimpleNamespace(monotonic=monotonic,sleep=lambda value:calls.append(['sleep',value])),
             signal=types.SimpleNamespace(**{key:getattr(signal,key) for key in ('SIGINT','SIGTERM','SIGHUP','SIGKILL','SIG_BLOCK','SIG_SETMASK')},SIG_DFL=signal.SIG_DFL,pthread_sigmask=lambda *args:set(),signal=set_handler),
             os=types.SimpleNamespace(set_blocking=os.set_blocking,killpg=kill,read=read))
         code=original.__code__.replace(co_name='_foreground') if fault=='wrong-frame' else original.__code__
@@ -6003,8 +6050,11 @@ def foreground_state_controls(area):
             try:
                 if fault in ('snapshot-term','deadline','cleanup-wait'):
                     owner=module._DarwinChildOwner.__new__(module._DarwinChildOwner)
+                    owner.ledger=None
                     select_namespace['_scope_select_call'](types.MethodType(function,owner),argv,b'',4096,65536,30,{})
-                else:function(object(),argv,b'',4096,65536,30,{})
+                else:
+                    owner=module._DarwinChildOwner.__new__(module._DarwinChildOwner);owner.ledger=None
+                    function(owner,argv,b'',4096,65536,30,{})
             except BaseException as error:holder.append((error,list(calls),list(pseudo_hooks)));raise
         def formatting(value,*args,**kwargs):
             if fault=='format':raise ValueError('fixed foreground format refusal')
@@ -6025,7 +6075,11 @@ def foreground_state_controls(area):
             try:exec(compile(tail,'actual-foreground-reader-mapping','exec'),namespace)
             except SystemExit as error:status=error.code
         finally:os.write=actual_write;sys.argv,sys.stderr=original_sys
-        before_wait=list(calls);before_hooks=list(pseudo_hooks);returned=actual_wait(timeout=5)
+        before_wait=list(calls);before_hooks=list(pseudo_hooks)
+        production_closed=[stream.closed for stream in (child.stdin,child.stdout,child.stderr)]
+        returned=actual_wait(timeout=5)
+        for stream in (child.stdin,child.stdout,child.stderr):
+            if not stream.closed:stream.close()
         raw=sink.read_bytes();original_error=holder[0][0] if holder else None
         trace=[];tb=BaseException.__dict__['__traceback__'].__get__(original_error,BaseException) if original_error is not None else None
         while tb is not None and len(trace)<16:
@@ -6035,11 +6089,12 @@ def foreground_state_controls(area):
             'original_calls':before_wait,'calls_after_final_wait':list(calls),'clock_calls':len(clock_calls),'status':status,
             'mapped_stderr':output.getvalue(),'returned':returned,'child_returncode':child.returncode,
             'pipes_closed':[stream.closed for stream in (child.stdin,child.stdout,child.stderr)],'holder_count':len(holder)}})
-        assert returned==0 and child.returncode==0 and all(stream.closed for stream in (child.stdin,child.stdout,child.stderr))
+        assert returned==0 and child.returncode==0 and all(production_closed)
         assert len(holder)==1 and before_wait==holder[0][1] and before_hooks==holder[0][2]
         assert status==1 and output.getvalue()=='E_RUNTIME\n'
         error=holder[0][0];waited=any(row[0]=='wait' for row in before_wait)
-        assert waited and len([row for row in before_wait if row[0]=='killpg'])==2
+        assert waited and len([row for row in before_wait if row[0]=='killpg' and row[2]!=0])==2
+        assert len([row for row in before_wait if row[0]=='killpg' and row[2]==0])==1
         assert type(error) is module.Refusal and error.code=='E_RUNTIME'
         if fault in ('term','kill','io-term','io-kill','snapshot-term'):assert error.__cause__ is sentinel
         assert len(raw)<=4096
@@ -6061,20 +6116,20 @@ def foreground_state_controls(area):
                 else:assert fact['child']=={'pid':child.pid,'returncode':0}
         if fault in ('io-term','io-kill'):
             context=BaseException.__dict__['__cause__'].__get__(error,BaseException)
-            assert context is sentinel and ['_foreground',1196] in record['trace']
+            assert context is sentinel and ['_foreground',5894] in record['trace']
             assert fact['io']['stderr_bytes']==512 and waited
             context_errors.append((context,error))
         if fault=='snapshot-term':snapshot_error=error;snapshot_namespace=select_namespace;assert type(record.get('first_git_select_observation')) is dict
         if fault=='deadline':
             direct_error=error;direct_namespace=select_namespace;assert type(record.get('first_git_select_observation')) is dict
-            assert error.__cause__ is None and error.__context__ is None and [v[1] for v in trace if v[2]]==[1196]
-            assert [v[2] for v in before_wait if v[0]=='killpg']==[int(signal.SIGTERM),int(signal.SIGKILL)]
-            assert [v[1] for v in before_wait if v[0]=='wait']==[{'timeout':10}] and before_wait.count(['selector-close'])==1
+            assert error.__cause__ is None and error.__context__ is None and [v[1] for v in trace if v[2]]==[6033,5894]
+            assert [v[2] for v in before_wait if v[0]=='killpg' and v[2]!=0]==[int(signal.SIGTERM),int(signal.SIGKILL)]
+            assert [v[1] for v in before_wait if v[0]=='wait']==[{'timeout':2}] and before_wait.count(['selector-close'])==1
             assert len(handlers)==6 and handlers[-3:]==[signal.SIG_DFL]*3 and scope['selectors'].DefaultSelector is Selector
         if fault=='cleanup-wait':
             cleanup_error=error;cleanup_namespace=select_namespace
             assert error.__cause__ is wait_failure and 'first_git_select_observation' not in record
-            assert [v[1] for v in trace if v[2]]==[1250,1196]
+            assert [v[1] for v in trace if v[2]]==[6033,5894]
         records.append({'case':fault,'mapped_stderr':output.getvalue(),'status':status,'original_error_type':type(error).__name__,'same_signal_error':error is sentinel,'original_calls':before_wait,'clock_calls':len(clock_calls),'wait_reached':waited,'facts':fact,'real_child_returncode':returned,'all_pipes_closed':True,'None_is_not_liveness':True})
     mapping=ast.parse('if True:\n'+insertion).body[0].body[0].body
     first=next(index for index,node in enumerate(mapping) if isinstance(node,ast.Assign) and any(isinstance(t,ast.Tuple) for t in node.targets))
@@ -13978,11 +14033,11 @@ def _scope_sample_original(owner,pid,end,cancelled):
                         except BaseException:pass
                     if code_object is relation_foreground_code and value is relation_snapshot_state[3]:
                         relation_snapshot_state[4]+=1
-                        if line not in (1196,1250):relation_snapshot_state[5]=False
-                    if code_object is relation_foreground_code and frame is relation_io_binding[0] and line==1196 and type(value) is c.Refusal:
+                        if line not in (5894,6033):relation_snapshot_state[5]=False
+                    if code_object is relation_foreground_code and frame is relation_io_binding[0] and line==5894 and type(value) is c.Refusal:
                         if object.__getattribute__(value,'__dict__').get('code')=='E_RUNTIME':relation_snapshot_state[2]=value
                     if (code_object is relation_foreground_code and frame is relation_io_binding[0] and
-                            not relation_io_binding[2] and line==1196):
+                            not relation_io_binding[2] and line==5894):
                         relation_io_binding[2]=True
                         try:
                             local=frame_fields['f_locals'].__get__(frame)

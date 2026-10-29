@@ -31,7 +31,7 @@ _C2_SCALARS = ("read_bytes", "write_bytes", "physical_bytes", "files", "export_r
 _C2_ACCOUNT_FIELDS = ("logical_bytes", "read_bytes", "write_bytes", "physical_bytes", "files", "occurrences")
 _C2_CLASSES = ("L", "W", "M", "raw", "unresolved")
 _C2_LIMIT = 1048576
-_C2_HELPERS_SHA256 = "a2c74b2b394495e98e0ff627434d21bed10a105a12f9943f706d77e5055b2d33"
+_C2_HELPERS_SHA256 = "ff3032511665e08591bfee8e67d4e13aa0ce0031dfc445764e29cb9e19050c72"
 
 class C2Refusal(Exception):
     def __init__(self, code):
@@ -2409,9 +2409,9 @@ shadow_source_rows() {
     'scope/v1/workflow-scope.jq 2d1df5f99b7019c4c41aece4f9fb89b00785ca47f9f8a713b2f43b212481366a 9728 100644' \
     'scripts/core-contract.sh b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 9176 100755' \
     'shadow/v1/_cancel_release.c 00ef369edbed569d50471b97f64aef57591b7afb8d9f25c286bffa5725faf015 55056 100644' \
-    'shadow/v1/_consumer.py dd8ef865177d4b2714117cb1631bb24d896215be56475544321b2959c024ccee 427686 100644' \
+    'shadow/v1/_consumer.py 24846f4538c76e0d8b04d4d091f8b6e1f94e7355d55de44e0f9d09eed83e12fd 430144 100644' \
     'shadow/v1/build-cancel-release.sh be1ad0afd99f72ea73fe52cca63c03381793710c587a82b57b9a38ed87c896d4 6169 100755' \
-    'shadow/v1/enforced-reproduction.py b1d80c8aac16630e2e8d28303169bd8bb06d475dc6645b0d41ebed5aa942e511 136145 100755' \
+    'shadow/v1/enforced-reproduction.py 2770569bb30d162ad41b4bd8213c8443dffa02b772fc625aac24d5031298955a 146626 100755' \
     'shadow/v1/incident-record.jq 9ea6e1ec6556f54887ea6937533157856271aab68c74bda6d18dae1354d2687c 3695 100644' \
     'shadow/v1/qualified-identity.jq 33267bca348ad2b4923a5858b4788a6ca6adf1a1e9f471ee4450d7fe06387071 5343 100644' \
     'shadow/v1/shadow-environments.json 655771163e18384904eeaf2b7f22e3999957a037dce845b7fa6fdff2196ac4c7 1471 100644' \
@@ -2916,10 +2916,10 @@ done
 [ -n "$jq_source" ] || emit_error E_RUNTIME
 
 generation=g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43
-program_sha=346608784cda4e64ff96fdfd01adcd3f1f74da33a90875c9fa1ba5aeb9062c20
+program_sha=c7724abc5420085cd1eb34d430a63bb0a374921a1ec49f85277f2adc10647dcb
 review_approval_sha=none
 catalog_sha=0239138447a8f9fd420cb3c5da31660d8f75c85099d80d89a040dce2878a4cac
-driver_sha=532cf45a7666b51500e274ad0ab8031a1ffb6cf4d02b69b01d7407814e544304
+driver_sha=a7e57a781bc7884e2863b24b42f00ec26f843b99fbbeecfcbfaf6ae98a08ce72
 }
 
 evals_record_context() {
