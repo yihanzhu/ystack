@@ -4156,7 +4156,7 @@ finally:
   e.StableDirectory._recording_parent=real_recording_parent
 assert len(flow_dependencies)==2 and len(flow_inputs)==5 and flow_recorder_checks
 assert all(recorder==native+'/recording' for recorder,native in flow_recorder_checks)
-assert [item.snapshot.path for item in flow_dependencies]==[str(work/'dependencies/helper/object-closure'),str(work/'dependencies/jq/jq')]
+assert [item.snapshot.path for item in flow_dependencies]==[str(work/'dependencies/helper/object-closure/object-closure'),str(work/'dependencies/jq/jq/jq')]
 ok(len(launch_frames)==1 and launch_frames[0].startswith(b"YSFRAME1"),"one framed launch")
 ok(events.index("launch")>events.index("prepare"),"launch follows preparation")
 ok(events.index("launch")>events.index("evaluate"),

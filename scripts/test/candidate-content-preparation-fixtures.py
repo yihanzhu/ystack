@@ -2087,6 +2087,9 @@ def raw16_t_lifecycle(root: Path) -> None:
 def raw16_preparation_P_handoff(root: Path) -> None:
     body=(root/'scripts/test/evals-malicious.test.sh').read_text().split("<<'PY_RUNTIME_CONSUMER'\n",1)[1].split('\nPY_RUNTIME_CONSUMER',1)[0]
     prefix=body.split('        copied_inventory.close();copied_inventory.close()\n',1)[0]
+    retained_locator = "        copied=private/'reproduction'/name\n"
+    assert prefix.count(retained_locator) == 1
+    prefix = prefix.replace(retained_locator, "        copied=private/'recording'/'reproduction'/name\n", 1)
     footer=body[body.rfind('finally:\n    if copied_inventory'):]
     before="        parent=c._open_held(str(private),True,c._store_rule(uid,gid,0o700,True),'E_STORE')\n"
     prefix=prefix.replace(before,"        scratch=private/'preparation-scratch';scratch.mkdir(mode=0o700)\n"+before)
@@ -2196,6 +2199,9 @@ def raw16_local_P_after_H_copy(root: Path) -> None:
     text = (root/'scripts/test/evals-malicious.test.sh').read_text()
     body = text.split("<<'PY_RUNTIME_CONSUMER'\n",1)[1].split('\nPY_RUNTIME_CONSUMER',1)[0]
     prefix = body.split('        copied_inventory.close();copied_inventory.close()\n',1)[0]
+    retained_locator = "        copied=private/'reproduction'/name\n"
+    assert prefix.count(retained_locator) == 1
+    prefix = prefix.replace(retained_locator, "        copied=private/'recording'/'reproduction'/name\n", 1)
     footer = body[body.rfind('finally:\n    if copied_inventory'):]
     setup = '''        holder=e.StableDirectory(parent)
         holder._initialize_recording(anchor,c.canonical({'kind':'shadow_write_request','id':'local.hcopy'}))
@@ -3186,6 +3192,9 @@ def _synthetic_parent_P_context(c, path):
 def raw16_T_enforced_chain(root: Path) -> None:
     body=(root/'scripts/test/evals-malicious.test.sh').read_text().split("<<'PY_RUNTIME_CONSUMER'\n",1)[1].split('\nPY_RUNTIME_CONSUMER',1)[0]
     prefix=body.split('        copied_inventory.close();copied_inventory.close()\n',1)[0]
+    retained_locator = "        copied=private/'reproduction'/name\n"
+    assert prefix.count(retained_locator) == 1
+    prefix = prefix.replace(retained_locator, "        copied=private/'recording'/'reproduction'/name\n", 1)
     footer=body[body.rfind('finally:\n    if copied_inventory'):]
     before="        parent=c._open_held(str(private),True,c._store_rule(uid,gid,0o700,True),'E_STORE')\n"
     prefix=prefix.replace(before,"        (private/'preparation-scratch').mkdir(mode=0o700)\n"+before)
@@ -3266,6 +3275,9 @@ def raw16_T_writer_chain(root: Path) -> None:
     import textwrap
     body=(root/'scripts/test/evals-malicious.test.sh').read_text().split("<<'PY_RUNTIME_CONSUMER'\n",1)[1].split('\nPY_RUNTIME_CONSUMER',1)[0]
     prefix=body.split('        copied_inventory.close();copied_inventory.close()\n',1)[0]
+    retained_locator = "        copied=private/'reproduction'/name\n"
+    assert prefix.count(retained_locator) == 1
+    prefix = prefix.replace(retained_locator, "        copied=private/'recording'/'reproduction'/name\n", 1)
     footer=body[body.rfind('finally:\n    if copied_inventory'):]
     before="        parent=c._open_held(str(private),True,c._store_rule(uid,gid,0o700,True),'E_STORE')\n"
     prefix=prefix.replace(before,"        (private/'preparation-scratch').mkdir(mode=0o700);(private/'inspection-scratch').mkdir(mode=0o700)\n"+before)
@@ -3915,6 +3927,9 @@ def raw16_parent_P_handoff(root: Path) -> None:
 def raw16_parent_P_Hcopy(root: Path) -> None:
     body=(root/'scripts/test/evals-malicious.test.sh').read_text().split("<<'PY_RUNTIME_CONSUMER'\n",1)[1].split('\nPY_RUNTIME_CONSUMER',1)[0]
     prefix=body.split('        copied_inventory.close();copied_inventory.close()\n',1)[0]
+    retained_locator = "        copied=private/'reproduction'/name\n"
+    assert prefix.count(retained_locator) == 1
+    prefix = prefix.replace(retained_locator, "        copied=private/'recording'/'reproduction'/name\n", 1)
     footer=body[body.rfind('finally:\n    if copied_inventory'):]
     line="        source=base/'kernel';source_raw=b'ordinary immutable runtime bytes'*4097;source.write_bytes(source_raw);source.chmod(0o400)\n"
     assert prefix.count(line)==1;prefix=prefix.replace(line,line+"        context,metadata=make_context(c,base/'synthetic-parent-frame')\n")
