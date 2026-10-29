@@ -3979,13 +3979,18 @@ class Anchor(e.c.Anchor):
    "group_replies":group_reader.raw_group_replies() if group_reader is not None else None}
   super().__init__(dict(anchor_config),anchor_raw,[],installed,(sha(registry_raw),[entry]),
    (sha(accepted),[entry]),resolver,identity_context=identity_context)
+  e.c._capture_work_values(self.recording_work,"flow-anchor")
+  pending=None
   try:
    for path,raw in anchor_backing.items():
-    item=e.c._open_held(str(path),False,e.c._store_rule(os.geteuid(),os.getegid(),0o400,False,resolver),"E_STORE")
-    self.held.append(item)
+    pending=e.c._open_held(str(path),False,e.c._store_rule(os.geteuid(),os.getegid(),0o400,False,resolver),"E_STORE",
+     recording_work=self.recording_work,accounting_kind="M")
+    self.held.append(pending)
+    item,pending=pending,None
     e.require(item.read(len(raw),"E_STORE")==raw,"E_STORE")
   except BaseException:
-   e.close_all(reversed(self.held))
+   unregistered=[pending] if pending is not None and not any(item is pending for item in self.held) else []
+   e.close_all([*unregistered,*reversed(self.held)])
    raise
  def recheck(self,*args):
   super().recheck(*args);events.append("anchor-recheck")

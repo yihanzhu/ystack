@@ -4294,26 +4294,55 @@ def raw16_scope_P_ownership(root: Path) -> None:
                                 source = object.__new__(c._HeldCoverageRead)
                                 source.anchor = anchor;source.configuration = configuration;source.attempt_id = "source.p.fixture"
                                 source.held = []
-                                reader.owned.append(source)
-                                source.held.append(c._open_held(str(raw_directory), True, lambda *_: True, "E_STORE"))
                                 source.snapshots = {"payload/request.json": request};source.observation = b"{}\n"
                                 source.capture_origin = b"{}\n";source.storage_rows = [];source.capture_work = {}
-                                source.capture = object.__new__(c._HeldCaptureRead)
-                                source.capture.snapshots = dict(capture_values)
-                                source.capture.request_raw = request;source.capture.attempt_id = source.attempt_id
-                                source.capture.held = []
-                                source.capture.names = set(capture_values)
-                                source.capture.work = {};c._capture_work_values(source.capture.work, "synthetic-source-H-input")
-                                source.capture_work = source.capture.work
-                                source.capture.transferred = 0;source.capture.anchor = anchor
+                                capture = object.__new__(c._HeldCaptureRead)
+                                capture.snapshots = dict(capture_values)
+                                capture.request_raw = request;capture.attempt_id = source.attempt_id
+                                capture.held = []
+                                capture.names = set(capture_values)
+                                capture.work = {};c._capture_work_values(capture.work, "synthetic-source-H-input")
+                                source.capture_work = capture.work
+                                capture.transferred = 0;capture.anchor = anchor
                                 anchor.identity_context = {}
                                 anchor.capture_completion_owner = types.SimpleNamespace(transfer=lambda *_: None)
-                                source.capture.completion_owner = anchor.capture_completion_owner
+                                capture.completion_owner = anchor.capture_completion_owner
+                                source.capture = capture
+                                reader.owned.append(source)
+                                held = c._open_held(str(raw_directory), True, lambda *_: True, "E_STORE")
+                                try:source.held.append(held)
+                                except BaseException as primary:
+                                    if not (source.held and source.held[-1] is held):
+                                        try:held.close()
+                                        except BaseException as closing:
+                                            first=closing if (isinstance(closing, KeyboardInterrupt) or getattr(closing, "_scope_signal_cancel", False)) and not (
+                                                isinstance(primary, KeyboardInterrupt) or getattr(primary, "_scope_signal_cancel", False)) else primary
+                                            earlier=getattr(primary,"_fixture_cleanup_errors",())
+                                            old_cause=primary.__cause__
+                                            if old_cause is not None and old_cause is not primary and not any(error is old_cause for error in earlier):earlier+=(old_cause,)
+                                            if first is not primary:earlier+=getattr(first,"_fixture_cleanup_errors",())
+                                            first._fixture_cleanup_errors=earlier+(closing,)
+                                            if first is closing:raise closing from primary
+                                            if closing is primary:raise
+                                            raise primary from closing
+                                    raise
                                 for name, raw in capture_values.items():
                                     held = c._open_held(str(capture_directory / name), False, lambda *_: True, "E_STORE")
                                     try:source.capture.held.append(held)
-                                    except BaseException:
-                                        held.close()
+                                    except BaseException as primary:
+                                        if not (source.capture.held and source.capture.held[-1] is held):
+                                            try:held.close()
+                                            except BaseException as closing:
+                                                first=closing if (isinstance(closing, KeyboardInterrupt) or getattr(closing, "_scope_signal_cancel", False)) and not (
+                                                    isinstance(primary, KeyboardInterrupt) or getattr(primary, "_scope_signal_cancel", False)) else primary
+                                                earlier=getattr(primary,"_fixture_cleanup_errors",())
+                                                old_cause=primary.__cause__
+                                                if old_cause is not None and old_cause is not primary and not any(error is old_cause for error in earlier):earlier+=(old_cause,)
+                                                if first is not primary:earlier+=getattr(first,"_fixture_cleanup_errors",())
+                                                first._fixture_cleanup_errors=earlier+(closing,)
+                                                if first is closing:raise closing from primary
+                                                if closing is primary:raise
+                                                raise primary from closing
                                         raise
                                     source.capture.work["input_kind"] = "W" if name == "complete.json" else "raw"
                                     observed = held.read(len(raw), "E_STALE", source.capture.work)
@@ -4358,7 +4387,9 @@ def raw16_scope_P_ownership(root: Path) -> None:
                                         reader.seal_source_captures()
                                         assert anchor.private_observations.get("recording_sealed") is not True
                                     elif case == "release":reader.release_stores()
-                                    elif case == "close":reader.close()
+                                    elif case == "close":
+                                        reader_close_attempted=True
+                                        reader.close()
                                     else:reader._close_source_copies()
                                     assert not reader.source_copies and all(item.closed and not item.owned for item in acquired)
                                     assert all(closes.get(fd) == 1 for fd in expected), ("Reader P once close", case, [(fd, closes.get(fd)) for fd in expected if closes.get(fd) != 1])
@@ -4366,22 +4397,35 @@ def raw16_scope_P_ownership(root: Path) -> None:
                                     assert os.fstat(native.fd)
                                 finally:
                                     os.close = close_fd
-                                    native_close_attempted=True
-                                    native.close()
                             results.append({"case": case, "P_acquisitions": len(acquired),
                                 "all_P_closed": all(item.closed for item in acquired), "work": anchor.recording_work,
                                 "completion_transport_and_qualification": "UNKNOWN fixture H input; not native production",
                                 "all_runtime_inputs": "TMP synthetic; none executed"})
                         finally:
                             c._HeldCaptureCopy.acquire, c._capture_observe, os.close = acquire, observe, close_fd
-                            if not reader_close_attempted:
-                                reader_close_attempted=True
-                                reader.close()
                     finally:
-                        try:
-                            if reader is not None and not reader_close_attempted:reader.close()
-                        finally:
-                            if native is not None and not native_close_attempted:native.close()
+                        primary=sys.exc_info()[1];cleanup_errors=[]
+                        if reader is not None and not reader_close_attempted:
+                            reader_close_attempted=True
+                            try:reader.close()
+                            except BaseException as error:cleanup_errors.append(error)
+                        if native is not None and not native_close_attempted:
+                            native_close_attempted=True
+                            try:native.close()
+                            except BaseException as error:cleanup_errors.append(error)
+                        if cleanup_errors:
+                            marked=lambda error:isinstance(error, KeyboardInterrupt) or getattr(error, "_scope_signal_cancel", False)
+                            first=primary if primary is not None else cleanup_errors[0]
+                            if not marked(first):first=next((error for error in cleanup_errors if marked(error)),first)
+                            origin=primary if primary is not None else first
+                            earlier=getattr(origin,"_fixture_cleanup_errors",())
+                            old_cause=origin.__cause__
+                            if old_cause is not None and old_cause is not origin and not any(error is old_cause for error in earlier):earlier+=(old_cause,)
+                            if first is not origin:earlier+=getattr(first,"_fixture_cleanup_errors",())
+                            first._fixture_cleanup_errors=earlier+tuple(cleanup_errors)
+                            cause=cleanup_errors[0] if first is primary else primary
+                            if cause is first:raise first
+                            raise first from cause
     finally:c._acl_state = acl
     print(json.dumps({"scope_actual_runtime_and_source_P_ownership": results}, sort_keys=True))
 

@@ -1437,6 +1437,7 @@ PY_GUEST_VALUES
 /usr/bin/python3 -I -S -B - "$root" <<'PY_CAPTURE_VALUES'
 import ast
 import copy
+import contextlib
 import importlib.util
 import inspect
 import json
@@ -1773,7 +1774,7 @@ if sys.platform in {'darwin','linux'}:
                         (configuration_root/'host-config.json').write_bytes(source_config_raw)
                         source_context=source_fixture._source_configuration_fixture(consumer,work_path.resolve(),outer_request,'coverage-read')
                         with source_context as (source_anchor,source_configuration):
-                            reader=None;reader_close_attempted=False;failed_source_closes=[]
+                            reader=None;reader_close_attempted=False
                             original_source_acl=consumer._acl_state
                             original_source_normalizer=source_configuration.normalizer
                             try:
@@ -1796,103 +1797,163 @@ if sys.platform in {'darwin','linux'}:
                                 owned=scope_capture_reader._Owned(reader);reader.owned=owned;owned.append(source_configuration)
                                 original_source_acl=consumer._acl_state
                                 consumer._acl_state=lambda *args:([],None) if sys.platform=='darwin' else (None,None)
-                                native_source=None
+                                @contextlib.contextmanager
+                                def source_custody(source):
+                                    attempted=False;succeeded=False;actual_close=None;primary=None
+                                    try:
+                                        actual_close=source.close
+                                        def observed_close():
+                                            nonlocal attempted,succeeded
+                                            active_primary=sys.exc_info()[1]
+                                            attempted=True
+                                            try:result=actual_close()
+                                            except BaseException as closing:
+                                                if active_primary is not None:
+                                                    if closing is active_primary:raise
+                                                    closing_marked=isinstance(closing,KeyboardInterrupt) or getattr(closing,'_scope_signal_cancel',False)
+                                                    primary_marked=isinstance(active_primary,KeyboardInterrupt) or getattr(active_primary,'_scope_signal_cancel',False)
+                                                    first=closing if closing_marked and not primary_marked else active_primary
+                                                    earlier=getattr(active_primary,'_fixture_cleanup_errors',())
+                                                    old_cause=active_primary.__cause__
+                                                    if old_cause is not None and old_cause is not active_primary and not any(error is old_cause for error in earlier):earlier+=(old_cause,)
+                                                    if first is not active_primary:earlier+=getattr(first,'_fixture_cleanup_errors',())
+                                                    first._fixture_cleanup_errors=earlier+(closing,)
+                                                    if first is closing:raise closing from active_primary
+                                                    raise active_primary from closing
+                                                raise
+                                            succeeded=True
+                                            return result
+                                        source.close=observed_close
+                                        yield source
+                                    except BaseException as error:
+                                        primary=error
+                                        raise
+                                    finally:
+                                        cleanup_errors=[]
+                                        if not attempted:
+                                            attempted=True
+                                            try:
+                                                (source.close if actual_close is None else actual_close)()
+                                                succeeded=True
+                                            except BaseException as error:cleanup_errors.append(error)
+                                        if succeeded and any(item is source for item in owned):
+                                            try:owned.remove(source)
+                                            except BaseException as error:
+                                                cleanup_errors.append(error)
+                                                if any(item is source for item in owned):list.remove(owned,source)
+                                        if cleanup_errors:
+                                            marked=lambda error:isinstance(error,KeyboardInterrupt) or getattr(error,'_scope_signal_cancel',False)
+                                            first=primary if primary is not None else cleanup_errors[0]
+                                            if not marked(first):first=next((error for error in cleanup_errors if marked(error)),first)
+                                            origin=primary if primary is not None else first
+                                            earlier=getattr(origin,'_fixture_cleanup_errors',())
+                                            old_cause=origin.__cause__
+                                            if old_cause is not None and old_cause is not origin and not any(error is old_cause for error in earlier):earlier+=(old_cause,)
+                                            if first is not origin:earlier+=getattr(first,'_fixture_cleanup_errors',())
+                                            first._fixture_cleanup_errors=earlier+tuple(cleanup_errors)
+                                            cause=cleanup_errors[0] if first is primary else primary
+                                            if cause is first:raise first
+                                            raise first from cause
                                 try:
                                     native_source=consumer._HeldCoverageRead(source_anchor,source_configuration,outer_request)
-                                    assert native_source.snapshots['receipt.json']==receipt
-                                    assert native_source.snapshots['payload/request.json']==outer_request
-                                    assert 'capture.json' not in native_source.snapshots
-                                    assert native_source.recheck() is None
-                                    if failed_sync:
-                                        assert source_anchor.private_observations['unusable'] is True
-                                        assert not hasattr(native_source,'capture')
-                                    else:
-                                        assert native_source.capture.snapshots['complete.json']==host._capture_completion_values(
-                                            outer_id,outer_request,native_source.capture.snapshots['capture.json'])
-                                        assert capture_replay._origin_values(root,native_source.snapshots,native_source.storage_rows,
-                                            {'attempt_id':outer_id,'platform':sys.platform},{'host-config.json':source_config_raw},
-                                            capture_files=native_source.capture.snapshots,
-                                            capture_storage_rows=native_source.capture.storage_rows)==native_source.capture_origin
-                                        owned.append(native_source)
-                                        source_again=consumer._HeldCoverageRead(source_anchor,source_configuration,outer_request)
-                                        try:
-                                            owned.append(source_again)
-                                            for ordinal,slot in enumerate((4095,4094)):
-                                                copied_source=private_sources/('gate-%04d'%slot)/('source-%04d'%ordinal)
-                                                assert {p.name for p in copied_source.iterdir()}=={
-                                                    'capture.json','complete.json','origin-observation.json','consumer-observations.json'}
-                                                assert (copied_source/'capture.json').read_bytes()==native_source.capture.snapshots['capture.json']
-                                                assert (copied_source/'complete.json').read_bytes()==native_source.capture.snapshots['complete.json']
-                                                assert (copied_source/'origin-observation.json').read_bytes()==native_source.capture_origin
-                                                assert all(p.stat().st_mode & 0o777==0o400 for p in copied_source.iterdir())
-                                            assert acquisitions==[outer_id,outer_id]
-                                            assert len(reader.source_copies)==4
-                                            configuration_copies=[reader.source_copies[index] for index in (1,3)]
-                                            for ordinal,copied in enumerate(configuration_copies):
-                                                assert copied.source_configuration is source_configuration
-                                                assert copied.source_configuration_source is (native_source if ordinal==0 else source_again)
-                                                assert copied.source_configuration_ordinal==ordinal
-                                                assert set(copied.source_configuration_members)==set(source_configuration.source_inputs)
-                                                for role,(raw,held) in source_configuration.source_inputs.items():
-                                                    member=copied.source_configuration_members[role]['member']
-                                                    assert copied.members[member].read(len(raw),'E_STALE')==raw
-                                                    assert held.read(len(raw),'E_STALE')==raw
-                                                assert copied.leaf['files']==6
-                                            assert source_anchor.recording_work['files']==8+sum(item.leaf['files'] for item in configuration_copies)
-                                            assert len(source_anchor.recording_work['cases'])==1
-                                            assert native_source.recheck() is None and source_again.recheck() is None
-                                            final_owner_module=load('source_final_owner',root/'shadow/v1/enforced-reproduction.py')
-                                            installed_bytes=source_configuration.source_inputs['supervisor'][0]
-                                            installed_hold=source_configuration.source_inputs['supervisor'][1]
-                                            original_final_anchor=final_owner_module.c.ANCHOR
-                                            final_owner_module.c.ANCHOR=str(configuration_root.resolve())
-                                            final_owner=None
-                                            try:
-                                                final_owner=final_owner_module._load_capture_completion_owner()
-                                                assert final_owner is not None,final_owner_module._CAPTURE_OWNER_WORK
-                                                assert any(item is installed_hold for item in source_anchor.held)
-                                                source_anchor.capture_completion_owner=final_owner
-                                                final_owner.authenticate(source_anchor)
-                                                reader.anchor=source_anchor;reader.enforced=final_owner_module
-                                                reader.seal_source_captures()
-                                                assert source_anchor.private_observations['recording_sealed'] is True
-                                                assert final_owner.work['transferred_read_bytes']==final_owner.work['read_bytes']
-                                                assert all(work['transferred_read_bytes']==work['read_bytes'] for work in reader.source_capture_work)
+                                    with source_custody(native_source):
+                                        assert native_source.snapshots['receipt.json']==receipt
+                                        assert native_source.snapshots['payload/request.json']==outer_request
+                                        assert 'capture.json' not in native_source.snapshots
+                                        assert native_source.recheck() is None
+                                        if failed_sync:
+                                            assert source_anchor.private_observations['unusable'] is True
+                                            assert not hasattr(native_source,'capture')
+                                        else:
+                                            assert native_source.capture.snapshots['complete.json']==host._capture_completion_values(
+                                                outer_id,outer_request,native_source.capture.snapshots['capture.json'])
+                                            assert capture_replay._origin_values(root,native_source.snapshots,native_source.storage_rows,
+                                                {'attempt_id':outer_id,'platform':sys.platform},{'host-config.json':source_config_raw},
+                                                capture_files=native_source.capture.snapshots,
+                                                capture_storage_rows=native_source.capture.storage_rows)==native_source.capture_origin
+                                            owned.append(native_source)
+                                            source_again=consumer._HeldCoverageRead(source_anchor,source_configuration,outer_request)
+                                            with source_custody(source_again):
+                                                owned.append(source_again)
+                                                for ordinal,slot in enumerate((4095,4094)):
+                                                    copied_source=private_sources/('gate-%04d'%slot)/('source-%04d'%ordinal)
+                                                    assert {p.name for p in copied_source.iterdir()}=={
+                                                        'capture.json','complete.json','origin-observation.json','consumer-observations.json'}
+                                                    assert (copied_source/'capture.json').read_bytes()==native_source.capture.snapshots['capture.json']
+                                                    assert (copied_source/'complete.json').read_bytes()==native_source.capture.snapshots['complete.json']
+                                                    assert (copied_source/'origin-observation.json').read_bytes()==native_source.capture_origin
+                                                    assert all(p.stat().st_mode & 0o777==0o400 for p in copied_source.iterdir())
+                                                assert acquisitions==[outer_id,outer_id]
+                                                assert len(reader.source_copies)==4
+                                                configuration_copies=[reader.source_copies[index] for index in (1,3)]
+                                                for ordinal,copied in enumerate(configuration_copies):
+                                                    assert copied.source_configuration is source_configuration
+                                                    assert copied.source_configuration_source is (native_source if ordinal==0 else source_again)
+                                                    assert copied.source_configuration_ordinal==ordinal
+                                                    assert set(copied.source_configuration_members)==set(source_configuration.source_inputs)
+                                                    for role,(raw,held) in source_configuration.source_inputs.items():
+                                                        member=copied.source_configuration_members[role]['member']
+                                                        assert copied.members[member].read(len(raw),'E_STALE')==raw
+                                                        assert held.read(len(raw),'E_STALE')==raw
+                                                    assert copied.leaf['files']==6
+                                                assert source_anchor.recording_work['files']==8+sum(item.leaf['files'] for item in configuration_copies)
                                                 assert len(source_anchor.recording_work['cases'])==1
-                                            finally:
+                                                assert native_source.recheck() is None and source_again.recheck() is None
+                                                final_owner_module=load('source_final_owner',root/'shadow/v1/enforced-reproduction.py')
+                                                installed_bytes=source_configuration.source_inputs['supervisor'][0]
+                                                installed_hold=source_configuration.source_inputs['supervisor'][1]
+                                                original_final_anchor=final_owner_module.c.ANCHOR
+                                                final_owner_module.c.ANCHOR=str(configuration_root.resolve())
+                                                final_owner=None
                                                 try:
-                                                    if final_owner is not None:final_owner_module._close_capture_completion_owner(final_owner)
-                                                finally:final_owner_module.c.ANCHOR=original_final_anchor
-                                                if final_owner is not None and sys.modules.get(final_owner.name) is final_owner.module:del sys.modules[final_owner.name]
-                                            print(json.dumps({'actual_source_owned_append_and_private_copy':True,
-                                                'two_reacquisitions_share_one_counter':True,
-                                                'scope_session_and_completion_startup_are_fixture_doubles':True,
-                                                'actual_final_source_owner_and_tail_transfer':True,
-                                                'additional_fixture_installed_owner_copy_bytes':len(installed_bytes),
-                                                'actual_work':source_anchor.recording_work},sort_keys=True))
-                                        finally:
-                                            try:source_again.close()
-                                            except BaseException:
-                                                failed_source_closes.append(source_again)
-                                                raise
-                                            else:owned.remove(source_again)
+                                                    final_owner=final_owner_module._load_capture_completion_owner()
+                                                    assert final_owner is not None,final_owner_module._CAPTURE_OWNER_WORK
+                                                    assert any(item is installed_hold for item in source_anchor.held)
+                                                    source_anchor.capture_completion_owner=final_owner
+                                                    final_owner.authenticate(source_anchor)
+                                                    reader.anchor=source_anchor;reader.enforced=final_owner_module
+                                                    reader.seal_source_captures()
+                                                    assert source_anchor.private_observations['recording_sealed'] is True
+                                                    assert final_owner.work['transferred_read_bytes']==final_owner.work['read_bytes']
+                                                    assert all(work['transferred_read_bytes']==work['read_bytes'] for work in reader.source_capture_work)
+                                                    assert len(source_anchor.recording_work['cases'])==1
+                                                finally:
+                                                    try:
+                                                        if final_owner is not None:final_owner_module._close_capture_completion_owner(final_owner)
+                                                    finally:final_owner_module.c.ANCHOR=original_final_anchor
+                                                    if final_owner is not None and sys.modules.get(final_owner.name) is final_owner.module:del sys.modules[final_owner.name]
+                                                print(json.dumps({'actual_source_owned_append_and_private_copy':True,
+                                                    'two_reacquisitions_share_one_counter':True,
+                                                    'scope_session_and_completion_startup_are_fixture_doubles':True,
+                                                    'actual_final_source_owner_and_tail_transfer':True,
+                                                    'additional_fixture_installed_owner_copy_bytes':len(installed_bytes),
+                                                    'actual_work':source_anchor.recording_work},sort_keys=True))
                                 finally:
-                                    try:
-                                        if native_source is not None:
-                                            try:native_source.close()
-                                            except BaseException:
-                                                failed_source_closes.append(native_source)
-                                                raise
-                                            else:
-                                                if any(item is native_source for item in owned):owned.remove(native_source)
-                                    finally:
-                                        consumer._acl_state=original_source_acl
-                                        source_configuration.normalizer=original_source_normalizer
-                                        reader_close_attempted=True
-                                        if failed_source_closes:
-                                            try:reader._close_source_copies()
-                                            finally:source_configuration.close()
-                                        else:reader.close()
+                                    primary=sys.exc_info()[1];cleanup_errors=[]
+                                    consumer._acl_state=original_source_acl
+                                    source_configuration.normalizer=original_source_normalizer
+                                    reader_close_attempted=True
+                                    if any(isinstance(item,consumer._HeldCoverageRead) for item in owned):
+                                        try:reader._close_source_copies(primary)
+                                        except BaseException as error:cleanup_errors.append(error)
+                                        try:source_configuration.close()
+                                        except BaseException as error:cleanup_errors.append(error)
+                                    else:
+                                        try:reader.close()
+                                        except BaseException as error:cleanup_errors.append(error)
+                                    if cleanup_errors:
+                                        marked=lambda error:isinstance(error,KeyboardInterrupt) or getattr(error,'_scope_signal_cancel',False)
+                                        first=primary if primary is not None else cleanup_errors[0]
+                                        if not marked(first):first=next((error for error in cleanup_errors if marked(error)),first)
+                                        origin=primary if primary is not None else first
+                                        earlier=getattr(origin,'_fixture_cleanup_errors',())
+                                        old_cause=origin.__cause__
+                                        if old_cause is not None and old_cause is not origin and not any(error is old_cause for error in earlier):earlier+=(old_cause,)
+                                        if first is not origin:earlier+=getattr(first,'_fixture_cleanup_errors',())
+                                        first._fixture_cleanup_errors=earlier+tuple(cleanup_errors)
+                                        cause=cleanup_errors[0] if first is primary else primary
+                                        if cause is first:raise first
+                                        raise first from cause
                             finally:
                                 consumer._acl_state=original_source_acl
                                 source_configuration.normalizer=original_source_normalizer
