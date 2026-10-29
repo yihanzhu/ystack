@@ -1489,11 +1489,20 @@ proof without adding a stimulus/read/process or declaring it covered.
 Rebind complete stderr expectations only where these existing scope errors now gain
 the permitted record: original_context_controls, genuine_relation_controls,
 select_counter_controls, launch_capture_controls, expect_evaluator_error,
-symlink-marker, PY_TERMINAL_TEST's terminal_failure/run_case, and the existing actual
-scope refuse/through_use/coverage_evaluate_pair controls. Keep each old code, exit,
+symlink-marker, race_marker_case, PY_TERMINAL_TEST's terminal_failure/run_case,
+and the existing actual scope refuse/through_use/coverage_evaluate_pair controls. Keep each old code, exit,
 stdout, wait/cancel/close, private terminal-error and size assertion exact. Validate
 the entire new representation, source/copy point and errno; never replace exact
 stderr with startswith, split-first-only or acceptance of arbitrary trailing bytes.
+For race_marker_case, keep exactly its three existing calls: rewritten, appeared
+and appeared-symlink. Each keeps its original E_STALE refusal and mutation behavior;
+the neighboring symlink-marker E_RUNTIME case remains separate. Preserve PY_MUTATE's
+unique policy_sha anchor and single insertion, its transformation bytes, original
+commands and calls. Adapt only the complete permitted stderr representation and
+bind the actual inserted copy's failure point through its exact source/copy mapping;
+never present an inserted copy line as the original source line. Add no read, probe,
+process, FD, case, call, path, authority or cap. The four observer literals, existing
+nine-map recipe and both old native bindings retain their original boundaries.
 Legacy validator/helper/embedded-terminal errors and sample_failure_carrier_controls'
 fixed-transport stderr retain exact old bytes. Preserve
 all existing cases and invocations. A dependency outside these fixed listed carriers
