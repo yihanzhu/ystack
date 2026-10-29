@@ -1183,7 +1183,7 @@ P 留在原位置，S 留在 parent 原受控留存根。失败不删、不迁�
 
 **范围、证明和后续门**
 
-本节接线仅可修改六个原 allowed paths：`scope/v1/read-shadow-evidence.py`、`scope/v1/generate-gate-evidence.py`、`shadow/v1/_consumer.py`、`evals/v1/replay-malicious.py`、`scripts/test/candidate-content-preparation-fixtures.py`、`scripts/test/evals-malicious.test.sh`。前三者接真实 owner/wire/固定原语；replay 接原 S 与真实账；两测试路径验证实际父子和拒绝分支。`evaluate-scope.sh` 原 blob `605370780345539c5ed7b9debbd04f5327610128` 不改；不改九个 adoption-only 路径、bootstrap 或 84 closure 成员集合，不增加其它文件入口。若这六个文件不能完成原根绑定，依赖交接保持不合格，不默认增加 allowlist。
+本节接线仅可修改六个原 allowed paths：`scope/v1/read-shadow-evidence.py`、`scope/v1/generate-gate-evidence.py`、`shadow/v1/_consumer.py`、`evals/v1/replay-malicious.py`、`scripts/test/candidate-content-preparation-fixtures.py`、`scripts/test/evals-malicious.test.sh`。前三者接真实 owner/wire/固定原语；replay 接原 S 与真实账；两测试路径验证实际父子和拒绝分支。`evaluate-scope.sh` 原 blob `605370780345539c5ed7b9debbd04f5327610128` 仅有 R9.2 scope_pre_failure_point 的窄例外；不改九个 adoption-only 路径、bootstrap 或 84 closure 成员集合，不增加其它文件入口。若这六个文件不能完成原根绑定，依赖交接保持不合格，不默认增加 allowlist。
 
 后续精确 GO 内的普通自有 fixture 必须走真实 spawn/FD6/Reader 与两个原关闭边界，并验证 S 全 bytes、错误回原流程、根/对端拒绝、partial/EOF/cancel、原帽和实际账。candidate 正例须从该 child 原 cat-file 读取，经实际关联、P 和独立 S，进入完整双 context manifest；覆盖普通及 policy write form、current/qualifying 原关系和原 no-coverage 分支。不得让 fixture 直接填 batch、原件或 receipt 替代实际调用。
 
@@ -2041,7 +2041,7 @@ to evade the source cap. Executable and policy files always belong to the closur
      仅可在既有直接 dashboard caller line-binding 接点机械重绑最终实际行号，并核完整
      绑定与实际生成行关系；不借此改其它 source/copy/observer 或旧 native 绑定。
      新问题逐项判断，不能自动纳入本条。需要更宽修改就停止并返回 artifact gate。
-     `evaluate-scope.sh` 保持 blob `605370780345539c5ed7b9debbd04f5327610128`，不得回退产品
+     `evaluate-scope.sh` 保持 blob `605370780345539c5ed7b9debbd04f5327610128`（仅有 R9.2 scope_pre_failure_point 窄例外），不得回退产品
      来满足旧测试。原 40 路径集合仅有 R9.3 明列的 C2 bootstrap 与 qualify 辅助兼容例外；
      原 20-path 子范围、C1 六功能路径/三 pin 的职责、九个 adoption-only 文件、SOURCE 84、
      协议、角色、九 occurrence、全部费用/cap/窗口预算及原验收保持。不得修改旧执行包或重置失败和 UNKNOWN。
@@ -2164,7 +2164,7 @@ to evade the source cap. Executable and policy files always belong to the closur
      本条是单列的 C1 非干扰辅助接点，不把 C1 六功能路径写成七个，不扩大原
      20-path、42-path 或 SOURCE 84 成员集合；九个 adoption-only 文件及字节全部不变。
      consumer 新 bytes 只能通过原严格生成配方重绑九 copy/mapping，四个 observer
-     literal、转换/逆变换规则及两个 native 旧绑定不变。保持 evaluate-scope 原 blob；
+     literal、转换/逆变换规则及两个 native 旧绑定不变。evaluate-scope 原 blob 仅有 R9.2 scope_pre_failure_point 窄例外；
      pin 必须从独立审过的实际 bytes 按原顺序更新。任一其它路径/pin 或更宽改动需求
      返回 gate，不复用旧 source GO。G2 后仍须分开的 high-risk plan 与 fresh
      source/recipe/resource 接受；本条不授代码执行、真实 target/native、窗口或网络。
@@ -2225,11 +2225,89 @@ to evade the source cap. Executable and policy files always belong to the closur
      | `scripts/test/candidate-content-preparation-fixtures.py:raw16_t_lifecycle` 的原 writer two-roots 循环和末尾复合断言（设计源 1809–1839） | 失败时保存实际 writer_calls 次数/原两个 operation 标记、unusable 与已有 preparation leaf 的 failure/errno/incomplete/关闭状态。已有 T parent transition 必须保留，不按“缺接线”改写；两次执行、两个 scratch、真实 seal/成员及全部原断言不变。 |
      | `scripts/test/shadow-self-host-evidence.test.sh` 原 scope harness pre/post evaluator 调用（设计源 2141–2163） | 在普通测试 stderr 标明原 pre/post 调用阶段、真实退出状态及原已取得的有界错误码/失败事实；保留一次原 evaluate-scope 调用、完整原 stdout/stderr 文件和实际 FAIL。不得 mock evaluator/Reader、删除两真实记录、吞 E_RUNTIME 或改 not-proposable、reason、qualification、authority/enabled、authentication 和 proposal 断言。 |
 
-     只投影既有 receipt/leaf/call 的固定类型、布尔、计数、阶段与错误类别/errno；
-     不输出 secret、原 payload、任意 exception repr、完整环境或新的大 ledger。
-     原全量记录继续保留，投影不能替代它或改变退出状态。不得新增 observer body、
-     生产诊断 API、任意 selector、框架或场景矩阵。若已有事实仍不能定位，保持
-     UNKNOWN；任何必须触达的新生产接点须以实际证据重新过对应 gate。
+     raw16_t_lifecycle keeps its existing facts-only contract. The original scope
+     pre/post failure may use one temporary private scope_pre_failure_point boundary.
+     Keep the original bare code as stderr line one. Permit one further ASCII line,
+     at most 64 bytes: SCOPE_FAIL_V1 owner point errno. owner is F/R/C/U; point is
+     a source-bound statement line or 0 for unknown. No path, name, message or stack.
+     This explicitly changes failure stderr bytes. It does not change success stdout.
+
+     Reader adds only one private pure projection at its original final except exit.
+     Preserve the original independently selected code and exit before projection.
+     Read that same final exception's traceback and errno only through trusted
+     built-in descriptors and exact built-in field/type checks. Unknown types or
+     fields become UNKNOWN. Projection must add no custom getter, str, repr,
+     equality or hash call; direct attribute access or getattr is not a safe
+     substitute. Keep the original code-selection behavior unchanged; this rule
+     governs only the new projection. Descriptor details belong in the separate plan.
+     Inspect at most 64 nodes of that same final exception's existing traceback.
+     Select the innermost matching actual code object from the fixed list below,
+     also requiring the original Reader or already-loaded consumer globals identity.
+     Bind its tb_lineno to the final reviewed source statement. Do not infer code
+     identity from filename/co_name, enumerate namespaces, read source or locals,
+     or follow cause/context. Unknown code or an overlong trace stays unknown.
+     The fixed Reader candidates are main, write_exclusive, _ControlFIFO.__init__,
+     _ControlFIFO.recheck, _ControlFIFO.close, _Reader.__init__, _Reader.evaluate,
+     _Reader._evaluate_authentication_phase, _Reader._evaluate_observation_phase,
+     _Reader.authenticate_bundles, _Reader.recheck and _Reader.close. Consumer
+     candidates are c._open_held, c._acl_state, c._metadata and c._named_metadata.
+     Compare their actual __code__ objects by identity. The generic require and
+     c._require raisers are deliberately excluded. Report R or C and the selected
+     actual statement, not a guessed deeper cause. A final error outside this small
+     set may leave only a known caller; disclose that limitation and keep the rest
+     UNKNOWN. Do not add future coverage, native contacts or a dynamic registry.
+
+     errno comes only from this final OSError's actual integer errno, mapped to
+     NONE/EACCES/EPERM/ENOENT/ENOTDIR/EEXIST/ELOOP/EBADF/EMFILE/ENFILE/ENOSPC/
+     EIO/EPIPE/EINTR/EINVAL/ETIMEDOUT/OTHER/UNKNOWN. No exception taxonomy or repr.
+     Do not change main, finally, cancellation, original code selection or primary
+     error policy. A final error can differ from the primary; do not claim otherwise.
+     Projection failure must preserve the original bare code and failure status.
+
+     Frontend adds only the fixed projection at emit_error and relays a valid
+     Reader record at the two existing reader-stderr read-result sites. Its own
+     point is the actual BASH_LINENO[0], bound to the exact reviewed frontend or
+     the existing generated copy map; owner F, errno UNKNOWN. No path-only identity
+     claim. signal_exit may report only U/0. Do not change locator/terminal code or
+     add a read, wait, FD, process, probe, file, environment selector or API.
+     Missing/malformed details stay UNKNOWN. Preserve bare-code-only refusal,
+     all old codes, exit 1, FIFO bytes, cleanup and the original stderr bounds.
+
+     At the same original failure-file read site, harness performs one bounded
+     read of at most 128 bytes that crosses the first newline and obtains the
+     original code plus the optional fixed second-line record. Merely enlarging
+     the old newline-stopping read is insufficient. Strictly parse those fields;
+     only a complete valid record may project its fixed owner/point/errno into
+     the original CI failure output. Missing or invalid details remain UNKNOWN.
+     Charge added bytes and projection work to the original owner/budget. Add no
+     source, read location or evaluator invocation. Preserve original stage/exit/code,
+     full original files, FAIL, both real records and all semantic assertions.
+     Repeated, truncated, unknown or extra fields are not location evidence.
+     Existing shell string-read byte loss is not raw-byte authentication; these
+     fields never control product acceptance, execution GO or qualified evidence.
+
+     Incremental paths are scope/v1/read-shadow-evidence.py and
+     scope/v1/evaluate-scope.sh at these exits; scripts/test/shadow-self-host-evidence.test.sh
+     at the original failure and existing fixture process; and
+     scripts/test/scope-qualification.test.sh at existing source SHA, nine-copy map
+     and exact error bindings. Regressions keep code/exit/cancel/cleanup assertions
+     exact and cover same-object errno, unknown/wrong code identity, no message
+     leakage and malformed records using the existing carriers, without more real
+     evaluator calls. Keep four observer literals, all transforms/inverses and both
+     old native bindings. A hash refresh alone cannot prove semantic compatibility.
+     The original evals.jq, evals-driver.sh and evals-launcher.sh pin chain may only
+     rebind these actual moved bytes. No other path or source member is added.
+
+     This is the sole narrow exception to the frozen evaluate-scope blob. All C1,
+     20-path, 42-path, SOURCE84 and nine adoption-only member sets remain unchanged.
+     Independent G2 must precede a separate high-risk plan, then fresh exact
+     source/recipe/resource review and execution GO. Keep the original six-shard,
+     79-suite full CI recipe; no new matrix, diagnostic run, retry, timeout, native,
+     target, network or credential scope. UNKNOWN does not authorize another run.
+     Once real evidence locates the original failure and the root fix is accepted,
+     remove this temporary boundary and restore bare-code-only stderr. Final full
+     CI must prove the state after removal under its separately accepted execution
+     plan. Do not turn this boundary into a lasting diagnostic facility.
      这些接点都已在原 R9.3 路径表内；42/SOURCE84/原 20-path、六功能三 pin
      集合及九 adoption-only 文件不变。完整独立 high-risk plan、fresh source/
      recipe/resource review 与 GO 仍先于代码和执行；不借用旧 CI 或 native 窗口。
