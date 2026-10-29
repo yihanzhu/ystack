@@ -2091,9 +2091,11 @@ to evade the source cap. Executable and policy files always belong to the closur
      | `evals/v1/evals.jq`、`evals/v1/evals-driver.sh`、`evals/v1/evals-launcher.sh` | 仅原 source/closure/program→driver→launcher 链上由这两个生产文件实际改变所移动的 digest；原完整闭集及检查保留。 |
 
      上述十六个 caller 绑定设计源 `196b503de35105a6ae2b6c49b415b29498a1c803`。
-     所有原 backing 准备完成后，在该 owner/request 的首个 local P 和 case 绑定前，
-     接同一真实固定 recorder initializer 恰一次。P/H-copy、seal、局部目标与 case
-     从该 bound recording holder 取得；native scratch、T 原件及原 acquisition 仍在 work。
+     所有原 backing 准备完成后，在该 owner/request 的全部 dependency/input/T/P 封印
+     及首个 local P/case 绑定前，接同一真实固定 recorder initializer 恰一次。P/H-copy、
+     seal、局部目标与 case 从该 bound recording holder 取得；native scratch/T 保持各自原 work 位置。
+     其它原 acquisition 保持原真实 locator、同一对象、次数与完整 bytes；不为 recording
+     迁移原件、重开 O 或重取 acquisition。
      原 fault 挂载须在初始化成功后命中原目标操作，不因提前失败而遮蔽原登记/取消/关闭
      控制。完整新增初始化、metadata、partial、复制、重叠持有和关闭费用照付；只准按实际
      分项调整对应计数，不重置额度、借别的 context、填假 holder 或伪造 T native transition。
