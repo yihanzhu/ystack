@@ -1871,10 +1871,17 @@ if sys.platform in {'darwin','linux'}:
                                                 {'attempt_id':outer_id,'platform':sys.platform},{'host-config.json':source_config_raw},
                                                 capture_files=native_source.capture.snapshots,
                                                 capture_storage_rows=native_source.capture.storage_rows)==native_source.capture_origin
+                                            creation_start=len(source_anchor.recording_work.get('source_configuration_leaves',()))
                                             owned.append(native_source)
+                                            assert len(source_anchor.recording_work['source_configuration_leaves'])==creation_start+1
+                                            first_creation=source_anchor.recording_work['source_configuration_leaves'][creation_start]
                                             source_again=consumer._HeldCoverageRead(source_anchor,source_configuration,outer_request)
                                             with source_custody(source_again):
+                                                assert len(source_anchor.recording_work['source_configuration_leaves'])==creation_start+1
                                                 owned.append(source_again)
+                                                assert len(source_anchor.recording_work['source_configuration_leaves'])==creation_start+2
+                                                assert source_anchor.recording_work['source_configuration_leaves'][creation_start] is first_creation
+                                                creation_leaves=(first_creation,source_anchor.recording_work['source_configuration_leaves'][creation_start+1])
                                                 for ordinal,slot in enumerate((4095,4094)):
                                                     copied_source=private_sources/('gate-%04d'%slot)/('source-%04d'%ordinal)
                                                     assert {p.name for p in copied_source.iterdir()}=={
@@ -1895,8 +1902,38 @@ if sys.platform in {'darwin','linux'}:
                                                         member=copied.source_configuration_members[role]['member']
                                                         assert copied.members[member].read(len(raw),'E_STALE')==raw
                                                         assert held.read(len(raw),'E_STALE')==raw
-                                                    assert copied.leaf['files']==6
-                                                assert source_anchor.recording_work['files']==8+sum(item.leaf['files'] for item in configuration_copies)
+                                                    creation=creation_leaves[ordinal]
+                                                    configuration_bytes=sum(len(raw) for raw,_held in source_configuration.source_inputs.values())
+                                                    assert creation is not copied.leaf and copied.work is source_anchor.recording_work
+                                                    assert any(item is copied.leaf for item in source_anchor.recording_work['P_hold_leaves'])
+                                                    assert creation['files']==6
+                                                    assert creation['write_bytes']==creation['physical_bytes']==configuration_bytes
+                                                    assert creation['read_bytes']>configuration_bytes
+                                                    assert creation['accounting']['M']['files']==6
+                                                    for field in ('write_bytes','physical_bytes','read_bytes'):
+                                                        assert creation['accounting']['M'][field]==creation[field]
+                                                    assert copied.leaf['files']==copied.leaf['write_bytes']==copied.leaf['physical_bytes']==0
+                                                    assert copied.leaf['accounting']['M']['read_bytes']>0
+                                                    for ledger in (creation,copied.leaf):
+                                                        assert ledger['transfer_target']==id(source_anchor.recording_work) and not consumer._capture_work_incomplete(ledger)
+                                                        for field in ('files','read_bytes','write_bytes','physical_bytes','close_calls','held_close_calls','observation_calls'):
+                                                            current=ledger.get(field,0);transferred=ledger.get('transferred_'+field,0)
+                                                            assert 0<=transferred<=current
+                                                            if ledger is creation or field not in {'read_bytes','observation_calls'}:assert transferred==current
+                                                        if ledger is creation:assert ledger['transferred_accounting']['M']==ledger['accounting']['M']
+                                                        else:
+                                                            assert all(0<=ledger['transferred_accounting']['M'].get(field,0)<=amount for field,amount in ledger['accounting']['M'].items())
+                                                            assert ledger['read_bytes']-ledger['transferred_read_bytes']==ledger['accounting']['M']['read_bytes']-ledger['transferred_accounting']['M']['read_bytes']
+                                                capture_copies=[reader.source_copies[index] for index in (0,2)]
+                                                case_work=capture_copies[0].case_work
+                                                assert all(item.case_work is case_work for item in reader.source_copies)
+                                                assert any(item is case_work for item in source_anchor.recording_work['cases'].values())
+                                                capture_bytes=sum(sum(member.before.st_size for member in item.members.values()) for item in capture_copies)
+                                                for field in ('files','write_bytes','physical_bytes'):
+                                                    capture_contribution=8 if field=='files' else capture_bytes
+                                                    assert source_anchor.recording_work[field]==case_work[field]==capture_contribution+sum(item[field] for item in creation_leaves)
+                                                assert source_anchor.recording_work['read_bytes']==case_work['read_bytes']
+                                                assert source_anchor.recording_work['read_bytes']>=sum(item['read_bytes'] for item in creation_leaves)+sum(item.leaf['transferred_read_bytes'] for item in reader.source_copies)+native_source.capture.work['transferred_read_bytes']+source_again.capture.work['transferred_read_bytes']
                                                 assert len(source_anchor.recording_work['cases'])==1
                                                 assert native_source.recheck() is None and source_again.recheck() is None
                                                 final_owner_module=load('source_final_owner',root/'shadow/v1/enforced-reproduction.py')
@@ -1914,6 +1951,12 @@ if sys.platform in {'darwin','linux'}:
                                                     reader.anchor=source_anchor;reader.enforced=final_owner_module
                                                     reader.seal_source_captures()
                                                     assert source_anchor.private_observations['recording_sealed'] is True
+                                                    for copied in capture_copies+configuration_copies:
+                                                        assert copied.closed and not copied.owned
+                                                        for field in ('files','read_bytes','write_bytes','physical_bytes','close_calls','held_close_calls','observation_calls'):
+                                                            assert copied.leaf.get('transferred_'+field,0)==copied.leaf.get(field,0)
+                                                        assert copied.leaf['transferred_accounting']['M']==copied.leaf['accounting']['M']
+                                                    assert source_anchor.recording_work['read_bytes']==case_work['read_bytes']
                                                     assert final_owner.work['transferred_read_bytes']==final_owner.work['read_bytes']
                                                     assert all(work['transferred_read_bytes']==work['read_bytes'] for work in reader.source_capture_work)
                                                     assert len(source_anchor.recording_work['cases'])==1
@@ -3452,6 +3495,7 @@ for label in ('positive','io-eintr','io-error','copy-signal','copy-signal-close-
                     reader.capture_completion_owner=None;anchor.scope_runtime_owner=reader
                     owned=r._Owned(reader);reader.owned=owned;owned.append(configuration)
                     configuration_baseline=list(owned);assert configuration_baseline==[configuration]
+                    configuration_creation_start=len(anchor.recording_work.get('source_configuration_leaves',()))
                     native_parent=None
                     if case in {'read-signal','constructor-read-signal'}:
                         native_parent=c._open_held(str(native_store),True,lambda *args:True,'E_STORE')
@@ -3577,11 +3621,50 @@ for label in ('positive','io-eintr','io-error','copy-signal','copy-signal-close-
                                 member=configuration_copy.source_configuration_members[role]['member']
                                 assert configuration_copy.members[member].read(len(config_raw),'E_STALE')==config_raw
                                 assert held.read(len(config_raw),'E_STALE')==config_raw
-                            assert configuration_copy.leaf['files']==6 and anchor.recording_work['files']==4+configuration_copy.leaf['files']
+                            assert len(anchor.recording_work['source_configuration_leaves'])==configuration_creation_start+1
+                            creation=anchor.recording_work['source_configuration_leaves'][configuration_creation_start]
+                            configuration_bytes=sum(len(value) for value,_held in configuration.source_inputs.values())
+                            assert creation is not configuration_copy.leaf and configuration_copy.work is anchor.recording_work
+                            assert any(item is configuration_copy.leaf for item in anchor.recording_work['P_hold_leaves'])
+                            assert creation['files']==6
+                            assert creation['write_bytes']==creation['physical_bytes']==configuration_bytes
+                            assert creation['read_bytes']>configuration_bytes
+                            assert creation['accounting']['M']['files']==6
+                            for field in ('write_bytes','physical_bytes','read_bytes'):
+                                assert creation['accounting']['M'][field]==creation[field]
+                            assert configuration_copy.leaf['files']==configuration_copy.leaf['write_bytes']==configuration_copy.leaf['physical_bytes']==0
+                            assert configuration_copy.leaf['accounting']['M']['read_bytes']>0
+                            for ledger in (creation,configuration_copy.leaf):
+                                assert ledger['transfer_target']==id(anchor.recording_work) and not c._capture_work_incomplete(ledger)
+                                for field in ('files','read_bytes','write_bytes','physical_bytes','close_calls','held_close_calls','observation_calls'):
+                                    current=ledger.get(field,0);transferred=ledger.get('transferred_'+field,0)
+                                    assert 0<=transferred<=current
+                                    if ledger is creation or field not in {'read_bytes','observation_calls'}:assert transferred==current
+                                if ledger is creation:assert ledger['transferred_accounting']['M']==ledger['accounting']['M']
+                                else:
+                                    assert all(0<=ledger['transferred_accounting']['M'].get(field,0)<=amount for field,amount in ledger['accounting']['M'].items())
+                                    assert ledger['read_bytes']-ledger['transferred_read_bytes']==ledger['accounting']['M']['read_bytes']-ledger['transferred_accounting']['M']['read_bytes']
+                            capture_copy=reader.source_copies[0]
+                            case_work=configuration_copy.case_work
+                            assert capture_copy.case_work is case_work and len(anchor.recording_work['cases'])==1
+                            assert any(item is case_work for item in anchor.recording_work['cases'].values())
+                            capture_bytes=sum(member.before.st_size for member in capture_copy.members.values())
+                            for field in ('files','write_bytes','physical_bytes'):
+                                capture_contribution=4 if field=='files' else capture_bytes
+                                assert anchor.recording_work[field]==case_work[field]==capture_contribution+creation[field]
+                            assert anchor.recording_work['read_bytes']==case_work['read_bytes']
+                            assert anchor.recording_work['read_bytes']>=creation['read_bytes']+sum(item.leaf['transferred_read_bytes'] for item in reader.source_copies)+source.capture.work['transferred_read_bytes']
                         if case.startswith('seal-'):
                             assert work['transferred_read_bytes']==work['read_bytes']==anchor.recording_work['read_bytes']
                             assert anchor.private_observations['recording_sealed'] is False
                         reader._close_source_copies(caught)
+                        if case=='positive':
+                            for copied in (capture_copy,configuration_copy):
+                                assert copied.closed and not copied.owned
+                                for field in ('files','read_bytes','write_bytes','physical_bytes','close_calls','held_close_calls','observation_calls'):
+                                    assert copied.leaf.get('transferred_'+field,0)==copied.leaf.get(field,0)
+                                assert copied.leaf['transferred_accounting']['M']==copied.leaf['accounting']['M']
+                            assert anchor.recording_work['read_bytes']==case_work['read_bytes']
                         assert not opened and all(value==0 for value in closed)
                         if 'metadata-' in case or 'named-' in case:
                             assert checking['metadata']>0
