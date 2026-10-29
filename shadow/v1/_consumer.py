@@ -1472,7 +1472,7 @@ class Anchor:
     local_runtime_snapshots: list = dataclasses.field(default_factory=list)
     runtime_companions: list = dataclasses.field(default_factory=list)
 
-    def retain_preparation(self, parent, scratch_name, operation, input_raw, response_raw, caller_raw, *, _T_transition=None):
+    def retain_preparation(self, parent, scratch_name, operation, input_raw, response_raw, caller_raw, *, _T_transition=None, _native_parent=None):
         _require(scratch_name in {"preparation-scratch", "inspection-scratch"}
                  and operation in {"prepare", "inspect"}, "E_STORE")
         opened, storage_rows, runtime_leaf = [], [], {}
@@ -1491,10 +1491,21 @@ class Anchor:
             case_work = _capture_work_values(self.recording_work, case_key)
             parent.recheck("E_STORE")
             parent_before = parent.before
+            native_parent = parent if _native_parent is None else _native_parent
+            native_parent.recheck("E_STORE")
+            if native_parent is not parent:
+                _require(isinstance(native_parent, HeldPath) and isinstance(parent, HeldPath)
+                         and parent.path == native_parent.path + "/recording"
+                         and parent.components[-1].name == "recording"
+                         and parent.before.st_uid == native_parent.before.st_uid == uid
+                         and parent.before.st_gid == native_parent.before.st_gid == gid
+                         and _identity(parent.components[-2].before) == _identity(native_parent.before), "E_STORE")
+                named = _capture_named_metadata("recording", native_parent.fd, runtime_leaf, "M")
+                _require(_identity(named) == _identity(parent.before), "E_STORE")
             if _T_transition is not None:
                 _require(operation == "inspect" and scratch_name == _T_transition["scratch"] and not _T_transition["failed"]
                          and _T_transition["cleaned"] and _T_transition["returned"]
-                         and _identity(parent_before) == _identity(_T_transition["parent_before"]), "E_STORE")
+                         and _identity(native_parent.before) == _identity(_T_transition["parent_before"]), "E_STORE")
             destination_name = "preparation-runtime-" + operation
             os.mkdir(destination_name, 0o700, dir_fd=parent.fd)
             _refresh_recording_directory(parent, parent_before, runtime_leaf)
@@ -1503,7 +1514,7 @@ class Anchor:
                 recording_work=runtime_leaf, accounting_kind="M")
             opened.append(destination)
             destination_before = destination.before
-            root = _open_child(parent, scratch_name, True, _store_rule(uid, gid, 0o700, True, self.resolver),
+            root = _open_child(native_parent, scratch_name, True, _store_rule(uid, gid, 0o700, True, self.resolver),
                                "E_STORE", recording_work=runtime_leaf, accounting_kind="M")
             opened.append(root)
             names = root.listdir()

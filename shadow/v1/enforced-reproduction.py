@@ -373,38 +373,110 @@ class StableDirectory:
     held: c.HeldPath
     runtime_copies: list = dataclasses.field(default_factory=list)
     T_native_context: dict | None = None
+    recording_attempted: bool = False
+    recording_failed: bool = False
+    recording_anchor: object = None
+    recording_request: bytes | None = None
+    recorder: object = None
+    recording_leaf: dict = dataclasses.field(default_factory=dict)
+    recording_case: object = None
+    recording_transition: dict | None = None
+    native_names: set | None = None
+
+    def _transfer_recording_work(self):
+        if self.recording_anchor is not None and self.recording_case is not None:
+            c._capture_transfer_work(self.recording_leaf, self.recording_anchor.recording_work, self.recording_case)
+
+    def _initialize_recording(self, anchor, caller_raw):
+        if self.recording_attempted:
+            require(not self.recording_failed and self.recording_anchor is anchor
+                    and self.recording_request == caller_raw and self.recorder is not None, "E_STORE")
+            return
+        self.recording_attempted = True
+        self.recording_failed = True
+        self.recording_anchor, self.recording_request = anchor, caller_raw
+        leaf = self.recording_leaf
+        c._capture_work_values(leaf, "recorder-initialization")
+        anchor.recording_work.setdefault("recorder_initialization_leaves", []).append(leaf)
+        try:
+            self.recheck("E_STORE")
+            before = c._capture_metadata(self.held.fd, leaf, "M")
+            component = self.held.components[-1]
+            named = c._capture_named_metadata(component.name, self.held.components[-2].fd, leaf, "M")
+            require(self._leaf_identity(before) == self._leaf_identity(component.before)
+                    and c._identity(before) == c._identity(named), "E_STORE")
+            names = set(self.held.listdir())
+            require("recording" not in names and not self.runtime_copies, "E_STORE")
+            c._capture_observe(leaf, "M", "recorder-setup", {"before": c._stat_values(before), "namespace": sorted(names)})
+            c._refresh_recording_directory(self.held, component.before, leaf)
+            os.mkdir("recording", 0o700, dir_fd=self.held.fd)
+            c._capture_observe(leaf, "M", "mkdir", {"name": "recording", "mode": 0o700})
+            c._refresh_recording_directory(self.held, before, leaf)
+            require(set(self.held.listdir()) == names | {"recording"}, "E_STORE")
+            self.recorder = c._open_child(self.held, "recording", True,
+                c._store_rule(os.geteuid(), os.getegid(), 0o700, True, anchor.resolver),
+                "E_STORE", recording_work=leaf, accounting_kind="M")
+            require(not self.recorder.listdir(), "E_STORE")
+            self.recorder.recheck("E_STORE")
+            self.native_names = names | {"recording"}
+            key = str(self.recorder.before.st_dev) + ":" + str(self.recorder.before.st_ino)
+            require(key not in anchor.recording_work.get("cases", {}), "E_STORE")
+            self.recording_case = c._capture_work_values(anchor.recording_work, key)
+            self._transfer_recording_work()
+            require(not c._capture_work_incomplete(leaf), "E_STORE")
+            self.recording_failed = False
+        except BaseException as error:
+            anchor.private_observations["unusable"] = True
+            leaf["failure"] = {"category": type(error).__name__, "errno": getattr(error, "errno", None)}
+            if self.recorder is not None:
+                try:self.recorder.close()
+                except BaseException as closing:
+                    leaf["close_incomplete"] = True
+                    if getattr(closing, "_scope_signal_cancel", False):error = closing
+            if self.recording_case is None:
+                key = str(self.held.before.st_dev) + ":" + str(self.held.before.st_ino)
+                self.recording_case = c._capture_work_values(anchor.recording_work, key)
+            try:self._transfer_recording_work()
+            except BaseException as transfer:
+                leaf["transfer_incomplete"] = True
+                if getattr(transfer, "_scope_signal_cancel", False):error = transfer
+            raise error
 
     @staticmethod
     def _leaf_identity(value):
         return value.st_dev, value.st_ino, value.st_uid, value.st_gid, value.st_mode & 0o170777
 
     def _recording_parent(self):
-        self.recheck()
-        leaf = self.held.components[-1]
-        current = c._metadata(leaf.fd)
-        named = c._named_metadata(leaf.name, self.held.components[-2].fd)
-        require(self._leaf_identity(current) == self._leaf_identity(leaf.before)
-                == self._leaf_identity(named) and c._identity(current) == c._identity(named), "E_WORKSPACE")
-        leaf.before = current
-        return self.held
+        require(self.recording_attempted and not self.recording_failed and self.recorder is not None, "E_STORE")
+        self.recheck("E_STORE")
+        self.held.recheck("E_STORE", self.recording_leaf, "M")
+        require(set(self.held.listdir()) == self.native_names, "E_STORE")
+        self.recorder.recheck("E_STORE")
+        self._transfer_recording_work()
+        return self.recorder
 
     def _begin_T_parent(self, anchor, parent):
+        require(parent is self._recording_parent() and self.recording_transition is None, "E_STORE")
         sources = []
         for carrier in self.runtime_copies:
             for index, source in enumerate(carrier.T_companions):
                 source.recheck()
                 require(not source.closed and source.stable and not c._capture_work_incomplete(source.leaf), "E_STORE")
                 sources.append((carrier, index, source))
-        if not sources:return None
-        leaf = sources[0][2].leaf
-        before = c._capture_metadata(parent.fd, leaf, "M")
-        require(c._identity(before) == c._identity(parent.before), "E_STORE")
-        names = parent.listdir()
-        c._capture_observe(leaf, "M", "T-workparent-before", {"stat": c._stat_values(before), "namespace": sorted(names)})
-        sources[0][2]._transfer()
+        leaf = self.recording_leaf
+        before = c._capture_metadata(self.held.fd, leaf, "M")
+        recorder_before = c._capture_metadata(parent.fd, leaf, "M")
+        require(c._identity(before) == c._identity(self.held.before)
+                and c._identity(recorder_before) == c._identity(parent.before), "E_STORE")
+        names, recording_names = set(self.held.listdir()), set(parent.listdir())
+        c._capture_observe(leaf, "M", "T-workparent-before", {"stat": c._stat_values(before),
+            "namespace": sorted(names), "recording": c._stat_values(recorder_before), "recording_namespace": sorted(recording_names)})
+        self._transfer_recording_work()
         require(not c._capture_work_incomplete(leaf), "E_STORE")
-        for _, _, source in sources:source.stable = False
-        return {"before": before, "names": set(names), "sources": sources}
+        transition = {"before": before, "names": names, "recorder_before": recorder_before,
+            "recording_names": recording_names, "sources": sources}
+        self.recording_transition = transition
+        return transition
 
     def _T_parent_receipt(self, parent, before, before_names, created, leaf):
         current = c._capture_metadata(parent.fd, leaf, "M")
@@ -421,39 +493,20 @@ class StableDirectory:
         return receipt
 
     def _finish_T_parent(self, anchor, parent, transition, created):
-        if transition is None:return
-        pending = []
+        require(transition is self.recording_transition and transition is not None, "E_STORE")
         try:
-            leaf = transition["sources"][0][2].leaf
-            receipt = self._T_parent_receipt(parent, transition["before"], transition["names"], created, leaf)
+            self._T_parent_receipt(self.held, transition["before"], transition["names"], set(), self.recording_leaf)
+            self._T_parent_receipt(parent, transition["recorder_before"], transition["recording_names"], created, self.recording_leaf)
             for carrier, index, source in transition["sources"]:
                 require(carrier.T_companions[index] is source, "E_STORE")
-                fresh = source.continue_parent_chain(parent, receipt)
-                try:pending.append((carrier, index, source, fresh))
-                except BaseException:
-                    fresh.close()
-                    raise
-            for carrier, index, source, fresh in pending:
-                carrier.T_history.append(source)
-                carrier.T_companions[index] = fresh
-            for _, _, source, _ in pending:
-                source.close()
-                require(source.close_complete, "E_STORE")
-        except BaseException as failure:
+                source.recheck()
+                require(source.stable and not source.closed and not c._capture_work_incomplete(source.leaf), "E_STORE")
+            self.recording_transition = None
+            self._refresh_runtime_parents()
+            self._transfer_recording_work()
+        except BaseException:
             anchor.private_observations["unusable"] = True
-            for _, _, _, fresh in reversed(pending):
-                if fresh.closed:continue
-                try:fresh.close()
-                except BaseException as closing:
-                    if getattr(closing, "_scope_signal_cancel", False) and not getattr(failure, "_scope_signal_cancel", False):
-                        failure = closing
-            for _, _, source in transition["sources"]:
-                if source.closed:continue
-                try:source.close()
-                except BaseException as closing:
-                    if getattr(closing, "_scope_signal_cancel", False) and not getattr(failure, "_scope_signal_cancel", False):
-                        failure = closing
-            raise failure
+            raise
 
     def _discard_runtime(self, anchor, copied, primary):
         if copied is None:return
@@ -566,7 +619,8 @@ class StableDirectory:
     def _finish_T_native(self, anchor, parent, copied, context):
         require(not context["failed"] and context["cleaned"] and context["returned"] and copied is not None, "E_STORE")
         leaf = context["sources"][0][2].leaf
-        self._T_parent_receipt(parent, context["parent_before"], context["parent_names"], {"preparation-runtime-inspect"}, leaf)
+        self._T_parent_receipt(self.held, context["parent_before"], context["parent_names"], set(), leaf)
+        self._T_parent_receipt(parent, context["recorder_before"], context["recording_names"], {"preparation-runtime-inspect"}, leaf)
         for carrier, index, old in context["sources"]:
             replacements = [source for source in copied.T_companions if source.previous_source is old]
             require(len(replacements) == 1 and not replacements[0].closed and replacements[0].stable
@@ -577,15 +631,22 @@ class StableDirectory:
             require(old.close_complete, "E_STORE")
             carrier.T_companions.remove(old)
         self.T_native_context = None
+        self.recording_transition = None
+        self._refresh_runtime_parents()
+        self._transfer_recording_work()
 
 
     def _retain_preparation(self, anchor, scratch_name, operation, input_raw, response_raw, caller_raw):
         copied = None
         try:
+            self._initialize_recording(anchor, caller_raw)
             parent = self._recording_parent()
             native = self.T_native_context
-            transition = None if native is not None else self._begin_T_parent(anchor, parent)
-            copied = anchor.retain_preparation(parent,scratch_name,operation,input_raw,response_raw,caller_raw, _T_transition=native)
+            transition = self._begin_T_parent(anchor, parent)
+            if native is not None:
+                native["recorder_before"], native["recording_names"] = transition["recorder_before"], transition["recording_names"]
+            copied = anchor.retain_preparation(parent,scratch_name,operation,input_raw,response_raw,caller_raw,
+                _T_transition=native, _native_parent=self.held)
             self._own_runtime(anchor, copied)
             if copied is not None:
                 if native is not None:self._finish_T_native(anchor, parent, copied, native)
@@ -600,6 +661,7 @@ class StableDirectory:
     def _retain_sudo(self, anchor, executable, caller_raw):
         copied = None
         try:
+            self._initialize_recording(anchor, caller_raw)
             parent = self._recording_parent()
             transition = self._begin_T_parent(anchor, parent)
             copied = anchor.retain_sudo_companion(parent, executable, caller_raw)
@@ -614,6 +676,7 @@ class StableDirectory:
     def _retain_parent_inputs(self, anchor, context, caller_raw):
         copied = None
         try:
+            self._initialize_recording(anchor, caller_raw)
             parent = self._recording_parent()
             transition = self._begin_T_parent(anchor, parent)
             copied = anchor.retain_parent_inputs(parent, context, caller_raw)
@@ -629,6 +692,7 @@ class StableDirectory:
     def _retain_runtime(self, anchor, role, original, raw, caller_raw):
         copied = None
         try:
+            self._initialize_recording(anchor, caller_raw)
             parent = self._recording_parent()
             transition = self._begin_T_parent(anchor, parent)
             copied = anchor.retain_runtime_acquisition(parent, role, original, raw, caller_raw)
@@ -650,7 +714,8 @@ class StableDirectory:
         self._refresh_runtime_parents()
 
     def _refresh_runtime_parents(self):
-        for copied in self.runtime_copies:copied.refresh_recorder_parent(self.held)
+        if self.recording_transition is not None:return
+        for copied in self.runtime_copies:copied.refresh_recorder_parent(self._recording_parent())
 
     def close_runtime_copies(self):
         copies, self.runtime_copies = self.runtime_copies, []
@@ -677,14 +742,22 @@ class StableDirectory:
                         and c._identity(named) == c._identity(component.before), code)
 
     def close(self) -> None:
-        cancellation = None
+        primary = None
         try:self.close_runtime_copies()
-        except Exception as error:cancellation = error
+        except BaseException as error:primary = error
+        if self.recorder is not None:
+            recorder, self.recorder = self.recorder, None
+            try:recorder.close()
+            except BaseException as error:
+                self.recording_failed = True
+                self.recording_anchor.private_observations["unusable"] = True
+                self.recording_anchor.private_observations["recording_sealed"] = False
+                primary = c._c3_first(primary, error)
+        try:self._transfer_recording_work()
+        except BaseException as error:primary = c._c3_first(primary, error)
         try:self.held.close()
-        except BaseException:
-            if getattr(cancellation, "_scope_signal_cancel", False):raise cancellation
-            raise
-        if cancellation is not None:raise cancellation
+        except BaseException as error:primary = c._c3_first(primary, error)
+        if primary is not None:raise primary
 
 
 @dataclasses.dataclass
@@ -874,6 +947,11 @@ def _close_capture_completion_owner(owner):
 def _seal_capture_recording(anchor, parent, held_store=None, copied_capture=None, local_parent=None):
     owner = getattr(anchor, "capture_completion_owner", _CAPTURE_OWNER)
     cancellation = None
+    if local_parent is not None:
+        try:parent = local_parent._recording_parent()
+        except (Refusal, c.Refusal, OSError, ValueError, MemoryError) as error:
+            anchor.private_observations["unusable"] = True
+            if getattr(error, "_scope_signal_cancel", False):cancellation = error
     try:
         if copied_capture is not None:
             copied_capture.recheck()
@@ -1143,6 +1221,12 @@ def _native_runtime_values(values, locators):
 
 
 def _retain_native_runtime(anchor, parent=None, caller_raw=None):
+    if parent is not None:
+        try:parent._initialize_recording(anchor, caller_raw)
+        except (Refusal, c.Refusal, OSError, ValueError, MemoryError) as error:
+            anchor.private_observations["unusable"] = True
+            if getattr(error, "_scope_signal_cancel", False):raise
+            return
     active = CancellationSignals.active
     native = active.native if active is not None else None
     if isinstance(native, _NativeRelease) and hasattr(native, "runtime_values"):
@@ -2348,8 +2432,6 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
         group_reader = _DarwinGroupReader(resolver) if resolver is not None else None
         anchor = c.load_anchor(resolver, group_reader)
         _bind_capture_completion_owner(anchor)
-        _retain_native_runtime(anchor, work_hold, request_raw)
-        work_hold._retain_parent_inputs(anchor, context, request_raw)
         exclusions = [SOURCE, request_path, Path(c.ANCHOR).parent, Path(anchor.config["store_root"]),
                       Path(anchor.config["work_root"]), *paths.values()]
         exclusions.extend(Path(value) for value in anchor.config["installed_files"].values())
@@ -2370,6 +2452,8 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
                                          "closure_helper"}):
             CancellationSignals.checkpoint()
             (work / "inputs" / name).mkdir(mode=0o700)
+        _retain_native_runtime(anchor, work_hold, request_raw)
+        work_hold._retain_parent_inputs(anchor, context, request_raw)
         helper = c.snapshot_dependency(str(paths["closure_helper"]), context["helper_executable_sha256"],
             context["helper_executable_size"], str(deps / "helper" / "object-closure"), "object-closure")
         jq = c.snapshot_jq(str(paths["jq"]), str(deps / "jq" / "jq"))
