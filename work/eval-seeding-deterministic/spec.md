@@ -2184,6 +2184,15 @@ to evade the source cap. Executable and policy files always belong to the closur
      仅将旧单一 wait(timeout=10) 和未分 signal-0 的字面断言重绑为上述原 phase
      在固定 clock 下的精确 timeout、实际调用顺序和同一去重 cause 链；
      不放宽为任意 timeout、任意异常、可缺 wait 或可缺后续清理。
+     同两组内已有 consumer traceback 绝对行号，只允许按同一实际 code object、
+     frame 与故障语义机械重绑到最终源的精确行号，并核完整旧/新映射。
+     错 code、错 frame 或错 line 仍必须拒绝；不得改成任意 traceback 接受。
+     此项不改变四 observer literal、九 copy 转换/逆变换或两 native 旧绑定。
+     在这两组内补充固定、有限的 finally 关闭/恢复单点故障与后续真实尝试对照，
+     覆盖新增独立清理分支。核原实际 owned 资源的 selector/pipe 关闭及 handler/mask
+     恢复、once-close、原 primary/取消对象、同一去重无环 cause 与原 cleanup_end。
+     某步失败后仍须观测后续适用动作；删除该动作须使对应控制失败，未成功不记成功。
+     全部八个原控制和 IO/拒绝控制保留，不增加框架、组合矩阵、权限或 timeout。
      若 fixture 在被测 Popen 接管前已创建 child，先保存真实失败及调用/关闭状态，
      再在原测试清理预算内由 fixture 关闭其实际拥有资源；fallback 不算被测方法
      清理成功，不能覆盖原 FAIL。删除任一后续清理尝试或首错保留，原配对控制须失败。
