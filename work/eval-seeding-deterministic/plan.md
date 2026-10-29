@@ -1,5 +1,5 @@
 ---
-spec-blob: ab5b6ddc830ae91506cac75ae9ea1ae1b25cf11c
+spec-blob: caaea73cee15653bf1d16ed008302c9f2e41ff58
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-26
@@ -14,8 +14,8 @@ one complete two-source delivery. Source preparation does not accept a dependenc
 a real recording, native qualification or either seed batch.
 
 This plan binds accepted G2 spec blob
-`ab5b6ddc830ae91506cac75ae9ea1ae1b25cf11c` at main
-`a8d78dc19836d32e4b4bbf480e5d82b2659d44c4` (PR #767).
+`caaea73cee15653bf1d16ed008302c9f2e41ff58` at main
+`2498e0d6290dbedd6a544d5c349773086632ac83` (PR #769).
 The separate high-risk plan-only gate must pass before dependent code.
 RAW16 acquisition design
 locations retain historical source `c1d9d23e42e6efe2d6da1aae3d23b34564b4080d`
@@ -31,12 +31,13 @@ historical anchors, not current resume identities. Earlier paused sources
 `ff9c26b3a1314f13efc0d97690ccf8b9fbe17bdf` and invoice source
 `5ceb67c9e33bb52f359514d8e785a26e77ecf491` and
 `60254f85f1c2db82c569688e989d15136ec9fc58` are historical. The current paused
-source is `3c5467b72fa835ca507ba18195e60aad619fdb12`, parent
-`d5c3ab5d001ec117d3f6f85cd17520f6ba6f72af`, tree
-`0cdeef75438e5abd1869b8d1c1dc89bb08e6a86f`, with last merged main
-`511fbb5b0c16c48639ffc3852d74cdfa19716bb3`, on the existing branch
-`codex/impl/eval-source-relay-replay`. Record the actual remote head separately;
-the source advance must use the normal reviewed push sequence.
+source is `87fb99dbc0d0c4a3a4f42f61685e9327be0b5267`, parent
+`196b503de35105a6ae2b6c49b415b29498a1c803`, tree
+`2cd246a06ba8601d2f1f9274a5f910422f37844d`, with last merged main
+`03275ea60f002918c6326ddf76f1531922b123ba`, on the existing branch
+`codex/impl/eval-source-relay-replay`. The recorded remote remains
+`d5c3ab5d001ec117d3f6f85cd17520f6ba6f72af`; recheck it separately before
+the normal reviewed push sequence. Clean checkpoint custody is not source acceptance.
 Recheck its clean worktree, exact local/remote heads, absent PR and existing #439
 claim before an ordinary merge of accepted main
 on that same branch. A prior clean record does not prove current state. Rebind
@@ -1195,7 +1196,7 @@ other's completed work with a stale whole-file copy.
 
 | Order | Fixed implementation contacts |
 | --- | --- |
-| A | enforced-reproduction reproduce setup, _retain_native_runtime, StableDirectory recorder/T/close and _seal_capture_recording; consumer Anchor.retain_preparation private dual-parent wiring; original shared flow in shadow-enforced and raw16_preparation_P_handoff/T failure boundary in candidate-content-preparation-fixtures. |
+| A | enforced-reproduction reproduce setup, _retain_native_runtime, StableDirectory recorder/T/close and _seal_capture_recording; consumer Anchor.retain_preparation private dual-parent wiring; original shared flow in shadow-enforced and exactly the sixteen StableDirectory callers named in the accepted R9.2 candidate-content-preparation-fixtures row, including its fixed T failure boundary. |
 | B | consumer _DarwinChildOwner._foreground; the two existing scope-qualification foreground groups; original shadow-self-host-evidence scope harness failure reporting only. |
 | Final | Freeze both product files; rebind allowed scope SHA/maps/caller/frame lines and the original evals.jq → evals-driver.sh → evals-launcher.sh source/closure pin chain. |
 
@@ -1268,7 +1269,25 @@ and event wrappers in the original shared flow. At its existing recorder,
 prepare/inspect, H-copy and seal points recheck those same snapshots and inputs;
 recheck T originals once acquired. Check both parents, full bytes, original
 member/ordinal/owner/cost relations and once-close. Retain all thirteen controls,
-twenty-nine evidence files and seven preparation P cases. Add only their finite
+twenty-nine evidence files and seven preparation P cases. Adapt only the sixteen
+fixed candidate-fixture callers in that accepted spec row, using their existing
+real initializer once for each actual owner/request. Complete backing first;
+initialize before every dependency/input/T/P seal and before local P/case binding.
+Keep native scratch/T at their original work locations. Other acquisitions keep
+their original real locator, object, count and full bytes; do not relocate or
+reopen O for recording. Bind P targets, actual H-copy/transitions, seal and case
+to the held recorder, including raw16_P_handoff_accounting's registered
+nested-stable. Install original fault hooks after successful initialization so
+they still hit the original operation and exact error/cancellation/close control.
+In raw16_T_writer_chain, replace only recording-induced renewed=1/3 expectations
+with the same native T objects remaining valid, full rechecks and no artificial
+native-chain continuation. Real inspect still proves previous-source replacement
+and old-owner close. Initialize raw16_C1_T_windows before constructing its assembly
+case; use each actual recorder case for its original two contexts, early
+consumption, occurrences and all costs. Preserve existing charges; no new case
+allowance, cross-context borrowing or count-only adjustment. The four direct
+Anchor/acquire exclusions in the spec remain byte-identical. In the original
+shared-flow and seven-case carriers, add only their finite
 paired dependency leaf/ancestor drift, wrong recorder owner/name, native-scratch
 drift and initialization/partial/close/cancel failures. Deleting the isolated
 destination or a parent/identity guard must fail its matching control. The plain
