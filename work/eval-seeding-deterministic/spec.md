@@ -1997,7 +1997,7 @@ to evade the source cap. Executable and policy files always belong to the closur
      `5084dfed3d6500d1b63a0331b0c149cfd0922bd3`；其余接点保留设计源
      `53bed46d5eb694bfd05578f5ac1841b9443749c6`。后续实现须绑定实际
      已接受 source 与完整 recipe bytes。此条不扩大 C1 的六个功能路径或三个 pin 路径，
-     本测试表不改产品行为，不开放整个测试文件或其它测试；唯一辅助生产兼容接点另列于下文。
+     本测试表不改产品行为，不开放整个测试文件或其它测试；固定辅助生产接点分别列于下文。
 
      | 测试路径与接点 | 修改范围与保留要求 |
      | --- | --- |
@@ -2034,8 +2034,9 @@ to evade the source cap. Executable and policy files always belong to the closur
      控制；变换缺失/重复/越界、错误 source/copy/行号、漏依赖或 guard 被删除均须拒绝。
      除表内固定绑定、先决适配、真实新增 configuration P 的分项精确计数、`close-failure` 及
      `PY_SOURCE_CANCEL` 的上述两个精确 owner 后置条件特例外，其它源码、observer/诊断语义、
-     场景和断言判定不变。`PY_STALE_PREPARE` 原四个 observer literal、九份 source copy 的
-     maps/逆变换及两个 native 旧绑定保持原字节；上述 first-Git phase literal 仅准补该
+     场景和断言判定不变。`PY_STALE_PREPARE` 原四个 observer literal、转换/逆变换规则
+     及两个 native 旧绑定保持原字节；仅下文非干扰根修允许按新 consumer bytes 机械
+     重绑既有 SHA 与九份 copy 的实际 maps 行值，并完整验证全部逆变换。上述 first-Git phase literal 仅准补该
      receiver 默认值，不属于 PY_STALE_PREPARE 的修改。上述测试代码造成行号移动时，
      仅可在既有直接 dashboard caller line-binding 接点机械重绑最终实际行号，并核完整
      绑定与实际生成行关系；不借此改其它 source/copy/observer 或旧 native 绑定。
@@ -2047,7 +2048,7 @@ to evade the source cap. Executable and policy files always belong to the closur
      G2 与分开的 high-risk plan 接受后，仍须 fresh exact source/recipe/resource review 和
      manager GO 才可改这些指定接点或执行普通 fixture/CI；旧 GO 不复用。此条不授权新的
      full-scope、LOCAL7/D、native、真实 target、网络、安装或激活，也不将普通 fixture 当 seed。
-   - **唯一辅助生产兼容：aggregate 的 capture namespace。** 仅允许
+   - **辅助生产兼容：aggregate 的 capture namespace。** 仅允许
      `sandbox/v1/qualify.py` 的 `aggregate` store namespace 分类及必要私有检查，
      与 `scripts/test/sandbox-launcher.test.sh` 原三批、十四 case 的 aggregate 回归及
      必要原 fixture 准备。此项绑定设计源 `5084dfed3d6500d1b63a0331b0c149cfd0922bd3`，
@@ -2075,6 +2076,137 @@ to evade the source cap. Executable and policy files always belong to the closur
      `complete=True`、skip 负例或新建场景矩阵/框架。单独 high-risk plan 须闭合安全分类
      算法、实际检查/读取/重查/关闭成本、取消与首错归属，并复核实际 pin；其它 pin 移动
      则返回 gate。未知费用/容量不算 fit，原 cap/预算与 fresh source/recipe/resource GO 保持。
+   - **C1 私有录制与 native dependency 的非干扰。** 设计源为
+     `d5c3ab5d001ec117d3f6f85cd17520f6ba6f72af`。正常 recorder 写入不能破坏仍存活
+     `DependencySnapshot`、input snapshot 或 T 原件的 ancestor/target 身份封印。
+     这是原非干扰要求的生产根修，不以 fixture 重定向、放松 guard 或丢弃录制替代。
+
+     | 原路径与精确接点 | 唯一新增修改范围 |
+     | --- | --- |
+     | `shadow/v1/enforced-reproduction.py` | `reproduce` 的原工作目录准备与首次 retention 次序；`_retain_native_runtime` 的固定 recorder 初始化；`StableDirectory` 的 recorder parent、runtime/T retention、parent transition、seal/close 责任；`_seal_capture_recording` 的同 owner parent 选择。其它业务/启动/执行/资格语义不变。 |
+     | `shadow/v1/_consumer.py` | `Anchor.retain_preparation` 内固定 native scratch 来源 parent 与 P 写入 parent 的分离、原 `_T_transition` 的对应身份检查和必要私有接线。实际 held/ACL/full-byte/费用/关闭机制不替换；不开放其它 producer 行为。 |
+     | `scripts/test/shadow-enforced.test.sh`、`scripts/test/candidate-content-preparation-fixtures.py` | 原共享 orchestration flow 与 `raw16_preparation_P_handoff` 的同路径非干扰/拒绝/关闭对照。保留原 13 个 flow 控制、29 个 evidence 文件和七个 T 正反 case。 |
+     | `scripts/test/scope-qualification.test.sh` | 仅既有受影响 consumer source SHA、九份私有 copy 的行号映射与直接 caller 行号的机械重绑；完整逆变换与四个 observer body 保持，不新增 observer 或 AST loader。 |
+     | `evals/v1/evals.jq`、`evals/v1/evals-driver.sh`、`evals/v1/evals-launcher.sh` | 仅原 source/closure/program→driver→launcher 链上由这两个生产文件实际改变所移动的 digest；原完整闭集及检查保留。 |
+
+     在同一次已经准入的 private work 内，只使用固定子目录 `recording` 作为 recorder
+     写入目的地。它与原 `dependencies`、`inputs`、preparation scratch 和 `runtime`
+     是 sibling，不是新的外部 root、用户可选目录或传递能力。`runtime` 仍是原
+     HOME/TMPDIR；不得改该 env 或把录制移到会受其 native 临时写影响的 ancestor 链。
+     先完成原固定 work 子目录准备，再排他创建并持有这个空的 0700 子目录；
+     必须在任何 dependency/input snapshot 及 recorder P 的封印之前完成。
+     `reproduce` 的初次 native-runtime/parent-input retention 因此位于准备之后；
+     原 writer 已有准备次序通过同一私有 owner 使用它，writer 源码不需更改。
+     同次实际 Anchor、caller/request、work holder 与 recording holder 必须唯一关联。
+     原 physical/nonlink、完整 ancestor、uid/gid/mode/ACL、空目录与 named/held 身份
+     检查全部成立才可使用。既存同名、错误 parent、替换或 partial 初始化不能被接受、
+     清理重用或重试成成功。初始化只尝试一次；失败按原 recording 失败隔离保留
+     unusable/首错，不回退到 work 根写入，也不代替原 native 结果。
+
+     所有既有 local recorder 创建必须在同一 recording holder 下：native/runtime
+     各角色、parent inputs、sudo companion、prepare/inspect 的 preparation-runtime
+     副本，以及 reproduction/write H-copy。原相对成员名、role、ordinal、原件
+     acquisition、完整 raw 与 read/copy/close 顺序仍各自绑定；不新造原件或合并同 SHA。
+     native helper/jq snapshot 的实际 path、digest、size、private directory/name 与
+     原全部 recheck 保持。原输入和 scratch 路径、child argv/env、host store、输出
+     bundle、29 文件集合与 cleanup 权限不变。writer 及其测试 copier 字节不变；
+     同一 StableDirectory 被原 writer 调用时也必须遵守这一固定 parent 关系。
+
+     preparation 的读取仍从原 work holder 下的原 scratch 取得；复制只写 recording。
+     这两个实际 parent 在本次 owner 内固定绑定，不能用一个的 before/namespace
+     冒充另一个。纯 recorder 写前后，完整核原 native work parent、scratch/T 原件
+     仍未改变，另对 recorder parent 核实际新增闭集与前后 named/held 状态。只更新
+     原录制副本通过已验证自身写入取得的 recorder-parent 关系；不得刷新 dependency、
+     input 或 T 原件的 before，不能重开它们来接受未知漂移。原 T cleanup/inspect
+     改变 scratch 的生命周期继续按真实原 target、namespace、清理/返回与前后关系
+     验证；必要新 T source 仍须按原全 bytes/目标身份与 once-close 规则取得。
+     recorder 的新增项不能伪装成 native work 的新增项，也不能以分离为由跳过
+     T_source.recheck、previous-source 检查或首错/取消传播。
+
+     从第一次 P 到最终 seal，持有并复核同一 recording parent 和原 work parent。
+     H-copy、local runtime seal、P refresh/close 都使用实际对应 holder；
+     close 前核完整 P/T 原件关系，最后关闭新增 holder，所有部分取得的 FD 也只关闭
+     一次。普通失败保留原 native 控制流与实际失败账；marked cancellation、首错
+     与次错优先级照原规则传播。不吞错误、不清 unusable、不重试不确定 FD。
+     创建、ancestor acquire/dup、metadata/ACL、namespace、读/写/比较、重叠持有、
+     refresh/seal、失败和关闭的全部实际成本归同一原 case/operation 账，不能因新 inode
+     重置 case 或额度。新目录/partial 的实际留存与每份副本按原类别计费并受适用物理/文件帽，未知保持
+     UNKNOWN；不增加 cap、窗口、role、occurrence、wire 字段、inherited FD、argv 或权限。
+
+     原共享 flow 必须证明同一真实 helper/jq 原 acquisition 与原 snapshot 路径在合法
+     多次 recorder 写、prepare/inspect、H-copy 和 seal 前后仍通过完整 recheck；
+     输入 snapshot 与 T 原件同样保持。以该原载体及七 case T 载体验证固定 parent
+     的 full-byte/身份/费用/一次关闭，不能只到第一个 helper 检查。保留普通模拟
+     native launch/probe 的既有边界，不把 unqualified context 变为完成或 seed。
+     有限负例仅变动原 dependency leaf/ancestor、recorder owner/name 或 native scratch
+     关系之一：未知 drift 仍按原 E_DEPENDENCY/E_STORE 拒绝；creation/partial/close/
+     cancellation 保留原失败隔离。删除隔离落点、原 identity/recheck 或双 parent 关联
+     检查，须使对应已有配对控制失败；不扩诊断矩阵或执行包。
+
+     这两个生产文件都属于原 R9.3 路径，enforced 不是九个 adoption-only 之一。
+     本条是单列的 C1 非干扰辅助接点，不把 C1 六功能路径写成七个，不扩大原
+     20-path、42-path 或 SOURCE 84 成员集合；九个 adoption-only 文件及字节全部不变。
+     consumer 新 bytes 只能通过原严格生成配方重绑九 copy/mapping，四个 observer
+     literal、转换/逆变换规则及两个 native 旧绑定不变。保持 evaluate-scope 原 blob；
+     pin 必须从独立审过的实际 bytes 按原顺序更新。任一其它路径/pin 或更宽改动需求
+     返回 gate，不复用旧 source GO。G2 后仍须分开的 high-risk plan 与 fresh
+     source/recipe/resource 接受；本条不授代码执行、真实 target/native、窗口或网络。
+   - **C1 原 foreground owner 的异常清理。** 绑定同一设计源中
+     `shadow/v1/_consumer.py:_DarwinChildOwner._foreground` 的异常清理边界；
+     它不是 scope Reader 的同名方法。只修实际已取得 child 的 best-effort
+     TERM、首次 wait、KILL、reap 与 group-gone probe 链，不开放其它 child/Reader
+     生产接口。成功路径、原闭集 argv/env、FD6/handoff、pipe 上限、session/owned
+     权限与原总 deadline 不变。
+
+     每个适用的清理步骤都必须在原预算内独立尝试。TERM、首次 wait 或 KILL 的
+     非 lookup 错误须留为真实后错，不能跳过后续仍需的 KILL/reap/probe。
+     ProcessLookupError 只说明该信号/探测位置的实际 lookup 结果；关闭 pipe 不能
+     代替 wait/reap。首次 wait 仍最多 2 秒，后续 wait 仍限同一 cleanup_end 的
+     剩余额；cleanup_end 仍为原当前时刻加 10 秒，inherited 时再受原 self.deadline
+     限制。不重置 deadline、不增宽 timeout、不用无界 sleep/retry。原已收取 child
+     不需重复 wait，但 KILL/group probe 的原适用规则和真实结果不能伪造。
+     继续保留 selector、每条 pipe、handler、mask 与 handoff 的实际关闭/恢复顺序。
+     finally 内某个关闭/恢复失败也须保存实际错误，并尝试其余独立 owned 资源的
+     必要关闭/恢复；已完成的关闭不重试，不能以 mask 恢复替代 pipe/reap。
+     保留原首错及取消优先规则；普通清理错误不能覆盖 primary。按真实发生顺序
+     保存同一异常对象，去重且无自环/循环的 cause 链，未尝试不记成功。
+
+     测试仅开放 `scripts/test/scope-qualification.test.sh` 的
+     `PY_OBSERVER_OWNER_CONTROLS:owned_cleanup_controls` 与直接相连的
+     `foreground_state_controls` 两组固定接点。普通无 gate receiver 使用原
+     `_DarwinChildOwner` 类型并初始化原 `ledger=None` 状态；不得在生产增加宽松 getattr、伪 gate/deadline 或
+     p_handoff。固定 clock 须让原启动前准入通过，再在原 owner/IO 阶段触发对应
+     deadline/取消；清理阶段按同一单调时钟和剩余预算验证，不把提前拒绝冒作
+     已取得 child 的清理。补全原 transport 的 TimeoutExpired、受控 sleep 与
+     signal-0 probe，区分信号尝试和 group probe；不执行新命令或伪造普通 FD。
+     八个 normal/term/kill/both/lookup/wait/both-wait/duplicate 控制、原真实 child
+     和 native wait、pipe 关闭、mask/handler/selector 顺序及所有原 IO/拒绝控制保留。
+     仅将旧单一 wait(timeout=10) 和未分 signal-0 的字面断言重绑为上述原 phase
+     在固定 clock 下的精确 timeout、实际调用顺序和同一去重 cause 链；
+     不放宽为任意 timeout、任意异常、可缺 wait 或可缺后续清理。
+     若 fixture 在被测 Popen 接管前已创建 child，先保存真实失败及调用/关闭状态，
+     再在原测试清理预算内由 fixture 关闭其实际拥有资源；fallback 不算被测方法
+     清理成功，不能覆盖原 FAIL。删除任一后续清理尝试或首错保留，原配对控制须失败。
+     全部实际调用、等待、metadata/FD/失败费用照付；普通 transport 不证明 native
+     EPERM、kernel group-gone 或任何新资格。consumer 移动的 SHA/maps/pin 仅按上条
+     原机械链重绑，四个 observer literal、九 copy 转换/逆变换及两 native 旧绑定不改。
+
+   - **两个未定位失败的固定测试诊断。** 以下仅允许在原失败边界输出必要已有证据，
+     不授权猜测修复、改变成功判定或扩大生产修改面；内部原因继续标作 UNKNOWN。
+
+     | 原测试接点 | 仅允许的失败证据 |
+     | --- | --- |
+     | `scripts/test/candidate-content-preparation-fixtures.py:raw16_t_lifecycle` 的原 writer two-roots 循环和末尾复合断言（设计源 1809–1839） | 失败时保存实际 writer_calls 次数/原两个 operation 标记、unusable 与已有 preparation leaf 的 failure/errno/incomplete/关闭状态。已有 T parent transition 必须保留，不按“缺接线”改写；两次执行、两个 scratch、真实 seal/成员及全部原断言不变。 |
+     | `scripts/test/shadow-self-host-evidence.test.sh` 原 scope harness pre/post evaluator 调用（设计源 2141–2163） | 在普通测试 stderr 标明原 pre/post 调用阶段、真实退出状态及原已取得的有界错误码/失败事实；保留一次原 evaluate-scope 调用、完整原 stdout/stderr 文件和实际 FAIL。不得 mock evaluator/Reader、删除两真实记录、吞 E_RUNTIME 或改 not-proposable、reason、qualification、authority/enabled、authentication 和 proposal 断言。 |
+
+     只投影既有 receipt/leaf/call 的固定类型、布尔、计数、阶段与错误类别/errno；
+     不输出 secret、原 payload、任意 exception repr、完整环境或新的大 ledger。
+     原全量记录继续保留，投影不能替代它或改变退出状态。不得新增 observer body、
+     生产诊断 API、任意 selector、框架或场景矩阵。若已有事实仍不能定位，保持
+     UNKNOWN；任何必须触达的新生产接点须以实际证据重新过对应 gate。
+     这些接点都已在原 R9.3 路径表内；42/SOURCE84/原 20-path、六功能三 pin
+     集合及九 adoption-only 文件不变。完整独立 high-risk plan、fresh source/
+     recipe/resource review 与 GO 仍先于代码和执行；不借用旧 CI 或 native 窗口。
    - PR 2 and PR 3 each change the shipped seeded and declared counts, asserted in
      `scripts/test/evals-framework.test.sh:83-84` (and its pass message at `:90`) and
      `scripts/test/evals-dashboard.test.sh:71`: 8 and 1 after the first seed PR, 9
@@ -2129,6 +2261,10 @@ to evade the source cap. Executable and policy files always belong to the closur
    edit set is exactly 42 paths: the original 40, C2 bootstrap, and qualify.
    The original 20-path subset, six C1 functional paths and three pin responsibilities,
    nine adoption-only paths and SOURCE 84 remain unchanged; qualify joins none of them.
+   The already listed enforced-reproduction.py and _consumer.py permit only the
+   additional fixed R9.2 noninterference and foreground-owner cleanup contacts;
+   their listed regressions, test-only failure diagnostics and moved-pin bindings
+   add no path or adoption exception.
    No workflow, installed
    configuration, profile or runtime selection changes. Existing immutable pins
    outside these paths that would need change stop implementation for a bounded
