@@ -2144,13 +2144,44 @@ for scope_case in pre post; do
       "$scope_dir/risk-$scope_case.json" "$scope_dir/kill-$scope_case.json" "$scope_dir/duty-$scope_case.json" \
       "$tmp/marker.json" "$legacy_bundle_root" "$legacy_source_git" >"$scope_dir/evaluation-$scope_case.json" 2>"$tmp/scope-$scope_case.err" || scope_status=$?
   if [ "$scope_status" -ne 0 ]; then
-    scope_error=UNKNOWN
-    IFS= read -r -n 64 scope_error < "$tmp/scope-$scope_case.err" || :
+    scope_capture=''
+    scope_read_status=0
+    IFS= read -r -d '' -n 128 scope_capture < "$tmp/scope-$scope_case.err" || scope_read_status=$?
+    scope_error=${scope_capture%%$'\n'*}
     case "$scope_error" in
       E_USAGE|E_LIMIT|E_PARSE|E_CANONICAL|E_RELATION|E_STALE|E_RUNTIME) ;;
       *) scope_error=UNKNOWN ;;
     esac
-    printf 'scope harness stage=%s exit=%s error=%s\n' "$scope_case" "$scope_status" "$scope_error" >&2
+    scope_owner=UNKNOWN; scope_point=UNKNOWN; scope_errno=UNKNOWN
+    if [ "$scope_error" != UNKNOWN ] && [ "$scope_read_status" -eq 1 ] && [ "${#scope_capture}" -lt 128 ] &&
+       [ "$scope_capture" != "${scope_capture#*$'\n'}" ]; then
+      scope_record=${scope_capture#*$'\n'}
+      case "$scope_record" in
+        'SCOPE_FAIL_V1 '*$'\n')
+          scope_record=${scope_record%$'\n'}
+          scope_rest=${scope_record#SCOPE_FAIL_V1 }
+          candidate_owner=${scope_rest%% *}; scope_rest=${scope_rest#* }
+          candidate_point=${scope_rest%% *}; candidate_errno=${scope_rest#* }
+          scope_valid=true
+          [ "$scope_record" = "SCOPE_FAIL_V1 $candidate_owner $candidate_point $candidate_errno" ] || scope_valid=false
+          case "$candidate_owner:$candidate_point" in
+            U:0) ;;
+            F:*|R:*|C:*)
+              case "$candidate_point" in ''|0*|*[!0-9]*) scope_valid=false ;; esac
+              [ "${#candidate_point}" -le 6 ] || scope_valid=false ;;
+            *) scope_valid=false ;;
+          esac
+          case "$candidate_errno" in
+            NONE|EACCES|EPERM|ENOENT|ENOTDIR|EEXIST|ELOOP|EBADF|EMFILE|ENFILE|ENOSPC|EIO|EPIPE|EINTR|EINVAL|ETIMEDOUT|OTHER|UNKNOWN) ;;
+            *) scope_valid=false ;;
+          esac
+          [ "${#scope_record}" -lt 64 ] || scope_valid=false
+          if [ "$scope_valid" = true ]; then
+            scope_owner=$candidate_owner; scope_point=$candidate_point; scope_errno=$candidate_errno
+          fi ;;
+      esac
+    fi
+    printf 'scope harness stage=%s exit=%s error=%s owner=%s point=%s errno=%s read_status=%s file_complete=UNKNOWN read_error_free=UNKNOWN\n' "$scope_case" "$scope_status" "$scope_error" "$scope_owner" "$scope_point" "$scope_errno" "$scope_read_status" >&2
     fail "scope harness ($scope_case): evaluate-scope.sh refused the two real shadow records"
   fi
 # A seeded failing eval keeps inputs well-formed while yielding scope.eval-failing.
