@@ -2085,9 +2085,26 @@ to evade the source cap. Executable and policy files always belong to the closur
      | --- | --- |
      | `shadow/v1/enforced-reproduction.py` | `reproduce` 的原工作目录准备与首次 retention 次序；`_retain_native_runtime` 的固定 recorder 初始化；`StableDirectory` 的 recorder parent、runtime/T retention、parent transition、seal/close 责任；`_seal_capture_recording` 的同 owner parent 选择。其它业务/启动/执行/资格语义不变。 |
      | `shadow/v1/_consumer.py` | `Anchor.retain_preparation` 内固定 native scratch 来源 parent 与 P 写入 parent 的分离、原 `_T_transition` 的对应身份检查和必要私有接线。实际 held/ACL/full-byte/费用/关闭机制不替换；不开放其它 producer 行为。 |
-     | `scripts/test/shadow-enforced.test.sh`、`scripts/test/candidate-content-preparation-fixtures.py` | 原共享 orchestration flow 与 `raw16_preparation_P_handoff` 的同路径非干扰/拒绝/关闭对照。保留原 13 个 flow 控制、29 个 evidence 文件和七个 T 正反 case。 |
+     | `scripts/test/shadow-enforced.test.sh` | 原共享 orchestration flow 的同路径非干扰/拒绝/关闭对照；保留原 13 个控制和 29 个 evidence 文件。 |
+     | `scripts/test/candidate-content-preparation-fixtures.py` | 仅以下十六个原 StableDirectory caller：`raw16_t_lifecycle`、`raw16_preparation_P_handoff`、`raw16_local_P_after_H_copy`、`raw16_local_P_handoff`、`raw16_p_acquisitions`、`raw16_T_enforced_chain`、`raw16_T_writer_chain`、`raw16_T_transition_refusals`、`raw16_adopt_registered_cancel`、`raw16_T_live_stable`、`raw16_P_handoff_accounting`、`raw16_parent_P_handoff`、`raw16_parent_P_Hcopy`、`raw16_parent_carrier`、`raw16_sudo_companion`、`raw16_C1_T_windows`。只接真实初始化和 bound recorder 的 P/H-copy/seal/case/目标路径；`raw16_P_handoff_accounting` 包括其登记给 holder 的原 nested-stable。保留全部原 case，含 `raw16_preparation_P_handoff` 七个正反 case；`raw16_t_lifecycle` 除原失败诊断外只新增此固定正向适配。 |
      | `scripts/test/scope-qualification.test.sh` | 仅既有受影响 consumer source SHA、九份私有 copy 的行号映射与直接 caller 行号的机械重绑；完整逆变换与四个 observer body 保持，不新增 observer 或 AST loader。 |
      | `evals/v1/evals.jq`、`evals/v1/evals-driver.sh`、`evals/v1/evals-launcher.sh` | 仅原 source/closure/program→driver→launcher 链上由这两个生产文件实际改变所移动的 digest；原完整闭集及检查保留。 |
+
+     上述十六个 caller 绑定设计源 `196b503de35105a6ae2b6c49b415b29498a1c803`。
+     所有原 backing 准备完成后，在该 owner/request 的全部 dependency/input/T/P 封印
+     及首个 local P/case 绑定前，接同一真实固定 recorder initializer 恰一次。P/H-copy、
+     seal、局部目标与 case 从该 bound recording holder 取得；native scratch/T 保持各自原 work 位置。
+     其它原 acquisition 保持原真实 locator、同一对象、次数与完整 bytes；不为 recording
+     迁移原件、重开 O 或重取 acquisition。
+     原 fault 挂载须在初始化成功后命中原目标操作，不因提前失败而遮蔽原登记/取消/关闭
+     控制。完整新增初始化、metadata、partial、复制、重叠持有和关闭费用照付；只准按实际
+     分项调整对应计数，不重置额度、借别的 context、填假 holder 或伪造 T native transition。
+     `raw16_T_writer_chain` 的原 renewed=1/3 仅对应旧同 parent 录制副作用；改为纯 recorder
+     写入不续接 native 祖先、同一 T 对象完整 recheck 后仍有效。原实际 T 读取、两 scratch、
+     inspect 的真实旧链替换/关闭及全部拒绝断言保留。`raw16_C1_T_windows` 的 assembly
+     必须绑定同次 recorder case，不能先建 work-inode case 再另开额度或丢弃已计费用。
+     低层直接 Anchor/acquire 的同 parent 合同保持原字节；不改 `raw16_local_P_clone_allocation`、
+     `raw16_scope_sudo_source`、`raw16_scope_acquisitions` 或 `raw16_C1_gate_revision`。
 
      在同一次已经准入的 private work 内，只使用固定子目录 `recording` 作为 recorder
      写入目的地。它与原 `dependencies`、`inputs`、preparation scratch 和 `runtime`
