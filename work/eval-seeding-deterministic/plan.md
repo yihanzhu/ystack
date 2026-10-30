@@ -1,5 +1,5 @@
 ---
-spec-blob: db56b3c5dd4eee21da12211da5a588f44e9333c9
+spec-blob: 9e93af990e0b2e9685bd7cfce444431f8567807e
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-26
@@ -14,8 +14,12 @@ one complete two-source delivery. Source preparation does not accept a dependenc
 a real recording, native qualification or either seed batch.
 
 This plan binds accepted G2 spec blob
-`db56b3c5dd4eee21da12211da5a588f44e9333c9` at main
-`9ca414b1ebe17509a212f8bf5b8ca2ba548ebaa8` (PR #785).
+`9e93af990e0b2e9685bd7cfce444431f8567807e` at the current planning base
+`20bf23388d1610b860eefcc301b895dfabf2e0b1` (PR #787).
+This amendment uses frozen design source `0ad7f40d262d7f84107b817fed06515d80d56bab`;
+its completed CI used the earlier execution base
+`5edbd3f6a21078ab9d0e24c98fa19a17b80ae08d`. Earlier checkpoint locators below
+remain historical and do not select the current source or a new execution window.
 The separate high-risk plan-only gate must pass before dependent code.
 RAW16 acquisition design
 locations retain historical source `c1d9d23e42e6efe2d6da1aae3d23b34564b4080d`
@@ -773,13 +777,14 @@ blocked pending its exact scope gate.
 
 ### Existing regression compatibility (R9.2)
 
-The compatibility requirements below remain accepted obligations. This pass edits
-only the three original C2 spawn-environment constructions and the fixed-source
-observer first-line bridge listed below, plus necessary actual mechanical bindings.
-The C2 bounded-counter allocation and all other ordinary observer compatibility
-remain frozen, together with the repaired
-finally seam, runtime guard proof, three earlier compatibility contacts and all
-earlier root-fix contacts stay frozen. The six C1 functional
+The compatibility requirements below remain accepted obligations. This pass opens
+only raw16_C2_source_tail's private backing and same-root caller argument, observe_case's
+existing exception/status propagation, and shadow-write's existing scope_check stdout
+forwarding. The three current paths and contacts are the first three rows below; only
+necessary actual mechanical bindings may move. The three C2 spawn environments,
+observer algorithms/first-line bridge and other compatibility remain frozen. Keep the C2
+bounded-counter allocation, finally seam, runtime guard proof, three earlier
+compatibility contacts and all other repaired contacts unchanged. The six C1 functional
 paths, three pin paths, SOURCE 84, nine adoption-only paths and original 20-path
 source subset stay unchanged. The auxiliary production boundaries are the accepted
 qualifier compatibility, fixed recorder/foreground contacts and the temporary
@@ -787,11 +792,15 @@ scope_pre_failure_point below; qualification standards and success output schema
 stay frozen.
 Rebind exact source/recipe bytes after this plan lands and main merges. Add no
 selector, recursive loader, observer, framework, workflow or diagnostic matrix.
-Every compatibility row below except the C2 spawn-environment and observer first-line rows remains frozen in this pass.
+Every compatibility row below except the first three rows remains frozen in this pass.
+T/scope-pre, L/R, production and formal/native contacts do not reopen.
 Retain all controls and failure evidence.
 
 | File | Fixed contact and order of work |
 | --- | --- |
+| `scripts/test/candidate-content-preparation-fixtures.py` | Only `raw16_C2_source_tail`: prepare the complete private SOURCE84 plus launcher backing inside its existing temporary area. Pass the same copied root to the original C2Sources and later _C2FixtureCaller; retain every original owner, guard, signal, accounting assertion and mutation call. Follow the source-backing requirements below. |
+| `scripts/test/scope-qualification.test.sh` | Only `PY_OBSERVER_OWNER_CONTROLS.observe_case`'s existing caught Exception and status assertion: preserve the same assertion failure and chain its same-call original exception, with bounded reference lifetime and original cleanup. No observer transform or output schema changes. |
+| `scripts/test/shadow-write.test.sh` | Only the existing `scope_check` result forwarding: move the original single stdout print before the original returncode check; preserve captured stderr, child failure and cancellation priority. No new read, subprocess, output field or collector. |
 | `scripts/test/scope-qualification.test.sh` | Only `_ordinary_observer_metadata_compat` fixed-source AST-to-CodeType first-line authentication: distinguish the exact decorated `HeldPath` class definition position from its compiled code first line. Preserve all source, uniqueness, filename, type and runtime identity checks; apply the fixed mapping below without changing code objects or formal sources. |
 | `scripts/test/candidate-content-preparation-fixtures.py` | Only the existing spawn environments in `_C2FixtureCaller.invoke`, `raw16_C2_lifecycle_core` and `raw16_C2_terminal`: keep fixed `LC_ALL`/`PATH`; forward the original `TMPDIR` value, including empty, only when present. Use the local construction and original-call ordering below; no other environment or caller change. |
 | `scripts/test/scope-qualification.test.sh` | Only `PY_OBSERVER_OWNER_CONTROLS/observe_case`: one `_ordinary_observer_metadata_compat` private transformation applies the same fixed metadata-exception routing to old/uncached/cached ordinary copies. Preserve their original classifiers and formal sources. Only the original errno tail assertion and necessary actual bindings may change. |
@@ -807,6 +816,71 @@ Retain all controls and failure evidence.
 | `scripts/test/candidate-content-preparation-fixtures.py` | `raw16_preparation_P_handoff`: wire the two existing transitions described below in its seven original cases. Check the inspect result before indexing, while retaining the actual failed retention and its errors. |
 | `scripts/test/candidate-content-preparation-fixtures.py` | Only `raw16_C1_gate_revision`: select the original `session.call_id` assignment and immediately following request assignment from `_Generator._kill_source_request_phase`. Bind the original five-role transition across request phase → `kill_source` → result phase: `K_REQUEST`, same-session `context[1].release_local()`, `not session.local and not session.remote` check, collector call, `K_DONE`. |
 | `scripts/test/shadow-enforced.test.sh` | In the first `PY_REPRODUCTION_VALUES`, add only the real `_runtime_sha_values` to the original ten-name AST selection. Require exactly one definition of each of `Refusal`, `canonical`, `sha`, `parse`, `document_ref`, `_native_provenance_values`, `_runtime_sha_values`, `_reproduction_provenance_values`, `_reproduction_record_values`, `_reproduction_bundle_values`, `StableFile`. Keep the existing namespace and all 32 original assertions; the helper uses its existing `sha/c`, so retain the exact `marked_sha`/bundle order, early-failure prefixes and error payloads. Do not alter expected marks, omit the Python hash, catch NameError as success or use a recursive loader. |
+
+**Existing test failure propagation.** Bind these two contacts to source
+`0ad7f40d262d7f84107b817fed06515d80d56bab`, execution base
+`5edbd3f6a21078ab9d0e24c98fa19a17b80ae08d` and the accepted G2 spec above.
+The current planning base is `20bf23388d1610b860eefcc301b895dfabf2e0b1`;
+the source and its earlier execution base remain distinct from that artifact base.
+They preserve errors and bytes already obtained by the original test. They do not
+repair or establish an inner observer/T/scope root and add no diagnostic facility.
+
+In observe_case's original handler (8700–8704), retain the same caught Exception
+in one local reference only after the unchanged kind != gap / str(error) == E_STALE
+assertion succeeds. Keep the gap else assertion, original observe call, exception
+class and tracing/sys.settrace/sys.argv restoration at their original positions.
+Do not catch BaseException or change cancellation handling. Run the existing
+result read, evidence construction and proof assertions in their original order.
+Keep the status assertion (8721) unchanged. Only when that assertion fails, raise
+that same AssertionError from the retained same-call Exception. If none was caught,
+re-raise the same AssertionError without supplying a cause. Do not substitute the
+expected E_STALE for the assertion, reconstruct an exception or inspect frames,
+locals or traceback contents. Use only normal exception chaining, without a
+formatter, print, payload/namespace field, hook, AST patch, global replacement or API.
+
+Initialize the local reference before the original call and clear it in an enclosing
+finally on every exit, including a failure before the status assertion. Check its
+name against the complete function. Do not clear or mutate the original exception's
+traceback, cause or context. The assertion retains its cause only through normal
+failure propagation; add no persistent or cross-call reference. Keep original
+finally/cleanup and all identity/errno/bool/auth/cache/shape/callback assertions,
+three variants/four kinds and 12-event/16-frame payload limits. The observer source,
+classification, same-request checks and private transformation remain unchanged.
+
+In shadow-write's original scope_check result handling (1297–1301), move the same
+single print(scope_check.stdout.decode()) immediately before the unchanged returncode
+ok check. Use only already-captured stdout. Keep the subprocess, argv, environment,
+timeout, PIPEs, predicate, failure message and captured stderr expression unchanged.
+No file reread, child rerun, output parse/filter/repackaging, labels, output fields,
+formatting, flush call, output destination or second print invocation is allowed.
+If this decode/print raises Exception, first apply the original _scope_signal_cancel
+semantics: re-raise that same marked cancellation, including marked InterruptedError,
+even when the child returncode is nonzero. Only an ordinary output Exception with
+known nonzero child status may continue to the original failing ok check, preserving
+that child failure. With zero child status, re-raise the ordinary output Exception.
+Do not catch BaseException; KeyboardInterrupt/SystemExit and other uncaught
+cancellation continue to propagate. Use a local try/
+except around the same print, with no helper or fallback output. A nonzero child
+still fails before the same subsequent assertions/calls. Success keeps the same
+stdout and successful ok count, with stdout now preceding that original ok marker.
+
+Use only standard exception presentation in the existing ordinary CI runtime,
+with the same captured errors and already-used modules. Default Python traceback
+rendering may trigger internal linecache/module-source reads; do not claim zero
+underlying I/O. Charge implicit reads, reference lifetime, rendering and newly
+reached forwarding/decoding/transport to the original ordinary invocation. Their
+unmeasured scope and actual cumulative costs stay UNKNOWN, with no zero-read,
+physical-cap or complete-fit guarantee. Add no explicit fixture source/frame read,
+custom formatter, measurement, arbitrary loader/source, network or credential scope.
+No new explicit fixture read, subprocess, case, trial, metadata or collector is allowed. Preserve
+complete existing streams and actual failures; do not fill missing job6 values from
+job1 or infer an inner root from exception chaining. Deliberately suppressed inner
+context is not recovered. Rebind only actually moved existing source/recipe hashes
+and line/dashboard literals. Do not regenerate unchanged SOURCE84/maps/pins.
+Full diff/inverse and independent review must confirm unchanged calls, assertions,
+cleanup and priority. Normal artifact-scope review, protected plan landing and fresh
+CODE/source/recipe/resource/GO gates precede implementation. No current acceptance
+or execution authority follows from this candidate; all UNKNOWN/P1/native/G3 debt stays.
 
 **Fixed-source observer first-line bridge.** Bind the actual implementation source
 `e746764b0f06fb88e06289bc2d71a02f5348f7ff` and the unchanged complete consumer
@@ -839,8 +913,9 @@ nested recheck, all three variants/four kinds, unique full transforms/inverses,
 every original assertion. Only actually moved ordinary-copy hash/line/dashboard
 bindings may change; formal/native bodies and SOURCE84/maps/pins remain frozen.
 All added source/AST/value work is charged; unmeasured costs remain UNKNOWN.
-The observer-freeze statements elsewhere retain every rule except this one
-explicit fixed-source first-line bridge. Fresh independent review is still required.
+This accepted first-line bridge and all observer algorithms remain frozen.
+Only the outer observe_case error propagation above may change in this pass.
+Fresh independent review remains required for the three current contacts.
 
 For ordinary observer compatibility, bind source
 `3d3d3aedd145054224ae8ef41a38c70048480f17` and the fixed full consumer SHA
@@ -950,7 +1025,7 @@ later errors, once-close, the single original call and all actual costs/caps.
 Unobserved compound components stay UNKNOWN; source analysis cannot fill them.
 Add no read, call, probe, field, print, loader or diagnostic path. This seam is not
 a recorder dual-parent caller or native proof. This accepted compatibility design
-remains intact; this pass opens only the three C2 environments and fixed-source first-line bridge.
+remains intact; this pass opens only the first three compatibility rows.
 
 The runtime guard proof uses the same `7f17a0181af3c4674df63f924c5b8f97f7938831`
 design source and unchanged consumer SHA. Verify that only ledger/deadline are
@@ -3365,12 +3440,87 @@ status changes in PR 1b.
 
 ### C2 fixed window session and implementation map
 
+**Private source backing for the original tail fixture.** Bind this contact to
+source `0ad7f40d262d7f84107b817fed06515d80d56bab` and execution base
+`5edbd3f6a21078ab9d0e24c98fa19a17b80ae08d`. Within the existing
+raw16_C2_source_tail TemporaryDirectory, finish one private source root before
+C2Sources acquisition. Reuse raw16_D_sources' complete real-copy pattern; do not
+invoke that test, add a loader/helper/framework or copy its fault matrix. Derive
+only the original 84 names from the fixed table in the already-read launcher,
+with its original generation substitution. Add the same launcher at its original
+relative path. No recursive checkout scan, alternate catalog or new subprocess.
+
+Use new independent regular files, never symlinks or hardlinks. Preserve complete
+bytes, the table's exact sizes/digests and 0644/0755 modes, and the launcher's
+original bytes/mode. Keep private directory modes and the original relative layout.
+The source, runtime and later caller directories must be siblings, not nested.
+Finish creation before any original holder freezes their parent metadata. Check
+all new local names against the full function; do not shadow its root argument,
+owner, first error, work, final, handlers or cleanup state. Keep preparation within
+the existing temporary-area and handler-restoration lifetime, including mutation.
+
+Pass the copied launcher to the single original C2Sources construction. Let the
+original D84 acquire, authenticate and load the copied consumer. Pass that same
+copied root to the later _C2FixtureCaller, preserving its strict owner.__file__
+equality and actual HeldPath identity. Do not alter either constructor. Preserve
+all complete SOURCE84, helper, D84 and consumer hash checks, exact directory scans,
+ancestor/name/ACL/mode/size/nlink checks and original target-root guards. No ACL
+mutation, getxattr replacement, synthetic source row, successful-state injection
+or catching rejection as success. The new tree must pass the actual unchanged
+guards; private placement does not promise that its host ancestry is acceptable.
+
+Keep the two real signals, the same first cancellation object, actual secondary
+EIO, once-close checks and complete source scalar differences. Keep original
+work/window/case settlement, duplicate-settle nonduplication, the second consumer
+cancellation, caller.transfer, finally restoration and every original assertion.
+The normal and mutation calls retain their counts and full body after setup.
+Do not invoke whole tests during preparation or add cases, calls, fields, prints,
+probes or test output. Only the finite copy's own required file operations are new.
+
+The original source_tail invocation owns this input preparation within its existing
+TemporaryDirectory and ordinary hosted CI harness preparation/resource boundary.
+Keep its costs in the existing manager source/recipe/resource record. The original
+raw16_D_sources already separates actual_D_work from fixture_source_copy_backend_R_W_C
+UNKNOWN; reuse that accounting boundary without calling that test or adding output.
+Include every invocation and mutation's actual source reads, destination writes,
+retained files/bytes, table/value processing, metadata, FD acquisition/close and
+temporary-area cleanup, including repeated, partial, failed and cancelled work.
+Unmeasured backend R/W/H/E/C, heap, metadata, physical and hosted totals remain
+cumulative UNKNOWN. The fixed 85 file contents total 3339085 bytes, with largest
+table item 531313 bytes; these are static shape values, not measured work, occupancy
+or proof of fit. Deletion, identical bytes and same-function reuse do not refund work.
+
+Keep later application work in its original owners: D84 work transfers through
+C2Sources.reconcile to C2 work, then the original caller's window/common/case
+settlement accounts each actual increment once. Preserve all original guards,
+watermarks, caps, carry-in, source-equality and duplicate-settle assertions. Never
+put harness copy costs into sources.work, create a preparation application owner,
+reset balances, borrow a pool or move application work into the harness category.
+No new numeric allowance, budget API, ledger field, print, probe or measurement
+facility is permitted. Record this distinction only in the plan and existing
+recipe cost entries. Retain original full CI streams, existing output and actual
+failure/NOTRUN/close evidence; do not add runtime output or treat source_unknown as
+measured harness cost. UNKNOWN is not spendable balance or complete-cost/native/
+physical-fit acceptance. Original hosted CI limits and application caps still apply;
+actual resource or cleanup failures remain failures. The normal exact source/recipe/
+resource review and execution GO remain required; this draft supplies neither.
+
+Static proof must close the complete setup-to-caller dependency and unchanged tail,
+not just the first C2Sources argument. Require full original-to-candidate diff and
+inverse, exact copied membership/bytes/modes and actually moved mechanical bindings.
+Keep production D84/C2/consumer/launcher, formal/native bodies, SOURCE84 members,
+maps/pins, old fixes and every prior failed/UNKNOWN/native/G3 obligation frozen.
+Collect the entire current CI batch before one combined plan review and protected
+landing; then normal source merge, fresh CODE/source/recipe/resource review and
+manager GO precede edits or the original full79/six-shard execution. No old GO or
+partial shard result accepts this backing, its closure or native qualification.
+
 **Optional spawn environment.** This design binds source
 `e746764b0f06fb88e06289bc2d71a02f5348f7ff` and execution base
-`91c1aafbc722eb958b1d0a4b2bc2a186ef2ce4cf`. Only the three environment arguments
+`91c1aafbc722eb958b1d0a4b2bc2a186ef2ce4cf`. The three environment arguments
 in `_C2FixtureCaller.invoke` (5972), `raw16_C2_lifecycle_core` (6250) and
-`raw16_C2_terminal` (6382) are open, with their necessary existing mechanical
-bindings. Bind final locations from actual bytes; do not change bootstrap,
+`raw16_C2_terminal` (6382) retain the following accepted design and are frozen.
+Only necessary actual mechanical bindings may move. Bind final locations from actual bytes; do not change bootstrap,
 workflow, run-all, evals-malicious, launcher or production behavior.
 
 At each existing spawn site, build a local `c2_spawn_env` with exactly
@@ -4125,7 +4275,8 @@ gates (R9.6).
   cannot leave the PR whose test checks their digests.
 - PR 3: `review_size: standard`, about 300-400 net added lines.
 - This plan-only amendment: `review_size: standard`. One concern: repair the fixed
-  ordinary fixture environment and source-to-code first-line compatibility contacts.
+  existing ordinary test compatibility: real C2 source backing and preservation
+  of already-caught errors/output at the two fixed test boundaries.
   Original regressions, bindings and runtime-invoice obligations stay intact.
 
 Each range waives only the soft line signal, never scope, tests, CI, review or human
