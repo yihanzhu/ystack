@@ -9270,12 +9270,41 @@ def _raw16_C1_generator_reporting_control(session, *, first_marked=False):
 def _raw16_C1_foreground_finally_seam(c, handoff) -> dict:
     import ast
     import copy
-    source = ast.parse(Path(c.__file__).read_text())
-    cls = next(node for node in source.body if isinstance(node, ast.ClassDef) and node.name == '_DarwinChildOwner')
-    method = next(node for node in cls.body if isinstance(node, ast.FunctionDef) and node.name == '_foreground')
-    original_try = next(node for node in reversed(method.body) if isinstance(node, ast.Try) and node.finalbody)
+    source_text = Path(c.__file__).read_text()
+    assert hashlib.sha256(source_text.encode()).hexdigest() == '7d58f60c6622ae4e3f22167a3429d72a0d65e826c8d91bf87a016644226018ad'
+    source = ast.parse(source_text)
+    classes = [node for node in source.body if isinstance(node, ast.ClassDef) and node.name == '_DarwinChildOwner']
+    assert len(classes) == 1
+    methods = [node for node in classes[0].body if isinstance(node, ast.FunctionDef) and node.name == '_foreground']
+    assert len(methods) == 1
+    method = methods[0]
+    tries = [node for node in method.body if isinstance(node, ast.Try) and node.finalbody]
+    assert len(tries) == 1
+    original_try = tries[0]
+    starts = [index for index, node in enumerate(method.body) if isinstance(node, ast.Assign)
+        and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id == 'primary']
+    assert len(starts) == 1
+    start = starts[0]
+    initial = method.body[start:start+4]
+    expected = ast.parse('primary=None;cleanup_errors=[];result_value=None\ndef later(error):\n cleanup_errors.append(error)')
+    assert ast.dump(ast.Module(body=initial, type_ignores=[])) == ast.dump(expected)
+    assert start+4 <= method.body.index(original_try) and not original_try.orelse
+    assert len(original_try.handlers) == 1
+    handler = original_try.handlers[0]
+    assert ast.dump(handler.type) == ast.dump(ast.Name(id='BaseException', ctx=ast.Load())) and handler.name == 'exc'
+    assert len(handler.body) == 2 and ast.dump(handler.body[0]) == ast.dump(ast.parse('primary=exc').body[0])
+    assert isinstance(handler.body[1], ast.If) and not handler.body[1].orelse
+    assert ast.dump(handler.body[1].test) == ast.dump(ast.parse('child is not None', mode='eval').body)
+    tail = method.body[method.body.index(original_try)+1:]
+    assert [type(node) for node in tail] == [ast.Assign, ast.For, ast.Assign, ast.For, ast.If, ast.Return]
+    assert ast.dump(tail[-1]) == ast.dump(ast.parse('return result_value').body[0])
     wrapper = ast.parse('def seam(native, handoff, selector, previous):\n child=None\n old_handlers={}\n try:\n  raise native\n finally:\n  pass\n')
-    wrapper.body[0].body[-1].finalbody = copy.deepcopy(original_try.finalbody)
+    controlled = wrapper.body[0].body[-1]
+    capture = copy.deepcopy(handler)
+    capture.body = copy.deepcopy(handler.body[:1])
+    controlled.handlers = [capture]
+    controlled.finalbody = copy.deepcopy(original_try.finalbody)
+    wrapper.body[0].body = wrapper.body[0].body[:2] + copy.deepcopy(initial) + [controlled] + copy.deepcopy(tail)
     ast.fix_missing_locations(wrapper)
     namespace = dict(c._DarwinChildOwner._foreground.__globals__)
     exec(compile(wrapper, '<actual-foreground-finally-seam>', 'exec'), namespace)

@@ -7886,7 +7886,7 @@ def short_stage_controls(guard,channel,area,clock_name):
     tree=ast.parse(guard);functions={n.name:n for n in tree.body if isinstance(n,ast.FunctionDef)}
     assert {'fixed_short_phase','prepare_fixed_fixture','run_control'}<=functions.keys()
     proof=next(n.args[0].value for n in ast.walk(tree) if isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute) and n.func.attr=='write_text' and isinstance(n.func.value,ast.Name) and n.func.value.id=='proof_program')
-    assert len(proof.encode())==1053 and hashlib.sha256(proof.encode()).hexdigest()=='574b1bb98638265366e3d370c52165c819bfd0845ec195e802038632f406ba30'
+    assert len(proof.encode())==1074 and hashlib.sha256(proof.encode()).hexdigest()=='056302ab926e42a6faf63f55ca1bcbe7f9e47b5768301ac53a0436486ab5fbf0'
     compile(proof.encode(),'actual-short-subject-prelaunch','exec')
     prefix=next(n.value.value for n in tree.body if isinstance(n,ast.Assign) and isinstance(n.targets[0],ast.Name) and n.targets[0].id=='wrapper_prefix')
     compile(prefix.encode(),'actual-short-wrapper-prelaunch','exec')
@@ -12066,7 +12066,7 @@ command=[sys.executable,'-I','-S','-B','-c',child_code]
 def fixed_sleep(argv,env,owner):
     assert argv==command and env=={'PATH':'/usr/bin:/bin','LC_ALL':'C','LANG':'C'}
 c._closed_scope_child=fixed_sleep
-instance=c._DarwinChildOwner.__new__(c._DarwinChildOwner)
+instance=c._DarwinChildOwner.__new__(c._DarwinChildOwner);instance.ledger=None
 name=str(consumer);before=tuple(os.lstat(name))
 def identity(value):return tuple(value)
 def uptime():return time.clock_gettime(time.CLOCK_UPTIME_RAW)
