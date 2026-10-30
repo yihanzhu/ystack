@@ -194,7 +194,7 @@ def expected_shadow_closure:
     {"path":"shadow/v1/shadow-environments.json","sha256":"655771163e18384904eeaf2b7f22e3999957a037dce845b7fa6fdff2196ac4c7"},
     {"path":"shadow/v1/validate-incident.sh","sha256":"c9f907bfd73307c977c4191d65f6783a3bf969c3bb0be988f14aa9cb66ebe262"},
     {"path":"shadow/v1/write-materialization-input.jq","sha256":"467a8f2901f053ff059302974ad80c5aaf1c805c6302e2333e1af0524fb3c510"},
-    {"path":"shadow/v1/write-shadow.py","sha256":"a49396dc5bf2e636ce560c1da820e07d1c239fe855edac9197327fd724cfef02"},
+    {"path":"shadow/v1/write-shadow.py","sha256":"92e9d7af286af7b13937109a3bf97287601e8d5b4aea76605465751030846ea6"},
     {"path":"telemetry/v1/trace-ledger.jq","sha256":"5436deb48eca6d988a24bbce07855628edd3bc60386d9993a1169d6d373a4212"},
     {"path":"telemetry/v1/validate-trace-ledger.sh","sha256":"fc4b7cdd36b5d48675ed1d851c7b2d4fe59d0c431a31f3c361d6196f8900e208"},
     {"path":"verifiers/file-digest/v1/verifier.c","sha256":"fcf244b70dc6bcbfd1e6983e6c23d5f38a60654aa074adb472b0e749184dcfeb"}

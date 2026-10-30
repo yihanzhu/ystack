@@ -927,7 +927,7 @@ def _admit(ws, materialized, frozen, files, write):
     require(all(files[name] == raw for name, raw in retained.items()), "E_RELATION")
     require(_git_inventory(ws, ws.paths["source_git_dir"], revision) == materialized.source_facts, "E_RELATION")
     candidate = _candidate_facts(ws, materialized.response_raw, incident, materialized.source_facts,
-        materialized.files, write_set)
+        materialized.files, materialized.write_set)
     require(candidate["commit_id"] == materialized.candidate_commit_id
         and candidate["tree_id"] == materialized.candidate_tree_id, "E_RELATION")
     ws.recheck()

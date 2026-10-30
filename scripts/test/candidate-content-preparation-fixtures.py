@@ -4888,63 +4888,96 @@ def raw16_C1_T_windows(root: Path) -> None:
         seed_parent=c._open_held(str(seed),True,c._store_rule(uid,gid,0o700,True,anchor.resolver),'E_STORE')
         holder=e.StableDirectory(parent)
         holder._initialize_recording(anchor,outer)
-        case_work=holder.recording_case
-        assembly=replay._SeedAssembly(seed_parent,anchor,'malicious.checked-file-bytes',anchor.recording_work,case_work)
-        input_raw,response_raw=b'ordinary C1 materialization input',b'ordinary C1 materialization response'
-        prep=private/'preparation-scratch'
-        make_T(c,prep,'prepare',input_raw,response_raw)
-        (prep/'candidate-preparation-0101010101010101').mkdir(mode=0o700)
-        prepared=holder._retain_preparation(anchor,'preparation-scratch','prepare',input_raw,response_raw,outer)
-        assert prepared is not None
-        early=prepared.T_companions[0]
-        assembly.reproduction_prepare(prepared,early,outer,input_raw,response_raw)
-        assert len(assembly.occurrences)==1 and not early.closed
-        holder._T_cleanup_begin(anchor,'preparation-scratch')
-        child=prep/'candidate-preparation-0101010101010101';shutil.rmtree(child)
-        holder._T_cleanup_removed(anchor,child.name);holder._T_cleanup_done(anchor)
-        make_T(c,prep,'inspect',input_raw,response_raw)
-        holder._T_inspection_returned(anchor)
-        inspected=holder._retain_preparation(anchor,'preparation-scratch','inspect',input_raw,response_raw,outer)
-        assert inspected is not None and early.closed and early.close_complete
-        current=next(item for item in inspected.T_companions if item.binding['operation']=='inspect')
-        assembly.reproduction_inspect(inspected,current,outer,input_raw,response_raw)
-        try:assembly.reproduction_prepare(prepared,early,outer,input_raw,response_raw)
-        except ValueError:pass
-        else:raise AssertionError('duplicate/closed prepare admitted')
-        record={'values':{'platform':sys.platform,'architecture':'fixture','python_implementation':'cpython',
-            'python_version':'fixture3.11','soabi':'fixture','ext_suffix':'.so',
-            'configuration':{name:None for name in e._NATIVE_CONFIGURATION_KEYS}},
-            'locators':{name:'/fixture/'+name for name in ('compiler','include','config_include','source','binary')}}
-        e._native_runtime_values(record['values'],record['locators'])
-        anchor.private_observations['commands']={'runtime_values':[record]}
-        anchor.retain_entropy('reproduction',bytes(32))
-        parent_P=holder._retain_parent_inputs(anchor,parent_context,outer)
-        runtime_source=c._open_held(str(source),False,c._store_rule(uid,gid,0o400,False,anchor.resolver),'E_STORE')
-        holder._retain_runtime(anchor,'python',runtime_source,source_raw,outer)
-        local=next((item for item in holder.runtime_copies if item.runtime_sha256 and all(name.endswith('-python-0000.bin') for name in item.runtime_sha256)),None)
-        assert parent_P is not None and local is not None
-        native.record_reproduction(outer,request,expectation)
-        transition=holder._begin_T_parent(anchor,holder._recording_parent())
-        copied_inventory=native.copy_capture(holder._recording_parent(),request,'reproduction',anchor.recording_work)
-        holder._refresh_runtime_parents();holder._finish_T_parent(anchor,holder._recording_parent(),transition,{'reproduction'})
-        assembly.reproduction(native,copied_inventory,list(holder.runtime_copies),outer,expectation)
-        assert 'reproduction' in assembly.occurrences
-        writer_anchor=c.Anchor(config,config_raw,[],{},('',[]),('',[]),anchor.resolver,recording_work=anchor.recording_work)
-        writer_parent=c._open_held(str(writer_private),True,c._store_rule(uid,gid,0o700,True,anchor.resolver),'E_STORE')
-        writer_holder=e.StableDirectory(writer_parent)
-        writer_outer=c.canonical({'schema_version':1,'kind':'shadow_write_request','id':'attempt.write','body':{'attempt_id':'attempt.write'}})
-        writer_holder._initialize_recording(writer_anchor,writer_outer)
-        for operation,scratch in (('prepare','preparation-scratch'),('inspect','inspection-scratch')):
-            make_T(c,writer_private/scratch,operation,input_raw,response_raw)
-            retained=writer_holder._retain_preparation(writer_anchor,scratch,operation,input_raw,response_raw,writer_outer)
-            assert retained is not None
-            T=next(item for item in retained.T_companions if item.binding['operation']==operation)
-            method=assembly.write_prepare if operation=='prepare' else assembly.write_inspect
-            method(retained,T,writer_outer,input_raw,response_raw)
-        assert set(assembly.occurrences)==set(replay._CASE_ROLES[:5])
-        assert len(assembly.case_sources)==2 and assembly.case_sources[0] is case_work
-        assert all(any(source is item for item in anchor.recording_work['cases'].values()) for source in assembly.case_sources)
-        assert assembly.raw is None and anchor.private_observations.get('accounting',{}).get('complete') is False
+        sudo=None
+        try:
+            sudo=e.fixed_sudo()
+            holder._retain_sudo(anchor,sudo,outer)
+            assert not anchor.private_observations.get('unusable', False)
+            case_work=holder.recording_case
+            assembly=replay._SeedAssembly(seed_parent,anchor,'malicious.checked-file-bytes',anchor.recording_work,case_work)
+            input_raw,response_raw=b'ordinary C1 materialization input',b'ordinary C1 materialization response'
+            prep=private/'preparation-scratch'
+            make_T(c,prep,'prepare',input_raw,response_raw)
+            (prep/'candidate-preparation-0101010101010101').mkdir(mode=0o700)
+            prepared=holder._retain_preparation(anchor,'preparation-scratch','prepare',input_raw,response_raw,outer)
+            assert prepared is not None
+            early=prepared.T_companions[0]
+            assembly.reproduction_prepare(prepared,early,outer,input_raw,response_raw)
+            assert len(assembly.occurrences)==1 and not early.closed
+            holder._T_cleanup_begin(anchor,'preparation-scratch')
+            child=prep/'candidate-preparation-0101010101010101';shutil.rmtree(child)
+            holder._T_cleanup_removed(anchor,child.name);holder._T_cleanup_done(anchor)
+            make_T(c,prep,'inspect',input_raw,response_raw)
+            holder._T_inspection_returned(anchor)
+            inspected=holder._retain_preparation(anchor,'preparation-scratch','inspect',input_raw,response_raw,outer)
+            assert inspected is not None and early.closed and early.close_complete
+            current=next(item for item in inspected.T_companions if item.binding['operation']=='inspect')
+            assembly.reproduction_inspect(inspected,current,outer,input_raw,response_raw)
+            try:assembly.reproduction_prepare(prepared,early,outer,input_raw,response_raw)
+            except ValueError:pass
+            else:raise AssertionError('duplicate/closed prepare admitted')
+            record={'values':{'platform':sys.platform,'architecture':'fixture','python_implementation':'cpython',
+                'python_version':'fixture3.11','soabi':'fixture','ext_suffix':'.so',
+                'configuration':{name:None for name in e._NATIVE_CONFIGURATION_KEYS}},
+                'locators':{name:'/fixture/'+name for name in ('compiler','include','config_include','source','binary')}}
+            e._native_runtime_values(record['values'],record['locators'])
+            anchor.private_observations['commands']={'runtime_values':[record]}
+            anchor.retain_entropy('reproduction',bytes(32))
+            parent_P=holder._retain_parent_inputs(anchor,parent_context,outer)
+            runtime_source=c._open_held(str(source),False,c._store_rule(uid,gid,0o400,False,anchor.resolver),'E_STORE')
+            holder._retain_runtime(anchor,'python',runtime_source,source_raw,outer)
+            local=next((item for item in holder.runtime_copies if item.runtime_sha256 and all(name.endswith('-python-0000.bin') for name in item.runtime_sha256)),None)
+            assert parent_P is not None and local is not None
+            native.record_reproduction(outer,request,expectation)
+            transition=holder._begin_T_parent(anchor,holder._recording_parent())
+            copied_inventory=native.copy_capture(holder._recording_parent(),request,'reproduction',anchor.recording_work)
+            holder._refresh_runtime_parents();holder._finish_T_parent(anchor,holder._recording_parent(),transition,{'reproduction'})
+            assembly.reproduction(native,copied_inventory,list(holder.runtime_copies),outer,expectation)
+            assert 'reproduction' in assembly.occurrences
+            writer_anchor=c.Anchor(config,config_raw,[],{},('',[]),('',[]),anchor.resolver,recording_work=anchor.recording_work)
+            writer_parent=c._open_held(str(writer_private),True,c._store_rule(uid,gid,0o700,True,anchor.resolver),'E_STORE')
+            writer_holder=e.StableDirectory(writer_parent)
+            writer_outer=c.canonical({'schema_version':1,'kind':'shadow_write_request','id':'attempt.write','body':{'attempt_id':'attempt.write'}})
+            writer_holder._initialize_recording(writer_anchor,writer_outer)
+            for operation,scratch in (('prepare','preparation-scratch'),('inspect','inspection-scratch')):
+                make_T(c,writer_private/scratch,operation,input_raw,response_raw)
+                retained=writer_holder._retain_preparation(writer_anchor,scratch,operation,input_raw,response_raw,writer_outer)
+                assert retained is not None
+                T=next(item for item in retained.T_companions if item.binding['operation']==operation)
+                method=assembly.write_prepare if operation=='prepare' else assembly.write_inspect
+                method(retained,T,writer_outer,input_raw,response_raw)
+            assert set(assembly.occurrences)==set(replay._CASE_ROLES[:5])
+            assert len(assembly.case_sources)==2 and assembly.case_sources[0] is case_work
+            assert all(any(source is item for item in anchor.recording_work['cases'].values()) for source in assembly.case_sources)
+            assert assembly.raw is None and anchor.private_observations.get('accounting',{}).get('complete') is False
+        finally:
+            sudo_primary = sys.exc_info()[1]
+            sudo_recheck_error = sudo_companion_error = sudo_close_error = None
+            try:
+                if sudo is not None:sudo.recheck()
+            except BaseException as error:sudo_recheck_error = error
+            try:anchor.close_runtime_companions(sudo_primary)
+            except BaseException as error:sudo_companion_error = error
+            try:
+                if sudo is not None:sudo.close()
+            except BaseException as error:sudo_close_error = error
+            sudo_errors = tuple(error for error in (sudo_recheck_error, sudo_companion_error, sudo_close_error)
+                if error is not None)
+            if sudo_errors:
+                sudo_first = sudo_primary
+                for error in sudo_errors:sudo_first = c._c3_first(sudo_first, error)
+                sudo_origin = sudo_primary if sudo_primary is not None else sudo_first
+                sudo_earlier = getattr(sudo_origin, '_fixture_cleanup_errors', ())
+                for error in (sudo_origin.__cause__, sudo_origin.__context__):
+                    if error is not None and error is not sudo_origin and not any(error is old for old in sudo_earlier):
+                        sudo_earlier += (error,)
+                if sudo_first is not sudo_origin:
+                    sudo_earlier += getattr(sudo_first, '_fixture_cleanup_errors', ())
+                sudo_first._fixture_cleanup_errors = sudo_earlier + sudo_errors
+                sudo_cause = sudo_errors[0] if sudo_first is sudo_primary else sudo_primary
+                if sudo_cause is None or sudo_cause is sudo_first:raise sudo_first
+                raise sudo_first from sudo_cause
+            if sudo_primary is None:assert not anchor.private_observations.get('unusable', False)
         assembly.close();seed_parent.close()
         writer_holder.close();holder.close();runtime_source.close()
         assert all(item.closed for item in assembly.bindings['reproduction.prepare']['T'])

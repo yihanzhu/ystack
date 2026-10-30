@@ -31,7 +31,7 @@ _C2_SCALARS = ("read_bytes", "write_bytes", "physical_bytes", "files", "export_r
 _C2_ACCOUNT_FIELDS = ("logical_bytes", "read_bytes", "write_bytes", "physical_bytes", "files", "occurrences")
 _C2_CLASSES = ("L", "W", "M", "raw", "unresolved")
 _C2_LIMIT = 1048576
-_C2_HELPERS_SHA256 = "4307b1417712a4052fe647aff1348e895878596661d805bab9f2c8b7c9a1e6ff"
+_C2_HELPERS_SHA256 = "041ec87ddf0f04984ce004600da8fb74a81a1931f941489d175b130c41d644a0"
 
 class C2Refusal(Exception):
     def __init__(self, code):
@@ -2417,7 +2417,7 @@ shadow_source_rows() {
     'shadow/v1/shadow-environments.json 655771163e18384904eeaf2b7f22e3999957a037dce845b7fa6fdff2196ac4c7 1471 100644' \
     'shadow/v1/validate-incident.sh c9f907bfd73307c977c4191d65f6783a3bf969c3bb0be988f14aa9cb66ebe262 4870 100755' \
     'shadow/v1/write-materialization-input.jq 467a8f2901f053ff059302974ad80c5aaf1c805c6302e2333e1af0524fb3c510 4907 100644' \
-    'shadow/v1/write-shadow.py a49396dc5bf2e636ce560c1da820e07d1c239fe855edac9197327fd724cfef02 70043 100755' \
+    'shadow/v1/write-shadow.py 92e9d7af286af7b13937109a3bf97287601e8d5b4aea76605465751030846ea6 70056 100755' \
     'telemetry/v1/trace-ledger.jq 5436deb48eca6d988a24bbce07855628edd3bc60386d9993a1169d6d373a4212 5849 100644' \
     'telemetry/v1/validate-trace-ledger.sh fc4b7cdd36b5d48675ed1d851c7b2d4fe59d0c431a31f3c361d6196f8900e208 8095 100755' \
     'verifiers/file-digest/v1/verifier.c fcf244b70dc6bcbfd1e6983e6c23d5f38a60654aa074adb472b0e749184dcfeb 28827 100644'
@@ -2916,10 +2916,10 @@ done
 [ -n "$jq_source" ] || emit_error E_RUNTIME
 
 generation=g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43
-program_sha=2c1bbda8b4710ad36bc9a11203468b0c8efa1446c450b363f0f3fcbc827033fe
+program_sha=efe2004d9d44c9fd3d9e6bf3e73edd9570d785af6c85f1e550fe0d7ff9fed413
 review_approval_sha=none
 catalog_sha=0239138447a8f9fd420cb3c5da31660d8f75c85099d80d89a040dce2878a4cac
-driver_sha=18dd98bfcca2cb43fe49d7a59acb96490c34ebdcc18ee6b1199f1d88bc1088bf
+driver_sha=7ea072ddc3ab6d9f11485d09ad384b5a92aaeff6bf47ab08b53f583df39d3df1
 }
 
 evals_record_context() {

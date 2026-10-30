@@ -4119,7 +4119,7 @@ def stable_sink_controls(area,assembler):
     return reports
 
 OUTER_RUN_SOURCE_SHA='7f3571e66a1da98ccc2a876c426ea77fcddc010cbdb64d76342efde97ce77a64'
-OUTER_CAPTURE_SOURCE_SHA='d4feeae9ba5c2b91b915f914e94cb5f58590886b482ddf66e2e711c2e483c5dd'
+OUTER_CAPTURE_SOURCE_SHA='d373c620314af3ed9009f50f133537cde792701edbf47ec3c6a3fca565b9bdfc'
 def outer_timeout_boundary(assembler):
     tree=ast.parse(assembler)
     runs=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='run']
@@ -13913,9 +13913,10 @@ def _scope_sample_original(owner,pid,end,cancelled):
                     cleanup_cause=relation_field(error,'__cause__')
                     eperm=(type(error) is c.Refusal and relation_snapshot_state[2] is error and
                         type(cleanup_cause) is PermissionError and OSError.__dict__['errno'].__get__(cleanup_cause,OSError)==1 and
-                        relation_snapshot_state[1] is relation_io_binding[0] and relation_snapshot_state[4]==2 and relation_snapshot_state[5])
+                        relation_snapshot_state[1] is relation_io_binding[0] and relation_snapshot_state[4]==2 and
+                        relation_snapshot_state[5] and not relation_truncated)
                     direct=(type(error) is c.Refusal and relation_snapshot_state[2] is error and
-                        relation_snapshot_state[4]==1 and relation_snapshot_state[5] and not relation_truncated and
+                        relation_snapshot_state[4]==2 and relation_snapshot_state[5] and not relation_truncated and
                         relation_field(error,'__cause__') is None and relation_field(error,'__context__') is None)
                     if (not (eperm or direct) or type(fact) is not dict or fact['cancelled'] is not False or
                             relation_snapshot_state[2] is None or not any(relation_snapshot_state[2] is item for item in relation_seen)):
@@ -13981,7 +13982,7 @@ def _scope_sample_original(owner,pid,end,cancelled):
                     valid=type(function) is str and len(function)<=80
                     rows.append([function if valid else 'GAP',line if type(line) is int else 'GAP'])
                     if (code_object is relation_foreground_code and relation_snapshot_state[3] is not None and
-                            value is relation_field(relation_snapshot_state[3],'__cause__') and line==1231):relation_snapshot_state[1]=frame
+                            value is relation_field(relation_snapshot_state[3],'__cause__') and line==6038):relation_snapshot_state[1]=frame
                     if code_object is relation_foreground_code and not relation_foreground[0]:
                         relation_foreground[0]=True
                         try:
@@ -14016,9 +14017,13 @@ def _scope_sample_original(owner,pid,end,cancelled):
                                 relation_io_binding[0]=frame
                                 relation_io_binding[1]=tuple(arguments)
                         except BaseException:pass
-                    if code_object is relation_foreground_code and value is relation_snapshot_state[3]:
-                        relation_snapshot_state[4]+=1
-                        if line not in (5980,6119):relation_snapshot_state[5]=False
+                    if value is relation_snapshot_state[3]:
+                        if code_object is relation_foreground_code:
+                            if (relation_snapshot_state[4] not in (0,1) or frame is not relation_io_binding[0] or
+                                    line!=(6119 if relation_snapshot_state[4]==0 else 5980)):
+                                relation_snapshot_state[5]=False
+                            relation_snapshot_state[4]+=1
+                        elif valid and function=='_foreground':relation_snapshot_state[5]=False
                     if code_object is relation_foreground_code and frame is relation_io_binding[0] and line==5980 and type(value) is c.Refusal:
                         if object.__getattribute__(value,'__dict__').get('code')=='E_RUNTIME':relation_snapshot_state[2]=value
                     if (code_object is relation_foreground_code and frame is relation_io_binding[0] and
