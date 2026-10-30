@@ -6265,7 +6265,7 @@ def raw16_C2_lifecycle_core(root: Path, selected=None, mutation=None) -> None:
 
 
 def raw16_C2_source_tail(root: Path, mutation=False) -> None:
-    import shlex, tempfile
+    import shlex, tempfile, shutil
     launcher=(root/'evals/v1/evals-launcher.sh').read_text()
     literal=shlex.split(launcher.split('c2_program=',1)[1].split('\nc2_fd9=',1)[0])[0]
     fixed={'__name__':'_raw16_C2_source_tail'};exec(compile(literal,str(root/'evals/v1/evals-launcher.sh')+':C2','exec'),fixed)
@@ -6278,7 +6278,26 @@ def raw16_C2_source_tail(root: Path, mutation=False) -> None:
     sources=None;first=None
     try:
         with tempfile.TemporaryDirectory(prefix='raw16-C2-source-tail.') as area:
-            sources=fixed['C2Sources'](str(root/'evals/v1/evals-launcher.sh'),area+'/runtime')
+            c2_tail_source=Path(area)/'source';c2_tail_source.mkdir(mode=0o700)
+            c2_tail_runtime=Path(area)/'runtime';c2_tail_runtime.mkdir(mode=0o700)
+            c2_tail_caller=Path(area)/'caller';c2_tail_caller.mkdir(mode=0o700)
+            c2_tail_generation=json.loads((root/'core/v2/generation-registry.json').read_bytes())[1]['generation_id']
+            c2_tail_table=launcher.split('\nshadow_source_rows() {\n',1)[1].split('\n}\n',1)[0]
+            c2_tail_table=c2_tail_table.split("/usr/bin/printf '%s\\n'",1)[1]
+            c2_tail_entries=[entry.replace('${record_generation}',c2_tail_generation).split()
+                for entry in shlex.split(c2_tail_table.replace('\\\n',''))]
+            assert len(c2_tail_entries)==84 and all(len(entry)==4 and entry[3] in ('100644','100755') for entry in c2_tail_entries)
+            assert len({entry[0] for entry in c2_tail_entries})==84
+            for c2_tail_name,c2_tail_digest,c2_tail_size,c2_tail_mode in c2_tail_entries:
+                c2_tail_parent=c2_tail_source
+                for c2_tail_part in Path(c2_tail_name).parts[:-1]:
+                    c2_tail_parent=c2_tail_parent/c2_tail_part;c2_tail_parent.mkdir(mode=0o700,exist_ok=True)
+                c2_tail_path=c2_tail_source/c2_tail_name
+                shutil.copyfile(root/c2_tail_name,c2_tail_path)
+                c2_tail_path.chmod(int(c2_tail_mode,8)&0o777)
+            c2_tail_launcher=c2_tail_source/'evals/v1/evals-launcher.sh'
+            shutil.copyfile(root/'evals/v1/evals-launcher.sh',c2_tail_launcher);c2_tail_launcher.chmod(0o755)
+            sources=fixed['C2Sources'](str(c2_tail_launcher),str(c2_tail_runtime))
             consumer=sources.load_consumer();work=fixed['c2_fresh_work']('C2-source-tail-fixture')
             sources.reconcile(work)
             before=dict(fixed['c2_counters'](work)['window']['source']);before_scalar=work['close_calls']
@@ -6311,10 +6330,10 @@ def raw16_C2_source_tail(root: Path, mutation=False) -> None:
             assert any(row.get('site')=='close' and row.get('errno')==errno.EIO for row in final['window']['source']['failures'] if type(row) is dict)
             # The exact source cutoff is what END projects; another original window/case receives its delta once.
             window,case=fixed['c2_fresh_work']('C2-window-fixture'),fixed['c2_fresh_work']('C2-case-fixture')
-            caller_path=Path(area)/'caller';caller_path.mkdir(mode=0o700)
+            caller_path=c2_tail_caller
             resolver=consumer._DarwinUUIDResolver() if sys.platform=='darwin' else None
             caller_held=consumer._open_held(str(caller_path),True,consumer._store_rule(os.geteuid(),os.getegid(),0o700,True,resolver),'E_STORE')
-            caller=_C2FixtureCaller(root,caller_held,window,case)
+            caller=_C2FixtureCaller(c2_tail_source,caller_held,window,case)
             try:
                 caller.settle_child(final)
                 for field in fixed['_C2_SCALARS']:assert window[field]==caller.common_case.get(field,0)==work[field]

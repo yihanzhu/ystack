@@ -3050,7 +3050,7 @@ evaluation_reasons() {
 }
 dashboard_shape_evaluation() {
   local scope_dashboard_line=${BASH_LINENO[0]}
-  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 10527 ]; then scope_dashboard_inflight=true; fi
+  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 10537 ]; then scope_dashboard_inflight=true; fi
   evaluation_document "$@"
   scope_dashboard_inflight=false
 }
@@ -8695,39 +8695,49 @@ finally:
                 wrappers[fn]=call
             return wrappers[fn]
         def counted(fn):install(wrap(fn))
-        previous=sys.argv;started=time.monotonic();sys.settrace=counted
+        observed_error=None
         try:
-            try:ns['observe'](reader,log,'owned', 'owned-phase',[str(reader),str(target),str(helper),kind],8)
-            except Exception as error:assert kind!='gap' and str(error)=='E_STALE'
-            else:assert kind=='gap'
+            previous=sys.argv;started=time.monotonic();sys.settrace=counted
+            try:
+                try:ns['observe'](reader,log,'owned', 'owned-phase',[str(reader),str(target),str(helper),kind],8)
+                except Exception as error:
+                    assert kind!='gap' and str(error)=='E_STALE'
+                    observed_error=error
+                else:assert kind=='gap'
+            finally:
+                install(None);sys.settrace=install;sys.argv=previous
+            result=json.loads(log.read_bytes());elapsed=time.monotonic()-started
+            facts=ns.get('AUTH_RESULT',{})
+            authentication=authentication_proof(facts) if facts else None
+            paired=None
+            if same_request:
+                proof=ns['SAME_REQUEST_PROOF'];details=proof['paired']
+                paired={'classifications':details['requests'],'dispatch_checks':proof['dispatch_checks'],'local_checks':proof['local_checks'],
+                    'actual_digest':proof['paired_cached'].hexdigest(),'original_digest':proof['paired_original'].hexdigest(),
+                    'primitive_digest':proof['primitive_digest'].hexdigest(),'new_actual_objects':len(details['objects']),
+                    'failure_code_dictionary':{'objects':details['objects'],'files':details['files'],'names':details['names']} if proof['failures'] else None,
+                    'primitive_steps':details['primitive_steps'],'failures':proof['failures'],'negative_dispatch_done':proof['negative_dispatch_done'],
+                    'proof_wall_includes_oracle':True}
+            reference=authentication_blocks_evidence({'observer_actual':kind,'result':result,'callbacks':callbacks,'whole_wall':elapsed,'authentication':authentication,'same_request':paired})
+            if same_request:
+                assert not paired['failures'] and paired['negative_dispatch_done'] and paired['actual_digest']==paired['original_digest']
+                assert paired['classifications']==facts['requests'] and paired['dispatch_checks'] and paired['local_checks']
+            try:
+                assert result['status']==('OBSERVER_GAP' if kind=='gap' else 'FIRST_STALE')
+            except AssertionError as status_error:
+                if observed_error is not None:raise status_error from observed_error
+                raise
+            if kind=='errno':
+                actual=[(frame,item) for frame in result['frames'] for item in frame['actual_returns'] if item.get('errno')==9]
+                assert len(actual)==1 and actual[0][1]['function']=='_metadata' and actual[0][1]['exception']=='OSError'
+                frame,item=actual[0]
+                assert frame['function']=='recheck' and frame['component']['ancestor'] is False
+                lines=(package/'shadow/v1/_consumer.py').read_text().splitlines()
+                assert item['caller_line']==4273 and lines[item['caller_line']-1].strip()=='value = _metadata(fd)'
+                assert lines[result['guard']['line']-1].strip()=='raise Refusal(code) from None'
+            return result,callbacks,elapsed,authentication,reference
         finally:
-            install(None);sys.settrace=install;sys.argv=previous
-        result=json.loads(log.read_bytes());elapsed=time.monotonic()-started
-        facts=ns.get('AUTH_RESULT',{})
-        authentication=authentication_proof(facts) if facts else None
-        paired=None
-        if same_request:
-            proof=ns['SAME_REQUEST_PROOF'];details=proof['paired']
-            paired={'classifications':details['requests'],'dispatch_checks':proof['dispatch_checks'],'local_checks':proof['local_checks'],
-                'actual_digest':proof['paired_cached'].hexdigest(),'original_digest':proof['paired_original'].hexdigest(),
-                'primitive_digest':proof['primitive_digest'].hexdigest(),'new_actual_objects':len(details['objects']),
-                'failure_code_dictionary':{'objects':details['objects'],'files':details['files'],'names':details['names']} if proof['failures'] else None,
-                'primitive_steps':details['primitive_steps'],'failures':proof['failures'],'negative_dispatch_done':proof['negative_dispatch_done'],
-                'proof_wall_includes_oracle':True}
-        reference=authentication_blocks_evidence({'observer_actual':kind,'result':result,'callbacks':callbacks,'whole_wall':elapsed,'authentication':authentication,'same_request':paired})
-        if same_request:
-            assert not paired['failures'] and paired['negative_dispatch_done'] and paired['actual_digest']==paired['original_digest']
-            assert paired['classifications']==facts['requests'] and paired['dispatch_checks'] and paired['local_checks']
-        assert result['status']==('OBSERVER_GAP' if kind=='gap' else 'FIRST_STALE')
-        if kind=='errno':
-            actual=[(frame,item) for frame in result['frames'] for item in frame['actual_returns'] if item.get('errno')==9]
-            assert len(actual)==1 and actual[0][1]['function']=='_metadata' and actual[0][1]['exception']=='OSError'
-            frame,item=actual[0]
-            assert frame['function']=='recheck' and frame['component']['ancestor'] is False
-            lines=(package/'shadow/v1/_consumer.py').read_text().splitlines()
-            assert item['caller_line']==4273 and lines[item['caller_line']-1].strip()=='value = _metadata(fd)'
-            assert lines[result['guard']['line']-1].strip()=='raise Refusal(code) from None'
-        return result,callbacks,elapsed,authentication,reference
+            observed_error=None
     for kind in ('identity','errno','bool','gap'):
         first,old_counts,old_cost,unused,old_reference=observe_case(old,kind)
         plain,plain_counts,plain_cost,plain_auth,plain_reference=observe_case(uncached_observer,kind)

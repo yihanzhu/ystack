@@ -1297,8 +1297,10 @@ cat "$tmp/legacy-evaluation.json" "$tmp/write-evaluation.json"
     scope_check = subprocess.run(["/bin/bash", str(scope_script), str(supplied_record)],
         env={"PATH": "/usr/bin:/bin", "LC_ALL": "C", "TMPDIR": str(base.parent.parent), "YSTACK_SCOPE_TEST_BOUNDED": "1"},
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300)
+    try:print(scope_check.stdout.decode())
+    except Exception as error:
+        if getattr(error, '_scope_signal_cancel', False) or scope_check.returncode == 0:raise
     ok(scope_check.returncode == 0, "actual scope evaluator keeps unrelated write and legacy records unqualified: " + scope_check.stderr.decode())
-    print(scope_check.stdout.decode())
     ok(json.loads((root / "enforcement/v1/accepted-identities.json").read_bytes())["body"]["environments"] == [], "shipped accepted set stays empty")
     ok(w.main(["write-shadow.py", "prepare", "request", "bundle", "work", "output"]) == 1, "public prepare refuses without trusted startup admission")
     scenario_work, scenario_output = original_work, original_output
