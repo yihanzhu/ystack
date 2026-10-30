@@ -1295,6 +1295,34 @@ drift and initialization/partial/close/cancel failures. Deleting the isolated
 destination or a parent/identity guard must fail its matching control. The plain
 context remains unqualified; these mocks do not execute inert native files.
 
+Within that same `scripts/test/shadow-enforced.test.sh` recorder_controls loop,
+prepare its fixed backing before acquiring the StableDirectory holder or running
+its initializer: create both `dependencies/helper` and `dependencies/jq` as 0700
+siblings under the case's existing dependencies directory. After the original
+successful initialization, keep the two real snapshot acquisitions in their old
+order, with private directories `dependencies/helper/object-closure` and
+`dependencies/jq/jq`, respectively; their file names remain object-closure and jq.
+Let snapshot_dependency create those independent leaf directories. Do not create
+the jq sibling after sealing helper or refresh/reopen a snapshot to hide that drift.
+The source helper/jq files, actual digest/size/full bytes and real snapshot/recheck/
+close methods remain unchanged. The original production and shared-flow snapshot
+paths do not move. This corrects only the finite added controls' backing layout.
+
+Keep all fifteen current fault cases and their call counts. stable and close still
+require no rejection at the original compound assertion; close retains its later
+incomplete/once-close checks. All drift, initialization, partial, write, cleanup and
+cancellation assertions stay intact. The dependency-ancestor mutation still targets
+its existing helper sibling; dependency-leaf still targets the actual acquired
+snapshot. Preserve recorder/native namespace checks, both parent relationships,
+original thirteen flow controls and twenty-nine evidence files. Pay actual backing,
+metadata, retention and cleanup costs under the original owners/caps; no new case,
+budget or execution allowance. The repair's only incremental source path is
+`scripts/test/shadow-enforced.test.sh` at this setup/acquisition contact. Do not
+change production, the seven scope-failure paths, their pins/maps or any other
+fixture. Any necessary outside edit returns to its gate. Reuse the original full
+79-suite recipe only after fresh exact review/GO; old failure evidence and UNKNOWN
+remain, and this plan authorizes no run or success claim.
+
 **B: cleanup algorithm.** Leave admission and successful IO unchanged. Save the
 actual primary object. Compute cleanup_end once using the existing ten seconds
 and inherited self.deadline. Independently guard TERM, first conditional wait,
