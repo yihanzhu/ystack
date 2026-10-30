@@ -7,7 +7,7 @@ umask 077
 case "${1:-}:${3:-}" in
   run:/*/operations/[0-2]/I/driver-input/seed.json|dashboard:/*/operations/[0-2]/I/driver-input)
     exec /usr/bin/python3 -I -S -B -c 'GENERATION = '"'"'g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43'"'"'
-PROGRAM_SHA = '"'"'144f9c739af059fcf7e9318c5ff1e3dc8b3d798ad9ba7a9f0774b2de484db86e'"'"'
+PROGRAM_SHA = '"'"'2c1bbda8b4710ad36bc9a11203468b0c8efa1446c450b363f0f3fcbc827033fe'"'"'
 CATALOG_SHA = '"'"'0239138447a8f9fd420cb3c5da31660d8f75c85099d80d89a040dce2878a4cac'"'"'
 TOOL_SHA = '"'"'b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9'"'"'
 SCANNER_SHA = '"'"'556a365b92a76c7a46c56b25c61a291f5ab3dcad8168fb77f15c15b3f3477ca5'"'"'
@@ -16,7 +16,7 @@ SANDBOX_SHA = '"'"'8c4b50e6ce324bbf8c3b14972356b153a40ab26c0dbcf54687e37d1133e8a
 RISK_SHA = '"'"'0df2094a1a86901d5db8bd463cdeb295f455585b345096719bdc6dcd0b8852e8'"'"'
 DUTY_SHA = '"'"'146e73dc880d363e889f32140ac375997fb709e3101de32b8d9603f1f38ca0fa'"'"'
 NORMALIZER_SHAS = '"'"'{"codex-cli-producer":"dc2fff5f40517b3dc7a633f90483c661b9a4b2e7e4f1f40d9aa7c8edcf268f25","codex-native-reviewer":"7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603","github-actions-ci":"690d9a8c35dc49f61a533d1ce1a9041e34895e5d337eb454bafa3a2e4d878df7","github-forge":"b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be","gitlab-forge":"ff2ec298eef102f94f28995f5306adeba8e078d19e4c22860c3b167cd9b7c37a"}'"'"'
-FIXED_PINS = [('"'"'program.jq'"'"', '"'"'144f9c739af059fcf7e9318c5ff1e3dc8b3d798ad9ba7a9f0774b2de484db86e'"'"'),
+FIXED_PINS = [('"'"'program.jq'"'"', '"'"'2c1bbda8b4710ad36bc9a11203468b0c8efa1446c450b363f0f3fcbc827033fe'"'"'),
  ('"'"'catalog.json'"'"', '"'"'0239138447a8f9fd420cb3c5da31660d8f75c85099d80d89a040dce2878a4cac'"'"'),
  ('"'"'core/v2/generation-registry.json'"'"', '"'"'3950ce43c3073b97759db23fb7e4ce533cbc1d8a8fe4917db6ee1ee0a8e78f94'"'"'),
  ('"'"'core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/contracts.jq'"'"',
@@ -874,7 +874,7 @@ duty_sha256=146e73dc880d363e889f32140ac375997fb709e3101de32b8d9603f1f38ca0fa
 normalizer_shas='{"codex-cli-producer":"dc2fff5f40517b3dc7a633f90483c661b9a4b2e7e4f1f40d9aa7c8edcf268f25","codex-native-reviewer":"7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603","github-actions-ci":"690d9a8c35dc49f61a533d1ce1a9041e34895e5d337eb454bafa3a2e4d878df7","github-forge":"b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be","gitlab-forge":"ff2ec298eef102f94f28995f5306adeba8e078d19e4c22860c3b167cd9b7c37a"}'
 jq_bin="$runtime/bin/jq"
 work="$runtime_parent/work"
-program_sha256=144f9c739af059fcf7e9318c5ff1e3dc8b3d798ad9ba7a9f0774b2de484db86e
+program_sha256=2c1bbda8b4710ad36bc9a11203468b0c8efa1446c450b363f0f3fcbc827033fe
 review_approval_sha256=none
 driver_sha256=$(sha256_path "$self") || emit_error E_RUNTIME
 

@@ -1189,7 +1189,7 @@ PY_MAC_TRANSITION
 python3 -I -S -B - "$root" "$tmp/stale-observation" <<'PY_STALE_PREPARE'
 import difflib,hashlib,json,pathlib,shlex
 root=pathlib.Path(__import__('sys').argv[1]);area=pathlib.Path(__import__('sys').argv[2])
-expected={'scope/v1/evaluate-scope.sh': 'fe6048b5eada5d86531e085acd0a9f46b73028d348349ab932e8c59f4e2ed66a', 'scope/v1/read-shadow-evidence.py': '201791d1783d4130ec947bc60ed61cd5cec9d45da98eae033d1b859b9761e404', 'shadow/v1/_consumer.py': '24846f4538c76e0d8b04d4d091f8b6e1f94e7355d55de44e0f9d09eed83e12fd'}
+expected={'scope/v1/evaluate-scope.sh': 'fe6048b5eada5d86531e085acd0a9f46b73028d348349ab932e8c59f4e2ed66a', 'scope/v1/read-shadow-evidence.py': '201791d1783d4130ec947bc60ed61cd5cec9d45da98eae033d1b859b9761e404', 'shadow/v1/_consumer.py': '7d58f60c6622ae4e3f22167a3429d72a0d65e826c8d91bf87a016644226018ad'}
 for path,digest in expected.items():
     assert hashlib.sha256((root/path).read_bytes()).hexdigest()==digest
 observer_source = r"""import hashlib,json,os,runpy,stat,sys,time,types
@@ -3050,7 +3050,7 @@ evaluation_reasons() {
 }
 dashboard_shape_evaluation() {
   local scope_dashboard_line=${BASH_LINENO[0]}
-  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 10413 ]; then scope_dashboard_inflight=true; fi
+  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 10406 ]; then scope_dashboard_inflight=true; fi
   evaluation_document "$@"
   scope_dashboard_inflight=false
 }
@@ -3544,7 +3544,7 @@ old=old.replace("return (frame.f_code.co_filename in source_codes and\n         
 assert hashlib.sha256(old.encode()).hexdigest()=='0c2b1c8c8cb9c662c55e17e134f408693ab4ead8f27357ad6cb2b7bcc0b820eb'
 root=Path(sys.argv[2]).resolve()
 consumer=(root/'shadow/v1/_consumer.py').read_bytes()
-assert hashlib.sha256(consumer).hexdigest()=='24846f4538c76e0d8b04d4d091f8b6e1f94e7355d55de44e0f9d09eed83e12fd'
+assert hashlib.sha256(consumer).hexdigest()=='7d58f60c6622ae4e3f22167a3429d72a0d65e826c8d91bf87a016644226018ad'
 old_wrapper=wrapper.replace("try:\n    for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):\n        signal.signal(number, cancel)\n    signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})\n    sys.settrace(dispatch)\n    exec(compiled_code, {'__name__': '__main__'})\n","for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):\n    signal.signal(number, cancel)\nsignal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})\nsys.settrace(dispatch)\ntry:\n    exec(compiled_code, {'__name__': '__main__'})\n",1)
 old_wrapper=old_wrapper.replace('import dis, json, os, signal, sys, time, types','import json, os, signal, sys, time',1)
 old_wrapper=old_wrapper.replace('    bound_cache.clear()\n','')
@@ -4119,7 +4119,7 @@ def stable_sink_controls(area,assembler):
     return reports
 
 OUTER_RUN_SOURCE_SHA='7f3571e66a1da98ccc2a876c426ea77fcddc010cbdb64d76342efde97ce77a64'
-OUTER_CAPTURE_SOURCE_SHA='1997521d40ec879427cbeee59466b97d06c9a032fce68799a39efb26cae8fd39'
+OUTER_CAPTURE_SOURCE_SHA='d4feeae9ba5c2b91b915f914e94cb5f58590886b482ddf66e2e711c2e483c5dd'
 def outer_timeout_boundary(assembler):
     tree=ast.parse(assembler)
     runs=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='run']
@@ -6116,20 +6116,20 @@ def foreground_state_controls(area):
                 else:assert fact['child']=={'pid':child.pid,'returncode':0}
         if fault in ('io-term','io-kill'):
             context=BaseException.__dict__['__cause__'].__get__(error,BaseException)
-            assert context is sentinel and ['_foreground',5894] in record['trace']
+            assert context is sentinel and ['_foreground',5980] in record['trace']
             assert fact['io']['stderr_bytes']==512 and waited
             context_errors.append((context,error))
         if fault=='snapshot-term':snapshot_error=error;snapshot_namespace=select_namespace;assert type(record.get('first_git_select_observation')) is dict
         if fault=='deadline':
             direct_error=error;direct_namespace=select_namespace;assert type(record.get('first_git_select_observation')) is dict
-            assert error.__cause__ is None and error.__context__ is None and [v[1] for v in trace if v[2]]==[6033,5894]
+            assert error.__cause__ is None and error.__context__ is None and [v[1] for v in trace if v[2]]==[6119,5980]
             assert [v[2] for v in before_wait if v[0]=='killpg' and v[2]!=0]==[int(signal.SIGTERM),int(signal.SIGKILL)]
             assert [v[1] for v in before_wait if v[0]=='wait']==[{'timeout':2}] and before_wait.count(['selector-close'])==1
             assert len(handlers)==6 and handlers[-3:]==[signal.SIG_DFL]*3 and scope['selectors'].DefaultSelector is Selector
         if fault=='cleanup-wait':
             cleanup_error=error;cleanup_namespace=select_namespace
             assert error.__cause__ is wait_failure and 'first_git_select_observation' not in record
-            assert [v[1] for v in trace if v[2]]==[6033,5894]
+            assert [v[1] for v in trace if v[2]]==[6119,5980]
         records.append({'case':fault,'mapped_stderr':output.getvalue(),'status':status,'original_error_type':type(error).__name__,'same_signal_error':error is sentinel,'original_calls':before_wait,'clock_calls':len(clock_calls),'wait_reached':waited,'facts':fact,'real_child_returncode':returned,'all_pipes_closed':True,'None_is_not_liveness':True})
     mapping=ast.parse('if True:\n'+insertion).body[0].body[0].body
     first=next(index for index,node in enumerate(mapping) if isinstance(node,ast.Assign) and any(isinstance(t,ast.Tuple) for t in node.targets))
@@ -14018,11 +14018,11 @@ def _scope_sample_original(owner,pid,end,cancelled):
                         except BaseException:pass
                     if code_object is relation_foreground_code and value is relation_snapshot_state[3]:
                         relation_snapshot_state[4]+=1
-                        if line not in (5894,6033):relation_snapshot_state[5]=False
-                    if code_object is relation_foreground_code and frame is relation_io_binding[0] and line==5894 and type(value) is c.Refusal:
+                        if line not in (5980,6119):relation_snapshot_state[5]=False
+                    if code_object is relation_foreground_code and frame is relation_io_binding[0] and line==5980 and type(value) is c.Refusal:
                         if object.__getattribute__(value,'__dict__').get('code')=='E_RUNTIME':relation_snapshot_state[2]=value
                     if (code_object is relation_foreground_code and frame is relation_io_binding[0] and
-                            not relation_io_binding[2] and line==5894):
+                            not relation_io_binding[2] and line==5980):
                         relation_io_binding[2]=True
                         try:
                             local=frame_fields['f_locals'].__get__(frame)

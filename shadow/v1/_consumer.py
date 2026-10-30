@@ -1612,6 +1612,33 @@ class Anchor:
             self.private_observations["unusable"] = True
             runtime_leaf["failure"] = {"category": type(error).__name__, "errno": getattr(error, "os_errno", getattr(error, "errno", None))}
             if getattr(error, "_scope_signal_cancel", False) or not isinstance(error, failures):raise
+            _facts_type = type
+            _facts_pop = dict.pop
+            _facts_base = BaseException
+            _facts_attribute = AttributeError
+            _facts_index = IndexError
+            _facts_key = KeyError
+            _facts_memory = MemoryError
+            _facts_runtime = RuntimeError
+            _facts_type_error = TypeError
+            _facts_value = ValueError
+            _facts_stop = StopIteration
+            _facts_failure = runtime_leaf["failure"]
+            try:
+                _facts_code, _facts_point = _retain_preparation_failure_facts(error)
+                _facts_failure["code"] = _facts_code
+                _facts_failure["point"] = _facts_point
+            except _facts_base as _facts_error:
+                _facts_error_type = _facts_type(_facts_error)
+                if not (_facts_error_type is _facts_attribute or _facts_error_type is _facts_index
+                        or _facts_error_type is _facts_key or _facts_error_type is _facts_memory
+                        or _facts_error_type is _facts_runtime or _facts_error_type is _facts_type_error
+                        or _facts_error_type is _facts_value or _facts_error_type is _facts_stop):
+                    raise
+                _facts_pop(_facts_failure, "point", None)
+                _facts_pop(_facts_failure, "code", None)
+            finally:
+                _facts_failure = None
             return None
         finally:
             tail_failure = None
@@ -2467,6 +2494,65 @@ class Anchor:
         if first is not None:raise first
         _require(copied is not None, "E_STORE")
         return copied
+
+
+def _retain_preparation_failure_facts(error, *,
+        _refusal=Refusal, _owner_code=Anchor.retain_preparation.__code__,
+        _owner_globals=Anchor.retain_preparation.__globals__,
+        _first=Anchor.retain_preparation.__code__.co_firstlineno, _span=212,
+        _instance_dict=BaseException.__dict__["__dict__"],
+        _traceback=BaseException.__dict__["__traceback__"],
+        _type=type, _dict=dict, _tuple=tuple, _str=str, _int=int,
+        _len=len, _iter=iter, _next=next, _base=BaseException,
+        _optional=(AttributeError, IndexError, KeyError, MemoryError,
+                   RuntimeError, TypeError, ValueError, StopIteration)):
+    values = iterator = first = second = third = code_item = value = trace = frame = None
+    frame_code = frame_globals = None
+    try:
+        if _type(error) is not _refusal:
+            return "UNKNOWN", 0
+        values = _instance_dict.__get__(error)
+        if _type(values) is not _dict or _len(values) != 2:
+            return "UNKNOWN", 0
+        iterator = _iter(_dict.items(values))
+        first, second, third = _next(iterator, None), _next(iterator, None), _next(iterator, None)
+        if (third is not None or _type(first) is not _tuple or _type(second) is not _tuple
+                or _len(first) != 2 or _len(second) != 2
+                or _type(first[0]) is not _str or _type(second[0]) is not _str):
+            return "UNKNOWN", 0
+        if first[0] == "code" and second[0] == "os_errno":
+            code_item = first
+        elif second[0] == "code" and first[0] == "os_errno":
+            code_item = second
+        else:
+            return "UNKNOWN", 0
+        value = code_item[1]
+        if (_type(value) is not _str or _len(value) > 16
+                or value not in ("E_ACL", "E_CANONICAL", "E_CONFIG", "E_DEPENDENCY", "E_INSTALL",
+                                 "E_LIMIT", "E_PARENT_CONTEXT", "E_RELATION", "E_RUNTIME", "E_STALE", "E_STORE")):
+            return "UNKNOWN", 0
+        trace = _traceback.__get__(error)
+        if trace is None:
+            return value, 0
+        trace_type = _type(trace)
+        frame = trace_type.__dict__["tb_frame"].__get__(trace)
+        point = trace_type.__dict__["tb_lineno"].__get__(trace)
+        frame_type = _type(frame)
+        frame_code = frame_type.__dict__["f_code"].__get__(frame)
+        frame_globals = frame_type.__dict__["f_globals"].__get__(frame)
+        if (frame_code is not _owner_code or frame_globals is not _owner_globals
+                or _type(point) is not _int or not _first <= point <= _first + _span):
+            return value, 0
+        return value, point
+    except _base as optional_error:
+        optional_type = _type(optional_error)
+        for native_type in _optional:
+            if optional_type is native_type:
+                return "UNKNOWN", 0
+        raise
+    finally:
+        error = values = iterator = first = second = third = code_item = value = trace = frame = None
+        frame_code = frame_globals = None
 
 
 def _principal_identity_values(principal_uid, real_uid, effective_uid):
