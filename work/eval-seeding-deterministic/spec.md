@@ -1998,13 +1998,16 @@ to evade the source cap. Executable and policy files always belong to the closur
      `raw16_C1_gate_revision` 和 `refuse_outer` 绑定设计源
      `929d59d243ae4f9b0a5a50a7c697759a087d3f12`；`_raw16_C1_foreground_finally_seam`
      与下表 runtime guard 的 `proof_program` 绑定设计源
-     `7f17a0181af3c4674df63f924c5b8f97f7938831`；其余接点保留设计源
+     `7f17a0181af3c4674df63f924c5b8f97f7938831`；下表 ordinary observer 接点绑定设计源
+     `3d3d3aedd145054224ae8ef41a38c70048480f17` 及完整 consumer SHA-256
+     `7d58f60c6622ae4e3f22167a3429d72a0d65e826c8d91bf87a016644226018ad`；其余接点保留设计源
      `53bed46d5eb694bfd05578f5ac1841b9443749c6`。后续实现须绑定实际
      已接受 source 与完整 recipe bytes。此条不扩大 C1 的六个功能路径或三个 pin 路径，
      本测试表不改产品行为，不开放整个测试文件或其它测试；固定辅助生产接点分别列于下文。
 
      | 测试路径与接点 | 修改范围与保留要求 |
      | --- | --- |
+     | `scripts/test/scope-qualification.test.sh`：`PY_OBSERVER_OWNER_CONTROLS/observe_case` 的普通 observer 私有 copy | 仅经一个命名的 `_ordinary_observer_metadata_compat` 有限私有转换边界，让 old/uncached/cached 共用下述固定 metadata 异常归属规则。保留正式四 literal、两 native helper/body/hash、旧 d35 与 1197/1231 原字节及 UNPROVED。只更新原 errno 精确尾断言和实际必需机械绑定；不改其它组、正式生成结果或生产。 |
      | `scripts/test/scope-qualification.test.sh`：`PY_GUARD_CONTROLS` 的 `fixed_short_phase` 内原 `proof_program` | 仅在原 `__new__` 创建的 `_DarwinChildOwner` 上、原 `_foreground` 调用前补 `ledger=None`，接回真实无继承 ledger 语义。完整核当前构造与 `_foreground` 的所有 self 读取及后继分支：`inherited` 必为 false，原可选 gate/coverage 属性仍缺省，全部 deadline 读取仍由原 inherited/gate 条件保护。不得造 ledger/session/deadline、任意补状态、改生产或替换原完整 `_foreground`；保留原固定 child/env seam、实际取消/READY-complete/channel、cleanup/receipt及全部断言。 |
      | `scripts/test/scope-qualification.test.sh`：`process_snapshot_controls` 的原 ordinary helper 私有 copy seam | 仅把 source-hash 断言及 `sources` 中 consumer 项的两个固定旧 digest，在各自完整上下文内绑定到独立审过的完整 consumer bytes。每处恰一次，并纳入原完整 inverse。保留原 runtime seam、全部 source/runtime/qualification 拒绝、真实持有/关闭及费用。Linux 原 `actual-helper` 必须通过原 source/held 检查，由原 Darwin 平台门拒绝，满足原 `GAP`、returncode 1、空 stdout 和 stderr 尾 `:E_RUNTIME\n`；native query 仍为 NOTRUN，不改平台门或以 source-hash ASSERT 替代。 |
      | `scripts/test/candidate-content-preparation-fixtures.py`：`raw16_C1_gate_revision` | 从唯一真实 request phase 取原 `session.call_id` 及紧随的 request 赋值。跨原 request/wrapper/result 三 owner 保留 `K_REQUEST` → 同 session 的 `context[1].release_local()` → 原 not-local/not-remote 检查 → collector → `K_DONE`。核唯一性、参数、相邻关系、context 数据流及全部后继 AST 选择，不调用整个 phase。保留六个原 case、phase/request-id 两 mutation、全部 owner/wire/COMPLETE/once-close/首错/取消/snapshot/费用断言与原 collector stub；不增加 recorder dual-parent caller，不改下文十六 caller 排除。 |
@@ -2022,6 +2025,33 @@ to evade the source cap. Executable and policy files always belong to the closur
      | `scripts/test/shadow-enforced.test.sh`：原共享 orchestration flow（设计源 3891–4098） | 接全真实固定 `Anchor.retain_runtime_acquisition/retain_parent_inputs/retain_sudo_companion/retain_preparation/seal_local_runtime` 及原 receiver 必需状态；不以空方法、常量成功或吞 AttributeError 替代。原 Snap 的 `original/acquisition_raw` 须来自同次普通 fixture 的真实 holder 与完整 bytes；原 store seam 接收同次 `_owner` 并建立真实 held/snapshots/recheck/close 及 reproduction/capture 关系，不能只忽略参数或假造 owner。保留原 host/process/native launch 模拟边界、13 个控制、29 个 evidence 文件、实际调用顺序、changed-response 拒绝和 finally。真实保留方法的拒绝、unusable、失败/取消及全费用照常保留；原普通 unqualified context 不成为合格 P/完成/seed 证明。仅修共享原 fixture，`shadow-write.test.sh` 的原复制/变换器和 writer 专有插入保持不变。 |
      | `scripts/test/evals-malicious.test.sh`：`PY_CAPTURE_VALUES` 内 source 的成功 reacquisition/seal 分支 | 在第一次真实 `_Owned.append` 前建立同一 Reader/Anchor 的 owner、真实 configuration 与其登记；两次 source acquisition 仍绑定该同 case 的实际 configuration，其 capture/held/完整 raw 各由本次真实取得，不借别的 source acquisition 或 case。保留原 failed_sync 两分支、native receipt/payload、两次 reacquisition、完整四成员 capture、同 case 账、真实最终 owner/seal、全部 tail transfer 和关闭。新增 configuration P 的成员/数量/费用须逐项实测并列入原精确计数；不改成功 seal 判定或用清失败状态恢复它。 |
      | `scripts/test/evals-malicious.test.sh`：`PY_SOURCE_CANCEL` 的原共享 receiver | 接全原 positive 所需同一 owner、真实 configuration/source 登记、实际 capture/held 和关闭先决，再沿用原 27 个 label 及各原故障注入位置。保留 positive 的无意外 unusable、真实完整 bytes、同一 reader/generator cancellation 对象、首错/次错、FD once-close/无泄漏、全部账与原负例判定。仅原 `owned` 后置条件改为同一 Reader 已实际登记的 configuration baseline 加原 case 的 source 登记增量；须核同一对象、原顺序且无额外 owner，seal 分支的 source 增量仍为空。不另造假 owner 来维持旧 list，不把预期失败改为必须成功。精确计数只按真实新增 configuration P 的实际贡献分项调整，不跳过 source copy、伪造输出或清 unusable。 |
+
+     ordinary observer 只处理 `_metadata → _capture_metadata → HeldPath.recheck` 与
+     `_named_metadata → _capture_named_metadata → HeldPath.recheck` 两条直接边。
+     在原 wrapper 桶清理前，把同次已捕获的原异常事件转存到所属同一 recheck 的
+     当前 component/iteration；不得从旧 local、期望 errno 或其它 component 造事件。
+     用固定源、实际原函数 code/global 身份、直接 frame 关系及准确 fd/name/parent_fd
+     关联核归属。三变体保留各自原 watched/source/code 分类与 cache 规则；兼容转存
+     不扩大 watched、信任或采集范围，不按名字猜、不向上通用找帧、不重复 stat/read。
+     保留事件原 function/exception/errno 和物理直接 caller_line：设计源为 4273/4283，
+     不能伪成外层 607。原 errno 尾断言须核真实 `_metadata(fd)` 调用与唯一事件，
+     同一 recheck/component 关系及原 613 `raise Refusal(code) from None` guard 语义。
+     未打印的 errno 与 job6 内部分项仍 UNKNOWN，不用 expected 倒填实际观测。
+
+     复用原 ordinary 路径已读的源字节，不增 IO。完整固定 formal source → 原变体 →
+     ordinary copy 链逐段唯一核验；三变体均在同一私有转换边界适配，不复制三份实现。
+     新转换须精确全 inverse 回各自未适配变体，并连同既有变换完整追溯同一正式原件；
+     inverse baseline 不预含本次改动。正式四 literal、两 native helper/body/hash、
+     d35/1197/1231 与正式转换/逆变换保持原字节，未变 frontend/maps/pins 不重生成。
+     原 12-event/16-frame 上限、清理、首错/取消、不重复及不跨 component 均保持。
+     正常 stat/bool return、gap、四 kinds、三变体、原调用数量和全部断言保持，
+     包括 source/code 认证、cache 身份/容量/回退、same-request primitive/dispatch/local
+     对照、callbacks 减少和 shape 相等。只允许原 errno 精确尾断言的上述兼容修订；
+     不增加 fields/kinds/calls/trials/probe、retired R 或诊断设施。
+     所有新增存续、引用、复制、分类与序列化费用照计，未量测为 UNKNOWN；有限数量或
+     同对象不豁免费用，也不构成 fit 或 native 资格。此适配私有于原普通回归边界；
+     正式原件冻结是其约束。只有后续独立接受的正式 observer 已覆盖这两条边，且原
+     三变体完整证明不再需要该转换时才移除；第二处用途须返回 artifact gate。
 
      runtime guard 仅按这处真实 proof bytes 的变化，机械重绑原完整 proof 长度/SHA、
      实际受影响的 compile 行和短 driver clock sites/maps。逐项核完整生成配方、
@@ -2074,7 +2104,8 @@ to evade the source cap. Executable and policy files always belong to the closur
      单换 SHA 或替换计数不构成兼容证明。须核完整生成 recipe、实际依赖及原所有拒绝
      控制；变换缺失/重复/越界、错误 source/copy/行号、漏依赖或 guard 被删除均须拒绝。
      除表内固定绑定、先决适配、真实新增 configuration P 的分项精确计数、`close-failure` 及
-     `PY_SOURCE_CANCEL` 的上述两个精确 owner 后置条件特例外，其它源码、observer/诊断语义、
+     `PY_SOURCE_CANCEL` 的上述两个精确 owner 后置条件特例及本条 ordinary observer
+     私有异常转存外，其它源码、observer/诊断语义、
      场景和断言判定不变。`PY_STALE_PREPARE` 原四个 observer literal、转换/逆变换规则
      及两个 native 旧绑定保持原字节；仅下文非干扰根修允许按新 consumer bytes 机械
      重绑既有 SHA 与九份 copy 的实际 maps 行值，并完整验证全部逆变换。上述 first-Git phase literal 仅准补该
@@ -2526,7 +2557,7 @@ in CI; wiring the record report into anything but the relay; enablement.
 - **Risk is high.** Eval policy, seed and scope-gate change. An operator-merged
   plan-only PR precedes code.
 - **Size.** This spec amendment uses `review_size: standard` for the fixed ordinary
-  runtime-guard owner initialization, with all original proof requirements.
+  observer metadata-exception compatibility boundary, with all original proof requirements.
   The separate high-risk plan must set the whole PR 1b implementation range, including the preserved relay
   code, every owner extraction and all tests. It must count inherited code and
   failed/retained proof; no partial implementation is a finished PR. Do not trim
