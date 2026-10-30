@@ -2222,11 +2222,48 @@ to evade the source cap. Executable and policy files always belong to the closur
 
      | 原测试接点 | 仅允许的失败证据 |
      | --- | --- |
-     | `scripts/test/candidate-content-preparation-fixtures.py:raw16_t_lifecycle` 的原 writer two-roots 循环和末尾复合断言（设计源 1809–1839） | 失败时保存实际 writer_calls 次数/原两个 operation 标记、unusable 与已有 preparation leaf 的 failure/errno/incomplete/关闭状态。已有 T parent transition 必须保留，不按“缺接线”改写；两次执行、两个 scratch、真实 seal/成员及全部原断言不变。 |
+     | `scripts/test/candidate-content-preparation-fixtures.py:raw16_t_lifecycle` 的原 writer two-roots 循环和末尾复合断言（设计源 1809–1839） | 失败时保存实际 writer_calls 次数/原两个 operation 标记、unusable 与已有 preparation leaf 的 failure/errno/incomplete/关闭状态。仅以下 retain_preparation_failure_facts 窄例外可在原 failure 字典增加 code/point；fixture 沿原 whole-failure 输出，不增加实现或调用。已有 T parent transition 必须保留，不按“缺接线”改写；两次执行、两个 scratch、真实 seal/成员及全部原断言不变。 |
      | `scripts/test/shadow-self-host-evidence.test.sh` 原 scope harness pre/post evaluator 调用（设计源 2141–2163） | 在普通测试 stderr 标明原 pre/post 调用阶段、真实退出状态及原已取得的有界错误码/失败事实；保留一次原 evaluate-scope 调用、完整原 stdout/stderr 文件和实际 FAIL。不得 mock evaluator/Reader、删除两真实记录、吞 E_RUNTIME 或改 not-proposable、reason、qualification、authority/enabled、authentication 和 proposal 断言。 |
 
-     raw16_t_lifecycle keeps its existing facts-only contract. The original scope
-     pre/post failure may use one temporary private scope_pre_failure_point boundary.
+     raw16_t_lifecycle keeps its facts-only contract with one temporary private
+     retain_preparation_failure_facts boundary in shadow/v1/_consumer.py. Bind
+     Anchor.retain_preparation's original except to source
+     cff7d274e9ba15d2a9d6fbc7779513097b3861b1:1610–1615. After its original
+     failure/unusable/category/errno and cancellation/rethrow decision, before
+     return None, one private pure helper may add only code/point to that same
+     runtime_leaf["failure"]. Preserve error/None/finally, tail_failure, cleanup and
+     cancellation priority. This changes existing failure JSON bytes, not authority.
+     Neither field controls acceptance, execution GO or qualification.
+
+     Accept only the exact original Refusal type, fixed at definition time; other
+     error types yield UNKNOWN/0. Read stored fields through the trusted builtin
+     BaseException instance-dictionary descriptor, never direct attributes/getattr.
+     Require exact dict with exactly two exact-str keys code and os_errno; validate
+     keys before lookup/comparison/hash could invoke an unknown object. Read only
+     code's value: exact str in E_ACL/E_CANONICAL/E_CONFIG/E_DEPENDENCY/E_INSTALL/
+     E_LIMIT/E_PARENT_CONTEXT/E_RELATION/E_RUNTIME/E_STALE/E_STORE, else UNKNOWN.
+     Do not read os_errno's value, args, message, repr, locals, cause or context.
+     Output no path, name, source text or stack.
+
+     For that same exact Refusal, use trusted builtin traceback/frame descriptors
+     on its existing head node only; never follow tb_next. Require actual code and
+     globals identity equal to original Anchor.retain_preparation identities fixed
+     at definition time, not a current method lookup or filename/name inference.
+     point is only an exact positive int tb_lineno within that reviewed owner's
+     source range, bound to the actual loaded source/copy statement; otherwise 0.
+     It identifies this caller statement, not a deeper guard, syscall or root cause.
+     The separate plan must prove builtin descriptor provenance without a new import,
+     exception sample or probe. Add no custom getter/str/repr/equality/hash call.
+     Optional failure leaves UNKNOWN/0 or absent added fields; retain no exception,
+     frame or traceback object. Keep helper/binding private to this one except;
+     no scope-helper reuse, registry, second owner or diagnostic API. Charge actual
+     initialization/projection/allocation/output costs to original owners/caps.
+     No new source read, FD, process, real call, case, retry or allowance. Use existing
+     failure controls/calls; preserve both producer/retention calls, two roots,
+     seal and all original success/refusal/once-close assertions.
+
+     The original scope pre/post failure may use one temporary private
+     scope_pre_failure_point boundary.
      Keep the original bare code as stderr line one. Permit one further ASCII line,
      at most 64 bytes: SCOPE_FAIL_V1 owner point errno. owner is F/R/C/U; point is
      a source-bound statement line or 0 for unknown. No path, name, message or stack.
@@ -2286,7 +2323,14 @@ to evade the source cap. Executable and policy files always belong to the closur
      Existing shell string-read byte loss is not raw-byte authentication; these
      fields never control product acceptance, execution GO or qualified evidence.
 
-     Incremental paths are scope/v1/read-shadow-evidence.py and
+     The raw16 exception adds only this consumer except/helper/fixed binding to
+     its earlier R9.2 contacts; candidate-fixture output code stays byte-identical.
+     Rebind actual moved consumer SHA, existing nine copies/maps and affected whole
+     class/function/generated-body hashes with complete inverse and caller-point
+     proof, then original source/closure/program→driver→launcher pins. Keep four
+     observer literals, both old native bindings, transforms and member sets; no
+     hash-only waiver. Do not extend the scope helper's sixteen objects or generator.
+     The separate scope incremental paths are scope/v1/read-shadow-evidence.py and
      scope/v1/evaluate-scope.sh at these exits; scripts/test/shadow-self-host-evidence.test.sh
      at the original failure and existing fixture process; and
      scripts/test/scope-qualification.test.sh at existing source SHA, nine-copy map
@@ -2304,10 +2348,13 @@ to evade the source cap. Executable and policy files always belong to the closur
      source/recipe/resource review and execution GO. Keep the original six-shard,
      79-suite full CI recipe; no new matrix, diagnostic run, retry, timeout, native,
      target, network or credential scope. UNKNOWN does not authorize another run.
-     Once real evidence locates the original failure and the root fix is accepted,
-     remove this temporary boundary and restore bare-code-only stderr. Final full
-     CI must prove the state after removal under its separately accepted execution
-     plan. Do not turn this boundary into a lasting diagnostic facility.
+     Remove each boundary after its own real failure is located and its root
+     fix/regression independently accepted: raw16 helper/binding/leaf fields, and
+     scope extensions with bare-code-only stderr restored. An unresolved raw16
+     failure cannot delay resolved scope removal. A later pass alone does not close
+     its earlier UNKNOWN root or P1. Final full CI must prove both removed under a
+     separately accepted execution plan. This grants no run or lasting diagnostic
+     facility; use only the original full79 recipe at a fresh authorized tuple.
      这些接点都已在原 R9.3 路径表内；42/SOURCE84/原 20-path、六功能三 pin
      集合及九 adoption-only 文件不变。完整独立 high-risk plan、fresh source/
      recipe/resource review 与 GO 仍先于代码和执行；不借用旧 CI 或 native 窗口。
