@@ -774,7 +774,8 @@ blocked pending its exact scope gate.
 ### Existing regression compatibility (R9.2)
 
 The compatibility requirements below remain accepted obligations. Current edits
-are only the fixed C1 root-fix contacts listed after them. The six C1 functional
+are only the fixed C1 root-fix contacts listed after them and the
+`raw16_C1_gate_revision` compatibility row below. The six C1 functional
 paths, three pin paths, SOURCE 84, nine adoption-only paths and original 20-path
 source subset stay unchanged. The auxiliary production boundaries are the accepted
 qualifier compatibility, fixed recorder/foreground contacts and the temporary
@@ -782,8 +783,8 @@ scope_pre_failure_point below; qualification standards and success output schema
 stay frozen.
 Rebind exact source/recipe bytes after this plan lands and main merges. Add no
 selector, recursive loader, observer, framework, workflow or diagnostic matrix.
-The earlier repaired contacts below remain frozen except the exact current
-contacts listed later. Retain all their controls and failure evidence.
+The earlier repaired contacts below remain frozen except that gate fixture row
+and the exact current contacts listed later. Retain all controls and failure evidence.
 
 | File | Fixed contact and order of work |
 | --- | --- |
@@ -793,7 +794,26 @@ contacts listed later. Retain all their controls and failure evidence.
 | `scripts/test/evals-framework.test.sh` | `review_fixture` and its fixed `review_substitute` calls: verify the four driver catalog positions (`CATALOG_SHA`, `FIXED_PINS`, `verify_runtime`, `run_program`) and the one launcher position. Bind those exact replacements, then the original approval replacements, then measure the private driver and bind that digest in the private launcher. Keep strict counts and exact private diffs; do not compute an expected replacement count from the input. |
 | `scripts/test/scope-gate-generation.test.sh` | `verifier_observation_value_controls`: extract the unique `environment_entry_sha = _verifier_registry_entry_sha(registry[0])`, the unique `raw = _verifier_observation_values(environment_id, environment_entry_sha, anchor.accepted[0], target_repository_id, verifier_sha)`, and the final `return raw`, in that order. Check complete arguments, targets and data flow. Apply only the existing `anchor.accepted` seam. Keep the intervening production recording branch in place and outside this existing value-only comparison. |
 | `scripts/test/candidate-content-preparation-fixtures.py` | `raw16_preparation_P_handoff`: wire the two existing transitions described below in its seven original cases. Check the inspect result before indexing, while retaining the actual failed retention and its errors. |
+| `scripts/test/candidate-content-preparation-fixtures.py` | Only `raw16_C1_gate_revision`: select the original `session.call_id` assignment and immediately following request assignment from `_Generator._kill_source_request_phase`. Bind the original five-role transition across request phase → `kill_source` → result phase: `K_REQUEST`, same-session `context[1].release_local()`, `not session.local and not session.remote` check, collector call, `K_DONE`. |
 | `scripts/test/shadow-enforced.test.sh` | In the first `PY_REPRODUCTION_VALUES`, add only the real `_runtime_sha_values` to the original ten-name AST selection. Require exactly one definition of each of `Refusal`, `canonical`, `sha`, `parse`, `document_ref`, `_native_provenance_values`, `_runtime_sha_values`, `_reproduction_provenance_values`, `_reproduction_record_values`, `_reproduction_bundle_values`, `StableFile`. Keep the existing namespace and all 32 original assertions; the helper uses its existing `sha/c`, so retain the exact `marked_sha`/bundle order, early-failure prefixes and error payloads. Do not alter expected marks, omit the Python hash, catch NameError as success or use a recursive loader. |
+
+For this gate fixture, require unique methods and statements, exact targets,
+arguments, adjacency and order. Verify the returned context carries the same reader,
+session and raw into the original wrapper release and result statements. Check all
+subsequent AST selections; replacing only the first missing match is insufficient.
+Use the original bounded slices; do not invoke whole request/result phases or copy
+product statements into a replacement implementation. Keep the existing
+`evals-malicious.test.sh` calls to `raw16_C1_gate_revision_controls` and
+`raw16_C1_revision_deletions`: all six normal/held-failure/reader-failure/prior-cancel/
+prior-failure/post-transfer cases and both phase/request-id mutations must retain
+their original assertions. Preserve every owner, frame, wire/COMPLETE/close,
+once-close, first-error/cancellation, snapshot, fee and other assertion, including
+the existing collector stub and no-source/native-qualification limit. Keep all costs
+in the original case and caps. No fabricated state or skipped check is allowed.
+Add no diagnostic field, print, probe, loader or invocation. Generator and SOURCE 84
+stay unchanged. This does not add a recorder dual-parent caller or change that
+R9.2 exclusion in the spec. The existing plan landing, fresh CODE-scope review/GO
+and separate execution review/GO below apply before source edits or tests.
 
 The stale recipe's design source SHA-256s are:
 
@@ -3806,8 +3826,8 @@ gates (R9.6).
   operator-graded seed and its test. 150-450 of them are verbatim verdict bytes, which
   cannot leave the PR whose test checks their digests.
 - PR 3: `review_size: standard`, about 300-400 net added lines.
-- This plan-only amendment: `review_size: standard`. One concern: complete the
-  existing C1_T backing and writer admission with their required owner facts.
+- This plan-only amendment: `review_size: standard`. One concern: bind the existing
+  C1 gate fixture to the three actual Generator phase owners.
   Original regressions, bindings and runtime-invoice obligations stay intact.
 
 Each range waives only the soft line signal, never scope, tests, CI, review or human
