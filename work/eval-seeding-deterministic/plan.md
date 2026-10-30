@@ -175,11 +175,11 @@ existing grader kinds stay byte-identical.
 | Distinct cases in one family | Two temporary valid seed sets with disjoint cases from one shipped family; run both, then dashboard | Accepted; two cases and two runs for that family |
 | Direct program rejection | Feed the cross-result repeat to the shipped jq program's `build-dashboard` and `validate-dashboard` | Build errors with `E_SHAPE` and no JSON; validate returns exactly false |
 | Direct program acceptance | Feed the corresponding no-repeat fixtures to both direct entries | Build succeeds; validate true on its canonical output |
-| M2/M3 below floor | Temporary scope-test dashboard: `stale-moved-artifacts` uses multi/minimum 3, total 2, all passed | Only `scope.eval-failing`; proposal absent |
-| M2/M3 floor and above | Same fixture with total 3, then 4, all passed | Baseline `scope.proposable`; output remains inactive, enabled false |
-| M2/M3 failed/inconclusive | Total 3, with one failed, then one inconclusive; remaining passed | Only `scope.eval-failing`; proposal absent |
-| Single regression | Same required seeded family, single/minimum 1: zero; one passed; one failed; one inconclusive | Zero/failed/inconclusive refuse; one passed matches baseline |
-| Declared regression | Require malicious family from the unchanged temporary dashboard | `scope.eval-family-unseeded`; no proposal |
+| M2/M3 below floor | Temporary scope-test dashboard: `stale-moved-artifacts` uses multi/minimum 3, total 2, all passed | Exact reasons `["scope.eval-failing","scope.sandbox-receipt-missing"]`; proposal absent |
+| M2/M3 floor and above | Same fixture with total 3, then 4, all passed | Family passes: exact baseline reasons `["scope.sandbox-receipt-missing"]`; no eval refusal |
+| M2/M3 failed/inconclusive | Total 3, with one failed, then one inconclusive; remaining passed | Exact reasons `["scope.eval-failing","scope.sandbox-receipt-missing"]`; proposal absent |
+| Single regression | Same required seeded family, single/minimum 1: zero; one passed; one failed; one inconclusive | Zero/failed/inconclusive have the same exact two reasons; one passed has only the baseline receipt refusal |
+| Declared regression | Require malicious family from the unchanged temporary dashboard | Exact reasons `["scope.eval-family-unseeded","scope.sandbox-receipt-missing"]`; proposal absent |
 | Catalog boundary | Fixed digest and both declared families checked in dashboard test; retain existing seven-set aggregate and framework catalog assertions | Original bytes, 7 seeded / 2 declared, unchanged 138-case aggregate |
 
 In `evals-dashboard.test.sh`, put new cases beside the existing duplicate test.
@@ -196,12 +196,38 @@ In `scope-qualification.test.sh`, add `check_eval_trial_policy` immediately afte
 `mutate_scope` (`:495`), then call it unconditionally. The existing setup through
 `:490` supplies whole scope, dashboard, shadow and gate fixtures and `good`.
 Use `run_evaluator` with the changed dashboard and unchanged other arguments.
-Require baseline reasons exactly `["scope.proposable"]` before mutations. Check
-outcome, reasons and inert proposal state, not reasons alone. Build every mutation
-from the original dashboard so cases cannot contaminate each other. Keep the
-existing eval checks (`:847–891`) and every later assertion. This named test group
-also allows the private bounded proof below to run the exact committed assertions;
-it adds no CLI option, environment selector or reusable test framework.
+The unchanged good fixture has two legacy declarations and two required shadow
+environments. Require baseline outcome not-proposable, exact reasons
+`["scope.sandbox-receipt-missing"]` and complete proposal `{state:"absent"}`.
+Each row retains that outcome/proposal and inactive, enabled-false checks. Its
+exact reasons above must distinguish passing families from failed ones; accepting
+any refusal would lose the positive proof. Preserve all nine original rows,
+labels, kind/total/passed/failed/inconclusive values and their original evaluator
+calls. Rename the row's expected-result column to family_result. Retain its nine
+original tokens: proposable means family-pass; not-proposable means family-fail.
+Neither token specifies whole-scope qualification. Update only their
+oracle branches and assertion messages accordingly. Keep the baseline and declared
+calls. Build each mutation from the original dashboard. Keep all other eval checks
+and every later assertion. No fake receipt, changed required environment, alternate
+input, new call, CLI selector or test framework is permitted.
+
+These oracle repairs bind `scripts/test/scope-qualification.test.sh` in source
+`cff7d274e9ba15d2a9d6fbc7779513097b3861b1`: check_eval_trial_policy at
+9812–9873, the complete dashboard-shape loop at 10619–10649, and the binding
+baseline/stale/rebound group at 10651–10719. They are permanent test corrections,
+not temporary failure projection; their contacts are separate from its removal.
+The latter two use the exact R3.3 assertions below. This is the only incremental
+source path. This repair leaves legacy inputs, run_evaluator, bind_dashboard_evaluator,
+expect_reasons and all original process calls unchanged; the separately gated
+temporary-removal work retains its own exact scope. Preserve the original authenticated
+positive controls and their negative/restoration pairs, including genuine enforced
+and withheld-write records and coverage pairs. They remain ordinary mechanism
+proof, not native qualification. Do not add a call or synthetic authentication to
+replace them. Existing map/source bindings must still match the final actual
+source; no new observer, diagnostic contact or hash-only semantic waiver.
+The original full 79-suite recipe and source/recipe/resource gates remain; all
+prior failures and UNKNOWN costs remain charged. No run, cap increase, production
+change or acceptance follows from this amendment.
 
 ## PR 1b now: complete review source and record relay
 
@@ -506,11 +532,14 @@ input, not closure. This inventory does not claim any shadow closure bound.
    content against candidate SHA. Do not add the private value to output or
    broaden qualification. On a wrong pair, the original invalid-dashboard path
    yields `not-proposable`, proposal `{state:"absent"}` and sorted reasons
-   `["scope.eval-failing","scope.eval-family-unseeded","scope.malformed"]`
-   for the otherwise-good fixture. This normal result exits 0 with empty stderr.
+   `["scope.eval-failing","scope.eval-family-unseeded","scope.malformed",
+   "scope.sandbox-receipt-missing"]` for the unchanged legacy fixture. This normal
+   result exits 0 with empty stderr. The complete dashboard-shape loop requires
+   this same exact array and complete absent proposal for every original mutation.
    Preserve `reference_semantics:"identity-only"`, observation-only, unavailable
-   qualification, inactive, authority/authority_effect none, enabled false and
-   the proposable baseline's blocked enablement. Scope does not replay eval or
+   qualification, inactive, authority/authority_effect none and enabled false.
+   Any independently valid present proposal retains blocked enablement; legacy
+   declarations cannot produce one. Scope does not replay eval or
    verify other components' actual closure files. Rewrite only the relevant old
    comment to distinguish pair integrity from those unchanged limits.
 4. Keep measuring the entire held dashboard for output evidence. Keep all existing
@@ -529,15 +558,24 @@ input, not closure. This inventory does not claim any shadow closure bound.
    the already verified registry/core_closure relation above. The maintenance
    fixture does not enter this scope path and remains unchanged.
 6. Add paired assertions beside the scope test's existing dashboard-shape group.
-   First require the real bound baseline's exact outcome/reasons and inert fields.
-   From that baseline change only one `record_closure` digest to a different valid
+   The real bound legacy baseline must have outcome not-proposable, exact reasons
+   `["scope.sandbox-receipt-missing"]`, complete proposal `{state:"absent"}` and
+   all original top-level inert fields. From it change only one `record_closure`
+   digest to a different valid
    64-hex value; preserve all keys, three paths, ordering, count and the old inner
    SHA. Prove the inner content bytes changed while the SHA field did not. Invoke
    the real `run_evaluator` and assert the refusal in step 3, including exit 0,
    empty stderr and absent proposal. Then extract exactly that changed content,
    hash its C1 bytes and update only its inner SHA. Run again and require baseline
-   outcome/reasons and unchanged authority fields. Compare projected semantic
-   fields, not the whole output whose evidence dashboard SHA must change.
+   outcome/reasons and unchanged authority fields. Preserve the old-SHA/content
+   inequality, actual changed C1-byte comparison and SHA-only rebind checks. The
+   positive must remove all three dashboard refusals while retaining only the
+   independent receipt refusal. In the existing baseline/rebound semantic projection,
+   keep outcome, reason_ids, activation_state, authority, authority_effect, enabled,
+   evaluation_mode, reference_semantics and qualification; compare the complete
+   proposal object instead of absent document fields projected as null. Keep the
+   actual cmp and all three evaluator calls. Evidence dashboard SHA changes, so do
+   not compare whole evaluations or weaken to merely not-proposable/exit zero.
 7. Add missing/wrong-type body, evaluator and content parents to the existing
    malformed-dashboard checks. Require the original refusal rather than jq error.
    Keep existing shape mutations; when they alter an object evaluator content,
