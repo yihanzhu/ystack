@@ -1,5 +1,5 @@
 ---
-spec-blob: e8bd61a7876197d6598782d01f7fb53248e8aed0
+spec-blob: d4b09913df81e58eee0834270b50dc099b694b90
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-26
@@ -14,8 +14,8 @@ one complete two-source delivery. Source preparation does not accept a dependenc
 a real recording, native qualification or either seed batch.
 
 This plan binds accepted G2 spec blob
-`e8bd61a7876197d6598782d01f7fb53248e8aed0` at main
-`741003baa15792c4bc44cc9bd6bbd5952f9e4c0d` (PR #779).
+`d4b09913df81e58eee0834270b50dc099b694b90` at main
+`53fddb1dfd43c4df725087298c0ae5dc51f075cf` (PR #781).
 The separate high-risk plan-only gate must pass before dependent code.
 RAW16 acquisition design
 locations retain historical source `c1d9d23e42e6efe2d6da1aae3d23b34564b4080d`
@@ -774,9 +774,8 @@ blocked pending its exact scope gate.
 ### Existing regression compatibility (R9.2)
 
 The compatibility requirements below remain accepted obligations. This pass edits
-only `raw16_C1_gate_revision`, `process_snapshot_controls` and `refuse_outer` below,
-plus the actual moved dashboard caller line. Earlier root-fix contacts stay frozen.
-The six C1 functional
+only `_raw16_C1_foreground_finally_seam` below. The three repaired compatibility
+contacts and earlier root-fix contacts stay frozen. The six C1 functional
 paths, three pin paths, SOURCE 84, nine adoption-only paths and original 20-path
 source subset stay unchanged. The auxiliary production boundaries are the accepted
 qualifier compatibility, fixed recorder/foreground contacts and the temporary
@@ -784,11 +783,12 @@ scope_pre_failure_point below; qualification standards and success output schema
 stay frozen.
 Rebind exact source/recipe bytes after this plan lands and main merges. Add no
 selector, recursive loader, observer, framework, workflow or diagnostic matrix.
-The earlier repaired contacts below remain frozen except these three rows.
+The earlier repaired contacts below remain frozen except the finally seam row.
 Retain all controls and failure evidence.
 
 | File | Fixed contact and order of work |
 | --- | --- |
+| `scripts/test/candidate-content-preparation-fixtures.py` | Only `_raw16_C1_foreground_finally_seam`: from the same original `_DarwinChildOwner._foreground`, select the unique `primary=None`, `cleanup_errors=[]`, `result_value=None` and local `later(error)`, the original exception capture, complete finalbody and complete following arbitration through `return result_value`. Join these original AST slices around the existing controlled `raise native`; preserve the same exception object and deferred arbitration. |
 | `scripts/test/scope-qualification.test.sh` | Only `process_snapshot_controls`' existing ordinary helper copy: check the copied consumer against the fixed SHA below. In the complete source-hash assertion and `sources` consumer tuple, replace each old digest exactly once. Include both replacements and the original `ordinary_prefix`/`ordinary_runtime` changes in the complete inverse to the same `original_helper`; capture that baseline before any new substitution. Preserve all existing controls and calls. |
 | `scripts/test/shadow-write.test.sh` | Only `outer-original-receipt`'s explicit `refuse_outer`: receive the eighth `record_form` argument and forward it unchanged to `original_outer`. Keep the original single receipt SHA mutation, actual admission, exactly one boundary marker, no retained output/seal and `finally` restoration. Do not change production, other `*args` stubs, the two valid seven-argument default calls or the shared transformer. |
 | `scripts/test/scope-qualification.test.sh` | `PY_STALE_PREPARE`, then its directly bound source SHA and line assertions: inspect the whole generation recipe; bind its three actual sources; check every fixed transformation before changing the private copies. Recompute the complete source-to-copy line maps and prove the inverse against the bound originals. Update only the corresponding source hash/line assertions in the existing owned/stale controls and dashboard caller binding. |
@@ -799,6 +799,27 @@ Retain all controls and failure evidence.
 | `scripts/test/candidate-content-preparation-fixtures.py` | `raw16_preparation_P_handoff`: wire the two existing transitions described below in its seven original cases. Check the inspect result before indexing, while retaining the actual failed retention and its errors. |
 | `scripts/test/candidate-content-preparation-fixtures.py` | Only `raw16_C1_gate_revision`: select the original `session.call_id` assignment and immediately following request assignment from `_Generator._kill_source_request_phase`. Bind the original five-role transition across request phase → `kill_source` → result phase: `K_REQUEST`, same-session `context[1].release_local()`, `not session.local and not session.remote` check, collector call, `K_DONE`. |
 | `scripts/test/shadow-enforced.test.sh` | In the first `PY_REPRODUCTION_VALUES`, add only the real `_runtime_sha_values` to the original ten-name AST selection. Require exactly one definition of each of `Refusal`, `canonical`, `sha`, `parse`, `document_ref`, `_native_provenance_values`, `_runtime_sha_values`, `_reproduction_provenance_values`, `_reproduction_record_values`, `_reproduction_bundle_values`, `StableFile`. Keep the existing namespace and all 32 original assertions; the helper uses its existing `sha/c`, so retain the exact `marked_sha`/bundle order, early-failure prefixes and error payloads. Do not alter expected marks, omit the Python hash, catch NameError as success or use a recursive loader. |
+
+For the finally seam, bind design source `7f17a0181af3c4674df63f924c5b8f97f7938831`
+and the unchanged full consumer SHA below. Check method/try uniqueness, exact
+initializers, local collector body and source order. The bounded catch uses the
+original exception type/name and `primary = exc`; prove the remaining handler is
+only the original `if child is not None` cleanup. Keep `child=None`, empty
+`old_handlers`, the same handoff/selector/previous and production globals. Resolve
+all reads in the selected slices, including `_c3_first` and `_c1_p_report`; prove
+all child-only paths remain inactive. Copy the complete finalbody and following
+identity deduplication/cause-chain/raise/return statements. The catch must finish
+before arbitration runs. No empty later, fabricated state, replacement arbitrator,
+unreachable tail or whole foreground/spawn/TERM/wait execution is allowed.
+
+Keep the original compound `caught is first`, `closes == [handoff]` and
+`reports == [(ordinary, 'foreground-close')]`, later identity in `C1_p_errors`,
+unusable/runtime=None and every following assertion. Preserve real original_close/
+original_fail, cls restoration, selector/signal-mask fallback, first cancellation,
+later errors, once-close, the single original call and all actual costs/caps.
+Unobserved compound components stay UNKNOWN; source analysis cannot fill them.
+Add no read, call, probe, field, print, loader or diagnostic path. This seam is not
+a recorder dual-parent caller or native proof. All other source bytes stay frozen.
 
 For this gate fixture, require unique methods and statements, exact targets,
 arguments, adjacency and order. Verify the returned context carries the same reader,
@@ -826,9 +847,10 @@ Never derive expected from arbitrary runtime source bytes or preapply the new
 binding to the inverse baseline. Keep runtime path/UID/version/isolated flags,
 nine-field identity, held bytes/recheck, ACL, close/cancel, fees and caps. Keep the
 three original actual-helper/source-refusal/runtime-refusal calls and later metadata
-controls. Linux actual-helper must reach consumer-load/native-query and satisfy
-its original GAP, returncode 1, empty stdout and `:E_RUNTIME\n` stderr tail;
-source-hash ASSERT cannot satisfy it. This does not prove consumer-tamper or native
+controls. Linux actual-helper must pass the original source/held checks and be
+refused by the unchanged Darwin platform guard: native query remains NOTRUN. Keep
+GAP, returncode 1, empty stdout and the `:E_RUNTIME\n` stderr tail; source-hash
+ASSERT cannot satisfy it. This does not prove consumer-tamper or native
 qualification. No new invocation, probe, field, print or loader is allowed.
 
 Keep all four formal observer literals, both native helper bodies/hashes and their
@@ -3852,8 +3874,8 @@ gates (R9.6).
   operator-graded seed and its test. 150-450 of them are verbatim verdict bytes, which
   cannot leave the PR whose test checks their digests.
 - PR 3: `review_size: standard`, about 300-400 net added lines.
-- This plan-only amendment: `review_size: standard`. One concern: complete the three
-  fixed ordinary fixture compatibility contacts.
+- This plan-only amendment: `review_size: standard`. One concern: complete the
+  original foreground-finally fixture owner extraction.
   Original regressions, bindings and runtime-invoice obligations stay intact.
 
 Each range waives only the soft line signal, never scope, tests, CI, review or human
