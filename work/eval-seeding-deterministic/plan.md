@@ -1240,9 +1240,10 @@ other's completed work with a stale whole-file copy.
 | B | consumer _DarwinChildOwner._foreground; the two existing scope-qualification foreground groups; original shadow-self-host-evidence scope harness failure reporting only. |
 | Final | Freeze both product files; rebind allowed scope SHA/maps/caller/frame lines and the original evals.jq → evals-driver.sh → evals-launcher.sh source/closure pin chain. |
 
-All file paths are the existing R9.3 entries. Writer source and its test copier
-remain unchanged. The preceding compatibility repairs and A2 ledger corrections
-are retained work, not authorization to rework their other contacts.
+All file paths are the existing R9.3 entries. Recorder/foreground A/B leave
+writer source and its test copier unchanged. The preceding compatibility repairs
+and A2 ledger corrections are retained work, not authorization to rework their
+other contacts.
 
 **A: prepare and hold one recorder.** In reproduce, move the existing initial
 native/runtime and parent-input retention after exclusions and all original work,
@@ -1313,9 +1314,10 @@ twenty-nine evidence files and seven preparation P cases. Adapt only the sixteen
 fixed candidate-fixture callers in that accepted spec row, using their existing
 real initializer once for each actual owner/request. Complete backing first;
 initialize before every dependency/input/T/P seal and before local P/case binding.
-Keep native scratch/T at their original work locations. Other acquisitions keep
-their original real locator, object, count and full bytes; do not relocate or
-reopen O for recording. Bind P targets, actual H-copy/transitions, seal and case
+Keep native scratch/T at their original work locations. Apart from the missing
+fixed sudo backing below, acquisitions keep their original real locator, object,
+count and full bytes; do not relocate or reopen O for recording.
+Bind P targets, actual H-copy/transitions, seal and case
 to the held recorder, including raw16_P_handoff_accounting's registered
 nested-stable. Install original fault hooks after successful initialization so
 they still hit the original operation and exact error/cancellation/close control.
@@ -1325,9 +1327,37 @@ native-chain continuation. Real inspect still proves previous-source replacement
 and old-owner close. Initialize raw16_C1_T_windows before constructing its assembly
 case; use each actual recorder case for its original two contexts, early
 consumption, occurrences and all costs. Preserve existing charges; no new case
-allowance, cross-context borrowing or count-only adjustment. The four direct
-Anchor/acquire exclusions in the spec remain byte-identical. In the original
-shared-flow and seven-case carriers, add only their finite
+allowance, cross-context borrowing or count-only adjustment.
+
+For raw16_C1_T_windows's reproduction backing, supply its missing sudo acquisition
+through the existing fixed_sudo owner and StableDirectory._retain_sudo /
+Anchor.retain_sudo_companion chain. After the original recorder initialization,
+complete this same-request, same-case O→P/storage acquisition before the first
+snapshot, H-copy and assembly. Use the real fixed /usr/bin/sudo and its read-only
+companion. Preserve the execution owner's metadata SHA, both actual identities,
+full held/name/ACL chains and before/after checks. Use normal owner holds,
+rechecks and once-close on success, partial failure and cancellation. Keep first
+and later errors visible; no failed acquisition or close can yield usable backing.
+Charge all added work and storage to the same original case under all original
+caps. Include acquisition, read, metadata, hash, serialization, copy, overlap,
+retained output and close. No new case, allowance, refund or assumed fit.
+Keep the original T early consumptions, both
+contexts, producer calls, transitions and all assertions unchanged.
+
+Do not add a root/path/ACL seam, synthetic held chain or storage row, borrow
+another case's acquisition, change the fixed path or uniqueness check, or relax
+qualification. Consumer and replay projectors stay unchanged. If the existing
+real owner route cannot supply this backing, stop and return to the affected
+artifact gate before any alternative implementation. This supplement adds only
+two functional contacts: this fixture and the _admit argument correction below.
+All earlier accepted requirements remain unchanged.
+Derive any necessary existing source-copy hashes, caller lines and
+source/closure→evals.jq→driver→launcher bindings from their actual final diff.
+Keep SOURCE84, four observer literals, both unproved native bindings and all caps.
+Add no diagnostic field, facility, trial, matrix or execution window.
+
+The four direct Anchor/acquire exclusions in the spec remain byte-identical. In
+the original shared-flow and seven-case carriers, add only their finite
 paired dependency leaf/ancestor drift, wrong recorder owner/name, native-scratch
 drift and initialization/partial/close/cancel failures. Deleting the isolated
 destination or a parent/identity guard must fail its matching control. The plain
@@ -1917,6 +1947,14 @@ those objects. Change imports only to make value definitions load without enteri
 | 9 write-shadow.py | Extract _publisher/_admit/_outer_record/provenance/command value construction from acquisition | Existing prepare/write call the same functions with held facts; coordinator uses reconstructed inputs. All old predicates remain; values cannot grant real write admission. |
 | 10 scope reader/generator | Extract request/expectation, bundle fact, measured observation, project_register, origins and manifest/completion value constructors | Existing _Reader/_Generator acquire real facts and session checks; coordinator calls values plus real jq evaluators. Public evaluate-scope retains its real reader handshake. |
 | 11 replay-malicious.py | One fixed `replay_case(held_case,runtime_root,private_work)` orchestration and comparison | Only the fixed eval-driver arm calls it; no public toolkit, plugin dispatch, transport or arbitrary callable. Expected outputs/invariants go only to final comparison. |
+
+In write-shadow.py's _admit, pass the same materialized.write_set already used
+by _admission_values to _candidate_facts. Do not substitute write["write_set"] or
+skip candidate validation. Preserve all admission predicates, receipt checks,
+Git inventory/commit/tree/parent relations and every full blob/byte/SHA check.
+Keep provenance, outer record, seal/close and publication withheld. The existing
+shadow-write positive calls and all negative assertions remain the proof;
+no copied test or additional invocation is needed.
 
 Instantiate these same owners independently for each applicable R4A.B occurrence.
 Keep both launch controllers, all four preparation calls and the two gate reader
@@ -3768,9 +3806,9 @@ gates (R9.6).
   operator-graded seed and its test. 150-450 of them are verbatim verdict bytes, which
   cannot leave the PR whose test checks their digests.
 - PR 3: `review_size: standard`, about 300-400 net added lines.
-- This plan-only amendment: `review_size: standard`. One concern: the accepted
-  C1 recorder noninterference and owned foreground cleanup, with their fixed
-  regression bindings and bounded failure facts. Runtime-invoice obligations stay intact.
+- This plan-only amendment: `review_size: standard`. One concern: complete the
+  existing C1_T backing and writer admission with their required owner facts.
+  Original regressions, bindings and runtime-invoice obligations stay intact.
 
 Each range waives only the soft line signal, never scope, tests, CI, review or human
 merge.
