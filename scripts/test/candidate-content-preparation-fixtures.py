@@ -6219,12 +6219,20 @@ def raw16_C2_lifecycle_core(root: Path, selected=None, mutation=None) -> None:
             failures.append('length-'+str(size))
         print(json.dumps({'case':'codec','failures':failures,'work':fixed['c2_counters'](work)},sort_keys=True))
     finally:left.close();right.close()
+    import copy as counter_copy
     cap=256<<20
     values=[]
-    for amount in (cap-5,3,3,0):
+    for index,amount in enumerate((cap-5,3,3,0)):
         counter=fixed['c2_counters'](fixed['c2_fresh_work']('C2-bounded-counter-only'))
-        counter['window']['write_bytes']=amount;counter['window']['accounting']['M']['write_bytes']=amount
-        counter['window']['seed_processing']['W']=counter['window']['seed_processing']['C']=amount;values.append(counter)
+        initial=counter['window']
+        counter={'window':counter_copy.deepcopy(initial),'common':counter_copy.deepcopy(initial),
+            'cases':{identity:counter_copy.deepcopy(initial) for identity in fixed['_C2_CASES']}}
+        scopes=[(counter['window'],amount),(counter['common'],3 if amount else 0)]
+        scopes.extend((counter['cases'][identity],(64<<20)-2 if index==0 else 0) for identity in fixed['_C2_CASES'])
+        for scope,allocated in scopes:
+            scope['write_bytes']=scope['accounting']['M']['write_bytes']=allocated
+            scope['seed_processing']['W']=scope['seed_processing']['C']=allocated
+        values.append(counter)
     admitted=fixed['c2_combine'](values[0],values[1],values[3])
     fixed['c2_reserve'](admitted,values[3])
     assert admitted['window']['write_bytes']==cap-2

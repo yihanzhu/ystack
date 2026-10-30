@@ -3050,7 +3050,7 @@ evaluation_reasons() {
 }
 dashboard_shape_evaluation() {
   local scope_dashboard_line=${BASH_LINENO[0]}
-  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 10414 ]; then scope_dashboard_inflight=true; fi
+  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 10519 ]; then scope_dashboard_inflight=true; fi
   evaluation_document "$@"
   scope_dashboard_inflight=false
 }
@@ -8525,7 +8525,112 @@ finally:
     uncached_observer=uncached_observer.replace('        watched_cache.clear()\n','')
     uncached_observer=uncached_observer.replace('            count_classification(7)\n','')
     uncached_observer=uncached_observer.replace('    def trace(frame,event,arg):\n','    classification_counts=[None]\n    def trace(frame,event,arg):\n',1)
+    def _ordinary_observer_metadata_compat(code,consumer,filename):
+        assert hashlib.sha256(consumer).hexdigest()=='7d58f60c6622ae4e3f22167a3429d72a0d65e826c8d91bf87a016644226018ad'
+        tree=ast.parse(consumer)
+        names=('_metadata','_named_metadata','_capture_metadata','_capture_named_metadata','HeldPath')
+        nodes={}
+        for name,line in zip(names,(542,546,4271,4281,579)):
+            matches=[node for node in tree.body if isinstance(node,(ast.FunctionDef,ast.ClassDef)) and node.name==name]
+            assert len(matches)==1 and matches[0].lineno==line
+            nodes[name]=matches[0]
+        checks=[node for node in nodes['HeldPath'].body if isinstance(node,ast.FunctionDef) and node.name=='recheck']
+        assert len(checks)==1 and checks[0].lineno==602
+        module=compile(consumer,filename,'exec',dont_inherit=True)
+        expected={'module':module,'filename':filename,'types':(types.CodeType,types.FunctionType,type)}
+        for name in names:
+            matches=[value for value in module.co_consts if type(value) is types.CodeType and value.co_name==name]
+            assert len(matches)==1 and matches[0].co_filename==filename and matches[0].co_firstlineno==nodes[name].lineno
+            expected[name]=matches[0]
+        matches=[value for value in expected['HeldPath'].co_consts if type(value) is types.CodeType and value.co_name=='recheck']
+        assert len(matches)==1 and matches[0].co_filename==filename and matches[0].co_firstlineno==602
+        expected['recheck']=matches[0]
+        setup="""    metadata_expected=_ordinary_metadata_expected
+    metadata_binding=[None]
+    metadata_seen=[False]
+"""
+        bind="""            if event=='return' and frame.f_code.co_name=='<module>' and frame.f_code.co_filename==metadata_expected['filename']:
+                code_type,function_type,class_type=metadata_expected['types']
+                namespace=frame.f_globals
+                if metadata_seen[0]:
+                    if metadata_binding[0] is not None and metadata_binding[0][0] is not namespace:metadata_binding[0]=None
+                else:
+                    metadata_seen[0]=True
+                    if type(frame.f_code) is code_type and frame.f_code==metadata_expected['module'] and type(namespace) is dict:
+                        functions=[namespace.get(name) for name in ('_metadata','_named_metadata','_capture_metadata','_capture_named_metadata')]
+                        owner_class=namespace.get('HeldPath')
+                        recheck=owner_class.__dict__.get('recheck') if type(owner_class) is class_type else None
+                        valid=True
+                        actual_codes=[]
+                        for name,function in zip(('_metadata','_named_metadata','_capture_metadata','_capture_named_metadata','recheck'),functions+[recheck]):
+                            wanted=metadata_expected[name]
+                            actual_code=function.__code__ if type(function) is function_type else None
+                            if (type(function) is not function_type or function.__globals__ is not namespace or
+                                    type(actual_code) is not code_type or actual_code!=wanted or
+                                    actual_code.co_filename!=wanted.co_filename or actual_code.co_firstlineno!=wanted.co_firstlineno):
+                                valid=False
+                                break
+                            actual_codes.append(actual_code)
+                        if valid and all(function.__code__ is code for function,code in zip(functions+[recheck],actual_codes)):
+                            metadata_binding[0]=(namespace,functions,owner_class,recheck,tuple(actual_codes))
+"""
+        route="""                recheck_frame=parent.f_back
+                binding=metadata_binding[0]
+                owner=component=previous_component=item=destination=None
+                try:
+                    if binding is not None and recheck_frame is not None:
+                        namespace,functions,owner_class,recheck,codes=binding
+                        edge=0 if frame.f_code is codes[0] else 1 if frame.f_code is codes[1] else None
+                        if (edge is not None and all(function.__code__ is code for function,code in zip(functions+[recheck],codes)) and
+                                frame.f_globals is namespace and parent.f_globals is namespace and
+                                parent.f_code is codes[edge+2] and recheck_frame.f_globals is namespace and
+                                recheck_frame.f_code is codes[4] and parent.f_lineno==(4273,4283)[edge] and
+                                recheck_frame.f_lineno in ((607,618),(609,620))[edge]):
+                            local=recheck_frame.f_locals
+                            owner=local.get('self');component=local.get('component');index=local.get('index')
+                            bucket=events.get(id(recheck_frame))
+                            if (type(owner) is owner_class and type(index) is int and 0<=index<len(owner.components) and
+                                    owner.components[index] is component and type(bucket) is dict and
+                                    bucket.get('component')==(id(recheck_frame),index)):
+                                if edge==0:
+                                    same=(frame.f_locals.get('fd')==parent.f_locals.get('fd')==component.fd)
+                                else:
+                                    previous_component=owner.components[index-1] if index>0 else None
+                                    same=(previous_component is not None and frame.f_locals.get('name')==parent.f_locals.get('name')==component.name and
+                                        frame.f_locals.get('parent_fd')==parent.f_locals.get('parent_fd')==previous_component.fd)
+                                destination=bucket.get('returns')
+                                if same and type(destination) is list and destination is not values:
+                                    item=values[-1]
+                                    try:destination.append(item)
+                                    finally:
+                                        if destination and destination[-1] is item:values.pop()
+                                    del destination[:-12]
+                finally:
+                    recheck_frame=binding=owner=component=previous_component=item=destination=None
+"""
+        cleanup="""        events.clear()
+        metadata_binding.clear()
+        metadata_seen.clear()
+        metadata_expected.clear()
+"""
+        edits=[('    def trace(frame,event,arg):\n',setup+'    def trace(frame,event,arg):\n'),
+            ('        try:\n            parent=frame.f_back\n','        try:\n'+bind+'            parent=frame.f_back\n'),
+            ("                    'exception':type(arg[1]).__name__,'errno':getattr(arg[1],'errno',None)})\n                del values[:-12]\n",
+             "                    'exception':type(arg[1]).__name__,'errno':getattr(arg[1],'errno',None)})\n                del values[:-12]\n"+route),
+            ("        except BaseException as error:gap='trace-restore:'+type(error).__name__\n",
+             "        except BaseException as error:gap='trace-restore:'+type(error).__name__\n"+cleanup)]
+        original=code
+        for before,after in edits:
+            assert code.count(before)==1
+            code=code.replace(before,after,1)
+        inverse=code
+        for before,after in reversed(edits):
+            assert inverse.count(after)==1
+            inverse=inverse.replace(after,before,1)
+        assert inverse==original
+        return code,expected
     def observe_case(code,kind):
+        code,metadata_expected=_ordinary_observer_metadata_compat(code,consumer,str(package/'shadow/v1/_consumer.py'))
         target=area/'value';target.write_bytes(b'actual owned file');log=area/'log';log.write_bytes(b'')
         if '    source_codes={}\n' in code:
             code=code.replace('    source_codes={}\n',"    authentication={'requests':0,'filename_memberships':0,'code_set_memberships':0,'objects':{},'rows':[],'stack':[],'events':[]}\n    globals()['AUTH_RESULT']=authentication\n    class AuthenticationTable(dict):\n        def __contains__(self,key):\n            authentication['filename_memberships']+=1\n            authentication['stack'][-1]['filename']+=1\n            return super().__contains__(key)\n    class AuthenticationSet(set):\n        def __contains__(self,key):\n            authentication['code_set_memberships']+=1\n            authentication['stack'][-1]['set']+=1\n            return super().__contains__(key)\n    source_codes=AuthenticationTable()\n",1)
@@ -8539,7 +8644,7 @@ finally:
         if same_request and kind=='identity':
             print(json.dumps({'observer_primitive_adapter_preexec':negative_adapter,'sha256':hashlib.sha256(negative_adapter.encode()).hexdigest()}),flush=True)
             reports.append(primitive_witness_controls(negative_adapter))
-        ns={};exec(compile(code,'actual-private-observer','exec'),ns)
+        ns={'_ordinary_metadata_expected':metadata_expected};exec(compile(code,'actual-private-observer','exec'),ns)
         callbacks={};wrappers={};install=sys.settrace
         def wrap(fn):
             if fn is None:return None
@@ -8612,7 +8717,7 @@ finally:
             frame,item=actual[0]
             assert frame['function']=='recheck' and frame['component']['ancestor'] is False
             lines=(package/'shadow/v1/_consumer.py').read_text().splitlines()
-            assert lines[item['caller_line']-1].strip()=='current = _metadata(component.fd)'
+            assert item['caller_line']==4273 and lines[item['caller_line']-1].strip()=='value = _metadata(fd)'
             assert lines[result['guard']['line']-1].strip()=='raise Refusal(code) from None'
         return result,callbacks,elapsed,authentication,reference
     for kind in ('identity','errno','bool','gap'):
