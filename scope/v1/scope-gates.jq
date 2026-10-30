@@ -1023,7 +1023,7 @@ content_ref("scope-qualification-policy";
 content_ref("workflow-scope-record";
   "application/vnd.ystack.workflow-scope+json"; $scope_sha) as $scope_content_ref |
 content_ref("operating-mode-marker"; "application/json"; $marker_sha) as $mode_ref |
-{
+({
   eval_dashboard_ref: document_ref($dash; $dashboard_sha),
   kill_switch_evaluation_ref: document_ref($kill_doc; $kill_sha),
   duty_evaluation_ref: document_ref($duty_doc; $duty_sha),
@@ -1035,7 +1035,7 @@ content_ref("operating-mode-marker"; "application/json"; $marker_sha) as $mode_r
   git_snapshot: $measured[0].body.git,
   shadow_set_ref: document_ref($set; $shadow_set_sha),
   unclaimed_shadow_records: $unclaimed
-} + (if $covered_write then {coverage:$measured[0].body.coverage} else {} end) as $evidence |
+} + (if $covered_write then {coverage:$measured[0].body.coverage} else {} end)) as $evidence |
 
 {
   schema_version: 1,
