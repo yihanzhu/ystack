@@ -1,5 +1,5 @@
 ---
-spec-blob: 0fb2bd01378582d9991c791ce83672621413aa24
+spec-blob: e8bd61a7876197d6598782d01f7fb53248e8aed0
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-26
@@ -14,8 +14,8 @@ one complete two-source delivery. Source preparation does not accept a dependenc
 a real recording, native qualification or either seed batch.
 
 This plan binds accepted G2 spec blob
-`0fb2bd01378582d9991c791ce83672621413aa24` at main
-`bf4a1316ebfc1171dcc0d3607e0e9b23963bca83` (PR #776).
+`e8bd61a7876197d6598782d01f7fb53248e8aed0` at main
+`741003baa15792c4bc44cc9bd6bbd5952f9e4c0d` (PR #779).
 The separate high-risk plan-only gate must pass before dependent code.
 RAW16 acquisition design
 locations retain historical source `c1d9d23e42e6efe2d6da1aae3d23b34564b4080d`
@@ -773,9 +773,10 @@ blocked pending its exact scope gate.
 
 ### Existing regression compatibility (R9.2)
 
-The compatibility requirements below remain accepted obligations. Current edits
-are only the fixed C1 root-fix contacts listed after them and the
-`raw16_C1_gate_revision` compatibility row below. The six C1 functional
+The compatibility requirements below remain accepted obligations. This pass edits
+only `raw16_C1_gate_revision`, `process_snapshot_controls` and `refuse_outer` below,
+plus the actual moved dashboard caller line. Earlier root-fix contacts stay frozen.
+The six C1 functional
 paths, three pin paths, SOURCE 84, nine adoption-only paths and original 20-path
 source subset stay unchanged. The auxiliary production boundaries are the accepted
 qualifier compatibility, fixed recorder/foreground contacts and the temporary
@@ -783,11 +784,13 @@ scope_pre_failure_point below; qualification standards and success output schema
 stay frozen.
 Rebind exact source/recipe bytes after this plan lands and main merges. Add no
 selector, recursive loader, observer, framework, workflow or diagnostic matrix.
-The earlier repaired contacts below remain frozen except that gate fixture row
-and the exact current contacts listed later. Retain all controls and failure evidence.
+The earlier repaired contacts below remain frozen except these three rows.
+Retain all controls and failure evidence.
 
 | File | Fixed contact and order of work |
 | --- | --- |
+| `scripts/test/scope-qualification.test.sh` | Only `process_snapshot_controls`' existing ordinary helper copy: check the copied consumer against the fixed SHA below. In the complete source-hash assertion and `sources` consumer tuple, replace each old digest exactly once. Include both replacements and the original `ordinary_prefix`/`ordinary_runtime` changes in the complete inverse to the same `original_helper`; capture that baseline before any new substitution. Preserve all existing controls and calls. |
+| `scripts/test/shadow-write.test.sh` | Only `outer-original-receipt`'s explicit `refuse_outer`: receive the eighth `record_form` argument and forward it unchanged to `original_outer`. Keep the original single receipt SHA mutation, actual admission, exactly one boundary marker, no retained output/seal and `finally` restoration. Do not change production, other `*args` stubs, the two valid seven-argument default calls or the shared transformer. |
 | `scripts/test/scope-qualification.test.sh` | `PY_STALE_PREPARE`, then its directly bound source SHA and line assertions: inspect the whole generation recipe; bind its three actual sources; check every fixed transformation before changing the private copies. Recompute the complete source-to-copy line maps and prove the inverse against the bound originals. Update only the corresponding source hash/line assertions in the existing owned/stale controls and dashboard caller binding. |
 | `scripts/test/scope-qualification.test.sh` | `PY_SAME_CALL_OWNED_CONTROLS:sudo_provenance_controls`: keep the original `provenance/recheck/close`, `FixedSudo/fixed_sudo` and actual FD seam. Extract their fixed current dependencies and initialize the receiver state described below before running the original twelve cases. |
 | `scripts/test/scope-qualification.test.sh` | In the top-level `PY_COVERAGE_PURE` manual `_Reader` construction, set only the original `source_copies=[]` and `capture_completion_owner=None` before acquiring any held object. Retain the existing `store_session=None`, all 141 original checks, real owned/Git/child/FD objects, command ledger and `finally: reader.close()`. Preserve first-error/cancellation behavior; do not clear owned, swallow errors, skip close, fake completion/enforced state or change production close. |
@@ -814,6 +817,29 @@ Add no diagnostic field, print, probe, loader or invocation. Generator and SOURC
 stay unchanged. This does not add a recorder dual-parent caller or change that
 R9.2 exclusion in the spec. The existing plan landing, fresh CODE-scope review/GO
 and separate execution review/GO below apply before source edits or tests.
+
+These three compatibility contacts bind design source
+`929d59d243ae4f9b0a5a50a7c697759a087d3f12`. The ordinary helper alone replaces
+`d35cb669a1521fb007c7814c49ca05054ef13d973067de8d0719073525971597` with fixed
+`7d58f60c6622ae4e3f22167a3429d72a0d65e826c8d91bf87a016644226018ad`.
+Never derive expected from arbitrary runtime source bytes or preapply the new
+binding to the inverse baseline. Keep runtime path/UID/version/isolated flags,
+nine-field identity, held bytes/recheck, ACL, close/cancel, fees and caps. Keep the
+three original actual-helper/source-refusal/runtime-refusal calls and later metadata
+controls. Linux actual-helper must reach consumer-load/native-query and satisfy
+its original GAP, returncode 1, empty stdout and `:E_RUNTIME\n` stderr tail;
+source-hash ASSERT cannot satisfy it. This does not prove consumer-tamper or native
+qualification. No new invocation, probe, field, print or loader is allowed.
+
+Keep all four formal observer literals, both native helper bodies/hashes and their
+old digest/1197/1231 bindings byte-identical and UNPROVED. Consumer, production,
+SOURCE 84, nine frontend copies/maps and program/driver/launcher pins do not change
+for these test repairs; do not regenerate unchanged bindings. Only if these edits
+move the existing dashboard caller, rebind its existing line literal to the final
+actual statement and retain its full binding and all three accepted oracles.
+Bind final test/recipe bytes and modes. The normal merge, fresh CODE review/GO and
+separate full source/recipe/resource review and unique execution GO below still apply;
+all earlier failures, UNKNOWN/P1 and final native/G3 obligations remain open.
 
 The stale recipe's design source SHA-256s are:
 
@@ -3826,8 +3852,8 @@ gates (R9.6).
   operator-graded seed and its test. 150-450 of them are verbatim verdict bytes, which
   cannot leave the PR whose test checks their digests.
 - PR 3: `review_size: standard`, about 300-400 net added lines.
-- This plan-only amendment: `review_size: standard`. One concern: bind the existing
-  C1 gate fixture to the three actual Generator phase owners.
+- This plan-only amendment: `review_size: standard`. One concern: complete the three
+  fixed ordinary fixture compatibility contacts.
   Original regressions, bindings and runtime-invoice obligations stay intact.
 
 Each range waives only the soft line signal, never scope, tests, CI, review or human
