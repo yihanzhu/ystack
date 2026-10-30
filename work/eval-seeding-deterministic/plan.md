@@ -1,5 +1,5 @@
 ---
-spec-blob: a284090093670ddfa8e5c09a86564bc73dcdf941
+spec-blob: db56b3c5dd4eee21da12211da5a588f44e9333c9
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-26
@@ -14,8 +14,8 @@ one complete two-source delivery. Source preparation does not accept a dependenc
 a real recording, native qualification or either seed batch.
 
 This plan binds accepted G2 spec blob
-`a284090093670ddfa8e5c09a86564bc73dcdf941` at main
-`3c72b55e34d5b1e393e830057d5d7cd980e4f53a` (PR #783).
+`db56b3c5dd4eee21da12211da5a588f44e9333c9` at main
+`9ca414b1ebe17509a212f8bf5b8ca2ba548ebaa8` (PR #785).
 The separate high-risk plan-only gate must pass before dependent code.
 RAW16 acquisition design
 locations retain historical source `c1d9d23e42e6efe2d6da1aae3d23b34564b4080d`
@@ -775,7 +775,8 @@ blocked pending its exact scope gate.
 
 The compatibility requirements below remain accepted obligations. This pass edits
 only the original `raw16_C2_lifecycle_core` bounded-counter construction described
-in the C2 section, plus genuinely required mechanical bindings. The repaired
+in the C2 section and the ordinary observer row below, plus genuinely required
+mechanical bindings. The repaired
 finally seam, runtime guard proof, three earlier compatibility contacts and all
 earlier root-fix contacts stay frozen. The six C1 functional
 paths, three pin paths, SOURCE 84, nine adoption-only paths and original 20-path
@@ -785,11 +786,12 @@ scope_pre_failure_point below; qualification standards and success output schema
 stay frozen.
 Rebind exact source/recipe bytes after this plan lands and main merges. Add no
 selector, recursive loader, observer, framework, workflow or diagnostic matrix.
-Every compatibility row below remains frozen in this pass.
+Every compatibility row below except the ordinary observer row remains frozen in this pass.
 Retain all controls and failure evidence.
 
 | File | Fixed contact and order of work |
 | --- | --- |
+| `scripts/test/scope-qualification.test.sh` | Only `PY_OBSERVER_OWNER_CONTROLS/observe_case`: one `_ordinary_observer_metadata_compat` private transformation applies the same fixed metadata-exception routing to old/uncached/cached ordinary copies. Preserve their original classifiers and formal sources. Only the original errno tail assertion and necessary actual bindings may change. |
 | `scripts/test/scope-qualification.test.sh` | Only `PY_GUARD_CONTROLS.fixed_short_phase`'s original `proof_program`: set `instance.ledger=None` after its existing `__new__` and before its original `_foreground` call. Keep the same owner and real non-inherited branch. Check all direct self reads and original conditional guards; do not add fake ledger/session/deadline/python/source/context, modify production or replace the original foreground. |
 | `scripts/test/candidate-content-preparation-fixtures.py` | Only `_raw16_C1_foreground_finally_seam`: from the same original `_DarwinChildOwner._foreground`, select the unique `primary=None`, `cleanup_errors=[]`, `result_value=None` and local `later(error)`, the original exception capture, complete finalbody and complete following arbitration through `return result_value`. Join these original AST slices around the existing controlled `raise native`; preserve the same exception object and deferred arbitration. |
 | `scripts/test/scope-qualification.test.sh` | Only `process_snapshot_controls`' existing ordinary helper copy: check the copied consumer against the fixed SHA below. In the complete source-hash assertion and `sources` consumer tuple, replace each old digest exactly once. Include both replacements and the original `ordinary_prefix`/`ordinary_runtime` changes in the complete inverse to the same `original_helper`; capture that baseline before any new substitution. Preserve all existing controls and calls. |
@@ -802,6 +804,94 @@ Retain all controls and failure evidence.
 | `scripts/test/candidate-content-preparation-fixtures.py` | `raw16_preparation_P_handoff`: wire the two existing transitions described below in its seven original cases. Check the inspect result before indexing, while retaining the actual failed retention and its errors. |
 | `scripts/test/candidate-content-preparation-fixtures.py` | Only `raw16_C1_gate_revision`: select the original `session.call_id` assignment and immediately following request assignment from `_Generator._kill_source_request_phase`. Bind the original five-role transition across request phase → `kill_source` → result phase: `K_REQUEST`, same-session `context[1].release_local()`, `not session.local and not session.remote` check, collector call, `K_DONE`. |
 | `scripts/test/shadow-enforced.test.sh` | In the first `PY_REPRODUCTION_VALUES`, add only the real `_runtime_sha_values` to the original ten-name AST selection. Require exactly one definition of each of `Refusal`, `canonical`, `sha`, `parse`, `document_ref`, `_native_provenance_values`, `_runtime_sha_values`, `_reproduction_provenance_values`, `_reproduction_record_values`, `_reproduction_bundle_values`, `StableFile`. Keep the existing namespace and all 32 original assertions; the helper uses its existing `sha/c`, so retain the exact `marked_sha`/bundle order, early-failure prefixes and error payloads. Do not alter expected marks, omit the Python hash, catch NameError as success or use a recursive loader. |
+
+For ordinary observer compatibility, bind source
+`3d3d3aedd145054224ae8ef41a38c70048480f17` and the fixed full consumer SHA
+`7d58f60c6622ae4e3f22167a3429d72a0d65e826c8d91bf87a016644226018ad`.
+Use only the existing already-read consumer bytes and private package path.
+The single named transformation runs at the existing `observe_case` copy seam,
+before its current authentication/same-request adapters. Keep the unmodified
+input for exact inverse. Apply identical event-routing text to all three variants;
+do not duplicate implementations or modify `old`, `observer` or formal literals
+in place. The old classifier has no `source_codes`; do not add that table to its
+classifier, widen watched or borrow a live global as its own proof of identity.
+
+Build the trusted binding during this finite transformation setup: compile the
+fixed already-read consumer bytes with their exact existing private filename,
+mode/flags and `dont_inherit=True`, without executing the consumer. Select the
+unique direct module code constants for `_metadata`, `_named_metadata`,
+`_capture_metadata`, `_capture_named_metadata` and `HeldPath`, then its unique
+direct `recheck` code. Check the full fixed source/AST and these exact positions;
+no recursive loader, new read, arbitrary selector or runtime-derived expected SHA.
+Pass these private expected code objects through the existing observer namespace
+setup. They are internal references, not new output fields or observer events.
+
+At the original consumer module-return event already delivered to the trace,
+bind that invocation's actual globals only when the complete module code equals
+the trusted compiled code and its filename is exact. Require actual `CodeType`
+and `FunctionType` using the existing control's trusted types, not objects that
+merely expose code/global attributes. Check each of the four function objects
+against its trusted complete code and filename/first line; require its `__globals__`
+to be that same namespace. Check the actual `HeldPath` class and its direct
+`recheck` function likewise. Retain these authenticated object
+identities for this observe invocation only. Do not replace the binding on a
+second namespace or accept code-name equality. A missing or mismatched binding
+cannot produce a transferred event or successful errno proof. Keep the existing
+observer gap/failure behavior; do not suppress a product exception or cancellation.
+
+At the existing primitive exception callback, use only `frame`, its direct parent
+and that parent's direct parent. Require the bound primitive function/code/global,
+matching bound capture wrapper, and bound `HeldPath.recheck` code/global. The
+recheck receiver must have the bound exact class. Verify the original bucket key
+`(id(recheck_frame), index)`, the same actual `self.components[index]` object and
+current component. For metadata, both primitive/wrapper fd must equal its fd.
+For named metadata, both name/parent_fd pairs must match the same component name
+and actual preceding component fd, with a valid original index. Check the fixed
+original recheck call sites and wrapper primitive call sites; never infer these
+relations from stale `current`/`named` locals or walk farther up the stack.
+
+Let the original exception branch create its one event from the actual exception.
+Before wrapper cleanup, move that same newly appended item from the wrapper's
+returns list to the authenticated current recheck bucket; do not create a second
+item or reconstruct errno. Remove it from the source bucket, append once and apply
+the original 12-event trim. This immediate handoff needs no pending exception or
+frame queue. Preserve the original physical `caller_line` 4273/4283, function,
+exception and errno; never replace the caller with outer line 607. Do not repeat
+stat/read, retry the primitive, catch cancellation as success or route a previous
+component's event. Leave all normal stat/bool returns and other event paths intact.
+
+Keep original component reset and frame-unwind bucket cleanup. Release temporary
+frame/component/exception references on callback return; retain no traceback or
+new exception queue. Clear the private authenticated namespace/functions/expected
+code references in the existing observe finally on success, gap, error and
+cancellation, along with original events/cache cleanup and trace restoration.
+Complete source/CODE review must verify both wrapper branches, failure before and
+after handoff, rethrow/unwind, no duplicates/cross-component reuse and all later
+return/cleanup paths without adding a test invocation or diagnostic scenario.
+
+Keep the original errno assertion's unique actual `_metadata`/`OSError`/errno 9
+check and recheck/component relation. Rebind its source-text check to the actual
+`value = _metadata(fd)` caller, and retain the exact line 613 Refusal guard semantic
+check. UNKNOWN observations stay UNKNOWN; neither expected errno nor job1 payload
+fills missing job6 facts. Preserve all four kinds, three variants, original calls,
+12-event/16-frame caps, first error/cancellation, actual stat/bool/gap behavior,
+source/code authentication, cache identity/capacity/fallback, same-request
+primitive/dispatch/local comparisons, callback reduction and exact shape checks.
+
+Prove unique complete formal-source → original-variant → ordinary-copy transforms
+and exact full inverses before the original calls; inverse baselines must not
+contain this change. Keep formal four literals, two native helper bodies/hashes,
+d35/1197/1231 byte-frozen and UNPROVED. Rebind only actually affected existing
+ordinary-copy hashes/lines and direct dashboard caller bindings. No new product,
+owner, primitive or test call, field, kind, probe, print, trial, retired R facility
+or general framework is allowed. Transformation setup, compilation, retained
+objects, references, copies, classification and serialization all incur original
+scope costs/caps; unmeasured costs stay UNKNOWN, never free or physical-fit proof.
+The accepted private exception ends only when a separately accepted formal
+observer covers these two edges and the original three-variant proof no longer
+needs the transform. A second use or required change to formal source, trust,
+collection, calls or caps stops at the artifact gate. This plan gives no CODE or
+execution GO; fresh complete review must cover both this contact and unchanged C2.
 
 For the finally seam, bind design source `7f17a0181af3c4674df63f924c5b8f97f7938831`
 and the unchanged full consumer SHA below. Check method/try uniqueness, exact
@@ -823,7 +913,7 @@ later errors, once-close, the single original call and all actual costs/caps.
 Unobserved compound components stay UNKNOWN; source analysis cannot fill them.
 Add no read, call, probe, field, print, loader or diagnostic path. This seam is not
 a recorder dual-parent caller or native proof. This accepted compatibility design
-remains intact; the current pass opens only the C2 counter construction below.
+remains intact; this pass opens only the C2 counter construction and ordinary observer.
 
 The runtime guard proof uses the same `7f17a0181af3c4674df63f924c5b8f97f7938831`
 design source and unchanged consumer SHA. Verify that only ledger/deadline are
@@ -3952,8 +4042,8 @@ gates (R9.6).
   operator-graded seed and its test. 150-450 of them are verbatim verdict bytes, which
   cannot leave the PR whose test checks their digests.
 - PR 3: `review_size: standard`, about 300-400 net added lines.
-- This plan-only amendment: `review_size: standard`. One concern: correct the
-  original C2 bounded-counter scope allocation.
+- This plan-only amendment: `review_size: standard`. One concern: repair the two
+  fixed ordinary regression contacts: C2 counter allocation and observer metadata routing.
   Original regressions, bindings and runtime-invoice obligations stay intact.
 
 Each range waives only the soft line signal, never scope, tests, CI, review or human
