@@ -3,6 +3,7 @@
 set -uo pipefail
 export LC_ALL=C
 umask 077
+scope_reader_error=false
 
 emit_error() {
   local scope_code=${1:-} scope_input=${1:-} scope_record='' scope_code_valid=true

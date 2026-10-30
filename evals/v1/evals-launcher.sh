@@ -31,7 +31,7 @@ _C2_SCALARS = ("read_bytes", "write_bytes", "physical_bytes", "files", "export_r
 _C2_ACCOUNT_FIELDS = ("logical_bytes", "read_bytes", "write_bytes", "physical_bytes", "files", "occurrences")
 _C2_CLASSES = ("L", "W", "M", "raw", "unresolved")
 _C2_LIMIT = 1048576
-_C2_HELPERS_SHA256 = "ff3032511665e08591bfee8e67d4e13aa0ce0031dfc445764e29cb9e19050c72"
+_C2_HELPERS_SHA256 = "208b6622a3cef986e7d8da249e60c42d7577ccb8a9f1181398750390a6965869"
 
 class C2Refusal(Exception):
     def __init__(self, code):
@@ -2400,9 +2400,9 @@ shadow_source_rows() {
     'sandbox/v1/guest/supervisor.c 905b2d57ba21c4a9b5622158135c547578bc7571d8b5ef43d5598e37a6688437 103685 100644' \
     'sandbox/v1/host-supervisor.py a1cdb3115e223f59a408394a78b7a3ba7573133e8ad04cd26c2634686cdcc649 232166 100755' \
     'sandbox/v1/runtime-vfkit.py 50a400dd73e8fa8d46cf93e5f8824ac80d5921cc1bf69d522bf11d4330050a14 6764 100755' \
-    'scope/v1/evaluate-scope.sh fe6048b5eada5d86531e085acd0a9f46b73028d348349ab932e8c59f4e2ed66a 25253 100755' \
+    'scope/v1/evaluate-scope.sh 8570da7150189f335747881c083320b21b51460011e33c857f566a04e6d50004 27244 100755' \
     'scope/v1/generate-gate-evidence.py 5444903bd219915137370970d60a15143b4e2210fd19706848b5bf8ac68e0864 54055 100755' \
-    'scope/v1/read-shadow-evidence.py 201791d1783d4130ec947bc60ed61cd5cec9d45da98eae033d1b859b9761e404 168018 100644' \
+    'scope/v1/read-shadow-evidence.py 767f6f18e2e3538dbb8c5f13286e26c7f2f2e672193f0b6a6a8441a7d4ad29a5 171946 100644' \
     'scope/v1/scope-gates.jq 8f0b7cb6f42bc514f466fda710a1bf6fcfa0afe0abbc02d75e77e419a2ff9ed8 57384 100644' \
     'scope/v1/scope-policy.json 5c6db4debedfcd7117735bd1d4bf907293f73972ec8909c4eab9f25cf6417fe5 1181 100644' \
     'scope/v1/validate-scope.sh 99c0abae1bdcc3809dfac535a8b24137842abaec2418b90566b6ac8ff213b406 3194 100755' \
@@ -2916,10 +2916,10 @@ done
 [ -n "$jq_source" ] || emit_error E_RUNTIME
 
 generation=g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43
-program_sha=c7724abc5420085cd1eb34d430a63bb0a374921a1ec49f85277f2adc10647dcb
+program_sha=144f9c739af059fcf7e9318c5ff1e3dc8b3d798ad9ba7a9f0774b2de484db86e
 review_approval_sha=none
 catalog_sha=0239138447a8f9fd420cb3c5da31660d8f75c85099d80d89a040dce2878a4cac
-driver_sha=a7e57a781bc7884e2863b24b42f00ec26f843b99fbbeecfcbfaf6ae98a08ce72
+driver_sha=9a6be15d4e4daa14c121fe7edc9f15ad2727506a5834108bab512b50c93adb7f
 }
 
 evals_record_context() {
