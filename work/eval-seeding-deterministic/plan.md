@@ -1,5 +1,5 @@
 ---
-spec-blob: d4b09913df81e58eee0834270b50dc099b694b90
+spec-blob: a284090093670ddfa8e5c09a86564bc73dcdf941
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-26
@@ -14,8 +14,8 @@ one complete two-source delivery. Source preparation does not accept a dependenc
 a real recording, native qualification or either seed batch.
 
 This plan binds accepted G2 spec blob
-`d4b09913df81e58eee0834270b50dc099b694b90` at main
-`53fddb1dfd43c4df725087298c0ae5dc51f075cf` (PR #781).
+`a284090093670ddfa8e5c09a86564bc73dcdf941` at main
+`3c72b55e34d5b1e393e830057d5d7cd980e4f53a` (PR #783).
 The separate high-risk plan-only gate must pass before dependent code.
 RAW16 acquisition design
 locations retain historical source `c1d9d23e42e6efe2d6da1aae3d23b34564b4080d`
@@ -774,7 +774,8 @@ blocked pending its exact scope gate.
 ### Existing regression compatibility (R9.2)
 
 The compatibility requirements below remain accepted obligations. This pass edits
-only `_raw16_C1_foreground_finally_seam` below. The three repaired compatibility
+only `_raw16_C1_foreground_finally_seam` and the runtime guard proof row below,
+including its required mechanical bindings. The three repaired compatibility
 contacts and earlier root-fix contacts stay frozen. The six C1 functional
 paths, three pin paths, SOURCE 84, nine adoption-only paths and original 20-path
 source subset stay unchanged. The auxiliary production boundaries are the accepted
@@ -783,11 +784,12 @@ scope_pre_failure_point below; qualification standards and success output schema
 stay frozen.
 Rebind exact source/recipe bytes after this plan lands and main merges. Add no
 selector, recursive loader, observer, framework, workflow or diagnostic matrix.
-The earlier repaired contacts below remain frozen except the finally seam row.
+The earlier repaired contacts below remain frozen except these two rows.
 Retain all controls and failure evidence.
 
 | File | Fixed contact and order of work |
 | --- | --- |
+| `scripts/test/scope-qualification.test.sh` | Only `PY_GUARD_CONTROLS.fixed_short_phase`'s original `proof_program`: set `instance.ledger=None` after its existing `__new__` and before its original `_foreground` call. Keep the same owner and real non-inherited branch. Check all direct self reads and original conditional guards; do not add fake ledger/session/deadline/python/source/context, modify production or replace the original foreground. |
 | `scripts/test/candidate-content-preparation-fixtures.py` | Only `_raw16_C1_foreground_finally_seam`: from the same original `_DarwinChildOwner._foreground`, select the unique `primary=None`, `cleanup_errors=[]`, `result_value=None` and local `later(error)`, the original exception capture, complete finalbody and complete following arbitration through `return result_value`. Join these original AST slices around the existing controlled `raise native`; preserve the same exception object and deferred arbitration. |
 | `scripts/test/scope-qualification.test.sh` | Only `process_snapshot_controls`' existing ordinary helper copy: check the copied consumer against the fixed SHA below. In the complete source-hash assertion and `sources` consumer tuple, replace each old digest exactly once. Include both replacements and the original `ordinary_prefix`/`ordinary_runtime` changes in the complete inverse to the same `original_helper`; capture that baseline before any new substitution. Preserve all existing controls and calls. |
 | `scripts/test/shadow-write.test.sh` | Only `outer-original-receipt`'s explicit `refuse_outer`: receive the eighth `record_form` argument and forward it unchanged to `original_outer`. Keep the original single receipt SHA mutation, actual admission, exactly one boundary marker, no retained output/seal and `finally` restoration. Do not change production, other `*args` stubs, the two valid seven-argument default calls or the shared transformer. |
@@ -819,7 +821,27 @@ original_fail, cls restoration, selector/signal-mask fallback, first cancellatio
 later errors, once-close, the single original call and all actual costs/caps.
 Unobserved compound components stay UNKNOWN; source analysis cannot fill them.
 Add no read, call, probe, field, print, loader or diagnostic path. This seam is not
-a recorder dual-parent caller or native proof. All other source bytes stay frozen.
+a recorder dual-parent caller or native proof. Outside the two contacts and their
+required mechanical bindings, source bytes stay frozen.
+
+The runtime guard proof uses the same `7f17a0181af3c4674df63f924c5b8f97f7938831`
+design source and unchanged consumer SHA. Verify that only ledger/deadline are
+direct self reads. With ledger None, inherited is false; absent optional
+coverage/gate attributes keep gate None. Every deadline read must remain behind
+its original inherited/gate guard. Preserve command/env, source import, original
+identity/deadline control, call/cap/timeout and actual child/cancel/cleanup behavior.
+
+Rebind only the original complete proof length/SHA and actually moved compile
+bindings or nine clock sites/maps. Keep unique proof extraction, all original
+prelaunch checks and complete driver transforms/inverses; derive moved values from
+final bytes, never guessed offsets. Unchanged wrapper/channel/clock semantics and
+formal native bindings remain frozen. The three whole-stage cases, all 26 faults
+and four cancel/alarm/mask077-cancel/mask022-cancel controls reuse the same proof
+with their original calls. Preserve READY-complete/channel, E_RUNTIME, first error,
+FD/child close, receipt/FAIL_PENDING and every assertion/cap. Add no trial, read,
+call, probe, field or print. Source/recipe outer bindings use only the existing
+mechanical chain; SOURCE84, frontend maps and pins do not reopen. Both contacts
+still require fresh exact review and GO through the unchanged execution chain.
 
 For this gate fixture, require unique methods and statements, exact targets,
 arguments, adjacency and order. Verify the returned context carries the same reader,
@@ -3875,7 +3897,7 @@ gates (R9.6).
   cannot leave the PR whose test checks their digests.
 - PR 3: `review_size: standard`, about 300-400 net added lines.
 - This plan-only amendment: `review_size: standard`. One concern: complete the
-  original foreground-finally fixture owner extraction.
+  two fixed ordinary owner compatibility contacts.
   Original regressions, bindings and runtime-invoice obligations stay intact.
 
 Each range waives only the soft line signal, never scope, tests, CI, review or human
