@@ -3050,7 +3050,7 @@ evaluation_reasons() {
 }
 dashboard_shape_evaluation() {
   local scope_dashboard_line=${BASH_LINENO[0]}
-  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 10406 ]; then scope_dashboard_inflight=true; fi
+  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 10414 ]; then scope_dashboard_inflight=true; fi
   evaluation_document "$@"
   scope_dashboard_inflight=false
 }
@@ -5235,7 +5235,9 @@ def process_snapshot_controls(area,module):
         reports.append({'case':stimulus,'actual_reference':reference})
     package=area/'process-helper-package';directory=package/'scope/v1';directory.mkdir(parents=True)
     source=package/'shadow/v1';source.mkdir(parents=True)
-    consumer_bytes=Path(module.__file__).read_bytes();(source/'_consumer.py').write_bytes(consumer_bytes)
+    consumer_bytes=Path(module.__file__).read_bytes()
+    assert hashlib.sha256(consumer_bytes).hexdigest()=='7d58f60c6622ae4e3f22167a3429d72a0d65e826c8d91bf87a016644226018ad'
+    (source/'_consumer.py').write_bytes(consumer_bytes)
     ctypes_source=module._hold_bytes(module.ctypes.__file__,module.EXECUTABLE_LIMIT)
     ctypes_native=module._hold_bytes(sys.modules['_ctypes'].__file__,module.EXECUTABLE_LIMIT)
     try:
@@ -5247,6 +5249,12 @@ def process_snapshot_controls(area,module):
     executable=module._hold_bytes(sys.executable,module.EXECUTABLE_LIMIT)
     runtime_inputs[executable.held.path]=tuple(getattr(executable.held.before,key) for key in identity_fields)
     original_helper=actual_helper
+    original_source_hash=b"assert len(source_raw)<=16777216 and hashlib.sha256(source_raw).hexdigest()=='d35cb669a1521fb007c7814c49ca05054ef13d973067de8d0719073525971597'"
+    ordinary_source_hash=b"assert len(source_raw)<=16777216 and hashlib.sha256(source_raw).hexdigest()=='7d58f60c6622ae4e3f22167a3429d72a0d65e826c8d91bf87a016644226018ad'"
+    original_source_tuple=b"(str(source),'d35cb669a1521fb007c7814c49ca05054ef13d973067de8d0719073525971597'),(c.ctypes.__file__,"
+    ordinary_source_tuple=b"(str(source),'7d58f60c6622ae4e3f22167a3429d72a0d65e826c8d91bf87a016644226018ad'),(c.ctypes.__file__,"
+    assert actual_helper.count(original_source_hash)==actual_helper.count(original_source_tuple)==1
+    actual_helper=actual_helper.replace(original_source_hash,ordinary_source_hash,1).replace(original_source_tuple,ordinary_source_tuple,1)
     ordinary_prefix=("ordinary_runtime_inputs="+repr(runtime_inputs)+"\nordinary_identity_fields="+repr(identity_fields)+
         "\nassert sys.executable=="+repr(sys.executable)+" and os.getuid()==os.geteuid()=="+str(os.getuid())+
         " and sys.version_info[:3]=="+repr(tuple(sys.version_info[:3]))+
@@ -5255,7 +5263,7 @@ def process_snapshot_controls(area,module):
     ordinary_runtime="                assert path in ordinary_runtime_inputs\n                current=c._open_held(path,False,lambda _fd,_state,_ancestor:True,'E_INSTALL');held.append(current)\n                assert tuple(getattr(current.before,key) for key in ordinary_identity_fields)==ordinary_runtime_inputs[path]"
     assert actual_helper.count(b'def main():')==1 and actual_helper.count(original_runtime.encode())==1
     actual_helper=actual_helper.replace(b'def main():',ordinary_prefix.encode()+b'def main():',1).replace(original_runtime.encode(),ordinary_runtime.encode(),1)
-    assert actual_helper.replace(ordinary_runtime.encode(),original_runtime.encode(),1).replace(ordinary_prefix.encode()+b'def main():',b'def main():',1)==original_helper
+    assert actual_helper.replace(ordinary_runtime.encode(),original_runtime.encode(),1).replace(ordinary_prefix.encode()+b'def main():',b'def main():',1).replace(ordinary_source_tuple,original_source_tuple,1).replace(ordinary_source_hash,original_source_hash,1)==original_helper
     executable.recheck('E_STALE')
     target=directory/'first-git-process-helper.py';target.write_bytes(actual_helper);target.chmod(0o444)
     command=[sys.executable,'-I','-S','-B',str(target),str(os.getpid()),hashlib.sha256(actual_helper).hexdigest(),executable.sha256]

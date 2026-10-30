@@ -976,9 +976,9 @@ def run_writer_tests():
                "actual checker refuses explicit simulated NONE controls; production qualification stays blocked")
     original_outer = w._outer_record
     boundary = []
-    def refuse_outer(ws, materialized, frozen, retained, section, provenance, trace):
+    def refuse_outer(ws, materialized, frozen, retained, section, provenance, trace, record_form):
         boundary.append("materialization-and-authenticated-verification-completed")
-        altered = json.loads(original_outer(ws, materialized, frozen, retained, section, provenance, trace))
+        altered = json.loads(original_outer(ws, materialized, frozen, retained, section, provenance, trace, record_form))
         altered["body"]["sandbox"]["receipt_ref"]["sha256"] = sha(frozen["sandbox-receipt.json"])
         return canonical(altered)
     w._outer_record = refuse_outer

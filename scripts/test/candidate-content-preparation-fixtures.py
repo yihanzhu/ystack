@@ -5307,10 +5307,30 @@ def raw16_C1_gate_revision(root: Path, case='normal', mutation=False) -> None:
         assert assembly._gate_request()['id']=='generation.fixture'
         reader.owned.append(native);native=None
         native_tree=ast.parse((root/'scope/v1/generate-gate-evidence.py').read_text())
-        gen_class=next(n for n in native_tree.body if isinstance(n,ast.ClassDef) and n.name=='_Generator')
-        kill=next(n for n in gen_class.body if isinstance(n,ast.FunctionDef) and n.name=='kill_source')
-        changed_id=next(n for n in kill.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Attribute) and t.attr=='call_id' for t in n.targets))
-        changed_request=kill.body[kill.body.index(changed_id)+1]
+        gen_classes=[n for n in native_tree.body if isinstance(n,ast.ClassDef) and n.name=='_Generator']
+        assert len(gen_classes)==1
+        methods={}
+        for name in ('kill_source','_kill_source_request_phase','_kill_source_result_phase'):
+            matches=[n for n in gen_classes[0].body if isinstance(n,ast.FunctionDef) and n.name==name]
+            assert len(matches)==1
+            methods[name]=matches[0]
+        kill=methods['kill_source'];request_phase=methods['_kill_source_request_phase'];result_phase=methods['_kill_source_result_phase']
+        assert ast.dump(kill.args)==ast.dump(ast.parse('def owner(self):pass').body[0].args)
+        assert ast.dump(request_phase.args)==ast.dump(kill.args)
+        assert ast.dump(result_phase.args)==ast.dump(ast.parse('def owner(self,context):pass').body[0].args)
+        assert ast.dump(ast.Module(body=kill.body,type_ignores=[]))==ast.dump(ast.parse('context=self._kill_source_request_phase();context[1].release_local();return self._kill_source_result_phase(context)'))
+        assert ast.dump(request_phase.body[0])==ast.dump(ast.parse('reader,session=self.reader,self.session').body[0])
+        assert ast.dump(request_phase.body[-1])==ast.dump(ast.parse('return reader,session,config,raw').body[0])
+        assert ast.dump(result_phase.body[0])==ast.dump(ast.parse('reader,session,config,raw=context').body[0])
+        ids=[n for n in request_phase.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Attribute) and t.attr=='call_id' for t in n.targets)]
+        assert len(ids)==1
+        changed_id=ids[0];changed_request=request_phase.body[request_phase.body.index(changed_id)+1]
+        assert ast.dump(changed_id)==ast.dump(ast.parse('session.call_id=call_id').body[0])
+        assert ast.dump(changed_request)==ast.dump(ast.parse('session.kill_request_raw,session.gate_call_ref=raw,ref(raw)').body[0])
+        assert ast.dump(request_phase.body[-2])==ast.dump(ast.parse('session.phase="K_REQUEST"').body[0])
+        assert ast.dump(ast.Module(body=result_phase.body[1:4],type_ignores=[]))==ast.dump(ast.parse('require(not session.local and not session.remote,"E_RUNTIME");reader.darwin.kill_register_source(raw);session.phase="K_DONE"'))
+        assert sum(isinstance(n,ast.Assign) and any(isinstance(t,ast.Attribute) and t.attr=='phase' for t in n.targets) for n in request_phase.body)==1
+        assert sum(isinstance(n,ast.Assign) and any(isinstance(t,ast.Attribute) and t.attr=='phase' for t in n.targets) for n in result_phase.body)==1
         source_id='kill-register.'+'11'*32
         source_raw=c.canonical({'schema_version':1,'kind':'kill_register_source_request','id':source_id,
             'body':{'operation':'kill-register-read.v1','nonce':'11'*32}})
@@ -5346,10 +5366,12 @@ def raw16_C1_gate_revision(root: Path, case='normal', mutation=False) -> None:
         collecting=[]
         reader.darwin=types.SimpleNamespace(kill_register_source=lambda raw:collecting.append(raw))
         raw=b'synthetic collector boundary input'
-        begin=next(i for i,n in enumerate(kill.body) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Attribute) and t.attr=='phase' for t in n.targets))
-        end=next(i for i,n in enumerate(kill.body) if isinstance(n,ast.Assign) and isinstance(n.value,ast.Constant) and n.value.value=='K_DONE')
-        environment=dict(g.__dict__,session=session,reader=reader,raw=raw)
-        exec(compile(ast.Module(body=kill.body[begin:end+1],type_ignores=[]),'<original-returned-collector-transition>','exec'),environment,environment)
+        context_binding=ast.copy_location(ast.Assign(targets=[ast.Name(id='context',ctx=ast.Store())],value=request_phase.body[-1].value),request_phase.body[-1])
+        transition=[request_phase.body[-2],context_binding,result_phase.body[0],kill.body[1]]+result_phase.body[1:4]
+        environment=dict(g.__dict__,session=session,reader=reader,raw=raw,config=None)
+        exec(compile(ast.fix_missing_locations(ast.Module(body=transition,type_ignores=[])),'<original-returned-collector-transition>','exec'),environment,environment)
+        assert environment['context'][0] is reader and environment['context'][1] is session and environment['context'][3] is raw
+        assert environment['reader'] is reader and environment['session'] is session and environment['raw'] is raw
         assert session.phase=='K_DONE' and not session.local and collecting==[raw]
         second_native=c._HeldStoreRead(anchor,attempt);reader.owned.append(second_native)
         session.start_scope();peer=c._GateWire(session.child_socket,session.deadline)
