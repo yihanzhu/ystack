@@ -2788,75 +2788,6 @@ def main(arguments):
             control.close()
 
 
-def _scope_pre_failure_point(error, _bindings=tuple(
-        (owner, type(lambda: None).__dict__['__code__'].__get__(function),
-         type(lambda: None).__dict__['__globals__'].__get__(function))
-        for owner, namespace, expected, names in (
-            ('R', globals(), globals(), ('main', 'write_exclusive')),
-            ('R', type.__dict__['__dict__'].__get__(_ControlFIFO) if type(_ControlFIFO) is type else {},
-             globals(), ('__init__', 'recheck', 'close')),
-            ('R', type.__dict__['__dict__'].__get__(_Reader) if type(_Reader) is type else {},
-             globals(), ('__init__', 'evaluate', '_evaluate_authentication_phase',
-                         '_evaluate_observation_phase', 'authenticate_bundles', 'recheck', 'close')),
-            ('C', type(sys).__dict__['__dict__'].__get__(c) if type(c) is type(sys) else {},
-             type(sys).__dict__['__dict__'].__get__(c) if type(c) is type(sys) else {},
-             ('_open_held', '_acl_state', '_metadata', '_named_metadata')))
-        for name in names
-        for function in (namespace.get(name),)
-        if type(function) is type(lambda: None)
-        and type(lambda: None).__dict__['__globals__'].__get__(function) is expected),
-        _errno=tuple((name, value)
-            for namespace in (type(sys).__dict__['__dict__'].__get__(c)
-                              if type(c) is type(sys) else {},)
-            for module in (namespace.get('errno'),)
-            if type(module) is type(sys)
-            for values in (type(sys).__dict__['__dict__'].__get__(module),)
-            for name in ('EACCES', 'EPERM', 'ENOENT', 'ENOTDIR', 'EEXIST', 'ELOOP',
-                         'EBADF', 'EMFILE', 'ENFILE', 'ENOSPC', 'EIO', 'EPIPE',
-                         'EINTR', 'EINVAL', 'ETIMEDOUT')
-            for value in (values.get(name),) if type(value) is int),
-        _code_type=type((lambda: None).__code__)):
-    # work/eval-seeding-deterministic/plan.md: temporary final-exception boundary.
-    owner, point, number = 'U', 0, 'UNKNOWN'
-    trace = BaseException.__dict__['__traceback__'].__get__(error)
-    if trace is not None:
-        trace_type = type(trace)
-        fields = type.__dict__['__dict__'].__get__(trace_type)
-        for index in range(64):
-            if trace is None:
-                break
-            if type(trace) is not trace_type:
-                owner, point = 'U', 0
-                break
-            frame = fields['tb_frame'].__get__(trace)
-            frame_fields = type.__dict__['__dict__'].__get__(type(frame))
-            code = frame_fields['f_code'].__get__(frame)
-            namespace = frame_fields['f_globals'].__get__(frame)
-            line = fields['tb_lineno'].__get__(trace)
-            if type(code) is not _code_type or type(namespace) is not dict or type(line) is not int:
-                owner, point = 'U', 0
-                break
-            for candidate_owner, candidate_code, candidate_globals in _bindings:
-                if code is candidate_code and namespace is candidate_globals:
-                    owner, point = (candidate_owner, line) if 0 < line <= 999999 else ('U', 0)
-            trace = fields['tb_next'].__get__(trace)
-        else:
-            if trace is not None:
-                owner, point = 'U', 0
-    ancestry = type.__dict__['__mro__'].__get__(type(error))
-    if type(ancestry) is tuple and any(base is OSError for base in ancestry):
-        value = OSError.__dict__['errno'].__get__(error)
-        if value is None:
-            number = 'NONE'
-        elif type(value) is int:
-            number = 'OTHER'
-            for name, expected in _errno:
-                if value == expected:
-                    number = name
-                    break
-    return 'SCOPE_FAIL_V1 %s %d %s\n' % (owner, point, number)
-
-
 if __name__ == "__main__":
     try:
         main(sys.argv[1:])
@@ -2866,8 +2797,4 @@ if __name__ == "__main__":
         if code not in {"E_USAGE", "E_LIMIT", "E_PARSE", "E_CANONICAL", "E_RELATION", "E_STALE", "E_RUNTIME"}:
             code = "E_RELATION" if code.startswith(("E_INSTALL", "E_STORE", "E_CONFIG", "E_ACL", "E_SHAPE")) else "E_RUNTIME"
         print(code, file=sys.stderr)
-        try:
-            print(_scope_pre_failure_point(error), end="", file=sys.stderr)
-        except BaseException:
-            pass
         raise SystemExit(1)

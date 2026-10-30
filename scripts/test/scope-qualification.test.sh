@@ -1121,7 +1121,7 @@ root=pathlib.Path(sys.argv[1]);source=root/'scope/v1/read-shadow-evidence.py'
 spec=importlib.util.spec_from_file_location('scope_fixed_marker_subject',source)
 module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
 reader_raw=source.read_bytes()
-assert hashlib.sha256(reader_raw).hexdigest()=='767f6f18e2e3538dbb8c5f13286e26c7f2f2e672193f0b6a6a8441a7d4ad29a5'
+assert hashlib.sha256(reader_raw).hexdigest()=='201791d1783d4130ec947bc60ed61cd5cec9d45da98eae033d1b859b9761e404'
 tree=ast.parse(reader_raw)
 methods=[node for node in ast.walk(tree) if isinstance(node,ast.FunctionDef) and node.name=='write_relations']
 helpers=[node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=='_scope_write_frozen_values']
@@ -1189,7 +1189,7 @@ PY_MAC_TRANSITION
 python3 -I -S -B - "$root" "$tmp/stale-observation" <<'PY_STALE_PREPARE'
 import difflib,hashlib,json,pathlib,shlex
 root=pathlib.Path(__import__('sys').argv[1]);area=pathlib.Path(__import__('sys').argv[2])
-expected={'scope/v1/evaluate-scope.sh': '8570da7150189f335747881c083320b21b51460011e33c857f566a04e6d50004', 'scope/v1/read-shadow-evidence.py': '767f6f18e2e3538dbb8c5f13286e26c7f2f2e672193f0b6a6a8441a7d4ad29a5', 'shadow/v1/_consumer.py': '24846f4538c76e0d8b04d4d091f8b6e1f94e7355d55de44e0f9d09eed83e12fd'}
+expected={'scope/v1/evaluate-scope.sh': 'fe6048b5eada5d86531e085acd0a9f46b73028d348349ab932e8c59f4e2ed66a', 'scope/v1/read-shadow-evidence.py': '201791d1783d4130ec947bc60ed61cd5cec9d45da98eae033d1b859b9761e404', 'shadow/v1/_consumer.py': '24846f4538c76e0d8b04d4d091f8b6e1f94e7355d55de44e0f9d09eed83e12fd'}
 for path,digest in expected.items():
     assert hashlib.sha256((root/path).read_bytes()).hexdigest()==digest
 observer_source = r"""import hashlib,json,os,runpy,stat,sys,time,types
@@ -2368,7 +2368,7 @@ def sudo_provenance_controls():
     enforced=(root/'shadow/v1/enforced-reproduction.py').read_text()
     spec=importlib.util.spec_from_file_location('sudo_contract_owned_consumer',root/'shadow/v1/_consumer.py')
     c=importlib.util.module_from_spec(spec);sys.modules[spec.name]=c;spec.loader.exec_module(c)
-    assert hashlib.sha256(reader.encode()).hexdigest()=='767f6f18e2e3538dbb8c5f13286e26c7f2f2e672193f0b6a6a8441a7d4ad29a5'
+    assert hashlib.sha256(reader.encode()).hexdigest()=='201791d1783d4130ec947bc60ed61cd5cec9d45da98eae033d1b859b9761e404'
     tree=ast.parse(reader);classes=[n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='_Reader']
     assert len(classes)==1;klass=classes[0]
     method_names=('provenance','recheck','close','anchor_for','_runtime_equal','_close_source_copies',
@@ -3050,7 +3050,7 @@ evaluation_reasons() {
 }
 dashboard_shape_evaluation() {
   local scope_dashboard_line=${BASH_LINENO[0]}
-  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 10641 ]; then scope_dashboard_inflight=true; fi
+  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 10413 ]; then scope_dashboard_inflight=true; fi
   evaluation_document "$@"
   scope_dashboard_inflight=false
 }
@@ -3062,40 +3062,12 @@ expect_reasons() {
   actual=$(evaluation_reasons "$@")
   [ "$actual" = "$expected" ] || fail "$label expected $expected got $actual"
 }
-scope_error_representation() {
-  local scope_expected=$2 scope_actual=$1 scope_expected_record scope_expected_owner scope_expected_point scope_expected_errno scope_expected_rest
-  [ "${scope_actual%%$'\n'*}" = "$scope_expected" ] || return 1
-  [ "$scope_actual" != "${scope_actual#*$'\n'}" ] || return 1
-  scope_expected_record=${scope_actual#*$'\n'}
-  [ "${#scope_actual}" -lt 128 ] && [ "${#scope_expected_record}" -lt 64 ] || return 1
-  case "$scope_expected_record" in 'SCOPE_FAIL_V1 '*) ;; *) return 1 ;; esac
-  scope_expected_rest=${scope_expected_record#SCOPE_FAIL_V1 }
-  scope_expected_owner=${scope_expected_rest%% *}; scope_expected_rest=${scope_expected_rest#* }
-  scope_expected_point=${scope_expected_rest%% *}; scope_expected_errno=${scope_expected_rest#* }
-  [ "$scope_expected_record" = "SCOPE_FAIL_V1 $scope_expected_owner $scope_expected_point $scope_expected_errno" ] || return 1
-  case "$scope_expected_errno" in NONE|EACCES|EPERM|ENOENT|ENOTDIR|EEXIST|ELOOP|EBADF|EMFILE|ENFILE|ENOSPC|EIO|EPIPE|EINTR|EINVAL|ETIMEDOUT|OTHER|UNKNOWN) ;; *) return 1 ;; esac
-  case "$scope_expected_owner:$scope_expected_point" in U:0) return 0 ;; esac
-  case "$scope_expected_point" in ''|0*|*[!0-9]*) return 1 ;; esac
-  [ "${#scope_expected_point}" -le 6 ] || return 1
-  case "$scope_expected_owner" in
-    F)
-      [ "$scope_expected_errno" = UNKNOWN ] || return 1
-      if [ "${3:-}" = race ]; then
-        case "$scope_expected_point" in 56|64|66|68|69|75|78|80|81|83|86|87|89|108|109|112|123|124|125|127|128|129|130|133|137|153|156|157|174|188|193|205|206|213|215|219|222|223|224|225|226|227|228|229|230|271|272|273|280|283|297|299|301|305|308|309|310|311|320|322|324|325|326|327|328|329|330|349|360|363|364|375|379|415|417|424|431|433|435|437|440|492|494|495|496|498|499|516|519|522|525|526|527|529|539|542|543|547) return 0 ;; *) return 1 ;; esac
-      fi
-      case "$scope_expected_point" in 56|64|66|68|69|75|78|80|81|83|86|87|89|108|109|112|123|124|125|127|128|129|130|133|137|153|156|157|174|188|193|205|206|213|215|219|222|223|224|225|226|227|228|229|230|271|272|273|280|283|297|299|301|305|307|308|309|310|319|321|323|324|325|326|327|328|329|348|359|362|363|374|378|414|416|423|430|432|434|436|439|491|493|494|495|497|498|515|518|521|524|525|526|528|538|541|542|546) return 0 ;; *) return 1 ;; esac ;;
-    R) [ "$scope_expected_point" -ge 1248 ] && [ "$scope_expected_point" -le 1325 ] || [ "$scope_expected_point" -ge 1485 ] && [ "$scope_expected_point" -le 1491 ] || [ "$scope_expected_point" -ge 1888 ] && [ "$scope_expected_point" -le 1930 ] || [ "$scope_expected_point" -ge 2528 ] && [ "$scope_expected_point" -le 2610 ] || [ "$scope_expected_point" -ge 2612 ] && [ "$scope_expected_point" -le 2627 ] || [ "$scope_expected_point" -ge 2629 ] && [ "$scope_expected_point" -le 2634 ] || [ "$scope_expected_point" -ge 2636 ] && [ "$scope_expected_point" -le 2643 ] || [ "$scope_expected_point" -ge 2648 ] && [ "$scope_expected_point" -le 2671 ] || [ "$scope_expected_point" -ge 2681 ] && [ "$scope_expected_point" -le 2690 ] || [ "$scope_expected_point" -ge 2692 ] && [ "$scope_expected_point" -le 2701 ] || [ "$scope_expected_point" -ge 2704 ] && [ "$scope_expected_point" -le 2741 ] || [ "$scope_expected_point" -ge 2744 ] && [ "$scope_expected_point" -le 2788 ] ;;
-    C) [ "$scope_expected_point" -ge 542 ] && [ "$scope_expected_point" -le 544 ] || [ "$scope_expected_point" -ge 546 ] && [ "$scope_expected_point" -le 548 ] || [ "$scope_expected_point" -ge 811 ] && [ "$scope_expected_point" -le 850 ] || [ "$scope_expected_point" -ge 963 ] && [ "$scope_expected_point" -le 968 ] ;;
-    *) return 1 ;;
-  esac
-}
-
 expect_evaluator_error() {
   local label=$1 expected=$2 status=0 out
   shift 2
   out=$(run_evaluator "$@" 2>&1 >/dev/null) || status=$?
   [ "$status" -ne 0 ] || fail "$label accepted"
-  scope_error_representation "$out" "$expected" || fail "$label expected $expected with one exact bound failure record got $out"
+  [ "$out" = "$expected" ] || fail "$label expected $expected got $out"
 }
 
 "$python_bin" -I -S -B - "$root" <<'PY_STALE_CONTROLS'
@@ -5693,7 +5665,6 @@ def select_counter_controls(area,module,error,observed_namespace,direct_error,di
     original_selector=state['selector'];original_pid=frame.f_locals['child'].pid;original_cancelled=list(frame.f_locals['cancelled']);original_errno=error.__cause__.errno
     mappings=[];baseline_trace=error.__traceback__;baseline_context=error.__context__;baseline_cause=error.__cause__;baseline_record=None
     reader=(root/'scope/v1/read-shadow-evidence.py').read_text();boundary='        if code not in {"E_USAGE", "E_LIMIT", "E_PARSE", "E_CANONICAL", "E_RELATION", "E_STALE", "E_RUNTIME"}:\n'
-    projection=scope_failure_projection(reader,module)
     assert reader.count(boundary)==1
     eperm_error=error;eperm_namespace=observed_namespace;baseline_records={}
     mapping_baselines={id(item):(item.__traceback__,item.__context__,item.__cause__) for item in (error,direct_error,cleanup_error)}
@@ -5738,7 +5709,7 @@ def select_counter_controls(area,module,error,observed_namespace,direct_error,di
                 assert b'first_git_process_snapshot' in args[1] and b'image_path_hex' in args[1]
                 raise OSError(9,'fixed actual sink write failure')
             return actual_write(*args)
-        namespace={'__name__':'__main__','c':module,'main':main,'error':error,'os':os,'sys':sys,'json':types.SimpleNamespace(dumps=dumps),'stat':stat,'_scope_pre_failure_point':projection,'_scope_select_state':state,'_scope_select_source_sha':source_sha,'_scope_select_native_sha':native_sha}
+        namespace={'__name__':'__main__','c':module,'main':main,'error':error,'os':os,'sys':sys,'json':types.SimpleNamespace(dumps=dumps),'stat':stat,'_scope_select_state':state,'_scope_select_source_sha':source_sha,'_scope_select_native_sha':native_sha}
         saved_foreground=state['foreground'];cancelled_error=None;status=None;error.__traceback__=baseline_trace;error.__context__=baseline_context;error.__cause__=baseline_cause
         try:
             if case=='wrong-frame':state['foreground']=saved_foreground.replace(co_name='_foreground')
@@ -5762,7 +5733,7 @@ def select_counter_controls(area,module,error,observed_namespace,direct_error,di
             error.code=original_code
         report={'case':case if lane=='eperm' else lane+':'+case,'raw_hex':raw.hex(),'same_error':len(raised_error)==1 and raised_error[0] is error,'shared_actual_frame':True,'actual_calls_not_reexecuted':True,'same_cancel_object':cancelled_error is cancel_holder[0] if cancel_holder else None,'status':status,'mapped_stderr':output.getvalue(),'same_context':error.__context__ is baseline_context,'same_cause':error.__cause__ is baseline_cause};completed_evidence({'select_mapping_actual':report})
         assert len(raised_error)==1 and raised_error[0] is error and error.__context__ is baseline_context and error.__cause__ is baseline_cause
-        if case!='cancel':assert status==1 and scope_failure_stderr(output.getvalue().encode(),b'E_RELATION' if case=='wrong-error' else b'E_RUNTIME',reader=copied,consumer=module)
+        if case!='cancel':assert status==1 and output.getvalue()==('E_RELATION\n' if case=='wrong-error' else 'E_RUNTIME\n')
         if case=='normal':
             assert type(data.get('first_git_select_observation')) is dict
             baseline_record={key:value for key,value in data.items() if key!='first_git_select_observation'};baseline_records[lane]=baseline_record
@@ -6248,62 +6219,6 @@ def foreground_io_controls():
         reports.append({'case':fault,'actual_io':value,'custom_hooks':list(hooks),'scope':'exact extracted optional helper; ordinary fixed in-memory adversarial inputs'})
     return completed_evidence({'foreground_io_controls':reports})
 
-def scope_failure_stderr(raw, code, frontend=None, reader=None, consumer=None):
-    if type(raw) is not bytes or type(code) is not bytes or len(raw) >= 128:
-        return False
-    lines = raw.split(b'\n')
-    if len(lines) != 3 or lines[0] != code or lines[2] != b'':
-        return False
-    record = lines[1].split(b' ')
-    if len(record) != 4 or record[0] != b'SCOPE_FAIL_V1' or len(lines[1]) >= 64:
-        return False
-    owner, point, number = record[1:]
-    if number not in (b'NONE', b'EACCES', b'EPERM', b'ENOENT', b'ENOTDIR', b'EEXIST',
-            b'ELOOP', b'EBADF', b'EMFILE', b'ENFILE', b'ENOSPC', b'EIO', b'EPIPE',
-            b'EINTR', b'EINVAL', b'ETIMEDOUT', b'OTHER', b'UNKNOWN'):
-        return False
-    if owner == b'U':
-        return point == b'0'
-    if not point or len(point) > 6 or point[:1] == b'0' or any(n < 48 or n > 57 for n in point):
-        return False
-    line = int(point)
-    if owner == b'F':
-        if frontend is None:
-            return number == b'UNKNOWN' and line in (56, 64, 66, 68, 69, 75, 78, 80, 81, 83, 86, 87, 89, 108, 109, 112, 123, 124, 125, 127, 128, 129, 130, 133, 137, 153, 156, 157, 174, 188, 193, 205, 206, 213, 215, 219, 222, 223, 224, 225, 226, 227, 228, 229, 230, 271, 272, 273, 280, 283, 297, 299, 301, 305, 307, 308, 309, 310, 319, 321, 323, 324, 325, 326, 327, 328, 329, 348, 359, 362, 363, 374, 378, 414, 416, 423, 430, 432, 434, 436, 439, 491, 493, 494, 495, 497, 498, 515, 518, 521, 524, 525, 526, 528, 538, 541, 542, 546)
-        statements = frontend.splitlines()
-        return number == b'UNKNOWN' and 0 < line <= len(statements) and 'emit_error ' in statements[line-1]
-    if owner == b'C':
-        consumer = consumer or c
-        return any(line in {n for _, _, n in consumer.__dict__[name].__code__.co_lines() if n is not None}
-            for name in ('_open_held', '_acl_state', '_metadata', '_named_metadata'))
-    if owner != b'R':
-        return False
-    if reader is None:
-        return any(start <= line <= end for start,end in ((1248, 1325), (1485, 1491), (1888, 1930), (2528, 2610), (2612, 2627), (2629, 2634), (2636, 2643), (2648, 2671), (2681, 2690), (2692, 2701), (2704, 2741), (2744, 2788)))
-    tree = ast.parse(reader)
-    functions = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in ('main', 'write_exclusive')]
-    for node in tree.body:
-        if isinstance(node, ast.ClassDef) and node.name in ('_ControlFIFO', '_Reader'):
-            names = ('__init__', 'recheck', 'close') if node.name == '_ControlFIFO' else (
-                '__init__', 'evaluate', '_evaluate_authentication_phase',
-                '_evaluate_observation_phase', 'authenticate_bundles', 'recheck', 'close')
-            functions.extend(n for n in node.body if isinstance(n, ast.FunctionDef) and n.name in names)
-    return any(node.lineno <= line <= node.end_lineno for node in functions)
-
-def scope_failure_definitions(original):
-    tree=ast.parse(original)
-    nodes=[n for n in tree.body if isinstance(n,(ast.FunctionDef,ast.ClassDef)) and n.name in
-        ('main','write_exclusive','_Reader','_ControlFIFO','_scope_pre_failure_point')]
-    assert len(nodes)==5 and nodes[-1].name=='_scope_pre_failure_point'
-    return 'from __future__ import annotations\n'+'\n\n'.join(ast.get_source_segment(original,n) for n in nodes)+'\n'
-
-def scope_failure_projection(original,consumer):
-    namespace={'c':consumer,'sys':sys,'Path':Path,'os':os,'stat':stat,'signal':signal,'time':time}
-    exec(compile(scope_failure_definitions(original),'actual-scope-failure-definitions','exec'),namespace)
-    helper=namespace['_scope_pre_failure_point']
-    assert len(helper.__defaults__[0])==16
-    return helper
-
 def original_context_controls(area):
     assembler=heredoc('PY_GENUINE_ASSEMBLER');tree=ast.parse(assembler)
     capture=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='GenuineRelationCapture')
@@ -6315,8 +6230,6 @@ def original_context_controls(area):
     state=os.lstat(sink);identity=(state.st_dev,state.st_ino,stat.S_IFMT(state.st_mode),state.st_uid,state.st_gid,stat.S_IMODE(state.st_mode),state.st_nlink)
     insertion=eval(compile(ast.Expression(expression),'actual-record-expression','eval'),{'token':repr('owned-context'),'sink':repr(str(sink)),'identity':repr(identity)})
     original=(root/'scope/v1/read-shadow-evidence.py').read_text()
-    projection=scope_failure_projection(original,module)
-    final_errors=[]
     boundary='        if code not in {"E_USAGE", "E_LIMIT", "E_PARSE", "E_CANONICAL", "E_RELATION", "E_STALE", "E_RUNTIME"}:\n'
     assert original.count(boundary)==1
     copied=original.replace(boundary,insertion+boundary,1)
@@ -6358,9 +6271,6 @@ def original_context_controls(area):
         sink.write_bytes(b'');calls=[];phase=[False];output=__import__('io').StringIO()
         def main(args):
             try:return action()
-            except BaseException as caught:
-                final_errors.append(caught)
-                raise
             finally:phase[0]=True
         def operation(name):
             def observed(*args,**kwargs):
@@ -6376,7 +6286,7 @@ def original_context_controls(area):
             if case=='format':raise ValueError('fixed context formatting failure')
             return json.dumps(value,*args,**kwargs)
         scope={'__name__':'__main__','sys':types.SimpleNamespace(argv=['reader'],stderr=output),
-            'c':module,'main':main,'_scope_pre_failure_point':projection,'json':types.SimpleNamespace(dumps=formatting),'os':os,'stat':stat}
+            'c':module,'main':main,'json':types.SimpleNamespace(dumps=formatting),'os':os,'stat':stat}
         for name in original_os:setattr(os,name,operation(name))
         status=0
         try:
@@ -6386,7 +6296,7 @@ def original_context_controls(area):
             for name,value in original_os.items():setattr(os,name,value)
         raw=sink.read_bytes();assert len(raw)<=4096
         if case=='success':assert status==0 and output.getvalue()=='' and not raw and not calls
-        else:assert status==1 and scope_failure_stderr(output.getvalue().encode(),b'E_RELATION',reader=copied,consumer=module)
+        else:assert status==1 and output.getvalue()=='E_RELATION\n'
         record=json.loads(raw) if raw else None
         if case not in ('format','write','success','utf8-cap'):
             assert record['exception']=='Refusal' and record['code']=='E_INSTALL'
@@ -6409,78 +6319,6 @@ def original_context_controls(area):
         elif case!='success':assert not raw
         if case=='cycle':assert context[1]['trace']==context[2]['trace']=='GAP'
         reports.append({'case':case,'status':status,'public_stderr':output.getvalue(),'sink_utf8':raw.decode(),'diagnostic_calls':calls,'custom_callbacks':list(hooks),'early_open_stimulus':'actual owned missingpath at original first os.open seam' if case=='early-open' else None})
-    callback_marks=[];projection_reports=[]
-    class FinalHostile(OSError):
-        def __getattribute__(self,key):callback_marks.append(('get',key));raise AssertionError('custom getter')
-        def __str__(self):callback_marks.append('str');raise AssertionError('custom str')
-        def __repr__(self):callback_marks.append('repr');raise AssertionError('custom repr')
-        @property
-        def errno(self):callback_marks.append('errno');raise AssertionError('custom errno')
-        @property
-        def __traceback__(self):callback_marks.append('traceback');raise AssertionError('custom traceback')
-    class HostileInt(int):
-        def __eq__(self,other):callback_marks.append('eq');raise AssertionError('custom eq')
-        def __hash__(self):callback_marks.append('hash');raise AssertionError('custom hash')
-    for value,token in ((FinalHostile(5,'private message'),'EIO'),
-            (FinalHostile(HostileInt(5),'private message'),'UNKNOWN'),
-            (OSError(None,'private message'),'NONE'),(OSError(123456,'private message'),'OTHER'),
-            (ValueError('private message'),'UNKNOWN')):
-        result=projection(value)
-        assert result=='SCOPE_FAIL_V1 U 0 '+token+'\n' and not callback_marks
-        projection_reports.append({'final_point':result,'custom_callbacks':list(callback_marks)})
-    actual_error=final_errors[0]
-    actual_trace=BaseException.__dict__['__traceback__'].__get__(actual_error)
-    actual_result=projection(actual_error)
-    assert actual_result.split(' ')[1]=='C' and actual_result.endswith(' UNKNOWN\n')
-    trace_type=type(actual_trace);fields=trace_type.__dict__;selected=None
-    for trace_index in range(64):
-        if actual_trace is None:break
-        frame=fields['tb_frame'].__get__(actual_trace)
-        if frame.f_code is module._open_held.__code__ and frame.f_globals is module.__dict__:
-            selected=(frame,fields['tb_lineno'].__get__(actual_trace))
-        actual_trace=fields['tb_next'].__get__(actual_trace)
-    assert selected is not None
-    frame,line=selected
-    for count in (64,65):
-        chain=None
-        for index in range(count):chain=trace_type(chain,frame,frame.f_lasti,line)
-        value=OSError(2,'private message');BaseException.__dict__['__traceback__'].__set__(value,chain)
-        result=projection(value)
-        assert result==('SCOPE_FAIL_V1 C '+str(line)+' ENOENT\n' if count==64 else 'SCOPE_FAIL_V1 U 0 ENOENT\n')
-        projection_reports.append({'traceback_nodes':count,'final_point':result})
-    assert projection(actual_error,())=='SCOPE_FAIL_V1 U 0 UNKNOWN\n'
-    original_bindings=projection.__defaults__[0]
-    trusted_code=original_bindings[0][1];trusted_globals=original_bindings[0][2]
-    wrong=types.FunctionType(trusted_code,dict(trusted_globals),'main')
-    same_name=types.FunctionType((lambda: (_ for _ in ()).throw(OSError(5,'private message'))).__code__,trusted_globals,'main')
-    for action in (lambda:wrong([]),same_name):
-        try:action()
-        except BaseException as value:
-            result=projection(value)
-            assert result.split(' ')[1:3]==['U','0']
-    old_main=trusted_globals['main'];trusted_globals['main']=lambda args:None
-    try:assert projection.__defaults__[0] is original_bindings and original_bindings[0][1] is trusted_code
-    finally:trusted_globals['main']=old_main
-    original_tail=original[original.index('if __name__ == "__main__":'):]
-    for fault in ('projection','second-write'):
-        class OptionalOutput(__import__('io').StringIO):
-            def write(self,value):
-                if fault=='second-write' and self.getvalue().endswith('\n'):raise OSError('optional output failure')
-                return super().write(value)
-        output=OptionalOutput()
-        def retained_main(args):raise actual_error
-        def refused_projection(value):raise MemoryError('optional projection failure')
-        scope={'__name__':'__main__','sys':types.SimpleNamespace(argv=['reader'],stderr=output),
-            'main':retained_main,'_scope_pre_failure_point':refused_projection if fault=='projection' else projection}
-        try:exec(compile(original_tail,'actual-optional-final-output','exec'),scope)
-        except SystemExit as stopped:assert stopped.code==1
-        else:raise AssertionError('original failure lost')
-        assert output.getvalue()=='E_RELATION\n'
-        projection_reports.append({'optional_fault':fault,'status':1,'stderr':output.getvalue()})
-    assert not callback_marks
-    completed_evidence({'scope_final_failure_controls':projection_reports,'custom_callbacks':list(callback_marks),
-        'actual_helper_source_sha256':hashlib.sha256(ast.get_source_segment(original,next(n for n in ast.parse(original).body if isinstance(n,ast.FunctionDef) and n.name=='_scope_pre_failure_point')).encode()).hexdigest(),
-        'scope':'actual extracted helper; direct-final only; no extra evaluator, read or process'})
     return completed_evidence({'original_error_context_controls':reports,'actual_copy_sha256':hashlib.sha256(copied.encode()).hexdigest(),'scope':'actual reader insertion/mapping; original held OS failure; builtin-descriptor adversarial controls; no full evaluator or runtime'})
 
 def capture_canonical(assembler):
@@ -6497,65 +6335,6 @@ def genuine_relation_controls(area):
     spec=importlib.util.spec_from_file_location('genuine_relation_owned_consumer',root/'shadow/v1/_consumer.py')
     module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
     location=area/'genuine-relation-controls';location.mkdir();reports=[]
-    harness_projection='    scope_error=${scope_capture%%$\'\\n\'*}\n    case "$scope_error" in\n      E_USAGE|E_LIMIT|E_PARSE|E_CANONICAL|E_RELATION|E_STALE|E_RUNTIME) ;;\n      *) scope_error=UNKNOWN ;;\n    esac\n    scope_owner=UNKNOWN; scope_point=UNKNOWN; scope_errno=UNKNOWN\n    if [ "$scope_error" != UNKNOWN ] && [ "$scope_read_status" -eq 1 ] && [ "${#scope_capture}" -lt 128 ] &&\n       [ "$scope_capture" != "${scope_capture#*$\'\\n\'}" ]; then\n      scope_record=${scope_capture#*$\'\\n\'}\n      case "$scope_record" in\n        \'SCOPE_FAIL_V1 \'*$\'\\n\')\n          scope_record=${scope_record%$\'\\n\'}\n          scope_rest=${scope_record#SCOPE_FAIL_V1 }\n          candidate_owner=${scope_rest%% *}; scope_rest=${scope_rest#* }\n          candidate_point=${scope_rest%% *}; candidate_errno=${scope_rest#* }\n          scope_valid=true\n          [ "$scope_record" = "SCOPE_FAIL_V1 $candidate_owner $candidate_point $candidate_errno" ] || scope_valid=false\n          case "$candidate_owner:$candidate_point" in\n            U:0) ;;\n            F:*|R:*|C:*)\n              case "$candidate_point" in \'\'|0*|*[!0-9]*) scope_valid=false ;; esac\n              [ "${#candidate_point}" -le 6 ] || scope_valid=false ;;\n            *) scope_valid=false ;;\n          esac\n          case "$candidate_errno" in\n            NONE|EACCES|EPERM|ENOENT|ENOTDIR|EEXIST|ELOOP|EBADF|EMFILE|ENFILE|ENOSPC|EIO|EPIPE|EINTR|EINVAL|ETIMEDOUT|OTHER|UNKNOWN) ;;\n            *) scope_valid=false ;;\n          esac\n          [ "${#scope_record}" -lt 64 ] || scope_valid=false\n          if [ "$scope_valid" = true ]; then\n            scope_owner=$candidate_owner; scope_point=$candidate_point; scope_errno=$candidate_errno\n          fi ;;\n      esac\n    fi\n    printf \'scope harness stage=%s exit=%s error=%s owner=%s point=%s errno=%s read_status=%s file_complete=UNKNOWN read_error_free=UNKNOWN\\n\' "$scope_case" "$scope_status" "$scope_error" "$scope_owner" "$scope_point" "$scope_errno" "$scope_read_status" >&2\n'
-    def pure_failure_controls():
-        controls='''
-[ "$scope_reader_error" = false ] || builtin exit 96
-scope_control_output=''
-scope_control_exit=0
-scope_control_disable=false
-/usr/bin/printf() { local scope_piece; builtin printf -v scope_piece "$@"; scope_control_output+=$scope_piece; }
-printf() {
-  local scope_piece
-  if [ "$scope_control_disable" = true ]; then return 1; fi
-  builtin printf -v scope_piece "$@"; scope_control_output+=$scope_piece
-}
-exit() { scope_control_exit=$1; }
-scope_control_line=$LINENO
-emit_error $'E_RELATION\\nSCOPE_FAIL_V1 R 42 EIO'
-[ "$scope_control_exit" = 1 ] && [ "$scope_control_output" = "E_RUNTIME"$'\\n'"SCOPE_FAIL_V1 F $scope_control_line UNKNOWN"$'\\n' ] || builtin exit 96
-'''
-        records=(('E_RUNTIME',None),('E_RUNTIME\nSCOPE_FAIL_V1 R 42 EIO','SCOPE_FAIL_V1 R 42 EIO\n'),
-            ('E_RUNTIME\nSCOPE_FAIL_V1 U 0 UNKNOWN','SCOPE_FAIL_V1 U 0 UNKNOWN\n'),
-            ('E_RUNTIME\nSCOPE_FAIL_V1 X 42 EIO',None),
-            ('E_RUNTIME\nSCOPE_FAIL_V1 R 42 EIO\nSCOPE_FAIL_V1 R 42 EIO',None),
-            ('E_RUNTIME\nSCOPE_FAIL_V1 R 42',None),('E_RUNTIME\nSCOPE_FAIL_V1 R 042 EIO',None),
-            ('E_RUNTIME\nSCOPE_FAIL_V1 R 42 EIO extra',None),
-            ('wrong\nSCOPE_FAIL_V1 R 42 EIO',None))
-        def quote(value):
-            return "$'"+value.replace('\\','\\\\').replace("'","\\'").replace('\n','\\n')+"'"
-        for text,record in records:
-            controls+='scope_control_output=\'\'\nscope_control_exit=0\nscope_reader_error=true\n'
-            controls+='scope_control_line=$((LINENO + 1))\nemit_error '+quote(text)+'\n'
-            expected=quote('E_RUNTIME\n'+record) if record else '"E_RUNTIME"$\'\\n\'"SCOPE_FAIL_V1 F $scope_control_line UNKNOWN"$\'\\n\''
-            controls+='[ "$scope_control_exit" = 1 ] && [ "$scope_control_output" = '+expected+' ] || builtin exit 97\n'
-        controls+='scope_control_output=\'\'\nscope_control_disable=true\nemit_error E_RUNTIME\n[ "$scope_control_exit" = 1 ] && [ "$scope_control_output" = $\'E_RUNTIME\\n\' ] || builtin exit 97\nscope_control_disable=false\n'
-        observed=(('E_RUNTIME\n',1,None),('E_RUNTIME\nSCOPE_FAIL_V1 R 42 EIO\n',1,('R','42','EIO')),
-            ('E_RUNTIME\nSCOPE_FAIL_V1 R 42 EIO\n',0,None),('E_RUNTIME\nSCOPE_FAIL_V1 R 42 EIO\n',2,None),
-            ('E_RUNTIME',1,None),('E_RUNTIME\nSCOPE_FAIL_V1 R 42 EIO',1,None),
-            ('E_RUNTIME\nSCOPE_FAIL_V1 R 42 EIO\nSCOPE_FAIL_V1 R 42 EIO\n',1,None),
-            ('E_RUNTIME\nSCOPE_FAIL_V1 R 42 EIO extra\n',1,None),
-            ('E_RUNTIME\n'+'x'*118,0,None),('wrong\nSCOPE_FAIL_V1 R 42 EIO\n',1,None))
-        for text,status,record in observed:
-            controls+='scope_control_output=\'\'\nscope_case=pre\nscope_status=1\nscope_capture='+quote(text)+'\nscope_read_status='+str(status)+'\n'+harness_projection
-            code='E_RUNTIME' if text.split('\n')[0]=='E_RUNTIME' else 'UNKNOWN'
-            owner,point,number=record or ('UNKNOWN','UNKNOWN','UNKNOWN')
-            expected='scope harness stage=pre exit=1 error='+code+' owner='+owner+' point='+point+' errno='+number+' read_status='+str(status)+' file_complete=UNKNOWN read_error_free=UNKNOWN\n'
-            controls+='[ "$scope_control_output" = '+quote(expected)+' ] || builtin exit 98\n'
-        controls=controls.replace('emit_error ', 'scope_control_emit_error ')
-        actual_front=capture.original[0].decode()
-        actual_start=actual_front.index('emit_error() {')
-        actual_end=actual_front.index('\n\nsha256_path()',actual_start)
-        actual_boundary=actual_front[actual_start:actual_end]
-        controls=actual_boundary.replace('emit_error() {','scope_control_emit_error() {',1)+'\n'+controls
-        controls+='unset -f scope_control_emit_error /usr/bin/printf printf exit\nunset scope_reader_error\n'
-        controls=controls.replace('scope_control_line=$((LINENO + 1))','scope_control_line=$LINENO')
-        controls='; '.join(line.strip() for line in controls.splitlines() if line.strip())
-        for old,new in (('{;', '{ '),('then;', 'then '),('else;', 'else '),(' in;', ' in '),
-                ('do;', 'do '),('&&;', '&& '),('||;', '|| '),(';;;',';;'),(');', ') ')):
-            controls=controls.replace(old,new)
-        assert '\n' not in controls
-        return controls
     snapshot=location/'preexec';snapshot.mkdir()
     assert snapshot.parent==location and snapshot.is_relative_to(area) and not snapshot.is_relative_to(root)
     assert snapshot!=Path(sys.argv[1]).parent and snapshot!=(root/'scripts/test/scope-qualification.test.sh').parent
@@ -6611,9 +6390,8 @@ emit_error $'E_RELATION\\nSCOPE_FAIL_V1 R 42 EIO'
         expected_error=b'E_RUNTIME\n'
         if fault in ('reader','write'):
             tail=reader[reader.index('if __name__ == "__main__":'):]
-            program='from __future__ import annotations\nimport os,sys,json,stat,importlib.util\n'
+            program='import os,sys,json,stat,importlib.util\n'
             program+='s=importlib.util.spec_from_file_location("owned_reader_consumer",'+repr(str(root/'shadow/v1/_consumer.py'))+');c=importlib.util.module_from_spec(s);sys.modules[s.name]=c;s.loader.exec_module(c)\n'
-            program+=scope_failure_definitions(reader).removeprefix('from __future__ import annotations\n')
             program+='def main(args):c._require(False,"E_INSTALL")\n'
             if fault=='write':program+='def refused_write(*args):raise OSError("fixed relation write failure")\nos.write=refused_write\n'
             program+=tail;child=base/'reader-mapping.py';child.write_text(program)
@@ -6625,17 +6403,11 @@ emit_error $'E_RELATION\\nSCOPE_FAIL_V1 R 42 EIO'
             admission=original[start:end];producer=base/'closed-writer.py';fifo=base/'ready-fifo'
             producer.write_text('import sys\nwith open(sys.argv[1],"wb",buffering=0) as stream:stream.write(b"COMMIT 1 "+b"0"*64+b"\\n")\n')
             command='set -uo pipefail\nscratch='+__import__('shlex').quote(str(base))+'\n: >"$scratch/reader-stderr"\n'+__import__('shlex').quote(sys.executable)+' -I -S -B '+__import__('shlex').quote(str(producer))+' '+__import__('shlex').quote(str(fifo))+' &\nreader_pid=$!\nexec 8<'+__import__('shlex').quote(str(fifo))+'\nremaining_time(){ printf 5; }\nemit_error(){ exit 1; }\n'+admission+'\nprintf "owned-admission-complete\\n"\n'
-        assert prelude.endswith('\n\n')
-        control_prelude=prelude[:-1]+pure_failure_controls()+'\n'
-        assert len(control_prelude.splitlines())==len(prelude.splitlines())
-        command=command.replace(prelude,control_prelude,1) if command.startswith(prelude) else control_prelude+command
-        assert command.startswith('#!/bin/bash\n')
-        command=command.replace('#!/bin/bash\n','scope_reader_error=true; #!/bin/bash\n',1)
         driver=base/'boundary.sh';driver.write_text(command)
         print(json.dumps({'genuine_boundary_preexec':fault,'bytes':command,'sha256':hashlib.sha256(command.encode()).hexdigest()}),flush=True)
         capture.before_call();result=subprocess.run(['/bin/bash',str(driver)],capture_output=True,timeout=10)
         if fault=='success':assert result.returncode==0 and result.stdout and not result.stderr
-        else:assert result.returncode==1 and scope_failure_stderr(result.stderr,expected_error[:-1],command,reader,module) and not result.stdout
+        else:assert result.returncode==1 and result.stderr==expected_error and not result.stdout
         if fault=='unknown':result=subprocess.CompletedProcess(result.args,-signal.SIGTERM,result.stdout,result.stderr)
         if fault=='format':
             def format_failure(value,*args,**kwargs):
@@ -6918,7 +6690,7 @@ def launch_capture_controls(area):
         reader_selector_validate(capture,reader_report)
         result=subprocess.run(['/bin/bash',str(base/'boundary.sh')],capture_output=True,timeout=10)
         completed_evidence({'launch_capture_actual_before_assert':{'case':fault,'returncode':result.returncode,'stdout_hex':result.stdout.hex(),'stderr_hex':result.stderr.hex()}})
-        assert result.returncode==1 and scope_failure_stderr(result.stderr,b'E_RUNTIME',command,reader,module) and not result.stdout
+        assert result.returncode==1 and result.stderr==b'E_RUNTIME\n' and not result.stdout
         launch_rows=[json.loads(line) for line in capture.sink.read_bytes().splitlines()]
         record=next(row for row in launch_rows if row['boundary']=='bash');assert record['binding']==capture.token
         assert record['launch']=={'command_v':expected_selected,'reader_python':expected_launch},record
@@ -9810,19 +9582,17 @@ pass 'the record validator accepts a well-formed routine workflow scope'
 
 mutate_scope() { "$jq_bin" -S -c "$1" "$tmp/scope.json" >"$2"; }
 check_eval_trial_policy() {
-  local kind total passed failed inconclusive outcome reasons label scope dashboard
+  local kind total passed failed inconclusive family_result reasons label scope dashboard
   run_evaluator "${good[@]}" >"$tmp/trial-baseline.json"
   "$jq_bin" -e '
-    .body.outcome == "proposable" and .body.reason_ids == ["scope.proposable"] and
+    .body.outcome == "not-proposable" and
+    .body.reason_ids == ["scope.sandbox-receipt-missing"] and
     .body.activation_state == "inactive" and .body.enabled == false and
-    .body.proposal.state == "present" and
-    .body.proposal.document.body.activation_state == "inactive" and
-    .body.proposal.document.body.enabled == false and
-    .body.proposal.document.body.push_allowed == false
-  ' "$tmp/trial-baseline.json" >/dev/null || fail 'trial baseline must be inert and proposable'
-  pass 'trial-policy baseline is proposable and stays inactive'
+    .body.proposal == {state:"absent"}
+  ' "$tmp/trial-baseline.json" >/dev/null || fail 'trial baseline must be inert with only the receipt refusal'
+  pass 'trial-policy baseline has only the receipt refusal and stays inactive'
 
-  while read -r label kind total passed failed inconclusive outcome; do
+  while read -r label kind total passed failed inconclusive family_result; do
     dashboard="$tmp/trial-$label.dashboard.json"
     "$jq_bin" -S -c --arg kind "$kind" --argjson total "$total" \
       --argjson passed "$passed" --argjson failed "$failed" \
@@ -9834,19 +9604,14 @@ check_eval_trial_policy() {
         else . end)
     ' "$tmp/dashboard.json" >"$dashboard"
     run_evaluator "${good[@]:0:2}" "$dashboard" "${good[@]:3}" >"$tmp/trial-$label.json"
-    if [ "$outcome" = proposable ]; then reasons='["scope.proposable"]'
-    else reasons='["scope.eval-failing"]'; fi
-    "$jq_bin" -e --arg outcome "$outcome" --argjson reasons "$reasons" '
-      .body.outcome == $outcome and .body.reason_ids == $reasons and
+    if [ "$family_result" = proposable ]; then reasons='["scope.sandbox-receipt-missing"]'
+    else reasons='["scope.eval-failing","scope.sandbox-receipt-missing"]'; fi
+    "$jq_bin" -e --argjson reasons "$reasons" '
+      .body.outcome == "not-proposable" and .body.reason_ids == $reasons and
       .body.activation_state == "inactive" and .body.enabled == false and
-      if $outcome == "proposable" then
-        .body.proposal.state == "present" and
-        .body.proposal.document.body.activation_state == "inactive" and
-        .body.proposal.document.body.enabled == false and
-        .body.proposal.document.body.push_allowed == false
-      else .body.proposal.state == "absent" end
-    ' "$tmp/trial-$label.json" >/dev/null || fail "trial-policy $label outcome or proposal"
-    pass "trial-policy $label: $outcome, exact reasons, inactive proposal state"
+      .body.proposal == {state:"absent"}
+    ' "$tmp/trial-$label.json" >/dev/null || fail "trial-policy $label family result or proposal"
+    pass "trial-policy $label: family result $family_result, exact reasons, inactive absent proposal"
   done <<'TRIAL_CASES'
 multi-below multi 2 2 0 0 not-proposable
 multi-floor multi 3 3 0 0 proposable
@@ -9864,9 +9629,9 @@ TRIAL_CASES
   run_evaluator "$scope" "${good[@]:1}" >"$tmp/trial-declared.json"
   "$jq_bin" -e '
     .body.outcome == "not-proposable" and
-    .body.reason_ids == ["scope.eval-family-unseeded"] and
+    .body.reason_ids == ["scope.eval-family-unseeded","scope.sandbox-receipt-missing"] and
     .body.activation_state == "inactive" and .body.enabled == false and
-    .body.proposal.state == "absent"
+    .body.proposal == {state:"absent"}
   ' "$tmp/trial-declared.json" >/dev/null || fail 'declared family must refuse without proposal'
   pass 'a declared family remains unseeded and cannot produce a proposal'
 }
@@ -10642,7 +10407,7 @@ for dashboard_case in 'del(.body)' '.body = null' '.body = []' '.body = "text"' 
     >"$tmp/dashboard-shape-evaluation.json" 2>"$tmp/dashboard-shape-evaluation.err"
   [ ! -s "$tmp/dashboard-shape-evaluation.err" ] || fail "dashboard shape $dashboard_case stderr"
   "$jq_bin" -e '.body.outcome == "not-proposable" and
-    .body.reason_ids == ["scope.eval-failing","scope.eval-family-unseeded","scope.malformed"] and
+    .body.reason_ids == ["scope.eval-failing","scope.eval-family-unseeded","scope.malformed","scope.sandbox-receipt-missing"] and
     .body.proposal == {state:"absent"}' "$tmp/dashboard-shape-evaluation.json" >/dev/null ||
     fail "dashboard shape $dashboard_case must return its semantic refusal"
 done
@@ -10651,17 +10416,12 @@ pass 'the dashboard is validated against the evals framework complete emitted sh
 run_evaluator "${good[@]}" >"$tmp/binding-baseline.json" 2>"$tmp/binding-baseline.err"
 [ ! -s "$tmp/binding-baseline.err" ] || fail 'bound baseline wrote stderr'
 "$jq_bin" -e '
-  .body.outcome == "proposable" and .body.reason_ids == ["scope.proposable"] and
+  .body.outcome == "not-proposable" and
+  .body.reason_ids == ["scope.sandbox-receipt-missing"] and
   .body.activation_state == "inactive" and .body.authority == "none" and
   .body.authority_effect == "none" and .body.enabled == false and
   .body.evaluation_mode == "observation-only" and .body.reference_semantics == "identity-only" and
-  .body.qualification.state == "unavailable" and .body.proposal.state == "present" and
-  .body.proposal.document.body.activation_state == "inactive" and
-  .body.proposal.document.body.authority == "none" and
-  .body.proposal.document.body.enabled == false and
-  .body.proposal.document.body.push_allowed == false and
-  .body.proposal.document.body.qualification.state == "unavailable" and
-  .body.proposal.document.body.enablement.state == "blocked"
+  .body.qualification.state == "unavailable" and .body.proposal == {state:"absent"}
 ' "$tmp/binding-baseline.json" >/dev/null || fail 'bound baseline semantics'
 "$jq_bin" -S -c '.body.evaluator.content.body.record_closure[0].sha256 |=
   (if . == ("0" * 64) then ("1" * 64) else ("0" * 64) end)' \
@@ -10686,7 +10446,7 @@ run_evaluator "${good[@]:0:2}" "$tmp/dashboard-binding-stale.json" "${good[@]:3}
 [ ! -s "$tmp/binding-stale.err" ] || fail 'stale binding wrote stderr'
 "$jq_bin" -e '
   .body.outcome == "not-proposable" and
-  .body.reason_ids == ["scope.eval-failing","scope.eval-family-unseeded","scope.malformed"] and
+  .body.reason_ids == ["scope.eval-failing","scope.eval-family-unseeded","scope.malformed","scope.sandbox-receipt-missing"] and
   .body.proposal == {state:"absent"} and .body.enabled == false and
   .body.activation_state == "inactive" and .body.authority == "none" and
   .body.authority_effect == "none" and .body.reference_semantics == "identity-only" and
@@ -10708,10 +10468,7 @@ run_evaluator "${good[@]:0:2}" "$tmp/dashboard-binding-rebound.json" "${good[@]:
 for result_name in baseline rebound; do
   "$jq_bin" -S -c '.body | {outcome,reason_ids,activation_state,authority,authority_effect,
     enabled,evaluation_mode,reference_semantics,qualification,
-    proposal:{state:.proposal.state,activation_state:.proposal.document.body.activation_state,
-      authority:.proposal.document.body.authority,enabled:.proposal.document.body.enabled,
-      push_allowed:.proposal.document.body.push_allowed,
-      qualification:.proposal.document.body.qualification,enablement:.proposal.document.body.enablement}}' \
+    proposal}' \
     "$tmp/binding-$result_name.json" >"$tmp/binding-$result_name.semantic"
 done
 /usr/bin/cmp -s "$tmp/binding-baseline.semantic" "$tmp/binding-rebound.semantic" ||
@@ -10793,12 +10550,8 @@ symlink_status=0
 PATH="$bin:/usr/bin:/bin" "$fake_repo/evaluate-scope.sh" evaluate "${good[@]:0:6}" \
   "$tmp/marker-operating.json" "$tmp/legacy-bundles" "$tmp/legacy-source.git" >"$tmp/evaluation-symlink-marker.json" 2>"$tmp/symlink-marker.err" ||
   symlink_status=$?
-if [ "$symlink_status" -eq 0 ] || [ -s "$tmp/evaluation-symlink-marker.json" ]; then
-  fail 'a symlinked committed marker was not refused'
-fi
-if ! scope_error_representation "$(/bin/cat "$tmp/symlink-marker.err")" E_RUNTIME; then
-  fail 'a symlinked committed marker was not refused'
-fi
+[ "$symlink_status" -ne 0 ] && [ ! -s "$tmp/evaluation-symlink-marker.json" ] &&
+  [ "$(/bin/cat "$tmp/symlink-marker.err")" = E_RUNTIME ] || fail 'a symlinked committed marker was not refused'
 /bin/rm -f "$tmp/portable/config/construction-mode.json"
 pass 'a committed marker that is not a regular file fails closed'
 
@@ -10835,7 +10588,7 @@ PY_MUTATE
   out=$(PATH="$race_bin:/usr/bin:/bin" "$race_repo/scope/v1/evaluate-scope.sh" \
     evaluate "${good[@]:0:6}" "$tmp/marker.json" "$tmp/legacy-bundles" "$tmp/legacy-source.git" 2>&1 >/dev/null) || status=$?
   [ "$status" -ne 0 ] || fail "$label accepted a marker that changed mid-run"
-  scope_error_representation "$out" E_STALE race || fail "$label expected E_STALE with one exact bound copy failure record got $out"
+  [ "$out" = E_STALE ] || fail "$label expected E_STALE got $out"
 }
 race_marker_case rewritten "$tmp/marker.json"
 race_marker_case appeared ''
@@ -10844,7 +10597,7 @@ pass 'held marker changes, appearance, and symlink appearance before SEAL refuse
 scope_stage_points[4]=$SECONDS
 
 "$python_bin" -I -S -B - "$root" "$tmp" "$bin" "${good[@]}" <<'PY_TERMINAL_TEST'
-import ast,copy,hashlib,json,os,pathlib,pwd,runpy,shutil,subprocess,sys,time
+import copy,hashlib,json,os,pathlib,pwd,runpy,shutil,subprocess,sys,time
 root,tmp,bin_path=map(pathlib.Path,sys.argv[1:4]);documents=sys.argv[4:]
 namespace=runpy.run_path(str(root/'scope/v1/read-shadow-evidence.py'),run_name='terminal_limits_test')
 Reader=namespace['_Reader'];c=namespace['c'];canonical=c.canonical
@@ -10896,53 +10649,11 @@ assert frontend_source.count(boundary)==1
 captures=area/'captures';captures.mkdir()
 for name in ('original.json','terminal.json','baseline-original.json'):(captures/name).write_bytes(b'')
 cost_module=runpy.run_path(str(tmp/'stale-observation/observer.py'))
-def scope_failure_stderr(raw, code, frontend=None, reader=None, consumer=None):
-    if type(raw) is not bytes or type(code) is not bytes or len(raw) >= 128:
-        return False
-    lines = raw.split(b'\n')
-    if len(lines) != 3 or lines[0] != code or lines[2] != b'':
-        return False
-    record = lines[1].split(b' ')
-    if len(record) != 4 or record[0] != b'SCOPE_FAIL_V1' or len(lines[1]) >= 64:
-        return False
-    owner, point, number = record[1:]
-    if number not in (b'NONE', b'EACCES', b'EPERM', b'ENOENT', b'ENOTDIR', b'EEXIST',
-            b'ELOOP', b'EBADF', b'EMFILE', b'ENFILE', b'ENOSPC', b'EIO', b'EPIPE',
-            b'EINTR', b'EINVAL', b'ETIMEDOUT', b'OTHER', b'UNKNOWN'):
-        return False
-    if owner == b'U':
-        return point == b'0'
-    if not point or len(point) > 6 or point[:1] == b'0' or any(n < 48 or n > 57 for n in point):
-        return False
-    line = int(point)
-    if owner == b'F':
-        if frontend is None:
-            return number == b'UNKNOWN' and line in (56, 64, 66, 68, 69, 75, 78, 80, 81, 83, 86, 87, 89, 108, 109, 112, 123, 124, 125, 127, 128, 129, 130, 133, 137, 153, 156, 157, 174, 188, 193, 205, 206, 213, 215, 219, 222, 223, 224, 225, 226, 227, 228, 229, 230, 271, 272, 273, 280, 283, 297, 299, 301, 305, 307, 308, 309, 310, 319, 321, 323, 324, 325, 326, 327, 328, 329, 348, 359, 362, 363, 374, 378, 414, 416, 423, 430, 432, 434, 436, 439, 491, 493, 494, 495, 497, 498, 515, 518, 521, 524, 525, 526, 528, 538, 541, 542, 546)
-        statements = frontend.splitlines()
-        return number == b'UNKNOWN' and 0 < line <= len(statements) and 'emit_error ' in statements[line-1]
-    if owner == b'C':
-        consumer = consumer or c
-        return any(line in {n for _, _, n in consumer.__dict__[name].__code__.co_lines() if n is not None}
-            for name in ('_open_held', '_acl_state', '_metadata', '_named_metadata'))
-    if owner != b'R':
-        return False
-    if reader is None:
-        return any(start <= line <= end for start,end in ((1248, 1325), (1485, 1491), (1888, 1930), (2528, 2610), (2612, 2627), (2629, 2634), (2636, 2643), (2648, 2671), (2681, 2690), (2692, 2701), (2704, 2741), (2744, 2788)))
-    tree = ast.parse(reader)
-    functions = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in ('main', 'write_exclusive')]
-    for node in tree.body:
-        if isinstance(node, ast.ClassDef) and node.name in ('_ControlFIFO', '_Reader'):
-            names = ('__init__', 'recheck', 'close') if node.name == '_ControlFIFO' else (
-                '__init__', 'evaluate', '_evaluate_authentication_phase',
-                '_evaluate_observation_phase', 'authenticate_bundles', 'recheck', 'close')
-            functions.extend(n for n in node.body if isinstance(n, ast.FunctionDef) and n.name in names)
-    return any(node.lineno <= line <= node.end_lineno for node in functions)
-
 def terminal_failure(label,result,private_error,reader_bytes,driver_bytes,facts_path,reader_error_path,expected):
     try:
         private_raw=private_error.read_bytes()
         unexpected=(len(private_raw)>65536 or (not(result.returncode==0 and result.stdout and not result.stderr)
-            if expected is None else not(result.returncode!=0 and not result.stdout and scope_failure_stderr(result.stderr,expected.encode(),driver_bytes,reader_bytes,c))))
+            if expected is None else not(result.returncode!=0 and not result.stdout and result.stderr==expected.encode()+b'\n')))
         if label in {'size-mismatch','deleted-suffix','shape-valid-suffix'} and private_raw!=b'E_RELATION\n':unexpected=True
         facts={'normal_wait':'GAP','COMMIT':'GAP','reader_stderr':'GAP'}
         if label=='size-mismatch':
@@ -10996,7 +10707,7 @@ def run_case(label,reader_change=None,driver_change=None,expected=None,timeout=3
     print('terminal control',label,'exit',result.returncode,'stderr',repr(result.stderr),flush=True)
     if expected is None:assert result.returncode==0 and result.stdout and not result.stderr
     else:
-        assert result.returncode!=0 and not result.stdout and scope_failure_stderr(result.stderr,expected.encode(),driver_bytes,reader_bytes,c),label
+        assert result.returncode!=0 and not result.stdout and result.stderr==expected.encode()+b'\n',label
         if label in {'size-mismatch','deleted-suffix','shape-valid-suffix'}:
             assert private_error.read_bytes()==b'E_RELATION\n',label+' did not reject actual retained snapshot digest'
     return result
@@ -13068,7 +12779,7 @@ PY_GENUINE_READER
 }
 prepare_genuine_assembler() {
   /bin/cat >"$tmp/genuine-assembler.py" <<'PY_GENUINE_ASSEMBLER'
-import ast,ctypes,hashlib,importlib.util,json,os,pathlib,pwd,grp,shutil,stat,subprocess,sys,sysconfig,time
+import ctypes,hashlib,importlib.util,json,os,pathlib,pwd,grp,shutil,stat,subprocess,sys,sysconfig,time
 base=pathlib.Path(sys.argv[1]);writer,consumer,group=sys.argv[2:5];jq_source=pathlib.Path(sys.argv[5]);documents=pathlib.Path(sys.argv[6]);package=base/'package'
 assert os.getuid()==0 and base.resolve()==base and package.resolve()==package
 canonical=lambda value:(json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=False,allow_nan=False)+'\n').encode()
@@ -14550,55 +14261,13 @@ def run(argv,raw=None,role=None,component=None,limit=16*1024*1024):
  assert r.returncode==0 and len(r.stdout)<=limit and not r.stderr
  if role:commands.append({'role':role,'argv_sha256':sha(canonical(argv)),'executable_sha256':sha(pathlib.Path(argv[0]).resolve().read_bytes()),'component_sha256':sha(pathlib.Path(component).read_bytes())})
  return r.stdout
-def scope_failure_stderr(raw, code, frontend=None, reader=None, consumer=None):
-    if type(raw) is not bytes or type(code) is not bytes or len(raw) >= 128:
-        return False
-    lines = raw.split(b'\n')
-    if len(lines) != 3 or lines[0] != code or lines[2] != b'':
-        return False
-    record = lines[1].split(b' ')
-    if len(record) != 4 or record[0] != b'SCOPE_FAIL_V1' or len(lines[1]) >= 64:
-        return False
-    owner, point, number = record[1:]
-    if number not in (b'NONE', b'EACCES', b'EPERM', b'ENOENT', b'ENOTDIR', b'EEXIST',
-            b'ELOOP', b'EBADF', b'EMFILE', b'ENFILE', b'ENOSPC', b'EIO', b'EPIPE',
-            b'EINTR', b'EINVAL', b'ETIMEDOUT', b'OTHER', b'UNKNOWN'):
-        return False
-    if owner == b'U':
-        return point == b'0'
-    if not point or len(point) > 6 or point[:1] == b'0' or any(n < 48 or n > 57 for n in point):
-        return False
-    line = int(point)
-    if owner == b'F':
-        if frontend is None:
-            return number == b'UNKNOWN' and line in (56, 64, 66, 68, 69, 75, 78, 80, 81, 83, 86, 87, 89, 108, 109, 112, 123, 124, 125, 127, 128, 129, 130, 133, 137, 153, 156, 157, 174, 188, 193, 205, 206, 213, 215, 219, 222, 223, 224, 225, 226, 227, 228, 229, 230, 271, 272, 273, 280, 283, 297, 299, 301, 305, 307, 308, 309, 310, 319, 321, 323, 324, 325, 326, 327, 328, 329, 348, 359, 362, 363, 374, 378, 414, 416, 423, 430, 432, 434, 436, 439, 491, 493, 494, 495, 497, 498, 515, 518, 521, 524, 525, 526, 528, 538, 541, 542, 546)
-        statements = frontend.splitlines()
-        return number == b'UNKNOWN' and 0 < line <= len(statements) and 'emit_error ' in statements[line-1]
-    if owner == b'C':
-        consumer = consumer or c
-        return any(line in {n for _, _, n in consumer.__dict__[name].__code__.co_lines() if n is not None}
-            for name in ('_open_held', '_acl_state', '_metadata', '_named_metadata'))
-    if owner != b'R':
-        return False
-    if reader is None:
-        return any(start <= line <= end for start,end in ((1248, 1325), (1485, 1491), (1888, 1930), (2528, 2610), (2612, 2627), (2629, 2634), (2636, 2643), (2648, 2671), (2681, 2690), (2692, 2701), (2704, 2741), (2744, 2788)))
-    tree = ast.parse(reader)
-    functions = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in ('main', 'write_exclusive')]
-    for node in tree.body:
-        if isinstance(node, ast.ClassDef) and node.name in ('_ControlFIFO', '_Reader'):
-            names = ('__init__', 'recheck', 'close') if node.name == '_ControlFIFO' else (
-                '__init__', 'evaluate', '_evaluate_authentication_phase',
-                '_evaluate_observation_phase', 'authenticate_bundles', 'recheck', 'close')
-            functions.extend(n for n in node.body if isinstance(n, ast.FunctionDef) and n.name in names)
-    return any(node.lineno <= line <= node.end_lineno for node in functions)
-
 def refuse(argv, label, expected):
     result = subprocess.run(list(map(str, argv)), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             env=env, timeout=180)
     print(json.dumps({'negative':label, 'returncode':result.returncode,
         'stdout_hex':result.stdout.hex(), 'stderr_utf8':result.stderr.decode('utf8','backslashreplace')},
         sort_keys=True), flush=True)
-    assert result.returncode != 0 and result.stdout == b'' and (scope_failure_stderr(result.stderr,expected) if str(package/'scope/v1/evaluate-scope.sh') in list(map(str,argv)) else result.stderr == expected + b'\n')
+    assert result.returncode != 0 and result.stdout == b'' and result.stderr == expected + b'\n'
     return result
 
 def put(path,value,mode=0o444):
@@ -15731,10 +15400,10 @@ def through_use(label, target, mutate, restore, cancellation=False):
         print(json.dumps({'through_use':label,'original_reader_stderr_utf8':inner_stderr.decode('utf8','backslashreplace'),
             'capture_error':capture_error.decode('utf8','backslashreplace'),
             'original_reader_wait_status':reader_status.decode('utf8','backslashreplace')},sort_keys=True),flush=True)
-        assert child.returncode!=0 and stdout==b'' and scope_failure_stderr(stderr,b'E_RUNTIME',execution.replace(cleanup_boundary,capture_cleanup,1).decode())
+        assert child.returncode!=0 and stdout==b'' and stderr==b'E_RUNTIME\n'
         assert not capture_error and len(inner_stderr)<=65536
         if not cancellation:
-            assert scope_failure_stderr(inner_stderr,b'E_STALE') and reader_status.isdigit() and 0<int(reader_status)<=255
+            assert inner_stderr==b'E_STALE\n' and reader_status.isdigit() and 0<int(reader_status)<=255
     except BaseException as error:
         original_error=error
         raise
@@ -16311,7 +15980,7 @@ def coverage_evaluate_pair(qualifying,current,allow_closed=False,at_ready=None):
         if allow_closed:
             completed=subprocess.run(list(map(str,scope_argv)),stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env,timeout=180)
             if completed.returncode!=0:
-                assert completed.stdout==b'' and any(scope_failure_stderr(completed.stderr,code) for code in (b'E_RELATION',b'E_RUNTIME',b'E_STALE'))
+                assert completed.stdout==b'' and completed.stderr in (b'E_RELATION\n',b'E_RUNTIME\n',b'E_STALE\n')
                 print(json.dumps({'coverage_closed':completed.returncode,'stderr':completed.stderr.decode()},sort_keys=True),flush=True)
                 return None
             raw=completed.stdout

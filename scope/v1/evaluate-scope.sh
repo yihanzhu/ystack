@@ -3,51 +3,14 @@
 set -uo pipefail
 export LC_ALL=C
 umask 077
-scope_reader_error=false
 
 emit_error() {
-  local scope_code=${1:-} scope_input=${1:-} scope_record='' scope_code_valid=true
-  local scope_owner=F scope_point=${BASH_LINENO[0]:-0} scope_errno=UNKNOWN scope_rest
-  if [ "${scope_reader_error:-false}" = true ]; then
-    scope_code=${scope_input%%$'\n'*}
-  fi
-  case "$scope_code" in
-    E_USAGE|E_RUNTIME|E_LIMIT|E_PARSE|E_CANONICAL|E_SHAPE|E_RELATION|E_STALE) ;;
-    *) scope_code=E_RUNTIME; scope_code_valid=false ;;
+  case "${1:-}" in
+    E_USAGE|E_RUNTIME|E_LIMIT|E_PARSE|E_CANONICAL|E_SHAPE|E_RELATION|E_STALE)
+      /usr/bin/printf '%s\n' "$1" >&2
+      ;;
+    *) /usr/bin/printf '%s\n' E_RUNTIME >&2 ;;
   esac
-  /usr/bin/printf '%s\n' "$scope_code" >&2 || exit 1
-  case "$scope_point" in
-    ''|0*|*[!0-9]*) scope_owner=U; scope_point=0 ;;
-    *) if [ "${#scope_point}" -gt 6 ]; then scope_owner=U; scope_point=0; fi ;;
-  esac
-  if [ "$scope_code_valid" = true ] && [ "${scope_reader_error:-false}" = true ] && [ "$scope_input" != "${scope_input#*$'\n'}" ]; then
-    scope_record=${scope_input#*$'\n'}
-    case "$scope_record" in
-      'SCOPE_FAIL_V1 '*)
-        scope_rest=${scope_record#SCOPE_FAIL_V1 }
-        local candidate_owner=${scope_rest%% *}
-        scope_rest=${scope_rest#* }
-        local candidate_point=${scope_rest%% *} candidate_errno=${scope_rest#* }
-        local scope_valid=true
-        [ "$scope_record" = "SCOPE_FAIL_V1 $candidate_owner $candidate_point $candidate_errno" ] || scope_valid=false
-        case "$candidate_owner:$candidate_point" in
-          U:0) ;;
-          F:*|R:*|C:*)
-            case "$candidate_point" in ''|0*|*[!0-9]*) scope_valid=false ;; esac
-            [ "${#candidate_point}" -le 6 ] || scope_valid=false ;;
-          *) scope_valid=false ;;
-        esac
-        case "$candidate_errno" in
-          NONE|EACCES|EPERM|ENOENT|ENOTDIR|EEXIST|ELOOP|EBADF|EMFILE|ENFILE|ENOSPC|EIO|EPIPE|EINTR|EINVAL|ETIMEDOUT|OTHER|UNKNOWN) ;;
-          *) scope_valid=false ;;
-        esac
-        [ "${#scope_record}" -lt 64 ] || scope_valid=false
-        if [ "$scope_valid" = true ]; then
-          scope_owner=$candidate_owner; scope_point=$candidate_point; scope_errno=$candidate_errno
-        fi ;;
-    esac
-  fi
-  printf 'SCOPE_FAIL_V1 %s %s %s\n' "$scope_owner" "$scope_point" "$scope_errno" >&2 || :
   exit 1
 }
 
@@ -113,7 +76,7 @@ remaining_time() {
   /usr/bin/printf '%s' "$remaining"
 }
 cleanup() { finish_reader; exec 8<&-; /bin/rm -rf -- "$scratch" >/dev/null 2>&1 || :; }
-signal_exit() { trap - EXIT HUP INT TERM; cleanup; /usr/bin/printf '%s\n' E_RUNTIME >&2; printf 'SCOPE_FAIL_V1 U 0 UNKNOWN\n' >&2 || :; exit 1; }
+signal_exit() { trap - EXIT HUP INT TERM; cleanup; /usr/bin/printf '%s\n' E_RUNTIME >&2; exit 1; }
 trap cleanup EXIT
 trap signal_exit HUP INT TERM
 
@@ -295,7 +258,6 @@ ready=$(/usr/bin/perl -e 'alarm shift; my $count=sysread(STDIN,my $frame,7);
 ' "$(remaining_time)" <&8) || {
   finish_reader
   reader_error=$(/bin/cat "$scratch/reader-stderr") || emit_error E_RUNTIME
-  scope_reader_error=true
   emit_error "$reader_error"
 }
 [ "$ready" = READY ] || emit_error E_RUNTIME
@@ -430,7 +392,6 @@ reader_pid=''
 [ "$(/usr/bin/wc -c <"$scratch/reader-stderr" | /usr/bin/tr -d ' ')" -le 65536 ] || emit_error E_LIMIT
 if [ "$reader_status" -ne 0 ]; then
   reader_error=$(/bin/cat "$scratch/reader-stderr") || emit_error E_RUNTIME
-  scope_reader_error=true
   emit_error "$reader_error"
 fi
 [ ! -s "$scratch/reader-stderr" ] || emit_error E_RUNTIME
