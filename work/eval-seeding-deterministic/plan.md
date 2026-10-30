@@ -1,5 +1,5 @@
 ---
-spec-blob: caaea73cee15653bf1d16ed008302c9f2e41ff58
+spec-blob: 8142e0f661b1ceb3b7372cc4f6aec53c6bf2cc7d
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-26
@@ -175,11 +175,11 @@ existing grader kinds stay byte-identical.
 | Distinct cases in one family | Two temporary valid seed sets with disjoint cases from one shipped family; run both, then dashboard | Accepted; two cases and two runs for that family |
 | Direct program rejection | Feed the cross-result repeat to the shipped jq program's `build-dashboard` and `validate-dashboard` | Build errors with `E_SHAPE` and no JSON; validate returns exactly false |
 | Direct program acceptance | Feed the corresponding no-repeat fixtures to both direct entries | Build succeeds; validate true on its canonical output |
-| M2/M3 below floor | Temporary scope-test dashboard: `stale-moved-artifacts` uses multi/minimum 3, total 2, all passed | Only `scope.eval-failing`; proposal absent |
-| M2/M3 floor and above | Same fixture with total 3, then 4, all passed | Baseline `scope.proposable`; output remains inactive, enabled false |
-| M2/M3 failed/inconclusive | Total 3, with one failed, then one inconclusive; remaining passed | Only `scope.eval-failing`; proposal absent |
-| Single regression | Same required seeded family, single/minimum 1: zero; one passed; one failed; one inconclusive | Zero/failed/inconclusive refuse; one passed matches baseline |
-| Declared regression | Require malicious family from the unchanged temporary dashboard | `scope.eval-family-unseeded`; no proposal |
+| M2/M3 below floor | Temporary scope-test dashboard: `stale-moved-artifacts` uses multi/minimum 3, total 2, all passed | Exact reasons `["scope.eval-failing","scope.sandbox-receipt-missing"]`; proposal absent |
+| M2/M3 floor and above | Same fixture with total 3, then 4, all passed | Family passes: exact baseline reasons `["scope.sandbox-receipt-missing"]`; no eval refusal |
+| M2/M3 failed/inconclusive | Total 3, with one failed, then one inconclusive; remaining passed | Exact reasons `["scope.eval-failing","scope.sandbox-receipt-missing"]`; proposal absent |
+| Single regression | Same required seeded family, single/minimum 1: zero; one passed; one failed; one inconclusive | Zero/failed/inconclusive have the same exact two reasons; one passed has only the baseline receipt refusal |
+| Declared regression | Require malicious family from the unchanged temporary dashboard | Exact reasons `["scope.eval-family-unseeded","scope.sandbox-receipt-missing"]`; proposal absent |
 | Catalog boundary | Fixed digest and both declared families checked in dashboard test; retain existing seven-set aggregate and framework catalog assertions | Original bytes, 7 seeded / 2 declared, unchanged 138-case aggregate |
 
 In `evals-dashboard.test.sh`, put new cases beside the existing duplicate test.
@@ -196,12 +196,38 @@ In `scope-qualification.test.sh`, add `check_eval_trial_policy` immediately afte
 `mutate_scope` (`:495`), then call it unconditionally. The existing setup through
 `:490` supplies whole scope, dashboard, shadow and gate fixtures and `good`.
 Use `run_evaluator` with the changed dashboard and unchanged other arguments.
-Require baseline reasons exactly `["scope.proposable"]` before mutations. Check
-outcome, reasons and inert proposal state, not reasons alone. Build every mutation
-from the original dashboard so cases cannot contaminate each other. Keep the
-existing eval checks (`:847–891`) and every later assertion. This named test group
-also allows the private bounded proof below to run the exact committed assertions;
-it adds no CLI option, environment selector or reusable test framework.
+The unchanged good fixture has two legacy declarations and two required shadow
+environments. Require baseline outcome not-proposable, exact reasons
+`["scope.sandbox-receipt-missing"]` and complete proposal `{state:"absent"}`.
+Each row retains that outcome/proposal and inactive, enabled-false checks. Its
+exact reasons above must distinguish passing families from failed ones; accepting
+any refusal would lose the positive proof. Preserve all nine original rows,
+labels, kind/total/passed/failed/inconclusive values and their original evaluator
+calls. Rename the row's expected-result column to family_result. Retain its nine
+original tokens: proposable means family-pass; not-proposable means family-fail.
+Neither token specifies whole-scope qualification. Update only their
+oracle branches and assertion messages accordingly. Keep the baseline and declared
+calls. Build each mutation from the original dashboard. Keep all other eval checks
+and every later assertion. No fake receipt, changed required environment, alternate
+input, new call, CLI selector or test framework is permitted.
+
+These oracle repairs bind `scripts/test/scope-qualification.test.sh` in source
+`cff7d274e9ba15d2a9d6fbc7779513097b3861b1`: check_eval_trial_policy at
+9812–9873, the complete dashboard-shape loop at 10619–10649, and the binding
+baseline/stale/rebound group at 10651–10719. They are permanent test corrections,
+not temporary failure projection; their contacts are separate from its removal.
+The latter two use the exact R3.3 assertions below. This is the only incremental
+source path. This repair leaves legacy inputs, run_evaluator, bind_dashboard_evaluator,
+expect_reasons and all original process calls unchanged; the separately gated
+temporary-removal work retains its own exact scope. Preserve the original authenticated
+positive controls and their negative/restoration pairs, including genuine enforced
+and withheld-write records and coverage pairs. They remain ordinary mechanism
+proof, not native qualification. Do not add a call or synthetic authentication to
+replace them. Existing map/source bindings must still match the final actual
+source; no new observer, diagnostic contact or hash-only semantic waiver.
+The original full 79-suite recipe and source/recipe/resource gates remain; all
+prior failures and UNKNOWN costs remain charged. No run, cap increase, production
+change or acceptance follows from this amendment.
 
 ## PR 1b now: complete review source and record relay
 
@@ -506,11 +532,14 @@ input, not closure. This inventory does not claim any shadow closure bound.
    content against candidate SHA. Do not add the private value to output or
    broaden qualification. On a wrong pair, the original invalid-dashboard path
    yields `not-proposable`, proposal `{state:"absent"}` and sorted reasons
-   `["scope.eval-failing","scope.eval-family-unseeded","scope.malformed"]`
-   for the otherwise-good fixture. This normal result exits 0 with empty stderr.
+   `["scope.eval-failing","scope.eval-family-unseeded","scope.malformed",
+   "scope.sandbox-receipt-missing"]` for the unchanged legacy fixture. This normal
+   result exits 0 with empty stderr. The complete dashboard-shape loop requires
+   this same exact array and complete absent proposal for every original mutation.
    Preserve `reference_semantics:"identity-only"`, observation-only, unavailable
-   qualification, inactive, authority/authority_effect none, enabled false and
-   the proposable baseline's blocked enablement. Scope does not replay eval or
+   qualification, inactive, authority/authority_effect none and enabled false.
+   Any independently valid present proposal retains blocked enablement; legacy
+   declarations cannot produce one. Scope does not replay eval or
    verify other components' actual closure files. Rewrite only the relevant old
    comment to distinguish pair integrity from those unchanged limits.
 4. Keep measuring the entire held dashboard for output evidence. Keep all existing
@@ -529,15 +558,24 @@ input, not closure. This inventory does not claim any shadow closure bound.
    the already verified registry/core_closure relation above. The maintenance
    fixture does not enter this scope path and remains unchanged.
 6. Add paired assertions beside the scope test's existing dashboard-shape group.
-   First require the real bound baseline's exact outcome/reasons and inert fields.
-   From that baseline change only one `record_closure` digest to a different valid
+   The real bound legacy baseline must have outcome not-proposable, exact reasons
+   `["scope.sandbox-receipt-missing"]`, complete proposal `{state:"absent"}` and
+   all original top-level inert fields. From it change only one `record_closure`
+   digest to a different valid
    64-hex value; preserve all keys, three paths, ordering, count and the old inner
    SHA. Prove the inner content bytes changed while the SHA field did not. Invoke
    the real `run_evaluator` and assert the refusal in step 3, including exit 0,
    empty stderr and absent proposal. Then extract exactly that changed content,
    hash its C1 bytes and update only its inner SHA. Run again and require baseline
-   outcome/reasons and unchanged authority fields. Compare projected semantic
-   fields, not the whole output whose evidence dashboard SHA must change.
+   outcome/reasons and unchanged authority fields. Preserve the old-SHA/content
+   inequality, actual changed C1-byte comparison and SHA-only rebind checks. The
+   positive must remove all three dashboard refusals while retaining only the
+   independent receipt refusal. In the existing baseline/rebound semantic projection,
+   keep outcome, reason_ids, activation_state, authority, authority_effect, enabled,
+   evaluation_mode, reference_semantics and qualification; compare the complete
+   proposal object instead of absent document fields projected as null. Keep the
+   actual cmp and all three evaluator calls. Evidence dashboard SHA changes, so do
+   not compare whole evaluations or weaken to merely not-proposable/exit zero.
 7. Add missing/wrong-type body, evaluator and content parents to the existing
    malformed-dashboard checks. Require the original refusal rather than jq error.
    Keep existing shape mutations; when they alter an object evaluator content,
@@ -739,8 +777,9 @@ The compatibility requirements below remain accepted obligations. Current edits
 are only the fixed C1 root-fix contacts listed after them. The six C1 functional
 paths, three pin paths, SOURCE 84, nine adoption-only paths and original 20-path
 source subset stay unchanged. The auxiliary production boundaries are the accepted
-qualifier compatibility and the fixed recorder/foreground contacts; qualification
-standards and output schema stay frozen.
+qualifier compatibility, fixed recorder/foreground contacts and the temporary
+scope_pre_failure_point below; qualification standards and success output schemas
+stay frozen.
 Rebind exact source/recipe bytes after this plan lands and main merges. Add no
 selector, recursive loader, observer, framework, workflow or diagnostic matrix.
 The earlier repaired contacts below remain frozen except the exact current
@@ -764,8 +803,9 @@ The stale recipe's design source SHA-256s are:
 
 Confirm these against independently reviewed source bytes before fixing expected
 literals. A later source change needs fresh binding review; runtime hashing of the
-file under test cannot supply its own expected value. Keep `evaluate-scope.sh` at
-blob `605370780345539c5ed7b9debbd04f5327610128`. Preserve all four literal observer
+file under test cannot supply its own expected value. The evaluate-scope blob
+`605370780345539c5ed7b9debbd04f5327610128` has only the scope_pre_failure_point
+exception below. Preserve all four literal observer
 bodies and their existing fixed hashes, nine copies/logs/bindings/line maps, complete
 inverse transforms, source/copy identity checks, errors, returns, closes and caps.
 A new SHA alone is not proof that the generated copies still implement the recipe.
@@ -1293,6 +1333,34 @@ drift and initialization/partial/close/cancel failures. Deleting the isolated
 destination or a parent/identity guard must fail its matching control. The plain
 context remains unqualified; these mocks do not execute inert native files.
 
+Within that same `scripts/test/shadow-enforced.test.sh` recorder_controls loop,
+prepare its fixed backing before acquiring the StableDirectory holder or running
+its initializer: create both `dependencies/helper` and `dependencies/jq` as 0700
+siblings under the case's existing dependencies directory. After the original
+successful initialization, keep the two real snapshot acquisitions in their old
+order, with private directories `dependencies/helper/object-closure` and
+`dependencies/jq/jq`, respectively; their file names remain object-closure and jq.
+Let snapshot_dependency create those independent leaf directories. Do not create
+the jq sibling after sealing helper or refresh/reopen a snapshot to hide that drift.
+The source helper/jq files, actual digest/size/full bytes and real snapshot/recheck/
+close methods remain unchanged. The original production and shared-flow snapshot
+paths do not move. This corrects only the finite added controls' backing layout.
+
+Keep all fifteen current fault cases and their call counts. stable and close still
+require no rejection at the original compound assertion; close retains its later
+incomplete/once-close checks. All drift, initialization, partial, write, cleanup and
+cancellation assertions stay intact. The dependency-ancestor mutation still targets
+its existing helper sibling; dependency-leaf still targets the actual acquired
+snapshot. Preserve recorder/native namespace checks, both parent relationships,
+original thirteen flow controls and twenty-nine evidence files. Pay actual backing,
+metadata, retention and cleanup costs under the original owners/caps; no new case,
+budget or execution allowance. The repair's only incremental source path is
+`scripts/test/shadow-enforced.test.sh` at this setup/acquisition contact. Do not
+change production, the seven scope-failure paths, their pins/maps or any other
+fixture. Any necessary outside edit returns to its gate. Reuse the original full
+79-suite recipe only after fresh exact review/GO; old failure evidence and UNKNOWN
+remain, and this plan authorizes no run or success claim.
+
 **B: cleanup algorithm.** Leave admission and successful IO unchanged. Save the
 actual primary object. Compute cleanup_end once using the existing ten seconds
 and inherited self.deadline. Independently guard TERM, first conditional wait,
@@ -1329,21 +1397,217 @@ Use the original primary/cancel controls for priority; add no combination matrix
 A deleted later action must fail. Pre-takeover fixture cleanup follows captured
 failure/state and cannot turn production failure into success.
 
-**Only the accepted failure facts.** At the original raw16_t_lifecycle writer
-two-roots compound assertion, report on failure its call count, two operation
-labels, unusable and existing preparation-leaf category/errno/incomplete/closed
-facts. Keep both operations and the assertion. At the original scope harness
-pre/post failure, report stage, exit and already-obtained bounded error code to
-test stderr; retain the same one invocation, full original output files and all
-original records/assertions. Missing internal facts remain UNKNOWN. No payload,
-exception repr, environment dump, new observer/Reader trace or speculative fix.
-Any newly located production contact outside this table returns to its gate.
+**Only the accepted failure facts.** Keep raw16_t_lifecycle's original two-roots
+operations, compound assertion and existing call/leaf failure projection unchanged.
+For scope only, implement the accepted temporary `scope_pre_failure_point` at the
+original final-error exits. Design source is preserved implementation commit
+`77d4311f5a8c66860c637776d65557b4cf6aa128`, not this artifact branch's default code.
+Its original failed CI evidence remains bound to d00; neither is new runtime proof.
 
-**Final bindings.** After A and B freeze production bytes, independently bind full
+The incremental edit set is exactly `scope/v1/read-shadow-evidence.py`,
+`scope/v1/evaluate-scope.sh`, `scripts/test/shadow-self-host-evidence.test.sh`,
+`scripts/test/scope-qualification.test.sh`, and the original three pin files
+`evals/v1/evals.jq`, `evals/v1/evals-driver.sh`, `evals/v1/evals-launcher.sh`.
+Consumer and generator bytes gain no new contact. Keep all original member sets.
+
+**Reader final exception only.** Leave main, all finally blocks and the original
+code-normalization statements unchanged. The original handler first selects its
+code and writes that bare first line. Only then call one private projection helper
+on the same final exception, attempt its bounded second line, and retain exit 1.
+Catch failure of this optional work without repr, retry or replacement of the
+original failure. If the original first-line write itself fails, do not run the
+projection; retain the original failure path. Do not follow context/cause, save a
+primary error, add a handler at import/main, or change cancellation priority.
+
+Use `BaseException.__dict__['__traceback__'].__get__(error)` for the stored traceback,
+not `error.__traceback__` or getattr. Its result must be None or the actual built-in
+traceback object. Use that built-in type's descriptors for tb_next/tb_frame/tb_lineno,
+and the built-in frame descriptors for f_code/f_globals. Require the exact built-in
+returned types (int excludes bool) before comparisons/formatting. These descriptors
+return Python's traceback/frame/code objects; do not select a descriptor from a
+user-supplied object's class. Do not read f_locals, co_filename, co_name or source.
+At most 64 nodes may be inspected. If a 65th node exists, discard the location as
+UNKNOWN rather than call a truncated prefix the innermost point.
+
+Obtain only the sixteen spec-listed functions through the actual Reader namespace
+and already-loaded c module: main, write_exclusive; _ControlFIFO.__init__/recheck/
+close; _Reader.__init__/evaluate/_evaluate_authentication_phase/
+_evaluate_observation_phase/authenticate_bundles/recheck/close; and c._open_held/
+_acl_state/_metadata/_named_metadata. Use exact module and type dictionaries with
+literal keys, not getattr, method binding or namespace enumeration. Require exact
+module, class (metaclass type) and function types. Use the built-in function
+__code__/__globals__ descriptors and identity comparisons against the original
+module dictionaries. Do not invoke class descriptors or compare/hash candidate
+objects as keys. Capture these code/globals identities once as the helper's private
+immutable default tuple after the original definitions and before main runs. Do not
+rebuild it from a replaced main, copied globals or mutable test namespace after the
+failure. This small definition-time allocation is charged too; no registry/API.
+The original loaded-source binding plus actual code/globals identity establishes
+ownership. A filename, same name, structurally equal code object or copied globals
+is insufficient. Reject an unbound candidate instead of looking for a replacement.
+
+Walk the bounded final traceback in order. For each node compare f_code and
+f_globals with the fixed tuple using `is` only; retain the last exact match and its
+positive integer tb_lineno. Generic require/c._require are excluded. The source
+review binds that line to the final code's actual statement and full file digest.
+A deeper unmatched frame is still unknown; the selected statement can be its caller.
+No match gives U/0. A source-copy line is bound to its actual copy and exact inverse
+map, never guessed as an original line. No new code or source is loaded to bind it.
+
+For errno, use OSError's built-in `errno` descriptor directly, never the instance
+attribute/property. Check the exception's actual type without custom metaclass or
+instance checks; the built-in type/MRO descriptors and identity-only membership
+can establish OSError storage without calling user methods. Unknown storage/type
+or a descriptor refusal gives UNKNOWN. Require the stored errno to have exact int
+type before the fixed numeric lookup; a custom int subclass is UNKNOWN, not a key.
+Use the already-loaded consumer errno module's fixed constants, with exact module,
+constant-int and identity checks; do not import/read another module. Map only the
+spec's errno tokens; other exact integers give OTHER, absent errno gives NONE.
+No custom getter, str, repr, equality or hash may be called by this new projection.
+This constraint does not silently rewrite the original code-selection behavior.
+The final exception can be a cleanup error; its point/errno is not the primary cause.
+
+**Fixed stderr and original relay.** The optional second line is exactly
+`SCOPE_FAIL_V1 <owner> <point> <errno>\n`, ASCII and at most 64 bytes including LF.
+Owner is F/R/C/U; U requires point 0. Other points are canonical positive decimal,
+at most six digits, and require the reviewed source/copy line binding. Errno is the
+spec's closed token set. Output contains no messages, names, paths, locals or stack.
+
+Keep emit_error's unique injection anchor and the original guard call strings.
+Inside that original failure boundary, save the independently normalized bare code
+before parsing optional metadata. For the two existing reader-stderr read results,
+select the closed first-line code; then validate the optional record independently.
+Do not add a cat/read/wait or change either original branch, admission, FIFO or
+65536-byte bound. Do not touch embedded locator/terminal code or seek their errors.
+Use shell parameter expansion, fixed case patterns and builtin printf only for new
+work. No pipeline, command substitution, here-string, read loop, eval or extra FD.
+Validate token lengths/digits before any numeric comparison; never arithmetic-evaluate
+untrusted text. Preserve the existing first-line printf and exit 1. A missing or bad
+Reader record gives the actual frontend emit_error caller point and UNKNOWN errno,
+not a claimed Reader point. signal_exit may emit only U/0/UNKNOWN. Preserve its
+trap/cleanup order. Builtin second-line printf failure cannot change code or exit.
+
+| Original failure input/result | Required handling |
+| --- | --- |
+| Legacy closed bare code, no record | Same code and exit; frontend may append only its actual F point with UNKNOWN errno |
+| Closed code plus one valid record | Same first-line code/exit; relay exact validated owner/point/errno, with no success or qualification effect |
+| Closed first-line code plus malformed, repeated, partial or extra record fields | Keep that independently selected code/exit; discard metadata, report only actual F point/UNKNOWN; do not choose a useful-looking record |
+| Empty/unknown/malformed first-line code | Keep original E_RUNTIME normalization/exit; metadata cannot supply or repair the code |
+| Projection/metadata formatting or second-line write failure | Original first-line code and failure stand; metadata absent/UNKNOWN, no retry |
+| Existing success path or cancellation | Success remains silent on stderr with unchanged stdout; cancellation preserves its original code, wait/close/trap behavior and failure |
+
+The added record is not part of the code token. Parse the two existing Reader
+read-result strings once in the original failure boundary so an appended record
+cannot accidentally turn a previously selected E_RELATION/E_STALE into E_RUNTIME.
+This affects only failure representation, never refusal versus success. Existing
+arbitrary legacy malformed code remains refused. Shell command substitution strips
+some original bytes; these records are not raw-byte authentication or authority.
+
+**Original harness read and visible failure.** At its sole original failure-file
+read, use one builtin `IFS= read -r -d '' -n 128` into a bounded variable under the
+existing LC_ALL=C, with the original input redirection and captured read status.
+The empty delimiter crosses LF. Validate the captured string itself: below 128
+bytes, a complete first-line LF and at most one complete fixed second-line record
+ending in LF, with the exact grammar and field checks above. Keep the actual read
+status. Status 1 cannot distinguish EOF from a read error; a valid short captured
+record with that status may supply only the non-authoritative fixed fields. Status
+0 (limit/delimiter completion), any other status, a cap-length capture, missing LF,
+invalid fields, repeated records or extra content leaves metadata UNKNOWN. Whether
+the original file was fully read or no I/O error occurred remains UNKNOWN even when
+a record parses. Do not claim physical EOF, complete-file or raw-byte authentication.
+Preserve the original closed first-line code classification even when metadata is
+unusable. Use parameter expansion and fixed token checks, not a second read,
+here-string or process. Maximum valid representation is below 128 bytes.
+Retain the existing stage/exit/error output and original FAIL; append only validated
+fixed fields (or UNKNOWN) to ordinary CI stderr. No evaluator mock, new invocation,
+new source/read site or extra retained file. Keep both real records and every original
+not-proposable/reason/qualification/authority/enabled/authentication/proposal assertion.
+
+**Fixed proof carriers.** Extend only the original scope-qualification
+PY_OBSERVER_OWNER_CONTROLS `original_context_controls` and `genuine_relation_controls`
+for finite in-memory projection/relay controls. Extract the unique actual helper and
+its fixed dependencies from the bound Reader source using the existing AST mechanism;
+no copied implementation, recursive loader or new interpreter. Preserve the existing
+Hostile(OSError), wrong-frame, errno, original mapping, sink-write and success cases.
+For the new helper only, add fixed direct-final checks for hostile traceback/errno
+access, hostile errno int equality/hash, valid exact errno, missing/wrong code/globals,
+64/65 traceback bounds, same-name wrong code, and optional projection/output failure.
+Keep callback counters empty for the helper; do not claim the unchanged original
+mapping is callback-free. Do not traverse the existing context-chain cases anew.
+Reuse their already owned real failure objects/calls; new inputs are pure in-memory.
+
+In each already existing genuine_relation_controls shell child, exercise the actual
+extracted shell parsing/projection block with fixed string variables before its
+original final emit_error. Cover bare code, valid record, unknown/duplicate/truncated/
+extra-field records and disabled optional output there, with exact captured bytes;
+no new shell child or evaluator call. In that same child, exercise the actual
+harness parsing/output statements with fixed captured-string/read-status values:
+status 1 with valid short two-line or bare-code text; status 0 with cap-length or
+short text; partial LF, repeated/extra fields; and other status values. Name and
+assert only those observed values, not simulated EOF or I/O-error categories.
+Valid short status-1 records remain useful; file completion/no-I/O-error remain
+UNKNOWN. These pure controls do not prove an actual file read. Statically bind the
+original single read, -d/-n options, LC_ALL=C and sole redirection. The original
+pre/post failure call supplies actual captured text, read status and CI output,
+never physical-EOF or error-free-read proof. If unreached, retain missing runtime
+proof without adding a stimulus/read/process or declaring it covered.
+
+Rebind complete stderr expectations only where these existing scope errors now gain
+the permitted record: original_context_controls, genuine_relation_controls,
+select_counter_controls, launch_capture_controls, expect_evaluator_error,
+symlink-marker, race_marker_case, PY_TERMINAL_TEST's terminal_failure/run_case,
+and the existing actual scope refuse/through_use/coverage_evaluate_pair controls. Keep each old code, exit,
+stdout, wait/cancel/close, private terminal-error and size assertion exact. Validate
+the entire new representation, source/copy point and errno; never replace exact
+stderr with startswith, split-first-only or acceptance of arbitrary trailing bytes.
+For race_marker_case, keep exactly its three existing calls: rewritten, appeared
+and appeared-symlink. Each keeps its original E_STALE refusal and mutation behavior;
+the neighboring symlink-marker E_RUNTIME case remains separate. Preserve PY_MUTATE's
+unique policy_sha anchor and single insertion, its transformation bytes, original
+commands and calls. Adapt only the complete permitted stderr representation and
+bind the actual inserted copy's failure point through its exact source/copy mapping;
+never present an inserted copy line as the original source line. Add no read, probe,
+process, FD, case, call, path, authority or cap. The four observer literals, existing
+nine-map recipe and both old native bindings retain their original boundaries.
+Legacy validator/helper/embedded-terminal errors and sample_failure_carrier_controls'
+fixed-transport stderr retain exact old bytes. Preserve
+all existing cases and invocations. A dependency outside these fixed listed carriers
+or seven paths returns to the gate, not a general stderr expectation sweep.
+
+**Binding, costs and removal.** Independently freeze changed Reader/frontend bytes.
+Keep four observer literal bodies/hashes, all generation transforms and both old
+native bindings byte-identical. Rebuild all nine actual copies/maps and prove each
+inverse byte-for-byte, including unchanged guard-substring extraction, emit_error
+insertion anchor and code/copy points. If an allowed existing carrier or generated
+body changes, derive every existing whole-class/function SHA (including the
+GenuineRelationCapture/OUTER_CAPTURE binding) from its complete final content.
+Preserve strict extraction counts and body equality; three source pins alone do
+not cover these hashes. Reuse a class/literal hash only after byte equality proves
+its body unchanged. Do not regenerate or rerun unaffected carriers. Bind each moved
+frame/caller assertion to its exact final statement. Then update source/closure hashes, evals.jq,
+driver and launcher in that order from actual reviewed bytes. No pin may excuse a
+semantic drift; no new source member or consumer/generator change is allowed here.
+
+Pay all new traceback/projection CPU/memory, retained bytes, parsing, output and the
+64-to-128-byte read increase in the original owners and limits. Do not borrow #558
+or native budgets, enlarge a deadline, invent zero cost or refund failure. Keep the
+original six-shard/79-suite full CI recipe and all existing execution gates. No
+standalone diagnostic run, new evaluator call, matrix or automatic retry is granted.
+Root cause remains UNKNOWN; this plan permits no guessed root fix. Once actual
+same-call evidence locates it and its bounded fix/regression is independently accepted,
+remove the temporary helper/relay/output/control extensions and restore bare-code-only
+stderr. Rebind actual bytes/pins again. Final full CI must cover that removed state
+under a fresh accepted source/recipe/resource tuple and execution GO. Old diagnostic
+CI is not final proof, and this plan does not pre-authorize another dispatch.
+CPUwall NONE/native BLOCKED/production EMPTY/automation PAUSED/docs329 NOTAPPROVED
+zero reads remain. All prior raw failures, costs, skips and UNKNOWN remain evidence.
+
+**Final bindings.** After A, B and the accepted failure contact freeze bytes, bind full
 source hashes. Rebuild nine maps using the unchanged recipe and prove each inverse
 byte-for-byte. Keep four observer literal hashes and both old native bindings.
 Mechanically bind the allowed dashboard caller and foreground frame lines.
-Keep evaluate-scope blob `605370780345539c5ed7b9debbd04f5327610128`.
+The evaluate-scope blob `605370780345539c5ed7b9debbd04f5327610128` changes only
+for scope_pre_failure_point; all other shell behavior remains frozen.
 Update measured source/closure digests, then program, driver and launcher pins
 from actual bytes. All SOURCE84 members, nine adoption-only bytes, original
 twenty-path subset, six C1 functional paths and three pin responsibilities stay
@@ -1351,9 +1615,9 @@ fixed; the auxiliary contacts add no path to the forty-two-path table.
 
 The CODE-only/static, combined clean commit, independent source/recipe/resource
 review and separate execution GO sequence above applies to this entire contact
-set. Its single existing six-shard/79-suite CI dispatch covers these carriers
-and all prior requirements. Keep all old failures, costs, skips and UNKNOWN;
-the two unlocated failures are not claimed fixed in advance.
+set. Use its original six-shard/79-suite recipe only at each separately accepted
+execution tuple; no new dispatch is authorized here. Keep all prior failures,
+costs, skips and UNKNOWN; the original scope failure is not claimed fixed.
 
 ### S1–S10 and invariant mapping
 
@@ -2584,9 +2848,10 @@ cannot satisfy the original requirements, reject complete proof.
 `scope/v1/read-shadow-evidence.py`, `scope/v1/generate-gate-evidence.py`,
 `shadow/v1/_consumer.py`, `evals/v1/replay-malicious.py`,
 `scripts/test/candidate-content-preparation-fixtures.py` and
-`scripts/test/evals-malicious.test.sh`. Keep evaluate-scope.sh blob
-`605370780345539c5ed7b9debbd04f5327610128`, nine adoption-only paths and bootstrap
-unchanged. The original 84-member set remains exact. Changed allowed source bytes
+`scripts/test/evals-malicious.test.sh`. The evaluate-scope.sh blob
+`605370780345539c5ed7b9debbd04f5327610128` has only the separately listed
+scope_pre_failure_point exception; C1 does not change it. Keep nine adoption-only
+paths and bootstrap unchanged. The original 84-member set remains exact. Changed allowed source bytes
 still require the pre-existing mechanical pin refresh in the original 20-path
 scope, in the original source/program→driver→launcher order. Refresh the original
 `evals/v1/evals.jq`, `evals/v1/evals-driver.sh` and `evals/v1/evals-launcher.sh`
