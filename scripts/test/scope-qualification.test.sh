@@ -3050,7 +3050,7 @@ evaluation_reasons() {
 }
 dashboard_shape_evaluation() {
   local scope_dashboard_line=${BASH_LINENO[0]}
-  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 10519 ]; then scope_dashboard_inflight=true; fi
+  if [ "${dashboard_case-}" = 'del(.body.flow)' ] && [ "$scope_dashboard_line" -eq 10527 ]; then scope_dashboard_inflight=true; fi
   evaluation_document "$@"
   scope_dashboard_inflight=false
 }
@@ -8534,16 +8534,24 @@ finally:
             matches=[node for node in tree.body if isinstance(node,(ast.FunctionDef,ast.ClassDef)) and node.name==name]
             assert len(matches)==1 and matches[0].lineno==line
             nodes[name]=matches[0]
+        for name in names[:4]:
+            assert isinstance(nodes[name],ast.FunctionDef) and not nodes[name].decorator_list
+        assert isinstance(nodes['HeldPath'],ast.ClassDef) and len(nodes['HeldPath'].decorator_list)==1
+        decorator=nodes['HeldPath'].decorator_list[0]
+        assert decorator.lineno==578 and ast.dump(decorator)==ast.dump(ast.parse('dataclasses.dataclass',mode='eval').body)
+        code_first_lines={name:nodes[name].lineno for name in names}
+        code_first_lines['HeldPath']=decorator.lineno
         checks=[node for node in nodes['HeldPath'].body if isinstance(node,ast.FunctionDef) and node.name=='recheck']
-        assert len(checks)==1 and checks[0].lineno==602
+        assert len(checks)==1 and checks[0].lineno==602 and not checks[0].decorator_list
+        code_first_lines['recheck']=checks[0].lineno
         module=compile(consumer,filename,'exec',dont_inherit=True)
         expected={'module':module,'filename':filename,'types':(types.CodeType,types.FunctionType,type)}
         for name in names:
             matches=[value for value in module.co_consts if type(value) is types.CodeType and value.co_name==name]
-            assert len(matches)==1 and matches[0].co_filename==filename and matches[0].co_firstlineno==nodes[name].lineno
+            assert len(matches)==1 and matches[0].co_filename==filename and matches[0].co_firstlineno==code_first_lines[name]
             expected[name]=matches[0]
         matches=[value for value in expected['HeldPath'].co_consts if type(value) is types.CodeType and value.co_name=='recheck']
-        assert len(matches)==1 and matches[0].co_filename==filename and matches[0].co_firstlineno==602
+        assert len(matches)==1 and matches[0].co_filename==filename and matches[0].co_firstlineno==code_first_lines['recheck']
         expected['recheck']=matches[0]
         setup="""    metadata_expected=_ordinary_metadata_expected
     metadata_binding=[None]

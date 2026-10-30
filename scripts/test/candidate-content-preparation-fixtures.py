@@ -5969,7 +5969,10 @@ class _C2FixtureCaller:
                 (os.POSIX_SPAWN_DUP2,prepared_control,9),(os.POSIX_SPAWN_DUP2,prepared_root,10)]
             actions.extend((os.POSIX_SPAWN_CLOSE,fd) for fd in sorted(known) if fd not in {0,1,2,9,10})
             argv = ['/bin/bash',str(self.root/'evals/v1/run-evals.sh'),*arguments]
-            child = os.posix_spawn('/bin/bash',argv,{'LC_ALL':'C','PATH':'/usr/bin:/bin','TMPDIR':os.environ['TMPDIR']},file_actions=actions)
+            c2_spawn_env={'LC_ALL':'C','PATH':'/usr/bin:/bin'}
+            c2_spawn_tmpdir=os.environ.get('TMPDIR')
+            if c2_spawn_tmpdir is not None:c2_spawn_env['TMPDIR']=c2_spawn_tmpdir
+            child = os.posix_spawn('/bin/bash',argv,c2_spawn_env,file_actions=actions)
             self.observe('C2.caller-spawn',{'pid':child,'actions':actions})
             child_socket.close();sockets.remove(child_socket)
             self.observe('C2.caller-child-socket-close',{'return':0})
@@ -6246,8 +6249,11 @@ def raw16_C2_lifecycle_core(root: Path, selected=None, mutation=None) -> None:
     actions=[(os.POSIX_SPAWN_DUP2,null,0),(os.POSIX_SPAWN_DUP2,out_w,1),(os.POSIX_SPAWN_DUP2,err_w,2),
         (os.POSIX_SPAWN_DUP2,right.fileno(),9),(os.POSIX_SPAWN_DUP2,null,10),(os.POSIX_SPAWN_CLOSE,10)]
     actions.extend((os.POSIX_SPAWN_CLOSE,fd) for fd in sorted(set(descriptors)) if fd not in {0,1,2,9,10})
-    pid=os.posix_spawn('/bin/bash',['/bin/bash',str(root/'evals/v1/run-evals.sh'),'run'],
-        {'LC_ALL':'C','PATH':'/usr/bin:/bin','TMPDIR':os.environ['TMPDIR']},file_actions=actions)
+    c2_spawn_argv=['/bin/bash',str(root/'evals/v1/run-evals.sh'),'run']
+    c2_spawn_env={'LC_ALL':'C','PATH':'/usr/bin:/bin'}
+    c2_spawn_tmpdir=os.environ.get('TMPDIR')
+    if c2_spawn_tmpdir is not None:c2_spawn_env['TMPDIR']=c2_spawn_tmpdir
+    pid=os.posix_spawn('/bin/bash',c2_spawn_argv,c2_spawn_env,file_actions=actions)
     right.close();os.close(out_w);os.close(err_w);os.close(null)
     try:
         output,error=os.read(out_r,1048576),os.read(err_r,1048576)
@@ -6378,8 +6384,11 @@ os.write=short_write
     descriptors=(left.fileno(),right.fileno(),out_r,out_w,err_r,err_w,null)
     actions=[(os.POSIX_SPAWN_DUP2,null,0),(os.POSIX_SPAWN_DUP2,out_w,1),(os.POSIX_SPAWN_DUP2,err_w,2),(os.POSIX_SPAWN_DUP2,right.fileno(),9)]
     actions.extend((os.POSIX_SPAWN_CLOSE,fd) for fd in sorted(set(descriptors)) if fd not in {0,1,2,9})
-    pid=os.posix_spawn('/usr/bin/python3',['/usr/bin/python3','-I','-S','-B','-c',code,str(root/'shadow/v1/_consumer.py')],
-        {'LC_ALL':'C','PATH':'/usr/bin:/bin','TMPDIR':os.environ['TMPDIR']},file_actions=actions)
+    c2_spawn_argv=['/usr/bin/python3','-I','-S','-B','-c',code,str(root/'shadow/v1/_consumer.py')]
+    c2_spawn_env={'LC_ALL':'C','PATH':'/usr/bin:/bin'}
+    c2_spawn_tmpdir=os.environ.get('TMPDIR')
+    if c2_spawn_tmpdir is not None:c2_spawn_env['TMPDIR']=c2_spawn_tmpdir
+    pid=os.posix_spawn('/usr/bin/python3',c2_spawn_argv,c2_spawn_env,file_actions=actions)
     right.close();os.close(out_w);os.close(err_w);os.close(null)
     try:
         chunks=[]
