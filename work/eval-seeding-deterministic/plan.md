@@ -774,9 +774,10 @@ blocked pending its exact scope gate.
 ### Existing regression compatibility (R9.2)
 
 The compatibility requirements below remain accepted obligations. This pass edits
-only `_raw16_C1_foreground_finally_seam` and the runtime guard proof row below,
-including its required mechanical bindings. The three repaired compatibility
-contacts and earlier root-fix contacts stay frozen. The six C1 functional
+only the original `raw16_C2_lifecycle_core` bounded-counter construction described
+in the C2 section, plus genuinely required mechanical bindings. The repaired
+finally seam, runtime guard proof, three earlier compatibility contacts and all
+earlier root-fix contacts stay frozen. The six C1 functional
 paths, three pin paths, SOURCE 84, nine adoption-only paths and original 20-path
 source subset stay unchanged. The auxiliary production boundaries are the accepted
 qualifier compatibility, fixed recorder/foreground contacts and the temporary
@@ -784,7 +785,7 @@ scope_pre_failure_point below; qualification standards and success output schema
 stay frozen.
 Rebind exact source/recipe bytes after this plan lands and main merges. Add no
 selector, recursive loader, observer, framework, workflow or diagnostic matrix.
-The earlier repaired contacts below remain frozen except these two rows.
+Every compatibility row below remains frozen in this pass.
 Retain all controls and failure evidence.
 
 | File | Fixed contact and order of work |
@@ -821,8 +822,8 @@ original_fail, cls restoration, selector/signal-mask fallback, first cancellatio
 later errors, once-close, the single original call and all actual costs/caps.
 Unobserved compound components stay UNKNOWN; source analysis cannot fill them.
 Add no read, call, probe, field, print, loader or diagnostic path. This seam is not
-a recorder dual-parent caller or native proof. Outside the two contacts and their
-required mechanical bindings, source bytes stay frozen.
+a recorder dual-parent caller or native proof. This accepted compatibility design
+remains intact; the current pass opens only the C2 counter construction below.
 
 The runtime guard proof uses the same `7f17a0181af3c4674df63f924c5b8f97f7938831`
 design source and unchanged consumer SHA. Verify that only ledger/deadline are
@@ -841,7 +842,8 @@ with their original calls. Preserve READY-complete/channel, E_RUNTIME, first err
 FD/child close, receipt/FAIL_PENDING and every assertion/cap. Add no trial, read,
 call, probe, field or print. Source/recipe outer bindings use only the existing
 mechanical chain; SOURCE84, frontend maps and pins do not reopen. Both contacts
-still require fresh exact review and GO through the unchanged execution chain.
+retain their accepted design; this pass requires fresh exact review and GO through
+the unchanged execution chain.
 
 For this gate fixture, require unique methods and statements, exact targets,
 arguments, adjacency and order. Verify the returned context carries the same reader,
@@ -3236,6 +3238,60 @@ status changes in PR 1b.
 
 ### C2 fixed window session and implementation map
 
+**Bounded-counter fixture compatibility.** Bind this design to source
+`3d3d3aedd145054224ae8ef41a38c70048480f17`, base
+`9c1acbae86eb6b9859d1eb5519838b0e4976d471` and the unchanged accepted G2 blob
+above. Only the counter-only `cap`/`values` construction in
+`scripts/test/candidate-content-preparation-fixtures.py:raw16_C2_lifecycle_core`
+is open. Keep the original four inputs with window amounts `(cap-5, 3, 3, 0)`
+and `cap=256<<20`. Build independent complete views for common and each of the
+four existing `_C2_CASES`; window is their projection, not another charge.
+
+Use this fixed allocation; the case column applies to each of the four fixed cases:
+
+| Original input | Window | Common | Each case |
+| --- | --- | --- | --- |
+| First | `cap-5` | 3 | `(64<<20)-2` |
+| Second | 3 | 3 | 0 |
+| Third | 3 | 3 | 0 |
+| Fourth / reservation | 0 | 0 | 0 |
+
+Apply each scope amount to the same original `write_bytes`,
+`accounting.M.write_bytes` and `seed_processing.W/C`.
+Keep every other original scalar, runtime, accounting and seed-processing value
+at its valid initialized value. Preserve complete original keys, integer types,
+empty incomplete/unknown state and zero unresolved accounting. Nested scope views
+must not alias or mutate each other. All four inputs carry the same fixed case
+keys, including the zero reservation. Add no producer, capture, counter-owner or
+test call; keep the original four fresh-work/counter constructions, two combines
+and two reserves. Bounded local independent dict/nested-container copies and
+scalar assignments are allowed within this counter-only construction. Charge all
+temporary-copy costs to their original scopes/caps. Add no general allocator,
+recursive helper or case.
+
+Prove the complete projection in every field before source acceptance: the
+original positive combine has window `cap-2`, common 6 and each case `(64<<20)-2`;
+the negative combine has window `cap+1`, common 9 and the same case values.
+Both common and all cases satisfy their original 64 MiB nonexport write cap;
+only the negative window exceeds its original 256 MiB cap. Check the real
+`c2_combine` key relation and the full `c2_reserve` sequence: window, common,
+then each case, including types/completeness, files, runtime and unresolved
+checks. Every non-target dimension must remain valid. No cap reduction, cleared
+common, hidden or exempted cost, fake actual fee, production change or real large
+write is allowed. These synthetic counters prove admission only.
+
+Keep the four original fresh-work/counter constructions, both original combine
+and reserve calls, zero reservation, `cap-2` assertion, `E_LIMIT` negative and all
+existing output fields, including `actual_large_bytes_written: 0`. Preserve the
+seven lifecycle cases, codec, one-FD bootstrap, all subsequent original calls,
+first error/cancellation/once-close and every assertion/resource cap. Rebind only
+existing hashes or source locations actually changed by this block through the
+original mechanical chain; no new read, call, probe, field, print, trial or
+diagnostic path. Production, prior repaired contacts, SOURCE84, formal native
+bodies/hashes, maps and pins remain frozen. This proposal grants no CODE/runtime
+GO; the original fresh source/recipe/resource review and full79 execution chain
+remain required, with all historical UNKNOWN/P1, failure and cost obligations.
+
 The accepted spec's “C2 固定窗口会话、留存与共同账” is the sole message,
 field, ordering and tail-vector schema. Implement that one route. Keep the
 original result bytes and trace.cost absent. No new CLI option, environment
@@ -3896,8 +3952,8 @@ gates (R9.6).
   operator-graded seed and its test. 150-450 of them are verbatim verdict bytes, which
   cannot leave the PR whose test checks their digests.
 - PR 3: `review_size: standard`, about 300-400 net added lines.
-- This plan-only amendment: `review_size: standard`. One concern: complete the
-  two fixed ordinary owner compatibility contacts.
+- This plan-only amendment: `review_size: standard`. One concern: correct the
+  original C2 bounded-counter scope allocation.
   Original regressions, bindings and runtime-invoice obligations stay intact.
 
 Each range waives only the soft line signal, never scope, tests, CI, review or human
