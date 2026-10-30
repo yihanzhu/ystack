@@ -563,9 +563,15 @@ class StableDirectory:
             self.recording_transition = None
             self._refresh_runtime_parents()
             self._transfer_recording_work()
-        except BaseException:
+        except BaseException as failure:
             anchor.private_observations["unusable"] = True
-            raise
+            first = failure
+            for _, _, source in transition["sources"]:
+                if source.closed:continue
+                try:source.close()
+                except BaseException as closing:first = c._c3_first(first, closing)
+            if first is failure:raise
+            raise first
 
     def _discard_runtime(self, anchor, copied, primary):
         if copied is None:return

@@ -4192,6 +4192,7 @@ try:
  for fault in ('stable','dependency-leaf','dependency-ancestor','recorder-owner','recorder-name','native-scratch','mkdir','partial','partial-write','close','cancel','occupied-recorder','init-transfer-cancels','init-case-cancels','init-transfer-keyboard'):
   location=base/('recorder-'+fault);location.mkdir(mode=0o700)
   for name in ('dependencies','inputs','preparation-scratch'):(location/name).mkdir(mode=0o700)
+  for name in ('helper','jq'):(location/'dependencies'/name).mkdir(mode=0o700)
   if fault=='occupied-recorder':(location/'recording').mkdir(mode=0o700)
   holder=e.stable_directory(location);local_anchor=e.c.Anchor({},b'',[],{},('',[]),('',[]),None);request_raw=e.canonical(request)
   mkdir,open_child=e.os.mkdir,e.c._open_child
@@ -4248,7 +4249,7 @@ try:
     assert initial_metadata[:len(holder.held.components)]==[item.fd for item in holder.held.components]
     assert inventory_rows[0]==('recorder-setup-after',sorted(holder.native_names))
     for name,original,raw in (('helper',helper,b'helper'),('jq',jq,b'jq')):
-     snapshot=real_snapshot_dependency(str(original),sha(raw),len(raw),str(location/'dependencies'/name),'object-closure' if name=='helper' else name)
+     snapshot=real_snapshot_dependency(str(original),sha(raw),len(raw),str(location/'dependencies'/name/('object-closure' if name=='helper' else name)),'object-closure' if name=='helper' else name)
      snapshots.append(snapshot)
     if fault=='dependency-leaf':
      target=pathlib.Path(snapshots[0].snapshot.path);target.chmod(0o600);target.chmod(0o500)
