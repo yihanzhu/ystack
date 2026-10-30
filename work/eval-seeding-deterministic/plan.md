@@ -1,5 +1,5 @@
 ---
-spec-blob: 8142e0f661b1ceb3b7372cc4f6aec53c6bf2cc7d
+spec-blob: 0fb2bd01378582d9991c791ce83672621413aa24
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-26
@@ -14,8 +14,8 @@ one complete two-source delivery. Source preparation does not accept a dependenc
 a real recording, native qualification or either seed batch.
 
 This plan binds accepted G2 spec blob
-`caaea73cee15653bf1d16ed008302c9f2e41ff58` at main
-`2498e0d6290dbedd6a544d5c349773086632ac83` (PR #769).
+`0fb2bd01378582d9991c791ce83672621413aa24` at main
+`bf4a1316ebfc1171dcc0d3607e0e9b23963bca83` (PR #776).
 The separate high-risk plan-only gate must pass before dependent code.
 RAW16 acquisition design
 locations retain historical source `c1d9d23e42e6efe2d6da1aae3d23b34564b4080d`
@@ -1240,9 +1240,10 @@ other's completed work with a stale whole-file copy.
 | B | consumer _DarwinChildOwner._foreground; the two existing scope-qualification foreground groups; original shadow-self-host-evidence scope harness failure reporting only. |
 | Final | Freeze both product files; rebind allowed scope SHA/maps/caller/frame lines and the original evals.jq → evals-driver.sh → evals-launcher.sh source/closure pin chain. |
 
-All file paths are the existing R9.3 entries. Writer source and its test copier
-remain unchanged. The preceding compatibility repairs and A2 ledger corrections
-are retained work, not authorization to rework their other contacts.
+All file paths are the existing R9.3 entries. Recorder/foreground A/B leave
+writer source and its test copier unchanged. The preceding compatibility repairs
+and A2 ledger corrections are retained work, not authorization to rework their
+other contacts.
 
 **A: prepare and hold one recorder.** In reproduce, move the existing initial
 native/runtime and parent-input retention after exclusions and all original work,
@@ -1313,9 +1314,10 @@ twenty-nine evidence files and seven preparation P cases. Adapt only the sixteen
 fixed candidate-fixture callers in that accepted spec row, using their existing
 real initializer once for each actual owner/request. Complete backing first;
 initialize before every dependency/input/T/P seal and before local P/case binding.
-Keep native scratch/T at their original work locations. Other acquisitions keep
-their original real locator, object, count and full bytes; do not relocate or
-reopen O for recording. Bind P targets, actual H-copy/transitions, seal and case
+Keep native scratch/T at their original work locations. Apart from the missing
+fixed sudo backing below, acquisitions keep their original real locator, object,
+count and full bytes; do not relocate or reopen O for recording.
+Bind P targets, actual H-copy/transitions, seal and case
 to the held recorder, including raw16_P_handoff_accounting's registered
 nested-stable. Install original fault hooks after successful initialization so
 they still hit the original operation and exact error/cancellation/close control.
@@ -1325,9 +1327,37 @@ native-chain continuation. Real inspect still proves previous-source replacement
 and old-owner close. Initialize raw16_C1_T_windows before constructing its assembly
 case; use each actual recorder case for its original two contexts, early
 consumption, occurrences and all costs. Preserve existing charges; no new case
-allowance, cross-context borrowing or count-only adjustment. The four direct
-Anchor/acquire exclusions in the spec remain byte-identical. In the original
-shared-flow and seven-case carriers, add only their finite
+allowance, cross-context borrowing or count-only adjustment.
+
+For raw16_C1_T_windows's reproduction backing, supply its missing sudo acquisition
+through the existing fixed_sudo owner and StableDirectory._retain_sudo /
+Anchor.retain_sudo_companion chain. After the original recorder initialization,
+complete this same-request, same-case O→P/storage acquisition before the first
+snapshot, H-copy and assembly. Use the real fixed /usr/bin/sudo and its read-only
+companion. Preserve the execution owner's metadata SHA, both actual identities,
+full held/name/ACL chains and before/after checks. Use normal owner holds,
+rechecks and once-close on success, partial failure and cancellation. Keep first
+and later errors visible; no failed acquisition or close can yield usable backing.
+Charge all added work and storage to the same original case under all original
+caps. Include acquisition, read, metadata, hash, serialization, copy, overlap,
+retained output and close. No new case, allowance, refund or assumed fit.
+Keep the original T early consumptions, both
+contexts, producer calls, transitions and all assertions unchanged.
+
+Do not add a root/path/ACL seam, synthetic held chain or storage row, borrow
+another case's acquisition, change the fixed path or uniqueness check, or relax
+qualification. Consumer and replay projectors stay unchanged. If the existing
+real owner route cannot supply this backing, stop and return to the affected
+artifact gate before any alternative implementation. This supplement adds only
+two functional contacts: this fixture and the _admit argument correction below.
+All earlier accepted requirements remain unchanged.
+Derive any necessary existing source-copy hashes, caller lines and
+source/closure→evals.jq→driver→launcher bindings from their actual final diff.
+Keep SOURCE84, four observer literals, both unproved native bindings and all caps.
+Add no diagnostic field, facility, trial, matrix or execution window.
+
+The four direct Anchor/acquire exclusions in the spec remain byte-identical. In
+the original shared-flow and seven-case carriers, add only their finite
 paired dependency leaf/ancestor drift, wrong recorder owner/name, native-scratch
 drift and initialization/partial/close/cancel failures. Deleting the isolated
 destination or a parent/identity guard must fail its matching control. The plain
@@ -1398,17 +1428,81 @@ A deleted later action must fail. Pre-takeover fixture cleanup follows captured
 failure/state and cannot turn production failure into success.
 
 **Only the accepted failure facts.** Keep raw16_t_lifecycle's original two-roots
-operations, compound assertion and existing call/leaf failure projection unchanged.
-For scope only, implement the accepted temporary `scope_pre_failure_point` at the
-original final-error exits. Design source is preserved implementation commit
-`77d4311f5a8c66860c637776d65557b4cf6aa128`, not this artifact branch's default code.
-Its original failed CI evidence remains bound to d00; neither is new runtime proof.
+operations, compound assertion and whole-leaf failure output unchanged. This leaf
+contact binds consumer and candidate fixture in preserved source
+`22e0a38d3f34bd60efbbb8b112a8bb14d4c71448`, not this artifact branch's source.
+Consumer's original retain_preparation method is 1475–1660, except 1610–1615;
+these locate the input only. Bind all final lines from actual reviewed bytes.
+The only new behavior is private `_retain_preparation_failure_facts` and its call
+in that except. After the original failure/unusable/category/errno assignment and
+original cancellation/unrecognized-error bare raise, before return None, obtain
+and add only scalar code/point to the same owned failure dict. Preserve the old
+fields, error identity, None, finally/tail_failure and all close/cancel priorities.
 
-The incremental edit set is exactly `scope/v1/read-shadow-evidence.py`,
-`scope/v1/evaluate-scope.sh`, `scripts/test/shadow-self-host-evidence.test.sh`,
-`scripts/test/scope-qualification.test.sh`, and the original three pin files
-`evals/v1/evals.jq`, `evals/v1/evals-driver.sh`, `evals/v1/evals-launcher.sh`.
-Consumer and generator bytes gain no new contact. Keep all original member sets.
+Define the helper immediately after the complete Anchor class, before the next
+original module function. Its private immutable default binding captures original
+Refusal, Anchor.retain_preparation.__code__ and __globals__, and trusted builtin
+BaseException.__dict__['__dict__'] and ['__traceback__'] descriptors. Freeze the
+builtin types/functions used below in the same private defaults; no registry or
+current method lookup. Capture the code's actual co_firstlineno and a literal
+method-body line span measured from final reviewed AST start/end. No source read,
+co_lines walk, extra import, exception sample or probe. Static review binds each
+actual loaded consumer source/copy's full method and same span; an unexplained
+copy transformation stops at this gate. Frontend copies contain no consumer owner.
+
+For an error whose exact type is not that Refusal, return ('UNKNOWN', 0) without
+reading its fields. Otherwise invoke the captured BaseException instance-dict
+descriptor. Require exact dict and size two. Use builtin dict.items/iter/next to
+take at most three builtin item tuples, with None as the exhaustion sentinel;
+require exactly two entries and exhaustion on the third. Check each tuple's exact
+type/length and key's exact str type before key comparison. Require exactly code
+and os_errno once each. Never look up a key in the shared original dict after
+checking it. Only index slot 1 of the captured code tuple; do not index, compare,
+serialize or output the os_errno value slot. The iterator's opaque value references
+are temporary, not additional observed facts. No unbounded dict copy or iteration.
+Accept code only as exact str equal to one of E_ACL/E_CANONICAL/E_CONFIG/
+E_DEPENDENCY/E_INSTALL/E_LIMIT/E_PARENT_CONTEXT/E_RELATION/E_RUNTIME/E_STALE/E_STORE;
+use UNKNOWN otherwise. Iteration/shape failure yields UNKNOWN/0. Exact builtin
+key/value checks precede all equality/hash operations; no custom hooks execute.
+Every type/class test uses `is`, never tuple/set membership or class equality.
+
+Use the captured BaseException traceback descriptor on that same original error.
+None gives point 0. Its non-None result has builtin traceback provenance from
+BaseException's typed storage; obtain tb_frame/tb_lineno via descriptors in that
+builtin type's own dictionary. Its tb_frame is a builtin frame; use that type's
+f_code/f_globals descriptors. Require code and globals `is` the captured objects;
+never inspect globals contents, f_locals, args, message, cause/context or tb_next.
+Accept only exact int line in [captured first, first + reviewed span]; else 0.
+Report the actual loaded caller line, not a deeper guard or inferred root cause.
+Only scalar results leave the helper. Its finally clears temporary error/dict/
+iterator/item/traceback/frame references on return and propagation; store none.
+
+Ordinary optional failures leave UNKNOWN/0 or absent added fields and cannot
+replace the original error or clear unusable. Limit the optional catch to exact
+builtin AttributeError, IndexError, KeyError, MemoryError, RuntimeError, TypeError,
+ValueError and StopIteration arising from these pure operations; a subclass or
+other exception propagates through the unchanged finally. Do not catch an original
+cancel/rethrow, KeyboardInterrupt, SystemExit or InterruptedError, or inspect a new
+exception's marker/attributes. Stage both scalar results before publication; a
+failed optional allocation/publication leaves no claimed partial location fact.
+
+Statically prove descriptor/type provenance, the bounded item reads, no unsafe
+lookup or hooks, exact owner/range, and every exceptional branch. Use the existing
+original negative/positive/cancel controls and their real calls; preserve all
+assertions, two producer/retention calls, two roots, seal and once-close. No new
+fixture print/read implementation, fake authenticated positive or test matrix.
+Keep candidate fixture bytes unchanged. New fields never grant success, GO or
+qualification. UNKNOWN and a later passing run cannot close the old job3 P1.
+
+The incremental source set is exactly `shadow/v1/_consumer.py` for this boundary,
+and `scripts/test/scope-qualification.test.sh`, `evals/v1/evals.jq`,
+`evals/v1/evals-driver.sh`, `evals/v1/evals-launcher.sh` for derived C bindings only.
+No other consumer method, generator, source member or fixture behavior opens.
+C remains a separate complete binding step after leaf bytes freeze; no old GO.
+The following scope-only Reader/frontend/harness/carrier recipe is retired after
+its independently accepted removal. Its retained limits govern removal checks;
+do not reintroduce any of its temporary helper/relay/output/control extensions.
+Original scope design 77d4311 and failed d00 evidence remain historical anchors.
 
 **Reader final exception only.** Leave main, all finally blocks and the original
 code-normalization statements unchanged. The original handler first selects its
@@ -1574,8 +1668,11 @@ fixed-transport stderr retain exact old bytes. Preserve
 all existing cases and invocations. A dependency outside these fixed listed carriers
 or seven paths returns to the gate, not a general stderr expectation sweep.
 
-**Binding, costs and removal.** Independently freeze changed Reader/frontend bytes.
-Keep four observer literal bodies/hashes, all generation transforms and both old
+**Binding, costs and removal.** Freeze the new consumer bytes and preserve the
+accepted scope removal. The nine copies are frontend transformations, not consumer
+owner copies. Regenerate their complete maps/inverses against the actual restored
+frontend, separately bind every actual loaded consumer owner/range. Keep four
+observer literal bodies/hashes, all generation transforms and both old
 native bindings byte-identical. Rebuild all nine actual copies/maps and prove each
 inverse byte-for-byte, including unchanged guard-substring extraction, emit_error
 insertion anchor and code/copy points. If an allowed existing carrier or generated
@@ -1586,19 +1683,27 @@ not cover these hashes. Reuse a class/literal hash only after byte equality prov
 its body unchanged. Do not regenerate or rerun unaffected carriers. Bind each moved
 frame/caller assertion to its exact final statement. Then update source/closure hashes, evals.jq,
 driver and launcher in that order from actual reviewed bytes. No pin may excuse a
-semantic drift; no new source member or consumer/generator change is allowed here.
+semantic drift. Only the leaf boundary above may change consumer; generator and
+source member sets remain frozen. Derive every actual caller line, including the
+dashboard wrapper anchor: the input literal 10413 differs from its actual call
+10406. Neither number is a final binding. Keep all three accepted oracle groups,
+full statements and original calls; C changes only their necessary mechanical binds.
 
-Pay all new traceback/projection CPU/memory, retained bytes, parsing, output and the
-64-to-128-byte read increase in the original owners and limits. Do not borrow #558
-or native budgets, enlarge a deadline, invent zero cost or refund failure. Keep the
-original six-shard/79-suite full CI recipe and all existing execution gates. No
-standalone diagnostic run, new evaluator call, matrix or automatic retry is granted.
-Root cause remains UNKNOWN; this plan permits no guessed root fix. Once actual
-same-call evidence locates it and its bounded fix/regression is independently accepted,
-remove the temporary helper/relay/output/control extensions and restore bare-code-only
-stderr. Rebind actual bytes/pins again. Final full CI must cover that removed state
-under a fresh accepted source/recipe/resource tuple and execution GO. Old diagnostic
-CI is not final proof, and this plan does not pre-authorize another dispatch.
+Pay actual definition-time binding, item tuples/opaque references/iteration,
+traceback/frame projection, scalar allocation/publication and every output/retained
+copy through the original owner/caps. Do not assume a single serialization or free
+identity-sharing in transferred leaf_failures. No borrowed #558/native budget,
+new cap, deadline, zero-cost claim, refund, call or retry. Preserve original six-shard/
+79-suite full CI and source/recipe/resource, normal commit/rebind/push and unique
+execution GO. Any new full validation uses the accepted known-root fixes, oracle
+corrections and removed scope facility, with this leaf contact only if separately
+admitted; no extra diagnostic invocation or same-source repeat is granted.
+Job3 root remains UNKNOWN. After its actual root fix/regression is independently
+accepted, remove this leaf helper/default binding/call and both fields, then rebind
+all actual bytes. Do not retain or restore the resolved scope facility while job3
+is unresolved. Final original full79 must cover both facilities removed. An earlier
+passing run with leaf fields cannot replace that proof or close the old UNKNOWN/P1.
+This plan pre-authorizes neither a run nor a guessed root fix.
 CPUwall NONE/native BLOCKED/production EMPTY/automation PAUSED/docs329 NOTAPPROVED
 zero reads remain. All prior raw failures, costs, skips and UNKNOWN remain evidence.
 
@@ -1617,7 +1722,7 @@ The CODE-only/static, combined clean commit, independent source/recipe/resource
 review and separate execution GO sequence above applies to this entire contact
 set. Use its original six-shard/79-suite recipe only at each separately accepted
 execution tuple; no new dispatch is authorized here. Keep all prior failures,
-costs, skips and UNKNOWN; the original scope failure is not claimed fixed.
+costs, skips and UNKNOWN; static scope root/removal acceptance is not runtime PASS.
 
 ### S1–S10 and invariant mapping
 
@@ -1842,6 +1947,14 @@ those objects. Change imports only to make value definitions load without enteri
 | 9 write-shadow.py | Extract _publisher/_admit/_outer_record/provenance/command value construction from acquisition | Existing prepare/write call the same functions with held facts; coordinator uses reconstructed inputs. All old predicates remain; values cannot grant real write admission. |
 | 10 scope reader/generator | Extract request/expectation, bundle fact, measured observation, project_register, origins and manifest/completion value constructors | Existing _Reader/_Generator acquire real facts and session checks; coordinator calls values plus real jq evaluators. Public evaluate-scope retains its real reader handshake. |
 | 11 replay-malicious.py | One fixed `replay_case(held_case,runtime_root,private_work)` orchestration and comparison | Only the fixed eval-driver arm calls it; no public toolkit, plugin dispatch, transport or arbitrary callable. Expected outputs/invariants go only to final comparison. |
+
+In write-shadow.py's _admit, pass the same materialized.write_set already used
+by _admission_values to _candidate_facts. Do not substitute write["write_set"] or
+skip candidate validation. Preserve all admission predicates, receipt checks,
+Git inventory/commit/tree/parent relations and every full blob/byte/SHA check.
+Keep provenance, outer record, seal/close and publication withheld. The existing
+shadow-write positive calls and all negative assertions remain the proof;
+no copied test or additional invocation is needed.
 
 Instantiate these same owners independently for each applicable R4A.B occurrence.
 Keep both launch controllers, all four preparation calls and the two gate reader
@@ -3693,9 +3806,9 @@ gates (R9.6).
   operator-graded seed and its test. 150-450 of them are verbatim verdict bytes, which
   cannot leave the PR whose test checks their digests.
 - PR 3: `review_size: standard`, about 300-400 net added lines.
-- This plan-only amendment: `review_size: standard`. One concern: the accepted
-  C1 recorder noninterference and owned foreground cleanup, with their fixed
-  regression bindings and bounded failure facts. Runtime-invoice obligations stay intact.
+- This plan-only amendment: `review_size: standard`. One concern: complete the
+  existing C1_T backing and writer admission with their required owner facts.
+  Original regressions, bindings and runtime-invoice obligations stay intact.
 
 Each range waives only the soft line signal, never scope, tests, CI, review or human
 merge.
