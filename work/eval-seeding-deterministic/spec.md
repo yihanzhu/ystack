@@ -2004,15 +2004,19 @@ to evade the source cap. Executable and policy files always belong to the closur
      `53bed46d5eb694bfd05578f5ac1841b9443749c6`。后续实现须绑定实际
      已接受 source 与完整 recipe bytes。此条不扩大 C1 的六个功能路径或三个 pin 路径，
      本测试表不改产品行为，不开放整个测试文件或其它测试；固定辅助生产接点分别列于下文。
+     下表两个原错误传播接点绑定设计源 `0ad7f40d262d7f84107b817fed06515d80d56bab`。
+     它们只复用原测试已取得的 Exception/stdout，不改变 observer 算法或采集范围。
 
      | 测试路径与接点 | 修改范围与保留要求 |
      | --- | --- |
+     | `scripts/test/scope-qualification.test.sh`：`PY_OBSERVER_OWNER_CONTROLS.observe_case` 的原异常捕获与 status 断言 | 保留原 E_STALE/kind 检查和 status 断言；仅在该 status 断言失败时，把已捕获的同次原 Exception 链为同一 AssertionError 的 cause。只增加一个局部引用并在所有出口释放；不改私有 copy、原分类或正式生成结果。遵守下述生命周期和取消要求。 |
+     | `scripts/test/shadow-write.test.sh`：原 `scope_check` 子进程结果转发 | 仅把已捕获 stdout 的原单次 print 移到原 returncode 检查前。原 subprocess/argv/env/timeout/PIPE、断言条件/消息及 stderr 不变；标记取消原样传播，普通输出错误不得覆盖已知 child 失败。遵守下述优先级；不开放其它 writer 插入。 |
      | `scripts/test/scope-qualification.test.sh`：`PY_OBSERVER_OWNER_CONTROLS/observe_case` 的普通 observer 私有 copy | 仅经一个命名的 `_ordinary_observer_metadata_compat` 有限私有转换边界，让 old/uncached/cached 共用下述固定 metadata 异常归属规则。保留正式四 literal、两 native helper/body/hash、旧 d35 与 1197/1231 原字节及 UNPROVED。只更新原 errno 精确尾断言和实际必需机械绑定；不改其它组、正式生成结果或生产。 |
      | `scripts/test/scope-qualification.test.sh`：`PY_GUARD_CONTROLS` 的 `fixed_short_phase` 内原 `proof_program` | 仅在原 `__new__` 创建的 `_DarwinChildOwner` 上、原 `_foreground` 调用前补 `ledger=None`，接回真实无继承 ledger 语义。完整核当前构造与 `_foreground` 的所有 self 读取及后继分支：`inherited` 必为 false，原可选 gate/coverage 属性仍缺省，全部 deadline 读取仍由原 inherited/gate 条件保护。不得造 ledger/session/deadline、任意补状态、改生产或替换原完整 `_foreground`；保留原固定 child/env seam、实际取消/READY-complete/channel、cleanup/receipt及全部断言。 |
      | `scripts/test/scope-qualification.test.sh`：`process_snapshot_controls` 的原 ordinary helper 私有 copy seam | 仅把 source-hash 断言及 `sources` 中 consumer 项的两个固定旧 digest，在各自完整上下文内绑定到独立审过的完整 consumer bytes。每处恰一次，并纳入原完整 inverse。保留原 runtime seam、全部 source/runtime/qualification 拒绝、真实持有/关闭及费用。Linux 原 `actual-helper` 必须通过原 source/held 检查，由原 Darwin 平台门拒绝，满足原 `GAP`、returncode 1、空 stdout 和 stderr 尾 `:E_RUNTIME\n`；native query 仍为 NOTRUN，不改平台门或以 source-hash ASSERT 替代。 |
      | `scripts/test/candidate-content-preparation-fixtures.py`：`raw16_C1_gate_revision` | 从唯一真实 request phase 取原 `session.call_id` 及紧随的 request 赋值。跨原 request/wrapper/result 三 owner 保留 `K_REQUEST` → 同 session 的 `context[1].release_local()` → 原 not-local/not-remote 检查 → collector → `K_DONE`。核唯一性、参数、相邻关系、context 数据流及全部后继 AST 选择，不调用整个 phase。保留六个原 case、phase/request-id 两 mutation、全部 owner/wire/COMPLETE/once-close/首错/取消/snapshot/费用断言与原 collector stub；不增加 recorder dual-parent caller，不改下文十六 caller 排除。 |
      | `scripts/test/candidate-content-preparation-fixtures.py`：`_raw16_C1_foreground_finally_seam` | 从同一固定 consumer 的 `_DarwinChildOwner._foreground` 有界提取原 `primary=None`、`cleanup_errors=[]`、`result_value=None`、局部 `later(error)`、原主错同对象捕获、完整 finally 及其后的去重/cause/raise 仲裁，接回原受控 `raise native`。核唯一性、顺序及全部后继依赖，保留原延后仲裁控制流；不能只补名字、在悬挂异常后追加不可达 tail、手写替代仲裁器或空 later。保留原 `child=None`、空 `old_handlers`、同一 handoff/selector/previous 和真实 globals；不执行整个 foreground 或 spawn/TERM/wait。 |
-     | `scripts/test/shadow-write.test.sh`：`outer-original-receipt` 的唯一显式 `refuse_outer` stub | 仅接收真实 `_outer_record` 的第八个 `record_form` 参数并原样传给 `original_outer`。保留同一 receipt tamper、边界顺序、admission 拒绝及无 retained output/seal 的全部断言。其它 `*args` stub、两个原七参数默认调用、共享复制/变换器及 writer 专有插入均不改；生产接口不改。 |
+     | `scripts/test/shadow-write.test.sh`：`outer-original-receipt` 的唯一显式 `refuse_outer` stub | 仅接收真实 `_outer_record` 的第八个 `record_form` 参数并原样传给 `original_outer`。保留同一 receipt tamper、边界顺序、admission 拒绝及无 retained output/seal 的全部断言。其它 `*args` stub、两个原七参数默认调用及共享复制/变换器均不改；writer 专有插入除本表单列的原 `scope_check` 转发外不改；生产接口不改。 |
      | `scripts/test/scope-qualification.test.sh`：`PY_STALE_PREPARE` 及同文件直接绑定它的 source SHA/行号断言；`PY_SAME_CALL_OWNED_CONTROLS:sudo_provenance_controls` | 前者仅修正原三个 source 的固定绑定及私有 copy 的必要兼容。保留原 observer、四个固定 body、精确替换次数、完整行号映射与逆变换、原异常/返回/关闭、所有 owner/身份/拒绝控制、费用与 cap。后者仅把原 `provenance/recheck/close` 的必需固定私有依赖和实际接收者状态接全；仍调用同一受绑定源码的原检查，不用常量、空实现或伪原件代替依赖。仅当真实普通 fixture backing 确需路径适配时，可在该测试独立加载的 consumer namespace 内将 `ANCHOR` 绑定到原 private fixture 目录，并须在 `finally` 恢复原常量；不改真实安装路径或生产 root，不开放其它路径 seam。保留原真实 FD、既有 OS transport seam、sudo 身份与内容摘要区别及登记/逆序关闭。十二 case 中仅 `close-failure` 的 owner 后置条件作此精确修正：关闭前记录同次 factory 返回且已实际登记的 `FixedSudo` 对象与原 fd；原 seam 仍先真实 `os.close`、记录 closed，再抛同一 marker。异常后 `owned` 恰含该同一对象，其 fd 仍等于同次记录值；在任何可能复用该 fd 数字的新 open 前，用未替换的真实 `os.fstat` 核 `errno.EBADF`。保留原 body error/身份、`closed==fds`、无重复关闭、marker 对象和 flags 断言；其它十一 case 仍须 `owned==[]`。本特例只适用于此明确先关闭后抛 marker 的 fixture，不将真实 close 异常泛化为 FD 必已关闭；不得 drop/清空失败 owner、修改生产 close 或重试该 FD/不确定的关闭。其余原故障断言判定不变。 |
      | `scripts/test/scope-qualification.test.sh`：顶层 `PY_COVERAGE_PURE` 的手工 `_Reader` 构造 | 仅在获取任何真实 held 对象前补齐原构造器默认值 `source_copies=[]`、`capture_completion_owner=None`；保留已有 `store_session=None`，不伪造 enforced/completion 或其它生产状态。保留原全部 141 项检查、真实 owned/Git/child/FD、命令 ledger、原 `finally` 的实际 `close` 及首错/取消规则。不得在关闭前清空 owned、吞异常、跳过 finally、伪造 completion 或放宽生产 `close` 对缺属性的处理；只补最后报错属性不算完成。 |
      | `scripts/test/scope-qualification.test.sh`：`PY_FIXED_MARKER` | 绑定原 package 取得 marker_raw 与实际调用唯一 `_scope_write_frozen_values` 的关系；从该真实 helper 唯一提取原 marker 长度检查及 JSON 解析 try 前缀，在进入 write-path/frozen-bundle 校验前止步，并返回该前缀实际产生的 marker。核完整 source/helper bytes、定义唯一性、原调用及提取边界，不再从 write_relations 盲取连续三句。固定依赖仅为同一受绑定 namespace 的 `c/require/json` 及原 builtins，保留 `c._unique_object/c.canonical/c.DOCUMENT_LIMIT/c.Refusal`；不手写 parser、捕获 NameError 充当拒绝或补造完整 write receiver。保留 pretty/canonical marker 结果相等、三路径 write_path_ok 相等、原十项非法输入全部 E_RELATION（重复/嵌套重复 key、NaN/Infinity/溢出、非 dict、错误编码、超限/过深嵌套）及普通 evidence parser 拒绝 pretty bytes。 |
@@ -2022,9 +2026,40 @@ to evade the source cap. Executable and policy files always belong to the closur
      | `scripts/test/candidate-content-preparation-fixtures.py`：`raw16_preparation_P_handoff` | 只补该既有七 case 的两处实际生命周期接线：在同 scratch 的 inspect 生成前后，按原时点调用 `_T_cleanup_begin/_T_cleanup_done/_T_inspection_returned`；在原 H-copy 前后调用 `_begin_T_parent/_finish_T_parent`，后者只接受实际新增的 `reproduction`。仅刷新 stat 不替代原 transition。读取第二副本前先核实际 inspect 返回值、数量和对象身份，保留原 failure，不以索引保护跳过。保留七个正反例、失败/取消/关闭/费用断言及生产 `T_source.recheck`；不直接填 holder、回写 receipt 或强行接受失败 retention。 |
      | `scripts/test/shadow-enforced.test.sh`：首个 `PY_REPRODUCTION_VALUES` | 仅在原固定 AST 提取集合中补入真实 `_runtime_sha_values`；完整闭集为 `Refusal`、`canonical`、`sha`、`parse`、`document_ref`、`_native_provenance_values`、`_runtime_sha_values`、`_reproduction_provenance_values`、`_reproduction_record_values`、`_reproduction_bundle_values`、`StableFile`，每个定义恰一次。新增 helper 只使用原 namespace 已有的 `sha/c`；不做递归或任意依赖 loader，不改产品或注入替代实现。保留原 32 个断言、provenance/record/bundle 值与 bytes 比较、单字段变异、缺字段和畸形拒绝、StableFile/DependencySnapshot 区别、`marked_sha` 与 bundle hash 的精确顺序、早失败前缀和故障 payload；不改 expected marks、跳过异常或删除 Python hash。该块以外的原控制和取消/关闭语义保持不变。 |
      | `scripts/test/candidate-content-preparation-fixtures.py`：`raw16_scope_P_ownership` | 接全同一 Reader/Anchor 的 `scope_runtime_owner`、真实 `_CoverageConfiguration`、source/configuration 实际登记与 capture 关闭状态。配置的 `host/config/accepted/package/supervisor/normalizer` 六成员须来自同次实际 backing 的完整 raw、路径和 held，满足原类型、membership、对象身份及再读检查。登记 source 须独立取得并拥有真实 acquisition，不能借用随后仍须存活的原 native holder；capture 的 request_raw、held 和一次关闭也须完整。仅在实际证明 `4 runtime + 2 capture + 2 configuration = 8` 个 P、两个 capture 各四成员及两个 configuration 各六成员的完整 bytes/归属/ordinal/费用后，才把原 6 改为 8；不得仅改计数、伪造副本或清 unusable。保留原九 case，四个 registration fault 仍在首次 runtime 登记处触发；保留 release/seal/close、native-live、drift、同一取消对象、全部 P once-close 和首错规则。 |
-     | `scripts/test/shadow-enforced.test.sh`：原共享 orchestration flow（设计源 3891–4098） | 接全真实固定 `Anchor.retain_runtime_acquisition/retain_parent_inputs/retain_sudo_companion/retain_preparation/seal_local_runtime` 及原 receiver 必需状态；不以空方法、常量成功或吞 AttributeError 替代。原 Snap 的 `original/acquisition_raw` 须来自同次普通 fixture 的真实 holder 与完整 bytes；原 store seam 接收同次 `_owner` 并建立真实 held/snapshots/recheck/close 及 reproduction/capture 关系，不能只忽略参数或假造 owner。保留原 host/process/native launch 模拟边界、13 个控制、29 个 evidence 文件、实际调用顺序、changed-response 拒绝和 finally。真实保留方法的拒绝、unusable、失败/取消及全费用照常保留；原普通 unqualified context 不成为合格 P/完成/seed 证明。仅修共享原 fixture，`shadow-write.test.sh` 的原复制/变换器和 writer 专有插入保持不变。 |
+     | `scripts/test/shadow-enforced.test.sh`：原共享 orchestration flow（设计源 3891–4098） | 接全真实固定 `Anchor.retain_runtime_acquisition/retain_parent_inputs/retain_sudo_companion/retain_preparation/seal_local_runtime` 及原 receiver 必需状态；不以空方法、常量成功或吞 AttributeError 替代。原 Snap 的 `original/acquisition_raw` 须来自同次普通 fixture 的真实 holder 与完整 bytes；原 store seam 接收同次 `_owner` 并建立真实 held/snapshots/recheck/close 及 reproduction/capture 关系，不能只忽略参数或假造 owner。保留原 host/process/native launch 模拟边界、13 个控制、29 个 evidence 文件、实际调用顺序、changed-response 拒绝和 finally。真实保留方法的拒绝、unusable、失败/取消及全费用照常保留；原普通 unqualified context 不成为合格 P/完成/seed 证明。仅修共享原 fixture，`shadow-write.test.sh` 的原复制/变换器保持不变；writer 专有插入仅允许本表单列的原 `scope_check` 转发。 |
      | `scripts/test/evals-malicious.test.sh`：`PY_CAPTURE_VALUES` 内 source 的成功 reacquisition/seal 分支 | 在第一次真实 `_Owned.append` 前建立同一 Reader/Anchor 的 owner、真实 configuration 与其登记；两次 source acquisition 仍绑定该同 case 的实际 configuration，其 capture/held/完整 raw 各由本次真实取得，不借别的 source acquisition 或 case。保留原 failed_sync 两分支、native receipt/payload、两次 reacquisition、完整四成员 capture、同 case 账、真实最终 owner/seal、全部 tail transfer 和关闭。新增 configuration P 的成员/数量/费用须逐项实测并列入原精确计数；不改成功 seal 判定或用清失败状态恢复它。 |
      | `scripts/test/evals-malicious.test.sh`：`PY_SOURCE_CANCEL` 的原共享 receiver | 接全原 positive 所需同一 owner、真实 configuration/source 登记、实际 capture/held 和关闭先决，再沿用原 27 个 label 及各原故障注入位置。保留 positive 的无意外 unusable、真实完整 bytes、同一 reader/generator cancellation 对象、首错/次错、FD once-close/无泄漏、全部账与原负例判定。仅原 `owned` 后置条件改为同一 Reader 已实际登记的 configuration baseline 加原 case 的 source 登记增量；须核同一对象、原顺序且无额外 owner，seal 分支的 source 增量仍为空。不另造假 owner 来维持旧 list，不把预期失败改为必须成功。精确计数只按真实新增 configuration P 的实际贡献分项调整，不跳过 source copy、伪造输出或清 unusable。 |
+
+     原错误传播只在上述两个测试层接点进行。observe_case 保留原 `except Exception`
+     及 kind/`E_STALE` 断言；该断言成功后才保存同一异常引用。原 gap else、observe
+     调用和 trace/sys.settrace/sys.argv 恢复时点不变。原结果读取、证据构造及全部
+     断言顺序不变。仅当原 status 断言失败，才以同次异常为 cause 再抛同一
+     AssertionError；没有已捕获异常则原样再抛。不能用预期 E_STALE 替代测试失败。
+     局部引用在原调用前初始化，在所有出口的 finally 清除，包括 status 前失败；
+     不改原异常的 traceback/cause/context，不跨调用保留。原失败链只在正常传播
+     期间持有该 cause；不解析 traceback/frame/local，也不恢复刻意抑制的内层 context。
+
+     scope_check 只前移原 `print(scope_check.stdout.decode())`，不增加第二次 print
+     或子进程调用。若原 decode/print 抛 Exception，先按原 `_scope_signal_cancel`
+     语义将标记取消（含标记 InterruptedError）原对象再抛；不得因 child 非零吞掉。
+     其它普通输出 Exception 仅在 child 已非零时继续原失败断言；child 为零则原样
+     再抛输出异常。不捕获 BaseException，保留 KeyboardInterrupt/SystemExit 等传播。
+     原 returncode 条件、失败消息/stderr 与后继断言不变；child 失败仍在原位置终止。
+     成功 stdout 内容及 ok 数量不变，仅原 stdout 先于该 ok marker 转发。
+
+     两接点保留全部原 guard、首错/取消/finally、调用/case 数量及数值 cap。
+     不新增 fixture 显式读取、采集器、字段、输出标签/自定义格式化设施、flush、probe、helper/API、
+     hook、AST patch、全局替换或 L/R 接点；不解析、筛选或重新包装已捕获 stdout。
+     正式四 literal、两 native helper/body/hash、d35/1197/1231、生产、T/scope-pre、
+     SOURCE84/maps/pins 不变。只允许实际移动的原 hash/line/dashboard 机械绑定，
+     完整 diff/inverse 须证明上述范围；不重生成未变依赖。标准异常呈现只沿既有
+     普通 CI runtime，使用原已取得错误对象和原已有模块。Python 默认 traceback
+     渲染可能触发内部 linecache/已有模块源码读取；不保证底层零 I/O。不得为此增加
+     显式源码/frame 读取、自定义 formatter、测量、任意 loader/source 来源、网络
+     或凭证范围。隐含源码读取、渲染、引用存续及转发/解码/传输的实际范围和费用
+     归原普通调用，未测累计 UNKNOWN；不豁免费用，不提供零读取、物理 cap 或完整
+     fit 保证，也不新增源范围。
+     原未知根因、失败与 native/G3 欠项不变；传播原值不构成新根因或资格证明。
 
      ordinary observer 只处理 `_metadata → _capture_metadata → HeldPath.recheck` 与
      `_named_metadata → _capture_named_metadata → HeldPath.recheck` 两条直接边。
@@ -2046,7 +2081,8 @@ to evade the source cap. Executable and policy files always belong to the closur
      原 12-event/16-frame 上限、清理、首错/取消、不重复及不跨 component 均保持。
      正常 stat/bool return、gap、四 kinds、三变体、原调用数量和全部断言保持，
      包括 source/code 认证、cache 身份/容量/回退、same-request primitive/dispatch/local
-     对照、callbacks 减少和 shape 相等。只允许原 errno 精确尾断言的上述兼容修订；
+     对照、callbacks 减少和 shape 相等。私有 copy 算法仍只允许原 errno 精确尾断言
+     的上述兼容修订；外层错误传播仅限本表单列接点，不改这些断言或分类；
      不增加 fields/kinds/calls/trials/probe、retired R 或诊断设施。
      所有新增存续、引用、复制、分类与序列化费用照计，未量测为 UNKNOWN；有限数量或
      同对象不豁免费用，也不构成 fit 或 native 资格。此适配私有于原普通回归边界；
@@ -2557,7 +2593,7 @@ in CI; wiring the record report into anything but the relay; enablement.
 - **Risk is high.** Eval policy, seed and scope-gate change. An operator-merged
   plan-only PR precedes code.
 - **Size.** This spec amendment uses `review_size: standard` for the fixed ordinary
-  observer metadata-exception compatibility boundary, with all original proof requirements.
+  test error-propagation contacts, with all original proof requirements.
   The separate high-risk plan must set the whole PR 1b implementation range, including the preserved relay
   code, every owner extraction and all tests. It must count inherited code and
   failed/retained proof; no partial implementation is a finished PR. Do not trim
