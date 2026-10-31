@@ -2187,7 +2187,13 @@ to evade the source cap. Executable and policy files always belong to the closur
      ordinal、flat runtime文件、原case聚合/窗口账、source_copies登记/刷新/关闭协议不变。
      不将每文件或新槽变为新预算case。两区和全部候选槽在首hold前已存在，故后续输入/
      recording/其它批次的写入不再改变已持有candidate的任何祖先。既有source_copies
-     只共享recording域；不新增alias before同步，不修改consumer既有刷新函数。
+     只共享recording域；不新增alias before同步。冻结原目录刷新算法。仅普通
+     _copy_candidate 将本次私有错误状态显式传过 _refresh_recording_directory，
+     沿其原 _capture_metadata、_capture_named_metadata、_capture_rule 到既有
+     _capture_observation_error、_capture_observe 的相应分支传递。同一 parent FD、
+     owner、原两次 metadata 和 rule 的次序、stable/current/named 身份与 ACL 比较，
+     及通过检查后写 component.before/after/named_after 的规则全部保持。其它调用
+     沿用原实参形式。只以源码证明错误对象可达，不增加读取、case、注入或采样。
      已用candidate槽不再写；重查和最终关闭保留全部完整identity。外部root/tmp或任一
      受保护ancestor发生未知变化仍按原规则拒绝，不宣称本方案消除这种原拒绝。
 
