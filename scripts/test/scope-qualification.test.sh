@@ -9066,7 +9066,7 @@ layout_source=ast.get_source_segment(assembler,layout)+'\n'
 layout_old="for name in ('tools','work','bundles','identities','snapshots'):(base/name).mkdir(mode=0o755)\nwork=base/'work';work.chmod(0o700)\n"
 (area/'layout-old.py').write_text(layout_old)
 coverage_fixture=next(node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=='build_coverage_revision')
-consumer_calls=sorted([node for node in ast.walk(tree) if node.lineno<coverage_fixture.lineno and isinstance(node,ast.Expr)
+consumer_calls=sorted([node for node in ast.walk(tree) if isinstance(node,ast.Expr) and node.lineno<coverage_fixture.lineno
     and isinstance(node.value,ast.Call) and isinstance(node.value.func,ast.Attribute) and node.value.func.attr=='mkdir'
     and any(k.arg=='mode' and isinstance(k.value,ast.Constant) and k.value.value==0o755 for k in node.value.keywords)
     and node.lineno!=layout.body[1].lineno],key=lambda node:node.lineno)

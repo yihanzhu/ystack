@@ -6617,20 +6617,69 @@ def raw16_C2_six_fixes(root: Path, original=None) -> None:
     literal=shlex.split(text.split('c2_program=',1)[1].split('\nc2_fd9=',1)[0])[0]
     fixed={'__name__':'_C2_six_fixed','c':owner};exec(compile(literal,'<actual-fixed-C2>','exec'),fixed)
     resolver=owner._DarwinUUIDResolver() if sys.platform=='darwin' else None
-    # The helper is stopped at its real spawn boundary. No shell, runtime or jq is executed.
-    work=fixed['c2_fresh_work']('C2-six-env');spawn=os.posix_spawn;seen=[]
+    work=fixed['c2_fresh_work']('C2-six-env')
     sentinel=OSError(5,'controlled before helper execution')
-    def intercept(path,argv,env,**kwargs):seen.append(dict(env));raise sentinel
-    os.posix_spawn=intercept
+    _six_env_tool_original=owner._c3_run_tool;_six_env_join_original=os.path.join
+    _six_env_host_tmpdir=os.environ.get('TMPDIR')
+    _six_env_area=None;_six_env_helper=None;_six_env_primary=None;_six_env_build_error=None
+    _six_env_cleanup=[];_six_env_calls=[];_six_env_joins=[]
     try:
-        sources=types.SimpleNamespace(helpers='',launcher=str(root/'evals/v1/evals-launcher.sh'),namespace={'owned':[]})
-        helper=fixed['C2Helpers'](sources,'/synthetic/scratch',work,())
-        try:helper.build([])
-        except BaseException as error:assert error is sentinel
+        _six_env_start='\nemit_error() {';_six_env_end='\n# Fixed public entry;'
+        assert text.count(_six_env_start)==text.count(_six_env_end)==1
+        _six_env_helpers=text[text.index(_six_env_start):text.index(_six_env_end)]
+        assert len(_six_env_helpers.encode('utf-8'))==61996
+        assert hashlib.sha256(_six_env_helpers.encode('utf-8')).hexdigest()==fixed['_C2_HELPERS_SHA256']=='041ec87ddf0f04984ce004600da8fb74a81a1931f941489d175b130c41d644a0'
+        _six_env_area=tempfile.TemporaryDirectory(prefix='C2-six-env.')
+        _six_env_scratch=str(Path(_six_env_area.name)/'scratch')
+        Path(_six_env_scratch).mkdir(mode=0o700);Path(_six_env_scratch).chmod(0o700)
+        _six_env_arguments=['run',os.path.normpath(os.path.abspath(str(Path(_six_env_area.name)/'seed-a.json'))),'2026-10-31T00:00:00Z']
+        _six_env_sources=types.SimpleNamespace(helpers=_six_env_helpers,launcher=str(root/'evals/v1/evals-launcher.sh'),namespace={'owned':[]})
+        _six_env_helper=fixed['C2Helpers'](_six_env_sources,_six_env_scratch,work,())
+        def _six_env_tool(source_root,declared_work,role,argv,*,stdin=b'',timeout=120,output_limit=1048576,env):
+            assert len(_six_env_calls)<2
+            assert source_root==_six_env_scratch+'/runtime' and declared_work is work
+            assert role=='evals-platform' and type(argv) is list and argv==[['/usr/bin/uname','-s'],['/usr/bin/uname','-m']][len(_six_env_calls)]
+            assert type(stdin) is bytes and stdin==b'' and type(output_limit) is int and output_limit==1048576
+            assert type(timeout) is int and timeout==120 and type(env) is dict and env=={'LC_ALL':'C','PATH':'/usr/bin:/bin'}
+            _six_env_stdout=(b'Linux\n',b'x86_64\n')[len(_six_env_calls)]
+            _six_env_calls.append(tuple(argv))
+            return {'stdout':_six_env_stdout,'stderr':b'','status':0,'pid':None}
+        def _six_env_join(*parts):
+            _six_env_candidate=_six_env_join_original(*parts)
+            if len(parts)==3 and parts[1]=='ystack-portable-core-jq16':
+                assert len(_six_env_calls)==2 and not _six_env_joins
+                assert parts[0]==('/tmp' if _six_env_host_tmpdir is None else _six_env_host_tmpdir), 'helper original TMPDIR lost'
+                assert parts[2]=='jq-linux64'
+                _six_env_joins.append((parts,_six_env_candidate))
+                raise sentinel
+            return _six_env_candidate
+        owner._c3_run_tool=_six_env_tool;os.path.join=_six_env_join
+        try:_six_env_helper.build(_six_env_arguments)
+        except BaseException as error:_six_env_build_error=error
         else:raise AssertionError('helper unexpectedly executed')
-    finally:os.posix_spawn=spawn
-    assert seen[0].get('TMPDIR')==os.environ.get('TMPDIR'), 'helper original TMPDIR lost'
-    print(json.dumps({'C2_fix':'helper-env','spawn_intercepted':True,'runtime_executed':False,'work':work},sort_keys=True))
+        if _six_env_build_error is not sentinel:raise _six_env_build_error
+        assert _six_env_calls==[('/usr/bin/uname','-s'),('/usr/bin/uname','-m')] and len(_six_env_joins)==1
+    except BaseException as error:_six_env_primary=error
+    finally:
+        try:owner._c3_run_tool=_six_env_tool_original
+        except BaseException as error:_six_env_cleanup.append(error)
+        try:os.path.join=_six_env_join_original
+        except BaseException as error:_six_env_cleanup.append(error)
+        if _six_env_helper is not None:
+            try:
+                _six_env_closing_helper=_six_env_helper;_six_env_helper=None
+                _six_env_closing_helper.close()
+            except BaseException as error:_six_env_cleanup.append(error)
+        if _six_env_area is not None:
+            try:
+                _six_env_closing_area=_six_env_area;_six_env_area=None
+                _six_env_closing_area.cleanup()
+            except BaseException as error:_six_env_cleanup.append(error)
+    for _six_env_error in _six_env_cleanup:_six_env_primary=fixed['c2_first'](_six_env_primary,_six_env_error)
+    if _six_env_primary is not None:raise _six_env_primary
+    assert _six_env_build_error is sentinel and not _six_env_cleanup
+    assert owner._c3_run_tool is _six_env_tool_original and os.path.join is _six_env_join_original
+    print(json.dumps({'C2_fix':'helper-env','spawn_intercepted':False,'runtime_executed':False,'work':work},sort_keys=True))
     with tempfile.TemporaryDirectory(prefix='C2-six-fixed.') as area:
         base=Path(area);window=base/'window';ephemeral=base/'ephemeral';window.mkdir(mode=0o700);ephemeral.mkdir(mode=0o700)
         source_path=base/'source';source_path.write_bytes(b'abcdef');source_path.chmod(0o400)
