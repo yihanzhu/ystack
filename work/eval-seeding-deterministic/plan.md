@@ -13,17 +13,18 @@ existing review relay and measured scope binding remain intact. PR 1b remains
 one complete two-source delivery. Source preparation does not accept a dependency,
 a real recording, native qualification or either seed batch.
 
-This C-only plan candidate derives from accepted plan e97e13db955435f9f300d5d7d3d53920710b27b4.
-Its spec-blob binds the accompanying unaccepted Reader layout G2 candidate. Current
+This plan revision derives from accepted plan e97e13db955435f9f300d5d7d3d53920710b27b4.
+Reader G2 PR803 is accepted; spec-blob binds its landed spec1e4333888cab4b31c3987898a221afedc76bac64. Current
 source2b4d98625ea49a0fa3d4da8f5ccc8439e075cc27 and execution
-basea79aaeab323bf1890627d145fff3384080df1e4c stay frozen while CI41232215523
-has observed FAILURE while remaining shards continue. No complete final8/79
-classification is claimed. This fixes a proven
+basea79aaeab323bf1890627d145fff3384080df1e4c stay frozen until all8 original logs
+and the full79 have independent closure, the new artifact gates land and fresh CODE
+is recorded. This plan claims no CI acceptance. This fixes a proven
 static ordinary Reader directory/hold conflict, not a proved dynamic job5/T/scope cause.
-Actual publishing bases and the future source plan-base remain UNKNOWN until the
-separate G2 and high-risk plan gates protected-land and main is freshly fetched.
-The manager may process separate G2 then plan gates while the old run continues;
-this candidate itself is not acceptance or GO. No source work precedes full-batch
+Current plan publishing base is G2 landing71498c4c06d32cb5043b2421434cf1df7dd26288.
+This high-risk plan still needs fresh independent PR804 review and protected landing;
+the final source plan-base/code-start OID remains UNKNOWN until that merge is freshly fetched and recorded.
+The manager may process separate artifact gates alongside the frozen source;
+this plan itself grants no CODE or runtime GO. No source work precedes full-batch
 closure and the new exact artifact/CODE gates. Before source work,
 archive all eight original logs, independently classify the full79, retain all failures,
 normally merge accepted artifacts into the same preserved branch and obtain fresh CODE.
