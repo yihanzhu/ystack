@@ -2010,7 +2010,7 @@ to evade the source cap. Executable and policy files always belong to the closur
 
      | 测试路径与接点 | 修改范围与保留要求 |
      | --- | --- |
-     | `scripts/test/candidate-content-preparation-fixtures.py`：`raw16_C2_six_fixes` 的原 helper-env 前缀及原 first-read mutation 对该同一函数的复用 | 仅接回当前真实 build CLI、同源完整 helper literal、实际私有 scratch/custody 和宿主 TMPDIR 缓存输入合同。保留每次原 build 调用、两原 uname 点、同一 sentinel、真实关闭/取消及下述有限 fixture 接线；不改另五组或后继控制，不开放生产 helper/env/guard。 |
+     | `scripts/test/candidate-content-preparation-fixtures.py`：`raw16_C2_six_fixes` 的原 helper-env 前缀及原 first-read mutation 对该同一函数的复用 | 仅接回当前真实 build CLI、同源完整 helper literal、实际私有 scratch/custody 和宿主 TMPDIR 缓存输入合同。保留每次原 build 调用、两原 uname 点、同一 sentinel、真实关闭/取消及下述有限 fixture 接线；不改另五组或后继控制；仅增加下文取得→custody交接的有界回归。生产只开放下文同一交接接点，env/guard不变。 |
      | `scripts/test/scope-qualification.test.sh`：`PY_STORE_MODE_CONTROLS` 的 `consumer_calls` 原 AST 列表筛选 | 仅把既有 `isinstance(node, ast.Expr)` 移到原 `node.lineno < coverage_fixture.lineno` 前，同一物理行完成。其余 selector、layout排除、sort、11接点/顺序/位置及全部后继控制逐字保留；不造位置、缺省属性或跳过必需节点。 |
      | `scripts/test/replay-materialization-result.test.sh`：下述16个既有 receiver supervision heredoc assert | 只在各原 assert 追加对应固定字符串 msg。完整 predicate/test AST、求值次数与顺序、控制流、原成功路径和失败/取消/cleanup 保持；不插值、不取新值、不改 supervisor/receiver 或其它 assert。只改善原失败呈现，不证明根因。 |
      | `scripts/test/scope-qualification.test.sh`：`PY_OBSERVER_OWNER_CONTROLS.observe_case` 的原异常捕获与 status 断言 | 保留原 E_STALE/kind 检查和 status 断言；仅在该 status 断言失败时，把已捕获的同次原 Exception 链为同一 AssertionError 的 cause。只增加一个局部引用并在所有出口释放；不改私有 copy、原分类或正式生成结果。遵守下述生命周期和取消要求。 |
@@ -2056,7 +2056,8 @@ to evade the source cap. Executable and policy files always belong to the closur
      **C2 helper-env 原合同兼容。** 此唯一接点绑定设计源
      `89748ffb350eb8db6b1162ff6daf90dbd9c72fa8`。原 `build([])`、空 helpers、
      虚构 scratch 和退休 posix_spawn/env 拦截不能证明当前合同。仅改原前缀，
-     原 first-read deletion 仍复用同一函数；原79中的 build/case/mutation 次数不变。
+     原 first-read deletion 仍复用同一函数；原79中的既有 build/case/mutation 次数不减不变。
+     新增交接回归的最少 case/build 次数须按下文单独闭合，不能藏在原次数内。
      从该次已读取的同一受绑定 launcher 完整提取原 helper 片段，按真实边界和
      `_C2_HELPERS_SHA256` 核字节；五 literal 仍由未改 `_literal` 取得，不手填值。
      使用符合原 `c2_cli` 的 run operands：规范绝对 fixture 路径的 seed-a.json
@@ -2095,12 +2096,95 @@ to evade the source cap. Executable and policy files always belong to the closur
      `runtime_executed`仍为false，此接线没有实际spawn拦截，`spawn_intercepted`
      必须如实为false，不能以旧true声称真实Popen/posix_spawn已到达或关闭。
      其它五组、failure_accounting、deletion及后继断言/调用/所有caps保持。
-     不增加helper框架、case/call、工具执行、探针、日志、输出字段、平台检测或
-     平台/工具资格；仅此普通测试输入与故障边界调整，不改正式/native/生产。
+     不增加helper框架、工具执行、探针、日志、输出字段、平台检测或平台/工具资格。
+     除下文明确列出的交接回归外不增加case/call；此输入适配不改正式/native，
+     生产修改仅限下文正常取得→custody交接。
      新增文本提取/校验、声明、join处理、引用、真实held与关闭及异常恢复费用归原
      普通harness并累计UNKNOWN；原真实应用增量仍原owner/原caps计入，不填零、
      不借新数值池、不宣称完整cost/fit。八个辅助测试文件、43路径、旧40/20/C1六
      功能/三pin、九adoption、SOURCE84/consumer/native/map/pin及旧P1均不扩。
+
+     **C2 helper 取得→custody 的正常生产交接。** 固定设计源为
+     `05a2b197199a0136483b05a875c15d2a19a24e59` 的 launcher；其生产字节与
+     `89748ffb350eb8db6b1162ff6daf90dbd9c72fa8` 相同。真实 `_open_held`
+     返回后，`C2Root` 接管前必须有明确的待交接责任；成功只移交一次。
+     当前缺口是静态条件反例，不是本批已观测的泄漏，不解释历史 T/scope 失败。
+
+     | 已列路径与精确接点 | 目标与关闭的范围 |
+     | --- | --- |
+     | `evals/v1/evals-launcher.sh`：`c2_program` 内 `C2Helpers.build` 的真实 `_open_held` 返回→`C2Root` 构造→`build_custody` 公布 | 只修该正常 owner 交接。仅当明确消费协议所必需时，连同 `C2Root.__init__` 的同一入参接管/早初始化失败边界一起闭合；不开放其它 Root 方法、业务步骤、工具调用或全局恢复机制。具体局部协议由独立 high-risk plan 确定。 |
+     | `scripts/test/candidate-content-preparation-fixtures.py`：`raw16_C2_six_fixes` 的同一 helper 前缀及交接回归 | 在此原普通调用内加入最少受控回归；保持另五组、`failure_accounting`、first-read deletion 及所有后继控制。原 `evals-malicious.test.sh` 调用链不改，不另建 suite 或 shell 入口。 |
+     | `scripts/test/scope-qualification.test.sh`：原 `PY_STORE_MODE_CONTROLS.consumer_calls` | 只保留已列同物理行 Expr 谓词前移；这不是生产交接的派生绑定路径，不新增其它修改。 |
+
+     factory/constructor 的未保护初始化失败、普通异常、marked cancellation 与
+     KeyboardInterrupt 都不能遗失原主错或待交接 held。仍未被构造器消费的真实
+     held 须完整关闭一次；构造器已接管、已消费的 components 或关闭结果不确定时，
+     不得再关或重试。局部责任槽被消费不等于 OS 已成功关闭。按原首错和取消优先
+     规则保留同对象错误、关闭次错与全部已知/UNKNOWN 记账；不能只见预期主错便
+     把关闭失败判为成功。用明确 owner 协议区分失败点，不能从 traceback/f_locals
+     找资源，不能仅凭 `build_custody is None` 猜测未消费，也不能依赖 GC/进程退出。
+     不泛化每条 Python 字节码的取消窗口，不造通用恢复器。`C2Helpers.close` 的
+     原成功 custody 责任与其它既有 caller 保持；若该边界不能在上表内闭合，停门。
+     通用 `_consumer._open_held`、HeldPath/ACL/身份 guard、环境及 native 标准不变。
+
+     原 helper-env 的单次 build、两次有限 uname 声明、真实 `_checked/_tool`、
+     同源 helpers/五 literal、真实 cache join 和同一 sentinel 全部保持。
+     新回归是普通生产 bug 的必要验收，不受上述旧调用数禁增句隐含禁止，也不授权
+     任意扩展。单独 plan 必须先列出最少有限 case 表、每 case 的真实取得/build/
+     constructor/关闭调用数、原 mutation 复用是否重复这些控制及完整累计次数。
+     至少覆盖真实 held 已返回而 factory/constructor 尚未负责时的早失败、构造器
+     已消费后的失败不重关、成功移交一次，以及普通主错/marked cancellation/
+     KeyboardInterrupt 与关闭次错的原优先级和不确定关闭不重试。允许复用已有
+     正反例覆盖重叠义务，但不得删减原 case/call/assert，也不能用 stub 假 held
+     或伪关闭替代真实资源。受控失败限于该测试独立 namespace 的对应构造入口、
+     原关闭 seam，以及仅H5“真实constructor已消费”控制的以下一次原recheck注入：
+     必须在真实 acquisition 已返回同一 held 后安装，只对该同一 held 在 saved
+     C2Root 构造器内的原 recheck 调用抛同一受控 MemoryError，恰一次；其它对象或
+     其它 recheck 调用原样委托，不影响 acquisition 自身的检查。所有出口 finally
+     恢复原入口。每次原函数只运行该H5一次，原first-read mutation复用时再一次；
+     不新增其它控制或调用，不放宽任何原实际root类型/guard/完整held链。
+     新控制在工具调用前止步；不新增真实 uname/jq/provider/native probe、CLI平台
+     探测、子进程或新日志/输出字段。不得把未取得的 pipe/child 记为已关闭。
+     回归仍归原79 suite/six shards；确切 case/call 与成本表未闭合不得授 CODE。
+
+     源绑定闭包仅为上表三文件，新增行为文件只有 launcher 与原 fixture；八个
+     辅助测试文件、43-path、旧40/20子集、C1六功能/三pin、九adoption成员不变。
+     修改后完整 launcher 与 `c2_program` 的实际 bytes/长度/SHA 必须重新绑定到
+     source manifest、recipe、审查及原运行快照；不得保留旧头的摘要或复用旧GO。
+     既有 fixture 均从同一 launcher 动态提取该 literal，不复制或手写第二份程序。
+     完整61996 B shell helpers 及 SHA
+     `041ec87ddf0f04984ce004600da8fb74a81a1931f941489d175b130c41d644a0`
+     保持原字节。五个 shell literal、`PY_SHADOW_SOURCE`/SOURCE84 table、
+     `evals.jq`、`evals-driver.sh`、`run-evals.sh`、consumer7d58、四正式 observer
+     literal/两native helper/body/hash/d35/1197/1231、九copy/maps/pins均不移动。
+     launcher 不在 SOURCE84 成员内；其原 snapshot/full-byte/hash 检查和
+     `launcher_sha` 动态量测继续使用实际新字节，不新增自证 expected 或外部 pin。
+     上表没有第四个机械绑定写路径；实际发现其它固定依赖必须停下明确回到相应门，
+     不能笼统重生成 pins/maps、改认证或开放整文件。每个修改区须有完整逆证，
+     其余生产/测试字节与原约束保持；原 AST 谓词逆证仍为同一行唯一调整。
+
+     新增取得、引用、分支、真实元数据/读写、异常和清理全部收费。原 app 增量按
+     原 owner/cap/carry-in/settlement 计入一次，普通回归准备和运行的实际费用累计
+     UNKNOWN；不填0、不借#558、不新建数值池、不宣称完整cost/fit/native资格。
+     关闭错误或未知不能抹账，所有历史失败、P1/UNKNOWN、轮数和未执行义务保留。
+
+     原两个测试稿已按独立阶段例外审查及operator直接批准，完成一次仅本地normal
+     保全提交：HEAD `932d9f911750fb003a79005d62c4179837d6e4e5`，sole parent
+     `05a2b197199a0136483b05a875c15d2a19a24e59`，tree
+     `c40cbcdee26ceeb319fd02c2a72350cd3aafa6c1`；原branch clean，完整601项
+     字节/模式保全。已完成保全收据SHA-256为
+     `d66be339c1cf72fa70db2a0bbae98269b23a5cee4bcce8d5b9628da6cfe62120`，
+     所绑定直接批准收据SHA-256为
+     `99d9e51e3e4a4283f79bcc7d72c21530a02914dc0f1f82a730d2d4e0c70b9d0c`。
+     保全GO已消费，未push；source_ACCEPT=false，静态所有权I1仍OPEN。原稿、
+     失败与费用证据全部保留，不reset/stash/clean或重建尝试。此动作不接受源码，
+     不授CODE/runtime权限，不豁免后续完整源码审查与clean重入核验。
+     新G2与独立high-risk plan仍须分别正常
+     接受/保护落地；随后原branch正常artifact merge、精确重封pre-CODE基线和
+     fresh CODE。之后完整source/recipe/resource审、正常提交/rebind及唯一fresh GO
+     另行满足。普通G2/plan沿现有manual program独立接受，不重复要求operator决定。
+     CPUwall NONE/native BLOCKED/production EMPTY/automation PAUSED/docs329零读，
+     701D、183、412及dirty credential等未授权尝试保持不动。
 
      replay assert 接点绑定设计源 `02f994361843bb452854d1b808b24e5bc34e8914`，文件
      SHA-256 `eef85b6fbb9409cafc695d0ce4cb62313564aac0e4295da1312de4945c4f23d5`。
@@ -2629,6 +2713,8 @@ to evade the source cap. Executable and policy files always belong to the closur
    sixteen fixed assertion messages; this adds no receiver/supervisor behavior or call.
    The final edit set is exactly 43 paths: the original 40, C2 bootstrap, qualify,
    and this one auxiliary test path.
+   The already listed launcher additionally permits only the R9.2 C2Helpers/C2Root
+   acquisition-to-custody contact and its listed fixture regression; this adds no path.
    The original 20-path subset, six C1 functional paths and three pin responsibilities,
    nine adoption-only paths and SOURCE 84 remain unchanged; qualify and the auxiliary
    replay test join none of them.
@@ -2669,13 +2755,16 @@ to evade the source cap. Executable and policy files always belong to the closur
    - **PR 3.** (a) The catalog digest at the same three literals. (b) Then the driver
      digest at `evals-launcher.sh:150`.
    Not moved, so not allowed: the `framework.jq` pin at `run.sh:54` (unchanged file),
-   seed-set digests (computed at run time, never pinned), the launcher's own digest,
-   and the tool digest pins in
+   seed-set digests (computed at run time, never pinned), and the tool digest pins in
    `evals-framework.test.sh:190`, `:225`, `:294` (`scripts/core-contract.sh`,
    unchanged). The C2 bootstrap exec changes `run-evals.sh` only as allowed in
    R9.3. Its existing runtime snapshot/SHA and evaluator.bootstrap content binding
    must use the exact changed bytes; it remains outside SOURCE 84 and gains no
-   new closure member. No other test pins any of these digests. A digest literal
+   new closure member. For the R9.2 C2 handoff repair, the launcher's own bytes change,
+   but there is no fixed external launcher/C2-literal digest pin to update. Its existing
+   runtime snapshot and dynamic launcher_sha checks use the actual changed bytes.
+   The shell helpers, program/driver/catalog literals, SOURCE84 and maps stay fixed.
+   No other test pins any of these digests. A digest literal
    found anywhere else that a PR's change moves stops that PR and returns to the plan.
 5. **Proof.** All tests run offline with no model, credential, provider or target.
    `scripts/test/run-all.sh` finds new tests by name (`:66-69`), so each PR records a
@@ -2705,7 +2794,7 @@ in CI; wiring the record report into anything but the relay; enablement.
 - **Risk is high.** Eval policy, seed and scope-gate change. An operator-merged
   plan-only PR precedes code.
 - **Size.** This spec amendment uses `review_size: standard` for the fixed ordinary
-  replay-test assertion messages, with all original proof requirements.
+  C2 acquisition-to-custody repair and its necessary regression, with all original proof requirements.
   The separate high-risk plan must set the whole PR 1b implementation range, including the preserved relay
   code, every owner extraction and all tests. It must count inherited code and
   failed/retained proof; no partial implementation is a finished PR. Do not trim
