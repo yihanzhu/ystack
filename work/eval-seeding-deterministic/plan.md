@@ -1,5 +1,5 @@
 ---
-spec-blob: a5a6993d6c056c8bd4a46bd3749d84e9b66136a5
+spec-blob: e12d3701a6ade6d1b3d17c21277f9679e49c2bb2
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-26
@@ -14,18 +14,23 @@ one complete two-source delivery. Source preparation does not accept a dependenc
 a real recording, native qualification or either seed batch.
 
 This plan binds accepted G2 spec blob
-`a5a6993d6c056c8bd4a46bd3749d84e9b66136a5`, independently accepted and
-protected-landed in PR #789 at `3a4c217aeb639008fe09ee43487a6db1fb605b5c`.
-That commit is the current planning base. The prior full-CI execution base was
-`417f1719f484cc47bde2859967aed1887d871b1a`; it is not the new planning base.
-This amendment keeps frozen design source `02f994361843bb452854d1b808b24e5bc34e8914`.
-Full CI 41141388381 has closed with failure: all eight raw logs are sealed;
-61 PASS, 5 FAIL and 13 NOT_REACHED remain the batch classification. Its prior
-execution GO is consumed. The all-shard collection prerequisite below is complete;
-this does not pass the full matrix or close any UNKNOWN/P1, native or G3 debt.
-The combined plan still requires fresh independent exact-head/base review and
-protected landing before dependent CODE and execution gates. Neither the accepted
-G2 nor earlier C-only feedback supplies plan acceptance or a new GO.
+`e12d3701a6ade6d1b3d17c21277f9679e49c2bb2`, protected-landed in PR #791 at
+`eefd0dabe3aa2155ff59026265f6ea7469e08aa0`. This is the plan PR's current-base,
+not the future source plan-base. The latter must be the fetched main OID after
+this separate plan passes independent review and protected landing.
+The frozen design source is `89748ffb350eb8db6b1162ff6daf90dbd9c72fa8`; its prior
+execution base is `ec68ada78dd031e37b9daee5a694bc4e18a4d69d`.
+Full CI 41157337543 remains FAILURE: eight closed raw logs total 222376463 bytes /
+37113 lines, with 64 PASS, 4 FAIL and 11 NOT_REACHED. Four control SKIPs and twelve
+actual NOTRUN lines remain separate; the two principal obligations have four
+printed occurrences. The complete-batch prerequisite is satisfied, not full-suite
+acceptance. Prior GO 6537419489 is consumed; #439 closure 6538099348 records failure.
+Scope-pre remains UNKNOWN/P1. Current T/receiver PASS does not close their historical
+unknowns. All prior failure costs, rounds, principal/native/Mac→same-head-Linux/I1,
+restoration/G3, Lstill/Rremoved and final-both-removed full79 debts remain due.
+The combined plan still needs fresh independent exact-head/base review and
+protected landing before dependent CODE and execution gates. G2 acceptance
+supplies neither plan acceptance nor a new GO.
 Earlier checkpoint locators below
 remain historical and do not select the current source or a new execution window.
 The separate high-risk plan-only gate must pass before dependent code.
@@ -789,33 +794,30 @@ blocked pending its exact scope gate.
 
 ### Existing regression compatibility (R9.2)
 
-Retained compatibility requirements remain accepted obligations. This draft proposes
-only raw16_C2_terminal's ordinary code-file input and complete local resource cleanup,
-and raw16_C2_lifecycle_deletion's original third, terminal-short-mutation catch,
-plus the sixteen fixed replay assertion messages and necessary actual mechanical
-bindings, and the metadata-route component-index rename, in the first three rows
-below. The three prior
-source-backing/error-propagation contacts, all C2 environment values and the two other
-spawn paths remain frozen. Observer algorithms and the first-line bridge remain
-frozen; only the route-local name collision described below reopens within the
-existing ordinary observer transform. Other compatibility remains frozen. Keep the C2
-bounded-counter allocation, finally seam, runtime guard proof, three earlier
-compatibility contacts and all other repaired contacts unchanged. The six C1 functional
-paths, three pin paths, SOURCE 84, nine adoption-only paths and original 20-path
-source subset stay unchanged. The auxiliary production boundaries are the accepted
-qualifier compatibility, fixed recorder/foreground contacts and the temporary
-scope_pre_failure_point below; qualification standards and success output schemas
-stay frozen.
-Rebind exact source/recipe bytes after this plan lands and main merges. Add no
-selector, recursive loader, observer, framework, workflow or diagnostic matrix.
-Every compatibility row below except the first three rows remains frozen in this pass.
-T/scope-pre, L/R, production and formal/native contacts do not reopen.
-Retain all controls and failure evidence.
+Retained compatibility requirements remain accepted obligations. This pass opens
+only the first two rows below: raw16_C2_six_fixes' original helper-env prefix and
+PY_STORE_MODE_CONTROLS.consumer_calls' existing type/location predicate order.
+Only their two existing source files may change. Preserve the frozen 89748 source
+baseline, including the implemented terminal script/complete cleanup, metadata
+component-index alias, sixteen replay messages and all prior repairs. Those designs
+remain below as requirements, not reopened edits. The other five C2 groups and
+failure_accounting/deletion controls retain their original code and calls; only
+the original first-read mutation reuses the repaired helper prefix.
+All later compatibility rows, C2 environment values, observer algorithms and
+first-line bridge, source-backing/stdout/cause repairs, T/scope-pre, L/R and
+production/formal/native contacts stay frozen. Keep the eight test-file/43-path
+sets, original 40/20, six C1 functional paths, three pin paths, nine adoption-only
+paths, SOURCE84, consumer7d58, maps, pins, guards and caps unchanged. No fourth
+binding path, collector, selector framework, diagnostic facility or extra invocation.
+Rebind only actual source/recipe bytes through the existing chain after landing.
+Retain every control, failure, NOTRUN and UNKNOWN obligation.
 
 | File | Fixed contact and order of work |
 | --- | --- |
+| `scripts/test/candidate-content-preparation-fixtures.py` | Only `raw16_C2_six_fixes` helper-env prefix and its original first-read mutation reuse: real CLI/helper literals/scratch custody, two declared uname responses through the original tool calls, and the real host-TMPDIR cache join fault. Preserve original calls, fields, sentinel, cleanup and later controls as specified below. |
+| `scripts/test/scope-qualification.test.sh` | Only `PY_STORE_MODE_CONTROLS.consumer_calls`: move the existing Expr predicate before the existing lineno comparison on the same line; keep all other selector and downstream bytes. |
 | `scripts/test/candidate-content-preparation-fixtures.py` | Only `raw16_C2_terminal` and the third, terminal-short-mutation catch in `raw16_C2_lifecycle_deletion`: replace the original large `-c` code argument with an exact private UTF-8 script; own all partial file/socket/pipe/null/child cleanup. The existing catch must additionally require the same terminal frame's private cleanup-complete value to be exactly True. Keep its original assertions and other two catches unchanged. Preserve the child, FD protocol, code variants, calls and cancellation priority. |
-| `scripts/test/replay-materialization-result.test.sh` | Only append the sixteen fixed literal assertion messages mapped below. Preserve every original predicate, control call, order, success path and evidence schema. The existing source receipt must measure the actual revised bytes/hash. No receiver/supervisor implementation change. This contact is accepted by G2 PR #789; its implementation still requires this plan gate. |
+| `scripts/test/replay-materialization-result.test.sh` | Only append the sixteen fixed literal assertion messages mapped below. Preserve every original predicate, control call, order, success path and evidence schema. The existing source receipt must measure the actual revised bytes/hash. No receiver/supervisor implementation change. Retain its implemented 89748 baseline; this contact is frozen in the current pass. |
 | `scripts/test/scope-qualification.test.sh` | Only the route string in `_ordinary_observer_metadata_compat`: rename its one component-index Store and six Name Loads to the verified unused private local below. Keep the original closure case index, string lookup key, event routing and every original assertion. Do not reopen the first-line bridge or formal observer. |
 | `scripts/test/candidate-content-preparation-fixtures.py` | Only `raw16_C2_source_tail`: prepare the complete private SOURCE84 plus launcher backing inside its existing temporary area. Pass the same copied root to the original C2Sources and later _C2FixtureCaller; retain every original owner, guard, signal, accounting assertion and mutation call. Follow the source-backing requirements below. |
 | `scripts/test/scope-qualification.test.sh` | Only `PY_OBSERVER_OWNER_CONTROLS.observe_case`'s existing caught Exception and status assertion: preserve the same assertion failure and chain its same-call original exception, with bounded reference lifetime and original cleanup. No observer transform or output schema changes. |
@@ -835,6 +837,121 @@ Retain all controls and failure evidence.
 | `scripts/test/candidate-content-preparation-fixtures.py` | `raw16_preparation_P_handoff`: wire the two existing transitions described below in its seven original cases. Check the inspect result before indexing, while retaining the actual failed retention and its errors. |
 | `scripts/test/candidate-content-preparation-fixtures.py` | Only `raw16_C1_gate_revision`: select the original `session.call_id` assignment and immediately following request assignment from `_Generator._kill_source_request_phase`. Bind the original five-role transition across request phase → `kill_source` → result phase: `K_REQUEST`, same-session `context[1].release_local()`, `not session.local and not session.remote` check, collector call, `K_DONE`. |
 | `scripts/test/shadow-enforced.test.sh` | In the first `PY_REPRODUCTION_VALUES`, add only the real `_runtime_sha_values` to the original ten-name AST selection. Require exactly one definition of each of `Refusal`, `canonical`, `sha`, `parse`, `document_ref`, `_native_provenance_values`, `_runtime_sha_values`, `_reproduction_provenance_values`, `_reproduction_record_values`, `_reproduction_bundle_values`, `StableFile`. Keep the existing namespace and all 32 original assertions; the helper uses its existing `sha/c`, so retain the exact `marked_sha`/bundle order, early-failure prefixes and error payloads. Do not alter expected marks, omit the Python hash, catch NameError as success or use a recursive loader. |
+
+**Current helper-env fixture contract.** Use the original single build invocation
+inside raw16_C2_six_fixes, including its unchanged first-read deletion reuse.
+Extract helpers from that invocation's already-read bound launcher using the unique
+original emit_error / Fixed public entry boundaries. Require the complete 61996
+bytes, SHA256 041ec87ddf0f04984ce004600da8fb74a81a1931f941489d175b130c41d644a0,
+and the original _C2_HELPERS_SHA256 binding. Let the unchanged _literal select all
+five generation/program/driver/catalog/review literals; never hand-fill them.
+Pass a real c2_cli run list with a normalized absolute fixture seed-a.json path
+and valid fixed-format UTC time. The seed is not read before this stop; do not claim
+its validation. Create a real private 0700 scratch before build and retain its
+lifetime through cleanup. Keep original _open_held/C2Root custody and all guards;
+missing backing or host refusal remains failure, never an identity refresh.
+
+Save the original private-consumer _c3_run_tool and join entry before replacement.
+Keep C2Helpers._checked and _tool unchanged. The one finite fixture seam must accept
+exactly the two original ordered evals-platform calls: ['/usr/bin/uname','-s'],
+then ['/usr/bin/uname','-m']. Check the same work object, scratch+'/runtime',
+stdin=b'', output_limit=1048576, timeout=120 and exact LC_ALL=C/PATH=/usr/bin:/bin.
+Return the original result shape's declared stdout b'Linux\n' then b'x86_64\n',
+status 0 and empty stderr. These are controlled inputs, not measured platform or
+process success. Any extra, reordered or different request fails before execution;
+never delegate to a real tool, spawn, shell, jq or runtime. No platform query.
+
+Limit the join seam to the original build interval and its exact three-argument
+cache call after both declarations. All other joins delegate unchanged to the
+saved original. At that call first compute the result with that saved real join;
+then verify the original host TMPDIR operand, cache suffix ystack-portable-core-jq16
+and declared jq-linux64 asset and raise the same original OSError sentinel. Do not
+build an expected business path instead of executing the real join. Retain the
+original host-value assertion input without another environment scan or mutation.
+The unchanged production get('TMPDIR','/tmp') chooses /tmp only when absent;
+an existing empty string remains empty. Static evidence covers both rules without
+extra build/case calls. Only the actual current host value is exercised here.
+The stop occurs before entering the cache-open catch, so it cannot be swallowed
+into /usr/bin/jq fallback. Do not read either jq candidate. Do not change the
+production tool env or the driver's distinct scratch/work TMPDIR.
+
+Track partial local ownership from before temporary backing creation. Save the
+actual build exception separately. The expected-sentinel catch covers only build,
+not restoration or cleanup. Restore both original entries in every exit before
+cleaning acquired resources, including early CLI/literal/custody failure. On the
+expected stop, call the real helper.close() once for its acquired custody, without
+seeding that close with the expected sentinel. Capture cleanup errors independently;
+close(sentinel) followed by accepting the same re-raised sentinel would hide an
+ordinary close failure and is forbidden. C2Root constructor failures keep their
+existing partial-held cleanup ownership; do not reclose consumed handles.
+Complete each remaining acquired cleanup even after another cleanup fails, then
+remove the private temporary backing. Retain the real body exception and all
+cleanup failures until arbitration; a marked cancellation/KeyboardInterrupt keeps
+original priority, and an unexpected body failure cannot become a successful
+sentinel test. Success requires the same expected sentinel, exactly two declarations,
+the unique real cache-join stop, restored entries and no cleanup error/uncertainty.
+If the body was the expected sentinel but cleanup fails, propagate that cleanup
+failure or fail the cleanup assertion with its original cause; never count the
+sentinel as success. Do not retry an uncertain close or use GC/process exit.
+No child/pipe was acquired at this seam, so claim no child wait or pipe closure.
+
+Keep the original print call and fields, with spawn_intercepted=False and
+runtime_executed=False. Do not add a cleanup/status/output field. Other five groups,
+failure_accounting, first-read mutation construction and all later controls stay
+byte-for-byte fixed; their existing calls must reach their original assertions.
+No new case, build invocation, helper framework, tool call or probe. Require a full
+fixture-file inverse with only this prefix replaced; include complete namespace
+restoration, local-name noncollision, original mutation source binding and every
+following ownership/exception path. Literal source and production remain frozen.
+Real held/application increments keep the original owner and caps. Fixture source
+extraction, declared inputs, join, references, temporary backing, cleanup and
+partial/cancel failures accumulate ordinary-harness UNKNOWN costs; no zero-cost,
+refund, borrowed pool or fit/native claim. Keep all original work fields.
+
+**Current store-mode AST prerequisite.** Within the original consumer_calls line,
+replace only node.lineno<coverage_fixture.lineno and isinstance(node,ast.Expr)
+with isinstance(node,ast.Expr) and node.lineno<coverage_fixture.lineno. Keep the
+physical line count and all remaining bytes. Non-Expr Module/ctx/operator nodes
+are excluded by the existing type predicate; a required Expr with a missing
+position or shape still fails. Do not use hasattr/getattr/default, try/except,
+continue, fix_missing_locations, invented positions or another AST helper.
+Verify all eight original explicit location accesses have their original type
+preconditions. Keep coverage_fixture, layout.body[1] exclusion, sort key, len==11,
+receiver sequence and actual assembler positions: 1774,1787,1997,2070,2114,2151,
+2153,2155,2164,2168,2487 before build_coverage_revision2682. These locate the bound
+original; do not add runtime line-number tests. Preserve sibling assignment and
+following chmod, creation7, copytree3, six mutation labels, all 21 workers and
+11sites/26observations with every umask/ownership/ACL/cleanup/sentinel/cap assertion.
+The source-bound original assembler and other heredocs remain byte-for-byte equal.
+Reverse this one predicate-order edit to recover the whole original shell file.
+No dashboard/caller/map shift is caused by a same-line change. Static selection
+of the eleven sites does not prove any worker ran. All check costs stay UNKNOWN.
+
+**Current source handoff and proof.** Before code, normally merge the main that
+contains this protected plan into the same preserved source branch; do not reset,
+rebase or replace the attempt. Bind its actual fetched OID as source plan-base;
+that future OID is not yet known. Keep these two comparisons separate.
+First compare the real artifact-merge result against frozen H89748ffb350eb8db6b1162ff6daf90dbd9c72fa8:
+intent remains a4197f299974e62bb2b97e004b75182012abbb87; only spec and plan may
+update, each exactly matching that accepted fetched main. These are at most two
+artifact deltas. The other 599 inventory entries must retain H89748's exact
+bytes/type/mode/blob. Seal a new pre-CODE 601 manifest from that actual
+post-artifact-merge tree, then obtain fresh CODE scope for the original Sol author.
+Next compare the CODE result against this new manifest: only the two named test
+files may change; the other 599 entries, including the newly accepted spec and
+plan, stay exact. Show both test-file inverses and bounded deltas against that
+pre-CODE baseline. Artifact updates are not additional CODE paths. Do not add a
+hidden binding path or regenerate unaffected SOURCE84/maps/pins.
+After code, perform the applicable pure static checks, bash -n on the affected
+shell and pinned shellcheck 0.11.0 over all 149 shell files; no product trial is
+substituted. Preserve the author's complete diff/report. Independent source,
+recipe and resource reviews precede a normal commit, committed rebind review,
+then one fresh manager GO and one original79/six-shard full-CI dispatch. Seal all
+eight raw logs and independently classify all79. Keep the original strict rounds,
+all failed/UNKNOWN preparation and execution costs without refund or #558 borrowing.
+Native Mac→same-head Linux, I1/restoration/G3, both principal obligations and
+Lstill/Rremoved/final-both-removed debts remain separate. No scope-pre diagnosis,
+new error facility, activation, production or docs329 read follows; 701D stays pending.
 
 **Fixed replay assertion messages.** Bind the existing test to frozen design source
 `02f994361843bb452854d1b808b24e5bc34e8914`: original 221205 bytes,
@@ -992,9 +1109,9 @@ every original assertion. Only actually moved ordinary-copy hash/line/dashboard
 bindings may change; formal/native bodies and SOURCE84/maps/pins remain frozen.
 All added source/AST/value work is charged; unmeasured costs remain UNKNOWN.
 This accepted first-line bridge and all observer algorithms remain frozen.
-Only the separate route-local binding repair below is open.
+The implemented route-local binding repair below is also frozen in this pass.
 The outer observe_case propagation also remains frozen in this pass.
-Fresh independent review remains required for all three current repair contacts and their exact tuple.
+Fresh independent review remains required for the two current repair contacts and their exact tuple.
 
 For ordinary observer compatibility, bind source
 `3d3d3aedd145054224ae8ef41a38c70048480f17` and the fixed full consumer SHA
@@ -1082,8 +1199,8 @@ The accepted private exception ends only when a separately accepted formal
 observer covers these two edges and the original three-variant proof no longer
 needs the transform. A second use or required change to formal source, trust,
 collection, calls or caps stops at the artifact gate. This plan gives no CODE or
-execution GO. This accepted observer design remains frozen except for the exact
-route-local binding repair below; no collection or authentication rule changes.
+execution GO. This accepted observer design and the implemented route-local binding
+repair below remain frozen; no collection or authentication rule changes.
 
 **Ordinary metadata-route local binding.** In the shared route string inside
 _ordinary_observer_metadata_compat, rename only the component index's one Name
@@ -1152,7 +1269,7 @@ later errors, once-close, the single original call and all actual costs/caps.
 Unobserved compound components stay UNKNOWN; source analysis cannot fill them.
 Add no read, call, probe, field, print, loader or diagnostic path. This seam is not
 a recorder dual-parent caller or native proof. This accepted compatibility design
-remains intact; this pass opens only the first three compatibility rows.
+remains intact; this pass opens only the first two compatibility rows.
 
 The runtime guard proof uses the same `7f17a0181af3c4674df63f924c5b8f97f7938831`
 design source and unchanged consumer SHA. Verify that only ledger/deadline are
@@ -4517,13 +4634,10 @@ gates (R9.6).
   operator-graded seed and its test. 150-450 of them are verbatim verdict bytes, which
   cannot leave the PR whose test checks their digests.
 - PR 3: `review_size: standard`, about 300-400 net added lines.
-- This plan-only amendment: `review_size: standard`. One concern: repair the fixed
-  ordinary test input/cleanup and failure propagation: C2 terminal code transport
-  and complete local partial/spawn-failure cleanup, sixteen fixed replay assertion
-  messages, and the ordinary metadata-route local-name collision. Original
-  regressions, bindings and runtime-invoice obligations
-  stay intact. G2 PR #789 accepts the message contact; this plan remains pending
-  independent plan review and protected landing.
+- This plan-only amendment: `review_size: standard`. One concern: restore the two
+  existing ordinary fixture contracts for current helper input and AST selection.
+  G2 PR #791 accepts these contacts. Original regressions, bindings and runtime
+  invoices remain intact. Independent plan review and protected landing remain due.
 
 Each range waives only the soft line signal, never scope, tests, CI, review or human
 merge.
