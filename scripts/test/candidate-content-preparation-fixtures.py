@@ -1818,6 +1818,11 @@ def raw16_t_lifecycle(root: Path) -> None:
             work.mkdir(mode=0o700)
             for name in ('preparation-scratch', 'inspection-scratch'):
                 (work / name).mkdir(mode=0o700)
+            _writer_primary=None;_writer_seen=False
+            _writer_body_error=_writer_restore_error=_writer_close_error=None
+            _writer_saved=_writer_previous=_writer_holder=_writer_anchor=None
+            _writer_key_saved=_writer_key_present=False
+            _writer_two_roots_discard_primary=None
             holder = e.stable_directory(work)
             anchor = c.Anchor({}, b'', [], {}, ('', []), ('', []), None)
             holder._initialize_recording(anchor, caller_raw)
@@ -1831,18 +1836,15 @@ def raw16_t_lifecycle(root: Path) -> None:
                 writer_calls.append((role, str(scratch)))
             ws = types.SimpleNamespace(execute=writer_execute, work_hold=holder, anchor=anchor,
                                        request=types.SimpleNamespace(raw=caller_raw))
-            _writer_primary=None;_writer_seen=False
-            _writer_body_error=_writer_restore_error=_writer_close_error=None
-            _writer_saved=_writer_previous=None;_writer_key_saved=False;_writer_key_present=False
-            _writer_holder=holder;_writer_anchor=anchor
-            def _writer_two_roots_discard_primary(self,delegated_anchor,copied,primary):
-                nonlocal _writer_primary,_writer_seen
-                if self is _writer_holder and delegated_anchor is _writer_anchor and not _writer_seen:
-                    _writer_seen=True;_writer_primary=primary
-                return _writer_saved(delegated_anchor,copied,primary)
             try:
                 try:
                     try:
+                        _writer_holder=holder;_writer_anchor=anchor
+                        def _writer_two_roots_discard_primary(self,delegated_anchor,copied,primary):
+                            nonlocal _writer_primary,_writer_seen
+                            if self is _writer_holder and delegated_anchor is _writer_anchor and not _writer_seen:
+                                _writer_seen=True;_writer_primary=primary
+                            return _writer_saved(delegated_anchor,copied,primary)
                         _writer_saved=holder._discard_runtime
                         _writer_key_present='_discard_runtime' in holder.__dict__
                         _writer_previous=holder.__dict__.get('_discard_runtime')
@@ -7062,7 +7064,7 @@ def raw16_C2_refused_END_transfer(root: Path) -> None:
     spec=importlib.util.spec_from_file_location('_C2_END_consumer',root/'shadow/v1/_consumer.py')
     owner=importlib.util.module_from_spec(spec);sys.modules[spec.name]=owner;spec.loader.exec_module(owner)
     resolver=owner._DarwinUUIDResolver() if sys.platform=='darwin' else None
-    _end_fixed_ready=False;_end_fatal=None;_end_close_error=None;_end_temp_error=None
+    _end_fixed_ready=False;_end_fatal=None;_end_restore_error=None;_end_close_error=None;_end_temp_error=None
     _end_peer_ready=False;_end_setup_complete=False;_end_spawn_saved=False
     _end_old_items=_end_template=None
     try:
@@ -7115,13 +7117,18 @@ ch.send(end);os.close(9);os.close(10);os._exit(3)
             finally:
                 try:
                     if _end_spawn_saved:os.posix_spawn=spawn
+                except BaseException as error:_end_restore_error=error
                 finally:
                     try:held.close()
                     except BaseException as error:_end_close_error=error
             _end_body_error=_end_fatal
+            if _end_restore_error is not None:
+                if _end_fatal is None and _end_peer_ready:_end_fatal=caught
+                _end_fatal=_end_restore_error if _end_fatal is None else fixed['c2_first'](_end_fatal,_end_restore_error)
             if _end_close_error is not None:
-                _end_fatal=fixed['c2_first'](_end_fatal if _end_fatal is not None else caught if _end_peer_ready else None,_end_close_error)
-            elif _end_peer_ready and fixed['c2_cancelled'](caught):_end_fatal=caught
+                if _end_fatal is None and _end_peer_ready:_end_fatal=caught
+                _end_fatal=_end_close_error if _end_fatal is None else fixed['c2_first'](_end_fatal,_end_close_error)
+            elif _end_fatal is None and _end_peer_ready and fixed['c2_cancelled'](caught):_end_fatal=caught
             if _end_fatal is None and _end_setup_complete:
                 try:
                     if not hasattr(caller,'last_attempt'):raise caught
@@ -7139,10 +7146,11 @@ ch.send(end);os.close(9);os.close(10);os._exit(3)
         _end_temp_error=error
     _end_before_temp=_end_fatal
     if _end_temp_error is not None:
-        _end_fatal=fixed['c2_first'](_end_fatal if _end_fatal is not None else caught if _end_peer_ready else None,_end_temp_error)
+        if _end_fatal is None and _end_peer_ready:_end_fatal=caught
+        _end_fatal=_end_temp_error if _end_fatal is None else fixed['c2_first'](_end_fatal,_end_temp_error)
     _end_old_items=_end_template=_end_key=_end_value=_end_group=_end_kind=None
     if _end_fatal is not None:raise _end_fatal
-    caught=_end_temp_error=_end_body_error=_end_before_temp=None
+    caught=_end_restore_error=_end_temp_error=_end_body_error=_end_before_temp=None
     print(json.dumps({'C2_fix':'refused-END-transfer','actual_END_seen':True,'wait':caller.last_attempt['wait'],'no_DONE':caller.last_attempt['done'] is None,
         'no_driver_executed':True,'no_success_result':True,'unadvanced':True,'window':work,'common':caller.common_case,'child_END':end,'caller':caller.work},sort_keys=True))
 
