@@ -2201,7 +2201,7 @@ to evade the source cap. Executable and policy files always belong to the closur
      Reader.close关闭，不重复或重试不确定的关闭。普通批另按上条传播自身replay登记失败。
      gate其它路径/谓词/顺序/调用和异常身份保持：原gate构造抛普通A、原close抛普通B时
      仍传播B并保留context A。原recheck及consumer身份、nlink、no-follow、mode、ACL/name-FD谓词冻结。
-     既有source_copies/owned资源本身和当前正常source保留/关闭算法不改。
+     既有source_copies的保留与业务关闭算法不改。普通已取得FD与报错接点按下条处理。
      新准备工作进入同一原replay_output_work/M及原账，不重置、不新造预算owner/池。
      所有真实mkdir/metadata/ACL/FD/引用、读写/hold/失败/清理累计计费，未测物理与运输
      费用仍UNKNOWN；不得把目录成本当零或把系统backend工作填成文件payload字节。
@@ -2235,20 +2235,43 @@ to evade the source cap. Executable and policy files always belong to the closur
      是GenuineRelationCapture原record中的循环检查/SIGTERM/raise-first位置认证。
      此精确数字替换优先于旧一概字节冻结，其余predicate/两帧次序、code/frame身份、
      异常对象/字段/16帧上限、guards、calls和全部原断言均冻结，不新加观测或运行。
-     完整模板/私有插入/断言逆证只容这十个数字；禁止全局+5替换或改原clock-site字符串。
+     上述+5是前次已实施的重绑。本轮从这十个实际值起，按下条同源语句重新核定位置。
+     完整模板/私有插入/断言逆证仍必需；禁止全局+5替换或改原clock-site字符串。
 
-     本pass仅六文件：上述Reader与两个测试文件，以及evals/v1/evals.jq、
-     evals/v1/evals-driver.sh、evals/v1/evals-launcher.sh的真实必要机械绑定。
-     Reader完整R/N→program P→driver D→完整helper K；SOURCE84只重绑Reader项的
-     digest/实际长度，原path/mode/membership/selection/guards不变。scope测试原1124、
-     1192 Reader项、2371三处完整Reader固定SHA同步到R；原私有转换的受影响Reader
-     行映射/逆证只按实际字节重算，其它source/consumer/native/map语义不改。
-     driver原三个P、launcher原Reader tuple/P/D、切片外K和fixture原K/实际长度
-     等值全部保留并重绑；完整切片边界和三重等值同原合同。不得伪造新摘要/长度，
-     未变consumer及正式四literal/两native helper/body/d35/1197/1231冻结。
-     六文件外595项对真实post-artifact-merge601冻结；43/八测试/旧40/20/C1六+三pin
-     集合不变。旧C2 caller协议及其绑定已在H2b4d实现，本pass不重开其行为。
-     全部旧费用/失败/UNKNOWN、L/R、native/G3及原79六分片义务不变。此候选不授CODE。
+     **普通 Reader 的 FD 关闭与报错。** 本条替代本节旧六文件边界中对 consumer
+     完整字节、普通释放和位置常量的冻结。只增加 `shadow/v1/_consumer.py` 一个
+     源文件。保留上述目录、原取得与校验、handoff、四项回归及所有原拒绝条件。
+     在普通布局、候选批和共享 hold 未交接补偿中，实际持有 FD 的函数负责消耗它。
+     每个实际取得的 FD 只尝试关闭一次。已经尝试而结果不确定的分量不可重关。
+     尚未尝试的分量必须留给同一真实 owner 并继续逆序处理。先取得、尚未登记的
+     FD 或 held 必须有局部责任。交接以原容器中的对象身份为准。
+     同一正常关闭实现区分记录型 held、无记录 held 和原 copy-close 的实际账。
+     保留普通操作及其关闭、观察、报错和记账期间出现的原异常对象。首个实际
+     KeyboardInterrupt、SystemExit 或 marked cancel 胜出。没有控制流异常时
+     保留首个普通错误。之前和之后的不同错误通过既有错误记录或异常链可达。
+     沿真实调用链在丢失对象前处理。禁止读 traceback、重跑失败步骤、增加采样、
+     清空 owner、另造资源池或从 errno/标记重建错误。
+     Reader 使用实际 owner 的结果。移除按 C1 错误行回扫的恢复和初始化专用
+     close 分支。gate 和既有 C2/C3 默认调用保留原参数、返回、抛出及原异常排序。
+     共享 hold 失败时的原对象交接补偿仍适用。记录的成功序列、次数、值、上限、
+     不完整状态及 C1 最终 recheck 不变。原 source-copy 和 completion owner 仍执行
+     自己原有的业务协议。普通 Receiver 只组合其实际返回或抛出的结果。
+     在原四控的既有真实 FD 关闭和观察中加入固定异常，以对象身份和实关次数
+     验证普通优先级、后续 FD 的释放和不重试。保留原第二次 mkdir 的实关证明、
+     101 个真实取得及 100/1 登记、132 copies、2 inputs、199 次成功 mkdir 和
+     drift 的原顺序。不增 case、child、acquisition、文件读取或 native 窗口。
+     合同内的报错和记账调用按实际分支另计。所有新增引用、处理、失败、清理及
+     运输费用在原 #439 账内累计 UNKNOWN_NOT_ZERO。
+     七文件包括 consumer、Reader、原两测试文件及原三个 evals 绑定文件。
+     除 consumer、Reader 的实际完整 SHA 与长度，SOURCE84 的其余 82 项及全部
+     path/mode/membership 不变。按真实字节依次重绑 program、driver、完整 helper。
+     scope 中仅更新原 metadata/foreground 认证的必要同源坐标和原完整 SHA。
+     保留同一 AST 选择、16 帧上限、原两帧顺序、异常和字段。保留原 T/END、
+     C2、89/27 schema、gate4096、正式 native 及原安全谓词。其余 594 项逐字
+     逐模式冻结。独立 plan 绑定完整七文件及每个必要文字位置。其它需求先回门。
+     driver原三个P、launcher原P/D、切片外K和fixture原K/实际长度仍为完整等值。
+     43/八测试/旧40/20/C1六+三pin集合不变。保留原L/R、native/G3及原79六分片。
+     全部旧费用、失败及UNKNOWN累计。此候选不授CODE。
 
      **原 C2 caller 的严格账与 END 拒绝终态。** 固定设计源为
      ac36c43801746089e17702f9b137fd6ee938dddd，执行base5303a67747af0e80c0fb964e979b81d1c11286ed。
@@ -3087,8 +3110,7 @@ in CI; wiring the record report into anything but the relay; enablement.
 
 - **Risk is high.** Eval policy, seed and scope-gate change. An operator-merged
   plan-only PR precedes code.
-- **Size.** This spec amendment uses `review_size: standard` for the fixed ordinary
-  bounded ordinary regression compatibility: retained END owner/cleanup, one AST type prerequisite and same-call writer error propagation, with all original proof requirements.
+- **Size.** This spec amendment uses `review_size: standard` for ordinary Reader FD ownership, fixed controls and existing source bindings. All earlier proof obligations remain.
   The separate high-risk plan must set the whole PR 1b implementation range, including the preserved relay
   code, every owner extraction and all tests. It must count inherited code and
   failed/retained proof; no partial implementation is a finished PR. Do not trim
