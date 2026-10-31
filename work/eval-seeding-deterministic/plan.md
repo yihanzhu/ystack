@@ -1,5 +1,5 @@
 ---
-spec-blob: 9e93af990e0b2e9685bd7cfce444431f8567807e
+spec-blob: a5a6993d6c056c8bd4a46bd3749d84e9b66136a5
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-26
@@ -14,11 +14,19 @@ one complete two-source delivery. Source preparation does not accept a dependenc
 a real recording, native qualification or either seed batch.
 
 This plan binds accepted G2 spec blob
-`9e93af990e0b2e9685bd7cfce444431f8567807e` at the current planning base
-`20bf23388d1610b860eefcc301b895dfabf2e0b1` (PR #787).
-This amendment uses frozen design source `0ad7f40d262d7f84107b817fed06515d80d56bab`;
-its completed CI used the earlier execution base
-`5edbd3f6a21078ab9d0e24c98fa19a17b80ae08d`. Earlier checkpoint locators below
+`a5a6993d6c056c8bd4a46bd3749d84e9b66136a5`, independently accepted and
+protected-landed in PR #789 at `3a4c217aeb639008fe09ee43487a6db1fb605b5c`.
+That commit is the current planning base. The prior full-CI execution base was
+`417f1719f484cc47bde2859967aed1887d871b1a`; it is not the new planning base.
+This amendment keeps frozen design source `02f994361843bb452854d1b808b24e5bc34e8914`.
+Full CI 41141388381 has closed with failure: all eight raw logs are sealed;
+61 PASS, 5 FAIL and 13 NOT_REACHED remain the batch classification. Its prior
+execution GO is consumed. The all-shard collection prerequisite below is complete;
+this does not pass the full matrix or close any UNKNOWN/P1, native or G3 debt.
+The combined plan still requires fresh independent exact-head/base review and
+protected landing before dependent CODE and execution gates. Neither the accepted
+G2 nor earlier C-only feedback supplies plan acceptance or a new GO.
+Earlier checkpoint locators below
 remain historical and do not select the current source or a new execution window.
 The separate high-risk plan-only gate must pass before dependent code.
 RAW16 acquisition design
@@ -759,9 +767,13 @@ remains part of review even when that base already contains dependency bytes.
 - `ci/required-files.txt`
 - `evals/v1/run-evals.sh` — only the R9.3 five-byte `exec ` addition
 - `sandbox/v1/qualify.py` — only the R9.2 aggregate namespace and necessary private checks
+- `scripts/test/replay-materialization-result.test.sh` — only the sixteen fixed assertion messages below, accepted by G2 PR #789
 
-These 42 paths are the original 40, the one C2 bootstrap dependency and the sole
-auxiliary qualifier compatibility path. The original 20-path subset, six C1
+The accepted R9.3 set has 43 paths: the original 40, the one C2 bootstrap
+dependency, the auxiliary qualifier compatibility path and the existing replay
+test solely for its sixteen fixed assertion messages. The corresponding R9.2
+auxiliary test-file set has eight distinct files, previously seven; only this
+replay test is added under G2 PR #789. The original 20-path subset, six C1
 functional paths, three pin paths, nine adoption-only paths and SOURCE 84 are
 unchanged. The fixed R9.2 recorder and foreground auxiliary contacts use already
 listed enforced/consumer and test paths; they add no path or adoption exception.
@@ -777,12 +789,16 @@ blocked pending its exact scope gate.
 
 ### Existing regression compatibility (R9.2)
 
-The compatibility requirements below remain accepted obligations. This pass opens
-only raw16_C2_source_tail's private backing and same-root caller argument, observe_case's
-existing exception/status propagation, and shadow-write's existing scope_check stdout
-forwarding. The three current paths and contacts are the first three rows below; only
-necessary actual mechanical bindings may move. The three C2 spawn environments,
-observer algorithms/first-line bridge and other compatibility remain frozen. Keep the C2
+Retained compatibility requirements remain accepted obligations. This draft proposes
+only raw16_C2_terminal's ordinary code-file input and complete local resource cleanup,
+and raw16_C2_lifecycle_deletion's original third, terminal-short-mutation catch,
+plus the sixteen fixed replay assertion messages and necessary actual mechanical
+bindings, and the metadata-route component-index rename, in the first three rows
+below. The three prior
+source-backing/error-propagation contacts, all C2 environment values and the two other
+spawn paths remain frozen. Observer algorithms and the first-line bridge remain
+frozen; only the route-local name collision described below reopens within the
+existing ordinary observer transform. Other compatibility remains frozen. Keep the C2
 bounded-counter allocation, finally seam, runtime guard proof, three earlier
 compatibility contacts and all other repaired contacts unchanged. The six C1 functional
 paths, three pin paths, SOURCE 84, nine adoption-only paths and original 20-path
@@ -798,6 +814,9 @@ Retain all controls and failure evidence.
 
 | File | Fixed contact and order of work |
 | --- | --- |
+| `scripts/test/candidate-content-preparation-fixtures.py` | Only `raw16_C2_terminal` and the third, terminal-short-mutation catch in `raw16_C2_lifecycle_deletion`: replace the original large `-c` code argument with an exact private UTF-8 script; own all partial file/socket/pipe/null/child cleanup. The existing catch must additionally require the same terminal frame's private cleanup-complete value to be exactly True. Keep its original assertions and other two catches unchanged. Preserve the child, FD protocol, code variants, calls and cancellation priority. |
+| `scripts/test/replay-materialization-result.test.sh` | Only append the sixteen fixed literal assertion messages mapped below. Preserve every original predicate, control call, order, success path and evidence schema. The existing source receipt must measure the actual revised bytes/hash. No receiver/supervisor implementation change. This contact is accepted by G2 PR #789; its implementation still requires this plan gate. |
+| `scripts/test/scope-qualification.test.sh` | Only the route string in `_ordinary_observer_metadata_compat`: rename its one component-index Store and six Name Loads to the verified unused private local below. Keep the original closure case index, string lookup key, event routing and every original assertion. Do not reopen the first-line bridge or formal observer. |
 | `scripts/test/candidate-content-preparation-fixtures.py` | Only `raw16_C2_source_tail`: prepare the complete private SOURCE84 plus launcher backing inside its existing temporary area. Pass the same copied root to the original C2Sources and later _C2FixtureCaller; retain every original owner, guard, signal, accounting assertion and mutation call. Follow the source-backing requirements below. |
 | `scripts/test/scope-qualification.test.sh` | Only `PY_OBSERVER_OWNER_CONTROLS.observe_case`'s existing caught Exception and status assertion: preserve the same assertion failure and chain its same-call original exception, with bounded reference lifetime and original cleanup. No observer transform or output schema changes. |
 | `scripts/test/shadow-write.test.sh` | Only the existing `scope_check` result forwarding: move the original single stdout print before the original returncode check; preserve captured stderr, child failure and cancellation priority. No new read, subprocess, output field or collector. |
@@ -817,11 +836,70 @@ Retain all controls and failure evidence.
 | `scripts/test/candidate-content-preparation-fixtures.py` | Only `raw16_C1_gate_revision`: select the original `session.call_id` assignment and immediately following request assignment from `_Generator._kill_source_request_phase`. Bind the original five-role transition across request phase → `kill_source` → result phase: `K_REQUEST`, same-session `context[1].release_local()`, `not session.local and not session.remote` check, collector call, `K_DONE`. |
 | `scripts/test/shadow-enforced.test.sh` | In the first `PY_REPRODUCTION_VALUES`, add only the real `_runtime_sha_values` to the original ten-name AST selection. Require exactly one definition of each of `Refusal`, `canonical`, `sha`, `parse`, `document_ref`, `_native_provenance_values`, `_runtime_sha_values`, `_reproduction_provenance_values`, `_reproduction_record_values`, `_reproduction_bundle_values`, `StableFile`. Keep the existing namespace and all 32 original assertions; the helper uses its existing `sha/c`, so retain the exact `marked_sha`/bundle order, early-failure prefixes and error payloads. Do not alter expected marks, omit the Python hash, catch NameError as success or use a recursive loader. |
 
+**Fixed replay assertion messages.** Bind the existing test to frozen design source
+`02f994361843bb452854d1b808b24e5bc34e8914`: original 221205 bytes,
+SHA256 `eef85b6fbb9409cafc695d0ce4cb62313564aac0e4295da1312de4945c4f23d5`.
+Append only the following literal msg to each original Assert. Design lines locate
+the original full heredoc; they are not runtime selectors or line-number guards.
+The two identical token/case predicates have different heredoc consumers and
+messages; match their complete contexts, never the first matching text alone.
+Line 1555 and every unlisted assertion stay byte-for-byte unchanged.
+
+| Design line | Complete original assertion | Fixed literal message |
+| --- | --- | --- |
+| 1523 | `assert record["token"] == sys.argv[3] and record["case"] == sys.argv[4]` | `receiver completion token/case mismatch` |
+| 1813 | `assert record["decoded_status"] == 37 and record["capture_complete"]` | `natural-zero receiver status/capture mismatch` |
+| 1832 | `assert record["signal_attempts"] == 1 and not record["cleanup_errors"]` | `wait-eintr receiver signal/cleanup mismatch` |
+| 1842 | `assert signal_error["cleanup_errors"] == ["signal failed: [Errno 5] injected group signal error"]` | `signal-error receiver cleanup mismatch` |
+| 1857 | `assert blocked["diagnostic_errors"] == ["TimeoutError: diagnostic write deadline expired"]` | `blocked diagnostic receiver error mismatch` |
+| 1882 | `assert record_exact["max_control_record"] == 4096 and not record_exact["cleanup_errors"]` | `record-exact receiver size/cleanup mismatch` |
+| 1955 | `assert not record["possible_admission"] and record["decoded_status"] == -9` | `identity-refusal receiver admission/status mismatch` |
+| 2025 | `assert record["token"] == sys.argv[3] and record["case"] == sys.argv[4]` | `cancellation-boundary completion token/case mismatch` |
+| 2059 | `assert completion["outcome_sealed"] and completion["pending_signal"] == 15` | `diagnostic-publication cancellation seal/signal mismatch` |
+| 2091 | `assert record["owned_pid"] is None and record["signal_attempts"] == 0` | `invalid-control receiver ownership/signal mismatch` |
+| 2110 | `assert record["inherited_blocked"] == sorted([signal.SIGINT, signal.SIGTERM])` | `inherited-blocked receiver signal mask mismatch` |
+| 2125 | `assert shell["pending"] == "TERM" and shell["wait_complete"] == 1` | `wait-completion race shell pending/wait mismatch` |
+| 2137 | `assert record["primary_failure"].startswith("cancelled")` | `shell-error receiver cancellation mismatch` |
+| 2152 | `assert shell["pending"] == "INT"` | `cancel-write failure shell pending mismatch` |
+| 2172 | `assert before["owned_pid"] is None and before["signal_attempts"] == 0` | `before-admission exception receiver ownership/signal mismatch` |
+| 2192 | `assert record["signal_attempts"] == 1 and record["capture_complete"]` | `publication-failure receiver signal/capture mismatch` |
+
+Keep every predicate and short-circuit order, call/read/comparison count, control
+sequence, timeout, cancellation, first error, close/wait and successful path.
+No interpolation, new value read, formatted string, helper, logger, collector,
+probe, frame walk, field, matrix, error API or extra case/call/trial. A message
+identifies this static assertion obligation only; it does not identify the failing
+compound subexpression, loop iteration or inner cause. Current job1 remains
+UNKNOWN/P1. No old bare failure, other T/scope result or native/G3 debt changes.
+
+Before implementation acceptance, require all sixteen original msg values to be
+absent and all new msg values to be exactly these distinct string Constants.
+Compare each complete test AST unchanged. Restore only msg=None and require the
+whole original heredoc AST; reverse the sixteen literal additions and require the
+entire original test file byte-for-byte. Preserve every remaining heredoc byte.
+Do not replace these checks with line offsets or a new runtime validation helper.
+
+The existing successful helper_arguments already includes this test source. Its
+original receipt loop must recompute actual revised bytes/SHA normally; never keep
+the old digest as the revised file's receipt. No field, source read, invocation or
+output structure is added. Preserve all 72 original controls and the existing
+2 MiB evidence cap. This test is already restore-listed; no new restore member,
+workflow or run-all edit follows. Original 40 members, 20-path subset, six C1
+functional paths, three pin paths, nine adoption-only paths and SOURCE84 remain
+unchanged; do not regenerate unchanged source maps or pins.
+
+The literal constants, exception lifetime, ordinary default traceback, possible
+linecache reads of existing modules, rendering and transport remain ordinary
+harness costs and accumulate UNKNOWN. No zero-I/O, complete physical cap, fit or
+native claim follows. Add no explicit fixture read, formatter, measurement, loader,
+source origin, network or credential scope. Use only the existing failure path.
+
 **Existing test failure propagation.** Bind these two contacts to source
 `0ad7f40d262d7f84107b817fed06515d80d56bab`, execution base
 `5edbd3f6a21078ab9d0e24c98fa19a17b80ae08d` and the accepted G2 spec above.
-The current planning base is `20bf23388d1610b860eefcc301b895dfabf2e0b1`;
-the source and its earlier execution base remain distinct from that artifact base.
+That contact's accepted planning base was `20bf23388d1610b860eefcc301b895dfabf2e0b1`;
+its source and earlier execution base are historical bindings. Both propagation
+contacts remain frozen in the current combined ordinary-test repair pass.
 They preserve errors and bytes already obtained by the original test. They do not
 repair or establish an inner observer/T/scope root and add no diagnostic facility.
 
@@ -914,8 +992,9 @@ every original assertion. Only actually moved ordinary-copy hash/line/dashboard
 bindings may change; formal/native bodies and SOURCE84/maps/pins remain frozen.
 All added source/AST/value work is charged; unmeasured costs remain UNKNOWN.
 This accepted first-line bridge and all observer algorithms remain frozen.
-Only the outer observe_case error propagation above may change in this pass.
-Fresh independent review remains required for the three current contacts.
+Only the separate route-local binding repair below is open.
+The outer observe_case propagation also remains frozen in this pass.
+Fresh independent review remains required for all three current repair contacts and their exact tuple.
 
 For ordinary observer compatibility, bind source
 `3d3d3aedd145054224ae8ef41a38c70048480f17` and the fixed full consumer SHA
@@ -1003,7 +1082,55 @@ The accepted private exception ends only when a separately accepted formal
 observer covers these two edges and the original three-variant proof no longer
 needs the transform. A second use or required change to formal source, trust,
 collection, calls or caps stops at the artifact gate. This plan gives no CODE or
-execution GO. This accepted observer design remains frozen during the C2 environment repair.
+execution GO. This accepted observer design remains frozen except for the exact
+route-local binding repair below; no collection or authentication rule changes.
+
+**Ordinary metadata-route local binding.** In the shared route string inside
+_ordinary_observer_metadata_compat, rename only the component index's one Name
+Store and six Name Loads from index to _metadata_component_index. Verify this
+private name is unused in the complete original and ordinary old/uncached/cached
+observe/trace scopes before the replacement. Do not touch local.get('index')'s
+literal key. Keep the original case_index output key and its original outer
+observe index reads: one in old, two each in uncached and cached. Do not add a
+nonlocal/global declaration, write back the case index, supply a fake default,
+normalize the code object or change any metadata field/value.
+
+The same local component index must still select owner.components, its previous
+component and the (id(recheck_frame), component-index) bucket for this same
+iteration. Keep the actual primitive exception/errno, real identity refusal,
+source/code/globals binding, FD/name relation, physical callers 4273/4283,
+recheck source 602 and real identity guard 615, and original errno guard 613.
+Preserve all four kinds and three variants, original calls and assertions,
+identity/errno9/bool/gap behavior, cache/shape/same-request comparisons, 12-event
+and 16-frame limits, cancellation priority, original bucket transfer/drop and
+finally reference release. No new observation, read, field, selector, helper,
+print, trial or diagnostic mechanism. The first-line bridge remains unchanged.
+
+Require complete formal-source → original-variant → ordinary-copy transformations
+and full unique inverses for all three variants. The formal baselines must stay
+unchanged; a baseline containing the repair is invalid. In addition to the seven
+route Name nodes, inspect every inserted binding against the original trace's
+free reads: the intersection must be empty after this rename. Confirm no index
+Store remains in trace and that all original closure loads remain. Reverse only
+the name edits to recover the prior ordinary bytes, then reverse the unchanged
+ordinary and variant transforms to their complete formal originals. This proof
+must cover the full functions and successors, not only the identity assertion.
+
+Rebind actual changed ordinary-copy hashes through their existing receipt chain.
+A same-line rename creates no line shift: do not invent dashboard/clock/frontend
+map edits. Formal four literals, two native helper bodies/hashes, d35/1197/1231,
+consumer SHA7d58f60c6622ae4e3f22167a3429d72a0d65e826c8d91bf87a016644226018ad,
+SOURCE84 and pins remain frozen and formal/native qualification stays UNPROVED.
+All setup/text/AST/retention/reference/serialization costs remain in the existing
+owner/caps and accumulate UNKNOWN; no fit claim or extra execution follows.
+
+This repair restores the existing G2 ordinary-transform contract; it needs no
+new G2 contact beyond that already accepted boundary. It still requires the
+fresh combined high-risk plan and later CODE/source/recipe/resource gates.
+The replay-message G2 above is accepted in PR #789. The observed old/identity
+GAP and inferred UnboundLocalError remain failed evidence; the latter was not
+printed by the run. Modern variants and later kinds are not thereby executed.
+T's separate static audit remains UNKNOWN/P1 and adds no repair contact.
 
 For the finally seam, bind design source `7f17a0181af3c4674df63f924c5b8f97f7938831`
 and the unchanged full consumer SHA below. Check method/try uniqueness, exact
@@ -3440,6 +3567,119 @@ status changes in PR 1b.
 
 ### C2 fixed window session and implementation map
 
+**Terminal fixture code input and local cleanup.** Bind this single contact to
+source `02f994361843bb452854d1b808b24e5bc34e8914` and base
+`417f1719f484cc47bde2859967aed1887d871b1a`. Keep the original launcher extraction,
+unique mutation replacement, short-write shim, suffix and __name__ prefix exactly.
+Write each invocation's complete original code as UTF-8 to one private regular file
+in a new local TemporaryDirectory, outside SOURCE84, copied-source, held window and
+runtime roots. No symlink/hardlink, catalog, alternate source, recursive loader or
+shared helper. Finish the complete write and close its handle before creating any
+original socket/pipe/null FD. Failure during file creation/write/close remains failure.
+
+Keep that directory and file alive through spawn, reads, wait/reap and all local
+FD cleanup. Execute directly as /usr/bin/python3 -I -S -B <private-script> <consumer>,
+with the same original consumer path at sys.argv[1]. Do not pass code in argv or
+stdin, alter FD0's /dev/null, or add a shell, trampoline, compile/exec loader or child.
+Accept script mode's real argv[0], code filename and interpreter-provided __file__;
+do not fake <string>. The original prefix still sets __name__ to _C2_terminal_only.
+Check the complete fixed literal and all three suffix variants: literal sys.argv
+uses remain behind the unentered __main__ branch, suffix uses only argv[1], and
+there is no __file__ read. Keep consumer loading/path/module identity unchanged.
+This ordinary script identity change does not open formal/native/observer bindings.
+
+Initialize the private local _terminal_cleanup_complete to False before the first
+preparation, alongside the local ownership slots. It describes cleanup only; an
+expected body AssertionError does not by itself prevent successful cleanup. Keep
+cleanup errors/uncertainty distinct from that primary with finite local bookkeeping.
+Only after the source write handle, every actually acquired parent socket/FD, every
+returned child's exact reap and TemporaryDirectory cleanup have all succeeded may
+this value become True. Any cleanup close/wait/directory error or unknown outcome
+permanently prevents completion for that invocation, including an interrupted wait
+even if later reaped. Consuming a slot is not evidence of close success. Missing,
+false or unknown completion never means resources were safely released.
+
+Initialize local ownership slots before acquisition. The encompassing error/finally
+region must cover TemporaryDirectory entry, file preparation, socketpair, each pipe,
+/dev/null, actions/env construction, spawn, parent-end closes, reads and wait. Record
+each returned socket or descriptor immediately in its own local slot; a later
+allocation failure must not lose earlier returns. Initialize the child slot empty
+and take responsibility immediately when posix_spawn returns its pid. No inferred
+pid or child exists when spawn raises; uncertain acquisition outcomes stay UNKNOWN.
+Do not rely on GC, process exit or moving the old try by one line for this coverage.
+
+On success retain the original parent-end close order and read/wait/assertion order.
+The original child actions keep DUP2 null→0, out_w→1, err_w→2, right→9 in that order,
+then the same sorted distinct CLOSE targets excluding 0/1/2/9. The source write handle
+is already closed and never joins these actions. Keep the same fixed LC_ALL/PATH and
+single optional TMPDIR getter/value semantics at the original pre-spawn position.
+Only the code transport changes argv; the other two spawn routes remain untouched.
+
+Before each explicit close attempt, consume its local ownership slot, then close
+that one object/FD once. Continue cleanup of every other acquired resource even if
+one close raises. Do not retry a possibly completed close or report it as confirmed
+closed; retain that failure/uncertainty. Preserve the same primary exception object;
+a marked _scope_signal_cancel or KeyboardInterrupt takes its original priority over
+an ordinary error, while an earlier cancellation wins over a later one. Ordinary
+cleanup errors cannot replace an existing primary; with no primary they must fail
+the invocation. Apply this locally without a new error API, helper, logger or field.
+Do not alter the child's own terminal close accounting or its first-error rules.
+
+If a child pid was returned, retain its wait/reap responsibility on every later exit.
+The successful body keeps its original waitpid and status assertions; mark reaped
+only after the exact pid returns. On an earlier body/close/cancel failure, close all
+still-owned parent endpoints so they do not keep the child channel alive, then use
+the same waitpid contract to reap that child before removing its script directory.
+An interrupted wait retains the pid and original cancellation/error while completing
+reaping; it does not spawn, retry the child or add a successful-path wait. Do not
+fabricate a wait result. An unrecoverable wait error remains failure with termination
+UNKNOWN, never completed cleanup or native proof. No polling/controller, new signal
+protocol or process-group manager is added. Temporary-directory cleanup runs after
+these attempts on every exit; its failures use the same primary/cancellation rule,
+not context-manager replacement of the primary. Keep partial files until that same
+cleanup and retain their incurred costs; no resource failure becomes a passing case.
+
+The sole downstream consumer is raw16_C2_lifecycle_deletion's existing third
+try/catch for raw16_C2_terminal(root, short=True, mutation=True), at design-source
+6448–6455. Keep the same AssertionError, existing traversal to its terminal frame,
+same f_locals mapping and both original assertions: terminal function name, then
+status==0 and len(observed)==511. Append only
+assert actual.get('_terminal_cleanup_complete') is True
+using that already-obtained mapping. No new traceback walk, frame inspection or
+probe. Missing/False/unknown must fail before the original deletion_detected output.
+Do not manufacture status/observed, replace the expected exception, clear a secondary
+cleanup error, or require body success to set completion. The first two mutation
+catches, every original invocation and all JSON/application/observer fields stay
+unchanged. This private local and existing catch are not a general error API.
+
+Retain the original normal/short calls and short mutation, complete exact program
+bytes, same original c2_terminal and short_write behavior, FD0 close, empty stdout/
+stderr, waited==pid, status and exact 512/511-byte checks. Preserve YC2DONE1, all
+53 zero integers and 80 zero tail bytes, the child's original three closes and
+unchanged JSON result fields. No new case, invocation, source/app-work field, print,
+probe or diagnostic facility. Full static diff/inverse must check all three code
+strings, script argv identities, each partial acquisition/close path, success and
+failure wait responsibility, local-name collisions and the complete following calls.
+Also prove completion defaults false, is committed only after all successful cleanup,
+never recovers after cleanup uncertainty, and is consumed by this exact original
+third catch without changing its two predicates or the other two mutation catches.
+
+File preparation, bytes/encoding, actual write/read/metadata/FD/close, interpreter
+loading, retention, private completion bookkeeping and its existing-catch assertion,
+and partial/cancel/cleanup/transport costs belong to the original
+ordinary harness invocation and accumulate UNKNOWN when unmeasured. Do not put them
+into the later C2-terminal work as observed application work. Parent write-handle
+closure proves neither interpreter internal read/close nor full physical/native
+termination; those unobserved facts remain UNKNOWN. All original application owner
+caps and accounting, failed carry-in and no-refund rules remain; no numeric pool,
+resource admission or fit claim follows from these finite strings.
+
+Collect all current shard results before one combined plan review and protected
+landing. Then normal source merge, fresh CODE/source/recipe/resource review,
+committed rebind and a new manager execution GO remain mandatory. Keep the current
+E2BIG and cleanup findings, every prior failed/NOTRUN/UNKNOWN and consumed GO;
+neither a new script nor a prior static ACCEPT supplies runtime/native/G3 proof.
+
 **Private source backing for the original tail fixture.** Bind this contact to
 source `0ad7f40d262d7f84107b817fed06515d80d56bab` and execution base
 `5edbd3f6a21078ab9d0e24c98fa19a17b80ae08d`. Within the existing
@@ -3520,7 +3760,8 @@ partial shard result accepts this backing, its closure or native qualification.
 `91c1aafbc722eb958b1d0a4b2bc2a186ef2ce4cf`. The three environment arguments
 in `_C2FixtureCaller.invoke` (5972), `raw16_C2_lifecycle_core` (6250) and
 `raw16_C2_terminal` (6382) retain the following accepted design and are frozen.
-Only necessary actual mechanical bindings may move. Bind final locations from actual bytes; do not change bootstrap,
+Only necessary actual mechanical bindings may move, except the terminal code transport
+and cleanup explicitly opened above. Bind final locations from actual bytes; do not change bootstrap,
 workflow, run-all, evals-malicious, launcher or production behavior.
 
 At each existing spawn site, build a local `c2_spawn_env` with exactly
@@ -3528,7 +3769,8 @@ At each existing spawn site, build a local `c2_spawn_env` with exactly
 once into `c2_spawn_tmpdir`. If it is not None, add `TMPDIR` with that unchanged
 string, including an empty string; otherwise leave the key absent. Environment
 values are strings, so None identifies only absence here. Never copy/iterate
-os.environ or alter it. No other key, gettempdir, file read, trial write, mkdtemp,
+os.environ or alter it. For environment construction, no other key, gettempdir,
+file read, trial write, mkdtemp,
 new helper, framework, subprocess invocation or source of scratch authority is
 allowed. Keep `/tmp` selection in the original unmodified run-evals.sh fallback;
 the existing terminal child does not require TMPDIR. Do not reuse base/window or
@@ -3542,10 +3784,11 @@ the original spawn. This only names the original value and preserves the origina
 argument-evaluation order. Check the complete three functions for name bindings,
 closures and later uses: the three local names must be unused before this edit,
 never overwrite an owner/error/result, and serve only this same original spawn.
-Do not move acquisition, cleanup, waits, signal handling or error boundaries.
+The terminal-only cleanup change above supersedes the old placement of its acquisition,
+cleanup, waits and error boundaries; all other paths keep those boundaries unchanged.
 
-Preserve complete executable/argv, DUP2/CLOSE actions, spawn counts and controlled
-peer behavior. Keep invoke's held-root/START/READY/GO, original failed/UNKNOWN and
+Preserve complete executable/argv outside the terminal script-path replacement above.
+Preserve DUP2/CLOSE actions, spawn counts and controlled peer behavior. Keep invoke's held-root/START/READY/GO, original failed/UNKNOWN and
 every finally release/transfer; one-FD must still actually reach the original CLI
 guard and prove wait/status, empty stdout, E_RUNTIME and EOF; terminal must retain
 its two calls and short mutation, exact 512/511 bytes, three closes and wait.
@@ -4275,9 +4518,12 @@ gates (R9.6).
   cannot leave the PR whose test checks their digests.
 - PR 3: `review_size: standard`, about 300-400 net added lines.
 - This plan-only amendment: `review_size: standard`. One concern: repair the fixed
-  existing ordinary test compatibility: real C2 source backing and preservation
-  of already-caught errors/output at the two fixed test boundaries.
-  Original regressions, bindings and runtime-invoice obligations stay intact.
+  ordinary test input/cleanup and failure propagation: C2 terminal code transport
+  and complete local partial/spawn-failure cleanup, sixteen fixed replay assertion
+  messages, and the ordinary metadata-route local-name collision. Original
+  regressions, bindings and runtime-invoice obligations
+  stay intact. G2 PR #789 accepts the message contact; this plan remains pending
+  independent plan review and protected landing.
 
 Each range waives only the soft line signal, never scope, tests, CI, review or human
 merge.
