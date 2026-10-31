@@ -2010,6 +2010,8 @@ to evade the source cap. Executable and policy files always belong to the closur
 
      | 测试路径与接点 | 修改范围与保留要求 |
      | --- | --- |
+     | `scripts/test/candidate-content-preparation-fixtures.py`：`raw16_C2_six_fixes` 的原 helper-env 前缀及原 first-read mutation 对该同一函数的复用 | 仅接回当前真实 build CLI、同源完整 helper literal、实际私有 scratch/custody 和宿主 TMPDIR 缓存输入合同。保留每次原 build 调用、两原 uname 点、同一 sentinel、真实关闭/取消及下述有限 fixture 接线；不改另五组或后继控制，不开放生产 helper/env/guard。 |
+     | `scripts/test/scope-qualification.test.sh`：`PY_STORE_MODE_CONTROLS` 的 `consumer_calls` 原 AST 列表筛选 | 仅把既有 `isinstance(node, ast.Expr)` 移到原 `node.lineno < coverage_fixture.lineno` 前，同一物理行完成。其余 selector、layout排除、sort、11接点/顺序/位置及全部后继控制逐字保留；不造位置、缺省属性或跳过必需节点。 |
      | `scripts/test/replay-materialization-result.test.sh`：下述16个既有 receiver supervision heredoc assert | 只在各原 assert 追加对应固定字符串 msg。完整 predicate/test AST、求值次数与顺序、控制流、原成功路径和失败/取消/cleanup 保持；不插值、不取新值、不改 supervisor/receiver 或其它 assert。只改善原失败呈现，不证明根因。 |
      | `scripts/test/scope-qualification.test.sh`：`PY_OBSERVER_OWNER_CONTROLS.observe_case` 的原异常捕获与 status 断言 | 保留原 E_STALE/kind 检查和 status 断言；仅在该 status 断言失败时，把已捕获的同次原 Exception 链为同一 AssertionError 的 cause。只增加一个局部引用并在所有出口释放；不改私有 copy、原分类或正式生成结果。遵守下述生命周期和取消要求。 |
      | `scripts/test/shadow-write.test.sh`：原 `scope_check` 子进程结果转发 | 仅把已捕获 stdout 的原单次 print 移到原 returncode 检查前。原 subprocess/argv/env/timeout/PIPE、断言条件/消息及 stderr 不变；标记取消原样传播，普通输出错误不得覆盖已知 child 失败。遵守下述优先级；不开放其它 writer 插入。 |
@@ -2031,6 +2033,74 @@ to evade the source cap. Executable and policy files always belong to the closur
      | `scripts/test/shadow-enforced.test.sh`：原共享 orchestration flow（设计源 3891–4098） | 接全真实固定 `Anchor.retain_runtime_acquisition/retain_parent_inputs/retain_sudo_companion/retain_preparation/seal_local_runtime` 及原 receiver 必需状态；不以空方法、常量成功或吞 AttributeError 替代。原 Snap 的 `original/acquisition_raw` 须来自同次普通 fixture 的真实 holder 与完整 bytes；原 store seam 接收同次 `_owner` 并建立真实 held/snapshots/recheck/close 及 reproduction/capture 关系，不能只忽略参数或假造 owner。保留原 host/process/native launch 模拟边界、13 个控制、29 个 evidence 文件、实际调用顺序、changed-response 拒绝和 finally。真实保留方法的拒绝、unusable、失败/取消及全费用照常保留；原普通 unqualified context 不成为合格 P/完成/seed 证明。仅修共享原 fixture，`shadow-write.test.sh` 的原复制/变换器保持不变；writer 专有插入仅允许本表单列的原 `scope_check` 转发。 |
      | `scripts/test/evals-malicious.test.sh`：`PY_CAPTURE_VALUES` 内 source 的成功 reacquisition/seal 分支 | 在第一次真实 `_Owned.append` 前建立同一 Reader/Anchor 的 owner、真实 configuration 与其登记；两次 source acquisition 仍绑定该同 case 的实际 configuration，其 capture/held/完整 raw 各由本次真实取得，不借别的 source acquisition 或 case。保留原 failed_sync 两分支、native receipt/payload、两次 reacquisition、完整四成员 capture、同 case 账、真实最终 owner/seal、全部 tail transfer 和关闭。新增 configuration P 的成员/数量/费用须逐项实测并列入原精确计数；不改成功 seal 判定或用清失败状态恢复它。 |
      | `scripts/test/evals-malicious.test.sh`：`PY_SOURCE_CANCEL` 的原共享 receiver | 接全原 positive 所需同一 owner、真实 configuration/source 登记、实际 capture/held 和关闭先决，再沿用原 27 个 label 及各原故障注入位置。保留 positive 的无意外 unusable、真实完整 bytes、同一 reader/generator cancellation 对象、首错/次错、FD once-close/无泄漏、全部账与原负例判定。仅原 `owned` 后置条件改为同一 Reader 已实际登记的 configuration baseline 加原 case 的 source 登记增量；须核同一对象、原顺序且无额外 owner，seal 分支的 source 增量仍为空。不另造假 owner 来维持旧 list，不把预期失败改为必须成功。精确计数只按真实新增 configuration P 的实际贡献分项调整，不跳过 source copy、伪造输出或清 unusable。 |
+
+     **Store-mode 原 AST 类型先决。** 此接点绑定设计源
+     `89748ffb350eb8db6b1162ff6daf90dbd9c72fa8` 的完整
+     `PY_STORE_MODE_CONTROLS`/`PY_GENUINE_ASSEMBLER`。只把原 consumer_calls
+     首句 `node.lineno<coverage_fixture.lineno and isinstance(node,ast.Expr)`
+     改为 `isinstance(node,ast.Expr) and node.lineno<coverage_fixture.lineno`，
+     保持同一物理行。ast.walk 的 Module/ctx/operator 等非候选由原 Expr 谓词
+     正常排除；必需 Expr 的位置或形状缺失仍失败，不能以静默过滤掩盖。
+     其余 and 条件、layout.body[1] 排除、原排序、11个接点的 receiver顺序与
+     source-bound位置、赋值/紧随chmod及全部断言不变。完整核原8处位置属性访问
+     的类型先决；不修改其余访问，不用 hasattr/getattr/default、try/except、
+     continue、fix_missing_locations、手填行号、重生成源码或新增AST helper。
+     原creation7、copytree3、6个mutation label、21个worker及原11sites/26observations、
+     umask/ownership/ACL/cleanup/sentinel/caps完整保留，不新增或省略case/call。
+     全文件逆证只允许此谓词顺序，原完整assembler与其余heredoc字节不变；
+     同行调整不制造caller/dashboard/map行号重绑。静态能选出11节点不等于
+     worker已执行或通过。原正式literal/native helper/body/hash/d35/consumer7d58、
+     SOURCE84/maps/pins及所有资格/guard保持冻结。新增文本/AST检查费用累计UNKNOWN，
+     不宣称零成本或fit；此普通测试修复不关闭其它历史UNKNOWN/P1或本批失败。
+
+     **C2 helper-env 原合同兼容。** 此唯一接点绑定设计源
+     `89748ffb350eb8db6b1162ff6daf90dbd9c72fa8`。原 `build([])`、空 helpers、
+     虚构 scratch 和退休 posix_spawn/env 拦截不能证明当前合同。仅改原前缀，
+     原 first-read deletion 仍复用同一函数；原79中的 build/case/mutation 次数不变。
+     从该次已读取的同一受绑定 launcher 完整提取原 helper 片段，按真实边界和
+     `_C2_HELPERS_SHA256` 核字节；五 literal 仍由未改 `_literal` 取得，不手填值。
+     使用符合原 `c2_cli` 的 run operands：规范绝对 fixture 路径的 seed-a.json
+     及原格式时间字符串；不跳过 CLI 检查，也不声称该未读 seed 已完成验证。
+     提供实际自有0700私有 scratch，让原 `_open_held`、C2Root和真实 guard取得
+     custody；宿主拒绝仍失败，不伪造 held 或刷新身份来接受漂移。
+
+     两个原 uname 点是同一次 build 的既有内部调用，不是新增平台探测机会。
+     保留真实 `_checked` → `_tool` 调用；只在该测试独立 consumer namespace 的
+     `_c3_run_tool` 边界，为严格有序的 evals-platform、`/usr/bin/uname -s` 与
+     `/usr/bin/uname -m` 提供固定普通 fixture 声明 bytes `Linux\n`、`x86_64\n`，
+     原返回形状的 status=0、stderr为空仅表示这些声明。精确核原 role/argv、空 stdin、
+     scratch/runtime、同一 work、output_limit、timeout 和原 env
+     `LC_ALL=C, PATH=/usr/bin:/bin`。任何额外或错序请求失败，不委托执行真实工具，
+     不读取实际平台，不改生产 `_tool/_checked` 或将宿主 TMPDIR 塞入工具 env。
+
+     原 sentinel 移至同一次 build 的实际 jq-cache 输入构造边界。只在 build
+     期间局部替换原 join 入口；以原两个声明调用已完成、精确三个原实参及固定
+     cache 后缀/asset 限定该唯一点，其余 join 原样委托保存的真实函数。
+     该点先用保存的真实 join 计算实际候选，再核其来自该次原宿主 TMPDIR，
+     随即抛同一原 OSError sentinel。它位于 cache-open 的异常捕获之外；不能
+     让 sentinel 被该捕获吞掉并继续 `/usr/bin/jq`，也不能用手写候选路径替代
+     原 build 的环境读取和真实 join。保留生产表达式
+     `os.path.join(os.environ.get('TMPDIR', '/tmp'), 'ystack-portable-core-jq16', asset)`：
+     缺变量用/tmp，存在空串不fallback，绝不改成 `or '/tmp'`。沿用原宿主值断言
+     所需输入，不改全局环境、不复制或遍历其它环境。缺失/空串合同由完整未改表达式
+     和有限静态证明核验；本次仅当前宿主取值实际经过边界，不为三种情况新增 build
+     或 case，不伪称三种均已运行。driver 的原 scratch/work TMPDIR保持原样，
+     不拿它替代宿主缓存义务。
+
+     所有替换只存续于原 build，所有出口在 finally 恢复，再完成实际持有资源的
+     清理。保留同一 sentinel identity、真实首错/标记取消优先与原 helper.close/
+     custody 一次关闭；partial 取得和 cleanup 异常也必须覆盖，不靠GC或进程结束。
+     此有限工具声明边界未取得实际 child/pipe时不得伪报其 wait/关闭；实际取得的
+     held/custody/fixture backing仍须完整关闭。保留原输出字段和原print调用；
+     `runtime_executed`仍为false，此接线没有实际spawn拦截，`spawn_intercepted`
+     必须如实为false，不能以旧true声称真实Popen/posix_spawn已到达或关闭。
+     其它五组、failure_accounting、deletion及后继断言/调用/所有caps保持。
+     不增加helper框架、case/call、工具执行、探针、日志、输出字段、平台检测或
+     平台/工具资格；仅此普通测试输入与故障边界调整，不改正式/native/生产。
+     新增文本提取/校验、声明、join处理、引用、真实held与关闭及异常恢复费用归原
+     普通harness并累计UNKNOWN；原真实应用增量仍原owner/原caps计入，不填零、
+     不借新数值池、不宣称完整cost/fit。八个辅助测试文件、43路径、旧40/20/C1六
+     功能/三pin、九adoption、SOURCE84/consumer/native/map/pin及旧P1均不扩。
 
      replay assert 接点绑定设计源 `02f994361843bb452854d1b808b24e5bc34e8914`，文件
      SHA-256 `eef85b6fbb9409cafc695d0ce4cb62313564aac0e4295da1312de4945c4f23d5`。
