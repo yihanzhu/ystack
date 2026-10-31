@@ -2145,6 +2145,74 @@ to evade the source cap. Executable and policy files always belong to the closur
      facts/retiredR、改L或scope输出。job3/T及job4根因仍UNKNOWN/P1，未来PASS
      不关闭旧失败。所有guard/cap、79/six、native/G3和累计费用义务不变。
 
+     **原 C2 caller 的严格账与 END 拒绝终态。** 固定设计源为
+     ac36c43801746089e17702f9b137fd6ee938dddd，执行base5303a67747af0e80c0fb964e979b81d1c11286ed。
+     本窄接点明确优先于旧 consumer/invoke/peer字节冻结句，只开放以下两项正常修复
+     和闭合绑定表。peer、生产guard和其它行为仍按原合同。实际本批caught/end值和
+     内因UNKNOWN。两项静态缺陷不能冒称本轮已打印的错误。
+
+     生产shadow/v1/_consumer.py只扩_C3_OBSERVATION_KEYS中五个既有事件的精确键形，
+     及_C3_CLOSE_SITES中三个既有close子名。原_C2FixtureCaller.observe/close记录的
+     同一owner、ordinal、kind、原实际actions/pid/status/return/errno和全部行都保留。
+     这些原producer行须正常进入原ledger=True，不能删行、过滤、换owner或假称C3角色。
+     _c3_ledger_values全部原类型/精确键集/容量/canonical/严格验证保持。
+     | Original site | Exact original value keys / occurrence |
+     | --- | --- |
+     | C2.caller-spawn | actions,pid; original successful spawn6027 |
+     | C2.caller-child-socket-close | return; original child socket close6029 |
+     | C2.caller-wait | pid,status; original normal wait6087 |
+     | C2.caller-failed-wait | pid,status; original failure reap6122 |
+     | C2.caller-control-close | return; original control socket close6134 |
+     | close → C2.caller-prepared-close | errno,return,site; original prepared FD loop6030 |
+     | close → C2.caller-pending-close | errno,return,site; original partial FD cleanup6126 |
+     | close → C2.caller-tail-close | errno,return,site; original owned FD cleanup6129 |
+
+     fixture仅_C2FixtureCaller.invoke的原control EOF、失败保留、同child wait/reap和
+     原尾清理责任可变。已经完成原END解析/身份/账转移、尚无任何DONE字节时，原
+     control EOF产生的同一协议断言先保留。继续原selector读stdout/stderr至真实EOF，
+     三stream均终态后走原wait一次，保留真实status，再传播原缺DONE错误。不得让
+     该已终态路径先kill抢在peer原exit3之前。原peer sendEND/close9/close10/exit3
+     次序、退出3和所有END/无DONE断言保持。EOF不能伪证明child已退出或FD10已关。
+     真正未终态、部分/坏帧、IO错误或取消仍走原终止/回收责任。读、wait、close
+     期间的新错误按同源c2_first与原错误仲裁，保首错/首次取消和真实次错。
+     原wait的位置与取消/finally责任一起闭合，不加裸等待、sleep、重试、轮询、
+     新child/消息/读取机会或协议成功。未完成/结果不确定不得伪记reap或重试消费。
+     全部原观察/费用、common/window单次转移、ordinal/head不前进、tailUNKNOWN和
+     原成功失败断言保持。END函数原4对象/3fold/1cancel、T和AST修复继续保留。
+
+     本pass六个文件均已在R9.3原43路径内。两个行为接点和四个文件的机械绑定如下。
+     C/N/P/D/K必须从后续独审的实际完整字节计算，禁止全局替换或预造digest。
+     | Exact path and binding | Old fixed value / required new value |
+     | --- | --- |
+     | shadow/v1/_consumer.py | Add only five entries in _C3_OBSERVATION_KEYS and three names in _C3_CLOSE_SITES. Its complete actual SHA becomes C and length becomes N. |
+     | scripts/test/candidate-content-preparation-fixtures.py | _C2FixtureCaller.invoke EOF/failure/wait responsibility only; _raw16_C1_foreground_finally_seam9662 changes its one 7d58… full-source SHA assertion to C. The original raw16_C2_six_fixes6682 triple equality changes its one fixed041ec… SHA to K;6681 still checks the exact final complete helper length. |
+     | scripts/test/scope-qualification.test.sh | Six exact 7d58… consumer SHA literals at1192 expected consumer member,3547 consumer assertion,5239 copied-consumer assertion,5253 ordinary_source_hash,5255 ordinary_source_tuple,8529 _ordinary_observer_metadata_compat assertion become C. Preserve the original d35… formal/helper source and complete inverse. |
+     | scripts/test/scope-qualification.test.sh | Same ordinary observer only:8533 five-definition tuple,8595 two immediate-caller coordinates,8736 errno caller coordinate. With the specified five added schema lines,4271/4281 become4276/4286 and4273/4283 become4278/4288. All other positions remain their actual source values; verify full AST/authentication. |
+     | evals/v1/evals.jq |189 SOURCE84 consumer member SHA7d58… becomes C. Hash the entire resulting program as P. |
+     | evals/v1/evals-driver.sh |10 PROGRAM_SHA,19 FIXED_PINS program.jq,877 program_sha256: old efe2004d… becomes P, exactly three occurrences. Hash the entire resulting driver as D. |
+     | evals/v1/evals-launcher.sh |2437 SOURCE84 consumer tuple changes only SHA7d58…→C and length434534→N, retaining path/mode100644.2944 program_sha old efe2004d…→P and2947 driver_sha old7ea072dd…→D, once each. After those replacements hash the complete original helper slice as K, then change only line34 _C2_HELPERS_SHA256 to K. This constant is outside the slice. |
+
+     K从已完成C/N→P→D绑定的launcher完整helper切片计算。边界包含原前导LF
+     emit_error() {，止于原前导LF # Fixed public entry;之前，两marker仍各唯一。
+     切片外launcher34和fixture6682两处固定SHA都绑定同一K，原真实加载、C2Sources
+     完整SHA guard和fixture完整切片SHA==fixed常量==固定K三项等值必须保留。
+     原helper长度61996须用最终实际UTF-8字节核验。固定64位摘要和六位N替换若使
+     长度不变，原6681断言保持61996；若实际长度改变，只同步该精确长度字面量，
+     原完整长度等值断言仍执行。H0/H1–H6、first-read复用、原次数和其它helper
+     内容不变。新增完整hash/长度核验仍累计原费用UNKNOWN，不预造K或新增执行。
+
+     在原schema字典按正常一行一entry加五行；三个close名字沿原tuple行扩充。
+     保持其它consumer行内容和相对位置，后续物理行只整体+5。只对表列三处实际
+     位置认证同步，原code/globals/full-source认证、三variant/四kind和异常路由不变。
+     SOURCE84 membership/path/mode/选择与guards、九adoption/maps语义、正式四literal/
+     两native helper/body/d35/1197/1231均保留。八测试/43路径、原40/20/C1六+三pin
+     成员不变。其它595个源码项按实际post-artifact-merge601冻结。未列绑定若确实
+     必需，暂停列出实际依赖并走范围审查，不能扩大源或默默跳过验证。
+     原79/six、所有原cases/calls/观察和strict caps不变。新增schema/有限失败状态/
+     哈希及private-copy/引用/清理的实际费用累计原owner和ordinary-harness UNKNOWN，
+     不记0、不借#558、不增加池或native资格。writer第二preparation E_STOREpoint1575
+     内因仍UNKNOWN，producer/copy/ACL及scope-pre不因此开放。
+
      **原 refused-END case 的完整 owner 初始化。** 设计源为
      `788570708e737da146c7867f6c3f328723be5770`。仅补原
      `_capture_work_values(work, 'END-case')` 新建、尚未承担应用工作且将进入
@@ -2268,11 +2336,12 @@ to evade the source cap. Executable and policy files always belong to the closur
      修改后完整 launcher 与 `c2_program` 的实际 bytes/长度/SHA 必须重新绑定到
      source manifest、recipe、审查及原运行快照；不得保留旧头的摘要或复用旧GO。
      既有 fixture 均从同一 launcher 动态提取该 literal，不复制或手写第二份程序。
-     完整61996 B shell helpers 及 SHA
-     `041ec87ddf0f04984ce004600da8fb74a81a1931f941489d175b130c41d644a0`
-     保持原字节。五个 shell literal、`PY_SHADOW_SOURCE`/SOURCE84 table、
-     `evals.jq`、`evals-driver.sh`、`run-evals.sh`、consumer7d58、四正式 observer
-     literal/两native helper/body/hash/d35/1197/1231、九copy/maps/pins均不移动。
+     完整shell helpers原件为61996 B、SHA
+     `041ec87ddf0f04984ce004600da8fb74a81a1931f941489d175b130c41d644a0`。
+     本pass仅按六文件表更新C/N/P/D派生内容及切片外K、fixture的K/实际长度认证。
+     五个shell literal、`PY_SHADOW_SOURCE`/SOURCE84 table、program/driver/consumer
+     只允许该表列出的精确绑定和schema差异。其余字节、run-evals.sh、四正式observer/
+     两native helper/body/hash/d35/1197/1231与九copy/maps语义保持。
      launcher 不在 SOURCE84 成员内；其原 snapshot/full-byte/hash 检查和
      `launcher_sha` 动态量测继续使用实际新字节，不新增自证 expected 或外部 pin。
      上表没有第四个机械绑定写路径；实际发现其它固定依赖必须停下明确回到相应门，
@@ -2835,9 +2904,13 @@ to evade the source cap. Executable and policy files always belong to the closur
    nine adoption-only paths and SOURCE 84 remain unchanged; qualify and the auxiliary
    replay test join none of them.
    The already listed enforced-reproduction.py and _consumer.py permit only the
-   additional fixed R9.2 noninterference and foreground-owner cleanup contacts;
+   additional fixed R9.2 noninterference and foreground-owner cleanup contacts,
+   plus this revision's exact C2 caller schema entries in _consumer.py;
    their listed regressions, test-only failure diagnostics and moved-pin bindings
    add no path or adoption exception.
+   The six-file C2 caller protocol/binding table above also permits only its exact
+   existing fixture, consumer and mechanical hash/length/coordinate contacts. It
+   adds no member to this43-path set.
    No workflow, installed
    configuration, profile or runtime selection changes. Existing immutable pins
    outside these paths that would need change stop implementation for a bounded
