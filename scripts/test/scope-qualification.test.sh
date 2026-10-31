@@ -493,6 +493,69 @@ run_validator "$tmp/scope.json" || fail 'the routine fixture scope was refused'
 pass 'the record validator accepts a well-formed routine workflow scope'
 
 mutate_scope() { "$jq_bin" -S -c "$1" "$tmp/scope.json" >"$2"; }
+check_eval_trial_policy() {
+  local kind total passed failed inconclusive outcome reasons label scope dashboard
+  run_evaluator "${good[@]}" >"$tmp/trial-baseline.json"
+  "$jq_bin" -e '
+    .body.outcome == "proposable" and .body.reason_ids == ["scope.proposable"] and
+    .body.activation_state == "inactive" and .body.enabled == false and
+    .body.proposal.state == "present" and
+    .body.proposal.document.body.activation_state == "inactive" and
+    .body.proposal.document.body.enabled == false and
+    .body.proposal.document.body.push_allowed == false
+  ' "$tmp/trial-baseline.json" >/dev/null || fail 'trial baseline must be inert and proposable'
+  pass 'trial-policy baseline is proposable and stays inactive'
+
+  while read -r label kind total passed failed inconclusive outcome; do
+    dashboard="$tmp/trial-$label.dashboard.json"
+    "$jq_bin" -S -c --arg kind "$kind" --argjson total "$total" \
+      --argjson passed "$passed" --argjson failed "$failed" \
+      --argjson inconclusive "$inconclusive" '
+      .body.families |= map(if .family_id == "stale-moved-artifacts" then
+        .trial_policy = (if $kind == "multi" then {kind:$kind,minimum_trials:3}
+                         else {kind:$kind} end) |
+        .cases = {total:$total,passed:$passed,failed:$failed,inconclusive:$inconclusive}
+        else . end)
+    ' "$tmp/dashboard.json" >"$dashboard"
+    run_evaluator "${good[@]:0:2}" "$dashboard" "${good[@]:3}" >"$tmp/trial-$label.json"
+    if [ "$outcome" = proposable ]; then reasons='["scope.proposable"]'
+    else reasons='["scope.eval-failing"]'; fi
+    "$jq_bin" -e --arg outcome "$outcome" --argjson reasons "$reasons" '
+      .body.outcome == $outcome and .body.reason_ids == $reasons and
+      .body.activation_state == "inactive" and .body.enabled == false and
+      if $outcome == "proposable" then
+        .body.proposal.state == "present" and
+        .body.proposal.document.body.activation_state == "inactive" and
+        .body.proposal.document.body.enabled == false and
+        .body.proposal.document.body.push_allowed == false
+      else .body.proposal.state == "absent" end
+    ' "$tmp/trial-$label.json" >/dev/null || fail "trial-policy $label outcome or proposal"
+    pass "trial-policy $label: $outcome, exact reasons, inactive proposal state"
+  done <<'TRIAL_CASES'
+multi-below multi 2 2 0 0 not-proposable
+multi-floor multi 3 3 0 0 proposable
+multi-above multi 4 4 0 0 proposable
+multi-failed multi 3 2 1 0 not-proposable
+multi-inconclusive multi 3 2 0 1 not-proposable
+single-zero single 0 0 0 0 not-proposable
+single-passed single 1 1 0 0 proposable
+single-failed single 1 0 1 0 not-proposable
+single-inconclusive single 1 0 0 1 not-proposable
+TRIAL_CASES
+
+  scope="$tmp/trial-declared.scope.json"
+  mutate_scope '.body.required_eval_families = ["malicious-instructions"]' "$scope"
+  run_evaluator "$scope" "${good[@]:1}" >"$tmp/trial-declared.json"
+  "$jq_bin" -e '
+    .body.outcome == "not-proposable" and
+    .body.reason_ids == ["scope.eval-family-unseeded"] and
+    .body.activation_state == "inactive" and .body.enabled == false and
+    .body.proposal.state == "absent"
+  ' "$tmp/trial-declared.json" >/dev/null || fail 'declared family must refuse without proposal'
+  pass 'a declared family remains unseeded and cannot produce a proposal'
+}
+check_eval_trial_policy
+
 mutate_scope '.body.enabled = true' "$tmp/bad-enabled.json"
 mutate_scope '.body.push_allowed = true' "$tmp/bad-push.json"
 mutate_scope '.body.workflow_id = "wf.docs"' "$tmp/bad-workflow.json"

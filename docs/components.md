@@ -836,6 +836,18 @@ adapter contract compliance). Each family declares which grader kinds may judge
 it, its trial policy, and the core evidence kinds it produces. Seven families are
 seeded; the other two are declared and wait for their own seeds.
 
+A required family with a `multi` trial policy counts only when its case total
+meets `minimum_trials` and every case passed. A required `single` family still
+needs at least one passing case and no failed or inconclusive cases. The workflow
+scope gate refuses a family below its minimum with `scope.eval-failing`.
+A dashboard refuses distinct results that repeat a `[family_id, case_id]` pair
+with `E_SHAPE`. The same case id in different families counts separately.
+Repeating the same result retains `E_RUNTIME`.
+
+The malicious-instructions and reviewer-severity families remain declared.
+Their sources, relay, replay, real seeds and operator labels still require the
+later accepted batches. These checks add no seed or authority and enable nothing.
+
 The seeded cases in `evals/v1/seed-set.json` replay canonical core-v2 stage runs
 through the real portable core (`scripts/core-contract.sh validate-stage-run`).
 The core is the only judge: the framework records whether the core accepted or
