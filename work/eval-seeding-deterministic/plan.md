@@ -1,5 +1,5 @@
 ---
-spec-blob: 9890fe5893282c67f165ddcf61906436b0fc5377
+spec-blob: 754737af72ddefeeb1e57b6f68d80a68f850a509
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-26
@@ -13,26 +13,34 @@ existing review relay and measured scope binding remain intact. PR 1b remains
 one complete two-source delivery. Source preparation does not accept a dependency,
 a real recording, native qualification or either seed batch.
 
-This plan candidate derives from accepted plan
-`90a6ba8af3cc826237eb8c0eb8a4dfb24ea3ae2e` and binds accepted G2 spec
-`9890fe5893282c67f165ddcf61906436b0fc5377`. PR #793 passed independent G2 review
-and quick CI 41197514933, then protected-landed at
-`40bf5438006a1ee483e139808426a88d511c3466`, sole parent
-`389c86eab8cefa6d7088bd3557cd6995c2c30f82`, tree
-`69081a852837ae2308a3b8411fe32dec94770d94`. That is this plan PR's current-base,
-not the future source plan-base. The latter remains unknown until this separate
-plan passes fresh independent review, protected landing and fetched-main binding.
-The preserved source is now `932d9f911750fb003a79005d62c4179837d6e4e5`, sole parent
-`05a2b197199a0136483b05a875c15d2a19a24e59`, tree
-`c40cbcdee26ceeb319fd02c2a72350cd3aafa6c1`, original branch clean with601 entries.
-The operator-approved local preservation stage exception is completed. Its closure
-receipt SHA256 is d66be339c1cf72fa70db2a0bbae98269b23a5cee4bcce8d5b9628da6cfe62120;
-its direct-approval receipt SHA256 is
-99d9e51e3e4a4283f79bcc7d72c21530a02914dc0f1f82a730d2d4e0c70b9d0c.
-The local preservation GO is consumed, source_ACCEPT=false and ownership I1 OPEN.
-The two test drafts are preserved, not accepted; no CODE/runtime GO follows.
-The fixed launcher design remains M05a2/89748 bytes. The prior full-CI source/base
-remain `89748ffb350eb8db6b1162ff6daf90dbd9c72fa8` /
+This plan-only candidate derives from accepted END plan
+`afcff86e00b7b95e780e3a93b1da88bedb9035a6` and binds accepted G2 spec
+`754737af72ddefeeb1e57b6f68d80a68f850a509`. PR #797 passed independent G2
+review and quick CI41208154993, then protected-landed at current plan-PR base
+`1ed9aeeb5ff25d5a24f5d9a19bdfaecb72bfa6cb`, sole parent
+`04696ed0f2301fa5f1c7bdb588877dfe2d74ec76`, tree
+`5f266f962f00949774b76d4e665179c6f8b819b4`. Review comment6544451060 was
+read back exactly. This accepts G2 scope, not this separate high-risk plan.
+Accepted END G2/plan obligations remain unimplemented and open for this combined
+pass; END, loops and writer technical contracts below do not change.
+Design source/run identity remains `788570708e737da146c7867f6c3f328723be5770` /
+CI41202319488 / execution base`d5e7e5be694f647b98a676175ea7f2ab26d21192`.
+The original run is now COMPLETED FAILURE. All eight raw archives and independent
+complete79 classification remain pending at drafting; do not supply final counts
+or infer causes from that terminal status. Retain the proven END owner and loops
+Tuple.id defects and every actual failure; T/scope-pre roots remain UNKNOWN.
+Artifact-only plan review, required quick CI and protected landing may proceed
+while the original evidence is closed. Source W/refs/recipe/consumed GO remain
+frozen until all eight raw/metadata/index archives and independent classification,
+this plan's protected landing, actual latest fetched-main artifact merge and fresh
+CODE. No old GO, automatic retry or second full window is authorized. The future
+source plan-base is UNKNOWN until fetched main containing the accepted plan;
+this known G2/current plan-PR base is not that future source execution baseline.
+Prior preservation is completed, not repeated. All implemented handoff/helper/AST
+and earlier repairs remain baseline facts, not permission to reopen them. Source,
+I1/G3/native and prior debts are not accepted or closed by this candidate.
+The prior full-CI source/base remain
+`89748ffb350eb8db6b1162ff6daf90dbd9c72fa8` /
 `ec68ada78dd031e37b9daee5a694bc4e18a4d69d`.
 Full CI 41157337543 remains FAILURE: eight closed raw logs total 222376463 bytes /
 37113 lines, with 64 PASS, 4 FAIL and 11 NOT_REACHED. Four control SKIPs and twelve
@@ -808,25 +816,25 @@ blocked pending its exact scope gate.
 
 ### Existing regression compatibility (R9.2)
 
-Retained compatibility requirements remain accepted obligations. Under accepted
-G2 PR #793 and subject to this plan landing, this pass opens only the first three rows below: the normal
-C2Helpers pending-held handoff, its existing helper-env fixture and bounded
-regression, and the same-line store-mode AST repair. Only the three named files
-may change. Preserve all other 89748 code, including terminal script/complete
-cleanup, metadata alias, sixteen replay messages and source-backing/stdout/cause.
-The two test drafts in the completed preservation receipt remain exact inputs
-until fresh CODE; their clean preservation does not accept their source content.
-Other five C2 groups, failure_accounting and deletion construction keep their
-original code/calls; first-read mutation also reuses the six new controls below.
-All later compatibility rows, environment values, observer/first-line bridge,
-T/scope-pre and L/R remain frozen. Production changes only at the named build
-handoff; C2Root, consumer/formal/native, SOURCE84/maps/pins/guards/caps remain
-unchanged. Keep eight test files/43 paths, original40/20, six C1 functional/three
-pin and nine adoption-only sets. No fourth binding path, diagnostic facility or
-extra call beyond the closed regression table. Retain every failure/NOTRUN/UNKNOWN.
+Retained requirements remain accepted obligations. G2 PR #797 accepts this scope;
+subject to separate high-risk plan landing, the next pass contains only three contacts in two
+files: retained END owner/cleanup, same-line loops all-Name prerequisite, and the
+writer-two-roots same-call primary propagation with its exact cleanup/outer exit.
+The first three table rows are the active set. END is accepted but not implemented;
+do not freeze it out of this combined pass. All other source788570 bytes remain
+frozen, including production handoff, H0/H1–H6/helper-env/first-read reuse, earlier
+AST repair, terminal, observer, replay messages and source/stdout/cause. Keep all
+other T controls, L/R and scope-pre behavior; no generic hook/diagnostic facility.
+Eight test files/43 paths, original40/20, C1six/threepins, nine adoption-only paths,
+SOURCE84/consumer/formal/native/maps/guards/caps and all failure/UNKNOWN debts stay.
+Only the exact original-call delegation, local checks and arbitration below are
+added; no new test case/child/producer/validator/source-read/runtime opportunity.
 
 | File | Fixed contact and order of work |
 | --- | --- |
+| `scripts/test/candidate-content-preparation-fixtures.py` | Only `raw16_C2_refused_END_transfer`: complete the same original new case using one canonical template and setdefault, retain old values/references and separate mutable containers, and move its one original binding into the protected inner try after checks. Keep peer/invoke and original assertion expressions. Only the same function's original held/tempdir cleanup error handling, final arbitration and deferred original print also change as specified below. |
+| `scripts/test/scope-qualification.test.sh` | Only PY_STORE_MODE_CONTROLS.loops at original physical9087/heredoc42: add the all-Name prerequisite before the existing complete ordered four-name comparison on that same line. Preserve unique1, six labels and every downstream byte. |
+| `scripts/test/candidate-content-preparation-fixtures.py` | Only raw16_t_lifecycle's writer-two-roots instance _discard_runtime delegation, the original compound assertion's cause, original holder cleanup/error arbitration, and the outer existing TemporaryDirectory exception exit when this writer already has pending failure. Other T bodies change only by mechanically necessary enclosing indentation; all statements/calls/assertions remain. |
 | `evals/v1/evals-launcher.sh` | Only the `c2_program` C2Helpers.build acquisition-to-C2Root publication block and its pending-held failure cleanup below. Keep C2Root.__init__/fail/close and all other production functions unchanged. |
 | `scripts/test/candidate-content-preparation-fixtures.py` | Only `raw16_C2_six_fixes` helper-env prefix and its original first-read mutation reuse: real CLI/helper literals/scratch custody, two declared uname responses through the original tool calls, and the real host-TMPDIR cache join fault. Preserve original calls, fields, sentinel, cleanup and later controls; add only the six bounded handoff controls below and their original first-read reuse. |
 | `scripts/test/scope-qualification.test.sh` | Only `PY_STORE_MODE_CONTROLS.consumer_calls`: move the existing Expr predicate before the existing lineno comparison on the same line; keep all other selector and downstream bytes. |
@@ -851,6 +859,219 @@ extra call beyond the closed regression table. Retain every failure/NOTRUN/UNKNO
 | `scripts/test/candidate-content-preparation-fixtures.py` | `raw16_preparation_P_handoff`: wire the two existing transitions described below in its seven original cases. Check the inspect result before indexing, while retaining the actual failed retention and its errors. |
 | `scripts/test/candidate-content-preparation-fixtures.py` | Only `raw16_C1_gate_revision`: select the original `session.call_id` assignment and immediately following request assignment from `_Generator._kill_source_request_phase`. Bind the original five-role transition across request phase → `kill_source` → result phase: `K_REQUEST`, same-session `context[1].release_local()`, `not session.local and not session.remote` check, collector call, `K_DONE`. |
 | `scripts/test/shadow-enforced.test.sh` | In the first `PY_REPRODUCTION_VALUES`, add only the real `_runtime_sha_values` to the original ten-name AST selection. Require exactly one definition of each of `Refusal`, `canonical`, `sha`, `parse`, `document_ref`, `_native_provenance_values`, `_runtime_sha_values`, `_reproduction_provenance_values`, `_reproduction_record_values`, `_reproduction_bundle_values`, `StableFile`. Keep the existing namespace and all 32 original assertions; the helper uses its existing `sha/c`, so retain the exact `marked_sha`/bundle order, early-failure prefixes and error payloads. Do not alter expected marks, omit the Python hash, catch NameError as success or use a recursive loader. |
+
+**Current loops type prerequisite.** Bind source788570's complete shell and
+original PY_STORE_MODE_CONTROLS/PY_GENUINE_ASSEMBLER literals. Only at physical9087
+(heredoc42), prepend all(isinstance(item,ast.Name) for item in node.target.elts)
+to the original [item.id for item in node.target.elts] full ordered comparison.
+Keep the same physical line and original For/Tuple predicates. Do not filter inside
+the comprehension, use getattr/default, truncate names, catch AttributeError,
+change the target or delete the valid nested protocol loop. The original unique
+four-Name loop is assembler2138; the valid non-target Name+Tuple is4286. A missing,
+duplicate or malformed required target still fails original len(loops)==1.
+Preserve six labels form-missing/form-wrong/write-missing/write-mixed/enforced-
+changed/withheld-nochange, whole iter/body, creation7, layout/its exclusion, 11sites/
+receiver/order, copies3, workers21 and observations26. All other selectors and
+worker/assembler bytes remain. Inverse the one added conjunct to recover the full
+shell, with unchanged line count and no dashboard/maps shift. The bounded eight-
+file static audit found no second selector to change; its121 field hits are not
+permission to generalize guards. Static selection is not worker execution.
+
+**Current writer-two-roots same-call propagation.** This is not a T root fix.
+Only the original writer-two-roots block of raw16_t_lifecycle may retain the first
+real primary passed on its existing holder._discard_runtime(anchor,copied,primary)
+edge. Use one named private instance delegate, _writer_two_roots_discard_primary,
+for this holder and the same anchor during the existing writer exec only. Save the
+actual bound method; verify same holder and original e.StableDirectory method,
+not a replacement consumer/production function. Save the exact prior instance-key
+state. Install only on this instance, not on its class/global/module. Use normal
+method binding; no source load, compile or new consumer invocation. The delegate
+forwards the original arguments exactly once to that saved bound method and returns
+its result or propagates its exception unchanged. For the same anchor only, retain
+the first original primary reference; no later replacement, list, field extraction,
+traceback/frame/sys.exc_info/point/leaf inspection or cross-call retention. Other
+anchors delegate unchanged without capture. This does not create a new runtime
+call: each existing edge has one private forwarding call and one original call.
+
+Place saved-state acquisition/installation and the unchanged writer exec under
+this holder's original cleanup responsibility. In a nested finally restore exact
+instance attribute state immediately after exec, before the original diagnostics/
+assertions and before holder.close. A previously absent instance key must be
+removed, not replaced by a newly stored bound method. Any installation/restoration
+failure fails; restoration failure must still allow the original holder.close
+attempt. No retry or second cleanup. Do not silently use an already replaced
+method; fail closed within this cleanup boundary. Existing writer operations,
+produce calls, arguments, two roots and all runtime/recording/guard behavior stay.
+
+Wrap only the original len(writer_calls)==2 and not unusable compound assert in
+an AssertionError handler. Keep that assert's exact predicate/message and object.
+If this first same-call primary is an ordinary Exception, raise that same
+AssertionError from that same primary. No edge/reference means bare re-raise.
+KeyboardInterrupt, SystemExit and original _scope_signal_cancel errors bypass this
+assert chain and preserve their original propagation; any delegate/exec exception
+also bypasses it. Do not turn an expected code/leaf/projection into a cause. Do not
+attach this primary to later assertions, restoration errors or close errors.
+Keep the original whole-leaf failure print and all subsequent assertions unchanged.
+This may still reveal no root cause; absent cause and all old UNKNOWN remain valid.
+
+Use finite separate local references for actual body/assertion, restoration and
+holder-close errors. Restore first, then call original holder.close exactly once
+at its original responsibility point even after earlier failure. Preserve the
+active exception context of that call: original close_runtime_copies itself reads
+sys.exc_info()[1] before cancellation arbitration. The fixture must not read this
+API or change production. On a body/delegate/assertion failure, run close while
+that same original exception remains active in the normal propagating finally or
+its handling except; do not leave that handler, save an inactive reference and
+then close. A caught restoration secondary must not become the active exception
+seen by close when the original body error was already active. If restoration is
+the first failure, let that real failure be the active primary for cleanup. On a
+normal body/restoration path, close retains the original no-active-error context.
+Prove each branch structurally; no new runtime probe/trial checks this dependency. Choose the same
+primary with original c._c3_first in occurrence order: earliest ordinary failure
+wins over later ordinary failures, first KeyboardInterrupt/marked cancellation wins
+over ordinary errors, and an earlier cancellation survives a later cancellation.
+SystemExit is never wrapped in the assertion cause path; cleanup uses the original
+same c._c3_first rule rather than a new classifier. Any restore/close failure forces
+failure, including on the otherwise-positive writer path. Keep secondary objects
+through arbitration/propagation; never report close complete on failure/uncertainty,
+retry an uncertain close, use GC as evidence or create a generic cleanup helper.
+
+Only when this writer block selects a fatal exception, set a private writer-pending
+reference immediately before its raise. A narrow outer try/except around the
+original TemporaryDirectory with may handle that one exit: pending absent means
+bare raise unchanged for every other T path; if the caught exit exception is the
+pending object, re-raise it unchanged; otherwise fold that later exit exception
+with pending using c._c3_first and raise the same selected object. Keep both actual
+errors. Do not call cleanup/__exit__ again or alter the original context manager.
+No new template/loader/arbiter is allowed before the original c/holder exist.
+On writer success clear pending before any subsequent control; later unrelated
+failures cannot enter this boundary. Other original T statements, cases, calls and
+assertions remain identical; only the mechanical indentation needed to enclose the
+same with is allowed. Strip that envelope/indentation in the full-file inverse.
+Do not broaden this outer gate into catch-and-continue or classify other failures.
+
+Restore delegation and drop its saved method/holder/anchor/closure/captured-primary
+aliases on every exit. Once chained, the original AssertionError cause alone owns
+the necessary primary; do not mutate the primary traceback/cause/context. A fatal
+cleanup's necessary secondary references may remain only as bounded locals of the
+propagated failure until its caller releases that failure. No global/cache/output
+field/custom formatter or frame reading/copy. No cause is invented if the edge is
+not reached. Original default traceback/linecache may read existing modules; these
+implicit reads/reference/render/transport costs are UNKNOWN, not zero IO or fit.
+
+Keep original calls/cases/outputs and holder-close count. New direct c._c3_first
+calls are bounded by one restoration error, one holder-close error and one outer
+exit error, at most three; no new producer/retain/discard/close/test/child or probe
+invocation. Use the original two-roots run as regression, with static same-holder/
+anchor/once-delegation/recovery and all exceptional-exit proof; no injected runtime
+fault matrix is added. All new local allocation/ref/forwarding/check/cleanup costs
+remain original ordinary-harness UNKNOWN, original app owner/cap unchanged.
+Full inverse removes only this one private boundary, cause/cleanup tail and exact
+outer envelope to recover the whole fixture. Prove unchanged writer segment,
+exec arguments, original assert expressions and every non-writer control AST/body.
+No production/formal/native/SOURCE84/maps/pins, old failure-facts/retiredR or scope
+stderr behavior opens. Job3 and job4 remain UNKNOWN/P1; future PASS is not closure.
+
+**Current refused-END owner contract.** Bind complete source788570 fixture,
+launcher and consumer. Preserve work, case=work['cases']['END-case'], caller.case_work
+and identity. _capture_work_values creates eight scalar slots; strict ledger needs
+eleven scalar, nine runtime, thirty accounting and five processing slots plus calls.
+Use exactly one fixed['c2_fresh_work']('END-case') after existing caller/fixed
+extraction. Apply every item with setdefault to the same case. Do not replace it,
+update old values, rebuild window/common, handwrite a subset or convert sparse owners.
+
+Added setup stays in the protected inner try. Move only the original
+work['C2_case_bindings'][identity]=(case,[case]) assignment there after completion/
+checks and before the unchanged single invoke. Keep caller.window_sha=caller.head
+at its original point. Reservation and its three fresh constructors, child_code,
+spawn/refused_peer, before/caught and spawn replacement retain original bytes and
+evaluation order. Prove those intervening expressions/projections do not read this
+binding. Capture finite old item references, assert same work case/caller.case_work
+and every old key/value reference, and preserve nonzero counts. Check runtime,
+accounting with its five class dictionaries, seed_processing and calls do not share
+mutable containers with window/common. No writes to those containers, recursive
+helper/validator, invented fields or extra schema calls. Keep all template keys;
+its bookkeeping keys are not new functional cases. Projection defaults do not prove
+actual ledger shape. Added allocation/check failures must reach original cleanup.
+
+The only additional reopening is this function's original error/cleanup tail.
+Retain original TemporaryDirectory context and one actual context exit. Restore
+spawn once, then call the original held.close exactly once; capture its BaseException
+instead of allowing it to replace an already caught primary. Do not retry any
+consumed or uncertain close, add a second cleanup, modify production close, use GC
+as proof or find resources through traceback. Capture a failure of the original
+TemporaryDirectory exit as a separate later error; do not call cleanup again.
+Keep fixed-not-yet-acquired preparation at its original positions. Do not add an
+earlier literal load, template or duplicate arbitration function for that prefix.
+The new protection/arbitration applies after the existing fixed acquisition.
+
+Use bounded local state to distinguish completed setup, expected peer caught,
+actual fatal body/assertion error, held-close error and temporary-exit error. A
+setup failure cannot enter the expected-refusal success path. A caught cancellation
+must fail even if last_attempt/END happens to exist. Use the actual fixed namespace's
+c2_cancelled (KeyboardInterrupt, _scope_signal_cancel or _D_source_cancel) and
+c2_first; do not recreate/weaken their classification. The original single invoke
+and its caught object remain; completed setup without last_attempt still fails.
+
+Before leaving the original with, retain protected-segment errors rather than
+raising them across its __exit__. If setup failed, invocation cancelled, last_attempt
+is absent or held.close failed, skip the success assertions/print and retain failure.
+When close failed, choose c2_first(caught, close_error) if caught exists, otherwise
+that same close_error. Any close failure forces failure even when the selected
+object is the normally expected refusal. An earlier cancellation is not replaced
+by a later ordinary error or later cancellation; a first later cancellation takes
+priority over an ordinary primary. Keep the losing original error as well.
+
+Only the otherwise-valid original END path runs the original end assignment and
+all original assertions, with their exact predicates/messages and original order.
+Capture an assertion failure as the real fatal primary, distinct from the expected
+peer caught; do not replace this failure with the expected refusal. Delay only the
+original print until after the original with has exited successfully. Its expression,
+fields and one-call success count stay unchanged. No successful output may precede
+an unresolved cleanup failure.
+
+After that one context exit, fold a temporary-exit error with the existing fatal
+primary using c2_first. If there was no fatal primary but the original peer caught
+exists, choose c2_first(caught, temporary_error); otherwise choose temporary_error.
+A temporary-exit error always forces failure. If there is no cleanup error and no
+fatal body/assertion failure, follow the original assertions' successful result and
+execute the deferred original print. Otherwise raise the selected same exception
+object. Never use caught!=None/END as permission to swallow a setup/cleanup error.
+
+Keep at most three distinct same-call original exception objects plus selected
+aliases until arbitration. Preserve existing traceback/cause, without rewriting
+or clearing them to hide a secondary. Successful completion releases unneeded
+caught/temporary references before the original print. On failure, needed secondary
+objects may remain as this function's bounded locals in the propagated traceback;
+they end with the caller's release of that original failure. No global retention,
+new exception attribute/output field, frame inspection/copy, custom formatter or
+error API. Release other transient aliases on all exits. This does not promise
+zero runtime linecache/rendering IO; original rendering/reference costs stay UNKNOWN.
+
+Preserve original peer/invoke bytes, argv/env/reservation, END without DONE, exit3,
+FD actions/signals/wait, original accounting and all assertions/print expressions.
+The same real END, unchanged ordinal/head, child-tail UNKNOWN and original once-only
+transfer remain required. Do not add two negative schema cases or extra validators;
+existing codec negatives cover messages/framing, not these exact schema omissions.
+Use the original END regression, local identity/old-value/nonalias assertions and
+static complete-schema/guard and error-path proof. Keep H0/H1–H6, first-read reuse,
+all five other groups, failure_accounting and deletion calls unchanged.
+
+Per original refused-END call reaching this setup, add one canonical template and
+bounded local checks; retain three reservation constructions and one original
+caller/invoke/peer opportunity. At the original cleanup point, held.close is called
+once, and the original TemporaryDirectory exits once. Earlier acquisition/setup
+failures do not imply a child existed or a close completed; do not fabricate either. Error arbitration uses at most two direct
+c2_first calls and one direct c2_cancelled check; their original internal calls are
+unchanged. There is no new test case, child/build/tool/platform/read opportunity.
+All allocation, comparisons, exception references/arbitration and partial/failure/
+cancel/cleanup costs accrue original ordinary-harness UNKNOWN. Actual application
+increments retain original owner/cap/carry-in/settlement once. No refund, #558
+borrowing, free/fit/native claim or new pool. Check local-name noncollision against
+the entire function. Full inverse removes only setup/checks, one binding move and
+this cleanup/arbitration/print-order delta. Recover all original fixture bytes;
+peer/invoke/assertion expressions and all other functions are exact. Static proof
+is not a completed END run or proof of unreached controls.
 
 **Current helper-env fixture contract.** Use the original single build invocation
 inside raw16_C2_six_fixes, including its unchanged first-read deletion reuse.
@@ -913,7 +1134,8 @@ No child/pipe was acquired at this seam, so claim no child wait or pipe closure.
 Keep the original print call and fields, with spawn_intercepted=False and
 runtime_executed=False. Do not add a cleanup/status/output field. Other five groups,
 failure_accounting, first-read mutation construction and all later controls stay
-byte-for-byte fixed; their existing calls must reach their original assertions.
+byte-for-byte fixed except the separately named END-case initialization/binding;
+their existing calls must reach their original assertions.
 Only the six handoff cases below add builds; no helper framework, tool call or
 probe. Require a full fixture-file inverse for this prefix and adjacent bounded
 controls, including namespace restoration, local-name noncollision, mutation source
@@ -1084,33 +1306,30 @@ Reverse this one predicate-order edit to recover the whole original shell file.
 No dashboard/caller/map shift is caused by a same-line change. Static selection
 of the eleven sites does not prove any worker ran. All check costs stay UNKNOWN.
 
-**Current source handoff and proof.** The exact local preservation exception is
-approved and closed at H932d9f911750fb003a79005d62c4179837d6e4e5, with the
-parent/tree/clean601 and closure/approval receipts bound above. Do not repeat that
-consumed action or treat it as source acceptance, I1 closure or CODE/runtime GO.
-Keep all prior drafts, failure and cost records. No reset/stash/clean, replacement
-attempt or hidden commit. Accepted G2 PR #793 supplies scope; this separate
-high-risk plan still requires fresh exact-head/base review and protected landing.
-Source remains stopped until the normal artifact merge and fresh CODE gate.
-
-After this plan lands, normally merge its fetched main into
-the same preserved source branch. Its future source plan-base OID is unknown.
-First compare to the exact preservation receipt's clean source tree, not 89748:
-only accepted spec/plan may update, intent stays a4197f299974e62bb2b97e004b75182012abbb87,
-and the other599 entries retain that receipt's exact bytes/type/mode/blob, including
-the two preserved test drafts. Seal the actual post-artifact-merge601 manifest and
-obtain fresh CODE for the original Sol author. Then only the three named files may
-change; the other598 entries, including new spec/plan, stay exact to that manifest.
-Show complete three-file inverses, separating preserved test deltas from the new
-handoff/regression delta. Do not count artifact updates as CODE paths.
-
-Rebind actual complete launcher/c2_program bytes/length/SHA in source/recipe/review
-and existing runtime snapshots. The complete61996 B shell helpers/041ec87d digest,
-five shell literals, D84 body/table/SOURCE84, driver/program/catalog pins, consumer,
-formal/native, maps and bootstrap remain byte-identical. Existing extraction and
-dynamic launcher_sha use actual changed bytes. No fixed external C2-literal or
-launcher hash pin was found in the bounded source search; discovery of another
-real dependency stops for its exact gate, not a fourth implicit binding path.
+**Current source handoff and proof.** G2 PR #797 is accepted and protected-landed
+at current plan-PR base1ed9aeeb5ff25d5a24f5d9a19bdfaecb72bfa6cb. The accepted END
+chain remains intact. This separate combined plan still needs fresh independent
+review, required quick CI and protected landing. Artifact-only gates may proceed
+during evidence closure; no reset/stash/clean or duplicate attempt.
+The original run is COMPLETED FAILURE, but all8raw/metadata/index archives and
+independent79 classification remain pending. Keep source788570, execution baseD5e7,
+source refs/recipe/GO frozen until that evidence is complete and every failure is
+retained. Then fetch latest main containing this accepted plan and normally merge
+it into the same source branch before fresh CODE. That future source plan-base is
+unknown here; neither G2 acceptance nor old GO substitutes for any source gate.
+Intent stays a4197f299974e62bb2b97e004b75182012abbb87; only spec/plan artifacts update,
+other599 entries exactly match source788570 bytes/type/mode/blob. Seal the real
+post-artifact-merge601 preCODE manifest. Fresh CODE for the original Sol author
+allows only this fixture and the scope-qualification shell to change; other599
+entries, including new spec/plan and launcher, stay exact. Artifact merge paths are not CODE paths; old GO
+and source review are not reused.
+Bind full actual fixture bytes/length/SHA in original source/recipe/review records.
+No new pin path opens. Current launcher/c2_program, complete61996 B shell helpers/
+041ec87d, five literals, D84/SOURCE84, driver/catalog, consumer7d58, formal/native,
+maps/bootstrap stay exact. Another necessary source edit stops for its scope gate.
+Require full single-file inverse, setup/order/reference/schema and finite error-path
+proof; peer/invoke/assertion expressions and other controls stay byte-identical.
+Only the exact retained END, writer-boundary/outer-exit and one-line AST deltas above are open.
 After code, perform the applicable pure static checks, bash -n on the affected
 shell and pinned shellcheck 0.11.0 over all 149 shell files; no product trial is
 substituted. Preserve the author's complete diff/report. Independent source,
@@ -2135,7 +2354,8 @@ A deleted later action must fail. Pre-takeover fixture cleanup follows captured
 failure/state and cannot turn production failure into success.
 
 **Only the accepted failure facts.** Keep raw16_t_lifecycle's original two-roots
-operations, compound assertion and whole-leaf failure output unchanged. This leaf
+operations, compound predicate and whole-leaf failure output unchanged; only the
+separately named same-call writer cause/cleanup/outer-exit contact above is open. This leaf
 contact binds consumer and candidate fixture in preserved source
 `22e0a38d3f34bd60efbbb8b112a8bb14d4c71448`, not this artifact branch's source.
 Consumer's original retain_preparation method is 1475–1660, except 1610–1615;
@@ -2198,7 +2418,9 @@ lookup or hooks, exact owner/range, and every exceptional branch. Use the existi
 original negative/positive/cancel controls and their real calls; preserve all
 assertions, two producer/retention calls, two roots, seal and once-close. No new
 fixture print/read implementation, fake authenticated positive or test matrix.
-Keep candidate fixture bytes unchanged. New fields never grant success, GO or
+Keep candidate fixture bytes unchanged except the separately named current ordinary
+contacts above. This does not activate or extend this old failure-facts boundary.
+New fields never grant success, GO or
 qualification. UNKNOWN and a later passing run cannot close the old job3 P1.
 
 The incremental source set is exactly `shadow/v1/_consumer.py` for this boundary,
@@ -4803,10 +5025,11 @@ gates (R9.6).
   operator-graded seed and its test. 150-450 of them are verbatim verdict bytes, which
   cannot leave the PR whose test checks their digests.
 - PR 3: `review_size: standard`, about 300-400 net added lines.
-- This plan-only amendment: `review_size: standard`. One concern: close the normal
-  C2 held-to-custody ownership gap with its minimum regression, retaining the helper
-  input and AST repairs. G2 PR #793 accepts this scope; fresh independent plan
-  review/protected landing remain due. All original proof and invoices remain.
+- This plan-only amendment: `review_size: standard`. One bounded ordinary regression
+  compatibility concern: retained END owner/cleanup, one AST type prerequisite and
+  same-call writer error propagation. G2 PR #797 accepts the scope; this separate
+  plan still needs fresh review, required CI and protected landing. No CODE/runtime
+  GO follows. All original proof and invoices remain.
 
 Each range waives only the soft line signal, never scope, tests, CI, review or human
 merge.
