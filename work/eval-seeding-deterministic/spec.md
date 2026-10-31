@@ -2145,6 +2145,72 @@ to evade the source cap. Executable and policy files always belong to the closur
      facts/retiredR、改L或scope输出。job3/T及job4根因仍UNKNOWN/P1，未来PASS
      不关闭旧失败。所有guard/cap、79/six、native/G3和累计费用义务不变。
 
+     **Ordinary Reader 的固定目录阶段。** 设计源为
+     2b4d98625ea49a0fa3d4da8f5ccc8439e075cc27。只修复独立静态 I1；当前 job5、
+     旧 writer/scope 的动态内因仍 UNKNOWN。采用预建隔离，不采用更新旧 before 的事务。
+     仅 ordinary store_session=None 改布局；原 gate 会话/4096槽/P-wires 保持原样。
+     Reader 在第一次 hold 前，通过一个私有初始化边界，在原 captures 下排他预建
+     ordinary-inputs、ordinary-recording、ordinary-candidate-0000 至0063，共66目录。
+     新目录0700，原 root 必须完整通过原 physical/name/FD/owner/mode/ACL检查；
+     预建失败不继续，保留原 first-error/marked-cancel/关闭责任。预建完成后建立真实
+     captures root hold，此后其 namespace 冻结。记录每个未用 candidate 槽的真实完整
+     identity；首次使用须仍与其同名/FD一致且空。根目录或已用槽不补建、不回收重用。
+
+     64来自原最多16 records、最多两个 qualifying/current角色和原初始/最终两遍
+     认证的乘积。原嵌套 frozen authentication 是 enforced-reproduction，无candidate
+     批次。这个存储布局不是新执行机会或新增应用额度；超出已证明原调用上界须拒绝，
+     不能增长目录、重试或扩大原records/roles/资格。每批消耗一个槽，不按digest复用。
+     所有原candidate的 names/order/raw引用、written identity和全字节/独立SHA检查保留。
+     在该槽先完成这一批全部原排他copy与原parent-close/计费，再建立这一批的原holds；
+     每份hold仍验证其真实written identity和全部bytes，发布到同一owned/inputs和原
+     store/replay关联。所有copy与hold各一次；不跳过原验证，也不把未hold的部分批次
+     当成完整candidate。异常/取消/配额/关闭失败令原输出unusable并真实传播失败，
+     已持有资源由原owner一次关闭，partial目录由原scratch owner处理，不增加清理器。
+
+     全部ordinary非candidate capture（包括Git config、verifier、retained、seed及
+     converter输入）改写入ordinary-inputs。ordinary runtime/source/configuration
+     保留与最后seal统一使用ordinary-recording；原basename、真实source/acquisition、
+     ordinal、flat runtime文件、原case聚合/窗口账、source_copies登记/刷新/关闭协议不变。
+     不将每文件或新槽变为新预算case。两区和全部候选槽在首hold前已存在，故后续输入/
+     recording/其它批次的写入不再改变已持有candidate的任何祖先。既有source_copies
+     只共享recording域；不新增alias before同步，不修改consumer既有刷新函数。
+     已用candidate槽不再写；重查和最终关闭保留全部完整identity。外部root/tmp或任一
+     受保护ancestor发生未知变化仍按原规则拒绝，不宣称本方案消除这种原拒绝。
+
+     生产只开放scope/v1/read-shadow-evidence.py的_Reader.__init__/capture/
+     _authenticate、ordinary目录初始化与candidate写后hold的有限私有边界，以及
+     retain_source_runtime/retain_source_capture/seal_source_captures的同一目的地选择；
+     _retain_source_configuration沿原parent参数不另造入口。仅为同一原工作dict的提前
+     初始化/后续保留，开放_initialize_replay_outputs的精确初始化责任。gate分支仅可
+     机械提取/调用原共享copy和hold正文，路径/谓词/顺序/原实际调用数不变；hold/recheck
+     及所有consumer身份、nlink、no-follow、mode、ACL/name-FD谓词冻结。
+     既有source_copies/owned资源本身和当前正常source保留/关闭算法不改。
+     新准备工作进入同一原replay_output_work/M及原账，不重置、不新造预算owner/池。
+     所有真实mkdir/metadata/ACL/FD/引用、读写/hold/失败/清理累计计费，未测物理与运输
+     费用仍UNKNOWN；不得把目录成本当零或把系统backend工作填成文件payload字节。
+
+     回归仅扩原scripts/test/candidate-content-preparation-fixtures.py的
+     raw16_scope_acquisitions，按独立plan的四个有限控制验证批次隔离/失败/取消，
+     不新增suite/child/工具/provider/native探测。原六控制和其它全量断言不减。
+     该文件raw16_scope_sudo_source、raw16_scope_acquisitions、raw16_scope_P_ownership
+     的三个手工ordinary Reader构造只接回真实同一初始化与新recording locator；
+     占用/P-drift/seal/空目录等原断言改对其实际责任目录，谓词不降。
+     scope-qualification.test.sh的PY_COVERAGE_PURE同样调用真实初始化；保留141检查。
+     gate/recorded-alias手工对象不注入ordinary布局，不改其协议或验收。
+
+     本pass仅六文件：上述Reader与两个测试文件，以及evals/v1/evals.jq、
+     evals/v1/evals-driver.sh、evals/v1/evals-launcher.sh的真实必要机械绑定。
+     Reader完整R/N→program P→driver D→完整helper K；SOURCE84只重绑Reader项的
+     digest/实际长度，原path/mode/membership/selection/guards不变。scope测试原1124、
+     1192 Reader项、2371三处完整Reader固定SHA同步到R；原私有转换的受影响Reader
+     行映射/逆证只按实际字节重算，其它source/consumer/native/map语义不改。
+     driver原三个P、launcher原Reader tuple/P/D、切片外K和fixture原K/实际长度
+     等值全部保留并重绑；完整切片边界和三重等值同原合同。不得伪造新摘要/长度，
+     未变consumer及正式四literal/两native helper/body/d35/1197/1231冻结。
+     六文件外595项对真实post-artifact-merge601冻结；43/八测试/旧40/20/C1六+三pin
+     集合不变。旧C2 caller协议及其绑定已在H2b4d实现，本pass不重开其行为。
+     全部旧费用/失败/UNKNOWN、L/R、native/G3及原79六分片义务不变。此候选不授CODE。
+
      **原 C2 caller 的严格账与 END 拒绝终态。** 固定设计源为
      ac36c43801746089e17702f9b137fd6ee938dddd，执行base5303a67747af0e80c0fb964e979b81d1c11286ed。
      本窄接点明确优先于旧 consumer/invoke/peer字节冻结句，只开放以下两项正常修复
@@ -2180,7 +2246,7 @@ to evade the source cap. Executable and policy files always belong to the closur
      全部原观察/费用、common/window单次转移、ordinal/head不前进、tailUNKNOWN和
      原成功失败断言保持。END函数原4对象/3fold/1cancel、T和AST修复继续保留。
 
-     本pass六个文件均已在R9.3原43路径内。两个行为接点和四个文件的机械绑定如下。
+     已在H2b4d实现的C2六文件均属R9.3原43路径。其两个行为接点和机械绑定合同如下。
      C/N/P/D/K必须从后续独审的实际完整字节计算，禁止全局替换或预造digest。
      | Exact path and binding | Old fixed value / required new value |
      | --- | --- |
@@ -2338,7 +2404,7 @@ to evade the source cap. Executable and policy files always belong to the closur
      既有 fixture 均从同一 launcher 动态提取该 literal，不复制或手写第二份程序。
      完整shell helpers原件为61996 B、SHA
      `041ec87ddf0f04984ce004600da8fb74a81a1931f941489d175b130c41d644a0`。
-     本pass仅按六文件表更新C/N/P/D派生内容及切片外K、fixture的K/实际长度认证。
+     上述已实现C2接点仅按其六文件表更新C/N/P/D及切片外K、fixture的K/实际长度认证。
      五个shell literal、`PY_SHADOW_SOURCE`/SOURCE84 table、program/driver/consumer
      只允许该表列出的精确绑定和schema差异。其余字节、run-evals.sh、四正式observer/
      两native helper/body/hash/d35/1197/1231与九copy/maps语义保持。
