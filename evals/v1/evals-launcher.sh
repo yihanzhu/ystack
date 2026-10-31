@@ -549,9 +549,34 @@ class C2Helpers:
             self.context[name] = self._literal(name)
         self.context["generation_runtime"] = self.context["runtime"] + "/core/v2/generations/" + self.context["generation"]
         resolver = c._DarwinUUIDResolver() if sys.platform == "darwin" else None
-        held = c._open_held(self.scratch, True, c._store_rule(os.geteuid(), os.getegid(), 0o700, True, resolver),
-            "E_STALE", recording_work=self.work, accounting_kind="M")
-        self.build_custody = C2Root(held, self.work, resolver)
+        _build_pending_held = None
+        try:
+            _build_pending_held = c._open_held(self.scratch, True, c._store_rule(os.geteuid(), os.getegid(), 0o700, True, resolver),
+                "E_STALE", recording_work=self.work, accounting_kind="M")
+            self.build_custody = C2Root(_build_pending_held, self.work, resolver)
+            held = _build_pending_held
+            _build_pending_held = None
+        except BaseException as _build_error:
+            if _build_pending_held is None or not _build_pending_held.components:raise
+            _build_first = _build_error
+            _build_recording_error = _build_close_error = _build_close_recording_error = None
+            try:
+                self.work["C2_root_incomplete"] = True
+                c._capture_observation_error(self.work, "M", "C2.root", _build_error)
+            except BaseException as _build_recording:
+                _build_recording_error = _build_recording
+                _build_first = c2_first(_build_first, _build_recording)
+            try:_build_pending_held.close()
+            except BaseException as _build_closing:
+                _build_close_error = _build_closing
+                _build_first = c2_first(_build_first, _build_closing)
+                try:
+                    c._capture_observation_error(self.work, "M", "C2.root", _build_closing)
+                except BaseException as _build_recording:
+                    _build_close_recording_error = _build_recording
+                    _build_first = c2_first(_build_first, _build_recording)
+            if _build_first is _build_error:raise
+            raise _build_first from _build_error
         self.directories = {self.scratch: held}
         self.build_seals = []
         system = self._checked("evals-platform", ["/usr/bin/uname", "-s"]).strip().decode("ascii")

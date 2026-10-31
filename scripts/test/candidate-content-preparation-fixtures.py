@@ -6659,6 +6659,10 @@ def raw16_C2_six_fixes(root: Path, original=None) -> None:
         else:raise AssertionError('helper unexpectedly executed')
         if _six_env_build_error is not sentinel:raise _six_env_build_error
         assert _six_env_calls==[('/usr/bin/uname','-s'),('/usr/bin/uname','-m')] and len(_six_env_joins)==1
+        _six_env_custody=_six_env_helper.build_custody
+        _six_env_held=_six_env_custody.root
+        assert type(_six_env_custody) is fixed['C2Root'] and _six_env_held.components
+        assert sum(item is _six_env_held for item in _six_env_custody.owned)==1
     except BaseException as error:_six_env_primary=error
     finally:
         try:owner._c3_run_tool=_six_env_tool_original
@@ -6669,17 +6673,149 @@ def raw16_C2_six_fixes(root: Path, original=None) -> None:
             try:
                 _six_env_closing_helper=_six_env_helper;_six_env_helper=None
                 _six_env_closing_helper.close()
+                if _six_env_build_error is sentinel:
+                    assert _six_env_custody.closed and not _six_env_held.components
             except BaseException as error:_six_env_cleanup.append(error)
         if _six_env_area is not None:
             try:
                 _six_env_closing_area=_six_env_area;_six_env_area=None
                 _six_env_closing_area.cleanup()
             except BaseException as error:_six_env_cleanup.append(error)
+    _six_env_body_error=_six_env_primary
     for _six_env_error in _six_env_cleanup:_six_env_primary=fixed['c2_first'](_six_env_primary,_six_env_error)
-    if _six_env_primary is not None:raise _six_env_primary
+    if _six_env_primary is not None:
+        if _six_env_body_error is not None and _six_env_primary is not _six_env_body_error:raise _six_env_primary from _six_env_body_error
+        raise _six_env_primary
     assert _six_env_build_error is sentinel and not _six_env_cleanup
     assert owner._c3_run_tool is _six_env_tool_original and os.path.join is _six_env_join_original
     print(json.dumps({'C2_fix':'helper-env','spawn_intercepted':False,'runtime_executed':False,'work':work},sort_keys=True))
+    _handoff_area=None;_handoff_primary=None;_handoff_area_errors=[]
+    _handoff_root_original=fixed['C2Root'];_handoff_close_original=owner.HeldPath.close
+    _handoff_recheck_original=owner.HeldPath.recheck;_handoff_os_close_original=os.close
+    try:
+        _handoff_area=tempfile.TemporaryDirectory(prefix='C2-six-handoff.')
+        _handoff_scratches=[]
+        for _handoff_label in ('H1','H2','H3','H4','H5','H6'):
+            _handoff_path=Path(_handoff_area.name)/_handoff_label
+            _handoff_path.mkdir(mode=0o700);_handoff_path.chmod(0o700)
+            _handoff_scratches.append(str(_handoff_path))
+        for _handoff_label,_handoff_scratch in zip(('H1','H2','H3','H4','H5','H6'),_handoff_scratches):
+            _handoff_helper=None;_handoff_row_primary=None;_handoff_cleanup=[];_handoff_observed=None
+            _handoff_state={'held':None,'fds':(),'entries':0,'held_closes':0,'attempts':[],
+                'real_close_errors':[],'injected':0,'recheck_hits':0,'real_root_init':0}
+            try:
+                _handoff_work=fixed['c2_fresh_work']('C2-six-handoff-'+_handoff_label)
+                _handoff_body=(InterruptedError('controlled handoff cancellation') if _handoff_label=='H2' else
+                    KeyboardInterrupt('controlled first handoff cancellation') if _handoff_label=='H4' else
+                    MemoryError('controlled pending-held constructor'))
+                if _handoff_label=='H2':_handoff_body._scope_signal_cancel=True
+                _handoff_closing=(OSError(5,'controlled after real held close') if _handoff_label in ('H2','H5','H6') else
+                    InterruptedError('controlled held-close cancellation') if _handoff_label in ('H3','H4') else None)
+                if _handoff_label in ('H3','H4'):_handoff_closing._scope_signal_cancel=True
+                _handoff_selected=_handoff_closing if _handoff_label=='H3' else _handoff_body
+                _handoff_arguments=['run',os.path.normpath(os.path.abspath(str(Path(_handoff_area.name)/'seed-a.json'))),'2026-10-31T00:00:00Z']
+                _handoff_helper=fixed['C2Helpers'](_six_env_sources,_handoff_scratch,_handoff_work,())
+                def _handoff_os_close(fd):
+                    if fd not in _handoff_state['fds']:return _handoff_os_close_original(fd)
+                    _handoff_state['attempts'].append(fd)
+                    try:_handoff_os_close_original(fd)
+                    except BaseException as error:
+                        _handoff_state['real_close_errors'].append(error)
+                        raise
+                    if len(_handoff_state['attempts'])==1 and _handoff_closing is not None:
+                        _handoff_state['injected']+=1
+                        raise _handoff_closing
+                def _handoff_close(held):
+                    if held is _handoff_state['held']:_handoff_state['held_closes']+=1
+                    return _handoff_close_original(held)
+                def _handoff_recheck(held,*args,**kwargs):
+                    if held is _handoff_state['held']:
+                        assert _handoff_state['recheck_hits']==0
+                        _handoff_state['recheck_hits']+=1
+                        raise _handoff_body
+                    return _handoff_recheck_original(held,*args,**kwargs)
+                def _handoff_constructor(held,held_work,held_resolver):
+                    _handoff_state['held']=held
+                    _handoff_state['fds']=tuple(component.fd for component in held.components)
+                    _handoff_state['entries']+=1
+                    assert _handoff_state['entries']==1 and type(held) is owner.HeldPath
+                    assert held_work is _handoff_work and held.recording_work is _handoff_work and held.accounting_kind=='M'
+                    assert _handoff_state['fds'] and len(set(_handoff_state['fds']))==len(_handoff_state['fds'])
+                    if sys.platform=='darwin':assert type(held_resolver) is owner._DarwinUUIDResolver
+                    else:assert held_resolver is None
+                    if _handoff_label=='H5':
+                        owner.HeldPath.recheck=_handoff_recheck
+                        _handoff_state['real_root_init']+=1
+                        return _handoff_root_original(held,held_work,held_resolver)
+                    raise _handoff_body
+                fixed['C2Root']=_handoff_constructor;owner.HeldPath.close=_handoff_close;os.close=_handoff_os_close
+                try:_handoff_helper.build(_handoff_arguments)
+                except BaseException as error:_handoff_observed=error
+                else:raise AssertionError('handoff fault accepted')
+                if _handoff_state['real_close_errors']:
+                    _handoff_real_failure=_handoff_observed
+                    for _handoff_error in _handoff_state['real_close_errors']:
+                        _handoff_real_failure=fixed['c2_first'](_handoff_real_failure,_handoff_error)
+                    if _handoff_real_failure is _handoff_state['real_close_errors'][0]:raise _handoff_real_failure
+                    if _handoff_real_failure is _handoff_observed:raise _handoff_real_failure from _handoff_state['real_close_errors'][0]
+                    raise _handoff_real_failure from _handoff_observed
+                assert _handoff_observed is _handoff_selected
+                if _handoff_label=='H3':assert _handoff_observed.__cause__ is _handoff_body
+                assert _handoff_state['entries']==1 and _handoff_state['held_closes']==1
+                assert _handoff_state['real_root_init']==int(_handoff_label=='H5')
+                assert _handoff_state['recheck_hits']==int(_handoff_label=='H5')
+                assert _handoff_state['attempts']==list(reversed(_handoff_state['fds']))
+                assert len(set(_handoff_state['attempts']))==len(_handoff_state['attempts'])
+                assert not _handoff_state['real_close_errors'] and not _handoff_state['held'].components
+                assert _handoff_state['injected']==int(_handoff_closing is not None)
+                assert _handoff_helper.build_custody is None and _handoff_work['C2_root_incomplete'] is True
+                assert _handoff_work['held_close_calls']==len(_handoff_state['fds'])
+                _handoff_close_rows=[row['value'] for row in _handoff_work['accounting_rows'] if row['site']=='held-close']
+                assert len(_handoff_close_rows)==len(_handoff_state['fds'])
+                assert [row['return'] for row in _handoff_close_rows]==([-1] if _handoff_closing is not None else [0])+[0]*(len(_handoff_state['fds'])-1)
+                if _handoff_closing is not None:assert _handoff_close_rows[0]['errno']==_handoff_closing.errno
+                _handoff_error_rows=[row['value'] for row in _handoff_work['accounting_rows'] if row['site']=='C2.root']
+                assert [row['category'] for row in _handoff_error_rows]==[type(_handoff_body).__name__]+([type(_handoff_closing).__name__] if _handoff_closing is not None else [])
+                assert all(row['return']==-1 for row in _handoff_error_rows)
+                assert _handoff_work['metadata_failure']['site']=='C2.root'
+                assert _handoff_work['metadata_failure']['category']==type(_handoff_body).__name__
+            except BaseException as error:_handoff_row_primary=error
+            finally:
+                try:fixed['C2Root']=_handoff_root_original
+                except BaseException as error:_handoff_cleanup.append(error)
+                try:owner.HeldPath.close=_handoff_close_original
+                except BaseException as error:_handoff_cleanup.append(error)
+                try:owner.HeldPath.recheck=_handoff_recheck_original
+                except BaseException as error:_handoff_cleanup.append(error)
+                try:os.close=_handoff_os_close_original
+                except BaseException as error:_handoff_cleanup.append(error)
+                if _handoff_helper is not None:
+                    try:
+                        _handoff_closing_helper=_handoff_helper;_handoff_helper=None
+                        _handoff_closing_helper.close()
+                    except BaseException as error:_handoff_cleanup.append(error)
+                if _handoff_state['held'] is not None and _handoff_state['held'].components:
+                    try:_handoff_close_original(_handoff_state['held'])
+                    except BaseException as error:_handoff_cleanup.append(error)
+            _handoff_row_body_error=_handoff_row_primary
+            for _handoff_error in _handoff_cleanup:_handoff_row_primary=fixed['c2_first'](_handoff_row_primary,_handoff_error)
+            if _handoff_row_primary is not None:
+                if _handoff_row_body_error is not None and _handoff_row_primary is not _handoff_row_body_error:raise _handoff_row_primary from _handoff_row_body_error
+                raise _handoff_row_primary
+            assert fixed['C2Root'] is _handoff_root_original and owner.HeldPath.close is _handoff_close_original
+            assert owner.HeldPath.recheck is _handoff_recheck_original and os.close is _handoff_os_close_original
+    except BaseException as error:_handoff_primary=error
+    finally:
+        if _handoff_area is not None:
+            try:
+                _handoff_closing_area=_handoff_area;_handoff_area=None
+                _handoff_closing_area.cleanup()
+            except BaseException as error:_handoff_area_errors.append(error)
+    _handoff_body_error=_handoff_primary
+    for _handoff_error in _handoff_area_errors:_handoff_primary=fixed['c2_first'](_handoff_primary,_handoff_error)
+    if _handoff_primary is not None:
+        if _handoff_body_error is not None and _handoff_primary is not _handoff_body_error:raise _handoff_primary from _handoff_body_error
+        raise _handoff_primary
     with tempfile.TemporaryDirectory(prefix='C2-six-fixed.') as area:
         base=Path(area);window=base/'window';ephemeral=base/'ephemeral';window.mkdir(mode=0o700);ephemeral.mkdir(mode=0o700)
         source_path=base/'source';source_path.write_bytes(b'abcdef');source_path.chmod(0o400)
