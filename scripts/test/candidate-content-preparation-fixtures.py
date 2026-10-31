@@ -6376,47 +6376,80 @@ def raw16_C2_source_tail(root: Path, mutation=False) -> None:
 
 
 def raw16_C2_terminal(root: Path, short=False, mutation=False) -> None:
-    import shlex,socket
-    launcher=(root/'evals/v1/evals-launcher.sh').read_text()
-    literal=shlex.split(launcher.split('c2_program=',1)[1].split('\nc2_fd9=',1)[0])[0]
-    if mutation:
-        guard='if result != 512:os._exit(1)'
-        assert literal.count(guard)==1;literal=literal.replace(guard,'if False:os._exit(1)')
-    # This is a terminal-only real child, not START/READY/GO, driver success, or a valid session.
-    suffix='''
+    import shlex,socket,tempfile
+    _terminal_cleanup_complete=False
+    owned={name:None for name in ('write','left','right','out_r','out_w','err_r','err_w','null')}
+    area=None;child_pid=None;primary=None;primary_traceback=None;cleanup_uncertain=False;acquisition_complete=False
+    try:
+        launcher=(root/'evals/v1/evals-launcher.sh').read_text()
+        literal=shlex.split(launcher.split('c2_program=',1)[1].split('\nc2_fd9=',1)[0])[0]
+        if mutation:
+            guard='if result != 512:os._exit(1)'
+            assert literal.count(guard)==1;literal=literal.replace(guard,'if False:os._exit(1)')
+        # This is a terminal-only real child, not START/READY/GO, driver success, or a valid session.
+        suffix='''
 import importlib.util
 spec=importlib.util.spec_from_file_location("_C2_terminal_consumer",sys.argv[1])
 c=importlib.util.module_from_spec(spec);sys.modules[spec.name]=c;spec.loader.exec_module(c)
 work=c2_fresh_work("C2-terminal")
 os.close(0)
 '''
-    if short:
-        suffix+='''original=os.write
+        if short:
+            suffix+='''original=os.write
 def short_write(fd,raw):
     if fd==9:return original(fd,memoryview(raw)[:511])
     return original(fd,raw)
 os.write=short_write
 '''
-    suffix+='c2_terminal(work,0,0,0,c2_vector(work))\n'
-    code='__name__="_C2_terminal_only"\n'+literal+suffix
-    left,right=socket.socketpair();out_r,out_w=os.pipe();err_r,err_w=os.pipe();null=os.open('/dev/null',os.O_RDONLY)
-    descriptors=(left.fileno(),right.fileno(),out_r,out_w,err_r,err_w,null)
-    actions=[(os.POSIX_SPAWN_DUP2,null,0),(os.POSIX_SPAWN_DUP2,out_w,1),(os.POSIX_SPAWN_DUP2,err_w,2),(os.POSIX_SPAWN_DUP2,right.fileno(),9)]
-    actions.extend((os.POSIX_SPAWN_CLOSE,fd) for fd in sorted(set(descriptors)) if fd not in {0,1,2,9})
-    c2_spawn_argv=['/usr/bin/python3','-I','-S','-B','-c',code,str(root/'shadow/v1/_consumer.py')]
-    c2_spawn_env={'LC_ALL':'C','PATH':'/usr/bin:/bin'}
-    c2_spawn_tmpdir=os.environ.get('TMPDIR')
-    if c2_spawn_tmpdir is not None:c2_spawn_env['TMPDIR']=c2_spawn_tmpdir
-    pid=os.posix_spawn('/usr/bin/python3',c2_spawn_argv,c2_spawn_env,file_actions=actions)
-    right.close();os.close(out_w);os.close(err_w);os.close(null)
-    try:
+        suffix+='c2_terminal(work,0,0,0,c2_vector(work))\n'
+        code='__name__="_C2_terminal_only"\n'+literal+suffix
+        area=tempfile.TemporaryDirectory()
+        script=Path(area.name)/'terminal.py'
+        owned['write']=script.open('w',encoding='utf-8',newline='')
+        written=owned['write'].write(code)
+        if written!=len(code):raise OSError('C2 terminal incomplete script write')
+        try:
+            resource=owned['write'];owned['write']=None
+            resource.close()
+        except BaseException:
+            cleanup_uncertain=True
+            raise
+        owned['left'],owned['right']=socket.socketpair()
+        owned['out_r'],owned['out_w']=os.pipe()
+        owned['err_r'],owned['err_w']=os.pipe()
+        owned['null']=os.open('/dev/null',os.O_RDONLY)
+        left=owned['left'];right=owned['right']
+        out_r=owned['out_r'];out_w=owned['out_w'];err_r=owned['err_r'];err_w=owned['err_w'];null=owned['null']
+        descriptors=(left.fileno(),right.fileno(),out_r,out_w,err_r,err_w,null)
+        actions=[(os.POSIX_SPAWN_DUP2,null,0),(os.POSIX_SPAWN_DUP2,out_w,1),(os.POSIX_SPAWN_DUP2,err_w,2),(os.POSIX_SPAWN_DUP2,right.fileno(),9)]
+        actions.extend((os.POSIX_SPAWN_CLOSE,fd) for fd in sorted(set(descriptors)) if fd not in {0,1,2,9})
+        c2_spawn_argv=['/usr/bin/python3','-I','-S','-B',str(script),str(root/'shadow/v1/_consumer.py')]
+        c2_spawn_env={'LC_ALL':'C','PATH':'/usr/bin:/bin'}
+        c2_spawn_tmpdir=os.environ.get('TMPDIR')
+        if c2_spawn_tmpdir is not None:c2_spawn_env['TMPDIR']=c2_spawn_tmpdir
+        child_pid=os.posix_spawn('/usr/bin/python3',c2_spawn_argv,c2_spawn_env,file_actions=actions)
+        acquisition_complete=True
+        pid=child_pid
+        for name in ('right','out_w','err_w','null'):
+            try:
+                resource=owned[name];owned[name]=None
+                if name=='right':resource.close()
+                else:os.close(resource)
+            except BaseException:
+                cleanup_uncertain=True
+                raise
         chunks=[]
         while True:
             raw=left.recv(513)
             if not raw:break
             chunks.append(raw)
         observed=b''.join(chunks);output,error=os.read(out_r,1024),os.read(err_r,1024)
-        waited,status=os.waitpid(pid,0)
+        try:waited,status=os.waitpid(pid,0)
+        except BaseException:
+            cleanup_uncertain=True
+            raise
+        if waited==pid:child_pid=None
+        else:cleanup_uncertain=True
         assert waited==pid and not output and not error
         if short:assert status==256 and len(observed)==511
         else:
@@ -6425,7 +6458,43 @@ os.write=short_write
             assert parsed[0]==b'YC2DONE1' and parsed[1:54]==(0,)*53 and parsed[54]==bytes(80)
         print(json.dumps({'case':'terminal-short' if short else 'terminal-only','wait':status,'actual_control_bytes':len(observed),
             'stdout_bytes':len(output),'stderr_bytes':len(error),'full_session':False,'short_fault_shim':short,'actions':actions},sort_keys=True))
-    finally:left.close();os.close(out_r);os.close(err_r)
+    except BaseException as error:
+        if not acquisition_complete:cleanup_uncertain=True
+        primary=error;primary_traceback=error.__traceback__
+    finally:
+        for name in ('write','left','right','out_r','out_w','err_r','err_w','null'):
+            try:
+                resource=owned[name];owned[name]=None
+                if resource is not None:
+                    if name in ('write','left','right'):resource.close()
+                    else:os.close(resource)
+            except BaseException as error:
+                cleanup_uncertain=True
+                if primary is None or ((isinstance(error,KeyboardInterrupt) or getattr(error,'_scope_signal_cancel',False)) and
+                        not (isinstance(primary,KeyboardInterrupt) or getattr(primary,'_scope_signal_cancel',False))):
+                    primary=error;primary_traceback=error.__traceback__
+        while child_pid is not None:
+            try:
+                cleanup_waited,cleanup_status=os.waitpid(child_pid,0)
+                if cleanup_waited!=child_pid:raise RuntimeError('C2 terminal exact child reap mismatch')
+                child_pid=None
+            except BaseException as error:
+                cleanup_uncertain=True
+                if primary is None or ((isinstance(error,KeyboardInterrupt) or getattr(error,'_scope_signal_cancel',False)) and
+                        not (isinstance(primary,KeyboardInterrupt) or getattr(primary,'_scope_signal_cancel',False))):
+                    primary=error;primary_traceback=error.__traceback__
+                if not (isinstance(error,(InterruptedError,KeyboardInterrupt)) or getattr(error,'_scope_signal_cancel',False)):break
+        if area is not None:
+            try:
+                resource=area;area=None
+                resource.cleanup()
+            except BaseException as error:
+                cleanup_uncertain=True
+                if primary is None or ((isinstance(error,KeyboardInterrupt) or getattr(error,'_scope_signal_cancel',False)) and
+                        not (isinstance(primary,KeyboardInterrupt) or getattr(primary,'_scope_signal_cancel',False))):
+                    primary=error;primary_traceback=error.__traceback__
+        if not cleanup_uncertain and child_pid is None:_terminal_cleanup_complete=True
+    if primary is not None:raise primary.with_traceback(primary_traceback)
 
 
 def raw16_C2_lifecycle_deletion(root: Path) -> None:
@@ -6452,6 +6521,7 @@ def raw16_C2_lifecycle_deletion(root: Path) -> None:
         actual=frame.tb_frame.f_locals
         assert frame.tb_frame.f_code.co_name=='raw16_C2_terminal'
         assert actual['status']==0 and len(actual['observed'])==511
+        assert actual.get('_terminal_cleanup_complete') is True
     else:raise AssertionError('C2 short-DONE deletion undetected')
     print(json.dumps({'C2_installed_length_deletion_detected':True,'C2_D_actual_tail_transfer_deletion_detected':True,
         'C2_short_DONE_retry_gate_deletion_detected':True}))

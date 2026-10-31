@@ -8595,15 +8595,15 @@ finally:
                                 recheck_frame.f_code is codes[4] and parent.f_lineno==(4273,4283)[edge] and
                                 recheck_frame.f_lineno in ((607,618),(609,620))[edge]):
                             local=recheck_frame.f_locals
-                            owner=local.get('self');component=local.get('component');index=local.get('index')
+                            owner=local.get('self');component=local.get('component');_metadata_component_index=local.get('index')
                             bucket=events.get(id(recheck_frame))
-                            if (type(owner) is owner_class and type(index) is int and 0<=index<len(owner.components) and
-                                    owner.components[index] is component and type(bucket) is dict and
-                                    bucket.get('component')==(id(recheck_frame),index)):
+                            if (type(owner) is owner_class and type(_metadata_component_index) is int and 0<=_metadata_component_index<len(owner.components) and
+                                    owner.components[_metadata_component_index] is component and type(bucket) is dict and
+                                    bucket.get('component')==(id(recheck_frame),_metadata_component_index)):
                                 if edge==0:
                                     same=(frame.f_locals.get('fd')==parent.f_locals.get('fd')==component.fd)
                                 else:
-                                    previous_component=owner.components[index-1] if index>0 else None
+                                    previous_component=owner.components[_metadata_component_index-1] if _metadata_component_index>0 else None
                                     same=(previous_component is not None and frame.f_locals.get('name')==parent.f_locals.get('name')==component.name and
                                         frame.f_locals.get('parent_fd')==parent.f_locals.get('parent_fd')==previous_component.fd)
                                 destination=bucket.get('returns')

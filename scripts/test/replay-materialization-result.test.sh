@@ -1520,7 +1520,7 @@ import json
 import sys
 record = json.load(open(sys.argv[1], encoding="utf-8"))
 shell = json.load(open(sys.argv[2], encoding="utf-8"))
-assert record["token"] == sys.argv[3] and record["case"] == sys.argv[4]
+assert record["token"] == sys.argv[3] and record["case"] == sys.argv[4], "receiver completion token/case mismatch"
 assert shell["token"] == sys.argv[3] and shell["case"] == sys.argv[4]
 assert shell["wait_complete"] == 1 and shell["cancel_failed"] == 0
 PY
@@ -1810,7 +1810,7 @@ import json
 import sys
 record = json.load(open(sys.argv[1], encoding="utf-8"))
 assert record["primary_failure"] == "outward stdout was not empty"
-assert record["decoded_status"] == 37 and record["capture_complete"]
+assert record["decoded_status"] == 37 and record["capture_complete"], "natural-zero receiver status/capture mismatch"
 PY
 for control_case in malformed wrong-case duplicate out-of-order record-overflow control-overflow \
   stream-overflow stderr-overflow admission-write-failure identity-missing identity-wrong \
@@ -1829,7 +1829,7 @@ import json
 import sys
 record = json.load(open(sys.argv[1], encoding="utf-8"))
 assert record["wait_eintr_retried"] and record["decoded_status"] == -9
-assert record["signal_attempts"] == 1 and not record["cleanup_errors"]
+assert record["signal_attempts"] == 1 and not record["cleanup_errors"], "wait-eintr receiver signal/cleanup mismatch"
 PY
 python3 - \
   "$tmp/control-signal-error/completion-"*'.json' \
@@ -1839,7 +1839,7 @@ import json
 import sys
 signal_error, exhausted, missing = [json.load(open(path, encoding="utf-8")) for path in sys.argv[1:]]
 assert signal_error["signal_attempts"] == 1 and signal_error["decoded_status"] == 42
-assert signal_error["cleanup_errors"] == ["signal failed: [Errno 5] injected group signal error"]
+assert signal_error["cleanup_errors"] == ["signal failed: [Errno 5] injected group signal error"], "signal-error receiver cleanup mismatch"
 assert exhausted["decoded_status"] is None and exhausted["rescue_status"] == -9
 assert exhausted["reaped"] is False and "child reap deadline expired" in exhausted["cleanup_errors"]
 assert missing["decoded_status"] is None and missing["rescue_status"] == -9
@@ -1854,7 +1854,7 @@ import json
 import sys
 blocked, broken, restoration = [json.load(open(path, encoding="utf-8")) for path in sys.argv[1:]]
 assert blocked["primary_failure"] == "diagnostic publication failed"
-assert blocked["diagnostic_errors"] == ["TimeoutError: diagnostic write deadline expired"]
+assert blocked["diagnostic_errors"] == ["TimeoutError: diagnostic write deadline expired"], "blocked diagnostic receiver error mismatch"
 assert blocked["diagnostic_sink_connected"] and blocked["diagnostic_prefill_bytes"] > 0
 assert blocked["diagnostic_blocked_writes"] > 1
 assert blocked["elapsed"] >= 5 and blocked["diagnostic_flags_restored"]
@@ -1879,7 +1879,7 @@ import json
 import sys
 record_exact, control_exact, stdout_exact, stderr_exact = [
     json.load(open(path, encoding="utf-8")) for path in sys.argv[1:]]
-assert record_exact["max_control_record"] == 4096 and not record_exact["cleanup_errors"]
+assert record_exact["max_control_record"] == 4096 and not record_exact["cleanup_errors"], "record-exact receiver size/cleanup mismatch"
 assert control_exact["control_bytes"] == 64 * 1024 and not control_exact["cleanup_errors"]
 assert stdout_exact["stream_bytes"] == {"stdout": 64 * 1024, "stderr": 0}
 assert stdout_exact["primary_failure"] == "outward stdout was not empty"
@@ -1952,7 +1952,7 @@ import json
 import sys
 record = json.load(open(sys.argv[1], encoding="utf-8"))
 assert record["signal_attempt"] == "PID-SIGKILL" and record["signal_attempts"] == 1
-assert not record["possible_admission"] and record["decoded_status"] == -9
+assert not record["possible_admission"] and record["decoded_status"] == -9, "identity-refusal receiver admission/status mismatch"
 PY
 done
 pass 'receiver supervision rejects malformed, misidentified, reordered, oversized, and overflowing evidence'
@@ -2022,7 +2022,7 @@ import json
 import sys
 record = json.load(open(sys.argv[1], encoding="utf-8"))
 shell = json.load(open(sys.argv[2], encoding="utf-8"))
-assert record["token"] == sys.argv[3] and record["case"] == sys.argv[4]
+assert record["token"] == sys.argv[3] and record["case"] == sys.argv[4], "cancellation-boundary completion token/case mismatch"
 assert record["primary_failure"] == "cancelled at " + sys.argv[5]
 assert shell["wait_complete"] == 1 and shell["cancel_failed"] == 0
 if sys.argv[6] == "bash": assert shell["pending"] == sys.argv[5] or shell["pending"] in ("INT", "TERM")
@@ -2056,7 +2056,7 @@ import json
 import sys
 completion, diagnostic = [json.load(open(path, encoding="utf-8")) for path in sys.argv[1:]]
 assert completion["primary_failure"] == "cancelled at diagnostic-publication"
-assert completion["outcome_sealed"] and completion["pending_signal"] == 15
+assert completion["outcome_sealed"] and completion["pending_signal"] == 15, "diagnostic-publication cancellation seal/signal mismatch"
 assert diagnostic["outcome_sealed"] is False and diagnostic["primary_failure"] is None
 PY
 
@@ -2088,7 +2088,7 @@ import json
 import sys
 record = json.load(open(sys.argv[1], encoding="utf-8"))
 assert record["primary_failure"] == "invalid " + sys.argv[2] + " record"
-assert record["owned_pid"] is None and record["signal_attempts"] == 0
+assert record["owned_pid"] is None and record["signal_attempts"] == 0, "invalid-control receiver ownership/signal mismatch"
 assert record["group_absent"] and record["capture_complete"]
 PY
   [ ! -e "$tmp/invalid-$invalid_control-record/control.product" ] ||
@@ -2107,7 +2107,7 @@ import json
 import signal
 import sys
 record = json.load(open(sys.argv[1], encoding="utf-8"))
-assert record["inherited_blocked"] == sorted([signal.SIGINT, signal.SIGTERM])
+assert record["inherited_blocked"] == sorted([signal.SIGINT, signal.SIGTERM]), "inherited-blocked receiver signal mask mismatch"
 assert record["primary_failure"] == "cancelled at setup" and record["signal_attempts"] == 1
 PY
 printf 'inherited-blocked\tsetup\tPASS\n' >> "$receiver_control_inventory"
@@ -2122,7 +2122,7 @@ import json
 import sys
 record, shell = [json.load(open(path, encoding="utf-8")) for path in sys.argv[1:]]
 assert record["primary_failure"] is None and record["signal_attempts"] == 1
-assert shell["pending"] == "TERM" and shell["wait_complete"] == 1
+assert shell["pending"] == "TERM" and shell["wait_complete"] == 1, "wait-completion race shell pending/wait mismatch"
 PY
 printf 'wait-completion-race\tcompletion-handoff\tPASS\n' >> "$receiver_control_inventory"
 
@@ -2134,7 +2134,7 @@ import json
 import sys
 record, shell = [json.load(open(path, encoding="utf-8")) for path in sys.argv[1:]]
 assert shell["pending"] == "shell-error" and shell["wait_complete"] == 1
-assert record["primary_failure"].startswith("cancelled")
+assert record["primary_failure"].startswith("cancelled"), "shell-error receiver cancellation mismatch"
 PY
 printf 'shell-error\texit-wait\tPASS\n' >> "$receiver_control_inventory"
 
@@ -2149,7 +2149,7 @@ import json
 import sys
 record, shell = [json.load(open(path, encoding="utf-8")) for path in sys.argv[1:]]
 assert shell["cancel_failed"] == 1 and shell["wait_complete"] == 1
-assert shell["pending"] == "INT"
+assert shell["pending"] == "INT", "cancel-write failure shell pending mismatch"
 assert record["primary_failure"] == "cancellation control deadline expired at setup"
 assert record["elapsed"] >= 5 and not record["cleanup_errors"]
 assert record["signal_attempts"] == 1 and record["reaped"] and record["group_absent"]
@@ -2169,7 +2169,7 @@ import json
 import sys
 before, owned, retired = [json.load(open(path, encoding="utf-8")) for path in sys.argv[1:]]
 assert before["primary_failure"] == "RuntimeError: injected exception before child launch"
-assert before["owned_pid"] is None and before["signal_attempts"] == 0
+assert before["owned_pid"] is None and before["signal_attempts"] == 0, "before-admission exception receiver ownership/signal mismatch"
 assert before["capture_complete"] and before["group_absent"]
 assert owned["primary_failure"] == "RuntimeError: injected exception while direct child is gated"
 assert owned["signal_attempt"] == "PID-SIGKILL" and owned["signal_attempts"] == 1
@@ -2189,7 +2189,7 @@ import json
 import sys
 record = json.load(open(sys.argv[1], encoding="utf-8"))
 assert record["case"] == sys.argv[2] and record["diagnostic_errors"] == []
-assert record["signal_attempts"] == 1 and record["capture_complete"]
+assert record["signal_attempts"] == 1 and record["capture_complete"], "publication-failure receiver signal/capture mismatch"
 PY
   managed_retention=1
   : > "$tmp/$publication_case/retained"
