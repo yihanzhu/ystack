@@ -2157,7 +2157,8 @@ to evade the source cap. Executable and policy files always belong to the closur
      任何业务capture或布局发布前，以该真实resolver完成root及全部66目录的原完整
      physical/name/FD/owner/mode/ACL认证，并与预建保存的完整identity比较；不得更新
      expected掩盖间隔变化。生产构造器禁止None/假resolver、跳过Darwin ACL或额外平台调用。
-     全部认证成功才发布布局和原owned中的真实captures root hold；namespace从预建
+     先在局部备齐全部路径、槽位状态和已认证root，再向原owned移交root一次，以单一完整结果发布布局。
+     发布失败时布局不可用；已交接root由Reader.close负责，未交接由原局部责任关闭一次。namespace从预建
      完成即冻结。任一阶段失败停止，由原finally保留first-error/marked-cancel并一次
      关闭实际取得资源；不发布partial。首次使用candidate槽仍验证同名/FD完整identity
      与原保存值一致且空。根目录或已用槽不补建、不回收重用。
@@ -2175,6 +2176,10 @@ to evade the source cap. Executable and policy files always belong to the closur
      store/replay关联。所有copy与hold各一次；不跳过原验证，也不把未hold的部分批次
      当成完整candidate。异常/取消/配额/关闭失败令原输出unusable并真实传播失败，
      已持有资源由原owner一次关闭，partial目录由原scratch owner处理，不增加清理器。
+     只传播本批实际copy/hold/登记错误。普通批的replay holds登记若失败，按原途径记错并传播
+     同一个错误，即使bundle_owner=None也不得发布完整acquisition。批外原retention guard及
+     成功后的关联失败仍走原路径。普通布局/交接按发生顺序保留首个KeyboardInterrupt、
+     SystemExit或marked cancel；无此类错误则保留首个普通主错。清理次错的原对象须可见。
 
      全部ordinary非candidate capture（包括Git config、verifier、retained、seed及
      converter输入）改写入ordinary-inputs。ordinary runtime/source/configuration
@@ -2191,8 +2196,11 @@ to evade the source cap. Executable and policy files always belong to the closur
      retain_source_runtime/retain_source_capture/seal_source_captures的同一目的地选择；
      _retain_source_configuration沿原parent参数不另造入口。仅为同一原工作dict的提前
      初始化/后续保留，开放_initialize_replay_outputs的精确初始化责任。gate分支仅可
-     机械提取/调用原共享copy和hold正文，路径/谓词/顺序/原实际调用数不变；hold/recheck
-     及所有consumer身份、nlink、no-follow、mode、ACL/name-FD谓词冻结。
+     机械提取/调用原共享copy和hold正文。共享Reader.hold唯一新增责任是从原_hold_bytes返回
+     到原owned登记成功前持有该item：登记失败而未交接则真实item.close一次；已交接则由
+     Reader.close关闭，不重复或重试不确定的关闭。普通批另按上条传播自身replay登记失败。
+     gate其它路径/谓词/顺序/调用和异常身份保持：原gate构造抛普通A、原close抛普通B时
+     仍传播B并保留context A。原recheck及consumer身份、nlink、no-follow、mode、ACL/name-FD谓词冻结。
      既有source_copies/owned资源本身和当前正常source保留/关闭算法不改。
      新准备工作进入同一原replay_output_work/M及原账，不重置、不新造预算owner/池。
      所有真实mkdir/metadata/ACL/FD/引用、读写/hold/失败/清理累计计费，未测物理与运输
@@ -2201,6 +2209,12 @@ to evade the source cap. Executable and policy files always belong to the closur
      回归仅扩原scripts/test/candidate-content-preparation-fixtures.py的
      raw16_scope_acquisitions，按独立plan的四个有限控制验证批次隔离/失败/取消，
      不新增suite/child/工具/provider/native探测。原六控制和其它全量断言不减。
+     四控制内复用第二次partial hold：取得真实item后在原owned登记处抛同一marked cancel。
+     未交接的第二项由hold真实关闭一次；首项由Reader.close关闭。实取101、成功登记100、
+     失败登记1；多一次真实获取/读取/FD/open/close/异常费用累计，132 copies、2 inputs、
+     199成功mkdir不变。layout负控核mkdir原dir_fd非空并经已委托os.close真实关闭一次。
+     负控只在目标操作消费预期错误；其它错误/取消原样传播。drift先完成33次登记与真实
+     bytes核对、写入真实sibling，再仅以目标recheck的原拒绝满足断言。
      该文件raw16_scope_sudo_source、raw16_scope_acquisitions、raw16_scope_P_ownership
      的三个手工ordinary Reader构造只接回真实同一初始化与新recording locator。
      仅这三个既有manual setup在原_acl_state替身有效期间保留原reader.darwin=None，
