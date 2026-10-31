@@ -2156,7 +2156,7 @@ to evade the source cap. Executable and policy files always belong to the closur
      原self.python/self.consumer及其余原先置holds按原顺序取得，原self.darwin建立后、
      任何业务capture或布局发布前，以该真实resolver完成root及全部66目录的原完整
      physical/name/FD/owner/mode/ACL认证，并与预建保存的完整identity比较；不得更新
-     expected掩盖间隔变化。禁止None/假resolver、跳过Darwin ACL或额外平台调用。
+     expected掩盖间隔变化。生产构造器禁止None/假resolver、跳过Darwin ACL或额外平台调用。
      全部认证成功才发布布局和原owned中的真实captures root hold；namespace从预建
      完成即冻结。任一阶段失败停止，由原finally保留first-error/marked-cancel并一次
      关闭实际取得资源；不发布partial。首次使用candidate槽仍验证同名/FD完整identity
@@ -2167,6 +2167,9 @@ to evade the source cap. Executable and policy files always belong to the closur
      批次。这个存储布局不是新执行机会或新增应用额度；超出已证明原调用上界须拒绝，
      不能增长目录、重试或扩大原records/roles/资格。每批消耗一个槽，不按digest复用。
      所有原candidate的 names/order/raw引用、written identity和全字节/独立SHA检查保留。
+     _authenticate仍按同一body.record_form取得原完整names：withheld-write.v1为32名，
+     withheld-write-policy.v1为33名。批次保留该form的完整集合与原顺序，不强制所有批次
+     为33名，不删policy成员或放宽原capture成员谓词；四新增控制仍使用policy33。
      在该槽先完成这一批全部原排他copy与原parent-close/计费，再建立这一批的原holds；
      每份hold仍验证其真实written identity和全部bytes，发布到同一owned/inputs和原
      store/replay关联。所有copy与hold各一次；不跳过原验证，也不把未hold的部分批次
@@ -2199,9 +2202,15 @@ to evade the source cap. Executable and policy files always belong to the closur
      raw16_scope_acquisitions，按独立plan的四个有限控制验证批次隔离/失败/取消，
      不新增suite/child/工具/provider/native探测。原六控制和其它全量断言不减。
      该文件raw16_scope_sudo_source、raw16_scope_acquisitions、raw16_scope_P_ownership
-     的三个手工ordinary Reader构造只接回真实同一初始化与新recording locator；
+     的三个手工ordinary Reader构造只接回真实同一初始化与新recording locator。
+     仅这三个既有manual setup在原_acl_state替身有效期间保留原reader.darwin=None，
+     经该原ACL seam执行同一真实布局和全部原physical/name/FD/identity/mode检查。
+     不新增fake owner/resolver、生产None fallback、类型检查绕过或source/runtime/platform
+     调用。原case/assertion/call/order、异常身份、取消、finally恢复、once-close、累计
+     费用及原非native/qualification=False输出不变。
      占用/P-drift/seal/空目录等原断言改对其实际责任目录，谓词不降。
-     scope-qualification.test.sh的PY_COVERAGE_PURE同样调用真实初始化；保留141检查。
+     scope-qualification.test.sh的PY_COVERAGE_PURE同样调用真实初始化；保留其真实
+     _DarwinChildOwner和完整ACL责任，不适用上述None seam；保留141检查。
      gate/recorded-alias手工对象不注入ordinary布局，不改其协议或验收。
 
      同一scope测试仅另开原foreground位置绑定：consumer完整_foreground相对ac36
