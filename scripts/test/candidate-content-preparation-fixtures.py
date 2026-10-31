@@ -5992,6 +5992,7 @@ class _C2FixtureCaller:
         self.fixed['c2_message'](start, 'START')
         self.fixed['c2_reserve'](before,reservation)
         owned, sockets, child, first = [], [], None, None
+        child_wait_started=False;protocol_failure=protocol_later_error=None
         pending,pending_pair=None,None
         caller_socket=child_socket=None
         stdout, stderr, control = [], [], []
@@ -6044,7 +6045,11 @@ class _C2FixtureCaller:
                         self._receive_charge(raw);lengths[stream] += len(raw)
                         if not raw:
                             selected.unregister(key.fileobj)
-                            if stream=='control':assert phase=='EOF'
+                            if stream=='control':
+                                try:assert phase=='EOF'
+                                except AssertionError as error:
+                                    if end is not None and phase=='DONE' and remaining==512 and not pieces:protocol_failure=error
+                                    else:raise
                             continue
                         if stream!='control':
                             assert lengths[stream]<=1048576
@@ -6082,10 +6087,12 @@ class _C2FixtureCaller:
                             assert done[2]==len(received[-1][1]) and done[3]==done[2]+4
                             phase='EOF';remaining=1
                         else:raise AssertionError('C2 trailing control bytes')
-            waited,status=os.waitpid(child,0);expected_child=child;child=None
+            expected_child=child;child_wait_started=True
+            waited,status=os.waitpid(child,0);child=None
             self.last_attempt['wait']=status
             self.observe('C2.caller-wait',{'pid':waited,'status':status})
             assert waited==expected_child
+            if protocol_failure is not None:raise protocol_failure
             output,error=b''.join(stdout),b''.join(stderr)
             self._receive_charge(output);self._receive_charge(error)
             assert status==0 and end is not None and done is not None and phase=='EOF'
@@ -6109,14 +6116,17 @@ class _C2FixtureCaller:
             self.settle_child(combined)
             candidate=receipt
         except BaseException as error:
-            first=error;self.failed=True
+            protocol_later_error=error
+            first=error if protocol_failure is None or error is protocol_failure else self.fixed['c2_first'](protocol_failure,error)
+            self.failed=True
             for target in (self.window_work,self.common_case):
                 target['C2_child_tail_unknown']=True
                 target['C2_accounting_incomplete']=True
         finally:
-            if child is not None:
+            if child is not None and not child_wait_started:
                 try:
                     os.kill(child,signal.SIGTERM)
+                    child_wait_started=True
                     waited,status=os.waitpid(child,0);child=None
                     self.last_attempt['wait']=status
                     self.observe('C2.caller-failed-wait',{'pid':waited,'status':status})
@@ -6679,7 +6689,7 @@ def raw16_C2_six_fixes(root: Path, original=None) -> None:
         assert text.count(_six_env_start)==text.count(_six_env_end)==1
         _six_env_helpers=text[text.index(_six_env_start):text.index(_six_env_end)]
         assert len(_six_env_helpers.encode('utf-8'))==61996
-        assert hashlib.sha256(_six_env_helpers.encode('utf-8')).hexdigest()==fixed['_C2_HELPERS_SHA256']=='041ec87ddf0f04984ce004600da8fb74a81a1931f941489d175b130c41d644a0'
+        assert hashlib.sha256(_six_env_helpers.encode('utf-8')).hexdigest()==fixed['_C2_HELPERS_SHA256']=='80aacc25e96d4378182f2fea01f6362ffe542b78709208ab9f8694d8b6e3c52c'
         _six_env_area=tempfile.TemporaryDirectory(prefix='C2-six-env.')
         _six_env_scratch=str(Path(_six_env_area.name)/'scratch')
         Path(_six_env_scratch).mkdir(mode=0o700);Path(_six_env_scratch).chmod(0o700)
@@ -9659,7 +9669,7 @@ def _raw16_C1_foreground_finally_seam(c, handoff) -> dict:
     import ast
     import copy
     source_text = Path(c.__file__).read_text()
-    assert hashlib.sha256(source_text.encode()).hexdigest() == '7d58f60c6622ae4e3f22167a3429d72a0d65e826c8d91bf87a016644226018ad'
+    assert hashlib.sha256(source_text.encode()).hexdigest() == '0172c23667de7d4496031f9c815d65457d859ee303c477d6d1946909f85d81fc'
     source = ast.parse(source_text)
     classes = [node for node in source.body if isinstance(node, ast.ClassDef) and node.name == '_DarwinChildOwner']
     assert len(classes) == 1

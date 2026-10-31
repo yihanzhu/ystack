@@ -3363,6 +3363,11 @@ def _c3_owner_receipt_values(slot, value, *, complete=False):
 
 
 _C3_OBSERVATION_KEYS = {
+    "C2.caller-spawn": (("actions", "pid"),),
+    "C2.caller-child-socket-close": (("return",),),
+    "C2.caller-wait": (("pid", "status"),),
+    "C2.caller-failed-wait": (("pid", "status"),),
+    "C2.caller-control-close": (("return",),),
     "C2.namespace-close": (("return",),),
     "C2.namespace": (("fd", "names"),),
     "C2.created-namespace": (("fd", "name"),),
@@ -3440,7 +3445,7 @@ for _c1_site in ("C1-P-final-recheck", "C1-P-close", "C1-side-encoding-account",
         "C1-P-before-spawn", "C1-P-spawn", "C1-P-foreground-close", "C1-P-parent-root-close",
         "C1-P-C_REQUEST", "C1-P-C_RELEASED", "C1-P-FINAL_OWNER", "C1-P-CLOSED", "C1-P-COMPLETE"):
     _C3_OBSERVATION_KEYS[_c1_site] = _C3_OBSERVATION_KEYS.get(_c1_site, ()) + (("return", "errno", "category"),)
-_C3_CLOSE_SITES = ('C2.clone-root-pending', 'C2.copy-failed-writer', 'C2.copy-writer', 'C2.driver-input-source-close', 'C2.receipt-failed-writer', 'C2.receipt-writer', 'C2.root-descriptor', 'C2.stdin', 'C3.driver-parent-end', 'C3.driver-pending-close', 'C3.driver-pipe-close', 'held-pending-close', 'held-rows-close', 'offline-preparation-boundary', 'preparation-capture-writer', 'preparation-document-close', 'qualified-runtime', 'replay-derived-write', 'scope-sudo-dup-compensation', 'source-configuration-directory', 'source-configuration-held-close', 'sudo-storage-P-close', 'sudo-storage-original-close') + ("C1-P-close",)
+_C3_CLOSE_SITES = ('C2.clone-root-pending', 'C2.copy-failed-writer', 'C2.copy-writer', 'C2.driver-input-source-close', 'C2.receipt-failed-writer', 'C2.receipt-writer', 'C2.root-descriptor', 'C2.stdin', 'C3.driver-parent-end', 'C3.driver-pending-close', 'C3.driver-pipe-close', 'held-pending-close', 'held-rows-close', 'offline-preparation-boundary', 'preparation-capture-writer', 'preparation-document-close', 'qualified-runtime', 'replay-derived-write', 'scope-sudo-dup-compensation', 'source-configuration-directory', 'source-configuration-held-close', 'sudo-storage-P-close', 'sudo-storage-original-close') + ("C1-P-close", "C2.caller-prepared-close", "C2.caller-pending-close", "C2.caller-tail-close")
 
 
 def _c3_ledger_values(work, owner_receipts, retained, errors, unknown):

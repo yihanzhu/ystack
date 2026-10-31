@@ -1189,7 +1189,7 @@ PY_MAC_TRANSITION
 python3 -I -S -B - "$root" "$tmp/stale-observation" <<'PY_STALE_PREPARE'
 import difflib,hashlib,json,pathlib,shlex
 root=pathlib.Path(__import__('sys').argv[1]);area=pathlib.Path(__import__('sys').argv[2])
-expected={'scope/v1/evaluate-scope.sh': 'fe6048b5eada5d86531e085acd0a9f46b73028d348349ab932e8c59f4e2ed66a', 'scope/v1/read-shadow-evidence.py': '201791d1783d4130ec947bc60ed61cd5cec9d45da98eae033d1b859b9761e404', 'shadow/v1/_consumer.py': '7d58f60c6622ae4e3f22167a3429d72a0d65e826c8d91bf87a016644226018ad'}
+expected={'scope/v1/evaluate-scope.sh': 'fe6048b5eada5d86531e085acd0a9f46b73028d348349ab932e8c59f4e2ed66a', 'scope/v1/read-shadow-evidence.py': '201791d1783d4130ec947bc60ed61cd5cec9d45da98eae033d1b859b9761e404', 'shadow/v1/_consumer.py': '0172c23667de7d4496031f9c815d65457d859ee303c477d6d1946909f85d81fc'}
 for path,digest in expected.items():
     assert hashlib.sha256((root/path).read_bytes()).hexdigest()==digest
 observer_source = r"""import hashlib,json,os,runpy,stat,sys,time,types
@@ -3544,7 +3544,7 @@ old=old.replace("return (frame.f_code.co_filename in source_codes and\n         
 assert hashlib.sha256(old.encode()).hexdigest()=='0c2b1c8c8cb9c662c55e17e134f408693ab4ead8f27357ad6cb2b7bcc0b820eb'
 root=Path(sys.argv[2]).resolve()
 consumer=(root/'shadow/v1/_consumer.py').read_bytes()
-assert hashlib.sha256(consumer).hexdigest()=='7d58f60c6622ae4e3f22167a3429d72a0d65e826c8d91bf87a016644226018ad'
+assert hashlib.sha256(consumer).hexdigest()=='0172c23667de7d4496031f9c815d65457d859ee303c477d6d1946909f85d81fc'
 old_wrapper=wrapper.replace("try:\n    for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):\n        signal.signal(number, cancel)\n    signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})\n    sys.settrace(dispatch)\n    exec(compiled_code, {'__name__': '__main__'})\n","for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):\n    signal.signal(number, cancel)\nsignal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})\nsys.settrace(dispatch)\ntry:\n    exec(compiled_code, {'__name__': '__main__'})\n",1)
 old_wrapper=old_wrapper.replace('import dis, json, os, signal, sys, time, types','import json, os, signal, sys, time',1)
 old_wrapper=old_wrapper.replace('    bound_cache.clear()\n','')
@@ -5236,7 +5236,7 @@ def process_snapshot_controls(area,module):
     package=area/'process-helper-package';directory=package/'scope/v1';directory.mkdir(parents=True)
     source=package/'shadow/v1';source.mkdir(parents=True)
     consumer_bytes=Path(module.__file__).read_bytes()
-    assert hashlib.sha256(consumer_bytes).hexdigest()=='7d58f60c6622ae4e3f22167a3429d72a0d65e826c8d91bf87a016644226018ad'
+    assert hashlib.sha256(consumer_bytes).hexdigest()=='0172c23667de7d4496031f9c815d65457d859ee303c477d6d1946909f85d81fc'
     (source/'_consumer.py').write_bytes(consumer_bytes)
     ctypes_source=module._hold_bytes(module.ctypes.__file__,module.EXECUTABLE_LIMIT)
     ctypes_native=module._hold_bytes(sys.modules['_ctypes'].__file__,module.EXECUTABLE_LIMIT)
@@ -5250,9 +5250,9 @@ def process_snapshot_controls(area,module):
     runtime_inputs[executable.held.path]=tuple(getattr(executable.held.before,key) for key in identity_fields)
     original_helper=actual_helper
     original_source_hash=b"assert len(source_raw)<=16777216 and hashlib.sha256(source_raw).hexdigest()=='d35cb669a1521fb007c7814c49ca05054ef13d973067de8d0719073525971597'"
-    ordinary_source_hash=b"assert len(source_raw)<=16777216 and hashlib.sha256(source_raw).hexdigest()=='7d58f60c6622ae4e3f22167a3429d72a0d65e826c8d91bf87a016644226018ad'"
+    ordinary_source_hash=b"assert len(source_raw)<=16777216 and hashlib.sha256(source_raw).hexdigest()=='0172c23667de7d4496031f9c815d65457d859ee303c477d6d1946909f85d81fc'"
     original_source_tuple=b"(str(source),'d35cb669a1521fb007c7814c49ca05054ef13d973067de8d0719073525971597'),(c.ctypes.__file__,"
-    ordinary_source_tuple=b"(str(source),'7d58f60c6622ae4e3f22167a3429d72a0d65e826c8d91bf87a016644226018ad'),(c.ctypes.__file__,"
+    ordinary_source_tuple=b"(str(source),'0172c23667de7d4496031f9c815d65457d859ee303c477d6d1946909f85d81fc'),(c.ctypes.__file__,"
     assert actual_helper.count(original_source_hash)==actual_helper.count(original_source_tuple)==1
     actual_helper=actual_helper.replace(original_source_hash,ordinary_source_hash,1).replace(original_source_tuple,ordinary_source_tuple,1)
     ordinary_prefix=("ordinary_runtime_inputs="+repr(runtime_inputs)+"\nordinary_identity_fields="+repr(identity_fields)+
@@ -8526,11 +8526,11 @@ finally:
     uncached_observer=uncached_observer.replace('            count_classification(7)\n','')
     uncached_observer=uncached_observer.replace('    def trace(frame,event,arg):\n','    classification_counts=[None]\n    def trace(frame,event,arg):\n',1)
     def _ordinary_observer_metadata_compat(code,consumer,filename):
-        assert hashlib.sha256(consumer).hexdigest()=='7d58f60c6622ae4e3f22167a3429d72a0d65e826c8d91bf87a016644226018ad'
+        assert hashlib.sha256(consumer).hexdigest()=='0172c23667de7d4496031f9c815d65457d859ee303c477d6d1946909f85d81fc'
         tree=ast.parse(consumer)
         names=('_metadata','_named_metadata','_capture_metadata','_capture_named_metadata','HeldPath')
         nodes={}
-        for name,line in zip(names,(542,546,4271,4281,579)):
+        for name,line in zip(names,(542,546,4276,4286,579)):
             matches=[node for node in tree.body if isinstance(node,(ast.FunctionDef,ast.ClassDef)) and node.name==name]
             assert len(matches)==1 and matches[0].lineno==line
             nodes[name]=matches[0]
@@ -8592,7 +8592,7 @@ finally:
                         if (edge is not None and all(function.__code__ is code for function,code in zip(functions+[recheck],codes)) and
                                 frame.f_globals is namespace and parent.f_globals is namespace and
                                 parent.f_code is codes[edge+2] and recheck_frame.f_globals is namespace and
-                                recheck_frame.f_code is codes[4] and parent.f_lineno==(4273,4283)[edge] and
+                                recheck_frame.f_code is codes[4] and parent.f_lineno==(4278,4288)[edge] and
                                 recheck_frame.f_lineno in ((607,618),(609,620))[edge]):
                             local=recheck_frame.f_locals
                             owner=local.get('self');component=local.get('component');_metadata_component_index=local.get('index')
@@ -8733,7 +8733,7 @@ finally:
                 frame,item=actual[0]
                 assert frame['function']=='recheck' and frame['component']['ancestor'] is False
                 lines=(package/'shadow/v1/_consumer.py').read_text().splitlines()
-                assert item['caller_line']==4273 and lines[item['caller_line']-1].strip()=='value = _metadata(fd)'
+                assert item['caller_line']==4278 and lines[item['caller_line']-1].strip()=='value = _metadata(fd)'
                 assert lines[result['guard']['line']-1].strip()=='raise Refusal(code) from None'
             return result,callbacks,elapsed,authentication,reference
         finally:

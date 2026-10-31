@@ -31,7 +31,7 @@ _C2_SCALARS = ("read_bytes", "write_bytes", "physical_bytes", "files", "export_r
 _C2_ACCOUNT_FIELDS = ("logical_bytes", "read_bytes", "write_bytes", "physical_bytes", "files", "occurrences")
 _C2_CLASSES = ("L", "W", "M", "raw", "unresolved")
 _C2_LIMIT = 1048576
-_C2_HELPERS_SHA256 = "041ec87ddf0f04984ce004600da8fb74a81a1931f941489d175b130c41d644a0"
+_C2_HELPERS_SHA256 = "80aacc25e96d4378182f2fea01f6362ffe542b78709208ab9f8694d8b6e3c52c"
 
 class C2Refusal(Exception):
     def __init__(self, code):
@@ -2434,7 +2434,7 @@ shadow_source_rows() {
     'scope/v1/workflow-scope.jq 2d1df5f99b7019c4c41aece4f9fb89b00785ca47f9f8a713b2f43b212481366a 9728 100644' \
     'scripts/core-contract.sh b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 9176 100755' \
     'shadow/v1/_cancel_release.c 00ef369edbed569d50471b97f64aef57591b7afb8d9f25c286bffa5725faf015 55056 100644' \
-    'shadow/v1/_consumer.py 7d58f60c6622ae4e3f22167a3429d72a0d65e826c8d91bf87a016644226018ad 434534 100644' \
+    'shadow/v1/_consumer.py 0172c23667de7d4496031f9c815d65457d859ee303c477d6d1946909f85d81fc 434852 100644' \
     'shadow/v1/build-cancel-release.sh be1ad0afd99f72ea73fe52cca63c03381793710c587a82b57b9a38ed87c896d4 6169 100755' \
     'shadow/v1/enforced-reproduction.py ea96db17ee970a5f8f1f43cc229a88db1df93707d7b36a4a35b346743e84470f 146925 100755' \
     'shadow/v1/incident-record.jq 9ea6e1ec6556f54887ea6937533157856271aab68c74bda6d18dae1354d2687c 3695 100644' \
@@ -2941,10 +2941,10 @@ done
 [ -n "$jq_source" ] || emit_error E_RUNTIME
 
 generation=g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43
-program_sha=efe2004d9d44c9fd3d9e6bf3e73edd9570d785af6c85f1e550fe0d7ff9fed413
+program_sha=a0e969e1fc734046c51617c66f69bf8792ac6081a4c10ba6de18f6058e3d4e2f
 review_approval_sha=none
 catalog_sha=0239138447a8f9fd420cb3c5da31660d8f75c85099d80d89a040dce2878a4cac
-driver_sha=7ea072ddc3ab6d9f11485d09ad384b5a92aaeff6bf47ab08b53f583df39d3df1
+driver_sha=8166658f14ba2e28c14630697c4dd9cb24f0eee643a1572b48ddadf58736a6b2
 }
 
 evals_record_context() {
