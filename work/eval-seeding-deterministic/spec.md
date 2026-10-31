@@ -2010,9 +2010,11 @@ to evade the source cap. Executable and policy files always belong to the closur
 
      | 测试路径与接点 | 修改范围与保留要求 |
      | --- | --- |
+     | `scripts/test/scope-qualification.test.sh`：`PY_STORE_MODE_CONTROLS.loops` 的四名称筛选 | 仅在原同一物理行、完整 `[item.id for item in node.target.elts]` 比较前加 `all(isinstance(item,ast.Name) for item in node.target.elts)`。保留原 For/Tuple 前置、四名/顺序、唯一1、六labels及全部后继；不改9062或其它selector。 |
+     | `scripts/test/candidate-content-preparation-fixtures.py`：`raw16_t_lifecycle` 的原 writer-two-roots `_discard_runtime` 调用边与唯一复合assert | 仅依下述同实例/anchor私有委托转发首个原primary到该同一AssertionError的cause；原方法同参一次/返回抛出原样。仅同时开放此块恢复/holder.close错误仲裁与原外层TemporaryDirectory的writer-pending-failure出口。无该边则原assert，无新采集/根因或PASS证明。 |
      | `scripts/test/candidate-content-preparation-fixtures.py`：`raw16_C2_refused_END_transfer` 的原 END-case 初始化与唯一 case-binding 赋值 | 仅按下述合同，在原受清理保护的 try 内用一次既有 c2_fresh_work 完整模板逐项 setdefault 补齐同一 owner，再执行移入的原唯一 binding 赋值。保留旧值/计数/引用及容器隔离；原 peer/invoke/断言表达式不变。仅同时开放本函数原 held/临时区一次清理的错误保留与尾部仲裁、原同一次 print 延后至清理成功后；不新增 case/child/validator 调用。 |
      | `scripts/test/candidate-content-preparation-fixtures.py`：`raw16_C2_six_fixes` 的原 helper-env 前缀及原 first-read mutation 对该同一函数的复用 | 仅接回当前真实 build CLI、同源完整 helper literal、实际私有 scratch/custody 和宿主 TMPDIR 缓存输入合同。保留每次原 build 调用、两原 uname 点、同一 sentinel、真实关闭/取消及下述有限 fixture 接线；不改另五组或后继控制（仅本表单列 END-case 初始化除外）；仅增加下文取得→custody交接的有界回归。生产只开放下文同一交接接点，env/guard不变。 |
-     | `scripts/test/scope-qualification.test.sh`：`PY_STORE_MODE_CONTROLS` 的 `consumer_calls` 原 AST 列表筛选 | 仅把既有 `isinstance(node, ast.Expr)` 移到原 `node.lineno < coverage_fixture.lineno` 前，同一物理行完成。其余 selector、layout排除、sort、11接点/顺序/位置及全部后继控制逐字保留；不造位置、缺省属性或跳过必需节点。 |
+     | `scripts/test/scope-qualification.test.sh`：`PY_STORE_MODE_CONTROLS` 的 `consumer_calls` 原 AST 列表筛选 | 仅把既有 `isinstance(node, ast.Expr)` 移到原 `node.lineno < coverage_fixture.lineno` 前，同一物理行完成。除本表单列 loops 元素类型先决外，其余 selector、layout排除、sort、11接点/顺序/位置及全部后继控制逐字保留；不造位置、缺省属性或跳过必需节点。 |
      | `scripts/test/replay-materialization-result.test.sh`：下述16个既有 receiver supervision heredoc assert | 只在各原 assert 追加对应固定字符串 msg。完整 predicate/test AST、求值次数与顺序、控制流、原成功路径和失败/取消/cleanup 保持；不插值、不取新值、不改 supervisor/receiver 或其它 assert。只改善原失败呈现，不证明根因。 |
      | `scripts/test/scope-qualification.test.sh`：`PY_OBSERVER_OWNER_CONTROLS.observe_case` 的原异常捕获与 status 断言 | 保留原 E_STALE/kind 检查和 status 断言；仅在该 status 断言失败时，把已捕获的同次原 Exception 链为同一 AssertionError 的 cause。只增加一个局部引用并在所有出口释放；不改私有 copy、原分类或正式生成结果。遵守下述生命周期和取消要求。 |
      | `scripts/test/shadow-write.test.sh`：原 `scope_check` 子进程结果转发 | 仅把已捕获 stdout 的原单次 print 移到原 returncode 检查前。原 subprocess/argv/env/timeout/PIPE、断言条件/消息及 stderr 不变；标记取消原样传播，普通输出错误不得覆盖已知 child 失败。遵守下述优先级；不开放其它 writer 插入。 |
@@ -2105,6 +2107,44 @@ to evade the source cap. Executable and policy files always belong to the closur
      不借新数值池、不宣称完整cost/fit。八个辅助测试文件、43路径、旧40/20/C1六
      功能/三pin、九adoption、SOURCE84/consumer/native/map/pin及旧P1均不扩。
 
+     **本批 AST 类型先决与原 T 错误传播。** 两接点绑定设计源
+     `788570708e737da146c7867f6c3f328723be5770`，不改变下述已接受 END 合同。
+     loops 原失败在物理9087/heredoc42；9062已有Name先决，不改。先要求全部
+     elts为Name，再完整比较label/form/change/needle；不是过滤非Name后拼列表。
+     目标缺失/重复/变形仍由原len==1失败。保留原六mutation/body、creation7、
+     layout、11sites/receiver/order、copytree3、21workers/26observations；不改
+     assembler、worker、其它selector或位置/maps，不填缺省id、不catch后继续。
+
+     T只沿原同一holder/anchor的writer调用安装一个实例私有委托
+     `_writer_two_roots_discard_primary`；不替换class/global/生产方法。保存原
+     bound方法，原_discard_runtime同参数调用恰一次，返回/抛出原样传回；只留
+     第一个同anchor传入的真实primary引用，不取frame/sys.exc_info/point/文本，
+     不收集列表/字段、遍历、补读source或新增retain/discard/producer机会。
+     仅原复合assert实际失败时，将该同一AssertionError从同次原普通primary
+     raise；无该边/原引用则原assert原样。其它assert、输出和资格不变。原取消、
+     KeyboardInterrupt、SystemExit及委托抛出绕过assert cause路径；不改原异常
+     traceback/cause/context，不从leaf或预期值制造cause，不保证未来根因可见。
+     安装/原writer调用/实例恢复均受原holder.close责任保护。原实例属性缺失则
+     恢复为缺失，不能用新bound属性假恢复；保存原有状态。恢复先于原一次close，
+     即使恢复失败仍尝试该close一次。body、恢复、close的真实错误分别保留，按
+     原c._c3_first优先级选同对象；任一错误都失败，不重试不确定关闭/恢复，
+     不追加第二套资源清理。holder.close 必须保留原 body 异常仍在传播时的
+     活动异常上下文：close_runtime_copies 原本读取 sys.exc_info；fixture 不可
+     新读该API，也不可在异常处理已退出后才close而改变其原primary。只复合
+     assert允许新cause，其它错不挂此捕获primary。
+     仅为该writer已选待传播错误，允许原外层TemporaryDirectory增加有限异常
+     出口：若无writer pending则bare raise原样；若原with离场抛更后错误，只用
+     c._c3_first与该pending折叠并失败，保留次错。原with/实际离场一次不变，
+     其它T控制不可改；仅外层try所需机械缩进可动并须完整逆证。成功writer
+     清除pending后继续原后继，不能让后续无关错误进入这个边界。
+     委托/holder/anchor/原方法与可链primary局部引用所有出口及时释放；已链
+     cause及必要传播次错只由原异常链/有限传播局部保持至调用方释放，无全局
+     缓存、错误字段或自定义formatter。原默认traceback/linecache既有模块隐含
+     读取及引用/渲染/传输费用仍UNKNOWN，不承诺零IO，不开显式读取/凭证/网络。
+     本接点是普通same-call错误传播，不是T根修或新诊断设施；不激活旧failure-
+     facts/retiredR、改L或scope输出。job3/T及job4根因仍UNKNOWN/P1，未来PASS
+     不关闭旧失败。所有guard/cap、79/six、native/G3和累计费用义务不变。
+
      **原 refused-END case 的完整 owner 初始化。** 设计源为
      `788570708e737da146c7867f6c3f328723be5770`。仅补原
      `_capture_work_values(work, 'END-case')` 新建、尚未承担应用工作且将进入
@@ -2158,7 +2198,7 @@ to evade the source cap. Executable and policy files always belong to the closur
      | --- | --- |
      | `evals/v1/evals-launcher.sh`：`c2_program` 内 `C2Helpers.build` 的真实 `_open_held` 返回→`C2Root` 构造→`build_custody` 公布 | 只修该正常 owner 交接。仅当明确消费协议所必需时，连同 `C2Root.__init__` 的同一入参接管/早初始化失败边界一起闭合；不开放其它 Root 方法、业务步骤、工具调用或全局恢复机制。具体局部协议由独立 high-risk plan 确定。 |
      | `scripts/test/candidate-content-preparation-fixtures.py`：`raw16_C2_six_fixes` 的同一 helper 前缀及交接回归 | 在此原普通调用内加入最少受控回归；保持另五组、`failure_accounting`、first-read deletion 及所有后继控制（仅本表单列 END-case 初始化除外）。原 `evals-malicious.test.sh` 调用链不改，不另建 suite 或 shell 入口。 |
-     | `scripts/test/scope-qualification.test.sh`：原 `PY_STORE_MODE_CONTROLS.consumer_calls` | 只保留已列同物理行 Expr 谓词前移；这不是生产交接的派生绑定路径，不新增其它修改。 |
+     | `scripts/test/scope-qualification.test.sh`：原 `PY_STORE_MODE_CONTROLS.consumer_calls` | 保留已列同物理行 Expr 谓词前移；仅本表另列 loops 元素类型先决可新增。这不是生产交接的派生绑定路径，其它修改不开放。 |
 
      factory/constructor 的未保护初始化失败、普通异常、marked cancellation 与
      KeyboardInterrupt 都不能遗失原主错或待交接 held。仍未被构造器消费的真实
@@ -2430,7 +2470,7 @@ to evade the source cap. Executable and policy files always belong to the closur
      | `shadow/v1/enforced-reproduction.py` | `reproduce` 的原工作目录准备与首次 retention 次序；`_retain_native_runtime` 的固定 recorder 初始化；`StableDirectory` 的 recorder parent、runtime/T retention、parent transition、seal/close 责任；`_seal_capture_recording` 的同 owner parent 选择。其它业务/启动/执行/资格语义不变。 |
      | `shadow/v1/_consumer.py` | `Anchor.retain_preparation` 内固定 native scratch 来源 parent 与 P 写入 parent 的分离、原 `_T_transition` 的对应身份检查和必要私有接线。实际 held/ACL/full-byte/费用/关闭机制不替换；不开放其它 producer 行为。 |
      | `scripts/test/shadow-enforced.test.sh` | 原共享 orchestration flow 的同路径非干扰/拒绝/关闭对照；保留原 13 个控制和 29 个 evidence 文件。 |
-     | `scripts/test/candidate-content-preparation-fixtures.py` | 仅以下十六个原 StableDirectory caller：`raw16_t_lifecycle`、`raw16_preparation_P_handoff`、`raw16_local_P_after_H_copy`、`raw16_local_P_handoff`、`raw16_p_acquisitions`、`raw16_T_enforced_chain`、`raw16_T_writer_chain`、`raw16_T_transition_refusals`、`raw16_adopt_registered_cancel`、`raw16_T_live_stable`、`raw16_P_handoff_accounting`、`raw16_parent_P_handoff`、`raw16_parent_P_Hcopy`、`raw16_parent_carrier`、`raw16_sudo_companion`、`raw16_C1_T_windows`。只接真实初始化和 bound recorder 的 P/H-copy/seal/case/目标路径；`raw16_P_handoff_accounting` 包括其登记给 holder 的原 nested-stable。保留全部原 case，含 `raw16_preparation_P_handoff` 七个正反 case；`raw16_t_lifecycle` 除原失败诊断外只新增此固定正向适配。 |
+     | `scripts/test/candidate-content-preparation-fixtures.py` | 仅以下十六个原 StableDirectory caller：`raw16_t_lifecycle`、`raw16_preparation_P_handoff`、`raw16_local_P_after_H_copy`、`raw16_local_P_handoff`、`raw16_p_acquisitions`、`raw16_T_enforced_chain`、`raw16_T_writer_chain`、`raw16_T_transition_refusals`、`raw16_adopt_registered_cancel`、`raw16_T_live_stable`、`raw16_P_handoff_accounting`、`raw16_parent_P_handoff`、`raw16_parent_P_Hcopy`、`raw16_parent_carrier`、`raw16_sudo_companion`、`raw16_C1_T_windows`。只接真实初始化和 bound recorder 的 P/H-copy/seal/case/目标路径；`raw16_P_handoff_accounting` 包括其登记给 holder 的原 nested-stable。保留全部原 case，含 `raw16_preparation_P_handoff` 七个正反 case；`raw16_t_lifecycle` 除原失败诊断及本表单列 writer-two-roots 同次错误传播外只新增此固定正向适配。 |
      | `scripts/test/scope-qualification.test.sh` | 仅既有受影响 consumer source SHA、九份私有 copy 的行号映射与直接 caller 行号的机械重绑；完整逆变换与四个 observer body 保持，不新增 observer 或 AST loader。 |
      | `evals/v1/evals.jq`、`evals/v1/evals-driver.sh`、`evals/v1/evals-launcher.sh` | 仅原 source/closure/program→driver→launcher 链上由这两个生产文件实际改变所移动的 digest；原完整闭集及检查保留。 |
 
@@ -2566,7 +2606,7 @@ to evade the source cap. Executable and policy files always belong to the closur
 
      | 原测试接点 | 仅允许的失败证据 |
      | --- | --- |
-     | `scripts/test/candidate-content-preparation-fixtures.py:raw16_t_lifecycle` 的原 writer two-roots 循环和末尾复合断言（设计源 1809–1839） | 失败时保存实际 writer_calls 次数/原两个 operation 标记、unusable 与已有 preparation leaf 的 failure/errno/incomplete/关闭状态。仅以下 retain_preparation_failure_facts 窄例外可在原 failure 字典增加 code/point；fixture 沿原 whole-failure 输出，不增加实现或调用。已有 T parent transition 必须保留，不按“缺接线”改写；两次执行、两个 scratch、真实 seal/成员及全部原断言不变。 |
+     | `scripts/test/candidate-content-preparation-fixtures.py:raw16_t_lifecycle` 的原 writer two-roots 循环和末尾复合断言（设计源 1809–1839） | 失败时保存实际 writer_calls 次数/原两个 operation 标记、unusable 与已有 preparation leaf 的 failure/errno/incomplete/关闭状态。仅以下 retain_preparation_failure_facts 窄例外可在原 failure 字典增加 code/point；fixture 沿原 whole-failure 输出，不增加输出实现或调用；仅本表单列同次 writer-two-roots cause/必要清理出口可改。已有 T parent transition 必须保留，不按“缺接线”改写；两次执行、两个 scratch、真实 seal/成员及全部原断言不变。 |
      | `scripts/test/shadow-self-host-evidence.test.sh` 原 scope harness pre/post evaluator 调用（设计源 2141–2163） | 在普通测试 stderr 标明原 pre/post 调用阶段、真实退出状态及原已取得的有界错误码/失败事实；保留一次原 evaluate-scope 调用、完整原 stdout/stderr 文件和实际 FAIL。不得 mock evaluator/Reader、删除两真实记录、吞 E_RUNTIME 或改 not-proposable、reason、qualification、authority/enabled、authentication 和 proposal 断言。 |
 
      raw16_t_lifecycle keeps its facts-only contract with one temporary private
@@ -2838,7 +2878,7 @@ in CI; wiring the record report into anything but the relay; enablement.
 - **Risk is high.** Eval policy, seed and scope-gate change. An operator-merged
   plan-only PR precedes code.
 - **Size.** This spec amendment uses `review_size: standard` for the fixed ordinary
-  refused-END case owner initialization, retaining all accepted handoff/regression and proof requirements.
+  bounded ordinary regression compatibility: retained END owner/cleanup, one AST type prerequisite and same-call writer error propagation, with all original proof requirements.
   The separate high-risk plan must set the whole PR 1b implementation range, including the preserved relay
   code, every owner extraction and all tests. It must count inherited code and
   failed/retained proof; no partial implementation is a finished PR. Do not trim
