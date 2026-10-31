@@ -755,7 +755,8 @@ actual work. Keep all existing binary passes and independent recomputation.
 D's RAW16 replacement
 caps apply together with every unchanged applicable cap, including 12 MiB exports,
 1 MiB JSON and the four raw partitions. The original 40 edit paths gain only
-the C2 bootstrap and auxiliary qualify namespace exceptions in R9.3; the original
+the C2 bootstrap, auxiliary qualify namespace and fixed replay-test assertion-message
+exceptions in R9.3; the original
 20-path subset, nine adoption-only paths and 84 source members do not change. No added helper,
 package, installation, authority or real recording is authorized by this layout.
 
@@ -1763,8 +1764,8 @@ replace implementation.
 | scope/权限 | 全部repo inactive；slot never executes；stdout零；native attempt两成员不变；source captures不能夹export；无新helper/network/credential/install/activation/target |
 
 G2 and the separate high-risk plan permit only inactive mechanisms within the
-original 40 edit paths plus the exact C2 bootstrap and auxiliary qualify edits in
-R9.3, with the original 20-path subset, 9 adoption-only paths and 84 source members unchanged. C source work may precede B
+original 40 edit paths plus the exact C2 bootstrap, auxiliary qualify and fixed
+replay-test assertion-message edits in R9.3, with the original 20-path subset, 9 adoption-only paths and 84 source members unchanged. C source work may precede B
 acceptance only through frozen, precisely mapped real B interfaces. Before C
 code, independently accept and land a separate high-risk plan amendment, merge
 that accepted main normally into the same source carrier, and obtain fresh
@@ -1991,7 +1992,7 @@ to evade the source cap. Executable and policy files always belong to the closur
      恢复 baseline outcome/reasons。测试判断输出语义，不能误要求进程非零。
      保留原 shape、父块类型、输入 tamper 和完成前重查负例；新增提取不能用 jq
      异常替代原拒绝。两个 fixture 的其他既有断言保持。
-   - **既有测试的固定源与生命周期绑定兼容。** 仅允许修订下表七个已有测试文件的指定接点。
+   - **既有测试的固定源与生命周期绑定兼容。** 仅允许修订下表八个已有测试文件的指定接点。
      `raw16_scope_P_ownership`、共享 orchestration flow、两个 `evals-malicious` 接点，以及
      下列 `PY_FIXED_MARKER` 和 `first_git_reference_driver` 接点绑定设计源
      `5084dfed3d6500d1b63a0331b0c149cfd0922bd3`；`process_snapshot_controls`、
@@ -2009,6 +2010,7 @@ to evade the source cap. Executable and policy files always belong to the closur
 
      | 测试路径与接点 | 修改范围与保留要求 |
      | --- | --- |
+     | `scripts/test/replay-materialization-result.test.sh`：下述16个既有 receiver supervision heredoc assert | 只在各原 assert 追加对应固定字符串 msg。完整 predicate/test AST、求值次数与顺序、控制流、原成功路径和失败/取消/cleanup 保持；不插值、不取新值、不改 supervisor/receiver 或其它 assert。只改善原失败呈现，不证明根因。 |
      | `scripts/test/scope-qualification.test.sh`：`PY_OBSERVER_OWNER_CONTROLS.observe_case` 的原异常捕获与 status 断言 | 保留原 E_STALE/kind 检查和 status 断言；仅在该 status 断言失败时，把已捕获的同次原 Exception 链为同一 AssertionError 的 cause。只增加一个局部引用并在所有出口释放；不改私有 copy、原分类或正式生成结果。遵守下述生命周期和取消要求。 |
      | `scripts/test/shadow-write.test.sh`：原 `scope_check` 子进程结果转发 | 仅把已捕获 stdout 的原单次 print 移到原 returncode 检查前。原 subprocess/argv/env/timeout/PIPE、断言条件/消息及 stderr 不变；标记取消原样传播，普通输出错误不得覆盖已知 child 失败。遵守下述优先级；不开放其它 writer 插入。 |
      | `scripts/test/scope-qualification.test.sh`：`PY_OBSERVER_OWNER_CONTROLS/observe_case` 的普通 observer 私有 copy | 仅经一个命名的 `_ordinary_observer_metadata_compat` 有限私有转换边界，让 old/uncached/cached 共用下述固定 metadata 异常归属规则。保留正式四 literal、两 native helper/body/hash、旧 d35 与 1197/1231 原字节及 UNPROVED。只更新原 errno 精确尾断言和实际必需机械绑定；不改其它组、正式生成结果或生产。 |
@@ -2030,7 +2032,42 @@ to evade the source cap. Executable and policy files always belong to the closur
      | `scripts/test/evals-malicious.test.sh`：`PY_CAPTURE_VALUES` 内 source 的成功 reacquisition/seal 分支 | 在第一次真实 `_Owned.append` 前建立同一 Reader/Anchor 的 owner、真实 configuration 与其登记；两次 source acquisition 仍绑定该同 case 的实际 configuration，其 capture/held/完整 raw 各由本次真实取得，不借别的 source acquisition 或 case。保留原 failed_sync 两分支、native receipt/payload、两次 reacquisition、完整四成员 capture、同 case 账、真实最终 owner/seal、全部 tail transfer 和关闭。新增 configuration P 的成员/数量/费用须逐项实测并列入原精确计数；不改成功 seal 判定或用清失败状态恢复它。 |
      | `scripts/test/evals-malicious.test.sh`：`PY_SOURCE_CANCEL` 的原共享 receiver | 接全原 positive 所需同一 owner、真实 configuration/source 登记、实际 capture/held 和关闭先决，再沿用原 27 个 label 及各原故障注入位置。保留 positive 的无意外 unusable、真实完整 bytes、同一 reader/generator cancellation 对象、首错/次错、FD once-close/无泄漏、全部账与原负例判定。仅原 `owned` 后置条件改为同一 Reader 已实际登记的 configuration baseline 加原 case 的 source 登记增量；须核同一对象、原顺序且无额外 owner，seal 分支的 source 增量仍为空。不另造假 owner 来维持旧 list，不把预期失败改为必须成功。精确计数只按真实新增 configuration P 的实际贡献分项调整，不跳过 source copy、伪造输出或清 unusable。 |
 
-     原错误传播只在上述两个测试层接点进行。observe_case 保留原 `except Exception`
+     replay assert 接点绑定设计源 `02f994361843bb452854d1b808b24e5bc34e8914`，文件
+     SHA-256 `eef85b6fbb9409cafc695d0ce4cb62313564aac0e4295da1312de4945c4f23d5`。
+     下表行号仅定位该固定原件，不成为运行条件、selector 或行号断言。完整原 heredoc
+     上下文与 predicate 唯一绑定；共享/循环断言只标识静态位置，不声称具体 case 或实际值。
+     只把原无 msg 的 assert 改为同一 assert 加下表字符串常量，不删、拆或重排谓词。
+
+     | 设计源行 | 原 assert | 固定 msg 字符串 |
+     | --- | --- | --- |
+     | 1523 | `assert record["token"] == sys.argv[3] and record["case"] == sys.argv[4]` | `receiver completion token/case mismatch` |
+     | 1813 | `assert record["decoded_status"] == 37 and record["capture_complete"]` | `natural-zero receiver status/capture mismatch` |
+     | 1832 | `assert record["signal_attempts"] == 1 and not record["cleanup_errors"]` | `wait-eintr receiver signal/cleanup mismatch` |
+     | 1842 | `assert signal_error["cleanup_errors"] == ["signal failed: [Errno 5] injected group signal error"]` | `signal-error receiver cleanup mismatch` |
+     | 1857 | `assert blocked["diagnostic_errors"] == ["TimeoutError: diagnostic write deadline expired"]` | `blocked diagnostic receiver error mismatch` |
+     | 1882 | `assert record_exact["max_control_record"] == 4096 and not record_exact["cleanup_errors"]` | `record-exact receiver size/cleanup mismatch` |
+     | 1955 | `assert not record["possible_admission"] and record["decoded_status"] == -9` | `identity-refusal receiver admission/status mismatch` |
+     | 2025 | `assert record["token"] == sys.argv[3] and record["case"] == sys.argv[4]` | `cancellation-boundary completion token/case mismatch` |
+     | 2059 | `assert completion["outcome_sealed"] and completion["pending_signal"] == 15` | `diagnostic-publication cancellation seal/signal mismatch` |
+     | 2091 | `assert record["owned_pid"] is None and record["signal_attempts"] == 0` | `invalid-control receiver ownership/signal mismatch` |
+     | 2110 | `assert record["inherited_blocked"] == sorted([signal.SIGINT, signal.SIGTERM])` | `inherited-blocked receiver signal mask mismatch` |
+     | 2125 | `assert shell["pending"] == "TERM" and shell["wait_complete"] == 1` | `wait-completion race shell pending/wait mismatch` |
+     | 2137 | `assert record["primary_failure"].startswith("cancelled")` | `shell-error receiver cancellation mismatch` |
+     | 2152 | `assert shell["pending"] == "INT"` | `cancel-write failure shell pending mismatch` |
+     | 2172 | `assert before["owned_pid"] is None and before["signal_attempts"] == 0` | `before-admission exception receiver ownership/signal mismatch` |
+     | 2192 | `assert record["signal_attempts"] == 1 and record["capture_complete"]` | `publication-failure receiver signal/capture mismatch` |
+
+     1555 的前置断言已被原 ok12 覆盖，不属于本接点。其它 assert 与全部已有控制、
+     调用/顺序、时间阈值、身份/清理/取消/状态断言及结果语义不变。不得通过消息表达式
+     读取变量、拼接/f-string/format、调用函数或新增字段、print、logger、collector、
+     probe、矩阵、错误 API、hook 或诊断设施。不得为此改 L/R、生产、T/scope 或 observer。
+     只沿原 Python 默认异常呈现；不新增显式读取、自定义 formatter、来源、网络或凭证。
+     字符串存续、默认 traceback/既有模块 linecache 隐含读取与渲染/传输实际费用累计
+     UNKNOWN，不保证零 I/O、完整物理 cap 或 fit。根因和原 P1/失败/NOTRUN/native/G3
+     欠项保持；静态消息不是运行值或根因证据。完整 diff/inverse 须证明仅16个 msg 改变，
+     每个 test AST、调用和其余文件字节不变；不改 SOURCE84、maps、pins 或重生成未变依赖。
+
+     原 Exception/stdout 错误传播只在上述两个相应测试层接点进行。observe_case 保留原 `except Exception`
      及 kind/`E_STALE` 断言；该断言成功后才保存同一异常引用。原 gap else、observe
      调用和 trace/sys.settrace/sys.argv 恢复时点不变。原结果读取、证据构造及全部
      断言顺序不变。仅当原 status 断言失败，才以同次异常为 cause 再抛同一
@@ -2150,7 +2187,8 @@ to evade the source cap. Executable and policy files always belong to the closur
      绑定与实际生成行关系；不借此改其它 source/copy/observer 或旧 native 绑定。
      新问题逐项判断，不能自动纳入本条。需要更宽修改就停止并返回 artifact gate。
      `evaluate-scope.sh` 保持 blob `605370780345539c5ed7b9debbd04f5327610128`（仅有 R9.2 scope_pre_failure_point 窄例外），不得回退产品
-     来满足旧测试。原 40 路径集合仅有 R9.3 明列的 C2 bootstrap 与 qualify 辅助兼容例外；
+     来满足旧测试。原 40 路径集合不变；额外路径只限 R9.3 明列的 C2 bootstrap、
+     qualify 辅助兼容与固定 replay assert 消息接点；
      原 20-path 子范围、C1 六功能路径/三 pin 的职责、九个 adoption-only 文件、SOURCE 84、
      协议、角色、九 occurrence、全部费用/cap/窗口预算及原验收保持。不得修改旧执行包或重置失败和 UNKNOWN。
      G2 与分开的 high-risk plan 接受后，仍须 fresh exact source/recipe/resource review 和
@@ -2270,7 +2308,7 @@ to evade the source cap. Executable and policy files always belong to the closur
 
      这两个生产文件都属于原 R9.3 路径，enforced 不是九个 adoption-only 之一。
      本条是单列的 C1 非干扰辅助接点，不把 C1 六功能路径写成七个，不扩大原
-     20-path、42-path 或 SOURCE 84 成员集合；九个 adoption-only 文件及字节全部不变。
+     20-path、R9.3 的43-path 或 SOURCE 84 成员集合；九个 adoption-only 文件及字节全部不变。
      consumer 新 bytes 只能通过原严格生成配方重绑九 copy/mapping，四个 observer
      literal、转换/逆变换规则及两个 native 旧绑定不变。evaluate-scope 原 blob 仅有 R9.2 scope_pre_failure_point 窄例外；
      pin 必须从独立审过的实际 bytes 按原顺序更新。任一其它路径/pin 或更宽改动需求
@@ -2451,7 +2489,7 @@ to evade the source cap. Executable and policy files always belong to the closur
      rebind these actual moved bytes. No other path or source member is added.
 
      This is the sole narrow exception to the frozen evaluate-scope blob. All C1,
-     20-path, 42-path, SOURCE84 and nine adoption-only member sets remain unchanged.
+     20-path, R9.3 43-path, SOURCE84 and nine adoption-only member sets remain unchanged.
      Independent G2 must precede a separate high-risk plan, then fresh exact
      source/recipe/resource review and execution GO. Keep the original six-shard,
      79-suite full CI recipe; no new matrix, diagnostic run, retry, timeout, native,
@@ -2463,7 +2501,7 @@ to evade the source cap. Executable and policy files always belong to the closur
      its earlier UNKNOWN root or P1. Final full CI must prove both removed under a
      separately accepted execution plan. This grants no run or lasting diagnostic
      facility; use only the original full79 recipe at a fresh authorized tuple.
-     这些接点都已在原 R9.3 路径表内；42/SOURCE84/原 20-path、六功能三 pin
+     这些接点都已在 R9.3 路径表内；43/SOURCE84/原 20-path、六功能三 pin
      集合及九 adoption-only 文件不变。完整独立 high-risk plan、fresh source/
      recipe/resource review 与 GO 仍先于代码和执行；不借用旧 CI 或 native 窗口。
    - PR 2 and PR 3 each change the shipped seeded and declared counts, asserted in
@@ -2516,10 +2554,14 @@ to evade the source cap. Executable and policy files always belong to the closur
    its final `/usr/bin/env -i ...` command. All other bytes of that file remain
    unchanged. PR 1b also permits `sandbox/v1/qualify.py` only for the auxiliary
    aggregate store namespace compatibility boundary in R9.2. Its existing regression
-   path `scripts/test/sandbox-launcher.test.sh` is already listed above. The final
-   edit set is exactly 42 paths: the original 40, C2 bootstrap, and qualify.
+   path `scripts/test/sandbox-launcher.test.sh` is already listed above. PR 1b also
+   permits `scripts/test/replay-materialization-result.test.sh` only for R9.2's
+   sixteen fixed assertion messages; this adds no receiver/supervisor behavior or call.
+   The final edit set is exactly 43 paths: the original 40, C2 bootstrap, qualify,
+   and this one auxiliary test path.
    The original 20-path subset, six C1 functional paths and three pin responsibilities,
-   nine adoption-only paths and SOURCE 84 remain unchanged; qualify joins none of them.
+   nine adoption-only paths and SOURCE 84 remain unchanged; qualify and the auxiliary
+   replay test join none of them.
    The already listed enforced-reproduction.py and _consumer.py permit only the
    additional fixed R9.2 noninterference and foreground-owner cleanup contacts;
    their listed regressions, test-only failure diagnostics and moved-pin bindings
@@ -2593,7 +2635,7 @@ in CI; wiring the record report into anything but the relay; enablement.
 - **Risk is high.** Eval policy, seed and scope-gate change. An operator-merged
   plan-only PR precedes code.
 - **Size.** This spec amendment uses `review_size: standard` for the fixed ordinary
-  test error-propagation contacts, with all original proof requirements.
+  replay-test assertion messages, with all original proof requirements.
   The separate high-risk plan must set the whole PR 1b implementation range, including the preserved relay
   code, every owner extraction and all tests. It must count inherited code and
   failed/retained proof; no partial implementation is a finished PR. Do not trim
