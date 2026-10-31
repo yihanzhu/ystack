@@ -1,5 +1,5 @@
 ---
-spec-blob: d84b1082e98741b8ad2bd6e2bc0535e497f0f768
+spec-blob: 163dd278c34d61beb2f0cee58ff5c5659c6325a1
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-26
@@ -13,19 +13,16 @@ existing review relay and measured scope binding remain intact. PR 1b remains
 one complete two-source delivery. Source preparation does not accept a dependency,
 a real recording, native qualification or either seed batch.
 
-This amendment derives from accepted plan dc5cc1eada558d180a44d80f8c0a409016bfdb04.
-G2 PR805 is accepted and protected-landed; spec-blob binds its landed spec
-d84b1082e98741b8ad2bd6e2bc0535e497f0f768. Current plan publishing base is
-97d3a1b07d087f6d1d4a30f1292901f0ab43a66f, sole parent
-4f52dad44426b9929e7b731d357d4073d703e8ce, tree3428c9ed16daa8995584ef689ba7af96e1e20c1b.
-The exact G2 review is recorded at issuecomment6549321575 and its protected merge receipt.
-This clarifies only the three existing manual Reader ACL seams and the two original
-candidate-name forms. Source M af0cb03011f23be68fcf48abd7be76a6904ac5ab and its six
-owned dirty drafts remain preserved with the original author paused and source unaccepted.
-This high-risk plan still requires fresh independent review, quick CI and protected
-landing. The future source plan-base/code-start OID remains UNKNOWN until that plan
-merge is freshly fetched and recorded, followed by exact source continuation checks
-and fresh CODE. No source/CI acceptance or historical UNKNOWN is closed.
+This amendment derives from accepted plan 3897546674e291d585929287457e7cc704746d93.
+G2 PR807 passed independent review (comment 6549791008) and landed through the
+protected PR. Its spec is 163dd278c34d61beb2f0cee58ff5c5659c6325a1.
+The current plan publishing base is 6ca5caa5490dabf48c5897f94f3986f832c148ca, sole parent
+27272ad465c816c4b81bbdfb7c5d6e13ab3a2f5d, tree e5309cbcca18f5bb58ec068fa664082bc555e92d.
+The original source author remains paused at 5da5e7c6814aee41bf06208862730b52b1e135ed.
+The six owned drafts are preserved. All six source findings remain open.
+This high-risk plan requires fresh independent review, quick CI and protected landing.
+Record the future source plan-base from the fetched merge. The original author
+requires fresh CODE on the verified continuation tuple before making the repairs.
 The manager may process separate artifact gates alongside the frozen source;
 this plan itself grants no CODE or runtime GO. No source work precedes full-batch
 closure and the new exact artifact/CODE gates. Before source work,
@@ -811,7 +808,7 @@ blocked pending its exact scope gate.
 ### Existing regression compatibility (R9.2)
 
 Retained requirements remain accepted obligations. The current pass opens only the
-ordinary Reader layout/hold lifecycle and finite regressions below, with its exact
+ordinary Reader layout/hold lifecycle, shared Reader.hold registration handoff and finite regressions below, with its exact
 six-file mechanical closure. H2b4d's C2 caller/END/T/AST implementation stays frozen.
 Other595 post-artifact source entries stay exact. Only the explicitly counted layout,
 validation and regression operations below are new; no new child, provider, platform
@@ -864,8 +861,11 @@ capture or layout publication, use that real resolver for the original complete
 physical/owner/mode/ACL/name-FD checks of the root and all66 directories. Compare
 complete identities with the saved prebuild values; do not refresh expected to
 hide intervening changes. Production construction must never use None, a fake resolver,
-an omitted Darwin ACL check or another platform call. Only full success publishes the layout and the
-actual captures root hold in the same owned list. The namespace freezes when
+an omitted Darwin ACL check or another platform call. Prepare all paths, slot state and the validated root locally before publishing.
+Transfer the root once to the original owned list. Expose one complete prepared
+layout only after that transfer. A publication failure leaves no usable partial
+layout, including on a manual receiver. Reader.close owns any transferred root.
+The local owner closes a root whose transfer did not occur. The namespace freezes when
 prebuilding ends. Either phase failing stops through the original finally with
 first-error/marked-cancel and actual once-close responsibility; partial state is
 not published. Each slot's first use checks the held/name object against its saved
@@ -888,9 +888,15 @@ replay outputs at their original point, so earlier package holds are not newly
 registered as replay holds. The gate/no-prepared-work branch keeps its original
 initialization. Manual ordinary test objects call the same initializer after original setup writes to their shared ancestors and before their
 first captures hold; do not create a fallback layout or trust fabricated flags.
-Constructor failure closes every actually acquired FD once, preserves the original
-primary/first cancellation and cleanup failures, leaves partial paths to the original
-scratch owner, and never continues into evaluation. There is no second cleanup owner.
+On ordinary initialization or a failed handoff, close each actually owned resource once.
+Keep the first actual control-flow exception in occurrence order across the operation and
+cleanup (KeyboardInterrupt, SystemExit or a marked cancellation). Otherwise propagate the
+first ordinary failure. Retain distinct secondary objects through existing error records
+or exception chaining, including earlier ordinary errors when cleanup cancels. Do not
+retry an uncertain close. Partial paths stay with the original scratch owner. Gate
+construction keeps its original exception path: ordinary construction error A followed
+by ordinary close error B propagates B with context A. Only the shared registration
+handoff below changes responsibility on gate calls.
 
 | Existing writer / owner | Ordinary destination and immutable lifetime |
 | --- | --- |
@@ -918,10 +924,20 @@ its actual ACL/no-follow/exclusive write, each parent's real refresh/close and o
 There are no extra source/Git reads and no substitute hashing or runtime expected value.
 Append the same inputs/owned/replay objects in original order after their checks;
 store.scope_candidate_acquisition and every downstream association remain unchanged.
-A partial batch never publishes a complete candidate. Record failure through the
-existing replay-output error path, then propagate that failure for this ordinary
-batch; the old catch must not convert a failed new batch into authenticated success.
-Already-owned holds stay with Reader.close, not a temporary list that can leak.
+At the shared Reader.hold call, the real _hold_bytes return belongs to this call until
+the original self.owned.append(item) transfers it. Protect just that handoff. Determine
+transfer from the actual owned entry by identity if append is interrupted. Close the
+same untransferred item once on failure. Once transferred, only Reader.close closes it,
+including if replay registration later fails. Preserve the original acquisition,
+normal return and all other gate guards, registrations and exception behavior.
+
+Only the ordinary batch propagates its own copy/hold/registration failure. Bind that
+decision to the actual failing operation. If the original replay holds append fails,
+use its original failure record and propagate that same error, subject to first
+cancellation, even when bundle_owner is None. An incomplete registration cannot yield
+a complete acquisition. Preserve the original fate of earlier retention guards and of
+association failures after a successful batch. A pre-existing unusable flag does not
+identify a new exception. Keep existing error fields and source call counts.
 Keep exact exception identity, first marked cancellation/KeyboardInterrupt/SystemExit,
 secondary errors, once-close and no retry of an uncertain close. No new error fields.
 
@@ -933,7 +949,8 @@ an ancestor of an already published candidate. Full root/tmp/other-ancestor iden
 leaf before/after/named, dev/ino/type/uid/gid/mode/nlink/size/time/ACL and full bytes
 remain exactly checked. Unknown interference after a hold still refuses. No promise
 is made about unrelated shared-root mutations or the old dynamic UNKNOWN failures.
-Inverses must recover the unchanged gate branches, consumer and original call bodies.
+Inverses must recover the original gate branches and call bodies outside the single shared
+owned handoff, and the full original consumer.
 
 Keep all original cases and actual acquisition/child/cancel/close calls. Update only
 three manual ordinary Reader setups in raw16_scope_sudo_source,
@@ -958,16 +975,25 @@ control extends its existing stable case rather than repeats its4 runtime acquis
 or original seal. It adds2 complete fixed-name candidate batches with2 ordinary input
 captures interleaved before/after those original runtime operations, then rechecks
 all real owners and checks distinct slots, exact bytes and unchanged saved identities.
-The other three controls each use one fresh ordinary fixture: layout-failure fails
-the second creation after one real successful mkdir; partial-hold-cancel writes one
-full batch, obtains the first real hold, then raises one original-style marked cancel
-on the second hold attempt; post-hold-parent-drift writes/holds one full batch then
-creates one unexpected regular sibling in that completed slot and requires original
-HeldPath rejection. F=33 is the exact existing policy-form count (29 SHADOW_EVIDENCE_NAMES plus
+The other three controls each use one fresh ordinary fixture. Layout-failure fails the
+second creation after one real mkdir. Require the actual root dir_fd passed to mkdir
+and exactly one successful original os.close of that FD through the existing delegate.
+Partial-hold-cancel writes one full batch. Register the first real item. On the second
+existing attempt let _hold_bytes return its real item, then inject the same marked
+cancel at its owned registration before transfer. Require the original cancel identity,
+one real close of the second item by hold and one real close of the first by Reader.close.
+For post-hold-parent-drift require all 33 successful registrations and their exact
+bytes, then create the real sibling and consume E_STALE only from the target recheck.
+In each negative control, catch only the intended operation and verify its expected
+error. Earlier failures cannot satisfy a later predicate. Unexpected KeyboardInterrupt,
+SystemExit, marked cancellation and other errors propagate as their original objects. F=33 is the exact existing policy-form count (29 SHADOW_EVIDENCE_NAMES plus
 bundle/eval-seed/README/policy), never a reduced sample.
-Added candidate copies are4F, added successful holds are3F+1, plus one failed hold
-attempt:132 added candidate copies,100 successful candidate holds and1 failed
-hold attempt; added ordinary input copies are2. The stable owner layout is initialized
+The four controls add 132 candidate copies (4F) and 2 ordinary input copies.
+They actually acquire 101 candidate items, with 100 successful owned registrations
+(3F+1) and one failed registration. Separately charge the additional acquisition and
+validation read, actual opens/FDs, lifetime, genuine close and error/cleanup work of
+that untransferred item to the original owners. The four paths still create 199
+directories successfully. Physical totals remain UNKNOWN_NOT_ZERO. The stable owner layout is initialized
 once, not twice; three negative owners add exactly three initialization attempts,
 one partial. Full successful initializations create66 directories each; partial
 creates1 before failure. No new child/tool/platform/source call or full authentication
