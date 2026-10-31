@@ -1,5 +1,5 @@
 ---
-spec-blob: 754737af72ddefeeb1e57b6f68d80a68f850a509
+spec-blob: f8d201cbfdf56a8451b43845758b73e1f125dd4e
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-26
@@ -13,32 +13,25 @@ existing review relay and measured scope binding remain intact. PR 1b remains
 one complete two-source delivery. Source preparation does not accept a dependency,
 a real recording, native qualification or either seed batch.
 
-This plan-only candidate derives from accepted END plan
-`afcff86e00b7b95e780e3a93b1da88bedb9035a6` and binds accepted G2 spec
-`754737af72ddefeeb1e57b6f68d80a68f850a509`. PR #797 passed independent G2
-review and quick CI41208154993, then protected-landed at current plan-PR base
-`1ed9aeeb5ff25d5a24f5d9a19bdfaecb72bfa6cb`, sole parent
-`04696ed0f2301fa5f1c7bdb588877dfe2d74ec76`, tree
-`5f266f962f00949774b76d4e665179c6f8b819b4`. Review comment6544451060 was
-read back exactly. This accepts G2 scope, not this separate high-risk plan.
-Accepted END G2/plan obligations remain unimplemented and open for this combined
-pass; END, loops and writer technical contracts below do not change.
-Design source/run identity remains `788570708e737da146c7867f6c3f328723be5770` /
-CI41202319488 / execution base`d5e7e5be694f647b98a676175ea7f2ab26d21192`.
-The original run is now COMPLETED FAILURE. All eight raw archives and independent
-complete79 classification remain pending at drafting; do not supply final counts
-or infer causes from that terminal status. Retain the proven END owner and loops
-Tuple.id defects and every actual failure; T/scope-pre roots remain UNKNOWN.
-Artifact-only plan review, required quick CI and protected landing may proceed
-while the original evidence is closed. Source W/refs/recipe/consumed GO remain
-frozen until all eight raw/metadata/index archives and independent classification,
-this plan's protected landing, actual latest fetched-main artifact merge and fresh
-CODE. No old GO, automatic retry or second full window is authorized. The future
-source plan-base is UNKNOWN until fetched main containing the accepted plan;
-this known G2/current plan-PR base is not that future source execution baseline.
-Prior preservation is completed, not repeated. All implemented handoff/helper/AST
-and earlier repairs remain baseline facts, not permission to reopen them. Source,
-I1/G3/native and prior debts are not accepted or closed by this candidate.
+This plan amendment derives from accepted plan
+`25ef8663d11f9048411ad53dcb811ba95e2cbdf4`. Protected G2 PR #799 accepted spec
+`f8d201cbfdf56a8451b43845758b73e1f125dd4e` after independent review and quick
+CI41213739584. Current plan-PR base is `bf502f5e11c43a6f8c51c62abcebaa79063d4c5e`, sole parent
+`3d4ccac2853a2bd1bc1df19a357a47f112a1e980`, tree `e0c942c87da48d9c98cc62d6084cbaaa73f109ac`.
+Source is paused at `760866d90c82b73505cffb6ac267156d24ab72ab` with the two
+CODE6544812019-authorized drafts preserved. SOURCE_NOT_ACCEPTED; restore I1 OPEN.
+The only new technical opening is the original END restore error source and its
+four-object/three-fold bound. Retain the original three contacts, all guards and
+unresolved acceptance debts. The separate one-use local checkpoint below requires
+the separate high-risk plan acceptance before its own review and preservation GO.
+It is not current permission to commit or continue code.
+Original CI41202319488 at source788570/baseD5e7 is closed FAILURE: 62 PASS,
+5 FAIL, 12 NOT_REACHED; all eight raw logs total219046433 bytes, closure6544585942.
+Retain every original failure and UNKNOWN; T/scope-pre roots remain UNKNOWN.
+The future source plan-base stays UNKNOWN until fetched main contains this new
+accepted plan. No old CODE/runtime GO or source review carries forward. Prior
+completed preservation remains history and cannot authorize this new checkpoint.
+Source, I1/G3/native and prior debts are not accepted or closed by this candidate.
 The prior full-CI source/base remain
 `89748ffb350eb8db6b1162ff6daf90dbd9c72fa8` /
 `ec68ada78dd031e37b9daee5a694bc4e18a4d69d`.
@@ -816,12 +809,13 @@ blocked pending its exact scope gate.
 
 ### Existing regression compatibility (R9.2)
 
-Retained requirements remain accepted obligations. G2 PR #797 accepts this scope;
-subject to separate high-risk plan landing, the next pass contains only three contacts in two
-files: retained END owner/cleanup, same-line loops all-Name prerequisite, and the
-writer-two-roots same-call primary propagation with its exact cleanup/outer exit.
-The first three table rows are the active set. END is accepted but not implemented;
-do not freeze it out of this combined pass. All other source788570 bytes remain
+Retained requirements remain accepted obligations. The first three table rows remain
+the two-file CODE set: END owner/cleanup, same-line loops all-Name prerequisite, and
+writer-two-roots propagation with its exact cleanup/outer exit. Their sealed M760
+drafts are unaccepted. This amendment adds only END restore capture and arbitration;
+T and AST technical contracts stay unchanged. After G2 PR #799, separate high-risk
+plan landing, the one-use preservation gate and fresh CODE precede further source work.
+All other source788570 bytes remain
 frozen, including production handoff, H0/H1–H6/helper-env/first-read reuse, earlier
 AST repair, terminal, observer, replay messages and source/stdout/cause. Keep all
 other T controls, L/R and scope-pre behavior; no generic hook/diagnostic facility.
@@ -832,7 +826,7 @@ added; no new test case/child/producer/validator/source-read/runtime opportunity
 
 | File | Fixed contact and order of work |
 | --- | --- |
-| `scripts/test/candidate-content-preparation-fixtures.py` | Only `raw16_C2_refused_END_transfer`: complete the same original new case using one canonical template and setdefault, retain old values/references and separate mutable containers, and move its one original binding into the protected inner try after checks. Keep peer/invoke and original assertion expressions. Only the same function's original held/tempdir cleanup error handling, final arbitration and deferred original print also change as specified below. |
+| `scripts/test/candidate-content-preparation-fixtures.py` | Only `raw16_C2_refused_END_transfer`: complete the same original new case using one canonical template and setdefault, retain old values/references and separate mutable containers, and move its one original binding into the protected inner try after checks. Keep peer/invoke and original assertion expressions. Only the same function's original spawn restore and held/tempdir cleanup error handling, final arbitration and deferred original print also change as specified below. |
 | `scripts/test/scope-qualification.test.sh` | Only PY_STORE_MODE_CONTROLS.loops at original physical9087/heredoc42: add the all-Name prerequisite before the existing complete ordered four-name comparison on that same line. Preserve unique1, six labels and every downstream byte. |
 | `scripts/test/candidate-content-preparation-fixtures.py` | Only raw16_t_lifecycle's writer-two-roots instance _discard_runtime delegation, the original compound assertion's cause, original holder cleanup/error arbitration, and the outer existing TemporaryDirectory exception exit when this writer already has pending failure. Other T bodies change only by mechanically necessary enclosing indentation; all statements/calls/assertions remain. |
 | `evals/v1/evals-launcher.sh` | Only the `c2_program` C2Helpers.build acquisition-to-C2Root publication block and its pending-held failure cleanup below. Keep C2Root.__init__/fail/close and all other production functions unchanged. |
@@ -996,8 +990,10 @@ actual ledger shape. Added allocation/check failures must reach original cleanup
 
 The only additional reopening is this function's original error/cleanup tail.
 Retain original TemporaryDirectory context and one actual context exit. Restore
-spawn once, then call the original held.close exactly once; capture its BaseException
-instead of allowing it to replace an already caught primary. Do not retry any
+spawn once and capture its BaseException as a separate original error. Even if that
+assignment fails, call the original held.close exactly once and capture its
+BaseException separately. A failed or uncertain restore is failure, never a retry.
+Do not let either error replace an already caught primary before arbitration. Do not retry any
 consumed or uncertain close, add a second cleanup, modify production close, use GC
 as proof or find resources through traceback. Capture a failure of the original
 TemporaryDirectory exit as a separate later error; do not call cleanup again.
@@ -1006,7 +1002,7 @@ earlier literal load, template or duplicate arbitration function for that prefix
 The new protection/arbitration applies after the existing fixed acquisition.
 
 Use bounded local state to distinguish completed setup, expected peer caught,
-actual fatal body/assertion error, held-close error and temporary-exit error. A
+actual fatal body/assertion error, restore error, held-close error and temporary-exit error. A
 setup failure cannot enter the expected-refusal success path. A caught cancellation
 must fail even if last_attempt/END happens to exist. Use the actual fixed namespace's
 c2_cancelled (KeyboardInterrupt, _scope_signal_cancel or _D_source_cancel) and
@@ -1015,9 +1011,15 @@ and its caught object remain; completed setup without last_attempt still fails.
 
 Before leaving the original with, retain protected-segment errors rather than
 raising them across its __exit__. If setup failed, invocation cancelled, last_attempt
-is absent or held.close failed, skip the success assertions/print and retain failure.
-When close failed, choose c2_first(caught, close_error) if caught exists, otherwise
-that same close_error. Any close failure forces failure even when the selected
+is absent, restore failed or held.close failed, skip the success assertions/print
+and retain failure. Fold only actual errors in body/peer → restore → close → temp
+order. Start with the actual fatal body/setup error if one occurred. Only in its
+absence use the original peer caught. For each actual restore, close and then
+temporary-exit error, fold it with the currently selected primary using c2_first.
+If no primary exists, select that error directly. Keep the selected same object
+for the next step, including when restore succeeded and close is the next error.
+Keep restore as its own original reference; neither overwriting caught nor implicit
+context supplies this arbitration input. Any restore/close failure forces failure even when the selected
 object is the normally expected refusal. An earlier cancellation is not replaced
 by a later ordinary error or later cancellation; a first later cancellation takes
 priority over an ordinary primary. Keep the losing original error as well.
@@ -1038,7 +1040,7 @@ fatal body/assertion failure, follow the original assertions' successful result 
 execute the deferred original print. Otherwise raise the selected same exception
 object. Never use caught!=None/END as permission to swallow a setup/cleanup error.
 
-Keep at most three distinct same-call original exception objects plus selected
+Keep at most four distinct same-call original exception objects plus selected
 aliases until arbitration. Preserve existing traceback/cause, without rewriting
 or clearing them to hide a secondary. Successful completion releases unneeded
 caught/temporary references before the original print. On failure, needed secondary
@@ -1061,7 +1063,7 @@ Per original refused-END call reaching this setup, add one canonical template an
 bounded local checks; retain three reservation constructions and one original
 caller/invoke/peer opportunity. At the original cleanup point, held.close is called
 once, and the original TemporaryDirectory exits once. Earlier acquisition/setup
-failures do not imply a child existed or a close completed; do not fabricate either. Error arbitration uses at most two direct
+failures do not imply a child existed or a close completed; do not fabricate either. Error arbitration uses at most three direct
 c2_first calls and one direct c2_cancelled check; their original internal calls are
 unchanged. There is no new test case, child/build/tool/platform/read opportunity.
 All allocation, comparisons, exception references/arbitration and partial/failure/
@@ -1306,23 +1308,65 @@ Reverse this one predicate-order edit to recover the whole original shell file.
 No dashboard/caller/map shift is caused by a same-line change. Static selection
 of the eleven sites does not prove any worker ran. All check costs stay UNKNOWN.
 
-**Current source handoff and proof.** G2 PR #797 is accepted and protected-landed
-at current plan-PR base1ed9aeeb5ff25d5a24f5d9a19bdfaecb72bfa6cb. The accepted END
-chain remains intact. This separate combined plan still needs fresh independent
-review, required quick CI and protected landing. Artifact-only gates may proceed
-during evidence closure; no reset/stash/clean or duplicate attempt.
-The original run is COMPLETED FAILURE, but all8raw/metadata/index archives and
-independent79 classification remain pending. Keep source788570, execution baseD5e7,
-source refs/recipe/GO frozen until that evidence is complete and every failure is
-retained. Then fetch latest main containing this accepted plan and normally merge
-it into the same source branch before fresh CODE. That future source plan-base is
-unknown here; neither G2 acceptance nor old GO substitutes for any source gate.
-Intent stays a4197f299974e62bb2b97e004b75182012abbb87; only spec/plan artifacts update,
-other599 entries exactly match source788570 bytes/type/mode/blob. Seal the real
-post-artifact-merge601 preCODE manifest. Fresh CODE for the original Sol author
-allows only this fixture and the scope-qualification shell to change; other599
-entries, including new spec/plan and launcher, stay exact. Artifact merge paths are not CODE paths; old GO
-and source review are not reused.
+**Current source handoff and proof.** G2 PR #799 has protected-landed. This separate
+high-risk plan requires fresh exact-head/base review, quick CI and protected merge.
+Its current PR base is `bf502f5e11c43a6f8c51c62abcebaa79063d4c5e`. Source M760 remains paused. The next accepted source plan-base is the actual fetched
+main containing the new plan, not a preassigned OID. Original full412023 closure
+and all failures remain evidence; no new runtime window is authorized here.
+
+**One-use local preservation checkpoint.** This is a distinct stage exception only
+for CODE6544812019's already authorized, sealed two-file draft. Keep SOURCE_NOT_ACCEPTED
+and restore I1 OPEN. It takes effect only after the above G2 and plan land, and does
+not replace final source review or final source commit. Preserve exact branch
+codex/impl/eval-source-relay-replay and HEAD760866d90c82b73505cffb6ac267156d24ab72ab,
+parents [788570708e737da146c7867f6c3f328723be5770,
+3d4ccac2853a2bd1bc1df19a357a47f112a1e980]. The HEAD tree is
+4e12445d1225e7e709f7b69ae09b17f2dc6541e3; the dirty candidate tree must be derived
+and sealed from the actual full601 bytes/types/modes, never inferred from this tree.
+Require the sealed actual601 (222866 B, SHA-256
+71242b695a67df22ac492f9a026a1e815bd5c55cef232e92a33708c9b10c4a9a) and expected
+dirty tree9b75113ef870863fd8fa5420850dd7ab300ab1dc. Recompute both before save GO.
+
+| Exact saved path | Sealed bytes / SHA-256 / POSIX mode |
+| --- | --- |
+| scripts/test/candidate-content-preparation-fixtures.py | 702210 / f636a80265d168e93460cddf3f8ee038ab64bdcca52203ba2e6dc578f98b0527 / 0644 |
+| scripts/test/scope-qualification.test.sh | 1224675 / c8256206ffd3569b9d2b5d2e071bc3a9cd2c832bffbcf98e54857185a7948a9e / 0755 |
+
+Bind r0 owned.diff SHA ae85c671cf6831239187493c20ec9b8402d617ce70cdcdde8a0225f981e3b20a,
+manifest fd8a9cb221ead811fa02138c751e03c6c96167e3fbeae6b1625406c64bf0b1d8,
+and unchanged index74324B/f849a6d6dc4d7bdac5a384f572b700a566050f3e6a70e48593871b4e0e5bc60e.
+Before any write, the manager seals the actual full601, the other599 unchanged
+against M760, index/stages, Git/POSIX modes, dirty tree and complete manifest hash.
+Freshly verify remote source788570, PR absent and #439's sole matching claim.
+A separate independent preservation-scope/integrity review must be Important0;
+the manager reads its complete raw report and rechecks the exact scene before a
+unique fresh preservation GO. This verdict does not accept source or close I1.
+
+That GO binds an exact commit message and dirty tree and permits at most one git add
+of the two listed paths and one normal local commit with sole parent M760. Immediately
+before writes, check full601, expected staged601 contents/modes, index stages and
+config/hooks/attributes so staging and commit cannot change the sealed bytes or run
+products. An unsafe hook/config/filter stops; do not bypass it or widen execution.
+Recheck actual staged601 before the commit. No reset, clean, stash, restore, deletion,
+push, main/other-ref move, product execution or CI. The current branch's one normal
+checkpoint commit is the only ref advance. First failure, drift or uncertainty stops
+with the resulting scene intact; no retry, index rollback or hidden commit.
+
+Independently seal actual commit HEAD/sole parent/tree/index/full601 bytes/types/Git
+and POSIX modes and clean status. The commit must save exactly the presealed dirty
+tree, not a rewritten draft. Its OID remains unknown until it exists. Then normally
+merge the latest accepted artifacts into this same clean branch. Intent stays
+a4197f299974e62bb2b97e004b75182012abbb87; only spec/plan may change in that artifact
+merge. All other599 entries must equal the actual saved checkpoint, including both
+saved test drafts. Seal the real post-artifact-merge601 manifest and clean tuple.
+Only fresh CODE to the original Sol author may then complete END restore capture/
+four-object/three-fold handling and genuinely required revisions within the same
+original three contacts. CODE still permits only the two listed test files; the
+other599 entries, including newly accepted spec/plan and launcher, stay equal to
+that new preCODE manifest. Artifact deltas are separate from CODE deltas.
+This one-use exception cannot save unknown/other dirty, authorize a second checkpoint,
+reuse old GO or alter excluded attempts. All preservation/review/commit/merge costs
+accumulate UNKNOWN within the original accounting; no refunds or new allowance.
 Bind full actual fixture bytes/length/SHA in original source/recipe/review records.
 No new pin path opens. Current launcher/c2_program, complete61996 B shell helpers/
 041ec87d, five literals, D84/SOURCE84, driver/catalog, consumer7d58, formal/native,
@@ -1333,8 +1377,9 @@ Only the exact retained END, writer-boundary/outer-exit and one-line AST deltas 
 After code, perform the applicable pure static checks, bash -n on the affected
 shell and pinned shellcheck 0.11.0 over all 149 shell files; no product trial is
 substituted. Preserve the author's complete diff/report. Independent source,
-recipe and resource reviews precede a normal commit, committed rebind review,
-then one fresh manager GO and one original79/six-shard full-CI dispatch. Seal all
+recipe and resource reviews with Important0 precede the normal final source commit
+(the one-use checkpoint above is not that commit), independent committed rebind,
+then one fresh runtime GO, normal push and one original79/six-shard full-CI dispatch. Seal all
 eight raw logs and independently classify all79. Keep the original strict rounds,
 all failed/UNKNOWN preparation and execution costs without refund or #558 borrowing.
 Native Mac→same-head Linux, I1/restoration/G3, both principal obligations and
@@ -5027,7 +5072,8 @@ gates (R9.6).
 - PR 3: `review_size: standard`, about 300-400 net added lines.
 - This plan-only amendment: `review_size: standard`. One bounded ordinary regression
   compatibility concern: retained END owner/cleanup, one AST type prerequisite and
-  same-call writer error propagation. G2 PR #797 accepts the scope; this separate
+  same-call writer error propagation. PR #797 accepted the three contacts. G2 PR #799
+  accepted the END restore and single-checkpoint amendment. This separate
   plan still needs fresh review, required CI and protected landing. No CODE/runtime
   GO follows. All original proof and invoices remain.
 
