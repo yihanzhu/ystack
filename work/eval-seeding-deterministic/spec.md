@@ -2151,10 +2151,16 @@ to evade the source cap. Executable and policy files always belong to the closur
      仅 ordinary store_session=None 改布局；原 gate 会话/4096槽/P-wires 保持原样。
      Reader 在第一次 hold 前，通过一个私有初始化边界，在原 captures 下排他预建
      ordinary-inputs、ordinary-recording、ordinary-candidate-0000 至0063，共66目录。
-     新目录0700，原 root 必须完整通过原 physical/name/FD/owner/mode/ACL检查；
-     预建失败不继续，保留原 first-error/marked-cancel/关闭责任。预建完成后建立真实
-     captures root hold，此后其 namespace 冻结。记录每个未用 candidate 槽的真实完整
-     identity；首次使用须仍与其同名/FD一致且空。根目录或已用槽不补建、不回收重用。
+     初始化严格分两阶段。首hold前仅排他创建0700目录，检查固定路径/真实mode，
+     保存未发布的root及各槽真实完整stat；不在真实resolver建立前宣称ACL通过。
+     原self.python/self.consumer及其余原先置holds按原顺序取得，原self.darwin建立后、
+     任何业务capture或布局发布前，以该真实resolver完成root及全部66目录的原完整
+     physical/name/FD/owner/mode/ACL认证，并与预建保存的完整identity比较；不得更新
+     expected掩盖间隔变化。禁止None/假resolver、跳过Darwin ACL或额外平台调用。
+     全部认证成功才发布布局和原owned中的真实captures root hold；namespace从预建
+     完成即冻结。任一阶段失败停止，由原finally保留first-error/marked-cancel并一次
+     关闭实际取得资源；不发布partial。首次使用candidate槽仍验证同名/FD完整identity
+     与原保存值一致且空。根目录或已用槽不补建、不回收重用。
 
      64来自原最多16 records、最多两个 qualifying/current角色和原初始/最终两遍
      认证的乘积。原嵌套 frozen authentication 是 enforced-reproduction，无candidate
@@ -2197,6 +2203,16 @@ to evade the source cap. Executable and policy files always belong to the closur
      占用/P-drift/seal/空目录等原断言改对其实际责任目录，谓词不降。
      scope-qualification.test.sh的PY_COVERAGE_PURE同样调用真实初始化；保留141检查。
      gate/recorded-alias手工对象不注入ordinary布局，不改其协议或验收。
+
+     同一scope测试仅另开原foreground位置绑定：consumer完整_foreground相对ac36
+     字节未变而整体后移5行；实际本轮deadline缺first_git_select_observation，不能
+     把cancel最终pipes值或此修复当其它E_RUNTIME/UNKNOWN的证明。仅原物理6127、
+     6133、6140、14116、14154、14158、14161七行的十个整数按原同源角色重绑：
+     5980六处→5985，6119三处→6124，6038一处→6043。前三行是原断言；后四行
+     是GenuineRelationCapture原record中的循环检查/SIGTERM/raise-first位置认证。
+     此精确数字替换优先于旧一概字节冻结，其余predicate/两帧次序、code/frame身份、
+     异常对象/字段/16帧上限、guards、calls和全部原断言均冻结，不新加观测或运行。
+     完整模板/私有插入/断言逆证只容这十个数字；禁止全局+5替换或改原clock-site字符串。
 
      本pass仅六文件：上述Reader与两个测试文件，以及evals/v1/evals.jq、
      evals/v1/evals-driver.sh、evals/v1/evals-launcher.sh的真实必要机械绑定。
