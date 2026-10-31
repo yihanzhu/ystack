@@ -1,5 +1,5 @@
 ---
-spec-blob: 1e4333888cab4b31c3987898a221afedc76bac64
+spec-blob: d84b1082e98741b8ad2bd6e2bc0535e497f0f768
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-26
@@ -13,16 +13,19 @@ existing review relay and measured scope binding remain intact. PR 1b remains
 one complete two-source delivery. Source preparation does not accept a dependency,
 a real recording, native qualification or either seed batch.
 
-This plan revision derives from accepted plan e97e13db955435f9f300d5d7d3d53920710b27b4.
-Reader G2 PR803 is accepted; spec-blob binds its landed spec1e4333888cab4b31c3987898a221afedc76bac64. Current
-source2b4d98625ea49a0fa3d4da8f5ccc8439e075cc27 and execution
-basea79aaeab323bf1890627d145fff3384080df1e4c stay frozen until all8 original logs
-and the full79 have independent closure, the new artifact gates land and fresh CODE
-is recorded. This plan claims no CI acceptance. This fixes a proven
-static ordinary Reader directory/hold conflict, not a proved dynamic job5/T/scope cause.
-Current plan publishing base is G2 landing71498c4c06d32cb5043b2421434cf1df7dd26288.
-This high-risk plan still needs fresh independent PR804 review and protected landing;
-the final source plan-base/code-start OID remains UNKNOWN until that merge is freshly fetched and recorded.
+This amendment derives from accepted plan dc5cc1eada558d180a44d80f8c0a409016bfdb04.
+G2 PR805 is accepted and protected-landed; spec-blob binds its landed spec
+d84b1082e98741b8ad2bd6e2bc0535e497f0f768. Current plan publishing base is
+97d3a1b07d087f6d1d4a30f1292901f0ab43a66f, sole parent
+4f52dad44426b9929e7b731d357d4073d703e8ce, tree3428c9ed16daa8995584ef689ba7af96e1e20c1b.
+The exact G2 review is recorded at issuecomment6549321575 and its protected merge receipt.
+This clarifies only the three existing manual Reader ACL seams and the two original
+candidate-name forms. Source M af0cb03011f23be68fcf48abd7be76a6904ac5ab and its six
+owned dirty drafts remain preserved with the original author paused and source unaccepted.
+This high-risk plan still requires fresh independent review, quick CI and protected
+landing. The future source plan-base/code-start OID remains UNKNOWN until that plan
+merge is freshly fetched and recorded, followed by exact source continuation checks
+and fresh CODE. No source/CI acceptance or historical UNKNOWN is closed.
 The manager may process separate artifact gates alongside the frozen source;
 this plan itself grants no CODE or runtime GO. No source work precedes full-batch
 closure and the new exact artifact/CODE gates. Before source work,
@@ -860,8 +863,8 @@ order. Immediately after the original self.darwin exists, before any business
 capture or layout publication, use that real resolver for the original complete
 physical/owner/mode/ACL/name-FD checks of the root and all66 directories. Compare
 complete identities with the saved prebuild values; do not refresh expected to
-hide intervening changes. Never use None, a fake resolver, an omitted Darwin ACL
-check or another platform call. Only full success publishes the layout and the
+hide intervening changes. Production construction must never use None, a fake resolver,
+an omitted Darwin ACL check or another platform call. Only full success publishes the layout and the
 actual captures root hold in the same owned list. The namespace freezes when
 prebuilding ends. Either phase failing stops through the original finally with
 first-error/marked-cancel and actual once-close responsibility; partial state is
@@ -904,7 +907,12 @@ copy a second writer or weaken the candidate=True guard. Ordinary _authenticate
 calls the batch method; gate still uses its original per-file capture route. The batch
 retains each original raw reference and real written stat until the original hold
 has matched both. Before holds, require the batch directory contains exactly the
-fixed original names and only the original created objects. Preserve _copy_preparation_document,
+fixed original names for that same body.record_form and only the original created objects.
+Keep _authenticate's original32 names for withheld-write.v1 and33 names for
+withheld-write-policy.v1. The batch retains that complete form-bound set and sorted
+order. Do not require33 for both forms, drop policy members or relax the original
+capture membership predicate. Add no authentication or validator call. The four new
+controls below still use the complete policy33 set. Preserve _copy_preparation_document,
 its actual ACL/no-follow/exclusive write, each parent's real refresh/close and original
 4*len(raw) candidate hold reservation/read accounting/seed-processing increments.
 There are no extra source/Git reads and no substitute hashing or runtime expected value.
@@ -931,9 +939,18 @@ Keep all original cases and actual acquisition/child/cancel/close calls. Update 
 three manual ordinary Reader setups in raw16_scope_sudo_source,
 raw16_scope_acquisitions and raw16_scope_P_ownership to call the real initializer
 before original holds, and point their original occupied/P-drift/seal/empty-directory
-checks to ordinary-recording. They test the same exact predicates on the responsibility
+checks to ordinary-recording. Only these three existing manual setups retain their
+original reader.darwin=None while the original c._acl_state substitute is installed.
+They use the same real layout initializer through that existing ACL seam, with all
+original physical/name/FD/identity/mode checks. Preserve the original seam restoration,
+case/assertion/call/order, exception identity, cancellation, finally, once-close,
+cumulative costs and non-native/qualification=False outputs. Add no fake owner/resolver,
+production None fallback, type-check bypass or source/runtime/platform call.
+They test the same exact predicates on the responsibility
 directory, not relaxed ancestor acceptance. PY_COVERAGE_PURE similarly initializes
-its real ordinary Reader and0700 captures before _ReadOnlyGit; retain all141 checks.
+its real ordinary Reader and0700 captures before _ReadOnlyGit; its real
+_DarwinChildOwner and complete ACL responsibility remain unchanged, without a
+None-seam exemption. Retain all141 checks.
 Do not modify gate/P, recorded-alias or unrelated manual receivers.
 
 Extend raw16_scope_acquisitions only with four bounded layout controls. The stable
