@@ -1,5 +1,5 @@
 ---
-spec-blob: 61dbd0be26a6735115d224bf72cb47becc62cdb4
+spec-blob: 1e4333888cab4b31c3987898a221afedc76bac64
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-26
@@ -13,24 +13,23 @@ existing review relay and measured scope binding remain intact. PR 1b remains
 one complete two-source delivery. Source preparation does not accept a dependency,
 a real recording, native qualification or either seed batch.
 
-This plan amendment derives from accepted plan d43c100dad9536b5fbe48cb3118d6fd38493c209
-and binds accepted G2 spec61dbd0be26a6735115d224bf72cb47becc62cdb4. PR #801
-passed independent G2 review and quick CI41225464398, then protected-landed at
-current plan-PR base56dfe9a8b125a385f46f6315c0100eed90174143, sole parent
-5303a67747af0e80c0fb964e979b81d1c11286ed, tree81cec753c16d960a1016a89f7a1714cd62ff5006.
-Review comment6546925824 was read back exactly. Current source
-ac36c43801746089e17702f9b137fd6ee938dddd and execution
-base5303a67747af0e80c0fb964e979b81d1c11286ed remain frozen while full CI41220613241
-runs. Actual caught/end values and this failure's inner cause remain UNKNOWN.
-Two proven static defects concern the same caller's strict ledger and missing-DONE
-failure/wait order. Only the six-file closure below opens for the next pass.
-G2 has protected-landed. This separate high-risk plan still requires its own
-exact-head/base review, quick CI and protected landing. The future
-source plan-base is UNKNOWN until that fetched main exists. Before source work,
-close all eight original logs and independently classify the full79, retain every
-failure, normally merge accepted artifacts into the same branch and obtain fresh CODE.
-The prior M760-only checkpoint keeps its exact historical scope and cannot be reused
-at this source. Preserve original4/3/1 END arbitration, T/AST repairs and all debts.
+This plan revision derives from accepted plan e97e13db955435f9f300d5d7d3d53920710b27b4.
+Reader G2 PR803 is accepted; spec-blob binds its landed spec1e4333888cab4b31c3987898a221afedc76bac64. Current
+source2b4d98625ea49a0fa3d4da8f5ccc8439e075cc27 and execution
+basea79aaeab323bf1890627d145fff3384080df1e4c stay frozen until all8 original logs
+and the full79 have independent closure, the new artifact gates land and fresh CODE
+is recorded. This plan claims no CI acceptance. This fixes a proven
+static ordinary Reader directory/hold conflict, not a proved dynamic job5/T/scope cause.
+Current plan publishing base is G2 landing71498c4c06d32cb5043b2421434cf1df7dd26288.
+This high-risk plan still needs fresh independent PR804 review and protected landing;
+the final source plan-base/code-start OID remains UNKNOWN until that merge is freshly fetched and recorded.
+The manager may process separate artifact gates alongside the frozen source;
+this plan itself grants no CODE or runtime GO. No source work precedes full-batch
+closure and the new exact artifact/CODE gates. Before source work,
+archive all eight original logs, independently classify the full79, retain all failures,
+normally merge accepted artifacts into the same preserved branch and obtain fresh CODE.
+Prior checkpoint and runtime GO records cannot be reused. Keep original4/3/1 END,
+T/AST/C2 repairs and all prior acceptance debts; the H2b4d implementation is baseline.
 The prior full-CI source/base remain
 `89748ffb350eb8db6b1162ff6daf90dbd9c72fa8` /
 `ec68ada78dd031e37b9daee5a694bc4e18a4d69d`.
@@ -809,12 +808,11 @@ blocked pending its exact scope gate.
 ### Existing regression compatibility (R9.2)
 
 Retained requirements remain accepted obligations. The current pass opens only the
-six-file caller-protocol and binding table below. The prior END owner/4-error cleanup,
-loops AST fix and T writer boundary are the implemented sourceac36 baseline. Their
-technical contracts continue to apply. New changes are limited to the original
-caller's eight existing schema sites and complete-END/no-DONE EOF/wait responsibility,
-plus the exact mechanical bindings. Other595 post-artifact source entries stay exact.
-No new test/case/child/producer/validator/read opportunity follows from this amendment.
+ordinary Reader layout/hold lifecycle and finite regressions below, with its exact
+six-file mechanical closure. H2b4d's C2 caller/END/T/AST implementation stays frozen.
+Other595 post-artifact source entries stay exact. Only the explicitly counted layout,
+validation and regression operations below are new; no new child, provider, platform
+probe, suite, permission or diagnostic facility follows from this amendment.
 
 | File | Fixed contact and order of work |
 | --- | --- |
@@ -846,7 +844,199 @@ No new test/case/child/producer/validator/read opportunity follows from this ame
 | `scripts/test/candidate-content-preparation-fixtures.py` | Only `raw16_C1_gate_revision`: select the original `session.call_id` assignment and immediately following request assignment from `_Generator._kill_source_request_phase`. Bind the original five-role transition across request phase → `kill_source` → result phase: `K_REQUEST`, same-session `context[1].release_local()`, `not session.local and not session.remote` check, collector call, `K_DONE`. |
 | `scripts/test/shadow-enforced.test.sh` | In the first `PY_REPRODUCTION_VALUES`, add only the real `_runtime_sha_values` to the original ten-name AST selection. Require exactly one definition of each of `Refusal`, `canonical`, `sha`, `parse`, `document_ref`, `_native_provenance_values`, `_runtime_sha_values`, `_reproduction_provenance_values`, `_reproduction_record_values`, `_reproduction_bundle_values`, `StableFile`. Keep the existing namespace and all 32 original assertions; the helper uses its existing `sha/c`, so retain the exact `marked_sha`/bundle order, early-failure prefixes and error payloads. Do not alter expected marks, omit the Python hash, catch NameError as success or use a recursive loader. |
 
-**Current C2 caller ledger and terminal failure.** Bind the complete sourceac36
+**Current ordinary Reader layout and hold lifetime.** Use prebuilt isolation;
+do not implement a mutable-parent alias-refresh transaction. In store_session=None,
+prepare the complete private layout before self.python or any other first hold.
+Keep gate construction and its original4096 slots unchanged. Under the existing
+captures root create exactly two fixed directories ordinary-inputs and
+ordinary-recording, plus64 directories ordinary-candidate-0000 through0063.
+Use original exclusive physical directory/FD operations and0700. Never reuse an
+existing name, create a symlink, unlink/rebuild a slot or grow the set after startup.
+Initialization has two ordered phases. Before the first hold, only create the
+exclusive0700 layout, check fixed paths and actual modes, and retain unpublished
+complete root/slot stats. This phase does not claim ACL acceptance. Acquire the
+original self.python/self.consumer and other preceding holds in their original
+order. Immediately after the original self.darwin exists, before any business
+capture or layout publication, use that real resolver for the original complete
+physical/owner/mode/ACL/name-FD checks of the root and all66 directories. Compare
+complete identities with the saved prebuild values; do not refresh expected to
+hide intervening changes. Never use None, a fake resolver, an omitted Darwin ACL
+check or another platform call. Only full success publishes the layout and the
+actual captures root hold in the same owned list. The namespace freezes when
+prebuilding ends. Either phase failing stops through the original finally with
+first-error/marked-cancel and actual once-close responsibility; partial state is
+not published. Each slot's first use checks the held/name object against its saved
+complete stat and requires the directory empty. A changed unused slot refuses;
+a failed or partially used slot is never retried or recycled.
+
+The64 bound is16 existing records × at most2 qualifying/current matches ×2
+original authentication passes. The first authenticate_bundles and later final
+reacquisition each have at most32 write-policy authentications. A recursive frozen
+bundle has enforced-reproduction form and no candidate batch. Prove these actual
+call paths and original form guards before source acceptance. No extra evaluate,
+authentication call, role, record or attempt follows from this storage reservation.
+Use an increasing private batch index, consumed before a batch can write; require
+0<=index<64. Overflow is failure, never dynamic capacity or another pool.
+
+A single finite Reader initializer prepares this layout and the same original
+replay_output_work dictionary before IO. At the original _initialize_replay_outputs
+point retain that exact dictionary and its accumulated costs; initialize all other
+replay outputs at their original point, so earlier package holds are not newly
+registered as replay holds. The gate/no-prepared-work branch keeps its original
+initialization. Manual ordinary test objects call the same initializer after original setup writes to their shared ancestors and before their
+first captures hold; do not create a fallback layout or trust fabricated flags.
+Constructor failure closes every actually acquired FD once, preserves the original
+primary/first cancellation and cleanup failures, leaves partial paths to the original
+scratch owner, and never continues into evaluation. There is no second cleanup owner.
+
+| Existing writer / owner | Ordinary destination and immutable lifetime |
+| --- | --- |
+| Every capture(candidate=False), including Git config/verifier/retained/seed/contract/patch/metadata | ordinary-inputs/name. These retain original inputs full-byte checks and original names/order/calls. Their writes cannot change captures or a candidate slot. |
+| _authenticate's one candidate_files batch | Consume one prebuilt candidate slot. First do all original copies in sorted original name order; only then perform every original candidate hold/identity/byte check. Never write that slot again after the first published hold. |
+| retain_source_runtime and retain_source_capture | Same ordinary-recording parent for all original runtime files and source-copy directories. _retain_source_configuration receives that same original parent argument. Keep basename, ordinal, flat runtime layout, source/caller/row identities and the same aggregate physical-case accounting responsibility. |
+| _own_source_copy/_recheck_source_copies/_close_source_copies | Preserve their original actual source_copies and owned aliases, existing recording-parent transition and cleanup contracts. No candidate or input owner aliases the recording directory. No new refresh operation or replacement of any before is permitted. |
+| seal_source_captures | Open ordinary-recording for the original single seal_local_runtime and final transfers/close; all original runtime basenames resolve there. Gate branch remains original. Original source/runtime failure and cancellation decisions stay. |
+
+Factor only the existing candidate copy/parent-finally/accounting part and existing
+candidate hold/full-byte/identity/accounting part into finite private Reader methods,
+so gate capture and the ordinary batch use the same original implementations. Do not
+copy a second writer or weaken the candidate=True guard. Ordinary _authenticate
+calls the batch method; gate still uses its original per-file capture route. The batch
+retains each original raw reference and real written stat until the original hold
+has matched both. Before holds, require the batch directory contains exactly the
+fixed original names and only the original created objects. Preserve _copy_preparation_document,
+its actual ACL/no-follow/exclusive write, each parent's real refresh/close and original
+4*len(raw) candidate hold reservation/read accounting/seed-processing increments.
+There are no extra source/Git reads and no substitute hashing or runtime expected value.
+Append the same inputs/owned/replay objects in original order after their checks;
+store.scope_candidate_acquisition and every downstream association remain unchanged.
+A partial batch never publishes a complete candidate. Record failure through the
+existing replay-output error path, then propagate that failure for this ordinary
+batch; the old catch must not convert a failed new batch into authenticated success.
+Already-owned holds stay with Reader.close, not a temporary list that can leak.
+Keep exact exception identity, first marked cancellation/KeyboardInterrupt/SystemExit,
+secondary errors, once-close and no retry of an uncertain close. No new error fields.
+
+Safety proof is a lifecycle proof, not a directory-name assertion. captures gains
+all66 names before its first hold; ordinary-inputs changes only its own entries;
+ordinary-recording retains the old source/runtime lifecycle; each candidate directory
+changes only before its first hold. Thus a future ordinary self-write is never to
+an ancestor of an already published candidate. Full root/tmp/other-ancestor identity,
+leaf before/after/named, dev/ino/type/uid/gid/mode/nlink/size/time/ACL and full bytes
+remain exactly checked. Unknown interference after a hold still refuses. No promise
+is made about unrelated shared-root mutations or the old dynamic UNKNOWN failures.
+Inverses must recover the unchanged gate branches, consumer and original call bodies.
+
+Keep all original cases and actual acquisition/child/cancel/close calls. Update only
+three manual ordinary Reader setups in raw16_scope_sudo_source,
+raw16_scope_acquisitions and raw16_scope_P_ownership to call the real initializer
+before original holds, and point their original occupied/P-drift/seal/empty-directory
+checks to ordinary-recording. They test the same exact predicates on the responsibility
+directory, not relaxed ancestor acceptance. PY_COVERAGE_PURE similarly initializes
+its real ordinary Reader and0700 captures before _ReadOnlyGit; retain all141 checks.
+Do not modify gate/P, recorded-alias or unrelated manual receivers.
+
+Extend raw16_scope_acquisitions only with four bounded layout controls. The stable
+control extends its existing stable case rather than repeats its4 runtime acquisitions
+or original seal. It adds2 complete fixed-name candidate batches with2 ordinary input
+captures interleaved before/after those original runtime operations, then rechecks
+all real owners and checks distinct slots, exact bytes and unchanged saved identities.
+The other three controls each use one fresh ordinary fixture: layout-failure fails
+the second creation after one real successful mkdir; partial-hold-cancel writes one
+full batch, obtains the first real hold, then raises one original-style marked cancel
+on the second hold attempt; post-hold-parent-drift writes/holds one full batch then
+creates one unexpected regular sibling in that completed slot and requires original
+HeldPath rejection. F=33 is the exact existing policy-form count (29 SHADOW_EVIDENCE_NAMES plus
+bundle/eval-seed/README/policy), never a reduced sample.
+Added candidate copies are4F, added successful holds are3F+1, plus one failed hold
+attempt:132 added candidate copies,100 successful candidate holds and1 failed
+hold attempt; added ordinary input copies are2. The stable owner layout is initialized
+once, not twice; three negative owners add exactly three initialization attempts,
+one partial. Full successful initializations create66 directories each; partial
+creates1 before failure. No new child/tool/platform/source call or full authentication
+trial is added. Existing source/runtime/configuration/close fault controls remain;
+all reused original calls and every partial/failed/cleanup cost stay counted.
+Real close seams call original close once; no fake descriptor success or swallowed
+cleanup error. Preserve test output fields; assertions may add fixed messages only.
+
+All preparation and retained state belong to original Reader replay_output_work/M
+and original recording case/window, with no per-slot budget multiplication. Record
+actual productive metadata/ACL/close observations through existing admitted operations;
+no new observation site/schema, logger or diagnostic field. Account actual successful
+mkdir work as original M occurrences and retain the actual operation count in existing
+ordinary recipe/resource evidence; do not mislabel directory backend bytes as file
+payload or claim free mkdir. Existing whole-copy and directory/FD costs remain
+UNKNOWN where not measured, including failure, memory, serialization and transport.
+No cap increase, fit claim, refund or #558/LOCAL borrowing. If this work cannot be
+represented by existing accounting without omitted costs, stop for scope review.
+
+**Existing foreground coordinate binding.** The source-bound root report for
+CI412322 job1 maps stdin2960 to original scope test6132: deadline's missing
+first_git_select_observation assertion. The original cancel record is a preceding
+iteration, not the failed assertion. The complete consumer _foreground method is
+byte-identical to ac36 and moved by exactly5 physical lines. Rebind only the
+following original scope test positions; keep each on its original physical line.
+
+| Original physical line | Exact integer substitution |
+| --- | --- |
+| 6127 | 5980→5985 |
+| 6133 | 6119→6124 and5980→5985 |
+| 6140 | 6119→6124 and5980→5985 |
+| 14116 | 6038→6043 |
+| 14154 | 6119→6124 and5980→5985 |
+| 14158 | 5980→5985 |
+| 14161 | 5980→5985 |
+
+These are exactly10 constants across7 lines: six loop-check, three final-raise,
+one SIGTERM-cause coordinate. The first3 lines retain every original assertion;
+the remaining4 bind the original GenuineRelationCapture record template. Preserve
+the complete original predicate/frame/code/object identities, two-frame order,
+output fields,16-frame limit, guards, cases/calls and exception/cleanup behavior.
+Reverse only these10 replacements and require the full affected template and
+assertion text equal the original; all other bytes stay unchanged except separately
+listed Reader bindings. Preserve the complete preexec template and private-copy
+inverse. No global numeric replacement, clock-site change, new observation or
+runtime opportunity. This finite coordinate change overrides a broad old freeze
+only for these constants. It neither changes consumer code nor claims the later
+foreground cases or any other E_RUNTIME/T/scope failure has passed. Existing
+ordinary CI exercises the same original controls after fresh source acceptance.
+
+**Current Reader binding closure.** Exactly six files are allowed: Reader, fixture,
+scope test, evals.jq, evals-driver.sh and evals-launcher.sh. The last three contain
+only necessary hash/length changes. Let R/N be actual revised Reader SHA/length,
+P revised whole program SHA, D revised whole driver SHA, and K revised complete
+launcher helper slice SHA after its R/N/P/D substitutions. Derive R/N→P→D→K from
+reviewed bytes. Never predict a new digest. The old exact values are in the source
+binding proof accompanying this plan, not runtime self-certification.
+
+| Path | Exact mechanical contact |
+| --- | --- |
+| scope-qualification.test.sh | Three R0 literals at original1124,1192 Reader member,2371; their existing Reader private-copy line maps/inverses use actual revised source. The seven original foreground coordinate lines above change only their ten constants. No other source literal or formal helper changes. |
+| evals.jq | Original182 SOURCE84 Reader SHA only; same path/mode/selection/membership. |
+| evals-driver.sh | Original10 PROGRAM_SHA,19 FIXED_PINS program.jq,877 program_sha256: exactly three P bindings. |
+| evals-launcher.sh | Original2430 Reader tuple R/N;2944 program P;2947 driver D; original34 K outside the unchanged helper slice boundaries. |
+| candidate-content-preparation-fixtures.py | Original raw16_C2_six_fixes6692 fixed K in the original three-way equality;6691 binds actual complete helper byte length if it changes. H0–H6/first-read calls and all source guards remain. |
+
+R has exactly five fixed literal positions: scope3, program1, launcher1. P has
+four, D one and K two. The only changed length contacts are Reader tuple N and
+actual helper length if needed. Recompute the actual complete slice including its
+original leading LF before emit_error and ending before the leading LF of Fixed
+public entry; preserve extraction/load/full-hash guards and original equality.
+The consumer complete bytes and all its formal/native bindings remain frozen.
+SOURCE84 and adoption membership/map semantics, original43/8/40/20/C1-six/three-pin
+sets remain. Do not regenerate unrelated frontend maps or loosen exact selectors.
+Any additional true binding outside these six files stops for finite scope review.
+
+Source entry remains two-stage: first normally merge actual protected accepted
+artifacts into H2b4d's same preserved source branch; only spec/plan change and intent
+stays a419, other599 entries remain H2b4d bytes/mode/type/blob. Seal the resulting
+pre-CODE601 manifest. This pass changes only the six exact files above; other595,
+including the new artifacts, stay equal to that post-merge manifest. Fresh CODE,
+full source/recipe/resource review, normal commit and independent committed rebind,
+then one fresh runtime GO and original79/six full CI remain required. All8 raws,
+actual classification, all failures/costs/UNKNOWN/native/G3/L/R obligations remain.
+
+**Retained C2 caller ledger and terminal failure (implemented at H2b4d).** Bind the complete sourceac36
 consumer/fixture and the accepted spec's eight original-site table. This narrow
 clause supersedes old broad consumer/invoke byte freezes only at the following
 closed contacts. No producer operation, observation or value is replaced.
@@ -920,7 +1110,7 @@ The latter counts belong to raw16_C2_refused_END_transfer, not a license to hide
 arbitration calls inside helpers. Each genuinely needed invoke error fold must be
 listed in implementation proof and charged UNKNOWN, without new runtime trials.
 
-**Exact current binding closure.** Six files change, with two behavior contacts
+**Retained C2 binding closure.** That implementation changes six files, with two behavior contacts
 and four files containing only mechanical bindings. The fixed old full digests are
 C0=7d58f60c6622ae4e3f22167a3429d72a0d65e826c8d91bf87a016644226018ad,
 P0=efe2004d9d44c9fd3d9e6bf3e73edd9570d785af6c85f1e550fe0d7ff9fed413,
