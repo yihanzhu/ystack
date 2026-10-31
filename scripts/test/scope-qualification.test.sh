@@ -9084,7 +9084,7 @@ for node in consumer_calls:
         'old':'\n'.join(ast.get_source_segment(assembler,item) for item in (assignment,node))+'\n'})
 assert [row['receiver'] for row in sites]==['bundle','doc_root','outer_bundle','relation_area','bundle_area','location','bundle_root','directory','location','bundle_root','directory']
 loops=[node for node in ast.walk(tree) if isinstance(node,ast.For) and isinstance(node.target,ast.Tuple)
-    and [item.id for item in node.target.elts]==['label','form','change','needle']]
+    and all(isinstance(item,ast.Name) for item in node.target.elts) and [item.id for item in node.target.elts]==['label','form','change','needle']]
 assert len(loops)==1
 labels=[row.elts[0].value for row in loops[0].iter.elts];assert len(labels)==6
 copies=[node for node in ast.walk(tree) if isinstance(node,ast.Expr) and isinstance(node.value,ast.Call)

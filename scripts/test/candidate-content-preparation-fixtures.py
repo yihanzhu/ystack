@@ -1684,401 +1684,450 @@ def raw16_t_lifecycle(root: Path) -> None:
     original_acl = c._acl_state
     c._acl_state = lambda *_: ([], None) if sys.platform == 'darwin' else (None, None)
     completed, receipts = [], []
-    with tempfile.TemporaryDirectory(prefix='ystack-raw16-T-') as temporary:
-        base = Path(temporary).resolve()
-        base.chmod(0o700)
-        fixtures = base / 'runtime'
-        fixtures.mkdir(mode=0o700)
-        runtime = {}
-        for role in ('python', 'git', 'jq'):
-            path = fixtures / role
-            path.write_bytes((b'synthetic unexecutable runtime ' + role.encode()) * 103)
-            path.chmod(0o400)
-            runtime[role] = path
-        input_raw, response_raw = b'actual fixture input', b'actual fixture response'
-        caller_raw = c.canonical({'schema_version': 1, 'kind': 'shadow_enforced_request',
-                                  'id': 'raw16.t.fixture', 'body': {}})
+    _writer_pending=None
+    try:
+        with tempfile.TemporaryDirectory(prefix='ystack-raw16-T-') as temporary:
+            base = Path(temporary).resolve()
+            base.chmod(0o700)
+            fixtures = base / 'runtime'
+            fixtures.mkdir(mode=0o700)
+            runtime = {}
+            for role in ('python', 'git', 'jq'):
+                path = fixtures / role
+                path.write_bytes((b'synthetic unexecutable runtime ' + role.encode()) * 103)
+                path.chmod(0o400)
+                runtime[role] = path
+            input_raw, response_raw = b'actual fixture input', b'actual fixture response'
+            caller_raw = c.canonical({'schema_version': 1, 'kind': 'shadow_enforced_request',
+                                      'id': 'raw16.t.fixture', 'body': {}})
 
-        def produce(scratch, operation, fault=None):
-            p = load('raw16_T_producer', 'preparation/v1/prepare-candidate.py')
-            deadline = time.monotonic() + 60
-            boundaries = {'scratch': p.hold_boundary(scratch, 'directory', deadline, private_leaf=True),
-                          'component_source': p.hold_boundary(root / 'preparation/v1/prepare-candidate.py', 'file', deadline)}
-            boundaries.update({role: p.hold_boundary(path, 'file', deadline) for role, path in runtime.items()})
-            args = types.SimpleNamespace(operation=operation, scratch=str(scratch), jq=str(runtime['jq']),
-                                         _boundaries=boundaries)
-            ctx = p.create_context(args, deadline)
-            native = ctx.scratch
-            child, git, python = p.run_child, p.GIT, sys.executable
-            commands = []
-            try:
-                ctx.input_hashes = {'input': p.sha256(input_raw), 'response': p.sha256(response_raw)}
-                def version(context, argv, **_options):
-                    commands.append(argv)
-                    assert argv[-1] == '--version'
-                    if argv[0] == str(runtime['git']):
-                        return b'git version synthetic\n'
-                    assert argv[0] == str(ctx.deps_root / 'tools/jq')
-                    return b'jq-1.6\n'
-                p.run_child, p.GIT, sys.executable = version, str(runtime['git']), str(runtime['python'])
-                if fault is not None:
-                    fault(p, ctx)
-                p.copy_dependencies(ctx)
-                identity = p.producer_identity(ctx)
-                assert identity['source_sha256'] == p.sha256((root / 'preparation/v1/prepare-candidate.py').read_bytes())
-                assert set(identity['core']['files'][0]) == {'path', 'sha256'}
-                p._write_preparation_observations(ctx, True)
-                receipts.append({'operation': operation, 'native_name': native.name,
-                    'runtime_paths': {key: str(path) for key, path in runtime.items()},
-                    'version_fixture_commands': commands, 'T_work': ctx.recording_work,
-                    'old_native_scratch_ledger': dataclasses.asdict(ctx.ledger),
-                    'original_source_identity': identity['source_sha256'],
-                    'Q_M_host_parent_qualification': 'UNKNOWN'})
-                return ctx, native
-            finally:
-                p.run_child, p.GIT, sys.executable = child, git, python
-                ctx.close_boundaries()
+            def produce(scratch, operation, fault=None):
+                p = load('raw16_T_producer', 'preparation/v1/prepare-candidate.py')
+                deadline = time.monotonic() + 60
+                boundaries = {'scratch': p.hold_boundary(scratch, 'directory', deadline, private_leaf=True),
+                              'component_source': p.hold_boundary(root / 'preparation/v1/prepare-candidate.py', 'file', deadline)}
+                boundaries.update({role: p.hold_boundary(path, 'file', deadline) for role, path in runtime.items()})
+                args = types.SimpleNamespace(operation=operation, scratch=str(scratch), jq=str(runtime['jq']),
+                                             _boundaries=boundaries)
+                ctx = p.create_context(args, deadline)
+                native = ctx.scratch
+                child, git, python = p.run_child, p.GIT, sys.executable
+                commands = []
+                try:
+                    ctx.input_hashes = {'input': p.sha256(input_raw), 'response': p.sha256(response_raw)}
+                    def version(context, argv, **_options):
+                        commands.append(argv)
+                        assert argv[-1] == '--version'
+                        if argv[0] == str(runtime['git']):
+                            return b'git version synthetic\n'
+                        assert argv[0] == str(ctx.deps_root / 'tools/jq')
+                        return b'jq-1.6\n'
+                    p.run_child, p.GIT, sys.executable = version, str(runtime['git']), str(runtime['python'])
+                    if fault is not None:
+                        fault(p, ctx)
+                    p.copy_dependencies(ctx)
+                    identity = p.producer_identity(ctx)
+                    assert identity['source_sha256'] == p.sha256((root / 'preparation/v1/prepare-candidate.py').read_bytes())
+                    assert set(identity['core']['files'][0]) == {'path', 'sha256'}
+                    p._write_preparation_observations(ctx, True)
+                    receipts.append({'operation': operation, 'native_name': native.name,
+                        'runtime_paths': {key: str(path) for key, path in runtime.items()},
+                        'version_fixture_commands': commands, 'T_work': ctx.recording_work,
+                        'old_native_scratch_ledger': dataclasses.asdict(ctx.ledger),
+                        'original_source_identity': identity['source_sha256'],
+                        'Q_M_host_parent_qualification': 'UNKNOWN'})
+                    return ctx, native
+                finally:
+                    p.run_child, p.GIT, sys.executable = child, git, python
+                    ctx.close_boundaries()
 
-        def retain(work, operation, anchor=None):
+            def retain(work, operation, anchor=None):
+                holder = e.stable_directory(work)
+                try:
+                    anchor = anchor or c.Anchor({}, b'', [], {}, ('', []), ('', []), None)
+                    holder._initialize_recording(anchor, caller_raw)
+                    result = holder._retain_preparation(anchor, 'preparation-scratch', operation,
+                                                         input_raw, response_raw, caller_raw)
+                    receipts.append({'P_fees': {key: anchor.recording_work.get(key) for key in
+                        ('read_bytes', 'write_bytes', 'physical_bytes', 'files', 'runtime', 'accounting', 'accounting_incomplete')},
+                        'P_leaves': [{key: leaf.get(key) for key in ('failure', 'release_failure', 'transfer_incomplete',
+                            'runtime', 'read_bytes', 'write_bytes', 'physical_bytes', 'observation_calls')}
+                            for leaf in anchor.recording_work.get('preparation_leaves', [])],
+                        'unusable': anchor.private_observations.get('unusable', False)})
+                    return result, anchor
+                finally:
+                    holder.close()
+
+            source = (root / 'shadow/v1/enforced-reproduction.py').read_text()
+            begin = source.index('        prep = work / "preparation-parent/preparation";')
+            end = source.index('        record_raw = read_regular(', begin)
+            segment = textwrap.dedent(source[begin:end])
+            work = base / 'lifecycle'
+            work.mkdir(mode=0o700)
+            (work / 'preparation-scratch').mkdir(mode=0o700)
             holder = e.stable_directory(work)
+            anchor = c.Anchor({}, b'', [], {}, ('', []), ('', []), None)
+            holder._initialize_recording(anchor, caller_raw)
+            calls, native_paths = [], []
+            def execute(role, argv, component, **options):
+                operation = argv[5]
+                assert operation in ('prepare', 'inspect')
+                assert argv[:5] == [sys.executable, '-I', '-S', '-B', str(root / 'preparation/v1/prepare-candidate.py')]
+                assert options == {'timeout': 300, 'env': {'fixture': 'unchanged'}, 'deadline': 123}
+                scratch = Path(argv[argv.index('--scratch') + 1])
+                if operation == 'inspect':
+                    assert all(not path.exists() for path in native_paths)
+                    assert len(list(scratch.glob('raw16-t-v1-prepare-*'))) == 5
+                    assert not (scratch / 'raw16-t-v1-prepare-runtime-unknown-00.bin').exists()
+                ctx, native = produce(scratch, operation)
+                assert ctx.recording_work.get('seal_returned', [False])[0] is True and not ctx.recording_unusable
+                native_paths.append(native)
+                calls.append(role)
+            unknown = work / 'preparation-scratch/raw16-t-v1-prepare-runtime-unknown-00.bin'
+            unknown.write_bytes(b'native unknown child must be removed')
+            # Unknown occupancy is deliberately introduced after prepare retention.
+            old_retain = holder._retain_preparation
+            def retained_then_unknown(*args):
+                result = old_retain(*args)
+                if args[2] == 'prepare':
+                    unknown.write_bytes(b'native unknown child must be removed')
+                return result
+            unknown.unlink()
+            holder._retain_preparation = retained_then_unknown
+            env = {'work': work, 'SOURCE': root, 'sys': sys, 'sha': e.sha, 'mapped': {'materialization_input': work/'input'},
+                'response_path': work/'response', 'candidate': work/'candidate', 'jq': types.SimpleNamespace(snapshot=types.SimpleNamespace(path=str(runtime['jq']))),
+                'execute': execute, 'env': {'fixture': 'unchanged'}, 'deadline': 123, 'work_hold': holder,
+                'anchor': anchor, 'input_raw': input_raw, 'response_raw': response_raw, 'request_raw': caller_raw,
+                'shutil': shutil, 'c': c}
             try:
-                anchor = anchor or c.Anchor({}, b'', [], {}, ('', []), ('', []), None)
-                holder._initialize_recording(anchor, caller_raw)
-                result = holder._retain_preparation(anchor, 'preparation-scratch', operation,
-                                                     input_raw, response_raw, caller_raw)
-                receipts.append({'P_fees': {key: anchor.recording_work.get(key) for key in
-                    ('read_bytes', 'write_bytes', 'physical_bytes', 'files', 'runtime', 'accounting', 'accounting_incomplete')},
-                    'P_leaves': [{key: leaf.get(key) for key in ('failure', 'release_failure', 'transfer_incomplete',
-                        'runtime', 'read_bytes', 'write_bytes', 'physical_bytes', 'observation_calls')}
-                        for leaf in anchor.recording_work.get('preparation_leaves', [])],
-                    'unusable': anchor.private_observations.get('unusable', False)})
-                return result, anchor
+                exec(compile(segment, str(root / 'shadow/v1/enforced-reproduction.py') + ':actual-T-sequence', 'exec'), env)
+                assert calls == ['candidate-preparation', 'candidate-inspection']
+                assert set(anchor.private_observations['preparation']) == {'prepare'}
+                assert anchor.private_observations.get('unusable') is True
+                assert not any(source.stable and not source.closed for carrier in holder.runtime_copies for source in carrier.T_companions)
+                assert not native_paths[0].exists() and native_paths[1].is_dir()
+                assert len(list((work/'preparation-scratch').glob('raw16-t-v1-*'))) == 10
+                completed.append('native cleanup unchanged; tainted T recording refused')
             finally:
                 holder.close()
-
-        source = (root / 'shadow/v1/enforced-reproduction.py').read_text()
-        begin = source.index('        prep = work / "preparation-parent/preparation";')
-        end = source.index('        record_raw = read_regular(', begin)
-        segment = textwrap.dedent(source[begin:end])
-        work = base / 'lifecycle'
-        work.mkdir(mode=0o700)
-        (work / 'preparation-scratch').mkdir(mode=0o700)
-        holder = e.stable_directory(work)
-        anchor = c.Anchor({}, b'', [], {}, ('', []), ('', []), None)
-        holder._initialize_recording(anchor, caller_raw)
-        calls, native_paths = [], []
-        def execute(role, argv, component, **options):
-            operation = argv[5]
-            assert operation in ('prepare', 'inspect')
-            assert argv[:5] == [sys.executable, '-I', '-S', '-B', str(root / 'preparation/v1/prepare-candidate.py')]
-            assert options == {'timeout': 300, 'env': {'fixture': 'unchanged'}, 'deadline': 123}
-            scratch = Path(argv[argv.index('--scratch') + 1])
-            if operation == 'inspect':
-                assert all(not path.exists() for path in native_paths)
-                assert len(list(scratch.glob('raw16-t-v1-prepare-*'))) == 5
-                assert not (scratch / 'raw16-t-v1-prepare-runtime-unknown-00.bin').exists()
-            ctx, native = produce(scratch, operation)
-            assert ctx.recording_work.get('seal_returned', [False])[0] is True and not ctx.recording_unusable
-            native_paths.append(native)
-            calls.append(role)
-        unknown = work / 'preparation-scratch/raw16-t-v1-prepare-runtime-unknown-00.bin'
-        unknown.write_bytes(b'native unknown child must be removed')
-        # Unknown occupancy is deliberately introduced after prepare retention.
-        old_retain = holder._retain_preparation
-        def retained_then_unknown(*args):
-            result = old_retain(*args)
-            if args[2] == 'prepare':
-                unknown.write_bytes(b'native unknown child must be removed')
-            return result
-        unknown.unlink()
-        holder._retain_preparation = retained_then_unknown
-        env = {'work': work, 'SOURCE': root, 'sys': sys, 'sha': e.sha, 'mapped': {'materialization_input': work/'input'},
-            'response_path': work/'response', 'candidate': work/'candidate', 'jq': types.SimpleNamespace(snapshot=types.SimpleNamespace(path=str(runtime['jq']))),
-            'execute': execute, 'env': {'fixture': 'unchanged'}, 'deadline': 123, 'work_hold': holder,
-            'anchor': anchor, 'input_raw': input_raw, 'response_raw': response_raw, 'request_raw': caller_raw,
-            'shutil': shutil, 'c': c}
-        try:
-            exec(compile(segment, str(root / 'shadow/v1/enforced-reproduction.py') + ':actual-T-sequence', 'exec'), env)
-            assert calls == ['candidate-preparation', 'candidate-inspection']
-            assert set(anchor.private_observations['preparation']) == {'prepare'}
-            assert anchor.private_observations.get('unusable') is True
-            assert not any(source.stable and not source.closed for carrier in holder.runtime_copies for source in carrier.T_companions)
-            assert not native_paths[0].exists() and native_paths[1].is_dir()
-            assert len(list((work/'preparation-scratch').glob('raw16-t-v1-*'))) == 10
-            completed.append('native cleanup unchanged; tainted T recording refused')
-        finally:
-            holder.close()
-        writer_source = (root / 'shadow/v1/write-shadow.py').read_text()
-        begin = writer_source.index('    for operation, scratch in (("prepare", "preparation-scratch"),')
-        end = writer_source.index('    prep_raw = ws.hold(', begin)
-        writer_segment = textwrap.dedent(writer_source[begin:end])
-        work = base / 'writer-two-roots'
-        work.mkdir(mode=0o700)
-        for name in ('preparation-scratch', 'inspection-scratch'):
-            (work / name).mkdir(mode=0o700)
-        holder = e.stable_directory(work)
-        anchor = c.Anchor({}, b'', [], {}, ('', []), ('', []), None)
-        holder._initialize_recording(anchor, caller_raw)
-        writer_calls = []
-        def writer_execute(role, argv, component, **options):
-            operation = argv[5]
-            scratch = Path(argv[argv.index('--scratch') + 1])
-            assert scratch == work / ('preparation-scratch' if operation == 'prepare' else 'inspection-scratch')
-            ctx, _native = produce(scratch, operation)
-            assert ctx.recording_work.get('seal_returned', [False])[0] is True
-            writer_calls.append((role, str(scratch)))
-        ws = types.SimpleNamespace(execute=writer_execute, work_hold=holder, anchor=anchor,
-                                   request=types.SimpleNamespace(raw=caller_raw))
-        try:
-            exec(compile(writer_segment, str(root / 'shadow/v1/write-shadow.py') + ':actual-T-two-roots', 'exec'),
-                {'ws': ws, 'work': work, 'sys': sys, 'preparation': root/'preparation/v1/prepare-candidate.py',
-                 'common': [], 'input_raw': input_raw, 'response_raw': response_raw})
-            if len(writer_calls) != 2 or anchor.private_observations.get('unusable', False):
-                print(json.dumps({'writer_two_roots_failure': {'calls': len(writer_calls),
-                    'operations': [role for role, _scratch in writer_calls],
-                    'unusable': bool(anchor.private_observations.get('unusable', False)),
-                    'preparation': [{key: leaf.get(key, 'UNKNOWN') for key in
-                        ('failure', 'release_failure', 'transfer_incomplete', 'close_incomplete', 'held_close_incomplete', 'closed')}
-                        for leaf in anchor.recording_work.get('preparation_leaves', [])]} }), file=sys.stderr)
-            assert len(writer_calls) == 2 and not anchor.private_observations.get('unusable', False)
-            assert set(anchor.private_observations['preparation']) == {'prepare', 'inspect'}
-            assert len(list((work/'preparation-scratch').glob('raw16-t-v1-prepare-*'))) == 5
-            assert len(list((work/'inspection-scratch').glob('raw16-t-v1-inspect-*'))) == 5
-            completed.append('actual writer two separate roots')
-        finally:
-            holder.close()
-        cleanup_source = segment[segment.index('for child in prep_scratch.iterdir():'):segment.index('execute("candidate-inspection"')]
-        scratch = base/'cleanup-error'
-        scratch.mkdir(mode=0o700)
-        native = scratch/'candidate-preparation-0000000000000000'
-        native.mkdir(mode=0o700)
-        partial = scratch/'raw16-t-v1-prepare-runtime-python-00.bin'
-        partial.write_bytes(b'preserved actual partial')
-        original_rmtree = shutil.rmtree
-        error = OSError(errno.EACCES, 'actual native cleanup failure fixture')
-        def rmtree(path, *args, **kwargs):
-            assert path == native
-            raise error
-        shutil.rmtree = rmtree
-        try:
-            try:
-                exec(compile(cleanup_source, 'actual-native-cleanup', 'exec'),
-                    {'prep_scratch': scratch, 'reserved_preparation_name': c._preparation_reserved_name, 'shutil': shutil})
-            except OSError as observed:
-                assert observed is error and partial.read_bytes() == b'preserved actual partial'
-            else:
-                raise AssertionError('native cleanup failure was swallowed')
-            completed.append('native cleanup exact first error and partial retained')
-        finally:
-            shutil.rmtree = original_rmtree
-        assert not c._preparation_reserved_name('raw16-t-v1-prepare-runtime-python-64.bin')
-        assert not c._preparation_reserved_name('raw16-t-v1-prepare-runtime-unknown-00.bin')
-        assert not c._preparation_reserved_name('raw16-t-v1-prepare-complete-' + 'G' * 64)
-        assert c._preparation_reserved_name('raw16-t-v1-inspect-runtime-python-63.bin')
-        for scenario in ('missing-marker', 'wrong-marker', 'nonempty-marker', 'extra-runtime', 'runtime-drift',
-                         'capture-drift', 'capture-and-marker-drift', 'occupied-runtime', 'mkdir-failed', 'mkdir-uncertain'):
-            work = base / scenario
+            writer_source = (root / 'shadow/v1/write-shadow.py').read_text()
+            begin = writer_source.index('    for operation, scratch in (("prepare", "preparation-scratch"),')
+            end = writer_source.index('    prep_raw = ws.hold(', begin)
+            writer_segment = textwrap.dedent(writer_source[begin:end])
+            work = base / 'writer-two-roots'
             work.mkdir(mode=0o700)
-            scratch = work / 'preparation-scratch'
-            scratch.mkdir(mode=0o700)
-            original_mkdir = os.mkdir
-            def fault(p, ctx):
-                if scenario.startswith('mkdir-'):
-                    def mkdir(name, *args, **kwargs):
-                        if str(name).startswith('raw16-t-v1-prepare-complete-'):
-                            if scenario == 'mkdir-uncertain':original_mkdir(name, *args, **kwargs)
-                            raise OSError(errno.EIO, 'controlled completion mkdir result unknown')
-                        return original_mkdir(name, *args, **kwargs)
-                    p.os.mkdir = mkdir
-            if scenario == 'occupied-runtime':
-                (scratch/'raw16-t-v1-prepare-runtime-jq-00.bin').write_bytes(b'preserved preexisting occupancy')
+            for name in ('preparation-scratch', 'inspection-scratch'):
+                (work / name).mkdir(mode=0o700)
+            holder = e.stable_directory(work)
+            anchor = c.Anchor({}, b'', [], {}, ('', []), ('', []), None)
+            holder._initialize_recording(anchor, caller_raw)
+            writer_calls = []
+            def writer_execute(role, argv, component, **options):
+                operation = argv[5]
+                scratch = Path(argv[argv.index('--scratch') + 1])
+                assert scratch == work / ('preparation-scratch' if operation == 'prepare' else 'inspection-scratch')
+                ctx, _native = produce(scratch, operation)
+                assert ctx.recording_work.get('seal_returned', [False])[0] is True
+                writer_calls.append((role, str(scratch)))
+            ws = types.SimpleNamespace(execute=writer_execute, work_hold=holder, anchor=anchor,
+                                       request=types.SimpleNamespace(raw=caller_raw))
+            _writer_primary=None;_writer_seen=False
+            _writer_body_error=_writer_restore_error=_writer_close_error=None
+            _writer_saved=_writer_previous=None;_writer_key_saved=False;_writer_key_present=False
+            _writer_holder=holder;_writer_anchor=anchor
+            def _writer_two_roots_discard_primary(self,delegated_anchor,copied,primary):
+                nonlocal _writer_primary,_writer_seen
+                if self is _writer_holder and delegated_anchor is _writer_anchor and not _writer_seen:
+                    _writer_seen=True;_writer_primary=primary
+                return _writer_saved(delegated_anchor,copied,primary)
             try:
-                ctx, native = produce(scratch, 'prepare', fault)
+                try:
+                    try:
+                        _writer_saved=holder._discard_runtime
+                        _writer_key_present='_discard_runtime' in holder.__dict__
+                        _writer_previous=holder.__dict__.get('_discard_runtime')
+                        _writer_key_saved=True
+                        assert _writer_saved.__self__ is holder and _writer_saved.__func__ is e.StableDirectory._discard_runtime
+                        holder._discard_runtime=types.MethodType(_writer_two_roots_discard_primary,holder)
+                        exec(compile(writer_segment, str(root / 'shadow/v1/write-shadow.py') + ':actual-T-two-roots', 'exec'),
+                            {'ws': ws, 'work': work, 'sys': sys, 'preparation': root/'preparation/v1/prepare-candidate.py',
+                             'common': [], 'input_raw': input_raw, 'response_raw': response_raw})
+                    finally:
+                        if _writer_key_saved:
+                            try:
+                                if _writer_key_present:holder.__dict__['_discard_runtime']=_writer_previous
+                                else:holder.__dict__.pop('_discard_runtime',None)
+                            except BaseException as error:_writer_restore_error=error
+                    if _writer_restore_error is not None:raise _writer_restore_error
+                    if len(writer_calls) != 2 or anchor.private_observations.get('unusable', False):
+                        print(json.dumps({'writer_two_roots_failure': {'calls': len(writer_calls),
+                            'operations': [role for role, _scratch in writer_calls],
+                            'unusable': bool(anchor.private_observations.get('unusable', False)),
+                            'preparation': [{key: leaf.get(key, 'UNKNOWN') for key in
+                                ('failure', 'release_failure', 'transfer_incomplete', 'close_incomplete', 'held_close_incomplete', 'closed')}
+                                for leaf in anchor.recording_work.get('preparation_leaves', [])]} }), file=sys.stderr)
+                    try:
+                        assert len(writer_calls) == 2 and not anchor.private_observations.get('unusable', False)
+                    except AssertionError as _writer_assertion:
+                        if isinstance(_writer_primary,Exception) and not getattr(_writer_primary,'_scope_signal_cancel',False):raise _writer_assertion from _writer_primary
+                        raise
+                    assert set(anchor.private_observations['preparation']) == {'prepare', 'inspect'}
+                    assert len(list((work/'preparation-scratch').glob('raw16-t-v1-prepare-*'))) == 5
+                    assert len(list((work/'inspection-scratch').glob('raw16-t-v1-inspect-*'))) == 5
+                    completed.append('actual writer two separate roots')
+                finally:
+                    try:holder.close()
+                    except BaseException as error:_writer_close_error=error
+            except BaseException as error:_writer_body_error=error
             finally:
-                os.mkdir = original_mkdir
-            capture = scratch / 'raw16-t-v1-prepare-capture.json'
-            markers = list(scratch.glob('raw16-t-v1-prepare-complete-*'))
-            if scenario in ('occupied-runtime', 'mkdir-failed', 'mkdir-uncertain'):
-                assert ctx.recording_unusable and not ctx.recording_work.get('seal_returned', [False])[0]
-                if scenario == 'mkdir-uncertain':
-                    assert len(markers) == 1
-                    # An observed failed commit is never offered to the reader as a qualified success.
-                    completed.append(scenario)
-                    continue
-            else:
-                marker = markers[0]
-                if scenario == 'missing-marker':marker.rmdir()
-                elif scenario == 'wrong-marker':marker.rename(scratch/('raw16-t-v1-prepare-complete-'+'0'*64))
-                elif scenario == 'nonempty-marker':(marker/'extra').write_bytes(b'extra')
-                elif scenario == 'extra-runtime':(scratch/'raw16-t-v1-prepare-runtime-python-63.bin').write_bytes(b'extra')
-                elif scenario == 'runtime-drift':
-                    path = scratch/ctx.runtime_inventory[0]['file'];path.chmod(0o600);path.write_bytes(b'drift');path.chmod(0o400)
-                else:
-                    value = json.loads(capture.read_bytes());value['binding']['input_sha256'] = '0'*64
-                    capture.chmod(0o600);capture.write_bytes(c.canonical(value));capture.chmod(0o400)
-                    if scenario == 'capture-and-marker-drift':marker.rename(scratch/('raw16-t-v1-prepare-complete-'+c.digest(capture.read_bytes())))
-            result, anchor = retain(work, 'prepare')
-            assert result is None and anchor.private_observations.get('unusable') is True, scenario
-            assert native.is_dir() and capture.exists()
-            completed.append(scenario)
-        for count in (128, 129):
-            work = base / ('root-entry-bound-' + str(count))
-            work.mkdir(mode=0o700)
-            scratch = work / 'preparation-scratch'
+                _writer_saved=_writer_previous=_writer_holder=_writer_anchor=_writer_primary=None
+                _writer_two_roots_discard_primary=None
+                _writer_seen=_writer_key_saved=_writer_key_present=False
+            _writer_selected=_writer_body_error
+            if _writer_restore_error is not None and _writer_restore_error is not _writer_body_error:
+                _writer_selected=c._c3_first(_writer_selected,_writer_restore_error)
+            if _writer_close_error is not None:_writer_selected=c._c3_first(_writer_selected,_writer_close_error)
+            if _writer_selected is not None:
+                _writer_pending=_writer_selected
+                raise _writer_selected
+            _writer_pending=None
+            _writer_body_error=_writer_restore_error=_writer_close_error=_writer_selected=None
+            cleanup_source = segment[segment.index('for child in prep_scratch.iterdir():'):segment.index('execute("candidate-inspection"')]
+            scratch = base/'cleanup-error'
             scratch.mkdir(mode=0o700)
-            ctx, _native = produce(scratch, 'prepare')
-            existing = len(list(scratch.iterdir()))
-            for index in range(count - existing):
-                (scratch / ('candidate-preparation-' + format(index, '016x'))).mkdir(mode=0o700)
-            assert len(list(scratch.iterdir())) == count
-            result, anchor = retain(work, 'prepare')
-            assert (result is not None) == (count == 128)
-            assert bool(anchor.private_observations.get('unusable')) == (count == 129)
-            completed.append('root total entries ' + str(count))
-        for scenario in ('runtime-write', 'runtime-fsync', 'runtime-close', 'runtime-readback',
-                         'capture-write-zero', 'capture-fsync', 'capture-close', 'capture-readback',
-                         'capture-readback-close', 'parent-sync', 'ledger-before-marker', 'ledger-return-cell'):
-            work = base / scenario
-            work.mkdir(mode=0o700)
-            scratch = work / 'preparation-scratch'
-            scratch.mkdir(mode=0o700)
-            saved = {name: getattr(os, name) for name in ('open', 'write', 'read', 'pread', 'fsync', 'close')}
-            tracked, closed, fired = {}, {}, []
-            def fault(p, ctx):
-                prefix = 'raw16-t-v1-prepare-'
-                def opened(name, flags, *args, **kwargs):
-                    fd = saved['open'](name, flags, *args, **kwargs)
-                    if str(name).startswith(prefix):
-                        tracked[fd] = (str(name), bool(flags & os.O_WRONLY))
-                    return fd
-                def reached(fd, phase):
-                    if fired or fd not in tracked:
-                        return False
-                    name, writer = tracked[fd]
-                    group = 'capture' if name.endswith('capture.json') else 'runtime'
-                    match = scenario == group + '-' + phase
-                    if phase == 'close' and not writer:
-                        match = scenario == group + '-readback-close'
-                    if match:
-                        fired.append((name, phase))
-                    return match
-                def write(fd, raw):
-                    if reached(fd, 'write'):
-                        raise OSError(errno.ENOSPC, 'controlled new T write failure')
-                    if scenario == 'capture-write-zero' and not fired and fd in tracked and tracked[fd][0].endswith('capture.json'):
-                        fired.append(('capture', 'write-zero'))
-                        return 0
-                    return saved['write'](fd, raw)
-                def pread(fd, count, offset):
-                    if reached(fd, 'readback'):
-                        raise OSError(errno.EIO, 'controlled T runtime readback')
-                    return saved['pread'](fd, count, offset)
-                def read(fd, count):
-                    if reached(fd, 'readback'):
-                        raise OSError(errno.EIO, 'controlled T C readback')
-                    return saved['read'](fd, count)
-                def fsync(fd):
-                    if reached(fd, 'fsync'):
-                        raise OSError(errno.EIO, 'controlled T fsync')
-                    if scenario == 'parent-sync' and fd == ctx.boundaries['scratch'].fd and not fired:
-                        fired.append(('scratch-parent', 'fsync'))
-                        raise OSError(errno.EIO, 'controlled T parent sync')
-                    return saved['fsync'](fd)
-                def close(fd):
-                    if fd in tracked:
-                        state = tracked.pop(fd)
-                        closed[state] = closed.get(state, 0) + 1
-                        tracked[fd] = state
-                        fail = reached(fd, 'close')
-                        tracked.pop(fd)
-                        saved['close'](fd)
-                        if fail:
-                            raise OSError(errno.EIO, 'controlled close result failure')
-                        return None
-                    return saved['close'](fd)
-                if scenario in ('ledger-before-marker', 'ledger-return-cell'):
-                    class FailLedger(dict):
-                        def __setitem__(self, key, value):
-                            if key == ('seal_returned' if scenario == 'ledger-return-cell' else 'seal_mkdir_attempts'):
-                                fired.append(('ledger', key))
-                                raise MemoryError('controlled precommit observation failure')
-                            return super().__setitem__(key, value)
-                    ctx.recording_work = FailLedger(ctx.recording_work)
-                p.os.open, p.os.write, p.os.read = opened, write, read
-                p.os.pread, p.os.fsync, p.os.close = pread, fsync, close
+            native = scratch/'candidate-preparation-0000000000000000'
+            native.mkdir(mode=0o700)
+            partial = scratch/'raw16-t-v1-prepare-runtime-python-00.bin'
+            partial.write_bytes(b'preserved actual partial')
+            original_rmtree = shutil.rmtree
+            error = OSError(errno.EACCES, 'actual native cleanup failure fixture')
+            def rmtree(path, *args, **kwargs):
+                assert path == native
+                raise error
+            shutil.rmtree = rmtree
             try:
-                ctx, native = produce(scratch, 'prepare', fault)
-            finally:
-                for name, value in saved.items():setattr(os, name, value)
-            assert fired and ctx.recording_unusable and not list(scratch.glob('raw16-t-v1-prepare-complete-*')), scenario
-            assert not tracked and all(count == 1 for count in closed.values()), (scenario, tracked, closed)
-            assert native.is_dir() and (scratch/'raw16-t-v1-prepare-capture.json').exists()
-            completed.append(scenario)
-        import ctypes
-        for scenario in ('linux-access-present', 'linux-access-empty', 'linux-default-present',
-                         'linux-default-empty', 'linux-unknown-errno', 'darwin-present',
-                         'darwin-present-free-failure', 'darwin-parent-present', 'darwin-null-zero', 'darwin-bind-error'):
-            work = base / scenario
-            work.mkdir(mode=0o700)
-            scratch = work / 'preparation-scratch'
-            scratch.mkdir(mode=0o700)
-            platform, getxattr, cdll = sys.platform, getattr(os, 'getxattr', None), ctypes.CDLL
-            calls, frees = [], []
-            def fault(p, ctx):
-                if scenario.startswith('linux'):
-                    sys.platform = 'linux'
-                    def xattr(fd, name):
-                        calls.append((fd, name))
-                        wanted = 'system.posix_acl_default' if 'default' in scenario else 'system.posix_acl_access'
-                        if name == wanted:
-                            if scenario == 'linux-unknown-errno':
-                                raise OSError(errno.ENOTSUP, 'controlled unsupported')
-                            return b'' if scenario.endswith('empty') else b'controlled present ACL bytes'
-                        raise OSError(getattr(errno, 'ENODATA', getattr(errno, 'ENOATTR', 93)), 'controlled absent')
-                    os.getxattr = xattr
+                try:
+                    exec(compile(cleanup_source, 'actual-native-cleanup', 'exec'),
+                        {'prep_scratch': scratch, 'reserved_preparation_name': c._preparation_reserved_name, 'shutil': shutil})
+                except OSError as observed:
+                    assert observed is error and partial.read_bytes() == b'preserved actual partial'
                 else:
-                    sys.platform = 'darwin'
-                    if scenario == 'darwin-bind-error':
-                        def load_library(*args, **kwargs):
-                            calls.append(('binding', args))
-                            raise OSError(errno.ENOENT, 'controlled library binding error')
-                        p._preparation_acl_library = None
-                        ctypes.CDLL = load_library
+                    raise AssertionError('native cleanup failure was swallowed')
+                completed.append('native cleanup exact first error and partial retained')
+            finally:
+                shutil.rmtree = original_rmtree
+            assert not c._preparation_reserved_name('raw16-t-v1-prepare-runtime-python-64.bin')
+            assert not c._preparation_reserved_name('raw16-t-v1-prepare-runtime-unknown-00.bin')
+            assert not c._preparation_reserved_name('raw16-t-v1-prepare-complete-' + 'G' * 64)
+            assert c._preparation_reserved_name('raw16-t-v1-inspect-runtime-python-63.bin')
+            for scenario in ('missing-marker', 'wrong-marker', 'nonempty-marker', 'extra-runtime', 'runtime-drift',
+                             'capture-drift', 'capture-and-marker-drift', 'occupied-runtime', 'mkdir-failed', 'mkdir-uncertain'):
+                work = base / scenario
+                work.mkdir(mode=0o700)
+                scratch = work / 'preparation-scratch'
+                scratch.mkdir(mode=0o700)
+                original_mkdir = os.mkdir
+                def fault(p, ctx):
+                    if scenario.startswith('mkdir-'):
+                        def mkdir(name, *args, **kwargs):
+                            if str(name).startswith('raw16-t-v1-prepare-complete-'):
+                                if scenario == 'mkdir-uncertain':original_mkdir(name, *args, **kwargs)
+                                raise OSError(errno.EIO, 'controlled completion mkdir result unknown')
+                            return original_mkdir(name, *args, **kwargs)
+                        p.os.mkdir = mkdir
+                if scenario == 'occupied-runtime':
+                    (scratch/'raw16-t-v1-prepare-runtime-jq-00.bin').write_bytes(b'preserved preexisting occupancy')
+                try:
+                    ctx, native = produce(scratch, 'prepare', fault)
+                finally:
+                    os.mkdir = original_mkdir
+                capture = scratch / 'raw16-t-v1-prepare-capture.json'
+                markers = list(scratch.glob('raw16-t-v1-prepare-complete-*'))
+                if scenario in ('occupied-runtime', 'mkdir-failed', 'mkdir-uncertain'):
+                    assert ctx.recording_unusable and not ctx.recording_work.get('seal_returned', [False])[0]
+                    if scenario == 'mkdir-uncertain':
+                        assert len(markers) == 1
+                        # An observed failed commit is never offered to the reader as a qualified success.
+                        completed.append(scenario)
+                        continue
+                else:
+                    marker = markers[0]
+                    if scenario == 'missing-marker':marker.rmdir()
+                    elif scenario == 'wrong-marker':marker.rename(scratch/('raw16-t-v1-prepare-complete-'+'0'*64))
+                    elif scenario == 'nonempty-marker':(marker/'extra').write_bytes(b'extra')
+                    elif scenario == 'extra-runtime':(scratch/'raw16-t-v1-prepare-runtime-python-63.bin').write_bytes(b'extra')
+                    elif scenario == 'runtime-drift':
+                        path = scratch/ctx.runtime_inventory[0]['file'];path.chmod(0o600);path.write_bytes(b'drift');path.chmod(0o400)
                     else:
-                        def get_acl(fd, kind):
-                            calls.append((fd, kind))
-                            if scenario == 'darwin-parent-present' and fd != ctx.boundaries['scratch'].fd:
-                                ctypes.set_errno(errno.ENOENT)
-                                return None
-                            ctypes.set_errno(0)
-                            return None if scenario == 'darwin-null-zero' else 123
-                        def free_acl(pointer):
-                            frees.append(pointer)
-                            ctypes.set_errno(errno.EIO if scenario.endswith('free-failure') else 0)
-                            return -1 if scenario.endswith('free-failure') else 0
-                        p._preparation_acl_library = types.SimpleNamespace(acl_get_fd_np=get_acl, acl_free=free_acl)
-            try:
-                ctx, native = produce(scratch, 'prepare', fault)
-            finally:
-                sys.platform = platform
-                ctypes.CDLL = cdll
-                if getxattr is None:
-                    if hasattr(os, 'getxattr'):del os.getxattr
-                else:os.getxattr = getxattr
-            assert calls and ctx.recording_unusable and native.is_dir(), scenario
-            assert not list(scratch.glob('raw16-t-v1-prepare-complete-*')), scenario
-            if scenario.startswith('darwin-present'):
-                assert len(frees) == len(calls) and all(pointer == 123 for pointer in frees)
-            elif scenario == 'darwin-parent-present':
-                assert frees and len(frees) < len(calls) and all(pointer == 123 for pointer in frees)
-            else:
-                assert not frees
-            if scenario == 'darwin-present-free-failure':
-                assert ctx.recording_work['failure']['site'] == 'acl-absence'
-                assert ctx.recording_work['failure']['token'] == 'E_IDENTITY'
-                assert any(row['site'] == 'acl-free' and row['errno'] == errno.EIO
-                           for row in ctx.recording_work['secondary_errors'])
-            completed.append(scenario + ' mocked negative only')
+                        value = json.loads(capture.read_bytes());value['binding']['input_sha256'] = '0'*64
+                        capture.chmod(0o600);capture.write_bytes(c.canonical(value));capture.chmod(0o400)
+                        if scenario == 'capture-and-marker-drift':marker.rename(scratch/('raw16-t-v1-prepare-complete-'+c.digest(capture.read_bytes())))
+                result, anchor = retain(work, 'prepare')
+                assert result is None and anchor.private_observations.get('unusable') is True, scenario
+                assert native.is_dir() and capture.exists()
+                completed.append(scenario)
+            for count in (128, 129):
+                work = base / ('root-entry-bound-' + str(count))
+                work.mkdir(mode=0o700)
+                scratch = work / 'preparation-scratch'
+                scratch.mkdir(mode=0o700)
+                ctx, _native = produce(scratch, 'prepare')
+                existing = len(list(scratch.iterdir()))
+                for index in range(count - existing):
+                    (scratch / ('candidate-preparation-' + format(index, '016x'))).mkdir(mode=0o700)
+                assert len(list(scratch.iterdir())) == count
+                result, anchor = retain(work, 'prepare')
+                assert (result is not None) == (count == 128)
+                assert bool(anchor.private_observations.get('unusable')) == (count == 129)
+                completed.append('root total entries ' + str(count))
+            for scenario in ('runtime-write', 'runtime-fsync', 'runtime-close', 'runtime-readback',
+                             'capture-write-zero', 'capture-fsync', 'capture-close', 'capture-readback',
+                             'capture-readback-close', 'parent-sync', 'ledger-before-marker', 'ledger-return-cell'):
+                work = base / scenario
+                work.mkdir(mode=0o700)
+                scratch = work / 'preparation-scratch'
+                scratch.mkdir(mode=0o700)
+                saved = {name: getattr(os, name) for name in ('open', 'write', 'read', 'pread', 'fsync', 'close')}
+                tracked, closed, fired = {}, {}, []
+                def fault(p, ctx):
+                    prefix = 'raw16-t-v1-prepare-'
+                    def opened(name, flags, *args, **kwargs):
+                        fd = saved['open'](name, flags, *args, **kwargs)
+                        if str(name).startswith(prefix):
+                            tracked[fd] = (str(name), bool(flags & os.O_WRONLY))
+                        return fd
+                    def reached(fd, phase):
+                        if fired or fd not in tracked:
+                            return False
+                        name, writer = tracked[fd]
+                        group = 'capture' if name.endswith('capture.json') else 'runtime'
+                        match = scenario == group + '-' + phase
+                        if phase == 'close' and not writer:
+                            match = scenario == group + '-readback-close'
+                        if match:
+                            fired.append((name, phase))
+                        return match
+                    def write(fd, raw):
+                        if reached(fd, 'write'):
+                            raise OSError(errno.ENOSPC, 'controlled new T write failure')
+                        if scenario == 'capture-write-zero' and not fired and fd in tracked and tracked[fd][0].endswith('capture.json'):
+                            fired.append(('capture', 'write-zero'))
+                            return 0
+                        return saved['write'](fd, raw)
+                    def pread(fd, count, offset):
+                        if reached(fd, 'readback'):
+                            raise OSError(errno.EIO, 'controlled T runtime readback')
+                        return saved['pread'](fd, count, offset)
+                    def read(fd, count):
+                        if reached(fd, 'readback'):
+                            raise OSError(errno.EIO, 'controlled T C readback')
+                        return saved['read'](fd, count)
+                    def fsync(fd):
+                        if reached(fd, 'fsync'):
+                            raise OSError(errno.EIO, 'controlled T fsync')
+                        if scenario == 'parent-sync' and fd == ctx.boundaries['scratch'].fd and not fired:
+                            fired.append(('scratch-parent', 'fsync'))
+                            raise OSError(errno.EIO, 'controlled T parent sync')
+                        return saved['fsync'](fd)
+                    def close(fd):
+                        if fd in tracked:
+                            state = tracked.pop(fd)
+                            closed[state] = closed.get(state, 0) + 1
+                            tracked[fd] = state
+                            fail = reached(fd, 'close')
+                            tracked.pop(fd)
+                            saved['close'](fd)
+                            if fail:
+                                raise OSError(errno.EIO, 'controlled close result failure')
+                            return None
+                        return saved['close'](fd)
+                    if scenario in ('ledger-before-marker', 'ledger-return-cell'):
+                        class FailLedger(dict):
+                            def __setitem__(self, key, value):
+                                if key == ('seal_returned' if scenario == 'ledger-return-cell' else 'seal_mkdir_attempts'):
+                                    fired.append(('ledger', key))
+                                    raise MemoryError('controlled precommit observation failure')
+                                return super().__setitem__(key, value)
+                        ctx.recording_work = FailLedger(ctx.recording_work)
+                    p.os.open, p.os.write, p.os.read = opened, write, read
+                    p.os.pread, p.os.fsync, p.os.close = pread, fsync, close
+                try:
+                    ctx, native = produce(scratch, 'prepare', fault)
+                finally:
+                    for name, value in saved.items():setattr(os, name, value)
+                assert fired and ctx.recording_unusable and not list(scratch.glob('raw16-t-v1-prepare-complete-*')), scenario
+                assert not tracked and all(count == 1 for count in closed.values()), (scenario, tracked, closed)
+                assert native.is_dir() and (scratch/'raw16-t-v1-prepare-capture.json').exists()
+                completed.append(scenario)
+            import ctypes
+            for scenario in ('linux-access-present', 'linux-access-empty', 'linux-default-present',
+                             'linux-default-empty', 'linux-unknown-errno', 'darwin-present',
+                             'darwin-present-free-failure', 'darwin-parent-present', 'darwin-null-zero', 'darwin-bind-error'):
+                work = base / scenario
+                work.mkdir(mode=0o700)
+                scratch = work / 'preparation-scratch'
+                scratch.mkdir(mode=0o700)
+                platform, getxattr, cdll = sys.platform, getattr(os, 'getxattr', None), ctypes.CDLL
+                calls, frees = [], []
+                def fault(p, ctx):
+                    if scenario.startswith('linux'):
+                        sys.platform = 'linux'
+                        def xattr(fd, name):
+                            calls.append((fd, name))
+                            wanted = 'system.posix_acl_default' if 'default' in scenario else 'system.posix_acl_access'
+                            if name == wanted:
+                                if scenario == 'linux-unknown-errno':
+                                    raise OSError(errno.ENOTSUP, 'controlled unsupported')
+                                return b'' if scenario.endswith('empty') else b'controlled present ACL bytes'
+                            raise OSError(getattr(errno, 'ENODATA', getattr(errno, 'ENOATTR', 93)), 'controlled absent')
+                        os.getxattr = xattr
+                    else:
+                        sys.platform = 'darwin'
+                        if scenario == 'darwin-bind-error':
+                            def load_library(*args, **kwargs):
+                                calls.append(('binding', args))
+                                raise OSError(errno.ENOENT, 'controlled library binding error')
+                            p._preparation_acl_library = None
+                            ctypes.CDLL = load_library
+                        else:
+                            def get_acl(fd, kind):
+                                calls.append((fd, kind))
+                                if scenario == 'darwin-parent-present' and fd != ctx.boundaries['scratch'].fd:
+                                    ctypes.set_errno(errno.ENOENT)
+                                    return None
+                                ctypes.set_errno(0)
+                                return None if scenario == 'darwin-null-zero' else 123
+                            def free_acl(pointer):
+                                frees.append(pointer)
+                                ctypes.set_errno(errno.EIO if scenario.endswith('free-failure') else 0)
+                                return -1 if scenario.endswith('free-failure') else 0
+                            p._preparation_acl_library = types.SimpleNamespace(acl_get_fd_np=get_acl, acl_free=free_acl)
+                try:
+                    ctx, native = produce(scratch, 'prepare', fault)
+                finally:
+                    sys.platform = platform
+                    ctypes.CDLL = cdll
+                    if getxattr is None:
+                        if hasattr(os, 'getxattr'):del os.getxattr
+                    else:os.getxattr = getxattr
+                assert calls and ctx.recording_unusable and native.is_dir(), scenario
+                assert not list(scratch.glob('raw16-t-v1-prepare-complete-*')), scenario
+                if scenario.startswith('darwin-present'):
+                    assert len(frees) == len(calls) and all(pointer == 123 for pointer in frees)
+                elif scenario == 'darwin-parent-present':
+                    assert frees and len(frees) < len(calls) and all(pointer == 123 for pointer in frees)
+                else:
+                    assert not frees
+                if scenario == 'darwin-present-free-failure':
+                    assert ctx.recording_work['failure']['site'] == 'acl-absence'
+                    assert ctx.recording_work['failure']['token'] == 'E_IDENTITY'
+                    assert any(row['site'] == 'acl-free' and row['errno'] == errno.EIO
+                               for row in ctx.recording_work['secondary_errors'])
+                completed.append(scenario + ' mocked negative only')
+    except BaseException as _writer_exit_error:
+        if _writer_pending is None or _writer_exit_error is _writer_pending:raise
+        _writer_exit_selected=c._c3_first(_writer_pending,_writer_exit_error)
+        raise _writer_exit_selected
     c._acl_state = original_acl
     print(json.dumps({'raw16_T_controls': completed, 'ordinary_synthetic_runtime_only': True,
         'actual_source_segments_not_full_native_route': True, 'receipts': receipts}, sort_keys=True))
@@ -7013,21 +7062,27 @@ def raw16_C2_refused_END_transfer(root: Path) -> None:
     spec=importlib.util.spec_from_file_location('_C2_END_consumer',root/'shadow/v1/_consumer.py')
     owner=importlib.util.module_from_spec(spec);sys.modules[spec.name]=owner;spec.loader.exec_module(owner)
     resolver=owner._DarwinUUIDResolver() if sys.platform=='darwin' else None
-    with tempfile.TemporaryDirectory(prefix='C2-END-failure.') as area:
-        base=Path(area);window=base/'window';window.mkdir(mode=0o700)
-        (window/'seed-a.json').write_bytes(b'{}\n');(window/'seed-a.json').chmod(0o400)
-        work={};owner._capture_work_values(work,'END-case')
-        for key,value in {'runtime':{field:0 for field in owner._RUNTIME_FIELDS},'close_calls':0,'held_close_calls':0,'observation_calls':0,'seed_processing':{field:0 for field in ('R','W','H','E','C')},'accounting':{kind:{field:0 for field in ('read_bytes','write_bytes','logical_bytes','physical_bytes','files','occurrences')} for kind in ('L','W','M','raw','unresolved')}}.items():work[key]=value
-        case=work['cases']['END-case']
-        held=owner._open_held(str(window),True,owner._store_rule(os.geteuid(),os.getegid(),0o700,True,resolver),'E_STALE')
-        caller=_C2FixtureCaller(root,held,work,case);fixed=caller.fixed;identity=sorted(fixed['_C2_CASES'])[0]
-        work['C2_case_bindings'][identity]=(case,[case]);caller.window_sha=caller.head='a'*64
-        reservation={'window':fixed['c2_counter_values'](fixed['c2_fresh_work']('END-window-reservation')),
-            'common':fixed['c2_counter_values'](fixed['c2_fresh_work']('END-common-reservation')),
-            'cases':{identity:fixed['c2_counter_values'](fixed['c2_fresh_work']('END-case-reservation'))}}
-        # Failure-only protocol peer. It reports its real codec work, then exits nonzero without DONE.
-        # It never invokes a driver, returns successful replay data or claims a qualified seed.
-        child_code=r'''import importlib.util,sys,os,shlex
+    _end_fixed_ready=False;_end_fatal=None;_end_close_error=None;_end_temp_error=None
+    _end_peer_ready=False;_end_setup_complete=False;_end_spawn_saved=False
+    _end_old_items=_end_template=None
+    try:
+        with tempfile.TemporaryDirectory(prefix='C2-END-failure.') as area:
+            base=Path(area);window=base/'window';window.mkdir(mode=0o700)
+            (window/'seed-a.json').write_bytes(b'{}\n');(window/'seed-a.json').chmod(0o400)
+            work={};owner._capture_work_values(work,'END-case')
+            for key,value in {'runtime':{field:0 for field in owner._RUNTIME_FIELDS},'close_calls':0,'held_close_calls':0,'observation_calls':0,'seed_processing':{field:0 for field in ('R','W','H','E','C')},'accounting':{kind:{field:0 for field in ('read_bytes','write_bytes','logical_bytes','physical_bytes','files','occurrences')} for kind in ('L','W','M','raw','unresolved')}}.items():work[key]=value
+            case=work['cases']['END-case']
+            held=owner._open_held(str(window),True,owner._store_rule(os.geteuid(),os.getegid(),0o700,True,resolver),'E_STALE')
+            caller=_C2FixtureCaller(root,held,work,case);fixed=caller.fixed;identity=sorted(fixed['_C2_CASES'])[0]
+            _end_fixed_ready=True
+            try:
+                caller.window_sha=caller.head='a'*64
+                reservation={'window':fixed['c2_counter_values'](fixed['c2_fresh_work']('END-window-reservation')),
+                    'common':fixed['c2_counter_values'](fixed['c2_fresh_work']('END-common-reservation')),
+                    'cases':{identity:fixed['c2_counter_values'](fixed['c2_fresh_work']('END-case-reservation'))}}
+                # Failure-only protocol peer. It reports its real codec work, then exits nonzero without DONE.
+                # It never invokes a driver, returns successful replay data or claims a qualified seed.
+                child_code=r'''import importlib.util,sys,os,shlex
 from pathlib import Path
 root=Path(sys.argv[1]);spec=importlib.util.spec_from_file_location('ENDpeerconsumer',root/'shadow/v1/_consumer.py');c=importlib.util.module_from_spec(spec);sys.modules[spec.name]=c;spec.loader.exec_module(c)
 s=(root/'evals/v1/evals-launcher.sh').read_text();literal=shlex.split(s.split('c2_program=',1)[1].split('\nc2_fd9=',1)[0])[0];ns={'__name__':'ENDpeer','c':c};exec(compile(literal,'<actual-fixed-codec>','exec'),ns)
@@ -7037,25 +7092,59 @@ ch.send(ready);ch.receive('GO')
 end={'kind':'END','version':1,'ordinal':start['ordinal'],'start_sha256':ns['c2_sha'](raw,w),'receipt_sha256':None,'result_sha256':None,'outcome':'refused','child_delta':ns['c2_counters'](w),'retained':[],'errors':[{'category':'controlled-refusal'}],'unknown':['missing-DONE-tail']}
 ch.send(end);os.close(9);os.close(10);os._exit(3)
 '''
-        spawn=os.posix_spawn
-        def refused_peer(path,argv,env,**kwargs):
-            return spawn('/usr/bin/python3',['/usr/bin/python3','-I','-S','-B','-c',child_code,str(root)],env,**kwargs)
-        before=work['read_bytes'];os.posix_spawn=refused_peer;caught=None
-        try:
-            try:caller.invoke(['run',str(window/'seed-a.json'),'2026-10-27T00:00:00Z'],[identity],reservation)
-            except BaseException as error:caught=error
-        finally:os.posix_spawn=spawn;held.close()
-        if not hasattr(caller,'last_attempt'):raise caught
-        end=caller.last_attempt['end']
-        assert caught is not None and end is not None,'refusal peer did not reach actual END'
-        assert caller.child_state['session']['read_bytes']==end['child_delta']['common']['read_bytes']>0
-        assert work['read_bytes']>before and caller.common_case['read_bytes']>=end['child_delta']['common']['read_bytes']
-        assert work['C2_child_tail_unknown'] and caller.common_case['C2_child_tail_unknown']
-        assert caller.last_attempt['wait']==3<<8
-        assert caller.ordinal==0 and caller.head=='a'*64
-        assert caller.work['seed_processing']['H']>0
-        print(json.dumps({'C2_fix':'refused-END-transfer','actual_END_seen':True,'wait':caller.last_attempt['wait'],'no_DONE':caller.last_attempt['done'] is None,
-            'no_driver_executed':True,'no_success_result':True,'unadvanced':True,'window':work,'common':caller.common_case,'child_END':end,'caller':caller.work},sort_keys=True))
+                spawn=os.posix_spawn;_end_spawn_saved=True
+                def refused_peer(path,argv,env,**kwargs):
+                    return spawn('/usr/bin/python3',['/usr/bin/python3','-I','-S','-B','-c',child_code,str(root)],env,**kwargs)
+                before=work['read_bytes'];os.posix_spawn=refused_peer;caught=None
+                _end_peer_ready=True
+                _end_old_items=tuple(case.items())
+                _end_template=fixed['c2_fresh_work']('END-case')
+                for _end_key,_end_value in _end_template.items():case.setdefault(_end_key,_end_value)
+                assert case is work['cases']['END-case'] and caller.case_work is case
+                assert all(case[_end_key] is _end_value for _end_key,_end_value in _end_old_items)
+                for _end_group in ('runtime','accounting','seed_processing','calls'):
+                    assert case[_end_group] is not work[_end_group] and case[_end_group] is not caller.common_case[_end_group]
+                for _end_kind in fixed['_C2_CLASSES']:
+                    assert case['accounting'][_end_kind] is not work['accounting'][_end_kind]
+                    assert case['accounting'][_end_kind] is not caller.common_case['accounting'][_end_kind]
+                work['C2_case_bindings'][identity]=(case,[case])
+                _end_setup_complete=True
+                try:caller.invoke(['run',str(window/'seed-a.json'),'2026-10-27T00:00:00Z'],[identity],reservation)
+                except BaseException as error:caught=error
+            except BaseException as error:_end_fatal=error
+            finally:
+                try:
+                    if _end_spawn_saved:os.posix_spawn=spawn
+                finally:
+                    try:held.close()
+                    except BaseException as error:_end_close_error=error
+            _end_body_error=_end_fatal
+            if _end_close_error is not None:
+                _end_fatal=fixed['c2_first'](_end_fatal if _end_fatal is not None else caught if _end_peer_ready else None,_end_close_error)
+            elif _end_peer_ready and fixed['c2_cancelled'](caught):_end_fatal=caught
+            if _end_fatal is None and _end_setup_complete:
+                try:
+                    if not hasattr(caller,'last_attempt'):raise caught
+                    end=caller.last_attempt['end']
+                    assert caught is not None and end is not None,'refusal peer did not reach actual END'
+                    assert caller.child_state['session']['read_bytes']==end['child_delta']['common']['read_bytes']>0
+                    assert work['read_bytes']>before and caller.common_case['read_bytes']>=end['child_delta']['common']['read_bytes']
+                    assert work['C2_child_tail_unknown'] and caller.common_case['C2_child_tail_unknown']
+                    assert caller.last_attempt['wait']==3<<8
+                    assert caller.ordinal==0 and caller.head=='a'*64
+                    assert caller.work['seed_processing']['H']>0
+                except BaseException as error:_end_fatal=error
+    except BaseException as error:
+        if not _end_fixed_ready:raise
+        _end_temp_error=error
+    _end_before_temp=_end_fatal
+    if _end_temp_error is not None:
+        _end_fatal=fixed['c2_first'](_end_fatal if _end_fatal is not None else caught if _end_peer_ready else None,_end_temp_error)
+    _end_old_items=_end_template=_end_key=_end_value=_end_group=_end_kind=None
+    if _end_fatal is not None:raise _end_fatal
+    caught=_end_temp_error=_end_body_error=_end_before_temp=None
+    print(json.dumps({'C2_fix':'refused-END-transfer','actual_END_seen':True,'wait':caller.last_attempt['wait'],'no_DONE':caller.last_attempt['done'] is None,
+        'no_driver_executed':True,'no_success_result':True,'unadvanced':True,'window':work,'common':caller.common_case,'child_END':end,'caller':caller.work},sort_keys=True))
 
 
 def raw16_C2_six_fix_deletions(root: Path) -> None:
