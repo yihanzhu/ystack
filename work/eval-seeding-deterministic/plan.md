@@ -1,5 +1,5 @@
 ---
-spec-blob: f8d201cbfdf56a8451b43845758b73e1f125dd4e
+spec-blob: 61dbd0be26a6735115d224bf72cb47becc62cdb4
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-26
@@ -13,25 +13,24 @@ existing review relay and measured scope binding remain intact. PR 1b remains
 one complete two-source delivery. Source preparation does not accept a dependency,
 a real recording, native qualification or either seed batch.
 
-This plan amendment derives from accepted plan
-`25ef8663d11f9048411ad53dcb811ba95e2cbdf4`. Protected G2 PR #799 accepted spec
-`f8d201cbfdf56a8451b43845758b73e1f125dd4e` after independent review and quick
-CI41213739584. Current plan-PR base is `bf502f5e11c43a6f8c51c62abcebaa79063d4c5e`, sole parent
-`3d4ccac2853a2bd1bc1df19a357a47f112a1e980`, tree `e0c942c87da48d9c98cc62d6084cbaaa73f109ac`.
-Source is paused at `760866d90c82b73505cffb6ac267156d24ab72ab` with the two
-CODE6544812019-authorized drafts preserved. SOURCE_NOT_ACCEPTED; restore I1 OPEN.
-The only new technical opening is the original END restore error source and its
-four-object/three-fold bound. Retain the original three contacts, all guards and
-unresolved acceptance debts. The separate one-use local checkpoint below requires
-the separate high-risk plan acceptance before its own review and preservation GO.
-It is not current permission to commit or continue code.
-Original CI41202319488 at source788570/baseD5e7 is closed FAILURE: 62 PASS,
-5 FAIL, 12 NOT_REACHED; all eight raw logs total219046433 bytes, closure6544585942.
-Retain every original failure and UNKNOWN; T/scope-pre roots remain UNKNOWN.
-The future source plan-base stays UNKNOWN until fetched main contains this new
-accepted plan. No old CODE/runtime GO or source review carries forward. Prior
-completed preservation remains history and cannot authorize this new checkpoint.
-Source, I1/G3/native and prior debts are not accepted or closed by this candidate.
+This plan amendment derives from accepted plan d43c100dad9536b5fbe48cb3118d6fd38493c209
+and binds accepted G2 spec61dbd0be26a6735115d224bf72cb47becc62cdb4. PR #801
+passed independent G2 review and quick CI41225464398, then protected-landed at
+current plan-PR base56dfe9a8b125a385f46f6315c0100eed90174143, sole parent
+5303a67747af0e80c0fb964e979b81d1c11286ed, tree81cec753c16d960a1016a89f7a1714cd62ff5006.
+Review comment6546925824 was read back exactly. Current source
+ac36c43801746089e17702f9b137fd6ee938dddd and execution
+base5303a67747af0e80c0fb964e979b81d1c11286ed remain frozen while full CI41220613241
+runs. Actual caught/end values and this failure's inner cause remain UNKNOWN.
+Two proven static defects concern the same caller's strict ledger and missing-DONE
+failure/wait order. Only the six-file closure below opens for the next pass.
+G2 has protected-landed. This separate high-risk plan still requires its own
+exact-head/base review, quick CI and protected landing. The future
+source plan-base is UNKNOWN until that fetched main exists. Before source work,
+close all eight original logs and independently classify the full79, retain every
+failure, normally merge accepted artifacts into the same branch and obtain fresh CODE.
+The prior M760-only checkpoint keeps its exact historical scope and cannot be reused
+at this source. Preserve original4/3/1 END arbitration, T/AST repairs and all debts.
 The prior full-CI source/base remain
 `89748ffb350eb8db6b1162ff6daf90dbd9c72fa8` /
 `ec68ada78dd031e37b9daee5a694bc4e18a4d69d`.
@@ -809,20 +808,13 @@ blocked pending its exact scope gate.
 
 ### Existing regression compatibility (R9.2)
 
-Retained requirements remain accepted obligations. The first three table rows remain
-the two-file CODE set: END owner/cleanup, same-line loops all-Name prerequisite, and
-writer-two-roots propagation with its exact cleanup/outer exit. Their sealed M760
-drafts are unaccepted. This amendment adds only END restore capture and arbitration;
-T and AST technical contracts stay unchanged. After G2 PR #799, separate high-risk
-plan landing, the one-use preservation gate and fresh CODE precede further source work.
-All other source788570 bytes remain
-frozen, including production handoff, H0/H1–H6/helper-env/first-read reuse, earlier
-AST repair, terminal, observer, replay messages and source/stdout/cause. Keep all
-other T controls, L/R and scope-pre behavior; no generic hook/diagnostic facility.
-Eight test files/43 paths, original40/20, C1six/threepins, nine adoption-only paths,
-SOURCE84/consumer/formal/native/maps/guards/caps and all failure/UNKNOWN debts stay.
-Only the exact original-call delegation, local checks and arbitration below are
-added; no new test case/child/producer/validator/source-read/runtime opportunity.
+Retained requirements remain accepted obligations. The current pass opens only the
+six-file caller-protocol and binding table below. The prior END owner/4-error cleanup,
+loops AST fix and T writer boundary are the implemented sourceac36 baseline. Their
+technical contracts continue to apply. New changes are limited to the original
+caller's eight existing schema sites and complete-END/no-DONE EOF/wait responsibility,
+plus the exact mechanical bindings. Other595 post-artifact source entries stay exact.
+No new test/case/child/producer/validator/read opportunity follows from this amendment.
 
 | File | Fixed contact and order of work |
 | --- | --- |
@@ -853,6 +845,143 @@ added; no new test case/child/producer/validator/source-read/runtime opportunity
 | `scripts/test/candidate-content-preparation-fixtures.py` | `raw16_preparation_P_handoff`: wire the two existing transitions described below in its seven original cases. Check the inspect result before indexing, while retaining the actual failed retention and its errors. |
 | `scripts/test/candidate-content-preparation-fixtures.py` | Only `raw16_C1_gate_revision`: select the original `session.call_id` assignment and immediately following request assignment from `_Generator._kill_source_request_phase`. Bind the original five-role transition across request phase → `kill_source` → result phase: `K_REQUEST`, same-session `context[1].release_local()`, `not session.local and not session.remote` check, collector call, `K_DONE`. |
 | `scripts/test/shadow-enforced.test.sh` | In the first `PY_REPRODUCTION_VALUES`, add only the real `_runtime_sha_values` to the original ten-name AST selection. Require exactly one definition of each of `Refusal`, `canonical`, `sha`, `parse`, `document_ref`, `_native_provenance_values`, `_runtime_sha_values`, `_reproduction_provenance_values`, `_reproduction_record_values`, `_reproduction_bundle_values`, `StableFile`. Keep the existing namespace and all 32 original assertions; the helper uses its existing `sha/c`, so retain the exact `marked_sha`/bundle order, early-failure prefixes and error payloads. Do not alter expected marks, omit the Python hash, catch NameError as success or use a recursive loader. |
+
+**Current C2 caller ledger and terminal failure.** Bind the complete sourceac36
+consumer/fixture and the accepted spec's eight original-site table. This narrow
+clause supersedes old broad consumer/invoke byte freezes only at the following
+closed contacts. No producer operation, observation or value is replaced.
+
+| Original site | Exact original value keys / occurrence |
+| --- | --- |
+| C2.caller-spawn | actions,pid; original successful spawn6027 |
+| C2.caller-child-socket-close | return; original child socket close6029 |
+| C2.caller-wait | pid,status; original normal wait6087 |
+| C2.caller-failed-wait | pid,status; original failure reap6122 |
+| C2.caller-control-close | return; original control socket close6134 |
+| close → C2.caller-prepared-close | errno,return,site; original prepared FD loop6030 |
+| close → C2.caller-pending-close | errno,return,site; original partial FD cleanup6126 |
+| close → C2.caller-tail-close | errno,return,site; original owned FD cleanup6129 |
+
+Add five ordinary entries to the existing _C3_OBSERVATION_KEYS dictionary, one
+readable line each. Preserve sorted exact key tuples: actions,pid; return;
+pid,status; pid,status; return. Append only the three original close subnames to
+the existing _C3_CLOSE_SITES tuple on its current physical line. Preserve all
+original constants, updates and the complete _c3_ledger_values implementation.
+The prior complete sets grow84→89 event names and24→27 close names, with exactly
+this set difference. Original row owner/ordinal/kind/value shape, bool/u64/cap,
+canonical data, full caller accounting_rows and same-owner transfer remain strict.
+Keep original C2 names and original actions/pids/arguments/results and observations.
+Verify each original producer-to-consumer mapping statically and through the existing
+full suite. Do not add a parallel schema, filter unknown rows or relabel as C3/offline.
+
+Only _C2FixtureCaller.invoke changes behavior. At original control EOF6047, preserve
+the original phase==EOF predicate and the same AssertionError it actually raises.
+Only if a complete END has passed the original parse/ordinal/start hash/settlement,
+phase is DONE, remaining is512 and no DONE pieces were read, retain that error as
+the pending protocol failure and continue the existing selector. A partial DONE,
+EOF in another phase or an invalid END keeps the original immediate failure path.
+Do not synthesize END/DONE, phaseEOF, child exit or closed descriptors.
+
+Keep the same real reads and caps. Remove each stream only on its actual EOF as
+before. The retained missing-DONE failure does not count as protocol success. Once
+all three stream registrations are gone, perform the original normal waitpid once
+at the existing wait point, under the same BaseException/finally responsibility.
+Store its actual status and record the original C2.caller-wait event with actual
+returned pid/status. Preserve the original waited==expected_child assertion. On
+this missing-DONE path, propagate the retained same protocol error before admitting
+any receipt/candidate or advancing ordinal/head. Keep the original status==0 and
+END/DONE/phase success predicates for the original successful route. The raw END
+regression still requires actual3<<8, absentDONE and every original assertion.
+The peer remains byte-identical, including END→close9→close10→exit3. Normal wait
+establishes real exit, while control EOF alone establishes neither exit nor close10.
+
+If a later read/validation/wait/observation error occurs while the protocol error
+is pending, fold that actual error with the earlier one using the existing c2_first.
+Preserve the first cancellation and ordinary first error, both original objects
+and existing cause. Mark failed/accounting-incomplete/child-tail-unknown through
+the original failure route. The original finally retains kill/reap responsibility
+for a child that has not reached the coordinated stream terminal path, for IO
+failure and for cancellation. Keep normal wait in this protected route so an
+interrupted/error wait cannot bypass cleanup. Never clear the child responsibility
+before an actual wait return; never declare an uncertain wait completed or retry
+an already consumed/uncertain reap. Preserve actual failure/UNKNOWN if completion
+cannot be established. Do not add a second wait loop, WNOHANG polling, timeout,
+sleep, retry, signal, extra read or execution chance. The implementation must prove
+separately the all-stream-terminal path and the real live/error/cancel cleanup path.
+A direct early kill on the first path is forbidden; skipping live-child cleanup on
+the second is also forbidden. Existing partial FD/sockets, original close sites,
+caller transfer and cleanup error selection remain responsible on every exit.
+
+The retained error is a bounded same-call local reference, released on success
+or with propagation of the original failure. It adds no output/error field, collector,
+frame read or diagnostic facility. Preserve all original calls/cases/control paths,
+first-read mutation and original4-object/3-fold/1-cancel END function contract.
+The latter counts belong to raw16_C2_refused_END_transfer, not a license to hide
+arbitration calls inside helpers. Each genuinely needed invoke error fold must be
+listed in implementation proof and charged UNKNOWN, without new runtime trials.
+
+**Exact current binding closure.** Six files change, with two behavior contacts
+and four files containing only mechanical bindings. The fixed old full digests are
+C0=7d58f60c6622ae4e3f22167a3429d72a0d65e826c8d91bf87a016644226018ad,
+P0=efe2004d9d44c9fd3d9e6bf3e73edd9570d785af6c85f1e550fe0d7ff9fed413,
+D0=7ea072ddc3ab6d9f11485d09ad384b5a92aaeff6bf47ab08b53f583df39d3df1.
+C/N are the complete revised consumer SHA/byte length, P the complete revised
+program SHA, D the complete revised driver SHA. Bind these three values in the
+launcher helper slice, then hash that complete slice as K. Finally bind the original
+launcher34 _C2_HELPERS_SHA256 and fixture6682 fixed digest to that same K. The K
+constant is outside the slice, so there is no self-hash cycle. Derive C/N→P→D→K
+from actual complete reviewed bytes, then measure the complete final launcher.
+Never compute an expected value from an unchecked runtime input.
+
+| Exact path and binding | Old fixed value / required new value |
+| --- | --- |
+| shadow/v1/_consumer.py | Add only five entries in _C3_OBSERVATION_KEYS and three names in _C3_CLOSE_SITES. Its complete actual SHA becomes C and length becomes N. |
+| scripts/test/candidate-content-preparation-fixtures.py | _C2FixtureCaller.invoke EOF/failure/wait responsibility only; _raw16_C1_foreground_finally_seam9662 changes its one 7d58… full-source SHA assertion to C. The original raw16_C2_six_fixes6682 triple equality changes its one fixed041ec… SHA to K;6681 still checks the exact final complete helper length. |
+| scripts/test/scope-qualification.test.sh | Six exact 7d58… consumer SHA literals at1192 expected consumer member,3547 consumer assertion,5239 copied-consumer assertion,5253 ordinary_source_hash,5255 ordinary_source_tuple,8529 _ordinary_observer_metadata_compat assertion become C. Preserve the original d35… formal/helper source and complete inverse. |
+| scripts/test/scope-qualification.test.sh | Same ordinary observer only:8533 five-definition tuple,8595 two immediate-caller coordinates,8736 errno caller coordinate. With the specified five added schema lines,4271/4281 become4276/4286 and4273/4283 become4278/4288. All other positions remain their actual source values; verify full AST/authentication. |
+| evals/v1/evals.jq |189 SOURCE84 consumer member SHA7d58… becomes C. Hash the entire resulting program as P. |
+| evals/v1/evals-driver.sh |10 PROGRAM_SHA,19 FIXED_PINS program.jq,877 program_sha256: old efe2004d… becomes P, exactly three occurrences. Hash the entire resulting driver as D. |
+| evals/v1/evals-launcher.sh |2437 SOURCE84 consumer tuple changes only SHA7d58…→C and length434534→N, retaining path/mode100644.2944 program_sha old efe2004d…→P and2947 driver_sha old7ea072dd…→D, once each. After those replacements hash the complete original helper slice as K, then change only line34 _C2_HELPERS_SHA256 to K. This constant is outside the slice. |
+
+K0 is041ec87ddf0f04984ce004600da8fb74a81a1931f941489d175b130c41d644a0.
+Exactly two fixed K0 literals rebind: launcher34 and fixture6682. Extract the same
+unique helper slice, including its leading LF before emit_error() { and stopping
+before the leading LF of # Fixed public entry;. Preserve both original markers,
+real extraction/loading, C2Sources' full-hash guard and the fixture's three-way
+equality of actual helper SHA, fixed['_C2_HELPERS_SHA256'] and literalK. No second
+helper implementation or replacement of the equality with a runtime self-check.
+
+Measure the final complete UTF-8 slice before binding its fixed expectations.
+The sourceac36 slice is61996B. Fixed-width64-hex substitutions and a six-digit N
+preserve that length, so retain fixture6681's61996 assertion when verified. If the
+actual slice length differs, rebind only that fixed literal to the exact measured
+length and retain the full equality check. Record the actual length and full K
+in source/recipe/review evidence. H0/H1–H6 and first-read mutation reuse retain all
+original calls/assertions/custody and cleanup. Charge full extraction/hash/check
+work UNKNOWN under the original owners and caps, without a new runtime opportunity.
+
+There are exactly nine C0 literals: launcher1, program1, fixture1, scope shell6.
+The P0 fanout is launcher1 plus driver3. D0 has launcher1. The one consumer length
+literal changes from434534 to actualN. Preserve every surrounding tuple/key/path,
+mode and check. Five inserted schema lines shift downstream consumer coordinates
+by+5 and leave pre-schema functions unchanged. Recompute full AST/code/globals
+proof before rebinding the three ordinary observer coordinate expressions above.
+No inserted fixture/scope shell lines are needed for their digest/coordinate edits.
+Do not update formal four observer literals or two native helper bodies/d35 pins.
+Keep original whole-copy inverses and prove only these specified substitutions.
+Native1197/1231, SOURCE84 membership/selection/guards, adoption maps' semantics and
+all original authentication controls stay intact. Prove literal counts and full
+file inverses for all six files. An additional actual binding outside this closure
+stops for a bounded scope review rather than automatic broad replacement.
+
+Full original END and existing caller regressions are the runtime regression path.
+Static proof checks the exact eight-site difference, unchanged predicates and original
+site ownership, complete stream/EOF/wait branches and actual source binding chain.
+Do not add two schema trials, extra cases or new producer/child invocations. Unreached
+branches remain unproved until original full evidence reaches them. New state/schema/
+hash/serialization/reference and partial cleanup work accrues original owner and
+ordinary-harness UNKNOWN; all original budgets/caps/failed costs remain. No free
+finite copies, new pool, #558 borrowing, native proof or acceptance inference.
 
 **Current loops type prerequisite.** Bind source788570's complete shell and
 original PY_STORE_MODE_CONTROLS/PY_GENUINE_ASSEMBLER literals. Only at physical9087
@@ -1078,9 +1207,10 @@ is not a completed END run or proof of unreached controls.
 **Current helper-env fixture contract.** Use the original single build invocation
 inside raw16_C2_six_fixes, including its unchanged first-read deletion reuse.
 Extract helpers from that invocation's already-read bound launcher using the unique
-original emit_error / Fixed public entry boundaries. Require the complete 61996
-bytes, SHA256 041ec87ddf0f04984ce004600da8fb74a81a1931f941489d175b130c41d644a0,
-and the original _C2_HELPERS_SHA256 binding. Let the unchanged _literal select all
+original emit_error / Fixed public entry boundaries including the leading LF.
+Require the complete actual byte length and K specified by the current binding table,
+including the original _C2_HELPERS_SHA256 and fixed triple-equality assertions.
+Retain61996 when the final slice length verifies equal. Let the unchanged _literal select all
 five generation/program/driver/catalog/review literals; never hand-fill them.
 Pass a real c2_cli run list with a normalized absolute fixture seed-a.json path
 and valid fixed-format UTC time. The seed is not read before this stop; do not claim
@@ -1308,11 +1438,19 @@ Reverse this one predicate-order edit to recover the whole original shell file.
 No dashboard/caller/map shift is caused by a same-line change. Static selection
 of the eleven sites does not prove any worker ran. All check costs stay UNKNOWN.
 
-**Current source handoff and proof.** G2 PR #799 has protected-landed. This separate
-high-risk plan requires fresh exact-head/base review, quick CI and protected merge.
-Its current PR base is `bf502f5e11c43a6f8c51c62abcebaa79063d4c5e`. Source M760 remains paused. The next accepted source plan-base is the actual fetched
-main containing the new plan, not a preassigned OID. Original full412023 closure
-and all failures remain evidence; no new runtime window is authorized here.
+**Current source handoff and proof.** G2 PR #801 has protected-landed. Current
+plan-PR base is56dfe9a8b125a385f46f6315c0100eed90174143. This separate high-risk
+plan still needs independent review, quick CI and protected landing. The future
+source plan-base is UNKNOWN until fetched main contains that accepted plan. Original full412206 evidence must close all8 logs and independent79
+classification before fresh CODE. Keep sourceac36/base5303 frozen during that run.
+After the new plan lands, normally merge its fetched main into the same clean source
+branch. Only spec/plan may change at this stage; other599 match sourceac36 exactly.
+Seal the actual post-artifact601 manifest. CODE opens only the six-file table above;
+other595, including newly accepted artifacts, remain byte/type/mode/blob identical.
+Retain source/recipe/resource independent Important0 reviews, normal source commit,
+committed rebind, one fresh execution GO, normal push and original79/six fullCI.
+The following checkpoint is bound only to its old M760 tuple and supplies no action
+for sourceac36. Its original proof and failed draft remain preserved.
 
 **One-use local preservation checkpoint.** This is a distinct stage exception only
 for CODE6544812019's already authorized, sealed two-file draft. Keep SOURCE_NOT_ACCEPTED
@@ -1367,13 +1505,20 @@ that new preCODE manifest. Artifact deltas are separate from CODE deltas.
 This one-use exception cannot save unknown/other dirty, authorize a second checkpoint,
 reuse old GO or alter excluded attempts. All preservation/review/commit/merge costs
 accumulate UNKNOWN within the original accounting; no refunds or new allowance.
-Bind full actual fixture bytes/length/SHA in original source/recipe/review records.
-No new pin path opens. Current launcher/c2_program, complete61996 B shell helpers/
-041ec87d, five literals, D84/SOURCE84, driver/catalog, consumer7d58, formal/native,
-maps/bootstrap stay exact. Another necessary source edit stops for its scope gate.
+Bind all six actual file bytes/length/SHA in original source/recipe/review records.
+Only the exact current binding table overrides the prior consumer7d58 and
+launcher/program/driver byte pins. The complete helper slice changes only through
+C/N/P/D bindings and its two fixed K checks, with the original exact length assertion
+retained or rebound as specified. The five program literals permit only the table's
+fixed digest bindings. D84/SOURCE84 membership and guards, catalog, formal/native
+and bootstrap remain exact. Map semantics stay unchanged. Further source edits stop
+for their scope gate.
 Require full single-file inverse, setup/order/reference/schema and finite error-path
-proof; peer/invoke/assertion expressions and other controls stay byte-identical.
-Only the exact retained END, writer-boundary/outer-exit and one-line AST deltas above are open.
+proof; peer, original assertion expressions and other controls stay byte-identical.
+Within _C2FixtureCaller.invoke only the current exact EOF/failure/wait/reap
+responsibility may change. Its remaining bytes must be recovered by the full inverse.
+For this pass only the current caller-protocol and six-file binding table is open.
+The implemented END/writer/AST obligations and full inverse remain the baseline.
 After code, perform the applicable pure static checks, bash -n on the affected
 shell and pinned shellcheck 0.11.0 over all 149 shell files; no product trial is
 substituted. Preserve the author's complete diff/report. Independent source,
@@ -5073,8 +5218,9 @@ gates (R9.6).
 - This plan-only amendment: `review_size: standard`. One bounded ordinary regression
   compatibility concern: retained END owner/cleanup, one AST type prerequisite and
   same-call writer error propagation. PR #797 accepted the three contacts. G2 PR #799
-  accepted the END restore and single-checkpoint amendment. This separate
-  plan still needs fresh review, required CI and protected landing. No CODE/runtime
+  accepted the END restore and single-checkpoint amendment. G2 PR #801 has accepted
+  the current caller-protocol and binding scope. This separate plan still needs
+  fresh review, required CI and protected landing. No CODE/runtime
   GO follows. All original proof and invoices remain.
 
 Each range waives only the soft line signal, never scope, tests, CI, review or human
