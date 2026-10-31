@@ -2012,7 +2012,7 @@ to evade the source cap. Executable and policy files always belong to the closur
      | --- | --- |
      | `scripts/test/scope-qualification.test.sh`：`PY_STORE_MODE_CONTROLS.loops` 的四名称筛选 | 仅在原同一物理行、完整 `[item.id for item in node.target.elts]` 比较前加 `all(isinstance(item,ast.Name) for item in node.target.elts)`。保留原 For/Tuple 前置、四名/顺序、唯一1、六labels及全部后继；不改9062或其它selector。 |
      | `scripts/test/candidate-content-preparation-fixtures.py`：`raw16_t_lifecycle` 的原 writer-two-roots `_discard_runtime` 调用边与唯一复合assert | 仅依下述同实例/anchor私有委托转发首个原primary到该同一AssertionError的cause；原方法同参一次/返回抛出原样。仅同时开放此块恢复/holder.close错误仲裁与原外层TemporaryDirectory的writer-pending-failure出口。无该边则原assert，无新采集/根因或PASS证明。 |
-     | `scripts/test/candidate-content-preparation-fixtures.py`：`raw16_C2_refused_END_transfer` 的原 END-case 初始化与唯一 case-binding 赋值 | 仅按下述合同，在原受清理保护的 try 内用一次既有 c2_fresh_work 完整模板逐项 setdefault 补齐同一 owner，再执行移入的原唯一 binding 赋值。保留旧值/计数/引用及容器隔离；原 peer/invoke/断言表达式不变。仅同时开放本函数原 held/临时区一次清理的错误保留与尾部仲裁、原同一次 print 延后至清理成功后；不新增 case/child/validator 调用。 |
+     | `scripts/test/candidate-content-preparation-fixtures.py`：`raw16_C2_refused_END_transfer` 的原 END-case 初始化与唯一 case-binding 赋值 | 仅按下述合同，在原受清理保护的 try 内用一次既有 c2_fresh_work 完整模板逐项 setdefault 补齐同一 owner，再执行移入的原唯一 binding 赋值。保留旧值/计数/引用及容器隔离；原 peer/invoke/断言表达式不变。仅同时开放本函数原 spawn 恢复、held/临时区一次清理的错误保留与尾部仲裁、原同一次 print 延后至清理成功后；不新增 case/child/validator 调用。 |
      | `scripts/test/candidate-content-preparation-fixtures.py`：`raw16_C2_six_fixes` 的原 helper-env 前缀及原 first-read mutation 对该同一函数的复用 | 仅接回当前真实 build CLI、同源完整 helper literal、实际私有 scratch/custody 和宿主 TMPDIR 缓存输入合同。保留每次原 build 调用、两原 uname 点、同一 sentinel、真实关闭/取消及下述有限 fixture 接线；不改另五组或后继控制（仅本表单列 END-case 初始化除外）；仅增加下文取得→custody交接的有界回归。生产只开放下文同一交接接点，env/guard不变。 |
      | `scripts/test/scope-qualification.test.sh`：`PY_STORE_MODE_CONTROLS` 的 `consumer_calls` 原 AST 列表筛选 | 仅把既有 `isinstance(node, ast.Expr)` 移到原 `node.lineno < coverage_fixture.lineno` 前，同一物理行完成。除本表单列 loops 元素类型先决外，其余 selector、layout排除、sort、11接点/顺序/位置及全部后继控制逐字保留；不造位置、缺省属性或跳过必需节点。 |
      | `scripts/test/replay-materialization-result.test.sh`：下述16个既有 receiver supervision heredoc assert | 只在各原 assert 追加对应固定字符串 msg。完整 predicate/test AST、求值次数与顺序、控制流、原成功路径和失败/取消/cleanup 保持；不插值、不取新值、不改 supervisor/receiver 或其它 assert。只改善原失败呈现，不证明根因。 |
@@ -2157,8 +2157,10 @@ to evade the source cap. Executable and policy files always belong to the closur
      放在新增补齐/身份/旧值/容器检查后、原唯一 invoke 前。原 head/window_sha
      仍原位；reservation、child_code、spawn 保存/替换、before/caught 原字节
      与求值顺序不变，须静态证明它们不读取该 binding。新增准备失败进入本函数受保护路径；原 spawn 恢复与真实 held.close 仍各一次。
-     允许仅对此原 close 捕获 BaseException，并捕获原 TemporaryDirectory 的一次
-     离场错误；不新增第二套资源清理、重试或生产 close 修改。
+     对原一次 os.posix_spawn=spawn 恢复捕获 BaseException，保留其原对象；
+     即使恢复失败，仍尝试原 held.close 一次并分别捕获其 BaseException，随后
+     捕获原 TemporaryDirectory 的一次离场错误。恢复失败或结果不确定均失败；
+     不重试恢复/未知关闭，不新增第二套清理或修改生产 close。
      用有限局部快照核同 owner 关系和全部旧值/引用；runtime、accounting（含五
      个内层）、seed_processing、calls 与 window/common 不共用可变容器。
      检查不改值。原一次 invoke 和真实 peer 验证严格 ledger、END/无DONE、
@@ -2171,22 +2173,52 @@ to evade the source cap. Executable and policy files always belong to the closur
      初始化、局部检查、该 binding 移动及以下有限错误传播；其余生产/consumer/native/SOURCE84/
      maps/pins、已实现交接/AST及所有旧约束冻结。
 
-     新增准备失败、原调用取消、held.close 错误和临时区离场错误必须失败；预期
+     新增准备失败、原调用取消、spawn 恢复错误、held.close 错误和临时区离场错误必须失败；预期
      peer refusal 不等于这些失败已处理。保留原 caught、真正的断言失败和清理错
      的分别身份。用同源既有 c2_first/c2_cancelled 仲裁：普通主错不被后普通错
-     替换；首次 KeyboardInterrupt/标记取消优先且不被后取消替换。若 close 或
-     临时区清理失败，即使选中原预期 refusal，也必须传播选中同一对象，不能
+     替换；首次 KeyboardInterrupt/标记取消优先且不被后取消替换。按 body/peer →
+     restore → close → temp 的真实顺序折叠已发生错误，至多三次 direct c2_first，
+     原一次 direct c2_cancelled 不变；不以覆盖 body 槽或隐式 context 代替恢复来源。
+     若恢复、close 或临时区清理失败，即使选中原预期 refusal，也须传播同一对象，不能
      继续 PASS。不得把新增 setup 错误或取消当作原预期 refusal。
      原 with/临时区离场次数不变。新增受保护段内错误先保存至原 with 完成，
      再做最终传播，避免 __exit__ 覆盖已选主错。fixed 取得前的旧准备前缀不为
      此另造加载、模板或仲裁器。正常无清理错时才执行原 END/账/状态断言；
      其异常仍是真正断言失败，不拿预期 caught 替代。原同一次 print 移到临时区
      清理成功后，表达式/字段不变。未取得/未知关闭不记成功，不重试。
-     局部保留至多三个同次原异常对象及选中别名；不改原 traceback/cause，
+     局部保留至多四个同次原异常对象及选中别名；不改原 traceback/cause，
      不加错误字段/日志/全局缓存/自定义呈现。成功后释放不再需要的异常引用；
      失败时所需次错可由传播 traceback 的本函数有限局部引用保留，随调用方
      释放原失败而释放，不复制/读取 frames。原默认呈现及这些引用/仲裁费用
      继续累计 UNKNOWN，不提供零IO/完整fit保证。
+
+     **本次已授权草稿的单次本地保存。** 此阶段步骤只在本窄 G2 与随后独立
+     high-risk plan 均正式接受、通过所需 CI 并保护落地后生效。只适用于原
+     codex/impl/eval-source-relay-replay、HEAD
+     `760866d90c82b73505cffb6ac267156d24ab72ab`，父序
+     `788570708e737da146c7867f6c3f328723be5770`、
+     `3d4ccac2853a2bd1bc1df19a357a47f112a1e980`，及 CODE6544812019 已授权、
+     已封存的两个稿：scripts/test/candidate-content-preparation-fixtures.py 和
+     scripts/test/scope-qualification.test.sh。完整 owned.diff SHA-256 为
+     `ae85c671cf6831239187493c20ec9b8402d617ce70cdcdde8a0225f981e3b20a`，
+     作者 manifest 为 `fd8a9cb221ead811fa02138c751e03c6c96167e3fbeae6b1625406c64bf0b1d8`。
+     当前 SOURCE_NOT_ACCEPTED，restore I1 OPEN。保存不接受源码或关闭该 finding。
+     经理先封实际601项、原index、类型/字节/Git及POSIX模式、精确dirty tree及
+     全manifest；核原599未变、index未变且无untracked，remote仍788570、PR absent、
+     #439唯一claim。独立保存scope/integrity审 Important0、经理全文读取及重新核现场
+     后，才可发唯一 fresh preservation GO。该审不是 source ACCEPT。
+     仅允许一次精确两路径 git add 和一次 normal local commit；parent必须为上述
+     HEAD，tree/message须绑定实际保存包，不预造commit OID。写前核完整601和预期
+     staged内容、index stages、config/hooks/attributes；不能运行产品、绕过hook或
+     借hook增加执行权限。首个失败、漂移或不确定即停并保留现场，不重试或回退。
+     不reset/clean/stash/restore/delete、不push、不改main或其它ref，不触发CI。
+     保存后独立核实际HEAD/parent/tree/index/完整字节和模式及clean收据。随后同一
+     branch正常merge最新已接受artifacts，重封基线并取得原Sol的fresh CODE，才可
+     修本END恢复接点及原三contacts范围内确实必要的修订。保存不是final source
+     commit，不授CODE/runtime；最终完整source/recipe/resource独审Important0、
+     normal final commit、独立committed rebind、唯一fresh runtime GO、normal push
+     与原79/six完整CI链保持。全部失败、轮数、cap和费用UNKNOWN不变。这是此tuple
+     唯一已授权dirty的保存用途，不适用于其它dirty、旧排除尝试或第二次checkpoint。
 
      **C2 helper 取得→custody 的正常生产交接。** 固定设计源为
      `05a2b197199a0136483b05a875c15d2a19a24e59` 的 launcher；其生产字节与
