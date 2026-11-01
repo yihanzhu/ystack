@@ -1,5 +1,5 @@
 ---
-spec-blob: 163dd278c34d61beb2f0cee58ff5c5659c6325a1
+spec-blob: f2a2cacd35973d5caef3fdae5920ca33e8f369e2
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-26
@@ -13,23 +13,25 @@ existing review relay and measured scope binding remain intact. PR 1b remains
 one complete two-source delivery. Source preparation does not accept a dependency,
 a real recording, native qualification or either seed batch.
 
-This amendment derives from accepted plan 3897546674e291d585929287457e7cc704746d93.
-G2 PR807 passed independent review (comment 6549791008) and landed through the
-protected PR. Its spec is 163dd278c34d61beb2f0cee58ff5c5659c6325a1.
-The current plan publishing base is 6ca5caa5490dabf48c5897f94f3986f832c148ca, sole parent
-27272ad465c816c4b81bbdfb7c5d6e13ab3a2f5d, tree e5309cbcca18f5bb58ec068fa664082bc555e92d.
-The original source author remains paused at 5da5e7c6814aee41bf06208862730b52b1e135ed.
-The six owned drafts are preserved. All six source findings remain open.
-This high-risk plan requires fresh independent review, quick CI and protected landing.
-Record the future source plan-base from the fetched merge. The original author
-requires fresh CODE on the verified continuation tuple before making the repairs.
-The manager may process separate artifact gates alongside the frozen source;
-this plan itself grants no CODE or runtime GO. No source work precedes full-batch
-closure and the new exact artifact/CODE gates. Before source work,
-archive all eight original logs, independently classify the full79, retain all failures,
-normally merge accepted artifacts into the same preserved branch and obtain fresh CODE.
-Prior checkpoint and runtime GO records cannot be reused. Keep original4/3/1 END,
-T/AST/C2 repairs and all prior acceptance debts; the H2b4d implementation is baseline.
+This amendment follows accepted plan 34c110a828ad91dcc1a50883ebc41c8a90b50458.
+G2 PR #809 landed through a protected squash merge. The manager read the full
+independent ACCEPT verdict in comment 6550380255. Quick CI 41250723009 passed
+on reviewed head 10bee0683edff1c790037b61e950f3fc04043550.
+The fetched plan publishing base is 3af2935b9569aac7adae9d1e77cb2bceafb25a33,
+sole parent 5c849828495a5ff2f29cb65c9032f37e9d73ddb9, tree
+5de9418aa8ccbf9f598c95276ef448b9faebeb9b. The accepted spec blob is
+f2a2cacd35973d5caef3fdae5920ca33e8f369e2. This separate high-risk plan still
+requires independent review, quick CI and protected landing before source work.
+Current frozen source is f902d9e9b610bf69a5c4eb35efd8c59b40a48309, with tree
+18c6547f4fba7c1745103ada976424e8f071df30 and base/plan-base
+5c849828495a5ff2f29cb65c9032f37e9d73ddb9. Remote remains
+2b4d98625ea49a0fa3d4da8f5ccc8439e075cc27 on codex/impl/eval-source-relay-replay.
+There is no source PR. #439 retains its single claim. CODE6549921968 was consumed.
+The original author has stopped. Preserve the six dirty files, including the newer
+Reader and fixture, the index, all refs and all earlier snapshots. The six source
+findings and both underlying static blockers remain open. The named manager must
+read the entire independent exact-head review, verify the checks and land each
+artifact separately. The remaining source and execution gates below still apply.
 The prior full-CI source/base remain
 `89748ffb350eb8db6b1162ff6daf90dbd9c72fa8` /
 `ec68ada78dd031e37b9daee5a694bc4e18a4d69d`.
@@ -807,12 +809,10 @@ blocked pending its exact scope gate.
 
 ### Existing regression compatibility (R9.2)
 
-Retained requirements remain accepted obligations. The current pass opens only the
-ordinary Reader layout/hold lifecycle, shared Reader.hold registration handoff and finite regressions below, with its exact
-six-file mechanical closure. H2b4d's C2 caller/END/T/AST implementation stays frozen.
-Other595 post-artifact source entries stay exact. Only the explicitly counted layout,
-validation and regression operations below are new; no new child, provider, platform
-probe, suite, permission or diagnostic facility follows from this amendment.
+Retained requirements remain accepted obligations. This pass opens seven source
+paths for ordinary Reader ownership and its existing bindings. The original C2,
+END, T and AST behavior stays frozen. The other 594 post-artifact entries stay
+exact. All earlier controls and costs remain due.
 
 | File | Fixed contact and order of work |
 | --- | --- |
@@ -950,7 +950,88 @@ leaf before/after/named, dev/ino/type/uid/gid/mode/nlink/size/time/ACL and full 
 remain exactly checked. Unknown interference after a hold still refuses. No promise
 is made about unrelated shared-root mutations or the old dynamic UNKNOWN failures.
 Inverses must recover the original gate branches and call bodies outside the single shared
-owned handoff, and the full original consumer.
+owned handoff. Use the seven full inverses below to recover the complete originals.
+
+**Close actual resources at their owners.** The following contacts supersede the
+earlier consumer freeze only for this Reader change. Keep the two-phase layout,
+original shared candidate copy/hold calls, all validation reads, release order
+and both 32/33-member forms. Apply the ordinary error rule at the operation
+which still has both real exceptions. A Reader classifier after return cannot
+recover a missing exception or identify an uncertain descriptor.
+
+| Existing owner or call | Required change and lifetime |
+| --- | --- |
+| Ordinary layout phase 1 | Hold the original directory FD locally from open through its single close attempt. Record the operation failure before closing. Invoke the original copy-close accounting path with ordinary disposition. Preserve close_calls and its original M/close row. No FD probe follows a failed close. |
+| Layout phase 2 and candidate directory/copy parent | Use the original _open_held and its original physical, ACL, owner, named/FD and full identity validation. For completed temporary helds use the original _c1_p_close final recheck, reverse pop, copy-close and existing C1 report sites. Use the ordinary disposition for the existing candidate writer/reader close and its parent/account delta on the ordinary batch only. Preserve the gate copy route and default five-argument calls. |
+| Published layout root and ordinary owned items | Transfer the validated root once into the existing owned list. Prepare all paths and slot state before transfer and publish one complete layout. On failure distinguish transfer by identity. The still-local root closes locally. Reader closes an actual transferred root on its normal reverse-owned route. Direct HeldPath and _HeldBytes retain their own component list through the entire drain. Use held_close_calls and M/held-close only where recording_work already exists. An unrecorded held does no recording. |
+| _hold_bytes and the shared Reader.hold | A newly constructed _HeldBytes transfers only on successful owned registration. Preserve the existing acquisition and all original successful operations. Release the same returned object once on failed transfer in either mode. Distinguish an append that inserted then raised from a pre-insert failure, by identity in the actual original list. Retain the original replay-registration error and any actual error while reporting or accounting it. Once transferred, the Reader remains the sole closer. |
+| Consumer held acquisition and owner lists reached by this path | In _open_held, each successful open is pending until its actual component is registered. A metadata/row-construction/append failure drains that pending FD and every registered row exactly once. Resolve the append boundary from the last real entry. For ordinary _hold_bytes construction/read failure, drain the held before propagation. The same rule applies at ordinary Reader.directory and ordinary _ReadOnlyGit's original config/held/Reader-owned handoffs where they participate in construction. Its _close_paths/_close_components must retain the live list until all remaining entries have a real closer. Preserve existing acquisition sites, refusal codes/conversions, reads, path/rule/metadata and success branches. No expansion to _open_child, other acquisition families or native bodies. |
+| Reader.close | Compose outcomes in the existing source_copies → reversed owned → completion-owner order. Keep the existing default close() entry. Remove r2's _ownership_failure chain walker, _close_ordinary_layout C1 row scan and _initializing switch. Use the same consumer error selection on the affected ordinary owners and registration compensation. Avoid first allocating a copy of the whole list to release the only owners. Visit each actual entry once. A drained ordinary component owner can be retired on failure, while an unattempted owner must remain reachable. Preserve other owner types' old registration/removal behavior, including the existing FixedSudo post-close marker and gate acquire/release/note_closed contracts. No general sweeper or retries. |
+| Existing source_copies, completion and gate | Call their original business interfaces once in their original order. Apply the ordinary rule to failures actually propagated into the relevant Reader operation. Keep their separate internal contracts, closed flags, accounting, failure rows and success/return paths. No new proof claim for their historical internal failures. Preserve gate constructor ordinary A followed by default close B as the original B with context A. The gate’s only changed responsibility is the shared untransferred held. |
+
+On the ordinary _copy_candidate call only, pass this operation's error disposition
+through _refresh_recording_directory(parent, parent.before, work). Its existing
+_capture_metadata and _capture_named_metadata keep their direct _metadata and
+_named_metadata calls. Each passes the same disposition to its original success
+_capture_observe or its error _capture_observation_error → _capture_observe.
+The original _capture_rule calls the same ACL rule once and passes this disposition
+to its existing conditional ACL _capture_observe. Preserve the original parent FD
+and owner, current stat then named stat, short-circuit stable(current)==stable(before)
+and full _identity(current)==_identity(named), then the original rule. Only after
+all pass may the original assignments set component.before and component.after to
+current and component.named_after to named. Keep the default argument shape on
+every other call, including the gate. Never append a None keyword in default mode.
+Check this edge statically: if the original _metadata throws ordinary OSError A and
+the original fstat-error notification throws unmarked MemoryError B, retain A
+before reporting and B where it is caught. After successful cleanup A must still
+be primary and B reachable by identity. Carry neither through shared work as a
+hidden channel. Use the same refresh body and direct authenticated frames. This
+proof adds no read, case, fault delivery, wrapper frame, sampling or runtime test.
+
+Keep one private consumer error disposition for these ordinary release paths. It
+holds only failure references for the dynamic operation. It never owns an FD,
+creates a recording owner, inspects frames or installs process-wide state. Pass
+it explicitly between affected owners. An absent disposition takes the original
+default path with its original call shapes. A held-close drain and a copy-close
+each reach one physical close for the FD they consume. Share that operation where
+the accounting differs. In held owners, detach the last component into the local
+attempt before calling os.close. Process its outcome and the remaining list even
+if this call raises BaseException. Retain the actual close error before attempting
+any counter, observation or report. A failed attempt is consumed even if the OS
+result is unknown. Do not add os.dup, fstat, retry, destructor or a second close.
+
+Choose the earliest observed KeyboardInterrupt, SystemExit or marked exception.
+If none occurred, choose the first ordinary one. Raise the chosen original object.
+Keep each distinct secondary reachable by identity via an existing error record
+or an exception link. Include earlier ordinary errors when a later control wins.
+Preserve prior cause/context and avoid self-links, cycles and duplicate insertion
+of the same propagated object. An optional work-row append or incomplete flag is
+never the sole copy of a failure. Keep the caught exception in a local reference
+before those operations. Retain any exception from that reporting too. Prepare
+necessary lossless local reference capacity before committing the resource, or
+use the existing exception links directly with bounded local references. Never
+require another fallible work-row append to recover its own append failure. Do
+not add an error field, log, serialized exception, general observer or new pool.
+
+Use the existing _close_capture_copy(fd, work, case_work, site, failure) as the
+compatibility entry. A private optional disposition is used only on the named
+ordinary calls. Factor the real close and existing accounting body once. Preserve
+default return None versus raise, error category/selection, original primary
+suppression and first marked behavior. On both routes keep work/case_work identity
+deduplication, close_calls, original M/close site and return/errno, row limit 4096,
+and original incomplete flags. A non-OSError uncertain close is not a success.
+HeldPath.close keeps its separate held-close accounting and no-work behavior.
+_c1_p_close still makes one final recheck on a nonempty held and reports an actual
+failure at the original C1-P-final-recheck or C1-P-close. Its default return and
+_c1_p_report’s error-list and metadata report order remain. In ordinary mode
+_capture_observe, _capture_observation_error and _c1_p_report preserve failures
+inside the original counter/encoding/append/flag and report handlers; retain an
+encoding failure before cleanup of _c3_encoding_kind. Keep its cleanup, the original
+ordinal, classification, read/logical/occurrences, accounting_rows and distinct
+work/case semantics. Never replay a failed notification to reconstruct a later
+error. Pass the disposition only on the affected path, preserving every old
+five-argument replacement, the original _c3_first, driver223/237/243, launcher
+718/761/764 and C2 fixture replacement at the original five-argument call.
 
 Keep all original cases and actual acquisition/child/cancel/close calls. Update only
 three manual ordinary Reader setups in raw16_scope_sudo_source,
@@ -1013,71 +1094,109 @@ UNKNOWN where not measured, including failure, memory, serialization and transpo
 No cap increase, fit claim, refund or #558/LOCAL borrowing. If this work cannot be
 represented by existing accounting without omitted costs, stop for scope review.
 
-**Existing foreground coordinate binding.** The source-bound root report for
-CI412322 job1 maps stdin2960 to original scope test6132: deadline's missing
-first_git_select_observation assertion. The original cancel record is a preceding
-iteration, not the failed assertion. The complete consumer _foreground method is
-byte-identical to ac36 and moved by exactly5 physical lines. Rebind only the
-following original scope test positions; keep each on its original physical line.
+**Four controls, with bounded faults on existing calls.** All original positive
+and negative assertions remain, including the three complete manual controls and
+PY_COVERAGE_PURE. The earlier source r2 is an unaccepted draft. Its no-cause
+assumption must give way to exact original-object assertions where a deliberately
+injected secondary is required. Do not loosen an original accepted predicate.
 
-| Original physical line | Exact integer substitution |
+| Existing control | Additional proof on the same execution |
 | --- | --- |
-| 6127 | 5980→5985 |
-| 6133 | 6119→6124 and5980→5985 |
-| 6140 | 6119→6124 and5980→5985 |
-| 14116 | 6038→6043 |
-| 14154 | 6119→6124 and5980→5985 |
-| 14158 | 5980→5985 |
-| 14161 | 5980→5985 |
+| Stable | Keep both policy33 batches, two inputs, four original runtime acquisitions and original seal. All original positive checks must pass with no injected errors. |
+| Layout failure | The second mkdir raises the same original error M. On the cleanup of that exact root dir_fd, delegate once to the real os.close. After successful delegation raise controlled OSError A to model an uncertain result at the consumer seam. On the one original M/close notification of that same attempt raise distinct unmarked MemoryError B. Require the same M primary and original A and B reachable by identity; one real close, no duplicate attempt, no published layout. Distinguish this fixture signal from a kernel failure. |
+| Partial cancel | Keep the original second real _hold_bytes result and pre-transfer marked registration cancel Q. On the first existing no-work component close of that item, do the real close once and then raise a distinct SystemExit S. Require Q primary, S visible and all remaining components actually closed once. The first registered item still has its original closer and the second item never appears in owned. No new acquisition or close attempt. |
+| Post-hold drift | Require 33 actual registrations, exact bytes, real sibling write and the original target recheck's E_STALE in order. Consume it only there. During the later normal reverse teardown of this case's already recorded captures root, target its first three actual components in reverse order. Delegate each real close once. Raise ordinary OSError A after the first and SystemExit S after the second. Raise distinct marked Q after the third. Require S primary, A and Q visible and every remaining original FD attempted once. A failure before the drift checks or outside the armed root/ordinal is never an expected result. |
 
-These are exactly10 constants across7 lines: six loop-check, three final-raise,
-one SIGTERM-cause coordinate. The first3 lines retain every original assertion;
-the remaining4 bind the original GenuineRelationCapture record template. Preserve
-the complete original predicate/frame/code/object identities, two-frame order,
-output fields,16-frame limit, guards, cases/calls and exception/cleanup behavior.
-Reverse only these10 replacements and require the full affected template and
-assertion text equal the original; all other bytes stay unchanged except separately
-listed Reader bindings. Preserve the complete preexec template and private-copy
-inverse. No global numeric replacement, clock-site change, new observation or
-runtime opportunity. This finite coordinate change overrides a broad old freeze
-only for these constants. It neither changes consumer code nor claims the later
-foreground cases or any other E_RUNTIME/T/scope failure has passed. Existing
-ordinary CI exercises the same original controls after fresh source acceptance.
+This is six additional fixed exception deliveries across the three negative controls:
+two, one and three. Other errors propagate with their actual identity. Keep a strong
+reference to each named injected object, check that every designated delegate fired
+exactly as specified and restore each original test seam in finally. Use the
+already held component lists to establish membership and remaining cardinality.
+Count attempts per owner/component lifetime; an integer FD can later be reused.
+No probes or fake successes. The same 4 × 33 copies, two ordinary input copies,
+101 true candidate acquisitions, 100 transfers, one failed transfer and 199 successful
+mkdir remain due. All failed operations, ordinals, existing report calls triggered
+by those faults and every reference/flag/allocation cost accrue to their existing
+owners. The finite static review must walk the actual ordinary and default
+branches through _capture_observe, _capture_observation_error and _c1_p_report,
+including failures of the original error append, encoding-kind cleanup and
+incomplete-flag write. Existing independent C1/C2/C3 and gate negative controls
+remain mandatory. No fifth case, extra recheck, read, close attempt, child,
+dispatch, native window, signal delivery to the OS or new sampling facility.
 
-**Current Reader binding closure.** Exactly six files are allowed: Reader, fixture,
-scope test, evals.jq, evals-driver.sh and evals-launcher.sh. The last three contain
-only necessary hash/length changes. Let R/N be actual revised Reader SHA/length,
-P revised whole program SHA, D revised whole driver SHA, and K revised complete
-launcher helper slice SHA after its R/N/P/D substitutions. Derive R/N→P→D→K from
-reviewed bytes. Never predict a new digest. The old exact values are in the source
-binding proof accompanying this plan, not runtime self-certification.
+**Current seven-file binding closure.** This replaces the preceding six-file
+instruction for this pass. Earlier C2 tables describe already retained changes.
+The accepted foreground shift of five lines has already been applied. Use the
+physical source and test bytes at the frozen six-dirty r2 tuple as the starting
+point. Consumer C and Reader R are whole SHA-256s; NC and NR are their actual
+UTF-8 byte lengths. Derive both first, then whole program P, then whole driver D,
+then complete helper K. Never use stale r2 display values as final pins.
 
-| Path | Exact mechanical contact |
+| Exact path | Behavior or mechanical contacts |
 | --- | --- |
-| scope-qualification.test.sh | Three R0 literals at original1124,1192 Reader member,2371; their existing Reader private-copy line maps/inverses use actual revised source. The seven original foreground coordinate lines above change only their ten constants. No other source literal or formal helper changes. |
-| evals.jq | Original182 SOURCE84 Reader SHA only; same path/mode/selection/membership. |
-| evals-driver.sh | Original10 PROGRAM_SHA,19 FIXED_PINS program.jq,877 program_sha256: exactly three P bindings. |
-| evals-launcher.sh | Original2430 Reader tuple R/N;2944 program P;2947 driver D; original34 K outside the unchanged helper slice boundaries. |
-| candidate-content-preparation-fixtures.py | Original raw16_C2_six_fixes6692 fixed K in the original three-way equality;6691 binds actual complete helper byte length if it changes. H0–H6/first-read calls and all source guards remain. |
+| shadow/v1/_consumer.py | Only the ordinary release, open-to-component compensation and bounded error/report contacts listed above. Preserve _C3_OBSERVATION_KEYS (89), _C3_CLOSE_SITES (27), C2 caller/wait, _c3_first, native bodies, clock strings and all validation predicates. Keep the original metadata and _foreground statement identities. Original complete C is 0172c23667de7d4496031f9c815d65457d859ee303c477d6d1946909f85d81fc, NC 434852. |
+| scope/v1/read-shadow-evidence.py | Complete the existing layout, batch, real shared transfer and ownership integration above. Preserve the 4096 gate slots, decision order, all other writer/capture protocols and original public entry. Derive R/NR from the final source. |
+| scripts/test/candidate-content-preparation-fixtures.py | Existing raw16_scope_acquisitions four controls and earlier three named manual setups only. At r2 line9870 the existing whole-consumer source guard binds C; its selector still authenticates the exact same whole _foreground method. At6889/6890 bind actual helper byte length and K in the original triple equality. Preserve complete T 30902 B / 8be5fab1e33d3524b420a21c45cb0a6c0905af1c65438da26dc7911c8e6d7e3f and END 7829 B / 562db2edcaafdbf94043fc7aeb45963b8e33fa61ba7f82fa0f91bf49144a570d. |
+| scripts/test/scope-qualification.test.sh | Bind C at1192,3547,5239,5253,5255,8529; R at1124,1192,2371. Retain the earlier PY_COVERAGE_PURE setup and three-way source/private-copy inverse. ActualReader at2374 uses its original exact nine Reader methods, existing helper domain and authentic source; the FixedSudo failure retains its registered owner and original error. Do not introduce a dependency on a missing extracted Reader helper or a new selector. Preserve original reader/copy/source maps, source hashes and full inverses at their actual locations. Only the following existing consumer coordinates are eligible for mechanical remapping. |
+| evals/v1/evals.jq | SOURCE84 Reader at182 and consumer at189 change only R and C. Hash the whole final program as P. |
+| evals/v1/evals-driver.sh | Original10 PROGRAM_SHA,19 FIXED_PINS program.jq,877 program_sha256 bind P, exactly three. Hash the whole result as D. No change to any driver call. |
+| evals/v1/evals-launcher.sh | SOURCE84 at2430 binds R/NR and2437 binds C/NC, preserving mode100644. At2944/2947 bind P/D. Hash the complete helper after substitutions. Its original leading LF before emit_error and final boundary before the leading LF of Fixed public entry are unique. Set the outside line34 constant to K. Preserve actual helper load and all triple equality/length guards; zero other helper changes. |
 
-R has exactly five fixed literal positions: scope3, program1, launcher1. P has
-four, D one and K two. The only changed length contacts are Reader tuple N and
-actual helper length if needed. Recompute the actual complete slice including its
-original leading LF before emit_error and ending before the leading LF of Fixed
-public entry; preserve extraction/load/full-hash guards and original equality.
-The consumer complete bytes and all its formal/native bindings remain frozen.
-SOURCE84 and adoption membership/map semantics, original43/8/40/20/C1-six/three-pin
-sets remain. Do not regenerate unrelated frontend maps or loosen exact selectors.
-Any additional true binding outside these six files stops for finite scope review.
+Metadata authentication in scope test lines8533/8541/8545/8595/8596/8736 binds
+exactly these original locations: _metadata542, _named_metadata546,
+_capture_metadata4276, _capture_named_metadata4286, HeldPath class579/decorator578,
+HeldPath.recheck602, its two same-FD/name caller pairs (607,618)/(609,620), and the
+two immediate metadata calls 4278/4288 (errno assertion repeats4278). Keep all
+actual owner/globals/code/AST/decorator/selector, route, frame identity and
+original four kinds/three variants. Bind unchanged locations to the original
+numbers. For each moved one authenticate the same original statement from
+before/after source; replace just its old literal in that same test expression.
+No runtime AST search, extra selector or frame and no offset assumption.
 
-Source entry remains two-stage: first normally merge actual protected accepted
-artifacts into H2b4d's same preserved source branch; only spec/plan change and intent
-stays a419, other599 entries remain H2b4d bytes/mode/type/blob. Seal the resulting
-pre-CODE601 manifest. This pass changes only the six exact files above; other595,
-including the new artifacts, stay equal to that post-merge manifest. Fresh CODE,
-full source/recipe/resource review, normal commit and independent committed rebind,
-then one fresh runtime GO and original79/six full CI remain required. All8 raws,
-actual classification, all failures/costs/UNKNOWN/native/G3/L/R obligations remain.
+For foreground, the original ten integers at scope test6127/6133/6140 and
+14116/14154/14158/14161 now bind loop check5985 six times, final raise6124
+three times and SIGTERM6043 once. Follow those exact three statements in the
+byte-identical whole _foreground method. The final-raise/loop-check two-frame order,
+16-frame limit, error and field identities, guards, original predicates, complete
+private transformation and inverse remain exact. A delta of zero stays zero.
+Never add five again. Pin C in the ordinary process helper's original hash/tuple
+substitution while keeping its full inverse to the fixed formal original. The four
+formal source literals, two native helpers and bodies, d35…,1197/1231 are frozen.
+
+C has 9 digest positions across scope6/fixture1/program1/launcher1. R has 5,
+P has 4, D has 1, K has 2. Only the launcher C/R tuples and existing fixture
+helper-length assertion can change lengths. All 84 paths, modes, membership and
+selection remain. The other 82 entries are unchanged. Seal full before/after and
+forward/inverse files for all seven, exact roles and old/new physical lines.
+Check all 601 tracked entries including physical bytes/type/mode/blob. Count
+594 unchanged against the actual post-artifact base for this source continuation.
+Keep 43/8/40/20/C1-six/three-pin sets. Any additional path or necessary selector
+change stops for a new finite review; never reformat to manufacture a location.
+
+After protected G2 and separate high-risk plan landing, the sole manager and
+original paused author must rebind the exact continuation. Before any change,
+verify the sealed r2 actual601 table SHA-256
+58c8657417ec94d2567c7e0c7c4647a0738bfbb3f121f8b282e6fb14c3e795cd,
+six physical files, index 74324 B / d6d410e77a3a621a417291dba11cb06b81e7e37f7f0dc344704a83b1f6b2d552,
+stage, refs and exact claim/remote/PR. Rebind any expected artifact refs only from
+the actual protected receipts. Recheck the necessary independently reviewed
+preservation procedure and obtain the manager's specific one-use authority for
+that ordinary, nonoverlapping merge. Preserve source and dirty differences in place.
+Incoming main may change only spec and plan. Require old local head then fetched
+main as the two parents and all other 599 physical entries including six drafts
+unchanged. No reset, stash, clean, checkpoint invention, replacement or new pickup.
+Seal the actual next post-merge 601 table and updated artifact links. Only fresh
+specific CODE can allow the original author’s next bounded write. This candidate
+supplies no GO. Require independent full source/recipe/resource review including
+all six findings, normal source commit and fresh committed rebind. Only the later
+one-use execution GO can dispatch the original79/six matrix once. Retain all
+eight raw logs, all old GO and round history and all failures. CI412322 remains
+FAILURE with 62 PASS, 5 FAIL and 12 NOT_REACHED, 65,675,155 B / 30,103 lines,
+7 NOTRUN and 2 structured, 2 principals with 4 outputs. Keep actual T/P/P1,
+native/G3/L/R and restoration debts. CPU/wall NONE, native BLOCKED, production
+EMPTY, automation PAUSED and docs329 zero reads. All incremental costs accumulate
+as UNKNOWN_NOT_ZERO where unmeasured. No refund, fit, cap increase, new budget or
+borrowing from #544/#558/LOCAL. No installation, deployment or activation.
 
 **Retained C2 caller ledger and terminal failure (implemented at H2b4d).** Bind the complete sourceac36
 consumer/fixture and the accepted spec's eight original-site table. This narrow
