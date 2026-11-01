@@ -2192,7 +2192,7 @@ to evade the source cap. Executable and policy files always belong to the closur
      沿其原 _capture_metadata、_capture_named_metadata、_capture_rule 到既有
      _capture_observation_error、_capture_observe 的相应分支传递。同一 parent FD、
      owner、原两次 metadata 和 rule 的次序、stable/current/named 身份与 ACL 比较，
-     及通过检查后写 component.before/after/named_after 的规则全部保持。其它调用
+     及通过检查后写 component.before/after/named_after 的规则全部保持。其余刷新调用
      沿用原实参形式。只以源码证明错误对象可达，不增加读取、case、注入或采样。
      已用candidate槽不再写；重查和最终关闭保留全部完整identity。外部root/tmp或任一
      受保护ancestor发生未知变化仍按原规则拒绝，不宣称本方案消除这种原拒绝。
@@ -2206,7 +2206,9 @@ to evade the source cap. Executable and policy files always belong to the closur
      到原owned登记成功前持有该item：登记失败而未交接则真实item.close一次；已交接则由
      Reader.close关闭，不重复或重试不确定的关闭。普通批另按上条传播自身replay登记失败。
      gate其它路径/谓词/顺序/调用和异常身份保持：原gate构造抛普通A、原close抛普通B时
-     仍传播B并保留context A。原recheck及consumer身份、nlink、no-follow、mode、ACL/name-FD谓词冻结。
+     仍传播B并保留context A。下条仅开放三个普通入口向原 HeldPath.recheck 显式传递
+     本次私有错误状态。其余 recheck 调用形状及全部身份、nlink、no-follow、mode、
+     ACL/name-FD 谓词冻结。
      既有source_copies的保留与业务关闭算法不改。普通已取得FD与报错接点按下条处理。
      新准备工作进入同一原replay_output_work/M及原账，不重置、不新造预算owner/池。
      所有真实mkdir/metadata/ACL/FD/引用、读写/hold/失败/清理累计计费，未测物理与运输
@@ -2254,14 +2256,31 @@ to evade the source cap. Executable and policy files always belong to the closur
      同一正常关闭实现区分记录型 held、无记录 held 和原 copy-close 的实际账。
      保留普通操作及其关闭、观察、报错和记账期间出现的原异常对象。首个实际
      KeyboardInterrupt、SystemExit 或 marked cancel 胜出。没有控制流异常时
-     保留首个普通错误。之前和之后的不同错误通过既有错误记录或异常链可达。
+     按原业务出口选首个普通错误；下述复查按原 guard 转换。之前和之后的不同错误
+     通过既有错误记录或异常链可达。
      沿真实调用链在丢失对象前处理。禁止读 traceback、重跑失败步骤、增加采样、
      清空 owner、另造资源池或从 errno/标记重建错误。
      Reader 使用实际 owner 的结果。移除按 C1 错误行回扫的恢复和初始化专用
      close 分支。gate 和既有 C2/C3 默认调用保留原参数、返回、抛出及原异常排序。
      共享 hold 失败时的原对象交接补偿仍适用。记录的成功序列、次数、值、上限、
-     不完整状态及 C1 最终 recheck 不变。原 source-copy 和 completion owner 仍执行
-     自己原有的业务协议。普通 Receiver 只组合其实际返回或抛出的结果。
+     不完整状态及非空 held 的一次 C1 最终 recheck 保持。原 source-copy 和 completion
+     owner 仍执行自己的业务协议。普通 Receiver 只组合其实际返回或抛出的结果。
+     三个入口为普通 _c1_p_close 的最终 held.recheck、带 recording_work 的普通
+     _open_held 的原 result.recheck，以及普通布局第二阶段的原 root.recheck。
+     三者只在持有本次显式私有状态时传入同一关键字参数。在同一组件上依次做原
+     current FD、条件 named、完整身份、rule、after FD、条件 after_named、完整身份
+     和赋值。两轮均复用原 metadata/named 及其中间的原 rule，向各自已有的
+     report/observe 显式透传。保留原 FD、parent_fd、短路、ACL 和完整比较。默认
+     调用沿用原实参。公开 Reader.recheck、HeldBytes 的读、gate、writer 和其它
+     调用仍走原入口。不能从 held 历史状态、work、活动异常或 frame 推导此模式。
+     保错分两层。裸 refresh 若原本抛无标记 OSError A，原报告的无标记 MemoryError B
+     不能取代 A。上述 recheck 若实际按原 guard 把 A 转为 Refusal R，则该次拒绝
+     以真实 R 占 A 在本次业务排序中的位置。保留原 code、from None、R 对 A 的
+     原 context 和 B 的可达身份。C1 原 site 接收本次真实复查失败。此前独立业务主错
+     保留顺位；整个操作中首个真实控制流优先。原路径跳过转换时不造 R。若构造 R
+     本身抛 F，保留实际逃出的 F、本次原错误及报告次错，按相同的两层规则组合。
+     所有先前和后续不同错在最终抛出后仍须按身份可达。只用现有对象记录或无环合法
+     空边；保留原 cause、context 和抑制状态。此条不新增投递、采样或对外载体。
      在原四控的既有真实 FD 关闭和观察中加入固定异常，以对象身份和实关次数
      验证普通优先级、后续 FD 的释放和不重试。保留原第二次 mkdir 的实关证明、
      101 个真实取得及 100/1 登记、132 copies、2 inputs、199 次成功 mkdir 和
