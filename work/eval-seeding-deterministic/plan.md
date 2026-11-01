@@ -1,5 +1,5 @@
 ---
-spec-blob: f2a2cacd35973d5caef3fdae5920ca33e8f369e2
+spec-blob: eb121fe02e9b47becf24b218ff198683eeba031b
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-26
@@ -13,26 +13,26 @@ existing review relay and measured scope binding remain intact. PR 1b remains
 one complete two-source delivery. Source preparation does not accept a dependency,
 a real recording, native qualification or either seed batch.
 
-This amendment follows accepted plan 34c110a828ad91dcc1a50883ebc41c8a90b50458.
-G2 PR #809 landed through a protected squash merge. The manager read the full
-independent ACCEPT verdict in comment 6550380255. Quick CI 41250723009 passed
-on reviewed head 10bee0683edff1c790037b61e950f3fc04043550.
-The fetched plan publishing base is 3af2935b9569aac7adae9d1e77cb2bceafb25a33,
-sole parent 5c849828495a5ff2f29cb65c9032f37e9d73ddb9, tree
-5de9418aa8ccbf9f598c95276ef448b9faebeb9b. The accepted spec blob is
-f2a2cacd35973d5caef3fdae5920ca33e8f369e2. This separate high-risk plan still
-requires independent review, quick CI and protected landing before source work.
-Current frozen source is f902d9e9b610bf69a5c4eb35efd8c59b40a48309, with tree
-18c6547f4fba7c1745103ada976424e8f071df30 and base/plan-base
-5c849828495a5ff2f29cb65c9032f37e9d73ddb9. Remote remains
-2b4d98625ea49a0fa3d4da8f5ccc8439e075cc27 on codex/impl/eval-source-relay-replay.
-There is no source PR. #439 retains its single claim. CODE6549921968 was consumed.
-The original author has stopped. Preserve the six dirty files, including the newer
-Reader and fixture, the index, all refs and all earlier snapshots. The six source
-findings and both underlying static blockers remain open. The named manager must
-read the entire independent exact-head review, verify the checks and land each
-artifact separately. The remaining source and execution gates below still apply.
-The prior full-CI source/base remain
+This plan amends accepted high-risk plan 334edd6d989ba8e32c78918ee34fd9fac2fe1f75.
+G2 PR #811 landed by protected squash after independent ACCEPT in comment
+6552132459 and successful quick CI 41263482826 on reviewed head
+c05da1ad6676c50322b2e21cc590b575e45ba0d6. The fetched plan publishing base is
+c3a3998f38851b74af2e97bdf98cfceda7d47665, sole parent 1f6469adb160a69bea8a16ef997f1f53d7094e35,
+tree b8abdb08dbb9ae8a64f42d006bafd7156747ab94. The accepted spec blob is
+eb121fe02e9b47becf24b218ff198683eeba031b. This plan requires its own independent review,
+quick CI and protected landing before source work resumes.
+The source author is stopped at 57b2c84b97e2a0781fe6ffae587e77ad7c4c53d8
+on codex/impl/eval-source-relay-replay, tree 492229adc2ebbc462f331d33b21f71b813c70e76,
+base/plan-base 1f6469adb160a69bea8a16ef997f1f53d7094e35. The preserved remote
+is 2b4d98625ea49a0fa3d4da8f5ccc8439e075cc27. The source PR is absent.
+#439 retains its single claim. CODE6550488832 is consumed. Keep the seven dirty
+files, all earlier snapshots, raw reviews and failures. Publication, reference
+capacity and final bindings remain open. The manager must read both full independent
+reviews, verify exact checks and record both protected landings before resumption.
+The latest full source CI, 41232215523, remains FAILURE on source
+2b4d98625ea49a0fa3d4da8f5ccc8439e075cc27 and execution base
+a79aaeab323bf1890627d145fff3384080df1e4c. The earlier full CI 41157337543 used
+the following historical source/base pair
 `89748ffb350eb8db6b1162ff6daf90dbd9c72fa8` /
 `ec68ada78dd031e37b9daee5a694bc4e18a4d69d`.
 Full CI 41157337543 remains FAILURE: eight closed raw logs total 222376463 bytes /
@@ -962,7 +962,7 @@ recover a missing exception or identify an uncertain descriptor.
 | Existing owner or call | Required change and lifetime |
 | --- | --- |
 | Ordinary layout phase 1 | Hold the original directory FD locally from open through its single close attempt. Record the operation failure before closing. Invoke the original copy-close accounting path with ordinary disposition. Preserve close_calls and its original M/close row. No FD probe follows a failed close. |
-| Layout phase 2 and candidate directory/copy parent | Use the original _open_held and its original physical, ACL, owner, named/FD and full identity validation. For completed temporary helds use the original _c1_p_close final recheck, reverse pop, copy-close and existing C1 report sites. Use the ordinary disposition for the existing candidate writer/reader close and its parent/account delta on the ordinary batch only. Preserve the gate copy route and default five-argument calls. |
+| Layout phase 2 and candidate directory/copy parent | Use the original _open_held and its original physical, ACL, owner, named/FD and full identity validation. For completed temporary helds use the original _c1_p_close final recheck, reverse pop, copy-close and existing C1 report sites. The three private recheck calls are listed below. Use the ordinary disposition for the existing candidate writer/reader close and its parent/account delta on the ordinary batch only. Preserve the gate copy route and default five-argument calls. |
 | Published layout root and ordinary owned items | Transfer the validated root once into the existing owned list. Prepare all paths and slot state before transfer and publish one complete layout. On failure distinguish transfer by identity. The still-local root closes locally. Reader closes an actual transferred root on its normal reverse-owned route. Direct HeldPath and _HeldBytes retain their own component list through the entire drain. Use held_close_calls and M/held-close only where recording_work already exists. An unrecorded held does no recording. |
 | _hold_bytes and the shared Reader.hold | A newly constructed _HeldBytes transfers only on successful owned registration. Preserve the existing acquisition and all original successful operations. Release the same returned object once on failed transfer in either mode. Distinguish an append that inserted then raised from a pre-insert failure, by identity in the actual original list. Retain the original replay-registration error and any actual error while reporting or accounting it. Once transferred, the Reader remains the sole closer. |
 | Consumer held acquisition and owner lists reached by this path | In _open_held, each successful open is pending until its actual component is registered. A metadata/row-construction/append failure drains that pending FD and every registered row exactly once. Resolve the append boundary from the last real entry. For ordinary _hold_bytes construction/read failure, drain the held before propagation. The same rule applies at ordinary Reader.directory and ordinary _ReadOnlyGit's original config/held/Reader-owned handoffs where they participate in construction. Its _close_paths/_close_components must retain the live list until all remaining entries have a real closer. Preserve existing acquisition sites, refusal codes/conversions, reads, path/rule/metadata and success branches. No expansion to _open_child, other acquisition families or native bodies. |
@@ -980,13 +980,59 @@ and owner, current stat then named stat, short-circuit stable(current)==stable(b
 and full _identity(current)==_identity(named), then the original rule. Only after
 all pass may the original assignments set component.before and component.after to
 current and component.named_after to named. Keep the default argument shape on
-every other call, including the gate. Never append a None keyword in default mode.
+every other refresh call, including the gate. Never append a None keyword in default mode.
 Check this edge statically: if the original _metadata throws ordinary OSError A and
 the original fstat-error notification throws unmarked MemoryError B, retain A
 before reporting and B where it is caught. After successful cleanup A must still
 be primary and B reachable by identity. Carry neither through shared work as a
 hidden channel. Use the same refresh body and direct authenticated frames. This
 proof adds no read, case, fault delivery, wrapper frame, sampling or runtime test.
+
+**Three calls to the original HeldPath.recheck.** On these calls only, pass the
+current ordinary disposition as a private keyword to the same method. Locations
+below identify the stopped draft, not final line numbers.
+
+| Existing call | When and what it checks |
+| --- | --- |
+| consumer _c1_p_close → held.recheck("E_STORE", work, "M"), 7237 | Ordinary disposition supplied and held nonempty. Keep one final check on this owner, its original C1-P-final-recheck report on outward failure, then reverse component close and its original reports. An empty held skips the check. |
+| consumer _open_held → result.recheck(code), 1056 | Ordinary disposition supplied and recording_work is present. Use the existing result's real components, inherited work/kind and original code. No change to the adjacent _open_child or unrecorded acquisition. |
+| Reader _initialize_ordinary_layout → root.recheck("E_STALE", work, "M"), 1441 | Phase two on the existing root at the original pre-transfer check. Preserve the original checks of the 66 directories and the actual transfer/cleanup order. |
+
+In HeldPath.recheck keep first FD _capture_metadata, conditional _capture_named_metadata
+with the same name and parent FD, full identity, _capture_rule, second FD metadata
+and conditional named metadata, full identity and only then the two assignments.
+Keep the original name-is-None shortcut on both passes. All five call sites use the
+same disposition only on those three entries. Keep direct metadata/named system
+calls, original rule and its conditional ACL notification. At their original
+success/error branches use the existing _capture_observe or _capture_observation_error
+→ _capture_observe. Preserve order, original frames, return values, guards and
+counts. Default branches call with the original arguments. Opt in explicitly at
+the ordinary Reader, never from a missing writer field, past held state, work,
+sys.exc_info, frame or traceback. Leave public Reader.recheck, held reads,
+source-copy, completion, gate, writer and other callers on their own contracts.
+
+**Record raw events and preserve the real recheck result.** Keep a local boundary
+for each private recheck within the same disposition. Record its events in order
+by identity. Save a raw metadata error before running its original report outside
+that error's handler. Keep the original conversion at the two original guards.
+Distinguish the raw references from the business result of this invocation.
+
+| Actual path | Outward result and identity obligation |
+| --- | --- |
+| Bare refresh: unmarked OSError A, reporting MemoryError B, successful cleanup | A remains primary absent an earlier independent error. B stays visible. There is no recheck conversion here. |
+| Recheck: A then unmarked B, original guard converts A | With no earlier independent error or control, the recheck raises the actual R at that guard with its original code (E_STORE at final C1, the supplied code at acquisition, E_STALE at the layout root). Preserve from None, R.context is A, and B reachable. C1 reports R at its original site once. |
+| An independent ordinary E already preceded this recheck | E keeps its earlier position. Retain the recheck's actual outward failure, A and every distinct report error. Within the recheck group, R represents its triggering A at A's position for ordinary selection. A previously captured in an independent operation keeps that earlier occurrence. |
+| A control occurs before, inside or after this recheck | Compare all actual KeyboardInterrupt, SystemExit and marked objects across the operation in original event order. The earliest wins, even when it is a report or conversion failure. A later control remains visible. Supply the original outward failure to the original C1 report, independent of any earlier overall winner. If the original guard was bypassed, produce no R. Retain an R only if actually constructed and raised. |
+| Original Refusal construction itself fails with F | There is no R. The actual failure F represents this failed conversion at its business position. Preserve F, its original links to the triggering error and all other distinct errors. An earlier independent ordinary still precedes it and the earliest actual control still wins. C1 sees the actual failure from the check. Never retry conversion. |
+
+Forwarding a grouped recheck result or a prior child result does not observe a
+second occurrence. The enclosing recorded _open_held, layout and Reader retain
+the actual recheck result. A retained raw A alone cannot trigger another Refusal
+conversion. After the final raise, verify cause/context, suppression and
+the actual original objects reachable from the selected failure or a successful
+existing caller-accessible error record. Source-copy keeps its original ambient
+business semantics; no-argument Reader.close does not import the caller's error.
+These are static obligations on existing operations. Use no new fault or case.
 
 Keep one private consumer error disposition for these ordinary release paths. It
 holds only failure references for the dynamic operation. It never owns an FD,
@@ -1001,7 +1047,8 @@ any counter, observation or report. A failed attempt is consumed even if the OS
 result is unknown. Do not add os.dup, fstat, retry, destructor or a second close.
 
 Choose the earliest observed KeyboardInterrupt, SystemExit or marked exception.
-If none occurred, choose the first ordinary one. Raise the chosen original object.
+If none occurred, choose the first ordinary business failure. Apply the original
+recheck conversion above when it was reached. Raise the chosen original object.
 Keep each distinct secondary reachable by identity via an existing error record
 or an exception link. Include earlier ordinary errors when a later control wins.
 Preserve prior cause/context and avoid self-links, cycles and duplicate insertion
@@ -1021,8 +1068,9 @@ suppression and first marked behavior. On both routes keep work/case_work identi
 deduplication, close_calls, original M/close site and return/errno, row limit 4096,
 and original incomplete flags. A non-OSError uncertain close is not a success.
 HeldPath.close keeps its separate held-close accounting and no-work behavior.
-_c1_p_close still makes one final recheck on a nonempty held and reports an actual
-failure at the original C1-P-final-recheck or C1-P-close. Its default return and
+_c1_p_close still makes one final recheck on a nonempty held. At C1-P-final-recheck
+it reports the actual outward recheck failure described above. At C1-P-close it
+reports the actual close failure. Its default return and
 _c1_p_report’s error-list and metadata report order remain. In ordinary mode
 _capture_observe, _capture_observation_error and _c1_p_report preserve failures
 inside the original counter/encoding/append/flag and report handlers; retain an
@@ -1032,6 +1080,32 @@ work/case semantics. Never replay a failed notification to reconstruct a later
 error. Pass the disposition only on the affected path, preserving every old
 five-argument replacement, the original _c3_first, driver223/237/243, launcher
 718/761/764 and C2 fixture replacement at the original five-argument call.
+
+**Static capacity and publication proof.** Before source acceptance, give the
+actual event bound per pending FD, retained component, zero-component receiver
+and each real owner. Include the raw before/after metadata or rule outcome, all
+reachable original report/flag/encoding failures, successful or failed conversion,
+the C1 row/report, child merge, retirement, completion and publication failures.
+Count distinct objects in actual branch order. Show which earlier entries remain
+live when a parent merges its child. Prepare local references before assuming
+resource responsibility. Show classification, owner dispatch and drain do not
+depend on fresh allocation. Neither the earlier 43-per-component draft nor the
+64-times-components reservation is proof. A count of events gives no bound on
+old cause/context nodes. Include all actual costs under their existing owners.
+
+Only add a link where its source is reachable, its slot is available, its target
+needs publication and the target cannot reach the source across either edge.
+For P.context=T, B.context=X, X.cause=T, all other links empty, T.context=B
+would make a cycle; P.cause=B is available in that example. A negative search
+on two separate single-edge chains cannot establish safety. A known fresh leaf
+or a proven producer-specific edge can avoid a whole-graph search. Do not infer
+freshness from exception type or arrival order at an opaque owner. Preserve old
+edges, suppression and the actual final-raise context. An inaccessible private
+reference, a failed append, a silent unlinked return or another attempt at the
+same failed operation cannot serve as an outlet. Show where each actual publishing
+failure itself is retained. Do not claim a bound on arbitrary old graphs or a
+guarantee under sustained allocation failure. No new holder, error field, graph
+cap or pool. Both source proof obligations remain open until independently verified.
 
 Keep all original cases and actual acquisition/child/cancel/close calls. Update only
 three manual ordinary Reader setups in raw16_scope_sudo_source,
@@ -1127,14 +1201,14 @@ dispatch, native window, signal delivery to the OS or new sampling facility.
 **Current seven-file binding closure.** This replaces the preceding six-file
 instruction for this pass. Earlier C2 tables describe already retained changes.
 The accepted foreground shift of five lines has already been applied. Use the
-physical source and test bytes at the frozen six-dirty r2 tuple as the starting
-point. Consumer C and Reader R are whole SHA-256s; NC and NR are their actual
+physical source and test bytes at the sealed seven-dirty amendment pause as the
+starting point. Consumer C and Reader R are whole SHA-256s; NC and NR are their actual
 UTF-8 byte lengths. Derive both first, then whole program P, then whole driver D,
 then complete helper K. Never use stale r2 display values as final pins.
 
 | Exact path | Behavior or mechanical contacts |
 | --- | --- |
-| shadow/v1/_consumer.py | Only the ordinary release, open-to-component compensation and bounded error/report contacts listed above. Preserve _C3_OBSERVATION_KEYS (89), _C3_CLOSE_SITES (27), C2 caller/wait, _c3_first, native bodies, clock strings and all validation predicates. Keep the original metadata and _foreground statement identities. Original complete C is 0172c23667de7d4496031f9c815d65457d859ee303c477d6d1946909f85d81fc, NC 434852. |
+| shadow/v1/_consumer.py | Only the ordinary release, open-to-component compensation, three explicit recheck entries and their bounded error/report contacts listed above. Preserve _C3_OBSERVATION_KEYS (89), _C3_CLOSE_SITES (27), C2 caller/wait, _c3_first, native bodies, clock strings and all validation predicates. Keep the original metadata and _foreground statement identities. Original complete C is 0172c23667de7d4496031f9c815d65457d859ee303c477d6d1946909f85d81fc, NC 434852. |
 | scope/v1/read-shadow-evidence.py | Complete the existing layout, batch, real shared transfer and ownership integration above. Preserve the 4096 gate slots, decision order, all other writer/capture protocols and original public entry. Derive R/NR from the final source. |
 | scripts/test/candidate-content-preparation-fixtures.py | Existing raw16_scope_acquisitions four controls and earlier three named manual setups only. At r2 line9870 the existing whole-consumer source guard binds C; its selector still authenticates the exact same whole _foreground method. At6889/6890 bind actual helper byte length and K in the original triple equality. Preserve complete T 30902 B / 8be5fab1e33d3524b420a21c45cb0a6c0905af1c65438da26dc7911c8e6d7e3f and END 7829 B / 562db2edcaafdbf94043fc7aeb45963b8e33fa61ba7f82fa0f91bf49144a570d. |
 | scripts/test/scope-qualification.test.sh | Bind C at1192,3547,5239,5253,5255,8529; R at1124,1192,2371. Retain the earlier PY_COVERAGE_PURE setup and three-way source/private-copy inverse. ActualReader at2374 uses its original exact nine Reader methods, existing helper domain and authentic source; the FixedSudo failure retains its registered owner and original error. Do not introduce a dependency on a missing extracted Reader helper or a new selector. Preserve original reader/copy/source maps, source hashes and full inverses at their actual locations. Only the following existing consumer coordinates are eligible for mechanical remapping. |
@@ -1151,7 +1225,17 @@ actual owner/globals/code/AST/decorator/selector, route, frame identity and
 original four kinds/three variants. Bind unchanged locations to the original
 numbers. For each moved one authenticate the same original statement from
 before/after source; replace just its old literal in that same test expression.
-No runtime AST search, extra selector or frame and no offset assumption.
+For the five recheck calls, map before FD, before named, rule, after FD and
+after named to their actual statements on both branches. The existing frame
+checks for FD/named still authenticate the same owner, code and operation. The
+rule remains a static statement binding, with no added runtime selector. Prefer
+one authenticated call expression per logical operation where this preserves the
+default ABI. If that call has separate physical statements, prove both belong
+to that same method and operation and bind the line the existing checked route
+really executes. Keep its full static counterpart mapping and exact rejection of
+wrong code/frame/line. Never substitute the default location for a private frame,
+broaden the runtime allowed sites or add a read, selector or frame. If the existing
+authentication cannot be preserved at the real site, stop for review.
 
 For foreground, the original ten integers at scope test6127/6133/6140 and
 14116/14154/14158/14161 now bind loop check5985 six times, final raise6124
@@ -1175,15 +1259,15 @@ change stops for a new finite review; never reformat to manufacture a location.
 
 After protected G2 and separate high-risk plan landing, the sole manager and
 original paused author must rebind the exact continuation. Before any change,
-verify the sealed r2 actual601 table SHA-256
-58c8657417ec94d2567c7e0c7c4647a0738bfbb3f121f8b282e6fb14c3e795cd,
-six physical files, index 74324 B / d6d410e77a3a621a417291dba11cb06b81e7e37f7f0dc344704a83b1f6b2d552,
+verify the amendment-pause actual601 table SHA-256
+a5fe774665f8f509421f70c775986d7c21f6b8d44ab411584743030d92804441,
+seven physical files, index 74324 B / 913c8c024ebaf422b56ac3277793da6dd6dc8b48c772153cda93876d7834f67e,
 stage, refs and exact claim/remote/PR. Rebind any expected artifact refs only from
 the actual protected receipts. Recheck the necessary independently reviewed
 preservation procedure and obtain the manager's specific one-use authority for
 that ordinary, nonoverlapping merge. Preserve source and dirty differences in place.
 Incoming main may change only spec and plan. Require old local head then fetched
-main as the two parents and all other 599 physical entries including six drafts
+main as the two parents and all other 599 physical entries including seven drafts
 unchanged. No reset, stash, clean, checkpoint invention, replacement or new pickup.
 Seal the actual next post-merge 601 table and updated artifact links. Only fresh
 specific CODE can allow the original author’s next bounded write. This candidate
