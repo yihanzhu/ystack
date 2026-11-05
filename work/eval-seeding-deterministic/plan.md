@@ -1,5 +1,5 @@
 ---
-spec-blob: eb121fe02e9b47becf24b218ff198683eeba031b
+spec-blob: b4b28e79f2179028df84cae3354220757f40cdb7
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-26
@@ -13,22 +13,30 @@ existing review relay and measured scope binding remain intact. PR 1b remains
 one complete two-source delivery. Source preparation does not accept a dependency,
 a real recording, native qualification or either seed batch.
 
-This plan amends accepted high-risk plan 334edd6d989ba8e32c78918ee34fd9fac2fe1f75.
-G2 PR #811 landed by protected squash after independent ACCEPT in comment
-6552132459 and successful quick CI 41263482826 on reviewed head
-c05da1ad6676c50322b2e21cc590b575e45ba0d6. The fetched plan publishing base is
-c3a3998f38851b74af2e97bdf98cfceda7d47665, sole parent 1f6469adb160a69bea8a16ef997f1f53d7094e35,
-tree b8abdb08dbb9ae8a64f42d006bafd7156747ab94. The accepted spec blob is
-eb121fe02e9b47becf24b218ff198683eeba031b. This plan requires its own independent review,
-quick CI and protected landing before source work resumes.
-The source author is stopped at 57b2c84b97e2a0781fe6ffae587e77ad7c4c53d8
-on codex/impl/eval-source-relay-replay, tree 492229adc2ebbc462f331d33b21f71b813c70e76,
-base/plan-base 1f6469adb160a69bea8a16ef997f1f53d7094e35. The preserved remote
-is 2b4d98625ea49a0fa3d4da8f5ccc8439e075cc27. The source PR is absent.
-#439 retains its single claim. CODE6550488832 is consumed. Keep the seven dirty
-files, all earlier snapshots, raw reviews and failures. Publication, reference
-capacity and final bindings remain open. The manager must read both full independent
-reviews, verify exact checks and record both protected landings before resumption.
+This candidate specifies the ordinary terminal handoff under the accepted
+G2. Independent plan review must judge the normal error paths and the
+runtime premises below. The preserved source remains stopped.
+
+This high-risk plan follows protected G2 PR #813. Its reviewed head was
+8d49ffbb1530455b417c9ed7eee215dee310b717. The independent ACCEPT is comment
+6554421242. Quick CI 41280403084 succeeded. The protected squash is
+ade5c83978988a0751b889d7115919cb174cc3d3, sole parent
+90aaf33eb3f23b843aa927a311d916e1b553eee9, tree
+a87d8c50b73f4cf6e7119e56c758e7345da2b0d6. Its accepted spec is
+b4b28e79f2179028df84cae3354220757f40cdb7. This plan replaces
+94c9eeca1f8285e53d1227bfaedc6a793c770d70 only after its own independent
+plan-only review, exact quick CI and protected landing.
+
+The original author is stopped on codex/impl/eval-source-relay-replay at
+2f19ad3ec34219ad6bdc724bcf4cac5b9fb2ef37, committed tree
+5821d412208e5b7c863b4d00e06d591258bb4c5b, source base
+90aaf33eb3f23b843aa927a311d916e1b553eee9. The remote source is
+2b4d98625ea49a0fa3d4da8f5ccc8439e075cc27. Its PR is absent. #439 is
+claimed-only. CODE6553382034 is consumed. Preserve r5's seven dirty files
+and 594 other entries. Its five direct metadata contacts and local C1
+close correction still need fresh SOURCE review. Three further findings
+on publication, first-control forwarding and capacity are open. Prior raw
+failures, attempts and charges stay with this attempt.
 The latest full source CI, 41232215523, remains FAILURE on source
 2b4d98625ea49a0fa3d4da8f5ccc8439e075cc27 and execution base
 a79aaeab323bf1890627d145fff3384080df1e4c. The earlier full CI 41157337543 used
@@ -891,8 +899,9 @@ first captures hold; do not create a fallback layout or trust fabricated flags.
 On ordinary initialization or a failed handoff, close each actually owned resource once.
 Keep the first actual control-flow exception in occurrence order across the operation and
 cleanup (KeyboardInterrupt, SystemExit or a marked cancellation). Otherwise propagate the
-first ordinary failure. Retain distinct secondary objects through existing error records
-or exception chaining, including earlier ordinary errors when cleanup cancels. Do not
+first ordinary business failure, subject to the real recheck conversion below. Retain
+distinct secondary objects in the caller-owned ordinary record, an existing accessible
+error row or a preserved exception link, including earlier ordinary errors when cleanup cancels. Do not
 retry an uncertain close. Partial paths stay with the original scratch owner. Gate
 construction keeps its original exception path: ordinary construction error A followed
 by ordinary close error B propagates B with context A. Only the shared registration
@@ -1030,35 +1039,59 @@ second occurrence. The enclosing recorded _open_held, layout and Reader retain
 the actual recheck result. A retained raw A alone cannot trigger another Refusal
 conversion. After the final raise, verify cause/context, suppression and
 the actual original objects reachable from the selected failure or a successful
-existing caller-accessible error record. Source-copy keeps its original ambient
+caller-accessible record, including the ordinary disposition below. Source-copy keeps its original ambient
 business semantics; no-argument Reader.close does not import the caller's error.
 These are static obligations on existing operations. Use no new fault or case.
 
-Keep one private consumer error disposition for these ordinary release paths. It
-holds only failure references for the dynamic operation. It never owns an FD,
-creates a recording owner, inspects frames or installs process-wide state. Pass
-it explicitly between affected owners. An absent disposition takes the original
-default path with its original call shapes. A held-close drain and a copy-close
-each reach one physical close for the FD they consume. Share that operation where
-the accounting differs. In held owners, detach the last component into the local
-attempt before calling os.close. Process its outcome and the remaining list even
-if this call raises BaseException. Retain the actual close error before attempting
-any counter, observation or report. A failed attempt is consumed even if the OS
-result is unknown. Do not add os.dup, fstat, retry, destructor or a second close.
+**One caller record for an ordinary operation.** Main makes one private
+disposition before installing the four original handlers, constructing
+_ControlFIFO or opening an FD. The root is a main local even if the control
+or Reader constructor does not return. Its explicit ordinary argument flows
+through the Reader, _ReadOnlyGit and admitted child calls. A child takes the
+same root and a local business boundary. It never clears its parent's history.
+A public no-argument close starts a new operation boundary and cannot nominate
+an earlier run's error. An existing manual ordinary caller holds the root
+across its call. A gate/writer takes its old argument list, error policy,
+release order and successful accounting. The pre-mode callback still throws
+immediately. An actual fd6 OSError falls back as before. A marked
+InterruptedError at that same except clause is bare-raised. A successful
+socket check selects the original gate. No additional probe selects a mode.
 
-Choose the earliest observed KeyboardInterrupt, SystemExit or marked exception.
-If none occurred, choose the first ordinary business failure. Apply the original
-recheck conversion above when it was reached. Raise the chosen original object.
-Keep each distinct secondary reachable by identity via an existing error record
-or an exception link. Include earlier ordinary errors when a later control wins.
-Preserve prior cause/context and avoid self-links, cycles and duplicate insertion
-of the same propagated object. An optional work-row append or incomplete flag is
-never the sole copy of a failure. Keep the caught exception in a local reference
-before those operations. Retain any exception from that reporting too. Prepare
-necessary lossless local reference capacity before committing the resource, or
-use the existing exception links directly with bounded local references. Never
-require another fallible work-row append to recover its own append failure. Do
-not add an error field, log, serialized exception, general observer or new pool.
+Keep resource ownership with the original owner. In a held drain take the
+last real component into the single physical attempt. Keep unattempted rows
+reachable through the owner. Once the actual close was entered, consume it
+even on BaseException or an uncertain result. Before entry a pending FD still
+has its original closer. Close this owner's remaining components in reverse.
+Preserve copy-close versus held-close accounting and the zero-component
+exit. No descriptor probe or repeated physical attempt is allowed.
+
+**Register the real operation.** Keep three facts separate. Track the current record
+head, the original outward business result for this invocation, and the
+earliest actually raised control for this operation. All are object identities.
+Use one activation per call that can produce a new entry. Its fixed ordinary
+locals are the root, previous (entry head), during (head just before recording
+the outgoing failure), and received (the actual outgoing object). Bind received
+outside the auto-cleared except target. Keep it alive after handler exit. Keep
+the actual constructed object separately at a conversion or callback. A single
+invocation's previous is never recycled. Save during before replacing latest.
+When a child has recorded a new head, forwarding the same object leaves the
+newer path accessible. Both previous and during survive in the actual failed
+activation. A delegated call returning success leaves the latest child head
+intact. Do not explicitly raise an object just to obtain another traceback.
+
+| Actual producer | One invocation and its fixed evidence |
+| --- | --- |
+| main.cancel | Its private production factory binds this main's disposition and the exact callback code once. Keep the original four installations and handler arguments. Each activation binds previous first, then constructs the original InterruptedError, retains it in built, marks it, binds during, installs the actual head and reaches the original raise. A construction or marker failure saves the actual F and during and bare-raises F. built is empty if construction did not return. The interrupted-frame argument is never read. Each nested invocation still raises. |
+| Reader layout and candidate | Use original per-call _copy_candidate, _hold_candidate, hold, directory, _replay_output_failure and _capture_metadata/_capture_named_metadata activations. For repeated layout mkdir with its following validation, split only the unprotected one-mkdir action per iteration. Keep the four direct metadata contacts and batch-final named call on the same disposition. Each actual named check already calls a fresh metadata function. At a repeated register/retire action that has no such function use a private single-append or single-remove activation around the existing list operation. Keep the real list, membership and default gate path. |
+| Raw consumer operations | The existing _capture_metadata and _capture_named_metadata each receive one raw call. HeldPath.recheck stays their direct caller at its two existing pairs. The raw functions remain their direct callees. The rule, observation-error and observation functions get fresh activations on each real call. For separate protected encoding, flag, counter or row failures in one activation, give each admitted recovery operation its own original-call activation or distinct once-only fixed locals. A repeated flag write for the second real work uses a new invocation. Preserve _c3_encoding_kind cleanup and distinct work/case handling. |
+| Open, close and C1 | In _open_held retain one pending FD until component insertion by identity. Split one row's ordinary physical-close/account action out of a loop only where _close_capture_copy does not already provide that activation. Apply this to HeldPath.close, _close_components and _release_held_acquisition. _close_paths, _HeldBytes, _ReadOnlyGit, _c1_p_close and Reader.close use the existing per-item callees and original rows. Preserve the raw close A before the notification B. C1-P-close gets A if the close failed, B if only notification failed. C1-P-final-recheck still gets the real outward R or F. |
+| Frozen owners and final receiver | Call source-copy, completion, foreground, public recheck and the control FIFO at the original business boundary. Register only an actual outward result there. Preserve the original ambient exception at the source-copy call. A private close caller passes its explicit operation. An ordinary no-argument close does not import ambient as a new failure. Do not inspect frozen internals as record producers. |
+
+Never insert a call between authenticated recheck and the capture function or
+between capture and the original raw metadata call. Separate loop helpers
+belong at the physical operation or at an unmeasured sibling call. Produce
+the exact before/after code/globals, statements, direct pairs and 16-frame
+and foreground two-frame mapping. The fixed foreground body stays identical.
 
 Use the existing _close_capture_copy(fd, work, case_work, site, failure) as the
 compatibility entry. A private optional disposition is used only on the named
@@ -1081,31 +1114,293 @@ error. Pass the disposition only on the affected path, preserving every old
 five-argument replacement, the original _c3_first, driver223/237/243, launcher
 718/761/764 and C2 fixture replacement at the original five-argument call.
 
-**Static capacity and publication proof.** Before source acceptance, give the
-actual event bound per pending FD, retained component, zero-component receiver
-and each real owner. Include the raw before/after metadata or rule outcome, all
-reachable original report/flag/encoding failures, successful or failed conversion,
-the C1 row/report, child merge, retirement, completion and publication failures.
-Count distinct objects in actual branch order. Show which earlier entries remain
-live when a parent merges its child. Prepare local references before assuming
-resource responsibility. Show classification, owner dispatch and drain do not
-depend on fresh allocation. Neither the earlier 43-per-component draft nor the
-64-times-components reservation is proof. A count of events gives no bound on
-old cause/context nodes. Include all actual costs under their existing owners.
+**Receipt, order and forwarding.** The callback's actual final raise is the
+commit point for control order. Installing latest protects a reference earlier.
+A built error in the outer marker assignment has not reached that raise.
+When the inner callback raises and unwinds both callbacks, its traceback can
+retain both activations. Keep both built objects. Elect the inner thrown
+object. An outer bare forwarding of that same object creates no new control.
+Apply the same distinction to a real Refusal which has been constructed but
+whose original conversion raise has not yet run.
 
-Only add a link where its source is reachable, its slot is available, its target
-needs publication and the target cannot reach the source across either edge.
-For P.context=T, B.context=X, X.cause=T, all other links empty, T.context=B
-would make a cycle; P.cause=B is available in that example. A negative search
-on two separate single-edge chains cannot establish safety. A known fresh leaf
-or a proven producer-specific edge can avoid a whole-graph search. Do not infer
-freshness from exception type or arrival order at an opaque owner. Preserve old
-edges, suppression and the actual final-raise context. An inaccessible private
-reference, a failed append, a silent unlinked return or another attempt at the
-same failed operation cannot serve as an outlet. Show where each actual publishing
-failure itself is retained. Do not claim a bound on arbitrary old graphs or a
-guarantee under sustained allocation failure. No new holder, error field, graph
-cap or pool. Both source proof obligations remain open until independently verified.
+At the real protected call, a passive exit receives incoming as a formal
+argument while the interpreter still has it pending. A stable root or
+argument retains identity if another error interrupts its selector. Only
+the actual original with still pending can use a false return to propagate
+that incoming. Use the terminal choices below when it is no longer pending.
+
+Read the history only from a caller-owned root or a nominated fixed
+reference in its authenticated activation. Authenticate the exact code
+object, defining globals, same disposition, genuine traceback node and
+source instruction range. For callback F distinguish failed construction,
+failed mark, the original success raise and forwarding at the except clause.
+Read only previous, during, received, built, the explicitly bound conversion
+object or the passive receipt's incoming argument at its named site. Ignore
+locals in other frames. Traverse a snapshot iteratively. Distinguish
+(traceback node, activation, instruction site) before dealing with repeated
+exception identities. Process each authenticated occurrence and predecessor
+edge once. Duplicate occurrences of one object are valid. Never use filename,
+name, old cause chains or an arbitrary interrupted frame to assign origin.
+The old projection and 16-frame/two-frame metadata/foreground controls are
+separate. Do not serialize this history or expose Python IDs.
+
+The caller retains the root through cleanup and through its actual receipt.
+It can retrieve secondaries there even if the Reader never returned. Remove
+the mutable publish traversal, its burned empty slots, 16-slot retention
+buffer, 64N error reserve, child reset/merge copying and synthetic link
+writes. Do not walk or retry cause/context slots to publish. The finite
+four-node mixed-edge example retains every original edge without adding one.
+Do not feed arrivals during receipt back as tasks to publish. Under the old
+finite 17-identity schedule the two original failures stay rooted; a later
+callback needs its own actual activation and zero append slots. There is no
+ancestry query per event which can enqueue the next query. Two interruptions
+before writing empty context/cause slots cannot burn either slot because
+ordinary retention writes neither slot. A source
+receipt that needs to compare an earlier prefix captures that prefix once.
+Later callbacks keep real references through their own activations. They
+cannot precede an already raised candidate from that prefix. A later error
+during retrieval gets its own real single-call receipt with the untouched
+old head. An optional secondary read may report incomplete access. An
+interrupted mandatory first-control lookup is a failed normal handoff until
+the actual first control reaches the caller. Continue draining original owners. Explicitly
+separate retaining a rooted object from successfully reading it.
+
+**Ordinary terminal delivery.** Keep the raw callback separate from the
+private handler installed by main. Make that handler and the closed
+generator's bound throw method ready before the first FD. The raw leaf
+owns previous, during, built and received. It performs the original
+construction, marking and raise of S or bare raise of the actual F.
+The installed handler surrounds that real call. Its caught raw argument
+and entry head stay in fixed locals. It never returns normally on cancel.
+
+Only a confirmed ordinary operation can enter terminal delivery. The caller
+owns the ticket for one actual terminal operation. Establish the surrounding
+catch before exposing its last raw call. Give the ticket a unique local
+identity shared by the raw caller, receiving exit and terminal selector.
+For the final real owner keep the protected catch across its call, return
+assignment and decision to enter terminal settlement. A normal return,
+including a zero-component return, writes a fixed completion local on that
+same ticket. It claims only that the old call returned. If interrupted
+before the local is set, the still-live covering catch receives the real
+outward; it never re-enters the original call. If later interrupted inside
+the catch/selector, its actual crossed frame or already-set completion local
+is the evidence. No artificial traceback, repeat close or fabricated FD
+attempt is needed for the no-work branch.
+
+**Reserve the actual raw call.** Prepare one exact private root slot current_raw
+with an idle sentinel distinct from the initial-head sentinel. Do this before
+any FD or handler. Do not maintain a depth counter or allocate a token per
+callback. Each installed activation first saves previous=latest. Its key K is
+the already-existing head node of previous's genuine traceback, or previous
+itself if no node exists, or the initial-head sentinel if previous is empty.
+Hold the chosen object strongly in a fixed local; compare by identity. Use
+only the bound BaseException traceback descriptor on this registered previous.
+This reads one existing reference, no frame or locals. Prebind it and the
+exact root slots. Require the admitted implementation's entry path to copy
+references without allocating a token, calling a custom getter or changing
+ambient E. An implementation that needs a fallible allocation to reserve may
+not run that allocator in place of the original callback. Charge all actual
+work. No weak references, reused numeric IDs, mutable history counters,
+locks, ContextVars or auxiliary generators implement the reservation.
+
+The installed handler's outer catch must already cover loading inherited
+from current_raw, publishing K to that slot and the direct call of the raw
+leaf. Keep inherited, K and this root in its own immutable-for-this-call
+locals. The raw leaf still saves the actual previous/during/built/received,
+performs the original construction/marker and genuinely raises S or bare-
+raises F. The marker describes an owed local delivery, never success or a
+throw. The installed catch starts its selector only after this protected
+interval unwound. A callback always leaves by error, so an interrupted
+preparation does not resume and overwrite a newer callback's slot.
+
+| Interruption point | Which pending receipt is authoritative |
+| --- | --- |
+| Before K is published | The previous slot still describes the predecessors. No raw call for this activation has begun. Its covering catch can receive a new outward without inventing a constructed object. |
+| After publication, before raw or during its construction/marker | With no actual crossing of that interval, an inner callback must bare-raise its own S/F to the live covering caller. If raw has begun, its actual local constructor/marker receives that error first. If raw has not begun, the installed catch receives it and never starts that skipped call. |
+| Original throw leaves raw, or a new throw aborts after publication but before raw | The actual throwable's traceback crosses this owner's exact protected raw-call or covered post-publication delivery site. Its frame, fixed root, K, inherited, code/globals and instruction range authenticate discharge. This witness already exists when control reaches the catch, before its first classifier or body store. A later callback may use it even if it interrupts that catch. A pre-publication site alone cannot discharge K. |
+| Retirement and nested return | Leave the last published key strongly rooted. Never clear it in a vulnerable finally or write inherited back over a new callback. To resolve *this callback's inherited key*, use the saved entry prefix. A certified discharged owner leads to that owner's inherited key. The idle sentinel ends the chain. A complete prefix with a claimed generation still awaiting its crossing routes the raw outward to its existing cover. Stop only on true eligibility, live cover or a genuine evidence failure. A partial read cannot prove absence. |
+
+If K equals inherited, this activation is a guest of the same generation.
+Its crossing cannot retire the claiming activation. If K differs, publishing
+it claims a new generation and retains its parent in inherited. Before a
+new independent raw call can complete, the real S/F must add a fresh thrown
+object or a fresh original traceback node in its own activation, even when F
+is the same object as before. A pure relay never rewinds latest to an older
+head. Keep the saved node itself if that object's traceback later grows.
+Overlapping entries with the same unchanged head can share one claimant.
+If X claims the key before Y's pending store, X always throws, so Y cannot
+resume to claim that key too. Only a crossing of the claiming generation
+can retire it. Check these rules also for a precommitted, unraised built
+object and a repeated constructor F. Missing VM nodes give no discharge.
+
+In the disputed pair, X directly in the terminal selector inherits a
+discharged generation with the certified S1-to-incoming-Q crossing. X in
+Y's precommit marker inherits Y's newly published generation. S1 is its
+*entry* evidence; it cannot be Y's later raw crossing. Although X.previous
+is S1 in both runs, only the first can normalize to Q now. The second sends
+actual X to Y. Once X has crossed the protected call in Y, a callback in
+Y's catch can certify discharge and resume arbitration even if no retirement
+instruction in Y ran. An interruption during arbitration is a new real
+activation with its own saved prefix; do not look for a still-running Y in
+X's traceback or inspect the supplied interrupted frame.
+
+| Actual boundary | What may leave it |
+| --- | --- |
+| Unconfirmed fd6, gate, writer, or normal business | Original raw delivery. The fd6 OSError handler bare-raises the exact marked InterruptedError and only a genuine probe failure selects its old fallback. Default calls retain their argument and error order. |
+| Three private rechecks, C1 and owner retirement | The raw A, B and conversion R/F run through their original guards. Preserve R.context=A and from None. C1-final receives the local R/F. C1-close receives close A, or B only when close succeeded. No terminal winner replaces any of these inputs. Reader finishes source-copy, reverse-owned and completion order. Main still finishes its original FIFO exit. An internal Reader outcome returned to that main is not a final operation exit. |
+| Nested callback construction or marker | Resolve the saved inherited reservation before selecting Q. A live predecessor gets the real raw S/F at its original local catch. Each actual throw counts once. |
+| Terminal receipt still unwinding Q | Later objects go to the real root. If the receiver completes and returns false, the interpreter continues that original Q. If ordinary A is pending and a genuinely earlier eligible control is absent, the first real S wins. A false return for A is not a substitute for sending S. |
+| Terminal receipt interrupted | Use the actual previous/during edges of each real throw, not a queue. The terminal handler may deliver an earlier Q only on the positive witnesses below. If the current object is the winner, bare-raise it from its genuine handler. Otherwise call the bound relay on the exact Q. The callback's original S/F remains accessible. |
+
+For the two interruptions, take raw Q=SystemExit or KeyboardInterrupt
+escaping the final original owner into its receiving exit. S1 interrupts
+before Q is pinned. If S1 cannot yet see an earlier authenticated Q, it
+bare-raises S1 to the already established terminal catch surrounding that
+owner and exit. Once there, S1's genuine traceback contains the interrupted
+exit's incoming Q. Authenticate its code/globals, same root and ticket,
+the actual final owner's call in that single activation, and Q's real
+throw/crossing. The catch examines this fixed prefix. If S2 interrupts this
+first lookup, S2 still really throws at its own original site. In S2's
+private outer handler its entry previous names S1 or an authenticated
+predecessor path to S1. S1's completed crossing still contains incoming Q.
+S2's actual handler can therefore elect Q itself and call the relay.
+It does not return to finish S1's failed lookup or require Q to be active.
+Earlier terminal selectors seeing that same certified relay result let it
+propagate. They must not reclassify Q as a new failed read, constructor,
+C1 report or raw callback merely because it interrupted their own code.
+
+If S3 interrupts that terminal selection or the relay's Python entry,
+its own genuine activation has the retained S2/S1 prefix and selects in
+the same way. If it enters an undecided *raw* construction, the still-live
+outer holder must first receive its true S/F as in the table. Each descent
+requires a distinct actual callback. For a finite delivery sequence, the
+last uninterrupted eligible selector reads a finite, already rooted prefix
+and emits the same earliest Q. It never creates another job to publish its
+own failure. No failed business operation, close, failed frame
+materialization or fallible marker getter is retried. Distinguish fresh
+reads by a different real activation from retrying a failed operation.
+A predecessor cannot become eligible by being constructed or merely
+written to latest. A matching actual throw and protected crossing are
+required. Never infer a candidate from an old ambient context.
+
+This proof has a boundary. At every actual dispatch before a witness exists,
+the exact raw return must still have a live enclosing receipt. After that
+last receipt is crossed, a later callback must be able to find the witness
+in its own saved prefix before relying on it. Verify both sides at actual
+method entry, nested raw exit, owner crossing and callback delivery to the
+selector; a Python try, store or getter is not an atomic interval. If the
+normal runtime can displace Q before the registered receiving activation
+exists and leave no other authenticated Q or covering catch, stop on that
+normal gap. Do not report optional incomplete access as successful election.
+Do not change an original local catch, install a signal mask or inspect
+the callback's interrupted-frame argument to bridge it.
+
+**Transfer of the selected instance.** The proposed private relay is one
+already exhausted or explicitly closed empty generator with its builtin
+throw prebound. Invoke it with the existing exception instance alone,
+outside the raw constructor/marker catches, only to emit a selected
+different object at a certified terminal boundary. No generator body
+runs on this transfer. In the FIFO example Q originally escaped the
+parent with context A, while E is the caller's separate active exception.
+S1 or S2 may be the currently handled exception. The needed runtime branch
+restores Q as pending without applying a fresh Python raise's implicit
+context assignment. The caller must receive Q itself with its original
+cause, context A, suppression and reachable prior traceback nodes. Let an
+outer original bare propagation continue that instance. Never repair its
+attributes after raising, synthesize a traceback or count this relay as a
+fresh Q occurrence. The terminal handler stays eligible for a new actual
+callback until the caller receives the real outward.
+
+Closed-generator transfer is a specific, unverified premise. Bind the
+asserted interpreter implementation, version/build and matching primary
+source. Trace the existing-instance closed-generator throw through its
+error-return/restore and active-context branches. Reference paths in
+python/cpython at v3.11.0 are Objects/genobject.c and Python/errors.c;
+the actual deployed branch names and scope must be verified. If normal
+signal delivery at the call/exit boundary matters, bind that dispatch
+branch to the actual protected statements too. One version cannot narrow
+the accepted >=3.11 domain. Use the existing three-callback ambient test
+below to falsify the transfer on the running implementation. No matched
+runtime source or runtime result is claimed here. Failure of this semantic
+premise, delivery of S in place of Q or a changed local obligation blocks
+the dependent normal implementation/acceptance, independently of the two
+VM evidence debts. The seven-path, restoration, test and full-CI gates stay.
+
+| Ordinary main branch | Existing receiver and exit |
+| --- | --- |
+| No Reader yet | Keep the root across handler installation, _ControlFIFO construction, fd6 and Reader construction. Preserve the installed signal's original timing. No close of a nonexistent Reader, FIFO or gate session. A failed Reader constructor drains its actual partial owners once. Main still receives its error and owns any successfully returned FIFO for the original finally. |
+| Body returned or failed | Keep evaluate, both pre-READY rechecks, output write/append, READY, SEAL, control and final Reader rechecks, terminal and COMMIT in original order. Stop business calls on the original failure. Preserve original success bytes and original source-copy ambient. Collect the actual original reader.close outcome once, even when the body failed. |
+| Gate or FIFO | A confirmed gate retains the original constructor, binding, final and close/finally call shapes and suppression. Ordinary has no gate_session.close. The outer finally attempts the successfully constructed FIFO's original close once after the Reader, also on Reader close failure. Keep its outward error and the first ordinary control under the same root. No release instruction is inferred from having called an opaque owner once. |
+
+**Separate FIFO finding.** At r5 Reader 3110–3119 _ControlFIFO.close clears
+both FD attributes, attempts ready_fd, conditionally attempts fd and finally
+closes the parent. If the ready close raises, fd is never attempted and its
+attribute is already empty. This is an open P1 on that pre-existing owner.
+This plan covers its outward result at main. It does not change FIFO's body
+or claim complete FIFO drain. End-to-end all-owner/no-leak proof, dependent
+native qualification and G3 remain blocked on its distinct repair and proof.
+If independent review finds the new ordinary handoff itself needs that
+internal repair, stop at the affected gate before source work.
+
+**Live references and proof gates.** Count actual owners and active calls.
+One pending FD plus the original list suffix suffices to identify an
+acquisition's resources. One active close consumes one component. A
+zero-component owner performs no final C1 check and must still pass its
+pre-existing error to the parent. A parent and child share the same head.
+Retiring a drained owner removes its resource from the original list without
+clearing reachable history. An undrained or post-close-failed opaque owner
+keeps its original ownership rule. No selection, frame read or second
+allocation to append the failed append may be needed to drain a real FD.
+Prepare fixed receiver methods and owner locals before the first acquisition.
+
+At root zero there is one caller disposition and no Reader-owned descriptor.
+Phase one has one root dirfd. Phase two holds a root and at most the current
+child, each with its real component list. A candidate copy owns its parent
+and the actual live writer/readback (a successful writer close precedes
+the reader open). On failed acquisition the pending FD is distinct from
+registered rows only on pre-insert failure. In the partial case the failed
+second item and the first registered item have different closers. In
+Reader.close there is one reverse-list cursor and one current owner. A C1
+site processes one recheck result, one close and each original report
+at its actual site. The two work objects may be the same. Count each real
+callback and each readback failure separately from these FD bounds.
+
+For a concrete execution count P actual registered producer activations, C
+actual callback activations and T real traceback nodes retained by their
+heads, separately from the FDs and original accounting rows. Each producer
+has at most its listed fixed local references, each callback its fixed
+previous/during/built/outward references, and each active passive receipt
+its actual argument and root. Shared references may alias; do not subtract
+that storage without evidence. For a frozen inspection prefix its work and
+visited storage follow the actual nodes and fixed predecessor references in
+that prefix. New events do not extend the snapshot being inspected or create
+new publish jobs. Give the final code's exact fixed fields per activation,
+maximum simultaneous pending FD/owner positions for each path, live parent
+and child frames, and post-return roots. Count actual fresh callbacks without
+a cap on their total. Neither a bound on components nor a 4096 row cap is a
+bound on event frames. Materialization, frame references pinning locals
+and their transitive data, callbacks, exception creation, reception, selection,
+readback, failed accesses, output and transport all accrue to the original
+owner, cumulative UNKNOWN_NOT_ZERO where unmeasured. No budget pool or refund.
+
+The formal G2 has two distinct runtime dependencies. First, an implicit
+failure creating an unwind traceback node or materializing an activation may
+affect where the previous head, outgoing F and any VM error live. Second,
+reading an otherwise present frame or its locals may fail. A healthy
+traceback for an ordinary MemoryError proves neither. Distinguish a read
+that fails before yielding a value from a missing activation. Preserve the
+old root and actual read failure at its own registered call. State exactly
+what remains inaccessible. The three normal callback calls cannot prove VM
+failure behavior. Inactive code and ordinary CI may proceed after their
+own gates only for independently sound normal paths. Before any complete
+lossless SOURCE acceptance, G3 or publication depending on these failures,
+require primary runtime transfer evidence applicable to the asserted
+supported runtimes. Trace each old head, raw/outward failure and actual VM
+error. An unverified possibility establishes neither failure nor safety.
+An actual lost frame requires a lawful outlet and a return to the affected
+gate. Unresolved normal first-control or owner-drain failures stop their
+own source path immediately. Shrinking supported runtime admission or
+weakening cancellation/identity needs the operator.
 
 Keep all original cases and actual acquisition/child/cancel/close calls. Update only
 three manual ordinary Reader setups in raw16_scope_sudo_source,
@@ -1195,22 +1490,102 @@ owners. The finite static review must walk the actual ordinary and default
 branches through _capture_observe, _capture_observation_error and _c1_p_report,
 including failures of the original error append, encoding-kind cleanup and
 incomplete-flag write. Existing independent C1/C2/C3 and gate negative controls
-remain mandatory. No fifth case, extra recheck, read, close attempt, child,
-dispatch, native window, signal delivery to the OS or new sampling facility.
+remain mandatory. The four layout controls gain no fifth layout case, recheck,
+read, close attempt or acquisition.
+
+**Migrate the existing fixture assertions and cleanup.** Use the actual
+raw16_scope_acquisitions positions in the preserved fixture. The outer test
+caller holds the production root before the ordinary layout or hold starts.
+Use an operation boundary within that root for expected failures and another
+for later fixture cleanup. Keep their raw history; a consumed expectation
+is a test decision, never a reset of the disposition.
+
+| Existing sites | Replacement and required proof |
+| --- | --- |
+| 3268–3283, second mkdir | The caught primary must be the prebound M. Retrieve the same M, post-real-close OSError A and original observer MemoryError B from the true caller outlet in that order. Replace only the three forced artificial-link assertions at 3274–3276. Keep the target nonempty root FD, actual delegate once, exact fired list, failed layout and all original checks. |
+| 3297–3312, failed second transfer | Require the caught Q by identity and the later real SystemExit S from the same operation, in Q/S order. Replace 3300–3301. Keep two real acquired items, first registered, second absent from owned, reverse component membership, all real closes and no retry. |
+| 3314–3327 then 3348–3364, drift | Before arming any close fault, keep all 33 successful transfers, actual bytes, real sibling and that target's E_STALE only. Read the teardown A/SystemExit S/marked Q in real order from its own operation. The caught outward must be S. Replace 3355–3357. Keep the exact three delegate positions and fired order and every remaining component attempt. If an unrelated body/restoration/close/validation error also occurred, the expected S cannot consume it. |
+
+For each prebound injected object check the source-established triple of
+cause identity, context identity and suppression value, separately from event
+order. At these real seams the original unchained injections are fresh. When
+the original raise runs in a genuine handler, bind the actual active object
+at that original raise site as the expected implicit context. The agreed
+producer/handler map must justify that ambient independently; do not bless a
+changed ambient merely because the candidate happens to produce it. Do not
+derive expected links by reading the final result, accept arbitrary edges,
+or manufacture a forward edge to a later error. Use the real record reader
+rooted by the caller, never the fixture's expected-object list as the outcome.
+Compare event occurrences and identity, no exception equality or ID-only
+deduplication. The old authorized R-from-None case still requires its exact A.
+
+| Existing test plumbing | Ownership and exit after migration |
+| --- | --- |
+| 3150–3159, preceding cases | Keep the outer finally, actual no-argument Reader.close and original ambient. Preserve the preceding cases' existing _c3_first/raise behavior. No fixture assumption that public close runs in an empty exception context. |
+| 3161–3163 and 3215–3224 | Replace prepare(18) with the caller's root and a local operation boundary. If instrumentation fails after the real hold returned, retain that exact error, close the same untransferred item once with the same root, retain any true close error, and deliver the applicable winner. A failed recording of the observation cannot leak the item. No old add/publish calls or fallback state. |
+| 3333–3351 | Keep body failure, then restore mkdir, _hold_bytes and _copy_candidate at their exact existing sites. Each restore gets its own single attempt and real failure receipt. Call Reader.close exactly once while os.close and _capture_observe seams are still installed. Keep the local actual close outward distinct from any earlier body or restore error. |
+| 3352–3372 | Consume only the exact drift triple after all its identity, order, reachability and once-close assertions passed, with no independent prior failure. Remove reset(), which could erase an unrelated failure. Preserve mismatches, unexpected close, assertion failures and both remaining original restorations (os.close, _capture_observe) in order. No restore is retried or skipped because another restore failed. |
+| 3373–3391 | Keep real restoration/empty-owned/FD-attempt validation, the original TemporaryDirectory exit and outer ACL restore. Keep actual validation, exit and restoration errors in the caller's cleanup operation, including its true earliest control; expected product events remain inspectable in their own operation. Replace old add/failure/publish and post-raise context restore at 3379–3389 with the same real outward transfer that passed the normal handoff gate. Keep original non-native output and success print only after successful cleanup. |
+
+These are in-place fixture changes. Keep the existing assertions about targets,
+calls, byte comparisons, data, fired faults and counts. Exactly six injected
+errors still occur at the original close or notification sites in the three
+negative controls. No additional OS fault, child, read or acquisition.
+
+In the same raw16_scope_acquisitions fixture add one separate in-memory control.
+Obtain the exact production cancel callable from the same fixed factory and
+the caller's fresh explicit disposition. Do not run main or install any
+signal handler. Make exactly three direct calls to that same callback. First
+enter the outer call. At its fixture-only marker write, after receiving its
+real built object and before head commitment, invoke the callback once more.
+Let the inner original raise unwind both activations. Assert the inner actual
+raised identity wins. Retrieve the distinct unraised outer object from its
+exact activation; require it did not reach its own success-raise site. For
+the third call make the original construction point throw the real prebound F.
+Require bare propagation of that same F, no constructed success for this call,
+and recover the previous nested history from the caller's head. Authenticate
+both frames for the repeated inner exception and reject a wrong activation
+or exception-ID-only traversal. The fixture keeps its expected identities
+independently; it must retrieve the results via the real approved outlet.
+Restore its constructor and marker seams in finally. No other injected callback,
+signal, child, native window, extra file read, dispatch, suite or CI case.
+Count three direct invocations, the two real nested activations and the
+construction failure separately from the four layout controls and their six
+fault deliveries. Keep the original cost owners and UNKNOWN_NOT_ZERO.
+
+Use these same three direct calls to falsify a proposed context-preserving
+transfer without a fourth callback. The existing target-drift E_STALE
+handler provides a real ambient A after its exact refusal check; it is not
+a new injected error. The memory-only control can use that handler for its
+outer and inner calls, without arming a close fault or changing the target
+proof. The true inner throw Q then has A as its original implicit context.
+Keep its rooted identity and frame evidence. The separate third call must
+still bare-raise its genuine constructor failure F. In that actual F handler
+the ambient E=F differs from A. The memory control's one final ordinary
+delivery of the already selected Q must reach its caller by identity with
+the original Q.context=A, cause and suppression intact. Check the bare F
+handoff, earlier head and both callback activations independently. Do not
+count a rethrow of F as another business occurrence. This tests a known-Q
+transfer on the runtime that actually executes it. It cannot force the
+independent raw Q / interrupt-before-pin / interrupted incoming lookup
+schedule: the three callbacks and six FD/observer faults already have
+different exact sites. Do not move them or silently add a fourth callback.
+Static proof of that remaining last receiver is mandatory. Any genuinely
+necessary extra ordinary fault contact first needs its exact G2 scope.
 
 **Current seven-file binding closure.** This replaces the preceding six-file
 instruction for this pass. Earlier C2 tables describe already retained changes.
 The accepted foreground shift of five lines has already been applied. Use the
-physical source and test bytes at the sealed seven-dirty amendment pause as the
+physical source and test bytes at the sealed seven-dirty r5 stop as the
 starting point. Consumer C and Reader R are whole SHA-256s; NC and NR are their actual
 UTF-8 byte lengths. Derive both first, then whole program P, then whole driver D,
 then complete helper K. Never use stale r2 display values as final pins.
 
 | Exact path | Behavior or mechanical contacts |
 | --- | --- |
-| shadow/v1/_consumer.py | Only the ordinary release, open-to-component compensation, three explicit recheck entries and their bounded error/report contacts listed above. Preserve _C3_OBSERVATION_KEYS (89), _C3_CLOSE_SITES (27), C2 caller/wait, _c3_first, native bodies, clock strings and all validation predicates. Keep the original metadata and _foreground statement identities. Original complete C is 0172c23667de7d4496031f9c815d65457d859ee303c477d6d1946909f85d81fc, NC 434852. |
-| scope/v1/read-shadow-evidence.py | Complete the existing layout, batch, real shared transfer and ownership integration above. Preserve the 4096 gate slots, decision order, all other writer/capture protocols and original public entry. Derive R/NR from the final source. |
-| scripts/test/candidate-content-preparation-fixtures.py | Existing raw16_scope_acquisitions four controls and earlier three named manual setups only. At r2 line9870 the existing whole-consumer source guard binds C; its selector still authenticates the exact same whole _foreground method. At6889/6890 bind actual helper byte length and K in the original triple equality. Preserve complete T 30902 B / 8be5fab1e33d3524b420a21c45cb0a6c0905af1c65438da26dc7911c8e6d7e3f and END 7829 B / 562db2edcaafdbf94043fc7aeb45963b8e33fa61ba7f82fa0f91bf49144a570d. |
+| shadow/v1/_consumer.py | Only the ordinary caller record, release, open-to-component compensation, three explicit recheck entries and their bounded error/report contacts listed above. Preserve _C3_OBSERVATION_KEYS (89), _C3_CLOSE_SITES (27), C2 caller/wait, _c3_first, native bodies, clock strings and all validation predicates. Keep the original metadata and _foreground statement identities. Original complete C is 0172c23667de7d4496031f9c815d65457d859ee303c477d6d1946909f85d81fc, NC 434852. |
+| scope/v1/read-shadow-evidence.py | Complete the existing layout, batch, shared transfer, ordinary main/cancel and explicitly scoped error handoff above. Preserve the 4096 gate slots, decision order, all other writer/capture protocols and original public entry. Derive R/NR from the final source. |
+| scripts/test/candidate-content-preparation-fixtures.py | Existing raw16_scope_acquisitions four layout controls, the single three-call memory control and the earlier three named manual setups only. At r2 line9870 the existing whole-consumer source guard binds C; its selector still authenticates the exact same whole _foreground method. At6889/6890 bind actual helper byte length and K in the original triple equality. Preserve complete T 30902 B / 8be5fab1e33d3524b420a21c45cb0a6c0905af1c65438da26dc7911c8e6d7e3f and END 7829 B / 562db2edcaafdbf94043fc7aeb45963b8e33fa61ba7f82fa0f91bf49144a570d. |
 | scripts/test/scope-qualification.test.sh | Bind C at1192,3547,5239,5253,5255,8529; R at1124,1192,2371. Retain the earlier PY_COVERAGE_PURE setup and three-way source/private-copy inverse. ActualReader at2374 uses its original exact nine Reader methods, existing helper domain and authentic source; the FixedSudo failure retains its registered owner and original error. Do not introduce a dependency on a missing extracted Reader helper or a new selector. Preserve original reader/copy/source maps, source hashes and full inverses at their actual locations. Only the following existing consumer coordinates are eligible for mechanical remapping. |
 | evals/v1/evals.jq | SOURCE84 Reader at182 and consumer at189 change only R and C. Hash the whole final program as P. |
 | evals/v1/evals-driver.sh | Original10 PROGRAM_SHA,19 FIXED_PINS program.jq,877 program_sha256 bind P, exactly three. Hash the whole result as D. No change to any driver call. |
@@ -1259,10 +1634,17 @@ change stops for a new finite review; never reformat to manufacture a location.
 
 After protected G2 and separate high-risk plan landing, the sole manager and
 original paused author must rebind the exact continuation. Before any change,
-verify the amendment-pause actual601 table SHA-256
-a5fe774665f8f509421f70c775986d7c21f6b8d44ab411584743030d92804441,
-seven physical files, index 74324 B / 913c8c024ebaf422b56ac3277793da6dd6dc8b48c772153cda93876d7834f67e,
-stage, refs and exact claim/remote/PR. Rebind any expected artifact refs only from
+verify the r5 actual601 table (222866 B, SHA-256
+c3189f53370e9e3a201d3d7b5d9aa9f68384b21cf2662e53954a1a717c58716a),
+seven physical files, index 74324 B /
+0e0324ad115287321b8421eeca47ce0f42e9faccfc0a0651d72506cceaadc6d6,
+601 stage entries, 481 refs, original claim, remote and absent source PR.
+Bind r5 consumer 477272 B / f3745721ee4862de18279d1378f80ba1758f0c50d9c8c39362d9cd221a86ec3c
+and Reader 193583 B / 27fa3d4d391559bd05b7bed31b2fb5019cb4a8dc251afe295b3f42cacdd78997.
+Its five outer source bindings are stale. Measure the final seven-path
+cascade anew. Current full publication gross is 68469 against 49000–74000.
+Any necessary readable size adjustment takes its own independent gate.
+Rebind expected artifact refs only from
 the actual protected receipts. Recheck the necessary independently reviewed
 preservation procedure and obtain the manager's specific one-use authority for
 that ordinary, nonoverlapping merge. Preserve source and dirty differences in place.
@@ -1272,7 +1654,8 @@ unchanged. No reset, stash, clean, checkpoint invention, replacement or new pick
 Seal the actual next post-merge 601 table and updated artifact links. Only fresh
 specific CODE can allow the original author’s next bounded write. This candidate
 supplies no GO. Require independent full source/recipe/resource review including
-all six findings, normal source commit and fresh committed rebind. Only the later
+all retained findings, the five r1 findings and the separate VM gates above; require
+the normal source commit and fresh committed rebind. Only the later
 one-use execution GO can dispatch the original79/six matrix once. Retain all
 eight raw logs, all old GO and round history and all failures. CI412322 remains
 FAILURE with 62 PASS, 5 FAIL and 12 NOT_REACHED, 65,675,155 B / 30,103 lines,
