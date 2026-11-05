@@ -2178,8 +2178,9 @@ to evade the source cap. Executable and policy files always belong to the closur
      已持有资源由原owner一次关闭，partial目录由原scratch owner处理，不增加清理器。
      只传播本批实际copy/hold/登记错误。普通批的replay holds登记若失败，按原途径记错并传播
      同一个错误，即使bundle_owner=None也不得发布完整acquisition。批外原retention guard及
-     成功后的关联失败仍走原路径。普通布局/交接按发生顺序保留首个KeyboardInterrupt、
-     SystemExit或marked cancel；无此类错误则保留首个普通主错。清理次错的原对象须可见。
+     成功后的关联失败仍走原路径。普通布局/交接按发生顺序择首个KeyboardInterrupt、
+     SystemExit或marked cancel；无此类错误则保留首个普通主错。首控实际交付仅有下述
+     四条件共同成立的单次资格失败例外。清理次错的原对象须可见。
 
      全部ordinary非candidate capture（包括Git config、verifier、retained、seed及
      converter输入）改写入ordinary-inputs。ordinary runtime/source/configuration
@@ -2254,10 +2255,11 @@ to evade the source cap. Executable and policy files always belong to the closur
      尚未尝试的分量必须留给同一真实 owner 并继续逆序处理。先取得、尚未登记的
      FD 或 held 必须有局部责任。交接以原容器中的对象身份为准。
      同一正常关闭实现区分记录型 held、无记录 held 和原 copy-close 的实际账。
-     保留普通操作及其关闭、观察、报错和记账期间出现的原异常对象。首个实际
-     KeyboardInterrupt、SystemExit 或 marked cancel 胜出。没有控制流异常时
-     按原业务出口选首个普通错误；下述复查按原 guard 转换。之前和之后的不同错误
-     通过既有错误记录或异常链可达。
+     保留普通操作及其关闭、观察、报错和记账期间出现的原异常对象。首控按首次实际
+     抛出的 KeyboardInterrupt、SystemExit 或 marked cancel 确定，并须向真实调用方
+     交付该原对象。实际交付的唯一例外是下述四条件共同成立的单次资格失败。
+     没有控制流异常时按原业务出口选首个普通错误；下述复查按原 guard 转换。
+     之前和之后的不同错误通过既有错误记录或异常链可达。
      沿真实调用链在丢失对象前处理。除下述普通取消交接的已登记帧外，禁止读
      traceback。禁止重跑失败步骤、增加采样、
      清空 owner、另造资源池或从 errno/标记重建错误。
@@ -2278,7 +2280,7 @@ to evade the source cap. Executable and policy files always belong to the closur
      不能取代 A。上述 recheck 若实际按原 guard 把 A 转为 Refusal R，则该次拒绝
      以真实 R 占 A 在本次业务排序中的位置。保留原 code、from None、R 对 A 的
      原 context 和 B 的可达身份。C1 原 site 接收本次真实复查失败。此前独立业务主错
-     保留顺位；整个操作中首个真实控制流优先。原路径跳过转换时不造 R。若构造 R
+     保留顺位；首个真实控制流仍按本条选择和交付。原路径跳过转换时不造 R。若构造 R
      本身抛 F，保留实际逃出的 F、本次原错误及报告次错，按相同的两层规则组合。
      所有先前和后续不同错在最终抛出后仍须按身份可达。除下述调用方私有记录外，
      只用原对象记录或无环合法空边。保留原 cause、context 和抑制状态。
@@ -2295,6 +2297,51 @@ to evade the source cap. Executable and policy files always belong to the closur
      不得盖掉更新的独立记录。若真实操作内已有新登记，接收失败处在本激活的独立固定局部保留当时的头，
      再登记逃出的 F。任何一个头都不得因嵌套、原业务内部消化或对象重抛而断开。
      原业务择主顺序保持。latest 是调用方记录入口，不据最后写入时间改选主错。
+
+     **普通软标记的类别交接。** 同一普通操作可在原标记生产者与其受保护接收处，
+     交接已证的软标记类别或已证的普通类别。该事实须对应同一票据、同一原异常、
+     本次真实发生及适用的原 marker 语义。原 mark 成功只说明类别事实可准备。
+     原对象真正抛出并越过其实际接收点后，才可提交首控。预期 fixture 身份、错误
+     类型、构造成功或 latest 先写入均不能证明首控。原硬控制 KeyboardInterrupt、
+     SystemExit 保持原语义。原构造或标记失败 F、后到 S 均按实际来源保留。
+     类别交接限于本条普通取消的私有来源边界。旧无参 close()、append(item)、rule
+     与默认 gate/writer/C2/C3 继续使用原调用形状；不得要求旧 owner 增加新回执。
+     没有新回执的旧 owner 当次正常返回、成功分类，或其它既有可信事实已唯一确定
+     最终对象时，仍须履行原保证。不得因旧 owner 未适配而整体预拒原调用、切换
+     运行模式，或豁免任何可判定的执行。原 getter/真值语义保持；不增加分类采样，
+     不重试失败步骤，不屏蔽、合并或延迟信号。
+
+     **单次首控资格失败。** 仅对同一票据的一次执行，在以下四项全部成立时，
+     才可登记这一次“首控未能判定”。须逐项证明，不能从未知推定成立。
+
+     | 必要条件 | 同一次真实执行中的要求 |
+     | --- | --- |
+     | 原来源 | 原允许的非协作旧来源已实际抛出非硬控制异常 E。 |
+     | 首次分类失败 | 首次获准的原 getter 或真值求值已经开始，因真实失败未把判定交给接收者。 |
+     | 无其它判据 | 没有其它既有可信事实能补足该判定。 |
+     | 结果确实分歧 | 保持本次已发生的事件、原业务顺序及其余事实不变，分别取 E 的标记为真和为假，按原规则必须向外交付身份不同的两个对象。 |
+
+     资格失败须分别保留原异常 E、真实分类失败、实际 outward、原 cause/context/
+     suppress 与原记录，以及所有已取得 owner 的逆序一次关闭义务。未知不得当作
+     False；实际 outward 不得据此记为已证 winner。该次记录必须阻止依赖这次首控
+     交付的 complete SOURCE、G3 或 native 验收，不能抹去真实失败或计作通过。
+     分类位已返回给接收者后丢失、登记损坏、缺少真实 cover 或后续查询失败均不适用。
+     若 Q0 已证最早，且 Q0 之前没有会改变最终对象的未知项，后来 E 首次分类失败
+     仍须实际交付 Q0，并保留 E 与真实失败。若未分类 E 先抛、后来确认 Q1 为控制，
+     这只证明 Q1 的类别。仅当 E 为真须交 E、为假须交 Q1，且其余三项同时成立时，
+     才可登记该次资格失败。原 C945 已有胜者时因一次显式失败而错交，仍须修复。
+     旧来源在首次原分类失败前不提供等价可信事实，是本例外的外部约束。来源契约、
+     原 marker 语义或旧调用 ABI 变化，须重新评估；当次已有等价可信事实即不适用。
+
+     独立高风险计划须命名唯一私有函数或模块边界，链接本条约束，并证明真实类别
+     来源、首次 throw 到实际接收/提交、raw 接收/退休及最后 owner 完成后的交付。
+     保留原 L/U occurrence 责任，不清共享历史。记录槽、路由 cell、引用数量、
+     生产者迁移和具体提交窗口须逐项证明；本条不预先批准其实现路线、数目或新路径。
+     本例外的回归须进入原 CI；新测试机会仍须另经原门，不能借本条增加执行机会。
+     原四 layout、六 fault、三次内存 callback、79 项六分片及全部安全门不减。
+     两项 VM、FIFO/native/vendor/G3 欠证独立保留。类别、引用、保留激活、交接、失败
+     与运输的实际费用归原 owner，未测累计 UNKNOWN_NOT_ZERO，不新增预算池。
+
      仅从该次显式登记的根及其真实 traceback 导航。只在代码对象、定义域、
      同次 disposition 身份匹配的固定生产者激活上取 previous 和已明列的原对象
      局部。嵌套取消可在同一 traceback 中有多个匹配激活；按实际出现的帧和位置
@@ -2309,8 +2356,9 @@ to evade the source cap. Executable and policy files always belong to the closur
      保留该运行时依赖，并由独审明确它在哪一关必须闭合。缺帧不算交付，不能
      以普通报错或 fixture 的正常 traceback 证明 VM 分配失败时仍完整。全部隐式
      VM traceback/帧物化、驻留、局部读取、遍历、失败及运输成本分别归原 owner，
-     未测累计 UNKNOWN_NOT_ZERO。实际首控最终抛出、全 owner 一次关闭、失败后
-     不重试及交接不会递归产生新待办仍须在独立计划和源码审查逐出口证明。
+     未测累计 UNKNOWN_NOT_ZERO。除上述单次资格失败外，实际首控最终抛出仍须
+     逐出口证明。全 owner 一次关闭、失败后不重试、原对象可达及交接不会递归产生
+     新待办，在资格失败时也不豁免；均须在独立计划和源码审查证明。
      原四控六投递及计数保留。仅在同一现有普通测试文件另列一个内存控制，
      共三次直接调用同一真实普通回调：一次外层与一次嵌套，另一次原构造点受控
      抛真实 F。嵌套位置在外层已取得 S、提交 latest 之前，由仅 fixture 的标记
