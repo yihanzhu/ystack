@@ -520,3 +520,69 @@ read-only. CPU wall is `NONE`; native qualification is `BLOCKED`; production is
 `EMPTY`; automation is `PAUSED`. ROADMAP.md and governance files stay unchanged.
 
 Prepared against base `b991877ba8b2f41e184b2d2ee51715451d1c0ba1`.
+
+## Manager succession — 2026-11-05
+
+Operator yihanzhu directly handed the manager role to Claude Code desktop session
+`7da9169c-8342-4fe0-b5a2-5bf488c7a32b`, model Claude Opus 5.5, on 2026-11-05.
+The operator first wrote “继续ystack的roadmap” in that session. The session then
+asked whether to take the role from Codex session
+`01a15e2e-9b80-71b1-b529-d3f6288591fa`, which had received the operator's #439
+decision that morning. The operator chose “交给这个会话”: the Codex session stops
+acting as manager, and this session records the handoff and continues the #439
+stages in the order of that decision's receipt (issue #439 comment `6660241649`).
+
+That direct answer ends the delegation to Codex session
+`01a15e2e-9b80-71b1-b529-d3f6288591fa`. Its last turn was interrupted at
+2026-11-05T14:51:44Z. No manager authority remains with it. Its 2026-10-21 handoff
+was never merged as its own appendix; draft PR #676 holds that record and stays
+preserved and unmerged.
+
+The same bounded program now applies to this session, and to no other session.
+Nothing else changes. RC-1, OD-1, the working sequence, the 2026-10-23
+implementation-first delivery order, the reserved operator decisions, the
+one-manager invariant, one concern and exact allowed paths per PR, substantive
+independent review with no unresolved Important finding, fresh exact head/base
+evidence, all required CI green before merge, read-only reviewers, the rounds cap,
+claims, recovery and restoration, and the exclusion of frozen #183 and unresolved
+dirty attempts all stand unchanged. ROADMAP.md and the accepted source blobs remain
+unchanged. This appendix records succession only.
+
+Publishing. This session's Claude Code project directory is the repository checkout,
+so `.claude/settings.json` loads and `.claude/hooks/no-merge-guard.sh` blocks every
+merge command for this session and its subagents. The manager does not work around
+the hook. It brings each PR to a clean exact-head/base independent review and green
+required CI under OD-1's conditions, then gives the operator OD-1's exact squash
+merge command, pinned with `--match-head-commit` to the reviewed head, to run.
+
+Review lane. The reviewer is never the author. A Codex-authored artifact gets a fresh
+read-only Claude reviewer. A Claude-authored artifact gets the operator's Codex model.
+Each review records the requested model and the model the runtime reports.
+
+Preserved #439 attempt at handoff. No review acceptance carries forward.
+
+- G2 candidate: branch `codex/spec/eval-candidate-history-20261028`, local head
+  `3c713728469cda9663d7c4faadee43c59af2bc2a`, a merge of main
+  `524056f275f2988d6935b4783e11f914c3382e7b` plus one commit that changes only
+  `work/eval-seeding-deterministic/spec.md`. Not pushed; PR absent; worktree clean.
+  Its independent review produced no verdict because the reviewer model was at
+  capacity.
+- High-risk plan for the same decision: not started.
+- Source: branch `codex/impl/eval-source-relay-replay`, local head
+  `6a4dca9053059f192773e5fb654570ec01114090`, remote head
+  `2b4d98625ea49a0fa3d4da8f5ccc8439e075cc27` (an ancestor of the local head),
+  PR absent. Its worktree, with seven uncommitted paths, is missing from disk. Its
+  Git metadata and index are preserved, and the index equals the local head. Frozen
+  copies of the seven paths exist. No restoration has been performed; restoring the
+  dirty worktree waits for an explicit operator disposition.
+- Intake #439 labels: `claimed`, `needs-human`.
+
+The other claimed attempts (#558, #544, #681 and #701) stay preserved. None resumes
+before its exact tuple is reconciled.
+
+The manager verified its own session identity from its scratchpad path, which the
+Claude Code harness derives from the session id. That is identity evidence, not
+authority. This direct handoff, not this record, supplies the successor authority;
+a further successor needs another explicit operator handoff recorded here.
+
+Prepared against base `524056f275f2988d6935b4783e11f914c3382e7b`.
