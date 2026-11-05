@@ -2178,9 +2178,9 @@ to evade the source cap. Executable and policy files always belong to the closur
      已持有资源由原owner一次关闭，partial目录由原scratch owner处理，不增加清理器。
      只传播本批实际copy/hold/登记错误。普通批的replay holds登记若失败，按原途径记错并传播
      同一个错误，即使bundle_owner=None也不得发布完整acquisition。批外原retention guard及
-     成功后的关联失败仍走原路径。普通布局/交接按发生顺序择首个KeyboardInterrupt、
+     成功后的关联失败仍走原路径。普通布局/交接按发生顺序保留首个KeyboardInterrupt、
      SystemExit或marked cancel；无此类错误则保留首个普通主错。首控实际交付仅有下述
-     四条件共同成立的单次资格失败例外。清理次错的原对象须可见。
+     “单次首控资格失败”一项例外，须四项条件共同成立。清理次错的原对象须可见。
 
      全部ordinary非candidate capture（包括Git config、verifier、retained、seed及
      converter输入）改写入ordinary-inputs。ordinary runtime/source/configuration
@@ -2257,7 +2257,7 @@ to evade the source cap. Executable and policy files always belong to the closur
      同一正常关闭实现区分记录型 held、无记录 held 和原 copy-close 的实际账。
      保留普通操作及其关闭、观察、报错和记账期间出现的原异常对象。首控按首次实际
      抛出的 KeyboardInterrupt、SystemExit 或 marked cancel 确定，并须向真实调用方
-     交付该原对象。实际交付的唯一例外是下述四条件共同成立的单次资格失败。
+     交付该原对象。实际交付的唯一例外是下述“单次首控资格失败”，须四项条件共同成立。
      没有控制流异常时按原业务出口选首个普通错误；下述复查按原 guard 转换。
      之前和之后的不同错误通过既有错误记录或异常链可达。
      沿真实调用链在丢失对象前处理。除下述普通取消交接的已登记帧外，禁止读
@@ -2280,7 +2280,7 @@ to evade the source cap. Executable and policy files always belong to the closur
      不能取代 A。上述 recheck 若实际按原 guard 把 A 转为 Refusal R，则该次拒绝
      以真实 R 占 A 在本次业务排序中的位置。保留原 code、from None、R 对 A 的
      原 context 和 B 的可达身份。C1 原 site 接收本次真实复查失败。此前独立业务主错
-     保留顺位；首个真实控制流仍按本条选择和交付。原路径跳过转换时不造 R。若构造 R
+     保留顺位；整个操作中首个真实控制流仍按本条选择和交付。原路径跳过转换时不造 R。若构造 R
      本身抛 F，保留实际逃出的 F、本次原错误及报告次错，按相同的两层规则组合。
      所有先前和后续不同错在最终抛出后仍须按身份可达。除下述调用方私有记录外，
      只用原对象记录或无环合法空边。保留原 cause、context 和抑制状态。
@@ -2297,6 +2297,60 @@ to evade the source cap. Executable and policy files always belong to the closur
      不得盖掉更新的独立记录。若真实操作内已有新登记，接收失败处在本激活的独立固定局部保留当时的头，
      再登记逃出的 F。任何一个头都不得因嵌套、原业务内部消化或对象重抛而断开。
      原业务择主顺序保持。latest 是调用方记录入口，不据最后写入时间改选主错。
+     仅从该次显式登记的根及其真实 traceback 导航。只在代码对象、定义域、
+     同次 disposition 身份匹配的固定生产者激活上取 previous 和已明列的原对象
+     局部。嵌套取消可在同一 traceback 中有多个匹配激活；按实际出现的帧和位置
+     验证，不以异常身份一次去重丢掉另一次真实激活。其它帧不查局部，不猜错误
+     或运行模式。不得读取传入的被打断帧，不用 sys._getframe、trace/profile、
+     额外观察、对外字段或人为 traceback。原 metadata/foreground 直接帧、原选择器、
+     16 帧及两帧顺序另按原件认证，不借此扩大采样。
+     每个必需 previous 必须在最终入口实际可取。普通业务或报告抛出 MemoryError
+     本身不证明丢帧。若解释器在创建该次 traceback 项或物化所需帧时另有真实
+     失败，必须以同一受支持运行时的实际错误转移语义证明原根、此前对象和该
+     新错误仍可取。现有证据没有确定任何受支持解释器在该故障上的实际结局。
+     保留该运行时依赖，并由独审明确它在哪一关必须闭合。缺帧不算交付，不能
+     以普通报错或 fixture 的正常 traceback 证明 VM 分配失败时仍完整。全部隐式
+     VM traceback/帧物化、驻留、局部读取、遍历、失败及运输成本分别归原 owner，
+     未测累计 UNKNOWN_NOT_ZERO。以下各项仍须在独立计划和源码审查中逐出口证明：
+     实际首控最终抛出（仅下述单次首控资格失败除外）、全 owner 一次关闭、失败后
+     不重试、原对象可达，以及交接不会递归产生新待办。后四项在资格失败时也不豁免。
+     原四控六投递及计数保留。仅在同一现有普通测试文件另列一个内存控制，
+     共三次直接调用同一真实普通回调：一次外层与一次嵌套，另一次原构造点受控
+     抛真实 F。嵌套位置在外层已取得 S、提交 latest 之前，由仅 fixture 的标记
+     写接点触发。核对外/内激活的不同对象身份、原顺序、构造失败前的头及裸抛
+     最终可取。使错误激活或同异常只查一次的读取器不能通过。此控制与原四控、
+     六次既有投递分账；新增 fixture 替身、调用、引用及费用按实累计。无新增
+     OS 信号、子进程、FD、原生窗口或额外产品读取。
+     在原四控的既有真实 FD 关闭和观察中加入固定异常，以对象身份和实关次数
+     验证普通优先级、后续 FD 的释放和不重试。保留原第二次 mkdir 的实关证明、
+     101 个真实取得及 100/1 登记、132 copies、2 inputs、199 次成功 mkdir 和
+     drift 的原顺序。不增 case、child、acquisition、文件读取或 native 窗口。
+     合同内的报错和记账调用按实际分支另计。所有新增引用、处理、失败、清理及
+     运输费用在原 #439 账内累计 UNKNOWN_NOT_ZERO。
+     七文件包括 consumer、Reader、原两测试文件及原三个 evals 绑定文件。
+     除 consumer、Reader 的实际完整 SHA 与长度，SOURCE84 的其余 82 项及全部
+     path/mode/membership 不变。按真实字节依次重绑 program、driver、完整 helper。
+     scope 中仅更新原 metadata/foreground 认证的必要同源坐标和原完整 SHA。
+     保留同一 AST 选择、16 帧上限、原两帧顺序、异常和字段。保留原 T/END、
+     C2、89/27 schema、gate4096、正式 native 及原安全谓词。其余 594 项逐字
+     逐模式冻结。独立 plan 绑定完整七文件及每个必要文字位置。其它需求先回门。
+     driver原三个P、launcher原P/D、切片外K和fixture原K/实际长度仍为完整等值。
+     43/八测试/旧40/20/C1六+三pin集合不变。保留原L/R、native/G3及原79六分片。
+     全部旧费用、失败及UNKNOWN累计。此候选不授CODE。
+
+     **首控例外的来源与用语。** 下面“普通软标记的类别交接”和“单次首控资格失败”
+     两节来自 #439 评论 6660241649 记录的 operator 直接决定。决定包 SHA-256 为
+     a447426c85db3ead97b4353ec2871d5cc1ab03adbb54f2154c3e6e205d8f2272。
+     表中代码名取自已暂停源码尝试的冻结候选，即 6a4dca90 加七个已编辑文件；
+     这些代码尚不在 main。下表各词只按此处定义使用。
+
+     | 用语 | 含义 |
+     | --- | --- |
+     | 票据 | 一次真实终局操作独有的身份对象，plan 称 ticket。冻结候选中，`shadow/v1/_consumer.py` 的 `_ordinary_terminal` 新建它，并存入 `_OrdinaryDisposition.terminal_ticket`。Reader main 在第一个 FD 前持有同一引用。raw 调用方、接收出口和终局选择器共用它。 |
+     | 真实 cover | 某个实际投递点上仍然有效、会接到该次真实 outward 的外层 catch，plan 称 covering catch。只剩旧局部或已离场的 handler 都不算。 |
+     | 非协作旧来源 | 原合同允许的旧 owner、callable 或容器。它只把原异常对象交给接收者，不交类别参数、固定返回值或生产者回执。例如冻结候选 `_ordinary_close_owned` 中的无参 `item.close()`，和 `_ordinary_owned_append` 中的 `owned.append(item)`。接收者靠读取原 `_scope_signal_cancel` 的真值判定类别；该真值求值可执行 Python 代码。已知的标记写入处有限，不能证明旧来源只交出这些写入处标记的实例。 |
+     | L/U occurrence | occurrence 是一个异常在真实 traceback 节点上的一次出现。冻结候选的 `_OrdinaryDisposition.history(prefix=U, after=L)` 和 `first_control(prefix=U, after=L)` 只查一个区段。L 是区段开始前由 `head()` 存下的历史头，U 是区段结束时存下的历史头。查询只计 U 可达而 L 不可达的 occurrence。原 L/U 责任是每次查询只消费自己区段内原指定的 occurrence，不重置或清除同一 root 的共享历史。 |
+     | C945 | 冻结候选 `_OrdinaryDisposition.terminal_eligible` 中的显式 `visited = set()` 分配。它在终局资格已认证之后、沿 inherited 链核对之前执行。此处一次真实 MemoryError 就会让调用方收到该错误，而不是已知首控 Q。这是已有胜者时的错交缺口，不属资格失败；它按冻结源码推导，未经运行。名称取自它在冻结候选中的行号，只作标签。 |
 
      **普通软标记的类别交接。** 同一普通操作可在原标记生产者与其受保护接收处，
      交接已证的软标记类别或已证的普通类别。该事实须对应同一票据、同一原异常、
@@ -2304,8 +2358,10 @@ to evade the source cap. Executable and policy files always belong to the closur
      原对象真正抛出并越过其实际接收点后，才可提交首控。预期 fixture 身份、错误
      类型、构造成功或 latest 先写入均不能证明首控。原硬控制 KeyboardInterrupt、
      SystemExit 保持原语义。原构造或标记失败 F、后到 S 均按实际来源保留。
-     类别交接限于本条普通取消的私有来源边界。旧无参 close()、append(item)、rule
-     与默认 gate/writer/C2/C3 继续使用原调用形状；不得要求旧 owner 增加新回执。
+     类别交接是私有来源契约，只在上述“普通取消的调用方记录”中 main 强持、
+     确认普通模式后显式传入的本次私有 disposition 内进行。旧无参 close()、
+     append(item)、rule 与默认 gate/writer/C2/C3 继续使用原调用形状；
+     不得因旧 owner 缺少新回执而拒绝或改变其原保证。
      没有新回执的旧 owner 当次正常返回、成功分类，或其它既有可信事实已唯一确定
      最终对象时，仍须履行原保证。不得因旧 owner 未适配而整体预拒原调用、切换
      运行模式，或豁免任何可判定的执行。原 getter/真值语义保持；不增加分类采样，
@@ -2330,58 +2386,23 @@ to evade the source cap. Executable and policy files always belong to the closur
      仍须实际交付 Q0，并保留 E 与真实失败。若未分类 E 先抛、后来确认 Q1 为控制，
      这只证明 Q1 的类别。仅当 E 为真须交 E、为假须交 Q1，且其余三项同时成立时，
      才可登记该次资格失败。原 C945 已有胜者时因一次显式失败而错交，仍须修复。
-     旧来源在首次原分类失败前不提供等价可信事实，是本例外的外部约束。来源契约、
-     原 marker 语义或旧调用 ABI 变化，须重新评估；当次已有等价可信事实即不适用。
+     旧来源在首次原分类失败前不提供等价可信事实，是本例外的外部约束。只要该约束
+     成立，本例外就是永久例外。来源契约、原 marker 语义或旧调用 ABI 变化时须重新
+     评估；当次已有等价可信事实即不适用。
 
      独立高风险计划须命名唯一私有函数或模块边界，链接本条约束，并证明真实类别
      来源、首次 throw 到实际接收/提交、raw 接收/退休及最后 owner 完成后的交付。
      保留原 L/U occurrence 责任，不清共享历史。记录槽、路由 cell、引用数量、
      生产者迁移和具体提交窗口须逐项证明；本条不预先批准其实现路线、数目或新路径。
-     本例外的回归须进入原 CI；新测试机会仍须另经原门，不能借本条增加执行机会。
-     原四 layout、六 fault、三次内存 callback、79 项六分片及全部安全门不减。
-     两项 VM、FIFO/native/vendor/G3 欠证独立保留。类别、引用、保留激活、交接、失败
-     与运输的实际费用归原 owner，未测累计 UNKNOWN_NOT_ZERO，不新增预算池。
-
-     仅从该次显式登记的根及其真实 traceback 导航。只在代码对象、定义域、
-     同次 disposition 身份匹配的固定生产者激活上取 previous 和已明列的原对象
-     局部。嵌套取消可在同一 traceback 中有多个匹配激活；按实际出现的帧和位置
-     验证，不以异常身份一次去重丢掉另一次真实激活。其它帧不查局部，不猜错误
-     或运行模式。不得读取传入的被打断帧，不用 sys._getframe、trace/profile、
-     额外观察、对外字段或人为 traceback。原 metadata/foreground 直接帧、原选择器、
-     16 帧及两帧顺序另按原件认证，不借此扩大采样。
-     每个必需 previous 必须在最终入口实际可取。普通业务或报告抛出 MemoryError
-     本身不证明丢帧。若解释器在创建该次 traceback 项或物化所需帧时另有真实
-     失败，必须以同一受支持运行时的实际错误转移语义证明原根、此前对象和该
-     新错误仍可取。现有证据没有确定任何受支持解释器在该故障上的实际结局。
-     保留该运行时依赖，并由独审明确它在哪一关必须闭合。缺帧不算交付，不能
-     以普通报错或 fixture 的正常 traceback 证明 VM 分配失败时仍完整。全部隐式
-     VM traceback/帧物化、驻留、局部读取、遍历、失败及运输成本分别归原 owner，
-     未测累计 UNKNOWN_NOT_ZERO。除上述单次资格失败外，实际首控最终抛出仍须
-     逐出口证明。全 owner 一次关闭、失败后不重试、原对象可达及交接不会递归产生
-     新待办，在资格失败时也不豁免；均须在独立计划和源码审查证明。
-     原四控六投递及计数保留。仅在同一现有普通测试文件另列一个内存控制，
-     共三次直接调用同一真实普通回调：一次外层与一次嵌套，另一次原构造点受控
-     抛真实 F。嵌套位置在外层已取得 S、提交 latest 之前，由仅 fixture 的标记
-     写接点触发。核对外/内激活的不同对象身份、原顺序、构造失败前的头及裸抛
-     最终可取。使错误激活或同异常只查一次的读取器不能通过。此控制与原四控、
-     六次既有投递分账；新增 fixture 替身、调用、引用及费用按实累计。无新增
-     OS 信号、子进程、FD、原生窗口或额外产品读取。
-     在原四控的既有真实 FD 关闭和观察中加入固定异常，以对象身份和实关次数
-     验证普通优先级、后续 FD 的释放和不重试。保留原第二次 mkdir 的实关证明、
-     101 个真实取得及 100/1 登记、132 copies、2 inputs、199 次成功 mkdir 和
-     drift 的原顺序。不增 case、child、acquisition、文件读取或 native 窗口。
-     合同内的报错和记账调用按实际分支另计。所有新增引用、处理、失败、清理及
-     运输费用在原 #439 账内累计 UNKNOWN_NOT_ZERO。
-     七文件包括 consumer、Reader、原两测试文件及原三个 evals 绑定文件。
-     除 consumer、Reader 的实际完整 SHA 与长度，SOURCE84 的其余 82 项及全部
-     path/mode/membership 不变。按真实字节依次重绑 program、driver、完整 helper。
-     scope 中仅更新原 metadata/foreground 认证的必要同源坐标和原完整 SHA。
-     保留同一 AST 选择、16 帧上限、原两帧顺序、异常和字段。保留原 T/END、
-     C2、89/27 schema、gate4096、正式 native 及原安全谓词。其余 594 项逐字
-     逐模式冻结。独立 plan 绑定完整七文件及每个必要文字位置。其它需求先回门。
-     driver原三个P、launcher原P/D、切片外K和fixture原K/实际长度仍为完整等值。
-     43/八测试/旧40/20/C1六+三pin集合不变。保留原L/R、native/G3及原79六分片。
-     全部旧费用、失败及UNKNOWN累计。此候选不授CODE。
+     本例外的回归须进入原 CI，并至少证明五点：（a）四项任一缺失或未知时不登记，
+     仍按原交付规则交付；（b）Q0 已证最早、后来 E 首次分类失败时，实际交付 Q0；
+     （c）分类位已返回接收者后丢失，不构成资格失败；（d）C945 情形已修复，交付
+     已有胜者，不登记资格失败；（e）一个四项全成立的正例中，该登记阻止依赖它的
+     complete SOURCE、G3 或 native 验收。新测试机会仍须另经原门，不能借本条增加
+     执行机会。原四控、六投递、内存控制的三次真实回调调用、原 79 六分片及全部
+     安全门不减。两项 VM、FIFO/native/vendor/G3 欠证独立保留。类别、引用、保留
+     激活、交接、失败与运输的实际费用归原 owner，未测累计 UNKNOWN_NOT_ZERO，
+     不新增预算池。
 
      **原 C2 caller 的严格账与 END 拒绝终态。** 固定设计源为
      ac36c43801746089e17702f9b137fd6ee938dddd，执行base5303a67747af0e80c0fb964e979b81d1c11286ed。
