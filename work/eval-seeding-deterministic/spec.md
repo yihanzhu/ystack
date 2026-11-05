@@ -2419,42 +2419,57 @@ to evade the source cap. Executable and policy files always belong to the closur
      | catch 唯一新选择 | 终局 catch 为接住的对象只做一次新选择，该次选择又被新的真实失败打断。 |
 
      须以同一次真实执行中的真实 traceback 节点及其指令位置证明中断落在某一窗口内；
-     不能证明时不适用本节，仍按原逐出口标准判定。适用时，这次交付不要求证明首控，
-     只为该票据登记一次“交付未证”；同一票据的后续窗口中断沿用这一登记，不重复写入，
-     也不撤销。须保留全部原异常、实际 outward、原 cause/context/suppress、原记录及
-     所有已取得 owner 的逆序一次关闭义务；不重试失败步骤，交接不递归产生新待办。
-     未知不得当作已证；实际 outward 不得据此记为已证 winner。该登记不计作通过，
-     必须阻止依赖这次交付的 complete SOURCE、G3 或 native 验收，不能抹去真实失败。
+     不能证明时不适用本节，仍按原逐出口标准判定。分类读取须为一次不经 CALL 的属性
+     读取，使“读取已开始未返回”与“值已返回后”的节点位置可以区分；否则独立计划须
+     证明二者位置可区分。不能区分时，不得据此登记资格失败。适用时，这次交付不要求
+     证明首控，只为该票据登记一次“交付未证”；同一票据的后续窗口中断沿用这一登记，
+     不重复写入，也不撤销。须保留全部原异常、实际 outward、原 cause/context/suppress、
+     原记录及所有已取得 owner 的逆序一次关闭义务；不重试失败步骤，交接不递归产生
+     新待办。未知不得当作已证；实际 outward 不得据此记为已证 winner。该登记不计作
+     通过，必须阻止依赖这次交付的 complete SOURCE、G3 或 native 验收，不能抹去真实
+     失败。main 终局入口的中断若离开 main 而无法在票据内登记，该次交付缺省按未证
+     处理，同样不计作通过；进程外退出码从不证明首控交付。若同一中断还满足“单次首控
+     资格失败”的四项条件，两项登记都写，各自保留，互不替代，都阻止依赖验收。
 
      登记只在“普通取消的调用方记录”中 main 强持、确认普通模式后显式传入的同一私有
      disposition 及其票据内进行，由独立计划命名的唯一私有边界写入。旧 owner 及默认
-     gate/writer/C2/C3 的调用形状和原保证不变。外部约束是：受支持运行时为开放的
-     CPython 3.11 及以上，CI 未固定解释器版本，现有一手证据不能证明这些窗口内没有
-     派发点。本节是临时例外：某一窗口若对某个已固定的受支持运行时，以一手证据证明
-     没有派发点，该窗口对该运行时即不再是缺口，须按原标准证明交付。运行时固定、解释器
-     语义变化或出现新的一手证据时须重新评估。本节不适用于上述窗口外的任何中断，也不
-     改变“单次首控资格失败”的四项条件。其余验收标准不变。
+     gate/writer/C2/C3 的调用形状和原保证不变。前三种窗口的外部约束是：受支持运行时
+     为开放的 CPython 3.11 及以上，CI 未固定解释器版本，现有一手证据不能证明这些窗口
+     内没有派发点。对这三种窗口，本节是临时例外：某一窗口若对某个已固定的受支持
+     运行时，以一手证据证明没有派发点，该窗口对该运行时即不再是缺口，须按原标准证明
+     交付。运行时固定、解释器语义变化或出现新的一手证据时须重新评估。第四种窗口另有
+     约束：这次新选择可能要对尚无读取记录的旧对象做首次读取，旧对象的真值求值可执行任意
+     Python 代码并真实失败，选择本身也有显式分配；原标准又禁止重试失败步骤或再加一次
+     选择。只要非协作旧来源仍受支持，这一窗口是永久例外。来源契约、原 marker 语义或
+     旧调用 ABI 变化时，或能证明这次新选择不再读取旧对象、也不再分配时，须重新评估。
+     本节不适用于上述窗口外的任何中断，也不改变“单次首控资格失败”的四项条件。其余
+     验收标准不变。
 
      本节回归须进入原 CI，至少证明：（a）catch 唯一新选择被打断时只登记一次，原对象
      与关闭义务保留，依赖该交付的验收被阻止；（b）窗口外的中断不登记交付未证；（c）已
-     存入读取记录的分类值不适用本节。其余三种窗口须在接收帧或 main 终局入口内出现
-     派发点，只有生产钩子、trace 或定时信号才能制造；本节不增加这些机会，它们保留
-     逐窗口静态证明。
+     存入读取记录的分类值不适用本节。前三种窗口须在接收帧或 main 终局入口内出现
+     派发点，只有生产钩子、trace 或定时信号才能制造；本节不增加这些机会。这三种窗口
+     只做静态证明，且只须证明本节自身的义务：只在命名边界登记一次；原异常、实际
+     outward 与原记录保留；已取得 owner 逆序一次关闭；不重试；交接不递归产生新待办；
+     依赖这次交付的验收被阻止。它不要求证明这些窗口内的首控交付，也不要求证明窗口内
+     没有派发点。
 
      **首控例外回归的新增测试机会。** 按“新测试机会仍须另经原门”，以下四项在本修订
      一并经原门。它们只扩原 `scripts/test/candidate-content-preparation-fixtures.py`
      中 `raw16_scope_acquisitions` 的内存控制所在块，都在原 CI 运行。除表中所列外，
-     不增加生产名替换、信号、子进程、FD 或外部运行。三项共新增三次对同一真实 installed
-     的直接调用，与内存控制原有的三次真实回调调用分账。原四控、六投递、三次真实回调
-     调用、原 79 六分片及全部安全门不变。新增调用、替身、引用与费用归原 owner，
-     未测累计 UNKNOWN_NOT_ZERO。
+     不增加生产名替换、信号、子进程、FD 或外部运行。三项共新增三次对真实 installed
+     的直接调用，installed 均由新建 root 经真实 `_ordinary_cancel_factory` 取得（C945 项
+     沿用终局 installed 出口项的 root）；
+     它们与内存控制原有的三次真实回调调用分账。原四控、六投递、三次真实回调调用、
+     原 79 六分片及全部安全门不变。新增调用、替身、引用与费用归原 owner，未测累计
+     UNKNOWN_NOT_ZERO。
 
      | 项 | 新增内容 | 必须证明 |
      | --- | --- | --- |
-     | 终局 installed 出口（plan QF.i） | 新建普通 root 与真实票据。已提交首控 Q 先由该票据的真实 Receipt relay 穿出，并由 fixture 已登记接收处记入 root；再在同一 Receipt 的第二个 with 内直接调用一次 installed，此时 inherited 为 idle。 | installed 认证终局资格并从票据交付 Q；Q 按身份到达调用方，原 cause/context/suppress 不变；不登记资格失败或交付未证。 |
-     | C945（plan QF.d） | 在上项调用期间，以及同一 Receipt 下再一次 inherited 非 idle 的直接调用期间，把 consumer 模块名 `set` 临时换成 fixture 替身，finally 恢复。替身只在其调用方是已过见证的终局资格核对时抛一个预建的真实 MemoryError；调用方只在 fixture 内用 `sys._getframe` 核对。 | idle 调用中替身从不触发，installed 交付 Q；非 idle 调用中替身只触发一次，该 MemoryError 可达，Receipt 仍交付 Q；均不登记资格失败。 |
-     | main 终局出口（plan QF.m） | 在本测试临时目录下，以六个原参数同进程调用真实 Reader main 两次。每次只把 Reader 模块的 `_ControlFIFO` 与 `_Reader` 换成不开 FD 的 fixture 替身，后者在构造时抛本行预备的对象，finally 恢复。main 自装的四个处理器在 finally 恢复为原处理器，不投递信号。每次调用前用一次 `os.fstat(6)` 核对 FD 6 不是 socket，否则本行失败；不改动任何 FD。 | 一次中已决首控按身份并保留原属性离开 main。另一次中 E 的首次分类抛真实 KeyboardInterrupt K，登记 E 的资格失败，K 按身份离开 main。两次中每个已取得 owner 都只关闭一次。 |
-     | 分类读取位置（plan QF.c3） | 新建普通 root 与真实票据。一个 fixture InterruptedError 子类实例的 `_scope_signal_cancel` 是 property，其 getter 为以 C 层 `functools.partial` 绑定同一真实 installed 的对象；首次读取因此不经旧代码 Python 帧直接进入回调，占一次直接调用。 | 接收帧节点停在读取指令上，证明读取已开始且未返回，按首次分类失败处理，不登记交付未证。“分类值返回后”窗口须见读取指令之后的位置；本行不能也不得伪造该位置。 |
+     | 终局 installed 出口（plan QF.i） | 新建普通 root，以真实 `_ordinary_terminal` 与 `_ordinary_cancel_factory` 取得票据、Receipt 和 raw/installed。已提交首控 Q 先由该 Receipt relay 穿出，并由 fixture 已登记接收处记入 root；再在同一 Receipt 的第二个 with 内直接调用一次 installed，此时 inherited 为 idle。 | installed 认证终局资格并从票据交付 Q；Q 按身份到达调用方，原 cause/context/suppress 不变；不登记资格失败或交付未证。 |
+     | C945（plan QF.d） | 在上项调用期间，以及同一 Receipt 下再一次 inherited 非 idle 的直接调用期间，向 consumer 模块注入全局名 `set`，指向 fixture 替身；consumer 原无此全局，finally 中删除该注入名即为恢复，注入前已有同名全局则本行失败。替身只在其调用方是已过见证的终局资格核对时抛一个预建的真实 MemoryError，其余调用转交内建 `set`；调用方只在 fixture 内用 `sys._getframe` 核对。 | idle 调用中替身从不触发，installed 交付 Q；非 idle 调用中替身只触发一次，该 MemoryError 可达，Receipt 仍交付 Q；均不登记资格失败。 |
+     | main 终局出口（plan QF.m） | 在主线程、本测试临时目录下，以六个原参数同进程调用真实 Reader main 两次。每次只把 Reader 模块的三个名字换成 fixture 替身，finally 恢复：`_ControlFIFO` 换成不开 FD 的替身；`_Reader` 换成在构造时抛本行对象的替身；`os` 换成代理，其 `fstat(6)` 不碰 FD 6 而新抛一个无标记 OSError(EBADF)，使 main 的原探测总走普通路径，其余属性都是真实 `os`。调用前保存四个信号的原处理器（须都不为 None），任何出口都在 finally 中逐一恢复为原对象；不投递信号。 | 第一次：`_Reader` 替身抛真实 KeyboardInterrupt Q，`_ControlFIFO` 替身的 close 抛普通 OSError B；Q 按身份并保留原 cause/context/suppress 离开 main，B 可达，不登记。第二次：`_Reader` 替身抛 InterruptedError E，其标记真值对象首次求值时抛普通真实失败 G；`_ControlFIFO` 替身的 close 再抛真实 KeyboardInterrupt Q1；登记 E 的资格失败，实际 outward G 按身份离开 main，E 与 Q1 可达。两次中替身的 close 都只尝试一次。 |
+     | 分类读取位置（plan QF.c3） | 新建普通 root，以真实 `_ordinary_terminal` 与 `_ordinary_cancel_factory` 自建票据与 raw/installed。一个 fixture InterruptedError 子类实例 E 的 `_scope_signal_cancel` 是 property，其 getter 为以 C 层 `functools.partial` 绑定该 installed 的对象；E 由 fixture 已登记接收处记入该 root，再以一次无 fallback 的窗口查询读取 E，首次读取因此不经旧代码 Python 帧直接进入回调。 | installed 恰好被调用一次，任何额外读取或调用都使本行失败；installed 原样抛出的 S 按身份离开该查询；S 在接收帧的节点位于读取指令上，判为读取已开始且未返回；不写交付未证，也不登记资格失败。“分类值返回后”窗口须见读取指令之后的位置；本行不能也不得伪造该位置。 |
 
      **原 C2 caller 的严格账与 END 拒绝终态。** 固定设计源为
      ac36c43801746089e17702f9b137fd6ee938dddd，执行base5303a67747af0e80c0fb964e979b81d1c11286ed。
