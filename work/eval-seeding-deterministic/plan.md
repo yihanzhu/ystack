@@ -1,5 +1,5 @@
 ---
-spec-blob: b4b28e79f2179028df84cae3354220757f40cdb7
+spec-blob: f717165b8ea636146679ddf1464fa91bb2345808
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-26
@@ -13,26 +13,30 @@ existing review relay and measured scope binding remain intact. PR 1b remains
 one complete two-source delivery. Source preparation does not accept a dependency,
 a real recording, native qualification or either seed batch.
 
-This candidate specifies the ordinary terminal handoff under the accepted
-G2. Independent plan review must judge the normal error paths and the
-runtime premises below. The preserved source remains stopped.
+This candidate adds the single first-control qualification failure to the
+ordinary terminal handoff planned under the earlier G2. Independent plan
+review must judge that new part, the normal error paths and the runtime
+premises below. The preserved source remains stopped.
 
-This high-risk plan follows protected G2 PR #813. Its reviewed head was
-8d49ffbb1530455b417c9ed7eee215dee310b717. The independent ACCEPT is comment
-6554421242. Quick CI 41280403084 succeeded. The protected squash is
-ade5c83978988a0751b889d7115919cb174cc3d3, sole parent
-90aaf33eb3f23b843aa927a311d916e1b553eee9, tree
-a87d8c50b73f4cf6e7119e56c758e7345da2b0d6. Its accepted spec is
-b4b28e79f2179028df84cae3354220757f40cdb7. This plan replaces
-94c9eeca1f8285e53d1227bfaedc6a793c770d70 only after its own independent
+This amendment follows G2 PR #816. Its reviewed head is
+1429643dcebe7c61a8785ea9589c2dba1d2b1656 and its accepted spec blob is
+f717165b8ea636146679ddf1464fa91bb2345808. The operator decision behind it is
+#439 comment 6660241649. The manager records #816's protected landing and
+quick CI before this plan's own review. The earlier G2 was protected PR #813
+(squash ade5c83978988a0751b889d7115919cb174cc3d3, spec
+b4b28e79f2179028df84cae3354220757f40cdb7). This plan replaces
+cefa61e554f7cbc6a527fb236e64688c23a65f1b only after its own independent
 plan-only review, exact quick CI and protected landing.
 
-The original author is stopped on codex/impl/eval-source-relay-replay at
-2f19ad3ec34219ad6bdc724bcf4cac5b9fb2ef37, committed tree
-5821d412208e5b7c863b4d00e06d591258bb4c5b, source base
-90aaf33eb3f23b843aa927a311d916e1b553eee9. The remote source is
-2b4d98625ea49a0fa3d4da8f5ccc8439e075cc27. Its PR is absent. #439 is
-claimed-only. CODE6553382034 is consumed. Preserve r5's seven dirty files
+The original author is stopped on codex/impl/eval-source-relay-replay. Its
+local head is 6a4dca9053059f192773e5fb654570ec01114090, committed tree
+cd0f3c7f4517148559097586e44af0521b9ad4e0, an ordinary merge of main
+524056f275f2988d6935b4783e11f914c3382e7b over the earlier stop
+2f19ad3ec34219ad6bdc724bcf4cac5b9fb2ef37. The remote source is still
+2b4d98625ea49a0fa3d4da8f5ccc8439e075cc27. Its PR is absent. #439 keeps
+its claim. Seven uncommitted paths hold the current candidate; the manager
+keeps frozen copies. Restoring that worktree waits for an explicit operator
+disposition. CODE6553382034 is consumed. Preserve the seven dirty files
 and 594 other entries. Its five direct metadata contacts and local C1
 close correction still need fresh SOURCE review. Three further findings
 on publication, first-control forwarding and capacity are open. Prior raw
@@ -898,7 +902,9 @@ initialization. Manual ordinary test objects call the same initializer after ori
 first captures hold; do not create a fallback layout or trust fabricated flags.
 On ordinary initialization or a failed handoff, close each actually owned resource once.
 Keep the first actual control-flow exception in occurrence order across the operation and
-cleanup (KeyboardInterrupt, SystemExit or a marked cancellation). Otherwise propagate the
+cleanup (KeyboardInterrupt, SystemExit or a marked cancellation). Its actual delivery has
+one exception only: the single first-control qualification failure below, when all four
+conditions hold. Otherwise propagate the
 first ordinary business failure, subject to the real recheck conversion below. Retain
 distinct secondary objects in the caller-owned ordinary record, an existing accessible
 error row or a preserved exception link, including earlier ordinary errors when cleanup cancels. Do not
@@ -1162,7 +1168,8 @@ cannot precede an already raised candidate from that prefix. A later error
 during retrieval gets its own real single-call receipt with the untouched
 old head. An optional secondary read may report incomplete access. An
 interrupted mandatory first-control lookup is a failed normal handoff until
-the actual first control reaches the caller. Continue draining original owners. Explicitly
+the actual first control reaches the caller; only a registered single
+qualification failure below is excepted. Continue draining original owners. Explicitly
 separate retaining a rooted object from successfully reading it.
 
 **Ordinary terminal delivery.** Keep the raw callback separate from the
@@ -1399,8 +1406,294 @@ supported runtimes. Trace each old head, raw/outward failure and actual VM
 error. An unverified possibility establishes neither failure nor safety.
 An actual lost frame requires a lawful outlet and a return to the affected
 gate. Unresolved normal first-control or owner-drain failures stop their
-own source path immediately. Shrinking supported runtime admission or
+own source path immediately. A registered single qualification failure
+below is the only first-control exception; it never exempts owner drain.
+Shrinking supported runtime admission or
 weakening cancellation/identity needs the operator.
+
+**Single first-control qualification failure.** This part plans the G2
+clauses "普通软标记的类别交接" and "单次首控资格失败" and their terms table,
+accepted in G2 PR #816. Their source is the operator's direct decision in
+#439 comment 6660241649: decision package SHA-256
+a447426c85db3ead97b4353ec2871d5cc1ab03adbb54f2154c3e6e205d8f2272 and
+independent decision review SHA-256
+ce4a7beb9fdbe82834f470c76378b04eb723b609082e4dbc4cb57e277633eace. The rules
+above keep their subjects; only the three sentences that name this part refer
+here. Labels C<n> and R<n> name lines of `shadow/v1/_consumer.py` and
+`scope/v1/read-shadow-evidence.py` in the frozen candidate: local head
+6a4dca9053059f192773e5fb654570ec01114090 plus its seven edited files. They
+are labels, not final positions. That code is not on main.
+
+| Term | Meaning in this plan |
+| --- | --- |
+| Ticket | The one identity object for one real terminal operation. `_ordinary_terminal` (C976–998) makes it and stores it in `_OrdinaryDisposition.terminal_ticket`. Main holds the same reference before its first FD (R3517). The raw caller, the receiving exit and the terminal selector share it. |
+| Real cover | A catch that is still live at an actual delivery point and will receive that real outward. An old local or a handler that already exited is not one. |
+| Old non-cooperating source | An original owner, callable or container that hands the receiver only the original exception object. It gives no class argument, fixed return value or producer receipt. Examples are the no-argument `item.close()` in `_ordinary_close_owned` (C1082) and `owned.append(item)` in `_ordinary_owned_append` (C1045). The receiver learns the class only by evaluating the original `_scope_signal_cancel` value, and that evaluation can run Python code. |
+| L/U occurrence | An occurrence is one appearance of an exception at a real traceback node. `history(prefix=U, after=L)` and `first_control(prefix=U, after=L)` count only occurrences reachable from U and not from L. L is the head the caller passes as `after`; callers take it with `head()` before their window. U is the `prefix` object passed in or, when prefix is None, `head()` at the moment the query runs. No U is stored anywhere else. Each query uses only its own designated occurrences and never resets or clears the root's shared history. |
+| C945 | The explicit `visited = set()` in `_OrdinaryDisposition.terminal_eligible`. It runs after the terminal witness is authenticated and before the inherited chain is checked, even when inherited is idle. One real MemoryError there sends that error to the caller instead of the already known first control Q. That is a delivery gap with a known winner, not a qualification failure. It is derived from the frozen source and was not run. |
+
+`history()` also lists a repeated error object once, at its first occurrence.
+That only decides which distinct objects need a class. `_occurrences` still
+visits every real activation and node, so no real activation is dropped
+because two occurrences share one exception object.
+
+**The one private boundary.** Only a new private method,
+`_OrdinaryDisposition._qualification_failure` in `shadow/v1/_consumer.py`,
+may register the failure. Its only caller is the classification step of
+`_OrdinaryDisposition.first_control` (C849–862), and only on a call from a
+final receiver that passed its business fallback (below). It writes only the
+ticket's `registered` slot, at most once. It reads no marker and builds no
+record. No Reader site, fixture, gate, writer, C2/C3 path or default branch
+calls it. Do not expose, reuse or copy it; a second need returns to the
+artifact gate.
+
+| Exception field | Value |
+| --- | --- |
+| Constraint | An old non-cooperating source gives no equivalent trusted fact before its first original classification fails. |
+| Provenance | G2 PR #816 clause "单次首控资格失败"; #439 comment 6660241649. |
+| Kind | Permanent while the constraint holds. |
+| Re-evaluate when | The source contract, the original marker semantics or the old call ABI changes. It never applies to an execution that already has an equivalent trusted fact. |
+| Regression | The QF rows below, in the original CI. |
+
+**Class facts and one read per object.** These are normal-path changes, not
+the exception. The classification step in first_control takes an object's
+class from the first of these that applies:
+
+1. the original KeyboardInterrupt/SystemExit type check;
+2. a producer class fact, read from the producer's authenticated activation
+   at its real raise (producer table below);
+3. a result already delivered in this ticket;
+4. otherwise the original getter and truth evaluation (`_control` at C649 and
+   the truth test at C855). This is the object's first permitted read. It runs
+   at most once per object per ticket.
+
+Only crossed occurrences enter this pass. A built object that never reached
+its raise stays object-only, as `_occurrences` already separates it. A
+fixture identity, an error type other than the two hard types, errno, text,
+IDs, a successful construction or an earlier latest write is never a class
+fact. On a root with a ticket, a class fact binds that ticket.
+
+`_ordinary_terminal` makes the ticket as one consumer-private object with
+fixed slots, in place of the bare `object()` at C977. Main still gets it
+before its first FD. Each slot holds one object identity. No write allocates
+and no slot is cleared.
+
+| Slot | Holds | Only writer and window | Why |
+| --- | --- | --- | --- |
+| `first` | The first object, in pass order, with a proven control class | The pass, once, after the class is proven for a crossed occurrence | Later receivers deliver it without another read or traversal. It is the winner only while `undecided` is empty. |
+| `checked` | A head. Every distinct object reachable from it has a delivered class in this ticket; all are non-control except the one in `undecided`. It bounds only the pass, never a query's L/U window. | The pass, forward only, after each delivered result | No object with a delivered result is read again, so a returned bit is never lost. |
+| `reading` | The object whose first permitted read has begun and has not delivered | The pass, just before the original getter call | A nested receiver never starts a second read of it. |
+| `undecided` | The one object whose first permitted read failed | Once: the failing first_control activation after it recorded the real failure, or a later receiver that authenticates that failure as in the conditions table | The failed read is never retried and is never taken as False. |
+| `registered` | The same object, once all four conditions are proven | Only `_qualification_failure`, once | This record blocks dependent acceptance. |
+
+The pass runs in first_control only when the root has a ticket. It walks
+distinct objects in history order from `checked` to the query's U and stops
+at `first`. Each window still answers its own L/U question from these facts.
+After a first read fails, the same activation continues the pass up to the
+current head, which now includes the real failure F, before any condition is
+judged. A windowed read of an object after `first` is an ordinary fresh read
+as before. It is not a pass read and its failure never writes `undecided`. A
+root with no ticket, such as the existing fixture caller roots, keeps
+per-call reads. It cannot commit, record an undecided object or register.
+
+first_control now reports one of three results to its existing ordinary
+callers: a decided object, proven absence of a control, or undecided. A
+decided object is a proven winner, or the one object that the original rule
+gives whether an undecided object is a control or not. Undecided means the
+window holds the `reading` or `undecided` object before any proven control
+and the original rule does not decide one object. A fixed non-exception
+sentinel prepared with the ticket marks it; it is never raised or recorded.
+On undecided the caller keeps the object it already propagates: main and
+installed bare-raise their received object, and Receipt returns False. The
+three final receivers pass their existing business fallback through one
+private keyword: installed at R3504 passes `received`, main at R3608 passes
+`root.failure` or else `terminal_received` as at R3609, and
+Receipt.__exit__ at C989 passes `incoming`. Reader sites pass none. For them
+first_control returns None on undecided, which already makes them raise
+their existing outward, so their code does not change; they never decide by
+fallback, never register and record nothing as False. With a fallback,
+first_control first checks whether the original rule decides one object,
+and only then calls `_qualification_failure`. Unknown is never False: an
+undecided object stays named, a later `first` is not a winner, a final
+receiver whose window holds it gets undecided, and the actual outward is
+never written to `first`.
+
+**Proving the four conditions.** Each comes from the same ticket and the
+same real execution. Each must be proven; an unknown never satisfies one.
+
+| Condition | Run-time evidence |
+| --- | --- |
+| Original source | E is a crossed occurrence in this root's history. Its first crossing is at an authenticated ordinary receiving activation around an original owner, callable or container call, so E came from an old non-cooperating source. E is not KeyboardInterrupt or SystemExit by the original type check. No producer class fact names E. |
+| First read failed | `reading` named E when its original getter or truth call began, and E has no delivered result. The real failure F crossed that first_control activation at its classification statement, and that activation's new fixed local names E. Then `undecided` was written. A value that already reached the activation's fixed local is a delivered result, never a failure. |
+| No other fact | No hard type, producer class fact, delivered result for E, or committed `first` before E. Nothing else counts. |
+| Result diverges | Every object before E has a delivered non-control result. With E true the original rule delivers E. With E false it delivers a different proven object: `first` (Q1), when the pass reached Q1 and every object between E and Q1 has a delivered non-control result; or, when the pass covered the final receiver's whole prefix with no control, that receiver's business fallback if it is not E. Both come from facts already held; the boundary reads nothing. |
+
+When all four hold, the boundary writes `registered`. The final receiver then
+reports undecided and the actual outward propagates unchanged. Keep E, the
+real failure F, the actual outward, Q1 or the fallback, every original cause,
+context and suppress value, the root's history and the fixed locals. Every
+acquired owner still closes once in reverse order. `first` may name Q1, but
+it is not a winner while `undecided` is set.
+
+| Actual order | Required delivery |
+| --- | --- |
+| Q0 proven earliest with nothing undecided before it; E's first read fails later | The pass committed Q0 and never reads E. A later windowed read of E that fails is an ordinary failure. Final receivers deliver Q0 and keep E and its failure reachable. No registration. |
+| E thrown first and its first read fails; Q1 proven later | Q1's proof shows only Q1's class. Register only if E true gives E, E false gives Q1 and conditions 1–3 hold. |
+| E undecided, no later control, and the final fallback is E | Both values give E. Deliver E. No registration. |
+| Known winner Q and one explicit failure in a final receiver (C945) | Deliver Q. Repaired below; never registered. |
+
+**When neither rule applies.** No registration is possible when the original
+rule does not decide one object and the four conditions are not proven. The
+cases are: a second first-read failure in the same ticket while E is
+undecided (the pass stops at it); an E-false result that depends on an object
+with no delivered class; a missing real cover; a damaged record; or a commit
+window with neither a committed fact nor a live cover at an actual dispatch
+point. The actual outward still propagates, every object and owner duty is
+kept, and that delivery never counts. This plan does not claim these cases
+cannot arise. Two old non-cooperating sources whose first reads both fail in
+one ticket produce the first one. The source review lists each reachable case
+as a normal handoff gap. The source path stops there and returns to the
+operator; no second exception is authorized.
+
+**How the record blocks acceptance.** A registered ticket means this
+execution's first-control delivery is unproven. Every proof that depends on
+it fails or stays blocked: the fixture delivery check below and complete
+SOURCE, G3 and native acceptance. Only an in-process caller that holds the
+root can read the ticket. The Reader process reports only its original exit
+code, so no out-of-process G3 or native run may use its exit as first-control
+delivery proof. Add no output field, status, log or serialized record.
+
+**C945 repair.** It stays required.
+
+1. `terminal_eligible` makes no explicit allocation between the
+   authenticated terminal witness and its return for an idle inherited chain.
+   Create the cycle guard only when a chain exists.
+2. When `first` is committed and nothing is undecided, the final receivers
+   deliver it from the ticket. They run no new traversal or read to select it.
+3. Other explicit steps on that path still allocate: `nodes` and
+   `_occurrences` (C902–903), `co_lines()` (C908, C938), the non-idle chain
+   walk and a selection pass before `first` is committed. For each, the
+   source author lists the exit after one real explicit failure there with a
+   known winner. An exit that can deliver anything else is a normal handoff
+   gap; the source path stops there. It is never registered.
+4. Its runtime regression is QF.d, which needs its own gate (below).
+
+**Producer migration.** Adapt in this order. Every row keeps its original
+construction, marker write and raise. Lines are frozen-candidate lines.
+
+| ID | Producer and site | Owner | Change |
+| --- | --- | --- | --- |
+| P01 | `_ordinary_cancel_factory.raw` (R3454–3474): make R3459, mark R3460, raise R3474 | Ordinary: main's cancel callback | None at the producer. Its fact is the existing raw activation at the success raise, with `built` the crossed object and `received` empty, as `callback_receipts` already authenticates. A failed construction or mark F gets no P01 fact; F keeps its own source. |
+| F01 | Fixture `raw16_scope_acquisitions`: `late_cancel` marked at 3354, raised by `layout_close` at 3451 (post-hold drift) | Ordinary opt-in: the fixture caller root, standing in for main's disposition as the existing manual ordinary callers do | Register `layout_close` as a producer site whose fixed local names the object it really raises after the marker write. The `os.close` seam keeps its call shape. |
+| F02 | Same fixture: `cancel` marked at 3357, raised by `Registration.append` at 3425 (partial-hold cancel) | Ordinary opt-in | The same at `Registration.append`. `owned.append(item)` keeps its call shape. |
+| P02 | `evals-driver.sh` `interrupt`, lines 776–780, mark at 779 | Default: driver process with its own `cancelled` (line 105) | None. Its objects never reach an ordinary root. |
+| P03 | `evals-launcher.sh` `interrupted`, lines 332–336, mark at 335 | Default: launcher process with its own `c2_cancelled` (line 41) | None. Its objects never reach an ordinary root. |
+| F03–F04 | Fixture `raw16_C2_six_fixes` (7485, 7488) | Default | None. |
+| F05 | Fixture `raw16_C3_driver_input_owners` (8907) | Default | None. |
+| F06 | Fixture `raw16_C3_accounted_io` (9295) | Default | None. |
+| F07–F08 | Fixture `raw16_C3_runtime_digest_and_held_close` (9423, 9482) | Default | None. |
+| F09–F10 | Fixture `raw16_C1_p_cancel_drain` (10060, 10061) | Default | None. |
+| F11–F12 | Fixture `_raw16_C1_generator_reporting_control` (10342, 10343) | Default | None. |
+| F13 | Fixture `_raw16_C1_foreground_finally_seam` (10425) | Default | None. |
+| F14–F15 | Fixture `raw16_C1_wire_recording_isolation` (10490, 10491) | Default | None. |
+
+These eighteen are the known marker writes in the seven paths. They do not
+prove that an old source hands over only these objects. Default branches get
+no new keyword. Old no-argument close(), append(item), rule and the default
+gate/writer/C2/C3 keep their call shapes. No old owner is rejected up front,
+moved to another mode or exempted because it lacks a receipt. No owner
+outside the seven paths needs a change. If source work finds one, list its
+path and return to the gate; plan no code there.
+
+**Proof obligations.** The source review must see each item.
+
+| Item | What the source review must see |
+| --- | --- |
+| Ticket slots | Exactly the five slots above, preset in `_ordinary_terminal` before main's first FD. Each is written only in its named window. None is cleared. No write allocates. |
+| Route cell | Still one: the existing `current_raw` root slot, read and written only by `installed` inside `_ordinary_cancel_factory`. This exception adds no route store. |
+| Parent reference | Still one `inherited` per actual installed activation, with its existing key K. |
+| New fixed locals | Two per first_control activation: the object whose read it began and the value delivered to it. They join first_control's existing registered site so a later receiver can authenticate them. |
+| Reference counts | Per ticket five slots and one sentinel; per first_control activation two locals; installed unchanged. Give the final maximum simultaneous counts for each path. Shared references may alias; do not subtract them without evidence. |
+| Producer migration | The eighteen rows above, each with its frozen and final site. P01, F01 and F02 facts come only from authenticated activations. The other fifteen rows stay byte-unchanged apart from existing pin rebinding. |
+| L/U | Every existing window gives its old answer. No query resets or clears shared history. No stored U. |
+| Commit windows | Each window below, with its actual dispatch points. |
+| Per-exit duties | On every exit, registered ones included: every owner closed once in reverse, no retry of a failed step or read, original objects reachable and no recursive new pending work. The actual first control is the final throw on every exit except a registered one. |
+
+| Window in one pass read | If a real interruption arrives | Required outcome |
+| --- | --- | --- |
+| Before `reading` names the object | No read began | A later pass does the first read. |
+| From the `reading` write until the value is in the activation's fixed local | The read has not delivered | A nested receiver reports undecided and keeps its object, so a callback takes the original raw route. If the old code catches that interruption and still returns a value, that value is delivered. When the failure unwinds the activation, the activation records it and then writes `undecided`. |
+| From catching the failure until it is recorded in latest | No authenticated evidence yet | Show no actual dispatch point there, or a live cover. Otherwise it is a normal gap. |
+| From recording the failure until `undecided` is written | The failure is authenticable | A later receiver authenticates it and writes `undecided` once. |
+| From the delivered value until `checked` or `first` is written | Delivered | The activation's except path, or a later receiver that authenticates the fixed local, commits it. Never a qualification failure. |
+| From `undecided` until the boundary has run | Read failed; conditions not yet decided | Any later final receiver evaluates and may register. |
+| After `first` or `registered` | Committed | Later receivers read the ticket. |
+
+**Three runtime boundaries.** Prove each separately.
+
+| Boundary | Runtime proof | Static proof |
+| --- | --- | --- |
+| First real throw to class and first-control commit | QF.p, QF.a1–a3 and QF.c. The existing memory control's unraised outer object never commits. | Every commit uses a crossed occurrence and a proven class. |
+| Actual raw crossing to route retirement | Only the existing three callback calls; no new callback. | The generation rules in "Reserve the actual raw call". |
+| Last bare raise or closed relay to the real caller | The existing final relay of the known Q in the memory control, and QF.e's outward by identity. | Each final exit (bare raise at R3506 and R3610; relay at C992, R3507 and R3611) reaches R3666 with its original cause, context and suppress. |
+
+The two VM debts, the closed-generator transfer premise and the FIFO,
+native, vendor and G3 debts stay separate and open.
+
+**Regression QF.** Extend only `raw16_scope_acquisitions` in
+`scripts/test/candidate-content-preparation-fixtures.py`, in the same
+E_STALE handler, after the existing three-call memory control. QF.p uses that
+control's root after its last assertion. Every other row uses its own fresh
+caller root with `ordinary` set and a ticket from the real
+`c._ordinary_terminal`. A fixture-local old-owner function, registered the
+same way as `layout_acquire`, throws each object into that root. Marker truth
+objects are fixture classes reached only through the original
+`_scope_signal_cancel` attribute; each counts its calls. Each row calls the
+real first_control directly as a final receiver with fallback E, except the
+QF.b window, which passes none. The fixture's delivery check passes only
+when `registered` is empty and the delivered object is the expected object
+by identity.
+
+| ID | Setup | Required result |
+| --- | --- | --- |
+| QF.p | One final selection on the memory control's root | Its actual inner object is returned from the P01 fact with no marker read and committed. Earlier assertions are unchanged. |
+| QF.a1 | Condition 1 missing: E is a KeyboardInterrupt whose marker truth object raises if evaluated | No read. E delivered. Nothing registered. |
+| QF.a2 | Condition 2 missing: E's truth object returns True once | One read. `first` is E. E delivered. Nothing registered. |
+| QF.a3 | Condition 3 missing: E has a fixture producer class fact; its truth object raises if evaluated | No read. E delivered by its fact. Nothing registered. |
+| QF.a4 | Condition 4 missing: E's truth object raises an ordinary G with no marker; the fallback is E; no later control | One read each of E and G. E delivered as the decided object. G reachable. Nothing registered. |
+| QF.b | KeyboardInterrupt Q0, then E; a final selection commits Q0; a window after Q0 then reads E, whose truth object raises G | The window fails with G. A final selection delivers Q0 with no new read. E and G reachable. Nothing registered. |
+| QF.c | E's truth object returns True once; the test drops that result; a later ordinary error follows | A later final selection delivers E from the ticket with no second read. Nothing registered. |
+| QF.e | E first; E's truth object raises KeyboardInterrupt K | Exactly one registration, naming E. `first` is K and is not a winner. K propagates by identity. E, K, the history and every cause, context and suppress value stay intact. The delivery check fails. |
+
+Each QF.a row removes one condition, and the original rule alone decides its
+object. None depends on a second unknown. QF.c shows a returned bit is kept
+and never re-read, so it is not a qualification failure. QF.e is the positive
+case: its registration makes the dependent delivery check fail, while QF.p,
+QF.a and QF.b–c pass it.
+
+QF.d covers the C945 case. It needs one controlled real MemoryError at the
+first explicit allocation that the repaired path still runs after an
+authenticated terminal witness with a known Q. That is a fixture-only seam at
+a production site. It also needs a terminal witness that the memory control
+lacks, since that control's eligibility is False. It is a new test
+opportunity, and this plan does not add it. Like the accepted fixture-only
+marker write contact, it must first be named and accepted through the
+original gate, a G2 scope decision, before any fixture code. Until then QF.d
+is NOTRUN, its static per-exit proof is mandatory and complete SOURCE
+acceptance waits for it.
+
+QF patches no production name. It adds no OS signal, child, FD, file read,
+native window, dispatch, suite, CI shard or callback call. The original four
+layout controls, six fault deliveries, three real callback calls, 101/100/1,
+132/2/199 counts, 79 suites in six shards and all safety gates stay
+unchanged. Count every fixture object, direct call, read and reference as
+actual cost.
+
+**Costs.** Class facts, ticket slots, fixed locals, retained activations,
+handoff, reads, failures and transport belong to their original owners.
+Unmeasured totals stay UNKNOWN_NOT_ZERO. No budget pool, refund or cap is
+added. Measure the source work against PR 1b's existing review range; an
+overrun pauses for a separate size amendment.
 
 Keep all original cases and actual acquisition/child/cancel/close calls. Update only
 three manual ordinary Reader setups in raw16_scope_sudo_source,
@@ -1583,9 +1876,9 @@ then complete helper K. Never use stale r2 display values as final pins.
 
 | Exact path | Behavior or mechanical contacts |
 | --- | --- |
-| shadow/v1/_consumer.py | Only the ordinary caller record, release, open-to-component compensation, three explicit recheck entries and their bounded error/report contacts listed above. Preserve _C3_OBSERVATION_KEYS (89), _C3_CLOSE_SITES (27), C2 caller/wait, _c3_first, native bodies, clock strings and all validation predicates. Keep the original metadata and _foreground statement identities. Original complete C is 0172c23667de7d4496031f9c815d65457d859ee303c477d6d1946909f85d81fc, NC 434852. |
-| scope/v1/read-shadow-evidence.py | Complete the existing layout, batch, shared transfer, ordinary main/cancel and explicitly scoped error handoff above. Preserve the 4096 gate slots, decision order, all other writer/capture protocols and original public entry. Derive R/NR from the final source. |
-| scripts/test/candidate-content-preparation-fixtures.py | Existing raw16_scope_acquisitions four layout controls, the single three-call memory control and the earlier three named manual setups only. At r2 line9870 the existing whole-consumer source guard binds C; its selector still authenticates the exact same whole _foreground method. At6889/6890 bind actual helper byte length and K in the original triple equality. Preserve complete T 30902 B / 8be5fab1e33d3524b420a21c45cb0a6c0905af1c65438da26dc7911c8e6d7e3f and END 7829 B / 562db2edcaafdbf94043fc7aeb45963b8e33fa61ba7f82fa0f91bf49144a570d. |
+| shadow/v1/_consumer.py | Only the ordinary caller record, release, open-to-component compensation, three explicit recheck entries and their bounded error/report contacts listed above, plus the ticket slots, the one-read pass, Receipt's fallback, `_qualification_failure` and the C945 repair in the single qualification failure part. Preserve _C3_OBSERVATION_KEYS (89), _C3_CLOSE_SITES (27), C2 caller/wait, _c3_first, native bodies, clock strings and all validation predicates. Keep the original metadata and _foreground statement identities. Original complete C is 0172c23667de7d4496031f9c815d65457d859ee303c477d6d1946909f85d81fc, NC 434852. |
+| scope/v1/read-shadow-evidence.py | Complete the existing layout, batch, shared transfer, ordinary main/cancel and explicitly scoped error handoff above, including the fallback keyword and undecided result at installed and main; other Reader first_control sites keep their code. Preserve the 4096 gate slots, decision order, all other writer/capture protocols and original public entry. Derive R/NR from the final source. |
+| scripts/test/candidate-content-preparation-fixtures.py | Existing raw16_scope_acquisitions four layout controls, the single three-call memory control, the F01/F02 producer sites, QF rows other than the gated QF.d, and the earlier three named manual setups only. At r2 line9870 the existing whole-consumer source guard binds C; its selector still authenticates the exact same whole _foreground method. At6889/6890 bind actual helper byte length and K in the original triple equality. Preserve complete T 30902 B / 8be5fab1e33d3524b420a21c45cb0a6c0905af1c65438da26dc7911c8e6d7e3f and END 7829 B / 562db2edcaafdbf94043fc7aeb45963b8e33fa61ba7f82fa0f91bf49144a570d. |
 | scripts/test/scope-qualification.test.sh | Bind C at1192,3547,5239,5253,5255,8529; R at1124,1192,2371. Retain the earlier PY_COVERAGE_PURE setup and three-way source/private-copy inverse. ActualReader at2374 uses its original exact nine Reader methods, existing helper domain and authentic source; the FixedSudo failure retains its registered owner and original error. Do not introduce a dependency on a missing extracted Reader helper or a new selector. Preserve original reader/copy/source maps, source hashes and full inverses at their actual locations. Only the following existing consumer coordinates are eligible for mechanical remapping. |
 | evals/v1/evals.jq | SOURCE84 Reader at182 and consumer at189 change only R and C. Hash the whole final program as P. |
 | evals/v1/evals-driver.sh | Original10 PROGRAM_SHA,19 FIXED_PINS program.jq,877 program_sha256 bind P, exactly three. Hash the whole result as D. No change to any driver call. |
@@ -5666,6 +5959,8 @@ all old RAW/DER/ROUTE/LIM/CLO/I5/SURF/ARC and export/completion tests:
 | RT.T | Paired ordinary prepare→native cleanup→inspect and writer two-root positives through actual owners; preserved zero/partial/committed/uncertain T and unchanged native rmtree/unlink/error timing. Fixed-name collision, broad-prefix nonmember, extra/wrong/nonempty/missing marker, full C/runtime mutation with actual inputs fixed, op swap, source/parent/name/ACL drift, every new write/readback/sync/close/ledger failure, and both uncertain mkdir namespaces reject recording. At/over 128 total root entries includes T; all other caps and carry-in still apply. Separately delete production tee, predeclared cleanup exclusion, marker construction, consumer validation or recording-failure propagation in the existing private source-copy mutation route: each paired assertion must fail. Original SOURCE bytes/identity and full Q/overlap checks remain. No fixture closes the external caller/genuine gate. |
 | RT.C | Fixed assembly, run and two disjoint dashboard pairs each use their complete scheduled flow; extra/repeated case follows M4/manifest refusal. No missing owner, empty dispatch or permanent rejection counts as delivery. Real parent hookup/full RAW16 remains blocked until its source gate. |
 | C1.FD6 | Execute the fixed C1 bounded proof above through actual parent spawn/FD6/main Reader and both original close boundaries. Verify full P/S bytes, root/peer/phase linkage, ordinary-error native continuation, actual settlement, partial/EOF/cancel, complete fees and all unchanged caps. Include the same-acquisition runtime_invoice positive/refusals and paired producer/consumer checks specified above. Paired source/wire/read/full-check/settlement mutations must fail. No fixture or source pass claims native/whole-SOURCE qualification. |
+| QF.p, QF.a1–a4, QF.b, QF.c, QF.e | The single qualification failure regression in the existing raw16_scope_acquisitions memory block, as specified in that part. No new entry point, callback, signal or production seam. |
+| QF.d | The C945 runtime case. NOTRUN until its fixture-only seam passes the original gate; its static per-exit proof is required now. |
 | C2.manifest | Actual assembly→closed S→manifest: preserve original names and every role; cross-case/occurrence/output swap, missing/extra/unused file, kind-as-role, raw/manifest confusion, complete.json omission and encoded cap/one-over refuse. A normal bounded fixture traverses the real CLI, not a receipt dictionary. |
 | C2.authority | One four-case ledger through both run inputs and the two dashboard pairs; old O, two small failed partials, zero files and distinct I remain charged. Disk rollback/new START, changed live head after READY, missing/duplicate/reordered messages, missing GO, single FD, wrong root/name/ACL and no-FD malicious bypass refuse before I. |
 | C2.lifetime | Check original driver and every independent program/pair/canonical/pin validation while S/I holds live; each initial/final hash, whole equality and identity deletion has a paired failure. Equal mutation of both copies still refuses. Wrong helper FD inheritance, extra wrapper PID, file_action failure, exec error, signal, retained cleanup or once-close failure cannot succeed. |
@@ -5808,6 +6103,9 @@ maintenance-loop and portable-core-schema. Compile/run the existing guest harnes
 through its normal sandbox-guest test; no separate native product invocation.
 No selector, test truncation or watchdog bypass is introduced. The only bootstrap
 edit is R9.3's five-byte C2 exec; include it in shell syntax/lint and compatibility proof.
+The QF rows run inside the existing candidate-content-preparation suite in the
+original CI. QF.d stays NOTRUN until its own gate passes, and complete SOURCE
+acceptance waits for it.
 
 Run only ordinary supported fixture tests in the current local environment.
 The full scope/root/native/#558 LOCAL7 or D windows and local run-all remain
@@ -6034,13 +6332,12 @@ gates (R9.6).
   operator-graded seed and its test. 150-450 of them are verbatim verdict bytes, which
   cannot leave the PR whose test checks their digests.
 - PR 3: `review_size: standard`, about 300-400 net added lines.
-- This plan-only amendment: `review_size: standard`. One bounded ordinary regression
-  compatibility concern: retained END owner/cleanup, one AST type prerequisite and
-  same-call writer error propagation. PR #797 accepted the three contacts. G2 PR #799
-  accepted the END restore and single-checkpoint amendment. G2 PR #801 has accepted
-  the current caller-protocol and binding scope. This separate plan still needs
-  fresh review, required CI and protected landing. No CODE/runtime
-  GO follows. All original proof and invoices remain.
+- This plan-only amendment: `review_size: standard`, 330–400 changed plan lines (the drafted commit
+  measures 329 added and 32 deleted). One
+  concern: plan the single first-control qualification failure accepted in G2
+  PR #816, its class handoff and the C945 repair. This plan still needs fresh
+  review, required CI and protected landing. No CODE/runtime GO follows. All
+  original proof and invoices remain.
 
 Each range waives only the soft line signal, never scope, tests, CI, review or human
 merge.
