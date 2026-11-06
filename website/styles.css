@@ -858,12 +858,14 @@ section.closing.wrap {
   font-size: 0.9rem;
 }
 .site-footer .motto { font-family: var(--serif); font-style: italic; }
-.site-footer .credit {
+.site-footer .credit,
+.hero .cta .note a {
   color: var(--muted);
   border-bottom: 1px solid var(--border-strong);
   transition: color 0.2s ease, border-color 0.2s ease;
 }
-.site-footer .credit:hover {
+.site-footer .credit:hover,
+.hero .cta .note a:hover {
   color: var(--ember-soft);
   border-color: var(--ember-soft);
 }
