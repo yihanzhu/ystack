@@ -45,8 +45,8 @@ cd website && python3 -m http.server 8000   # then open http://localhost:8000
   set to `summary_large_image`. To regenerate, rasterize a self-contained card at 1200×630
   (e.g. headless Chrome `--screenshot`) and overwrite `og.png` — keep the served asset a
   static raster.
-- **Repo link / docs:** the GitHub repo is currently private, so the page intentionally
-  links nowhere external. Add links once there's a public destination.
+- **Repo link / docs:** the GitHub repo is public, and the hero note links to it. Add
+  docs links once there are public docs.
 
 ## Note
 
