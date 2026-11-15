@@ -1,5 +1,5 @@
 ---
-spec-blob: f9b2b4c7751826c20f45a32258f1218fce814a45
+spec-blob: 1ffdcdd66f589fcd97ef8105df6c70abc4ff68b7
 intent-blob: a4197f299974e62bb2b97e004b75182012abbb87
 risk: high
 drafted: 2026-10-26
@@ -17,11 +17,11 @@ Plan PR #817 added the single first-control qualification failure, the
 runtime-window delivery record and three first-control gaps that stay
 unproven by default to the ordinary terminal handoff planned under
 the earlier G2. Plan PR #827 added gap D, a fourth gap with the same
-handling. This candidate adds gap E, a fifth gap with the same handling,
-accepted in G2 PR #828 (squash a84f4052fc65ebb0ef0d30ed91673c916e24f09d).
-Independent plan review must judge gap E and the text it changes, the
-node authentication rule, condition 1's crossing test and the runtime
-premises below included. The preserved source remains stopped.
+handling, and plan PR #829 added gap E, a fifth gap with the same
+handling. This candidate adds two registration cases that stay unproven
+by default, accepted in G2 PR #830. Independent plan review must judge
+the two cases and the text they change. The preserved source remains
+stopped.
 
 This amendment follows G2 PR #816 (reviewed head
 1429643dcebe7c61a8785ea9589c2dba1d2b1656) and G2 PR #818 (reviewed head
@@ -42,7 +42,9 @@ bf0e9f5462365811c39591d91ffde45c0bc0ce6a, accepted spec blob
 aa52c1572db08e51312aa6b47e398cd4bdb709f6, accepted spec blob
 10c5b5cafd44477b65e8a51fcd17fb28c2312e8a) and G2 PR #828 (reviewed head
 e3dbc1a3157da570be7fe3c2534031d077b78c0e, accepted spec blob
-f9b2b4c7751826c20f45a32258f1218fce814a45). #818
+f9b2b4c7751826c20f45a32258f1218fce814a45) and G2 PR #830 (reviewed head
+8f76d73cce66d7e4a19fd388109a69c0aaf0effc, accepted spec blob
+1ffdcdd66f589fcd97ef8105df6c70abc4ff68b7). #818
 adds the runtime-window record and passes four test rows through the
 original gate. #819 adds the terminal window to that record, and #820
 widens it to the terminal receiver's whole handling period. #822 adds the
@@ -50,18 +52,22 @@ two first-control gaps whose delivery is unproven by default, #823
 adds a third gap with the same handling, #824 extends the first gap to
 a callback's control that a later outward replaces, #825 extends it
 to a returning take inside own code, #826 adds a fourth gap with the
-same handling, and #828 adds a fifth gap with the same handling. The
+same handling, #828 adds a fifth gap with the same handling, and #830
+makes two registration cases unproven by default. The
 operator decisions behind them are #439 comments 6660241649, 6663412232,
 6673734052, 6686291409, 6689877885, 6691835071, 6692867268, 6698631418,
-6705326701, 6706746860, 6707203331, 6822007334 and 6841236214.
-The manager records the ten protected landings and
+6705326701, 6706746860, 6707203331, 6822007334, 6841236214 and
+6867704878.
+The manager records the eleven protected landings and
 their quick CI before this plan's own review. The earlier G2 was protected PR #813
 (squash ade5c83978988a0751b889d7115919cb174cc3d3, spec
 b4b28e79f2179028df84cae3354220757f40cdb7). Protected plan PR #817
 (squash d401db8f09c5a2620f7acac09512dc0fca0d2b16) landed plan blob
 5c92dd8361340fa8510a2dc30a2650c75a596193, and protected plan PR #827
 (squash d4c9265d48ac8bb6d6bbeaad7e337163232a97b6) replaced it with plan
-blob 656b43db75dbfc157be9ccbfc75d1ef09df751b4. This plan replaces that
+blob 656b43db75dbfc157be9ccbfc75d1ef09df751b4, and protected plan PR #829
+(squash 8c9acdd0e4da2fc9a9bcdf258a62edde4f47e1df) replaced that with plan
+blob 606d4ff3782c4bb83903a1305b3d478534fb1ab3. This plan replaces that
 blob only after its own independent plan-only review, exact quick CI and
 protected landing.
 
@@ -1521,7 +1527,9 @@ An actual lost frame requires a lawful outlet and a return to the affected
 gate. Unresolved normal first-control or owner-drain failures stop their
 own source path immediately. A registered single qualification failure,
 a runtime-window delivery record and an exit of the five first-control gaps
-below are the only first-control exceptions; none exempts owner drain.
+below are the only first-control exceptions; a registration under "Two
+registration cases unproven by default" is not a registered single
+qualification failure here; none exempts owner drain.
 Shrinking supported runtime admission or
 weakening cancellation/identity needs the operator.
 
@@ -1554,7 +1562,10 @@ inside own code to it and set which objects of that take need not stay
 reachable. The operator's direct decision in #439 comment 6822007334
 adds the fourth gap and is the third source of that last sentence, and
 the operator's direct decision in #439 comment 6841236214 adds the fifth
-gap and is the fourth source of that last sentence. The
+gap and is the fourth source of that last sentence. This part also plans
+the subsection "两处登记缺省未证" and the spec sentences that point to it,
+accepted in G2 PR #830 from the operator's direct decision in #439
+comment 6867704878. The
 rules above keep their subjects; only the sentences that name this
 part refer here. Labels C<n> and R<n> name lines of
 `shadow/v1/_consumer.py` and `scope/v1/read-shadow-evidence.py` in the
@@ -1611,9 +1622,9 @@ record.
 | --- | --- |
 | Constraint for W4, W5, W8 | The supported runtime domain is open (CPython 3.11 or later, CI unpinned), and no primary evidence shows that these windows have no dispatch point. |
 | Kind for W4, W5, W8 | Temporary. A window stops being covered for a pinned supported runtime once primary evidence shows no dispatch point there; delivery is then proven under the original standard. Re-evaluate when a runtime is pinned, interpreter semantics change or new primary evidence appears. |
-| Constraint for W9 | The catch's one new pass may have to make first reads of old objects, whose truth evaluation can run Python code and really fail, and the pass allocates. No retry and no second pass are allowed. |
+| Constraint for W9 | The catch's one new pass may have to make first reads of old objects, whose truth evaluation can run Python code and really fail, and the pass allocates. No second pass is allowed, and no retry apart from the second run ("Two registration cases unproven by default" below). |
 | Kind for W9 | Permanent while old non-cooperating sources stay supported. Re-evaluate when the source contract, the marker semantics or the old call ABI changes, or when the pass is shown to need no read and no allocation. |
-| Constraint for W10 | In the same open runtime domain, no primary evidence excludes a real callback at any instruction of a terminal receiver's handling period. That callback's installed must select; its selection allocates and can run old marker code and really fail. The terminal receiver's own selection can also run old marker code. Old marker code and the runtime can both take the callback's outward, as when an old getter catches it or a finalizer's unraisable report takes it. Old marker code can run any Python code, so primary evidence for a pinned runtime cannot show that it has no dispatch point. No retry and no further selection are allowed. |
+| Constraint for W10 | In the same open runtime domain, no primary evidence excludes a real callback at any instruction of a terminal receiver's handling period. That callback's installed must select; its selection allocates and can run old marker code and really fail. The terminal receiver's own selection can also run old marker code. Old marker code and the runtime can both take the callback's outward, as when an old getter catches it or a finalizer's unraisable report takes it. Old marker code can run any Python code, so primary evidence for a pinned runtime cannot show that it has no dispatch point. No further selection is allowed, and no retry apart from the second run. |
 | Kind for W10 | Permanent while old non-cooperating sources stay supported, like W9. Re-evaluate when a runtime is pinned, interpreter semantics change, new primary evidence appears, installed's selection or the terminal receiver's own selection no longer allocates and no longer runs old marker code, or the source contract, the marker semantics or the old call ABI changes. |
 | Provenance | G2 PR #818 clause "运行时窗口交付未证"; #439 comment 6663412232. W10: G2 PR #819, #439 comment 6673734052; widened by G2 PR #820, #439 comment 6686291409. |
 | Regression | QF.a4u (record written once) and the "no window record" checks on every other in-process QF row, in the original CI. W10 has no runtime row; it has static proof only. In production only a production hook, trace, timed signal or finalizer runs a real callback in a terminal receiver's handling period. A fixture's old getter could call the real installed directly during a terminal receiver's selection; by the decision in #439 comment 6686291409 the test rows stay unchanged, so that opportunity would need the original gate. |
@@ -1778,8 +1789,9 @@ outward propagates and every object and owner duty is kept, apart from
 the objects that a returning take exempts. One record is
 written only when an existing route reaches `_delivery_unproven`;
 otherwise the delivery is unproven by default, also when no real node
-shows where the callback ran. Nothing is retried and no further selection
-runs: a selection that also took objects recorded after its walk is
+shows where the callback ran. Nothing is retried, apart from the second
+run ("Two registration cases unproven by default" below), and no further
+selection runs: a selection that also took objects recorded after its walk is
 forbidden by the rule above ("New events do not extend the snapshot being
 inspected") and by the spec ("原标准又禁止重试失败步骤或再加一次选择").
 When the callback's control is the first control and such a take, or a
@@ -1929,10 +1941,12 @@ as in the fixture memory control. On an exception X from the first region:
    concerns only the relay. Otherwise the catch records Y in
    the root as step 2 records X, then applies the first rule that fits
    (table below):
-   - Window W9: `outcome` holds PENDING. Then Y's traceback head lies in this
+   - W9's rule: `outcome` holds PENDING. Then Y's traceback head lies in this
      catch's frame within its pass, and Y stopped that pass before its result
-     reached the catch. The result reaches the catch only when it is stored,
-     so this holds even at the selection call's own return boundary. The
+     reached the catch, unless a second failure in the catch's frame replaced
+     the failure of its own `_qualification_failure` call (second run below).
+     The result reaches the catch only when it is stored, so this holds even
+     at the selection call's own return boundary. The
      source review confirms that the PENDING store and the result store bound
      exactly these instructions, against the real node positions. The test
      reads one local and allocates nothing. The catch calls
@@ -1951,7 +1965,23 @@ as in the fixture memory control. On an exception X from the first region:
      own selection: Y's traceback then shows that selection's node at that
      call, a position the source review binds like the other spans. A
      failed frame push of that call leaves the same node. That step already
-     failed and is not retried. A failed call inside a nested installed does
+     failed and is not retried. When a second failure replaces that call's
+     failure before the catch receives it, Y's traceback need not show that
+     node; when it does not, the check runs the step again. That run is the
+     second run ("Two registration cases unproven by default" below), the
+     one exception to the no-retry rule. If the second failure arises in the
+     catch's frame, PENDING alone does not show that the exit lies in W9,
+     and the source makes no other test. That call's real failure still
+     stopped the pass before its result reached the catch, so the exit lies
+     in W9 when the source review shows by static proof a real node that
+     places that failure, or Y, inside the pass, such as the failure's node
+     at the pass's selection call. Then step 5's W9 record and the
+     W9 delivery handling apply as for any other W9 case. Where no real node
+     does, the existing rules decide, unchanged: the window rule that a
+     real node must show the interruption, W10's no-node rule when W10's
+     own conditions hold, and the existing stop cases, such as case 3 of
+     "When neither rule applies" below. A failed call inside a nested
+     installed does
      not count; a later evaluation is allowed there, as in W7. If the walk did
      not complete, the history order is not known, so the four conditions
      stay unproven.
@@ -1970,7 +2000,7 @@ as in the fixture memory control. On an exception X from the first region:
      `received`; such an X is not a control and stays reachable as the
      context of the callback's object. The region's catch applies step 5 to
      its exception, without this rule. This is still the catch's only new
-     pass, and nothing that failed is retried.
+     pass, and nothing that failed is retried apart from the second run.
    - Otherwise, if `first` is committed, deliver it (bare raise if Y is
      `first`, else relay) and write no record. No pass of this catch was
      stopped: it made a slot read, its pass stored its result, or its pass
@@ -2009,7 +2039,7 @@ as in the fixture memory control. On an exception X from the first region:
    | Y at step 5 | Record | Delivery | Rule or window |
    | --- | --- | --- | --- |
    | Y is `delivering` | None | Bare-raise Y | The receiver's own exit |
-   | `outcome` holds PENDING | `unproven`; then, with `first` empty and the walk completed, `registered` if the W9 check proves the four conditions (skipped when Y came out of the catch's own `_qualification_failure` call) | `first` if committed, else bare-raise Y | W9 |
+   | `outcome` holds PENDING | `unproven`; then, with `first` empty and the walk completed, `registered` if the W9 check proves the four conditions (skipped when Y came out of the catch's own `_qualification_failure` call; when a second failure hid that call's failure, the check's call is the second run) | `first` if committed, else bare-raise Y | W9's rule: the exit lies in W9 as that rule above says. When a second failure in the catch's frame hid the `_qualification_failure` call's failure, it lies in W9 only when a real node, by static proof, places that failure or Y inside the pass; otherwise the existing rules decide |
    | `walk` still None, and step 3 runs a pass here | As that pass decides | Step 4's exit for that pass | The catch's one new pass, run in step 5 |
    | Otherwise, `first` committed | None | `first`: bare raise if Y is `first`, else relay | The proven `first` (C945 repair); a W10 case there, such as a callback that stops this delivery, still follows W10's rule |
    | Otherwise, `first` empty (late Y) | None | Bare-raise Y | W10 at main and at a Receipt with no surrounding main when an existing first control does not leave; at a Receipt inside main, main's R3600 except clause selects |
@@ -2053,7 +2083,7 @@ inside it stops its pass before any commit, like any other pass failure: it is a
 region, a W9 Y of the catch's pass, or in installed a failure that reaches
 the live cover below. installed's committed-`first` path runs no check and
 stays allocation-free. A W9 record that a callback cut off and that no
-final pass records is covered as the W9 rows below state.
+final pass records is handled as the W9 rows below state.
 
 **A committed `first` owes no W4 or W5 record.** Once `first` is committed,
 no W4 or W5 case of the ticket is left unrecorded, for three reasons:
@@ -2095,16 +2125,21 @@ A W9 case can still follow a commit: main's catch runs its pass also with
 pass runs, and in both a later Y can still stop that pass. Step 5 records
 that case before it delivers `first`; the spec's W9 row has no condition on
 `first` ("该次选择又被新的真实失败打断"). If a callback cuts off that
-record, the next final pass's window check finds Y by its node in the pass.
+record, the next final pass's window check records the case when one of
+its objects, or the `__context__` of one, has an authenticated node in the
+stopped catch's pass; the source review shows which object and which node.
 At a Receipt inside main that is main's pass, which runs also with `first`
 committed. At main, and at a Receipt with no surrounding main, the callback
 is W10 (runtime-window record below), and without a record the delivery is
-unproven by default.
+unproven by default. Where no such object exists, the existing window and
+record-duty rules decide, unchanged.
 
 **The W9 check.** For W9, step 5 passes Y with its kept walk. The catch's selection may already have called
 `_qualification_failure` for an UNDECIDED result. This call is a new
 evaluation over more objects, as in W7, not a retry, and `registered` is
-still written at most once. Y, and the objects that Y's own traceback
+still written at most once. When that earlier call failed and a second
+failure hid its failure from the catch, this call is instead the second
+run (step 5 above). Y, and the objects that Y's own traceback
 shows, occurred after that walk: Y itself and the
 `received` object of each installed activation of this root with a node in
 Y's traceback, authenticated as `_occurrences` authenticates installed. The
@@ -2152,7 +2187,9 @@ remain" below applies.
 
 **When neither rule applies.** In these three cases the receivers cannot
 decide one object by the original rule from the ticket's entries and facts,
-and the four conditions are not proven, so nothing is registered. The
+and the four conditions are not proven, so nothing is registered, apart
+from a registration that the second run makes ("Two registration cases
+unproven by default" below). The
 actual outward still propagates, every object and owner duty is kept, and
 that delivery never counts. This plan does not claim
 these cases cannot arise. The source review lists each reachable case as a
@@ -2214,7 +2251,8 @@ kept, apart from the objects that a returning take exempts ("Gap A's
 returning take" below). One record is written only when an existing
 route reaches `_delivery_unproven`; otherwise the delivery is unproven by
 default.
-Nothing is retried, no further selection runs and no record route is added.
+Nothing is retried apart from the second run, no further selection runs
+and no record route is added.
 
 **Five first-control gaps.** This carries "五处首控缺口缺省未证" (G2 #822,
 #823, #824, #825, #826 and #828; #439 comments 6689877885, 6691835071,
@@ -2386,8 +2424,9 @@ read must stay reachable, and the stale value still reaches them. Every
 other original object, and every other duty, stays. A stale value never
 makes the four conditions hold: a pass there that registers an object
 whose four conditions fail in the actual execution stops the source
-path, although the gap covers the delivery. When the same execution
-also lies in a window, only that window's rule records it. A stale store
+path, although the gap covers the delivery, unless the second run made
+it ("Two registration cases unproven by default" below). When the same
+execution also lies in a window, only that window's rule records it. A stale store
 that this form leaves out, such as a store that rests on own code's own
 earlier store rather than on a read, or an erased object that it does
 not exempt, is the fifth kind under "Normal gaps that remain" below.
@@ -2687,13 +2726,19 @@ Gap E itself never registers a single qualification failure. It adds no
 record, record route, retry, read, registration, selection, class source,
 order source or authentication. A walk that misses Q is
 incomplete, so a pass over it can rest condition 4 on "every earlier
-object proven non-control" while Q came first. As for gap C and the
-returning take, the source review shows that no pass in a gap E exit
-registers an object whose four conditions fail in the actual execution,
-with Q, the dropped object when it is not Q, and every other object that
-the walk misses counted at their actual places in the throw order. Such a
-registration stops the source path, although the gap covers the
-delivery. A lineless first crossing leaves condition 1 unproven
+object proven non-control" while Q came first. The source review checks
+each registration in a gap E exit against the actual execution, with Q,
+the dropped object when it is not Q, and every other object that the
+walk misses counted at their actual places in the throw order. In an
+exit that is neither a gap C exit nor a returning-take exit, a
+registration whose four conditions fail only because of the objects that
+the lineless link made the walk miss is a cut registration ("Two
+registration cases unproven by default" below): it is unproven by
+default and does not stop the source path. As for gap C and the
+returning take, any other registration whose four conditions fail in
+the actual execution stops the source path, although the gap covers the
+delivery, unless the second run made it. A lineless first crossing
+leaves condition 1 unproven
 ("Proving the four conditions" above).
 
 **Handling of the five gaps.** The delivery is unproven by default, as for
@@ -2731,6 +2776,118 @@ other guarantee and rule of that clause stays.
 | Provenance | G2 PR #822 clause "两处首控缺口缺省未证", renamed "三处首控缺口缺省未证" and extended by G2 PR #823, with the displaced form of gap A added by G2 PR #824 and its returning take by G2 PR #825, renamed "四处首控缺口缺省未证" with gap D ("首读内部失败") added by G2 PR #826, and renamed "五处首控缺口缺省未证" with gap E ("无行号节点断链") added by G2 PR #828; #439 comments 6689877885, 6691835071, 6692867268, 6698631418, 6705326701, 6706746860, 6707203331, 6822007334 and 6841236214. |
 | Regression | None. The clause adds no code path, record route, test opportunity or budget. The independent plan and source review prove statically that each exit handled this way belongs to at least one of the five gaps; every other exit keeps the original standard. |
 
+**Two registration cases unproven by default.** This carries
+"两处登记缺省未证" (G2 #830; the operator's direct decision "缺省未证" in
+#439 comment 6867704878). Its two cases, a cut registration and the
+second run, are handled like the five gaps. They are not a sixth gap and
+not a window; the five gaps and their count stay. In this part, the
+qualification step is `_qualification_failure`, the step that decides
+and registers a single qualification failure.
+
+A cut registration. The exit is a gap E exit. Because of that gap's
+lineless link, the walk of a selection misses Q, the dropped object or
+another object. Here and below, the missed objects are the objects that
+the lineless link made the walk miss. That selection, or the terminal
+catch's later W9 check on that walk, registers an object E. Over what
+the walk sees, each of E's four conditions is proven. They fail in the
+actual execution only when the missed objects are counted at their
+actual places in the throw order. For example, after gap E's example
+above, Reader.close keeps closing its other owned items. At the next
+HeldPath, `os.close` raises an ordinary failure E, and a registered
+receiving slot records E at a node that has a line. Reader.close's own
+query then makes E's first marker read. One real allocation failure F
+while the interpreter builds the AttributeError leaves E UNKNOWN, and
+main records F. The Receipt's selection on its exit uses F as its
+fallback. Its walk stops at X's lineless node and does not see B, so it
+registers E. In the actual execution B, a control, was thrown before E.
+Whatever E's marker, the original rule gives B, so "Result diverges"
+fails.
+
+The second run, after a hidden failure of the qualification step. The
+new selection that a terminal catch makes for the object it caught, in
+its one new pass in step 3 or in step 5, calls the qualification step,
+and that call really fails. Before the catch receives that failure, a second
+failure replaces it. The second failure can come from code that the
+runtime runs in between, such as a trace, profile or monitoring function
+or the runtime's dispatch for running it, that fails or raises at a
+lineless handler entry or cleanup instruction in the selection's frame
+or the catch's frame, on a handler's source line, or on the exception
+event. It can also come from a real callback or another real failure. So
+the catch cannot see that the step failed. After it records the delivery
+unproven (step 5's W9 rule), its W9 check runs the qualification step
+again. This is the second run, and it can register an object. The case
+holds whether or not node positions show that the exit lies in W9. When
+the second failure arises in the catch's frame, Y's traceback head need
+not lie in the pass. Step 5 still takes its W9 rule because `outcome`
+holds PENDING, but PENDING alone then does not show that the exit lies
+in W9, and the source makes no other test. The qualification step's real
+failure still stopped the pass before its result reached the catch, as
+W9 requires. So the exit lies in W9, with step 5's W9 record and W9
+delivery handling, when the source review shows by static proof a real
+node that places that failure, or Y, inside the pass. Step 5 above gives
+an example and the existing rules that decide where no real node does.
+Either way the source review proves the second run on its own (proof row
+"Two registration cases" below). For
+example, the Receipt catch's selection calls `_qualification_failure`,
+and one real allocation failure Z occurs in that call. Z reaches the
+handler entry of the selection's frame, whose `PUSH_EXC_INFO` is
+lineless. A monitoring function fails there, and its Y replaces Z. The
+catch receives Y, calls `_delivery_unproven(Y)`, and runs
+`_qualification_failure` again with the same walk and fallback.
+
+Both cases are unproven by default. A cut registration, the second run
+and anything the second run registers do not stop the source path: the
+source review does not fail the exit because of them. They never count
+as a pass, and neither kind of registration proves that the four
+conditions hold. Each blocks dependent complete SOURCE, G3 and native
+acceptance. The second run is the only run that the no-retry rules do
+not bind: "not retried", "no retry", "No step is retried", "nothing is
+retried" and every other rule of this plan that forbids a retry of a
+failed step do not apply to it. Every other duty stays: every original
+exception, the actual outward, every original cause, context and
+suppress value, the original records and every acquired owner's reverse
+once-only close duty are kept, and the handoff creates no recursive new
+work. This part does not change how delivery is handled: each exit's
+delivery keeps its existing handling, by its window, its gap or the
+original standard. It adds no mechanism, record, record route, retry,
+read, registration, selection, class source, order source or
+authentication. The second run and its registrations already exist in
+the source; this part only stops treating them as stops of the source
+path.
+
+Not a cut registration, and each keeps the original standard, so an
+invalid registration there still stops the source path:
+
+- a registration in a gap E exit whose four conditions fail for a reason
+  other than the missed objects, for example when they fail also without
+  counting the missed objects;
+- a registration in an exit that is not a gap E exit, such as one where
+  another existing trusted fact already decides the final object.
+
+Two limits define the second run:
+
+- when the qualification step has completed, a new evaluation of more
+  objects that the catch makes after it records the delivery unproven is
+  not a second run; it is the W9 check's new evaluation ("The W9 check"
+  above);
+- every other retry stays forbidden.
+
+The registration duties of gap C and of gap A's returning take do not
+change. A registration in a gap C exit or a returning-take exit is not a
+cut registration, also when that exit is also a gap E exit; it keeps
+that gap's duty. The second run and its registrations are always handled
+by this part, whatever makes a registration's four conditions fail, also
+in a gap C exit, a returning-take exit or an exit that is not a gap E exit.
+
+| Case field | Value |
+| --- | --- |
+| Constraint for a cut registration | Gap E's constraint. The source reads a frame's locals only through an authenticated node, so no allowed check can see what lies behind a lineless link: a control, an ordinary object or no relevant object. Refusing every registration after such a link would also refuse registrations whose four conditions really hold and that the spec requires. |
+| Constraint for the second run | No primary evidence excludes a second failure after the qualification step fails and before the catch receives that failure. In some executions nothing the source may read shows that the step failed: for example, the second failure replaces the original failure on the exception event, or at the lineless handler entry of the selection's frame, as the original failure enters that frame; or the second failure is an allocation failure with no context, and no registered receiving slot or root has recorded the original failure yet. In the others, such as on a handler's source line, at a lineless cleanup instruction after those lines or in the catch's frame, the second failure's context, the selection frame's locals or the root's record of the original failure may still show that failure. The catch's existing check does not use these facts. Using them would change the evidence that check accepts: the source already reads some of these facts, and others need a new read and authentication. A separate state record is a new record. Skipping the qualification step whenever an exception passes the selection frame's handler or the catch's cleanup would also skip registrations owed when the original step did not run or completed. A signal mask or delay is forbidden. |
+| Kind | Permanent for each case while its own constraint holds. |
+| Re-evaluate when | A cut registration: whenever gap E is re-evaluated. The second run: the runtime gives a way to see that failed call, the supported runtime excludes a second failure in that interval, interpreter semantics change, new primary evidence appears, or a state record, or that check's use of the facts above, is accepted through the original gates. |
+| Provenance | G2 PR #830 subsection "两处登记缺省未证" and the spec sentences that point to it; #439 comment 6867704878. |
+| Regression | None. The part adds no code path, record route, test opportunity or budget. The independent plan and source review prove statically that each exit handled this way meets its case's conditions (proof row "Two registration cases" below). Apart from the second run's exemption from the no-retry rules and the handling of both cases' registrations, this part changes neither the conditions and exclusions of the five gaps, the five record windows and the single qualification failure, nor the four new test opportunities of "首控例外回归的新增测试机会". Every other acceptance standard stays. |
+
 **Normal gaps that remain.** Three kinds stay outside every window and
 every gap: cases 1, 2 and 3 of "When neither rule applies" above. No
 operator decision covers them.
@@ -2741,7 +2898,10 @@ sixth are delivery failures. The three cases and these four kinds apply
 only to an exit that no gap covers and that is not a window case that a
 record covers or that W8 or W10 leaves unproven by default: an exit that
 meets the predicates of at least one gap is a gap exit ("Handling of the
-five gaps" above), and that window's rule decides such a window case. The second is
+five gaps" above), and that window's rule decides such a window case.
+Where the third, fourth and sixth kinds speak of what a registration
+rests on, they leave out a registration that the second run makes; "Two
+registration cases unproven by default" above handles it. The second is
 a record duty, which no gap removes. The fifth is a stale store that gap
 A's returning take leaves out; no gap or window removes its duty.
 The first is an existing first control that does not leave because,
@@ -3039,16 +3199,17 @@ control has only a lineless link (gap E above).
 | W4 | The truth branch, or the AttributeError default, has given its value in `_read_marker`'s frame; the value is not yet stored in the entry. | `_read_marker`'s except clause stores the interrupting object with INTERRUPTED; its node lies in the store span. The window check of the next final pass finds it before that pass commits `first` and calls `_delivery_unproven`. When it arises inside a callback in a terminal receiver's handling period and no later final pass records it, W10 covers it. When pre-existing code or the runtime takes the interrupting object, or a later outward that replaced it, outside every such period, no final pass follows and `unproven` is empty, nothing records it; unless W10 covers the exit, the record duty is unmet and the source path stops, also when gap A covers the delivery (the paragraph on runtime-handled outwards above). |
 | W5 | `_read_marker` has caught the read failure; INTERRUPTED is not yet stored. | The interrupting object S escapes with the entry still READING. Its node lies in the except span. S is recorded in the root as it leaves (by first_control at C857–861, or by a guard's caller), or is the `__context__` of the `received` of an installed that interrupts that record; the source review confirms this for each `_read_marker` caller, and where it fails W5 is not shown (case 3). The caught failure is S's `__context__`, or a walk object or that object's `__context__`. The window check of the next final pass finds this before its commit and calls `_delivery_unproven`. When the catch's own pass meets W5, S is Y and step 5 records it as W9. When it arises inside a callback in a terminal receiver's handling period and no later final pass records it, W10 covers it. When pre-existing code or the runtime takes S, or a later outward that replaced it, outside every such period, no final pass follows and `unproven` is empty, nothing records it; unless W10 covers the exit, the record duty is unmet and the source path stops, also when gap A covers the delivery (the paragraph on runtime-handled outwards above). |
 | W8 | Main has entered its terminal except; its catch is not yet active. | No in-process receiver remains. The delivery stays unproven by default and never counts. |
-| W9 | A terminal catch's one new pass (its walk call and its selection call, which ends with the window check and the commit), run in step 3 or, if it had not begun there, in step 5, is stopped by a new real failure Y before its result reaches the catch. | `outcome` holds PENDING: Y's traceback head lies in the catch's frame between the PENDING store and the result store. This holds also when `first` was committed before or during the pass. The catch calls `_delivery_unproven(Y)`, then delivers `first` if it is committed, else runs the W9 check when its walk completed and bare-raises Y (step 5 above). If a callback cuts off that step, the window check of the next final pass finds Y by its node in the pass and records it before any commit: the callback's installed's pass when `first` is empty, or, at a Receipt inside main, main's pass, which runs also with `first` committed. At main, and at a Receipt with no surrounding main, that callback is W10: if no final pass records Y, the delivery is unproven by default. |
-| W10 | Terminal handling period. The terminal receiver is main, or a Receipt with no surrounding main. The period runs at main from the moment its terminal catch is active, right after W8, and at a Receipt with no surrounding main from the start of its `__exit__`; in both it ends when the delivery leaves. In it a real callback runs, a first control exists and the receiver does not deliver it, because of that callback or of a new real failure in the period after that callback. This includes: callbacks keep the receiver from beginning its own selection; old marker code (such as an old getter during a read) or the runtime (such as a finalizer's unraisable report) takes the callback's outward, so the receiver's selection never sees the first control, or the runtime takes that outward after the receiver's last selection; the callback, a later callback or a new real failure in the period after the callback stops the selection or the delivery; the receiver's selection sees the first control but cannot decide by the original rule that it is the first control. A callback that cuts off a record another window owed is also W10. When the receiver's own selection sees an object and decides by the original rule that it is the first control, the original delivery duty stays, unless a real callback in the period, or a new real failure in the period after that callback, stops that delivery. | Main's own selections are its first region's pass and its catch's pass. A Receipt's are its first region's selection and its catch's selection, in step 3 or in the pass that step 5 runs, each a final pass or a slot read of a committed `first`; step 5's read of `first` is part of the delivery. W10 adds no record route ("不另设登记途径"). A record already in the ticket covers the exit. So does one `_delivery_unproven` call through an existing route: the W9 step of the receiver's catch, when the callback or a later failure stops that catch's pass, which is then also W9; or the window check of a final pass that runs after the callback, the callback's own installed pass included, when it finds a W4, W5 or cut-off W9 case before any commit. No other step records a W10 case: the receiver cannot tell one from a VM debt, a taken outward never reaches it, and no record may be written outside the windows. Every W10 exit that no such record covers leaves without one, and its delivery is unproven by default, like W8: a late Y with `first` empty, which step 5 bare-raises; a callback in step 5's own statements or its final raise or relay; callbacks that keep the receiver from beginning its selection; a callback whose outward old marker code or the runtime takes; one that cuts off a record another window owed; and every W10 case whose position no real node can show. When the callback's outward reaches step 5 with `first` committed, step 5 still delivers `first`, the proven first control. When `delivering` is the committed `first` and the callback's outward is `delivering` (step 1 or step 5's first rule), that exit also delivers `first`. No step is retried and no further selection runs. |
+| W9 | A terminal catch's one new pass (its walk call and its selection call, which ends with the window check and the commit), run in step 3 or, if it had not begun there, in step 5, is stopped by a new real failure Y before its result reaches the catch. | `outcome` holds PENDING: Y's traceback head lies in the catch's frame between the PENDING store and the result store, unless a second failure in the catch's frame replaced the failure of the catch's own `_qualification_failure` call; there the PENDING test alone does not show that the exit lies in W9, and the source makes no other test. That failure stopped the pass, so the exit lies in W9 when the source review shows by static proof a real node that places that failure, or Y, inside the pass, such as the failure's node at the pass's selection call; where no real node does, the existing rules decide, unchanged (step 5 above, and the second run in "Two registration cases unproven by default" above). This holds also when `first` was committed before or during the pass. The catch calls `_delivery_unproven(Y)`, then delivers `first` if it is committed, else runs the W9 check when its walk completed and bare-raises Y (step 5 above). If a callback cuts off that step, the next final pass (the callback's installed's pass when `first` is empty, or, at a Receipt inside main, main's pass, which runs also with `first` committed) records the case before any commit when its window check finds one of its objects, or the `__context__` of one, with an authenticated node in the stopped catch's pass. The source review shows which object and which node. At main, and at a Receipt with no surrounding main, that callback is W10: if no final pass records the case, the delivery is unproven by default. Where no such object exists, the existing window and record-duty rules decide, unchanged. |
+| W10 | Terminal handling period. The terminal receiver is main, or a Receipt with no surrounding main. The period runs at main from the moment its terminal catch is active, right after W8, and at a Receipt with no surrounding main from the start of its `__exit__`; in both it ends when the delivery leaves. In it a real callback runs, a first control exists and the receiver does not deliver it, because of that callback or of a new real failure in the period after that callback. This includes: callbacks keep the receiver from beginning its own selection; old marker code (such as an old getter during a read) or the runtime (such as a finalizer's unraisable report) takes the callback's outward, so the receiver's selection never sees the first control, or the runtime takes that outward after the receiver's last selection; the callback, a later callback or a new real failure in the period after the callback stops the selection or the delivery; the receiver's selection sees the first control but cannot decide by the original rule that it is the first control. A callback that cuts off a record another window owed is also W10. When the receiver's own selection sees an object and decides by the original rule that it is the first control, the original delivery duty stays, unless a real callback in the period, or a new real failure in the period after that callback, stops that delivery. | Main's own selections are its first region's pass and its catch's pass. A Receipt's are its first region's selection and its catch's selection, in step 3 or in the pass that step 5 runs, each a final pass or a slot read of a committed `first`; step 5's read of `first` is part of the delivery. W10 adds no record route ("不另设登记途径"). A record already in the ticket covers the exit. So does one `_delivery_unproven` call through an existing route: the W9 step of the receiver's catch, when the callback or a later failure stops that catch's pass, which is then also W9; or the window check of a final pass that runs after the callback, the callback's own installed pass included, when it finds a W4, W5 or cut-off W9 case before any commit. No other step records a W10 case: the receiver cannot tell one from a VM debt, a taken outward never reaches it, and no record may be written outside the windows. Every W10 exit that no such record covers leaves without one, and its delivery is unproven by default, like W8: a late Y with `first` empty, which step 5 bare-raises; a callback in step 5's own statements or its final raise or relay; callbacks that keep the receiver from beginning its selection; a callback whose outward old marker code or the runtime takes; one that cuts off a record another window owed; and every W10 case whose position no real node can show. When the callback's outward reaches step 5 with `first` committed, step 5 still delivers `first`, the proven first control. When `delivering` is the committed `first` and the callback's outward is `delivering` (step 1 or step 5's first rule), that exit also delivers `first`. No step is retried, apart from the second run ("Two registration cases unproven by default" above), and no further selection runs. |
 
 For a recorded case, the delivery needs no first-control proof. Write one
 `unproven` per ticket; later window cases reuse it, and it is never rewritten
 or cleared. Keep every original exception, the actual outward, every
 original cause, context and suppress value, the root's history and every
-acquired owner's reverse once-only close duty. No step is retried and the
-handoff creates no recursive new work. An unknown is never taken as proven,
-and the actual outward is never recorded as a winner. The record never counts
+acquired owner's reverse once-only close duty. No step is retried, apart
+from the second run, and the handoff creates no recursive new work. An
+unknown is never taken as proven, and the actual outward is never
+recorded as a winner. The record never counts
 as a pass. When a W5 or W9 case also meets the four qualification
 conditions, both `registered` and `unproven` are written; neither replaces
 the other. For W5 the final pass proves condition 2 from S and the caught
@@ -3061,7 +3222,10 @@ order is unknown; nor can one whose proof needs
 an object that occurred after the walk and that Y does not show, because
 the W9 check makes no new walk; nor one where Y came out of the catch's own
 `_qualification_failure` call, which is not retried. Then only `unproven`
-is written. A W10 exit writes no record of its own and adds no
+is written. When a second failure hid that call's failure from the catch,
+the W9 check runs the call again: that is the second run, and it and
+anything it registers are unproven by default ("Two registration cases
+unproven by default" above). A W10 exit writes no record of its own and adds no
 evaluation. The four conditions hold there only if a final pass or W9
 check that already ran, the callback's own installed pass included, proved
 them and registered E; an unproven condition never registers
@@ -3081,7 +3245,8 @@ conditions.
 For W4, W5, W8, W9 and W10 the static proof covers only these duties: the
 record is written once at `_delivery_unproven`; the original exceptions, the
 actual outward and the history are kept; every acquired owner closes once in
-reverse; nothing is retried; nothing recursive is created; and dependent
+reverse; nothing is retried apart from the second run; nothing recursive
+is created; and dependent
 acceptance is blocked. It does not have to prove first-control delivery in
 these windows, nor that they contain no dispatch point or callback. W9 also
 has the runtime row QF.a4u.
@@ -3166,9 +3331,9 @@ there.
 | Item | What the source review must see |
 | --- | --- |
 | Ticket slots | Exactly `reads`, `first`, `registered` and `unproven`, plus the three constants, preset in `_ordinary_terminal` before main's first FD. Each is written only in its named window. None is cleared. |
-| Window record | `_delivery_unproven` is the only writer of `unproven`; its callers are the window check (W4, W5 and a cut-off W9) and the W9 step of the two terminal catches. Every final pass, installed's included, runs the window check after its selection, also after an early stop, and before its commit of `first`. Main runs its pass also with `first` committed, and that pass makes no read. A committed `first` owes no W4 or W5 record, for the three reasons above: the source review confirms that only installed runs inside a live read, that a later walk extends an earlier walk in the same order, that no guard or Reader-site query runs after the Receipt begins its exit, and that the QF rows keep this. It also confirms that the code that raises each object that leaves a first region records it in the root before it reaches the catch. The exceptions are non-control failures that no registered step records, a failed frame push or an explicit failure of installed's `_traceback_get` call at R3500 after `received` is recorded; they stay reachable as the context of the next object. In step 5, W9 is decided by `outcome` holding PENDING, before the test for a committed `first`, also when `first` was committed before or during the pass; the PENDING store and the store of the selection's result into `outcome` bound exactly the catch's pass, in step 3 or in step 5, and the window check finds a W9 object by its node in that same span. A W10 late Y is shown by its traceback head in the receiver's frame, inside its handling period. The source review also confirms that every catch's statements before the PENDING store make no call and allocate nothing, and that after the result store a catch only stores `delivering`, branches and delivers. Receipt's early return (not ordinary, or no incoming object) delivers nothing. It writes once per ticket. A W8 exit stays unproven by default. No step records a late Y, and no record is written outside the windows. A W10 case is recorded only when an existing route reaches `_delivery_unproven`: the W9 step, or the window check of a later final pass. Every W10 exit without a record stays unproven by default, including a cut-off W9 record at main or at a Receipt with no surrounding main and a case whose position no real node can show. A W9 record cut off at a Receipt inside main is made by main's next pass, unless a W8, W9 or W10 case at main covers the exit first. Both records are written when a W5 or W9 case also meets the four conditions, by the routes in the record section. The static proof for these windows covers only the listed record duties. |
+| Window record | `_delivery_unproven` is the only writer of `unproven`; its callers are the window check (W4, W5 and a cut-off W9) and the W9 step of the two terminal catches. Every final pass, installed's included, runs the window check after its selection, also after an early stop, and before its commit of `first`. Main runs its pass also with `first` committed, and that pass makes no read. A committed `first` owes no W4 or W5 record, for the three reasons above: the source review confirms that only installed runs inside a live read, that a later walk extends an earlier walk in the same order, that no guard or Reader-site query runs after the Receipt begins its exit, and that the QF rows keep this. It also confirms that the code that raises each object that leaves a first region records it in the root before it reaches the catch. The exceptions are non-control failures that no registered step records, a failed frame push or an explicit failure of installed's `_traceback_get` call at R3500 after `received` is recorded; they stay reachable as the context of the next object. In step 5, the source takes W9's rule when `outcome` holds PENDING, before the test for a committed `first`, also when `first` was committed before or during the pass; the PENDING store and the store of the selection's result into `outcome` bound exactly the catch's pass, in step 3 or in step 5, and the window check finds a W9 object by its node in that same span. When a second failure in the catch's frame replaced the failure of the catch's own `_qualification_failure` call, that test alone does not show that the exit lies in W9, and the source makes no other test. The exit then lies in W9 when the source review shows by static proof a real node that places that failure, or Y, inside the pass, such as the failure's node at the pass's selection call; where no real node does, the existing rules decide, unchanged (step 5 above). A W10 late Y is shown by its traceback head in the receiver's frame, inside its handling period. The source review also confirms that every catch's statements before the PENDING store make no call and allocate nothing, and that after the result store a catch only stores `delivering`, branches and delivers. Receipt's early return (not ordinary, or no incoming object) delivers nothing. It writes once per ticket. A W8 exit stays unproven by default. No step records a late Y, and no record is written outside the windows. A W10 case is recorded only when an existing route reaches `_delivery_unproven`: the W9 step, or the window check of a later final pass. Every W10 exit without a record stays unproven by default, including a cut-off W9 record at main or at a Receipt with no surrounding main and a case whose position no real node can show. A W9 record cut off at a Receipt inside main is made by main's next pass when its window check finds a W9 object, as the W9 rows say, unless a W8, W9 or W10 case at main covers the exit first. Both records are written when a W5 or W9 case also meets the four conditions, by the routes in the record section. The static proof for these windows covers only the listed record duties. |
 | Read entries | Each entry is built and appended before its read, outside the guarded region. Each state is stored once, without allocation; the except clause stores only while the entry is READING. An activation decides to read only after its own publication, when every earlier entry of the object is WITHDRAWN or a dead reservation shown by a reservation-span node; only a pass of main, Receipt or a Reader site treats a dead reservation so. Otherwise it stores WITHDRAWN and returns the earlier result or UNKNOWN. No object has two begun reads in one ticket, and no read starts while an earlier activation can still begin a read of that object, however a nested activation ends, a finalizer's return included. |
-| Window check and step 5 | They read no marker and run no old code, and step 5 runs no pass except the catch's one new pass when `walk` is still None: every `__traceback__` and `__context__` read uses `_traceback_get` or `_context_get`, as do the dead-reservation lookup and condition 2. A window check failure stops its pass before the commit, as an X of a first region, a W9 Y, or a failure that leaves installed for the live cover. A failure in step 5 is a Z, which propagates with Y as its context; before a record step 5 makes no call except that of `_delivery_unproven`, whose failed frame push is the first VM debt, the pass in its own guarded region and its final transfer. With `outcome` PENDING, step 5 calls `_delivery_unproven(Y)` first. When `walk` is still None and step 3 runs a pass there, step 5 starts the catch's one new pass in its own guarded region, whose first statement is the PENDING store; Y's history holds X there, as step 5 states. On any other Y that is not `delivering`, step 5 calls no Python function and allocates nothing before it delivers: it records Y as step 2 records X, tests locals, reads `first`, and delivers `first` if committed, else bare-raises Y. It records nothing there and selects nothing. The W9 check adds only Y and the installed `received` objects shown by Y's traceback, and is skipped when Y came out of the catch's own selection's `_qualification_failure` call, a failed frame push of that call included. `_qualification_failure` writes `registered` only as its last step. |
+| Window check and step 5 | They read no marker and run no old code, and step 5 runs no pass except the catch's one new pass when `walk` is still None: every `__traceback__` and `__context__` read uses `_traceback_get` or `_context_get`, as do the dead-reservation lookup and condition 2. A window check failure stops its pass before the commit, as an X of a first region, a W9 Y, or a failure that leaves installed for the live cover. A failure in step 5 is a Z, which propagates with Y as its context; before a record step 5 makes no call except that of `_delivery_unproven`, whose failed frame push is the first VM debt, the pass in its own guarded region and its final transfer. With `outcome` PENDING, step 5 calls `_delivery_unproven(Y)` first. When `walk` is still None and step 3 runs a pass there, step 5 starts the catch's one new pass in its own guarded region, whose first statement is the PENDING store; Y's history holds X there, as step 5 states. On any other Y that is not `delivering`, step 5 calls no Python function and allocates nothing before it delivers: it records Y as step 2 records X, tests locals, reads `first`, and delivers `first` if committed, else bare-raises Y. It records nothing there and selects nothing. The W9 check adds only Y and the installed `received` objects shown by Y's traceback, and is skipped when Y came out of the catch's own selection's `_qualification_failure` call, a failed frame push of that call included. When a second failure hid that call's failure, the check runs the call again only as the second run (row "Two registration cases" below). `_qualification_failure` writes `registered` only as its last step. |
 | `_open_held` final raise | C1702–1703 raise `_ordinary_outward`. The source review checks that this never happens while it is None, which would replace a marked cancellation with a TypeError. By this plan's reading the ordinary `_release_held_acquisition` always raises, so the value is set; a reachable case is a further open source finding. |
 | Route cell | Still one: the existing `current_raw` root slot. `_OrdinaryDisposition.__init__` writes idle (C591) and `installed` writes K (R3492). `raw` reads it (R3456) and `installed` reads it (R3481). This exception adds no route store. |
 | Parent reference | Still one `inherited` per actual installed activation, with its existing key K. |
@@ -3180,9 +3345,10 @@ there.
 | L/U | Every existing window gives its old answer from the same entries. A window reads only its own objects that have no entry or only void ones. No query resets or clears shared history. No stored U. |
 | Exits | Every row of the exit tables above, for both caller kinds. |
 | Commit windows | Each window below, with its status. |
-| Per-exit duties | On every exit, registered, window and first-control gap cases included: every owner closed once in reverse, no retry of a failed step or read, original objects reachable, apart from those that gap A's returning take exempts, and no recursive new pending work. The actual first control is the final throw on every exit except a registered one, a window case that a record covers or that W8 or W10 leaves unproven by default, and an exit of at least one of the five first-control gaps. Every exit under "Normal gaps that remain" blocks the source path. Its delivery kinds (cases 1–3 of "When neither rule applies" and the first, third, fourth and sixth kinds named there) cover only exits that no gap covers and that are not a window case that a record covers or that W8 or W10 leaves unproven by default, and each fails this proof, also when a pass registered there an object whose four conditions fail in the actual throw order. Its second kind fails the window's record duty, also when a gap covers the delivery. Its fifth kind, a stale store that gap A's returning take leaves out, fails this proof also when a gap or window covers the delivery. A registration in a gap C exit whose four conditions fail in the actual throw order, in a returning-take exit whose four conditions fail in the actual execution, or in a gap E exit whose four conditions fail in the actual execution, with gap E's Q, the dropped object when it is not Q, and every other object that the walk misses counted at their actual places in the throw order, also fails (next two rows). |
-| First-control gaps | Each exit handled as a first-control gap belongs to at least one of gaps A, B, C, D and E, by static proof only; an exit in more than one is handled the same way, and each gap's limit and exclusions exclude only that gap. A lineless link alone proves neither gap A nor gap E. Gap A: a real callback's first control; the taker of that control, or of a later outward from any source that replaced it, is pre-existing code or the runtime, never the #439 source change's own code, both measured against the frozen candidate as gap A above says; a control that old code throws itself is not gap A when replaced; the take lies outside every terminal receiver's handling period, or no real node places it relative to that period's start (then gap A or W10); and no selection, with its walk and its L and U not narrowed, sees the control. Or gap A's returning take: the source review lists each own-code site that stores a value based on an earlier read of a root slot, or that stores a root slot after its own earlier store there, such as installed's R3496–3501 and main's body catch's R3564–3569. For each reachable exit at a store based on a read, which at these two sites is only R3496→R3498 and R3564→R3566, it shows that the taker is the runtime, or a finalizer or a trace, profile or monitoring function that the runtime runs between the read and the store, neither own code nor code that own code itself calls, that it took a real callback's control, the callback's own construction or mark failure, or an outward that replaced either, and that every object the stale store erases is one that this form exempts; it also shows that no pass there registers an object whose four conditions fail in the actual execution. Any other such exit whose stale store loses an object or a record, or changes what a pass selects or delivers, is the fifth kind. So are a second store at the ticket's once-only writers and a store that rests on own code's own earlier store, such as R3501 after R3498 and R3569 after R3566, where code that the runtime runs between the two records an object and that store then loses an object or a record, or changes what a pass selects or delivers; the taker and erase proof above does not apply to R3501 or R3569. The review also lists each new call that the #439 source change makes into standard-library or third-party code able to catch the cancel or a later outward that replaced it, and keeps only those the accepted scope needs: for each call it keeps, it names the accepted spec or plan item that requires that call. Gap B: the evaluating function, in any module, holds no private disposition in that call; the source review lists each such read, those of the no-disposition row and the default-branch reads reached without the disposition, that can come before any ticket read of its object, and for each reachable exit shows the form and the limit; an exit that another trusted fact or both marker values decide is not gap B and, unless gap A, C, D or E covers it, delivers that object. Gap C: the source review lists each reachable site where pre-existing code or the runtime keeps or carries a control while code runs that can let the root record a later object. It checks at least `_close_source_copies`, which Reader.close calls at R2471: a control that a copy's recheck (R2181) or close (R2183) raises and the function keeps (R2186–2188 or R2197), while a later copy's recheck or close, or the reporting call R2190 → `_HeldCaptureCopy._failed` → C5836, runs a callback whose object raw records and the protocol takes (R2185–2197 or C5837); and an old owner's `close()` at C1082 that carries a control while its own handler takes a callback's object, before `_ordinary_close_owned` records the control (C1083–1088). It also checks the other sites of this kind, such as a copy's own `close()` (C5930–5965), which keeps an earlier control across its later closes, and `_load_capture_completion_owner` (`enforced-reproduction.py` lines 982–996), which R1322 calls. For each reachable exit it shows that the code that kept or carried the control is pre-existing code or the runtime, that the root recorded the later object before the control, and that the limit holds: the original rule over the actual throw order and over history order delivers two objects of different identity. An exit that fails any of these is not gap C and, unless gap A, B, D or E covers it, keeps the original standard. It also shows that no pass in a gap C exit registers an object whose four conditions fail in the actual throw order. At the sites above, the later objects come from raw or from installed's eligibility check (C902, C968–973): raw's construction or mark failure and the eligibility check's failure fail condition 1, since no old source throws them, and raw's `built` has its P01 fact, so none of them is registered; a registration whose conditions fail in the actual throw order stops the source path, although the gap covers the delivery, while one whose conditions also hold in that order is a valid single qualification failure. For each own-code site it shows the rule of "Own code keeps the actual order" above. Gap D: the source review lists each exit handled as gap D and, for each, shows every predicate. The failing read is the object's first ticket read, and its failure arises inside the interpreter at the load instruction in the read span; the static proof shows this position, and no real node has to. The failure comes neither from old marker code nor from Python code that ran in the read, such as a real callback; since a node cannot tell an internal failure from a C getter's failure, the review proves that the object's type uses the interpreter's generic attribute lookup for the marker: neither the type nor a base class adds a custom `__getattribute__`, `__getattr__` or `tp_getattro`, or a marker descriptor, in Python or C. The object stays UNKNOWN in the ticket (its entry INTERRUPTED, or READING where W5 cuts the store), and no later read of it begins. In the actual execution the receivers can neither decide one object by the original rule nor register. Under every true/false combination of the markers of every object in the ticket whose first read failed inside the interpreter as above, with every other fact fixed and other UNKNOWN objects still UNKNOWN, they could decide one object or register. An exit that fails any of these is not gap D and, unless gap A, B, C or E covers it, keeps the original standard; an UNKNOWN that old marker code or a callback in the read leaves keeps its original handling. No gap writes a record or adds a route, read, retry, selection, class source, order source or authentication, no gap B object is registered, and no pass in a gap D exit registers. |
-| First-control gap E | The source review lists each exit handled as gap E and, for each, shows every predicate: the first control Q and its root record; the dropped object in flight that X replaces, which can be Q, an outward that replaced Q or another object; the registered activation of own code; the instruction there and that it is lineless in the line table of each supported runtime where the exit is claimed (`tb_lineno` -1 on 3.11.0 to 3.11.6 and on 3.12.0, None on 3.11.7 and later 3.11 releases and on 3.12.1 and later, and a None line from `co_lines()`); the trace, profile or monitoring function, or the runtime's dispatch for it, that fails or raises X there; that X replaces the dropped object; and that no walk then reaches Q except through lineless nodes. It also shows that no exclusion applies: no take of the dropped object, X or Q by pre-existing code or the runtime that meets gap A, no case that meets every condition of W9 or W10, no link from Q to some walk through an authenticated node, no other trusted fact that decides the final object, and no own-code take of the dropped object, X or Q, where a registered receiving slot that keeps such an object and hands it back, by returning or re-raising it, does not take it, and neither does a receiver that, for an object already recorded in the root, only drops its local reference or delivers another object by the original rule applied to what its selection sees. An exit that fails any of these is not gap E and, unless gap A, B, C or D covers it or a window's rule decides it, keeps the original standard. It also shows that no pass in a gap E exit registers an object whose four conditions fail in the actual execution, with Q, the dropped object when it is not Q, and every other object that the walk misses counted at their actual places in the throw order; such a registration stops the source path, although the gap covers the delivery. |
+| Per-exit duties | On every exit, registered, window and first-control gap cases included: every owner closed once in reverse, no retry of a failed step or read apart from the second run ("Two registration cases unproven by default" above), original objects reachable, apart from those that gap A's returning take exempts, and no recursive new pending work. The actual first control is the final throw on every exit except a registered one (a registration under "Two registration cases unproven by default" does not count), a window case that a record covers or that W8 or W10 leaves unproven by default, and an exit of at least one of the five first-control gaps. Every exit under "Normal gaps that remain" blocks the source path. Its delivery kinds (cases 1–3 of "When neither rule applies" and the first, third, fourth and sixth kinds named there) cover only exits that no gap covers and that are not a window case that a record covers or that W8 or W10 leaves unproven by default, and each fails this proof, also when a pass registered there an object whose four conditions fail in the actual throw order. Its second kind fails the window's record duty, also when a gap covers the delivery. Its fifth kind, a stale store that gap A's returning take leaves out, fails this proof also when a gap or window covers the delivery. A registration in a gap C exit whose four conditions fail in the actual throw order, or in a returning-take exit whose four conditions fail in the actual execution, also fails, unless the second run made it (row "First-control gaps" below). A registration in a gap E exit whose four conditions fail in the actual execution, with gap E's Q, the dropped object when it is not Q, and every other object that the walk misses counted at their actual places in the throw order, also fails, unless it is a cut registration or the second run made it (row "First-control gap E" below). A cut registration and a registration that the second run makes are unproven by default (row "Two registration cases" below). |
+| First-control gaps | Each exit handled as a first-control gap belongs to at least one of gaps A, B, C, D and E, by static proof only; an exit in more than one is handled the same way, and each gap's limit and exclusions exclude only that gap. A lineless link alone proves neither gap A nor gap E. Gap A: a real callback's first control; the taker of that control, or of a later outward from any source that replaced it, is pre-existing code or the runtime, never the #439 source change's own code, both measured against the frozen candidate as gap A above says; a control that old code throws itself is not gap A when replaced; the take lies outside every terminal receiver's handling period, or no real node places it relative to that period's start (then gap A or W10); and no selection, with its walk and its L and U not narrowed, sees the control. Or gap A's returning take: the source review lists each own-code site that stores a value based on an earlier read of a root slot, or that stores a root slot after its own earlier store there, such as installed's R3496–3501 and main's body catch's R3564–3569. For each reachable exit at a store based on a read, which at these two sites is only R3496→R3498 and R3564→R3566, it shows that the taker is the runtime, or a finalizer or a trace, profile or monitoring function that the runtime runs between the read and the store, neither own code nor code that own code itself calls, that it took a real callback's control, the callback's own construction or mark failure, or an outward that replaced either, and that every object the stale store erases is one that this form exempts; it also shows that, apart from a registration that the second run makes, no pass there registers an object whose four conditions fail in the actual execution. Any other such exit whose stale store loses an object or a record, or changes what a pass selects or delivers, is the fifth kind. So are a second store at the ticket's once-only writers and a store that rests on own code's own earlier store, such as R3501 after R3498 and R3569 after R3566, where code that the runtime runs between the two records an object and that store then loses an object or a record, or changes what a pass selects or delivers; the taker and erase proof above does not apply to R3501 or R3569. The review also lists each new call that the #439 source change makes into standard-library or third-party code able to catch the cancel or a later outward that replaced it, and keeps only those the accepted scope needs: for each call it keeps, it names the accepted spec or plan item that requires that call. Gap B: the evaluating function, in any module, holds no private disposition in that call; the source review lists each such read, those of the no-disposition row and the default-branch reads reached without the disposition, that can come before any ticket read of its object, and for each reachable exit shows the form and the limit; an exit that another trusted fact or both marker values decide is not gap B and, unless gap A, C, D or E covers it, delivers that object. Gap C: the source review lists each reachable site where pre-existing code or the runtime keeps or carries a control while code runs that can let the root record a later object. It checks at least `_close_source_copies`, which Reader.close calls at R2471: a control that a copy's recheck (R2181) or close (R2183) raises and the function keeps (R2186–2188 or R2197), while a later copy's recheck or close, or the reporting call R2190 → `_HeldCaptureCopy._failed` → C5836, runs a callback whose object raw records and the protocol takes (R2185–2197 or C5837); and an old owner's `close()` at C1082 that carries a control while its own handler takes a callback's object, before `_ordinary_close_owned` records the control (C1083–1088). It also checks the other sites of this kind, such as a copy's own `close()` (C5930–5965), which keeps an earlier control across its later closes, and `_load_capture_completion_owner` (`enforced-reproduction.py` lines 982–996), which R1322 calls. For each reachable exit it shows that the code that kept or carried the control is pre-existing code or the runtime, that the root recorded the later object before the control, and that the limit holds: the original rule over the actual throw order and over history order delivers two objects of different identity. An exit that fails any of these is not gap C and, unless gap A, B, D or E covers it, keeps the original standard. It also shows that, apart from a registration that the second run makes, no pass in a gap C exit registers an object whose four conditions fail in the actual throw order. At the sites above, the later objects come from raw or from installed's eligibility check (C902, C968–973): raw's construction or mark failure and the eligibility check's failure fail condition 1, since no old source throws them, and raw's `built` has its P01 fact, so none of them is registered; a registration whose conditions fail in the actual throw order stops the source path, although the gap covers the delivery, unless the second run made it, while one that the second run did not make, whose conditions also hold in that order, is a valid single qualification failure. For each own-code site it shows the rule of "Own code keeps the actual order" above. Gap D: the source review lists each exit handled as gap D and, for each, shows every predicate. The failing read is the object's first ticket read, and its failure arises inside the interpreter at the load instruction in the read span; the static proof shows this position, and no real node has to. The failure comes neither from old marker code nor from Python code that ran in the read, such as a real callback; since a node cannot tell an internal failure from a C getter's failure, the review proves that the object's type uses the interpreter's generic attribute lookup for the marker: neither the type nor a base class adds a custom `__getattribute__`, `__getattr__` or `tp_getattro`, or a marker descriptor, in Python or C. The object stays UNKNOWN in the ticket (its entry INTERRUPTED, or READING where W5 cuts the store), and no later read of it begins. In the actual execution the receivers can neither decide one object by the original rule nor register. Under every true/false combination of the markers of every object in the ticket whose first read failed inside the interpreter as above, with every other fact fixed and other UNKNOWN objects still UNKNOWN, they could decide one object or register. An exit that fails any of these is not gap D and, unless gap A, B, C or E covers it, keeps the original standard; an UNKNOWN that old marker code or a callback in the read leaves keeps its original handling. No gap writes a record or adds a route, read, retry, selection, class source, order source or authentication, no gap B object is registered except by the second run, and no pass in a gap D exit registers. |
+| First-control gap E | The source review lists each exit handled as gap E and, for each, shows every predicate: the first control Q and its root record; the dropped object in flight that X replaces, which can be Q, an outward that replaced Q or another object; the registered activation of own code; the instruction there and that it is lineless in the line table of each supported runtime where the exit is claimed (`tb_lineno` -1 on 3.11.0 to 3.11.6 and on 3.12.0, None on 3.11.7 and later 3.11 releases and on 3.12.1 and later, and a None line from `co_lines()`); the trace, profile or monitoring function, or the runtime's dispatch for it, that fails or raises X there; that X replaces the dropped object; and that no walk then reaches Q except through lineless nodes. It also shows that no exclusion applies: no take of the dropped object, X or Q by pre-existing code or the runtime that meets gap A, no case that meets every condition of W9 or W10, no link from Q to some walk through an authenticated node, no other trusted fact that decides the final object, and no own-code take of the dropped object, X or Q, where a registered receiving slot that keeps such an object and hands it back, by returning or re-raising it, does not take it, and neither does a receiver that, for an object already recorded in the root, only drops its local reference or delivers another object by the original rule applied to what its selection sees. An exit that fails any of these is not gap E and, unless gap A, B, C or D covers it or a window's rule decides it, keeps the original standard. It also checks each registration in a gap E exit against the actual execution, with Q, the dropped object when it is not Q, and every other object that the walk misses counted at their actual places in the throw order. In an exit that is neither a gap C exit nor a returning-take exit, a registration whose four conditions fail only because of the objects that the lineless link made the walk miss is a cut registration and is unproven by default (next row). Any other registration whose four conditions fail in the actual execution stops the source path, although the gap covers the delivery, unless the second run made it. |
+| Two registration cases | By static proof only, the source review lists each registration handled as a cut registration and each run handled as the second run, and shows that case's conditions. A cut registration: the exit is a gap E exit (previous row) and neither a gap C exit nor a returning-take exit; the registering selection's walk, which a later W9 check may also use, misses objects because of that exit's lineless link; over what that walk sees, each of the four conditions is proven; and the registration's invalidity comes only from the missed objects, the objects that the lineless link made the walk miss: with them counted at their actual places in the throw order a condition fails, and without them every condition holds. The review lists the sites where the second run can happen: the W9 check's `_qualification_failure` call in each terminal catch, one for the catch's one new pass in step 3 and one for the pass that step 5 runs, in Receipt and in main. In the PR 1b carrier `codex/impl/eval-source-relay-replay` at HEAD 876315ad9acb13e3e1a64daa7da28790f15b2b9e plus its seven modified files, these four calls are at lines 1328 and 1350 of `shadow/v1/_consumer.py` in Receipt and at lines 3762 and 3785 of `scope/v1/read-shadow-evidence.py` in main. These are labels, not final positions. For each site the review shows that, after the catch's own selection called `_qualification_failure` and that call really failed, the site runs that call again only when a second failure replaced that failure before the catch received it, whether or not node positions show that the exit lies in W9; it shows no other retry. The source needs no change for either case: the cut registrations and the second run already exist in it, and no new registration, retry, read or record is added for them. Outside the second run, a registration whose four conditions fail for another reason keeps the original standard, and so does every other retry. |
 
 **Commit windows.** Each window is bound to the operations that run in it.
 The supported runtime domain is open: the plan admits any CPython 3.11 or
@@ -3204,8 +3370,8 @@ whole handling period.
 | W6 | From a pass proving the winner, through its window check, to storing `first` | A later pass recomputes it from entries and facts, with no read. | Closed. |
 | W7 | From the four conditions being proven to storing `registered` | A later final pass evaluates again and may register. | Closed. |
 | W8 | Main's except entry at R3600 up to its catch at R3602 | No in-process receiver remains. | Unproven by default; never counts. Temporary, under the dispatch-point constraint. |
-| W9 | A terminal catch's one new pass, in step 3 or in step 5: from the PENDING store through its walk call and its selection call, which ends with the window check and the commit, to the store of the result into `outcome` | A new real failure Y stops it before its result reaches the catch, also when `first` was committed before or during the pass. | Recorded in `unproven` by that catch. With `first` committed the catch then delivers `first`; otherwise it registers when its completed walk and the objects Y shows prove the four conditions, and bare-raises Y. Permanent, under its own constraint. Receipt's catch with `first` committed makes one slot read and no pass, so it cannot meet W9; main's catch always runs its pass. A Y before the pass begins starts the pass in step 5, and a Y after the result store goes to step 5's last two rules: `first` if committed, else a late Y (W10 at main and at a Receipt with no surrounding main when an existing first control does not leave). If a callback cuts off the record step itself, the next final pass records Y before any commit: the callback's installed's when `first` is empty, or, at a Receipt inside main, main's, unless a W8, W9 or W10 case at main covers the exit first. At main and at a Receipt with no surrounding main the exit is otherwise W10, unproven by default. |
-| W10 | Terminal handling period, at main or at a Receipt with no surrounding main: at main from the end of W8, at such a Receipt from the start of its `__exit__`, until the delivery leaves | A real callback runs, and an existing first control does not leave, because of that callback or of a new real failure in the period after it: callbacks keep the receiver from beginning its selection; old marker code or the runtime takes the callback's outward, so the selection never sees the first control, or the runtime takes it after the last selection; the callback, a later callback or a new real failure after it stops the selection or the delivery; or the selection sees the first control but cannot decide that it is first. A callback that cuts off another window's owed record is also W10. | Covered by one record when an existing route reaches `_delivery_unproven` (the W9 step, or the window check of a later final pass, the callback's own installed pass included) or a record is already in the ticket; otherwise, and also when no real node can show the position, unproven by default and never counts. W10 adds no route. An object that the receiver's own selection decides as the first control keeps its original delivery duty unless such a callback or later failure stops that delivery; with `first` committed, step 5 still delivers `first`. Permanent, under its own constraint. Static proof covers only the record duties. No retry and no further selection. |
+| W9 | A terminal catch's one new pass, in step 3 or in step 5: from the PENDING store through its walk call and its selection call, which ends with the window check and the commit, to the store of the result into `outcome` | A new real failure Y stops it before its result reaches the catch, also when `first` was committed before or during the pass. When a second failure hid the failure of the catch's own `_qualification_failure` call, that failure stopped the pass, and the exit lies in W9 as step 5 says. | Recorded in `unproven` by that catch. With `first` committed the catch then delivers `first`; otherwise it registers when its completed walk and the objects Y shows prove the four conditions, and bare-raises Y. Permanent, under its own constraint. Receipt's catch with `first` committed makes one slot read and no pass, so it cannot meet W9; main's catch always runs its pass. A Y before the pass begins starts the pass in step 5, and a Y after the result store goes to step 5's last two rules: `first` if committed, else a late Y (W10 at main and at a Receipt with no surrounding main when an existing first control does not leave). If a callback cuts off the record step itself, the next final pass (the callback's installed's when `first` is empty, or, at a Receipt inside main, main's, unless a W8, W9 or W10 case at main covers the exit first) records the case before any commit when its window check finds one of its objects, or the `__context__` of one, with an authenticated node in the stopped catch's pass, as the source review shows. At main and at a Receipt with no surrounding main the exit is otherwise W10, unproven by default. Where no such object exists, the existing window and record-duty rules decide, unchanged. |
+| W10 | Terminal handling period, at main or at a Receipt with no surrounding main: at main from the end of W8, at such a Receipt from the start of its `__exit__`, until the delivery leaves | A real callback runs, and an existing first control does not leave, because of that callback or of a new real failure in the period after it: callbacks keep the receiver from beginning its selection; old marker code or the runtime takes the callback's outward, so the selection never sees the first control, or the runtime takes it after the last selection; the callback, a later callback or a new real failure after it stops the selection or the delivery; or the selection sees the first control but cannot decide that it is first. A callback that cuts off another window's owed record is also W10. | Covered by one record when an existing route reaches `_delivery_unproven` (the W9 step, or the window check of a later final pass, the callback's own installed pass included) or a record is already in the ticket; otherwise, and also when no real node can show the position, unproven by default and never counts. W10 adds no route. An object that the receiver's own selection decides as the first control keeps its original delivery duty unless such a callback or later failure stops that delivery; with `first` committed, step 5 still delivers `first`. Permanent, under its own constraint. Static proof covers only the record duties. No retry apart from the second run, and no further selection. |
 
 **Three runtime boundaries.** Prove each separately.
 
@@ -7945,9 +8111,10 @@ gates (R9.6).
   operator-graded seed and its test. 150-450 of them are verbatim verdict bytes, which
   cannot leave the PR whose test checks their digests.
 - PR 3: `review_size: standard`, about 300-400 net added lines.
-- This plan-only amendment: `review_size: standard`, about 250–350 changed
-  plan lines. One concern: plan gap E, the fifth first-control gap accepted
-  in G2 PR #828, in the first-control exceptions that plan PR #817 landed.
+- This plan-only amendment: `review_size: standard`, about 200–300 changed
+  plan lines. One concern: plan the two registration cases unproven by
+  default, accepted in G2 PR #830, in the first-control exceptions that
+  plan PR #817 landed.
   It adds no code path, test row or budget. This plan still needs fresh
   review, required CI and protected landing. No CODE/runtime GO follows.
   All original proof and invoices remain.
