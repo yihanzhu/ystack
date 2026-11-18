@@ -2328,12 +2328,12 @@ to evade the source cap. Executable and policy files always belong to the closur
      抛真实 F。嵌套位置在外层已取得 S、提交 latest 之前，由仅 fixture 的标记
      写接点触发。核对外/内激活的不同对象身份、原顺序、构造失败前的头及裸抛
      最终可取。使错误激活或同异常只查一次的读取器不能通过。此控制与原四控、
-     六次既有投递分账；新增 fixture 替身、调用、引用及费用按实累计。无新增
+     六次既有投递分账；新增 fixture 替身、调用、引用及费用按实累计。此控制无新增
      OS 信号、子进程、FD、原生窗口或额外产品读取。
      在原四控的既有真实 FD 关闭和观察中加入固定异常，以对象身份和实关次数
      验证普通优先级、后续 FD 的释放和不重试。保留原第二次 mkdir 的实关证明、
      101 个真实取得及 100/1 登记、132 copies、2 inputs、199 次成功 mkdir 和
-     drift 的原顺序。不增 case、child、acquisition、文件读取或 native 窗口。
+     drift 的原顺序。原四控不增 case、child、acquisition、文件读取或 native 窗口。
      合同内的报错和记账调用按实际分支另计。所有新增引用、处理、失败、清理及
      运输费用在原 #439 账内累计 UNKNOWN_NOT_ZERO。
      七文件包括 consumer、Reader、原两测试文件及原三个 evals 绑定文件。
@@ -2636,7 +2636,7 @@ to evade the source cap. Executable and policy files always belong to the closur
      就属第一种缺口或终局处理期；二者的交付都缺省按未证，不回落到原逐出口标准。
      其余出口仍按原标准判定。
      本节不改变五种窗口、单次首控资格失败的条件与排除，
-     以及下述四项新增测试机会；其余验收标准不变。
+     以及下述新增测试机会；其余验收标准不变。
 
      **第二次运行缺省未证。** 原称“两处登记缺省未证”。本节来自 #439 评论 6867704878
      记录的 operator 直接决定（2026-11-13，“缺省未证”），适用范围按 #439 评论
@@ -2684,7 +2684,7 @@ to evade the source cap. Executable and policy files always belong to the closur
      本节不增加代码路径、登记途径、测试机会或预算，只做静态证明：独立计划和源码
      审查须证明每个按本节处理的出口满足本节条件。除第二次运行不受“这里不重试”
      约束及其登记按本节缺省未证外，本节不改变四种缺口、五种窗口、单次首控资格失败的
-     条件与排除，以及下述四项新增测试机会。其余验收标准不变。
+     条件与排除，以及下述新增测试机会。其余验收标准不变。
 
      **owner 关闭缺省未证。** 本节来自 #439 评论 6978522615 记录的 operator 直接决定
      （2026-11-18，“能修的修，其余缺省未证”）。依据见 #439 评论 6978521813、6978522247。
@@ -2736,7 +2736,7 @@ to evade the source cap. Executable and policy files always belong to the closur
      须重新评估。
 
      本节只处理关闭的证明。四种缺口、五种窗口、单次首控资格失败和第二次运行的
-     条件与排除，以及下述四项新增测试机会，仍按原规则。其余验收标准不变。
+     条件与排除，以及下述新增测试机会，仍按原规则。其余验收标准不变。
 
      **追踪失败缺省未证。** 本节原有规则（#439 评论 6898014810）按 #439 评论 6964235647
      退役。上文“受支持运行时”已排除原规则的前提（本代码运行期间，运行时运行 trace、
@@ -2746,10 +2746,10 @@ to evade the source cap. Executable and policy files always belong to the closur
      **首控例外回归的新增测试机会。** 按“新测试机会仍须另经原门”，以下四项在加入
      “运行时窗口交付未证”一节的修订中一并经原门。它们只扩原
      `scripts/test/candidate-content-preparation-fixtures.py`
-     中 `raw16_scope_acquisitions` 的内存控制所在块，都在原 CI 运行。除表中所列外，
-     不增加生产名替换、信号、子进程、FD 或外部运行。三项共新增三次对真实 installed
-     的直接调用，installed 均由新建 root 经真实 `_ordinary_cancel_factory` 取得（C945 项
-     沿用终局 installed 出口项的 root）；
+     中 `raw16_scope_acquisitions` 的内存控制所在块，都在原 CI 运行。表外不增加
+     生产名替换、子进程或外部运行。表外新增的信号和 FD 仅限下述取得绑定回归。
+     表中三项共新增三次对真实 installed 的直接调用，installed 均由新建 root 经真实
+     `_ordinary_cancel_factory` 取得（C945 项沿用终局 installed 出口项的 root）；
      它们与内存控制原有的三次真实回调调用分账。原四控、六投递、三次真实回调调用、
      原 79 六分片及全部安全门不变。新增调用、替身、引用与费用归原 owner，未测累计
      UNKNOWN_NOT_ZERO。
@@ -2760,6 +2760,65 @@ to evade the source cap. Executable and policy files always belong to the closur
      | C945（plan QF.d） | 在上项调用期间，以及同一 Receipt 下再一次 inherited 非 idle 的直接调用期间，向 consumer 模块注入全局名 `set`，指向 fixture 替身；consumer 原无此全局，finally 中删除该注入名即为恢复，注入前已有同名全局则本行失败。替身只在其调用方是已过见证的终局资格核对时抛一个预建的真实 MemoryError，其余调用转交内建 `set`；调用方只在 fixture 内用 `sys._getframe` 核对。 | idle 调用中替身从不触发，installed 交付 Q；非 idle 调用中替身只触发一次，该 MemoryError 可达，Receipt 仍交付 Q；均不登记资格失败。 |
      | main 终局出口（plan QF.m） | 在主线程、本测试临时目录下，以六个原参数同进程调用真实 Reader main 两次。每次只把 Reader 模块的三个名字换成 fixture 替身，finally 恢复：`_ControlFIFO` 换成不开 FD 的替身；`_Reader` 换成在构造时抛本行对象的替身；`os` 换成代理，其 `fstat(6)` 不碰 FD 6 而新抛一个无标记 OSError(EBADF)，使 main 的原探测总走普通路径，其余属性都是真实 `os`。调用前保存四个信号的原处理器（须都不为 None），任何出口都在 finally 中逐一恢复为原对象；不投递信号。 | 第一次：`_Reader` 替身抛真实 KeyboardInterrupt Q，`_ControlFIFO` 替身的 close 抛普通 OSError B；Q 按身份并保留原 cause/context/suppress 离开 main，B 可达，不登记。第二次：`_Reader` 替身抛 InterruptedError E，其标记真值对象首次求值时抛普通真实失败 G；`_ControlFIFO` 替身的 close 再抛真实 KeyboardInterrupt Q1；登记 E 的资格失败，实际 outward G 按身份离开 main，E 与 Q1 可达。两次中替身的 close 都只尝试一次。 |
      | 分类读取位置（plan QF.c3） | 新建普通 root，以真实 `_ordinary_terminal` 与 `_ordinary_cancel_factory` 自建票据与 raw/installed。一个 fixture InterruptedError 子类实例 E 的 `_scope_signal_cancel` 是 property，其 getter 为以 C 层 `functools.partial` 绑定该 installed 的对象；E 由 fixture 已登记接收处记入该 root，再以一次无 fallback 的窗口查询读取 E，首次读取因此不经旧代码 Python 帧直接进入回调。 | installed 恰好被调用一次，任何额外读取或调用都使本行失败；installed 原样抛出的 S 按身份离开该查询；S 在接收帧的节点位于读取指令上，判为读取已开始且未返回；不写交付未证，也不登记资格失败。“分类值返回后”窗口须见读取指令之后的位置；本行不能也不得伪造该位置。 |
+
+     **取得绑定回归的新增测试机会。** #439 评论 6978522615 记录的 operator 直接决定
+     （2026-11-18，“能修的修，其余缺省未证”）要求 Python 源码凡能履行 owner 关闭义务处都须履行。
+     manager 证据（#439 评论 6987900362）据此判定自有代码取得点可修。plan PR #838
+     的 “Bind own-code acquisitions” 将取得绑定列为 AGENTS.md 下的永久例外。
+     AGENTS.md 要求例外回归进入 CI。本测试机会在加入本节的修订中经原门开放。
+     独立计划更新须先落地，再实施绑定和回归。
+
+     只扩冻结候选中 `scripts/test/candidate-content-preparation-fixtures.py` 的
+     `raw16_scope_acquisitions`。
+     在 `post-hold-parent-drift` 的原最终校验通过且无待抛的原失败后，原临时目录退出前
+     运行一次。四项首控例外回归所在的 `E_STALE` handler 内，`os.close`、`os.mkdir`、
+     `c._hold_bytes` 和 `c._capture_observe` 仍是布局替身，`os.close` 还统计所跟踪
+     FD 的关闭。本例运行时布局替身已恢复，原关闭次数已核对。本例借用该临时目录。
+     本例的 case、FD 和取得与原四控分账，并与六投递及内存控制分账。沿用
+     `scripts/test/evals-malicious.test.sh` 的 `PY_SCOPE_P_ACQUISITIONS` 进入原 CI。
+
+     本节只开放这一项测试机会，只新增本例一个 case，不借此增加其它执行机会。
+     成功路径使用原临时目录内一个 FIFO、一条新增辅助线程、一次真实 OS 信号
+     （`SIGUSR1`）、两个 FD、两次成功取得（读端和写端各一次）。失败路径不超过
+     这些数量。为维持两个 FD，计划须保证本例可不传入父目录 FD 就调用该私有边界。
+     fixture 保存非 None 的原处理器，安装只抛测试本地异常
+     的处理器。该异常无 `_scope_signal_cancel` 标记。主线程调用一次
+     `c._bind_acquisition`，传入 fixture 的 owner，经真实 `os.open` 阻塞取得读端。
+     辅助线程确认主线程已在取得调用中后，才经 `pthread_kill` 向辅助线程自身投递一次。
+     随后打开写端，使读端在信号待派发时返回。计划须写明就绪判据及其上限。可用
+     `sys._current_frames()` 核对主线程顶帧为 `_bind_acquisition`，且 `f_lasti` 对应
+     执行该取得调用的指令。不可只看行号或用固定睡眠判定就绪。
+
+     所有等待须有固定上限，由本例保证。辅助线程在上限内非阻塞打开写端，只在尚无
+     读端时重试。计划须固定重试次数上限。辅助线程在主线程的取得调用返回或抛出之前
+     因超限、出错或任何其它原因结束时，均须以 `os._exit` 非零结束现有测试进程。
+     本例立即失败。该出口不执行 Python 清理，由系统回收进程 FD。原临时目录及
+     FIFO 留待测试环境清理，其费用同计 UNKNOWN_NOT_ZERO。辅助线程使用 daemon，
+     join 有固定上限。可退出到 finally 时，fixture 清理资源，原临时目录清理移除 FIFO。
+     finally 须在确认辅助线程已结束且已投递的信号已处理后恢复原处理器。若在上限内
+     无法确认，以同一非零退出判本例失败，保留测试处理器至进程结束。任何超限均不计
+     通过。
+
+     本例须在 `c._bind_acquisition` 调用处接到该异常，并从传入的同一 owner 取到
+     读端 FD。对 `fstat` 结果检查 `S_ISFIFO`，以设备和 inode 核对为同一 FIFO，
+     并核对 FD 为只读。fixture 清理真实关闭读端一次，辅助线程清理真实关闭写端
+     一次。若处理器在取得读端前抛出，本例判失败。普通绑定丢失 FD 的对照不属于本例。
+
+     本例不走产品回调、票据或 seam，不增加生产名替换、子进程、原生窗口或外部运行。
+     FIFO 创建与移除、信号、线程、等待、FD 取得与关闭、写端失败尝试、核对读取
+     （`fstat`、访问模式、就绪帧读取）、处理器安装与恢复、引用、失败退出和清理的
+     费用在原 #439 账内累计 UNKNOWN_NOT_ZERO。`_fixture_sites_outer` 中 slot 与
+     receipt 两处 `_fixture_temporary` 范围的终点显式延至新增后的 with 体末句，
+     以覆盖本例的失败。其它位置只按移动的同源语句重绑。本例本身不改 launcher
+     helper 切片、完整 helper 长度、K 及其等值检查，也不改上述位置以外的
+     fixture pin。consumer 的源码修改仍按上文七文件规则及下述 C2 绑定表重绑 C/N/P/D/K。
+
+     原四控、101 个真实取得、100/1 登记、132 copies、2 inputs、199 次成功 mkdir、
+     六投递和内存控制的三次真实回调调用不变。原 79 六分片、全部安全门及其余验收
+     标准不变。两项 VM、FIFO/native/vendor/G3 欠证独立保留。
+     回归只证明该私有边界在 CI 所用解释器上的行为。其它受支持版本族仍须按计划
+     逐族提供一手源码证明，包括 manager 探针未运行的 3.11。各源码取得点从调用返回
+     到绑定之间无派发点，仍须由源码审查逐处证明。
 
      **原 C2 caller 的严格账与 END 拒绝终态。** 固定设计源为
      ac36c43801746089e17702f9b137fd6ee938dddd，执行base5303a67747af0e80c0fb964e979b81d1c11286ed。
