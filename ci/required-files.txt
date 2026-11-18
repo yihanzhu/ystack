@@ -66,6 +66,7 @@ proposals/README.md
 # v2 guard layer (no agent path to main — see .claude/hooks/no-merge-guard.sh)
 .claude/settings.json
 .claude/hooks/no-merge-guard.sh
+scripts/test/no-merge-guard.test.sh
 .github/workflows/tripwire.yml
 
 # v2 lane helpers (deterministic; used by the Stack B workflows)

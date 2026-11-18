@@ -586,3 +586,51 @@ authority. This direct handoff, not this record, supplies the successor authorit
 a further successor needs another explicit operator handoff recorded here.
 
 Prepared against base `524056f275f2988d6935b4783e11f914c3382e7b`.
+
+## Publishing change — 2026-11-17
+
+Operator yihanzhu decided directly in the chat of Claude Code desktop session
+`7da9169c-8342-4fe0-b5a2-5bf488c7a32b`, the manager named in the 2026-11-05
+succession above. This session may now merge reviewed, CI-green, non-constitution PRs
+itself. The operator asked “每次这个pr你能帮我合并吗” and chose
+“改钩子，让你合并 (Recommended)”. The durable record is issue #275 comment
+`6966108607`.
+
+This section replaces the 2026-11-05 “Publishing” paragraph for this session only.
+
+- `.claude/hooks/no-merge-guard.sh` now allows one command form:
+  `gh pr merge <N> --repo <owner>/<repo> --squash --match-head-commit <40-hex>`.
+  It allows the form only when all of these hold:
+  - the form is the whole command;
+  - the call comes from the main session thread, so the hook input has no
+    `agent_id` or `agent_type`;
+  - the operator has written the local file
+    `${XDG_CONFIG_HOME:-$HOME/.config}/ystack/merge-publisher`, and it holds exactly
+    `<session_id> <owner>/<repo>` for that session and repository.
+
+  A missing or different file blocks, as before. Every other rule of the hook is
+  unchanged, and subagents stay blocked.
+- The manager merges a non-constitution PR only under OD-1's conditions:
+  - the newest independent review is clean at the exact head and base;
+  - no Important finding is unresolved;
+  - all required CI is green;
+  - the labels are consistent;
+  - the merge is pinned to the reviewed head.
+
+  It then records the receipt.
+- Constitution-path PRs stay the operator's to merge. These are PRs that touch
+  `.github/**`, `.claude/**`, `AGENTS.md`, `CLAUDE.md`, `REVIEW.md`, `ROADMAP.md`,
+  `NORTH_STAR.md` or `config/**`. For them, the manager still gives the operator the
+  pinned command.
+- The publisher file is a local appointment on one machine. It is not in this
+  repository and not restore-critical. The operator, not an agent, writes it. A
+  successor needs another explicit operator handoff and a rewritten file. The
+  operator revokes the path by saying so or by deleting the file.
+- The hook is defense in depth. The `ystack-main-gate` ruleset still blocks a red or
+  stale merge, whoever calls it: it requires `ci`, keeps branches strictly up to
+  date, allows squash merges only and allows no direct pushes.
+
+The rest of this record is unchanged: RC-1, OD-1, the reserved operator decisions,
+the one-manager invariant, review separation and the rounds cap.
+
+Prepared against base `c9910580f003718169abeb84830f092f453693d5`.
