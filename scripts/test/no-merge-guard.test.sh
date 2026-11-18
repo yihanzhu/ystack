@@ -117,6 +117,8 @@ assert_hook 'push rule takes precedence over merge rule' 2 "$(hook_input "$cmd; 
 assert_hook 'cat names the full publisher path' 2 "$(hook_input "cat '$publisher'")" "$publisher_message"
 assert_hook 'printf redirects to the bare publisher name' 2 \
   "$(hook_input 'printf "%s\n" "manager-123 o/r" > merge-publisher')" "$publisher_message"
+assert_hook 'printf redirects to the mixed-case publisher name' 2 \
+  "$(hook_input "printf '%s\n' '$publisher_line' > '$HOME/.config/ystack/Merge-Publisher'")" "$publisher_message"
 assert_hook 'ordinary command' 0 "$(hook_input 'git status')"
 assert_hook 'empty input' 0 ''
 
@@ -125,6 +127,9 @@ block_merge 'relative XDG config with no file in the default directory' "$cmd"
 mv "$publisher" "$HOME/.config/ystack/merge-publisher"
 XDG_CONFIG_HOME=''
 assert_hook 'publisher file in the default config directory' 0 "$(hook_input "$cmd")"
+XDG_CONFIG_HOME="$tmp/empty-config"
+mkdir "$XDG_CONFIG_HOME"
+block_merge 'absolute XDG config without a publisher file does not fall back to HOME' "$cmd"
 XDG_CONFIG_HOME=config
 assert_hook 'relative XDG config is ignored in favor of the default directory' 0 "$(hook_input "$cmd")"
 unset XDG_CONFIG_HOME

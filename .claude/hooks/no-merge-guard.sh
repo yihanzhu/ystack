@@ -19,7 +19,7 @@ if printf '%s' "$cmd" | grep -Eq 'git[[:space:]]+push[^|;&]*[[:space:]:+](refs/h
   exit 2
 fi
 
-if printf '%s' "$cmd" | grep -Fq 'merge-publisher'; then
+if printf '%s' "$cmd" | grep -Fqi 'merge-publisher'; then
   echo "Blocked by ystack guard: the merge publisher file is the operator's to write." >&2
   exit 2
 fi

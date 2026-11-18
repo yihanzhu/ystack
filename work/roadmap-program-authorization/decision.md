@@ -617,12 +617,16 @@ that paragraph, for this session only.
     regular file, not a symlink. It must hold exactly `<session_id> <owner>/<repo>`,
     with at most one final newline. `<session_id>` is the hook input's session ID,
     made only of letters, digits and `-`. `<owner>/<repo>` is the one in the
-    command. `<config>` is `XDG_CONFIG_HOME` when that is an absolute path, and
-    otherwise `$HOME/.config`.
+    command. `<config>` is `XDG_CONFIG_HOME` when that is an absolute path.
+    Otherwise it is `$HOME/.config`, but only when `HOME` is absolute. If neither is
+    absolute, the hook blocks the merge. An absolute `XDG_CONFIG_HOME` with no file
+    blocks too: the hook does not fall back to `$HOME/.config`.
 
-  In every other case the hook blocks, as before. Every earlier rule of the hook is
-  unchanged, and subagents remain forbidden to merge. The hook also blocks any Bash
-  command that names `merge-publisher`.
+  If the pinned form fails any check, the hook blocks it, as before. The other merge
+  and main-push rules still apply unchanged, and subagents remain forbidden to merge.
+  The hook also blocks any Bash command that contains the text `merge-publisher`, in
+  any letter case. That rule is only a tripwire, because Bash can still reach the file
+  through a glob, quoting or a variable.
 - The manager merges a non-constitution PR only under OD-1's conditions:
   - the newest independent review is clean at the exact head and base;
   - no Important finding is unresolved;
@@ -637,14 +641,23 @@ that paragraph, for this session only.
   pinned command.
 - The publisher file is a local appointment on one machine. It is not in this
   repository and not restore-critical. The operator, not an agent, writes it. The
-  hook trusts the file and cannot prove who wrote it. It blocks Bash commands that
-  name the file, but not Claude's Write or Edit tools. A successor needs another
+  hook trusts the file and cannot prove who wrote it. Its tripwire covers Bash
+  commands only, not Claude's Write or Edit tools. A successor needs another
   explicit operator handoff and a rewritten file. The operator revokes the path by
   saying so or by deleting the file.
-- One residual is known. The hook checks a session ID, not a process. A process that
-  resumes this session, for example `claude --resume` with this session's ID, carries
-  the same ID and no subagent fields. Like the shell tricks the hook never stopped,
-  this takes a deliberate workaround, and no agent may use one.
+- Three residuals are known.
+  - **The hook checks a session ID, not a process.** A process that resumes this
+    session, for example `claude --resume` with this session's ID, carries the same
+    session ID. If its hook input passes the four agent-field checks, the hook
+    cannot tell the two processes apart. Like the shell tricks the hook never
+    stopped, this takes a deliberate workaround, and no agent may use one.
+  - **The hook does not look at which files a PR touches.** The pinned form can
+    merge any PR in the named repository. That includes a constitution-path PR, and
+    a PR that edits this hook. The rule that constitution-path PRs stay the
+    operator's is policy, not a hook check.
+  - **The hook fails open when jq fails, as it did before this change.** Examples
+    are invalid input or a broken `~/.jq`. Making it fail closed is a separate
+    follow-up.
 - The hook is defense in depth. The `ystack-main-gate` ruleset still blocks a red or
   stale merge, whoever calls it: it requires `ci`, keeps branches strictly up to
   date, allows squash merges only and allows no direct pushes.
