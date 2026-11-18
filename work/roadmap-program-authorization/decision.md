@@ -666,3 +666,70 @@ The rest of this record is unchanged: RC-1, OD-1, the reserved operator decision
 the one-manager invariant, review separation and the rounds cap.
 
 Prepared against base `c9910580f003718169abeb84830f092f453693d5`.
+
+## Publishing change, update — 2026-11-18
+
+The operator, yihanzhu, wrote directly in manager session
+`7da9169c-8342-4fe0-b5a2-5bf488c7a32b`: “什么时候你能合并？我不想我再点合并了”.
+The durable records are issue #275 comments `6981243584`, `6981315043` and
+`6981455927`. The operator's merge of the PR that adds this section accepts the
+change below. This section updates the 2026-11-17 section only where it says so.
+
+- **Why the first use failed.** The first pinned merge, for #834, was blocked on
+  the manager's main thread (#275 comment `6978702235`). The hook that ran was the
+  old copy in the operator's main checkout, not the merged one. The hook entry runs
+  the script under the Claude Code project directory, and for this worktree
+  session that is the main checkout, which still held the old commit. Evidence: in
+  that session, a Bash command containing the tripwire text ran without a block.
+  The merged hook, run by hand, blocked the same text. The old copy, run by hand,
+  blocked the pinned form and allowed that text, as seen. After the operator
+  fast-forwarded the main checkout, the same kind of command was blocked (#275
+  comment `6981455927`). So a merged hook change takes effect for a session only
+  after the checkout that holds its project directory is updated.
+- **Not a subagent call, replaced.** The hook now blocks the pinned form when
+  `agent_id` or `agentId` has any value other than null or the empty string. It no
+  longer looks at `agent_type` or `agentType`. Claude Code's hook input schema, in
+  version 2.1.325, documents `agent_id` as present only inside a subagent and
+  absent on the main thread, even in a session started with `--agent`. It
+  documents `agent_type` as present inside a subagent and also on the main thread
+  of an `--agent` session, and it says to use `agent_id` to tell subagent calls
+  apart. So `agent_type` on a main thread could block the manager by mistake. The
+  hook still relies on Claude Code to mark subagent calls, now with the field that
+  Claude Code documents for this.
+- **The failed check is named.** When the exact pinned form reaches the
+  pinned-merge checks and one of them fails, the hook keeps the general merge
+  message and adds one line with a fixed phrase for the first failed check. That
+  line includes no input value: no session ID, repository, path or file content.
+  The push-to-main and tripwire rules still run first, with their own messages.
+- **jq fails closed.** If the first jq call fails, or the input holds a raw NUL
+  byte, the hook blocks the command with an input-error message. So a missing jq
+  or a `~/.jq` that jq cannot load now blocks every Bash command. If the first jq
+  call succeeds and the command it extracts is empty, the hook allows the call, as
+  before. Empty input, whitespace only, JSON `null` and an object without a
+  command take this path. Other JSON values, such as an array, `false`, a string
+  or a number, make the first jq call fail and are blocked. This replaces the
+  third residual of the 2026-11-17 section.
+- **Locale.** The whole hook runs with `LC_ALL=C`, so a multibyte locale cannot
+  change how the command text is read.
+- **Tripwire limits, stated exactly.** The `merge-publisher` text rule compares
+  ASCII letters without case. It does not catch Unicode spellings that a file
+  system may fold to the same name. The hook checks that the publisher file
+  itself is not a symlink. It does not check the directories above the file, so a
+  symlinked `ystack` or config directory is followed.
+- **A known residual, unchanged.** jq loads `~/.jq` when that file exists, and a
+  definition there can change what jq returns. A deliberate write there can make
+  every jq check on the pinned path pass, including the agent-ID and session
+  checks. The pinned form would then be allowed from a subagent of the named
+  session, or from another session. Such a write cannot hide a command from the
+  other block rules. A planted `jq`, `grep`, `tr` or `cmp` earlier on the PATH
+  has the same effect. This was already true before this change. Like the shell
+  tricks the hook never stopped, it takes a deliberate workaround, and no agent
+  may use one.
+
+Everything else in the 2026-11-17 section stands: the exact pinned form, the
+publisher file and its config-directory rule, OD-1's conditions, the receipt, the
+operator's merge of constitution-path PRs, revocation, and the first two
+residuals. In the first residual, the agent-field checks are now the two agent-ID
+checks.
+
+Prepared against base `0cc70164a80825e1e0271160fbb9a005cb1c8c9c`.
