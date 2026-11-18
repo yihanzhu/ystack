@@ -2,9 +2,13 @@
 # Allow one exact pinned merge form on the main thread only, with a matching
 # operator-written publisher file. If any check fails, the merge stays blocked.
 # Issue #275 comment 6966108607.
+# PreToolUse guard for Bash. Exit 2 blocks the command.
+# Defense in depth under ystack-main-gate and the only guard in clones without it.
+# merge-pr.sh stays blocked because its old exemption became a bypass.
 
 input=$(cat)
-cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // empty')
+# Strip NULs before Bash can warn. The allow path checks the original string.
+cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // empty' | tr -d '\000')
 if [ -z "$cmd" ]; then
   exit 0
 fi
@@ -12,6 +16,11 @@ fi
 # Any push whose refspec targets main (origin main, HEAD:main, +sha:refs/heads/main).
 if printf '%s' "$cmd" | grep -Eq 'git[[:space:]]+push[^|;&]*[[:space:]:+](refs/heads/)?main([[:space:]]|$)'; then
   echo "Blocked by ystack guard: no direct pushes to main. Push a branch and open a PR." >&2
+  exit 2
+fi
+
+if printf '%s' "$cmd" | grep -Fq 'merge-publisher'; then
+  echo "Blocked by ystack guard: the merge publisher file is the operator's to write." >&2
   exit 2
 fi
 
@@ -27,11 +36,20 @@ allow_pinned_merge() (
     select(length == 1) | .[0]
     | select(.tool_input.command == $command
         and (.agent_id == null or .agent_id == "")
-        and (.agent_type == null or .agent_type == ""))
+        and (.agent_type == null or .agent_type == "")
+        and (.agentId == null or .agentId == "")
+        and (.agentType == null or .agentType == ""))
     | .session_id | strings | select(test("\\A[A-Za-z0-9-]+\\z"))
   ' <<< "$input") || exit 1
 
-  publisher=${XDG_CONFIG_HOME:-$HOME/.config}/ystack/merge-publisher
+  if [[ $XDG_CONFIG_HOME == /* ]]; then
+    config_dir=$XDG_CONFIG_HOME
+  elif [[ $HOME == /* ]]; then
+    config_dir=$HOME/.config
+  else
+    exit 1
+  fi
+  publisher=$config_dir/ystack/merge-publisher
   [[ -f $publisher && ! -L $publisher ]] || exit 1
   printf '%s %s' "$session_id" "$repo" | cmp -s -- "$publisher" - ||
     printf '%s %s\n' "$session_id" "$repo" | cmp -s -- "$publisher" -

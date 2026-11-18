@@ -591,25 +591,38 @@ Prepared against base `524056f275f2988d6935b4783e11f914c3382e7b`.
 
 Operator yihanzhu decided directly in the chat of Claude Code desktop session
 `7da9169c-8342-4fe0-b5a2-5bf488c7a32b`, the manager named in the 2026-11-05
-succession above. This session may now merge reviewed, CI-green, non-constitution PRs
-itself. The operator asked “每次这个pr你能帮我合并吗” and chose
+succession above. The operator asked “每次这个pr你能帮我合并吗” and chose
 “改钩子，让你合并 (Recommended)”. The durable record is issue #275 comment
 `6966108607`.
 
-This section replaces the 2026-11-05 “Publishing” paragraph for this session only.
+Two steps must happen first, in this order: the operator merges the PR that adds this
+section, and then writes the local publisher file described below. After both, this
+session may merge in-scope non-constitution PRs itself under OD-1. Until then, the
+2026-11-05 “Publishing” paragraph still applies. From then on, this section replaces
+that paragraph, for this session only.
 
-- `.claude/hooks/no-merge-guard.sh` now allows one command form:
-  `gh pr merge <N> --repo <owner>/<repo> --squash --match-head-commit <40-hex>`.
-  It allows the form only when all of these hold:
-  - the form is the whole command;
-  - the call comes from the main session thread, so the hook input has no
-    `agent_id` or `agent_type`;
-  - the operator has written the local file
-    `${XDG_CONFIG_HOME:-$HOME/.config}/ystack/merge-publisher`, and it holds exactly
-    `<session_id> <owner>/<repo>` for that session and repository.
+- `.claude/hooks/no-merge-guard.sh` allows one command form, and only as the whole
+  command: `gh pr merge <N> --repo <owner>/<repo> --squash --match-head-commit <sha>`.
+  - `<N>` is a positive decimal PR number with no leading zero.
+  - Single spaces separate the words.
+  - `<sha>` is 40 lowercase hexadecimal characters.
 
-  A missing or different file blocks, as before. Every other rule of the hook is
-  unchanged, and subagents stay blocked.
+  The hook allows this form only when both of these hold:
+  - **Not a subagent call.** The hook relies on Claude Code to identify subagents.
+    It blocks if `agent_id`, `agent_type`, `agentId` or `agentType` has any value
+    other than null or the empty string. Whether the main thread's hook input
+    leaves these fields out has not been verified live. If the main thread carries
+    one of them, the hook blocks, so the path fails closed.
+  - **A matching publisher file.** `<config>/ystack/merge-publisher` must be a
+    regular file, not a symlink. It must hold exactly `<session_id> <owner>/<repo>`,
+    with at most one final newline. `<session_id>` is the hook input's session ID,
+    made only of letters, digits and `-`. `<owner>/<repo>` is the one in the
+    command. `<config>` is `XDG_CONFIG_HOME` when that is an absolute path, and
+    otherwise `$HOME/.config`.
+
+  In every other case the hook blocks, as before. Every earlier rule of the hook is
+  unchanged, and subagents remain forbidden to merge. The hook also blocks any Bash
+  command that names `merge-publisher`.
 - The manager merges a non-constitution PR only under OD-1's conditions:
   - the newest independent review is clean at the exact head and base;
   - no Important finding is unresolved;
@@ -623,9 +636,15 @@ This section replaces the 2026-11-05 “Publishing” paragraph for this session
   `NORTH_STAR.md` or `config/**`. For them, the manager still gives the operator the
   pinned command.
 - The publisher file is a local appointment on one machine. It is not in this
-  repository and not restore-critical. The operator, not an agent, writes it. A
-  successor needs another explicit operator handoff and a rewritten file. The
-  operator revokes the path by saying so or by deleting the file.
+  repository and not restore-critical. The operator, not an agent, writes it. The
+  hook trusts the file and cannot prove who wrote it. It blocks Bash commands that
+  name the file, but not Claude's Write or Edit tools. A successor needs another
+  explicit operator handoff and a rewritten file. The operator revokes the path by
+  saying so or by deleting the file.
+- One residual is known. The hook checks a session ID, not a process. A process that
+  resumes this session, for example `claude --resume` with this session's ID, carries
+  the same ID and no subagent fields. Like the shell tricks the hook never stopped,
+  this takes a deliberate workaround, and no agent may use one.
 - The hook is defense in depth. The `ystack-main-gate` ruleset still blocks a red or
   stale merge, whoever calls it: it requires `ci`, keeps branches strictly up to
   date, allows squash merges only and allows no direct pushes.
