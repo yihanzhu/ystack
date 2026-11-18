@@ -19,6 +19,12 @@ cmd="gh pr merge 12 --repo $repo --squash --match-head-commit $sha"
 publisher_line="$session_id $repo"
 merge_message='Blocked by ystack guard: agents never merge PRs. The operator merges at the gate.'
 publisher_message="Blocked by ystack guard: the merge publisher file is the operator's to write."
+read_message='Blocked by ystack guard: the hook could not read its input.'
+command_check='tool_input.command does not equal the checked command'
+agent_check='agent_id or agentId is set'
+session_check='session_id is missing or not letters, digits and hyphens'
+publisher_path_check='publisher file is missing, a symlink or not a regular file'
+publisher_contents_check='publisher file does not name this session and repository'
 passed=0
 failed=0
 
@@ -30,16 +36,19 @@ hook_input() {
 
 assert_hook() {
   local label=$1 expected_status=$2 input=$3 expected_stderr=${4-}
-  local status=0 stderr
+  local status=0
   printf '%s' "$input" | "$hook" >/dev/null 2>"$tmp/stderr" || status=$?
-  stderr=$(cat "$tmp/stderr")
-  if [[ $status == "$expected_status" && $stderr == "$expected_stderr" ]]; then
+  if [[ $status == "$expected_status" ]] && cmp -s "$tmp/stderr" <(
+    if [[ -n $expected_stderr ]]; then
+      printf '%s\n' "$expected_stderr"
+    fi
+  ); then
     passed=$((passed + 1))
     printf 'PASS %s\n' "$label"
   else
     failed=$((failed + 1))
     printf 'FAIL %s\n  expected exit %s and stderr [%s]\n  got exit %s and stderr [%s]\n' \
-      "$label" "$expected_status" "$expected_stderr" "$status" "$stderr"
+      "$label" "$expected_status" "$expected_stderr" "$status" "$(cat "$tmp/stderr")"
   fi
 }
 
@@ -49,51 +58,75 @@ block_merge() {
   assert_hook "$label" 2 "$(hook_input "$@")" "$merge_message"
 }
 
+pinned_message() {
+  printf '%s\nPinned merge check failed: %s.' "$merge_message" "$1"
+}
+
+block_pinned_merge() {
+  local label=$1 check=$2
+  shift 2
+  assert_hook "$label" 2 "$(hook_input "$@")" "$(pinned_message "$check")"
+}
+
 printf '%s' "$publisher_line" > "$publisher"
 assert_hook 'exact pinned merge' 0 "$(hook_input "$cmd")"
 printf '%s\n' "$publisher_line" > "$publisher"
 assert_hook 'publisher line with one trailing newline' 0 "$(hook_input "$cmd")"
-assert_hook 'null agent fields' 0 "$(hook_input "$cmd" "$session_id" '{"agent_id":null,"agent_type":null}')"
-assert_hook 'empty agent fields' 0 "$(hook_input "$cmd" "$session_id" '{"agent_id":"","agent_type":""}')"
+assert_hook 'null agent fields' 0 "$(hook_input "$cmd" "$session_id" '{"agent_id":null,"agentId":null}')"
+assert_hook 'empty agent fields' 0 "$(hook_input "$cmd" "$session_id" '{"agent_id":"","agentId":""}')"
 
-block_merge 'agent ID present' "$cmd" "$session_id" '{"agent_id":"subagent-1"}'
-block_merge 'agent type present' "$cmd" "$session_id" '{"agent_type":"reviewer"}'
-block_merge 'non-string agent field' "$cmd" "$session_id" '{"agent_id":false}'
-block_merge 'numeric agent type' "$cmd" "$session_id" '{"agent_type":0}'
-block_merge 'camelCase agent ID present' "$cmd" "$session_id" '{"agentId":"subagent-1"}'
-block_merge 'camelCase agent type present' "$cmd" "$session_id" '{"agentType":"reviewer"}'
-block_merge 'empty session ID' "$cmd" ''
-block_merge 'invalid session ID' "$cmd" 'manager_123'
-block_merge 'session ID with trailing newline' "$cmd" "$session_id"$'\n'
+assert_hook 'agent type present' 0 "$(hook_input "$cmd" "$session_id" '{"agent_type":"reviewer"}')"
+assert_hook 'numeric agent type' 0 "$(hook_input "$cmd" "$session_id" '{"agent_type":0}')"
+assert_hook 'empty agent type' 0 "$(hook_input "$cmd" "$session_id" '{"agent_type":""}')"
+assert_hook 'camelCase agent type present' 0 "$(hook_input "$cmd" "$session_id" '{"agentType":"reviewer"}')"
+assert_hook 'numeric camelCase agent type' 0 "$(hook_input "$cmd" "$session_id" '{"agentType":0}')"
+assert_hook 'empty camelCase agent type' 0 "$(hook_input "$cmd" "$session_id" '{"agentType":""}')"
+block_pinned_merge 'agent ID present' "$agent_check" "$cmd" "$session_id" '{"agent_id":"subagent-1"}'
+block_pinned_merge 'agent ID and type present' "$agent_check" "$cmd" "$session_id" \
+  '{"agent_id":"subagent-1","agent_type":"reviewer"}'
+block_pinned_merge 'boolean agent ID' "$agent_check" "$cmd" "$session_id" '{"agent_id":false}'
+block_pinned_merge 'numeric agent ID' "$agent_check" "$cmd" "$session_id" '{"agent_id":0}'
+block_pinned_merge 'object agent ID' "$agent_check" "$cmd" "$session_id" '{"agent_id":{}}'
+block_pinned_merge 'camelCase agent ID present' "$agent_check" "$cmd" "$session_id" '{"agentId":"subagent-1"}'
+block_pinned_merge 'camelCase agent ID and type present' "$agent_check" "$cmd" "$session_id" \
+  '{"agentId":"subagent-1","agentType":"reviewer"}'
+block_pinned_merge 'boolean camelCase agent ID' "$agent_check" "$cmd" "$session_id" '{"agentId":false}'
+block_pinned_merge 'numeric camelCase agent ID' "$agent_check" "$cmd" "$session_id" '{"agentId":0}'
+block_pinned_merge 'object camelCase agent ID' "$agent_check" "$cmd" "$session_id" '{"agentId":{}}'
+block_pinned_merge 'empty session ID' "$session_check" "$cmd" ''
+block_pinned_merge 'invalid session ID' "$session_check" "$cmd" 'manager_123'
+block_pinned_merge 'session ID with trailing newline' "$session_check" "$cmd" "$session_id"$'\n'
 
 mv "$publisher" "$tmp/publisher-target"
-block_merge 'missing publisher file' "$cmd"
+block_pinned_merge 'missing publisher file' "$publisher_path_check" "$cmd"
 ln -s "$tmp/publisher-target" "$publisher"
-block_merge 'publisher file is a symlink' "$cmd"
+block_pinned_merge 'publisher file is a symlink' "$publisher_path_check" "$cmd"
 rm "$publisher"
 mkdir "$publisher"
-block_merge 'publisher path is a directory' "$cmd"
+block_pinned_merge 'publisher path is a directory' "$publisher_path_check" "$cmd"
 rmdir "$publisher"
 printf 'other-session %s\n' "$repo" > "$publisher"
-block_merge 'publisher names another session' "$cmd"
+block_pinned_merge 'publisher names another session' "$publisher_contents_check" "$cmd"
 printf '%s other/repo\n' "$session_id" > "$publisher"
-block_merge 'publisher names another repository' "$cmd"
+block_pinned_merge 'publisher names another repository' "$publisher_contents_check" "$cmd"
 printf '%s\nextra\n' "$publisher_line" > "$publisher"
-block_merge 'publisher file has an extra line' "$cmd"
+block_pinned_merge 'publisher file has an extra line' "$publisher_contents_check" "$cmd"
 printf '%s\n\n' "$publisher_line" > "$publisher"
-block_merge 'publisher file has an extra blank line' "$cmd"
+block_pinned_merge 'publisher file has an extra blank line' "$publisher_contents_check" "$cmd"
 printf '%s\0' "$publisher_line" > "$publisher"
-block_merge 'publisher file has a NUL byte' "$cmd"
+block_pinned_merge 'publisher file has a NUL byte' "$publisher_contents_check" "$cmd"
 printf '%s\n' "$publisher_line" > "$publisher"
 
 block_merge 'semicolon and another command' "$cmd; echo x"
 block_merge 'and operator and another command' "$cmd && true"
 block_merge 'embedded newline' "$cmd"$'\necho x'
-block_merge 'trailing newline' "$cmd"$'\n'
+block_pinned_merge 'trailing newline' "$command_check" "$cmd"$'\n'
 assert_hook 'NUL at the end of the JSON command' 2 "$(hook_input "$cmd" |
-  jq -c '.tool_input.command += "\u0000"')" "$merge_message"
+  jq -c '.tool_input.command += "\u0000"')" "$(pinned_message "$command_check")"
 input=$(hook_input "$cmd")
-assert_hook 'two JSON documents on stdin' 2 "$input"$'\n'"$input" "$merge_message"
+assert_hook 'two JSON documents on stdin' 2 '{}'$'\n'"$input" \
+  "$(pinned_message 'hook input is not exactly one JSON document')"
+assert_hook 'two command documents on stdin' 2 "$input"$'\n'"$input" "$merge_message"
 block_merge 'leading space' " $cmd"
 block_merge 'admin flag' "$cmd --admin"
 block_merge 'auto flag' "$cmd --auto"
@@ -121,20 +154,34 @@ assert_hook 'printf redirects to the mixed-case publisher name' 2 \
   "$(hook_input "printf '%s\n' '$publisher_line' > '$HOME/.config/ystack/Merge-Publisher'")" "$publisher_message"
 assert_hook 'ordinary command' 0 "$(hook_input 'git status')"
 assert_hook 'empty input' 0 ''
+assert_hook 'unfinished JSON input' 2 '{' "$read_message"
+assert_hook 'non-JSON input' 2 'not json' "$read_message"
+assert_hook 'malformed input after a valid JSON document' 2 "$input"$'\n''{' "$read_message"
+
+multibyte_locale=$(locale -a | awk 'tolower($0) ~ /utf-?8$/ && !found { print; found = 1 }')
+if [[ -n $multibyte_locale ]]; then
+  LC_ALL="$multibyte_locale" assert_hook 'exact pinned merge in a multibyte locale' 0 "$input"
+  invalid_byte_input=$(printf '{"tool_input":{"command":"echo \377; %s"},"session_id":"%s"}' "$cmd" "$session_id")
+  LC_ALL="$multibyte_locale" assert_hook 'merge with invalid UTF-8 in a multibyte locale' 2 \
+    "$invalid_byte_input" "$merge_message"
+else
+  printf 'PASS skipped multibyte locale cases (no UTF-8 locale installed)\n'
+fi
 
 XDG_CONFIG_HOME=config
-block_merge 'relative XDG config with no file in the default directory' "$cmd"
+block_pinned_merge 'relative XDG config with no file in the default directory' "$publisher_path_check" "$cmd"
 mv "$publisher" "$HOME/.config/ystack/merge-publisher"
 XDG_CONFIG_HOME=''
 assert_hook 'publisher file in the default config directory' 0 "$(hook_input "$cmd")"
 XDG_CONFIG_HOME="$tmp/empty-config"
 mkdir "$XDG_CONFIG_HOME"
-block_merge 'absolute XDG config without a publisher file does not fall back to HOME' "$cmd"
+block_pinned_merge 'absolute XDG config without a publisher file does not fall back to HOME' \
+  "$publisher_path_check" "$cmd"
 XDG_CONFIG_HOME=config
 assert_hook 'relative XDG config is ignored in favor of the default directory' 0 "$(hook_input "$cmd")"
 unset XDG_CONFIG_HOME
 HOME=home
-block_merge 'relative HOME with XDG config unset' "$cmd"
+block_pinned_merge 'relative HOME with XDG config unset' 'no absolute config directory' "$cmd"
 
 printf '\n%s passed, %s failed\n' "$passed" "$failed"
 [[ $failed == 0 ]]
