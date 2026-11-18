@@ -703,10 +703,12 @@ change below. This section updates the 2026-11-17 section only where it says so.
   The push-to-main and tripwire rules still run first, with their own messages.
 - **jq fails closed.** If the first jq call fails, or the input holds a raw NUL
   byte, the hook blocks the command with an input-error message. So a missing jq
-  or a `~/.jq` that jq cannot load now blocks every Bash command. Input that
-  carries no command, such as empty input, whitespace only or JSON `null`, is
-  still allowed, as before. This replaces the third residual of the 2026-11-17
-  section.
+  or a `~/.jq` that jq cannot load now blocks every Bash command. If the first jq
+  call succeeds and the command it extracts is empty, the hook allows the call, as
+  before. Empty input, whitespace only, JSON `null` and an object without a
+  command take this path. Other JSON values, such as an array, `false`, a string
+  or a number, make the first jq call fail and are blocked. This replaces the
+  third residual of the 2026-11-17 section.
 - **Locale.** The whole hook runs with `LC_ALL=C`, so a multibyte locale cannot
   change how the command text is read.
 - **Tripwire limits, stated exactly.** The `merge-publisher` text rule compares
@@ -715,10 +717,14 @@ change below. This section updates the 2026-11-17 section only where it says so.
   itself is not a symlink. It does not check the directories above the file, so a
   symlinked `ystack` or config directory is followed.
 - **A known residual, unchanged.** jq loads `~/.jq` when that file exists, and a
-  definition there can change what jq returns. A deliberate write there could
-  fake the session check or hide the command, so the hook would allow it. This was
-  already true before this change. Like the shell tricks the hook never stopped, it
-  takes a deliberate workaround, and no agent may use one.
+  definition there can change what jq returns. A deliberate write there can make
+  every jq check on the pinned path pass, including the agent-ID and session
+  checks. The pinned form would then be allowed from a subagent of the named
+  session, or from another session. Such a write cannot hide a command from the
+  other block rules. A planted `jq`, `grep`, `tr` or `cmp` earlier on the PATH
+  has the same effect. This was already true before this change. Like the shell
+  tricks the hook never stopped, it takes a deliberate workaround, and no agent
+  may use one.
 
 Everything else in the 2026-11-17 section stands: the exact pinned form, the
 publisher file and its config-directory rule, OD-1's conditions, the receipt, the
