@@ -696,15 +696,17 @@ change below. This section updates the 2026-11-17 section only where it says so.
   apart. So `agent_type` on a main thread could block the manager by mistake. The
   hook still relies on Claude Code to mark subagent calls, now with the field that
   Claude Code documents for this.
-- **The failed check is named.** When the whole command is the exact pinned form
-  but a later check fails, the hook keeps the general merge message and adds one
-  line with a fixed phrase for the first failed check. That line includes no input
-  value: no session ID, repository, path or file content.
+- **The failed check is named.** When the exact pinned form reaches the
+  pinned-merge checks and one of them fails, the hook keeps the general merge
+  message and adds one line with a fixed phrase for the first failed check. That
+  line includes no input value: no session ID, repository, path or file content.
+  The push-to-main and tripwire rules still run first, with their own messages.
 - **jq fails closed.** If the first jq call fails, or the input holds a raw NUL
-  byte, the hook blocks the command with an input-error message. This covers
-  input that is not JSON or not a JSON object, and jq itself failing; a missing
-  jq or a broken `~/.jq` now blocks every Bash command. Empty input is still
-  allowed, as before. This replaces the third residual of the 2026-11-17 section.
+  byte, the hook blocks the command with an input-error message. So a missing jq
+  or a `~/.jq` that jq cannot load now blocks every Bash command. Input that
+  carries no command, such as empty input, whitespace only or JSON `null`, is
+  still allowed, as before. This replaces the third residual of the 2026-11-17
+  section.
 - **Locale.** The whole hook runs with `LC_ALL=C`, so a multibyte locale cannot
   change how the command text is read.
 - **Tripwire limits, stated exactly.** The `merge-publisher` text rule compares
@@ -712,6 +714,11 @@ change below. This section updates the 2026-11-17 section only where it says so.
   system may fold to the same name. The hook checks that the publisher file
   itself is not a symlink. It does not check the directories above the file, so a
   symlinked `ystack` or config directory is followed.
+- **A known residual, unchanged.** jq loads `~/.jq` when that file exists, and a
+  definition there can change what jq returns. A deliberate write there could
+  fake the session check or hide the command, so the hook would allow it. This was
+  already true before this change. Like the shell tricks the hook never stopped, it
+  takes a deliberate workaround, and no agent may use one.
 
 Everything else in the 2026-11-17 section stands: the exact pinned form, the
 publisher file and its config-directory rule, OD-1's conditions, the receipt, the

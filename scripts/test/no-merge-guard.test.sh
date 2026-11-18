@@ -179,7 +179,7 @@ else
   printf 'PASS skipped UTF-8 locale cases (locale -a found no UTF-8 locale)\n'
 fi
 
-legacy_locale=$(awk 'tolower($0) ~ /(big5|gb18030|gbk|sjis|euc-?jp)/ { print; exit }' <<< "$available_locales")
+legacy_locale=$(awk 'tolower($0) ~ /\.(big5|gb18030|gbk)$/ { print; exit }' <<< "$available_locales")
 if [[ -n $legacy_locale ]]; then
   LC_ALL="$legacy_locale" assert_hook "merge after a UTF-8 euro sign in $legacy_locale" 2 \
     "$(hook_input 'echo €;gh pr merge 1 --admin')" "$merge_message"

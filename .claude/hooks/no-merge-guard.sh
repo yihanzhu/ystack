@@ -1,7 +1,7 @@
 #!/bin/bash
 # PreToolUse guard for Bash. Blocks direct pushes to main and agent merges.
 # Exit 2 blocks the command.
-# Allow one exact pinned merge form on the main thread only (no agent_id),
+# Allow one exact pinned merge form on the main thread only (no agent_id or agentId),
 # with a matching operator-written publisher file. If any check fails, block.
 # Issue #275 comment 6966108607.
 # Issue #275 comment 6981243584.
@@ -33,12 +33,12 @@ if printf '%s' "$cmd" | grep -Fqi 'merge-publisher'; then
   exit 2
 fi
 
-fail_pinned_merge() {
-  printf 'Pinned merge check failed: %s.\n' "$1"
-  exit 1
-}
-
 allow_pinned_merge() (
+  fail_pinned_merge() {
+    printf 'Pinned merge check failed: %s.\n' "$1"
+    exit 1
+  }
+
   shopt -u nocasematch
   merge_pattern='^gh pr merge [1-9][0-9]* --repo ([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+) --squash --match-head-commit [0-9a-f]{40}$'
   [[ $cmd =~ $merge_pattern ]] || exit 1
