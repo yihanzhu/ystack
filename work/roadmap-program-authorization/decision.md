@@ -586,3 +586,83 @@ authority. This direct handoff, not this record, supplies the successor authorit
 a further successor needs another explicit operator handoff recorded here.
 
 Prepared against base `524056f275f2988d6935b4783e11f914c3382e7b`.
+
+## Publishing change — 2026-11-17
+
+Operator yihanzhu decided directly in the chat of Claude Code desktop session
+`7da9169c-8342-4fe0-b5a2-5bf488c7a32b`, the manager named in the 2026-11-05
+succession above. The operator asked “每次这个pr你能帮我合并吗” and chose
+“改钩子，让你合并 (Recommended)”. The durable record is issue #275 comment
+`6966108607`.
+
+Two steps must happen first, in this order: the operator merges the PR that adds this
+section, and then writes the local publisher file described below. After both, this
+session may merge in-scope non-constitution PRs itself under OD-1. Until then, the
+2026-11-05 “Publishing” paragraph still applies. From then on, this section replaces
+that paragraph, for this session only.
+
+- `.claude/hooks/no-merge-guard.sh` allows one command form, and only as the whole
+  command: `gh pr merge <N> --repo <owner>/<repo> --squash --match-head-commit <sha>`.
+  - `<N>` is a positive decimal PR number with no leading zero.
+  - Single spaces separate the words.
+  - `<sha>` is 40 lowercase hexadecimal characters.
+
+  The hook allows this form only when both of these hold:
+  - **Not a subagent call.** The hook relies on Claude Code to identify subagents.
+    It blocks if `agent_id`, `agent_type`, `agentId` or `agentType` has any value
+    other than null or the empty string. Whether the main thread's hook input
+    leaves these fields out has not been verified live. If the main thread carries
+    one of them, the hook blocks, so the path fails closed.
+  - **A matching publisher file.** `<config>/ystack/merge-publisher` must be a
+    regular file, not a symlink. It must hold exactly `<session_id> <owner>/<repo>`,
+    with at most one final newline. `<session_id>` is the hook input's session ID,
+    made only of letters, digits and `-`. `<owner>/<repo>` is the one in the
+    command. `<config>` is `XDG_CONFIG_HOME` when that is an absolute path.
+    Otherwise it is `$HOME/.config`, but only when `HOME` is absolute. If neither is
+    absolute, the hook blocks the merge. An absolute `XDG_CONFIG_HOME` with no file
+    blocks too: the hook does not fall back to `$HOME/.config`.
+
+  If the pinned form fails any check, the hook blocks it, as before. The other merge
+  and main-push rules still apply unchanged, and subagents remain forbidden to merge.
+  The hook also blocks any Bash command that contains the text `merge-publisher`, in
+  any letter case. That rule is only a tripwire, because Bash can still reach the file
+  through a glob, quoting or a variable.
+- The manager merges a non-constitution PR only under OD-1's conditions:
+  - the newest independent review is clean at the exact head and base;
+  - no Important finding is unresolved;
+  - all required CI is green;
+  - the labels are consistent;
+  - the merge is pinned to the reviewed head.
+
+  It then records the receipt.
+- Constitution-path PRs stay the operator's to merge. These are PRs that touch
+  `.github/**`, `.claude/**`, `AGENTS.md`, `CLAUDE.md`, `REVIEW.md`, `ROADMAP.md`,
+  `NORTH_STAR.md` or `config/**`. For them, the manager still gives the operator the
+  pinned command.
+- The publisher file is a local appointment on one machine. It is not in this
+  repository and not restore-critical. The operator, not an agent, writes it. The
+  hook trusts the file and cannot prove who wrote it. Its tripwire covers Bash
+  commands only, not Claude's Write or Edit tools. A successor needs another
+  explicit operator handoff and a rewritten file. The operator revokes the path by
+  saying so or by deleting the file.
+- Three residuals are known.
+  - **The hook checks a session ID, not a process.** A process that resumes this
+    session, for example `claude --resume` with this session's ID, carries the same
+    session ID. If its hook input passes the four agent-field checks, the hook
+    cannot tell the two processes apart. Like the shell tricks the hook never
+    stopped, this takes a deliberate workaround, and no agent may use one.
+  - **The hook does not look at which files a PR touches.** The pinned form can
+    merge any PR in the named repository. That includes a constitution-path PR, and
+    a PR that edits this hook. The rule that constitution-path PRs stay the
+    operator's is policy, not a hook check.
+  - **The hook fails open when jq fails, as it did before this change.** Examples
+    are invalid input or a broken `~/.jq`. Making it fail closed is a separate
+    follow-up.
+- The hook is defense in depth. The `ystack-main-gate` ruleset still blocks a red or
+  stale merge, whoever calls it: it requires `ci`, keeps branches strictly up to
+  date, allows squash merges only and allows no direct pushes.
+
+The rest of this record is unchanged: RC-1, OD-1, the reserved operator decisions,
+the one-manager invariant, review separation and the rounds cap.
+
+Prepared against base `c9910580f003718169abeb84830f092f453693d5`.

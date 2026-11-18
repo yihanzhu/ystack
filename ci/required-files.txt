@@ -613,3 +613,6 @@ adapters/github-forge/v1/_collector_model.py
 scripts/test/github-change-request-collector.test.sh
 scripts/test/fixtures/github-change-request-collector/v1/test_collector.py
 docs/github-change-request-collector.md
+
+# Merge guard regression test (see .claude/hooks/no-merge-guard.sh)
+scripts/test/no-merge-guard.test.sh
