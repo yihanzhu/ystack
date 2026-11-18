@@ -35,9 +35,13 @@ hook_input() {
 }
 
 assert_hook() {
-  local label=$1 expected_status=$2 input=$3 expected_stderr=${4-}
+  assert_hook_stdin "$1" "$2" "${4-}" < <(printf '%s' "$3")
+}
+
+assert_hook_stdin() {
+  local label=$1 expected_status=$2 expected_stderr=$3
   local status=0
-  printf '%s' "$input" | "$hook" >/dev/null 2>"$tmp/stderr" || status=$?
+  "$hook" >/dev/null 2>"$tmp/stderr" || status=$?
   if [[ $status == "$expected_status" ]] && cmp -s "$tmp/stderr" <(
     if [[ -n $expected_stderr ]]; then
       printf '%s\n' "$expected_stderr"
@@ -156,16 +160,31 @@ assert_hook 'ordinary command' 0 "$(hook_input 'git status')"
 assert_hook 'empty input' 0 ''
 assert_hook 'unfinished JSON input' 2 '{' "$read_message"
 assert_hook 'non-JSON input' 2 'not json' "$read_message"
+assert_hook 'JSON string input' 2 '"x"' "$read_message"
+assert_hook 'JSON array input' 2 '[]' "$read_message"
 assert_hook 'malformed input after a valid JSON document' 2 "$input"$'\n''{' "$read_message"
+assert_hook_stdin 'raw NUL between ordinary and pinned command documents' 2 "$read_message" \
+  < <(printf '%s\0%s' "$(hook_input 'git status')" "$input")
+assert_hook_stdin 'raw NUL after pinned command document' 2 "$read_message" \
+  < <(printf '%s\0' "$input")
 
-multibyte_locale=$(locale -a | awk 'tolower($0) ~ /utf-?8$/ && !found { print; found = 1 }')
-if [[ -n $multibyte_locale ]]; then
-  LC_ALL="$multibyte_locale" assert_hook 'exact pinned merge in a multibyte locale' 0 "$input"
+available_locales=$(locale -a 2>/dev/null || true)
+utf8_locale=$(awk 'tolower($0) ~ /utf-?8$/ { print; exit }' <<< "$available_locales")
+if [[ -n $utf8_locale ]]; then
+  LC_ALL="$utf8_locale" assert_hook 'exact pinned merge stays allowed in a UTF-8 locale' 0 "$input"
   invalid_byte_input=$(printf '{"tool_input":{"command":"echo \377; %s"},"session_id":"%s"}' "$cmd" "$session_id")
-  LC_ALL="$multibyte_locale" assert_hook 'merge with invalid UTF-8 in a multibyte locale' 2 \
+  LC_ALL="$utf8_locale" assert_hook 'merge with an invalid input byte stays blocked in a UTF-8 locale' 2 \
     "$invalid_byte_input" "$merge_message"
 else
-  printf 'PASS skipped multibyte locale cases (no UTF-8 locale installed)\n'
+  printf 'PASS skipped UTF-8 locale cases (locale -a found no UTF-8 locale)\n'
+fi
+
+legacy_locale=$(awk 'tolower($0) ~ /(big5|gb18030|gbk|sjis|euc-?jp)/ { print; exit }' <<< "$available_locales")
+if [[ -n $legacy_locale ]]; then
+  LC_ALL="$legacy_locale" assert_hook "merge after a UTF-8 euro sign in $legacy_locale" 2 \
+    "$(hook_input 'echo €;gh pr merge 1 --admin')" "$merge_message"
+else
+  printf 'PASS skipped legacy multibyte locale case (locale -a found no supported legacy locale)\n'
 fi
 
 XDG_CONFIG_HOME=config

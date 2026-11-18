@@ -671,18 +671,20 @@ Prepared against base `c9910580f003718169abeb84830f092f453693d5`.
 
 The operator, yihanzhu, wrote directly in manager session
 `7da9169c-8342-4fe0-b5a2-5bf488c7a32b`: “什么时候你能合并？我不想我再点合并了”.
-The durable records are issue #275 comments `6981243584` and `6981315043`. The
-operator's merge of the PR that adds this section accepts the change below. This
-section updates the 2026-11-17 section only where it says so.
+The durable records are issue #275 comments `6981243584`, `6981315043` and
+`6981455927`. The operator's merge of the PR that adds this section accepts the
+change below. This section updates the 2026-11-17 section only where it says so.
 
 - **Why the first use failed.** The first pinned merge, for #834, was blocked on
-  the manager's main thread (#275 comment `6978702235`). The hook that ran was
-  most likely the old copy in the operator's main checkout, not the merged one.
-  The hook entry runs the script under the Claude Code project directory, and for
-  a worktree session that copy lagged behind main. Evidence: in that session, a
-  Bash command containing the tripwire text ran without a block, which the merged
-  hook never allows; the old copy, run by hand, blocks the pinned form and allows
-  that text, as seen. So a merged hook change takes effect for a session only
+  the manager's main thread (#275 comment `6978702235`). The hook that ran was the
+  old copy in the operator's main checkout, not the merged one. The hook entry runs
+  the script under the Claude Code project directory, and for this worktree
+  session that is the main checkout, which still held the old commit. Evidence: in
+  that session, a Bash command containing the tripwire text ran without a block.
+  The merged hook, run by hand, blocked the same text. The old copy, run by hand,
+  blocked the pinned form and allowed that text, as seen. After the operator
+  fast-forwarded the main checkout, the same kind of command was blocked (#275
+  comment `6981455927`). So a merged hook change takes effect for a session only
   after the checkout that holds its project directory is updated.
 - **Not a subagent call, replaced.** The hook now blocks the pinned form when
   `agent_id` or `agentId` has any value other than null or the empty string. It no
@@ -696,12 +698,13 @@ section updates the 2026-11-17 section only where it says so.
   Claude Code documents for this.
 - **The failed check is named.** When the whole command is the exact pinned form
   but a later check fails, the hook keeps the general merge message and adds one
-  line that names the failed check. That line gives field names only, never a
-  session ID, repository, path or file content.
-- **jq fails closed.** If the hook cannot parse its input as JSON, or the input
-  holds a raw NUL byte, it blocks the command with its own message. Empty input is
-  still allowed, as before. This replaces the third residual of the 2026-11-17
-  section.
+  line with a fixed phrase for the first failed check. That line includes no input
+  value: no session ID, repository, path or file content.
+- **jq fails closed.** If the first jq call fails, or the input holds a raw NUL
+  byte, the hook blocks the command with an input-error message. This covers
+  input that is not JSON or not a JSON object, and jq itself failing; a missing
+  jq or a broken `~/.jq` now blocks every Bash command. Empty input is still
+  allowed, as before. This replaces the third residual of the 2026-11-17 section.
 - **Locale.** The whole hook runs with `LC_ALL=C`, so a multibyte locale cannot
   change how the command text is read.
 - **Tripwire limits, stated exactly.** The `merge-publisher` text rule compares
