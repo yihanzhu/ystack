@@ -48,6 +48,16 @@ jq_bin="$tmp/bin/jq"
 /usr/bin/grep -qxF scripts/test/evals-dashboard.test.sh "$manifest" || fail 'manifest missing test'
 observed_at=2026-09-05T00:00:00Z
 
+[ "$(sha_file "$catalog")" = 0239138447a8f9fd420cb3c5da31660d8f75c85099d80d89a040dce2878a4cac ] ||
+  fail 'shipped catalog digest changed'
+"$jq_bin" -e '
+  [.body.families[] | select(.seed_status == "declared") |
+    {family_id,seed_sources}] ==
+  [{family_id:"malicious-instructions",seed_sources:[]},
+   {family_id:"reviewer-severity-false-positive-negative",seed_sources:[]}]
+' "$catalog" >/dev/null || fail 'declared families changed'
+pass 'the catalog bytes and both declared families remain unchanged'
+
 # --- one run per shipped seed set, then one dashboard over all of them -----------
 seeds=(seed-set seed-set-events seed-set-plans seed-set-boundaries seed-set-adapters
   seed-set-approvals seed-set-duty)
@@ -157,6 +167,119 @@ expect_error claimed-evaluator-digest E_RELATION "$root/evals/v1/seed-set.json" 
 expect_error mismatched-pair E_RELATION "$root/evals/v1/seed-set-events.json" "$tmp/seed-set.result.json"
 expect_error duplicate-result E_RUNTIME "$root/evals/v1/seed-set.json" "$tmp/seed-set.result.json" \
   "$root/evals/v1/seed-set.json" "$tmp/seed-set.result.json"
+[ "$(sha_file "$tmp/seed-set.result.json")" != "$(sha_file "$tmp/earlier.result.json")" ] ||
+  fail 'repeat-case fixture must have distinct result digests'
+expect_error repeated-family-case E_SHAPE "$root/evals/v1/seed-set.json" "$tmp/seed-set.result.json" \
+  "$tmp/seed-no-newline.json" "$tmp/earlier.result.json"
+pass 'distinct results cannot count the same family and case twice'
+
+for fixture in family-a family-b disjoint-a disjoint-b; do
+  case "$fixture" in
+    family-a) family=empty-fake-timed-out-degraded-reviews; slot=0; case_id=shared.case ;;
+    family-b) family=stale-moved-artifacts; slot=0; case_id=shared.case ;;
+    disjoint-a) family=stale-moved-artifacts; slot=0; case_id=distinct.case-a ;;
+    disjoint-b) family=stale-moved-artifacts; slot=1; case_id=distinct.case-b ;;
+  esac
+  "$jq_bin" -S -c --arg id "evals.seed.$fixture" --arg family "$family" \
+    --argjson slot "$slot" --arg case_id "$case_id" '
+    .id = $id | .body.cases =
+      [([.body.cases[] | select(.family_id == $family)][$slot] | .case_id = $case_id)]
+  ' "$root/evals/v1/seed-set.json" >"$tmp/$fixture.seed.json" || fail "$fixture seed"
+  "$framework" run "$tmp/$fixture.seed.json" "$observed_at" \
+    >"$tmp/$fixture.result.json" 2>"$tmp/$fixture.run.err" ||
+    fail "$fixture run: $(<"$tmp/$fixture.run.err")"
+done
+for fixture in family disjoint; do
+  "$framework" dashboard "$observed_at" \
+    "$tmp/$fixture-a.seed.json" "$tmp/$fixture-a.result.json" \
+    "$tmp/$fixture-b.seed.json" "$tmp/$fixture-b.result.json" \
+    >"$tmp/$fixture.dashboard.json" 2>"$tmp/$fixture.dashboard.err" ||
+    fail "$fixture dashboard: $(<"$tmp/$fixture.dashboard.err")"
+  [ ! -s "$tmp/$fixture.dashboard.err" ] || fail "$fixture dashboard stderr"
+  "$jq_bin" -e --arg fixture "$fixture" '
+    .body.quality == {total:2,passed:2,failed:0,inconclusive:0} and
+    (.body.inputs | length) == 2 and
+    if $fixture == "family" then
+      .body.coverage.families_with_results == 2 and
+      ([.body.families[] | select(.cases.total > 0) | {runs,cases}] ==
+        [{runs:1,cases:{total:1,passed:1,failed:0,inconclusive:0}},
+         {runs:1,cases:{total:1,passed:1,failed:0,inconclusive:0}}])
+    else
+      .body.coverage.families_with_results == 1 and
+      (.body.families[] | select(.family_id == "stale-moved-artifacts") |
+        .runs == 2 and .cases == {total:2,passed:2,failed:0,inconclusive:0})
+    end
+  ' "$tmp/$fixture.dashboard.json" >/dev/null || fail "$fixture dashboard counts"
+done
+pass 'same case id in different families and distinct cases in one family count separately'
+
+launcher="$root/evals/v1/evals-launcher.sh"
+program="$root/evals/v1/evals.jq"
+driver="$root/evals/v1/evals-driver.sh"
+generation=$(/usr/bin/grep -oE '^generation=g-[0-9a-f]{64}$' "$launcher" | /usr/bin/cut -d= -f2)
+[ -n "$generation" ] || fail 'launcher generation missing'
+modules="$root/core/v2/generations/$generation/modules"
+[ -d "$modules" ] || fail 'selected modules missing'
+"$jq_bin" -S -c '.body.evaluator.content' "$tmp/seed-set.result.json" >"$tmp/evaluator.json"
+evaluator_sha=$("$jq_bin" -r '.body.evaluator.sha256' "$tmp/seed-set.result.json")
+[ "$(sha_file "$tmp/evaluator.json")" = "$evaluator_sha" ] || fail 'evaluator digest'
+"$jq_bin" -n --arg r "$(sha_file "$root/adapters/codex-native-reviewer/v1/normalize.jq")" \
+  --arg c "$(sha_file "$root/adapters/github-actions-ci/v1/normalize.jq")" \
+  --arg f "$(sha_file "$root/adapters/github-forge/v1/normalize.jq")" \
+  --arg g "$(sha_file "$root/adapters/gitlab-forge/v1/normalize.jq")" \
+  --arg p "$(sha_file "$root/adapters/codex-cli-producer/v1/normalize.jq")" \
+  '{"codex-cli-producer":$p,"codex-native-reviewer":$r,"github-actions-ci":$c,
+    "github-forge":$f,"gitlab-forge":$g}' >"$tmp/normalizers.json"
+/usr/bin/printf '[]\n' >"$tmp/empty.json"
+direct_dashboard() {
+  local operation=$1 candidate=$2 first=$3 second=$4
+  /bin/cat "$first" "$second" >"$tmp/direct-results.jsonl" || return 1
+  "$jq_bin" -S -c -n -L "$modules" \
+    --arg evals_operation "$operation" \
+    --arg program_sha256 "$(sha_file "$program")" --arg driver_sha256 "$(sha_file "$driver")" \
+    --arg catalog_sha256 "$(sha_file "$catalog")" --arg evaluator_sha256 "$evaluator_sha" \
+    --arg seed_set_sha256 "$(sha_file "$root/evals/v1/seed-set.json")" \
+    --arg tool_sha256 "$(sha_file "$root/scripts/core-contract.sh")" \
+    --arg scanner_sha256 "$(sha_file "$root/orchestrator/v1/scan-state.sh")" \
+    --arg planner_sha256 "$(sha_file "$root/orchestrator/v1/reconciliation-plan.jq")" \
+    --arg sandbox_sha256 "$(sha_file "$root/control/v1/evaluate-sandbox.sh")" \
+    --argjson normalizer_shas "$(<"$tmp/normalizers.json")" \
+    --arg risk_gates_sha256 "$(sha_file "$root/control/v1/evaluate-risk-gates.sh")" \
+    --arg duty_sha256 "$(sha_file "$root/control/v1/evaluate-duty.sh")" \
+    --arg observed_at "$observed_at" \
+    --slurpfile catalog_docs "$catalog" --slurpfile seed_set_docs "$root/evals/v1/seed-set.json" \
+    --slurpfile observation_docs "$tmp/empty.json" --slurpfile evaluator_docs "$tmp/evaluator.json" \
+    --slurpfile candidate_docs "$candidate" --slurpfile result_docs "$tmp/direct-results.jsonl" \
+    --argjson result_shas "[\"$(sha_file "$first")\",\"$(sha_file "$second")\"]" \
+    -f "$program"
+}
+for fixture in family disjoint; do
+  direct_dashboard build-dashboard "$tmp/empty.json" \
+    "$tmp/$fixture-a.result.json" "$tmp/$fixture-b.result.json" \
+    >"$tmp/$fixture.direct.json" 2>"$tmp/$fixture.direct.err" || fail "$fixture direct build"
+  [ ! -s "$tmp/$fixture.direct.err" ] || fail "$fixture direct build stderr"
+  /usr/bin/cmp -s "$tmp/$fixture.dashboard.json" "$tmp/$fixture.direct.json" ||
+    fail "$fixture direct build differs from launcher"
+  direct_dashboard validate-dashboard "$tmp/$fixture.direct.json" \
+    "$tmp/$fixture-a.result.json" "$tmp/$fixture-b.result.json" \
+    >"$tmp/$fixture.valid" 2>"$tmp/$fixture.validate.err" || fail "$fixture direct validate"
+  [ "$(<"$tmp/$fixture.valid")" = true ] && [ ! -s "$tmp/$fixture.validate.err" ] ||
+    fail "$fixture direct validation must be true"
+done
+if direct_dashboard build-dashboard "$tmp/empty.json" \
+  "$tmp/seed-set.result.json" "$tmp/earlier.result.json" \
+  >"$tmp/duplicate.direct.out" 2>"$tmp/duplicate.direct.err"; then
+  fail 'direct build accepted a repeated family/case'
+fi
+[ ! -s "$tmp/duplicate.direct.out" ] || fail 'direct duplicate build wrote JSON'
+/usr/bin/grep -qF E_SHAPE "$tmp/duplicate.direct.err" || fail 'direct duplicate build error'
+direct_dashboard validate-dashboard "$tmp/disjoint.direct.json" \
+  "$tmp/seed-set.result.json" "$tmp/earlier.result.json" \
+  >"$tmp/duplicate.valid" 2>"$tmp/duplicate.validate.err" || fail 'direct duplicate validate errored'
+[ "$(<"$tmp/duplicate.valid")" = false ] && [ ! -s "$tmp/duplicate.validate.err" ] ||
+  fail 'direct duplicate validation must be false'
+pass 'shipped build and validate entries enforce pair uniqueness and preserve valid dashboards'
+
 "$jq_bin" . "$tmp/seed-set.result.json" > "$tmp/pretty.json"
 expect_error non-canonical-result E_CANONICAL "$root/evals/v1/seed-set.json" "$tmp/pretty.json"
 /usr/bin/printf '%s  \n' "$(<"$tmp/seed-set.result.json")" > "$tmp/trailing-space.json"

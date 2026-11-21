@@ -884,7 +884,10 @@ def claimed_by_scope($refs): . as $record |
     # A family counts only when every case actually passed: at least one case,
     # none failed or inconclusive, and the passed count equal to the total (a
     # total no passing case accounts for is not evidence).
-    elif $entry.cases.total < 1 or $entry.cases.failed > 0 or
+    elif $entry.cases.total < 1 or
+         ($entry.trial_policy.kind == "multi" and
+          $entry.cases.total < $entry.trial_policy.minimum_trials) or
+         $entry.cases.failed > 0 or
          $entry.cases.inconclusive > 0 or $entry.cases.passed < 1 or
          $entry.cases.passed != $entry.cases.total then
       "scope.eval-failing"
