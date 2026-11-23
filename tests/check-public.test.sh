@@ -7,29 +7,30 @@ export LC_ALL=C
 check="$(git rev-parse --show-toplevel)/scripts/check-public.sh"
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
+repo=$scratch/repo
 failures=0
 
 fake_terms=$'# fake terms for this test\nZebraquill\nmoonfjord'
-printf '%s\n' zebraquill moonfjord > "$scratch/terms-to-hide"
 fake_token="ghp_$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 36)"
-printf '%s\n' "$fake_token" >> "$scratch/terms-to-hide"
+printf '%s\n' zebraquill moonfjord "$fake_token" > "$scratch/must-not-show"
 
-# Runs check-public.sh in the scratch repo. $1 name, $2 wanted exit, $3 text the
-# output must hold ("" for none), then the check's arguments.
+# Runs check-public.sh in the scratch repo as CI would. $1 name, $2 wanted exit,
+# $3 text the output must hold ("" for none), then the check's arguments.
 expect() {
   local name=$1 want=$2 needle=$3 out got
   shift 3
-  out=$(cd "$scratch/repo" && env -u GITHUB_ACTIONS "$check" "$@" 2>&1)
+  out=$(cd "$repo" && GITHUB_ACTIONS=true "$check" "$@" 2>&1)
   got=$?
   if [ "$got" -ne "$want" ]; then
     echo "not ok - $name: exit $got, want $want"
-    printf '%s\n' "$out" | sed 's/^/#   /' | grep -v -i -F -f "$scratch/terms-to-hide"
+    printf '%s\n' "$out" | grep -v -i -F -f "$scratch/must-not-show" | sed 's/^/#   /'
     failures=$((failures + 1))
-  elif printf '%s\n' "$out" | grep -q -i -F -f "$scratch/terms-to-hide"; then
+  elif printf '%s\n' "$out" | grep -q -i -F -f "$scratch/must-not-show"; then
     echo "not ok - $name: the output shows a term or the token"
     failures=$((failures + 1))
   elif [ -n "$needle" ] && ! printf '%s\n' "$out" | grep -q -F -- "$needle"; then
     echo "not ok - $name: the output lacks '$needle'"
+    printf '%s\n' "$out" | sed 's/^/#   /'
     failures=$((failures + 1))
   else
     echo "ok - $name"
@@ -37,16 +38,20 @@ expect() {
 }
 
 commit_all() {
-  git -C "$scratch/repo" add -A
-  git -C "$scratch/repo" -c core.hooksPath=/dev/null commit -q -m "$1"
+  git -C "$repo" add -A
+  git -C "$repo" -c core.hooksPath=/dev/null commit -q --allow-empty -m "$1"
 }
 
-git init -q "$scratch/repo"
-git -C "$scratch/repo" config user.name test
-git -C "$scratch/repo" config user.email test@example.invalid
-printf 'plain text\n' > "$scratch/repo/readme.txt"
+tip() {
+  git -C "$repo" rev-parse HEAD
+}
+
+git init -q "$repo"
+git -C "$repo" config user.name test
+git -C "$repo" config user.email test@example.invalid
+printf 'plain text\n' > "$repo/readme.txt"
 commit_all 'first commit'
-base=$(git -C "$scratch/repo" rev-parse HEAD)
+base=$(tip)
 
 export YSTACK_BLOCKED_TERMS_FILE="$scratch/no-such-file"
 unset YSTACK_BLOCKED_TERMS
@@ -58,43 +63,98 @@ YSTACK_BLOCKED_TERMS_FILE="$scratch/terms.txt" expect 'term list from a file' 0 
 
 export YSTACK_BLOCKED_TERMS="$fake_terms"
 expect 'clean tree' 0 'tree clean' tree
+expect 'clean index' 0 'staged clean' staged
 expect 'clean range' 0 'range clean' range "$base" HEAD
 
-printf 'one\nNotes about ZEBRAQUILL here\n' > "$scratch/repo/notes.txt"
+printf 'one\nNotes about ZEBRAQUILL here\n' > "$repo/notes.txt"
 commit_all 'add notes'
-expect 'term in a file, other case' 1 'notes.txt, line 2' tree
-expect 'term added in a commit' 1 'adds a blocked term' range "$base" HEAD
-git -C "$scratch/repo" rm -q notes.txt
+expect 'term in a file, other case' 1 'notes.txt (commit' tree
+expect 'term added in a commit' 1 ', line 2' range "$base" HEAD
+git -C "$repo" rm -q notes.txt
 commit_all 'remove notes'
 expect 'term removed again: tree' 0 'tree clean' tree
 expect 'term in history' 1 'adds or removes a blocked term' history
+expect 'term in an earlier commit of the range' 1 'notes.txt (commit' range "$base" HEAD
+base=$(tip)
 
-mkdir -p "$scratch/repo/moonfjord-docs"
-printf 'clean\n' > "$scratch/repo/moonfjord-docs/a.txt"
-git -C "$scratch/repo" add -A
-expect 'term in a staged path' 1 "entry 1 of 'git diff --cached --name-only'" staged
-commit_all 'add docs'
-expect 'term in a tracked path' 1 "of 'git ls-files'" tree
-git -C "$scratch/repo" rm -q -r moonfjord-docs
-commit_all 'remove docs'
+mkdir -p "$repo/moonfjord-docs"
+: > "$repo/moonfjord-docs/empty.txt"
+git -C "$repo" add -A
+expect 'term in a staged path' 1 "of 'git ls-files -s'" staged
+commit_all 'add an empty file with a blocked path'
+git -C "$repo" rm -q -r moonfjord-docs
+commit_all 'remove it'
+expect 'term in a path of an earlier commit' 1 "of 'git ls-tree -r" range "$base" HEAD
+base=$(tip)
 
-printf 'clean\n' > "$scratch/repo/b.txt"
-git -C "$scratch/repo" add b.txt
 commit_all 'mention moonfjord in a message'
-expect 'term in a commit message' 1 'in the message of commit' range "$base" HEAD
+expect 'term in a commit message' 1 'the message of commit' range "$base" HEAD
+base=$(tip)
 
 printf 'Subject\n\nBody with zebraquill\n' > "$scratch/message.txt"
-expect 'term in message text' 1 'message text, line 3' message "$scratch/message.txt"
+expect 'term in message text' 1 'the message text, line 3' message "$scratch/message.txt"
 printf 'Subject\n\nA clean body\n' > "$scratch/message.txt"
 expect 'clean message text' 0 'message clean' message "$scratch/message.txt"
 
-printf 'token = "%s"\n' "$fake_token" > "$scratch/repo/config.txt"
-git -C "$scratch/repo" add config.txt
-expect 'secret in a staged file' 1 'secret (github-pat)' staged
+printf 'head\0zebraquill\0tail' > "$repo/data.bin"
+commit_all 'add binary data'
+expect 'term in a binary file' 1 'data.bin (commit' tree
+git -C "$repo" rm -q data.bin
+commit_all 'remove binary data'
+
+printf 'moonfjord\n' > "$repo/-"
+commit_all 'add a file named -'
+expect 'term in a file named -' 1 '- (commit' tree
+git -C "$repo" rm -q -- -
+commit_all 'remove the file named -'
+
+ln -s zebraquill-target "$repo/link"
+git -C "$repo" add link
+expect 'term in a staged symlink target' 1 'link, line 1' staged
+commit_all 'add a link'
+expect 'term in a symlink target' 1 'link (commit' tree
+git -C "$repo" rm -q link
+commit_all 'remove the link'
+
+{ echo zebraquill; head -c 300000 /dev/zero | tr '\0' 'x'; echo; } > "$repo/big.txt"
+commit_all 'add a big file'
+git -C "$repo" rm -q big.txt
+commit_all 'remove the big file'
+expect 'term early in a big file of the range' 1 'big.txt (commit' range "$base" HEAD
+base=$(tip)
+
+git -C "$repo" update-index --add --cacheinfo "160000,$(tip),sub"
+expect 'submodule in the index' 1 'is a submodule' staged
+git -C "$repo" rm -q --cached sub
+
+printf 'token = "%s"\n' "$fake_token" > "$repo/config.txt"
+git -C "$repo" add config.txt
+expect 'secret in a staged file' 1 'a secret (github-pat) is in config.txt' staged
 commit_all 'add config'
-expect 'secret in the tree' 1 'config.txt:1' tree
+expect 'secret in the tree' 1 'config.txt (commit' tree
+git -C "$repo" rm -q config.txt
+commit_all 'remove config'
+expect 'secret in an earlier commit of the range' 1 'a secret (github-pat)' range "$base" HEAD
+base=$(tip)
+
+printf 'token = "%s" # gitleaks:allow\n' "$fake_token" > "$repo/allowed.txt"
+commit_all 'add a secret marked allowed'
+expect 'inline allow comment is ignored' 1 'a secret (github-pat)' tree
+git -C "$repo" rm -q allowed.txt
+commit_all 'remove it'
+base=$(tip)
+
+commit_all "token $fake_token"
+expect 'secret in a commit message' 1 'the message of commit' range "$base" HEAD
+base=$(tip)
+
+mkdir -p "$repo/moonfjord"
+printf 'token = "%s"\n' "$fake_token" > "$repo/moonfjord/key.txt"
+commit_all 'add a secret under a blocked path'
+expect 'secret under a blocked path' 1 "of 'git ls-tree -r" tree
+
 printf 'Subject\n\ntoken %s\n' "$fake_token" > "$scratch/message.txt"
-expect 'secret in message text' 1 'secret (github-pat)' message "$scratch/message.txt"
+expect 'secret in message text' 1 'the message text' message "$scratch/message.txt"
 
 if [ "$failures" -gt 0 ]; then
   echo "$failures case(s) failed"

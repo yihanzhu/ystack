@@ -51,8 +51,11 @@ paste it into a chat, an issue or a PR.
   pushing to `main`. Claude Code runs this hook from the owner's main checkout,
   so a merged change to it is live only after that checkout is updated.
 - `scripts/check-public.sh` blocks the owner's blocked terms and secrets. The
-  `.githooks/` hooks run it before each commit. CI runs it on the whole tree,
-  each commit of the PR, and the PR title and body.
+  `.githooks/` hooks run it on the index and the commit message. In CI the
+  `guard` job runs first, with the scanner from the base commit. It reads the
+  tree and message of each PR commit, and the PR title and body, without running
+  any PR code. A PR can still change `ci.yml` itself, so workflow changes need
+  the owner's close look.
 - `.github/workflows/tripwire.yml` fails when anyone but the owner lands a
   commit on `main`.
 
