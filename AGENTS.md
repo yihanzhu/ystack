@@ -53,9 +53,11 @@ paste it into a chat, an issue or a PR.
 - `.claude/hooks/no-merge-guard.sh` blocks Claude Code from merging and from
   pushing to `main`. Claude Code runs this hook from the owner's main checkout,
   so a merged change to it is live only after that checkout is updated.
-- `scripts/check-public.sh` blocks the owner's blocked terms and secrets. The
-  `.githooks/` hooks run it on the index and the commit message. Its output never
-  shows a term, a secret or a path.
+- `scripts/check-public.sh` blocks the owner's blocked terms, secrets, and
+  machine-specific values: home-directory paths, local host names, and agent
+  permission lists and trust settings. The `.githooks/` hooks run it on the index
+  and the commit message. Its output never shows a term, a secret, a value or a
+  path. Write `~` or `$HOME` instead of a real home path.
 - In CI the `guard` job runs first, on its own runner, with the scanner from the
   base commit. It reads the checked-out tree, each PR commit, and the PR title and
   body, and runs no PR code. PR code runs only after it passes. A PR can still
