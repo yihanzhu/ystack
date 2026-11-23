@@ -85,7 +85,7 @@ git -C "$repo" rm -q notes.txt
 commit_all 'side work removes the old notes'
 expect 'old content only in an earlier commit' 0 'range clean' range "$main_tip" HEAD
 git -C "$repo" checkout -q -
-expect 'term in an earlier commit of the range' 1 "of 'git rev-list --objects" range "$base" HEAD
+expect 'term in an earlier commit of the range' 1 "of 'git diff-tree -r -m --root" range "$base" HEAD
 base=$(tip)
 
 mkdir -p "$repo/moonfjord-docs"
@@ -99,7 +99,7 @@ expect 'term in a path of an earlier commit' 1 'a path of commit' range "$base" 
 base=$(tip)
 
 commit_all 'mention moonfjord in a message'
-expect 'term in a commit message' 1 'the message of commit' range "$base" HEAD
+expect 'term in a commit message' 1 'the author, committer or message of commit' range "$base" HEAD
 base=$(tip)
 
 printf 'Subject\n\nBody with zebraquill\n' > "$scratch/message.txt"
@@ -131,7 +131,7 @@ commit_all 'remove the link'
 commit_all 'add a big file'
 git -C "$repo" rm -q big.txt
 commit_all 'remove the big file'
-expect 'term early in a big file of the range' 1 "of 'git rev-list --objects" range "$base" HEAD
+expect 'term early in a big file of the range' 1 "of 'git diff-tree -r -m --root" range "$base" HEAD
 base=$(tip)
 
 git -C "$repo" update-index --add --cacheinfo "160000,$(tip),sub"
@@ -156,7 +156,7 @@ commit_all 'remove it'
 base=$(tip)
 
 commit_all "token $fake_token"
-expect 'secret in a commit message' 1 'the message of commit' range "$base" HEAD
+expect 'secret in a commit message' 1 'the author, committer or message of commit' range "$base" HEAD
 base=$(tip)
 
 mkdir -p "$repo/moonfjord"
@@ -177,6 +177,40 @@ expect 'path rule does not fire on another name' 0 'tree clean' tree
 git -C "$repo" mv settings.xml NuGet.Config
 commit_all 'rename it to the name the rule covers'
 expect 'path rule fires on its file name' 1 'a secret (nuget-config-password)' tree
+git -C "$repo" mv NuGet.Config settings.xml
+commit_all 'back to the neutral name'
+base=$(tip)
+git -C "$repo" mv settings.xml NuGet.Config
+commit_all 'a short-lived rename'
+git -C "$repo" mv NuGet.Config settings.xml
+commit_all 'and back again'
+expect 'path rule fires on a short-lived rename' 1 'a secret (nuget-config-password)' range "$base" HEAD
+git -C "$repo" rm -q settings.xml
+commit_all 'remove the password'
+base=$(tip)
+
+: > "$repo/token-$fake_token"
+commit_all 'a short-lived file with a secret in its name'
+git -C "$repo" rm -q "token-$fake_token"
+commit_all 'remove it'
+expect 'secret in a short-lived file name' 1 'a secret (github-pat) is in the path of' range "$base" HEAD
+base=$(tip)
+
+printf 'same\n' > "$repo/p"
+printf 'same\n' > "$repo/p"$'\n'moonfjord
+git -C "$repo" add -A
+expect 'file names with a newline' 1 'a blocked term is in the path of' staged
+commit_all 'two names, one with a newline'
+expect 'file names with a newline in the tree' 1 'a blocked term is in the path of' tree
+git -C "$repo" rm -q -- p "p"$'\n'moonfjord
+commit_all 'remove them'
+base=$(tip)
+
+git -C "$repo" -c user.email=me@moonfjord.example commit -q --allow-empty -m 'work identity'
+expect 'term in an author email' 1 'the author, committer or message of commit' range "$base" HEAD
+GIT_AUTHOR_EMAIL=me@moonfjord.example expect 'term in the next author email' 1 \
+  'the author or committer of the next commit' staged
+base=$(tip)
 
 # Machine-specific values. The literals are split so this file holds none of them.
 home_path="/Us""ers/someone/notes"
@@ -194,7 +228,7 @@ machine_case() {
   printf '%s\n' "$text" > "$repo/$file"
   git -C "$repo" add -A
   expect "$name" 1 "a machine-specific value ($label)" staged
-  git -C "$repo" rm -q -- "$file"
+  git -C "$repo" rm -q -f -- "$file"
 }
 machine_case 'home path' a.txt "see $home_path" 'home directory path'
 machine_case 'Windows home path' a.txt 'C:\Us''ers\someone\x' 'Windows home directory path'

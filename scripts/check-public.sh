@@ -6,7 +6,8 @@
 #   check-public.sh message FILE      a commit message or other text
 #   check-public.sh tree              the tree of HEAD
 #   check-public.sh range BASE HEAD   the tree of HEAD; for each commit in BASE..HEAD
-#                                     its paths and message; every blob BASE cannot reach
+#                                     every path, each file it adds or changes against
+#                                     any parent, its message and its author and committer
 #   check-public.sh history           every commit on every ref; terms only
 #
 # Terms come from $YSTACK_BLOCKED_TERMS when it is set (CI), or else from
@@ -61,10 +62,6 @@ finding() {
   found=1
 }
 
-readable() {
-  [ -f "$1" ] && [ -r "$1" ] || setup_error "cannot read a scratch file."
-}
-
 # Succeeds if FILE holds a term. A grep error stops the check.
 holds_term() {
   grep -q -a -i -F -f "$terms" -- "$1"
@@ -90,34 +87,41 @@ load_terms() {
   grep -v -e '^$' -e '^#' "$work/trimmed" > "$terms"
   [ $? -le 1 ] || setup_error "cannot read the term list."
   [ -s "$terms" ] || setup_error "the term list is empty."
-  while IFS= read -r term; do
+  exec 3< "$terms" || setup_error "cannot read a scratch file."
+  while IFS= read -r -u 3 term; do
     n=$((n + 1))
     [ "${#term}" -ge 3 ] || setup_error "term $n is shorter than 3 characters."
-  done < "$terms"
+  done
+  exec 3<&-
 }
 
 # Adds one file of a Git listing to the scan. $1 mode, $2 object id, $3 path,
 # $4 how to name the entry in public output.
 add_entry() {
-  local mode=$1 id=$2 path=$3 label=$4 dir safe
+  local mode=$1 id=$2 path=$3 label=$4 dir safe key
   [[ $id =~ ^[0-9a-f]{40,64}$ ]] || setup_error "unexpected object id."
   if [ "$mode" = 160000 ]; then
     finding "$label is a submodule; this repo allows none"
     return
   fi
-  grep -q -x -F -- "$id $path" "$work/seen" && return
-  printf '%s %s\n' "$id" "$path" >> "$work/seen" || setup_error "cannot write a scratch file."
+  # The path goes into the key as hex, so a newline in a path cannot split it.
+  key=$(printf '%s' "$path" | od -An -tx1 | tr -d ' \n') || setup_error "cannot copy the path of $label."
+  key="$id $key"
+  grep -q -x -F -- "$key" "$work/seen" && return
+  printf '%s\n' "$key" >> "$work/seen" || setup_error "cannot write a scratch file."
   entries=$((entries + 1))
-  printf '%s' "$path" > "$scan/paths/$entries" || setup_error "cannot write a scratch file."
+  # Error messages from these writes could name the path, so they are dropped.
+  { printf '%s' "$path" > "$scan/paths/$entries"; } 2> /dev/null ||
+    setup_error "cannot copy the path of $label."
   printf '%s\t%s\n' "paths/$entries" "the path of $label" >> "$work/where"
   if holds_term "$scan/paths/$entries"; then
     finding "a blocked term is in the path of $label"
   fi
   # Characters that would break the line-based maps below become underscores.
-  safe=$(printf '%s' "$path" | tr '\n\t:' '___') || setup_error "cannot copy a path."
+  safe=$(printf '%s' "$path" | tr '\n\t:' '___') || setup_error "cannot copy the path of $label."
   dir=$scan/files/$entries
-  mkdir -p "$(dirname "$dir/$safe")" || setup_error "cannot write a scratch file."
-  git cat-file blob "$id" > "$dir/$safe" || setup_error "cannot read the blob of $label."
+  { mkdir -p "$(dirname "$dir/$safe")" && git cat-file blob "$id" > "$dir/$safe"; } 2> /dev/null ||
+    setup_error "cannot copy the blob of $label."
   printf '%s\t%s\n' "files/$entries" "$label" >> "$work/where"
 }
 
@@ -126,14 +130,15 @@ add_entry() {
 add_listing() {
   local listing=$1 id_field=$2 label=$3 entry meta path i=0
   local -a fields
-  readable "$listing"
-  while IFS= read -r -d '' entry; do
+  exec 4< "$listing" || setup_error "cannot read a scratch file."
+  while IFS= read -r -d '' -u 4 entry; do
     i=$((i + 1))
     meta=${entry%%$'\t'*}
     path=${entry#*$'\t'}
     read -r -a fields <<< "$meta"
     add_entry "${fields[0]}" "${fields[$id_field]}" "$path" "entry $i of '$label'"
-  done < "$listing"
+  done
+  exec 4<&-
 }
 
 add_commit_tree() {
@@ -148,7 +153,11 @@ check_commit_paths() {
   git ls-tree -r -z --full-tree "$sha" > "$work/listing" || setup_error "cannot list commit $sha."
   tr '\0' '\n' < "$work/listing" | cut -f2- > "$work/names" || setup_error "cannot list commit $sha."
   grep -n -a -i -F -f "$terms" -- "$work/names" > "$work/name-hits"
-  [ $? -le 1 ] || setup_error "the term match failed."
+  case $? in
+    0) found=1 ;;
+    1) ;;
+    *) setup_error "the term match failed." ;;
+  esac
   lines=$(cut -d: -f1 "$work/name-hits" | paste -sd, -) || setup_error "cannot sort the term matches."
   [ -z "$lines" ] || finding "a blocked term is in a path of commit $sha (lines $lines of 'git ls-tree -r $sha')"
   tr '\0' '\n' < "$work/listing" | cut -d' ' -f1 > "$work/modes" || setup_error "cannot list commit $sha."
@@ -157,26 +166,27 @@ check_commit_paths() {
   fi
 }
 
-# Adds each blob that BASE cannot reach, under the first path Git reports for it.
-add_new_blobs() {
-  local base=$1 head=$2 line i=0
-  git rev-list --objects "$head" --not "$base" > "$work/objects" || setup_error "cannot list new objects."
-  cut -d' ' -f1 "$work/objects" |
-    git cat-file --batch-check='%(objectname) %(objecttype)' > "$work/types" ||
-    setup_error "cannot read object types."
-  awk 'NR == FNR { if ($2 == "blob") blob[$1] = 1; next } ($1 in blob)' \
-    "$work/types" "$work/objects" > "$work/new-blobs" || setup_error "cannot list new blobs."
-  readable "$work/new-blobs"
-  while IFS= read -r line; do
+# Adds each file that a commit adds or changes against any of its parents, so
+# renames, merge results and short-lived files are covered.
+add_commit_changes() {
+  local sha=$1 meta path i=0
+  local -a fields
+  git diff-tree -r -z -m --root --no-commit-id --no-renames --diff-filter=AMT "$sha" \
+    > "$work/changes" || setup_error "cannot diff commit $sha."
+  exec 5< "$work/changes" || setup_error "cannot read a scratch file."
+  while IFS= read -r -d '' -u 5 meta && IFS= read -r -d '' -u 5 path; do
     i=$((i + 1))
-    add_entry 100644 "${line%% *}" "${line#* }" "entry $i of 'git rev-list --objects $head --not $base'"
-  done < "$work/new-blobs"
+    read -r -a fields <<< "${meta#:}"
+    add_entry "${fields[1]}" "${fields[3]}" "$path" "change $i of 'git diff-tree -r -m --root $sha'"
+  done
+  exec 5<&-
 }
 
 add_message() {
   local sha=$1
-  git log -1 --format=%B "$sha" > "$scan/msgs/$sha" || setup_error "cannot read commit $sha."
-  printf '%s\t%s\n' "msgs/$sha" "the message of commit $sha" >> "$work/where"
+  git log -1 --format='%an <%ae>%n%cn <%ce>%n%n%B' "$sha" > "$scan/msgs/$sha" ||
+    setup_error "cannot read commit $sha."
+  printf '%s\t%s\n' "msgs/$sha" "the author, committer or message of commit $sha" >> "$work/where"
 }
 
 # Names a scanned file in public output. $1 is files/N, paths/N or msgs/NAME.
@@ -194,23 +204,33 @@ report_hits() {
       lines[key] = lines[key] (lines[key] == "" ? "" : ",") $2 }
     END { for (k in lines) print k "\t" lines[k] }' "$work/hits" > "$work/hit-lines" ||
     setup_error "cannot sort the matches."
-  readable "$work/hit-lines"
-  while IFS=$'\t' read -r key lines; do
+  exec 6< "$work/hit-lines" || setup_error "cannot read a scratch file."
+  while IFS=$'\t' read -r -u 6 key lines; do
     finding "$what is in $(where "$key"), line $lines"
-  done < "$work/hit-lines"
+  done
+  exec 6<&-
+}
+
+# Runs grep with the given arguments over the scan copies; a match sets the
+# finding at once, and a grep error stops the check.
+grep_scan() {
+  (cd "$scan" && grep -r -a -n "$@") > "$work/hits"
+  case $? in
+    0) found=1 ;;
+    1) ;;
+    *) setup_error "a match over the scan failed." ;;
+  esac
 }
 
 match_terms() {
-  (cd "$scan" && grep -r -a -i -n -F -f "$terms" -- files msgs) > "$work/hits"
-  [ $? -le 1 ] || setup_error "the term match failed."
+  grep_scan -i -F -f "$terms" -- files msgs
   report_hits "a blocked term"
 }
 
 match_machine() {
   local entry
   for entry in "${machine_patterns[@]}"; do
-    (cd "$scan" && grep -r -a -n -E -e "${entry#*|}" -- files paths msgs) > "$work/hits"
-    [ $? -le 1 ] || setup_error "the machine-value match failed."
+    grep_scan -E -e "${entry#*|}" -- files paths msgs
     report_hits "a machine-specific value (${entry%%|*})"
   done
 }
@@ -235,10 +255,12 @@ match_secrets() {
     setup_error "gitleaks found a secret, but its report is unreadable."
   rows=$(wc -l < "$work/leak-lines") || setup_error "cannot read a scratch file."
   [ "$rows" -gt 0 ] || setup_error "gitleaks found a secret, but its report is empty."
-  while IFS=$'\t' read -r key line rule; do
+  exec 6< "$work/leak-lines" || setup_error "cannot read a scratch file."
+  while IFS=$'\t' read -r -u 6 key line rule; do
     [[ $line =~ ^[0-9]+$ ]] || line='?'
     finding "a secret ($rule) is in $(where "$key"), line $line"
-  done < "$work/leak-lines"
+  done
+  exec 6<&-
 }
 
 check_history() {
@@ -247,16 +269,20 @@ check_history() {
     setup_error "cannot build the history pattern."
   pattern=$(cat "$work/pattern") || setup_error "cannot read a scratch file."
   git log --all -i -G"$pattern" --format=%H > "$work/commits" || setup_error "git log failed."
-  readable "$work/commits"
-  while IFS= read -r sha; do
+  exec 7< "$work/commits" || setup_error "cannot read a scratch file."
+  while IFS= read -r -u 7 sha; do
     finding "commit $sha adds or removes a blocked term"
-  done < "$work/commits"
+  done
+  exec 7<&-
   git rev-list --all > "$work/commits" || setup_error "git rev-list failed."
-  readable "$work/commits"
-  while IFS= read -r sha; do
-    git log -1 --format=%B "$sha" > "$work/message" || setup_error "cannot read commit $sha."
-    holds_term "$work/message" && finding "a blocked term is in the message of commit $sha"
-  done < "$work/commits"
+  exec 7< "$work/commits" || setup_error "cannot read a scratch file."
+  while IFS= read -r -u 7 sha; do
+    git log -1 --format='%an <%ae>%n%cn <%ce>%n%n%B' "$sha" > "$work/message" ||
+      setup_error "cannot read commit $sha."
+    holds_term "$work/message" &&
+      finding "a blocked term is in the author, committer or message of commit $sha"
+  done
+  exec 7<&-
 }
 
 mode=${1:-}
@@ -276,6 +302,9 @@ case $mode in
   staged)
     git ls-files -s -z > "$work/listing" || setup_error "cannot list the index."
     add_listing "$work/listing" 1 "git ls-files -s"
+    { git var GIT_AUTHOR_IDENT && git var GIT_COMMITTER_IDENT; } > "$scan/msgs/identity" ||
+      setup_error "cannot read the Git identity."
+    printf '%s\t%s\n' "msgs/identity" "the author or committer of the next commit" >> "$work/where"
     ;;
   message)
     cp "$work/message" "$scan/msgs/text" || setup_error "cannot write a scratch file."
@@ -285,14 +314,15 @@ case $mode in
     add_commit_tree HEAD
     ;;
   range)
-    git rev-list "$2..$3" > "$work/commits" || setup_error "cannot list $2..$3."
-    readable "$work/commits"
-    while IFS= read -r sha; do
-      check_commit_paths "$sha"
-      add_message "$sha"
-    done < "$work/commits"
     add_commit_tree "$3"
-    add_new_blobs "$2" "$3"
+    git rev-list "$2..$3" > "$work/commits" || setup_error "cannot list $2..$3."
+    exec 8< "$work/commits" || setup_error "cannot read a scratch file."
+    while IFS= read -r -u 8 sha; do
+      check_commit_paths "$sha"
+      add_commit_changes "$sha"
+      add_message "$sha"
+    done
+    exec 8<&-
     ;;
   history)
     check_history
