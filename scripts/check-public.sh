@@ -62,7 +62,7 @@ load_terms() {
     raw=$YSTACK_BLOCKED_TERMS
   else
     file=${YSTACK_BLOCKED_TERMS_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/ystack/blocked-terms.txt}
-    [ -f "$file" ] || setup_error "no term list at $file. See AGENTS.md."
+    [ -f "$file" ] || setup_error "no term list. See AGENTS.md."
     raw=$(cat -- "$file") || setup_error "cannot read the term list."
   fi
   printf '%s\n' "$raw" > "$work/raw" || setup_error "cannot write a scratch file."
@@ -82,14 +82,14 @@ load_terms() {
 # Adds one file of a Git listing to the scan. $1 mode, $2 object id, $3 path,
 # $4 how to name the entry in public output.
 add_entry() {
-  local mode=$1 id=$2 path=$3 label=$4 dir safe key
+  local mode=$1 id=$2 path=$3 label=$4 dir key
   [[ $id =~ ^[0-9a-f]{40,64}$ ]] || setup_error "unexpected object id."
   if [ "$mode" = 160000 ]; then
     finding "$label is a submodule; this repo allows none"
     return
   fi
   # The path goes into the key as hex, so a newline in a path cannot split it.
-  key=$(printf '%s' "$path" | od -An -tx1 | tr -d ' \n') || setup_error "cannot copy the path of $label."
+  key=$(printf '%s' "$path" | od -An -v -tx1 | tr -d ' \n') || setup_error "cannot copy the path of $label."
   key="$id $key"
   grep -q -x -F -- "$key" "$work/seen" && return
   printf '%s\n' "$key" >> "$work/seen" || setup_error "cannot write a scratch file."
@@ -101,10 +101,8 @@ add_entry() {
   if holds_term "$scan/paths/$entries"; then
     finding "a blocked term is in the path of $label"
   fi
-  # Characters that would break the line-based maps below become underscores.
-  safe=$(printf '%s' "$path" | tr '\n\t:' '___') || setup_error "cannot copy the path of $label."
   dir=$scan/files/$entries
-  { mkdir -p "$(dirname "$dir/$safe")" && git cat-file blob "$id" > "$dir/$safe"; } 2> /dev/null ||
+  { mkdir -p "$(dirname "$dir/$path")" && git cat-file blob "$id" > "$dir/$path"; } 2> /dev/null ||
     setup_error "cannot copy the blob of $label."
   printf '%s\t%s\n' "files/$entries" "$label" >> "$work/where"
 }
@@ -181,21 +179,25 @@ where() {
   printf '%s' "${shown:-an unnamed input}"
 }
 
+# Names a scanned file by its first two path parts: files/N or msgs/NAME.
+scan_key() {
+  local rest=${1#*/}
+  printf '%s/%s' "${1%%/*}" "${rest%%/*}"
+}
+
 match_terms() {
-  local key lines
-  (cd "$scan" && grep -r -a -i -n -F -f "$terms" -- files msgs) > "$work/hits"
+  local file lines
+  (cd "$scan" && grep -r -l --null -a -i -F -f "$terms" -- files msgs) > "$work/hit-files" 2> /dev/null
   case $? in
     0) found=1 ;;
     1) ;;
     *) setup_error "the term match failed." ;;
   esac
-  awk -F: '{ split($1, p, "/"); key = p[1] "/" p[2]
-      lines[key] = lines[key] (lines[key] == "" ? "" : ",") $2 }
-    END { for (k in lines) print k "\t" lines[k] }' "$work/hits" > "$work/hit-lines" ||
-    setup_error "cannot sort the term matches."
-  exec 6< "$work/hit-lines" || setup_error "cannot read a scratch file."
-  while IFS=$'\t' read -r -u 6 key lines; do
-    finding "a blocked term is in $(where "$key"), line $lines"
+  exec 6< "$work/hit-files" || setup_error "cannot read a scratch file."
+  while IFS= read -r -d '' -u 6 file; do
+    lines=$( (cd "$scan" && grep -n -a -i -F -f "$terms" -- "$file") 2> /dev/null |
+      cut -d: -f1 | paste -sd, -)
+    finding "a blocked term is in $(where "$(scan_key "$file")"), line ${lines:-?}"
   done
   exec 6<&-
 }
@@ -267,7 +269,7 @@ case $mode in
   staged)
     git ls-files -s -z > "$work/listing" || setup_error "cannot list the index."
     add_listing "$work/listing" 1 "git ls-files -s"
-    { git var GIT_AUTHOR_IDENT && git var GIT_COMMITTER_IDENT; } > "$scan/msgs/identity" ||
+    { git var GIT_AUTHOR_IDENT && git var GIT_COMMITTER_IDENT; } > "$scan/msgs/identity" 2> /dev/null ||
       setup_error "cannot read the Git identity."
     printf '%s\t%s\n' "msgs/identity" "the author or committer of the next commit" >> "$work/where"
     ;;

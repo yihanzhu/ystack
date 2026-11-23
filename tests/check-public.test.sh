@@ -210,6 +210,29 @@ git -C "$repo" -c user.email=me@moonfjord.example commit -q --allow-empty -m 'wo
 expect 'term in an author email' 1 'the author, committer or message of commit' range "$base" HEAD
 GIT_AUTHOR_EMAIL=me@moonfjord.example expect 'term in the next author email' 1 \
   'the author or committer of the next commit' staged
+GIT_AUTHOR_NAME='' GIT_AUTHOR_EMAIL=me@moonfjord.example expect 'identity error stays quiet' 2 \
+  'cannot read the Git identity' staged
+base=$(tip)
+
+# od folds repeated 16-byte lines unless told not to, so these two paths once
+# shared a dedupe key and only one of them was scanned.
+block=moonfjord-123456
+printf 'same\n' > "$repo/$block$block$block"
+printf 'same\n' > "$repo/$block$block$block$block"
+git -C "$repo" add -A
+out=$(cd "$repo" && "$check" staged 2>&1)
+if [ "$(printf '%s\n' "$out" | grep -c 'a blocked term is in the path of')" -eq 2 ]; then
+  echo "ok - two paths that differ only in repeated blocks"
+else
+  echo "not ok - two paths that differ only in repeated blocks"
+  failures=$((failures + 1))
+fi
+git -C "$repo" rm -q -f -- "$block$block$block" "$block$block$block$block"
+
+printf 'zebraquill\n' > "$repo/name:with"$'\t'"tab"
+git -C "$repo" add -A
+expect 'term in a file with a colon and a tab in its name' 1 "of 'git ls-files -s', line 1" staged
+git -C "$repo" rm -q -f -- "name:with"$'\t'"tab"
 base=$(tip)
 
 # A fake gitleaks shows that an empty report or a scanner error never passes.
