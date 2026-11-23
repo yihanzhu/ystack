@@ -74,7 +74,16 @@ git -C "$repo" rm -q notes.txt
 commit_all 'remove notes'
 expect 'term removed again: tree' 0 'tree clean' tree
 expect 'term in history' 1 'adds or removes a blocked term' history
-expect 'term in an earlier commit of the range' 1 'notes.txt (commit' range "$base" HEAD
+notes_commit=$(git -C "$repo" rev-parse HEAD~1)
+main_tip=$(tip)
+git -C "$repo" checkout -q -b side "$notes_commit"
+commit_all 'side work that still holds the old notes'
+expect 'old content put back into the tree' 1 'notes.txt (commit' range "$main_tip" HEAD
+git -C "$repo" rm -q notes.txt
+commit_all 'side work removes the old notes'
+expect 'old content only in an earlier commit' 0 'range clean' range "$main_tip" HEAD
+git -C "$repo" checkout -q -
+expect 'term in an earlier commit of the range' 1 'notes.txt (new in this range)' range "$base" HEAD
 base=$(tip)
 
 mkdir -p "$repo/moonfjord-docs"
@@ -84,7 +93,7 @@ expect 'term in a staged path' 1 "of 'git ls-files -s'" staged
 commit_all 'add an empty file with a blocked path'
 git -C "$repo" rm -q -r moonfjord-docs
 commit_all 'remove it'
-expect 'term in a path of an earlier commit' 1 "of 'git ls-tree -r" range "$base" HEAD
+expect 'term in a path of an earlier commit' 1 'a path of commit' range "$base" HEAD
 base=$(tip)
 
 commit_all 'mention moonfjord in a message'
@@ -120,7 +129,7 @@ commit_all 'remove the link'
 commit_all 'add a big file'
 git -C "$repo" rm -q big.txt
 commit_all 'remove the big file'
-expect 'term early in a big file of the range' 1 'big.txt (commit' range "$base" HEAD
+expect 'term early in a big file of the range' 1 'big.txt (new in this range)' range "$base" HEAD
 base=$(tip)
 
 git -C "$repo" update-index --add --cacheinfo "160000,$(tip),sub"

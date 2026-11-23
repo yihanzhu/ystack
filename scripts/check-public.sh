@@ -4,7 +4,8 @@
 #   check-public.sh staged            the whole index (pre-commit hook)
 #   check-public.sh message FILE      a commit message or other text
 #   check-public.sh tree              the tree of HEAD
-#   check-public.sh range BASE HEAD   the tree and message of each commit in BASE..HEAD
+#   check-public.sh range BASE HEAD   the tree of HEAD; for each commit in BASE..HEAD
+#                                     its paths and message; every blob BASE cannot reach
 #   check-public.sh history           every commit on every ref; terms only
 #
 # Terms come from $YSTACK_BLOCKED_TERMS when it is set (CI), or else from
@@ -122,6 +123,39 @@ add_commit_tree() {
   add_listing "$work/listing" 2 "git ls-tree -r $sha" " (commit $sha)"
 }
 
+# Checks every path of a commit for terms and gitlinks, with one grep per commit.
+check_commit_paths() {
+  local sha=$1 lines
+  git ls-tree -r -z --full-tree "$sha" > "$work/listing" || setup_error "cannot list commit $sha."
+  tr '\0' '\n' < "$work/listing" | cut -f2- > "$work/names" || setup_error "cannot list commit $sha."
+  grep -n -a -i -F -f "$terms" -- "$work/names" | cut -d: -f1 | paste -sd, - > "$work/name-hits"
+  [ "${PIPESTATUS[0]}" -le 1 ] || setup_error "the term match failed."
+  lines=$(cat "$work/name-hits")
+  [ -z "$lines" ] || finding "a blocked term is in a path of commit $sha (lines $lines of 'git ls-tree -r $sha')"
+  tr '\0' '\n' < "$work/listing" | cut -d' ' -f1 > "$work/modes" || setup_error "cannot list commit $sha."
+  if grep -q -x 160000 "$work/modes"; then
+    finding "commit $sha has a submodule; this repo allows none"
+  fi
+}
+
+# Adds each blob that BASE cannot reach, under the first path Git reports for it.
+add_new_blobs() {
+  local base=$1 head=$2 line id path i=0
+  git rev-list --objects "$head" --not "$base" > "$work/objects" || setup_error "cannot list new objects."
+  cut -d' ' -f1 "$work/objects" |
+    git cat-file --batch-check='%(objectname) %(objecttype)' > "$work/types" ||
+    setup_error "cannot read object types."
+  awk 'NR == FNR { if ($2 == "blob") blob[$1] = 1; next } ($1 in blob)' \
+    "$work/types" "$work/objects" > "$work/new-blobs" || setup_error "cannot list new blobs."
+  while IFS= read -r line; do
+    i=$((i + 1))
+    id=${line%% *}
+    path=${line#* }
+    add_path "$path" "new object $i of '$base..$head'"
+    add_blob 100644 "$id" "$REPLY (new in this range)"
+  done < "$work/new-blobs"
+}
+
 add_message() {
   local sha=$1
   git log -1 --format=%B "$sha" > "$scan/msgs/$sha" || setup_error "cannot read commit $sha."
@@ -212,9 +246,11 @@ case $mode in
   range)
     git rev-list "$2..$3" > "$work/commits" || setup_error "cannot list $2..$3."
     while IFS= read -r sha; do
-      add_commit_tree "$sha"
+      check_commit_paths "$sha"
       add_message "$sha"
     done < "$work/commits"
+    add_commit_tree "$3"
+    add_new_blobs "$2" "$3"
     ;;
   history)
     check_history
