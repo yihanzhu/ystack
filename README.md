@@ -1,5 +1,10 @@
 # ystack
 
+> **New purpose (2026-11-23).** ystack is now the owner's kit and a layer-by-layer
+> pass over each codebase. Read [`NORTH_STAR.md`](NORTH_STAR.md) and
+> [`ROADMAP.md`](ROADMAP.md). The rest of this page describes the parked loop.
+> Roadmap step 2 rewrites it.
+
 A small autonomous coding team. **yshifu** (the manager) runs the shop in a Claude Code
 session: you approve the direction, user-directed intake, and every merge; yshifu spawns
 a Claude coder subagent to build and runs a Codex reviewer to review.
