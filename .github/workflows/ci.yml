@@ -2,6 +2,8 @@ name: ci
 
 on:
   pull_request:
+    # `edited` re-runs the guard when the PR title or body changes.
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
 
@@ -16,6 +18,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Shellcheck
         env:
@@ -35,3 +38,27 @@ jobs:
 
       - name: Merge-guard hook test
         run: bash tests/no-merge-guard.test.sh
+
+      - name: Public-repo guard test
+        run: |
+          scripts/get-gitleaks.sh
+          bash tests/check-public.test.sh
+
+      - name: Public-repo guard
+        env:
+          # Without this secret the guard fails. The term list is never committed.
+          YSTACK_BLOCKED_TERMS: ${{ secrets.YSTACK_BLOCKED_TERMS }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          status=0
+          scripts/check-public.sh tree || status=1
+          scripts/check-public.sh range "$BASE_SHA" "$HEAD_SHA" || status=1
+          if [ "$EVENT_NAME" = pull_request ]; then
+            printf '%s\n\n%s\n' "$PR_TITLE" "$PR_BODY" > "$RUNNER_TEMP/pr-text.txt"
+            scripts/check-public.sh message "$RUNNER_TEMP/pr-text.txt" || status=1
+          fi
+          exit "$status"

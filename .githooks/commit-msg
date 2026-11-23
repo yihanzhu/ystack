@@ -1,0 +1,3 @@
+#!/bin/sh
+# Blocks a commit message that holds a blocked term or a secret.
+exec "$(git rev-parse --show-toplevel)/scripts/check-public.sh" message "$1"

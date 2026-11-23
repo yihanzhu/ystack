@@ -27,9 +27,22 @@ for the order of work. This repo is public.
 ```bash
 git ls-files -z '*.sh' | xargs -0 -r shellcheck -x -S style
 bash tests/no-merge-guard.test.sh
+bash tests/check-public.test.sh
+scripts/check-public.sh tree
 ```
 
 CI pins shellcheck 0.11.0. Use the same version locally.
+
+Set up each machine once:
+
+```bash
+scripts/get-gitleaks.sh
+git config core.hooksPath .githooks
+```
+
+The term list lives only in the owner's file `~/.config/ystack/blocked-terms.txt`
+and in the Actions secret `YSTACK_BLOCKED_TERMS`. Never commit it, print it, or
+paste it into a chat, an issue or a PR.
 
 ## Enforcement
 
@@ -37,6 +50,9 @@ CI pins shellcheck 0.11.0. Use the same version locally.
 - `.claude/hooks/no-merge-guard.sh` blocks Claude Code from merging and from
   pushing to `main`. Claude Code runs this hook from the owner's main checkout,
   so a merged change to it is live only after that checkout is updated.
+- `scripts/check-public.sh` blocks the owner's blocked terms and secrets. The
+  `.githooks/` hooks run it before each commit. CI runs it on the whole tree,
+  each commit of the PR, and the PR title and body.
 - `.github/workflows/tripwire.yml` fails when anyone but the owner lands a
   commit on `main`.
 
