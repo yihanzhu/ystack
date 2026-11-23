@@ -53,6 +53,10 @@ paste it into a chat, an issue or a PR.
 - `scripts/check-public.sh` blocks the owner's blocked terms and secrets. The
   `.githooks/` hooks run it on the index and the commit message. Its output never
   shows a term, a secret or a path.
+- In CI the `guard` job runs first, on its own runner, with the scanner from the
+  base commit. It reads the checked-out tree, each PR commit, and the PR title and
+  body, and runs no PR code. PR code runs only after it passes. A PR can still
+  change `ci.yml` itself, so the owner reads workflow changes closely.
 - `.github/workflows/tripwire.yml` fails when anyone but the owner lands a
   commit on `main`.
 
