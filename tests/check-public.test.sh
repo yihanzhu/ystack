@@ -12,7 +12,9 @@ failures=0
 
 fake_terms=$'# fake terms for this test\nZebraquill\nmoonfjord'
 fake_token="ghp_$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 36)"
-printf '%s\n' zebraquill moonfjord "$fake_token" > "$scratch/must-not-show"
+fake_password=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 20)
+printf '%s\n' zebraquill moonfjord "$fake_token" "$fake_password" config.txt notes.txt \
+  > "$scratch/must-not-show"
 
 # Runs check-public.sh in the scratch repo as CI would. $1 name, $2 wanted exit,
 # $3 text the output must hold ("" for none), then the check's arguments.
@@ -68,7 +70,7 @@ expect 'clean range' 0 'range clean' range "$base" HEAD
 
 printf 'one\nNotes about ZEBRAQUILL here\n' > "$repo/notes.txt"
 commit_all 'add notes'
-expect 'term in a file, other case' 1 'notes.txt (commit' tree
+expect 'term in a file, other case' 1 "of 'git ls-tree -r HEAD', line 2" tree
 expect 'term added in a commit' 1 ', line 2' range "$base" HEAD
 git -C "$repo" rm -q notes.txt
 commit_all 'remove notes'
@@ -78,12 +80,12 @@ notes_commit=$(git -C "$repo" rev-parse HEAD~1)
 main_tip=$(tip)
 git -C "$repo" checkout -q -b side "$notes_commit"
 commit_all 'side work that still holds the old notes'
-expect 'old content put back into the tree' 1 'notes.txt (commit' range "$main_tip" HEAD
+expect 'old content put back into the tree' 1 "of 'git ls-tree -r" range "$main_tip" HEAD
 git -C "$repo" rm -q notes.txt
 commit_all 'side work removes the old notes'
 expect 'old content only in an earlier commit' 0 'range clean' range "$main_tip" HEAD
 git -C "$repo" checkout -q -
-expect 'term in an earlier commit of the range' 1 'notes.txt (new in this range)' range "$base" HEAD
+expect 'term in an earlier commit of the range' 1 "of 'git rev-list --objects" range "$base" HEAD
 base=$(tip)
 
 mkdir -p "$repo/moonfjord-docs"
@@ -107,21 +109,21 @@ expect 'clean message text' 0 'message clean' message "$scratch/message.txt"
 
 printf 'head\0zebraquill\0tail' > "$repo/data.bin"
 commit_all 'add binary data'
-expect 'term in a binary file' 1 'data.bin (commit' tree
+expect 'term in a binary file' 1 "of 'git ls-tree -r HEAD'" tree
 git -C "$repo" rm -q data.bin
 commit_all 'remove binary data'
 
 printf 'moonfjord\n' > "$repo/-"
 commit_all 'add a file named -'
-expect 'term in a file named -' 1 '- (commit' tree
+expect 'term in a file named -' 1 "of 'git ls-tree -r HEAD'" tree
 git -C "$repo" rm -q -- -
 commit_all 'remove the file named -'
 
 ln -s zebraquill-target "$repo/link"
 git -C "$repo" add link
-expect 'term in a staged symlink target' 1 'link, line 1' staged
+expect 'term in a staged symlink target' 1 "of 'git ls-files -s', line 1" staged
 commit_all 'add a link'
-expect 'term in a symlink target' 1 'link (commit' tree
+expect 'term in a symlink target' 1 "of 'git ls-tree -r HEAD'" tree
 git -C "$repo" rm -q link
 commit_all 'remove the link'
 
@@ -129,7 +131,7 @@ commit_all 'remove the link'
 commit_all 'add a big file'
 git -C "$repo" rm -q big.txt
 commit_all 'remove the big file'
-expect 'term early in a big file of the range' 1 'big.txt (new in this range)' range "$base" HEAD
+expect 'term early in a big file of the range' 1 "of 'git rev-list --objects" range "$base" HEAD
 base=$(tip)
 
 git -C "$repo" update-index --add --cacheinfo "160000,$(tip),sub"
@@ -138,9 +140,9 @@ git -C "$repo" rm -q --cached sub
 
 printf 'token = "%s"\n' "$fake_token" > "$repo/config.txt"
 git -C "$repo" add config.txt
-expect 'secret in a staged file' 1 'a secret (github-pat) is in config.txt' staged
+expect 'secret in a staged file' 1 'a secret (github-pat) is in entry' staged
 commit_all 'add config'
-expect 'secret in the tree' 1 'config.txt (commit' tree
+expect 'secret in the tree' 1 'a secret (github-pat) is in entry' tree
 git -C "$repo" rm -q config.txt
 commit_all 'remove config'
 expect 'secret in an earlier commit of the range' 1 'a secret (github-pat)' range "$base" HEAD
@@ -164,6 +166,34 @@ expect 'secret under a blocked path' 1 "of 'git ls-tree -r" tree
 
 printf 'Subject\n\ntoken %s\n' "$fake_token" > "$scratch/message.txt"
 expect 'secret in message text' 1 'the message text' message "$scratch/message.txt"
+
+git -C "$repo" rm -q -r moonfjord
+nuget='<configuration><packageSourceCredentials><feed>'
+nuget+="<add key=\"ClearTextPassword\" value=\"$fake_password\" />"
+nuget+='</feed></packageSourceCredentials></configuration>'
+printf '%s\n' "$nuget" > "$repo/settings.xml"
+commit_all 'add a password under a neutral name'
+expect 'path rule does not fire on another name' 0 'tree clean' tree
+git -C "$repo" mv settings.xml NuGet.Config
+commit_all 'rename it to the name the rule covers'
+expect 'path rule fires on its file name' 1 'a secret (nuget-config-password)' tree
+
+# A fake gitleaks shows that an empty report or a scanner error never passes.
+fake_cache=$scratch/fake-cache
+mkdir -p "$fake_cache/ystack/gitleaks-8.30.1"
+fake_gitleaks=$fake_cache/ystack/gitleaks-8.30.1/gitleaks
+cat > "$fake_gitleaks" <<'FAKE'
+#!/bin/bash
+while [ $# -gt 0 ]; do
+  [ "$1" = --report-path ] && printf '[]' > "$2"
+  shift
+done
+exit 3
+FAKE
+chmod +x "$fake_gitleaks"
+XDG_CACHE_HOME=$fake_cache expect 'leaks reported with an empty report' 2 'report is empty' message "$scratch/message.txt"
+printf '#!/bin/bash\nexit 1\n' > "$fake_gitleaks"
+XDG_CACHE_HOME=$fake_cache expect 'scanner error' 2 'gitleaks could not run (exit 1)' message "$scratch/message.txt"
 
 if [ "$failures" -gt 0 ]; then
   echo "$failures case(s) failed"

@@ -28,27 +28,25 @@ jobs:
         run: |
           set -uo pipefail
           if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
-            base=$(jq -r .pull_request.base.sha "$GITHUB_EVENT_PATH")
-            head=$(jq -r .pull_request.head.sha "$GITHUB_EVENT_PATH")
+            base=$(jq -r .pull_request.base.sha "$GITHUB_EVENT_PATH") || exit 2
+            head=$(jq -r .pull_request.head.sha "$GITHUB_EVENT_PATH") || exit 2
           else
-            base=$(jq -r .before "$GITHUB_EVENT_PATH")
+            base=$(jq -r .before "$GITHUB_EVENT_PATH") || exit 2
             head=$GITHUB_SHA
           fi
           trusted=$RUNNER_TEMP/trusted
           mkdir -p "$trusted"
-          if git cat-file -e "$base:scripts/check-public.sh" 2>/dev/null; then
-            for f in check-public.sh get-gitleaks.sh; do
-              git show "$base:scripts/$f" > "$trusted/$f" || exit 2
-            done
-          else
-            echo "::warning::The base has no guard yet, so this run uses the PR's own guard."
-            for f in check-public.sh get-gitleaks.sh; do
-              git show "$head:scripts/$f" > "$trusted/$f" || exit 2
-            done
-          fi
+          for f in check-public.sh get-gitleaks.sh; do
+            git show "$base:scripts/$f" > "$trusted/$f" || {
+              echo "The base commit has no trusted scanner."
+              exit 2
+            }
+          done
           chmod +x "$trusted"/*.sh
           "$trusted/get-gitleaks.sh" > /dev/null || exit 2
           status=0
+          # HEAD is the commit the later job checks out: the test merge for a PR.
+          "$trusted/check-public.sh" tree || status=1
           "$trusted/check-public.sh" range "$base" "$head" || status=1
           if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
             jq -r '.pull_request.title, "", (.pull_request.body // "")' "$GITHUB_EVENT_PATH" \
@@ -91,7 +89,7 @@ jobs:
           bash tests/check-public.test.sh
 
   # The main ruleset requires this job by its name, `ci`. A skipped job would
-  # count as passing, so this one runs always and checks both results.
+  # count as passing, so this one always runs and checks both results.
   ci:
     needs: [guard, checks]
     if: always()
