@@ -37,19 +37,19 @@ mkdir -p "$scan/files" "$scan/paths" "$scan/msgs" "$work/no-ignore" || exit 2
 entries=0
 found=0
 
-# Machine-specific values, each "label|extended regular expression". The owner's
-# own user and host names belong in the private term list instead.
+# Machine-specific values, each "label|scope|extended regular expression".
+# Scope "all" covers file text, paths and messages; "paths" covers paths only.
+# The owner's own user and host names belong in the private term list instead.
+# shellcheck disable=SC2016 # Literal regular expressions.
 machine_patterns=(
-  'home directory path|/(Users|home)/[A-Za-z0-9._-]+'
-  'Windows home directory path|[A-Za-z]:[\\/]+Users[\\/]+[A-Za-z0-9._-]+'
-  'macOS temporary folder|/var/folders/[A-Za-z0-9_+-]{2}/'
-  'local host name|[A-Za-z0-9-]+[.]local([^.A-Za-z0-9_-]|$)'
-  'Mac host name|[A-Za-z0-9]+-(MacBook|iMac|Mac-mini|Mac-Studio|Mac-Pro)'
-  'agent permission list|"permissions"[[:space:]]*:[[:space:]]*[{]'
-  'agent permission list|"(allow|deny|ask)"[[:space:]]*:[[:space:]]*[[]'
-  'Codex trust setting|trust_level[[:space:]]*='
-  'Codex command rule|prefix_rule[[:space:]]*[(]'
-  'Claude Code local settings file|settings[.]local[.]json'
+  'home directory path|all|(^|[^A-Za-z0-9._~:/-]|file://)/(Users|home)/[^]/[:space:]<>${}*"[]+'
+  'Windows home directory path|all|(^|[^A-Za-z0-9])[A-Za-z]:[\\/]+[Uu][Ss][Ee][Rr][Ss][\\/]+[^]\\/[:space:]<>$%{}*"[]+'
+  'macOS temporary folder|all|/var/folders/[A-Za-z0-9_+-]{2}/'
+  'local host name|all|(^|[[:space:]@/"=(])[A-Za-z0-9][A-Za-z0-9-]*[.]local([^.A-Za-z0-9_-]|$)'
+  'Mac host name|all|[A-Za-z0-9]+-(MacBook|iMac|Mac-mini|Mac-Studio|Mac-Pro)'
+  'Codex trust setting|all|trust_level[[:space:]]*='
+  'Codex command rule|all|prefix_rule[[:space:]]*[(]'
+  'Claude Code local settings file|paths|(^|/)settings[.]local[.]json$'
 )
 
 setup_error() {
@@ -78,7 +78,7 @@ load_terms() {
     raw=$YSTACK_BLOCKED_TERMS
   else
     file=${YSTACK_BLOCKED_TERMS_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/ystack/blocked-terms.txt}
-    [ -f "$file" ] || setup_error "no term list at $file. See AGENTS.md."
+    [ -f "$file" ] || setup_error "no term list. See AGENTS.md."
     raw=$(cat -- "$file") || setup_error "cannot read the term list."
   fi
   printf '%s\n' "$raw" > "$work/raw" || setup_error "cannot write a scratch file."
@@ -98,14 +98,14 @@ load_terms() {
 # Adds one file of a Git listing to the scan. $1 mode, $2 object id, $3 path,
 # $4 how to name the entry in public output.
 add_entry() {
-  local mode=$1 id=$2 path=$3 label=$4 dir safe key
+  local mode=$1 id=$2 path=$3 label=$4 dir key
   [[ $id =~ ^[0-9a-f]{40,64}$ ]] || setup_error "unexpected object id."
   if [ "$mode" = 160000 ]; then
     finding "$label is a submodule; this repo allows none"
     return
   fi
   # The path goes into the key as hex, so a newline in a path cannot split it.
-  key=$(printf '%s' "$path" | od -An -tx1 | tr -d ' \n') || setup_error "cannot copy the path of $label."
+  key=$(printf '%s' "$path" | od -An -v -tx1 | tr -d ' \n') || setup_error "cannot copy the path of $label."
   key="$id $key"
   grep -q -x -F -- "$key" "$work/seen" && return
   printf '%s\n' "$key" >> "$work/seen" || setup_error "cannot write a scratch file."
@@ -117,10 +117,8 @@ add_entry() {
   if holds_term "$scan/paths/$entries"; then
     finding "a blocked term is in the path of $label"
   fi
-  # Characters that would break the line-based maps below become underscores.
-  safe=$(printf '%s' "$path" | tr '\n\t:' '___') || setup_error "cannot copy the path of $label."
   dir=$scan/files/$entries
-  { mkdir -p "$(dirname "$dir/$safe")" && git cat-file blob "$id" > "$dir/$safe"; } 2> /dev/null ||
+  { mkdir -p "$(dirname "$dir/$path")" && git cat-file blob "$id" > "$dir/$path"; } 2> /dev/null ||
     setup_error "cannot copy the blob of $label."
   printf '%s\t%s\n' "files/$entries" "$label" >> "$work/where"
 }
@@ -197,42 +195,74 @@ where() {
   printf '%s' "${shown:-an unnamed input}"
 }
 
-# Reports each scanned file in $work/hits (grep -n output) once. $1 names the match.
-report_hits() {
-  local what=$1 key lines
-  awk -F: '{ split($1, p, "/"); key = p[1] "/" p[2]
-      lines[key] = lines[key] (lines[key] == "" ? "" : ",") $2 }
-    END { for (k in lines) print k "\t" lines[k] }' "$work/hits" > "$work/hit-lines" ||
-    setup_error "cannot sort the matches."
-  exec 6< "$work/hit-lines" || setup_error "cannot read a scratch file."
-  while IFS=$'\t' read -r -u 6 key lines; do
-    finding "$what is in $(where "$key"), line $lines"
+# Names a scanned file by its first two path parts: files/N, paths/N or msgs/NAME.
+scan_key() {
+  local rest=${1#*/}
+  printf '%s/%s' "${1%%/*}" "${rest%%/*}"
+}
+
+# Runs grep over the scan copies and reports each matching file once, by
+# position. $1 names the match, $2 lists the directories, the rest are grep's
+# pattern arguments. A match sets the finding at once; a grep error stops.
+grep_scan() {
+  local what=$1 dirs=$2 file lines
+  shift 2
+  # shellcheck disable=SC2086 # $dirs is a fixed list of directory names.
+  (cd "$scan" && grep -r -l --null -a "$@" -- $dirs) > "$work/hit-files" 2> /dev/null
+  case $? in
+    0) found=1 ;;
+    1) return ;;
+    *) setup_error "a match over the scan failed." ;;
+  esac
+  exec 6< "$work/hit-files" || setup_error "cannot read a scratch file."
+  while IFS= read -r -d '' -u 6 file; do
+    lines=$( (cd "$scan" && grep -n -a "$@" -- "$file") 2> /dev/null | cut -d: -f1 | paste -sd, -)
+    finding "$what is in $(where "$(scan_key "$file")"), line ${lines:-?}"
   done
   exec 6<&-
 }
 
-# Runs grep with the given arguments over the scan copies; a match sets the
-# finding at once, and a grep error stops the check.
-grep_scan() {
-  (cd "$scan" && grep -r -a -n "$@") > "$work/hits"
-  case $? in
-    0) found=1 ;;
-    1) ;;
-    *) setup_error "a match over the scan failed." ;;
-  esac
+match_terms() {
+  grep_scan "a blocked term" "files msgs" -i -F -f "$terms"
 }
 
-match_terms() {
-  grep_scan -i -F -f "$terms" -- files msgs
-  report_hits "a blocked term"
+# Agent settings files hold permission lists in any layout, so their text is
+# checked with all white space removed. Other JSON is left alone.
+match_permission_lists() {
+  local file rel n settings_path='(^|/)(\.claude|\.codex)/|(^|/)settings(\.[A-Za-z0-9_-]+)?\.json$'
+  (cd "$scan/files" && find . -type f -print0) > "$work/all-files" 2> /dev/null ||
+    setup_error "cannot list the scan."
+  exec 7< "$work/all-files" || setup_error "cannot read a scratch file."
+  while IFS= read -r -d '' -u 7 file; do
+    file=${file#./}
+    n=${file%%/*}
+    rel=${file#*/}
+    [[ $rel =~ $settings_path ]] || continue
+    tr -d ' \t\r\n' < "$scan/files/$file" > "$work/squashed" 2> /dev/null ||
+      setup_error "cannot read a scanned file."
+    grep -q -a -E '"permissions":[{]|"(allow|deny|ask)":[[]' "$work/squashed"
+    case $? in
+      0) finding "a machine-specific value (agent permission list) is in $(where "files/$n")" ;;
+      1) ;;
+      *) setup_error "a match over the scan failed." ;;
+    esac
+  done
+  exec 7<&-
 }
 
 match_machine() {
-  local entry
+  local entry label scope rest
   for entry in "${machine_patterns[@]}"; do
-    grep_scan -E -e "${entry#*|}" -- files paths msgs
-    report_hits "a machine-specific value (${entry%%|*})"
+    label=${entry%%|*}
+    rest=${entry#*|}
+    scope=${rest%%|*}
+    case $scope in
+      all) grep_scan "a machine-specific value ($label)" "files paths msgs" -E -e "${rest#*|}" ;;
+      paths) grep_scan "a machine-specific value ($label)" "paths" -E -e "${rest#*|}" ;;
+      *) setup_error "unknown pattern scope." ;;
+    esac
   done
+  match_permission_lists
 }
 
 match_secrets() {
@@ -302,7 +332,7 @@ case $mode in
   staged)
     git ls-files -s -z > "$work/listing" || setup_error "cannot list the index."
     add_listing "$work/listing" 1 "git ls-files -s"
-    { git var GIT_AUTHOR_IDENT && git var GIT_COMMITTER_IDENT; } > "$scan/msgs/identity" ||
+    { git var GIT_AUTHOR_IDENT && git var GIT_COMMITTER_IDENT; } > "$scan/msgs/identity" 2> /dev/null ||
       setup_error "cannot read the Git identity."
     printf '%s\t%s\n' "msgs/identity" "the author or committer of the next commit" >> "$work/where"
     ;;
