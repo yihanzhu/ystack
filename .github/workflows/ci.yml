@@ -88,6 +88,11 @@ jobs:
           scripts/get-gitleaks.sh
           bash tests/check-public.test.sh
 
+      - name: Owner-only tests
+        run: |
+          bash tests/owner-only-guard.test.sh
+          bash tests/gh-read.test.sh
+
   # The main ruleset requires this job by its name, `ci`. A skipped job would
   # count as passing, so this one always runs and checks both results.
   ci:
