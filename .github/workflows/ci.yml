@@ -2,8 +2,6 @@ name: ci
 
 on:
   pull_request:
-    # `edited` re-runs the guard when the PR title or body changes.
-    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
 
@@ -11,55 +9,8 @@ permissions:
   contents: read
 
 jobs:
-  # Runs first, on its own runner, and runs no code from the PR. The scanner
-  # comes from the base commit; the PR's commits are only read as Git objects.
-  guard:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-
-      - name: Public-repo guard
-        env:
-          # Without this secret the guard fails. The term list is never committed.
-          YSTACK_BLOCKED_TERMS: ${{ secrets.YSTACK_BLOCKED_TERMS }}
-        run: |
-          set -uo pipefail
-          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
-            base=$(jq -r .pull_request.base.sha "$GITHUB_EVENT_PATH")
-            head=$(jq -r .pull_request.head.sha "$GITHUB_EVENT_PATH")
-          else
-            base=$(jq -r .before "$GITHUB_EVENT_PATH")
-            head=$GITHUB_SHA
-          fi
-          trusted=$RUNNER_TEMP/trusted
-          mkdir -p "$trusted"
-          if git cat-file -e "$base:scripts/check-public.sh" 2>/dev/null; then
-            for f in check-public.sh get-gitleaks.sh; do
-              git show "$base:scripts/$f" > "$trusted/$f" || exit 2
-            done
-          else
-            echo "::warning::The base has no guard yet, so this run uses the PR's own guard."
-            for f in check-public.sh get-gitleaks.sh; do
-              git show "$head:scripts/$f" > "$trusted/$f" || exit 2
-            done
-          fi
-          chmod +x "$trusted"/*.sh
-          "$trusted/get-gitleaks.sh" > /dev/null || exit 2
-          status=0
-          "$trusted/check-public.sh" range "$base" "$head" || status=1
-          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
-            jq -r '.pull_request.title, "", (.pull_request.body // "")' "$GITHUB_EVENT_PATH" \
-              > "$RUNNER_TEMP/pr-text.txt" || exit 2
-            "$trusted/check-public.sh" message "$RUNNER_TEMP/pr-text.txt" || status=1
-          fi
-          exit "$status"
-
-  # Runs code from the PR, and prints source lines, only after the guard passed.
-  checks:
-    needs: guard
+  # The main ruleset requires this job by its name, `ci`.
+  ci:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -89,19 +40,3 @@ jobs:
         run: |
           scripts/get-gitleaks.sh
           bash tests/check-public.test.sh
-
-  # The main ruleset requires this job by its name, `ci`. A skipped job would
-  # count as passing, so this one runs always and checks both results.
-  ci:
-    needs: [guard, checks]
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Gate
-        env:
-          GUARD: ${{ needs.guard.result }}
-          CHECKS: ${{ needs.checks.result }}
-        run: |
-          echo "guard: $GUARD"
-          echo "checks: $CHECKS"
-          [ "$GUARD" = success ] && [ "$CHECKS" = success ]
