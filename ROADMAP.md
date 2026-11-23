@@ -60,8 +60,8 @@ NORTH_STAR.md and this file state the new purpose. README.md points to them.
 
 ## 5. Guard: no machine-specific configuration
 
-- The step-3 check also blocks home-directory paths, local user and host names
-  from the private list, and agent permission allow and deny lists.
+- The step-3 check also blocks home-directory paths, host names from the
+  private list, and agent permission allow and deny lists.
 - The kit uses `$HOME` and parameters instead of machine values.
 
 ## 6. Move the kit from ymemory

@@ -39,7 +39,9 @@ found=0
 
 # Machine-specific values, each "label|scope|extended regular expression".
 # Scope "all" covers file text, paths and messages; "paths" covers paths only.
-# The owner's own user and host names belong in the private term list instead.
+# Home paths are caught here whatever the user name. The owner's host names belong
+# in the private term list. The GitHub user name does not: it is public, and this
+# repo needs it.
 # shellcheck disable=SC2016 # Literal regular expressions.
 machine_patterns=(
   'home directory path|all|(^|[^A-Za-z0-9._~:/-]|file://)/(Users|home)/[^]/[:space:]<>${}*"[]+'
