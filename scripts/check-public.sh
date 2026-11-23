@@ -1,5 +1,6 @@
 #!/bin/bash
-# Blocks employer-confidential terms and secrets from entering this public repo.
+# Blocks employer-confidential terms, secrets and machine-specific values (home
+# paths, host names, agent permission lists) from entering this public repo.
 #
 #   check-public.sh staged            the whole index (pre-commit hook)
 #   check-public.sh message FILE      a commit message or other text
@@ -34,6 +35,21 @@ mkdir -p "$scan/files" "$scan/paths" "$scan/msgs" "$work/no-ignore" || exit 2
 : > "$work/seen" || exit 2
 entries=0
 found=0
+
+# Machine-specific values, each "label|extended regular expression". The owner's
+# own user and host names belong in the private term list instead.
+machine_patterns=(
+  'home directory path|/(Users|home)/[A-Za-z0-9._-]+'
+  'Windows home directory path|[A-Za-z]:[\\/]+Users[\\/]+[A-Za-z0-9._-]+'
+  'macOS temporary folder|/var/folders/[A-Za-z0-9_+-]{2}/'
+  'local host name|[A-Za-z0-9-]+[.]local([^.A-Za-z0-9_-]|$)'
+  'Mac host name|[A-Za-z0-9]+-(MacBook|iMac|Mac-mini|Mac-Studio|Mac-Pro)'
+  'agent permission list|"permissions"[[:space:]]*:[[:space:]]*[{]'
+  'agent permission list|"(allow|deny|ask)"[[:space:]]*:[[:space:]]*[[]'
+  'Codex trust setting|trust_level[[:space:]]*='
+  'Codex command rule|prefix_rule[[:space:]]*[(]'
+  'Claude Code local settings file|settings[.]local[.]json'
+)
 
 setup_error() {
   echo "check-public: $1" >&2
@@ -171,18 +187,32 @@ where() {
   printf '%s' "${shown:-an unnamed input}"
 }
 
-match_terms() {
-  local key lines
-  (cd "$scan" && grep -r -a -i -n -F -f "$terms" -- files msgs) > "$work/hits"
-  [ $? -le 1 ] || setup_error "the term match failed."
+# Reports each scanned file in $work/hits (grep -n output) once. $1 names the match.
+report_hits() {
+  local what=$1 key lines
   awk -F: '{ split($1, p, "/"); key = p[1] "/" p[2]
       lines[key] = lines[key] (lines[key] == "" ? "" : ",") $2 }
     END { for (k in lines) print k "\t" lines[k] }' "$work/hits" > "$work/hit-lines" ||
-    setup_error "cannot sort the term matches."
+    setup_error "cannot sort the matches."
   readable "$work/hit-lines"
   while IFS=$'\t' read -r key lines; do
-    finding "a blocked term is in $(where "$key"), line $lines"
+    finding "$what is in $(where "$key"), line $lines"
   done < "$work/hit-lines"
+}
+
+match_terms() {
+  (cd "$scan" && grep -r -a -i -n -F -f "$terms" -- files msgs) > "$work/hits"
+  [ $? -le 1 ] || setup_error "the term match failed."
+  report_hits "a blocked term"
+}
+
+match_machine() {
+  local entry
+  for entry in "${machine_patterns[@]}"; do
+    (cd "$scan" && grep -r -a -n -E -e "${entry#*|}" -- files paths msgs) > "$work/hits"
+    [ $? -le 1 ] || setup_error "the machine-value match failed."
+    report_hits "a machine-specific value (${entry%%|*})"
+  done
 }
 
 match_secrets() {
@@ -271,6 +301,7 @@ esac
 
 if [ "$mode" != history ]; then
   match_terms
+  match_machine
   match_secrets
 fi
 if [ "$found" -ne 0 ]; then

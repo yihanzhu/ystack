@@ -178,6 +178,37 @@ git -C "$repo" mv settings.xml NuGet.Config
 commit_all 'rename it to the name the rule covers'
 expect 'path rule fires on its file name' 1 'a secret (nuget-config-password)' tree
 
+# Machine-specific values. The literals are split so this file holds none of them.
+home_path="/Us""ers/someone/notes"
+printf '%s\n' someone build-box Jos-Mac >> "$scratch/must-not-show"
+git -C "$repo" rm -q -r -- . > /dev/null
+# shellcheck disable=SC2016 # the literal $HOME is the point of this case
+printf '%s\n' 'Use ~/.config/x, $HOME/x or /Users/<name>/x.' > "$repo/clean.md"
+commit_all 'document paths without real values'
+expect 'placeholders are not machine values' 0 'tree clean' tree
+base=$(tip)
+
+machine_case() {
+  local name=$1 file=$2 text=$3 label=$4
+  mkdir -p "$(dirname "$repo/$file")"
+  printf '%s\n' "$text" > "$repo/$file"
+  git -C "$repo" add -A
+  expect "$name" 1 "a machine-specific value ($label)" staged
+  git -C "$repo" rm -q -- "$file"
+}
+machine_case 'home path' a.txt "see $home_path" 'home directory path'
+machine_case 'Windows home path' a.txt 'C:\Us''ers\someone\x' 'Windows home directory path'
+machine_case 'macOS temporary folder' a.txt '/var/fol''ders/ab/T/x' 'macOS temporary folder'
+machine_case 'local host name' a.txt 'ssh build-box''.local now' 'local host name'
+machine_case 'Mac host name' a.txt 'host Jos-Mac''Book-Pro' 'Mac host name'
+machine_case 'permission object' s.json '{"permiss''ions": {}}' 'agent permission list'
+machine_case 'permission list' s.json '{"al''low": ["Bash(ls)"]}' 'agent permission list'
+machine_case 'Codex trust setting' c.toml 'trust_''level = "trusted"' 'Codex trust setting'
+machine_case 'Codex command rule' r.rules 'prefix_''rule(pattern = ["ls"])' 'Codex command rule'
+machine_case 'local settings file name' "x/settings.lo""cal.json" '{}' 'Claude Code local settings file'
+commit_all "notes from $home_path"
+expect 'home path in a commit message' 1 'a machine-specific value (home directory path)' range "$base" HEAD
+
 # A fake gitleaks shows that an empty report or a scanner error never passes.
 fake_cache=$scratch/fake-cache
 mkdir -p "$fake_cache/ystack/gitleaks-8.30.1"
