@@ -1,353 +1,113 @@
-# ystack roadmap — a portable AI-native SDLC
-
-This document records the direction between the north star and individual
-`work/<slug>/` initiatives. It preserves the architecture decisions that future
-specs and plans must follow. It is not an implementation plan by itself.
-
-While the ystack-self `config/construction-mode.json` record is active and matches
-this file's Git blob, the numbered rollout is also the bounded program authorization
-for inactive repository construction. Each change remains one reviewable Roadmap
-unit with required CI and independent review, but it does not repeat the operating
-artifact or human gates. This temporary exception never applies to an external
-target and ends before the first real development use.
-
-Construction reaches `implementation-complete`: code, contracts, adapters,
-orchestration, publisher, deploy/rollback surfaces, and hermetic tests may be built,
-but real-target qualification, live credentials, profile/install activation,
-deployment, and production feedback remain unclaimed until operating mode.
-
-The reference model is Anthropic's
-[AI-Native SDLC Playbook](https://claude.com/blog/the-ai-native-sdlc-playbook),
-supplemented by its
-[AI-native SDLC security guidance](https://claude.com/blog/how-anthropic-secures-its-ai-native-software-development-lifecycle),
-[NIST SSDF](https://csrc.nist.gov/pubs/sp/800/218/final), and
-[DORA](https://dora.dev/guides/dora-metrics/). The playbook supplies useful
-control objectives, not vendor requirements or a recipe to copy unchanged.
-
-## Product boundary
-
-ystack is a control plane for a governed software-delivery loop. Its core is:
-
-- **harness-neutral** — Claude Code, Codex CLI, Gemini CLI, an Agent SDK, or a
-  custom runner may fill an agent role;
-- **model-neutral** — model names and vendors belong to a selected profile;
-- **forge-neutral** — GitHub, GitLab, Bitbucket, or another Git forge may host
-  the same change-request and approval contract;
-- **CI-neutral** — GitHub Actions, GitLab CI, Bitbucket Pipelines, or another CI
-  system may provide checks and execution;
-- **Git-backed first** — committed Git artifacts are the initial durable source
-  of truth. Supporting a non-Git version-control system is not a current goal.
-
-The first shipped profile may prefer GitHub + GitHub Actions, Claude Code as a
-producer, and Codex as a reviewer. Those are defaults, not requirements.
-
-## Self-hosting and target separation
-
-ystack is the product; a target repo is where that product runs. Target repos own
-their north star, artifacts, project policy, selected profile, code, tests, and
-delivery evidence. They do not inherit ystack's personal paths, credentials, or
-operator approval.
-
-The ystack control-plane repo is intentionally its own first target. Using ystack
-to develop ystack is the bootstrap and dogfood path: it exposes missing gates and
-keeps the backup complete. It is not sufficient proof of portability, because a
-control plane can accidentally special-case itself.
-
-The rollout therefore needs both:
-
-- **self-host proof** — ystack improves its own control plane through the same
-  artifacts and gates; and
-- **external-target proof** — a fresh unrelated Git repo selects a profile and
-  completes the same contracts without copying ystack-specific state.
-
-Control-plane self-modification is always high risk. A self-hosted run cannot
-rewrite or activate its own architecture, workflow, identity, eval, or safety
-policy without the operator accepting the exact plan first. Source changes do
-not silently change a running installation: release/sync and target upgrades are
-explicit, versioned operator actions.
-
-## Control objectives
-
-Every implementation must preserve these rules regardless of adapter:
-
-1. Work flows through versioned artifacts:
-   `intent → spec → accepted plan → diff + tests → review → human merge →
-   deploy/rollback → production feedback/incident → new intent`.
-2. One source of truth is named for every artifact. Forge issues, labels, and
-   comments are links, projections, and audit records; they are not a second
-   hidden state machine.
-3. Human judgment stays at explicit gates. An author cannot approve its own
-   work, and no agent merges or passes a production gate by itself.
-4. Risk changes the gate. High-risk work receives plan approval before code;
-   lower-risk work may combine plan and code review when eval evidence supports
-   that shortcut.
-5. Skills and prompts are advisory. Rules that must always hold are enforced by
-   deterministic hooks, CI, sandbox policy, branch rules, and publishers.
-6. Model output is untrusted. Candidate code never shares a sandbox with a
-   credential worth stealing.
-7. Events are wake-up signals. A durable reconciler reads canonical state and
-   repairs missed, repeated, canceled, or partially completed runs.
-8. Autonomy is earned for a recorded workflow scope, not granted to an agent in
-   general. The record identifies the target and the target versions or conditions
-   it covers; workflow, task class, and risk tier; resolved profile; harness and
-   adapter identities and config; capabilities and permissions; model, tool, prompt,
-   skill, and verification-instruction versions; and execution environment.
-   Policy names which changes invalidate that qualification and which gate they
-   return to. Each execution environment qualifies separately.
-   Progress remains manual → shadow/read-only → bounded write → risk-tiered
-   automation, and every stage has a kill switch.
-9. Configuration changes are tested like code. Prompts, skills, hooks, models,
-   adapters, and permissions run against versioned evals.
-10. The loop is measured by user value, quality, flow, recovery, and human
-    attention — never by code volume or token use alone.
-11. Every stage attempt ends with an explicit status such as `completed`,
-    `skipped`, `stale`, `blocked`, or `failed`. An attempt that executes work also
-    returns an evidence-backed result such as `changed`, `no-change`, or
-    `inconclusive`. A useful run does not have to change code. Silence or a
-    confident claim without evidence never counts as a pass.
+# Roadmap
+
+This is the order of work toward [NORTH_STAR.md](NORTH_STAR.md). Each step is one
+or a few small PRs. Each PR has one concern. The owner merges every PR, and a
+relayed approval does not count.
+
+| Step | Work | Needs |
+| --- | --- | --- |
+| 1 | New purpose | — |
+| 2 | Park the run-anywhere work | 1 |
+| 3 | Guard: blocked terms and secrets | 1 |
+| 4 | Guard: only the owner's text is an instruction | 1 |
+| 5 | Guard: no machine-specific configuration | 3 |
+| 6 | Move the kit from ymemory | 3, 4, 5 |
+| 7 | Rewire installation | 6 |
+| 8 | Write down the layer pass | 6 |
+| 9 | Site merge gate | the site's repository can enforce a ruleset |
+| 10 | ystack's own layer pass | 2, 8 |
+| 11 | A second codebase | 8 |
+
+## 1. New purpose
+
+NORTH_STAR.md and this file state the new purpose. README.md points to them.
+
+## 2. Park the run-anywhere work
+
+- Tag the last main commit before the new purpose as `archive/run-anywhere`.
+- Remove from main the inactive components, their tests, docs and workflows, and
+  the old artifacts under `work/`. Git history and the tag keep all of it.
+- End the construction-mode record, the Roadmap program authorization and
+  operator decision OD-1 (#275). No agent merges. The merge-guard hook blocks
+  every agent merge again.
+- Rewrite README.md and AGENTS.md for the new purpose. Cut CI down to the checks
+  that remain.
+- Close or fold in the open PRs and issues as the owner decides. Their branches
+  stay.
+
+## 3. Guard: blocked terms and secrets
+
+- One script checks staged changes before each commit. In CI it checks the whole
+  tree, the PR's commit messages, and the PR title and body. It fails on a blocked
+  term or a secret.
+- The term list is never committed. Locally it comes from a private file outside
+  the repo. In CI it comes from an Actions secret. A missing list fails the check.
+- The check prints only the file and line number. It never prints the term or the
+  matching line, because CI logs are public.
+- Secrets are found with a pinned, checksum-verified secret scanner.
+- The owner turns on GitHub secret scanning and push protection.
+
+## 4. Guard: only the owner's text is an instruction
+
+- One read script returns an issue or PR with its comments. Text from the owner's
+  account is marked as instructions. Text from any other author is fenced as data.
+  The script fails if it cannot tell who wrote a piece of text.
+- A Claude Code hook blocks direct reads of issue, PR and comment text and points
+  to the script. Codex has no such hook; its written rule points to the same script.
+- Remove the unused `@claude` workflow. It reads whole threads, including other
+  people's comments.
+- The owner sets interaction limits on the repository.
+
+## 5. Guard: no machine-specific configuration
+
+- The step-3 check also blocks home-directory paths, local user and host names
+  from the private list, and agent permission allow and deny lists.
+- The kit uses `$HOME` and parameters instead of machine values.
+
+## 6. Move the kit from ymemory
+
+- `kit/rules/`: working preferences and model routing for Claude Code and Codex.
+  ymemory imports them from here. The "About the owner" block stays in ymemory.
+- `kit/skills/`: development skills. They lose run records, session IDs and
+  private links before they move. They change here only through PRs. ymemory's
+  nightly distill only proposes skill candidates to the ymemory inbox. It never
+  writes here.
+- Employer names are removed. Two work-related knowledge pages stay in ymemory.
+- The distill and capture engine stays in ymemory.
+
+## 7. Rewire installation
+
+- `kit/install.sh` makes Claude Code and Codex load the rules and skills from this
+  repo. It can run again safely. It writes no machine values into the repo.
+- ymemory's installer stops installing these pieces and imports them from here.
+- A work computer runs only this installer.
+
+## 8. Write down the layer pass
+
+- A kit skill holds the five questions, where to find evidence for each, the
+  format of a finding, and the rule for which changes may merge without the owner.
+- It starts from the template of the site pass. One lesson from that pass: if a
+  PR's own code decides its kind of change, the rule is not a gate. The decision
+  must come from merged code, and an unknown kind goes to the owner.
+
+## 9. Site merge gate
+
+- When the site's repository can enforce a ruleset, apply it and merge the site's
+  PR 290. Then the site's merge kinds go live.
+
+## 10. ystack's own layer pass
+
+- Run the five layers on ystack. Rules that must always hold become checks.
+- Until this step ends, the owner merges every ystack PR.
 
-## Stable interfaces
-
-The core should use capabilities rather than vendor commands.
-
-### Artifact and Git
-
-- read an artifact at an exact commit;
-- calculate and compare immutable identities;
-- materialize an isolated snapshot or package;
-- describe an allowed diff;
-- record input and output commits.
-
-### Harness
-
-- plan from trusted artifacts in read-only mode;
-- produce a bounded patch or structured artifact;
-- review an exact change with no write authority;
-- return a structured result and trace, with model and cost metadata when they
-  apply to that harness.
-
-### Forge
-
-- identify the repository and default branch;
-- open or find one change request for a deterministic branch;
-- read approvals and current head/base identities;
-- post comments, labels, or status projections;
-- expose branch and code-owner controls.
-
-### CI
-
-- start and observe deterministic checks;
-- publish machine-verifiable evidence;
-- retain check state and artifacts;
-- enforce environment-specific gates.
-
-### Verification
-
-- name the finish condition and required proof kind before a stage starts;
-- keep deterministic/static, behavioral/runtime, architecture/boundary, and
-  independent-review evidence distinct;
-- bind proof to the target, source, release, and output identities when they
-  apply, plus the execution environment, verifier, and versioned verification
-  instructions;
-- return an explicit result, including `inconclusive` when required proof cannot
-  run, without forcing every useful outcome to produce a patch or PR.
-
-### Execution
-
-- provision a disposable, policy-bound environment;
-- isolate candidate code from credentials and the host;
-- deny network by default and expose only approved tools/resources;
-- destroy the environment without losing the durable session record.
-
-### Orchestration and reconciliation
-
-- wake from an event, schedule, or operator request;
-- scan canonical state for pending or stranded work;
-- retry at least once delivery without duplicating effects;
-- apply backpressure, cancellation, and a kill switch;
-- return an actionable recovery reason to the operator.
-
-### Deployment and rollback
-
-- expose deploy, status, and rollback as environment-scoped capabilities;
-- require the risk tier's named authorization;
-- bind a release to verified source and evidence;
-- rehearse and record rollback before autonomous maintenance can invoke it.
-
-### Observability and incident intake
-
-- record stage, tool, adapter, gate, identity, latency, and cost events;
-- receive deterministic control-band or security-scan findings;
-- create a canonical incident/intent artifact without granting deploy authority;
-- feed shipped failures back into evals.
-
-### Publisher and identity
-
-- use a short-lived, single-purpose identity;
-- validate base, allowed paths, proof, approval state, and output identity;
-- never execute candidate code or invoke a model;
-- perform only the fixed external write for its stage.
-
-Adapters implement these interfaces. Core artifacts and policies must not call
-`gh`, `glab`, `claude`, or `codex` directly.
-
-## Canonical state and audit
-
-Git artifacts and their immutable identities are canonical. A forge adapter may
-project state into PR/MR labels such as `stale` or `needs-human`, but deleting a
-label must not erase the underlying state.
-
-Each stage record must make these facts recoverable:
-
-- initiative, stage, workflow, task class, terminal status, and result when work
-  executed;
-- input and output commit identities;
-- risk tier and required gate;
-- harness and adapter identity/config, plus model, effort, prompt/skill version,
-  and cost when they apply;
-- reference to the qualification record;
-- attempt, retry, and failure or recovery reason;
-- proof identity, proof kind, execution environment, versioned verification
-  instructions, and check result;
-- human decision and timestamp.
-
-Delivery is **at least once**. Idempotency and reconciliation make repeated
-delivery safe; the system does not pretend webhook delivery is exactly once.
-
-Qualification is authority attached to that exact recorded workflow scope. It is
-not reputation attached to an agent, model, or profile. Nothing outside the scope
-inherits authority by inference. A policy-controlled change returns the affected
-scope to its named shadow or eval gate before authority resumes.
-
-## Risk-tiered gates
-
-The operating gates in this section are deliberately dormant during matching
-ystack-self construction mode. Construction keeps CI, independent review,
-inactivity, repository scope, and reversible ancestry as hard machine gates. An
-operator-merged operating-mode transition restores the gates before real use.
-
-The target policy is:
-
-- **High risk** — constitution paths, workflows, identity/auth, security
-  controls, database/schema migrations, deployment, production infrastructure,
-  or broad architectural change. A human accepts `plan.md` before code.
-- **Routine** — small, reversible, well-tested work within an accepted spec and
-  established architecture. Plan and code may share the final change request,
-  provided an independent plan check passes before the write phase.
-- **Bootstrap** — work that creates its own CI or gate. It stays human-gated and
-  cannot certify itself.
-
-Every tier still requires deterministic checks and a human merge. Changing the
-tier policy requires eval evidence and an operator decision.
-
-An **accepted plan** always has a recorded decision before code. For high-risk
-work that decision is the operator's approval. For routine work it may be an
-independent plan check backed by eval evidence; the producing agent cannot accept
-its own plan.
-
-## Security architecture
-
-Agent execution is split into independent boundaries:
-
-1. **Planner/producer (brain)** — model access, trusted inputs, no repository
-   write credential. It produces an artifact or patch.
-2. **Verifier** — no model credential, no forge write credential, no network by
-   default. It runs candidate code and produces commit-bound evidence.
-3. **Reviewer** — read-only access to the exact change. It cannot edit, approve,
-   or merge.
-4. **Publisher (hands)** — no model and no candidate-code execution. It validates
-   the artifact and uses a short-lived adapter credential for one fixed write.
-5. **Session/telemetry** — a durable append-only record outside every disposable
-   execution sandbox.
-
-Agent-to-agent routes count as capabilities and must be included in the same
-permission and threat model as direct tools.
-
-## Evals and measurements
-
-Before bounded autonomous writes, ystack needs a small regression suite built
-from real work. It must cover, at minimum:
-
-- stale and moved artifacts;
-- repeated, canceled, and missed events;
-- approval invalidation and no-push-after-approval;
-- actor and rerun identity;
-- malicious issue, PR/MR, diff, and comment instructions;
-- protected-path, credential, network, and publisher boundaries;
-- empty, fake, timed-out, and degraded reviews;
-- reviewer severity and false-positive/false-negative behavior;
-- adapter contract compliance.
-
-Agent evals run multiple trials where behavior is stochastic. Deterministic,
-model-based, and human graders are combined and calibrated. Production failures
-become permanent regression cases.
-
-The operating dashboard should pair flow and quality:
-
-- intent-to-spec and accepted-plan-to-merge time;
-- queue and human-gate wait;
-- first-pass success and rework cycles;
-- review latency, precision, recall samples, and stale rate;
-- escaped defects and vulnerabilities;
-- retry/reconciliation recovery;
-- token, latency, and cost per accepted change;
-- DORA throughput and instability metrics;
-- user or service outcome for the target change.
-
-## Rollout sequence
-
-The roadmap is intentionally ordered by dependency, not by playbook stage name.
-In operating mode, each numbered item becomes its own intent/spec/plan chain and
-small PRs. In matching ystack-self construction mode, the sequence is implemented
-directly as bounded, dependency-ordered implementation units.
-
-1. **Portable control-plane core** — canonical contracts, typed stage results,
-   evidence and references to qualification records, capability manifests, profile
-   resolution, fake adapters, and adapter contract tests. It carries references;
-   later initiatives decide and enforce qualification policy.
-2. **Control foundation** — brain/verifier/publisher separation, sandbox and
-   credential policy, risk gates, kill switch, and immutable evidence.
-3. **Durable orchestrator** — canonical state scanner, at-least-once retry,
-   reconciliation, backpressure, and operator recovery messages.
-4. **Default adapters** — GitHub forge, GitHub Actions CI, Claude Code producer,
-   and Codex reviewer as the first preference profile.
-5. **Agent evals and telemetry** — eval/trace framework, then real default-adapter
-   regression and qualification evidence, cost/latency, and flow/quality dashboard.
-6. **Alternative adapters** — prove at least one alternative harness and one
-   alternative forge against the same contract and safety evals. GitLab is the
-   recommended first alternative forge.
-7. **Shadow vertical slice** — prove one narrow read-only workflow locally, then
-   prove it separately in every other execution environment where it will run.
-   Incident reproduction is the preferred first case when practical because
-   `no-change` and `inconclusive` are useful outcomes. Run on real self-host and
-   external-target changes, including adversarial and recovery smoke tests.
-8. **Bounded autonomous writes** — enable one low-risk qualified workflow scope at
-   a time in an independent PR after that scope's own shadow evidence passes.
-9. **Safe review-fix loop** — add autonomous fixes only after the credential and
-   reconciliation boundaries are proven.
-10. **Target packaging** — install profiles and adapters into a fresh target
-    without copying personal configuration.
-11. **Deploy and rollback** — environment tiers, named production gate, rehearsed
-    rollback, and delivery evidence.
-12. **Maintenance loop** — deterministic control bands and scans create new
-    intents; service owners triage; shipped incidents become evals.
-
-## Current disposition
-
-- PR #146 is a draft experiment and must not merge. It records useful failure
-  modes from a GitHub/Claude-specific implementation.
-- The old Phase 2 event names are not product requirements. A supported event is
-  acceptable only when it is trusted, durable, idempotent, and recoverable.
-- The previous Phase 3 controls and the reconciler portion of Phase 4 move ahead
-  of autonomous write enablement.
-- Existing in-session and autonomous paths must converge on the same artifact
-  source of truth before either is called the product loop.
-
-## Non-goals for the first initiative
-
-- implementing every harness or forge;
-- opening autonomous write access;
-- treating an agent, model, or profile as globally trusted;
-- deployment or production monitoring;
-- replacing Git as the first artifact store;
-- preserving Claude, Codex, or GitHub as mandatory dependencies.
+## 11. A second codebase
+
+- Run the pass with the kit on a second codebase.
+- Done when the kit did not need to change to fit it.
+
+## Not planned
+
+- Adapters for other agent harnesses, Git forges or CI systems.
+- Portability, sandbox and execution-environment proofs.
+- Autonomous writes, deploy and rollback, and target packaging.
+- Automating the pass before step 11.
