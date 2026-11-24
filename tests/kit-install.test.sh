@@ -253,6 +253,17 @@ else
   fail "$name"
 fi
 
+cp "$kit/rules/codex.md" "$scratch/codex-rules"
+printf '%s\n' '<!-- ymemory: begin -->' >> "$kit/rules/codex.md"
+cp "$codex" "$scratch/codex-installed"
+name='rules with a line like another tool'"'"'s marker stop the install'
+if run 2 && holds "$scratch/out" 'looks like a block marker' && cmp -s "$codex" "$scratch/codex-installed"; then
+  pass "$name"
+else
+  fail "$name"
+fi
+cp "$scratch/codex-rules" "$kit/rules/codex.md"
+
 if [ "$failures" -gt 0 ]; then
   echo "$failures case(s) failed"
   exit 1

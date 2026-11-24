@@ -71,6 +71,10 @@ esac
 for f in working-preferences.md claude.md codex.md; do
   [ -s "$kit/rules/$f" ] || fail "kit/rules/$f is missing."
 done
+# Other tools mark their blocks in the same files with lines like <!-- name: begin -->.
+if grep -q -E '^<!-- [^>]*: (begin|end)' "$kit"/rules/*.md; then
+  fail "kit/rules holds a line that looks like a block marker."
+fi
 
 # Sets resolved to the regular file that a path names, following links. A link to
 # a missing file, a path that is not a regular file, or a link that cannot be
