@@ -1,4 +1,7 @@
 #!/bin/sh
-# Refreshes the installed kit after a pull, in the main checkout only.
+# Refreshes an installed kit after a pull, in the main checkout only. The first
+# install is a manual `kit/install.sh`, so a pull never installs by surprise.
 [ "$(git rev-parse --git-dir)" = "$(git rev-parse --git-common-dir)" ] || exit 0
+grep -q '^<!-- ystack kit: begin' "$HOME/.claude/CLAUDE.md" "$HOME/.codex/AGENTS.md" 2> /dev/null ||
+  exit 0
 exec "$(git rev-parse --show-toplevel)/kit/install.sh"

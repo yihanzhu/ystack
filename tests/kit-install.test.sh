@@ -232,6 +232,27 @@ else
   fail "$name"
 fi
 
+hook_repo=$scratch/hook-repo
+kit_repo "$hook_repo"
+cp -R "$root/.githooks" "$hook_repo/.githooks"
+hook_home=$scratch/hook-home
+name='after a pull, the hook does not install the kit for the first time'
+if (cd "$hook_repo" && HOME=$hook_home sh .githooks/post-merge) > "$scratch/out" 2>&1 &&
+  [ ! -e "$hook_home/.claude/CLAUDE.md" ] && [ ! -e "$hook_home/.codex/AGENTS.md" ]; then
+  pass "$name"
+else
+  fail "$name"
+fi
+HOME=$hook_home "$hook_repo/kit/install.sh" > /dev/null 2>&1
+printf '\n- Another routing line.\n' >> "$hook_repo/kit/rules/codex.md"
+name='after a pull, the hook refreshes an installed kit'
+if (cd "$hook_repo" && HOME=$hook_home sh .githooks/post-merge) > "$scratch/out" 2>&1 &&
+  holds "$hook_home/.codex/AGENTS.md" 'Another routing line.'; then
+  pass "$name"
+else
+  fail "$name"
+fi
+
 if [ "$failures" -gt 0 ]; then
   echo "$failures case(s) failed"
   exit 1
