@@ -50,13 +50,14 @@ After the findings of each layer, list what stays as it is and what was checked 
 
 ## Merges without the owner
 
-Until every layer has been checked and raised to the standard, the owner merges every PR. A layer meets the standard when none of its picked findings is still open, and the owner agrees, in the owner's own words, that the layer is enough. After that, a kind of change may merge without the owner only when all of the rules below hold. A stricter rule in the target repository wins. Write the rules into the target's `AGENTS.md`.
+Until every layer has been checked and raised to the standard, the owner merges every PR. A layer meets the standard when none of its picked findings is still open, and the owner agrees, in the owner's own words, that the layer is enough. After that, a kind of change may merge without the owner only when all of the rules below hold. A stricter rule in the target repository wins. Write into the target's `AGENTS.md` who may merge which kinds, and when. The kind script holds the detailed conditions.
 
 ### The gate
 
 - Main has an enforced gate: PRs are required, the required checks must pass, and nobody can push to main directly. Without an enforced gate, this rule is only a written rule.
 - A check shows what the owner would judge by looking. For example, it compares the screenshots and content of the PR's build with main's build.
 - A required check gives each PR its kind. The kind must block the merge: a missing result, or the kind "owner", keeps the PR from merging without the owner's approval. If the forge cannot enforce this, tell the owner that the kinds hold only as a written rule.
+- The forge refuses a merge when main has moved since the required checks ran. On GitHub, the rule set requires branches to be up to date before merging. If the forge cannot refuse it, the owner merges.
 
 ### Who decides the kind
 
@@ -85,7 +86,7 @@ Until every layer has been checked and raised to the standard, the owner merges 
 ### How an agent reads the gate
 
 - Read the rules in force on main, not only the list of rule sets. On GitHub: `gh api repos/OWNER/NAME/rules/branches/main`.
-- Trust only the result that the trusted job writes in its required check. A comment or a bot name alone proves nothing, because any workflow can write as the bot.
+- Trust a result only when the forge shows which workflow file and which job produced it, and that the file came from main. A comment or a bot name alone proves nothing, because any workflow can write as the bot. If the forge cannot show this, the owner merges.
 - The result must name the PR's head commit and the main commit it was compared with. If either one has moved, the check runs again before any merge.
 - Merge only the head commit that the result names. On GitHub: `gh pr merge --match-head-commit SHA`.
 - The owner's OK counts only in the owner's own words. A relayed approval does not count.
