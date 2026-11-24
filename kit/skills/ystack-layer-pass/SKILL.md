@@ -15,9 +15,9 @@ Each layer has one question. Each layer down costs more. A fix goes into the hig
 2. Go over the five layers in order. For each layer, write what holds today, then the findings.
 3. Put each fix in the highest layer that can hold it: design before checks, checks before written rules. A written rule that must hold every time becomes a check.
 4. Show the owner the findings, with a recommendation for each. The owner picks. Do only what the owner picked. When the target is private, keep the findings out of public repositories.
-5. Open one PR for each picked finding, in this order:
-   - First make one local command run the same steps as CI.
-   - Then design fixes and new checks.
+5. Open one PR for each picked finding. Order the PRs by what each one needs:
+   - If the owner picked a finding that makes one local command run the same steps as CI, it goes first.
+   - Then design, check and verification fixes.
    - Then written rules, after the checks they depend on have merged. A rule that a check now holds stays out of the written rules.
    - The merge gate last.
 6. Leave the result in the target repository: in its checks and in its `AGENTS.md`.
@@ -50,19 +50,22 @@ After the findings of each layer, list what stays as it is and what was checked 
 
 ## Merges without the owner
 
-Until every layer has been checked and every finding the owner picked has merged, the owner merges every PR. After that, a kind of change may merge without the owner only when all of the rules below hold. Write them into the target's `AGENTS.md`.
+Until every layer has been checked and raised to the standard, the owner merges every PR. A layer meets the standard when none of its picked findings is still open, and the owner agrees, in the owner's own words, that the layer is enough. After that, a kind of change may merge without the owner only when all of the rules below hold. A stricter rule in the target repository wins. Write the rules into the target's `AGENTS.md`.
 
 ### The gate
 
 - Main has an enforced gate: PRs are required, the required checks must pass, and nobody can push to main directly. Without an enforced gate, this rule is only a written rule.
-- A check shows what the owner would judge by looking. For example, it compares the screenshots and content of the PR's build with its base branch's build.
-- A required check gives each PR its kind.
+- A check shows what the owner would judge by looking. For example, it compares the screenshots and content of the PR's build with main's build.
+- A required check gives each PR its kind. The kind must block the merge: a missing result, or the kind "owner", keeps the PR from merging without the owner's approval. If the forge cannot enforce this, tell the owner that the kinds hold only as a written rule.
 
 ### Who decides the kind
 
-- Merged code decides the kind: the base branch's copy of the check script. The PR's own code never decides it. If the PR's code decides its kind, the rule is not a gate.
-- The PR's code runs only in a job with no write token. The job that decides the kind and writes the result runs only the base branch's code.
-- The default kind is "owner". A PR gets another kind only when the script can prove it. An unknown kind goes to the owner. So does a PR whose base is not main, and a PR whose comparison is incomplete.
+- Merged code decides the kind. The PR's own code never decides it. If the PR's code decides its kind, the rule is not a gate.
+- The trusted job is the one CI job that decides the kind and writes the result. It runs only main's code. The PR's code runs only in another job, with no write token.
+- Before any code runs, the trusted job checks that the PR targets the protected main branch of the same repository. If not, the kind is "owner". Code on any other base branch can come from the PR's author.
+- The trusted job loads the kind script from the exact main commit that the PR is compared with. It reads the changes from the PR's exact head commit.
+- The trusted job works out the kind itself. It treats the output of the PR's job as data, never as a kind or a result.
+- The default kind is "owner". A PR gets another kind only when the script can prove it. An unknown kind goes to the owner. So does a PR whose comparison is incomplete.
 
 ### Each kind
 
@@ -82,5 +85,7 @@ Until every layer has been checked and every finding the owner picked has merged
 ### How an agent reads the gate
 
 - Read the rules in force on main, not only the list of rule sets. On GitHub: `gh api repos/OWNER/NAME/rules/branches/main`.
-- Trust only a result that the CI bot wrote for the PR's current head commit.
+- Trust only the result that the trusted job writes in its required check. A comment or a bot name alone proves nothing, because any workflow can write as the bot.
+- The result must name the PR's head commit and the main commit it was compared with. If either one has moved, the check runs again before any merge.
+- Merge only the head commit that the result names. On GitHub: `gh pr merge --match-head-commit SHA`.
 - The owner's OK counts only in the owner's own words. A relayed approval does not count.
