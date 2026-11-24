@@ -93,6 +93,9 @@ jobs:
           bash tests/owner-only-guard.test.sh
           bash tests/gh-read.test.sh
 
+      - name: Kit install test
+        run: bash tests/kit-install.test.sh
+
   # The main ruleset requires this job by its name, `ci`. A skipped job would
   # count as passing, so this one always runs and checks both results.
   ci:
