@@ -1,5 +1,6 @@
 #!/bin/bash
-# Blocks employer-confidential terms and secrets from entering this public repo.
+# Blocks employer-confidential terms, secrets and machine-specific values (home
+# paths, host names, agent permission lists) from entering this public repo.
 #
 #   check-public.sh staged            the whole index (pre-commit hook)
 #   check-public.sh message FILE      a commit message or other text
@@ -35,6 +36,23 @@ mkdir -p "$scan/files" "$scan/paths" "$scan/msgs" "$work/no-ignore" || exit 2
 : > "$work/seen" || exit 2
 entries=0
 found=0
+
+# Machine-specific values, each "label|scope|extended regular expression".
+# Scope "all" covers file text, paths and messages; "paths" covers paths only.
+# Home paths are caught here whatever the user name. The owner's host names belong
+# in the private term list. The GitHub user name does not: it is public, and this
+# repo needs it.
+# shellcheck disable=SC2016 # Literal regular expressions.
+machine_patterns=(
+  'home directory path|all|(^|[^A-Za-z0-9._~:/-]|file://)/(Users|home)/[^]/[:space:]<>${}*"[]+'
+  'Windows home directory path|all|(^|[^A-Za-z0-9])[A-Za-z]:[\\/]+[Uu][Ss][Ee][Rr][Ss][\\/]+[^]\\/[:space:]<>$%{}*"[]+'
+  'macOS temporary folder|all|/var/folders/[A-Za-z0-9_+-]{2}/'
+  'local host name|all|(^|[[:space:]@/"=(])[A-Za-z0-9][A-Za-z0-9-]*[.]local([^.A-Za-z0-9_-]|$)'
+  'Mac host name|all|[A-Za-z0-9]+-(MacBook|iMac|Mac-mini|Mac-Studio|Mac-Pro)'
+  'Codex trust setting|all|trust_level[[:space:]]*='
+  'Codex command rule|all|prefix_rule[[:space:]]*[(]'
+  'Claude Code local settings file|paths|(^|/)settings[.]local[.]json$'
+)
 
 setup_error() {
   echo "check-public: $1" >&2
@@ -179,27 +197,74 @@ where() {
   printf '%s' "${shown:-an unnamed input}"
 }
 
-# Names a scanned file by its first two path parts: files/N or msgs/NAME.
+# Names a scanned file by its first two path parts: files/N, paths/N or msgs/NAME.
 scan_key() {
   local rest=${1#*/}
   printf '%s/%s' "${1%%/*}" "${rest%%/*}"
 }
 
-match_terms() {
-  local file lines
-  (cd "$scan" && grep -r -l --null -a -i -F -f "$terms" -- files msgs) > "$work/hit-files" 2> /dev/null
+# Runs grep over the scan copies and reports each matching file once, by
+# position. $1 names the match, $2 lists the directories, the rest are grep's
+# pattern arguments. A match sets the finding at once; a grep error stops.
+grep_scan() {
+  local what=$1 dirs=$2 file lines
+  shift 2
+  # shellcheck disable=SC2086 # $dirs is a fixed list of directory names.
+  (cd "$scan" && grep -r -l --null -a "$@" -- $dirs) > "$work/hit-files" 2> /dev/null
   case $? in
     0) found=1 ;;
-    1) ;;
-    *) setup_error "the term match failed." ;;
+    1) return ;;
+    *) setup_error "a match over the scan failed." ;;
   esac
   exec 6< "$work/hit-files" || setup_error "cannot read a scratch file."
   while IFS= read -r -d '' -u 6 file; do
-    lines=$( (cd "$scan" && grep -n -a -i -F -f "$terms" -- "$file") 2> /dev/null |
-      cut -d: -f1 | paste -sd, -)
-    finding "a blocked term is in $(where "$(scan_key "$file")"), line ${lines:-?}"
+    lines=$( (cd "$scan" && grep -n -a "$@" -- "$file") 2> /dev/null | cut -d: -f1 | paste -sd, -)
+    finding "$what is in $(where "$(scan_key "$file")"), line ${lines:-?}"
   done
   exec 6<&-
+}
+
+match_terms() {
+  grep_scan "a blocked term" "files msgs" -i -F -f "$terms"
+}
+
+# Agent settings files hold permission lists in any layout, so their text is
+# checked with all white space removed. Other JSON is left alone.
+match_permission_lists() {
+  local file rel n settings_path='(^|/)(\.claude|\.codex)/|(^|/)settings(\.[A-Za-z0-9_-]+)?\.json$'
+  (cd "$scan/files" && find . -type f -print0) > "$work/all-files" 2> /dev/null ||
+    setup_error "cannot list the scan."
+  exec 7< "$work/all-files" || setup_error "cannot read a scratch file."
+  while IFS= read -r -d '' -u 7 file; do
+    file=${file#./}
+    n=${file%%/*}
+    rel=${file#*/}
+    [[ $rel =~ $settings_path ]] || continue
+    tr -d ' \t\r\n' < "$scan/files/$file" > "$work/squashed" 2> /dev/null ||
+      setup_error "cannot read a scanned file."
+    grep -q -a -E '"permissions":[{]|"(allow|deny|ask)":[[]' "$work/squashed"
+    case $? in
+      0) finding "a machine-specific value (agent permission list) is in $(where "files/$n")" ;;
+      1) ;;
+      *) setup_error "a match over the scan failed." ;;
+    esac
+  done
+  exec 7<&-
+}
+
+match_machine() {
+  local entry label scope rest
+  for entry in "${machine_patterns[@]}"; do
+    label=${entry%%|*}
+    rest=${entry#*|}
+    scope=${rest%%|*}
+    case $scope in
+      all) grep_scan "a machine-specific value ($label)" "files paths msgs" -E -e "${rest#*|}" ;;
+      paths) grep_scan "a machine-specific value ($label)" "paths" -E -e "${rest#*|}" ;;
+      *) setup_error "unknown pattern scope." ;;
+    esac
+  done
+  match_permission_lists
 }
 
 match_secrets() {
@@ -298,6 +363,7 @@ esac
 
 if [ "$mode" != history ]; then
   match_terms
+  match_machine
   match_secrets
 fi
 if [ "$found" -ne 0 ]; then

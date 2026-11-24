@@ -235,6 +235,56 @@ expect 'term in a file with a colon and a tab in its name' 1 "of 'git ls-files -
 git -C "$repo" rm -q -f -- "name:with"$'\t'"tab"
 base=$(tip)
 
+# Machine-specific values. The literals are split so this file holds none of them.
+home_path="/Us""ers/someone/notes"
+printf '%s\n' someone build-box Jos-Mac >> "$scratch/must-not-show"
+git -C "$repo" rm -q -r -- . > /dev/null
+# shellcheck disable=SC2016 # the literal $HOME is the point of this case
+printf '%s\n' 'Use ~/.config/x, $HOME/x or /Users/<name>/x.' > "$repo/clean.md"
+commit_all 'document paths without real values'
+expect 'placeholders are not machine values' 0 'tree clean' tree
+base=$(tip)
+
+machine_case() {
+  local name=$1 file=$2 text=$3 label=$4
+  mkdir -p "$(dirname "$repo/$file")"
+  printf '%s\n' "$text" > "$repo/$file"
+  git -C "$repo" add -A
+  expect "$name" 1 "a machine-specific value ($label)" staged
+  git -C "$repo" rm -q -f -- "$file"
+}
+machine_case 'home path' a.txt "see $home_path" 'home directory path'
+machine_case 'home path with a non-ASCII name' a.txt 'cd /ho''me/Émile/src' 'home directory path'
+machine_case 'home path in a file URL' a.txt 'file:///Us''ers/someone/x' 'home directory path'
+machine_case 'Windows home path' a.txt 'C:\Us''ers\someone\x' 'Windows home directory path'
+machine_case 'Windows home path in lower case' a.txt 'c:/us''ers/someone/x' 'Windows home directory path'
+machine_case 'macOS temporary folder' a.txt '/var/fol''ders/ab/T/x' 'macOS temporary folder'
+machine_case 'local host name' a.txt 'ssh build-box''.local now' 'local host name'
+machine_case 'Mac host name' a.txt 'host Jos-Mac''Book-Pro' 'Mac host name'
+machine_case 'permission object' .claude/settings.json '{"permiss''ions": {}}' 'agent permission list'
+machine_case 'permission list over several lines' .claude/settings.json \
+  "$(printf '{\n  "al''low":\n  [\n    "Bash(ls)"\n  ]\n}')" 'agent permission list'
+machine_case 'permission list in a shared settings file' kit/settings.json \
+  '{"de''ny": ["Read(x)"]}' 'agent permission list'
+machine_case 'Codex trust setting' c.toml 'trust_''level = "trusted"' 'Codex trust setting'
+machine_case 'Codex command rule' r.rules 'prefix_''rule(pattern = ["ls"])' 'Codex command rule'
+machine_case 'local settings file name' "x/settings.lo""cal.json" '{}' 'Claude Code local settings file'
+
+clean_case() {
+  local name=$1 file=$2 text=$3
+  mkdir -p "$(dirname "$repo/$file")"
+  printf '%s\n' "$text" > "$repo/$file"
+  git -C "$repo" add -A
+  expect "$name" 0 'staged clean' staged
+  git -C "$repo" rm -q -f -- "$file"
+}
+clean_case 'ignore entry for the local settings file' .gitignore '.claude/settings.lo''cal.json'
+clean_case 'a dotenv file name' notes.md 'cp .env.example .env''.local'
+clean_case 'a web URL with a home route' notes.md 'https://example.com/ho''me/page'
+clean_case 'an allow list in other JSON' data/colors.json '{"al''low": ["red"]}'
+commit_all "notes from $home_path"
+expect 'home path in a commit message' 1 'a machine-specific value (home directory path)' range "$base" HEAD
+
 # A fake gitleaks shows that an empty report or a scanner error never passes.
 fake_cache=$scratch/fake-cache
 mkdir -p "$fake_cache/ystack/gitleaks-8.30.1"

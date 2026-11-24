@@ -23,7 +23,7 @@ Read [`NORTH_STAR.md`](NORTH_STAR.md) for the purpose and rules, and
 | `.claude/hooks/no-merge-guard.sh` | Blocks Claude Code from merging PRs and pushing to `main`. |
 | `.claude/hooks/owner-only-guard.sh` | Blocks Claude Code from reading issue and PR text directly. |
 | `scripts/gh-read.sh` | Reads an issue or PR and hides text from accounts other than the owner's. |
-| `scripts/check-public.sh` | Blocks the owner's blocked terms and secrets. The term list is never committed. |
+| `scripts/check-public.sh` | Blocks the owner's blocked terms, secrets and machine-specific values. The term list is never committed. |
 | `scripts/get-gitleaks.sh` | Gets the pinned secret scanner and checks its digest. |
 | `.githooks/` | Runs the public-repo check before each commit. |
 | `tests/` | Tests for the checks. |
@@ -31,7 +31,7 @@ Read [`NORTH_STAR.md`](NORTH_STAR.md) for the purpose and rules, and
 | `.github/workflows/tripwire.yml` | Fails when anyone but the owner lands a commit on `main`. |
 | `website/` | The landing page at ystack.yihanzhu.com. |
 
-The last public-repo guard and the kit arrive in roadmap steps 5 to 7.
+The kit arrives in roadmap steps 6 and 7.
 
 ## Earlier work
 
