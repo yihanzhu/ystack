@@ -180,6 +180,53 @@ git -C "$HOME/git/ystack" worktree add -q "$scratch/linked" 2> /dev/null
 name='a linked worktree is refused'
 if run_at 2 "$scratch/linked/kit/install.sh" --check && holds "$scratch/out" "not from a linked worktree"; then pass "$name"; else fail "$name"; fi
 
+rm -rf "$HOME/.claude" "$HOME/.codex" "$HOME/.agents"
+run 0
+printf '%s\n' 'notes' '<!-- ystack kit: beginner example -->' >> "$claude"
+cp "$claude" "$scratch/beginner"
+name='a line that only starts like a marker stops the install'
+if run 2 && cmp -s "$claude" "$scratch/beginner"; then pass "$name"; else fail "$name"; fi
+
+rm -rf "$HOME/.claude" "$HOME/.codex"
+run 0
+sed 's/@~/@~\/old/' "$claude" > "$scratch/stale" && cat "$scratch/stale" > "$claude"
+printf '%s\n' 'no block yet' > "$codex"
+chmod 555 "$HOME/.codex"
+name='a folder that cannot be written stops the install before any file changes'
+if run 2 && cmp -s "$claude" "$scratch/stale" &&
+  [ -z "$(find "$HOME/.claude" "$HOME/.codex" -name '.ystack-kit.*')" ]; then
+  pass "$name"
+else
+  fail "$name"
+fi
+chmod 755 "$HOME/.codex"
+
+rm -rf "$HOME/.claude/skills" "$HOME/.agents"
+mkdir -p "$HOME/.claude/skills" "$HOME/.agents" "$kit/skills/ystack-demo"
+ln -s "$HOME/.claude/skills" "$HOME/.agents/skills"
+printf '%s\n' '---' 'name: ystack-demo' '---' > "$kit/skills/ystack-demo/SKILL.md"
+name='one skills folder under two names gets one link'
+if run 0 && [ "$(readlink "$HOME/.claude/skills/ystack-demo")" = "$kit/skills/ystack-demo" ] &&
+  [ ! -e "$kit/skills/ystack-demo/ystack-demo" ] && run 0 --check; then
+  pass "$name"
+else
+  fail "$name"
+fi
+rm -r "$kit/skills/ystack-demo"
+run 0
+
+rm "$claude"
+printf '%s\n' 'plain sibling' > "$HOME/dotfiles/notes"
+printf '%s\n' 'newline name' > "$HOME/dotfiles/notes"$'\n'
+ln -s "$HOME/dotfiles/notes"$'\n' "$claude"
+name='a link that cannot be followed exactly stops the install and changes no file'
+if run 2 && [ "$(cat "$HOME/dotfiles/notes"$'\n')" = 'newline name' ] &&
+  [ "$(cat "$HOME/dotfiles/notes")" = 'plain sibling' ]; then
+  pass "$name"
+else
+  fail "$name"
+fi
+
 if [ "$failures" -gt 0 ]; then
   echo "$failures case(s) failed"
   exit 1
