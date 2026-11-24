@@ -19,6 +19,8 @@ for the order of work. This repo is public.
 - **Nothing private.** Never commit employer-confidential detail, secrets, or
   machine-specific configuration: home-directory paths, host names, or
   permission allow and deny lists.
+- **The kit.** `kit/rules/` and `kit/skills/` change only through PRs. Never edit
+  the installed copies in `~/.claude` or `~/.codex`; `kit/install.sh` rewrites them.
 - **Plain words.** Short sentences, one idea each, active voice.
 - **Comments.** A comment explains only a reason, an invariant or an outside
   contract that the code cannot show.
@@ -31,6 +33,7 @@ bash tests/no-merge-guard.test.sh
 bash tests/check-public.test.sh
 bash tests/owner-only-guard.test.sh
 bash tests/gh-read.test.sh
+bash tests/kit-install.test.sh
 scripts/check-public.sh tree
 ```
 

@@ -18,6 +18,9 @@ Read [`NORTH_STAR.md`](NORTH_STAR.md) for the purpose and rules, and
 | Path | What it does |
 | --- | --- |
 | `NORTH_STAR.md` | The purpose, its rules and the done signal. |
+| `kit/rules/` | The owner's working preferences and model routing, loaded by Claude Code and Codex. |
+| `kit/skills/` | Development skills, linked for both agents. |
+| `kit/install.sh` | Installs the kit on this machine. Safe to run again. |
 | `ROADMAP.md` | The order of work. |
 | `AGENTS.md` | Rules and checks for agents in this repo. `CLAUDE.md` imports it. |
 | `.claude/hooks/no-merge-guard.sh` | Blocks Claude Code from merging PRs and pushing to `main`. |
@@ -25,13 +28,24 @@ Read [`NORTH_STAR.md`](NORTH_STAR.md) for the purpose and rules, and
 | `scripts/gh-read.sh` | Reads an issue or PR and hides text from accounts other than the owner's. |
 | `scripts/check-public.sh` | Blocks the owner's blocked terms, secrets and machine-specific values. The term list is never committed. |
 | `scripts/get-gitleaks.sh` | Gets the pinned secret scanner and checks its digest. |
-| `.githooks/` | Runs the public-repo check before each commit. |
+| `.githooks/` | Runs the public-repo check before each commit, and refreshes the kit after each pull. |
 | `tests/` | Tests for the checks. |
 | `.github/workflows/ci.yml` | The `ci` check that `main` requires. |
 | `.github/workflows/tripwire.yml` | Fails when anyone but the owner lands a commit on `main`. |
 | `website/` | The landing page at ystack.yihanzhu.com. |
 
-The kit arrives in roadmap steps 6 and 7.
+## Install the kit
+
+On each machine, clone this repo to `~/git/ystack` (another place works too), then run:
+
+```bash
+cd ~/git/ystack && kit/install.sh && git config core.hooksPath .githooks && scripts/get-gitleaks.sh
+```
+
+`kit/install.sh` adds a marked block to `~/.claude/CLAUDE.md` and to `~/.codex/AGENTS.md`,
+links the kit skills, and changes nothing else. After that, each `git pull` in this
+checkout refreshes the installed kit. `kit/install.sh --check` says whether it is current.
+A work computer installs only this repo.
 
 ## Earlier work
 

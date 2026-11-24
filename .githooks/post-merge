@@ -1,0 +1,4 @@
+#!/bin/sh
+# Refreshes the installed kit after a pull, in the main checkout only.
+[ "$(git rev-parse --git-dir)" = "$(git rev-parse --git-common-dir)" ] || exit 0
+exec "$(git rev-parse --show-toplevel)/kit/install.sh"
