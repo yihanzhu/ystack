@@ -15,9 +15,9 @@ only what [`NORTH_STAR.md`](../NORTH_STAR.md) and [`ROADMAP.md`](../ROADMAP.md) 
 | `robots.txt` | Allows crawlers; points at the sitemap. |
 | `sitemap.xml` | Single-URL sitemap. |
 
-No build step, no dependencies, no JS framework. The only external request is the
-Google Fonts stylesheet (Fraunces + Inter), and the page degrades to system fonts if
-it fails to load.
+No build step, no dependencies, no JS framework. The only external dependency is
+Google Fonts (Fraunces + Inter), and the page degrades to system fonts if it fails
+to load.
 
 ## Deploy (Cloudflare Pages)
 
@@ -40,6 +40,6 @@ cd website && python3 -m http.server 8000   # then open http://localhost:8000
 
 `og.png` is wired via `og:image`/`og:image:width`/`og:image:height` and
 `twitter:image`, with `twitter:card` set to `summary_large_image`. Its tagline matches
-the page title. To regenerate it, rasterize a self-contained card at 1200×630 (for
+the hero headline. To regenerate it, rasterize a self-contained card at 1200×630 (for
 example with headless Chrome `--screenshot`) and overwrite `og.png`. Keep the served
 asset a static raster.
