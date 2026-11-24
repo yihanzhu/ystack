@@ -35,3 +35,8 @@ jobs:
 
       - name: Merge-guard hook test
         run: bash tests/no-merge-guard.test.sh
+
+      - name: Public-repo guard test
+        run: |
+          scripts/get-gitleaks.sh
+          bash tests/check-public.test.sh

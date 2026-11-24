@@ -1,0 +1,3 @@
+#!/bin/sh
+# Blocks a commit that adds a blocked term or a secret. See scripts/check-public.sh.
+exec "$(git rev-parse --show-toplevel)/scripts/check-public.sh" staged
