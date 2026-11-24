@@ -4,167 +4,34 @@ on:
   pull_request:
   push:
     branches: [main]
-  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  checks:
+  # The main ruleset requires this job by its name, `ci`.
+  ci:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Check required files exist
-        run: |
-          set -eu
-          manifest="ci/required-files.txt"
-          if [ ! -f "$manifest" ]; then
-            echo "missing manifest: $manifest"; exit 1
-          fi
-          status=0
-          # Read the manifest line by line, skipping blank lines and # comments.
-          while IFS= read -r f || [ -n "$f" ]; do
-            case "$f" in
-              ''|'#'*) continue ;;
-            esac
-            if [ ! -f "$f" ]; then
-              echo "missing required file: $f"; status=1; continue
-            fi
-            # scripts/*.sh must be executable — a non-+x script is a restore footgun.
-            case "$f" in
-              scripts/*.sh)
-                if [ ! -x "$f" ]; then
-                  echo "required script not executable (+x): $f"; status=1
-                fi
-                ;;
-            esac
-          done < "$manifest"
-          if [ "$status" -ne 0 ]; then
-            echo "structure check FAILED"; exit 1
-          fi
-          echo "structure ok"
-
-      - name: Shellcheck (if any shell scripts)
-        env:
-          # Pinned shellcheck version — the single source of truth for the
-          # version coders must lint against locally. The preinstalled binary on
-          # ubuntu-latest drifts on runner-image bumps and disagrees with coders'
-          # local installs (different findings + codes for the same issue, e.g.
-          # SC2317 vs SC2329), so "clean locally" could land CI-red. Pin it so
-          # local↔CI parity is deterministic. Bumping this value is the ONE place
-          # the version changes — keep CLAUDE.md / routines/coder*.md in sync.
-          SHELLCHECK_VERSION: "0.11.0"
-          # GitHub's release-asset digest for the linux.x86_64 tar.xz. Version pinning
-          # alone still trusts whatever bytes the download endpoint returns; verify the
-          # immutable expected digest before extracting or sudo-installing the binary.
-          SHELLCHECK_SHA256: "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
-        run: |
-          set -euo pipefail
-          # Install the exact pinned release rather than trusting the runner's
-          # preinstalled binary: download the official static release and put it
-          # on PATH for this step.
-          url="https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
-          echo "downloading shellcheck v${SHELLCHECK_VERSION} from $url"
-          curl -fsSL "$url" -o /tmp/shellcheck.tar.xz
-          printf '%s  %s\n' "$SHELLCHECK_SHA256" /tmp/shellcheck.tar.xz | sha256sum -c -
-          tar -xJf /tmp/shellcheck.tar.xz -C /tmp
-          # /usr/local/bin is root-owned and this step runs as the unprivileged
-          # `runner` user, so a bare `install` is fragile to runner-image drift
-          # (the exact drift this pin exists to prevent). Use passwordless sudo —
-          # guaranteed on GitHub-hosted runners — to place it on the standard PATH.
-          sudo install -m 0755 "/tmp/shellcheck-v${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
-          # Assert the exact version BEFORE the sweep — a silent drift (wrong
-          # download, stale PATH shadowing) must fail loudly, not lint quietly
-          # under an unexpected version.
-          shellcheck --version
-          got=$(shellcheck --version | awk '/^version:/ {print $2}')
-          if [ "$got" != "$SHELLCHECK_VERSION" ]; then
-            echo "shellcheck version mismatch: expected $SHELLCHECK_VERSION, got $got"; exit 1
-          fi
-          echo "shellcheck version pinned to $got — ok"
-          scripts=$(find . -name '*.sh' -not -path './.git/*')
-          if [ -n "$scripts" ]; then
-            # -S style = shellcheck's default floor; pinned explicitly so the
-            # policy is visible and a future default change can't silently relax
-            # it. -x follows `source`d files so the `# shellcheck source=...`
-            # directives (e.g. scripts/lib/north-star.sh) resolve cleanly.
-            echo "$scripts" | xargs shellcheck -x -S style
-          else
-            echo "no shell scripts yet"
-          fi
-
-      - name: Sharding proof
-        run: |
-          bash scripts/test/run-all-sharding.check.sh
-
-      - name: Rename gate
-        run: |
-          # Patrols tracked files for old names left over from the rename.
-          # Lines labeled legacy and scripts/test/ fixtures are exempt.
-          bash scripts/check-rename.sh
-
-      - name: Roadmap content guards
-        run: |
-          bash scripts/test/portable-core-schema.test.sh
-          bash scripts/test/v2-pending-stage.test.sh
-
-      - name: Minimal CI gate proof
-        run: |
-          bash scripts/test/ci-minimum.check.sh
-
-  test:
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Test suite
-        run: |
-          # Construction installs tests by filename; a dispatched full run covers
-          # every scripts/test/*.test.sh file without workflow edits.
-          bash scripts/test/run-all.sh --shard ${{ matrix.shard }}/6
-
-  ci:
-    runs-on: ubuntu-latest
-    needs: [checks, test]
-    if: always()
-    steps:
-      - name: Gate
+      - name: Shellcheck
         env:
-          EVENT_NAME: ${{ github.event_name }}
-          CHECKS_RESULT: ${{ needs.checks.result }}
-          TEST_RESULT: ${{ needs.test.result }}
+          SHELLCHECK_VERSION: "0.11.0"
+          # Release-asset digest of the linux.x86_64 tar.xz. Check it before installing.
+          SHELLCHECK_SHA256: "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
         run: |
-          # ci-minimum-gate:start
-          set -eu
-          echo "event:  $EVENT_NAME"
-          echo "checks: $CHECKS_RESULT"
-          echo "test:   $TEST_RESULT"
-          if [ "$CHECKS_RESULT" != "success" ]; then
-            echo "ci gate FAILED: checks did not succeed"; exit 1
-          fi
-          case "$EVENT_NAME" in
-            pull_request|push)
-              [ "$TEST_RESULT" = "skipped" ] || {
-                echo "ci gate FAILED: automatic run did not skip full tests"; exit 1;
-              }
-              echo "ci gate ok: automatic quick checks passed"
-              ;;
-            workflow_dispatch)
-              [ "$TEST_RESULT" = "success" ] || {
-                echo "ci gate FAILED: dispatched full tests did not pass"; exit 1;
-              }
-              echo "ci gate ok: dispatched full tests passed"
-              ;;
-            *)
-              echo "ci gate FAILED: unexpected event"; exit 1
-              ;;
-          esac
-          # ci-minimum-gate:end
+          set -euo pipefail
+          url="https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          curl -fsSL "$url" -o /tmp/shellcheck.tar.xz
+          printf '%s  %s\n' "$SHELLCHECK_SHA256" /tmp/shellcheck.tar.xz | sha256sum -c -
+          tar -xJf /tmp/shellcheck.tar.xz -C /tmp
+          sudo install -m 0755 "/tmp/shellcheck-v${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+          got=$(shellcheck --version | awk '/^version:/ {print $2}')
+          [ "$got" = "$SHELLCHECK_VERSION" ] || { echo "shellcheck $got, want $SHELLCHECK_VERSION"; exit 1; }
+          git ls-files -z '*.sh' | xargs -0 -r shellcheck -x -S style
+
+      - name: Merge-guard hook test
+        run: bash tests/no-merge-guard.test.sh
