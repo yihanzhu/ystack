@@ -164,8 +164,13 @@ if run 0 && [ -f "$commands/yshifu.md" ]; then pass "$name"; else fail "$name"; 
 
 kit_repo "$scratch/elsewhere"
 name='a kit outside HOME is imported by its full path'
-if run_at 0 "$scratch/elsewhere/kit/install.sh" &&
-  holds "$claude" "@$scratch/elsewhere/kit/rules/claude.md"; then pass "$name"; else fail "$name"; fi
+# A second kit in the same HOME would clash with the first kit's skill links.
+if HOME=$scratch/home-elsewhere run_at 0 "$scratch/elsewhere/kit/install.sh" &&
+  holds "$scratch/home-elsewhere/.claude/CLAUDE.md" "@$scratch/elsewhere/kit/rules/claude.md"; then
+  pass "$name"
+else
+  fail "$name"
+fi
 
 kit_repo "$scratch/with space"
 name='a kit path with white space is refused'
