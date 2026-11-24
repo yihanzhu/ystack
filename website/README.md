@@ -1,16 +1,17 @@
 # ystack — landing page
 
-A static, self-contained "coming soon" landing page for ystack, served at
-**ystack.yihanzhu.com**.
+A static, self-contained landing page for ystack, served at
+**ystack.yihanzhu.com**. It describes the kit and the layer pass. Its copy says
+only what [`NORTH_STAR.md`](../NORTH_STAR.md) and [`ROADMAP.md`](../ROADMAP.md) say.
 
 ## Files
 
 | File | Purpose |
 |------|---------|
 | `index.html` | The page (single-page; entry point). |
-| `styles.css` | All styling — warm-ember "workshop / forge" theme. |
+| `styles.css` | All styling — warm-ember theme. |
 | `favicon.svg` | Brand mark (anvil) used as the tab icon. |
-| `og.png` | 1200×630 social preview card (brand-matched). Wired as `og:image`/`twitter:image`. |
+| `og.png` | 1200×630 social preview card. Wired as `og:image`/`twitter:image`. |
 | `robots.txt` | Allows crawlers; points at the sitemap. |
 | `sitemap.xml` | Single-URL sitemap. |
 
@@ -35,21 +36,10 @@ To preview locally:
 cd website && python3 -m http.server 8000   # then open http://localhost:8000
 ```
 
-## When distribution is decided
+## Social preview image
 
-- **Waitlist / notify:** there's a clearly-marked `WAITLIST PLACEHOLDER` comment in
-  `index.html` (in the hero). Drop a capture form there — with Cloudflare you can POST to
-  a Pages Function / Worker, or embed a hosted form. Keep it inline and dependency-free.
-- **Social preview image:** done — `og.png` (1200×630, brand-matched) is committed and wired
-  via `og:image`/`og:image:width`/`og:image:height` and `twitter:image`, with `twitter:card`
-  set to `summary_large_image`. To regenerate, rasterize a self-contained card at 1200×630
-  (e.g. headless Chrome `--screenshot`) and overwrite `og.png` — keep the served asset a
-  static raster.
-- **Repo link / docs:** the GitHub repo is public, and the hero note links to it. Add
-  docs links once there are public docs.
-
-## Note
-
-This page is a marketing artifact, not part of the team-restore backup, so it is **not**
-listed in `ci/required-files.txt`. CI stays green regardless (the structure check only
-verifies listed files exist; there are no shell scripts here for shellcheck).
+`og.png` is wired via `og:image`/`og:image:width`/`og:image:height` and
+`twitter:image`, with `twitter:card` set to `summary_large_image`. Its tagline matches
+the page title. To regenerate it, rasterize a self-contained card at 1200×630 (for
+example with headless Chrome `--screenshot`) and overwrite `og.png`. Keep the served
+asset a static raster.
